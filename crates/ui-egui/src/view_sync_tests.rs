@@ -12,7 +12,7 @@ fn app_with_two_documents() -> PhotocraftApp {
     assert_eq!(app.ui.views.len(), 2);
     // The first document is zoomed in; the second keeps its own default view.
     app.ui.views[0].zoom = 3.2;
-    app.ui.views[0].fit_pending = false;
+    app.ui.views[0].clear_pending();
     app
 }
 

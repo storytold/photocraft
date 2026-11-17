@@ -20,14 +20,14 @@ fn bar_with(tool: Tool) -> Harness<'static, PhotocraftApp> {
     app.run("shape.create", json!({"kind": "roundedRect", "rect": [10, 10, 80, 60], "radii": [20, 20, 20, 20], "fill": "#ff0000"})).unwrap();
     app.sync_views();
     app.ui.tool = tool;
-    let mut h = Harness::builder().with_size(vec2(1800.0, 300.0)).build_ui_state(|ui, app| crate::panels::options_bar(app, ui), app);
-    PhotocraftApp::setup_context(&h.ctx, Default::default());
+    let mut h =
+        Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1800.0, 300.0)).build_ui_state(|ui, app| crate::panels::options_bar(app, ui), app);
     h.run_steps(4);
     h
 }
 
 fn type_radius(h: &mut Harness<'static, PhotocraftApp>, text: &str) {
-    h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Radius:")).expect("the Radius field").click();
+    h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Radius")).expect("the Radius field").click();
     h.run_steps(1);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
     h.event(egui::Event::Text(text.into()));
@@ -90,7 +90,7 @@ fn the_rectangle_tools_radius_field_shows_the_tools_radius() {
     let mut h = bar_with(Tool::Rectangle);
     h.state_mut().ui.tool_options.corner_radius = 0.0;
     h.run_steps(3);
-    let field = h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Radius:")).expect("the Radius field");
+    let field = h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Radius")).expect("the Radius field");
     let shown = field
         .accesskit_node()
         .numeric_value()

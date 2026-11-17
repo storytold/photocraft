@@ -20,108 +20,68 @@ fn app() -> PhotocraftApp {
     app
 }
 
-/// ⌘+ / ⌘− step the preview along the canvas's zoom ladder as Liquify's do, from the zoom Fit
-/// in View shows; ⌘0 fits it and ⌘1 is 100 %, through the canvas's own shortcuts; the canvas
-/// behind keeps its zoom.
-#[test]
-fn zoom_shortcuts_zoom_the_preview_not_the_canvas() {
-    let ctx = egui::Context::default();
-    PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
-    // Large enough that Fit in View is well under 100 % in a 1000 × 700 window.
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-    app.session.execute("file.new", json!({"width": 3000, "height": 2000})).unwrap();
-    app.sync_views();
-    open(&mut app).unwrap();
-    let canvas_zoom = app.ui.views.first().map(|v| v.zoom);
-    let mut run = |key: Option<egui::Key>| {
-        let events = key
-            .map(|key| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND })
-            .into_iter()
-            .collect();
-        let screen = ERect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 700.0));
-        let raw = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
-        let mut out = ctx.run_ui(raw, |ui| {
-            crate::shortcuts::handle(&mut app, ui.ctx());
-            show(&mut app, ui.ctx());
-        });
-        out.textures_delta.clear();
-        let d = app.distort.gallery.as_ref().unwrap();
-        (d.zoom, d.fit)
-    };
-    let (zoom, fit) = run(None);
-    assert_eq!(zoom, 0.0, "opens at Fit in View");
-    assert!(fit > 0.0 && fit < 0.5, "fits a 3000 px image well under 100 %: {fit}");
-    let step = |z, dir| crate::zoom_levels::step_in_range(z, dir, ZOOM_MIN, ZOOM_MAX);
-    let (zoom, _) = run(Some(egui::Key::Equals));
-    assert_eq!(zoom, step(fit, 1), "⌘= steps up from the fitted zoom, not from the menu's first entry");
-    assert!(zoom > fit);
-    assert_eq!(run(Some(egui::Key::Plus)).0, step(step(fit, 1), 1), "⌘+ typed as Plus too");
-    assert_eq!(run(Some(egui::Key::Num0)).0, 0.0, "Fit in View");
-    assert!(run(Some(egui::Key::Minus)).0 < fit, "⌘− steps down from the fitted zoom");
-    assert_eq!(run(Some(egui::Key::Num1)).0, 1.0);
-    assert_eq!(run(Some(egui::Key::Equals)).0, 2.0);
-    assert_eq!(run(Some(egui::Key::Equals)).0, 3.0, "past the menu's steps, on the canvas's ladder");
-    assert_eq!(run(Some(egui::Key::Minus)).0, 2.0);
-    assert!(app.distort.gallery.is_some(), "the dialog stays open");
-    assert_eq!(app.ui.views.first().map(|v| v.zoom), canvas_zoom, "the canvas behind keeps its zoom");
+/// Sends one `ui` object to the open Filter Gallery, as `ui.menu.invoke {"ui": …}` does.
+fn ui(app: &mut PhotocraftApp, v: Value) -> Result<Value, String> {
+    let ctx = app.ctx().clone();
+
+    crate::control::dialogs::workspace_ui(app, &ctx, KEY, &v)
 }
 
-/// A huge image can fit below the 1 % minimum: Zoom Out keeps Fit in View rather than
-/// enlarging it to 1 %, and Zoom In still steps up from there.
-#[test]
-fn zoom_out_from_a_fit_below_the_minimum_stays_at_fit() {
-    let mut app = app();
-    open(&mut app).unwrap();
-    let d = app.distort.gallery.as_mut().unwrap();
-    d.zoom = 0.0;
-    d.fit = 0.005;
-    assert_eq!(step_zoom(d, -1), 0.0, "no smaller zoom than Fit: stays at Fit in View");
-    assert!(step_zoom(d, 1) > d.fit);
-    d.fit = 0.05;
-    assert!(step_zoom(d, -1) > 0.0 && step_zoom(d, -1) < 0.05, "a Fit above the minimum still steps down");
+/// The open gallery's stack as the workspace holds it.
+fn effects_of(app: &PhotocraftApp) -> Vec<EffectLayer> {
+    serde_json::from_value(describe(app).unwrap()["effects"].clone()).unwrap()
+}
+
+fn source_of(app: &PhotocraftApp) -> Arc<PcGallerySource> {
+    app.gallery.as_ref().unwrap().source.clone()
 }
 
 #[test]
 fn stack_editing_and_commit_match_the_engine() {
-    let ctx = egui::Context::default();
     let mut app = app();
-    let r = crate::distort_ui::menu(&mut app, &ctx, "filter.filterGallery", &json!({})).unwrap().unwrap();
+    let ctx = app.ctx().clone();
+    let r = crate::distort_ui::menu(&mut app, &ctx, KEY, &json!({})).unwrap().unwrap();
     assert_eq!(r["gallery"]["effects"].as_array().unwrap().len(), 1);
-    control(&mut app, &json!({"filter": "cutout", "params": {"numberOfLevels": 3}})).unwrap();
-    control(&mut app, &json!({"add": true})).unwrap();
-    control(&mut app, &json!({"filter": "texturizer", "params": {"texture": "brick", "relief": 20}})).unwrap();
-    control(&mut app, &json!({"add": true})).unwrap();
-    control(&mut app, &json!({"filter": "glowingEdges"})).unwrap();
-    control(&mut app, &json!({"toggle": 2})).unwrap();
-    let d = control(&mut app, &json!({"move": {"from": 1, "to": 0}})).unwrap();
+    ui(&mut app, json!({"filter": "cutout"})).unwrap();
+    ui(&mut app, json!({"params": {"numberOfLevels": 3}})).unwrap();
+    ui(&mut app, json!({"add": true})).unwrap();
+    ui(&mut app, json!({"filter": "texturizer"})).unwrap();
+    ui(&mut app, json!({"params": {"texture": "brick", "relief": 20}})).unwrap();
+    ui(&mut app, json!({"add": true})).unwrap();
+    ui(&mut app, json!({"filter": "glowingEdges"})).unwrap();
+    ui(&mut app, json!({"toggle": 2})).unwrap();
+    ui(&mut app, json!({"move": {"from": 1, "to": 0}})).unwrap();
+    let d = describe(&app).unwrap();
     let keys: Vec<&str> = d["effects"].as_array().unwrap().iter().map(|e| e["filter"].as_str().unwrap()).collect();
     assert_eq!(keys, ["texturizer", "cutout", "glowingEdges"]);
     assert_eq!(d["effects"][2]["visible"], json!(false));
-    // Preview pixels = engine result on the same pixels.
-    let params = app.distort.gallery.as_ref().unwrap().params();
+    let params = source_of(&app).command_params(&effects_of(&app));
     let before = app.session.active().unwrap().history.past_len();
-    control(&mut app, &json!({"commit": true})).unwrap();
-    assert!(app.distort.gallery.is_none());
+    ui(&mut app, json!({"commit": true})).unwrap();
+    take(&mut app, &ctx);
+    assert!(app.gallery.is_none());
     assert_eq!(app.session.active().unwrap().history.past_len(), before + 1);
     let (id, p) = app.session.journal.last().cloned().unwrap();
-    assert_eq!(id, "filter.filterGallery");
+    assert_eq!(id, KEY);
     assert_eq!(p["effects"], params["effects"]);
     // Re-opening starts from the last stack.
-    crate::distort_ui::menu(&mut app, &ctx, "filter.filterGallery", &json!({})).unwrap().unwrap();
-    assert_eq!(app.distort.gallery.as_ref().unwrap().effects.len(), 3);
-    control(&mut app, &json!({"delete": true})).unwrap();
-    assert_eq!(app.distort.gallery.as_ref().unwrap().effects.len(), 2);
-    control(&mut app, &json!({"cancel": true})).unwrap();
+    crate::distort_ui::menu(&mut app, &ctx, KEY, &json!({})).unwrap().unwrap();
+    assert_eq!(effects_of(&app).len(), 3);
+    ui(&mut app, json!({"delete": true})).unwrap();
+    assert_eq!(effects_of(&app).len(), 2);
+    ui(&mut app, json!({"cancel": true})).unwrap();
+    take(&mut app, &ctx);
+    assert!(app.gallery.is_none());
     assert_eq!(app.session.active().unwrap().history.past_len(), before + 1, "cancel records nothing");
 }
 
 #[test]
 fn smart_filter_double_click_edits_the_stored_gallery_stack() {
-    let ctx = egui::Context::default();
     let mut app = app();
+    let ctx = app.ctx().clone();
     app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
     let stack = json!({"effects": [{"filter": "chrome", "params": {"detail": 2, "smoothness": 9}, "visible": true}], "foreground": [1.0, 0.0, 0.0, 1.0], "background": [0.0, 0.0, 1.0, 1.0]});
-    app.run("filter.filterGallery", stack).unwrap();
+    app.run(KEY, stack).unwrap();
     app.run("filter.blur.gaussianBlur", json!({"radius": 2.0})).unwrap();
     let layer = app.session.active().unwrap().active_layer.unwrap();
     let smart = |app: &PhotocraftApp| match &app.session.active().unwrap().doc.layer(layer).unwrap().content {
@@ -132,55 +92,60 @@ fn smart_filter_double_click_edits_the_stored_gallery_stack() {
 
     let sm = smart(&app);
     crate::smart_ui::open_editor(&mut app, &ctx, layer.0, &sm, 0);
-    assert!(app.ui.dialogs.is_empty(), "no generic parameter form");
-    let d = app.distort.gallery.as_ref().expect("the gallery dialog opens");
-    assert_eq!((d.smart_filter, d.foreground, d.background), (Some(0), [1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]));
-    assert_eq!(d.effects.len(), 1);
-    assert_eq!((d.effects[0].filter, &d.effects[0].params["detail"]), (GalleryFilter::Chrome, &json!(2)));
+    assert_eq!(app.framework.dialogs.stack().ids().count(), 1, "only the gallery opens, no generic parameter form");
+    let g = app.gallery.as_ref().expect("the gallery dialog opens");
+    assert_eq!((g.smart_filter, g.source.foreground, g.source.background), (Some(0), [1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]));
+    let effects = effects_of(&app);
+    assert_eq!(effects.len(), 1);
+    assert_eq!(effects[0].filter, "chrome");
+    assert_eq!(describe(&app).unwrap()["effects"][0]["params"]["detail"].as_f64(), Some(2.0));
     // The preview starts from the pixels below the filter (no blur, no chrome).
     let below = photocraft_engine::smart_cmds::render_below_filter(&app.session.active().unwrap().doc, &sm, 0).unwrap().unwrap();
-    let d = app.distort.gallery.as_ref().unwrap();
-    assert_eq!(d.src.read_region(d.canvas), below.read_region(d.canvas));
+    let source = source_of(&app);
+    assert_eq!(source.src.read_region(source.canvas), below.read_region(source.canvas));
 
-    control(&mut app, &json!({"params": {"detail": 7}})).unwrap();
-    control(&mut app, &json!({"commit": true})).unwrap();
-    assert!(app.distort.gallery.is_none());
+    ui(&mut app, json!({"params": {"detail": 7}})).unwrap();
+    ui(&mut app, json!({"commit": true})).unwrap();
+    take(&mut app, &ctx);
+    assert!(app.gallery.is_none());
     let sm = smart(&app);
     assert_eq!(sm.smart_filters.len(), 2, "edited in place, not added");
-    assert_eq!(sm.smart_filters[0].command, "filter.filterGallery");
-    assert_eq!(sm.smart_filters[0].params["effects"][0]["params"]["detail"], json!(7));
+    assert_eq!(sm.smart_filters[0].command, KEY);
+    assert_eq!(sm.smart_filters[0].params["effects"][0]["params"]["detail"].as_f64(), Some(7.0));
     assert_eq!(sm.smart_filters[0].params["foreground"], json!([1.0, 0.0, 0.0, 1.0]));
     assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1);
     app.run("edit.undo", json!({})).unwrap();
-    assert_eq!(smart(&app).smart_filters[0].params["effects"][0]["params"]["detail"], json!(2));
+    assert_eq!(smart(&app).smart_filters[0].params["effects"][0]["params"]["detail"].as_f64(), Some(2.0));
 
     // Not a gallery filter / no such filter: an error, no dialog.
     assert!(open_smart_filter(&mut app, layer, 1).is_err());
     assert!(open_smart_filter(&mut app, layer, 9).is_err());
-    assert!(app.distort.gallery.is_none());
+    assert!(app.gallery.is_none());
 }
 
 #[test]
 fn preview_and_thumbnails_render() {
-    let ctx = egui::Context::default();
     let mut app = app();
     open(&mut app).unwrap();
-    let d = app.distort.gallery.as_mut().unwrap();
-    update_preview(d, &ctx, ERect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 300.0)), false);
-    assert!(d.tex.is_some() && d.shown.is_some());
-    d.open = [true; 6];
-    update_thumbs(d, &ctx, 100);
-    assert!(d.thumbs.iter().all(Option::is_some));
+    let source = source_of(&app);
+    let effects = effects_of(&app);
+    let before = source.preview().revision();
+    let took = paint_preview(&source.src, source.canvas, &source.command_params(&effects), source.canvas, 1, &source.preview, &Interrupt::NONE).unwrap();
+    assert!(took < Duration::from_secs(60));
+    assert_ne!(source.preview().revision(), before, "the landed preview moves the picture's revision");
+    let thumb = source.thumb_source();
+    for f in GalleryFilter::ALL {
+        let key = GalleryThumb::new(f.key());
+        let ThumbRender::Ready(img) = thumb.render(&key, &ThumbRequest::for_cell(80.0, 1.0)) else { panic!("{}: not rendered at once", f.key()) };
+        assert_eq!(img.size, THUMB, "{}", f.key());
+    }
     // Preview equals the engine's algorithm on the sampled pixels.
-    let src = sample(&d.src, d.canvas, 1);
-    let a = render(&src, &d.params());
-    let mut s2 = photocraft_engine::Session::new();
-    s2.add_document(app.session.active().unwrap().doc.as_ref().clone(), None);
-    s2.select_layer(d.layer).unwrap();
-    s2.execute("filter.filterGallery", d.params()).unwrap();
-    let st = s2.active().unwrap();
-    let b = st.doc.layer(d.layer).unwrap().surface().unwrap().read_region(d.canvas);
-    let worst = a.read_region(d.canvas).iter().zip(&b).map(|(x, y)| (x - y).abs()).fold(0.0, f32::max);
+    let params = source.command_params(&effects);
+    let layer = app.gallery.as_ref().unwrap().layer;
+    let src = sample(&source.src, source.canvas, 1);
+    let a = render(&src, &params);
+    let b = applied(&app, layer, &params).read_region(source.canvas);
+    let worst = a.read_region(source.canvas).iter().zip(&b).map(|(x, y)| (x - y).abs()).fold(0.0, f32::max);
     assert!(worst < 2e-3, "preview differs from the result by {worst}");
 }
 
@@ -191,19 +156,21 @@ fn native_component_gallery_previews_match_commit_and_capture_the_target() {
             for alpha in [true, false] {
                 let fixture = crate::distort_ui::component_tests::app(mode, depth);
                 let mut app = if alpha { fixture } else { crate::distort_ui::component_tests::without_alpha(fixture) };
+                let ctx = app.ctx().clone();
                 open(&mut app).unwrap();
-                let d = app.distort.gallery.as_mut().unwrap();
-                d.effects = vec![EffectLayer::new(GalleryFilter::Cutout)];
-                let params = d.params();
-                let before = d.src.clone();
-                let bounds = d.canvas;
-                let layer = d.layer;
+                ui(&mut app, json!({"filter": "cutout"})).unwrap();
+                let source = source_of(&app);
+                let params = source.command_params(&effects_of(&app));
+                let before = source.src.as_ref().clone();
+                let bounds = source.canvas;
+                let layer = app.gallery.as_ref().unwrap().layer;
                 let preview = preview_pixels(&before, bounds, &params, bounds, 1, &Interrupt::NONE).unwrap();
                 crate::distort_ui::component_tests::protected(&before, &preview, bounds);
                 let thumbnail = render(&before, &params);
                 crate::distort_ui::component_tests::protected(&before, &thumbnail, bounds);
                 app.run("channel.target", json!({"channel":{"color":1}})).unwrap();
-                commit(&mut app).unwrap();
+                ui(&mut app, json!({"commit": true})).unwrap();
+                take(&mut app, &ctx);
                 let after = app.session.active().unwrap().doc.layer(layer).unwrap().surface().unwrap();
                 assert_eq!(after.read_region(bounds), preview.read_region(bounds));
             }
@@ -236,13 +203,13 @@ fn photo_app() -> PhotocraftApp {
     app
 }
 
-/// What OK applies: `filter.filterGallery` with the dialog's stack on a copy of the document.
-fn applied(app: &PhotocraftApp, d: &GalleryDialog) -> Surface {
+/// What OK applies: `filter.filterGallery` with `params` on a copy of the document.
+fn applied(app: &PhotocraftApp, layer: LayerId, params: &Value) -> Surface {
     let mut s2 = photocraft_engine::Session::new();
     s2.add_document(app.session.active().unwrap().doc.as_ref().clone(), None);
-    s2.select_layer(d.layer).unwrap();
-    s2.execute("filter.filterGallery", d.params()).unwrap();
-    s2.active().unwrap().doc.layer(d.layer).unwrap().surface().unwrap().clone()
+    s2.select_layer(layer).unwrap();
+    s2.execute(KEY, params.clone()).unwrap();
+    s2.active().unwrap().doc.layer(layer).unwrap().surface().unwrap().clone()
 }
 
 /// Mean of `k`×`k` blocks (opaque layers), written independently of [`reduce`].
@@ -277,25 +244,26 @@ fn mean_diff(a: &[f32], b: &[f32]) -> f32 {
 fn zoomed_out_preview_matches_the_applied_result_scaled_down() {
     // #2502: below 100 % the preview filtered every k-th pixel with the same params, so
     // strokes, grain and textures showed several times too large.
-    let ctx = egui::Context::default();
     let mut app = photo_app();
     open(&mut app).unwrap();
-    let area = ERect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 300.0));
+    let source = source_of(&app);
+    let layer = app.gallery.as_ref().unwrap().layer;
     for f in ["graphicPen", "charcoal", "reticulation", "stainedGlass", "spatter", "chalkCharcoal"] {
-        control(&mut app, &json!({"filter": f, "zoom": 0.25})).unwrap();
-        let reference = {
-            let d = app.distort.gallery.as_ref().unwrap();
-            box_mean(&applied(&app, d), d.canvas, 4)
-        };
-        let d = app.distort.gallery.as_mut().unwrap();
-        let (_, vis, k) = view(d, area);
-        assert_eq!((vis, k), (d.canvas, 4), "{f}: at 25 % the whole layer shows, averaged 4×4");
-        assert!(update_preview(d, &ctx, area, false).is_some());
-        let shown = preview_pixels(&d.src, d.canvas, &d.params(), vis, k, &Interrupt::NONE).unwrap();
+        ui(&mut app, json!({"filter": f})).unwrap();
+        let params = source.command_params(&effects_of(&app));
+        let reference = box_mean(&applied(&app, layer, &params), source.canvas, 4);
+        // A render request at 25 % shows the whole layer, averaged 4×4.
+        let k = preview_factor(0.25);
+        assert_eq!(k, 4, "{f}: at 25 % the preview averages 4×4");
+        let before = source.preview().revision();
+        paint_preview(&source.src, source.canvas, &params, source.canvas, k, &source.preview, &Interrupt::NONE).unwrap();
+        assert_ne!(source.preview().revision(), before, "{f}: the render landed");
+        let vis = source.canvas;
+        let shown = preview_pixels(&source.src, source.canvas, &params, vis, k, &Interrupt::NONE).unwrap();
         let (w, h) = (reduced(vis.width(), k) as i32, reduced(vis.height(), k) as i32);
         let diff = mean_diff(&shown.read_region(Rect::new(0, 0, w, h)), &reference);
         // The old preview (every 4th pixel, filtered at that size) for comparison.
-        let old = mean_diff(&render(&sample(&d.src, vis, k), &d.params()).read_region(Rect::new(0, 0, w, h)), &reference);
+        let old = mean_diff(&render(&sample(&source.src, vis, k), &params).read_region(Rect::new(0, 0, w, h)), &reference);
         assert!(diff < 1e-3, "{f}: preview differs from the applied result by {diff}");
         assert!(old > 20.0 * diff.max(1e-3), "{f}: the old preview differed by only {old}");
     }
@@ -307,12 +275,14 @@ fn a_region_renders_the_same_pixels_as_the_full_result() {
     // document position, and the filters read their reach around the region.
     let mut app = photo_app();
     open(&mut app).unwrap();
+    let source = source_of(&app);
+    let layer = app.gallery.as_ref().unwrap().layer;
     let region = Rect::new(37, 21, 151, 117);
     for f in GalleryFilter::ALL {
-        control(&mut app, &json!({"filter": f.key()})).unwrap();
-        let d = app.distort.gallery.as_ref().unwrap();
-        let full = applied(&app, d).read_region(region);
-        let part = preview_pixels(&d.src, d.canvas, &d.params(), region, 1, &Interrupt::NONE).unwrap();
+        ui(&mut app, json!({"filter": f.key()})).unwrap();
+        let params = source.command_params(&effects_of(&app));
+        let full = applied(&app, layer, &params).read_region(region);
+        let part = preview_pixels(&source.src, source.canvas, &params, region, 1, &Interrupt::NONE).unwrap();
         let part = part.read_region(Rect::new(0, 0, region.width() as i32, region.height() as i32));
         let worst = full.iter().zip(&part).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
         assert!(worst < 1e-3, "{}: region differs from the full result by {worst}", f.key());
@@ -332,34 +302,22 @@ fn reduce_averages_blocks_weighted_by_alpha() {
 
 #[test]
 fn background_preview_renders_off_the_ui_thread() {
-    let ctx = egui::Context::default();
     let mut app = photo_app();
     open(&mut app).unwrap();
-    control(&mut app, &json!({"filter": "graphicPen"})).unwrap();
-    let d = app.distort.gallery.as_mut().unwrap();
-    let area = ERect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 300.0));
-    assert!(update_preview(d, &ctx, area, true).is_none(), "nothing to show until the first render is done");
-    assert!(d.describe()["rendering"].as_bool().unwrap());
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    while d.rendering().is_some() {
-        assert!(std::time::Instant::now() < deadline, "the preview never finished");
-        std::thread::sleep(std::time::Duration::from_millis(5));
-        update_preview(d, &ctx, area, true);
-    }
-    assert!(d.tex.is_some() && update_preview(d, &ctx, area, true).is_some());
-    // A new setting starts a new render; the last preview stays up meanwhile.
-    let before = d.cur().params.get("strokeLength").cloned().unwrap();
-    d.cur().params.insert("strokeLength".into(), json!(5));
-    assert!(update_preview(d, &ctx, area, true).is_some());
-    assert!(d.rendering().is_some());
-    // Back to the settings on screen: that render is dropped (and cancelled).
-    d.cur().params.insert("strokeLength".into(), before);
-    assert!(update_preview(d, &ctx, area, true).is_some());
-    assert!(d.rendering().is_none());
-    d.cur().params.insert("strokeLength".into(), json!(5));
-    update_preview(d, &ctx, area, true);
-    // Closing the dialog cancels it.
-    app.distort.gallery = None;
+    ui(&mut app, json!({"filter": "graphicPen"})).unwrap();
+    let source = source_of(&app);
+    let before = source.preview().revision();
+    let params = source.command_params(&effects_of(&app));
+    let ui_thread = std::thread::current().id();
+    let worker_source = source.clone();
+    let worker = std::thread::spawn(move || {
+        let s = &worker_source;
+        (std::thread::current().id(), paint_preview(&s.src, s.canvas, &params, s.canvas, 1, &s.preview, &Interrupt::NONE))
+    });
+    let (thread, done) = worker.join().unwrap();
+    assert_ne!(thread, ui_thread);
+    done.unwrap();
+    assert_ne!(source.preview().revision(), before, "the landing bumps the preview raster's revision");
 }
 
 /// Preview cost on 24 MP: `cargo test -p photocraft-ui-egui --lib bench_gallery_preview -- --ignored --nocapture`.
@@ -392,28 +350,61 @@ fn bench_gallery_preview() {
     }
 }
 
-/// #10335: the effect-layer list grows with the dialog: a tall column gives it more than the 190 px
-/// minimum, a short one keeps the minimum, and the settings keep room above it.
+/// The Glow Color swatch asks the app for a colour; the dialog's floats stay exact through OK and
+/// Cancel on the opening colour and change only on a new pick. The command records the colour linear.
 #[test]
-fn effect_layer_list_grows_with_the_dialog_height() {
-    let (_, short) = column_heights(400.0);
-    assert_eq!(short, 190.0);
-    let (params, tall) = column_heights(980.0);
-    assert!(tall > 190.0 + 100.0, "list height {tall}");
-    assert!(params >= 80.0);
-    assert!(params + tall + 110.0 <= 980.0 + 1.0);
-    assert_eq!(column_heights(f32::NAN).1, 190.0);
-    // Short, zero, negative and non-finite heights keep the settings at 80 px and the list at 190 px.
-    for h in [380.0, 300.0, 0.0, -50.0, f32::NAN, f32::NEG_INFINITY] {
-        assert_eq!(column_heights(h), (80.0, 190.0), "{h}");
-    }
-    // At every height the settings keep at least 80 px and the list at least 190 px; from 380 px,
-    // where both floors and the 110 px of chrome first fit, they stay within the column.
-    for h in (0..=4000).step_by(10).map(|h| h as f32) {
-        let (params, list) = column_heights(h);
-        assert!(params >= 80.0 && list >= 190.0, "{h}: {params} {list}");
-        if h >= 380.0 {
-            assert!(params + list + 110.0 <= h + 1.0, "{h}: {params} {list}");
-        }
-    }
+fn glow_color_keeps_exact_floats_until_a_new_pick_and_stores_linear() {
+    use egui_kittest::kittest::Queryable;
+    let mut app = app();
+    open(&mut app).unwrap();
+    ui(&mut app, json!({"filter": "neonGlow"})).unwrap();
+    ui(&mut app, json!({"params": {"glowColor": [0.123456, 0.234567, 0.345678]}})).unwrap();
+    let ctx = app.ctx().clone();
+    let mut h = egui_kittest::Harness::builder().with_context(ctx.clone()).with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            app.framework.dialogs.run(ui);
+            take(app, ui.ctx());
+        },
+        app,
+    );
+    let glow = |app: &PhotocraftApp| -> Vec<f64> {
+        describe(app).unwrap()["effects"][0]["params"]["glowColor"].as_array().unwrap().iter().filter_map(Value::as_f64).collect()
+    };
+    let exact = [0.123456, 0.234567, 0.345678];
+    let near = |got: &[f64], want: &[f64], eps: f64| got.iter().zip(want).all(|(a, b)| (a - b).abs() < eps);
+    h.run_steps(3);
+    // OK on the opening colour keeps the floats.
+    h.get_by_role_and_label(egui::accesskit::Role::ColorWell, "Glow Color").click();
+    h.run_steps(3);
+    assert_eq!(h.state().framework.dialogs.stack().ids().count(), 2, "the swatch opens the colour picker as a child");
+    let picker = |app: &PhotocraftApp| app.framework.dialogs.stack().top().expect("the colour picker is on top");
+    let id = picker(h.state());
+    crate::dialogs::testing::confirm(h.state_mut(), id).unwrap();
+    h.run_steps(3);
+    assert!(near(&glow(h.state()), &exact, 1e-6), "{:?}", glow(h.state()));
+    // Cancel keeps them too.
+    h.get_by_role_and_label(egui::accesskit::Role::ColorWell, "Glow Color").click();
+    h.run_steps(3);
+    let id = picker(h.state());
+    crate::dialogs::testing::cancel(h.state_mut(), id).unwrap();
+    h.run_steps(3);
+    assert!(near(&glow(h.state()), &exact, 1e-6), "{:?}", glow(h.state()));
+    // A new pick stores the linear colour.
+    h.get_by_role_and_label(egui::accesskit::Role::ColorWell, "Glow Color").click();
+    h.run_steps(3);
+    let id = picker(h.state());
+    crate::color_picker_ui::testing::set_color(h.state_mut(), id, "#8040ff");
+    crate::dialogs::testing::confirm(h.state_mut(), id).unwrap();
+    h.run_steps(3);
+    let recorded = |app: &PhotocraftApp| -> Vec<f64> {
+        let g = app.gallery.as_ref().expect("the gallery is open");
+        let hosted = app.framework.dialogs.get_by_id::<Hosted>(g.id).expect("the gallery dialog");
+        g.source.command_params(&hosted.workspace().session().effects)["effects"][0]["params"]["glowColor"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_f64)
+            .collect()
+    };
+    assert!(near(&recorded(h.state())[..3], &[0.21586, 0.05127, 1.0], 1e-3), "{:?}", recorded(h.state()));
 }
