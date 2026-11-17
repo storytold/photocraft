@@ -299,6 +299,12 @@ fn sync_live_layer_from_draft(app: &mut PhotocraftApp) {
 /// Edit › Undo while a live shape layer is being drawn takes back its last History step, which
 /// is its last anchor (or the layer itself with the first), and the draft follows (#12909).
 fn undo_live_step(app: &mut PhotocraftApp) -> bool {
+    // Anchors the layer refused are the draft's alone: Undo takes those back first, without
+    // undoing the last anchor the layer did take.
+    if live_anchors_pending(app) {
+        rebuild_live_draft(app);
+        return true;
+    }
     if let Err(e) = run_beside_draft(app, "edit.undo", json!({})) {
         app.ui.status = e;
         app.ui.status_error = true;
@@ -307,8 +313,23 @@ fn undo_live_step(app: &mut PhotocraftApp) -> bool {
     true
 }
 
+/// The layer's subpath a live draft carries, in the active document.
+fn live_subpath<'a>(doc: &'a Document, pen: &PenPath) -> Option<&'a photocraft_doc::vector::Subpath> {
+    let r = pen.resumes.as_ref()?;
+    resumed_path(doc, r)?.subpaths.get(r.index)
+}
+
+/// Does the live draft have anchors its layer has not taken (a refused `shape.edit`), while the
+/// layer is still as the draft last left it?
+fn live_anchors_pending(app: &PhotocraftApp) -> bool {
+    let (Some(pen), Some(st)) = (app.ui.pen.as_ref().filter(|p| p.live_layer), app.session.active()) else { return false };
+    live_subpath(&st.doc, pen).is_some_and(|sub| pen.resumes.as_ref().is_some_and(|r| *sub == r.was) && !subpath_is(sub, &pen_to_json(pen, false)))
+}
+
 /// A live draft whose document moved on (Undo, Redo, the History panel…) is rebuilt from its
-/// layer's open subpath, or dropped when the layer or the subpath is gone or closed (#12909).
+/// layer's open subpath, or dropped when the layer or the subpath is gone or closed (#12909). When
+/// the layer's subpath is as the draft last left it (an edit elsewhere in the document), the draft
+/// keeps its anchors, including any the layer refused, and only follows the new document state.
 pub(super) fn sync_live_draft_from_layer(app: &mut PhotocraftApp) {
     let Some(pen) = app.ui.pen.as_ref().filter(|p| p.live_layer && !p.commit_failed) else { return };
     let (Some(owner), Some(r)) = (pen.owner.as_ref(), pen.resumes.as_ref()) else { return };
@@ -316,6 +337,19 @@ pub(super) fn sync_live_draft_from_layer(app: &mut PhotocraftApp) {
     if st.doc.id != owner.document || owner.valid(app) {
         return;
     }
+    if live_subpath(&st.doc, pen).is_some_and(|sub| !sub.closed && *sub == r.was) {
+        follow_live_layer(app);
+        return;
+    }
+    rebuild_live_draft(app);
+}
+
+/// Rebuild the live draft from its layer's open subpath, or drop it when the layer or the
+/// subpath is gone, closed or empty.
+fn rebuild_live_draft(app: &mut PhotocraftApp) {
+    let Some(pen) = app.ui.pen.as_ref().filter(|p| p.live_layer) else { return };
+    let (Some(owner), Some(r)) = (pen.owner.as_ref(), pen.resumes.as_ref()) else { return };
+    let Some(st) = app.session.active() else { return };
     let sub = resumed_path(&st.doc, r).and_then(|p| p.subpaths.get(r.index)).filter(|s| !s.closed && !s.knots.is_empty());
     let rebuilt = sub.map(|s| {
         let mut draft = resumed(r.doc, "layer".into(), r.layer, r.index, s, false);
@@ -831,9 +865,10 @@ fn commit_resumed_on_layer(app: &mut PhotocraftApp, pen: &PenPath, path: &Value,
     }
     let mut params = json!({"layer": id, "path": p});
     // Closing a shape made of open paths gives it the options bar's fill and stroke, as drawing it
-    // closed would have. A live layer has a fill already (#12909), so it counts by its draft and
-    // a shape made of open paths whatever its fill: the stroke was the open path's.
-    if closed && (pen.live_layer || sh.path.subpaths.iter().all(|s| !s.closed)) {
+    // closed would have. A Pen shape has its fill from the first click (#12909), so besides one
+    // with no fill this counts one whose fill is still the options bar's; a fill set by hand stays.
+    let pen_paint = sh.fill.is_none() || (app.ui.tool_options.shape_fill && sh.fill.as_ref() == Some(&super::shapes::tool_paint(app, false)));
+    if closed && (pen.live_layer || (pen_paint && sh.path.subpaths.iter().all(|s| !s.closed))) {
         params["fill"] = fill_param(app);
         params["stroke"] = stroke_param(app);
     }

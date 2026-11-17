@@ -237,3 +237,68 @@ fn a_path_carried_on_from_its_endpoint_stays_one_step() {
     assert_eq!(subpaths(&shapes(&app)[0].1)[0].1.len(), 3);
     assert_eq!(steps(&app), before + 1);
 }
+
+/// Refuse `shape.edit`, so the next anchor stays the draft's alone.
+fn refuse_edits(app: &mut PhotocraftApp) {
+    app.session.authorize = Some(|id, _| if id == "shape.edit" { Err(photocraft_engine::EngineError::Other("refused edit fixture".into())) } else { Ok(()) });
+}
+
+#[test]
+fn undo_takes_back_an_anchor_the_layer_refused_before_any_document_step() {
+    let mut app = app();
+    click(&mut app, 500.0, 100.0);
+    click(&mut app, 700.0, 100.0);
+    refuse_edits(&mut app);
+    click(&mut app, 700.0, 300.0);
+    assert_eq!(draft_len(&app), Some(3), "the refused anchor stays in the draft");
+    app.session.authorize = None;
+    let before = steps(&app);
+    menu(&mut app, "edit.undo");
+    assert_eq!(draft_len(&app), Some(2), "only the refused anchor is taken back");
+    assert_eq!(subpaths(&shapes(&app)[0].1), [(false, vec![[500.0, 100.0], [700.0, 100.0]])], "the layer keeps the anchors it took");
+    assert_eq!(steps(&app), before, "no document step is undone");
+    menu(&mut app, "edit.undo");
+    assert_eq!(draft_len(&app), Some(1));
+    assert_eq!(subpaths(&shapes(&app)[0].1), [(false, vec![[500.0, 100.0]])]);
+}
+
+#[test]
+fn an_edit_elsewhere_keeps_the_anchors_the_layer_has_not_taken() {
+    let mut app = app();
+    let below = app.session.active().unwrap().active_layer.unwrap().0;
+    click(&mut app, 500.0, 100.0);
+    click(&mut app, 700.0, 100.0);
+    refuse_edits(&mut app);
+    click(&mut app, 700.0, 300.0);
+    app.session.authorize = None;
+    app.run("layer.setProps", json!({"layer": below, "opacity": 0.5})).unwrap();
+    crate::vector_ui::cancel_stale(&mut app);
+    assert_eq!(draft_len(&app), Some(3), "the pending anchor is kept");
+    // The next anchor takes the pending one into the layer with it.
+    click(&mut app, 500.0, 300.0);
+    assert_eq!(subpaths(&shapes(&app)[0].1)[0].1.len(), 4);
+}
+
+#[test]
+fn closing_a_carried_on_open_shape_keeps_a_fill_set_by_hand() {
+    let mut app = app();
+    click(&mut app, 500.0, 100.0);
+    click(&mut app, 700.0, 100.0);
+    click(&mut app, 700.0, 300.0);
+    pen_enter(&mut app);
+    let id = app.session.active().unwrap().active_layer.unwrap().0;
+    let options_fill = shapes(&app)[0].1.fill.clone();
+    let mut path = None;
+    if let LayerContent::Shape(sh) = &app.session.active().unwrap().doc.layer(photocraft_doc::LayerId(id)).unwrap().content {
+        path = Some(photocraft_engine::vector_cmds::path_json(&sh.path));
+    }
+    app.run("shape.edit", json!({"layer": id, "path": path.unwrap(), "fill": [0.25, 0.5, 0.75, 1.0]})).unwrap();
+    let own = shapes(&app)[0].1.fill.clone();
+    assert!(own.is_some() && own != options_fill, "the layer has a fill of its own");
+    click(&mut app, 700.0, 300.0); // its last anchor: carry on
+    click(&mut app, 500.0, 300.0);
+    click(&mut app, 500.0, 100.0); // its first anchor: close
+    let sh = &shapes(&app)[0].1;
+    assert!(sh.path.subpaths[0].closed);
+    assert_eq!(sh.fill, own, "a fill set by hand is not replaced by the options bar's");
+}

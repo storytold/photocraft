@@ -42,7 +42,7 @@ pub(super) fn open_pen_stroke_param(app: &PhotocraftApp) -> Value {
 
 /// The paint the next shape's fill (`stroke` false) or stroke takes: the options bar's gradient,
 /// else the foreground / background colour.
-fn tool_paint(app: &PhotocraftApp, stroke: bool) -> photocraft_doc::Fill {
+pub(super) fn tool_paint(app: &PhotocraftApp, stroke: bool) -> photocraft_doc::Fill {
     let (gradient, color) = tool_paint_source(app, stroke);
     gradient.clone().unwrap_or_else(|| solid_paint(color))
 }
