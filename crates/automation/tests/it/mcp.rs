@@ -240,6 +240,30 @@ async fn tool_schemas_pass_strict_validators() {
     client.cancel().await.unwrap();
 }
 
+/// `reply` crosses the wire as a lowercase string, per batch and per step, and a bad value is a
+/// parameter error rather than a silently full reply.
+#[tokio::test(flavor = "multi_thread")]
+async fn reply_detail_is_accepted_over_mcp() {
+    let client = connect(PhotocraftMcp::headless()).await;
+    json_of(&call(&client, "doc_new", json!({"width": 32, "height": 32})).await);
+    let rect = json!({"id": "shape.create", "params": {"kind": "rect", "rect": [2, 2, 10, 10]}});
+    let mut full_step = rect.clone();
+    full_step["reply"] = json!("full");
+    let batch = json_of(&call(&client, "command_batch", json!({"steps": [rect, full_step], "reply": "brief"})).await);
+    let results = batch["results"].as_array().unwrap();
+    assert_eq!(results[0]["result"]["bounds"], json!([2, 2, 10, 10]), "{batch}");
+    assert!(results[0]["result"].get("path").is_none() && results[1]["result"]["path"].is_object(), "{batch}");
+    let r = call(&client, "command_run", json!({"id": "shape.create", "params": {"kind": "rect", "rect": [1, 1, 4, 4]}, "reply": "none"})).await;
+    assert_eq!(json_of(&r), Value::Null);
+    let schema = client.list_all_tools().await.unwrap();
+    let run = schema.iter().find(|t| t.name == "command_run").unwrap();
+    assert!(run.input_schema["properties"]["reply"].is_object(), "agents can discover `reply`");
+    let bad = client
+        .call_tool(CallToolRequestParams::new("command_run").with_arguments(json!({"id": "shape.create", "reply": "short"}).as_object().unwrap().clone()));
+    assert!(bad.await.is_err_and(|e| e.to_string().contains("short")), "an unknown reply is rejected");
+    client.cancel().await.unwrap();
+}
+
 /// The backticked examples in every `id` property description of a schema.
 fn id_examples(schema: &Value, out: &mut Vec<String>) {
     match schema {

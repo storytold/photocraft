@@ -183,10 +183,19 @@ protocol messages. For `serve`, explicit credential flags require `--port` (or
   `filter` and `enabled_only`. Returns a bare JSON array of
   `{id, label, menu, shortcut, params, enabled, disabledReason, needsDocument}` objects (see
   [Command list replies](control-protocol.md#command-list-replies)).
-- `command_run`: `id`, optional `params` and `wait`. Command parameters remain engine-defined.
-- `command_batch`: ordered `steps`, optional `stop_on_error` (default true); stops at the first
-  error unless false. Not an atomic transaction: earlier successful steps stay applied, with
-  no rollback. Existing per-step results and reply budgets are preserved.
+- `command_run`: `id`, optional `params`, `wait` and `reply`. Command parameters remain
+  engine-defined.
+- `command_batch`: ordered `steps`, optional `stop_on_error` (default true) and `reply`; stops
+  at the first error unless false. Not an atomic transaction: earlier successful steps stay
+  applied, with no rollback. Existing per-step results and reply budgets are preserved.
+- `reply` sets how much of a command's result comes back: `full` (the default), `brief` or
+  `none`. `brief` keeps the result's top-level numbers, strings, nulls and lists of up to 16
+  scalars (a layer id, a name, `bounds`) and lists the members it drops in `omitted`; a longer
+  top-level list becomes `{length, omitted:["items"]}`. `none` returns `null` from
+  `command_run` and a bare `{ok:true}` step in a batch; errors are always reported in full. A
+  batch's `reply` applies to every step without its own. Shape commands echo the whole path
+  with both handles of every knot, so a batch that draws many shapes stays well inside the
+  reply budget with `brief`.
 - `doc_inspect`: layer tree, history and selection; an empty session returns `document:null`.
   Every layer (including groups and nested children) reports raster-only `hasMask`,
   `hasVectorMask` for vector mask presence, and `vectorMaskEnabled` (`true`/`false` when
