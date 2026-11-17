@@ -622,8 +622,9 @@ impl<'a> Image<'a> {
         Ok(CoverageMaskHeader { name, name_limited, properties, width, height, hierarchy_offset, children })
     }
 
-    /// Current P2 has no coverage adapters: inventory source configuration once,
-    /// leaving the supported native owner's pixels untouched.
+    /// Inventory-only oracle for configuration-retention tests. Production
+    /// coverage execution reports its independently admitted outcomes.
+    #[cfg(test)]
     fn inventory_coverage_effects(&mut self, owner: usize, pointers: &[usize], ctl: &Interrupt<'_>) -> Result<()> {
         self.report_coverage_effects(owner, pointers, None, ctl)
     }
@@ -845,10 +846,8 @@ impl<'a> Image<'a> {
                 if !self.outcomes.recording() {
                     return Ok(());
                 }
-                if mask_consumed {
-                    if let Some(flags) = execution.and_then(|state| state.sample_flags.get(&start)) {
-                        self.precision_underflow(mask_outcome, flags)?;
-                    }
+                if mask_consumed && let Some(flags) = execution.and_then(|state| state.sample_flags.get(&start)) {
+                    self.precision_underflow(mask_outcome, flags)?;
                 }
                 if record.name_limited {
                     self.metadata_limit(

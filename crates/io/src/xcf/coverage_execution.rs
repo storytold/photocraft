@@ -1,6 +1,9 @@
 //! Coverage execution is independent of optional report retention. Orphan masks
 //! still use header-only inventory; only admitted native owners reach this module.
-use super::*;
+use super::{
+    ConversionReason, CoverageMaskHeader, HashMap, Image, Interrupt, IoError, LayerMask, MAX_DEPTH, MAX_LAYERS, Pixels, Rect, Result, Surface, coverage,
+    effects, invalid, native_work,
+};
 #[derive(Default)]
 pub(super) struct CoverageExecution<'a> {
     pub(super) applied: HashMap<usize, std::result::Result<String, effects::MappingFailure>>,
@@ -16,21 +19,19 @@ pub(super) struct CoverageExecution<'a> {
 impl CoverageExecution<'_> {
     pub(super) fn discard_since(&mut self, start: usize, work: &native_work::Work, ctl: &Interrupt<'_>) -> Result<()> {
         for pointer in self.finished.get(start..).unwrap_or_default() {
-            if let Some(result) = self.applied.get_mut(pointer) {
-                if let Ok(notes) = result {
-                    let (reason, message) = match work.charge_bytes(notes.len().saturating_add(96), ctl) {
-                        Ok(()) => (
-                            ConversionReason::NativePolicy,
-                            format!("Temporary native coverage result discarded because its owning stage did not commit. {notes}"),
-                        ),
-                        Err(IoError::Cancelled) => return Err(IoError::Cancelled),
-                        Err(_) => (
-                            ConversionReason::RetentionLimit,
-                            "Temporary native coverage discarded; further details omitted after generation work limits".into(),
-                        ),
-                    };
-                    *result = Err(effects::MappingFailure { reason, message });
-                }
+            if let Some(result) = self.applied.get_mut(pointer)
+                && let Ok(notes) = result
+            {
+                let (reason, message) = match work.charge_bytes(notes.len().saturating_add(96), ctl) {
+                    Ok(()) => {
+                        (ConversionReason::NativePolicy, format!("Temporary native coverage result discarded because its owning stage did not commit. {notes}"))
+                    }
+                    Err(IoError::Cancelled) => return Err(IoError::Cancelled),
+                    Err(_) => {
+                        (ConversionReason::RetentionLimit, "Temporary native coverage discarded; further details omitted after generation work limits".into())
+                    }
+                };
+                *result = Err(effects::MappingFailure { reason, message });
             }
         }
         Ok(())
@@ -238,6 +239,10 @@ impl<'a> Image<'a> {
 #[cfg(test)]
 mod tests {
     use super::super::tests::W;
+    use super::super::{
+        Arc, ColorMode, Compression, ConversionDisposition, ConversionEntry, Document, Layer, LayerContent, MAX_PIXEL_BYTES, PixelFormat, SampleType, Size,
+        conversion,
+    };
     use super::*;
     fn source() -> (Vec<u8>, usize) {
         let mut w = W { out: vec![0; 4], wide: true };
