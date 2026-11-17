@@ -159,6 +159,33 @@ fn batch_runs_the_first_action_of_the_set_switched_to_in_the_form() {
     assert_eq!((image.size.width, image.size.height), (80, 100), "set B's rotation ran, not set A's Invert");
 }
 
+/// The other half of the OK-time rule (`playback_params`' lagging-name branch): a written
+/// action name the new set does not hold, arriving before any frame drew the follow row. The
+/// action write stays as the raw fields value (a custom row takes it, its draw would only
+/// re-pick on the next frame), and OK runs the switched-to set's first action - a name from
+/// another entry is a set-switch lag, not a command error.
+#[test]
+fn batch_ok_with_an_action_name_lagging_the_set_switch_runs_the_new_sets_first_action() {
+    let (mut app, ctx) = app_with(1);
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("source.png").to_string_lossy().into_owned();
+    let output = dir.path().join("out");
+    app.run("file.saveACopy", json!({"path": input})).unwrap();
+    push(&mut app, "Alpha", Some("A"), vec![("image.adjustments.invert", json!({}))]);
+    push(&mut app, "Gamma", Some("B"), vec![("image.imageRotation.90cw", json!({}))]);
+    app.ui.actions.panel.selected = Some(craft::automation::ui::actions::ActionSelection::Action(0));
+    let id = open_form(&mut app, &ctx, "file.automate.batch");
+    set(&mut app, &ctx, id, "input", json!(dir.path().to_string_lossy()));
+    set(&mut app, &ctx, id, "output", json!(output.to_string_lossy()));
+    set(&mut app, &ctx, id, "set", json!("B"));
+    set(&mut app, &ctx, id, "action", json!("Alpha"));
+    crate::dialogs::confirm(&mut app, &ctx, id).unwrap();
+    let written = names_in(&output);
+    assert_eq!(written.len(), 1, "the batch ran: {}", app.ui.status);
+    let image = photocraft_io::import("out.png", &std::fs::read(output.join(&written[0])).unwrap()).unwrap().document;
+    assert_eq!((image.size.width, image.size.height), (80, 100), "set B's Gamma ran: A's lagging name re-picked, not refused");
+}
+
 /// Not measured (#13672): the first-open state stays the Actions panel's selection. With sets
 /// loaded, the dialog opens on the selected action's set and on that action's name.
 #[test]
