@@ -217,7 +217,7 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         _ => {}
     }
     if let Some(next) = &out.last_used {
-        for slot in &slots {
+        for slot in slots.iter() {
             if let Some(tool) = next.get(slot.id)
                 && remembered.get(slot.id) != Some(tool)
             {

@@ -707,3 +707,18 @@ fn a_second_pass_in_one_frame_runs_no_command_twice() {
     crate::app::framework::keys_pass(&mut app, &ctx, egui::RawInput::default(), |_| {});
     assert_eq!(count(&app), n + 1, "one press, one duplicate");
 }
+
+/// `bridge_of` answers from the table built once (#15493) exactly as a scan that builds every row's command does:
+/// for every row's framework command, and none for a command no row bridges.
+#[test]
+fn bridge_of_finds_the_row_a_fresh_scan_finds() {
+    use super::{CommandRef, RUNTIME_COMMANDS, bridge_of};
+    let scan = |command: &CommandRef| RUNTIME_COMMANDS.iter().find(|(_, bridged)| bridged.command() == *command).map(|(id, bridged)| (*id, *bridged));
+    for (_, bridged) in RUNTIME_COMMANDS {
+        let command = bridged.command();
+        assert_eq!(bridge_of(&command), scan(&command), "{command:?}");
+        assert!(bridge_of(&command).is_some(), "{command:?} is bridged");
+    }
+    let unknown = CommandRef::new("photocraft.noSuchCommand");
+    assert_eq!(bridge_of(&unknown), None);
+}
