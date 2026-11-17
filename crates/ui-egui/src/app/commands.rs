@@ -7,6 +7,12 @@ impl PhotocraftApp {
     /// Run an engine command, reporting errors in the status bar.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
         let params = if id == "select.findLayers" { crate::layer_filter_ui::find::params_for_run(self, params) } else { params };
+        let library_change = matches!(id, "actions.clearAll" | "actions.reset" | "actions.replace" | "actions.undoLibrary");
+        if library_change && let Err(error) = actions::library::idle(self, id) {
+            self.ui.status = error.clone();
+            self.ui.status_error = true;
+            return Err(error);
+        }
         if let Some(result) = delete_layer_prompt::intercept(self, id, &params) {
             return result;
         }
@@ -21,6 +27,17 @@ impl PhotocraftApp {
         let result = self.run_command(id, params);
         if gate.is_some() {
             self.session.authorize = None;
+        }
+        if let Ok(reply) = &result {
+            if library_change {
+                actions::library_selection_changed(self);
+            } else if id == "actions.load" {
+                actions::library_slots_changed(self);
+            } else if id == "actions.duplicate"
+                && let Some(slot) = reply["setSlot"].as_u64().and_then(|slot| usize::try_from(slot).ok())
+            {
+                actions::library_slot_inserted(self, slot);
+            }
         }
         // An explicit channel target (⌘2, ⌘\, ⌘3…) decides what the Layers panel targets too:
         // ⌘2 after the mask was targeted goes back to the layer's pixels.
@@ -54,8 +71,8 @@ impl PhotocraftApp {
     }
 
     /// [`run_command`]'s body at the current depth: stale-gesture cancellation, automation
-    /// authorization, the UI intercepts (prompts, tool routing, the path clipboard), the
-    /// engine dispatch and the post-command state fixes.
+    /// authorization, the UI intercepts (prompts, tool routing, the action library and path
+    /// clipboard), the engine dispatch and the post-command state fixes.
     fn run_command_at_depth(&mut self, id: &str, params: Value) -> Result<Value, String> {
         if !vector_ui::cancel_stale(self) {
             return Err(self.ui.status.clone());
@@ -116,6 +133,10 @@ impl PhotocraftApp {
         }
         if let Some(r) = crate::crop_ui::intercept(self, id) {
             return r;
+        }
+        // Action-library edits keep their own history beside the document's.
+        if id == "edit.undo" && actions::library::edit_undo_label(self).is_some() {
+            return actions::library::undo(self);
         }
         // Path Selection's component clipboard: Edit › Copy/Cut take the selected components,
         // Edit › Paste lays the path clipboard down (before the OS-clipboard import below).

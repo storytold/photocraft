@@ -35,21 +35,24 @@ pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
     // The options bar's Mode is the tool's own brush's.
     let mode = crate::blend_keys::brush_tool_mode(app.ui.tool, app.session.tools.brush.mode);
     // View › Pattern Preview: both tools carry a stroke on across the canvas edges (#8883).
-    let mut p = json!({"aligned": o.clone_aligned, "sampleLayer": o.clone_sample, "mode": mode.label(), "wrap": app.ui.view.pattern_preview});
+    let sample = if clone_stamp_indexed(app) { "current" } else { o.clone_sample.as_str() };
+    let mut p = json!({"aligned": o.clone_aligned, "sampleLayer": sample, "mode": mode.label(), "wrap": app.ui.view.pattern_preview});
     if app.ui.tool == Tool::CloneStamp {
         p["opacity"] = json!(app.session.tools.brush.opacity * 100.0);
         p["flow"] = json!(app.session.tools.brush.flow * 100.0);
     }
     // The Clone Source panel's active slot (set by ⌥-click) drives the stroke: the engine keeps
-    // the aligned pairing and applies the slot's scale/rotation/flip.
-    let slot = app.session.presets.clone.active().source.is_some();
-    match (app.ui.clone_offset.filter(|_| o.clone_aligned && !slot), app.ui.clone_source.filter(|_| !slot)) {
-        _ if slot => {}
-        (Some(off), _) => p["offset"] = json!(off),
-        (None, Some(src)) => p["source"] = json!(src),
-        (None, None) => return None,
-    }
+    // the aligned pairing and applies the slot's scale/rotation/flip. An empty slot refuses to
+    // paint, as with no source at all: `ui.clone_source` / `ui.clone_offset` carry no document,
+    // so falling back to them would read another document's coordinates from this one's pixels.
+    app.session.presets.clone.active().source?;
     Some(p)
+}
+
+/// The Clone Stamp in an Indexed Color document, where the reference greys Sample at Current Layer
+/// and names the Normal Mode "Threshold" (#12613).
+pub(crate) fn clone_stamp_indexed(app: &PhotocraftApp) -> bool {
+    app.ui.tool == Tool::CloneStamp && app.session.active().is_some_and(|st| st.doc.mode == photocraft_doc::ColorMode::Indexed)
 }
 
 /// History Brush params for the live preview and the commit (without `points` and `target`): the
@@ -177,6 +180,8 @@ pub(crate) fn pattern_stamp_params(app: &PhotocraftApp, points: &[[f64; 3]]) -> 
         "seed": stroke_seed(points),
         // The options bar's Mode is the tool's own brush's; Behind is a mode of that list.
         "mode": if app.session.tools.brush.behind { "Behind" } else { app.session.tools.brush.mode.label() },
+        "opacity": app.session.tools.brush.opacity * 100.0,
+        "flow": app.session.tools.brush.flow * 100.0,
     });
     if o.pattern_stamp_aligned
         && let Some(ph) = app.ui.pattern_stamp_phase
@@ -619,10 +624,10 @@ pub fn content_aware_move_params(app: &PhotocraftApp, offset: [i64; 2]) -> Value
 
 /// Object Selection: the dragged rectangle. A click (or a sub-2 px nudge) cannot be a
 /// rectangle: with Object Finder on it selects the object under the pointer, the one hovering
-/// highlighted (#4087; ⇧ adds, ⌥ subtracts, ⇧⌥ intersects, otherwise replaces). With it off it
-/// falls back to a Quick Selection dab at
-/// the brush size instead of looking dead (⌥ subtracts, otherwise it adds). Larger drags
-/// run the rectangle GrabCut (⌥ subtracts, ⇧ adds, otherwise replaces).
+/// highlighted (#4087). With it off it falls back to a Quick Selection dab at the brush size
+/// instead of looking dead (⌥ or Subtract mode subtracts, otherwise it adds). Larger drags
+/// run the rectangle GrabCut. Both combine as the options bar's New / Add / Subtract /
+/// Intersect buttons say, with ⇧ adding, ⌥ subtracting and ⇧⌥ intersecting (#12853).
 pub fn finish_object_selection(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) {
     // Indexed Color and Bitmap: the reference application's alert with OK (#12867), and nothing runs.
     if let Some(why) = app.session.active().and_then(|st| photocraft_engine::smartselect_cmds::object_mode_refusal(st.doc.mode)) {
@@ -633,34 +638,26 @@ pub fn finish_object_selection(app: &mut PhotocraftApp, start: [f64; 2], end: [f
     let (x, y) = (start[0].min(end[0]), start[1].min(end[1]));
     let (w, h) = ((end[0] - start[0]).abs(), (end[1] - start[1]).abs());
     let sample_all = app.ui.tool_options.sample_all.object_selection;
+    let hard_edge = app.ui.tool_options.object_hard_edge;
+    let mode = crate::tool_feedback::selection_mode(Tool::ObjectSelection, app.ui.selection_mode, mods);
     if (w < 2.0 || h < 2.0) && app.ui.tool_options.object_finder {
         // Object Finder (#4087): the object under the click, as hovering highlighted it.
-        let mode = match (mods.shift, mods.alt) {
-            (true, true) => "intersect",
-            (true, false) => "add",
-            (false, true) => "subtract",
-            (false, false) => "replace",
-        };
-        let r = app.run("select.object", json!({"point": [end[0], end[1]], "mode": mode, "sampleAllLayers": sample_all}));
+        let r = app.run("select.object", json!({"point": [end[0], end[1]], "mode": mode, "sampleAllLayers": sample_all, "hardEdge": hard_edge}));
         crate::object_finder::clear(app);
         report_smart_result(app, r, tl!("No object found there — drag a rectangle around it"));
         return;
     }
     if w < 2.0 || h < 2.0 {
         let size = app.session.tools.brush.size;
-        let mode = if mods.alt { "subtract" } else { "add" };
+        let mode = if mods.alt || mode == "subtract" { "subtract" } else { "add" };
         let r = app.run("select.quick", json!({"points": [[end[0], end[1]]], "size": size, "mode": mode, "sampleAllLayers": sample_all}));
         report_smart_result(app, r, tl!("Quick Selection found nothing there"));
         return;
     }
-    let mode = if mods.alt {
-        "subtract"
-    } else if mods.shift {
-        "add"
-    } else {
-        "replace"
-    };
-    let r = app.run("select.object", json!({"rect": [x.round(), y.round(), w.round(), h.round()], "mode": mode, "sampleAllLayers": sample_all}));
+    let r = app.run(
+        "select.object",
+        json!({"rect": [x.round(), y.round(), w.round(), h.round()], "mode": mode, "sampleAllLayers": sample_all, "hardEdge": hard_edge}),
+    );
     report_smart_result(app, r, tl!("Object Selection found nothing there — try a tighter rectangle"));
 }
 
@@ -707,16 +704,17 @@ pub fn set_source(app: &mut PhotocraftApp, x: f64, y: f64) {
 
 /// Where the clone source is sampled from, shown only while a Clone Stamp or Healing Brush stroke
 /// is painted, as in Photoshop: setting the source (⌥-click) leaves nothing on the canvas (#668).
+/// A source in another open document has no point on this canvas.
 pub fn source_marker_point(app: &PhotocraftApp) -> Option<[f64; 2]> {
     if !matches!(app.active_tool(), Tool::CloneStamp | Tool::Healing) {
         return None;
     }
-    let at = app.drag.as_ref().filter(|d| matches!(d.tool, Tool::CloneStamp | Tool::Healing)).and_then(|d| d.points.last().map(|p| [p[0], p[1]]))?;
-    match (crate::preset_panels::clone_sample_point(app, Some(at)), app.ui.clone_offset, app.ui.clone_source) {
-        (Some(p), ..) => Some(p),
-        (None, Some(off), _) => Some([at[0] + off[0], at[1] + off[1]]),
-        (None, None, s) => s,
+    let slot = app.session.presets.clone.active();
+    if slot.document_closed || slot.document.is_some_and(|id| app.session.active().is_none_or(|st| st.doc.id != id)) {
+        return None;
     }
+    let at = app.drag.as_ref().filter(|d| matches!(d.tool, Tool::CloneStamp | Tool::Healing)).and_then(|d| d.points.last().map(|p| [p[0], p[1]]))?;
+    crate::preset_panels::clone_sample_point(app, Some(at))
 }
 
 /// Crosshair at [`source_marker_point`].
@@ -799,6 +797,61 @@ fn cam_amount_slider(ui: &mut egui::Ui, name: &str, value: &mut f32, lo: f32, hi
         }
         s.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), f64::from(*value), name));
     });
+}
+
+/// Burn and Dodge's Exposure (#12669): whole numbers 1..100 with the reference's "Closest value
+/// inserted" alert, and the slider arrow. A typed value outside the range becomes the closest one
+/// and the caller opens the alert once the field is left; a scrub stops at the ends without one.
+/// The caption just before the field names it.
+fn exposure_popup(ui: &mut egui::Ui, value: &mut f32) -> (egui::Response, bool) {
+    *value = if value.is_finite() { value.round().clamp(1.0, 100.0) } else { 1.0 };
+    let draft_id = ui.make_persistent_id(egui::IdSalt::new("burn-exposure-typed")).with("typed");
+    let draft = ui.ctx().data(|d| d.get_temp::<(f32, f32)>(draft_id));
+    let mut typed = draft.filter(|(_, stored)| *stored == *value).map_or(*value, |(typed, _)| typed);
+    // Wide range so a typed 150 reaches here unclamped.
+    let r = crate::widgets::value_field(ui, &mut typed, -1.0e9..=1.0e9, "%", 58.0);
+    let out_id = r.id.with("out-of-range");
+    if r.gained_focus() {
+        ui.ctx().data_mut(|d| d.remove_temp::<bool>(out_id));
+    }
+    // A draft that is no longer a number holds no out-of-range value: an alert owed for an earlier
+    // 150 typed and then typed over with text would name a value the field does not keep. Typing a
+    // number again after that text owes the alert again, even when the draft never stopped holding
+    // the first 150, so the restored number is no change of its own: the eraser's tolerance field
+    // keeps the same flag for the same reason (#12268).
+    let no_number_id = r.id.with("no-number-typed");
+    if r.has_focus() {
+        match crate::widgets::typed_text_parses(ui.ctx(), r.id) {
+            Some(false) => ui.ctx().data_mut(|d| {
+                d.remove_temp::<bool>(out_id);
+                d.insert_temp(no_number_id, true);
+            }),
+            Some(true) if ui.ctx().data_mut(|d| d.remove_temp::<bool>(no_number_id)).unwrap_or(false) => {
+                let out = typed.is_finite() && !(1.0..=100.0).contains(&typed);
+                ui.ctx().data_mut(|d| d.insert_temp(out_id, out));
+            }
+            _ => {}
+        }
+    } else {
+        ui.ctx().data_mut(|d| d.remove_temp::<bool>(no_number_id));
+    }
+    if r.changed() && typed.is_finite() {
+        *value = typed.round().clamp(1.0, 100.0);
+        let typing = (r.has_focus() || r.lost_focus()) && ui.ctx().dragged_id().is_none();
+        let out = typing && !(1.0..=100.0).contains(&typed);
+        ui.ctx().data_mut(|d| d.insert_temp(out_id, out));
+        if typing && r.has_focus() {
+            ui.ctx().data_mut(|d| d.insert_temp(draft_id, (typed, *value)));
+        } else {
+            ui.ctx().data_mut(|d| d.remove_temp::<(f32, f32)>(draft_id));
+        }
+    }
+    if !r.has_focus() {
+        ui.ctx().data_mut(|d| d.remove_temp::<(f32, f32)>(draft_id));
+    }
+    cam_amount_slider(ui, tl!("Exposure"), value, 1.0, 100.0, "Exposure");
+    let alert = r.lost_focus() && ui.ctx().data_mut(|d| d.remove_temp::<bool>(out_id)).unwrap_or(false);
+    (r, alert)
 }
 
 /// Opens the alert with `message` (English, translated here) unless it is already up.
@@ -888,6 +941,17 @@ fn protect_tones_checkbox(ui: &mut egui::Ui, on: &mut bool) -> (egui::Response, 
     (resp, label_resp.id)
 }
 
+/// The Clone Stamp's and Healing Brush's Sample. `indexed` ([`clone_stamp_indexed`]) greys it at
+/// Current Layer and leaves the stored choice for other documents.
+fn clone_sample_dropdown(ui: &mut egui::Ui, stored: &mut String, indexed: bool) {
+    let opts = [("current", tl!("Current Layer")), ("currentAndBelow", tl!("Current & Below")), ("all", tl!("All Layers"))];
+    let mut sample = if indexed { "current" } else { stored.as_str() };
+    let changed = ui.add_enabled_ui(!indexed, |ui| crate::widgets::dropdown(ui, "clone-sample", tl!("Source"), &mut sample, &opts, 130.0)).inner;
+    if changed && !indexed {
+        *stored = sample.to_owned();
+    }
+}
+
 /// Options bar for the retouching and smart-selection tools. Returns false for other tools.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bool {
     if !tool.is_brushlike() && !matches!(tool, Tool::QuickSelection | Tool::ObjectSelection | Tool::Patch | Tool::ContentAwareMove | Tool::RedEye)
@@ -900,6 +964,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         return true;
     }
     let composite = crate::canvas::paint_target(app).as_str() == Some("pixels");
+    let indexed = clone_stamp_indexed(app);
     let o = &mut app.ui.tool_options;
     match tool {
         Tool::SpotHealing => {
@@ -914,11 +979,14 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             crate::widgets::checkbox(ui, &mut o.sample_all.spot_healing, tl!("Sample All Layers"));
         }
         Tool::Remove => {
-            // Photoshop's options bar: Sample All Layers, Create a new layer, Remove after each
-            // stroke; with strokes waiting, ✓ applies them and ⊘ drops them.
-            crate::widgets::checkbox(ui, &mut o.sample_all.remove, tl!("Sample All Layers"));
-            ui.add_enabled_ui(composite, |ui| crate::widgets::checkbox(ui, &mut o.remove_new_layer, tl!("Create a new layer")));
-            crate::widgets::checkbox(ui, &mut o.remove_after_each_stroke, tl!("Remove after each stroke"));
+            // Photoshop's options bar (#12546): Sample all layers, Remove after each stroke, Create
+            // new layer; with strokes waiting, ✓ applies them and ⊘ drops them.
+            crate::widgets::checkbox(ui, &mut o.sample_all.remove, tl!("Sample all layers")).on_hover_text(tl!("Sample content from all visible layers"));
+            crate::widgets::checkbox(ui, &mut o.remove_after_each_stroke, tl!("Remove after each stroke"))
+                .on_hover_text(tl!("Remove area after a single stroke"));
+            ui.add_enabled_ui(composite, |ui| {
+                crate::widgets::checkbox(ui, &mut o.remove_new_layer, tl!("Create new layer")).on_hover_text(tl!("Create new layer with results"));
+            });
             if !app.remove_pending.is_empty() {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if crate::widgets::primary_button(ui, "✓", 32.0)
@@ -965,13 +1033,8 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         Tool::Healing | Tool::CloneStamp => {
             crate::widgets::checkbox(ui, &mut o.clone_aligned, tl!("Aligned"));
             opt(ui, tl!("Sample:"));
-            let opts = [
-                ("current".to_string(), tl!("Current Layer")),
-                ("currentAndBelow".to_string(), tl!("Current & Below")),
-                ("all".to_string(), tl!("All Layers")),
-            ];
-            crate::widgets::dropdown(ui, "clone-sample", tl!("Source"), &mut o.clone_sample, &opts, 130.0);
-            if app.ui.clone_source.is_none() {
+            clone_sample_dropdown(ui, &mut o.clone_sample, indexed);
+            if app.session.presets.clone.active().source.is_none() {
                 crate::widgets::vline(ui, 22.0);
                 opt(ui, &crate::i18n::fmt(tl!("{key}-click to set the source"), &[("key", &crate::shortcuts::pretty("Alt"))]));
             }
@@ -1004,12 +1067,17 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 let id = range.id;
                 tooltip(range, tl!("Painting Mode"), id);
             }
+            // Whole numbers 1..100 with the reference's "Closest value inserted" alert and a
+            // slider arrow (#12669). The Dodge tool shares this field.
             opt(ui, tl!("Exposure:"));
-            let exposure = crate::widgets::value_field(ui, &mut o.exposure, 1.0..=100.0, "%", 58.0);
+            let (exposure, out_of_range) = exposure_popup(ui, &mut o.exposure);
             let exposure_id = exposure.id;
             tooltip(exposure, tl!("Set exposure for stroke"), exposure_id);
             let (protect, protect_id) = protect_tones_checkbox(ui, &mut o.protect_tones);
             tooltip(protect, tl!("Minimizes clipping in shadows and highlights, and keeps colors from shifting hue"), protect_id);
+            if out_of_range {
+                crate::eraser_ui::open_range_alert(app);
+            }
         }
         Tool::Sponge => {
             opt(ui, tl!("Mode:"));
@@ -1111,7 +1179,8 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                     let entries = st.history.entries();
                     let name =
                         if idx < entries.len() { entries.get(idx).cloned() } else { st.history.redo_labels().nth(idx - entries.len()).map(str::to_string) }?;
-                    if idx == 0 && name == "Open" {
+                    // The opening state is "Open" for a file and "New" for a new document (#14029).
+                    if idx == 0 && matches!(name.as_str(), "Open" | "New") {
                         Some(tl!("Paints from the document's opening state").to_string())
                     } else {
                         Some(crate::i18n::fmt(tl!("Source: {name}"), &[("name", &name)]))
@@ -1154,8 +1223,11 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             }
         }
         Tool::ObjectSelection => {
+            crate::panels::selection_mode_buttons(&mut app.ui.selection_mode, ui);
+            crate::widgets::vline(ui, 22.0);
             crate::widgets::checkbox(ui, &mut o.object_finder, tl!("Object Finder"));
             crate::widgets::checkbox(ui, &mut o.sample_all.object_selection, tl!("Sample All Layers"));
+            crate::widgets::checkbox(ui, &mut o.object_hard_edge, tl!("Hard Edge"));
             opt(ui, tl!("Drag a rectangle around the object"));
             crate::widgets::vline(ui, 22.0);
             if crate::widgets::secondary_button(ui, tl!("Select Subject"), 0.0).clicked() {
@@ -1230,3 +1302,11 @@ mod healing_indexed_alert_tests;
 #[cfg(test)]
 #[path = "../clone_stamp_no_source_alert_tests.rs"]
 mod clone_stamp_no_source_alert_tests;
+
+#[cfg(test)]
+#[path = "remove_options_bar_labels_tests.rs"]
+mod remove_options_bar_labels_tests;
+
+#[cfg(test)]
+#[path = "../burn_exposure_field_tests.rs"]
+mod burn_exposure_field_tests;
