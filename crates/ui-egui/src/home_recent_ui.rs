@@ -92,10 +92,21 @@ fn paths_match(a: &str, b: &str) -> bool {
     }
 }
 
-/// Downscale an RGBA8 buffer to fit within `max_dim` on its longest side.
+/// Pixel budget for decoding a flat image (PNG, JPEG, TIFF, ...) for its Home thumbnail. The
+/// embedded-preview limit of 4096 px a side turned away ordinary photos (a 24 MP camera, a 48 MP
+/// phone; #13140); 64 MP covers them. Larger images keep the file icon.
 #[cfg(not(target_arch = "wasm32"))]
-fn downsample_rgba(w: u32, h: u32, src_data: &[u8], max_dim: u32) -> Option<ColorImage> {
-    if w == 0 || h == 0 || src_data.len() != (w as usize) * (h as usize) * 4 {
+const MAX_FLAT_THUMBNAIL_PIXELS: u64 = 64 << 20;
+/// Decoded-buffer budget for that image: 64 MP of 8-bit RGBA, or 32 MP at 16 bits.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_FLAT_THUMBNAIL_ALLOC: u64 = 256 << 20;
+
+/// Nearest-neighbour downscale of `w`×`h` pixels of `bpp` bytes each to fit within `max_dim` on
+/// the longest side: the result's width, height and pixels, or `None` if `src_data` is not
+/// `w`×`h` pixels.
+#[cfg(not(target_arch = "wasm32"))]
+fn downsample_pixels(w: u32, h: u32, src_data: &[u8], bpp: usize, max_dim: u32) -> Option<(u32, u32, std::borrow::Cow<'_, [u8]>)> {
+    if w == 0 || h == 0 || bpp == 0 || src_data.len() != (w as usize) * (h as usize) * bpp {
         return None;
     }
     let (tw, th) = if w > max_dim || h > max_dim {
@@ -105,26 +116,45 @@ fn downsample_rgba(w: u32, h: u32, src_data: &[u8], max_dim: u32) -> Option<Colo
         (w, h)
     };
     if tw == w && th == h {
-        Some(ColorImage::from_rgba_unmultiplied([w as usize, h as usize], src_data))
+        Some((w, h, std::borrow::Cow::Borrowed(src_data)))
     } else {
-        let mut thumb_px = vec![0u8; (tw as usize) * (th as usize) * 4];
+        let mut thumb_px = vec![0u8; (tw as usize) * (th as usize) * bpp];
         for y in 0..th {
             let sy = ((y as f32 / th as f32) * h as f32) as usize;
             for x in 0..tw {
                 let sx = ((x as f32 / tw as f32) * w as f32) as usize;
-                let src_idx = (sy * w as usize + sx) * 4;
-                let dst_idx = (y as usize * tw as usize + x as usize) * 4;
-                if src_idx + 4 <= src_data.len()
-                    && dst_idx + 4 <= thumb_px.len()
-                    && let Some(src) = src_data.get(src_idx..src_idx + 4)
-                    && let Some(dst) = thumb_px.get_mut(dst_idx..dst_idx + 4)
+                let src_idx = (sy * w as usize + sx) * bpp;
+                let dst_idx = (y as usize * tw as usize + x as usize) * bpp;
+                if src_idx + bpp <= src_data.len()
+                    && dst_idx + bpp <= thumb_px.len()
+                    && let Some(src) = src_data.get(src_idx..src_idx + bpp)
+                    && let Some(dst) = thumb_px.get_mut(dst_idx..dst_idx + bpp)
                 {
                     dst.copy_from_slice(src);
                 }
             }
         }
-        Some(ColorImage::from_rgba_unmultiplied([tw as usize, th as usize], &thumb_px))
+        Some((tw, th, std::borrow::Cow::Owned(thumb_px)))
     }
+}
+
+/// Downscale an RGBA8 buffer to fit within `max_dim` on its longest side.
+#[cfg(not(target_arch = "wasm32"))]
+fn downsample_rgba(w: u32, h: u32, src_data: &[u8], max_dim: u32) -> Option<ColorImage> {
+    let (tw, th, px) = downsample_pixels(w, h, src_data, 4, max_dim)?;
+    Some(ColorImage::from_rgba_unmultiplied([tw as usize, th as usize], &px))
+}
+
+/// [`downsample_rgba`] for a decoded image of any layout and depth. Only the picked pixels are
+/// converted to RGBA8, so a large photo is not copied at full size first.
+#[cfg(not(target_arch = "wasm32"))]
+fn downsample_image(img: &photocraft_codecs::Image, max_dim: u32) -> Option<ColorImage> {
+    let (w, h) = img.dimensions();
+    let from = (img.layout(), img.sample_type());
+    let (tw, th, px) = downsample_pixels(w, h, img.data(), from.0.channels() * from.1.bytes(), max_dim)?;
+    let to = (photocraft_codecs::ChannelLayout::Rgba, photocraft_codecs::SampleType::U8);
+    let rgba = photocraft_codecs::convert_samples(&px, tw, th, from, to).ok()?;
+    Some(ColorImage::from_rgba_unmultiplied([tw as usize, th as usize], &rgba))
 }
 
 /// Read a PSD/PSB thumbnail preview by streaming only the header and image resources section.
@@ -291,15 +321,24 @@ fn load_thumbnail_image_bounded(path: &str, file_len: u64) -> Option<ColorImage>
         return None;
     }
 
-    // 3. Flat raster formats (PNG, JPG, WebP, TIFF, GIF, BMP, etc.)
+    // 3. Flat raster formats (PNG, JPG, WebP, TIFF, GIF, BMP, etc.): the image itself, so it gets
+    // a pixel budget sized for photos instead of the embedded-preview limits above.
+    let flat_opts = photocraft_codecs::DecodeOptions {
+        limits: photocraft_codecs::Limits {
+            max_width: 1 << 16,
+            max_height: 1 << 16,
+            max_pixels: MAX_FLAT_THUMBNAIL_PIXELS,
+            max_alloc: MAX_FLAT_THUMBNAIL_ALLOC,
+        },
+        ..Default::default()
+    };
     if let Ok(bytes) = std::fs::read(std_path)
-        && let Ok(img) = photocraft_codecs::decode_with(&bytes, &decode_opts)
+        && let Ok(img) = photocraft_codecs::decode_with(&bytes, &flat_opts)
     {
         let (w, h) = img.dimensions();
-        // Guard against decompression bombs: don't expand > 4096 images to gigabytes of RGBA
-        if w > 0 && h > 0 && w <= 4096 && h <= 4096 {
-            let rgba = img.convert(photocraft_codecs::ChannelLayout::Rgba, photocraft_codecs::SampleType::U8);
-            return downsample_rgba(w, h, rgba.data(), 256);
+        // The decoders enforce the limits; the size is checked again before sampling, as before.
+        if w > 0 && h > 0 && u64::from(w) * u64::from(h) <= MAX_FLAT_THUMBNAIL_PIXELS {
+            return downsample_image(&img, 256);
         }
     }
 
@@ -1304,6 +1343,43 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
+    fn recent_thumbnail_previews_photo_wider_than_4096_px() {
+        use photocraft_codecs::{ChannelLayout, Format, Image, encode};
+        // A 24 MP camera photo is 6000 px wide; Home showed only the file icon above 4096 px (#13140).
+        let temp_dir = std::env::temp_dir().join(format!("craft_flat_wide_test_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let (w, h) = (6000u32, 40u32);
+        let mut rgb = Vec::with_capacity((w * h * 3) as usize);
+        for _ in 0..h {
+            for x in 0..w {
+                rgb.extend_from_slice(if x < w / 2 { &[255, 0, 0] } else { &[0, 0, 255] });
+            }
+        }
+        let red_blue = Image::from_u8(w, h, ChannelLayout::Rgb, rgb).unwrap();
+        let grey16 = Image::from_u16(w, h, ChannelLayout::Gray, &vec![0x8080; (w * h) as usize]).unwrap();
+        let cases = [("wide.png", &red_blue, Format::Png), ("wide.jpg", &red_blue, Format::Jpeg), ("wide16.png", &grey16, Format::Png)];
+        for (name, image, format) in cases {
+            let bytes = encode(image, format, &Default::default()).unwrap();
+            let path = temp_dir.join(name);
+            std::fs::write(&path, &bytes).unwrap();
+
+            let thumb = load_thumbnail_image_bounded(&path.to_string_lossy(), bytes.len() as u64);
+            let thumb = thumb.unwrap_or_else(|| panic!("{name}: a 6000 px wide image must get a Home thumbnail"));
+            assert_eq!(thumb.size, [256, 2], "{name}");
+            let (left, right) = (thumb.pixels[0], thumb.pixels[255]);
+            if image.layout() == ChannelLayout::Gray {
+                assert_eq!((left.r(), left.g(), left.b(), left.a()), (128, 128, 128, 255), "{name}");
+            } else {
+                assert!(left.r() > 200 && left.b() < 60, "{name}: left half is red, got {left:?}");
+                assert!(right.b() > 200 && right.r() < 60, "{name}: right half is blue, got {right:?}");
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
     fn recent_thumbnail_extracts_embedded_preview_from_large_psd_without_reading_payload() {
         let temp_dir = std::env::temp_dir().join(format!("craft_psd_large_preview_test_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&temp_dir);
@@ -1502,20 +1578,22 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn recent_thumbnail_skips_flat_image_larger_than_4k_dimensions() {
+    fn recent_thumbnail_skips_flat_image_above_pixel_budget() {
         let temp_dir = std::env::temp_dir().join(format!("photocraft_huge_img_test_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&temp_dir);
         let file_path = temp_dir.join("huge_img.png");
         let path_str = file_path.to_string_lossy().into_owned();
 
-        // Write a PNG with 4097x1 dimensions (exceeds 4096 cap on longest side)
-        let img = photocraft_codecs::Image::from_raw(4097, 1, photocraft_codecs::ChannelLayout::Rgba, photocraft_codecs::SampleType::U8, vec![0u8; 4097 * 4])
-            .unwrap();
+        // Write a grey 8193x8193 PNG: one row and column past MAX_FLAT_THUMBNAIL_PIXELS (64 Mi pixels)
+        let side = 8193u32;
+        assert!(u64::from(side) * u64::from(side) > MAX_FLAT_THUMBNAIL_PIXELS);
+        let pixels = vec![0u8; (side * side) as usize];
+        let img = photocraft_codecs::Image::from_raw(side, side, photocraft_codecs::ChannelLayout::Gray, photocraft_codecs::SampleType::U8, pixels).unwrap();
         let png = photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &photocraft_codecs::EncodeOptions::default()).unwrap();
         std::fs::write(&file_path, &png).unwrap();
 
         let thumb = load_thumbnail_image_bounded(&path_str, png.len() as u64);
-        assert!(thumb.is_none(), "flat images exceeding 4096 on longest side must be skipped");
+        assert!(thumb.is_none(), "flat images above the pixel budget must be skipped");
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
