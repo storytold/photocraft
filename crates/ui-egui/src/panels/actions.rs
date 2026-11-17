@@ -726,6 +726,9 @@ fn open_recorded_editor(app: &mut PhotocraftApp, id: &str, params: &Value) -> Re
         // Private keys belong to the dialog, not the recorded Action step.
         object.retain(|key, _| !key.starts_with("__"));
     }
+    if id == "file.export.saveForWebLegacy" {
+        return crate::file_ui::open_web_with_params(app, &values);
+    }
     let dialog = crate::adjust_dialog::open_with_params(app, id, &values).map(Ok).unwrap_or_else(|| open_step_editor(app, id))?;
     // Adjustment dialogs normalized their effective target already. Raw parameters here
     // would restore discarded Lab/CMYK records or override the normalized tone controls.
@@ -740,6 +743,7 @@ fn open_recorded_editor(app: &mut PhotocraftApp, id: &str, params: &Value) -> Re
 
 /// Open a recorded step's dialog and bind it to the paused playback.
 fn pause_for_dialog(app: &mut PhotocraftApp, action: &Action, step: usize, id: &str, params: &Value) -> Result<u64, String> {
+    let web = id == "file.export.saveForWebLegacy";
     let active_layer = app.session.active().and_then(|st| st.active_layer);
     let dialog = open_recorded_editor(app, id, params)?;
     let token = app.paused_playbacks.pause(action.name.clone(), step + 1, app.session.authorize);
@@ -748,12 +752,16 @@ fn pause_for_dialog(app: &mut PhotocraftApp, action: &Action, step: usize, id: &
         d.fields.insert(RESUME.into(), json!(token));
         // A dialog on a document target may switch to a layer-owned one, so remember the
         // receiver of every implicit step for run_step_dialog's confirmation check.
-        if params.get("layer").is_none_or(Value::is_null) {
+        if !web && params.get("layer").is_none_or(Value::is_null) {
             receiver = Some(active_layer);
         }
     }
     if let Some(paused) = app.paused_playbacks.paused.get_mut(&token) {
         paused.filter_receiver = receiver;
+        if web {
+            paused.doc = app.session.active().map(|state| state.doc.id);
+            paused.menu_editor = Some((dialog, id.to_owned()));
+        }
     }
     Ok(dialog)
 }
@@ -876,6 +884,7 @@ fn play_steps(app: &mut PhotocraftApp, params: &Value, suspended: Option<Suspend
             && interactive
             && (crate::filter_dialog::has_dialog(id)
                 || crate::adjust_dialog::has_dialog(id)
+                || id == "file.export.saveForWebLegacy"
                 || (id == crate::equalize_ui::COMMAND && crate::equalize_ui::asks(app)))
         {
             match pause_for_dialog(app, &action, i, id, p) {
@@ -1687,7 +1696,9 @@ fn check_menu_editor(app: &PhotocraftApp, paused: &PausedPlayback, command: &str
     if let Some((_, original)) = &paused.menu_editor
         && (original != command
             || app.session.active().map(|st| st.doc.id) != paused.doc
-            || (!document_target(params) && paused.filter_receiver != Some(app.session.active().and_then(|st| st.active_layer))))
+            || (command != "file.export.saveForWebLegacy"
+                && !document_target(params)
+                && paused.filter_receiver != Some(app.session.active().and_then(|st| st.active_layer))))
     {
         return Err("the menu item command or its document changed".into());
     }
@@ -1698,7 +1709,18 @@ fn check_menu_editor(app: &PhotocraftApp, paused: &PausedPlayback, command: &str
 /// policy judges the edited parameters; a current live gate still governs dispatch and nested
 /// work. With no live gate, reinstall the captured gate for job admission and rendering.
 pub(crate) fn run_step_dialog(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>, command: &str, params: Value) -> Result<Value, String> {
-    let Some(token) = fields.get(RESUME) else { return app.run(command, params) };
+    run_step_dialog_with(app, fields, command, params, |app, params| app.run(command, params))
+}
+
+/// A platform-owned export uses the same paused-action admission and history as engine commands.
+pub(crate) fn run_step_dialog_with(
+    app: &mut PhotocraftApp,
+    fields: &serde_json::Map<String, Value>,
+    command: &str,
+    params: Value,
+    run: impl FnOnce(&mut PhotocraftApp, Value) -> Result<Value, String>,
+) -> Result<Value, String> {
+    let Some(token) = fields.get(RESUME) else { return run(app, params) };
     let token = token.as_u64().ok_or("this dialog doesn't belong to a paused action")?;
     let paused = app.paused_playbacks.paused.get(&token).ok_or("this dialog doesn't belong to a paused action")?;
     check_menu_editor(app, paused, command, &params)?;
@@ -1722,7 +1744,7 @@ pub(crate) fn run_step_dialog(app: &mut PhotocraftApp, fields: &serde_json::Map<
     let gate = continuation_gate(captured, continuation_gate(saved, service)?)?;
     prepare_history(app, fields)?;
     app.session.authorize = gate;
-    let result = app.run(command, params);
+    let result = run(app, params);
     app.session.authorize = saved;
     result
 }

@@ -57,6 +57,36 @@ pub fn open_web(app: &mut PhotocraftApp) -> u64 {
     app.ui.open_dialog(DialogKind::Command, f)
 }
 
+/// Recorded settings use native defaults, not the last document's export choices. Destinations
+/// are picker hints: the dialog toggle must let the person change the filename before writing.
+pub(crate) fn open_web_with_params(app: &mut PhotocraftApp, recorded: &Value) -> Result<u64, String> {
+    app.session.active().ok_or_else(|| tl!("No document.").to_string())?;
+    let defaults = WebSettings::from_params(recorded, WEB_COMMAND).map_err(|error| error.to_string())?.to_params();
+    let id = open_web(app);
+    if let Some(dialog) = app.ui.dialog_mut(id) {
+        let f = &mut dialog.fields;
+        f.retain(|key, _| key.starts_with("__"));
+        if let Some(defaults) = defaults.as_object() {
+            f.extend(defaults.clone());
+        }
+        f.insert("html".into(), json!(false));
+        f.insert("slices".into(), json!("all"));
+        f.insert("resample".into(), json!("bicubic"));
+        let mut destination = Map::new();
+        if let Some(recorded) = recorded.as_object() {
+            for (key, value) in recorded {
+                if matches!(key.as_str(), "path" | "dir" | "folder") {
+                    destination.insert(key.clone(), value.clone());
+                } else if !key.starts_with("__") {
+                    f.insert(key.clone(), value.clone());
+                }
+            }
+        }
+        f.insert("__webDestination".into(), Value::Object(destination));
+    }
+    Ok(id)
+}
+
 /// Settings variants shown in 4-Up (current, then two smaller alternatives).
 pub(super) fn variants(p: &Value) -> Vec<Value> {
     let mut out = vec![p.clone()];
@@ -246,7 +276,11 @@ pub(super) fn web_frame_document(doc: &photocraft_doc::Document, frame: Option<u
 }
 
 /// Lay out the preview and settings without letting their content resize the dialog.
-pub(super) fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+pub(super) fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, id: u64) {
+    if let Err(error) = crate::actions::authorize_panel_preview(app, id, f, WEB_COMMAND, &params(f)) {
+        ui.label(error);
+        return;
+    }
     let t = Tokens::get(ui.ctx());
     let Some(doc) = app.session.active().map(|d| d.doc.clone()) else { return };
     ui.horizontal(|ui| {
@@ -548,10 +582,34 @@ fn web_size(ui: &mut egui::Ui, f: &mut Map<String, Value>, doc: &photocraft_doc:
     });
 }
 
-pub(super) fn web_confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
+pub(super) fn web_confirm(app: &mut PhotocraftApp, id: u64, f: &Map<String, Value>) -> Result<Value, String> {
+    let result = web_confirm_impl(app, id, f);
+    if !f.contains_key(crate::actions::RESUME) {
+        return result;
+    }
+    if result.as_ref().is_ok_and(|value| value.get("fileDialog").is_some()) {
+        let fields = f.clone();
+        app.after_file_dialog(move |app, result| finish_web_step(app, &fields, result));
+        result
+    } else {
+        finish_web_step(app, f, result)
+    }
+}
+
+fn finish_web_step(app: &mut PhotocraftApp, fields: &Map<String, Value>, result: Result<Value, String>) -> Result<Value, String> {
+    match &result {
+        Ok(_) => crate::actions::resume(app, fields)?,
+        Err(error) if error == crate::file_dialog::CANCELLED => crate::actions::stopped(app, fields),
+        Err(_) => crate::actions::abandoned(app, fields),
+    }
+    result
+}
+
+fn web_confirm_impl(app: &mut PhotocraftApp, id: u64, f: &Map<String, Value>) -> Result<Value, String> {
     // Check while the control/input policy is still installed, before an asynchronous picker
     // can outlive the request. A browser download uses the interactive platform writer.
     let authorize = |p: &Value| -> Result<(), String> {
+        crate::actions::authorize_panel_preview(app, id, f, WEB_COMMAND, p)?;
         if let Some(authorize) = app.session.authorize.or(if app.automation_input { app.services.automation_authorize } else { None }) {
             authorize(WEB_COMMAND, p).map_err(|e| e.to_string())?;
         }
@@ -577,21 +635,47 @@ pub(super) fn web_confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Re
     // A null or empty destination is none: the picker asks for one.
     if let Some(fields) = p.as_object_mut() {
         fields.retain(|key, value| !(matches!(key.as_str(), "path" | "dir" | "folder") && (value.is_null() || value.as_str() == Some(""))));
+        if f.contains_key(crate::actions::RESUME) {
+            // A played dialog always asks where to write, even if automation edited a destination field.
+            fields.retain(|key, _| !matches!(key.as_str(), "path" | "dir" | "folder"));
+        }
     }
     if p.get("path").is_some() || p.get("dir").is_some() || p.get("folder").is_some() {
-        return save_for_web(app, p);
+        return save_for_web(app, p, f);
     }
     let doc = app.session.active().ok_or("no document")?.doc.clone();
     let html = b(f, "html", true);
     let st = WebSettings::from_params(&p, "file.export.saveForWebLegacy").map_err(|e| e.to_string())?;
     let base = photocraft_doc::slices::base_name(&doc);
-    let suggested = if has_slices && html { format!("{base}.html") } else { format!("{base}.{}", st.format.ext()) };
+    let name = if has_slices && html { format!("{base}.html") } else { format!("{base}.{}", st.format.ext()) };
+    let destination = f.get("__webDestination");
+    let suggested = if let Some(path) = destination.and_then(|d| d.get("path")).and_then(Value::as_str) {
+        std::path::Path::new(path).with_extension(st.format.ext()).to_string_lossy().into_owned()
+    } else {
+        let name = destination
+            .and(p.get("fileNaming"))
+            .and_then(|n| n.get("fileName"))
+            .and_then(Value::as_str)
+            .map(|name| std::path::Path::new(name).with_extension(st.format.ext()).to_string_lossy().into_owned())
+            .unwrap_or(name);
+        destination
+            .and_then(|d| d.get("dir").or_else(|| d.get("folder")))
+            .and_then(Value::as_str)
+            .map(|dir| std::path::Path::new(dir).join(&name).to_string_lossy().into_owned())
+            .unwrap_or(name)
+    };
+    let fields = f.clone();
     app.pick_export(&suggested, move |app, path| {
         app.refocus(doc.id)?;
-        if has_slices {
+        if has_slices || p.get("fileNaming").is_some_and(|n| !n.is_null()) {
             let dir = path.rfind(['/', '\\']).map(|i| path[..i].to_string()).unwrap_or_else(|| ".".into());
             p["dir"] = json!(dir);
             p["html"] = json!(html);
+            if let Some(naming) = p.get_mut("fileNaming").and_then(Value::as_object_mut) {
+                let file = path.rsplit(['/', '\\']).next().unwrap_or(&path);
+                naming.remove("name");
+                naming.insert("fileName".into(), json!(file));
+            }
         } else if let Some(folder) = kept_name_folder(&path, &base, st.format.ext())
             // A save that renamed the document meanwhile: the engine would name the file after
             // the new name, not the one picked.
@@ -603,7 +687,7 @@ pub(super) fn web_confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Re
         } else {
             p["path"] = json!(path);
         }
-        save_for_web(app, p)
+        save_for_web(app, p, &fields)
     })
 }
 
@@ -631,11 +715,11 @@ pub(super) fn web_params(f: &Map<String, Value>, has_slices: bool) -> Result<Val
 }
 
 /// Runs Save for Web with `p`, which says where to write.
-fn save_for_web(app: &mut PhotocraftApp, p: Value) -> Result<Value, String> {
+fn save_for_web(app: &mut PhotocraftApp, p: Value, fields: &Map<String, Value>) -> Result<Value, String> {
     #[cfg(target_arch = "wasm32")]
-    let result = download_for_web(app, p);
+    let result = crate::actions::run_step_dialog_with(app, fields, WEB_COMMAND, p, download_for_web);
     #[cfg(not(target_arch = "wasm32"))]
-    let result = app.run(WEB_COMMAND, p);
+    let result = crate::actions::run_step_dialog(app, fields, WEB_COMMAND, p);
     let r = result.inspect_err(|error| {
         app.ui.status = error.clone();
         app.ui.status_error = true;

@@ -23,6 +23,7 @@ pub(crate) use print::print_status;
 use print::{drag_print_position, driver_paper_is_wide, print_params, print_preview_image, printer_options, take_turned_page, turn_driver};
 use print::{print_body, print_confirm};
 pub use web::open_web;
+pub(crate) use web::open_web_with_params;
 #[cfg(test)]
 use web::web_params;
 #[cfg(test)]
@@ -199,14 +200,14 @@ pub fn ok_label(f: &Map<String, Value>) -> Option<&'static str> {
 /// The body of Save for Web or Print (dialog `id`).
 pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, id: u64) {
     if f.contains_key("__web") {
-        web_body(app, ui, f);
+        web_body(app, ui, f, id);
     } else {
         print_body(app, ui, f, id);
     }
 }
 
-pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
-    if f.contains_key("__web") { web_confirm(app, f) } else { print_confirm(app, f) }
+pub fn confirm(app: &mut PhotocraftApp, id: u64, f: &Map<String, Value>) -> Result<Value, String> {
+    if f.contains_key("__web") { web_confirm(app, id, f) } else { print_confirm(app, f) }
 }
 
 fn params(f: &Map<String, Value>) -> Value {
@@ -288,7 +289,7 @@ mod web_playback_tests {
                 if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                     return;
                 }
-                web_body(&mut state.0, ui, &mut state.1);
+                web_body(&mut state.0, ui, &mut state.1, 0);
             },
             (app, fields),
         );

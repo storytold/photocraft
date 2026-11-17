@@ -1206,7 +1206,7 @@ fn confirm_command_more(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, Str
         _ if crate::analysis_ui::owns_delete_note(&d.fields) => crate::analysis_ui::confirm_delete_note(app, &d.fields),
         _ if crate::analysis_ui::owns_clear_notes(&d.fields) => crate::analysis_ui::confirm_clear_notes(app, &d.fields),
         _ if live_shape_prompt::owns(&d.fields) => live_shape_prompt::confirm(app, &d.fields),
-        _ if crate::file_ui::owns(&d.fields) => crate::file_ui::confirm(app, &d.fields),
+        _ if crate::file_ui::owns(&d.fields) => crate::file_ui::confirm(app, d.id, &d.fields),
         _ if crate::new_guide_ui::owns(&d.fields) => crate::new_guide_ui::confirm(app, &d.fields),
         _ if crate::color_picker_ui::owns(&d.fields) => {
             // OK sets the target as it was before the live preview showed the colour in it.

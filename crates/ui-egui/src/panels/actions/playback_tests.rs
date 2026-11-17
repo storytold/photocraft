@@ -50,6 +50,176 @@ fn assert_released(app: &mut PhotocraftApp) {
     app.run("actions.setHistory", json!({"singleState": single})).unwrap();
 }
 
+fn web_action_app(dir: &std::path::Path) -> PhotocraftApp {
+    let mut app = app_with("accelerated", 1, true);
+    let mut child = Action::new(
+        "Export",
+        vec![
+            (
+                "file.export.saveForWebLegacy".into(),
+                json!({"format":"jpeg","quality":17,"dir":dir,"slices":"all","html":false,"imagesFolder":"assets",
+            "fileNaming":{"components":["slice"],"wholeImage":true,"fileName":"Recorded.jpg","windows":true,"unix":true,"extension":"lower"}}),
+            ),
+            ("layer.new.layer".into(), json!({"name":"Child"})),
+        ],
+    );
+    child.dialogs.insert(0);
+    let parent = Action::new("Parent", vec![("actions.play".into(), json!({"action":"Export"})), ("layer.new.layer".into(), json!({"name":"Parent"}))]);
+    let (bytes, skipped) = photocraft_engine::atn_cmds::export("Web", &[&child, &parent], &[], false).unwrap();
+    assert!(skipped.is_empty());
+    let imported = photocraft_engine::atn_cmds::import(&bytes).unwrap();
+    assert!(imported.unsupported.is_empty());
+    assert!(imported.actions[0].dialogs.contains(&0));
+    app.session.actions.list = imported.actions;
+    app
+}
+
+#[test]
+fn recorded_web_dialog_waits_for_settings_and_the_chosen_filename() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = dir.path().join("Chosen.png");
+    let mut app = web_action_app(dir.path());
+    let (picker, requests) = crate::file_dialog::fake(vec![Some(crate::file_dialog::FileDialogAnswer::SaveTo(output.to_string_lossy().into_owned()))]);
+    app.services.file_dialog = Some(picker);
+    let played = app.run("actions.play", json!({"action":"Parent"})).unwrap();
+    let id = played["paused"]["dialog"].as_u64().expect("Save for Web must pause");
+    assert!(names(&app).is_empty());
+    assert!(!dir.path().join("Recorded.jpg").exists());
+    let f = &mut app.ui.dialog_mut(id).unwrap().fields;
+    assert_eq!(f["format"], "jpeg");
+    assert_eq!(f["quality"], 17);
+    assert_eq!(f["resample"], "bicubic");
+    f.insert("format".into(), json!("png24"));
+    let confirmed = crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(confirmed["fileDialog"], "save");
+    assert!(app.file_dialog_open());
+    assert!(!output.exists(), "settings confirmation must not write before the picker answers");
+    assert!(names(&app).is_empty());
+    app.poll_file_dialog(&egui::Context::default(), None);
+    assert_eq!(requests.borrow().len(), 1);
+    assert!(output.exists());
+    assert!(!dir.path().join("Recorded.jpg").exists());
+    assert!(!dir.path().join("assets").exists());
+    assert_eq!(&std::fs::read(&output).unwrap()[..8], b"\x89PNG\r\n\x1a\n");
+    assert_eq!(names(&app), ["Child", "Parent"]);
+    assert_idle(&app);
+}
+
+#[test]
+fn recorded_web_dialog_cancel_stops_at_settings_or_the_filename_picker() {
+    for picker_cancel in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = web_action_app(dir.path());
+        let (picker, _) = crate::file_dialog::fake(vec![None]);
+        app.services.file_dialog = Some(picker);
+        let played = app.run("actions.play", json!({"action":"Parent"})).unwrap();
+        let id = played["paused"]["dialog"].as_u64().unwrap();
+        if picker_cancel {
+            crate::dialogs::confirm(&mut app, id).unwrap();
+            app.poll_file_dialog(&egui::Context::default(), None);
+        } else {
+            crate::dialogs::cancel(&mut app, id).unwrap();
+        }
+        assert_idle(&app);
+        assert!(!app.file_dialog_open());
+        assert!(names(&app).is_empty());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+        assert!(!app.ui.status_error, "{}", app.ui.status);
+    }
+}
+
+#[test]
+fn recorded_web_dialog_off_and_programmatic_playback_keep_the_recorded_destination() {
+    for programmatic in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = web_action_app(dir.path());
+        app.programmatic_playback = programmatic;
+        if !programmatic {
+            app.session.actions.list[0].dialogs.clear();
+        }
+        let played = app.run("actions.play", json!({"action":"Parent"})).unwrap();
+        assert!(played.get("failed").is_none() && played.get("paused").is_none(), "{played}");
+        assert!(dir.path().join("Recorded.jpg").exists());
+        assert!(app.ui.dialogs.is_empty());
+        assert!(!app.file_dialog_open());
+        assert_eq!(names(&app), ["Child", "Parent"]);
+        assert_idle(&app);
+    }
+}
+
+#[test]
+fn recorded_web_dialog_keeps_authorization_for_edited_settings_and_the_picked_path() {
+    fn gate(command: &str, p: &Value) -> photocraft_engine::Result<()> {
+        if command == "file.export.saveForWebLegacy"
+            && (p["quality"].as_u64().is_some_and(|q| q > 50) || p["dir"].as_str().is_some_and(|dir| dir.contains("refused")))
+        {
+            return Err(photocraft_engine::EngineError::Other("export refused".into()));
+        }
+        Ok(())
+    }
+    for edited_settings in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = web_action_app(dir.path());
+        let target = dir.path().join("refused").join("Chosen.jpg");
+        let (picker, requests) = crate::file_dialog::fake(vec![Some(crate::file_dialog::FileDialogAnswer::SaveTo(target.to_string_lossy().into_owned()))]);
+        app.services.file_dialog = Some(picker);
+        app.session.authorize = Some(gate);
+        let played = app.run("actions.play", json!({"action":"Parent"})).unwrap();
+        let id = played["paused"]["dialog"].as_u64().unwrap();
+        app.session.authorize = None;
+        if edited_settings {
+            app.ui.dialog_mut(id).unwrap().fields.insert("quality".into(), json!(99));
+            assert!(crate::dialogs::confirm(&mut app, id).unwrap_err().contains("export refused"));
+            assert!(requests.borrow().is_empty(), "refuse edited settings before opening the picker");
+        } else {
+            crate::dialogs::confirm(&mut app, id).unwrap();
+            app.poll_file_dialog(&egui::Context::default(), None);
+            assert!(app.ui.status_error && app.ui.status.contains("export refused"), "{}", app.ui.status);
+        }
+        assert!(!target.exists());
+        assert!(names(&app).is_empty());
+        assert_idle(&app);
+    }
+}
+
+#[test]
+fn recorded_web_dialog_does_not_export_another_document() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = web_action_app(dir.path());
+    let played = app.run("actions.play", json!({"action":"Parent"})).unwrap();
+    let id = played["paused"]["dialog"].as_u64().unwrap();
+    app.run("file.new", json!({"width":32,"height":24})).unwrap();
+    assert!(crate::dialogs::confirm(&mut app, id).is_err());
+    assert_idle(&app);
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+
+    let mut app = web_action_app(dir.path());
+    let _ = app.session.close(0);
+    let played = app.run("actions.play", json!({"action":"Parent"})).unwrap();
+    assert!(played.get("failed").is_some(), "an unavailable export must fail instead of opening an empty dialog");
+    assert!(app.ui.dialogs.is_empty());
+    assert_idle(&app);
+}
+
+#[test]
+fn recorded_web_dialog_write_failure_does_not_run_the_tail() {
+    let dir = tempfile::tempdir().unwrap();
+    let parent = dir.path().join("not-a-folder");
+    std::fs::write(&parent, b"unchanged").unwrap();
+    let target = parent.join("Chosen.jpg");
+    let mut app = web_action_app(dir.path());
+    let (picker, _) = crate::file_dialog::fake(vec![Some(crate::file_dialog::FileDialogAnswer::SaveTo(target.to_string_lossy().into_owned()))]);
+    app.services.file_dialog = Some(picker);
+    let played = app.run("actions.play", json!({"action":"Parent"})).unwrap();
+    let id = played["paused"]["dialog"].as_u64().unwrap();
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    app.poll_file_dialog(&egui::Context::default(), None);
+    assert!(app.ui.status_error);
+    assert!(names(&app).is_empty());
+    assert_eq!(std::fs::read(parent).unwrap(), b"unchanged");
+    assert_idle(&app);
+}
+
 #[test]
 fn recorded_move_inside_a_hidden_group_continues_in_the_desktop_player() {
     let mut app = app_with("accelerated", 1, true);

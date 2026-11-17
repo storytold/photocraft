@@ -41,6 +41,9 @@ Pause For Audio Annotation (Mac only) is not offered.
 Step-dialog confirmation joins the original play only while its document and
 history still match the paused state. Cancel keeps the completed prefix; an
 intervening edit or document switch prevents the stale dialog from applying.
+A Save for Web step with its dialog toggle on opens its recorded settings, then asks for the
+filename and destination. Playback resumes after a successful export; cancelling either dialog
+stops it. Headless playback uses the recorded destination without opening dialogs.
 A Stop step (`Stop`, `Msge` message, `Cntn` Allow Continue) with its dialog toggle on shows a
 window titled Message with the recorded text and Continue (the default) and Stop, or Stop alone
 without Allow Continue; Stop keeps the steps already applied. With the toggle off the step ends
