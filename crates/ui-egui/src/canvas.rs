@@ -2152,7 +2152,11 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
             Some(crate::type_tool::PathClick::Area { .. }) => crate::tool_cursor::area_type(painter, p),
             _ => crate::tool_cursor::path_type(painter, p),
         },
-        Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask => egui::CursorIcon::Text,
+        // The vertical tools turn the I-beam on its side (#12063): the Vertical Type tool's sits in
+        // a dotted box, over text too; the Vertical Type Mask tool's has no box.
+        Tool::VerticalType => crate::tool_cursor::vertical_type(painter, p),
+        Tool::VerticalTypeMask => egui::CursorIcon::VerticalText,
+        Tool::Type | Tool::HorizontalTypeMask => egui::CursorIcon::Text,
         Tool::MagneticLasso => crate::magnetic_lasso_ui::cursor(app, painter, p, xf.zoom),
         Tool::RedEye => {
             let pupil = app.ui.tool_options.red_eye_pupil_size.clamp(1.0, 100.0);
@@ -3262,9 +3266,13 @@ mod blend_viewport_regression;
 #[cfg(test)]
 #[path = "canvas/perspective_crop_cursor_tests.rs"]
 mod perspective_crop_cursor_tests;
+
 #[cfg(test)]
 #[path = "canvas/pixel_alignment_tests.rs"]
 mod pixel_alignment_tests;
+#[cfg(test)]
+#[path = "canvas/vertical_type_cursor_tests.rs"]
+mod vertical_type_cursor_tests;
 #[cfg(test)]
 mod lasso_preview_tests {
     use super::*;
