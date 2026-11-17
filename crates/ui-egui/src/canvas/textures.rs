@@ -592,13 +592,21 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
     gpu_budget(app, &gpu, idx, partial, visible);
     app.perf.stage.damage_ms += crate::gpu_canvas::now_ms() - budget_start;
     // A very large canvas refreshes in slices over the next frames, not in one long frame.
-    if !partial && let Some(drawn) = super::gpu_slices::start(app, ctx, &gpu, (id, &doc), display.as_deref(), visible) {
-        crate::background_redraw::cancel(app, id);
-        app.perf.gpu_layer_fit = gpu.layer_fit();
-        if !drawn {
-            return false;
+    // An edit that damages that much of it too.
+    let started = if partial {
+        damage.and_then(|d| super::gpu_slices::start_damage(app, ctx, &gpu, (id, &doc), d, visible))
+    } else {
+        super::gpu_slices::start(app, ctx, &gpu, (id, &doc), visible)
+    };
+    if started.is_some() {
+        if partial {
+            // Blocks of a running CPU redraw still to come follow the edit.
+            crate::background_redraw::restart(app, ctx, &gpu, doc.clone(), display.clone(), visible);
+        } else {
+            crate::background_redraw::cancel(app, id);
         }
-        crate::render_path::note(app, id.0, crate::render_path::Path::Gpu { full: true });
+        app.perf.gpu_layer_fit = gpu.layer_fit();
+        crate::render_path::note(app, id.0, crate::render_path::Path::Gpu { full: !partial });
         if let Some(cache) = app.canvases.get_mut(&(id, GPU_OUTPUT)) {
             cache.revision = revision;
             cache.preview_key = preview_key;
