@@ -434,9 +434,7 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
                         ui.label("");
                     }
                     let mut col = colors.get(id).cloned().unwrap_or_else(|| "none".into());
-                    let opts: Vec<(String, &str)> =
-                        ["none", "red", "orange", "yellow", "green", "blue", "violet", "gray"].iter().map(|c| (c.to_string(), *c)).collect();
-                    crate::widgets::dropdown(ui, &format!("menu-color-{id}"), tl!("Color"), &mut col, &opts, 90.0);
+                    menu_color_dropdown(ui, id, &mut col);
                     if col == "none" {
                         colors.remove(id);
                     } else {
@@ -764,6 +762,61 @@ fn set_row(
 
 /// The reference application's question when another set is chosen over unsaved edits (#14326).
 const SWITCH_SET_QUESTION: &str = "Selecting a different set will result in a loss of all unsaved shortcuts.  Save your changes before switching sets?";
+
+/// The Menus tab's Color list (#14336), as the reference application has it: None, a
+/// separator, then the eleven colours with their names capitalised and a swatch each (the colour
+/// a menu row takes on a light menu, as measured). The closed cell shows the swatch and the name.
+fn menu_color_dropdown(ui: &mut egui::Ui, id: &str, col: &mut String) {
+    const SWATCH: egui::Vec2 = egui::vec2(12.0, 12.0);
+    let name = |c: &str| -> String {
+        let mut s = c.to_string();
+        if let Some(first) = s.get_mut(..1) {
+            first.make_ascii_uppercase();
+        }
+        tl!(&s).to_string()
+    };
+    let paint = |ui: &egui::Ui, rect: egui::Rect, c: &str| {
+        if let Some(fill) = menu_color_swatch(c) {
+            ui.painter().rect_filled(rect, 2.0, fill);
+            ui.painter().rect_stroke(rect, 2.0, egui::Stroke::new(1.0, egui::Color32::from_gray(110)), egui::StrokeKind::Inside);
+        }
+    };
+    let r = craft_ui::ComboBox::from_id_salt(format!("menu-color-{id}")).width(120.0).selected_text(format!("     {}", name(col))).show_ui(ui, |ui| {
+        for c in photocraft_engine::prefs::MENU_COLORS {
+            ui.horizontal(|ui| {
+                let (rect, _) = ui.allocate_exact_size(SWATCH, egui::Sense::hover());
+                paint(ui, rect, c);
+                ui.selectable_value(col, c.to_string(), name(c));
+            });
+            if c == "none" {
+                ui.separator();
+            }
+        }
+    });
+    // The closed cell's swatch, before the name.
+    let at = egui::Rect::from_min_size(r.response.rect.left_center() + egui::vec2(6.0, -SWATCH.y / 2.0), SWATCH);
+    paint(ui, at, col);
+    r.response.on_hover_text(tl!("Color"));
+}
+
+/// The swatch of an Edit › Menus colour: a light menu row's colour in the reference application.
+fn menu_color_swatch(c: &str) -> Option<egui::Color32> {
+    let (r, g, b) = match c {
+        "red" => (243, 197, 198),
+        "orange" => (243, 223, 197),
+        "yellow" => (237, 243, 197),
+        "green" => (198, 243, 197),
+        "seafoam" => (205, 255, 252),
+        "blue" => (197, 217, 243),
+        "indigo" => (183, 185, 247),
+        "magenta" => (233, 161, 193),
+        "fuchsia" => (221, 172, 221),
+        "violet" => (218, 197, 243),
+        "gray" => (221, 221, 221),
+        _ => return None,
+    };
+    Some(egui::Color32::from_rgb(r, g, b))
+}
 
 /// Save `text` through the save dialog under the suggested file name.
 fn save_text(app: &mut PhotocraftApp, suggested: &str, text: String) -> Result<Value, String> {

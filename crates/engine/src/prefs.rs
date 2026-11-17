@@ -526,12 +526,15 @@ mod cmds;
 mod customize;
 mod files;
 #[cfg(test)]
+mod menus_color_list_tests;
+#[cfg(test)]
 mod menus_hideable_tests;
 mod shortcuts;
 mod store;
 mod validate;
 
 pub use cmds::specs;
+pub use customize::MENU_COLORS;
 #[cfg(test)]
 pub(crate) use files::write_files_atomically;
 pub use shortcuts::{

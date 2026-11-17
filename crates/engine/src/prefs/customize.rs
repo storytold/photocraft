@@ -273,16 +273,19 @@ fn apply_shortcut_changes(
     Ok(true)
 }
 
+/// Edit › Menus colour ids, in the reference application's order (#14336): none, then the eleven
+/// colours. Stored lower-case, as preferences saved with the first eight still are.
+pub const MENU_COLORS: [&str; 12] = ["none", "red", "orange", "yellow", "green", "seafoam", "blue", "indigo", "magenta", "fuchsia", "violet", "gray"];
+
 /// Edit › Menus: hide/show items and give them colours.
 pub(super) fn menus(s: &mut Session, p: &Value) -> Result<Value> {
     let ids = |k: &str| -> Vec<String> {
         p.get(k).and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default()
     };
-    const COLORS: [&str; 8] = ["none", "red", "orange", "yellow", "green", "blue", "violet", "gray"];
     if let Some(m) = p.get("color").and_then(Value::as_object) {
         for v in m.values() {
-            if let Some(c) = v.as_str().filter(|c| !COLORS.contains(c)) {
-                return Err(bad("edit.menus", format!("unknown colour `{c}` ({})", COLORS.join("|"))));
+            if let Some(c) = v.as_str().filter(|c| !MENU_COLORS.contains(c)) {
+                return Err(bad("edit.menus", format!("unknown colour `{c}` ({})", MENU_COLORS.join("|"))));
             }
         }
     }
