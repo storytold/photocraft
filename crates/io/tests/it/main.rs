@@ -107,3 +107,5 @@ mod xcf_native_text;
 mod xcf_native_transport;
 
 mod xcf_native_variants;
+
+mod xcf_source_evidence;

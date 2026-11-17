@@ -2,7 +2,7 @@ use super::tests::{W, hierarchy};
 use super::*;
 use photocraft_doc::import_conversion::ImportConversion;
 
-fn image(bytes: &[u8], budget: usize) -> Image<'_> {
+pub(super) fn image(bytes: &[u8], budget: usize) -> Image<'_> {
     Image {
         c: Cursor { b: bytes, pos: 0, wide: true },
         version: 26,

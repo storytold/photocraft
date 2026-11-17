@@ -18,7 +18,11 @@
 
 mod color;
 mod coverage;
+mod coverage_execution;
+use coverage_execution::CoverageExecution;
 mod coverage_color;
+#[cfg(test)]
+mod coverage_effect_tests;
 mod coverage_geometry;
 mod coverage_spatial;
 mod native_alignment;
@@ -190,6 +194,7 @@ struct Channel<'a> {
 }
 
 /// Bounded header/configuration facts; auxiliary hierarchy pixels are never decoded.
+#[derive(Clone)]
 struct CoverageMaskHeader<'a> {
     name: String,
     name_limited: bool,
@@ -308,6 +313,16 @@ impl<'a> Image<'a> {
     /// Keep the reviewed per-mask ownership accounting when a layer effect starts
     /// installing masks: failed masks release only their own samples and tiles.
     fn native_effect_mask(&mut self, offset: usize, owner: Rect, depth: SampleType, ctl: &Interrupt<'_>) -> Result<NativeEffectMask<'a>> {
+        self.native_effect_mask_with_placement(offset, owner, depth, true, ctl)
+    }
+    fn native_effect_mask_with_placement(
+        &mut self,
+        offset: usize,
+        owner: Rect,
+        depth: SampleType,
+        place: bool,
+        ctl: &Interrupt<'_>,
+    ) -> Result<NativeEffectMask<'a>> {
         ctl.check().map_err(|_| IoError::Cancelled)?;
         let mut own_pixel_charge = 0usize;
         let metadata_before = self.meta_budget;
@@ -346,17 +361,8 @@ impl<'a> Image<'a> {
             let written = write_pixels(&mut surface, &pixels, 0, 0, &mut self.budget);
             own_pixel_charge = own_pixel_charge.saturating_add(before.saturating_sub(self.budget));
             written?;
-            if (dx, dy) != (0, 0) {
-                let bounds = surface.content_bounds();
-                if !bounds.is_empty() {
-                    let target = Rect::new(translate(bounds.x0, dx)?, translate(bounds.y0, dy)?, translate(bounds.x1, dx)?, translate(bounds.y1, dy)?);
-                    let bytes = usize::try_from(photocraft_raster::tile_storage_bytes(target, &surface.format()))
-                        .map_err(|_| invalid("effect mask tile storage overflows"))?;
-                    self.native_work.charge_bytes(bytes, ctl)?;
-                    self.budget = self.budget.checked_sub(bytes).ok_or_else(|| invalid("effect mask placement exceeds the pixel limit"))?;
-                    own_pixel_charge = own_pixel_charge.saturating_add(bytes);
-                    surface = photocraft_algo::resample::translate_surface(&surface, dx, dy);
-                }
+            if place {
+                own_pixel_charge = own_pixel_charge.saturating_add(self.place_effect_mask(&mut surface, owner, ctl)?);
             }
             ctl.check().map_err(|_| IoError::Cancelled)?;
             Ok((LayerMask { surface, ..LayerMask::reveal_all() }, record, Pixels { data: Vec::new(), ..pixels }))
@@ -366,6 +372,29 @@ impl<'a> Image<'a> {
             self.meta_budget = metadata_before;
         }
         result.map(|(mask, record, sample_flags)| NativeEffectMask { mask, record, sample_flags, pixel_charge: own_pixel_charge })
+    }
+
+    // Source child masks are image-global too: execute their stacks before this
+    // one final translation into the native layer-effect owner's local frame.
+    fn place_effect_mask(&mut self, surface: &mut Surface, owner: Rect, ctl: &Interrupt<'_>) -> Result<usize> {
+        ctl.check().map_err(|_| IoError::Cancelled)?;
+        let dx = owner.x0.checked_neg().ok_or_else(|| invalid("effect mask origin overflow"))?;
+        let dy = owner.y0.checked_neg().ok_or_else(|| invalid("effect mask origin overflow"))?;
+        if (dx, dy) == (0, 0) {
+            return Ok(0);
+        }
+        let bounds = surface.content_bounds();
+        if bounds.is_empty() {
+            return Ok(0);
+        }
+        let shift = |v: i32, d: i32| v.checked_add(d).ok_or_else(|| invalid("effect mask placement overflow"));
+        let target = Rect::new(shift(bounds.x0, dx)?, shift(bounds.y0, dy)?, shift(bounds.x1, dx)?, shift(bounds.y1, dy)?);
+        let bytes =
+            usize::try_from(photocraft_raster::tile_storage_bytes(target, &surface.format())).map_err(|_| invalid("effect mask tile storage overflows"))?;
+        self.native_work.charge_bytes(bytes, ctl)?;
+        self.budget = self.budget.checked_sub(bytes).ok_or_else(|| invalid("effect mask placement exceeds the pixel limit"))?;
+        *surface = photocraft_algo::resample::translate_surface(surface, dx, dy);
+        Ok(bytes)
     }
 
     fn native_mask_hierarchy(&mut self, hptr: usize, ctl: &Interrupt<'_>) -> Result<Pixels> {
@@ -596,15 +625,21 @@ impl<'a> Image<'a> {
     /// Current P2 has no coverage adapters: inventory source configuration once,
     /// leaving the supported native owner's pixels untouched.
     fn inventory_coverage_effects(&mut self, owner: usize, pointers: &[usize], ctl: &Interrupt<'_>) -> Result<()> {
+        self.report_coverage_effects(owner, pointers, None, ctl)
+    }
+    fn report_coverage_effects(&mut self, owner: usize, pointers: &[usize], execution: Option<&CoverageExecution<'a>>, ctl: &Interrupt<'_>) -> Result<()> {
         ctl.check().map_err(|_| IoError::Cancelled)?;
         if pointers.is_empty() {
             return Ok(());
         }
-        self.outcomes.warning(
-            owner,
-            "has stored coverage effects retained as inactive configuration; auxiliary mask pixels are not retained; see the conversion report",
-            &mut self.warnings,
-        )?;
+        if execution.is_none_or(|state| state.limited || state.applied.values().any(|result| result.is_err())) {
+            let message = if execution.is_none() {
+                "has stored coverage effects retained as inactive configuration; auxiliary mask pixels are not retained; see the conversion report"
+            } else {
+                "has stored coverage effects that could not be applied completely; configuration remains inert; see the conversion report"
+            };
+            self.outcomes.warning(owner, message, &mut self.warnings)?;
+        }
         if !self.outcomes.recording() {
             return Ok(());
         }
@@ -689,15 +724,44 @@ impl<'a> Image<'a> {
                     _ => {}
                 }
             }
-            let reason =
-                if effect.errors.is_empty() && invalid_arguments.is_empty() { ConversionReason::MissingMapping } else { ConversionReason::InvalidOptionalData };
-            let native_description =
-                "Native coverage is unchanged; conversion is not implemented. Source effect configuration remains inert and is not executed".into();
+            let (disposition, reason, native_description) = match execution.and_then(|state| state.applied.get(&pointer)) {
+                Some(Ok(notes)) => (
+                    ConversionDisposition::NativeApproximation,
+                    ConversionReason::NativePolicy,
+                    format!("Stored coverage became native coverage pixels; parameter editability is lost. {notes}"),
+                ),
+                Some(Err(failure)) => (ConversionDisposition::RetainedUnapplied, failure.reason, failure.message.clone()),
+                None if execution.is_some_and(|state| state.limited) => (
+                    ConversionDisposition::RetainedUnapplied,
+                    ConversionReason::RetentionLimit,
+                    "Optional native coverage admission reached its shared metadata limits".into(),
+                ),
+                None if execution.is_some()
+                    && current_owner.feature_code == "xcf.coverage_effect_mask"
+                    && current_owner.reason == ConversionReason::NativePolicy
+                    && current_owner.disposition == ConversionDisposition::RetainedUnapplied =>
+                {
+                    (
+                        ConversionDisposition::RetainedUnapplied,
+                        ConversionReason::NativePolicy,
+                        "Auxiliary coverage was not executed or its temporary result was discarded because its parent stage did not commit".into(),
+                    )
+                }
+                None => (
+                    ConversionDisposition::RetainedUnapplied,
+                    if effect.errors.is_empty() && invalid_arguments.is_empty() {
+                        ConversionReason::MissingMapping
+                    } else {
+                        ConversionReason::InvalidOptionalData
+                    },
+                    "Native coverage unchanged; native conversion is unfinished and source configuration remains inert".into(),
+                ),
+            };
             let outcome = self.outcomes.push(ConversionEntry {
                 feature_code: "xcf.coverage_effect".into(),
                 source,
                 targets: current_owner.targets.clone(),
-                disposition: ConversionDisposition::RetainedUnapplied,
+                disposition,
                 reason,
                 source_description: format!(
                     "{} version {}; visible {}, opacity {}; {} ordered arguments ({} config bytes, {} string bytes); inert icon {}; {} {}",
@@ -726,7 +790,8 @@ impl<'a> Image<'a> {
                 let start = effect.mask_offset;
                 let effect_source = self.outcomes.entry(outcome)?.source.clone();
                 let before_mask = self.meta_budget;
-                let record = match self.coverage_mask_header(start, ctl) {
+                let record = match execution.and_then(|state| state.masks.get(&start)).cloned().map(Ok).unwrap_or_else(|| self.coverage_mask_header(start, ctl))
+                {
                     Ok(record) => record,
                     Err(IoError::Cancelled) => return Err(IoError::Cancelled),
                     Err(IoError::XcfMetadataLimit) => {
@@ -752,20 +817,38 @@ impl<'a> Image<'a> {
                         continue;
                     }
                 };
+                let mask_prepared = execution.is_some_and(|state| state.masks.contains_key(&start));
+                let mask_blocked = execution.is_some_and(|state| state.discarded || matches!(state.applied.get(&pointer), Some(Err(_))));
+                let mask_consumed = execution.is_some_and(|state| !state.discarded && matches!(state.applied.get(&pointer), Some(Ok(_)))) && mask_prepared;
                 let mask_outcome = self.outcomes.push(ConversionEntry {
                     feature_code: "xcf.coverage_effect_mask".into(),
                     source: conversion::source("coverage_effect_mask", effect_source.ordinal as usize, start, &record.name, &effect_source.item_path, None),
                     targets: current_owner.targets.clone(),
-                    disposition: ConversionDisposition::SkippedNonessential,
-                    reason: ConversionReason::NativeLimitation,
+                    disposition: if mask_consumed {
+                        ConversionDisposition::NativeApproximation
+                    } else if mask_prepared || mask_blocked {
+                        ConversionDisposition::RetainedUnapplied
+                    } else {
+                        ConversionDisposition::SkippedNonessential
+                    },
+                    reason: if mask_prepared || mask_blocked { ConversionReason::NativePolicy } else { ConversionReason::NativeLimitation },
                     source_description: format!("Source effect-mask coverage {}x{}; {} nested effects", record.width, record.height, record.children.len()),
-                    native_description:
-                        "Source auxiliary mask pixels are not retained; only mask identity and configuration remain inert with the unapplied coverage stage"
-                            .into(),
+                    native_description: if mask_consumed {
+                        "Source auxiliary coverage was consumed by the native coverage operation; the resulting native owner pixels are retained".into()
+                    } else if mask_prepared {
+                        "Temporary auxiliary coverage discarded because its native owning stage did not commit; source configuration remains inert".into()
+                    } else {
+                        "Source auxiliary mask pixels are not retained; only mask identity and configuration remain inert".into()
+                    },
                     attachments: Vec::new(),
                 })?;
                 if !self.outcomes.recording() {
                     return Ok(());
+                }
+                if mask_consumed {
+                    if let Some(flags) = execution.and_then(|state| state.sample_flags.get(&start)) {
+                        self.precision_underflow(mask_outcome, flags)?;
+                    }
                 }
                 if record.name_limited {
                     self.metadata_limit(
@@ -1490,6 +1573,7 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
             ctl.check().map_err(|_| IoError::Cancelled)?;
             let mut mask_report = None;
             let mut mask_pixel_charge = 0usize;
+            let mut mask_workspace_charge = 0usize;
             let result = match mapped {
                 Err(failure) => Err(failure),
                 Ok(mapping) => {
@@ -1514,15 +1598,20 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
                             if effect.mask_offset == 0 {
                                 Ok(None)
                             } else {
-                                let prepared = image.native_effect_mask(effect.mask_offset, pending.bounds, document.depth, ctl)?;
+                                let mut prepared = image.native_effect_mask_with_placement(effect.mask_offset, pending.bounds, document.depth, false, ctl)?;
                                 mask_pixel_charge = prepared.pixel_charge;
-                                if !prepared.record.children.is_empty() {
-                                    notes.push(
-                                        "Stored mask child effects remain inactive in this slice; the parent uses the retained original native mask coverage"
-                                            .into(),
-                                    );
-                                }
-                                mask_report = Some((prepared.record, prepared.sample_flags));
+                                let workspace_before = image.native_source_budget;
+                                let state = image.run_coverage(
+                                    &prepared.record.children,
+                                    &mut prepared.mask.surface,
+                                    Rect::from_xywh(0, 0, prepared.record.width, prepared.record.height),
+                                    effect.mask_offset,
+                                    ctl,
+                                )?;
+                                mask_workspace_charge = workspace_before.saturating_sub(image.native_source_budget);
+                                let placement = image.place_effect_mask(&mut prepared.mask.surface, pending.bounds, ctl)?;
+                                mask_pixel_charge = mask_pixel_charge.saturating_add(placement);
+                                mask_report = Some((prepared.record, prepared.sample_flags, state));
                                 Ok(Some(prepared.mask))
                             }
                         })();
@@ -1570,6 +1659,7 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
                 // A rejected owner drops this mask, but converted child-mask records
                 // still belong to the retained report and keep their own charges.
                 image.budget = image.budget.saturating_add(mask_pixel_charge);
+                image.native_source_budget = image.native_source_budget.saturating_add(mask_workspace_charge);
                 image.meta_budget = image.meta_budget.saturating_add(parameter_charge);
             }
             let result = if image.native_work.rejections() != generation_rejections {
@@ -1622,7 +1712,10 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
                 attachments: Vec::new(),
             })?;
             image.outcomes.property_with_reason(outcome, 45, effect.record_offset, effect.raw, reason)?;
-            if let Some((record, sample_flags)) = mask_report {
+            if let Some((record, sample_flags, mut state)) = mask_report {
+                if !mask_retained {
+                    state.discard(&image.native_work, ctl)?;
+                }
                 let owner = image.layer_effect_mask_outcome(outcome, effect.mask_offset, &record.name, &record.properties, mask_retained)?;
                 if record.name_limited {
                     image.metadata_limit(owner, "xcf.mask_name", "Effect mask name omitted after metadata retention limits")?;
@@ -1630,7 +1723,7 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
                 if mask_retained {
                     image.precision_underflow(owner, &sample_flags)?;
                 }
-                image.inventory_coverage_effects(owner, &record.children, ctl)?;
+                image.report_coverage_effects(owner, &record.children, Some(&state), ctl)?;
             }
             if effect.mask_offset != 0 && !mask_retained {
                 // This slice retains the envelope, not the referenced mask channel/tiles.
