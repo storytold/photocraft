@@ -155,6 +155,11 @@ fn assert_vscg_fill_is_not_doubled(mut d: Document, fill: Fill, edited: Fill) {
         // must be rewritten.
         let LayerContent::Shape(s) = &mut d.layers[at].content else { panic!("not a shape") };
         s.fill = Some(want.clone());
+        // Re-render the layer pixels too, as an edit does, so the save carries the new fill's
+        // pixels. Sample a point inside the path, outside its subtracted triangle.
+        let fresh = photocraft_vector::render_shape(s, photocraft_color::PixelFormat::RGBA8, Rect::new(0, 0, 256, 256));
+        let expected = fresh.pixel(60, 80);
+        s.cache = Some(fresh);
         for psb in [false, true] {
             let name = if psb { "x.psb" } else { "x.psd" };
             let out = export(&d, name, &ExportOptions { force_psb: psb, ..Default::default() }).unwrap();
@@ -163,6 +168,8 @@ fn assert_vscg_fill_is_not_doubled(mut d: Document, fill: Fill, edited: Fill) {
             let back = import(name, &out.bytes).unwrap().document;
             let LayerContent::Shape(s) = &back.layers[at].content else { panic!("{name}: {step}: not a shape") };
             assert_eq!(s.fill.as_ref(), Some(&want), "{name}: {step}");
+            // The saved layer pixels are the rendering of the fill that was saved.
+            assert_eq!(s.cache.as_ref().expect("stored pixels").pixel(60, 80), expected, "{name}: {step}: pixels");
         }
     }
 }
