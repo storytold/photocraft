@@ -2,10 +2,10 @@ pub(super) const CANVAS_WGSL: &str = r#"
 struct View {
     a: vec4<f32>, // screen_w, screen_h, scale (device px per doc px), pixels_per_point
     b: vec4<f32>, // doc origin x, y (device px), doc w, h (doc px)
-    c: vec4<f32>, // filter mode, lod, grid alpha, checker square (device px)
-    d: vec4<f32>, // pattern preview offset x, y (doc px), display (0 none, 1 LUT, 2 LUT + gamut, 3 matrix/shaper), output linear
-    e: vec4<f32>, // checker light rgb, gamut warning opacity
-    f: vec4<f32>, // checker dark rgb, 32-bit preview gain (2^exposure; 0 = off)
+    c: vec4<f32>, // filter mode, lod, unused, unused
+    d: vec4<f32>, // unused, unused, display (0 none, 1 LUT, 2 LUT + gamut, 3 matrix/shaper), output linear
+    e: vec4<f32>, // unused rgb, gamut warning opacity
+    f: vec4<f32>, // unused rgb, 32-bit preview gain (2^exposure; 0 = off)
     g: vec4<f32>, // gamut warning rgb, 32-bit preview 1 / gamma
     h: vec4<f32>, // cos, sin, center_doc_x, center_doc_y
 };
@@ -76,8 +76,6 @@ fn px_to_doc(p: vec2<f32>) -> vec2<f32> {
     return vec2(q.x * cs.x + q.y * cs.y, -q.x * cs.y + q.y * cs.x) + view.h.zw;
 }
 
-fn doc_min() -> vec2<f32> { return view.b.xy; }
-fn doc_max() -> vec2<f32> { return view.b.xy + view.b.zw * view.a.z; }
 
 fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
     let lo = c / 12.92;
@@ -90,79 +88,19 @@ fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
     return select(hi, c * 12.92, c <= vec3(0.0031308));
 }
 
-// --- drop shadow ---------------------------------------------------------------------------
-
-fn erf2(x: vec2<f32>) -> vec2<f32> {
-    let s = sign(x);
-    let a = abs(x);
-    var t = 1.0 + (0.278393 + (0.230389 + 0.078108 * (a * a)) * a) * a;
-    t = t * t;
-    return s - s / (t * t);
-}
-
-// Coverage of the box [lo, hi] blurred by a Gaussian of std-dev `sigma`, at point p.
-fn box_blur(p: vec2<f32>, lo: vec2<f32>, hi: vec2<f32>, sigma: f32) -> f32 {
-    let k = 0.70710678 / sigma;
-    let q = (erf2((p - lo) * k) - erf2((p - hi) * k)) * 0.5;
-    return q.x * q.y;
-}
-
-@vertex
-fn vs_shadow(@builtin(vertex_index) vi: u32) -> VOut {
-    let pad = 64.0 * view.a.w;
-    let c0 = doc_to_px(vec2(0.0, 0.0));
-    let c1 = doc_to_px(vec2(view.b.z, 0.0));
-    let c2 = doc_to_px(vec2(view.b.z, view.b.w));
-    let c3 = doc_to_px(vec2(0.0, view.b.w));
-    let lo = min(min(c0, c1), min(c2, c3)) - vec2(pad);
-    let hi = max(max(c0, c1), max(c2, c3)) + vec2(pad);
-    let p = mix(lo, hi, corner(vi));
-    return VOut(px_to_clip(p));
-}
-
-@fragment
-fn fs_shadow(in: VOut) -> @location(0) vec4<f32> {
-    let p = in.pos.xy;
-    let d = px_to_doc(p);
-    if (all(d >= vec2(0.0)) && all(d < view.b.zw)) {
-        discard;
-    }
-    let p_align = view.b.xy + d * view.a.z;
-    let lo = doc_min();
-    let hi = doc_max();
-    let u = view.a.w;
-    let ambient = box_blur(p_align - vec2(0.0, 7.0 * u), lo, hi, 16.0 * u) * 0.40;
-    let contact = box_blur(p_align - vec2(0.0, 0.75 * u), lo, hi, 1.25 * u) * 0.30;
-    let a = 1.0 - (1.0 - ambient) * (1.0 - contact);
-    return vec4(0.0, 0.0, 0.0, a);
-}
-
 // --- document tiles ------------------------------------------------------------------------
 
 @vertex
 fn vs_tile(@builtin(vertex_index) vi: u32) -> VOut {
-    // A View › Pattern Preview copy sits a whole number of document sizes away (view.d.xy).
-    let p = doc_to_px(view.d.xy + tile.r.xy + tile.r.zw * corner(vi));
+    let p = doc_to_px(tile.r.xy + tile.r.zw * corner(vi));
     return VOut(px_to_clip(p));
-}
-
-// Cells are screen-sized (view.c.w device px) but anchored to the document's top-left corner, so
-// the pattern moves with the image as it is panned or zoomed. `d` is in document pixels (each
-// Pattern Preview copy has the same cells).
-fn checker(d: vec2<f32>) -> vec3<f32> {
-    if (view.c.w <= 0.0) {
-        return vec3(1.0);
-    }
-    let c = floor(d * view.a.z / view.c.w);
-    let odd = fract((c.x + c.y) * 0.5) > 0.25;
-    return select(view.e.xyz, view.f.xyz, odd);
 }
 
 @fragment
 fn fs_tile(in: VOut) -> @location(0) vec4<f32> {
     let p = in.pos.xy;
     let scale = view.a.z;
-    let d = px_to_doc(p) - view.d.xy;      // document pixel coordinates (within this copy)
+    let d = px_to_doc(p);                  // document pixel coordinates
     // A viewport page's apron is only sampled; its neighbour draws those pixels.
     if (any(d < tile.core.xy) || any(d >= tile.core.zw)) { discard; }
     let size = tile.r.zw;
@@ -208,25 +146,13 @@ fn fs_tile(in: VOut) -> @location(0) vec4<f32> {
         }
         col = vec4(shown * col.a, col.a);
     }
-    var rgb = col.rgb + checker(d) * (1.0 - col.a);
-    // The pixel grid is drawn over pixels with content, not over empty checker.
-    let grid = view.c.z * col.a;
-    if (grid > 0.0) {
-        let e = fract(d) * scale;
-        if (e.x < 1.0 || e.y < 1.0) {
-            // White over dark pixels, a weaker black over light ones, cross-faded by luma so a
-            // mid-tone image never flips line colour from one cell to the next (pixel_grid.rs
-            // `light_share`: same band, same numbers).
-            let t = smoothstep(0.35, 0.75, dot(rgb, vec3(0.299, 0.587, 0.114)));
-            let white = grid * (1.0 - t);
-            let black = grid * 0.64 * t;
-            rgb = rgb * (1.0 - white - black) + vec3(white);
-        }
-    }
+    // Document pixels only, premultiplied: the canvas draws the checkerboard under them and the pixel grid over them.
+    if (col.a <= 0.0) { discard; }
+    var rgb = col.rgb;
     if (view.d.w > 0.5) {
-        rgb = srgb_to_linear(rgb);
+        rgb = srgb_to_linear(rgb / col.a) * col.a;
     }
-    return vec4(rgb, 1.0);
+    return vec4(rgb, col.a);
 }
 "#;
 
