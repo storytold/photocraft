@@ -48,6 +48,9 @@ pub const SHELL_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("view.extras", "Extras", &["View"], Some("Cmd+H")),
     ("view.show.targetPath", "Target Path", &["View", "Show"], Some("Cmd+Shift+H")),
     ("view.screenMode.cycle", "Cycle Screen Mode", &[], Some("F")),
+    // ⇧F steps back through the screen modes, as Photoshop's "Cycle through screen modes
+    // (backward)" (#15404).
+    ("view.screenMode.cycleBackward", "Cycle Screen Mode Backward", &[], Some("Shift+F")),
     // Photoshop's interface brightness shortcuts: step through the four Pro themes.
     ("view.darkenInterface", "Darken Interface", &[], Some("Cmd+Shift+F1")),
     ("view.lightenInterface", "Lighten Interface", &[], Some("Cmd+Shift+F2")),

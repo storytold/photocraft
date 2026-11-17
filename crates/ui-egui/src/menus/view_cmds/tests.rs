@@ -1450,7 +1450,7 @@ fn form_keys_orders_by_order_then_catalogue() {
 #[test]
 fn full_screen_modes_need_a_document() {
     let (mut app, ctx) = app_with(0);
-    for id in ["view.screenMode.fullScreen", "view.screenMode.fullScreenWithMenuBar", "view.screenMode.cycle"] {
+    for id in ["view.screenMode.fullScreen", "view.screenMode.fullScreenWithMenuBar", "view.screenMode.cycle", "view.screenMode.cycleBackward"] {
         assert_eq!(is_enabled(&app, id), Some(false), "{id} without a document");
     }
     // #9354 review: run anyway (the toolbar list, automation), they are refused and Standard stays.
@@ -1460,7 +1460,7 @@ fn full_screen_modes_need_a_document() {
     }
     assert_eq!(is_enabled(&app, "view.screenMode.standard"), Some(true));
     let (mut with_doc, _) = app_with(1);
-    for id in ["view.screenMode.fullScreen", "view.screenMode.fullScreenWithMenuBar", "view.screenMode.cycle"] {
+    for id in ["view.screenMode.fullScreen", "view.screenMode.fullScreenWithMenuBar", "view.screenMode.cycle", "view.screenMode.cycleBackward"] {
         assert_eq!(is_enabled(&with_doc, id), Some(true), "{id} with a document");
     }
     // The last document closed in Full Screen Mode: back to Standard.
@@ -1477,6 +1477,11 @@ fn full_screen_modes_need_a_document() {
     // #9354 review: and Cycle itself goes straight back to Standard, not on to Full Screen.
     menu(&mut app, &ctx, "view.screenMode.cycle", json!({})).unwrap();
     assert_eq!(app.ui.view.screen_mode, "standard", "Cycle without a document returns to Standard");
+    // #15404: ⇧F's backward cycle too, not back to Full Screen Mode With Menu Bar.
+    app.ui.view.screen_mode = "fullScreen".into();
+    assert_eq!(is_enabled(&app, "view.screenMode.cycleBackward"), Some(true), "Cycle Backward can still leave it");
+    menu(&mut app, &ctx, "view.screenMode.cycleBackward", json!({})).unwrap();
+    assert_eq!(app.ui.view.screen_mode, "standard", "Cycle Backward without a document returns to Standard");
     app.ui.view.screen_mode = "fullScreenWithMenuBar".into();
     leave_full_screen_without_document(&mut app, &ctx);
     assert_eq!(app.ui.view.screen_mode, "standard");

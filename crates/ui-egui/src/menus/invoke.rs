@@ -56,6 +56,7 @@ fn keeps_box_drag(id: &str) -> bool {
         "view.rotateView",
         "view.resetView",
         "view.screenMode.cycle",
+        "view.screenMode.cycleBackward",
         "view.darkenInterface",
         "view.lightenInterface",
     ];

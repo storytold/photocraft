@@ -12,7 +12,7 @@ pub fn handles(id: &str) -> bool {
         return snap_slot(&mut SnapTo::default(), k).is_some() || k == "all" || k == "none";
     }
     if let Some(k) = id.strip_prefix("view.screenMode.") {
-        return SCREEN_MODES.contains(&k) || k == "cycle";
+        return SCREEN_MODES.contains(&k) || k == "cycle" || k == "cycleBackward";
     }
     if let Some(k) = id.strip_prefix("view.pixelAspectRatio.") {
         return PIXEL_ASPECTS.contains(&k);
@@ -86,7 +86,7 @@ pub(super) fn is_enabled_with_engine(app: &PhotocraftApp, id: &str, engine_enabl
     Some(match id {
         // Full Screen Mode shows a document, so without one it is unavailable, as in Photoshop
         // (#9349); with none open, Cycle can only bring a full screen mode back to Standard.
-        "view.screenMode.cycle" => app.ui.text_edit.is_none() && (doc || app.ui.view.screen_mode != "standard"),
+        "view.screenMode.cycle" | "view.screenMode.cycleBackward" => app.ui.text_edit.is_none() && (doc || app.ui.view.screen_mode != "standard"),
         "view.screenMode.fullScreen" | "view.screenMode.fullScreenWithMenuBar" => doc,
         "view.twoHundredPercent"
         | "view.printSize"
@@ -364,13 +364,16 @@ fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Res
         if matches!(k, "fullScreen" | "fullScreenWithMenuBar") && app.session.documents().is_empty() {
             return Err("Full Screen Mode needs an open document".into());
         }
-        let next = if k == "cycle" && app.session.documents().is_empty() {
+        let cycle = matches!(k, "cycle" | "cycleBackward");
+        let next = if cycle && app.session.documents().is_empty() {
             // Without a document Cycle can only leave a full screen mode (#9349): straight back
             // to Standard, not on to the next full screen mode.
             "standard"
-        } else if k == "cycle" {
+        } else if cycle {
+            // F steps forward (Standard, With Menu Bar, Full Screen), ⇧F backward (#15404).
             let i = SCREEN_MODES.iter().position(|m| *m == o.screen_mode).unwrap_or(0);
-            SCREEN_MODES[(i + 1) % SCREEN_MODES.len()]
+            let step = if k == "cycle" { 1 } else { SCREEN_MODES.len() - 1 };
+            SCREEN_MODES[(i + step) % SCREEN_MODES.len()]
         } else {
             k
         };
