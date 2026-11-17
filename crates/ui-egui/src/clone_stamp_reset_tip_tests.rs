@@ -75,7 +75,7 @@ fn other_tools_keep_their_reset_tips() {
         (Tool::BackgroundEraser, [13.0, 1.0, 0.25, 0.0, 1.0, 0.1]),
         (Tool::Healing, [19.0, 1.0, 0.25, 0.0, 1.0, 0.1]),
         (Tool::Burn, [65.0, 0.0, 0.25, 0.0, 1.0, 0.1]),
-        (Tool::HistoryBrush, [20.0, 1.0, 0.1, 0.0, 1.0, 0.1]),
+        (Tool::HistoryBrush, [21.0, 0.0, 0.25, 0.0, 1.0, 0.0]),
         (Tool::PatternStamp, [20.0, 1.0, 0.1, 0.0, 1.0, 0.1]),
     ] {
         let mut a = app();
