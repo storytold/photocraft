@@ -126,6 +126,13 @@ fn arm_move_transfer(app: &mut PhotocraftApp, ctx: &egui::Context, index: usize)
             }
             let grabbed = if let Some(b) = app.layer_box.as_ref() {
                 let Some(g) = b.grabbed_layer else { return false };
+                // The marquee belongs to the document it began in (#11971 review): another
+                // window's focus or a keyboard document switch can make another document
+                // active while the button is still held, and the grabbed id would then name
+                // a layer of that document instead.
+                if b.doc != app.session.active().map(|st| st.doc.id) {
+                    return false;
+                }
                 app.layer_box = None;
                 app.move_viewport = None;
                 g

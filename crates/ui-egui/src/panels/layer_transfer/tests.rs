@@ -948,3 +948,36 @@ fn a_blocked_move_over_empty_space_does_not_transfer_locked_active_layer() {
 
     assert_eq!(h.state().session.documents()[1].doc.layers.len(), 1, "nothing transferred from empty space");
 }
+
+/// #11971 review: the marquee that grabbed a layer belongs to the document it began in. Another
+/// document becoming active while the button is still held (a document window's focus, a keyboard
+/// document switch) must not arm the grabbed layer against it.
+#[test]
+fn a_grabbed_marquee_layer_never_transfers_from_another_document() {
+    let (mut h, _paint) = harness();
+    // A locked cover in the source document: a Move press there draws the marquee and grabs it.
+    h.state_mut().session.execute("layer.new.layer", json!({"name": "cover"})).unwrap();
+    let cover = LayerId(h.state().session.active().unwrap().doc.layers.last().unwrap().id.0);
+    h.state_mut().session.execute("select.rect", json!({"x": 4, "y": 6, "width": 10, "height": 10})).unwrap();
+    h.state_mut().session.execute("edit.fill", json!({"color": "#00ff00"})).unwrap();
+    h.state_mut().session.execute("layer.lockLayers", json!({"all": true})).unwrap();
+    h.state_mut().ui.tool = Tool::Move;
+    h.state_mut().ui.tool_options.move_auto_select = true;
+
+    use crate::canvas::{ToolEvent, tool_event};
+    tool_event(h.state_mut(), ToolEvent::Down { x: 8.0, y: 10.0, pressure: 1.0 }, Modifiers::NONE);
+    let source = h.state().session.documents()[0].doc.id;
+    let b = *h.state().layer_box.as_ref().expect("the marquee grabbed the locked layer");
+    assert_eq!(b.grabbed_layer, Some(cover), "the locked layer under the pointer is grabbed");
+    assert_eq!(b.doc, Some(source), "the press records its document");
+
+    // Another document becomes active while the button is still held; nothing clears the marquee.
+    h.state_mut().session.set_active(1);
+    assert_eq!(h.state().session.active().unwrap().doc.name, "dest-doc");
+
+    // Hovering a tab must not arm the grabbed layer against the document that became active.
+    let ctx = h.ctx.clone();
+    assert!(!super::arm_move_transfer(h.state_mut(), &ctx, 0), "the marquee's layer is not armed from another document");
+    assert!(!crate::layer_transfer::is_transfer_armed(&ctx), "no transfer is armed");
+    assert_eq!(h.state().layer_box.as_ref().and_then(|b| b.grabbed_layer), Some(cover), "the marquee stays with its document");
+}

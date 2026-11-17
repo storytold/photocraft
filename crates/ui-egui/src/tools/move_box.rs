@@ -18,6 +18,9 @@ pub(crate) struct LayerBox {
     add: bool,
     /// A locked or background layer that was hit under the pointer, kept for a cross-document transfer.
     pub(crate) grabbed_layer: Option<photocraft_doc::LayerId>,
+    /// The document the press began in: a cross-document transfer only arms there, as
+    /// `move_blocked_doc` does for a refused press.
+    pub(crate) doc: Option<photocraft_doc::DocId>,
     /// The actual Move tool skips Position locks. Temporary Move keeps ordinary rectangle picks.
     move_auto_select: bool,
     /// An empty plain marquee from a locked-only hit clears the selection.
@@ -29,7 +32,8 @@ pub(crate) struct LayerBox {
 /// locked-only press so an empty replacement marquee clears the selection.
 /// Temporary Move keeps ordinary lock filtering. Marquees clear the press's snapping and ⇧/⌥ state.
 pub(crate) fn begin(app: &mut PhotocraftApp, p: [f64; 2], add: bool, move_auto_select: bool, clear_on_empty: bool) {
-    app.layer_box = Some(LayerBox { start: p, end: p, add, grabbed_layer: None, move_auto_select, clear_on_empty });
+    app.layer_box =
+        Some(LayerBox { start: p, end: p, add, grabbed_layer: None, move_auto_select, clear_on_empty, doc: app.session.active().map(|st| st.doc.id) });
     app.move_viewport = app.current_viewport;
     app.prefs_rt.snap = None;
     app.prefs_rt.snap_lines.clear();
@@ -46,7 +50,7 @@ pub(crate) fn begin_with_layer(
     move_auto_select: bool,
     clear_on_empty: bool,
 ) {
-    app.layer_box = Some(LayerBox { start: p, end: p, add, grabbed_layer, move_auto_select, clear_on_empty });
+    app.layer_box = Some(LayerBox { start: p, end: p, add, grabbed_layer, move_auto_select, clear_on_empty, doc: app.session.active().map(|st| st.doc.id) });
     app.move_viewport = app.current_viewport;
     app.prefs_rt.snap = None;
     app.prefs_rt.snap_lines.clear();
