@@ -81,7 +81,6 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
         return None;
     }
     let dir = default_dir(app);
-    let stem = doc_stem(app);
     Some(Ok(match id {
         "file.export.saveForWebLegacy" => {
             app.session.active()?;
@@ -142,25 +141,93 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
         }
         "file.package" => form(app, id, "Package", json!({"dir": dir}), json!({})),
         "file.export.pathsToIllustrator" => {
-            // Document Bounds comes first; a document without paths offers only it, selected (#13771).
-            let mut names = vec!["documentBounds".to_string()];
-            if let Some(d) = app.session.active().filter(|d| d.doc.work_path.is_some() || !d.doc.paths.is_empty()) {
-                names.push("all".into());
-                if d.doc.work_path.is_some() {
-                    names.push("work".into());
-                }
-                names.extend(d.doc.paths.iter().map(|p| p.name.clone()));
-            }
+            let (names, labels, groups) = paths_export_entries(app);
             let fallback = if names.len() > 1 { "all" } else { "documentBounds" };
-            // Opens on the Paths panel's selected row, as the reference application does (#13777).
-            // A shape layer's path ("layer") is not an entry yet, and a row the document no longer
-            // has falls back to All Paths (Document Bounds without paths).
-            let paths = app.ui.selected_path.as_deref().filter(|s| *s != "layer" && names.iter().any(|n| n == s)).unwrap_or(fallback).to_string();
-            form(app, id, "Export Paths to File", json!({"path": format!("{dir}/{stem}.ai"), "paths": paths}), json!({"paths": names}))
+            // Opens on the Paths panel's selected row, as the reference application does (#13777):
+            // its layer row is the layer path's entry, a saved path its entry's value. A row the
+            // document no longer has falls back to All Paths (Document Bounds without paths).
+            let layer = app.session.active().and_then(|d| photocraft_engine::print_cmds::active_layer_path(&d.doc, d.active_layer).map(|(n, _)| n));
+            // The Paths panel keeps the raw name of the selected row, so `layer` and `work` are the layer row or
+            // the Work Path and also a saved path of that name. With such a path in the document the panel's
+            // selection says nothing about which: open on All Paths rather than export the wrong geometry.
+            let ambiguous = |s: &str| matches!(s, "layer" | "work") && app.session.active().is_some_and(|d| d.doc.paths.iter().any(|p| p.name == s));
+            let selected = app.ui.selected_path.as_deref().filter(|s| !ambiguous(s)).map(|s| match s {
+                "layer" => layer.as_ref().map(|_| "layer".to_string()).unwrap_or_default(),
+                "work" => "work".to_string(),
+                name => saved_path_value(name),
+            });
+            let paths = selected.filter(|s| names.iter().any(|n| n == s)).unwrap_or_else(|| fallback.to_string());
+            // Only the Paths choice: OK then asks where to save the `.ai` file (#13778).
+            let id = form(app, id, "Export Paths to File", json!({"paths": paths}), json!({"paths": names}));
+            if let Some(d) = id.get("dialog").and_then(Value::as_u64).and_then(|d| app.ui.dialog_mut(d)) {
+                d.fields.insert("__choiceLabels".into(), json!({"paths": labels}));
+                d.fields.insert("__choiceGroups".into(), json!({"paths": groups}));
+                d.fields.insert(PATHS_EXPORT.into(), json!(true));
+            }
+            id
         }
         _ => return None,
     }))
 }
+
+/// The Paths to Illustrator entries as the reference application lists them (#13776): Document
+/// Bounds, a separator, All Paths, a separator, then the paths as the Paths panel lists them:
+/// the saved paths, the Work Path and the active layer's path (#13774). A document without paths
+/// offers Document Bounds alone. Returns the values, their labels and the values a separator goes
+/// above.
+fn paths_export_entries(app: &PhotocraftApp) -> (Vec<String>, Map<String, Value>, Vec<String>) {
+    let mut names = vec!["documentBounds".to_string()];
+    let mut labels = Map::new();
+    labels.insert("documentBounds".into(), json!(tl!("Document Bounds")));
+    let Some(d) = app.session.active() else { return (names, labels, Vec::new()) };
+    let layer = photocraft_engine::print_cmds::active_layer_path(&d.doc, d.active_layer).map(|(n, _)| n);
+    let mut paths: Vec<(String, String)> = d.doc.paths.iter().map(|p| (saved_path_value(&p.name), p.name.clone())).collect();
+    if d.doc.work_path.is_some() {
+        paths.push(("work".into(), tl!("Work Path").into()));
+    }
+    // The active layer's path has its own selector, so a saved path of the same name stays distinct.
+    paths.extend(layer.map(|n| ("layer".to_string(), n)));
+    if paths.is_empty() {
+        return (names, labels, Vec::new());
+    }
+    names.push("all".into());
+    labels.insert("all".into(), json!(tl!("All Paths")));
+    let groups = vec!["all".to_string(), paths[0].0.clone()];
+    for (value, label) in paths {
+        labels.insert(value.clone(), json!(label));
+        names.push(value);
+    }
+    (names, labels, groups)
+}
+
+/// The command params of the Paths to Illustrator dialog's choice. A saved path goes as `savedPath`, its
+/// exact name, apart from `paths`, which keeps its older reading for scripts (a `paths` of `path:all` still
+/// means a path literally named so when it exists). The reserved choices stay `paths`. Other commands'
+/// params come back as they were.
+pub(crate) fn paths_export_params(cmd: &str, mut params: Value) -> Value {
+    if cmd != "file.export.pathsToIllustrator" {
+        return params;
+    }
+    let choice = params.get("paths").and_then(Value::as_str).map(str::to_string);
+    if let (Some(choice), Some(o)) = (choice, params.as_object_mut())
+        && !matches!(choice.as_str(), "documentBounds" | "all" | "work" | "layer")
+    {
+        o.remove("paths");
+        o.insert("savedPath".into(), json!(choice.strip_prefix("path:").unwrap_or(&choice)));
+    }
+    params
+}
+
+/// The value a saved path is exported by: its name, or `path:<name>` when the name is one of the
+/// reserved values (`all`, `work`, `layer`, `documentBounds`) or itself starts with `path:` (#13776).
+/// The engine reads a `path:` value as the saved path with the rest as its name before anything else.
+fn saved_path_value(name: &str) -> String {
+    if matches!(name, "all" | "work" | "layer" | "documentBounds") || name.starts_with("path:") { format!("path:{name}") } else { name.to_string() }
+}
+
+#[cfg(test)]
+#[path = "paths_export_entries_tests.rs"]
+mod paths_export_entries_tests;
 
 /// Checked state of toggle items owned here.
 pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
@@ -173,7 +240,7 @@ pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
 
 /// Dialogs whose body and confirm live here.
 pub fn owns(f: &Map<String, Value>) -> bool {
-    f.contains_key("__web") || f.contains_key("__print")
+    f.contains_key("__web") || f.contains_key("__print") || f.contains_key(PATHS_EXPORT)
 }
 
 pub fn dialog_width(f: &Map<String, Value>) -> Option<f32> {
@@ -198,7 +265,10 @@ pub fn ok_label(f: &Map<String, Value>) -> Option<&'static str> {
 
 /// The body of Save for Web or Print (dialog `id`).
 pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, id: u64) {
-    if f.contains_key("__web") {
+    if f.contains_key(PATHS_EXPORT) {
+        // Paths to Illustrator is a plain form; only its OK is ours (#13778).
+        crate::view_cmds::form_body(ui, f);
+    } else if f.contains_key("__web") {
         web_body(app, ui, f);
     } else {
         print_body(app, ui, f, id);
@@ -206,7 +276,41 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
 }
 
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
+    if f.contains_key(PATHS_EXPORT) {
+        return paths_export_confirm(app, f);
+    }
     if f.contains_key("__web") { web_confirm(app, f) } else { print_confirm(app, f) }
+}
+
+#[cfg(test)]
+#[path = "paths_export_save_dialog_tests.rs"]
+mod paths_export_save_dialog_tests;
+
+/// Marks the Paths to Illustrator dialog, whose OK asks for the file (#13778).
+const PATHS_EXPORT: &str = "__pathsExport";
+
+/// Paths to Illustrator's OK: the save dialog for the `.ai` file, suggesting the document name
+/// with its last extension replaced (`My Doc.v2.psd` → `My Doc.v2.ai`). The app's save dialog adds
+/// a missing `.ai`, asks before replacing a file and starts where the last export went; Cancel
+/// writes nothing. The web downloads the file under the chosen name.
+fn paths_export_confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
+    const CMD: &str = "file.export.pathsToIllustrator";
+    let paths = s(f, "paths", "all");
+    let suggested = format!("{}.ai", doc_stem(app));
+    // The file dialog answers on a later frame, when another document may be active: the export is
+    // of the document that asked, as the other deferred exports are.
+    let doc = app.session.active().map(|d| d.doc.id).ok_or("no document")?;
+    app.pick_export(&suggested, move |app, path| {
+        app.refocus(doc)?;
+        if cfg!(target_arch = "wasm32") {
+            let r = app.run(CMD, paths_export_params(CMD, json!({"paths": paths})))?;
+            let text = r["ai"].as_str().unwrap_or_default().to_string();
+            let write = app.services.write.as_mut().ok_or("no writer configured")?;
+            write(&path, text.as_bytes())?;
+            return Ok(json!({"path": path, "paths": r["paths"]}));
+        }
+        app.run(CMD, paths_export_params(CMD, json!({"paths": paths, "path": path})))
+    })
 }
 
 fn params(f: &Map<String, Value>) -> Value {

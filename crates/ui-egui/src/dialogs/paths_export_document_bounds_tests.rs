@@ -40,7 +40,8 @@ fn document_bounds_comes_before_the_paths() {
     app.run("path.set", json!({"name": "work", "path": path})).unwrap();
     app.ui.selected_path = None;
     let (names, paths) = open(&mut app);
-    assert_eq!(names, ["documentBounds", "all", "work", "Rect A"]);
+    // The saved paths come before the Work Path (#13776).
+    assert_eq!(names, ["documentBounds", "all", "Rect A", "work"]);
     assert_eq!(paths, "all", "the default stays All Paths (#13777)");
 }
 
