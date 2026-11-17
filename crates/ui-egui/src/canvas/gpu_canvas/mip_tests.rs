@@ -66,7 +66,6 @@ fn canvas_mips_preserve_opaque_pixels_and_partial_updates() {
     }
     // On the same device (see the top of the file).
     canvas_textures_the_gpu_refuses_leave_it_working(&gpu);
-    background_compositor_switch_preserves_pixels(&gpu);
     refused_viewport_page_work_is_caught(&gpu);
 }
 
@@ -204,35 +203,125 @@ fn partial_updates_match_a_full_rebuild_at_every_mip_level() {
     }
 }
 
-/// A CPU-created texture stays valid when a newly built compositor updates only a damage rect.
-fn background_compositor_switch_preserves_pixels(gpu: &GpuCanvas) {
-    use photocraft_doc::{ColorMode, Document, Layer, LayerContent};
-    let mut doc = Document::new("background build", photocraft_geom::Size::new(64, 64), ColorMode::Rgb, SampleType::U8);
-    let mut layer = Layer::raster("pixels", doc.pixel_format());
-    if let LayerContent::Raster(surface) = &mut layer.content {
-        surface.fill_rect(Rect::new(0, 0, 64, 64), &[0.2, 0.4, 0.6, 1.0]);
-    }
+/// The 2D canvas encoder copies each compositor chunk into a document texture. A spatial mask
+/// Blur returns a padded texture whose visible `rect` starts at nonzero `origin`; exercise two
+/// compositor chunks and compare the actual GPU canvas texture against the CPU-uploaded result.
+#[test]
+fn blurred_mask_canvas_transfer_matches_cpu_across_chunk_boundary() {
+    use photocraft_color::{ColorMode, PixelFormat};
+    use photocraft_doc::{
+        Document, Layer, LayerMask, SampleType, Size,
+        mask_paint::{EffectKind, Paint, Stack},
+    };
+    use photocraft_geom::Rect;
+    use photocraft_raster::Surface;
+
+    let _gpu = photocraft_testkit::gpu_lock();
+    let rs = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| egui_kittest::wgpu::create_render_state(wgpu_setup(), Default::default())));
+    let Ok(rs) = rs else {
+        eprintln!("skipping blurred canvas transfer test: no GPU adapter");
+        return;
+    };
+    let gpu = GpuCanvas::with_tile(&rs, Some(photocraft_gpu::CHUNK * 2));
+    let width = photocraft_gpu::CHUNK + 32;
+    let height = 24;
+    let bounds = Rect::from_xywh(0, 0, width, height);
+
+    let base = Surface::with_default(PixelFormat::GRAY8, &[0.0]);
+    let mut paint_surface = Surface::with_default(PixelFormat::RGBA8, &[0.0; 4]);
+    paint_surface.write_region(Rect::new(photocraft_gpu::CHUNK as i32 - 1, 12, photocraft_gpu::CHUNK as i32, 13), &[1.0; 4]);
+    let empty = || Surface::with_default(PixelFormat::RGBA8, &[0.0; 4]);
+    let paint = Paint {
+        name: "boundary impulse".into(),
+        visible: true,
+        opacity: 1.0,
+        blend: photocraft_color::BlendMode::Normal,
+        surface: paint_surface,
+        fill_map: None,
+        fill_map_size: [0, 0],
+        fill_bounds: None,
+        kind: EffectKind::Paint,
+    };
+    let blur = Paint {
+        name: "blur".into(),
+        visible: true,
+        opacity: 1.0,
+        blend: photocraft_color::BlendMode::Normal,
+        surface: empty(),
+        fill_map: None,
+        fill_map_size: [0, 0],
+        fill_bounds: None,
+        kind: EffectKind::Blur { radius: 5 },
+    };
+    let mut mask = LayerMask::hide_all();
+    mask.surface = base.clone();
+    mask.paint = Some(Stack { base, layers: vec![paint, blur], active: 0 });
+    photocraft_compose::mask_paint::refresh_in_canvas(&mut mask, bounds);
+
+    let mut layer = Layer::raster("blurred mask", PixelFormat::RGBA8);
+    *layer.surface_mut().unwrap() = Surface::with_default(PixelFormat::RGBA8, &[1.0; 4]);
+    layer.mask = Some(mask);
+    let mut doc = Document::new("2D mask Blur chunk transfer", Size::new(width, height), ColorMode::Rgb, SampleType::U8);
     doc.layers.push(layer);
-    let key = doc.id.0;
-    *gpu.compositor_build.lock().unwrap() = compositor_build::BuildState::Building;
-    let first = gpu.refresh(key, &doc, None, None);
-    assert_eq!(first.kind, "full");
-    assert_eq!(first.fallback, Some(CpuReason::CompositorBuilding));
-    assert!(gpu.compositor_failed().is_none());
-    let built = photocraft_gpu::Compositor::try_new_with_format(&gpu.rs.device, photocraft_gpu::Compositor::preferred_acc_format(&gpu.rs.adapter));
-    let Ok(comp) = built else { return };
-    *gpu.compositor_build.lock().unwrap() = compositor_build::BuildState::Ready(Box::new(comp));
-    let damage = Rect::new(8, 8, 16, 16);
-    if let LayerContent::Raster(surface) = &mut doc.layers[0].content {
-        surface.fill_rect(damage, &[0.8, 0.2, 0.1, 1.0]);
-    }
-    let second = gpu.refresh(key, &doc, Some(damage), None);
-    assert_eq!(second.kind, "gpu-rect", "{:?}", second.fallback);
-    let actual = read_mips(gpu, key).remove(0);
-    let expected = photocraft_compose::render(&doc, doc.bounds());
-    for (got, want) in actual.iter().zip(expected.px.iter()) {
-        for (g, w) in got.iter().zip(want.iter()) {
-            assert!((g - w).abs() < 0.02, "{got:?} != {want:?}");
+
+    // The first display texture can be filled through the CPU compositor while GPU pipelines
+    // are still building. Keep that texture, then ensure a later partial GPU refresh updates the
+    // same allocation without disturbing the CPU-rendered pixels outside its damage.
+    gpu.simulate_compositor_build();
+    let initial = gpu.refresh(doc.id.0, &doc, None, None);
+    assert_eq!(initial.kind, "full", "a not-yet-ready compositor falls back to the CPU full render: {initial:?}");
+    assert!(gpu.simulate_compositor_completion(true), "the adapter can build the compositor");
+
+    let reference = doc.id.0 ^ (1u64 << 62);
+    gpu.upload_composite(reference, &doc, None);
+    let (_, _, before_refresh) = gpu.read_texels(doc.id.0).expect("CPU-rendered canvas before GPU readiness");
+
+    // Exercise the first partial GPU update while the target still contains the full CPU render.
+    // The changed raster patch straddles the chunk boundary and overlaps the mask's Blur impulse.
+    let mut changed = doc.clone();
+    let patch = Rect::from_xywh(photocraft_gpu::CHUNK as i32 - 2, 10, 4, 4);
+    let pixels = (0..patch.width() * patch.height()).flat_map(|_| [0.8, 0.1, 0.2, 1.0]).collect::<Vec<_>>();
+    changed.layers[0].surface_mut().unwrap().write_region(patch, &pixels);
+    gpu.upload_composite(reference, &changed, None);
+    let (_, _, expected_partial) = gpu.read_texels(reference).expect("changed CPU reference before partial refresh");
+    assert!(
+        expected_partial.iter().zip(&before_refresh).any(|(after, before)| (0..4).any(|channel| (after[channel] - before[channel]).abs() > 2.0 / 255.0)),
+        "the partial CPU reference must change at least one pixel"
+    );
+    let refreshed = gpu.refresh(doc.id.0, &changed, Some(patch), None);
+    assert_eq!(refreshed.kind, "gpu-rect", "the ready compositor performs the first partial refresh: {refreshed:?}");
+    let (_, _, actual_partial) = gpu.read_texels(doc.id.0).expect("partial GPU refresh readback");
+    for (index, (actual, expected)) in actual_partial.iter().zip(&expected_partial).enumerate() {
+        for channel in 0..4 {
+            assert!(
+                (actual[channel] - expected[channel]).abs() <= 2.0 / 255.0,
+                "CPU-to-GPU partial refresh mismatch at pixel {index} channel {channel}: {} != {}",
+                actual[channel],
+                expected[channel]
+            );
         }
     }
+
+    // Separately compare the complete padded Blur transfer across the chunk boundary.
+    gpu.upload_composite(reference, &doc, None);
+    let stats = gpu.composite(&doc, bounds, false).expect("2D GPU canvas must encode the padded Blur chunks");
+    assert!(stats.chunks >= 2, "fixture must cross the compositor chunk boundary: {stats:?}");
+    let (_, size, actual) = gpu.read_texels(doc.id.0).expect("GPU canvas texture readback");
+    let (_, ref_size, expected) = gpu.read_texels(reference).expect("CPU-composited canvas texture readback");
+    assert_eq!(size, ref_size);
+    for y in 0..height as usize {
+        for x in 0..width as usize {
+            let i = y * width as usize + x;
+            for channel in 0..4 {
+                assert!(
+                    (actual[i][channel] - expected[i][channel]).abs() <= 2.0 / 255.0,
+                    "GPU/CPU canvas mismatch at ({x},{y}) channel {channel}: {} != {}",
+                    actual[i][channel],
+                    expected[i][channel]
+                );
+            }
+        }
+    }
+    let boundary = height as usize / 2 * width as usize + photocraft_gpu::CHUNK as usize;
+    assert!(expected[boundary][3] > 0.0, "Blur energy must reach the first pixel of the next compositor chunk");
 }

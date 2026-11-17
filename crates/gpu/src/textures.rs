@@ -1,9 +1,11 @@
 use super::{Arc, DocId, FieldKind, HashMap, LayerId, PixelFormat, Rect, Role, SampleType, Tile, TileCoord, fx, timing};
 
-/// A finished chunk: straight-alpha RGBA32F pixels of `rect` (document coordinates) at the
-/// texture's origin.
+/// A finished chunk: straight-alpha pixels of `rect` (document coordinates), starting at
+/// `origin` within the texture. Consumers must crop any padding before displaying the chunk.
 pub struct ChunkOut<'a> {
     pub rect: Rect,
+    /// Origin of `rect` within the texture (non-zero for Blur-padded work chunks).
+    pub origin: [u32; 2],
     pub texture: &'a wgpu::Texture,
     pub view: &'a wgpu::TextureView,
 }
@@ -22,6 +24,10 @@ pub struct Stats {
     pub slots: u32,
     pub tiles_uploaded: usize,
     pub bytes_uploaded: usize,
+    /// Editable mask Fill source textures uploaded this frame.
+    pub mask_fill_uploads: usize,
+    /// Bytes uploaded for editable mask Fill source textures this frame.
+    pub mask_fill_bytes_uploaded: u64,
     /// Tiles a new layer texture took from another layer's texture by a GPU copy (a duplicate
     /// shares its source's tiles) instead of uploading them.
     pub tiles_shared: usize,
@@ -66,9 +72,9 @@ pub(crate) enum TexKind {
 impl TexKind {
     pub(crate) fn for_surface(role: Role, f: PixelFormat) -> Self {
         match role {
-            Role::Content | Role::Stroke if f == PixelFormat::RGBA8 => TexKind::Rgba8Direct,
-            Role::Content | Role::Stroke if f.sample == SampleType::U8 => TexKind::Rgba8,
-            Role::Content | Role::Stroke => TexKind::Rgba16F,
+            Role::Content | Role::Stroke | Role::MaskPaint(_) if f == PixelFormat::RGBA8 => TexKind::Rgba8Direct,
+            Role::Content | Role::Stroke | Role::MaskPaint(_) if f.sample == SampleType::U8 => TexKind::Rgba8,
+            Role::Content | Role::Stroke | Role::MaskPaint(_) => TexKind::Rgba16F,
             Role::Mask if f == PixelFormat::GRAY8 => TexKind::R8Direct,
             Role::Mask if f.sample == SampleType::F32 => TexKind::R32F,
             Role::Mask => TexKind::R16F,
@@ -117,6 +123,16 @@ pub(crate) struct CachedPattern {
     /// [`Compositor::frame`] when it last painted.
     pub(crate) last_used: u64,
     /// GPU bytes of the texture (RGBA32F).
+    pub(crate) bytes: u64,
+}
+
+pub(crate) struct CachedMaskFill {
+    pub(crate) fingerprint: u64,
+    pub(crate) _pin: Vec<std::sync::Weak<Tile>>,
+    pub(crate) format: PixelFormat,
+    pub(crate) default_bits: Vec<u32>,
+    pub(crate) texture: Tex,
+    pub(crate) last_used: u64,
     pub(crate) bytes: u64,
 }
 

@@ -1,0 +1,6 @@
+newmtl ORBIT_07
+Kd 1 1 1
+map_Kd orbit07_color.png
+map_Pr orbit07_roughness.png
+map_Pm orbit07_metallic.png
+map_Ke orbit07_emissive.png

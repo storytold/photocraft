@@ -33,15 +33,17 @@ fn select_state(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(EngineError::Other("the history can't move while a command is still running on this document".into()));
     }
     let keep_visibility = !s.visibility_undoable();
+    #[cfg(feature = "uv-workbench")]
+    let uv_cache_context = s.active().and_then(|state| s.uv.mask_cache_context(&state.doc));
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
     if target == past {
         return Ok(json!({ "state": target, "changed": false }));
     }
-    st.coalesce = None;
     // Step the history itself (pointer moves, no pixels touched), then make the reached state
     // current once: one revision, one damage rect for the canvas.
     let start = st.doc.clone();
     let mut doc = start.clone();
+    let mut history = st.history.clone();
     let mut layers = None;
     let mut at = past;
     while at != target {
@@ -49,12 +51,12 @@ fn select_state(s: &mut Session, p: &Value) -> Result<Value> {
         // step by step as Undo / Redo keep them, except on the layers whose visibility the step
         // passed over changed.
         let undoing = target < at;
-        let mut changed = if undoing { st.history.current_visibility().to_vec() } else { Vec::new() };
-        let step = if undoing { st.history.undo(doc.clone()) } else { st.history.redo(doc.clone()) };
+        let mut changed = if undoing { history.current_visibility().to_vec() } else { Vec::new() };
+        let step = if undoing { history.undo(doc.clone()) } else { history.redo(doc.clone()) };
         let Some((mut d, l)) = step else { break };
         if keep_visibility {
             if !undoing {
-                changed = st.history.current_visibility().to_vec();
+                changed = history.current_visibility().to_vec();
             }
             crate::carry_visibility(&doc, &mut d, &changed);
         }
@@ -69,7 +71,26 @@ fn select_state(s: &mut Session, p: &Value) -> Result<Value> {
     if doc.name != start.name {
         std::sync::Arc::make_mut(&mut doc).name.clone_from(&start.name);
     }
+    #[cfg(feature = "uv-workbench")]
+    if let Some(context) = uv_cache_context.as_ref() {
+        let target_context = context.for_document(&doc);
+        if !target_context.is_current(&doc) {
+            if crate::uv_reload_cmds::refresh_bound_mask_cache_for_document(
+                std::sync::Arc::make_mut(&mut doc),
+                &context.scene,
+                &context.topology,
+                &context.materials,
+            )
+            .is_err()
+            {
+                return Err(EngineError::Other("Could not refresh the bound mask cache for the current UV topology".into()));
+            }
+            target_context.remember(&doc);
+        }
+    }
     let damage = crate::layer_multi_cmds::step_damage(&start, &doc);
+    st.history = history;
+    st.coalesce = None;
     st.doc = doc;
     // Stepping only over selection changes keeps a clean document clean (#6865).
     let keep_clean = st.keeps_clean(&start);

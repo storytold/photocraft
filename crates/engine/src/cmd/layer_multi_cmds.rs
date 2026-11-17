@@ -23,7 +23,7 @@ use align::{align, distribute};
 pub(crate) use damage::grow_hint;
 #[cfg(any(test, debug_assertions))]
 pub(crate) use damage::{hint_misses, small_change_pct};
-pub use damage::{layer_bounds, same_pixels, selection_only_change, step_damage};
+pub use damage::{layer_bounds, same_pixels, same_pixels_ignoring_masks, selection_only_change, step_damage};
 use moves::link_groups;
 pub(crate) use moves::shift_surface;
 #[cfg(test)]

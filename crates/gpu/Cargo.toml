@@ -38,6 +38,7 @@ pollster = "1"
 [dev-dependencies]
 wgpu = { version = "30" }
 pollster = "1"
+photocraft-paint = { workspace = true }
 # Shape layers in the effect parity tests.
 photocraft-vector = { workspace = true }
 # A document-tagged CMYK profile in the tile conversion test.

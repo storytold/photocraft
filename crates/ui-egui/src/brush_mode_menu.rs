@@ -244,6 +244,10 @@ pub(crate) fn checked(app: &PhotocraftApp, ctx: &Context, tool: Tool) -> Option<
     if plain && tool == Tool::PaintBucket { None } else { current(app, tool) }
 }
 
+fn dismissal_key(ctx: &Context, name: &'static str) -> Id {
+    menu_id().with((name, ctx.viewport_id()))
+}
+
 /// Opens the active tool's menu at screen point `pos`, for a right-click with `mods`.
 pub(crate) fn open(app: &mut PhotocraftApp, ctx: &Context, pos: [f32; 2], mods: egui::Modifiers) {
     if !pos.iter().all(|v| v.is_finite()) || items(app.ui.tool).is_empty() {
@@ -257,12 +261,14 @@ pub(crate) fn open(app: &mut PhotocraftApp, ctx: &Context, pos: [f32; 2], mods: 
     app.ui.layer_menu = None;
     app.ui.canvas_tool_menu = None;
     app.ui.brush_mode_menu = Some(pos);
+    app.ui.brush_mode_menu_viewport = Some(ctx.viewport_id());
     app.ui.brush_mode_menu_tool = Some(app.ui.tool);
     crate::canvas_popup::mark_open(ctx, menu_id());
 }
 
 fn close(app: &mut PhotocraftApp) {
     app.ui.brush_mode_menu = None;
+    app.ui.brush_mode_menu_viewport = None;
     app.ui.brush_mode_menu_tool = None;
 }
 
@@ -271,16 +277,20 @@ fn current_tool(app: &PhotocraftApp) -> bool {
     app.ui.brush_mode_menu_tool == Some(app.ui.tool)
 }
 
+fn owns_viewport(app: &PhotocraftApp, ctx: &Context) -> bool {
+    app.ui.brush_mode_menu.is_some() && app.ui.brush_mode_menu_viewport == Some(ctx.viewport_id())
+}
+
 /// A press outside dismisses the popup, and consumes that entire canvas gesture through Up.
 pub(crate) fn blocks_canvas(app: &PhotocraftApp, ctx: &Context) -> bool {
-    let key = menu_id().with("dismiss-pointer");
+    let key = dismissal_key(ctx, "dismiss-pointer");
     if ctx.data(|d| d.get_temp::<bool>(key)).unwrap_or(false) {
         if !ctx.input(|i| i.pointer.any_down()) {
             ctx.data_mut(|d| d.remove::<bool>(key));
         }
         return true;
     }
-    if app.ui.brush_mode_menu.is_some() {
+    if owns_viewport(app, ctx) {
         if let Some(rect) = ctx.memory(|m| m.area_rect(menu_id()))
             && crate::canvas_popup::outside_pressed(ctx, menu_id(), rect)
         {
@@ -295,7 +305,7 @@ pub(crate) fn blocks_canvas(app: &PhotocraftApp, ctx: &Context) -> bool {
 /// or `ui.context.choose`.
 pub(crate) fn blocks_control(app: &mut PhotocraftApp, ctx: &Context, ev: crate::canvas::ToolEvent) -> bool {
     use crate::canvas::ToolEvent;
-    let key = menu_id().with("control-dismiss");
+    let key = dismissal_key(ctx, "control-dismiss");
     let blocked = ctx.data(|d| d.get_temp::<bool>(key)).unwrap_or(false);
     if blocked {
         if matches!(ev, ToolEvent::Up { .. }) {
@@ -303,7 +313,7 @@ pub(crate) fn blocks_control(app: &mut PhotocraftApp, ctx: &Context, ev: crate::
         }
         return true;
     }
-    if app.ui.brush_mode_menu.is_some() {
+    if owns_viewport(app, ctx) {
         if !current_tool(app) {
             close(app);
             return false;
@@ -384,12 +394,16 @@ pub(crate) fn choose(app: &mut PhotocraftApp, ctx: &Context, item: Item) {
 
 pub(crate) fn show(app: &mut PhotocraftApp, ctx: &Context) {
     let Some([x, y]) = app.ui.brush_mode_menu else { return };
+    if !owns_viewport(app, ctx) {
+        return;
+    }
     if !current_tool(app) || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         let same_tool = current_tool(app);
         close(app);
         // Escape also consumes the release of a right-button gesture still in flight.
         if same_tool && ctx.input(|i| i.pointer.secondary_down()) {
-            ctx.data_mut(|d| d.insert_temp(menu_id().with("dismiss-pointer"), true));
+            let key = dismissal_key(ctx, "dismiss-pointer");
+            ctx.data_mut(|d| d.insert_temp(key, true));
         }
         return;
     }

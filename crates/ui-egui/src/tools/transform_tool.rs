@@ -127,6 +127,12 @@ pub(crate) struct Preparing {
     made: Option<MadeLayer>,
 }
 
+impl Preparing {
+    pub(crate) fn document(&self) -> DocId {
+        self.layer.0
+    }
+}
+
 /// The canvas key of an open box's preview document (`display_doc`).
 pub(crate) fn preview_key(session: u64) -> u64 {
     (1 << 40) + session
@@ -335,6 +341,20 @@ pub const HANDLE_PX: f64 = 12.0;
 /// [`HANDLE_PX`] in document pixels at the current zoom.
 pub fn handle_tolerance(app: &PhotocraftApp) -> f64 {
     HANDLE_PX / app.point_zoom().max(0.01) as f64
+}
+
+/// A mask Fill already has live, non-destructive canvas controls. Native transform commands
+/// must not create a second session targeting its linked parent raster.
+pub(crate) fn route_to_mask_fill(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
+    #[cfg(feature = "uv-workbench")]
+    let owns = app.session.active_index().is_some_and(|index| crate::uv_ui::fill_manipulator_active(app, ctx, index));
+    #[cfg(not(feature = "uv-workbench"))]
+    let owns = false;
+    if owns && (app.ui.transform.is_some() || app.transform_preview.is_some()) {
+        cancel(app);
+        ctx.request_repaint();
+    }
+    owns
 }
 
 /// End a handle drag whose release a modal sampler consumed, preserving the transform. Its snapping

@@ -76,6 +76,7 @@ pub struct Compositor {
     /// Effect temporaries (R32F, region sized) and the frame they were last used.
     temps: Vec<(Tex, u64)>,
     patterns: HashMap<String, CachedPattern>,
+    mask_fills: HashMap<(DocId, LayerId, u16), CachedMaskFill>,
     /// The colour mode of the document being encoded: patterns paint in it
     /// (`photocraft_compose::pattern::pattern_rgba`).
     pattern_mode: photocraft_color::ColorMode,
@@ -140,6 +141,7 @@ mod convert;
 mod encode;
 mod fx_passes;
 mod kit;
+mod mask_stack_gpu;
 mod paging;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod readback;
@@ -160,6 +162,9 @@ use convert::{CONVERT_BATCH, colour_managed, convert_tile, convert_tiles, rgb_gr
 pub use convert::{f16_to_f32, f32_to_f16};
 pub use kit::SHADER;
 use kit::{Kit, tex_entry};
+pub use mask_stack_gpu::{
+    MaskBrushPatch, MaskBrushPreviewRequest, MaskBrushSettings, MaskBrushStackRenderRequest, MaskRoundDab, MaskStackRenderRequest, MaskStackRenderer,
+};
 pub use paging::OVER_BUDGET;
 use paging::first_error;
 #[cfg(test)]
@@ -168,7 +173,7 @@ use paging::{lru_victims, uniform_buffer_len};
 pub use readback::{ReadbackError, render_bands, render_to_vec, render_to_vec_stats};
 #[cfg(test)]
 use textures::TexKind;
-use textures::{CachedPattern, FxEntry, FxKey, ResKey, Resident, Tex};
+use textures::{CachedMaskFill, CachedPattern, FxEntry, FxKey, ResKey, Resident, Tex};
 pub use textures::{ChunkOut, Stats};
 
 /// Stable fingerprint of the compositor WGSL source, for invalidating cached build failures.

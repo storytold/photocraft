@@ -766,6 +766,9 @@ fn preference_uses_ambient_filesystem(path: &str) -> bool {
 
 fn command_uses_ambient_path(id: &str, params: &Value) -> bool {
     match id {
+        "uv.model.import" | "uv.model.reimport" | "uv.model.checkSource" | "uv.texture.open" | "uv.project.save" | "uv.project.load" | "uv.asset.import" => {
+            true
+        }
         "actions.load"
         | "actions.replace"
         | "brush.presets.importAbr"

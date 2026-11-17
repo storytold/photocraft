@@ -324,6 +324,7 @@ impl LiveMixer {
             params: params.clone(),
             seed: Some(self.seed),
             points: self.points,
+            breaks: Vec::new(),
             surface,
             bounds,
             mixer: Some((self.original_state, after)),

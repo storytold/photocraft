@@ -120,7 +120,7 @@ pub(super) fn history_source(s: &Session, id: Option<LayerId>, p: &Value, cmd: &
         crate::history_source_cmds::refuse_other_format(st, &source_doc)?;
     }
     let missing = || EngineError::Other("the target did not exist (as pixels, a mask or a channel) in that history state".into());
-    match crate::channel_cmds::read_target_surface(source_doc.as_ref(), id, p) {
+    match crate::channel_cmds::read_history_target_surface(source_doc.as_ref(), id, p) {
         Ok(surf) => Ok(surf.clone()),
         Err(_)
             if flag(p, "eraseToHistory", false) && crate::channel_cmds::target_of(p) == crate::channel_cmds::Target::Pixels && source_doc.layers.len() == 1 =>

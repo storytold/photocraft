@@ -35,6 +35,8 @@ pub(super) fn workspace_name(id: &str) -> Option<&'static str> {
         "graphicAndWeb" => "Graphic and Web",
         "pixelArt" => "Pixel Art",
         "motion" => "Motion",
+        #[cfg(feature = "uv-workbench")]
+        "threeD" => "3D",
         _ => return None,
     })
 }
@@ -69,15 +71,40 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Va
     {
         authorize(id, &params)?;
     }
+    if matches!(
+        id,
+        "image.imageSize"
+            | "image.canvasSize"
+            | "image.crop"
+            | "image.trim"
+            | "image.rotation.arbitrary"
+            | "image.imageRotation.flipCanvasHorizontal"
+            | "image.imageRotation.flipCanvasVertical"
+            | "image.imageRotation.180"
+            | "image.imageRotation.90cw"
+            | "image.imageRotation.90ccw"
+    ) {
+        crate::sizing::geometry_preflight(app, id)?;
+    }
+
     // A held Type box handle applies its box before any command that may read or edit the
     // document runs; a command that edits it first would make the drag's box stale and lose it.
     if !keeps_box_drag(id) {
         crate::type_box_preview::end_drag(app);
     }
+    #[cfg(feature = "uv-workbench")]
+    if crate::uv_project::intercept(app, id, &params) {
+        return Ok(Value::Null);
+    }
     if crate::discard_ui::intercept(app, id, &params) {
         return Ok(Value::Null);
     }
-    let r = invoke_unguarded(app, ctx, id, params)?;
+    let r = invoke_unguarded(app, ctx, id, params);
+    #[cfg(feature = "uv-workbench")]
+    if r.is_err() && matches!(id, "file.uv.import" | "file.uv.openProject") {
+        crate::uv_project::cancel_pending_replace(app);
+    }
+    let r = r?;
     // The palette's empty-query list (UI-217-7); opening the palette isn't a command to recall.
     if id != "edit.search" {
         crate::palette::note_recent(ctx, id);
@@ -104,6 +131,31 @@ fn frame_convert_dialog(app: &mut PhotocraftApp, id: &str) -> Result<Value, Stri
 
 /// [`invoke`] without the unsaved-changes prompt, for once the user has already answered it.
 fn invoke_early_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
+    #[cfg(feature = "uv-workbench")]
+    if let Some(result) = crate::uv_workspace::menu(app, id) {
+        return Some(result);
+    }
+    #[cfg(feature = "uv-workbench")]
+    if id == "window.uvWorkbench" {
+        return Some((|| {
+            let is_open = app.ui.workspace == "3D"
+                && app.ui.docking.as_ref().map_or(app.ui.uv_workbench.open, |workspace| workspace.layout.contains(&"uvWorkbench".to_owned()));
+            if !is_open {
+                if app.ui.workspace != "3D" {
+                    crate::menus::workspace_ui::select_workspace_named(app, "3D".into())?;
+                }
+                crate::uv_ui::reveal(app)?;
+            } else if app.ui.docking.is_some() {
+                crate::panel_docking::command(app, "window.panel.close", &json!({"panel":"uvWorkbench"}))
+                    .ok_or("native UV panel close command was unavailable")??;
+                app.ui.uv_workbench.open = false;
+            } else {
+                app.ui.dock_tabs.properties = 0;
+                app.ui.uv_workbench.open = false;
+            }
+            Ok(json!({"open": app.ui.uv_workbench.open}))
+        })());
+    }
     if let Some(tool) = crate::tool_shortcuts::tool(id) {
         crate::tool_memory::select(app, tool);
         // The tool's own brush now, not at the next frame, so a paint command right after uses
@@ -236,11 +288,18 @@ fn invoke_shell_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str,
         return Some(invoke(app, ctx, alias, params.clone()));
     }
     if let Some(ws) = workspace_name(id) {
-        // Reset re-applies the current workspace; Essentials is the default layout.
-        match (ws, id) {
-            (_, "window.workspace.resetWorkspace") => {}
-            ("", _) => app.ui.workspace = "Essentials".into(),
-            (name, _) => app.ui.workspace = name.into(),
+        // Reset re-applies the current layout. All actual preset changes use the same
+        // document-bank transition as the workspace switcher before replacing the layout.
+        if id != "window.workspace.resetWorkspace" {
+            let name = if ws.is_empty() { "Essentials" } else { ws };
+            #[cfg(feature = "uv-workbench")]
+            {
+                return Some(crate::workspace_ui::select_workspace_named(app, name.to_string()));
+            }
+            #[cfg(not(feature = "uv-workbench"))]
+            {
+                app.ui.workspace = name.into();
+            }
         }
         apply_workspace(app);
         return Some(Ok(json!({"workspace": app.ui.workspace})));
@@ -742,6 +801,9 @@ fn invoke_view_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p
         | "edit.transform.skew"
         | "edit.transform.distort"
         | "edit.transform.perspective" => Some((|| {
+            if crate::transform_tool::route_to_mask_fill(app, ctx) {
+                return Ok(json!({"transform": null, "maskFill": true}));
+            }
             if app.ui.transform.as_ref().is_some_and(|transform| transform.content_aware.is_some()) {
                 return Err(crate::transform_tool::CAS_ONLY_SCALES.into());
             }
@@ -936,11 +998,23 @@ pub fn apply_workspace(app: &mut PhotocraftApp) {
         _ => (false, true, true, false, true),
     };
     p.navigator = nav;
-    p.color = color;
+    // Keep the base 3D workspace focused on model and UV panels. The Color panel remains
+    // available through Window › Color and in the other built-in workspaces.
+    p.color = color && app.ui.workspace != "3D";
     p.layers = layers;
     p.history = history;
     p.properties = props;
     p.character = app.ui.workspace == "Graphic and Web";
+    #[cfg(feature = "uv-workbench")]
+    {
+        app.ui.uv_workbench.open = app.ui.workspace == "3D";
+        if app.ui.workspace == "3D" {
+            app.ui.dock_tabs.properties = 2;
+        }
+        if app.ui.workspace == "3D" && app.uv_cache.parked_dock.is_none() {
+            app.ui.uv_workbench.view_3d = true;
+        }
+    }
     // Timeline is a floating panel, not a dock group. Showing it does not create or edit
     // a document timeline; changing away from Motion closes it just like its Close button.
     app.ui.timeline.open = app.ui.workspace == "Motion";

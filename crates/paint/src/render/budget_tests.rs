@@ -46,6 +46,22 @@ fn a_dab_that_straddles_the_clip_edge_is_painted_in_full_inside() {
 }
 
 #[test]
+fn mapped_dabs_are_clipped_and_survive_the_last_signed_tile_edge() {
+    let mut r = StrokeRenderer::new(&brush(4.0, 0.25), None, 1.0).with_clip(Rect::new(1, 0, 3, 2));
+    let dab = Dab::round(photocraft_geom::Point::new(1.0, 0.0), 1.0, 1.0);
+    let coverage = [1.0; 4];
+    let zeros = [0.0; 4];
+    assert!(r.accumulate_mapped(Rect::new(0, 0, 4, 1), &coverage, &zeros, &zeros, &dab));
+    assert_eq!(r.coverage_at(0, 0), 0.0);
+    assert!(r.coverage_at(1, 0) > 0.0);
+    assert_eq!(r.coverage_at(3, 0), 0.0);
+
+    let mut edge = CoverageMap::default();
+    edge.accumulate(Rect::new(i32::MAX - 1, 0, i32::MAX, 1), &[1.0], 1.0, None, None);
+    assert!(edge.get(i32::MAX - 1, 0) > 0.0);
+}
+
+#[test]
 fn a_huge_brush_at_the_finest_spacing_over_a_long_path_stays_cheap_with_a_clip() {
     // 500 px brush at the 1 % minimum spacing over 2e6 px: 400 000 dabs; only those that reach the
     // clip are rasterized.

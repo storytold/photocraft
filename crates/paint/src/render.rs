@@ -21,7 +21,7 @@ use crate::dynamics::{DabGenerator, grid_cell};
 use crate::retouch::{Footprint, alpha_index, over_native};
 use crate::rng::hash2;
 use crate::tile::{Mips, PatternImage};
-use crate::{Dab, StrokePoint, TipProfile};
+use crate::{Dab, MappedDab, StrokePoint, TipProfile};
 
 /// Salt of the 8-bit dither's per-pixel noise.
 const DITHER_SALT: u64 = 0x0000_6469_7468_6572;
@@ -515,6 +515,17 @@ fn tile_coords(key: u64) -> (i32, i32) {
     ((key >> 32) as i32, key as i32)
 }
 
+/// A coverage tile's half-open pixel bounds, saturated at the representable signed-coordinate edge.
+#[inline]
+fn coverage_tile_rect((tx, ty): (i32, i32)) -> Rect {
+    Rect::new(
+        tx.saturating_mul(COV_TILE),
+        ty.saturating_mul(COV_TILE),
+        tx.saturating_add(1).saturating_mul(COV_TILE),
+        ty.saturating_add(1).saturating_mul(COV_TILE),
+    )
+}
+
 /// A sparse tiled coverage (+ optional colour) buffer.
 #[derive(Clone, Debug, Default)]
 pub struct CoverageMap {
@@ -561,7 +572,13 @@ impl CoverageMap {
         // Iterate directly for small dabs: no work-list allocations or removing existing tiles.
         let keys = (t0y..=t1y).flat_map(|ty| {
             (t0x..=t1x).map(move |tx| {
-                let tr = Rect::new(tx * COV_TILE, ty * COV_TILE, (tx + 1) * COV_TILE, (ty + 1) * COV_TILE).intersect(&rect);
+                let tr = Rect::new(
+                    tx.saturating_mul(COV_TILE),
+                    ty.saturating_mul(COV_TILE),
+                    tx.saturating_add(1).saturating_mul(COV_TILE),
+                    ty.saturating_add(1).saturating_mul(COV_TILE),
+                )
+                .intersect(&rect);
                 ((tx, ty), tr)
             })
         });
@@ -920,7 +937,7 @@ impl StrokeRenderer {
         let mut dmg = Rect::EMPTY;
         let mut region = Vec::new();
         for &(tx, ty) in &keys {
-            let tile = Rect::new(tx * COV_TILE, ty * COV_TILE, (tx + 1) * COV_TILE, (ty + 1) * COV_TILE);
+            let tile = coverage_tile_rect((tx, ty));
             let old = tile.intersect(&before);
             if !old.is_empty() {
                 pre.read_region_into(old, &mut region);
@@ -993,6 +1010,115 @@ impl StrokeRenderer {
     pub fn dab_count(&self) -> usize {
         self.dabs_done
     }
+    /// Accumulate an externally projected native dab. Geometry adapters provide
+    /// coverage in destination pixels; native opacity, masks, colour dynamics,
+    /// blending, bit depth and sparse stroke compositing remain in this renderer.
+    pub fn accumulate_mapped(&mut self, rect: Rect, coverage: &[f32], dual: &[f32], depth: &[f32], dab: &Dab) -> bool {
+        if !Self::mapped_input_valid(rect, coverage, dual, depth, dab) {
+            return false;
+        }
+        self.accumulate_mapped_admitted(rect, coverage, dual, depth, dab);
+        true
+    }
+
+    /// Validate a complete projected batch before mutating the accumulated coverage maps.
+    pub fn accumulate_mapped_batch(&mut self, batches: &[MappedDab<'_>]) -> bool {
+        if batches.iter().any(|batch| !Self::mapped_input_valid(batch.rect, batch.coverage, batch.dual_coverage, batch.depth, batch.dab)) {
+            return false;
+        }
+        for batch in batches {
+            self.accumulate_mapped_admitted(batch.rect, batch.coverage, batch.dual_coverage, batch.depth, batch.dab);
+        }
+        true
+    }
+
+    fn accumulate_mapped_admitted(&mut self, rect: Rect, coverage: &[f32], dual: &[f32], depth: &[f32], dab: &Dab) {
+        let mut main_rect = rect;
+        let mut main_cov = coverage;
+        let mut main_depth = depth;
+        let mut main_storage = None;
+        if !admit(self.clip, &mut self.area_left, &mut self.refused, rect) {
+            return;
+        }
+        if let Some(clip) = self.clip {
+            let clipped = rect.intersect(&clip);
+            if clipped != rect {
+                let Some((cov, dep)) = Self::crop_mapped(rect, clipped, coverage, depth) else { return };
+                main_storage = Some((cov, dep));
+                main_rect = clipped;
+                if let Some((cov, dep)) = main_storage.as_ref() {
+                    main_cov = cov;
+                    main_depth = dep;
+                }
+            }
+        }
+        self.accumulate_mapped_validated(main_rect, main_cov, &[], main_depth, dab);
+        let dual_allowed = self.dual.is_some() && admit(self.clip, &mut self.dual_area_left, &mut self.refused, rect);
+        if dual_allowed {
+            let mut dual_rect = rect;
+            let mut dual_cov = dual;
+            let mut dual_storage = None;
+            if let Some(clip) = self.clip {
+                let clipped = rect.intersect(&clip);
+                if clipped != rect {
+                    let Some(cov) = Self::crop_mapped_plane(rect, clipped, dual) else { return };
+                    dual_storage = Some(cov);
+                    dual_rect = clipped;
+                    if let Some(cov) = dual_storage.as_ref() {
+                        dual_cov = cov;
+                    }
+                }
+            }
+            if let Some(target) = &mut self.dual {
+                target.accumulate(dual_rect, dual_cov, 1.0, None, None);
+            }
+            self.mark_dirty(dual_rect);
+        }
+    }
+
+    fn mapped_input_valid(rect: Rect, coverage: &[f32], dual: &[f32], depth: &[f32], dab: &Dab) -> bool {
+        let n = u64::from(rect.width()) * u64::from(rect.height());
+        !(n == 0
+            || n > 16_777_216
+            || coverage.len() as u64 != n
+            || dual.len() != coverage.len()
+            || depth.len() != coverage.len()
+            || coverage.iter().chain(dual).chain(depth).any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
+            || dab.color.iter().any(|v| !v.is_finite())
+            || !dab.opacity.is_finite()
+            || !(0.0..=1.0).contains(&dab.opacity))
+    }
+
+    fn crop_mapped_plane(rect: Rect, clipped: Rect, plane: &[f32]) -> Option<Vec<f32>> {
+        let src_width = rect.width() as usize;
+        let dst_width = clipped.width() as usize;
+        let x = (clipped.x0 - rect.x0) as usize;
+        let y = (clipped.y0 - rect.y0) as usize;
+        let mut out = Vec::new();
+        out.try_reserve_exact(dst_width.checked_mul(clipped.height() as usize)?).ok()?;
+        for row in 0..clipped.height() as usize {
+            let start = (y + row) * src_width + x;
+            out.extend_from_slice(&plane[start..start + dst_width]);
+        }
+        Some(out)
+    }
+
+    fn crop_mapped(rect: Rect, clipped: Rect, coverage: &[f32], depth: &[f32]) -> Option<(Vec<f32>, Vec<f32>)> {
+        Some((Self::crop_mapped_plane(rect, clipped, coverage)?, Self::crop_mapped_plane(rect, clipped, depth)?))
+    }
+
+    fn accumulate_mapped_validated(&mut self, rect: Rect, coverage: &[f32], dual: &[f32], depth: &[f32], dab: &Dab) {
+        let mut native = [0.0; 8];
+        let color = match (self.per_dab_color, self.fmt) {
+            (true, Some(fmt)) => {
+                from_rgba_into(&fmt, dab.color, &mut native);
+                Some(&native[..fmt.mode.color_channels()])
+            }
+            _ => None,
+        };
+        self.cov.accumulate(rect, coverage, dab.opacity, color, self.ctx.brush.wet_edges.then_some(depth));
+        let _ = dual;
+    }
     /// Union of the dab rectangles so far.
     pub fn bounds(&self) -> Rect {
         self.cov.bounds
@@ -1022,6 +1148,7 @@ impl StrokeRenderer {
             // Bounds track the full dab rectangle (even fully transparent parts), like the damage.
             self.cov.bounds = self.cov.bounds.union(&rect);
         }
+        let mut dual_damage = Vec::with_capacity(duals.len());
         if let Some(dm) = self.dual.as_mut() {
             for d in &duals {
                 let rect = self.ctx.dab_rect(d, true);
@@ -1030,7 +1157,11 @@ impl StrokeRenderer {
                 }
                 self.ctx.rasterize(d, true, rect, &mut self.scratch);
                 dm.accumulate(rect, &self.scratch, 1.0, None, None);
+                dual_damage.push(rect);
             }
+        }
+        for rect in dual_damage {
+            self.mark_dirty(rect);
         }
         self.dabs_done += dabs.len();
         if let Some(all) = self.all_dabs.as_mut() {
@@ -1146,7 +1277,7 @@ impl StrokeRenderer {
             let mut region = Vec::new();
             for ty in old.y0.div_euclid(COV_TILE)..=(old.y1 - 1).div_euclid(COV_TILE) {
                 for tx in old.x0.div_euclid(COV_TILE)..=(old.x1 - 1).div_euclid(COV_TILE) {
-                    let tile = Rect::new(tx * COV_TILE, ty * COV_TILE, (tx + 1) * COV_TILE, (ty + 1) * COV_TILE);
+                    let tile = coverage_tile_rect((tx, ty));
                     let part = tile.intersect(&old);
                     let written = if redrawn_by_tail.contains(&tile_key((tx, ty))) {
                         tile.intersect(&tail_bounds)
@@ -1188,11 +1319,7 @@ impl StrokeRenderer {
     /// the stroke bounds, and forget them: what a live preview that composites its own paint has
     /// to redraw.
     pub fn take_dirty_rect(&mut self) -> Rect {
-        let r = self
-            .cov
-            .take_dirty()
-            .into_iter()
-            .fold(Rect::EMPTY, |acc, (tx, ty)| acc.union(&Rect::new(tx * COV_TILE, ty * COV_TILE, (tx + 1) * COV_TILE, (ty + 1) * COV_TILE)));
+        let r = self.cov.take_dirty().into_iter().fold(Rect::EMPTY, |acc, key| acc.union(&coverage_tile_rect(key)));
         if let Some(d) = self.dual.as_mut() {
             d.dirty.clear();
         }
@@ -1236,7 +1363,7 @@ impl StrokeRenderer {
         let mut out = vec![0.0f32; w * b.height() as usize];
         for (&key, t) in &self.cov.tiles {
             let (tx, ty) = tile_coords(key);
-            let tr = Rect::new(tx * COV_TILE, ty * COV_TILE, (tx + 1) * COV_TILE, (ty + 1) * COV_TILE).intersect(&b);
+            let tr = coverage_tile_rect((tx, ty)).intersect(&b);
             for y in tr.y0..tr.y1 {
                 for x in tr.x0..tr.x1 {
                     let ti = ((y - ty * COV_TILE) * COV_TILE + (x - tx * COV_TILE)) as usize;
@@ -1305,7 +1432,7 @@ impl StrokeRenderer {
             let composite_tile = |(key, done, region): &mut ((i32, i32), Rect, Vec<f32>)| {
                 let (tx, ty) = *key;
                 let Some(tile) = self.cov.tiles.get(&tile_key((tx, ty))) else { return };
-                let tr = Rect::new(tx * COV_TILE, ty * COV_TILE, (tx + 1) * COV_TILE, (ty + 1) * COV_TILE).intersect(&bounds);
+                let tr = coverage_tile_rect((tx, ty)).intersect(&bounds);
                 if tr.is_empty() {
                     return;
                 }

@@ -47,7 +47,17 @@ pub(crate) fn modal_allows(app: &PhotocraftApp, id: &str) -> bool {
     if app.camera_raw.is_some() || app.smart_svg.modal_open() || crate::distort_ui::modal_workspace(app).is_some() || crate::crop_ui::blocks(app, id) {
         return false;
     }
-    (app.ui.dialogs.is_empty() && app.ui.layers_panel_dialog.is_none() && app.discard.is_none()) || crate::shortcuts::NAV_COMMANDS.contains(&id)
+    let blocked = {
+        #[cfg(feature = "uv-workbench")]
+        {
+            crate::uv_project::prompt_open(app)
+        }
+        #[cfg(not(feature = "uv-workbench"))]
+        {
+            false
+        }
+    };
+    (app.ui.dialogs.is_empty() && app.ui.layers_panel_dialog.is_none() && app.discard.is_none() && !blocked) || crate::shortcuts::NAV_COMMANDS.contains(&id)
 }
 
 /// Top-level menus in Photoshop order.

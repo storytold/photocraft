@@ -326,8 +326,9 @@ pub(crate) fn damage_since(
     seen: (u64, u64),
     now: (u64, u64),
     display_key: u64,
-    (damage_from, last_damage): (u64, Option<DRect>),
+    damage_span: impl IntoDamageSpan,
 ) -> Option<DRect> {
+    let (damage_from, last_damage) = damage_span.into_damage_span(seen.0);
     // A brush stroke committed with the pixels its live preview already showed: only the steps
     // this cache hadn't shown yet (usually nothing), not the stroke's whole bounding box.
     if seen.0 + 1 == now.0
@@ -433,6 +434,30 @@ pub(crate) fn damage_since(
     Some(if r.is_empty() { r } else { r.inflate(effect_reach(&l.doc().layers)) })
 }
 
+pub(crate) trait IntoDamageSpan {
+    fn into_damage_span(self, seen_revision: u64) -> (u64, Option<DRect>);
+}
+
+impl IntoDamageSpan for (u64, Option<DRect>) {
+    fn into_damage_span(self, _seen_revision: u64) -> (u64, Option<DRect>) {
+        self
+    }
+}
+
+// UV preview callers that only have the latest damage use the older, one-revision contract.
+impl IntoDamageSpan for Option<DRect> {
+    fn into_damage_span(self, seen_revision: u64) -> (u64, Option<DRect>) {
+        (seen_revision, self)
+    }
+}
+
+/// CPU-canvas damage for a document, with the engine's journal span and effect margins.
+pub(crate) fn cpu_damage_since(app: &PhotocraftApp, idx: usize, seen: (u64, u64), now: (u64, u64), display_key: u64) -> Option<DRect> {
+    let st = app.session.documents().get(idx)?;
+    let last_damage = st.last_damage.map(|r| if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) });
+    damage_since(app, idx, seen, now, display_key, (st.damage_from(), last_damage))
+}
+
 /// Document `doc`'s canvas caches showed a preview that the edit just committed reproduces
 /// (`was_preview` tells its keys): count it as the document itself, so the commit's damage rect
 /// refreshes only that area instead of everything.
@@ -467,11 +492,28 @@ pub(crate) fn effect_reach(layers: &[photocraft_doc::Layer]) -> i32 {
         .filter(|l| l.visible)
         .map(|l| {
             let own = if photocraft_compose::effects::has_effects(l) { photocraft_compose::effects::margin(l) } else { 0 };
+            let mask_blur_reach = l
+                .mask
+                .as_ref()
+                .filter(|mask| mask.enabled)
+                .and_then(|mask| mask.paint.as_ref())
+                .map(|stack| {
+                    stack
+                        .layers
+                        .iter()
+                        .filter(|effect| effect.visible && effect.opacity > 0.0)
+                        .map(|effect| match &effect.kind {
+                            photocraft_doc::mask_paint::EffectKind::Blur { radius } => i32::from(*radius),
+                            _ => 0,
+                        })
+                        .sum::<i32>()
+                })
+                .unwrap_or(0);
             let inner = match &l.content {
                 LayerContent::Group(g) => effect_reach(&g.children),
                 _ => 0,
             };
-            own + inner
+            own + mask_blur_reach + inner
         })
         .max()
         .unwrap_or(0)
@@ -489,6 +531,9 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
     else {
         return false;
     };
+    #[cfg(feature = "uv-workbench")]
+    let (doc, raw_key) = crate::uv_mask_paint_preview::gpu_display_doc(app, idx).unwrap_or_else(|| display_doc(app, idx));
+    #[cfg(not(feature = "uv-workbench"))]
     let (doc, raw_key) = display_doc(app, idx);
     let (display, _) = canvas_display(app, &doc, None);
     // Repeated pattern tiles sample the same texture, including pixels outside the unwrapped
@@ -622,6 +667,9 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
     }
     if r.kind.starts_with("gpu") {
         app.perf.gpu_uploads = r.uploads;
+        app.perf.gpu_upload_bytes = r.gpu_upload_bytes;
+        app.perf.gpu_passes = r.gpu_passes;
+        app.perf.gpu_chunks = r.gpu_chunks;
     }
     let Some(cache) = app.canvases.get_mut(&(id, GPU_OUTPUT)) else { return true };
     cache.revision = revision;

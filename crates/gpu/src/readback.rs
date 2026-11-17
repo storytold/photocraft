@@ -3,6 +3,7 @@ use std::fmt;
 use photocraft_color::SampleType;
 use photocraft_raster::Interrupt;
 
+pub use super::consts::READBACK_WAIT_TIMEOUT;
 use super::textures::Stats;
 use super::{Compositor, Document, Rect, Unsupported};
 
@@ -34,10 +35,6 @@ impl<E> From<Unsupported> for ReadbackError<E> {
 /// Default maximum bytes of staging buffer memory in flight during band readback (32 MiB).
 pub const DEFAULT_MAX_STAGING_BYTES: usize = 32 << 20;
 
-/// How long a readback waits for submitted GPU work before treating the device as lost: a
-/// headless export has no user to cancel a wedged GPU, so it must never block forever.
-pub const READBACK_WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-
 /// Blocking readback of a composite (native tests and tools).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn render_to_vec(comp: &mut Compositor, device: &wgpu::Device, queue: &wgpu::Queue, doc: &Document, rect: Rect) -> Result<Vec<[f32; 4]>, Unsupported> {
@@ -67,7 +64,12 @@ pub fn render_to_vec_stats(
             mapped_at_creation: false,
         });
         enc.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo { texture: out.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::TexelCopyTextureInfo {
+                texture: out.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x: out.origin[0], y: out.origin[1], z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
             wgpu::TexelCopyBufferInfo {
                 buffer: &buf,
                 layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(out.rect.height()) },
@@ -261,7 +263,12 @@ where
                 mapped_at_creation: false,
             });
             _enc.copy_texture_to_buffer(
-                wgpu::TexelCopyTextureInfo { texture: out.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                wgpu::TexelCopyTextureInfo {
+                    texture: out.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x: out.origin[0], y: out.origin[1], z: 0 },
+                    aspect: wgpu::TextureAspect::All,
+                },
                 wgpu::TexelCopyBufferInfo {
                     buffer: &buf,
                     layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(chunk_row), rows_per_image: Some(out.rect.height()) },

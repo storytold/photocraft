@@ -168,7 +168,16 @@ impl Session {
         // A saved copy can reuse a closed source's persisted ID. Give the new tab another ID so
         // a closed clone source stays invalid until the user explicitly picks a new source.
         // Persisted IDs can overlap the allocator, so check every replacement too.
-        while self.docs.iter().any(|st| st.doc.id == doc.id) || self.presets.clone.slots.iter().any(|slot| slot.document == Some(doc.id)) {
+        while self.docs.iter().any(|st| st.doc.id == doc.id) || self.presets.clone.slots.iter().any(|slot| slot.document == Some(doc.id)) || {
+            #[cfg(feature = "uv-workbench")]
+            {
+                self.uv_workspace.parked.iter().any(|st| st.doc.id == doc.id)
+            }
+            #[cfg(not(feature = "uv-workbench"))]
+            {
+                false
+            }
+        } {
             doc.id = photocraft_doc::DocId::fresh();
         }
         self.open_document_order.push(doc.id);

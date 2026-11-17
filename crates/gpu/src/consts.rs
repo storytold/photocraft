@@ -3,6 +3,9 @@
 /// the CPU reference, and Color Burn/Dodge amplify input error.
 pub const ACC_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
 
+/// Maximum duration for a blocking GPU readback wait before treating it as a failed device.
+pub const READBACK_WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 // default accumulation format; `preferred_acc_format` downgrades to Rgba16Float where 32-bit float isn't renderable
 /// Effect intermediates (distances, blurs) and layer shapes.
 pub(crate) const MAP32: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
@@ -39,6 +42,8 @@ pub(crate) const MAX_PATTERN_TEXTURE_BYTES: u64 = 256 << 20;
 
 /// A pattern texture no frame has painted with for this many frames is dropped.
 pub const PATTERN_IDLE_FRAMES: u64 = 240;
+
+pub(crate) const MASK_FILL_SOURCE_BYTES: u64 = 256 << 20;
 
 /// Uploads (bytes) [`Compositor::render`] stages before submitting the work recorded so far, so
 /// a refresh of a huge document never holds all its uploads in staging memory at once.

@@ -34,6 +34,7 @@ impl Class {
 /// prefix.
 pub const TABLE: &[(&str, Class)] = &[
     ("geom", Class::Layer(0)),
+    ("uv", Class::Standalone),
     ("color", Class::Layer(0)),
     ("raster", Class::Layer(0)),
     ("codecs", Class::Standalone),

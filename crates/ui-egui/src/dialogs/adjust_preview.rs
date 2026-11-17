@@ -123,7 +123,7 @@ pub fn base_document(doc: &Document, target: LayerId) -> Result<Document, String
     preview.id = PREVIEW_LAYER;
     preview.clipped = true;
     if let Some(sel) = &doc.selection {
-        preview.mask = Some(LayerMask { surface: sel.clone(), enabled: true, linked: false, density: 1.0, feather: 0.0 });
+        preview.mask = Some(LayerMask { surface: sel.clone(), enabled: true, linked: false, density: 1.0, feather: 0.0, paint: None });
     }
     let mut out = doc.clone();
     if !out.layer(target).is_some_and(|l| l.clipped) {

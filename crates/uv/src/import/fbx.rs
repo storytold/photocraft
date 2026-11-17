@@ -1,0 +1,958 @@
+//! Binary FBX static meshes, preserving per-corner UV and control-point identities.
+use crate::{Corner, Error, MAX_MATERIALS, MAX_VERTICES, Material, Result, Scene};
+use fbxcel::{
+    low::v7400::AttributeValue as A,
+    tree::{any::AnyTree, v7400::NodeHandle},
+};
+use glam::{DMat3, DMat4, DQuat, DVec3, EulerRot};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap},
+    sync::Arc,
+};
+
+// `fbxcel::AnyTree` owns every node and attribute, including arrays which the
+// mesh importer may never use. Bound that allocation before constructing it.
+const FBX_HEADER_LEN: usize = 27;
+const FBX_MAX_DEPTH: usize = 256;
+const FBX_MAX_NODES: usize = 1_000_000;
+const FBX_MAX_ATTRIBUTES: u64 = 2_000_000;
+const FBX_MAX_ARRAY_BYTES: u64 = 128 * 1024 * 1024;
+const FBX_MAX_DECODED_BYTES: u64 = 384 * 1024 * 1024;
+
+#[derive(Default)]
+struct PreflightBudget {
+    nodes: usize,
+    attributes: u64,
+    decoded_bytes: u64,
+}
+
+fn preflight_error() -> Error {
+    Error("FBX structure exceeds safe import limits or is malformed".into())
+}
+
+fn checked_end(start: usize, length: usize, bound: usize) -> Result<usize> {
+    let end = start.checked_add(length).ok_or_else(preflight_error)?;
+    if end > bound {
+        return Err(preflight_error());
+    }
+    Ok(end)
+}
+
+fn read_u32(bytes: &[u8], offset: usize, bound: usize) -> Result<(u32, usize)> {
+    let end = checked_end(offset, 4, bound)?;
+    let value = u32::from_le_bytes(bytes.get(offset..end).ok_or_else(preflight_error)?.try_into().map_err(|_| preflight_error())?);
+    Ok((value, end))
+}
+
+fn account_decoded(budget: &mut PreflightBudget, amount: u64) -> Result<()> {
+    budget.decoded_bytes = budget.decoded_bytes.checked_add(amount).ok_or_else(preflight_error)?;
+    if budget.decoded_bytes > FBX_MAX_DECODED_BYTES {
+        return Err(preflight_error());
+    }
+    Ok(())
+}
+
+fn scan_attributes(bytes: &[u8], mut offset: usize, count: u64, end: usize, budget: &mut PreflightBudget) -> Result<()> {
+    budget.attributes = budget.attributes.checked_add(count).ok_or_else(preflight_error)?;
+    if budget.attributes > FBX_MAX_ATTRIBUTES {
+        return Err(preflight_error());
+    }
+    for _ in 0..count {
+        let code = *bytes.get(offset).filter(|_| offset < end).ok_or_else(preflight_error)?;
+        offset = offset.checked_add(1).ok_or_else(preflight_error)?;
+        let scalar_size = match code {
+            b'C' => Some(1),
+            b'Y' => Some(2),
+            b'I' | b'F' => Some(4),
+            b'L' | b'D' => Some(8),
+            _ => None,
+        };
+        if let Some(size) = scalar_size {
+            offset = checked_end(offset, size, end)?;
+            account_decoded(budget, size as u64)?;
+            continue;
+        }
+        let element_size = match code {
+            b'b' => 1_u64,
+            b'i' | b'f' => 4,
+            b'l' | b'd' => 8,
+            b'R' | b'S' => {
+                let (length, data_start) = read_u32(bytes, offset, end)?;
+                let data_end = checked_end(data_start, usize::try_from(length).map_err(|_| preflight_error())?, end)?;
+                account_decoded(budget, u64::from(length))?;
+                offset = data_end;
+                continue;
+            }
+            _ => return Err(preflight_error()),
+        };
+
+        // ArrayAttributeHeader is (u32 count, u32 encoding, u32 byte length).
+        let (elements, p) = read_u32(bytes, offset, end)?;
+        let (encoding, p) = read_u32(bytes, p, end)?;
+        let (stored_len, payload) = read_u32(bytes, p, end)?;
+        if encoding > 1 {
+            return Err(preflight_error());
+        }
+        let decoded_len = u64::from(elements).checked_mul(element_size).ok_or_else(preflight_error)?;
+        if decoded_len > FBX_MAX_ARRAY_BYTES {
+            return Err(preflight_error());
+        }
+        let stored_len_usize = usize::try_from(stored_len).map_err(|_| preflight_error())?;
+        let data_end = checked_end(payload, stored_len_usize, end)?;
+        match encoding {
+            0 if u64::from(stored_len) != decoded_len => return Err(preflight_error()),
+            1 if decoded_len != 0 && stored_len == 0 => return Err(preflight_error()),
+            _ => {}
+        }
+        account_decoded(budget, decoded_len)?;
+        offset = data_end;
+    }
+    if offset > end {
+        return Err(preflight_error());
+    }
+    // FBX permits unused bytes in the declared property block; fbxcel skips
+    // them after reading the declared attribute count.
+    Ok(())
+}
+
+fn scan_nodes(bytes: &[u8], mut offset: usize, bound: usize, root: bool, depth: usize, width: usize, budget: &mut PreflightBudget) -> Result<usize> {
+    if depth > FBX_MAX_DEPTH {
+        return Err(preflight_error());
+    }
+    while offset < bound {
+        let header_end = checked_end(offset, width, bound)?;
+        let (node_end, attr_count, attr_len, name_len, header_end) = if width == 13 {
+            let (node_end, p) = read_u32(bytes, offset, bound)?;
+            let (attrs, p) = read_u32(bytes, p, bound)?;
+            let (attr_bytes, p) = read_u32(bytes, p, bound)?;
+            let name_len = *bytes.get(p).filter(|_| p < bound).ok_or_else(preflight_error)?;
+            (u64::from(node_end), u64::from(attrs), u64::from(attr_bytes), name_len, p + 1)
+        } else {
+            let end = bytes.get(offset..header_end).ok_or_else(preflight_error)?;
+            let node_end = u64::from_le_bytes(end.get(0..8).ok_or_else(preflight_error)?.try_into().map_err(|_| preflight_error())?);
+            let attrs = u64::from_le_bytes(end.get(8..16).ok_or_else(preflight_error)?.try_into().map_err(|_| preflight_error())?);
+            let attr_bytes = u64::from_le_bytes(end.get(16..24).ok_or_else(preflight_error)?.try_into().map_err(|_| preflight_error())?);
+            let name_len = *end.get(24).ok_or_else(preflight_error)?;
+            (node_end, attrs, attr_bytes, name_len, header_end)
+        };
+        if node_end == 0 && attr_count == 0 && attr_len == 0 && name_len == 0 {
+            let after_marker = header_end;
+            if !root && after_marker != bound {
+                return Err(preflight_error());
+            }
+            return Ok(after_marker);
+        }
+        budget.nodes = budget.nodes.checked_add(1).ok_or_else(preflight_error)?;
+        if budget.nodes > FBX_MAX_NODES {
+            return Err(preflight_error());
+        }
+        let node_end = usize::try_from(node_end).map_err(|_| preflight_error())?;
+        if node_end <= offset || node_end > bound {
+            return Err(preflight_error());
+        }
+        let name_end = checked_end(header_end, usize::from(name_len), node_end)?;
+        let attr_len = usize::try_from(attr_len).map_err(|_| preflight_error())?;
+        let attrs_end = checked_end(name_end, attr_len, node_end)?;
+        let estimated_metadata = attr_count.checked_mul(32).and_then(|n| n.checked_add(u64::from(name_len) + 64)).ok_or_else(preflight_error)?;
+        account_decoded(budget, estimated_metadata)?;
+        scan_attributes(bytes, name_end, attr_count, attrs_end, budget)?;
+        let child_end = scan_nodes(bytes, attrs_end, node_end, false, depth + 1, width, budget)?;
+        if child_end != node_end {
+            return Err(preflight_error());
+        }
+        offset = node_end;
+    }
+    if offset != bound {
+        return Err(preflight_error());
+    }
+    if root {
+        // A binary FBX document ends its top-level nodes with a null record.
+        return Err(preflight_error());
+    }
+    Ok(offset)
+}
+
+fn preflight_binary(bytes: &[u8]) -> Result<()> {
+    const MAGIC: &[u8] = b"Kaydara FBX Binary  \x00\x1a\x00";
+    if bytes.len() < FBX_HEADER_LEN || !bytes.starts_with(MAGIC) {
+        return Err(preflight_error());
+    }
+    let version = u32::from_le_bytes(bytes.get(23..27).ok_or_else(preflight_error)?.try_into().map_err(|_| preflight_error())?);
+    if !(7400..8000).contains(&version) {
+        return Err(Error("Unsupported FBX version".into()));
+    }
+    let width = if version < 7500 { 13 } else { 25 };
+    let mut budget = PreflightBudget::default();
+    let _ = scan_nodes(bytes, FBX_HEADER_LEN, bytes.len(), true, 0, width, &mut budget)?;
+    Ok(())
+}
+
+fn child<'a>(n: NodeHandle<'a>, name: &str) -> Option<NodeHandle<'a>> {
+    n.first_child_by_name(name)
+}
+fn string(n: NodeHandle<'_>, index: usize) -> Option<&str> {
+    n.attributes().get(index)?.get_string()
+}
+fn id(n: NodeHandle<'_>) -> Option<i64> {
+    n.attributes().first()?.get_i64()
+}
+fn text<'a>(n: NodeHandle<'a>, name: &str) -> Option<&'a str> {
+    string(child(n, name)?, 0)
+}
+fn is_indexed_reference_mode(reference: Option<&str>) -> bool {
+    matches!(reference, Some("IndexToDirect" | "Index"))
+}
+fn floats(n: NodeHandle<'_>, name: &str) -> Result<Vec<f64>> {
+    let values = child(n, name).and_then(|n| n.attributes().first());
+    match values {
+        Some(A::ArrF64(a)) => Ok(a.clone()),
+        Some(A::ArrF32(a)) => Ok(a.iter().map(|v| f64::from(*v)).collect()),
+        _ => Err(Error(format!("FBX {name} array is missing"))),
+    }
+}
+fn ints(n: NodeHandle<'_>, name: &str) -> Result<Vec<i32>> {
+    child(n, name)
+        .and_then(|n| n.attributes().first())
+        .and_then(A::get_arr_i32)
+        .map(|a| a.to_vec())
+        .ok_or_else(|| Error(format!("FBX {name} array is missing")))
+}
+fn property<'a>(n: NodeHandle<'a>, name: &str) -> Option<NodeHandle<'a>> {
+    child(n, "Properties70")?.children_by_name("P").find(|p| string(*p, 0) == Some(name))
+}
+fn vector(n: NodeHandle<'_>, name: &str, default: DVec3) -> DVec3 {
+    property(n, name)
+        .and_then(|p| {
+            let a = p.attributes();
+            Some(DVec3::new(a.get(4)?.get_f64()?, a.get(5)?.get_f64()?, a.get(6)?.get_f64()?))
+        })
+        .unwrap_or(default)
+}
+fn material_alpha(n: NodeHandle<'_>) -> f32 {
+    let scalar = |name| property(n, name).and_then(|p| p.attributes().get(4)).and_then(A::get_f64);
+    if let Some(transparency) = scalar("TransparencyFactor") {
+        return (1.0 - transparency).clamp(0.0, 1.0) as f32;
+    }
+    // FBX stores color transparency separately; use its strongest channel as the
+    // scalar opacity fallback when no TransparencyFactor was authored.
+    if let Some(color) = property(n, "TransparentColor").and_then(|p| {
+        let a = p.attributes();
+        Some(DVec3::new(a.get(4)?.get_f64()?, a.get(5)?.get_f64()?, a.get(6)?.get_f64()?))
+    }) {
+        return (1.0 - color.max_element()).clamp(0.0, 1.0) as f32;
+    }
+    1.0
+}
+fn rotate(v: DVec3, order: i32) -> DMat4 {
+    let v = v * std::f64::consts::PI / 180.0;
+    let q = match order {
+        1 => DQuat::from_euler(EulerRot::YZX, v.y, v.z, v.x),
+        2 => DQuat::from_euler(EulerRot::XZY, v.x, v.z, v.y),
+        3 => DQuat::from_euler(EulerRot::ZXY, v.z, v.x, v.y),
+        4 => DQuat::from_euler(EulerRot::YXZ, v.y, v.x, v.z),
+        5 => DQuat::from_euler(EulerRot::XYZ, v.x, v.y, v.z),
+        _ => DQuat::from_euler(EulerRot::ZYX, v.z, v.y, v.x),
+    };
+    DMat4::from_quat(q)
+}
+fn integer(n: NodeHandle<'_>, name: &str) -> i32 {
+    property(n, name).and_then(|p| p.attributes().get(4)).and_then(A::get_i32).unwrap_or(0)
+}
+fn transform(n: NodeHandle<'_>, geometric: bool) -> DMat4 {
+    let v = |name, default| vector(n, name, default);
+    let t = |x| DMat4::from_translation(x);
+    if geometric {
+        return t(v("GeometricTranslation", DVec3::ZERO))
+            * rotate(v("GeometricRotation", DVec3::ZERO), 0)
+            * DMat4::from_scale(v("GeometricScaling", DVec3::ONE));
+    }
+    let rp = v("RotationPivot", DVec3::ZERO);
+    let sp = v("ScalingPivot", DVec3::ZERO);
+    t(v("Lcl Translation", DVec3::ZERO))
+        * t(v("RotationOffset", DVec3::ZERO))
+        * t(rp)
+        * rotate(v("PreRotation", DVec3::ZERO), 0)
+        * rotate(v("Lcl Rotation", DVec3::ZERO), integer(n, "RotationOrder"))
+        * rotate(v("PostRotation", DVec3::ZERO), 0).inverse()
+        * t(-rp)
+        * t(v("ScalingOffset", DVec3::ZERO))
+        * t(sp)
+        * DMat4::from_scale(v("Lcl Scaling", DVec3::ONE))
+        * t(-sp)
+}
+
+/// Extract a proper orthonormal rotation from an affine parent matrix while leaving its
+/// scale and shear in the residual. Column normalization alone is not valid when the parent
+/// contains shear (for example, a rotated child under a nonuniformly scaled grandparent).
+fn parent_rotation(parent: DMat4) -> Result<DMat4> {
+    let mut rotation = DMat3::from_cols(parent.x_axis.truncate(), parent.y_axis.truncate(), parent.z_axis.truncate());
+    if !rotation.is_finite() {
+        return Err(Error("FBX parent transform is singular".into()));
+    }
+    // Scale first so the determinant threshold detects relative degeneracy, not a valid
+    // uniformly tiny parent scale. The polar factor is unchanged by positive normalization.
+    let magnitude = rotation.x_axis.abs().max_element().max(rotation.y_axis.abs().max_element()).max(rotation.z_axis.abs().max_element());
+    if !magnitude.is_finite() || magnitude == 0.0 {
+        return Err(Error("FBX parent transform is singular".into()));
+    }
+    rotation /= magnitude;
+    if rotation.determinant().abs() <= 1e-24 {
+        return Err(Error("FBX parent transform is singular or too close to singular".into()));
+    }
+    for _ in 0..64 {
+        let next = (rotation + rotation.inverse().transpose()) * 0.5;
+        if !next.is_finite() {
+            return Err(Error("FBX parent rotation decomposition failed".into()));
+        }
+        let delta = (next.x_axis - rotation.x_axis)
+            .length_squared()
+            .max((next.y_axis - rotation.y_axis).length_squared())
+            .max((next.z_axis - rotation.z_axis).length_squared());
+        rotation = next;
+        if delta <= 1e-24 {
+            break;
+        }
+    }
+    // A quaternion represents only proper rotations. Keep reflections in the scale/shear
+    // residual by flipping one axis of the orthogonal factor when necessary.
+    if rotation.determinant() < 0.0 {
+        rotation.x_axis = -rotation.x_axis;
+    }
+    let orthogonality_error = (rotation.x_axis.length_squared() - 1.0)
+        .abs()
+        .max((rotation.y_axis.length_squared() - 1.0).abs())
+        .max((rotation.z_axis.length_squared() - 1.0).abs())
+        .max(rotation.x_axis.dot(rotation.y_axis).abs())
+        .max(rotation.x_axis.dot(rotation.z_axis).abs())
+        .max(rotation.y_axis.dot(rotation.z_axis).abs());
+    if !orthogonality_error.is_finite() || orthogonality_error > 1e-10 {
+        return Err(Error("FBX parent rotation is too ill-conditioned to decompose safely".into()));
+    }
+    let quaternion = DQuat::from_mat3(&rotation).normalize();
+    if !quaternion.is_finite() {
+        return Err(Error("FBX parent rotation decomposition failed".into()));
+    }
+    Ok(DMat4::from_quat(quaternion))
+}
+
+/// Evaluate one FBX model transform using its parent's global rotation and scale/shear.
+/// FBX's default RrSs order places the child's local rotation before inherited parent scale.
+fn inherited_transform(n: NodeHandle<'_>, parent: DMat4, parent_local_scale: DVec3) -> Result<DMat4> {
+    let local = transform(n, false);
+    let local_translation = local.w_axis.truncate();
+    let v = |name, default| vector(n, name, default);
+    let local_rotation = rotate(v("PreRotation", DVec3::ZERO), 0)
+        * rotate(v("Lcl Rotation", DVec3::ZERO), integer(n, "RotationOrder"))
+        * rotate(v("PostRotation", DVec3::ZERO), 0).inverse();
+    let local_scale = DMat4::from_scale(v("Lcl Scaling", DVec3::ONE));
+    let parent_rotation = parent_rotation(parent)?;
+    let parent_translation = DMat4::from_translation(parent.w_axis.truncate());
+    let parent_scale_shear = parent_rotation.inverse() * parent_translation.inverse() * parent;
+    let inherit_type = integer(n, "InheritType");
+    let global_rs = match inherit_type {
+        0 => parent_rotation * local_rotation * parent_scale_shear * local_scale,
+        1 => parent_rotation * parent_scale_shear * local_rotation * local_scale,
+        2 => {
+            let parent_local = DMat4::from_scale(parent_local_scale);
+            if parent_local_scale.abs().min_element() <= f64::EPSILON {
+                return Err(Error("FBX Rrs inheritance cannot invert a zero parent scale".into()));
+            }
+            parent_rotation * local_rotation * parent_scale_shear * parent_local.inverse() * local_scale
+        }
+        _ => return Err(Error("Unsupported FBX transform inheritance type".into())),
+    };
+    let global_translation = parent.transform_point3(local_translation);
+    let mut result = global_rs;
+    result.w_axis = global_translation.extend(1.0);
+    if !result.is_finite() {
+        return Err(Error("FBX has a non-finite mesh transform".into()));
+    }
+    Ok(result)
+}
+
+type Connection = (i64, i64, String);
+type ConnectionIndex = HashMap<i64, Vec<usize>>;
+
+fn connected<'a>(connections: &'a [Connection], index: &'a ConnectionIndex, id: i64) -> impl Iterator<Item = &'a Connection> + 'a {
+    index.get(&id).into_iter().flatten().filter_map(|&i| connections.get(i))
+}
+
+pub(super) fn load(bytes: &[u8], uv_set: usize) -> Result<Scene> {
+    if !bytes.starts_with(b"Kaydara FBX Binary") {
+        return Err(Error("This build imports binary FBX 7.4+; export FBX as Binary from Maya (ASCII FBX is not supported)".into()));
+    }
+    preflight_binary(bytes)?;
+    let tree = AnyTree::from_seekable_reader(std::io::Cursor::new(bytes)).map_err(|e| Error(format!("FBX: {e}")))?;
+    let AnyTree::V7400(_, tree, _) = tree else { return Err(Error("Unsupported FBX version".into())) };
+    let root = tree.root();
+    let objects = child(root, "Objects").ok_or_else(|| Error("FBX Objects missing".into()))?;
+    let connections: Vec<Connection> = child(root, "Connections")
+        .map(|c| {
+            c.children_by_name("C")
+                .filter_map(|n| {
+                    let a = n.attributes();
+                    Some((a.get(1)?.get_i64()?, a.get(2)?.get_i64()?, a.get(3).and_then(A::get_string).unwrap_or("").to_owned()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut incoming = ConnectionIndex::new();
+    let mut outgoing = ConnectionIndex::new();
+    for (i, (from, to, _)) in connections.iter().enumerate() {
+        outgoing.entry(*from).or_default().push(i);
+        incoming.entry(*to).or_default().push(i);
+    }
+    let by_id: BTreeMap<i64, NodeHandle<'_>> = objects.children().filter_map(|n| Some((id(n)?, n))).collect();
+    // Decode each embedded Video payload once. FBX commonly connects one Video to several
+    // texture/material nodes; Arc clones keep those materials on the same backing allocation.
+    let embedded_videos: BTreeMap<i64, Arc<[u8]>> = objects
+        .children_by_name("Video")
+        .filter_map(|video| {
+            let video_id = id(video)?;
+            let bytes = child(video, "Content")?.attributes().first()?.get_binary()?;
+            Some((video_id, Arc::<[u8]>::from(bytes)))
+        })
+        .collect();
+    let mut scene = Scene::default();
+    let mut materials = BTreeMap::new();
+    for m in objects.children_by_name("Material") {
+        let Some(mid) = id(m) else { continue };
+        // Reserve one slot for the generated default material.
+        if scene.materials.len() >= MAX_MATERIALS.saturating_sub(1) {
+            return Err(Error(format!("Model exceeds the {MAX_MATERIALS}-material import limit")));
+        }
+        let color = vector(m, "DiffuseColor", DVec3::ONE);
+        let texture = connected(&connections, &incoming, mid)
+            .filter(|(_, _, prop)| matches!(prop.as_str(), "DiffuseColor" | "Diffuse" | "BaseColor"))
+            .find_map(|(from, _, _)| by_id.get(from).copied().filter(|n| n.name() == "Texture"));
+        let filename = texture.and_then(|t| text(t, "RelativeFilename").filter(|s| !s.is_empty()).or_else(|| text(t, "FileName"))).map(str::to_owned);
+        let embedded = texture.and_then(id).and_then(|tid| {
+            connected(&connections, &incoming, tid).find_map(|(from, _, _)| {
+                let video = by_id.get(from).copied().filter(|n| n.name() == "Video")?;
+                embedded_videos.get(&id(video)?).cloned()
+            })
+        });
+        let normal_texture = connected(&connections, &incoming, mid)
+            .filter(|(_, _, prop)| matches!(prop.as_str(), "NormalMap" | "normalCamera"))
+            .find_map(|(from, _, _)| by_id.get(from).copied().filter(|n| n.name() == "Texture"));
+        let normal_map = normal_texture.and_then(|t| text(t, "RelativeFilename").filter(|s| !s.is_empty()).or_else(|| text(t, "FileName"))).map(str::to_owned);
+        let embedded_normal = normal_texture.and_then(id).and_then(|tid| {
+            connected(&connections, &incoming, tid).find_map(|(from, _, _)| {
+                let video = by_id.get(from).copied().filter(|n| n.name() == "Video")?;
+                embedded_videos.get(&id(video)?).cloned()
+            })
+        });
+        let mut maps = BTreeMap::new();
+        for (kind, properties) in [
+            (crate::preview::Channel::Id, &["MaterialID", "ID"][..]),
+            (crate::preview::Channel::Ao, &["AmbientOcclusion", "AmbientOcclusionMap"][..]),
+            (crate::preview::Channel::Curvature, &["Curvature"][..]),
+            (crate::preview::Channel::Opacity, &["Opacity", "OpacityMap", "TransparentColor"][..]),
+            (crate::preview::Channel::Metallic, &["Metalness", "Metallic"][..]),
+            (crate::preview::Channel::Roughness, &["Roughness", "DiffuseRoughness"][..]),
+            (crate::preview::Channel::Emissive, &["EmissiveColor", "Emissive", "Emission"][..]),
+        ] {
+            if let Some(texture) = connected(&connections, &incoming, mid)
+                .filter(|(_, _, prop)| properties.contains(&prop.as_str()))
+                .find_map(|(from, _, _)| by_id.get(from).copied().filter(|n| n.name() == "Texture"))
+                && let Some(name) = text(texture, "RelativeFilename").filter(|s| !s.is_empty()).or_else(|| text(texture, "FileName"))
+            {
+                maps.insert(kind, name.to_owned());
+            }
+        }
+        materials.insert(mid, scene.materials.len());
+        scene.materials.push(Material {
+            name: string(m, 1).unwrap_or("Material").split('\0').next().unwrap_or("Material").trim_start_matches("Material::").to_owned(),
+            color: [color.x as f32, color.y as f32, color.z as f32, material_alpha(m)],
+            base_color: filename,
+            embedded,
+            normal_map,
+            embedded_normal,
+            maps,
+        });
+    }
+    let default_material = scene.materials.len();
+    scene.materials.push(Material::default());
+    let has_deformer = objects.children_by_name("Deformer").next().is_some();
+    let mut warned_skin = false;
+    let mut triangulation_budget = super::TriangulationBudget::default();
+    for geometry in objects.children_by_name("Geometry").filter(|n| string(*n, 2) == Some("Mesh")) {
+        let gid = id(geometry).ok_or_else(|| Error("FBX geometry id missing".into()))?;
+        let vertices = floats(geometry, "Vertices")?;
+        let polygons = ints(geometry, "PolygonVertexIndex")?;
+        if !vertices.len().is_multiple_of(3) || vertices.len() / 3 > MAX_VERTICES {
+            return Err(Error("Invalid FBX vertex array".into()));
+        }
+        let uv = geometry
+            .children_by_name("LayerElementUV")
+            .nth(uv_set)
+            .ok_or_else(|| Error(format!("FBX mesh has no UV set {uv_set}; unwrap it before import")))?;
+        let uv_values = floats(uv, "UV")?;
+        let uv_indices = if is_indexed_reference_mode(text(uv, "ReferenceInformationType")) { Some(ints(uv, "UVIndex")?) } else { None };
+        let mapping = text(uv, "MappingInformationType").unwrap_or("ByPolygonVertex");
+        let normals = child(geometry, "LayerElementNormal");
+        let normal_values = normals.map(|n| floats(n, "Normals")).transpose()?.unwrap_or_default();
+        let normal_mapping = normals.and_then(|n| text(n, "MappingInformationType")).unwrap_or("ByPolygonVertex");
+        let normal_indices = normals
+            .filter(|n| matches!(text(*n, "ReferenceInformationType"), Some("IndexToDirect" | "Index")))
+            .map(|n| ints(n, if child(n, "NormalsIndex").is_some() { "NormalsIndex" } else { "NormalIndex" }))
+            .transpose()?;
+        let material_layer = child(geometry, "LayerElementMaterial");
+        let material_indices = material_layer.and_then(|n| ints(n, "Materials").ok()).unwrap_or_default();
+        let all_same = material_layer.and_then(|n| text(n, "MappingInformationType")) == Some("AllSame");
+        let models: Vec<NodeHandle<'_>> =
+            connected(&connections, &outgoing, gid).filter_map(|(_, to, _)| by_id.get(to).copied().filter(|n| n.name() == "Model")).collect();
+        if models.is_empty() {
+            scene.warnings.push("Unconnected FBX geometry skipped".into());
+        }
+        for model in models {
+            let mid = id(model).ok_or_else(|| Error("Missing model id".into()))?;
+            let mut hierarchy = vec![model];
+            let mut current = mid;
+            let mut seen = BTreeSet::new();
+            seen.insert(mid);
+            while let Some(parent) = connected(&connections, &outgoing, current).find_map(|(_, to, _)| by_id.get(to).copied().filter(|n| n.name() == "Model")) {
+                current = id(parent).ok_or_else(|| Error("Missing parent id".into()))?;
+                if seen.len() >= 128 || !seen.insert(current) {
+                    return Err(Error("Cyclic or overly deep FBX hierarchy".into()));
+                }
+                hierarchy.push(parent);
+            }
+            let mut matrix = DMat4::IDENTITY;
+            let mut parent_local_scale = DVec3::ONE;
+            for node in hierarchy.iter().rev() {
+                matrix = inherited_transform(*node, matrix, parent_local_scale)?;
+                parent_local_scale = vector(*node, "Lcl Scaling", DVec3::ONE);
+            }
+            matrix *= transform(model, true);
+            let reflected = matrix.determinant() < 0.0;
+            let normal_matrix = matrix.inverse().transpose();
+            if !normal_matrix.is_finite() {
+                return Err(Error("FBX has a singular mesh transform; freeze transforms before importing".into()));
+            }
+            let attached: Vec<usize> = connected(&connections, &incoming, mid).filter_map(|(from, _, _)| materials.get(from).copied()).collect();
+            let offset = scene.positions.len();
+            if offset.saturating_add(vertices.len() / 3) > MAX_VERTICES {
+                return Err(Error("Too many FBX vertices".into()));
+            }
+            scene.positions.extend(vertices.as_chunks::<3>().0.iter().map(|&[x, y, z]| matrix.transform_point3(DVec3::new(x, y, z)).to_array()));
+            let mut face = Vec::new();
+            let mut polygon = 0;
+            for (corner, &raw) in polygons.iter().enumerate() {
+                let vertex = usize::try_from(if raw < 0 { !raw } else { raw }).map_err(|_| Error("Invalid FBX vertex index".into()))?;
+                if vertex >= vertices.len() / 3 {
+                    return Err(Error("FBX vertex index is out of range".into()));
+                }
+                let mapped = match mapping {
+                    "ByPolygonVertex" => corner,
+                    "ByVertice" | "ByVertex" => vertex,
+                    "ByPolygon" => polygon,
+                    "AllSame" => 0,
+                    _ => return Err(Error(format!("Unsupported FBX UV mapping: {mapping}"))),
+                };
+                let direct = if let Some(indices) = &uv_indices {
+                    indices.get(mapped).copied().and_then(|n| usize::try_from(n).ok()).ok_or_else(|| Error("FBX UV index out of range".into()))?
+                } else {
+                    mapped
+                };
+                let at = direct.checked_mul(2).ok_or_else(|| Error("FBX UV index overflow".into()))?;
+                let (Some(&u), Some(&v)) = (uv_values.get(at), uv_values.get(at + 1)) else { return Err(Error("FBX UV coordinates out of range".into())) };
+                let normal = if normals.is_some() {
+                    let mapped = match normal_mapping {
+                        "ByPolygonVertex" => corner,
+                        "ByVertice" | "ByVertex" => vertex,
+                        "ByPolygon" => polygon,
+                        "AllSame" => 0,
+                        _ => return Err(Error("Unsupported FBX normal mapping".into())),
+                    };
+                    let direct = if let Some(indices) = &normal_indices {
+                        indices.get(mapped).and_then(|v| usize::try_from(*v).ok()).ok_or_else(|| Error("FBX normal index out of range".into()))?
+                    } else {
+                        mapped
+                    };
+                    let at = direct.checked_mul(3).ok_or_else(|| Error("FBX normal index overflow".into()))?;
+                    let xyz = normal_values.get(at..at.saturating_add(3)).ok_or_else(|| Error("FBX normals out of range".into()))?;
+                    let &[x, y, z] = xyz else { return Err(Error("Invalid FBX normal".into())) };
+                    let n = normal_matrix.transform_vector3(DVec3::new(x, y, z));
+                    if !n.is_finite() || n.length_squared() < 1e-24 {
+                        return Err(Error("Invalid FBX normal".into()));
+                    }
+                    Some(n.normalize().to_array())
+                } else {
+                    None
+                };
+                if face.len() >= super::MAX_FACE_CORNERS {
+                    return Err(Error(format!("FBX polygon exceeds the {}-corner import limit", super::MAX_FACE_CORNERS)));
+                }
+                face.push(Corner { vertex: vertex + offset, uv: [u, v], normal });
+                if raw < 0 {
+                    let slot = material_indices.get(if all_same { 0 } else { polygon }).copied().unwrap_or(0);
+                    let material = usize::try_from(slot).ok().and_then(|i| attached.get(i)).copied().unwrap_or(default_material);
+                    if reflected {
+                        face.reverse();
+                    }
+                    if super::triangulate(&scene.positions, &face, material, &mut scene.triangles, &mut triangulation_budget)? && scene.warnings.len() < 100 {
+                        scene.warnings.push("FBX: redundant or degenerate polygon corners omitted during triangulation".into());
+                    }
+                    face.clear();
+                    polygon += 1;
+                }
+            }
+            if !face.is_empty() {
+                return Err(Error("Unterminated FBX polygon".into()));
+            }
+        }
+        if has_deformer {
+            warned_skin = true;
+        }
+    }
+    if warned_skin {
+        scene.warnings.push("Skinning and animation are not evaluated; the original static mesh is shown".into());
+    }
+    scene.warnings.push("GPU Material supports Color, Normal, Metallic, Roughness, AO and Emissive; height/bump is not evaluated".into());
+    scene.warnings.sort();
+    scene.warnings.dedup();
+    Ok(scene)
+}
+
+#[cfg(test)]
+mod preflight_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_and_current_indexed_reference_modes_are_recognized() {
+        assert!(is_indexed_reference_mode(Some("IndexToDirect")));
+        assert!(is_indexed_reference_mode(Some("Index")));
+        assert!(!is_indexed_reference_mode(Some("Direct")));
+        assert!(!is_indexed_reference_mode(None));
+    }
+
+    fn fbx_string(value: &str) -> Vec<u8> {
+        let mut out = vec![b'S'];
+        out.extend_from_slice(&(value.len() as u32).to_le_bytes());
+        out.extend_from_slice(value.as_bytes());
+        out
+    }
+
+    fn fbx_i64(value: i64) -> Vec<u8> {
+        let mut out = vec![b'L'];
+        out.extend_from_slice(&value.to_le_bytes());
+        out
+    }
+
+    fn fbx_i32(value: i32) -> Vec<u8> {
+        let mut out = vec![b'I'];
+        out.extend_from_slice(&value.to_le_bytes());
+        out
+    }
+
+    fn fbx_f64(value: f64) -> Vec<u8> {
+        let mut out = vec![b'D'];
+        out.extend_from_slice(&value.to_le_bytes());
+        out
+    }
+
+    fn fbx_vector_property(name: &str, value: [f64; 3]) -> FbxNode {
+        fbx_node(
+            "P",
+            vec![fbx_string(name), fbx_string("Vector3D"), fbx_string("Vector"), fbx_string(""), fbx_f64(value[0]), fbx_f64(value[1]), fbx_f64(value[2])],
+            vec![],
+        )
+    }
+
+    fn fbx_scalar_property(name: &str, value: f64) -> FbxNode {
+        fbx_node("P", vec![fbx_string(name), fbx_string("double"), fbx_string("Number"), fbx_string(""), fbx_f64(value)], vec![])
+    }
+
+    fn fbx_integer_property(name: &str, value: i32) -> FbxNode {
+        fbx_node("P", vec![fbx_string(name), fbx_string("enum"), fbx_string(""), fbx_string(""), fbx_i32(value)], vec![])
+    }
+
+    fn fbx_array<T>(tag: u8, values: &[T], encode: impl Fn(&T, &mut Vec<u8>)) -> Vec<u8> {
+        let mut data = Vec::new();
+        for value in values {
+            encode(value, &mut data);
+        }
+        let mut out = vec![tag];
+        out.extend_from_slice(&(values.len() as u32).to_le_bytes());
+        out.extend_from_slice(&0_u32.to_le_bytes());
+        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        out.extend_from_slice(&data);
+        out
+    }
+
+    struct FbxNode {
+        name: String,
+        attrs: Vec<Vec<u8>>,
+        children: Vec<FbxNode>,
+    }
+
+    fn fbx_node(name: &str, attrs: Vec<Vec<u8>>, children: Vec<FbxNode>) -> FbxNode {
+        FbxNode { name: name.into(), attrs, children }
+    }
+
+    fn append_fbx_node(bytes: &mut Vec<u8>, node: &FbxNode) {
+        let start = bytes.len();
+        bytes.resize(start + 13, 0);
+        bytes[start + 12] = node.name.len() as u8;
+        bytes.extend_from_slice(node.name.as_bytes());
+        let attr_start = bytes.len();
+        for attr in &node.attrs {
+            bytes.extend_from_slice(attr);
+        }
+        let attr_len = bytes.len() - attr_start;
+        for child in &node.children {
+            append_fbx_node(bytes, child);
+        }
+        if !node.children.is_empty() {
+            bytes.extend_from_slice(&[0; 13]);
+        }
+        let end = bytes.len() as u32;
+        bytes[start..start + 4].copy_from_slice(&end.to_le_bytes());
+        bytes[start + 4..start + 8].copy_from_slice(&(node.attrs.len() as u32).to_le_bytes());
+        bytes[start + 8..start + 12].copy_from_slice(&(attr_len as u32).to_le_bytes());
+        bytes[start + 12] = node.name.len() as u8;
+    }
+
+    fn indexed_uv_fbx(reference: &str) -> Vec<u8> {
+        indexed_uv_fbx_with_inheritance(reference, 0)
+    }
+
+    fn indexed_uv_fbx_with_inheritance(reference: &str, inherit_type: i32) -> Vec<u8> {
+        indexed_uv_fbx_with_modes(reference, inherit_type, false)
+    }
+
+    fn indexed_uv_fbx_with_modes(reference: &str, inherit_type: i32, mixed_shear: bool) -> Vec<u8> {
+        let (parent_scale, grandparent_scale, parent_rotation, parent_inherit, child_rotation) = if mixed_shear {
+            ([1.0, 1.0, 1.0], [2.0, 1.0, 1.0], [0.0, 0.0, 45.0], 1, [90.0, 0.0, 0.0])
+        } else {
+            ([2.0, 1.0, 1.0], [3.0, 1.0, 1.0], [0.0, 0.0, 0.0], 0, [0.0, 0.0, 90.0])
+        };
+        let mut version = vec![b'I'];
+        version.extend_from_slice(&101_i32.to_le_bytes());
+        let uv_layer = fbx_node(
+            "LayerElementUV",
+            vec![],
+            vec![
+                fbx_node("Version", vec![version], vec![]),
+                fbx_node("Name", vec![fbx_string("UVChannel_1")], vec![]),
+                fbx_node("MappingInformationType", vec![fbx_string("ByPolygonVertex")], vec![]),
+                fbx_node("ReferenceInformationType", vec![fbx_string(reference)], vec![]),
+                fbx_node("UV", vec![fbx_array(b'd', &[0.1_f64, 0.2, 0.3, 0.4, 0.5, 0.6], |v, o| o.extend_from_slice(&v.to_le_bytes()))], vec![]),
+                fbx_node("UVIndex", vec![fbx_array(b'i', &[2_i32, 0, 1], |v, o| o.extend_from_slice(&v.to_le_bytes()))], vec![]),
+            ],
+        );
+        let vertices = fbx_array(b'd', &[0.0_f64, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0], |v, o| o.extend_from_slice(&v.to_le_bytes()));
+        let polygons = fbx_array(b'i', &[0_i32, 1, -3], |v, o| o.extend_from_slice(&v.to_le_bytes()));
+        let objects = fbx_node(
+            "Objects",
+            vec![],
+            vec![
+                fbx_node(
+                    "Geometry",
+                    vec![fbx_i64(1), fbx_string("Geometry::Triangle"), fbx_string("Mesh")],
+                    vec![fbx_node("Vertices", vec![vertices], vec![]), fbx_node("PolygonVertexIndex", vec![polygons], vec![]), uv_layer],
+                ),
+                fbx_node(
+                    "Model",
+                    vec![fbx_i64(2), fbx_string("Model::Triangle"), fbx_string("Mesh")],
+                    vec![fbx_node(
+                        "Properties70",
+                        vec![],
+                        vec![fbx_vector_property("Lcl Rotation", child_rotation), fbx_integer_property("InheritType", inherit_type)],
+                    )],
+                ),
+                fbx_node(
+                    "Model",
+                    vec![fbx_i64(3), fbx_string("Model::Parent"), fbx_string("Null")],
+                    vec![fbx_node(
+                        "Properties70",
+                        vec![],
+                        vec![
+                            fbx_vector_property("Lcl Scaling", parent_scale),
+                            fbx_vector_property("Lcl Rotation", parent_rotation),
+                            fbx_integer_property("InheritType", parent_inherit),
+                        ],
+                    )],
+                ),
+                fbx_node(
+                    "Model",
+                    vec![fbx_i64(4), fbx_string("Model::Grandparent"), fbx_string("Null")],
+                    vec![fbx_node("Properties70", vec![], vec![fbx_vector_property("Lcl Scaling", grandparent_scale)])],
+                ),
+            ],
+        );
+        let connections = fbx_node(
+            "Connections",
+            vec![],
+            vec![
+                fbx_node("C", vec![fbx_string("OO"), fbx_i64(1), fbx_i64(2)], vec![]),
+                fbx_node("C", vec![fbx_string("OO"), fbx_i64(2), fbx_i64(3)], vec![]),
+                fbx_node("C", vec![fbx_string("OO"), fbx_i64(3), fbx_i64(4)], vec![]),
+            ],
+        );
+        let mut bytes = b"Kaydara FBX Binary  \0\x1a\0".to_vec();
+        bytes.extend_from_slice(&7400_u32.to_le_bytes());
+        append_fbx_node(&mut bytes, &objects);
+        append_fbx_node(&mut bytes, &connections);
+        bytes.extend_from_slice(&[0; 13]);
+        bytes
+    }
+
+    #[test]
+    fn loader_uses_uv_indices_for_legacy_index_reference_mode() {
+        let bytes = indexed_uv_fbx("Index");
+        let tree = AnyTree::from_seekable_reader(std::io::Cursor::new(bytes.clone())).unwrap();
+        let AnyTree::V7400(_, tree, _) = tree else { panic!("test fixture should be FBX 7.4") };
+        let geometry = child(tree.root(), "Objects").unwrap().first_child_by_name("Geometry").unwrap();
+        let uv = child(geometry, "LayerElementUV").unwrap();
+        assert_eq!(text(uv, "ReferenceInformationType"), Some("Index"));
+        assert_eq!(ints(uv, "UVIndex").unwrap(), [2, 0, 1]);
+        let scene = load(&bytes, 0).unwrap();
+        let uvs = scene.triangles[0].corners.map(|corner| corner.uv);
+        assert_eq!(uvs, [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]);
+    }
+
+    #[test]
+    fn material_alpha_uses_fbx_transparency_factor() {
+        let objects = fbx_node(
+            "Objects",
+            vec![],
+            vec![fbx_node(
+                "Material",
+                vec![fbx_i64(9), fbx_string("Material::Glass"), fbx_string("")],
+                vec![fbx_node("Properties70", vec![], vec![fbx_scalar_property("TransparencyFactor", 1.0)])],
+            )],
+        );
+        let mut bytes = b"Kaydara FBX Binary  \0\x1a\0".to_vec();
+        bytes.extend_from_slice(&7400_u32.to_le_bytes());
+        append_fbx_node(&mut bytes, &objects);
+        bytes.extend_from_slice(&[0; 13]);
+        let tree = AnyTree::from_seekable_reader(std::io::Cursor::new(bytes)).unwrap();
+        let AnyTree::V7400(_, tree, _) = tree else { panic!("test fixture should be FBX 7.4") };
+        let material = child(child(tree.root(), "Objects").unwrap(), "Material").unwrap();
+        assert_eq!(material_alpha(material), 0.0);
+    }
+
+    #[test]
+    fn default_inheritance_rotates_before_nonuniform_parent_scale() {
+        let scene = load(&indexed_uv_fbx("Index"), 0).unwrap();
+        let p = scene.positions[1];
+        assert!(p[0].abs() < 1e-10);
+        assert!((p[1] - 6.0).abs() < 1e-10);
+        assert!(p[2].abs() < 1e-10);
+    }
+
+    #[test]
+    fn unsupported_inheritance_modes_are_rejected() {
+        let error = load(&indexed_uv_fbx_with_inheritance("Index", 3), 0).unwrap_err();
+        assert!(error.to_string().contains("Unsupported FBX transform inheritance type"));
+    }
+
+    #[test]
+    fn mixed_inheritance_keeps_rotation_orthonormal_under_parent_shear() {
+        let scene = load(&indexed_uv_fbx_with_modes("Index", 0, true), 0).unwrap();
+        let point = scene.positions[2];
+        assert!((point[0] + 0.3535533905932738).abs() < 1e-8);
+        assert!((point[1] + 0.3535533905932738).abs() < 1e-8);
+        assert!((point[2] - 1.5).abs() < 1e-8);
+    }
+
+    #[test]
+    fn parent_rotation_keeps_signed_scale_in_the_residual_and_rejects_near_singular_basis() {
+        let affine = DMat4::from_scale(DVec3::new(-2.0, 1.0, 0.5)) * rotate(DVec3::new(0.0, 25.0, 0.0), 0);
+        let rotation = parent_rotation(affine).unwrap();
+        let residual = rotation.inverse() * DMat4::from_translation(affine.w_axis.truncate()).inverse() * affine;
+        assert!((rotation.determinant() - 1.0).abs() < 1e-10);
+        let reconstructed = rotation * residual;
+        assert!((reconstructed.x_axis - affine.x_axis).length() < 1e-10);
+        assert!((reconstructed.y_axis - affine.y_axis).length() < 1e-10);
+        assert!((reconstructed.z_axis - affine.z_axis).length() < 1e-10);
+
+        let almost_flat = DMat4::from_scale(DVec3::new(1.0, 1.0, 1e-30));
+        assert!(parent_rotation(almost_flat).is_err());
+    }
+
+    fn file_with_attributes(attribute_count: u32, declared_attribute_bytes: u32, attributes: &[u8]) -> Vec<u8> {
+        const NODE_HEADER: usize = 13;
+        const END_MARKER: usize = NODE_HEADER;
+        let node_start = FBX_HEADER_LEN;
+        let node_end = node_start + NODE_HEADER + 1 + declared_attribute_bytes as usize;
+        let mut bytes = b"Kaydara FBX Binary  \x00\x1a\x00".to_vec();
+        bytes.extend_from_slice(&7400_u32.to_le_bytes());
+        bytes.extend_from_slice(&(node_end as u32).to_le_bytes());
+        bytes.extend_from_slice(&attribute_count.to_le_bytes());
+        bytes.extend_from_slice(&declared_attribute_bytes.to_le_bytes());
+        bytes.push(1); // name length
+        bytes.push(b'N');
+        bytes.extend_from_slice(attributes);
+        bytes.resize(bytes.len() + END_MARKER, 0); // root end marker
+        bytes
+    }
+
+    fn nested_file(depth: usize) -> Vec<u8> {
+        fn append_node(bytes: &mut Vec<u8>, descendants: usize) {
+            let start = bytes.len();
+            bytes.resize(start + 13, 0); // 32-bit node header fields plus name length
+            bytes[start + 12] = 1;
+            bytes.push(b'N');
+            if descendants != 0 {
+                append_node(bytes, descendants - 1);
+            }
+            bytes.resize(bytes.len() + 13, 0); // required node end marker
+            let end = bytes.len() as u32;
+            bytes[start..start + 4].copy_from_slice(&end.to_le_bytes());
+        }
+
+        let mut bytes = b"Kaydara FBX Binary  \x00\x1a\x00".to_vec();
+        bytes.extend_from_slice(&7400_u32.to_le_bytes());
+        // The first node is depth one because preflight enters its child list at depth one.
+        append_node(&mut bytes, depth.saturating_sub(1));
+        bytes.resize(bytes.len() + 13, 0); // implicit root end marker
+        bytes
+    }
+
+    #[test]
+    fn bounded_preflight_accepts_normal_scalar_attributes() {
+        let mut attributes = vec![b'I'];
+        attributes.extend_from_slice(&17_i32.to_le_bytes());
+        assert!(preflight_binary(&file_with_attributes(1, attributes.len() as u32, &attributes)).is_ok());
+    }
+
+    #[test]
+    fn bounded_preflight_rejects_huge_declared_arrays_before_tree_loading() {
+        let mut attributes = vec![b'd'];
+        attributes.extend_from_slice(&u32::MAX.to_le_bytes());
+        attributes.extend_from_slice(&1_u32.to_le_bytes()); // zlib
+        attributes.extend_from_slice(&1_u32.to_le_bytes());
+        attributes.push(0x78);
+        assert!(preflight_binary(&file_with_attributes(1, attributes.len() as u32, &attributes)).is_err());
+    }
+
+    #[test]
+    fn bounded_preflight_rejects_unknown_codecs_and_truncated_payloads() {
+        let mut unknown_codec = vec![b'i'];
+        unknown_codec.extend_from_slice(&1_u32.to_le_bytes());
+        unknown_codec.extend_from_slice(&9_u32.to_le_bytes());
+        unknown_codec.extend_from_slice(&4_u32.to_le_bytes());
+        unknown_codec.extend_from_slice(&[0; 4]);
+        assert!(preflight_binary(&file_with_attributes(1, unknown_codec.len() as u32, &unknown_codec)).is_err());
+
+        let mut truncated = vec![b'f'];
+        truncated.extend_from_slice(&1_u32.to_le_bytes());
+        truncated.extend_from_slice(&0_u32.to_le_bytes()); // direct
+        truncated.extend_from_slice(&4_u32.to_le_bytes());
+        truncated.push(0);
+        assert!(preflight_binary(&file_with_attributes(1, truncated.len() as u32, &truncated)).is_err());
+    }
+
+    #[test]
+    fn bounded_preflight_rejects_excessive_nesting() {
+        assert!(preflight_binary(&nested_file(FBX_MAX_DEPTH + 1)).is_err());
+    }
+
+    #[test]
+    fn bounded_preflight_accepts_maximum_nesting() {
+        assert!(preflight_binary(&nested_file(FBX_MAX_DEPTH)).is_ok());
+    }
+}

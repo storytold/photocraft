@@ -1,6 +1,8 @@
 //! Icons embedded and tinted at runtime; sources and licences are listed in `ATTRIBUTION.md`.
 
 pub static ICONS: &[(&str, &[u8])] = &[
+    ("uv-perspective", include_bytes!("../../../assets/icons/uv-perspective.svg")),
+    ("uv-orthographic", include_bytes!("../../../assets/icons/uv-orthographic.svg")),
     ("adjustment-layer", include_bytes!("../../../assets/icons/adjustment-layer.svg")),
     ("align-center", include_bytes!("../../../assets/icons/align-center.svg")),
     ("align-justify", include_bytes!("../../../assets/icons/align-justify.svg")),

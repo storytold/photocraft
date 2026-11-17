@@ -392,5 +392,3 @@ Paragraph; the rest open as in-app floating windows.
 | 2026-11-08 | minor | Tool inventory: Color Replacement listed in the Brush group, Star (#11377) in Shapes; the `Tool` enum count is now 69; tools present 56/68 → 68/68 (Star counted separately) |
 | 2026-11-04 | minor | Unsaved-changes prompt on macOS: ⌘D presses Don't Save, as in Photoshop (#11282); no percentage changed |
 | 2026-11-11 | minor | Space's Hand view menu (#11271, after #11292): a plain Esc under it closes only the menu and a plain Enter does nothing, so neither reaches a pending crop (in Photoshop, Esc with a context menu open only closes the menu); outside the image Space's Hand opens the pasteboard menu over the selected tool, which stays open after Space is released; no percentage changed |
-
-

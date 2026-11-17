@@ -47,7 +47,7 @@ fn converted_native_groups_masks_off_canvas_pixels_and_report_survive_at_every_d
         raster.surface_mut().unwrap().write_pixel(-2, 1, &[if depth == SampleType::F32 { 1.5 } else { 0.75 }, 0.25, 0.5, 0.8]);
         let mut coverage = photocraft_raster::Surface::new(photocraft_color::PixelFormat::new(ColorMode::Grayscale, depth, false));
         coverage.write_pixel(-2, 1, &[0.5]);
-        raster.mask = Some(photocraft_doc::LayerMask { surface: coverage, enabled: true, linked: true, density: 0.8, feather: 1.25 });
+        raster.mask = Some(photocraft_doc::LayerMask { surface: coverage, enabled: true, linked: true, density: 0.8, feather: 1.25, paint: None });
         let child = raster.id;
         let group = Layer::group("Native group", vec![raster]);
         let group_id = group.id;
@@ -324,6 +324,74 @@ fn old_effect_snapshots_need_no_interpolation_record() {
     let json = serde_json::to_value(&effect).unwrap();
     assert!(json["GradientOverlay"].get("interpolation").is_none());
     assert_eq!(serde_json::from_value::<photocraft_doc::Effect>(json).unwrap(), effect);
+}
+
+#[test]
+fn legacy_scalar_mask_blend_roundtrips_in_native_documents() {
+    use photocraft_color::PixelFormat;
+    use photocraft_doc::{
+        LayerMask,
+        mask_paint::{EffectKind, Paint, Stack},
+    };
+    use photocraft_raster::Surface;
+
+    let mut doc = rich_doc(ColorMode::Rgb, SampleType::U8);
+    let layer = doc.layers.first_mut().unwrap();
+    let base = Surface::with_default(PixelFormat::GRAY8, &[0.0]);
+    let mut mask = LayerMask::hide_all();
+    mask.surface = base.clone();
+    mask.paint = Some(Stack {
+        base,
+        layers: vec![
+            Paint {
+                name: "Legacy scalar blend".into(),
+                visible: true,
+                opacity: 0.7,
+                blend: photocraft_color::BlendMode::ColorBurn,
+                surface: Surface::with_default(PixelFormat::RGBA8, &[0.0, 0.0, 0.0, 0.0]),
+                fill_map: None,
+                fill_map_size: [0, 0],
+                fill_bounds: None,
+                kind: EffectKind::Paint,
+            },
+            Paint {
+                name: "Multiply Blur".into(),
+                visible: true,
+                opacity: 0.45,
+                blend: photocraft_color::BlendMode::Multiply,
+                surface: Surface::with_default(PixelFormat::RGBA8, &[0.0, 0.0, 0.0, 0.0]),
+                fill_map: None,
+                fill_map_size: [0, 0],
+                fill_bounds: None,
+                kind: EffectKind::Blur { radius: 8 },
+            },
+        ],
+        active: 0,
+    });
+    layer.mask = Some(mask);
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    let loaded = load_from_bytes(&bytes).unwrap();
+    assert_eq!(loaded, doc, "older supported scalar mask blends remain lossless");
+    let mask = loaded.layers[0].mask.as_ref().unwrap();
+    assert_eq!(mask.paint.as_ref().unwrap().layers[1].blend, photocraft_color::BlendMode::Multiply);
+}
+
+#[test]
+fn empty_mask_paint_stack_roundtrips_in_native_documents() {
+    use photocraft_color::PixelFormat;
+    use photocraft_doc::{LayerMask, mask_paint::Stack};
+    use photocraft_raster::Surface;
+
+    let mut doc = rich_doc(ColorMode::Rgb, SampleType::U8);
+    let base = Surface::with_default(PixelFormat::GRAY8, &[0.35]);
+    let mut mask = LayerMask::hide_all();
+    mask.surface = base.clone();
+    mask.paint = Some(Stack { base, layers: Vec::new(), active: 0 });
+    doc.layers.first_mut().unwrap().mask = Some(mask);
+
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    let loaded = load_from_bytes(&bytes).unwrap();
+    assert_eq!(loaded, doc, "empty editable mask stacks with active index zero are valid");
 }
 
 #[test]

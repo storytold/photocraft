@@ -132,7 +132,17 @@ impl PhotocraftApp {
     /// Whether closing now would lose work: a document has unsaved changes and closing wasn't
     /// confirmed. The web build has the browser ask before leaving the page while this holds (#1380).
     pub fn has_unsaved_work(&self) -> bool {
-        !self.allow_close && self.session.documents().iter().any(|d| d.is_dirty())
+        !self.allow_close
+            && (self.session.documents().iter().any(|d| d.is_dirty()) || {
+                #[cfg(feature = "uv-workbench")]
+                {
+                    crate::uv_project::dirty(self) || self.session.uv_workspace.parked().iter().any(|d| d.is_dirty())
+                }
+                #[cfg(not(feature = "uv-workbench"))]
+                {
+                    false
+                }
+            })
     }
 }
 
@@ -141,6 +151,12 @@ impl PhotocraftApp {
 /// here as a close request.
 pub fn guard_window_close(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if !ctx.input(|i| i.viewport().close_requested()) {
+        return;
+    }
+    #[cfg(feature = "uv-workbench")]
+    if !app.allow_close && !app.window_lost && crate::uv_project::guard_exit(app) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         return;
     }
     if !app.allow_close && intercept(app, EXIT, &Value::Null) {
@@ -425,7 +441,11 @@ fn apply_to_rest(app: &mut PhotocraftApp, doc: DocId, answer: Answer, from_contr
 /// File › Save (see [`authorize_save`]); the prompt stays up.
 fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId, answer: Answer, from_control: bool) -> Result<(), String> {
     match answer {
-        Answer::Cancel => app.discard = None,
+        Answer::Cancel => {
+            app.discard = None;
+            #[cfg(feature = "uv-workbench")]
+            crate::uv_project::cancel_exit(app);
+        }
         Answer::Discard => advance(app, ctx),
         Answer::Save => {
             authorize_save(app, from_control)?;

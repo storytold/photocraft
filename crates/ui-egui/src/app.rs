@@ -41,6 +41,12 @@ impl PhotocraftApp {
         // copy steps instead of the action, so they do not keep the gate yet.
         session.automation_gate = session.automation_gate.or(services.automation_authorize);
         let mut app = Self {
+            #[cfg(feature = "uv-workbench")]
+            uv_cache: Default::default(),
+            #[cfg(feature = "uv-workbench")]
+            uv_mask_paint_preview: None,
+            #[cfg(feature = "uv-workbench")]
+            uv_paint_key: None,
             session,
             ui: UiState::default(),
             services,
@@ -79,6 +85,12 @@ impl PhotocraftApp {
             secondary_erase: false,
             held_erase: false,
             defer_live_stroke: false,
+            #[cfg(feature = "uv-workbench")]
+            native_uv_surface_input: false,
+            #[cfg(feature = "uv-workbench")]
+            native_uv_gpu_available: false,
+            #[cfg(feature = "uv-workbench")]
+            native_uv_mask_gpu_disabled: false,
             press_stroke: false,
             last_stroke_end: None,
             brush_resize: None,

@@ -13,6 +13,10 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
     if app.transform_preparing.is_some() {
         return Err("Free Transform is still preparing the layer".into());
     }
+
+    if super::route_to_mask_fill(app, ctx) {
+        return Ok(());
+    }
     if let Some((params, path)) = crate::vector_ui::free_transform_path(app) {
         return begin_path(app, ctx, params, path);
     }
@@ -407,6 +411,9 @@ pub const WARP_ONE_LAYER: &str = "Warp works on one layer at a time: select a si
 /// Free Transform on a copy (⌥⌘T, no menu item): duplicates the active layer (with a selection,
 /// its selected pixels, as Layer via Copy) and transforms the copy (#352).
 pub fn begin_copy(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
+    if super::route_to_mask_fill(app, ctx) {
+        return Ok(());
+    }
     let selection = app.session.active().is_some_and(|d| d.doc.selection.is_some());
     // A linked layer without a selection: the reference application makes no copy and frames the
     // whole link group, as Free Transform does (measured, #11217). Unlinked layers get the copy,
@@ -806,6 +813,9 @@ pub fn begin_selection(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(
 
 /// Start (or switch an active Free Transform into) Warp mode.
 pub fn begin_warp(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
+    if super::route_to_mask_fill(app, ctx) {
+        return Ok(());
+    }
     if app.ui.transform.as_ref().is_some_and(|t| t.content_aware.is_some()) {
         return Err(CAS_ONLY_SCALES.into());
     }

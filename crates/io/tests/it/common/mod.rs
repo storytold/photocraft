@@ -107,13 +107,26 @@ pub fn gen_doc(mode: ColorMode, depth: SampleType, f: Features) -> Document {
 
     if f.masks {
         let mut m = raster("Masked", fmt, Rect::new(2, 2, 14, 12), 5, true);
-        m.mask = Some(LayerMask { surface: mask_surface(depth, Rect::new(4, 4, 10, 9), 1.0, 1), enabled: true, linked: true, density: 1.0, feather: 0.0 });
+        m.mask = Some(LayerMask {
+            surface: mask_surface(depth, Rect::new(4, 4, 10, 9), 1.0, 1),
+            enabled: true,
+            linked: true,
+            density: 1.0,
+            feather: 0.0,
+            paint: None,
+        });
         m.advanced.layer_mask_hides_effects = true;
         m.advanced.vector_mask_hides_effects = true;
         d.layers.push(m);
         let mut m2 = raster("Masked2", fmt, Rect::new(-2, 1, 6, 5), 6, true);
-        m2.mask =
-            Some(LayerMask { surface: mask_surface(depth, Rect::new(-1, 0, 3, 4), 0.0, 2), enabled: false, linked: false, density: g(128), feather: 2.5 });
+        m2.mask = Some(LayerMask {
+            surface: mask_surface(depth, Rect::new(-1, 0, 3, 4), 0.0, 2),
+            enabled: false,
+            linked: false,
+            density: g(128),
+            feather: 2.5,
+            paint: None,
+        });
         d.layers.push(m2);
     }
 

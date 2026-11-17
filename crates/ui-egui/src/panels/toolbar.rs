@@ -210,11 +210,24 @@ fn more_slot_flyout(app: &mut PhotocraftApp, ui: &mut egui::Ui, button: &egui::R
 
 /// The tool palette panel, on the side `panels.toolbar_side` resolves to, with its width
 /// toggle and Move Toolbar header buttons.
+fn visible_sections_for_workspace(mut sections: Vec<Vec<(usize, Vec<Tool>)>>, is_3d: bool) -> Vec<Vec<(usize, Vec<Tool>)>> {
+    if is_3d {
+        for section in &mut sections {
+            for (_, tools) in section.iter_mut() {
+                tools.retain(|tool| !matches!(tool, Tool::Crop | Tool::PerspectiveCrop));
+            }
+            section.retain(|(_, tools)| !tools.is_empty());
+        }
+        sections.retain(|section| !section.is_empty());
+    }
+    sections
+}
+
 pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let (_, bx) = toolbar_columns(t.pro);
     let m = if t.pro { 5i8 } else { 7i8 };
-    let sections = layout_sections(&app.session.prefs().toolbar);
+    let sections = visible_sections_for_workspace(layout_sections(&app.session.prefs().toolbar), app.ui.workspace == "3D");
     // Two columns when the header chevron asks for them; a column that doesn't fit scrolls.
     let double = app.ui.panels.toolbar_double;
     let w = toolbar_width(t.pro, double);
@@ -304,6 +317,8 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                 let key = egui::Id::unique(("tool-slot", *slot_index));
                                 let tool = slot_tool(app.ui.tool, &app.ui.group_tools, slot);
                                 let sel = slot.contains(&app.ui.tool);
+                                #[cfg(feature = "uv-workbench")]
+                                let sel = sel && !(app.ui.workspace == "3D" && app.ui.uv_workbench.select_shells);
                                 let tip = match crate::tool_shortcuts::shortcut(app, tool) {
                                     Some(sc) => format!("{}  ({})", tl!(tool.label()), crate::shortcuts::pretty(&sc)),
                                     None => tl!(tool.label()).to_string(),
@@ -482,6 +497,8 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         });
                     }
                 }
+                #[cfg(feature = "uv-workbench")]
+                crate::uv_workspace::shell_tool(app, ui, bx);
                 let more = icons::button(ui, "ellipsis", bx, false, tl!("Edit Toolbar…"));
                 if more.clicked()
                     && let Err(e) = crate::menus::invoke(app, &ctx, "edit.toolbar", json!({}))

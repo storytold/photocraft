@@ -217,7 +217,7 @@ impl Mapper<'_, '_> {
         if let Some((_, pixels)) = self.xcf.layer_mask(index, &mut self.budget, &|| !self.ctl.cancelled()).map_err(map_error)? {
             let mut surface = Surface::new(self.mask_fmt);
             write_pixels(&mut surface, &pixels, source.x, source.y, &mut self.budget)?;
-            layer.mask = Some(LayerMask { surface, enabled: source.apply_mask, linked: true, density: 1.0, feather: 0.0 });
+            layer.mask = Some(LayerMask { surface, enabled: source.apply_mask, linked: true, density: 1.0, feather: 0.0, paint: None });
         }
         let linear = source.composite_space.unsigned_abs() == 1 || source.blend_space.unsigned_abs() == 1;
         self.linear_compositing |= linear;

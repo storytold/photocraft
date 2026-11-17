@@ -25,6 +25,7 @@ pub mod fill_layout;
 pub mod filter_mask;
 pub mod gradient_fill;
 pub mod lut_rows;
+pub mod mask_paint;
 pub mod masks;
 pub mod multichannel;
 pub mod native;
