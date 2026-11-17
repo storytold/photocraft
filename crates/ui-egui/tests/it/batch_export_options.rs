@@ -48,6 +48,17 @@ fn open_format_choices(h: &mut Harness) {
     h.run_steps(3);
 }
 
+/// The Batch dialog opens on Destination None (#13659), which greys the destination folder and
+/// the File Naming controls. These tests are about the format, quality and naming controls, so
+/// they pick Folder first - the assertions stay as they were.
+fn choose_folder_destination(h: &mut Harness) {
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Destination").click();
+    h.run_steps(3);
+    h.get_by_label("Folder").click();
+    h.run_steps(3);
+    assert_eq!(h.state().ui.dialogs.last().unwrap().fields["destination"], json!("folder"));
+}
+
 fn choose_webp(h: &mut Harness) {
     open_format_choices(h);
     h.query_by_label("WebP").or_else(|| h.query_by_label("Webp")).expect("WebP output choice").click();
@@ -84,6 +95,7 @@ fn batch_menu_offers_webp() {
     let _gpu = photocraft_testkit::gpu_lock();
     let mut h = harness();
     open(&mut h, "file.automate.batch");
+    choose_folder_destination(&mut h);
     open_format_choices(&mut h);
     evidence(&mut h, "batch-formats");
     assert!(h.query_by_label("WebP").or_else(|| h.query_by_label("Webp")).is_some(), "Batch must offer the supported WebP output format");
@@ -185,6 +197,7 @@ fn batch_custom_quality_is_bounded_dialog_local_and_reversible() {
     let _gpu = photocraft_testkit::gpu_lock();
     let mut h = harness();
     open(&mut h, "file.automate.batch");
+    choose_folder_destination(&mut h);
     assert!(h.state().ui.dialogs.last().unwrap().fields["quality"].is_null(), "default command quality remains unset");
     h.get_by_label("Custom").click();
     h.run_steps(3);
@@ -225,6 +238,7 @@ fn batch_real_controls_write_the_chosen_webp_quality() {
     for quality in [0, 12] {
         let output = dir.0.join(format!("batch-{quality}"));
         open(&mut h, "file.automate.batch");
+        choose_folder_destination(&mut h);
         assert!(h.state().ui.dialogs.last().unwrap().fields["quality"].is_null());
         h.get_by_label("Custom").click();
         h.run_steps(3);
@@ -269,6 +283,7 @@ fn batch_naming_controls_export_the_requested_names_and_reset_on_cancel() {
     }
     let mut h = harness();
     open(&mut h, "file.automate.batch");
+    choose_folder_destination(&mut h);
     h.get_by_role_and_label(egui::accesskit::Role::TextInput, "File Naming").click();
     h.run_steps(2);
     replace_text(&mut h, "cancelled_{serial}");
@@ -276,6 +291,7 @@ fn batch_naming_controls_export_the_requested_names_and_reset_on_cancel() {
     h.run_steps(3);
     assert!(!output.exists());
     open(&mut h, "file.automate.batch");
+    choose_folder_destination(&mut h);
     let fields = &h.state().ui.dialogs.last().unwrap().fields;
     assert_eq!(fields["naming"], "");
     assert_eq!(fields["startingSerial"], 1);
@@ -318,6 +334,7 @@ fn batch_default_quality_keeps_lossless_webp_and_existing_jpeg_bytes() {
         let output = dir.0.join(format!("ui-default-{format}"));
         let reference = dir.0.join(format!("engine-existing-default-{format}"));
         open(&mut h, "file.automate.batch");
+        choose_folder_destination(&mut h);
         if format == "webp" {
             choose_webp(&mut h);
         } else {
