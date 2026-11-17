@@ -456,6 +456,46 @@ fn inter_only() -> Arc<usvg::fontdb::Database> {
     Arc::new(db)
 }
 
+#[test]
+fn percent_encoded_svg_child_text_renders_without_outer_text() {
+    let child = br#"<svg xmlns="http://www.w3.org/2000/svg" width="80" height="40"><text x="5" y="32" font-family="Inter" font-size="30">HI</text></svg>"#;
+    let data = child.iter().map(|byte| format!("%{byte:02X}")).collect::<String>();
+    let outer =
+        format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="80" height="40"><image width="80" height="40" href="data:image/svg+xml,{data}"/></svg>"#);
+    assert!(!outer.contains("text"), "the encoded child is the only text source");
+    let has_glyph_ink = |pixels: &photocraft_compose::Buffer| pixels.px.iter().any(|pixel| pixel[3] > 0.5);
+
+    let ink = on_svg_stack(|| {
+        let parsed = parse_with(outer.as_bytes(), inter_only)?;
+        let imported = import_parsed("child.svg", parsed, MAX_GROUP_DEPTH, None, false)?;
+        let (parsed, chain) = parse_bounded_inner_with(outer.as_bytes(), MAX_RASTER_PIXELS, inter_only)?;
+        assert_eq!(chain, 1);
+        let pixels = rasterize_tree(&complete_raster_tree(parsed)?, 1.0)?;
+        Ok([has_glyph_ink(&photocraft_compose::flatten(&imported.document)), has_glyph_ink(&pixels)])
+    })
+    .unwrap();
+    assert_eq!(ink, [true, true], "glyph ink through ordinary import and bounded rendering");
+}
+
+#[test]
+fn svg_without_text_does_not_load_fonts() {
+    fn unexpected_fonts() -> Arc<usvg::fontdb::Database> {
+        panic!("a text-free drawing should never load fonts");
+    }
+    let child = image_svg(r#"<rect width="1" height="1" fill="red"/>"#);
+    let outer = image_svg(&embedded_image("image/svg+xml", child.as_bytes()));
+    on_svg_stack(|| {
+        let ordinary = parse_with(outer.as_bytes(), unexpected_fonts)?;
+        let (bounded, _) = parse_bounded_inner_with(outer.as_bytes(), MAX_RASTER_PIXELS, unexpected_fonts)?;
+        for parsed in [ordinary, bounded] {
+            assert!(!parsed.fontless_text);
+            assert_eq!(rasterize_tree(&parsed.tree, 1.0)?.get(0, 0), [1., 0., 0., 1.]);
+        }
+        Ok(())
+    })
+    .unwrap();
+}
+
 /// Text asking for fonts that aren't installed (`Arial, Helvetica, sans-serif` on a Linux
 /// without them) is set in an installed font, as a browser does, instead of being dropped.
 #[test]

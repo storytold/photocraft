@@ -302,18 +302,25 @@ fn fallback_face(c: char, used: &[usvg::fontdb::ID], db: &usvg::fontdb::Database
         .map(|f| f.id)
 }
 
-/// usvg's font choice, with the chosen faces read from memory ([`in_memory`]).
-fn font_resolver() -> usvg::FontResolver<'static> {
+/// Load the same fonts for top-level and embedded text. usvg requests them only
+/// when it shapes text, including text hidden inside an encoded image URL.
+fn font_resolver(loaded: &OnceLock<Arc<usvg::fontdb::Database>>, load: fn() -> Arc<usvg::fontdb::Database>) -> usvg::FontResolver<'_> {
+    let mut resolver = usvg::FontResolver::default();
+    let select = resolver.select_font;
+    resolver.select_font = Box::new(move |font, db| {
+        if db.faces().next().is_none() {
+            *db = Arc::clone(loaded.get_or_init(load));
+        }
+        let id = select(font, db)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        let id = in_memory(id, db);
+        Some(id)
+    });
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let select = usvg::FontResolver::default_font_selector();
-        usvg::FontResolver {
-            select_font: Box::new(move |font, db| select(font, db).map(|id| in_memory(id, db))),
-            select_fallback: Box::new(|c, used, db| fallback_face(c, used, db).map(|id| in_memory(id, db))),
-        }
+        resolver.select_fallback = Box::new(|c, used, db| fallback_face(c, used, db).map(|id| in_memory(id, db)));
     }
-    #[cfg(target_arch = "wasm32")]
-    usvg::FontResolver::default()
+    resolver
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -383,8 +390,17 @@ fn parse_at_depth<T: Send>(depth: usize, parse: impl FnOnce() -> Result<T, IoErr
 
 /// Font and resource options for untrusted drawings. The shared validated context
 /// installs its own bounded data-only image resolver during conversion.
-fn parse_options(fontdb: Arc<usvg::fontdb::Database>) -> usvg::Options<'static> {
-    usvg::Options { resources_dir: None, fontdb, font_resolver: font_resolver(), ..usvg::Options::default() }
+fn parse_checked_svg(
+    text: &str,
+    resolver: &craft_svg::tree::ValidatedImageResolver,
+    load_fonts: fn() -> Arc<usvg::fontdb::Database>,
+) -> Result<(usvg::Tree, bool), IoError> {
+    let checked = craft_svg::tree::preflight(text, &resolver.limits()).map_err(svg_parse_error)?;
+    let loaded = OnceLock::new();
+    let options = usvg::Options { resources_dir: None, font_resolver: font_resolver(&loaded, load_fonts), ..usvg::Options::default() };
+    let tree = resolver.parse_preflight(checked, options).map_err(svg_parse_error)?;
+    let fontless_text = loaded.get().is_some_and(|db| db.faces().next().is_none());
+    Ok((tree, fontless_text))
 }
 
 /// A parsed drawing.
@@ -402,8 +418,8 @@ struct Parsed {
 
 /// Parses a drawing, `.svgz` included. The XML is inflated and checked here, before the parser
 /// sees it: deeper nesting than [`MAX_XML_DEPTH`] is an error, not a stack overflow. The font
-/// database (and its one-off scan of the system fonts) is only loaded when the drawing may
-/// contain text.
+/// database (and its one-off scan of the system fonts) is loaded only when the drawing requests
+/// a text font.
 fn parse(bytes: &[u8]) -> Result<Parsed, IoError> {
     parse_with(bytes, fonts)
 }
@@ -440,9 +456,6 @@ fn parse_with_image_limit(bytes: &[u8], fonts: fn() -> Arc<usvg::fontdb::Databas
     if depth > MAX_XML_DEPTH {
         return Err(IoError::Svg(format!("elements are nested more than {MAX_XML_DEPTH} levels deep")));
     }
-    let has_text = xml.windows(4).any(|w| w == b"text");
-    let fontdb = if has_text { fonts() } else { Arc::new(usvg::fontdb::Database::new()) };
-    let fontless_text = has_text && fontdb.faces().next().is_none();
     // Convert the already-bounded-and-decoded text through checked XML, never from_data:
     // re-checks the gzip magic and would decompress a second time without our size limit if
     // the inflated content happened to start with a nested gzip stream.
@@ -450,10 +463,7 @@ fn parse_with_image_limit(bytes: &[u8], fonts: fn() -> Arc<usvg::fontdb::Databas
     let limits = tree_limits(MAX_XML_DEPTH, max_image_pixels);
     let image_resolver = craft_svg::tree::ValidatedImageResolver::new(limits);
     parse_at_depth(depth, || {
-        let tree = guarded_parse(|| {
-            let checked = craft_svg::tree::preflight(text, &limits).map_err(svg_parse_error)?;
-            image_resolver.parse_preflight(checked, parse_options(fontdb)).map_err(svg_parse_error)
-        })??;
+        let (tree, fontless_text) = guarded_parse(|| parse_checked_svg(text, &image_resolver, fonts))??;
         // Ordinary Open retains usable artwork and discloses optional omissions.
         // Strict stored previews enforce completeness in their separate path.
         Ok(Parsed { tree, fontless_text, image_usage: image_resolver.usage() })
@@ -531,19 +541,12 @@ fn parse_image_bounded_with(bytes: &[u8], budget: Arc<Mutex<ImageBudget>>, fonts
         return Err(IoError::Svg(format!("elements are nested more than {MAX_XML_DEPTH} levels deep")));
     }
     parse_at_depth(depth, || {
-        let has_text = xml.windows(4).any(|w| w == b"text");
-        let fontdb = if has_text { fonts() } else { Arc::new(usvg::fontdb::Database::new()) };
-        if has_text && fontdb.faces().next().is_none() {
-            budget.lock().unwrap_or_else(PoisonError::into_inner).fontless_text = true;
-        }
         let resolver = Arc::clone(&budget.lock().unwrap_or_else(PoisonError::into_inner).resolver);
         let text = std::str::from_utf8(&xml).map_err(|_| IoError::Svg("the SVG is not valid UTF-8".into()))?;
-        let limits = resolver.limits();
-        let tree = guarded_parse(|| {
-            let checked = craft_svg::tree::preflight(text, &limits).map_err(svg_parse_error)?;
-            resolver.parse_preflight(checked, parse_options(fontdb)).map_err(svg_parse_error)
-        })??;
+        let (tree, fontless_text) =
+            guarded_parse(|| parse_checked_svg(text, &resolver, fonts)).inspect_err(|error| image_error(&budget, error.to_string()))??;
         let mut counter = budget.lock().unwrap_or_else(PoisonError::into_inner);
+        counter.fontless_text |= fontless_text;
         let usage = counter.resolver.usage();
         counter.pixels = counter.pixels.saturating_sub(usage.raster_pixels);
         counter.xml_bytes = counter.xml_bytes.saturating_sub(u64::try_from(usage.embedded_svg_bytes).unwrap_or(u64::MAX));
