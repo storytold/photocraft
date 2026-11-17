@@ -345,6 +345,7 @@ fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fie
     let mut outcome: Option<bool> = None;
     match d.kind {
         _ if crate::actions::library::owns(fields) => crate::actions::library::body(app, ui, d.id),
+        _ if crate::missing_links_ui::owns(fields) => crate::missing_links_ui::body(app, ui, fields, d.id),
         _ if crate::variables_ui::owns(fields) => crate::variables_ui::body(app, ui, fields),
         _ if merge_channels_ui::owns(fields) => merge_channels_ui::body(ui, fields),
         _ if crate::file_ui::owns(fields) => crate::file_ui::body(app, ui, fields, d.id),
@@ -974,6 +975,7 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     crate::color_range_ui::owns,
     crate::prefs_ui::owns,
     crate::open_prompt::owns,
+    crate::missing_links_ui::owns,
     crate::replace_prompt::owns,
     crate::actions::library::owns,
     crate::preset_group_prompt::owns,
@@ -1202,6 +1204,8 @@ fn confirm_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> 
 fn confirm_command_more(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> {
     match d.kind {
         _ if crate::actions::library::owns(&d.fields) => crate::actions::library::confirm(app, d.id),
+        // OK: the document stays open as it was read, its links kept.
+        _ if crate::missing_links_ui::owns(&d.fields) => Ok(Value::Null),
         _ if merge_channels_ui::owns(&d.fields) => merge_channels_ui::confirm(app, &d.fields),
         _ if crate::analysis_ui::owns_delete_note(&d.fields) => crate::analysis_ui::confirm_delete_note(app, &d.fields),
         _ if crate::analysis_ui::owns_clear_notes(&d.fields) => crate::analysis_ui::confirm_clear_notes(app, &d.fields),
@@ -1393,6 +1397,7 @@ pub mod liquify_ui;
 pub mod live_shape_prompt;
 pub mod mask_trash_prompt;
 pub mod merge_channels_ui;
+pub mod missing_links_ui;
 pub mod new_doc_ui;
 pub mod new_group_ui;
 pub mod new_guide_ui;

@@ -167,6 +167,7 @@ pub use dialogs::layer_picker;
 pub use dialogs::layer_style;
 pub use dialogs::liquify_ui;
 pub use dialogs::mask_trash_prompt;
+pub(crate) use dialogs::missing_links_ui;
 pub use dialogs::new_doc_ui;
 pub use dialogs::new_group_ui;
 pub use dialogs::new_guide_ui;

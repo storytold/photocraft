@@ -21,6 +21,7 @@
 //! ends catches up.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use photocraft_doc::{Document, LayerContent, LayerId, SmartSource};
@@ -76,9 +77,13 @@ pub(crate) fn update_changed(s: &mut Session, _: &Value) -> Result<Value> {
 
 /// [`linked_files`] of `st`'s document with the file each path resolves to, or `None` for a path
 /// that is not followed ([`crate::doc_path`]).
-fn resolved_files(st: &crate::DocState) -> Vec<(String, Option<std::path::PathBuf>, Vec<u64>)> {
-    let document = st.path.as_deref().map(std::path::Path::new);
-    linked_files(&st.doc)
+fn resolved_files(st: &crate::DocState) -> Vec<(String, Option<PathBuf>, Vec<u64>)> {
+    resolved_files_of(&st.doc, st.path.as_deref().map(Path::new))
+}
+
+/// [`resolved_files`] for `doc` read from the file `document`.
+fn resolved_files_of(doc: &Document, document: Option<&Path>) -> Vec<(String, Option<PathBuf>, Vec<u64>)> {
+    linked_files(doc)
         .into_iter()
         .map(|(p, ids)| {
             let file = crate::doc_path::resolve_in(&p, document).ok();
@@ -86,6 +91,66 @@ fn resolved_files(st: &crate::DocState) -> Vec<(String, Option<std::path::PathBu
         })
         .collect()
 }
+
+/// A missing linked file, by the absolute path its links resolve to, with the stored paths that
+/// name it (sorted).
+pub type MissingFile = (PathBuf, Vec<String>);
+
+/// Groups the followed paths among `resolved` whose file is not there by that file: each file once,
+/// in path order, however many layers or spellings name it.
+fn missing_among(resolved: Vec<(String, Option<PathBuf>, Vec<u64>)>) -> Vec<MissingFile> {
+    let mut by_file: BTreeMap<PathBuf, Vec<String>> = BTreeMap::new();
+    for (stored, file, _) in resolved {
+        // Absent, not merely unstamped: a file dated before 1970 has no stamp but is there.
+        if let Some(file) = file.filter(|f| !cfg!(target_arch = "wasm32") && std::fs::metadata(f).is_err()) {
+            by_file.entry(file).or_default().push(stored);
+        }
+    }
+    by_file.into_iter().collect()
+}
+
+/// The linked files of `doc`, read from the file `document` (relative links are taken from its
+/// folder), that are not there right now. Looked at on the spot, for a document that has just opened
+/// (the watcher's first look is still to come). A path that is not followed ([`crate::doc_path`]) is
+/// not listed, as in [`Session::missing_links`]; the web app has no files to look at and lists none.
+pub fn missing_files(doc: &Document, document: Option<&Path>) -> Vec<MissingFile> {
+    missing_among(resolved_files_of(doc, document))
+}
+
+/// [`missing_files`] looked at on a worker thread and waited for at most `wait`, for a caller that
+/// must not be held up (the interface after an open): `None` when the look takes longer, as a file
+/// on a share that doesn't answer can make it.
+pub fn missing_files_within(doc: &Document, document: Option<&Path>, wait: std::time::Duration) -> Option<Vec<MissingFile>> {
+    let resolved = resolved_files_of(doc, document);
+    if cfg!(target_arch = "wasm32") || resolved.iter().all(|(_, file, _)| file.is_none()) {
+        return Some(Vec::new());
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new().name("link-check".into()).spawn(move || tx.send(missing_among(resolved))).ok()?;
+    rx.recv_timeout(wait).ok()
+}
+
+/// Decides whether an untrusted caller may touch a path: the session's [`Session::authorize`] gate.
+pub type PathGate = fn(&str, &Value) -> Result<()>;
+
+/// The warnings an open without a dialog (automation, the CLI) reports for [`missing_files`]: one
+/// per file, naming its absolute path. With `gate` (an automation open), a file it refuses is not
+/// looked at, so the warnings can't tell whether a file outside what the caller may read exists.
+pub fn missing_file_warnings(doc: &Document, document: Option<&Path>, gate: Option<PathGate>) -> Vec<String> {
+    let mut resolved = resolved_files_of(doc, document);
+    if let Some(gate) = gate {
+        for (_, file, _) in &mut resolved {
+            if file.as_ref().is_some_and(|f| gate(MISSING_LINK_CHECK, &json!({"path": f.to_string_lossy()})).is_err()) {
+                *file = None;
+            }
+        }
+    }
+    missing_among(resolved).into_iter().map(|(file, _)| format!("Cannot locate linked asset: {}", file.display())).collect()
+}
+
+/// The command a missing-link look is authorized as: it reads no more of a file than Update
+/// Modified Content would.
+const MISSING_LINK_CHECK: &str = "layer.smartObjects.updateModifiedContent";
 
 impl Session {
     /// Start stamping the active document's linked files on a worker thread, unless a look is
