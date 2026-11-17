@@ -309,6 +309,7 @@ fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: 
     match d.kind {
         _ if crate::open_prompt::owns_memory(fields) => crate::open_prompt::memory_body(ui, fields),
         _ if crate::open_prompt::owns_damage(fields) => crate::open_prompt::damage_body(ui, fields),
+        _ if crate::missing_links_ui::owns(fields) => crate::missing_links_ui::body(app, ui, fields, d.id),
         _ if crate::guide_layout_ui::owns(fields) => outcome = crate::guide_layout_ui::body(app, ui, fields, interactive),
         _ if crate::brush_preset_dialog::owns(fields) => outcome = crate::brush_preset_dialog::body(app, ui, fields, interactive),
         _ if crate::fill_ui::owns(fields) => crate::fill_ui::body(app, ui, fields),
@@ -974,6 +975,7 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     crate::color_range_ui::owns,
     crate::prefs_ui::owns,
     crate::open_prompt::owns,
+    crate::missing_links_ui::owns,
     crate::replace_prompt::owns,
     crate::actions::library::owns,
     crate::preset_group_prompt::owns,
@@ -1168,6 +1170,8 @@ fn confirm_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> 
     match d.kind {
         _ if crate::open_prompt::owns_memory(&d.fields) => crate::open_prompt::answer_memory(app, true),
         _ if crate::open_prompt::owns_damage(&d.fields) => crate::open_prompt::answer_damage(app, true),
+        // OK: the document stays open as it was read, its links kept.
+        _ if crate::missing_links_ui::owns(&d.fields) => Ok(Value::Null),
         _ if crate::guide_layout_ui::owns(&d.fields) => crate::guide_layout_ui::confirm(app, &d.fields),
         _ if crate::brush_preset_dialog::owns(&d.fields) => crate::brush_preset_dialog::confirm(app, &d.fields),
         _ if crate::fill_ui::owns(&d.fields) => crate::fill_ui::confirm(app, &d.fields),
@@ -1393,6 +1397,7 @@ pub mod liquify_ui;
 pub mod live_shape_prompt;
 pub mod mask_trash_prompt;
 pub mod merge_channels_ui;
+pub mod missing_links_ui;
 pub mod new_doc_ui;
 pub mod new_group_ui;
 pub mod new_guide_ui;

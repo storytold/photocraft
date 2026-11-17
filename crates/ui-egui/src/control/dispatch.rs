@@ -1626,7 +1626,7 @@ fn app_open(app: &mut PhotocraftApp, path: &str, approved: bool) -> Outcome {
     };
     wrap(opened.and_then(|crate::AutomationReadResult { name, bytes, save_path }| {
         let name = app.open_name(&name);
-        let warnings = app.open_automation_bytes_with_approval(&name, &bytes, approved)?;
+        let mut warnings = app.open_automation_bytes_with_approval(&name, &bytes, approved)?;
         // Brushes/gradients go to the preset libraries: no document, no Open Recent entry.
         if !crate::preset_files_ui::is_preset_file(&name) {
             app.opened_from(path);
@@ -1635,6 +1635,8 @@ fn app_open(app: &mut PhotocraftApp, path: &str, approved: bool) -> Outcome {
             {
                 state.path = save_path;
             }
+            // No Cannot Locate Linked Assets dialog for automation: the files are listed here.
+            warnings.extend(app.missing_link_warnings());
         }
         Ok(json!({"path": path, "name": name, "warnings": warnings}))
     }))
@@ -1657,7 +1659,7 @@ fn open_pcraft_directory(app: &mut PhotocraftApp, path: &str) -> Option<Outcome>
             app.sync_views();
             app.ui.status = crate::i18n::fmt(tl!("Opened {name}"), &[("name", &name)]);
             app.ui.status_error = false;
-            Some(ok(json!({"path": path, "name": name, "warnings": []})))
+            Some(ok(json!({"path": path, "name": name, "warnings": app.missing_link_warnings()})))
         }
         Ok(None) => None, // a regular file: the bytes path reads the zip form
         Err(e) => Some(err(e)),

@@ -87,6 +87,27 @@ fn resolved_files(st: &crate::DocState) -> Vec<(String, Option<std::path::PathBu
         .collect()
 }
 
+/// The linked files of `st`'s document that are not there right now, each once: the file a stored
+/// path resolves to, with the stored paths that name it (sorted, so one file named two ways is
+/// listed once). Looked at on the spot, for a document that has just opened (the watcher's first
+/// look is still to come). A path that is not followed ([`crate::doc_path`]) is not listed, as in
+/// [`Session::missing_links`]; the web app has no files to look at and lists none.
+pub fn missing_files(st: &crate::DocState) -> Vec<(std::path::PathBuf, Vec<String>)> {
+    let mut by_file: BTreeMap<std::path::PathBuf, Vec<String>> = BTreeMap::new();
+    for (stored, file, _) in resolved_files(st) {
+        if let Some(file) = file.filter(|f| stamp(Some(f)).is_none() && !cfg!(target_arch = "wasm32")) {
+            by_file.entry(file).or_default().push(stored);
+        }
+    }
+    by_file.into_iter().collect()
+}
+
+/// The warnings an open without a dialog (automation, the CLI) reports for [`missing_files`]: one
+/// per file, naming its absolute path.
+pub fn missing_file_warnings(st: &crate::DocState) -> Vec<String> {
+    missing_files(st).into_iter().map(|(file, _)| format!("Cannot locate linked asset: {}", file.display())).collect()
+}
+
 impl Session {
     /// Start stamping the active document's linked files on a worker thread, unless a look is
     /// still running (or the build has no files to look at: the web app).

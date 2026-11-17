@@ -233,9 +233,12 @@ pub fn open_bytes_as_with_options(
     if let Some(settings) = raw_settings {
         super::raw_open::finish(s, settings)?;
     }
-    batch_open_notice(s, name, &r.warnings, &color);
+    // Linked files that are not there: an open without a dialog lists them with the import notes.
+    let mut warnings = r.warnings;
+    warnings.extend(s.active().map(crate::link_watch::missing_file_warnings).unwrap_or_default());
+    batch_open_notice(s, name, &warnings, &color);
     // Import notes (e.g. how a camera raw was developed, or that only its preview opened).
-    Ok(json!({"document": i, "color": color, "warnings": r.warnings}))
+    Ok(json!({"document": i, "color": color, "warnings": warnings}))
 }
 
 /// Extensions Open As reads besides the codec formats, the camera raw formats

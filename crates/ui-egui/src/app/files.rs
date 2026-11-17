@@ -171,6 +171,14 @@ impl PhotocraftApp {
         result
     }
 
+    /// The active document's linked files that are not there, as an automation open reports them
+    /// in its `warnings` instead of asking in the Cannot Locate Linked Assets dialog: one line per
+    /// file, with its absolute path. Called once the opened document has its path, which relative
+    /// links are taken from.
+    pub(crate) fn missing_link_warnings(&self) -> Vec<String> {
+        self.session.active().map(photocraft_engine::link_watch::missing_file_warnings).unwrap_or_default()
+    }
+
     /// The document half of [`open_automation_bytes`](Self::open_automation_bytes): no script
     /// events and no Color Settings policy (which may read user-configured profile paths).
     fn import_automation_document(&mut self, name: &str, bytes: &[u8], approved: bool) -> Result<Vec<String>, String> {
