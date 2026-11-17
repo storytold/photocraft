@@ -340,7 +340,7 @@ pub(crate) fn start_open_as_smart_object(app: &mut PhotocraftApp, path: &str, or
 pub(crate) fn begin_batch(app: &mut PhotocraftApp) -> u64 {
     let id = app.jobs.next_batch;
     app.jobs.next_batch = app.jobs.next_batch.wrapping_add(1);
-    let base = app.session.documents().len() + app.jobs.opens.len();
+    let base = app.session.documents().len() + app.jobs.opens.len() + app.jobs.pending_opens.len();
     app.jobs.batches.push(OpenBatch { id, base, opened: Vec::new() });
     id
 }
