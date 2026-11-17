@@ -1176,10 +1176,27 @@ fn export_as_preserves_protected_sources_and_aliases_across_tabs() {
     }
 }
 
+/// Answer the distinct desktop folder and single-download dialog contracts.
+fn closed_tab_export_answer(mode: &str, destination: &std::path::Path) -> crate::file_dialog::FileDialogAnswer {
+    use crate::file_dialog::FileDialogAnswer;
+    if mode == "layers" && !cfg!(target_arch = "wasm32") {
+        FileDialogAnswer::FolderTo(destination.to_string_lossy().into_owned())
+    } else {
+        FileDialogAnswer::SaveTo(destination.join("copy.png").to_string_lossy().into_owned())
+    }
+}
+
+/// Require one request of the documented kind even after its source tab closes.
+fn assert_closed_tab_export_request(mode: &str, requests: &[crate::file_dialog::FileDialogRequest]) {
+    use crate::file_dialog::FileDialogRequest;
+    let folder_export = mode == "layers" && !cfg!(target_arch = "wasm32");
+    assert_eq!(matches!(requests, [FileDialogRequest::Folder { .. }]), folder_export, "{mode}");
+    assert_eq!(matches!(requests, [FileDialogRequest::Save { .. }]), !folder_export, "{mode}");
+}
+
 /// A pending export owns its document and may finish even after the last tab closes.
 #[test]
 fn captured_exports_finish_after_the_last_source_tab_closes() {
-    use crate::file_dialog::FileDialogAnswer;
     use std::{cell::Cell, rc::Rc};
 
     for mode in ["document", "layer", "layers", "quickLayers"] {
@@ -1187,6 +1204,8 @@ fn captured_exports_finish_after_the_last_source_tab_closes() {
             let calls = Rc::new(Cell::new(0));
             let encoded = calls.clone();
             let written = calls.clone();
+            let destination = tempfile::tempdir().unwrap();
+            let (dialog, requests) = crate::file_dialog::fake(vec![Some(closed_tab_export_answer(mode, destination.path()))]);
             let mut app = PhotocraftApp::new(
                 photocraft_engine::Session::new(),
                 crate::Services {
@@ -1201,7 +1220,7 @@ fn captured_exports_finish_after_the_last_source_tab_closes() {
                         written.set(written.get() + 1);
                         Ok(())
                     })),
-                    file_dialog: Some(crate::file_dialog::fake(vec![Some(FileDialogAnswer::SaveTo("copy.png".into()))]).0),
+                    file_dialog: Some(dialog),
                     ..Default::default()
                 },
             );
@@ -1237,6 +1256,7 @@ fn captured_exports_finish_after_the_last_source_tab_closes() {
             app.run("file.close", json!({"document":0})).unwrap();
             assert!(app.session.active().is_none());
             app.poll_file_dialog(&egui::Context::default(), None);
+            assert_closed_tab_export_request(mode, requests.borrow().as_slice());
             assert!(!app.ui.status_error, "{mode}, protected={protected}: {}", app.ui.status);
             assert_eq!(calls.get(), if mode == "layers" || mode == "quickLayers" { 4 } else { 2 }, "{mode}");
             assert!(app.session.active().is_none(), "export must not reopen or focus a tab");
