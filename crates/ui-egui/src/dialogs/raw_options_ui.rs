@@ -64,13 +64,15 @@ pub fn asks(params: &Value) -> bool {
 }
 
 /// Parks a `file.openAs` that [`asks`] behind Raw Options, unless automation sent it or the file
-/// is a camera raw. A file that can't be read is left to the engine, which reports it.
+/// is a camera raw. A file that can't be read (missing, not a regular file, over
+/// the open size limit) is left to the engine, which reports it.
 pub fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
     if id != "file.openAs" || app.automation_input || !asks(params) {
         return None;
     }
     let path = params.get("path").and_then(Value::as_str)?;
-    let bytes = std::fs::read(path).ok()?;
+    // Read as the engine's Open As reads it: bounded, regular files only.
+    let bytes = photocraft_format::read_file(std::path::Path::new(path)).ok()?;
     if photocraft_io::raw::is_raw(&bytes) {
         return None;
     }

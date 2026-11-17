@@ -167,3 +167,18 @@ fn automation_and_unreadable_files_are_never_asked() {
     assert!(open_as_raw(&mut h, &format!("{path}.missing")).is_err());
     assert!(h.state().raw_options.is_none());
 }
+
+/// The dialog reads the file as the engine does, so a path that isn't a regular file is refused
+/// at once: a FIFO with no writer would block a plain whole-file read on the UI thread for good.
+#[cfg(unix)]
+#[test]
+fn a_path_that_is_not_a_regular_file_is_refused_without_blocking() {
+    let dir = std::path::PathBuf::from(notes_file("fifo", NOTES)).parent().unwrap().to_path_buf();
+    let fifo = dir.join("pipe.raw");
+    let made = std::process::Command::new("mkfifo").arg(&fifo).status().unwrap();
+    assert!(made.success(), "mkfifo");
+    let mut h = harness();
+    assert!(open_as_raw(&mut h, &fifo.to_string_lossy()).is_err());
+    assert!(h.state().raw_options.is_none());
+    assert_eq!(h.state().session.documents().len(), 0);
+}

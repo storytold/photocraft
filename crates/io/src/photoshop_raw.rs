@@ -108,13 +108,17 @@ pub fn guess_size(len: u64) -> Option<(u32, u32)> {
 
 /// The document a Photoshop Raw file named `name` makes, read as `layout` says (see
 /// [`RawLayout::check`] for what is refused). The source is import-only: there is no Photoshop
-/// Raw writer, so Save never writes the document back over the file it came from.
+/// Raw writer, so Save never writes the document back over the file it came from. As for every
+/// other open, a scratch-disk failure while the tiles are built is an error, not a document.
 pub fn import(name: &str, bytes: &[u8], layout: &RawLayout) -> Result<ImportResult, IoError> {
+    let scratch_generation = photocraft_raster::spill::read_error_generation();
     layout.check(bytes.len() as u64)?;
     // `check` proved the header fits and the rest is exactly the pixels.
     let pixels = &bytes[layout.header as usize..];
     let img = Image::from_u8(layout.width, layout.height, ChannelLayout::Gray, pixels.to_vec())?;
     let mut r = crate::flat::image_to_document(name, &img)?;
+    photocraft_raster::spill::check_since(scratch_generation).map_err(IoError::Unsupported)?;
+    r.document.scratch_health().map_err(IoError::Unsupported)?;
     r.source_read_only = true;
     Ok(r)
 }
