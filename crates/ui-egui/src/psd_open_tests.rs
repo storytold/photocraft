@@ -218,7 +218,7 @@ fn memory_confirmation_dialog_and_cancel_lifecycle() {
         })
         .unwrap();
 
-    crate::open_prompt::arrive_memory(&mut app, preflight_id, "high_mem.psd".into(), None, None, None, 7 * gb, Some(10 * gb), false, false);
+    crate::open_prompt::arrive_memory(&mut app, preflight_id, "high_mem.psd".into(), None, None, None, None, 7 * gb, Some(10 * gb), false, false);
     assert_eq!(app.ui.dialogs.len(), 1);
     assert!(crate::open_prompt::owns_memory(&app.ui.dialogs[0].fields));
     let dlg_id = app.ui.dialogs[0].id;
@@ -365,6 +365,7 @@ fn memory_confirmation_refuses_when_source_changed_inline() {
         Some(path.to_string_lossy().to_string()),
         None,
         None,
+        None,
         1000,
         Some(100_000),
         false,
@@ -417,6 +418,7 @@ fn memory_confirmation_refuses_when_source_changed_async() {
         Some(path.to_string_lossy().to_string()),
         None,
         None,
+        None,
         1000,
         Some(100_000),
         false,
@@ -466,7 +468,7 @@ fn memory_decline_advances_queue_and_cleans_batch() {
         })
         .unwrap();
 
-    crate::open_prompt::arrive_memory(&mut app, preflight_id, "declined.psd".into(), None, None, Some(order), 1000, Some(4000), false, false);
+    crate::open_prompt::arrive_memory(&mut app, preflight_id, "declined.psd".into(), None, None, None, Some(order), 1000, Some(4000), false, false);
     assert_eq!(app.ui.dialogs.len(), 1);
     let dlg_id = app.ui.dialogs[0].id;
 
@@ -515,8 +517,8 @@ fn batch_single_file_cancel_preserves_other_held_memory_orders() {
         })
         .unwrap();
 
-    crate::open_prompt::arrive_memory(&mut app, p0, "first.psd".into(), None, None, Some(order0), 1000, Some(4000), false, false);
-    crate::open_prompt::arrive_memory(&mut app, p1, "second.psd".into(), None, None, Some(order1), 1000, Some(4000), false, false);
+    crate::open_prompt::arrive_memory(&mut app, p0, "first.psd".into(), None, None, None, Some(order0), 1000, Some(4000), false, false);
+    crate::open_prompt::arrive_memory(&mut app, p1, "second.psd".into(), None, None, None, Some(order1), 1000, Some(4000), false, false);
 
     // Cancel first file:
     let dlg0 = app.ui.dialogs[0].id;
@@ -553,7 +555,7 @@ fn profile_cancel_cancels_whole_queue_including_memory_prompts() {
         })
         .unwrap();
 
-    crate::open_prompt::arrive_memory(&mut app, preflight_id, "high_mem.psd".into(), None, None, None, 7 * gb, Some(10 * gb), false, false);
+    crate::open_prompt::arrive_memory(&mut app, preflight_id, "high_mem.psd".into(), None, None, None, None, 7 * gb, Some(10 * gb), false, false);
 
     crate::open_prompt::arrive(
         &mut app,
@@ -620,7 +622,7 @@ fn mixed_prompts_follow_arrival_order_fifo() {
             confirm_damage: true,
         })
         .unwrap();
-    crate::open_prompt::arrive_memory(&mut app, preflight_id, "second_mem.psd".into(), None, None, None, 7 * gb, Some(10 * gb), false, false);
+    crate::open_prompt::arrive_memory(&mut app, preflight_id, "second_mem.psd".into(), None, None, None, None, 7 * gb, Some(10 * gb), false, false);
 
     // First prompt shown must be damage (since it arrived first)!
     assert_eq!(app.ui.dialogs.len(), 1);
@@ -792,7 +794,7 @@ fn reopening_a_file_whose_memory_prompt_waits_does_not_queue_a_duplicate() {
     let gb = 1u64 << 30;
     let mut app = app();
     let id = store_preflight(&mut app, "slow.psd", 3 * gb, Some(5 * gb));
-    crate::open_prompt::arrive_memory(&mut app, id, "slow.psd".into(), Some("/pics/slow.psd".into()), None, None, 3 * gb, Some(5 * gb), false, false);
+    crate::open_prompt::arrive_memory(&mut app, id, "slow.psd".into(), Some("/pics/slow.psd".into()), None, None, None, 3 * gb, Some(5 * gb), false, false);
     assert_eq!(app.held_memory_prompts.len(), 1);
     assert_eq!(app.ui.dialogs.len(), 1);
     assert!(app.show_if_open("/pics/slow.psd"), "the waiting prompt is shown");
@@ -801,7 +803,7 @@ fn reopening_a_file_whose_memory_prompt_waits_does_not_queue_a_duplicate() {
 
     // The template exception: a repeat open still creates another Untitled.
     let id = store_preflight(&mut app, "card.psdt", 3 * gb, Some(5 * gb));
-    crate::open_prompt::arrive_memory(&mut app, id, "card.psdt".into(), Some("/pics/card.psdt".into()), None, None, 3 * gb, Some(5 * gb), false, false);
+    crate::open_prompt::arrive_memory(&mut app, id, "card.psdt".into(), Some("/pics/card.psdt".into()), None, None, None, 3 * gb, Some(5 * gb), false, false);
     assert_eq!(app.held_memory_prompts.len(), 2);
     assert!(!app.show_if_open("/pics/card.psdt"), "a template reopens instead of reusing the waiting prompt");
     assert_eq!(app.held_memory_prompts.len(), 2);
@@ -1058,8 +1060,8 @@ fn failed_inline_memory_approval_alerts_once_and_preserves_the_next_prompt_and_e
         let batch = crate::jobs_ui::begin_batch(&mut app);
         let first_order = crate::jobs_ui::OpenOrder { batch, seq: 0 };
         let second_order = crate::jobs_ui::OpenOrder { batch, seq: 1 };
-        crate::open_prompt::arrive_memory(&mut app, first, name.into(), path.clone(), None, Some(first_order), 1000, Some(4000), false, false);
-        crate::open_prompt::arrive_memory(&mut app, second, "next.psd".into(), None, None, Some(second_order), 1000, Some(4000), false, false);
+        crate::open_prompt::arrive_memory(&mut app, first, name.into(), path.clone(), None, None, Some(first_order), 1000, Some(4000), false, false);
+        crate::open_prompt::arrive_memory(&mut app, second, "next.psd".into(), None, None, None, Some(second_order), 1000, Some(4000), false, false);
         let dialog = app.ui.dialogs[0].id;
         let reply = call(&mut app, "ui.dialog.confirm", json!({"dialog": dialog}));
         assert_eq!(reply["ok"], false);

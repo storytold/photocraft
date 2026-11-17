@@ -64,6 +64,8 @@ pub struct MemoryPrompt {
     pub id: u64,
     pub name: String,
     pub path: Option<String>,
+    /// Original read source when an untitled open has no save/recent path.
+    pub error_source: Option<String>,
     pub slot: Option<usize>,
     pub order: Option<crate::jobs_ui::OpenOrder>,
     pub estimated: u64,
@@ -370,6 +372,7 @@ pub fn arrive_memory(
     id: u64,
     name: String,
     path: Option<String>,
+    error_source: Option<String>,
     slot: Option<usize>,
     order: Option<crate::jobs_ui::OpenOrder>,
     estimated: u64,
@@ -377,7 +380,7 @@ pub fn arrive_memory(
     capacity_unknown: bool,
     uncertain_capacity_warning: bool,
 ) {
-    app.held_memory_prompts.push_back(MemoryPrompt { id, name, path, slot, order, estimated, available, capacity_unknown, uncertain_capacity_warning });
+    app.held_memory_prompts.push_back(MemoryPrompt { id, name, path, error_source, slot, order, estimated, available, capacity_unknown, uncertain_capacity_warning });
     app.prompt_order.push_back(PromptKind::Memory);
     advance_memory(app);
 }
@@ -457,6 +460,7 @@ pub(crate) fn answer_memory(app: &mut PhotocraftApp, accept: bool) -> Result<Val
     let id = front.id;
     let name = front.name.clone();
     let path = front.path.clone();
+    let error_source = front.error_source.clone();
     let slot = front.slot;
     let order = front.order;
 
@@ -470,7 +474,7 @@ pub(crate) fn answer_memory(app: &mut PhotocraftApp, accept: bool) -> Result<Val
                         job: photocraft_engine::jobs::JobId(job),
                         name: name.clone(),
                         path,
-                        error_source: None,
+                        error_source: error_source.clone(),
                         slot,
                         order,
                     });
@@ -483,7 +487,7 @@ pub(crate) fn answer_memory(app: &mut PhotocraftApp, accept: bool) -> Result<Val
                         job: photocraft_engine::jobs::JobId(0),
                         name: name.clone(),
                         path: path.clone(),
-                        error_source: None,
+                        error_source: error_source.clone(),
                         slot,
                         order,
                     };
@@ -502,7 +506,7 @@ pub(crate) fn answer_memory(app: &mut PhotocraftApp, accept: bool) -> Result<Val
             Ok(r)
         }
         Err(err) => {
-            let source = path.as_deref().unwrap_or(&name);
+            let source = path.as_deref().or(error_source.as_deref()).unwrap_or(&name);
             // A template may have reserved an Untitled name; presentation names its read source,
             // while the returned error keeps the approval command's original wrapper.
             let prefix = format!("{name}: ");

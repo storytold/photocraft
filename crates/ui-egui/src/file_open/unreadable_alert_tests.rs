@@ -375,3 +375,150 @@ fn recognized_psd_header_failures_keep_their_diagnostic_and_raw_error() {
         assert_eq!(messages(&app), [format!("Couldn't open corrupt.psdt: {reason}")]);
     }
 }
+
+
+#[cfg(not(target_arch = "wasm32"))]
+fn template_psd_for_memory_prompt() -> Vec<u8> {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 4, "height": 3, "background": "white"})).unwrap();
+    photocraft_io::export(&s.active().unwrap().doc, "small.psd", &Default::default()).unwrap().bytes
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn memory_dialog_reply(app: &mut PhotocraftApp, dialog: u64, accept: bool) -> serde_json::Value {
+    let method = if accept { "ui.dialog.confirm" } else { "ui.dialog.cancel" };
+    let (request, _rx) = ControlRequest::new(method, json!({"dialog": dialog}));
+    let Outcome::Done(reply) = handle(app, &egui::Context::default(), &request) else { panic!("memory prompt reply is immediate") };
+    reply
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn finish_successful_template_jobs(app: &mut PhotocraftApp) {
+    let jobs: Vec<_> = app.jobs.opens.iter().map(|tab| tab.job).collect();
+    for job in jobs {
+        app.session.wait_job(job).unwrap();
+    }
+    crate::jobs_ui::tick(app, &egui::Context::default());
+}
+
+/// A real picked byte template reaches preflight through both immediate and worker completion.
+/// Its original source is metadata only: approval still opens Untitled-1 without a save path.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn byte_template_memory_prompt_keeps_the_source_through_real_open_approve_and_cancel() {
+    if cfg!(target_pointer_width = "32") {
+        return; // The scoped 3 GiB estimate charge exceeds the 32-bit product cap.
+    }
+    let gb = 1u64 << 30;
+    let psd = template_psd_for_memory_prompt();
+    let memory = photocraft_io::memory::MemorySnapshot { available_ram: Some(5 * gb), swap_free: None, commit_headroom: None };
+    for background in [false, true] {
+        for accept in [false, true] {
+            let mut app = app_with(Some(FileDialogAnswer::Contents("card.psdt".into(), psd.clone())));
+            app.background_jobs = background;
+            photocraft_io::psd_budget::with_test_estimate_charge(3 * gb, || {
+                photocraft_io::memory::with_mock_memory(memory, || {
+                    pick(&mut app);
+                    assert_eq!(app.jobs.opens.len(), usize::from(background));
+                    if background {
+                        finish_successful_template_jobs(&mut app);
+                    }
+                    assert!(app.session.documents().is_empty());
+                    assert_eq!(app.held_memory_prompts.len(), 1, "use the real high-memory preflight");
+                    let prompt = &app.held_memory_prompts[0];
+                    assert_eq!(prompt.name, "Untitled-1");
+                    assert!(prompt.path.is_none());
+                    assert_eq!(prompt.error_source.as_deref(), Some("card.psdt"));
+                    assert!(prompt.estimated > 3 * gb);
+                    let preflight = prompt.id;
+                    let dialog = app.ui.dialogs[0].id;
+                    assert!(crate::open_prompt::owns_memory(&app.ui.dialogs[0].fields));
+                    let reply = memory_dialog_reply(&mut app, dialog, accept);
+                    assert_eq!(reply["ok"], true, "{reply}");
+                    if background && accept {
+                        let tab = app.jobs.opens.first().unwrap();
+                        assert_eq!(tab.name, "Untitled-1");
+                        assert!(tab.path.is_none());
+                        assert_eq!(tab.error_source.as_deref(), Some("card.psdt"));
+                        finish_successful_template_jobs(&mut app);
+                    }
+                    assert_eq!(app.session.documents().len(), usize::from(accept));
+                    if accept {
+                        let opened = &app.session.documents()[0];
+                        assert_eq!(opened.doc.name, "Untitled-1");
+                        assert!(opened.path.is_none(), "error source is never a save destination");
+                    }
+                    assert!(app.ui.recent_files.is_empty(), "byte input does not acquire a Recent path");
+                    assert!(app.ui.dialogs.is_empty());
+                    assert!(app.held_memory_prompts.is_empty());
+                    assert!(app.prompt_order.is_empty());
+                    assert!(app.jobs.opens.is_empty());
+                    assert!(app.jobs.batches.is_empty());
+                    assert!(app.session.take_pending_preflight(preflight).is_none());
+                    assert_eq!(app.session.pending_preflight_bytes().unwrap(), 0);
+                    assert!(!app.ui.status_error);
+                });
+            });
+        }
+    }
+}
+
+/// A stored byte preflight with a valid identity but invalid PSD version drives the real
+/// approval decoder, so both the immediate error and the later worker failure keep raw replies.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn byte_template_memory_approval_decode_failures_name_the_source_and_keep_raw_replies() {
+    let header = vec![
+        b'8', b'B', b'P', b'S', 0, 0, // unsupported version
+        0, 0, 0, 0, 0, 0, // reserved
+        0, 3, // channels
+        0, 0, 0, 1, // height
+        0, 0, 0, 1, // width
+        0, 8, // depth
+        0, 3, // RGB
+    ];
+    for background in [false, true] {
+        let mut app = app_with(None);
+        app.background_jobs = background;
+        let source = photocraft_engine::jobs::OpenSource::Bytes(std::sync::Arc::new(header.clone()));
+        let fingerprint = photocraft_engine::jobs::SourceFingerprint::of(&source).unwrap();
+        let preflight = app.session.store_pending_preflight(photocraft_engine::jobs::PendingPsdPreflight {
+            id: 0, name: "Untitled-1".into(), source, fingerprint,
+            required: 1000, soft_limit: 500, hard_limit: 2000, available_ram: Some(4000), confirm_damage: true,
+        }).unwrap();
+        crate::open_prompt::arrive_memory(
+            &mut app, preflight, "Untitled-1".into(), None, Some("card.psdt".into()), None, None, 1000, Some(4000), false, false,
+        );
+        let dialog = app.ui.dialogs[0].id;
+        let reply = memory_dialog_reply(&mut app, dialog, true);
+        let reason = "PSD: unsupported file version 0";
+        if background {
+            assert_eq!(reply["ok"], true, "the actual approval starts a worker: {reply}");
+            let tab = app.jobs.opens.first().unwrap();
+            assert_eq!(tab.name, "Untitled-1");
+            assert!(tab.path.is_none());
+            assert_eq!(tab.error_source.as_deref(), Some("card.psdt"));
+            finish_read_failure(&mut app, "card.psdt", reason, &format!("Untitled-1: {reason}"));
+        } else {
+            assert_eq!(reply["ok"], false);
+            assert_eq!(reply["error"], format!("Untitled-1: Untitled-1: {reason}"), "preserve the approval's original wrapper");
+            assert_eq!(messages(&app), [format!("Couldn't open card.psdt: {reason}")]);
+        }
+        assert_eq!(app.ui.status, format!("Couldn't open card.psdt: {reason}"));
+        assert_eq!(app.ui.status.matches("card.psdt").count(), 1);
+        assert!(!app.ui.status.contains("Untitled-1"));
+        assert!(app.ui.status_error);
+        assert!(app.ui.notices.is_empty());
+        assert!(app.session.documents().is_empty());
+        assert!(app.ui.recent_files.is_empty());
+        assert!(app.jobs.opens.is_empty());
+        assert!(app.held_memory_prompts.is_empty());
+        assert!(app.prompt_order.is_empty());
+        assert!(app.jobs.batches.is_empty());
+        assert_eq!(app.session.pending_preflight_bytes().unwrap(), 0);
+        assert!(app.session.take_pending_preflight(preflight).is_none());
+        let alert = app.ui.dialogs[0].id;
+        crate::dialogs::confirm(&mut app, alert).unwrap();
+        assert!(app.ui.dialogs.is_empty(), "the one error alert closes normally");
+    }
+}
