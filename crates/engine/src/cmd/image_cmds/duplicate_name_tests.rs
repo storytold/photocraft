@@ -109,3 +109,35 @@ fn merged_only_copies_use_the_same_name() {
     let mut s = source("dupspec.psd");
     assert_eq!(duplicate(&mut s, json!({"mergedOnly": true})), "dupspec copy");
 }
+
+/// Holds back a copy of the first document named `name`, as a background open does while its
+/// profile prompt waits.
+fn hold(s: &mut Session, name: &str) {
+    let mut doc = (*s.documents()[0].doc).clone();
+    doc.name = name.to_string();
+    s.hold_open(doc, false);
+}
+
+#[test]
+fn every_document_held_for_a_prompt_is_skipped_however_many_there_are() {
+    let mut s = source("oracle");
+    hold(&mut s, "oracle copy");
+    for n in 2..=1100 {
+        hold(&mut s, &format!("oracle copy {n}"));
+    }
+    assert_eq!(duplicate(&mut s, json!({})), "oracle copy 1101");
+}
+
+#[test]
+fn a_copy_number_with_none_after_it_is_never_reused() {
+    // The largest number has no next one, so the whole name is copied as any other name is.
+    let mut s = source("Bar copy 18446744073709551615");
+    assert_eq!(duplicate(&mut s, json!({})), "Bar copy 18446744073709551615 copy");
+    s.set_active(0);
+    assert_eq!(duplicate(&mut s, json!({})), "Bar copy 18446744073709551615 copy 2");
+    // One below counts on to the largest number, then, with that one taken, does the same.
+    let mut s = source("Bar copy 18446744073709551614");
+    assert_eq!(duplicate(&mut s, json!({})), "Bar copy 18446744073709551615");
+    s.set_active(0);
+    assert_eq!(duplicate(&mut s, json!({})), "Bar copy 18446744073709551614 copy");
+}
