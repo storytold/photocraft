@@ -463,9 +463,16 @@ fn red_eye_click(app: &mut PhotocraftApp, x: f64, y: f64) {
 /// more clicks arrive while it is open (`ui.pointer` can send them).
 fn bucket_click(app: &mut PhotocraftApp, x: f64, y: f64) {
     use photocraft_engine::paint_cmds::BITMAP_REFUSAL;
+    clear_off_on_background(app, Tool::PaintBucket);
     let o = app.ui.tool_options.clone();
     let contents = if o.bucket_fill_pattern { "pattern" } else { "foreground" };
-    let mode = if o.bucket_clear { "clear" } else { o.bucket_blend_mode.label() };
+    let mode = if o.bucket_clear {
+        "clear"
+    } else if o.bucket_behind {
+        "behind"
+    } else {
+        o.bucket_blend_mode.label()
+    };
     let r = app.run("paint.bucket", json!({"x": x.floor(), "y": y.floor(), "tolerance": o.tolerance, "contiguous": o.contiguous, "antiAlias": o.anti_alias, "sampleAllLayers": o.sample_all.paint_bucket, "opacity": o.fill_opacity, "contents": contents, "mode": mode, "target": paint_target(app)}));
     if r.is_err_and(|e| e == BITMAP_REFUSAL) {
         app.ui.status.clear();
@@ -481,7 +488,9 @@ fn bucket_click(app: &mut PhotocraftApp, x: f64, y: f64) {
 /// The Brush's chosen Clear paints as Normal on the Background, and its Mode then reads Normal
 /// (#11897): at the press of a Brush stroke on the Background's own pixels, Clear (chosen in the
 /// options bar, not a held `~`) is turned off, so the stroke is sent as Normal. A Background whose
-/// pixels are locked refuses the stroke, so Clear stays chosen there.
+/// pixels are locked refuses the stroke, so Clear stays chosen there. The Paint Bucket's Behind
+/// is greyed on the Background (#12531), so a bucket click there turns it off the same way and
+/// the fill goes with the bucket's blend mode.
 fn clear_off_on_background(app: &mut PhotocraftApp, tool: Tool) {
     let on_background = app.session.active().is_some_and(|st| {
         st.active_layer.is_some_and(|id| {
@@ -493,6 +502,9 @@ fn clear_off_on_background(app: &mut PhotocraftApp, tool: Tool) {
     });
     if tool == Tool::Brush && app.ui.tool_options.brush_clear && !app.held_erase && on_background && paint_target(app) == serde_json::json!("pixels") {
         app.ui.tool_options.brush_clear = false;
+    }
+    if tool == Tool::PaintBucket && app.ui.tool_options.bucket_behind && on_background && paint_target(app) == serde_json::json!("pixels") {
+        app.ui.tool_options.bucket_behind = false;
     }
 }
 

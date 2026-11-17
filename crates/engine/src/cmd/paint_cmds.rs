@@ -41,17 +41,18 @@ fn opacity(p: &Value, cmd: &str) -> Result<f32> {
     Ok(crate::eraser_cmds::number(p, cmd, "opacity", 100.0, 1.0..=100.0)? as f32 / 100.0)
 }
 
-/// The Paint Bucket's `mode`: a blend mode (not Pass Through, a group's) or `clear`.
+/// The Paint Bucket's `mode`: a blend mode (not Pass Through, a group's), `behind` or `clear`.
 fn fill_mode(p: &Value) -> Result<FillMode> {
     let bad = |msg: String| EngineError::BadParams { cmd: "paint.bucket".into(), msg };
     match p.get("mode") {
         None | Some(Value::Null) => Ok(FillMode::Blend(photocraft_color::BlendMode::Normal)),
         Some(Value::String(m)) if m.eq_ignore_ascii_case("clear") => Ok(FillMode::Clear),
+        Some(Value::String(m)) if m.eq_ignore_ascii_case("behind") => Ok(FillMode::Behind),
         Some(Value::String(m)) => blend_from_str(m)
             .filter(|m| *m != photocraft_color::BlendMode::PassThrough)
             .map(FillMode::Blend)
             .ok_or_else(|| bad(format!("unknown blend mode `{m}`"))),
-        Some(v) => Err(bad(format!("`mode` must be a blend mode name or `clear`, not {v}"))),
+        Some(v) => Err(bad(format!("`mode` must be a blend mode name, `behind` or `clear`, not {v}"))),
     }
 }
 
@@ -265,7 +266,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Paint Bucket",
             menu: &[],
             shortcut: None,
-            params: r##"{"x":px,"y":px,"tolerance":0..255=32,"contiguous":bool=true,"antiAlias":bool=true,"sampleAllLayers":bool=false,"contents":"foreground|pattern"="foreground","color":"#rrggbb"=foreground,"pattern":id|name (contents=pattern),"scale":%=100,"angle":deg,"opacity":1..100=100,"mode":"normal|multiply|…|clear (erases the filled area)"="normal","target":"pixels"|"mask"|"filterMask"|"quickMask"|{"channel":i}=Channels panel target}"##,
+            params: r##"{"x":px,"y":px,"tolerance":0..255=32,"contiguous":bool=true,"antiAlias":bool=true,"sampleAllLayers":bool=false,"contents":"foreground|pattern"="foreground","color":"#rrggbb"=foreground,"pattern":id|name (contents=pattern),"scale":%=100,"angle":deg,"opacity":1..100=100,"mode":"normal|multiply|…|behind (fills only transparency)|clear (erases the filled area)"="normal","target":"pixels"|"mask"|"filterMask"|"quickMask"|{"channel":i}=Channels panel target}"##,
             enabled: crate::commands::has_paintable,
             run: bucket,
             journal: true,
@@ -291,3 +292,6 @@ mod bucket_no_op_history_tests;
 
 #[cfg(test)]
 mod bucket_bitmap_tests;
+
+#[cfg(test)]
+mod bucket_behind_tests;

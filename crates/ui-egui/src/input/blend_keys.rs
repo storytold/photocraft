@@ -200,6 +200,8 @@ fn set_tool_mode(app: &mut PhotocraftApp, mode: Option<BlendMode>) {
             return;
         }
         Tool::PaintBucket => {
+            // Like the Brush's, any other mode (Clear too) leaves Behind (#12531).
+            app.ui.tool_options.bucket_behind = false;
             app.ui.tool_options.bucket_clear = mode.is_none();
             if let Some(m) = mode {
                 app.ui.tool_options.bucket_blend_mode = m;
