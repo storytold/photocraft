@@ -85,7 +85,10 @@ fn table(a: f64, st: f64) -> Vec<[i64; TAPS]> {
 
 /// Pass 1 (rule 3): row `j` of `img` onto the document columns `x0 .. x0 + count`, the map along
 /// the row being `x ↦ (h0 x + h1 y + h2) / (h6 x + 1)` at `y = j + ½`.
-fn projective(img: &Image, h: &[f64; 9], x0: i64, count: usize, depth: Depth, table: &[[i64; TAPS]]) -> Option<Image> {
+///
+/// `cap`: the projective spacing's end-to-end ratio when [`capped_ratio`] limits it; each row then
+/// keeps its two ends and samples between them at that ratio.
+fn projective(img: &Image, h: &[f64; 9], x0: i64, count: usize, depth: Depth, table: &[[i64; TAPS]], cap: Option<f64>) -> Option<Image> {
     let (n, nc) = (img.w, img.n);
     let alpha = nc - 1;
     let last = n as i64 - 1;
@@ -97,8 +100,18 @@ fn projective(img: &Image, h: &[f64; 9], x0: i64, count: usize, depth: Depth, ta
         let mut acc = vec![0.0f64; nc];
         for (k, out) in row.chunks_exact_mut(nc).enumerate() {
             let xc = (x0 + k as i64) as f64 + 0.5;
-            let den = h[0] - xc * h[6];
-            let pos = (xc * (h[7] * y + 1.0) - h[1] * y - h[2]) / den - 0.5;
+            let (den, pos) = match cap {
+                Some(r) => {
+                    let (a, b) = (h[1] * y + h[2], (h[0] * nf + h[1] * y + h[2]) / (h[6] * nf + 1.0));
+                    let xi = (xc - a) / (b - a);
+                    let den = r - (r - 1.0) * xi;
+                    (den, xi / den * nf - 0.5)
+                }
+                None => {
+                    let den = h[0] - xc * h[6];
+                    (den, (xc * (h[7] * y + 1.0) - h[1] * y - h[2]) / den - 0.5)
+                }
+            };
             if !(den > 0.0 && pos.is_finite() && pos >= -0.5 && pos < nf - 0.5) {
                 continue; // transparent
             }
@@ -129,6 +142,71 @@ fn projective(img: &Image, h: &[f64; 9], x0: i64, count: usize, depth: Depth, ta
         }
     });
     Some(Image { w: count, h: img.h, n: nc, px })
+}
+
+/// The largest end-to-end ratio of a one-way perspective's spacing: the reference application
+/// draws a perspective that converges further (the far edge under a seventh of the near one)
+/// with its outline as placed but the picture spaced along the converging direction as at this
+/// ratio (measured on its renders of quads narrowed from 1/5 to 1/2500 of the near edge: from
+/// 1/7 on, the spacing no longer changes).
+pub const MAX_RATIO: f64 = 7.0;
+
+/// The ratio a one-way perspective is drawn at when its own, `w` at the far end over `w` at the
+/// near end, passes [`MAX_RATIO`] either way; `None` within it.
+pub fn capped_ratio(ratio: f64) -> Option<f64> {
+    (ratio.is_finite() && ratio > 0.0 && !(1.0 / MAX_RATIO..=MAX_RATIO).contains(&ratio)).then(|| ratio.clamp(1.0 / MAX_RATIO, MAX_RATIO))
+}
+
+/// The point map the reference application draws a one-way perspective `h` (row-major, source →
+/// document) with when [`MAX_RATIO`] caps it over the source box `frame` (left, top, right,
+/// bottom): along the converging direction each line keeps its two ends with the spacing between
+/// them at the capped ratio, across it the extents stay as placed (the two passes of [`render`]).
+/// A warp's control points are carried into the document through it, measured over their box.
+/// `None` for a map that isn't a one-way perspective or isn't capped over `frame`: then `h`.
+pub fn capped_map(h: &[f64; 9], frame: [f64; 4]) -> Option<impl Fn(f64, f64) -> (f64, f64) + use<>> {
+    let (m, len, swap, r) = capped_setup(h, frame)?;
+    let [fx0, fy0, ..] = frame;
+    Some(move |x: f64, y: f64| {
+        let (x, y) = if swap { (y - fy0, x - fx0) } else { (x - fx0, y - fy0) };
+        // Pass 1: the capped spacing between the line's ends.
+        let (a, b) = (m[1] * y + m[2], (m[0] * len + m[1] * y + m[2]) / (m[6] * len + 1.0));
+        let s = x / len;
+        let xx = a + (b - a) * (s * r / (1.0 + (r - 1.0) * s));
+        // Pass 2: the walk across, as placed at that column.
+        let den = m[0] - xx * m[6];
+        let (p, q) = (-m[1] / den, (xx - m[2]) / den);
+        let yy = ((m[3] * p + m[4]) * y + m[3] * q + m[5]) / (m[6] * q + 1.0);
+        if swap { (yy, xx) } else { (xx, yy) }
+    })
+}
+
+/// [`capped_map`]'s map in its own frame: `h` from `frame`'s corner (transposed when it converges
+/// down), the converging extent, whether it is transposed, and the capped ratio.
+fn capped_setup(h: &[f64; 9], frame: [f64; 4]) -> Option<([f64; 9], f64, bool, f64)> {
+    let [fx0, fy0, fx1, fy1] = frame;
+    if !(frame.iter().all(|v| v.is_finite()) && fx1 > fx0 && fy1 > fy0) {
+        return None;
+    }
+    let m = mul(h, &translation(fx0, fy0));
+    if !m.iter().all(|v| v.is_finite()) || m[8].abs() < FLAT {
+        return None;
+    }
+    let m = m.map(|v| v / m[8]);
+    // Judged over the frame's extent, not per pixel: a frame stretched to a billion pixels by a
+    // control point pulled past the horizon has a tiny per-pixel perspective.
+    let flat = |v: f64| v.abs() <= FLAT;
+    let (kx, ky) = (m[6] * (fx1 - fx0), m[7] * (fy1 - fy0));
+    let side = !flat(kx) && flat(ky) && flat(m[1] / m[0].abs().max(FLAT));
+    let down = !flat(ky) && flat(kx) && flat(m[3] / m[4].abs().max(FLAT));
+    let (m, len, swap) = if side {
+        (m, fx1 - fx0, false)
+    } else if down {
+        (transposed(&m), fy1 - fy0, true)
+    } else {
+        return None;
+    };
+    let r = capped_ratio(m[6] * len + 1.0)?;
+    Some((m, len, swap, r))
 }
 
 /// The same map with x and y swapped (contents and document both transposed).
@@ -178,8 +256,10 @@ fn draw(img: &Image, h: &[f64; 9], depth: Depth, kernel: Option<(f64, f64)>) -> 
         return None;
     }
     // Rule 3's Automatic: the quad's extent along the projective direction against the contents'.
-    let (a, st) = kernel.unwrap_or_else(|| automatic(hi(|c| c.0) - lo(|c| c.0), wf));
-    let inter = projective(img, h, x0, nx, depth, &table(a, st))?;
+    // A capped perspective (see [`MAX_RATIO`]) draws Sharper (measured: Smoother is up to 18 levels off on its rows).
+    let cap = capped_ratio(h[6] * wf + 1.0);
+    let (a, st) = kernel.unwrap_or_else(|| if cap.is_some() { SHARPER } else { automatic(hi(|c| c.0) - lo(|c| c.0), wf) });
+    let inter = projective(img, h, x0, nx, depth, &table(a, st), cap)?;
     // Pass 2: column X samples source x = p y + q; along it y ↦ (A y + B) / Dd (h7 = 0).
     let mut dist0 = Vec::with_capacity(nx);
     let mut lengths = Vec::with_capacity(nx);
@@ -573,6 +653,59 @@ mod tests {
         let out = render(&s, Rect::new(0, 0, 302, 202), h).unwrap();
         let r = out.content_bounds();
         assert_eq!(r.x1, 480, "{r:?}");
+    }
+
+    /// Narrowed past a seventh of the near edge, a perspective is spaced as at a seventh: the
+    /// reference application's renders of quads from 1/7 to 1/2500 (top edge 0.12 px) keep the
+    /// same rows, and match this byte for byte; the outline still follows the quad.
+    #[test]
+    fn a_perspective_past_a_seventh_is_spaced_as_at_a_seventh() {
+        use photocraft_color::{ColorMode, PixelFormat, SampleType};
+        let mut s = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::U8, true));
+        for y in 0..202 {
+            s.fill_rect(Rect::new(0, y, 302, y + 1), &[f32::from(y as u8) / 255.0, 0.0, 0.0, 1.0]);
+        }
+        let quad = |half: f64| {
+            let q = [[301.0 - half - 150.0, 0.0], [301.0 + half - 150.0, 0.0], [302.0, 202.0], [0.0, 202.0]];
+            crate::transform::Homography::rect_to_quad([0.0, 0.0, 302.0, 202.0], q).unwrap().0
+        };
+        // The source row drawn at the quad's middle column, by document row.
+        let rows = |half: f64| {
+            let out = render(&s, Rect::new(0, 0, 302, 202), quad(half)).unwrap();
+            (20..200).step_by(20).map(|y| out.read_region(Rect::new(151, y, 152, y + 1))[0]).collect::<Vec<_>>()
+        };
+        let (at7, past) = (rows(151.0 / 7.0), rows(0.06));
+        for (a, b) in at7.iter().zip(&past) {
+            assert!((a - b).abs() < 1.5 / 255.0, "{at7:?} vs {past:?}");
+        }
+        assert_ne!(rows(151.0 / 6.0), at7, "within the cap the spacing still follows the quad");
+        // The outline is the quad's: three pixels wide near the point.
+        let out = render(&s, Rect::new(0, 0, 302, 202), quad(0.06)).unwrap();
+        let top = out.read_region(Rect::new(140, 1, 162, 2));
+        let covered = top.as_chunks::<4>().0.iter().filter(|p| p[3] > 0.0).count();
+        assert!(covered <= 4, "{covered}");
+    }
+
+    /// Control points carried through a capped perspective sit where the reference draws them
+    /// (its file g-vp-up250: the points between the edge rows at y 288 and 114, not near the
+    /// vanishing point at 73, which the exact map gives).
+    #[test]
+    fn control_points_are_carried_through_the_capped_perspective() {
+        let q = [[300.940594059406, 72.9166666666667], [301.059405940594, 72.9166666666667], [452.0, 327.0], [150.0, 327.0]];
+        let frame = [150.0, -804439401.9240966, 452.0, 327.0];
+        let h = crate::transform::Homography::rect_to_quad(frame, q).unwrap().0;
+        let c = capped_map(&h, frame).unwrap();
+        let (_, y1) = c(300.0, -20110799.2064358);
+        let (_, y3) = c(300.0, -340058257.21791375);
+        assert!((y1 - 288.4).abs() < 0.5 && (y3 - 114.4).abs() < 0.5, "{y1} {y3}");
+        // Its corners stay the quad's.
+        for (p, e) in [((150.0, frame[1]), q[0]), ((452.0, frame[1]), q[1]), ((452.0, 327.0), q[2]), ((150.0, 327.0), q[3])] {
+            let (x, y) = c(p.0, p.1);
+            assert!((x - e[0]).abs() < 1e-6 && (y - e[1]).abs() < 1e-6, "{p:?} -> {x} {y}");
+        }
+        // A mild perspective is not capped.
+        let mild = crate::transform::Homography::rect_to_quad([0.0, 0.0, 302.0, 202.0], [[80.0, 0.0], [222.0, 0.0], [302.0, 202.0], [0.0, 202.0]]).unwrap().0;
+        assert!(capped_map(&mild, [0.0, 0.0, 302.0, 202.0]).is_none());
     }
 
     /// A quad far off the canvas is refused, not overflowed: its box is reckoned in 1/256 px.

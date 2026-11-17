@@ -134,13 +134,24 @@ const HORIZON_REACH: f64 = 15_000.0;
 impl TransformSession {
     /// A point of the warp being edited, where it shows in the document ([`Self::warp_place`]).
     pub fn warp_to_doc(&self, p: [f64; 2]) -> [f64; 2] {
-        match self.warp_place.map(photocraft_algo::transform::Homography) {
-            Some(h) => {
-                let (x, y) = h.apply(p[0], p[1]);
-                [x, y]
-            }
-            None => p,
+        let Some(m) = self.warp_place else { return p };
+        // A perspective converging past the reference's cap shows the warp through the capped map,
+        // as the render draws it (`photocraft_algo::warp::warp_in_document`).
+        if let Some(c) = self.warp_frame().and_then(|f| photocraft_algo::smart_perspective::capped_map(&m, f)) {
+            let (x, y) = c(p[0], p[1]);
+            return [x, y];
         }
+        let (x, y) = photocraft_algo::transform::Homography(m).apply(p[0], p[1]);
+        [x, y]
+    }
+
+    /// The box of the warp's control points, which a capped perspective is measured over
+    /// ([`photocraft_algo::smart_perspective::capped_map`]).
+    fn warp_frame(&self) -> Option<[f64; 4]> {
+        let w = self.warp.as_ref()?;
+        let inf = f64::INFINITY;
+        let b = w.to_mesh(1, 1).points.iter().fold([inf, inf, -inf, -inf], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+        b.iter().all(|v| v.is_finite()).then_some(b)
     }
 
     /// A document point in the warp's own space (the inverse of [`Self::warp_to_doc`]).
@@ -153,6 +164,9 @@ impl TransformSession {
         let Some(h) = self.warp_place.and_then(|m| photocraft_algo::transform::Homography(m).inverse()) else { return p };
         let w_at = |q: [f64; 2]| h.0[6] * q[0] + h.0[7] * q[1] + h.0[8];
         let centre = self.warp.as_ref().map(|w| self.warp_to_doc([(w.bounds[0] + w.bounds[2]) / 2.0, (w.bounds[1] + w.bounds[3]) / 2.0]));
+        // The pointer is taken through the placement itself even where the warp shows through the
+        // reference's capped map ([`Self::warp_to_doc`]): its drags were measured so (a capped
+        // inverse put a pull away from the vanishing point three times further off).
         let map = |q: [f64; 2]| {
             let (x, y) = h.apply(q[0], q[1]);
             [x, y]
