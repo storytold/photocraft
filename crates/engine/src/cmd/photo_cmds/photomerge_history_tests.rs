@@ -12,15 +12,18 @@ fn scene_pixel(x: usize, y: usize) -> [f32; 4] {
 }
 
 /// A session with t1.tif, t2.tif and t3.tif open: 300x300 tiles of the scene cut at x 0, 200
-/// and 400, so neighbours overlap by 100 px (the issue's measured set).
-fn tiles() -> Session {
+/// and 400, so neighbours overlap by 100 px (the issue's measured set). t2.tif's colours are
+/// scaled by `t2_exposure`, which Auto-Blend Layers' gain compensation then evens out.
+fn exposed_tiles(t2_exposure: f32) -> Session {
     let mut s = Session::new();
     for (k, x0) in [0usize, 200, 400].into_iter().enumerate() {
         let mut d = Document::new(format!("t{}.tif", k + 1), Size::new(300, 300), ColorMode::Rgb, SampleType::U8);
         let fmt = d.pixel_format();
         let mut data = vec![0.0f32; 300 * 300 * fmt.channels()];
         for (i, o) in data.chunks_exact_mut(fmt.channels()).enumerate() {
-            photocraft_raster::from_rgba_into(&fmt, scene_pixel(x0 + i % 300, i / 300), o);
+            let [r, g, b, a] = scene_pixel(x0 + i % 300, i / 300);
+            let e = if k == 1 { t2_exposure } else { 1.0 };
+            photocraft_raster::from_rgba_into(&fmt, [r * e, g * e, b * e, a], o);
         }
         let mut surf = Surface::new(fmt);
         surf.write_region(Rect::new(0, 0, 300, 300), &data);
@@ -28,6 +31,11 @@ fn tiles() -> Session {
         s.add_document(d, None);
     }
     s
+}
+
+/// [`exposed_tiles`] with the three tiles exposed alike.
+fn tiles() -> Session {
+    exposed_tiles(1.0)
 }
 
 /// Merges the open tiles and returns the result's History rows (the first snapshot excluded).
@@ -76,19 +84,26 @@ fn blend_on_is_one_auto_blend_layers_step_targeting_every_source() {
 }
 
 #[test]
-fn going_back_before_auto_blend_leaves_the_aligned_layers_without_masks() {
-    let mut s = tiles();
+fn going_back_before_auto_blend_restores_the_aligned_layers_without_masks() {
+    // t2.tif darker, so blending changes its pixels, not only its mask.
+    let mut s = exposed_tiles(0.7);
     merge(&mut s, json!({"layout": "reposition"}));
     let blended: Document = (*s.active().unwrap().doc).clone();
+    // The aligned layers before blending: what the same merge gives with Blend off.
+    let mut unblended = exposed_tiles(0.7);
+    merge(&mut unblended, json!({"layout": "reposition", "blend": false}));
+    let aligned: Document = (*unblended.active().unwrap().doc).clone();
     s.execute("history.selectSnapshot", json!({"snapshot": 0})).unwrap();
     assert_eq!(stack(&s), expect(&SOURCES, false));
     let st = s.active().unwrap();
-    for (now, then) in st.doc.layers.iter().zip(&blended.layers) {
-        let (a, b) = (now.surface().unwrap(), then.surface().unwrap());
-        let area = Rect::new(0, 0, blended.size.width as i32, blended.size.height as i32);
-        assert_eq!(a.read_region(area), b.read_region(area), "{}: the aligned pixels are kept", now.name);
+    assert_eq!(st.doc.size, aligned.size);
+    let area = Rect::new(0, 0, aligned.size.width as i32, aligned.size.height as i32);
+    let pixels = |l: &Layer| l.surface().unwrap().read_region(area);
+    for ((now, before), after) in st.doc.layers.iter().zip(&aligned.layers).zip(&blended.layers) {
+        assert_eq!(now.id, after.id, "{}: the snapshot keeps the result's layers", now.name);
+        assert!(pixels(now) == pixels(before), "{}: the snapshot holds the aligned, unblended pixels", now.name);
     }
-    assert_eq!(st.doc.size, blended.size);
+    assert!(pixels(&blended.layers[1]) != pixels(&aligned.layers[1]), "the blend changed t2.tif's pixels");
     // Selecting the snapshot is a state of its own; undoing it brings the masks back.
     assert_eq!(st.history.entries(), ["Auto-Blend Layers".to_string(), st.doc.name.clone()]);
     s.execute("history.undo", json!({})).unwrap();
