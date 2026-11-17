@@ -616,6 +616,7 @@ pub(crate) fn prepare_layer_with_source(doc: &Document, layer: &mut Layer, ctx: 
 #[cfg(test)]
 mod prepared_source_tests {
     use super::*;
+    use photocraft_geom::Size;
     #[test]
     fn native_stack_frames_are_admitted_before_sparse_layer_rendering() {
         let mut source = Document::new("Sparse stack", Size::new(6000, 4000), super::super::ColorMode::Rgb, super::super::SampleType::F32);
