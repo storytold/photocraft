@@ -465,20 +465,6 @@ fn parse_with_image_limit(bytes: &[u8], fonts: fn() -> Arc<usvg::fontdb::Databas
     .map_err(IoError::from)
 }
 
-/// Convert shared resolver refusals into one warning per kind for document imports.
-fn image_warnings(usage: craft_svg::tree::ImageUsage) -> Vec<String> {
-    [
-        (usage.raster_limit_images, "SVG: an embedded raster image exceeded the pixel budget and was omitted"),
-        (usage.svg_limit_images, "SVG: an embedded SVG image could not be inflated or exceeded the byte or nesting budget and was omitted"),
-        (usage.invalid_raster_images, "SVG: an embedded raster image could not be decoded and was omitted"),
-        (usage.invalid_svg_images, "SVG: an embedded SVG image could not be parsed and was omitted"),
-    ]
-    .into_iter()
-    .filter(|(count, _)| *count > 0)
-    .map(|(_, warning)| warning.to_string())
-    .collect()
-}
-
 /// `f` under `catch_unwind`, `None` when it panics: usvg, resvg and tiny-skia panic on some
 /// malformed drawings, which must fail like any unreadable file, not crash (as the HEIF and
 /// JPEG XL decoders are guarded). Where a panic aborts (wasm) this changes nothing.
@@ -1132,7 +1118,10 @@ fn import_parsed_with_limits(
     pixel_budget: u64,
 ) -> Result<ImportResult, IoError> {
     let Parsed { tree, fontless_text, image_usage } = parsed;
-    let mut warnings = image_warnings(image_usage);
+    let mut warnings = Vec::new();
+    if let Some(warning) = omitted_image_warning(image_usage) {
+        warnings.push(warning);
+    }
     if fontless_text {
         warnings.push("SVG: the text needs a font and none is installed, so it was dropped".to_string());
     }
