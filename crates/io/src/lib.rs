@@ -99,9 +99,9 @@ use photocraft_doc::{Adjustment, Document, Layer, LayerContent};
 
 pub use adjust_map::ADJUSTMENT_KEYS;
 pub use flat::{
-    DEFAULT_LOSSY_WEBP_QUALITY, FramesImport, MAX_GIF_LAYER_FRAMES, apply_file_encoding, document_to_image, document_to_image_with_renderer, export_flat, export_flat_with_renderer,
-    export_png_streamed_with_renderer, export_preview_png_with_renderer, file_encoding, import_gif_frames, import_tiff_page, import_tiff_page_with_options,
-    import_webp_frames, opaque_surface, tga_alpha_channel_to_transparency, tga_default_bits,
+    DEFAULT_LOSSY_WEBP_QUALITY, FramesImport, MAX_GIF_LAYER_FRAMES, apply_file_encoding, document_to_image, document_to_image_with_renderer, export_flat,
+    export_flat_with_renderer, export_png_streamed_with_renderer, export_preview_png_with_renderer, file_encoding, import_gif_frames, import_tiff_page,
+    import_tiff_page_with_options, import_webp_frames, opaque_surface, tga_alpha_channel_to_transparency, tga_default_bits,
 };
 pub use png_steps::PngImport;
 // Re-exported for the `flat_open_bench` example, which times the tile-building phase of a flat open.
@@ -1256,7 +1256,7 @@ fn export_stages_with_renderer(
         // The preview is rendered first, while only the document is in memory: its full-size
         // render would otherwise come on top of the finished file model (#6607).
         let preview = opts.image_previews.then(|| psd_thumbnail::resource(doc));
-        let (mut file, mut warnings) = with_span(ctl, 0.0, PSD_MODEL_DONE, |ctl| psd_export::document_to_psd_interruptible(doc, &o, ctl));
+        let (mut file, mut warnings) = with_span(ctl, 0.0, PSD_MODEL_DONE, |ctl| psd_export::document_to_psd_interruptible(doc, &o, ctl))?;
         // A cancelled conversion stops early with an incomplete model: never write it.
         ctl.check().map_err(|_| IoError::Cancelled)?;
         if !doc.metadata.text.is_empty() {
