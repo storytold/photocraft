@@ -6,7 +6,7 @@ use egui::{Rect, Sense, Stroke, pos2, vec2};
 use photocraft_doc::{Layer, LayerContent};
 use serde_json::{Value, json};
 
-use crate::props_layout::{LABEL_GAP, LABEL_W, quick_actions_ui, section, stacked_label};
+use crate::props_layout::{LABEL_GAP, LABEL_W, linked_file, quick_actions_ui, section, stacked_label};
 use crate::theme::{ROW_GAP, Tokens};
 use crate::{PhotocraftApp, widgets};
 
@@ -194,6 +194,65 @@ fn frame(layer: &Layer, px: photocraft_geom::Rect) -> [f64; 4] {
 /// Width of the link toggle between the W and H fields (the X/Y row leaves the same gap).
 const LINK_W: f32 = 20.0;
 
+/// A linked smart object's W or H: read-only text in the rulers' unit ("100 px"), as Photoshop
+/// shows a linked smart object's size (#14121), under the same stacked label as the field it
+/// replaces. `px` is the length, `extent` its 100% for percent; the accessible name is the
+/// field's name and the text ("Width 100 px").
+fn size_text(ui: &mut egui::Ui, label: (&str, &str), name: &str, px: f64, extent: f64, u: LenUnit, width: f32) {
+    let t = Tokens::get(ui.ctx());
+    stacked_label(ui, tl!(label.0), &[tl!(label.0), tl!(label.1)], LABEL_W, 2.0);
+    let shown = photocraft_engine::prefs::fmt_decimals(f64::from(u.shown(px, extent)), u.unit.decimals());
+    let text = format!("{shown} {}", u.unit.suffix());
+    let (r, resp) = ui.allocate_exact_size(vec2(width, 22.0), Sense::hover());
+    ui.painter().text(pos2(r.left() + 4.0, r.center().y), egui::Align2::LEFT_CENTER, &text, egui::FontId::proportional(12.0), t.text);
+    let name = format!("{} {text}", tl!(name));
+    resp.widget_info(move || egui::WidgetInfo::labeled(egui::Role::Label, true, &name));
+}
+
+/// The path a linked smart object's file is shown by: the full absolute path, a relative stored
+/// path taken from the document's folder ([`photocraft_engine::doc_path::resolve_in`]), or the
+/// stored text itself when it is not followed.
+fn shown_path(app: &PhotocraftApp, stored: &str) -> String {
+    let document = app.session.active().and_then(|st| st.path.as_deref()).map(std::path::Path::new);
+    photocraft_engine::doc_path::resolve_in(stored, document).map_or_else(|_| stored.to_string(), |p| p.display().to_string())
+}
+
+/// Accessible name and tooltip of the red mark beside a missing linked file's path.
+pub(crate) const MISSING_MARK: &str = "Linked file is missing";
+
+/// The linked file's row below Transform, as in Photoshop (#14121): its full path, wrapped to the
+/// panel; while the file is missing (the last look found nothing, [`photocraft_engine::Session::missing_links`])
+/// a red question mark, and the path cut short with "…" on one line. The row follows the file:
+/// put back, it shows as before with nothing to do.
+fn linked_file_row(app: &PhotocraftApp, ui: &mut egui::Ui, stored: &str) {
+    let t = Tokens::get(ui.ctx());
+    let path = shown_path(app, stored);
+    let missing = app.session.missing_links().contains(stored);
+    let avail = ui.available_width();
+    const MARK: f32 = 14.0;
+    let indent = if missing { MARK + LABEL_GAP } else { 0.0 };
+    let mut job = egui::text::LayoutJob::simple(path.clone(), egui::FontId::proportional(11.0), t.text_dim, (avail - indent).max(1.0));
+    if missing {
+        job.wrap = egui::text::TextWrapping::truncate_at_width((avail - indent).max(1.0));
+    } else {
+        // A path has few spaces: break it anywhere rather than run past the panel.
+        job.wrap.break_anywhere = true;
+    }
+    let galley = ui.painter().layout_job(job);
+    let (r, resp) = ui.allocate_exact_size(vec2(avail, galley.size().y.max(MARK)), Sense::hover());
+    if missing {
+        let mark = Rect::from_min_size(pos2(r.left(), r.top() + (galley.size().y.min(r.height()) - MARK).max(0.0) / 2.0), vec2(MARK, MARK));
+        ui.painter().circle_filled(mark.center(), MARK / 2.0, t.danger);
+        ui.painter().text(mark.center(), egui::Align2::CENTER_CENTER, "?", crate::theme::semibold(10.0), egui::Color32::WHITE);
+        let mark_resp = ui.interact(mark, ui.make_persistent_id("linked-file-missing"), Sense::hover());
+        mark_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, true, tl!(MISSING_MARK)));
+        mark_resp.on_hover_text(tl!(MISSING_MARK));
+    }
+    ui.painter().galley(pos2(r.left() + indent, r.top()), galley, t.text_dim);
+    resp.widget_info(move || egui::WidgetInfo::labeled(egui::Role::Label, true, &path));
+    ui.add_space(ROW_GAP);
+}
+
 /// Pro Properties body for a non-adjustment layer: Transform, Align and Distribute, the kind's own
 /// sections (Character/Paragraph/Type Options for type, Appearance/Shape for shapes), then Quick
 /// Actions, all with the same collapsible headers (#155).
@@ -211,6 +270,13 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
             let w = ((ui.available_width() - 2.0 * (LABEL_W + LABEL_GAP) - LINK_W - 2.0 * LABEL_GAP) / 2.0).max(36.0);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = LABEL_GAP;
+                // A linked smart object's size is read-only text in Photoshop; X and Y still move it.
+                if linked_file(&layer.content).is_some() {
+                    size_text(ui, ("W", "X"), "Width", bb[2] - bb[0], dw, u, w);
+                    ui.add_space(LINK_W);
+                    size_text(ui, ("H", "Y"), "Height", bb[3] - bb[1], dh, u, w);
+                    return;
+                }
                 if let Some(v) = field(ui, ("w", layer.id.0), ("W", "X"), "Width", (bb[2] - bb[0]) as f32, w, (u, dw, bb[2] - bb[0]), tw) {
                     run.extend(transform_params(layer.id.0, bb, Some(v), None, linked, tw).map(|p| ("edit.transform".to_string(), p)));
                 }
@@ -240,6 +306,9 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
             });
             ui.add_space(ROW_GAP);
         }
+    }
+    if let Some(stored) = linked_file(&layer.content) {
+        linked_file_row(app, ui, stored);
     }
     // Gradient fills: their gradient first, as in Photoshop's Properties panel.
     let gradient = matches!(layer.content, LayerContent::Fill(photocraft_doc::Fill::Gradient { .. }));
@@ -328,6 +397,10 @@ pub fn selection_align(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "linked_properties_tests.rs"]
+mod linked_properties_tests;
 
 #[cfg(test)]
 mod tests {
