@@ -48,15 +48,41 @@ pub fn overflow_button(ui: &mut Ui, id: egui::Id, r: Rect, tip: &str, labels: &[
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tip));
     let resp = resp.on_hover_text(tip);
     egui::Popup::menu(&resp).show(|ui| {
-        ui.set_min_width(140.0);
-        for &i in overflow {
-            let Some(name) = labels.get(i) else { continue };
-            let text = if checked.is_some() { format!("{} {name}", if checked == Some(i) { "✔" } else { "  " }) } else { (*name).to_owned() };
-            if ui.button(text).clicked() {
-                *picked = Some(i);
-                ui.close();
-            }
+        // Document lists use a consistent width; panel overflow menus retain
+        // their natural width. Keep the popup within narrow application windows.
+        if checked.is_some() {
+            let menu_width = 434.0_f32.min((ui.ctx().content_rect().width() - 32.0).max(140.0));
+            ui.set_min_width(menu_width);
+            ui.set_max_width(menu_width);
         }
+
+        // Grow downward as rows are added, up to the bottom of the app.
+        // Only then should the scroll area need to scroll.
+        let screen = ui.ctx().content_rect();
+        let max_height = (screen.bottom() - r.bottom() - 12.0).max(48.0);
+        let row_height = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
+        let desired_height = (overflow.len() as f32 * row_height).min(max_height);
+
+        egui::ScrollArea::vertical()
+            .id_salt(id.with("overflow-list-scroll"))
+            .min_scrolled_height(desired_height)
+            .max_height(max_height)
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
+            .show(ui, |ui| {
+                for &i in overflow {
+                    let Some(name) = labels.get(i) else { continue };
+                    let text = if checked.is_some() { format!("{} {name}", if checked == Some(i) { "✔" } else { "  " }) } else { (*name).to_owned() };
+                    // Natural-width buttons stay left-aligned; stretching a Button
+                    // to the whole menu width centers its text in egui 0.37.
+                    let button = egui::Button::new(text)
+                        .wrap_mode(egui::TextWrapMode::Truncate);
+                    let response = ui.add(button).on_hover_text(*name);
+                    if response.clicked() {
+                        *picked = Some(i);
+                        ui.close();
+                    }
+                }
+            });
     });
 }
 
