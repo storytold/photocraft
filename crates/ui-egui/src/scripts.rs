@@ -127,24 +127,30 @@ const MAX_RUN_DOCUMENTS: u32 = 64;
 const MAX_RUN_APP_TIME: Duration = Duration::from_secs(30 * 60);
 
 impl RunBudget {
-    /// Charge command `id`, or say why the run may not run it.
-    fn charge(&mut self, id: &str) -> Result<(), String> {
+    /// Charge command `id`, which makes `copies` layers when it duplicates them (a group with
+    /// everything in it, or a whole document), or say why the run may not run it.
+    fn charge(&mut self, id: &str, copies: u32) -> Result<(), String> {
         if self.commands >= MAX_RUN_COMMANDS {
             return Err(format!("a script can run at most {MAX_RUN_COMMANDS} commands"));
         }
         if self.app_time >= MAX_RUN_APP_TIME {
             return Err("the script has used all the time PhotoCraft gives a script's commands".into());
         }
-        let layer = matches!(id, "layer.new.layer" | "layer.new.group" | "layer.duplicate" | "type.create");
-        let document = matches!(id, "file.new" | "image.duplicate");
-        if layer && self.layers >= MAX_RUN_LAYERS {
+        let layers = match id {
+            "layer.new.layer" | "layer.new.group" | "type.create" => 1,
+            "layer.duplicate" => copies.max(1),
+            "image.duplicate" => copies,
+            _ => 0,
+        };
+        let document = matches!(id, "file.new" | "file.open" | "image.duplicate");
+        if layers > 0 && self.layers.saturating_add(layers) > MAX_RUN_LAYERS {
             return Err(format!("a script can make at most {MAX_RUN_LAYERS} layers"));
         }
         if document && self.documents >= MAX_RUN_DOCUMENTS {
             return Err(format!("a script can make at most {MAX_RUN_DOCUMENTS} documents"));
         }
         self.commands += 1;
-        self.layers += u32::from(layer);
+        self.layers += layers;
         self.documents += u32::from(document);
         Ok(())
     }
@@ -158,11 +164,38 @@ struct AppCommands<'a> {
     budget: &'a mut RunBudget,
 }
 
+impl AppCommands<'_> {
+    /// The layers command `id` copies in the document with serial `target` (or the active one):
+    /// `layer.duplicate`'s layer and all it holds, every layer for `image.duplicate` (one when
+    /// merged).
+    fn copies(&self, id: &str, target: Option<u64>, params: &Value) -> u32 {
+        fn count(l: &photocraft_doc::Layer) -> u32 {
+            1u32.saturating_add(l.children().map_or(0, |ch| ch.iter().map(count).fold(0, u32::saturating_add)))
+        }
+        let session = &self.app.session;
+        let doc = match target {
+            Some(serial) => session.documents().iter().find(|d| d.serial == serial),
+            None => session.active(),
+        };
+        match id {
+            "layer.duplicate" => {
+                let layer = params["layer"].as_u64().map(photocraft_doc::LayerId);
+                doc.zip(layer).and_then(|(d, id)| d.doc.layer(id)).map_or(1, count)
+            }
+            // A merged duplicate is one layer.
+            "image.duplicate" if params["mergedOnly"].as_bool() == Some(true) => 1,
+            "image.duplicate" => doc.map_or(0, |d| d.doc.layers.iter().map(count).fold(0, u32::saturating_add)),
+            _ => 0,
+        }
+    }
+}
+
 impl ScriptCommands for AppCommands<'_> {
     fn execute(&mut self, id: &str, mut params: Value) -> Result<Value, String> {
-        self.budget.charge(id)?;
-        let started = web_time::Instant::now();
         let target = params.as_object_mut().and_then(|m| m.remove(ON_DOCUMENT)).and_then(|v| v.as_u64());
+        let copies = self.copies(id, target, &params);
+        self.budget.charge(id, copies)?;
+        let started = web_time::Instant::now();
         let was = std::mem::replace(&mut self.app.automation_input, self.automation);
         let result = (|| {
             if let Some(serial) = target
@@ -232,6 +265,8 @@ struct Active {
     /// What it has asked of the app so far.
     budget: RunBudget,
     started_ms: f64,
+    /// When a dialog became busy with its event (ms): its Stop shows only once that takes a while.
+    busy_since_ms: Option<f64>,
 }
 
 struct Open {
@@ -290,6 +325,7 @@ pub(crate) fn start(app: &mut PhotocraftApp, start: ScriptStart, resume: Option<
         automation,
         budget: RunBudget::default(),
         started_ms: crate::gpu_canvas::now_ms(),
+        busy_since_ms: None,
     });
     let template = "Running script {name}…";
     app.ui.status = crate::i18n::fmt(tl!(template), &[("name", &name)]);
@@ -643,18 +679,36 @@ pub(crate) fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 node(ui, w, &mut st, 0, &[]);
             });
     }
+    // A busy dialog is modal, so the way to stop the run is inside it.
+    let now = crate::gpu_canvas::now_ms();
+    active.busy_since_ms = if waiting_dialog.is_empty() { None } else { Some(active.busy_since_ms.unwrap_or(now)) };
+    let offer_stop = active.busy_since_ms.is_some_and(|t| now - t >= STOP_AFTER_MS);
+    let mut stop = false;
     for (id, w) in &waiting_dialog {
         egui::Modal::new(Id::unique(("script-dialog", *id))).show(ctx, |ui| {
             window_title(ui, w);
             let mut st = Draw { window: *id, edits: &mut BTreeMap::new(), event: None, live: false, multiline_focus: false };
             node(ui, w, &mut st, 0, &[]);
+            if offer_stop {
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    stop |= ui.button(tl!("Stop")).clicked();
+                });
+            }
         });
+    }
+    if stop {
+        cancel(app);
+        return;
     }
     let reply = match active.dialog.as_mut() {
         Some(open) if !open.kind.picker() => dialog(ctx, open),
         Some(_) => None,
         None => {
-            stop_window(ctx, active);
+            if waiting_dialog.is_empty() {
+                stop_window(ctx, active);
+            }
             None
         }
     };
@@ -1018,6 +1072,8 @@ fn manager_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let running = app.scripts.running();
     let can_run = can_run(app);
     let mut action: Option<ManagerAction> = None;
+    // Leaving the tags field and clicking a button are one click: both happen.
+    let mut tags_commit: Option<(usize, String)> = None;
     egui::Window::new(tl!("Scripts Manager")).id(Id::unique("scripts-manager")).open(&mut open).default_width(460.0).collapsible(false).show(ctx, |ui| {
         ui.horizontal(|ui| {
             if ui.button(tl!("Load…")).clicked() {
@@ -1066,7 +1122,7 @@ fn manager_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     app.ui.scripts.tags = Some(text.clone());
                 }
                 if r.lost_focus() && app.ui.scripts.tags.is_some() {
-                    action = Some(ManagerAction::Tags(i, text));
+                    tags_commit = Some((i, text));
                 }
             });
             ui.weak(tl!("The first tag is what scripts see as app.name when run from this list."));
@@ -1084,6 +1140,13 @@ fn manager_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     });
     if !open {
         app.ui.scripts.open = false;
+    }
+    if let Some((i, text)) = tags_commit {
+        app.ui.scripts.tags = None;
+        if let Err(e) = app.run("file.scripts.setTags", json!({ "index": i, "tags": text })) {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
     }
     let result = match action {
         None => return,
@@ -1105,10 +1168,6 @@ fn manager_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
             r
         }
         Some(ManagerAction::Run(i)) => run_listed(app, i),
-        Some(ManagerAction::Tags(i, text)) => {
-            app.ui.scripts.tags = None;
-            app.run("file.scripts.setTags", json!({ "index": i, "tags": text }))
-        }
     };
     if let Err(e) = result
         && e != crate::file_dialog::CANCELLED
@@ -1124,7 +1183,6 @@ enum ManagerAction {
     Run(usize),
     Stop,
     Select(usize),
-    Tags(usize, String),
 }
 
 /// The manager's Load…: add the chosen `.js` / `.jsx` files to the list.

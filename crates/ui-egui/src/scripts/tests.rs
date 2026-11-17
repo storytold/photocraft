@@ -275,7 +275,8 @@ fn a_run_that_does_not_start_is_not_recorded() {
 fn a_file_picker_answered_after_its_run_stopped_is_dropped() {
     let log = Log::default();
     let first = vec![dialog(ScriptDialog::OpenFile, json!({"prompt": "Pick", "filter": null, "multiple": false}))];
-    let second = vec![dialog(ScriptDialog::Prompt, json!(["Name?", ""]))];
+    // The new run waits at the same kind of picker, which the late answer must not reach.
+    let second = vec![dialog(ScriptDialog::OpenFile, json!({"prompt": "Pick again", "filter": null, "multiple": false}))];
     let files: Arc<dyn craft::host::Files> = Arc::new(ScriptedFiles::held());
     let mut app =
         PhotocraftApp::new(Session::new(), crate::Services { files: Some(files), scripts: Some(service(vec![first, second], &log)), ..Default::default() });
@@ -291,7 +292,7 @@ fn a_file_picker_answered_after_its_run_stopped_is_dropped() {
     settle(&mut app);
     late.answer_now(&mut app, Picked::Paths(vec![PathBuf::from("/x/a.png")])).unwrap();
     assert!(log.answers.borrow().is_empty(), "{:?}", log.answers.borrow());
-    assert!(app.scripts.run.as_ref().is_some_and(|a| a.dialog.as_ref().is_some_and(|d| d.kind == ScriptDialog::Prompt)), "the new run still waits");
+    assert!(app.scripts.run.as_ref().is_some_and(|a| a.dialog.as_ref().is_some_and(|d| d.kind == ScriptDialog::OpenFile)), "the new run still waits");
 }
 
 #[test]
@@ -486,12 +487,65 @@ fn a_run_started_by_automation_keeps_its_gate() {
 #[test]
 fn a_runs_work_in_the_app_is_bounded() {
     let mut budget = RunBudget { layers: MAX_RUN_LAYERS - 1, documents: MAX_RUN_DOCUMENTS, ..RunBudget::default() };
-    assert_eq!(budget.charge("layer.new.layer"), Ok(()));
-    assert!(budget.charge("layer.duplicate").unwrap_err().contains("layers"));
-    assert!(budget.charge("file.new").unwrap_err().contains("documents"));
-    assert_eq!(budget.charge("layer.setProps"), Ok(()), "other commands still run");
+    assert_eq!(budget.charge("layer.new.layer", 0), Ok(()));
+    assert!(budget.charge("layer.duplicate", 1).unwrap_err().contains("layers"));
+    assert!(budget.charge("file.new", 0).unwrap_err().contains("documents"));
+    assert_eq!(budget.charge("layer.setProps", 0), Ok(()), "other commands still run");
     budget.app_time = MAX_RUN_APP_TIME;
-    assert!(budget.charge("layer.setProps").is_err());
+    assert!(budget.charge("layer.setProps", 0).is_err());
     let mut budget = RunBudget { commands: MAX_RUN_COMMANDS, ..RunBudget::default() };
-    assert!(budget.charge("session.inspect").is_err());
+    assert!(budget.charge("session.inspect", 0).is_err());
+}
+
+/// Duplicating a group or a document copies everything in it, and the run pays for each copy.
+#[test]
+fn duplicating_a_group_counts_every_layer_it_copies() {
+    let log = Log::default();
+    let mut app = app(vec![], &log);
+    app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+    let group = app.run("layer.new.group", json!({"name": "G"})).unwrap()["layer"].as_u64().unwrap();
+    for name in ["a", "b"] {
+        let l = app.run("layer.new.layer", json!({"name": name})).unwrap()["layer"].as_u64().unwrap();
+        app.run("layer.moveTo", json!({"layer": l, "target": group, "position": "into"})).unwrap();
+    }
+    let serial = app.session.active().unwrap().serial;
+    let mut budget = RunBudget { layers: MAX_RUN_LAYERS - 2, ..RunBudget::default() };
+    let mut commands = AppCommands { app: &mut app, automation: false, budget: &mut budget };
+    assert_eq!(commands.copies("layer.duplicate", Some(serial), &json!({"layer": group})), 3);
+    let err = commands.execute("layer.duplicate", json!({"layer": group, ON_DOCUMENT: serial})).unwrap_err();
+    assert!(err.contains("layers"), "{err}");
+    // A duplicated document copies every layer: background, the group and its two layers.
+    assert_eq!(commands.copies("image.duplicate", Some(serial), &json!({"mergedOnly": false})), 4);
+    assert_eq!(commands.copies("image.duplicate", Some(serial), &json!({"mergedOnly": true})), 1);
+    let err = commands.execute("image.duplicate", json!({"name": "copy", "mergedOnly": false, ON_DOCUMENT: serial})).unwrap_err();
+    assert!(err.contains("layers"), "{err}");
+}
+
+/// Opening a file makes a document, which the run's document count bounds.
+#[test]
+fn opening_files_counts_against_the_documents_a_run_may_make() {
+    let mut budget = RunBudget { documents: MAX_RUN_DOCUMENTS, ..RunBudget::default() };
+    assert!(budget.charge("file.open", 0).unwrap_err().contains("documents"));
+}
+
+/// Typing tags and then clicking Run is one click that does both: the tags are kept, and the
+/// run starts.
+#[test]
+fn leaving_the_tags_field_by_clicking_run_keeps_the_tags_and_runs() {
+    let log = Log::default();
+    let mut h = harness(vec![vec![]], &log, vec![]);
+    let app = h.state_mut();
+    app.run("file.scripts.load", json!({"name": "a.jsx", "source": "1"})).unwrap();
+    app.ui.scripts.open = true;
+    app.ui.scripts.selected = Some(0);
+    h.run_steps(4);
+    let field = h.get_by_role(egui::accesskit::Role::TextInput);
+    field.focus();
+    h.run_steps(2);
+    h.get_by_role(egui::accesskit::Role::TextInput).type_text("night");
+    h.run_steps(2);
+    h.get_by_label("Run").click();
+    h.run_steps(6);
+    assert_eq!(h.state().session.prefs().scripts.entries[0].tags, ["night"]);
+    assert_eq!(log.starts.borrow().len(), 1, "the run started");
 }
