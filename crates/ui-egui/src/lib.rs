@@ -862,6 +862,10 @@ mod live_retouch_tests;
 #[cfg(test)]
 mod lock_layers_shortcut_tests;
 #[cfg(test)]
+mod pencil_angle_field_tests;
+#[cfg(test)]
+mod pencil_smoothing_options_tests;
+#[cfg(test)]
 mod pencil_tests;
 #[cfg(test)]
 mod smart_objects_menu_tests;
