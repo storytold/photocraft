@@ -533,6 +533,9 @@ condition IDs remain kept Photoshop steps with their original descriptors.
   Loading the active layer's vector mask (`Path.vectorMask`, `Vrsn` 1, `vectorMaskParams` true)
   maps to `select.loadSelection` and saves back as a path reference. Other vector-mask source
   references and additional path-selection options remain kept steps.
+- Layer navigation (`Frwr`, `Bckw`, `Frnt`, `Back`) follows visible Layers panel rows, skips collapsed
+  children, and cycles at the ends. Explicit names, `Trgt` and stack indexes can still address
+  hidden layers; indexes retain group-end entries.
 - Selecting a named snapshot (`SnpS`) resolves its exact name at playback through
   `history.selectSnapshot`; a missing or ambiguous name fails without restoring another snapshot.
   Native snapshot ids are session-local and do not export as Photoshop references.

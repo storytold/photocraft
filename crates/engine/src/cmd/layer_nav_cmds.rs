@@ -1,14 +1,15 @@
 //! Keyboard layer navigation, the shortcuts that have no menu item (#352): ⌥] / ⌥[ select the
 //! layer above / below, ⌥. / ⌥, the top / bottom layer, and ⇧⌥] / ⇧⌥[ add the layer above /
 //! below to the selection. They follow the Layers panel's rows, top to bottom: a group's row comes
-//! before its children, and the children of a collapsed group are skipped.
+//! before its children. Navigation skips invisible layers and collapsed children, and cycles
+//! at the ends, as recorded Photoshop ordinal selections do.
 
 use photocraft_doc::{Document, Layer, LayerContent, LayerId};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
 use crate::layer_multi_cmds::set_selection;
-use crate::{EngineError, Result, Session};
+use crate::{DocState, EngineError, Result, Session};
 
 fn has_layers(s: &Session) -> std::result::Result<(), String> {
     let st = s.active().ok_or("no document open")?;
@@ -18,26 +19,55 @@ fn has_layers(s: &Session) -> std::result::Result<(), String> {
 /// The Layers panel's rows, top to bottom: each group before its children, collapsed groups
 /// without them.
 pub fn panel_rows(doc: &Document) -> Vec<LayerId> {
-    fn rec(layers: &[Layer], out: &mut Vec<LayerId>) {
-        for l in layers.iter().rev() {
-            out.push(l.id);
-            if let LayerContent::Group(g) = &l.content
-                && g.expanded
-            {
-                rec(&g.children, out);
-            }
+    panel_entries(doc).into_iter().map(|(id, _)| id).collect()
+}
+
+/// Keep hidden rows as navigation origins, but not as destinations. Descendants inherit their
+/// parent's visibility; a collapsed group contributes only its header, not its stored children.
+fn panel_entries(doc: &Document) -> Vec<(LayerId, bool)> {
+    let mut out = Vec::new();
+    let mut pending: Vec<(&Layer, bool)> = doc.layers.iter().map(|layer| (layer, true)).collect();
+    while let Some((layer, parent_visible)) = pending.pop() {
+        let visible = parent_visible && layer.visible;
+        out.push((layer.id, visible));
+        if let LayerContent::Group(group) = &layer.content
+            && group.expanded
+        {
+            pending.extend(group.children.iter().map(|child| (child, visible)));
         }
     }
-    let mut out = Vec::new();
-    rec(&doc.layers, &mut out);
     out
 }
 
 /// Where `id` is in `rows`; a layer inside a collapsed group counts as that group's row (the
 /// nearest enclosing one that has a row).
-fn row_of(doc: &Document, rows: &[LayerId], id: LayerId) -> Option<usize> {
+fn row_of(doc: &Document, rows: &[(LayerId, bool)], id: LayerId) -> Option<usize> {
     let path = doc.path_of(id)?;
-    (1..=path.len()).rev().find_map(|n| doc.layer_at(&path[..n]).and_then(|l| rows.iter().position(|r| *r == l.id)))
+    (1..=path.len()).rev().find_map(|n| path.get(..n).and_then(|path| doc.layer_at(path)).and_then(|l| rows.iter().position(|(row, _)| *row == l.id)))
+}
+
+/// Photoshop layer navigation ordinals, shared by keyboard commands and recorded references.
+/// Explicit names and indexes use their own lookup and may still select hidden layers.
+pub(crate) fn ordinal_target(st: &DocState, ordinal: &str) -> Result<LayerId> {
+    if ordinal == "Trgt" {
+        return st.active_layer.filter(|id| st.doc.layer(*id).is_some()).ok_or_else(|| EngineError::Other("no active layer".into()));
+    }
+    let rows = panel_entries(&st.doc);
+    let current = st.active_layer.and_then(|id| row_of(&st.doc, &rows, id));
+    let target = match ordinal {
+        "Frnt" => rows.iter().find(|row| row.1),
+        "Back" => rows.iter().rev().find(|row| row.1),
+        "Frwr" => {
+            let current = current.ok_or_else(|| EngineError::Other("no active layer".into()))?;
+            rows.iter().take(current).rev().find(|row| row.1).or_else(|| rows.iter().rev().find(|row| row.1))
+        }
+        "Bckw" => {
+            let current = current.ok_or_else(|| EngineError::Other("no active layer".into()))?;
+            rows.iter().skip(current.saturating_add(1)).find(|row| row.1).or_else(|| rows.iter().find(|row| row.1))
+        }
+        _ => return Err(EngineError::Other(format!("unsupported layer ordinal {ordinal}"))),
+    };
+    target.map(|row| row.0).ok_or_else(|| EngineError::Other("no visible layer to select".into()))
 }
 
 #[derive(Clone, Copy)]
@@ -49,19 +79,16 @@ enum Step {
 }
 
 /// Selects (or with `add`, adds to the selection) the row `step` away from the active layer.
-/// At the top or bottom row the selection stays as it is.
+/// At either end, relative navigation cycles to the other end.
 fn navigate(s: &mut Session, step: Step, add: bool) -> Result<Value> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    let rows = panel_rows(&st.doc);
-    let last = rows.len().checked_sub(1).ok_or_else(|| EngineError::Other("the document has no layers".into()))?;
-    let current = st.active_layer.and_then(|a| row_of(&st.doc, &rows, a));
-    let target = match (step, current) {
-        (Step::Top, _) | (Step::Above, None) => 0,
-        (Step::Bottom, _) | (Step::Below, None) => last,
-        (Step::Above, Some(i)) => i.saturating_sub(1),
-        (Step::Below, Some(i)) => (i + 1).min(last),
+    let ordinal = match (step, st.active_layer) {
+        (Step::Top, _) | (Step::Above, None) => "Frnt",
+        (Step::Bottom, _) | (Step::Below, None) => "Back",
+        (Step::Above, _) => "Frwr",
+        (Step::Below, _) => "Bckw",
     };
-    let id = rows.get(target).copied().ok_or_else(|| EngineError::Other("no layer there".into()))?;
+    let id = ordinal_target(st, ordinal)?;
     if add {
         let mut sel = st.selected_layers();
         if !sel.contains(&id) {
@@ -84,7 +111,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 label: $label,
                 menu: &[],
                 shortcut: Some($sc),
-                params: "{} (follows the Layers panel's rows; collapsed groups are one row)",
+                params: "{} (follows visible Layers panel rows; collapsed groups are one row; relative navigation cycles at the ends)",
                 enabled: has_layers,
                 journal: true,
                 run: |s, _| navigate(s, $step, $add),
@@ -130,15 +157,16 @@ mod tests {
     }
 
     #[test]
-    fn steps_follow_the_panel_rows_and_stop_at_the_ends() {
+    fn steps_follow_the_panel_rows_and_cycle_at_the_ends() {
         let (mut s, [bg, a, group, b, c, d]) = session();
         assert_eq!(panel_rows(&s.active().unwrap().doc), vec![d, group, c, b, a, bg]);
         s.execute("layer.select", json!({"layer": d.0})).unwrap();
-        for want in [group, c, b, a, bg, bg] {
+        for want in [group, c, b, a, bg, d] {
             s.execute("layer.selectBelow", json!({})).unwrap();
             assert_eq!(active(&s), want);
         }
-        for want in [a, b, c, group, d, d] {
+        s.select_layer(bg).unwrap();
+        for want in [a, b, c, group, d, bg] {
             s.execute("layer.selectAbove", json!({})).unwrap();
             assert_eq!(active(&s), want);
         }

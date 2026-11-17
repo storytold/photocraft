@@ -101,22 +101,134 @@ fn fixture() -> (Session, u64, u64, u64) {
     (s, l2, child, group)
 }
 
-/// Recorded navigation enters collapsed groups; native keyboard navigation follows visible rows.
+/// Photoshop's recorded navigation and keyboard navigation both treat a closed group as one row.
 #[test]
-fn recorded_forward_enters_a_collapsed_group() {
-    let (mut s, l2, child, group) = fixture();
+fn recorded_forward_matches_keyboard_navigation_at_a_collapsed_group() {
+    let (mut s, l2, _child, group) = fixture();
     s.execute("layer.select", json!({"layer": l2})).unwrap();
     s.execute("layer.selectAbove", json!({})).unwrap();
     assert_eq!(s.active().unwrap().active_layer.unwrap().0, group);
     s.execute("layer.select", json!({"layer": l2})).unwrap();
     load(&mut s, ordinal("Frwr"));
     s.execute("actions.play", json!({"action": "Select"})).unwrap();
-    assert_eq!(s.active().unwrap().active_layer.unwrap().0, child);
+    assert_eq!(s.active().unwrap().active_layer.unwrap().0, group);
 }
 
-/// Indexes count group ends; recorded navigation visits collapsed children and retains its form.
+/// An invisible guide must not add a step to a locked-boundary conditional dispatch.
 #[test]
-fn indexes_and_ordinals_use_the_recorded_stack_with_or_without_background() {
+fn recorded_navigation_skips_hidden_guides_before_conditional_dispatch() {
+    let (mut s, _l2, photo, group) = fixture();
+    let guide = s
+        .edit("Guide", |doc, _| {
+            let mut guide = photocraft_doc::Layer::raster("Guide", doc.pixel_format());
+            guide.visible = false;
+            let id = guide.id;
+            let photocraft_doc::LayerContent::Group(g) = &mut doc.layer_mut(photocraft_doc::LayerId(group)).unwrap().content else { panic!("group") };
+            g.children.push(guide);
+            g.expanded = true;
+            Ok(id)
+        })
+        .unwrap();
+    s.execute("layer.setProps", json!({"layer":layer(&s,"L3"),"locked":true})).unwrap();
+    s.execute("layer.select", json!({"layer":photo})).unwrap();
+    let forward = select(ordinal("Frwr")).steps.remove(0);
+    let parent = Action::new(
+        "Parent",
+        vec![
+            forward.clone(),
+            ("actions.conditional".into(), json!({"if":"isLocked","then":"Unexpected"})),
+            forward,
+            ("actions.conditional".into(), json!({"if":"isLocked","then":"Matched","else":"Unexpected"})),
+            ("layer.new.layer".into(), json!({"name":"After parent"})),
+        ],
+    );
+    let matched = Action::new("Matched", vec![("layer.new.layer".into(), json!({"name":"Match witness"}))]);
+    let unexpected = Action::new("Unexpected", vec![("layer.select".into(), json!({"layer":"Absent"}))]);
+    let (data, skipped) = atn_cmds::export("References", &[&parent, &matched, &unexpected], &[], false).unwrap();
+    assert!(skipped.is_empty());
+    let imported = atn_cmds::import(&data).unwrap();
+    assert!(imported.unsupported.is_empty());
+    s.actions.list = imported.actions;
+    let result = s.execute("actions.play", json!({"action":"Parent"})).unwrap();
+    assert!(result.get("failed").is_none(), "{result}");
+    assert!(s.active().unwrap().doc.walk().iter().any(|(_, _, l)| l.name == "Match witness"));
+    assert_eq!(s.active().unwrap().doc.layer(s.active().unwrap().active_layer.unwrap()).unwrap().name, "After parent");
+    assert!(!s.active().unwrap().doc.layer(guide).unwrap().visible);
+}
+
+#[test]
+fn recorded_navigation_and_keyboard_skip_hidden_rows_and_wrap() {
+    let mut s = scene(true);
+    s.execute("layer.setExpanded", json!({"layer":layer(&s,"G"),"expanded":true})).unwrap();
+    s.execute("layer.setProps", json!({"layer":layer(&s,"Gchild"),"visible":false})).unwrap();
+    for (start, code, command, expected) in [
+        ("L2", "Frwr", "layer.selectAbove", "G"),
+        ("G", "Bckw", "layer.selectBelow", "L2"),
+        ("L3", "Frwr", "layer.selectAbove", "Base"),
+        ("Base", "Bckw", "layer.selectBelow", "L3"),
+    ] {
+        let action = select(ordinal(code));
+        roundtrip(&action, &ordinal(code), None);
+        for recorded in [false, true] {
+            s.execute("layer.select", json!({"layer":layer(&s,start)})).unwrap();
+            if recorded {
+                replay(&mut s, &action);
+            } else {
+                s.execute(command, json!({})).unwrap();
+            }
+            assert_eq!(s.active().unwrap().active_layer.unwrap().0, layer(&s, expected), "{start} {code}, recorded={recorded}");
+        }
+    }
+    // Indexes and names still address hidden layers explicitly, without making them visible.
+    replay(&mut s, &select(index("Lyr ", 4)));
+    assert_eq!(s.active().unwrap().active_layer.unwrap().0, layer(&s, "Gchild"));
+    assert!(!s.active().unwrap().doc.layer(photocraft_doc::LayerId(layer(&s, "Gchild"))).unwrap().visible);
+}
+
+#[test]
+fn recorded_navigation_skips_hidden_ancestors_and_extreme_hidden_rows() {
+    let mut s = scene(true);
+    s.execute("layer.setExpanded", json!({"layer":layer(&s,"G"),"expanded":true})).unwrap();
+    s.execute("layer.setProps", json!({"layer":layer(&s,"G"),"visible":false})).unwrap();
+    s.execute("layer.select", json!({"layer":layer(&s,"L2")})).unwrap();
+    replay(&mut s, &select(ordinal("Frwr")));
+    assert_eq!(s.active().unwrap().active_layer.unwrap().0, layer(&s, "L3"));
+    s.execute("layer.setProps", json!({"layer":layer(&s,"L3"),"visible":false})).unwrap();
+    replay(&mut s, &select(ordinal("Frnt")));
+    assert_eq!(s.active().unwrap().active_layer.unwrap().0, layer(&s, "L2"));
+    s.execute("layer.setProps", json!({"layer":layer(&s,"Base"),"visible":false})).unwrap();
+    replay(&mut s, &select(ordinal("Back")));
+    assert_eq!(s.active().unwrap().active_layer.unwrap().0, layer(&s, "L1"));
+}
+
+#[test]
+fn recorded_navigation_with_one_or_no_visible_layers_is_bounded() {
+    let mut s = scene(true);
+    let ids: Vec<_> = s.active().unwrap().doc.walk().iter().map(|(_, _, l)| l.id.0).collect();
+    s.execute("layer.setProps", json!({"layers":ids,"visible":false})).unwrap();
+    let only = layer(&s, "L2");
+    s.execute("layer.setProps", json!({"layer":only,"visible":true})).unwrap();
+    s.execute("layer.select", json!({"layer":only})).unwrap();
+    for code in ["Frwr", "Bckw", "Frnt", "Back"] {
+        replay(&mut s, &select(ordinal(code)));
+        assert_eq!(s.active().unwrap().active_layer.unwrap().0, only);
+    }
+    s.execute("layer.setProps", json!({"layer":only,"visible":false})).unwrap();
+    let before = s.active().unwrap().doc.clone();
+    let state = selection(&s);
+    for code in ["Frwr", "Bckw", "Frnt", "Back"] {
+        assert!(s.execute("layer.select", json!({"layer":{"ordinal":code}})).is_err());
+        assert_eq!(s.active().unwrap().doc, before);
+        assert_eq!(selection(&s), state);
+    }
+    // Trgt is the exact current layer, even when every layer is invisible.
+    replay(&mut s, &select(ordinal("Trgt")));
+    assert_eq!(s.active().unwrap().active_layer.unwrap().0, only);
+}
+
+/// Indexes count group ends and closed children; ordinals follow navigable panel rows.
+#[test]
+fn indexes_keep_the_full_stack_while_ordinals_follow_panel_rows() {
     for background in [false, true] {
         let mut s = scene(background);
         let first = u32::from(!background);
@@ -129,7 +241,7 @@ fn indexes_and_ordinals_use_the_recorded_stack_with_or_without_background() {
             replay(&mut s, &action);
             assert_eq!(s.active().unwrap().active_layer.unwrap().0, layer(&s, name.unwrap_or("L2")));
         }
-        for (code, expected) in [("Trgt", "L2"), ("Frwr", "Gchild"), ("Bckw", "L1"), ("Frnt", "L3"), ("Back", "Base")] {
+        for (code, expected) in [("Trgt", "L2"), ("Frwr", "G"), ("Bckw", "L1"), ("Frnt", "L3"), ("Back", "Base")] {
             s.execute("layer.select", json!({"layer":layer(&s,"L2")})).unwrap();
             let reference = ordinal(code);
             let action = select(reference.clone());

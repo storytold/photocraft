@@ -1,4 +1,4 @@
-//! Recorded layer references use the full stack, including hidden group-end entries.
+//! Recorded indexes count the full stack; navigation ordinals follow visible panel rows.
 
 use super::{Document, EngineError, LayerId, Result, Session, Value};
 
@@ -47,18 +47,7 @@ pub(crate) fn recorded_layer(s: &Session, selector: &Value) -> Result<Option<Lay
         });
     }
     let ordinal = fields.get("ordinal").and_then(Value::as_str).ok_or_else(|| bad("layer reference needs an index or ordinal"))?;
-    let rows: Vec<_> = stack(&st.doc).into_iter().filter_map(|entry| if let Entry::Layer(id) = entry { Some(id) } else { None }).collect();
-    let last = rows.len().checked_sub(1).ok_or_else(|| bad("the document has no layers"))?;
-    let current = st.active_layer.and_then(|id| rows.iter().position(|layer| *layer == id));
-    let target = match ordinal {
-        "Frnt" => last,
-        "Back" => 0,
-        "Trgt" => current.ok_or_else(|| bad("no active layer"))?,
-        "Frwr" => current.ok_or_else(|| bad("no active layer"))?.saturating_add(1).min(last),
-        "Bckw" => current.ok_or_else(|| bad("no active layer"))?.saturating_sub(1),
-        _ => return Err(bad(format!("unsupported layer ordinal {ordinal}"))),
-    };
-    rows.get(target).copied().map(Some).ok_or_else(|| bad("no layer there"))
+    crate::layer_nav_cmds::ordinal_target(st, ordinal).map(Some)
 }
 
 /// Convert a pre-move stack boundary to an existing layer.moveTo drop position.
