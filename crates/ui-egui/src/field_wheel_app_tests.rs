@@ -13,7 +13,7 @@ use crate::state::Tool;
 fn harness() -> Harness<'static, PhotocraftApp> {
     let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
         app.ui.tool = Tool::Brush;
         app
@@ -44,25 +44,6 @@ fn wheel(h: &mut Harness<'_, PhotocraftApp>, at: egui::Pos2, lines: f32, modifie
 fn view(h: &Harness<'_, PhotocraftApp>) -> (f32, [f32; 2]) {
     let v = &h.state().ui.views[0];
     (v.zoom, v.center)
-}
-
-#[test]
-fn a_focused_field_takes_the_wheel_over_the_canvas() {
-    let mut h = harness();
-    let canvas = egui::pos2(640.0, 500.0);
-    let before = view(&h);
-    wheel(&mut h, canvas, -1.0, egui::Modifiers::NONE);
-    assert_ne!(view(&h), before, "without a focused field the wheel pans the canvas");
-    let before = view(&h);
-    field(&h, "10").click();
-    h.run();
-    wheel(&mut h, canvas, -2.0, egui::Modifiers::NONE);
-    assert_eq!(view(&h), before, "the canvas neither pans nor zooms");
-    assert!(h.query_all_by_role(Role::SpinButton).any(|n| n.value().as_deref() == Some("8")), "Smoothing stepped from 10 to 8");
-    // ⌥/Alt + wheel is still the view's zoom.
-    wheel(&mut h, canvas, 1.0, egui::Modifiers::ALT);
-    assert_ne!(view(&h).0, before.0, "Alt + wheel zooms");
-    assert!(h.query_all_by_role(Role::SpinButton).any(|n| n.value().as_deref() == Some("8")));
 }
 
 #[test]

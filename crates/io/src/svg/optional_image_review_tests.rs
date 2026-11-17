@@ -257,6 +257,23 @@ fn url(mime: &str, bytes: &[u8]) -> String {
     value
 }
 
+#[test]
+fn svgz_content_detection_and_parser_agree_on_later_gzip_members() {
+    let xml = b"<svg xmlns='http://www.w3.org/2000/svg' width='2' height='2'><rect width='2' height='2'/></svg>";
+    // The first member alone looks like SVG. Detection must validate the
+    // following member as well, even when there is no filename extension.
+    let split = xml.len() - b"</svg>".len();
+    let mut compressed = gzip(&xml[..split]);
+    compressed.extend(gzip(&xml[split..]));
+    assert!(crate::is_svg_input("untitled", &compressed));
+    assert!(rasterize_bounded(&compressed, 1., 16).is_ok());
+
+    let crc = compressed.len() - 8;
+    compressed[crc] ^= 1;
+    assert!(!crate::is_svg_input("untitled", &compressed));
+    assert!(rasterize_bounded(&compressed, 1., 16).is_err());
+}
+
 fn gzip(bytes: &[u8]) -> Vec<u8> {
     let mut writer = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
     writer.write_all(bytes).unwrap();

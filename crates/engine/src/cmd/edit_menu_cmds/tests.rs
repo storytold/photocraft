@@ -1,8 +1,6 @@
 use super::*;
 use photocraft_doc::vector::Subpath;
 
-static PURGE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 fn session(depth: u32) -> Session {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 64, "height": 48, "depth": depth, "background": "white"})).unwrap();

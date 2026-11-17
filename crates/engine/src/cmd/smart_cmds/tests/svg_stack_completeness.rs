@@ -31,35 +31,20 @@ fn old_placed_key(bytes: &[u8], doc: &Document, smart: &SmartObject) -> StageKey
 }
 
 #[test]
-fn gzipped_svg_sources_keep_omission_warnings_and_reject_legacy_stack_caches() {
+fn gzipped_svg_stack_retains_ordinary_import_for_misnamed_sources() {
     use std::io::Write;
     let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
     encoder.write_all(&incomplete_svg()).unwrap();
-    let bytes = encoder.finish().unwrap();
+    let bytes = Arc::new(encoder.finish().unwrap());
     let session = session(8);
     let doc = &session.active().unwrap().doc;
     for name in ["logo.gz", "without-extension"] {
-        let mut smart = SmartObject::new(SmartSource::Embedded { file_name: name.into(), bytes: Arc::new(bytes.clone()) }, Affine::IDENTITY, None);
-        let (ordinary, warnings) = render_with_warnings(doc, &smart).unwrap();
-        assert_eq!(ordinary.unwrap().rgba(1, 1), [1., 0., 0., 1.]);
-        assert_eq!(warnings.len(), 1);
-        assert!(decode_source(name, &bytes).is_err(), "warningless source decoding must be complete");
+        let mut smart = SmartObject::new(SmartSource::Embedded { file_name: name.into(), bytes: bytes.clone() }, Affine::IDENTITY, None);
+        assert!(decode_source(name, &bytes).is_ok());
         smart.stack_mode = Some(photocraft_doc::StackMode::Mean);
-        let mut poisoned = Surface::new(PixelFormat::RGBA32F);
-        poisoned.fill_rect(Rect::new(0, 0, 2, 2), &[0., 1., 0., 1.]);
-        source::cache_put(
-            old_stack_key(&bytes, PixelFormat::RGBA32F, photocraft_doc::StackMode::Mean),
-            source::SourceImage { surface: Arc::new(poisoned), bounds: Rect::new(0, 0, 2, 2) },
-        );
-        let mut poisoned = Surface::new(doc.pixel_format());
-        poisoned.fill_rect(Rect::new(0, 0, 2, 2), &[0., 1., 0., 1.]);
-        stack_cache::put(old_placed_key(&bytes, doc, &smart), &Stage { surface: poisoned, extent: doc.bounds() });
-        for _ in 0..2 {
-            assert!(stack_image(name, &bytes, PixelFormat::RGBA32F, photocraft_doc::StackMode::Mean).is_err());
-            assert!(render(doc, &smart).is_err());
-            assert!(render_with_warnings(doc, &smart).is_err());
-            assert_eq!(source_box(doc, &smart), None);
-        }
+        let rendered = render(doc, &smart).unwrap().unwrap();
+        assert_eq!(rendered.rgba(1, 1), [1., 0., 0., 1.]);
+        assert_eq!(source_box(doc, &smart), Some([0., 0., 2., 2.]));
     }
 }
 
@@ -85,6 +70,7 @@ fn svg_stack_rejects_incomplete_pixels_repeatedly_but_ordinary_placement_keeps_w
 
 #[test]
 fn svg_stack_does_not_reuse_incomplete_legacy_source_or_filter_stages() {
+    let _cache = crate::edit_menu_cmds::PURGE_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let session = session(8);
     let doc = &session.active().unwrap().doc;
     let bytes = incomplete_svg();
@@ -94,7 +80,6 @@ fn svg_stack_does_not_reuse_incomplete_legacy_source_or_filter_stages() {
     poisoned.fill_rect(Rect::new(0, 0, 2, 2), &[0., 1., 0., 1.]);
     let key = old_stack_key(&bytes, PixelFormat::RGBA32F, photocraft_doc::StackMode::Mean);
     source::cache_put(key, source::SourceImage { surface: Arc::new(poisoned), bounds: Rect::new(0, 0, 2, 2) });
-    assert!(source::cache_get(&key).is_some(), "exercise a warm source entry from the old omission-permitting path");
     assert!(stack_image("Stack completeness.svg", &bytes, PixelFormat::RGBA32F, photocraft_doc::StackMode::Mean).is_err());
 
     let mut poisoned = Surface::new(doc.pixel_format());
@@ -102,7 +87,6 @@ fn svg_stack_does_not_reuse_incomplete_legacy_source_or_filter_stages() {
     let stage = Stage { surface: poisoned, extent: doc.bounds() };
     let placed = old_placed_key(&bytes, doc, &smart);
     stack_cache::put(placed, &stage);
-    assert!(stack_cache::get(&placed).is_some());
     assert!(render(doc, &smart).is_err(), "old placed pixels must not bypass strict decoding");
     smart.smart_filters.push(SmartFilter {
         command: "filter.blur.gaussianBlur".into(),
@@ -113,7 +97,6 @@ fn svg_stack_does_not_reuse_incomplete_legacy_source_or_filter_stages() {
     });
     let filtered = stack_cache::filter_key(&placed, &smart.smart_filters[0], None);
     stack_cache::put(filtered, &stage);
-    assert!(stack_cache::get(&filtered).is_some());
     assert!(render(doc, &smart).is_err(), "old deepest filter stages must not bypass strict decoding");
     assert!(render_with_warnings(doc, &smart).is_err());
 }

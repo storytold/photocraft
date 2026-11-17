@@ -5,13 +5,11 @@ use super::*;
 /// Require shallow, deep and nested private SVG probes to reuse the single native parser worker.
 fn private_svg_parsing_uses_the_same_worker_at_every_depth() {
     for depth in [2, 200] {
-        parse_at_depth(depth, false, |isolated| {
-            assert!(isolated);
+        parse_at_depth(depth, || {
             assert!(SVG_WORKER.with(std::cell::Cell::get));
             assert_eq!(std::thread::current().name(), Some("photocraft-svg"));
             let worker = std::thread::current().id();
-            parse_at_depth(200, isolated, |nested| {
-                assert!(nested);
+            parse_at_depth(200, || {
                 assert_eq!(std::thread::current().id(), worker);
                 Ok(())
             })
@@ -43,10 +41,10 @@ fn non_strict_embedded_svg_records_isolation_failure_but_omits_invalid_images() 
         resolver: Arc::new(craft_svg::tree::ValidatedImageResolver::new(tree_limits(MAX_XML_DEPTH, MAX_RASTER_PIXELS))),
     }));
     let invalid = image_svg(&embedded_image("image/svg+xml", b"<not-svg/>"));
-    parse_image_bounded_with(invalid.as_bytes(), budget.clone(), MAX_XML_DEPTH, inter_only, false).unwrap();
+    parse_image_bounded_with(invalid.as_bytes(), budget.clone(), inter_only).unwrap();
     assert!(budget.lock().unwrap().error.is_none(), "ordinary invalid images are still omitted");
     let svg = image_svg("<text>x</text>");
-    let error = parse_image_bounded_with(svg.as_bytes(), budget.clone(), 2, panic_fonts, false).unwrap_err();
+    let error = parse_image_bounded_with(svg.as_bytes(), budget.clone(), panic_fonts).unwrap_err();
     assert!(error.to_string().contains("bounded SVG worker failed"));
     assert_eq!(budget.lock().unwrap().error.as_deref(), Some(error.to_string().as_str()));
 }
@@ -61,29 +59,13 @@ fn reference_chain_svg(links: usize) -> String {
     source
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 #[test]
-fn narrowed_embedded_xml_allowance_also_bounds_expanded_references() {
-    let source = reference_chain_svg(12);
-    let xml_left = 5;
-    assert!(nesting_depth(source.as_bytes(), xml_left).unwrap() <= xml_left, "lexical nesting alone fits");
-    assert!(craft_svg::tree::preflight(&source, &tree_limits(MAX_XML_DEPTH, MAX_RASTER_PIXELS)).is_ok());
-    assert!(matches!(craft_svg::tree::preflight(&source, &tree_limits(xml_left, MAX_RASTER_PIXELS)), Err(craft_svg::tree::Error::TooDeep(_))));
-    let budget = Arc::new(Mutex::new(ImageBudget {
-        pixels: MAX_RASTER_PIXELS,
-        xml_bytes: MAX_BOUNDED_SVG_BYTES,
-        svg_images: 0,
-        svg_chain: 0,
-        draw_nodes: 0,
-        repeatable_raster: false,
-        repeatable_svg: false,
-        fontless_text: false,
-        strict: false,
-        error: None,
-        resolver: Arc::new(craft_svg::tree::ValidatedImageResolver::new(tree_limits(MAX_XML_DEPTH, MAX_RASTER_PIXELS))),
-    }));
-    let error = parse_image_bounded_with(source.as_bytes(), budget, xml_left, inter_only, false).unwrap_err();
-    assert!(error.to_string().contains("nested"), "{error}");
+fn bounded_render_rejects_expanded_references_that_exceed_the_app_limit() {
+    let depth = tree_limits(MAX_XML_DEPTH, MAX_RASTER_PIXELS).tree_depth;
+    let source = reference_chain_svg(depth + 2);
+    assert!(nesting_depth(source.as_bytes(), depth).unwrap() <= depth, "the lexical guard alone admits this source");
+    let error = rasterize_bounded(source.as_bytes(), 1., 16).unwrap_err();
+    assert!(error.to_string().contains("layers are nested too deeply"), "{error}");
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -107,7 +89,7 @@ fn image_svg(images: &str) -> String {
     format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\">{images}</svg>")
 }
 
-fn base64(bytes: &[u8]) -> String {
+pub(super) fn base64(bytes: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::new();
     for chunk in bytes.chunks(3) {

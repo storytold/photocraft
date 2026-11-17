@@ -413,6 +413,7 @@ fn update_contents_with_frame_budget(s: &mut Session, p: &Value, native: bool, f
         }
         crate::smart_cmds::detach_psd(replacement);
     }
+    drop(sources);
     s.edit(if native { "Update Vector Contents" } else { "Update SVG Contents" }, |doc, _| {
         for replacement in replacements {
             let id = replacement.id;

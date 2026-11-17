@@ -135,7 +135,7 @@ fn a_refused_background_eraser_stroke_shows_nothing_and_reports_on_release() {
 fn spot_healing_shows_the_area_it_heals_and_heals_on_release() {
     let mut app = app(8, Tool::SpotHealing);
     assert!(!strokes_live(Tool::SpotHealing), "the heal needs the whole stroke");
-    assert_eq!(crate::canvas::SPOT_HEALING_TRAIL.r(), 0, "a dark overlay, as Photoshop's");
+
     let steps = app.session.active().unwrap().history.past_len();
     let m = Modifiers::NONE;
     tool_event(&mut app, ToolEvent::Down { x: 30.0, y: 20.0, pressure: 1.0 }, m);

@@ -18,13 +18,13 @@ pub fn stack_image(file_name: &str, bytes: &[u8], fmt: PixelFormat, mode: photoc
 fn stack_image_classified(file_name: &str, bytes: &[u8], fmt: PixelFormat, mode: photocraft_doc::StackMode, svg: Option<bool>) -> Result<SourceImage> {
     use photocraft_algo::stack::Stat;
     let mut key = cache_key(bytes, fmt);
-    // A uniform fresh strict domain admits cache hits before any compressed SVG probe.
-    // Earlier domains could contain incomplete warning-aware SVG imports.
-    key.0 = *blake3::hash(&[&key.0[..], b"stack-complete-v2:", blake3::hash(file_name.as_bytes()).as_bytes(), mode.id().as_bytes()].concat()).as_bytes();
+    // Keep the filename in the key because fallback import uses it to choose a format.
+    // Use a separate domain from entries that predate plain SVG completeness checks.
+    key.0 = *blake3::hash(&[&key.0[..], b"stack-source-v3:", blake3::hash(file_name.as_bytes()).as_bytes(), mode.id().as_bytes()].concat()).as_bytes();
     if let Some(img) = cache_get(&key) {
         return Ok(img);
     }
-    let svg = svg.unwrap_or_else(|| svg_input(file_name, bytes));
+    let svg = svg.unwrap_or_else(|| photocraft_io::svg::is_svg(bytes));
     let doc = super::decode_source_classified(file_name, bytes, svg)?;
     let layers: &[Layer] = match doc.layers.as_slice() {
         [only] if only.is_group() => only.children().unwrap_or_default(),
@@ -70,15 +70,6 @@ fn stack_image_classified(file_name: &str, bytes: &[u8], fmt: PixelFormat, mode:
     let img = SourceImage { surface: Arc::new(source_surface_from_buffer(&doc, &buf, fmt)?), bounds };
     cache_put(key, img.clone());
     Ok(img)
-}
-
-#[cfg(test)]
-thread_local! { static SVG_CLASSIFICATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
-
-fn svg_input(name: &str, bytes: &[u8]) -> bool {
-    #[cfg(test)]
-    SVG_CLASSIFICATIONS.with(|count| count.set(count.get().saturating_add(1)));
-    photocraft_io::is_svg_input(name, bytes)
 }
 
 // ---------- rendering ----------
@@ -193,7 +184,7 @@ fn apply_smart_filter(f: &SmartFilter, sm: &SmartObject, cur: &Surface, canvas: 
 /// The source placed in document pixels, before any smart filter (uncached test oracle).
 #[cfg(test)]
 pub(super) fn place(name: &str, bytes: &[u8], doc: &Document, sm: &SmartObject) -> Result<Surface> {
-    place_with_svg(name, bytes, doc, sm, svg_input(name, bytes), &mut |bytes, scale| svg_source_image_in(bytes, doc, scale))
+    place_with_svg(name, bytes, doc, sm, photocraft_io::svg::is_svg(bytes), &mut |bytes, scale| svg_source_image_in(bytes, doc, scale))
 }
 
 fn place_with_svg(
@@ -335,17 +326,9 @@ pub(crate) fn source_box(doc: &Document, sm: &SmartObject) -> Option<[f64; 4]> {
     let bytes = display_source(sm, &bytes);
     let fmt = doc.pixel_format();
     let r = match sm.stack_mode {
+        None if photocraft_io::svg::is_svg(&bytes) => photocraft_io::svg::bounded_canvas_bounds(&bytes, 24_000_000).ok()?,
         Some(mode) => stack_image(&name, &bytes, fmt, mode).ok()?.bounds,
-        None => {
-            // An existing typed placed stage already proves the source kind; bounds
-            // still come from the original drawing, not from its transformed pixels.
-            let (_, svg) = select_stage_domain(doc, sm, &name, &bytes, &[], None);
-            if svg {
-                photocraft_io::svg::bounded_canvas_bounds(&bytes, 24_000_000).ok()?
-            } else {
-                super::source::source_image_classified(&name, &bytes, fmt, false).ok()?.bounds
-            }
-        }
+        None => super::source::source_image(&name, &bytes, fmt).ok()?.bounds,
     };
     Some([f64::from(r.x0), f64::from(r.y0), f64::from(r.x1), f64::from(r.y1)])
 }
@@ -408,10 +391,6 @@ impl<'a> WarningRenderSources<'a> {
         self.srgb.is_some()
     }
 
-    fn knows_svg(&self, bytes: &Arc<Vec<u8>>, name: &[u8; 32]) -> bool {
-        self.entries.iter().any(|entry| entry.name == *name && std::ptr::eq(entry.source.as_ptr(), Arc::as_ptr(bytes)))
-    }
-
     fn image(&mut self, bytes: &Arc<Vec<u8>>, scale: f64, name: [u8; 32]) -> Result<(SourceImage, Vec<String>)> {
         let doc = self.document;
         // Non-SVG and unavailable sources keep their old fast path without
@@ -454,6 +433,9 @@ impl<'a> WarningRenderSources<'a> {
             }
         }
         // Preserve the normal renderer's exact built-in sRGB fast path.
+        // A full memo is optional. Let the placement proceed uncached if the
+        // browser cannot afford retaining these tiles along with prior renders.
+        let admitted = admitted && crate::memory_gate::ensure("retain the SVG source for this update", cost as u64).is_ok();
         let image = if srgb {
             SourceImage { surface: Arc::new(super::source::buffer_to_surface(&buf, doc.pixel_format())), bounds: buf.rect }
         } else {
@@ -482,13 +464,11 @@ pub(crate) fn render_with_warnings_using(sm: &SmartObject, sources: &mut Warning
         return render(doc, sm).map(|surface| (surface, Vec::new()));
     }
     let Some((name, bytes)) = source_bytes(&doc.metadata, &sm.source) else { return Ok((None, Vec::new())) };
-    // Filename recognition is not constant: the same source Arc may be named
-    // .svgz in one instance and .af in another, which the central router treats differently.
-    let name_key = *blake3::hash(name.as_bytes()).as_bytes();
-    if !sources.knows_svg(&bytes, &name_key) && !svg_input(&name, &bytes) {
-        // Keep this exact authorized source snapshot and its decision through strict fallback.
-        return render_in_with_source(doc, sm, &JobCtx::new(), Some((name, bytes, false))).map(|surface| (surface, Vec::new()));
+    if !photocraft_io::svg::is_svg(&bytes) {
+        // Keep the same source snapshot for fallback, including authorized linked reads.
+        return render_in_with_source(doc, sm, &JobCtx::new(), Some((name, bytes))).map(|surface| (surface, Vec::new()));
     }
+    let name_key = *blake3::hash(name.as_bytes()).as_bytes();
     if !unapplied_filters(sm).is_empty() {
         return Err(other("the smart object has unsupported visible filters"));
     }
@@ -501,55 +481,6 @@ pub(crate) fn render_with_warnings_using(sm: &SmartObject, sources: &mut Warning
     Ok((Some(apply_smart_filters(&placed, sm, doc.bounds())?), warnings))
 }
 
-/// A typed stage domain keeps successful non-SVG and strict SVG results distinguishable
-/// without probing a compressed source again. Names remain part of format recognition.
-fn stage_domain(base: &StageKey, name: &str, doc: &Document, svg: bool) -> StageKey {
-    let mut hash = blake3::Hasher::new();
-    hash.update(base);
-    hash.update(if svg { b"strict-svg-stage-v2:" } else { b"non-svg-stage-v2:" });
-    hash.update(blake3::hash(name.as_bytes()).as_bytes());
-    if svg {
-        hash.update(&crate::color_cmds::document_profile(doc).to_bytes());
-    }
-    *hash.finalize().as_bytes()
-}
-
-struct CachedStages {
-    placed_key: StageKey,
-    keys: Vec<StageKey>,
-    hit: Option<(usize, Stage)>,
-}
-
-fn stage_candidate(placed_key: StageKey, filters: &[&SmartFilter], mask: Option<&photocraft_doc::LayerMask>) -> CachedStages {
-    let keys: Vec<_> = filters
-        .iter()
-        .scan(placed_key, |key, filter| {
-            *key = stack_cache::filter_key(key, filter, mask);
-            Some(*key)
-        })
-        .collect();
-    let hit = keys
-        .iter()
-        .enumerate()
-        .rev()
-        .find_map(|(index, key)| stack_cache::get(key).map(|stage| (index + 1, stage)))
-        .or_else(|| stack_cache::get(&placed_key).map(|stage| (0, stage)));
-    CachedStages { placed_key, keys, hit }
-}
-
-fn select_stage_domain(doc: &Document, sm: &SmartObject, name: &str, bytes: &[u8], filters: &[&SmartFilter], known: Option<bool>) -> (CachedStages, bool) {
-    let base = stack_cache::placed_key(bytes, doc.pixel_format(), sm, doc.bounds());
-    let ordinary = stage_candidate(stage_domain(&base, name, doc, false), filters, sm.filter_mask.as_ref());
-    if known == Some(false) || (known.is_none() && ordinary.hit.is_some()) {
-        return (ordinary, false);
-    }
-    let svg = stage_candidate(stage_domain(&base, name, doc, true), filters, sm.filter_mask.as_ref());
-    if known == Some(true) || svg.hit.is_some() {
-        return (svg, true);
-    }
-    if svg_input(name, bytes) { (svg, true) } else { (ordinary, false) }
-}
-
 /// [`render`], reporting progress per smart filter to `ctx` and stopping between filters once it
 /// is cancelled. Gives the same pixels as [`apply_smart_filters`] on the placed source, but
 /// starts from the deepest stage of the stack already rendered (see [`stack_cache`]).
@@ -557,43 +488,47 @@ pub(super) fn render_in(doc: &Document, sm: &SmartObject, ctx: &JobCtx) -> Resul
     render_in_with_source(doc, sm, ctx, None)
 }
 
-fn render_in_with_source(doc: &Document, sm: &SmartObject, ctx: &JobCtx, known: Option<(String, Arc<Vec<u8>>, bool)>) -> Result<Option<Surface>> {
-    // Stored filters can come from a file or another layer. Check before looking up cached
-    // stages too: a trusted UI render may have populated this process-wide cache earlier.
+fn render_in_with_source(doc: &Document, sm: &SmartObject, ctx: &JobCtx, snapshot: Option<(String, Arc<Vec<u8>>)>) -> Result<Option<Surface>> {
+    // A trusted UI render may have populated these stages. Check authority even on a hit.
     for filter in sm.smart_filters.iter().filter(|f| sm.filters_enabled && f.visible) {
         crate::jobs::authorize_render_command(&filter.command, &filter.params)?;
     }
-    let (name, original, kind) = match known {
-        Some((name, bytes, kind)) => (name, bytes, Some(kind)),
-        None => {
-            let Some((name, bytes)) = source_bytes(&doc.metadata, &sm.source) else { return Ok(None) };
-            (name, bytes, None)
-        }
-    };
+    let Some((name, original)) = snapshot.or_else(|| source_bytes(&doc.metadata, &sm.source)) else { return Ok(None) };
     let bytes = display_source(sm, &original);
-    let canvas = doc.bounds();
-    let filters: Vec<&SmartFilter> = sm.smart_filters.iter().filter(|filter| sm.filters_enabled && filter.visible).collect();
-    // A changed native preview is a distinct source and cannot reuse the original's classification.
-    let kind = if Arc::ptr_eq(&bytes, &original) { kind } else { None };
-    let (CachedStages { placed_key, keys, hit }, is_svg) = select_stage_domain(doc, sm, &name, &bytes, &filters, kind);
-    let cached_placement = hit.as_ref().filter(|(done, _)| *done == 0).map(|(_, stage)| stage.clone());
+    let (fmt, canvas) = (doc.pixel_format(), doc.bounds());
+    // Plain SVG uses the original strict vector path. Gzip sources use ordinary
+    // file import and native-size pixels, as existing saved objects expect.
+    let is_svg = photocraft_io::svg::is_svg(&bytes);
+    let mut h = blake3::Hasher::new();
+    h.update(b"smart-placement-v3:");
+    h.update(&stack_cache::placed_key(&bytes, fmt, sm, canvas));
+    h.update(blake3::hash(name.as_bytes()).as_bytes());
+    if is_svg {
+        h.update(&crate::color_cmds::document_profile(doc).to_bytes());
+    }
+    let placed_key: StageKey = *h.finalize().as_bytes();
     let placed = || -> Result<Stage> {
-        if let Some(stage) = &cached_placement {
-            return Ok(stage.clone());
-        }
         if let Some(stage) = stack_cache::get(&placed_key) {
             return Ok(stage);
         }
         let surface = place_with_svg(&name, &bytes, doc, sm, is_svg, &mut |bytes, scale| svg_source_image_in(bytes, doc, scale))?;
-        // Edge pixels repeat at the canvas ∪ placed-content edge, as for layer filters.
         let stage = Stage { extent: canvas.union(&surface.content_bounds()), surface };
         stack_cache::put(placed_key, &stage);
         Ok(stage)
     };
+    let filters: Vec<&SmartFilter> = sm.smart_filters.iter().filter(|f| sm.filters_enabled && f.visible).collect();
     if filters.is_empty() {
         return Ok(Some(placed()?.surface));
     }
-    let (done, mut cur) = match hit {
+    let keys: Vec<StageKey> = filters
+        .iter()
+        .scan(placed_key, |key, f| {
+            *key = stack_cache::filter_key(key, f, sm.filter_mask.as_ref());
+            Some(*key)
+        })
+        .collect();
+    let deepest = keys.iter().enumerate().rev().find_map(|(i, key)| stack_cache::get(key).map(|stage| (i + 1, stage)));
+    let (done, mut cur) = match deepest {
         Some(hit) => hit,
         None => (0, placed()?),
     };

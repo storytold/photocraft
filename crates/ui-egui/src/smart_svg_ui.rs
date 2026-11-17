@@ -4,9 +4,15 @@ use base64::Engine as _;
 use std::sync::Arc;
 use std::time::Duration;
 
+use craft::ui::contract::Bind;
+use craft::ui::dialog::DialogId;
+use craft::ui::patterns::form_dialogs::{DialogFields, HostedParamDialog, Param, ParamDialog, ParamKind, ParamResult};
+use craft::ui::runtime::env::Label;
+use craft::ui::runtime::requests::PathKind;
 use photocraft_doc::{DocId, LayerContent, LayerId, SmartSource};
 use serde_json::{Value, json};
 
+use crate::dialogs::params::ParamFamily;
 use crate::{ExternalSvgEditor, ExternalSvgSession, PhotocraftApp};
 
 const MAX_SESSIONS: usize = 8;
@@ -47,6 +53,8 @@ pub(crate) struct State {
     pending: Option<Pending>,
     editing: Vec<Editing>,
     internal_once: bool,
+    /// The editor-choice dialog opened for `pending` (see [`host`]).
+    dialog: Option<DialogId>,
 }
 
 impl State {
@@ -214,137 +222,143 @@ fn confirm(app: &mut PhotocraftApp) -> Result<Value, String> {
     Ok(json!({"externalEditor": true}))
 }
 
-/// Ask the user for one local executable; the answer applies only if the same pending target
-/// is still open. Executable validation happens when the session starts.
-fn choose_program(app: &mut PhotocraftApp) -> Result<Value, String> {
-    let pending = app.smart_svg.pending.as_ref().ok_or("The SVG editor choice was cancelled")?;
-    let doc = pending.target.doc;
-    let layer = pending.target.layer;
-    let contents_id = pending.target.contents_id.clone();
-    app.ask_file(
-        crate::file_dialog::FileDialogRequest::Open {
-            multiple: false,
-            initial_dir: None,
-            extensions: if cfg!(windows) { Some(vec!["exe".into()]) } else { None },
-        },
-        move |app, answer| {
-            let crate::file_dialog::FileDialogAnswer::Paths(paths) = answer else { return Err("Choose a local editor executable".into()) };
-            if paths.len() != 1 {
-                return Err("Choose one editor executable".into());
-            }
-            let path = paths.into_iter().next().ok_or("No editor executable selected")?;
-            if let Some(pending) = app
-                .smart_svg
-                .pending
-                .as_mut()
-                .filter(|pending| pending.target.doc == doc && pending.target.layer == layer && pending.target.contents_id == contents_id)
-            {
-                pending.program = Some(path);
-                pending.editor = Editor::Program;
-            } else {
-                return Err("The SVG editor choice was cancelled".into());
-            }
-            Ok(json!({"editorSelected": true}))
-        },
-    )
+/// The key of the editor-choice dialog.
+const KEY: &str = "layer.smartObjects.editSvg";
+
+/// Each choice with its id in the dialog's `editor` field and its label.
+const CHOICES: [(Editor, &str, &str); 4] = [
+    (Editor::VectorCraft, "vectorCraft", "VectorCraft"),
+    (Editor::Illustrator, "illustrator", "Adobe Illustrator"),
+    (Editor::Program, "program", "Other application"),
+    (Editor::Internal, "internal", "PhotoCraft (internal editor)"),
+];
+
+fn editor_id(editor: Editor) -> &'static str {
+    CHOICES.iter().find(|(choice, ..)| *choice == editor).map_or("vectorCraft", |&(_, id, _)| id)
 }
 
-/// Draw the editor-choice dialog while a choice is pending. The internal editor is offered
-/// only for SVG; "Stop syncing" ends a running session for the same contents.
-pub(crate) fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    let file_dialog_open = app.file_dialog_open();
-    let can_pick = app.services.file_dialog.is_some() && !file_dialog_open;
-    let Some(pending) = app.smart_svg.pending.as_mut() else { return };
-    let mut ok = false;
-    let mut cancel = false;
-    let mut choose = false;
-    let mut stop = false;
-    let running = app.smart_svg.editing.iter().any(|edit| edit.target.doc == pending.target.doc && edit.target.contents_id == pending.target.contents_id);
-    let modal = egui::Modal::new(egui::Id::unique("smart-svg-editor")).show(ctx, |ui| {
-        let tokens = crate::theme::Tokens::get(ctx);
-        ui.set_max_width(470.0);
-        ui.label(
-            egui::RichText::new(tr(if pending.target.extension == "svg" { "Edit SVG Smart Object" } else { "Edit Vector Smart Object" }))
-                .font(crate::theme::semibold(15.0)),
-        );
-        ui.add_space(4.0);
-        crate::widgets::hairline(ui);
-        ui.add_space(8.0);
-        ui.label(tr(if pending.target.extension == "svg" {
-            "Choose the application used to edit this SVG:"
-        } else {
-            "Choose the application used to edit this vector:"
-        }));
-        if pending.target.extension != "svg" {
-            ui.label(tr(
-                "AI/PDF/EPS files keep their original format. Unsupported features may change when saved. Original contents remain available through Undo.",
-            ));
-        }
-        for (choice, label) in [
-            (Editor::VectorCraft, "VectorCraft"),
-            (Editor::Illustrator, "Adobe Illustrator"),
-            (Editor::Program, "Other application"),
-            (Editor::Internal, "PhotoCraft (internal editor)"),
-        ] {
-            // The desktop shell discovers Illustrator installations only on Windows and macOS.
-            if choice == Editor::Illustrator && !cfg!(any(windows, target_os = "macos")) {
-                continue;
-            }
-            let available = pending.target.extension == "svg" || choice != Editor::Internal;
-            ui.add_enabled_ui(available, |ui| ui.radio_value(&mut pending.editor, choice, tr(label)));
-        }
-        if pending.editor == Editor::Program {
-            if let Some(program) = &pending.program {
-                let name = std::path::Path::new(program).file_name().and_then(|s| s.to_str()).unwrap_or(program);
-                ui.label(name);
-            }
-            choose = ui.add_enabled(can_pick, egui::Button::new(tr("Choose executable…"))).clicked();
-        }
-        ui.add_space(8.0);
-        ui.label(
-            egui::RichText::new(tr(if pending.target.extension == "svg" {
-                "Save to the opened SVG file. Each saved change becomes one undo step in PhotoCraft."
-            } else {
-                "Save to the opened original-format file. Each saved change becomes one undo step in PhotoCraft."
-            }))
-            .small()
-            .color(tokens.text_dim),
-        );
-        ui.label(egui::RichText::new(tr("Updates wait while another document or an editing dialog is active.")).small().color(tokens.text_dim));
-        if running {
-            stop = ui.button(tr("Stop syncing this Smart Object")).clicked();
-        }
-        ui.add_space(12.0);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let enabled = !file_dialog_open && (pending.editor != Editor::Program || pending.program.is_some());
-            ok = ui.add_enabled_ui(enabled, |ui| crate::widgets::primary_button(ui, "OK", 84.0)).inner.clicked();
-            cancel = crate::widgets::secondary_button(ui, "Cancel", 84.0).clicked();
-        });
+fn editor_from(id: Option<&str>) -> Editor {
+    CHOICES.iter().find(|(_, choice, _)| Some(*choice) == id).map_or(Editor::VectorCraft, |(editor, ..)| *editor)
+}
+
+/// The dialog's rows. The internal editor is offered only for SVG, and Illustrator only where
+/// the desktop shell discovers installations (Windows and macOS).
+fn params(svg: bool) -> Vec<Param> {
+    let options = CHOICES
+        .iter()
+        .filter(|(editor, ..)| match editor {
+            Editor::Illustrator => cfg!(any(windows, target_os = "macos")),
+            Editor::Internal => svg,
+            _ => true,
+        })
+        .map(|&(_, id, label)| (id.to_owned(), Label::from(tr(label))))
+        .collect();
+    let choose = tr(if svg { "Choose the application used to edit this SVG:" } else { "Choose the application used to edit this vector:" });
+    let mut rows = vec![Param::read_only_text("choose", Label::Empty, Label::from(choose)).full_width()];
+    if !svg {
+        let note = "AI/PDF/EPS files keep their original format. Unsupported features may change when saved. Original contents remain available through Undo.";
+        rows.push(Param::read_only_text("nativeNote", Label::Empty, Label::from(tr(note))).full_width());
+    }
+    rows.push(Param::new("editor", Label::from(tr("Editor")), ParamKind::radio(options, Some("vectorCraft".to_owned()))));
+    let extensions: &[&str] = if cfg!(windows) { &["exe"] } else { &[] };
+    rows.push(
+        Param::new("program", Label::from(tr("Executable")), ParamKind::text("")).browse(PathKind::open_file(extensions)).visible_when("editor", "program"),
+    );
+    let saved = tr(if svg {
+        "Save to the opened SVG file. Each saved change becomes one undo step in PhotoCraft."
+    } else {
+        "Save to the opened original-format file. Each saved change becomes one undo step in PhotoCraft."
     });
-    let owns_keys = modal.is_top_modal || ctx.memory(|memory| memory.top_modal_layer().is_none());
-    cancel |=
-        modal.should_close() || (owns_keys && !modal.any_popup_open && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)));
-    if stop || cancel {
-        if stop && let Some(pending) = app.smart_svg.pending.as_ref() {
-            app.smart_svg.editing.retain(|edit| edit.target.doc != pending.target.doc || edit.target.contents_id != pending.target.contents_id);
+    rows.push(Param::read_only_text("savedNote", Label::Empty, Label::from(saved)).full_width());
+    rows.push(
+        Param::read_only_text("waitNote", Label::Empty, Label::from(tr("Updates wait while another document or an editing dialog is active."))).full_width(),
+    );
+    rows
+}
+
+/// The editor-choice dialog over `pending`'s choice. "Stop syncing" is offered while an editor
+/// session for the same contents runs (`running`).
+fn dialog(ctx: &egui::Context, pending: &Pending, running: bool) -> HostedParamDialog {
+    let svg = pending.target.extension == "svg";
+    let fields = DialogFields::from_pairs([("editor", editor_id(pending.editor).to_owned()), ("program", pending.program.clone().unwrap_or_default())]);
+    HostedParamDialog::new(ctx, KEY, fields, move |fields| {
+        let title = tr(if svg { "Edit SVG Smart Object" } else { "Edit Vector Smart Object" });
+        let dialog = ParamDialog::new(KEY, Label::from(title), params(svg)).values(Bind::bound(fields));
+        if running { dialog.extra_buttons(vec![(STOP_SYNC.to_owned(), Label::from(tr("Stop syncing this Smart Object")))]) } else { dialog }
+    })
+}
+
+/// The id of the "Stop syncing" footer button.
+const STOP_SYNC: &str = "stopSync";
+
+/// Whether an editor session runs for the contents `pending` would edit.
+fn session_running(app: &PhotocraftApp, pending: &Pending) -> bool {
+    app.smart_svg.editing.iter().any(|edit| edit.target.doc == pending.target.doc && edit.target.contents_id == pending.target.contents_id)
+}
+
+/// Once per pass: opens the editor-choice dialog while a choice is pending, and closes it when the
+/// choice was cleared elsewhere (the document went away, a session ended).
+pub(crate) fn host(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let open = app.smart_svg.dialog.filter(|id| app.framework.dialogs.stack().ids().any(|shown| shown == *id));
+    match (app.smart_svg.pending.as_ref(), open) {
+        (Some(pending), None) => {
+            let dialog = dialog(ctx, pending, session_running(app, pending));
+            app.smart_svg.dialog = app.framework.dialogs.open_unless_open(dialog).ok();
         }
-        app.smart_svg.pending = None;
-        return;
-    }
-    if choose {
-        if let Err(error) = choose_program(app) {
-            report(app, error);
+        (None, Some(id)) => {
+            app.framework.dialogs.cancel_by_id(ctx, id);
+            app.smart_svg.dialog = None;
         }
-        return;
+        (None, None) => app.smart_svg.dialog = None,
+        (Some(_), Some(_)) => {}
     }
-    let enter = owns_keys && !modal.any_popup_open && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
-    let ready = !app.file_dialog_open() && app.smart_svg.pending.as_ref().is_some_and(|pending| pending.editor != Editor::Program || pending.program.is_some());
-    if ready
-        && (ok || enter)
-        && let Err(error) = confirm(app)
-    {
+}
+
+/// The `PARAM_FAMILIES` row of the editor-choice dialog.
+pub(crate) const fn family() -> ParamFamily {
+    ParamFamily { check: Some(check), footer: Some(footer), cancel: Some(cancel), ..ParamFamily::new(owns, run) }
+}
+
+fn owns(key: &str) -> bool {
+    key == KEY
+}
+
+/// Refuses OK for "Other application" until an executable is chosen.
+fn check(_app: &mut PhotocraftApp, result: &ParamResult) -> Result<(), Label> {
+    let program = result.fields.text("program").unwrap_or_default();
+    if editor_from(result.fields.text("editor")) == Editor::Program && program.is_empty() {
+        return Err(Label::from(tr("Choose an editor executable first")));
+    }
+    Ok(())
+}
+
+/// OK: the dialog's choice becomes the pending one and is confirmed.
+fn run(app: &mut PhotocraftApp, _ctx: &egui::Context, result: ParamResult) {
+    app.smart_svg.dialog = None;
+    let Some(pending) = app.smart_svg.pending.as_mut() else { return };
+    pending.editor = editor_from(result.fields.text("editor"));
+    pending.program = result.fields.text("program").filter(|program| !program.is_empty()).map(str::to_owned);
+    if let Err(error) = confirm(app) {
         report(app, error);
     }
+}
+
+/// Cancel, Escape, the close box, or a parent closing over the dialog: no choice, nothing launched.
+fn cancel(app: &mut PhotocraftApp, _ctx: &egui::Context, _id: DialogId) {
+    app.smart_svg.pending = None;
+    app.smart_svg.dialog = None;
+}
+
+/// The footer buttons: "Stop syncing" ends the running sessions for the same contents and drops the choice.
+fn footer(app: &mut PhotocraftApp, ctx: &egui::Context, id: DialogId, action: &str) {
+    if action != STOP_SYNC {
+        return;
+    }
+    if let Some(pending) = app.smart_svg.pending.take() {
+        app.smart_svg.editing.retain(|edit| edit.target.doc != pending.target.doc || edit.target.contents_id != pending.target.contents_id);
+    }
+    app.smart_svg.dialog = None;
+    app.framework.dialogs.cancel_by_id(ctx, id);
 }
 
 /// True only when no save, dialog, mask/channel target, transform, preview or drag is in
@@ -364,22 +378,19 @@ fn safe_to_apply(app: &PhotocraftApp) -> bool {
                 && st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::Composite
                 && app.session.job_on(st.doc.id).is_none()
         })
-        && app.ui.dialogs.is_empty()
-        && app.ui.layers_panel_dialog.is_none()
+        && !app.dialog_open()
         && app.discard.is_none()
-        && app.camera_raw.is_none()
         && !app.smart_svg.modal_open()
         && app.ui.transform.is_none()
         && app.ui.cam_transform.is_none()
         && app.ui.text_edit.is_none()
         && app.ui.type_transform.is_none()
         && app.ui.symmetry_transform.is_none()
-        && app.ui.stroke_editor.is_none()
-        && app.ui.direct_selection.drag.is_none()
-        && app.ui.corner_radius.is_none()
+        && !app.ui.shape_stroke_open
+        && !crate::direct_select::editing(app)
+        && !crate::shape_controls::editing(app)
         && !app.distort.active()
         && crate::distort_ui::modal_workspace(app).is_none()
-        && app.wide_angle.is_none()
         && app.color_range.is_none()
         && app.text_style_preview.is_none()
         && !crate::crop_ui::pending(app)
@@ -393,8 +404,7 @@ fn safe_to_apply(app: &PhotocraftApp) -> bool {
         && app.shape_fill_preview.is_none()
         && app.solid_fill_preview.is_none()
         && app.live_stroke.is_none()
-        && app.drag.is_none()
-        && !app.press_stroke
+        && !crate::canvas::tools::in_gesture(app)
 }
 
 /// Poll platform snapshots without changing the active document or selection.

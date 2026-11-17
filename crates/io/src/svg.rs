@@ -24,8 +24,6 @@ use photocraft_raster::Surface;
 
 use crate::{ImportResult, IoError};
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
-mod decoder_edges;
 #[cfg(test)]
 mod xml_reuse_tests;
 
@@ -99,8 +97,13 @@ fn fonts() -> Arc<usvg::fontdb::Database> {
         for f in photocraft_text::CRAFT_FONTS {
             db.load_font_data(f.bytes.to_vec());
         }
+        // The same installed files the shaper registers: one scan serves both.
         #[cfg(not(target_arch = "wasm32"))]
-        db.load_system_fonts();
+        {
+            for path in photocraft_text::fonts::installed_font_files() {
+                let _ = db.load_font_file(path);
+            }
+        }
         resolve_generic_families(&mut db, system_generic_family);
         Arc::new(db)
     })
@@ -360,17 +363,17 @@ impl From<ParseFailure> for IoError {
 
 /// Native parsing always reuses the complete-operation worker, including private probes.
 /// WASM has no worker stack, so shared outer/embedded XML depth is guarded inline.
-fn parse_at_depth<T: Send>(depth: usize, isolated: bool, parse: impl FnOnce(bool) -> Result<T, IoError> + Send) -> Result<T, ParseFailure> {
+fn parse_at_depth<T: Send>(depth: usize, parse: impl FnOnce() -> Result<T, IoError> + Send) -> Result<T, ParseFailure> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let _ = (depth, isolated);
+        let _ = depth;
         // The nested Result distinguishes a worker failure from a normal parser error.
-        on_svg_stack(|| Ok(parse(true))).map_err(ParseFailure::Isolation)?.map_err(ParseFailure::Decode)
+        on_svg_stack(|| Ok(parse())).map_err(ParseFailure::Isolation)?.map_err(ParseFailure::Decode)
     }
     #[cfg(target_arch = "wasm32")]
     {
-        if isolated || depth <= INLINE_XML_DEPTH {
-            return parse(isolated).map_err(ParseFailure::Decode);
+        if depth <= INLINE_XML_DEPTH {
+            return parse().map_err(ParseFailure::Decode);
         }
         Err(ParseFailure::Isolation(IoError::Svg(format!(
             "SVG parsing deeper than {INLINE_XML_DEPTH} levels requires the native app's isolated parser; simplify the drawing or open it in PhotoCraft desktop"
@@ -446,7 +449,7 @@ fn parse_with_image_limit(bytes: &[u8], fonts: fn() -> Arc<usvg::fontdb::Databas
     let text = std::str::from_utf8(&xml).map_err(|_| IoError::Svg("the SVG is not valid UTF-8".into()))?;
     let limits = tree_limits(MAX_XML_DEPTH, max_image_pixels);
     let image_resolver = craft_svg::tree::ValidatedImageResolver::new(limits);
-    parse_at_depth(depth, false, |_isolated| {
+    parse_at_depth(depth, || {
         let tree = guarded_parse(|| {
             let checked = craft_svg::tree::preflight(text, &limits).map_err(svg_parse_error)?;
             image_resolver.parse_preflight(checked, parse_options(fontdb)).map_err(svg_parse_error)
@@ -514,13 +517,7 @@ fn image_error(budget: &Mutex<ImageBudget>, error: impl Into<String>) {
 }
 
 /// Parse one bounded SVG with the shared tree parser and its format-neutral image resolver.
-fn parse_image_bounded_with(
-    bytes: &[u8],
-    budget: Arc<Mutex<ImageBudget>>,
-    xml_left: usize,
-    fonts: fn() -> Arc<usvg::fontdb::Database>,
-    isolated: bool,
-) -> Result<usvg::Tree, IoError> {
+fn parse_image_bounded_with(bytes: &[u8], budget: Arc<Mutex<ImageBudget>>, fonts: fn() -> Arc<usvg::fontdb::Database>) -> Result<usvg::Tree, IoError> {
     let overrun = |error: IoError| {
         image_error(&budget, error.to_string());
         error
@@ -529,12 +526,11 @@ fn parse_image_bounded_with(
         return Err(overrun(IoError::Svg("embedded SVG source exceeds the 16 MiB byte limit".into())));
     }
     let xml = inflate_with_limit(bytes, MAX_BOUNDED_SVG_BYTES).map_err(overrun)?;
-    let nesting = nesting_depth(&xml, xml_left)?;
-    if nesting > xml_left {
-        return Err(IoError::Svg(format!("elements are nested more than {xml_left} levels deep")));
+    let depth = nesting_depth(&xml, MAX_XML_DEPTH)?;
+    if depth > MAX_XML_DEPTH {
+        return Err(IoError::Svg(format!("elements are nested more than {MAX_XML_DEPTH} levels deep")));
     }
-    let shared_depth = MAX_XML_DEPTH.saturating_sub(xml_left).saturating_add(nesting);
-    parse_at_depth(shared_depth, isolated, |_isolated| {
+    parse_at_depth(depth, || {
         let has_text = xml.windows(4).any(|w| w == b"text");
         let fontdb = if has_text { fonts() } else { Arc::new(usvg::fontdb::Database::new()) };
         if has_text && fontdb.faces().next().is_none() {
@@ -544,13 +540,6 @@ fn parse_image_bounded_with(
         let text = std::str::from_utf8(&xml).map_err(|_| IoError::Svg("the SVG is not valid UTF-8".into()))?;
         let limits = resolver.limits();
         let tree = guarded_parse(|| {
-            // Private callers may reserve less stack than the context's outer
-            // policy. Check expanded references too; lexical depth alone misses
-            // a shallow chain of <use> elements. Public imports use the full
-            // allowance and keep the single checked-DOM conversion path.
-            if xml_left < MAX_XML_DEPTH {
-                craft_svg::tree::preflight(text, &tree_limits(xml_left, limits.embedded_raster_pixels)).map_err(svg_parse_error)?;
-            }
             let checked = craft_svg::tree::preflight(text, &limits).map_err(svg_parse_error)?;
             resolver.parse_preflight(checked, parse_options(fontdb)).map_err(svg_parse_error)
         })??;
@@ -563,7 +552,7 @@ fn parse_image_bounded_with(
         // Resource overruns fail bounded renders; non-strict renders may omit a child
         // whose XML depth exceeds the allowance left by the outer drawing.
         if usage.raster_limit_images > 0 {
-            counter.error.get_or_insert_with(|| "embedded SVG raster images exceed the decoded pixel budget".into());
+            counter.error.get_or_insert_with(|| "embedded SVG raster images exceed the encoded byte or decoded pixel budget".into());
         } else if usage.svg_resource_limit_images > 0 || (counter.strict && usage.svg_limit_images > 0) {
             counter.error.get_or_insert_with(|| "embedded SVG images exceed the byte or nesting budget".into());
         } else if counter.strict && (usage.invalid_raster_images > 0 || usage.invalid_svg_images > 0) {
@@ -693,7 +682,7 @@ fn parse_bounded_work_with(bytes: &[u8], max_pixels: u64, strict: bool, fonts: f
         error: None,
         resolver: Arc::new(craft_svg::tree::ValidatedImageResolver::new(tree_limits(MAX_XML_DEPTH, max_pixels.min(MAX_RASTER_PIXELS)))),
     }));
-    let tree = parse_image_bounded_with(bytes, budget.clone(), MAX_XML_DEPTH, fonts, false)?;
+    let tree = parse_image_bounded_with(bytes, budget.clone(), fonts)?;
     let counter = budget.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let decoded = max_pixels.min(MAX_RASTER_PIXELS).saturating_sub(counter.pixels);
     Ok(ParsedWork {

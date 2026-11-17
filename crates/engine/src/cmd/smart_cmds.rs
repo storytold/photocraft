@@ -70,7 +70,7 @@ pub fn encode_source(doc: &Document) -> Result<Vec<u8>> {
 
 /// Decodes smart-object contents (a `.pcraft` bundle, PSD/PSB, or any flat image format).
 pub fn decode_source(file_name: &str, bytes: &[u8]) -> Result<Document> {
-    decode_source_classified(file_name, bytes, photocraft_io::is_svg_input(file_name, bytes))
+    decode_source_classified(file_name, bytes, photocraft_io::svg::is_svg(bytes))
 }
 
 /// Reuse the central format decision made by this render operation.
