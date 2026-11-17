@@ -1,11 +1,39 @@
 //! Free Transform with several layers selected (#6501): ⌘T frames them all and the box moves
 //! every one of them, type and pixels alike, in one history step.
 
+use craft::draw::ui::transform::{Interpolation, TransformEdit};
 use photocraft_doc::{LayerContent, LayerId};
 use photocraft_geom::Rect;
 use serde_json::json;
 
 use crate::PhotocraftApp;
+
+/// The open box's source frame as `[x0, y0, x1, y1]`.
+fn frame_of(app: &PhotocraftApp) -> [f64; 4] {
+    let r = app.ui.transform.as_ref().expect("a box is open").session.rect();
+    [r.x0, r.y0, r.x1, r.y1]
+}
+
+/// The open box's corners.
+fn quad_of(app: &PhotocraftApp) -> [[f64; 2]; 4] {
+    app.ui.transform.as_ref().expect("a box is open").session.quad().map(|p| [p.x, p.y])
+}
+
+/// Sets the open box's corners; the reference point stays.
+fn set_quad(app: &mut PhotocraftApp, quad: [[f64; 2]; 4]) {
+    app.ui.transform.as_mut().expect("a box is open").edit_box(|b| b.quad = quad.map(|[x, y]| (x, y).into()));
+}
+
+/// Maps each corner of the open box through `f`.
+fn map_quad(app: &mut PhotocraftApp, f: impl Fn([f64; 2]) -> [f64; 2]) {
+    let quad = quad_of(app).map(f);
+    set_quad(app, quad);
+}
+
+/// Resamples the open box with nearest neighbour so the blocks keep their edges.
+fn nearest(app: &mut PhotocraftApp) {
+    app.ui.transform.as_mut().expect("a box is open").session.apply(TransformEdit::Interpolation(Interpolation::NearestNeighbor), 0.0);
+}
 
 /// A 200 × 200 document: "Paint" with a red block at x 10..50, y 10..30, and a type layer over it.
 /// Both are selected with Paint active, as after ⌘-clicking Paint in the Layers panel (the
@@ -31,7 +59,8 @@ fn bounds(app: &PhotocraftApp, id: LayerId) -> Rect {
 }
 
 fn free_transform(app: &mut PhotocraftApp) {
-    crate::menus::invoke(app, &egui::Context::default(), "edit.freeTransform", json!({})).unwrap();
+    let app_ctx = app.ctx().clone();
+    crate::menus::invoke(app, &app_ctx, "edit.freeTransform", json!({})).unwrap();
 }
 
 #[test]
@@ -39,20 +68,19 @@ fn free_transform_frames_every_selected_layer_and_moves_them_all() {
     let (mut app, paint, text) = app();
     let (p0, t0) = (bounds(&app, paint), bounds(&app, text));
     free_transform(&mut app);
-    let t = app.ui.transform.as_ref().unwrap();
+    assert!(app.ui.transform.is_some());
     let both = p0.union(&t0);
-    assert_eq!(t.rect, [both.x0, both.y0, both.x1, both.y1].map(f64::from), "the box frames both layers");
+    assert_eq!(frame_of(&app), [both.x0, both.y0, both.x1, both.y1].map(f64::from), "the box frames both layers");
+    let t = app.ui.transform.as_ref().unwrap();
     assert_eq!((t.layer, t.layers.clone()), (paint.0, vec![paint.0, text.0]));
     // Both move with the box: neither stays behind on the canvas under it.
     let pv = app.transform_preview.as_ref().unwrap();
     assert!(!pv.doc.layer(paint).unwrap().visible && !pv.doc.layer(text).unwrap().visible);
     let steps = app.session.active().unwrap().history.past_len();
     // A quarter turn about the box's centre.
-    let r = t.rect;
+    let r = frame_of(&app);
     let (cx, cy) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
-    if let Some(t) = app.ui.transform.as_mut() {
-        t.quad = t.quad.map(|[x, y]| [cx - (y - cy), cy + (x - cx)]);
-    }
+    map_quad(&mut app, |[x, y]| [cx - (y - cy), cy + (x - cx)]);
     crate::transform_tool::commit(&mut app);
     assert_eq!(app.ui.status, "");
     assert!(app.ui.transform.is_none());
@@ -76,9 +104,7 @@ fn with_a_selection_the_pixels_are_lifted_and_the_type_moves_whole() {
     assert!(under.visible, "Paint stays, less the selected pixels");
     assert_eq!(under.surface().unwrap().content_bounds(), Rect::new(30, 10, 50, 30));
     assert!(!pv.doc.layer(text).unwrap().visible, "the type moves whole (#2630)");
-    if let Some(t) = app.ui.transform.as_mut() {
-        t.quad = t.quad.map(|[x, y]| [x, y + 100.0]);
-    }
+    map_quad(&mut app, |[x, y]| [x, y + 100.0]);
     crate::transform_tool::commit(&mut app);
     assert_eq!(app.ui.status, "");
     let st = app.session.active().unwrap();
@@ -91,9 +117,7 @@ fn cancel_leaves_every_layer_as_it_was() {
     let (mut app, paint, text) = app();
     let before = app.session.active().unwrap().doc.clone();
     free_transform(&mut app);
-    if let Some(t) = app.ui.transform.as_mut() {
-        t.quad = t.quad.map(|[x, y]| [x + 20.0, y]);
-    }
+    map_quad(&mut app, |[x, y]| [x + 20.0, y]);
     crate::transform_tool::cancel(&mut app);
     assert!(app.ui.transform.is_none());
     let st = app.session.active().unwrap();
@@ -134,11 +158,11 @@ fn the_warp_button_keeps_the_box_when_the_active_layer_is_type() {
     app.run("layer.select", json!({"layer": text.0, "mode": "add"})).unwrap();
     assert_eq!(app.session.active().unwrap().active_layer, Some(text));
     free_transform(&mut app);
-    let before = app.ui.transform.as_ref().map(|t| (t.rect, t.quad));
+    let before = (frame_of(&app), quad_of(&app));
     crate::transform_tool::enter_warp(&mut app, &egui::Context::default());
     let t = app.ui.transform.as_ref().unwrap();
-    assert!(t.warp.is_none(), "no warp on several layers");
-    assert_eq!(Some((t.rect, t.quad)), before);
+    assert!(t.session.warp().is_none(), "no warp on several layers");
+    assert_eq!((frame_of(&app), quad_of(&app)), before);
 }
 
 #[test]
@@ -170,10 +194,8 @@ fn picking_another_layer_applies_the_box_to_all_of_them() {
     let (mut app, paint, text) = app();
     let (p0, t0) = (bounds(&app, paint), bounds(&app, text));
     free_transform(&mut app);
-    if let Some(t) = app.ui.transform.as_mut() {
-        t.interpolation = "nearest".into();
-        t.quad = t.quad.map(|[x, y]| [x + 10.0, y]);
-    }
+    nearest(&mut app);
+    map_quad(&mut app, |[x, y]| [x + 10.0, y]);
     app.run("layer.select", json!({"layer": text.0})).unwrap();
     crate::transform_tool::end_if_left(&mut app);
     assert!(app.ui.transform.is_none());
@@ -196,24 +218,20 @@ fn styles_past_the_frame_move_with_the_box() {
     let (mut app, _, _) = stroked();
     free_transform(&mut app);
     // The frame is the content's (the block starts at x 10); its stroke reaches 6 px past it.
-    assert_eq!(app.ui.transform.as_ref().unwrap().rect[0], 10.0, "the handles stay on the content");
+    assert_eq!(frame_of(&app)[0], 10.0, "the handles stay on the content");
     let (stroke, quad) = crate::transform_tool::moving_texel(&app, [6, 20]);
     assert!(stroke.is_some_and(|c| c.a() > 200 && c.g() > 200), "the stroke left of the block is in the moving pixels: {stroke:?}");
     assert!(quad[0][0] <= 4.0, "and drawn there: {quad:?}");
     // Moving the box carries the texture's own rect with it.
-    if let Some(t) = app.ui.transform.as_mut() {
-        t.quad = t.quad.map(|[x, y]| [x + 50.0, y + 5.0]);
-    }
+    map_quad(&mut app, |[x, y]| [x + 50.0, y + 5.0]);
     let (_, moved) = crate::transform_tool::moving_texel(&app, [6, 20]);
     for (a, b) in quad.iter().zip(&moved) {
         assert!((b[0] - a[0] - 50.0).abs() < 1e-9 && (b[1] - a[1] - 5.0).abs() < 1e-9, "{quad:?} -> {moved:?}");
     }
     // A quarter turn maps the stroke's corner where the frame's map takes it.
-    let r = app.ui.transform.as_ref().unwrap().rect;
+    let r = frame_of(&app);
     let (cx, cy) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
-    if let Some(t) = app.ui.transform.as_mut() {
-        t.quad = crate::transform_tool::corners(r).map(|[x, y]| [cx - (y - cy), cy + (x - cx)]);
-    }
+    set_quad(&mut app, crate::transform_tool::corners(r).map(|[x, y]| [cx - (y - cy), cy + (x - cx)]));
     let (_, turned) = crate::transform_tool::moving_texel(&app, [6, 20]);
     let [x0, y0] = quad[0];
     assert!((turned[0][0] - (cx - (y0 - cy))).abs() < 1e-6 && (turned[0][1] - (cy + (x0 - cx))).abs() < 1e-6, "{turned:?}");
@@ -245,10 +263,8 @@ fn hiding_or_fading_a_moving_layer_shows_in_the_preview_at_once() {
     assert_eq!(crate::transform_tool::moving_texel(&app, p).0.map(|c| c.a()), Some(0), "a hidden layer moves nothing");
     // The commit still transforms it, hidden, like Photoshop.
     let t0 = bounds(&app, text);
-    if let Some(t) = app.ui.transform.as_mut() {
-        t.interpolation = "nearest".into();
-        t.quad = t.quad.map(|[x, y]| [x + 10.0, y]);
-    }
+    nearest(&mut app);
+    map_quad(&mut app, |[x, y]| [x + 10.0, y]);
     crate::transform_tool::commit(&mut app);
     assert_eq!(bounds(&app, text), t0.translate(10, 0));
 }
