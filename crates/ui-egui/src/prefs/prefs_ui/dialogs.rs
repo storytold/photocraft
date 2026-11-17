@@ -144,7 +144,7 @@ impl PrefsDialog {
         if wanted != self.labels {
             doc.relabel(&host.with_lang(wanted));
             self.labels = wanted;
-            self.words = Arc::new(Words::from_i18n(crate::i18n::framework_i18n(), wanted));
+            self.words = Arc::new(Words::from_i18n(Arc::clone(crate::i18n::framework_i18n()), wanted));
         }
     }
 }
@@ -237,7 +237,7 @@ pub fn open_preferences(app: &mut PhotocraftApp, section: &str) {
     state.selected = section.to_string();
     let custom = PrefsCustom::new(app, false);
     let saved_rev = app.session.prefs.rev();
-    let words = Arc::new(Words::from_i18n(crate::i18n::framework_i18n(), host.lang()));
+    let words = Arc::new(Words::from_i18n(Arc::clone(crate::i18n::framework_i18n()), host.lang()));
     app.framework.dialogs.open(PrefsDialog { doc: Some(doc), state, saved_rev, labels: host.lang(), words, custom, pick: None, edits: Vec::new() });
 }
 
