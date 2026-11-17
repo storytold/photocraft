@@ -49,7 +49,7 @@ const PLACE_AFTER: &[(&str, &str)] = &[
 pub struct MenuModel {
     /// [`crate::native_menu::state_hash`] of the state the model was built from.
     state: u64,
-    /// The English label each row was built from, by command id (`rows` hold the labels as shown).
+    /// The English label each row was built from, by [`command_key`] (`rows` hold the labels as shown).
     english: HashMap<(String, String), String>,
     /// The English title of each menu and submenu, by its title as shown.
     english_titles: HashMap<String, String>,
