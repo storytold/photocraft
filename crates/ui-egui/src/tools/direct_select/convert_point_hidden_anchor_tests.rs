@@ -44,12 +44,12 @@ fn mask_doc(tool: Tool) -> (PhotocraftApp, u64) {
 }
 
 fn saved_knot(app: &PhotocraftApp, k: usize) -> photocraft_doc::Knot {
-    app.session.active().unwrap().doc.paths[0].path.subpaths[0].knots[k].clone()
+    app.session.active().unwrap().doc.paths[0].path.subpaths[0].knots[k]
 }
 
 fn mask_knot(app: &PhotocraftApp, k: usize) -> photocraft_doc::Knot {
     let st = app.session.active().unwrap();
-    st.active_layer.and_then(|id| st.doc.layer(id)).unwrap().vector_mask.as_ref().unwrap().path.subpaths[0].knots[k].clone()
+    st.active_layer.and_then(|id| st.doc.layer(id)).unwrap().vector_mask.as_ref().unwrap().path.subpaths[0].knots[k]
 }
 
 /// Both control points sit on the anchor: the handles are retracted, a corner.
