@@ -4,7 +4,7 @@
 //! region scope, the persisted scope settings and the hover sample.
 use egui::{Pos2, pos2, vec2};
 use egui_kittest::Harness;
-use egui_kittest::kittest::{NodeT, Queryable};
+use egui_kittest::kittest::Queryable;
 use photocraft_ui_egui::{PhotocraftApp, camera_raw_ui, control, theme::AppTheme};
 use serde_json::{Value, json};
 
