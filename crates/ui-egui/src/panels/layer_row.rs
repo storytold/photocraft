@@ -422,7 +422,7 @@ fn eye_column(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer, row: RowSel
     // A hidden layer's eye box is left empty (still clickable; the whole column takes the click, #8467).
     if l.visible {
         // Centre the drawing in the column while preserving the visibility hit area.
-        icons::paint(ui, eye_cell, "eye", 15.0, t.layer_label_icon(l.label));
+        icons::paint(ui, eye_cell, "eye", crate::layer_row_ui::EYE_SIZE, t.layer_label_icon(l.label));
     }
     eye_sweep(ctx, l, rect, &eye_resp, actions);
     if eye_resp.clicked() {
