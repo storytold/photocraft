@@ -2016,6 +2016,7 @@ pub(super) fn prepare(
     Ok(mapped)
 }
 
+#[cfg(test)]
 pub(super) fn apply(
     surface: &Surface,
     bounds: Rect,
