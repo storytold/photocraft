@@ -689,7 +689,7 @@ fn scaled_estimate(bytes: usize, doc: &Document, proxy: &Document, f: &Map<Strin
 /// Estimated size (bytes) from the already prepared proxy encode, scaled by pixel count.
 fn estimate(app: &PhotocraftApp, doc: &Document, proxy: &Document, f: &Map<String, Value>) -> Option<u64> {
     let export = app.services.export.as_ref()?;
-    let (bytes, _) = export(proxy, &format!("estimate.{}", s_fmt(f)), &settings(f)).ok()?;
+    let (bytes, _) = export(proxy, &format!("estimate.{}", s_fmt(f)), &source_scoped_settings(doc, f)).ok()?;
     Some(scaled_estimate(bytes.len(), doc, proxy, f))
 }
 
@@ -800,7 +800,7 @@ fn poll_or_start_preview(
 /// The native exporter uses this same IO encoder. Keep the entire estimate off the UI thread.
 #[cfg(not(target_arch = "wasm32"))]
 fn estimate_native(doc: &Document, proxy: &Document, f: &Map<String, Value>) -> Option<u64> {
-    let bytes = photocraft_io::export(proxy, &format!("estimate.{}", s_fmt(f)), &settings(f).io_options()).ok()?.bytes;
+    let bytes = photocraft_io::export(proxy, &format!("estimate.{}", s_fmt(f)), &source_scoped_settings(doc, f).io_options()).ok()?.bytes;
     Some(scaled_estimate(bytes.len(), doc, proxy, f))
 }
 
@@ -821,7 +821,7 @@ fn exact_estimate(doc: &Document, f: &Map<String, Value>, source_profile: &Profi
         return None;
     }
     let full = export_document(doc, f, None, source_profile).ok()?;
-    let bytes = photocraft_io::export(&full, &format!("estimate.{}", s_fmt(f)), &settings(f).io_options()).ok()?.bytes;
+    let bytes = photocraft_io::export(&full, &format!("estimate.{}", s_fmt(f)), &source_scoped_settings(doc, f).io_options()).ok()?.bytes;
     u64::try_from(bytes.len()).ok()
 }
 

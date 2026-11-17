@@ -9,7 +9,9 @@ use std::rc::Rc;
 use photocraft_codecs::ChannelLayout;
 use serde_json::{Map, Value, json};
 
-use super::{effective_source_profile, settings, source_document, write_export};
+use super::{effective_source_profile, estimate, export_document, preview_proxy, settings, source_document, source_scoped_settings, write_export};
+#[cfg(not(target_arch = "wasm32"))]
+use super::{estimate_native, exact_estimate};
 use crate::{FileDialogAnswer, FileDialogReply, FileDialogRequest, PhotocraftApp, Services, menus};
 
 /// What the test writer was handed: the path and the encoded bytes.
@@ -506,4 +508,81 @@ fn an_opaque_layer_of_an_unmeasured_source_mode_keeps_todays_file_under_srgb() {
         assert_eq!(layout, ChannelLayout::Rgb, "{label}: unmeasured by #14816, so an opaque layer export still drops its alpha, as before the change");
         assert_eq!(data.len(), 30 * 20 * 3, "{label}: the sRGB dialog still wrote an RGB file");
     }
+}
+
+/// The app for the estimate tests: a real encoder, plus a log of the settings `estimate` was
+/// handed, so what the "~ N KB" label encodes is observable without touching the disc.
+fn estimate_app() -> (PhotocraftApp, Rc<RefCell<Vec<crate::services::ExportSettings>>>) {
+    let asked: Rc<RefCell<Vec<crate::services::ExportSettings>>> = Rc::default();
+    let log = asked.clone();
+    let services = Services {
+        export: Some(Box::new(move |doc, path, s| {
+            log.borrow_mut().push(s.clone());
+            let out = photocraft_io::export(doc, path, &s.io_options()).map_err(|e| e.to_string())?;
+            Ok((out.bytes, out.warnings))
+        })),
+        ..Default::default()
+    };
+    (PhotocraftApp::new(photocraft_engine::Session::new(), services), asked)
+}
+
+/// #14968 review (estimate edge): the dialog's size estimates run the same encoder as the writer,
+/// but at the review's head they asked it for the unscoped `settings(f)` while `write_export` and
+/// `confirm_layers` scope the kept alpha on the source document. For a grayscale source under
+/// "Convert to sRGB" the written file is RGB while the label sized an RGBA encode of the converted
+/// copy. Every estimate path must ask for exactly the settings the writer will use: the proxy
+/// `estimate` (its encoder settings observed directly), the native proxy `estimate_native`, and
+/// the full `exact_estimate`.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn the_size_estimates_use_the_scoped_settings_for_an_unmeasured_source_mode() {
+    let (mut app, written, _open) = app(40, 30);
+    let id = opaque_layer_in(&mut app, photocraft_doc::ColorMode::Grayscale, &[0.5, 1.0]);
+    let mut f = fields(Some(id.0));
+    f.insert("profile".into(), json!("srgb"));
+    let doc = source_document(&app, &f).unwrap();
+    let profile = effective_source_profile(&app, &doc);
+    // The writer's answer: an RGB file (pinned by the test above); this test is about its size.
+    let file = export_as(&mut app, &written, &f);
+    assert_eq!(png(&file).2, ChannelLayout::Rgb);
+    // The converted copy every estimate path encodes, and what an unscoped RGBA encode of it
+    // costs: the symptom, and proof the two encodes differ in size, so a length can tell them apart.
+    let full = export_document(&doc, &f, None, &profile).unwrap();
+    let rgba = photocraft_io::export(&full, "estimate.png", &settings(&f).io_options()).unwrap().bytes;
+    assert_eq!(png(&rgba).2, ChannelLayout::Rgba, "the unscoped settings size an RGBA encode");
+    assert_ne!(rgba.len(), file.len(), "the RGB file and the RGBA encode differ in size");
+    // The proxy paths: this small document keeps the proxy at full size, so its estimate is the
+    // encode's own byte count.
+    let proxy = preview_proxy(&doc, &f, &profile).unwrap();
+    assert_eq!(estimate_native(&doc, &proxy, &f), Some(file.len() as u64));
+    // `estimate` goes through the app's exporter: ask it directly what it was handed.
+    let (app2, asked) = estimate_app();
+    assert_eq!(estimate(&app2, &doc, &proxy, &f), Some(file.len() as u64));
+    assert_eq!(asked.borrow().as_slice(), &[source_scoped_settings(&doc, &f)], "the estimate encodes with the writer's settings");
+    // The exact estimate encodes the full image; its length must be the writer's file size.
+    assert_eq!(exact_estimate(&doc, &f, &profile), Some(file.len() as u64));
+}
+
+/// The measured layer case, the estimate side: an RGB 8-bit document with a partly transparent
+/// layer keeps the kept-alpha request in the estimates too, so the label sizes the RGBA encode the
+/// writer really writes. Guard test, passes before and after the fix (the unscoped settings agree
+/// with the scoped ones for this source).
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn the_size_estimates_keep_rgba_for_the_measured_layer_case() {
+    let (mut app, written, _open) = app(60, 60);
+    let layer = painted(&mut app, "Green", "#00a000", None);
+    app.run("layer.setProps", json!({"layer": layer, "opacity": 0.5})).unwrap();
+    let f = fields(Some(layer));
+    let doc = source_document(&app, &f).unwrap();
+    let profile = effective_source_profile(&app, &doc);
+    let file = export_as(&mut app, &written, &f);
+    assert_eq!(png(&file).2, ChannelLayout::Rgba, "the writer keeps the alpha channel");
+    let proxy = preview_proxy(&doc, &f, &profile).unwrap();
+    assert_eq!(estimate_native(&doc, &proxy, &f), Some(file.len() as u64));
+    let (app2, asked) = estimate_app();
+    assert_eq!(estimate(&app2, &doc, &proxy, &f), Some(file.len() as u64));
+    assert_eq!(asked.borrow().as_slice(), &[source_scoped_settings(&doc, &f)], "and asks for it with the writer's settings");
+    assert!(asked.borrow()[0].layer_alpha, "the RGB 8-bit source keeps the request");
+    assert_eq!(exact_estimate(&doc, &f, &profile), Some(file.len() as u64));
 }
