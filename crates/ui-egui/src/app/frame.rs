@@ -368,6 +368,7 @@ impl PhotocraftApp {
         discard_ui::show(self, &ctx);
         tiff_options_ui::show(self, &ctx);
         targa_options_ui::show(self, &ctx);
+        crate::file_dialog::show_frame_rate(self, &ctx);
         jpeg_options_ui::show(self, &ctx);
         dds_options_ui::show(self, &ctx);
         smart_svg_ui::poll(self, &ctx);

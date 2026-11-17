@@ -1006,3 +1006,14 @@ fn save_types_list_the_document_formats_then_the_rest_by_name() {
     let formats = names.iter().position(|name| *name == "Brushes").expect("the app's own resources");
     assert!(names[2..formats].is_sorted_by_key(key), "{:?}", &names[2..formats]);
 }
+
+/// File › Open with Image Sequence ticked and one file picked answers that file as the sequence's
+/// frame (#14057); unticked, or with several files picked, every file opens on its own.
+#[test]
+fn image_sequence_answers_the_one_file_picked() {
+    let one = [PathBuf::from("/seq/frame001.png")];
+    assert_eq!(open_answer(&one, true), FileDialogAnswer::ImageSequence("/seq/frame001.png".into()));
+    assert_eq!(open_answer(&one, false), FileDialogAnswer::Paths(vec!["/seq/frame001.png".into()]));
+    let two = [PathBuf::from("/seq/frame001.png"), PathBuf::from("/seq/flat.png")];
+    assert_eq!(open_answer(&two, true), FileDialogAnswer::Paths(vec!["/seq/frame001.png".into(), "/seq/flat.png".into()]));
+}

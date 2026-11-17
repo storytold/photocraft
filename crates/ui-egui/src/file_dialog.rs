@@ -26,7 +26,10 @@ use crate::file_open::display_name;
 pub enum FileDialogRequest {
     /// Files to read: several for File › Open, one for a command that reads a file (Place,
     /// scripts, notes, presets). Starts in `initial_dir` (the last-used folder, UI-217-3).
-    Open { multiple: bool, initial_dir: Option<String>, extensions: Option<Vec<String>> },
+    /// `image_sequence`: File › Open's Image Sequence checkbox is offered, off each time the
+    /// dialog opens (#14057), where the platform's dialog can show one; ticked with one file
+    /// picked, the answer is [`FileDialogAnswer::ImageSequence`].
+    Open { multiple: bool, initial_dir: Option<String>, extensions: Option<Vec<String>>, image_sequence: bool },
     /// Which folder to read from. Starts in `initial_dir` when available.
     Folder { initial_dir: Option<String> },
     /// Where to write, starting from `suggested` (a file name, or the document's own path).
@@ -46,6 +49,9 @@ pub enum FileDialogAnswer {
     SaveTo(String),
     /// The selected folder's path (desktop).
     FolderTo(String),
+    /// The one file picked with File › Open's Image Sequence ticked (desktop, #14057): the frame
+    /// whose numbered run opens as a video layer, after the Frame Rate dialog.
+    ImageSequence(String),
     /// No dialog could be shown (on Linux: no desktop portal and no zenity, #3354; the message
     /// says what to install), or the file chosen can't be used (a name that isn't valid Unicode,
     /// #6601). Reported as an error rather than taken for Cancel.
@@ -272,22 +278,24 @@ impl PhotocraftApp {
     ) -> Result<Value, String> {
         let initial_dir = last_used_dir(&self.ui.recent_files);
         let extensions = (!extensions.is_empty()).then(|| extensions.iter().map(|s| (*s).to_string()).collect());
-        self.ask_file(FileDialogRequest::Open { multiple: false, initial_dir, extensions }, move |app, answer| {
+        self.ask_file(FileDialogRequest::Open { multiple: false, initial_dir, extensions, image_sequence: false }, move |app, answer| {
             let (name, bytes) = read_picked(answer)?;
             then(app, name, bytes)
         })
     }
 
     /// File › Open: opens every chosen file in the order the dialog returns them, reporting each
-    /// failure (see [`Self::open_paths_in_order`]).
+    /// failure (see [`Self::open_paths_in_order`]). With Image Sequence ticked, the Frame Rate
+    /// dialog comes first (see [`FrameRatePrompt`]).
     pub fn open_dialog_file(&mut self) -> Result<Value, String> {
         let initial_dir = last_used_dir(&self.ui.recent_files);
-        self.ask_file(FileDialogRequest::Open { multiple: true, initial_dir, extensions: None }, |app, answer| {
+        self.ask_file(FileDialogRequest::Open { multiple: true, initial_dir, extensions: None, image_sequence: true }, |app, answer| {
             match answer {
                 FileDialogAnswer::Paths(paths) => {
                     // The order the dialog returns, not name order; the last is active.
                     app.open_paths_in_order(&paths);
                 }
+                FileDialogAnswer::ImageSequence(path) => app.frame_rate = Some(FrameRatePrompt::new(path)),
                 FileDialogAnswer::Contents(name, bytes) => app.open_contents(vec![(name, bytes)]),
                 FileDialogAnswer::ContentsMany(files) => app.open_contents(files),
                 FileDialogAnswer::FolderTo(_) => return Err(UNEXPECTED.into()),
@@ -302,7 +310,7 @@ impl PhotocraftApp {
     /// reporting each failure as File › Open does.
     pub fn open_dialog_as_smart_object(&mut self) -> Result<Value, String> {
         let initial_dir = last_used_dir(&self.ui.recent_files);
-        self.ask_file(FileDialogRequest::Open { multiple: true, initial_dir, extensions: None }, |app, answer| {
+        self.ask_file(FileDialogRequest::Open { multiple: true, initial_dir, extensions: None, image_sequence: false }, |app, answer| {
             let FileDialogAnswer::Paths(paths) = answer else { return Err(UNEXPECTED.into()) };
             // Each file is a tracked open job like File › Open's, in name order. No `show_if_open`:
             // the file opens as another document even when it is already open.
@@ -472,8 +480,134 @@ fn read_picked(answer: FileDialogAnswer) -> Result<(String, Vec<u8>), String> {
             let bytes = photocraft_format::read_file(std::path::Path::new(&path)).map_err(|e| format!("{}: {e}", display_name(&path)))?;
             Ok((path, bytes))
         }
-        FileDialogAnswer::FolderTo(_) => Err(UNEXPECTED.into()),
+        FileDialogAnswer::FolderTo(_) | FileDialogAnswer::ImageSequence(_) => Err(UNEXPECTED.into()),
         FileDialogAnswer::SaveTo(_) | FileDialogAnswer::Unavailable(_) => Err(UNEXPECTED.into()),
+    }
+}
+
+/// The Frame Rate dialog's rates (#14057), in the measured order; the last, `None`, is Custom.
+pub(crate) const FRAME_RATES: [Option<f32>; 13] =
+    [Some(10.0), Some(12.0), Some(12.5), Some(15.0), Some(23.976), Some(24.0), Some(25.0), Some(29.97), Some(30.0), Some(50.0), Some(59.94), Some(60.0), None];
+
+/// The rate the Frame Rate dialog starts at.
+const DEFAULT_FRAME_RATE: f32 = 30.0;
+
+/// The highest rate the field takes, as a video layer's timeline does (`timeline_cmds::fps_param`).
+const MAX_FRAME_RATE: f32 = 1000.0;
+
+/// The Frame Rate dialog File › Open shows before an image sequence opens (#14057): the frame
+/// picked, and the rate, 30 to start with and not remembered. The combo box picks one of
+/// [`FRAME_RATES`]; the field beside it holds the rate in fps, and a rate typed there that isn't
+/// one of them shows as Custom. OK opens the sequence (`file.openImageSequence`), Cancel nothing.
+pub struct FrameRatePrompt {
+    /// The frame picked in the Open dialog.
+    pub path: String,
+    /// The rate in frames per second.
+    pub fps: f32,
+    /// Custom is picked in the combo box (a preset rate still in the field).
+    custom: bool,
+}
+
+impl FrameRatePrompt {
+    /// The dialog for the frame `path`, at 30 fps.
+    pub fn new(path: String) -> Self {
+        Self { path, fps: DEFAULT_FRAME_RATE, custom: false }
+    }
+
+    /// The combo box's entry: the preset the rate is, or Custom (`None`).
+    pub fn preset(&self) -> Option<f32> {
+        if self.custom { None } else { FRAME_RATES.iter().flatten().copied().find(|r| *r == self.fps) }
+    }
+
+    /// Picks an entry of the combo box: a preset puts its rate in the field; Custom keeps the
+    /// field's rate for the user to change.
+    pub fn pick(&mut self, preset: Option<f32>) {
+        self.custom = preset.is_none();
+        if let Some(rate) = preset {
+            self.fps = rate;
+        }
+    }
+
+    /// A rate typed in the field, kept within what a video layer plays.
+    pub fn set_fps(&mut self, fps: f32) {
+        if fps.is_finite() && fps > 0.0 {
+            self.fps = fps.min(MAX_FRAME_RATE);
+        }
+        self.custom = false;
+    }
+}
+
+/// The combo box label of a Frame Rate entry: `23.976`, `30`, Custom.
+fn frame_rate_label(rate: Option<f32>) -> String {
+    rate.map_or_else(|| tl!("Custom").to_string(), |r| r.to_string())
+}
+
+impl PhotocraftApp {
+    /// The Frame Rate dialog is answered: OK opens the image sequence at its rate as a new
+    /// document, reporting a failure (a file whose name has no number gets Photoshop's alert);
+    /// Cancel opens nothing. Returns the command's result; "cancelled" for Cancel.
+    pub fn answer_frame_rate(&mut self, ok: bool) -> Result<Value, String> {
+        let Some(prompt) = self.frame_rate.take() else { return Err("no Frame Rate dialog is open".into()) };
+        if !ok {
+            return Err(CANCELLED.into());
+        }
+        match self.run("file.openImageSequence", json!({"path": &prompt.path, "fps": prompt.fps})) {
+            Ok(v) => {
+                // A GIF frame salvaged from a damaged file says so, as New Video Layer from File does.
+                let what = crate::i18n::fmt(tl!("Imported {name}"), &[("name", &display_name(&prompt.path))]);
+                crate::notices::footage_warnings(self, &v, &what);
+                // As Layer › Video Layers › New Video Layer from File does: the frames are on the
+                // timeline.
+                self.ui.timeline.open = true;
+                self.sync_views();
+                Ok(v)
+            }
+            Err(e) => {
+                crate::notices::error(self, e.clone());
+                Err(e)
+            }
+        }
+    }
+}
+
+/// Draws the Frame Rate dialog while it is open (see [`FrameRatePrompt`]).
+pub(crate) fn show_frame_rate(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let Some(p) = app.frame_rate.as_mut() else { return };
+    let (mut ok, mut cancel) = (false, false);
+    let modal = egui::Modal::new(egui::Id::unique("open-frame-rate")).show(ctx, |ui| {
+        ui.set_max_width(320.0);
+        ui.label(egui::RichText::new(tl!("Frame Rate")).font(crate::theme::semibold(15.0)));
+        ui.add_space(4.0);
+        crate::widgets::hairline(ui);
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            let labels: Vec<(Option<f32>, String)> = FRAME_RATES.iter().map(|r| (*r, frame_rate_label(*r))).collect();
+            let options: Vec<(Option<f32>, &str)> = labels.iter().map(|(r, l)| (*r, l.as_str())).collect();
+            let mut preset = p.preset();
+            if crate::widgets::dropdown_literal(ui, "open-frame-rate-preset", tl!("Frame Rate"), &mut preset, &options, 110.0) {
+                p.pick(preset);
+            }
+            let mut fps = p.fps;
+            let field =
+                ui.add(egui::DragValue::new(&mut fps).range(0.001..=MAX_FRAME_RATE).max_decimals(3).speed(0.1).custom_parser(crate::widgets::parse_num));
+            if field.changed() {
+                p.set_fps(fps);
+            }
+            ui.label(tl!("fps"));
+        });
+        ui.add_space(12.0);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = 10.0;
+            ok = crate::widgets::primary_button(ui, tl!("OK"), 84.0).clicked();
+            cancel = crate::widgets::secondary_button(ui, tl!("Cancel"), 84.0).clicked();
+        });
+    });
+    cancel |= modal.should_close();
+    // A focused button takes Enter as its click without consuming the key: Enter on Cancel cancels.
+    if ok || (!cancel && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))) {
+        let _ = app.answer_frame_rate(true);
+    } else if cancel {
+        let _ = app.answer_frame_rate(false);
     }
 }
 

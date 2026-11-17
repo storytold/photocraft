@@ -265,3 +265,40 @@ fn the_type_that_gives_the_extension_is_the_one_picked() {
     // An answer naming a type this dialog never offered is not a pick either.
     assert_eq!(chosen_type(&many, Some(99)), None);
 }
+
+/// File › Open's `OpenFile` options (#14057): the Image Sequence checkbox, off, beside the folder,
+/// the file types and multiple selection.
+#[test]
+fn file_open_asks_the_portal_for_the_image_sequence_checkbox() {
+    let req = OpenRequest { parent: String::new(), folder: Some(PathBuf::from("/pics")), filters: vec![("PNG".into(), vec!["png".into()])], multiple: true };
+    let o = open_options(&req, "Image Sequence", "tok");
+    let choices: Vec<(String, String, Vec<(String, String)>, String)> = o["choices"].try_clone().unwrap().try_into().unwrap();
+    assert_eq!(choices, [("image_sequence".into(), "Image Sequence".into(), Vec::new(), "false".into())]);
+    assert_eq!(bool::try_from(o["multiple"].try_clone().unwrap()).unwrap(), true);
+    assert_eq!(Vec::<u8>::try_from(o["current_folder"].try_clone().unwrap()).unwrap(), b"/pics\0");
+    let filters: Vec<(String, Vec<(u32, String)>)> = o["filters"].try_clone().unwrap().try_into().unwrap();
+    assert_eq!(filters, [("PNG".to_string(), vec![(0, "*.png".to_string())])]);
+    assert_eq!(String::try_from(o["handle_token"].try_clone().unwrap()).unwrap(), "tok");
+}
+
+/// The portal's answer to `OpenFile`: the files picked, and whether Image Sequence was ticked.
+#[test]
+fn the_open_answer_carries_the_image_sequence_checkbox() {
+    let results = |uris: Vec<&str>, ticked: Option<&str>| -> HashMap<String, OwnedValue> {
+        let mut r = HashMap::from([("uris".to_string(), OwnedValue::try_from(Value::from(uris.iter().map(|u| u.to_string()).collect::<Vec<_>>())).unwrap())]);
+        if let Some(state) = ticked {
+            let choices = vec![("image_sequence".to_string(), state.to_string())];
+            r.insert("choices".into(), OwnedValue::try_from(Value::from(choices)).unwrap());
+        }
+        r
+    };
+    let frame = "file:///seq/frame001.png";
+    let picked = |image_sequence| Ok(Some(Opened { paths: vec![PathBuf::from("/seq/frame001.png")], image_sequence }));
+    assert_eq!(opened(0, &results(vec![frame], Some("true"))), picked(true));
+    assert_eq!(opened(0, &results(vec![frame], Some("false"))), picked(false));
+    assert_eq!(opened(0, &results(vec![frame], None)), picked(false), "a portal without choices: unticked");
+    assert_eq!(opened(1, &results(vec![frame], Some("true"))), Ok(None), "Cancel");
+    assert_eq!(opened(2, &HashMap::new()), Ok(None));
+    assert!(opened(0, &results(vec!["sftp://host/frame001.png"], None)).is_err());
+    assert!(opened(3, &HashMap::new()).is_err());
+}

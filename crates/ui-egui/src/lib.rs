@@ -734,6 +734,8 @@ pub struct PhotocraftApp {
     pub(crate) discard: Option<discard_ui::Prompt>,
     /// The Open or Save dialog in progress, and the action waiting on it (see `file_dialog`).
     pub(crate) file_dialog: Option<file_dialog::Pending>,
+    /// File › Open's Frame Rate dialog for an image sequence (see `file_dialog::FrameRatePrompt`).
+    pub(crate) frame_rate: Option<file_dialog::FrameRatePrompt>,
     /// A Save As or Save a Copy to a TIFF parked behind the TIFF Options prompt (see `tiff_options_ui`).
     pub(crate) tiff_options: Option<tiff_options_ui::Prompt>,
     /// The last TIFF Options compression and pyramid answer, where the next prompt starts. Session-only.
