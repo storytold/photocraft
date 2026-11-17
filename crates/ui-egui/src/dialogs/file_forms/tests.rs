@@ -60,7 +60,10 @@ fn create_droplet_uses_the_action_selected_in_the_form() {
     }
     app.ui.actions.panel.selected = Some(ActionSelection::Action(0));
     let id = open_create_droplet(&mut app).unwrap();
-    assert!(app.framework.dialogs.set_json_field(&ctx, id, "action", json!("Missing")).is_err(), "the action choice offers the listed actions");
+    // The Action row now follows the Set row (#13672): a value the chosen entry does not hold
+    // falls back on its next draw, and a name no entry holds at all is left for the command to
+    // report - the row no longer refuses it as a closed choice list did.
+    assert!(app.framework.dialogs.set_json_field(&ctx, id, "action", json!("Missing")).is_ok(), "the follow row takes the write");
     set(&mut app, &ctx, id, "action", json!("Rotate"));
     set(&mut app, &ctx, id, "path", json!(path));
     set(&mut app, &ctx, id, "output", json!(output));

@@ -379,7 +379,7 @@ fn stylistic_set_checkmark_follows_the_toggle() {
     }
 }
 
-/// Actions of two sets: the Batch form lists every action name and both sets, starts on the selected action's set,
+/// Actions of two sets: the Batch form lists both sets and opens on the chosen set's own action,
 /// and runs that action.
 #[test]
 fn batch_menu_starts_on_the_selected_actions_set_and_runs_its_action() {
@@ -396,7 +396,6 @@ fn batch_menu_starts_on_the_selected_actions_set_and_runs_its_action() {
     }
     app.ui.actions.panel.selected = Some(ActionSelection::Action(1));
     let id = open_form(&mut app, &ctx, "file.automate.batch");
-    assert_eq!(choice_ids(&mut app, "file.automate.batch", "action"), ["Retouch", "Turn"]);
     assert_eq!(choice_ids(&mut app, "file.automate.batch", "set"), ["A", "B"]);
     let shown = fields(&app, id);
     assert_eq!((&shown["action"], &shown["set"]), (&json!("Turn"), &json!("B")));
