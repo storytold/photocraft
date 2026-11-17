@@ -5,6 +5,141 @@
 use super::*;
 use photocraft_engine::atn_cmds::STOP_MESSAGE;
 
+#[test]
+fn conditional_panel_branches_keep_specific_and_common_set_scopes() {
+    for condition in ["always", "never"] {
+        for specific in [false, true] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width": 8, "height": 6})).unwrap();
+            for (set, name) in [("First", "wrong namesake"), ("Chosen", "scoped child")] {
+                let mut action = Action::new("Same", vec![("layer.new.layer".into(), json!({"name": name}))]);
+                action.set = Some(set.into());
+                app.session.actions.list.push(action);
+            }
+            let mut params = json!({"if": condition, "then": "Same", "else": "Same", "set": "Chosen"});
+            if specific {
+                params["set"] = json!("First");
+                params[if condition == "always" { "thenSet" } else { "elseSet" }] = json!("Chosen");
+            }
+            app.session
+                .actions
+                .list
+                .push(Action::new("Caller", vec![("actions.conditional".into(), params), ("layer.new.layer".into(), json!({"name": "caller tail"}))]));
+            let result = play(&mut app, &json!({"action": "Caller"})).unwrap();
+            assert!(result.get("failed").is_none(), "{result}");
+            assert_eq!(result["ran"], 2);
+            assert_eq!(names(&app), ["scoped child", "caller tail"], "{condition}, specific {specific}");
+            assert_idle(&app);
+            assert!(app.session.actions.held_playback.is_none());
+        }
+    }
+}
+
+#[test]
+fn conditional_panel_ids_choose_the_same_caption_folder_occurrence() {
+    for condition in ["always", "never"] {
+        for id_only in [false, true] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width": 8, "height": 6})).unwrap();
+            app.session.actions.sets.push("Repeated".into());
+            app.session.actions.set_rows.extend(["Repeated".into(), "Repeated".into()]);
+            for (slot, name, id) in [(0, "wrong occurrence", "a".repeat(32)), (1, "selected occurrence", "b".repeat(32))] {
+                let mut action = Action::new("Same", vec![("layer.new.layer".into(), json!({"name": name}))]);
+                action.set = Some("Repeated".into());
+                action.set_slot = Some(slot);
+                action.action_id = Some(id);
+                app.session.actions.list.push(action);
+            }
+            let mut params = json!({"if": condition});
+            let branch = if condition == "always" { "then" } else { "else" };
+            if !id_only {
+                params[branch] = json!("Same");
+            }
+            params[if condition == "always" { "thenActionId" } else { "elseActionId" }] = json!("b".repeat(32));
+            params[if condition == "always" { "thenSet" } else { "elseSet" }] = json!("Repeated");
+            app.session.actions.list.push(Action::new("Caller", vec![("actions.conditional".into(), params)]));
+            let result = play(&mut app, &json!({"action": "Caller"})).unwrap();
+            assert!(result.get("failed").is_none(), "{result}");
+            assert_eq!(names(&app), ["selected occurrence"], "{condition}, id-only {id_only}");
+            assert_idle(&app);
+            assert!(app.session.actions.held_playback.is_none());
+        }
+    }
+}
+
+#[test]
+fn conditional_panel_missing_and_invalid_branches_keep_the_engine_contract() {
+    for (params, failure) in [
+        (json!({"if": "always", "else": "Missing"}), false),
+        (json!({"if": "never", "then": "Missing"}), false),
+        (json!({"if": "always", "then": "Missing", "thenSet": "Absent"}), true),
+        (json!({"if": "never", "then": 3}), true),
+    ] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 8, "height": 6})).unwrap();
+        app.session
+            .actions
+            .list
+            .push(Action::new("Caller", vec![("actions.conditional".into(), params.clone()), ("layer.new.layer".into(), json!({"name": "caller tail"}))]));
+        let result = play(&mut app, &json!({"action": "Caller"})).unwrap();
+        assert_eq!(result.get("failed").is_some(), failure, "{params}: {result}");
+        assert_eq!(names(&app), if failure { Vec::<String>::new() } else { vec!["caller tail".to_string()] });
+        assert_idle(&app);
+        assert!(app.session.actions.held_playback.is_none());
+    }
+}
+
+#[test]
+fn a_conditional_id_branch_keeps_its_pause_and_automation_gate() {
+    fn deny_suffix(id: &str, params: &Value) -> photocraft_engine::Result<()> {
+        if id == "layer.new.layer" && params.get("name").and_then(Value::as_str) == Some("selected suffix") {
+            Err(photocraft_engine::EngineError::Other("conditional suffix denied".into()))
+        } else {
+            Ok(())
+        }
+    }
+    for automated in [false, true] {
+        let services = crate::Services { automation_authorize: Some(deny_suffix), ..Default::default() };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        app.run("file.new", json!({"width": 8, "height": 6})).unwrap();
+        let first = Action::new("Same", vec![("layer.new.layer".into(), json!({"name": "wrong namesake"}))]);
+        let mut selected = Action::new(
+            "Same",
+            vec![
+                ("layer.new.layer".into(), json!({"name": "selected prefix"})),
+                (STOP_MESSAGE.into(), json!({"message": MESSAGE, "allowContinue": true})),
+                ("layer.new.layer".into(), json!({"name": "selected suffix"})),
+            ],
+        );
+        selected.action_id = Some("b".repeat(32));
+        selected.automation = automated;
+        selected.dialogs.insert(1);
+        app.session.actions.list.extend([first, selected]);
+        app.session.actions.list.push(Action::new(
+            "Caller",
+            vec![
+                ("actions.conditional".into(), json!({"if": "always", "then": "Same", "thenActionId": "b".repeat(32)})),
+                ("layer.new.layer".into(), json!({"name": "caller tail"})),
+            ],
+        ));
+        let result = play(&mut app, &json!({"action": "Caller"})).unwrap();
+        let dialog = result["paused"]["dialog"].as_u64().expect("the selected branch owns the Stop dialog");
+        assert_eq!(names(&app), ["selected prefix"]);
+        crate::dialogs::confirm(&mut app, dialog).unwrap();
+        if automated {
+            assert!(app.ui.status_error);
+            assert!(app.ui.status.contains("conditional suffix denied"), "{}", app.ui.status);
+            assert_eq!(names(&app), ["selected prefix"]);
+        } else {
+            assert!(!app.ui.status_error, "{}", app.ui.status);
+            assert_eq!(names(&app), ["selected prefix", "selected suffix", "caller tail"]);
+        }
+        assert!(app.session.authorize.is_none(), "the branch's kept gate never leaks to its caller");
+        assert_idle(&app);
+        assert!(app.session.actions.held_playback.is_none());
+    }
+}
+
 const MESSAGE: &str = "Check the mask before continuing";
 
 fn names(app: &PhotocraftApp) -> Vec<String> {
@@ -176,7 +311,7 @@ fn a_stop_restores_a_suspended_recording_once_for_every_exit() {
             assert!(app.session.actions.recording.is_some());
             app.run("actions.stop", json!({})).unwrap();
             let owner = app.session.actions.list.iter().find(|a| a.name == "Owner").unwrap();
-            assert_eq!(owner.steps, vec![("actions.play".into(), json!({"action": "Stop Test"}))]);
+            assert_eq!(owner.steps, vec![("actions.play".into(), json!({"action": "Stop Test", "set":"Stops"}))]);
             assert_idle(&app);
         }
     }
@@ -211,7 +346,7 @@ fn continue_inside_a_called_action_finishes_every_caller_once() {
     assert!(app.session.actions.recording.is_some());
     app.run("actions.stop", json!({})).unwrap();
     let owner = app.session.actions.list.iter().find(|a| a.name == "Owner").unwrap();
-    assert_eq!(owner.steps, vec![("actions.play".into(), json!({"action": "Grandparent"}))]);
+    assert_eq!(owner.steps, vec![("actions.play".into(), json!({"action": "Grandparent", "set":photocraft_engine::atn_cmds::UNGROUPED_SET}))]);
 }
 
 #[test]
@@ -274,17 +409,28 @@ fn a_filter_dialog_inside_a_called_action_continues_its_callers_after_ok() {
 
 #[test]
 fn a_caller_chain_is_bounded() {
-    let mut app = stop_app(true, true);
-    let v = play(&mut app, &json!({"action": "Stop Test"})).unwrap();
+    let mut app = nested_app(true);
+    let v = play(&mut app, &json!({"action": "Grandparent"})).unwrap();
     let dialog = v["paused"]["dialog"].clone();
     let token = paused_token(&mut app, &dialog).unwrap();
-    app.paused_playbacks.paused.get_mut(&token).unwrap().callers = vec![("Missing".into(), 1); MAX_CALLERS];
-    let r = called(&mut app, "One more", 0, "actions.play", &json!({"paused": v["paused"].clone()}), None);
-    assert!(matches!(r, Called::Failed(_)), "a caller past the bound fails the call");
+    let paused = app.paused_playbacks.paused.get_mut(&token).unwrap();
+    let parent = paused.parents.first().cloned().expect("the paused child retains its caller frame");
+    paused.parents = vec![parent; 16];
+    let before_resume = names(&app);
+    let error = crate::dialogs::confirm(&mut app, dialog.as_u64().unwrap()).unwrap_err();
+    assert!(error.contains("action nesting exceeds 16 levels"), "a caller past the bound fails the call: {error}");
+    assert_eq!(names(&app), before_resume, "no child or caller tail runs past the depth bound");
+    assert_eq!(count(&app, "Suffix"), 0);
+    assert_idle(&app);
+
     // A caller that no longer exists ends the resumed playback with an error, nothing else runs.
-    app.paused_playbacks.paused.get_mut(&token).unwrap().callers = vec![("Missing".into(), 1)];
-    let id = dialog.as_u64().unwrap();
-    assert!(crate::dialogs::confirm(&mut app, id).is_err());
+    let mut app = nested_app(true);
+    let v = play(&mut app, &json!({"action": "Grandparent"})).unwrap();
+    app.session.execute("actions.delete", json!({"action": "Parent"})).unwrap();
+    let before_resume = names(&app);
+    let error = crate::dialogs::confirm(&mut app, v["paused"]["dialog"].as_u64().unwrap()).unwrap_err();
+    assert!(error.contains("the paused action no longer exists"), "{error}");
+    assert_eq!(names(&app), before_resume, "a missing caller cannot run the child or another caller's tail");
     assert_eq!(count(&app, "Suffix"), 0);
     assert_idle(&app);
 }

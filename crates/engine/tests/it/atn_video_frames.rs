@@ -186,8 +186,8 @@ fn unrepresented_settings_and_descriptor_metadata_stay_complete_kept_steps() {
 }
 
 #[test]
-/// Current-frame recordings cannot serialize an explicit frame, layer or mask selector.
-fn native_options_and_damaged_absence_metadata_refuse_export() {
+/// Current-frame Photoshop events cannot represent explicit selectors; native fallback retains them.
+fn native_options_and_damaged_absence_metadata_use_lossless_fallback() {
     for (_, command) in EVENTS {
         for params in [
             json!({"frame":2}),
@@ -197,7 +197,7 @@ fn native_options_and_damaged_absence_metadata_refuse_export() {
             json!({"_atnVideoFrameNoDescriptor":"true"}),
         ] {
             let action = Action::new("Invalid", vec![(command.into(), params)]);
-            assert!(atn_cmds::export("Video", &[&action], &[], false).is_err(), "{command}");
+            super::atn_export::fallback("Video", &action);
         }
     }
 }

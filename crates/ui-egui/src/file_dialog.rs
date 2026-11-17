@@ -79,6 +79,8 @@ type SavedPath = Box<dyn Fn(&PhotocraftApp, &str) -> String>;
 
 /// The file dialog in progress.
 pub(crate) struct Pending {
+    /// The paused action step whose parameter dialog deferred to this picker.
+    pub(crate) action_step: Option<u64>,
     /// Not shown yet: it is shown at the end of the frame, which has the window to parent it to.
     request: Option<FileDialogRequest>,
     answer: Option<Receiver<Option<FileDialogAnswer>>>,
@@ -98,6 +100,11 @@ impl PhotocraftApp {
     /// Whether a file dialog is open (or about to be shown).
     pub fn file_dialog_open(&self) -> bool {
         self.file_dialog.is_some()
+    }
+
+    /// An unrelated picker cannot keep an abandoned action-step owner alive.
+    pub(crate) fn file_dialog_owns_action_step(&self, token: u64) -> bool {
+        self.file_dialog.as_ref().is_some_and(|pending| pending.action_step == Some(token))
     }
 
     /// Show a file dialog; `then` continues with the user's choice on a later frame (see the
@@ -124,7 +131,7 @@ impl PhotocraftApp {
             Some(FileDialogAnswer::Unavailable(why)) => Err(why),
             Some(a) => then(app, a),
         });
-        self.file_dialog = Some(Pending { request: Some(request), answer: None, then, saved_path: None, held: None });
+        self.file_dialog = Some(Pending { action_step: None, request: Some(request), answer: None, then, saved_path: None, held: None });
         Ok(json!({ "fileDialog": kind }))
     }
 

@@ -1,11 +1,21 @@
 //! The crate's integration tests, linked into one test binary.
 
+#[path = "../support/atn_export.rs"]
+mod atn_export;
+
+mod action_metadata;
 mod actions_duplicate;
-mod actions_panel_menu;
-mod actions_record_again;
+mod actions_editor_draft;
+mod actions_group_delete;
+mod actions_owned_preview;
 mod actions_single_history;
 mod affinity;
 mod artboard_export_names;
+mod atn_action_colors;
+mod atn_call_scopes;
+
+mod actions_panel_menu;
+mod actions_record_again;
 mod artboard_move_overflow;
 mod atn_adjustment_make_props;
 mod atn_calculations;
@@ -16,6 +26,7 @@ mod atn_crystallize_cell_size;
 mod atn_dialog_filters;
 mod atn_direct_adjustments;
 mod atn_layer_style;
+mod atn_native_admission;
 mod atn_newer_events;
 mod atn_perspective_warp;
 mod atn_reference_forms;

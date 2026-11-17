@@ -1,3 +1,4 @@
+// Literal JSON seeds below represent the prior Main/v2 library. Reopens after sync exercise the current ATN store.
 use crate::Session;
 use crate::actions_cmds::{Action, PLAY_SHORTCUT_PREFIX};
 use crate::preset_store::{MemBackend, open};
@@ -7,7 +8,7 @@ use serde_json::json;
 
 #[test]
 fn attachment_keeps_reset_undo_only_when_disk_has_no_actions_content() {
-    use crate::preset_store::{ACTIONS_FILE, PresetBackend};
+    use crate::preset_store::{LEGACY_ACTIONS_FILE as ACTIONS_FILE, PresetBackend};
 
     for disk in [
         json!({"version":1,"actions":[]}),
@@ -168,7 +169,23 @@ fn duplicate_set_distinguishes_implicit_caption_and_empty_import() {
     assert_eq!(s.actions.list[copy["index"].as_u64().unwrap() as usize].name, "Implicit copy");
     assert_eq!(s.execute("actions.duplicate", json!({"set":"Same"})).unwrap()["actions"], 2);
     assert_eq!(s.execute("actions.duplicate", json!({"set":"Empty"})).unwrap(), json!({"set":"Empty copy","actions":0}));
-    assert_eq!(s.actions.sets, ["Empty copy"]);
+    // A set copy declares its own durable name, even when its source was implicit.
+    // It does not turn that copy into an imported physical folder occurrence.
+    assert_eq!(s.actions.sets, ["Same copy", "Same copy 2", "Empty copy"]);
+    assert_eq!(s.actions.set_rows, ["Same", "Empty"]);
+    for (name, slot) in [("Physical", Some(0)), ("Implicit", None)] {
+        assert_eq!(s.actions.list.iter().find(|action| action.name == name).unwrap().set_slot, slot);
+    }
+    for (set, expected) in [("Same copy", vec!["Implicit copy"]), ("Same copy 2", vec!["Physical copy", "Implicit copy 2"])] {
+        let copied: Vec<_> = s.actions.list.iter().filter(|action| action.set.as_deref() == Some(set)).collect();
+        assert_eq!(copied.iter().map(|action| action.name.as_str()).collect::<Vec<_>>(), expected);
+        assert!(copied.iter().all(|action| action.set_slot.is_none()));
+    }
+    s.execute("actions.delete", json!({"action":"Implicit copy"})).unwrap();
+    assert_eq!(s.actions.sets, ["Same copy", "Same copy 2", "Empty copy"]);
+    let empty_copy = s.execute("actions.save", json!({"set":"Same copy"})).unwrap();
+    assert!(empty_copy["actions"].as_array().unwrap().is_empty(), "the declared copy remains exportable after its last action");
+    assert_eq!(s.execute("actions.save", json!({"set":"Same copy 2"})).unwrap()["actions"], json!(["Physical copy", "Implicit copy 2"]));
     assert_eq!(s.actions.set_rows, ["Same", "Empty"]);
 }
 
@@ -232,7 +249,7 @@ fn repeated_reset_pins_existing_shortcuts_and_undo_restores_legacy_keys() {
 
 #[test]
 fn duplicate_stored_ids_stay_unplayable_after_deleting_one_row() {
-    use crate::preset_store::{ACTIONS_FILE, PresetBackend};
+    use crate::preset_store::{LEGACY_ACTIONS_FILE as ACTIONS_FILE, PresetBackend};
 
     let store = MemBackend::default();
     let id = "0".repeat(32);
@@ -270,7 +287,7 @@ fn atn_export_and_load_keep_function_keys_of_duplicate_rows_separate() {
 
 #[test]
 fn attachment_keeps_disk_batch_targets_and_does_not_resolve_foreign_ids() {
-    use crate::preset_store::{ACTIONS_FILE, PresetBackend};
+    use crate::preset_store::{LEGACY_ACTIONS_FILE as ACTIONS_FILE, PresetBackend};
 
     let store = MemBackend::default();
     let foreign_id = "a".repeat(32);
@@ -297,7 +314,7 @@ fn attachment_keeps_disk_batch_targets_and_does_not_resolve_foreign_ids() {
 #[test]
 fn attachment_keeps_unresolved_disk_calls_from_binding_to_early_actions() {
     use crate::actions_cmds::{conditional_branch, resolve_play_target};
-    use crate::preset_store::{ACTIONS_FILE, PresetBackend};
+    use crate::preset_store::{LEGACY_ACTIONS_FILE as ACTIONS_FILE, PresetBackend};
 
     let store = MemBackend::default();
     let file = json!({"version":1,"actions":[{"name":"Disk caller","steps":[
@@ -361,7 +378,7 @@ fn shortcut_only_clear_restores_orphan_bindings_on_undo() {
 
 #[test]
 fn pre_attachment_replacement_persists_without_reloading_disk_and_keeps_undo() {
-    use crate::preset_store::{ACTIONS_FILE, PresetBackend};
+    use crate::preset_store::{LEGACY_ACTIONS_FILE as ACTIONS_FILE, PresetBackend};
 
     for undo_before_attachment in [false, true] {
         let store = MemBackend::default();
@@ -396,7 +413,7 @@ fn pre_attachment_replacement_persists_without_reloading_disk_and_keeps_undo() {
 
 #[test]
 fn pre_attachment_clear_remains_authoritative_after_an_ordinary_edit() {
-    use crate::preset_store::{ACTIONS_FILE, PresetBackend};
+    use crate::preset_store::{LEGACY_ACTIONS_FILE as ACTIONS_FILE, PresetBackend};
 
     let store = MemBackend::default();
     store.write(ACTIONS_FILE, br#"{"version":1,"actions":[{"name":"Disk"}]}"#).unwrap();
@@ -415,7 +432,7 @@ fn pre_attachment_clear_remains_authoritative_after_an_ordinary_edit() {
 
 #[test]
 fn empty_pre_attachment_clear_replaces_the_saved_library() {
-    use crate::preset_store::{ACTIONS_FILE, PresetBackend};
+    use crate::preset_store::{LEGACY_ACTIONS_FILE as ACTIONS_FILE, PresetBackend};
 
     for undo in [false, true] {
         let store = MemBackend::default();
@@ -430,16 +447,21 @@ fn empty_pre_attachment_clear_replaces_the_saved_library() {
         }
         assert!(s.attach_preset_store(open(Box::new(store.clone()))).is_empty());
         assert_eq!(s.actions.list.first().map(|action| action.name.as_str()), undo.then_some("Disk"));
+        let saved = store.read(crate::preset_store::ACTIONS_FILE, crate::preset_store::MAX_ACTIONS_BYTES).unwrap();
         let mut reopened = Session::new();
-        assert!(reopened.attach_preset_store(open(Box::new(store))).is_empty());
-        assert_eq!(reopened.actions.list, s.actions.list);
+        assert!(reopened.attach_preset_store(open(Box::new(store.clone()))).is_empty());
+        // Restart must preserve every persisted action field, not the opaque archive backing it.
+        assert_eq!(serde_json::to_value(&reopened.actions.list).unwrap(), serde_json::to_value(&s.actions.list).unwrap());
+        assert_eq!(reopened.actions.sets, s.actions.sets);
+        assert_eq!(reopened.actions.set_rows, s.actions.set_rows);
+        assert_eq!(store.read(crate::preset_store::ACTIONS_FILE, crate::preset_store::MAX_ACTIONS_BYTES).unwrap(), saved);
     }
 }
 
 #[test]
 fn attachment_does_not_fill_an_unresolved_early_numeric_call() {
     use crate::actions_cmds::resolve_play_target;
-    use crate::preset_store::{ACTIONS_FILE, PresetBackend};
+    use crate::preset_store::{LEGACY_ACTIONS_FILE as ACTIONS_FILE, PresetBackend};
 
     let store = MemBackend::default();
     store.write(ACTIONS_FILE, br#"{"version":1,"actions":[{"name":"Disk"}]}"#).unwrap();
@@ -470,7 +492,7 @@ fn attachment_does_not_fill_an_unresolved_early_numeric_call() {
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn attachment_keeps_named_numeric_droplet_targets_in_their_source_library() {
-    use crate::preset_store::{ACTIONS_FILE, PresetBackend};
+    use crate::preset_store::{LEGACY_ACTIONS_FILE as ACTIONS_FILE, PresetBackend};
 
     let temp = tempfile::tempdir().unwrap();
     let missing = temp.path().join("missing.pcdroplet");
@@ -504,7 +526,7 @@ fn attachment_keeps_named_numeric_droplet_targets_in_their_source_library() {
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn attachment_keeps_explicit_droplet_ids_in_their_source_library() {
-    use crate::preset_store::{ACTIONS_FILE, PresetBackend};
+    use crate::preset_store::{LEGACY_ACTIONS_FILE as ACTIONS_FILE, PresetBackend};
 
     let temp = tempfile::tempdir().unwrap();
     let missing = temp.path().join("missing.pcdroplet");
@@ -573,9 +595,9 @@ fn whole_replace_preserves_explicit_atn_play_and_conditional_set_scopes() {
     })
     .unwrap();
     let ordinary = crate::atn_cmds::import(&caller).unwrap();
-    assert!(ordinary.actions[0].steps[0].1.get("set").is_none());
-    assert!(ordinary.actions[0].steps[2].1.get("thenSet").is_none());
-    assert!(ordinary.actions[0].steps[3].1.get("set").is_none());
+    assert_eq!(ordinary.actions[0].steps[0].1["set"], "Wanted");
+    assert_eq!(ordinary.actions[0].steps[2].1["thenSet"], "Wanted");
+    assert_eq!(ordinary.actions[0].steps[3].1["set"], 2);
 
     let mut archive = set("Decoy", Some(("Target", 0)));
     archive.extend_from_slice(&set("Wanted", Some(("Target", 0)))[4..]);

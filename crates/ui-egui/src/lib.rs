@@ -586,6 +586,8 @@ pub struct PhotocraftApp {
     /// Action playbacks paused at a step dialog, by the token in that dialog's fields
     /// ([`actions::RESUME`]): what to play next and the automation gate it paused under.
     pub(crate) paused_playbacks: actions::PausedPlaybacks,
+    /// Runtime Actions editor buffers and owned UI continuations; never part of workspace JSON.
+    pub(crate) actions_runtime: actions::Runtime,
     pub(crate) held_actions_library: Option<actions::library::Held>,
     /// Levels/Curves histogram cache: (document, adjustment layer, revision it is valid for).
     pub(crate) tone_hist: Option<(DocId, photocraft_doc::LayerId, u64, std::sync::Arc<tone::Histograms>)>,

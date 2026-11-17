@@ -854,11 +854,16 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let mut playback_stack = s.actions.playback_stack.clone();
     playback_stack.extend(called_target);
+    let playback_namespace = if p.get("calledActions").is_some_and(|value| !value.is_null()) {
+        s.actions.playback_namespace.checked_add(1).ok_or_else(|| EngineError::BatchLimit("action playback namespaces exhausted".into()))?
+    } else {
+        s.actions.playback_namespace
+    };
     let actions = crate::actions_cmds::ActionState {
         list,
         playing: if named { s.actions.playing.saturating_add(1) } else { s.actions.playing },
         playback_stack,
-        playback_namespace: s.actions.playback_namespace + usize::from(embedded.is_some()),
+        playback_namespace,
         playback_steps,
         script_depth: s.actions.script_depth,
         script_steps: s.actions.script_steps,
@@ -878,9 +883,9 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         };
         // Swap only execution context, retaining the recorder, revision and script counters.
         let previous_playing = std::mem::replace(&mut s.actions.playing, actions.playing);
+        let previous_namespace = std::mem::replace(&mut s.actions.playback_namespace, actions.playback_namespace);
         let previous_stack = std::mem::replace(&mut s.actions.playback_stack, actions.playback_stack);
         let previous_steps = std::mem::replace(&mut s.actions.playback_steps, actions.playback_steps);
-        let previous_namespace = std::mem::replace(&mut s.actions.playback_namespace, actions.playback_namespace);
         // The nesting depth and shared budget of the levels above travel with the run too.
         let previous_shared = std::mem::replace(&mut s.actions.budget_shared, actions.budget_shared);
         let previous_depth = std::mem::replace(&mut s.actions.batch_depth, actions.batch_depth);

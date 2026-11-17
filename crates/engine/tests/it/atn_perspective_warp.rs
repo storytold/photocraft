@@ -120,20 +120,20 @@ fn unsupported_recordings_are_kept_without_partial_mapping() {
     }
 }
 
-/// Native export needs a reference rectangle. A stale recorded topology must not be substituted.
+/// Photoshop projection needs a reference rectangle; native fallback must retain stale topology exactly.
 #[test]
-fn native_export_requires_known_rectangle_and_rejects_stale_source() {
+fn native_fallback_preserves_missing_rectangle_and_stale_source() {
     let mut action = Action::new("Warp", vec![(COMMAND.into(), json!({"planes": planes()}))]);
-    assert!(atn_cmds::export("Set", &[&action], &[], false).is_err());
+    super::atn_export::fallback("Set", &action);
     action.steps[0].1["__atnPerspectiveWarpRect"] = json!([0, 0, 32, 24]);
     let d = saved(&action).descriptor.unwrap();
     let keys: Vec<_> = d.items.iter().map(|(id, _)| id.as_bytes()).collect();
     assert_eq!(keys, [b"null".as_slice(), b"Md  ", b"referenceRect", b"vertices", b"warpedVertices", b"quads"]);
     let mut recorded = imported(d, false, true).actions.remove(0);
     recorded.steps[0].1["planes"][0]["dst"][0][0] = json!(6);
-    assert!(atn_cmds::export("Set", &[&recorded], &[], false).is_err());
+    super::atn_export::fallback("Set", &recorded);
     action.steps[0].1["interpolation"] = json!("nearest");
-    assert!(atn_cmds::export("Set", &[&action], &[], false).is_err());
+    super::atn_export::fallback("Set", &action);
 }
 
 fn session(depth: u8) -> (Session, LayerId) {

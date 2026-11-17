@@ -81,7 +81,7 @@ fn batch_untouched_reference_and_edited_set_are_distinct() {
     assert_eq!(*names, vec![named("Actn", "Edited")]);
 }
 
-/// Native Batch's optional false flag must export, but malformed values must not.
+/// Native Batch's optional false flag maps to Photoshop; malformed values stay exact native JSON.
 #[test]
 fn batch_missing_override_save_as_exports_false() {
     let p = json!({"input":"in","output":"out","action":"Child","stopOnError":true,"includeNonImages":true,"namingComponents":[{"component":"name"},{"component":"extension"}]});
@@ -89,7 +89,7 @@ fn batch_missing_override_save_as_exports_false() {
     assert_eq!(exported(&action).get("Ovrd"), Some(&D::Boolean(false)));
     let mut invalid = p;
     invalid["overrideSaveAs"] = json!(17);
-    assert!(atn_cmds::export("Parent", &[&Action::new("Bad", vec![("file.automate.batch".into(), invalid)])], &[], false).is_err());
+    super::atn_export::fallback("Parent", &Action::new("Bad", vec![("file.automate.batch".into(), invalid)]));
 }
 
 /// Unknown outer Calculations metadata stays a whole disabled step instead of changing on save.
@@ -116,11 +116,11 @@ fn calculations_outer_descriptor_metadata_is_preserved() {
     }
 }
 
-/// Custom export refuses non-object values instead of inventing an identity filter.
+/// Non-object Custom values stay complete native steps instead of inventing an identity filter.
 #[test]
-fn custom_non_object_params_refuse_export() {
+fn custom_non_object_params_stay_native_instead_of_becoming_identity() {
     for params in [Value::Null, json!(3), json!(true), json!([])] {
-        assert!(atn_cmds::export("Parent", &[&Action::new("Bad", vec![("filter.other.custom".into(), params)])], &[], false).is_err());
+        super::atn_export::fallback("Parent", &Action::new("Bad", vec![("filter.other.custom".into(), params)]));
     }
     exported(&Action::new("Identity", vec![("filter.other.custom".into(), json!({}))]));
 }
@@ -664,7 +664,11 @@ fn batch_null_set_exports_like_absent_and_preserves_explicit_sets() {
         p["set"] = set.clone();
         let action = Action::new("Review", vec![("file.automate.batch".into(), p)]);
         let result = atn_cmds::export("Parent", &[&action], &[], false);
-        assert_eq!(result.is_ok(), allowed);
+        if !allowed {
+            super::atn_export::fallback("Parent", &action);
+            continue;
+        }
+        assert!(result.is_ok());
         if allowed {
             let bytes = result.unwrap().0;
             let imported = atn_cmds::import(&bytes).unwrap();

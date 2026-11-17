@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 use serde_json::{Value, json};
 
 use crate::actions_cmds::{Action, PLAY_SHORTCUT_PREFIX, branch_id_field};
-use crate::actions_edit_cmds::{check_library_size, confirmed_idle, publish_library};
+use crate::actions_edit_cmds::{check_library_size, confirmed_idle, publish_library_with_origins};
 use crate::{Result, Session};
 
 use super::super::bad;
@@ -18,6 +18,8 @@ struct Replacement {
     keys: BTreeMap<String, String>,
     warnings: Vec<String>,
     unsupported: Vec<Unsupported>,
+    library: crate::actions_cmds::library::Library,
+    metadata: Vec<crate::atn_cmds::sidecar::SetRowMetadata>,
 }
 
 impl Replacement {
@@ -101,7 +103,20 @@ impl Replacement {
             }
         }
         check_library_size(&list, &[], &rows, COMMAND)?;
-        Ok(Self { list, rows, keys, warnings, unsupported })
+        let (library, metadata) = crate::actions_cmds::library::decode_import(bytes)
+            .ok()
+            .map(|state| {
+                // Keep action metadata and the installed empty-row carriers in one decoded
+                // source. Independent decodes of identical bytes are not physical identities.
+                for (action, original) in list.iter_mut().zip(&state.list) {
+                    crate::actions_cmds::library::bind_import(action, original);
+                }
+                crate::actions_cmds::library::replacement_provenance(&state, &rows)
+            })
+            .transpose()
+            .map_err(|error| bad(COMMAND, error))?
+            .unwrap_or_default();
+        Ok(Self { list, rows, keys, warnings, unsupported, library, metadata })
     }
 }
 
@@ -121,12 +136,12 @@ pub(in super::super) fn replace(s: &mut Session, p: &Value) -> Result<Value> {
         _ => return Err(bad(COMMAND, "encoding must be auto or a non-empty label")),
     };
     let (bytes, _) = crate::preset_import_cmds::file_bytes(p, COMMAND, ".atn file")?;
-    let Replacement { mut list, rows, keys, warnings, unsupported } = Replacement::parse(&bytes, encoding)?;
+    let Replacement { mut list, rows, keys, warnings, unsupported, library, metadata } = Replacement::parse(&bytes, encoding)?;
     // Whole-library imports keep their automation origin just as actions.load imports do.
     for action in &mut list {
-        action.automation = s.authorize.is_some();
+        action.automation |= s.authorize.is_some();
     }
     let result = json!({"sets":rows,"actions":list.iter().map(|a| &a.name).collect::<Vec<_>>(),"warnings":warnings,"unsupported":unsupported});
-    publish_library(s, list, Vec::new(), rows, Some(keys), "Undo Replace Actions", COMMAND)?;
+    publish_library_with_origins(s, list, Vec::new(), rows, Some(keys), "Undo Replace Actions", COMMAND, Some((library, metadata)))?;
     Ok(result)
 }

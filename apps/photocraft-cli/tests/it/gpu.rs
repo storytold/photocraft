@@ -180,8 +180,10 @@ fn batch_recovers_renderer_after_failed_item_and_preserves_gpu_policy() {
     let valid_png = in_dir.join("02_valid.png");
     write_png(&valid_png, 32, 32);
 
-    let actions = d.join("actions.json");
-    std::fs::write(&actions, serde_json::json!([{"command": "layer.new.layer", "params": {"name": "Batch"}}]).to_string()).unwrap();
+    // Batch action files are ATN libraries or droplets; a droplet keeps this test about the renderer.
+    let actions = d.join("fixture.pcdroplet");
+    let droplet = serde_json::json!({"photocraftDroplet": 1, "action": {"steps": [{"command": "layer.new.layer", "params": {"name": "Batch"}}]}});
+    std::fs::write(&actions, droplet.to_string()).unwrap();
     let o = bin()
         .args(["batch", "--gpu", "--actions"])
         .arg(&actions)

@@ -156,10 +156,10 @@ fn descriptor_width_matches_defaults_limits_and_other_stroke_options() {
 
 /// A custom Stroke converter must retain the plain-event mask/channel target guard.
 #[test]
-fn stroke_mask_and_channel_targets_are_still_refused_and_reported() {
+fn stroke_mask_and_channel_targets_are_preserved_or_skipped_and_reported() {
     for target in [json!("mask"), json!("quickMask"), json!({"channel": 0})] {
         let action = Action::new("Targeted", vec![("edit.stroke".into(), json!({"width": 2.4, "target": target}))]);
-        assert!(atn_cmds::export("Widths", &[&action], &[], false).is_err());
+        crate::atn_export::fallback("Widths", &action);
         let (bytes, skipped) = atn_cmds::export("Widths", &[&action], &[], true).unwrap();
         assert_eq!(skipped, vec![atn_cmds::Skipped { action: "Targeted".into(), step: 0, id: "edit.stroke".into() }]);
         assert!(atn::parse(&bytes).unwrap().actions[0].items.is_empty());

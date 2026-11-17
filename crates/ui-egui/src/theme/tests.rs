@@ -1,5 +1,15 @@
 use super::*;
 
+#[test]
+fn action_picker_selection_marks_remain_readable() {
+    for fill in Tokens::ACTION_PICKER_SWATCHES {
+        let ink = Tokens::action_thumbnail_ink(fill);
+        assert!(contrast(ink, fill) >= 4.5, "{ink:?} on {fill:?}");
+    }
+    assert_eq!(Tokens::action_thumbnail_ink(Color32::from_rgb(255, 240, 90)), Color32::BLACK);
+    assert_eq!(Tokens::action_thumbnail_ink(Color32::from_rgb(20, 25, 35)), Color32::WHITE);
+}
+
 fn text_sizes(ctx: &egui::Context) -> Vec<egui::Vec2> {
     let mut sizes = Vec::new();
     // The plugin queues changed fonts at the end of a pass; egui applies them next pass.
@@ -361,4 +371,54 @@ fn breeze_themes_parse_and_meet_text_contrast() {
         }
         assert!(contrast(t.caption_close_text, t.caption_close) >= 4.5, "{kind:?}: close button glyph");
     }
+}
+
+#[test]
+fn action_tiles_use_photocraft_pro_palettes_in_atn_order() {
+    let defaults = [
+        (ThemeKind::Pro, [0x323232, 0x913633, 0x904d2a, 0x7e692a, 0x36674b, 0x305c86, 0x5d4c87, 0x5b5b5b, 0x286a6c, 0x344599, 0x8a3967, 0x713e8f]),
+        (ThemeKind::ProMedium, [0x535353, 0xb0494a, 0xa15e35, 0x957a2f, 0x477b53, 0x42709d, 0x715e9e, 0x6e6e6e, 0x327c78, 0x4457a9, 0xa44878, 0x834ba2]),
+        (ThemeKind::ProLightGray, [0xb8b8b8, 0xd87073, 0xe29b6a, 0xddc468, 0x85b590, 0x7badda, 0xa192d2, 0x9d9d9d, 0x69afae, 0x778cdb, 0xd27eab, 0xb484cf]),
+        (ThemeKind::ProLight, [0xf0f0f0, 0xed9999, 0xf4b58b, 0xefd886, 0xa0cda3, 0x9dc3e6, 0xbba9e0, 0xbcbcbc, 0x84cac4, 0x97a6e6, 0xe59dc1, 0xcf9fe1]),
+    ];
+    for (kind, expected) in defaults {
+        let actual = Tokens::for_kind(kind).action_tiles.map(|fill| u32::from_be_bytes([0, fill.r(), fill.g(), fill.b()]));
+        assert_eq!(actual, expected, "{kind:?}");
+    }
+}
+
+#[test]
+fn action_glyph_uses_theme_family_ink_and_meets_tile_contrast() {
+    for kind in ThemeKind::ALL {
+        let tokens = Tokens::for_kind(kind);
+        let glyph = tokens.action_glyph;
+        let expected = if kind.is_dark() { Color32::from_white_alpha(204) } else { Color32::from_black_alpha(204) };
+        assert_eq!(glyph, expected, "{kind:?}");
+        assert_eq!(tokens.action_tiles[0], tokens.card, "{kind:?}");
+        let family = if kind.is_dark() { ThemeKind::ProMedium } else { ThemeKind::ProLightGray };
+        if !kind.is_pro() {
+            assert_eq!(tokens.action_tiles[1..], Tokens::for_kind(family).action_tiles[1..], "{kind:?}");
+        }
+        let background_weight = u16::from(255 - glyph.a());
+        let blend = |ink: u8, fill: u8| ink + ((u16::from(fill) * background_weight + 127) / 255) as u8;
+        for (index, fill) in tokens.action_tiles.into_iter().enumerate() {
+            let blended = Color32::from_rgb(blend(glyph.r(), fill.r()), blend(glyph.g(), fill.g()), blend(glyph.b(), fill.b()));
+            let ratio = contrast(blended, fill);
+            assert!(ratio >= 3.0, "{kind:?}: tile {index} has contrast {ratio}");
+            if kind == ThemeKind::ProLight && index == 3 {
+                assert_eq!(blended, Color32::from_rgb(48, 43, 27));
+            }
+        }
+    }
+}
+
+#[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+#[test]
+fn live_action_ink_and_neutral_tile_follow_overrides() {
+    let mut tokens = Tokens::for_kind(ThemeKind::ProMedium);
+    let original_gray = tokens.action_tile_fill("gray");
+    assert!(live::apply_overrides(&mut tokens, &serde_json::json!({"card":"#333333","action_glyph":"#00000099"})).is_empty());
+    assert_eq!(tokens.action_glyph, Color32::from_black_alpha(153));
+    assert_eq!(tokens.action_tile_fill(""), Color32::from_rgb(51, 51, 51));
+    assert_eq!(tokens.action_tile_fill("gray"), original_gray);
 }

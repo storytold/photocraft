@@ -24,6 +24,8 @@ pub struct LibraryUndo {
     list: Vec<Action>,
     sets: Vec<String>,
     rows: Vec<String>,
+    library: crate::actions_cmds::library::Library,
+    metadata: Vec<crate::atn_cmds::sidecar::SetRowMetadata>,
     shortcuts: Shortcuts,
     alternates: Alternates,
     after_shortcuts: Shortcuts,
@@ -93,12 +95,26 @@ pub(crate) fn check_library_size(list: &[Action], sets: &[String], rows: &[Strin
 /// Append pins an existing legacy binding before adding a namesake.
 pub(crate) fn publish_library(
     s: &mut Session,
+    list: Vec<Action>,
+    sets: Vec<String>,
+    rows: Vec<String>,
+    new_shortcuts: Option<Shortcuts>,
+    label: &'static str,
+    cmd: &str,
+) -> Result<()> {
+    publish_library_with_origins(s, list, sets, rows, new_shortcuts, label, cmd, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn publish_library_with_origins(
+    s: &mut Session,
     mut list: Vec<Action>,
     sets: Vec<String>,
     rows: Vec<String>,
     new_shortcuts: Option<Shortcuts>,
     label: &'static str,
     cmd: &str,
+    origins: Option<(crate::actions_cmds::library::Library, Vec<crate::atn_cmds::sidecar::SetRowMetadata>)>,
 ) -> Result<()> {
     let shortcuts = action_bindings(&s.prefs().shortcuts);
     let alternates = action_bindings(&s.prefs().alternate_shortcuts);
@@ -119,6 +135,17 @@ pub(crate) fn publish_library(
         }
     };
     check_library_size(&list, &sets, &rows, cmd)?;
+    let (library, metadata) =
+        origins.unwrap_or_else(|| if replacing { Default::default() } else { (s.actions.library.clone(), s.actions.atn_set_rows.clone()) });
+    let proposed = crate::actions_cmds::ActionState {
+        list: list.clone(),
+        sets: sets.clone(),
+        set_rows: rows.clone(),
+        library: library.clone(),
+        atn_set_rows: metadata.clone(),
+        ..Default::default()
+    };
+    crate::actions_cmds::library::check_definition(&proposed, &after_shortcuts).map_err(|error| bad(cmd, error))?;
     if after_shortcuts != shortcuts || after_alternates != alternates {
         replace_bindings(s, after_shortcuts.clone(), after_alternates.clone());
     }
@@ -133,6 +160,8 @@ pub(crate) fn publish_library(
         list: std::mem::replace(&mut s.actions.list, list),
         sets: std::mem::replace(&mut s.actions.sets, sets),
         rows: std::mem::replace(&mut s.actions.set_rows, rows),
+        library: std::mem::replace(&mut s.actions.library, library),
+        metadata: std::mem::replace(&mut s.actions.atn_set_rows, metadata),
         shortcuts,
         alternates,
         after_shortcuts,
@@ -217,6 +246,8 @@ pub(super) fn undo(s: &mut Session, _: &Value) -> Result<Value> {
     s.actions.list = undo.list;
     s.actions.sets = undo.sets;
     s.actions.set_rows = undo.rows;
+    s.actions.library = undo.library;
+    s.actions.atn_set_rows = undo.metadata;
     if s.preset_store.is_none() {
         s.actions.replaced_before_attachment = undo.replaced_before_attachment;
     }

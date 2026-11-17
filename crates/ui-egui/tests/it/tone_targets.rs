@@ -1184,6 +1184,7 @@ fn record_again_uses_recorded_alpha_settings_and_matches_its_preview() {
     for mode in MODES {
         for kind in ["levels", "curves"] {
             let mut app = fixture(mode, SampleType::U16, ChannelTarget::Color(0));
+            app.ui.actions_layout = photocraft_ui_egui::state::ActionsLayout::Classic;
             let mut recorded = photocraft_engine::adjust_params::to_params(&photocraft_engine::adjust_params::default_for(kind, mode).unwrap());
             for key in ["red", "green", "blue", "cyan", "magenta", "yellow", "black", "lightness", "a", "b"] {
                 if recorded.get(key).is_some() {

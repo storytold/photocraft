@@ -5,6 +5,28 @@
 use super::*;
 use web_time::{Duration, Instant};
 
+#[test]
+fn pacing_stops_at_the_last_enabled_step_with_a_disabled_tail() {
+    let mut app = app_with("step", 1, true);
+    app.session.actions.list[0].disabled.insert(1);
+    let ctx = egui::Context::default();
+    let first = play(&mut app, &json!({"action": "Three"})).unwrap();
+    assert_eq!(first["ran"], 1);
+    assert_eq!(names(&app), ["A"]);
+    assert!(app.paused_playbacks.timer.is_some(), "a later enabled step still needs a pause");
+    next_step(&mut app, &ctx);
+    assert_eq!(names(&app), ["A", "C"]);
+    assert_idle(&app);
+
+    app.run("file.new", json!({"width": 8, "height": 6})).unwrap();
+    app.session.actions.list[0].disabled.extend([1, 2]);
+    let last = play(&mut app, &json!({"action": "Three"})).unwrap();
+    assert_eq!(last["ran"], 1);
+    assert_eq!(names(&app), ["A"]);
+    assert_idle(&app);
+    assert_released(&mut app);
+}
+
 fn names(app: &PhotocraftApp) -> Vec<String> {
     app.session.active().unwrap().doc.walk().iter().map(|(_, _, l)| l.name.clone()).filter(|n| n != "Background").collect()
 }
@@ -251,6 +273,7 @@ fn a_paced_play_clears_an_earlier_playback_error() {
     let mut app = app_with("step", 1, true);
     app.ui.status = "Step 2 (layer.select) failed: no such layer".into();
     app.ui.status_error = true;
+    app.ui.actions_layout = crate::state::ActionsLayout::Classic;
     let mut h = Harness::builder().with_size(egui::vec2(400.0, 320.0)).build_ui_state(|ui, app| panel(app, ui), app);
     h.run_steps(3);
     h.get_by_label("Play selection").click();

@@ -667,11 +667,13 @@ fn saving_preferences_waits_for_the_actions_write_only_for_its_shortcuts() {
 fn desktop_shortcuts_wait_for_the_actions_definition_write() {
     use photocraft_engine::actions_cmds;
     use photocraft_engine::preset_store::{ACTIONS_FILE, MemBackend, PresetBackend, open};
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     struct RetriableActionsWrite {
         store: MemBackend,
         reject: Arc<AtomicBool>,
+        attempts: Arc<AtomicUsize>,
+        fail_at: Arc<AtomicUsize>,
     }
 
     impl PresetBackend for RetriableActionsWrite {
@@ -684,8 +686,11 @@ fn desktop_shortcuts_wait_for_the_actions_definition_write() {
         }
 
         fn write(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
-            if name == ACTIONS_FILE && self.reject.load(Ordering::Relaxed) {
-                return Err("injected Actions write rejection".into());
+            if name == ACTIONS_FILE {
+                let attempt = self.attempts.fetch_add(1, Ordering::Relaxed) + 1;
+                if self.reject.load(Ordering::Relaxed) || self.fail_at.load(Ordering::Relaxed) == attempt {
+                    return Err("injected Actions write rejection".into());
+                }
             }
             self.store.write(name, bytes)
         }
@@ -697,9 +702,8 @@ fn desktop_shortcuts_wait_for_the_actions_definition_write() {
 
     let old_id = "00112233445566778899aabbccddeeff";
     let old = actions_cmds::occurrence_key(old_id);
-    let original = json!({"version":1, "actions":[{"name":"Saved", "action_id":old_id}]});
     let ctx = egui::Context::default();
-    for attach in [true, false] {
+    for (attach, fail_cleanup) in [(true, false), (true, true), (false, false)] {
         let (tx, rx) = std::sync::mpsc::channel();
         let (mut app, prefs) = app_with_saved(Some(json!({"shortcuts":{(&old):"F4"}, "alternateShortcuts":{(&old):["F4","F8"]}}).to_string()));
         app.services.preset_store = Some(rx);
@@ -724,10 +728,32 @@ fn desktop_shortcuts_wait_for_the_actions_definition_write() {
         assert_held(13);
 
         let definitions = MemBackend::default();
-        definitions.write(ACTIONS_FILE, original.to_string().as_bytes()).unwrap();
+        let mut seed = photocraft_engine::Session::new();
+        assert!(seed.attach_preset_store(open(Box::new(definitions.clone()))).is_empty());
+        let mut saved_action = actions_cmds::Action::new("Saved", Vec::new());
+        saved_action.action_id = Some(old_id.into());
+        seed.actions.list = vec![saved_action];
+        seed.actions.rev = seed.actions.rev.saturating_add(1);
+        seed.edit_prefs(|prefs| {
+            prefs.shortcuts.insert(old.clone(), "F4".into());
+        });
+        seed.sync_preset_store();
+        assert!(seed.action_definitions_written());
+        let original = definitions.read(ACTIONS_FILE, photocraft_engine::preset_store::MAX_ACTIONS_BYTES).unwrap();
+        let mut reopened = photocraft_engine::Session::new();
+        assert!(reopened.attach_preset_store(open(Box::new(definitions.clone()))).is_empty());
+        assert_eq!(reopened.actions.list[0].action_id.as_deref(), Some(old_id));
         let reject = Arc::new(AtomicBool::new(true));
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let fail_at = Arc::new(AtomicUsize::new(0));
         if attach {
-            tx.send(open(Box::new(RetriableActionsWrite { store: definitions.clone(), reject: reject.clone() }))).unwrap();
+            tx.send(open(Box::new(RetriableActionsWrite {
+                store: definitions.clone(),
+                reject: reject.clone(),
+                attempts: attempts.clone(),
+                fail_at: fail_at.clone(),
+            })))
+            .unwrap();
         }
         drop(tx);
         tick(&mut app, &ctx);
@@ -736,15 +762,28 @@ fn desktop_shortcuts_wait_for_the_actions_definition_write() {
         app.session.edit_prefs(|p| p.file_handling.recent_file_count = 14);
         save_preferences(&mut app).unwrap();
         assert_held(14);
-        assert_eq!(serde_json::from_slice::<Value>(&definitions.read(ACTIONS_FILE, 4096).unwrap()).unwrap(), original);
+        assert_eq!(definitions.read(ACTIONS_FILE, 4096).unwrap(), original);
 
         if attach {
+            if fail_cleanup {
+                // First acknowledge definitions, then reject the following guarded header cleanup.
+                fail_at.store(attempts.load(Ordering::Relaxed) + 2, Ordering::Relaxed);
+            }
             reject.store(false, Ordering::Relaxed);
             // A normal command retries the failed Actions write before preferences are saved.
             app.run("file.new", json!({"width":2,"height":2})).unwrap();
             save_preferences(&mut app).unwrap();
-            let durable = serde_json::from_slice::<Value>(&definitions.read(ACTIONS_FILE, 4096).unwrap()).unwrap();
-            assert_eq!(durable["actions"][0]["action_id"], new_id);
+            if fail_cleanup {
+                assert_eq!(attempts.load(Ordering::Relaxed), fail_at.load(Ordering::Relaxed), "the cleanup write was actually attempted and rejected");
+                assert!(!app.session.action_definitions_written(), "the previous revision write does not acknowledge the cleaned-up keys");
+                assert_held(14);
+                fail_at.store(0, Ordering::Relaxed);
+                app.run("file.new", json!({"width":2,"height":2})).unwrap();
+                save_preferences(&mut app).unwrap();
+            }
+            let mut durable = photocraft_engine::Session::new();
+            assert!(durable.attach_preset_store(open(Box::new(definitions.clone()))).is_empty());
+            assert_eq!(durable.actions.list[0].action_id.as_deref(), Some(new_id.as_str()));
             let saved = stored(&prefs);
             assert_eq!(saved["shortcuts"][&new], "F4");
             assert_ne!(saved["shortcuts"][&old], "F4");
@@ -764,13 +803,24 @@ fn desktop_shortcuts_wait_for_the_actions_definition_write() {
             tx.send(open(Box::new(definitions.clone()))).unwrap();
             app.services.preset_store = Some(rx);
             tick(&mut app, &ctx);
-            let durable = serde_json::from_slice::<Value>(&definitions.read(ACTIONS_FILE, 4096).unwrap()).unwrap();
-            assert_eq!(durable["actions"][1]["action_id"], late_id);
+            let mut durable = photocraft_engine::Session::new();
+            assert!(durable.attach_preset_store(open(Box::new(definitions.clone()))).is_empty());
+            assert_eq!(durable.actions.list[1].action_id.as_deref(), Some(late_id.as_str()));
             let saved = stored(&prefs);
             assert_eq!(saved["shortcuts"][&new], "F4");
             assert_eq!(saved["shortcuts"][&late], "F8");
             assert!(saved["alternateShortcuts"][&old].as_array().is_none_or(Vec::is_empty));
         }
+        let saved = stored(&prefs);
+        let mut reopened = photocraft_engine::Session::new();
+        reopened.load_prefs_json(&saved.to_string()).unwrap();
+        assert!(reopened.attach_preset_store(open(Box::new(definitions.clone()))).is_empty());
+        assert_eq!(reopened.prefs().shortcuts[&new], "F4");
+        assert_ne!(
+            reopened.prefs().shortcuts.get(&old).map(String::as_str),
+            Some("F4"),
+            "the durable native header must not resurrect the old conflicting key"
+        );
     }
 }
 

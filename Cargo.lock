@@ -5715,6 +5715,7 @@ dependencies = [
  "photocraft-testkit",
  "photocraft-text",
  "photocraft-vector",
+ "proptest",
  "rayon",
  "same-file",
  "semver",

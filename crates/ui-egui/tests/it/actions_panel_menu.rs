@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 fn harness() -> Harness<'static, PhotocraftApp> {
     let mut app = PhotocraftApp::new(Session::new(), Default::default());
     app.background_jobs = false;
+    app.ui.actions_layout = photocraft_ui_egui::state::ActionsLayout::Classic;
     app.run("file.new", json!({"width":16,"height":12})).unwrap();
     let mut a = Action::new("A", vec![]);
     a.set = Some("S".into());

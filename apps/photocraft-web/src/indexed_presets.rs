@@ -10,8 +10,10 @@ use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{Blob, Event, EventTarget, IdbDatabase, IdbRequest, IdbTransactionMode};
 
-use crate::preset_bridge::{ActionKeys, Batch, Bridge, MAX_RECORDS, WriteError, record_limit};
-use photocraft_engine::preset_store::{ACTIONS_FILE, MAX_ACTIONS_BYTES, MAX_STORE_BYTES};
+use crate::preset_bridge::{ActionKeys, ActionWrite, Batch, Bridge, MAX_RECORDS, WriteError, record_limit};
+
+mod migration;
+use photocraft_engine::preset_store::{ACTIONS_FILE, LEGACY_ACTIONS_FILE, MAX_ACTIONS_BYTES, MAX_STORE_BYTES, MIGRATED_ACTIONS_FILE};
 
 const DATABASE: &str = "photocraft.presets";
 const FILES: &str = "files";
@@ -103,12 +105,21 @@ async fn before(promise: &Promise, deadline: f64) -> Result<JsValue, String> {
 
 async fn open(deadline: f64) -> Result<IdbDatabase, String> {
     let factory = web_sys::window().ok_or("no window")?.indexed_db().map_err(js)?.ok_or("IndexedDB unavailable")?;
-    // Version 2 excludes old tabs that could still overwrite the paired Actions record with a Blob.
-    let req = factory.open_with_u32(DATABASE, 2).map_err(js)?;
+    // Version 3 excludes both legacy v2 JSON-pair writers and v2 ATN-Blob writers.
+    let req = factory.open_with_u32(DATABASE, 3).map_err(js)?;
     let mut upgrade = Listeners::new();
+    let blocked = Rc::new(Cell::new(false));
+    let noticed = blocked.clone();
+    upgrade.add(&req, "blocked", move |_| noticed.set(true)).map_err(js)?;
     let upgrade_req = req.clone();
     upgrade
         .add(&req, "upgradeneeded", move |_| {
+            if js_sys::Date::now() >= deadline {
+                if let Some(tx) = upgrade_req.transaction() {
+                    let _ = tx.abort();
+                }
+                return;
+            }
             let result = (|| -> Result<(), JsValue> {
                 let db = upgrade_req.result()?.dyn_into::<IdbDatabase>()?;
                 let tx = upgrade_req.transaction().ok_or_else(|| JsValue::from_str("No preset database upgrade transaction"))?;
@@ -126,8 +137,22 @@ async fn open(deadline: f64) -> Result<IdbDatabase, String> {
         .map_err(js)?;
     let pending = request(&req);
     match before(&pending.promise, deadline).await {
-        Ok(value) => value.dyn_into().map_err(|_| "invalid preset database".into()),
+        Ok(value) => {
+            let db: IdbDatabase = value.dyn_into().map_err(|_| "invalid preset database")?;
+            let connection = db.clone();
+            let close = Closure::<dyn FnMut(Event)>::new(move |_| connection.close());
+            db.set_onversionchange(Some(close.as_ref().unchecked_ref()));
+            close.forget(); // Connection lifetime is the page lifetime.
+            Ok(db)
+        }
         Err(e) => {
+            let e = if blocked.get() {
+                format!(
+                    "{e}; browser storage upgrade is blocked by another tab. Close other tabs for this site, then reload this tab to enable saving. Reloading discards session-only brushes."
+                )
+            } else {
+                e
+            };
             // An open request cannot be cancelled (another tab may block its upgrade). Keep
             // its handlers alive and close any late connection; never hydrate a live session.
             wasm_bindgen_futures::spawn_local(async move {
@@ -157,6 +182,23 @@ pub async fn load() -> Result<(IdbDatabase, Bridge, Vec<String>), String> {
     }
 }
 
+/// Retained migration errors must not invalidate the published Actions library.
+fn record_action_issue(name: &str, error: String, action_issue: &mut Option<String>, warnings: &mut Vec<String>, unreadable: &mut Vec<String>) {
+    if name == MIGRATED_ACTIONS_FILE {
+        if warnings.len() < 8 {
+            warnings.push(format!("Browser Actions recovery backup was skipped: {error}"));
+        }
+    } else if name == LEGACY_ACTIONS_FILE {
+        // Keep its presence visible: the engine prefers valid ATN, but rejects unreadable legacy without it.
+        unreadable.push(name.into());
+        if warnings.len() < 8 {
+            warnings.push(format!("Browser Actions legacy input was skipped: {error}"));
+        }
+    } else {
+        *action_issue = Some(error);
+    }
+}
+
 async fn read(db: &IdbDatabase, deadline: f64) -> Result<(Bridge, Vec<String>), String> {
     let tx = db.transaction_with_str_and_mode(FILES, IdbTransactionMode::Readonly).map_err(js)?;
     let req = tx.object_store(FILES).map_err(js)?.open_cursor().map_err(js)?;
@@ -165,7 +207,7 @@ async fn read(db: &IdbDatabase, deadline: f64) -> Result<(Bridge, Vec<String>), 
     let mut unreadable = Vec::new();
     let mut total = 0u64;
     let mut seen = 0usize;
-    let mut action_record = None;
+    let mut action_records = Vec::new();
     let mut action_issue = None;
     let mut next = request(&req);
     loop {
@@ -182,10 +224,10 @@ async fn read(db: &IdbDatabase, deadline: f64) -> Result<(Bridge, Vec<String>), 
         // Inspect key length in JS before allocating its Rust String.
         let name = if key.is_string() && js_sys::JsString::from(key.clone()).length() <= 133 { key.as_string().unwrap_or_default() } else { String::new() };
         let stored = cursor.value().map_err(js)?;
-        if name == ACTIONS_FILE && !stored.is_instance_of::<Blob>() {
+        if matches!(name.as_str(), ACTIONS_FILE | LEGACY_ACTIONS_FILE | MIGRATED_ACTIONS_FILE) && !stored.is_instance_of::<Blob>() {
             match paired_actions(&stored) {
-                Ok(record) => action_record = Some(record),
-                Err(error) => action_issue = Some(error),
+                Ok(record) => action_records.push((name, record)),
+                Err(error) => record_action_issue(&name, error, &mut action_issue, &mut warnings, &mut unreadable),
             }
             next = request(&req);
             cursor.continue_().map_err(js)?;
@@ -224,19 +266,17 @@ async fn read(db: &IdbDatabase, deadline: f64) -> Result<(Bridge, Vec<String>), 
         cursor.continue_().map_err(js)?;
     }
     let bridge = Bridge::default();
-    for name in unreadable {
-        bridge.load(&name, Vec::new())?;
-    }
     for (name, blob) in records {
         let result = before(&blob.array_buffer(), deadline).await.and_then(|buffer| bridge.load(&name, Uint8Array::new(&buffer).to_vec()));
         if let Err(error) = result {
-            if name != ACTIONS_FILE {
+            if matches!(name.as_str(), ACTIONS_FILE | LEGACY_ACTIONS_FILE | MIGRATED_ACTIONS_FILE) {
+                record_action_issue(&name, error, &mut action_issue, &mut warnings, &mut unreadable);
+            } else {
                 return Err(error);
             }
-            action_issue = Some(error);
         }
     }
-    if let Some((revision, definitions, keys)) = action_record {
+    for (name, (revision, definitions, keys)) in action_records {
         let result = async {
             // A paired record beyond the remaining definition budget leaves the ordinary presets usable.
             if total.saturating_add(definitions.as_ref().map_or(0, |blob| blob.size() as u64)) > MAX_STORE_BYTES {
@@ -246,15 +286,22 @@ async fn read(db: &IdbDatabase, deadline: f64) -> Result<(Bridge, Vec<String>), 
             let keys = ActionKeys::decode(&Uint8Array::new(&buffer).to_vec())?;
             if let Some(blob) = definitions {
                 let buffer = before(&blob.array_buffer(), deadline).await?;
-                bridge.load(ACTIONS_FILE, Uint8Array::new(&buffer).to_vec())?;
+                bridge.load(&name, Uint8Array::new(&buffer).to_vec())?;
             }
-            bridge.load_action_keys(revision, keys);
+            if name == ACTIONS_FILE {
+                bridge.load_action_keys(revision, keys);
+            } else if name == LEGACY_ACTIONS_FILE {
+                bridge.load_legacy_action_keys(revision, keys);
+            }
             Ok::<_, String>(())
         }
         .await;
         if let Err(error) = result {
-            action_issue = Some(error);
+            record_action_issue(&name, error, &mut action_issue, &mut warnings, &mut unreadable);
         }
+    }
+    for name in unreadable {
+        bridge.load(&name, Vec::new())?;
     }
     if let Some(error) = action_issue {
         // A placeholder tells the engine that this file exists and must be left unchanged.
@@ -291,6 +338,8 @@ pub async fn write(db: &IdbDatabase, batch: &Batch) -> Result<(), WriteError> {
     let tx = db.transaction_with_str_and_mode(FILES, IdbTransactionMode::Readwrite).map_err(js)?;
     let store = tx.object_store(FILES).map_err(js)?;
     let mut compare = Listeners::new();
+    let deadline = js_sys::Date::now() + TIMEOUT_MS;
+    let mut migration_scope = None;
     let compare_error = Rc::new(RefCell::new(None));
     let queued = (|| -> Result<(), String> {
         match batch {
@@ -305,6 +354,10 @@ pub async fn write(db: &IdbDatabase, batch: &Batch) -> Result<(), WriteError> {
                 }
             }
             Batch::Actions(action) => {
+                if action.migration.is_some() {
+                    migration_scope = Some(migration::start(&tx, &store, action, deadline)?);
+                    return Ok(());
+                }
                 let keys = action.keys.encode()?;
                 if keys.len() as u64 > MAX_ACTIONS_BYTES {
                     return Err("Browser Action shortcuts are too large to save".into());
@@ -369,7 +422,10 @@ pub async fn write(db: &IdbDatabase, batch: &Batch) -> Result<(), WriteError> {
             let _ = reject.call1(&JsValue::NULL, &e);
         }
     });
-    let outcome = before(&promise, js_sys::Date::now() + TIMEOUT_MS).await;
+    let outcome = before(&promise, deadline).await;
+    if let Some(error) = migration_scope.as_ref().and_then(migration::Scope::error) {
+        return Err(error);
+    }
     if let Some(error) = compare_error.take() {
         // No put was queued on any comparison failure.
         return Err(error);
@@ -385,4 +441,62 @@ pub async fn write(db: &IdbDatabase, batch: &Batch) -> Result<(), WriteError> {
             Err(WriteError::Uncertain(message))
         }
     }
+}
+
+struct ActionRecord {
+    revision: u64,
+    definitions: Option<Vec<u8>>,
+    keys: Option<ActionKeys>,
+}
+impl ActionRecord {
+    fn pair(&self) -> Option<(u64, ActionKeys)> {
+        self.keys.clone().map(|keys| (self.revision, keys))
+    }
+}
+async fn action_record(value: JsValue, deadline: f64) -> Result<Option<ActionRecord>, WriteError> {
+    if value.is_undefined() {
+        return Ok(None);
+    }
+    let (revision, definitions, keys) = if value.is_instance_of::<Blob>() {
+        (0, Some(value.dyn_into::<Blob>().map_err(js)?), None)
+    } else {
+        let (revision, definitions, keys) = paired_actions(&value).map_err(WriteError::Blocked)?;
+        (revision, definitions, Some(keys))
+    };
+    let read = async |blob: Blob| -> Result<Vec<u8>, WriteError> {
+        if blob.size() > MAX_ACTIONS_BYTES as f64 {
+            return Err(WriteError::Blocked("Actions migration record exceeds its file limit".into()));
+        }
+        let buffer = before(&blob.array_buffer(), deadline).await?;
+        Ok(Uint8Array::new(&buffer).to_vec())
+    };
+    let definitions = match definitions {
+        Some(blob) => Some(read(blob).await?),
+        None => None,
+    };
+    let keys = match keys {
+        Some(blob) => Some(ActionKeys::decode(&read(blob).await?).map_err(WriteError::Blocked)?),
+        None => None,
+    };
+    Ok(Some(ActionRecord { revision, definitions, keys }))
+}
+
+/// Called only by an active request callback after every migration tuple was authenticated.
+fn queue_migration(store: &web_sys::IdbObjectStore, action: &ActionWrite, legacy: &JsValue, committed: bool) -> Result<(), WriteError> {
+    if committed {
+        return Ok(());
+    }
+    let migration = action.migration.as_ref().ok_or("missing Actions migration identity")?;
+    let definitions = action.definitions.as_deref().map(blob).transpose()?.map_or(JsValue::NULL, JsValue::from);
+    let keys = blob(&action.keys.encode()?)?;
+    let record = Array::of3(&JsValue::from_str(&action.revision.to_string()), &definitions, keys.as_ref());
+    // The original v2 paired value (including its key map) is retained, not reconstructed.
+    store.add_with_key(legacy, &JsValue::from_str(MIGRATED_ACTIONS_FILE)).map_err(js)?;
+    if migration.published {
+        store.put_with_key(&record, &JsValue::from_str(ACTIONS_FILE)).map_err(js)?;
+    } else {
+        store.add_with_key(&record, &JsValue::from_str(ACTIONS_FILE)).map_err(js)?;
+    }
+    store.delete(&JsValue::from_str(LEGACY_ACTIONS_FILE)).map_err(js)?;
+    Ok(())
 }

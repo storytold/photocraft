@@ -164,7 +164,15 @@ pub(crate) fn remove_shortcuts(s: &mut Session, remove: impl Fn(usize, &Action) 
         .shortcuts
         .keys()
         .chain(s.prefs().alternate_shortcuts.keys())
-        .filter(|key| shortcut_row(list, key).is_some_and(|row| remove(row, &list[row])))
+        .filter(|key| {
+            shortcut_row(list, key).is_some_and(|row| {
+                let action = &list[row];
+                remove(row, action)
+                    && (key.starts_with(OCCURRENCE_PREFIX)
+                        || action.legacy_shortcut_owner
+                        || !list.iter().enumerate().any(|(other, candidate)| candidate.name == action.name && !remove(other, candidate)))
+            })
+        })
         .cloned()
         .peekable();
     if keys.peek().is_none() {
