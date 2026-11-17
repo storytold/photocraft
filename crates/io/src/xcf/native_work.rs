@@ -75,7 +75,8 @@ mod tests {
     fn cancellation_precedes_admission() {
         let work = Work::with_units(3);
         let cancel = std::sync::atomic::AtomicBool::new(true);
-        assert!(matches!(work.charge_bytes(4, &Interrupt::cancel_only(&cancel)), Err(IoError::Cancelled)));
+        let is_cancelled = || cancel.load(std::sync::atomic::Ordering::Relaxed);
+        assert!(matches!(work.charge_bytes(4, &Interrupt::cancel_only(&is_cancelled)), Err(IoError::Cancelled)));
         assert_eq!(work.remaining_units(), 3);
     }
 }

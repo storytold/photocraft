@@ -398,6 +398,10 @@ fn valid_native_mask_generation_obeys_exact_component_boundary_and_cancellation(
     let mut image = image(&bytes, MAX_PIXEL_BYTES);
     image.native_work = native_work::Work::with_units(2);
     let cancel = std::sync::atomic::AtomicBool::new(true);
-    assert!(matches!(image.native_effect_mask(channel, Rect::new(0, 0, 1, 1), SampleType::U8, &Interrupt::cancel_only(&cancel)), Err(IoError::Cancelled)));
+    let is_cancelled = || cancel.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(matches!(
+        image.native_effect_mask(channel, Rect::new(0, 0, 1, 1), SampleType::U8, &Interrupt::cancel_only(&is_cancelled)),
+        Err(IoError::Cancelled)
+    ));
     assert_eq!(image.native_work.remaining_units(), 2);
 }
