@@ -650,3 +650,30 @@ fn no_duplicate_shortcuts() {
         }
     }
 }
+
+#[test]
+fn shift_f_cycles_the_screen_modes_backwards() {
+    // #15404: F steps Standard → Full Screen With Menu Bar → Full Screen, ⇧F the other way.
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    let ctx = egui::Context::default();
+    let press = |app: &mut PhotocraftApp, key, modifiers| {
+        let raw = egui::RawInput {
+            events: vec![
+                egui::Event::ModifiersChanged(modifiers),
+                egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers },
+                egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers },
+            ],
+            ..Default::default()
+        };
+        ctx.begin_pass(raw);
+        handle(app, &ctx);
+        ctx.end_pass().textures_delta.clear();
+    };
+    for want in ["fullScreen", "fullScreenWithMenuBar", "standard"] {
+        press(&mut app, Key::F, Modifiers::SHIFT);
+        assert_eq!(app.ui.view.screen_mode, want);
+    }
+    press(&mut app, Key::F, Modifiers::NONE);
+    assert_eq!(app.ui.view.screen_mode, "fullScreenWithMenuBar", "F still steps forwards");
+}

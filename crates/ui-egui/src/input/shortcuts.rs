@@ -840,6 +840,15 @@ fn handle_registry_and_tool_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
     if editing {
         return true;
     }
+    // ⇧F cycles the screen modes backwards, as in Photoshop (#15404). After the registry, so a
+    // command bound to ⇧F in Keyboard Shortcuts keeps the key.
+    if crate::menus::is_enabled(app, "view.screenMode.cycle") && ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::F)) {
+        if let Err(e) = crate::menus::invoke(app, ctx, "view.screenMode.cycle", json!({"back": true})) {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
+        return true;
+    }
     // Crop tool showing a box: O cycles its overlay, ⇧O the overlay's orientation (#1919).
     // ... and H toggles Show Cropped Area, and I fills W x H x Resolution from the document (#2443).
     if crate::crop_overlay::keys(app, ctx) || crate::crop_shield::keys(app, ctx) || crate::crop_size::keys(app, ctx) {
