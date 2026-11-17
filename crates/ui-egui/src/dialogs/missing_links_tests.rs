@@ -322,7 +322,7 @@ fn automation_warnings_take_relative_links_from_the_opened_file() {
     app.session.active_mut().unwrap().path = None;
     assert_eq!(app.missing_link_warnings(&abs(&s.doc)), [warning]);
     let doc = &app.session.active().unwrap().doc;
-    assert!(photocraft_engine::link_watch::missing_file_warnings(doc, None).is_empty(), "nothing to take a relative link from");
+    assert!(photocraft_engine::link_watch::missing_file_warnings(doc, None, None).is_empty(), "nothing to take a relative link from");
     // The interactive look answers the same files.
     let looked = photocraft_engine::link_watch::missing_files_within(doc, Some(&s.doc), std::time::Duration::from_secs(10));
     assert_eq!(looked, Some(vec![(s.art.clone(), vec!["art.png".to_string()])]));
