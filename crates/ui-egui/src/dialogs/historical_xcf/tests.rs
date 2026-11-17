@@ -264,6 +264,16 @@ fn automation_open_forwards_choice_before_read_and_preserves_source_protection()
     }
 }
 
+/// A refused startup retains the exact explicit answer in one existing modal.
+fn assert_retained_historical_modal(app: &PhotocraftApp, dialog_id: u64, source: u64, answered_fields: &serde_json::Map<String, Value>) {
+    let retry = app.ui.dialogs.iter().find(|dialog| owns(&dialog.fields)).unwrap();
+    assert_eq!(retry.id, dialog_id, "startup refusal retains the existing modal rather than creating a new question");
+    assert_eq!(&retry.fields, answered_fields, "retain the explicitly selected order and source fields without guessing another choice");
+    assert_eq!(retry.fields[FIELD], source);
+    assert_eq!(retry.fields["historicalXcfSampleOrder"], json!("big-endian"));
+    assert_eq!(app.ui.dialogs.iter().filter(|dialog| owns(&dialog.fields)).count(), 1);
+}
+
 #[test]
 fn refused_historical_start_restores_choice_ahead_of_later_open_then_retries_retained_bytes() {
     let mut app = app();
@@ -290,12 +300,7 @@ fn refused_historical_start_restores_choice_ahead_of_later_open_then_retries_ret
     assert_eq!(app.held_opens.len(), 1, "the later decoded file cannot pass the retry choice");
     assert_eq!(app.session.documents().len(), 1);
     assert!(std::sync::Arc::ptr_eq(&original, &app.session.active().unwrap().doc));
-    let retry = app.ui.dialogs.iter().find(|dialog| owns(&dialog.fields)).unwrap();
-    assert_eq!(retry.id, dialog_id, "startup refusal retains the existing modal rather than creating a new question");
-    assert_eq!(retry.fields, answered_fields, "retain the explicitly selected order and source fields without guessing another choice");
-    assert_eq!(retry.fields[FIELD], source);
-    assert_eq!(retry.fields["historicalXcfSampleOrder"], json!("big-endian"));
-    assert_eq!(app.ui.dialogs.iter().filter(|dialog| owns(&dialog.fields)).count(), 1);
+    assert_retained_historical_modal(&app, dialog_id, source, &answered_fields);
     assert!(app.historical_opens[0].job.is_none());
     assert!(app.session.jobs().is_empty());
     assert_eq!(photocraft_engine::jobs::import_options(app.session.prefs()), import_options);
