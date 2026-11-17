@@ -50,6 +50,8 @@ pub use open::{
 };
 use open::{Target, non_defaults};
 use proxy::{ProxyFrame, ProxyJob};
+#[cfg(not(target_arch = "wasm32"))]
+type ProxyReceiver = std::sync::mpsc::Receiver<Result<ProxyFrame, String>>;
 pub use sidecar::sidecar_path;
 #[cfg(test)]
 use sidecar::{existing_sidecar_is_ours, read_bounded};
@@ -236,6 +238,22 @@ impl CameraRawDialog {
         self.preview_revision = self.preview_revision.saturating_add(1);
     }
 
+    /// Starts the same proxy worker used by the dialog, returning its completion handle.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn spawn_proxy_worker(&self, ctx: &egui::Context) -> std::io::Result<(ProxyReceiver, std::thread::JoinHandle<()>)> {
+        let job = self.proxy_job();
+        let (tx, rx) = std::sync::mpsc::channel::<Result<ProxyFrame, String>>();
+        let repaint = ctx.clone();
+        let worker = std::thread::Builder::new().name("camera-raw-proxy".into()).spawn(move || {
+            let frame = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job.run())).map_err(|_| "RAW Develop preview failed".to_string());
+            // The dialog may have closed or rendered on its own meanwhile; then nobody listens.
+            if tx.send(frame).is_ok() {
+                repaint.request_repaint();
+            }
+        })?;
+        Ok((rx, worker))
+    }
+
     /// Starts developing the proxy with the current settings on a worker, unless one is already
     /// running: then [`Self::poll_render`] starts the next one with the settings of that moment.
     /// A slider drag never waits for the develop, which takes hundreds of milliseconds with
@@ -246,18 +264,8 @@ impl CameraRawDialog {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let job = self.proxy_job();
-            let (tx, rx) = std::sync::mpsc::channel::<Result<ProxyFrame, String>>();
-            let repaint = ctx.clone();
-            let spawned = std::thread::Builder::new().name("camera-raw-proxy".into()).spawn(move || {
-                let frame = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job.run())).map_err(|_| "RAW Develop preview failed".to_string());
-                // The dialog may have closed or rendered on its own meanwhile; then nobody listens.
-                if tx.send(frame).is_ok() {
-                    repaint.request_repaint();
-                }
-            });
-            match spawned {
-                Ok(_) => {
+            match self.spawn_proxy_worker(ctx) {
+                Ok((rx, _worker)) => {
                     self.pending = Some(rx);
                     self.dirty = false;
                 }

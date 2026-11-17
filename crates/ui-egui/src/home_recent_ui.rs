@@ -340,6 +340,27 @@ fn drain_pending_thumbnails(app: &PhotocraftApp, ctx: &egui::Context, opts: Text
     }
 }
 
+/// Starts the disk worker; callers may retain its handle to observe completion.
+#[cfg(not(target_arch = "wasm32"))]
+fn spawn_thumbnail_worker(
+    cache_arc: std::sync::Arc<std::sync::Mutex<ThumbnailCache>>,
+    ctx_clone: egui::Context,
+    path_str: String,
+    req_id: u64,
+    key_clone: CacheKey,
+    file_len: u64,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let opt_img = load_thumbnail_catching_panic(|| load_thumbnail_image_bounded(&path_str, file_len));
+        let mut cache = cache_arc.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Only enqueue if this request generation is still the active one
+        if cache.in_flight.get(&path_str).copied() == Some(req_id) {
+            cache.pending.push((path_str, req_id, key_clone, opt_img));
+            ctx_clone.request_repaint();
+        }
+    })
+}
+
 /// Retrieve, lazily load, or regenerate the preview texture for `path`.
 ///
 /// If `path` is currently open in `app.session`, the thumbnail is rendered from
@@ -476,15 +497,7 @@ pub(crate) fn get_or_load_thumbnail(app: &PhotocraftApp, ctx: &egui::Context, pa
             let path_str = path.to_string();
             let key_clone = current_key;
             let file_len = meta.len();
-            std::thread::spawn(move || {
-                let opt_img = load_thumbnail_catching_panic(|| load_thumbnail_image_bounded(&path_str, file_len));
-                let mut cache = cache_arc.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                // Only enqueue if this request generation is still the active one
-                if cache.in_flight.get(&path_str).copied() == Some(req_id) {
-                    cache.pending.push((path_str, req_id, key_clone, opt_img));
-                    ctx_clone.request_repaint();
-                }
-            });
+            let _ = spawn_thumbnail_worker(cache_arc, ctx_clone, path_str, req_id, key_clone, file_len);
             cached_entry.and_then(|e| e.texture)
         } else {
             let opt_img = load_thumbnail_image_bounded(path, meta.len());
@@ -1414,14 +1427,25 @@ mod tests {
         app.background_jobs = true;
 
         let ctx = egui::Context::default();
-        let tex1 = get_or_load_thumbnail(&app, &ctx, &path_str);
-        assert!(tex1.is_none());
-
-        // Immediately invalidate while thread is in flight
-        app.thumbnail_cache.lock().unwrap().invalidate(&path_str);
-
-        // Wait a short time for thread to complete
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        let meta = std::fs::metadata(&file_path).unwrap();
+        let key = CacheKey::DiskFile { modified: meta.modified().ok(), len: meta.len() };
+        let worker = {
+            // Hold the publication lock until invalidation, so even a fast decode must
+            // check its generation after this request has been removed.
+            let mut cache = app.thumbnail_cache.lock().unwrap();
+            let req_id = cache.next_req_id;
+            cache.next_req_id = cache.next_req_id.wrapping_add(1);
+            cache.in_flight.insert(path_str.clone(), req_id);
+            let worker = spawn_thumbnail_worker(std::sync::Arc::clone(&app.thumbnail_cache), ctx.clone(), path_str.clone(), req_id, key, meta.len());
+            cache.invalidate(&path_str);
+            worker
+        };
+        let start = std::time::Instant::now();
+        while !worker.is_finished() && start.elapsed() < std::time::Duration::from_secs(2) {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(worker.is_finished(), "the invalidated thumbnail worker never finished");
+        worker.join().unwrap();
 
         // The background thread should have detected it was removed from in_flight and discarded its result
         let cache = app.thumbnail_cache.lock().unwrap();

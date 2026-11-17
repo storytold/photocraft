@@ -251,13 +251,31 @@ fn a_stale_worker_never_replaces_a_newer_synchronous_render() {
     let d = app.camera_raw.as_mut().unwrap();
     d.params.highlights = -80.0;
     d.dirty = true;
+    #[cfg(not(target_arch = "wasm32"))]
+    let worker = {
+        let (rx, worker) = d.spawn_proxy_worker(&ctx).unwrap();
+        d.pending = Some(rx);
+        d.dirty = false;
+        worker
+    };
+    #[cfg(target_arch = "wasm32")]
     d.request_render(&ctx);
     assert!(d.render_pending());
     let reply = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"highlights": 0, "exposure": -1.0}}})).unwrap().unwrap();
     assert_eq!(reply["previewPending"], false);
     let d = app.camera_raw.as_mut().unwrap();
     let (revision, shown) = (d.preview_revision, d.processed.clone());
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        // The synchronous render drops its receiver, not the detached worker. Wait
+        // for that worker itself before checking that its frame stayed discarded.
+        let start = std::time::Instant::now();
+        while !worker.is_finished() && start.elapsed() < std::time::Duration::from_secs(10) {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(worker.is_finished(), "the stale RAW Develop preview worker never finished");
+        worker.join().unwrap();
+    }
     d.poll_render(&ctx).unwrap();
     assert_eq!((d.preview_revision, &d.processed), (revision, &shown));
     d.render(&ctx);
