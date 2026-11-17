@@ -249,7 +249,11 @@ pub(super) fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
             let name_g = crate::tab_strip::elided(ui, &name, font.clone(), t.text, name_max);
             // The title was cut: the tooltip has the rest of it.
             let cut = name_g.size().x + 0.5 < natural_w - STUDIO_TAB_PAD + STUDIO_TAB_GAP - meta_g.size().x;
-            let resp = ui.interact(r, ui.scope_id().with(("dtab", doc)), Sense::click_and_drag());
+            // The interaction id carries the document, not the tab position. egui credits a
+            // release to the widget holding the id that was pressed, and a background open
+            // finishing mid-click shifts another document onto a position id - selecting tab A
+            // would then show (or close) image B (#15318). A DocId id follows its document.
+            let resp = ui.interact(r, ui.scope_id().with(("dtab", st.doc.id)), Sense::click_and_drag());
             let saving = crate::jobs_ui::save_progress(app, st.doc.id);
             resp.widget_info(|| {
                 let label = saving.as_ref().map_or_else(|| st.doc.name.clone(), |s| format!("{} - {s}", st.doc.name));
@@ -271,7 +275,7 @@ pub(super) fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
             ui.painter().galley_with_override_text_color(egui::pos2(r.left() + 10.0, ny), name_g.clone(), color);
             ui.painter().galley(egui::pos2(r.left() + 16.0 + name_g.size().x, r.center().y - meta_g.size().y / 2.0), meta_g, t.text_faint);
             let xr = Rect::from_center_size(egui::pos2(r.right() - 12.0, r.center().y), egui::vec2(16.0, 16.0));
-            let xresp = ui.interact(xr, ui.scope_id().with(("dtabx", doc)), Sense::click());
+            let xresp = ui.interact(xr, ui.scope_id().with(("dtabx", st.doc.id)), Sense::click());
             if xresp.hovered() {
                 ui.painter().rect_filled(xr, 4.0, t.hover);
             }
@@ -622,9 +626,11 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
     let (mut focus_open, mut cancel_open) = (None, None);
     for &(i, r) in placed.iter().filter(|(i, _)| *i < tab_count) {
         let Some(&doc) = documents.get(i) else { continue };
+        let Some(doc_id) = app.session.documents().get(doc).map(|st| st.doc.id) else { continue };
         let Some(title) = titles.get(i) else { continue };
         let g = crate::tab_strip::elided(ui, title, font.clone(), t.text, (r.width() - DOC_TAB_PAD).max(1.0));
-        let resp = ui.interact(r, ui.scope_id().with(("ptab", doc)), Sense::click_and_drag());
+        // The id keys on the document, not the tab position, as in `tabs` (#15318).
+        let resp = ui.interact(r, ui.scope_id().with(("ptab", doc_id)), Sense::click_and_drag());
         let sel = Some(i) == active;
         if sel {
             ui.painter().rect_filled(r, 0.0, t.chrome);
@@ -637,7 +643,7 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
         }
         ui.painter().line_segment([r.right_top(), r.right_bottom()], Stroke::new(1.0, t.separator));
         let (xr, at) = pro_tab_layout(r, g.size().y, mac);
-        let xresp = ui.interact(xr, ui.scope_id().with(("ptabx", doc)), Sense::click());
+        let xresp = ui.interact(xr, ui.scope_id().with(("ptabx", doc_id)), Sense::click());
         // Painted: name the tab and its × for accessibility (and so tests and agents can find them).
         resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, sel, g.text()));
         xresp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Close")));
@@ -920,3 +926,7 @@ pub(super) fn move_target_after_filter(visible: &[usize], from: usize, to: usize
 #[cfg(test)]
 #[path = "../file_info_copyright_title_tests.rs"]
 mod file_info_copyright_title_tests;
+
+#[cfg(test)]
+#[path = "tab_open_race_tests.rs"]
+mod tab_open_race_tests;
