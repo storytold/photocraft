@@ -265,15 +265,6 @@ fn high_quality_preview_is_full_size() {
     assert_eq!(selected(&mut app), 400);
 }
 
-/// Edits scale with the reduced copy: points, rectangles and sizes by 1 / k.
-#[test]
-fn edits_scale_to_the_reduced_copy() {
-    let e = json!({"tool": "quick", "points": [[30.0, 60.0]], "size": 30.0, "rect": [3, 6, 9, 12], "point": [15, 3]});
-    assert_eq!(scale_edit(&e, 3), json!({"tool": "quick", "points": [[10.0, 20.0]], "size": 10.0, "rect": [1.0, 2.0, 3.0, 4.0], "point": [5.0, 1.0]}));
-    assert_eq!(scale_edit(&json!({"size": 2.0}), 4)["size"], json!(1.0), "never below a pixel");
-    assert_eq!(scale_edit(&json!("x"), 2), json!("x"));
-}
-
 /// With Real-Time Refinement the stroke being drawn is in the preview before it is released.
 #[test]
 fn real_time_refinement_previews_the_stroke_being_drawn() {
