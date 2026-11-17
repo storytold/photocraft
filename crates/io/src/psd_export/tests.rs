@@ -862,3 +862,23 @@ fn a_type_layer_without_a_writable_tysh_drops_its_imported_block() {
     assert!(!written.blocks.iter().any(|b| b.key == *b"TySh"), "the stale imported TySh is dropped");
     assert!(warnings.iter().any(|w| w.contains("no TySh data")), "{warnings:?}");
 }
+
+#[test]
+fn shared_legacy_guides_preserve_wire_order_rounding_and_recovery() {
+    let mut doc = Document::new("guides", photocraft_geom::Size::new(8, 6), ColorMode::Rgb, SampleType::U8);
+    doc.guides.vertical = vec![-1.015625, 2.0];
+    doc.guides.horizontal = vec![0.015625];
+    let bytes = guides_resource(&doc);
+    assert_eq!(&bytes[..16], &[0, 0, 0, 1, 0, 0, 2, 64, 0, 0, 2, 64, 0, 0, 0, 3]);
+    assert_eq!(&bytes[16..], &[255, 255, 255, 223, 0, 0, 0, 0, 64, 0, 0, 0, 0, 1, 1]);
+    let mut recovered = Document::new("guides", photocraft_geom::Size::new(8, 6), ColorMode::Rgb, SampleType::U8);
+    let mut damaged = bytes[..bytes.len() - 1].to_vec();
+    damaged[..4].copy_from_slice(&99u32.to_be_bytes());
+    damaged[12..16].copy_from_slice(&u32::MAX.to_be_bytes());
+    damaged[20] = 255;
+    crate::psd_import::parse_guides(&damaged, &mut recovered);
+    assert_eq!(recovered.guides.vertical, [-33.0 / 32.0, 2.0]);
+    assert!(recovered.guides.horizontal.is_empty());
+    crate::psd_import::parse_guides(&bytes, &mut recovered);
+    assert_eq!(recovered.guides.horizontal, [1.0 / 32.0]);
+}

@@ -30,16 +30,12 @@ pub(crate) fn pascal_names_resource(names: &[&str]) -> Vec<u8> {
 }
 
 pub(crate) fn guides_resource(doc: &Document) -> Vec<u8> {
-    let mut v = Vec::new();
-    v.extend_from_slice(&1u32.to_be_bytes());
-    v.extend_from_slice(&576u32.to_be_bytes());
-    v.extend_from_slice(&576u32.to_be_bytes());
     let n = doc.guides.horizontal.len() + doc.guides.vertical.len();
-    v.extend_from_slice(&(n as u32).to_be_bytes());
-    for (list, dir) in [(&doc.guides.vertical, 0u8), (&doc.guides.horizontal, 1u8)] {
+    let mut v = craft_psd::guides::header_v1(576, 576, n as u32).to_vec();
+    for (list, direction) in [(&doc.guides.vertical, 0u8), (&doc.guides.horizontal, 1u8)] {
         for p in list {
-            v.extend_from_slice(&((p * 32.0).round() as i32).to_be_bytes());
-            v.push(dir);
+            let guide = craft_psd::guides::GuideV1 { location: (p * 32.0).round() as i32, direction };
+            v.extend_from_slice(&guide.to_bytes());
         }
     }
     v

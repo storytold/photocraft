@@ -978,13 +978,9 @@ fn write_rgba8(s: &mut Surface, canvas: Rect, data: &[u8]) -> Result<(), String>
 }
 
 pub(crate) fn parse_guides(data: &[u8], doc: &mut Document) {
-    let rd = |at: usize| data.get(at..at + 4).map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]));
-    let Some(count) = rd(12) else { return };
-    for i in 0..count as usize {
-        let at = 16 + i * 5;
-        let (Some(loc), Some(&dir)) = (rd(at), data.get(at + 4)) else { break };
-        let pos = f64::from(loc as i32) / 32.0;
-        if dir == 1 {
+    for guide in craft_psd::guides::parse_v1_prefix(data) {
+        let pos = f64::from(guide.location) / 32.0;
+        if guide.direction == 1 {
             doc.guides.horizontal.push(pos);
         } else {
             doc.guides.vertical.push(pos);
