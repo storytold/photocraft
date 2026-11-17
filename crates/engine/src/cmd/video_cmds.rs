@@ -647,8 +647,53 @@ fn safe_stem(name: &str) -> String {
     if stem.is_empty() || stem.chars().all(|c| c == '.') { "video".to_string() } else { stem.to_string() }
 }
 
+/// A Render Video name the caller gave: its leaf (no folder can be named), or `None` when it is
+/// blank, so the document's stem is used. A name of dots alone becomes "video", as in [`safe_stem`].
+fn safe_name(name: &str) -> Option<String> {
+    let leaf = name.rsplit(['/', '\\']).next().unwrap_or(name).trim();
+    if leaf.is_empty() {
+        None
+    } else if leaf.chars().all(|c| c == '.') {
+        Some("video".to_string())
+    } else {
+        Some(leaf.to_string())
+    }
+}
+
+/// A whole number in `range` from `p[key]`, `default` when absent; anything else is an error.
+fn sequence_number(p: &Value, key: &str, range: std::ops::RangeInclusive<u64>, default: u64) -> Result<u64> {
+    let bad = || EngineError::BadParams {
+        cmd: "file.export.renderVideo".into(),
+        msg: format!("`{key}` must be a whole number from {} to {}", range.start(), range.end()),
+    };
+    match p.get(key) {
+        None | Some(Value::Null) => Ok(default),
+        Some(v) => {
+            // A whole number may come as a float (`7.0`); the range keeps the cast exact.
+            let whole = v.as_f64().filter(|f| f.fract() == 0.0 && (*range.start() as f64..=*range.end() as f64).contains(f));
+            v.as_u64().filter(|n| range.contains(n)).or_else(|| whole.map(|f| f as u64)).ok_or_else(bad)
+        }
+    }
+}
+
+/// How Render Video names an image sequence, as the reference application does (#14159):
+/// `<name><number>.<ext>` with no separator, the number starting at `startNumber` (0..10000) for
+/// the first frame and zero-padded to `digits` (1..5; wider numbers are written in full). A render
+/// of a single frame has no number. Returns the name, the start number and the digits.
+fn sequence_naming(p: &Value, doc_name: &str) -> Result<(String, u64, usize)> {
+    let name = match p.get("name") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(n)) => safe_name(n),
+        Some(_) => return Err(EngineError::BadParams { cmd: "file.export.renderVideo".into(), msg: "`name` must be a string".into() }),
+    };
+    let start = sequence_number(p, "startNumber", 0..=10_000, 0)?;
+    let digits = sequence_number(p, "digits", 1..=5, 4)?;
+    Ok((name.unwrap_or_else(|| safe_stem(doc_name)), start, digits as usize))
+}
+
 /// Export › Render Video: composite the whole document at each timeline frame and write an image
-/// sequence (`{dir}/{stem}_NNNN.{format}`). Clean-room; no proprietary codec.
+/// sequence (`{dir}/{name}{number}.{format}`, see [`sequence_naming`]). Clean-room; no
+/// proprietary codec.
 fn render_video(s: &mut Session, p: &Value) -> Result<Value> {
     let dir = p.get("dir").and_then(Value::as_str).ok_or_else(|| EngineError::BadParams { cmd: "file.export.renderVideo".into(), msg: "need `dir`".into() })?;
     std::fs::create_dir_all(dir).map_err(|e| EngineError::Other(format!("mkdir `{dir}`: {e}")))?;
@@ -676,7 +721,7 @@ pub fn render_video_with(
     // Only the GIF delay reads the rate (frames come from the duration); rates under 1 fps are
     // valid timelines, so only an unusable loaded rate falls back to 30.
     let fps = base.timeline.as_ref().map(|t| t.fps).filter(|f| f.is_finite() && *f > 0.0).unwrap_or(30.0);
-    let stem = safe_stem(&base.name);
+    let (stem, start, digits) = sequence_naming(p, &base.name)?;
     let fmt = base.pixel_format();
     let bounds = base.bounds();
     let (w, h) = (bounds.width() as usize, bounds.height() as usize);
@@ -728,7 +773,12 @@ pub fn render_video_with(
             t.current = f;
         }
         sync(&mut doc);
-        let path = format!("{stem}_{f:04}.{format}");
+        let path = if frames == 1 {
+            format!("{stem}.{format}")
+        } else {
+            let number = start.saturating_add(f as u64);
+            format!("{stem}{number:0digits$}.{format}")
+        };
         let bytes = photocraft_io::export(&doc, format, &opts).map(|r| r.bytes).map_err(|e| EngineError::Other(format!("render frame {f}: {e}")))?;
         write(&path, &bytes)?;
         files.push(path);
@@ -781,9 +831,16 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("layer.videoLayers.interpretFootage", "Interpret Footage…", vl, active_video, |s, p| interpret_footage(s, p)),
         spec!("layer.videoLayers.reloadFrame", "Reload Frame", vl, active_video, |s, p| reload_frame(s, p)),
         spec!("file.import.videoFramesToLayers", "Video Frames to Layers…", &["File", "Import"], has_doc, |s, p| frames_to_layers(s, p)),
-        spec!("file.export.renderVideo", "Render Video…", &["File", "Export"], has_doc, |s, p| render_video(s, p)),
+        CommandSpec {
+            params: r##"{"dir":folder,"format":"png|jpg|psd|tiff|…|gif"="png","name":str=the document name without its extension,"startNumber":0..10000=0,"digits":1..5=4} → {frames, dir}|{frames, file} (an image sequence is <name><startNumber + frame, zero-padded to digits>.<format> with no separator, a single frame <name>.<format>; gif writes one animated <name>.gif)"##,
+            ..spec!("file.export.renderVideo", "Render Video…", &["File", "Export"], has_doc, |s, p| render_video(s, p))
+        },
     ]
 }
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "video_cmds/render_video_names_tests.rs"]
+mod render_video_names_tests;
