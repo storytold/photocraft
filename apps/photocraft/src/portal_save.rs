@@ -8,6 +8,9 @@
 //! (zenity, or no portal), and this can go once an rfd release reads the picked type
 //! (PolyMeilex/rfd#341).
 //!
+//! File › Open asks the portal too (#14057): its `OpenFile` takes a checkbox (`choices`), which
+//! rfd can't add, so the dialog itself offers Image Sequence, as Photoshop's Open dialog does.
+//!
 //! The dialog is attached to the window on X11. On Wayland it has no parent: naming the window to
 //! the portal needs an xdg-foreign handle, which takes `unsafe` code the workspace forbids.
 
@@ -43,6 +46,32 @@ pub struct Saved {
     pub filter: Option<String>,
 }
 
+/// File › Open's dialog to show (#14057).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OpenRequest {
+    /// The portal's parent window identifier (`x11:<xid>`), or empty.
+    pub parent: String,
+    /// Where the dialog starts.
+    pub folder: Option<PathBuf>,
+    pub filters: Vec<Filter>,
+    /// Several files may be picked.
+    pub multiple: bool,
+}
+
+/// What the user picked in File › Open's dialog: the files, and whether Image Sequence was ticked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Opened {
+    pub paths: Vec<PathBuf>,
+    pub image_sequence: bool,
+}
+
+/// One of the dialog's `choices` as the portal takes it: id, label, options (none for a
+/// checkbox) and the initial state.
+type Choice<'a> = (&'a str, &'a str, Vec<(&'a str, &'a str)>, &'a str);
+
+/// The id of File › Open's Image Sequence checkbox among the dialog's `choices`.
+const IMAGE_SEQUENCE: &str = "image_sequence";
+
 /// The portal's parent window identifier for `window`: `x11:<xid>` on X11, empty elsewhere.
 pub fn parent_id(window: Option<eframe::wgpu::rwh::RawWindowHandle>) -> String {
     use eframe::wgpu::rwh::RawWindowHandle;
@@ -56,18 +85,37 @@ pub fn parent_id(window: Option<eframe::wgpu::rwh::RawWindowHandle>) -> String {
 /// Shows the portal's Save dialog and waits for it. `Ok(None)` is Cancel; `Err` means the portal
 /// couldn't show it (no portal, no FileChooser), so the caller falls back to rfd.
 pub fn save_file(conn: &zbus::blocking::Connection, req: &SaveRequest) -> Result<Option<Saved>, String> {
+    let (code, results) =
+        ask(conn, |chooser, token| chooser.call("SaveFile", &(req.parent.as_str(), "Save As", options(req, token))).map_err(|e| e.to_string()))?;
+    answer(code, &results)
+}
+
+/// Shows File › Open's dialog with the Image Sequence checkbox (`label`, off) and waits for it.
+/// `Ok(None)` is Cancel; `Err` means the portal couldn't show it, so the caller falls back to rfd.
+pub fn open_files(conn: &zbus::blocking::Connection, req: &OpenRequest, label: &str) -> Result<Option<Opened>, String> {
+    let (code, results) =
+        ask(conn, |chooser, token| chooser.call("OpenFile", &(req.parent.as_str(), "Open", open_options(req, label, token))).map_err(|e| e.to_string()))?;
+    opened(code, &results)
+}
+
+/// Asks the portal's FileChooser through `call` (given the chooser and the request's handle
+/// token) and waits for the dialog's answer: the response code and results.
+fn ask(
+    conn: &zbus::blocking::Connection,
+    call: impl FnOnce(&zbus::blocking::Proxy<'_>, &str) -> Result<OwnedObjectPath, String>,
+) -> Result<(u32, HashMap<String, OwnedValue>), String> {
     use futures_lite::StreamExt;
     use zbus::blocking::Proxy;
     let unique = conn.unique_name().ok_or("Portal connection has no unique name")?.as_str().trim_start_matches(':').replace('.', "_");
     static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-    let token = format!("photocraft_save_{}_{}", std::process::id(), NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+    let token = format!("photocraft_dialog_{}_{}", std::process::id(), NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
     let path = format!("/org/freedesktop/portal/desktop/request/{unique}/{token}");
     // Listen before asking, so a quick answer isn't missed.
     let request = Proxy::new(conn, "org.freedesktop.portal.Desktop", path.as_str(), "org.freedesktop.portal.Request").map_err(|e| e.to_string())?;
     let mut replies = futures_lite::future::block_on(request.inner().receive_signal("Response")).map_err(|e| e.to_string())?;
     let chooser = Proxy::new(conn, "org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop", "org.freedesktop.portal.FileChooser")
         .map_err(|e| e.to_string())?;
-    let handle: OwnedObjectPath = chooser.call("SaveFile", &(req.parent.as_str(), "Save As", options(req, &token))).map_err(|e| e.to_string())?;
+    let handle = call(&chooser, &token)?;
     // A portal older than 0.9 ignores `handle_token` and answers on a request path of its own,
     // which it returns: listen there instead, as the Request documentation asks.
     let reply = if handle.as_str() == path {
@@ -77,9 +125,8 @@ pub fn save_file(conn: &zbus::blocking::Connection, req: &SaveRequest) -> Result
         let mut replies = futures_lite::future::block_on(request.inner().receive_signal("Response")).map_err(|e| e.to_string())?;
         futures_lite::future::block_on(replies.next())
     }
-    .ok_or("The save dialog closed without an answer")?;
-    let (code, results): (u32, HashMap<String, OwnedValue>) = reply.body().deserialize().map_err(|e| e.to_string())?;
-    answer(code, &results)
+    .ok_or("The file dialog closed without an answer")?;
+    reply.body().deserialize().map_err(|e| e.to_string())
 }
 
 /// The `SaveFile` options for `req`.
@@ -89,13 +136,8 @@ fn options<'a>(req: &'a SaveRequest, token: &'a str) -> HashMap<&'static str, Va
         o.insert("current_name", Value::from(name.as_str()));
     }
     if let Some(folder) = &req.folder {
-        // A byte string with its terminating NUL, as the portal specifies.
-        use std::os::unix::ffi::OsStrExt;
-        let mut bytes = folder.as_os_str().as_bytes().to_vec();
-        bytes.push(0);
-        o.insert("current_folder", Value::from(bytes));
+        o.insert("current_folder", folder_bytes(folder));
     }
-    let wire = |(label, exts): &Filter| (label.clone(), exts.iter().map(|e| (0u32, format!("*.{e}"))).collect::<Vec<_>>());
     if !req.filters.is_empty() {
         o.insert("filters", Value::from(req.filters.iter().map(wire).collect::<Vec<_>>()));
     }
@@ -103,6 +145,60 @@ fn options<'a>(req: &'a SaveRequest, token: &'a str) -> HashMap<&'static str, Va
         o.insert("current_filter", Value::from(wire(f)));
     }
     o
+}
+
+/// The `OpenFile` options for File › Open's dialog: its folder and file types, and the Image
+/// Sequence checkbox (`label`), off each time the dialog opens.
+fn open_options<'a>(req: &'a OpenRequest, label: &'a str, token: &'a str) -> HashMap<&'static str, Value<'a>> {
+    let mut o: HashMap<&'static str, Value<'a>> =
+        HashMap::from([("handle_token", Value::from(token)), ("modal", Value::from(true)), ("multiple", Value::from(req.multiple))]);
+    if let Some(folder) = &req.folder {
+        o.insert("current_folder", folder_bytes(folder));
+    }
+    if !req.filters.is_empty() {
+        o.insert("filters", Value::from(req.filters.iter().map(wire).collect::<Vec<_>>()));
+    }
+    // A choice without options is a checkbox; its initial state is "false".
+    let choices: Vec<Choice<'_>> = vec![(IMAGE_SEQUENCE, label, Vec::new(), "false")];
+    o.insert("choices", Value::from(choices));
+    o
+}
+
+/// A folder as the portal takes it: a byte string with its terminating NUL.
+fn folder_bytes(folder: &Path) -> Value<'static> {
+    use std::os::unix::ffi::OsStrExt;
+    let mut bytes = folder.as_os_str().as_bytes().to_vec();
+    bytes.push(0);
+    Value::from(bytes)
+}
+
+/// A file type as the portal takes it: its label and `*.ext` globs.
+fn wire((label, exts): &Filter) -> (String, Vec<(u32, String)>) {
+    (label.clone(), exts.iter().map(|e| (0u32, format!("*.{e}"))).collect())
+}
+
+/// Reads the portal's answer to `OpenFile`: the files picked, all local, and the state of the
+/// Image Sequence checkbox. Codes 1 and 2 are Cancel, as for Save ([`answer`]).
+fn opened(code: u32, results: &HashMap<String, OwnedValue>) -> Result<Option<Opened>, String> {
+    match code {
+        0 => {}
+        1 | 2 => return Ok(None),
+        _ => return Err(format!("the open dialog failed (portal response {code})")),
+    }
+    let uris: Vec<String> = results
+        .get("uris")
+        .ok_or("no file in the portal's answer")?
+        .try_clone()
+        .map_err(|e| e.to_string())?
+        .try_into()
+        .map_err(|e: zbus::zvariant::Error| e.to_string())?;
+    if uris.is_empty() {
+        return Ok(None);
+    }
+    let paths = uris.iter().map(|uri| file_uri_path(uri).ok_or_else(|| format!("not a local file: {uri}"))).collect::<Result<Vec<_>, _>>()?;
+    let choices: Vec<(String, String)> = results.get("choices").and_then(|v| v.try_clone().ok()?.try_into().ok()).unwrap_or_default();
+    let image_sequence = choices.iter().any(|(id, value)| id == IMAGE_SEQUENCE && value == "true");
+    Ok(Some(Opened { paths, image_sequence }))
 }
 
 /// Reads the portal's `Response`: code 0 with the first `uris` entry. 1 is Cancel, and 2 a dialog

@@ -475,7 +475,7 @@ fn open_starts_in_the_last_used_folder() {
     menus::invoke(&mut app, &ctx, "file.open", json!({})).unwrap();
     app.poll_file_dialog(&ctx, None);
     assert!(
-        matches!(open.borrow().as_slice(), [(FileDialogRequest::Open { multiple: true, initial_dir: Some(dir), extensions: None }, _)] if dir == "/pics"),
+        matches!(open.borrow().as_slice(), [(FileDialogRequest::Open { multiple: true, initial_dir: Some(dir), extensions: None, image_sequence: true }, _)] if dir == "/pics"),
         "{:?}",
         open.borrow().first().map(|(r, _)| r.clone())
     );
@@ -1840,3 +1840,5 @@ fn the_last_export_folder_is_a_preference_that_old_files_lack() {
     let old: photocraft_engine::prefs::Preferences = serde_json::from_value(json).unwrap();
     assert_eq!(old.export.last_folder, "");
 }
+
+mod image_sequence_tests;

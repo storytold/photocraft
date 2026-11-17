@@ -230,7 +230,15 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
         dialog = dialog.set_parent(parent);
     }
     let answer: Pin<Box<dyn Future<Output = Option<FileDialogAnswer>> + Send>> = match request {
-        FileDialogRequest::Open { multiple, initial_dir, extensions } => {
+        FileDialogRequest::Open { multiple, initial_dir, extensions, image_sequence } => {
+            // File › Open's Image Sequence checkbox (#14057): on Linux the portal's dialog shows
+            // it; rfd's dialogs can't take one (see `show_open_with_image_sequence`).
+            #[cfg(target_os = "linux")]
+            if image_sequence && extensions.is_none() {
+                return show_open_with_image_sequence(dialog, multiple, initial_dir, parent, reply);
+            }
+            #[cfg(not(target_os = "linux"))]
+            let _ = image_sequence;
             if let Some(dir) = initial_dir {
                 dialog = dialog.set_directory(dir);
             }
@@ -305,6 +313,11 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
             }
         }
     };
+    wait_for_file_dialog(answer, reply);
+}
+
+/// Waits for the dialog's `answer` on a helper thread and hands it to the app through `reply`.
+fn wait_for_file_dialog(answer: Pin<Box<dyn Future<Output = Option<FileDialogAnswer>> + Send>>, reply: FileDialogReply) {
     // Without the thread the reply is dropped unanswered, which the app takes as Cancel.
     if let Err(e) = std::thread::Builder::new().name("file dialog".into()).spawn(move || {
         // An empty answer from a system with no dialog backend isn't a Cancel (#3354).
@@ -312,6 +325,62 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
         reply.send(answer)
     }) {
         log::error!("couldn't wait for the file dialog: {e}");
+    }
+}
+
+/// File › Open on Linux (#14057): the portal's Open dialog with the Image Sequence checkbox,
+/// which rfd can't add. On Windows and macOS the system dialogs take an extra checkbox only
+/// through COM and AppKit calls that need `unsafe` code, which the workspace forbids, so File ›
+/// Open there has no Image Sequence option. rfd's own dialog (`dialog`, the window its parent) is
+/// the fallback when the portal can't show one, without the checkbox.
+#[cfg(target_os = "linux")]
+fn show_open_with_image_sequence(
+    mut dialog: rfd::AsyncFileDialog,
+    multiple: bool,
+    initial_dir: Option<String>,
+    parent: Option<&eframe::Frame>,
+    reply: FileDialogReply,
+) {
+    use eframe::wgpu::rwh::HasWindowHandle;
+    let req = crate::portal_save::OpenRequest {
+        parent: crate::portal_save::parent_id(parent.and_then(|p| p.window_handle().ok()).map(|h| h.as_raw())),
+        folder: initial_dir.clone().map(PathBuf::from),
+        filters: open_filters().into_iter().map(|(name, exts)| (name.to_string(), exts)).collect(),
+        multiple,
+    };
+    if let Some(dir) = initial_dir {
+        dialog = dialog.set_directory(dir);
+    }
+    let dialog = open_filters().into_iter().fold(dialog, |dialog, (name, extensions)| dialog.add_filter(name, &extensions));
+    let label = photocraft_ui_egui::i18n::t("Image Sequence").to_string();
+    let answer = Box::pin(async move {
+        let portal = zbus::blocking::connection::Builder::session()
+            .and_then(|b| b.build())
+            .map_err(|e| e.to_string())
+            .and_then(|conn| crate::portal_save::open_files(&conn, &req, &label));
+        match portal {
+            Ok(picked) => picked.map(|o| open_answer(&o.paths, o.image_sequence)),
+            Err(e) => {
+                log::info!("portal open dialog unavailable ({e}), using rfd");
+                if multiple {
+                    dialog.pick_files().await.map(|files| answer(files.iter().map(|f| f.path()), false, FileDialogAnswer::Paths))
+                } else {
+                    dialog.pick_file().await.map(|file| answer([file.path()], false, FileDialogAnswer::Paths))
+                }
+            }
+        }
+    });
+    wait_for_file_dialog(answer, reply);
+}
+
+/// File › Open's answer for the files picked: with Image Sequence ticked and one file picked, that
+/// file's numbered run is opened ([`FileDialogAnswer::ImageSequence`]); otherwise every file opens
+/// on its own, as without the checkbox.
+#[cfg(any(target_os = "linux", test))]
+fn open_answer(paths: &[PathBuf], image_sequence: bool) -> FileDialogAnswer {
+    match paths {
+        [one] if image_sequence => answer_one(one, false, FileDialogAnswer::ImageSequence),
+        _ => answer(paths.iter().map(PathBuf::as_path), false, FileDialogAnswer::Paths),
     }
 }
 

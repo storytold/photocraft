@@ -1205,7 +1205,7 @@ fn load_source(app: &mut PhotocraftApp, name: &str, params: Value) -> Result<Val
 /// Load every chosen action file in order, retaining failures and unsupported-step warnings.
 fn load_dialog(app: &mut PhotocraftApp) -> Result<Value, String> {
     let initial_dir = crate::file_dialog::last_used_dir(&app.ui.recent_files);
-    app.ask_file(FileDialogRequest::Open { multiple: true, initial_dir, extensions: Some(vec!["atn".into()]) }, |app, answer| {
+    app.ask_file(FileDialogRequest::Open { multiple: true, initial_dir, extensions: Some(vec!["atn".into()]), image_sequence: false }, |app, answer| {
         let files: Vec<_> = match answer {
             FileDialogAnswer::Paths(paths) => paths.into_iter().map(|name| (name, None)).collect(),
             FileDialogAnswer::Contents(name, bytes) => vec![(name, Some(bytes))],

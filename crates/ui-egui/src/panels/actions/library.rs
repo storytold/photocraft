@@ -122,7 +122,8 @@ pub(super) fn open(app: &mut PhotocraftApp, kind: Kind) -> Result<Value, String>
     if kind != Kind::Replace {
         return Ok(prompt(app, held));
     }
-    app.ask_file(FileDialogRequest::Open { multiple: false, initial_dir: None, extensions: Some(vec!["atn".into()]) }, move |app, answer| {
+    let request = FileDialogRequest::Open { multiple: false, initial_dir: None, extensions: Some(vec!["atn".into()]), image_sequence: false };
+    app.ask_file(request, move |app, answer| {
         idle(app, command)?;
         if app.session.actions.rev != revision || app.held_actions_library.is_some() {
             return Err(tl!("The actions changed. Request Replace Actions again.").into());

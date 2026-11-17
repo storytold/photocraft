@@ -212,6 +212,7 @@ impl PhotocraftApp {
             updates_rt: Default::default(),
             discard: None,
             file_dialog: None,
+            frame_rate: None,
             tiff_options: None,
             tiff_remembered: Default::default(),
             save_dirs: HashMap::new(),
