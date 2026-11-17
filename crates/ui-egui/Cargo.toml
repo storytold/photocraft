@@ -8,6 +8,8 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+# Export names that differ only in Unicode normalisation (APFS treats them as one file). Already in the lock file.
+unicode-normalization = "0.1"
 chrono = { workspace = true }
 craft-print = { workspace = true }
 craft-ui = { workspace = true }

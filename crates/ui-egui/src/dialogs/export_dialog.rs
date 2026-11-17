@@ -144,6 +144,16 @@ fn scaled_fields(f: &Map<String, Value>, factor: f64) -> Map<String, Value> {
     out
 }
 
+/// The settings Export writes with: with exactly one Scale All row, the row's size applied to them
+/// (as `confirm` does); with several rows each file has its own size, so the dialog's own settings
+/// stand for the document.
+fn effective_fields(f: &Map<String, Value>) -> Map<String, Value> {
+    match scale_rows(f).as_slice() {
+        [(size, _)] => scaled_fields(f, scale_factor(size)),
+        _ => f.clone(),
+    }
+}
+
 /// A row's suffix as part of a file name: characters a file name can't hold become `_`.
 fn file_suffix(suffix: &str) -> String {
     suffix.chars().map(|c| if c.is_control() || "<>:\"/\\|?*".contains(c) { '_' } else { c }).collect()
@@ -1077,6 +1087,8 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
         ui.vertical(|ui| {
             ui.set_width(248.0);
             scale_all_fields(ui, f);
+            let layer = f.get("__layer").and_then(Value::as_u64);
+            asset_fields(ui, f, &doc, egui::Id::unique(("export-preview", doc.id.0, app.session.active().map_or(0, |s| s.revision), layer)));
             ui.label(egui::RichText::new(tl!("File Settings")).font(crate::theme::semibold(12.0)).color(t.text));
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(tl!("Format")).color(t.text_dim));
@@ -1145,23 +1157,26 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
         ui.add_space(12.0);
         // Right: preview + estimated size.
         ui.vertical(|ui| {
+            // The preview, the estimate and the asset row show what Export writes: with one Scale All row
+            // that is the row's size, so a 2x row previews and estimates at twice the size.
+            let eff = effective_fields(f);
             let layer = f.get("__layer").and_then(Value::as_u64);
             let key = egui::Id::unique(("export-preview", doc.id.0, app.session.active().map_or(0, |s| s.revision), layer));
             let sig = format!(
                 "{}{}{}{}{}{}{}{}{}{}{}{}{}",
-                s_fmt(f),
-                n(f, "quality", 85.0),
-                lossless(f),
-                f.get("transparency").map(|v| v.to_string()).unwrap_or_default(),
-                n(f, "scale", 100.0),
-                n(f, "width", 0.0),
-                n(f, "height", 0.0),
-                s(f, "metadata"),
-                s(f, "tgaBits"),
-                s(f, "profile"),
-                f.get("embedProfile").and_then(Value::as_bool).unwrap_or(true),
-                s(f, "sizing"),
-                s(f, "resample")
+                s_fmt(&eff),
+                n(&eff, "quality", 85.0),
+                lossless(&eff),
+                eff.get("transparency").map(|v| v.to_string()).unwrap_or_default(),
+                n(&eff, "scale", 100.0),
+                n(&eff, "width", 0.0),
+                n(&eff, "height", 0.0),
+                s(&eff, "metadata"),
+                s(&eff, "tgaBits"),
+                s(&eff, "profile"),
+                eff.get("embedProfile").and_then(Value::as_bool).unwrap_or(true),
+                s(&eff, "sizing"),
+                s(&eff, "resample")
             );
             let sig = format!("{sig}:{}", source_profile.content_hash());
             let cached: Option<CachedPreview> = ui.data(|d| d.get_temp(key));
@@ -1170,17 +1185,17 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 None => {
                     #[cfg(not(target_arch = "wasm32"))]
                     let result = if background_preview_needed(&doc) {
-                        poll_or_start_preview(ui, key, &sig, doc.clone(), f, source_profile.clone())
+                        poll_or_start_preview(ui, key, &sig, doc.clone(), &eff, source_profile.clone())
                     } else {
                         let source = source_document(app, f).unwrap_or_else(|_| doc.clone());
-                        Some(preview_sync(app, &source, f, &source_profile))
+                        Some(preview_sync(app, &source, &eff, &source_profile))
                     };
                     #[cfg(target_arch = "wasm32")]
                     let result = {
                         let source = source_document(app, f).unwrap_or_else(|_| doc.clone());
-                        Some(preview_sync(app, &source, f, &source_profile))
+                        Some(preview_sync(app, &source, &eff, &source_profile))
                     };
-                    let filter = preview_filter(f);
+                    let filter = preview_filter(&eff);
                     result.map(|result| cache_preview(ui, key, sig.clone(), result, filter))
                 }
             };
@@ -1199,14 +1214,61 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             }
             ui.painter().rect_stroke(r, 0.0, egui::Stroke::new(1.0, t.separator), egui::StrokeKind::Outside);
             #[cfg(not(target_arch = "wasm32"))]
-            let exact = poll_or_start_exact_estimate(ui, key, &sig, doc.clone(), f, source_profile.clone()).flatten();
+            let exact = poll_or_start_exact_estimate(ui, key, &sig, doc.clone(), &eff, source_profile.clone()).flatten();
             #[cfg(target_arch = "wasm32")]
             let exact: Option<u64> = None;
-            let est =
-                exact.or_else(|| preview.as_ref().and_then(|preview| preview.estimate)).map_or("—".to_string(), |b| crate::sizing::human_bytes(b as f64));
+            let bytes = exact.or_else(|| preview.as_ref().and_then(|preview| preview.estimate));
+            match bytes {
+                Some(b) => f.insert("__estimate".into(), json!(b)),
+                None => f.remove("__estimate"),
+            };
+            let est = bytes.map_or("—".to_string(), |b| crate::sizing::estimate_text(b as f64));
             ui.label(egui::RichText::new(format!("{}  ≈ {est}", s_fmt(f).to_uppercase())).color(t.text_dim).size(11.5));
         });
     });
+}
+
+/// Whether the asset row (and so Select All) is ticked; both are when the dialog opens.
+fn asset_ticked(f: &Map<String, Value>) -> bool {
+    f.get("__asset").and_then(Value::as_bool).unwrap_or(true)
+}
+
+/// Export is greyed while nothing in the asset list is ticked. Other dialogs are not affected.
+pub fn can_confirm(f: &Map<String, Value>) -> bool {
+    !f.contains_key("__export") || asset_ticked(f)
+}
+
+/// Export As's asset list: Select All, then the one row a document without artboards gives, with
+/// its checkbox, thumbnail (the preview), name, format, output size and estimate. The estimate
+/// is the one the preview column computed last; `—` until there is one, as today.
+fn asset_fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, doc: &Document, preview: egui::Id) {
+    let t = Tokens::get(ui.ctx());
+    let mut on = asset_ticked(f);
+    crate::widgets::checkbox(ui, &mut on, tl!("Select All"));
+    ui.horizontal(|ui| {
+        let name = doc.name.rsplit_once('.').map_or(doc.name.as_str(), |(a, _)| a).to_string();
+        let response = ui.add(egui::Checkbox::without_text(&mut on));
+        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, on, &name));
+        let (r, _) = ui.allocate_exact_size(egui::vec2(32.0, 32.0), egui::Sense::hover());
+        crate::widgets::checker(ui.painter(), r, 4.0);
+        let cached: Option<CachedPreview> = ui.data(|d| d.get_temp(preview));
+        if let Some(tex) = cached.and_then(|c| c.texture) {
+            let ts = tex.size_vec2();
+            let ir = egui::Rect::from_center_size(r.center(), ts * (32.0 / ts.x.max(ts.y)));
+            ui.painter().image(tex.id(), ir, egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+        }
+        ui.vertical(|ui| {
+            ui.label(egui::RichText::new(&name).color(t.text));
+            // The source the dialog sizes from (`__w` × `__h`): the layer's trimmed bounds in a layer
+            // dialog, the document's size otherwise, as preview and export use.
+            let (sw, sh) = (n(f, "__w", f64::from(doc.size.width)), n(f, "__h", f64::from(doc.size.height)));
+            let (w, h) = export_pixels(sw, sh, &effective_fields(f), None).unwrap_or((0.0, 0.0));
+            let est = f.get("__estimate").and_then(Value::as_f64).map_or("—".to_string(), crate::sizing::estimate_text);
+            ui.label(egui::RichText::new(format!("{}  {w} x {h}  {est}", s_fmt(f).to_uppercase())).color(t.text_dim).size(11.5));
+        });
+    });
+    f.insert("__asset".into(), json!(on));
+    ui.add_space(8.0);
 }
 
 /// Export with the dialog's settings: choose a path, render, encode, write.
@@ -1250,13 +1312,22 @@ fn batch_unsupported(rows: usize, browser: bool) -> Option<&'static str> {
     (browser && rows > 1).then_some("Exporting several sizes at once needs a folder, which the browser can't write to; export one size at a time")
 }
 
+/// Whether two file names can be one file on some file system: equal once Unicode-normalised (APFS
+/// treats `e` + U+0301 and `é` as one name) and upper-cased (Windows folds `σ` and `ς`) or lower-cased
+/// (`K` and the Kelvin sign).
+fn file_names_clash(a: &str, b: &str) -> bool {
+    use unicode_normalization::UnicodeNormalization;
+    let (a, b): (String, String) = (a.nfc().collect(), b.nfc().collect());
+    a.to_uppercase() == b.to_uppercase() || a.to_lowercase() == b.to_lowercase()
+}
+
 /// The file names a batch writes, `<name><suffix>.<ext>` per row, or an error naming the first one two
-/// rows share (suffixes that sanitize alike, or differ only in case, count: a file system may fold them, by upper-casing as Windows does, so `σ` and `ς` are one).
-/// Nothing is written then; replacing a file that already exists is unchanged.
+/// rows share (names a file system may fold into one, see [`file_names_clash`], count). Nothing is written
+/// then; replacing a file that already exists is unchanged.
 fn batch_file_names(stem: &str, ext: &str, rows: &[(String, String)]) -> Result<Vec<String>, String> {
     let names: Vec<String> = rows.iter().map(|(_, suffix)| format!("{stem}{}.{ext}", file_suffix(suffix))).collect();
     for (i, name) in names.iter().enumerate() {
-        if names[..i].iter().any(|other| other.to_uppercase() == name.to_uppercase() || other.to_lowercase() == name.to_lowercase()) {
+        if names[..i].iter().any(|other| file_names_clash(other, name)) {
             return Err(format!("Two sizes would write the same file, {name}; give each size its own suffix"));
         }
     }
@@ -1523,5 +1594,7 @@ mod batch_name_tests {
     }
 }
 
+#[cfg(test)]
+mod asset_list_tests;
 #[cfg(test)]
 mod scale_all_tests;

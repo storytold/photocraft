@@ -496,7 +496,8 @@ fn button_row(
         let can_ok = crate::crop_presets::can_confirm(app, fields)
             && crate::stack_dialog::can_confirm(fields)
             && merge_channels_ui::can_confirm(fields)
-            && (!crate::actions::library::owns(fields) || crate::actions::library::can_confirm(app, d.id));
+            && (!crate::actions::library::owns(fields) || crate::actions::library::can_confirm(app, d.id))
+            && crate::export_dialog::can_confirm(fields);
         let ok = DialogButton::new(ButtonRole::Default, ok_label, 84.0).enabled(can_ok);
         // Photoshop: holding Alt turns Cancel into Reset (the dialog stays open).
         // Dialogs opt in via `dialog_alt_reset::supported` (per marker).
@@ -1146,6 +1147,10 @@ pub(crate) fn confirm_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), 
             crate::equalize_ui::validate(app, &d.fields)?;
         }
         crate::filter_dialog::validate_match_color_destination(app, &d.fields)?;
+        // Export As with nothing ticked in its list: the same refusal as the greyed OK button.
+        if !crate::export_dialog::can_confirm(&d.fields) {
+            return Err("Nothing is selected to export: tick an item in the list first".into());
+        }
     }
     // Merge Channels with too few, repeated, closed or changed documents stays open (#11451).
     merge_channels_ui::preflight(app, id)?;

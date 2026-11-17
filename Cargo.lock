@@ -5992,6 +5992,7 @@ dependencies = [
  "tempfile",
  "toml",
  "unicode-bidi",
+ "unicode-normalization",
  "web-time",
  "winsafe",
 ]
