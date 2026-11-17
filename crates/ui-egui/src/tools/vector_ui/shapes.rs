@@ -209,6 +209,12 @@ pub fn shape_bounds(o: &ToolOptions, tool: Tool, start: [f64; 2], end: [f64; 2],
 
 /// Finish a Shape-tool drag: ⇧ constrains proportions, ⌥ draws from the centre.
 pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) {
+    finish_shape_pressed(app, tool, start, end, mods, egui::Modifiers::NONE);
+}
+
+/// [`finish_shape`] for a canvas drag: `mods` are the modifiers held at the release, `press` the
+/// ones held at the press, which can pick the path operation (`press_path_op`).
+pub fn finish_shape_pressed(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers, press: egui::Modifiers) {
     if draws_path(&app.ui.tool_options) {
         // Path mode: the outline joins the work path (one more subpath), and no layer is made.
         let Some(outline) = shape_outline(app, tool, start, end, mods) else { return };
@@ -225,7 +231,7 @@ pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [
         path.subpaths.extend(outline.subpaths);
         // The first component of a path always combines; the later ones take the drag's operation.
         if first_new > 0
-            && let Some(op) = drag_path_op(app)
+            && let Some(op) = drag_path_op(app, tool, press)
             && let Some(sp) = path.subpaths.get_mut(first_new)
         {
             sp.op = path_op_of(op);
@@ -245,7 +251,7 @@ pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [
     if tool == Tool::CustomShape {
         // With an operation other than New Layer the shape joins the active shape layer as one
         // component, its holes joined to it as in Path mode.
-        if let Some(op) = drag_path_op(app)
+        if let Some(op) = drag_path_op(app, tool, press)
             && let Some(id) = super::options::selected_shape(&app.session)
             && let Some(outline) = shape_outline(app, tool, start, end, mods)
         {
@@ -276,7 +282,7 @@ pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [
     }
     p["historyName"] = json!(line_history_name(tool));
     // With an operation other than New Layer the drag joins the active shape layer.
-    if let Some(op) = drag_path_op(app)
+    if let Some(op) = drag_path_op(app, tool, press)
         && let Some(id) = super::options::selected_shape(&app.session)
     {
         p["addTo"] = json!(id.0);
@@ -288,10 +294,32 @@ pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [
     }
 }
 
-/// The operation the next Shape-tool drag is added with (the options bar's Path operations);
-/// None for a new shape layer. The one place press modifiers can override it (#13227).
-fn drag_path_op(app: &PhotocraftApp) -> Option<&'static str> {
-    super::pen::shape_path_op(&app.ui.tool_options)
+/// The operation the next Shape-tool drag is added with: the one the modifiers held at the press
+/// pick (`press_path_op`), else the options bar's Path operations; None for a new shape layer.
+fn drag_path_op(app: &PhotocraftApp, tool: Tool, press: egui::Modifiers) -> Option<&'static str> {
+    press_path_op(app, tool, press).or_else(|| super::pen::shape_path_op(&app.ui.tool_options))
+}
+
+/// The Polygon tool's ⇧, ⌥ or ⇧⌥ held at the press, in Shape mode with one shape layer selected:
+/// the drag joins that layer as a Combine, Subtract or Intersect component, as in the reference
+/// application (#13320). The same keys still constrain and draw from the centre while held. Not
+/// measured, so None (the options bar's operation, as before): another shape tool, Path mode, a
+/// pixel layer or none active, several layers selected, and ⌘ / Ctrl held as well.
+fn press_path_op(app: &PhotocraftApp, tool: Tool, press: egui::Modifiers) -> Option<&'static str> {
+    let shape_mode = app.ui.tool_options.shape_mode == "shape";
+    if tool != Tool::Polygon || !shape_mode || press.command || press.ctrl || press.mac_cmd {
+        return None;
+    }
+    let st = app.session.active()?;
+    if st.selected_layers().len() != 1 || super::options::selected_shape(&app.session).is_none() {
+        return None;
+    }
+    match (press.shift, press.alt) {
+        (true, false) => Some("combine"),
+        (false, true) => Some("subtract"),
+        (true, true) => Some("intersect"),
+        (false, false) => None,
+    }
 }
 
 fn path_op_of(op: &str) -> photocraft_doc::vector::PathOp {
