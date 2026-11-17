@@ -49,7 +49,7 @@ pub(crate) fn base_of(doc: &Document, id: LayerId) -> Option<LayerId> {
 
 /// The layers clipped to `id`: the clipped run directly above it. Empty when `id` is itself
 /// clipped (it is not a base) or nothing is clipped to it.
-fn clipped_to(doc: &Document, id: LayerId) -> Vec<LayerId> {
+pub(crate) fn clipped_to(doc: &Document, id: LayerId) -> Vec<LayerId> {
     match group_of(doc, id).split_first() {
         Some((&base, rest)) if base == id => rest.to_vec(),
         _ => Vec::new(),
