@@ -3,7 +3,7 @@ use super::*;
 /// #321: New Document offers the working space and the other profiles of the mode's space.
 #[test]
 fn color_profile_menu_lists_the_profiles_of_the_modes_space() {
-    use photocraft_cms::{Builtin, ColorSpace, ProfileClass};
+    use craft_cms::{Builtin, ColorSpace, ProfileClass};
     use photocraft_engine::installed_profiles::InstalledProfile;
     let installed = [
         InstalledProfile { path: "press.icc".into(), description: "Press".into(), class: ProfileClass::Output, color_space: ColorSpace::Cmyk },
@@ -38,7 +38,7 @@ fn applying_a_preset_replaces_the_picked_profile() {
     press["profile"] = json!("coated-cmyk");
     s.execute("document.presets.save", json!({"name": "Press", "settings": press})).unwrap();
     let mut f = Map::new();
-    f.insert("profile".into(), json!(photocraft_cms::Builtin::AdobeRgbCompat.id()));
+    f.insert("profile".into(), json!(craft_cms::Builtin::AdobeRgbCompat.id()));
     apply_saved_preset(&mut f, &s.presets.documents[0]);
     assert!(!f.contains_key("profile"), "{f:?}");
     assert!(s.execute("file.new", command_params(&f)).is_ok());
@@ -383,11 +383,10 @@ mod dialog {
         assert!((c[0] * 255.0 - 51.0).abs() < 1.0 && (c[1] * 255.0 - 102.0).abs() < 1.0 && (c[2] * 255.0 - 153.0).abs() < 1.0, "{c:?}");
     }
 
+    /// Open Save Document Preset from the icon beside Name and type over the proposed name.
     fn name_preset(h: &mut Harness<'static, PhotocraftApp>, name: &str) {
-        h.get_by_label("Save Preset…").click();
-        h.run_steps(2);
-        h.get_by_role_and_label(Role::TextInput, "Preset Name").click();
-        h.run_steps(1);
+        h.get_by_label("Save Document Preset").click();
+        h.run_steps(3);
         h.event(egui::Event::Text(name.into()));
         h.run_steps(1);
     }
@@ -402,7 +401,7 @@ mod dialog {
         f.insert("background".into(), serde_json::json!("transparent"));
         set_fields(&mut h, f);
         name_preset(&mut h, " Product square ");
-        h.get_by_label("Save").click();
+        h.get_by_label("Save Preset").click();
         h.run_steps(3);
         assert!(h.state().session.documents().is_empty(), "saving does not create a document");
         assert_eq!(h.state().session.presets.documents[0].name, "Product square");
@@ -447,7 +446,7 @@ mod dialog {
         assert!(h.state().session.documents().is_empty(), "Enter must not also press Create");
         assert_eq!(h.state().ui.dialogs.len(), 1);
         name_preset(&mut h, " ENTER TEST ");
-        h.get_by_label("Save").click();
+        h.get_by_label("Save Preset").click();
         h.run_steps(2);
         assert!(fields(&h).get("__presetError").is_some());
         assert_eq!(h.state().session.presets.documents.len(), 1);
@@ -455,10 +454,10 @@ mod dialog {
         h.get_by_label("Cancel").click();
         h.run_steps(2);
         name_preset(&mut h, "");
-        // Cancel keeps the entered name; clear it as an automation edit, then use the button.
+        // Clear the proposed name as an automation edit, then use the button.
         h.state_mut().ui.dialogs[0].fields.insert("__presetName".into(), serde_json::json!("   "));
         h.run_steps(2);
-        h.get_by_label("Save").click();
+        h.get_by_label("Save Preset").click();
         h.run_steps(2);
         assert!(fields(&h).get("__presetError").is_some());
         assert_eq!(h.state().session.presets.documents.len(), 1);

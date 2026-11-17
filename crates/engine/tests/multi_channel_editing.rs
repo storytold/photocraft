@@ -99,8 +99,9 @@ fn adjustments_filters_and_drawing_preserve_other_encoded_components() {
                 let mut s = setup(mode, depth);
                 subset(&mut s);
                 let before = surface(&s);
-                // Color Replacement refuses 32-bit RGB, as the reference application does (#11923).
-                if *cmd == "paint.colorReplacement" && mode == "rgb" && depth == 32 {
+                // Color Replacement refuses 32-bit RGB (#11923), the Art History Brush every depth
+                // but 8 bits (#12637), as the reference application does.
+                if (*cmd == "paint.colorReplacement" && mode == "rgb" && depth == 32) || (*cmd == "paint.artHistoryBrush" && depth != 8) {
                     assert!(s.execute(cmd, p.clone()).is_err(), "{mode} {depth} {cmd} is refused");
                     assert_eq!(surface(&s), before, "{mode} {depth} {cmd}: nothing changed");
                     continue;

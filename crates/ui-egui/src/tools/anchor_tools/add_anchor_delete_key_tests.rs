@@ -11,7 +11,7 @@ use crate::state::Tool;
 
 /// 800 x 600 on white, pixel layer Red active, saved path Path 1 (a closed corner square)
 /// targeted in the Paths panel, the Add Anchor Point tool on.
-fn app() -> PhotocraftApp {
+pub(super) fn app() -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 800, "height": 600, "background": "white"})).unwrap();
     app.sync_views();
@@ -23,25 +23,25 @@ fn app() -> PhotocraftApp {
     app
 }
 
-fn path1(app: &PhotocraftApp) -> Path {
+pub(super) fn path1(app: &PhotocraftApp) -> Path {
     app.session.active().unwrap().doc.paths.iter().find(|p| p.name == "Path 1").unwrap().path.clone()
 }
 
-fn layers(app: &PhotocraftApp) -> usize {
+pub(super) fn layers(app: &PhotocraftApp) -> usize {
     app.session.active().unwrap().doc.layers.len()
 }
 
-fn steps(app: &PhotocraftApp) -> usize {
+pub(super) fn steps(app: &PhotocraftApp) -> usize {
     app.session.active().unwrap().history.past_len()
 }
 
-fn ctrl_click(app: &mut PhotocraftApp, at: [f64; 2]) {
+pub(super) fn ctrl_click(app: &mut PhotocraftApp, at: [f64; 2]) {
     tool_event(app, ToolEvent::Down { x: at[0], y: at[1], pressure: 1.0 }, Modifiers::COMMAND);
     tool_event(app, ToolEvent::Up { x: at[0], y: at[1] }, Modifiers::COMMAND);
 }
 
 /// A key through the app's shortcut handling, as the canvas gets it.
-fn press(app: &mut PhotocraftApp, key: egui::Key) {
+pub(super) fn press(app: &mut PhotocraftApp, key: egui::Key) {
     let ctx = egui::Context::default();
     let m = Modifiers::NONE;
     let raw = egui::RawInput {
@@ -53,7 +53,7 @@ fn press(app: &mut PhotocraftApp, key: egui::Key) {
     ctx.end_pass().textures_delta.clear();
 }
 
-fn anchors(path: &Path) -> Vec<[f64; 2]> {
+pub(super) fn anchors(path: &Path) -> Vec<[f64; 2]> {
     path.subpaths.iter().flat_map(|sp| sp.knots.iter().map(|k| [k.anchor.x, k.anchor.y])).collect()
 }
 

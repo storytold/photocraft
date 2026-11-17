@@ -196,6 +196,34 @@ fn drawn_texts(out: &egui::FullOutput) -> Vec<(String, egui::Rect, bool)> {
     texts
 }
 
+/// The Urdu Stroke heading has a negative left glyph bearing with the shipped fonts. Its ink
+/// must stay inside the panel at every scale, even though its logical advance starts at zero.
+#[test]
+fn section_labels_keep_glyph_bearings_inside_the_panel() {
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts(&ctx);
+    for kind in crate::theme::ThemeKind::ALL {
+        crate::theme::apply(&ctx, kind);
+        for ppp in [1.0, 1.25, 2.0] {
+            ctx.set_pixels_per_point(ppp);
+            for label in ["Stroke", "\u{644}\u{6a9}\u{6cc}\u{631}", "Location"] {
+                let mut room = egui::Rect::NOTHING;
+                let mut out = ctx.run_ui(Default::default(), |ui| {
+                    ui.set_max_width(440.0);
+                    room = ui.max_rect();
+                    super::section_label(ui, label);
+                });
+                out.textures_delta.clear();
+                let texts = drawn_texts(&out);
+                assert_eq!(texts.len(), 1, "{kind:?} @{ppp}x: {label}");
+                let (_, ink, _) = &texts[0];
+                assert!(ink.left() >= room.left() - 0.01, "{kind:?} @{ppp}x: {label} ink {ink:?} in {room:?}");
+                assert!(ink.right() <= room.right() + 0.01, "{kind:?} @{ppp}x: {label} ink {ink:?} in {room:?}");
+            }
+        }
+    }
+}
+
 /// #9635: the shared dialog label column is as wide as its widest label, between the English
 /// width and a cap, and a label wider than the column elides inside it.
 #[test]
@@ -1055,10 +1083,15 @@ fn typed_arithmetic_evaluates() {
         ("(2+3)*4", 20.0),
         ("2^3", 8.0),
         ("10%3", 1.0),
+        // A decimal comma (#10729).
+        ("0,3", 0.3),
+        ("1,5*2", 3.0),
+        ("−2,25", -2.25),
     ] {
         assert_eq!(parse_num(text), Some(want), "{text}");
     }
-    for text in ["", "abc", "5+", "*2", "4/0", "0/0", "1+*2", "(2+3", "1e400"] {
+    // A comma beside a point, or two decimal separators, is not guessed at.
+    for text in ["", "abc", "5+", "*2", "4/0", "0/0", "1+*2", "(2+3", "1e400", "1.234,5", "1,2,3"] {
         assert_eq!(parse_num(text), None, "{text}");
     }
 }
@@ -1574,6 +1607,65 @@ fn value_field_applies_typed_arithmetic() {
     // `5/2` alone would round to 3 under the caller; the whole expression still applies.
     assert_eq!(type_and_press(1.0, "5/2*2", Tab, true), 5.0);
     assert_eq!(type_and_press(1.0, "1280/3*2", Enter, true), 853.0);
+}
+
+/// #10729: a field such as Feather takes a decimal comma, as typed where the comma is the decimal
+/// separator.
+#[test]
+fn value_field_takes_a_decimal_comma() {
+    use egui::Key::{Enter, Tab};
+    assert!((type_and_press(1.0, "0,3", Enter, false) - 0.3).abs() < 1e-6);
+    assert!((type_and_press(1.0, "2,5", Tab, false) - 2.5).abs() < 1e-6);
+}
+
+/// Review on #10729: only where the system's separator is not the point. Where it is, a typed
+/// `1,234` is a thousands group, and reading the comma as a decimal point would be out by a
+/// factor of a thousand instead of invalid. Where the separator can't be read the field takes
+/// both, as it did before.
+#[test]
+fn a_decimal_comma_is_read_only_where_the_system_uses_one() {
+    let parse = |text: &str| super::units::plain(text);
+    crate::i18n::with_decimal_separator(Some(','), || {
+        assert_eq!(parse("0,3"), Some(0.3), "a comma system reads the comma");
+    });
+    crate::i18n::with_decimal_separator(Some('.'), || {
+        assert_eq!(parse("0,3"), None, "a point system does not: 0,3 stays invalid, not 0.3");
+        assert_eq!(parse("1,234"), None, "and a thousands group is not read as 1.234");
+        assert_eq!(parse("0.3"), Some(0.3), "its own separator still works");
+    });
+    crate::i18n::with_decimal_separator(None, || {
+        assert_eq!(parse("0,3"), Some(0.3), "unknown: both are taken, as zoom_field does");
+        assert_eq!(parse("0.3"), Some(0.3));
+    });
+}
+
+/// Review on #10729: each number in an expression decides for itself, so a comma in one operand
+/// and a point in another still computes. A single number holding both separators stays invalid
+/// rather than being guessed at.
+#[test]
+fn a_decimal_comma_is_read_per_operand_not_per_entry() {
+    let close = |got: Option<f64>, want: f64, what: &str| {
+        let v = got.unwrap_or_else(|| panic!("{what}: refused"));
+        assert!((v - want).abs() < 1e-9, "{what}: {v} is not {want}");
+    };
+    for sep in [Some(','), None] {
+        crate::i18n::with_decimal_separator(sep, || {
+            close(super::parse_num("1,5+2.0"), 3.5, "a comma and a point in one expression");
+            close(super::parse_num("2.0+1,5"), 3.5, "and the other way round");
+            close(super::parse_num("1,5*2"), 3.0, "a comma against a whole number");
+            close(super::parse_num("1,5"), 1.5, "a comma on its own");
+            close(super::parse_num("1.5"), 1.5, "a point on its own");
+            // One number carrying both is not guessed at, whichever side it sits on.
+            for text in ["1.234,5", "1,2,3", "1.234,5+1", "1+1.234,5"] {
+                assert_eq!(super::parse_num(text), None, "{text} stays invalid");
+            }
+        });
+    }
+    // A point system reads no comma at all, in an expression either: 1,5 is a thousands group.
+    crate::i18n::with_decimal_separator(Some('.'), || {
+        assert_eq!(super::parse_num("1,5+2.0"), None, "a point system refuses the comma operand");
+        close(super::parse_num("1.5+2.0"), 3.5, "its own separator computes");
+    });
 }
 
 #[test]
