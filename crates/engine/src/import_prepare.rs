@@ -366,7 +366,13 @@ fn prepare_layers(doc: &mut Document, ids: Vec<LayerPath>, ctx: &JobCtx, depth: 
                     // recursive decoder/preparation allowance is needed to render this layer.
                     let image = prepared_source
                         .as_ref()
-                        .map(|source| smart_cmds::prepared_source_image(source, doc.pixel_format(), object.stack_mode, ctx))
+                        .map(|source| {
+                            if svg_source {
+                                smart_cmds::prepared_svg_source_image(source, doc, object.stack_mode, ctx)
+                            } else {
+                                smart_cmds::prepared_source_image(source, doc.pixel_format(), object.stack_mode, ctx)
+                            }
+                        })
                         .transpose()?;
                     // Embedded PSD UUIDs render from memory without enabling a filesystem link.
                     object.source = SmartSource::Embedded { file_name: name, bytes: prepared_bytes };

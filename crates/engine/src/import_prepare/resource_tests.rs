@@ -765,3 +765,75 @@ fn stacked_svg_preparation_rejects_incomplete_artwork_atomically() {
     assert!(prepare_imported_document(&mut doc, &JobCtx::new()).is_err());
     assert_eq!(doc, before);
 }
+
+#[test]
+/// Prepared Stack/warp SVG pixels must match ordinary refresh and an independent sRGB-to-parent CMS conversion.
+fn prepared_svg_stack_and_warp_keep_parent_profile_alpha_and_source_identity() {
+    use craft_cms::{Builtin, Curve, Intent, Profile, Transform};
+    use photocraft_color::PixelFormat;
+    use photocraft_doc::StackMode;
+    use photocraft_geom::warp::{BezierMesh, Warp};
+    let mut custom = Builtin::Srgb.profile().clone();
+    custom.description = "Independent gamma 1.8 RGB preparation oracle".into();
+    custom.trc = Some([Curve::Gamma(1.8), Curve::Gamma(1.8), Curve::Gamma(1.8)]);
+    let custom = custom.with_encoded_bytes().to_bytes();
+    let profiles = [
+        (ColorMode::Rgb, Builtin::DisplayP3.profile().to_bytes()),
+        (ColorMode::Rgb, custom),
+        (ColorMode::Rgb, Builtin::LinearSrgb.profile().to_bytes()),
+        (ColorMode::Grayscale, Builtin::GrayGamma22.profile().to_bytes()),
+    ];
+    for (case, (mode, profile)) in profiles.into_iter().enumerate() {
+        for depth in [SampleType::U16, SampleType::F32] {
+            for stack in [false, true] {
+                let bytes = Arc::new(format!(r##"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><!--prepared-profile-{case}-{depth:?}-{stack}--><rect width="8" height="8" fill="#cc6633" fill-opacity="0.5"/></svg>"##).into_bytes());
+                let mut object = SmartObject::new(SmartSource::Embedded { file_name: "profile.svg".into(), bytes: bytes.clone() }, Affine::IDENTITY, None);
+                if stack {
+                    object.stack_mode = Some(StackMode::Mean);
+                } else {
+                    let bounds = [0., 0., 8., 8.];
+                    object.warp = Some(Warp::custom(BezierMesh::identity(bounds, 1, 1), bounds));
+                }
+                let mut parent = Document::new("Prepared profile", Size::new(8, 8), mode, depth);
+                parent.icc_profile = Some(profile.clone());
+                // Read the ordinary source representation independently, before either placement path.
+                let raw = if stack {
+                    smart_cmds::stack_image("profile.svg", &bytes, PixelFormat::RGBA32F, StackMode::Mean).unwrap()
+                } else {
+                    smart_cmds::svg_source_image(&bytes, PixelFormat::RGBA32F, 1.).unwrap()
+                };
+                let raw_pixel = raw.surface.pixel(3, 3);
+                let target = Profile::parse(&profile).unwrap();
+                let transform = Transform::new(Builtin::Srgb.profile(), &target, Intent::RelativeColorimetric, true).unwrap();
+                let mut oracle = vec![0.; parent.pixel_format().channels()];
+                let channels = oracle.len();
+                transform.convert_f32(&raw_pixel, 4, &mut oracle, channels, true).unwrap();
+                smart_cmds::purge_source_cache();
+                smart_cmds::purge_stack_cache();
+                let ordinary = smart_cmds::render(&parent, &object).unwrap().unwrap();
+                smart_cmds::purge_source_cache();
+                smart_cmds::purge_stack_cache();
+                parent.layers.push(Layer::new("Missing SVG cache", LayerContent::Smart(object.clone())));
+                prepare_imported_document(&mut parent, &JobCtx::new()).unwrap();
+                let LayerContent::Smart(prepared) = &parent.layers[0].content else { panic!("SVG Smart Object") };
+                let cache = prepared.cache.as_ref().unwrap();
+                assert_eq!(cache.read_region(parent.bounds()), ordinary.read_region(parent.bounds()), "profile {case}, {depth:?}, stack={stack}");
+                let pixel = cache.pixel(3, 3);
+                for (actual, expected) in pixel.iter().zip(&oracle) {
+                    assert!((actual - expected).abs() < 4e-5, "profile {case}, {depth:?}, stack={stack}: {pixel:?} vs {oracle:?}");
+                }
+                assert_eq!(pixel.last(), raw_pixel.last(), "profile conversion preserves alpha exactly");
+                assert_eq!(prepared.source, object.source);
+                assert_eq!(prepared.stack_mode, object.stack_mode);
+                assert_eq!(prepared.warp, object.warp);
+                let SmartSource::Embedded { bytes: retained, .. } = &prepared.source else { panic!("encoded SVG source") };
+                assert!(Arc::ptr_eq(retained, &bytes));
+                // The prepared path supplies pixels directly instead of decoding through the source cache again.
+                assert_eq!(smart_cmds::source_decode_count(&bytes, PixelFormat::RGBA32F), 0);
+                smart_cmds::purge_stack_cache();
+                let refreshed = smart_cmds::render(&parent, prepared).unwrap().unwrap();
+                assert_eq!(refreshed.read_region(parent.bounds()), cache.read_region(parent.bounds()), "cold refresh cannot change prepared colors");
+            }
+        }
+    }
+}

@@ -203,7 +203,9 @@ use rendering::{NativeDigests, blend_surfaces, place, render_in};
 pub use rendering::{
     apply_smart_filters, purge_stack_cache, refresh, refresh_layer, render, render_below_filter, stack_cache_bytes, stack_image, stack_image_with_order,
 };
-pub(crate) use rendering::{prepare_layer_with_source, prepared_source_image, render_below_filter_with_source, render_with_warnings, source_box};
+pub(crate) use rendering::{
+    prepare_layer_with_source, prepared_source_image, prepared_svg_source_image, render_below_filter_with_source, render_with_warnings, source_box,
+};
 #[cfg(test)]
 use source::svg_source_image_in;
 pub use source::{
