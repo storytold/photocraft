@@ -201,6 +201,8 @@ fn file_names_split_around_their_frame_number() {
     assert_eq!(n("take3_v2.png"), Some(("take3_v", "2", ".png")));
     assert_eq!(n("0007.exr"), Some(("", "0007", ".exr")));
     assert_eq!(n("scène 12.jpg"), Some(("scène ", "12", ".jpg")));
+    assert_eq!(n("é001.png"), Some(("é", "001", ".png")), "a multibyte character right before the digits");
+    assert_eq!(Numbered::parse("é001.png").and_then(|n| n.number()), Some(1));
     assert_eq!(n("12"), Some(("", "12", "")));
     assert_eq!(n("flat.png"), None);
     assert_eq!(n("clip.mp4"), None, "the extension's digits aren't a frame number");
@@ -224,4 +226,22 @@ fn a_run_longer_than_the_frame_limit_is_refused() {
     assert_eq!(sequence_files_within(&path, 3).unwrap().len(), 3);
     let e = sequence_files_within(&path, 2).unwrap_err().to_string();
     assert!(e.contains("more than 2 frames"), "{e}");
+}
+
+/// Each file is one frame of the sequence, even an animated GIF: its first frame, as File › Open
+/// reads it, not every frame of its animation.
+#[test]
+fn each_file_is_one_frame_even_an_animated_gif() {
+    let d = folder("gif");
+    for i in 1..=2 {
+        let path = d.join(format!("clip{i}.gif")).to_string_lossy().into_owned();
+        super::tests::write_gif(&path, 40, 30, &[([255, 0, 0], 10), ([0, 0, 255], 10), ([0, 255, 0], 10)]);
+    }
+    let mut s = Session::new();
+    let r = open(&mut s, &d, "clip1.gif", json!({})).unwrap();
+    assert_eq!(r["frames"], 2);
+    let id = LayerId(r["layer"].as_u64().unwrap());
+    let frames = &s.active().unwrap().doc.layer(id).unwrap().video.as_ref().unwrap().frames;
+    assert!(frames.iter().all(|f| f.pixel(20, 15) == RED), "each file's first frame");
+    assert_eq!(s.active().unwrap().doc.timeline.as_ref().unwrap().duration, 2);
 }

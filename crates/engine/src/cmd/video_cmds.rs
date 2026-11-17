@@ -426,7 +426,8 @@ fn frame_size_error(got: photocraft_doc::Size, size: Option<photocraft_doc::Size
 }
 
 /// Load `files`, in order, as frames of the document's format `fmt` (see [`load_frames`]). With
-/// `size`, every frame must have that canvas size (an image sequence opened as a document).
+/// `size` (an image sequence opened as a document), each file is one frame, its first page or
+/// animation frame as File › Open reads it, and every frame must have that canvas size.
 fn load_frame_files(
     files: &[std::path::PathBuf],
     fmt: photocraft_color::PixelFormat,
@@ -457,6 +458,7 @@ fn load_frame_files(
         let name = f.to_string_lossy();
         // A GIF (a still one is its only frame) or an animated WebP brings every frame.
         let animation = match photocraft_formats::detect(&name, &bytes) {
+            _ if size.is_some() => None,
             Some(photocraft_formats::Format::Gif) => Some(photocraft_io::import_gif_frames as ImportFrames),
             Some(photocraft_formats::Format::WebP) if photocraft_codecs::webp_is_animated(&bytes) => Some(photocraft_io::import_webp_frames as ImportFrames),
             _ => None,
@@ -491,7 +493,7 @@ fn load_frame_files(
         }
         // A multi-page TIFF: every full-resolution page of the main chain, in order, as the
         // GIF's frames are (#6379). Thumbnails, reduced-resolution copies and masks are left out.
-        if photocraft_formats::detect(&name, &bytes) == Some(photocraft_formats::Format::Tiff) {
+        if size.is_none() && photocraft_formats::detect(&name, &bytes) == Some(photocraft_formats::Format::Tiff) {
             let (pages, complete) = tiff_pages(&bytes);
             if pages.len() > 1 {
                 // A damaged or looping page chain, or one past the 10,000-directory limit, lists
@@ -601,7 +603,8 @@ impl<'a> Numbered<'a> {
         };
         let stem = name.get(..stem_end)?;
         let end = stem.rfind(|c: char| c.is_ascii_digit())? + 1;
-        let start = stem.get(..end)?.rfind(|c: char| !c.is_ascii_digit()).map_or(0, |i| i + 1);
+        // Where the digits start: just after the last other character, whatever its byte length.
+        let start = stem.get(..end)?.char_indices().rev().find(|(_, c)| !c.is_ascii_digit()).map_or(0, |(i, c)| i + c.len_utf8());
         let digits = name.get(start..end)?;
         (digits.len() <= MAX_FRAME_DIGITS).then_some(Numbered { prefix: name.get(..start)?, digits, suffix: name.get(end..)? })
     }
@@ -639,11 +642,14 @@ fn sequence_files_within(path: &str, limit: usize) -> Result<Vec<std::path::Path
     let dir = p.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(std::path::Path::new("."));
     let mut run: Vec<(u64, std::path::PathBuf)> = Vec::new();
     for entry in std::fs::read_dir(dir).map_err(|e| EngineError::Other(format!("read dir `{}`: {e}", dir.display())))? {
-        let Ok(entry) = entry else { continue };
+        // An entry that can't be read could be a frame: refuse rather than open a shorter run.
+        let entry = entry.map_err(|e| EngineError::Other(format!("read dir `{}`: {e}", dir.display())))?;
         let file = entry.path();
         let number = file.file_name().and_then(|n| n.to_str()).and_then(Numbered::parse).filter(|n| n.same_run(&picked)).and_then(|n| n.number());
         let Some(number) = number else { continue };
-        if !file.is_file() {
+        // Follows links, as opening the frame does.
+        let meta = std::fs::metadata(&file).map_err(|e| EngineError::Other(format!("`{}`: {e}", file.display())))?;
+        if !meta.is_file() {
             continue;
         }
         if run.len() >= limit {

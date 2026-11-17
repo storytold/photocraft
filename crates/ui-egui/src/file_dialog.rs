@@ -288,6 +288,11 @@ impl PhotocraftApp {
     /// failure (see [`Self::open_paths_in_order`]). With Image Sequence ticked, the Frame Rate
     /// dialog comes first (see [`FrameRatePrompt`]).
     pub fn open_dialog_file(&mut self) -> Result<Value, String> {
+        // The image sequence picked last is still waiting on its frame rate (a shortcut can reach
+        // File › Open behind the modal).
+        if self.frame_rate.is_some() {
+            return Err(FRAME_RATE_OPEN.into());
+        }
         let initial_dir = last_used_dir(&self.ui.recent_files);
         self.ask_file(FileDialogRequest::Open { multiple: true, initial_dir, extensions: None, image_sequence: true }, |app, answer| {
             match answer {
@@ -488,6 +493,9 @@ fn read_picked(answer: FileDialogAnswer) -> Result<(String, Vec<u8>), String> {
 /// The Frame Rate dialog's rates (#14057), in the measured order; the last, `None`, is Custom.
 pub(crate) const FRAME_RATES: [Option<f32>; 13] =
     [Some(10.0), Some(12.0), Some(12.5), Some(15.0), Some(23.976), Some(24.0), Some(25.0), Some(29.97), Some(30.0), Some(50.0), Some(59.94), Some(60.0), None];
+
+/// File › Open's refusal while the Frame Rate dialog waits for an answer.
+const FRAME_RATE_OPEN: &str = "the Frame Rate dialog is open";
 
 /// The rate the Frame Rate dialog starts at.
 const DEFAULT_FRAME_RATE: f32 = 30.0;
