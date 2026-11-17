@@ -215,9 +215,12 @@ fn saved_named_markup_colors_become_native_editable_runs() {
         ("C ", [250, 250, 210], 1.),
         ("B", [102, 51, 153], 1.),
     ];
-    // Original authoring literals, converted independently through native CMS.
-    let profile = craft_cms::Profile::parse(doc.icc_profile.as_deref().expect("saved source profile")).unwrap();
-    let transform = craft_cms::Transform::new(craft_cms::Builtin::Srgb.profile(), &profile, craft_cms::Intent::RelativeColorimetric, false).unwrap();
+    // This original RGB/U8 nonlinear source has no assigned profile. Native missing-profile
+    // policy keeps it untagged while its sRGB markup literals still use the native CMS.
+    assert_eq!((doc.mode, doc.depth), (ColorMode::Rgb, SampleType::U8));
+    assert!(doc.icc_profile.is_none(), "an unassigned source must not gain an ICC assignment");
+    let profile = craft_cms::Builtin::Srgb.profile();
+    let transform = craft_cms::Transform::new(profile, profile, craft_cms::Intent::RelativeColorimetric, false).unwrap();
     for (word, rgb, alpha) in expected {
         let at = native.text.find(word).expect("original text span");
         let mut offset = 0;
