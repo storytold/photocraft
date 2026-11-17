@@ -580,6 +580,36 @@ fn direct_svg_avoids_discarded_native_import_while_stacked_svg_keeps_shared_admi
     assert_eq!(a, b, "one native SVG shape and its Mean stack have the same ordinary pixels");
 }
 
+#[test]
+fn warped_svg_keeps_direct_render_allowance_and_exact_original_bytes() {
+    use photocraft_geom::warp::{BezierMesh, Warp};
+    let original = document(vec![svg_smart(false)]);
+    let mut baseline = original.clone();
+    let mut measured = allowance();
+    prepare_with_allowance(&mut baseline, &JobCtx::new(), &mut measured).unwrap();
+    let retained = MAX_PREPARATION_BYTES - measured.remaining_bytes;
+    let mut warped = original.clone();
+    let LayerContent::Smart(object) = &mut warped.layers[0].content else { panic!("SVG") };
+    let bounds = [0., 0., 1., 1.];
+    object.warp = Some(Warp::custom(BezierMesh::identity(bounds, 1, 1), bounds));
+    let original_object = object.clone();
+    let SmartSource::Embedded { bytes, .. } = &original_object.source else { panic!("original bytes") };
+    let mut exact = allowance();
+    exact.items = 1;
+    exact.remaining_bytes = Allowance::render_bytes(&warped).unwrap() + retained;
+    prepare_with_allowance(&mut warped, &JobCtx::new(), &mut exact).unwrap();
+    assert_eq!(exact.items, 0);
+    assert_eq!(exact.source_bytes, MAX_SOURCE_BYTES - bytes.len(), "original source admitted once under the same ledger");
+    assert_eq!(exact.remaining_bytes, Allowance::render_bytes(&original).unwrap(), "no discarded editable SVG layer allocation");
+    let LayerContent::Smart(ready) = &warped.layers[0].content else { panic!("prepared SVG") };
+    assert_eq!(ready.warp, original_object.warp);
+    assert_eq!(ready.stack_mode, original_object.stack_mode);
+    assert_eq!(ready.source, original_object.source);
+    let SmartSource::Embedded { bytes: retained, .. } = &ready.source else { panic!("retained original bytes") };
+    assert!(Arc::ptr_eq(retained, bytes));
+    assert_eq!(ready.cache.as_ref().unwrap().read_region(original.bounds()), baseline.layers[0].surface().unwrap().read_region(original.bounds()));
+}
+
 /// Author bounded native pixels and pending automatic filters without precomputing their fixed parameters.
 fn automatic_document(layers: usize, filters: usize, uniform: bool) -> (Document, u64) {
     let mut source = Document::new("Original automatic input", Size::new(64, 64), ColorMode::Rgb, SampleType::U8);
@@ -796,13 +826,15 @@ fn prepared_svg_stack_and_warp_keep_parent_profile_alpha_and_source_identity() {
                 }
                 let mut parent = Document::new("Prepared profile", Size::new(8, 8), mode, depth);
                 parent.icc_profile = Some(profile.clone());
-                // Read the ordinary source representation independently, before either placement path.
-                let raw = if stack {
-                    smart_cmds::stack_image("profile.svg", &bytes, PixelFormat::RGBA32F, StackMode::Mean).unwrap()
+                // Independent source-encoding controls: one native SVG shape's Mean
+                // preserves its documented paint channels and U8 alpha; a warped whole
+                // drawing starts from the strict SVG rasterizer's own straight samples.
+                // Neither oracle passes through generic native U8-to-F32 depth conversion.
+                let raw_pixel = if stack {
+                    vec![204. / 255., 102. / 255., 51. / 255., 128. / 255.]
                 } else {
-                    smart_cmds::svg_source_image(&bytes, PixelFormat::RGBA32F, 1.).unwrap()
+                    photocraft_io::svg::rasterize_bounded(&bytes, 1., 24_000_000).unwrap().get(3, 3).to_vec()
                 };
-                let raw_pixel = raw.surface.pixel(3, 3);
                 let target = Profile::parse(&profile).unwrap();
                 let transform = Transform::new(Builtin::Srgb.profile(), &target, Intent::RelativeColorimetric, true).unwrap();
                 let mut oracle = vec![0.; parent.pixel_format().channels()];
@@ -828,7 +860,8 @@ fn prepared_svg_stack_and_warp_keep_parent_profile_alpha_and_source_identity() {
                 assert_eq!(prepared.warp, object.warp);
                 let SmartSource::Embedded { bytes: retained, .. } = &prepared.source else { panic!("encoded SVG source") };
                 assert!(Arc::ptr_eq(retained, &bytes));
-                // The prepared path supplies pixels directly instead of decoding through the source cache again.
+                // Neither route reopens the generic decoded-source cache: Stack uses
+                // admitted layers; warp uses the original strict SVG renderer directly.
                 assert_eq!(smart_cmds::source_decode_count(&bytes, PixelFormat::RGBA32F), 0);
                 smart_cmds::purge_stack_cache();
                 let refreshed = smart_cmds::render(&parent, prepared).unwrap().unwrap();

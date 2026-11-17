@@ -81,8 +81,8 @@ impl Session {
         self.start_open_inner(name, source, true, None, background, Some(options))
     }
 
-    /// Resume the exact retained bytes once. Invalid or missing choices must be rejected by
-    /// the host before this typed API; cancellation or failure releases the job's source.
+    /// Resume the exact retained bytes once. A refused startup keeps its capability available;
+    /// an accepted job owns the source through completion or cancellation.
     pub fn resume_historical_xcf_open(&mut self, id: u64, order: photocraft_io::HistoricalXcfSampleOrder, background: bool) -> Result<Started> {
         self.resume_historical_xcf_open_inner(id, order, background, false)
     }
@@ -94,25 +94,25 @@ impl Session {
         background: bool,
         in_command: bool,
     ) -> Result<Started> {
-        let index = self
+        let held = self
             .jobs
             .historical_xcf
             .iter()
-            .position(|held| held.id == id)
+            .find(|held| held.id == id)
             .ok_or_else(|| EngineError::Other("historical XCF source choice is no longer available".into()))?;
-        let held = self.jobs.historical_xcf.get(index).ok_or_else(|| EngineError::Other("historical XCF source choice is no longer available".into()))?;
-        // Authorization refusal leaves the exact source available for retry. Once permitted,
-        // the attempt consumes it before decoding, including ordinary failures and cancellation.
+        // A retained source grants no additional profile authority. Refusal keeps
+        // its exact bytes, options and queue identity available for the next answer.
         WorkerPolicy::capture(self).authorize_working_profile(held.mode)?;
-        // A context cancelled before startup never accepted ownership of this capability.
-        let runs_inline = self.cooperative_jobs() || cfg!(target_arch = "wasm32") || (!background && !super::has_compressed_import_signature(&held.bytes));
-        if runs_inline && let Some(ctx) = &self.jobs.inline {
-            ctx.check()?;
-        }
-        let held = self.jobs.historical_xcf.remove(index);
+        let name = held.name.clone();
+        let path = held.path.clone();
+        let bytes = Arc::clone(&held.bytes);
         let mut options = held.options;
         options.historical_xcf_sample_order = Some(order);
-        self.start_open_transaction(&held.name, OpenSource::Bytes(held.bytes), true, None, background, Some(options), held.path, in_command)
+        // Share the allocation through startup instead of removing its sole retry
+        // capability. Inline refusal or failed registration has accepted no job.
+        let started = self.start_open_transaction(&name, OpenSource::Bytes(bytes), true, None, background, Some(options), path, in_command)?;
+        self.jobs.historical_xcf.retain(|held| held.id != id);
+        Ok(started)
     }
 
     /// Cancel a still-pending encoded source without admitting a document.
@@ -646,6 +646,9 @@ mod preparation_tests {
         s.execute("file.new", json!({"width":2,"height":2})).unwrap();
         let original = s.active().unwrap().doc.clone();
         let mut imported = photocraft_io::import("native.pcraft", &native_source()).unwrap();
+        assert!(!imported.source_read_only, "the native fixture is ordinarily writable");
+        // Model a host decoder's import-only policy independently of its native pixel payload.
+        imported.source_read_only = true;
         let ctx = JobCtx::new();
         ctx.cancel();
         assert!(matches!(install_prepared(&mut s, imported.document.clone(), Some("protected.xcf".into()), true, None, &ctx), Err(EngineError::Cancelled)));
@@ -657,6 +660,7 @@ mod preparation_tests {
         s.color.settings.ask_on_missing = false;
         s.color.settings.ask_on_mismatch = false;
         let prepared = WorkerPolicy::capture(&s).prepare("protected.xcf", imported, false, false, &JobCtx::new()).unwrap();
+        let pixels = prepared.imported.document.layers[0].surface().unwrap().read_region(prepared.imported.document.bounds());
         let opened = install(&mut s, "protected.xcf", Some("protected.xcf".into()), prepared).unwrap();
         assert_eq!(s.documents().len(), 2);
         assert!(Arc::ptr_eq(&original, &s.documents()[0].doc));
@@ -666,7 +670,9 @@ mod preparation_tests {
         assert!(s.active().unwrap().source_read_only);
         assert_eq!(s.active().unwrap().protected_import_source.as_deref(), Some("protected.xcf"));
         assert!(s.active().unwrap().path.is_none());
-        assert!(s.active().unwrap().doc.layers[0].surface().is_some());
+        let admitted = s.active().unwrap();
+        assert_eq!(admitted.doc.layers[0].surface().unwrap().read_region(admitted.doc.bounds()), pixels);
+        assert!(!admitted.is_dirty(), "optional view refusal does not create an edit");
     }
 
     /// Author a minimal v7 high-depth header whose sample order requires a choice without relying on a private corpus.

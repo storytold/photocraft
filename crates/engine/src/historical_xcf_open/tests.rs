@@ -129,6 +129,7 @@ fn historical_profile_refusal_preserves_exact_source_and_options_for_retry() {
 }
 
 #[test]
+#[cfg(not(target_arch = "wasm32"))]
 fn permitted_historical_attempt_still_consumes_source_on_decode_failure() {
     let mut bytes = b"gimp xcf v007\0".to_vec();
     for value in [1u32, 1, 0, 250] {
@@ -139,8 +140,15 @@ fn permitted_historical_attempt_still_consumes_source_on_decode_failure() {
     let mut s = Session::new();
     let held = hold(&mut s, "truncated.xcf".into(), bytes.clone(), question, Default::default()).unwrap();
     let id = held["heldHistoricalXcfOpen"].as_u64().unwrap();
-    assert!(s.resume_historical_xcf_open(id, photocraft_io::HistoricalXcfSampleOrder::LittleEndian, false).is_err());
+    let Started::Job(job) = s.resume_historical_xcf_open(id, photocraft_io::HistoricalXcfSampleOrder::LittleEndian, true).unwrap() else {
+        panic!("the native continuation must first accept a real worker job")
+    };
     assert!(!s.holds_historical_xcf_open(id));
+    assert!(s.wait_job(job).is_err(), "the accepted job still validates the truncated decode");
+    assert!(
+        s.resume_historical_xcf_open(id, photocraft_io::HistoricalXcfSampleOrder::LittleEndian, true).is_err(),
+        "an accepted failed job cannot retry the consumed capability"
+    );
     assert!(s.documents().is_empty());
     assert_eq!(Arc::strong_count(&bytes), 1);
 }
@@ -255,5 +263,29 @@ fn refused_historical_start_retains_exact_source_and_choice_identity_for_retry()
     assert_eq!(session.documents().len(), 2);
     assert!(Arc::ptr_eq(&original, &session.documents()[0].doc));
     assert!(session.cancel_historical_xcf_open(ids[1]));
+    assert_eq!(Arc::strong_count(&bytes), 1);
+}
+
+#[test]
+fn inline_historical_decode_refusal_retains_exact_source_options_and_identity() {
+    let mut bytes = b"gimp xcf v007\0".to_vec();
+    for value in [1u32, 1, 0, 250] {
+        bytes.extend_from_slice(&value.to_be_bytes());
+    }
+    let bytes = Arc::new(bytes);
+    let question = photocraft_io::historical_xcf_sample_order_request("truncated.xcf", &bytes).unwrap().unwrap();
+    let options = photocraft_io::ImportOptions { psd_high_memory_approved: true, psd_approved_estimate: Some(1234), ..Default::default() };
+    let mut s = Session::new();
+    let held = hold(&mut s, "truncated.xcf".into(), bytes.clone(), question, options).unwrap();
+    let id = held["heldHistoricalXcfOpen"].as_u64().unwrap();
+    assert!(s.resume_historical_xcf_open(id, photocraft_io::HistoricalXcfSampleOrder::LittleEndian, false).is_err());
+    assert_eq!(s.jobs.historical_xcf.len(), 1);
+    let retained = &s.jobs.historical_xcf[0];
+    assert_eq!(retained.id, id);
+    assert!(Arc::ptr_eq(&retained.bytes, &bytes));
+    assert_eq!(retained.options, options, "a refused attempt does not persist its unaccepted choice");
+    assert_eq!(Arc::strong_count(&bytes), 2);
+    assert!(s.documents().is_empty());
+    assert!(s.cancel_historical_xcf_open(id));
     assert_eq!(Arc::strong_count(&bytes), 1);
 }

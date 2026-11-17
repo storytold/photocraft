@@ -302,12 +302,13 @@ fn prepare_layers(doc: &mut Document, ids: Vec<LayerPath>, ctx: &JobCtx, depth: 
                     let svg_source = ctx
                         .stage(0.0, 0.05, "Inspecting embedded contents", |ctl| photocraft_io::is_svg_input_with(&name, &bytes, ctl))
                         .map_err(|error| if ctx.cancelled() { EngineError::Cancelled } else { EngineError::Other(error.to_string()) })?;
-                    let direct_svg = svg_source && object.stack_mode.is_none() && object.warp.is_none();
+                    let direct_svg = svg_source && object.stack_mode.is_none();
                     let prepared_source;
                     let prepared_bytes = if direct_svg {
-                        // The ordinary scale-aware renderer validates and rasterizes
-                        // this source once. Importing native shapes first would build
-                        // caches that this direct vector route immediately discards.
+                        // The ordinary renderer validates/rasterizes original SVG once,
+                        // including warped placement. Editable U8 shape caches are a
+                        // different rasterization and must not replace these source pixels
+                        // before the parent's single sRGB-to-ICC conversion.
                         prepared_source = None;
                         bytes
                     } else if native_source {
