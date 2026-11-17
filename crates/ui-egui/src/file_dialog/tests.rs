@@ -1139,8 +1139,53 @@ fn convert_to_linked_asks_where_to_write_the_contents() {
 }
 
 #[test]
+fn quick_export_groups_use_their_own_names() {
+    let (mut app, open, _) = app();
+    let dir = tempfile::tempdir().unwrap();
+    app.services.export = Some(Box::new(|doc, path, settings| {
+        let result = photocraft_io::export(doc, path, &settings.io_options()).map_err(|e| e.to_string())?;
+        Ok((result.bytes, result.warnings))
+    }));
+    app.services.write_new = Some(Box::new(|path, data| photocraft_format::write_noreplace(std::path::Path::new(path), data).map_err(|e| e.to_string())));
+    let mut layers = Vec::new();
+    for color in ["#ff0000", "#00ff00"] {
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("paint.bucket", json!({"x": 0, "y": 0, "color": color})).unwrap();
+        layers.push(app.session.active().unwrap().active_layer.unwrap());
+    }
+    let mut groups = Vec::new();
+    for (layer, name) in layers.into_iter().zip(["Folder 1", "Folder 2"]) {
+        app.run("layer.select", json!({"layer": layer.0})).unwrap();
+        let group = app.run("layer.new.groupFromLayers", json!({"name": name})).unwrap()["layer"].as_u64().unwrap();
+        groups.push(group);
+    }
+    app.run("layer.select", json!({"layer": groups[0]})).unwrap();
+    app.run("layer.select", json!({"layer": groups[1], "mode": "add"})).unwrap();
+
+    let ctx = egui::Context::default();
+    menus::invoke(&mut app, &ctx, "layer.quickExportAsPng", Value::Null).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert!(matches!(open.borrow().as_slice(), [(FileDialogRequest::Folder { .. }, _)]), "the selection asks once for a folder");
+    answer(&open, Some(FileDialogAnswer::FolderTo(dir.path().to_string_lossy().into_owned())));
+    app.poll_file_dialog(&ctx, None);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
+    for (name, expected) in [("Folder 1.png", [1.0, 0.0, 0.0, 1.0]), ("Folder 2.png", [0.0, 1.0, 0.0, 1.0])] {
+        let bytes = std::fs::read(dir.path().join(name)).unwrap();
+        let doc = photocraft_io::import(name, &bytes).unwrap().document;
+        assert_eq!(doc.layers[0].surface().unwrap().rgba(0, 0), expected, "{name}");
+    }
+}
+
+#[test]
 fn quick_export_selected_layers_writes_separate_pngs_with_one_prompt() {
     let (mut app, open, written) = app();
+    app.services.write_new = app.services.write.take();
+    let remembered = tempfile::tempdir().unwrap();
+    let destination = tempfile::tempdir().unwrap();
+    let remembered_path = remembered.path().to_str().unwrap().to_string();
+    let dir = destination.path();
+    app.session.prefs.edit(|p| p.export.last_folder = remembered_path.clone());
     app.run("layer.new.layer", json!({"name": "Same/name"})).unwrap();
     app.run("paint.bucket", json!({"x": 0, "y": 0, "color": "#ff0000"})).unwrap();
     app.run("layer.new.layer", json!({"name": "Same/name"})).unwrap();
@@ -1161,15 +1206,24 @@ fn quick_export_selected_layers_writes_separate_pngs_with_one_prompt() {
     assert!(!crate::layer_menu_ui::single_layer_only("layer.quickExportAsPng"));
     menus::invoke(&mut app, &ctx, "layer.quickExportAsPng", Value::Null).unwrap();
     app.poll_file_dialog(&ctx, None);
+    assert!(matches!(open.borrow().as_slice(), [(FileDialogRequest::Folder { initial_dir: Some(path) }, _)] if path == &remembered_path));
+    answer(&open, None);
+    app.poll_file_dialog(&ctx, None);
+    assert!(written.borrow().is_empty(), "cancel writes nothing");
+    assert_eq!(app.session.prefs().export.last_folder, remembered_path);
+
+    menus::invoke(&mut app, &ctx, "layer.quickExportAsPng", Value::Null).unwrap();
+    app.poll_file_dialog(&ctx, None);
     assert_eq!(open.borrow().len(), 1, "one destination for the entire selection");
     // Selection changes while choosing a destination must not change the captured sources.
     app.run("layer.select", json!({"layer": selected[0].0})).unwrap();
-    answer(&open, Some(FileDialogAnswer::SaveTo("selected.png".into())));
+    answer(&open, Some(FileDialogAnswer::FolderTo(dir.to_string_lossy().into_owned())));
     app.poll_file_dialog(&ctx, None);
     assert_eq!(written.borrow().len(), selected.len());
     assert_eq!(sources.borrow().len(), selected.len());
-    assert_eq!(written.borrow()[0], "selected.png");
-    assert_eq!(written.borrow()[1], "selected-2-Same_name.png");
+    let want: Vec<_> = ["Same_name-1.png", "Same_name.png"].iter().map(|name| dir.join(name).to_string_lossy().into_owned()).collect();
+    assert_eq!(*written.borrow(), want);
+    assert_eq!(app.session.prefs().export.last_folder, dir.to_str().unwrap());
     assert_eq!(selected.len(), 2, "Select All Layers leaves the locked Background out");
     assert_eq!(app.session.active().unwrap().doc, before);
     assert!(!app.ui.status_error, "{}", app.ui.status);

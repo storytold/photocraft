@@ -27,7 +27,7 @@ pub enum FileDialogRequest {
     /// Files to read: several for File › Open, one for a command that reads a file (Place,
     /// scripts, notes, presets). Starts in `initial_dir` (the last-used folder, UI-217-3).
     Open { multiple: bool, initial_dir: Option<String>, extensions: Option<Vec<String>> },
-    /// Which folder to read from. Starts in `initial_dir` when available.
+    /// Which folder to use. Starts in `initial_dir` when available.
     Folder { initial_dir: Option<String> },
     /// Where to write, starting from `suggested` (a file name, or the document's own path).
     Save { suggested: String },
@@ -169,16 +169,10 @@ impl PhotocraftApp {
         // Closed documents' folders are no longer needed.
         let open: Vec<_> = self.session.documents().iter().map(|d| d.doc.id).collect();
         self.save_dirs.retain(|id, _| open.contains(id));
-        if suggested.parent().is_some_and(|p| p.as_os_str().is_empty()) {
-            let document_dir = doc
-                .and_then(|d| self.save_dirs.get(&d).cloned())
-                // An export doesn't start in a folder that is gone.
-                .filter(|dir| !export || folder_exists(dir))
-                .or_else(|| self.session.active().and_then(|d| d.path.as_deref()).and_then(|p| std::path::Path::new(p).parent()).map(Path::to_path_buf));
-            let remembered = export.then(|| self.session.prefs().export.last_folder.clone());
-            if let Some(dir) = export_start_dir(remembered.as_deref(), document_dir, folder_exists) {
-                suggested = dir.join(suggested);
-            }
+        if suggested.parent().is_some_and(|p| p.as_os_str().is_empty())
+            && let Some(dir) = self.save_start_dir(doc, export)
+        {
+            suggested = dir.join(suggested);
         }
         // The format comes from the extension, so a name typed without one (common where file
         // extensions are hidden, #5039) gets the suggested file's extension, as Photoshop's
@@ -189,18 +183,15 @@ impl PhotocraftApp {
             FileDialogAnswer::SaveTo(path) => {
                 let path = saved_path(app, &path, suggested_ext.as_deref());
                 // The web answers a download name, which has no folder to remember.
-                let dir = doc.zip(Path::new(&path).parent().filter(|p| !p.as_os_str().is_empty()).map(Path::to_path_buf));
+                let dir = Path::new(&path).parent().filter(|p| !p.as_os_str().is_empty());
                 // An export's folder only once it has exported: a failed one doesn't move where
                 // the next export starts.
-                if !export && let Some((doc, dir)) = dir.clone() {
-                    app.save_dirs.insert(doc, dir);
+                if !export && let Some((doc, dir)) = doc.zip(dir) {
+                    app.save_dirs.insert(doc, dir.to_path_buf());
                 }
                 let exported = then(app, path.clone())?;
-                if export {
-                    if let Some((doc, dir)) = dir {
-                        app.save_dirs.insert(doc, dir);
-                    }
-                    app.remember_export_folder(&path);
+                if export && let Some(dir) = dir {
+                    app.remember_export_dir(doc, dir);
                 }
                 Ok(exported)
             }
@@ -213,13 +204,37 @@ impl PhotocraftApp {
     }
 
     /// Remember the folder of an export that succeeded as where the next export dialog starts.
-    /// The web answers a download name, which has no folder, and leaves it alone.
-    fn remember_export_folder(&mut self, path: &str) {
-        let Some(dir) = Path::new(path).parent().filter(|p| !p.as_os_str().is_empty()) else { return };
+    fn remember_export_dir(&mut self, doc: Option<DocId>, dir: &Path) {
+        if let Some(doc) = doc {
+            self.save_dirs.insert(doc, dir.to_path_buf());
+        }
         let dir = dir.to_string_lossy().into_owned();
         if self.session.prefs().export.last_folder != dir {
             self.session.prefs.edit(|p| p.export.last_folder = dir);
         }
+    }
+
+    /// Pick a destination for several exports with the same folder memory as a single export.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn pick_export_folder(&mut self, then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static) -> Result<Value, String> {
+        let doc = self.session.active().map(|d| d.doc.id);
+        let initial_dir = self.save_start_dir(doc, true).map(|dir| dir.to_string_lossy().into_owned());
+        self.ask_file(FileDialogRequest::Folder { initial_dir }, move |app, answer| {
+            let FileDialogAnswer::FolderTo(dir) = answer else { return Err(UNEXPECTED.into()) };
+            let result = then(app, dir.clone())?;
+            app.remember_export_dir(doc, Path::new(&dir));
+            Ok(result)
+        })
+    }
+
+    fn save_start_dir(&self, doc: Option<DocId>, export: bool) -> Option<std::path::PathBuf> {
+        let document_dir = doc
+            .and_then(|d| self.save_dirs.get(&d).cloned())
+            // An export doesn't start in a folder that is gone.
+            .filter(|dir| !export || folder_exists(dir))
+            .or_else(|| self.session.active().and_then(|d| d.path.as_deref()).and_then(|p| Path::new(p).parent()).map(Path::to_path_buf));
+        let remembered = self.session.prefs().export.last_folder.as_str();
+        export_start_dir(export.then_some(remembered), document_dir, folder_exists)
     }
 
     /// Whether a save to `path` replaces a file the save dialog didn't ask about: the dialog
