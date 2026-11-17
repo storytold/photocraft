@@ -28,6 +28,8 @@ mod contour;
 mod gradient_field;
 #[cfg(test)]
 mod gradient_method_tests;
+#[cfg(test)]
+mod pattern_overlay_new_preset_tests;
 
 #[derive(Clone, Copy)]
 enum P {
@@ -1753,6 +1755,15 @@ fn page(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, 
                         let value = json!(cur);
                         disp[key] = value.clone();
                         set_param(f, selected, key, value);
+                    }
+                    if sel_kind == "patternOverlay" {
+                        let available = !cur.is_empty() && photocraft_engine::pattern_cmds::resolve_id(&app.session, &cur).is_some();
+                        let add = ui
+                            .add_enabled_ui(available, |ui| crate::icons::button(ui, "plus", 24.0, false, tl!("Create a new preset from the current pattern")))
+                            .inner;
+                        if add.clicked() && app.run("edit.definePattern", json!({"fromPattern": cur})).is_ok() {
+                            f.insert("patternList".into(), pattern_list(app));
+                        }
                     }
                 });
             }
