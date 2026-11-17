@@ -1196,7 +1196,7 @@ fn a_symlinked_preset_entry_is_refused_not_written_through() {
 #[test]
 fn tip_adapter_matches_shared_codec_and_keeps_preview_limit() {
     for t in [tip8(37, 21, 3), tip16(40, 33, 9)] {
-        let shared = craft_pcraft_tip::tip::encode(t.width, t.height, &t.data);
+        let shared = craft_pcraft_format::tip::encode(t.width, t.height, &t.data);
         assert_eq!(encode_tip(&t), shared);
         assert_eq!(decode_tip(&shared).unwrap(), t);
         assert!(decode_tip_max(&shared, t.width - 1).is_err());

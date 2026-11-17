@@ -86,9 +86,9 @@ pub const MAX_PATTERNS_BYTES: u64 = 256 << 20;
 /// The whole store never grows beyond this; further groups are skipped with a warning.
 pub const MAX_STORE_BYTES: u64 = 2 << 30;
 /// Largest tip side accepted from disk.
-pub const MAX_TIP_SIDE: u32 = craft_pcraft_tip::tip::MAX_SIDE;
+pub const MAX_TIP_SIDE: u32 = craft_pcraft_format::tip::MAX_SIDE;
 /// Largest tip sample count accepted from disk (64 Mi samples).
-pub const MAX_TIP_SAMPLES: u64 = craft_pcraft_tip::tip::MAX_SAMPLES;
+pub const MAX_TIP_SAMPLES: u64 = craft_pcraft_format::tip::MAX_SAMPLES;
 /// Most group files loaded.
 pub const MAX_GROUPS: usize = 4096;
 /// Most presets loaded from one group file.
@@ -259,7 +259,7 @@ fn tip_hash(t: &GrayTile) -> String {
 
 /// Encode the shared PCTIP1 envelope, preserving lossless 8/16-bit samples.
 pub fn encode_tip(t: &GrayTile) -> Vec<u8> {
-    craft_pcraft_tip::tip::encode(t.width, t.height, &t.data)
+    craft_pcraft_format::tip::encode(t.width, t.height, &t.data)
 }
 
 /// Inverse of [`encode_tip`]; any malformed, truncated or oversized input is an error.
@@ -269,7 +269,7 @@ pub fn decode_tip(bytes: &[u8]) -> Result<GrayTile, String> {
 
 /// [`decode_tip`] refusing (before inflating anything) a bitmap with a side over `max_side`.
 fn decode_tip_max(bytes: &[u8], max_side: u32) -> Result<GrayTile, String> {
-    let tip = craft_pcraft_tip::tip::decode_with_max_side(bytes, max_side)?;
+    let tip = craft_pcraft_format::tip::decode_with_max_side(bytes, max_side)?;
     Ok(GrayTile { width: tip.width, height: tip.height, data: tip.data.into() })
 }
 

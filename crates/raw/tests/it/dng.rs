@@ -866,6 +866,27 @@ fn map_polynomial_follows_the_linearization_table() {
     assert_eq!(s.polynomials.len(), 1);
 }
 
+/// With an OpcodeList1 present, the shared decoder leaves the LinearizationTable to its caller.
+/// PhotoCraft still applies the table at decode, as it does without the list, and the list's
+/// polynomial to the linearized values, as `map_polynomial_follows_the_linearization_table` does
+/// for OpcodeList2.
+#[test]
+fn an_opcode_list1_does_not_leave_the_linearization_table_unapplied() {
+    let (w, h) = (16, 8);
+    let data = noise(w * h, 12);
+    let table: Vec<u16> = (0..4096u16).map(|i| i * 2).collect();
+    let mut spec = DngSpec::cfa(w, h, data.clone());
+    spec.bits = 12;
+    spec.white = 8190;
+    spec.linearization = Some(table.clone());
+    spec.raw_extra = vec![(51008, Val::Undefined(testgen::map_polynomial_opcode_list([0, 0, h as u32, w as u32], &[(0, vec![0.0, 0.0, 1.0])])))];
+    let s = sensor(&spec.build());
+    assert!(s.linearization.is_none());
+    assert_eq!(s.data, data.iter().map(|&value| table[usize::from(value)]).collect::<Vec<_>>());
+    let want: Vec<f32> = data.iter().map(|&v| poly(&[0.0, 0.0, 1.0], f64::from(f32::from(table[usize::from(v)]) / 8190.)) as f32).collect();
+    assert_polynomial_development(&s, want);
+}
+
 /// A LinearizationTable maps integer samples: floating-point data ignores one.
 #[test]
 fn floating_point_raw_data_ignores_a_linearization_table() {

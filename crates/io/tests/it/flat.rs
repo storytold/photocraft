@@ -1199,7 +1199,7 @@ fn a_stereo_png_keeps_its_stereo_mark_on_save() {
 fn dds_writes_the_alpha_channel_as_the_texture_alpha() {
     use photocraft_codecs::DdsCompression;
     let d = with_alpha_channel(single(ColorMode::Rgb, SampleType::U8, false), "Alpha 1");
-    for compression in DdsCompression::ALL {
+    for compression in photocraft_io::DDS_COMPRESSIONS {
         let mut opts = ExportOptions::default();
         opts.encode.dds.compression = compression;
         let r = export(&d, "a.dds", &opts).unwrap();

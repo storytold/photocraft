@@ -62,6 +62,7 @@ fn label(c: DdsCompression) -> &'static str {
         DdsCompression::Bc1 => "BC1 / DXT1",
         DdsCompression::Bc2 => "BC2 / DXT3",
         DdsCompression::Bc3 => "BC3 / DXT5",
+        _ => c.name(),
     }
 }
 
@@ -78,7 +79,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         crate::widgets::hairline(ui);
         ui.add_space(8.0);
         crate::widgets::section_label(ui, tl!("Compression"));
-        for c in DdsCompression::ALL {
+        for c in photocraft_io::DDS_COMPRESSIONS {
             ui.radio_value(&mut options.compression, c, label(c));
         }
         ui.add_space(8.0);
@@ -139,12 +140,24 @@ mod tests {
     }
 
     #[test]
+    fn the_prompt_offers_uncompressed_and_bc1_to_bc3() {
+        let offered: Vec<&str> = photocraft_io::DDS_COMPRESSIONS.into_iter().map(label).collect();
+        assert_eq!(offered, [tl!("None"), "BC1 / DXT1", "BC2 / DXT3", "BC3 / DXT5"]);
+    }
+
+    #[test]
     fn options_params() {
         use serde_json::json;
         assert_eq!(options_param(&json!({}), "file.saveAs"), Ok(None));
         assert_eq!(options_param(&json!({"ddsCompression": "bc3"}), "file.saveAs"), Ok(Some(DdsOptions { compression: DdsCompression::Bc3, mipmaps: false })));
         assert_eq!(options_param(&json!({"ddsMipmaps": true}), "file.saveAs"), Ok(Some(DdsOptions { compression: DdsCompression::None, mipmaps: true })));
-        for bad in [json!({"ddsCompression": "bc7"}), json!({"ddsCompression": 3}), json!({"ddsMipmaps": "yes"})] {
+        for bad in [
+            json!({"ddsCompression": "bc7"}),
+            json!({"ddsCompression": "bc4"}),
+            json!({"ddsCompression": "ATI2"}),
+            json!({"ddsCompression": 3}),
+            json!({"ddsMipmaps": "yes"}),
+        ] {
             assert!(options_param(&bad, "file.saveAs").is_err(), "{bad}");
         }
         let mut step = json!({"path": "a.dds"});

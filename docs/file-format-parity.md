@@ -93,7 +93,7 @@ D5100 colour profile. Counts and the G14 estimate are unchanged.
 | Paint.NET `.pdn` | yes | no | [pdn.md](pdn.md) |
 | OpenRaster `.ora` | yes | yes | [ora.md](ora.md) |
 | ICO, QOI | yes | yes | |
-| DirectDraw Surface `.dds` | yes | yes | Opens the top mip level of a 2D texture: uncompressed RGB, RGBA or luminance, BC1–BC3 (DXT1/3/5), legacy or DX10 header. Saves a 2D texture uncompressed (BGRA, BGRX, luminance with or without alpha) or BC1–BC3 with the legacy header, optionally with its full mip chain (box filter); Save As and Save a Copy ask (DDS Options), scripts pass `ddsCompression` and `ddsMipmaps` (`--dds-compression`, `--dds-mipmaps` on the CLI). Cubemaps, arrays, volumes and BC4–BC7 are refused (#1327). Photoshop needs a plug-in |
+| DirectDraw Surface `.dds` | yes | yes | Opens the top mip level of a 2D texture: uncompressed RGB, RGBA or luminance, BC1–BC3 (DXT1/3/5), unsigned BC4 and BC5 (ATI1/ATI2), legacy or DX10 header. Saves a 2D texture uncompressed (BGRA, BGRX, luminance with or without alpha) or BC1–BC3 with the legacy header, optionally with its full mip chain (box filter); Save As and Save a Copy ask (DDS Options), scripts pass `ddsCompression` and `ddsMipmaps` (`--dds-compression`, `--dds-mipmaps` on the CLI). Cubemaps, arrays, volumes, signed BC4 and BC5, BC6H and BC7 are refused (#1327). Photoshop needs a plug-in |
 | Krita `.kra`, GIMP `.xcf`, Procreate | no | no | Not in Photoshop either |
 
 ### Affinity import notes (moved from `roadmap.md`)
