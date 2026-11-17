@@ -365,6 +365,14 @@ pub struct CopiedStyle {
 /// or fill layer) is known only when they run.
 pub const PRECHECKED: &[&str] = &["layer.new.layer", "layer.new.group", "layer.new.groupFromLayers", "layer.new.layerFromBackground"];
 
+/// The selected layers of `doc` whose active layer is `active` and whose selection set is `selected`, in bottom-to-top
+/// order ([`DocState::selected_layers`]), for a reader that holds the document without its editing state.
+pub fn selected_in(doc: &Document, active: Option<LayerId>, selected: &[LayerId]) -> Vec<LayerId> {
+    let Some(active) = active else { return Vec::new() };
+    let set: &[LayerId] = if selected.contains(&active) { selected } else { std::slice::from_ref(&active) };
+    doc.walk().into_iter().map(|(_, _, l)| l.id).filter(|id| set.contains(id)).collect()
+}
+
 #[cfg(test)]
 mod cmyk_same_rgb_diagnostic_tests {
     use crate::Session;
@@ -440,12 +448,4 @@ mod cmyk_same_rgb_diagnostic_tests {
         assert!(s.tools.target_mask(true));
         assert_eq!(s.tools.picked_role_cmyk(0), Some(mask_inks));
     }
-}
-
-/// The selected layers of `doc` whose active layer is `active` and whose selection set is `selected`, in bottom-to-top
-/// order ([`DocState::selected_layers`]), for a reader that holds the document without its editing state.
-pub fn selected_in(doc: &Document, active: Option<LayerId>, selected: &[LayerId]) -> Vec<LayerId> {
-    let Some(active) = active else { return Vec::new() };
-    let set: &[LayerId] = if selected.contains(&active) { selected } else { std::slice::from_ref(&active) };
-    doc.walk().into_iter().map(|(_, _, l)| l.id).filter(|id| set.contains(id)).collect()
 }
