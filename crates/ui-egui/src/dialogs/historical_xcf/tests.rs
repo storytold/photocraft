@@ -277,6 +277,8 @@ fn refused_historical_start_restores_choice_ahead_of_later_open_then_retries_ret
     let dialog = app.ui.dialogs.iter_mut().find(|dialog| owns(&dialog.fields)).unwrap();
     dialog.fields.insert("historicalXcfSampleOrder".into(), json!("big-endian"));
     let dialog_id = dialog.id;
+    let answered_fields = dialog.fields.clone();
+    let import_options = photocraft_engine::jobs::import_options(app.session.prefs());
     let cancelled = photocraft_engine::jobs::JobCtx::new();
     cancelled.cancel();
     app.session.set_inline_job_ctx(Some(cancelled));
@@ -289,10 +291,21 @@ fn refused_historical_start_restores_choice_ahead_of_later_open_then_retries_ret
     assert_eq!(app.session.documents().len(), 1);
     assert!(std::sync::Arc::ptr_eq(&original, &app.session.active().unwrap().doc));
     let retry = app.ui.dialogs.iter().find(|dialog| owns(&dialog.fields)).unwrap();
+    assert_eq!(retry.id, dialog_id, "startup refusal retains the existing modal rather than creating a new question");
+    assert_eq!(retry.fields, answered_fields, "retain the explicitly selected order and source fields without guessing another choice");
     assert_eq!(retry.fields[FIELD], source);
-    assert_eq!(retry.fields["historicalXcfSampleOrder"], Value::Null, "a recreated choice requires an explicit answer");
+    assert_eq!(retry.fields["historicalXcfSampleOrder"], json!("big-endian"));
+    assert_eq!(app.ui.dialogs.iter().filter(|dialog| owns(&dialog.fields)).count(), 1);
+    assert!(app.historical_opens[0].job.is_none());
+    assert!(app.session.jobs().is_empty());
+    assert_eq!(photocraft_engine::jobs::import_options(app.session.prefs()), import_options);
     app.session.set_inline_job_ctx(None);
-    choose(&mut app, "big-endian");
+    // Releasing the cancelled context does not answer the modal or launch work.
+    assert!(app.session.holds_historical_xcf_open(source));
+    assert_eq!(app.session.documents().len(), 1);
+    assert_eq!(app.prompt_order.iter().copied().collect::<Vec<_>>(), [PromptKind::Historical(source), PromptKind::Open]);
+    assert!(app.session.jobs().is_empty());
+    crate::dialogs::confirm(&mut app, dialog_id).unwrap();
     assert!(!app.session.holds_historical_xcf_open(source));
     assert!(app.historical_opens.is_empty());
     assert!(app.held_opens.is_empty());
@@ -301,6 +314,13 @@ fn refused_historical_start_restores_choice_ahead_of_later_open_then_retries_ret
     assert_eq!(app.session.active().unwrap().doc.name, "later");
     app.session.set_active(1);
     assert_pixel(&app);
+    assert_eq!(app.session.active().unwrap().protected_import_source.as_deref(), Some("/source/retained.xcf"));
+    assert!(
+        app.session.resume_historical_xcf_open(source, photocraft_io::HistoricalXcfSampleOrder::BigEndian, false).is_err(),
+        "successful admission consumes the exact capability once"
+    );
+    assert_eq!(app.session.documents().len(), 3);
+    assert_eq!(photocraft_engine::jobs::import_options(app.session.prefs()), import_options);
     assert!(std::sync::Arc::ptr_eq(&original, &app.session.documents()[0].doc));
 }
 
