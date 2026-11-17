@@ -5,7 +5,7 @@ use photocraft_color::{ColorMode, SampleType};
 use photocraft_doc::text::{CharStyle, Kerning, ParagraphRun, ParagraphStyle, TextDirection, TextRun};
 use photocraft_doc::{Document, Layer, LayerContent, TextLayer};
 use photocraft_engine::{Session, file_cmds::open_bytes_as, jobs::JobCtx};
-use photocraft_geom::{Affine, Rect, Size};
+use photocraft_geom::{Affine, Point, Rect, Size};
 use serde_json::json;
 
 /// Create the expected editable text through ordinary native data and preparation, independently of imported
@@ -35,6 +35,16 @@ fn counterpart() -> Document {
         ..Default::default()
     };
     text.sync_summary();
+    // The public GIMP fixture places the logical top-left at (10, 10). Native
+    // point text instead stores a baseline anchor. Derive it from this independently
+    // authored typography and this host's font metrics, never from imported state.
+    let [left, top, _, _] = photocraft_text::shared()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .layout(&text, doc.resolution_dpi)
+        .bounds()
+        .expect("native logical source typography");
+    text.transform = Affine::translate(10.0 - f64::from(left), 10.0 - f64::from(top));
     let mut layer = Layer::raster("XCF", doc.pixel_format());
     layer.content = LayerContent::Text(text);
     doc.layers = vec![background, layer];
@@ -70,6 +80,14 @@ fn first_open_text_prepares_edits_undoes_and_reopens_without_source() {
     let report = imported.active().unwrap().doc.metadata.import_conversion.clone();
     let LayerContent::Text(text) = &imported.active().unwrap().doc.layers[1].content else { panic!("editable text") };
     assert!(text.cache.is_some(), "first successful host open prepared native typography");
+    let [left, top, _, _] = photocraft_text::shared()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .layout(text, imported.active().unwrap().doc.resolution_dpi)
+        .bounds()
+        .expect("imported logical text bounds");
+    let origin = text.transform.apply(Point::new(f64::from(left), f64::from(top)));
+    assert!((origin.x - 10.0).abs() < 0.0001 && (origin.y - 10.0).abs() < 0.0001, "source logical top-left: {origin:?}");
     let mut native = Session::new();
     native.color.settings.ask_on_missing = false;
     native.open_imported_document(counterpart(), None, &JobCtx::new()).unwrap();
@@ -91,6 +109,7 @@ fn first_open_text_prepares_edits_undoes_and_reopens_without_source() {
         assert_eq!(imported.active().unwrap().doc.metadata.import_conversion, report);
     }
     imported.execute("file.saveACopy", json!({"path":saved})).unwrap();
+    assert_eq!(std::fs::read(&source).unwrap(), bytes, "native editing and save preserve the original source bytes");
     std::fs::remove_file(&source).unwrap();
     let mut reopened = Session::new();
     reopened.color.settings.ask_on_missing = false;
