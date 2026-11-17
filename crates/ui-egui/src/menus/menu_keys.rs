@@ -32,6 +32,25 @@ pub const TOP_PREFERRED: [(&str, char); 10] = [
     ("Help", 'H'),
 ];
 
+/// Photoshop's mnemonics for menu rows (Windows) where the first free letter differs: the parent
+/// path, the English label (a leaf's or a submenu's name) and the letter. Used where the shown
+/// label has the letter; every other row takes [`assign`]'s first free letter.
+pub const ITEM_PREFERRED: &[(&[&str], &str, char)] = &[
+    (&["Image", "Adjustments"], "Selective Color…", 'S'),
+    (&["Image", "Adjustments"], "Shadows/Highlights…", 'H'),
+    (&["Layer"], "New Fill Layer", 'W'),
+    (&["Layer"], "Link Layers", 'K'),
+    (&["Layer"], "Flatten Image", 'F'),
+];
+
+/// The preferred mnemonic of the row `label` under `path` ([`ITEM_PREFERRED`]).
+pub fn item_preferred(path: &[String], label: &str) -> Option<char> {
+    ITEM_PREFERRED
+        .iter()
+        .find(|(p, l, _)| *l == label && p.len() == path.len() && p.iter().zip(path).all(|(a, b)| *a == b.as_str()))
+        .map(|(_, _, c)| *c)
+}
+
 /// Keyboard state of the menu bar between frames.
 #[derive(Clone, Debug, Default)]
 pub struct Keys {
@@ -202,25 +221,36 @@ pub(crate) fn label_key(c: char) -> Option<char> {
     upper.is_ascii_alphanumeric().then_some(upper)
 }
 
-/// Mnemonics for `labels`, unique within the group: the preferred letter when the label has it,
-/// else the first unused ASCII letter or digit, trying the first character of each word before
+/// Mnemonics for `labels`, unique within the group: the preferred letter when the label has it
+/// (reserved before any fallback is chosen), else the first unused ASCII letter or digit, trying the first character of each word before
 /// the others. Compared case-insensitively; the returned letter is upper case.
 pub fn assign(labels: &[&str], preferred: &[Option<char>]) -> Vec<Option<char>> {
     let mut used: Vec<char> = Vec::new();
-    let mut out = Vec::with_capacity(labels.len());
-    for (i, label) in labels.iter().enumerate() {
-        let upper: Vec<char> = label.chars().filter_map(label_key).collect();
-        let has = |c: char| upper.contains(&c.to_ascii_uppercase());
-        let mut pick = preferred.get(i).copied().flatten().map(|c| c.to_ascii_uppercase()).filter(|&c| has(c) && !used.contains(&c));
-        if pick.is_none() {
-            let starts = label.split(|c: char| !c.is_alphanumeric()).filter_map(|w| w.chars().next());
-            let rest = label.chars();
-            pick = starts.chain(rest).filter_map(label_key).find(|c| !used.contains(c));
+    // Preferred letters are reserved first, so an earlier row's fallback can't take a later row's
+    // letter ("Lock Layers…" must leave K to "Link Layers", #15406).
+    let mut out: Vec<Option<char>> = labels
+        .iter()
+        .enumerate()
+        .map(|(i, label)| {
+            let upper: Vec<char> = label.chars().filter_map(label_key).collect();
+            let pick = preferred.get(i).copied().flatten().map(|c| c.to_ascii_uppercase()).filter(|c| upper.contains(c) && !used.contains(c));
+            if let Some(c) = pick {
+                used.push(c);
+            }
+            pick
+        })
+        .collect();
+    for (label, slot) in labels.iter().zip(out.iter_mut()) {
+        if slot.is_some() {
+            continue;
         }
+        let starts = label.split(|c: char| !c.is_alphanumeric()).filter_map(|w| w.chars().next());
+        let rest = label.chars();
+        let pick = starts.chain(rest).filter_map(label_key).find(|c| !used.contains(c));
         if let Some(c) = pick {
             used.push(c);
         }
-        out.push(pick);
+        *slot = pick;
     }
     out
 }
@@ -570,6 +600,9 @@ mod tests {
         // A preferred letter the label lacks (a translation) falls back; a taken one too.
         assert_eq!(assign(&["Datei", "Bearbeiten"], &[Some('F'), Some('E')]), [Some('D'), Some('E')]);
         assert_eq!(assign(&["Aa", "Ab", "Ba"], &[Some('A'), Some('A'), Some('A')]), [Some('A'), Some('B'), None]);
+        // A later row's preferred letter wins over an earlier row's fallback.
+        assert_eq!(assign(&["Lock", "Link"], &[None, Some('K')]), [Some('L'), Some('K')]);
+        assert_eq!(assign(&["Kl", "Lk"], &[None, Some('K')]), [Some('L'), Some('K')]);
         // Only ASCII letters and digits are keys: no mnemonic without one.
         assert_eq!(assign(&["ファイル", "Zoom 100%", "✔ Rulers"], &[]), [None, Some('Z'), Some('R')]);
     }

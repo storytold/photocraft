@@ -26,24 +26,31 @@ pub(super) fn render_level_rows(ui: &mut egui::Ui, items: &[&MenuItem], depth: u
     // Each row's mnemonic (#4988), unique within this level, in display order: the leaves' labels
     // and the submenus' names as shown.
     // A label with no Latin letter shows its English label's key after it: "新建(N)…" (#5863).
-    let (translated, english): (Vec<String>, Vec<&str>) = {
+    // Rows with a Photoshop letter of their own prefer it (#15406).
+    let (translated, english, preferred): (Vec<String>, Vec<&str>, Vec<Option<char>>) = {
         let mut subs: Vec<&str> = Vec::new();
-        items
-            .iter()
-            .filter_map(|it| {
-                if it.path.len() == depth {
-                    (it.label != "---").then(|| (translated_menu_label(lang, it), it.label.as_str()))
-                } else {
-                    let name = it.path.get(depth).map(String::as_str)?;
-                    (!subs.contains(&name)).then(|| {
-                        subs.push(name);
-                        (crate::i18n::tr(lang, name).to_string(), name)
-                    })
-                }
-            })
-            .unzip()
+        let mut translated = Vec::new();
+        let mut english = Vec::new();
+        let mut preferred = Vec::new();
+        for it in items {
+            let parent = it.path.get(..depth).unwrap_or(&[]);
+            let row = if it.path.len() == depth {
+                (it.label != "---").then(|| (translated_menu_label(lang, it), it.label.as_str()))
+            } else {
+                it.path.get(depth).map(String::as_str).filter(|name| !subs.contains(name)).map(|name| {
+                    subs.push(name);
+                    (crate::i18n::tr(lang, name).to_string(), name)
+                })
+            };
+            if let Some((shown, name)) = row {
+                translated.push(shown);
+                english.push(name);
+                preferred.push(crate::menu_keys::item_preferred(parent, name));
+            }
+        }
+        (translated, english, preferred)
     };
-    let (shown_labels, mnemonics) = crate::menu_keys::localized(&translated, &english, &[]);
+    let (shown_labels, mnemonics) = crate::menu_keys::localized(&translated, &english, &preferred);
     let mut next_row = 0usize;
     let mut shown_subs: Vec<&str> = Vec::new();
     let mut last_was_sep = true;
