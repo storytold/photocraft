@@ -406,6 +406,11 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, 
             let out = frame.apply(RasterDisplay::new(label.clone(), composite as &dyn RasterSource)).picture().show_at(ui, body.rect);
             cpu_read = out.read.map(|read| (read, crate::gpu_canvas::now_ms() - started));
         }
+        // The picture slot appends in show order. Drawing this with the controls would let the
+        // document's opaque background cover the moving pixels (the original layer is hidden).
+        if primary {
+            crate::transform_tool::show_preview(app, ui, body.rect);
+        }
         if let Some(overlay) = &overlay {
             let display = RasterDisplay::new(Label::Empty, overlay as &dyn RasterSource).id_salt("pc-channel-view").picture();
             let display = match mapping {

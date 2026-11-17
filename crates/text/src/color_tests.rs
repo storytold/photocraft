@@ -1,12 +1,14 @@
-//! Colour glyphs (COLR v0 and v1 with CPAL) draw in the font's colours (#7711). The fonts are
-//! Inter with a COLR and a CPAL table spliced in, so no colour font has to be bundled.
+//! Colour glyphs draw in the font's colours. Synthetic tests splice colour tables into Inter,
+//! so no colour font has to be bundled.
 
 use std::sync::Arc;
 
+use photocraft_codecs::{ChannelLayout, EncodeOptions, Format, Image, encode};
 use photocraft_color::{Color, ColorMode, PixelFormat, SampleType};
 use photocraft_doc::TextLayer;
 use photocraft_doc::text::{AntiAlias, CharStyle, TextRun};
 use photocraft_geom::Affine;
+use skrifa::raw::TableProvider;
 use skrifa::{FontRef, MetadataProvider};
 
 use crate::render::{ink_rect, rasterize};
@@ -153,6 +155,98 @@ fn pixels(l: &TextLayout, format: PixelFormat) -> Vec<[f32; 4]> {
 
 fn depths() -> [PixelFormat; 3] {
     [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F]
+}
+
+/// Splice bitmap strikes into Inter's space glyph, which has no visible outline.
+fn sbix_space(strikes: &[(u16, u32, [u8; 4])]) -> Vec<u8> {
+    let inter = fonts::INTER_REGULAR.as_slice();
+    let id = gid(inter, ' ');
+    assert_ne!(id, 0);
+    let count = FontRef::new(inter).unwrap().maxp().unwrap().num_glyphs();
+    let mut sbix = vec![0, 1, 0, 1];
+    sbix.extend_from_slice(&(strikes.len() as u32).to_be_bytes());
+    sbix.resize(8 + 4 * strikes.len(), 0);
+    let start = 4 + 4 * (u32::from(count) + 1);
+    for (i, &(ppem, side, rgba)) in strikes.iter().enumerate() {
+        let pixels = Image::from_u8(side, side, ChannelLayout::Rgba, rgba.repeat((side * side) as usize)).unwrap();
+        let image = encode(&pixels, Format::Png, &EncodeOptions::default()).unwrap();
+        let strike = sbix.len() as u32;
+        sbix[8 + 4 * i..12 + 4 * i].copy_from_slice(&strike.to_be_bytes());
+        sbix.extend_from_slice(&ppem.to_be_bytes());
+        sbix.extend_from_slice(&72u16.to_be_bytes());
+        for entry in 0..=count {
+            let offset = if entry <= id { start } else { start + 8 + image.len() as u32 };
+            sbix.extend_from_slice(&offset.to_be_bytes());
+        }
+        sbix.extend_from_slice(b"\0\0\0\0png ");
+        sbix.extend_from_slice(&image);
+    }
+    with_tables(inter, &[(*b"sbix", sbix)])
+}
+
+#[test]
+fn sbix_bitmap_uses_its_own_colour_and_text_opacity() {
+    let mut color = Color::BLACK;
+    color.alpha = 0.5;
+    let layout = layout_with(" ", sbix_space(&[(64, 8, RED)]), color);
+    for format in depths() {
+        let pixels = pixels(&layout, format);
+        assert!(pixels.iter().any(|p| p[0] > 0.99 && p[1] < 0.01 && p[2] < 0.01 && (p[3] - 0.5).abs() < 0.01));
+    }
+}
+
+#[test]
+fn png_strike_charges_input_bytes_for_each_decode() {
+    use crate::{bitmap_glyphs, color_glyphs::Limits, raster::Xform};
+    use skrifa::{GlyphId, bitmap::BitmapData};
+
+    let bytes = sbix_space(&[(64, 1, RED)]);
+    let font = FontRef::new(&bytes).unwrap();
+    let glyph = bitmap_glyphs::get(&font, GlyphId::new(u32::from(gid(&bytes, ' '))), 64.0).unwrap();
+    let BitmapData::Png(png) = glyph.data else { panic!("fixture must be PNG") };
+    let mut limits = Limits { bytes: u64::MAX, work: png.len() as u64 + 2 };
+    let mut pixels = [0.0; 4];
+    let mut paint = || bitmap_glyphs::paint(&glyph, &Xform::IDENTITY, 1.0, &PixelFormat::RGBA8, &mut pixels, (1, 1), &mut limits);
+    assert_eq!(paint(), Some(()), "the first decode fits the budget");
+    assert_eq!(paint(), None, "the second decode exceeds the cumulative budget");
+    assert_eq!(pixels, [1.0, 0.0, 0.0, 1.0]);
+}
+
+#[test]
+fn scaled_bitmap_glyph_uses_the_larger_strike_for_paint_and_bounds() {
+    // Different colours identify each strike. The larger strike also has different ink
+    // bounds, so this checks that measuring and painting agree on the source.
+    let font = sbix_space(&[(64, 8, RED), (128, 24, BLUE)]);
+    let layout = layout_with(" ", font, Color::BLACK);
+    for (scale, side, channel) in [(1.0, 8, 0), (2.0, 24, 2)] {
+        let transform = Affine::scale(scale);
+        let r = rasterize(&layout, &transform, PixelFormat::RGBA8, AntiAlias::Smooth);
+        assert_eq!(r.surface.content_bounds().width(), side, "strike width at {scale}×");
+        assert!(r.surface.read_region(r.rect).as_chunks::<4>().0.iter().any(|p| p[3] > 0.99 && p[channel] > 0.99), "strike colour at {scale}×");
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_emoji_renders_in_colour_with_the_default_font() {
+    let mut engine = TextEngine::with_system_fonts();
+    assert!(engine.has_family("Apple Color Emoji"));
+    let layer = TextLayer { text: "Hello 🐺 World".into(), size_pt: 48.0, ..Default::default() };
+    for format in depths() {
+        let (layout, rendered) = engine.render(&layer, 72.0, format);
+        let shaped_wolf = layout.glyphs.iter().any(|g| {
+            let face = &layout.faces[g.face as usize];
+            FontRef::from_index(face.font.data.as_ref(), face.font.index)
+                .is_ok_and(|font| g.id != 0 && font.charmap().map('🐺').is_some_and(|id| id.to_u32() == g.id))
+        });
+        assert!(shaped_wolf, "the system fallback must shape the wolf emoji");
+        assert!(rendered.rect.width() > 10 && rendered.rect.height() > 10, "{:?}", rendered.rect);
+        let pixels = rendered.surface.read_region(rendered.rect);
+        assert!(
+            pixels.as_chunks::<4>().0.iter().any(|&[r, g, b, a]| a > 0.8 && r.max(g).max(b) - r.min(g).min(b) > 0.04),
+            "the wolf emoji must have coloured ink"
+        );
+    }
 }
 
 #[test]

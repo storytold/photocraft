@@ -274,6 +274,49 @@ fn transform_preview_stays_visible_while_panning() {
     assert!(has_preview(&h), "the transformed layer stays visible during the pan");
 }
 
+#[test]
+fn scaled_text_preview_paints_over_the_document() {
+    use craft::imaging::ui::transform_preview::PreviewTextures;
+    use egui::{Shape, TextureId};
+
+    // The background and the text preview share one picture slot. Merely finding the
+    // preview mesh in the shape list doesn't prove that the document isn't covering it.
+    fn pictures_at(shape: &Shape, point: Pos2, textures: &mut Vec<TextureId>) {
+        match shape {
+            Shape::Vec(shapes) => shapes.iter().for_each(|shape| pictures_at(shape, point, textures)),
+            Shape::Mesh(mesh) if mesh.texture_id != TextureId::default() && mesh.calc_bounds().contains(point) => textures.push(mesh.texture_id),
+            _ => {}
+        }
+    }
+
+    let mut h = harness();
+    h.state_mut().run("type.create", json!({"x": 110, "y": 145, "text": "Hello 🐺 World", "size": 24})).unwrap();
+    let view = &mut h.state_mut().ui.views[0];
+    view.zoom = 4.825;
+    view.center = [155.0, 133.0];
+    view.clear_pending();
+    h.run_steps(2);
+    begin(&mut h);
+    let t = h.state_mut().ui.transform.as_mut().unwrap();
+    t.edit_box(|b| *b = b.scaled_about_pivot(1.8582, 1.8582));
+    h.run_steps(2);
+
+    let [a, _, c, _] = quad(&h);
+    let center = screen(&mut h, [(a[0] + c[0]) * 0.5, (a[1] + c[1]) * 0.5]);
+    let preview = h.state().transform_preview.as_ref().unwrap();
+    let texels = preview.textures.level_image(0).unwrap().0;
+    assert!(texels.pixels.iter().any(|p| p.a() != 0), "the text preview contains ink");
+    let (texture, _) = preview.textures.pick(&h.ctx, PreviewTextures::choose(4.825, 1.8582, false), None).unwrap();
+    let mut pictures = Vec::new();
+    for shape in &h.output().shapes {
+        if shape.clip_rect.contains(center) {
+            pictures_at(&shape.shape, center, &mut pictures);
+        }
+    }
+    assert!(pictures.iter().any(|&id| id != texture), "the document is painted under the box: {pictures:?}");
+    assert_eq!(pictures.last(), Some(&texture), "the text preview must paint over the document: {pictures:?}");
+}
+
 /// A transform started by dragging a Move-tool control: that first drag is undoable too.
 #[test]
 fn the_first_drag_from_the_move_tools_controls_undoes() {
