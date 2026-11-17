@@ -1,5 +1,7 @@
 use super::open::{open, open_smart_filter};
-use super::{LayerId, PhotocraftApp, Value, describe, dismiss, take_with};
+use super::{LayerId, PhotocraftApp, Value, describe};
+#[cfg(not(target_arch = "wasm32"))]
+use super::{dismiss, take_with};
 
 /// The menu id of the RAW Develop workspace.
 const ID: &str = "filter.cameraRaw";
@@ -27,6 +29,14 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
         })();
         return Some(opened);
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    return workspace_request(app, ctx, params);
+    #[cfg(target_arch = "wasm32")]
+    None
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn workspace_request(app: &mut PhotocraftApp, ctx: &egui::Context, params: &Value) -> Option<Result<Value, String>> {
     let ui = params.get("ui")?;
     app.raw_reply = None;
     let was_closed = app.raw.is_none();

@@ -278,6 +278,7 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
     if id != KEY {
         return None;
     }
+    #[cfg(not(target_arch = "wasm32"))]
     if let Some(ui) = params.get("ui") {
         return Some(if app.wide_angle.is_some() {
             crate::control::dialogs::workspace_ui(app, ctx, KEY, ui)
