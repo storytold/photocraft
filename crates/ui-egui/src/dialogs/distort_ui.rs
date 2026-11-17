@@ -266,7 +266,7 @@ pub fn display_doc(app: &PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u6
 pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
     let empty = params.as_object().is_none_or(|o| o.is_empty());
     let ui = params.get("ui");
-    let hosted = |app: &mut PhotocraftApp, key: &str, ui: &Value| crate::control::dialogs::workspace_ui(app, ctx, key, ui);
+    let hosted = |app: &mut PhotocraftApp, key: &str, ui: &Value| crate::dialogs::workspace_ui(app, ctx, key, ui);
     match id {
         "filter.filterGallery" if empty => Some(crate::gallery_ui::open(app).map(|_| json!({"gallery": crate::gallery_ui::describe(app)}))),
         "filter.filterGallery" if ui.is_some() && workspace_open(app, id) => Some(hosted(app, id, ui.unwrap_or(&Value::Null))),

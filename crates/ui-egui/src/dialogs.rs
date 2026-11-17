@@ -13,6 +13,19 @@ use serde_json::Value;
 
 use crate::PhotocraftApp;
 
+/// Routes native automation requests without pulling native control services into the web build.
+pub(crate) fn workspace_ui(app: &mut PhotocraftApp, ctx: &egui::Context, key: &str, ui: &Value) -> Result<Value, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        crate::control::dialogs::workspace_ui(app, ctx, key, ui)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (app, ctx, key, ui);
+        Err("UI automation is unavailable in the web build".into())
+    }
+}
+
 /// What a family of the hosted dialogs does with each result, and who owns which dialog key.
 pub(crate) mod params {
     use std::path::{Path, PathBuf};
@@ -507,6 +520,7 @@ pub fn confirm(app: &mut PhotocraftApp, ctx: &egui::Context, id: DialogId) -> Re
     }
     // Automation confirming a dialog that stands for a command is judged as that command, whichever way the answer
     // arrives (a control request or synthetic input).
+    #[cfg(not(target_arch = "wasm32"))]
     if app.automation_input
         && let Some(authorize) = app.services.automation_command.as_ref()
         && let Some((command, params)) = crate::control::dialogs::hosted_command(app, id)
@@ -514,6 +528,7 @@ pub fn confirm(app: &mut PhotocraftApp, ctx: &egui::Context, id: DialogId) -> Re
         authorize(&command, &params)?;
     }
     // Synthetic input answering Save on the unsaved-changes prompt is judged as `file.save`, as a control answer is.
+    #[cfg(not(target_arch = "wasm32"))]
     if app.automation_input && crate::control::dialogs::is_save_answer(app, id) {
         crate::discard_ui::authorize_save(app, false)?;
     }

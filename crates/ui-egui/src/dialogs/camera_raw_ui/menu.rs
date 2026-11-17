@@ -33,7 +33,7 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
     if was_closed && let Err(e) = open(app, ctx) {
         return Some(Err(e));
     }
-    let applied = crate::control::dialogs::workspace_ui(app, ctx, ID, ui);
+    let applied = crate::dialogs::workspace_ui(app, ctx, ID, ui);
     // A commit, cancel or done in the request lands now, so its reply is this call's: the confirm or cancel ran the
     // result pump, which left the reply.
     let ended = take_with(app, ctx).or_else(|| app.raw_reply.take());

@@ -225,7 +225,10 @@ fn save_text(app: &mut PhotocraftApp, state: &mut DialogState, suggested: &str, 
     // A set name can hold characters a file name can't.
     let name: String = suggested.chars().map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c }).collect();
     let saved = app.pick_save(&name, move |app, path| {
+        #[cfg(not(target_arch = "wasm32"))]
         app.framework.files().write(std::path::Path::new(&path), text.as_bytes()).map_err(|e| e.to_string())?;
+        #[cfg(target_arch = "wasm32")]
+        app.services.write.as_mut().ok_or("File downloads are unavailable")?(&path, text.as_bytes())?;
         Ok(json!({"path": path}))
     });
     if let Err(e) = saved {
