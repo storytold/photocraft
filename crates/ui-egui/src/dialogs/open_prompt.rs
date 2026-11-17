@@ -380,7 +380,18 @@ pub fn arrive_memory(
     capacity_unknown: bool,
     uncertain_capacity_warning: bool,
 ) {
-    app.held_memory_prompts.push_back(MemoryPrompt { id, name, path, error_source, slot, order, estimated, available, capacity_unknown, uncertain_capacity_warning });
+    app.held_memory_prompts.push_back(MemoryPrompt {
+        id,
+        name,
+        path,
+        error_source,
+        slot,
+        order,
+        estimated,
+        available,
+        capacity_unknown,
+        uncertain_capacity_warning,
+    });
     app.prompt_order.push_back(PromptKind::Memory);
     advance_memory(app);
 }

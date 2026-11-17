@@ -376,7 +376,6 @@ fn recognized_psd_header_failures_keep_their_diagnostic_and_raw_error() {
     }
 }
 
-
 #[cfg(not(target_arch = "wasm32"))]
 fn template_psd_for_memory_prompt() -> Vec<u8> {
     let mut s = photocraft_engine::Session::new();
@@ -482,13 +481,21 @@ fn byte_template_memory_approval_decode_failures_name_the_source_and_keep_raw_re
         app.background_jobs = background;
         let source = photocraft_engine::jobs::OpenSource::Bytes(std::sync::Arc::new(header.clone()));
         let fingerprint = photocraft_engine::jobs::SourceFingerprint::of(&source).unwrap();
-        let preflight = app.session.store_pending_preflight(photocraft_engine::jobs::PendingPsdPreflight {
-            id: 0, name: "Untitled-1".into(), source, fingerprint,
-            required: 1000, soft_limit: 500, hard_limit: 2000, available_ram: Some(4000), confirm_damage: true,
-        }).unwrap();
-        crate::open_prompt::arrive_memory(
-            &mut app, preflight, "Untitled-1".into(), None, Some("card.psdt".into()), None, None, 1000, Some(4000), false, false,
-        );
+        let preflight = app
+            .session
+            .store_pending_preflight(photocraft_engine::jobs::PendingPsdPreflight {
+                id: 0,
+                name: "Untitled-1".into(),
+                source,
+                fingerprint,
+                required: 1000,
+                soft_limit: 500,
+                hard_limit: 2000,
+                available_ram: Some(4000),
+                confirm_damage: true,
+            })
+            .unwrap();
+        crate::open_prompt::arrive_memory(&mut app, preflight, "Untitled-1".into(), None, Some("card.psdt".into()), None, None, 1000, Some(4000), false, false);
         let dialog = app.ui.dialogs[0].id;
         let reply = memory_dialog_reply(&mut app, dialog, true);
         let reason = "PSD: unsupported file version 0";
