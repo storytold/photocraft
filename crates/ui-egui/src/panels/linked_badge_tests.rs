@@ -295,7 +295,7 @@ fn the_missing_set_is_read_once_per_pass() {
     let ctx = egui::Context::default();
     let mut answers = Vec::new();
     for pass in 0..2 {
-        let _ = ctx.run_ui(Default::default(), |ui| {
+        let mut out = ctx.run_ui(Default::default(), |ui| {
             let session = &mut h.state_mut().session;
             answers.push(link_missing(ui.ctx(), session, &path));
             if pass == 0 && file.exists() {
@@ -306,6 +306,8 @@ fn the_missing_set_is_read_once_per_pass() {
             }
             answers.push(link_missing(ui.ctx(), session, &path));
         });
+        // No renderer here takes the pass's textures.
+        out.textures_delta.clear();
     }
     assert_eq!(answers, [false, false, true, true]);
 }

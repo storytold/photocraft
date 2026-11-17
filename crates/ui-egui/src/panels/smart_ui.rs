@@ -61,7 +61,7 @@ fn link_badge_measured(doc: &Document, l: &Layer, path: &str) -> bool {
 /// during a pass shows from the next one.
 pub fn link_missing(ctx: &egui::Context, session: &photocraft_engine::Session, path: &str) -> bool {
     type Cached = (u64, Option<u64>, std::sync::Arc<std::collections::HashSet<String>>);
-    let id = egui::Id::new("smart_ui::link_missing");
+    let id = egui::Id::unique("smart_ui::link_missing");
     let (pass, doc) = (ctx.cumulative_pass_nr(), session.active().map(|d| d.doc.id.0));
     let cached: Option<Cached> = ctx.data(|d| d.get_temp(id));
     let set = match cached {
