@@ -206,6 +206,24 @@ pub(crate) fn store(
 /// `width` × `height` as the reference application draws a scaled smart object, placed with its
 /// top-left corner at `origin`. `None` for an empty size or one past [`MAX_SAMPLES`].
 pub fn scale(src: &Surface, bounds: Rect, width: u32, height: u32, origin: (i32, i32)) -> Option<Surface> {
+    let w = f64::from(bounds.width().max(1));
+    let h = f64::from(bounds.height().max(1));
+    scale_at(src, bounds, width, height, origin, [f64::from(width) / w, f64::from(height) / h, f64::from(origin.0), f64::from(origin.1)])
+}
+
+/// [`scale`] into the whole-pixel box `width` × `height` at `origin`, sampling the exact placement
+/// `[sx, sy, x0, y0]` (the box's scale per axis and where its top-left corner lands, both
+/// unsnapped), as the reference application draws a smart object scaled to a fractional size or
+/// position: each resized axis reads the source where the exact placement puts it (measured byte
+/// for byte, 0 pixels apart, on scales from 66 % to 172 % with fractional heights and tops). An
+/// axis that keeps its size is copied, as in [`scale`].
+pub fn scale_at(src: &Surface, bounds: Rect, width: u32, height: u32, origin: (i32, i32), exact: [f64; 4]) -> Option<Surface> {
+    let [sx, sy, x0, y0] = exact;
+    if !exact.iter().all(|v| v.is_finite()) || sx <= 0.0 || sy <= 0.0 {
+        return None;
+    }
+    let along_x = Exact { scale: sx, phase: x0 - f64::from(origin.0) };
+    let along_y = Exact { scale: sy, phase: y0 - f64::from(origin.1) };
     let fmt = src.format();
     let n = src.channels();
     if !fmt.alpha || n == 0 || bounds.is_empty() || width == 0 || height == 0 {
@@ -221,7 +239,7 @@ pub fn scale(src: &Surface, bounds: Rect, width: u32, height: u32, origin: (i32,
     let mut img = load(src, bounds, depth);
     bleed(&mut img);
     if nx != w {
-        img = axis(&img, nx, depth, false);
+        img = axis(&img, nx, depth, false, along_x);
     }
     let rect = Rect::new(origin.0, origin.1, origin.0.checked_add(i32::try_from(width).ok()?)?, origin.1.checked_add(i32::try_from(height).ok()?)?);
     if ny == h {
@@ -232,9 +250,10 @@ pub fn scale(src: &Surface, bounds: Rect, width: u32, height: u32, origin: (i32,
         });
     }
     // The rows are filtered as they are written: no image of the full size in between.
-    let (mid, k, a, stretch) = prepared(&img, ny, depth, true);
+    let (mid, _, a, stretch) = prepared(&img, ny, depth, true);
+    let along_y = along_y.read(h, mid.as_ref().map_or(h, |m| m.h));
     let img = mid.unwrap_or(img);
-    let taps: Vec<Taps> = (0..ny).map(|o| taps(o, img.h, k, a, stretch)).collect();
+    let taps: Vec<Taps> = (0..ny).map(|o| taps(o, img.h, a, stretch, along_y)).collect();
     store(fmt, rect, depth, true, |y, x, out| {
         if let Some(t) = taps.get(y) {
             blend_rows(&img, t, x, depth, out);
@@ -244,9 +263,26 @@ pub fn scale(src: &Surface, bounds: Rect, width: u32, height: u32, origin: (i32,
 
 /// One axis resized to `len` samples (`vertical`: the rows), with the Automatic filter for its
 /// scale, through the averaged image below ¼.
-fn axis(img: &Image, len: usize, depth: Depth, vertical: bool) -> Image {
-    let (mid, k, a, stretch) = prepared(img, len, depth, vertical);
-    pass(mid.as_ref().unwrap_or(img), len, k, a, stretch, depth, vertical)
+fn axis(img: &Image, len: usize, depth: Depth, vertical: bool, exact: Exact) -> Image {
+    let (mid, _, a, stretch) = prepared(img, len, depth, vertical);
+    let have = |i: &Image| if vertical { i.h } else { i.w };
+    let exact = exact.read(have(img), mid.as_ref().map_or(have(img), have));
+    pass(mid.as_ref().unwrap_or(img), len, a, stretch, depth, vertical, exact)
+}
+
+/// Where an axis's output samples read: the exact scale (source → document) and how far the exact
+/// placement lies past the whole-pixel box (in output samples).
+#[derive(Clone, Copy, Debug)]
+struct Exact {
+    scale: f64,
+    phase: f64,
+}
+
+impl Exact {
+    /// The same placement over an image averaged from `was` samples down to `now` (below ¼).
+    fn read(self, was: usize, now: usize) -> Exact {
+        Exact { scale: self.scale * was as f64 / now.max(1) as f64, phase: self.phase }
+    }
 }
 
 /// What an axis's filtering pass to `len` samples works with: the averaged image it reads (below
@@ -292,9 +328,11 @@ struct Taps {
 }
 
 /// The taps of output sample `o` of `have` source samples at scale `k`.
-fn taps(o: usize, have: usize, k: f64, a: f64, stretch: f64) -> Taps {
+/// Output sample `o`'s taps: it reads the source at `(o + ½ − phase)/scale − ½` (the exact
+/// placement; the filter for the snapped scale sets only the kernel, `a` and `stretch`).
+fn taps(o: usize, have: usize, a: f64, stretch: f64, exact: Exact) -> Taps {
     let last = have.saturating_sub(1) as f64;
-    let u = ((o as f64 + 0.5) / k - 0.5).clamp(0.0, last);
+    let u = ((o as f64 + 0.5 - exact.phase) / exact.scale - 0.5).clamp(0.0, last);
     let j = u.floor();
     let u = j + ((u - j) * 128.0).round_ties_even() / 128.0;
     let (lo, hi) = ((u - 2.0 * stretch).floor() as i64, (u + 2.0 * stretch).ceil() as i64);
@@ -316,10 +354,10 @@ fn taps(o: usize, have: usize, k: f64, a: f64, stretch: f64) -> Taps {
 }
 
 /// One filtering pass along an axis to `len` samples at scale `k` (rule 3 of the module).
-fn pass(img: &Image, len: usize, k: f64, a: f64, stretch: f64, depth: Depth, vertical: bool) -> Image {
+fn pass(img: &Image, len: usize, a: f64, stretch: f64, depth: Depth, vertical: bool, exact: Exact) -> Image {
     let have = if vertical { img.h } else { img.w };
     let n = img.n;
-    let taps: Vec<Taps> = (0..len).map(|o| taps(o, have, k, a, stretch)).collect();
+    let taps: Vec<Taps> = (0..len).map(|o| taps(o, have, a, stretch, exact)).collect();
     let (ow, oh) = if vertical { (img.w, len) } else { (len, img.h) };
     let mut px = vec![0.0f32; ow * oh * n];
     crate::par::chunks_mut(&mut px, ow * n, true, |y, row| {
@@ -744,7 +782,7 @@ mod tests {
         for o in 0..40 {
             for &(k, have) in &[(0.5, 96), (0.75, 96), (1.5, 96), (2.0, 96), (0.25, 400)] {
                 let (a, st) = automatic(k);
-                let t = taps(o, have, k, a, st);
+                let t = taps(o, have, a, st, Exact { scale: k, phase: 0.0 });
                 assert_eq!(t.q.iter().sum::<i64>(), ONE);
             }
         }
@@ -755,7 +793,7 @@ mod tests {
         // 75 %, output 6: Sharper at 0.75 (a = -1.4, stretch 1.4), position 6.5 / 0.75 - 0.5 =
         // 8.1666.. → 8 + 21/128.
         let (a, st) = automatic(0.75);
-        let t = taps(6, 96, 0.75, a, st);
+        let t = taps(6, 96, a, st, Exact { scale: 0.75, phase: 0.0 });
         let u = 8.0 + 21.0 / 128.0;
         let w: Vec<f64> = (t.start..t.start + t.q.len() as i64).map(|i| keys((u - i as f64) / st, a)).collect();
         let total: f64 = w.iter().sum();
@@ -1054,10 +1092,12 @@ mod tests {
                 let mut img = load(&src, bounds, depth);
                 bleed(&mut img);
                 if width != img.w {
-                    img = axis(&img, width, depth, false);
+                    let k = width as f64 / img.w as f64;
+                    img = axis(&img, width, depth, false, Exact { scale: k, phase: 0.0 });
                 }
                 if height != img.h {
-                    img = axis(&img, height, depth, true);
+                    let k = height as f64 / img.h as f64;
+                    img = axis(&img, height, depth, true, Exact { scale: k, phase: 0.0 });
                 }
                 let unit = depth.levels.unwrap_or(1.0);
                 let mut data: Vec<f32> = img.px.iter().map(|v| v / unit).collect();

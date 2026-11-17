@@ -131,7 +131,8 @@ pub fn snapped_scale(bounds: Rect, [sx, sy, dx, dy]: [f64; 4]) -> Option<[f64; 4
 }
 
 /// `src` scaled and moved by `t` the way the reference application draws a smart object with
-/// the box `bounds` ([`snapped_scale`], [`crate::smart_scale`]): resized to fill the snapped box.
+/// the box `bounds` ([`snapped_scale`], [`crate::smart_scale`]): resized into the snapped box,
+/// each resized axis sampled at the exact placement.
 /// Shared with Convert to Layers, so the layers it makes look as the smart object did. `None`
 /// where [`snapped_scale`] or [`crate::smart_scale::scale`] take no part.
 pub fn scale_snapped(src: &Surface, bounds: Rect, t: [f64; 4]) -> Option<Surface> {
@@ -151,7 +152,10 @@ pub fn scale_snapped(src: &Surface, bounds: Rect, t: [f64; 4]) -> Option<Surface
     if kx == 1.0 && ky == 1.0 {
         return Some(crate::resample::translate_surface(&crate::resample::crop_surface(src, bounds), x0 - bounds.x0, y0 - bounds.y0));
     }
-    crate::smart_scale::scale(src, bounds, w, h, (x0, y0))
+    // Into the snapped box, but sampled where the exact placement puts the source, as the
+    // reference application draws it (a fractional size or top is not rounded away).
+    let [sx, sy, ex, ey] = t;
+    crate::smart_scale::scale_at(src, bounds, w, h, (x0, y0), [sx, sy, ex + sx * bx, ey + sy * by])
 }
 
 /// [`place_source`] through a projective map `h` (source → document; Distort, Perspective).
@@ -2684,13 +2688,52 @@ mod tests {
     }
 
     /// A scaled smart object fills a box snapped to whole pixels, as in the reference
-    /// application: a third of 256 px (85.33 px, from 277.33) covers exactly 277..362.
+    /// application: a third of 256 px (85.33 px, from 277.33) covers exactly 277..362. Inside it
+    /// the source is read where the exact placement puts it, so the first pixel, a third of which
+    /// lies before 277.33, is only partly covered (as the reference draws fractional tops).
     #[test]
     fn a_scaled_smart_object_fills_whole_pixels() {
         let row = scaled_strip(1.0 / 3.0);
         assert_eq!(row[276], 0.0);
-        assert!(row[277] > 100.0 && row[361] > 100.0, "{} {}", row[277], row[361]);
+        assert!(row[277] > 0.0 && row[277] < row[278], "{} {}", row[277], row[278]);
+        assert!(row[361] > 100.0, "{}", row[361]);
         assert_eq!(row[362], 0.0);
+    }
+
+    /// A smart object scaled to a fractional size or top (as the reference application draws one;
+    /// matched byte for byte on its own renders): the box stays on whole pixels, but the rows are
+    /// read at the exact placement. With the snapped placement nothing changes; a top a quarter
+    /// pixel lower moves the picture's weight a quarter pixel down.
+    #[test]
+    fn a_fractional_scale_reads_the_exact_placement() {
+        let mut src = Surface::new(PixelFormat::RGBA8);
+        for y in 0..40 {
+            for x in 0..30 {
+                let v = if (12..16).contains(&y) { 1.0 } else { 0.2 };
+                src.write_pixel(x, y, &[v, v, v, 1.0]);
+            }
+        }
+        let b = Rect::new(0, 0, 30, 40);
+        let (w, h) = (35u32, 47u32);
+        let (sx, sy) = (f64::from(w) / 30.0, f64::from(h) / 40.0);
+        let plain = crate::smart_scale::scale(&src, b, w, h, (10, 20)).unwrap();
+        let same = crate::smart_scale::scale_at(&src, b, w, h, (10, 20), [sx, sy, 10.0, 20.0]).unwrap();
+        assert_eq!(plain.read_region(plain.content_bounds()), same.read_region(same.content_bounds()));
+        let lower = crate::smart_scale::scale_at(&src, b, w, h, (10, 20), [sx, sy, 10.0, 20.25]).unwrap();
+        // The bright band's centre, down column 25.
+        let centre = |s: &Surface| {
+            let (mut m, mut t) = (0.0, 0.0);
+            for y in 20..67 {
+                let v = s.pixel(25, y).first().copied().unwrap_or(0.0) as f64 - 0.2;
+                if v > 0.0 {
+                    m += v * y as f64;
+                    t += v;
+                }
+            }
+            m / t
+        };
+        let shift = centre(&lower) - centre(&plain);
+        assert!((shift - 0.25).abs() < 0.05, "{shift}");
     }
 
     /// The snapped box rounds halves up on both sides of 0, as the reference application does
