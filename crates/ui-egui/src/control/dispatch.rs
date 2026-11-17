@@ -962,8 +962,15 @@ fn dialog_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlReq
     let p = &req.params;
     let s = |k: &str| str_param(p, k);
     let u = |k: &str| u64_param(p, k);
+    use crate::dialogs::find_replace_ui as find_replace;
     Some(match req.method.as_str() {
         "ui.dialog.open" => dialog_open(app, p),
+        "ui.dialog.set" if s("dialog") == Some(find_replace::CONTROL_ID) => match (s("field"), p.get("value")) {
+            (Some(key), Some(value)) => wrap(find_replace::set_field(app, key, value.clone())),
+            _ => err("need a field and value"),
+        },
+        "ui.dialog.confirm" if s("dialog") == Some(find_replace::CONTROL_ID) => wrap(find_replace::command(app, s("choice").unwrap_or("done"))),
+        "ui.dialog.cancel" if s("dialog") == Some(find_replace::CONTROL_ID) => wrap(find_replace::close(app)),
         // The shell's own dialog (Window › Workspace, View › Pixel Aspect Ratio › Custom, Show
         // Extras Options, 32-bit Preview Options), listed by ui.inspect with the id "shell".
         "ui.dialog.set" if s("dialog") == Some(SHELL_DIALOG) => shell_dialog_set(app, p),
@@ -1026,6 +1033,9 @@ fn open_named_dialog(app: &mut PhotocraftApp, p: &Value, kind: &str) -> Outcome 
         "deleteCropPreset" => opened(crate::crop_presets::open_delete(app), "no crop presets are saved"),
         "command" | "Command" => {
             let Some(cmd) = str_param(p, "command") else { return err("command dialogs need `command`") };
+            if cmd == crate::dialogs::find_replace_ui::COMMAND {
+                return wrap(crate::dialogs::find_replace_ui::open(app));
+            }
             let label = photocraft_engine::commands::find(cmd).map(|c| c.label).unwrap_or(cmd);
             ok(json!({"dialog": crate::dialogs::open_command_dialog(app, cmd, label)}))
         }
