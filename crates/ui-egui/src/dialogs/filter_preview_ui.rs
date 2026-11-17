@@ -125,7 +125,8 @@ pub(crate) fn window(app: &PhotocraftApp, dialog: u64, ui: &mut egui::Ui, f: &mu
     }
     painter.rect_stroke(rect, t.radius_sm, Stroke::new(1.0, t.field_border), egui::StrokeKind::Inside);
 
-    // Drag to pan (the image follows the pointer); a plain click centres on the clicked point.
+    // Drag to pan (the image follows the pointer); a plain click centres on the clicked point,
+    // or places the light in Lighting Effects.
     if response.dragged() {
         let d = response.drag_delta();
         cx -= d.x / zoom;
@@ -134,7 +135,10 @@ pub(crate) fn window(app: &PhotocraftApp, dialog: u64, ui: &mut egui::Ui, f: &mu
     if response.clicked()
         && let Some(p) = response.interact_pointer_pos()
     {
-        (cx, cy) = point_to_source(p - rect.min, x0, y0, zoom, doc);
+        let (px, py) = point_to_source(p - rect.min, x0, y0, zoom, doc);
+        if !place_light(f, &cmd, vec2(px / doc.x, py / doc.y)) {
+            (cx, cy) = (px, py);
+        }
     }
     (cx, cy) = clamp_center(cx, cy, doc.x, doc.y);
 
@@ -179,6 +183,34 @@ pub(crate) fn center_at(app: &mut PhotocraftApp, x: f64, y: f64) -> bool {
     let Some(d) = app.ui.dialog_mut(id) else { return false };
     d.fields.insert(CENTER_X_FIELD.into(), json!(cx));
     d.fields.insert(CENTER_Y_FIELD.into(), json!(cy));
+    true
+}
+
+/// A click in Lighting Effects' preview moves its light there, as in Photoshop (#15373): a spot
+/// light shifts as a whole so it aims at the point, a point light moves onto it. `at` is a
+/// fraction of the document. `false` (the click pans) for other dialogs, an infinite light, which
+/// has no position, and a `lights` list, whose lights the dialog's fields don't edit.
+fn place_light(f: &mut Map<String, Value>, cmd: &str, at: Vec2) -> bool {
+    let multi = f.get("lights").and_then(Value::as_array).is_some_and(|l| !l.is_empty());
+    if cmd != "filter.render.lightingEffects" || multi || !(at.x.is_finite() && at.y.is_finite()) {
+        return false;
+    }
+    let spot = match f.get("lightType").and_then(Value::as_str).unwrap_or("spot") {
+        "spot" => true,
+        "point" => false,
+        _ => return false,
+    };
+    let num = |key: &str, default: f32| f.get(key).and_then(Value::as_f64).map_or(default, |v| v as f32);
+    let light = vec2(num("lightX", 0.25), num("lightY", 0.2));
+    let focus = if spot { vec2(num("targetX", 0.5), num("targetY", 0.55)) } else { light };
+    let moved = light + (at - focus);
+    let fraction = |v: f32| json!((f64::from(v.clamp(0.0, 1.0)) * 100.0).round() / 100.0);
+    if spot {
+        f.insert("targetX".into(), fraction(at.x));
+        f.insert("targetY".into(), fraction(at.y));
+    }
+    f.insert("lightX".into(), fraction(moved.x));
+    f.insert("lightY".into(), fraction(moved.y));
     true
 }
 
@@ -570,6 +602,51 @@ mod tests {
         crate::color_picker_ui::open(&mut app, "foreground");
         assert_eq!(locator(&app), None);
         assert!(!center_at(&mut app, 20.0, 20.0));
+    }
+
+    #[test]
+    fn a_click_in_the_lighting_effects_preview_moves_the_light() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+        let id = crate::filter_dialog::open(&mut app, "filter.render.lightingEffects").expect("Lighting Effects opens a dialog");
+        let fields = app.ui.dialogs.iter().find(|d| d.id == id).expect("the dialog is open").fields.clone();
+        let get = |f: &Map<String, Value>, key: &str| f.get(key).and_then(Value::as_f64).unwrap();
+        // The default spot keeps its direction: its aim and its source move by the same offset.
+        let mut f = fields.clone();
+        let (lx, ly, tx, ty) = (get(&f, "lightX"), get(&f, "lightY"), get(&f, "targetX"), get(&f, "targetY"));
+        assert!(place_light(&mut f, "filter.render.lightingEffects", vec2(0.75, 0.25)));
+        assert_eq!((get(&f, "targetX"), get(&f, "targetY")), (0.75, 0.25));
+        let round = |v: f64| (v * 100.0).round() / 100.0;
+        assert_eq!((get(&f, "lightX"), get(&f, "lightY")), (round(lx + 0.75 - tx), round((ly + 0.25 - ty).max(0.0))));
+        assert_eq!(f.get(CENTER_X_FIELD), fields.get(CENTER_X_FIELD), "the view does not pan");
+        // A point light moves onto the point.
+        let mut f = fields.clone();
+        f.insert("lightType".into(), json!("point"));
+        assert!(place_light(&mut f, "filter.render.lightingEffects", vec2(0.4, 0.6)));
+        assert_eq!((get(&f, "lightX"), get(&f, "lightY")), (0.4, 0.6));
+        // A real click in the window's image moves the spot's aim and leaves the view alone.
+        let mut f = fields.clone();
+        let ctx = egui::Context::default();
+        let at = pos2(40.0, 40.0);
+        let press = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        for events in [vec![egui::Event::PointerMoved(at)], vec![press(true)], vec![press(false)], vec![]] {
+            let input = egui::RawInput { events, ..Default::default() };
+            ctx.run_ui(input, |ui| window(&app, id, ui, &mut f)).textures_delta.clear();
+        }
+        assert_ne!((f.get("targetX"), f.get("targetY")), (fields.get("targetX"), fields.get("targetY")), "the click aimed the light");
+        assert_eq!((f.get(CENTER_X_FIELD), f.get(CENTER_Y_FIELD)), (Some(&json!(32.0)), Some(&json!(24.0))), "the view stays centred");
+        // An infinite light, a `lights` list and other filters keep the click's pan.
+        for (kind, lights, cmd) in [
+            ("infinite", json!(null), "filter.render.lightingEffects"),
+            ("spot", json!([{"kind": "point"}]), "filter.render.lightingEffects"),
+            ("spot", json!(null), "filter.render.lensFlare"),
+        ] {
+            let mut f = fields.clone();
+            f.insert("lightType".into(), json!(kind));
+            f.insert("lights".into(), lights);
+            assert!(!place_light(&mut f, cmd, vec2(0.4, 0.6)), "{kind} {cmd}");
+            assert_eq!(f.get("lightX"), fields.get("lightX"));
+        }
     }
 
     #[test]
