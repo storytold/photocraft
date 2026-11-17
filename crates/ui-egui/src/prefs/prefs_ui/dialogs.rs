@@ -99,6 +99,9 @@ pub(crate) struct PrefsDialog {
     saved_rev: u64,
     /// The language the document's labels are in: the draft's language, which previews before Apply.
     labels: Lang,
+    /// The language the frame's words preview: the draft's, when it names one and differs from the committed
+    /// language. `Auto` is none: the frame keeps the app's language, which is what `Auto` resolves to there.
+    preview: Option<Lang>,
     /// What the custom rows read from the app, as of the last `feed`.
     custom: PrefsCustom,
     /// The colour row whose swatch was pressed, until `take` opens the picker for it.
@@ -108,6 +111,12 @@ pub(crate) struct PrefsDialog {
 }
 
 impl PrefsDialog {
+    /// The language the frame's words preview, while the draft names one the app's own doesn't: the dialog's
+    /// OK, Cancel and Apply are the framework's words, which read the frame's host.
+    pub(crate) fn preview(&self) -> Option<Lang> {
+        self.preview
+    }
+
     /// Moves the keys the document's last Apply changed into `edits`.
     fn file_edits(&mut self) {
         if let Some(edits) = self.doc.as_mut().and_then(Doc::take_applied_edits) {
@@ -137,11 +146,13 @@ impl PrefsDialog {
             self.saved_rev = rev;
         }
         // The draft's language previews inside the window; the main window keeps the committed one.
-        let wanted = draft_language(doc).map_or_else(|| host.lang(), |code| language_of(host, &code));
+        let draft = draft_language(doc);
+        let wanted = draft.clone().map_or_else(|| host.lang(), |code| language_of(host, &code));
         if wanted != self.labels {
             doc.relabel(&host.with_lang(wanted));
             self.labels = wanted;
         }
+        self.preview = draft.filter(|code| code != "auto").map(|code| language_of(host, &code)).filter(|lang| *lang != host.lang());
     }
 }
 
@@ -226,7 +237,7 @@ pub fn open_preferences(app: &mut PhotocraftApp, section: &str) {
     state.selected = section.to_string();
     let custom = PrefsCustom::new(app, false);
     let saved_rev = app.session.prefs.rev();
-    app.framework.dialogs.open(PrefsDialog { doc: Some(doc), state, saved_rev, labels: host.lang(), custom, pick: None, edits: Vec::new() });
+    app.framework.dialogs.open(PrefsDialog { doc: Some(doc), state, saved_rev, labels: host.lang(), preview: None, custom, pick: None, edits: Vec::new() });
 }
 
 /// The language the draft's `interface.language` names, as the code stored in the draft.

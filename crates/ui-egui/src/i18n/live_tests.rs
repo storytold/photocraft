@@ -318,7 +318,7 @@ fn preferences_preview_does_not_commit_until_applied_and_survives_reload() {
         assert_eq!(h.state().session.prefs().interface.language, "auto");
         assert_eq!(current(), Lang::EN);
         open_preferences(h.state_mut(), "interface");
-        assert!(set_draft(h.state_mut(), "interface.language", PrefValue::Text("ko".into())));
+        assert!(set_draft(h.state_mut(), "interface.language", PrefValue::Choice("ko".into())));
         apply_window(h.state_mut()).expect("apply");
         h.step();
         assert_eq!(current(), lang("ko"));
