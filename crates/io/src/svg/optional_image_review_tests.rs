@@ -465,18 +465,43 @@ fn malformed_data_urls_and_broken_pixel_payloads_are_disclosed_before_rendering(
 }
 
 #[test]
-fn excessive_mime_parameters_are_disclosed_only_for_used_image_resources() {
+fn excessive_mime_parameters_preserve_valid_images_and_disclose_only_real_failures() {
+    fn assert_complete_green_image(text: &str) {
+        for bytes in [text.as_bytes().to_vec(), gzip(text.as_bytes())] {
+            let imported = crate::import("valid.svg", &bytes).unwrap();
+            assert_no_omission_or_unexpected_import_warning(&imported);
+            assert_eq!(photocraft_compose::flatten(&imported.document).get(1, 1), [0., 1., 0., 1.]);
+            let strict = import_svg_bounded_images_strict("valid.svg", &bytes, MAX_RASTER_PIXELS).unwrap();
+            assert_no_omission_or_unexpected_import_warning(&strict);
+            assert_eq!(photocraft_compose::flatten(&strict.document).get(1, 1), [0., 1., 0., 1.]);
+            import_svg_preview_with_work("valid.svg", &bytes, MAX_RASTER_PIXELS).unwrap();
+            let (pixels, warnings) = rasterize_bounded_with_warnings(&bytes, 1., MAX_RASTER_PIXELS).unwrap();
+            assert!(warnings.is_empty());
+            assert_eq!(pixels.get(1, 1), [0., 1., 0., 1.]);
+            assert_eq!(rasterize_bounded(&bytes, 1., MAX_RASTER_PIXELS).unwrap().get(1, 1), [0., 1., 0., 1.]);
+            assert_eq!(rasterize(&bytes, 1.).unwrap().get(1, 1), [0., 1., 0., 1.]);
+            let (width, height, pixels) = rasterize_rgba8(&bytes).unwrap();
+            assert_eq!((width, height), (2, 2));
+            assert_eq!(pixels, [0, 255, 0, 255].repeat(4));
+        }
+    }
     let parameters = (0..65).map(|index| format!(";p{index}=x")).collect::<String>();
     let image = photocraft_codecs::Image::from_u8(2, 2, photocraft_codecs::ChannelLayout::Rgb, [0, 255, 0].repeat(4)).unwrap();
     let png = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap();
     for essence in ["image/png", "text/plain", ""] {
         let href = url(&format!("{essence}{parameters}"), &png);
         let text = drawing(&href);
-        assert_incomplete_image_is_disclosed(&text);
+        assert_complete_green_image(&text);
         for child in [text.as_bytes().to_vec(), gzip(text.as_bytes())] {
-            assert_incomplete_image_is_disclosed(&drawing(&url("image/svg+xml", &child)));
+            assert_complete_green_image(&drawing(&url("image/svg+xml", &child)));
+        }
+        // Header compaction cannot turn a malformed base64 body or a missing
+        // delimiter into a valid image, including default text/plain MIME.
+        for href in [format!("data:{essence}{parameters};base64,A"), format!("data:{essence}{parameters};base64")] {
+            assert_incomplete_image_is_disclosed(&drawing(&href));
         }
     }
+    assert_incomplete_image_is_disclosed(&drawing(&url(&format!("image/unsupported{parameters}"), &png)));
     let href = format!("data:application/octet-stream{parameters};base64,AA==");
     assert_ignored_data_image_stays_quiet(&drawing(&href));
     let image = url(&format!("image/png{parameters}"), &png);
