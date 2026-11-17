@@ -855,7 +855,8 @@ pub fn import_file_for_open_verified(
         // layouts, and EXR headers the band decoder refuses, are read whole below.
         let mut streamed = None;
         let format_name = path.file_name().and_then(|name| name.to_str()).unwrap_or(name);
-        if photocraft_formats::detect(format_name, &magic) == Some(photocraft_formats::Format::OpenExr) {
+        // One whose parts, views or channel groups open as a layer tree is read whole (#14062).
+        if photocraft_formats::detect(format_name, &magic) == Some(photocraft_formats::Format::OpenExr) && !exr_layered(&mut file, opts).map_err(read_failed)? {
             let before = photocraft_raster::spill::read_error_generation();
             if let Some(mut result) = exr_native::import(&mut file, ctl)? {
                 // A rewrite in place while the blocks were read must not become the document.
@@ -1042,8 +1043,22 @@ fn import_stages(
             }
         }
         Route::Svg => svg::import_svg_with_group_depth(name, bytes, opts.max_group_depth),
-        Route::Flat => flat::import_flat_with_options(name, bytes, opts, ctl),
+        Route::Flat => match exr_parts::open_layered(name, bytes, opts, ctl)? {
+            Some(layered) => Ok(layered),
+            None => flat::import_flat_with_options(name, bytes, opts, ctl),
+        },
     }
+}
+
+/// Whether the EXR at the start of `file` opens as a layer tree ([`exr_parts::open_layered`]),
+/// from its headers alone; `file` is rewound afterwards.
+#[cfg(any(unix, windows))]
+fn exr_layered(file: &mut &std::fs::File, opts: &ImportOptions) -> std::io::Result<bool> {
+    use std::io::Read;
+    let mut prefix = Vec::new();
+    Read::by_ref(file).take(exr_parts::HEADER_PREFIX_BYTES).read_to_end(&mut prefix)?;
+    std::io::Seek::rewind(file)?;
+    Ok(exr_parts::opens_layered(&prefix, opts))
 }
 
 /// Extension names can be wrong (for example, an image downloaded as WebP and renamed `.svg`).

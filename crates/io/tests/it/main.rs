@@ -24,6 +24,7 @@ mod deflate_compatibility;
 mod effects_multi;
 mod exif_resolution;
 mod export_progress;
+mod exr_open_all_parts_tests;
 mod exr_part_profile;
 mod flat;
 mod flat_export_renderer;
