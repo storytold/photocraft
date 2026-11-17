@@ -481,7 +481,8 @@ struct OsClipboard {
     /// read tries again to take `reads` out of use.
     #[cfg(all(unix, not(target_os = "macos")))]
     forget: bool,
-    /// Set by the reads' worker when its handle failed to open: no clipboard backend works.
+    /// Set by the current reads' worker when its handle failed to open: no clipboard backend works.
+    /// Each worker gets its own flag, unset when it starts.
     #[cfg(all(unix, not(target_os = "macos")))]
     unopened: Arc<std::sync::atomic::AtomicBool>,
     /// Writes, and on Windows and macOS reads.
@@ -510,6 +511,25 @@ impl OsClipboard {
         self.unopened.load(std::sync::atomic::Ordering::SeqCst)
     }
 
+    /// Starts the reads' worker, whose load `reader` builds from an open-failure flag of the
+    /// worker's own, unset at the start, and the worker's [`clipboard_reads::Finish`]. That flag
+    /// becomes the one [`Self::unopened`] reads, so neither an earlier worker's failure nor a
+    /// retired worker that opens late changes what this one reports. `reads` stays empty when the
+    /// worker's thread didn't start.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    fn start_reads<L: FnMut(Request) -> Answer + Send + 'static>(
+        &mut self,
+        reader: impl FnOnce(Arc<std::sync::atomic::AtomicBool>, clipboard_reads::Finish) -> L,
+    ) {
+        let finish = clipboard_reads::Finish::from(CLIPBOARD_HANDOVER_WAIT);
+        let unopened = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let load = reader(unopened.clone(), finish.clone());
+        if let Some(reads) = clipboard_reads::Loads::spawn("clipboard-read", finish, load) {
+            self.unopened = unopened;
+            self.reads = Some(reads);
+        }
+    }
+
     /// `request` read as [`clipboard_answer`] reads it. On Linux and the BSDs this opens no
     /// handle on the calling thread.
     fn read(&mut self, request: Request) -> Answer {
@@ -518,17 +538,10 @@ impl OsClipboard {
             if self.forget {
                 self.forget_unanswered();
             }
-            let reads = match &mut self.reads {
-                Some(reads) => reads,
-                slot => {
-                    let finish = clipboard_reads::Finish::from(CLIPBOARD_HANDOVER_WAIT);
-                    let read = clipboard_reader(self.unopened.clone(), finish.clone());
-                    match clipboard_reads::Loads::spawn("clipboard-read", finish, read) {
-                        Some(reads) => slot.insert(reads),
-                        None => return Answer::failed(request, "the clipboard's reader didn't start".into()),
-                    }
-                }
-            };
+            if self.reads.is_none() {
+                self.start_reads(clipboard_reader);
+            }
+            let Some(reads) = self.reads.as_mut() else { return Answer::failed(request, "the clipboard's reader didn't start".into()) };
             let answer = clipboard_reads::read_on(reads, request, clipboard_reads::wait_for(request));
             if matches!(&answer, Answer::Files(Err(why)) | Answer::Image(Err(why)) | Answer::Text(Err(why)) if why == clipboard_reads::GONE) {
                 // A reader that stopped is started again on the next read.
