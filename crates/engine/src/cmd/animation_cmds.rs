@@ -505,7 +505,7 @@ fn tween(s: &mut Session, p: &Value) -> Result<Value> {
         // What a layer shows in a frame: its opacity, or nothing when hidden.
         let defaults = a.clone();
         let shown = |f: &AnimFrame, id: photocraft_doc::LayerId| {
-            let o = defaults.opacity_in(f, id).unwrap_or(fallback[&id]);
+            let o = defaults.opacity_in(f, id).unwrap_or_else(|| fallback.get(&id).copied().unwrap_or(1.0));
             (if f.hidden.binary_search(&id).is_ok() { 0.0 } else { o }, o)
         };
         let mut made = Vec::with_capacity(n);
