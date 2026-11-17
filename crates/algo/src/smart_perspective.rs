@@ -26,8 +26,8 @@
 //!    `[[s, 0, tx], [c', d, 0], [g1, 0, 1]]` (scale, vertical shear, horizontal perspective)
 //!    followed by a down one `[[1, b2, 0], [0, 1, ty], [0, h2, 1]]` (horizontal shear, vertical
 //!    perspective), or the same with x and y swapped ([`stages`]).
-//! 2. Of the two orders the one whose intermediate image is smaller is used (ties: horizontal
-//!    first). The intermediate is stage 1 stretched along stage 2's walk axis by stage 2's largest
+//! 2. Of the two orders the one whose intermediate image is smaller is used, compared strictly
+//!    to the last bit (exact ties: horizontal first). The intermediate is stage 1 stretched along stage 2's walk axis by stage 2's largest
 //!    walk magnification (`1 / (1 + h2·y)` over stage 1's corners, scale included) and along its
 //!    projective axis to the final quad's height; its left edge lands on the whole pixel below,
 //!    its top exactly on the final quad's top. Stage 2 then draws the intermediate (cropped to its
@@ -417,13 +417,22 @@ fn transposed_surface(s: &Surface, r: Rect) -> Option<(Surface, Rect)> {
 
 /// A general quad (see the module docs): two one-way stages through a stretched intermediate.
 /// `h` is normalised and measured from `bounds`' corner.
+/// Whether the mirrored plan (vertical stage first) draws the quad: its intermediate is smaller,
+/// compared strictly, as the reference application compares them. Two orders whose intermediates
+/// are the same size but for the last bits go by those bits (its Distort of 302 x 202 to
+/// (480, 80): 81 510.000 000 000 01 against 81 510, drawn vertical first; with a tolerance,
+/// 21 875 pixels apart, strictly 44). Exact ties: horizontal first.
+fn vertical_first(normal: &Plan, mirrored: &Plan) -> bool {
+    mirrored.area < normal.area
+}
+
 fn cascade(src: &Surface, bounds: Rect, h: &[f64; 9], clear: bool) -> Option<Surface> {
     let (w, hgt) = (f64::from(bounds.width()), f64::from(bounds.height()));
     let normal = plan(h, w, hgt);
     let mirrored = plan(&transposed(h), hgt, w);
     let (p, turned) = match (normal, mirrored) {
         (Some(n), Some(m)) => {
-            if m.area < n.area * (1.0 - 1e-9) {
+            if vertical_first(&n, &m) {
                 (m, true)
             } else {
                 (n, false)
@@ -515,6 +524,28 @@ pub fn from_corner(h: [f64; 9], x: f64, y: f64) -> [f64; 9] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The reference application's Distort of a 302 x 202 smart object, its top-right corner
+    /// dragged to (480, 80): both orders' intermediates are 81 510 px but for the last bits, and it
+    /// draws the vertical stage first (byte for byte but 44 edge pixels; the other order is 21 875
+    /// pixels apart).
+    #[test]
+    fn a_distort_whose_orders_tie_but_for_the_last_bits_goes_vertical_first() {
+        let h = [
+            0.8031477062498324,
+            0.056304796632436926,
+            150.0,
+            -0.1972678767729308,
+            1.1227444566587126,
+            125.0,
+            -0.0006032656782046813,
+            0.0003753653108829128,
+            1.0,
+        ];
+        let (n, m) = (plan(&h, 302.0, 202.0).unwrap(), plan(&transposed(&h), 202.0, 302.0).unwrap());
+        assert!((n.area - m.area).abs() < 1e-6, "{} {}", n.area, m.area);
+        assert!(vertical_first(&n, &m));
+    }
 
     /// A quad far off the canvas is refused, not overflowed: its box is reckoned in 1/256 px.
     #[test]
