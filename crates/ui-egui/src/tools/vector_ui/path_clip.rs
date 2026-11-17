@@ -55,8 +55,9 @@ fn panel_target(app: &PhotocraftApp) -> Option<Value> {
 
 /// The document coordinates of the active view's centre: where Photoshop centres a pasted path.
 fn view_center(app: &PhotocraftApp) -> Option<[f64; 2]> {
-    let xf = crate::canvas::ViewXform::active(app)?;
-    Some([f64::from(xf.center[0]), f64::from(xf.center[1])])
+    let index = app.session.active_index()?;
+    let center = app.ui.views.get(index)?.center;
+    Some([f64::from(center[0]), f64::from(center[1])])
 }
 
 /// Edit › Copy/Cut/Paste for path components; `None` = not this context, dispatch as usual.
@@ -133,8 +134,9 @@ mod tests {
     use serde_json::json;
 
     use crate::PhotocraftApp;
+    use crate::canvas::{ToolEvent, tool_event};
     use crate::state::Tool;
-    use crate::vector_ui::{pen_down, pen_up};
+    use craft::draw::ui::VectorMode;
 
     /// The mocked OS bitmap clipboard, as in `app::clipboard_tests`.
     type OsImage = std::sync::Arc<std::sync::Mutex<Option<(u32, u32, Vec<u8>)>>>;
@@ -144,19 +146,21 @@ mod tests {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
         app.ui.tool = Tool::Pen;
-        app.ui.tool_options.vector_mode = "shape".into();
+        app.ui.tool_options.vector_mode = VectorMode::Shape;
         app
     }
 
     /// One Pen click at `(x, y)`.
     fn click(app: &mut PhotocraftApp, x: f64, y: f64) {
-        pen_down(app, x, y, false);
-        pen_up(app);
+        tool_event(app, ToolEvent::Down { x, y, pressure: 1.0 }, egui::Modifiers::NONE);
+        tool_event(app, ToolEvent::Up { x, y }, egui::Modifiers::NONE);
     }
 
-    /// A closed square with the Pen, from `(x, y)` with side `side`.
+    /// A closed square with the Pen, from `(x, y)` with side `side`; the closing click lands on
+    /// the first anchor exactly, so it closes at any zoom (a half-unit offset can sit outside
+    /// the click-to-close tolerance on small shapes).
     fn square(app: &mut PhotocraftApp, x: f64, y: f64, side: f64) {
-        for (dx, dy) in [(0.0, 0.0), (side, 0.0), (side, side), (0.0, side), (0.5, 0.5)] {
+        for (dx, dy) in [(0.0, 0.0), (side, 0.0), (side, side), (0.0, side), (0.0, 0.0)] {
             click(app, x + dx, y + dy);
         }
     }
@@ -271,10 +275,12 @@ mod tests {
         let (a, b) = (os.clone(), os.clone());
         let services = crate::Services { clipboard_get_image: Some(Box::new(move || Ok(b.lock().unwrap().clone()))), ..Default::default() };
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
-        app.run("file.new", json!({"width": 40, "height": 40})).unwrap();
+        app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
         app.ui.tool = Tool::Pen;
-        app.ui.tool_options.vector_mode = "shape".into();
-        square(&mut app, 5.0, 5.0, 10.0);
+        app.ui.tool_options.vector_mode = VectorMode::Shape;
+        // The big square like the other helpers: on a tiny shape the framework's press
+        // classification can take the closing click as a new anchor instead of a close.
+        square(&mut app, 20.0, 20.0, 120.0);
         let shape_id = shape(&app).0;
         app.ui.tool = Tool::PathSelection;
         let paste = |app: &mut PhotocraftApp| app.run("edit.paste", json!({"center": [20.0, 20.0]})).unwrap();
@@ -282,14 +288,14 @@ mod tests {
         // No baseline yet — the OS image (older than the copy) cannot displace the fresh clip;
         // the paste's read only learns the baseline.
         *os.lock().unwrap() = Some((2, 2, [0u8, 255u8, 0, 255].repeat(4)));
-        crate::path_components::press(&mut app, [10.0, 10.0], false);
+        crate::path_components::press(&mut app, [80.0, 80.0], false);
         app.run("edit.copy", json!({})).unwrap();
         app.ui.selected_path = None;
         paste(&mut app);
         assert!(saved(&app, "Pasted Path").is_some(), "the older OS image did not displace the path clip");
         assert!(app.session.clipboard.is_none(), "and it was not installed as a pixel clip");
         // With the baseline, a changed OS image supersedes the clip: ⌘V pastes the pixels.
-        *os.lock().unwrap() = Some((2, 2, [255u8, 0, 0, 255].repeat(4)));
+        *os.lock().unwrap() = Some((2, 2, [255u8, 0u8, 0, 255].repeat(4)));
         paste(&mut app);
         assert!(app.session.path_clipboard.is_none(), "the newer OS image replaced the path clip");
         assert_eq!(
@@ -302,18 +308,18 @@ mod tests {
         // path, so select the shape and clear the panel for the press to reach it again.)
         app.run("layer.select", json!({"layer": shape_id.0})).unwrap();
         app.ui.selected_path = None;
-        crate::path_components::press(&mut app, [10.0, 10.0], false);
+        crate::path_components::press(&mut app, [80.0, 80.0], false);
         app.run("edit.copy", json!({})).unwrap();
-        app.run("edit.paste", json!({"center": [40.0, 40.0]})).unwrap();
+        app.run("edit.paste", json!({"center": [140.0, 140.0]})).unwrap();
         assert!(app.session.clipboard.is_none(), "the unchanged image did not install a pixel clip");
         assert!(app.session.path_clipboard.is_some(), "and the fresh path clip survived");
         let first: Vec<_> = saved(&app, "Pasted Path 2").unwrap().subpaths[0].knots.iter().map(|k| k.anchor).collect();
-        assert_eq!(first[0], photocraft_geom::Point::new(35.0, 35.0), "the paste centred the component on (40, 40)");
+        assert_eq!(first[0], photocraft_geom::Point::new(80.0, 80.0), "the paste centred the component on (140, 140)");
         // The next paste inserted too: paste at another centre and the new numbered path follows.
         app.ui.selected_path = None;
-        app.run("edit.paste", json!({"center": [30.0, 30.0]})).unwrap();
+        app.run("edit.paste", json!({"center": [130.0, 130.0]})).unwrap();
         let anchors: Vec<_> = saved(&app, "Pasted Path 3").unwrap().subpaths[0].knots.iter().map(|k| k.anchor).collect();
-        assert_eq!(anchors[0], photocraft_geom::Point::new(25.0, 25.0), "the paste centred the new component on (30, 30)");
+        assert_eq!(anchors[0], photocraft_geom::Point::new(70.0, 70.0), "the paste centred the new component on (130, 130)");
         drop(a);
     }
 
@@ -397,7 +403,7 @@ mod tests {
             let v = &mut app.ui.views[0];
             v.zoom = 1.0;
             v.center = [60.0, 40.0];
-            v.fit_pending = false;
+            v.clear_pending();
         }
         app.ui.selected_path = None;
         app.run("edit.paste", json!({})).unwrap();
@@ -431,7 +437,7 @@ mod tests {
         // A newer path clip replaces the pixel clipboard (one clipboard); the pen adds the
         // square to the pasted SVG shape, addressed by id.
         app.ui.tool = Tool::Pen;
-        app.ui.tool_options.vector_mode = "shape".into();
+        app.ui.tool_options.vector_mode = VectorMode::Shape;
         square(&mut app, 20.0, 20.0, 50.0);
         let (id, _) = shape(&app);
         app.run("path.copy", json!({"name": "layer", "layer": id.0, "subpaths": [0]})).unwrap();
@@ -464,7 +470,7 @@ mod tests {
         *image.lock().unwrap() = Some((2, 1, vec![0, 0, 255, 255, 0, 0, 255, 255]));
         app.run("edit.paste", json!({})).unwrap();
         app.ui.tool = Tool::Pen;
-        app.ui.tool_options.vector_mode = "shape".into();
+        app.ui.tool_options.vector_mode = VectorMode::Shape;
         square(&mut app, 20.0, 20.0, 50.0);
         let (id, _) = shape(&app);
         app.run("path.copy", json!({"name": "layer", "layer": id.0, "subpaths": [0]})).unwrap();
@@ -509,7 +515,7 @@ mod tests {
         app.run("edit.paste", json!({"as": "shape"})).unwrap();
         // A newer path clip.
         app.ui.tool = Tool::Pen;
-        app.ui.tool_options.vector_mode = "shape".into();
+        app.ui.tool_options.vector_mode = VectorMode::Shape;
         square(&mut app, 20.0, 20.0, 50.0);
         let (id, _) = shape(&app);
         app.run("path.copy", json!({"name": "layer", "layer": id.0, "subpaths": [0]})).unwrap();
@@ -542,7 +548,7 @@ mod tests {
         app.run("edit.paste", json!({"as": "shape"})).unwrap();
         // A newer path clip.
         app.ui.tool = Tool::Pen;
-        app.ui.tool_options.vector_mode = "shape".into();
+        app.ui.tool_options.vector_mode = VectorMode::Shape;
         square(&mut app, 20.0, 20.0, 50.0);
         let (id, _) = shape(&app);
         app.run("path.copy", json!({"name": "layer", "layer": id.0, "subpaths": [0]})).unwrap();

@@ -413,11 +413,11 @@ mod tests {
         s.execute("actions.record", json!({"name": "Copy component"})).unwrap();
         s.execute("path.copy", json!({"subpaths": [0]})).unwrap();
         s.execute("actions.stop", json!({})).unwrap();
-        let action = s.actions.list[0].clone();
+        let action = s.actions.list.actions()[0].clone();
         // A fresh session replays the recording (name-based target)…
         let mut fresh = session();
         fresh.execute("path.set", json!({"name": "work", "path": rect})).unwrap();
-        fresh.actions.list.push(action);
+        fresh.actions.list.push(action).unwrap();
         let played = fresh.execute("actions.play", json!({"action": "Copy component"})).unwrap();
         assert!(played.get("failed").is_none(), "{played}");
         let clip = fresh.path_clipboard.as_ref().expect("the replayed copy populated the path clipboard");
