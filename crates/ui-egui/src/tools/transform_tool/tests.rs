@@ -4189,3 +4189,29 @@ fn a_waiting_new_layer_click_keeps_the_layer_it_was_made_on() {
     assert_eq!(at(new), at(placed) + 1, "the new layer sits right above the layer selected at the click: {order:?}");
     assert_eq!(st.active_layer, Some(new));
 }
+
+/// A smart object's box carries the reference application's X across it (drawn by
+/// `draw::draw_smart_cross`); a pixel layer's does not.
+#[test]
+fn only_a_smart_objects_box_is_marked_with_an_x() {
+    let mut pixel = app_with_square(100, photocraft_geom::Rect::new(30, 40, 70, 60));
+    begin(&mut pixel, &egui::Context::default()).unwrap();
+    assert!(!super::draw::transforms_smart_object(&pixel, pixel.ui.transform.as_ref().unwrap()));
+    let mut smart = app_with_square(100, photocraft_geom::Rect::new(30, 40, 70, 60));
+    smart.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    begin(&mut smart, &egui::Context::default()).unwrap();
+    assert!(super::draw::transforms_smart_object(&smart, smart.ui.transform.as_ref().unwrap()));
+    // A box over the smart object that moves something else carries none.
+    type Set = fn(&mut TransformSession);
+    let sets: [(&str, Set); 4] = [
+        ("selection", |t| t.selection = true),
+        ("mask", |t| t.target = Some(json!({"mask": true}))),
+        ("path", |t| t.path = Some(json!({"name": "Path 1"}))),
+        ("layers", |t| t.layers = vec![1, 2]),
+    ];
+    for (what, set) in sets {
+        let mut t = smart.ui.transform.clone().unwrap();
+        set(&mut t);
+        assert!(!super::draw::transforms_smart_object(&smart, &t), "{what}");
+    }
+}

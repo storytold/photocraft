@@ -210,6 +210,9 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     }
     let pts: Vec<Pos2> = t.quad.iter().map(|q| scr(*q)).collect();
     painter.add(egui::Shape::closed_line(pts.clone(), Stroke::new(1.0, accent)));
+    if transforms_smart_object(app, t) {
+        draw_smart_cross(painter, [pts[0], pts[1], pts[2], pts[3]], accent);
+    }
     let mids: Vec<Pos2> = (0..4).map(|i| pts[i].lerp(pts[(i + 1) % 4], 0.5)).collect();
     for p in pts.iter().chain(mids.iter()) {
         let r = egui::Rect::from_center_size(*p, vec2(7.0, 7.0));
@@ -231,6 +234,28 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
             draw_live_readout(app, painter.ctx(), at, r);
         }
     }
+}
+
+/// Whether the box transforms a smart object, which the reference application marks with an X
+/// across its box in the box modes (a pixel layer's box has none, and Warp shows its grid alone).
+pub(super) fn transforms_smart_object(app: &PhotocraftApp, t: &TransformSession) -> bool {
+    // The box moves the smart object itself: not the selection, a path, a mask or channel on its
+    // own, or several layers at once.
+    let alone = !t.selection && t.target.is_none() && t.path.is_none() && t.layers.len() <= 1 && t.content_aware.is_none();
+    alone
+        && app
+            .session
+            .active()
+            .and_then(|st| st.doc.layer(photocraft_doc::LayerId(t.layer)))
+            .is_some_and(|l| matches!(l.content, photocraft_doc::LayerContent::Smart(_)))
+}
+
+/// The X across a smart object's box: its corners `c` (clockwise from the top-left) joined
+/// diagonally.
+fn draw_smart_cross(painter: &egui::Painter, c: [Pos2; 4], accent: Color32) {
+    let stroke = Stroke::new(1.0, accent);
+    painter.line_segment([c[0], c[2]], stroke);
+    painter.line_segment([c[1], c[3]], stroke);
 }
 
 /// Applying the open box moves the selection outline with it: `edit.transform` and
