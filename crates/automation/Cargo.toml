@@ -34,14 +34,11 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "syn
 base64 = "0.23"
 schemars = "1"
 getrandom = { workspace = true }
-# HMAC-SHA256 for the control channel's challenge authentication: the token never crosses the wire (NV-6).
-hmac = "0.12"
-sha2 = "0.10"
 cap-std = "4"
 clap = { workspace = true }
-# The suite's AI-MCP flag and the ArtCraft Launcher's agents switch (the one consent for agents).
-craft-flags = { workspace = true }
-craft-ai-agents = { workspace = true }
+# The framework through its facade: the control channel's handshake (`craft::automation::security`),
+# and the agent settings, the ArtCraft Launcher's switch and the connection file (`craft::automation::agents`).
+craft = { workspace = true, features = ["automation-agents"] }
 
 # Optional native GPU rendering backend
 photocraft-gpu = { workspace = true, optional = true }

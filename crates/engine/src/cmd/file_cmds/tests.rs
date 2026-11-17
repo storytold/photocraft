@@ -1,4 +1,17 @@
 use super::*;
+use crate::actions_cmds::{ActionList, ActionStep, ActionsFile};
+
+/// An `ActionList` holding `actions` in order.
+fn list_of(actions: Vec<crate::actions_cmds::Action>) -> ActionList {
+    ActionList::from_file(ActionsFile::new(actions, Vec::new()))
+}
+
+/// Appends `actions` to `list`, each through the list's own name check.
+fn push_all(list: &mut ActionList, actions: Vec<crate::actions_cmds::Action>) {
+    for action in actions {
+        list.push(action).unwrap();
+    }
+}
 
 // Named Batch action regression adapted from #7170 by @HirthikBalaji.
 /// Named action lookup retains the original #7170 behavior while rejecting recursive Batch calls.
@@ -9,9 +22,9 @@ fn batch_resolves_action_by_name_and_detects_recursion() {
     let out = join(&dir, "out");
     std::fs::create_dir_all(&out).unwrap();
     let mut s = Session::new();
-    let mut action = crate::actions_cmds::Action::new("Scale", vec![("image.imageSize".into(), json!({"width":16,"height":16}))]);
+    let mut action = crate::actions_cmds::Action::new("Scale", vec![ActionStep::new("image.imageSize", json!({"width":16,"height":16}))]);
     action.set = Some("Ops".into());
-    s.actions.list.push(action);
+    s.actions.list.push(action).unwrap();
     let result = s.execute("file.automate.batch", json!({"action":"Scale","set":"Ops","input":[input.clone()],"output":out})).unwrap();
     assert_eq!(result["files"].as_array().unwrap().len(), 1, "{result}");
     for p in [json!({"action":"Nonexistent"}), json!({"action":"Scale","set":"Wrong set"})] {
@@ -67,15 +80,15 @@ fn batch_structured_names_keep_image_format_and_refuse_unsupported_save_routing(
     // One composition witness: Save Actions -> Load Actions -> named Batch -> actual PNG bytes.
     let mut child = crate::actions_cmds::Action::new("Child", vec![]);
     child.set = Some("S".into());
-    s.actions.list.push(child);
+    s.actions.list.push(child).unwrap();
     let params = json!({"input":dir,"output":output,"action":"Child","set":"S","includeSubfolders":false,"flatOutput":true,
         "overrideSaveAs":false,"stopOnError":true,"includeNonImages":true,"namingComponents":[{"text":"from-atn"}]});
-    let driver = crate::actions_cmds::Action::new("Driver", vec![("file.automate.batch".into(), params)]);
+    let driver = crate::actions_cmds::Action::new("Driver", vec![ActionStep::new("file.automate.batch", params)]);
     let (bytes, skipped) = crate::atn_cmds::export("S", &[&driver], &[], false).unwrap();
     assert!(skipped.is_empty());
     let imported = crate::atn_cmds::import(&bytes).unwrap();
     assert!(imported.unsupported.is_empty());
-    s.actions.list.extend(imported.actions);
+    push_all(&mut s.actions.list, imported.actions);
     s.execute("actions.play", json!({"action":"Driver"})).unwrap();
     assert!(std::fs::read(join(&output, "from-atn")).unwrap().starts_with(b"\x89PNG\r\n\x1a\n"));
 }
@@ -110,18 +123,19 @@ fn batch_recorded_stop_for_errors_retains_earlier_outputs_and_stops_before_later
     assert!(native["errors"].as_array().unwrap().is_empty(), "{native}");
     let mut child = crate::actions_cmds::Action::new("Child", vec![]);
     child.set = Some("S".into());
-    s.actions.list.push(child);
+    s.actions.list.push(child).unwrap();
     let output = join(&dir, "recorded");
     let p = json!({"input":input,"output":output,"action":"Child","set":"S","stopOnError":true,"includeNonImages":true,
         "includeSubfolders":false,"overrideSaveAs":false,"flatOutput":true,
         "namingComponents":[{"component":"name"},{"component":"extension"}]});
     let sentinel = json!({"width":7,"height":9});
-    let driver = crate::actions_cmds::Action::new("Driver", vec![("file.automate.batch".into(), p.clone()), ("file.new".into(), sentinel.clone())]);
+    let driver =
+        crate::actions_cmds::Action::new("Driver", vec![ActionStep::new("file.automate.batch", p.clone()), ActionStep::new("file.new", sentinel.clone())]);
     let (bytes, skipped) = crate::atn_cmds::export("S", &[&driver], &[], false).unwrap();
     assert!(skipped.is_empty());
     let imported = crate::atn_cmds::import(&bytes).unwrap();
-    assert_eq!(imported.actions[0].steps[1].0, "file.new", "the after-Batch sentinel must be replayable");
-    s.actions.list.extend(imported.actions);
+    assert_eq!(imported.actions[0].steps[1].command, "file.new", "the after-Batch sentinel must be replayable");
+    push_all(&mut s.actions.list, imported.actions);
     let result = s.execute("actions.play", json!({"action":"Driver"})).unwrap();
     assert_eq!(result["ran"], 0, "{result}");
     assert_eq!(result["failed"]["id"], "file.automate.batch");
@@ -205,16 +219,16 @@ fn batch_save_and_close_preserves_caller_and_failed_sources() {
     let before = caller_state(&s);
     let mut child = crate::actions_cmds::Action::new(
         "Child",
-        vec![("image.adjustments.invert".into(), json!({})), ("file.saveAs".into(), json!({})), ("file.close".into(), json!({}))],
+        vec![ActionStep::new("image.adjustments.invert", json!({})), ActionStep::new("file.saveAs", json!({})), ActionStep::new("file.close", json!({}))],
     );
     child.set = Some("S".into());
-    s.actions.list.push(child);
+    s.actions.list.push(child).unwrap();
     let params = json!({"input":dir,"destination":"saveAndClose","action":"Child","set":"S",
         "includeSubfolders":false,"overrideSaveAs":false,"stopOnError":true,"includeNonImages":true});
-    let driver = crate::actions_cmds::Action::new("Driver", vec![("file.automate.batch".into(), params)]);
+    let driver = crate::actions_cmds::Action::new("Driver", vec![ActionStep::new("file.automate.batch", params)]);
     let (bytes, skipped) = crate::atn_cmds::export("S", &[&driver], &[], false).unwrap();
     assert!(skipped.is_empty());
-    s.actions.list.extend(crate::atn_cmds::import(&bytes).unwrap().actions);
+    push_all(&mut s.actions.list, crate::atn_cmds::import(&bytes).unwrap().actions);
     let result = s.execute("actions.play", json!({"action":"Driver"})).unwrap();
     assert_eq!(result["ran"], 1, "{result}");
     assert!(result.get("failed").is_none(), "{result}");
@@ -324,8 +338,8 @@ fn batch_override_open_follows_called_conditional_and_script_steps() {
     let mut s = session(7, 9, 8);
     let caller = photocraft_format::save_to_bytes(doc(&s), &Default::default()).unwrap();
     let prefs = serde_json::to_value(s.prefs()).unwrap();
-    s.actions.list.push(crate::actions_cmds::Action::new("Open", vec![("file.openAs".into(), json!({"path":recorded,"as":"png"}))]));
-    let actions = serde_json::to_value(&s.actions.list).unwrap();
+    s.actions.list.push(crate::actions_cmds::Action::new("Open", vec![ActionStep::new("file.openAs", json!({"path":recorded,"as":"png"}))])).unwrap();
+    let actions = s.actions.list.to_file().to_json().unwrap();
     let steps = json!([["actions.conditional",{"if":"always","then":"Open"}],
         ["file.scripts.browse",{"steps":[["file.closeAll",{}],["file.openAs",{"path":recorded,"as":"png"}]]}],
         ["image.adjustments.invert",{}]]);
@@ -335,7 +349,7 @@ fn batch_override_open_follows_called_conditional_and_script_steps() {
             .execute(
                 "file.automate.batch",
                 json!({"input":[first,second],"output":output,"steps":steps,
-            "calledActions":s.actions.list,"overrideOpen":enabled}),
+            "calledActions":s.actions.list.actions(),"overrideOpen":enabled}),
             )
             .unwrap();
         assert!(result["errors"].as_array().unwrap().is_empty(), "{result}");
@@ -354,7 +368,7 @@ fn batch_override_open_follows_called_conditional_and_script_steps() {
     let invalid = join(&dir, "invalid-override");
     assert!(s.execute("file.automate.batch", json!({"input":[first],"output":invalid,"steps":[],"overrideOpen":"true"})).is_err());
     assert!(!std::path::Path::new(&invalid).exists());
-    assert_eq!(serde_json::to_value(&s.actions.list).unwrap(), actions);
+    assert_eq!(s.actions.list.to_file().to_json().unwrap(), actions);
     assert_eq!(serde_json::to_value(s.prefs()).unwrap(), prefs);
     assert_eq!(photocraft_format::save_to_bytes(doc(&s), &Default::default()).unwrap(), caller);
     assert!(s.batch_open.is_none());
@@ -382,7 +396,7 @@ fn batch_override_open_authorizes_effective_path_and_carries_failure_budget() {
     let existing = png(&output, "b.png", 3, 2, "#4488aa");
     let intact = std::fs::read(&existing).unwrap();
     let mut s = Session::new();
-    s.actions.list.push(crate::actions_cmds::Action::new("Open", vec![("file.openAs".into(), json!({"path":"/recorded.png","as":"png"}))]));
+    s.actions.list.push(crate::actions_cmds::Action::new("Open", vec![ActionStep::new("file.openAs", json!({"path":"/recorded.png","as":"png"}))])).unwrap();
     s.batch_open = Some(BatchOpen { path: first.clone(), sources: Vec::new(), raw_ppi: 300.0, read_only: false });
     assert!(matches!(s.execute("file.openAs", json!([1])), Err(EngineError::BadParams { .. })));
     assert!(s.documents().is_empty());
@@ -420,7 +434,7 @@ fn batch_override_open_nested_binding_and_save_close_preserve_sources() {
     let inner = join(&dir, "inner");
     let open = json!({"path":"/recorded.png","as":"png"});
     let mut s = Session::new();
-    s.actions.list.push(crate::actions_cmds::Action::new("Open", vec![("file.openAs".into(), open.clone())]));
+    s.actions.list.push(crate::actions_cmds::Action::new("Open", vec![ActionStep::new("file.openAs", open.clone())])).unwrap();
     let steps = json!([["actions.play",{"action":"Open"}],
         ["file.automate.batch",{"input":[second],"output":inner,"overrideOpen":true,"steps":[["file.openAs",open],["image.adjustments.invert",{}]]}],
         ["file.closeAll",{}],["file.openAs",open],["image.adjustments.invert",{}]]);
@@ -485,10 +499,13 @@ fn batch_quiet_profile_open_uses_caller_policy_and_retains_diagnostics() {
     assert!(profile.same_colors(craft_cms::Builtin::Srgb.profile()));
     // A script calling an action with a failing inner Batch still retains both import reports.
     let inner = join(&dir, "inner");
-    s.actions.list.push(crate::actions_cmds::Action::new(
-        "Quiet inner",
-        vec![("file.automate.batch".into(), json!({"input":[source,bad],"output":inner,"suppressWarnings":true,"stopOnError":true,"steps":[]}))],
-    ));
+    s.actions
+        .list
+        .push(crate::actions_cmds::Action::new(
+            "Quiet inner",
+            vec![ActionStep::new("file.automate.batch", json!({"input":[source,bad],"output":inner,"suppressWarnings":true,"stopOnError":true,"steps":[]}))],
+        ))
+        .unwrap();
     let nested = s
         .execute(
             "file.automate.batch",
@@ -524,14 +541,14 @@ fn named_open_document_batch_keeps_cycle_context_and_live_recorder() {
     for mutual in [false, true] {
         let mut s = Session::new();
         s.execute("file.new", json!({"width":8,"height":8})).unwrap();
-        let nested = |name| ("file.automate.batch".into(), json!({"source":"open","action":name}));
-        s.actions.list = vec![
+        let nested = |name| ActionStep::new("file.automate.batch", json!({"source":"open","action":name}));
+        s.actions.list = list_of(vec![
             crate::actions_cmds::Action::new("Recorder", vec![]),
             crate::actions_cmds::Action::new("Loop A", vec![nested(if mutual { "Loop B" } else { "Loop A" })]),
             crate::actions_cmds::Action::new("Loop B", vec![nested("Loop A")]),
-            crate::actions_cmds::Action::new("Leaf", vec![("actions.play".into(), json!({"action":0}))]),
-        ];
-        let definitions = s.actions.list[1..].to_vec();
+            crate::actions_cmds::Action::new("Leaf", vec![ActionStep::new("actions.play", json!({"action":0}))]),
+        ]);
+        let definitions = s.actions.list.actions()[1..].to_vec();
         s.actions.playback_stack = vec!["Enclosing".into()];
         s.actions.recording = Some((s.journal.len(), 0));
         let take = s.actions.take;
@@ -543,16 +560,16 @@ fn named_open_document_batch_keeps_cycle_context_and_live_recorder() {
         assert_eq!(s.actions.playback_stack, ["Enclosing"]);
         assert_eq!(s.actions.recording.map(|(_, owner)| owner), Some(0));
         assert_eq!(s.actions.take, take);
-        assert_eq!(&s.actions.list[1..], definitions.as_slice());
+        assert_eq!(&s.actions.list.actions()[1..], definitions.as_slice());
         let before = doc(&s).walk().len();
-        let embedded = vec![crate::actions_cmds::Action::new("Embedded", vec![("layer.new.layer".into(), json!({"name":"visited"}))])];
+        let embedded = vec![crate::actions_cmds::Action::new("Embedded", vec![ActionStep::new("layer.new.layer", json!({"name":"visited"}))])];
         let result = batch(&mut s, &json!({"source":"open","action":"Leaf","calledActions":embedded})).unwrap();
         assert_eq!(result["errors"], json!([]), "{result}");
         assert_eq!(doc(&s).walk().len(), before + 1);
         assert_eq!(s.actions.playback_stack, ["Enclosing"]);
         assert_eq!(s.actions.recording.map(|(_, owner)| owner), Some(0));
         assert_eq!(s.actions.take, take);
-        assert_eq!(&s.actions.list[1..], definitions.as_slice());
+        assert_eq!(&s.actions.list.actions()[1..], definitions.as_slice());
     }
 }
 
@@ -574,13 +591,16 @@ fn named_open_document_batch_uses_effective_recorded_parameters() {
         s.execute("file.new", json!({"width":200,"height":100})).unwrap();
         let a = s.execute("layer.new.layer", json!({"name":"A"})).unwrap()["layer"].as_u64().unwrap();
         let b = s.execute("layer.new.layer", json!({"name":"B"})).unwrap()["layer"].as_u64().unwrap();
-        s.actions.list.push(crate::actions_cmds::Action::new(
-            "Recorded",
-            vec![
-                ("layer.setProps".into(), json!({"visible":false,"_actionLayer":{"name":"A","ordinal":0}})),
-                ("type.create".into(), json!({"text":"x","size":12,"xPercent":25.0,"yPercent":40.0})),
-            ],
-        ));
+        s.actions
+            .list
+            .push(crate::actions_cmds::Action::new(
+                "Recorded",
+                vec![
+                    ActionStep::new("layer.setProps", json!({"visible":false,"_actionLayer":{"name":"A","ordinal":0}})),
+                    ActionStep::new("type.create", json!({"text":"x","size":12,"xPercent":25.0,"yPercent":40.0})),
+                ],
+            ))
+            .unwrap();
         if through_batch {
             s.authorize = Some(gate);
             let result = s.execute("file.automate.batch", json!({"source":"open","action":"Recorded"})).unwrap();
@@ -696,7 +716,8 @@ fn batch_quiet_raw_applies_prior_settings_and_workflow_without_touching_inputs()
     let bytes = DngSpec::cfa(w, h, mosaic(&scene(w, h), w, [0, 1, 1, 2], 0, 65535)).build();
     std::fs::write(&path, &bytes).unwrap();
     let sidecar = join(&dir, "raw.xmp");
-    let settings = photocraft_algo::camera_raw::CameraRaw { exposure: 1.0, ..Default::default() };
+    let mut settings = photocraft_algo::camera_raw::CameraRaw::default();
+    settings.exposure = 1.0;
     let xmp = photocraft_io::camera_raw_xmp::save(&settings);
     std::fs::write(&sidecar, &xmp).unwrap();
     let mut s = Session::new();
@@ -2633,7 +2654,7 @@ fn layers_to_files_reports_skipped_layers_without_changing_files() {
                 {"layer": adjustment, "name": "Levels/α", "reason": "adjustment layer has no pixels of its own"}
             ])
         );
-        assert_eq!(result["files"], json!([join(&dir, "doc_0001_Background.png")]));
+        assert_eq!(result["files"], json!([join(&dir, "doc_0002_Background.png")]));
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
         assert_eq!(s.active().unwrap().doc.layers.len(), before.layers.len());
         assert!(!s.active().unwrap().doc.layer(LayerId(hidden.as_u64().unwrap())).unwrap().visible);
@@ -2688,7 +2709,7 @@ fn layers_to_files_writes_each_visible_layer() {
     let r = s.execute("file.export.layersToFiles", json!({"dir": dir, "prefix": "doc", "format": "png"})).unwrap();
     let files: Vec<String> = r["files"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
     assert_eq!(files.len(), 2, "{files:?}");
-    assert!(files[0].ends_with("doc_0000_Ink_1.png"), "{files:?}");
+    assert!(files[0].ends_with("doc_0001_Ink_1.png"), "{files:?}");
     assert!(files.iter().all(|f| std::path::Path::new(f).is_file()));
     let r = s.execute("file.export.layersToFiles", json!({"dir": dir, "visibleOnly": false, "format": "psd"})).unwrap();
     assert_eq!(r["files"].as_array().unwrap().len(), 3);
@@ -2847,15 +2868,16 @@ fn named_batch_cycles_stop_before_the_test_ceiling() {
             let params = json!({"action": "A", "source": source, "input": [input], "output": output, "format": "png"});
             let mut child = params.clone();
             child["action"] = json!(if route == "self" || route == "play-parent" { "A" } else { "B" });
-            let first = if route == "play-child" { ("actions.play".into(), json!({"action": "B"})) } else { ("file.automate.batch".into(), child) };
+            let first =
+                if route == "play-child" { ActionStep::new("actions.play", json!({"action": "B"})) } else { ActionStep::new("file.automate.batch", child) };
             let mut s = Session::new();
             if source == "open" {
                 s.execute("file.openAs", json!({"path": input})).unwrap();
             }
-            s.actions.list = vec![
+            s.actions.list = list_of(vec![
                 crate::actions_cmds::Action::new("A", vec![first]),
-                crate::actions_cmds::Action::new("B", vec![("file.automate.batch".into(), params.clone())]),
-            ];
+                crate::actions_cmds::Action::new("B", vec![ActionStep::new("file.automate.batch", params.clone())]),
+            ]);
             s.authorize = Some(bounded);
             CALLS.store(0, Ordering::SeqCst);
             let result =
@@ -2886,7 +2908,7 @@ fn named_batch_limits_nesting_and_keeps_the_callers_state() {
         if source == "open" {
             s.execute("file.openAs", json!({"path": input})).unwrap();
         }
-        s.actions.list.push(Action::new("Invert", vec![("image.adjustments.invert".into(), json!({}))]));
+        s.actions.list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
         s.actions.playing = 16;
         s.actions.playback_stack = (0..16).map(|i| format!("Parent{i}")).collect();
         let before = s.actions.clone();
@@ -2913,7 +2935,7 @@ fn named_batch_limits_nesting_and_keeps_the_callers_state() {
         assert_eq!(s.actions.playing, 0);
         assert!(s.actions.playback_stack.is_empty());
         s.execute("actions.stop", json!({})).unwrap();
-        assert_eq!(s.actions.list[1].steps, vec![("file.automate.batch".into(), params)]);
+        assert_eq!(s.actions.list.actions()[1].steps, vec![ActionStep::new("file.automate.batch", params)]);
     }
 }
 
@@ -2925,7 +2947,7 @@ fn named_batch_charges_the_existing_budget_across_inputs_and_children() {
     let input = png(&dir, "red.png", 8, 8, "#ff0000");
     let output = join(&dir, "out");
     let mut s = Session::new();
-    s.actions.list.push(Action::new("Large", vec![("image.adjustments.invert".into(), json!({})); 100]));
+    s.actions.list.push(Action::new("Large", vec![ActionStep::new("image.adjustments.invert", json!({})); 100])).unwrap();
     let result = s.execute("file.automate.batch", json!({"action": "Large", "input": vec![input.clone(); 1001], "output": output})).unwrap_err();
     assert!(result.to_string().contains("step limit"), "{result}");
     assert!(!std::path::Path::new(&output).exists());
@@ -2933,16 +2955,16 @@ fn named_batch_charges_the_existing_budget_across_inputs_and_children() {
     assert!(s.actions.playback_stack.is_empty());
 
     // A finished playback leaves its count behind; a new named Batch starts fresh.
-    s.actions.list = vec![Action::new("Empty", Vec::new())];
+    s.actions.list = list_of(vec![Action::new("Empty", Vec::new())]);
     s.actions.playback_steps = MAX_PLAYBACK_STEPS;
     let result = s.execute("file.automate.batch", json!({"action": "Empty", "input": [input], "output": join(&dir, "fresh")})).unwrap();
     assert_eq!(result["errors"], json!([]), "{result}");
     assert_eq!(result["files"].as_array().unwrap().len(), 1);
 
-    s.actions.list = vec![
-        Action::new("Outer", vec![("actions.play".into(), json!({"action": "Leaf"}))]),
-        Action::new("Leaf", vec![("select.deselect".into(), json!({})); 2]),
-    ];
+    s.actions.list = list_of(vec![
+        Action::new("Outer", vec![ActionStep::new("actions.play", json!({"action": "Leaf"}))]),
+        Action::new("Leaf", vec![ActionStep::new("select.deselect", json!({})); 2]),
+    ]);
     s.actions.playing = 1;
     s.actions.playback_stack = vec!["Parent".into()];
     s.actions.playback_steps = MAX_PLAYBACK_STEPS - 4;
@@ -2968,8 +2990,10 @@ fn named_batch_allows_nested_work_and_preserves_authorization() {
         let inner = join(&dir, &format!("inner-{denied}"));
         let child = json!({"action": "Leaf", "input": [input], "output": inner, "format": "png"});
         let mut s = Session::new();
-        s.actions.list =
-            vec![Action::new("Outer", vec![("file.automate.batch".into(), child)]), Action::new("Leaf", vec![("image.adjustments.invert".into(), json!({}))])];
+        s.actions.list = list_of(vec![
+            Action::new("Outer", vec![ActionStep::new("file.automate.batch", child)]),
+            Action::new("Leaf", vec![ActionStep::new("image.adjustments.invert", json!({}))]),
+        ]);
         if denied {
             s.authorize = Some(deny_invert);
         }
@@ -3002,8 +3026,8 @@ fn nested_batch_errors_stop_actions_but_direct_scripts_keep_results_and_continue
     assert_eq!(result["files"], json!([]));
     assert_eq!(result["errors"].as_array().unwrap().len(), 1);
     assert_eq!(result["errors"][0].as_object().unwrap().len(), 2, "ordinary errors still contain only file/error");
-    let steps = vec![("file.automate.batch".into(), batch), ("file.new".into(), json!({"width": 2, "height": 2}))];
-    s.actions.list.push(Action::new("Caller", steps.clone()));
+    let steps = vec![ActionStep::new("file.automate.batch", batch), ActionStep::new("file.new", json!({"width": 2, "height": 2}))];
+    s.actions.list.push(Action::new("Caller", steps.clone())).unwrap();
     let result = s.execute("actions.play", json!({"action": "Caller"})).unwrap();
     assert_eq!(result["ran"], 0, "{result}");
     assert!(result["failed"]["error"].as_str().unwrap().contains("no active document"), "{result}");
@@ -3030,11 +3054,11 @@ fn nested_batch_partial_failures_keep_outputs_and_stop_only_action_parents() {
         let mut s = Session::new();
         let output = join(&dir, caller);
         let batch = json!({"input": [input, corrupt], "output": output, "steps": [], "format": "png"});
-        let steps = vec![("file.automate.batch".into(), batch.clone()), ("file.new".into(), json!({"width": 2, "height": 2}))];
+        let steps = vec![ActionStep::new("file.automate.batch", batch.clone()), ActionStep::new("file.new", json!({"width": 2, "height": 2}))];
         let result = match caller {
             "batch" => s.execute("file.automate.batch", batch).unwrap(),
             "action" => {
-                s.actions.list.push(Action::new("Mixed", steps));
+                s.actions.list.push(Action::new("Mixed", steps)).unwrap();
                 let result = s.execute("actions.play", json!({"action": "Mixed"})).unwrap();
                 assert_eq!(result["ran"], 0, "{result}");
                 let error = result["failed"]["error"].as_str().unwrap();
@@ -3071,7 +3095,10 @@ fn successful_nested_batch_allows_later_action_steps() {
     let input = png(&dir, "red.png", 8, 8, "#ff0000");
     let mut s = Session::new();
     let batch = json!({"input": [input], "output": join(&dir, "success"), "steps": [], "format": "png"});
-    s.actions.list.push(Action::new("Success", vec![("file.automate.batch".into(), batch), ("file.new".into(), json!({"width": 2, "height": 2}))]));
+    s.actions
+        .list
+        .push(Action::new("Success", vec![ActionStep::new("file.automate.batch", batch), ActionStep::new("file.new", json!({"width": 2, "height": 2}))]))
+        .unwrap();
     let result = s.execute("actions.play", json!({"action": "Success"})).unwrap();
     assert!(result.get("failed").is_none(), "{result}");
     assert_eq!(result["ran"], 2);
@@ -4242,8 +4269,8 @@ fn approve_memory_is_neither_journaled_nor_recorded_in_an_action() {
     assert_eq!((r["approved"].clone(), r["cancelled"].clone()), (json!(false), json!(true)));
     s.execute("actions.stop", json!({})).unwrap();
     assert!(s.journal.iter().all(|(command, _)| command != "file.approveMemory"), "one-shot approval must not become a journal entry: {:?}", s.journal);
-    let action = s.actions.list.first().expect("the recorded action");
-    assert!(action.steps.iter().all(|(command, _)| command != "file.approveMemory"), "one-shot approval must not replay from an action: {:?}", action.steps);
+    let action = s.actions.list.actions().first().expect("the recorded action");
+    assert!(action.steps.iter().all(|step| step.command != "file.approveMemory"), "one-shot approval must not replay from an action: {:?}", action.steps);
 }
 
 #[test]
@@ -4329,7 +4356,10 @@ fn playback_stops_after_a_cancelled_nested_batch() {
     REVIEW_CANCEL.with(|slot| *slot.borrow_mut() = Some(ctx.clone()));
     s.authorize = Some(cancel_at_marker);
     let batch = json!({"input": [input], "output": join(&dir, "out"), "steps": [["layer.renameLayer", {"name": "Cancel here"}]]});
-    s.actions.list.push(crate::actions_cmds::Action::new("Run", vec![("file.automate.batch".into(), batch), ("layer.new.layer".into(), json!({}))]));
+    s.actions
+        .list
+        .push(crate::actions_cmds::Action::new("Run", vec![ActionStep::new("file.automate.batch", batch), ActionStep::new("layer.new.layer", json!({}))]))
+        .unwrap();
     let layers = doc(&s).layers.len();
     let played = s.execute("actions.play", json!({"action": "Run"})).unwrap();
     REVIEW_CANCEL.with(|slot| *slot.borrow_mut() = None);
