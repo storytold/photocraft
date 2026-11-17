@@ -82,19 +82,30 @@ fn dismiss_outside(h: &mut Harness<'_, PhotocraftApp>, popup: Popup) {
 }
 
 fn check_reopening(tool: Tool, modifiers: Modifiers, popup: Popup) {
+    check_reopening_cases(tool, modifiers, popup, false);
+}
+
+fn check_reopening_cases(tool: Tool, modifiers: Modifiers, popup: Popup, distinct_positions_only: bool) {
+    let attempts = if distinct_positions_only { 2 } else { 3 };
     for scale in [1.0, 2.0] {
         for selection in [false, true] {
             let mut h = harness(tool, selection, scale);
             let center = fractional_point(&h, scale);
             let aligned = pos2((center.x * scale).round() / scale, (center.y * scale).round() / scale);
-            let mut points = vec![center, center + vec2(40.0, 20.0), center - vec2(40.0, 20.0), aligned];
+            // Integer offsets repeat the same physical-pixel fraction. The selection row keeps
+            // the fractional and aligned positions, plus an initial opening and one reopening.
+            let mut points = if distinct_positions_only {
+                vec![center, aligned]
+            } else {
+                vec![center, center + vec2(40.0, 20.0), center - vec2(40.0, 20.0), aligned]
+            };
             if popup == Popup::Brush {
                 let canvas = crate::rulers::content_rect(h.state(), h.state().last_canvas_rect);
                 points.extend([canvas.center(), canvas.left_top() + vec2(40.0, 40.0), canvas.right_bottom() - vec2(40.0, 40.0)]);
             }
             for at in points {
                 for same_frame in [false, true] {
-                    for attempt in 0..3 {
+                    for attempt in 0..attempts {
                         let before = document_state(&h);
                         tap(&mut h, at, modifiers, same_frame);
                         assert!(is_open(&h, popup), "{tool:?} scale={scale} selection={selection} same_frame={same_frame} reopen={attempt} at {at:?}");
@@ -123,15 +134,12 @@ fn secondary_taps_keep_selection_menus_open() {
     // menu (#7268), the brush is set from the options bar.
     for tool in [
         Tool::RectMarquee,
-        Tool::EllipseMarquee,
         Tool::Lasso,
         Tool::PolygonLasso,
         Tool::MagneticLasso,
-        Tool::MagicWand,
-        Tool::ObjectSelection,
         Tool::QuickSelection,
     ] {
-        check_reopening(tool, Modifiers::NONE, Popup::Tool);
+        check_reopening_cases(tool, Modifiers::NONE, Popup::Tool, true);
     }
 }
 

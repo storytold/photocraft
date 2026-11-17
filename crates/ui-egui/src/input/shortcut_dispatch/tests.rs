@@ -255,7 +255,7 @@ fn every_displayed_shortcut_dispatches_from_where_focus_usually_is() {
                 continue;
             }
             let parsed = parse(&sc).unwrap();
-            press(&mut h, &sc);
+            press_in_one_frame(&mut h, &[sc.as_str()]);
             let log = take_log(&h.ctx);
             if !focus.allows(&parsed) {
                 // A focused text field keeps typing / editing keys: nothing may fire.
@@ -275,7 +275,8 @@ fn every_displayed_shortcut_dispatches_from_where_focus_usually_is() {
         if !matches!(focus, Focus::Text) {
             for t in Tool::ALL.into_iter().filter(|t| t.key() != '\0') {
                 h.state_mut().ui.tool = if t.key() == 'H' { Tool::Move } else { Tool::Hand };
-                press(&mut h, &t.key().to_string());
+                let key = t.key().to_string();
+                press_in_one_frame(&mut h, &[key.as_str()]);
                 if h.state().ui.tool.key() != t.key() {
                     failures.push(format!("{place:?}: tool key {} left {:?}", t.key(), h.state().ui.tool));
                 }
