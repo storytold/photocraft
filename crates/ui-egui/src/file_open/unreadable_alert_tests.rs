@@ -355,7 +355,8 @@ fn recognized_psd_header_failures_keep_their_diagnostic_and_raw_error() {
     assert!(app.ui.recent_files.is_empty());
     assert!(app.ui.notices.is_empty());
     let mut direct = app_with(None);
-    assert_eq!(direct.open_bytes("corrupt.psdt", &bytes).unwrap_err(), "corrupt.psdt: PSD: unsupported file version 0");
+    // The typed PSD path returns its raw IO error without adding a source-name prefix.
+    assert_eq!(direct.open_bytes("corrupt.psdt", &bytes).unwrap_err(), "PSD: unsupported file version 0");
     assert!(direct.ui.dialogs.is_empty());
 
     // A damaged internal block or an unrelated/malformed diagnostic retains its reason.

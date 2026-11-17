@@ -1016,16 +1016,28 @@ fn confirmed_damaged_smart_object_opens_are_admitted_as_smart_objects_with_disti
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn failed_inline_memory_approval_alerts_once_and_preserves_the_next_prompt_and_error_reply() {
+    // File-backed decoding reads the complete 26-byte header before parsing it. Give both
+    // routes that same header so the unsupported version, rather than EOF, is the failure.
+    let header = [
+        b'8', b'B', b'P', b'S',
+        0, 0, // unsupported version
+        0, 0, 0, 0, 0, 0, // reserved
+        0, 3, // channels
+        0, 0, 0, 1, // height
+        0, 0, 0, 1, // width
+        0, 8, // depth
+        0, 3, // RGB
+    ];
     for (name, file_name) in [("failed.psd", None), ("failed.psd", Some("failed.psd")), ("Untitled-1", Some("template.psdt"))] {
         let mut app = app();
         let temp = tempfile::tempdir().unwrap();
         let path = file_name.map(|file| {
             let path = temp.path().join(file);
-            std::fs::write(&path, b"8BPS\0\0").unwrap();
+            std::fs::write(&path, header).unwrap();
             path.to_string_lossy().into_owned()
         });
         let source = path.as_ref().map_or_else(
-            || photocraft_engine::jobs::OpenSource::Bytes(std::sync::Arc::new(b"8BPS\0\0".to_vec())),
+            || photocraft_engine::jobs::OpenSource::Bytes(std::sync::Arc::new(header.to_vec())),
             |path| photocraft_engine::jobs::OpenSource::Path(path.clone()),
         );
         let fingerprint = photocraft_engine::jobs::SourceFingerprint::of(&source).unwrap();
