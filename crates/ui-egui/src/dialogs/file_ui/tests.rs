@@ -1017,6 +1017,7 @@ fn palette_draft_survives_navigation_and_resets_when_colors_change() {
 #[test]
 fn print_dialog_and_toggles() {
     let (mut app, ctx) = app();
+    app.session.system_print_dialog = Some(Arc::new(|_, _| Err("Save as PDF must not open the system print dialog".into())));
     let r = crate::menus::invoke(&mut app, &ctx, "file.print", json!({})).unwrap();
     let id = r["dialog"].as_u64().unwrap();
     let out = std::env::temp_dir().join(format!("pc-printui-{}.pdf", std::process::id())).to_string_lossy().into_owned();
@@ -1146,6 +1147,31 @@ fn orientation_follows_the_driver_paper() {
     assert!(!driver_paper_is_wide(&with(json!([842.29, 1191.14]))));
     assert!(!driver_paper_is_wide(&with(json!("a3"))), "a named paper is not a driver page");
     assert!(!driver_paper_is_wide(&Map::new()));
+}
+
+/// Switching a landscape Windows driver page to PDF keeps its direction, then restores normal
+/// orientation handling instead of forcing landscape after the user changes the dropdown.
+#[test]
+fn print_leaving_a_driver_page_restores_editable_pdf_orientation() {
+    let mut f = json!({
+        "paper": [1191.14, 842.29],
+        "orientation": "portrait",
+        "printable": [12.0, 12.0, 1167.14, 818.29],
+        "__paperAlreadyOriented": true,
+        "__driverPageInitialized": true
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+
+    leave_driver_page(&mut f);
+    assert_eq!(f.get("orientation"), Some(&json!("landscape")));
+    assert!(!f.contains_key("__paperAlreadyOriented"));
+    assert!(!f.contains_key("__driverPageInitialized"));
+    assert!(!f.contains_key("printable"));
+
+    f.insert("orientation".into(), json!("portrait"));
+    assert_eq!(print_params(&f)["orientation"], "portrait");
 }
 
 /// Turning a printer whose driver can't be asked keeps its settings and says why on the dialog.

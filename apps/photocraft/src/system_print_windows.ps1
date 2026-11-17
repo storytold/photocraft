@@ -1,0 +1,136 @@
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Runtime.WindowsRuntime
+$null = [Windows.Data.Pdf.PdfDocument, Windows.Data.Pdf, ContentType = WindowsRuntime]
+$null = [Windows.Storage.StorageFile, Windows.Storage, ContentType = WindowsRuntime]
+
+$extensions = [System.WindowsRuntimeSystemExtensions]
+$operationTask = $extensions.GetMethods() | Where-Object {
+    $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and
+    $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1'
+} | Select-Object -First 1
+$actionTask = $extensions.GetMethods() | Where-Object {
+    $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and
+    $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncAction'
+} | Select-Object -First 1
+function Wait-Operation($operation, $resultType) {
+    $task = $operationTask.MakeGenericMethod($resultType).Invoke($null, @($operation))
+    $task.Wait()
+    $task.Result
+}
+function Wait-Action($action) {
+    $task = $actionTask.Invoke($null, @($action))
+    $task.Wait()
+}
+
+$source = Wait-Operation ([Windows.Storage.StorageFile]::GetFileFromPathAsync($env:PHOTOCRAFT_PRINT_FILE)) ([Windows.Storage.StorageFile])
+$pdf = Wait-Operation ([Windows.Data.Pdf.PdfDocument]::LoadFromFileAsync($source)) ([Windows.Data.Pdf.PdfDocument])
+if ($pdf.PageCount -ne 1) { throw 'PhotoCraft expected a one-page print document' }
+
+$page = $pdf.GetPage(0)
+try {
+    $width = [int][Math]::Max(1, [Math]::Round($page.Size.Width * 100.0 / 96.0))
+    $height = [int][Math]::Max(1, [Math]::Round($page.Size.Height * 100.0 / 96.0))
+    $renderDpi = [Math]::Max(96.0, [Math]::Min(600.0, [double]$env:PHOTOCRAFT_PRINT_RASTER_DPI))
+    $uncappedWidth = [Math]::Max(1.0, [Math]::Round($page.Size.Width * $renderDpi / 96.0))
+    $uncappedHeight = [Math]::Max(1.0, [Math]::Round($page.Size.Height * $renderDpi / 96.0))
+    # GDI+ cannot create a bitmap wider or taller than 32768 pixels. Reduce both dimensions by
+    # the same factor so an oversized sheet retains its aspect ratio instead of being stretched.
+    $reduction = [Math]::Min(1.0, 32768.0 / [Math]::Max($uncappedWidth, $uncappedHeight))
+    $renderWidth = [uint32][Math]::Max(1, [Math]::Round($uncappedWidth * $reduction))
+    $renderHeight = [uint32][Math]::Max(1, [Math]::Round($uncappedHeight * $reduction))
+    $options = [Windows.Data.Pdf.PdfPageRenderOptions]::new()
+    $options.DestinationWidth = $renderWidth
+    $options.DestinationHeight = $renderHeight
+    $stream = [System.IO.MemoryStream]::new()
+    try {
+        $random = [System.IO.WindowsRuntimeStreamExtensions]::AsRandomAccessStream($stream)
+        Wait-Action ($page.RenderToStreamAsync($random, $options))
+        $stream.Position = 0
+        $image = [System.Drawing.Image]::FromStream($stream)
+        $bitmap = [System.Drawing.Bitmap]::new($image)
+        $image.Dispose()
+    } finally {
+        $stream.Dispose()
+    }
+} finally {
+    $page.Dispose()
+}
+
+$document = [System.Drawing.Printing.PrintDocument]::new()
+$document.DocumentName = $env:PHOTOCRAFT_PRINT_TITLE
+$document.OriginAtMargins = $false
+if (-not [string]::IsNullOrWhiteSpace($env:PHOTOCRAFT_PRINT_PRINTER)) {
+    $document.PrinterSettings.PrinterName = $env:PHOTOCRAFT_PRINT_PRINTER
+}
+if (-not [string]::IsNullOrWhiteSpace($env:PHOTOCRAFT_PRINT_DRIVER_SETTINGS)) {
+    $hex = $env:PHOTOCRAFT_PRINT_DRIVER_SETTINGS
+    if (($hex.Length % 2) -ne 0) { throw 'PhotoCraft received malformed Windows printer settings' }
+    $bytes = [byte[]]::new($hex.Length / 2)
+    for ($i = 0; $i -lt $bytes.Length; $i++) {
+        $bytes[$i] = [Convert]::ToByte($hex.Substring($i * 2, 2), 16)
+    }
+    $devmode = [Runtime.InteropServices.Marshal]::AllocHGlobal($bytes.Length)
+    try {
+        [Runtime.InteropServices.Marshal]::Copy($bytes, 0, $devmode, $bytes.Length)
+        $document.PrinterSettings.SetHdevmode($devmode)
+    } finally {
+        [Runtime.InteropServices.Marshal]::FreeHGlobal($devmode)
+    }
+}
+$paperWidth = [Math]::Min($width, $height)
+$paperHeight = [Math]::Max($width, $height)
+$document.DefaultPageSettings.PaperSize = [System.Drawing.Printing.PaperSize]::new('PhotoCraft page', $paperWidth, $paperHeight)
+$document.DefaultPageSettings.Landscape = ($width -gt $height)
+$document.DefaultPageSettings.Margins = [System.Drawing.Printing.Margins]::new(0, 0, 0, 0)
+$document.DefaultPageSettings.Color = ($env:PHOTOCRAFT_PRINT_GRAYSCALE -ne '1')
+$document.PrinterSettings.Copies = [int16][Math]::Max(1, [Math]::Min(999, [int]$env:PHOTOCRAFT_PRINT_COPIES))
+$document.PrinterSettings.Collate = ($env:PHOTOCRAFT_PRINT_COLLATE -eq '1')
+switch ($env:PHOTOCRAFT_PRINT_DUPLEX) {
+    'simplex' { $document.PrinterSettings.Duplex = [System.Drawing.Printing.Duplex]::Simplex }
+    'long-edge' { $document.PrinterSettings.Duplex = [System.Drawing.Printing.Duplex]::Vertical }
+    'short-edge' { $document.PrinterSettings.Duplex = [System.Drawing.Printing.Duplex]::Horizontal }
+}
+$document.add_PrintPage({
+    param($sender, $event)
+    $box = [System.Drawing.RectangleF]::new(
+        -$event.PageSettings.HardMarginX,
+        -$event.PageSettings.HardMarginY,
+        $event.PageBounds.Width,
+        $event.PageBounds.Height
+    )
+    $scale = [Math]::Min($box.Width / $bitmap.Width, $box.Height / $bitmap.Height)
+    $drawWidth = $bitmap.Width * $scale
+    $drawHeight = $bitmap.Height * $scale
+    $drawBox = [System.Drawing.RectangleF]::new(
+        $box.X + ($box.Width - $drawWidth) / 2.0,
+        $box.Y + ($box.Height - $drawHeight) / 2.0,
+        $drawWidth,
+        $drawHeight
+    )
+    $event.Graphics.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
+    $event.Graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+    $event.Graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+    $event.Graphics.DrawImage($bitmap, $drawBox)
+    $event.HasMorePages = $false
+})
+
+$dialog = [System.Windows.Forms.PrintDialog]::new()
+$dialog.UseEXDialog = $true
+$dialog.AllowPrintToFile = $true
+$dialog.Document = $document
+try {
+    if ($dialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) {
+        Write-Output 'cancelled'
+        return
+    }
+    $document.PrintController = [System.Drawing.Printing.StandardPrintController]::new()
+    $document.Print()
+    Write-Output 'printed'
+} finally {
+    $dialog.Dispose()
+    $document.Dispose()
+    $bitmap.Dispose()
+}
