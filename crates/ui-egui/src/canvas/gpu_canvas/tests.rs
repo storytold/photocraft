@@ -1,5 +1,14 @@
 use super::*;
 
+#[test]
+fn tile_sides_are_powers_of_two_within_the_device_limit() {
+    assert_eq!(tile_side(None, 16384), DEFAULT_TILE);
+    assert_eq!(tile_side(Some(1000), 16384), 512);
+    assert_eq!(tile_side(Some(4096), 16384), 4096);
+    assert_eq!(tile_side(Some(16384), 10000), 8192);
+    assert_eq!(tile_side(Some(1), 16384), 64);
+}
+
 /// A GPU measurement arrives a frame or two after its refresh, so most GPU refreshes carry
 /// none; the last one reported must stand until a newer one lands. A CPU refresh is
 /// different: there is no GPU time at all then, and keeping the old number would show it as
