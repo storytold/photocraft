@@ -529,7 +529,7 @@ fn footer(app: &mut PhotocraftApp, picked: Option<crate::smart_ui::FilterDrag>, 
             }
         }
         LayersFooterAction::Adjustment(id) => actions.push((id, json!({}))),
-        LayersFooterAction::Style(kind) => {
+        LayersFooterAction::Style(kind) if app.session.is_enabled("layer.layerStyle.blendingOptions") => {
             crate::layer_style::open(app, (!kind.is_empty()).then_some(kind.as_str()));
         }
         _ => {}

@@ -13,6 +13,19 @@ pub(super) fn has_layer(s: &Session) -> std::result::Result<(), String> {
     d.active_layer.filter(|id| d.doc.layer(*id).is_some()).map(|_| ()).ok_or_else(|| "no active layer".into())
 }
 
+pub(crate) fn layer_style_allowed(s: &Session) -> std::result::Result<(), String> {
+    let st = s.active().ok_or("no document open")?;
+    let id = st.active_layer.filter(|&id| st.doc.layer(id).is_some()).ok_or("no active layer")?;
+    check_layer_style_target(&st.doc, id).map_err(|err| err.to_string())
+}
+
+pub(crate) fn check_layer_style_target(doc: &Document, id: LayerId) -> Result<()> {
+    if doc.is_background(id) {
+        return Err(EngineError::Other("the Background layer cannot have a layer style".into()));
+    }
+    Ok(())
+}
+
 pub(super) fn has_pixel_layer(s: &Session) -> std::result::Result<(), String> {
     let l = crate::active_layer_of(s)?;
     if matches!(l.content, LayerContent::Raster(_)) {
