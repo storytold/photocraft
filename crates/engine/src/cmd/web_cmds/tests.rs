@@ -1549,6 +1549,20 @@ fn web_file_naming_does_not_reserve_or_validate_files_for_no_image_cells() {
     })
     .unwrap();
     assert_eq!(paths, ["output/tile.png", "output/web_03.png"]);
+    for (component, expected) in [
+        ("serial", ["output/1.png", "output/2.png"]),
+        ("serial2", ["output/01.png", "output/02.png"]),
+        ("letter", ["output/a.png", "output/b.png"]),
+        ("LETTER", ["output/A.png", "output/B.png"]),
+    ] {
+        paths.clear();
+        save_for_web_with_writer(&mut s, &json!({"dir":"output","imagesFolder":"","fileNaming":{"components":[component]}}), &mut |path, _| {
+            paths.push(path.to_string());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(paths, expected, "{component}: no-image cells do not take a file serial");
+    }
 }
 
 /// A refused slice export writes and remembers nothing, and (called directly, as the platform

@@ -13,7 +13,7 @@ fn text(value: &Value) -> Result<&str> {
 }
 
 /// Build every output name before the exporter commits a floating selection or writes a file.
-/// Components refer to resolved slice numbers, including no-image cells, rather than write order.
+/// Slice names retain resolved slice numbers; file serials count image slices only.
 pub(super) fn plan(p: &Value, doc: &Document, ext: &str) -> Result<Option<Vec<String>>> {
     let Some(value) = p.get("fileNaming").filter(|v| !v.is_null()) else { return Ok(None) };
     if p.get("dir").and_then(Value::as_str).is_none_or(str::is_empty)
@@ -77,11 +77,13 @@ pub(super) fn plan(p: &Value, doc: &Document, ext: &str) -> Result<Option<Vec<St
     let mut used = HashSet::new();
     let mut next_serial = HashMap::new();
     let mut names = Vec::with_capacity(all.len());
+    let mut file_serial = 0u64;
     for slice in &all {
         if slice.kind == SliceKind::NoImage {
             names.push(String::new());
             continue;
         }
+        file_serial += 1; // `all` is capped above; no-image cells never consume a file serial.
         let mut stem = String::new();
         for part in components {
             if let Some(literal) = part.get("text") {
@@ -99,9 +101,9 @@ pub(super) fn plan(p: &Value, doc: &Document, ext: &str) -> Result<Option<Vec<St
                         stem.push_str(&format!("{base}_{:02}", slice.number));
                     }
                 }
-                "serial" => stem.push_str(&slice.number.to_string()),
-                "serial2" => stem.push_str(&format!("{:02}", slice.number)),
-                "letter" | "LETTER" => stem.push_str(&crate::file_cmds::serial_letters(slice.number as u64, part == "LETTER")),
+                "serial" => stem.push_str(&file_serial.to_string()),
+                "serial2" => stem.push_str(&format!("{file_serial:02}")),
+                "letter" | "LETTER" => stem.push_str(&crate::file_cmds::serial_letters(file_serial, part == "LETTER")),
                 "underscore" => stem.push('_'),
                 "hyphen" => stem.push('-'),
                 "space" => stem.push(' '),
