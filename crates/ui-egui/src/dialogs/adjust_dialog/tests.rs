@@ -159,7 +159,7 @@ fn color_balance_dialog_gestures_match_photoshop() {
     // Alt turns Cancel into Reset.
     assert!(h.query_by_label("Cancel").is_some() && h.query_by_label("Reset").is_none());
     h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("highlights".into(), json!([5, 5, 5]));
-    let tone = egui::Id::unique(("adjust-dialog", "colorBalance")).with("cb-tone");
+    let tone = editor_mem("colorBalance", &h.state().ui.dialogs[0].fields).with("cb-tone");
     h.ctx.data_mut(|d| d.insert_temp(tone, 2usize));
     h.event(egui::Event::ModifiersChanged(egui::Modifiers::ALT));
     h.run_steps(2);
@@ -1647,3 +1647,6 @@ fn selective_color_editor_survives_malformed_params() {
     assert!(row.as_array().is_some_and(|a| a.len() == 4 && a.iter().all(Value::is_number)), "rebuilt as four numbers: {row}");
     assert!(row[1].as_f64().unwrap() > 0.0);
 }
+
+#[path = "../adjust_editors/color_balance_tone_on_open_tests.rs"]
+mod color_balance_tone_on_open_tests;
