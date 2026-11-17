@@ -65,6 +65,10 @@ pub struct Opened {
     pub image_sequence: bool,
 }
 
+/// One of the dialog's `choices` as the portal takes it: id, label, options (none for a
+/// checkbox) and the initial state.
+type Choice<'a> = (&'a str, &'a str, Vec<(&'a str, &'a str)>, &'a str);
+
 /// The id of File › Open's Image Sequence checkbox among the dialog's `choices`.
 const IMAGE_SEQUENCE: &str = "image_sequence";
 
@@ -155,7 +159,7 @@ fn open_options<'a>(req: &'a OpenRequest, label: &'a str, token: &'a str) -> Has
         o.insert("filters", Value::from(req.filters.iter().map(wire).collect::<Vec<_>>()));
     }
     // A choice without options is a checkbox; its initial state is "false".
-    let choices: Vec<(&str, &str, Vec<(&str, &str)>, &str)> = vec![(IMAGE_SEQUENCE, label, Vec::new(), "false")];
+    let choices: Vec<Choice<'_>> = vec![(IMAGE_SEQUENCE, label, Vec::new(), "false")];
     o.insert("choices", Value::from(choices));
     o
 }

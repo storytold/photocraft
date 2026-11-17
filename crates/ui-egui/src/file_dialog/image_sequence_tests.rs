@@ -60,14 +60,14 @@ fn the_frame_rate_dialog_comes_first_and_cancel_opens_nothing() {
     let mut app = picked_with_image_sequence(&d, "frame001.png");
     let prompt = app.frame_rate.as_ref().expect("the Frame Rate dialog is open");
     assert_eq!((prompt.fps, prompt.preset()), (30.0, Some(30.0)));
-    assert_eq!(documents(&app), ["Untitled-1"], "nothing opened yet");
+    assert_eq!(documents(&app), ["Untitled"], "nothing opened yet");
     assert_eq!(app.answer_frame_rate(false), Err(CANCELLED.to_string()));
     assert!(app.frame_rate.is_none());
-    assert_eq!(documents(&app), ["Untitled-1"]);
+    assert_eq!(documents(&app), ["Untitled"]);
     assert!(!app.ui.status_error);
 }
 
-/// OK opens the run as the next Untitled-N with Video Group 1 > Layer 1 at the rate picked, and
+/// OK opens the run as the next Untitled-N (the app's own first document is "Untitled") with Video Group 1 > Layer 1 at the rate picked, and
 /// shows the timeline.
 #[test]
 fn ok_opens_the_sequence_at_the_rate_picked() {
@@ -75,7 +75,7 @@ fn ok_opens_the_sequence_at_the_rate_picked() {
     let mut app = picked_with_image_sequence(&d, "frame002.png");
     app.frame_rate.as_mut().unwrap().pick(Some(23.976));
     app.answer_frame_rate(true).unwrap();
-    assert_eq!(documents(&app), ["Untitled-1", "Untitled-2"]);
+    assert_eq!(documents(&app), ["Untitled", "Untitled-1"]);
     let st = app.session.active().unwrap();
     assert_eq!(st.doc.layers[0].name, "Video Group 1");
     let layer = &st.doc.layers[0].children().unwrap()[0];
@@ -95,7 +95,7 @@ fn an_unnumbered_file_gives_the_alert() {
     assert_eq!(app.answer_frame_rate(true), Err(alert.to_string()));
     assert_eq!(app.ui.status, alert);
     assert!(app.ui.status_error);
-    assert_eq!(documents(&app), ["Untitled-1"]);
+    assert_eq!(documents(&app), ["Untitled"]);
 }
 
 /// The dialog drawn: Enter is OK, Escape is Cancel.
@@ -109,16 +109,16 @@ fn enter_and_escape_answer_the_drawn_dialog() {
     let ctx = egui::Context::default();
 
     let mut app = picked_with_image_sequence(&d, "frame001.png");
-    let _ = ctx.run_ui(egui::RawInput::default(), |ui| crate::file_dialog::show_frame_rate(&mut app, ui.ctx()));
+    ctx.run_ui(egui::RawInput::default(), |ui| crate::file_dialog::show_frame_rate(&mut app, ui.ctx())).drop_without_applying_deltas();
     assert!(app.frame_rate.is_some(), "the dialog stays up until answered");
-    let _ = ctx.run_ui(key(egui::Key::Escape), |ui| crate::file_dialog::show_frame_rate(&mut app, ui.ctx()));
+    ctx.run_ui(key(egui::Key::Escape), |ui| crate::file_dialog::show_frame_rate(&mut app, ui.ctx())).drop_without_applying_deltas();
     assert!(app.frame_rate.is_none());
-    assert_eq!(documents(&app), ["Untitled-1"]);
+    assert_eq!(documents(&app), ["Untitled"]);
 
     let mut app = picked_with_image_sequence(&d, "frame001.png");
-    let _ = ctx.run_ui(key(egui::Key::Enter), |ui| crate::file_dialog::show_frame_rate(&mut app, ui.ctx()));
+    ctx.run_ui(key(egui::Key::Enter), |ui| crate::file_dialog::show_frame_rate(&mut app, ui.ctx())).drop_without_applying_deltas();
     assert!(app.frame_rate.is_none());
-    assert_eq!(documents(&app), ["Untitled-1", "Untitled-2"]);
+    assert_eq!(documents(&app), ["Untitled", "Untitled-1"]);
 }
 
 /// The combo box lists the measured rates in order, then Custom; a preset fills the field, a rate

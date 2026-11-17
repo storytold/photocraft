@@ -272,9 +272,10 @@ fn the_type_that_gives_the_extension_is_the_one_picked() {
 fn file_open_asks_the_portal_for_the_image_sequence_checkbox() {
     let req = OpenRequest { parent: String::new(), folder: Some(PathBuf::from("/pics")), filters: vec![("PNG".into(), vec!["png".into()])], multiple: true };
     let o = open_options(&req, "Image Sequence", "tok");
-    let choices: Vec<(String, String, Vec<(String, String)>, String)> = o["choices"].try_clone().unwrap().try_into().unwrap();
+    type Owned = (String, String, Vec<(String, String)>, String);
+    let choices: Vec<Owned> = o["choices"].try_clone().unwrap().try_into().unwrap();
     assert_eq!(choices, [("image_sequence".into(), "Image Sequence".into(), Vec::new(), "false".into())]);
-    assert_eq!(bool::try_from(o["multiple"].try_clone().unwrap()).unwrap(), true);
+    assert!(bool::try_from(o["multiple"].try_clone().unwrap()).unwrap());
     assert_eq!(Vec::<u8>::try_from(o["current_folder"].try_clone().unwrap()).unwrap(), b"/pics\0");
     let filters: Vec<(String, Vec<(u32, String)>)> = o["filters"].try_clone().unwrap().try_into().unwrap();
     assert_eq!(filters, [("PNG".to_string(), vec![(0, "*.png".to_string())])]);
