@@ -931,7 +931,11 @@ impl BezierMesh {
     /// Pulls the surface point at normalised `(s, t)` by `d`. `base` is the control grid at the
     /// start of the drag. A press that is not near a grid line: see [`Self::pull_at`].
     pub fn pull(&mut self, base: &[[f64; 2]], s: f64, t: f64, d: [f64; 2]) {
-        let press = Self::eval_points(&self.us, &self.vs, base, s, t);
+        if base.len() != self.points.len() {
+            return;
+        }
+        self.points.copy_from_slice(base);
+        let press = self.eval(s, t);
         self.pull_at(base, s, t, press, d, 0.0);
     }
 
@@ -958,7 +962,7 @@ impl BezierMesh {
             return;
         }
         if reach > 0.0
-            && let Some(line) = self.nearest_anchor_line(base, press, s, t, reach)
+            && let Some(line) = self.nearest_anchor_line(press, s, t, reach)
         {
             self.pull_line(base, line, press, d);
             return;
@@ -994,14 +998,14 @@ impl BezierMesh {
 
     /// The anchor line (column `true` or row `false`, and its knot index) nearest `press`, if it
     /// is within `reach`, with the parameter along it of its point nearest the press.
-    fn nearest_anchor_line(&self, base: &[[f64; 2]], press: [f64; 2], s: f64, t: f64, reach: f64) -> Option<(bool, usize, f64)> {
+    /// `self` still holds the grid the drag began with (see [`Self::pull_at`]).
+    fn nearest_anchor_line(&self, press: [f64; 2], s: f64, t: f64, reach: f64) -> Option<(bool, usize, f64)> {
         let mut best: Option<(f64, (bool, usize, f64))> = None;
         for (column, knots, along) in [(true, &self.us, t), (false, &self.vs, s)] {
             for (k, &knot) in knots.iter().enumerate() {
                 // The point of this line nearest the press: a short search around the press's own
                 // parameter along it.
-                let at =
-                    |v: f64| if column { Self::eval_points(&self.us, &self.vs, base, knot, v) } else { Self::eval_points(&self.us, &self.vs, base, v, knot) };
+                let at = |v: f64| if column { self.eval(knot, v) } else { self.eval(v, knot) };
                 let (mut v, mut dist) = (along, f64::MAX);
                 for step in 0..=40 {
                     let w = (along - 0.1 + 0.2 * step as f64 / 40.0).clamp(0.0, 1.0);
@@ -1032,7 +1036,8 @@ impl BezierMesh {
         }
         let knot = if column { self.us.get(k).copied() } else { self.vs.get(k).copied() };
         let Some(knot) = knot else { return };
-        let on_line = if column { Self::eval_points(&self.us, &self.vs, base, knot, v) } else { Self::eval_points(&self.us, &self.vs, base, v, knot) };
+        // Still the drag's starting grid here: nothing has moved yet.
+        let on_line = if column { self.eval(knot, v) } else { self.eval(v, knot) };
         // The line's nearest point goes to the pointer.
         let target = [press[0] + d[0] - on_line[0], press[1] + d[1] - on_line[1]];
         let index = |r: usize| if column { (3 * k, r) } else { (r, 3 * k) };
@@ -1061,12 +1066,6 @@ impl BezierMesh {
                 self.turn_frame(base, x, y);
             }
         }
-    }
-
-    /// The point at `(s, t)` of the surface with control points `points` on these knots.
-    fn eval_points(us: &[f64], vs: &[f64], points: &[[f64; 2]], s: f64, t: f64) -> [f64; 2] {
-        let mesh = BezierMesh { us: us.to_vec(), vs: vs.to_vec(), points: points.to_vec() };
-        mesh.eval(s, t)
     }
 
     /// Drags control point `index` by `d` from the grid `base` it had when the drag began, as the

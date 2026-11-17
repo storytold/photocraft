@@ -182,7 +182,7 @@ fn place_with_svg(name: &str, bytes: &[u8], doc: &Document, sm: &SmartObject, sv
     let fmt = doc.pixel_format();
     // A vector source is rendered at the placement's scale, and the placement is divided by
     // that scale so the rendered pixels land where the source units would.
-    if sm.stack_mode.is_none() && sm.warp.is_none() && photocraft_io::svg::is_svg(bytes) {
+    if sm.stack_mode.is_none() && sm.warp.as_ref().is_none_or(|w| w.is_identity()) && photocraft_io::svg::is_svg(bytes) {
         let k = vector_scale(sm);
         let img = svg(bytes, k)?;
         return Ok(match &sm.perspective {

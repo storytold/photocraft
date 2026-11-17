@@ -114,9 +114,10 @@ pub fn draw_content(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     if let Some(w) = &t.warp {
         // Through a Perspective or Distort placement, the warp's control points are carried into
         // the document and the surface drawn there, as the render does.
+        // An untouched warp shows the placement itself (foreshortened), as the render does.
         let carried = t
             .warp_place
-            .filter(|m| m[6] != 0.0 || m[7] != 0.0)
+            .filter(|m| (m[6] != 0.0 || m[7] != 0.0) && !w.is_identity())
             .and_then(|m| photocraft_algo::warp::warp_in_document(w, &photocraft_algo::transform::Homography(m)));
         draw_warp_content(
             painter,
@@ -138,8 +139,24 @@ pub fn draw_content(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         return;
     }
     if let Some(w) = &t.held_warp {
-        let place = t.box_move().mul(&photocraft_algo::transform::Homography(t.held_place.unwrap_or(photocraft_algo::transform::Homography::IDENTITY.0)));
-        let carried = (place.0[6] != 0.0 || place.0[7] != 0.0).then(|| photocraft_algo::warp::warp_in_document(w, &place)).flatten();
+        let place = t.held_homography();
+        // Held from an upright smart object's Warp, which ran on the placed pixels: the contents'
+        // own texture was never read, so the warp is drawn over the placed box's texture, its
+        // control points carried into the document.
+        if pv.contents.is_none()
+            && let Some(start) = t.held_place.map(photocraft_algo::transform::Homography)
+            && let Some(doc) = photocraft_algo::warp::warp_in_document(w, &place)
+        {
+            let c = [[w.bounds[0], w.bounds[1]], [w.bounds[2], w.bounds[1]], [w.bounds[2], w.bounds[3]], [w.bounds[0], w.bounds[3]]]
+                .map(|p| start.apply(p[0], p[1]));
+            let r = c.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p.0), b[1].min(p.1), b[2].max(p.0), b[3].max(p.1)]);
+            let mesh = doc.to_mesh(1, 1);
+            let placed = Warp::custom(mesh, r);
+            draw_warp_content(painter, xf, r, &placed, None, &|p| p, t.interpolation == "nearest", texels(false, r), pv, display);
+            return;
+        }
+        let carried = (place.0[6] != 0.0 || place.0[7] != 0.0) && !w.is_identity();
+        let carried = carried.then(|| photocraft_algo::warp::warp_in_document(w, &place)).flatten();
         draw_warp_content(painter, xf, w.bounds, w, carried.as_ref(), &t.held_to_doc(), t.interpolation == "nearest", texels(true, w.bounds), pv, display);
         return;
     }

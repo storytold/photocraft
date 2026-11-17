@@ -157,7 +157,9 @@ impl TransformSession {
             let (x, y) = h.apply(q[0], q[1]);
             [x, y]
         };
-        let Some(c) = centre.filter(|&c| w_at(c).abs() > 1e-300) else { return map(p) };
+        // Only a Perspective or Distort placement has a horizon; an affine one maps as it is.
+        let projective = h.0[6] != 0.0 || h.0[7] != 0.0;
+        let Some(c) = centre.filter(|&c| projective && w_at(c).abs() > 1e-300) else { return map(p) };
         let (wc, wp) = (w_at(c), w_at(p));
         let p = if wp / wc < HORIZON_MARGIN {
             let k = (HORIZON_MARGIN * wc - wc) / (wp - wc);
@@ -191,11 +193,17 @@ impl TransformSession {
         Homography::quad_to_quad(self.start_quad(), self.quad).unwrap_or(Homography::IDENTITY)
     }
 
+    /// A smart object's held warp's map to the document now: its placement, then the box's move
+    /// since it opened.
+    pub fn held_homography(&self) -> photocraft_algo::transform::Homography {
+        use photocraft_algo::transform::Homography;
+        self.box_move().mul(&Homography(self.held_place.unwrap_or(Homography::IDENTITY.0)))
+    }
+
     /// Where a smart object's held warp ([`Self::held_warp`], in its contents' space) shows a
     /// point now: through its placement, then the box's move since it opened.
     pub fn held_to_doc(&self) -> impl Fn([f64; 2]) -> [f64; 2] + use<> {
-        use photocraft_algo::transform::Homography;
-        let h = self.box_move().mul(&Homography(self.held_place.unwrap_or(Homography::IDENTITY.0)));
+        let h = self.held_homography();
         move |p| {
             let (x, y) = h.apply(p[0], p[1]);
             [x, y]

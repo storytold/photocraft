@@ -1250,11 +1250,17 @@ pub fn leave_warp(app: &mut PhotocraftApp) {
     // space with the placement, as any other smart object's, so a box moved before Warp comes
     // back shows it through that move exactly (a mesh in document space would have to be split
     // to follow a perspective).
-    let to_contents = app.ui.transform.as_ref().filter(|t| t.warp_place.is_none() && !t.selection && t.path.is_none() && t.target.is_none()).and_then(|t| {
-        let w = t.warp.as_ref().filter(|w| t.warp_entry.as_ref() != Some(*w))?;
-        let layer = app.session.active()?.doc.layer(LayerId(t.layer))?;
-        photocraft_engine::warp_cmds::smart_warp_to_source(layer, w)
-    });
+    // Only a warp begun on the untouched box: one begun after the box moved (the contents couldn't
+    // be read) already carries that move, and the placement would apply it twice.
+    let begun_untouched = |t: &TransformSession| t.warp_box.as_ref().is_some_and(|b| b.quad == corners(b.rect));
+    let to_contents =
+        app.ui.transform.as_ref().filter(|t| t.warp_place.is_none() && !t.selection && t.path.is_none() && t.target.is_none() && begun_untouched(t)).and_then(
+            |t| {
+                let w = t.warp.as_ref().filter(|w| t.warp_entry.as_ref() != Some(*w))?;
+                let layer = app.session.active()?.doc.layer(LayerId(t.layer))?;
+                photocraft_engine::warp_cmds::smart_warp_to_source(layer, w)
+            },
+        );
     let Some(t) = app.ui.transform.as_mut() else { return };
     if let Some((w, place)) = to_contents {
         t.warp = Some(w);

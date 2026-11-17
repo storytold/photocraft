@@ -156,7 +156,6 @@ pub fn smart_placement_axis_aligned(layer: &Layer) -> bool {
     m[8] != 0.0 && m[1] == 0.0 && m[3] == 0.0 && m[6] == 0.0 && m[7] == 0.0 && m[0] / m[8] > 0.0 && m[4] / m[8] > 0.0
 }
 
-/// `w`, in the smart object's source space, mapped through its placement.
 /// A document-space warp of a smart object put back in its contents' space, by `inv` (the inverse
 /// of its placement): the box it then covers, and the warp (`None` for no warp). A preset keeps
 /// its style over that box, a cylinder stays a cylinder where it can.
@@ -183,6 +182,7 @@ pub fn smart_warp_to_source(layer: &Layer, w: &Warp) -> Option<(Warp, Homography
     Some((warp?, t))
 }
 
+/// `w`, in the smart object's source space, mapped through its placement.
 fn placed_warp(sm: &photocraft_doc::SmartObject, w: &Warp) -> Warp {
     let t = crate::smart_cmds::placement(sm);
     let corners = [[w.bounds[0], w.bounds[1]], [w.bounds[2], w.bounds[1]], [w.bounds[2], w.bounds[3]], [w.bounds[0], w.bounds[3]]].map(|p| hom_apply(&t, p));
@@ -717,12 +717,24 @@ fn warp_contents_in(
 /// moves with that edge instead of collapsing onto it.
 pub fn contents_move(old: Homography, old_warp: Option<Warp>, new: Homography, new_warp: Option<Warp>) -> Result<impl Fn(f64, f64) -> (f64, f64) + Sync> {
     let old_inv = old.inverse().ok_or_else(|| EngineError::Other("the smart object's transform is degenerate".into()))?;
-    let old_mesh = old_warp.filter(|w| !w.is_identity()).map(|w| (photocraft_geom::warp::MeshInverse::new(w.to_mesh(1, 1)), w.bounds));
+    // Through a Perspective or Distort placement a warp shows from its control points carried into
+    // the document (`photocraft_algo::warp::place_source_projective`): those points use the
+    // carried surface, so masks and outlines follow the pixels as drawn.
+    let carry = |h: &Homography, w: &Warp| (h.0[6] != 0.0 || h.0[7] != 0.0).then(|| photocraft_algo::warp::warp_in_document(w, h)).flatten();
+    let old_live = old_warp.filter(|w| !w.is_identity());
+    let old_carried = old_live.as_ref().and_then(|w| carry(&old, w));
+    let old_mesh = match &old_carried {
+        Some(c) => Some((photocraft_geom::warp::MeshInverse::new(c.to_mesh(1, 1)), c.bounds)),
+        None => old_live.map(|w| (photocraft_geom::warp::MeshInverse::new(w.to_mesh(1, 1)), w.bounds)),
+    };
+    let old_in_doc = old_carried.is_some();
+    let new_carried = new_warp.as_ref().filter(|w| !w.is_identity()).and_then(|w| carry(&new, w));
     Ok(move |x: f64, y: f64| -> (f64, f64) {
-        let q = hom_apply(&old_inv, [x, y]);
+        let q = if old_in_doc { [x, y] } else { hom_apply(&old_inv, [x, y]) };
         // Back onto the contents: a point outside the old warp goes to the warp's nearest edge
-        // point, and keeps its offset from it as the warp left it (`rest`, in the warp's output
-        // space), so the new warp moves it with that edge and only then adds the offset.
+        // point, and keeps its offset from it as the warp left it (`rest`: in the warp's output
+        // space, or in the document for a carried warp), so the new warp moves it with that edge
+        // and only then adds the offset.
         let (q, rest) = match &old_mesh {
             Some((m, b)) => {
                 let (s, t) = m.param_at(q);
@@ -731,17 +743,45 @@ pub fn contents_move(old: Homography, old_warp: Option<Warp>, new: Homography, n
             }
             None => (q, [0.0, 0.0]),
         };
-        let q = match &new_warp {
-            Some(w) => {
+        match (&new_warp, &new_carried) {
+            (Some(w), Some(c)) => {
+                let b = w.bounds;
+                let on = [q[0].max(b[0]).min(b[2]), q[1].max(b[1]).min(b[3])];
+                let (x, y) = c.map(on[0], on[1]);
+                // The offset outside the box, as the placement shows it there.
+                let (u, v) = w.map(on[0], on[1]);
+                let (ax, ay) = new.apply(u, v);
+                let (bx, by) = new.apply(u + q[0] - on[0], v + q[1] - on[1]);
+                let (rx, ry) = if old_in_doc {
+                    (rest[0], rest[1])
+                } else {
+                    let (cx, cy) = new.apply(u + q[0] - on[0] + rest[0], v + q[1] - on[1] + rest[1]);
+                    (cx - bx, cy - by)
+                };
+                (x + bx - ax + rx, y + by - ay + ry)
+            }
+            (Some(w), None) => {
                 let b = w.bounds;
                 // max/min, not clamp: a stored warp's box can be reversed or NaN.
                 let on = [q[0].max(b[0]).min(b[2]), q[1].max(b[1]).min(b[3])];
                 let (x, y) = w.map(on[0], on[1]);
-                [x + q[0] - on[0], y + q[1] - on[1]]
+                let q = [x + q[0] - on[0], y + q[1] - on[1]];
+                if old_in_doc {
+                    let (dx, dy) = new.apply(q[0], q[1]);
+                    (dx + rest[0], dy + rest[1])
+                } else {
+                    new.apply(q[0] + rest[0], q[1] + rest[1])
+                }
             }
-            None => q,
-        };
-        new.apply(q[0] + rest[0], q[1] + rest[1])
+            (None, _) => {
+                if old_in_doc {
+                    let (dx, dy) = new.apply(q[0], q[1]);
+                    (dx + rest[0], dy + rest[1])
+                } else {
+                    new.apply(q[0] + rest[0], q[1] + rest[1])
+                }
+            }
+        }
     })
 }
 
@@ -837,40 +877,7 @@ pub fn split_warp(w: &Warp, at: Option<[f64; 2]>, how: Split) -> Option<Warp> {
             }
         }
     };
-    if ok && matches!(how, Split::Remove) {
-        restore_default_grid(&mut mesh);
-    }
     ok.then(|| Warp::custom(mesh, w.bounds))
-}
-
-/// After a split is removed: when what is left is the Default grid's thirds that a one-way split
-/// would leave and nothing else, merge them back into the Default grid's
-/// one patch, which draws them as guides again (#12912). Only when that loses nothing: splitting
-/// the merged patch at the thirds must give back the same points, so thirds whose anchors or
-/// handles were moved, or any other grid, stay as they are. The mesh doesn't record where its
-/// sections came from, so a straight 3 x 1 (or 1 x 3) grid at exactly the thirds made another way
-/// merges too; nothing is lost, as the Default grid draws the same lines as guides.
-fn restore_default_grid(mesh: &mut BezierMesh) {
-    const THIRDS: [f64; 4] = [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0];
-    let is = |k: &[f64], want: &[f64]| k.len() == want.len() && k.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-9);
-    let columns = is(&mesh.us, &THIRDS) && is(&mesh.vs, &[0.0, 1.0]);
-    let rows = is(&mesh.vs, &THIRDS) && is(&mesh.us, &[0.0, 1.0]);
-    if !(columns || rows) {
-        return;
-    }
-    let mut merged = mesh.clone();
-    let removed = if columns { merged.remove_split_u(2) && merged.remove_split_u(1) } else { merged.remove_split_v(2) && merged.remove_split_v(1) };
-    if !removed {
-        return;
-    }
-    let mut again = merged.clone();
-    let split = if columns { again.split_u(1.0 / 3.0) && again.split_u(2.0 / 3.0) } else { again.split_v(1.0 / 3.0) && again.split_v(2.0 / 3.0) };
-    let same = split
-        && again.points.len() == mesh.points.len()
-        && again.points.iter().zip(&mesh.points).all(|(a, b)| (a[0] - b[0]).abs() < 1e-6 && (a[1] - b[1]).abs() < 1e-6);
-    if same {
-        *mesh = merged;
-    }
 }
 
 fn param_rect(p: &Value) -> [f64; 4] {
