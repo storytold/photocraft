@@ -1042,6 +1042,8 @@ fn import_stages(
             }
         }
         Route::Svg => svg::import_svg_with_group_depth(name, bytes, opts.max_group_depth),
+        // A `.tx` texture opens as its first MIP level, read-only.
+        Route::Flat if is_tx_texture(name, bytes) => flat::import_tx(name, bytes, opts, ctl),
         Route::Flat => flat::import_flat_with_options(name, bytes, opts, ctl),
     }
 }
@@ -1055,6 +1057,13 @@ pub fn is_svg_input(name: &str, bytes: &[u8]) -> bool {
 
 fn extension(name_or_ext: &str) -> String {
     name_or_ext.rsplit(['.', '/', '\\']).next().unwrap_or(name_or_ext).to_ascii_lowercase()
+}
+
+/// Whether `name` and `bytes` are a `.tx` render texture (a TIFF named `.tx`), which opens
+/// read-only (see [`import`]). For open paths that don't get the importer's
+/// [`ImportResult::source_read_only`], such as the app's inline and automation opens.
+pub fn is_tx_texture(name: &str, bytes: &[u8]) -> bool {
+    has_extension(name, "tx") && photocraft_codecs::detect(bytes) == Some(photocraft_codecs::Format::Tiff)
 }
 
 fn has_extension(name: &str, expected: &str) -> bool {
