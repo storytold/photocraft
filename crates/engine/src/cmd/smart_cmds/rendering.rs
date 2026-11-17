@@ -175,6 +175,8 @@ fn apply_smart_filter(f: &SmartFilter, sm: &SmartObject, cur: &Surface, canvas: 
 
 /// The source placed in document pixels, before any smart filter.
 pub(super) fn place(name: &str, bytes: &[u8], doc: &Document, sm: &SmartObject) -> Result<Surface> {
+    #[cfg(test)]
+    super::PLACEMENTS.with(|p| p.set(p.get() + 1));
     place_with_svg(name, bytes, doc, sm, &mut |bytes, scale| svg_source_image_in(bytes, doc, scale))
 }
 
