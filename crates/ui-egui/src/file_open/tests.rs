@@ -86,7 +86,7 @@ fn aseprite_documents_bypass_swatches_and_keep_their_writable_sprite_path() {
     let bytes = include_bytes!("../../../io/tests/fixtures/aseprite/layers.aseprite");
     for automation in [false, true] {
         for path in ["/pics/sprite.aseprite", "/pics/sprite.ase", "/pics/renamed.psd"] {
-            let (mut app, written) = app_with(vec![None]);
+            let (mut app, written) = app_with(vec![Picked::Cancelled]);
             app.services.import = Some(Box::new(|name, bytes, opts| {
                 photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
             }));

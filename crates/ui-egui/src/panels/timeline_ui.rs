@@ -239,7 +239,7 @@ fn sprite_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, now: f64) {
         Text::new(format!("{:.3}s", elapsed as f64 / 1000.0)).role(TypeRole::Mono).shade(Shade::Muted).show(ui);
         ui.push_id(("sprite-delay", document, frame), |ui| {
             let edit = Slider::new(Bind::given(f64::from(delay)), 0.0..=65_535.0).step(1.0).label(tl!("Frame Delay")).show(ui);
-            let id = ui.id().with("delay-gesture");
+            let id = ui.scope_id().with("delay-gesture");
             let stamp = ui.ctx().cumulative_pass_nr();
             if edit.events.began() {
                 ui.data_mut(|d| d.insert_temp(id, stamp));
