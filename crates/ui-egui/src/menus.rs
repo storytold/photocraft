@@ -26,7 +26,7 @@ use bar::pointer_reaches_title;
 pub use invoke::{apply_workspace, invoke};
 pub(crate) use invoke::{invoke_unguarded, panel_alias};
 pub(crate) use items::ItemCache;
-pub use items::{MenuItem, is_live, menu_items};
+pub use items::{MenuItem, SHOW_ALL_ITEM, is_live, menu_items, menu_items_showing, native_show_all_id, show_all_items, show_all_path};
 pub use render::alt_click;
 #[cfg(test)]
 use render::submenu_enabled;

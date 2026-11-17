@@ -846,6 +846,9 @@ fn invoke_window_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str)
             app.jobs.focus = None;
             Ok(json!({"document": next}))
         })()),
+        // Show All Menu Items (#14333) chosen in the macOS menu bar or by an agent; the in-window
+        // bar reopens its menu itself.
+        _ if id.starts_with(crate::menus::SHOW_ALL_ITEM) => Some(crate::menus::show_all_items(app, ctx, id)),
         _ if id.starts_with(DOCUMENT_ITEM) => Some((|| {
             let count = app.session.documents().len();
             let next =

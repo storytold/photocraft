@@ -1,5 +1,5 @@
 use super::invoke::invoke;
-use super::items::{ItemCache, MenuItem, menu_items};
+use super::items::{ItemCache, MenuItem, SHOW_ALL_ITEM, menu_items, menu_items_showing, show_all_path};
 use super::render::{alt_click, render_level, render_level_rows};
 use super::search::help_search;
 use super::{PhotocraftApp, TOP_MENUS, Value, json};
@@ -11,6 +11,13 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> f32 {
     // Built only while a menu is open: every item's enabled/checked state scales with the
     // document (layer lookups), which cost milliseconds per frame on large layouts (#125). While
     // one stays open, the items are reused until what they depend on changes.
+    // One open of a menu with every item shown (#14333): its title and popup, set by Show All Menu
+    // Items or a ⌘-click (Ctrl+click) on the title; gone once that menu closes.
+    let mut show_all: Option<(String, egui::Id)> = ui.ctx().data(|d| d.get_temp(show_all_id()));
+    if show_all.as_ref().is_some_and(|(_, popup)| !egui::Popup::is_id_open(ui.ctx(), *popup)) {
+        show_all = None;
+    }
+    let mut popups: Vec<(&str, egui::Id)> = Vec::with_capacity(TOP_MENUS.len());
     let kept = std::cell::Cell::new(app.menu_cache.take());
     let built: std::cell::OnceCell<ItemCache> = std::cell::OnceCell::new();
     let app_ref: &PhotocraftApp = app;
@@ -62,6 +69,14 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> f32 {
                 let bar = egui::containers::menu::MenuConfig::find(ui);
                 let config = egui::containers::menu::MenuConfig::new().close_behavior(bar.close_behavior).style(bar.style.clone());
                 let open = title_press(ui.ctx(), &title);
+                let popup = egui::Popup::default_response_id(&title);
+                popups.push((top, popup));
+                // A press that opens the menu: ⌘ (Ctrl) shows every item for this open, a plain
+                // press the menu as set in Edit › Menus.
+                if matches!(open, Some(egui::SetOpenCommand::Bool(true))) {
+                    show_all = ui.input(|i| i.modifiers.command).then(|| (top.to_string(), popup));
+                }
+                let full: Option<Vec<MenuItem>> = show_all.as_ref().filter(|(t, _)| t == top).map(|_| menu_items_showing(app_ref, Some(top)));
                 // The release ending the press that opened this menu is a click "outside" the
                 // popup: it must not close it again.
                 let opening = title.clicked() && ui.ctx().data(|d| d.get_temp::<bool>(press_gesture_id())).unwrap_or(false);
@@ -81,14 +96,19 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> f32 {
                     .style(config.style.clone())
                     .info(egui::UiStackInfo::new(egui::UiKind::Menu).with_tag_value(egui::containers::menu::MenuConfig::MENU_CONFIG_TAG, config))
                     .show(|ui| {
-                        let items = &built
-                            .get_or_init(|| {
-                                let state = crate::native_menu::state_hash(app_ref, None);
-                                let input = crate::native_menu::had_input(ui.ctx());
-                                let items = kept.take().and_then(|c| c.reuse(state, input)).unwrap_or_else(|| menu_items(app_ref));
-                                ItemCache { state, items }
-                            })
-                            .items;
+                        let items = match &full {
+                            Some(all) => all,
+                            None => {
+                                &built
+                                    .get_or_init(|| {
+                                        let state = crate::native_menu::state_hash(app_ref, None);
+                                        let input = crate::native_menu::had_input(ui.ctx());
+                                        let items = kept.take().and_then(|c| c.reuse(state, input)).unwrap_or_else(|| menu_items(app_ref));
+                                        ItemCache { state, items }
+                                    })
+                                    .items
+                            }
+                        };
                         let mine: Vec<&MenuItem> = items.iter().filter(|i| i.path.first().map(String::as_str) == Some(*top)).collect();
                         ui.set_min_width(220.0);
                         if mine.is_empty() {
@@ -132,6 +152,21 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> f32 {
     if ui.input(|i| i.pointer.primary_released() || !i.pointer.primary_down()) {
         ui.ctx().data_mut(|d| d.remove::<bool>(press_gesture_id()));
     }
+    // Show All Menu Items: the same menu again at once, every item shown, without the row.
+    if let Some(top) = clicked.as_deref().filter(|id| id.starts_with(SHOW_ALL_ITEM)).and_then(show_all_path).map(|p| p[0].clone()) {
+        clicked = None;
+        if let Some((_, popup)) = popups.iter().find(|(t, _)| *t == top) {
+            egui::Popup::open_id(ui.ctx(), *popup);
+            show_all = Some((top, *popup));
+            ui.ctx().request_repaint();
+        }
+    }
+    ui.ctx().data_mut(|d| match show_all {
+        Some(s) => {
+            d.insert_temp(show_all_id(), s);
+        }
+        None => d.remove::<(String, egui::Id)>(show_all_id()),
+    });
     if let Some(id) = clicked {
         let ctx = ui.ctx().clone();
         let alt = ctx.input(|i| i.modifiers.alt);
@@ -152,6 +187,10 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> f32 {
         }
     }
     edge
+}
+
+fn show_all_id() -> egui::Id {
+    egui::Id::unique("menu-show-all")
 }
 
 fn press_gesture_id() -> egui::Id {

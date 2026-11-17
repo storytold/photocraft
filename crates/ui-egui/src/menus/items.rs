@@ -47,7 +47,41 @@ const PLACE_AFTER: &[(&str, &str)] = &[
     ("filter.other.colorToAlpha", "filter.other.offset"),
 ];
 
+/// Show All Menu Items (#14333): the row ending a menu that has items hidden in Edit › Menus.
+/// Its id is this prefix and the menu's path joined by [`SHOW_ALL_PATH_SEP`].
+pub const SHOW_ALL_ITEM: &str = "menus.showAll:";
+const SHOW_ALL_PATH_SEP: &str = " › ";
+
+/// The menu path a [`SHOW_ALL_ITEM`] row belongs to.
+pub fn show_all_path(id: &str) -> Option<Vec<String>> {
+    let path = id.strip_prefix(SHOW_ALL_ITEM)?;
+    (!path.is_empty()).then(|| path.split(SHOW_ALL_PATH_SEP).map(str::to_string).collect())
+}
+
+/// Context data: the top-level menu the native macOS menu bar shows in full (Show All Menu Items
+/// chosen there), until another of its items is chosen.
+pub fn native_show_all_id() -> egui::Id {
+    egui::Id::unique("menus-native-show-all")
+}
+
+/// Show All Menu Items chosen outside the in-window bar (the macOS menu bar, `ui.menu.invoke`):
+/// the native bar shows that top-level menu in full until another item runs, and the result
+/// lists the menu with every item, so an agent sees what was hidden.
+pub fn show_all_items(app: &PhotocraftApp, ctx: &egui::Context, id: &str) -> Result<serde_json::Value, String> {
+    let path = show_all_path(id).ok_or("no such menu")?;
+    let top = path[0].clone();
+    ctx.data_mut(|d| d.insert_temp(native_show_all_id(), top.clone()));
+    let items: Vec<MenuItem> = menu_items_showing(app, Some(&top)).into_iter().filter(|i| i.path.starts_with(&path)).collect();
+    Ok(serde_json::json!({"menu": path, "items": items}))
+}
+
 pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
+    menu_items_showing(app, None)
+}
+
+/// [`menu_items`], with every item of the top-level menu `show_all` shown, hidden ones too, and no
+/// Show All Menu Items row in it: one open after Show All Menu Items or a ⌘-click on its title.
+pub fn menu_items_showing(app: &PhotocraftApp, show_all: Option<&str>) -> Vec<MenuItem> {
     // 1) Photoshop's full menu tree, in Photoshop order; live where we implement the command.
     let known = is_live;
     let mut items: Vec<MenuItem> = crate::menu_catalog::CATALOG
@@ -224,9 +258,7 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
             }
         }
     }
-    if !prefs.menus.hidden.is_empty() {
-        items.retain(|i| !prefs.menus.is_hidden(&i.id));
-    }
+    hide_items(&mut items, &prefs.menus, show_all);
     if prefs.interface.show_menu_colors {
         for it in &mut items {
             it.color = prefs.menus.colors.get(&it.id).cloned();
@@ -249,6 +281,42 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
         item.label = label.into();
     }
     items
+}
+
+/// Drops the items hidden in Edit › Menus, except under the top-level menu `show_all`, and ends
+/// each menu that lost one with Show All Menu Items (#14333).
+fn hide_items(items: &mut Vec<MenuItem>, menus: &photocraft_engine::prefs::MenuCustomization, show_all: Option<&str>) {
+    if menus.hidden.is_empty() {
+        return;
+    }
+    let shown = |i: &MenuItem| show_all.is_some_and(|top| i.path.first().is_some_and(|p| p == top));
+    let hides = |i: &MenuItem| !shown(i) && menus.is_hidden(&i.id);
+    let mut losing: Vec<Vec<String>> = Vec::new();
+    for i in items.iter().filter(|i| hides(i)) {
+        if !losing.contains(&i.path) {
+            losing.push(i.path.clone());
+        }
+    }
+    items.retain(|i| !hides(i));
+    // A submenu's row before its parents', so a submenu with every item hidden (it goes where its
+    // parent ends) lands ahead of the parent's own row, which stays last in the menu.
+    losing.sort_by_key(|p| std::cmp::Reverse(p.len()));
+    for path in losing {
+        show_all_row(items, path);
+    }
+}
+
+/// Ends the menu at `path` (after its submenus' rows) with a separator and Show All Menu Items.
+fn show_all_row(items: &mut Vec<MenuItem>, path: Vec<String>) {
+    let row = |id: String, label: &str| MenuItem { id, label: label.into(), path: path.clone(), shortcut: None, enabled: true, checked: None, color: None };
+    // After the menu's last row; a menu whose every row is hidden goes where its parent ends.
+    let at = items
+        .iter()
+        .rposition(|i| i.path.starts_with(&path))
+        .or_else(|| items.iter().rposition(|i| i.path.starts_with(&path[..path.len().saturating_sub(1).max(1)])))
+        .map_or(items.len(), |i| i + 1);
+    let id = format!("{SHOW_ALL_ITEM}{}", path.join(SHOW_ALL_PATH_SEP));
+    items.splice(at..at, [row("---".into(), "---"), row(id, "Show All Menu Items")]);
 }
 
 /// Background tint of an Edit › Menus colour name.
@@ -280,3 +348,7 @@ impl ItemCache {
         (!input && self.state == state).then_some(self.items)
     }
 }
+
+#[cfg(test)]
+#[path = "show_all_menu_items_tests.rs"]
+mod show_all_menu_items_tests;
