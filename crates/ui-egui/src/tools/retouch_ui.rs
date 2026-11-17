@@ -165,10 +165,23 @@ pub(crate) fn pattern_stamp_params(app: &PhotocraftApp, points: &[[f64; 3]]) -> 
     {
         p["phase"] = json!(ph);
     }
-    if let Some(id) = photocraft_engine::presets::patterns::current(&app.session).or(app.session.patterns.items.first()).map(|x| x.id.clone()) {
+    if let Some(id) = pattern_stamp_pattern_id(app) {
         p["pattern"] = json!(id);
     }
     p
+}
+
+/// The pattern the Pattern Stamp paints with (#12868): its own choice when it has one and that
+/// pattern still exists, else the shared selection Fill and the Paint Bucket read, else the first
+/// pattern in the library. Reset Tool sets the tool's own choice without touching the shared one.
+pub(crate) fn pattern_stamp_pattern_id(app: &PhotocraftApp) -> Option<String> {
+    app.ui
+        .tool_options
+        .pattern_stamp_pattern
+        .as_deref()
+        .and_then(|id| app.session.patterns.items.iter().find(|p| p.id == id))
+        .map(|p| p.id.clone())
+        .or_else(|| photocraft_engine::presets::patterns::current(&app.session).or(app.session.patterns.items.first()).map(|x| x.id.clone()))
 }
 
 /// The jitter seed of a stroke drawn live and committed on release: from its first position, which

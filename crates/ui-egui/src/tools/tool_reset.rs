@@ -86,6 +86,17 @@ fn reset_tool(app: &mut PhotocraftApp, tool: Tool) {
     if crate::tool_feedback::is_selection_tool(tool) || matches!(tool, Tool::Patch | Tool::ContentAwareMove) {
         app.ui.selection_mode = 0;
     }
+    // Pattern Stamp: its own pattern goes back to the first of the first default group, while Fill
+    // and the Paint Bucket keep the shared pattern selection (#12868). A missing built-in leaves
+    // the tool following the shared selection, so no stale id can be painted.
+    if tool == Tool::PatternStamp
+        && let Some(id) = photocraft_engine::presets::patterns::builtin_groups()
+            .first()
+            .and_then(|g| g.items.first())
+            .filter(|id| app.session.patterns.items.iter().any(|p| p.id == **id))
+    {
+        app.ui.tool_options.pattern_stamp_pattern = Some(id.clone());
+    }
     if crate::paint_mouse::has_brush_picker(tool) {
         // The session brush is the options bar's tool's: make sure it is `tool`'s before resetting.
         crate::paint_mouse::sync_tool_brush(app);
@@ -230,7 +241,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::RedEye => reset!(red_eye_pupil_size, red_eye_darken),
         Tool::CloneStamp => reset!(clone_aligned, clone_sample),
         Tool::ArtHistoryBrush => reset!(art_history_style, art_history_area, art_history_tolerance),
-        Tool::PatternStamp => reset!(pattern_stamp_aligned, pattern_stamp_impressionist, pattern_stamp_scale, pattern_stamp_angle),
+        Tool::PatternStamp => reset!(pattern_stamp_aligned, pattern_stamp_impressionist, pattern_stamp_scale, pattern_stamp_angle, pattern_stamp_pattern),
         Tool::Blur | Tool::Sharpen => reset!(strength, protect_detail),
         Tool::Smudge => reset!(strength, finger_painting, smudge_mode),
         Tool::Dodge | Tool::Burn => reset!(tone_range, exposure, protect_tones),
