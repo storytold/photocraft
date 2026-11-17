@@ -10,7 +10,7 @@ use photocraft_raster::{Surface, from_rgba, from_rgba_into, to_rgba};
 use serde::{Deserialize, Serialize};
 
 use crate::Stroke;
-use crate::retouch::{alpha_index, apply_dab_stroke, over_native};
+use crate::retouch::{StrokeTooLarge, alpha_index, apply_dab_stroke, over_native};
 use photocraft_geom::Rect;
 
 /// Fraction of the way the pickup colour moves towards the canvas colour per dab at 100 % Wet.
@@ -175,7 +175,7 @@ pub fn apply_mixer_stroke(
     state: &mut MixerState,
     selection: Option<&Surface>,
     lock_transparency: bool,
-) -> Rect {
+) -> Result<Rect, StrokeTooLarge> {
     let fmt = target.format();
     let mut st = stroke.clone();
     st.brush.opacity = 1.0;
@@ -341,7 +341,8 @@ mod tests {
             let mut s = Surface::new(PixelFormat::RGBA8);
             let mut st = MixerState::default();
             st.load([1.0, 0.0, 0.0, 1.0]);
-            apply_mixer_stroke(&mut s, None, &stroke(10.0), &MixerSettings { wet: 0.0, load, mix: 0.0, flow: 1.0, ..Default::default() }, &mut st, None, false);
+            apply_mixer_stroke(&mut s, None, &stroke(10.0), &MixerSettings { wet: 0.0, load, mix: 0.0, flow: 1.0, ..Default::default() }, &mut st, None, false)
+                .unwrap();
             let (start, end) = (s.rgba(10, 10)[3], s.rgba(190, 10)[3]);
             assert!(start > 0.95, "{start}");
             if expect_dry {
@@ -370,7 +371,8 @@ mod tests {
             &mut st,
             None,
             false,
-        );
+        )
+        .unwrap();
         // Blue is dragged into the white half.
         let c = s.rgba(115, 10);
         assert!(c[2] > c[1] + 0.05 && c[1] < 0.95, "{c:?}");
@@ -391,7 +393,7 @@ mod tests {
         // On red, the clean wet brush smears red and lays down none of the blue it was loaded with.
         let mut s = Surface::new(PixelFormat::RGBA8);
         s.fill_rect(Rect::new(0, 0, 200, 20), &[1.0, 0.0, 0.0, 1.0]);
-        apply_mixer_stroke(&mut s, None, &stroke(10.0), &MixerSettings::default(), &mut st, None, false);
+        apply_mixer_stroke(&mut s, None, &stroke(10.0), &MixerSettings::default(), &mut st, None, false).unwrap();
         let c = s.rgba(100, 10);
         assert!(c[0] > 0.99 && c[1] < 0.01 && c[2] < 0.01, "{c:?}");
     }
@@ -459,7 +461,7 @@ mod tests {
     fn dry_empty_brush_paints_nothing() {
         let mut s = Surface::new(PixelFormat::RGBA8);
         let mut st = MixerState::default();
-        let dmg = apply_mixer_stroke(&mut s, None, &stroke(10.0), &MixerSettings { wet: 0.0, ..Default::default() }, &mut st, None, false);
+        let dmg = apply_mixer_stroke(&mut s, None, &stroke(10.0), &MixerSettings { wet: 0.0, ..Default::default() }, &mut st, None, false).unwrap();
         assert!(!dmg.is_empty());
         assert_eq!(s.rgba(50, 10)[3], 0.0);
     }
@@ -477,7 +479,8 @@ mod tests {
             for p in &mut k.points {
                 p.pressure = pressure;
             }
-            apply_mixer_stroke(&mut s, None, &k, &MixerSettings { wet: 1.0, load: 1.0, mix: 1.0, flow: 1.0, ..Default::default() }, &mut st, None, false);
+            apply_mixer_stroke(&mut s, None, &k, &MixerSettings { wet: 1.0, load: 1.0, mix: 1.0, flow: 1.0, ..Default::default() }, &mut st, None, false)
+                .unwrap();
             st.pickup
         };
         assert!(run(0.0).is_none());

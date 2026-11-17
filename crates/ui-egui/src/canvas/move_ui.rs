@@ -20,8 +20,8 @@ use crate::state::Tool;
 /// rather than the whole layer, with `tool` in effect? With a selection, as in Photoshop; a layer
 /// whose pixels can't float (type, shape, Smart Object, group, position-locked), a hidden layer or
 /// several selected layers still move whole, as without one. The canvas cursor asks before the
-/// press, and a pointer event passes `canvas::event_tool`, which also sees a ⌘ sent with the event
-/// (#2768).
+/// press, and the ⌘ stand-in (the host's `StandInKey::Command`) runs the Move tool for a press made
+/// with ⌘ held, also when ⌘ comes with the event (#2768).
 pub(crate) fn moves_selected_pixels_with(app: &PhotocraftApp, tool: Tool) -> bool {
     let Some(st) = app.session.active() else { return false };
     tool == Tool::Move
@@ -49,10 +49,7 @@ fn float_selected_as(app: &mut PhotocraftApp, copy: bool, dx: f64, dy: f64, step
     let floating = app.session.active().is_some_and(|st| photocraft_engine::float_cmds::floating(st).is_some());
     let dropped = if copy && floating { app.run("select.drop", json!({})) } else { Ok(json!(null)) };
     match dropped.and_then(|_| app.run("select.float", json!({"dx": dx, "dy": dy, "copy": copy, "stepName": step_name}))) {
-        Ok(_) => {
-            crate::snap_ui::follow_cut(app);
-            true
-        }
+        Ok(_) => true,
         Err(e) => {
             app.ui.status = e;
             app.ui.status_error = true;
@@ -168,7 +165,7 @@ pub(crate) struct MovePreview {
     pattern: bool,
 }
 
-/// The reduced picture of the moving layers a costly drag shows at the pointer ([`draw_snapshot`]).
+/// The reduced picture of the moving layers a costly drag shows at the pointer ([`snapshot_shapes`]).
 pub(crate) struct Snapshot {
     /// The document area it shows, at offset (0, 0).
     rect: Rect,
@@ -335,15 +332,20 @@ fn snapshot_pool() -> Option<&'static rayon::ThreadPool> {
     .as_ref()
 }
 
-/// Draws a costly drag's snapshot at the pointer, once its render has arrived (taking it).
-pub(crate) fn draw_snapshot(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &crate::canvas::ViewXform) {
+/// A costly drag's snapshot at the pointer, once its render has arrived (taking it), as shapes for
+/// the picture slot of a canvas showing document `idx` (over the picture, under the controls):
+/// none unless the drag is in that document.
+pub(crate) fn snapshot_shapes(app: &mut PhotocraftApp, ctx: &egui::Context, view: &craft::behavior::CanvasView, idx: usize) -> Vec<egui::Shape> {
+    if !app.move_preview.as_ref().is_some_and(|p| app.session.documents().get(idx).is_some_and(|st| st.doc.id == p.doc)) {
+        return Vec::new();
+    }
     let offset = drag_offset(app);
     // Converted for the monitor the way the canvas is, so the layers keep their colours in the drag.
     let doc = app.move_preview.as_ref().and_then(|p| app.session.documents().iter().find(|st| st.doc.id == p.doc)).map(|st| st.doc.clone());
-    let display = doc.and_then(|d| super::display::canvas_display(app, &d, crate::monitor_status::view_display(app, painter.ctx())).0);
-    let Some(p) = app.move_preview.as_mut() else { return };
+    let display = doc.and_then(|d| super::display::canvas_display(app, &d, crate::monitor_status::view_display(app, ctx)).0);
+    let Some(p) = app.move_preview.as_mut() else { return Vec::new() };
     let canvas = p.canvas;
-    let Some(s) = p.snapshot.as_mut() else { return };
+    let Some(s) = p.snapshot.as_mut() else { return Vec::new() };
     if let Some(rx) = &s.rx {
         match rx.try_recv() {
             Ok(buf) => {
@@ -351,13 +353,13 @@ pub(crate) fn draw_snapshot(app: &mut PhotocraftApp, painter: &egui::Painter, xf
                 if buf.px.len() == size[0] * size[1] {
                     s.picture = Some(buf);
                     // The next frame hides the layers under it (`display_doc`), with or without input.
-                    painter.ctx().request_repaint();
+                    ctx.request_repaint();
                 }
                 s.rx = None;
             }
             Err(std::sync::mpsc::TryRecvError::Disconnected) => s.rx = None,
             // The render thread can't wake the UI: look again soon, even if the pointer rests.
-            Err(std::sync::mpsc::TryRecvError::Empty) => painter.ctx().request_repaint_after(std::time::Duration::from_millis(50)),
+            Err(std::sync::mpsc::TryRecvError::Empty) => ctx.request_repaint_after(std::time::Duration::from_millis(50)),
         }
     }
     let key = display.as_ref().map_or(0, |d| d.key);
@@ -369,18 +371,22 @@ pub(crate) fn draw_snapshot(app: &mut PhotocraftApp, painter: &egui::Painter, xf
         if s.textures.len() >= SNAPSHOT_DISPLAYS {
             drop(s.textures.remove(0));
         }
-        s.textures.push((key, painter.ctx().load_texture("move-drag-snapshot", image, egui::TextureOptions::LINEAR)));
+        s.textures.push((key, ctx.load_texture("move-drag-snapshot", image, egui::TextureOptions::LINEAR)));
     }
     let texture = s.textures.iter().find(|(k, _)| *k == key).map(|(_, t)| t);
-    let (Some(texture), Some((dx, dy))) = (texture, offset) else { return };
-    let Some((r, uvs)) = snapshot_quad(s.rect.translate(dx, dy), canvas) else { return };
+    let (Some(texture), Some((dx, dy))) = (texture, offset) else { return Vec::new() };
+    let Some((r, uvs)) = snapshot_quad(s.rect.translate(dx, dy), canvas) else { return Vec::new() };
     let corners = [(r.x0, r.y0), (r.x1, r.y0), (r.x1, r.y1), (r.x0, r.y1)];
     let mut mesh = egui::Mesh::with_texture(texture.id());
     for ((x, y), uv) in corners.into_iter().zip(uvs) {
-        mesh.vertices.push(egui::epaint::Vertex { pos: xf.to_screen(x as f32, y as f32), uv, color: egui::Color32::WHITE });
+        mesh.vertices.push(egui::epaint::Vertex {
+            pos: view.to_screen(craft::behavior::kurbo::Point::new(f64::from(x), f64::from(y))),
+            uv,
+            color: egui::Color32::WHITE,
+        });
     }
     mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
-    painter.add(egui::Shape::mesh(mesh));
+    vec![egui::Shape::mesh(mesh)]
 }
 
 /// The part of a snapshot drawn at `full` that lies on `canvas`, and the texture coordinates of its
@@ -430,22 +436,16 @@ pub(crate) fn pattern_wrap(app: &PhotocraftApp, mut args: serde_json::Value) -> 
     args
 }
 
-/// The whole-pixel offset of the current Move drag on document `idx`, if one is under way.
+/// The whole-pixel offset of the current Move drag on document `idx`, if one is under way. The
+/// tool's ΔX/ΔY readout shows the same value (#5727); Free Transform shows its own.
 fn drag_offset(app: &PhotocraftApp) -> Option<(i32, i32)> {
-    let d = app.drag.as_ref().filter(|d| d.tool == Tool::Move)?;
-    let end = d.points.last().map_or(d.start, |p| [p[0], p[1]]);
-    let dx = (end[0] - d.start[0]).round().clamp(-1e7, 1e7) as i32;
-    let dy = (end[1] - d.start[1]).round().clamp(-1e7, 1e7) as i32;
-    Some((dx, dy))
+    app.canvas_tools.mover.offset()
 }
 
-/// The ΔX/ΔY values shown beside the pointer while the Move tool drags layers or selected pixels,
-/// as in Photoshop (#5727): the whole pixels the release will move them. Free Transform shows its
-/// own (`transform_tool::live_readout`). `None` until the pointer moves.
-pub(crate) fn offset_readout(app: &PhotocraftApp) -> Option<[String; 2]> {
-    app.drag.as_ref().filter(|d| d.points.len() > 1)?;
-    let (dx, dy) = drag_offset(app)?;
-    Some([dx, dy].map(|v| format!("{v} px")))
+/// The offset of the drag in progress: the selection tools' drag of the selection, else the Move
+/// tool's drag of the selected pixels.
+fn drag_delta(app: &PhotocraftApp) -> (i32, i32) {
+    app.canvas_tools.selection.drag_offset().or_else(|| app.canvas_tools.mover.offset()).unwrap_or((0, 0))
 }
 
 /// The document to show while a Move drag is under way on document `idx`: the moving layers at
@@ -586,7 +586,7 @@ fn shape_reach(l: &photocraft_doc::Layer, canvas: Rect) -> Option<Rect> {
 }
 
 /// `ids` and every layer inside them (groups move their contents).
-fn with_descendants(doc: &Document, ids: &[LayerId]) -> Vec<LayerId> {
+pub(crate) fn with_descendants(doc: &Document, ids: &[LayerId]) -> Vec<LayerId> {
     let walk = doc.walk();
     let roots: Vec<_> = walk.iter().filter(|(_, _, l)| ids.contains(&l.id)).map(|(p, _, _)| p.as_slice()).collect();
     walk.iter().filter(|(p, _, _)| roots.iter().any(|r| p.starts_with(r))).map(|(_, _, l)| l.id).collect()
@@ -608,10 +608,10 @@ pub(crate) fn shown_layer_offset(app: &PhotocraftApp, doc: DocId, revision: u64,
     p.offsets.last().copied()
 }
 
-/// A floating selection's offset plus a drag of it in progress (`canvas::selection_drag_delta`).
+/// A floating selection's offset plus a drag of it in progress ([`drag_delta`]).
 pub(crate) fn floating_offset(app: &PhotocraftApp) -> Option<(i32, i32)> {
     let f = photocraft_engine::float_cmds::floating(app.session.active()?)?;
-    let d = crate::canvas::selection_drag_delta(app).unwrap_or((0, 0));
+    let d = drag_delta(app);
     Some((f.offset.0 + d.0, f.offset.1 + d.1))
 }
 
@@ -649,7 +649,7 @@ fn floating_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u
     let shown = app.move_preview.as_ref()?.offsets.last() != Some(&offset);
     if shown {
         let t0 = crate::gpu_canvas::now_ms();
-        let d = photocraft_engine::float_cmds::displayed(st, crate::canvas::selection_drag_delta(app).unwrap_or((0, 0)))?;
+        let d = photocraft_engine::float_cmds::displayed(st, drag_delta(app))?;
         let d = photocraft_engine::mode_cmds::display_document(&d).unwrap_or(d);
         let p = app.move_preview.as_mut()?;
         p.shown = Some(Arc::new(d));

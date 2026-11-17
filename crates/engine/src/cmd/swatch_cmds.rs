@@ -1,21 +1,20 @@
 //! Swatches panel commands (`swatches.*`): add, delete, rename, reorder and group swatches, set
 //! the foreground or background colour from one, restore the defaults, and import or export
-//! Photoshop `.aco` and Adobe Swatch Exchange `.ase` files.
+//! swatch files (`.aco`, `.act`, `.ase`, `.gpl`; export also `.css`).
 //!
 //! The library is [`PresetState::swatches`](crate::presets::PresetState) (model and colour
-//! conversions in [`crate::presets::swatches`]); file parsing is `photocraft_psd::{aco, ase}`.
-//! Swatches are addressed by name (names are kept unique across the library, as for the other
-//! presets), optionally narrowed by `group`, or by `index` (position across all groups, in
-//! panel order). Like the other preset commands they change the preferences document, not a
-//! document's history.
+//! conversions in [`crate::presets::swatches`]); the file formats are craft-color's
+//! (`craft::color_ui::palette`). Swatches are addressed by name (names are kept unique across the
+//! library, as for the other presets), optionally narrowed by `group`, or by `index` (position
+//! across all groups, in panel order). Like the other preset commands they change the
+//! preferences document, not a document's history.
 
-use photocraft_psd::aco::{AcoColor, AcoSwatch};
-use photocraft_psd::ase::{AseColor, AseEntry, AseFile, AseKind, AseSwatch};
+use craft::color_ui::palette::{SwatchFormat, SwatchNote, default_swatches, read_swatches, write_swatches};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
-use crate::presets::swatches::{Swatch, SwatchColor, SwatchConv, SwatchKind, builtin, hex, hsb_to_rgb};
-use crate::presets::{Group, bad, find, str_param, unique_name};
+use crate::presets::swatches::{SwatchColor, SwatchConv, SwatchEntry, SwatchGroup, SwatchKind, color_from_param, color_json, hex, kind_id, parse_kind};
+use crate::presets::{bad, str_param};
 use crate::{Result, Session};
 
 /// Most swatches the library holds (imports beyond it are refused).
@@ -26,14 +25,14 @@ pub const MAX_GROUPS: usize = 10_000;
 pub const MAX_NAME: usize = 255;
 
 /// Trim a hand-edited or imported library to the limits (never refuse to start over it).
-pub fn cap_library(groups: &mut Vec<Group<Swatch>>) {
+pub fn cap_library(groups: &mut Vec<SwatchGroup>) {
     groups.truncate(MAX_GROUPS);
     let mut left = MAX_SWATCHES;
     for g in groups.iter_mut() {
-        g.items.truncate(left);
-        left -= g.items.len();
+        g.entries.truncate(left);
+        left -= g.entries.len();
         g.name = clip(&g.name);
-        for s in &mut g.items {
+        for s in &mut g.entries {
             s.name = clip(&s.name);
         }
     }
@@ -43,8 +42,8 @@ fn clip(s: &str) -> String {
     s.chars().take(MAX_NAME).collect()
 }
 
-fn total(groups: &[Group<Swatch>]) -> usize {
-    groups.iter().map(|g| g.items.len()).sum()
+fn total(groups: &[SwatchGroup]) -> usize {
+    groups.iter().map(|g| g.entries.len()).sum()
 }
 
 fn always(_: &Session) -> std::result::Result<(), String> {
@@ -67,20 +66,35 @@ fn name_param(p: &Value, k: &str, cmd: &str) -> Result<Option<String>> {
     }
 }
 
+/// Position (group, swatch) of the swatch called `name`, optionally only in `group`.
+fn locate_swatch(groups: &[SwatchGroup], name: &str, group: Option<&str>) -> Option<(usize, usize)> {
+    crate::presets::find_in(groups.iter().map(|g| (g.name.as_str(), g.entries.iter().map(|e| e.name.as_str()))), name, group)
+}
+
+/// `base`, or `base 2`, `base 3`… so swatch names stay unique across all groups.
+fn unique_swatch_name(groups: &[SwatchGroup], base: &str) -> String {
+    crate::presets::unique_name_by(base, |n| groups.iter().any(|g| g.entries.iter().any(|e| e.name == n)))
+}
+
+/// `base`, or `base 1`, `base 2`… so group names stay unique.
+fn unique_group(groups: &[SwatchGroup], base: &str) -> String {
+    crate::presets::unique_group(base, |n| groups.iter().any(|g| g.name == n))
+}
+
 /// The swatch a command names: `"swatch"` (name, narrowed by `"group"`) or `"index"`.
 fn locate(s: &Session, p: &Value, cmd: &str) -> Result<(usize, usize)> {
     let groups = &s.presets.swatches;
     if let Some(name) = str_param(p, "swatch") {
-        return find(groups, name, str_param(p, "group")).ok_or_else(|| bad(cmd, format!("no swatch \"{name}\" (see swatches.list)")));
+        return locate_swatch(groups, name, str_param(p, "group")).ok_or_else(|| bad(cmd, format!("no swatch \"{name}\" (see swatches.list)")));
     }
     if let Some(i) = p.get("index") {
         let i = i.as_u64().ok_or_else(|| bad(cmd, "`index` must be a non-negative integer"))?;
         let mut left = usize::try_from(i).unwrap_or(usize::MAX);
         for (gi, g) in groups.iter().enumerate() {
-            if left < g.items.len() {
+            if left < g.entries.len() {
                 return Ok((gi, left));
             }
-            left -= g.items.len();
+            left -= g.entries.len();
         }
         return Err(bad(cmd, format!("no swatch at index {i} (the panel has {})", total(groups))));
     }
@@ -89,10 +103,10 @@ fn locate(s: &Session, p: &Value, cmd: &str) -> Result<(usize, usize)> {
 
 /// Name → position of the first swatch with that name (optionally only in `group`), so commands
 /// taking lists of names stay linear on big libraries.
-fn index_by_name<'a>(groups: &'a [Group<Swatch>], group: Option<&str>) -> std::collections::HashMap<&'a str, (usize, usize)> {
+fn index_by_name<'a>(groups: &'a [SwatchGroup], group: Option<&str>) -> std::collections::HashMap<&'a str, (usize, usize)> {
     let mut m = std::collections::HashMap::new();
     for (gi, g) in groups.iter().enumerate().filter(|(_, g)| group.is_none_or(|n| g.name == n)) {
-        for (ii, sw) in g.items.iter().enumerate() {
+        for (ii, sw) in g.entries.iter().enumerate() {
             m.entry(sw.name.as_str()).or_insert((gi, ii));
         }
     }
@@ -103,16 +117,12 @@ fn group_of(s: &Session, name: &str, cmd: &str) -> Result<usize> {
     s.presets.swatches.iter().position(|g| g.name == name).ok_or_else(|| bad(cmd, format!("no swatch group \"{name}\"")))
 }
 
-fn unique_group(groups: &[Group<Swatch>], base: &str) -> String {
-    crate::presets::gradients::unique_group(groups, base)
-}
-
-fn swatch_json(conv: &SwatchConv, sw: &Swatch) -> Value {
-    let mut v = sw.color.to_json();
+fn swatch_json(conv: &SwatchConv, sw: &SwatchEntry) -> Value {
+    let mut v = color_json(&sw.color);
     v["name"] = json!(sw.name);
     v["hex"] = json!(hex(conv.rgb(&sw.color)));
     if sw.kind != SwatchKind::Process {
-        v["kind"] = json!(sw.kind.id());
+        v["kind"] = json!(kind_id(sw.kind));
     }
     v
 }
@@ -122,7 +132,7 @@ fn swatch_json(conv: &SwatchConv, sw: &Swatch) -> Value {
 fn list(s: &mut Session, _: &Value) -> Result<Value> {
     let conv = SwatchConv::new(s);
     let groups: Vec<Value> =
-        s.presets.swatches.iter().map(|g| json!({"name": g.name, "swatches": g.items.iter().map(|sw| swatch_json(&conv, sw)).collect::<Vec<_>>()})).collect();
+        s.presets.swatches.iter().map(|g| json!({"name": g.name, "swatches": g.entries.iter().map(|sw| swatch_json(&conv, sw)).collect::<Vec<_>>()})).collect();
     Ok(json!({"groups": groups, "count": total(&s.presets.swatches)}))
 }
 
@@ -133,11 +143,11 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
             let f = s.tools.foreground;
             SwatchColor::Rgb([f[0], f[1], f[2]].map(|v| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 }))
         }
-        Some(v) => SwatchColor::from_param(v).map_err(|e| bad(CMD, e))?,
+        Some(v) => color_from_param(v).map_err(|e| bad(CMD, e))?,
     };
     let kind = match str_param(p, "kind") {
         None => SwatchKind::Process,
-        Some(k) => SwatchKind::parse(k).ok_or_else(|| bad(CMD, format!("unknown kind `{k}` (process|global|spot)")))?,
+        Some(k) => parse_kind(k).ok_or_else(|| bad(CMD, format!("unknown kind `{k}` (process|global|spot)")))?,
     };
     if total(&s.presets.swatches) >= MAX_SWATCHES {
         return Err(bad(CMD, format!("the Swatches panel is full ({MAX_SWATCHES} swatches)")));
@@ -146,10 +156,10 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
     let explicit = name_param(p, "name", CMD)?;
     let groups = &mut s.presets.swatches;
     let name = match explicit {
-        Some(n) => unique_name(groups, &n),
+        Some(n) => unique_swatch_name(groups, &n),
         // Photoshop's default: "Color Swatch 1", "Color Swatch 2"…
         None => {
-            let taken = |n: &str| groups.iter().any(|g| g.items.iter().any(|i| i.name == n));
+            let taken = |n: &str| groups.iter().any(|g| g.entries.iter().any(|i| i.name == n));
             (1..).map(|i| format!("Color Swatch {i}")).find(|n| !taken(n)).unwrap_or_default()
         }
     };
@@ -160,23 +170,23 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
                 if groups.len() >= MAX_GROUPS {
                     return Err(bad(CMD, "too many swatch groups"));
                 }
-                groups.push(Group::new(&g, Vec::new()));
+                groups.push(SwatchGroup { name: g, entries: Vec::new() });
                 groups.len() - 1
             }
         },
         None => {
             if groups.is_empty() {
-                groups.push(Group::new("Swatches", Vec::new()));
+                groups.push(SwatchGroup { name: "Swatches".into(), entries: Vec::new() });
             }
             0
         }
     };
-    let items = &mut groups[gi].items;
+    let entries = &mut groups[gi].entries;
     let at = match p.get("index") {
-        None | Some(Value::Null) => items.len(),
-        Some(v) => usize::try_from(v.as_u64().ok_or_else(|| bad(CMD, "`index` must be a non-negative integer"))?).unwrap_or(usize::MAX).min(items.len()),
+        None | Some(Value::Null) => entries.len(),
+        Some(v) => usize::try_from(v.as_u64().ok_or_else(|| bad(CMD, "`index` must be a non-negative integer"))?).unwrap_or(usize::MAX).min(entries.len()),
     };
-    items.insert(at, Swatch { name: name.clone(), color, kind });
+    entries.insert(at, SwatchEntry { name: name.clone(), color, kind });
     let gname = groups[gi].name.clone();
     s.presets_changed();
     Ok(json!({"name": name, "group": gname, "index": at}))
@@ -203,9 +213,9 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     let mut names = Vec::with_capacity(targets.len());
     for (gi, ii) in targets.into_iter().rev() {
         if let Some(g) = groups.get_mut(gi)
-            && ii < g.items.len()
+            && ii < g.entries.len()
         {
-            names.push(g.items.remove(ii).name);
+            names.push(g.entries.remove(ii).name);
         }
     }
     names.reverse();
@@ -218,10 +228,10 @@ fn rename(s: &mut Session, p: &Value) -> Result<Value> {
     let (gi, ii) = locate(s, p, CMD)?;
     let to = name_param(p, "name", CMD)?.ok_or_else(|| bad(CMD, "missing `name`"))?;
     let groups = &mut s.presets.swatches;
-    if groups[gi].items[ii].name != to && find(groups, &to, None).is_some() {
+    if groups[gi].entries[ii].name != to && locate_swatch(groups, &to, None).is_some() {
         return Err(bad(CMD, format!("a swatch named \"{to}\" already exists")));
     }
-    groups[gi].items[ii].name = to.clone();
+    groups[gi].entries[ii].name = to.clone();
     s.presets_changed();
     Ok(json!({"name": to}))
 }
@@ -238,13 +248,27 @@ fn move_swatch(s: &mut Session, p: &Value) -> Result<Value> {
         Some(v) => Some(usize::try_from(v.as_u64().ok_or_else(|| bad(CMD, "`position` must be a non-negative integer"))?).unwrap_or(usize::MAX)),
     };
     let groups = &mut s.presets.swatches;
-    let item = groups[gi].items.remove(ii);
-    let items = &mut groups[ti].items;
-    let at = at.unwrap_or(items.len()).min(items.len());
-    items.insert(at, item);
+    let item = groups[gi].entries.remove(ii);
+    let entries = &mut groups[ti].entries;
+    let at = at.unwrap_or(entries.len()).min(entries.len());
+    entries.insert(at, item);
     let gname = groups[ti].name.clone();
     s.presets_changed();
     Ok(json!({"group": gname, "position": at}))
+}
+
+/// `swatches.moveGroup`: the group to index `to` among the groups (clamped to the list).
+fn move_group(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "swatches.moveGroup";
+    let g = name_param(p, "group", CMD)?.ok_or_else(|| bad(CMD, "missing `group`"))?;
+    let to = p.get("to").and_then(Value::as_u64).ok_or_else(|| bad(CMD, "`to` must be a non-negative integer"))?;
+    let from = group_of(s, &g, CMD)?;
+    let groups = &mut s.presets.swatches;
+    let at = usize::try_from(to).unwrap_or(usize::MAX).min(groups.len() - 1);
+    let group = groups.remove(from);
+    groups.insert(at, group);
+    s.presets_changed();
+    Ok(json!({"group": g, "position": at}))
 }
 
 fn new_group(s: &mut Session, p: &Value) -> Result<Value> {
@@ -267,13 +291,13 @@ fn new_group(s: &mut Session, p: &Value) -> Result<Value> {
     moving.dedup();
     let groups = &mut s.presets.swatches;
     let name = unique_group(groups, &base);
-    let mut items: Vec<Swatch> = Vec::with_capacity(moving.len());
+    let mut entries: Vec<SwatchEntry> = Vec::with_capacity(moving.len());
     for (gi, ii) in moving.into_iter().rev() {
-        items.push(groups[gi].items.remove(ii));
+        entries.push(groups[gi].entries.remove(ii));
     }
-    items.reverse();
-    let n = items.len();
-    groups.push(Group::new(&name, items));
+    entries.reverse();
+    let n = entries.len();
+    groups.push(SwatchGroup { name: name.clone(), entries });
     s.presets_changed();
     Ok(json!({"group": name, "moved": n}))
 }
@@ -304,12 +328,12 @@ fn delete_group(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(CMD, "there is no other group to keep the swatches in"));
     }
     let removed = groups.remove(i);
-    let n = removed.items.len();
+    let n = removed.entries.len();
     if keep {
         // Into the group above (or the new first group), like Photoshop's "Delete Group Only".
         let into = i.saturating_sub(1).min(groups.len().saturating_sub(1));
         if let Some(t) = groups.get_mut(into) {
-            t.items.extend(removed.items);
+            t.entries.extend(removed.entries);
         }
     }
     s.presets_changed();
@@ -320,7 +344,7 @@ fn use_swatch(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "swatches.use";
     let (gi, ii) = locate(s, p, CMD)?;
     let target = str_param(p, "target").unwrap_or("foreground");
-    let sw = s.presets.swatches[gi].items[ii].clone();
+    let sw = s.presets.swatches[gi].entries[ii].clone();
     let rgb = SwatchConv::new(s).rgb(&sw.color);
     let c = [rgb[0], rgb[1], rgb[2], 1.0];
     match target {
@@ -344,15 +368,15 @@ fn reset(s: &mut Session, p: &Value) -> Result<Value> {
         None | Some(Value::Null) => false,
         Some(v) => v.as_bool().ok_or_else(|| bad(CMD, "`append` must be true or false"))?,
     };
-    let mut b = builtin();
+    let mut b = default_swatches();
     if append {
         if total(&s.presets.swatches) + total(&b) > MAX_SWATCHES || s.presets.swatches.len() + b.len() > MAX_GROUPS {
             return Err(bad(CMD, "the Swatches panel is full"));
         }
         for g in &mut b {
             g.name = unique_group(&s.presets.swatches, &g.name);
-            for sw in &mut g.items {
-                sw.name = unique_name(&s.presets.swatches, &sw.name);
+            for sw in &mut g.entries {
+                sw.name = unique_swatch_name(&s.presets.swatches, &sw.name);
             }
             s.presets.swatches.push(g.clone());
         }
@@ -365,289 +389,53 @@ fn reset(s: &mut Session, p: &Value) -> Result<Value> {
 
 // ------------------------------------------------------------------ files
 
-/// File format of a swatch file.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Format {
-    Aco,
-    Act,
-    Ase,
-}
-
-impl Format {
-    fn parse(s: &str) -> Option<Format> {
-        match s.trim_start_matches('.').to_ascii_lowercase().as_str() {
-            "aco" => Some(Format::Aco),
-            "act" => Some(Format::Act),
-            "ase" => Some(Format::Ase),
-            _ => None,
-        }
-    }
-    fn id(self) -> &'static str {
-        match self {
-            Format::Aco => "aco",
-            Format::Act => "act",
-            Format::Ase => "ase",
-        }
-    }
-}
-
-fn ext_format(path: Option<&str>) -> Option<Format> {
-    Format::parse(std::path::Path::new(path?).extension()?.to_str()?)
-}
-
-fn unit(v: f32) -> f32 {
-    if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 }
-}
-
-fn q16(v: f32) -> u16 {
-    (unit(v) * 65535.0).round() as u16
-}
-
-fn from_aco(c: AcoColor) -> SwatchColor {
-    let f = |v: u16| f32::from(v) / 65535.0;
-    match c {
-        AcoColor::Rgb(v) => SwatchColor::Rgb(v.map(f)),
-        AcoColor::Hsb([h, sa, b]) => SwatchColor::Hsb([f(h) * 360.0, f(sa), f(b)]),
-        AcoColor::Cmyk(v) => SwatchColor::Cmyk(v.map(f)),
-        AcoColor::Lab { l, a, b } => SwatchColor::Lab([f32::from(l.min(10000)) / 100.0, f32::from(a) / 100.0, f32::from(b) / 100.0]),
-        AcoColor::Gray(g) => SwatchColor::Gray(1.0 - f32::from(g.min(10000)) / 10000.0),
-        AcoColor::Other { space, values } => SwatchColor::Book { space, values },
-    }
-}
-
-fn to_aco(c: &SwatchColor) -> AcoColor {
-    match *c {
-        SwatchColor::Rgb(v) => AcoColor::Rgb(v.map(q16)),
-        SwatchColor::Hsb([h, sa, b]) => {
-            let h = if h.is_finite() { h.rem_euclid(360.0) } else { 0.0 };
-            AcoColor::Hsb([((h / 360.0) * 65535.0).round().min(65535.0) as u16, q16(sa), q16(b)])
-        }
-        SwatchColor::Cmyk(v) => AcoColor::Cmyk(v.map(q16)),
-        SwatchColor::Lab([l, a, b]) => {
-            let ab = |v: f32| if v.is_finite() { (v * 100.0).round().clamp(-12800.0, 12700.0) as i16 } else { 0 };
-            AcoColor::Lab { l: (if l.is_finite() { l } else { 0.0 } * 100.0).round().clamp(0.0, 10000.0) as u16, a: ab(a), b: ab(b) }
-        }
-        SwatchColor::Gray(k) => AcoColor::Gray(((1.0 - unit(k)) * 10000.0).round() as u16),
-        SwatchColor::Book { space, values } => AcoColor::Other { space, values },
-    }
-}
-
-fn from_ase(c: &AseColor) -> Option<SwatchColor> {
-    Some(match *c {
-        AseColor::Rgb(v) => SwatchColor::Rgb(v),
-        AseColor::Cmyk(v) => SwatchColor::Cmyk(v),
-        // L is stored as a fraction (L*/100); a few writers store L* itself, which can only be
-        // told apart above 1.
-        AseColor::Lab([l, a, b]) => SwatchColor::Lab([if l > 1.0 { l } else { l * 100.0 }, a, b]),
-        AseColor::Gray(g) => SwatchColor::Gray(1.0 - g),
-        AseColor::Other { .. } => return None,
-    })
-}
-
-fn to_ase(c: &SwatchColor) -> Option<AseColor> {
-    Some(match *c {
-        SwatchColor::Rgb(v) => AseColor::Rgb(v),
-        // ASE has no HSB; HSB is a view of RGB, so this is exact up to float rounding.
-        SwatchColor::Hsb(v) => AseColor::Rgb(hsb_to_rgb(v)),
-        SwatchColor::Cmyk(v) => AseColor::Cmyk(v),
-        SwatchColor::Lab([l, a, b]) => AseColor::Lab([l / 100.0, a, b]),
-        SwatchColor::Gray(k) => AseColor::Gray(1.0 - k),
-        SwatchColor::Book { .. } => return None,
-    })
-}
-
-fn kind_from_ase(k: AseKind) -> SwatchKind {
-    match k {
-        AseKind::Global => SwatchKind::Global,
-        AseKind::Spot => SwatchKind::Spot,
-        AseKind::Process => SwatchKind::Process,
-    }
-}
-
-fn kind_to_ase(k: SwatchKind) -> AseKind {
-    match k {
-        SwatchKind::Global => AseKind::Global,
-        SwatchKind::Spot => AseKind::Spot,
-        SwatchKind::Process => AseKind::Process,
-    }
-}
-
 /// Colors in an `.act` color table (what the format holds).
-pub const ACT_COLORS: usize = photocraft_psd::act::COLOR_COUNT;
+pub const ACT_COLORS: usize = craft_psd::act::COLOR_COUNT;
 
 /// `.act` bytes as `#rrggbb` colors plus the transparent index, for the Color Table dialog.
 pub fn act_table(bytes: &[u8]) -> std::result::Result<(Vec<String>, Option<u64>), String> {
-    let f = photocraft_psd::act::parse(bytes).map_err(|e| e.to_string())?;
+    let f = craft_psd::act::parse(bytes).map_err(|e| e.to_string())?;
     let hex = |c: &[u8; 3]| format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2]);
     Ok((f.used().iter().map(hex).collect(), f.transparent_index().map(|i| i as u64)))
 }
 
 /// Encode colors as `.act` bytes (at most [`ACT_COLORS`]); the transparent index is kept.
 pub fn act_bytes(colors: &[[u8; 3]], transparent: Option<u16>) -> std::result::Result<Vec<u8>, String> {
-    photocraft_psd::act::write(colors, Some(colors.len().min(ACT_COLORS) as u16), transparent).map_err(|e| e.to_string())
+    craft_psd::act::write(colors, Some(colors.len().min(ACT_COLORS) as u16), transparent).map_err(|e| e.to_string())
 }
 
-/// Parse a swatch file into groups (`group` names the group for ungrouped colours).
-pub fn read_file(bytes: &[u8], format: Format, group: &str) -> std::result::Result<(Vec<Group<Swatch>>, Vec<String>), String> {
-    let mut warnings = Vec::new();
-    let mut out: Vec<Group<Swatch>> = Vec::new();
-    let fallback = |i: usize, name: &str| if name.trim().is_empty() { format!("Swatch {}", i + 1) } else { clip(name.trim()) };
-    match format {
-        Format::Aco => {
-            let f = photocraft_psd::aco::parse(bytes).map_err(|e| format!("not a readable .aco swatch file: {e}"))?;
-            let books = f.swatches.iter().filter(|s| matches!(s.color, AcoColor::Other { .. })).count();
-            if books > 0 {
-                warnings.push(format!(
-                    "{books} swatches use a colour book or colour space PhotoCraft can't show; they are kept (shown gray) and saved back unchanged"
-                ));
-            }
-            let items = f
-                .swatches
-                .iter()
-                .enumerate()
-                .map(|(i, s)| Swatch { name: fallback(i, &s.name), color: from_aco(s.color), kind: SwatchKind::Process })
-                .collect();
-            out.push(Group::new(group, items));
-        }
-        Format::Act => {
-            let f = photocraft_psd::act::parse(bytes).map_err(|e| format!("not a readable .act color table: {e}"))?;
-            if let Some(t) = f.transparent_index() {
-                warnings.push(format!("color {} is the table's transparent color; swatches have no transparency so it was kept opaque", t + 1));
-            }
-            let items = f
-                .used()
-                .iter()
-                .enumerate()
-                .map(|(i, c)| Swatch { name: format!("Swatch {}", i + 1), color: SwatchColor::Rgb(c.map(|v| f32::from(v) / 255.0)), kind: SwatchKind::Process })
-                .collect();
-            out.push(Group::new(group, items));
-        }
-        Format::Ase => {
-            let f = photocraft_psd::ase::parse(bytes).map_err(|e| format!("not a readable .ase swatch file: {e}"))?;
-            let mut skipped = 0;
-            let mut n = 0usize;
-            let mut conv = |s: &AseSwatch| -> Option<Swatch> {
-                n += 1;
-                match from_ase(&s.color) {
-                    Some(color) => Some(Swatch { name: fallback(n - 1, &s.name), color, kind: kind_from_ase(s.kind) }),
-                    None => {
-                        skipped += 1;
-                        None
-                    }
-                }
-            };
-            let mut loose = Vec::new();
-            for e in &f.entries {
-                match e {
-                    AseEntry::Swatch(s) => loose.extend(conv(s)),
-                    AseEntry::Group { name, swatches } => {
-                        let items: Vec<Swatch> = swatches.iter().filter_map(&mut conv).collect();
-                        let name = if name.trim().is_empty() { group.to_string() } else { clip(name.trim()) };
-                        out.push(Group::new(&name, items));
-                    }
-                }
-            }
-            if !loose.is_empty() || out.is_empty() {
-                out.insert(0, Group::new(group, loose));
-            }
-            if skipped > 0 {
-                warnings.push(format!("{skipped} swatches in an unknown colour model were skipped"));
-            }
-        }
-    }
-    if total(&out) == 0 {
-        return Err("the file holds no swatches".into());
-    }
-    Ok((out, warnings))
+/// The format an id or extension names (`aco`, `.ACT`, …).
+fn parse_format(s: &str) -> Option<SwatchFormat> {
+    SwatchFormat::from_name(&format!("x.{}", s.trim_start_matches('.')))
 }
 
-/// Encode groups as a swatch file; returns the bytes, the number of swatches written and
-/// warnings about what the format cannot hold.
-pub fn write_file(groups: &[Group<Swatch>], format: Format) -> std::result::Result<(Vec<u8>, usize, Vec<String>), String> {
-    let mut warnings = Vec::new();
-    match format {
-        Format::Aco => {
-            let swatches: Vec<AcoSwatch> =
-                groups.iter().flat_map(|g| g.items.iter()).map(|s| AcoSwatch { name: s.name.clone(), color: to_aco(&s.color) }).collect();
-            if groups.len() > 1 {
-                warnings.push(".aco files have no groups; the swatches were saved as one list".into());
-            }
-            if groups.iter().flat_map(|g| g.items.iter()).any(|s| s.kind != SwatchKind::Process) {
-                warnings.push(".aco files don't mark spot or global colours; save as .ase to keep them".into());
-            }
-            let n = swatches.len();
-            let bytes = photocraft_psd::aco::write(&swatches).map_err(|e| e.to_string())?;
-            Ok((bytes, n, warnings))
+/// One sentence for a note of a read (`writing` false) or a write of `format`.
+fn word_note(note: &SwatchNote, format: SwatchFormat, writing: bool) -> String {
+    let ext = format.extension();
+    match *note {
+        SwatchNote::BookColors(n) if writing => {
+            format!("{n} colour-book swatches can't be stored in a .{ext} file and were left out (save as .aco to keep them)")
         }
-        Format::Act => {
-            // `.act` holds RGB only: HSB rides along as RGB, anything else is left out.
-            let rgb8 = |v: [f32; 3]| v.map(|c| (unit(c) * 255.0).round() as u8);
-            let mut triplets = Vec::new();
-            let mut skipped = 0;
-            for s in groups.iter().flat_map(|g| g.items.iter()) {
-                match s.color {
-                    SwatchColor::Rgb(v) => triplets.push(rgb8(v)),
-                    SwatchColor::Hsb(v) => triplets.push(rgb8(hsb_to_rgb(v))),
-                    _ => skipped += 1,
-                }
-            }
-            if groups.len() > 1 {
-                warnings.push(".act files have no groups; the swatches were saved as one list".into());
-            }
-            if skipped > 0 {
-                warnings.push(format!("{skipped} non-RGB swatches can't be stored in an .act file and were left out (save as .aco to keep them)"));
-            }
-            if triplets.len() > photocraft_psd::act::COLOR_COUNT {
-                warnings.push(format!("only the first {} swatches fit in an .act file", photocraft_psd::act::COLOR_COUNT));
-                triplets.truncate(photocraft_psd::act::COLOR_COUNT);
-            }
-            let n = triplets.len();
-            let bytes = photocraft_psd::act::write(&triplets, Some(n as u16), None).map_err(|e| e.to_string())?;
-            Ok((bytes, n, warnings))
+        SwatchNote::BookColors(n) => {
+            format!("{n} swatches use a colour book or colour space PhotoCraft can't show; they are kept (shown gray) and saved back unchanged")
         }
-        Format::Ase => {
-            let mut books = 0;
-            let mut entries = Vec::with_capacity(groups.len());
-            let mut n = 0;
-            for g in groups {
-                let swatches: Vec<AseSwatch> = g
-                    .items
-                    .iter()
-                    .filter_map(|s| match to_ase(&s.color) {
-                        Some(color) => Some(AseSwatch { name: s.name.clone(), color, kind: kind_to_ase(s.kind) }),
-                        None => {
-                            books += 1;
-                            None
-                        }
-                    })
-                    .collect();
-                n += swatches.len();
-                entries.push(AseEntry::Group { name: g.name.clone(), swatches });
-            }
-            if books > 0 {
-                warnings.push(format!("{books} colour-book swatches can't be stored in an .ase file and were left out (save as .aco to keep them)"));
-            }
-            let bytes = photocraft_psd::ase::write(&AseFile { entries }).map_err(|e| e.to_string())?;
-            Ok((bytes, n, warnings))
+        SwatchNote::Skipped(n) => format!("{n} swatches in an unknown colour model were skipped"),
+        SwatchNote::GroupsFlattened => format!(".{ext} files have no groups; the swatches were saved as one list"),
+        SwatchNote::ConvertedToRgb(n) => format!("{n} non-RGB swatches were converted to RGB to fit a .{ext} file"),
+        SwatchNote::KindsDropped(n) => {
+            format!("{n} spot or global swatches were saved as process colours; .{ext} files don't mark them (save as .ase to keep them)")
         }
+        SwatchNote::Truncated(n) => format!("only the first {ACT_COLORS} swatches fit in an .act file; {n} were left out"),
+        SwatchNote::NamesCut(n) => format!("{n} names were cut to the length the .{ext} format holds"),
+        SwatchNote::TransparentKept(n) => format!("color {n} is the table's transparent color; swatches have no transparency so it was kept opaque"),
+        // The note list may grow (the enum is non-exhaustive).
+        _ => "some data could not be kept".into(),
     }
 }
 
 fn import(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "swatches.import";
-    let (bytes, stem) = crate::preset_import_cmds::file_bytes(p, CMD, ".aco, .act or .ase file")?;
-    // `.act` has no magic: exactly 768/772 bytes. An `.act` whose first colour is `0, 1, x` or
-    // `0, 2, x` starts like an `.aco`, and the .aco reader ignores trailing bytes, so at those
-    // lengths an .aco header only counts when its sections fill the file exactly.
-    let act_len = bytes.len() == photocraft_psd::act::PALETTE_LEN || bytes.len() == photocraft_psd::act::PALETTE_LEN + photocraft_psd::act::TRAILER_LEN;
-    let format = match str_param(p, "format") {
-        Some(f) => Format::parse(f).ok_or_else(|| bad(CMD, format!("unknown format `{f}` (aco|act|ase)")))?,
-        None if ext_format(str_param(p, "path")) == Some(Format::Act) => Format::Act,
-        None if bytes.starts_with(photocraft_psd::ase::SIGNATURE) => Format::Ase,
-        None if matches!(bytes.get(..2), Some([0, 1] | [0, 2])) && (!act_len || photocraft_psd::aco::sections_len(&bytes) == Some(bytes.len())) => Format::Aco,
-        None if act_len => Format::Act,
-        None => ext_format(str_param(p, "path")).ok_or_else(|| bad(CMD, "not an .aco, .act or .ase swatch file"))?,
-    };
+    let (bytes, stem) = crate::preset_import_cmds::file_bytes(p, CMD, ".aco, .act, .ase or .gpl file")?;
     let mode = str_param(p, "mode").unwrap_or("append");
     let replace = match mode {
         "append" => false,
@@ -659,8 +447,23 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
         None if !stem.trim().is_empty() => clip(stem.trim()),
         None => "Imported Swatches".into(),
     };
-    let (groups, warnings) = read_file(&bytes, format, &group).map_err(|e| bad(CMD, e))?;
-    let base: Vec<Group<Swatch>> = if replace { Vec::new() } else { s.presets.swatches.clone() };
+    // The extension is a hint for the sniffing: an explicit `format`, else the path's extension,
+    // else none (`bin`). An `.act` has no signature: without a hint it is told by its length.
+    let hint = match str_param(p, "format") {
+        Some(f) => {
+            let format = parse_format(f).ok_or_else(|| bad(CMD, format!("unknown format `{f}` (aco|act|ase|gpl)")))?;
+            if !format.can_read() {
+                return Err(bad(CMD, format!(".{} files can be written, not read", format.extension())));
+            }
+            format.extension().to_string()
+        }
+        None => str_param(p, "path").and_then(|path| std::path::Path::new(path).extension()).and_then(|e| e.to_str()).unwrap_or("bin").to_string(),
+    };
+    let format = SwatchFormat::sniff(&bytes, &format!("{group}.{hint}")).ok_or_else(|| bad(CMD, "not an .aco, .act, .ase or .gpl swatch file"))?;
+    // The group name is the file stem: craft-color names ungrouped colours after it.
+    let (groups, report) = read_swatches(&bytes, &format!("{group}.{}", format.extension())).map_err(|e| bad(CMD, e.to_string()))?;
+    let warnings: Vec<String> = report.notes.iter().map(|n| word_note(n, format, false)).collect();
+    let base: Vec<SwatchGroup> = if replace { Vec::new() } else { s.presets.swatches.clone() };
     if total(&base) + total(&groups) > MAX_SWATCHES || base.len() + groups.len() > MAX_GROUPS {
         return Err(bad(CMD, format!("too many swatches: the panel holds at most {MAX_SWATCHES} in {MAX_GROUPS} groups")));
     }
@@ -669,12 +472,13 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
     let mut names = Vec::with_capacity(groups.len());
     // Names stay unique across the library (agents address swatches by name).
     let mut next: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    let mut taken: std::collections::HashSet<String> = lib.iter().flat_map(|g| g.items.iter().map(|i| i.name.clone())).collect();
+    let mut taken: std::collections::HashSet<String> = lib.iter().flat_map(|g| g.entries.iter().map(|i| i.name.clone())).collect();
     // Group names are numbered from 1 as in `unique_group` ("Grays 1"), and the numbering
     // resumes per base name.
     let mut group_next: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut group_taken: std::collections::HashSet<String> = lib.iter().map(|g| g.name.clone()).collect();
     for mut g in groups {
+        g.name = clip(&g.name);
         if group_taken.contains(&g.name) {
             let from = group_next.get(&g.name).copied().unwrap_or(1);
             let (i, n) = (from..).map(|i| (i, format!("{} {i}", g.name))).find(|(_, n)| !group_taken.contains(n)).unwrap_or((from, g.name.clone()));
@@ -682,7 +486,8 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
             g.name = n;
         }
         group_taken.insert(g.name.clone());
-        for sw in &mut g.items {
+        for sw in &mut g.entries {
+            sw.name = clip(&sw.name);
             if taken.contains(&sw.name) {
                 // Resume numbering per base name, so a file of identical names stays linear.
                 let from = next.get(&sw.name).copied().unwrap_or(2);
@@ -697,17 +502,17 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.presets.swatches = lib;
     s.presets_changed();
-    Ok(json!({"format": format.id(), "mode": mode, "groups": names, "count": count, "warnings": warnings}))
+    Ok(json!({"format": format.extension(), "mode": mode, "groups": names, "count": count, "warnings": warnings}))
 }
 
 fn export(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "swatches.export";
     let path = str_param(p, "path");
     let format = match str_param(p, "format") {
-        Some(f) => Format::parse(f).ok_or_else(|| bad(CMD, format!("unknown format `{f}` (aco|act|ase)")))?,
-        None => ext_format(path).unwrap_or(Format::Aco),
+        Some(f) => parse_format(f).ok_or_else(|| bad(CMD, format!("unknown format `{f}` (aco|act|ase|gpl|css)")))?,
+        None => path.and_then(SwatchFormat::from_name).unwrap_or(SwatchFormat::Aco),
     };
-    let mut groups: Vec<Group<Swatch>> = match name_param(p, "group", CMD)? {
+    let mut groups: Vec<SwatchGroup> = match name_param(p, "group", CMD)? {
         Some(g) => vec![s.presets.swatches[group_of(s, &g, CMD)?].clone()],
         None => s.presets.swatches.clone(),
     };
@@ -726,15 +531,26 @@ fn export(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
         for g in &mut groups {
-            g.items.retain(|sw| want.contains(&sw.name));
+            g.entries.retain(|sw| want.contains(&sw.name));
         }
-        groups.retain(|g| !g.items.is_empty());
+        groups.retain(|g| !g.entries.is_empty());
     }
     if total(&groups) == 0 {
         return Err(bad(CMD, "no swatches to export"));
     }
-    let (bytes, count, warnings) = write_file(&groups, format).map_err(|e| bad(CMD, e))?;
-    let mut out = json!({"format": format.id(), "count": count, "bytes": bytes.len(), "warnings": warnings});
+    let (bytes, report) = write_swatches(&groups, format).map_err(|e| bad(CMD, e.to_string()))?;
+    // What the report says was left out is not in the file.
+    let left_out: usize = report
+        .notes
+        .iter()
+        .map(|n| match n {
+            SwatchNote::BookColors(c) | SwatchNote::Truncated(c) => *c,
+            _ => 0,
+        })
+        .sum();
+    let count = total(&groups).saturating_sub(left_out);
+    let warnings: Vec<String> = report.notes.iter().map(|n| word_note(n, format, true)).collect();
+    let mut out = json!({"format": format.extension(), "count": count, "bytes": bytes.len(), "warnings": warnings});
     match path {
         Some(path) => {
             crate::file_cmds::write_file(path, &bytes)?;
@@ -804,6 +620,16 @@ pub fn specs() -> Vec<CommandSpec> {
             journal: true,
         },
         CommandSpec {
+            id: "swatches.moveGroup",
+            label: "Move Swatch Group",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"group":name,"to":n (index among the groups, clamped to the list)} → {group,position}"##,
+            enabled: has_groups,
+            run: move_group,
+            journal: true,
+        },
+        CommandSpec {
             id: "swatches.newGroup",
             label: "New Swatch Group…",
             menu: &[],
@@ -860,7 +686,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Import Swatches…",
             menu: &[],
             shortcut: None,
-            params: r##"{"path":".aco, .act or .ase file"?,"data":base64 bytes?,"format":"aco|act|ase"? (detected; an .act by its .act path or its 768/772-byte length),"mode":"append|replace"="append","group":str?=file name (the group for ungrouped colours)} → {format,mode,groups,count,warnings}"##,
+            params: r##"{"path":".aco, .act, .ase or .gpl file"?,"data":base64 bytes?,"format":"aco|act|ase|gpl"? (detected; an .act by its .act path or its 768/772-byte length),"mode":"append|replace"="append","group":str?=file name (the group for ungrouped colours)} → {format,mode,groups,count,warnings}"##,
             enabled: always,
             run: import,
             journal: true,
@@ -870,7 +696,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Export Swatches…",
             menu: &[],
             shortcut: None,
-            params: r##"{"format":"aco|act|ase"?=from path, else aco,"path":file? (else the bytes come back as base64 `data`),"group":name? (only that group),"swatches":[names]? (only these)} → {format,count,bytes,warnings,path|data}"##,
+            params: r##"{"format":"aco|act|ase|gpl|css"?=from path, else aco,"path":file? (else the bytes come back as base64 `data`),"group":name? (only that group),"swatches":[names]? (only these)} → {format,count,bytes,warnings,path|data}"##,
             enabled: has_swatches,
             run: export,
             journal: true,

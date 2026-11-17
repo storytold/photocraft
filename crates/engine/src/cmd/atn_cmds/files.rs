@@ -1,5 +1,15 @@
-use super::convert::{UniqueNames, export, import_with_encoding};
+use super::convert::{ReplacementSet, clip_name, export, import_first_with_keys};
 use super::{Action, DEFAULT_SET, EngineError, Result, Session, Value, bad, json};
+use crate::actions_cmds::ActionsFile;
+
+mod replacement;
+pub(super) use replacement::replace;
+pub use replacement::validate as validate_replacement;
+
+/// The name the file gave an action that `merge_file` renamed to stay unique, to the name it got.
+fn renamed_to<'a>(renames: &'a [(String, String)], name: &str) -> Option<&'a String> {
+    renames.iter().find(|(from, _)| from == name).map(|(_, to)| to)
+}
 
 /// `actions.load`: add the actions of an `.atn` file (`path` or `data`) to the list, retargeting
 /// the set's own action references once and preserving foreign qualifications even when the
@@ -17,12 +27,13 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
         Some(_) => return Err(bad(cmd, "encoding must be \"auto\" or a label such as shift_jis, gbk, big5, euc-kr, windows-1252, macintosh")),
     };
     let (bytes, _) = crate::preset_import_cmds::file_bytes(p, cmd, ".atn file")?;
-    let mut imp = import_with_encoding(&bytes, encoding).map_err(|e| bad(cmd, e))?;
+    let ReplacementSet { imported: mut imp, keys: function_keys } = import_first_with_keys(&bytes, encoding).map_err(|e| bad(cmd, e))?;
     let original_set = imp.set.clone();
     match p.get("set") {
         None | Some(Value::Null) => {}
         Some(Value::String(n)) if !n.trim().is_empty() => {
-            imp.set = n.trim().to_string();
+            // Held to the importer's name limit: the set name is copied into every action.
+            imp.set = clip_name(n.trim()).trim_end().to_string();
             for a in &mut imp.actions {
                 a.set = Some(imp.set.clone());
             }
@@ -34,62 +45,48 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::Bool(b)) => *b,
         Some(_) => return Err(bad(cmd, "`replace` must be true or false")),
     };
+    let steps = imp.actions.iter().fold(0usize, |total, a| total.saturating_add(a.steps.len()));
+    // The file names its set even when it holds no action (Photoshop saves an empty set): the list
+    // keeps it as an empty folder, like one New Set made, and `replace` drops the set's actions.
     if replace {
-        s.actions.list.retain(|a| a.set.as_deref() != Some(imp.set.as_str()));
+        // The function keys of the actions it replaces go with them.
+        let replaced: Vec<String> = s.actions.list.actions().iter().filter(|a| a.set.as_deref() == Some(imp.set.as_str())).map(|a| a.name.clone()).collect();
+        crate::actions_cmds::remove_shortcuts(s, replaced.iter().map(String::as_str));
     }
-    let mut taken = UniqueNames::new(s.actions.list.iter().map(|a| a.name.clone()));
-    let mut names = Vec::with_capacity(imp.actions.len());
-    // The file's name of each action that had to be renamed, and its new name.
-    let mut renamed: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    let mut steps = 0usize;
-    let mut added = Vec::with_capacity(imp.actions.len());
-    for mut a in imp.actions {
-        let name = taken.claim(&a.name);
-        if name != a.name {
-            renamed.entry(a.name.clone()).or_insert_with(|| name.clone());
-        }
-        a.name = name.clone();
-        steps = steps.saturating_add(a.steps.len());
-        names.push(name);
-        added.push(a);
-    }
+    let file = ActionsFile::new(imp.actions, vec![imp.set.clone()]);
     // Play, Conditional, Batch and Create Droplet steps call actions by name: follow the renames in
     // the actions just loaded, each target looked up once by the name the file gave it.
-    for a in &mut added {
-        for (id, params) in &mut a.steps {
-            // A qualified Batch or Create Droplet reference belongs to the file's original set, not
-            // to a foreign set which happens to have the destination override's name.
-            let by_set = matches!(id.as_str(), "file.automate.batch" | "file.automate.createDroplet");
-            if by_set && params.get("set").and_then(Value::as_str) == Some(original_set.as_str()) {
-                params["set"] = json!(imp.set);
-            } else if by_set && params.get("set").is_some_and(|set| !set.is_null()) {
-                continue;
-            }
-            let keys: &[&str] = match id.as_str() {
-                "actions.play" => &["action"],
-                "actions.conditional" => &["then", "else"],
-                "file.automate.batch" | "file.automate.createDroplet" => &["action"],
-                _ => &[],
-            };
-            for key in keys {
-                if let Some(to) = params.get(*key).and_then(Value::as_str).and_then(|n| renamed.get(n)) {
-                    params[*key] = json!(to);
-                }
+    let merged = s.actions.list.merge_file(file, replace, |step, renames| {
+        let (id, params) = (step.command.as_str(), &mut step.params);
+        // A qualified Batch or Create Droplet reference belongs to the file's original set, not
+        // to a foreign set which happens to have the destination override's name.
+        let by_set = matches!(id, "file.automate.batch" | "file.automate.createDroplet");
+        if by_set && params.get("set").and_then(Value::as_str) == Some(original_set.as_str()) {
+            params["set"] = json!(imp.set);
+        } else if by_set && params.get("set").is_some_and(|set| !set.is_null()) {
+            return;
+        }
+        let keys: &[&str] = match id {
+            "actions.play" => &["action"],
+            "actions.conditional" => &["then", "else"],
+            "file.automate.batch" | "file.automate.createDroplet" => &["action"],
+            _ => &[],
+        };
+        for key in keys {
+            if let Some(to) = params.get(*key).and_then(Value::as_str).and_then(|n| renamed_to(renames, n)) {
+                params[*key] = json!(to);
             }
         }
-    }
+    });
     // Actions an automation client loads keep its gate when the user plays them.
-    let automation = s.authorize.is_some();
-    for a in &mut added {
-        a.automation = automation;
+    if s.authorize.is_some() {
+        for &index in &merged.added {
+            s.actions.list.set_automation(index, true).map_err(|e| crate::actions_cmds::list_error(cmd, e))?;
+        }
     }
-    s.actions.list.extend(added);
-    // A set saved with no actions (Photoshop saves an empty set) is an empty folder, like one New
-    // Set made.
-    if !s.actions.list.iter().any(|a| a.set.as_deref() == Some(imp.set.as_str())) && !s.actions.sets.contains(&imp.set) {
-        s.actions.sets.push(imp.set.clone());
-    }
-    let keys: Vec<(String, String)> = imp.function_keys.into_iter().map(|(n, k)| (renamed.get(&n).cloned().unwrap_or(n), k)).collect();
+    let names: Vec<String> = merged.added.iter().map(|&index| s.actions.list.actions()[index].name.clone()).collect();
+    // Keys go by the file's action order, so two actions the file gives one name keep their own.
+    let keys: Vec<(String, String)> = function_keys.into_iter().filter_map(|(index, key)| Some((names.get(index)?.clone(), key))).collect();
     if !keys.is_empty() {
         s.edit_prefs(|prefs| {
             for (name, key) in &keys {
@@ -99,7 +96,6 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
             }
         });
     }
-    s.actions.touch();
     Ok(json!({
         "set": imp.set,
         "actions": names,
@@ -128,21 +124,21 @@ pub(super) fn save(s: &mut Session, p: &Value) -> Result<Value> {
         Some(_) => return Err(bad(cmd, "`set` must be a non-empty string")),
     };
     let (set, actions): (String, Vec<&Action>) = if p.get("action").is_some() {
-        let idx = crate::actions_cmds::resolve(&s.actions.list, p, cmd)?;
-        let a = &s.actions.list[idx];
+        let idx = crate::actions_cmds::resolve(s.actions.list.actions(), p, cmd)?;
+        let a = &s.actions.list.actions()[idx];
         (set_param.or_else(|| a.set.clone()).unwrap_or_else(|| a.name.clone()), vec![a])
     } else if let Some(set) = set_param {
-        let list: Vec<&Action> = s.actions.list.iter().filter(|a| a.set.as_deref() == Some(set.as_str())).collect();
+        let list: Vec<&Action> = s.actions.list.actions().iter().filter(|a| a.set.as_deref() == Some(set.as_str())).collect();
         // An empty set New Set made is written with no actions, as Photoshop saves one.
-        if list.is_empty() && !s.actions.sets.contains(&set) {
+        if list.is_empty() && !s.actions.list.sets().contains(&set.as_str()) {
             return Err(bad(cmd, format!("no actions in a set named `{set}`")));
         }
         (set, list)
     } else {
-        if s.actions.list.is_empty() {
+        if s.actions.list.actions().is_empty() {
             return Err(bad(cmd, "there are no actions to save"));
         }
-        (DEFAULT_SET.to_string(), s.actions.list.iter().collect())
+        (DEFAULT_SET.to_string(), s.actions.list.actions().iter().collect())
     };
     let names: Vec<String> = actions.iter().map(|a| a.name.clone()).collect();
     let keys: Vec<(String, String)> =

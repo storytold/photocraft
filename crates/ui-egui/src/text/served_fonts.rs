@@ -1,13 +1,12 @@
 //! Fonts a host serves next to the app, for the platform shell that fetches them (the web build;
 //! see `photocraft_text::served`): reading the manifest, the families to fetch, and installing
-//! what arrived, which registers the files and re-renders the type layers drawn without them.
-//! A served script fallback (Arabic, Japanese…) also joins the UI's font stack: the web build has
-//! no system fonts, so it is what draws an Arabic or Japanese interface.
+//! what arrived, which registers the files for documents and re-renders the type layers drawn
+//! without them. The UI's own font stack takes its served faces through `UiFonts::served_faces`
+//! ([`serve`]); the framework's loader fetches them and puts them in the stack.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
-use egui::epaint::text::{FontInsert, FontPriority, InsertFontFamily};
-use egui::{FontData, FontFamily};
+use craft::ui::fonts::{FontFetcher, ServedFace};
 
 use photocraft_doc::{LayerContent, TextLayer};
 use photocraft_engine::TypeLayerRef;
@@ -18,85 +17,64 @@ use crate::PhotocraftApp;
 /// Layers whose document was busy with a background job when their font arrived.
 static PENDING: Mutex<Vec<TypeLayerRef>> = Mutex::new(Vec::new());
 
-/// Served script fallbacks in the UI's font stack, by egui font name, unscaled: kept so the stack
-/// `theme::install_fonts` rebuilds on a language change includes them again.
-static UI_FACES: Mutex<Vec<(String, Arc<FontData>)>> = Mutex::new(Vec::new());
+/// The served catalog is process-wide, and every family added while a font menu is open adds a
+/// row that egui styles on its next pass, so `Harness::run` takes one more pass per family. Tests
+/// that add families hold this for writing ([`changing_catalog`]), and tests that wait for an
+/// open font menu to settle hold it for reading ([`steady_catalog`]).
+#[cfg(test)]
+static CATALOG: std::sync::RwLock<()> = std::sync::RwLock::new(());
 
-/// The served faces for the end of the UI's font stack (see [`UI_FACES`]), the interface
-/// language's own first: a Japanese and a Simplified Chinese face both cover Han, and egui draws a
-/// character with the first face in the stack that has it, so a Chinese interface must not get
-/// the Japanese face only because it arrived first.
-pub fn ui_faces() -> Vec<(String, Arc<FontData>)> {
-    let mut faces = UI_FACES.lock().unwrap_or_else(PoisonError::into_inner).clone();
-    if let Some(own) = ui_language_face() {
-        faces.sort_by_key(|(n, _)| *n != own);
-    }
-    faces
+/// Held by a test while it adds families to the served catalog.
+#[cfg(test)]
+pub(crate) fn changing_catalog() -> std::sync::RwLockWriteGuard<'static, ()> {
+    CATALOG.write().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// The egui font name of the interface language's served script fallback, if the host serves one.
-fn ui_language_face() -> Option<String> {
-    photocraft_text::served::fallback_for_language(crate::i18n::current().code()).map(|f| face_name(&f))
+/// Held by a test while it waits for an open font menu to settle: no family is added meanwhile.
+#[cfg(test)]
+pub(crate) fn steady_catalog() -> std::sync::RwLockReadGuard<'static, ()> {
+    CATALOG.read().unwrap_or_else(PoisonError::into_inner)
 }
 
-fn face_name(family: &str) -> String {
-    format!("served-{family}")
+/// The served craft-fonts faces of the UI's font stack and what fetches them.
+#[derive(Clone)]
+pub struct Served {
+    /// The faces the host serves, in the manifest's order.
+    pub faces: Vec<ServedFace>,
+    /// Fetches a face's file.
+    pub fetcher: Arc<dyn FontFetcher>,
 }
 
-/// Puts a delivered script fallback at the end of every UI font family, once. A file egui cannot
-/// read is left out: egui panics on a configured font it cannot parse.
-fn add_ui_face(ctx: &egui::Context, family: &str, bytes: &[u8]) {
-    if !photocraft_text::cjk::font_face_is_readable(bytes, 0) {
-        log::warn!("the served font {family:?} is not a readable font file; the interface does not use it");
-        return;
-    }
-    let name = face_name(family);
-    let mut data = {
-        let mut faces = UI_FACES.lock().unwrap_or_else(PoisonError::into_inner);
-        if faces.iter().any(|(n, _)| *n == name) {
-            return;
-        }
-        let data = FontData::from_owned(bytes.to_vec());
-        faces.push((name.clone(), Arc::new(data.clone())));
-        data
-    };
-    // The interface language's face arriving after another served face must go ahead of it, which
-    // appending cannot do: rebuild the stack, as a language change does.
-    let others = ctx.fonts(|f| f.definitions().font_data.keys().any(|n| n.starts_with("served-")));
-    if others && ui_language_face().as_ref() == Some(&name) {
-        crate::theme::install_fonts(ctx);
-        return;
-    }
-    crate::theme::size_ui_font(ctx, &name, &mut data);
-    let mut families: Vec<FontFamily> = ctx.fonts(|f| f.definitions().families.keys().cloned().collect());
-    for f in [FontFamily::Proportional, FontFamily::Monospace] {
-        if !families.contains(&f) {
-            families.push(f);
-        }
-    }
-    let families = families.into_iter().map(|family| InsertFontFamily { family, priority: FontPriority::Lowest }).collect();
-    ctx.add_font(FontInsert { name, data, families });
+fn served_id() -> egui::Id {
+    egui::Id::unique("photocraft-served-fonts")
 }
 
-/// Registers delivered font files (`(family, bytes)`, the family as the manifest lists it) and
+/// Gives the UI's font stack `faces`, fetched by `fetcher` when text needs them, and installs the stack again. Every
+/// later install (a language change) takes them too.
+pub fn serve(ctx: &egui::Context, faces: Vec<ServedFace>, fetcher: Arc<dyn FontFetcher>) {
+    ctx.data_mut(|d| d.insert_temp(served_id(), Served { faces, fetcher }));
+    crate::theme::install_fonts(ctx);
+}
+
+/// The served faces of `ctx`'s UI font stack, if the host serves any.
+pub(crate) fn served(ctx: &egui::Context) -> Option<Served> {
+    ctx.data(|d| d.get_temp::<Served>(served_id()))
+}
+
+/// Registers delivered font files (`(family, bytes)`, the family as the manifest lists it) for documents and
 /// re-renders the type layers that use those families, or whose text falls back to them (a script
 /// fallback, e.g. Arabic set in Inter), and show our own layout. A PSD layer still
 /// showing Photoshop's pixels (not edited yet) keeps them, as it does when its font is installed
-/// from the start. A script fallback also joins the UI's font stack. Call it every frame: it also
-/// retries the layers of a document that was busy.
-pub fn install(app: &mut PhotocraftApp, ctx: &egui::Context, delivered: Vec<(String, Vec<u8>)>) {
+/// from the start. Call it every frame: it also retries the layers of a document that was busy.
+// PLAN: dialogs-w59 (`apps/photocraft-web/src/web.rs`) calls this with the `ctx` argument the UI stack used to take;
+// the framework's loader puts a delivered script fallback in the UI stack, so the argument is gone.
+pub fn install(app: &mut PhotocraftApp, delivered: Vec<(String, Vec<u8>)>) {
     let mut layers = std::mem::take(&mut *PENDING.lock().unwrap_or_else(PoisonError::into_inner));
     if !delivered.is_empty() {
         let families: Vec<String> = delivered.iter().map(|(f, _)| f.clone()).collect();
         // Decided before the fonts are in: "shows our own layout" compares the layer's pixels
         // with what the engine draws now, that is with the fallback font.
         pick(&app.session, &families, &mut layers);
-        let fallbacks = photocraft_text::served::script_fallback_families();
-        for (family, bytes) in &delivered {
-            if fallbacks.contains(family) {
-                add_ui_face(ctx, family, bytes);
-            }
-        }
         let mut eng = photocraft_text::shared().lock().unwrap_or_else(PoisonError::into_inner);
         for (family, bytes) in delivered {
             let added = eng.fonts.register_font_data(bytes);
@@ -204,106 +182,13 @@ mod tests {
     fn a_layer_in_a_script_redraws_when_that_scripts_fallback_arrives() {
         // Thai: other tests use other scripts (the served catalog is process-wide).
         let thai = "Served Test Thai";
-        photocraft_text::served::add_fonts(&parse_manifest(&format!("{thai} | Regular | fonts/t/T.ttf | Thai\n")).0);
+        {
+            let _catalog = changing_catalog();
+            photocraft_text::served::add_fonts(&parse_manifest(&format!("{thai} | Regular | fonts/t/T.ttf | Thai\n")).0);
+        }
         let layer = |text: &str| TextLayer { text: text.into(), font_family: "Inter".into(), ..Default::default() };
         assert!(redraws_for(&layer("สวัสดี"), &[thai.into()]), "Thai text set in Inter falls back to it");
         assert!(!redraws_for(&layer("hello"), &[thai.into()]));
         assert!(redraws_for(&layer("hello"), &["Inter".into()]), "and a layer still redraws for its own family");
-    }
-
-    /// #10006: the web build has no system fonts, so a served Arabic fallback is what draws an
-    /// Arabic interface, also after a language change rebuilds the UI's font stack.
-    #[test]
-    fn a_served_script_fallback_draws_the_ui_and_survives_a_font_rebuild() {
-        // The web build's sources: no system fonts, no embedded craft fonts.
-        let web = || crate::cjk_fonts::Sources {
-            locale: || None,
-            files: |_| Vec::new(),
-            last_resort: Vec::new,
-            pending: || false,
-            scripts: |_| Vec::new(),
-            covers: |_, _| None,
-            embedded: crate::cjk_fonts::no_embedded,
-            eager_craft_fonts: false,
-        };
-        let ctx = egui::Context::default();
-        crate::theme::install_fonts_with(&ctx, web());
-        ctx.set_missing_glyph_policy(egui::MissingGlyphPolicy::Panic);
-        // Font changes take effect on the next pass: one empty pass, then draw Arabic.
-        let draw = |ctx: &egui::Context, text: &str| {
-            ctx.run_ui(egui::RawInput::default(), |ui| {
-                ui.label(text);
-            })
-            .textures_delta
-            .clear();
-        };
-        draw(&ctx, "File");
-        add_ui_face(&ctx, "Served Test Arabic", &crate::cjk_fonts::tests::synthetic_font(&[(0x0600, 0x06FF)]));
-        draw(&ctx, "File");
-        draw(&ctx, "ملف");
-        // A language change rebuilds the stack; the served face comes back with it.
-        crate::theme::install_fonts_with(&ctx, web());
-        draw(&ctx, "File");
-        draw(&ctx, "ملف");
-    }
-
-    /// #10006: a host serving a broken file as a script fallback must not stop the interface;
-    /// egui panics on a configured font it cannot parse.
-    #[test]
-    fn an_unreadable_served_font_stays_out_of_the_ui() {
-        let ctx = egui::Context::default();
-        crate::theme::install_fonts(&ctx);
-        let draw = |ctx: &egui::Context| {
-            ctx.run_ui(egui::RawInput::default(), |ui| {
-                ui.label("File ملف");
-            })
-            .textures_delta
-            .clear();
-        };
-        draw(&ctx);
-        add_ui_face(&ctx, "Served Test Broken", b"<html>not found</html>");
-        draw(&ctx);
-        crate::theme::install_fonts(&ctx);
-        draw(&ctx);
-        assert!(!ui_faces().iter().any(|(n, _)| n == "served-Served Test Broken"));
-    }
-
-    /// #10006: a Japanese and a Simplified Chinese face both cover Han. A Chinese interface draws
-    /// it with the Chinese one, even when the Japanese face arrived first.
-    #[test]
-    fn the_interface_languages_served_face_comes_first_in_the_ui_stack() {
-        if !crate::i18n::needs_catalogs() {
-            return;
-        }
-        let (jpan, hans) = ("Served Test Jpan", "Served Test Hans");
-        photocraft_text::served::add_fonts(&parse_manifest(&format!("{jpan} | Regular | fonts/j/J.ttf | Jpan\n{hans} | Regular | fonts/h/H.ttf | Hans\n")).0);
-        crate::i18n::set_current(crate::i18n::Lang::from_code("zh-hans").expect("Simplified Chinese"));
-        let ctx = egui::Context::default();
-        crate::theme::install_fonts(&ctx);
-        let draw = |ctx: &egui::Context| {
-            ctx.run_ui(egui::RawInput::default(), |ui| {
-                ui.label("文件");
-            })
-            .textures_delta
-            .clear();
-        };
-        let order = |ctx: &egui::Context| {
-            let stack = ctx.fonts(|f| f.definitions().families[&FontFamily::Proportional].clone());
-            let at = |family: &str| stack.iter().position(|n| *n == format!("served-{family}"));
-            (at(hans), at(jpan))
-        };
-        draw(&ctx);
-        let han = crate::cjk_fonts::tests::synthetic_font(&[(0x4E00, 0x9FFF)]);
-        add_ui_face(&ctx, jpan, &han);
-        draw(&ctx);
-        add_ui_face(&ctx, hans, &han);
-        draw(&ctx);
-        let (h, j) = order(&ctx);
-        assert!(h.is_some() && h < j, "the Chinese face goes ahead of the Japanese one: {h:?} {j:?}");
-        crate::theme::install_fonts(&ctx);
-        draw(&ctx);
-        let (h, j) = order(&ctx);
-        assert!(h.is_some() && h < j, "also after a rebuild: {h:?} {j:?}");
-        crate::i18n::set_current(crate::i18n::Lang::EN);
     }
 }

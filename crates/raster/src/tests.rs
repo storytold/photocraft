@@ -1043,6 +1043,17 @@ fn fallible_interleaved_writes_match_encoded_pixels_and_reject_bad_lengths() {
     }
 }
 
+#[test]
+fn tile_storage_counts_whole_tiles() {
+    let fmt = PixelFormat::RGBA8;
+    let tile = (TILE_SIZE as u64).pow(2) * 4;
+    assert_eq!(tile_storage_bytes(Rect::new(0, 0, 1, 1), &fmt), tile);
+    // A one-pixel column down four tiles keeps four whole tiles; straddling an edge, five.
+    assert_eq!(tile_storage_bytes(Rect::new(0, 0, 1, TILE_SIZE * 4), &fmt), 4 * tile);
+    assert_eq!(tile_storage_bytes(Rect::new(0, -1, 1, TILE_SIZE * 4), &fmt), 5 * tile);
+    assert_eq!(tile_storage_bytes(Rect::EMPTY, &fmt), 0);
+}
+
 /// The byte a row-callback test writes at pixel (x, y).
 fn row_byte(x: i32, y: i32) -> u8 {
     (x.wrapping_mul(7).wrapping_add(y.wrapping_mul(13)) & 0xff) as u8

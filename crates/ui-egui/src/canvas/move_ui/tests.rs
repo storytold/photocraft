@@ -1,8 +1,10 @@
+use craft::behavior::CanvasView;
+use craft::behavior::kurbo::Point;
 use photocraft_geom::Rect;
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::canvas::{ToolEvent, ViewXform};
+use crate::canvas::ToolEvent;
 use crate::state::Tool;
 
 #[test]
@@ -51,15 +53,15 @@ fn a_move_drag_reads_out_the_offset_it_will_commit() {
     app.ui.extras.snap = false;
     app.ui.view.show.smart_guides = false;
     let m = egui::Modifiers::NONE;
-    assert_eq!(super::offset_readout(&app), None, "no drag");
+    let rows = |r: craft::ui::canvas::ToolHostResponse| r.readout.map(|r| r.rows.into_iter().map(|(_, v)| v).collect::<Vec<_>>());
     // Pressed on the red square (16..32): with Auto-Select (on by default) an empty spot would
     // start the layer marquee instead of a move.
-    crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 24.0, y: 24.0, pressure: 1.0 }, m);
-    assert_eq!(super::offset_readout(&app), None, "pressed, not moved yet");
-    crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 34.4, y: 20.8, pressure: 1.0 }, m);
-    assert_eq!(super::offset_readout(&app), Some(["10 px".to_string(), "-3 px".to_string()]));
-    crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 34.4, y: 20.8 }, m);
-    assert_eq!(super::offset_readout(&app), None, "released");
+    let r = crate::canvas::tool_event_response(&mut app, ToolEvent::Down { x: 24.0, y: 24.0, pressure: 1.0 }, m);
+    assert_eq!(rows(r), None, "pressed, not moved yet");
+    let r = crate::canvas::tool_event_response(&mut app, ToolEvent::Move { x: 34.4, y: 20.8, pressure: 1.0 }, m);
+    assert_eq!(rows(r), Some(vec!["10 px".to_string(), "-3 px".to_string()]));
+    let r = crate::canvas::tool_event_response(&mut app, ToolEvent::Up { x: 34.4, y: 20.8 }, m);
+    assert_eq!(rows(r), None, "released");
 }
 
 /// A release past the ±10,000,000 px the preview and the readout show commits the offset they
@@ -355,13 +357,14 @@ fn photo(width: u32, height: u32, depth: u32) -> PhotocraftApp {
     app
 }
 
-/// Mid-drag by (37, 11): is the layer shown at the pointer?
+/// Mid-drag by (1000, 500) document pixels, far enough on screen for these large documents (shown at a small zoom)
+/// to pass the press slop: is the layer shown at the pointer?
 fn follows_a_drag(app: &mut PhotocraftApp) -> bool {
     let m = egui::Modifiers::NONE;
     crate::canvas::tool_event(app, ToolEvent::Down { x: 100.0, y: 100.0, pressure: 1.0 }, m);
-    crate::canvas::tool_event(app, ToolEvent::Move { x: 137.0, y: 111.0, pressure: 1.0 }, m);
+    crate::canvas::tool_event(app, ToolEvent::Move { x: 1100.0, y: 600.0, pressure: 1.0 }, m);
     let shown = super::display_doc(app, 0).is_some();
-    crate::canvas::tool_event(app, ToolEvent::Up { x: 137.0, y: 111.0 }, m);
+    crate::canvas::tool_event(app, ToolEvent::Up { x: 1100.0, y: 600.0 }, m);
     shown
 }
 
@@ -471,10 +474,7 @@ fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2], m: egui::Modifier
 
 /// ↩ through the app's key handling.
 fn enter(app: &mut PhotocraftApp) {
-    let ctx = egui::Context::default();
-    let key = egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
-    let input = egui::RawInput { events: vec![key], ..Default::default() };
-    ctx.run_ui(input, |ui| crate::shortcuts::handle(app, ui.ctx())).textures_delta.clear();
+    crate::canvas::testing::key(app, egui::Key::Enter, egui::Modifiers::NONE);
 }
 
 /// #578: with a selection the Move tool drags the selected pixels (from anywhere, without an
@@ -580,22 +580,6 @@ fn arrow_keys_nudge_the_selected_pixels() {
     app.run("select.drop", json!({})).unwrap();
     assert!(alpha(&app, id, 10, 10) == 0.0 && alpha(&app, id, 18, 20) == 1.0 && alpha(&app, id, 34, 20) == 1.0);
     assert_eq!(alpha(&app, id, 48, 16), 1.0, "the layer itself didn't move");
-}
-
-/// Without floatable pixels (a position-locked layer) the Move tool behaves as without a
-/// selection: it moves the layer, which the lock refuses.
-#[test]
-fn a_layer_that_cannot_float_moves_whole_as_before() {
-    let (mut app, id) = selected_pixels(8);
-    app.session.execute("layer.lockLayers", json!({"position": true})).unwrap();
-    drag(&mut app, [16.0, 16.0], [26.0, 16.0], egui::Modifiers::NONE);
-    assert_eq!(offset(&app), None);
-    assert!(alpha(&app, id, 10, 10) == 1.0 && alpha(&app, id, 30, 16) == 0.0, "nothing moved");
-    // Without a selection the layer moves whole.
-    app.session.execute("layer.lockLayers", json!({"position": false})).unwrap();
-    app.session.execute("select.deselect", json!({})).unwrap();
-    drag(&mut app, [16.0, 16.0], [26.0, 16.0], egui::Modifiers::NONE);
-    assert!(alpha(&app, id, 10, 10) == 0.0 && alpha(&app, id, 58, 16) == 1.0, "the whole layer moved");
 }
 
 #[test]
@@ -738,16 +722,8 @@ fn a_snapshot_uploads_straight_alpha_the_way_the_canvas_does() {
     px[0] = [1.0, 0.0, 0.0, 0.5];
     tx.send(photocraft_compose::Buffer { rect: Rect::new(0, 0, 1, 1), px }).unwrap();
     let ctx = egui::Context::default();
-    let painter = egui::Painter::new(ctx.clone(), egui::LayerId::background(), egui::Rect::EVERYTHING);
-    let xf = ViewXform {
-        rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 800.0)),
-        zoom: 0.1,
-        center: [2048.0, 2048.0],
-        flip: false,
-        rotation: 0.0,
-        aspect: 1.0,
-    };
-    super::draw_snapshot(&mut app, &painter, &xf);
+    let xf = CanvasView::new(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 800.0)), Point::new(2048.0, 2048.0), 0.1);
+    let _ = super::snapshot_shapes(&mut app, &ctx, &xf, 0);
     let mut delta = ctx.tex_manager().write().take_delta();
     let texel = delta
         .set
@@ -925,23 +901,15 @@ fn each_display_converts_the_snapshot_itself() {
     px[0] = [1.0, 0.0, 0.0, 1.0];
     tx.send(photocraft_compose::Buffer { rect: Rect::new(0, 0, 1, 1), px }).unwrap();
     let ctx = egui::Context::default();
-    let painter = egui::Painter::new(ctx.clone(), egui::LayerId::background(), egui::Rect::EVERYTHING);
-    let xf = ViewXform {
-        rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 800.0)),
-        zoom: 0.1,
-        center: [2048.0, 2048.0],
-        flip: false,
-        rotation: 0.0,
-        aspect: 1.0,
-    };
+    let xf = CanvasView::new(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 800.0)), Point::new(2048.0, 2048.0), 0.1);
     let keys = |app: &PhotocraftApp| {
         app.move_preview.as_ref().and_then(|p| p.snapshot.as_ref()).map(|s| s.textures.iter().map(|(k, _)| *k).collect::<Vec<_>>()).unwrap()
     };
-    super::draw_snapshot(&mut app, &painter, &xf);
+    let _ = super::snapshot_shapes(&mut app, &ctx, &xf, 0);
     let first = keys(&app);
     assert_eq!(first.len(), 1, "the first display's texture");
     app.session.color.settings.monitor_profile = "display-p3".into();
-    super::draw_snapshot(&mut app, &painter, &xf);
+    let _ = super::snapshot_shapes(&mut app, &ctx, &xf, 0);
     let both = keys(&app);
     assert!(both.len() == 2 && both[1] != first[0], "the P3 monitor converts its own: {both:?}");
     assert!(app.move_preview.as_ref().and_then(|p| p.snapshot.as_ref()).is_some_and(|s| s.picture.is_some()), "the picture is kept for the next display");

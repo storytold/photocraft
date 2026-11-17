@@ -1,3 +1,8 @@
+use craft::color_ui::ui::EyedropperOptions;
+use craft::draw::ui::crop::{CropSettings, CropSizeFields};
+use craft::draw::ui::{PathOptionsSettings, TransformSettings, VectorMode};
+use craft::imaging::ui::select::MagneticSettings;
+
 use super::tool::Tool;
 use super::{Deserialize, Serialize};
 
@@ -13,6 +18,8 @@ pub struct ToolOptions {
     pub sample_all: SampleAllLayers,
     /// Object Selection › Object Finder: hovering highlights the object a click selects (#4087).
     pub object_finder: bool,
+    /// Object Selection › Hard Edge (#12855): off, the result gets a softer, slightly wider rim.
+    pub object_hard_edge: bool,
     /// Remove tool: the fill goes to a new layer above the target (Photoshop's Create a new layer).
     pub remove_new_layer: bool,
     /// Remove tool: each stroke is filled when released (Photoshop's default). Off, the strokes
@@ -96,16 +103,21 @@ pub struct ToolOptions {
     pub smudge_mode: photocraft_color::BlendMode,
     /// Quick Selection enhance edge.
     pub enhance_edge: bool,
-    /// Pen: "path" (work path) or "shape" (shape layer).
-    pub vector_mode: String,
+    /// Pen: a work path or a shape layer.
+    pub vector_mode: VectorMode,
     /// Pen, Freeform Pen and Curvature Pen › Path Operations (#1397): how a new path combines with
     /// the path or shape it is drawn into: "newLayer" (Shape mode: a new shape layer; Path mode
     /// draws it as "combine"), "combine", "subtract", "intersect" or "exclude".
     #[serde(default = "default_pen_path_op")]
     pub pen_path_op: String,
-    /// Shape tools: "shape" (a shape layer) or "path" (the work path), as Photoshop's tool mode
-    /// (#9453). Shape by default, where the Pen's own mode defaults to Path.
-    pub shape_mode: String,
+    /// Shape tools › Path operations (#13235): how a drag combines with the active shape layer
+    /// (Shape mode) or work path (Path mode). Same values as `pen_path_op`; in Path mode "newLayer"
+    /// means Exclude Overlapping Shapes.
+    #[serde(default = "default_shape_path_op")]
+    pub shape_path_op: String,
+    /// Shape tools: a shape layer or the work path, as Photoshop's tool mode (#9453). Shape by
+    /// default, where the Pen's own mode defaults to Path.
+    pub shape_mode: VectorMode,
     /// Shape tools: fill with the foreground colour, stroke width (0 = none), rectangle corner
     /// radius, polygon sides, line weight.
     pub shape_fill: bool,
@@ -117,6 +129,9 @@ pub struct ToolOptions {
     pub shape_fill_gradient: Option<photocraft_doc::Fill>,
     pub shape_stroke_gradient: Option<photocraft_doc::Fill>,
     pub corner_radius: f32,
+    /// Shape tools' Align Edges: snap the drawn shape's box to whole pixels. On by default; the
+    /// Triangle tool shows it, enabled in Shape mode only (#13370); the other shape tools always snap.
+    pub align_edges: bool,
     pub polygon_sides: u32,
     pub line_weight: f32,
     /// Line arrowheads.
@@ -125,6 +140,17 @@ pub struct ToolOptions {
     pub arrow_width: f32,
     pub arrow_length: f32,
     pub arrow_concavity: f32,
+    /// Rectangle tool › gear (#13343): how a drag sizes the rectangle: "unconstrained" (the
+    /// default), "square", "fixedSize" or "proportional".
+    pub rect_constraint: String,
+    /// Rectangle tool › gear › Fixed Size W and H in px; 0 is an empty field, as they start.
+    pub rect_fixed_width: f32,
+    pub rect_fixed_height: f32,
+    /// Rectangle tool › gear › Proportional W : H, 1 : 1 to start.
+    pub rect_ratio_width: f32,
+    pub rect_ratio_height: f32,
+    /// Rectangle tool › gear › From Center: every drag draws from its centre. Off to start.
+    pub rect_from_center: bool,
     /// Freeform Pen › Curve Fit: how far (px) the fitted path may stray from the pointer trace.
     #[serde(default = "default_curve_fit")]
     pub curve_fit: f32,
@@ -132,10 +158,10 @@ pub struct ToolOptions {
     /// on one of its anchors deletes it (#4144).
     #[serde(default = "yes")]
     pub pen_auto_add_delete: bool,
-    /// Pen › gear › Rubber Band: while drawing, preview the next segment from the last anchor to
-    /// the pointer. Off by default, as in Photoshop (#12900).
+    /// Pen › gear › Path Options: the rubber band (off by default, as in Photoshop, #12900), the
+    /// path colour and the line thickness.
     #[serde(default)]
-    pub pen_rubber_band: bool,
+    pub path_options: PathOptionsSettings,
     /// Marquee options bar: "normal" | "fixedRatio" | "fixedSize", with the ratio or size.
     #[serde(default = "default_marquee_style")]
     pub marquee_style: String,
@@ -174,60 +200,21 @@ pub struct ToolOptions {
     pub move_expand_group_on_click: bool,
     #[serde(default = "yes")]
     pub move_show_layers_hover_bounds: bool,
-    /// Transform options bar: Toggle Reference Point. Off by default, as in Photoshop: the point
-    /// isn't drawn and isn't a handle, so a drag from the middle of the box moves the content;
-    /// transforms still turn and scale about it (#11098).
+    /// Free Transform and the Move tool's Transform controls: Show Reference Point (off by
+    /// default, as in Photoshop, #11098), relative positioning (#11679), the last interpolation
+    /// picked (unset follows General's default), Legacy scaling, the W/H link and unit.
     #[serde(default)]
-    pub transform_reference_point: bool,
-    /// Transform options bar: X and Y show the reference point's offset from where the box started
-    /// instead of its position (Photoshop's relative positioning, off by default, #11679).
+    pub transform: TransformSettings,
+    /// The Crop tool: ratio, W x H x Resolution, Delete Cropped Pixels, Fill, the guide
+    /// overlay and the shield (#1919, #2443, #3823).
     #[serde(default)]
-    pub transform_relative_position: bool,
-    /// Last interpolation selected in the Transform options bar; unset follows General's default.
+    pub crop: CropSettings,
+    /// Perspective Crop's own W, H and Resolution fields; the Crop tool's are `crop.size`.
     #[serde(default)]
-    pub transform_interpolation: Option<photocraft_engine::prefs::Interpolation>,
-    /// Crop options bar: aspect ratio ("" = Ratio/unconstrained, "w:h", or "original") and
-    /// Delete Cropped Pixels.
-    #[serde(default)]
-    pub crop_ratio: String,
-    /// In-progress custom crop ratio fields. Kept separately because entering one side before the
-    /// other must survive a frame while the ratio itself remains unconstrained.
-    #[serde(default)]
-    pub crop_custom_ratio_width: f32,
-    #[serde(default)]
-    pub crop_custom_ratio_height: f32,
-    #[serde(default = "yes")]
-    pub crop_delete: bool,
-    /// Crop options bar › Fill: false = Background (default), true = Content-Aware Fill (the area a
-    /// rotated or extending crop uncovers is filled from its surroundings, #3823).
-    #[serde(default)]
-    pub crop_content_aware: bool,
-    /// Crop W x H x Resolution (`crop_ratio` = "whr", #2443): width and height as typed lengths
-    /// with their unit ("4 in", "1024 px"; empty = unset), the resolution ("" = the document's)
-    /// and its unit ("px/in" or "px/cm"). See `crop_size`.
-    #[serde(default)]
-    pub crop_width: String,
-    #[serde(default)]
-    pub crop_height: String,
-    #[serde(default)]
-    pub crop_resolution: String,
-    #[serde(default = "default_crop_resolution_unit")]
-    pub crop_resolution_unit: String,
-    /// Perspective Crop's Show Grid (`perspective_crop_ui`); it shares W, H and the resolution above.
+    pub perspective_crop: CropSizeFields,
+    /// Perspective Crop's Show Grid.
     #[serde(default = "yes")]
     pub perspective_crop_grid: bool,
-    /// Crop overlay (#1919): the guide in the crop box, when it shows and its orientation
-    /// (the reference application's defaults: Rule of Thirds, Always Show Overlay, #10894). See
-    /// `crop_overlay`.
-    #[serde(default)]
-    pub crop_overlay: crate::crop_overlay::CropOverlay,
-    #[serde(default)]
-    pub crop_overlay_show: crate::crop_overlay::OverlayShow,
-    #[serde(default)]
-    pub crop_overlay_orientation: u8,
-    /// Crop gear menu (#1919): Show Cropped Area and the crop shield. See `crop_shield`.
-    #[serde(default)]
-    pub crop_shield: crate::crop_shield::CropShield,
     /// Magic Eraser opacity % (tolerance, anti-alias and contiguous are shared with the Magic Wand
     /// and Paint Bucket).
     pub magic_eraser_opacity: f32,
@@ -251,6 +238,10 @@ pub struct ToolOptions {
     /// Zoom tool › Scrubby Zoom: dragging left/right zooms continuously (else a zoom rectangle).
     #[serde(default = "yes")]
     pub zoom_scrubby: bool,
+    /// Zoom tool › Zoom In / Zoom Out: which way a click steps (⌥ turns it around). Reset Tool
+    /// leaves it, as in Photoshop.
+    #[serde(default = "yes")]
+    pub zoom_in: bool,
     /// Hand tool › Scroll All Windows: a Hand drag pans every shown document view, not only the
     /// one dragged in (`scroll_all_windows.rs`). Shift held while dragging does the same.
     #[serde(default)]
@@ -274,31 +265,21 @@ pub struct ToolOptions {
     #[serde(default)]
     pub erase_to_history: bool,
     /// Mixer Brush › Useful mixer brush combinations: the entry last picked, an index into
-    /// `brush_controls::MIXER_COMBINATIONS` (0 = Custom, #11946).
+    /// `craft::draw::ui::MIXER_COMBINATIONS` (0 = Custom, #11946).
     pub mixer_combination: usize,
-    /// Magnetic Lasso: detection width (px, 1..256), edge contrast (%, 1..100), how often it
-    /// fastens points by itself (0..100), and whether pen pressure narrows the width.
-    pub magnetic_width: f32,
-    pub magnetic_contrast: f32,
-    pub magnetic_frequency: f32,
-    pub magnetic_pressure: bool,
+    /// Magnetic Lasso: detection width, edge contrast, frequency and Stylus Pressure.
+    #[serde(default)]
+    pub magnetic: MagneticSettings,
     /// Red Eye: pupil search size (1–100) and how far corrected pixels darken (0–100).
     #[serde(default = "fifty")]
     pub red_eye_pupil_size: f32,
     #[serde(default = "fifty")]
     pub red_eye_darken: f32,
-    /// Eyedropper › Sample Size: 1 = Point Sample, else the side of the averaged square (3, 5,
-    /// 11, 31, 51, 101; `photocraft_engine::sample_cmds::SAMPLE_SIZES`). Shared, as in Photoshop,
-    /// with the ⌥-click eyedropper of the painting tools, the dialog eyedroppers and the Info panel.
-    #[serde(default = "one_u32")]
-    pub eyedropper_size: u32,
-    /// Eyedropper › Sample: current | currentAndBelow | all | allNoAdjustments |
-    /// currentAndBelowNoAdjustments (`document.sampleColor`'s `sampleLayer`).
-    #[serde(default = "default_eyedropper_sample")]
-    pub eyedropper_sample: String,
-    /// Eyedropper › Show Sampling Ring.
-    #[serde(default = "yes")]
-    pub eyedropper_ring: bool,
+    /// Eyedropper: Sample Size, Sample and Show Sampling Ring. The size is shared, as in
+    /// Photoshop, with the ⌥-click eyedropper of the painting tools, the dialog eyedroppers and
+    /// the Info panel.
+    #[serde(default)]
+    pub eyedropper: EyedropperOptions,
     /// Art History Brush: dab layout, Area (0–100), Tolerance (0–100).
     #[serde(default = "default_art_history_style")]
     pub art_history_style: String,
@@ -309,15 +290,11 @@ pub struct ToolOptions {
 }
 
 fn default_art_history_style() -> String {
-    "tightMedium".into()
+    "tightShort".into()
 }
 
 pub(super) fn yes() -> bool {
     true
-}
-
-fn default_crop_resolution_unit() -> String {
-    crate::crop_size::PX_PER_IN.into()
 }
 
 fn default_move_target() -> String {
@@ -325,6 +302,10 @@ fn default_move_target() -> String {
 }
 
 fn default_pen_path_op() -> String {
+    "newLayer".into()
+}
+
+fn default_shape_path_op() -> String {
     "newLayer".into()
 }
 
@@ -355,26 +336,6 @@ fn fifty() -> f32 {
 /// The session brush starts out as the Brush's (the tool the app opens with).
 pub(super) fn default_brush_tool() -> Tool {
     Tool::Brush
-}
-
-pub(super) fn default_layer_filter_mode() -> photocraft_color::BlendMode {
-    photocraft_color::BlendMode::Normal
-}
-
-/// A stored Mode filter set to Pass Through, which the Mode list offered until #10878, loads as
-/// Normal: Pass Through isn't a mode the filter lists any more.
-pub(super) fn layer_filter_mode_or_normal<'de, D: serde::Deserializer<'de>>(d: D) -> Result<photocraft_color::BlendMode, D::Error> {
-    use serde::Deserialize;
-    let mode = photocraft_color::BlendMode::deserialize(d)?;
-    Ok(if mode == photocraft_color::BlendMode::PassThrough { photocraft_color::BlendMode::Normal } else { mode })
-}
-
-fn one_u32() -> u32 {
-    1
-}
-
-fn default_eyedropper_sample() -> String {
-    "all".into()
 }
 
 /// Each tool's Sample All Layers (the Paint Bucket calls it All Layers). Photoshop keeps one per
@@ -451,6 +412,7 @@ impl Default for ToolOptions {
             anti_alias: true,
             sample_all: SampleAllLayers::default(),
             object_finder: true,
+            object_hard_edge: true,
             remove_new_layer: false,
             remove_after_each_stroke: true,
             feather: 0.0,
@@ -496,25 +458,33 @@ impl Default for ToolOptions {
             finger_painting: false,
             smudge_mode: photocraft_color::BlendMode::Normal,
             enhance_edge: false,
-            vector_mode: "path".into(),
+            vector_mode: VectorMode::Path,
             pen_path_op: default_pen_path_op(),
-            shape_mode: "shape".into(),
+            shape_path_op: default_shape_path_op(),
+            shape_mode: VectorMode::Shape,
             shape_fill: true,
             stroke_width: 0.0,
             shape_stroke: Default::default(),
             shape_fill_gradient: None,
             shape_stroke_gradient: None,
             corner_radius: 0.0,
+            align_edges: true,
             polygon_sides: 5,
-            line_weight: 3.0,
+            line_weight: 1.0,
             arrow_start: false,
             arrow_end: false,
-            arrow_width: 52.0,
-            arrow_length: 50.0,
+            arrow_width: 5.0,
+            arrow_length: 10.0,
             arrow_concavity: 0.0,
+            rect_constraint: "unconstrained".into(),
+            rect_fixed_width: 0.0,
+            rect_fixed_height: 0.0,
+            rect_ratio_width: 1.0,
+            rect_ratio_height: 1.0,
+            rect_from_center: false,
             curve_fit: default_curve_fit(),
             pen_auto_add_delete: true,
-            pen_rubber_band: false,
+            path_options: PathOptionsSettings::default(),
             marquee_style: default_marquee_style(),
             marquee_width: 1.0,
             marquee_height: 1.0,
@@ -528,23 +498,10 @@ impl Default for ToolOptions {
             move_show_hover_bounds: true,
             move_expand_group_on_click: true,
             move_show_layers_hover_bounds: true,
-            transform_reference_point: false,
-            transform_relative_position: false,
-            transform_interpolation: None,
-            crop_ratio: String::new(),
-            crop_custom_ratio_width: 0.0,
-            crop_custom_ratio_height: 0.0,
-            crop_delete: true,
-            crop_content_aware: false,
-            crop_width: String::new(),
-            crop_height: String::new(),
-            crop_resolution: String::new(),
-            crop_resolution_unit: default_crop_resolution_unit(),
+            transform: TransformSettings::default(),
+            crop: CropSettings::default(),
+            perspective_crop: CropSizeFields::default(),
             perspective_crop_grid: true,
-            crop_overlay: Default::default(),
-            crop_overlay_show: Default::default(),
-            crop_overlay_orientation: 0,
-            crop_shield: Default::default(),
             magic_eraser_opacity: 100.0,
             bg_sampling: "continuous".into(),
             bg_limits: "contiguous".into(),
@@ -557,6 +514,7 @@ impl Default for ToolOptions {
             cr_tolerance: 30.0,
             cr_anti_alias: true,
             zoom_scrubby: true,
+            zoom_in: true,
             hand_scroll_all: false,
             pencil_auto_erase: false,
             brush_clear: false,
@@ -564,15 +522,10 @@ impl Default for ToolOptions {
             eraser_mode: default_eraser_mode(),
             erase_to_history: false,
             mixer_combination: 0,
-            magnetic_width: 10.0,
-            magnetic_contrast: 10.0,
-            magnetic_frequency: 57.0,
-            magnetic_pressure: false,
+            magnetic: MagneticSettings::default(),
             red_eye_pupil_size: 50.0,
             red_eye_darken: 50.0,
-            eyedropper_size: 1,
-            eyedropper_sample: default_eyedropper_sample(),
-            eyedropper_ring: true,
+            eyedropper: EyedropperOptions::default(),
             art_history_style: default_art_history_style(),
             art_history_area: 50.0,
             art_history_tolerance: 0.0,

@@ -408,25 +408,75 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
 /// export with ~5e11 steps of work (#1020).
 const MAX_DIVIDE_PARTS: i32 = 10_000;
 
+/// How one axis of a slice is cut: into a number of even parts, or into parts of a pixel size with
+/// the last taking what is left.
+#[derive(Clone, Copy)]
+enum Cut {
+    Count(i32),
+    Size(u32),
+}
+
+impl Cut {
+    /// The axis's cut from `count_key` or `size_key`; both is an error, neither is one part.
+    fn param(p: &Value, cmd: &str, count_key: &str, size_key: &str) -> Result<Cut> {
+        match (crate::commands::int(p, count_key), crate::commands::int(p, size_key)) {
+            (Some(_), Some(_)) => Err(bad(cmd, format!("give \"{count_key}\" or \"{size_key}\", not both"))),
+            (None, Some(size)) if size < 1 => Err(bad(cmd, format!("\"{size_key}\" is a whole number of pixels, at least 1"))),
+            (None, Some(size)) => Ok(Cut::Size(size.min(i64::from(u32::MAX)) as u32)),
+            (count, None) => Ok(Cut::Count(count.unwrap_or(1).clamp(1, 1000) as i32)),
+        }
+    }
+
+    /// The parts the cut makes of an axis `len` pixels long.
+    fn parts(self, len: u32) -> i64 {
+        match self {
+            Cut::Count(n) => i64::from(n),
+            Cut::Size(size) => i64::from(len.div_ceil(size)),
+        }
+    }
+
+    /// The edges of the parts of the axis `from..from + len`, first and last included.
+    fn edges(self, from: i32, len: u32) -> Vec<i32> {
+        let (from, len) = (i64::from(from), i64::from(len));
+        match self {
+            // Products can exceed i32 even when every interpolated edge fits the rect.
+            Cut::Count(n) => (0..=i64::from(n)).map(|k| (from + len * k / i64::from(n)) as i32).collect(),
+            Cut::Size(size) => {
+                // Sizes and lengths are positive; signed div_ceil is unstable.
+                let size_l = i64::from(size);
+                let parts = (len + size_l - 1) / size_l;
+                (0..parts).map(|k| (from + i64::from(size) * k) as i32).chain(std::iter::once((from + len) as i32)).collect()
+            }
+        }
+    }
+}
+
 fn divide(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "slice.divide";
     let t = find(s, p, cmd)?;
-    let down = crate::commands::int(p, "horizontal").unwrap_or(1).clamp(1, 1000) as i32;
-    let across = crate::commands::int(p, "vertical").unwrap_or(1).clamp(1, 1000) as i32;
-    if down == 1 && across == 1 {
-        return Err(bad(cmd, "give \"horizontal\" (slices down) and/or \"vertical\" (slices across) > 1"));
-    }
-    if down * across > MAX_DIVIDE_PARTS {
-        return Err(bad(cmd, format!("{down} x {across} = {} parts is more than one division makes ({MAX_DIVIDE_PARTS})", down * across)));
-    }
+    let down = Cut::param(p, cmd, "horizontal", "horizontalSize")?;
+    let across = Cut::param(p, cmd, "vertical", "verticalSize")?;
     let r = match t {
         Target::Auto(r) => r,
         Target::Stored(id) => s.active().and_then(|d| d.doc.slices.get(id)).map(|sl| sl.rect).ok_or_else(|| bad(cmd, "no such slice"))?,
     };
-    if r.width() < across as u32 || r.height() < down as u32 {
+    let (down_parts, across_parts) = (down.parts(r.height()), across.parts(r.width()));
+    if down_parts == 1 && across_parts == 1 {
+        return Err(bad(
+            cmd,
+            "give \"horizontal\" or \"horizontalSize\" (slices down) and/or \"vertical\" or \"verticalSize\" (slices across) that make more than one part",
+        ));
+    }
+    let total = down_parts.saturating_mul(across_parts);
+    if total > i64::from(MAX_DIVIDE_PARTS) {
+        return Err(bad(cmd, format!("{down_parts} x {across_parts} = {total} parts is more than one division makes ({MAX_DIVIDE_PARTS})")));
+    }
+    if down_parts > i64::from(r.height()) || across_parts > i64::from(r.width()) {
         return Err(bad(cmd, "the slice is too small to divide that many times"));
     }
-    let n = (down * across) as usize;
+    let rows = down.edges(r.y0, r.height());
+    let columns = across.edges(r.x0, r.width());
+    let n = total as usize;
     // An auto slice is promoted inside the same step: one undo restores it.
     let ids = s.edit("Divide Slice", |doc, _| {
         let id = store(doc, t)?;
@@ -436,13 +486,10 @@ fn divide(s: &mut Session, p: &Value) -> Result<Value> {
         let mut ids = Vec::new();
         let mut parts = Vec::new();
         let mut next_id = doc.slices.next_id();
-        for j in 0..down {
-            for i in 0..across {
-                // Products can exceed i32 even when every interpolated edge fits the rect.
-                let x = |k: i32| (i64::from(r.x0) + i64::from(r.width()) * i64::from(k) / i64::from(across)) as i32;
-                let y = |k: i32| (i64::from(r.y0) + i64::from(r.height()) * i64::from(k) / i64::from(down)) as i32;
-                let (x0, x1) = (x(i), x(i + 1));
-                let (y0, y1) = (y(j), y(j + 1));
+        for ys in rows.windows(2) {
+            for xs in columns.windows(2) {
+                let (x0, x1) = (xs[0], xs[1]);
+                let (y0, y1) = (ys[0], ys[1]);
                 let nid = if ids.is_empty() {
                     id
                 } else {
@@ -485,7 +532,8 @@ fn list(s: &mut Session) -> Result<Value> {
     for sl in d.doc.slices.list.iter().filter(|sl| !listed.contains(&sl.id) && !sl.rect.intersect(&canvas).is_empty()) {
         all.extend(stored_json(&d.doc, sl.id, &resolved));
     }
-    Ok(json!({"slices": all, "locked": s.file_menu.slices_locked}))
+    let warnings: Vec<String> = slices::overflow_warning(&d.doc).into_iter().collect();
+    Ok(json!({"slices": all, "locked": s.file_menu.slices_locked, "warnings": warnings}))
 }
 
 fn layer_based(s: &mut Session, p: &Value) -> Result<Value> {
@@ -565,7 +613,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "slice.divide",
             "Divide Slice…",
             &[],
-            r##"{"slice":id | "number":n,"horizontal":n=1 (slices down),"vertical":n=1 (slices across); at most 10000 parts} → {slices}"##,
+            r##"{"slice":id | "number":n,"horizontal":n=1 (slices down) or "horizontalSize":px (slices px high, the last takes the rest),"vertical":n=1 (slices across) or "verticalSize":px (slices px wide, the last takes the rest); a count and a size on one axis is an error; at most 10000 parts} → {slices}"##,
             unlocked,
             divide
         ),

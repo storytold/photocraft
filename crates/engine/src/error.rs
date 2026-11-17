@@ -37,6 +37,10 @@ pub enum EngineError {
     SourceChanged { name: String },
     #[error("{0}")]
     Other(String),
+    /// A batch or droplet stopped at its nesting or shared playback-step limit. A batch whose
+    /// step hits one fails that input instead of saving it unprocessed.
+    #[error("{0}")]
+    BatchLimit(String),
     /// A background job was cancelled (see [`jobs`]); nothing changed.
     #[error("cancelled")]
     Cancelled,
@@ -72,7 +76,7 @@ fn memory_limit_for(is_wasm32: bool, is_32_bit: bool) -> BuildMemoryLimit {
 /// The text after "hard limit": where the limit comes from and, where another build could open
 /// the file, where to get it. Its sentences stand apart so the action isn't lost in the cause.
 fn build_limit_scope(limit: BuildMemoryLimit) -> String {
-    let releases = crate::updates_cmds::RELEASES;
+    let releases = crate::build_info::RELEASES;
     match limit {
         BuildMemoryLimit::Measured => " on this machine".to_owned(),
         BuildMemoryLimit::Desktop32Bit => format!(
@@ -140,6 +144,19 @@ pub(crate) fn io_open_error(name: &str, error: photocraft_io::IoError) -> Engine
     }
 }
 
+/// [`io_open_error`] for Open As: `name` is the real file name and `as_ext` the format asked for,
+/// so a file that cannot be read as it says so instead of naming a made-up `<stem>.<as>` file.
+pub(crate) fn io_open_as_error(name: &str, as_ext: &str, error: photocraft_io::IoError) -> EngineError {
+    match io_open_error(name, error) {
+        EngineError::Other(message) => {
+            let detail = message.strip_prefix(&format!("{name}: ")).unwrap_or(&message);
+            let format = as_ext.trim_start_matches('.').to_ascii_uppercase();
+            EngineError::Other(format!("\"{name}\" could not be opened as {format}: {detail}"))
+        }
+        other => other,
+    }
+}
+
 impl From<photocraft_raster::AllocationError> for EngineError {
     fn from(error: photocraft_raster::AllocationError) -> Self {
         Self::Other(format!("not enough memory for this operation ({error}); the document was not changed"))
@@ -182,7 +199,7 @@ mod tests {
     #[test]
     fn hard_budget_scope_text_per_build() {
         assert_eq!(build_limit_scope(BuildMemoryLimit::Measured), " on this machine");
-        let releases = crate::updates_cmds::RELEASES;
+        let releases = crate::build_info::RELEASES;
         assert_eq!(
             build_limit_scope(BuildMemoryLimit::Desktop32Bit),
             format!(
