@@ -28,21 +28,35 @@ pub struct PathGrants {
 /// On Windows `/` and `\` both separate and a drive (`C:`) or share (`\\server`) starts it;
 /// elsewhere only `/` separates, as a `\` is part of a file name there.
 fn parts(path: &str) -> Option<Vec<String>> {
+    parts_on(path, cfg!(windows))
+}
+
+/// [`parts`] as Windows (`windows`) or any other system reads `path`.
+fn parts_on(path: &str, windows: bool) -> Option<Vec<String>> {
     if path.contains('\0') {
         return None;
     }
-    let separators: &[char] = if cfg!(windows) { &['/', '\\'] } else { &['/'] };
-    let absolute = if cfg!(windows) {
-        let drive = path.as_bytes().get(1) == Some(&b':') && path.as_bytes().first().is_some_and(u8::is_ascii_alphabetic);
-        drive || path.starts_with("\\\\") || path.starts_with("//")
+    let separators: &[char] = if windows { &['/', '\\'] } else { &['/'] };
+    // The parts that name the root: a drive (`C:`), a share (`\\\\server\\share`), or none (`/`).
+    let root = if windows {
+        // `C:\x` is absolute; `C:x` is relative to that drive's current folder.
+        let b = path.as_bytes();
+        let drive = b.first().is_some_and(u8::is_ascii_alphabetic) && b.get(1) == Some(&b':') && matches!(b.get(2), Some(b'/' | b'\\'));
+        if drive {
+            1
+        } else if path.starts_with("\\\\") || path.starts_with("//") {
+            2
+        } else {
+            return None;
+        }
+    } else if path.starts_with('/') {
+        0
     } else {
-        path.starts_with('/')
-    };
-    if !absolute {
         return None;
-    }
+    };
     let out: Vec<String> = path.split(separators).filter(|p| !p.is_empty()).map(str::to_owned).collect();
-    if out.is_empty() || out.iter().any(|p| p == "." || p == "..") {
+    // A root alone is no file or folder a script may be given.
+    if out.len() <= root || out.iter().any(|p| p == "." || p == "..") {
         return None;
     }
     Some(out)
@@ -121,13 +135,18 @@ mod tests {
 
     use super::*;
 
+    /// `path` (written with `/`) as an absolute path on this platform.
+    fn abs(path: &str) -> String {
+        if cfg!(windows) { format!("C:{path}") } else { path.to_owned() }
+    }
+
     #[test]
     fn only_chosen_paths_are_writable() {
         let mut g = PathGrants::default();
-        let save = json!({"path": "/home/a/out.png"});
+        let save = json!({"path": abs("/home/a/out.png")});
         assert!(g.check("file.saveACopy", &save).is_err(), "nothing is granted before a dialog");
         assert!(g.check("session.inspect", &json!({})).is_ok(), "other commands are not paths");
-        g.record(ModalKind::SaveFile, &json!("/home/a/out.png"));
+        g.record(ModalKind::SaveFile, &json!(abs("/home/a/out.png")));
         assert!(g.check("file.saveACopy", &save).is_ok());
         for no in [
             "/home/a/out.jpg",
@@ -140,12 +159,13 @@ mod tests {
             "/home/a/./out.png",
             "",
         ] {
-            assert!(!g.allows(no), "{no}");
+            let no = if no.starts_with('/') { abs(no) } else { no.to_owned() };
+            assert!(!g.allows(&no), "{no}");
         }
-        g.record(ModalKind::SaveFile, &json!("/home/a/plain"));
-        assert!(g.allows("/home/a/plain.jpg"), "a name typed without an extension takes the format's");
-        assert!(!g.allows("/home/a/plain.x/y"));
-        assert!(!g.allows("/home/a/plainer.jpg"));
+        g.record(ModalKind::SaveFile, &json!(abs("/home/a/plain")));
+        assert!(g.allows(&abs("/home/a/plain.jpg")), "a name typed without an extension takes the format's");
+        assert!(!g.allows(&abs("/home/a/plain.x/y")));
+        assert!(!g.allows(&abs("/home/a/plainer.jpg")));
     }
 
     #[cfg(not(windows))]
@@ -171,15 +191,27 @@ mod tests {
     }
 
     #[test]
+    fn windows_paths_start_at_a_drive_root_or_a_share() {
+        let win = |p: &str| parts_on(p, true);
+        assert_eq!(win("C:\\Users\\a/out.png"), Some(vec!["C:".into(), "Users".into(), "a".into(), "out.png".into()]));
+        assert!(win("\\\\server\\share\\x.png").is_some());
+        // Relative, or a root alone.
+        for relative in ["C:out.png", "C:", "out.png", "\\Users\\a.png", "1:\\x.png", "C:\\", "\\\\server\\share\\"] {
+            assert_eq!(win(relative), None, "{relative}");
+        }
+        assert_eq!(parts_on("C:\\Users\\a.png", false), None, "only Windows has drives");
+    }
+
+    #[test]
     fn other_dialogs_and_relative_answers_grant_nothing() {
         let mut g = PathGrants::default();
-        g.record(ModalKind::OpenFile, &json!("/home/a/in.png"));
-        g.record(ModalKind::Prompt, &json!("/home/a/x.png"));
+        g.record(ModalKind::OpenFile, &json!(abs("/home/a/in.png")));
+        g.record(ModalKind::Prompt, &json!(abs("/home/a/x.png")));
         g.record(ModalKind::SaveFile, &json!("x.png"));
         g.record(ModalKind::SaveFile, &json!(null));
-        g.record(ModalKind::SelectFolder, &json!("/"));
-        assert!(!g.allows("/home/a/in.png"));
-        assert!(!g.allows("/home/a/x.png"));
-        assert!(!g.allows("/x.png"), "the root is not a folder a script may be given");
+        g.record(ModalKind::SelectFolder, &json!(abs("/")));
+        assert!(!g.allows(&abs("/home/a/in.png")));
+        assert!(!g.allows(&abs("/home/a/x.png")));
+        assert!(!g.allows(&abs("/x.png")), "the root is not a folder a script may be given");
     }
 }

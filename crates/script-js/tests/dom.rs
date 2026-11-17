@@ -256,8 +256,9 @@ fn custom_options_are_kept_between_runs() {
         "#,
     );
     assert_eq!(lines, ["4 Ada 3 true", "12.5 #Pxl DescValueType.INTEGERTYPE", "lastName false", "typed", "8500"]);
-    let kept = s.borrow().prefs().scripts.custom_options.clone();
-    assert!(kept.persistent.is_empty() && kept.session.contains_key("my.session"));
+    assert!(s.borrow().prefs().scripts.custom_options.persistent.is_empty(), "erased");
+    let session = s.borrow_mut().execute("scripts.customOptions.get", json!({"key": "my.session"})).unwrap();
+    assert!(session.is_object(), "the session's own options are still there");
 }
 
 #[test]
@@ -285,4 +286,126 @@ fn a_physical_size_is_resized_at_the_new_resolution() {
     let lines =
         run(&s, "var d = app.activeDocument; d.resizeImage(new UnitValue(2, 'in'), undefined, 144); $.writeln(d.width, 'x', d.height, ' ', d.resolution);");
     assert_eq!(lines, ["288 pxx144 px 144"]);
+}
+
+#[test]
+fn custom_options_too_large_to_keep_say_so() {
+    let s = session(8, 8);
+    let lines = run(
+        &s,
+        r#"
+        var d = new ActionDescriptor(), big = Array(30001).join('x');
+        for (var i = 0; i < 3; i++) { d.putString(i + 1, big); }
+        try { app.putCustomOptions('big', d); } catch (e) { $.writeln(e.name, ' ', e.message.indexOf('64 KiB') >= 0); }
+        "#,
+    );
+    assert_eq!(lines, ["RangeError true"]);
+}
+
+#[test]
+fn a_history_state_an_edit_discarded_is_gone_not_another_state() {
+    let s = session(32, 32);
+    s.borrow_mut().execute("layer.new.layer", json!({"name": "A"})).unwrap();
+    s.borrow_mut().execute("layer.new.layer", json!({"name": "B"})).unwrap();
+    let lines = run(
+        &s,
+        r#"
+        var doc = app.activeDocument, h = doc.historyStates, last = h[2];
+        doc.activeHistoryState = h[1];
+        doc.artLayers.add();
+        try { $.writeln(last.name); } catch (e) { $.writeln(e.message); }
+        $.writeln(h[1].name, ' ', doc.historyStates.length);
+        // The new state took the discarded one's row: selecting it goes by the state, not a row.
+        var made = doc.activeHistoryState;
+        doc.activeHistoryState = doc.historyStates[0];
+        doc.activeHistoryState = made;
+        $.writeln(doc.activeHistoryState == made, ' ', doc.layers.length);
+        "#,
+    );
+    assert_eq!(lines, ["the History state no longer exists", "New Layer 3", "true 3"]);
+}
+
+#[test]
+fn layers_added_to_the_document_go_beside_the_active_layer() {
+    let s = session(32, 32);
+    let lines = run(
+        &s,
+        r#"
+        var doc = app.activeDocument;
+        var set = doc.layerSets.add(); set.name = 'G';
+        var inner = set.artLayers.add();
+        doc.activeLayer = inner;
+        var beside = doc.artLayers.add(); beside.name = 'Beside';
+        $.writeln(beside.parent == set, ' ', set.layers.length, ' ', doc.layers.length);
+        beside.move(doc, ElementPlacement.PLACEATBEGINNING);
+        $.writeln(beside.parent == doc, ' ', set.layers.length, ' ', doc.layers.length);
+        "#,
+    );
+    assert_eq!(lines, ["true 2 2", "true 1 3"]);
+}
+
+#[test]
+fn making_a_layer_text_keeps_its_settings() {
+    let s = session(64, 32);
+    let lines = run(
+        &s,
+        r#"
+        var doc = app.activeDocument;
+        var t = doc.artLayers.add();
+        t.name = 'Caption'; t.opacity = 30; t.blendMode = BlendMode.SCREEN; t.visible = false;
+        t.kind = LayerKind.TEXT;
+        $.writeln(t.kind, ' ', t.name, ' ', t.opacity, ' ', t.blendMode, ' ', t.visible, ' ', doc.layers.length);
+        "#,
+    );
+    assert_eq!(lines, ["LayerKind.TEXT Caption 30 BlendMode.SCREEN false 2"]);
+}
+
+#[test]
+fn a_layer_moves_to_the_beginning_or_the_end_of_a_group() {
+    let s = session(32, 32);
+    let lines = run(
+        &s,
+        r#"
+        var doc = app.activeDocument, set = doc.layerSets.add();
+        var a = set.artLayers.add(); a.name = 'A';
+        var b = set.artLayers.add(); b.name = 'B';
+        var x = doc.artLayers.add(); x.name = 'X';
+        x.move(set, ElementPlacement.PLACEATEND);
+        var names = []; for (var i = 0; i < set.layers.length; i++) names.push(set.layers[i].name);
+        $.writeln(names.join(','));
+        x.move(set, ElementPlacement.PLACEATBEGINNING);
+        names = []; for (var i = 0; i < set.layers.length; i++) names.push(set.layers[i].name);
+        $.writeln(names.join(','));
+        "#,
+    );
+    let first = lines[0].split(',').next_back().map(str::to_owned);
+    assert_eq!(first.as_deref(), Some("X"), "{lines:?}");
+    assert_eq!(lines[1].split(',').next(), Some("X"), "{lines:?}");
+}
+
+#[test]
+fn a_spent_time_limit_stays_uncatchable_at_a_document_read() {
+    let s = session(8, 8);
+    let host = SessionHost::new(s.clone(), "stop");
+    let src = "var doc = app.activeDocument; for (;;) { try { doc.name; } catch (e) {} }";
+    let budget = photocraft_script_js::WallClock::new(std::time::Duration::from_millis(50));
+    let mut r = Runner::new(src, Box::new(host), Box::new(budget), RunOptions::default()).unwrap();
+    let started = std::time::Instant::now();
+    let Step::Failed(m) = r.step() else { panic!("the run was stopped") };
+    assert!(m.contains("time limit"), "{m}");
+    // A caught stop would let the loop go on until something else ends it.
+    assert!(started.elapsed() < std::time::Duration::from_secs(10), "stopped only after {:?}", started.elapsed());
+}
+
+#[test]
+fn only_identifier_length_string_ids_are_remembered() {
+    let s = session(8, 8);
+    let lines = run(
+        &s,
+        r#"
+        var short = stringIDToTypeID('layerName'), long = new Array(5000).join('x');
+        $.writeln(typeIDToStringID(short), ' [', typeIDToStringID(stringIDToTypeID(long)), ']');
+        "#,
+    );
+    assert_eq!(lines, ["layerName []"]);
 }

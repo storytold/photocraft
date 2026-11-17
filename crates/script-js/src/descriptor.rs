@@ -21,6 +21,8 @@ use crate::value;
 const MAX_KEYS: usize = 1024;
 /// Longest text value, in bytes.
 const MAX_TEXT: usize = 32 << 10;
+/// Longest string id `typeIDToStringID` can give back, in bytes.
+const MAX_ID_TEXT: usize = 1024;
 
 #[derive(Debug, Clone, PartialEq)]
 enum Item {
@@ -310,7 +312,8 @@ fn string_to_id(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<Js
     let id = string_id(&s);
     if let Some(r) = ctx.realm().host_defined().get::<Registry>() {
         let mut strings = r.strings.borrow_mut();
-        if strings.len() < 1 << 16 {
+        // Only ids short enough to be identifiers are remembered for `typeIDToStringID`.
+        if strings.len() < 1 << 16 && s.len() <= MAX_ID_TEXT {
             strings.entry(id).or_insert(s);
         }
     }
@@ -334,6 +337,11 @@ fn put_custom(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
     .ok_or_else(|| type_error("putCustomOptions takes a key and an ActionDescriptor"))?;
     let persistent = args.get(2).is_none_or(|v| v.is_undefined() || v.to_boolean());
     let value = json!({ "items": items.iter().map(|(k, v)| v.to_json(*k)).collect::<Vec<_>>() });
+    if serde_json::to_vec(&value).map_or(usize::MAX, |b| b.len()) > crate::commands::MAX_JSON_BYTES {
+        return Err(JsNativeError::range()
+            .with_message(format!("custom options can hold at most {} KiB; this descriptor holds more", crate::commands::MAX_JSON_BYTES >> 10))
+            .into());
+    }
     command(ctx, "scripts.customOptions.put", json!({ "key": key, "value": value, "persistent": persistent }))?;
     Ok(JsValue::undefined())
 }

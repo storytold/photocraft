@@ -245,6 +245,8 @@ pub struct Scanner {
     second: bool,
     /// Past the first line (a `#!` line at the very start is a comment).
     started: bool,
+    /// Any depth is fine: only directives are being found (see [`Self::unbounded`]).
+    unbounded: bool,
 }
 
 impl Default for Scanner {
@@ -259,7 +261,15 @@ impl Default for Scanner {
             label: false,
             second: false,
             started: false,
+            unbounded: false,
         }
+    }
+}
+
+impl Scanner {
+    /// A scanner that follows brackets nested to any depth, for a parser that takes them all.
+    pub fn unbounded() -> Self {
+        Self { unbounded: true, ..Self::default() }
     }
 }
 
@@ -340,7 +350,7 @@ impl Scanner {
     fn open(&mut self) -> bool {
         self.depth += 1;
         self.regex_ok = true;
-        self.depth > MAX_NESTING
+        !self.unbounded && self.depth > MAX_NESTING
     }
 
     /// Scan one line; `true` when brackets nest deeper than [`MAX_NESTING`] on it.

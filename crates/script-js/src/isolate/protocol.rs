@@ -222,11 +222,13 @@ pub fn check_dialog_args(kind: DialogKind, args: &Value) -> Result<(), String> {
             Ok(())
         }
         DialogKind::Window => {
-            let id = args.get("id").and_then(Value::as_u64);
+            // The interface draws windows by a 32-bit id: a larger one could never be shown or
+            // answered, and the run would wait for it forever.
+            let id = args.get("id").and_then(Value::as_u64).and_then(|i| u32::try_from(i).ok());
             let window = args.get("window");
             match (id, window) {
                 (Some(_), Some(w)) => check_window(w),
-                _ => Err("a window dialog without an id and controls".into()),
+                _ => Err("a window dialog without a 32-bit id and controls".into()),
             }
         }
         DialogKind::OpenFile | DialogKind::SaveFile | DialogKind::SelectFolder => {
@@ -386,6 +388,13 @@ mod tests {
         assert!(matches!(err, FrameError::Malformed(ref m) if m.contains("values")), "{err:?}");
         // Commas and brackets inside text are not values.
         assert_eq!(values_in(br#"{"line":"a,b,[c]:{\",\"}"}"#), 3, "one object and its one member");
+    }
+
+    #[test]
+    fn a_window_dialog_id_must_fit_in_32_bits() {
+        let w = json!({"id": 0, "type": "window", "children": []});
+        assert!(check_dialog_args(DialogKind::Window, &json!({"id": u32::MAX, "window": w})).is_ok());
+        assert!(check_dialog_args(DialogKind::Window, &json!({"id": u64::from(u32::MAX) + 1, "window": w})).is_err());
     }
 
     #[test]

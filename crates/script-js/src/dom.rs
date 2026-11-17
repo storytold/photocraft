@@ -273,12 +273,13 @@ struct TextRef {
     layer: u64,
 }
 
-/// A History panel row of a document.
+/// A History panel state of a document, by the state's id: it means that state while it exists,
+/// wherever its row moves, and nothing once an edit has discarded it.
 #[derive(Debug, Clone, Copy, Trace, Finalize, JsData)]
 #[boa_gc(empty_trace)]
 struct HistoryRef {
     doc: DocKey,
-    row: u64,
+    state: u64,
 }
 
 /// A document's `selection`.
@@ -297,13 +298,13 @@ fn layer_object(ctx: &mut Context, doc: DocKey, id: u64) -> JsResult<JsObject> {
     Ok(obj)
 }
 
-fn history_object(ctx: &mut Context, doc: DocKey, row: u64) -> JsResult<JsObject> {
-    let key = (HISTORY, doc.id, doc.serial, row);
+fn history_object(ctx: &mut Context, doc: DocKey, state: u64) -> JsResult<JsObject> {
+    let key = (HISTORY, doc.id, doc.serial, state);
     if let Some(o) = cached(ctx, key) {
         return Ok(o);
     }
     let (_, _, proto, _) = protos(ctx)?;
-    let obj = JsObject::from_proto_and_data(Some(proto), HistoryRef { doc, row });
+    let obj = JsObject::from_proto_and_data(Some(proto), HistoryRef { doc, state });
     cache(ctx, key, &obj);
     Ok(obj)
 }
@@ -422,6 +423,8 @@ fn coll_add(_: &JsValue, _: &[JsValue], c: &Coll, ctx: &mut Context) -> JsResult
     if c.parent != u64::MAX {
         edit(ctx, doc, "layer.moveTo", json!({ "layer": new, "target": c.parent, "position": "into" }))?;
     }
+    // The document's own collections add beside the active layer, as Photoshop's do: inside
+    // the active layer's group when it is in one (scripts move it out with `move` if they want).
     Ok(layer_object(ctx, doc, new)?.into())
 }
 
@@ -539,6 +542,27 @@ fn layer_set_kind(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResu
     edit(ctx, doc, "layer.select", json!({ "layer": id }))?;
     let made = edit(ctx, doc, "type.create", json!({ "x": 0, "y": 0, "text": "" }))?;
     let new = made["layer"].as_u64().ok_or_else(|| error("the text layer was not reported"))?;
+    // The layer's own settings carry over; only its kind changes. A name the user or script
+    // gave it stays, while a default one ("Layer 3") is left for the type engine to name.
+    let mut props = json!({ "layer": new });
+    if let Some(v) = n["visible"].as_bool() {
+        props["visible"] = json!(v);
+    }
+    for k in ["opacity", "fill"] {
+        if let Some(v) = n[k].as_f64().filter(|v| (0.0..=1.0).contains(v)) {
+            props[k] = json!(v);
+        }
+    }
+    if let Some(b) = n["blend"].as_str().and_then(blend_label) {
+        props["blend"] = json!(b);
+    }
+    // Only what there is to carry over: each command is a History step.
+    if props.as_object().is_some_and(|m| m.len() > 1) {
+        edit(ctx, doc, "layer.setProps", props)?;
+    }
+    if let Some(name) = n["name"].as_str().filter(|name| !is_default_name(name)) {
+        edit(ctx, doc, "layer.renameLayer", json!({ "layer": new, "name": name }))?;
+    }
     edit(ctx, doc, "layer.delete", json!({ "layer": id }))?;
     if let Some(o) = this.as_object() {
         if let Some(l) = o.downcast_ref::<LayerRef>() {
@@ -548,6 +572,11 @@ fn layer_set_kind(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResu
         cache(ctx, (LAYER, doc.id, doc.serial, new), &o);
     }
     Ok(JsValue::undefined())
+}
+
+/// A name the app gives a new layer itself: "Layer" and a number.
+fn is_default_name(name: &str) -> bool {
+    name.strip_prefix("Layer ").is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
 fn layer_typename(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
@@ -660,7 +689,15 @@ fn move_layer(ctx: &mut Context, doc: DocKey, id: u64, rel: &JsValue, placement:
         match place.as_str() {
             "ElementPlacement.PLACEBEFORE" => (rid, "above"),
             "ElementPlacement.PLACEAFTER" => (rid, "below"),
-            "ElementPlacement.INSIDE" | "ElementPlacement.PLACEATBEGINNING" | "ElementPlacement.PLACEATEND" => (rid, "into"),
+            "ElementPlacement.INSIDE" | "ElementPlacement.PLACEATBEGINNING" => (rid, "into"),
+            // `into` puts it first in the group: the end is below the group's last layer.
+            "ElementPlacement.PLACEATEND" => {
+                let last = find(&d["layers"], rid).and_then(|(g, _)| g["children"].as_array().and_then(|k| k.last()).and_then(|l| l["id"].as_u64()));
+                match last {
+                    Some(l) => (l, "below"),
+                    None => (rid, "into"),
+                }
+            }
             other => return Err(error(format!("{other} is not an ElementPlacement"))),
         }
     } else if doc_id(rel) == Some(doc) {
@@ -799,20 +836,27 @@ fn history_ref(v: &JsValue) -> Option<HistoryRef> {
     v.as_object().and_then(|o| o.downcast_ref::<HistoryRef>().map(|h| *h))
 }
 
-/// The History panel rows of a document's inspection, and the current one.
-fn rows(d: &Value) -> (Vec<String>, u64) {
-    let past: Vec<String> = d["history"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect()).unwrap_or_default();
-    let current = u64::try_from(past.len().saturating_sub(1)).unwrap_or(0);
-    let redo = d["historyRedo"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect::<Vec<_>>()).unwrap_or_default();
-    (past.into_iter().chain(redo).collect(), current)
+/// The History panel rows of a document's inspection, as (state id, name), and the current
+/// row's index.
+fn rows(d: &Value) -> (Vec<(u64, String)>, usize) {
+    let names = |k: &str| d[k].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect::<Vec<_>>()).unwrap_or_default();
+    let past = names("history");
+    let current = past.len().saturating_sub(1);
+    let ids: Vec<u64> = d["historyIds"].as_array().map(|a| a.iter().filter_map(Value::as_u64).collect()).unwrap_or_default();
+    (ids.into_iter().zip(past.into_iter().chain(names("historyRedo"))).collect(), current)
+}
+
+/// The row of state `h` now, or an error when an edit has discarded it.
+fn row_of(d: &Value, h: HistoryRef) -> JsResult<(usize, String)> {
+    let (rows, _) = rows(d);
+    rows.into_iter().enumerate().find(|(_, (id, _))| *id == h.state).map(|(i, (_, name))| (i, name)).ok_or_else(|| error("the History state no longer exists"))
 }
 
 fn history_name(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let h = history_ref(this).ok_or_else(|| type_error("not a HistoryState"))?;
     let d = inspect(ctx, h.doc)?;
-    let (rows, _) = rows(&d);
-    let row = usize::try_from(h.row).ok().and_then(|i| rows.get(i)).ok_or_else(|| error("the History state no longer exists"))?;
-    Ok(JsValue::from(JsString::from(row.as_str())))
+    let (_, name) = row_of(&d, h)?;
+    Ok(JsValue::from(JsString::from(name.as_str())))
 }
 
 fn history_parent(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
@@ -825,8 +869,8 @@ fn doc_history_states(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsRes
     let d = inspect(ctx, doc)?;
     let (rows, _) = rows(&d);
     let mut out = Vec::with_capacity(rows.len());
-    for i in 0..rows.len() {
-        out.push(JsValue::from(history_object(ctx, doc, u64::try_from(i).unwrap_or(u64::MAX))?));
+    for (id, _) in rows {
+        out.push(JsValue::from(history_object(ctx, doc, id)?));
     }
     Ok(JsArray::from_iter(out, ctx).into())
 }
@@ -834,8 +878,9 @@ fn doc_history_states(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsRes
 fn doc_active_history(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let doc = doc_key(this)?;
     let d = inspect(ctx, doc)?;
-    let (_, current) = rows(&d);
-    Ok(history_object(ctx, doc, current)?.into())
+    let (rows, current) = rows(&d);
+    let (id, _) = rows.get(current).ok_or_else(|| error("the document has no History state"))?;
+    Ok(history_object(ctx, doc, *id)?.into())
 }
 
 fn doc_set_active_history(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
@@ -845,7 +890,9 @@ fn doc_set_active_history(this: &JsValue, args: &[JsValue], ctx: &mut Context) -
         .and_then(history_ref)
         .filter(|h| h.doc == doc)
         .ok_or_else(|| type_error("activeHistoryState takes one of this document's historyStates"))?;
-    edit(ctx, doc, "history.selectState", json!({ "state": h.row }))?;
+    let d = inspect(ctx, doc)?;
+    let (row, _) = row_of(&d, h)?;
+    edit(ctx, doc, "history.selectState", json!({ "state": row }))?;
     Ok(JsValue::undefined())
 }
 

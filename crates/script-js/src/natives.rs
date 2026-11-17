@@ -55,6 +55,15 @@ pub(crate) fn error_with_number(ctx: &mut Context, message: impl Into<String>, n
     }
 }
 
+/// `message` for a command the host refused, or `e` itself when it stops the run: a stop must
+/// stay uncatchable, never become an `Error` the script could catch and go on after.
+fn host_failure(ctx: &Context, e: JsError, message: &str) -> JsError {
+    match shared(ctx) {
+        Ok(s) if s.borrow().stop.is_none() => error(message),
+        _ => e,
+    }
+}
+
 /// End the attempt with an uncatchable error, remembering why.
 fn stop(ctx: &mut Context, why: Stop) -> JsError {
     if let Ok(s) = shared(ctx) {
@@ -337,7 +346,7 @@ fn this_doc(this: &JsValue, ctx: &mut Context) -> JsResult<Value> {
 /// `document.inspect` of document `id`, by its serial: one call, so a tab closed or moved in the
 /// meantime can't make it read another document.
 pub(crate) fn inspect_document(id: DocKey, ctx: &mut Context) -> JsResult<Value> {
-    let d = command(ctx, "document.inspect", json!({ "serial": id.serial })).map_err(|_| error("the document is no longer open"))?;
+    let d = command(ctx, "document.inspect", json!({ "serial": id.serial })).map_err(|e| host_failure(ctx, e, "the document is no longer open"))?;
     // The id is checked too, against a host that answers for another document.
     if d.get("id").and_then(Value::as_u64).is_some_and(|i| i != id.id) {
         return Err(error("the document is no longer open"));
@@ -408,7 +417,7 @@ fn app_set_active_document(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> 
     if !s["documents"].as_array().is_some_and(|docs| docs.iter().any(|d| entry_id(d).ok() == Some(id))) {
         return Err(error("Object expected"));
     }
-    command(ctx, "document.activate", json!({ "serial": id.serial })).map_err(|_| error("Object expected"))?;
+    command(ctx, "document.activate", json!({ "serial": id.serial })).map_err(|e| host_failure(ctx, e, "Object expected"))?;
     Ok(JsValue::undefined())
 }
 

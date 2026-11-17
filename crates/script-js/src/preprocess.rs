@@ -42,7 +42,8 @@ pub fn preprocess_with(source: &str, guard: bool) -> Result<String, String> {
         return Err("the file is UTF-16 text (it starts with a UTF-16 byte-order mark); save it as UTF-8".into());
     }
     let mut out = String::with_capacity(source.len());
-    let mut scan = Scanner::default();
+    // Unguarded, the scan still has to follow every bracket to tell where directives can be.
+    let mut scan = if guard { Scanner::default() } else { Scanner::unbounded() };
     for (n, (line, end)) in lines(source).enumerate() {
         if scan.at_top_level()
             && let Some(d) = comment_include(line)
@@ -54,7 +55,7 @@ pub fn preprocess_with(source: &str, guard: bool) -> Result<String, String> {
             Some(_) => {}
             None => {
                 // U+2028 and U+2029 end a line but not a string literal.
-                if scan.line(line, matches!(end, "\u{2028}" | "\u{2029}")) && guard {
+                if scan.line(line, matches!(end, "\u{2028}" | "\u{2029}")) {
                     return Err(format!("line {}: SyntaxError: {}", n + 1, scan::TOO_DEEP));
                 }
                 out.push_str(line);
@@ -96,7 +97,18 @@ fn directive(line: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::preprocess;
+    use super::{preprocess, preprocess_with};
+
+    #[test]
+    fn unguarded_directives_after_deep_nesting_are_still_found() {
+        let deep = format!("var a = {}0{};", "[".repeat(100), "]".repeat(100));
+        let src = format!("{deep}\n#target photoshop\nvar b = 1;");
+        assert!(preprocess_with(&src, true).is_err());
+        let out = preprocess_with(&src, false).unwrap();
+        assert_eq!(out, format!("{deep}\n\nvar b = 1;"));
+        let inc = format!("{deep}\n#include \"x.jsx\"");
+        assert!(preprocess_with(&inc, false).unwrap_err().contains("#include"));
+    }
 
     #[test]
     fn blanks_known_directives_and_keeps_line_numbers() {
