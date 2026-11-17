@@ -537,6 +537,16 @@ fn plan(parts: &[craft_exr::decode::PartInfo]) -> Option<Plan> {
     Some(Plan { nodes: top, canvas: (x0, y0, width, height) })
 }
 
+/// Tiles the decoded image would add must fit the RAM tile budget when no scratch disk can
+/// take cold tiles. Shared with the native band decoder (`exr_native`), which only the desktop
+/// builds have; the layer tree is built on every target, the browser's included.
+pub(crate) fn ram_tile_capacity(resident: u64, budget: u64, growth: u64) -> Result<(), IoError> {
+    if resident.checked_add(growth).is_none_or(|required| required > budget) {
+        return Err(IoError::OutOfMemory("decoded image tiles exceed the available RAM budget; enable a scratch disk or close other documents".into()));
+    }
+    Ok(())
+}
+
 /// The header limits File › Open's decoder applies, as `craft-exr` limits.
 fn exr_limits(opts: &crate::ImportOptions) -> craft_exr::decode::Limits {
     let codec = crate::flat::decode_limits(opts);
@@ -649,7 +659,7 @@ pub(crate) fn open_layered(name: &str, bytes: &[u8], opts: &crate::ImportOptions
         let side = photocraft_geom::TILE_SIZE as u64;
         let tiles = u64::from(cw).div_ceil(side).saturating_mul(u64::from(ch).div_ceil(side));
         let growth = tiles.saturating_mul(side * side * 16).saturating_mul(order.len() as u64);
-        crate::exr_native::ram_tile_capacity(photocraft_raster::spill::stats().resident_bytes as u64, photocraft_raster::memory::refresh().tile_bytes, growth)?;
+        ram_tile_capacity(photocraft_raster::spill::stats().resident_bytes as u64, photocraft_raster::memory::refresh().tile_bytes, growth)?;
     }
     // Leaves are built part by part, then placed in the tree in panel order.
     let mut built: Vec<Option<Layer>> = (0..order.len()).map(|_| None).collect();
