@@ -590,7 +590,8 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Define Pattern…",
             menu: &["Edit"],
             shortcut: None,
-            params: r##"{"name":text,"rect":[x0,y0,x1,y1]?,"fromPattern":id|name?} → {"pattern":id,info} (fromPattern: copy the existing pattern into the library with a fresh id and the same name and pixels; name/rect apply only without fromPattern. Otherwise name defaults to the document's name numbered past the library's names; rect defaults to the selection bounds or else the canvas; defined from the visible composite)"##,
+            // The leading object supplies the Pattern Name dialog; the copy-only input belongs in its note.
+            params: r##"{"name":text,"rect":[x0,y0,x1,y1]?} → {"pattern":id,info} (name: default the document's name numbered past the library's names; rect: default the selection bounds or else the canvas; defined from the visible composite. API-only alternative {"fromPattern":id|name}: copy the existing pattern with a fresh id and the same name and pixels, ignoring name/rect)"##,
             enabled: has_doc,
             journal: true,
             run: define,
