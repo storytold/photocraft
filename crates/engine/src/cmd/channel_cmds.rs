@@ -26,6 +26,9 @@ use crate::{DocState, EngineError, Result, Session};
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+mod calculations_new_document_tests;
+
 // ---------------------------------------------------------------------------------------------
 // Enabled predicates
 

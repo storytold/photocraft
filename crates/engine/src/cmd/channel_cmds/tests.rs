@@ -867,8 +867,9 @@ fn calculations_results() {
         .unwrap();
     assert_eq!(r["document"], 1);
     let d = doc(&s);
-    assert_eq!(d.mode, ColorMode::Grayscale);
-    let v = d.layers[0].surface().unwrap().pixel(5, 5)[0];
+    // A Multichannel document whose one channel stores the result as ink (#14515).
+    assert_eq!(d.mode, ColorMode::Multichannel);
+    let v = 1.0 - d.channels[0].surface.pixel(5, 5)[0];
     assert!((v - 0.5).abs() < 0.01, "{v}");
     s.set_active(0);
     assert!(s.execute("image.calculations", json!({"source1": {"channel": 0}, "source2": {"channel": 1}, "result": "x"})).is_err());

@@ -153,6 +153,21 @@ pub(super) fn gray_document(name: &str, like: &Document, plane: &[f32]) -> Docum
     d
 }
 
+/// The document Calculations with Result New Document makes, as the reference application does
+/// (#14515): Multichannel, with no layers and one channel "Alpha 1" holding `plane`, at the size,
+/// resolution and depth of `like`. Like the channels Image › Mode › Multichannel makes from a Lab
+/// image, it prints in black and stores ink (`1 - value`), so it shows and reads back as `plane`.
+pub(super) fn multichannel_document(name: &str, like: &Document, plane: &[f32]) -> Document {
+    let mut d = Document::new(name, like.size, ColorMode::Multichannel, like.depth);
+    d.resolution_dpi = like.resolution_dpi;
+    let mut surface = Surface::new(PixelFormat::new(ColorMode::Grayscale, like.depth, false));
+    let ink: Vec<f32> = plane.iter().map(|v| 1.0 - v.clamp(0.0, 1.0)).collect();
+    surface.write_region(like.bounds(), &ink);
+    surface.prune();
+    d.channels.push(AlphaChannel { spot: Some((Color::BLACK, 0.0)), ..AlphaChannel::new("Alpha 1", surface) });
+    d
+}
+
 pub(super) fn delete_channel(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "channel.delete";
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
