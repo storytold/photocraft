@@ -110,9 +110,10 @@ fn place_scaled(src: &Surface, src_rect: Rect, t: [f64; 4]) -> Option<Surface> {
 }
 
 /// Where the reference application puts a smart object whose box (its contents' canvas) is
-/// `bounds`, scaled and moved by `[sx, sy, dx, dy]` (source → document): the box's left and top
-/// edges and its width and height are each rounded to whole pixels, halves up (a move to 106.5
-/// lands on 107). Returns the map that fills that snapped box, as `[sx, sy, dx, dy]`, or `None`
+/// `bounds`, scaled and moved by `[sx, sy, dx, dy]` (source → document): each of the box's four
+/// edges is rounded to whole pixels on its own, halves up (a move to 106.5 lands on 107), so a
+/// box 235.44 px tall whose top is at 128.28 spans 128 to 364, 236 rows (measured on the
+/// reference application's own files: its layer bounds and pixels). Returns the map that fills that snapped box, as `[sx, sy, dx, dy]`, or `None`
 /// for a flip, an empty box, or a size past [`MAX_SCALED_SIDE`].
 pub fn snapped_scale(bounds: Rect, [sx, sy, dx, dy]: [f64; 4]) -> Option<[f64; 4]> {
     if bounds.is_empty() || !(sx > 0.0 && sy > 0.0) {
@@ -121,7 +122,8 @@ pub fn snapped_scale(bounds: Rect, [sx, sy, dx, dy]: [f64; 4]) -> Option<[f64; 4
     let (w, h) = (f64::from(bounds.width()), f64::from(bounds.height()));
     let snap = |v: f64| (v + 0.5).floor();
     let (x0, y0) = (snap(dx + sx * f64::from(bounds.x0)), snap(dy + sy * f64::from(bounds.y0)));
-    let (pw, ph) = (snap(sx * w).max(1.0), snap(sy * h).max(1.0));
+    let (x1, y1) = (snap(dx + sx * f64::from(bounds.x1)), snap(dy + sy * f64::from(bounds.y1)));
+    let (pw, ph) = ((x1 - x0).max(1.0), (y1 - y0).max(1.0));
     let fits = |v: f64| v.is_finite() && v.abs() < MAX_SCALED_SIDE;
     if !(fits(x0) && fits(y0) && fits(pw) && fits(ph)) {
         return None;
@@ -2694,16 +2696,18 @@ mod tests {
     }
 
     /// A scaled smart object fills a box snapped to whole pixels, as in the reference
-    /// application: a third of 256 px (85.33 px, from 277.33) covers exactly 277..362. Inside it
-    /// the source is read where the exact placement puts it, so the first pixel, a third of which
-    /// lies before 277.33, is only partly covered (as the reference draws fractional tops).
+    /// application: a third of 256 px (85.33 px, from 277.33 to 362.67) covers exactly 277..363,
+    /// each edge rounded where it falls. Inside it the source is read where the exact placement
+    /// puts it, so the first and last pixels, partly outside 277.33..362.67, are only partly
+    /// covered (as the reference draws fractional edges).
     #[test]
     fn a_scaled_smart_object_fills_whole_pixels() {
         let row = scaled_strip(1.0 / 3.0);
         assert_eq!(row[276], 0.0);
         assert!(row[277] > 0.0 && row[277] < row[278], "{} {}", row[277], row[278]);
         assert!(row[361] > 100.0, "{}", row[361]);
-        assert_eq!(row[362], 0.0);
+        assert!(row[362] > 0.0 && row[362] < row[361], "{} {}", row[362], row[361]);
+        assert_eq!(row[363], 0.0);
     }
 
     /// A smart object scaled to a fractional size or top (as the reference application draws one;
@@ -2752,6 +2756,21 @@ mod tests {
         assert_eq!(snapped_scale(r, [-1.0, 1.0, 0.0, 0.0]), None, "a flip takes the general path");
         assert_eq!(snapped_scale(r, [f64::NAN, 1.0, 0.0, 0.0]), None);
         assert_eq!(snapped_scale(r, [1e300, 1.0, 0.0, 0.0]), None);
+    }
+
+    /// The bottom and right edges are rounded where they fall, not the size: the reference
+    /// application's 302 x 202 contents scaled by 352/302 with the top at 128.28 cover rows 128 to
+    /// 364 (its layer bounds), where rounding the height (235.44) would end them at 363.
+    #[test]
+    fn each_edge_of_a_scaled_box_is_rounded_where_it_falls() {
+        let r = Rect::new(0, 0, 302, 202);
+        let k = 352.0 / 302.0;
+        let [kx, ky, dx, dy] = snapped_scale(r, [k, k, 180.0, 128.278_145_695_364_24]).unwrap();
+        assert_eq!([dx, dy, dx + kx * 302.0, dy + ky * 202.0], [180.0, 128.0, 532.0, 364.0]);
+        // Shrunk to 0.3 with the top at 10.6: the 60.6 rows reach 71.2, so 11 to 71 (60 rows),
+        // where rounding the size would give 61.
+        let [_, ky, dy, ..] = snapped_scale(r, [1.0, 0.3, 0.0, 10.6]).map(|[a, b, c, d]| [a, b, d, c]).unwrap();
+        assert_eq!([dy, dy + ky * 202.0], [11.0, 71.0]);
     }
 
     /// Shrinking resamples with Bicubic Sharper and enlarging with Bicubic Smoother (Image Size's
