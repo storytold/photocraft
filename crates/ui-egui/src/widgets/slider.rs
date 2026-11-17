@@ -1,7 +1,7 @@
 use super::fields::{FieldOpts, VALUE_FIELD_H, value_field_in};
 use super::panel::surface;
 use super::scrub::scrub_label_within;
-use super::text_field::TEXT_FIELD_H;
+use super::text_field::{TEXT_FIELD_H, first_field_id};
 use super::{Color32, Pos2, Rect, Response, Sense, Stroke, Tokens, Ui, Vec2, pos2, vec2};
 
 /// Thin-track slider with a round knob. `gradient` paints the track (e.g. hue spectrum).
@@ -203,6 +203,24 @@ fn slider_with(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32
     resp
 }
 
+/// A click on a row's slider, or the end of a drag on it, hands keyboard focus to the row's number,
+/// so typing replaces it and Up and Down step it as after a click on the number itself (#13432).
+/// Dialogs only (the Foreground order, as are popups and modals): docked and floating panels sit
+/// below it, and there a focused field would take the tool shortcuts, Space-to-pan and the hold
+/// keys after every slider click.
+fn slider_hands_off(ui: &Ui, slider: &Response) -> bool {
+    ui.layer_id().order == egui::Order::Foreground && (slider.clicked() || slider.drag_stopped())
+}
+
+/// Ask for the hand-off before the row's number is drawn: the number then gains focus in the frame
+/// it draws, with its text selected and its arrow-key filter set up, like a click on it
+/// (`first_field_id` is what a dialog's first field uses).
+fn take_hand_off(ui: &Ui, key: egui::Id) {
+    if ui.data_mut(|d| d.remove_temp::<bool>(key)).unwrap_or(false) {
+        ui.data_mut(|d| d.insert_temp(first_field_id(), true));
+    }
+}
+
 /// Labelled slider row: `Label ........ [value field]` above a full-width thin slider.
 pub fn slider_row(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, gradient: Option<&[Color32]>) -> Response {
     slider_row_with(ui, label, value, range, suffix, gradient, RowGestures::default())
@@ -236,6 +254,7 @@ pub fn slider_row_prec(
 ) -> Response {
     let t = Tokens::get(ui.ctx());
     let mut changed_resp = None;
+    let hand_off_key = ui.next_auto_id().with("slider-hand-off");
     // The row's caption names both its number (through the scrub link) and its slider.
     let mut label_id = None;
     ui.horizontal(|ui| {
@@ -244,6 +263,7 @@ pub fn slider_row_prec(
         label_id = Some(l.id);
         scrub_label_within(ui, &l, f32::INFINITY);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            take_hand_off(ui, hand_off_key);
             changed_resp = Some(
                 value_field_in(
                     ui,
@@ -262,6 +282,10 @@ pub fn slider_row_prec(
     let s = slider_with(ui, value, range, gradient, g);
     s.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), f64::from(*value), tl!(label)));
     let s = if let Some(id) = label_id { s.labelled_by(id) } else { s };
+    if slider_hands_off(ui, &s) {
+        ui.data_mut(|d| d.insert_temp(hand_off_key, true));
+        ui.ctx().request_repaint();
+    }
     let mut r = s.clone();
     if let Some(v) = changed_resp {
         if v.changed() {
@@ -291,6 +315,7 @@ pub fn row_label(ui: &mut Ui, label: &str, width: f32) -> Response {
 /// ([`row_label`]), the slider, then the value field. The label still scrubs the field.
 pub fn slider_line(ui: &mut Ui, label: &str, label_w: f32, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str) -> Response {
     const FIELD_W: f32 = 64.0;
+    let hand_off_key = ui.next_auto_id().with("slider-hand-off");
     let mut field = None;
     let s = ui
         .horizontal(|ui| {
@@ -302,6 +327,11 @@ pub fn slider_line(ui: &mut Ui, label: &str, label_w: f32, value: &mut f32, rang
                     slider_with(ui, value, range.clone(), None, RowGestures::default())
                 })
                 .inner;
+            take_hand_off(ui, hand_off_key);
+            if slider_hands_off(ui, &s) {
+                ui.data_mut(|d| d.insert_temp(hand_off_key, true));
+                ui.ctx().request_repaint();
+            }
             field = Some(value_field_in(ui, value, range.clone(), suffix, FIELD_W, 0.0, FieldOpts::default(), Some(label)).0);
             s
         })
