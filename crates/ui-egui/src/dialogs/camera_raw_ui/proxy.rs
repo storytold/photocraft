@@ -3,6 +3,11 @@ use super::PARALLEL_MIN_PIXELS;
 use super::open::raw_stage;
 use super::{CameraRaw, CameraRawDialog, RgbHistogram};
 
+pub(super) fn retone(px: &mut [[f32; 4]], w: usize, h: usize, curve: &[[f32; 2]], p: &mut CameraRaw) {
+    photocraft_io::raw::retone(px, w, h, curve, raw_stage(p));
+    (p.shadows, p.highlights, p.clarity, p.texture, p.dehaze) = (0.0, 0.0, 0.0, 0.0, 0.0);
+}
+
 /// Everything one develop of the proxy reads, owned, so it can run off the UI thread.
 pub(super) struct ProxyJob {
     pub(super) proxy: std::sync::Arc<Vec<[f32; 4]>>,
@@ -39,12 +44,9 @@ impl ProxyJob {
         // proxy as it is and uploads it once.
         let retoned = self.raw_curve.as_ref().map(|curve| {
             let mut px = self.proxy.to_vec();
-            photocraft_io::raw::retone(&mut px, pw, ph, curve, raw_stage(&p));
+            retone(&mut px, pw, ph, curve, &mut p);
             px
         });
-        if retoned.is_some() {
-            (p.shadows, p.highlights, p.clarity, p.texture, p.dehaze) = (0.0, 0.0, 0.0, 0.0, 0.0);
-        }
         let develop_start = crate::gpu_canvas::now_ms();
         let key = retoned.is_none().then_some(self.source_key);
         let input = retoned.as_deref().unwrap_or(&self.proxy);

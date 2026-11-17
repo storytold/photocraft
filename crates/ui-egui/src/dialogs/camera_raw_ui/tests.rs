@@ -1056,6 +1056,39 @@ fn full_auto_keeps_previously_enabled_panels_and_restores_a_single_edit() {
 }
 
 #[test]
+fn full_auto_removes_its_own_curve_and_keeps_a_later_curve_edit() {
+    use super::auto::{AutoState, Control};
+    use photocraft_algo::camera_raw::{
+        auto::{Image, Panel},
+        develop,
+    };
+
+    let pixels: Vec<_> = (0..64 * 64)
+        .map(|i| {
+            let v = 0.18 + 0.28 * (i % 64) as f32 / 63.0;
+            [v, v, v, 1.0]
+        })
+        .collect();
+    let image = Image::new(&pixels, 64, 64, None).unwrap();
+    let mut params = CameraRaw::default();
+    let mut auto = AutoState::default();
+    for panel in Panel::ALL {
+        auto.remember_panel(panel, &params);
+    }
+    let render = |px: &mut [[f32; 4]], w, h, p: &CameraRaw| develop(px, w, h, p, false);
+    auto.set(Control::Full, true, &image, &mut params, false, render);
+    assert!(!params.point_curve.is_empty());
+    auto.set(Control::Full, false, &image, &mut params, false, render);
+    assert!(params.point_curve.is_empty());
+
+    auto.set(Control::Full, true, &image, &mut params, false, render);
+    let manual = vec![[0.0, 0.0], [128.0, 115.0], [255.0, 255.0]];
+    params.point_curve.clone_from(&manual);
+    auto.set(Control::Full, false, &image, &mut params, false, render);
+    assert_eq!(params.point_curve, manual);
+}
+
+#[test]
 fn a_sidecar_fills_the_dialog_and_open_writes_it_back() {
     use std::sync::{Arc, Mutex};
     let (mut app, dng) = raw_app();

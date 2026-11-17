@@ -72,6 +72,7 @@ pub(super) fn open_pixels(
         Coverage::Mask(mask) => Some(proxy.sample_coverage(|x, y| mask.value(x, y))),
         Coverage::None => None,
     };
+    let shadow_noise = proxy.shadow_noise(&surf, params.encoding_gamma, selection.as_deref());
     let Proxy { pixels: proxy, width: pw, height: ph, full_width: w, full_height: h, area, .. } = proxy;
     let source = photocraft_engine::color_cmds::composite_profile(&st.doc);
     let display = app.session.color.canvas_display(&st.doc).map_err(|e| e.to_string())?;
@@ -113,6 +114,7 @@ pub(super) fn open_pixels(
         ph,
         full_w: w,
         full_h: h,
+        shadow_noise,
         preview_ppp: ctx.pixels_per_point(),
         detail: crate::camera_raw_detail_ui::DetailPreview::new(
             surf,

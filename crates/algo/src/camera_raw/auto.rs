@@ -1,8 +1,12 @@
 //! Image-dependent starting points for RAW Develop. Each panel owns its slider values.
 
 mod effects;
+mod full;
+mod noise;
 
 use super::{CameraRaw, Encoding, auto_tone, luma, white_balance_gains};
+pub use noise::measure_shadow_noise;
+pub use full::suggest_full;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Panel {
@@ -75,6 +79,7 @@ pub struct Image<'a> {
     coverage: Option<&'a [f32]>,
     w: usize,
     h: usize,
+    shadow_noise: f32,
 }
 
 impl<'a> Image<'a> {
@@ -82,7 +87,15 @@ impl<'a> Image<'a> {
         if w == 0 || h == 0 || w.checked_mul(h) != Some(px.len()) || coverage.is_some_and(|c| c.len() != px.len()) {
             return None;
         }
-        Some(Self { px, coverage, w, h })
+        Some(Self { px, coverage, w, h, shadow_noise: 0.0 })
+    }
+
+    /// Use the noise level measured before reducing the image to preview size.
+    pub fn with_shadow_noise(mut self, amplitude: f32) -> Self {
+        if amplitude.is_finite() {
+            self.shadow_noise = ((amplitude - 0.008) / 0.008).clamp(0.0, 1.0);
+        }
+        self
     }
 
     fn rgb(&self, x: usize, y: usize) -> Option<[f32; 3]> {
@@ -154,6 +167,11 @@ fn light(image: &Image<'_>, out: &mut CameraRaw) {
         out.whites = out.whites.min(0.0);
         out.highlights = out.highlights.min(-(extra * 28.0).round().min(24.0));
     }
+    // Brightening also exposes the source noise that the downsampled histogram hides.
+    if out.exposure > 0.0 && image.shadow_noise > 0.0 {
+        out.exposure = (out.exposure * (1.0 - 0.55 * image.shadow_noise) * 100.0).floor() / 100.0;
+    }
+    out.shadows = (out.shadows * (1.0 - 0.50 * image.shadow_noise)).round();
 }
 
 fn white_balance(image: &Image<'_>, enc: Encoding) -> Option<[f32; 2]> {

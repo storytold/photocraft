@@ -578,7 +578,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         }
         if let (Some(control), Some(image)) = (toggle_auto, d.auto_image()) {
             let mut next = d.edit();
-            next.auto.set(control, !d.auto.active(control), &image, &mut next.params);
+            next.auto.set(control, !d.auto.active(control), &image, &mut next.params, d.float, d.auto_renderer());
             if next.auto != d.auto || next.params != d.params {
                 remember_edit(d);
                 restore_edit(d, next);

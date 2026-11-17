@@ -1,6 +1,9 @@
 //! Compute RAW Develop adjustments from the same proxy used by the interactive preview.
 
-use photocraft_algo::camera_raw::{CameraRaw, auto::Image};
+use photocraft_algo::camera_raw::{
+    CameraRaw,
+    auto::{Image, measure_shadow_noise},
+};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
@@ -8,7 +11,7 @@ use serde_json::{Value, json};
 use super::{CommandSpec, layer_param, lens_cmds};
 use crate::{EngineError, Result, Session};
 
-pub use photocraft_algo::camera_raw::auto::{Panel, suggest};
+pub use photocraft_algo::camera_raw::auto::{Panel, suggest, suggest_full};
 
 const ID: &str = "filter.cameraRaw.autoSettings";
 const PROXY_SIDE: usize = 900;
@@ -51,6 +54,17 @@ impl Proxy {
             })
             .map(|(x, y)| value(x, y).clamp(0.0, 1.0))
             .collect()
+    }
+
+    /// Sample native shadow pixels through the same selection used by Auto.
+    pub fn shadow_noise(&self, surface: &Surface, gamma: f32, coverage: Option<&[f32]>) -> f32 {
+        measure_shadow_noise(surface, self.area, gamma, |x, y| {
+            coverage.is_none_or(|mask| {
+                let col = (x - self.area.x0) as usize / self.block;
+                let row = (y - self.area.y0) as usize / self.block;
+                mask.get(row * self.width + col).is_some_and(|&a| a >= 0.5)
+            })
+        })
     }
 }
 
@@ -112,8 +126,20 @@ fn run(session: &mut Session, params: &Value) -> Result<Value> {
     settings.encoding_gamma = lens_cmds::encoding_gamma(&state.doc);
     let proxy = Proxy::new(surface, state.doc.bounds()).map_err(EngineError::Other)?;
     let coverage = state.doc.selection.as_ref().map(|mask| proxy.sample_coverage(|x, y| mask.sample_channel(x, y, 0)));
-    let image = Image::new(&proxy.pixels, proxy.width, proxy.height, coverage.as_deref()).ok_or_else(|| invalid("invalid RAW Develop preview"))?;
-    Ok(json!({"layer": id.0, "settings": suggest(&image, &panels, &settings)}))
+    let image = Image::new(&proxy.pixels, proxy.width, proxy.height, coverage.as_deref())
+        .ok_or_else(|| invalid("invalid RAW Develop preview"))?
+        .with_shadow_noise(proxy.shadow_noise(surface, settings.encoding_gamma, coverage.as_deref()));
+    let result = if panels.len() == Panel::ALL.len() {
+        let float = surface.format().sample == photocraft_color::SampleType::F32;
+        suggest_full(&image, &panels, &settings, float, |pixels, w, h, parameters| {
+            let mut p = parameters.clone();
+            p.pixel_scale = w as f32 / proxy.full_width as f32;
+            photocraft_algo::camera_raw::develop(pixels, w, h, &p, float);
+        })
+    } else {
+        suggest(&image, &panels, &settings)
+    };
+    Ok(json!({"layer": id.0, "settings": result}))
 }
 
 pub(super) fn specs() -> Vec<CommandSpec> {

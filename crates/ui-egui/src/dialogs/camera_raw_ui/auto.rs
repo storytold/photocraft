@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use photocraft_algo::camera_raw::{CameraRaw, auto::Image};
-use photocraft_engine::commands::raw_auto_cmds::{Panel, suggest};
+use photocraft_engine::commands::raw_auto_cmds::{Panel, suggest, suggest_full};
 
 use super::CameraRawDialog;
 
@@ -27,6 +27,7 @@ type Previous = [Option<Arc<CameraRaw>>; 4];
 struct Full {
     params: Arc<CameraRaw>,
     panels: Previous,
+    curve: Option<Vec<[f32; 2]>>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -47,7 +48,15 @@ impl AutoState {
         self.before[panel.index()] = Some(Arc::new(params.clone()));
     }
 
-    pub(super) fn set(&mut self, control: Control, enabled: bool, image: &Image<'_>, params: &mut CameraRaw) {
+    pub(super) fn set(
+        &mut self,
+        control: Control,
+        enabled: bool,
+        image: &Image<'_>,
+        params: &mut CameraRaw,
+        float: bool,
+        render: impl Fn(&mut [[f32; 4]], usize, usize, &CameraRaw),
+    ) {
         if self.active(control) == enabled {
             return;
         }
@@ -64,16 +73,21 @@ impl AutoState {
             Control::Full if enabled => {
                 let missing: Vec<_> = Panel::ALL.into_iter().filter(|p| !self.active(Control::Panel(*p))).collect();
                 let before = Arc::new(params.clone());
-                self.full = Some(Arc::new(Full { params: before.clone(), panels: self.before.clone() }));
+                let panels = self.before.clone();
                 for p in &missing {
                     self.before[p.index()] = Some(before.clone());
                 }
-                *params = suggest(image, &missing, params);
+                *params = suggest_full(image, &missing, params, float, render);
+                let curve = (params.point_curve != before.point_curve).then(|| params.point_curve.clone());
+                self.full = Some(Arc::new(Full { params: before, panels, curve }));
             }
             Control::Full => {
                 if let Some(before) = self.full.take() {
                     for panel in Panel::ALL {
                         panel.copy_settings(&before.params, params);
+                    }
+                    if before.curve.as_ref() == Some(&params.point_curve) {
+                        params.point_curve.clone_from(&before.params.point_curve);
                     }
                     self.before.clone_from(&before.panels);
                 }
@@ -84,6 +98,17 @@ impl AutoState {
 
 impl CameraRawDialog {
     pub(super) fn auto_image(&self) -> Option<Image<'_>> {
-        Image::new(&self.proxy, self.pw, self.ph, self.selection.as_deref().map(Vec::as_slice))
+        Image::new(&self.proxy, self.pw, self.ph, self.selection.as_deref().map(Vec::as_slice)).map(|image| image.with_shadow_noise(self.shadow_noise))
+    }
+
+    pub(super) fn auto_renderer(&self) -> impl Fn(&mut [[f32; 4]], usize, usize, &CameraRaw) + '_ {
+        move |pixels, w, h, params| {
+            let mut p = params.clone();
+            p.pixel_scale = w as f32 / self.full_w.max(1) as f32;
+            if let Some(curve) = &self.raw_curve {
+                super::proxy::retone(pixels, w, h, curve, &mut p);
+            }
+            photocraft_algo::camera_raw::develop(pixels, w, h, &p, self.float);
+        }
     }
 }

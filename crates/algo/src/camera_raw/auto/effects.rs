@@ -2,7 +2,7 @@ use super::{CameraRaw, Image, luma, percentile};
 
 pub(super) fn suggest(image: &Image<'_>, out: &mut CameraRaw) {
     let mut scene = Scene::measure(image);
-    scene.detail.apply(out);
+    scene.detail.apply(out, image.shadow_noise);
     out.dehaze = scene.dehaze();
     scene.radial.apply(out);
 }
@@ -12,15 +12,17 @@ struct Scene {
     radial: Radial,
     dark: Vec<f32>,
     light: Vec<f32>,
+    minima: Vec<f32>,
 }
 
 impl Scene {
     fn measure(image: &Image<'_>) -> Self {
-        let mut scene = Self { detail: Detail::default(), radial: Radial::default(), dark: Vec::new(), light: Vec::new() };
+        let mut scene = Self { detail: Detail::default(), radial: Radial::default(), dark: Vec::new(), light: Vec::new(), minima: Vec::new() };
         let radius = (image.w.min(image.h) / 40).clamp(2, 18);
         for (x, y, rgb) in image.samples(96) {
             let rgb = rgb.map(|v| v.clamp(0.0, 1.0));
             let center = luma(rgb);
+            scene.minima.push(rgb[0].min(rgb[1]).min(rgb[2]));
             scene.radial.add((x as f32 + 0.5) / image.w as f32, (y as f32 + 0.5) / image.h as f32, center);
             if let (Some(fine), Some(coarse)) = (cross(image, x, y, 1), cross(image, x, y, radius)) {
                 scene.detail.add(center, fine.map(luma), coarse.map(luma));
@@ -44,7 +46,11 @@ impl Scene {
         if !(0.12..0.43).contains(&dark) || !(0.14..0.51).contains(&(high - low)) || high >= 0.85 {
             return 0.0;
         }
-        ((dark - 0.12) * 108.0).clamp(0.0, 24.0).round()
+        // The local minima omit the edges of the frame. Check the full sample too:
+        // removing a veil subtracts light and can crush already-dark colors there.
+        let floor = percentile(&mut self.minima, 0.02);
+        let headroom = ((floor - 0.05) / 0.05).clamp(0.0, 1.0);
+        (((dark - 0.12) * 108.0).clamp(0.0, 24.0) * headroom).round()
     }
 }
 
@@ -93,13 +99,18 @@ impl Detail {
         self.banded += usize::from(band(center, [coarse[0], coarse[1]], fine[0]) || band(center, [coarse[2], coarse[3]], fine[1]));
     }
 
-    fn apply(&self, out: &mut CameraRaw) {
+    fn apply(&self, out: &mut CameraRaw, shadow_noise: f32) {
         let count = self.count.max(1) as f32;
         let noise = self.flat_energy / self.flat.max(1) as f32;
-        out.clarity = ((self.coarse as f32 / count - 0.08) * 96.0).clamp(0.0, 22.0).round();
-        out.texture = ((self.fine as f32 / count - 0.07) * 100.0 * (1.0 - noise / 0.015).max(0.0)).clamp(0.0, 16.0).round();
+        let structure = (self.coarse as f32 / count - 0.08).max(0.0);
+        // A gradual roll-off keeps images with lots of structure from clustering
+        // at the same setting. Native noise weakens both detail boosts.
+        out.clarity = (22.0 * structure / (structure + 0.22) * (1.0 - 0.75 * shadow_noise)).round();
+        let texture = ((self.fine as f32 / count - 0.07) * 100.0 * (1.0 - noise / 0.015).max(0.0)).clamp(0.0, 16.0);
+        out.texture = (texture * (1.0 - 0.90 * shadow_noise)).round();
         let bands = (self.banded as f32 / count - 0.045).max(0.0);
-        out.grain_amount = (120.0 * bands * (1.0 - noise / 0.006).max(0.0)).clamp(0.0, 15.0).round();
+        let grain = (120.0 * bands * (1.0 - noise / 0.006).max(0.0)).clamp(0.0, 15.0);
+        out.grain_amount = (grain * (1.0 - shadow_noise)).round();
         let active = out.grain_amount > 0.0;
         out.grain_size = if active { (16.0 + 30.0 * bands).clamp(16.0, 25.0).round() } else { 25.0 };
         out.grain_roughness = if active { (42.0 + 36.0 * bands).clamp(42.0, 55.0).round() } else { 50.0 };
@@ -145,7 +156,7 @@ impl Bin {
 #[derive(Default)]
 struct Radial {
     center: Bin,
-    middle: Bin,
+    middle: [Bin; 4],
     corners: [Bin; 4],
 }
 
@@ -153,27 +164,37 @@ impl Radial {
     fn add(&mut self, x: f32, y: f32, luma: f32) {
         let (x, y) = (2.0 * x - 1.0, 2.0 * y - 1.0);
         let radius = x.hypot(y);
+        let quadrant = usize::from(x > 0.0) + 2 * usize::from(y > 0.0);
         match radius {
             r if r < 0.35 => self.center.add(luma),
-            r if (0.58..0.82).contains(&r) => self.middle.add(luma),
-            r if r > 1.04 => self.corners[usize::from(x > 0.0) + 2 * usize::from(y > 0.0)].add(luma),
+            r if (0.58..0.82).contains(&r) => self.middle[quadrant].add(luma),
+            r if r > 1.04 => self.corners[quadrant].add(luma),
             _ => {}
         }
     }
 
     fn lift(&self) -> Option<(f32, f32)> {
         let (center, center_std) = self.center.estimate()?;
-        let (mid, mid_std) = self.middle.estimate()?;
-        let [Some((a, sa)), Some((b, sb)), Some((c, sc)), Some((d, sd))] = self.corners.map(Bin::estimate) else { return None };
-        let low = a.min(b).min(c).min(d);
-        let high = a.max(b).max(c).max(d);
-        let corner = (a + b + c + d) * 0.25;
+        let [Some(m0), Some(m1), Some(m2), Some(m3)] = self.middle.map(Bin::estimate) else { return None };
+        let [Some(c0), Some(c1), Some(c2), Some(c3)] = self.corners.map(Bin::estimate) else { return None };
+        let middle = [m0, m1, m2, m3];
+        let corners = [c0, c1, c2, c3];
+        let average = |bins: &[(f32, f32); 4]| bins.iter().map(|&(mean, _)| mean).sum::<f32>() * 0.25;
+        let mid = average(&middle);
+        let corner = average(&corners);
         let drop = center - corner;
         if !(0.25..0.75).contains(&center) || corner < 0.12 || drop < 0.065 || mid > center - 0.018 || mid < corner + 0.018 {
             return None;
         }
-        let deviation = center_std.max(mid_std).max(sa).max(sb).max(sc).max(sd);
-        if high - low > drop * 0.35 || deviation > drop * 0.55 {
+        let spread = |bins: &[(f32, f32); 4]| {
+            let low = bins.iter().map(|&(mean, _)| mean).fold(1.0, f32::min);
+            let high = bins.iter().map(|&(mean, _)| mean).fold(0.0, f32::max);
+            high - low
+        };
+        let deviation = middle.iter().chain(&corners).map(|&(_, std)| std).fold(center_std, f32::max);
+        // Four dark corners can come from the scene itself. Require the ring between
+        // the centre and the corners to agree across directions as well.
+        if spread(&middle).max(spread(&corners)) > drop * 0.35 || deviation > drop * 0.55 {
             return None;
         }
         let intensity = (center / corner).log2() * 35.0;

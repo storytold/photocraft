@@ -16,6 +16,29 @@ fn estimates_are_available_at_each_document_depth_without_editing_pixels() {
 }
 
 #[test]
+fn full_estimate_returns_replayable_curve_settings_without_editing_the_layer() {
+    let mut session = Session::new();
+    session.execute("file.new", json!({"width": 96, "height": 96, "depth": 16})).unwrap();
+    session.execute("layer.new.layer", json!({})).unwrap();
+    session
+        .edit("grey ramp", |doc, active| {
+            let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+            for x in 0..96 {
+                let v = 0.19 + 0.30 * x as f32 / 95.0;
+                surf.fill_rect(photocraft_geom::Rect::new(x, 0, x + 1, 96), &[v, v, v, 1.0]);
+            }
+            Ok(())
+        })
+        .unwrap();
+    let rev = session.active().unwrap().revision;
+    let result = session.execute(ID, json!({"panel": "all"})).unwrap();
+    assert_eq!(result["settings"]["pointCurve"].as_array().unwrap().len(), 5);
+    assert_eq!(session.active().unwrap().revision, rev);
+    session.execute("filter.cameraRaw", result["settings"].clone()).unwrap();
+    assert_ne!(session.active().unwrap().revision, rev);
+}
+
+#[test]
 fn rejects_unknown_panels_and_wrong_parameter_shapes() {
     let mut session = Session::new();
     session.execute("file.new", json!({"width": 16, "height": 16})).unwrap();

@@ -659,9 +659,11 @@ keeps the dialog open for correction. Nothing else writes document history.
 
 `autoLight`, `autoWhiteBalance`, `autoColor` and `autoEffects` set the corresponding Auto
 control. Send `true` to calculate its sliders and `false` to restore their previous values.
-`fullAuto: true` enables the remaining panels together and `fullAuto: false` restores the
-previous values and enabled states across all four panels. Other panels' manual edits are
-kept. The reply exposes the five boolean states. Each action is one dialog undo step.
+`fullAuto: true` enables the remaining panels together. On SDR images it compares rendered
+previews for new channel clipping and the distribution of tones. It can add a composite
+point curve when the existing tone curve is neutral. `fullAuto: false` restores the previous
+values and enabled states across all four panels and clears a generated curve if it is
+still intact. The reply exposes the five boolean states. Each action is one dialog undo step.
 For a headless estimate on a pixel layer use `engine.execute` with
 `filter.cameraRaw.autoSettings` and a `panel` of `light`, `whiteBalance`, `color`, `effects`
 or `all`. It returns `{layer, settings}` for inspection or a subsequent `filter.cameraRaw`

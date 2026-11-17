@@ -113,7 +113,7 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
     if let Some(image) = d.auto_image() {
         for (key, control) in Control::KEYS {
             if let Some(enabled) = ui.get(key).and_then(Value::as_bool) {
-                auto.set(control, enabled, &image, &mut next_params);
+                auto.set(control, enabled, &image, &mut next_params, d.float, d.auto_renderer());
             }
         }
     }

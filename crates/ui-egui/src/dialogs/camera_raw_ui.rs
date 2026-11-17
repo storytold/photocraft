@@ -85,6 +85,7 @@ pub struct CameraRawDialog {
     pub(crate) ph: usize,
     pub(crate) full_w: usize,
     full_h: usize,
+    shadow_noise: f32,
     preview_ppp: f32,
     pub(crate) detail: crate::camera_raw_detail_ui::DetailPreview,
     display: std::sync::Arc<photocraft_engine::display_color::CanvasDisplay>,
