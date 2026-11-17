@@ -79,6 +79,28 @@ mod tests {
         }
     }
 
+    /// View › Pattern Preview: a click on one of the copies round the document samples the document
+    /// where that copy shows it; with Pattern Preview off, a click past the edge picks nothing.
+    #[test]
+    fn pattern_preview_clicks_on_the_copies_sample_the_document() {
+        let mut app = app();
+        app.ui.tool_options.eyedropper.size = size(1);
+        let red = [1.0, 0.0, 0.0, 1.0];
+        app.run("tools.setColors", json!({"foreground": red})).unwrap();
+        // Right of the 40×40 document: the copy's black top-left corner.
+        click(&mut app, 41.5, 1.5, egui::Modifiers::NONE);
+        assert_eq!(fg(&app), red, "off the image without Pattern Preview");
+        app.ui.view.pattern_preview = true;
+        click(&mut app, 41.5, 1.5, egui::Modifiers::NONE);
+        assert_eq!(fg(&app), [0.0, 0.0, 0.0, 1.0], "the copy to the right");
+        click(&mut app, -38.5, 20.5, egui::Modifiers::NONE);
+        assert_eq!(fg(&app), [1.0, 1.0, 1.0, 1.0], "the copy to the left");
+        click(&mut app, -38.5, -38.5, egui::Modifiers::NONE);
+        assert_eq!(fg(&app), [0.0, 0.0, 0.0, 1.0], "the diagonal copy");
+        // The dialog eyedroppers (and the Color Picker's) read the copies too.
+        assert_eq!(crate::canvas::composite_color(&mut app, 81.5, 41.5), Some([0.0, 0.0, 0.0]));
+    }
+
     /// View the document at 200 %, where an N by N Average is the centred N × N square (#11751:
     /// at 100 % and below it covers (N+1) × (N+1) screen pixels).
     fn zoomed_in(app: &mut PhotocraftApp) {
