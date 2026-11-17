@@ -1715,6 +1715,41 @@ fn temporary_type_transform_imported_psd_retains_editability_and_styles() {
     assert_affine(text(&app, id).transform, before.transform);
 }
 
+/// Live pin of the two invariants the deleted #1091 benchmark (`temporary_type_transform_large_document_preview`)
+/// carried: a held Ctrl/Cmd corner-handle move damages only the type layer's region on the canvas,
+/// and a stationary pointer reuses the already-rendered preview (same key, same Arc) instead of a
+/// fresh render. Same mechanism as the benchmark, on a small document, so CI runs it.
+#[test]
+fn temporary_type_transform_damage_stays_on_the_type_layer_and_a_still_pointer_reuses_the_render() {
+    use crate::canvas::{ToolEvent, tool_event};
+    let mut app = new_app();
+    app.run("file.new", json!({"width": 1200, "height": 800})).unwrap();
+    app.run("type.create", json!({"text": "Preview pin", "size": 48, "x": 100, "y": 140})).unwrap();
+    super::edit_active(&mut app).unwrap();
+    let frame = crate::type_transform::frame(&mut app).unwrap();
+    let doc = app.session.active().unwrap().doc.id;
+    let revision = app.session.active().unwrap().revision;
+    let index = app.session.active_index().unwrap();
+    let a = frame.quad[2];
+    tool_event(&mut app, ToolEvent::Down { x: a[0], y: a[1], pressure: 1.0 }, type_command());
+    let mut before = 0u64;
+    for i in 1..=4 {
+        tool_event(&mut app, ToolEvent::Move { x: a[0] + f64::from(i) * 12.0, y: a[1] + f64::from(i) * 6.0, pressure: 1.0 }, type_command());
+        let (rendered, after) = crate::type_transform::display_doc(&mut app, index).unwrap();
+        let damage = crate::type_transform::damage(&app, doc, revision, before, after).unwrap();
+        let area = i64::from(damage.width()) * i64::from(damage.height());
+        assert!(
+            (1..=480_000).contains(&area),
+            "move {i}: preview damage {damage:?} ({area} px) must stay in the type layer's region, at most half of the 960000 px canvas"
+        );
+        let (reused, same) = crate::type_transform::display_doc(&mut app, index).unwrap();
+        assert_eq!(same, after, "stationary pointer reuses the rendered preview");
+        assert!(std::sync::Arc::ptr_eq(&rendered, &reused), "the still-pointer call hands back the same rendered document, no second render");
+        before = after;
+    }
+    crate::type_transform::cancel_drag(&mut app);
+}
+
 #[test]
 fn font_styles_keep_metadata_names_and_numeric_labels() {
     let styles = super::styles("Inter");
