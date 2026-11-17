@@ -111,6 +111,8 @@ pub(crate) use startup::{on_recovery_event, remember_rulers};
 #[cfg(test)]
 mod agents_tests;
 #[cfg(test)]
+mod menus_search_tests;
+#[cfg(test)]
 mod recovery_tests;
 
 #[cfg(test)]
