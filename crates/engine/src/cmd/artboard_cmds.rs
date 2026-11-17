@@ -631,11 +631,7 @@ fn clear_artboard_guides(s: &mut Session) -> Result<Value> {
 pub fn artboard_document(doc: &Document, id: LayerId) -> Result<Option<Document>> {
     let Some(l) = doc.layer(id) else { return Ok(None) };
     let Some(r) = l.artboard().map(|a| a.rect) else { return Ok(None) };
-    // A board starting at i32::MIN needs an offset of 2^31 to reach the origin, one past
-    // i32::MAX (#931).
-    let (Some(dx), Some(dy)) = (r.x0.checked_neg(), r.y0.checked_neg()) else {
-        return Err(EngineError::Other(format!("artboard `{}` at ({}, {}) is too far from the origin to export", l.name, r.x0, r.y0)));
-    };
+    let (dx, dy) = artboard_export_offset(l, r)?;
     let mut group = l.clone();
     group.visible = true;
     crate::commands::translate_layer(doc, &mut group, dx, dy);
@@ -657,6 +653,15 @@ pub fn artboard_document(doc: &Document, id: LayerId) -> Result<Option<Document>
     one.guides.vertical = shift(&doc.guides.vertical, r.x0, r.width());
     one.guides.horizontal = shift(&doc.guides.horizontal, r.y0, r.height());
     Ok(Some(one))
+}
+
+fn artboard_export_offset(layer: &Layer, r: Rect) -> Result<(i32, i32)> {
+    // A board starting at i32::MIN needs an offset of 2^31 to reach the origin, one past
+    // i32::MAX (#931).
+    let (Some(dx), Some(dy)) = (r.x0.checked_neg(), r.y0.checked_neg()) else {
+        return Err(EngineError::Other(format!("artboard `{}` at ({}, {}) is too far from the origin to export", layer.name, r.x0, r.y0)));
+    };
+    Ok((dx, dy))
 }
 
 /// [`artboard_document`] for each chosen board, all built before any file is written so a
@@ -730,17 +735,29 @@ fn collision_key(stem: &str) -> String {
 /// [`artboard_file_stems`] (`abfiles-testRed-Board.png`, `abfiles-testRed Board.psd`).
 fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.artboardsToFiles";
-    let dir = str_param(p, "dir", cmd).or_else(|_| str_param(p, "output", cmd))?.to_string();
+    let dir = str_param(p, "dir", cmd).or_else(|_| str_param(p, "output", cmd)).map_err(|_| EngineError::Other("Choose a destination folder.".into()))?;
     let format = p.get("format").and_then(Value::as_str).unwrap_or("png").trim_start_matches('.').to_ascii_lowercase();
     let save = SaveOpts::from_params(s, p, cmd)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let prefix = p.get("prefix").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&d.doc.name));
-    let doc = d.doc.clone();
-    let boards = chosen_documents(&doc, p)?;
-    let names: Vec<&str> = boards.iter().map(|one| one.name.as_str()).collect();
+    // Leave other filesystem errors to the existing save path.
+    #[cfg(not(target_arch = "wasm32"))]
+    if matches!(std::path::Path::new(dir).try_exists(), Ok(false)) {
+        // Preserve board validation errors before reporting a missing destination.
+        for id in chosen_artboards(&d.doc, p) {
+            if let Some(layer) = d.doc.layer(id)
+                && let Some(board) = layer.artboard()
+            {
+                artboard_export_offset(layer, board.rect)?;
+            }
+        }
+        return Err(EngineError::Other(format!("Destination does not exist: {dir}")));
+    }
+    let documents = chosen_documents(&d.doc, p)?;
+    let names: Vec<&str> = documents.iter().map(|one| one.name.as_str()).collect();
     let mut files = Vec::new();
-    for (one, name) in boards.iter().zip(artboard_file_stems(&prefix, &names, HYPHENATED_FORMATS.contains(&format.as_str()))) {
-        let path = join(&dir, &format!("{name}.{format}"));
+    for (one, name) in documents.iter().zip(artboard_file_stems(&prefix, &names, HYPHENATED_FORMATS.contains(&format.as_str()))) {
+        let path = join(dir, &format!("{name}.{format}"));
         save_doc(one, &path, save)?;
         files.push(path);
     }
@@ -910,3 +927,7 @@ mod pdf_page_order_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "artboard_cmds/destination_tests.rs"]
+mod destination_tests;

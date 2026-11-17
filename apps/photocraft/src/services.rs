@@ -248,7 +248,10 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
                 Box::pin(async move { picked.await.map(|file| answer([file.path()], false, FileDialogAnswer::Paths)) })
             }
         }
-        FileDialogRequest::Folder { initial_dir } => {
+        FileDialogRequest::Folder { initial_dir, title } => {
+            if let Some(title) = title {
+                dialog = dialog.set_title(title);
+            }
             if let Some(dir) = initial_dir {
                 dialog = dialog.set_directory(dir);
             }
