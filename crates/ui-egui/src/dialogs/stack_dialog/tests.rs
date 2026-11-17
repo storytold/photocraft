@@ -194,6 +194,10 @@ fn source_files_list_is_built_with_browse_remove_sort_and_open_files() {
     h.get_by_label("Add Open Files").click();
     h.run_steps(2);
     assert_eq!(listed(&h), ["a.png", "c.png", "b.png"]);
+    // The untitled document was left out with the "must be saved" alert (#14001); close it.
+    assert!(h.state().ui.dialogs.iter().any(|d| d.kind == DialogKind::Error && d.fields["message"] == UNSAVED_ALERT));
+    h.state_mut().ui.dialogs.retain(|d| d.kind != DialogKind::Error);
+    h.run_steps(2);
 
     let docs = h.state().session.documents().len();
     h.get_by_label("OK").click();
