@@ -1,4 +1,4 @@
-//! Canvas context menus for the selection tools, the Pen, the Line tool in Shape mode, the Zoom
+//! Canvas context menus for the selection tools, the Pen, the shape tools, the Zoom
 //! and Hand tools, an active Free Transform box, text being edited with a Type tool, committed type
 //! under a Type tool, the pasteboard (outside the image), a guide and a pending crop.
 
@@ -683,19 +683,43 @@ fn shape_layer_row(command: &str) -> bool {
     )
 }
 
-/// Shape tools whose Shape-mode right-click opens [`SHAPE_MENU`] (#13249). The Ellipse (#13232)
-/// and the other shape tools join here once measured.
+/// Shape tools whose right-click opens [`SHAPE_MENU`]: the Line (#13249), the Rectangle (#13341)
+/// and the Triangle (#13367). The other shape tools join here once measured.
 pub fn shape_tool_menu(tool: Tool) -> bool {
-    matches!(tool, Tool::Line)
+    matches!(tool, Tool::Line | Tool::Rectangle | Tool::Triangle)
 }
 
-/// Does a right-click with a shape tool open its menu? Only where measured: Shape mode, over
-/// a pixel or shape layer. Path and Pixels mode, and other layer kinds, keep opening nothing.
-fn shape_menu_measured(app: &PhotocraftApp) -> bool {
-    app.ui.tool_options.shape_mode == "shape"
-        && app.session.active().is_some_and(|st| {
-            st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| matches!(l.content, LayerContent::Raster(_) | LayerContent::Shape(_)))
-        })
+/// Shape tools whose menu was measured in Path mode too, over a Work Path with a pixel layer
+/// active: the Rectangle (#13341) and the Triangle (#13367).
+fn shape_menu_in_path_mode(tool: Tool) -> bool {
+    matches!(tool, Tool::Rectangle | Tool::Triangle)
+}
+
+/// Does a right-click with shape tool `tool` at document point `doc` open its menu? Only where
+/// measured: in Shape mode over a pixel or shape layer, and for [`shape_menu_in_path_mode`]'s tools
+/// in Path mode over a pixel layer with the Work Path shown. Pixels mode, Path mode elsewhere and
+/// other layer kinds keep opening nothing; so does the Rectangle's right-click on a shape or on a
+/// corner radius widget, which #13341 left unmeasured.
+fn shape_menu_measured(app: &PhotocraftApp, tool: Tool, doc: Option<[f64; 2]>) -> bool {
+    let Some(st) = app.session.active() else { return false };
+    let Some(layer) = st.active_layer.and_then(|id| st.doc.layer(id)) else { return false };
+    let pixel = matches!(layer.content, LayerContent::Raster(_));
+    let opens = match app.ui.tool_options.shape_mode.as_str() {
+        "shape" => pixel || matches!(layer.content, LayerContent::Shape(_)),
+        "path" => shape_menu_in_path_mode(tool) && pixel && crate::vector_ui::active_path_name(app).as_deref() == Some("work"),
+        _ => false,
+    };
+    opens && !(tool == Tool::Rectangle && doc.is_some_and(|d| rectangle_keeps_right_click(app, d)))
+}
+
+/// Is document point `doc` on a shape (as Path Selection picks one) or on a corner radius widget?
+/// The Rectangle's right-click there wasn't measured (#13341), so it opens nothing, as before.
+fn rectangle_keeps_right_click(app: &PhotocraftApp, doc: [f64; 2]) -> bool {
+    if !doc.iter().all(|v| v.is_finite()) {
+        return false;
+    }
+    let tol = crate::path_components::press_tolerance(app);
+    crate::corner_radius::hovers(app, doc) || app.session.active().is_some_and(|st| crate::vector_ui::pick_shape_at(&st.doc, doc, tol).is_some())
 }
 
 /// The label a row shows, untranslated. The Pen's transform row names what it acts on, as in
@@ -1396,7 +1420,7 @@ pub fn open_at(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]
     if tool == Tool::RedEye && !red_eye_measured(app, doc) {
         return false;
     }
-    if shape_tool_menu(tool) && !text && !type_layer && !shape_menu_measured(app) {
+    if shape_tool_menu(tool) && !text && !type_layer && !shape_menu_measured(app, tool, doc) {
         return false;
     }
     app.ui.brush_picker = None;
@@ -1938,6 +1962,12 @@ mod convert_point_menu_tests;
 
 #[cfg(test)]
 mod object_selection_menu_tests;
+
+#[cfg(test)]
+mod rectangle_menu_tests;
+
+#[cfg(test)]
+mod triangle_menu_tests;
 
 #[cfg(test)]
 mod line_menu_tests;

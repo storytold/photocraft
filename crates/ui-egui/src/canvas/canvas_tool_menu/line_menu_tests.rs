@@ -45,17 +45,17 @@ fn right_click_entries(h: &mut Harness<'static, PhotocraftApp>) -> Vec<Value> {
 }
 
 /// The entries' labels, a separator as `None`.
-fn shown(entries: &[Value]) -> Vec<Option<String>> {
+pub(super) fn shown(entries: &[Value]) -> Vec<Option<String>> {
     entries.iter().map(|e| if e["separator"] == json!(true) { None } else { e["label"].as_str().map(String::from) }).collect()
 }
 
 /// The labels of the greyed entries.
-fn greyed(entries: &[Value]) -> Vec<String> {
+pub(super) fn greyed(entries: &[Value]) -> Vec<String> {
     entries.iter().filter(|e| e["enabled"] == json!(false)).filter_map(|e| e["label"].as_str().map(String::from)).collect()
 }
 
 /// The issue's notation: rows joined by " · ", separators written " ― ".
-fn menu(spec: &str) -> Vec<Option<String>> {
+pub(super) fn menu(spec: &str) -> Vec<Option<String>> {
     spec.split(" ― ")
         .enumerate()
         .flat_map(|(i, group)| (i > 0).then_some(None).into_iter().chain(group.split(" · ").map(|label| Some(label.to_owned()))))
