@@ -49,7 +49,7 @@ pub use info::{CAMERA_FIELDS, camera_data, copyright_marked, read_file_info, wri
 #[cfg(test)]
 use info::{exposure_text, find_element};
 pub(crate) use open::{BatchOpen, batch_open_notice, batch_open_params, remember_batch_open};
-pub use open::{PLACE_EMBEDDED, open_bytes_as, open_bytes_as_with_options, place_bytes, raw_defaults};
+pub use open::{PLACE_EMBEDDED, RAW_LAYOUT_KEYS, open_bytes_as, open_bytes_as_with_options, place_bytes, raw_defaults, raw_layout_param};
 pub(crate) use open::{PlaceInput, apply_place, import, import_with_options, tag_exr_colorspace};
 use open::{approve_memory, close_all, close_others, open_as, place, revert};
 pub use open_as_smart_object::admit_as_smart_object;
@@ -308,7 +308,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Open As…",
             &["File"],
             Some("Cmd+Alt+Shift+O"),
-            r##"{"path":str,"as":"psd|png|jpg|tiff|…"? (decode as this format),"approveHighMemory":bool=false (explicitly approve high memory usage)}"##,
+            r##"{"path":str,"as":"psd|png|jpg|tiff|raw|…"? (decode as this format),"approveHighMemory":bool=false (explicitly approve high memory usage),"width":n?,"height":n?,"channels":n=1,"depth":8|16|32=8,"byteOrder":"mac|ibm"="mac","interleaved":bool=true,"header":n=0} (with "as":"raw", any of width…header reads the file as Photoshop Raw pixel bytes; width and height are then required)"##,
             native,
             open_as
         ),
@@ -472,6 +472,10 @@ mod open_as_smart_object_tests;
 #[cfg(test)]
 #[path = "file_cmds/open_as_error_name_tests.rs"]
 mod open_as_error_name_tests;
+
+#[cfg(test)]
+#[path = "file_cmds/open_as_raw_options_tests.rs"]
+mod open_as_raw_options_tests;
 
 #[cfg(test)]
 mod aces_exr_tests {
