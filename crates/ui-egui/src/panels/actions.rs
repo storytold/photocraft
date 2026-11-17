@@ -734,6 +734,7 @@ fn open_recorded_editor(app: &mut PhotocraftApp, id: &str, params: &Value) -> Re
         && let Some(object) = values.as_object()
     {
         d.fields.extend(object.iter().map(|(key, value)| (key.clone(), value.clone())));
+        crate::sizing::load_recorded(&mut d.fields, object);
     }
     Ok(dialog)
 }
