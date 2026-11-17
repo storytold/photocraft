@@ -718,6 +718,7 @@ fn memory_prompt_states_unknown_capacity_and_the_eight_gib_warning() {
         job: photocraft_engine::jobs::JobId(1),
         name: "unknown.psd".into(),
         path: Some("/pics/unknown.psd".into()),
+        error_source: None,
         slot: None,
         order: None,
     };
@@ -742,7 +743,8 @@ fn memory_prompt_states_unknown_capacity_and_the_eight_gib_warning() {
 
     // A measured capacity shows the number and drops the uncertainty warning.
     let id = store_preflight(&mut app, "known.psd", 3 * gb, Some(5 * gb));
-    let tab = crate::jobs_ui::OpenTab { job: photocraft_engine::jobs::JobId(2), name: "known.psd".into(), path: None, slot: None, order: None };
+    let tab =
+        crate::jobs_ui::OpenTab { job: photocraft_engine::jobs::JobId(2), name: "known.psd".into(), path: None, error_source: None, slot: None, order: None };
     crate::jobs_ui::finish_open_tab(
         &mut app,
         &tab,
@@ -768,7 +770,8 @@ fn memory_prompt_warns_when_little_memory_would_be_left() {
     let mut app = app();
     let available = 3 * gb + gb / 2;
     let id = store_preflight(&mut app, "tight.psd", 3 * gb, Some(available));
-    let tab = crate::jobs_ui::OpenTab { job: photocraft_engine::jobs::JobId(3), name: "tight.psd".into(), path: None, slot: None, order: None };
+    let tab =
+        crate::jobs_ui::OpenTab { job: photocraft_engine::jobs::JobId(3), name: "tight.psd".into(), path: None, error_source: None, slot: None, order: None };
     crate::jobs_ui::finish_open_tab(
         &mut app,
         &tab,

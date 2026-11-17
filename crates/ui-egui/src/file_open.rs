@@ -367,7 +367,14 @@ impl PhotocraftApp {
         let name = display_name(source);
         let source_prefix = format!("{source}: ");
         let name_prefix = format!("{name}: ");
-        let reason = err.strip_prefix(&source_prefix).or_else(|| err.strip_prefix(&name_prefix)).unwrap_or(err);
+        // The native background importer wraps its path-prefixed read error in the file name.
+        let wrapped_source_prefix = format!("{name}: {source}: ");
+        let reason = (source != name)
+            .then(|| err.strip_prefix(&wrapped_source_prefix))
+            .flatten()
+            .or_else(|| err.strip_prefix(&source_prefix))
+            .or_else(|| err.strip_prefix(&name_prefix))
+            .unwrap_or(err);
         let msg = if reason == "codec: unrecognized image format" {
             crate::i18n::fmt(tl!("Could not open \"{name}\" because PhotoCraft does not recognize this type of file."), &[("name", &name)])
         } else {
@@ -429,7 +436,10 @@ impl PhotocraftApp {
             match self.open_dropped_file(&f, &name, slot) {
                 Ok(true) => slot = slot.map(|s| s + 1),
                 Ok(false) => {}
-                Err(e) => self.open_failed(&name, &e),
+                Err(e) => {
+                    let source = if f.path().is_absolute() { f.path().to_string_lossy().into_owned() } else { name.clone() };
+                    self.open_failed(&source, &e);
+                }
             }
         }
     }

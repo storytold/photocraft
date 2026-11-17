@@ -343,7 +343,7 @@ fn the_opening_card_keeps_a_long_name_and_cancel_inside() {
     let long = "a7rv-test_2024_02_17_shot_30_3705_with_an_even_longer_suffix_that_never_ends.psb";
     for name in ["short.psd", long] {
         h.state_mut().jobs.opens.clear();
-        h.state_mut().jobs.opens.push(crate::jobs_ui::OpenTab { job, name: name.to_string(), path: None, slot: None, order: None });
+        h.state_mut().jobs.opens.push(crate::jobs_ui::OpenTab { job, name: name.to_string(), path: None, error_source: None, slot: None, order: None });
         h.state_mut().jobs.focus = Some(job);
         h.run_steps(4);
         let r = crate::jobs_ui::open_card_rects(&h.ctx).expect("the opening card was drawn");
