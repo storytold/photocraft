@@ -67,8 +67,8 @@ fn the_frame_rate_dialog_comes_first_and_cancel_opens_nothing() {
     assert!(!app.ui.status_error);
 }
 
-/// OK opens the run as the next Untitled-N (the app's own first document is "Untitled") with Video Group 1 > Layer 1 at the rate picked, and
-/// shows the timeline.
+/// OK opens the run as the next Untitled-N (the app's own first document is "Untitled") with
+/// Video Group 1 > Layer 1 at the rate picked, and shows the timeline.
 #[test]
 fn ok_opens_the_sequence_at_the_rate_picked() {
     let d = sequence_folder("ok");
