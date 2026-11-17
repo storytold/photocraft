@@ -416,7 +416,8 @@ fn an_animated_export_thresholds_partial_alpha_at_half() {
     l.surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(0, 0, 1, 1), &[1.0, 0.0, 0.0, 0.3]);
     l.surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(1, 0, 2, 1), &[1.0, 0.0, 0.0, 0.7]);
     d.layers = vec![l];
-    d.frame_animation = Some(FrameAnimation { frames: vec![AnimFrame::default().into(); 2], current: 0, loops: LoopCount::Forever });
+    d.frame_animation =
+        Some(FrameAnimation { frames: vec![AnimFrame::default().into(); 2], current: 0, loops: LoopCount::Forever, defaults: Default::default() });
     let bytes = photocraft_io::export(&d, "a.gif", &Default::default()).unwrap().bytes;
     let opened = photocraft_io::import("a.gif", &bytes).unwrap().document;
     let px = photocraft_compose::flatten(&opened).into_px();
