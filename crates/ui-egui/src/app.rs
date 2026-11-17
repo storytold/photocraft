@@ -55,6 +55,7 @@ impl PhotocraftApp {
             thumbnail_cache: std::sync::Arc::new(std::sync::Mutex::new(crate::home_recent_ui::ThumbnailCache::default())),
             checker: None,
             drag: None,
+            drag_canvas: None,
             cancelled_vector_drag: false,
             move_blocked: false,
             tool_override: None,

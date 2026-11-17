@@ -379,7 +379,9 @@ pub fn track_right_press_view(response: &Response, view: &crate::state::View, fl
 /// brush with Alt held (#297), erases (Erase preference) or opens the Brush Preset picker. Arms
 /// `secondary_erase` or `brush_resize_armed` for this frame's `Down`. `xf` is this canvas's view,
 /// one cell of a Window › Arrange layout: it places a right-click on the image or the pasteboard.
-pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool, xf: &crate::canvas::ViewXform) -> Buttons {
+/// `popups` is false on a canvas whose window can't show the pickers (an extra document window,
+/// #6022): a right-click opens nothing.
+pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool, xf: &crate::canvas::ViewXform, popups: bool) -> Buttons {
     if crate::brush_mode_menu::blocks_canvas(app, &response.ctx) {
         app.secondary_erase = false;
         return Buttons::default();
@@ -413,7 +415,7 @@ pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool, 
     let mode_menu = crate::brush_mode_menu::opens_on(app, tool, menu_mods, menu_at.map(|p| xf.to_doc(p)));
     if mode_menu && !resizing && app.drag.is_none() {
         app.secondary_erase = false;
-        if let Some(p) = menu_at {
+        if popups && let Some(p) = menu_at {
             crate::brush_mode_menu::open(app, &response.ctx, [p.x, p.y], menu_mods);
         }
         return Buttons {
@@ -429,7 +431,8 @@ pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool, 
     let sticky = crate::workspace_ui::sticky_mods(app, mods);
     let hud_gesture = right_click_picker(tool) && !layer_menu && !erase && sticky.shift && sticky.alt;
     let right_press = response.ctx.input(|i| i.pointer.button_pressed(PointerButton::Secondary)) && response.contains_pointer();
-    if hud_gesture
+    if popups
+        && hud_gesture
         && right_press
         && let Some(p) = response.ctx.input(|i| i.pointer.hover_pos())
     {
@@ -442,7 +445,8 @@ pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool, 
     }
     let right_at = right_click_at(response);
     let right_click = right_at.is_some();
-    if !erase
+    if popups
+        && !erase
         && !layer_menu
         && !crate::color_hud::is_open(&app.ui)
         && right_click_picker(tool)

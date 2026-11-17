@@ -56,7 +56,7 @@ impl DocumentWindow {
     fn frame(&mut self, app: &mut PhotocraftApp, events: Vec<Event>) {
         let input = RawInput { screen_rect: Some(self.screen), events, ..Default::default() };
         let mut out = self.ctx.run_ui(input, |ui| {
-            self.view = document_window_canvas(app, ui, &self.window, self.view.clone(), true).0;
+            self.view = document_window_canvas(app, ui, &self.window, self.view.clone()).0;
         });
         out.textures_delta.clear();
     }
