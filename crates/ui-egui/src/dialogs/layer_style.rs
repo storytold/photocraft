@@ -25,6 +25,8 @@ use crate::{PhotocraftApp, widgets};
 mod bevel_modes_tests;
 pub(crate) mod color_picker;
 mod contour;
+#[cfg(test)]
+mod drop_shadow_drag_angle_tests;
 mod gradient_field;
 #[cfg(test)]
 mod gradient_method_tests;
@@ -512,9 +514,9 @@ pub fn drags_shadow(f: &Map<String, Value>) -> bool {
 
 /// A drag on the image with a shadow page selected: `start` is true on the press (it records the
 /// shadow's angle and distance then), `total` the pointer's movement since in document pixels.
-/// The shadow's offset follows the pointer, kept as Photoshop's whole-degree angle and whole-pixel
-/// distance (offset = (−cos angle, sin angle) × distance, the light opposite the shadow); with
-/// Use Global Light the shared angle moves too ([`set_param`]).
+/// The shadow's offset follows the pointer, kept as Photoshop's whole-degree angle (the fraction
+/// cut off) and whole-pixel distance (offset = (−cos angle, sin angle) × distance, the light
+/// opposite the shadow); with Use Global Light the shared angle moves too ([`set_param`]).
 pub fn drag_shadow(f: &mut Map<String, Value>, start: bool, total: [f64; 2]) {
     const KEY: &str = "__shadowDrag";
     let Some(id) = f.get("selected").and_then(Value::as_str).map(str::to_string).filter(|_| drags_shadow(f)) else { return };
@@ -531,7 +533,15 @@ pub fn drag_shadow(f: &mut Map<String, Value>, start: bool, total: [f64; 2]) {
     if !d.is_finite() {
         return;
     }
-    let new_angle = if d >= 0.5 { oy.atan2(-ox).to_degrees().round() } else { angle };
+    let new_angle = if d >= 0.5 {
+        let degrees = oy.atan2(-ox).to_degrees();
+        // Photoshop cuts the fraction off a dragged angle (133.6° → 133°, #14894). The 1e-6° slack
+        // keeps a whole angle whole: a press without movement gives 119.99999…° for 120°. Drags
+        // ending below 0° weren't measured (toward zero or down?), so those keep rounding.
+        if degrees >= 0.0 { (degrees + 1e-6).trunc() } else { degrees.round() }
+    } else {
+        angle
+    };
     set_param(f, &id, "angle", json!(new_angle));
     set_param(f, &id, "distance", json!(d.round().clamp(0.0, 30000.0)));
 }
