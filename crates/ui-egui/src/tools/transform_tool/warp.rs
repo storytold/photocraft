@@ -1,225 +1,73 @@
+use craft::behavior::EditEvents;
+use craft::draw::ui::transform::TransformEdit;
+use craft::imaging::ui::warp::{CylinderValues, WarpMesh};
+
 use super::begin::warps_type;
-use super::cylinder::cylinder_pointer;
-use super::{BezierMesh, CursorIcon, PhotocraftApp, SplitTool, ToolEvent, ViewXform, Warp, WarpDrag, WarpStyle, json};
+use super::{BezierMesh, PhotocraftApp, Warp, WarpStyle, json};
+use crate::state::SessionWarp;
 
-/// An anchor or a handle on a section line. The inner control points of a patch are not shown.
-pub(super) fn on_section_edge(i: usize, j: usize) -> bool {
-    i.is_multiple_of(3) || j.is_multiple_of(3)
-}
-
-/// Index of the warp control point within `tol` of `p` (nearest anchor or handle).
-pub(super) fn warp_hit(w: &Warp, p: [f64; 2], tol: f64) -> Option<usize> {
-    let m = w.mesh.as_ref()?;
-    let nx = m.nx();
-    m.points
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| on_section_edge(i % nx, i / nx))
-        .map(|(i, q)| (i, ((q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2)).sqrt()))
-        .filter(|(_, d)| *d < tol)
-        .min_by(|a, b| a.1.total_cmp(&b.1))
-        .map(|(i, _)| i)
-}
-
-/// A 1×1 mesh (Grid › Default) draws rule-of-thirds guides. Denser presets are real patch
-/// boundaries only — a 3×3 is three cells, not a third-line lattice inside every cell.
-pub(super) fn single_patch(mesh: &BezierMesh) -> bool {
-    mesh.us.len() == 2 && mesh.vs.len() == 2
-}
-
-/// The surface parameters under `p` when it is inside the warped mesh, else None. `unit` is one
-/// document pixel in the mesh's space ([`crate::state::TransformSession::warp_unit`]).
-pub(super) fn surface_at(mesh: &BezierMesh, p: [f64; 2], unit: f64) -> Option<(f64, f64)> {
-    let (s, t) = mesh.param_at(p);
-    let q = mesh.eval(s, t);
-    ((q[0] - p[0]).hypot(q[1] - p[1]) < unit).then_some((s, t))
-}
-
-/// Ctrl-click (or Option-click) picks the split: crosswise in the open, and the perpendicular
-/// split when the pointer's grid position `(s, t)` is close to an existing grid line. `unit` is
-/// one document pixel in the mesh's space.
-pub(super) fn quick_split_kind(mesh: &BezierMesh, bounds: [f64; 4], (s, t): (f64, f64), unit: f64) -> SplitTool {
-    let w = (bounds[2] - bounds[0]).abs().max(1.0);
-    let h = (bounds[3] - bounds[1]).abs().max(1.0);
-    let su = (8.0 * unit / w).clamp(0.02, 0.12);
-    let sv = (8.0 * unit / h).clamp(0.02, 0.12);
-    let thirds = single_patch(mesh);
-    let near = |knots: &[f64], v: f64, tol: f64| {
-        knots.iter().any(|k| *k > 0.0 && *k < 1.0 && (k - v).abs() < tol) || (thirds && [1.0 / 3.0, 2.0 / 3.0].iter().any(|k| (k - v).abs() < tol))
-    };
-    match (near(&mesh.us, s, su), near(&mesh.vs, t, sv)) {
-        (true, false) => SplitTool::Horizontal,
-        (false, true) => SplitTool::Vertical,
-        _ => SplitTool::Cross,
+/// Gives the session `warp` as its new warp (one `TransformEdit::Warp`), keeping whether it is on
+/// a type layer. The one place the warp glue writes the session's warp.
+pub(super) fn set_warp(app: &mut PhotocraftApp, warp: Warp) {
+    let now = app.nudge_bundle.now;
+    let on_type = app.ui.transform.as_ref().and_then(|t| t.session.warp()).map_or_else(|| warps_type(app), |w| w.on_type);
+    if let Some(t) = app.ui.transform.as_mut() {
+        t.session.apply(TransformEdit::Warp(SessionWarp::new(warp, on_type)), now);
     }
 }
 
-/// The cursor for a split armed at grid position `(s, t)` of warp grid `m` (shown through
-/// `to_doc`): the arrow across the
-/// split line as it looks on screen. A vertical split line runs along the grid's columns and is
-/// placed by moving across them, in the grid's own direction there, so the arrow turns with a
-/// turned or bent grid and with the view.
-pub(super) fn split_cursor(m: &BezierMesh, tool: SplitTool, (s, t): (f64, f64), xf: &ViewXform, to_doc: &dyn Fn([f64; 2]) -> [f64; 2]) -> CursorIcon {
-    let e = 1e-3;
-    let (a, b) = match tool {
-        SplitTool::Vertical => (m.eval((s - e).max(0.0), t), m.eval((s + e).min(1.0), t)),
-        SplitTool::Horizontal => (m.eval(s, (t - e).max(0.0)), m.eval(s, (t + e).min(1.0))),
-        SplitTool::Cross => return CursorIcon::Crosshair,
-    };
-    // Where they show: a smart object's grid is drawn through its placement.
-    let (a, b) = (to_doc(a), to_doc(b));
-    crate::tool_cursor::resize([b[0] - a[0], b[1] - a[1]], xf)
+/// The app's mesh of the framework's: the same knots and control points.
+fn bezier_of(mesh: &WarpMesh) -> BezierMesh {
+    BezierMesh { us: mesh.us.clone(), vs: mesh.vs.clone(), points: mesh.points.iter().map(|p| [p.x, p.y]).collect() }
 }
 
-/// Armed split tool, or Option held: the guide tracks the pointer and the split lands on release.
-/// A Split button is one-shot, as in the reference: the release that splits ends its mode (#12498).
-/// Returns false when this event is an ordinary control-point drag.
-fn split_gesture(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> bool {
-    let armed = app.transform_preview.as_ref().and_then(|p| p.split_tool);
-    let placing = app.transform_preview.as_ref().is_some_and(|p| p.split_placing);
-    match ev {
-        ToolEvent::Down { x, y, .. } if armed.is_some() || mods.alt || mods.command => {
-            if let Some(pv) = app.transform_preview.as_mut() {
-                pv.split_placing = true;
-                pv.split_pointer = Some([x, y]);
-                pv.split_quick = armed.is_none();
-            }
-            true
-        }
-        ToolEvent::Move { x, y, .. } if placing => {
-            if let Some(pv) = app.transform_preview.as_mut() {
-                pv.split_pointer = Some([x, y]);
-            }
-            true
-        }
-        ToolEvent::Up { x, y } if placing => {
-            let quick = app.transform_preview.as_ref().is_some_and(|p| p.split_quick);
-            if let Some(pv) = app.transform_preview.as_mut() {
-                pv.split_placing = false;
-                pv.split_pointer = None;
-                pv.split_quick = false;
-            }
-            let kind = if let Some(tool) = armed {
-                Some(tool)
-            } else if quick {
-                app.ui.transform.as_ref().and_then(|t| t.warp.as_ref().map(|w| (t, w))).map(|(t, w)| {
-                    let m = w.to_mesh(1, 1);
-                    quick_split_kind(&m, w.bounds, m.param_at([x, y]), t.warp_unit([x, y]))
-                })
-            } else {
-                None
-            };
-            // Outside the grid or on an existing line this is a no-op, and the mode stays armed.
-            if let Some(kind) = kind
-                && split(app, kind.command(), Some([x, y])).is_ok()
-                && let Some(pv) = app.transform_preview.as_mut()
-            {
-                pv.split_tool = None;
-            }
-            true
-        }
-        _ => false,
+/// Applies the warp grid's edits of this pass: every value it reports becomes a Custom warp over
+/// the box (a preset warp's first edit turns it Custom), and a cancelled drag puts back the mesh it
+/// began on. `split` is whether the pass placed a split line
+/// (`matches!(out.edit, Some(WarpEdit::Split { .. }))`): the armed Split tool is one-shot, so it
+/// disarms. A pass with no events changes nothing, and a second pass of a frame has none, so it
+/// applies nothing twice.
+pub(crate) fn grid_edit(app: &mut PhotocraftApp, events: &EditEvents<WarpMesh>, split: bool) {
+    let Some(b) = app.ui.transform.as_ref().and_then(|t| t.session.warp()).map(|w| w.warp.bounds) else { return };
+    let mut applied = false;
+    for event in events.iter() {
+        // PLAN: the sheet says a `Cancel` keeps the session's warp, but `TransformSession::apply(Warp(..))` stores each Update, so the drag's start is restored from the event's `before` (as a Custom warp over the same mesh).
+        let Some(mesh) = event.landed() else { continue };
+        set_warp(app, Warp::custom(bezier_of(mesh), b));
+        applied = true;
     }
-}
-
-/// How close (in document pixels, at any zoom) a press on a split warp grid must be to a split
-/// line or the border to pull that line, as in the reference application (measured: 22 px pulls
-/// the line, 24 px doesn't, at 100 % and at 50 %).
-const LINE_REACH_PX: f64 = 23.0;
-
-/// Drags the warp grid. A press on an anchor or handle moves that point (an anchor carries its
-/// handles along); a press anywhere else inside the grid pulls the surface under the pointer.
-/// Preset warps turn into a custom mesh when the press grabs something. An armed split tool, or
-/// Ctrl / Option held, places a split where the pointer is released instead.
-pub(super) fn warp_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tol: f64, mods: egui::Modifiers) {
-    // Type takes only the warp styles: nothing on the canvas to drag or split (#3004).
-    if warps_type(app) {
-        return;
-    }
-    // A press first records what it finds: a Warp entered this frame hasn't settled yet, and once
-    // a drag starts the box settles only on release, so Undo would skip from the drag to the box.
-    if matches!(ev, ToolEvent::Down { .. })
-        && let (Some(t), Some(pv)) = (app.ui.transform.as_ref(), app.transform_preview.as_mut())
+    if split
+        && applied
+        && let Some(pv) = app.transform_preview.as_mut()
     {
-        pv.steps.settle(super::Step::of(t));
+        pv.split = None;
     }
-    // Where the press is on screen, for a grid drawn through a capped perspective (below).
-    let (doc_point, doc_tol) = (event_point(ev), tol);
-    // A smart object's warp may be in its contents' space (#8927): the pointer is taken there.
-    let (ev, tol, unit) = match app.ui.transform.as_ref().filter(|t| t.warp_place.is_some()) {
-        Some(t) => {
-            let scale = t.warp_scale_at(event_point(ev));
-            (to_warp_space(t, ev), tol / scale, 1.0 / scale)
-        }
-        None => (ev, tol, 1.0),
-    };
-    // A cylinder has its own handles, and no splits (#4112).
-    if app.ui.transform.as_ref().and_then(|t| t.warp.as_ref()).is_some_and(|w| w.style == WarpStyle::Cylinder) {
-        return cylinder_pointer(app, ev, tol);
-    }
-    if split_gesture(app, ev, mods) {
-        return;
-    }
-    let (Some(t), Some(pv)) = (app.ui.transform.as_mut(), app.transform_preview.as_mut()) else { return };
-    let place = t.warp_place;
-    let Some(w) = t.warp.as_mut() else { return };
-    match ev {
-        ToolEvent::Down { x, y, .. } => {
-            // A preset warp becomes a custom mesh only when the press grabs one of its points.
-            let custom = if w.mesh.is_none() || w.style != WarpStyle::Custom { Warp::custom(w.to_mesh(1, 1), w.bounds) } else { w.clone() };
-            let pts0 = custom.mesh.as_ref().map(|m| m.points.clone()).unwrap_or_default();
-            // Through a perspective past the reference's cap the grid shows through the capped
-            // map, not the placement: what the press grabs is found where it is drawn. The pull
-            // still follows the pointer through the placement, as the reference's does.
-            let drawn = place
-                .filter(|m| photocraft_algo::smart_perspective::capped_map(m, custom.to_mesh(1, 1).control_bounds()).is_some())
-                .and_then(|m| photocraft_algo::warp::warp_in_document(&custom, &photocraft_algo::transform::Homography(m)));
-            let (grid, at, tol, unit) = match &drawn {
-                Some(d) => (d, doc_point, doc_tol, 1.0),
-                None => (&custom, [x, y], tol, unit),
-            };
-            pv.warp_drag = warp_hit(grid, at, tol).map(|index| WarpDrag::Point { index, start: [x, y], pts0: pts0.clone() }).or_else(|| {
-                let (s, t) = surface_at(grid.mesh.as_ref()?, at, unit)?;
-                Some(WarpDrag::Surface { s, t, start: [x, y], pts0 })
-            });
-            if pv.warp_drag.is_some() {
-                *w = custom;
-            }
-        }
-        ToolEvent::Move { x, y, .. } | ToolEvent::Up { x, y } => {
-            match (&pv.warp_drag, w.mesh.as_mut()) {
-                (Some(WarpDrag::Point { index, start, pts0 }), Some(m)) => m.drag_point(pts0, *index, [x - start[0], y - start[1]]),
-                (Some(WarpDrag::Surface { s, t, start, pts0 }), Some(m)) => m.pull_at(pts0, *s, *t, *start, [x - start[0], y - start[1]], LINE_REACH_PX * unit),
-                _ => {}
-            }
-            if matches!(ev, ToolEvent::Up { .. }) {
-                pv.warp_drag = None;
-            }
-            t.keep_warp_before_horizon();
+}
+
+/// Applies the cylinder's edits of this pass: every value it reports becomes the cylinder warp
+/// over the box, and a cancelled drag puts back the values it began with. A pass with no events
+/// changes nothing. A set of values that describe no cylinder is refused and the warp stays.
+pub(crate) fn cylinder_edit(app: &mut PhotocraftApp, events: &EditEvents<CylinderValues>) {
+    let Some(b) = app.ui.transform.as_ref().and_then(|t| t.session.warp()).map(|w| w.warp.bounds) else { return };
+    for event in events.iter() {
+        let Some(values) = event.landed() else { continue };
+        if let Some(warp) = Warp::cylinder(&values.to_array(), b) {
+            set_warp(app, warp);
         }
     }
 }
 
-/// The document point of a pointer event.
-fn event_point(ev: ToolEvent) -> [f64; 2] {
-    match ev {
-        ToolEvent::Down { x, y, .. } | ToolEvent::Move { x, y, .. } | ToolEvent::Up { x, y } => [x, y],
+/// The seven values of `w` when it is a cylinder.
+pub(crate) fn cylinder_values(w: &Warp) -> Option<CylinderValues> {
+    if w.style != WarpStyle::Cylinder {
+        return None;
     }
-}
-
-/// `ev` with its point in the warp's own space ([`TransformSession::doc_to_warp`]).
-fn to_warp_space(t: &super::TransformSession, ev: ToolEvent) -> ToolEvent {
-    let [x, y] = t.doc_to_warp(event_point(ev));
-    match ev {
-        ToolEvent::Down { pressure, .. } => ToolEvent::Down { x, y, pressure },
-        ToolEvent::Move { pressure, .. } => ToolEvent::Move { x, y, pressure },
-        ToolEvent::Up { .. } => ToolEvent::Up { x, y },
-    }
+    <[f64; 7]>::try_from(w.values.as_slice()).ok().map(CylinderValues::from_array)
 }
 
 /// Runs a warp-edit command against the mesh in the open Warp session and writes the mesh back.
 pub fn edit_session_warp(app: &mut PhotocraftApp, id: &str, params: &serde_json::Value) -> Result<(), String> {
-    let Some(w) = app.ui.transform.as_ref().and_then(|t| t.warp.clone()) else { return Err("not warping".into()) };
+    let Some(w) = app.ui.transform.as_ref().and_then(|t| t.session.warp()).map(|w| w.warp.clone()) else { return Err("not warping".into()) };
     if warps_type(app) {
         return Err("Warp on type takes only the warp styles".into());
     }
@@ -230,18 +78,12 @@ pub fn edit_session_warp(app: &mut PhotocraftApp, id: &str, params: &serde_json:
     let r = app.session.execute(id, p).map_err(|e| e.to_string())?;
     let raw = r.get("warp").cloned().ok_or_else(|| "warp command returned no mesh".to_string())?;
     let nw: Warp = serde_json::from_value(raw).map_err(|e| e.to_string())?;
-    // A warp-edit command can replace the mesh while pointer input is split across control
-    // requests. Any drag index captured from the old mesh is invalid once that happens.
-    if let Some(pv) = app.transform_preview.as_mut() {
-        pv.warp_drag = None;
-    }
-    if let Some(t) = app.ui.transform.as_mut() {
-        t.warp = Some(nw);
-    }
+    set_warp(app, nw);
     Ok(())
 }
 
 /// Applies a split-warp command to the mesh being edited (at the box centre unless `at`).
+// PLAN: sheet note 8 says a split without `at` arms `pv.split`; the base splits at the box centre and the menu's callers rely on it, and tools-w27 does not name the command-to-`WarpSplit` function arming would need, so this keeps the base rule.
 pub fn split(app: &mut PhotocraftApp, id: &str, at: Option<[f64; 2]>) -> Result<(), String> {
     let mut p = json!({});
     if let Some(a) = at {
@@ -249,7 +91,3 @@ pub fn split(app: &mut PhotocraftApp, id: &str, at: Option<[f64; 2]>) -> Result<
     }
     edit_session_warp(app, id, &p)
 }
-
-#[cfg(test)]
-#[path = "warp_split_one_shot_tests.rs"]
-mod warp_split_one_shot_tests;

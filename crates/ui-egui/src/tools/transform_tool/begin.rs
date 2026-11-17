@@ -1,11 +1,43 @@
-use super::commit::{cancel, commit, start_steps};
+use craft::behavior::geometry::BoxAllow;
+use craft::behavior::kurbo::Rect;
+use craft::draw::ui::transform::{TransformEdit, TransformSession};
+use craft::imaging::ui::transform_preview::{PreviewPixels, PreviewTextures, StyledPreview};
+
+use super::commit::{cancel, commit};
 #[cfg(test)]
 use super::draw::texture_quad;
 use super::preview::{Above, AbovePlan, preview_image};
 use super::{
-    Arc, BezierMesh, CAS_ONLY_SCALES, Color32, DocId, Document, Follow, Homography, LOCKED, LayerContent, LayerId, MadeLayer, OtherTexels, PhotocraftApp,
-    Several, Steps, TransformPreview, TransformSession, Warp, WarpStyle, corners, default_interpolation, json, swap_mode_texels,
+    Arc, BezierMesh, CAS_ONLY_SCALES, Color32, DocId, Document, Follow, Homography, LOCKED, LayerContent, LayerId, MadeLayer, OpenPreview, OtherTexels,
+    PhotocraftApp, Several, Warp, WarpStyle, default_interpolation, json, settings, swap_mode_texels,
 };
+use crate::state::{FreeTransform, SessionWarp};
+
+/// The source frame `r` (`[x0, y0, x1, y1]`) as the session's frame.
+fn frame_of(r: [f64; 4]) -> Rect {
+    Rect::new(r[0], r[1], r[2], r[3])
+}
+
+/// What the content allows: editable type refuses distort and perspective, everything else allows all.
+fn type_allow(typed: bool) -> BoxAllow {
+    if typed { BoxAllow::new(true, true, false) } else { BoxAllow::default() }
+}
+
+/// The session over the source frame `rect`: the stored settings, the interpolation default and the nudge pause.
+/// `warp_ok` is false where the content cannot warp (a lone mask or channel, several layers, Content-Aware Scale).
+fn open_session(app: &PhotocraftApp, rect: [f64; 4], allow: BoxAllow, warp_ok: bool) -> TransformSession<SessionWarp> {
+    TransformSession::new(frame_of(rect))
+        .allow(allow.with_warp(warp_ok))
+        .settings(&settings(app), default_interpolation(app))
+        .nudge_pause(crate::nudge_bundle::pause(app))
+}
+
+/// The Frame tool's entry: [`begin`] with the session marked to commit when the press that opened it is released.
+pub fn begin_from_frame(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
+    begin(app, ctx)?;
+    app.ui.frame_tool.auto_transform = true;
+    Ok(())
+}
 
 /// Start Free Transform on the active layer (or its selected pixels), or on the targeted unlinked
 /// layer mask, alpha channel or Quick Mask.
@@ -14,7 +46,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
         return Err("Free Transform is still preparing the layer".into());
     }
     if let Some((params, path)) = crate::vector_ui::free_transform_path(app) {
-        return begin_path(app, ctx, params, path);
+        return begin_path(app, params, path);
     }
     if crate::canvas::multiple_color_target(app) {
         return Err("Move and transforms on several colour channels are not implemented yet".into());
@@ -44,7 +76,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
         app.ui.tool == crate::state::Tool::Frame && layer.frame.is_some() && crate::frame_tool::target(app, layer) == crate::frame_tool::Target::Frame;
     if photocraft_engine::transform_cmds::locked_for_transform(&doc, id) {
         // Photoshop refuses before the box opens rather than when it is committed (#2585).
-        app.ui.open_dialog(crate::state::DialogKind::Error, json!({"message": tl!(LOCKED)}).as_object().cloned().unwrap_or_default());
+        crate::dialogs::alerts::alert(app, tl!(LOCKED));
         return Err(LOCKED.into());
     }
     if matches!(layer.content, LayerContent::Adjustment(_)) && layer.mask.is_none() {
@@ -97,11 +129,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
     let styled = lifted.is_none() && photocraft_compose::effects::has_effects(layer);
     let opacity = layer.opacity * layer.fill_opacity;
     let whole = lifted.is_none();
-    // A rotated, skewed or distorted smart object: the box opens on its placement (#3649), and the
-    // preview's texels (its pixels as they are, over `rect`) move with the box from there.
-    let opened = smart_start(&doc, layer, rect);
-    let start = opened.map(|(q, _)| q);
-    let frame = opened.map_or(rect, |(_, f)| f);
+    let allow = type_allow(matches!(layer.content, LayerContent::Text(_)));
     // Reading the moving pixels and compositing the layers over them is the heavy part: hundreds
     // of megapixels on a large canvas. Done on the UI thread, the window stopped answering for
     // long enough that a Wayland compositor dropped it, so a large layer prepares as a job
@@ -109,10 +137,8 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
     let big = plan_pixels(&plan).saturating_add(b.size().area()) >= PREPARE_IN_BACKGROUND_PX;
     let source = doc.clone();
     let doc_id = doc.id;
-    let finish_ctx = ctx.clone();
     let selected = selected_now(app);
     let finish = move |app: &mut PhotocraftApp, prepared: Prepared| -> Result<(), String> {
-        let ctx = &finish_ctx;
         // The document is locked while preparing; still, never open a box on another state (or
         // in another tab). The revision is read again: the job itself may have moved it on.
         let Some(revision) = app.session.active().filter(|st| Arc::ptr_eq(&st.doc, &doc) && st.active_layer == Some(id)).map(|st| st.revision) else {
@@ -123,60 +149,28 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
             return Err("Free Transform: the layer selection changed while it was preparing".into());
         }
         let Prepared { plan, above, image: (image, uv) } = prepared;
-        let above = Above::from_plan(ctx, format!("transform-{session}-above"), max_side, plan, above);
+        let above = Above::from_plan(max_side, plan, above);
         app.transform_area = area.map(|area| super::OpenArea { doc: doc.id, key: super::preview_key(session), revision, area });
-        let texture = crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}"), image, uv);
-        app.transform_preview = Some(TransformPreview {
-            session,
-            doc: if frame_only { doc.clone() } else { Arc::new(pd) },
-            texture,
+        let textures = PreviewTextures::new(format!("transform-{session}"), PreviewPixels::new(image, uv));
+        let shown = if frame_only { doc.clone() } else { Arc::new(pd) };
+        app.transform_preview = Some(OpenPreview {
             opacity,
             above: (!frame_only).then_some(above),
-            styled: (styled && !frame_only).then(|| crate::transform_fx::StyledPreview::new(format!("transform-{session}-styled"))),
+            styled: (styled && !frame_only).then(|| StyledPreview::new(format!("transform-{session}-styled"))),
             follow: Some(Follow { revision, hidden: if whole && !frame_only { vec![id] } else { Vec::new() }, selected: selected_now(app) }),
-            committing: None,
-            other_texels: None,
-            gesture: None,
-            warp_drag: None,
-            split_tool: None,
-            split_pointer: None,
-            split_placing: false,
-            split_quick: false,
-            placed: start.map(|_| corners(rect)),
-            contents: None,
-            ants: Default::default(),
-            steps: Steps::default(),
-            tool: app.ui.tool,
-            path: None,
-            content_aware: None,
-            several: None,
+            ..OpenPreview::new(session, shown, textures, app.ui.tool)
         });
-        app.ui.transform = Some(TransformSession {
-            session,
+        app.ui.transform = Some(FreeTransform {
+            session: open_session(app, rect, allow, !frame_only),
+            id: session,
             layer: id.0,
-            rect: frame,
-            quad: start.unwrap_or(corners(rect)),
-            pivot: [(frame[0] + frame[2]) / 2.0, (frame[1] + frame[3]) / 2.0],
-            interpolation: default_interpolation(app).into(),
-            warp: None,
+            layers: Vec::new(),
             selection: false,
             target: frame_only.then(|| json!({"frame": id.0})),
             path: None,
             made: None,
-            mode: Default::default(),
             content_aware: None,
-            skew_v: 0.0,
-            start,
-            warp_place: None,
-            held_warp: None,
-            held_place: None,
-            warp_entry: None,
-            warp_box: None,
-            warp_origin: None,
-            warp_squeeze: None,
-            layers: Vec::new(),
         });
-        start_steps(app);
         Ok(())
     };
     // `canceled` is asked between the two images, so a canceled job doesn't make the second.
@@ -278,54 +272,6 @@ fn mark_made(app: &mut PhotocraftApp, made: MadeLayer) {
     }
 }
 
-/// Where Free Transform's box opens on smart object `layer`, and the frame it measures from: its
-/// placement's corners, unless they are (to the pixel) the upright `rect` the box would open on
-/// anyway at the contents' own size. The frame is the contents' own size, centred on the
-/// placement, so W and H read the placement's total scale against the original contents and a
-/// typed 100 % brings them back to it (as the reference does); a warped smart object's frame is
-/// its box at 100 % ([`frame_of`]). Not with a selection, whose box is the selection's (#5297).
-fn smart_start(doc: &Document, layer: &photocraft_doc::Layer, rect: [f64; 4]) -> Option<([[f64; 2]; 4], [f64; 4])> {
-    if doc.selection.is_some() {
-        return None;
-    }
-    let q = photocraft_engine::warp_cmds::smart_box(doc, layer)?;
-    Homography::quad_to_quad(q, q)?;
-    let warped = matches!(&layer.content, LayerContent::Smart(sm) if sm.warp.as_ref().is_some_and(|w| !w.is_identity()));
-    let size = photocraft_engine::warp_cmds::smart_contents_size(doc, layer).filter(|_| !warped);
-    let frame = match size {
-        Some([w, h]) => {
-            let (cx, cy) = (q.iter().map(|p| p[0]).sum::<f64>() / 4.0, q.iter().map(|p| p[1]).sum::<f64>() / 4.0);
-            [cx - w / 2.0, cy - h / 2.0, cx + w / 2.0, cy + h / 2.0]
-        }
-        None => frame_of(q),
-    };
-    let upright = q.iter().zip(corners(rect)).all(|(a, b)| (a[0] - b[0]).abs() <= 1.0 && (a[1] - b[1]).abs() <= 1.0);
-    let full_size = q.iter().zip(corners(frame)).all(|(a, b)| (a[0] - b[0]).abs() <= 0.5 && (a[1] - b[1]).abs() <= 0.5);
-    (!(upright && full_size)).then_some((q, frame))
-}
-
-/// An upright frame for a box opening on quad `q`: as wide as its top edge and as tall as its
-/// height across it, centred on it, so `q` reads as W and H 100 % with the quad's own angle and
-/// skew (Photoshop: a smart object's earlier rotation shows; its size is the 100 % one).
-pub(super) fn frame_of(q: [[f64; 2]; 4]) -> [f64; 4] {
-    let (ex, ey) = (q[1][0] - q[0][0], q[1][1] - q[0][1]);
-    let w = ex.hypot(ey);
-    let h = if w > 1e-9 { ((q[3][0] - q[0][0]) * ey - (q[3][1] - q[0][1]) * ex).abs() / w } else { 0.0 };
-    let (cx, cy) = (q.iter().map(|p| p[0]).sum::<f64>() / 4.0, q.iter().map(|p| p[1]).sum::<f64>() / 4.0);
-    let (w, h) = (w.max(1e-3), h.max(1e-3));
-    [cx - w / 2.0, cy - h / 2.0, cx + w / 2.0, cy + h / 2.0]
-}
-
-pub(super) fn interpolation_preference(interpolation: &str) -> Option<photocraft_engine::prefs::Interpolation> {
-    use photocraft_engine::prefs::Interpolation;
-    match interpolation {
-        "nearest" => Some(Interpolation::Nearest),
-        "bilinear" => Some(Interpolation::Bilinear),
-        "bicubic" => Some(Interpolation::Bicubic),
-        _ => None,
-    }
-}
-
 /// Free Transform of the selected layers `ids` together (#6501): the box frames them all, and the
 /// preview moves their composite, drawn over the layers they cover. `active` stays the session's
 /// `layer`, so picking another layer still applies the box. The selected pixels of each pixel
@@ -334,7 +280,7 @@ fn begin_several(app: &mut PhotocraftApp, ctx: &egui::Context, doc: Arc<Document
     use photocraft_engine::transform_cmds as tc;
     // The Background among them refuses the same way, rather than being left out (#11101).
     if tc::background_among(&doc, &ids).is_some() || ids.iter().any(|id| tc::locked_for_transform(&doc, *id)) {
-        app.ui.open_dialog(crate::state::DialogKind::Error, json!({"message": tl!(LOCKED)}).as_object().cloned().unwrap_or_default());
+        crate::dialogs::alerts::alert(app, tl!(LOCKED));
         return Err(LOCKED.into());
     }
     let b = tc::transform_frame_of(&doc, &ids);
@@ -368,71 +314,31 @@ fn begin_several(app: &mut PhotocraftApp, ctx: &egui::Context, doc: Arc<Document
         }
     }
     let max_side = ctx.input(|i| i.max_texture_side).max(app.gpu.as_ref().map_or(1, |g| g.max_texture_side()));
-    let above = Above::new(ctx, format!("transform-{session}-above"), &doc, top, max_side);
+    let above = Above::new(&doc, top, max_side);
     above.hide_in(&mut under.layers);
     // Opacity, fill, masks and styles are in the composite already.
-    let mut several = Several {
-        ctx: ctx.clone(),
-        name: format!("transform-{session}"),
-        max_side,
-        moving: Several::shown(&doc, &ids, &lifted),
-        lifted,
-        ids: ids.clone(),
-        frame: b,
-        rect: b,
-    };
-    let texture = several.render();
-    app.transform_preview = Some(TransformPreview {
-        session,
-        doc: Arc::new(under),
-        texture,
-        opacity: 1.0,
+    let mut several =
+        Several { name: format!("transform-{session}"), max_side, moving: Several::shown(&doc, &ids, &lifted), lifted, ids: ids.clone(), frame: b, rect: b };
+    let textures = several.render();
+    app.transform_preview = Some(OpenPreview {
         above: Some(above),
-        styled: None,
         follow: Some(Follow { revision, hidden, selected: selected_now(app) }),
-        committing: None,
-        other_texels: None,
-        gesture: None,
-        warp_drag: None,
-        split_tool: None,
-        split_pointer: None,
-        split_placing: false,
-        split_quick: false,
-        placed: None,
-        contents: None,
-        ants: Default::default(),
-        steps: Steps::default(),
-        tool: app.ui.tool,
-        path: None,
-        content_aware: None,
         several: Some(several),
+        ..OpenPreview::new(session, Arc::new(under), textures, app.ui.tool)
     });
-    app.ui.transform = Some(TransformSession {
-        session,
+    let typed = ids.iter().any(|id| doc.layer(*id).is_some_and(|l| matches!(l.content, LayerContent::Text(_))));
+    // One box over several layers doesn't warp (#6501).
+    app.ui.transform = Some(FreeTransform {
+        session: open_session(app, rect, type_allow(typed), false),
+        id: session,
         layer: active.0,
-        rect,
-        quad: corners(rect),
-        pivot: [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0],
-        interpolation: default_interpolation(app).into(),
-        warp: None,
+        layers: ids.iter().map(|id| id.0).collect(),
         selection: false,
         target: None,
         path: None,
         made: None,
-        mode: Default::default(),
         content_aware: None,
-        skew_v: 0.0,
-        start: None,
-        warp_place: None,
-        held_warp: None,
-        held_place: None,
-        warp_entry: None,
-        warp_box: None,
-        warp_origin: None,
-        warp_squeeze: None,
-        layers: ids.iter().map(|id| id.0).collect(),
     });
-    start_steps(app);
     Ok(())
 }
 
@@ -441,12 +347,13 @@ fn begin_several(app: &mut PhotocraftApp, ctx: &egui::Context, doc: Arc<Document
 #[cfg(test)]
 pub(crate) fn moving_texel(app: &PhotocraftApp, p: [i32; 2]) -> (Option<Color32>, [[f64; 2]; 4]) {
     let (Some(t), Some(pv)) = (&app.ui.transform, &app.transform_preview) else { return (None, [[0.0; 2]; 4]) };
-    let r = pv.several.as_ref().map_or(photocraft_geom::Rect::new(t.rect[0] as i32, t.rect[1] as i32, t.rect[2] as i32, t.rect[3] as i32), |sv| sv.rect);
-    let texel = pv.texture.level_image(0).and_then(|(image, _)| {
+    let a = t.rect_array();
+    let r = pv.several.as_ref().map_or(photocraft_geom::Rect::new(a[0] as i32, a[1] as i32, a[2] as i32, a[3] as i32), |sv| sv.rect);
+    let texel = pv.textures.level_image(0).and_then(|(image, _)| {
         let (x, y) = (usize::try_from(p[0] - r.x0).ok()?, usize::try_from(p[1] - r.y0).ok()?);
         (x < image.size[0] && y < image.size[1]).then(|| image.pixels[y * image.size[0] + x])
     });
-    (texel, texture_quad(t, pv))
+    (texel, texture_quad(t, pv).map(|p| [p.x, p.y]))
 }
 
 /// The Layers panel's selection, sorted, as a layer's box records it when it opens (#11101).
@@ -457,12 +364,12 @@ pub(super) fn selected_now(app: &PhotocraftApp) -> Option<Vec<LayerId>> {
 }
 
 /// The layers the box moves: every layer of a several-layer session (#6501), else its one layer.
-pub(crate) fn moving_layers(t: &TransformSession) -> Vec<LayerId> {
+pub(crate) fn moving_layers(t: &FreeTransform) -> Vec<LayerId> {
     if t.layers.is_empty() { vec![LayerId(t.layer)] } else { t.layers.iter().copied().map(LayerId).collect() }
 }
 
 /// Is any of the layers the box moves of this kind?
-pub(super) fn moves_kind(app: &PhotocraftApp, t: &TransformSession, kind: fn(&LayerContent) -> bool) -> bool {
+pub(super) fn moves_kind(app: &PhotocraftApp, t: &FreeTransform, kind: fn(&LayerContent) -> bool) -> bool {
     app.session.active().is_some_and(|st| moving_layers(t).iter().any(|id| st.doc.layer(*id).is_some_and(|l| kind(&l.content))))
 }
 
@@ -549,61 +456,28 @@ pub(crate) fn begin_content_aware(
         s.prune();
     }
     let max_side = ctx.input(|i| i.max_texture_side).max(app.gpu.as_ref().map_or(1, |g| g.max_texture_side()));
-    let above = Above::new(ctx, format!("transform-{session}-above"), &doc, id, max_side);
+    let above = Above::new(&doc, id, max_side);
     above.hide_in(&mut pd.layers);
-    let (image, uv) = crate::transform_tex::read_surface(surf, None, region, max_side);
-    let texture = crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}"), image, uv);
-    app.transform_preview = Some(TransformPreview {
-        session,
-        doc: Arc::new(pd),
-        texture,
+    let textures = PreviewTextures::new(format!("transform-{session}"), super::preview::read_surface(surf, region, max_side));
+    app.transform_preview = Some(OpenPreview {
         opacity: layer.opacity * layer.fill_opacity,
         above: Some(above),
         follow: Some(Follow { revision, hidden: Vec::new(), selected: None }),
-        committing: None,
-        other_texels: None,
-        gesture: None,
-        warp_drag: None,
-        split_tool: None,
-        split_pointer: None,
-        split_placing: false,
-        split_quick: false,
-        placed: None,
-        contents: None,
-        ants: Default::default(),
-        steps: Steps::default(),
-        tool: app.ui.tool,
-        path: None,
         content_aware: Some(live),
-        styled: None,
-        several: None,
+        ..OpenPreview::new(session, Arc::new(pd), textures, app.ui.tool)
     });
-    app.ui.transform = Some(TransformSession {
-        session,
+    // Content-Aware Scale only scales: no rotating, skewing, distorting or warping.
+    app.ui.transform = Some(FreeTransform {
+        session: open_session(app, rect, BoxAllow::new(false, false, false), false),
+        id: session,
         layer: id.0,
-        rect,
-        quad: corners(rect),
-        pivot: [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0],
-        interpolation: default_interpolation(app).into(),
-        warp: None,
+        layers: Vec::new(),
         selection: false,
         target: None,
         path: None,
         made: None,
-        mode: Default::default(),
         content_aware: Some(Default::default()),
-        skew_v: 0.0,
-        start: None,
-        warp_place: None,
-        held_warp: None,
-        held_place: None,
-        warp_entry: None,
-        warp_box: None,
-        warp_origin: None,
-        warp_squeeze: None,
-        layers: Vec::new(),
     });
-    start_steps(app);
     Ok(())
 }
 
@@ -691,65 +565,26 @@ fn begin_lone(
     let rect = [b.x0 as f64, b.y0 as f64, b.x1 as f64, b.y1 as f64];
     let session = app.ui.alloc_id();
     let max_side = ctx.input(|i| i.max_texture_side).max(app.gpu.as_ref().map_or(1, |g| g.max_texture_side()));
-    let (image, uv) = crate::transform_tex::read_surface(&lifted, None, b, max_side);
-    let texture = crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}"), image, uv);
-    app.transform_preview = Some(TransformPreview {
-        session,
-        doc: Arc::new(pd),
-        texture,
-        opacity: 0.6,
-        above: None,
-        styled: None,
-        follow: None,
-        committing: None,
-        other_texels: None,
-        gesture: None,
-        warp_drag: None,
-        split_tool: None,
-        split_pointer: None,
-        split_placing: false,
-        split_quick: false,
-        placed: None,
-        contents: None,
-        ants: Default::default(),
-        steps: Steps::default(),
-        tool: app.ui.tool,
-        path: None,
-        content_aware: None,
-        several: None,
-    });
-    app.ui.transform = Some(TransformSession {
-        session,
+    let textures = PreviewTextures::new(format!("transform-{session}"), super::preview::read_surface(&lifted, b, max_side));
+    app.transform_preview = Some(OpenPreview { opacity: 0.6, ..OpenPreview::new(session, Arc::new(pd), textures, app.ui.tool) });
+    // A lone mask or channel keeps the box: it does not warp.
+    app.ui.transform = Some(FreeTransform {
+        session: open_session(app, rect, BoxAllow::default(), false),
+        id: session,
         layer,
-        rect,
-        quad: corners(rect),
-        pivot: [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0],
-        interpolation: default_interpolation(app).into(),
-        warp: None,
+        layers: Vec::new(),
         selection: false,
         target: Some(target),
         path: None,
         made: None,
-        mode: Default::default(),
         content_aware: None,
-        skew_v: 0.0,
-        start: None,
-        warp_place: None,
-        held_warp: None,
-        held_place: None,
-        warp_entry: None,
-        warp_box: None,
-        warp_origin: None,
-        warp_squeeze: None,
-        layers: Vec::new(),
     });
-    start_steps(app);
     Ok(())
 }
 
 /// Edit › Free Transform Path: the box frames the path's anchors and handles and draws the
 /// path through it; OK commits one `path.transform` step.
-fn begin_path(app: &mut PhotocraftApp, ctx: &egui::Context, params: serde_json::Value, path: photocraft_doc::vector::Path) -> Result<(), String> {
+fn begin_path(app: &mut PhotocraftApp, params: serde_json::Value, path: photocraft_doc::vector::Path) -> Result<(), String> {
     let (x0, y0, x1, y1) = path.control_bounds().ok_or("the path has no points to transform")?;
     let st = app.session.active().ok_or("no document")?;
     let doc = st.doc.clone();
@@ -758,59 +593,20 @@ fn begin_path(app: &mut PhotocraftApp, ctx: &egui::Context, params: serde_json::
     // A straight horizontal or vertical path still gets a box to turn.
     let rect = [x0, y0, x1.max(x0 + 1.0), y1.max(y0 + 1.0)];
     let session = app.ui.alloc_id();
-    let texture =
-        crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}"), egui::ColorImage::new([1, 1], vec![Color32::TRANSPARENT]), [1.0, 1.0]);
-    app.transform_preview = Some(TransformPreview {
-        session,
-        doc,
-        texture,
-        opacity: 1.0,
-        styled: None,
-        gesture: None,
-        warp_drag: None,
-        split_tool: None,
-        split_pointer: None,
-        split_placing: false,
-        split_quick: false,
-        placed: None,
-        contents: None,
-        ants: Default::default(),
-        steps: Steps::default(),
-        tool: app.ui.tool,
-        path: Some(path),
-        content_aware: None,
-        above: None,
-        follow: None,
-        committing: None,
-        other_texels: None,
-        several: None,
-    });
-    app.ui.transform = Some(TransformSession {
-        session,
+    let textures =
+        PreviewTextures::new(format!("transform-{session}"), PreviewPixels::new(egui::ColorImage::new([1, 1], vec![Color32::TRANSPARENT]), [1.0, 1.0]));
+    app.transform_preview = Some(OpenPreview { path: Some(path), ..OpenPreview::new(session, doc, textures, app.ui.tool) });
+    app.ui.transform = Some(FreeTransform {
+        session: open_session(app, rect, BoxAllow::default(), true),
+        id: session,
         layer: layer.0,
-        rect,
-        quad: corners(rect),
-        pivot: [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0],
-        interpolation: default_interpolation(app).into(),
-        warp: None,
+        layers: Vec::new(),
         selection: false,
         target: None,
         path: Some(params),
         made: None,
-        mode: Default::default(),
         content_aware: None,
-        skew_v: 0.0,
-        start: None,
-        warp_place: None,
-        held_warp: None,
-        held_place: None,
-        warp_entry: None,
-        warp_box: None,
-        warp_origin: None,
-        warp_squeeze: None,
-        layers: Vec::new(),
     });
-    start_steps(app);
     Ok(())
 }
 
@@ -833,7 +629,7 @@ pub(super) fn rect_to_quad_affine(r: [f64; 4], q: [[f64; 2]; 4]) -> Option<photo
 
 /// Start Select › Transform Selection: the same box over the selection's bounds, previewing the
 /// selection mask (the marching ants are hidden meanwhile); commits `select.transformSelection`.
-pub fn begin_selection(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
+pub fn begin_selection(app: &mut PhotocraftApp, _ctx: &egui::Context) -> Result<(), String> {
     let st = app.session.active().ok_or("no document")?;
     let doc = st.doc.clone();
     let sel = doc.selection.clone().ok_or("no selection")?;
@@ -856,61 +652,32 @@ pub fn begin_selection(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(
         }
     }
     let uv = [w as f32 / (tw * k) as f32, h as f32 / (th * k) as f32];
-    let texture = crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}"), egui::ColorImage::new([tw, th], px), uv);
+    let textures = PreviewTextures::new(format!("transform-{session}"), PreviewPixels::new(egui::ColorImage::new([tw, th], px), uv));
     let mut pd = (*doc).clone();
     pd.selection = None;
-    app.transform_preview = Some(TransformPreview {
-        session,
-        doc: Arc::new(pd),
-        texture,
-        opacity: 1.0,
-        above: None,
-        styled: None,
-        follow: None,
-        committing: None,
-        other_texels: None,
-        gesture: None,
-        warp_drag: None,
-        split_tool: None,
-        split_pointer: None,
-        split_placing: false,
-        split_quick: false,
-        placed: None,
-        contents: None,
-        ants: Default::default(),
-        steps: Steps::default(),
-        tool: app.ui.tool,
-        path: None,
-        content_aware: None,
-        several: None,
-    });
-    app.ui.transform = Some(TransformSession {
-        session,
+    app.transform_preview = Some(OpenPreview::new(session, Arc::new(pd), textures, app.ui.tool));
+    app.ui.transform = Some(FreeTransform {
+        session: open_session(app, rect, BoxAllow::default(), true),
+        id: session,
         layer: layer.0,
-        rect,
-        quad: corners(rect),
-        pivot: [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0],
-        interpolation: default_interpolation(app).into(),
-        warp: None,
+        layers: Vec::new(),
         selection: true,
         target: None,
         path: None,
         made: None,
-        mode: Default::default(),
         content_aware: None,
-        skew_v: 0.0,
-        start: None,
-        warp_place: None,
-        held_warp: None,
-        held_place: None,
-        warp_entry: None,
-        warp_box: None,
-        warp_origin: None,
-        warp_squeeze: None,
-        layers: Vec::new(),
     });
-    start_steps(app);
     Ok(())
+}
+
+/// Reports `warp` to the open session: it enters the Warp phase as one undo step with the box. The session reads
+/// `now` only for a box nudge, so the app's latest frame time is the one clock.
+fn report_warp(app: &mut PhotocraftApp, warp: Warp, on_type: bool, stored: bool) {
+    let now = app.nudge_bundle.now;
+    if let Some(t) = app.ui.transform.as_mut() {
+        let warp = SessionWarp::new(warp, on_type);
+        t.session.apply(TransformEdit::Warp(if stored { warp.stored() } else { warp }), now);
+    }
 }
 
 /// Start (or switch an active Free Transform into) Warp mode.
@@ -921,8 +688,7 @@ pub fn begin_warp(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), St
     if app.ui.transform.as_ref().is_some_and(|t| !t.layers.is_empty()) {
         return Err(WARP_ONE_LAYER.into());
     }
-    let fresh = app.ui.transform.is_none();
-    if fresh {
+    if app.ui.transform.is_none() {
         begin(app, ctx)?;
         if app.ui.transform.as_ref().is_some_and(|t| !t.layers.is_empty()) {
             cancel(app);
@@ -930,184 +696,59 @@ pub fn begin_warp(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), St
         }
     }
     enter_warp(app, ctx);
-    // Started in Warp: that is where Undo stops. Switching an open transform to Warp is a step.
-    if fresh {
-        start_steps(app);
-    }
     Ok(())
 }
 
-/// Switch to Warp mode: a smart object's own warp (no warp yet is a mesh over its contents),
-/// edited in the contents' space and shown through its placement and the box's move (#8927), else a
+/// Switch to Warp mode: a smart object's existing warp (when the box is untouched), else a
 /// custom mesh following the current box (so a transform made first carries over). Editable type
-/// gets its own Warp Text style instead ([`enter_type_warp`]).
+/// gets its own Warp Text style instead ([`enter_type_warp`]). This answers
+/// `TransformRequest::NeedWarp` of the session's `WarpRequested`.
 pub fn enter_warp(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    // Several layers keep the box (#6501), even when the active one is type.
-    if app.ui.transform.as_ref().is_some_and(|t| !t.layers.is_empty()) {
-        return;
-    }
-    if app.ui.transform.as_ref().is_some_and(|t| t.warp.is_none()) && warps_type(app) {
-        return enter_type_warp(app, ctx);
-    }
     let Some(t) = app.ui.transform.as_ref() else { return };
     // Warp moves layers and paths (#3027): a lone mask or channel keeps the box, and so do
-    // several layers (#6501).
-    if t.warp.is_some() || t.target.is_some() || !t.layers.is_empty() {
+    // several layers (#6501) and Content-Aware Scale; their content allows no warp.
+    if !t.session.allows().warp || t.session.warp().is_some() {
         return;
     }
-    // A smart object whose placement only scales and moves has its warp edited in document space,
-    // where it is the same warp (and a stored cylinder keeps its editor, #4112): over a preview of
-    // its source without the stored warp (#9798), or the one kept from an earlier visit.
-    let plain_box = !t.selection && t.path.is_none() && t.held_warp.is_none();
-    let untouched = plain_box && t.quad == corners(t.rect);
-    let in_doc = app
-        .session
-        .active()
-        .filter(|_| plain_box)
-        .and_then(|d| d.doc.layer(LayerId(t.layer)))
-        .is_some_and(|l| matches!(l.content, LayerContent::Smart(_)) && photocraft_engine::warp_cmds::smart_placement_axis_aligned(l));
-    if in_doc {
-        let stored = app.session.active().and_then(|d| d.doc.layer(LayerId(t.layer)).and_then(photocraft_engine::warp_cmds::smart_warp_doc_space));
-        if untouched
-            && let Some(w) = &stored
-            && let (Some(t), Some(pv)) = (app.ui.transform.as_mut(), app.transform_preview.as_mut())
-            && pv.other_texels.as_ref().is_some_and(|o| !o.kept)
-        {
-            // As the first visit: the box as it is, kept for the way back, and the warp's own.
-            t.warp_box = Some(crate::state::WarpBox { rect: t.rect, quad: t.quad, start: t.start, pivot: t.pivot });
-            swap_mode_texels(t, pv);
-            t.start = None;
-            t.warp_entry = Some(w.clone());
-            t.warp = Some(w.clone());
-            return;
+    let (layer, untouched) = (t.layer, t.session.is_untouched() && !t.selection && t.path.is_none());
+    if warps_type(app) {
+        return enter_type_warp(app, ctx);
+    }
+    let existing = app.session.active().and_then(|d| d.doc.layer(LayerId(layer)).and_then(photocraft_engine::warp_cmds::smart_warp_doc_space));
+    // Back into Warp mode after leaving it: the texels it showed are kept.
+    if untouched
+        && let Some(w) = &existing
+        && app.transform_preview.as_ref().is_some_and(|pv| pv.other_texels.is_some())
+    {
+        if let Some(pv) = app.transform_preview.as_mut() {
+            swap_mode_texels(pv);
         }
-        if untouched
-            && let Some(w) = stored
-            && preview_without_smart_warp(app, ctx, w.bounds)
-            && let Some(t) = app.ui.transform.as_mut()
-        {
-            t.warp_box = Some(crate::state::WarpBox { rect: t.rect, quad: t.quad, start: t.start, pivot: t.pivot });
-            t.rect = w.bounds;
-            t.quad = corners(w.bounds);
-            t.start = None;
-            t.warp_entry = Some(w.clone());
-            t.warp = Some(w);
-            return;
-        }
+        report_warp(app, w.clone(), false, true);
+        return;
+    }
+    // The stored warp is edited only when the source can be previewed without it: the texels
+    // the box opened with have the warp in them, and the mesh would warp them again.
+    if untouched
+        && let Some(w) = existing
+        && preview_without_smart_warp(app, ctx, w.bounds)
+    {
+        report_warp(app, w, false, true);
+        return;
     }
     let Some(t) = app.ui.transform.as_ref() else { return };
-    // A smart object's warp is edited in its contents' own space and shown through its placement
-    // and the box's move so far, so a Distort stays exact (#8927, #3649).
-    let moved = Homography::quad_to_quad(t.start_quad(), t.quad).filter(|_| t.quad != t.start_quad());
-    let plain = !t.selection && t.path.is_none();
-    let (id, session) = (LayerId(t.layer), t.session);
-    let needs_contents = app.transform_preview.as_ref().is_some_and(|pv| pv.contents.is_none());
-    // A layer's warp held in document space (the contents couldn't be read when it was made)
-    // carries on there.
-    let held_in_doc = t.held_warp.is_some() && t.held_place.is_none();
-    // An upright smart object whose box hasn't moved was handled above; once the box has moved (a
-    // Perspective or Distort not yet applied), its warp is edited here like any other, in the
-    // contents' space and shown through the box, so the move stays exact.
-    let existing = app.session.active().filter(|_| plain && !held_in_doc && !(in_doc && untouched)).and_then(|d| {
-        let layer = d.doc.layer(id)?;
-        let (w, place) = photocraft_engine::warp_cmds::smart_warp_source(&d.doc, layer)?;
-        // The preview reads the contents unplaced: the layer's own pixels would be placed twice.
-        // Rendered once a session.
-        let contents = match needs_contents {
-            true => Some(photocraft_engine::warp_cmds::smart_unplaced_contents(&d.doc, layer)?),
-            false => None,
-        };
-        Some((w, place, contents))
+    let (rect, quad) = (t.rect_array(), t.quad_array());
+    let h = Homography::rect_to_quad(rect, quad).unwrap_or(Homography::IDENTITY);
+    let mesh = BezierMesh::identity(rect, 1, 1).map_points(|p| {
+        let (x, y) = h.apply(p[0], p[1]);
+        [x, y]
     });
-    if let Some((stored, origin, contents)) = existing {
-        let Some(t) = app.ui.transform.as_mut() else { return };
-        // Back from another mode with a warp held: carry on with it, and with any squeeze its pull
-        // made of the placement; else none.
-        t.held_place = None;
-        let held = t.held_warp.take();
-        if held.is_none() {
-            t.warp_squeeze = None;
-        }
-        let squeezed = t.warp_squeeze.map_or(origin, |sq| origin.mul(&photocraft_algo::transform::Homography(sq)));
-        let place = moved.map_or(squeezed, |h| h.mul(&squeezed));
-        let w = held.clone().unwrap_or_else(|| stored.clone());
-        if let (Some(pv), Some((contents, k))) = (app.transform_preview.as_mut(), contents) {
-            let max_side = ctx.input(|i| i.max_texture_side).max(app.gpu.as_ref().map_or(1, |g| g.max_texture_side()));
-            // The contents' own box, at the scale they were rendered at.
-            let d = w.bounds.map(|v| v * k);
-            let b = photocraft_geom::Rect::new(d[0].floor() as i32, d[1].floor() as i32, d[2].ceil() as i32, d[3].ceil() as i32);
-            let (image, uv) = crate::transform_tex::read_surface(&contents, None, b, max_side);
-            // Read over whole pixels: the box they cover, which a fractional warp box is inside.
-            let covers = [b.x0, b.y0, b.x1, b.y1].map(|v| f64::from(v) / k);
-            pv.contents = Some((crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}-contents"), image, uv), covers));
-        }
-        t.warp_box = Some(crate::state::WarpBox { rect: t.rect, quad: t.quad, start: t.start, pivot: t.pivot });
-        t.warp_entry = held.is_none().then(|| w.clone());
-        t.warp_origin = Some((stored, origin.0));
-        t.rect = w.bounds;
-        t.quad = corners(w.bounds);
-        t.start = None;
-        t.warp_place = Some(place.0);
-        t.warp = Some(w);
-        return;
-    }
-    let Some(t) = app.ui.transform.as_mut() else { return };
-    let h = Homography::rect_to_quad(t.rect, t.quad).unwrap_or(Homography::IDENTITY);
-    let placed = app.transform_preview.as_ref().and_then(|pv| pv.placed);
-    t.warp_box = Some(crate::state::WarpBox { rect: t.rect, quad: t.quad, start: t.start, pivot: t.pivot });
-    // The held warp as the box shows it and a commit would apply it ([`TransformSession::held_doc_warp`]:
-    // under a perspective box its mesh is split first, as a projective map doesn't keep Béziers).
-    let shown = t.held_doc_warp();
-    let warp = match t.held_warp.take() {
-        // Back from another mode with a warp held: the box's move since then carries it along.
-        Some(held) => {
-            let warp = shown.unwrap_or_else(|| {
-                let d = Homography::quad_to_quad(t.start_quad(), t.quad).unwrap_or(Homography::IDENTITY);
-                let mesh = held.to_mesh(1, 1).map_points(|p| {
-                    let (x, y) = d.apply(p[0], p[1]);
-                    [x, y]
-                });
-                Warp::custom(mesh, held.bounds)
-            });
-            t.rect = held.bounds;
-            t.quad = corners(held.bounds);
-            t.start = None;
-            t.warp_entry = None;
-            warp
-        }
-        // A box that opened on a smart object's placement (whose contents couldn't be read here):
-        // the warp covers its texels, moved by the box since it opened.
-        None if t.start.is_some() && placed.is_some() => {
-            let placed = placed.unwrap_or(corners(t.rect));
-            let d = Homography::quad_to_quad(t.start_quad(), t.quad).unwrap_or(Homography::IDENTITY);
-            let r = [placed[0][0], placed[0][1], placed[2][0], placed[2][1]];
-            let mesh = BezierMesh::identity(r, 1, 1).map_points(|p| {
-                let (x, y) = d.apply(p[0], p[1]);
-                [x, y]
-            });
-            (t.rect, t.quad, t.start) = (r, corners(r), None);
-            let w = Warp::custom(mesh, r);
-            t.warp_entry = Some(w.clone());
-            w
-        }
-        None => {
-            let mesh = BezierMesh::identity(t.rect, 1, 1).map_points(|p| {
-                let (x, y) = h.apply(p[0], p[1]);
-                [x, y]
-            });
-            let w = Warp::custom(mesh, t.rect);
-            t.warp_entry = Some(w.clone());
-            w
-        }
-    };
-    t.held_place = None;
-    t.warp = Some(warp);
+    report_warp(app, Warp::custom(mesh, rect), false, false);
 }
 
 /// Whether the active layer is warped: a Warp box is open on it, or it is a smart object with a
 /// stored warp, which Edit › Transform › Warp then opens for editing (its menu item is checked).
 pub fn warps_active_layer(app: &PhotocraftApp) -> bool {
-    if app.ui.transform.as_ref().is_some_and(|t| t.warp.is_some()) {
+    if app.ui.transform.as_ref().is_some_and(|t| t.session.warp().is_some()) {
         return true;
     }
     let Some(st) = app.session.active() else { return false };
@@ -1119,12 +760,12 @@ pub fn warps_active_layer(app: &PhotocraftApp) -> bool {
 /// The preview texels for editing a smart object's stored warp: its source placed without the
 /// warp, over the warp box `r`, so the box's mesh warps it once. The texels read when the box
 /// opened are the layer's render, which already has the warp: warping that again drew the
-/// picture well inside the grid (#9798). Those texels and the box are kept as the other mode's
+/// picture well inside the grid (#9798). Those texels are kept as the other mode's
 /// ([`OtherTexels`]), for leaving Warp mode. False when the source can't be re-rendered (a
 /// missing linked file): the texels keep the warp, so the caller must not adopt it.
 fn preview_without_smart_warp(app: &mut PhotocraftApp, ctx: &egui::Context, r: [f64; 4]) -> bool {
     let (Some(t), Some(st)) = (app.ui.transform.as_ref(), app.session.active()) else { return false };
-    let (id, session, box_rect, box_quad) = (LayerId(t.layer), t.session, t.rect, t.quad);
+    let (id, session) = (LayerId(t.layer), t.id);
     let doc = st.doc.clone();
     let Some(LayerContent::Smart(sm)) = doc.layer(id).map(|l| &l.content) else { return false };
     let mut flat = sm.clone();
@@ -1142,8 +783,8 @@ fn preview_without_smart_warp(app: &mut PhotocraftApp, ctx: &egui::Context, r: [
     let max_side = ctx.input(|i| i.max_texture_side).max(app.gpu.as_ref().map_or(1, |g| g.max_texture_side()));
     let Some(pv) = app.transform_preview.as_mut() else { return false };
     let (image, uv) = preview_image(&plain, id, None, b, max_side, pv.styled.is_some());
-    let unwarped = crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}-unwarped"), image, uv);
-    pv.other_texels = Some(OtherTexels { texture: std::mem::replace(&mut pv.texture, unwarped), rect: box_rect, quad: box_quad, kept: false });
+    let unwarped = PreviewTextures::new(format!("transform-{session}-unwarped"), PreviewPixels::new(image, uv));
+    pv.other_texels = Some(OtherTexels { texture: std::mem::replace(&mut pv.textures, unwarped) });
     true
 }
 
@@ -1161,7 +802,7 @@ pub fn warps_type(app: &PhotocraftApp) -> bool {
 /// of the options bar (Warp Text's). A box scaled or rotated first is applied first (that keeps
 /// type editable). The preview shows the type without its current Warp Text, under that style.
 fn enter_type_warp(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    if app.ui.transform.as_ref().is_some_and(|t| t.quad != corners(t.rect)) {
+    if app.ui.transform.as_ref().is_some_and(|t| !t.session.is_untouched()) {
         commit(app);
         if app.ui.transform.is_some() {
             return; // refused: the box stays as it was
@@ -1172,7 +813,7 @@ fn enter_type_warp(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
     }
     let (Some(t), Some(st)) = (app.ui.transform.as_ref(), app.session.active()) else { return };
-    let (id, session) = (LayerId(t.layer), t.session);
+    let (id, session) = (LayerId(t.layer), t.id);
     let doc = st.doc.clone();
     let Some(LayerContent::Text(text)) = doc.layer(id).map(|l| &l.content) else { return };
     let current = text.warp.clone();
@@ -1191,7 +832,7 @@ fn enter_type_warp(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let max_side = ctx.input(|i| i.max_texture_side).max(app.gpu.as_ref().map_or(1, |g| g.max_texture_side()));
         // Read as the session's texels were: without the style when the box draws it itself.
         let (image, uv) = preview_image(&plain, id, None, b, max_side, pv.styled.is_some());
-        pv.texture = crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}"), image, uv);
+        pv.textures = PreviewTextures::new(format!("transform-{session}"), PreviewPixels::new(image, uv));
     }
     let warp =
         current.as_ref().and_then(|w| WarpStyle::parse(&w.style).filter(|s| s.is_preset()).map(|s| (w, s))).map_or(Warp::none(rect), |(w, style)| Warp {
@@ -1202,129 +843,25 @@ fn enter_type_warp(app: &mut PhotocraftApp, ctx: &egui::Context) {
             vertical: !w.horizontal,
             ..Warp::none(rect)
         });
-    if let Some(t) = app.ui.transform.as_mut() {
-        t.rect = rect;
-        t.quad = corners(rect);
-        t.pivot = [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0];
-        t.warp = Some(warp);
-    }
+    // PLAN: the session's frame stays the box's; the warp's bounds carry the frame without the old Warp Text, and
+    // the preview and the commit read `warp.bounds`.
+    report_warp(app, warp, true, false);
 }
 
 /// Leave Warp mode (back to the box; warp edits are dropped, like Photoshop's mode toggle on an
 /// untouched warp).
-/// Whether the open transform's warp is a layer's own, which [`leave_warp`] keeps under the box.
-/// Warp Text, Transform Selection and paths keep theirs as the box (their commits don't carry a
-/// held warp), so another mode would drop it.
-pub fn holds_warp(app: &PhotocraftApp) -> bool {
-    !warps_type(app) && app.ui.transform.as_ref().is_some_and(|t| !t.selection && t.path.is_none() && t.target.is_none())
-}
-
 pub fn leave_warp(app: &mut PhotocraftApp) {
-    // A drag in flight belongs to this mesh: a control client can switch modes between Down and Up,
-    // and a kept drag would move the next Warp's mesh and block the session's undo. What it moved
-    // is a step of its own, as on release, so Undo takes back the mode switch alone.
-    if let (Some(t), Some(pv)) = (app.ui.transform.as_ref(), app.transform_preview.as_mut())
-        && pv.warp_drag.take().is_some()
+    let now = app.nudge_bundle.now;
+    if let Some(t) = app.ui.transform.as_mut()
+        && t.session.warp().is_some()
     {
-        pv.steps.settle(super::Step::of(t));
-    }
-    // A stored warp edited in document space over its source without it (#9798): untouched, the box
-    // shows the render with it again; changed, it is held like any other (its preview already
-    // shows the source unwarped, so it stays).
-    if let (Some(t), Some(pv)) = (app.ui.transform.as_mut(), app.transform_preview.as_mut())
-        && pv.other_texels.as_ref().is_some_and(|o| !o.kept)
-        && t.warp_place.is_none()
-    {
-        let untouched = t.warp.is_none() || t.warp_entry.as_ref() == t.warp.as_ref();
-        if untouched {
-            t.warp = None;
-            t.warp_entry = None;
-            swap_mode_texels(t, pv);
-            // The box as Warp opened on it: the swap gives back its rect and quad, and its start
-            // quad (cleared for the warp's box) comes back with its pivot.
-            if let Some(b) = t.warp_box.take() {
-                (t.start, t.pivot) = (b.start, b.pivot);
-            }
-            pv.split_tool = None;
-            pv.split_pointer = None;
-            pv.split_placing = false;
-            pv.split_quick = false;
-            return;
-        }
-        // Kept, not dropped: Undo back to the box before Warp shows that render again.
-        if let Some(o) = pv.other_texels.as_mut() {
-            o.kept = true;
-        }
-    }
-    let layer_warp = holds_warp(app);
-    // An upright smart object's warp was edited in document space: it is held in the contents'
-    // space with the placement, as any other smart object's, so a box moved before Warp comes
-    // back shows it through that move exactly (a mesh in document space would have to be split
-    // to follow a perspective).
-    // Only a warp begun on the untouched box: one begun after the box moved (the contents couldn't
-    // be read) already carries that move, and the placement would apply it twice.
-    let begun_untouched = |t: &TransformSession| t.warp_box.as_ref().is_some_and(|b| b.quad == corners(b.rect));
-    let to_contents =
-        app.ui.transform.as_ref().filter(|t| t.warp_place.is_none() && !t.selection && t.path.is_none() && t.target.is_none() && begun_untouched(t)).and_then(
-            |t| {
-                let w = t.warp.as_ref().filter(|w| t.warp_entry.as_ref() != Some(*w))?;
-                let layer = app.session.active()?.doc.layer(LayerId(t.layer))?;
-                photocraft_engine::warp_cmds::smart_warp_to_source(layer, w)
-            },
-        );
-    let Some(t) = app.ui.transform.as_mut() else { return };
-    if let Some((w, place)) = to_contents {
-        t.warp = Some(w);
-        t.warp_place = Some(place.0);
-    }
-    // One transform session, as in Photoshop: a warp made here is kept when the box goes back to
-    // another mode, and the box then transforms the warped result. An untouched warp is dropped.
-    let warp = t.warp.take();
-    let changed = warp.as_ref().filter(|w| layer_warp && t.warp_entry.as_ref() != Some(*w)).cloned();
-    let (warp_box, origin) = (t.warp_box.take(), t.warp_origin.take());
-    t.warp_entry = None;
-    let restore = |t: &mut TransformSession, b: &crate::state::WarpBox| (t.rect, t.quad, t.start, t.pivot) = (b.rect, b.quad, b.start, b.pivot);
-    match (changed, t.warp_place.take()) {
-        // A smart object's: the box comes back as it was, and shows the warp through the stored
-        // placement and the box's move.
-        (Some(w), Some(place)) => {
-            if let Some(b) = &warp_box {
-                restore(t, b);
-            }
-            // With any squeeze a pull towards the viewer made (applied first, in the warp's space).
-            let held = origin.as_ref().map_or(place, |(_, p)| *p);
-            t.held_place = Some(match t.warp_squeeze {
-                Some(sq) => photocraft_algo::transform::Homography(held).mul(&photocraft_algo::transform::Homography(sq)).0,
-                None => held,
-            });
-            t.held_warp = Some(w);
-            // Kept: the commit and the selection outline still go from what Warp opened on.
-            t.warp_origin = origin;
-        }
-        // A layer's (document space): an upright box around the warped grid.
-        (Some(w), None) => {
-            let m = w.to_mesh(1, 1);
-            let b = m.points.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
-            if b.iter().all(|v| v.is_finite()) && b[2] > b[0] && b[3] > b[1] {
-                t.rect = b;
-                t.quad = corners(b);
-                t.start = None;
-                t.pivot = [(b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0];
-                t.held_place = None;
-                t.held_warp = Some(w);
-            }
-        }
-        // Untouched: the box as it was before Warp.
-        _ => {
-            if let Some(b) = &warp_box {
-                restore(t, b);
-            }
+        t.session.apply(TransformEdit::LeaveWarp, now);
+        // A stored warp's edit showed the source without it: the box shows the render with it.
+        if let Some(pv) = app.transform_preview.as_mut() {
+            swap_mode_texels(pv);
         }
     }
     if let Some(pv) = app.transform_preview.as_mut() {
-        pv.split_tool = None;
-        pv.split_pointer = None;
-        pv.split_placing = false;
-        pv.split_quick = false;
+        pv.split = None;
     }
 }
