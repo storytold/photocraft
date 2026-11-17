@@ -218,6 +218,47 @@ fn recorded_web_dialog_rejects_an_edit_while_the_filename_picker_is_open() {
 }
 
 #[test]
+fn recorded_web_dialog_saves_on_the_first_play_with_a_layer_in_a_closed_group() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = web_action_app(dir.path());
+    app.run("layer.new.layer", json!({"name":"Inside"})).unwrap();
+    let inside = app.session.active().unwrap().active_layer.unwrap();
+    let group = app.run("layer.groupLayers", json!({"name":"Closed"})).unwrap()["layer"].as_u64().unwrap();
+    app.run("layer.new.layer", json!({"name":"Outside"})).unwrap();
+    let child = &mut app.session.actions.list[0];
+    child.steps.insert(0, ("layer.select".into(), json!({"layer":inside.0})));
+    child.dialogs.clear();
+    child.dialogs.insert(1);
+    let reply = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let answer = reply.clone();
+    app.services.file_dialog = Some(Box::new(move |_, _, pending| *answer.borrow_mut() = Some(pending)));
+    app.background_jobs = true;
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 900.0)).with_max_steps(64).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        app
+    });
+    h.run_steps(4);
+    for attempt in 0..2 {
+        let played = h.state_mut().run("actions.play", json!({"action":"Parent"})).unwrap();
+        let id = played["paused"]["dialog"].as_u64().unwrap();
+        let before = h.state().session.active().unwrap().doc.clone();
+        h.run_steps(4);
+        crate::dialogs::confirm(h.state_mut(), id).unwrap();
+        h.run_steps(8);
+        assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.active().unwrap().doc), "revealing a layer must wait while export owns the snapshot");
+        let output = dir.path().join(format!("Renamed-{attempt}.jpg"));
+        reply.borrow_mut().take().unwrap().send(Some(crate::file_dialog::FileDialogAnswer::SaveTo(output.to_string_lossy().into_owned())));
+        h.run_steps(4);
+        assert!(output.exists(), "attempt {attempt}: {}", h.state().ui.status);
+        assert_eq!(names(h.state()).iter().filter(|name| name.as_str() == "Child").count(), attempt + 1);
+        assert_eq!(names(h.state()).iter().filter(|name| name.as_str() == "Parent").count(), attempt + 1);
+        assert_idle(h.state());
+        let doc = &h.state().session.active().unwrap().doc;
+        assert!(matches!(&doc.layer(photocraft_doc::LayerId(group)).unwrap().content, photocraft_doc::LayerContent::Group(group) if group.expanded));
+    }
+}
+
+#[test]
 fn recorded_web_dialog_off_and_programmatic_playback_keep_the_recorded_destination() {
     for programmatic in [false, true] {
         let dir = tempfile::tempdir().unwrap();

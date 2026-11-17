@@ -24,6 +24,11 @@ fn seen_id() -> egui::Id {
 /// changed since the last frame, opens its closed parent groups and returns it: the row to
 /// scroll into view (see [`scroll_to_row`]). The first frame of a document only records it.
 pub fn track(app: &mut PhotocraftApp, ctx: &egui::Context) -> Option<LayerId> {
+    // Opening a group replaces document data even though it is a view change. A modal
+    // editor/picker owns that snapshot; retain the unseen selection until it closes.
+    if !app.ui.dialogs.is_empty() || app.file_dialog_open() {
+        return None;
+    }
     let index = app.session.active_index()?;
     let active = app.session.active()?.active_layer;
     let now = Seen(index, active);
