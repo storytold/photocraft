@@ -158,6 +158,12 @@ pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj
     let vcx = value_cx(mode, &committed_params);
     let committed = match values::from_params(kind, &committed_params, &vcx) {
         Ok(value) => value,
+        // A CMYK Channel Mixer has no framework editor yet (#8047): say so in the panel, like an unsupported adjustment
+        // above, rather than in the status bar on every frame the layer is shown. The layer is kept as it is.
+        Err(err) if err == values::CMYK_MIXER_UNAVAILABLE => {
+            ui.label(egui::RichText::new(tl!(values::CMYK_MIXER_UNAVAILABLE)).color(t.text_faint));
+            return;
+        }
         Err(err) => {
             app.ui.status = err;
             return;

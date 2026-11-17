@@ -143,7 +143,9 @@ fn every_adjustment_layer_edits_through_properties() {
             let steps = history_len(&h);
             if kind == "channelMixer" && mode == "cmyk" {
                 // No framework editor for ink outputs yet (#8047): `cmyk_channel_mixer_is_kept_out_of_the_rgb_editor`.
-                assert_eq!(h.state().ui.status, crate::adjust_editors::values::CMYK_MIXER_UNAVAILABLE, "{kind} {mode}");
+                let why = crate::adjust_editors::values::CMYK_MIXER_UNAVAILABLE;
+                assert!(label_rect(&h, why).is_some(), "{kind} {mode}: the Properties panel says why");
+                assert_ne!(h.state().ui.status, why, "{kind} {mode}: not in the status bar");
                 continue;
             }
             let slider = sliders(&h).first().copied();
@@ -188,13 +190,15 @@ fn cmyk_channel_mixer_is_kept_out_of_the_rgb_editor() {
     let read = values::from_params("channelMixer", &rgb, &ValueCx::new(ColorMode::Rgb, rgb.clone()));
     assert!(matches!(read, Ok(crate::adjust_editors::AdjustValue::ChannelMixer { .. })), "RGB mixers read: {read:?}");
 
-    // A CMYK document: the Properties panel shows no editor, the dialog refuses, the mixer is unchanged.
+    // A CMYK document: the Properties panel shows no editor but a faint label saying why (not the status bar, which
+    // it would overwrite on every frame), the dialog refuses with the same reason, the mixer is unchanged.
     let mut h = app_harness("channelMixer", "cmyk", 8);
     let (_, before) = layer(&h);
     assert!(matches!(&before, Adjustment::ChannelMixer { cmyk: Some(_), .. }), "{before:?}");
     let steps = history_len(&h);
     h.run_steps(4);
-    assert_eq!(h.state().ui.status, CMYK_MIXER_UNAVAILABLE);
+    assert!(label_rect(&h, CMYK_MIXER_UNAVAILABLE).is_some(), "the Properties panel says why");
+    assert_ne!(h.state().ui.status, CMYK_MIXER_UNAVAILABLE, "the status bar is left alone");
     let err = crate::adjust_dialog::open(h.state_mut(), "image.adjustments.channelMixer").unwrap_err();
     assert_eq!(err, CMYK_MIXER_UNAVAILABLE);
     h.run_steps(4);
