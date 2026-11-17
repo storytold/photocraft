@@ -84,6 +84,10 @@ fn pattern_preview_repeats_the_document_on_gpu_and_cpu_canvases() {
         assert!(h.state().ui.view.pattern_preview);
         let got = sample(&mut h, right);
         assert!(near(got, red), "{path}: copy to the right shows the left edge, got {got:?}");
+        // The tile's limit is ruled even with the default Canvas Border (Drop Shadow): just past the right edge the
+        // rule covers the next copy's red band.
+        let got = sample(&mut h, [200.4, 50.0]);
+        assert!(!near(got, red), "{path}: the tile's edge is outlined, got {got:?}");
         let got = sample(&mut h, below);
         assert!(near(got, blue), "{path}: copy below, got {got:?}");
         let got = sample(&mut h, diagonal);
