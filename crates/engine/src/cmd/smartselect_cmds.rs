@@ -435,15 +435,42 @@ fn opaque_areas(opaque: &[bool], w: usize, h: usize, stop: usize) -> usize {
     areas
 }
 
+/// Whether every raw pixel of `area` on `surf` is at least half opaque and identical: one flat
+/// area. Identical stored samples convert to identical floats, so the exact compare is honest on
+/// raw pixels - the box-averaged working scan below is not: a canvas whose bounds are not a
+/// multiple of the step averages its edge boxes over different counts, and the partial sums sit
+/// an ulp apart for most 8-bit colours (#15472 review). Read in row bands, giving up at the
+/// first difference.
+fn surface_is_flat(surf: &photocraft_raster::Surface, area: Rect) -> bool {
+    const BAND: i32 = 64;
+    let smp = SurfaceSampler(surf);
+    let mut first: Option<[f32; 4]> = None;
+    for y0 in (area.y0..area.y1).step_by(BAND as usize) {
+        let band = Rect::new(area.x0, y0, area.x1, (y0 + BAND).min(area.y1));
+        for p in smp.rgba(band) {
+            if p[3] < 0.5 {
+                return false;
+            }
+            match first {
+                None => first = Some(p),
+                Some(f) if f == p => {}
+                Some(_) => return false,
+            }
+        }
+    }
+    first.is_some()
+}
+
 /// The click answers the reference application measures for flat targets (#12863): with a
 /// uniform sampled layer, or with a plain group active and Sample All Layers off, the whole
 /// canvas; on an empty spot of a sampled layer holding exactly one opaque object, the canvas
 /// with that layer's pixels cut out. A click on the opaque part of its layer, a layer with
 /// several objects (measured on Shapes: nothing found), and every other target (composite,
-/// adjustment, Smart Object, type) answer `None` and keep the plain nothing-found. The layer
-/// is scanned at the Object Finder's working resolution; a coarse step can merge areas that
-/// sit within one step of each other, which only ever answers "several" for detail finer
-/// than the scan. `target` is [`sampled_target`]'s sampled layer.
+/// adjustment, Smart Object, type) answer `None` and keep the plain nothing-found. Uniformity
+/// is probed on the raw pixels ([`surface_is_flat`]); the object areas are scanned at the
+/// Object Finder's working resolution, where a coarse step can merge areas that sit within one
+/// step of each other, which only ever answers "several" for detail finer than the scan.
+/// `target` is [`sampled_target`]'s sampled layer.
 fn flat_area_answer(doc: &Document, target: Option<LayerId>, group: bool, x: f32, y: f32) -> Option<Region> {
     let canvas = doc.bounds();
     let (px, py) = (x.floor() as i32, y.floor() as i32);
@@ -458,6 +485,9 @@ fn flat_area_answer(doc: &Document, target: Option<LayerId>, group: bool, x: f32
     if content.is_empty() {
         return None;
     }
+    if surface_is_flat(surf, content) {
+        return area_region(canvas, None);
+    }
     let step = photocraft_algo::segment::scale_for(content, grabcut::OBJECT_AT_WORK_PX);
     let rgba = SurfaceSampler(surf).rgba_scaled(content, step);
     let (w, h) = ((content.width() as usize).div_ceil(step), (content.height() as usize).div_ceil(step));
@@ -466,10 +496,6 @@ fn flat_area_answer(doc: &Document, target: Option<LayerId>, group: bool, x: f32
     }
     let rgba = &rgba[..w * h];
     let opaque: Vec<bool> = rgba.iter().map(|p| p[3] >= 0.5).collect();
-    let flat = opaque.iter().all(|o| *o) && rgba.windows(2).all(|p| p[0] == p[1]);
-    if flat {
-        return area_region(canvas, None);
-    }
     // `rgba` was sliced to exactly `w * h` above, so clamping `sx` and `sy` keeps this and
     // every later scan index in bounds.
     let (sx, sy) = (((px - content.x0) as usize / step).min(w - 1), ((py - content.y0) as usize / step).min(h - 1));
@@ -519,9 +545,15 @@ fn object_at_point(s: &mut Session, p: &Value, (x, y): (f32, f32)) -> Result<Val
     };
     // A found object wins; the area answer is not cached (it is the layer's flatness, not a
     // remembered object, and a canvas-sized mask in the cache would swallow later real clicks).
-    let region = found.or_else(|| flat_area_answer(&doc, target, group, x, y).map(std::sync::Arc::new));
-    // The cache keeps the object as found; Hard Edge only shapes what is stored.
-    let region = object_edge(canvas, p, region.as_deref());
+    let area = if found.is_none() { flat_area_answer(&doc, target, group, x, y) } else { None };
+    // Hard Edge off (#12855) reshapes found objects only: soften_edge's taps sum to 1.0 and its
+    // ramp maps the area answers' 254 back to fully selected, so an area answer keeps the
+    // measured partly-selected coverage as it is (#15472 review).
+    let region = match found.as_deref().or(area.as_ref()) {
+        Some(r) if found.is_some() => object_edge(canvas, p, Some(r)),
+        Some(r) => Some(Cow::Borrowed(r)),
+        None => None,
+    };
     let out = apply(s, "Object Selection", region.as_deref(), mode(p, "replace"))?;
     if let Some(d) = s.active() {
         let doc = std::sync::Arc::clone(&d.doc);

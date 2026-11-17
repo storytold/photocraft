@@ -270,3 +270,68 @@ fn a_point_outside_the_canvas_still_errors_on_a_pixel_layer() {
     let e = s.execute("select.object", json!({"point": [820, 300]})).unwrap_err().to_string();
     assert!(e.contains("no pixels in that area"), "{e}");
 }
+
+/// An 800x600 document whose Background is painted flat `color`, Background active.
+fn flat_background_document(color: &str) -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": W, "height": H, "depth": 8})).unwrap();
+    s.execute("select.all", json!({})).unwrap();
+    s.execute("edit.fill", json!({"color": color})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    s
+}
+
+/// #15472 review F1: flatness must not depend on the working step. 800 % 3 = 2, so a scaled
+/// scan's edge boxes average different pixel counts and their float means sit an ulp apart for
+/// most 8-bit colours; a uniform RED Background is as flat as white and answers the whole canvas.
+#[test]
+fn uniform_red_background_click_selects_the_whole_canvas_at_254() {
+    let mut s = flat_background_document("#dc1e1e");
+    let before = steps(&s);
+    let r = s.execute("select.object", json!({"point": [200, 175]})).unwrap();
+    assert_eq!(r["changed"], true, "a uniform red fill is as flat as white");
+    assert_eq!(bounds(&s), [0, 0, 800, 600]);
+    assert_eq!(select_counts(&s), (0, 480_000, 480_000));
+    assert_eq!(steps(&s), before + 1, "one step");
+    assert_eq!(s.active().unwrap().history.undo_label(), Some("Object Selection"));
+}
+
+/// #15472 review F1 guard: a layer that is not flat - here one deviating pixel - keeps the
+/// plain nothing-found answer.
+#[test]
+fn one_deviating_pixel_breaks_the_uniform_answer() {
+    let mut s = flat_background_document("#dc1e1e");
+    s.execute("paint.pencil", json!({"points": [[600, 400]], "size": 2, "color": "#000000"})).unwrap();
+    let r = s.execute("select.object", json!({"point": [200, 175]})).unwrap();
+    assert_eq!(r["changed"], false, "one dark pixel makes the layer not flat");
+    assert!(s.active().unwrap().doc.selection.is_none());
+}
+
+/// #15472 review F2: Hard Edge off (#12855) softens found objects, not the area answers:
+/// soften_edge's taps sum to 1.0 and its ramp maps every 254 back to fully selected 255,
+/// contradicting the measured partly-selected answer. The area answer keeps 254.
+#[test]
+fn hard_edge_off_keeps_area_answers_partly_selected() {
+    let mut s = issue_document();
+    select_layer(&mut s, "Background");
+    let r = s.execute("select.object", json!({"point": [5, 5], "hardEdge": false})).unwrap();
+    assert_eq!(r["changed"], true);
+    assert_eq!(select_counts(&s), (0, 480_000, 480_000), "still 254 everywhere, none at 255");
+}
+
+/// #15472 review F3, guard test passing before and after this change: the area answer reads
+/// the layer's raw pixels, exactly like the object lookup under it - a hide-all layer mask
+/// hides on the canvas but does not gate the answer.
+#[test]
+fn a_hide_all_layer_mask_does_not_gate_the_area_answer() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": W, "height": H, "depth": 8})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "Flat"})).unwrap();
+    s.execute("select.all", json!({})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ffffff"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("layer.layerMask.hideAll", json!({})).unwrap();
+    let r = s.execute("select.object", json!({"point": [200, 175]})).unwrap();
+    assert_eq!(r["changed"], true, "the raw surface decides, mask ignored, as the object lookup does");
+    assert_eq!(select_counts(&s), (0, 480_000, 480_000));
+}
