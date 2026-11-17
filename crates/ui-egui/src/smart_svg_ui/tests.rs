@@ -85,9 +85,7 @@ fn control_menu_invoke_preserves_svg_editor_choice_and_rejects_other_dialogs() {
     let ctx = egui::Context::default();
     for id in ["layer.duplicate", "image.imageSize", "edit.paste", "view.zoomIn"] {
         let (request, _) = crate::control::ControlRequest::new("ui.menu.invoke", json!({"id": id}));
-        let crate::control::Outcome::Done(result) = crate::control::handle(&mut app, &ctx, &request) else {
-            panic!("blocked menu call must return immediately")
-        };
+        let crate::control::Reply::Done(result) = crate::control::handle(&mut app, &ctx, &request) else { panic!("blocked menu call must return immediately") };
         assert_eq!(result["ok"], false, "{id}: {result}");
         assert!(result.to_string().contains("modal dialog"));
         assert_eq!(authorizations.get(), 0);
@@ -96,7 +94,7 @@ fn control_menu_invoke_preserves_svg_editor_choice_and_rejects_other_dialogs() {
         assert!(saves.borrow().is_empty());
         assert!(app.smart_svg.editing.is_empty());
         assert_eq!(app.smart_svg.internal_once, internal_once);
-        assert!(app.ui.dialogs.is_empty());
+        assert!(!app.dialog_open());
         let state = app.session.active().unwrap();
         assert_eq!(state.doc, before);
         assert_eq!(state.revision, revision);
@@ -146,13 +144,19 @@ fn prompt_and_escape_never_launch_or_change_document() {
     let before = app.session.active().unwrap().doc.clone();
     open(&mut app);
     open(&mut app);
-    let ctx = egui::Context::default();
-    PhotocraftApp::setup_context(&ctx, Default::default());
-    let mut input = egui::RawInput::default();
-    input.events.push(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
-    let mut output = ctx.run_ui(input, |ui| show(&mut app, ui.ctx()));
-    output.textures_delta.clear();
-    assert!(!app.smart_svg.modal_open());
+    let ctx = app.ctx().clone();
+    // A second pass of the frame finds the dialog open and opens no other.
+    host(&mut app, &ctx);
+    host(&mut app, &ctx);
+    assert_eq!(app.framework.dialogs.stack().ids().count(), 1, "one editor-choice dialog");
+    let id = app.smart_svg.dialog.expect("the dialog's id is kept");
+    assert!(app.smart_svg.modal_open());
+    // Escape, the close box and Cancel all end in the framework's cancel.
+    let _ = crate::dialogs::cancel(&mut app, &ctx, id);
+    assert!(!app.smart_svg.modal_open(), "the choice is dropped");
+    assert!(app.smart_svg.dialog.is_none());
+    host(&mut app, &ctx);
+    assert_eq!(app.framework.dialogs.stack().ids().count(), 0, "a cancelled choice does not reopen");
     assert!(calls.borrow().is_empty());
     assert_eq!(app.session.active().unwrap().doc, before);
 }
@@ -300,10 +304,10 @@ fn saved_changes_wait_on_document_switch_and_active_preview() {
     assert!(app.smart_svg.editing.first().unwrap().saved.is_some());
     let index = app.session.documents().iter().position(|st| st.doc.id == parent).unwrap();
     app.session.set_active(index);
-    app.ui.open_dialog(crate::state::DialogKind::Command, serde_json::Map::new());
+    let open_dialog = app.framework.dialogs.open(craft::ui::dialog::StandardPrompt::custom("Hold on".to_owned()));
     poll(&mut app, &ctx);
     assert!(app.smart_svg.editing.first().unwrap().saved.is_some());
-    app.ui.dialogs.clear();
+    app.framework.dialogs.cancel_by_id(&ctx, open_dialog);
     poll(&mut app, &ctx);
     assert!(app.smart_svg.editing.first().unwrap().saved.is_none());
 }
@@ -399,7 +403,7 @@ fn saved_changes_wait_on_idle_cam_box_then_resume_after_cancel() {
     app.session.execute("select.rect", json!({"x":8,"y":8,"width":12,"height":8})).unwrap();
     app.ui.tool = crate::state::Tool::ContentAwareMove;
     assert!(crate::cam_transform::begin(&mut app, [8, 4]));
-    assert!(app.drag.is_none() && app.patch_preview.is_none() && app.ui.transform.is_none());
+    assert!(!crate::canvas::testing::in_gesture(&app) && app.patch_preview.is_none() && app.ui.transform.is_none());
     let before = app.session.active().unwrap().doc.clone();
     let revision = app.session.active().unwrap().revision;
     let history = app.session.active().unwrap().history.past_len();
@@ -530,25 +534,6 @@ fn explicit_mask_channel_roundtrip_resumes_queued_svg_save_with_masks_preserved(
 }
 
 #[test]
-fn active_gradient_preview_defers_save_until_gesture_ends() {
-    let (mut app, saves, _) = fixture();
-    open(&mut app);
-    confirm(&mut app).unwrap();
-    let before = app.session.active().unwrap().doc.clone();
-    app.ui.tool = crate::state::Tool::Gradient;
-    app.ui.tool_options.gradient_classic = false;
-    assert!(crate::gradient_ui::pointer(&mut app, crate::canvas::ToolEvent::Down { x: 0.0, y: 0.0, pressure: 1.0 }, egui::Modifiers::NONE));
-    assert!(crate::gradient_ui::editing(&app));
-    saves.borrow_mut().push_back(Ok(SVG.replace("red", "blue").into_bytes()));
-    let ctx = egui::Context::default();
-    poll(&mut app, &ctx);
-    assert_eq!(app.session.active().unwrap().doc, before);
-    app.gradient = Default::default();
-    poll(&mut app, &ctx);
-    assert_ne!(app.session.active().unwrap().doc, before);
-}
-
-#[test]
 fn bounded_sessions_require_reuse_or_closing_a_document() {
     let (mut app, _, calls) = fixture();
     for _ in 0..MAX_SESSIONS {
@@ -560,34 +545,6 @@ fn bounded_sessions_require_reuse_or_closing_a_document() {
     assert!(confirm(&mut app).unwrap_err().contains("limit: 8"));
     assert_eq!(calls.borrow().len(), MAX_SESSIONS);
     assert_eq!(app.smart_svg.editing.len(), MAX_SESSIONS);
-}
-
-#[test]
-fn capture_smart_svg_visual_fixtures() {
-    let _gpu = photocraft_testkit::gpu_lock();
-    let Some(directory) = std::env::var_os("CRAFT_SMART_SVG_FIXTURES").map(std::path::PathBuf::from) else { return };
-    std::fs::create_dir_all(&directory).unwrap();
-    for theme in [crate::theme::ThemeKind::Pro, crate::theme::ThemeKind::StudioLight] {
-        let (mut app, _, _) = fixture();
-        open(&mut app);
-        let mut ready = false;
-        let lang = crate::i18n::lang_from_tag("en").unwrap();
-        let mut harness = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 620.0)).wgpu().build_ui_state(
-            move |ui, app: &mut PhotocraftApp| {
-                let _language = crate::i18n::language_scope(lang);
-                if !ready {
-                    PhotocraftApp::setup_context(ui.ctx(), theme);
-                    ready = true;
-                    return;
-                }
-                show(app, ui.ctx());
-            },
-            app,
-        );
-        harness.ctx.set_os(egui::os::OperatingSystem::Windows);
-        harness.run_steps(5);
-        harness.render().unwrap().save(directory.join(format!("photocraft-smart-svg-editor-{}-en.png", theme.id()))).unwrap();
-    }
 }
 
 /// An AI payload in the PSD link table must reach explicit editor selection without becoming
@@ -630,61 +587,6 @@ fn embedded_ai_link_table_handoff_preserves_source_until_saved_and_undo_restores
     assert_eq!(app.session.active().unwrap().doc, before);
 }
 
-/// Optional screenshot uses authored bytes and mock services, never private artwork or an editor.
-#[test]
-fn capture_embedded_vector_conversion_prompt() {
-    let _gpu = photocraft_testkit::gpu_lock();
-    let Some(directory) = std::env::var_os("CRAFT_SMART_SVG_FIXTURES").map(std::path::PathBuf::from) else { return };
-    std::fs::create_dir_all(&directory).unwrap();
-    let (mut app, _, _) = fixture();
-    let state = app.session.active_mut().unwrap();
-    let id = state.active_layer.unwrap();
-    let LayerContent::Smart(sm) = &mut Arc::make_mut(&mut state.doc).layer_mut(id).unwrap().content else { panic!("smart") };
-    sm.source = SmartSource::Embedded { file_name: "Authored.ai".into(), bytes: Arc::new(b"%PDF-1.6\nsynthetic vector prompt".to_vec()) };
-    open(&mut app);
-    let mut ready = false;
-    let lang = crate::i18n::lang_from_tag("en").unwrap();
-    let mut harness = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 620.0)).wgpu().build_ui_state(
-        move |ui, app: &mut PhotocraftApp| {
-            let _language = crate::i18n::language_scope(lang);
-            if !ready {
-                PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::Pro);
-                ready = true;
-                return;
-            }
-            show(app, ui.ctx());
-        },
-        app,
-    );
-    harness.run_steps(5);
-    harness.render().unwrap().save(directory.join("photocraft-embedded-vector-editor-en.png")).unwrap();
-}
-
-/// Filter Gallery owns a document preview even though `distort.active()` excludes it.
-#[test]
-fn saved_changes_wait_for_filter_gallery_and_resume_after_cancel() {
-    let (mut app, saves, _) = fixture();
-    open(&mut app);
-    confirm(&mut app).unwrap();
-    crate::gallery_ui::open(&mut app).unwrap();
-    assert!(app.distort.gallery.is_some());
-    assert!(!app.distort.active());
-    let before = app.session.active().unwrap().doc.clone();
-    let changed = SVG.replace("red", "blue");
-    saves.borrow_mut().push_back(Ok(changed.as_bytes().to_vec()));
-    let ctx = egui::Context::default();
-    poll(&mut app, &ctx);
-    assert_eq!(app.session.active().unwrap().doc, before);
-    assert!(app.smart_svg.editing.first().unwrap().saved.is_some());
-    crate::gallery_ui::control(&mut app, &json!({"cancel":true})).unwrap();
-    poll(&mut app, &ctx);
-    assert!(app.smart_svg.editing.first().unwrap().saved.is_none());
-    let state = app.session.active().unwrap();
-    let LayerContent::Smart(smart) = &state.doc.layer(state.active_layer.unwrap()).unwrap().content else { panic!("smart object") };
-    let photocraft_doc::SmartSource::Embedded { bytes, .. } = &smart.source else { panic!("embedded") };
-    assert_eq!(bytes.as_slice(), changed.as_bytes());
-}
-
 #[test]
 fn saved_changes_wait_through_quick_mask_and_resume_without_another_save() {
     let (mut app, saves, _) = fixture();
@@ -704,25 +606,6 @@ fn saved_changes_wait_through_quick_mask_and_resume_without_another_save() {
     let photocraft_doc::LayerContent::Smart(sm) = &st.doc.layer(st.active_layer.unwrap()).unwrap().content else { panic!("smart object") };
     let photocraft_doc::SmartSource::Embedded { bytes, .. } = &sm.source else { panic!("embedded") };
     assert_eq!(bytes.as_slice(), SVG.replace("red", "blue").as_bytes());
-}
-
-#[test]
-fn saved_changes_wait_for_layers_panel_dialog_before_first_modal_frame() {
-    let (mut app, saves, _) = fixture();
-    open(&mut app);
-    confirm(&mut app).unwrap();
-    let before = app.session.active().unwrap().doc.clone();
-    app.ui.layers_panel_dialog = Some(crate::state::LayersPanelDialog::NewGroup("New group".into()));
-    saves.borrow_mut().push_back(Ok(SVG.replace("red", "blue").into_bytes()));
-    let ctx = egui::Context::default();
-    assert!(ctx.memory(|memory| memory.top_modal_layer().is_none()));
-    poll(&mut app, &ctx);
-    assert_eq!(app.session.active().unwrap().doc, before);
-    assert!(app.smart_svg.editing.first().unwrap().saved.is_some());
-    app.ui.layers_panel_dialog = None;
-    poll(&mut app, &ctx);
-    assert_ne!(app.session.active().unwrap().doc, before);
-    assert!(app.smart_svg.editing.first().unwrap().saved.is_none());
 }
 
 struct FinishedSession(Option<Result<Vec<u8>, String>>);

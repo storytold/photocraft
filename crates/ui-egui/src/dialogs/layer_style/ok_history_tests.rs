@@ -1,6 +1,9 @@
 //! #14850: a Layer Style confirmation is one undoable edit.
 
-use super::*;
+use super::{
+    tests::{edit, first_of},
+    *,
+};
 use egui_kittest::Harness;
 use photocraft_doc::Layer;
 
@@ -21,8 +24,8 @@ fn opacity_only_ok_is_one_undoable_layer_style_edit() {
     let mut app = pixel_layer_app().unwrap();
     let before = app.session.active().unwrap().history.entries().to_vec();
     let id = open(&mut app, Some(BLENDING)).unwrap();
-    app.ui.dialog_mut(id).unwrap().fields.get_mut("p:blendingOptions").unwrap()["opacity"] = json!(70);
-    crate::dialogs::confirm(&mut app, id).unwrap();
+    edit(&mut app, id, |draft| draft.style.blending.opacity = 70.0);
+    crate::dialogs::testing::confirm(&mut app, id).unwrap();
 
     let entries = app.session.active().unwrap().history.entries();
     assert_eq!(&entries[..before.len()], before.as_slice());
@@ -44,11 +47,13 @@ fn fill_stroke_and_global_light_undo_and_redo_together() {
     let initial_light = app.session.active().unwrap().doc.global_light;
     let before = app.session.active().unwrap().history.entries().len();
     let id = open(&mut app, Some(BLENDING)).unwrap();
-    let fields = &mut app.ui.dialog_mut(id).unwrap().fields;
-    fields.get_mut("p:blendingOptions").unwrap()["fillOpacity"] = json!(40);
-    fields.insert("pendingGlobalLight".into(), json!(45));
-    set_param(fields, "fx1", "size", json!(7));
-    crate::dialogs::confirm(&mut app, id).unwrap();
+    let stroke = first_of(&app, id, EffectKind::Stroke);
+    edit(&mut app, id, |draft| {
+        draft.style.blending.fill_opacity = 40.0;
+        draft.style.global_light = 45.0;
+        draft.set_param(stroke, "size", StyleValue::Number(7.0));
+    });
+    crate::dialogs::testing::confirm(&mut app, id).unwrap();
 
     assert_eq!(&app.session.active().unwrap().history.entries()[before..], ["Layer Style"]);
     assert_eq!(layer(&app).unwrap().fill_opacity, 0.4);
@@ -78,15 +83,15 @@ fn cancel_and_escape_leave_history_and_opacity_unchanged() {
     for escape in [false, true] {
         let app = h.state_mut();
         let id = open(app, Some(BLENDING)).unwrap();
-        app.ui.dialog_mut(id).unwrap().fields.get_mut("p:blendingOptions").unwrap()["opacity"] = json!(70);
+        edit(app, id, |draft| draft.style.blending.opacity = 70.0);
         h.run_steps(3);
         if escape {
             h.key_press(egui::Key::Escape);
             h.run_steps(3);
         } else {
-            crate::dialogs::cancel(h.state_mut(), id).unwrap();
+            crate::dialogs::testing::cancel(h.state_mut(), id).unwrap();
         }
-        assert!(h.state_mut().ui.dialog_mut(id).is_none());
+        assert!(h.state().framework.dialogs.get_by_id::<HostedLayerStyle>(id).is_none());
         assert_eq!(h.state().session.active().unwrap().history.entries(), before.as_slice());
         assert_eq!(layer(h.state()).unwrap().opacity, 1.0);
     }
@@ -97,7 +102,7 @@ fn unchanged_ok_adds_at_most_one_step() {
     let mut app = pixel_layer_app().unwrap();
     let before = app.session.active().unwrap().history.entries().len();
     let id = open(&mut app, None).unwrap();
-    crate::dialogs::confirm(&mut app, id).unwrap();
+    crate::dialogs::testing::confirm(&mut app, id).unwrap();
     let entries = app.session.active().unwrap().history.entries();
     assert!(entries.len() <= before + 1);
     if let Some(label) = entries.get(before) {
@@ -112,10 +117,12 @@ fn rejected_effect_keeps_opacity_and_history_unchanged() {
     let initial_effects = layer(&app).unwrap().effects.clone();
     let before = app.session.active().unwrap().history.entries().to_vec();
     let id = open(&mut app, Some(BLENDING)).unwrap();
-    let fields = &mut app.ui.dialog_mut(id).unwrap().fields;
-    fields.get_mut("p:blendingOptions").unwrap()["opacity"] = json!(70);
-    fields.get_mut("effects").unwrap()[0]["kind"] = json!("unknown-effect");
-    assert!(crate::dialogs::confirm(&mut app, id).is_err());
+    edit(&mut app, id, |draft| {
+        draft.style.blending.opacity = 70.0;
+        draft.style.effects[0].params.0.insert("fx".into(), StyleValue::Other("{}".into()));
+    });
+    crate::dialogs::testing::confirm(&mut app, id).unwrap();
+    assert!(app.ui.status_error);
 
     assert_eq!(app.session.active().unwrap().history.entries(), before.as_slice());
     assert_eq!(layer(&app).unwrap().opacity, 1.0);
