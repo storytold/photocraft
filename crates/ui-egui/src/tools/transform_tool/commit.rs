@@ -408,6 +408,19 @@ fn box_command(id: &str) -> bool {
         || box_preset(id).is_some()
 }
 
+/// The commands that read the document's pixels, so Free Transform applies its box before they
+/// run: the reference application transforms the layer as the box is dragged, so the copy it
+/// takes is the transformed one. PhotoCraft applies the transform when the box is committed, so a
+/// copy taken while the box is open held the untransformed layer, and the pasted one came out at
+/// the old size.
+///
+/// Layer via Copy and Cut read the layer's pixels as well, and are left out of this: they make a
+/// new layer instead of filling the clipboard, so they are a different case, and their precheck
+/// isn't complete either (whether they have anything to copy is known only when they run).
+pub fn reads_the_pixels(id: &str) -> bool {
+    matches!(id, "edit.copy" | "edit.cut" | "edit.copyMerged")
+}
+
 pub fn intercept(app: &mut PhotocraftApp, id: &str) -> Option<Result<serde_json::Value, String>> {
     let warping = app.ui.transform.as_ref()?.warp.is_some();
     if committing(app).is_some() {
