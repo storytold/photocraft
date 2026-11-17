@@ -68,13 +68,16 @@ impl PhotocraftApp {
 impl PhotocraftApp {
     /// Install the app's icons, fonts, image loaders and the theme. Call from the app creator
     /// (and again for a replacement Context) before the first `run_ui` so the very first frame
-    /// renders; otherwise `logic` does it and the first frame is skipped.
+    /// renders; otherwise `logic` does it and the first frame is skipped. A context set up here
+    /// does not watch the desktop's appearance: a window's context, a replacement one included,
+    /// goes through [`setup_window`](Self::setup_window).
     pub fn setup_context(ctx: &egui::Context, theme: theme::AppTheme) {
         Self::setup(ctx, theme, None);
     }
 
     /// [`setup_context`](Self::setup_context) for a window whose frame the platform decided
-    /// (`decision`): the runtime installs the frame's look with the fonts.
+    /// (`decision`): the runtime installs the frame's look with the fonts and follows the
+    /// desktop's appearance settings.
     pub fn setup_window(ctx: &egui::Context, theme: theme::AppTheme, decision: craft::window::policy::Decision) {
         Self::setup(ctx, theme, Some(decision));
     }

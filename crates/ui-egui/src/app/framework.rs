@@ -41,18 +41,19 @@ use crate::theme::AppTheme;
 
 /// Installs the runtime on `ctx` with `fonts` and the root window's decided `frame` (`None` where
 /// the platform decides none), unless it is there already (`setup_window` again for the same
-/// context). Only `theme::install_runtime` calls it.
+/// context). Only a window (`frame` set) watches the desktop's appearance; a headless context
+/// answers what its integration reports. Only `theme::install_runtime` calls it.
 pub(crate) fn install(ctx: &egui::Context, fonts: &UiFonts<'_>, frame: Option<Decision>) {
     // The wheel zooms with the canvas's own keys and scrolls sideways with Shift or Command, as
     // PhotoCraft's input always has.
     let wheel = WheelModifiers::new(egui::Modifiers::NONE, egui::Modifiers::SHIFT | egui::Modifiers::COMMAND);
-    let wake = ctx.clone();
-    let mut spec = InstallSpec::new(ShellInfo::default().backend(Backend::from_env()), Arc::new(SystemWindows))
-        .wheel(wheel)
-        .app_id(crate::os_window::APP_ID)
-        .system(SystemReader::start(move || wake.request_repaint()));
+    let mut spec = InstallSpec::new(ShellInfo::default().backend(Backend::from_env()), Arc::new(SystemWindows)).wheel(wheel).app_id(crate::os_window::APP_ID);
     if let Some(decision) = frame {
-        spec = spec.frame(decision);
+        // The watcher holds a session-bus connection, and its wake keeps `ctx` alive while `ctx`
+        // keeps the watcher, so neither is ever dropped. One per window is fine; one per headless
+        // context (each test builds its own) exhausted the desktop's session bus (#15499).
+        let wake = ctx.clone();
+        spec = spec.frame(decision).system(SystemReader::start(move || wake.request_repaint()));
     }
     // The platform's pen readings: the app writes them into this feed, the runtime pairs them with the pointer moves.
     let pen = crate::stylus::StylusFeed::default();

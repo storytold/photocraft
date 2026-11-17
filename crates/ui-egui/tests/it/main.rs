@@ -21,6 +21,7 @@ mod drag_preview_canvas;
 mod eraser_reset_defaults;
 mod full_res_preview;
 mod gpu_device_loss;
+mod headless_appearance_watcher;
 mod healing_reset_tip;
 // The interactive bench's `#[cfg(test)]` reporting tests: CI runs `--tests`, never examples.
 // Embedding the example leaves its other entrypoints unused in this binary.
