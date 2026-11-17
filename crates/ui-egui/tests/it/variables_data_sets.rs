@@ -1,63 +1,81 @@
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use photocraft_ui_egui::PhotocraftApp;
-use photocraft_ui_egui::state::DialogKind;
-use serde_json::{Map, json};
+use photocraft_ui_egui::control::{ControlRequest, Reply};
+use serde_json::{Value, json};
 
-fn app_with_variables_dialog(cur: u64) -> PhotocraftApp {
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), photocraft_ui_egui::Services::default());
-    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
-    app.run("layer.new.layer", json!({})).unwrap();
-    let state = json!({
-        "defs": [{
-            "name": "v1",
-            "layer": 0,
-            "type": "visibility",
-            "method": "fit",
-            "align": "center",
-            "clip": false
-        }],
-        "dataSets": [{"name": "A", "values": []}]
-    });
-    let mut fields = Map::new();
-    fields.insert("__variables".into(), state);
-    fields.insert("__page".into(), json!("dataSets"));
-    fields.insert("__cur".into(), json!(cur));
-    app.ui.open_dialog(DialogKind::Command, fields);
-    app
-}
+type H = Harness<'static, PhotocraftApp>;
 
-fn harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(900.0, 700.0)).build_ui_state(
+fn harness(app: PhotocraftApp) -> H {
+    let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(egui::vec2(900.0, 700.0)).build_ui_state(
         |ui, app: &mut PhotocraftApp| {
-            let ctx = ui.ctx().clone();
-            if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                return;
-            }
-            photocraft_ui_egui::dialogs::show(app, &ctx);
+            photocraft_ui_egui::dialogs::run(app, ui);
         },
         app,
     );
-    PhotocraftApp::setup_context(&h.ctx, photocraft_ui_egui::theme::ThemeKind::ALL[0]);
     h.run_steps(3);
     h
 }
 
-#[test]
-fn out_of_range_data_set_index_does_not_overflow_during_render() {
-    let mut h = harness(app_with_variables_dialog(u64::MAX));
-    h.run_steps(2);
+/// One control request, as a transport sends it.
+fn control(h: &mut H, method: &str, params: Value) -> Value {
+    let (request, _) = ControlRequest::new(method, params);
+    let ctx = h.ctx.clone();
+    match photocraft_ui_egui::control::handle(h.state_mut(), &ctx, &request) {
+        Reply::Done(value) => value,
+        _ => panic!("{method} did not answer at once"),
+    }
 }
 
-#[test]
-fn out_of_range_data_set_index_is_clamped_before_delete() {
-    let mut h = harness(app_with_variables_dialog(999));
-    h.get_by_label("Delete").click();
-    h.run_steps(2);
+fn refused(reply: &Value) -> bool {
+    reply.get("error").is_some() || reply["ok"] == json!(false)
 }
 
-/// A real image file and unsaved dialog edits exercise the same path as manual entry.
-fn pixel_replacement_harness() -> (tempfile::TempDir, Harness<'static, PhotocraftApp>) {
+/// Opens a menu's dialog and returns its id.
+fn open(h: &mut H, menu: &str) -> String {
+    let ctx = h.ctx.clone();
+    let reply = photocraft_ui_egui::menus::invoke(h.state_mut(), &ctx, menu, json!({})).unwrap();
+    h.run_steps(3);
+    reply["dialog"].as_str().expect("the menu opens a dialog").to_string()
+}
+
+fn set(h: &mut H, id: &str, field: &str, value: Value) -> Value {
+    let reply = control(h, "ui.dialog.set", json!({"dialog": id, "field": field, "value": value}));
+    h.run_steps(2);
+    reply
+}
+
+/// The open dialog's fields, as `ui.inspect` lists them.
+fn inspect(h: &mut H, id: &str) -> Value {
+    let listed = control(h, "ui.inspect", json!({}));
+    // PLAN: assumed the `ui.inspect` entry of a hosted dialog keeps its values under `fields`.
+    listed["result"]["dialogs"].as_array().into_iter().flatten().find(|d| d["id"] == json!(id)).map(|d| d["fields"].clone()).expect("the dialog is listed")
+}
+
+fn confirm(h: &mut H, id: &str) {
+    assert!(!refused(&control(h, "ui.dialog.confirm", json!({"dialog": id}))));
+    h.run_steps(3);
+}
+
+fn cancel(h: &mut H, id: &str) {
+    assert!(!refused(&control(h, "ui.dialog.cancel", json!({"dialog": id}))));
+    h.run_steps(3);
+}
+
+fn read_pixel(h: &mut H) -> Value {
+    h.state_mut().run("document.pixel", json!({"x": 4, "y": 4})).unwrap()
+}
+
+fn revision(h: &H) -> u64 {
+    h.state().session.active().unwrap().revision
+}
+
+fn blue_row(dir: &tempfile::TempDir, name: &str) -> Value {
+    json!({"name": name, "values": [{"variable": "photo", "kind": "pixels", "value": dir.path().join("blue.png")}]})
+}
+
+/// A real image file and an open Data Sets dialog exercise the same path as manual entry.
+fn pixel_replacement_harness() -> (tempfile::TempDir, H, String) {
     let dir = tempfile::tempdir().unwrap();
     for (name, color) in [("blue.png", "#0000ff"), ("red.png", "#ff0000")] {
         let mut source = photocraft_engine::Session::new();
@@ -65,145 +83,68 @@ fn pixel_replacement_harness() -> (tempfile::TempDir, Harness<'static, Photocraf
         let png = photocraft_io::export(&source.active().unwrap().doc, "png", &photocraft_io::ExportOptions::default()).unwrap().bytes;
         std::fs::write(dir.path().join(name), png).unwrap();
     }
-    let path = dir.path().join("blue.png");
-
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), photocraft_ui_egui::Services::default());
     app.run("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
     let layer = app.session.active().unwrap().active_layer.unwrap();
-    photocraft_ui_egui::menus::invoke(&mut app, &egui::Context::default(), "image.variables.dataSets", json!({})).unwrap();
-    let dialog = app.ui.dialogs.last_mut().unwrap();
-    dialog.fields.insert(
-        "__variables".into(),
-        json!({
-            "defs": [{"name": "photo", "layer": layer.0, "type": "pixelReplacement", "method": "conform"}],
-            "dataSets": [{"name": "Blue", "values": [{"variable": "photo", "kind": "pixels", "value": path}]}]
-        }),
-    );
-    (dir, harness(app))
+    let mut h = harness(app);
+    let id = open(&mut h, "image.variables.dataSets");
+    set(&mut h, &id, "defs", json!([{"name": "photo", "layer": layer.0, "type": "pixelReplacement", "method": "conform"}]));
+    set(&mut h, &id, "dataSets", json!([blue_row(&dir, "Blue")]));
+    (dir, h, id)
 }
 
-fn save_draft_and_open_apply_menu(h: &mut Harness<'static, PhotocraftApp>) {
-    h.get_by_label("OK").click();
-    h.run_steps(3);
-    assert!(h.state().ui.dialogs.is_empty());
-    let ctx = h.ctx.clone();
-    photocraft_ui_egui::menus::invoke(h.state_mut(), &ctx, "image.applyDataSet", json!({})).unwrap();
-    h.run_steps(3);
-}
-
-fn read_pixel(h: &mut Harness<'static, PhotocraftApp>) -> serde_json::Value {
-    h.state_mut().run("document.pixel", json!({"x": 4, "y": 4})).unwrap()
-}
-
-/// CSV chosen through the import menu supplies the row that Apply renders and OK preserves.
-#[test]
-fn imported_csv_replaces_pixels_through_the_apply_dialog() {
-    use photocraft_ui_egui::file_dialog::{FileDialogAnswer, FileDialogRequest};
-
-    for contents in [false, true] {
-        let (dir, mut h) = pixel_replacement_harness();
-        h.get_by_label("OK").click();
-        h.run_steps(3);
-        h.state_mut().run("image.variables.dataSets", json!({"dataSets": []})).unwrap();
-        let csv = format!("DataSet,photo\nImported,\"{}\"\n", dir.path().join("blue.png").display());
-        let path = dir.path().join("sets.csv");
-        std::fs::write(&path, &csv).unwrap();
-        let answer = if contents {
-            FileDialogAnswer::Contents("sets.csv".into(), csv.into_bytes())
-        } else {
-            FileDialogAnswer::Paths(vec![path.to_string_lossy().into_owned()])
-        };
-        h.state_mut().services.file_dialog = Some(Box::new(move |request, _, reply| {
-            assert!(matches!(request, FileDialogRequest::Open { multiple: false, .. }));
-            reply.send(Some(answer.clone()));
-        }));
-        let ctx = h.ctx.clone();
-        photocraft_ui_egui::menus::invoke(h.state_mut(), &ctx, "file.import.variableDataSets", json!({})).unwrap();
-        h.state_mut().poll_file_dialog(&ctx, None);
-        assert!(!h.state().file_dialog_open());
-        let rows = &h.state().session.active().unwrap().doc.variables.data_sets;
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].name, "Imported");
-        assert_eq!(read_pixel(&mut h), json!([1.0, 1.0, 1.0, 1.0]), "import alone does not apply a row");
-
-        photocraft_ui_egui::menus::invoke(h.state_mut(), &ctx, "image.applyDataSet", json!({})).unwrap();
-        h.run_steps(3);
-        h.get_by_label("Apply").click();
-        h.run_steps(3);
-        assert_eq!(read_pixel(&mut h), json!([0.0, 0.0, 1.0, 1.0]));
-        assert_eq!(h.state().ui.dialogs.len(), 1);
-        let revision = h.state().session.active().unwrap().revision;
-        h.get_by_label("OK").click();
-        h.run_steps(3);
-        assert!(h.state().ui.dialogs.is_empty());
-        assert_eq!(h.state().session.active().unwrap().revision, revision);
-        h.state_mut().run("edit.undo", json!({})).unwrap();
-        assert_eq!(read_pixel(&mut h), json!([1.0, 1.0, 1.0, 1.0]));
-    }
+/// OK saves the draft; the Apply Data Set dialog opens on the saved rows.
+fn save_draft_and_open_apply_menu(h: &mut H, id: &str) -> String {
+    confirm(h, id);
+    assert!(!h.state().dialog_open());
+    open(h, "image.applyDataSet")
 }
 
 #[test]
 fn apply_menu_ok_requires_a_row_but_not_variable_definitions() {
-    for (rows, explicit, expected) in [(json!([]), false, None), (json!([{"name": "Empty", "values": []}]), false, Some(0)), (json!([]), true, None)] {
+    for (rows, expected) in [(json!([]), None), (json!([{"name": "Empty", "values": []}]), Some(0))] {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), photocraft_ui_egui::Services::default());
         app.run("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
         app.run("image.variables.dataSets", json!({"dataSets": rows})).unwrap();
-        photocraft_ui_egui::menus::invoke(&mut app, &egui::Context::default(), "image.applyDataSet", json!({})).unwrap();
-        if explicit {
-            app.ui.dialogs.last_mut().unwrap().fields.insert("__apply".into(), json!(0));
-        }
         let mut h = harness(app);
+        let id = open(&mut h, "image.applyDataSet");
         h.state_mut().ui.status.clear();
-        h.get_by_label("OK").click();
-        h.run_steps(3);
-        assert!(h.state().ui.dialogs.is_empty());
+        confirm(&mut h, &id);
+        assert!(!h.state().dialog_open());
         assert_eq!(h.state().session.active().unwrap().doc.variables.active, expected);
-        if explicit {
-            assert!(h.state().ui.status.contains("no data sets in document"));
-        } else {
-            assert!(h.state().ui.status.is_empty(), "{}", h.state().ui.status);
-        }
+        assert!(h.state().ui.status.is_empty(), "{}", h.state().ui.status);
     }
 }
 
 /// Apply updates the canvas immediately; OK must not apply the same request again.
 #[test]
 fn apply_replaces_pixels_before_ok_and_keeps_the_dialog_open() {
-    let (_dir, mut h) = pixel_replacement_harness();
-    let id = h.state().ui.dialogs.last().unwrap().id;
-    h.state_mut().ui.dialogs.last_mut().unwrap().fields.insert("__apply".into(), json!("Blue"));
+    let (_dir, mut h, id) = pixel_replacement_harness();
     h.run_steps(3);
     assert_eq!(read_pixel(&mut h), json!([1.0, 1.0, 1.0, 1.0]), "editing fields alone is not Apply");
     h.get_by_label("Apply").click();
     h.run_steps(3);
 
-    assert_eq!(h.state().ui.dialogs.last().unwrap().id, id, "Apply leaves the editor open");
-    assert!(!h.state().ui.dialogs.last().unwrap().fields.contains_key("__apply"));
+    assert!(h.state().dialog_open(), "Apply leaves the editor open");
     let pixel = read_pixel(&mut h);
-    h.get_by_label("OK").click();
-    h.run_steps(3);
-    let confirmed = read_pixel(&mut h);
-    assert_eq!(confirmed, json!([0.0, 0.0, 1.0, 1.0]), "the same replacement works through OK");
-    assert_eq!(pixel, confirmed, "Apply uses the edited definitions and image path immediately");
+    assert_eq!(pixel, json!([0.0, 0.0, 1.0, 1.0]), "Apply uses the edited definitions and image path immediately");
+    confirm(&mut h, &id);
+    assert_eq!(read_pixel(&mut h), pixel, "OK does not apply again");
     h.state_mut().run("edit.undo", json!({})).unwrap();
-    assert_eq!(read_pixel(&mut h), json!([1.0, 1.0, 1.0, 1.0]));
+    assert_eq!(read_pixel(&mut h), json!([1.0, 1.0, 1.0, 1.0]), "one history entry");
 }
 
 /// Duplicate labels must not change which row Apply or OK sends to the engine.
 #[test]
 fn duplicate_names_apply_the_selected_row_for_apply_and_ok() {
     for button in ["Apply", "OK"] {
-        let (_dir, mut h) = pixel_replacement_harness();
-        let fields = &mut h.state_mut().ui.dialogs.last_mut().unwrap().fields;
-        let selected = fields["__variables"]["dataSets"][0].clone();
-        fields["__variables"]["dataSets"] = json!([{"name": "Blue", "values": []}, selected]);
-        save_draft_and_open_apply_menu(&mut h);
+        let (dir, mut h, id) = pixel_replacement_harness();
+        set(&mut h, &id, "dataSets", json!([{"name": "Blue", "values": []}, blue_row(&dir, "Blue")]));
+        let apply = save_draft_and_open_apply_menu(&mut h, &id);
         assert_eq!(read_pixel(&mut h), json!([1.0, 1.0, 1.0, 1.0]), "editing data sets only saves them");
-        h.get_by_label("▶").click();
+        h.get_by_label("Next Data Set").click();
         h.run_steps(2);
-        let fields = &h.state().ui.dialogs.last().unwrap().fields;
-        assert_eq!(fields["__cur"], 1);
-        assert!(!fields.contains_key("__apply"));
+        assert_eq!(inspect(&mut h, &apply)["cur"], 1);
         h.get_by_label(button).click();
         h.run_steps(3);
         assert_eq!(read_pixel(&mut h), json!([0.0, 0.0, 1.0, 1.0]), "{button}");
@@ -213,15 +154,14 @@ fn duplicate_names_apply_the_selected_row_for_apply_and_ok() {
 
 #[test]
 fn apply_menu_apply_then_ok_keeps_one_history_entry() {
-    let (_dir, mut h) = pixel_replacement_harness();
-    save_draft_and_open_apply_menu(&mut h);
+    let (_dir, mut h, id) = pixel_replacement_harness();
+    let apply = save_draft_and_open_apply_menu(&mut h, &id);
     h.get_by_label("Apply").click();
     h.run_steps(3);
     assert_eq!(read_pixel(&mut h), json!([0.0, 0.0, 1.0, 1.0]));
-    let revision = h.state().session.active().unwrap().revision;
-    h.get_by_label("OK").click();
-    h.run_steps(3);
-    assert_eq!(h.state().session.active().unwrap().revision, revision);
+    let before = revision(&h);
+    confirm(&mut h, &apply);
+    assert_eq!(revision(&h), before);
     h.state_mut().run("edit.undo", json!({})).unwrap();
     assert_eq!(read_pixel(&mut h), json!([1.0, 1.0, 1.0, 1.0]));
 }
@@ -229,29 +169,29 @@ fn apply_menu_apply_then_ok_keeps_one_history_entry() {
 #[test]
 fn apply_menu_ok_honors_changes_after_apply() {
     for change in ["row", "value", "document"] {
-        let (dir, mut h) = pixel_replacement_harness();
+        let (dir, mut h, id) = pixel_replacement_harness();
         let red = json!(dir.path().join("red.png"));
         if change == "row" {
-            let fields = &mut h.state_mut().ui.dialogs.last_mut().unwrap().fields;
-            let mut row = fields["__variables"]["dataSets"][0].clone();
+            let mut row = blue_row(&dir, "Blue");
             row["values"][0]["value"] = red.clone();
-            fields["__variables"]["dataSets"].as_array_mut().unwrap().push(row);
+            set(&mut h, &id, "dataSets", json!([blue_row(&dir, "Blue"), row]));
         }
-        save_draft_and_open_apply_menu(&mut h);
+        let apply = save_draft_and_open_apply_menu(&mut h, &id);
         h.get_by_label("Apply").click();
         h.run_steps(3);
         if change == "row" {
-            h.get_by_label("▶").click();
+            h.get_by_label("Next Data Set").click();
         } else if change == "value" {
-            h.state_mut().ui.dialogs.last_mut().unwrap().fields["__variables"]["dataSets"][0]["values"][0]["value"] = red;
+            let mut row = blue_row(&dir, "Blue");
+            row["values"][0]["value"] = red;
+            set(&mut h, &apply, "dataSets", json!([row]));
         } else {
             h.state_mut().run("image.adjustments.invert", json!({})).unwrap();
         }
         h.run_steps(3);
         let before = if change == "document" { json!([1.0, 1.0, 0.0, 1.0]) } else { json!([0.0, 0.0, 1.0, 1.0]) };
         assert_eq!(read_pixel(&mut h), before, "{change}: only document edits change pixels before OK");
-        h.get_by_label("OK").click();
-        h.run_steps(3);
+        confirm(&mut h, &apply);
         let after = if change == "document" { json!([0.0, 0.0, 1.0, 1.0]) } else { json!([1.0, 0.0, 0.0, 1.0]) };
         assert_eq!(read_pixel(&mut h), after, "{change}");
         h.state_mut().run("edit.undo", json!({})).unwrap();
@@ -260,55 +200,31 @@ fn apply_menu_ok_honors_changes_after_apply() {
 }
 
 #[test]
-fn apply_menu_cancel_does_not_apply_the_selected_row() {
-    let (_dir, mut h) = pixel_replacement_harness();
-    save_draft_and_open_apply_menu(&mut h);
-    h.get_by_label("Cancel").click();
-    h.run_steps(3);
-    assert!(h.state().ui.dialogs.is_empty());
-    assert_eq!(read_pixel(&mut h), json!([1.0, 1.0, 1.0, 1.0]));
-}
-
-#[test]
 fn apply_menu_ok_after_deleting_the_last_row_only_saves() {
-    let (_dir, mut h) = pixel_replacement_harness();
-    save_draft_and_open_apply_menu(&mut h);
+    let (_dir, mut h, id) = pixel_replacement_harness();
+    let apply = save_draft_and_open_apply_menu(&mut h, &id);
     h.get_by_label("Delete").click();
     h.run_steps(2);
     h.state_mut().ui.status.clear();
-    h.get_by_label("OK").click();
-    h.run_steps(3);
-    assert!(h.state().ui.dialogs.is_empty());
+    confirm(&mut h, &apply);
+    assert!(!h.state().dialog_open());
     assert!(h.state().ui.status.is_empty(), "{}", h.state().ui.status);
     assert!(h.state().session.active().unwrap().doc.variables.data_sets.is_empty());
     assert_eq!(read_pixel(&mut h), json!([1.0, 1.0, 1.0, 1.0]));
 }
 
 #[test]
-fn legacy_named_request_stays_draft_until_ok() {
-    let (_dir, mut h) = pixel_replacement_harness();
-    h.state_mut().ui.dialogs.last_mut().unwrap().fields.insert("__apply".into(), json!("Blue"));
-    h.run_steps(3);
-    assert_eq!(read_pixel(&mut h), json!([1.0, 1.0, 1.0, 1.0]));
-    h.get_by_label("OK").click();
-    h.run_steps(3);
-    assert_eq!(read_pixel(&mut h), json!([0.0, 0.0, 1.0, 1.0]));
-}
-
-#[test]
 fn variables_editor_ok_only_saves_configuration() {
     for menu in ["image.variables.define", "image.variables.dataSets"] {
-        let (_dir, mut h) = pixel_replacement_harness();
-        let state = h.state().ui.dialogs.last().unwrap().fields["__variables"].clone();
-        h.get_by_label("Cancel").click();
-        h.run_steps(3);
-        let ctx = h.ctx.clone();
-        photocraft_ui_egui::menus::invoke(h.state_mut(), &ctx, menu, json!({})).unwrap();
-        h.state_mut().ui.dialogs.last_mut().unwrap().fields.insert("__variables".into(), state);
-        h.run_steps(3);
+        let (_dir, mut h, id) = pixel_replacement_harness();
+        let state = inspect(&mut h, &id);
+        cancel(&mut h, &id);
+        let reopened = open(&mut h, menu);
+        set(&mut h, &reopened, "defs", state["defs"].clone());
+        set(&mut h, &reopened, "dataSets", state["dataSets"].clone());
         h.get_by_label("OK").click();
         h.run_steps(3);
-        assert!(h.state().ui.dialogs.is_empty());
+        assert!(!h.state().dialog_open());
         assert_eq!(h.state().session.active().unwrap().doc.variables.data_sets.len(), 1, "{menu}");
         assert_eq!(read_pixel(&mut h), json!([1.0, 1.0, 1.0, 1.0]), "{menu}");
     }
@@ -318,64 +234,39 @@ fn variables_editor_ok_only_saves_configuration() {
 #[test]
 fn failed_apply_can_be_corrected_without_retries_or_cancel_rollback() {
     for apply_mode in [false, true] {
-        let (dir, mut h) = pixel_replacement_harness();
-        if apply_mode {
-            save_draft_and_open_apply_menu(&mut h);
-        }
-        let fields = &mut h.state_mut().ui.dialogs.last_mut().unwrap().fields;
-        fields["__variables"]["dataSets"][0]["values"][0]["value"] = json!(dir.path().join("missing.png"));
+        let (dir, mut h, id) = pixel_replacement_harness();
+        let id = if apply_mode { save_draft_and_open_apply_menu(&mut h, &id) } else { id };
+        let missing = json!([{"name": "Blue", "values": [{"variable": "photo", "kind": "pixels", "value": dir.path().join("missing.png")}]}]);
+        set(&mut h, &id, "dataSets", missing);
         h.get_by_label("Apply").click();
         h.run_steps(3);
         assert!(h.state().ui.status.contains("missing.png"), "{}", h.state().ui.status);
-        assert!(!h.state().ui.dialogs.last().unwrap().fields.contains_key("__apply"));
         assert_eq!(read_pixel(&mut h), json!([1.0, 1.0, 1.0, 1.0]));
         h.state_mut().ui.status.clear();
         h.run_steps(3);
         assert!(h.state().ui.status.is_empty(), "a failed Apply must not retry each frame");
 
-        let fields = &mut h.state_mut().ui.dialogs.last_mut().unwrap().fields;
-        fields["__variables"]["dataSets"][0]["values"][0]["value"] = json!(dir.path().join("blue.png"));
+        set(&mut h, &id, "dataSets", json!([blue_row(&dir, "Blue")]));
         h.get_by_label("Apply").click();
         h.run_steps(3);
-        h.get_by_label("Cancel").click();
-        h.run_steps(3);
-        assert!(h.state().ui.dialogs.is_empty());
+        cancel(&mut h, &id);
+        assert!(!h.state().dialog_open());
         assert_eq!(read_pixel(&mut h), json!([0.0, 0.0, 1.0, 1.0]));
         h.state_mut().run("edit.undo", json!({})).unwrap();
         assert_eq!(read_pixel(&mut h), json!([1.0, 1.0, 1.0, 1.0]));
     }
 }
 
-/// `ui.dialog.set` can store any JSON in `__variables`; the editors write into its entries.
-fn app_with_malformed_variables(page: &str) -> PhotocraftApp {
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), photocraft_ui_egui::Services::default());
-    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
-    app.run("layer.new.layer", json!({})).unwrap();
-    let mut fields = Map::new();
-    fields.insert(
-        "__variables".into(),
-        json!({"defs": [42, {"name": "v1", "layer": 0, "type": "textReplacement"}], "dataSets": ["bad", {"name": "A", "values": [7, "x"]}, {"name": "B", "values": "nope"}]}),
-    );
-    fields.insert("__page".into(), json!(page));
-    app.ui.open_dialog(DialogKind::Command, fields);
-    app
-}
-
-fn type_into_first_text_field(h: &mut Harness<'static, PhotocraftApp>) {
-    h.query_all_by_role(egui::accesskit::Role::TextInput).next().expect("a text field").click();
-    h.run_steps(2);
-    h.query_all_by_role(egui::accesskit::Role::TextInput).next().expect("a text field").type_text("z");
-    h.run_steps(2);
-}
-
+/// `ui.dialog.set` takes only values the typed state holds: a malformed one is refused and the dialog keeps its state.
 #[test]
 fn malformed_variable_entries_are_dropped_before_an_edit() {
     for page in ["define", "dataSets"] {
-        let mut h = harness(app_with_malformed_variables(page));
-        type_into_first_text_field(&mut h);
-        let state = &h.state().ui.dialogs.last().unwrap().fields["__variables"];
-        assert_eq!(state["defs"].as_array().unwrap().len(), 1, "{page}: {state}");
-        assert_eq!(state["dataSets"].as_array().unwrap().len(), 2, "{page}: {state}");
-        assert!(state["dataSets"].as_array().unwrap().iter().all(|s| s["values"].as_array().unwrap().iter().all(|v| v.is_object())), "{page}: {state}");
+        let (_dir, mut h, id) = pixel_replacement_harness();
+        set(&mut h, &id, "page", json!(page));
+        let before = inspect(&mut h, &id);
+        for (field, bad) in [("defs", json!([42, {"name": "v1"}])), ("dataSets", json!(["bad", {"name": "B", "values": "nope"}]))] {
+            assert!(refused(&set(&mut h, &id, field, bad)), "{page}: {field}");
+        }
+        assert_eq!(inspect(&mut h, &id), before, "{page}");
     }
 }

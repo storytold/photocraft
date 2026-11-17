@@ -329,7 +329,7 @@ fn cpu_preview_rows(b: &mut Bench, doc: &Document, target: LayerId, name: &str, 
             doc,
             target,
             &format!("{name}, CPU proxy preview zoomed out{sel}"),
-            photocraft_ui_egui::proxy::view_factor(photocraft_ui_egui::proxy::factor(doc), zoom),
+            photocraft_ui_egui::proxy::view_factor(photocraft_ui_egui::proxy::factor(doc), zoom, doc.size.area()),
         );
     }
 }
@@ -339,7 +339,7 @@ fn adjust_preview_case(b: &mut Bench, s: &Session, target: LayerId, name: &str, 
     let doc = &s.active().expect("doc").doc;
     let (w, h) = (doc.size.width, doc.size.height);
     let zoom = 1600.0 / w as f32 * 2.0;
-    let k = photocraft_ui_egui::adjust_preview::proxy_factor(zoom);
+    let k = craft::imaging::ui::live_preview::ProxyPlan::factor(zoom, doc.size.area(), true);
     if let Some(why) = photocraft_ui_egui::adjust_preview::unsupported(doc, target) {
         println!("  ({name}{sel}: no layer preview: {why}; CPU reference rows only)");
         cpu_preview_rows(b, doc, target, name, sel, report_path);
