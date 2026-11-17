@@ -75,14 +75,24 @@ fn the_dialog_opens_in_pixels_per_inch_with_a_unit_list() {
     assert!(first < second, "Pixels/Inch comes first");
 }
 
-/// Switching the unit changes what is shown, never what is stored.
+/// Opens the Resolution unit list (the one showing `from`) and picks `to` from it.
+fn pick_unit(h: &mut Harness<'static, PhotocraftApp>, from: &str, to: &str) {
+    h.query_all_by_role(Role::ComboBox).find(|n| n.value().as_deref() == Some(from)).expect("the Resolution unit list").click();
+    h.run_steps(3);
+    h.query_by_label(to).expect("the unit is listed").click();
+    h.run_steps(3);
+}
+
+/// Picking a unit from the list changes what is shown, never what is stored.
 #[test]
 fn switching_the_unit_converts_the_display_only() {
     let (mut h, _) = dialog(72.0);
-    set_field(&mut h, "__resUnit", json!("ppcm"));
+    pick_unit(&mut h, "Pixels/Inch", "Pixels/Centimeter");
+    assert_eq!(fields(&h).get("__resUnit"), Some(&json!("ppcm")));
     assert!((shown(&h) - 28.346).abs() < 1e-3, "{}", shown(&h));
     assert_eq!(res(&h), 72.0);
-    set_field(&mut h, "__resUnit", json!("ppi"));
+    pick_unit(&mut h, "Pixels/Centimeter", "Pixels/Inch");
+    assert_eq!(fields(&h).get("__resUnit"), Some(&json!("ppi")));
     assert_eq!(shown(&h), 72.0);
     assert_eq!(res(&h), 72.0);
 }
