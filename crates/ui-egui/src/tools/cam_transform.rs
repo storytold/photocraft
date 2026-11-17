@@ -67,6 +67,7 @@ pub(crate) fn begin(app: &mut PhotocraftApp, offset: [i32; 2]) -> bool {
         warp_entry: None,
         warp_box: None,
         warp_origin: None,
+        warp_squeeze: None,
         layers: Vec::new(),
     };
     app.ui.cam_transform = Some(CamTransform { document, revision, offset, frame, gesture: None });

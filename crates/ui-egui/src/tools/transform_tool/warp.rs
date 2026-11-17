@@ -143,6 +143,8 @@ pub(super) fn warp_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tol: f64, mod
     {
         pv.steps.settle(super::Step::of(t));
     }
+    // Where the press is on screen, for a grid drawn through a capped perspective (below).
+    let (doc_point, doc_tol) = (event_point(ev), tol);
     // A smart object's warp may be in its contents' space (#8927): the pointer is taken there.
     let (ev, tol, unit) = match app.ui.transform.as_ref().filter(|t| t.warp_place.is_some()) {
         Some(t) => {
@@ -159,14 +161,25 @@ pub(super) fn warp_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tol: f64, mod
         return;
     }
     let (Some(t), Some(pv)) = (app.ui.transform.as_mut(), app.transform_preview.as_mut()) else { return };
+    let place = t.warp_place;
     let Some(w) = t.warp.as_mut() else { return };
     match ev {
         ToolEvent::Down { x, y, .. } => {
             // A preset warp becomes a custom mesh only when the press grabs one of its points.
             let custom = if w.mesh.is_none() || w.style != WarpStyle::Custom { Warp::custom(w.to_mesh(1, 1), w.bounds) } else { w.clone() };
             let pts0 = custom.mesh.as_ref().map(|m| m.points.clone()).unwrap_or_default();
-            pv.warp_drag = warp_hit(&custom, [x, y], tol).map(|index| WarpDrag::Point { index, start: [x, y], pts0: pts0.clone() }).or_else(|| {
-                let (s, t) = surface_at(custom.mesh.as_ref()?, [x, y], unit)?;
+            // Through a perspective past the reference's cap the grid shows through the capped
+            // map, not the placement: what the press grabs is found where it is drawn. The pull
+            // still follows the pointer through the placement, as the reference's does.
+            let drawn = place
+                .filter(|m| photocraft_algo::smart_perspective::capped_map(m, custom.to_mesh(1, 1).control_bounds()).is_some())
+                .and_then(|m| photocraft_algo::warp::warp_in_document(&custom, &photocraft_algo::transform::Homography(m)));
+            let (grid, at, tol, unit) = match &drawn {
+                Some(d) => (d, doc_point, doc_tol, 1.0),
+                None => (&custom, [x, y], tol, unit),
+            };
+            pv.warp_drag = warp_hit(grid, at, tol).map(|index| WarpDrag::Point { index, start: [x, y], pts0: pts0.clone() }).or_else(|| {
+                let (s, t) = surface_at(grid.mesh.as_ref()?, at, unit)?;
                 Some(WarpDrag::Surface { s, t, start: [x, y], pts0 })
             });
             if pv.warp_drag.is_some() {

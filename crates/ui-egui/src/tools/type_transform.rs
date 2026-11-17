@@ -145,6 +145,7 @@ pub(crate) fn frame(app: &mut PhotocraftApp) -> Option<TransformSession> {
         warp_entry: None,
         warp_box: None,
         warp_origin: None,
+        warp_squeeze: None,
         layers: Vec::new(),
     })
 }

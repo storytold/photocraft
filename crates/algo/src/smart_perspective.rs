@@ -495,8 +495,6 @@ fn transposed_surface(s: &Surface, r: Rect) -> Option<(Surface, Rect)> {
     Some((out, tr))
 }
 
-/// A general quad (see the module docs): two one-way stages through a stretched intermediate.
-/// `h` is normalised and measured from `bounds`' corner.
 /// Whether the mirrored plan (vertical stage first) draws the quad: its intermediate is smaller,
 /// compared strictly, as the reference application compares them. Two orders whose intermediates
 /// are the same size but for the last bits go by those bits (its Distort of 302 x 202 to
@@ -506,6 +504,12 @@ fn vertical_first(normal: &Plan, mirrored: &Plan) -> bool {
     mirrored.area < normal.area
 }
 
+/// A general quad (see the module docs): two one-way stages through a stretched intermediate.
+/// `h` is normalised and measured from `bounds`' corner. Each stage is drawn as a one-way
+/// perspective, capped at [`MAX_RATIO`] on its own: measured on the reference's renders of Distort
+/// quads past the cap, capping both stages came closest (a quad whose first stage converges to
+/// 1/14 matched to one pixel; without the cap 7 200 pixels were off). Quads converging hard both
+/// ways still differ: the reference flattens them further than this.
 fn cascade(src: &Surface, bounds: Rect, h: &[f64; 9], clear: bool) -> Option<Surface> {
     let (w, hgt) = (f64::from(bounds.width()), f64::from(bounds.height()));
     let normal = plan(h, w, hgt);

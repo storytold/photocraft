@@ -125,7 +125,7 @@ pub fn draw_content(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
             t.rect,
             w,
             carried.as_ref(),
-            &|p| t.warp_to_doc(p),
+            &t.warp_map(),
             t.interpolation == "nearest",
             texels(t.warp_place.is_some(), t.rect),
             pv,
@@ -731,8 +731,9 @@ fn draw_warp_content(
 /// The warp grid, its control points and split guides ([`draw_overlay`] for a warp).
 fn draw_warp_overlay(painter: &egui::Painter, xf: &ViewXform, t: &TransformSession, w: &Warp, pv: &TransformPreview, guide: Option<(SplitTool, [f64; 2])>) {
     // The grid's points are in the warp's space; a smart object's show through its placement.
+    let to_doc = t.warp_map();
     let scr = |q: [f64; 2]| {
-        let q = t.warp_to_doc(q);
+        let q = to_doc(q);
         xf.to_screen(q[0] as f32, q[1] as f32)
     };
     let m = w.to_mesh(1, 1);

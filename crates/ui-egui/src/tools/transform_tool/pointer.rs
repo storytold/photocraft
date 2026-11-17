@@ -427,7 +427,7 @@ pub fn cursor(app: &PhotocraftApp, xf: &ViewXform, p: [f64; 2], mods: egui::Modi
             let m = w.to_mesh(1, 1);
             let at = m.param_at(p);
             let tool = armed.unwrap_or_else(|| quick_split_kind(&m, w.bounds, at, t.warp_unit(p)));
-            return Some(split_cursor(&m, tool, at, xf, &|q| t.warp_to_doc(q)));
+            return Some(split_cursor(&m, tool, at, xf, &t.warp_map()));
         }
         if w.style != WarpStyle::Custom || warp_hit(w, p, tol).is_some() {
             return Some(CursorIcon::Crosshair);

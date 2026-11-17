@@ -173,6 +173,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
             warp_entry: None,
             warp_box: None,
             warp_origin: None,
+            warp_squeeze: None,
             layers: Vec::new(),
         });
         start_steps(app);
@@ -428,6 +429,7 @@ fn begin_several(app: &mut PhotocraftApp, ctx: &egui::Context, doc: Arc<Document
         warp_entry: None,
         warp_box: None,
         warp_origin: None,
+        warp_squeeze: None,
         layers: ids.iter().map(|id| id.0).collect(),
     });
     start_steps(app);
@@ -598,6 +600,7 @@ pub(crate) fn begin_content_aware(
         warp_entry: None,
         warp_box: None,
         warp_origin: None,
+        warp_squeeze: None,
         layers: Vec::new(),
     });
     start_steps(app);
@@ -737,6 +740,7 @@ fn begin_lone(
         warp_entry: None,
         warp_box: None,
         warp_origin: None,
+        warp_squeeze: None,
         layers: Vec::new(),
     });
     start_steps(app);
@@ -803,6 +807,7 @@ fn begin_path(app: &mut PhotocraftApp, ctx: &egui::Context, params: serde_json::
         warp_entry: None,
         warp_box: None,
         warp_origin: None,
+        warp_squeeze: None,
         layers: Vec::new(),
     });
     start_steps(app);
@@ -901,6 +906,7 @@ pub fn begin_selection(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(
         warp_entry: None,
         warp_box: None,
         warp_origin: None,
+        warp_squeeze: None,
         layers: Vec::new(),
     });
     start_steps(app);
@@ -1014,11 +1020,16 @@ pub fn enter_warp(app: &mut PhotocraftApp, ctx: &egui::Context) {
         Some((w, place, contents))
     });
     if let Some((stored, origin, contents)) = existing {
-        let place = moved.map_or(origin, |h| h.mul(&origin));
         let Some(t) = app.ui.transform.as_mut() else { return };
-        // Back from another mode with a warp held: carry on with it.
+        // Back from another mode with a warp held: carry on with it, and with any squeeze its pull
+        // made of the placement; else none.
         t.held_place = None;
         let held = t.held_warp.take();
+        if held.is_none() {
+            t.warp_squeeze = None;
+        }
+        let squeezed = t.warp_squeeze.map_or(origin, |sq| origin.mul(&photocraft_algo::transform::Homography(sq)));
+        let place = moved.map_or(squeezed, |h| h.mul(&squeezed));
         let w = held.clone().unwrap_or_else(|| stored.clone());
         if let (Some(pv), Some((contents, k))) = (app.transform_preview.as_mut(), contents) {
             let max_side = ctx.input(|i| i.max_texture_side).max(app.gpu.as_ref().map_or(1, |g| g.max_texture_side()));
@@ -1280,7 +1291,12 @@ pub fn leave_warp(app: &mut PhotocraftApp) {
             if let Some(b) = &warp_box {
                 restore(t, b);
             }
-            t.held_place = Some(origin.as_ref().map_or(place, |(_, p)| *p));
+            // With any squeeze a pull towards the viewer made (applied first, in the warp's space).
+            let held = origin.as_ref().map_or(place, |(_, p)| *p);
+            t.held_place = Some(match t.warp_squeeze {
+                Some(sq) => photocraft_algo::transform::Homography(held).mul(&photocraft_algo::transform::Homography(sq)).0,
+                None => held,
+            });
             t.held_warp = Some(w);
             // Kept: the commit and the selection outline still go from what Warp opened on.
             t.warp_origin = origin;

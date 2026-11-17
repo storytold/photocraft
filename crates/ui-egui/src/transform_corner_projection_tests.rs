@@ -32,6 +32,7 @@ fn session(deg: f64) -> TransformSession {
         warp_entry: None,
         warp_box: None,
         warp_origin: None,
+        warp_squeeze: None,
         layers: Vec::new(),
     }
 }

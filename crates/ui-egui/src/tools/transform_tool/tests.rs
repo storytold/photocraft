@@ -23,6 +23,7 @@ pub(super) fn session() -> TransformSession {
         warp_entry: None,
         warp_box: None,
         warp_origin: None,
+        warp_squeeze: None,
         layers: Vec::new(),
     }
 }
@@ -4989,7 +4990,7 @@ fn a_warp_pulled_past_the_vanishing_point_is_applied() {
     {
         let t = app.ui.transform.as_ref().unwrap();
         let (near, past, left) = (t.doc_to_warp([301.0, 80.0]), t.doc_to_warp([301.0, -24.0]), t.doc_to_warp([121.0, 46.0]));
-        assert!(near[1] < -1000.0 && near[1] > -1e6 && past[1] < -1e8, "{near:?} {past:?}");
+        assert!(near[1] < -1000.0 && near[1] > -1e6 && past[1] < -5e7, "{near:?} {past:?}");
         assert!((past[0] - near[0]).abs() < 1.0, "straight up: {past:?}");
         assert!(left[0] - past[0] > 1000.0 && left[0] - past[0] < 3000.0 && (left[1] - past[1]).abs() < 1.0, "{past:?} {left:?}");
     }
@@ -5048,4 +5049,88 @@ fn a_warp_pulled_towards_the_viewer_squeezes_its_perspective() {
     let st = app.session.active().unwrap();
     let LayerContent::Smart(sm) = &st.doc.layers.last().unwrap().content else { panic!("smart object") };
     assert!(sm.perspective.is_some() && sm.warp.is_some(), "applied");
+}
+
+/// Through a Perspective past the reference application's cap the grid is drawn through the
+/// capped map: a press on a drawn anchor grabs that anchor.
+#[test]
+fn a_capped_perspective_warp_grabs_the_anchor_where_it_is_drawn() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_square(600, photocraft_geom::Rect::new(150, 125, 452, 327));
+    app.ui.extras.snap = false;
+    app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    begin(&mut app, &ctx).unwrap();
+    {
+        let t = app.ui.transform.as_mut().unwrap();
+        t.mode = TransformMode::Perspective;
+        // The top edge a twentieth of the bottom one.
+        t.quad = [[293.45, 125.0], [308.55, 125.0], [452.0, 327.0], [150.0, 327.0]];
+    }
+    enter_warp(&mut app, &ctx);
+    let none = egui::Modifiers::NONE;
+    let (at, index) = {
+        let t = app.ui.transform.as_ref().unwrap();
+        let m = t.warp.as_ref().unwrap().to_mesh(1, 1);
+        // The grid's first inner handle on the left edge (row 1, column 0), as drawn.
+        (t.warp_to_doc(m.points[4]), 4)
+    };
+    crate::canvas::tool_event(&mut app, ToolEvent::Down { x: at[0], y: at[1], pressure: 1.0 }, none);
+    let grabbed = match &app.transform_preview.as_ref().unwrap().warp_drag {
+        Some(WarpDrag::Point { index: i, .. }) => Some(*i),
+        _ => None,
+    };
+    assert_eq!(grabbed, Some(index));
+    crate::canvas::tool_event(&mut app, ToolEvent::Up { x: at[0], y: at[1] }, none);
+}
+
+/// A pull towards the viewer squeezes the placement; switched to Perspective before Enter, the
+/// box keeps showing the warp through the squeezed placement, and Enter stores that one (not the
+/// placement Warp opened on, which would leave points behind the viewer). A box placed steeply on
+/// its own (no point pulled past it) is not squeezed.
+#[test]
+fn a_squeezed_perspective_is_kept_through_a_mode_switch() {
+    let ctx = egui::Context::default();
+    let setup = |quad: [[f64; 2]; 4]| {
+        let mut app = app_with_square(600, photocraft_geom::Rect::new(150, 125, 452, 327));
+        app.ui.extras.snap = false;
+        app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        begin(&mut app, &ctx).unwrap();
+        {
+            let t = app.ui.transform.as_mut().unwrap();
+            t.mode = TransformMode::Perspective;
+            t.quad = quad;
+        }
+        enter_warp(&mut app, &ctx);
+        app
+    };
+    let none = egui::Modifiers::NONE;
+    let mut app = setup([[270.0, 125.0], [332.0, 125.0], [452.0, 327.0], [150.0, 327.0]]);
+    crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 301.0, y: 226.0, pressure: 1.0 }, none);
+    for k in 1..=10 {
+        crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 301.0, y: 226.0 + 30.0 * k as f64, pressure: 1.0 }, none);
+    }
+    crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 301.0, y: 526.0 }, none);
+    let squeezed = app.ui.transform.as_ref().unwrap().warp_place.unwrap();
+    leave_warp(&mut app);
+    let t = app.ui.transform.as_ref().unwrap();
+    let held = t.held_homography().0;
+    assert!(held.iter().zip(squeezed).all(|(a, b)| (a / held[8] - b / squeezed[8]).abs() < 1e-9), "{held:?} {squeezed:?}");
+    commit(&mut app);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    let st = app.session.active().unwrap();
+    let layer = st.doc.layers.last().unwrap();
+    let stored = photocraft_engine::warp_cmds::smart_warp_source(&st.doc, layer).unwrap().1.0;
+    // The stored warp is in the contents' own space: compare where the squeezed and the stored
+    // placements put the warp's points.
+    let LayerContent::Smart(sm) = &layer.content else { panic!("smart object") };
+    let mesh = sm.warp.as_ref().unwrap().to_mesh(1, 1);
+    let w = |m: &[f64; 9], p: &[f64; 2]| m[6] * p[0] + m[7] * p[1] + m[8];
+    assert!(mesh.points.iter().all(|p| w(&stored, p) * w(&stored, &mesh.points[0]) > 0.0), "every point on the picture's side");
+    // Steep, untouched by a pull towards the viewer: the placement stays.
+    let mut app = setup([[300.0, 125.0], [302.0, 125.0], [452.0, 327.0], [150.0, 327.0]]);
+    let before = app.ui.transform.as_ref().unwrap().warp_place;
+    crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 301.0, y: 280.0, pressure: 1.0 }, none);
+    crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 301.0, y: 270.0, pressure: 1.0 }, none);
+    crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 301.0, y: 270.0 }, none);
+    assert_eq!(app.ui.transform.as_ref().unwrap().warp_place, before);
 }

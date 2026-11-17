@@ -207,9 +207,7 @@ pub fn warp_in_document(w: &photocraft_geom::warp::Warp, h: &crate::transform::H
     }
     // Converging past the reference's cap over the control points' box, they are carried through
     // its capped map ([`crate::smart_perspective::capped_map`]).
-    let inf = f64::INFINITY;
-    let b = mesh.points.iter().fold([inf, inf, -inf, -inf], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
-    let capped = crate::smart_perspective::capped_map(m, b);
+    let capped = crate::smart_perspective::capped_map(m, mesh.control_bounds());
     let doc = mesh.map_points(|p| {
         let (x, y) = match &capped {
             Some(c) => c(p[0], p[1]),

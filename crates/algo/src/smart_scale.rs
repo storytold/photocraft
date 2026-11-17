@@ -250,7 +250,7 @@ pub fn scale_at(src: &Surface, bounds: Rect, width: u32, height: u32, origin: (i
         });
     }
     // The rows are filtered as they are written: no image of the full size in between.
-    let (mid, _, a, stretch) = prepared(&img, ny, depth, true);
+    let (mid, a, stretch) = prepared(&img, ny, depth, true);
     let along_y = along_y.read(h, mid.as_ref().map_or(h, |m| m.h));
     let img = mid.unwrap_or(img);
     let taps: Vec<Taps> = (0..ny).map(|o| taps(o, img.h, a, stretch, along_y)).collect();
@@ -264,7 +264,7 @@ pub fn scale_at(src: &Surface, bounds: Rect, width: u32, height: u32, origin: (i
 /// One axis resized to `len` samples (`vertical`: the rows), with the Automatic filter for its
 /// scale, through the averaged image below ¼.
 fn axis(img: &Image, len: usize, depth: Depth, vertical: bool, exact: Exact) -> Image {
-    let (mid, _, a, stretch) = prepared(img, len, depth, vertical);
+    let (mid, a, stretch) = prepared(img, len, depth, vertical);
     let have = |i: &Image| if vertical { i.h } else { i.w };
     let exact = exact.read(have(img), mid.as_ref().map_or(have(img), have));
     pass(mid.as_ref().unwrap_or(img), len, a, stretch, depth, vertical, exact)
@@ -286,16 +286,16 @@ impl Exact {
 }
 
 /// What an axis's filtering pass to `len` samples works with: the averaged image it reads (below
-/// ¼; otherwise it reads `img` itself), then its scale, Keys parameter and stretch.
-fn prepared(img: &Image, len: usize, depth: Depth, vertical: bool) -> (Option<Image>, f64, f64, f64) {
+/// ¼; otherwise it reads `img` itself), then the Keys parameter and stretch for its scale.
+fn prepared(img: &Image, len: usize, depth: Depth, vertical: bool) -> (Option<Image>, f64, f64) {
     let have = if vertical { img.h } else { img.w };
     let k = len as f64 / have as f64;
     if k < 0.25 {
         let (a, stretch) = automatic(0.25);
-        (Some(average(img, 4 * len, depth, vertical)), len as f64 / (4 * len) as f64, a, stretch)
+        (Some(average(img, 4 * len, depth, vertical)), a, stretch)
     } else {
         let (a, stretch) = automatic(k);
-        (None, k, a, stretch)
+        (None, a, stretch)
     }
 }
 
@@ -327,8 +327,7 @@ struct Taps {
     q: Vec<i64>,
 }
 
-/// The taps of output sample `o` of `have` source samples at scale `k`.
-/// Output sample `o`'s taps: it reads the source at `(o + ½ − phase)/scale − ½` (the exact
+/// Output sample `o`'s taps over `have` source samples: it reads the source at `(o + ½ − phase)/scale − ½` (the exact
 /// placement; the filter for the snapped scale sets only the kernel, `a` and `stretch`).
 fn taps(o: usize, have: usize, a: f64, stretch: f64, exact: Exact) -> Taps {
     let last = have.saturating_sub(1) as f64;
@@ -353,7 +352,8 @@ fn taps(o: usize, have: usize, a: f64, stretch: f64, exact: Exact) -> Taps {
     Taps { start: lo, q }
 }
 
-/// One filtering pass along an axis to `len` samples at scale `k` (rule 3 of the module).
+/// One filtering pass along an axis to `len` samples at the placement `exact` (rule 3 of the
+/// module).
 fn pass(img: &Image, len: usize, a: f64, stretch: f64, depth: Depth, vertical: bool, exact: Exact) -> Image {
     let have = if vertical { img.h } else { img.w };
     let n = img.n;

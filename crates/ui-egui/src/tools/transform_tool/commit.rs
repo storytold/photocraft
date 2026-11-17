@@ -101,7 +101,7 @@ pub fn commit(app: &mut PhotocraftApp) {
                 let mut p = json!({"layer": t.layer, "contents": true, "warp": hw});
                 // An untouched box keeps the placement exactly (the box's move would be the
                 // identity only to rounding).
-                if t.quad != t.start_quad() {
+                if t.quad != t.start_quad() || t.warp_squeeze.is_some() {
                     p["placement"] = json!(t.box_move().mul(&place).0);
                 }
                 app.run("edit.transform.warp", p)
