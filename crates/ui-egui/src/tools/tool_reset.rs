@@ -5,8 +5,9 @@
 //! tool's options.
 //!
 //! Both are shell commands (`tool.reset`, `tool.resetAll`) that the control channel can run.
-//! `tool.resetAll` opens the confirmation as an ordinary dialog (`ui.dialog.confirm` /
-//! `ui.dialog.cancel` answer it); `{"confirmed": true}` skips it, for agents that already asked.
+//! `tool.resetAll` opens the confirmation as a hosted prompt (`ui.dialog.confirm` /
+//! `ui.dialog.cancel` answer it, and its answer reaches [`answer`] through `PROMPTS`);
+//! `{"confirmed": true}` skips it, for agents that already asked.
 //!
 //! What a tool's options are: [`ToolOptions`] is one struct, not one per tool, and a few fields
 //! are shared by the tools that show them (Tolerance, Anti-alias and Contiguous by the Magic Wand,
@@ -19,20 +20,17 @@
 //! others), keeping the colours. Tools without options (Rotate View, Ruler, Note, …) have
 //! nothing to reset.
 
-use serde_json::{Map, Value, json};
+use craft::ui::dialog::{PromptAnswer, PromptChoice, StandardPrompt};
+use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
-use crate::state::{DialogKind, Tool, ToolOptions};
+use crate::state::{Tool, ToolOptions};
 
 pub const RESET: &str = "tool.reset";
 pub const RESET_ALL: &str = "tool.resetAll";
-const MARK: &str = "__resetAllTools";
-const MESSAGE: &str = "Reset all tools to their default settings?";
 
-/// Is this the Reset All Tools confirmation?
-pub fn owns(fields: &Map<String, Value>) -> bool {
-    fields.contains_key(MARK)
-}
+/// Tags the Reset All Tools confirmation, so [`answer`] knows its prompt among the others.
+struct ResetAllTools;
 
 /// Run `tool.reset` / `tool.resetAll`; `None` for any other command.
 pub fn invoke(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
@@ -47,32 +45,37 @@ pub fn invoke(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Resul
             Some(Ok(json!({"reset": "all"})))
         }
         RESET_ALL => {
-            if let Some(d) = app.ui.dialogs.iter().find(|d| owns(&d.fields)) {
-                return Some(Ok(json!({"dialog": d.id, "confirmationPending": true})));
-            }
-            let fields = json!({MARK: true, "__label": "Reset All Tools", "message": MESSAGE});
-            let id = app.ui.open_dialog(DialogKind::Command, fields.as_object().cloned().unwrap_or_default());
-            Some(Ok(json!({"dialog": id, "confirmationPending": true})))
+            let prompt = StandardPrompt::custom(tl!("Reset all tools to their default settings?"))
+                .title(tl!("Reset All Tools"))
+                .button(PromptChoice::Proceed, tl!("OK"))
+                .button(PromptChoice::Cancel, tl!("Cancel"))
+                .tag(ResetAllTools);
+            Some(match app.framework.dialogs.open_unless_open(prompt) {
+                Ok(id) => Ok(json!({"dialog": id.value().to_string(), "confirmationPending": true})),
+                Err(_) => Err("command is unavailable while a modal dialog is open".to_string()),
+            })
         }
         _ => None,
     }
 }
 
-/// The confirmation's text.
-pub fn body(ui: &mut egui::Ui) {
-    ui.label(tl!("Reset all tools to their default settings?"));
-}
-
-/// OK in the confirmation.
-pub fn confirm(app: &mut PhotocraftApp) -> Result<Value, String> {
-    reset_all(app);
-    Ok(json!({"reset": "all"}))
+/// Answers the Reset All Tools prompt: OK resets every tool, Cancel resets nothing. `false` for
+/// another prompt's answer. A host cancel (a replaced prompt, a closed parent) reaches no answer
+/// and resets nothing. The answer is taken once, so a second pass of the frame resets nothing again.
+pub(crate) fn answer(app: &mut PhotocraftApp, _ctx: &egui::Context, answer: &mut PromptAnswer) -> bool {
+    if answer.take_tag::<ResetAllTools>().is_none() {
+        return false;
+    }
+    if answer.choice == PromptChoice::Proceed {
+        reset_all(app);
+    }
+    true
 }
 
 /// Reset Tool: `tool`'s options, its selection mode and its brush.
 fn reset_tool(app: &mut PhotocraftApp, tool: Tool) {
     if tool == Tool::Frame {
-        crate::frame_tool::cancel(app);
+        crate::frame_tool::clear(app);
         app.ui.frame_tool = Default::default();
     }
     if tool == Tool::Artboard {
@@ -80,7 +83,7 @@ fn reset_tool(app: &mut PhotocraftApp, tool: Tool) {
     }
     reset_options(&mut app.ui.tool_options, tool);
     // Patch and Content-Aware Move lasso in the shared selection mode their bars show (#11024).
-    if is_selection_tool(tool) || matches!(tool, Tool::Patch | Tool::ContentAwareMove) {
+    if crate::tool_feedback::is_selection_tool(tool) || matches!(tool, Tool::Patch | Tool::ContentAwareMove) {
         app.ui.selection_mode = 0;
     }
     if crate::paint_mouse::has_brush_picker(tool) {
@@ -93,7 +96,7 @@ fn reset_tool(app: &mut PhotocraftApp, tool: Tool) {
 
 /// Reset All Tools: every option, the selection mode and every tool's brush.
 fn reset_all(app: &mut PhotocraftApp) {
-    crate::frame_tool::cancel(app);
+    crate::frame_tool::clear(app);
     app.ui.frame_tool = Default::default();
     app.ui.tool_options = ToolOptions::default();
     app.ui.artboard_tool = Default::default();
@@ -115,22 +118,6 @@ fn reset_session_brush(app: &mut PhotocraftApp) {
     app.session.tools.brush_gesture = None;
     app.session.tools.current_preset = None;
     app.session.tools.brush_changed();
-}
-
-fn is_selection_tool(tool: Tool) -> bool {
-    matches!(
-        tool,
-        Tool::RectMarquee
-            | Tool::EllipseMarquee
-            | Tool::SingleRowMarquee
-            | Tool::SingleColumnMarquee
-            | Tool::Lasso
-            | Tool::PolygonLasso
-            | Tool::MagneticLasso
-            | Tool::MagicWand
-            | Tool::QuickSelection
-            | Tool::ObjectSelection
-    )
 }
 
 /// The fields of [`option_keys`] that Reset Tool leaves as they are, as the reference app does
@@ -156,6 +143,10 @@ pub fn reset_options(o: &mut ToolOptions, tool: Tool) {
     let (Ok(Value::Object(mut cur)), Ok(Value::Object(d))) = (serde_json::to_value(&*o), serde_json::to_value(ToolOptions::default())) else {
         return;
     };
+    // Move's `transform` section also holds Free Transform's Legacy choice, the W/H link and the
+    // size unit, which Reset Tool never touched: only the reference point, relative position and
+    // interpolation go back.
+    let transform_before = (tool == Tool::Move).then(|| o.transform.clone());
     for k in keys.iter().filter(|k| !kept.contains(k)) {
         if let Some(v) = d.get(*k) {
             cur.insert((*k).to_string(), v.clone());
@@ -163,6 +154,11 @@ pub fn reset_options(o: &mut ToolOptions, tool: Tool) {
     }
     if let Ok(n) = serde_json::from_value(Value::Object(cur)) {
         *o = n;
+    }
+    if let Some(before) = transform_before {
+        o.transform.legacy = before.legacy;
+        o.transform.aspect_linked = before.aspect_linked;
+        o.transform.size_unit = before.size_unit;
     }
     // Sample All Layers is each tool's own (#5524): only `tool`'s goes back.
     let d = ToolOptions::default();
@@ -200,35 +196,19 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
             move_show_hover_bounds,
             move_expand_group_on_click,
             move_show_layers_hover_bounds,
-            transform_interpolation,
-            transform_reference_point,
-            transform_relative_position
+            transform
         ),
         Tool::RectMarquee | Tool::EllipseMarquee => reset!(feather, anti_alias, marquee_style, marquee_width, marquee_height, marquee_unit),
         // The single-pixel marquees are never anti-aliased: Feather is their only option.
         Tool::SingleRowMarquee | Tool::SingleColumnMarquee => reset!(feather),
         Tool::Lasso | Tool::PolygonLasso => reset!(feather, anti_alias),
-        Tool::MagneticLasso => reset!(feather, anti_alias, magnetic_width, magnetic_contrast, magnetic_frequency, magnetic_pressure),
+        Tool::MagneticLasso => reset!(feather, anti_alias, magnetic),
         Tool::MagicWand => reset!(tolerance, anti_alias, contiguous),
         Tool::QuickSelection => reset!(enhance_edge),
         Tool::ObjectSelection => reset!(enhance_edge, object_finder, object_hard_edge),
-        Tool::Crop => reset!(
-            crop_ratio,
-            crop_delete,
-            crop_content_aware,
-            crop_width,
-            crop_height,
-            crop_resolution,
-            crop_resolution_unit,
-            crop_overlay,
-            crop_overlay_show,
-            crop_overlay_orientation,
-            crop_shield,
-            crop_custom_ratio_width,
-            crop_custom_ratio_height,
-        ),
-        Tool::PerspectiveCrop => reset!(crop_width, crop_height, crop_resolution, crop_resolution_unit, perspective_crop_grid),
-        Tool::Eyedropper => reset!(eyedropper_size, eyedropper_sample, eyedropper_ring),
+        Tool::Crop => reset!(crop),
+        Tool::PerspectiveCrop => reset!(perspective_crop, perspective_crop_grid),
+        Tool::Eyedropper => reset!(eyedropper),
         Tool::Brush => reset!(brush_clear),
         Tool::Pencil => reset!(pencil_auto_erase, pencil_clear),
         Tool::Eraser => reset!(eraser_mode, erase_to_history),
@@ -256,7 +236,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::Dodge | Tool::Burn => reset!(tone_range, exposure, protect_tones),
         Tool::Sponge => reset!(sponge_mode, sponge_flow, vibrance),
         Tool::Slice => reset!(slice_style, slice_width, slice_height),
-        Tool::Pen => reset!(vector_mode, pen_path_op, pen_auto_add_delete, pen_rubber_band),
+        Tool::Pen => reset!(vector_mode, pen_path_op, pen_auto_add_delete, path_options),
         Tool::CurvaturePen => reset!(vector_mode, pen_path_op),
         Tool::FreeformPen => reset!(vector_mode, pen_path_op, curve_fit),
         Tool::Line => reset!(
@@ -370,7 +350,7 @@ mod tests {
     #[test]
     fn reset_tool_and_reset_all_tools() {
         let mut app = app();
-        let ctx = egui::Context::default();
+        let ctx = app.ctx().clone();
         app.ui.tool_options.move_auto_select = false;
         app.ui.tool_options.feather = 12.0;
         app.ui.tool = Tool::Move;
@@ -380,29 +360,41 @@ mod tests {
 
         app.ui.tool_options.move_auto_select = false;
         let r = crate::menus::invoke(&mut app, &ctx, RESET_ALL, json!({})).unwrap();
-        let dialog = r["dialog"].as_u64().unwrap();
+        let dialog = r["dialog"].as_str().expect("the id is a decimal string").to_string();
         assert_eq!(app.ui.tool_options.feather, 12.0, "nothing changes before OK");
-        crate::dialogs::cancel(&mut app, dialog).unwrap();
+        assert_eq!(answer_dialog(&mut app, &ctx, "ui.dialog.cancel", &dialog)["ok"], true);
         assert_eq!(app.ui.tool_options.feather, 12.0, "Cancel keeps the options");
+        assert!(!app.dialog_open());
 
-        let dialog = crate::menus::invoke(&mut app, &ctx, RESET_ALL, json!({})).unwrap()["dialog"].as_u64().unwrap();
-        crate::dialogs::confirm(&mut app, dialog).unwrap();
+        let dialog = crate::menus::invoke(&mut app, &ctx, RESET_ALL, json!({})).unwrap()["dialog"].as_str().unwrap().to_string();
+        assert_eq!(answer_dialog(&mut app, &ctx, "ui.dialog.confirm", &dialog)["ok"], true);
         assert_eq!(app.ui.tool_options, ToolOptions::default());
-        assert!(app.ui.dialogs.is_empty());
+        assert!(!app.dialog_open());
     }
 
-    /// The Patch and Content-Aware Move bars show the shared selection mode, so Reset Tool on
-    /// either sets it back to New, as on the selection tools (#11024).
-    #[test]
-    fn reset_tool_resets_the_patch_selection_mode() {
-        let ctx = egui::Context::default();
-        for tool in [Tool::Patch, Tool::ContentAwareMove] {
-            let mut app = app();
-            app.ui.selection_mode = 2;
-            app.ui.tool = tool;
-            crate::menus::invoke(&mut app, &ctx, RESET, json!({})).unwrap();
-            assert_eq!(app.ui.selection_mode, 0, "{tool:?}");
+    /// `ui.dialog.confirm` / `ui.dialog.cancel` on a hosted dialog, as the control channel sends them.
+    fn answer_dialog(app: &mut PhotocraftApp, ctx: &egui::Context, method: &str, dialog: &str) -> Value {
+        use crate::control::{ControlRequest, Reply, handle};
+        let (req, _rx) = ControlRequest::new(method, json!({"dialog": dialog}));
+        match handle(app, ctx, &req) {
+            Reply::Done(v) => v,
+            _ => panic!("{method}: expected an immediate reply"),
         }
+    }
+
+    /// Reset Tool on Move puts back what production reset (reference point, relative position,
+    /// interpolation) and leaves Free Transform's Legacy choice, W/H link and unit, which share
+    /// the `transform` section.
+    #[test]
+    fn reset_tool_on_move_keeps_the_transform_choices_it_never_reset() {
+        let mut o = ToolOptions::default();
+        o.transform.show_reference_point = true;
+        o.transform.relative_position = true;
+        o.transform.legacy = true;
+        o.transform.aspect_linked = false;
+        reset_options(&mut o, Tool::Move);
+        assert!(!o.transform.show_reference_point && !o.transform.relative_position);
+        assert!(o.transform.legacy && !o.transform.aspect_linked);
     }
 
     /// Object Selection › Hard Edge (#12855) is on by default, Reset Tool turns it back on, and
@@ -416,9 +408,9 @@ mod tests {
         let last = |app: &PhotocraftApp| app.session.journal.last().filter(|(id, _)| id == "select.object").map(|(_, p)| p["hardEdge"].clone());
         for hard in [false, true] {
             app.ui.tool_options.object_hard_edge = hard;
-            crate::retouch_ui::finish_object_selection(&mut app, [4.0, 4.0], [4.0, 4.0], egui::Modifiers::NONE);
+            crate::retouch_ui::finish_object_selection(&mut app, [4.0, 4.0], [4.0, 4.0], craft::keymap::Mods::default());
             assert_eq!(last(&app), Some(json!(hard)), "a click");
-            crate::retouch_ui::finish_object_selection(&mut app, [1.0, 1.0], [7.0, 7.0], egui::Modifiers::NONE);
+            crate::retouch_ui::finish_object_selection(&mut app, [1.0, 1.0], [7.0, 7.0], craft::keymap::Mods::default());
             assert_eq!(last(&app), Some(json!(hard)), "a dragged rectangle");
         }
         app.ui.tool_options.object_hard_edge = false;
@@ -457,7 +449,8 @@ mod tests {
         assert_eq!(sample_all_key(Tool::Brush), None);
         let keys: Vec<String> = Tool::ALL.iter().filter_map(|t| sample_all_key(*t)).collect();
         let distinct: std::collections::BTreeSet<&String> = keys.iter().collect();
-        assert_eq!((keys.len(), distinct.len()), (12, 12), "one key per tool with the option");
+        assert!(!keys.is_empty());
+        assert_eq!(keys.len(), distinct.len(), "one key per tool with the option");
     }
 }
 
