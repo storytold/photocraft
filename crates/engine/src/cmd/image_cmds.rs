@@ -1191,6 +1191,53 @@ pub(crate) fn change_depth(doc: &mut Document, depth: SampleType) {
     doc.depth = depth;
 }
 
+/// `name` without a file extension: `dupspec.psd` gives `dupspec`. Only a short alphanumeric tail
+/// with a letter counts as an extension, so `v1.2` or `Shot 2026.11.17` keep their dots.
+fn without_extension(name: &str) -> &str {
+    match name.rsplit_once('.') {
+        Some((stem, ext))
+            if !stem.is_empty()
+                && (1..=8).contains(&ext.len())
+                && ext.chars().all(|c| c.is_ascii_alphanumeric())
+                && ext.chars().any(|c| c.is_ascii_alphabetic()) =>
+        {
+            stem
+        }
+        _ => name,
+    }
+}
+
+/// The name Image › Duplicate gives a copy when none is given, as the reference application does
+/// (#14590): the source's name without its extension plus " copy", then " copy 2", " copy 3"...
+/// taking the lowest number no open document has. A source that is already a copy counts on from
+/// its own number: `X copy` gives `X copy 2`, `Bar copy 7` gives `Bar copy 8`.
+fn default_duplicate_name(s: &Session, source: &str) -> String {
+    let base = without_extension(source);
+    let (root, first) = match base.rsplit_once(" copy") {
+        Some((root, "")) if !root.is_empty() => (root, 2u64),
+        Some((root, n)) if !root.is_empty() => {
+            match n.strip_prefix(' ').filter(|n| n.bytes().all(|b| b.is_ascii_digit())).and_then(|n| n.parse::<u64>().ok()) {
+                Some(n) if n >= 2 => (root, n.saturating_add(1)),
+                _ => (base, 1),
+            }
+        }
+        _ => (base, 1),
+    };
+    let candidate = |n: u64| if n <= 1 { format!("{root} copy") } else { format!("{root} copy {n}") };
+    let taken = |name: &str| s.documents().iter().any(|d| d.doc.name == name || without_extension(&d.doc.name) == name) || s.held_open_named(name);
+    // Each open document takes at most one candidate, so a free one comes within `documents + 1`
+    // tries; the slack covers documents held back for a prompt.
+    let mut n = first;
+    for _ in 0..=s.documents().len().saturating_add(1024) {
+        let name = candidate(n);
+        if !taken(&name) {
+            return name;
+        }
+        n = n.saturating_add(1);
+    }
+    candidate(n)
+}
+
 /// Image → Duplicate.
 fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
@@ -1199,7 +1246,9 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     // channels, guides and paths are copied.
     doc.selection = None;
     doc.id = photocraft_doc::DocId::fresh();
-    doc.name = p.get("name").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| format!("{} copy", d.doc.name));
+    // A given name is used verbatim; an omitted or empty one gets the default (#14590).
+    let name = p.get("name").and_then(Value::as_str).filter(|n| !n.is_empty()).map(str::to_string);
+    doc.name = name.unwrap_or_else(|| default_duplicate_name(s, &d.doc.name));
     if p.get("mergedOnly").and_then(Value::as_bool).unwrap_or(false) {
         let buf = flatten_whole(&doc, "image.duplicate")?;
         let fmt = doc.pixel_format();
@@ -1312,6 +1361,10 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 #[path = "image_cmds/duplicate_selection_tests.rs"]
 mod duplicate_selection_tests;
+
+#[cfg(test)]
+#[path = "image_cmds/duplicate_name_tests.rs"]
+mod duplicate_name_tests;
 
 #[cfg(test)]
 mod tests;
