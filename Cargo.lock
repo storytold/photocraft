@@ -1431,6 +1431,7 @@ dependencies = [
 [[package]]
 name = "craft-crw"
 version = "0.1.0"
+source = "git+https://github.com/texjer/craft-libs?rev=25e796b0ff8bc6713d5cec110934789ecf3160e8#25e796b0ff8bc6713d5cec110934789ecf3160e8"
 dependencies = [
  "thiserror 2.0.21",
 ]
@@ -1438,6 +1439,7 @@ dependencies = [
 [[package]]
 name = "craft-develop"
 version = "0.1.0"
+source = "git+https://github.com/texjer/craft-libs?rev=25e796b0ff8bc6713d5cec110934789ecf3160e8#25e796b0ff8bc6713d5cec110934789ecf3160e8"
 dependencies = [
  "craft-develop-model",
  "craft-geom",
@@ -1454,6 +1456,7 @@ dependencies = [
 [[package]]
 name = "craft-develop-model"
 version = "0.1.0"
+source = "git+https://github.com/texjer/craft-libs?rev=25e796b0ff8bc6713d5cec110934789ecf3160e8#25e796b0ff8bc6713d5cec110934789ecf3160e8"
 dependencies = [
  "craft-geom",
  "craft-metadata",
@@ -1475,6 +1478,7 @@ source = "git+https://github.com/storytold/craft-libs?rev=1b34eba41e62138fc2438d
 [[package]]
 name = "craft-geom"
 version = "0.1.0"
+source = "git+https://github.com/texjer/craft-libs?rev=25e796b0ff8bc6713d5cec110934789ecf3160e8#25e796b0ff8bc6713d5cec110934789ecf3160e8"
 dependencies = [
  "serde",
 ]
@@ -1522,6 +1526,7 @@ dependencies = [
 [[package]]
 name = "craft-metadata"
 version = "0.1.0"
+source = "git+https://github.com/texjer/craft-libs?rev=25e796b0ff8bc6713d5cec110934789ecf3160e8#25e796b0ff8bc6713d5cec110934789ecf3160e8"
 dependencies = [
  "brotli-decompressor 6.3.1",
  "chrono",
@@ -1569,6 +1574,7 @@ dependencies = [
 [[package]]
 name = "craft-raw"
 version = "0.1.0"
+source = "git+https://github.com/texjer/craft-libs?rev=25e796b0ff8bc6713d5cec110934789ecf3160e8#25e796b0ff8bc6713d5cec110934789ecf3160e8"
 dependencies = [
  "chrono",
  "craft-crw",
@@ -1586,6 +1592,7 @@ dependencies = [
 [[package]]
 name = "craft-tiff"
 version = "0.1.0"
+source = "git+https://github.com/texjer/craft-libs?rev=25e796b0ff8bc6713d5cec110934789ecf3160e8#25e796b0ff8bc6713d5cec110934789ecf3160e8"
 dependencies = [
  "serde",
  "thiserror 2.0.21",

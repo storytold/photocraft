@@ -98,12 +98,12 @@ wildcard_imports = "deny"
 dbg_macro = "warn"
 todo = "warn"
 
-# Local build only: the develop crates come from a craft-libs checkout until they are released.
+# Until the develop crates are in craft-libs (craft-libs#587), they come from the branch that adds them.
 [patch."https://github.com/storytold/craft-libs"]
-craft-geom = { path = "/Users/texjernigan/Code/artcraft/craft-libs-develop/crates/geom" }
-craft-develop-model = { path = "/Users/texjernigan/Code/artcraft/craft-libs-develop/crates/develop-model" }
-craft-raw = { path = "/Users/texjernigan/Code/artcraft/craft-libs-develop/crates/raw" }
-craft-develop = { path = "/Users/texjernigan/Code/artcraft/craft-libs-develop/crates/develop" }
+craft-geom = { git = "https://github.com/texjer/craft-libs", rev = "25e796b0ff8bc6713d5cec110934789ecf3160e8" }
+craft-develop-model = { git = "https://github.com/texjer/craft-libs", rev = "25e796b0ff8bc6713d5cec110934789ecf3160e8" }
+craft-raw = { git = "https://github.com/texjer/craft-libs", rev = "25e796b0ff8bc6713d5cec110934789ecf3160e8" }
+craft-develop = { git = "https://github.com/texjer/craft-libs", rev = "25e796b0ff8bc6713d5cec110934789ecf3160e8" }
 
 # Dependencies carry no debug info: their frames in a backtrace lose file:line, and the target dir
 # and link times shrink. The test profile inherits both settings.
