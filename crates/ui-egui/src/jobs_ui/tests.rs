@@ -1246,7 +1246,10 @@ fn open_identity_rejects_closed_missing_and_invalid_identities() {
             }
             Some(value) => result["docId"] = value,
         }
-        assert!(super::finish_open(&mut app, "closed.png", Some("closed.png"), None, &result, Some(0), None).is_err(), "invalid identity was accepted: {result}");
+        assert!(
+            super::finish_open(&mut app, "closed.png", Some("closed.png"), None, &result, Some(0), None).is_err(),
+            "invalid identity was accepted: {result}"
+        );
         control.assert_untouched(&app);
         assert_eq!(app.session.active().unwrap().doc.id, control.doc.id);
         assert_eq!(app.session.documents().len(), 1);
