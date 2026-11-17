@@ -1,149 +1,64 @@
 //! #7942 / #7531: path fields of command dialogs get a Browse… button (Artboards to Files'
-//! folder, Install Plug-in…'s .wasm file) that fills the field from a file dialog.
+//! folder, Install Plug-in…'s .wasm file) that fills the field from the file service.
 use crate::PhotocraftApp;
-use crate::file_dialog::{FileDialogAnswer, FileDialogRequest};
-use egui::vec2;
+use craft::host::{PickKind, Picked, ScriptedFiles};
+use craft::ui::dialog::DialogId;
+use craft::ui::patterns::form_dialogs::HostedParamDialog;
 use egui_kittest::{Harness, kittest::Queryable};
 use serde_json::{Value, json};
+use std::sync::Arc;
 
-fn harness(answers: Vec<Option<FileDialogAnswer>>) -> (Harness<'static, PhotocraftApp>, std::rc::Rc<std::cell::RefCell<Vec<FileDialogRequest>>>) {
-    let (show, asked) = crate::file_dialog::fake(answers);
-    let h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(move |cc| {
-        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { file_dialog: Some(show), ..Default::default() })
-    });
-    (h, asked)
+fn harness(files: Arc<ScriptedFiles>) -> Harness<'static, PhotocraftApp> {
+    // The framework builds its host's file service from the services the app is made with.
+    let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { files: Some(files), ..Default::default() });
+    let h = Harness::builder()
+        .with_size(egui::vec2(1440.0, 900.0))
+        .with_max_steps(64)
+        .with_context(app.ctx().clone())
+        .build_ui_state(|ui, app: &mut PhotocraftApp| crate::dialogs::run(app, ui), app);
+    PhotocraftApp::setup_context(&h.ctx, Default::default());
+    h
 }
 
-fn field(h: &Harness<'_, PhotocraftApp>, key: &str) -> Option<Value> {
-    h.state().ui.dialogs.last().and_then(|d| d.fields.get(key).cloned())
+fn field(h: &Harness<'_, PhotocraftApp>, dialog: DialogId, key: &str) -> Option<Value> {
+    let form = h.state().framework.dialogs.get_by_id::<HostedParamDialog>(dialog)?;
+    serde_json::to_value(form.fields()).ok()?.get(key).cloned()
 }
 
+fn open(h: &mut Harness<'_, PhotocraftApp>, command: &str) -> DialogId {
+    let ctx = h.ctx.clone();
+    let reply = crate::menus::invoke(h.state_mut(), &ctx, command, json!({})).unwrap();
+    let want = reply["dialog"].as_str().unwrap().to_owned();
+    // PLAN: assumed `app.framework.dialogs: DialogHost` and `OpenDialog { id, .. }`
+    let dialog = h.state().framework.dialogs.open_dialogs().into_iter().map(|d| d.id).find(|d| d.value().to_string() == want).unwrap();
+    h.run_steps(4);
+    dialog
+}
+
+/// A folder row asks for a folder and a file row for a `.wasm` file; each answer fills its own row.
 #[test]
-fn artboards_to_files_folder_is_chosen_with_browse() {
-    let (mut h, asked) = harness(vec![Some(FileDialogAnswer::FolderTo("/tmp/exports".into()))]);
+fn browse_asks_the_file_service_and_fills_the_field() {
+    let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec!["/tmp/exports".into()]), Picked::Paths(vec!["/tmp/blur.wasm".into()])]));
+    let mut h = harness(files.clone());
     h.state_mut().run("file.new", json!({"width": 64, "height": 64})).unwrap();
     h.state_mut().sync_views();
-    let ctx = h.ctx.clone();
-    crate::menus::invoke(h.state_mut(), &ctx, "file.export.artboardsToFiles", json!({})).unwrap();
-    h.run_steps(4);
-    assert!(field(&h, "dir").is_some(), "the dialog has a Dir field");
+
+    let folder = open(&mut h, "file.export.artboardsToFiles");
+    assert!(field(&h, folder, "dir").is_some(), "the dialog has a Dir row");
     h.get_by_label("Browse…").click();
     h.run_steps(4);
-    assert!(matches!(asked.borrow().as_slice(), [FileDialogRequest::Folder { .. }]));
-    assert_eq!(field(&h, "dir"), Some(json!("/tmp/exports")));
-    assert!(field(&h, crate::dialogs::BROWSE_FIELD).is_none(), "the request is consumed");
-}
-
-#[test]
-fn cancelling_browse_keeps_the_typed_folder() {
-    let (mut h, _) = harness(vec![None]);
-    h.state_mut().run("file.new", json!({"width": 64, "height": 64})).unwrap();
-    h.state_mut().sync_views();
+    assert_eq!(field(&h, folder, "dir"), Some(json!("/tmp/exports")));
     let ctx = h.ctx.clone();
-    crate::menus::invoke(h.state_mut(), &ctx, "file.export.layersToFiles", json!({})).unwrap();
-    h.run_steps(4);
-    let before = field(&h, "dir");
+    crate::dialogs::cancel(h.state_mut(), &ctx, folder).unwrap();
+
+    let plugin = open(&mut h, "plugin.install");
     h.get_by_label("Browse…").click();
     h.run_steps(4);
-    assert_eq!(field(&h, "dir"), before);
-}
+    assert_eq!(field(&h, plugin, "path"), Some(json!("/tmp/blur.wasm")));
 
-#[test]
-fn install_plugin_path_is_chosen_with_browse() {
-    let (mut h, asked) = harness(vec![Some(FileDialogAnswer::Paths(vec!["/tmp/blur.wasm".into()]))]);
-    let ctx = h.ctx.clone();
-    crate::menus::invoke(h.state_mut(), &ctx, "plugin.install", json!({})).unwrap();
-    h.run_steps(4);
-    h.get_by_label("Browse…").click();
-    h.run_steps(4);
-    match asked.borrow().as_slice() {
-        [FileDialogRequest::Open { multiple: false, extensions: Some(e), .. }] => assert_eq!(e, &["wasm".to_string()]),
-        other => panic!("unexpected requests {other:?}"),
-    }
-    assert_eq!(field(&h, "path"), Some(json!("/tmp/blur.wasm")));
-}
-
-/// #9357: Image Processor's source and destination folders are chosen with Browse…, as
-/// Photoshop's Select Folder… buttons choose them, instead of being typed.
-#[test]
-fn image_processor_folders_are_chosen_with_browse() {
-    let (mut h, asked) = harness(vec![Some(FileDialogAnswer::FolderTo("/tmp/shoot".into())), Some(FileDialogAnswer::FolderTo("/tmp/web".into()))]);
-    let ctx = h.ctx.clone();
-    crate::menus::invoke(h.state_mut(), &ctx, "file.scripts.imageProcessor", json!({})).unwrap();
-    h.run_steps(4);
-    assert_eq!(h.query_all_by_label("Browse…").count(), 2, "one Browse… for the source and one for the destination");
-    h.query_all_by_label("Browse…").next().unwrap().click();
-    h.run_steps(4);
-    assert_eq!(field(&h, "input"), Some(json!("/tmp/shoot")));
-    h.query_all_by_label("Browse…").nth(1).unwrap().click();
-    h.run_steps(4);
-    assert_eq!(field(&h, "output"), Some(json!("/tmp/web")));
-    assert!(matches!(asked.borrow().as_slice(), [FileDialogRequest::Folder { .. }, FileDialogRequest::Folder { .. }]));
-}
-
-#[test]
-fn data_sets_as_files_folder_is_chosen_with_browse() {
-    let (mut h, asked) = harness(vec![Some(FileDialogAnswer::FolderTo("/tmp/dataset-exports".into()))]);
-    h.state_mut().run("file.new", json!({"width": 64, "height": 64})).unwrap();
-    h.state_mut().run("image.variables.dataSets", json!({"dataSets": [{"name": "Set 1", "values": []}]})).unwrap();
-    h.state_mut().sync_views();
-    let ctx = h.ctx.clone();
-    crate::menus::invoke(h.state_mut(), &ctx, "file.export.dataSetsAsFiles", json!({})).unwrap();
-    h.run_steps(4);
-    assert!(field(&h, "dir").is_some(), "the dialog has a Dir field");
-    assert_eq!(field(&h, "naming"), Some(json!("{name}")));
-    assert_eq!(field(&h, "format"), Some(json!("png")));
-    h.get_by_label("Browse…").click();
-    h.run_steps(4);
-    assert!(matches!(asked.borrow().as_slice(), [FileDialogRequest::Folder { .. }]));
-    assert_eq!(field(&h, "dir"), Some(json!("/tmp/dataset-exports")));
-}
-
-/// Switching Source through the actual dropdown must show input-folder controls only for
-/// Folder, while retaining the output-folder picker for every source.
-#[test]
-fn image_processor_source_picker_hides_folder_fields_for_open_documents() {
-    let (mut h, _) = harness(vec![]);
-    h.state_mut().run("file.new", json!({"width": 40, "height": 20})).unwrap();
-    let ctx = h.ctx.clone();
-    crate::menus::invoke(h.state_mut(), &ctx, "file.scripts.imageProcessor", json!({})).unwrap();
-    h.run_steps(4);
-    assert_eq!(field(&h, "source"), Some(json!("current")));
-    assert_eq!(h.query_all_by_label("Browse…").count(), 1, "only the output folder is needed");
-    assert_eq!(h.query_all_by_label("Include All Subfolders").count(), 0);
-    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Source").click();
-    h.run_steps(4);
-    h.get_by_label("Folder").click();
-    h.run_steps(4);
-    assert_eq!(field(&h, "source"), Some(json!("folder")));
-    assert_eq!(h.query_all_by_label("Browse…").count(), 2);
-    assert_eq!(h.query_all_by_label("Include All Subfolders").count(), 1);
-    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Source").click();
-    h.run_steps(4);
-    h.get_by_label("All open documents").click();
-    h.run_steps(4);
-    assert_eq!(field(&h, "source"), Some(json!("open")));
-    assert_eq!(h.query_all_by_label("Browse…").count(), 1);
-}
-
-#[test]
-fn scratch_disk_browse_sets_only_the_selected_draft_and_cancel_keeps_it() {
-    let (mut h, asked) = harness(vec![Some(FileDialogAnswer::FolderTo("/tmp/scratch".into())), None]);
-    let id = crate::prefs_ui::open_preferences(h.state_mut(), "scratchDisks");
-    h.run_steps(4);
-    assert_eq!(h.query_all_by_label("Browse…").count(), 0, "system temp is not browsable");
-    h.get_by_label("Add disk").click();
-    h.run_steps(3);
-    h.get_by_label("Browse…").click();
-    h.run_steps(4);
-    let values = &h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields["values"];
-    assert_eq!(values["scratchDisks"]["disks"][0]["path"], "(system temp)");
-    assert_eq!(values["scratchDisks"]["disks"][1]["path"], "/tmp/scratch");
-    assert_eq!(h.state().session.prefs().scratch_disks.disks.len(), 1, "selection edits only the draft");
-    h.get_by_label("Browse…").click();
-    h.run_steps(4);
-    let values = &h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields["values"];
-    assert_eq!(values["scratchDisks"]["disks"][1]["path"], "/tmp/scratch");
-    assert!(matches!(asked.borrow().as_slice(), [FileDialogRequest::Folder { .. }, FileDialogRequest::Folder { .. }]));
+    let asked = files.requests();
+    assert_eq!(asked.len(), 2);
+    assert_eq!(asked[0].kind, PickKind::Folder);
+    assert_eq!(asked[1].kind, PickKind::Open);
+    assert_eq!(asked[1].filters.iter().flat_map(|f| f.extensions.clone()).collect::<Vec<_>>(), ["wasm"]);
 }

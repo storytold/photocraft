@@ -12,7 +12,6 @@ use egui_kittest::Harness;
 use photocraft_doc::{Document, LayerContent, LayerId};
 use photocraft_engine::layer_multi_cmds::{layer_bounds, move_targets, moved};
 use photocraft_geom::Rect;
-use photocraft_ui_egui::canvas::ViewXform;
 use photocraft_ui_egui::state::Tool;
 use photocraft_ui_egui::{PhotocraftApp, Services};
 use serde_json::json;
@@ -24,7 +23,7 @@ fn app() -> (H, layout_doc::Handles) {
     let (doc, handles) = layout_doc::build(layout_doc::Spec::small());
     let h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_pixels_per_point(1.0).with_max_steps(64).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+        let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), Services::default());
         app.session.open_document(doc, None);
         app.sync_views();
         app
@@ -43,10 +42,8 @@ fn bounds(h: &H, id: LayerId) -> Rect {
 }
 
 fn screen(h: &H, p: [f64; 2]) -> Pos2 {
-    let app = h.state();
-    let v = &app.ui.views[0];
-    let rect = photocraft_ui_egui::rulers::content_rect(app, app.last_canvas_rect);
-    ViewXform { rect, zoom: v.zoom, center: v.center, flip: false, rotation: v.rotation, aspect: 1.0 }.to_screen(p[0] as f32, p[1] as f32)
+    let view = photocraft_ui_egui::canvas::active_view(h.state()).expect("an active document view");
+    view.to_screen(craft::behavior::kurbo::Point::new(p[0], p[1]))
 }
 
 /// A point where `id` (or, for a group, one of its layers) is the topmost layer with pixels.
@@ -93,7 +90,7 @@ fn actual_pixels(h: &mut H) {
     let size = app.session.active().map(|s| s.doc.size).expect("doc");
     app.ui.views[0].zoom = 1.0;
     app.ui.views[0].center = [size.width as f32 / 2.0, size.height as f32 / 2.0];
-    app.ui.views[0].fit_pending = false;
+    app.ui.views[0].clear_pending();
     // View › Snap and smart guides would pull the layers onto their neighbours' edges.
     app.ui.extras.snap = false;
     app.ui.view.show.smart_guides = false;

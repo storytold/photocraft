@@ -9,7 +9,21 @@ use egui::{Align2, Color32, FontId, Rect, RichText, Sense, Stroke, StrokeKind, T
 use photocraft_doc::{Document, FrameAnimation, LayerId, LoopCount};
 use serde_json::{Value, json};
 
+use craft::behavior::IconId;
+use craft::ui::buttons::{Button, IconButton};
+use craft::ui::contract::{Props as _, Show as _, TooltipSpec};
+
 use crate::theme::Tokens;
+
+/// A square icon button named (and with a tooltip) `tip`; `selected` shows it as on. True when it was clicked.
+fn icon_button(ui: &mut egui::Ui, icon: &'static str, selected: bool, tip: &str) -> bool {
+    IconButton::new(IconId::new(icon)).label(tip.to_owned()).tooltip(TooltipSpec::new(tip.to_owned())).selected(selected).show(ui).clicked()
+}
+
+/// A labelled button. True when it was clicked.
+fn text_button(ui: &mut egui::Ui, label: &str) -> bool {
+    Button::new(label.to_owned()).show(ui).clicked()
+}
 
 /// Longest side of a frame thumbnail, in pixels.
 const THUMB_SIDE: u32 = 96;
@@ -264,9 +278,11 @@ pub struct Strip<'a> {
     pub acts: &'a mut Vec<Act>,
     /// The onion-skin settings, and where changes to them go.
     pub onion: crate::onion_skin::OnionSkin,
-    /// Whether the Onion Skin menu is shown (Options menu in the panel header).
+    /// Whether the Onion Skin menu is shown (turned on in the bar's Options menu).
     pub show_onion: bool,
     pub onion_out: &'a mut Option<crate::onion_skin::OnionSkin>,
+    /// Where a change of `show_onion` from the Options menu goes.
+    pub show_onion_out: &'a mut Option<bool>,
     /// A click on a frame, to turn into a selection.
     pub clicked: &'a mut Option<(usize, Click)>,
     /// Set when Play or Pause was pressed.
@@ -275,7 +291,7 @@ pub struct Strip<'a> {
 
 /// Draws the strip and its bar.
 pub fn body(ui: &mut egui::Ui, ctx: &egui::Context, strip: Strip<'_>) {
-    let Strip { doc, revision, no_damage, animation: a, selection, playing, acts, onion, show_onion, onion_out, clicked, toggle_play } = strip;
+    let Strip { doc, revision, no_damage, animation: a, selection, playing, acts, onion, show_onion, onion_out, show_onion_out, clicked, toggle_play } = strip;
     let t = Tokens::get(ctx);
     refresh_thumbs(ctx, doc, revision, no_damage, a);
 
@@ -338,19 +354,26 @@ pub fn body(ui: &mut egui::Ui, ctx: &egui::Context, strip: Strip<'_>) {
         if show_onion {
             onion_menu(ui, onion, onion_out);
         }
+        // Options: what the bar offers beyond the basics (the panel has no header of its own to hold it).
+        drop_menu(ui, tl!("Options"), |ui| {
+            let mut show = show_onion;
+            if ui.checkbox(&mut show, tl!("Onion Skin")).changed() {
+                *show_onion_out = Some(show);
+            }
+        });
         ui.separator();
-        if crate::icons::button(ui, "chevrons-left", 22.0, false, tl!("First frame")).clicked() {
+        if icon_button(ui, "chevrons_left", false, tl!("First frame")) {
             acts.push(("animation.selectFrame", json!({ "frame": 0 })));
         }
-        if crate::icons::button(ui, "chevron-left", 22.0, false, tl!("Previous frame")).clicked() {
+        if icon_button(ui, "chevron_left", false, tl!("Previous frame")) {
             acts.push(("animation.previousFrame", json!({})));
         }
         let play_icon = if playing { "pause" } else { "play" };
         let play_tip = format!("{} ({})", if playing { tl!("Pause") } else { tl!("Play") }, crate::shortcuts::pretty("Space"));
-        if crate::icons::button(ui, play_icon, 22.0, playing, &play_tip).clicked() {
+        if icon_button(ui, play_icon, playing, &play_tip) {
             *toggle_play = true;
         }
-        if crate::icons::button(ui, "chevron-right", 22.0, false, tl!("Next frame")).clicked() {
+        if icon_button(ui, "chevron_right", false, tl!("Next frame")) {
             acts.push(("animation.nextFrame", json!({})));
         }
         ui.separator();
@@ -363,7 +386,7 @@ pub fn body(ui: &mut egui::Ui, ctx: &egui::Context, strip: Strip<'_>) {
             .monospace(),
         );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if crate::icons::button(ui, "trash", 22.0, false, tl!("Delete Selected Frame")).clicked() {
+            if icon_button(ui, "trash", false, tl!("Delete Selected Frame")) {
                 // The last frame can't go: deleting it removes the animation, as Photoshop's does.
                 if a.frames.len() == 1 {
                     acts.push(("animation.delete", json!({})));
@@ -371,7 +394,7 @@ pub fn body(ui: &mut egui::Ui, ctx: &egui::Context, strip: Strip<'_>) {
                     acts.push(("animation.deleteFrame", json!({ "frames": targets(selection, a.current) })));
                 }
             }
-            if crate::icons::button(ui, "copy", 22.0, false, tl!("Duplicate Selected Frame")).clicked() {
+            if icon_button(ui, "copy", false, tl!("Duplicate Selected Frame")) {
                 acts.push(("animation.newFrame", json!({ "frames": targets(selection, a.current) })));
             }
         });
@@ -539,15 +562,15 @@ fn other_field(ui: &mut egui::Ui, label: &str, initial: &str, apply: impl FnOnce
 pub fn empty(ui: &mut egui::Ui, acts: &mut Vec<Act>) {
     ui.add_space(8.0);
     ui.vertical_centered(|ui| {
-        if crate::widgets::primary_button(ui, tl!("Create Frame Animation"), 220.0).clicked() {
+        if text_button(ui, tl!("Create Frame Animation")) {
             acts.push(("animation.create", json!({})));
         }
         ui.add_space(4.0);
-        if crate::widgets::secondary_button(ui, tl!("Make Frames From Layers"), 220.0).clicked() {
+        if text_button(ui, tl!("Make Frames From Layers")) {
             acts.push(("animation.makeFramesFromLayers", json!({})));
         }
         ui.add_space(4.0);
-        if crate::widgets::secondary_button(ui, tl!("Create Video Timeline"), 220.0).clicked() {
+        if text_button(ui, tl!("Create Video Timeline")) {
             acts.push(("timeline.create", json!({ "duration": 30, "fps": 30.0 })));
         }
     });

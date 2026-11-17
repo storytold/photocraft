@@ -2,7 +2,12 @@
 //! earlier ones tinted red and the later ones green, so the next pose can be drawn against them.
 //! It only changes what the canvas shows; nothing is saved or exported.
 
-use egui::{Color32, TextureHandle, TextureOptions};
+use std::sync::Arc;
+
+use craft::behavior::PixelSize;
+use craft::ui::canvas::{PixelRect, RasterSource};
+use craft::ui::primitives::Revision;
+use egui::{Color32, ColorImage};
 use photocraft_doc::{AnimFrame, DocId, Document, FrameAnimation, Layer, LayerId};
 use serde::{Deserialize, Serialize};
 
@@ -66,7 +71,61 @@ pub fn ghost_tint(s: OnionSkin, distance: u32, earlier: bool) -> Color32 {
 struct Ghost {
     /// The layers the ghost frame and the shown frame hid when this was drawn, and the pixel version.
     key: (Vec<LayerId>, Vec<LayerId>, u64),
-    tex: TextureHandle,
+    image: Arc<ColorImage>,
+    /// Counts the pictures this cache rendered: a new picture is a new revision for the raster display.
+    serial: u64,
+}
+
+/// A ghost frame as a raster display reads it: the composited neighbour, reduced, drawn over the canvas
+/// with its tint.
+pub struct GhostSource {
+    image: Arc<ColorImage>,
+    tint: Color32,
+    size: PixelSize,
+    revision: Revision,
+}
+
+impl RasterSource for GhostSource {
+    fn size(&self) -> PixelSize {
+        self.size
+    }
+
+    fn revision(&self) -> Revision {
+        self.revision
+    }
+
+    fn damage(&self, since: Revision) -> Option<PixelRect> {
+        (since == self.revision).then(PixelRect::default)
+    }
+
+    fn read(&self, region: PixelRect, factor: u32, out: &mut ColorImage) {
+        let [ow, oh] = out.size;
+        let (iw, ih) = (self.image.size[0], self.image.size[1]);
+        let (dw, dh) = (i64::from(self.size.width), i64::from(self.size.height));
+        if ow == 0 || oh == 0 || iw == 0 || ih == 0 || dw == 0 || dh == 0 {
+            return;
+        }
+        let factor = i64::from(factor.max(1));
+        let t = self.tint.to_array().map(u32::from);
+        for y in 0..oh {
+            let dy = i64::from(region.y0) + y as i64 * factor + factor / 2;
+            for x in 0..ow {
+                let dx = i64::from(region.x0) + x as i64 * factor + factor / 2;
+                // Past the document the ghost has nothing.
+                let px = if dx < 0 || dy < 0 || dx >= dw || dy >= dh {
+                    Color32::TRANSPARENT
+                } else {
+                    let gx = ((dx * iw as i64) / dw).clamp(0, iw as i64 - 1) as usize;
+                    let gy = ((dy * ih as i64) / dh).clamp(0, ih as i64 - 1) as usize;
+                    let p = self.image.pixels.get(gy * iw + gx).copied().unwrap_or(Color32::TRANSPARENT).to_array().map(u32::from);
+                    Color32::from_rgba_premultiplied((p[0] * t[0] / 255) as u8, (p[1] * t[1] / 255) as u8, (p[2] * t[2] / 255) as u8, (p[3] * t[3] / 255) as u8)
+                };
+                if let Some(slot) = out.pixels.get_mut(y * ow + x) {
+                    *slot = px;
+                }
+            }
+        }
+    }
 }
 
 #[derive(Default)]
@@ -78,6 +137,8 @@ struct GhostCache {
     /// The last revision that was only frame selections since `rev` (see `continues_navigation`).
     pure_nav: Option<u64>,
     ghosts: std::collections::HashMap<usize, Ghost>,
+    /// The pictures rendered so far, for the ghosts' serials.
+    rendered: u64,
 }
 
 fn with_cache<R>(ctx: &egui::Context, f: impl FnOnce(&mut GhostCache) -> R) -> R {
@@ -92,13 +153,13 @@ fn with_cache<R>(ctx: &egui::Context, f: impl FnOnce(&mut GhostCache) -> R) -> R
     f(&mut g)
 }
 
-/// The ghost textures to draw over the canvas, farthest first, each with its tint. Empty unless the
+/// The ghost pictures to draw over the canvas, farthest first, each with its tint. Empty unless the
 /// onion skin is on, the Timeline is open and `canvas_doc`, the document being drawn, is the active one
 /// with a frame animation (Window › Arrange tiles and floating windows show other documents).
-pub fn ghosts(app: &PhotocraftApp, ctx: &egui::Context, canvas_doc: DocId) -> Vec<(egui::TextureId, Color32)> {
+pub fn ghosts(app: &PhotocraftApp, ctx: &egui::Context, canvas_doc: DocId) -> Vec<GhostSource> {
     let settings = app.ui.timeline.onion.clamped();
     // No ghosts while playing: every step would composite a new neighbour on the UI thread.
-    if !settings.enabled || !app.ui.timeline.show_onion || !app.ui.timeline.open || app.ui.timeline.playing {
+    if !settings.enabled || !app.ui.timeline.show_onion || !crate::panel_docking::is_shown(app, "timeline") || app.ui.timeline.playing() {
         return Vec::new();
     }
     let Some(st) = app.session.active().filter(|st| st.doc.id == canvas_doc) else { return Vec::new() };
@@ -133,16 +194,19 @@ pub fn ghosts(app: &PhotocraftApp, ctx: &egui::Context, canvas_doc: DocId) -> Ve
                     continue;
                 }
                 budget -= 1;
-                let tex = render(ctx, &st.doc, a, i, c.ghosts.remove(&i).map(|g| g.tex));
-                c.ghosts.insert(i, Ghost { key, tex });
+                let image = render(&st.doc, a, i);
+                c.rendered += 1;
+                c.ghosts.insert(i, Ghost { key, image, serial: c.rendered });
             }
             if let Some(g) = c.ghosts.get(&i) {
-                out.push((distance, g.tex.id(), ghost_tint(settings, distance, earlier)));
+                let tint = ghost_tint(settings, distance, earlier);
+                let revision = Revision::of(&(st.doc.id.0, g.serial, tint.to_array()));
+                out.push((distance, GhostSource { image: g.image.clone(), tint, size: PixelSize::new(st.doc.size.width, st.doc.size.height), revision }));
             }
         }
     });
     out.sort_by_key(|g| std::cmp::Reverse(g.0));
-    out.into_iter().map(|(_, id, tint)| (id, tint)).collect()
+    out.into_iter().map(|(_, source)| source).collect()
 }
 
 /// What a ghost of frame `i` shows while frame `current` is on the canvas: the layers that look different
@@ -176,24 +240,61 @@ pub fn ghost_frame(layers: &[Layer], a: &FrameAnimation, i: usize) -> AnimFrame 
 }
 
 /// Frame `i` of the animation as a ghost, composited and reduced.
-fn render(ctx: &egui::Context, doc: &Document, a: &FrameAnimation, i: usize, reuse: Option<TextureHandle>) -> TextureHandle {
+fn render(doc: &Document, a: &FrameAnimation, i: usize) -> Arc<ColorImage> {
     let mut d = doc.clone();
-    let only = FrameAnimation { frames: vec![std::sync::Arc::new(ghost_frame(&d.layers, a, i))], current: 0, loops: Default::default() };
+    let only = FrameAnimation { frames: vec![Arc::new(ghost_frame(&d.layers, a, i))], current: 0, loops: Default::default() };
     only.apply(0, &mut d.layers);
     let img = photocraft_compose::thumbnail(&d, GHOST_SIDE);
-    let color = egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.pixels);
-    match reuse {
-        Some(mut tex) => {
-            tex.set(color, TextureOptions::LINEAR);
-            tex
-        }
-        None => ctx.load_texture(format!("onion-ghost-{i}"), color, TextureOptions::LINEAR),
-    }
+    Arc::new(ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.pixels))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A ghost of 2 × 2 pixels over a document of 4 × 4.
+    fn source(tint: Color32) -> GhostSource {
+        let px = [Color32::from_rgb(255, 0, 0), Color32::from_rgb(0, 255, 0), Color32::from_rgb(0, 0, 255), Color32::from_rgb(255, 255, 0)];
+        GhostSource {
+            image: Arc::new(ColorImage { size: [2, 2], source_size: egui::vec2(2.0, 2.0), pixels: px.to_vec() }),
+            tint,
+            size: PixelSize::new(4, 4),
+            revision: Revision::of(&1u8),
+        }
+    }
+
+    #[test]
+    fn a_ghost_source_maps_its_picture_onto_the_document_and_tints_it() {
+        let s = source(Color32::WHITE);
+        let mut out = ColorImage::filled([4, 4], Color32::TRANSPARENT);
+        s.read(PixelRect::new(0, 0, 4, 4), 1, &mut out);
+        assert_eq!(out.pixels[0], Color32::from_rgb(255, 0, 0), "top left");
+        assert_eq!(out.pixels[3], Color32::from_rgb(0, 255, 0), "top right");
+        assert_eq!(out.pixels[12], Color32::from_rgb(0, 0, 255), "bottom left");
+        assert_eq!(out.pixels[15], Color32::from_rgb(255, 255, 0), "bottom right");
+        // A reduced read (a texel per two pixels) takes the picture's own pixels.
+        let mut half = ColorImage::filled([2, 2], Color32::TRANSPARENT);
+        s.read(PixelRect::new(0, 0, 4, 4), 2, &mut half);
+        assert_eq!(half.pixels, s.image.pixels);
+        // The tint multiplies every channel, alpha included.
+        let faint = source(Color32::from_rgba_premultiplied(128, 128, 128, 128));
+        let mut tinted = ColorImage::filled([1, 1], Color32::TRANSPARENT);
+        faint.read(PixelRect::new(0, 0, 1, 1), 1, &mut tinted);
+        assert_eq!(tinted.pixels[0].a(), 128);
+        assert_eq!(tinted.pixels[0].r(), 128, "red at half strength");
+        // Past the document there is nothing, and a read of a region it reaches past stays in bounds.
+        let mut past = ColorImage::filled([4, 1], Color32::from_rgb(9, 9, 9));
+        s.read(PixelRect::new(2, 0, 6, 1), 1, &mut past);
+        assert_eq!(past.pixels[3], Color32::TRANSPARENT);
+        assert_ne!(past.pixels[0], Color32::TRANSPARENT);
+    }
+
+    #[test]
+    fn a_ghost_source_reads_only_its_own_revision_as_unchanged() {
+        let s = source(Color32::WHITE);
+        assert_eq!(s.damage(s.revision), Some(PixelRect::default()));
+        assert_eq!(s.damage(Revision::of(&2u8)), None, "another revision: read everything");
+    }
 
     #[test]
     fn neighbours_stop_at_the_ends() {
