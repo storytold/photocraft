@@ -2,12 +2,13 @@
 //! clipboard waits on the app that owns it: arboard's Wayland data-control read waits for that app
 //! to send its data with no time limit, and its X11 read waits up to 4 s for each format it tries.
 //! On Linux and the BSDs every paste read goes through a [`Loads`] worker with a clipboard handle of
-//! its own, so an owner that never sends its data holds the worker, not the window. Built on every
-//! platform so it is tested on every platform.
+//! its own, opened on the worker at its first read ([`opened_on_worker`]), so an owner or a display
+//! server that never answers holds the worker, not the window. Built on every platform so it is
+//! tested on every platform.
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -86,6 +87,51 @@ pub(super) fn read_on(reads: &mut Loads<Request, Answer>, request: Request, wait
     reads.get(request, wait).unwrap_or_else(|why| Answer::failed(request, why))
 }
 
+/// A worker's `load` that opens its clipboard with `open` at its first request, on the worker, and
+/// then answers each request with `read`. Opening a clipboard handle talks to the display server,
+/// so a server that stops answering holds the worker and the read times out. An open that fails is
+/// the request's answer (`failed`), and the next request tries to open it again.
+pub(super) fn opened_on_worker<C, R, A>(
+    mut open: impl FnMut() -> Result<C, String>,
+    mut read: impl FnMut(&mut C, R) -> A,
+    failed: impl Fn(R, String) -> A,
+) -> impl FnMut(R) -> A {
+    let mut clipboard = None;
+    move |request| {
+        let clipboard = match &mut clipboard {
+            Some(clipboard) => clipboard,
+            slot => match open() {
+                Ok(opened) => slot.insert(opened),
+                Err(why) => return failed(request, why),
+            },
+        };
+        read(clipboard, request)
+    }
+}
+
+/// How long dropping [`Loads`] waits for an unanswered read, after it was sent. Clones share the
+/// value, so the worker can set it once it knows which backend its clipboard opened.
+#[derive(Clone)]
+pub(super) struct Finish(Arc<AtomicU64>);
+
+impl Finish {
+    pub(super) fn set(&self, finish: Duration) {
+        self.0.store(u64::try_from(finish.as_millis()).unwrap_or(u64::MAX), Ordering::SeqCst);
+    }
+
+    fn get(&self) -> Duration {
+        Duration::from_millis(self.0.load(Ordering::SeqCst))
+    }
+}
+
+impl From<Duration> for Finish {
+    fn from(finish: Duration) -> Self {
+        let shared = Self(Arc::default());
+        shared.set(finish);
+        shared
+    }
+}
+
 /// Requests of type `R` answered with `A` on a worker thread, one at a time.
 pub(super) struct Loads<R, A> {
     /// The worker's requests, each with the channel its answer is sent on. The worker stops once
@@ -99,7 +145,7 @@ pub(super) struct Loads<R, A> {
     /// Disconnected once the worker has let go of what its `load` holds.
     done: mpsc::Receiver<()>,
     /// How long after it was sent dropping `Loads` waits for an unanswered read to end.
-    finish: Duration,
+    finish: Finish,
 }
 
 /// When dropping `Loads` stops waiting for its worker: `finish` after the unanswered read
@@ -111,9 +157,10 @@ fn stop_by(pending: Option<Instant>, now: Instant, finish: Duration) -> Instant 
 
 impl<R: Send + 'static, A: Send + 'static> Loads<R, A> {
     /// A worker thread named `name` that answers each request with `load`. Dropping the result
-    /// waits up to `finish` after an unanswered read was sent for that read to end. `None` when the
-    /// worker can't start.
-    pub(super) fn spawn(name: &str, finish: Duration, mut load: impl FnMut(R) -> A + Send + 'static) -> Option<Self> {
+    /// waits up to `finish` after an unanswered read was sent for that read to end, as `finish`
+    /// stands at the drop. `None` when the worker can't start.
+    pub(super) fn spawn(name: &str, finish: impl Into<Finish>, mut load: impl FnMut(R) -> A + Send + 'static) -> Option<Self> {
+        let finish = finish.into();
         let (requests, asked) = mpsc::channel::<(R, mpsc::Sender<A>)>();
         let (alive, done) = mpsc::channel::<()>();
         let open = Arc::new(AtomicUsize::new(0));
@@ -216,7 +263,7 @@ impl<R, A> Drop for Loads<R, A> {
     fn drop(&mut self) {
         let pending = self.sent.filter(|_| self.open.load(Ordering::SeqCst) > 0);
         drop(self.requests.take());
-        let end = stop_by(pending, Instant::now(), self.finish);
+        let end = stop_by(pending, Instant::now(), self.finish.get());
         // Nothing is sent on `done`: this ends when the worker drops `alive`, or at `end`.
         let _ = self.done.recv_timeout(end.saturating_duration_since(Instant::now()));
     }
@@ -385,6 +432,67 @@ mod tests {
         assert!(reads.is_none());
         assert_eq!(retired.len(), MAX_RETIRED);
         releases.clear();
+    }
+
+    #[test]
+    fn the_clipboard_opens_on_the_worker_at_the_first_read_not_on_the_caller() {
+        let (release, gate) = mpsc::channel::<()>();
+        let opens = Arc::new(AtomicUsize::new(0));
+        let counted = opens.clone();
+        let load = opened_on_worker(
+            move || {
+                assert_eq!(std::thread::current().name(), Some("test"), "the clipboard opens on the worker");
+                // The first open hangs until released, as on a display server that stops answering.
+                if counted.fetch_add(1, Ordering::SeqCst) == 0 {
+                    let _ = gate.recv();
+                }
+                Ok(())
+            },
+            |(), n: u32| Ok(n),
+            |_, why| Err(why),
+        );
+        let mut loads = Loads::spawn("test", Duration::ZERO, load).unwrap();
+        assert_eq!(opens.load(Ordering::SeqCst), 0, "starting the reads opens nothing");
+        let why = loads.get(1, Duration::ZERO).unwrap_err();
+        assert!(why.contains("didn't send its data"), "a hung open holds the worker, not the caller: {why}");
+        release.send(()).unwrap();
+        let answer = loop {
+            match loads.get(2, Duration::from_secs(600)) {
+                Ok(answer) => break answer,
+                Err(why) => {
+                    // The hung read hasn't ended yet.
+                    assert_eq!(why, BUSY);
+                    std::thread::yield_now();
+                }
+            }
+        };
+        assert_eq!(answer, Ok(2));
+        assert_eq!(loads.get(3, Duration::from_secs(600)), Ok(Ok(3)));
+        assert_eq!(opens.load(Ordering::SeqCst), 1, "later reads keep the handle");
+
+        // An open that fails is the read's error, and the next read opens again.
+        let mut tries = 0;
+        let load = opened_on_worker(
+            move || {
+                tries += 1;
+                if tries == 1 { Err("no backend".to_string()) } else { Ok(()) }
+            },
+            |(), n: u32| Ok(n),
+            |_, why| Err(why),
+        );
+        let mut loads = Loads::spawn("test", Duration::ZERO, load).unwrap();
+        assert_eq!(loads.get(1, Duration::from_secs(600)), Ok(Err("no backend".to_string())));
+        assert_eq!(loads.get(2, Duration::from_secs(600)), Ok(Ok(2)));
+    }
+
+    #[test]
+    fn the_worker_sets_how_long_dropping_the_reads_waits() {
+        let finish = Finish::from(Duration::from_secs(25));
+        let learned = finish.clone();
+        let mut loads = Loads::spawn("test", finish, move |()| learned.set(Duration::ZERO)).unwrap();
+        assert_eq!(loads.finish.get(), Duration::from_secs(25), "until the worker knows, the wait is the one given");
+        assert_eq!(loads.get((), Duration::from_secs(600)), Ok(()));
+        assert_eq!(loads.finish.get(), Duration::ZERO, "the wait the worker set is the one dropping uses");
     }
 
     #[test]
