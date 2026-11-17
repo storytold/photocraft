@@ -760,7 +760,7 @@ fn canvas_size(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// The largest side an explicit crop may give the canvas (the `file.new` and Canvas Size limit).
-const MAX_CROP_SIDE: i32 = 300_000;
+pub(crate) const MAX_CROP_SIDE: i32 = 300_000;
 
 /// Image → Crop (to the selection bounds).
 fn crop(s: &mut Session, p: &Value) -> Result<Value> {
@@ -907,7 +907,7 @@ impl CropTarget {
 }
 
 /// The highest resolution (ppi) a crop may set, as for Image Size.
-const MAX_CROP_RESOLUTION: f64 = 10_000.0;
+pub(crate) const MAX_CROP_RESOLUTION: f64 = 10_000.0;
 
 /// `image.crop`'s optional `targetWidth`/`targetHeight` (whole px, both or neither), `resolution`
 /// (ppi) and `resample` (as for `image.imageSize`; "none" is refused with a target size).
@@ -966,7 +966,7 @@ fn crop_result(s: &Session, mut frame: Value) -> Value {
 }
 
 /// The largest crop angle accepted (degrees), as for Image Rotation › Arbitrary.
-const MAX_CROP_ANGLE: f64 = 3600.0;
+pub(crate) const MAX_CROP_ANGLE: f64 = 3600.0;
 
 /// `image.crop`'s optional `angle` in degrees, normalised to (-180, 180]; `None` when it is absent,
 /// null or (after normalising) zero, so an unrotated crop takes the plain, resampling-free path.

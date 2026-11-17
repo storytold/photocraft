@@ -502,6 +502,127 @@ fn saved(action: &Action) -> AtnItem {
     file.actions[0].items[0].clone()
 }
 
+fn recorded_target_crop(rect_key: &str) -> Descriptor {
+    let px = |value| D::UnitFloat { unit: *b"#Pxl", value };
+    Descriptor::new("Crop")
+        .with(rect_key, D::Descriptor(Descriptor::new("Rctn").with("Top ", px(1.0)).with("Left", px(2.0)).with("Btom", px(19.0)).with("Rght", px(26.0))))
+        .with("Angl", D::UnitFloat { unit: *b"#Ang", value: 0.0 })
+        .with("Dlt ", D::Boolean(true))
+        .with("cropAspectRatioModeKey", enm("cropAspectRatioModeClass", "targetSize"))
+        .with("Wdth", px(12.0))
+        .with("Hght", px(9.0))
+        .with("Rslt", D::UnitFloat { unit: *b"#Rsl", value: 144.0 })
+        .with("Intr", enm("Intp", "Nrst"))
+}
+
+#[test]
+fn recorded_crop_frames_and_target_sizes_replay_without_a_selection() {
+    for rect_key in ["T   ", "To  "] {
+        for event in [AtnEvent::Code(*b"Crop"), AtnEvent::name("crop")] {
+            let action = recorded(event, recorded_target_crop(rect_key));
+            assert_eq!(action.steps[0].0, "image.crop");
+            assert_eq!(
+                action.steps[0].1,
+                json!({"x":2,"y":1,"width":24,"height":18,"angle":0,"deleteCroppedPixels":true,
+                "targetWidth":12,"targetHeight":9,"resolution":144,"resample":"nearest"})
+            );
+            let written = saved(&action).descriptor.unwrap();
+            assert!(written.get("T   ").is_some(), "export uses Photoshop's recorded rectangle key");
+            assert!(written.get("To  ").is_none());
+            assert_eq!(recorded(AtnEvent::name("crop"), written).steps, action.steps);
+            for depth in [8, 16, 32] {
+                let mut s = Session::new();
+                s.execute("file.new", json!({"width":32,"height":24,"depth":depth,"background":"white"})).unwrap();
+                s.execute("image.imageSize", json!({"resolution":72,"resample":"none"})).unwrap();
+                s.edit("Mark crop origin", |doc, _| {
+                    doc.layers[0].surface_mut().unwrap().write_region(photocraft_geom::Rect::from_xywh(2, 1, 2, 2), &[1.0, 0.0, 0.0, 1.0].repeat(4));
+                    Ok(())
+                })
+                .unwrap();
+                let before = s.active().unwrap().doc.clone();
+                assert!(before.selection.is_none());
+                replay_saved(&mut s, &action);
+                let doc = &s.active().unwrap().doc;
+                assert_eq!((doc.size.width, doc.size.height), (12, 9));
+                assert_eq!(doc.resolution_dpi, 144.0);
+                let rendered = photocraft_compose::flatten(doc);
+                assert_eq!(rendered.px[0], [1.0, 0.0, 0.0, 1.0]);
+                s.execute("edit.undo", json!({})).unwrap();
+                assert_eq!(s.active().unwrap().doc, before, "one undo restores crop and resampling");
+            }
+        }
+    }
+}
+
+#[test]
+fn recorded_crop_runs_inside_a_conditional_and_continues_the_parent() {
+    let child = recorded(AtnEvent::name("crop"), recorded_target_crop("T   "));
+    let parent = Action::new(
+        "Parent",
+        vec![("actions.conditional".into(), json!({"if":"isOpen","then":"Recorded"})), ("layer.renameLayer".into(), json!({"name":"After crop"}))],
+    );
+    let (bytes, skipped) = atn_cmds::export("Identifiers", &[&parent, &child], &[], false).unwrap();
+    assert!(skipped.is_empty());
+    let imported = atn_cmds::import(&bytes).unwrap();
+    assert!(imported.unsupported.is_empty());
+    let mut s = sized_document(32, 24, 72);
+    s.actions.list = imported.actions;
+    let result = s.execute("actions.play", json!({"action":"Parent"})).unwrap();
+    assert!(result.get("failed").is_none(), "{result}");
+    let doc = &s.active().unwrap().doc;
+    assert_eq!((doc.size.width, doc.size.height), (12, 9));
+    assert!(doc.layers.iter().any(|layer| layer.name == "After crop"));
+}
+
+#[test]
+fn recorded_crop_keeps_ambiguous_malformed_and_unrepresented_settings() {
+    let base = recorded_target_crop("T   ");
+    let mut cases = Vec::new();
+    for (key, value) in [
+        ("T   ", D::Boolean(false)),
+        ("Angl", D::UnitFloat { unit: *b"#Pxl", value: 1.0 }),
+        ("Angl", D::UnitFloat { unit: *b"#Ang", value: 3601.0 }),
+        ("Dlt ", D::Integer(1)),
+        ("Wdth", D::UnitFloat { unit: *b"#Prc", value: 50.0 }),
+        ("Hght", D::UnitFloat { unit: *b"#Pxl", value: 0.0 }),
+        ("Rslt", D::UnitFloat { unit: *b"#Pxl", value: 144.0 }),
+        ("Rslt", D::UnitFloat { unit: *b"#Rsl", value: 10001.0 }),
+        ("cropAspectRatioModeKey", enm("cropAspectRatioModeClass", "pureAspectRatio")),
+        ("Intr", enm("Intp", "unknown")),
+    ] {
+        let mut d = base.clone();
+        d.items.iter_mut().find(|(k, _)| k.is(key)).unwrap().1 = value;
+        cases.push(d);
+    }
+    for key in ["Wdth", "Hght", "cropAspectRatioModeKey"] {
+        let mut d = base.clone();
+        d.items.retain(|(k, _)| !k.is(key));
+        cases.push(d);
+    }
+    cases.push(base.clone().with("To  ", base.get("T   ").unwrap().clone()));
+    cases.push(base.clone().with("unknown", D::Boolean(false)));
+    for mutation in 0..5 {
+        let mut d = base.clone();
+        let Some((_, D::Descriptor(frame))) = d.items.iter_mut().find(|(k, _)| k.is("T   ")) else { panic!("crop frame") };
+        match mutation {
+            0 => frame.items.retain(|(k, _)| !k.is("Top ")),
+            1 => frame.items.push(frame.items[0].clone()),
+            2 => frame.class_id = Id::new("Other"),
+            3 => frame.items.iter_mut().find(|(k, _)| k.is("Rght")).unwrap().1 = D::UnitFloat { unit: *b"#Pxl", value: 1.0 },
+            _ => frame.items.iter_mut().find(|(k, _)| k.is("Btom")).unwrap().1 = D::UnitFloat { unit: *b"#Pxl", value: f64::INFINITY },
+        }
+        cases.push(d);
+    }
+    let mut duplicate = base.clone();
+    duplicate.items.push(duplicate.items[0].clone());
+    cases.push(duplicate);
+    for d in cases {
+        let action = recorded(AtnEvent::name("crop"), d.clone());
+        assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP);
+        assert_eq!(saved(&action).descriptor.unwrap().to_bytes(), d.to_bytes());
+    }
+}
+
 const LAYERS_TO_FILES_EVENT: &str = "6f1c2cf5-4a97-4e32-8f59-f5d7a087adef";
 
 /// Settings-shaped script descriptor; the message belongs to the recording's locale.

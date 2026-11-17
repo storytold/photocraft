@@ -552,6 +552,11 @@ condition IDs remain kept Photoshop steps with their original descriptors.
   export as a current-target reference.
 - Close without `Svng` preserves the unanswered save choice. Headless playback refuses to discard a
   changed document. Native `file.close` still defaults to discard; `save: "ask"` opts into this policy.
+- Crop reads a pixel rectangle from Photoshop's `T   ` or the legacy `To  ` key and exports `T   `.
+  Complete pixel `targetSize` recordings retain output width, height, resolution and interpolation.
+  Recorded pixel rectangles run without a selection. Ambiguous or malformed frames, other units/aspect-ratio modes,
+  partial target sizes and unknown options remain kept steps. Resolution-only native crops do
+  not export as plain rectangle crops.
 - Save for Web accepts `In  ` inside `Usng` and the existing outer destination, exporting it inside
   `Usng`. `DIDr` retains a folder destination under each playback document's name. Duplicate or
   conflicting destinations, malformed paths and unrepresented slice/output settings remain kept

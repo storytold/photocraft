@@ -3844,14 +3844,24 @@ fn radial_blur_off_center_strict_export_refuses_silent_recentering() {
     assert_eq!(saved_pixels["steps"], 1);
 }
 
-/// A crop with W x H x Resolution output options must not export as a plain rectangle crop
-/// that keeps the old size and resolution on replay: the mapper has no field for them.
+/// Output sizes must survive export; partial or unrepresented settings must never become a
+/// plain rectangle crop that keeps the old size and resolution on replay.
 #[test]
-fn crop_with_output_size_or_resolution_is_not_exported_as_plain_crop() {
+fn crop_with_output_settings_round_trips_or_refuses_incomplete_forms() {
     for params in [
         json!({"x": 1, "y": 1, "width": 4, "height": 3, "targetWidth": 8, "targetHeight": 6, "resolution": 144, "resample": "nearest"}),
-        json!({"x": 1, "y": 1, "width": 4, "height": 3, "resolution": 144}),
         json!({"x": 1, "y": 1, "width": 4, "height": 3, "targetWidth": 8, "targetHeight": 6}),
+    ] {
+        let sized = Action { name: "Probe".into(), steps: vec![("image.crop".into(), params)], ..Default::default() };
+        let (bytes, skipped) = export("Audit", &[&sized], &[], false).unwrap();
+        assert!(skipped.is_empty());
+        assert_eq!(import(&bytes).unwrap().actions[0].steps, sized.steps);
+    }
+    for params in [
+        json!({"x": 1, "y": 1, "width": 4, "height": 3, "resolution": 144}),
+        json!({"x": 1, "y": 1, "width": 4, "height": 3, "targetWidth": 8}),
+        json!({"x": 1, "y": 1, "width": 4, "height": 3, "contentAware": true}),
+        json!({"x": 1, "y": 1, "width": 4, "height": 3, "targetWidth": 8, "targetHeight": 6, "resample": "none"}),
     ] {
         let sized = Action { name: "Probe".into(), steps: vec![("image.crop".into(), params)], ..Default::default() };
         assert!(export("Audit", &[&sized], &[], false).is_err());

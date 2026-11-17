@@ -1006,47 +1006,128 @@ pub(super) fn image_size_to(_: &str, p: &Value) -> Option<Descriptor> {
 }
 
 pub(super) fn crop_from(d: &Descriptor) -> Mapped {
+    let Some(p) = crop_parameters(d) else { return Mapped::Unsupported { harmless: false } };
+    step("image.crop", Value::Object(p))
+}
+
+fn crop_parameters(d: &Descriptor) -> Option<Map<String, Value>> {
+    let known = |d: &Descriptor, keys: &[&str]| {
+        d.items.len() <= keys.len()
+            && d.items.iter().all(|(key, _)| keys.iter().any(|known| key.is(known)))
+            && keys.iter().all(|key| d.items.iter().filter(|(k, _)| k.is(key)).count() <= 1)
+    };
+    if !known(d, &["T   ", "To  ", "Angl", "Dlt ", "cropAspectRatioModeKey", "Wdth", "Hght", "Rslt", "Intr"]) {
+        return None;
+    }
     let mut p = Map::new();
-    if let Some(t) = get_obj(d, "To  ") {
+    // Photoshop records `T   `; also read the legacy spelling emitted by PhotoCraft.
+    // Two frames are ambiguous, and a malformed explicit frame must never become a selection crop.
+    let frame = match (d.get("T   "), d.get("To  ")) {
+        (Some(_), Some(_)) => return None,
+        (Some(frame), None) | (None, Some(frame)) => Some(frame),
+        (None, None) => None,
+    };
+    if let Some(frame) = frame {
+        let (D::Descriptor(t) | D::GlobalObject(t)) = frame else { return None };
+        if !t.class_id.is("Rctn") || !known(t, &["Top ", "Left", "Btom", "Rght"]) {
+            return None;
+        }
         // Pixels only, like Canvas Size: a side in percent or points needs the document's size
         // or resolution and must not be played as pixels.
         let side = |k: &str| match t.get(k) {
             Some(D::UnitFloat { unit: PX, value }) if value.is_finite() => Some(*value),
             _ => None,
         };
-        let (Some(top), Some(left), Some(bottom), Some(right)) = (side("Top "), side("Left"), side("Btom"), side("Rght")) else {
-            return Mapped::Unsupported { harmless: false };
+        let (top, left, bottom, right) = (side("Top ")?, side("Left")?, side("Btom")?, side("Rght")?);
+        let (x, y, w, h) = (left.round(), top.round(), (right - left).round(), (bottom - top).round());
+        let coordinate = |n: f64| n.is_finite() && (f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(&n);
+        let side = |n: f64| n.is_finite() && (1.0..=f64::from(crate::image_cmds::MAX_CROP_SIDE)).contains(&n);
+        if !coordinate(x) || !coordinate(y) || !coordinate(x + w) || !coordinate(y + h) || !side(w) || !side(h) {
+            return None;
+        }
+        for (key, value) in [("x", x), ("y", y), ("width", w), ("height", h)] {
+            p.insert(key.into(), json!(value));
+        }
+    }
+    if let Some(value) = d.get("Angl") {
+        let a = match value {
+            D::UnitFloat { unit, value } if *unit == *b"#Ang" => *value,
+            D::Double(value) => *value,
+            _ => return None,
         };
-        p.insert("x".into(), left.round().into());
-        p.insert("y".into(), top.round().into());
-        p.insert("width".into(), (right - left).round().into());
-        p.insert("height".into(), (bottom - top).round().into());
+        if !a.is_finite() || a.abs() > crate::image_cmds::MAX_CROP_ANGLE || a != 0.0 && frame.is_none() {
+            return None;
+        }
+        p.insert("angle".into(), json!(a));
     }
-    if let Some(a) = get_num(d, "Angl") {
-        p.insert("angle".into(), a.into());
+    if let Some(value) = d.get("Dlt ") {
+        let D::Boolean(del) = value else { return None };
+        p.insert("deleteCroppedPixels".into(), json!(del));
     }
-    if let Some(del) = get_bool(d, "Dlt ") {
-        p.insert("deleteCroppedPixels".into(), del.into());
+    if ["cropAspectRatioModeKey", "Wdth", "Hght", "Rslt", "Intr"].iter().any(|key| d.get(key).is_some()) {
+        // Only complete pixel target-size recordings have a represented resampling meaning.
+        // An aspect-ratio constraint must not be mistaken for output dimensions.
+        let D::Enumerated { type_id, value } = d.get("cropAspectRatioModeKey")? else { return None };
+        if !type_id.is("cropAspectRatioModeClass") || !value.is("targetSize") {
+            return None;
+        }
+        for (key, param) in [("Wdth", "targetWidth"), ("Hght", "targetHeight")] {
+            let D::UnitFloat { unit: PX, value } = d.get(key)? else { return None };
+            if !value.is_finite() || value.fract() != 0.0 || !(1.0..=f64::from(crate::image_cmds::MAX_CROP_SIDE)).contains(value) {
+                return None;
+            }
+            p.insert(param.into(), json!(value));
+        }
+        if let Some(value) = d.get("Rslt") {
+            let D::UnitFloat { unit, value } = value else { return None };
+            if *unit != *b"#Rsl" || !value.is_finite() || !(1.0..=crate::image_cmds::MAX_CROP_RESOLUTION).contains(value) {
+                return None;
+            }
+            p.insert("resolution".into(), json!(value));
+        }
+        if let Some(value) = d.get("Intr") {
+            let D::Enumerated { type_id, value } = value else { return None };
+            if !type_id.is("Intp") {
+                return None;
+            }
+            p.insert("resample".into(), json!(lookup(INTERPOLATION, &trimmed(value))?));
+        }
     }
-    step("image.crop", Value::Object(p))
+    Some(p)
 }
 
 pub(super) fn crop_to(_: &str, p: &Value) -> Option<Descriptor> {
-    // The W x H x Resolution output options have no field here: refuse rather than export a plain
-    // rectangle crop that keeps the old size and resolution on replay.
-    if ["targetWidth", "targetHeight", "resolution"].iter().any(|k| p.get(k).is_some_and(|v| !v.is_null())) {
+    const KEYS: &[&str] = &["x", "y", "width", "height", "angle", "deleteCroppedPixels", "targetWidth", "targetHeight", "resolution", "resample"];
+    if p.as_object()?.iter().any(|(key, value)| !value.is_null() && !KEYS.contains(&key.as_str())) {
         return None;
     }
     let mut d = desc("null");
-    if let (Some(x), Some(y), Some(w), Some(h)) = (jnum(p, "x"), jnum(p, "y"), jnum(p, "width"), jnum(p, "height")) {
-        d = d.with("To  ", D::Descriptor(desc("Rctn").with("Top ", px(y)).with("Left", px(x)).with("Btom", px(y + h)).with("Rght", px(x + w))));
+    if ["x", "y", "width", "height"].iter().any(|key| p.get(key).is_some_and(|v| !v.is_null())) {
+        let (x, y, w, h) = (jnum(p, "x")?, jnum(p, "y")?, jnum(p, "width")?, jnum(p, "height")?);
+        if [x, y, w, h].iter().any(|n| !n.is_finite() || n.fract() != 0.0) {
+            return None;
+        }
+        d = d.with("T   ", D::Descriptor(desc("Rctn").with("Top ", px(y)).with("Left", px(x)).with("Btom", px(y + h)).with("Rght", px(x + w))));
     }
-    if let Some(a) = jnum(p, "angle") {
-        d = d.with("Angl", ang(a));
+    if p.get("angle").is_some_and(|v| !v.is_null()) {
+        d = d.with("Angl", ang(jnum(p, "angle")?));
     }
-    if let Some(del) = jbool(p, "deleteCroppedPixels") {
-        d = d.with("Dlt ", D::Boolean(del));
+    if p.get("deleteCroppedPixels").is_some_and(|v| !v.is_null()) {
+        d = d.with("Dlt ", D::Boolean(jbool(p, "deleteCroppedPixels")?));
     }
+    if ["targetWidth", "targetHeight", "resolution", "resample"].iter().any(|key| p.get(key).is_some_and(|v| !v.is_null())) {
+        d = d
+            .with("cropAspectRatioModeKey", enm("cropAspectRatioModeClass", "targetSize"))
+            .with("Wdth", px(jnum(p, "targetWidth")?))
+            .with("Hght", px(jnum(p, "targetHeight")?));
+        if p.get("resolution").is_some_and(|v| !v.is_null()) {
+            d = d.with("Rslt", D::UnitFloat { unit: *b"#Rsl", value: jnum(p, "resolution")? });
+        }
+        if p.get("resample").is_some_and(|v| !v.is_null()) {
+            d = d.with("Intr", enm("Intp", lookup_back(INTERPOLATION, jstr(p, "resample")?)?));
+        }
+    }
+    crop_parameters(&d)?;
     Some(d)
 }
 
