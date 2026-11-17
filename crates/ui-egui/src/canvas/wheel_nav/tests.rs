@@ -80,14 +80,49 @@ fn unsmoothed_wheel_pans_at_once_without_a_glide() {
         ctx.options(|o| o.input_options.line_scroll_speed)
     };
     let direct = pans(false);
-    assert!(near(direct[0], Vec2::new(0.0, -notch)), "the whole notch at once: {:?}", direct[0]);
+    // The canvas pans Photoshop's 16 points per notch (#12028), all of it at once.
+    assert!(near(direct[0], Vec2::new(0.0, -CANVAS_PAN_PER_LINE)), "the whole notch at once: {:?}", direct[0]);
     assert!(direct[1..].iter().all(|p| *p == Vec2::ZERO), "no glide after it");
     let smooth = pans(true);
     assert!(smooth[0].y.abs() < notch - 0.5, "smoothed, the first frame moves only part of it: {:?}", smooth[0]);
     assert!(smooth[1..].iter().any(|p| p.y != 0.0), "and the rest follows");
 }
 
-/// Interface › Enable Animations off only stops the *pan* gliding. A plain wheel that zooms
+/// Unsmoothed, only `Move` wheel events pan, as egui scrolls by them alone: a trackpad's
+/// `Start`, `End` or `Cancel` event with a delta doesn't move the canvas.
+#[test]
+fn unsmoothed_pan_ignores_wheel_events_outside_the_move_phase() {
+    let ctx = Context::default();
+    configure(&ctx);
+    let owner = Id::unique("test-unsmoothed-phase");
+    let event = |phase: TouchPhase| Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
+        unit: MouseWheelUnit::Point,
+        delta: Vec2::new(0.0, -30.0),
+        phase,
+        modifiers: Modifiers::NONE,
+    };
+    let pan_of = |n: u32, events: Vec<Event>| {
+        let raw = RawInput { time: Some(f64::from(n) / 60.0), predicted_dt: 1.0 / 60.0, events, ..Default::default() };
+        let mut pan = Vec2::ZERO;
+        let mut out = ctx.run_ui(raw, |ui| {
+            if let Some(Wheel::Pan(d)) = read_with(ui.ctx(), false, true, true, owner, true, false, true) {
+                pan = d;
+            }
+        });
+        out.textures_delta.clear();
+        pan
+    };
+    for (n, phase) in [TouchPhase::Start, TouchPhase::End, TouchPhase::Cancel].into_iter().enumerate() {
+        let n = u32::try_from(n).unwrap_or(0) * 2;
+        assert_eq!(pan_of(n, vec![event(phase)]), Vec2::ZERO, "{phase:?} doesn't pan");
+        assert_eq!(pan_of(n + 1, Vec::new()), Vec2::ZERO, "nor after {phase:?}");
+    }
+    let moved = pan_of(10, vec![event(TouchPhase::Start), event(TouchPhase::Move), event(TouchPhase::End)]);
+    assert!(near(moved, Vec2::new(0.0, -30.0)), "only the Move delta pans: {moved:?}");
+}
+
+/// Pan smoothing off (the canvas, #9479) only stops the *pan* gliding. A plain wheel that zooms
 /// (Zoom with Scroll Wheel) with Animated Zoom on must still ease over the frames of a notch,
 /// exactly as it does with the pan smoothing on.
 #[test]
@@ -372,7 +407,7 @@ fn animated_zoom_does_not_ease_a_trackpad() {
     assert!(frames[1..].iter().all(|f| *f == 1.0), "no tail after it: {frames:?}");
 }
 
-/// Zoom with Scroll Wheel + Animated Zoom with Enable Animations off: the wheel zooms eased, but
+/// Zoom with Scroll Wheel + Animated Zoom with pan smoothing off: the wheel zooms eased, but
 /// a sideways wheel still pans without a glide (#5721), all of it in the frame it turns.
 #[test]
 fn animated_zoom_keeps_the_sideways_wheel_unsmoothed_with_animations_off() {
@@ -393,8 +428,46 @@ fn animated_zoom_keeps_the_sideways_wheel_unsmoothed_with_animations_off() {
             pan
         })
         .collect();
-    assert!(near(pans[0], Vec2::new(40.0, 0.0)), "the whole notch at once: {:?}", &pans[..4]);
+    assert!(near(pans[0], Vec2::new(16.0, 0.0)), "the whole notch at once: {:?}", &pans[..4]);
     assert!(pans[1..].iter().all(|p| *p == Vec2::ZERO), "no glide after it: {pans:?}");
+}
+
+/// One frame of `events` read with pan smoothing off (the canvas, #9479) and Animated Zoom on.
+fn unsmoothed_frame(events: Vec<Event>, zoom_with_wheel: bool) -> Option<Wheel> {
+    let ctx = Context::default();
+    configure(&ctx);
+    let raw = RawInput { time: Some(0.0), predicted_dt: 1.0 / 60.0, events, ..Default::default() };
+    let mut wheel = None;
+    let mut out = ctx.run_ui(raw, |ui| wheel = read_with(ui.ctx(), zoom_with_wheel, true, true, Id::unique("test-mixed"), true, false, true));
+    out.textures_delta.clear();
+    wheel
+}
+
+/// Unsmoothed, the canvas pans by the wheel events of the gesture in progress only (the latest
+/// event's modifiers pick it, as for zooming): a ⌥ notch (a zoom) or a ⇧ notch (a snap zoom)
+/// arriving in the same frame as the panning notch must not pan the canvas too.
+#[test]
+fn unsmoothed_pan_takes_only_the_wheel_events_of_the_gesture_in_progress() {
+    let down = Vec2::new(0.0, -1.0);
+    // ⌥ zooms, then a plain notch pans: one notch, not two.
+    let pan = unsmoothed_frame(vec![wheel(down, Modifiers::ALT), wheel(down, Modifiers::NONE)], false);
+    assert_eq!(pan, Some(Wheel::Pan(Vec2::new(0.0, -16.0))), "only the plain notch pans");
+    // ⇧ + wheel pans sideways: a plain notch before it in the frame is not part of that.
+    let pan = unsmoothed_frame(vec![wheel(down, Modifiers::NONE), wheel(down, Modifiers::SHIFT)], false);
+    assert_eq!(pan, Some(Wheel::Pan(Vec2::new(-16.0, 0.0))), "only the ⇧ notch pans, sideways");
+    // Zoom with Scroll Wheel: ⌥ + wheel pans; the plain notch before it zooms and doesn't pan.
+    let pan = unsmoothed_frame(vec![wheel(down, Modifiers::NONE), wheel(down, Modifiers::ALT)], true);
+    assert_eq!(pan, Some(Wheel::Pan(Vec2::new(0.0, -16.0))), "only the ⌥ notch pans");
+    // ...and with the plain wheel zooming, a ⇧ snap notch earlier in the frame doesn't pan sideways.
+    let zoom = unsmoothed_frame(vec![wheel(Vec2::new(0.0, 1.0), Modifiers::SHIFT), wheel(down, Modifiers::NONE)], true);
+    assert!(matches!(zoom, Some(Wheel::Zoom(f)) if f < 1.0), "the plain notch zooms, nothing pans: {zoom:?}");
+    // ⌘/Ctrl + wheel is part of the plain gesture: it pans sideways alongside a plain notch.
+    let pan = unsmoothed_frame(vec![wheel(down, CTRL), wheel(down, Modifiers::NONE)], false);
+    assert_eq!(pan, Some(Wheel::Pan(Vec2::new(-16.0, -16.0))), "⌘/Ctrl + wheel and a plain notch both pan");
+    // A held ⌥ the wheel event itself misses (#8049) still makes it the ⌥ gesture's.
+    let alt_key = |pressed: bool| Event::Key { key: Key::AltLeft, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE };
+    let pan = unsmoothed_frame(vec![wheel(down, Modifiers::NONE), alt_key(true), wheel(down, Modifiers::NONE), alt_key(false)], true);
+    assert_eq!(pan, Some(Wheel::Pan(Vec2::new(0.0, -16.0))), "only the notch under the held ⌥ pans");
 }
 
 /// A diagonal point step with ⌥ is measured as egui measures it, folded onto one axis: (5, 5)
@@ -616,6 +689,50 @@ fn each_modifier_maps_like_photoshop() {
     assert!(pan == Vec2::ZERO && (zoom - 1.1).abs() < 1e-4, "{pan:?} {zoom}");
     let (pan, zoom, _) = gesture(vec![vec![wheel(notch, CTRL)]], true, false);
     assert!(near(pan, Vec2::new(40.0, 0.0)) && zoom == 1.0, "⌘/Ctrl + wheel still scrolls sideways: {pan:?} {zoom}");
+
+    // #10488, as Windows sends it: winit reports a held Ctrl as BOTH `ctrl` and `command`, so a
+    // gesture condition that only asks for `!command` never fires there. Ctrl + ⌥ + wheel is a dead
+    // gesture today (nothing at all with Zoom with Scroll Wheel on, a plain vertical scroll with it
+    // off), so teaching it to zoom like ⌥ + wheel replaces no working behaviour.
+    let ctrl_alt = Modifiers { alt: true, ctrl: true, command: true, ..Modifiers::NONE };
+    let (pan, zoom, _) = one(ctrl_alt);
+    assert!(pan == Vec2::ZERO && (zoom - NOTCH).abs() < 1e-4, "Ctrl + ⌥ + wheel zooms 10%, at once: {pan:?} {zoom}");
+    // With the preference on the gesture swaps: ⌥ + wheel scrolls, so Ctrl + ⌥ + wheel scrolls too.
+    let (pan, zoom, _) = gesture(vec![vec![wheel(notch, ctrl_alt)]], true, false);
+    assert!(near(pan, Vec2::new(0.0, 40.0)) && zoom == 1.0, "with the preference on, Ctrl + ⌥ + wheel scrolls like ⌥: {pan:?} {zoom}");
+    // Animated Zoom on (the default): the notch is eased over its frames, ×1.1 in total.
+    let (pan, zoom, _) = gesture_with(vec![vec![wheel(notch, ctrl_alt)]], false, false, true);
+    assert!(pan == Vec2::ZERO && (zoom - NOTCH).abs() < 1e-4, "eased, one Ctrl + ⌥ notch is still ×1.1: {pan:?} {zoom}");
+    // A Windows touchpad pinch while ⌥ is held keeps folding into one pinch event: the fold looks at
+    // `ctrl` whatever else is held, and *replaces* the wheel event, so nothing is counted twice.
+    let (pan, zoom, _) = gesture(vec![vec![wheel(Vec2::new(0.0, 0.25), ctrl_alt)]], false, true);
+    let speed = egui::InputOptions::default().scroll_zoom_speed;
+    assert!(pan == Vec2::ZERO && (zoom - (speed * 40.0 * 0.25).exp()).abs() < 1e-4, "a fractional Ctrl + ⌥ step zooms once: {pan:?} {zoom}");
+    // Ctrl + ⌥ + ⇧ + wheel keeps the behaviour it had on main before #10488, in all four
+    // combinations of Zoom with Scroll Wheel and Animated Zoom (measured on origin/main with a
+    // probe test): with the preference off the notch is a plain vertical scroll (pan [0 40], no
+    // zoom, no snap); with it on the notch does nothing at all. `alt_gesture` refuses the
+    // ctrl + command mirror together with ⇧, so the classification sees neither alt nor shift,
+    // exactly as `!command && !ctrl` did. Which Photoshop gesture the combination should be is
+    // open on #10488 (no measured evidence), so it is pinned, not chosen.
+    let ctrl_alt_shift = Modifiers { alt: true, ctrl: true, command: true, shift: true, ..Modifiers::NONE };
+    for animated in [false, true] {
+        let (pan, zoom, snaps) = gesture_with(vec![vec![wheel(notch, ctrl_alt_shift)]], false, false, animated);
+        assert!(
+            near(pan, Vec2::new(0.0, 40.0)) && zoom == 1.0 && snaps == 0,
+            "Ctrl + ⌥ + ⇧ + wheel scrolls as before with the preference off (animated {animated}): {pan:?} {zoom} snaps {snaps}"
+        );
+        let (pan, zoom, snaps) = gesture_with(vec![vec![wheel(notch, ctrl_alt_shift)]], true, false, animated);
+        assert!(pan == Vec2::ZERO && zoom == 1.0 && snaps == 0, "and does nothing with the preference on (animated {animated}): {pan:?} {zoom} snaps {snaps}");
+    }
+    // Without the Windows ctrl mirror the same wheel does snap, so only the ctrl half kills it.
+    let (pan, zoom, snaps) = one(Modifiers { alt: true, shift: true, ..Modifiers::NONE });
+    assert!(pan == Vec2::ZERO && zoom == 1.0 && snaps == 1, "⌥ + ⇧ + wheel still snaps: {pan:?} {zoom} snaps {snaps}");
+    // macOS ⌘ + ⌥ (command set, ctrl not) is deliberately NOT the zoom gesture: it is left to egui's
+    // own scroll handling. Ctrl + ⌥ + ⇧ is not the zoom gesture either (the rows above, unchanged
+    // from before #10488); which behaviour is right for it is the open question on #10488.
+    let (pan, zoom, _) = one(Modifiers { alt: true, ..CMD });
+    assert!(zoom == 1.0 && pan != Vec2::ZERO, "⌘ + ⌥ + wheel keeps scrolling: {pan:?} {zoom}");
 }
 
 #[test]
@@ -1012,4 +1129,52 @@ fn enable_gestures_off_keeps_the_trackpad_pinch() {
     frames[2] = vec![Event::Zoom(1.25)];
     let zoom = touch_zoom(frames, false);
     assert!((zoom - 1.25).abs() < 1e-4, "fingers resting: {zoom}");
+}
+
+#[test]
+fn alt_gesture_is_per_platform_modifier_shape() {
+    let alt = Modifiers::ALT;
+    // Windows / Linux: a held Ctrl arrives as ctrl + command, `mac_cmd` never set.
+    assert!(alt_gesture(&Modifiers { ctrl: true, command: true, ..alt }), "Ctrl + Alt zooms");
+    assert!(alt_gesture(&alt), "Alt zooms");
+    // macOS: ⌘ is command + mac_cmd, ⌃ is ctrl alone.
+    assert!(!alt_gesture(&Modifiers { mac_cmd: true, command: true, ..alt }), "⌘ + ⌥ keeps its meaning");
+    assert!(!alt_gesture(&Modifiers { mac_cmd: true, command: true, ctrl: true, ..alt }), "⌘ + ⌃ + ⌥ is not the zoom gesture");
+    assert!(alt_gesture(&Modifiers { ctrl: true, ..alt }), "macOS ⌃ + ⌥ (command unset) still counts as Alt");
+    // AltGr: winit reports neither alt nor ctrl for it (Windows `get_agnostic_mods` filters both
+    // out on layouts with an AltGr key; X11/Wayland deliver ISO_Level3_Shift), so it is NONE here.
+    assert!(!alt_gesture(&Modifiers::NONE), "AltGr alone is no modifier egui sees");
+    assert!(!alt_gesture(&Modifiers::CTRL), "Ctrl alone is not Alt");
+}
+
+#[test]
+fn mac_cmd_alt_wheel_does_not_zoom() {
+    let notch = Vec2::new(0.0, 1.0);
+    let cmd_alt = Modifiers { mac_cmd: true, command: true, ctrl: true, alt: true, ..Modifiers::NONE };
+    let (pan, zoom, _) = gesture(vec![vec![wheel(notch, cmd_alt)]], false, false);
+    assert!((zoom - 1.0).abs() < 1e-6, "⌘ + ⌃ + ⌥ + wheel must not zoom: {zoom}");
+    assert!(pan != Vec2::ZERO, "⌘ + ⌃ + ⌥ + wheel keeps scrolling: {pan:?}");
+    let (_, zoom, _) = gesture(vec![vec![wheel(notch, Modifiers { ctrl: true, command: true, alt: true, ..Modifiers::NONE })]], false, false);
+    assert!(zoom > 1.0, "Ctrl + Alt + wheel zooms on Windows/Linux: {zoom}");
+}
+
+#[test]
+fn alt_key_press_before_the_wheel_counts_as_alt_modifier() {
+    // `wheel_events` adds ⌥ from an Alt key event when the wheel's own modifiers miss it (#8049):
+    // the same frame with the key press and a modifier-less wheel must equal the wheel with `alt`.
+    let notch = Vec2::new(0.0, 1.0);
+    let key = |pressed| Event::Key { key: Key::AltRight, physical_key: Some(Key::AltRight), pressed, repeat: false, modifiers: Modifiers::NONE };
+    for animated in [false, true] {
+        let via_key = gesture_with(vec![vec![key(true), wheel(notch, Modifiers::NONE)]], false, false, animated);
+        let via_mods = gesture_with(vec![vec![wheel(notch, Modifiers::ALT)]], false, false, animated);
+        assert_eq!(via_key, via_mods, "AltRight key press + wheel == wheel with alt (animated {animated})");
+        assert!(via_key.1 > 1.0, "and it zooms: {via_key:?}");
+    }
+}
+
+#[test]
+fn ctrl_alt_shift_mirror_is_not_an_alt_gesture() {
+    let m = Modifiers { alt: true, ctrl: true, command: true, shift: true, ..Modifiers::NONE };
+    assert!(!alt_gesture(&m), "Ctrl + Alt + Shift keeps its pre-#10488 behaviour");
+    assert!(alt_gesture(&Modifiers { alt: true, shift: true, ..Modifiers::NONE }), "Alt + Shift is still the snap gesture");
 }

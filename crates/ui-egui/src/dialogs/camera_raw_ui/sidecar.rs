@@ -52,27 +52,50 @@ pub(super) fn write_sidecar(app: &mut PhotocraftApp, raw: &RawOpen, params: &Cam
     if !app.session.prefs().raw_defaults.write_xmp_sidecars || loaded == Some(params) {
         return;
     }
+    store_sidecar(app, raw, params);
+}
+
+/// What [`store_sidecar`] did.
+#[derive(Debug, PartialEq)]
+pub(super) enum Stored {
+    /// Written: the sidecar's name.
+    Written(String),
+    /// Nothing to keep: default settings and no sidecar of ours to update.
+    Defaults,
+    /// This raw can't keep a sidecar here: an automation request, a DNG or a raw without a path,
+    /// another application's sidecar, or no file writer.
+    Skipped,
+    /// The write failed (already reported in a notice).
+    Failed,
+}
+
+/// Writes `params` to `raw`'s sidecar under [`write_sidecar`]'s rules, whatever the preference
+/// (Done asks for it).
+pub(super) fn store_sidecar(app: &mut PhotocraftApp, raw: &RawOpen, params: &CameraRaw) -> Stored {
     if app.automation_input || app.session.authorize.is_some() {
         log::info!("{}: sidecar not written for an automation request", raw.name);
-        return;
+        return Stored::Skipped;
     }
-    let Some(path) = raw.path.as_deref().filter(|p| !is_dng(p)) else { return };
+    let Some(path) = raw.path.as_deref().filter(|p| !is_dng(p)) else { return Stored::Skipped };
     let sidecar = sidecar_path(path);
     let name = crate::file_open::display_name(&sidecar);
     match existing_sidecar_is_ours(&sidecar) {
         Some(false) => {
             let kept = crate::i18n::fmt(tl!("Kept {name}: written by another application"), &[("name", &name)]);
             crate::notices::post(app, kept, Vec::new(), false, None);
-            return;
+            return Stored::Skipped;
         }
-        None if params.is_identity() => return,
+        None if params.is_identity() => return Stored::Defaults,
         _ => {}
     }
-    let bytes = photocraft_io::camera_raw_xmp::save(params).into_bytes();
-    let Some(write) = app.services.write.as_mut() else { return };
+    // The crop it opened with stays in the file, though the dialog has no control for it.
+    let bytes = photocraft_io::camera_raw_xmp::save_with_crop(params, raw.crop).into_bytes();
+    let Some(write) = app.services.write.as_mut() else { return Stored::Skipped };
     if let Err(e) = write(&sidecar, &bytes) {
         crate::notices::error(app, crate::i18n::fmt(tl!("Could not write {name}: {error}"), &[("name", &name), ("error", &e)]));
+        return Stored::Failed;
     }
+    Stored::Written(name)
 }
 
 /// `None` when there is no sidecar at `sidecar`, else whether PhotoCraft wrote it. One that
@@ -85,19 +108,13 @@ pub(super) fn existing_sidecar_is_ours(sidecar: &str) -> Option<bool> {
 
 /// The bytes of the regular file at `path` when it holds at most
 /// [`photocraft_io::camera_raw_xmp::MAX_XMP_BYTES`]; `None` for anything else (missing, a folder,
-/// a pipe or device that might never end, larger). Never reads more than the cap plus one byte.
+/// a pipe or device that might never end, larger). Never reads more than the cap plus one byte, and
+/// never blocks opening a pipe.
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn read_bounded(path: &str) -> Option<Vec<u8>> {
-    use std::io::Read;
-    let cap = photocraft_io::camera_raw_xmp::MAX_XMP_BYTES;
-    // Checked before opening: opening a pipe for reading waits for a writer.
-    if !std::fs::metadata(path).ok()?.is_file() {
-        return None;
-    }
-    let file = std::fs::File::open(path).ok()?;
-    let mut bytes = Vec::new();
-    file.take(cap as u64 + 1).read_to_end(&mut bytes).ok()?;
-    (bytes.len() <= cap).then_some(bytes)
+    // One nonblocking open judged by the opened handle (regular file, at most the cap): a name
+    // checked and then opened again could be swapped for a pipe in between.
+    photocraft_format::read_file_limited(std::path::Path::new(path), photocraft_io::camera_raw_xmp::MAX_XMP_BYTES as u64).ok()
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -107,9 +124,9 @@ fn existing_sidecar_is_ours(_: &str) -> Option<bool> {
 
 /// Save Settings…: the dialog's settings as a Camera Raw `.xmp` settings file.
 pub(super) fn save_settings(app: &mut PhotocraftApp) -> Result<Value, String> {
-    let d = app.camera_raw.as_ref().ok_or(tl!("Camera Raw isn't open"))?;
+    let d = app.camera_raw.as_ref().ok_or(tl!("RAW Develop isn't open"))?;
     let bytes = photocraft_io::camera_raw_xmp::save(&d.params).into_bytes();
-    app.pick_save("Camera Raw Settings.xmp", move |app, path| {
+    app.pick_save("RAW Develop Settings.xmp", move |app, path| {
         let write = app.services.write.as_mut().ok_or("no writer configured")?;
         write(&path, &bytes)?;
         Ok(json!({"path": path}))
@@ -119,12 +136,17 @@ pub(super) fn save_settings(app: &mut PhotocraftApp) -> Result<Value, String> {
 /// Load Settings…: applies a Camera Raw `.xmp` settings file's supported settings over the
 /// dialog's; the status bar names how many were not supported.
 pub(super) fn load_settings(app: &mut PhotocraftApp) -> Result<Value, String> {
-    app.camera_raw.as_ref().ok_or(tl!("Camera Raw isn't open"))?;
+    app.camera_raw.as_ref().ok_or(tl!("RAW Develop isn't open"))?;
     app.pick_file_bytes_filtered(&["xmp"], |app, name, bytes| {
         let file = crate::file_open::display_name(&name);
-        let d = app.camera_raw.as_mut().ok_or(tl!("Camera Raw isn't open"))?;
+        let d = app.camera_raw.as_mut().ok_or(tl!("RAW Develop isn't open"))?;
         let mut next = d.params.clone();
-        let report = photocraft_io::camera_raw_xmp::load(&mut next, &bytes).map_err(|e| format!("{file}: {e}"))?;
+        let mut report = photocraft_io::camera_raw_xmp::load(&mut next, &bytes).map_err(|e| format!("{file}: {e}"))?;
+        // A crop only applies as a raw file opens; the filter has none, so it is not supported.
+        if report.crop.take().is_some() {
+            report.applied = report.applied.saturating_sub(1);
+            report.ignored.extend(photocraft_io::camera_raw_xmp::CROP_KEYS.iter().take(4).map(|k| k.to_string()));
+        }
         next.validate_changes(&d.original).map_err(|e| format!("{file}: {e}"))?;
         if d.params.point_curve != next.point_curve {
             d.curve_state = Default::default();
@@ -136,9 +158,9 @@ pub(super) fn load_settings(app: &mut PhotocraftApp) -> Result<Value, String> {
         }
         app.ui.status_error = false;
         app.ui.status = if report.ignored.is_empty() {
-            crate::i18n::fmt(tl!("Loaded Camera Raw settings from {file}"), &[("file", &file)])
+            crate::i18n::fmt(tl!("Loaded RAW Develop settings from {file}"), &[("file", &file)])
         } else {
-            let template = "Loaded Camera Raw settings from {file} ({n} not supported)";
+            let template = "Loaded RAW Develop settings from {file} ({n} not supported)";
             crate::i18n::fmt(tl!(template), &[("file", &file), ("n", &report.ignored.len().to_string())])
         };
         Ok(json!({"applied": report.applied, "ignored": report.ignored}))

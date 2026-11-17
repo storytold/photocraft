@@ -43,7 +43,7 @@ pub use bevel::{BEVEL_H_EPS, BevelGeom, BevelPaint, TextureCtx, bevel_chisel_h, 
 use bevel::{bevel_maps, satin_map};
 #[cfg(test)]
 use blur::{blur, box_line, dilate, tent, tent_direct};
-pub use blur::{softer_glow_tail_amplitude, softer_glow_tail_width, tent_kernel};
+pub use blur::{size_one_kernel, tent_kernel};
 pub(crate) use composite::{VectorStroke, build_maps_prepared, composite_with_effects_prepared, map_count};
 pub use composite::{build_maps, composite_with_effects, outline_share, premerges_layer, shadow_see_through, stroke_widths};
 pub use distance::{FieldKind, STROKE_CHAMFER_MAX, bevel_distance_fields, distance_field, stroke_outside_exact};
@@ -54,7 +54,8 @@ use distance::{
 };
 use paint::dissolves;
 pub use paint::{
-    bevel_contour_lut, glow_gradient_gain, glow_lut, gradient_t, gradient_units, hash_noise, ranged_lut, sample_gradient, satin_lut, spread_split,
+    bevel_contour_lut, glow_gradient_gain, glow_lut, glow_paint_lut, gradient_t, gradient_units, hash_noise, ranged_lut, sample_gradient, satin_lut,
+    spread_split,
 };
 #[cfg(test)]
 use paint::{glow_map, lut_at, noise, offset, shadow_map};
@@ -89,14 +90,7 @@ pub fn margin(layer: &Layer) -> i32 {
     for e in layer.effects.items.iter().filter(|e| e.enabled()) {
         let r = match e {
             Effect::DropShadow(s) | Effect::InnerShadow(s) => s.distance + s.size,
-            Effect::OuterGlow(g) => {
-                if g.technique == GlowTechnique::Softer {
-                    g.size + softer_glow_tail_width(g.size)
-                } else {
-                    g.size
-                }
-            }
-            Effect::InnerGlow(g) => g.size,
+            Effect::OuterGlow(g) | Effect::InnerGlow(g) => g.size,
             Effect::Stroke(s) => s.size,
             Effect::Satin(s) => satin_distance(s) + s.size,
             Effect::BevelEmboss(b) => b.size + b.soften,
@@ -254,3 +248,6 @@ impl FxMaps {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod satin_size_one_tests;
