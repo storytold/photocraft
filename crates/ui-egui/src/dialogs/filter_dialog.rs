@@ -377,6 +377,9 @@ fn restore_remembered(app: &PhotocraftApp, command: &str, spec: &str, fields: &m
         }
     }
     for p in parse_spec(spec) {
+        if command == "image.mode.colorTable" && p.key == "table" {
+            continue;
+        }
         if let Some(v) = saved.get(&p.key).filter(|v| rememberable(&p.kind, v)) {
             fields.insert(p.key, v.clone());
         }
@@ -399,6 +402,9 @@ pub(crate) fn remember(app: &mut PhotocraftApp, command: &str, fields: &Map<Stri
             saved.clear();
         }
         saved.insert(crate::select_mask_view::REMEMBER.into(), json!(remember));
+    }
+    if command == "image.mode.colorTable" {
+        saved.remove("table");
     }
     if !saved.is_empty() {
         app.session.prefs.edit(|prefs| prefs.dialogs.insert(command.into(), Value::Object(saved)));
@@ -438,6 +444,9 @@ fn default_value(app: &PhotocraftApp, command: &str, p: &Param) -> Option<Value>
 fn apply_command_defaults(app: &PhotocraftApp, command: &str, fields: &mut Map<String, Value>) {
     if command == "image.mode.indexedColor" {
         indexed_matte_defaults(app, fields);
+    }
+    if command == "image.mode.colorTable" {
+        color_table_defaults(app, fields);
     }
     if command == "image.rotation.arbitrary" {
         straighten_defaults(app, fields);
@@ -483,6 +492,17 @@ fn apply_command_defaults(app: &PhotocraftApp, command: &str, fields: &mut Map<S
     if command == COLOR_LOOKUP {
         fields.insert(LUT_FOLDER.into(), json!(app.session.prefs().file_handling.lut_folder));
     }
+}
+
+/// Color Table opens on `grayscale` when the document's palette equals the built-in Grayscale
+/// ramp, and `custom` for every other table (#14343).
+fn color_table_defaults(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
+    let is_grayscale = app
+        .session
+        .active()
+        .and_then(|st| st.doc.color_table.as_ref())
+        .is_some_and(|t| photocraft_engine::mode_cmds::preset_table("grayscale").as_deref() == Some(t.colors.as_slice()));
+    fields.insert("table".into(), json!(if is_grayscale { "grayscale" } else { "custom" }));
 }
 
 /// Image › Adjustments › Color Lookup: its 3D LUT menu lists the LUT folder's files after the
