@@ -1604,6 +1604,14 @@ fn handle_canvas_tool_clicks(
                 // A click the transform controls refused (the Background among the layers) goes
                 // nowhere else (#11101).
                 _ if tool == Tool::Move && app.ui.transform.is_none() && begin_transform_controls_at(app, ctx, xf, p) == ControlsPress::Refused => {}
+                // A Mixer Brush press that loaded paint was handled on pointer-down: the release only
+                // ends it, so one ⌥-click loads (and adds a history state, #11954) once.
+                _ if app.mixer_sampling => tool_input::tool_event_with_view(
+                    app,
+                    ToolEvent::Up { x: d[0], y: d[1] },
+                    click_mods,
+                    Some(tool_input::ToolViewContext::new(xf, Some(input.ctx.viewport_id()))),
+                ),
                 _ => {
                     // If this tool was not handled on pointer-down, fall back to a
                     // click-sized gesture while preserving pen pressure (mouse stays at 1).
