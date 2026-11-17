@@ -55,6 +55,35 @@ fn exr_scanline_alpha_opens_and_round_trips() {
 }
 
 #[test]
+fn exr_straight_float_overflow_preserves_associated_colour() {
+    let path = std::env::temp_dir().join(format!("photocraft-exr-float-overflow-{}.exr", std::process::id()));
+    let alpha = f32::MIN_POSITIVE;
+    let bytes = fixture(ChannelLayout::Rgba, &[8.0, 0.0, 0.0, alpha], &[0.0, -16.0, 0.0, alpha]);
+    std::fs::write(&path, &bytes).unwrap();
+    let file = import_file("overflow.exr", &path, &ImportOptions::default(), &Interrupt::NONE).unwrap().document;
+    std::fs::remove_file(path).unwrap();
+    let memory = import("overflow.exr", &bytes).unwrap().document;
+    let saved = export(&file, "exr", &ExportOptions::default()).unwrap();
+    let raw = codecs::decode(&saved.bytes).unwrap();
+    let reopened = import("overflow.exr", &saved.bytes).unwrap().document;
+
+    for (x, channel, value, black, white) in [(4, 0, 8.0f32, [8.0, 0.0, 0.0], [9.0, 1.0, 1.0]), (24, 1, -16.0, [0.0, -16.0, 0.0], [1.0, -15.0, 1.0])] {
+        let coverage = raw.get(x, 4, 3);
+        assert!(coverage > alpha);
+        assert!((raw.get(x, 4, channel) - value).abs() <= value.abs() * f32::EPSILON);
+        let max = f64::from(f32::MAX);
+        assert!(max * f64::from(coverage) >= f64::from(value.abs()));
+        assert!(max * f64::from(coverage.next_down()) < f64::from(value.abs()));
+        for doc in [&file, &memory, &reopened] {
+            let pixel = doc.layers[0].surface().unwrap().pixel(x as i32, 4);
+            assert!(pixel[channel].is_finite());
+            assert_eq!(pixel[3], coverage);
+            assert_composite(doc, x as i32, black, white);
+        }
+    }
+}
+
+#[test]
 fn exr_emission_survives_half_float_texture_samples() {
     let bytes = fixture(ChannelLayout::Rgba, &[0.5, 0.25, 0.125, 0.0], &[0.5, 0.25, 0.125, 1.0 / 16_384.0]);
     let doc = import("emission.exr", &bytes).unwrap().document;

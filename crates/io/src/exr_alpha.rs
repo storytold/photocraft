@@ -44,23 +44,35 @@ pub(crate) fn unpremultiply(data: &mut [u8], channels: usize) {
         if !(0.0..1.0).contains(&a) {
             continue;
         }
-        let a = if a == 0.0 {
+        let peak = colours.iter().map(|colour| f32::from_ne_bytes(*colour).abs()).filter(|value| value.is_finite()).fold(0.0, f32::max);
+        let zero_coverage = a == 0.0;
+        let mut coverage = if zero_coverage {
             if colours.iter().all(|colour| f32::from_ne_bytes(*colour) == 0.0) {
                 continue;
             }
-            *alpha = EMISSION_ALPHA.to_ne_bytes();
             EMISSION_ALPHA
-        } else if a == EMISSION_ALPHA {
-            // Reserve the exact marker for zero-alpha emission. Move a real sample at the
-            // marker up by one float32 step, preserving its coverage at export.
-            let a = a.next_up();
-            *alpha = a.to_ne_bytes();
-            a
         } else {
             a
         };
+        // No straight float32 sample can retain both the original coverage and this colour
+        // when the quotient is too large. Raise coverage only as far as needed to keep the
+        // associated colour. Round the bound upward so division cannot overflow again.
+        let peak = f64::from(peak);
+        let max = f64::from(f32::MAX);
+        if peak > max * f64::from(coverage) {
+            let needed = peak / max;
+            coverage = needed as f32;
+            if f64::from(coverage) * max < peak {
+                coverage = coverage.next_up();
+            }
+        }
+        if !zero_coverage && coverage == EMISSION_ALPHA {
+            // Reserve the exact marker for zero-alpha emission.
+            coverage = coverage.next_up();
+        }
+        *alpha = coverage.to_ne_bytes();
         for colour in colours {
-            *colour = (f32::from_ne_bytes(*colour) / a).clamp(f32::MIN, f32::MAX).to_ne_bytes();
+            *colour = (f32::from_ne_bytes(*colour) / coverage).clamp(f32::MIN, f32::MAX).to_ne_bytes();
         }
     }
 }
