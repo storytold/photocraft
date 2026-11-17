@@ -101,7 +101,8 @@ pub type MissingFile = (PathBuf, Vec<String>);
 fn missing_among(resolved: Vec<(String, Option<PathBuf>, Vec<u64>)>) -> Vec<MissingFile> {
     let mut by_file: BTreeMap<PathBuf, Vec<String>> = BTreeMap::new();
     for (stored, file, _) in resolved {
-        if let Some(file) = file.filter(|f| !cfg!(target_arch = "wasm32") && stamp(Some(f)).is_none()) {
+        // Absent, not merely unstamped: a file dated before 1970 has no stamp but is there.
+        if let Some(file) = file.filter(|f| !cfg!(target_arch = "wasm32") && std::fs::metadata(f).is_err()) {
             by_file.entry(file).or_default().push(stored);
         }
     }
@@ -129,11 +130,27 @@ pub fn missing_files_within(doc: &Document, document: Option<&Path>, wait: std::
     rx.recv_timeout(wait).ok()
 }
 
+/// Decides whether an untrusted caller may touch a path: the session's [`Session::authorize`] gate.
+pub type PathGate = fn(&str, &Value) -> Result<()>;
+
 /// The warnings an open without a dialog (automation, the CLI) reports for [`missing_files`]: one
-/// per file, naming its absolute path.
-pub fn missing_file_warnings(doc: &Document, document: Option<&Path>) -> Vec<String> {
-    missing_files(doc, document).into_iter().map(|(file, _)| format!("Cannot locate linked asset: {}", file.display())).collect()
+/// per file, naming its absolute path. With `gate` (an automation open), a file it refuses is not
+/// looked at, so the warnings can't tell whether a file outside what the caller may read exists.
+pub fn missing_file_warnings(doc: &Document, document: Option<&Path>, gate: Option<PathGate>) -> Vec<String> {
+    let mut resolved = resolved_files_of(doc, document);
+    if let Some(gate) = gate {
+        for (_, file, _) in &mut resolved {
+            if file.as_ref().is_some_and(|f| gate(MISSING_LINK_CHECK, &json!({"path": f.to_string_lossy()})).is_err()) {
+                *file = None;
+            }
+        }
+    }
+    missing_among(resolved).into_iter().map(|(file, _)| format!("Cannot locate linked asset: {}", file.display())).collect()
 }
+
+/// The command a missing-link look is authorized as: it reads no more of a file than Update
+/// Modified Content would.
+const MISSING_LINK_CHECK: &str = "layer.smartObjects.updateModifiedContent";
 
 impl Session {
     /// Start stamping the active document's linked files on a worker thread, unless a look is

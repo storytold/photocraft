@@ -327,3 +327,61 @@ fn automation_warnings_take_relative_links_from_the_opened_file() {
     let looked = photocraft_engine::link_watch::missing_files_within(doc, Some(&s.doc), std::time::Duration::from_secs(10));
     assert_eq!(looked, Some(vec![(s.art.clone(), vec!["art.png".to_string()])]));
 }
+
+/// A file dated before 1970 has no watcher stamp, but it is there: not listed.
+#[test]
+fn a_file_dated_before_1970_is_not_missing() {
+    let s = saved(true, None);
+    let old = std::time::UNIX_EPOCH - std::time::Duration::from_secs(10 * 365 * 24 * 3600);
+    std::fs::File::options().write(true).open(&s.art).unwrap().set_modified(old).unwrap();
+    let (mut app, _) = app();
+    open_file(&mut app, &s.doc);
+    assert!(app.ui.dialogs.is_empty(), "{:?}", app.ui.dialogs.iter().map(|d| &d.fields).collect::<Vec<_>>());
+}
+
+/// Refuses every path, as an automation policy refuses one outside its granted root.
+fn refuse_paths(_: &str, p: &serde_json::Value) -> photocraft_engine::Result<()> {
+    match p.get("path") {
+        Some(_) => Err(photocraft_engine::EngineError::Other("outside the granted root".into())),
+        None => Ok(()),
+    }
+}
+
+/// An automation open looks only at files its policy lets it read: a refused link is not reported,
+/// so the warnings can't tell whether a file outside the granted root exists.
+#[test]
+fn automation_warnings_skip_files_the_policy_refuses() {
+    let s = saved(false, None);
+    let (mut app, _) = app();
+    app.services.automation_authorize = Some(refuse_paths);
+    let (req, _rx) = control::ControlRequest::new("app.open", json!({"path": abs(&s.doc)}));
+    let control::Outcome::Done(r) = control::handle(&mut app, &egui::Context::default(), &req) else { panic!("app.open answers at once") };
+    assert_eq!(r["result"]["warnings"], json!([]), "{r}");
+    // The engine's open under the same gate.
+    let mut session = photocraft_engine::Session::new();
+    session.authorize = Some(refuse_paths);
+    let bytes = std::fs::read(&s.doc).unwrap();
+    let r = photocraft_engine::file_cmds::open_bytes_as(&mut session, "doc.pcraft", &bytes, None, Some(abs(&s.doc))).unwrap();
+    assert_eq!(r["warnings"], json!([]));
+}
+
+/// Raw Defaults › Resolution goes by the import's own notes, not by a missing link's path that
+/// happens to contain the developed-raw note.
+#[test]
+fn a_missing_link_named_like_the_raw_note_keeps_the_resolution() {
+    let s = saved(true, None);
+    let named = s.dir.path().join(format!("{}.png", photocraft_io::raw::DEVELOPED_NOTE));
+    let mut session = photocraft_engine::Session::new();
+    let bytes = std::fs::read(&s.doc).unwrap();
+    photocraft_engine::file_cmds::open_bytes_as(&mut session, "doc.pcraft", &bytes, None, Some(abs(&s.doc))).unwrap();
+    std::fs::write(&named, png("#00ff00")).unwrap();
+    session.execute("file.placeLinked", json!({"path": abs(&named)})).unwrap();
+    session.execute("file.saveACopy", json!({"path": abs(&s.doc), "overwrite": true})).unwrap();
+    std::fs::remove_file(&named).unwrap();
+    let dpi = session.active().unwrap().doc.resolution_dpi;
+    session.edit_prefs(|p| p.raw_defaults.resolution = 300.0);
+    let bytes = std::fs::read(&s.doc).unwrap();
+    let r = photocraft_engine::file_cmds::open_bytes_as(&mut session, "doc.pcraft", &bytes, None, Some(abs(&s.doc))).unwrap();
+    assert_eq!(r["warnings"], json!([format!("Cannot locate linked asset: {}", abs(&named))]));
+    assert_eq!(session.active().unwrap().doc.resolution_dpi, dpi);
+}

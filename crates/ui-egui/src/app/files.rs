@@ -177,7 +177,9 @@ impl PhotocraftApp {
     /// was read from, which a template, a read-only source or a directory `.pcraft` doesn't keep.
     pub(crate) fn missing_link_warnings(&self, opened: &str) -> Vec<String> {
         let opened = Some(std::path::Path::new(opened));
-        self.session.active().map(|st| photocraft_engine::link_watch::missing_file_warnings(&st.doc, opened)).unwrap_or_default()
+        // Only files the automation client may read are looked at.
+        let gate = self.services.automation_authorize;
+        self.session.active().map(|st| photocraft_engine::link_watch::missing_file_warnings(&st.doc, opened, gate)).unwrap_or_default()
     }
 
     /// The document half of [`open_automation_bytes`](Self::open_automation_bytes): no script
