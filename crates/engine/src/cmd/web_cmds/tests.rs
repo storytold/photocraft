@@ -1565,6 +1565,90 @@ fn web_file_naming_does_not_reserve_or_validate_files_for_no_image_cells() {
     }
 }
 
+fn named_web_files(s: &mut Session, naming: Value) -> Vec<String> {
+    let mut paths = Vec::new();
+    save_for_web_with_writer(s, &json!({"dir":"output","imagesFolder":"","format":"jpeg","fileNaming":naming}), &mut |path, data| {
+        photocraft_codecs::decode(data).unwrap();
+        paths.push(path.strip_prefix("output/").unwrap().to_string());
+        Ok(())
+    })
+    .unwrap();
+    paths
+}
+
+#[test]
+fn web_file_naming_separators_coalesce_and_do_not_leave_a_trailing_separator() {
+    let mut s = session(8);
+    s.execute("slice.new", json!({"rect":[0,0,32,48]})).unwrap();
+    for (parts, expected) in [
+        (json!(["hyphen",{"text":"X"}]), "-X"),
+        (json!([{"text":"X"},"hyphen"]), "X"),
+        (json!([{"text":"X"},"hyphen","underscore","space",{"text":"Y"}]), "X-Y"),
+        (json!(["underscore","hyphen","space",{"text":"X"}]), "_X"),
+        (json!([{"text":"X"},"hyphen","none","underscore","none","space",{"text":"Y"}]), "X-Y"),
+        (json!([{"text":"X-"},"space"]), "X-"),
+    ] {
+        assert_eq!(named_web_files(&mut s, json!({"components":parts})), [format!("{expected}.jpg"), format!("{expected}-02.jpg")]);
+    }
+    assert_eq!(named_web_files(&mut s, json!({"components":[{"text":"A.B"}],"extension":"none"})), ["A.B", "A.B-02"]);
+}
+
+#[test]
+fn web_file_naming_recorded_whole_image_name_overrides_components_only_for_a_single_slice() {
+    let mut s = session(8);
+    let naming = json!({"fileName":"Archive.JPG","wholeImage":true,"windows":true,"components":["serial"]});
+    assert_eq!(named_web_files(&mut s, naming.clone()), ["Archive.JPG"]);
+    s.execute("slice.new", json!({"rect":[0,0,64,48],"name":"Full Label"})).unwrap();
+    assert_eq!(named_web_files(&mut s, naming), ["Archive.JPG"]);
+    assert_eq!(
+        named_web_files(&mut s, json!({"fileName":"Archive Set.JPG","wholeImage":true,"windows":true,"unix":true,"components":["serial"]})),
+        ["Archive-Set.JPG"]
+    );
+    assert_eq!(named_web_files(&mut s, json!({"wholeImage":true,"windows":true,"components":[{"text":"Ignored"}]})), ["web.jpg"]);
+
+    let mut s = session(8);
+    s.execute("slice.new", json!({"rect":[0,0,32,48],"name":"Named: One?"})).unwrap();
+    assert_eq!(
+        named_web_files(&mut s, json!({"fileName":"Version.2.JPG","wholeImage":true,"windows":true,"unix":true,"components":["slice"]})),
+        ["Named--One-.jpg", "Version.2_02.jpg"]
+    );
+    let mut s = session(8);
+    s.execute("slice.new", json!({"rect":[0,0,32,48],"kind":"noImage"})).unwrap();
+    s.execute("slice.new", json!({"rect":[32,0,32,48]})).unwrap();
+    assert_eq!(named_web_files(&mut s, json!({"fileName":"Archive.JPG","wholeImage":true,"windows":true,"components":["serial"]})), ["1.jpg"]);
+}
+
+#[test]
+fn web_file_naming_windows_characters_and_unicode_are_explicit_and_bounded() {
+    let mut s = session(8);
+    s.execute("slice.new", json!({"rect":[0,0,32,48]})).unwrap();
+    assert_eq!(
+        named_web_files(&mut s, json!({"components":[{"text":"A:B\\C*D?E\"F<G>H|I"}],"windows":true})),
+        ["A-B_C-D-E'F(G)H_I.jpg", "A-B_C-D-E'F(G)H_I-02.jpg"]
+    );
+    assert_eq!(named_web_files(&mut s, json!({"components":[{"text":"图像Ωé"}],"windows":true})), ["图像Ωé.jpg", "图像Ωé-02.jpg"]);
+    for id in [7002, 7003, 7004] {
+        let dir = tmp(&format!("naming-rollover-{id}"));
+        let mut s = session(8);
+        s.edit("Legacy resource", |doc, _| {
+            doc.metadata.psd_resources.push((id, String::new(), std::sync::Arc::new(vec![0])));
+            Ok(())
+        })
+        .unwrap();
+        assert_refused(&mut s, &dir, json!({"dir":dir,"fileNaming":{"components":["slice"]}}), "fileNaming");
+    }
+    for naming in [
+        json!({"components":["slice"],"windows":"true"}),
+        json!({"components":["slice"],"wholeImage":1}),
+        json!({"components":["slice"],"fileName":"../escape.jpg"}),
+        json!({"components":["slice"],"fileName":"x.jpg","name":"ambiguous"}),
+    ] {
+        let dir = tmp("naming-recorded-validation");
+        let mut s = session(8);
+        assert_refused(&mut s, &dir, json!({"dir":dir,"fileNaming":naming}), "fileNaming");
+    }
+}
+
 /// A refused slice export writes and remembers nothing, and (called directly, as the platform
 /// writer is) leaves a floating move in place.
 fn assert_refused(s: &mut Session, dir: &str, p: Value, expect: &str) {

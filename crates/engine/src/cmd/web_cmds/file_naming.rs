@@ -1,5 +1,6 @@
 //! Explicit image naming for Save for Web. The ordinary exporter keeps its existing defaults.
 use super::{Document, Result, SliceKind, Value, bad, slices};
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 const CMD: &str = "file.export.saveForWebLegacy";
@@ -24,7 +25,7 @@ pub(super) fn plan(p: &Value, doc: &Document, ext: &str) -> Result<Option<Vec<St
         return Err(invalid("requires Images Only, all slices and a dir destination"));
     }
     let value = value.as_object().ok_or_else(|| invalid("expected an object"))?;
-    if value.keys().any(|k| !["name", "components", "extension", "unix"].contains(&k.as_str())) {
+    if value.keys().any(|k| !["name", "fileName", "wholeImage", "windows", "components", "extension", "unix"].contains(&k.as_str())) {
         return Err(invalid("unknown setting"));
     }
     let components = value
@@ -42,13 +43,19 @@ pub(super) fn plan(p: &Value, doc: &Document, ext: &str) -> Result<Option<Vec<St
         "none" => String::new(),
         _ => return Err(invalid("unknown extension choice")),
     };
-    let unix = match value.get("unix") {
-        None => false,
-        Some(v) => v.as_bool().ok_or_else(|| invalid("unix must be boolean"))?,
+    let flag = |key: &str| match value.get(key) {
+        None => Ok(false),
+        Some(v) => v.as_bool().ok_or_else(|| invalid("compatibility and wholeImage settings must be boolean")),
     };
-    let base = match value.get("name") {
-        Some(v) => text(v)?,
-        None => doc.name.rsplit_once('.').map_or(doc.name.as_str(), |(base, _)| base),
+    let (unix, windows, whole_image) = (flag("unix")?, flag("windows")?, flag("wholeImage")?);
+    let file_name = value.get("fileName").map(text).transpose()?;
+    if file_name.is_some_and(|name| name.is_empty() || name.contains(['/', '\\'])) || file_name.is_some() && value.contains_key("name") {
+        return Err(invalid("fileName must be one filename and cannot be combined with name"));
+    }
+    let base = match (file_name, value.get("name")) {
+        (Some(name), _) => name.rsplit_once('.').map_or(name, |(base, _)| base),
+        (None, Some(v)) => text(v)?,
+        (None, None) => doc.name.rsplit_once('.').map_or(doc.name.as_str(), |(base, _)| base),
     };
     if base.len() > 4096 || base.contains('\0') {
         return Err(invalid("document name is too long or contains NUL"));
@@ -62,6 +69,11 @@ pub(super) fn plan(p: &Value, doc: &Document, ext: &str) -> Result<Option<Vec<St
             }
             _ => return Err(invalid("unknown component")),
         }
+    }
+    // These preserved ImageReady resources can refer to output states/rollovers that the
+    // static slice model cannot reproduce. Never silently export just one of their images.
+    if doc.metadata.psd_resources.iter().any(|(id, _, _)| matches!(*id, 7002 | 7003 | 7004)) {
+        return Err(invalid("ImageReady rollover documents are not supported"));
     }
     // The resolver copies stored names into visible pieces. Reject oversized names before
     // that copy, not only after concatenating a filename from them.
@@ -85,38 +97,78 @@ pub(super) fn plan(p: &Value, doc: &Document, ext: &str) -> Result<Option<Vec<St
         }
         file_serial += 1; // `all` is capped above; no-image cells never consume a file serial.
         let mut stem = String::new();
+        let mut separator = None;
         for part in components {
-            if let Some(literal) = part.get("text") {
-                stem.push_str(text(literal)?);
+            if let Some(sep) = match part.as_str() {
+                Some("underscore") => Some('_'),
+                Some("hyphen") => Some('-'),
+                Some("space") => Some(' '),
+                _ => None,
+            } {
+                separator.get_or_insert(sep);
                 continue;
             }
-            match part.as_str().unwrap_or_default() {
-                "document" => stem.push_str(base),
-                "slice" => {
-                    if slice.id.and_then(|id| doc.slices.get(id)).is_some_and(|s| !s.name.is_empty()) {
-                        stem.push_str(&slice.name);
-                    } else if all.len() == 1 {
-                        stem.push_str(base);
-                    } else {
-                        stem.push_str(&format!("{base}_{:02}", slice.number));
+            let fragment = if let Some(literal) = part.get("text") {
+                Cow::Borrowed(text(literal)?)
+            } else {
+                match part.as_str().unwrap_or_default() {
+                    "document" => Cow::Borrowed(base),
+                    "slice" => {
+                        if slice.id.and_then(|id| doc.slices.get(id)).is_some_and(|s| !s.name.is_empty()) {
+                            Cow::Borrowed(slice.name.as_str())
+                        } else if all.len() == 1 {
+                            Cow::Borrowed(base)
+                        } else {
+                            Cow::Owned(format!("{base}_{:02}", slice.number))
+                        }
                     }
+                    "serial" => Cow::Owned(file_serial.to_string()),
+                    "serial2" => Cow::Owned(format!("{file_serial:02}")),
+                    "letter" | "LETTER" => Cow::Owned(crate::file_cmds::serial_letters(file_serial, part == "LETTER")),
+                    _ => Cow::Borrowed(""),
                 }
-                "serial" => stem.push_str(&file_serial.to_string()),
-                "serial2" => stem.push_str(&format!("{file_serial:02}")),
-                "letter" | "LETTER" => stem.push_str(&crate::file_cmds::serial_letters(file_serial, part == "LETTER")),
-                "underscore" => stem.push('_'),
-                "hyphen" => stem.push('-'),
-                "space" => stem.push(' '),
-                _ => {}
+            };
+            if !fragment.is_empty() {
+                if let Some(sep) = separator.take() {
+                    stem.push(sep);
+                }
+                stem.push_str(&fragment);
             }
-        }
-        if unix {
-            stem = stem.replace(' ', "-");
         }
         if stem.is_empty() {
             stem.push('_');
         }
         let suffix = if extension.is_empty() { String::new() } else { format!(".{extension}") };
+        // A single full-canvas slice uses the Save Optimized As filename, including its
+        // original extension case, instead of the per-slice component settings.
+        let (stem, suffix) = if whole_image && all.len() == 1 {
+            let name = file_name.map(str::to_string).unwrap_or_else(|| format!("{base}.{}", ext.to_ascii_lowercase()));
+            if let Some((base, ext)) = name.rsplit_once('.') { (base.to_string(), format!(".{ext}")) } else { (name, String::new()) }
+        } else {
+            (stem, suffix)
+        };
+        let compatible = |value: &str| -> String {
+            value
+                .chars()
+                .map(|c| {
+                    if unix && c == ' ' {
+                        '-'
+                    } else if windows {
+                        match c {
+                            ':' | '*' | '?' => '-',
+                            '\\' | '|' => '_',
+                            '"' => '\'',
+                            '<' => '(',
+                            '>' => ')',
+                            _ => c,
+                        }
+                    } else {
+                        c
+                    }
+                })
+                .collect()
+        };
+        let (stem, suffix) = (compatible(&stem), compatible(&suffix));
         let mut name = format!("{stem}{suffix}");
         // Remember the next suffix for each base: identical components across many slices
         // must not rescan all earlier suffixes on every image.
