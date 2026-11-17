@@ -16,7 +16,7 @@ fn smart_svg(bytes: Vec<u8>) -> SmartObject {
     SmartObject::new(SmartSource::Embedded { file_name: "Stack completeness.svg".into(), bytes: Arc::new(bytes) }, Affine::IDENTITY, None)
 }
 
-fn old_stack_key(bytes: &[u8], fmt: PixelFormat, mode: photocraft_doc::StackMode) -> ([u8; 32], PixelFormat) {
+fn old_stack_key(bytes: &[u8], fmt: PixelFormat, mode: photocraft_doc::StackMode) -> source::CacheKey {
     let mut key = source::cache_key(bytes, fmt);
     key.0 = *blake3::hash(&[&key.0[..], b"stack:", mode.id().as_bytes()].concat()).as_bytes();
     key
