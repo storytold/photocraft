@@ -11,6 +11,14 @@ use crate::{PhotocraftApp, Services};
 /// Frames a harness may take to settle: opening the list loads the rows' samples over several passes.
 const SETTLE_STEPS: u64 = 64;
 
+#[test]
+fn a_japanese_interface_lists_japanese_font_names_whatever_the_preference() {
+    assert!(!super::fonts::english_font_names(true, "ja"), "a Japanese interface keeps its names");
+    assert!(!super::fonts::english_font_names(false, "ja"));
+    assert!(super::fonts::english_font_names(true, "de"), "the preference decides in other languages");
+    assert!(!super::fonts::english_font_names(false, "en"));
+}
+
 fn app_with_layer() -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
     app.run("file.new", json!({"width": 200, "height": 100})).unwrap();

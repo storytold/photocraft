@@ -86,6 +86,13 @@ pub(super) fn preview_text(app: &PhotocraftApp) -> Option<String> {
     (!line.is_empty()).then_some(line)
 }
 
+/// Show the families by their English names: the preference decides, except in a Japanese
+/// interface, which lists them by their Japanese names (ＭＳ Ｐ明朝, not MS PMincho) as Photoshop
+/// does.
+pub(super) fn english_font_names(preference: bool, language: &str) -> bool {
+    preference && !language.starts_with("ja")
+}
+
 /// The font picker's most recent families the settings may hold, whatever the preference says.
 const MAX_RECENT_FONTS: usize = 50;
 
@@ -118,7 +125,7 @@ pub(crate) fn font_state(app: &PhotocraftApp) -> FontSourceState {
         FontPreview::ExtraLarge => FontPreviewSize::ExtraLarge,
         FontPreview::Huge => FontPreviewSize::Huge,
     };
-    settings.names_in_english = prefs.type_.show_font_names_in_english;
+    settings.names_in_english = english_font_names(prefs.type_.show_font_names_in_english, crate::i18n::current().code());
     let catalog = photocraft_text::fonts::catalog();
     let served = photocraft_text::served::families().into_iter().filter(|f| catalog.family(f).is_none()).collect();
     FontSourceState { before: settings.clone(), settings, filters: app.ui.font_filters.clone(), preview_text: preview_text(app), served }

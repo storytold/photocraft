@@ -58,13 +58,38 @@ static I18N: LazyLock<I18n> = LazyLock::new(|| {
 
 /// The same catalogs for the craft framework's components, which take their words from the
 /// framework's own craft-i18n through the `Host`.
+///
+/// One row is PhotoCraft's own: the font picker's sample. A Japanese interface samples each row
+/// in the family's own face, and Photoshop draws Kana there (`あいうえお`), not Latin; the
+/// picker falls back to the family's name for a face that can't draw the sample, so a Latin-only
+/// font still shows itself.
 pub(crate) fn framework_i18n() -> &'static std::sync::Arc<craft::i18n::I18n> {
-    static FRAMEWORK: LazyLock<std::sync::Arc<craft::i18n::I18n>> = LazyLock::new(|| {
-        let offered: Vec<&str> = LANGUAGES.iter().map(|l| l.code).collect();
-        std::sync::Arc::new(craft::i18n::I18n::new(CRAFT_I18N, &offered).0)
-    });
+    static FRAMEWORK: LazyLock<std::sync::Arc<craft::i18n::I18n>> = LazyLock::new(|| std::sync::Arc::new(framework_catalogs()));
     &FRAMEWORK
 }
+
+/// The framework's catalogs: the embedded ones, with `JAPANESE_FONT_SAMPLE` added while no
+/// catalog translates the font picker's sample.
+fn framework_catalogs() -> craft::i18n::I18n {
+    let offered: Vec<&str> = LANGUAGES.iter().map(|l| l.code).collect();
+    let (i18n, _) = craft::i18n::I18n::new(CRAFT_I18N, &offered);
+    let translated = i18n.from_code("ja").is_some_and(|ja| i18n.get(ja, "@id", FONT_PICKER_SAMPLE).is_some());
+    if translated {
+        return i18n;
+    }
+    let catalogs = CRAFT_I18N.iter().map(|&(code, shared, app)| {
+        let app = if code.eq_ignore_ascii_case("ja") { format!("{}\n{}", app.trim_end_matches(['\n', '\r']), JAPANESE_FONT_SAMPLE) } else { app.to_owned() };
+        (code.to_owned(), shared.to_owned(), app)
+    });
+    craft::i18n::I18n::from_owned(catalogs, &offered).0
+}
+
+/// The font picker's sample word: craft-libs' `picker::FontPickerWords::sample`.
+const FONT_PICKER_SAMPLE: &str = "fontPicker.sample";
+
+/// The Japanese sample PhotoCraft gives the font picker, as a catalog row: id, then the
+/// translation. A face that draws every Kana here is sampled with it; others show their name.
+const JAPANESE_FONT_SAMPLE: &str = "@id\tfontPicker.sample\tあいうえお";
 
 /// One UI language PhotoCraft offers, when its catalogs are embedded: what the app needs beyond
 /// them. Its name and translations come from craft-i18n.

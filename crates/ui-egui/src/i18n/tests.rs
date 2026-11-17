@@ -1,5 +1,25 @@
 use super::*;
 
+/// The font picker's sample is PhotoCraft's row, not the framework's: a Japanese interface draws
+/// Kana in each row (`あいうえお`), and a face that can't draw it falls back to its own name.
+/// The framework's catalogs are otherwise the same, and no other language takes the Kana sample.
+#[test]
+fn a_japanese_interface_samples_the_font_picker_in_kana() {
+    if !needs_catalogs() {
+        return;
+    }
+    let i18n = framework_catalogs();
+    let Some(ja) = i18n.from_code("ja") else { return };
+    assert_eq!(i18n.get(ja, "@id", FONT_PICKER_SAMPLE), Some("あいうえお"), "the picker's Japanese sample");
+    // The rest of the Japanese catalogs still parse around the added row.
+    assert_eq!(i18n.name(ja), "日本語");
+    for code in ["de", "fr", "zh-hans"] {
+        if let Some(lang) = i18n.from_code(code) {
+            assert_ne!(i18n.get(lang, "@id", FONT_PICKER_SAMPLE), Some("あいうえお"), "{code} keeps the framework's sample");
+        }
+    }
+}
+
 /// A registered language whose catalogs are embedded. Callers check [`needs_catalogs`] first.
 fn lang(code: &str) -> Lang {
     Lang::from_code(code).unwrap_or_else(|| panic!("{code} registered and embedded"))
