@@ -1039,6 +1039,11 @@ impl PresetStore {
         Ok(())
     }
 
+    /// Saved ids remain reserved even when their unreadable pattern files could not be loaded.
+    pub(crate) fn has_pattern_id(&self, id: &str) -> bool {
+        self.patterns.index.iter().any(|entry| entry.id == id)
+    }
+
     /// Write the pattern library's changes (see [`patterns`]).
     pub fn sync_patterns(&mut self, library: &crate::pattern_cmds::PatternLibrary) {
         let changed = self.patterns.pixels_rev != library.pixels_rev;

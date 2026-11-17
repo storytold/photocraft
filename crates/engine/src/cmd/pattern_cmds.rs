@@ -324,8 +324,51 @@ pub fn default_name(s: &Session) -> String {
 /// where the working copy is larger per pixel. What is accepted always paints.
 const MAX_DEFINE_EDGE: u32 = 8000;
 
+/// A copy can travel between installations in a PAT file, so it needs an independent identity.
+/// Also reserve stored ids whose unreadable pattern files were not loaded into the library.
+fn copied_pattern_id(s: &Session) -> Result<String> {
+    let occupied: std::collections::HashSet<&str> =
+        s.patterns.items.iter().chain(s.documents().iter().flat_map(|state| state.doc.patterns.iter())).map(|pattern| pattern.id.as_str()).collect();
+    for _ in 0..16 {
+        let mut bytes = [0; 16];
+        getrandom::fill(&mut bytes).map_err(|error| bad("edit.definePattern", format!("could not create a pattern ID: {error}")))?;
+        bytes[6] = (bytes[6] & 0x0f) | 0x40;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        let hex = format!("{:032x}", u128::from_be_bytes(bytes));
+        let id = format!("{}-{}-{}-{}-{}", &hex[..8], &hex[8..12], &hex[12..16], &hex[16..20], &hex[20..]);
+        if !occupied.contains(id.as_str()) && s.preset_store.as_ref().is_none_or(|store| !store.has_pattern_id(&id)) {
+            return Ok(id);
+        }
+    }
+    Err(bad("edit.definePattern", "could not create a unique pattern ID"))
+}
+
+fn copy_pattern(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "edit.definePattern";
+    let key = p
+        .get("fromPattern")
+        .and_then(Value::as_str)
+        .filter(|key| !key.trim().is_empty())
+        .ok_or_else(|| bad(cmd, "`fromPattern` must be a nonempty pattern id or name"))?;
+    let mut pat = resolve_or_named(s, key, &json!({})).map_err(|reason| bad(cmd, reason))?;
+    if pat.is_empty() {
+        return Err(bad(cmd, "the source pattern is empty"));
+    }
+    pat.id = copied_pattern_id(s)?;
+    let id = pat.id.clone();
+    let out = info(&pat, (pat.width, pat.height), false, true);
+    s.patterns.items.push(pat);
+    crate::presets::patterns::sync(s);
+    s.presets_changed();
+    Ok(json!({"pattern": id, "info": out}))
+}
+
 fn define(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "edit.definePattern";
+    if p.get("fromPattern").is_some() {
+        s.active().ok_or(EngineError::NoDocument)?;
+        return copy_pattern(s, p);
+    }
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let doc = &st.doc;
     let r = match p.get("rect").and_then(Value::as_array) {
@@ -551,7 +594,8 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Define Pattern…",
             menu: &["Edit"],
             shortcut: None,
-            params: r##"{"name":text,"rect":[x0,y0,x1,y1]?} → {"pattern":id} (name: default the document's name numbered past the library's names; rect: default the selection bounds or else the canvas; added to the library from the visible composite)"##,
+            // The leading object supplies the Pattern Name dialog; the copy-only input belongs in its note.
+            params: r##"{"name":text,"rect":[x0,y0,x1,y1]?} → {"pattern":id,info} (name: default the document's name numbered past the library's names; rect: default the selection bounds or else the canvas; defined from the visible composite. API-only alternative {"fromPattern":id|name}: copy the existing pattern with a fresh id and the same name and pixels, ignoring name/rect)"##,
             enabled: has_doc,
             journal: true,
             run: define,
