@@ -1,10 +1,11 @@
 //! Filter › Liquify…: the framework's Liquify workspace, hosted on the app's dialog host.
 //!
 //! The workspace owns the session (steps, undo, settings) and every control. This module owns the
-//! pixels: a CPU proxy (the layer box-downsampled once to at most 1600 px, `ProxyImage`) that is
-//! re-rendered through the displacement field only where a dab changed it, shown to the workspace
-//! through [`PcLiquifySource`]. Above 100 % the display asks for full-resolution regions, which are
-//! rendered from the layer and the field on demand. OK answers the recorded steps, and
+//! pixels: a CPU proxy (the layer at document resolution, box-downsampled only past
+//! [`PROXY_MAX_PIXELS`] or the GPU's texture side, `ProxyImage`) that is re-rendered through the
+//! displacement field only where a dab changed it, shown to the workspace through
+//! [`PcLiquifySource`]. The display reads it as it is, so a brush update renders its region once;
+//! only a downsampled proxy read finer than its scale renders from the layer and the field. OK answers the recorded steps, and
 //! `filter.liquify` replays them on the document, so it gets the same field as the preview.
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -28,8 +29,18 @@ use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 
-/// Longest side of the preview proxy (px).
-const PROXY_SIDE: usize = 1600;
+/// Most pixels the preview proxy holds at document resolution (RGBA8 twice over: the copy and
+/// the rendered picture, 96 MB each at this size); a larger layer is downsampled.
+const PROXY_MAX_PIXELS: usize = 24_000_000;
+
+/// Longest side of Show Backdrop's picture (px): a guide under the warp, not the picture itself.
+const BACKDROP_SIDE: usize = 1600;
+
+/// The longest side the preview proxy may have: the GPU's texture limit, within reason. A limit
+/// below the usual sizes is respected, not raised: the proxy is downsampled to fit.
+fn proxy_side(ctx: &egui::Context) -> usize {
+    ctx.input(|i| i.max_texture_side).clamp(1, 16384)
+}
 
 /// The saved slot of the brush and view settings; the workspace writes it on every change.
 const REMEMBERED: SaveKey = SaveKey::new("photocraft.filter.liquify");
@@ -206,7 +217,7 @@ struct PreviewSelection {
 impl PreviewSelection {
     /// `sel` with its coverage sampled at `proxy`'s pixels. Kept even when every proxy pixel is
     /// selected: a gap narrower than a proxy pixel still shows in the source-resolution crop.
-    fn new(mask: photocraft_doc::LayerMask, proxy: &ProxyImage, base: Option<Surface>) -> Self {
+    fn new(mask: photocraft_doc::LayerMask, proxy: &ProxyImage, base: Option<Surface>, side: usize) -> Self {
         let (bx, by, s) = (f64::from(proxy.bounds.x0), f64::from(proxy.bounds.y0), proxy.scale);
         let mut cov = Vec::with_capacity(proxy.w * proxy.h);
         for y in 0..proxy.h {
@@ -217,7 +228,7 @@ impl PreviewSelection {
             }
         }
         let base = base.map(|b| {
-            let p = ProxyImage::new(&b, proxy.bounds, PROXY_SIDE);
+            let p = ProxyImage::new_within(&b, proxy.bounds, side, PROXY_MAX_PIXELS);
             (b, p)
         });
         PreviewSelection { mask, proxy: cov, base }
@@ -225,8 +236,8 @@ impl PreviewSelection {
 }
 
 /// `new` over `old` (premultiplied RGBA8) by coverage `c`.
-fn mix(new: [u8; 4], old: [f32; 4], c: f32) -> [u8; 4] {
-    std::array::from_fn(|k| (f32::from(new[k]) * c + old[k].clamp(0.0, 1.0) * 255.0 * (1.0 - c) + 0.5).clamp(0.0, 255.0) as u8)
+fn mix(new: [u8; 4], old: [u8; 4], c: f32) -> [u8; 4] {
+    std::array::from_fn(|k| (f32::from(new[k]) * c + f32::from(old[k]) * (1.0 - c) + 0.5).clamp(0.0, 255.0) as u8)
 }
 
 fn union(a: Option<[usize; 4]>, b: [usize; 4]) -> Option<[usize; 4]> {
@@ -364,7 +375,7 @@ impl Engine {
                 let at = ((y - bounds.y0) as usize) * w + (x - bounds.x0) as usize;
                 if let (Some(new), Some(o)) = (buf.get_mut(at), old.get((x - dirty.x0) as usize)) {
                     // Straight to premultiplied, as the preview's pixels are.
-                    let o = [o[0] * o[3], o[1] * o[3], o[2] * o[3], o[3]];
+                    let o = [o[0] * o[3], o[1] * o[3], o[2] * o[3], o[3]].map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
                     *new = mix(*new, o, c);
                 }
             }
@@ -488,27 +499,45 @@ impl Engine {
             }
         }
         let (pw, ph) = (self.proxy.w as i32, self.proxy.h as i32);
-        for oy in 0..oh {
-            let y = region.y0 + oy as i32 * factor;
-            for ox in 0..ow {
-                let x = region.x0 + ox as i32 * factor;
-                let p = if !detail.is_empty() {
-                    if x >= render.x0 && x < render.x1 && y >= render.y0 && y < render.y1 {
-                        detail[(y - render.y0) as usize * render.width() as usize + (x - render.x0) as usize]
-                    } else {
-                        [0; 4]
-                    }
-                } else if pw == 0 || ph == 0 {
-                    [0; 4]
-                } else {
-                    let (yc, xc) = (y + factor / 2, x + factor / 2);
-                    let py = (f64::from(yc - self.proxy.bounds.y0) / scale).floor().clamp(0.0, f64::from(ph - 1)) as usize;
-                    let px = (f64::from(xc - self.proxy.bounds.x0) / scale).floor().clamp(0.0, f64::from(pw - 1)) as usize;
-                    self.out.get(py * self.proxy.w + px).copied().unwrap_or([0; 4])
-                };
-                out.pixels[oy * ow + ox] = Color32::from_rgba_premultiplied(p[0], p[1], p[2], p[3]);
-            }
+        if ow == 0 || oh == 0 {
+            return;
         }
+        // The proxy pixel under each column's and each row's texel centre, worked out once: a
+        // whole-picture read is tens of millions of texels.
+        let index = |o: usize, origin: i32, start: i32, n: i32| -> usize {
+            let at = start + o as i32 * factor + factor / 2;
+            (f64::from(at - origin) / scale).floor().clamp(0.0, f64::from((n - 1).max(0))) as usize
+        };
+        let cols: Vec<usize> = (0..ow).map(|ox| index(ox, self.proxy.bounds.x0, region.x0, pw)).collect();
+        let fill = |oy: usize, line: &mut [Color32]| {
+            let y = region.y0 + oy as i32 * factor;
+            if !detail.is_empty() {
+                let rw = render.width() as usize;
+                for (ox, slot) in line.iter_mut().enumerate() {
+                    let x = region.x0 + ox as i32 * factor;
+                    let inside = x >= render.x0 && x < render.x1 && y >= render.y0 && y < render.y1;
+                    let p = if inside { detail.get((y - render.y0) as usize * rw + (x - render.x0) as usize).copied().unwrap_or([0; 4]) } else { [0; 4] };
+                    *slot = Color32::from_rgba_premultiplied(p[0], p[1], p[2], p[3]);
+                }
+            } else if pw == 0 || ph == 0 {
+                line.fill(Color32::TRANSPARENT);
+            } else {
+                let row = index(oy, self.proxy.bounds.y0, region.y0, ph) * self.proxy.w;
+                let src = self.out.get(row..row + self.proxy.w).unwrap_or(&[]);
+                for (slot, &c) in line.iter_mut().zip(&cols) {
+                    let p = src.get(c).copied().unwrap_or([0; 4]);
+                    *slot = Color32::from_rgba_premultiplied(p[0], p[1], p[2], p[3]);
+                }
+            }
+        };
+        let rows = out.pixels.get_mut(..ow * oh).unwrap_or(&mut []);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use rayon::prelude::*;
+            rows.par_chunks_mut(ow).enumerate().for_each(|(oy, line)| fill(oy, line));
+        }
+        #[cfg(target_arch = "wasm32")]
+        rows.chunks_mut(ow).enumerate().for_each(|(oy, line)| fill(oy, line));
     }
 
     /// The displaced mesh Show Mesh draws at `size`.
@@ -746,7 +775,8 @@ fn open_on(
     let st = app.session.active().ok_or("no document")?;
     let canvas = st.doc.bounds();
     let name = st.doc.layer(layer).map(|l| l.name.clone()).unwrap_or_default();
-    let proxy = ProxyImage::new(&surf, canvas, PROXY_SIDE);
+    let side = proxy_side(app.ctx());
+    let proxy = ProxyImage::new_within(&surf, canvas, side, PROXY_MAX_PIXELS);
     let target = if smart_filter.is_some() { json!("pixels") } else { crate::distort_ui::colour_set_target(app) };
     let colors = photocraft_engine::color_channels::explicit(&json!({"target":target}), surf.format().mode.color_channels()).map_err(|e| e.to_string())?;
     let native_proxy = colors.map(|_| crate::gallery_ui::reduce(&surf, canvas, proxy.scale as u32));
@@ -757,14 +787,14 @@ fn open_on(
     let selection = match st.doc.layer(layer).map(|l| &l.content) {
         Some(photocraft_doc::LayerContent::Smart(sm)) if sm.filter_mask.is_some() => sm.filter_mask.clone().map(|mask| {
             let placed = photocraft_engine::smart_cmds::render_below_filter(&st.doc, sm, 0).ok().flatten();
-            PreviewSelection::new(mask, &proxy, placed)
+            PreviewSelection::new(mask, &proxy, placed, side)
         }),
         _ => st
             .doc
             .selection
             .clone()
             .filter(|_| smart_filter.is_none())
-            .map(|sel| PreviewSelection::new(photocraft_doc::LayerMask { surface: sel, ..photocraft_doc::LayerMask::reveal_all() }, &proxy, None)),
+            .map(|sel| PreviewSelection::new(photocraft_doc::LayerMask { surface: sel, ..photocraft_doc::LayerMask::reveal_all() }, &proxy, None, side)),
     };
     // Show Backdrop › Use: All Layers or one layer, bottom to top as Photoshop lists them.
     let layers: Vec<(u64, String)> = st.doc.walk().into_iter().map(|(_, _, l)| (l.id.0, l.name.clone())).collect();
@@ -941,7 +971,7 @@ fn load_backdrop(app: &PhotocraftApp, of: Option<u64>, canvas: Rect) -> Option<C
     let mut s = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8);
     let flat: Vec<f32> = buf.px.iter().flat_map(|p| *p).collect();
     s.write_region(canvas, &flat);
-    Some(crate::distort_ui::surface_image(&s, canvas, PROXY_SIDE))
+    Some(crate::distort_ui::surface_image(&s, canvas, BACKDROP_SIDE))
 }
 
 /// The document [`load_backdrop`] renders for Use `of`.

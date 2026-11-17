@@ -968,17 +968,18 @@ pub fn apply_liquify(src: &Surface, field: &LiquifyField) -> Surface {
     out
 }
 
-/// A downsampled, premultiplied RGBA copy of a layer for the interactive preview.
+/// A premultiplied RGBA8 copy of a layer for the interactive preview, at document resolution or
+/// box-downsampled by a whole number when the layer is larger than the preview may be.
 #[derive(Clone, Debug)]
 pub struct ProxyImage {
     /// Document region the proxy covers (the field bounds).
     pub bounds: Rect,
-    /// Document pixels per proxy pixel.
+    /// Document pixels per proxy pixel (a whole number).
     pub scale: f64,
     pub w: usize,
     pub h: usize,
-    /// Premultiplied RGBA, row-major.
-    pub px: Vec<[f32; 4]>,
+    /// Premultiplied RGBA8, row-major.
+    pub px: Vec<[u8; 4]>,
 }
 
 const MAX_FULL_RES_SOURCE_PIXELS: usize = 8 * 1024 * 1024;
@@ -986,14 +987,25 @@ const MAX_FULL_RES_SOURCE_PIXELS: usize = 8 * 1024 * 1024;
 impl ProxyImage {
     /// Box-downsamples `src` over `bounds` so the longer side is at most `max_side`.
     pub fn new(src: &Surface, bounds: Rect, max_side: usize) -> Self {
+        Self::new_within(src, bounds, max_side, usize::MAX)
+    }
+
+    /// [`Self::new`], also keeping the proxy within `max_pixels`: the smallest whole scale that
+    /// fits both, so a layer the preview can hold is copied at document resolution and shown
+    /// sharp at any zoom, and a larger one is downsampled as little as the budget allows.
+    pub fn new_within(src: &Surface, bounds: Rect, max_side: usize, max_pixels: usize) -> Self {
         let side = bounds.width().max(bounds.height()).max(1) as f64;
-        let scale = (side / max_side.max(1) as f64).max(1.0).ceil();
-        let w = ((f64::from(bounds.width()) / scale).ceil() as usize).max(1);
-        let h = ((f64::from(bounds.height()) / scale).ceil() as usize).max(1);
+        let mut scale = (side / max_side.max(1) as f64).max(1.0).ceil();
+        let dims = |scale: f64| (((f64::from(bounds.width()) / scale).ceil() as usize).max(1), ((f64::from(bounds.height()) / scale).ceil() as usize).max(1));
+        let (mut w, mut h) = dims(scale);
+        while w.saturating_mul(h) > max_pixels.max(1) && scale < side {
+            scale += 1.0;
+            (w, h) = dims(scale);
+        }
         let k = scale as i32;
-        let mut px = vec![[0.0f32; 4]; w * h];
+        let mut px = vec![[0u8; 4]; w * h];
         let fmt = src.format();
-        let fill_rows = |y: usize, row: &mut [[f32; 4]]| {
+        let fill_rows = |y: usize, row: &mut [[u8; 4]]| {
             let r = Rect::new(bounds.x0, bounds.y0 + y as i32 * k, bounds.x0 + w as i32 * k, (bounds.y0 + (y as i32 + 1) * k).min(bounds.y1));
             let mut buf = vec![[0.0f32; 4]; r.width() as usize * r.height() as usize];
             src.read_rgba_into(r, &mut buf);
@@ -1013,7 +1025,7 @@ impl ProxyImage {
                     }
                 }
                 if cnt > 0.0 {
-                    *o = acc.map(|v| v / cnt);
+                    *o = acc.map(|v| ((v / cnt).clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
                 }
             }
         };
@@ -1044,7 +1056,9 @@ impl ProxyImage {
                 let (u, v) = ((px + d[0] - bx) / s - 0.5, (py + d[1] - by) / s - 0.5);
                 let (iu, iv) = (u.floor(), v.floor());
                 let (fu, fv) = ((u - iu) as f32, (v - iv) as f32);
-                let at = |x: f64, y: f64| self.px[(y.clamp(0.0, (self.h - 1) as f64) as usize) * self.w + x.clamp(0.0, (self.w - 1) as f64) as usize];
+                let at = |x: f64, y: f64| {
+                    self.px[(y.clamp(0.0, (self.h - 1) as f64) as usize) * self.w + x.clamp(0.0, (self.w - 1) as f64) as usize].map(|c| f32::from(c) / 255.0)
+                };
                 let (a, b, c, e) = (at(iu, iv), at(iu + 1.0, iv), at(iu, iv + 1.0), at(iu + 1.0, iv + 1.0));
                 *slot = std::array::from_fn(|k| {
                     let v = (a[k] * (1.0 - fu) + b[k] * fu) * (1.0 - fv) + (c[k] * (1.0 - fu) + e[k] * fu) * fv;

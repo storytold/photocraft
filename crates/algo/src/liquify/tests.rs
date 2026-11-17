@@ -400,17 +400,21 @@ fn full_resolution_preview_matches_the_unit_scale_proxy_and_partial_updates() {
         let mut want = vec![[0; 4]; proxy.w * proxy.h];
         proxy.render(&field, [0, 0, proxy.w, proxy.h], &mut want);
 
+        // The proxy holds 8-bit texels and interpolates those, the full-resolution render
+        // interpolates the source: a level apart at most.
+        let within_a_level =
+            |got: &[[u8; 4]], want: &[[u8; 4]]| got.len() == want.len() && got.iter().zip(want).all(|(g, w)| g.iter().zip(w).all(|(a, b)| a.abs_diff(*b) <= 1));
         let mut got = vec![[0; 4]; proxy.w * proxy.h];
         let mut scratch = Vec::new();
         assert!(ProxyImage::render_full_resolution(&source, &field, canvas, canvas, &mut got, &mut scratch));
-        assert_eq!(got, want, "full-resolution render at {sample_type:?}");
+        assert!(within_a_level(&got, &want), "full-resolution render at {sample_type:?}");
 
         let mut more = LiquifyStroke::new(LiquifyTool::Bloat, 16.0);
         more.points = vec![vec![43.0, 32.0, 1.0]];
         let dirty = field.apply_stroke(&more);
         proxy.render(&field, proxy.proxy_rect(dirty), &mut want);
         assert!(ProxyImage::render_full_resolution(&source, &field, canvas, dirty, &mut got, &mut scratch));
-        assert_eq!(got, want, "partial update at {sample_type:?}");
+        assert!(within_a_level(&got, &want), "partial update at {sample_type:?}");
     }
 }
 
