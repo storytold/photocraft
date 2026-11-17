@@ -143,7 +143,7 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         drag_borders(app, ui, rect);
         return;
     }
-    if idx != active_doc && main_focused && ui.input(|i| i.pointer.primary_pressed() && i.pointer.interact_pos().is_some_and(|p| rect.contains(p))) {
+    if idx != active_doc && main_focused && super::pressed_on(ui, rect, true) {
         app.session.set_active(idx);
     }
     let view = app.ui.views[idx].clone();

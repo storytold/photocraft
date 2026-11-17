@@ -2361,6 +2361,27 @@ fn update_polygon_camera(app: &mut PhotocraftApp, ctx: &egui::Context, (idx, pri
     }
 }
 
+/// A press this frame (the primary button, or `any` button) that began on `rect` with `ui`'s own
+/// layer on top there: not on a menu, popup or panel drawn over it (#11010). Where the press began,
+/// not where the pointer is by the time the frame runs, so a quick move can't carry it elsewhere,
+/// and a release in the same frame (a quick click or tap) still counts. Every press of the frame
+/// counts: a slow frame can hold a click elsewhere and then a press here.
+pub(crate) fn pressed_on(ui: &egui::Ui, rect: Rect, primary: bool) -> bool {
+    let presses: Vec<egui::Pos2> = ui.input(|i| {
+        i.events
+            .iter()
+            .filter_map(|e| match e {
+                egui::Event::PointerButton { pos, button, pressed: true, .. } if !primary || *button == egui::PointerButton::Primary => Some(*pos),
+                _ => None,
+            })
+            .collect()
+    });
+    let ctx = ui.ctx();
+    let rect = ui.clip_rect().intersect(rect);
+    let rect = ctx.layer_transform_to_global(ui.layer_id()).map_or(rect, |t| t * rect);
+    presses.into_iter().any(|p| rect.contains(p) && ctx.layer_id_at(p) == Some(ui.layer_id()))
+}
+
 pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect: Rect, mut view: View, primary: bool) -> View {
     let ctx = ui.ctx().clone();
     // The Frame tool starts transforms from pointer events, which carry no context; the options
@@ -2479,8 +2500,9 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     // Under an open dialog the canvas widget is inert, but the image still pans and zooms.
     let under_dialog = !app.ui.dialogs.is_empty();
     let free_hover = under_dialog && crate::dialogs::free_pointer_over(&ctx, rect).is_some();
-    // A press on the canvas while a tool letter is held makes that tool temporary (#2672).
-    if !under_dialog && ctx.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| rect.contains(p))) {
+    // A press on the canvas while a tool letter is held makes that tool temporary (#2672). A
+    // press on a menu or popup over it isn't one (#11010).
+    if !under_dialog && pressed_on(ui, rect, false) {
         crate::spring_tools::note_canvas_press(app);
     }
     let bars_id = egui::Id::unique(("pc-canvas-bars-hover", idx));
