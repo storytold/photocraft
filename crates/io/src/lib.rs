@@ -561,17 +561,23 @@ mod format_detection_test_support;
 #[cfg(test)]
 use format_detection_test_support::{COMPRESSED_DETECTOR_CALLS, invoke_format_detector};
 
-/// The shared detector may inflate SVGZ internally. Compressed candidates must be
-/// probed only by our bounded, cancellable transport; before that, use filename policy.
+/// Compressed input gets its own bounded transport probe. Its fallback is a
+/// filename hint only, since the shared content detector can inflate SVGZ.
 fn central_format(name: &str, bytes: &[u8]) -> Option<photocraft_formats::Format> {
-    let bytes = if import_compression(bytes).is_some() { &[] } else { bytes };
+    if import_compression(bytes).is_some() {
+        if is_xcf_input_name(name) {
+            return Some(photocraft_formats::Format::Xcf);
+        }
+        let (_, ext) = name.rsplit(['/', '\\']).next()?.rsplit_once('.')?;
+        return photocraft_formats::from_extension(ext);
+    }
     invoke_format_detector(name, bytes)
 }
 
-// Query the central detector's precedence for verified SVG magic without ever
-// handing it a compressed stream (its SVGZ detector inflates internally).
-fn svg_magic_takes_precedence(name: &str) -> bool {
-    central_format(name, b"<svg/>") == Some(photocraft_formats::Format::Svg)
+/// Preserve the shared registry's explicit short Affinity alias, which claims
+/// a file before SVG signatures. Other filename hints follow verified content.
+fn allow_compressed_svg(name: &str) -> bool {
+    !name.rsplit(['/', '\\']).next().and_then(|base| base.rsplit_once('.')).is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("af"))
 }
 
 const XCF_INPUT_SUFFIXES: &[&str] = &[".xcf", ".xcf.gz", ".xcfgz", ".xcf.bz2", ".xcfbz2", ".xcf.xz", ".xcfxz"];
@@ -1196,9 +1202,7 @@ fn import_stages(
     // Only an automatic route may change format after probing. Forced Open As keeps
     // precedence, while explicitly forcing XCF still accepts its supported envelopes.
     let decoded = if selected == Route::Compressed || (selected == Route::Xcf && import_compression(bytes).is_some()) {
-        // Preserve the central detector's verified-SVG precedence without copying
-        // its filename policy or letting its SVGZ probe inflate unbounded input.
-        let svg = selected == Route::Compressed && svg_magic_takes_precedence(name);
+        let svg = selected == Route::Compressed && allow_compressed_svg(name);
         let decoded = xcf::transport::decode_import(name, bytes, ctl, svg)?;
         selected = match &decoded {
             Some(value) if value.is_xcf => Route::Xcf,
@@ -1253,7 +1257,7 @@ pub fn is_svg_input_with(name: &str, bytes: &[u8], ctl: &photocraft_raster::Inte
     ctl.check().map_err(|_| IoError::Cancelled)?;
     match import_compression(bytes) {
         None => Ok(matches!(central_format(name, bytes), Some(photocraft_formats::Format::Svg | photocraft_formats::Format::Svgz))),
-        Some(ImportCompression::Gzip) if svg_magic_takes_precedence(name) => Ok(xcf::transport::svg_prefix(name, bytes, ctl)?.is_some()),
+        Some(ImportCompression::Gzip) if allow_compressed_svg(name) => Ok(xcf::transport::svg_prefix(name, bytes, ctl)?.is_some()),
         Some(_) => Ok(false),
     }
 }

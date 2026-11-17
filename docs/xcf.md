@@ -6,6 +6,16 @@ use the same enhanced import in `photocraft-io` (`crates/io/src/xcf.rs`). This a
 `gimp xcf ` signature, so an XCF with another extension still opens as one. Save suggests
 `.pcraft`, which keeps everything PhotoCraft holds; exporting as `.xcf` fails with a message.
 
+## Shared reader follow-up
+
+The enhanced decoder currently lives in PhotoCraft. Other applications using `craft-xcf` keep the
+reader at their pinned revision. The proposed follow-up would move the bounded transport, XCF
+framing and sample decoding into `craft-xcf`, with a format-neutral representation of parsed
+records. The shared API would need cancellation and caller-supplied resource limits, with
+precision, legacy byte order and compressed-input regression tests. PhotoCraft would keep the
+conversion from those records to native layers, text, paths and editing views. The API and the
+migration sequence are open for maintainer review.
+
 ## What is kept
 
 | | Open |

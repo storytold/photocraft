@@ -35,8 +35,8 @@ fn retained_bytes(document: &Document) -> usize {
 }
 
 #[test]
-fn guide_spare_capacity_is_charged_before_admission_and_survives_native_reopen() {
-    let data = property(&[(1, 1), (2, 1), (3, 1), (4, 1), (5, 1)]);
+fn guide_prefix_fills_exact_budget_and_survives_native_reopen() {
+    let data = property(&[(1, 1), (2, 1), (3, 1), (4, 1), (5, 1), (6, 2)]);
     let (mut document, mut outcomes, owner) = fixture();
     let pixels = document.layers.clone();
     let initial = 5 * std::mem::size_of::<f64>();
@@ -53,8 +53,8 @@ fn guide_spare_capacity_is_charged_before_admission_and_survives_native_reopen()
         &Interrupt::NONE,
     )
     .unwrap();
-    assert!(!document.guides.horizontal.is_empty());
-    assert!(document.guides.horizontal.len() < 5, "five pushed values used to retain eight slots while paying for only five");
+    assert_eq!(document.guides.horizontal, [1., 2., 3., 4., 5.]);
+    assert!(document.guides.vertical.is_empty());
     assert!(retained_bytes(&document) <= initial);
     assert_eq!(initial - budget, retained_bytes(&document));
     let ImportConversion::Report(report) = outcomes.finish().unwrap() else { panic!("report") };
@@ -83,45 +83,10 @@ fn guide_capacity_is_charged_once_per_orientation_across_properties() {
 }
 
 #[test]
-fn guide_preallocated_slots_cannot_bypass_admission_and_refusal_is_atomic() {
-    let mut guides = Vec::with_capacity(8);
-    guides.push(1.);
+fn refused_guide_reservation_keeps_the_existing_vector() {
+    let mut guides = vec![1., 2.];
     let capacity = guides.capacity();
-    let mut charged = 0;
-    let mut budget = std::mem::size_of::<f64>();
-    assert!(!push_guide(&mut guides, 2., &mut charged, &mut budget));
-    assert_eq!(guides, [1.]);
+    assert_eq!(reserve_guides(&mut guides, 2, 1), None);
+    assert_eq!(guides, [1., 2.]);
     assert_eq!(guides.capacity(), capacity);
-    assert_eq!(charged, 0);
-    assert_eq!(budget, std::mem::size_of::<f64>());
-    budget = capacity * std::mem::size_of::<f64>();
-    assert!(push_guide(&mut guides, 2., &mut charged, &mut budget));
-    assert_eq!(budget, 0);
-    assert!(push_guide(&mut guides, 3., &mut charged, &mut budget));
-    while guides.len() < capacity {
-        assert!(push_guide(&mut guides, 4., &mut charged, &mut budget));
-    }
-    let before = guides.clone();
-    assert!(!push_guide(&mut guides, 5., &mut charged, &mut budget));
-    assert_eq!(guides, before);
-    assert_eq!(guides.capacity(), capacity);
-    assert_eq!(charged, capacity);
-    assert_eq!(budget, 0);
-}
-
-#[test]
-fn admitted_guide_growth_is_geometric_and_charges_only_retained_capacity() {
-    let mut guides = Vec::new();
-    let mut charged = 0;
-    let initial = 1024 * std::mem::size_of::<f64>();
-    let mut budget = initial;
-    let mut changes = 0;
-    for i in 0..1024 {
-        let old = guides.capacity();
-        assert!(push_guide(&mut guides, f64::from(i), &mut charged, &mut budget));
-        changes += usize::from(guides.capacity() != old);
-        assert_eq!(initial - budget, guides.capacity() * std::mem::size_of::<f64>());
-    }
-    assert!(changes <= 11, "growth must not copy the full prefix for every guide");
-    assert_eq!(guides, (0..1024).map(f64::from).collect::<Vec<_>>());
 }

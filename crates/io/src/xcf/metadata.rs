@@ -133,7 +133,7 @@ fn metadata_parasites<'a>(
     Ok((selected, scan))
 }
 
-#[allow(clippy::too_many_arguments)] // One bounded guide conversion plus its caller's cancellation context.
+#[allow(clippy::too_many_arguments)] // Guide conversion shares the image's storage budget and report.
 fn image_guides(
     doc: &mut Document,
     property: &Prop<'_>,
@@ -141,37 +141,66 @@ fn image_guides(
     outcomes: &mut conversion::Outcomes<'_>,
     owner: usize,
     budget: &mut usize,
-    storage: &mut GuideStorage,
     ctl: &photocraft_raster::Interrupt<'_>,
 ) -> Result<()> {
     use photocraft_doc::import_conversion::ConversionReason as Reason;
-    let (guides, tail) = property.data.as_chunks::<5>();
-    let mut skipped = !tail.is_empty();
-    let mut limited = false;
-    for &[a, b, c, d, orientation] in guides {
+    const SLOT: usize = std::mem::size_of::<f64>();
+    let (records, tail) = property.data.as_chunks::<5>();
+    let bounds = [doc.size.height, doc.size.width];
+    let mut targets = [&mut doc.guides.horizontal, &mut doc.guides.vertical];
+    let spare = targets.each_ref().map(|target| target.capacity() - target.len());
+    let slots = *budget / SLOT;
+    let mut additions = [0usize; 2];
+    let mut minimum = 0;
+    let mut prefix = 0;
+    let mut invalid_data = !tail.is_empty();
+    for record in records {
         ctl.check().map_err(|_| super::IoError::Cancelled)?;
-        let position = i32::from_be_bytes([a, b, c, d]);
-        let limit = match orientation {
-            1 => doc.size.height,
-            2 => doc.size.width,
-            _ => {
-                skipped = true;
-                continue;
+        if let Some((axis, _)) = guide_record(record, bounds, version) {
+            let axis = usize::from(axis);
+            if additions[axis] >= spare[axis] {
+                if minimum == slots {
+                    break;
+                }
+                minimum += 1;
             }
-        };
-        if version < 15 && (position < 0 || i64::from(position) > i64::from(limit)) {
-            skipped = true;
+            additions[axis] += 1;
+        } else {
+            invalid_data = true;
+        }
+        prefix += 1;
+    }
+
+    let mut limited = prefix != records.len();
+    // Preserve the admitted prefix under tight budgets. Spare growth from earlier
+    // records is already charged. Spend any extra only after covering both axes.
+    let mut extra = slots - minimum;
+    for ((target, count), free) in targets.iter_mut().zip(&mut additions).zip(spare) {
+        let needed = count.saturating_sub(free);
+        if needed == 0 {
             continue;
         }
-        let (target, charged) =
-            if orientation == 1 { (&mut doc.guides.horizontal, &mut storage.horizontal) } else { (&mut doc.guides.vertical, &mut storage.vertical) };
-        if !push_guide(target, f64::from(position), charged, budget) {
-            skipped = true;
+        let requested = needed.max(target.capacity().min(needed.saturating_add(extra)));
+        let Some(actual) = reserve_guides(target, requested, needed.saturating_add(extra)) else {
+            *count = free;
             limited = true;
-            break;
+            continue;
+        };
+        extra -= actual.saturating_sub(needed);
+        *budget -= actual * SLOT;
+    }
+
+    for record in records.iter().take(prefix) {
+        ctl.check().map_err(|_| super::IoError::Cancelled)?;
+        if let Some((axis, position)) = guide_record(record, bounds, version) {
+            let axis = usize::from(axis);
+            if additions[axis] != 0 {
+                targets[axis].push(f64::from(position));
+                additions[axis] -= 1;
+            }
         }
     }
-    if skipped {
+    if limited || invalid_data {
         outcomes.detail(
             owner,
             "xcf.guides",
@@ -183,52 +212,29 @@ fn image_guides(
     Ok(())
 }
 
-/// Capacity admitted once per orientation across all guide properties in this image.
-#[derive(Default)]
-struct GuideStorage {
-    horizontal: usize,
-    vertical: usize,
+fn guide_record(bytes: &[u8; 5], [height, width]: [u32; 2], version: u32) -> Option<(bool, i32)> {
+    let &[a, b, c, d, orientation] = bytes;
+    let position = i32::from_be_bytes([a, b, c, d]);
+    let (vertical, limit) = match orientation {
+        1 => (false, height),
+        2 => (true, width),
+        _ => return None,
+    };
+    (version >= 15 || (position >= 0 && i64::from(position) <= i64::from(limit))).then_some((vertical, position))
 }
 
-/// Stage growth fallibly and admit actual retained slots before changing native guides.
-fn push_guide(target: &mut Vec<f64>, value: f64, charged: &mut usize, budget: &mut usize) -> bool {
-    let Some(length) = target.len().checked_add(1) else { return false };
-    // Geometric growth bounds total copying work for long optional guide lists.
-    let capacity = if length > target.capacity() {
-        let Some(grown) = target.capacity().max(1).checked_mul(2) else { return false };
-        if target.capacity() == 0 { 1 } else { grown.max(length) }
-    } else {
-        target.capacity()
-    };
-    let slot_bytes = std::mem::size_of::<f64>();
-    let Some(minimum) = capacity.saturating_sub(*charged).checked_mul(slot_bytes) else { return false };
-    if minimum > *budget {
-        return false;
+/// Stage one allocation per axis, then check actual capacity before retaining it.
+fn reserve_guides(target: &mut Vec<f64>, additional: usize, allowed: usize) -> Option<usize> {
+    let previous = target.capacity();
+    let mut next = Vec::new();
+    next.try_reserve_exact(previous.checked_add(additional)?).ok()?;
+    let added = next.capacity().checked_sub(previous)?;
+    if added > allowed {
+        return None;
     }
-    let mut replacement = if length > target.capacity() {
-        let mut next = Vec::new();
-        if next.try_reserve_exact(capacity).is_err() {
-            return false;
-        }
-        Some(next)
-    } else {
-        None
-    };
-    let capacity = replacement.as_ref().map_or(target.capacity(), Vec::capacity);
-    let Some(cost) = capacity.saturating_sub(*charged).checked_mul(slot_bytes) else { return false };
-    let Some(remaining) = budget.checked_sub(cost) else { return false };
-    if let Some(next) = &mut replacement {
-        next.append(target);
-        next.push(value);
-    } else {
-        target.push(value);
-    }
-    if let Some(next) = replacement {
-        *target = next;
-    }
-    *charged = capacity;
-    *budget = remaining;
-    true
+    next.append(target);
+    *target = next;
+    Some(added)
 }
 
 /// Map native document metadata without changing native DPI, unit, guide or sampler semantics.
@@ -272,13 +278,12 @@ pub(super) fn image_with_work<'a>(
         warnings.note(&warning);
     }
     let mut text_storage = TextStorage::default();
-    let mut guide_storage = GuideStorage::default();
     let mut metadata_incomplete = false;
     let mut retention_limited = false;
     for p in props {
         ctl.check().map_err(|_| super::IoError::Cancelled)?;
         match p.kind {
-            18 => image_guides(doc, p, version, outcomes, owner, budget, &mut guide_storage, ctl)?,
+            18 => image_guides(doc, p, version, outcomes, owner, budget, ctl)?,
             19 => {
                 if let Some((x, y)) = resolution_pair(p.data) {
                     if x != y {

@@ -473,12 +473,7 @@ impl PlaceInput {
             // an embedded place lands as a plain pixel layer.
             smart: linked.is_some() || p.get("smartObject").and_then(Value::as_bool).unwrap_or(prefs.general.always_create_smart_objects_when_placing),
             doc: match &file {
-                PlaceFile::Bytes(bytes) => {
-                    // Retain the candidate cheaply; the worker identifies wrapped SVG
-                    // with cancellation before deciding whether this snapshot is needed.
-                    (frame.is_some() || photocraft_io::import_compression(bytes).is_some() || photocraft_io::is_svg_input(name, bytes))
-                        .then(|| Arc::clone(&d.doc))
-                }
+                PlaceFile::Bytes(bytes) => (frame.is_some() || photocraft_io::svg::is_svg(bytes)).then(|| Arc::clone(&d.doc)),
                 PlaceFile::Path(_) => Some(Arc::clone(&d.doc)),
             },
             frame,

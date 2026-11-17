@@ -149,9 +149,9 @@ fn placed_and_filtered_stages_separate_opposite_choices_and_never_guess_none() {
             unspecified.historical_xcf_sample_order = None;
             // Also make the identity contract independent of unrelated tests
             // purging process-wide caches between these tiny renders.
-            let right_key = super::super::stack_cache::placed_key(&bytes, doc.pixel_format(), &right, doc.bounds());
-            assert_ne!(right_key, super::super::stack_cache::placed_key(&bytes, doc.pixel_format(), &wrong, doc.bounds()));
-            assert_ne!(right_key, super::super::stack_cache::placed_key(&bytes, doc.pixel_format(), &unspecified, doc.bounds()));
+            let right_key = super::super::stack_cache::placed_key("cached.xcf", &bytes, doc.pixel_format(), &right, doc.bounds());
+            assert_ne!(right_key, super::super::stack_cache::placed_key("cached.xcf", &bytes, doc.pixel_format(), &wrong, doc.bounds()));
+            assert_ne!(right_key, super::super::stack_cache::placed_key("cached.xcf", &bytes, doc.pixel_format(), &unspecified, doc.bounds()));
             clear_caches();
             let correct = bits(&render(&doc, &right).unwrap().unwrap());
             clear_caches();

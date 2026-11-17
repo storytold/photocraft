@@ -70,7 +70,7 @@ pub struct SourceImage {
     pub bounds: Rect,
 }
 
-type CacheKey = ([u8; 32], PixelFormat, Option<photocraft_doc::HistoricalXcfSampleOrder>);
+pub(super) type CacheKey = ([u8; 32], PixelFormat, Option<photocraft_doc::HistoricalXcfSampleOrder>, Option<[u8; 32]>);
 
 struct CacheEntry {
     key: CacheKey,
@@ -99,12 +99,9 @@ fn cache() -> std::sync::MutexGuard<'static, Vec<CacheEntry>> {
     SOURCE_CACHE.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-pub(super) fn cache_key(bytes: &[u8], fmt: PixelFormat) -> CacheKey {
-    cache_key_with_order(bytes, fmt, None)
-}
-
-pub(super) fn cache_key_with_order(bytes: &[u8], fmt: PixelFormat, order: Option<photocraft_doc::HistoricalXcfSampleOrder>) -> CacheKey {
-    (*blake3::hash(bytes).as_bytes(), fmt, order)
+/// Source names can select extension-sensitive importers for the same bytes.
+pub(super) fn source_cache_key(file_name: &str, bytes: &[u8], fmt: PixelFormat, order: Option<photocraft_doc::HistoricalXcfSampleOrder>) -> CacheKey {
+    (*blake3::hash(bytes).as_bytes(), fmt, order, Some(*blake3::hash(file_name.as_bytes()).as_bytes()))
 }
 
 pub(super) fn cache_get(key: &CacheKey) -> Option<SourceImage> {
@@ -144,8 +141,8 @@ pub fn source_decode_count(bytes: &[u8], fmt: PixelFormat) -> u32 {
 
 /// Decode accounting for exactly this persisted source interpretation.
 pub fn source_decode_count_with_order(bytes: &[u8], fmt: PixelFormat, order: Option<photocraft_doc::HistoricalXcfSampleOrder>) -> u32 {
-    let key = cache_key_with_order(bytes, fmt, order);
-    cache().iter().find(|e| e.key == key).map(|e| e.decodes).unwrap_or(0)
+    let digest = *blake3::hash(bytes).as_bytes();
+    cache().iter().filter(|e| (e.key.0, e.key.1, e.key.2) == (digest, fmt, order)).fold(0u32, |total, e| total.saturating_add(e.decodes))
 }
 
 /// Bytes held by cached source composites.
@@ -300,7 +297,7 @@ pub fn svg_source_image(bytes: &[u8], fmt: PixelFormat, scale: f64) -> Result<So
     let mut h = blake3::Hasher::new();
     h.update(bytes);
     h.update(&scale.to_bits().to_le_bytes());
-    let key = (*h.finalize().as_bytes(), fmt, None);
+    let key = (*h.finalize().as_bytes(), fmt, None, None);
     if let Some(img) = cache_get(&key) {
         return Ok(img);
     }
@@ -327,7 +324,7 @@ pub(super) fn svg_source_image_in(bytes: &[u8], doc: &Document, scale: f64) -> R
     h.update(bytes);
     h.update(&scale.to_bits().to_le_bytes());
     h.update(&profile.to_bytes());
-    let key = (*h.finalize().as_bytes(), fmt, None);
+    let key = (*h.finalize().as_bytes(), fmt, None, None);
     if let Some(image) = cache_get(&key) {
         return Ok(image);
     }
@@ -372,7 +369,7 @@ pub fn source_image_with_order(
     fmt: PixelFormat,
     order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
 ) -> Result<SourceImage> {
-    let key = cache_key_with_order(bytes, fmt, order);
+    let key = source_cache_key(file_name, bytes, fmt, order);
     if let Some(img) = cache_get(&key) {
         return Ok(img);
     }
@@ -395,7 +392,7 @@ mod tests {
 
     #[test]
     fn a_source_larger_than_the_limit_is_returned_but_not_cached() {
-        let key = cache_key(b"oversize", PixelFormat::RGBA8);
+        let key = source_cache_key("oversize.png", b"oversize", PixelFormat::RGBA8, None);
         let img = image(256);
         let bytes = super::super::stack_cache::surface_bytes(&img.surface);
         cache_put_within(key, img.clone(), bytes - 1);

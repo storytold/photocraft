@@ -411,9 +411,14 @@ impl<'a> Image<'a> {
 
     /// A channel structure (a layer mask, the selection or an extra channel) as one-channel
     /// pixels, with its properties.
-    fn channel(&mut self, ptr: usize, ctl: &Interrupt<'_>) -> Result<Channel<'a>> {
+    fn channel(&mut self, ptr: usize, layer_size: Option<(u32, u32)>, ctl: &Interrupt<'_>) -> Result<Channel<'a>> {
         let mut c = self.c.at(ptr);
         let (width, height) = (c.u32()?, c.u32()?);
+        if let Some((lw, lh)) = layer_size
+            && (width, height) != (lw, lh)
+        {
+            return Err(invalid(format!("layer mask dimensions {width}x{height} differ from the layer's {lw}x{lh}")));
+        }
         let (name, name_limited) = self.metadata_name(&mut c, "Channel")?;
         let props = props(&mut c)?;
         let hptr = c.ptr()?;
@@ -940,7 +945,7 @@ fn read_image_metadata_with_work<'a>(
     // The property allowance is also the fixed prerequisite-profile copy bound. Scan every
     // record first so only the final assignment is copied, never unused parasites/profiles.
     ctl.check().map_err(|_| IoError::Cancelled)?;
-    let icc = selected_icc.filter(|data| !parasites_limited && data.len() <= MAX_PAYLOAD).map(<[u8]>::to_vec);
+    let icc = selected_icc.filter(|_| !parasites_limited).map(<[u8]>::to_vec);
     ctl.check().map_err(|_| IoError::Cancelled)?;
     Ok(ImageMetadata { properties: image_props, compression, colormap, icc, parasite_work, parasites_limited })
 }
@@ -1728,15 +1733,14 @@ fn import_vectors(document: &mut Document, image: &mut Image<'_>, ctl: &Interrup
 /// nowhere (at any depth) puts it at the top level, so later siblings keep their indices.
 fn place(roots: &mut Vec<Node>, node: Node, warnings: &mut Warnings, outcomes: &mut conversion::Outcomes<'_>) -> Result<()> {
     let depth = node.path.len().saturating_sub(1);
-    let mut probe: &Vec<Node> = roots;
-    let reachable = node.path.iter().take(depth).all(|&index| match probe.get(index as usize) {
-        Some(n) if n.group => {
-            probe = &n.children;
-            true
-        }
-        _ => false,
-    });
-    if !reachable {
+    let destination = node
+        .path
+        .iter()
+        .take(depth)
+        .try_fold(&mut *roots, |level, &index| level.get_mut(index as usize).filter(|node| node.group).map(|group| &mut group.children));
+    if let Some(level) = destination {
+        level.push(node);
+    } else {
         warnings.layer(&node.layer.name, "has an item path that leads to no group; opened at the top level");
         outcomes.detail(
             node.outcome,
@@ -1748,13 +1752,7 @@ fn place(roots: &mut Vec<Node>, node: Node, warnings: &mut Warnings, outcomes: &
         let mut node = node;
         node.path = vec![];
         roots.push(node);
-        return Ok(());
     }
-    let mut level = roots;
-    for &index in node.path.iter().take(depth) {
-        level = &mut level[index as usize].children;
-    }
-    level.push(node);
     Ok(())
 }
 

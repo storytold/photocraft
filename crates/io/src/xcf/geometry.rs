@@ -2,7 +2,7 @@
 
 use std::io::Read;
 
-use super::{Interrupt, IoError, MAX_PAYLOAD, MAX_STRING, Result, invalid, metadata, read_header, read_version, transport, wire};
+use super::{Interrupt, IoError, Result, invalid, metadata, read_header, read_version, transport, wire};
 
 /// Unclaimed input stays available to the ordinary non-XCF geometry reader. This
 /// prefix query stops at image-property END: it does not validate unread drawable
@@ -20,93 +20,50 @@ fn scan(reader: &mut dyn Read, ctl: &Interrupt<'_>) -> Result<((f64, f64), f64)>
     let length = if version >= 4 { 30 } else { 26 };
     read(reader, bytes.get_mut(14..length).ok_or_else(|| invalid("invalid geometry header range"))?)?;
     let (_, header) = read_header(bytes.get(..length).ok_or_else(|| invalid("invalid geometry header length"))?)?;
+    let mut input = Stream(reader);
     let mut dpi = 72.;
-    let mut count = 0usize;
+    let mut count = 0;
     loop {
         ctl.check().map_err(|_| IoError::Cancelled)?;
-        let kind = word(reader)?;
-        let declared = word(reader)? as usize;
-        if kind == 0 {
+        let Some((kind, declared)) = wire::property_header(&mut input, count)? else {
             return Ok(((f64::from(header.width), f64::from(header.height)), f64::from(dpi)));
-        }
-        count = count.saturating_add(1);
-        if count > 4096 {
-            return Err(invalid("too many properties"));
-        }
-        match kind {
-            // Match image property framing: only an indexed image consumes
-            // the palette and needs its historical count-based length workaround.
-            1 if header.base_type == 2 => {
-                let colors = word(reader)? as usize;
-                let length = colors.checked_mul(3).and_then(|n| n.checked_add(4)).ok_or_else(|| invalid("colormap overflow"))?;
-                payload_limit(kind, length)?;
-                skip(reader, length.saturating_sub(4))?;
-            }
-            24 => user_unit(reader, header.version)?,
-            48 => {
-                skip(reader, 4)?;
-                string(reader)?;
-                skip(reader, 8)?;
-            }
-            _ => {
-                payload_limit(kind, declared)?;
-                if kind == 19 && declared >= 8 {
-                    let mut pair = [0; 8];
-                    read(reader, &mut pair)?;
-                    // Reuse the importer policy: last valid pair wins, invalid
-                    // pairs leave the preceding DPI intact, trailing bytes ignored.
-                    dpi = metadata::image_resolution(&[wire::Prop { offset: 0, kind, data: &pair }], dpi);
-                    skip(reader, declared.saturating_sub(pair.len()))?;
-                } else {
-                    skip(reader, declared)?;
-                }
-            }
+        };
+        count += 1;
+        let remaining = wire::property_payload(&mut input, kind, declared, Some(header.version), header.base_type == 2)?;
+        if kind == 19 && remaining >= 8 {
+            let mut pair = [0; 8];
+            read(input.0, &mut pair)?;
+            // Last valid pair wins, and extra bytes do not affect it.
+            dpi = metadata::image_resolution(&[wire::Prop { offset: 0, kind, data: &pair }], dpi);
+            wire::PropertyInput::discard(&mut input, remaining - pair.len())?;
+        } else {
+            wire::PropertyInput::discard(&mut input, remaining)?;
         }
     }
 }
 
-fn payload_limit(kind: u32, length: usize) -> Result<()> {
-    if length > MAX_PAYLOAD {
-        return Err(invalid(format!("property {kind} declares {length} bytes")));
-    }
-    Ok(())
-}
+struct Stream<'a>(&'a mut dyn Read);
 
-fn user_unit(reader: &mut dyn Read, version: u32) -> Result<()> {
-    skip(reader, 8)?;
-    for _ in 0..if version < 21 { 5 } else { 3 } {
-        string(reader)?;
+impl wire::PropertyInput for Stream<'_> {
+    fn word(&mut self) -> Result<u32> {
+        let mut bytes = [0; 4];
+        read(self.0, &mut bytes)?;
+        Ok(u32::from_be_bytes(bytes))
     }
-    // The maximum five bounded strings and fixed fields fit MAX_PAYLOAD.
-    Ok(())
-}
 
-fn string(reader: &mut dyn Read) -> Result<()> {
-    let length = word(reader)? as usize;
-    if length > MAX_STRING {
-        return Err(invalid(format!("a string of {length} bytes exceeds the limit")));
+    fn discard(&mut self, mut length: usize) -> Result<()> {
+        let mut scratch = [0; 32 * 1024];
+        while length != 0 {
+            let count = length.min(scratch.len());
+            read(self.0, scratch.get_mut(..count).ok_or_else(|| invalid("invalid geometry discard range"))?)?;
+            length -= count;
+        }
+        Ok(())
     }
-    skip(reader, length)
-}
-
-fn word(reader: &mut dyn Read) -> Result<u32> {
-    let mut bytes = [0; 4];
-    read(reader, &mut bytes)?;
-    Ok(u32::from_be_bytes(bytes))
 }
 
 fn read(reader: &mut dyn Read, output: &mut [u8]) -> Result<()> {
     reader.read_exact(output).map_err(|error| invalid(format!("XCF geometry prefix: {error}")))
-}
-
-fn skip(reader: &mut dyn Read, mut length: usize) -> Result<()> {
-    let mut scratch = [0; 32 * 1024];
-    while length != 0 {
-        let count = length.min(scratch.len());
-        read(reader, scratch.get_mut(..count).ok_or_else(|| invalid("invalid geometry discard range"))?)?;
-        length = length.saturating_sub(count);
-    }
-    Ok(())
 }
 
 #[cfg(test)]

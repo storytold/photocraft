@@ -1485,3 +1485,35 @@ fn blank_layers_are_not_charged_for_pruned_tiles() {
     }
     assert_eq!(budget, MAX_PIXEL_BYTES);
 }
+
+#[test]
+fn rejects_a_mask_with_its_own_size_before_reading_its_hierarchy() {
+    let mut image = TestImage::rgb8(2, 2);
+    let mut layer = TestLayer::rgba("Masked", 2, 2, rgba(2, 2, |_, _| [255, 0, 0, 255]));
+    layer.mask = Some(vec![127; 4]);
+    image.layers.push(layer);
+    let bytes = image.write();
+    let (mut cursor, header) = read_header(&bytes).unwrap();
+    wire::props_image_with_interrupt(&mut cursor, header.version, false, &Interrupt::NONE).unwrap();
+    let layer = cursor.ptr().unwrap();
+    let mut cursor = cursor.at(layer);
+    cursor.skip(12).unwrap();
+    cursor.string_bytes().unwrap();
+    wire::props(&mut cursor).unwrap();
+    cursor.ptr().unwrap();
+    let mask = cursor.ptr().unwrap();
+
+    let mut mask_header = cursor.at(mask);
+    mask_header.skip(8).unwrap();
+    mask_header.string_bytes().unwrap();
+    wire::props(&mut mask_header).unwrap();
+    let pointer = mask_header.pos;
+    let mut writer = W { out: bytes, wide: header.version >= 11 };
+    writer.out[mask..mask + 4].copy_from_slice(&3u32.to_be_bytes());
+    let valid_hierarchy = hierarchy(&mut writer, 3, 2, 1, &[127; 6], image.compression);
+    for target in [valid_hierarchy, writer.out.len()] {
+        writer.patch(pointer, target);
+        let Err(error) = open(&writer.out) else { panic!("a differently sized layer mask was admitted") };
+        assert!(error.to_string().contains("layer mask dimensions 3x2 differ from the layer's 2x2"), "{error}");
+    }
+}

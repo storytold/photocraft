@@ -82,7 +82,7 @@ impl<'a> Image<'a> {
         let mut selection = None;
         for (ordinal, &ptr) in pointers.iter().enumerate() {
             ctl.check().map_err(|_| IoError::Cancelled)?;
-            let Channel { name, properties: cprops, pixels: px, effects: coverage_effects, name_limited, effects_limited } = self.channel(ptr, ctl)?;
+            let Channel { name, properties: cprops, pixels: px, effects: coverage_effects, name_limited, effects_limited } = self.channel(ptr, None, ctl)?;
             let mut surface = Surface::new(mask_fmt);
             write_pixels(&mut surface, &px, 0, 0, &mut self.budget)?;
             let is_selection = cprops.iter().any(|p| p.kind == 4);
@@ -780,7 +780,8 @@ impl<'a> Image<'a> {
         }
         self.retain_layer_properties(outcome, &lprops, ctl)?;
         if mptr != 0 {
-            let Channel { name: mname, properties: mprops, pixels: px, effects: coverage_effects, name_limited, effects_limited } = self.channel(mptr, ctl)?;
+            let Channel { name: mname, properties: mprops, pixels: px, effects: coverage_effects, name_limited, effects_limited } =
+                self.channel(mptr, Some((lw, lh)), ctl)?;
             let mut surface = Surface::new(mask_fmt);
             write_pixels(&mut surface, &px, x, y, &mut self.budget)?;
             let mask_outcome = self.outcomes.push(ConversionEntry {

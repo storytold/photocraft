@@ -125,61 +125,84 @@ fn props_charged<'a>(
         #[cfg(test)]
         PROPERTY_READS.with(|count| count.set(count.get().saturating_add(1)));
         let offset = c.pos;
-        let kind = c.u32()?;
-        let len = c.u32()? as usize;
-        if kind == 0 {
-            return Ok(out);
-        }
-        // PROP_COLORMAP's length word was wrong in some releases (n+4 for 3n+4 bytes); its real
-        // size follows from the count. Unit strings changed at XCF21.
-        // PROP_LINK_LAYER's length can be four bytes short (#8857); read all its fields.
-        let len = match kind {
-            1 if palette_from_count => {
-                let n = c.at(c.pos).u32()? as usize;
-                4usize.checked_add(n.checked_mul(3).ok_or_else(|| invalid("colormap overflow"))?).ok_or_else(|| invalid("colormap overflow"))?
-            }
-            24 => {
-                if let Some(version) = version {
-                    user_unit_len(c, version)?
-                } else {
-                    len
-                }
-            }
-            48 => link_layer_len(c)?,
-            _ => len,
-        };
-        if len > MAX_PAYLOAD {
-            return Err(invalid(format!("property {kind} declares {len} bytes")));
-        }
+        let Some((kind, declared)) = property_header(c, out.len())? else { return Ok(out) };
+        let mut framing = c.at(c.pos);
+        let remaining = property_payload(&mut framing, kind, declared, version, palette_from_count)?;
+        let len = (framing.pos - c.pos).checked_add(remaining).ok_or_else(|| invalid("property size overflow"))?;
         charge(len)?;
         let data = c.take(len)?;
         out.try_reserve(1).map_err(|_| invalid("not enough memory for XCF properties"))?;
         out.push(Prop { offset, kind, data });
-        if out.len() > 4096 {
-            return Err(invalid("too many properties"));
+    }
+}
+
+/// Framing shared by the in-memory decoder and the streaming geometry probe.
+pub(super) trait PropertyInput {
+    fn word(&mut self) -> Result<u32>;
+    fn discard(&mut self, length: usize) -> Result<()>;
+}
+
+impl PropertyInput for Cursor<'_> {
+    fn word(&mut self) -> Result<u32> {
+        self.u32()
+    }
+
+    fn discard(&mut self, length: usize) -> Result<()> {
+        self.skip(length)
+    }
+}
+
+pub(super) fn property_header(input: &mut impl PropertyInput, count: usize) -> Result<Option<(u32, usize)>> {
+    let kind = input.word()?;
+    let declared = input.word()? as usize;
+    if kind == 0 {
+        return Ok(None);
+    }
+    if count >= 4096 {
+        return Err(invalid("too many properties"));
+    }
+    Ok(Some((kind, declared)))
+}
+
+/// Consume only the bytes needed to determine framing. Return the payload bytes
+/// still unread, so the geometry probe can inspect DPI without retaining other properties.
+pub(super) fn property_payload(input: &mut impl PropertyInput, kind: u32, declared: usize, version: Option<u32>, indexed: bool) -> Result<usize> {
+    let (length, prefix) = match (kind, version) {
+        // Old XCFs can declare n+4 for 3n+4 bytes. Non-indexed images do not consume this palette.
+        (1, _) if indexed => {
+            let colors = input.word()? as usize;
+            let length = colors.checked_mul(3).and_then(|n| n.checked_add(4)).ok_or_else(|| invalid("colormap overflow"))?;
+            (length, 4)
         }
+        // Both variants fit MAX_PAYLOAD because each individual string is bounded.
+        (24, Some(version)) => {
+            input.discard(8)?;
+            for _ in 0..if version < 21 { 5 } else { 3 } {
+                discard_property_string(input)?;
+            }
+            return Ok(0);
+        }
+        // PROP_LINK_LAYER can declare four bytes too few (#8857).
+        (48, _) => {
+            input.discard(4)?;
+            discard_property_string(input)?;
+            input.discard(8)?;
+            return Ok(0);
+        }
+        _ => (declared, 0),
+    };
+    if length > MAX_PAYLOAD {
+        return Err(invalid(format!("property {kind} declares {length} bytes")));
     }
+    Ok(length - prefix)
 }
 
-/// A PROP_LINK_LAYER payload: flags, a path STRING, then the source width and height.
-/// The dimensions are present for raster links too, where their values are unused.
-pub(super) fn link_layer_len(c: &Cursor<'_>) -> Result<usize> {
-    let mut p = c.at(c.pos);
-    p.skip(4)?;
-    p.string_bytes()?;
-    p.skip(8)?;
-    Ok(p.pos - c.pos)
-}
-
-/// The real size of a PROP_USER_UNIT payload: a float, a count and three (XCF 21+) or five
-/// strings. Measured without consuming.
-pub(super) fn user_unit_len(c: &Cursor<'_>, version: u32) -> Result<usize> {
-    let mut p = c.at(c.pos);
-    p.skip(8)?;
-    for _ in 0..if version < 21 { 5 } else { 3 } {
-        p.string()?;
+fn discard_property_string(input: &mut impl PropertyInput) -> Result<()> {
+    let length = input.word()? as usize;
+    if length > MAX_STRING {
+        return Err(invalid(format!("a string of {length} bytes exceeds the limit")));
     }
-    Ok(p.pos - c.pos)
+    input.discard(length)
 }
 
 pub(super) fn be_u32(b: &[u8]) -> Option<u32> {

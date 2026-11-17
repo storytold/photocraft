@@ -1,6 +1,6 @@
 use super::filters::smart;
 use super::source::{
-    SourceImage, cache_get, cache_key_with_order, cache_put, convert_svg_source, source_bytes, source_image_with_order, source_surface_from_buffer,
+    SourceImage, cache_get, cache_put, convert_svg_source, source_bytes, source_cache_key, source_image_with_order, source_surface_from_buffer,
     svg_source_image_in, vector_scale,
 };
 use super::{
@@ -24,7 +24,7 @@ pub fn stack_image_with_order(
     order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
 ) -> Result<SourceImage> {
     use photocraft_algo::stack::Stat;
-    let mut key = cache_key_with_order(bytes, fmt, order);
+    let mut key = source_cache_key(file_name, bytes, fmt, order);
     key.0 = *blake3::hash(&[&key.0[..], b"stack:", mode.id().as_bytes()].concat()).as_bytes();
     if let Some(img) = cache_get(&key) {
         return Ok(img);
@@ -37,7 +37,7 @@ pub fn stack_image_with_order(
     let bounds = doc.bounds();
     // An SVG opens with one layer per shape, and every visible one gets its own float frame:
     // they may take 1 GiB together, the SVG import's own budget, before any is rendered.
-    if photocraft_io::is_svg_input(file_name, bytes) {
+    if photocraft_io::svg::is_svg(bytes) {
         let visible = u64::try_from(layers.iter().filter(|l| l.visible).count()).unwrap_or(u64::MAX);
         let frame_bytes = doc.size.area().saturating_mul(16);
         if visible.saturating_mul(frame_bytes) > 1 << 30 {
@@ -192,7 +192,7 @@ pub(super) fn place(name: &str, bytes: &[u8], doc: &Document, sm: &SmartObject) 
 
 fn place_with_svg(name: &str, bytes: &[u8], doc: &Document, sm: &SmartObject, svg: &mut impl FnMut(&[u8], f64) -> Result<SourceImage>) -> Result<Surface> {
     let fmt = doc.pixel_format();
-    let is_svg = photocraft_io::is_svg_input(name, bytes);
+    let is_svg = photocraft_io::svg::is_svg(bytes);
     // A vector source is rendered at the placement's scale, and the placement is divided by
     // that scale so the rendered pixels land where the source units would.
     if sm.stack_mode.is_none() && sm.warp.is_none() && is_svg {
@@ -323,7 +323,7 @@ pub(crate) fn source_box(doc: &Document, sm: &SmartObject) -> Option<[f64; 4]> {
     let bytes = display_source(sm, &bytes);
     let fmt = doc.pixel_format();
     let r = match sm.stack_mode {
-        None if photocraft_io::is_svg_input(&name, &bytes) => photocraft_io::svg::bounded_canvas_bounds(&bytes, 24_000_000).ok()?,
+        None if photocraft_io::svg::is_svg(&bytes) => photocraft_io::svg::bounded_canvas_bounds(&bytes, 24_000_000).ok()?,
         Some(mode) => stack_image_with_order(&name, &bytes, fmt, mode, sm.historical_xcf_sample_order).ok()?.bounds,
         None => source_image_with_order(&name, &bytes, fmt, sm.historical_xcf_sample_order).ok()?.bounds,
     };
@@ -341,7 +341,7 @@ pub fn render(doc: &Document, sm: &SmartObject) -> Result<Option<Surface>> {
 /// must not accidentally reuse an incomplete surface. Native previews remain strict.
 pub(crate) fn render_with_warnings(doc: &Document, sm: &SmartObject) -> Result<(Option<Surface>, Vec<String>)> {
     let Some((name, bytes)) = source_bytes(&doc.metadata, &sm.source) else { return Ok((None, Vec::new())) };
-    if !photocraft_io::is_svg_input(&name, &bytes) || sm.vector_preview.is_some() || sm.stack_mode.is_some() {
+    if !photocraft_io::svg::is_svg(&bytes) || sm.vector_preview.is_some() || sm.stack_mode.is_some() {
         return render(doc, sm).map(|surface| (surface, Vec::new()));
     }
     if !unapplied_filters(sm).is_empty() {
@@ -375,8 +375,8 @@ pub(super) fn render_in(doc: &Document, sm: &SmartObject, ctx: &JobCtx) -> Resul
     let Some((name, bytes)) = source_bytes(&doc.metadata, &sm.source) else { return Ok(None) };
     let bytes = display_source(sm, &bytes);
     let (fmt, canvas) = (doc.pixel_format(), doc.bounds());
-    let mut placed_key = stack_cache::placed_key(&bytes, fmt, sm, canvas);
-    if photocraft_io::is_svg_input(&name, &bytes) {
+    let mut placed_key = stack_cache::placed_key(&name, &bytes, fmt, sm, canvas);
+    if photocraft_io::svg::is_svg(&bytes) {
         let mut h = blake3::Hasher::new();
         h.update(&placed_key);
         h.update(&crate::color_cmds::document_profile(doc).to_bytes());
