@@ -1,14 +1,12 @@
-//! Hidden-tick and synthetic-input lifecycle regressions.
-//!
-//! The host runs `App::logic` without a UI pass for hidden/occluded windows; eframe preserves the
-//! raw input appended by `raw_input_hook` until a real pass consumes it. These tests exercise that
-//! order without a renderer: at most one synthetic batch may be in flight, a pass that returns
-//! early must not lose it (and must not deliver it twice), and a batch queued for one document
-//! must not be replayed into another.
+//! Synthetic input around the app's passes: input queued for one active document is withdrawn
+//! when another document becomes active between passes, not on an edit nor on a switch the
+//! injected step makes itself, and a hidden window keeps painting while input or a capture waits.
+//! The queue itself is the window host's (craft-automation's `synthetic` trials).
 
 use crate::{PhotocraftApp, Services};
+use craft::ui::runtime::windows::WindowHost;
 use eframe::App as _;
-use egui::{Context, Event, Key, Modifiers, RawInput};
+use egui::{Context, RawInput};
 use photocraft_engine::Session;
 use serde_json::json;
 
@@ -18,18 +16,15 @@ fn app_with_doc() -> PhotocraftApp {
     app
 }
 
-fn press(key: Key) -> Event {
-    Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }
-}
-
-fn release(key: Key) -> Event {
-    Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE }
-}
-
-fn hook(app: &mut PhotocraftApp, ctx: &Context) -> Vec<Event> {
-    let mut raw = RawInput::default();
-    app.inject_synthetic(ctx, &mut raw);
-    raw.events
+/// Sends `ui.key V` through a control channel and runs it: the reply waits on the queued input.
+fn queue_key(app: &mut PhotocraftApp, ctx: &Context) -> std::sync::mpsc::Receiver<serde_json::Value> {
+    let (transport, rx) = std::sync::mpsc::channel();
+    app.control = Some(craft::automation::ControlChannel::new(rx));
+    let (req, reply) = crate::ControlRequest::new("ui.key", json!({"key": "V"}));
+    transport.send(req).expect("the channel is open");
+    app.drain_control(ctx);
+    assert!(!WindowHost::of(ctx).injected_idle(), "the key is queued");
+    reply
 }
 
 /// Hidden logic ticks still receive the current viewport's native geometry. The default ROOT
@@ -42,150 +37,121 @@ fn host_input(viewport: egui::ViewportId) -> RawInput {
     raw
 }
 
+/// A switch of the active document before the queued input ran withdraws it and fails the
+/// waiting reply; an edit in the same document (a new revision, the same activation) does not.
 #[test]
-fn one_batch_at_a_time_across_hidden_ticks() {
-    let ctx = Context::default();
-    let mut app = app_with_doc();
-    app.synthetic.extend([press(Key::V), release(Key::V), press(Key::W), release(Key::W)]);
-    // The first hidden tick injects the first press/release pair.
-    let first = hook(&mut app, &ctx);
-    assert_eq!(first.len(), 2, "one step: the press and its release");
-    // Further hidden ticks must not drain the next step into eframe's preserved buffer.
-    assert!(hook(&mut app, &ctx).is_empty());
-    assert!(hook(&mut app, &ctx).is_empty());
-    // A real UI pass consumes the batch; only then may the next step start.
-    app.begin_synthetic_pass(&ctx);
-    app.finish_synthetic_pass();
-    let next = hook(&mut app, &ctx);
-    assert_eq!(next.len(), 2, "the second step starts after the pass");
-}
-
-#[test]
-fn an_early_returning_pass_reinjects_the_batch_exactly_once() {
-    let ctx = Context::default();
-    let mut app = app_with_doc();
-    app.synthetic.extend([press(Key::A)]);
-    assert_eq!(hook(&mut app, &ctx).len(), 1);
-    // A pass began (egui consumed the events), then returned before handling input: fonts not
-    // ready. Keep the same batch and put it back on the next hook.
-    app.begin_synthetic_pass(&ctx);
-    app.defer_synthetic_pass();
-    let again = hook(&mut app, &ctx);
-    assert_eq!(again.len(), 1, "the same step is delivered again");
-    assert!(matches!(again[0], Event::Key { key: Key::A, pressed: true, .. }));
-    // A second hidden tick before the UI pass must not append the step a second time.
-    assert!(hook(&mut app, &ctx).is_empty(), "the reinjection is consumed once");
-    app.begin_synthetic_pass(&ctx);
-    app.finish_synthetic_pass();
-    assert!(hook(&mut app, &ctx).is_empty(), "then it is delivered once and done");
-}
-
-#[test]
-fn a_document_change_before_injection_drops_the_batch_and_replies() {
-    let ctx = Context::default();
-    let mut app = app_with_doc();
-    app.synthetic.extend([press(Key::V), release(Key::V)]);
-    assert!(!hook(&mut app, &ctx).is_empty());
-    let (tx, rx) = std::sync::mpsc::channel();
-    app.input_waiters.push(tx);
-    // The document changed while the events were still in flight: the next hook sees it before
-    // the host consumes them, so it withdraws the batch and fails the waiting reply.
-    app.run("file.new", json!({"width": 16, "height": 16})).expect("a second document");
-    assert!(hook(&mut app, &ctx).is_empty(), "nothing is delivered to the new document");
-    assert!(app.synthetic_batch.is_none(), "the stale batch is dropped");
-    let reply = rx.recv().expect("the waiting control request gets an answer");
-    assert_eq!(reply["ok"], false);
-    assert!(reply["error"].as_str().is_some_and(|e| e.contains("document or focus changed")));
-}
-
-#[test]
-fn a_document_change_inside_the_pass_is_delivered_and_not_reported_as_cancelled() {
-    let ctx = Context::default();
-    let mut app = app_with_doc();
-    app.synthetic.extend([press(Key::V), release(Key::V)]);
-    assert!(!hook(&mut app, &ctx).is_empty());
-    let (tx, rx) = std::sync::mpsc::channel();
-    app.input_waiters.push(tx);
-    // `logic` opens another document after the hook consumed the events into this pass. They
-    // cannot be withdrawn now. Treat the batch as delivered (automation-gated) rather than
-    // failing the reply while the input still lands.
-    app.run("file.new", json!({"width": 16, "height": 16})).expect("a second document");
-    app.begin_synthetic_pass(&ctx);
-    assert!(app.automation_input, "the delivered batch keeps the automation policy");
-    assert!(app.synthetic_batch.is_some(), "the pass still owns the batch until it finishes");
-    assert!(rx.try_recv().is_err(), "no cancellation reply for input that was delivered");
-    app.finish_synthetic_pass();
-    assert!(app.synthetic_batch.is_none());
-}
-
-#[test]
-fn a_preserved_batch_is_withdrawn_from_the_raw_input_on_a_document_change() {
-    let ctx = Context::default();
-    let mut app = app_with_doc();
-    app.synthetic.extend([press(Key::V), release(Key::V)]);
-    let first = hook(&mut app, &ctx);
-    assert_eq!(first.len(), 2);
-    // A hidden logic tick preserved the events for the next pass; meanwhile the document changed.
-    app.run("file.new", json!({"width": 16, "height": 16})).expect("a second document");
-    let mut preserved = RawInput { events: first, ..Default::default() };
-    app.inject_synthetic(&ctx, &mut preserved);
-    assert!(preserved.events.is_empty(), "the stale events are withdrawn from preserved input");
-    assert!(app.synthetic_batch.is_none());
-}
-
-#[test]
-fn an_edit_in_the_same_document_does_not_cancel_the_queued_batch() {
-    let ctx = Context::default();
-    let mut app = app_with_doc();
-    app.synthetic.extend([press(Key::L), release(Key::L)]);
-    assert!(!hook(&mut app, &ctx).is_empty());
-    let (tx, rx) = std::sync::mpsc::channel();
-    app.input_waiters.push(tx);
-    // A command edits the same document while the step is in flight: the revision changes, the
-    // document activation does not, so the step is not cancelled.
-    app.run("layer.new.layer", json!({"name": "queued"})).expect("an edit");
-    let mut preserved = RawInput::default();
-    app.inject_synthetic(&ctx, &mut preserved);
-    assert!(app.synthetic_batch.is_some(), "the batch for this document survives an edit");
-    assert!(rx.try_recv().is_err(), "no cancellation reply");
-    app.begin_synthetic_pass(&ctx);
-    app.finish_synthetic_pass();
+fn queued_input_is_withdrawn_only_when_the_active_document_changes() {
+    for (command, params, withdrawn) in [("file.new", json!({"width": 16, "height": 16}), true), ("layer.new.layer", json!({"name": "queued"}), false)] {
+        let mut app = app_with_doc();
+        let ctx = app.ctx().clone();
+        let reply = queue_key(&mut app, &ctx);
+        app.run(command, params).expect(command);
+        app.withdraw_stale_input(&ctx);
+        if withdrawn {
+            // The window host carries the withdrawal out in the next pass's input hook.
+            ctx.run_ui(RawInput::default(), |_| {}).textures_delta.clear();
+        }
+        app.poll_input(&ctx);
+        let host = WindowHost::of(&ctx);
+        if withdrawn {
+            let reply = reply.try_recv().expect("the waiting request is answered");
+            assert_eq!(reply["ok"], false, "{command}");
+            assert!(reply["error"].as_str().is_some_and(|e| e.contains("document or focus changed")), "{reply}");
+            assert!(host.injected_idle(), "nothing is left for the new document");
+        } else {
+            assert!(reply.try_recv().is_err(), "{command}: no cancellation reply");
+            assert!(!host.injected_idle(), "{command}: the input stays queued");
+        }
+    }
 }
 
 /// A hidden host runs `logic` without a UI pass. Both a capture that is waiting for its first
-/// geometry and a queued synthetic step must ask the host for a paint, or the window stays
+/// geometry and queued synthetic input must ask the host for a paint, or the window stays
 /// hidden forever and the control request times out.
 #[test]
 fn a_logic_tick_requests_a_hidden_paint_for_waiting_captures_and_queued_input() {
-    let ctx = Context::default();
-    let mut app = app_with_doc();
-    let mut frame = eframe::Frame::_new_kittest();
-    let (tx, _rx) = std::sync::mpsc::channel();
-    let document = app.document_identity();
-    app.captures.admit(90, None, tx, document, 0.0, crate::screenshot::now()).expect("parked before the first pass");
-    let out = ctx.run_logic(&host_input(egui::ViewportId::ROOT), |ctx| app.logic(ctx, &mut frame));
     let paints = |out: &egui::LogicOutput| {
         out.viewport_commands.get(&egui::ViewportId::ROOT).is_some_and(|commands| commands.contains(&egui::ViewportCommand::RequestPaintWhileHidden))
     };
+    let mut frame = eframe::Frame::_new_kittest();
+
+    let mut app = app_with_doc();
+    let ctx = app.ctx().clone();
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let document = app.document_identity();
+    let (_transport, requests) = std::sync::mpsc::channel();
+    let mut channel = craft::automation::ControlChannel::new(requests);
+    channel
+        .captures
+        .admit(
+            {
+                let mut request = craft::automation::screenshot::ScreenshotRequest::new(90, egui::ViewportId::ROOT, tx);
+                request.document = document;
+                request
+            },
+            craft::ui::runtime::motion::now(),
+        )
+        .expect("parked before the first pass");
+    app.control = Some(channel);
+    let out = ctx.run_logic(&host_input(egui::ViewportId::ROOT), |ctx| app.logic(ctx, &mut frame));
     assert!(paints(&out), "a capture waiting for geometry keeps the hidden window painting");
 
-    app.synthetic.extend([press(Key::V), release(Key::V)]);
-    let mut raw = host_input(egui::ViewportId::ROOT);
-    app.inject_synthetic(&ctx, &mut raw);
-    let out = ctx.run_logic(&raw, |ctx| app.logic(ctx, &mut frame));
+    let ctx = app.ctx().clone();
+    let mut app = app_with_doc();
+    let _reply = queue_key(&mut app, &ctx);
+    let out = ctx.run_logic(&host_input(egui::ViewportId::ROOT), |ctx| app.logic(ctx, &mut frame));
     assert!(paints(&out), "queued synthetic input keeps the hidden window painting");
 }
 
+/// The whole app in an eframe harness with `documents` open and a control channel; the channel's
+/// sending end.
+pub(crate) fn app_harness(
+    services: Services,
+    documents: usize,
+) -> (egui_kittest::Harness<'static, PhotocraftApp>, std::sync::mpsc::Sender<crate::ControlRequest>) {
+    let (transport, requests) = std::sync::mpsc::channel();
+    let requests = std::cell::Cell::new(Some(requests));
+    let services = std::cell::Cell::new(Some(services));
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).with_max_steps(64).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), Session::new(), services.take().expect("one app"));
+        for _ in 0..documents {
+            app.run("file.new", json!({"width": 32, "height": 32})).expect("a document");
+        }
+        app.control = Some(craft::automation::ControlChannel::new(requests.take().expect("one channel")));
+        app
+    });
+    h.run_steps(8);
+    (h, transport)
+}
+
+/// Sends `method` over the harness's control channel and runs passes until it is answered.
+pub(crate) fn answered(
+    h: &mut egui_kittest::Harness<'static, PhotocraftApp>,
+    transport: &std::sync::mpsc::Sender<crate::ControlRequest>,
+    method: &str,
+    params: serde_json::Value,
+) -> serde_json::Value {
+    let (req, reply) = crate::ControlRequest::new(method, params);
+    transport.send(req).expect("the channel is open");
+    for _ in 0..64 {
+        h.run_steps(1);
+        if let Ok(answer) = reply.try_recv() {
+            return answer;
+        }
+    }
+    panic!("{method} was not answered");
+}
+
+/// A step that switches the active document itself (Ctrl+Tab on its press pass) delivers the rest
+/// of its request: the reply is ok, and the key and the modifier are released.
 #[test]
-fn a_finished_pass_does_not_replay_the_batch() {
-    let ctx = Context::default();
-    let mut app = app_with_doc();
-    app.synthetic.extend([press(Key::B), release(Key::B)]);
-    assert_eq!(hook(&mut app, &ctx).len(), 2);
-    app.begin_synthetic_pass(&ctx);
-    app.finish_synthetic_pass();
-    // A second pass in the same frame (a popup sizing pass) must see no events from us.
-    let mut second_pass = RawInput::default();
-    app.inject_synthetic(&ctx, &mut second_pass);
-    assert!(second_pass.events.is_empty());
+fn a_step_that_switches_the_document_delivers_the_rest_of_its_request() {
+    let (mut h, transport) = app_harness(Services::default(), 2);
+    let before = h.state().session.active_generation();
+    let reply = answered(&mut h, &transport, "ui.key", json!({"key": "Tab", "ctrl": true}));
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert_ne!(h.state().session.active_generation(), before, "Ctrl+Tab switched the document");
+    h.run_steps(1);
+    assert!(h.ctx.input(|i| i.keys_down.is_empty() && i.modifiers.is_none()), "nothing stays down");
 }
