@@ -152,6 +152,8 @@ pub mod sample_cmds;
 #[cfg(test)]
 mod sample_zoom_box_tests;
 pub mod sampler_cmds;
+pub mod script_list_cmds;
+pub mod script_options_cmds;
 pub mod select_extra_cmds;
 pub mod selection_cmds;
 pub mod slice_cmds;
@@ -341,7 +343,8 @@ fn build() -> Vec<CommandSpec> {
                 if let Some(st) = s.active_mut() {
                     st.history.set_current_label("New");
                 }
-                Ok(json!({ "document": i }))
+                let (id, serial) = s.documents().get(i).map(|d| (d.doc.id.0, d.serial)).unzip();
+                Ok(json!({ "document": i, "id": id, "serial": serial }))
             }
         ),
         cmd!(
@@ -1116,9 +1119,14 @@ fn build() -> Vec<CommandSpec> {
             label: "Inspect Document",
             menu: &[],
             shortcut: None,
-            params: r##"{"document":index?}"##,
+            params: r##"{"document":index?} or {"serial":n} (the document's never-reused serial from session.inspect)"##,
             enabled: has_doc,
             run: |s, p| {
+                if let Some(serial) = p.get("serial").filter(|v| !v.is_null()) {
+                    let n = serial.as_u64().ok_or_else(|| bad("document.inspect", "`serial` must be a document serial"))?;
+                    let d = s.documents().iter().find(|d| d.serial == n).ok_or_else(|| EngineError::Other(format!("no open document has serial {n}")))?;
+                    return Ok(inspect::document(d));
+                }
                 let d = match p.get("document") {
                     Some(v) => {
                         let i = v.as_u64().and_then(|v| usize::try_from(v).ok()).ok_or_else(|| bad("document.inspect", "`document` must be an index"))?;
@@ -1135,11 +1143,19 @@ fn build() -> Vec<CommandSpec> {
             label: "Activate Document",
             menu: &[],
             shortcut: None,
-            params: r##"{"document":index|{"index":uint}} or {"offset":int} (numeric document: zero-based tab index; typed index: one-based opening order; offset: places after the active document in opening order, before it when negative) → {document}"##,
+            params: r##"{"document":index|{"index":uint}} or {"offset":int} or {"serial":n} (numeric document: zero-based tab index; typed index: one-based opening order; offset: places after the active document in opening order, before it when negative; serial: the document's never-reused serial from session.inspect) → {document}"##,
             enabled: has_doc,
             run: |s, p| {
                 // A null key counts as omitted.
                 let given = |k: &str| p.get(k).filter(|v| !v.is_null());
+                if let Some(serial) = given("serial") {
+                    if given("document").is_some() || given("offset").is_some() {
+                        return Err(bad("document.activate", "give one of `document`, `offset` or `serial`"));
+                    }
+                    let n = serial.as_u64().ok_or_else(|| bad("document.activate", "`serial` must be a document serial"))?;
+                    let idx = s.documents().iter().position(|d| d.serial == n).ok_or_else(|| EngineError::Other(format!("no open document has serial {n}")))?;
+                    return if s.set_active(idx) { Ok(json!({"document": idx})) } else { Err(EngineError::NoDocument) };
+                }
                 let idx = match (given("document"), given("offset")) {
                     (Some(_), Some(_)) => return Err(bad("document.activate", "give `document` or `offset`, not both")),
                     (None, None) => return Err(bad("document.activate", "needs `document` (a tab index) or `offset`")),
@@ -1449,6 +1465,8 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::slice_cmds::specs());
     v.extend(crate::web_cmds::specs());
     v.extend(crate::automate_cmds::specs());
+    v.extend(crate::script_list_cmds::specs());
+    v.extend(crate::script_options_cmds::specs());
     v.extend(crate::print_cmds::specs());
     v.extend(crate::installed_profiles::specs());
     v.extend(crate::pick_cmds::specs());

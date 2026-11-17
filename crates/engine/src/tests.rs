@@ -1687,6 +1687,29 @@ fn document_inspect_and_activate_invalid_index() {
     assert_eq!(err_act.to_string(), "no document at index 9");
 }
 
+#[test]
+fn documents_are_inspected_and_activated_by_their_serial() {
+    let mut s = Session::new();
+    let made = s.execute("file.new", json!({"width": 8, "height": 8, "name": "One"})).unwrap();
+    s.execute("file.new", json!({"width": 9, "height": 9, "name": "Two"})).unwrap();
+    let serial = |s: &mut Session, i: usize| s.execute("session.inspect", json!({})).unwrap()["documents"][i]["serial"].as_u64().unwrap();
+    let listed = s.execute("session.inspect", json!({})).unwrap()["documents"][0].clone();
+    assert_eq!((&made["serial"], &made["id"]), (&listed["serial"], &listed["id"]), "a new document reports what names it");
+    let copy = s.execute("image.duplicate", json!({"name": "Copy"})).unwrap();
+    let listed = s.execute("session.inspect", json!({})).unwrap()["documents"][2].clone();
+    assert_eq!((&copy["serial"], &copy["id"]), (&listed["serial"], &listed["id"]), "so does a duplicate");
+    s.execute("file.close", json!({"save": "discard"})).unwrap();
+    let one = serial(&mut s, 0);
+    assert_eq!(s.execute("document.inspect", json!({"serial": one})).unwrap()["name"], "One");
+    assert_eq!(s.active_index(), Some(1), "inspecting does not switch documents");
+    assert_eq!(s.execute("document.activate", json!({"serial": one})).unwrap(), json!({"document": 0}));
+    assert_eq!(s.active_index(), Some(0));
+    for bad in [json!({"serial": 999}), json!({"serial": "1"}), json!({"serial": one, "document": 0})] {
+        assert!(s.execute("document.activate", bad.clone()).is_err(), "{bad}");
+    }
+    assert!(s.execute("document.inspect", json!({"serial": 999})).is_err());
+}
+
 /// #7103: Photoshop's Select Document by offset (previous is -1, next +1) walks opening order
 /// from the active document, wrapping at both ends. Bad params preserve the active document.
 #[test]

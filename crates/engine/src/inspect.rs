@@ -12,6 +12,10 @@ pub fn session(s: &Session) -> Value {
         "active": s.active_index(),
         "documents": s.documents().iter().enumerate().map(|(i, d)| json!({
             "index": i,
+            // Stable while the document stays open, unlike `index` (tabs move and close).
+            "id": d.doc.id.0,
+            // Never reused within the session, unlike `id` (`DocState::serial`).
+            "serial": d.serial,
             "name": d.doc.name,
             "path": d.path,
             "width": d.doc.size.width,
@@ -49,12 +53,16 @@ fn document_with(d: &DocState, detail: bool) -> Value {
         "depth": doc.depth.bits(),
         "resolution": doc.resolution_dpi,
         "activeLayer": d.active_layer.map(|l| l.0),
+        "backgroundLayer": doc.background().map(|l| l.id.0),
         "selectedLayers": selected.iter().map(|l| l.0).collect::<Vec<_>>(),
         "isolatedLayers": d.isolated_layers.iter().map(|l| l.0).collect::<Vec<_>>(),
         "hasSelection": doc.selection.is_some(),
         "selectionBounds": doc.selection.as_ref().map(|s| { let r = s.content_bounds(); [r.x0, r.y0, r.width() as i32, r.height() as i32] }),
         "layers": doc.layers.iter().rev().map(|l| layer_sel(l, &selected, &instances, Some(&doc.metadata), detail)).collect::<Vec<_>>(),
         "history": d.history.entries(),
+        // The History panel rows after the current state (its last `history` entry), as
+        // `history.selectState` counts them.
+        "historyRedo": d.history.redo_labels().collect::<Vec<_>>(),
         "historySource": crate::history_source_cmds::source_json(d),
         "snapshots": d.snapshots.iter().map(|snap| json!({"id": snap.id, "name": snap.name})).collect::<Vec<_>>(),
         "canUndo": d.history.can_undo(),
