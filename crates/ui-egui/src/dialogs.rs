@@ -376,6 +376,8 @@ fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fie
             } else {
                 crate::view_cmds::form_body(ui, fields);
             }
+            // A row of the form asked for an info message (the Batch Override note, #13659).
+            crate::view_cmds::take_form_alert(app, fields);
         }
         _ => {}
     }

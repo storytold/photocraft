@@ -154,15 +154,15 @@ fn show_snap_extras_and_screen_modes_are_state() {
 #[test]
 fn full_screen_and_maximized_never_overlap_on_windows() {
     use egui::ViewportCommand::{Fullscreen, Maximized};
-    // Maximized → full screen: un-maximize first, and remember it.
+    // Maximized â†’ full screen: un-maximize first, and remember it.
     let (cmds, remember) = screen_mode_commands(true, false, true, false, "fullScreenWithMenuBar");
     assert_eq!(cmds, vec![Maximized(false), Fullscreen(true)]);
     assert!(remember);
-    // Full screen → the other full-screen mode: nothing about maximized changes.
+    // Full screen â†’ the other full-screen mode: nothing about maximized changes.
     let (cmds, remember) = screen_mode_commands(true, true, false, true, "fullScreen");
     assert_eq!(cmds, vec![Fullscreen(true)]);
     assert!(remember);
-    // Full screen → Standard: maximize again after leaving, then forget.
+    // Full screen â†’ Standard: maximize again after leaving, then forget.
     let (cmds, remember) = screen_mode_commands(true, true, false, true, "standard");
     assert_eq!(cmds, vec![Fullscreen(false), Maximized(true)]);
     assert!(!remember);
@@ -353,7 +353,7 @@ fn dragged_arrange_borders_resize_the_cells_beside_them() {
 fn damaged_or_stale_arrange_splits_lay_out_even_cells() {
     let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 600.0));
     let even = cells("threeUpVertical", rect, 3, &[]).unwrap();
-    // From a settings file or another layout: wrong count, out of order, outside 0–1, NaN.
+    // From a settings file or another layout: wrong count, out of order, outside 0â€“1, NaN.
     for bad in [vec![0.5], vec![0.6, 0.3], vec![0.0, 0.5], vec![0.3, 1.5], vec![f32::NAN, 0.7], vec![0.2, 0.4, 0.6]] {
         assert_eq!(cells("threeUpVertical", rect, 3, &bad).unwrap(), even, "{bad:?}");
         assert_eq!(borders("threeUpVertical", rect, 3, &bad).len(), 2);
@@ -495,6 +495,7 @@ fn batch_menu_runs_the_selected_sets_action_among_same_named_ones() {
     assert_eq!(fields["__choices"]["set"], json!(["A", "B"]));
     assert_eq!((&fields["action"], &fields["set"]), (&json!("Retouch"), &json!("B")));
     fields.insert("input".into(), json!([input.clone()]));
+    fields.insert("destination".into(), json!("folder"));
     fields.insert("output".into(), json!(output));
     crate::dialogs::confirm(&mut app, id).unwrap();
     let saved = std::fs::read_dir(&output).unwrap().next().unwrap().unwrap().path();
@@ -639,6 +640,7 @@ fn batch_menu_runs_the_action_chosen_in_the_form() {
     let fields = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
     assert!(!fields.contains_key("steps"));
     fields.insert("input".into(), json!([input]));
+    fields.insert("destination".into(), json!("folder"));
     fields.insert("output".into(), json!(output));
     h.run_steps(4);
     h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Action").click();
@@ -836,8 +838,11 @@ fn batch_dialogs_include_all_subfolders() {
         assert_eq!(fields["__labels"]["includeSubfolders"], json!("Include All Subfolders"), "{id}");
         if id == "file.automate.batch" {
             assert_eq!(fields["source"], json!("folder"));
+            assert_eq!(fields["destination"], json!("none"), "the form opens on Destination None (#13659)");
             assert_eq!(fields["stopOnError"], json!(false));
             assert_eq!(fields["errorLog"], json!(""));
+            // The subfolder walk here is the copy run's, so the form picks Folder.
+            fields.insert("destination".into(), json!("folder"));
         }
         fields.insert("source".into(), json!("folder"));
         fields.insert("input".into(), json!(input));
@@ -879,6 +884,7 @@ fn batch_runs_an_action_recorded_with_the_type_tool() {
     let d = menu(&mut app, &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
     let fields = &mut app.ui.dialog_mut(d).unwrap().fields;
     fields.insert("input".into(), json!(dir.join("in").to_string_lossy()));
+    fields.insert("destination".into(), json!("folder"));
     fields.insert("output".into(), json!(dir.join("out").to_string_lossy()));
     let r = crate::dialogs::confirm(&mut app, d).unwrap();
     assert_eq!(r["files"].as_array().map(Vec::len), Some(2), "{r}");
@@ -917,6 +923,7 @@ fn a_batch_that_fails_on_its_files_says_which_and_why() {
     let d = menu(&mut app, &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
     let fields = &mut app.ui.dialog_mut(d).unwrap().fields;
     fields.insert("input".into(), json!(dir.join("in").to_string_lossy()));
+    fields.insert("destination".into(), json!("folder"));
     fields.insert("output".into(), json!(dir.join("out").to_string_lossy()));
     let notices = app.ui.notices.len();
     let r = crate::dialogs::confirm(&mut app, d).unwrap();
@@ -935,6 +942,143 @@ fn a_batch_that_fails_on_its_files_says_which_and_why() {
         assert_eq!(*line, format!("{}: {}", e["file"].as_str().unwrap(), e["error"].as_str().unwrap()));
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #13659: Batch's Destination dropdown carries the reference application's three values, in its
+/// order, opening on None, with the Override Action "Save As" Commands box beside it.
+#[test]
+fn batch_dialog_offers_destination_none_save_and_close_and_folder() {
+    let (mut app, ctx) = app_with(1);
+    app.session.actions.list.push(photocraft_engine::actions_cmds::Action::new("Invert", vec![("image.adjustments.invert".into(), json!({}))]));
+    let id = menu(&mut app, &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
+    let fields = &app.ui.dialog_mut(id).unwrap().fields;
+    assert_eq!(fields["destination"], json!("none"), "the default is None");
+    assert_eq!(fields["__choices"]["destination"], json!(["none", "saveAndClose", "folder"]), "listed in the reference order");
+    for (value, caption) in [("none", "None"), ("saveAndClose", "Save and Close"), ("folder", "Folder")] {
+        assert_eq!(fields["__labels"][value], json!(caption), "the caption of {value}");
+    }
+    assert_eq!(fields["overrideSaveAs"], json!(false), "Override Action \"Save As\" Commands starts off");
+    assert_eq!(fields["__labels"]["overrideSaveAs"], json!("Override Action \"Save As\" Commands"), "with the reference caption");
+    let keys = form_keys(fields);
+    let at = |key: &str| keys.iter().position(|k| k == key).unwrap_or_else(|| panic!("{key} is a Batch field: {keys:?}"));
+    assert!(at("source") < at("destination"), "Destination sits under the Source block: {keys:?}");
+    assert!(at("destination") < at("output"), "and the folder fields follow it: {keys:?}");
+}
+
+/// #13659: OK on the default Destination None runs the folder's files into open tabs. The dialog
+/// prefilled an Output folder, so the run must send none: nothing is written and each file is
+/// left open and changed.
+#[test]
+fn batch_dialog_on_destination_none_opens_the_folder_files_and_writes_nothing() {
+    let (mut app, ctx) = app_with(1);
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("in");
+    std::fs::create_dir_all(&input).unwrap();
+    for name in ["a.png", "b.png"] {
+        app.run("file.saveACopy", json!({"path": input.join(name).to_string_lossy()})).unwrap();
+    }
+    app.session.actions.list.push(photocraft_engine::actions_cmds::Action::new("Invert", vec![("image.adjustments.invert".into(), json!({}))]));
+    let id = menu(&mut app, &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
+    let out = dir.path().join("batch").to_string_lossy().into_owned();
+    {
+        let fields = &mut app.ui.dialog_mut(id).unwrap().fields;
+        fields.insert("input".into(), json!(input.to_string_lossy()));
+        fields.insert("output".into(), json!(out.clone()));
+    }
+    let result = crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(result["errors"], json!([]), "{result}");
+    assert_eq!(result["files"], json!([]), "None writes nothing: {result}");
+    assert!(!std::path::Path::new(&out).exists(), "the run took no output folder at all");
+    assert_eq!(app.session.documents().len(), 3, "both folder files opened as tabs");
+    assert!(app.session.documents().iter().skip(1).all(|st| st.is_dirty()), "each tab shows the changed mark");
+}
+
+/// #13659: Choose... and the File Naming controls are enabled only with Folder, and Override
+/// Action "Save As" Commands is greyed with None.
+#[test]
+fn batch_dialog_greys_the_folder_fields_until_folder_is_picked() {
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::{NodeT, Queryable};
+
+    let (mut app, _) = app_with(1);
+    app.session.actions.list.push(photocraft_engine::actions_cmds::Action::new("Invert", vec![("image.adjustments.invert".into(), json!({}))]));
+    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 800.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("semibold".into()))) {
+                crate::dialogs::show(app, ui.ctx());
+            }
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, Default::default());
+    let ctx = h.ctx.clone();
+    menu(h.state_mut(), &ctx, "file.automate.batch", json!({})).unwrap();
+    h.run_steps(4);
+    let fields = ["File Naming", "Custom", "Override Action \"Save As\" Commands"];
+    for label in fields {
+        assert!(h.get_by_label(label).accesskit_node().is_disabled(), "{label} is greyed with Destination None");
+    }
+    assert!(h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Format").accesskit_node().is_disabled(), "the Format dropdown is greyed too");
+    assert_eq!(
+        h.query_all_by_label("Browse…").map(|node| node.accesskit_node().is_disabled()).collect::<Vec<bool>>(),
+        vec![false, true],
+        "the Source folder keeps its Choose..., the destination's is greyed"
+    );
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Destination").click();
+    h.run_steps(2);
+    h.get_by_label("Folder").click();
+    h.run_steps(2);
+    for label in fields {
+        assert!(!h.get_by_label(label).accesskit_node().is_disabled(), "{label} is live again with Folder");
+    }
+    assert!(!h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Format").accesskit_node().is_disabled(), "Format is live again with Folder");
+    assert_eq!(
+        h.query_all_by_label("Browse…").map(|node| node.accesskit_node().is_disabled()).collect::<Vec<bool>>(),
+        vec![false, false],
+        "with Folder both Choose... buttons are live"
+    );
+}
+
+/// #13659: ticking Override Action "Save As" Commands explains what it does, with OK; the note
+/// closes and the box stays ticked.
+#[test]
+fn ticking_override_save_as_shows_the_reference_note_with_ok() {
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::{NodeT, Queryable};
+
+    const NOTE: &str = "When this option is on, files will be saved to the destination folder only by \"save as\" steps in the action. \
+                        If there are no \"save\" or \"save as\" steps, no files will be saved.";
+    let (mut app, _) = app_with(1);
+    app.session.actions.list.push(photocraft_engine::actions_cmds::Action::new("Invert", vec![("image.adjustments.invert".into(), json!({}))]));
+    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 800.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("semibold".into()))) {
+                crate::dialogs::show(app, ui.ctx());
+            }
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, Default::default());
+    let ctx = h.ctx.clone();
+    let id = menu(h.state_mut(), &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
+    h.run_steps(4);
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Destination").click();
+    h.run_steps(2);
+    h.get_by_label("Folder").click();
+    h.run_steps(2);
+    h.get_by_label("Override Action \"Save As\" Commands").click();
+    h.run_steps(4);
+    let notes: Vec<u64> =
+        h.state().ui.dialogs.iter().filter(|d| d.kind == crate::state::DialogKind::Error && d.fields["message"] == json!(NOTE)).map(|d| d.id).collect();
+    assert_eq!(notes.len(), 1, "the reference note opened over the dialog");
+    let buttons: Vec<String> =
+        h.query_all_by_role(egui::accesskit::Role::Button).filter_map(|node| node.accesskit_node().label().map(|label| label.to_string())).collect();
+    assert_eq!(buttons.iter().filter(|label| *label == "OK").count(), 2, "the note has an OK of its own beside the dialog's: {buttons:?}");
+    h.query_all_by_label("OK").last().expect("the note's OK button").click();
+    h.run_steps(3);
+    assert!(h.state().ui.dialogs.iter().all(|d| d.kind != crate::state::DialogKind::Error), "OK closed the note (buttons {buttons:?})");
+    assert!(h.state().ui.dialogs.iter().any(|d| d.id == id), "the Batch dialog stayed open");
+    assert_eq!(h.state_mut().ui.dialog_mut(id).unwrap().fields["overrideSaveAs"], json!(true), "the box stayed ticked");
 }
 
 /// Float in Window takes the document and the screen position a dragged-off tab was dropped at
@@ -992,7 +1136,7 @@ fn float_all_in_windows_gives_each_document_its_own_view() {
 
 #[test]
 fn save_selection_opens_its_dialog_and_saves_on_confirm() {
-    // #3713: Select › Save Selection… asks for the channel, name and operation first.
+    // #3713: Select â€º Save Selectionâ€¦ asks for the channel, name and operation first.
     let (mut app, ctx) = app_with(1);
     app.run("select.all", json!({})).unwrap();
     let revision = app.session.active().unwrap().revision;
@@ -1014,7 +1158,7 @@ fn save_selection_opens_its_dialog_and_saves_on_confirm() {
 
 #[test]
 fn load_selection_opens_its_dialog_and_loads_on_confirm() {
-    // #3713: Select › Load Selection… used to fail with "missing `channel`".
+    // #3713: Select â€º Load Selectionâ€¦ used to fail with "missing `channel`".
     let (mut app, ctx) = app_with(1);
     app.run("select.all", json!({})).unwrap();
     app.run("select.saveSelection", json!({"name": "Keep"})).unwrap();
@@ -1357,7 +1501,7 @@ fn a_press_on_a_dialog_over_an_arranged_tile_keeps_the_active_document() {
                 .fixed_pos(egui::pos2(60.0, 120.0))
                 .fixed_size(egui::vec2(260.0, 200.0))
                 .show(ui.ctx(), |ui| ui.label("Levels"));
-            // An open menu (View › Pixel Aspect Ratio, say): a foreground popup below the dialog.
+            // An open menu (View â€º Pixel Aspect Ratio, say): a foreground popup below the dialog.
             egui::Area::new(egui::Id::unique("arrange-test-menu")).order(egui::Order::Foreground).fixed_pos(egui::pos2(60.0, 360.0)).show(ui.ctx(), |ui| {
                 ui.set_min_size(egui::vec2(200.0, 80.0));
                 ui.label("Anamorphic 2:1 (2)")

@@ -74,9 +74,56 @@ pub(super) fn form(app: &mut PhotocraftApp, command: &str, label: &str, fields: 
     app.ui.open_dialog(DialogKind::Command, f)
 }
 
-/// The Batch and Image Processor dialogs' "Include All Subfolders" checkbox reads as Photoshop's.
-fn subfolders_label() -> Value {
-    json!({"includeSubfolders": tl!("Include All Subfolders")})
+/// The Batch dialog's captions, worded as the reference application words them: its "Include All
+/// Subfolders" checkbox, the three Destination choices and the Override Action "Save As" Commands
+/// box (#13659). The values stay the command's own words (`none`, `saveAndClose`, `folder`); only
+/// the captions are translated here.
+fn batch_labels() -> Value {
+    json!({
+        "includeSubfolders": tl!("Include All Subfolders"),
+        "none": tl!("None"),
+        "saveAndClose": tl!("Save and Close"),
+        "folder": tl!("Folder"),
+        "overrideSaveAs": tl!("Override Action \"Save As\" Commands"),
+    })
+}
+
+/// A `__form` control named in `__alertOnTick` answers its own tick with this marker: `{"message":
+/// …, "pref": …}`, read back by [`take_form_alert`]. `pref` is the dialog preference that keeps a
+/// ticked "Don't show again".
+const FORM_ALERT: &str = "__formAlert";
+
+/// The Batch dialog's Destination rule for its greyed rows (`__enabledWhen`) and the note its
+/// Override Action "Save As" Commands box answers a tick with, as the reference application shows
+/// them (#13659): Folder alone takes the destination folder and the File Naming controls, None
+/// alone greets the Override box with the note.
+fn batch_destination_rules() -> (Value, Value) {
+    let folder_only = |values: &[&str]| json!({"field": "destination", "values": values});
+    let enabled_when = json!({
+        "output": folder_only(&["folder"]),
+        "format": folder_only(&["folder"]),
+        "naming": folder_only(&["folder"]),
+        "startingSerial": folder_only(&["folder"]),
+        "quality": folder_only(&["folder"]),
+        "overrideSaveAs": folder_only(&["folder", "saveAndClose"]),
+    });
+    let alert = json!({
+        "overrideSaveAs": {
+            "message": tl!("When this option is on, files will be saved to the destination folder only by \"save as\" steps in the action. If there are no \"save\" or \"save as\" steps, no files will be saved."),
+            "pref": "automate.batch.overrideSaveAs",
+        }
+    });
+    (enabled_when, alert)
+}
+
+/// Open the info message a `__form` body asked for (the Batch Override note, #13659). The dialog
+/// host calls this after the body, where it can reach the app; a marker missing either part
+/// opens nothing.
+pub fn take_form_alert(app: &mut PhotocraftApp, f: &mut Map<String, Value>) {
+    let Some(alert) = f.remove(FORM_ALERT) else { return };
+    if let (Some(message), Some(pref)) = (alert.get("message").and_then(Value::as_str), alert.get("pref").and_then(Value::as_str)) {
+        crate::dialogs::dont_show_again::alert(app, message, pref);
+    }
 }
 
 /// Alt+Cancel (Reset): restore the `__form` params captured at open.
@@ -157,6 +204,18 @@ fn batch_occurrence_field(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.end_row();
 }
 
+/// Whether a `__form` row is live: the row is named in `enabled_when` only while the field its
+/// rule names holds one of the values the rule lists, and a row with no rule is always live.
+fn form_row_live(enabled_when: &Value, f: &Map<String, Value>, k: &str) -> bool {
+    let Some(rule) = enabled_when.get(k).filter(|rule| !rule.is_null()) else { return true };
+    let Some(list) = rule.get("values").and_then(Value::as_array) else { return true };
+    match f.get(rule.get("field").and_then(Value::as_str).unwrap_or(k)) {
+        Some(Value::String(value)) => list.iter().any(|want| want.as_str() == Some(value.as_str())),
+        Some(value) => list.iter().any(|want| want == value),
+        None => true,
+    }
+}
+
 /// Body of a `__form` dialog: text fields, number fields, checkboxes and `__choices` dropdowns.
 pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let choices = f.get("__choices").cloned().unwrap_or(Value::Null);
@@ -166,6 +225,10 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let command = f.get("__command").and_then(Value::as_str);
     let file_info = command == Some("file.fileInfo");
     let image_processor = command == Some("file.scripts.imageProcessor");
+    let batch = command == Some("file.automate.batch");
+    // Batch's Destination greys the rows only a folder run uses and answers the Override box's
+    // tick with the reference application's note (#13659).
+    let (enabled_when, alert_on_tick) = if batch { batch_destination_rules() } else { (Value::Null, Value::Null) };
     let label = |k: &str| {
         if file_info {
             match k {
@@ -191,7 +254,7 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             if k == "naming" && f.get("__command").and_then(Value::as_str) == Some("file.automate.batch") {
                 let label = ui.label(tl!("File Naming"));
                 let mut naming = v.as_str().unwrap_or_default().to_owned();
-                ui.add(egui::TextEdit::singleline(&mut naming).desired_width(260.0).hint_text("{name}"))
+                ui.add_enabled(form_row_live(&enabled_when, f, &k), egui::TextEdit::singleline(&mut naming).desired_width(260.0).hint_text("{name}"))
                     .labelled_by(label.id)
                     .on_hover_text("{name} · {serial} · {date} (UTC)");
                 f.insert(k, json!(naming));
@@ -202,7 +265,7 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 ui.label(label(&k));
                 let mut custom = v.as_f64().is_some();
                 let mut quality = v.as_f64().or_else(|| f.get(BATCH_QUALITY).and_then(Value::as_f64)).unwrap_or(8.0).clamp(0.0, 12.0) as f32;
-                custom_quality_row(ui, &mut custom, &mut quality, true);
+                custom_quality_row(ui, &mut custom, &mut quality, form_row_live(&enabled_when, f, &k));
                 // None preserves the command's existing JPEG and lossless WebP defaults.
                 // The inactive custom value is shell state, never a command parameter.
                 f.insert(BATCH_QUALITY.into(), json!(quality));
@@ -222,16 +285,26 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     ui.label("");
                     let mut b = *b;
                     // A checkbox named in `__enabledBy` is greyed while the checkbox it names is off.
-                    let on =
-                        f.get("__enabledBy").and_then(|m| m.get(&k)).and_then(Value::as_str).is_none_or(|by| f.get(by).and_then(Value::as_bool) != Some(false));
+                    let on = form_row_live(&enabled_when, f, &k)
+                        && f.get("__enabledBy")
+                            .and_then(|m| m.get(&k))
+                            .and_then(Value::as_str)
+                            .is_none_or(|by| f.get(by).and_then(Value::as_bool) != Some(false));
                     let response = ui.add_enabled(on, egui::Checkbox::new(&mut b, label(&k)));
                     if let Some(tip) = f.get("__tooltips").and_then(|m| m.get(&k)).and_then(Value::as_str) {
                         response.on_hover_text(tip).on_disabled_hover_text(tip);
+                    }
+                    // A row named in `alert_on_tick` answers its own tick with the note it carries.
+                    if b && !v.as_bool().unwrap_or(false)
+                        && let Some(alert) = alert_on_tick.get(k.as_str())
+                    {
+                        f.insert(FORM_ALERT.into(), alert.clone());
                     }
                     json!(b)
                 }
                 Value::String(s) => {
                     ui.label(label(&k));
+                    let live = form_row_live(&enabled_when, f, &k);
                     let mut s = s.clone();
                     match choices.get(&k).and_then(Value::as_array) {
                         Some(opts) => {
@@ -242,9 +315,9 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                                 opts.iter().filter_map(Value::as_str).map(|o| (o.to_string(), if action_names { o.to_string() } else { label(o) })).collect();
                             let refs: Vec<(String, &str)> = opts.iter().map(|(a, b)| (a.clone(), b.as_str())).collect();
                             if action_names {
-                                crate::widgets::dropdown_literal(ui, &format!("form-{k}"), &label(&k), &mut s, &refs, 200.0);
+                                ui.add_enabled_ui(live, |ui| crate::widgets::dropdown_literal(ui, &format!("form-{k}"), &label(&k), &mut s, &refs, 200.0));
                             } else {
-                                crate::widgets::dropdown(ui, &format!("form-{k}"), &label(&k), &mut s, &refs, 200.0);
+                                ui.add_enabled_ui(live, |ui| crate::widgets::dropdown(ui, &format!("form-{k}"), &label(&k), &mut s, &refs, 200.0));
                             }
                         }
                         None => {
@@ -257,17 +330,19 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                                 });
                             } else {
                                 ui.horizontal(|ui| {
-                                    let field = ui.add(egui::TextEdit::singleline(&mut s).desired_width(260.0)).accessible_name(label(&k));
-                                    if image_processor && crate::dialogs::is_folder_field(&k) {
-                                        crate::field_tab::register(ui.ctx(), field.id);
-                                        if crate::field_tab::reached(ui.ctx(), field.id) {
-                                            crate::field_tab::select_all(ui.ctx(), field.id, &s);
+                                    ui.add_enabled_ui(live, |ui| {
+                                        let field = ui.add(egui::TextEdit::singleline(&mut s).desired_width(260.0)).accessible_name(label(&k));
+                                        if image_processor && crate::dialogs::is_folder_field(&k) {
+                                            crate::field_tab::register(ui.ctx(), field.id);
+                                            if crate::field_tab::reached(ui.ctx(), field.id) {
+                                                crate::field_tab::select_all(ui.ctx(), field.id, &s);
+                                            }
                                         }
-                                    }
-                                    // A folder field gets the system folder picker (#7942, #9357).
-                                    if crate::dialogs::is_folder_field(&k) && crate::widgets::secondary_button(ui, tl!("Browse…"), 0.0).clicked() {
-                                        browse = Some(k.clone());
-                                    }
+                                        // A folder field gets the system folder picker (#7942, #9357).
+                                        if crate::dialogs::is_folder_field(&k) && crate::widgets::secondary_button(ui, tl!("Browse…"), 0.0).clicked() {
+                                            browse = Some(k.clone());
+                                        }
+                                    });
                                 });
                             }
                         }
@@ -276,12 +351,13 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 }
                 Value::Number(n) => {
                     ui.label(label(&k));
+                    let live = form_row_live(&enabled_when, f, &k);
                     if let Some(mut i) = n.as_i64() {
-                        ui.add(egui::DragValue::new(&mut i).custom_parser(crate::widgets::parse_num)).accessible_name(label(&k));
+                        ui.add_enabled(live, egui::DragValue::new(&mut i).custom_parser(crate::widgets::parse_num)).accessible_name(label(&k));
                         json!(i)
                     } else {
                         let mut x = n.as_f64().unwrap_or(0.0);
-                        ui.add(egui::DragValue::new(&mut x).speed(0.5).custom_parser(crate::widgets::parse_num)).accessible_name(label(&k));
+                        ui.add_enabled(live, egui::DragValue::new(&mut x).speed(0.5).custom_parser(crate::widgets::parse_num)).accessible_name(label(&k));
                         json!(x)
                     }
                 }
@@ -630,17 +706,18 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
             let (names, sets) = crate::actions::action_form_choices(app);
             let mut fields = json!({
                 "action": name, "source": "folder", "input": dir,
-                "includeSubfolders": false, "__labels": subfolders_label(),
+                "includeSubfolders": false, "__labels": batch_labels(),
+                "destination": "none", "overrideSaveAs": false,
                 "output": format!("{dir}/batch"), "format": "same", "quality": null,
                 "__batchQuality": 8, "naming": "", "startingSerial": 1,
                 "stopOnError": false, "errorLog": "",
-                "__order": ["set", "action", "source", "input", "includeSubfolders", "output", "format", "naming", "startingSerial", "quality", "stopOnError", "errorLog"]
+                "__order": ["set", "action", "source", "input", "includeSubfolders", "destination", "overrideSaveAs", "output", "format", "naming", "startingSerial", "quality", "stopOnError", "errorLog"]
             });
             // The Set dropdown picks between same-named actions; an action outside any set has none.
             if let Some(set) = set {
                 fields["set"] = json!(set);
             }
-            let choices = json!({"set": sets, "action": names, "format": ["same", "png", "jpg", "psd", "tiff", "webp"], "source": ["folder", "open"]});
+            let choices = json!({"set": sets, "action": names, "format": ["same", "png", "jpg", "psd", "tiff", "webp"], "source": ["folder", "open"], "destination": ["none", "saveAndClose", "folder"]});
             let dialog = form(app, id, label, fields, choices);
             crate::actions::bind_batch_dialog(app, dialog, row);
             Some(Ok(json!({"dialog": dialog})))

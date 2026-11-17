@@ -197,6 +197,17 @@ pub(crate) fn cancel_batch_dialog(app: &mut PhotocraftApp, dialog: u64) {
 pub(crate) fn batch_dialog_params(app: &mut PhotocraftApp, dialog: u64, choice: Option<&Value>, params: &mut Value) -> Result<(), String> {
     let targets = app.ui.actions.batch_dialog_targets.remove(&dialog);
     let params = params.as_object_mut().ok_or("Batch parameters must be an object")?;
+    // Destination decides what the command is asked for (#13659): None opens each source and Save
+    // and Close writes each source, so neither takes an output folder. The dialog keeps the typed
+    // path on screen for the next Folder choice, but the run must not see it. The Override box
+    // rides along only when it is ticked, since the engine's recorded-Batch rules refuse an
+    // Override that does not match the action's own Save steps and the box starts off.
+    if matches!(params.get("destination").and_then(Value::as_str), Some("none") | Some("saveAndClose")) {
+        params.insert("output".into(), Value::Null);
+    }
+    if params.get("overrideSaveAs") == Some(&Value::Bool(false)) {
+        params.remove("overrideSaveAs");
+    }
     if params.get("actionId").is_some() {
         return Ok(());
     }
