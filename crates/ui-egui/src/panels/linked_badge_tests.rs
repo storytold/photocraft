@@ -6,7 +6,7 @@
 use egui::{Color32, Rect};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use photocraft_doc::{LayerContent, LayerId, SmartSource};
+use photocraft_doc::{ColorMode, LayerContent, LayerId, SampleType, SmartSource};
 use serde_json::json;
 
 use super::*;
@@ -214,17 +214,98 @@ fn only_a_linked_file_gets_a_link_badge() {
     let LayerContent::Smart(sm) = &layer(linked).content else { panic!("smart object") };
     let SmartSource::Linked { path: stored } = &sm.source else { panic!("linked") };
     let mut asked = Vec::new();
-    let kind = thumb_badge_kind(&layer(linked), |p| {
+    let kind = thumb_badge_kind(doc, &layer(linked), |p| {
         asked.push(p.to_string());
         true
     });
     assert_eq!(kind, Some(ThumbBadge::LinkMissing));
     assert_eq!(asked, [stored.as_str()], "asked once, with the path as stored");
-    assert_eq!(thumb_badge_kind(&layer(linked), |_| false), Some(ThumbBadge::Linked));
-    assert_eq!(thumb_badge_kind(&layer(embedded), |_| true), Some(ThumbBadge::Smart));
+    assert_eq!(thumb_badge_kind(doc, &layer(linked), |_| false), Some(ThumbBadge::Linked));
+    assert_eq!(thumb_badge_kind(doc, &layer(embedded), |_| true), Some(ThumbBadge::Smart));
     let mut psd = layer(embedded);
     let LayerContent::Smart(sm) = &mut psd.content else { panic!("smart object") };
     sm.source = SmartSource::Linked { path: "a1b2c3d4-0000-1111-2222-333344445555".into() };
     sm.psd_raw = Some(std::sync::Arc::new(vec![0; 4]));
-    assert_eq!(thumb_badge_kind(&psd, |_| true), Some(ThumbBadge::Smart));
+    assert_eq!(thumb_badge_kind(doc, &psd, |_| true), Some(ThumbBadge::Smart));
+}
+
+/// #14118 did not measure Indexed, Bitmap and 32-bit documents or links to a network share, and
+/// those cases keep today's smart object badge, missing or not. The measured modes and depths get
+/// the link badge.
+#[test]
+fn the_cases_the_issue_did_not_measure_keep_the_smart_object_badge() {
+    let (_directory, file) = png();
+    let (h, _, linked) = app(&file);
+    let mut doc = h.state().session.active().unwrap().doc.as_ref().clone();
+    let layer = doc.layer(LayerId(linked)).unwrap().clone();
+    let kind = |doc: &photocraft_doc::Document, l: &photocraft_doc::Layer| thumb_badge_kind(doc, l, |_| true);
+    for (mode, depth) in
+        [(ColorMode::Rgb, SampleType::U8), (ColorMode::Rgb, SampleType::U16), (ColorMode::Grayscale, SampleType::U8), (ColorMode::Cmyk, SampleType::U8)]
+    {
+        (doc.mode, doc.depth) = (mode, depth);
+        assert_eq!(kind(&doc, &layer), Some(ThumbBadge::LinkMissing), "{mode:?} {depth:?}");
+    }
+    for (mode, depth) in [(ColorMode::Indexed, SampleType::U8), (ColorMode::Bitmap, SampleType::U8), (ColorMode::Rgb, SampleType::F32)] {
+        (doc.mode, doc.depth) = (mode, depth);
+        assert_eq!(kind(&doc, &layer), Some(ThumbBadge::Smart), "{mode:?} {depth:?}");
+    }
+    (doc.mode, doc.depth) = (ColorMode::Rgb, SampleType::U8);
+    for share in [r"\\192.0.2.1\share\linked.png", "//192.0.2.1/share/linked.png"] {
+        let mut on_share = layer.clone();
+        let LayerContent::Smart(sm) = &mut on_share.content else { panic!("smart object") };
+        sm.source = SmartSource::Linked { path: share.into() };
+        assert_eq!(kind(&doc, &on_share), Some(ThumbBadge::Smart), "{share}");
+    }
+}
+
+/// A linked smart object in an artboard (not measured either) keeps the smart object badge in the
+/// panel, while the file is there and while it is missing.
+#[test]
+fn a_linked_smart_object_in_an_artboard_keeps_the_smart_object_badge() {
+    let (_directory, file) = png();
+    let (mut h, _, linked) = app(&file);
+    h.state_mut().run("layer.new.artboardFromLayers", json!({})).unwrap();
+    h.run_steps(8);
+    let doc = h.state().session.active().unwrap().doc.clone();
+    assert!(doc.artboard_of(LayerId(linked)).is_some(), "the linked layer is in an artboard");
+    let t = Tokens::get(&h.ctx);
+    let check = |h: &Harness<'_, PhotocraftApp>| {
+        assert!(h.query_by_label(LINKED_BADGE).is_none() && h.query_by_label(LINK_MISSING_BADGE).is_none());
+        // The layer is drawn framed by its artboard, so its thumbnail can be letterboxed: count
+        // the 11 px badge frames instead, one for the embedded copy and one for this layer.
+        let badges: Vec<_> = frames(h, Rect::EVERYTHING).into_iter().filter(|(r, _, _)| r.size() == vec2(11.0, 11.0)).collect();
+        assert_eq!(badges.len(), 2, "{badges:?}");
+        assert!(badges.iter().all(|(_, fill, border)| (*fill, *border) == (t.field, t.field_border)), "{badges:?}");
+    };
+    check(&h);
+    std::fs::remove_file(&file).unwrap();
+    look(&mut h);
+    assert!(!h.state().session.missing_links().is_empty(), "the watcher saw it go");
+    check(&h);
+}
+
+/// The Layers panel reads the missing set once per pass ([`link_missing`]): a look that lands
+/// during a pass shows from the next one, and every row of a pass sees the same set.
+#[test]
+fn the_missing_set_is_read_once_per_pass() {
+    let (_directory, file) = png();
+    let (mut h, _, linked) = app(&file);
+    let LayerContent::Smart(sm) = &h.state().session.active().unwrap().doc.layer(LayerId(linked)).unwrap().content else { panic!("smart object") };
+    let SmartSource::Linked { path } = sm.source.clone() else { panic!("linked") };
+    let ctx = egui::Context::default();
+    let mut answers = Vec::new();
+    for pass in 0..2 {
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            let session = &mut h.state_mut().session;
+            answers.push(link_missing(ui.ctx(), session, &path));
+            if pass == 0 && file.exists() {
+                // The file goes and a look sees it, in the middle of the pass.
+                std::fs::remove_file(&file).unwrap();
+                session.execute("layer.smartObjects.updateChanged", json!({})).unwrap();
+                assert!(session.missing_links().contains(&path));
+            }
+            answers.push(link_missing(ui.ctx(), session, &path));
+        });
+    }
+    assert_eq!(answers, [false, false, true, true]);
 }

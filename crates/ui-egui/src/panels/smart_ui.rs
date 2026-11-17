@@ -6,7 +6,7 @@
 //! ⌥-click to view it, ⇧-click to disable it (FILE-215-3).
 
 use egui::{Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
-use photocraft_doc::{Document, Layer, LayerContent, LayerId, SmartObject, SmartSource};
+use photocraft_doc::{ColorMode, Document, Layer, LayerContent, LayerId, SampleType, SmartObject, SmartSource};
 use serde_json::{Value, json};
 
 use crate::state::LayerThumbnailSize;
@@ -24,22 +24,55 @@ enum ThumbBadge {
     LinkMissing,
 }
 
-/// The badge `l`'s thumbnail carries. Smart objects and shape layers (#4584) show their pixels
-/// like any other layer, so only the badge tells them apart. `missing` says whether a linked
-/// file, as stored in the document, was not there at the link watcher's last look
-/// ([`photocraft_engine::Session::missing_links`]); it is asked only for a linked smart object.
+/// The badge `l`, a layer of `doc`, carries on its thumbnail. Smart objects and shape layers
+/// (#4584) show their pixels like any other layer, so only the badge tells them apart. `missing`
+/// says whether a linked file, as stored in the document, was not there at the link watcher's last
+/// look ([`link_missing`]); it is asked only for a linked smart object that gets a link badge.
 /// A PSD's placed layer is not one: its path is the uuid of an entry in the PSD's own file table
 /// (it keeps `psd_raw` until Relink to File or Convert to Linked gives it a file), so it keeps the
-/// smart object badge.
-fn thumb_badge_kind(l: &Layer, missing: impl FnOnce(&str) -> bool) -> Option<ThumbBadge> {
+/// smart object badge, as do the cases #14118 did not measure ([`link_badge_measured`]).
+fn thumb_badge_kind(doc: &Document, l: &Layer, missing: impl FnOnce(&str) -> bool) -> Option<ThumbBadge> {
     match &l.content {
         LayerContent::Smart(sm) => match &sm.source {
-            SmartSource::Linked { path } if sm.psd_raw.is_none() => Some(if missing(path) { ThumbBadge::LinkMissing } else { ThumbBadge::Linked }),
+            SmartSource::Linked { path } if sm.psd_raw.is_none() && link_badge_measured(doc, l, path) => {
+                Some(if missing(path) { ThumbBadge::LinkMissing } else { ThumbBadge::Linked })
+            }
             _ => Some(ThumbBadge::Smart),
         },
         LayerContent::Shape(_) => Some(ThumbBadge::Shape),
         _ => None,
     }
+}
+
+/// Whether the reference measurements in #14118 cover linked smart object `l` of `doc`, linking
+/// `path`. They don't for Indexed, Bitmap and 32-bit documents, for layers in an artboard, or for
+/// a link to a network share; those keep the smart object badge, as before.
+fn link_badge_measured(doc: &Document, l: &Layer, path: &str) -> bool {
+    use photocraft_io::doc_path::{NotFollowed, Refused, resolve};
+    !matches!(doc.mode, ColorMode::Indexed | ColorMode::Bitmap)
+        && doc.depth != SampleType::F32
+        && doc.artboard_of(l.id).is_none()
+        && resolve(path, None) != Err(NotFollowed::Refused(Refused::Network))
+}
+
+/// Whether stored path `path` is among the active document's missing linked files
+/// ([`photocraft_engine::Session::missing_links`]). The set is read once per pass and shared by
+/// every row of that pass, rather than rebuilt for each linked thumbnail; a look that lands
+/// during a pass shows from the next one.
+pub fn link_missing(ctx: &egui::Context, session: &photocraft_engine::Session, path: &str) -> bool {
+    type Cached = (u64, Option<u64>, std::sync::Arc<std::collections::HashSet<String>>);
+    let id = egui::Id::new("smart_ui::link_missing");
+    let (pass, doc) = (ctx.cumulative_pass_nr(), session.active().map(|d| d.doc.id.0));
+    let cached: Option<Cached> = ctx.data(|d| d.get_temp(id));
+    let set = match cached {
+        Some((p, d, set)) if p == pass && d == doc => set,
+        _ => {
+            let set = std::sync::Arc::new(session.missing_links());
+            ctx.data_mut(|d| d.insert_temp::<Cached>(id, (pass, doc, set.clone())));
+            set
+        }
+    };
+    set.contains(path)
 }
 
 /// Where the badge sits: over the bottom-right corner of the thumbnail.
@@ -70,11 +103,11 @@ const SHAPE_PATH_INSET: f32 = 3.0;
 /// Side of an anchor point on the shape badge's path.
 const SHAPE_ANCHOR: f32 = 3.0;
 
-/// Smart-object, linked-smart-object or shape-layer badge in the bottom-right corner of a layer
-/// thumbnail. `missing` is asked, for a linked smart object only, whether its stored path is
-/// among the active document's missing linked files.
-pub fn thumb_badge(ui: &egui::Ui, l: &Layer, thumb: Rect, missing: impl FnOnce(&str) -> bool) {
-    let Some(kind) = thumb_badge_kind(l, missing) else { return };
+/// Smart-object, linked-smart-object or shape-layer badge in the bottom-right corner of the
+/// thumbnail of `l`, a layer of `doc`. `missing` is asked, for a linked smart object only, whether
+/// its stored path is among the active document's missing linked files ([`link_missing`]).
+pub fn thumb_badge(ui: &egui::Ui, doc: &Document, l: &Layer, thumb: Rect, missing: impl FnOnce(&str) -> bool) {
+    let Some(kind) = thumb_badge_kind(doc, l, missing) else { return };
     let t = Tokens::get(ui.ctx());
     let r = match kind {
         ThumbBadge::Linked | ThumbBadge::LinkMissing => link_badge_rect(thumb),
@@ -753,15 +786,22 @@ mod tests {
     #[test]
     fn shape_layers_and_smart_objects_carry_a_thumbnail_badge() {
         let [pixel, shape, smart] = layers();
-        assert_eq!(thumb_badge_kind(&pixel, |_| false), None);
-        assert_eq!(thumb_badge_kind(&shape, |_| false), Some(ThumbBadge::Shape), "#4584");
-        assert_eq!(thumb_badge_kind(&smart, |_| true), Some(ThumbBadge::Smart), "embedded: never a link badge");
+        let doc = rgb8();
+        assert_eq!(thumb_badge_kind(&doc, &pixel, |_| false), None);
+        assert_eq!(thumb_badge_kind(&doc, &shape, |_| false), Some(ThumbBadge::Shape), "#4584");
+        assert_eq!(thumb_badge_kind(&doc, &smart, |_| true), Some(ThumbBadge::Smart), "embedded: never a link badge");
+    }
+
+    /// An empty 64 × 48 px RGB 8-bit document, for badges that don't depend on it.
+    fn rgb8() -> Document {
+        Document::new("t", photocraft_geom::Size::new(64, 48), ColorMode::Rgb, SampleType::U8)
     }
 
     /// The rects `thumb_badge` fills for `l` over `thumb`, with their colours.
     fn filled(l: &Layer, thumb: Rect) -> Vec<(Rect, Color32)> {
         let l = l.clone();
-        let mut h = egui_kittest::Harness::new_ui(move |ui| thumb_badge(ui, &l, thumb, |_| false));
+        let doc = rgb8();
+        let mut h = egui_kittest::Harness::new_ui(move |ui| thumb_badge(ui, &doc, &l, thumb, |_| false));
         h.run();
         let badge = thumb_badge_rect(thumb).expand(0.5);
         let rects = h.output().shapes.iter().filter_map(|s| match &s.shape {
