@@ -47,7 +47,9 @@ pub fn overflow_button(ui: &mut Ui, id: egui::Id, r: Rect, tip: &str, labels: &[
     crate::icons::paint(&paint_ui, r, "chevrons-right", 16.0, t.text);
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tip));
     let resp = resp.on_hover_text(tip);
-    egui::Popup::menu(&resp).show(|ui| {
+    egui::Popup::menu(&resp)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
         // Document lists use a consistent width; panel overflow menus retain
         // their natural width. Keep the popup within narrow application windows.
         if checked.is_some() {
@@ -77,6 +79,9 @@ pub fn overflow_button(ui: &mut Ui, id: egui::Id, r: Rect, tip: &str, labels: &[
                     let button = egui::Button::new(text)
                         .wrap_mode(egui::TextWrapMode::Truncate);
                     let response = ui.add(button).on_hover_text(*name);
+                    if response.gained_focus() {
+                        response.scroll_to_me(None);
+                    }
                     if response.clicked() {
                         *picked = Some(i);
                         ui.close();
