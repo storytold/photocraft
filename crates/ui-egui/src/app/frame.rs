@@ -1,6 +1,6 @@
 use super::{
-    PhotocraftApp, canvas, discard_ui, gpu_canvas, gpu_status, i18n, jobs_ui, last_brush, monitor_status, native_menu, notices, paint_mouse, panels, prefs_ui,
-    screen_picker, shortcuts, smart_svg_ui, tool_memory, transform_tool, type_tool, updates_ui, view_cmds, work_area,
+    PhotocraftApp, canvas, cloud, discard_ui, gpu_canvas, gpu_status, i18n, jobs_ui, last_brush, monitor_status, native_menu, notices, paint_mouse, panels,
+    prefs_ui, screen_picker, shortcuts, smart_svg_ui, tool_memory, transform_tool, type_tool, updates_ui, view_cmds, work_area,
 };
 use craft::ui::contract::Bind;
 use craft::ui::runtime::env::WindowKey;
@@ -77,6 +77,8 @@ impl PhotocraftApp {
         let _ = self.live_tokens.poll(ctx, &self.ui.theme);
         #[cfg(not(target_arch = "wasm32"))]
         self.drain_control(ctx);
+        // Answers from the host's cloud worker. Nothing arrives in a build with no service.
+        cloud::pump(self);
         view_cmds::leave_full_screen_without_document(self);
         // A box drag that ended without a release reaching the Type tool keeps its box, before
         // the commit below can end the edit.
@@ -256,6 +258,9 @@ impl PhotocraftApp {
         updates_ui::show(self, &ctx);
         // The Keyboard Shortcuts dialog draws while its session is open.
         prefs_ui::show_shortcuts(self, ui);
+        // Open from the Cloud and Save to the Cloud. Nothing is drawn with no page open, which is
+        // always the case in a build with no cloud service.
+        cloud::window(self, &ctx);
         crate::dialogs::run(self, ui);
         canvas::extra_windows(self, ui);
         screen_picker::show(self, ui);

@@ -190,6 +190,10 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "brush": {"size": app.session.tools.brush.size, "hardness": app.session.tools.brush.hardness, "opacity": app.session.tools.brush.opacity},
         "distort": app.distort.describe(),
         "jobs": crate::jobs_ui::inspect(app),
+        // The cloud session and what is in flight; null when no service is configured. The cloud
+        // commands themselves are menu commands (`cloud.open`, `cloud.save`, ...), so they run
+        // through `ui.menu.invoke`.
+        "cloud": crate::cloud::available(app).then(|| crate::cloud::status(app)),
         "agentLink": agent_link_json(app),
         "histogram": crate::histogram_panel::inspect(app),
         "cameraRaw": crate::camera_raw_ui::describe(app),

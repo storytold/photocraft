@@ -32,6 +32,9 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         |ui, _| {
             let mut guard = app.borrow_mut();
             let app = &mut **guard;
+            // Who is signed in, in the bar's end region where every office suite puts it. A build
+            // with no cloud service draws none of it.
+            crate::cloud::title_controls(app, ui);
             crate::prefs_ui::appearance_button(app, ui);
             let tip = crate::shortcuts::tip_label(app, "Search commands", "edit.search");
             let search = IconButton::new(IconId::new("search")).label(tip.clone()).tooltip(TooltipSpec::new(tip)).selected(app.ui.palette.open).show(ui);

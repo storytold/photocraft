@@ -45,6 +45,9 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
     if let Some(e) = crate::view_cmds::is_enabled(app, id) {
         return e;
     }
+    if let Some(e) = crate::cloud::is_enabled(app, id) {
+        return e;
+    }
     if let Some(e) = crate::plugin_ui::is_enabled(app, id) {
         return e;
     }

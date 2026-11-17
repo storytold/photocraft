@@ -1490,6 +1490,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-cloud"
+version = "0.1.0"
+source = "git+https://github.com/wdunn001/craft-libs?rev=6f0a6d2#6f0a6d2f4c24140d5ea988e5e40a85b2c6058401"
+dependencies = [
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-cms"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9#a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9"
@@ -6674,6 +6683,7 @@ dependencies = [
  "base64 0.23.1",
  "chrono",
  "craft",
+ "craft-cloud",
  "craft-file-formats",
  "craft-i18n",
  "craft-image-codecs",
