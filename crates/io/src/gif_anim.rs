@@ -140,8 +140,17 @@ pub fn export_stepped(doc: &Document, ctl: &Interrupt, step: &mut dyn FnMut(usiz
         if px.len() != w * h {
             return Err(IoError::Unsupported("a frame did not render at the size of the canvas".into()));
         }
-        let rgba: Vec<u8> = px.iter().flat_map(|p| p.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8)).collect();
-        transparent |= rgba.as_chunks::<4>().0.iter().any(|p| p[3] < 255);
+        // A GIF pixel is either transparent or opaque, and the writer treats any alpha above zero as opaque: the
+        // half-alpha threshold of Save for Web (and of `quantized_frame`) is applied here, so the soft edge of
+        // a shape doesn't become a ring of solid pixels.
+        let rgba: Vec<u8> = px
+            .iter()
+            .flat_map(|p| {
+                let [r, g, b, a] = p.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8);
+                if a >= 128 { [r, g, b, 255] } else { [0, 0, 0, 0] }
+            })
+            .collect();
+        transparent |= rgba.as_chunks::<4>().0.iter().any(|p| p[3] == 0);
         frames.push((prepare_frame(w as u32, h as u32, rgba, speed).map_err(writer_err)?, delay_cs(f.delay_ms)));
         if !step(i + 1, total) {
             return Err(IoError::Cancelled);
