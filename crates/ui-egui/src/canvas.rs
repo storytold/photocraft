@@ -24,6 +24,8 @@ mod cursors;
 mod display;
 mod drag;
 mod filter_preview;
+#[cfg(test)]
+mod finishing_stroke_tests;
 mod gesture;
 pub mod gpu_canvas;
 pub mod guide_select;
@@ -105,7 +107,8 @@ pub(crate) use start_screen::start_screen_drop_hint;
 pub(crate) use strokes::multiple_color_target;
 pub use strokes::paint_target;
 pub(crate) use strokes::{
-    ClonePreviewCache, CommittedStroke, LiveStroke, cancel_mixer_on_context_change, freehand_tool, spread_ms, strokes_live, unsmoothed_line,
+    ClonePreviewCache, CommittedStroke, FinishingStroke, LiveStroke, cancel_mixer_on_context_change, continue_finishing_stroke, flush_finishing_stroke,
+    freehand_tool, land_finished_stroke, runs_while_a_stroke_finishes, spread_ms, still_finishing, strokes_live, unsmoothed_line,
 };
 use strokes::{
     HOLD_REPEAT_MS, draw_clone_preview, feed_live_stroke, live_stroke_busy, pointer_button_modifiers, pointer_moves, stroke_wants_time, tap_at_peak_pressure,
@@ -1245,6 +1248,12 @@ fn handle_canvas_tool_stroke(
     // the moves below are spread between the previous point and this frame (`spread_ms`).
     let now_ms = ui.input(|i| i.time) * 1000.0;
     app.stylus.clock_ms = now_ms;
+    // A released stroke still finishing shows its new steps and commits once done (a new press
+    // commits it first: `tool_event`). Committed, the next frame runs the commands that waited
+    // for it (`PhotocraftApp::logic`).
+    if continue_finishing_stroke(app) || app.stroke_landed {
+        ctx.request_repaint();
+    }
     // Live painting tools start on the press, not once the pointer passes egui's click
     // distance: the first dab shows at once. The drag recognised later continues that stroke,
     // and a click (or a long press that never moved) just ends it.

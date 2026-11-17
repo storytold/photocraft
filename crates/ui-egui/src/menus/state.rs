@@ -12,6 +12,11 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
     if id == "ui.symmetryTransform" {
         return crate::symmetry_ui::can_transform(app);
     }
+    // A released stroke still finishing is the next History step: Undo right after the release
+    // waits for it and undoes it (`PhotocraftApp::run`), even with nothing to undo before it.
+    if matches!(id, "edit.undo" | "edit.toggleLastState") && app.finishing_stroke.is_some() {
+        return true;
+    }
     // Draft Pen points can be undone even when the document has no History entries; Redo would
     // put a finished Pen path back beside its own edited draft. Step Backward/Forward alike.
     if let Some(on) = crate::vector_ui::pen_history_enabled(app, id) {
