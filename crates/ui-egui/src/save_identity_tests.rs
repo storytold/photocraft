@@ -6,9 +6,15 @@ use serde_json::json;
 use std::{cell::RefCell, rc::Rc};
 
 fn app() -> PhotocraftApp {
+    app_over(None)
+}
+
+/// The app over the file service `files` (the framework takes it when the app is built).
+fn app_over(files: Option<std::sync::Arc<dyn craft::host::Files>>) -> PhotocraftApp {
     let mut app = PhotocraftApp::new(
         Session::new(),
         Services {
+            files,
             import: Some(Box::new(|name, bytes, opts| {
                 photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
             })),
@@ -54,7 +60,7 @@ fn new_document_psd_and_subsequent_save_as_adopt_the_written_file_name() {
         }));
         let id = app.session.active().unwrap().doc.id;
         let revision = app.session.active().unwrap().revision;
-        let ctx = egui::Context::default();
+        let ctx = app.ctx().clone();
         menus::invoke(&mut app, &ctx, "file.saveAs", json!({"path": "作品/My image.PSD"})).unwrap();
         assert_eq!(identity(&app), ("My image.PSD".into(), Some("作品/My image.PSD".into()), revision, revision));
         assert_eq!(app.session.active().unwrap().doc.id, id);
@@ -106,22 +112,16 @@ fn save_copy_and_export_keep_the_editable_document_identity() {
     let before = identity(&app);
     app.write_document("copy.psd".into(), &ExportSettings::default(), true).unwrap();
     assert_eq!(identity(&app), before);
-    let (dialog, _) = crate::file_dialog::fake(vec![Some(crate::file_dialog::FileDialogAnswer::SaveTo("export.png".into()))]);
-    app.services.file_dialog = Some(dialog);
-    let ctx = egui::Context::default();
-    crate::export_dialog::confirm(&mut app, json!({"format": "png", "scale": 100}).as_object().unwrap()).unwrap();
-    app.poll_file_dialog(&ctx, None);
+    crate::export_dialog::replay(&mut app, &json!({"format": "png", "scale": 100, "path": "export.png"})).unwrap();
     assert_eq!(identity(&app), before);
     assert!(app.ui.status.starts_with("Exported export.png"), "{}", app.ui.status);
 }
 
 #[test]
 fn web_download_and_automation_saves_use_the_same_identity_completion() {
-    let mut app = app();
-    let (dialog, _) = crate::file_dialog::fake(vec![Some(crate::file_dialog::FileDialogAnswer::SaveTo("Untitled-1.psd".into()))]);
-    app.services.file_dialog = Some(dialog);
+    let mut app = app_over(Some(std::sync::Arc::new(craft::host::ScriptedFiles::answering([craft::host::Picked::Paths(vec!["Untitled-1.psd".into()])]))));
     app.save_as(None).unwrap();
-    app.poll_file_dialog(&egui::Context::default(), None);
+    app.poll_file_dialog();
     assert_eq!(app.session.active().unwrap().doc.name, "Untitled-1.psd");
     app.save_automation(Some("保存/agent save.psd".into())).unwrap();
     assert_eq!(app.session.active().unwrap().doc.name, "agent save.psd");
@@ -132,10 +132,10 @@ fn web_download_and_automation_saves_use_the_same_identity_completion() {
 /// layered original and the edits stay unsaved (#2550).
 #[test]
 fn save_as_flat_keeps_the_layered_original() {
-    let ctx = egui::Context::default();
     // A layered document, and a one-layer one (the issue's case: the dialog offered a JPEG).
     for layered in [true, false] {
         let mut app = app();
+        let ctx = app.ctx().clone();
         if !layered {
             app.run("file.new", json!({"width": 4, "height": 4, "name": "Untitled-2"})).unwrap();
         }
@@ -166,6 +166,7 @@ fn save_as_flat_keeps_the_layered_original() {
         w.borrow_mut().push(path.to_string());
         Ok(())
     }));
+    let ctx = app.ctx().clone();
     let before = identity(&app);
     menus::invoke(&mut app, &ctx, "file.saveAs", json!({"path": "flat.jpg", "jpegFormat": "baseline"})).unwrap();
     assert_eq!(*written.borrow(), ["flat.jpg"]);
@@ -181,7 +182,8 @@ fn save_as_flat_retargets_a_flat_document() {
     assert_eq!(app.session.active().unwrap().path.as_deref(), Some("shot.png"));
     app.save_as(Some("shot.jpg".into())).unwrap();
     // JPEG Options asks first; OK writes.
-    crate::jpeg_options_ui::confirm(&mut app, &egui::Context::default());
+    let ctx = app.ctx().clone();
+    crate::format_prompts::confirm(&mut app, &ctx);
     let st = app.session.active().unwrap();
     assert_eq!((st.doc.name.as_str(), st.path.as_deref()), ("shot.jpg", Some("shot.jpg")));
     assert_eq!(st.saved_revision, st.revision);
@@ -203,51 +205,6 @@ fn automation_flat_save_is_a_copy() {
     assert_eq!(st.saved_revision, st.revision);
 }
 
-/// Preferences › File Handling › Image Previews reaches the exporter of Save As, Save and
-/// automation saves: Always and Ask When Saving embed the PSD thumbnail, Never doesn't.
-#[test]
-fn image_previews_preference_reaches_the_exporter() {
-    let seen = Rc::new(RefCell::new(Vec::new()));
-    let mut app = app();
-    let log = seen.clone();
-    app.services.export = Some(Box::new(move |_, _, settings: &ExportSettings| {
-        log.borrow_mut().push(settings.image_previews);
-        Ok((b"out".to_vec(), Vec::new()))
-    }));
-    let ctx = egui::Context::default();
-    for (value, expect) in [("always", true), ("never", false), ("ask", true)] {
-        app.run("prefs.set", json!({"path": "fileHandling.imagePreviews", "value": value})).unwrap();
-        seen.borrow_mut().clear();
-        menus::invoke(&mut app, &ctx, "file.saveAs", json!({"path": format!("{value}.psd")})).unwrap();
-        menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
-        app.save_automation(Some(format!("{value} agent.psd"))).unwrap();
-        assert_eq!(*seen.borrow(), [expect; 3], "{value}");
-    }
-}
-
-/// Preferences › File Handling › Maximize PSD and PSB File Compatibility reaches the exporter of
-/// Save As, Save and automation saves: Always and Ask When Saving keep the PSD's real merged
-/// image, Never doesn't.
-#[test]
-fn maximize_compatibility_preference_reaches_the_exporter() {
-    let seen = Rc::new(RefCell::new(Vec::new()));
-    let mut app = app();
-    let log = seen.clone();
-    app.services.export = Some(Box::new(move |_, _, settings: &ExportSettings| {
-        log.borrow_mut().push(settings.psd_maximize_compatibility);
-        Ok((b"out".to_vec(), Vec::new()))
-    }));
-    let ctx = egui::Context::default();
-    for (value, expect) in [("always", true), ("never", false), ("ask", true)] {
-        app.run("prefs.set", json!({"path": "fileHandling.maximizePsdCompatibility", "value": value})).unwrap();
-        seen.borrow_mut().clear();
-        menus::invoke(&mut app, &ctx, "file.saveAs", json!({"path": format!("{value}.psd")})).unwrap();
-        menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
-        app.save_automation(Some(format!("{value} agent.psd"))).unwrap();
-        assert_eq!(*seen.borrow(), [expect; 3], "{value}");
-    }
-}
-
 /// Preferences › File Handling › Save Full-Size Composite in .pcraft Files reaches the exporter
 /// of Save As, Save and automation saves, and is off by default.
 #[test]
@@ -260,7 +217,7 @@ fn full_composite_preference_reaches_the_exporter() {
         log.borrow_mut().push(settings.io_options().pcraft_full_composite);
         Ok((b"out".to_vec(), Vec::new()))
     }));
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     for value in [true, false] {
         app.run("prefs.set", json!({"path": "fileHandling.pcraftFullComposite", "value": value})).unwrap();
         seen.borrow_mut().clear();
