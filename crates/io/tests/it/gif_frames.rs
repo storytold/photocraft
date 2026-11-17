@@ -400,3 +400,22 @@ fn a_single_frame_animation_saves_as_a_still_gif() {
     let one = photocraft_io::export(&d, "a.gif", &Default::default()).unwrap().bytes;
     assert_eq!(one, still, "the same file as a document without the animation");
 }
+
+/// A GIF pixel is transparent or opaque: an animated export keeps the half-alpha threshold Save for Web
+/// has, so a faint pixel is dropped rather than turned into a solid one and a firm one is kept.
+#[test]
+fn an_animated_export_thresholds_partial_alpha_at_half() {
+    use photocraft_doc::{AnimFrame, ColorMode, Document, FrameAnimation, Layer, LoopCount, SampleType};
+    let mut d = Document::new("a", photocraft_geom::Size::new(2, 1), ColorMode::Rgb, SampleType::U8);
+    let mut l = Layer::raster("A", d.pixel_format());
+    l.surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(0, 0, 1, 1), &[1.0, 0.0, 0.0, 0.3]);
+    l.surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(1, 0, 2, 1), &[1.0, 0.0, 0.0, 0.7]);
+    d.layers = vec![l];
+    d.frame_animation = Some(FrameAnimation { frames: vec![AnimFrame::default().into(); 2], current: 0, loops: LoopCount::Forever });
+    let bytes = photocraft_io::export(&d, "a.gif", &Default::default()).unwrap().bytes;
+    let opened = photocraft_io::import("a.gif", &bytes).unwrap().document;
+    let px = photocraft_compose::flatten(&opened).into_px();
+    assert_eq!(px.len(), 2);
+    assert!(px[0][3] < 0.5, "30 % alpha is transparent, not a solid pixel: {:?}", px[0]);
+    assert!(px[1][3] > 0.5, "70 % alpha is kept: {:?}", px[1]);
+}
