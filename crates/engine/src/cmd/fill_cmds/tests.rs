@@ -313,3 +313,20 @@ fn unselected_tiles_stay_shared() {
         s.execute("select.deselect", json!({})).unwrap();
     }
 }
+
+#[test]
+fn background_cmyk_survives_foreground_picks() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8, "mode": "cmyk", "background": "transparent"})).unwrap();
+    let bg = [0.9, 0.2, 0.1, 1.0];
+    s.execute("tools.setColors", json!({"background": bg, "backgroundCmyk": [0.0, 1.0, 1.0, 0.0]})).unwrap();
+    // More foreground picks than the cache holds. The background's mapping must not be evicted.
+    for i in 0..8 {
+        let fg = [i as f32 / 10.0, 0.3, 0.3, 1.0];
+        s.execute("tools.setColors", json!({"foreground": fg, "foregroundCmyk": [1.0, 0.0, 0.0, 0.0]})).unwrap();
+    }
+    s.execute(CMD, json!({"contents": "background"})).unwrap();
+    let st = s.active().unwrap();
+    let px = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().pixel(4, 4);
+    assert!(px[..4].iter().zip([0.0, 1.0, 1.0, 0.0]).all(|(a, b)| (a - b).abs() < 0.01), "background inks survived: {px:?}");
+}
