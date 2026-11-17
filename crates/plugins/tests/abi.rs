@@ -169,10 +169,13 @@ fn hostile_modules_fail_quickly() {
         ("division by zero", ok_module("(i32.div_u (i32.const 1) (local.get $ch))  (drop) (i32.div_u (i32.const 1) (i32.const 0))")),
         ("deep recursion", module(MANIFEST, 1, "(call $r) (i32.const 0)", "(func $r (call $r))")),
         ("error code", ok_module("(i32.const 7)")),
-        ("wrong ABI version", module(MANIFEST, 2, "(i32.const 0)", "")),
+        // A version this host does not implement. (Version 2 used to be here, but ABI 2 now exists:
+        // a filter may declare it and keep `pc_filter` — see `tests/abi_v2.rs`.)
+        ("unimplemented ABI version", module(MANIFEST, 3, "(i32.const 0)", "")),
         ("bad manifest", module("not json", 1, "(i32.const 0)", "")),
         ("manifest with a bad id", module(r#"{"id":"a b","name":"x","kind":"filter"}"#, 1, "(i32.const 0)", "")),
-        ("manifest of the wrong kind", module(r#"{"id":"a","name":"x","kind":"panel"}"#, 1, "(i32.const 0)", "")),
+        // `panel` is a real kind now, but one must declare itself: this manifest has no `panel`.
+        ("a panel manifest with no panel", module(r#"{"id":"a","name":"x","kind":"panel"}"#, 1, "(i32.const 0)", "")),
         ("start function loops", module(MANIFEST, 1, "(i32.const 0)", "(func $spin (loop $l (br $l))) (start $spin)")),
         ("WASI import", module(MANIFEST, 1, "(i32.const 0)", r#"(import "wasi_snapshot_preview1" "fd_write" (func (param i32 i32 i32 i32) (result i32)))"#)),
     ];

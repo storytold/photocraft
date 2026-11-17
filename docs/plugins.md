@@ -5,7 +5,10 @@ arbitrary machine code and cannot work in the browser build. Instead, plug-ins a
 modules** run in a sandbox. One `.wasm` file works on macOS, Windows, Linux and the web.
 
 This page is the contract for plug-in authors and the reference for the host
-(`crates/plugins`, the `plugin.*` commands in `crates/engine/src/plugin_cmds.rs`).
+(`crates/plugins`, the `plugin.*` commands in `crates/engine/src/plugin_cmds.rs`). It covers
+**filter** plug-ins, ABI v1, one pixel transform per run. **Panel** plug-ins — a second kind that
+keeps its own state between events and lives in a window — are ABI v2, a separate contract on the
+same sandbox: [`docs/plugins-v2.md`](plugins-v2.md).
 
 ## Using plug-ins
 
@@ -186,5 +189,7 @@ original for the selection blend, and the instance's memory), i.e. ~12 MiB per t
 ## Not in v1
 
 - Panel / UI plug-ins, plug-ins that read other layers or documents, host callbacks (progress,
-  cancel), plug-in-provided file formats.
+  cancel), plug-in-provided file formats. Panel plug-ins exist, as ABI v2
+  ([`docs/plugins-v2.md`](plugins-v2.md)), with their own exports and their own rows under
+  Window › Plug-ins; a v1 filter is unchanged by them and needs nothing new.
 - Filter › Last Filter does not repeat plug-in runs yet.

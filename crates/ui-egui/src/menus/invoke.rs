@@ -188,6 +188,10 @@ fn invoke_early_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str,
     if let Some(r) = crate::plugin_ui::menu(app, id, params) {
         return Some(r);
     }
+    // Window › Plug-ins (the panels of installed panel plug-ins).
+    if let Some(r) = crate::plugin_panel_ui::menu(app, id, params) {
+        return Some(r);
+    }
     // History panel menu › History Options… (without params: its dialog).
     if let Some(r) = crate::history_options_ui::menu(app, id, params) {
         return Some(r);

@@ -21,9 +21,11 @@ pub(crate) fn registry_guard() -> std::sync::MutexGuard<'static, ()> {
 #[cfg(test)]
 pub(crate) static REGISTRY: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Inserts the installed plug-ins into Filter › Plug-ins, above "Install Plug-in…".
+/// Inserts the installed filter plug-ins into Filter › Plug-ins, above "Install Plug-in…". A panel
+/// plug-in is not a filter and is not run on a layer: its rows belong to Window › Plug-ins
+/// ([`crate::plugin_panel_ui`]), so it is left out here.
 pub fn insert_menu_items(app: &PhotocraftApp, items: &mut Vec<MenuItem>) {
-    let plugins = photocraft_plugins::registry::list();
+    let plugins: Vec<std::sync::Arc<photocraft_plugins::Plugin>> = photocraft_plugins::registry::list().into_iter().filter(|p| !p.is_panel()).collect();
     let Some(at) = items.iter().position(|i| i.id == "plugin.install") else { return };
     // `MenuItem::path` is the untranslated English path from the command's engine spec: the menu
     // renderer groups rows by it and translates only at display time. Translating it here left the

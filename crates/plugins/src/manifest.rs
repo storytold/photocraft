@@ -11,12 +11,74 @@ pub const MAX_MANIFEST_BYTES: usize = 64 * 1024;
 pub const MAX_PARAMS: usize = 64;
 /// Largest neighbourhood (`overlap`) a plug-in may ask for, in pixels.
 pub const MAX_OVERLAP: u32 = 256;
+/// Narrowest a panel plug-in may ask to be, in points.
+pub const MIN_PANEL_WIDTH: u32 = 160;
+/// Widest a panel plug-in may ask to be, in points.
+pub const MAX_PANEL_WIDTH: u32 = 640;
+/// Most loopback hosts a panel plug-in may declare.
+pub const MAX_NETWORK_HOSTS: usize = 16;
 
-/// What a plug-in is. ABI v1 has filters only.
+/// What a plug-in is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Kind {
+    /// ABI v1: a pixel transform, run on one layer in a fresh instance per band.
     Filter,
+    /// ABI v2: a long-lived panel that returns operations for the host to carry out.
+    Panel,
+}
+
+/// The panel a `kind:"panel"` plug-in declares.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Panel {
+    /// Dock-tab label; `name`'s rule (1-64 printable characters) applies.
+    pub title: String,
+    /// Narrowest the user may drag the panel, in points.
+    #[serde(default = "default_panel_min_width")]
+    pub min_width: u32,
+}
+
+fn default_panel_min_width() -> u32 {
+    260
+}
+
+/// What a panel asks for. Everything is off unless declared, and a declared capability is still only
+/// granted when the user allows it (the documented ABI v2 consent dialog).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Capabilities {
+    /// What the panel may see or change in the document: `[]`, `["read"]` or `["read","addLayers"]`.
+    #[serde(default)]
+    pub document: Vec<DocumentCap>,
+    /// Loopback HTTP access. Parsed and validated here; the host refuses `http.request` until it
+    /// implements the transport.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<Network>,
+    /// A per-plug-in key/value store (≤ 1 MiB) kept beside the preferences.
+    #[serde(default)]
+    pub storage: bool,
+}
+
+/// One document capability.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DocumentCap {
+    /// `doc.info` and `doc.capture`: see the canvas and the layer stack.
+    Read,
+    /// `doc.commit`: add layers to the document (one undo step).
+    AddLayers,
+}
+
+/// Declared loopback access.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Network {
+    /// `host` or `host:port`; `"127.0.0.1:*"` asks for any port, `"localhost:8188"` for one.
+    pub hosts: Vec<String>,
+    /// Lets the user edit the list in Preferences (a ComfyUI moved to another port).
+    #[serde(default)]
+    pub user_can_edit: bool,
 }
 
 /// Which pixels a filter is given.
@@ -125,6 +187,12 @@ pub struct Manifest {
     pub overlap: u32,
     #[serde(default)]
     pub area: Area,
+    /// A `panel` plug-in's panel declaration; absent (and refused) for filters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panel: Option<Panel>,
+    /// What a panel asks for; ignored for filters.
+    #[serde(default)]
+    pub capabilities: Capabilities,
 }
 
 impl Manifest {
@@ -154,6 +222,36 @@ impl Manifest {
         }
         if self.overlap > MAX_OVERLAP {
             return Err(Error::Manifest(format!("`overlap` {} exceeds {MAX_OVERLAP}", self.overlap)));
+        }
+        match self.kind {
+            Kind::Panel => {
+                let Some(panel) = &self.panel else {
+                    return Err(Error::Manifest("a `panel` plug-in must declare `panel`".into()));
+                };
+                let title = panel.title.trim();
+                let printable = title.chars().all(|c| !c.is_control() && !hidden_format(c)) && title.chars().any(visible);
+                if !printable || title.chars().count() > 64 {
+                    return Err(Error::Manifest("`panel.title` must be 1-64 printable characters".into()));
+                }
+                if !(MIN_PANEL_WIDTH..=MAX_PANEL_WIDTH).contains(&panel.min_width) {
+                    return Err(Error::Manifest(format!("`panel.minWidth` {} must be between {MIN_PANEL_WIDTH} and {MAX_PANEL_WIDTH}", panel.min_width)));
+                }
+            }
+            // `overlap` and `area` describe pixels; a panel has none.
+            Kind::Filter if self.panel.is_some() => return Err(Error::Manifest("`panel` is only for a `panel` plug-in".into())),
+            Kind::Filter => {}
+        }
+        if let Some(net) = &self.capabilities.network {
+            if net.hosts.is_empty() || net.hosts.len() > MAX_NETWORK_HOSTS {
+                return Err(Error::Manifest(format!("`capabilities.network.hosts` must list 1-{MAX_NETWORK_HOSTS} hosts")));
+            }
+            for host in &net.hosts {
+                if !valid_network_host(host) {
+                    return Err(Error::Manifest(format!(
+                        "`capabilities.network.hosts` entry {host:?}: only loopback (127.0.0.1, [::1], localhost) is allowed"
+                    )));
+                }
+            }
         }
         for (k, spec) in &self.params {
             if !valid_key(k) {
@@ -344,6 +442,43 @@ fn params_as_object<S: serde::Serializer>(p: &[(String, ParamSpec)], s: S) -> st
     m.end()
 }
 
+/// A declared host must be loopback: `127.x.x.x`, `[::1]` or `localhost`, optionally with a port
+/// (`:8188`) or any port (`:*`). A bare IPv6 address needs its brackets, as in a URL.
+pub(crate) fn valid_network_host(host: &str) -> bool {
+    if host.is_empty() || host.len() > 64 {
+        return false;
+    }
+    let (name, port) = if let Some(rest) = host.strip_prefix('[') {
+        match rest.split_once(']') {
+            Some((addr, tail)) => match tail.strip_prefix(':') {
+                Some(port) => (addr, Some(port)),
+                None if tail.is_empty() => (addr, None),
+                None => return false,
+            },
+            None => return false,
+        }
+    } else {
+        match host.split_once(':') {
+            Some((name, port)) => (name, Some(port)),
+            None => (host, None),
+        }
+    };
+    let port_ok = match port {
+        None | Some("*") => true,
+        Some(p) => p.parse::<u32>().is_ok_and(|n| (1..=65535).contains(&n)),
+    };
+    port_ok && (name == "localhost" || name == "::1" || loopback_v4(name))
+}
+
+/// `127.0.0.0/8`: the package's own loopback, never a public address that merely starts with `127`.
+fn loopback_v4(name: &str) -> bool {
+    let mut parts = name.split('.');
+    let (Some("127"), Some(a), Some(b), Some(c), None) = (parts.next(), parts.next(), parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    [a, b, c].iter().all(|o| !o.is_empty() && o.bytes().all(|b| b.is_ascii_digit()) && o.parse::<u8>().is_ok())
+}
+
 /// `[A-Za-z0-9._-]{1,64}`.
 pub fn valid_id(id: &str) -> bool {
     (1..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
@@ -507,6 +642,10 @@ mod tests {
                   "mono":{"type":"bool"},"seed":{"type":"int","min":0,"max":9}},
         "overlap":2,"area":"canvas"}"#;
 
+    const PANEL: &str = r#"{"id":"com.example.panel","name":"Example Panel","version":"2.0","kind":"panel",
+        "panel":{"title":"Example","minWidth":300},
+        "capabilities":{"document":["read","addLayers"],"storage":true}}"#;
+
     #[test]
     fn parses_and_keeps_param_order() {
         let m = Manifest::parse(FULL.as_bytes()).unwrap();
@@ -560,6 +699,7 @@ mod tests {
             r#"{"id":"","name":"x","kind":"filter"}"#,
             r#"{"id":"a b","name":"x","kind":"filter"}"#,
             r#"{"id":"a","name":"","kind":"filter"}"#,
+            // `kind:"panel"` is valid only with a `panel` declaration (see the panel tests).
             r#"{"id":"a","name":"x","kind":"panel"}"#,
             r#"{"id":"a","name":"x"}"#,
             r#"{"id":"a","name":"x","kind":"filter","overlap":100000}"#,
@@ -575,6 +715,76 @@ mod tests {
         }
         assert!(Manifest::parse(&[0xff, 0xfe]).is_err());
         assert!(Manifest::parse(&vec![b' '; MAX_MANIFEST_BYTES + 1]).is_err());
+    }
+
+    #[test]
+    fn parses_a_panel_manifest() {
+        let m = Manifest::parse(PANEL.as_bytes()).unwrap();
+        assert_eq!(m.kind, Kind::Panel);
+        let panel = m.panel.as_ref().unwrap();
+        assert_eq!(panel.title, "Example");
+        assert_eq!(panel.min_width, 300);
+        assert_eq!(m.capabilities.document, [DocumentCap::Read, DocumentCap::AddLayers]);
+        assert!(m.capabilities.storage);
+        assert!(m.capabilities.network.is_none());
+        // A filter carries no panel declaration and asks for nothing.
+        let f = Manifest::parse(FULL.as_bytes()).unwrap();
+        assert_eq!(f.panel, None);
+        assert_eq!(f.capabilities, Capabilities::default());
+    }
+
+    #[test]
+    fn panel_declaration_is_required_bounded_and_printable() {
+        assert_eq!(panel_min_width(r#"{"id":"a","name":"x","kind":"panel","panel":{"title":"T"}}"#), Some(260));
+        for bad in [
+            r#"{"id":"a","name":"x","kind":"panel"}"#,
+            r#"{"id":"a","name":"x","kind":"panel","panel":{"title":"T","minWidth":80}}"#,
+            r#"{"id":"a","name":"x","kind":"panel","panel":{"title":"T","minWidth":1000}}"#,
+            r#"{"id":"a","name":"x","kind":"panel","panel":{"title":""}}"#,
+            r#"{"id":"a","name":"x","kind":"panel","panel":{"title":"T\u{200B}"}}"#,
+            // `panel` means nothing on a filter.
+            r#"{"id":"a","name":"x","kind":"filter","panel":{"title":"T"}}"#,
+        ] {
+            assert!(Manifest::parse(bad.as_bytes()).is_err(), "{bad}");
+        }
+    }
+
+    fn panel_min_width(manifest: &str) -> Option<u32> {
+        Manifest::parse(manifest.as_bytes()).ok().and_then(|m| m.panel).map(|p| p.min_width)
+    }
+
+    fn with_network_hosts(hosts: &[String]) -> Result<Manifest> {
+        let json = json!({"id": "com.example.panel", "name": "Panel", "kind": "panel",
+            "panel": {"title": "Panel"}, "capabilities": {"network": {"hosts": hosts}}});
+        Manifest::parse(json.to_string().as_bytes())
+    }
+
+    #[test]
+    fn network_capability_is_loopback_only() {
+        for good in ["127.0.0.1", "127.0.0.1:8188", "127.9.9.9:1", "localhost", "localhost:*", "[::1]", "[::1]:3000"] {
+            assert!(with_network_hosts(&[good.to_string()]).is_ok(), "{good}");
+        }
+        for bad in
+            ["", "example.com", "127.0.0.1.evil.com", "10.0.0.1", "localhost:0", "localhost:70000", "localhost:x", "::1", "[::1", "127.0.0.256", "127.0.0.1:"]
+        {
+            assert!(with_network_hosts(&[bad.to_string()]).is_err(), "{bad}");
+        }
+        // Empty and oversized lists are refused too.
+        assert!(with_network_hosts(&[]).is_err());
+        let many: Vec<String> = (0..=MAX_NETWORK_HOSTS).map(|_| "127.0.0.1".to_string()).collect();
+        assert!(with_network_hosts(&many).is_err());
+    }
+
+    #[test]
+    fn unknown_capabilities_are_ignored_not_fatal() {
+        // Forward compatible: a manifest from a host that grew a capability still installs.
+        let m = Manifest::parse(
+            br#"{"id":"com.example.panel","name":"Panel","kind":"panel","panel":{"title":"Panel"},
+                "capabilities":{"document":["read"],"storage":true,"telepathy":true}}"#,
+        )
+        .unwrap();
+        assert_eq!(m.capabilities.document, [DocumentCap::Read]);
+        assert!(m.capabilities.storage);
     }
 
     #[test]

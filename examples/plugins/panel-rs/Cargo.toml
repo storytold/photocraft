@@ -1,0 +1,20 @@
+[package]
+name = "photocraft-plugin-panel"
+description = "Example PhotoCraft WebAssembly panel plug-in: Document Info"
+version = "1.0.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Not a member of the PhotoCraft workspace: it builds for wasm32-unknown-unknown only.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

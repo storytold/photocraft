@@ -7,11 +7,16 @@ use wasmi::{
     WasmResults,
 };
 
-use crate::manifest::Manifest;
+use crate::manifest::{Kind, Manifest};
 use crate::{Error, Result};
 
-/// The plug-in ABI version this host implements (`pc_abi_version` must return it).
-pub const ABI_VERSION: i32 = 1;
+/// The ABI that introduced panel plug-ins: `pc_event`/`pc_free` instead of `pc_filter`.
+pub const ABI_PANEL: i32 = 2;
+/// The newest plug-in ABI this host implements; `pc_abi_version` may return this or anything from
+/// [`ABI_VERSION_MIN`] up.
+pub const ABI_VERSION: i32 = ABI_PANEL;
+/// The oldest: ABI v1 filter plug-ins still load and run unchanged.
+pub const ABI_VERSION_MIN: i32 = 1;
 
 /// Fuel handed out per slice; between slices the host checks the deadline and the abort flag.
 const FUEL_SLICE: u64 = 20_000_000;
@@ -38,6 +43,13 @@ pub struct Limits {
     /// Wall-clock budget for one filter run (all bands), in milliseconds. Native builds only:
     /// the web build has no monotonic clock in `std`, so the fuel budget alone bounds it there.
     pub wall_time_ms: u64,
+    /// Wall-clock budget for one `pc_event`, in milliseconds. Far below a filter's: a panel blocks
+    /// its own worker, but its reply lands in a UI frame.
+    pub panel_wall_time_ms: u64,
+    /// Largest blob (a captured PNG, an HTTP body) one panel instance may hold.
+    pub max_blob_bytes: usize,
+    /// Total blob bytes one panel instance may hold.
+    pub max_blob_total_bytes: usize,
 }
 
 impl Default for Limits {
@@ -52,6 +64,9 @@ impl Default for Limits {
             fuel_per_sample: 4_000,
             max_recursion_depth: 1024,
             wall_time_ms: 60_000,
+            panel_wall_time_ms: 2_000,
+            max_blob_bytes: crate::blobs::MAX_BLOB_BYTES,
+            max_blob_total_bytes: crate::blobs::MAX_TOTAL_BYTES,
         }
     }
 }
@@ -70,6 +85,7 @@ impl Limits {
 /// every run gets its own store and instance.
 pub struct Plugin {
     manifest: Manifest,
+    abi: i32,
     engine: Engine,
     module: Module,
     limits: Limits,
@@ -79,7 +95,7 @@ pub struct Plugin {
 
 impl std::fmt::Debug for Plugin {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Plugin").field("manifest", &self.manifest).field("size", &self.size).field("source", &self.source).finish()
+        f.debug_struct("Plugin").field("manifest", &self.manifest).field("abi", &self.abi).field("size", &self.size).field("source", &self.source).finish()
     }
 }
 
@@ -93,11 +109,15 @@ pub(crate) struct Deadline {
 
 impl Deadline {
     pub(crate) fn new(limits: &Limits) -> Self {
+        Self::after_ms(limits.wall_time_ms)
+    }
+    /// A deadline `ms` from now: each `pc_event` gets its own, shorter budget.
+    pub(crate) fn after_ms(ms: u64) -> Self {
         #[cfg(target_arch = "wasm32")]
-        let _ = limits;
+        let _ = ms;
         Self {
             #[cfg(not(target_arch = "wasm32"))]
-            at: std::time::Instant::now() + std::time::Duration::from_millis(limits.wall_time_ms),
+            at: std::time::Instant::now() + std::time::Duration::from_millis(ms),
             abort: Arc::new(Mutex::new(None)),
         }
     }
@@ -212,14 +232,15 @@ impl Plugin {
                 imp.name()
             )));
         }
-        let mut p = Plugin { manifest: placeholder_manifest(), engine, module, limits, size: bytes.len(), source: None };
+        let mut p = Plugin { manifest: placeholder_manifest(), abi: 0, engine, module, limits, size: bytes.len(), source: None };
         let deadline = Deadline::new(&p.limits);
         let mut live = p.instantiate(&deadline)?;
         let version: TypedFunc<(), i32> = live.func("pc_abi_version")?;
         let v = p.call(&mut live, &version, (), p.limits.fuel_base, &deadline)?;
-        if v != ABI_VERSION {
-            return Err(Error::Abi(format!("pc_abi_version returned {v}; this host implements version {ABI_VERSION}")));
+        if !(ABI_VERSION_MIN..=ABI_VERSION).contains(&v) {
+            return Err(Error::Abi(format!("pc_abi_version returned {v}; this host implements versions {ABI_VERSION_MIN} to {ABI_VERSION}")));
         }
+        p.abi = v;
         let manifest: TypedFunc<(), i64> = live.func("pc_manifest")?;
         let packed = p.call(&mut live, &manifest, (), p.limits.fuel_base, &deadline)? as u64;
         let (ptr, len) = ((packed & 0xffff_ffff) as usize, (packed >> 32) as usize);
@@ -228,14 +249,40 @@ impl Plugin {
         }
         let text = live.memory.data(&live.store).get(ptr..ptr.saturating_add(len)).ok_or_else(|| Error::Abi("pc_manifest points outside memory".into()))?;
         p.manifest = Manifest::parse(text)?;
-        // The other exports must exist with the right types.
+        // Only ABI 2 introduced `panel`, so a panel must declare it; a filter may use either ABI
+        // (an ABI 2 filter gets the v2 manifest fields and keeps the per-band model).
+        if p.manifest.kind == Kind::Panel && v < ABI_PANEL {
+            return Err(Error::Abi(format!("a `panel` plug-in must return ABI {ABI_PANEL} from `pc_abi_version` (it returned {v})")));
+        }
+        // The other exports must exist with the right types: a filter is pixels-in-pixels-out, a
+        // panel is event-in-operations-out.
         live.func::<i32, i32>("pc_alloc")?;
-        live.func::<FilterArgs, i32>("pc_filter")?;
+        match p.manifest.kind {
+            Kind::Filter => {
+                live.func::<FilterArgs, i32>("pc_filter")?;
+            }
+            Kind::Panel => {
+                live.func::<EventArgs, i64>("pc_event")?;
+                live.func::<(i32, i32), ()>("pc_free")?;
+            }
+        }
         Ok(p)
     }
 
     pub fn manifest(&self) -> &Manifest {
         &self.manifest
+    }
+    /// What the plug-in is: a filter or a panel.
+    pub fn kind(&self) -> Kind {
+        self.manifest.kind
+    }
+    /// The ABI version the module declared: 1 for a v1 filter, 2 for a panel.
+    pub fn abi(&self) -> i32 {
+        self.abi
+    }
+    /// Whether this plug-in is a panel (it then runs in an [`crate::instance::Instance`]).
+    pub fn is_panel(&self) -> bool {
+        self.manifest.kind == Kind::Panel
     }
     pub fn id(&self) -> &str {
         &self.manifest.id
@@ -334,10 +381,60 @@ impl Plugin {
         }
         Ok(())
     }
+
+    /// Sends one JSON event to a panel instance and returns the raw operations JSON it replied with
+    /// (empty when it replied `0`, meaning "no operations").
+    ///
+    /// The host owns both buffers: it allocates the event block, writes the event into it, calls
+    /// `pc_event`, and hands both blocks back through `pc_free` once it has read the reply.
+    pub(crate) fn send_event(&self, live: &mut Live, event: &[u8], deadline: &Deadline) -> Result<Vec<u8>> {
+        if event.len() > crate::ops::MAX_OPS_BYTES {
+            return Err(Error::Limit(format!("event is {} bytes (limit {})", event.len(), crate::ops::MAX_OPS_BYTES)));
+        }
+        // A zero-byte allocation is not portable: always ask for at least one byte.
+        let len = event.len().max(1);
+        if len > self.limits.max_memory_bytes {
+            return Err(Error::Limit("memory budget (event too large)".into()));
+        }
+        let alloc: TypedFunc<i32, i32> = live.func("pc_alloc")?;
+        let free: TypedFunc<EventArgs, ()> = live.func("pc_free")?;
+        let func: TypedFunc<EventArgs, i64> = live.func("pc_event")?;
+        let ptr = self.call(live, &alloc, len as i32, self.limits.fuel_base, deadline)? as u32 as usize;
+        if ptr == 0 {
+            return Err(Error::Failed("pc_alloc returned 0 (out of memory)".into()));
+        }
+        let outside = || Error::Abi("pc_alloc returned a block outside memory".into());
+        let end = ptr.checked_add(len).filter(|e| *e <= self.limits.max_memory_bytes).ok_or_else(outside)?;
+        {
+            let mem = live.memory.data_mut(&mut live.store);
+            let dst = mem.get_mut(ptr..end).ok_or_else(outside)?;
+            dst.get_mut(..event.len()).ok_or_else(outside)?.copy_from_slice(event);
+        }
+        let packed = self.call(live, &func, (ptr as i32, event.len() as i32), self.limits.fuel_base, deadline)?;
+        self.call(live, &free, (ptr as i32, len as i32), self.limits.fuel_base, deadline)?;
+        let packed = packed as u64;
+        if packed == 0 {
+            return Ok(Vec::new());
+        }
+        let (rptr, rlen) = ((packed & 0xffff_ffff) as usize, (packed >> 32) as usize);
+        if rlen > crate::ops::MAX_OPS_BYTES {
+            return Err(Error::Limit(format!("pc_event returned {rlen} bytes of operations (limit {})", crate::ops::MAX_OPS_BYTES)));
+        }
+        let reply = {
+            let outside = || Error::Abi("pc_event returned a block outside memory".into());
+            let rend = rptr.checked_add(rlen).filter(|e| *e <= self.limits.max_memory_bytes).ok_or_else(outside)?;
+            live.memory.data(&live.store).get(rptr..rend).ok_or_else(outside)?.to_vec()
+        };
+        self.call(live, &free, (rptr as i32, rlen as i32), self.limits.fuel_base, deadline)?;
+        Ok(reply)
+    }
 }
 
 /// `pc_filter(buf_ptr, buf_len, width, height, channels, format, params_ptr, params_len)`.
 type FilterArgs = (i32, i32, i32, i32, i32, i32, i32, i32);
+
+/// `pc_event(ptr, len)` and `pc_free(ptr, size)`.
+type EventArgs = (i32, i32);
 
 impl Live {
     fn func<P: WasmParams, R: WasmResults>(&self, name: &str) -> Result<TypedFunc<P, R>> {
@@ -356,5 +453,7 @@ fn placeholder_manifest() -> Manifest {
         params: Vec::new(),
         overlap: 0,
         area: crate::Area::Content,
+        panel: None,
+        capabilities: crate::Capabilities::default(),
     }
 }

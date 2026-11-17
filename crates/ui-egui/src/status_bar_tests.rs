@@ -305,3 +305,32 @@ fn a_second_separator_in_the_zoom_field_opens_the_invalid_entry_message_and_appl
         assert_eq!(messages, [want], "one message, in the dialog the app shows errors in");
     });
 }
+
+/// A command the application drives by itself must not wipe what the status bar is telling the user.
+///
+/// `run_command` clears a refusal once a command succeeds, so the next thing read is the result of
+/// what the user just picked. That is right for their command and wrong for one running every frame
+/// behind them: with a plug-in panel open, its tick would blank the reason an action was refused
+/// before anyone could read it. The same command through both doors is what proves it is the door,
+/// not the command.
+#[test]
+fn a_background_command_leaves_a_refusal_on_screen() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 40, "height": 28})).unwrap();
+    let refused = "Merge Down is not available for the bottom layer";
+
+    app.ui.status = refused.into();
+    app.ui.status_error = true;
+    app.run_background("plugin.panel.tick", json!({})).unwrap();
+    assert_eq!(app.ui.status, refused, "the frames behind the user say nothing of their own");
+    assert!(app.ui.status_error, "so the user is still being told why");
+
+    app.run("plugin.panel.tick", json!({})).unwrap();
+    assert!(app.ui.status.is_empty() && !app.ui.status_error, "while their own command clears it");
+
+    // A background command that genuinely fails is still reported: only a silent success keeps quiet.
+    app.ui.status = refused.into();
+    app.ui.status_error = true;
+    assert!(app.run_background("no.such.command", json!({})).is_err());
+    assert!(app.ui.status_error && app.ui.status != refused, "the failure replaced the stale message: {}", app.ui.status);
+}

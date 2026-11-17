@@ -50,6 +50,7 @@ pub mod monitor_status;
 pub mod notices;
 pub mod os_window;
 pub mod panels;
+pub mod plugin_panel_ui;
 pub mod preset_files_ui;
 pub mod proxy;
 pub mod render_path;

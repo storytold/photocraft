@@ -360,6 +360,8 @@ impl PhotocraftApp {
             timeline_ui::windows(self, &ctx);
             workspace_ui::windows(self, &ctx);
         }
+        // Plug-in panels can open without a document and must keep receiving events on Home.
+        crate::plugin_panel_ui::windows(self, &ctx);
         palette::show(self, &ctx);
         dialogs::show(self, &ctx);
         layers_panel_ui::show_dialog(self, &ctx);

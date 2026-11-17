@@ -49,9 +49,9 @@ note = "file_cmds/batch_run.rs and batch_naming.rs: flat subfolder output and la
 [[item]]
 id = "AUTO-219-6"
 target = "Plug-in ABI v2: panel kind, progress/cancel calls, read other layers, Last Filter repeats"
-status = "missing"
+status = "partial"
 issue = 219
-note = "runtime.rs:15 ABI_VERSION = 1; manifest.rs:18 Kind::Filter only"
+note = "2026-10-16: ABI v2 panels run — plugins/src/manifest.rs Kind::Panel, runtime.rs (pc_event, no host imports), ops.rs/view.rs/instance.rs; plugin_panel_cmds.rs opens, draws and drives them and adds the plugin.panel.* commands, Window › Plug-ins, ui.progress and the cancel event, plug-in-scoped storage, doc.info, timers and doc.command (running an engine command from a reviewed allow-list, gated by the manifest's capability), with three failures in a minute stopping a panel until restart; proven at the far end of what it was designed for, by a Rust port of TyperTools/TypeR 1.4.9's lettering workflow (about 6,500 lines, MIT, © 2017 Swirt, installed as one .wasm from a repository of its own) that letters a page end to end through five allow-listed commands; still missing: doc.capture/doc.commit (document images to and from a panel), storage on disk rather than in memory, reading layers other than the active document, command and shortcut contribution, selection commands, and Filter › Last Filter repeating a plug-in run"
 
 [[item]]
 id = "AUTO-219-7"

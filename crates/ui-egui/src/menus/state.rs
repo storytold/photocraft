@@ -47,6 +47,9 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
     if let Some(e) = crate::plugin_ui::is_enabled(app, id) {
         return e;
     }
+    if let Some(e) = crate::plugin_panel_ui::is_enabled(app, id) {
+        return e;
+    }
     if let Some(e) = crate::transform_tool::is_enabled(app, id) {
         return e;
     }
@@ -145,6 +148,9 @@ pub(super) fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
         return Some(c);
     }
     if let Some(c) = crate::type_panels_ui::checked(app, id) {
+        return Some(c);
+    }
+    if let Some(c) = crate::plugin_panel_ui::checked(app, id) {
         return Some(c);
     }
     if let Some(alias) = panel_alias(id) {

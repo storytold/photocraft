@@ -33,11 +33,22 @@ fn always(_: &Session) -> std::result::Result<(), String> {
 /// JSON description of an installed plug-in.
 pub fn describe(p: &Plugin) -> Value {
     let m = p.manifest();
-    json!({
+    let mut v = json!({
         "id": m.id, "name": m.name, "version": m.version, "kind": m.kind, "author": m.author, "description": m.description,
         "params": m.params_notation(), "paramsSchema": serde_json::to_value(m).ok().and_then(|v| v.get("params").cloned()),
         "overlap": m.overlap, "area": m.area, "size": p.size(), "source": p.source(),
-    })
+    });
+    // A panel's own declaration and what it asks to be allowed to do, so a UI can show them before
+    // anything is opened.
+    if let Some(o) = v.as_object_mut() {
+        o.insert("abi".into(), json!(p.abi()));
+        o.insert("panel".into(), serde_json::to_value(&m.panel).unwrap_or(Value::Null));
+        o.insert("capabilities".into(), serde_json::to_value(&m.capabilities).unwrap_or(Value::Null));
+        if p.is_panel() {
+            o.insert("open".into(), json!(crate::plugin_panel_cmds::open_ids().iter().any(|id| id == &m.id)));
+        }
+    }
+    v
 }
 
 /// The plug-in's own parameters from command params: `params` if given, else the top-level keys
@@ -104,6 +115,9 @@ fn plugin_by_id(cmd: &str, p: &Value) -> Result<std::sync::Arc<Plugin>> {
 
 fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let plugin = plugin_by_id(RUN, p)?;
+    if plugin.is_panel() {
+        return Err(bad(RUN, format!("plug-in {:?} is a panel: open it with plugin.panel.open", plugin.id())));
+    }
     let params = plugin_params(p);
     // Bad parameters fail before anything is touched.
     let resolved = Value::Object(plugin.manifest().resolve_params(&params).map_err(|e| bad(RUN, e.to_string()))?);
@@ -185,6 +199,10 @@ fn install(_s: &mut Session, p: &Value) -> Result<Value> {
     if !replace && registry::get(plugin.id()).is_some() {
         return Err(bad(CMD, format!("a plug-in with id {:?} is already installed", plugin.id())));
     }
+    // Replacing a plug-in ends the instance the old module was running in: its code is gone.
+    if replace && registry::get(plugin.id()).is_some() {
+        crate::plugin_panel_cmds::stop_all(plugin.id());
+    }
     Ok(describe(&registry::install(plugin)))
 }
 
@@ -213,20 +231,34 @@ pub(crate) fn sync_prefs(s: &Session) {
     if last.as_ref().is_some_and(|(f, _)| f == folder) {
         return;
     }
-    *last = Some((folder.to_string(), load_folder(folder)));
+    let (report, loaded) = load_folder(folder);
+    stop_replaced(&loaded);
+    *last = Some((folder.to_string(), report));
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn load_folder(folder: &str) -> Value {
+fn load_folder(folder: &str) -> (Value, Vec<String>) {
     match registry::load_folder(std::path::Path::new(folder)) {
-        Ok(r) => json!({"folder": folder, "loaded": r.loaded, "failed": r.failed.iter().map(|(f, e)| json!({"file": f, "error": e})).collect::<Vec<_>>()}),
-        Err(e) => json!({"folder": folder, "error": e.to_string()}),
+        Ok(r) => (
+            json!({"folder": folder, "loaded": r.loaded, "failed": r.failed.iter().map(|(f, e)| json!({"file": f, "error": e})).collect::<Vec<_>>()}),
+            r.loaded,
+        ),
+        Err(e) => (json!({"folder": folder, "error": e.to_string()}), Vec::new()),
     }
 }
 
 #[cfg(target_arch = "wasm32")]
-fn load_folder(folder: &str) -> Value {
-    json!({"folder": folder, "error": "plug-in folders are not available on the web"})
+fn load_folder(folder: &str) -> (Value, Vec<String>) {
+    (json!({"folder": folder, "error": "plug-in folders are not available on the web"}), Vec::new())
+}
+
+/// Ends the running instance of every plug-in a folder load has just replaced: a panel started the
+/// old module, and its code is gone. What the plug-in stored is kept — an upgrade is not a removal
+/// (see [`crate::plugin_panel_cmds::stop_all`]).
+fn stop_replaced(loaded: &[String]) {
+    for id in loaded {
+        crate::plugin_panel_cmds::stop_all(id);
+    }
 }
 
 fn reload(s: &mut Session, p: &Value) -> Result<Value> {
@@ -237,10 +269,11 @@ fn reload(s: &mut Session, p: &Value) -> Result<Value> {
     if folder.is_empty() {
         return Err(bad("plugin.reload", "no folder: pass `path` or set Preferences › Plug-ins › Additional Plug-ins Folder"));
     }
-    let report = load_folder(&folder);
+    let (report, loaded) = load_folder(&folder);
     if let Some(e) = report.get("error").and_then(Value::as_str) {
         return Err(EngineError::Other(e.to_string()));
     }
+    stop_replaced(&loaded);
     *FOLDER.lock().unwrap_or_else(|e| e.into_inner()) = Some((folder, report.clone()));
     Ok(report)
 }
@@ -280,7 +313,14 @@ pub fn specs() -> Vec<CommandSpec> {
             enabled: always,
             run: |_, p| {
                 let id = p.get("id").and_then(Value::as_str).ok_or_else(|| bad("plugin.remove", "missing `id`"))?;
-                if registry::remove(id) { Ok(json!({"removed": id})) } else { Err(err(photocraft_plugins::Error::NotFound(id.into()))) }
+                if registry::remove(id) {
+                    // A panel's instance runs the removed module, so it goes with it — and so does
+                    // anything it stored: the plug-in is gone, not merely replaced.
+                    crate::plugin_panel_cmds::forget(id);
+                    Ok(json!({"removed": id}))
+                } else {
+                    Err(err(photocraft_plugins::Error::NotFound(id.into())))
+                }
             },
             journal: false,
         },

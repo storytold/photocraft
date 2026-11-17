@@ -40,6 +40,29 @@ fn wat_plugin(id: &str, params: &str, filter: &str) -> Vec<u8> {
     wat::parse_str(src).unwrap()
 }
 
+/// A minimal panel module: `pc_event` answers every event with `[]`, which is a valid reply to
+/// `init` and to anything else. It exists so a folder load can replace a panel that is running.
+fn panel_plugin(id: &str) -> Vec<u8> {
+    let manifest = format!(r#"{{"id":"{id}","name":"Panel {id}","version":"2","kind":"panel","panel":{{"title":"{id}","minWidth":200}},"capabilities":{{}}}}"#);
+    let src = format!(
+        r#"(module
+  (memory (export "memory") 1)
+  (data (i32.const 16) "{data}")
+  (data (i32.const 4096) "[]")
+  (func (export "pc_abi_version") (result i32) (i32.const 2))
+  (func (export "pc_manifest") (result i64) (i64.or (i64.shl (i64.const {len}) (i64.const 32)) (i64.const 16)))
+  (func (export "pc_alloc") (param $n i32) (result i32) (local $old i32)
+    (local.set $old (memory.grow (i32.shr_u (i32.add (local.get $n) (i32.const 65535)) (i32.const 16))))
+    (if (result i32) (i32.eq (local.get $old) (i32.const -1)) (then (i32.const 0)) (else (i32.mul (local.get $old) (i32.const 65536)))))
+  (func (export "pc_free") (param i32 i32))
+  (func (export "pc_event") (param $p i32) (param $len i32) (result i64)
+    (i64.or (i64.shl (i64.const 2) (i64.const 32)) (i64.const 4096))))"#,
+        data = manifest.replace('"', "\\\""),
+        len = manifest.len()
+    );
+    wat::parse_str(src).unwrap()
+}
+
 /// Sets every sample to 0.5.
 const GREY: &str = r#"(local $i i32)
   (block $done (loop $l
@@ -347,6 +370,26 @@ fn preference_folder_is_loaded() {
     let r = s.execute("plugin.reload", json!({})).unwrap();
     assert_eq!(r["loaded"], json!(["test.cmds.folder"]));
     registry::remove("test.cmds.folder");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn reloading_a_folder_ends_the_panel_of_every_plug_in_it_replaced() {
+    let id = "test.cmds.reloadpanel";
+    let dir = std::env::temp_dir().join(format!("pc-plugin-reload-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("panel.wasm");
+    std::fs::write(&path, panel_plugin(id)).unwrap();
+    let mut s = Session::new();
+    s.execute("plugin.install", json!({"path": path.to_str().unwrap()})).unwrap();
+    s.execute("plugin.panel.open", json!({"id": id})).unwrap();
+    assert_eq!(s.execute("plugin.panel.inspect", json!({"id": id})).unwrap()["state"], "running");
+    // The folder load replaces the module the running instance started from. Its code is gone, so
+    // the instance goes too — closed, not stopped with a failure, because nothing failed.
+    let r = s.execute("plugin.reload", json!({"path": dir.to_str().unwrap()})).unwrap();
+    assert_eq!(r["loaded"], json!([id]));
+    assert_eq!(s.execute("plugin.panel.inspect", json!({"id": id})).unwrap()["state"], "closed");
+    s.execute("plugin.remove", json!({"id": id})).unwrap();
     std::fs::remove_dir_all(&dir).ok();
 }
 
