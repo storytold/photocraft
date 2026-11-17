@@ -41,7 +41,9 @@ architecture and the PSD writer are the serial parts.
 
 **Why alpha.** Core workflows (open, layer, select, paint, adjust, filter, type, save) work end to
 end, and breadth is high, but 953 issues are open (2026-10-13), 22 of 25 performance budgets
-are missed, and PSDs we write are not yet reliably accepted by Photoshop (#1281, #2469). Beta
+are missed, and PSDs we write are not yet reliably accepted by Photoshop (the reported re-open
+failures #1281 and #2469 are closed: #1281 as completed 2026-11-10, #2469 as a duplicate of
+#7698, fixed by #7773 merged 2026-10-21; no test opens our exports in Photoshop yet). Beta
 needs ~75% ready and no blocking PSD gap. The [alpha gate](docs/roadmap.md#alpha-gate) passes: all six core workflows
 (retouch, composite, cut-out, design, paint, PSD exchange) complete end to end and save and reopen;
 four are partial in depth, none blocked.
