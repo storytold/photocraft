@@ -1618,6 +1618,26 @@ mod tests {
         assert_eq!(docs, 0, "the step after the budget ran out did not run");
     }
 
+    /// `brief` trims each step before the reply budget is charged: the batch that runs out of budget
+    /// above fits once every `command.list` result is cut down, so its last step still runs.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn mcp_brief_batch_is_trimmed_before_the_budget_is_charged() {
+        let mcp = PhotocraftMcp::headless();
+        let step = |id: &str, params: Value| RunParams { id: id.into(), params: Some(params), wait: None, reply: None };
+        let mut steps: Vec<RunParams> = (0..MAX_BATCH_STEPS - 1).map(|_| step("command.list", json!({}))).collect();
+        steps.push(step("file.new", json!({"width": 8, "height": 8})));
+        let params = BatchParams { steps, stop_on_error: Some(false), reply: Some(ReplyDetail::Brief) };
+        let result = mcp.batch(params, Waiter::new(None)).await.unwrap();
+        let text = &result.content.first().and_then(|c| c.as_text()).unwrap().text;
+        assert_ne!(result.is_error, Some(true), "{}", &text[..200.min(text.len())]);
+        let reply: Value = serde_json::from_str(text).unwrap();
+        assert_eq!((&reply["completed"], &reply["failed"]), (&json!(MAX_BATCH_STEPS), &json!(0)), "{}", &text[..300.min(text.len())]);
+        let first = serde_json::to_string(&reply["results"][0]).unwrap();
+        assert!(first.len() < 200, "a brief command list is small: {first}");
+        let docs = mcp.headless_op(|h| Ok(h.session.documents().len())).await.unwrap().unwrap();
+        assert_eq!(docs, 1, "the step after the trimmed results ran");
+    }
+
     /// rmcp may drop a cancelled request's future without polling it again; its job must still
     /// stop and leave the document unchanged (#8129).
     #[tokio::test(flavor = "multi_thread")]
