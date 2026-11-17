@@ -337,7 +337,7 @@ fn prepare_layers(doc: &mut Document, ids: Vec<LayerPath>, ctx: &JobCtx, depth: 
                     } else {
                         let imported = ctx
                             .stage(0.0, 0.5, "Decoding embedded contents", |ctl| -> std::result::Result<photocraft_io::ImportResult, photocraft_io::IoError> {
-                                ctl.check()?;
+                                ctl.check().map_err(|_| photocraft_io::IoError::Cancelled)?;
                                 let imported = if svg_source {
                                     // Native cached previews cannot silently omit artwork.
                                     photocraft_io::svg::import_svg_bounded_images_strict(&name, &bytes, 24_000_000)
@@ -346,7 +346,7 @@ fn prepare_layers(doc: &mut Document, ids: Vec<LayerPath>, ctx: &JobCtx, depth: 
                                         photocraft_io::ImportOptions { historical_xcf_sample_order: object.historical_xcf_sample_order, ..Default::default() };
                                     photocraft_io::import_with_options_and_interrupt(&name, &bytes, &options, ctl)
                                 }?;
-                                ctl.check()?;
+                                ctl.check().map_err(|_| photocraft_io::IoError::Cancelled)?;
                                 Ok(imported)
                             })
                             .map_err(|error| {
