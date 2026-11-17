@@ -40,8 +40,7 @@ fn non_strict_embedded_svg_records_isolation_failure_but_omits_invalid_images() 
         fontless_text: false,
         strict: false,
         error: None,
-        resolver: Arc::new(craft_svg::tree::ImageResolver::new(tree_limits(MAX_XML_DEPTH, MAX_RASTER_PIXELS))),
-        integrity: Arc::new(Mutex::new(image_integrity::Integrity::new(MAX_RASTER_PIXELS))),
+        resolver: Arc::new(craft_svg::tree::ValidatedImageResolver::new(tree_limits(MAX_XML_DEPTH, MAX_RASTER_PIXELS))),
     }));
     let invalid = image_svg(&embedded_image("image/svg+xml", b"<not-svg/>"));
     parse_image_bounded_with(invalid.as_bytes(), budget.clone(), MAX_XML_DEPTH, inter_only, false).unwrap();
@@ -50,6 +49,53 @@ fn non_strict_embedded_svg_records_isolation_failure_but_omits_invalid_images() 
     let error = parse_image_bounded_with(svg.as_bytes(), budget.clone(), 2, panic_fonts, false).unwrap_err();
     assert!(error.to_string().contains("bounded SVG worker failed"));
     assert_eq!(budget.lock().unwrap().error.as_deref(), Some(error.to_string().as_str()));
+}
+
+/// Shallow declarations can expand to a much deeper parser walk through references.
+fn reference_chain_svg(links: usize) -> String {
+    let mut source = String::from("<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'><defs>");
+    for index in 0..links {
+        source.push_str(&format!("<g id='n{index}'><use href='#n{}'/></g>", index + 1));
+    }
+    source.push_str(&format!("<g id='n{links}'><rect width='1' height='1'/></g></defs><use href='#n0'/></svg>"));
+    source
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn narrowed_embedded_xml_allowance_also_bounds_expanded_references() {
+    let source = reference_chain_svg(12);
+    let xml_left = 5;
+    assert!(nesting_depth(source.as_bytes(), xml_left).unwrap() <= xml_left, "lexical nesting alone fits");
+    assert!(craft_svg::tree::preflight(&source, &tree_limits(MAX_XML_DEPTH, MAX_RASTER_PIXELS)).is_ok());
+    assert!(matches!(craft_svg::tree::preflight(&source, &tree_limits(xml_left, MAX_RASTER_PIXELS)), Err(craft_svg::tree::Error::TooDeep(_))));
+    let budget = Arc::new(Mutex::new(ImageBudget {
+        pixels: MAX_RASTER_PIXELS,
+        xml_bytes: MAX_BOUNDED_SVG_BYTES,
+        svg_images: 0,
+        svg_chain: 0,
+        draw_nodes: 0,
+        repeatable_raster: false,
+        repeatable_svg: false,
+        fontless_text: false,
+        strict: false,
+        error: None,
+        resolver: Arc::new(craft_svg::tree::ValidatedImageResolver::new(tree_limits(MAX_XML_DEPTH, MAX_RASTER_PIXELS))),
+    }));
+    let error = parse_image_bounded_with(source.as_bytes(), budget, xml_left, inter_only, false).unwrap_err();
+    assert!(error.to_string().contains("nested"), "{error}");
+}
+
+#[cfg(target_arch = "wasm32")]
+#[test]
+fn wasm_inline_allowance_bounds_shallow_expanded_references_before_conversion() {
+    let limits = tree_limits(MAX_XML_DEPTH, MAX_RASTER_PIXELS);
+    assert_eq!(limits.tree_depth, INLINE_XML_DEPTH + 1);
+    let shallow = reference_chain_svg(INLINE_XML_DEPTH / 4);
+    assert!(craft_svg::tree::preflight(&shallow, &limits).is_ok());
+    let expanded = reference_chain_svg(INLINE_XML_DEPTH + 2);
+    assert!(nesting_depth(expanded.as_bytes(), INLINE_XML_DEPTH).unwrap() <= INLINE_XML_DEPTH);
+    assert!(matches!(craft_svg::tree::preflight(&expanded, &limits), Err(craft_svg::tree::Error::TooDeep(_))));
 }
 
 fn embedded_image(mime: &str, bytes: &[u8]) -> String {
@@ -852,24 +898,29 @@ fn missing_svg_font_uses_an_available_generic_instead_of_dropping_text() {
 }
 
 #[test]
-fn resolve_data_rejects_oversized_and_malformed_embedded_png_and_webp() {
-    let opt = options(Arc::new(usvg::fontdb::Database::new()), MAX_XML_DEPTH);
-    let resolve = &opt.image_href_resolver.resolve_data;
+fn embedded_png_and_webp_validation_preserves_public_warning_and_strict_contracts() {
     let img = photocraft_codecs::Image::from_u8(2, 2, photocraft_codecs::ChannelLayout::Rgb, vec![255; 12]).unwrap();
     let valid_png = photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &Default::default()).unwrap();
-    assert!(resolve("image/png", Arc::new(valid_png.clone()), &opt).is_some());
-    assert!(resolve("text/plain", Arc::new(valid_png.clone()), &opt).is_some());
-
-    let mut huge_png = valid_png;
-    huge_png[16..20].copy_from_slice(&40_000u32.to_be_bytes());
-    huge_png[20..24].copy_from_slice(&40_000u32.to_be_bytes());
-    assert!(resolve("image/png", Arc::new(huge_png.clone()), &opt).is_none(), "oversized PNG rejected before decode");
-    assert!(resolve("text/plain", Arc::new(huge_png), &opt).is_none(), "oversized mime-less PNG rejected before decode");
-
-    // Malformed WebP header under image/webp or text/plain must be rejected at the probe step.
-    let bad_webp = b"RIFF\x10\x00\x00\x00WEBPVP8 ".to_vec();
-    assert!(resolve("image/webp", Arc::new(bad_webp.clone()), &opt).is_none());
-    assert!(resolve("text/plain", Arc::new(bad_webp), &opt).is_none());
+    for mime in ["image/png", "text/plain"] {
+        let svg = image_svg(&embedded_image(mime, &valid_png));
+        let output = rasterize_bounded(svg.as_bytes(), 1.0, 64).unwrap();
+        assert_eq!((output.rect.width(), output.rect.height()), (1, 1));
+        assert_eq!(output.get(0, 0), [1.; 4]);
+        let mut huge = valid_png.clone();
+        huge[16..20].copy_from_slice(&40_000u32.to_be_bytes());
+        huge[20..24].copy_from_slice(&40_000u32.to_be_bytes());
+        let svg = image_svg(&embedded_image(mime, &huge));
+        assert!(parse_bounded(svg.as_bytes(), 64).is_err(), "oversized PNG refused before decode: {mime}");
+        assert!(rasterize_bounded(svg.as_bytes(), 1.0, 64).is_err());
+    }
+    for mime in ["image/webp", "text/plain"] {
+        let svg = image_svg(&embedded_image(mime, b"RIFF\x10\x00\x00\x00WEBPVP8 "));
+        let parsed = parse_bounded(svg.as_bytes(), 64).unwrap();
+        assert_eq!(omitted_image_count(parsed.image_usage), 1);
+        assert!(rasterize_bounded(svg.as_bytes(), 1.0, 64).is_err());
+        let imported = import_svg_bounded("invalid.webp.svg", svg.as_bytes(), 64).unwrap();
+        assert!(imported.warnings.iter().any(|warning| warning.contains("omitted")));
+    }
 }
 
 #[test]
@@ -885,11 +936,12 @@ fn jpeg_allocation_probe_uses_the_frame_header_and_oversized_jpegs_are_refused()
     assert_eq!(photocraft_codecs::probe_allocation_size(&jpeg(400, 300)).unwrap(), (300, 400));
     assert!(photocraft_codecs::probe_allocation_size(&[0xFF, 0xD8, 0xFF, 0xDA, 0, 2]).is_err());
     assert!(photocraft_codecs::probe_allocation_size(&[0xFF, 0xD8]).is_err());
-    let opt = options(Arc::new(usvg::fontdb::Database::new()), MAX_XML_DEPTH);
-    let resolve = &opt.image_href_resolver.resolve_data;
-    // 1.2 billion pixels would be 4.8 GB of RGBA before resvg scaled anything down.
-    assert!(resolve("image/jpeg", Arc::new(jpeg(40_000, 30_000)), &opt).is_none());
-    assert!(resolve("text/plain", Arc::new(jpeg(40_000, 30_000)), &opt).is_none());
+    for mime in ["image/jpeg", "text/plain"] {
+        // 1.2 billion pixels would require 4.8 GB before scaling.
+        let svg = image_svg(&embedded_image(mime, &jpeg(40_000, 30_000)));
+        assert!(parse_bounded(svg.as_bytes(), 64).is_err());
+        assert!(rasterize_bounded(svg.as_bytes(), 1.0, 64).is_err());
+    }
 }
 
 #[test]
@@ -900,17 +952,21 @@ fn resolve_data_rejects_nested_gzip_and_handles_text_plain_svgz() {
         e.write_all(bytes).unwrap();
         e.finish().unwrap()
     }
-    let opt = options(Arc::new(usvg::fontdb::Database::new()), MAX_XML_DEPTH);
-    let resolve = &opt.image_href_resolver.resolve_data;
-    let svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"4\" height=\"4\"><rect width=\"4\" height=\"4\"/></svg>";
+    let svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"4\" height=\"4\"><rect width=\"4\" height=\"4\" fill=\"#ff0000\"/></svg>";
     let once = gz(svg);
-    assert!(resolve("image/svg+xml", Arc::new(once.clone()), &opt).is_some());
-    assert!(resolve("text/plain", Arc::new(once.clone()), &opt).is_some());
-
-    // Doubly gzip-compressed payload must be rejected rather than decompressed a second time by usvg.
     let twice = gz(&once);
-    assert!(resolve("image/svg+xml", Arc::new(twice.clone()), &opt).is_none());
-    assert!(resolve("text/plain", Arc::new(twice), &opt).is_none());
+    for mime in ["image/svg+xml", "text/plain"] {
+        let single = image_svg(&embedded_image(mime, &once));
+        let output = rasterize_bounded(single.as_bytes(), 1.0, 64).unwrap();
+        assert_eq!((output.rect.width(), output.rect.height()), (1, 1));
+        assert_eq!(output.get(0, 0), [1., 0., 0., 1.]);
+        let nested = image_svg(&embedded_image(mime, &twice));
+        let parsed = parse_bounded(nested.as_bytes(), 64).unwrap();
+        assert_eq!(omitted_image_count(parsed.image_usage), 1);
+        assert!(rasterize_bounded(nested.as_bytes(), 1.0, 64).is_err());
+        let imported = import_svg_bounded("nested.svg", nested.as_bytes(), 64).unwrap();
+        assert!(imported.warnings.iter().any(|warning| warning.contains("omitted")));
+    }
 }
 
 /// The outer gzip is size-limited by PhotoCraft. Its result must be XML, never another
@@ -1192,35 +1248,24 @@ fn fitting_latin1_retry_keeps_inflation_and_content_budgets_separate() {
     let decoded = craft_svg::svgz::decode(&latin1).unwrap();
     assert!(latin1.len() < budget / 2);
     assert!(decoded.len() > budget / 2 && decoded.len() < budget);
-    let state = Arc::new(Mutex::new(image_integrity::Integrity::new(MAX_RASTER_PIXELS)));
-    let resolver = Arc::new(craft_svg::tree::ImageResolver::new(tree_limits(MAX_XML_DEPTH, MAX_RASTER_PIXELS)));
-    let options = options_with_isolation(Arc::new(usvg::fontdb::Database::new()), MAX_XML_DEPTH, false, Arc::clone(&resolver), Arc::clone(&state));
     let valid = gzip(b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\"/>");
-    let damaged = Arc::new(valid[..valid.len() / 2].to_vec());
-    assert!((options.image_href_resolver.resolve_data)("image/svg+xml", damaged, &options).is_none());
-    assert_eq!(state.lock().unwrap().classification_bytes_left(), budget);
-
-    // Spend half the inflation allowance through an actual compressed retry.
-    // None of these retries may restore admission after the damaged source.
+    let damaged = embedded_image("image/svg+xml", &valid[..valid.len() / 2]);
     let mut primer = b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\"><!--".to_vec();
     let close = b"--></svg>";
     primer.resize(budget / 2 - close.len(), b' ');
     primer.extend_from_slice(close);
     assert_eq!(primer.len(), budget / 2);
-    assert!((options.image_href_resolver.resolve_data)("image/svg+xml", Arc::new(gzip(&primer)), &options).is_none());
-    {
-        let state = state.lock().unwrap();
-        assert_eq!(state.classification_bytes_left(), budget / 2);
-        assert_eq!(state.usage(resolver.usage()).unwrap().svg_resource_limit_images, 0);
-    }
-    assert!((options.image_href_resolver.resolve_data)("image/svg+xml", Arc::new(gzip(&latin1)), &options).is_none());
-    let state = state.lock().unwrap();
-    let usage = state.usage(resolver.usage()).unwrap();
-    assert_eq!(usage.svg_resource_limit_images, 0, "decoded content fits its independent original allowance");
-    assert_eq!(usage.svg_limit_images, 2, "both fitting retries remain omitted");
-    assert_eq!(usage.invalid_svg_images, 1, "the original corrupt source stays classified as unreadable");
-    assert_eq!(usage.embedded_svg_bytes, budget, "retry classification never refunds failed admission work");
-    assert_eq!(state.classification_bytes_left(), budget / 2 - latin1.len(), "only inflated Latin-1 bytes consume retry inflation work");
+    let primer = embedded_image("image/svg+xml", &gzip(&primer));
+    let fitting = embedded_image("image/svg+xml", &gzip(&latin1));
+    let source = image_svg(&format!("{damaged}{primer}{fitting}"));
+    let parsed = parse_bounded(source.as_bytes(), MAX_RASTER_PIXELS).unwrap();
+    assert_eq!(parsed.image_usage.svg_resource_limit_images, 0, "decoded content fits its independent original allowance");
+    assert_eq!(parsed.image_usage.svg_limit_images, 2, "both fitting retries remain omitted");
+    assert_eq!(parsed.image_usage.invalid_svg_images, 1, "the original corrupt source stays unreadable");
+    assert_eq!(parsed.image_usage.embedded_svg_bytes, budget, "retry classification never refunds failed admission work");
+    assert!(rasterize_bounded(source.as_bytes(), 1.0, MAX_RASTER_PIXELS).is_err(), "warningless pixels must remain strict");
+    let imported = import_svg_bounded("legacy-retry.svg", source.as_bytes(), MAX_RASTER_PIXELS).unwrap();
+    assert!(imported.warnings.iter().any(|warning| warning.contains("omitted")));
 }
 /// After a damaged image spent the budget, images refused for bytes are unpacked again to tell
 /// whether they are too large themselves, but at most one budget's worth in all: past that the
@@ -1249,31 +1294,23 @@ fn unpacking_images_again_adds_up_to_one_budget_however_many_there_are() {
     huge.resize(budget * 2, b' ');
     huge.extend_from_slice(b"</svg>");
     let huge = gzip(&huge);
-    let state = Arc::new(Mutex::new(image_integrity::Integrity::new(MAX_RASTER_PIXELS)));
-    let resolver = Arc::new(craft_svg::tree::ImageResolver::new(tree_limits(MAX_XML_DEPTH, MAX_RASTER_PIXELS)));
-    let options = options_with_isolation(Arc::new(usvg::fontdb::Database::new()), MAX_XML_DEPTH, false, Arc::clone(&resolver), Arc::clone(&state));
     let valid = gzip(b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\"/>");
-    let damaged = Arc::new(valid[..valid.len() / 2].to_vec());
-    assert!((options.image_href_resolver.resolve_data)("image/svg+xml", damaged, &options).is_none());
-    {
-        let state = state.lock().unwrap();
-        let usage = state.usage(resolver.usage()).unwrap();
-        assert_eq!(usage.invalid_svg_images, 1, "the actual damaged stream is omitted");
-        assert_eq!(usage.embedded_svg_bytes, budget, "failed work retains its original charge");
-        assert_eq!(usage.svg_resource_limit_images, 0, "corruption alone is not a resource overrun");
-        assert_eq!(state.classification_bytes_left(), budget, "classification has its own single shared allowance");
-    }
-    for index in 0..64 {
-        // Distinct references must share one classification pool, not acquire one
-        // pool per source or retry. This tail is never reached before the size cap.
-        let mut source = huge.clone();
-        source.push(index);
-        assert!((options.image_href_resolver.resolve_data)("image/svg+xml", Arc::new(source), &options).is_none());
-        let state = state.lock().unwrap();
-        let usage = state.usage(resolver.usage()).unwrap();
-        assert!(usage.svg_resource_limit_images > 0, "the body is too large independently of the failed-work charge");
-        assert_eq!(state.classification_bytes_left(), 0, "all 64 references share exactly one exhausted allowance");
-        assert_eq!(usage.embedded_svg_bytes, budget, "classification must not refund or multiply the original allowance");
+    let damaged = embedded_image("image/svg+xml", &valid[..valid.len() / 2]);
+    let parsed = parse_bounded(image_svg(&damaged).as_bytes(), MAX_RASTER_PIXELS).unwrap();
+    assert_eq!(parsed.image_usage.invalid_svg_images, 1);
+    assert_eq!(parsed.image_usage.embedded_svg_bytes, budget, "failed work retains its original charge");
+    assert_eq!(parsed.image_usage.svg_resource_limit_images, 0, "corruption alone is not a resource overrun");
+    for count in [1, 64] {
+        let mut children = damaged.clone();
+        for index in 0..count {
+            let mut source = huge.clone();
+            source.push(index);
+            children.push_str(&embedded_image("image/svg+xml", &source));
+        }
+        let source = image_svg(&children);
+        let error = parse_bounded(source.as_bytes(), MAX_RASTER_PIXELS).unwrap_err();
+        assert!(error.to_string().contains("byte or nesting budget"), "{error}");
+        assert!(rasterize_bounded(source.as_bytes(), 1.0, MAX_RASTER_PIXELS).is_err());
     }
 }
 

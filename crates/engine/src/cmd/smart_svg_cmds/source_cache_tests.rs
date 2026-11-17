@@ -182,7 +182,12 @@ fn local_svg_source_memo_evicts_and_oversize_entries_render_without_retention() 
     reset();
     let expected = draw(&mut sources, &encoded);
     assert_eq!(draw(&mut sources, &encoded), expected);
-    assert_eq!(count(), 2, "retained encoded bytes count even for a tiny output");
+    assert_eq!(count(), 1, "the immutable document owns encoded bytes; only rendered output belongs to the memo budget");
+    let mut output_too_large = WarningRenderSources::with_limits(&doc, tile - 1, 32);
+    reset();
+    let expected = draw(&mut output_too_large, &first);
+    assert_eq!(draw(&mut output_too_large, &first), expected);
+    assert_eq!(count(), 2, "oversize rendered output remains an uncached success");
     let mut disabled = WarningRenderSources::with_limits(&doc, 0, 0);
     assert_eq!(draw(&mut disabled, &first), draw(&mut WarningRenderSources::new(&doc), &first));
 }

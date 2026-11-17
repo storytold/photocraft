@@ -54,12 +54,6 @@ craft-tiff = { workspace = true }
 craft-crs = { workspace = true }
 craft-xml = { workspace = true }
 thiserror = { workspace = true }
-# Match the SVG renderer decoder backends when validating optional images.
-zune-core = { workspace = true }
-zune-jpeg = { workspace = true }
-gif = { workspace = true }
-image-webp = { workspace = true }
-data-url = { workspace = true }
 ttf-parser = "0.25.1"
 serde_json = { workspace = true }
 blake3 = { version = "1.8", default-features = false, features = ["pure"] }
@@ -75,6 +69,9 @@ craft-pdf = { workspace = true }
 kurbo = { version = "0.13", optional = true }
 
 [dev-dependencies]
+# Check selected SVG validator/renderer edges in this consumer lockfile.
+# Already resolved; MIT OR Apache-2.0.
+toml = "=1.1.6"
 lopdf = { version = "0.38", default-features = false }
 miniz_oxide = "0.9"
 crc32fast = "1.5"

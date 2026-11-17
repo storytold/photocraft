@@ -52,9 +52,13 @@ fn valid_twelve_bit_jpeg_rejected_by_the_svg_renderer_is_disclosed() {
     assert_eq!(decoded.dimensions(), (8, 8));
     // Match resvg's actual JPEG backend/output policy, rather than the broader
     // shared codec which also supports valid 12-bit and arithmetic JPEG files.
-    let options = zune_core::options::DecoderOptions::default().jpeg_set_out_colorspace(zune_core::colorspace::ColorSpace::RGBA);
-    let mut renderer_decoder = zune_jpeg::JpegDecoder::new_with_options(std::io::Cursor::new(jpeg.as_slice()), options);
-    assert!(renderer_decoder.decode().is_err(), "fixture must exercise the actual renderer capability gap");
+    let kind = usvg::ImageKind::JPEG(Arc::new(jpeg.clone()));
+    let mut pixels_left = MAX_RASTER_PIXELS;
+    assert_eq!(
+        draw::validate_raster(&kind, MAX_RASTER_PIXELS, &mut pixels_left),
+        Err(draw::RasterValidationFailure::Invalid),
+        "fixture must exercise the shared renderer capability gap"
+    );
     for mime in ["image/jpeg", "text/plain"] {
         let direct = drawing(&url(mime, &jpeg));
         assert_incomplete_image_is_disclosed(&direct);

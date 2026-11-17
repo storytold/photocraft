@@ -70,7 +70,12 @@ pub fn encode_source(doc: &Document) -> Result<Vec<u8>> {
 
 /// Decodes smart-object contents (a `.pcraft` bundle, PSD/PSB, or any flat image format).
 pub fn decode_source(file_name: &str, bytes: &[u8]) -> Result<Document> {
-    if photocraft_io::is_svg_input(file_name, bytes) {
+    decode_source_classified(file_name, bytes, photocraft_io::is_svg_input(file_name, bytes))
+}
+
+/// Reuse the central format decision made by this render operation.
+fn decode_source_classified(file_name: &str, bytes: &[u8], svg: bool) -> Result<Document> {
+    if svg {
         // This API has no warning channel. Stack/source caches and contents edits must not
         // turn a partial SVG import into silently complete smart-object contents.
         return photocraft_io::svg::import_svg_bounded_images_strict(file_name, bytes, 24_000_000)

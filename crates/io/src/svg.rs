@@ -24,9 +24,10 @@ use photocraft_raster::Surface;
 
 use crate::{ImportResult, IoError};
 
-mod data_href_validation;
-mod image_integrity;
-mod raster_validation;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod decoder_edges;
+#[cfg(test)]
+mod xml_reuse_tests;
 
 /// Hard caps on the memory resvg needs to draw a subtree, checked before it draws: craft-svg's
 /// `tree::draw`, within this crate's peak pixel budget.
@@ -377,37 +378,10 @@ fn parse_at_depth<T: Send>(depth: usize, isolated: bool, parse: impl FnOnce(bool
     }
 }
 
-/// Supplies bounded parsing options to direct resolver tests without changing their existing interface.
-#[cfg(test)]
-fn options(fontdb: Arc<usvg::fontdb::Database>, depth_left: usize) -> usvg::Options<'static> {
-    options_with_isolation(
-        fontdb,
-        depth_left,
-        false,
-        Arc::new(craft_svg::tree::ImageResolver::new(tree_limits(depth_left, MAX_RASTER_PIXELS))),
-        Arc::new(Mutex::new(image_integrity::Integrity::new(MAX_RASTER_PIXELS))),
-    )
-}
-
-/// Parse options for an untrusted drawing. `<image href>` resolves only `data:` URLs: a file path
-/// or relative href is never read, so opening an SVG cannot pull local files (`/etc/...`,
-/// `~/.ssh/...`) into the document. Embedded SVG images get no `<image>` resolution at all
-/// (`usvg` already blanks it for sub-SVGs). An embedded SVG may nest `depth_left` levels: it is
-/// parsed on top of the drawing's own recursion, so the two depths share [`MAX_XML_DEPTH`].
-fn options_with_isolation(
-    fontdb: Arc<usvg::fontdb::Database>,
-    _depth_left: usize,
-    _isolated: bool,
-    image_resolver: Arc<craft_svg::tree::ImageResolver>,
-    integrity: Arc<Mutex<image_integrity::Integrity>>,
-) -> usvg::Options<'static> {
-    usvg::Options {
-        resources_dir: None,
-        image_href_resolver: image_integrity::wrap(image_resolver.resolver(), integrity),
-        fontdb,
-        font_resolver: font_resolver(),
-        ..usvg::Options::default()
-    }
+/// Font and resource options for untrusted drawings. The shared validated context
+/// installs its own bounded data-only image resolver during conversion.
+fn parse_options(fontdb: Arc<usvg::fontdb::Database>) -> usvg::Options<'static> {
+    usvg::Options { resources_dir: None, fontdb, font_resolver: font_resolver(), ..usvg::Options::default() }
 }
 
 /// A parsed drawing.
@@ -437,10 +411,14 @@ fn tree_limits(depth: usize, raster_pixels: u64) -> craft_svg::tree::Limits {
         // PhotoCraft's stack guard counts open tags; the shared SVG preflight counts every
         // element, including a self-closing leaf. Allow that leaf at the same guarded depth.
         depth: depth.saturating_add(1),
-        // The shared default is intentionally conservative for general consumers. PhotoCraft
-        // already guards XML nesting and reference expansion against its 512-level parser
-        // budget, so pass that same explicit limit through instead of inheriting 256.
-        tree_depth: depth.saturating_add(1),
+        // Expanded references consume parser stack even when the source XML is
+        // shallow. Native parsing owns the larger worker; WASM must keep both
+        // reference expansion and lexical nesting within its inline allowance.
+        tree_depth: {
+            #[cfg(target_arch = "wasm32")]
+            let depth = depth.min(INLINE_XML_DEPTH);
+            depth.saturating_add(1)
+        },
         embedded_bytes: usize::try_from(MAX_BOUNDED_SVG_BYTES).unwrap_or(usize::MAX),
         embedded_depth: MAX_EMBEDDED_SVG_DEPTH,
         embedded_raster_pixels: raster_pixels.min(MAX_RASTER_PIXELS),
@@ -462,25 +440,20 @@ fn parse_with_image_limit(bytes: &[u8], fonts: fn() -> Arc<usvg::fontdb::Databas
     let has_text = xml.windows(4).any(|w| w == b"text");
     let fontdb = if has_text { fonts() } else { Arc::new(usvg::fontdb::Database::new()) };
     let fontless_text = has_text && fontdb.faces().next().is_none();
-    // Parse the already-bounded-and-decoded text with from_str, not from_data: from_data
+    // Convert the already-bounded-and-decoded text through checked XML, never from_data:
     // re-checks the gzip magic and would decompress a second time without our size limit if
     // the inflated content happened to start with a nested gzip stream.
     let text = std::str::from_utf8(&xml).map_err(|_| IoError::Svg("the SVG is not valid UTF-8".into()))?;
-    let image_resolver = Arc::new(craft_svg::tree::ImageResolver::new(tree_limits(MAX_XML_DEPTH, max_image_pixels)));
-    let integrity = Arc::new(Mutex::new(image_integrity::Integrity::new(max_image_pixels)));
-    image_resolver.set_document_depth(depth);
-    parse_at_depth(depth, false, |isolated| {
-        let opt = options_with_isolation(fontdb, MAX_XML_DEPTH.saturating_sub(depth), isolated, Arc::clone(&image_resolver), Arc::clone(&integrity));
+    let limits = tree_limits(MAX_XML_DEPTH, max_image_pixels);
+    let image_resolver = craft_svg::tree::ValidatedImageResolver::new(limits);
+    parse_at_depth(depth, false, |_isolated| {
         let tree = guarded_parse(|| {
-            data_href_validation::with_repaired_xml(text, &tree_limits(MAX_XML_DEPTH, max_image_pixels), |xml| {
-                usvg::Tree::from_xmltree(xml, &opt).map_err(|error| svg_parse_error(craft_svg::tree::Error::Parse(error.to_string())))
-            })
+            let checked = craft_svg::tree::preflight(text, &limits).map_err(svg_parse_error)?;
+            image_resolver.parse_preflight(checked, parse_options(fontdb)).map_err(svg_parse_error)
         })??;
-        // The resolver already rejects each over-budget optional image before decode.
-        // Ordinary Open keeps the usable outer drawing, as before the shared-parser
-        // migration; strict stored previews enforce completeness in their separate path.
-        let image_usage = integrity.lock().unwrap_or_else(PoisonError::into_inner).usage(image_resolver.usage())?;
-        Ok(Parsed { tree, fontless_text, image_usage })
+        // Ordinary Open retains usable artwork and discloses optional omissions.
+        // Strict stored previews enforce completeness in their separate path.
+        Ok(Parsed { tree, fontless_text, image_usage: image_resolver.usage() })
     })
     .map_err(IoError::from)
 }
@@ -528,8 +501,7 @@ struct ImageBudget {
     /// stored display preview must draw completely, or it isn't used.
     strict: bool,
     error: Option<String>,
-    resolver: Arc<craft_svg::tree::ImageResolver>,
-    integrity: Arc<Mutex<image_integrity::Integrity>>,
+    resolver: Arc<craft_svg::tree::ValidatedImageResolver>,
 }
 
 /// Record the first budget or decoding failure seen while usvg resolves images. Resolver
@@ -562,25 +534,28 @@ fn parse_image_bounded_with(
         return Err(IoError::Svg(format!("elements are nested more than {xml_left} levels deep")));
     }
     let shared_depth = MAX_XML_DEPTH.saturating_sub(xml_left).saturating_add(nesting);
-    budget.lock().unwrap_or_else(PoisonError::into_inner).resolver.set_document_depth(nesting);
-    parse_at_depth(shared_depth, isolated, |isolated| {
+    parse_at_depth(shared_depth, isolated, |_isolated| {
         let has_text = xml.windows(4).any(|w| w == b"text");
         let fontdb = if has_text { fonts() } else { Arc::new(usvg::fontdb::Database::new()) };
         if has_text && fontdb.faces().next().is_none() {
             budget.lock().unwrap_or_else(PoisonError::into_inner).fontless_text = true;
         }
         let resolver = Arc::clone(&budget.lock().unwrap_or_else(PoisonError::into_inner).resolver);
-        let integrity = Arc::clone(&budget.lock().unwrap_or_else(PoisonError::into_inner).integrity);
         let text = std::str::from_utf8(&xml).map_err(|_| IoError::Svg("the SVG is not valid UTF-8".into()))?;
-        let limits = tree_limits(xml_left, MAX_RASTER_PIXELS);
-        let opt = options_with_isolation(fontdb, xml_left, isolated, resolver, integrity);
+        let limits = resolver.limits();
         let tree = guarded_parse(|| {
-            data_href_validation::with_repaired_xml(text, &limits, |xml| {
-                usvg::Tree::from_xmltree(xml, &opt).map_err(|error| svg_parse_error(craft_svg::tree::Error::Parse(error.to_string())))
-            })
+            // Private callers may reserve less stack than the context's outer
+            // policy. Check expanded references too; lexical depth alone misses
+            // a shallow chain of <use> elements. Public imports use the full
+            // allowance and keep the single checked-DOM conversion path.
+            if xml_left < MAX_XML_DEPTH {
+                craft_svg::tree::preflight(text, &tree_limits(xml_left, limits.embedded_raster_pixels)).map_err(svg_parse_error)?;
+            }
+            let checked = craft_svg::tree::preflight(text, &limits).map_err(svg_parse_error)?;
+            resolver.parse_preflight(checked, parse_options(fontdb)).map_err(svg_parse_error)
         })??;
         let mut counter = budget.lock().unwrap_or_else(PoisonError::into_inner);
-        let usage = counter.integrity.lock().unwrap_or_else(PoisonError::into_inner).usage(counter.resolver.usage())?;
+        let usage = counter.resolver.usage();
         counter.pixels = counter.pixels.saturating_sub(usage.raster_pixels);
         counter.xml_bytes = counter.xml_bytes.saturating_sub(u64::try_from(usage.embedded_svg_bytes).unwrap_or(u64::MAX));
         counter.svg_images = usage.embedded_svg_count as u64;
@@ -716,18 +691,13 @@ fn parse_bounded_work_with(bytes: &[u8], max_pixels: u64, strict: bool, fonts: f
         fontless_text: false,
         strict,
         error: None,
-        resolver: Arc::new(craft_svg::tree::ImageResolver::new(tree_limits(MAX_XML_DEPTH, max_pixels.min(MAX_RASTER_PIXELS)))),
-        integrity: Arc::new(Mutex::new(image_integrity::Integrity::new(max_pixels))),
+        resolver: Arc::new(craft_svg::tree::ValidatedImageResolver::new(tree_limits(MAX_XML_DEPTH, max_pixels.min(MAX_RASTER_PIXELS)))),
     }));
     let tree = parse_image_bounded_with(bytes, budget.clone(), MAX_XML_DEPTH, fonts, false)?;
     let counter = budget.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let decoded = max_pixels.min(MAX_RASTER_PIXELS).saturating_sub(counter.pixels);
     Ok(ParsedWork {
-        parsed: Parsed {
-            tree,
-            fontless_text: counter.fontless_text,
-            image_usage: counter.integrity.lock().unwrap_or_else(PoisonError::into_inner).usage(counter.resolver.usage())?,
-        },
+        parsed: Parsed { tree, fontless_text: counter.fontless_text, image_usage: counter.resolver.usage() },
         svg_images: counter.svg_images,
         svg_chain: counter.svg_chain,
         decoded,
