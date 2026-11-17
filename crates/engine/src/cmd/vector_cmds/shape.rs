@@ -80,6 +80,7 @@ fn live_kind(l: &LiveShape) -> &'static str {
         LiveShape::Ellipse { .. } => "ellipse",
         LiveShape::Polygon { star_ratio, .. } if *star_ratio < 1.0 => "star",
         LiveShape::Polygon { .. } => "polygon",
+        LiveShape::Triangle { .. } => "triangle",
         LiveShape::Line { .. } | LiveShape::ArrowLine { .. } => "line",
     }
 }
@@ -234,6 +235,7 @@ pub fn transform_shape(sh: &mut ShapeLayer, a: &Affine) {
                 LiveShape::Polygon { rect, sides, star_ratio, corner_radius } => {
                     LiveShape::Polygon { rect: r(rect), sides, star_ratio, corner_radius: corner_radius * m0.min(m3) }
                 }
+                LiveShape::Triangle { rect, corner_radius } => LiveShape::Triangle { rect: r(rect), corner_radius: corner_radius * m0.min(m3) },
                 LiveShape::ArrowLine { from, to, weight, start, end, width, length, concavity } => {
                     let (dx, dy) = (to[0] - from[0], to[1] - from[1]);
                     let old_len = dx.hypot(dy);
@@ -426,6 +428,7 @@ fn default_name(kind: &str) -> &'static str {
         "roundedRect" | "roundRect" => "Rounded Rectangle",
         "ellipse" => "Ellipse",
         "polygon" => "Polygon",
+        "triangle" => "Triangle",
         "star" => "Star",
         "line" => "Line",
         _ => "Shape",
@@ -545,13 +548,40 @@ pub(super) fn path_to_shape(s: &mut Session, p: &Value) -> Result<Value> {
     shape_info(s, id)
 }
 
+/// The History name of a `shape.edit` of layer `id`: an edit of one arrowhead setting of a line
+/// is named after it, "Change Arrowhead End" (#13267). The reference application was measured for
+/// End and Width; Start, Length and Concavity follow the same pattern. Rounding a live triangle
+/// alone is "Change Rounded Triangle" (#13354); a three-sided Polygon is not a Triangle and keeps
+/// "Edit Shape" until the Polygon naming issue lands. Any other edit, several keys at once, or
+/// these keys sent to another shape stay "Edit Shape".
+fn edit_history_name(s: &Session, id: LayerId, p: &Value) -> &'static str {
+    const EDIT: &str = "Edit Shape";
+    let live = s.active().and_then(|st| st.doc.layer(id)).and_then(|l| match &l.content {
+        LayerContent::Shape(sh) => sh.live.as_ref(),
+        _ => None,
+    });
+    let Some(o) = p.as_object() else { return EDIT };
+    let mut changed = o.keys().map(String::as_str).filter(|k| !matches!(*k, "layer" | "coalesce") && !k.starts_with("__"));
+    let line = matches!(live, Some(LiveShape::Line { .. } | LiveShape::ArrowLine { .. }));
+    match (changed.next(), changed.next()) {
+        (Some("arrowStart"), None) if line => "Change Arrowhead Start",
+        (Some("arrowEnd"), None) if line => "Change Arrowhead End",
+        (Some("arrowWidth"), None) if line => "Change Arrowhead Width",
+        (Some("arrowLength"), None) if line => "Change Arrowhead Length",
+        (Some("arrowConcavity"), None) if line => "Change Arrowhead Concavity",
+        (Some("cornerRadius"), None) if matches!(live, Some(LiveShape::Triangle { .. })) => "Change Rounded Triangle",
+        _ => EDIT,
+    }
+}
+
 pub(super) fn shape_edit(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "shape.edit";
     let id = layer_id(s, p)?;
     let fg = s.tools.foreground;
     let fgc = Color::rgba(fg[0], fg[1], fg[2], fg[3]);
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
-    with_shape(s, id, "Edit Shape", |sh, layer| {
+    let label = edit_history_name(s, id, p);
+    with_shape(s, id, label, |sh, layer| {
         if let Some(v) = p.get("path") {
             sh.path = parse_path(v).map_err(|e| bad(CMD, e))?;
             sh.live = None;
@@ -785,6 +815,14 @@ pub(super) fn selection_to_shape(s: &mut Session, p: &Value) -> Result<Value> {
     }
     shape_create(s, &q)
 }
+
+#[cfg(test)]
+#[path = "triangle_layer_name_tests.rs"]
+mod triangle_layer_name_tests;
+
+#[cfg(test)]
+#[path = "triangle_box_geometry_tests.rs"]
+mod triangle_box_geometry_tests;
 
 #[cfg(test)]
 mod arrow_affine_regression_tests {
