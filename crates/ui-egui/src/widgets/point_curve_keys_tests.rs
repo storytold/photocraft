@@ -45,6 +45,20 @@ fn key(h: &mut Harness<'_, PhotocraftApp>, key: Key, mods: Modifiers) {
     h.run_steps(3);
 }
 
+/// `times` presses and releases of `key`, all in one frame and with no frame drawn after it.
+/// (`Harness::event` would give each event a frame of its own.)
+fn presses_in_one_frame(h: &mut Harness<'_, PhotocraftApp>, key: Key, mods: Modifiers, times: usize) {
+    let events = &mut h.input_mut().events;
+    events.push(egui::Event::ModifiersChanged(mods));
+    for _ in 0..times {
+        for pressed in [true, false] {
+            events.push(egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: mods });
+        }
+    }
+    events.push(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.step();
+}
+
 fn click(h: &mut Harness<'_, PhotocraftApp>, at: Pos2) {
     h.hover_at(at);
     h.run_steps(1);
@@ -132,4 +146,48 @@ fn ctrl_tab_in_the_properties_graph_steps_points_only_while_one_is_selected() {
     assert!(doc.doc.layer(layer).is_some(), "Delete in the focused graph doesn't delete the layer");
     key(&mut h, Key::Tab, ctrl());
     assert_eq!(active(&h), Some(0), "with no point selected Ctrl+Tab switches documents");
+}
+
+/// Properties' Curves graph with points at 64 and 192 and 64 selected; returns the graph's
+/// memory id.
+fn properties_graph_with_64_selected(h: &mut Harness<'_, PhotocraftApp>) -> egui::Id {
+    let layer = h.state().session.active().unwrap().active_layer.unwrap();
+    let mem = egui::Id::unique(("adjust-layer", layer.0));
+    let graph = h.ctx.data(|d| d.get_temp::<Rect>(mem.with("curves-graph"))).expect("curves graph drawn");
+    for v in [[64.0, 64.0], [192.0, 192.0], [64.0, 64.0]] {
+        click(h, at(graph, v));
+    }
+    assert_eq!(properties_selected(h, mem), Some(1), "64 is selected");
+    mem
+}
+
+fn properties_selected(h: &Harness<'_, PhotocraftApp>, mem: egui::Id) -> Option<usize> {
+    h.ctx.data(|d| d.get_temp::<CurvesEditorState>(mem.with("curves"))).unwrap_or_default().gesture.selected
+}
+
+/// Delete on an end point gives Ctrl+Tab back to the documents in the same frame: the next
+/// press switches documents even when no other frame is drawn in between.
+#[test]
+fn ctrl_tab_switches_documents_right_after_delete_deselects_an_end_point() {
+    let mut h = app(true);
+    let mem = properties_graph_with_64_selected(&mut h);
+    key(&mut h, Key::Tab, ctrl() | Modifiers::SHIFT);
+    assert_eq!(properties_selected(&h, mem), Some(0), "the black point is selected");
+    presses_in_one_frame(&mut h, Key::Delete, Modifiers::NONE, 1);
+    assert_eq!(properties_selected(&h, mem), None, "Delete deselects the end point");
+    presses_in_one_frame(&mut h, Key::Tab, ctrl(), 1);
+    h.run_steps(3);
+    assert_eq!(active(&h), Some(0), "the very next Ctrl+Tab switches documents");
+}
+
+/// Two presses that land in one frame step two points, both ways.
+#[test]
+fn two_ctrl_tab_presses_in_one_frame_step_two_points() {
+    let mut h = app(true);
+    let mem = properties_graph_with_64_selected(&mut h);
+    presses_in_one_frame(&mut h, Key::Tab, ctrl(), 2);
+    assert_eq!(properties_selected(&h, mem), Some(3), "64 → 192 → the white point");
+    presses_in_one_frame(&mut h, Key::Tab, ctrl() | Modifiers::SHIFT, 2);
+    h.run_steps(3);
+    assert_eq!((properties_selected(&h, mem), active(&h)), (Some(1), Some(1)), "back to 64, same document");
 }

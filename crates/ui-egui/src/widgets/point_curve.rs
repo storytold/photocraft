@@ -167,18 +167,18 @@ pub fn interact(ui: &mut Ui, resp: &Response, graph: Rect, pts: &mut Vec<[f32; 2
     // point, wrapping around; while a point is selected they don't switch documents.
     if resp.has_focus() {
         crate::shortcut_dispatch::claim_delete_keys(ui.ctx(), resp.id);
-        crate::shortcut_dispatch::claim_ctrl_tab(ui.ctx(), state.selected.is_some().then_some(resp.id));
     }
     if resp.has_focus()
         && let Some(i) = state.selected.filter(|i| *i < pts.len())
     {
-        // Ctrl+Shift+Tab first: the Ctrl+Tab pattern also matches it.
-        let back = ui.input_mut(|inp| inp.consume_key(Modifiers::CTRL | Modifiers::SHIFT, Key::Tab));
-        let next = !back && ui.input_mut(|inp| inp.consume_key(Modifiers::CTRL, Key::Tab));
+        // Ctrl+Shift+Tab first: the Ctrl+Tab pattern also matches it. Every press in the frame
+        // counts, so two quick presses step two points.
+        let back = ui.input_mut(|inp| inp.count_and_consume_key(Modifiers::CTRL | Modifiers::SHIFT, Key::Tab));
+        let next = ui.input_mut(|inp| inp.count_and_consume_key(Modifiers::CTRL, Key::Tab));
         let del = ui.input_mut(|inp| inp.consume_key(Modifiers::NONE, Key::Delete) || inp.consume_key(Modifiers::NONE, Key::Backspace));
-        if back || next {
+        if back > 0 || next > 0 {
             let n = pts.len();
-            state.selected = Some(if next { (i + 1) % n } else { (i + n - 1) % n });
+            state.selected = Some((i + next % n + n - back % n) % n);
         } else if del {
             if delete(pts, i) {
                 e.changed = true;
@@ -193,13 +193,19 @@ pub fn interact(ui: &mut Ui, resp: &Response, graph: Rect, pts: &mut Vec<[f32; 2
                     d = [d[0] + dx * step, d[1] + dy * step];
                 }
             }
-            let Some(point) = pts.get(i) else { return e };
-            let to = [point[0] + d[0], point[1] + d[1]];
-            if d != [0.0, 0.0] && move_to(pts, i, to) {
-                e.changed = true;
-                e.commit = true;
+            if let Some(point) = pts.get(i) {
+                let to = [point[0] + d[0], point[1] + d[1]];
+                if d != [0.0, 0.0] && move_to(pts, i, to) {
+                    e.changed = true;
+                    e.commit = true;
+                }
             }
         }
+    }
+    // After the keys, so the claim follows this frame's selection: once Delete deselects an end
+    // point, the next Ctrl+Tab switches documents even if no frame is drawn in between.
+    if resp.has_focus() {
+        crate::shortcut_dispatch::claim_ctrl_tab(ui.ctx(), state.selected.is_some().then_some(resp.id));
     }
 
     e
