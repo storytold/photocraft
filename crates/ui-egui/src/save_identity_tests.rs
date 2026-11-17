@@ -553,7 +553,13 @@ fn finish_browser_open(app: &mut PhotocraftApp, name: &str, writes: &RefCell<Vec
         assert!(std::time::Instant::now() < deadline, "{name}: Open did not complete: {}", app.ui.status);
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
-    assert!(!app.ui.status_error, "{name}: Open failed: {}", app.ui.status);
+    // The specification-authored empty XCF is accepted with a visible warning.
+    // The status attention flag also covers warnings; Notice.error classifies failures.
+    assert!(app.ui.notices.iter().all(|notice| !notice.error), "{name}: no failed-Open notice");
+    assert!(
+        app.ui.notices.iter().any(|notice| notice.lines.iter().any(|line| line == "the XCF file has no layers")),
+        "{name}: preserve the accepted empty-layer warning"
+    );
     assert!(app.held_opens.is_empty() && app.historical_opens.is_empty(), "{name}: no unanswered Open prompt remains");
     if let Some(pending_job) = pending_job {
         assert!(app.session.jobs_with_recent().iter().any(|job| job.id == pending_job && job.state == "done"), "{name}: tracked Open completed successfully");
