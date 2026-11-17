@@ -115,7 +115,7 @@ Also shipped: Traditional Chinese, Russian (every dynamic label, [notes](docs/lo
 | 2 | Performance budgets: the 22 over-budget scenarios and the 150-layer GPU crash | 200–350 h |
 | 3 | User bug backlog to under 100 open | 250–400 h |
 | 4 | Brush and transform feel (brush-parity, ui-parity rows) | 160–290 h |
-| 5 | The 12 missing tools | 60–100 h |
+| 5 | The missing tools: 0 fully missing (all 68 toolbox tools present, 1 partial: the Art History Brush) | 60–100 h |
 
 Detail and the next releases: [docs/roadmap.md](docs/roadmap.md).
 
