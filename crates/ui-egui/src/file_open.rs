@@ -205,6 +205,29 @@ pub fn display_name(path: &str) -> String {
     std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).filter(|n| !n.is_empty()).unwrap_or_else(|| path.to_string())
 }
 
+// Named PSD/PSB/templates deliberately keep the PSD parser's errors for direct callers. Only
+// its missing file-header signature means unrecognized content; damaged internal signatures
+// (8BIM, etc.) and a recognized 8BPS file's other parse errors must retain their reasons.
+fn unrecognized_open_reason(reason: &str) -> bool {
+    if reason == "codec: unrecognized image format" {
+        return true;
+    }
+    let Some(signature) = reason.strip_prefix("PSD: invalid signature [").and_then(|s| s.strip_suffix("], expected 8BPS")) else {
+        return false;
+    };
+    let mut values = signature.split(", ");
+    let mut found = [0u8; 4];
+    for byte in &mut found {
+        let Some(text) = values.next() else { return false };
+        let Ok(value) = text.parse::<u8>() else { return false };
+        if text != value.to_string() {
+            return false;
+        }
+        *byte = value;
+    }
+    values.next().is_none() && &found != b"8BPS"
+}
+
 impl PhotocraftApp {
     /// Open `bytes` read from the file at `path`: the document is named after the file, keeps
     /// `path` for File › Save unless it is a derivative preview, and `path` goes to the top of Open Recent. Returns the import
@@ -375,7 +398,7 @@ impl PhotocraftApp {
             .or_else(|| err.strip_prefix(&source_prefix))
             .or_else(|| err.strip_prefix(&name_prefix))
             .unwrap_or(err);
-        let msg = if reason == "codec: unrecognized image format" {
+        let msg = if unrecognized_open_reason(reason) {
             crate::i18n::fmt(tl!("Could not open \"{name}\" because PhotoCraft does not recognize this type of file."), &[("name", &name)])
         } else {
             let template = "Couldn't open {name}: {error}";

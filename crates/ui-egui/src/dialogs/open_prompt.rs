@@ -502,8 +502,13 @@ pub(crate) fn answer_memory(app: &mut PhotocraftApp, accept: bool) -> Result<Val
             Ok(r)
         }
         Err(err) => {
-            app.ui.status = err.clone();
-            app.ui.status_error = true;
+            let source = path.as_deref().unwrap_or(&name);
+            // A template may have reserved an Untitled name; presentation names its read source,
+            // while the returned error keeps the approval command's original wrapper.
+            let prefix = format!("{name}: ");
+            let error = err.strip_prefix(&prefix).unwrap_or(&err);
+            let reason = if name != crate::file_open::display_name(source) { error.strip_prefix(&prefix).unwrap_or(error) } else { error };
+            app.open_failed(source, reason);
             crate::jobs_ui::end_batch(app);
             advance(app);
             crate::jobs_ui::end_batch(app);

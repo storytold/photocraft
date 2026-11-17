@@ -45,12 +45,13 @@ fn unrecognized_and_mislabeled_files_show_the_exact_alert_without_opening_docume
         ("notes.txt", b"ordinary text".to_vec()),
         ("broken.png", b"ordinary text".to_vec()),
         ("zz-bad.png", (1..=17).collect()),
+        ("unknown.psd", b"ordinary text".to_vec()),
+        ("unknown.psb", b"ordinary text".to_vec()),
         ("unknown.psdt", b"ordinary text".to_vec()),
     ] {
         let mut app = app_with(Some(FileDialogAnswer::Contents(name.into(), bytes)));
         pick(&mut app);
-        let wanted =
-            if name == "unknown.psdt" { format!("Couldn't open {name}: PSD: invalid signature [111, 114, 100, 105], expected 8BPS") } else { expected(name) };
+        let wanted = expected(name);
         assert_eq!(messages(&app), [wanted.as_str()]);
         assert!(app.session.documents().is_empty());
         assert!(app.ui.recent_files.is_empty());
@@ -340,5 +341,36 @@ fn smart_object_open_read_failures_retain_the_read_source_without_a_save_or_rece
         assert!(app.jobs.opens.iter().all(|tab| tab.error_source.as_deref() == Some(source.as_str())));
         finish_read_failure(&mut app, &source, &reason, &format!("{source}: {reason}"));
         assert!(app.ui.recent_files.is_empty());
+    }
+}
+
+#[test]
+fn recognized_psd_header_failures_keep_their_diagnostic_and_raw_error() {
+    // The file signature is recognized: a bad version is a PSD error, not a codec miss.
+    let bytes = b"8BPS\0\0".to_vec();
+    let mut app = app_with(Some(FileDialogAnswer::Contents("corrupt.psdt".into(), bytes.clone())));
+    pick(&mut app);
+    assert_eq!(messages(&app), ["Couldn't open corrupt.psdt: PSD: unsupported file version 0"]);
+    assert!(app.session.documents().is_empty());
+    assert!(app.ui.recent_files.is_empty());
+    assert!(app.ui.notices.is_empty());
+    let mut direct = app_with(None);
+    assert_eq!(direct.open_bytes("corrupt.psdt", &bytes).unwrap_err(), "corrupt.psdt: PSD: unsupported file version 0");
+    assert!(direct.ui.dialogs.is_empty());
+
+    // A damaged internal block or an unrelated/malformed diagnostic retains its reason.
+    for reason in [
+        "PSD: invalid signature [0, 0, 0, 0], expected 8BIM (layer blend mode)",
+        "PSD: invalid signature [56, 66, 80, 83], expected 8BPS",
+        "PSD: invalid signature [0, 0, 0], expected 8BPS",
+        "PSD: invalid signature [256, 0, 0, 0], expected 8BPS",
+        "PSD: invalid signature [+1, 0, 0, 0], expected 8BPS",
+        "PSD: invalid signature [00, 0, 0, 0], expected 8BPS",
+        "PSD: invalid signature [0, 0, 0, 0], expected 8BPS; keep this detail",
+        "embedded PSD: invalid signature [0, 0, 0, 0], expected 8BPS",
+    ] {
+        let mut app = app_with(None);
+        app.open_failed("corrupt.psdt", reason);
+        assert_eq!(messages(&app), [format!("Couldn't open corrupt.psdt: {reason}")]);
     }
 }
