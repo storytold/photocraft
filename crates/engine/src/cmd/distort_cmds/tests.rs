@@ -415,6 +415,53 @@ fn liquify_with_a_far_off_stroke_point_returns() {
     }
 }
 
+/// Forward Warp from the left edge into the canvas, pushing the left columns right.
+fn push_in_from_left() -> Value {
+    json!({"strokes": [{"tool": "forwardWarp", "size": 40, "density": 100, "points": [[0, 30], [16, 30]]}]})
+}
+
+#[test]
+fn liquify_leaves_transparency_where_an_edge_is_pushed_in() {
+    for depth in [8u64, 16, 32] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 80, "height": 60, "depth": depth})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.edit("fill", |doc, active| {
+            doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(0, 0, 80, 60), &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+        s.tools.background = [0.0, 0.0, 1.0, 1.0];
+        s.execute(LIQUIFY, push_in_from_left()).unwrap();
+        let after = active_surface(&s);
+        assert!(after.pixel(0, 30)[3] < 0.05, "{depth}: transparent, not the edge pixel repeated: {:?}", after.pixel(0, 30));
+        assert_eq!(after.pixel(0, 2), vec![1.0, 0.0, 0.0, 1.0], "{depth}: untouched away from the stroke");
+    }
+}
+
+#[test]
+fn liquify_fills_a_pushed_in_background_edge_with_the_background_colour() {
+    for depth in [8u64, 16, 32] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 80, "height": 60, "depth": depth})).unwrap();
+        let id = s.active().unwrap().active_layer.unwrap();
+        assert!(s.active().unwrap().doc.is_background(id));
+        s.edit("fill", |doc, _| {
+            doc.layer_mut(id).unwrap().surface_mut().unwrap().fill_rect(Rect::new(0, 0, 80, 60), &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+        s.tools.background = [0.0, 0.0, 1.0, 1.0];
+        s.execute(LIQUIFY, push_in_from_left()).unwrap();
+        let st = s.active().unwrap();
+        assert!(st.doc.is_background(id), "{depth}: still the Background");
+        let after = active_surface(&s);
+        let edge = after.pixel(0, 30);
+        assert!(edge[2] > 0.95 && edge[0] < 0.05 && edge[3] > 0.99, "{depth}: the background colour fills the edge: {edge:?}");
+        assert_eq!(after.pixel(0, 2), vec![1.0, 0.0, 0.0, 1.0], "{depth}: untouched away from the stroke");
+    }
+}
+
 /// The three distortions on the active smart object, each with a visible change.
 fn smart_distortions() -> [(&'static str, Value); 3] {
     let q = [[10.0, 10.0], [60.0, 10.0], [60.0, 40.0], [10.0, 40.0]];

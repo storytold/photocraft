@@ -16,8 +16,10 @@
 //!
 //! [`apply_liquify`] upsamples the field with Catmull-Rom (bicubic) per pixel and samples the
 //! source (premultiplied, bicubic), tile by tile in parallel; tiles where the field is zero are
-//! copied untouched. [`ProxyImage::render`] is the cheap preview path: bilinear field and
-//! bilinear source on a downsampled RGBA copy, re-rendered only where a dab changed things.
+//! copied untouched. Where the field pulls from past the canvas the result is transparent (or,
+//! on a layer without transparency, a fill colour: [`PastBounds`]), not the edge stretched.
+//! [`ProxyImage::render`] is the cheap preview path: bilinear field and bilinear source on a
+//! downsampled RGBA copy, re-rendered only where a dab changed things.
 
 use crate::par;
 use photocraft_geom::Rect;
@@ -838,10 +840,31 @@ fn cubic_taps(g: f64, len: usize) -> [(usize, f64); 4] {
     std::array::from_fn(|k| ((i - 1 + k as isize).clamp(0, len as isize - 1) as usize, weights[k]))
 }
 
-/// Resamples `src` through the field: inside `field.bounds` each pixel shows the source at
-/// `p + d(p)` (bicubic field, bicubic premultiplied source, edge pixels repeat past the field
-/// bounds); everything outside the bounds is kept. Same format as `src`.
+/// What [`apply_liquify_past`] reads where the field pulls pixels from past its bounds (the
+/// canvas): what fills the space the image was pushed away from.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PastBounds<'a> {
+    /// The nearest pixel inside the bounds, repeated.
+    Edge,
+    /// One pixel in the source's format, straight (not premultiplied): all zeros for
+    /// transparency, or an opaque colour where the layer can't hold transparency (the
+    /// Background takes the background colour).
+    Pixel(&'a [f32]),
+}
+
+/// [`apply_liquify_past`] with transparency past the bounds, as the reference application
+/// leaves where an edge is pushed in. A source without alpha can't show that, so there the edge
+/// pixels repeat; give it [`PastBounds::Pixel`] to fill with a colour instead.
 pub fn apply_liquify(src: &Surface, field: &LiquifyField) -> Surface {
+    let clear = [0.0f32; 8];
+    let past = if src.format().alpha { PastBounds::Pixel(&clear) } else { PastBounds::Edge };
+    apply_liquify_past(src, field, past)
+}
+
+/// Resamples `src` through the field: inside `field.bounds` each pixel shows the source at
+/// `p + d(p)` (bicubic field, bicubic premultiplied source, `past` beyond the field bounds);
+/// everything outside the bounds is kept. Same format as `src`.
+pub fn apply_liquify_past(src: &Surface, field: &LiquifyField, past: PastBounds) -> Surface {
     let fmt = src.format();
     let n = fmt.channels();
     let alpha = fmt.alpha;
@@ -850,6 +873,23 @@ pub fn apply_liquify(src: &Surface, field: &LiquifyField) -> Surface {
     if field.is_identity() || b.is_empty() {
         return out;
     }
+    // The pixel read past the bounds, premultiplied like the source reads; `None` repeats the edge.
+    let fill: Option<[f32; 8]> = match past {
+        PastBounds::Edge => None,
+        PastBounds::Pixel(p) => {
+            let mut f = [0.0f32; 8];
+            for (d, s) in f.iter_mut().zip(p).take(n) {
+                *d = if s.is_finite() { s.clamp(0.0, 1.0) } else { 0.0 };
+            }
+            if alpha {
+                let al = f[n - 1];
+                for v in &mut f[..n - 1] {
+                    *v *= al;
+                }
+            }
+            Some(f)
+        }
+    };
     // A 1D Catmull-Rom stencil's absolute weights sum to at most 5/4, so the 2D
     // interpolated displacement can reach 25/16 of the largest nodal displacement.
     let maxd = ((f64::from(field.max_displacement()) * (25.0 / 16.0)).ceil() as i32).saturating_add(3);
@@ -900,10 +940,11 @@ pub fn apply_liquify(src: &Surface, field: &LiquifyField) -> Surface {
         }
         let foot =
             Rect::new(fx0.floor() as i32 - 3, fy0.floor() as i32 - 3, fx1.ceil() as i32 + 3, fy1.ceil() as i32 + 3).intersect(&t.inflate(maxd)).intersect(&b);
-        if foot.is_empty() {
+        // Every read past the bounds is the fill, so a tile pulled wholly from there still renders.
+        if foot.is_empty() && fill.is_none() {
             return None;
         }
-        let mut px = src.read_region(foot);
+        let mut px = if foot.is_empty() { Vec::new() } else { src.read_region(foot) };
         if alpha {
             for p in px.chunks_exact_mut(n) {
                 let al = p[n - 1];
@@ -913,10 +954,19 @@ pub fn apply_liquify(src: &Surface, field: &LiquifyField) -> Surface {
             }
         }
         let fw = foot.width() as usize;
-        let at = |x: i32, y: i32| -> usize {
+        let fill = fill.as_ref().map(|f| &f[..n]);
+        // A tap past the bounds reads the fill; any other is clamped to the footprint (which holds
+        // every tap inside the bounds).
+        let tap = |x: i32, y: i32| -> Option<&[f32]> {
+            if let Some(f) = fill
+                && (foot.is_empty() || x < b.x0 || x >= b.x1 || y < b.y0 || y >= b.y1)
+            {
+                return Some(f);
+            }
             let x = x.clamp(foot.x0, foot.x1 - 1);
             let y = y.clamp(foot.y0, foot.y1 - 1);
-            ((y - foot.y0) as usize * fw + (x - foot.x0) as usize) * n
+            let o = ((y - foot.y0) as usize * fw + (x - foot.x0) as usize) * n;
+            px.get(o..o + n)
         };
         let snap = |t: f64| if (t - t.round()).abs() < 1e-7 { t.round() } else { t };
         let mut outp = vec![0.0f32; w * h * n];
@@ -935,9 +985,9 @@ pub fn apply_liquify(src: &Surface, field: &LiquifyField) -> Surface {
                         if k == 0.0 {
                             continue;
                         }
-                        let o = at(ix - 1 + i as i32, iy - 1 + j as i32);
-                        for (c, s) in acc.iter_mut().enumerate().take(n) {
-                            *s += f64::from(px[o + c]) * k;
+                        let Some(p) = tap(ix - 1 + i as i32, iy - 1 + j as i32) else { continue };
+                        for (s, v) in acc.iter_mut().zip(p) {
+                            *s += f64::from(*v) * k;
                         }
                     }
                 }
@@ -1028,7 +1078,7 @@ impl ProxyImage {
     }
 
     /// Renders proxy pixels `r` (proxy coordinates) through the field into `out` (premultiplied
-    /// RGBA8, `w × h`): bilinear field, bilinear source.
+    /// RGBA8, `w × h`): bilinear field, bilinear source, transparent past the proxy.
     pub fn render(&self, field: &LiquifyField, r: [usize; 4], out: &mut [[u8; 4]]) {
         let [x0, y0, x1, y1] = [r[0].min(self.w), r[1].min(self.h), r[2].min(self.w), r[3].min(self.h)];
         if x0 >= x1 || y0 >= y1 {
@@ -1044,7 +1094,12 @@ impl ProxyImage {
                 let (u, v) = ((px + d[0] - bx) / s - 0.5, (py + d[1] - by) / s - 0.5);
                 let (iu, iv) = (u.floor(), v.floor());
                 let (fu, fv) = ((u - iu) as f32, (v - iv) as f32);
-                let at = |x: f64, y: f64| self.px[(y.clamp(0.0, (self.h - 1) as f64) as usize) * self.w + x.clamp(0.0, (self.w - 1) as f64) as usize];
+                let at = |x: f64, y: f64| {
+                    if x < 0.0 || y < 0.0 || x >= self.w as f64 || y >= self.h as f64 {
+                        return [0.0; 4];
+                    }
+                    self.px.get(y as usize * self.w + x as usize).copied().unwrap_or([0.0; 4])
+                };
                 let (a, b, c, e) = (at(iu, iv), at(iu + 1.0, iv), at(iu, iv + 1.0), at(iu + 1.0, iv + 1.0));
                 *slot = std::array::from_fn(|k| {
                     let v = (a[k] * (1.0 - fu) + b[k] * fu) * (1.0 - fv) + (c[k] * (1.0 - fu) + e[k] * fu) * fv;
@@ -1064,9 +1119,10 @@ impl ProxyImage {
     }
 
     /// Renders a document-pixel-resolution preview for `region` into the corresponding part of
-    /// `out`, whose dimensions cover `bounds`. Source reads are limited to the dirty region plus
-    /// the displacement range that can affect it, so zoomed-in brush updates do not flatten the
-    /// whole layer. `source_scratch` is reused by the caller between updates.
+    /// `out`, whose dimensions cover `bounds`; reads past the field bounds are transparent.
+    /// Source reads are limited to the dirty region plus the displacement range that can affect
+    /// it, so zoomed-in brush updates do not flatten the whole layer. `source_scratch` is reused
+    /// by the caller between updates.
     pub fn render_full_resolution(
         src: &Surface,
         field: &LiquifyField,
@@ -1104,7 +1160,7 @@ impl ProxyImage {
         }
 
         // Source coordinates are pixel centres. Add one sample on each side for bilinear
-        // interpolation, then clamp to the document just as the regular proxy renderer does.
+        // interpolation, then clamp to the document: reads past it are transparent.
         let x0 = (f64::from(region.x0) + f64::from(min_dx)).floor() - 1.0;
         let y0 = (f64::from(region.y0) + f64::from(min_dy)).floor() - 1.0;
         let x1 = (f64::from(region.x1 - 1) + f64::from(max_dx)).ceil() + 2.0;
@@ -1151,18 +1207,20 @@ impl ProxyImage {
         let y0 = (region.y0 - bounds.y0) as usize;
         let y1 = (region.y1 - bounds.y0) as usize;
         let source_at = |x: f64, y: f64| -> [f32; 4] {
-            let fx = (x - 0.5).clamp(f64::from(canvas.x0), f64::from(canvas.x1 - 1));
-            let fy = (y - 0.5).clamp(f64::from(canvas.y0), f64::from(canvas.y1 - 1));
+            // Kept a pixel past the canvas on each side, so far-off samples stay in `i32`.
+            let fx = (x - 0.5).clamp(f64::from(canvas.x0) - 1.0, f64::from(canvas.x1));
+            let fy = (y - 0.5).clamp(f64::from(canvas.y0) - 1.0, f64::from(canvas.y1));
             let ix = fx.floor();
             let iy = fy.floor();
             let (tx, ty) = ((fx - ix) as f32, (fy - iy) as f32);
-            let sx0 = (ix as i32).clamp(src_rect.x0, src_rect.x1 - 1);
-            let sy0 = (iy as i32).clamp(src_rect.y0, src_rect.y1 - 1);
-            let sx1 = (sx0 + 1).min(src_rect.x1 - 1);
-            let sy1 = (sy0 + 1).min(src_rect.y1 - 1);
+            let (sx0, sy0) = (ix as i32, iy as i32);
+            let (sx1, sy1) = (sx0.saturating_add(1), sy0.saturating_add(1));
             let at = |sx: i32, sy: i32| -> [f32; 4] {
-                let ox = (sx - src_rect.x0) as usize;
-                let oy = (sy - src_rect.y0) as usize;
+                if sx < canvas.x0 || sx >= canvas.x1 || sy < canvas.y0 || sy >= canvas.y1 {
+                    return [0.0; 4];
+                }
+                let ox = (sx.clamp(src_rect.x0, src_rect.x1 - 1) - src_rect.x0) as usize;
+                let oy = (sy.clamp(src_rect.y0, src_rect.y1 - 1) - src_rect.y0) as usize;
                 source_scratch.get(oy * sw + ox).copied().unwrap_or([0.0; 4])
             };
             let (a, b, c, d) = (at(sx0, sy0), at(sx1, sy0), at(sx0, sy1), at(sx1, sy1));

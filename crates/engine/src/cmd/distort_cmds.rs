@@ -12,7 +12,7 @@
 
 use std::cell::RefCell;
 
-use photocraft_algo::liquify::{LiquifyField, LiquifyStroke, apply_liquify, auto_cell};
+use photocraft_algo::liquify::{LiquifyField, LiquifyStroke, PastBounds, apply_liquify, apply_liquify_past, auto_cell};
 use photocraft_algo::perspective::{PerspectiveMap, Plane, Straighten, straighten};
 use photocraft_algo::puppet::{PuppetDensity, PuppetMesh, PuppetMode, PuppetPin, PuppetWarp, puppet_warp, puppet_warp_with_mask, warp_with_mesh};
 use photocraft_algo::transform::Interp;
@@ -345,6 +345,12 @@ fn liquify(s: &mut Session, p: &Value) -> Result<Value> {
     if field.is_identity() && !smart {
         return Ok(json!({"layer": id.0, "changed": false}));
     }
+    // Where an edge is pushed in, the space left behind is transparent; a layer that can't hold
+    // transparency (the Background) gets the background colour there, as in Photoshop. A colour
+    // channel target keeps repeating the edge.
+    let colors = crate::color_channels::target(s, p)?.is_some();
+    let is_background = s.active().is_some_and(|d| d.doc.is_background(id));
+    let background = s.tools.background;
     let r = run_on_layer(
         s,
         LIQUIFY,
@@ -352,7 +358,13 @@ fn liquify(s: &mut Session, p: &Value) -> Result<Value> {
         p,
         false,
         &|surf, sel, _| {
-            let out = apply_liquify(surf, &field);
+            let fmt = surf.format();
+            let mut fill = [0.0f32; 8];
+            if is_background || !fmt.alpha {
+                photocraft_raster::from_rgba_into(&fmt, [background[0], background[1], background[2], 1.0], &mut fill);
+            }
+            let past = if colors { PastBounds::Edge } else { PastBounds::Pixel(&fill) };
+            let out = apply_liquify_past(surf, &field, past);
             Ok(match sel {
                 Some(sel) => mix_by_selection(surf, &out, sel)?,
                 None => out,
