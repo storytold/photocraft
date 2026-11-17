@@ -133,6 +133,9 @@ pub(crate) fn refresh_impl_with_budget(app: &mut PhotocraftApp, maps: &mut Surfa
                 if let Some(v) = maps.keys[kind].get_mut(material) {
                     *v = Key::default();
                 }
+                if let Some(v) = maps.snapshots[kind].get_mut(material) {
+                    *v = None;
+                }
                 continue;
             };
             if allow_gpu && crate::uv_mask_paint_preview::fill_manipulation_active(app, index) {

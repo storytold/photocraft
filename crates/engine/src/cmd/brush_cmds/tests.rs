@@ -95,14 +95,16 @@ fn native_mask_gpu_preflight_keeps_unsupported_strokes_on_cpu_from_the_start() {
         LiveStroke::can_use_native_mask_gpu_brush(&s, "paint.stroke", &params),
         "the native GPU stack renderer recomposes downstream Blur from dirty, halo-expanded regions"
     );
-    let mut segmented = LiveStroke::begin_with_native_mask_gpu_brush(&s, "paint.stroke", &params).unwrap();
+    let segmented = LiveStroke::begin_with_native_mask_gpu_brush(&s, "paint.stroke", &params).unwrap();
     segmented.break_segment().unwrap();
-    assert!(!segmented.take_native_mask_gpu_dabs().is_empty(), "breaking the initial path flushes its stationary dab");
+    assert!(!segmented.native_mask_gpu_brush_active(), "a path break falls back to the CPU renderer");
+    let first = segmented.doc.layer(id).unwrap().mask.as_ref().unwrap().paint.as_ref().unwrap().layers[0].surface.clone();
+    assert!(first.rgba(8, 8)[3] > 0.0, "the first disconnected segment is committed");
     segmented.push(&[StrokePoint::new(56.5, 8.5, 1.0)]).unwrap();
     segmented.break_segment().unwrap();
-    let after_seam = segmented.take_native_mask_gpu_dabs();
-    assert!(!after_seam.is_empty());
-    assert!(after_seam.iter().all(|dab| dab.center[0] > 40.0), "GPU dab generation must restart after a UV island break: {after_seam:?}");
+    let second = segmented.doc.layer(id).unwrap().mask.as_ref().unwrap().paint.as_ref().unwrap().layers[0].surface.clone();
+    assert!(second.rgba(56, 8)[3] > 0.0, "the second disconnected segment is committed");
+    assert_eq!(second.rgba(32, 8)[3], 0.0, "a path break must not paint a bridge between UV islands");
 }
 
 #[test]

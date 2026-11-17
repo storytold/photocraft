@@ -575,7 +575,7 @@ pub(super) fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
         paint: PaintThread::start(stroke),
         doc: st.doc.id,
         revision: st.revision,
-        key: (1 << 44) | (n << 20),
+        key,
         damage,
         fed: if d.tool == Tool::MixerBrush { 1 } else { d.points.len() },
         preview_failed: false,
@@ -1057,7 +1057,7 @@ pub(crate) fn clone_preview_texture(
     let wrap = tool == Tool::CloneStamp && app.ui.view.pattern_preview;
     let brush = overlay.clipped.then_some(&app.session.tools.brush);
     let key = format!(
-        "{:?}:{}:{:?}:{:?}:{map:?}:{}:{}:{}:{}:{wrap}:{}:{}",
+        "{tool:?}:{:?}:{}:{:?}:{:?}:{map:?}:{}:{}:{}:{}:{wrap}:{}:{}",
         st.doc.id,
         st.revision,
         st.active_layer,
@@ -1080,7 +1080,12 @@ pub(crate) fn clone_preview_texture(
                 None,
             ),
         };
-        let Ok(mut buf) = photocraft_engine::retouch_cmds::clone_preview_periodic(&app.session, rect, &map, &app.ui.tool_options.clone_sample, wrap) else {
+        let preview = if tool == Tool::Healing {
+            photocraft_engine::retouch_cmds::healing_preview_periodic(&app.session, rect, &map, &app.ui.tool_options.clone_sample, wrap)
+        } else {
+            photocraft_engine::retouch_cmds::clone_preview_periodic(&app.session, rect, &map, &app.ui.tool_options.clone_sample, wrap)
+        };
+        let Ok(mut buf) = preview else {
             return None;
         };
         if overlay.invert {

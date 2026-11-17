@@ -913,9 +913,15 @@ fn transform(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(missing) = ids.iter().find(|id| st.doc.layer(**id).is_none()) {
         return Err(EngineError::NoLayer(*missing));
     }
-    // Refuse transforms that would target a flattened cache of an editable mask stack. Check
-    // every layer in a multi-layer transform before scheduling the worker so it cannot partially
-    // mutate a selection and then fail on a later layer.
+    // The named layer or the selection takes its linked layers along, as the Move tool does: in
+    // Photoshop transforming one linked layer transforms the whole link group (#11217), but not a
+    // linked Background it didn't target ([`box_targets`]). A caller listing `layers` gets
+    // exactly those.
+    if !listed {
+        ids = box_targets(&st.doc, &ids);
+    }
+    // Refuse transforms that target a flattened mask cache, including linked layers expanded
+    // above, before scheduling a worker that could otherwise partially mutate a linked set.
     let target = crate::channel_cmds::target_of(p);
     let checked_ids: Vec<LayerId> = if ids.is_empty() { id.into_iter().collect() } else { ids.clone() };
     for layer_id in checked_ids {
@@ -932,13 +938,6 @@ fn transform(s: &mut Session, p: &Value) -> Result<Value> {
         if unsupported {
             return Err(EngineError::Other("Free Transform cannot move the flattened cache of an editable mask Paint stack".into()));
         }
-    }
-    // The named layer or the selection takes its linked layers along, as the Move tool does: in
-    // Photoshop transforming one linked layer transforms the whole link group (#11217), but not a
-    // linked Background it didn't target ([`box_targets`]). A caller listing `layers` gets
-    // exactly those.
-    if !listed {
-        ids = box_targets(&st.doc, &ids);
     }
     let rect = match p.get("rect").and_then(Value::as_array) {
         Some(r) if r.len() == 4 => {

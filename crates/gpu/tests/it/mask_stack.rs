@@ -29,7 +29,7 @@ fn mask_stack_preflight_accepts_spatial_fill_without_gpu_setup() {
 #[test]
 fn gpu_spatial_and_legacy_image_fill_match_cpu_stack() {
     let _lock = GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+    let instance = crate::instance();
     let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
         eprintln!("skipping GPU image-Fill test: no adapter");
         return;
@@ -79,7 +79,7 @@ fn gpu_spatial_and_legacy_image_fill_match_cpu_stack() {
 #[test]
 fn gpu_mask_fill_blend_modes_match_cpu_semantics() {
     let _lock = GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+    let instance = crate::instance();
     let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
         eprintln!("skipping mask blend-mode test: no adapter");
         return;
@@ -128,7 +128,7 @@ fn gpu_mask_fill_blend_modes_match_cpu_semantics() {
 #[test]
 fn gpu_round_dab_preview_and_release_patches_match_cpu_stroke() {
     let _lock = GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+    let instance = crate::instance();
     let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
         eprintln!("skipping GPU brush preview test: no adapter");
         return;
@@ -214,7 +214,7 @@ fn gpu_round_dab_preview_and_release_patches_match_cpu_stroke() {
 #[test]
 fn gpu_brush_preview_recomposes_downstream_blur_and_matches_full_stack() {
     let _lock = GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+    let instance = crate::instance();
     let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
         eprintln!("skipping GPU brush+Blur test: no adapter");
         return;
@@ -319,7 +319,7 @@ fn gpu_brush_preview_recomposes_downstream_blur_and_matches_full_stack() {
 #[test]
 fn gpu_mask_blur_matches_shell_aware_cpu_stack_without_crossing_islands() {
     let _lock = GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+    let instance = crate::instance();
     let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
         eprintln!("skipping GPU mask-stack test: no adapter");
         return;
@@ -436,7 +436,7 @@ fn gpu_mask_blur_matches_shell_aware_cpu_stack_without_crossing_islands() {
 #[test]
 fn convenience_render_refreshes_a_new_target_and_shell_map() {
     let _lock = GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+    let instance = crate::instance();
     let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
         eprintln!("skipping mask-stack target refresh test: no adapter");
         return;
@@ -500,7 +500,7 @@ fn convenience_render_refreshes_a_new_target_and_shell_map() {
 #[test]
 fn incremental_paint_tile_upload_matches_fresh_render_through_multiple_blurs() {
     let _lock = GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+    let instance = crate::instance();
     let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
         eprintln!("skipping incremental mask-stack test: no adapter");
         return;
@@ -574,7 +574,7 @@ fn incremental_paint_tile_upload_matches_fresh_render_through_multiple_blurs() {
 #[test]
 fn paint_only_change_recomposites_dirty_region_and_matches_full_render() {
     let _lock = GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+    let instance = crate::instance();
     let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
         eprintln!("skipping dirty mask-stack test: no adapter");
         return;
@@ -625,7 +625,7 @@ fn paint_only_change_recomposites_dirty_region_and_matches_full_render() {
 #[test]
 fn unchanged_stack_reuses_the_caller_target_without_full_replay() {
     let _lock = GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+    let instance = crate::instance();
     let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
         eprintln!("skipping unchanged mask-stack test: no adapter");
         return;
@@ -661,7 +661,7 @@ fn unchanged_stack_reuses_the_caller_target_without_full_replay() {
 #[test]
 fn paint_above_blur_reuses_blur_prefix_and_matches_full_render() {
     let _lock = GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+    let instance = crate::instance();
     let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
         eprintln!("skipping Blur-prefix mask-stack test: no adapter");
         return;

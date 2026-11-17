@@ -83,13 +83,25 @@ pub(crate) fn restore(app: &mut PhotocraftApp, view: &Value) -> Result<(), Strin
     Ok(())
 }
 pub(crate) fn save_to(app: &mut PhotocraftApp, path: String) -> Result<Value, String> {
-    uv_ui::reveal(app)?;
+    if app.transform_preparing.is_some() {
+        return Err(tl!("Wait for Free Transform to finish preparing, then save the project again").into());
+    }
     if crate::uv_lighting::pending(&app.uv_cache.lighting) {
         return Err(tl!("Wait for the environment map to finish preparing, then save the project again").into());
     }
+    uv_ui::reveal(app)?;
     uv_ui::finish_paint(app)?;
     if let Some([x, y, _]) = app.drag.as_ref().and_then(|d| d.points.last()).copied() {
         crate::canvas::tool_event(app, crate::canvas::ToolEvent::Up { x, y }, egui::Modifiers::NONE);
+    }
+    if app.ui.transform.is_some() {
+        crate::transform_tool::commit(app);
+    }
+    if crate::transform_tool::committing(app).is_some() {
+        return Err(tl!("Wait for Free Transform to finish applying, then save the project again").into());
+    }
+    if app.ui.transform.is_some() {
+        return Err(if app.ui.status.is_empty() { tl!("The transform couldn't be applied.").into() } else { app.ui.status.clone() });
     }
     let view = snapshot(app);
     let result = app.run("uv.project.save", json!({"path":path,"view":view}));
@@ -323,6 +335,42 @@ pub(crate) fn prompt_open(app: &PhotocraftApp) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn save_commits_an_active_free_transform_before_snapshotting() {
+        let _gpu = photocraft_testkit::gpu_lock();
+        let mut session = photocraft_engine::Session::new();
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../uv/tests/fixtures/two-shells.obj");
+        session.execute("uv.workspace.activate", json!({"active":true})).unwrap();
+        session.execute("uv.model.import", json!({"path":source})).unwrap();
+        session.execute("uv.texture.create", json!({"width":64,"height":64})).unwrap();
+        session.execute("edit.fill", json!({"color":"#ff0000"})).unwrap();
+        let mut app = PhotocraftApp::new(session, Default::default());
+        app.ui.workspace = "3D".into();
+        app.sync_views();
+        let ctx = egui::Context::default();
+        crate::transform_tool::begin(&mut app, &ctx).unwrap();
+        let transform = app.ui.transform.as_mut().unwrap();
+        transform.quad = transform.quad.map(|[x, y]| [x + 6.0, y]);
+        let path = std::env::temp_dir().join(format!("uv-transform-save-{}.pcuv", std::process::id()));
+
+        save_to(&mut app, path.to_string_lossy().into_owned()).unwrap();
+        assert!(app.ui.transform.is_none());
+        assert!(crate::transform_tool::committing(&app).is_none());
+        let expected =
+            app.session.active().unwrap().doc.layer(app.session.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap().content_bounds();
+
+        let mut restored = photocraft_engine::Session::new();
+        restored.execute("uv.workspace.activate", json!({"active":true})).unwrap();
+        restored.execute("uv.project.load", json!({"path":path})).unwrap();
+        let owner = restored.uv.map_bindings(photocraft_uv::preview::Channel::Color)[0].unwrap();
+        let index = restored.documents().iter().position(|state| state.doc.id == owner).unwrap();
+        assert!(restored.set_active(index));
+        let layer = restored.active().unwrap().active_layer.unwrap();
+        assert_eq!(restored.active().unwrap().doc.layer(layer).unwrap().surface().unwrap().content_bounds(), expected);
+        assert_eq!(expected, photocraft_geom::Rect::new(6, 0, 64, 64));
+        std::fs::remove_file(path).unwrap();
+    }
+
     #[test]
     fn repeated_save_restores_camera_pbr_texture_views_and_keeps_errors_visible() {
         let _gpu = photocraft_testkit::gpu_lock();

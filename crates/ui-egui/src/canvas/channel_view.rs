@@ -722,8 +722,12 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, display:
     let raw_fill_active = crate::uv_mask_paint_preview::current_fill_key(app, idx).is_some();
     #[cfg(feature = "uv-workbench")]
     let fill_proxy = if raw_fill_active {
-        crate::uv_mask_paint_preview::fill_mask_proxy(app, idx, ctx)
-            .filter(|proxy| view.layer_mask.is_some_and(|shown| shown.layer == proxy.layer) && view.shown_layer_mask(&doc).is_some())
+        crate::uv_mask_paint_preview::fill_mask_proxy(app, idx, ctx).filter(|proxy| {
+            view.shown_layer_mask(&doc).is_some_and(|(_, mode)| {
+                view.layer_mask.is_some_and(|selected| selected.layer == proxy.layer)
+                    && (mode == MaskViewMode::Gray || (mode == MaskViewMode::Overlay && ChannelView { layer_mask: None, ..view.clone() }.is_plain(&doc)))
+            })
+        })
     } else {
         None
     };

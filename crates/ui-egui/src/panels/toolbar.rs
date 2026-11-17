@@ -318,7 +318,7 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                 let tool = slot_tool(app.ui.tool, &app.ui.group_tools, slot);
                                 let sel = slot.contains(&app.ui.tool);
                                 #[cfg(feature = "uv-workbench")]
-                                let sel = sel && !app.ui.uv_workbench.select_shells;
+                                let sel = sel && !(app.ui.workspace == "3D" && app.ui.uv_workbench.select_shells);
                                 let tip = match crate::tool_shortcuts::shortcut(app, tool) {
                                     Some(sc) => format!("{}  ({})", tl!(tool.label()), crate::shortcuts::pretty(&sc)),
                                     None => tl!(tool.label()).to_string(),

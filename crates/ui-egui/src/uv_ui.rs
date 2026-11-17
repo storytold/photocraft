@@ -1865,7 +1865,11 @@ pub(crate) fn main_view(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             keys: &cache.keys,
             normal_keys: &cache.normal_keys,
             masked: &cache.masked,
-            symmetry_plane: if state.view_3d { crate::uv_symmetry::plane_corners(geometry, crate::uv_symmetry::get(ui.ctx())) } else { None },
+            symmetry_plane: if state.view_3d || state.floating_3d {
+                crate::uv_symmetry::plane_corners(geometry, crate::uv_symmetry::get(ui.ctx()))
+            } else {
+                None
+            },
         };
         let environment = crate::uv_lighting::ensure(&mut cache.lighting);
         let map_started = crate::gpu_canvas::now_ms();
@@ -2767,6 +2771,11 @@ pub(crate) fn commit_polygon_selection(app: &mut PhotocraftApp, state: &mut Stat
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    if !state.selected_polygons.is_empty() && polygons.is_empty() {
+        app.ui.status = tl!("The UV selection's document is no longer available").into();
+        app.ui.status_error = true;
+        return false;
+    }
     if !polygons.is_empty()
         && let Err(error) = app.run("select.uvPolygons", json!({"document":owner.map(|id|id.0),"polygons":polygons}))
     {

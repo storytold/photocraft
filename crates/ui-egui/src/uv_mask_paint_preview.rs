@@ -259,6 +259,12 @@ pub(crate) fn set_fill(app: &mut PhotocraftApp, layer: LayerId, index: usize, bo
     if !rotation.is_finite() || bounds[0] >= bounds[2] || bounds[1] >= bounds[3] {
         return;
     }
+    let Some(canvas) = app.session.active().map(|state| state.doc.bounds()) else { return };
+    let clipped = photocraft_geom::Rect::new(bounds[0], bounds[1], bounds[2], bounds[3]).intersect(&canvas);
+    if clipped.is_empty() {
+        return;
+    }
+    let bounds = [clipped.x0, clipped.y0, clipped.x1, clipped.y1];
     let Some((doc, revision)) = active_fill(app, layer, index) else { return };
     if app.uv_mask_paint_preview.as_ref().is_some_and(|p| (p.doc, p.revision, p.layer, p.index) != (doc, revision, layer, index)) {
         let Some(previous) = pending(app) else { return };
@@ -388,7 +394,9 @@ pub(crate) fn fill_preview_pending(app: &PhotocraftApp, layer: LayerId, index: u
     }
     let explicit_gray =
         state.channel_view.layer_mask.is_some_and(|view| view.layer == layer && view.mode == photocraft_engine::mask_view_cmds::MaskViewMode::Gray);
-    let targeted_gray = state.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::LayerMask && state.active_layer == Some(layer);
+    let targeted_gray = state.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::LayerMask
+        && state.active_layer == Some(layer)
+        && state.channel_view.layer_mask.is_none();
     if explicit_gray || targeted_gray {
         return false;
     }
@@ -710,7 +718,9 @@ pub(crate) fn current_fill_gray_mask(app: &PhotocraftApp, idx: usize) -> bool {
     };
     let explicit =
         state.channel_view.layer_mask.is_some_and(|view| view.layer == preview.layer && view.mode == photocraft_engine::mask_view_cmds::MaskViewMode::Gray);
-    let targeted = state.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::LayerMask && state.active_layer == Some(preview.layer);
+    let targeted = state.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::LayerMask
+        && state.active_layer == Some(preview.layer)
+        && state.channel_view.layer_mask.is_none();
     (explicit || targeted) && state.doc.layer(preview.layer).is_some_and(|layer| layer.mask.is_some())
 }
 

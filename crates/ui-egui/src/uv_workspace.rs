@@ -329,7 +329,7 @@ fn bar(app: &mut PhotocraftApp, ui: &mut Ui) {
             let response = response.on_hover_text(tl!("3D display"));
             response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("3D display")));
             display_menu_button = Some(response);
-            if app.ui.workspace == "3D" && app.ui.uv_workbench.view_3d && app.session.uv.scene.is_some() {
+            if app.ui.workspace == "3D" && (app.ui.uv_workbench.view_3d || app.ui.uv_workbench.floating_3d) && app.session.uv.scene.is_some() {
                 icon_menu(ui, "painting-symmetry", tl!("3D brush symmetry"), |ui| crate::uv_symmetry::menu(ui));
             }
             icon_menu(ui, "sliders-horizontal", tl!("Camera navigation"), |ui| {

@@ -228,6 +228,21 @@ fn vector(n: NodeHandle<'_>, name: &str, default: DVec3) -> DVec3 {
         })
         .unwrap_or(default)
 }
+fn material_alpha(n: NodeHandle<'_>) -> f32 {
+    let scalar = |name| property(n, name).and_then(|p| p.attributes().get(4)).and_then(A::get_f64);
+    if let Some(transparency) = scalar("TransparencyFactor") {
+        return (1.0 - transparency).clamp(0.0, 1.0) as f32;
+    }
+    // FBX stores color transparency separately; use its strongest channel as the
+    // scalar opacity fallback when no TransparencyFactor was authored.
+    if let Some(color) = property(n, "TransparentColor").and_then(|p| {
+        let a = p.attributes();
+        Some(DVec3::new(a.get(4)?.get_f64()?, a.get(5)?.get_f64()?, a.get(6)?.get_f64()?))
+    }) {
+        return (1.0 - color.max_element()).clamp(0.0, 1.0) as f32;
+    }
+    1.0
+}
 fn rotate(v: DVec3, order: i32) -> DMat4 {
     let v = v * std::f64::consts::PI / 180.0;
     let q = match order {
@@ -448,7 +463,7 @@ pub(super) fn load(bytes: &[u8], uv_set: usize) -> Result<Scene> {
         materials.insert(mid, scene.materials.len());
         scene.materials.push(Material {
             name: string(m, 1).unwrap_or("Material").split('\0').next().unwrap_or("Material").trim_start_matches("Material::").to_owned(),
-            color: [color.x as f32, color.y as f32, color.z as f32, 1.0],
+            color: [color.x as f32, color.y as f32, color.z as f32, material_alpha(m)],
             base_color: filename,
             embedded,
             normal_map,
@@ -645,6 +660,10 @@ mod preflight_tests {
         )
     }
 
+    fn fbx_scalar_property(name: &str, value: f64) -> FbxNode {
+        fbx_node("P", vec![fbx_string(name), fbx_string("double"), fbx_string("Number"), fbx_string(""), fbx_f64(value)], vec![])
+    }
+
     fn fbx_integer_property(name: &str, value: i32) -> FbxNode {
         fbx_node("P", vec![fbx_string(name), fbx_string("enum"), fbx_string(""), fbx_string(""), fbx_i32(value)], vec![])
     }
@@ -792,6 +811,27 @@ mod preflight_tests {
         let scene = load(&bytes, 0).unwrap();
         let uvs = scene.triangles[0].corners.map(|corner| corner.uv);
         assert_eq!(uvs, [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]);
+    }
+
+    #[test]
+    fn material_alpha_uses_fbx_transparency_factor() {
+        let objects = fbx_node(
+            "Objects",
+            vec![],
+            vec![fbx_node(
+                "Material",
+                vec![fbx_i64(9), fbx_string("Material::Glass"), fbx_string("")],
+                vec![fbx_node("Properties70", vec![], vec![fbx_scalar_property("TransparencyFactor", 1.0)])],
+            )],
+        );
+        let mut bytes = b"Kaydara FBX Binary  \0\x1a\0".to_vec();
+        bytes.extend_from_slice(&7400_u32.to_le_bytes());
+        append_fbx_node(&mut bytes, &objects);
+        bytes.extend_from_slice(&[0; 13]);
+        let tree = AnyTree::from_seekable_reader(std::io::Cursor::new(bytes)).unwrap();
+        let AnyTree::V7400(_, tree, _) = tree else { panic!("test fixture should be FBX 7.4") };
+        let material = child(child(tree.root(), "Objects").unwrap(), "Material").unwrap();
+        assert_eq!(material_alpha(material), 0.0);
     }
 
     #[test]

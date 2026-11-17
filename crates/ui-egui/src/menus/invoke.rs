@@ -141,6 +141,9 @@ fn invoke_early_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str,
             let is_open = app.ui.workspace == "3D"
                 && app.ui.docking.as_ref().map_or(app.ui.uv_workbench.open, |workspace| workspace.layout.contains(&"uvWorkbench".to_owned()));
             if !is_open {
+                if app.ui.workspace != "3D" {
+                    crate::menus::workspace_ui::select_workspace_named(app, "3D".into())?;
+                }
                 crate::uv_ui::reveal(app)?;
             } else if app.ui.docking.is_some() {
                 crate::panel_docking::command(app, "window.panel.close", &json!({"panel":"uvWorkbench"}))

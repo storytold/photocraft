@@ -45,6 +45,25 @@ fn fill_app() -> (PhotocraftApp, LayerId) {
 }
 
 #[test]
+fn image_fill_preview_clips_bounds_like_the_commit() {
+    let (mut app, layer) = fill_app();
+    let fill = &mut app.session.active_mut().unwrap().doc;
+    let fill = std::sync::Arc::make_mut(fill).layer_mut(layer).unwrap().mask.as_mut().unwrap().paint.as_mut().unwrap().layers.get_mut(0).unwrap();
+    fill.fill_map = Some(Surface::with_default(PixelFormat::GRAY8, &[0.75]));
+    fill.fill_map_size = [1, 1];
+
+    set_fill(&mut app, layer, 0, [-8, 0, 24, 24], 12.0);
+    let expected = [0, 0, 24, 24];
+    assert_eq!(super::fill_transform(&app, layer, 0, [0, 0, 32, 24], 0.0), (expected, 12.0));
+    let commit = super::pending(&app).expect("the moved image Fill is pending");
+    assert_eq!(commit.bounds, Some(expected));
+    app.run("uv.maskPaint.modify", commit.params()).unwrap();
+    let committed = &app.session.active().unwrap().doc.layer(layer).unwrap().mask.as_ref().unwrap().paint.as_ref().unwrap().layers[0];
+    assert_eq!(committed.fill_bounds, Some(expected));
+    assert_eq!(committed.fill_map_size, [1, 1]);
+}
+
+#[test]
 fn opacity_preview_is_gpu_document_transient_then_cpu_materializes_when_needed() {
     let (mut app, layer) = app();
     let (revision, history) = (app.session.active().unwrap().revision, app.session.active().unwrap().history.past_len());

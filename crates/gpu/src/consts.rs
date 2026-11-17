@@ -3,6 +3,9 @@
 /// the CPU reference, and Color Burn/Dodge amplify input error.
 pub const ACC_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
 
+/// Maximum duration for a blocking GPU readback wait before treating it as a failed device.
+pub const READBACK_WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 // default accumulation format; `preferred_acc_format` downgrades to Rgba16Float where 32-bit float isn't renderable
 /// Effect intermediates (distances, blurs) and layer shapes.
 pub(crate) const MAP32: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;

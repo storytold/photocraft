@@ -245,7 +245,22 @@ fn max_difference(a: &[[f32; 4]], b: &[[f32; 4]]) -> Result<f32, Box<dyn Error>>
     if a.len() != b.len() {
         return Err(format!("pixel count differs: {} vs {}", a.len(), b.len()).into());
     }
+    if a.iter().chain(b).flatten().any(|channel| !channel.is_finite()) {
+        return Err("pixel comparison contains non-finite channel values".into());
+    }
     Ok(a.iter().zip(b).flat_map(|(x, y)| x.iter().zip(y).map(|(x, y)| (x - y).abs())).fold(0.0f32, f32::max))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pixel_comparison_rejects_non_finite_channels() {
+        assert!(max_difference(&[[f32::NAN, 0.0, 0.0, 1.0]], &[[0.0; 4]]).is_err());
+        assert!(max_difference(&[[f32::INFINITY, 0.0, 0.0, 1.0]], &[[0.0; 4]]).is_err());
+        assert_eq!(max_difference(&[[0.0, 0.5, 1.0, 1.0]], &[[0.0, 0.25, 1.0, 1.0]]).unwrap(), 0.25);
+    }
 }
 
 fn main() -> Result<(), Box<dyn Error>> {

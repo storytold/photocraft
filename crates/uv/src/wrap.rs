@@ -96,7 +96,9 @@ impl Mesh {
                     continue;
                 }
                 let distance = (pa + e * ((-pa).dot(e) / e.length_squared()).clamp(0.0, 1.0)).length();
-                if distance > reach {
+                // The dab is square in chart space. Its farthest corner is sqrt(2) * reach
+                // from the center, so include edges that can intersect that corner region.
+                if distance > reach * std::f64::consts::SQRT_2 {
                     continue;
                 }
                 let Some(na) = next.corners.iter().position(|c| c.vertex == ca.vertex) else { continue };
@@ -213,5 +215,27 @@ impl Patch {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Corner, Material, Triangle};
+
+    #[test]
+    fn square_dab_reaches_a_diagonal_neighbor_past_its_inscribed_circle() {
+        let corner = |vertex, uv| Corner { vertex, uv, normal: None };
+        let scene = Scene {
+            positions: vec![[0.0, 0.0, 0.0], [120.0, 0.0, 0.0], [0.0, 120.0, 0.0], [120.0, 120.0, 0.0]],
+            triangles: vec![
+                Triangle { corners: [corner(0, [0.0, 0.0]), corner(1, [1.0, 0.0]), corner(2, [0.0, 1.0])], material: 0 },
+                Triangle { corners: [corner(1, [1.0, 0.0]), corner(3, [1.0, 1.0]), corner(2, [0.0, 1.0])], material: 0 },
+            ],
+            materials: vec![Material::default()],
+            warnings: vec![],
+        };
+        let patches = Mesh::new(&scene).unwrap().chart_scaled(&scene, 0, [0.0; 3], [256, 256], 70.0, Some(1.0)).unwrap();
+        assert!(patches.iter().any(|patch| patch.triangle == 1));
     }
 }

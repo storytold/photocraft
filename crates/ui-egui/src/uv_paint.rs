@@ -56,11 +56,12 @@ struct PathPoint {
     screen: Pos2,
     pen: Option<PenSample>,
     time_ms: f64,
+    view: Option<PathView>,
 }
 
 impl From<Pos2> for PathPoint {
     fn from(screen: Pos2) -> Self {
-        Self { screen, pen: None, time_ms: 0.0 }
+        Self { screen, pen: None, time_ms: 0.0, view: None }
     }
 }
 
@@ -72,12 +73,21 @@ enum PointerEvent {
     Gone,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct PathView {
+    camera: Camera,
+    size: [u32; 2],
+    rect: egui::Rect,
+}
+
 fn collect_pointer_events(
     app: &mut PhotocraftApp,
     ui: &egui::Ui,
     response: &Response,
     events: &[egui::Event],
     tool: Tool,
+    camera: Camera,
+    size: [u32; 2],
     now_ms: f64,
     frame_time_base: f64,
 ) -> VecDeque<PointerEvent> {
@@ -90,7 +100,12 @@ fn collect_pointer_events(
                 if !modifiers.alt && response.contains_pointer() =>
             {
                 queued.push_back(PointerEvent::Down {
-                    point: PathPoint { screen: *pos, pen: app.stylus.raw_selection(), time_ms: now_ms },
+                    point: PathPoint {
+                        screen: *pos,
+                        pen: app.stylus.raw_selection(),
+                        time_ms: now_ms,
+                        view: Some(PathView { camera, size, rect: response.rect }),
+                    },
                     modifiers: *modifiers,
                     tool,
                     symmetry_enabled: crate::uv_symmetry::get(ui.ctx()).enabled,
@@ -104,13 +119,25 @@ fn collect_pointer_events(
                 app.stylus.clear_selection();
                 let fraction = (index + 1) as f64 / move_count.max(1) as f64;
                 queued.push_back(PointerEvent::Move {
-                    point: PathPoint { screen: *pos, pen, time_ms: frame_time_base + (now_ms - frame_time_base).max(0.0) * fraction },
+                    point: PathPoint {
+                        screen: *pos,
+                        pen,
+                        time_ms: frame_time_base + (now_ms - frame_time_base).max(0.0) * fraction,
+                        view: Some(PathView { camera, size, rect: response.rect }),
+                    },
                     modifiers: ui.input(|input| input.modifiers),
                 });
             }
             egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers } => {
-                queued
-                    .push_back(PointerEvent::Up { point: PathPoint { screen: *pos, pen: app.stylus.raw_selection(), time_ms: now_ms }, modifiers: *modifiers });
+                queued.push_back(PointerEvent::Up {
+                    point: PathPoint {
+                        screen: *pos,
+                        pen: app.stylus.raw_selection(),
+                        time_ms: now_ms,
+                        view: Some(PathView { camera, size, rect: response.rect }),
+                    },
+                    modifiers: *modifiers,
+                });
             }
             egui::Event::PointerGone => queued.push_back(PointerEvent::Gone),
             _ => {}
@@ -135,6 +162,8 @@ pub(crate) struct State {
     tool: Option<Tool>,
     last: Option<Sample>,
     output_last: Option<Sample>,
+    source_live_last: Option<MirrorSample>,
+    mirror_live_last: Option<MirrorSample>,
     path_last: Option<PathPoint>,
     path_pending: VecDeque<PathPoint>,
     deferred_pointer_events: VecDeque<PointerEvent>,
@@ -384,6 +413,7 @@ fn next_path_point(last: &mut PathPoint, pending: &mut VecDeque<PathPoint>) -> O
                 screen: last.screen.lerp(target.screen, t),
                 pen: interpolate_pen(last.pen, target.pen, t),
                 time_ms: last.time_ms + (target.time_ms - last.time_ms) * f64::from(t),
+                view: target.view,
             }
         };
         *last = point;
@@ -433,6 +463,8 @@ fn close_selection_contour(app: &mut PhotocraftApp, state: &mut State) {
 
 fn end_segment(app: &mut PhotocraftApp, state: &mut State, close_contour: bool, finish_gesture: bool) {
     let source_last = state.last.take();
+    state.source_live_last = None;
+    state.mirror_live_last = None;
     let had_last = source_last.is_some();
     if had_last || finish_gesture && (state.mask_segmented_live || app.drag.is_some()) {
         let last = state
@@ -529,6 +561,7 @@ fn finish_inner(app: &mut PhotocraftApp, state: &mut State, preserve_contour: bo
 fn replay_mirror_path(app: &mut PhotocraftApp, state: &mut State) {
     let points = std::mem::take(&mut state.mirror_path);
     if points.iter().all(|point| matches!(point, MirrorPathPoint::Break)) {
+        state.mirror_live_last = None;
         return;
     }
     let Some(scene) = app.session.uv.scene.clone() else { return };
@@ -536,18 +569,23 @@ fn replay_mirror_path(app: &mut PhotocraftApp, state: &mut State) {
     if let Some(tool) = state.tool {
         app.tool_override = Some(tool);
     }
+    let prior = state.mirror_live_last;
     if app.drag.is_some() {
         mark_path_break(app);
+        if let Some(last) = prior {
+            replay_live_sample(app, state, last);
+        }
     }
     // The primary source path has ended for this rendered batch. Keep its own continuity state,
     // but split the live renderer path before appending the corresponding mirrored batch.
     let doc_size = app.session.active().filter(|st| Some(st.doc.id) == state.doc).map(|st| st.doc.size);
     if let Some(doc_size) = doc_size {
-        let mut prior: Option<Sample> = None;
+        let mut prior = prior.map(|sample| sample.sample);
         let mut pending_break = false;
         for point in points {
             let MirrorPathPoint::Sample(mirrored) = point else {
                 pending_break |= prior.take().is_some();
+                state.mirror_live_last = None;
                 continue;
             };
             let discontinuous = prior.is_some_and(|last| {
@@ -558,6 +596,9 @@ fn replay_mirror_path(app: &mut PhotocraftApp, state: &mut State) {
             });
             if pending_break || discontinuous {
                 mark_path_break(app);
+                if discontinuous {
+                    state.mirror_live_last = None;
+                }
             }
             pending_break = false;
             let event = if app.drag.is_some() {
@@ -570,6 +611,8 @@ fn replay_mirror_path(app: &mut PhotocraftApp, state: &mut State) {
             tool_event(app, state, event, state.modifiers);
             app.stylus.clear_selection();
             state.output_last = Some(mirrored.sample);
+            let live_sample = MirrorSample { sample: mirrored.sample, pressure: mirrored.pressure, pen: mirrored.pen, time_ms: mirrored.time_ms };
+            state.mirror_live_last = Some(live_sample);
             prior = Some(mirrored.sample);
         }
         if prior.is_some() {
@@ -577,6 +620,13 @@ fn replay_mirror_path(app: &mut PhotocraftApp, state: &mut State) {
         }
     }
     app.tool_override = previous_override;
+}
+
+fn replay_live_sample(app: &mut PhotocraftApp, state: &State, sample: MirrorSample) {
+    app.stylus.clock_ms = sample.time_ms;
+    app.stylus.select_raw_sample(sample.pen);
+    tool_event(app, state, ToolEvent::Move { x: sample.sample.point[0], y: sample.sample.point[1], pressure: sample.pressure }, state.modifiers);
+    app.stylus.clear_selection();
 }
 fn adjacent(scene: &Scene, a: usize, b: usize) -> bool {
     if a == b {
@@ -635,6 +685,10 @@ fn begin_source_path(app: &mut PhotocraftApp, state: &mut State) {
         // Source and reflected passes share one drag for Undo, but each renderer path needs an
         // explicit boundary when the next ordered source batch follows a mirrored batch.
         mark_path_break(app);
+        if let Some(last) = state.source_live_last {
+            replay_live_sample(app, state, last);
+            state.output_last = Some(last.sample);
+        }
         state.live_mirrored_path = false;
     }
 }
@@ -647,6 +701,11 @@ struct View<'a> {
     maps: &'a Materials<'a>,
     size: [u32; 2],
     rect: egui::Rect,
+}
+
+fn view_at_point<'a>(view: &View<'a>, point: PathPoint) -> View<'a> {
+    let captured = point.view.unwrap_or(PathView { camera: view.camera, size: view.size, rect: view.rect });
+    View { wrap: view.wrap, geometry: view.geometry, scene: view.scene, camera: captured.camera, maps: view.maps, size: captured.size, rect: captured.rect }
 }
 
 fn document_at_surface_point(app: &PhotocraftApp, view: &View<'_>, point: PathPoint) -> Option<photocraft_doc::DocId> {
@@ -671,7 +730,7 @@ fn surface_line_start(app: &PhotocraftApp, state: &State, view: &View<'_>, endpo
     }
     let normalized = view.geometry.project_normalized(view.camera, anchor.position, view.size)?;
     let screen = view.rect.min + egui::vec2(normalized[0] as f32 * view.rect.width(), normalized[1] as f32 * view.rect.height());
-    let start = PathPoint { screen, pen: anchor.pressure, time_ms: endpoint.time_ms };
+    let start = PathPoint { screen, pen: anchor.pressure, time_ms: endpoint.time_ms, view: endpoint.view };
     let at = (screen - view.rect.min) / view.rect.size();
     let hit = view.geometry.hit(view.scene, view.camera, view.maps, [f64::from(at.x), f64::from(at.y)], view.size)?;
     let position = std::array::from_fn::<_, 3, _>(|index| (hit.position[index] - view.geometry.center[index]) / view.geometry.diameter);
@@ -684,7 +743,7 @@ fn draw_surface_line_preview(app: &PhotocraftApp, ui: &egui::Ui, state: &State, 
         return;
     }
     let Some(pointer) = ui.input(|input| input.pointer.hover_pos()) else { return };
-    let endpoint = PathPoint { screen: pointer, pen: None, time_ms: ui.input(|input| input.time * 1000.0) };
+    let endpoint = PathPoint { screen: pointer, pen: None, time_ms: ui.input(|input| input.time * 1000.0), view: None };
     let Some(start) = surface_line_start(app, state, view, endpoint, tool) else { return };
     let tokens = crate::theme::Tokens::get(ui.ctx());
     let painter = ui.painter_at(view.rect);
@@ -886,6 +945,7 @@ fn sample(app: &mut PhotocraftApp, ctx: &egui::Context, state: &mut State, view:
     let segment_start = state.mask_segment_start_pending.then(|| app.drag.as_ref().map_or(0, |drag| drag.points.len()));
     tool_event(app, state, event, state.modifiers);
     state.output_last = Some(source_sample);
+    state.source_live_last = Some(MirrorSample { sample: source_sample, pressure, pen: path_point.pen, time_ms: path_point.time_ms });
     if let Some(mirrored) = mirrored_hit
         && let Some(mirror_triangle) = view.geometry.triangles.get(mirrored.triangle)
     {
@@ -950,10 +1010,20 @@ fn process_path(app: &mut PhotocraftApp, ctx: &egui::Context, state: &mut State,
             break;
         }
         let Some(point) = next_path_point(&mut last, &mut state.path_pending) else { break };
+        let path_view = point.view.unwrap_or(PathView { camera: view.camera, size: view.size, rect: view.rect });
+        let sample_view = View {
+            wrap: view.wrap,
+            geometry: view.geometry,
+            scene: view.scene,
+            camera: path_view.camera,
+            maps: view.maps,
+            size: path_view.size,
+            rect: path_view.rect,
+        };
         app.stylus.clock_ms = point.time_ms;
         app.stylus.select_raw_sample(point.pen);
         let action = state.action;
-        sample(app, ctx, state, view, point, action);
+        sample(app, ctx, state, &sample_view, point, action);
         app.stylus.clear_selection();
         state.path_last = Some(last);
         processed += 1;
@@ -1138,7 +1208,7 @@ pub(crate) fn input(
     let events = ui.input(|input| input.events.clone());
     let now_ms = ui.input(|input| input.time) * 1000.0;
     let frame_time_base = state.path_pending.back().or(state.path_last.as_ref()).map_or(now_ms, |point| point.time_ms).min(now_ms);
-    let mut incoming_pointer_events = collect_pointer_events(app, ui, response, &events, tool, now_ms, frame_time_base);
+    let mut incoming_pointer_events = collect_pointer_events(app, ui, response, &events, tool, camera, size, now_ms, frame_time_base);
     if state.wrap_blocked {
         if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
             let _ = cancel_blocked_wrap(app, state);
@@ -1255,8 +1325,9 @@ pub(crate) fn input(
                 static GESTURES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
                 app.uv_paint_key = Some(format!("uv3d-{}", GESTURES.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
                 app.tool_override = Some(down_tool);
+                let point_view = view_at_point(&view, point);
                 let action = action_for_down(modifiers, down_tool);
-                let line_start = (action == Action::Paint && modifiers.shift).then(|| surface_line_start(app, state, &view, point, down_tool)).flatten();
+                let line_start = (action == Action::Paint && modifiers.shift).then(|| surface_line_start(app, state, &point_view, point, down_tool)).flatten();
                 state.held = true;
                 state.path_release_pending = false;
                 state.path_pending.clear();
@@ -1271,11 +1342,11 @@ pub(crate) fn input(
                 app.stylus.select_raw_sample(point.pen);
                 if let Some(start) = line_start {
                     app.stylus.select_raw_sample(start.pen);
-                    sample(app, ui.ctx(), state, &view, start, action);
+                    sample(app, ui.ctx(), state, &point_view, start, action);
                     app.stylus.select_raw_sample(point.pen);
                     state.path_pending.push_back(point);
                 } else {
-                    sample(app, ui.ctx(), state, &view, point, action);
+                    sample(app, ui.ctx(), state, &point_view, point, action);
                 }
                 app.stylus.clear_selection();
                 if action != Action::Paint || down_tool == Tool::MagicWand {
@@ -1284,6 +1355,7 @@ pub(crate) fn input(
             }
             PointerEvent::Move { point, modifiers } => {
                 if state.held && state.tool != Some(Tool::MagicWand) {
+                    let point_view = view_at_point(&view, point);
                     state.modifiers = modifiers;
                     app.tool_override = state.tool;
                     let gesture_tool = state.tool.unwrap_or(tool);
@@ -1302,9 +1374,10 @@ pub(crate) fn input(
                                 screen: previous.screen.lerp(point.screen, t),
                                 pen: interpolate_pen(previous.pen, point.pen, t),
                                 time_ms: previous.time_ms + (point.time_ms - previous.time_ms) * f64::from(t),
+                                view: point.view,
                             };
                             app.stylus.select_raw_sample(sample_point.pen);
-                            sample(app, ui.ctx(), state, &view, sample_point, state.action);
+                            sample(app, ui.ctx(), state, &point_view, sample_point, state.action);
                             app.stylus.clear_selection();
                         }
                         state.path_last = Some(point);
@@ -1604,10 +1677,10 @@ mod tests {
 
     #[test]
     fn long_pointer_segments_are_consumed_without_a_sampling_gap() {
-        let mut last = PathPoint { screen: Pos2::ZERO, pen: Some(PenSample { pressure: 0.2, ..Default::default() }), time_ms: 0.0 };
+        let mut last = PathPoint { screen: Pos2::ZERO, pen: Some(PenSample { pressure: 0.2, ..Default::default() }), time_ms: 0.0, view: None };
         let mut pending = VecDeque::from([
-            PathPoint { screen: egui::pos2(260.0, 0.0), pen: Some(PenSample { pressure: 0.8, ..Default::default() }), time_ms: 10.0 },
-            PathPoint { screen: egui::pos2(420.0, 80.0), pen: Some(PenSample { pressure: 0.4, ..Default::default() }), time_ms: 20.0 },
+            PathPoint { screen: egui::pos2(260.0, 0.0), pen: Some(PenSample { pressure: 0.8, ..Default::default() }), time_ms: 10.0, view: None },
+            PathPoint { screen: egui::pos2(420.0, 80.0), pen: Some(PenSample { pressure: 0.4, ..Default::default() }), time_ms: 20.0, view: None },
         ]);
         let mut previous = last.screen;
         let mut samples = 0;
@@ -1637,6 +1710,38 @@ mod tests {
         assert!(!path_batch_exhausted(127, 128, std::time::Duration::from_millis(2)));
         assert!(path_batch_exhausted(128, 128, std::time::Duration::ZERO));
         assert!(path_batch_exhausted(1, 128, SURFACE_PATH_BUDGET));
+    }
+
+    #[test]
+    fn queued_surface_path_uses_the_camera_that_acquired_its_points() {
+        let _gpu = photocraft_testkit::gpu_lock();
+        let (mut app, scene, geometry) = setup(Tool::Brush);
+        let maps = Materials::default();
+        let acquired = make_view(&scene, &geometry, &maps);
+        let changed = View { camera: Camera { yaw: 0.8, pitch: 0.35, ..Default::default() }, ..make_view(&scene, &geometry, &maps) };
+        let end = screen(&acquired, 0);
+        let start = end - egui::vec2(2.0, 0.0);
+        let at = (end - acquired.rect.min) / acquired.rect.size();
+        let hit = geometry.hit(&scene, acquired.camera, &maps, [f64::from(at.x), f64::from(at.y)], acquired.size).unwrap();
+        let expected =
+            [hit.uv[0] * f64::from(app.session.active().unwrap().doc.size.width), (1.0 - hit.uv[1]) * f64::from(app.session.active().unwrap().doc.size.height)];
+        let doc = app.session.active().unwrap().doc.id;
+        let acquired_view = PathView { camera: acquired.camera, size: acquired.size, rect: acquired.rect };
+        let mut state = State {
+            held: true,
+            action: Action::Paint,
+            tool: Some(Tool::Brush),
+            material: Some(app.session.uv.material),
+            doc: Some(doc),
+            path_last: Some(PathPoint { screen: start, pen: None, time_ms: 0.0, view: Some(acquired_view) }),
+            path_pending: VecDeque::from([PathPoint { screen: end, pen: None, time_ms: 1.0, view: Some(acquired_view) }]),
+            ..Default::default()
+        };
+
+        assert_eq!(process_path(&mut app, &egui::Context::default(), &mut state, &changed, 128), 2);
+        let point = app.drag.as_ref().unwrap().points.last().unwrap();
+        assert!((point[0] - expected[0]).abs() < 1e-3);
+        assert!((point[1] - expected[1]).abs() < 1e-3);
     }
 
     #[test]
@@ -1686,10 +1791,10 @@ mod tests {
 
     #[test]
     fn new_pointer_gesture_waits_behind_backlog_without_losing_pen_samples() {
-        let old_point = PathPoint { screen: egui::pos2(10.0, 10.0), pen: None, time_ms: 1.0 };
+        let old_point = PathPoint { screen: egui::pos2(10.0, 10.0), pen: None, time_ms: 1.0, view: None };
         let mut state = State { held: true, path_pending: VecDeque::from([old_point]), ..Default::default() };
         let down = PointerEvent::Down {
-            point: PathPoint { screen: egui::pos2(20.0, 20.0), pen: Some(PenSample { pressure: 0.4, ..Default::default() }), time_ms: 2.0 },
+            point: PathPoint { screen: egui::pos2(20.0, 20.0), pen: Some(PenSample { pressure: 0.4, ..Default::default() }), time_ms: 2.0, view: None },
             modifiers: Modifiers::NONE,
             tool: Tool::Brush,
             symmetry_enabled: true,
@@ -1698,14 +1803,14 @@ mod tests {
         defer_pointer_event(
             &mut state,
             PointerEvent::Move {
-                point: PathPoint { screen: egui::pos2(25.0, 24.0), pen: Some(PenSample { pressure: 0.75, ..Default::default() }), time_ms: 3.0 },
+                point: PathPoint { screen: egui::pos2(25.0, 24.0), pen: Some(PenSample { pressure: 0.75, ..Default::default() }), time_ms: 3.0, view: None },
                 modifiers: Modifiers { shift: true, ..Modifiers::NONE },
             },
         );
         defer_pointer_event(
             &mut state,
             PointerEvent::Up {
-                point: PathPoint { screen: egui::pos2(30.0, 28.0), pen: Some(PenSample { pressure: 0.2, ..Default::default() }), time_ms: 4.0 },
+                point: PathPoint { screen: egui::pos2(30.0, 28.0), pen: Some(PenSample { pressure: 0.2, ..Default::default() }), time_ms: 4.0, view: None },
                 modifiers: Modifiers::NONE,
             },
         );
@@ -1725,7 +1830,7 @@ mod tests {
 
     #[test]
     fn blocked_wrap_input_keeps_only_one_active_release_event() {
-        let point = PathPoint { screen: egui::pos2(20.0, 20.0), pen: None, time_ms: 1.0 };
+        let point = PathPoint { screen: egui::pos2(20.0, 20.0), pen: None, time_ms: 1.0, view: None };
         let mut events = VecDeque::from([
             PointerEvent::Down { point, modifiers: Modifiers::NONE, tool: Tool::Brush, symmetry_enabled: false },
             PointerEvent::Move { point, modifiers: Modifiers::NONE },
@@ -1797,7 +1902,7 @@ mod tests {
                 held: true,
                 tool: Some(Tool::Brush),
                 action: Action::Paint,
-                path_last: Some(PathPoint { screen: start, pen: None, time_ms: 0.0 }),
+                path_last: Some(PathPoint { screen: start, pen: None, time_ms: 0.0, view: None }),
                 ..Default::default()
             };
             app.uv_paint_key = Some("queued-mask-preview-test".into());
@@ -1805,7 +1910,7 @@ mod tests {
             sample(&mut app, &egui::Context::default(), &mut state, &view, start, Action::Paint);
             for i in 1..=12 {
                 let t = i as f32 / 12.0;
-                state.path_pending.push_back(PathPoint { screen: start.lerp(target, t), pen: None, time_ms: f64::from(i) });
+                state.path_pending.push_back(PathPoint { screen: start.lerp(target, t), pen: None, time_ms: f64::from(i), view: None });
             }
             state.held = false;
             state.path_release_pending = true;
@@ -2132,7 +2237,7 @@ mod tests {
             &egui::Context::default(),
             &mut state,
             &view,
-            PathPoint { screen: view.rect.max + egui::vec2(2.0, 2.0), pen: None, time_ms: 2.5 },
+            PathPoint { screen: view.rect.max + egui::vec2(2.0, 2.0), pen: None, time_ms: 2.5, view: None },
             Action::Paint,
         );
         state.mirror_path.extend([
@@ -2183,6 +2288,7 @@ mod tests {
         tool_event(&mut app, &state, ToolEvent::Move { x: 30.0, y: 20.0, pressure: 1.0 }, Modifiers::NONE);
         state.last = Some(Sample { triangle: 0, shell: 0, point: [30.0, 20.0] });
         state.output_last = state.last;
+        state.source_live_last = Some(MirrorSample { sample: state.last.unwrap(), pressure: 1.0, pen: None, time_ms: 0.0 });
         state.mirror_path.extend([
             MirrorPathPoint::Sample(MirrorSample { sample: Sample { triangle: 0, shell: 0, point: [100.0, 20.0] }, pressure: 0.25, pen: None, time_ms: 1.0 }),
             MirrorPathPoint::Sample(MirrorSample { sample: Sample { triangle: 0, shell: 0, point: [100.0, 30.0] }, pressure: 0.5, pen: None, time_ms: 2.0 }),
@@ -2195,18 +2301,22 @@ mod tests {
         tool_event(&mut app, &state, ToolEvent::Move { x: 40.0, y: 20.0, pressure: 0.75 }, Modifiers::NONE);
         state.last = Some(Sample { triangle: 0, shell: 0, point: [40.0, 20.0] });
         state.output_last = state.last;
+        state.source_live_last = Some(MirrorSample { sample: state.last.unwrap(), pressure: 0.75, pen: None, time_ms: 3.0 });
         state.mirror_path.extend([
-            MirrorPathPoint::Break,
-            MirrorPathPoint::Sample(MirrorSample { sample: Sample { triangle: 1, shell: 1, point: [100.0, 70.0] }, pressure: 0.75, pen: None, time_ms: 3.0 }),
-            MirrorPathPoint::Sample(MirrorSample { sample: Sample { triangle: 1, shell: 1, point: [100.0, 80.0] }, pressure: 1.0, pen: None, time_ms: 4.0 }),
+            MirrorPathPoint::Sample(MirrorSample { sample: Sample { triangle: 0, shell: 0, point: [100.0, 40.0] }, pressure: 0.75, pen: None, time_ms: 3.0 }),
+            MirrorPathPoint::Sample(MirrorSample { sample: Sample { triangle: 0, shell: 0, point: [100.0, 50.0] }, pressure: 1.0, pen: None, time_ms: 4.0 }),
         ]);
         replay_mirror_path(&mut app, &mut state);
         let drag = app.drag.as_ref().unwrap();
-        assert_eq!(drag.breaks, [2, 4, 5], "each bounded render batch remains separated from the other ordered path");
-        assert_eq!(drag.points[5..7].iter().map(|point| point[2]).collect::<Vec<_>>(), [0.75, 1.0], "recorded pen pressure order is preserved");
+        assert_eq!(drag.breaks, [2, 4, 6], "source and mirrored render batches have independent continuity boundaries");
+        assert_eq!(drag.points[7..9].iter().map(|point| point[2]).collect::<Vec<_>>(), [0.75, 1.0], "recorded pen pressure order is preserved");
 
         finish(&mut app, &mut state);
-        assert_eq!(app.session.active().unwrap().history.past_len(), history + 1, "all source and mirrored batches share one Undo");
+        let active = app.session.active().unwrap();
+        assert_eq!(active.history.past_len(), history + 1, "all source and mirrored batches share one Undo");
+        let committed = active.doc.layers[0].surface().unwrap();
+        assert_ne!(committed.rgba(35, 20), [1.0; 4], "the source path reconnects across the mirrored frame batch");
+        assert_ne!(committed.rgba(100, 35), [1.0; 4], "the mirrored path reconnects across source frame batches");
     }
 
     #[test]

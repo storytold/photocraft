@@ -176,12 +176,13 @@ pub fn refresh(mask: &mut LayerMask, region: Option<Rect>) {
     let default = composite_default(stack);
     mask.surface.set_default_pixel(&[default]);
     let Some(bounds) = region else {
-        let mut tiles = std::collections::BTreeSet::new();
-        tiles.extend(mask.surface.tiles().map(|(c, _)| *c));
-        tiles.extend(stack.base.tiles().map(|(c, _)| *c));
+        // Preserve old output tiles so stale pixels are cleared, but expand only the source
+        // coverage by the Blur halo. Expanding the prior cache on every rebuild grows it forever.
+        let mut tiles: std::collections::BTreeSet<_> = mask.surface.tiles().map(|(c, _)| *c).collect();
+        let mut source_tiles: std::collections::BTreeSet<_> = stack.base.tiles().map(|(c, _)| *c).collect();
         for paint in &stack.layers {
             if matches!(&paint.kind, EffectKind::Paint) {
-                tiles.extend(paint.surface.tiles().map(|(c, _)| *c));
+                source_tiles.extend(paint.surface.tiles().map(|(c, _)| *c));
             }
             if matches!(&paint.kind, EffectKind::Fill { .. })
                 && let Some([x0, y0, x1, y1]) = paint.fill_bounds
@@ -221,7 +222,7 @@ pub fn refresh(mask: &mut LayerMask, region: Option<Rect>) {
                 {
                     continue;
                 }
-                tiles.extend(bounds.tiles());
+                source_tiles.extend(bounds.tiles());
             }
         }
         let halo = stack
@@ -234,11 +235,9 @@ pub fn refresh(mask: &mut LayerMask, region: Option<Rect>) {
             })
             .fold(0i32, i32::saturating_add);
         if halo > 0 {
-            let source_tiles = tiles.iter().copied().collect::<Vec<_>>();
-            for coord in source_tiles {
-                tiles.extend(coord.rect().inflate(halo).tiles());
-            }
+            source_tiles = source_tiles.into_iter().flat_map(|coord| coord.rect().inflate(halo).tiles()).collect();
         }
+        tiles.extend(source_tiles);
         refresh_tiles(mask, tiles.into_iter().collect());
         return;
     };

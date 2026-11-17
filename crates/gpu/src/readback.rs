@@ -3,6 +3,7 @@ use std::fmt;
 use photocraft_color::SampleType;
 use photocraft_raster::Interrupt;
 
+pub use super::consts::READBACK_WAIT_TIMEOUT;
 use super::textures::Stats;
 use super::{Compositor, Document, Rect, Unsupported};
 
@@ -33,10 +34,6 @@ impl<E> From<Unsupported> for ReadbackError<E> {
 
 /// Default maximum bytes of staging buffer memory in flight during band readback (32 MiB).
 pub const DEFAULT_MAX_STAGING_BYTES: usize = 32 << 20;
-
-/// How long a readback waits for submitted GPU work before treating the device as lost: a
-/// headless export has no user to cancel a wedged GPU, so it must never block forever.
-pub const READBACK_WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Blocking readback of a composite (native tests and tools).
 #[cfg(not(target_arch = "wasm32"))]

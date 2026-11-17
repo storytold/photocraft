@@ -514,7 +514,9 @@ pub fn restore(app: &mut PhotocraftApp) {
         #[cfg(feature = "uv-workbench")]
         if ws == "3D" {
             app.ui.uv_workbench.open = true;
-            app.ui.dock_tabs.properties = 2;
+            if !visible_tabs(app, Group::Properties, false).iter().any(|(index, _)| *index == app.ui.dock_tabs.properties) {
+                app.ui.dock_tabs.properties = 2;
+            }
         }
     }
 }

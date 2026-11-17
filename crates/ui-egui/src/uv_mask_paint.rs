@@ -671,12 +671,15 @@ fn compose_levels_prefix(
     }
     let needs_shell_ids =
         stack.layers.iter().take(end_layer).any(|layer| layer.visible && layer.opacity > 0.0 && matches!(&layer.kind, EffectKind::Blur { .. }));
+    if !needs_shell_ids {
+        return photocraft_compose::mask_paint::compose_prefix(stack, end_layer, region);
+    }
     let Some((_, ids)) = crate::uv_mask::shell_ids_for_document(app, ctx, document, [size.width, size.height]) else {
-        return (!needs_shell_ids).then(|| photocraft_compose::mask_paint::compose_prefix(stack, end_layer, region)).flatten();
+        return None;
     };
     let canvas = photocraft_geom::Rect::new(0, 0, size.width as i32, size.height as i32);
     let Some(shell_ids) = photocraft_compose::mask_paint::ShellIdMap::new(canvas, &ids) else {
-        return (!needs_shell_ids).then(|| photocraft_compose::mask_paint::compose_prefix(stack, end_layer, region)).flatten();
+        return None;
     };
     photocraft_compose::mask_paint::compose_prefix_with_shell_ids(stack, end_layer, region, shell_ids)
 }

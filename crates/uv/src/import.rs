@@ -35,7 +35,10 @@ fn normalize_library_path(path: &str) -> String {
         match component {
             Component::CurDir => {}
             Component::ParentDir => {
-                if !result.pop() && !result.has_root() {
+                let pops_normal = matches!(result.components().next_back(), Some(Component::Normal(_)));
+                if pops_normal {
+                    result.pop();
+                } else if !result.has_root() {
                     result.push("..");
                 }
             }
@@ -397,6 +400,12 @@ mod tests {
 
         let error = obj(source.as_bytes(), &mut |_| Err(Error("unused resolver".into()))).unwrap_err();
         assert!(error.to_string().contains("4096-corner import limit"));
+    }
+
+    #[test]
+    fn library_path_preserves_consecutive_parent_components() {
+        assert_eq!(normalize_library_path("../../shared.mtl"), "../../shared.mtl");
+        assert_eq!(normalize_library_path("../..\\shared.mtl"), "../../shared.mtl");
     }
 
     #[test]

@@ -567,6 +567,10 @@ fn read_import_texture_source(file: std::fs::File, reserved_len: u64, budget: &m
     read_opened_file(file, reserved_len.min(read_limit)).map(Arc::<[u8]>::from).map_err(|error| error.to_string())
 }
 #[cfg(target_arch = "wasm32")]
+fn read_import_texture_source(_file: std::fs::File, _reserved_len: u64, _budget: &mut UvTextureBudget) -> std::result::Result<Arc<[u8]>, String> {
+    Err("automatic model texture loading is available in native builds only".into())
+}
+#[cfg(target_arch = "wasm32")]
 fn read(_path: &str) -> Result<Vec<u8>> {
     Err(err("UV file import is available in native builds only"))
 }
@@ -1492,6 +1496,32 @@ fn validate_view(view: &Value) -> Result<()> {
     }
     Ok(())
 }
+fn charge_project_expanded(total: &mut u64, amount: u64) -> Result<()> {
+    *total = total.checked_add(amount).ok_or_else(|| err("Expanded project size overflow"))?;
+    if *total > MAX_PROJECT_BYTES {
+        return Err(err("Expanded project exceeds 2 GiB; save texture documents separately"));
+    }
+    Ok(())
+}
+fn charge_saved_document(total: &mut u64, bytes: &[u8]) -> Result<()> {
+    charge_project_expanded(total, bytes.len() as u64)?;
+    let remaining = MAX_PROJECT_BYTES.saturating_sub(*total);
+    let mut options = photocraft_format::LoadOptions::default();
+    options.max_total_bytes = options.max_total_bytes.min(remaining);
+    options.max_blob_bytes = options.max_blob_bytes.min(usize::try_from(remaining).unwrap_or(usize::MAX));
+    let (_, decoded_bytes) = photocraft_format::load_from_bytes_measured(bytes, &options).map_err(|e| err(e.to_string()))?;
+    charge_project_expanded(total, decoded_bytes)
+}
+fn write_project_container(path: &str, bytes: &[u8], expanded_bytes: u64) -> Result<()> {
+    if expanded_bytes > MAX_PROJECT_BYTES {
+        return Err(err("Expanded project exceeds 2 GiB; save texture documents separately"));
+    }
+    if bytes.len() as u64 > MAX_PROJECT_BYTES {
+        return Err(err("UV project exceeds 2 GiB; save texture documents separately"));
+    }
+    crate::file_cmds::write_file(path, bytes)?;
+    Ok(())
+}
 fn project_save(s: &mut Session, p: &Value) -> Result<Value> {
     let path = path(p)?;
     if !path.to_ascii_lowercase().ends_with(".pcuv") {
@@ -1522,6 +1552,18 @@ fn project_save(s: &mut Session, p: &Value) -> Result<Value> {
     if slots.iter().flatten().any(|id| !uv_docs.iter().any(|doc| doc.doc.id == *id)) {
         return Err(err("A bound UV document is missing from the UV workspace"));
     }
+    let mut expanded_bytes = 0u64;
+    if s.uv.assets.len() > 256 {
+        return Err(err("Project resource count exceeds budget"));
+    }
+    let mut asset_ids = BTreeSet::new();
+    for asset in &s.uv.assets {
+        if !asset_ids.insert(asset.id) || asset.source.bytes.len() as u64 > crate::uv_asset_cmds::MAX_ASSET_BYTES {
+            return Err(err("Invalid library image resource"));
+        }
+        charge_project_expanded(&mut expanded_bytes, asset.source.bytes.len() as u64)?;
+        charge_project_expanded(&mut expanded_bytes, asset.decoded_bytes)?;
+    }
     let mut zip = photocraft_format::zip::ZipWriter::new();
     let mut documents = Vec::new();
     let mut saved = std::collections::BTreeMap::<u64, String>::new();
@@ -1535,6 +1577,7 @@ fn project_save(s: &mut Session, p: &Value) -> Result<Value> {
             }
             let name = format!("documents/{i}.pcraft");
             let bytes = photocraft_format::save_to_bytes(&doc.doc, &Default::default()).map_err(|e| err(e.to_string()))?;
+            charge_saved_document(&mut expanded_bytes, &bytes)?;
             zip.add(&name, &bytes).map_err(|e| err(e.to_string()))?;
             if let Some(path) = &doc.path {
                 document_paths.insert(name.clone(), path.clone());
@@ -1555,6 +1598,7 @@ fn project_save(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let name = format!("documents/loose-{}.pcraft", loose_documents.len());
         let bytes = photocraft_format::save_to_bytes(&doc.doc, &Default::default()).map_err(|e| err(e.to_string()))?;
+        charge_saved_document(&mut expanded_bytes, &bytes)?;
         zip.add(&name, &bytes).map_err(|e| err(e.to_string()))?;
         if let Some(path) = &doc.path {
             document_paths.insert(name.clone(), path.clone());
@@ -1586,6 +1630,7 @@ fn project_save(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let environment = if let Some(resource) = &environment_resource {
         let entry = "environment/source.bin".to_owned();
+        charge_project_expanded(&mut expanded_bytes, resource.bytes.len() as u64)?;
         zip.add(&entry, &resource.bytes).map_err(|e| err(e.to_string()))?;
         Some(crate::uv_asset_cmds::Packed { id: 0, name: resource.name.clone(), entry })
     } else {
@@ -1643,10 +1688,7 @@ fn project_save(s: &mut Session, p: &Value) -> Result<Value> {
     }
     zip.add("project.json", &manifest).map_err(|e| err(e.to_string()))?;
     let bytes = zip.finish().map_err(|e| err(e.to_string()))?;
-    if bytes.len() as u64 > MAX_PROJECT_BYTES {
-        return Err(err("UV project exceeds 2 GiB; save texture documents separately"));
-    }
-    crate::file_cmds::write_file(path, &bytes)?;
+    write_project_container(path, &bytes, expanded_bytes)?;
     // Checkpoints change only after the atomic container write succeeded. External
     // exports have their own revision: saving a project never writes source textures.
     let mut saved_state = Vec::new();
@@ -1669,6 +1711,21 @@ fn project_save(s: &mut Session, p: &Value) -> Result<Value> {
     s.uv.environment = environment_resource;
     s.uv.project_view = view;
     Ok(json!({"saved":path}))
+}
+
+#[cfg(test)]
+mod project_save_budget_tests {
+    use super::*;
+
+    #[test]
+    fn expanded_budget_refusal_preserves_an_existing_destination() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("existing.pcuv");
+        std::fs::write(&path, b"previous project").expect("seed destination");
+        let error = write_project_container(path.to_str().expect("path is UTF-8"), b"replacement", MAX_PROJECT_BYTES + 1).unwrap_err();
+        assert!(error.to_string().contains("Expanded project exceeds"));
+        assert_eq!(std::fs::read(path).expect("read destination"), b"previous project");
+    }
 }
 fn project_load(s: &mut Session, p: &Value) -> Result<Value> {
     require_active_uv_bank(s)?;
@@ -1729,6 +1786,7 @@ fn project_load(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let mut assets = Vec::new();
     let mut library_bytes = 0usize;
+    let mut library_decoded_bytes = 0u64;
     let mut asset_ids = BTreeSet::new();
     for asset in &project.assets {
         if !asset_ids.insert(asset.id) {
@@ -1739,7 +1797,12 @@ fn project_load(s: &mut Session, p: &Value) -> Result<Value> {
         if library_bytes > crate::uv_asset_cmds::MAX_LIBRARY_BYTES {
             return Err(err("Library exceeds 512 MiB"));
         }
-        assets.push(crate::uv_asset_cmds::decode(asset.id, asset.name.clone(), bytes)?);
+        let decoded = crate::uv_asset_cmds::decode(asset.id, asset.name.clone(), bytes)?;
+        library_decoded_bytes = library_decoded_bytes.saturating_add(decoded.decoded_bytes);
+        if library_decoded_bytes > crate::uv_asset_cmds::MAX_LIBRARY_DECODED_BYTES {
+            return Err(err("Library exceeds 512 MiB of decoded image data"));
+        }
+        assets.push(decoded);
     }
     let environment = project
         .environment
@@ -1757,7 +1820,11 @@ fn project_load(s: &mut Session, p: &Value) -> Result<Value> {
     let mut entries: Vec<_> = project.documents.iter().chain(&project.normal_documents).chain(project.map_documents.values().flatten()).cloned().collect();
     let bound_count = entries.len();
     entries.extend(project.loose_documents.iter().cloned().map(Some));
-    let mut decoded_bytes = library_bytes as u64;
+    let mut decoded_bytes =
+        (library_bytes as u64).saturating_add(library_decoded_bytes).saturating_add(environment.as_ref().map_or(0, |resource| resource.bytes.len() as u64));
+    if decoded_bytes > MAX_PROJECT_BYTES {
+        return Err(err("Expanded project exceeds 2 GiB"));
+    }
     for entry in &entries {
         documents.push(if let Some(name) = entry {
             if decoded.insert(name.clone()) {

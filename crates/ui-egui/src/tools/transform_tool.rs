@@ -127,6 +127,12 @@ pub(crate) struct Preparing {
     made: Option<MadeLayer>,
 }
 
+impl Preparing {
+    pub(crate) fn document(&self) -> DocId {
+        self.layer.0
+    }
+}
+
 /// The canvas key of an open box's preview document (`display_doc`).
 pub(crate) fn preview_key(session: u64) -> u64 {
     (1 << 40) + session

@@ -21,8 +21,8 @@ impl PhotocraftApp {
         #[cfg(feature = "uv-workbench")]
         if id == "select.deselect" && !self.ui.uv_workbench.selected_polygons.is_empty() {
             let can_deselect = self.session.is_enabled("select.deselect");
-            crate::uv_ui::clear_polygon_selection(self);
             if self.session.active().is_none_or(|st| st.doc.selection.is_none()) && !can_deselect {
+                crate::uv_ui::clear_polygon_selection(self);
                 return Ok(Value::Null);
             }
         }
@@ -190,6 +190,17 @@ impl PhotocraftApp {
         }
         if let Some(result) = smart_svg_ui::intercept(self, id, &params) {
             return result;
+        }
+        if id == "file.scripts.imageProcessor"
+            && let Some(source) = params.get("source").and_then(Value::as_str)
+            && let Some(document) = self
+                .transform_preview
+                .as_ref()
+                .map(|preview| preview.doc.id)
+                .or_else(|| self.transform_preparing.as_ref().map(|preparing| preparing.document()))
+            && (source == "open" || (source == "current" && self.session.active().is_some_and(|st| st.doc.id == document)))
+        {
+            return Err("Commit or cancel the transform first".into());
         }
         if let Some(r) = transform_tool::intercept(self, id) {
             return r;
@@ -371,6 +382,7 @@ impl PhotocraftApp {
                     | "select.loadSelection"
                     | "select.loadLuminosity"
                     | "path.toSelection"
+                    | "path.intersectWithSelection"
                     | "path.addToSelection"
                     | "path.subtractFromSelection"
             )

@@ -578,7 +578,7 @@ fn fill_source(s: &mut Session, p: &Value) -> Result<Value> {
         })?;
         x = slab.x1;
     }
-    s.edit("Set Fill image", |doc, _| {
+    let result = s.edit("Set Fill image", |doc, _| {
         let canvas = doc.bounds();
         let mask = doc.layer_mut(id).and_then(|l| l.mask.as_mut()).ok_or_else(|| bad("Layer has no mask"))?;
         let stack = mask.paint.as_mut().ok_or_else(|| bad("Mask has no effect layers"))?;
@@ -592,7 +592,12 @@ fn fill_source(s: &mut Session, p: &Value) -> Result<Value> {
             fill.fill_bounds = Some([canvas.x0, canvas.y0, canvas.x1, canvas.y1]);
         }
         Ok(Value::Null)
-    })
+    })?;
+    // The evaluated Gray mask can need repainting even when the source Paint surface is empty.
+    if let Some(state) = s.active_mut() {
+        state.last_damage = Some(state.doc.bounds());
+    }
+    Ok(result)
 }
 pub fn specs() -> Vec<CommandSpec> {
     [
