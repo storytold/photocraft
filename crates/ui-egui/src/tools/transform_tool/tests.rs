@@ -4994,11 +4994,14 @@ fn a_warp_pulled_past_the_vanishing_point_is_applied() {
         assert!(left[0] - past[0] > 1000.0 && left[0] - past[0] < 3000.0 && (left[1] - past[1]).abs() < 1.0, "{past:?} {left:?}");
     }
     let none = egui::Modifiers::NONE;
+    let place = app.ui.transform.as_ref().unwrap().warp_place;
     crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 301.0, y: 226.0, pressure: 1.0 }, none);
     for k in 1..=10 {
         crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 301.0, y: 226.0 - 25.0 * k as f64, pressure: 1.0 }, none);
     }
     crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 301.0, y: -24.0 }, none);
+    // Away from the viewer the placement stays as it is.
+    assert_eq!(app.ui.transform.as_ref().unwrap().warp_place, place);
     let mesh = app.ui.transform.as_ref().unwrap().warp.as_ref().unwrap().mesh.clone().unwrap();
     assert!(mesh.points.iter().all(|p| p[0].is_finite() && p[1].is_finite()), "{:?}", mesh.points);
     // The grab is low in the picture's own space, so the lower rows reach out the farthest.
@@ -5007,5 +5010,42 @@ fn a_warp_pulled_past_the_vanishing_point_is_applied() {
     let st = app.session.active().unwrap();
     let LayerContent::Smart(sm) = &st.doc.layers.last().unwrap().content else { panic!("smart object") };
     assert!(!app.ui.status_error, "{}", app.ui.status);
+    assert!(sm.perspective.is_some() && sm.warp.is_some(), "applied");
+}
+
+/// A warp pulled towards the viewer past a Perspective placement's horizon keeps every point on
+/// the picture's side: the placement squeezes the warp's space towards its far side (as the
+/// reference application does), the pulled points stay, and Enter stores both.
+#[test]
+fn a_warp_pulled_towards_the_viewer_squeezes_its_perspective() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_square(600, photocraft_geom::Rect::new(150, 125, 452, 327));
+    app.ui.extras.snap = false;
+    app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    begin(&mut app, &ctx).unwrap();
+    {
+        let t = app.ui.transform.as_mut().unwrap();
+        t.mode = TransformMode::Perspective;
+        t.quad = [[270.0, 125.0], [332.0, 125.0], [452.0, 327.0], [150.0, 327.0]];
+    }
+    enter_warp(&mut app, &ctx);
+    let before = app.ui.transform.as_ref().unwrap().warp_place.unwrap();
+    let none = egui::Modifiers::NONE;
+    crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 301.0, y: 226.0, pressure: 1.0 }, none);
+    for k in 1..=10 {
+        crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 301.0, y: 226.0 + 30.0 * k as f64, pressure: 1.0 }, none);
+    }
+    crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 301.0, y: 526.0 }, none);
+    let t = app.ui.transform.as_ref().unwrap();
+    let m = t.warp_place.unwrap();
+    assert_ne!(m, before, "the placement gave way");
+    let pts = t.warp.as_ref().unwrap().mesh.as_ref().unwrap().points.clone();
+    let w = |p: &[f64; 2]| m[6] * p[0] + m[7] * p[1] + m[8];
+    let far = pts.iter().map(w).fold(f64::NEG_INFINITY, f64::max);
+    assert!(pts.iter().all(|p| w(p) > 0.005 * far), "{pts:?}");
+    commit(&mut app);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    let st = app.session.active().unwrap();
+    let LayerContent::Smart(sm) = &st.doc.layers.last().unwrap().content else { panic!("smart object") };
     assert!(sm.perspective.is_some() && sm.warp.is_some(), "applied");
 }

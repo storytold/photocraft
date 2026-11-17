@@ -133,7 +133,66 @@ const HORIZON_MARGIN: f64 = 1e-3;
 /// (`photocraft_engine::warp_cmds`).
 const HORIZON_REACH: f64 = 4e8;
 
+/// How close to a Perspective or Distort placement's horizon a pulled warp may come on the
+/// viewer's side before the placement gives way ([`TransformSession::keep_warp_before_horizon`]):
+/// its homogeneous weight there as a share of the weight on the far side (the reference
+/// application's files: 0.0099 to 0.0116 over pulls from 240 to 300 px).
+const HORIZON_SQUEEZE: f64 = 0.0107;
+
 impl TransformSession {
+    /// A smart object's warp pulled towards the viewer past its Perspective or Distort
+    /// placement's horizon (where the picture would come round behind the viewer) keeps every
+    /// point on the picture's side, as the reference application does: its placement squeezes the
+    /// warp's space along the way the picture recedes, about the far side of the warp's box, until
+    /// the nearest point is back at [`HORIZON_SQUEEZE`] of the weight there. The warp's points stay.
+    pub fn keep_warp_before_horizon(&mut self) {
+        let (Some(m), Some(w)) = (self.warp_place, self.warp.as_ref()) else { return };
+        if m[6] == 0.0 && m[7] == 0.0 {
+            return;
+        }
+        let pts = w.to_mesh(1, 1).points;
+        let c = [(w.bounds[0] + w.bounds[2]) / 2.0, (w.bounds[1] + w.bounds[3]) / 2.0];
+        let side = (m[6] * c[0] + m[7] * c[1] + m[8]).signum();
+        let (gx, gy) = (m[6] * side, m[7] * side);
+        let n = gx.hypot(gy);
+        if !(n > 0.0 && n.is_finite() && side != 0.0) {
+            return;
+        }
+        // Along the unit way u the weight grows: w = a + n s with s = p · u.
+        let (ux, uy) = (gx / n, gy / n);
+        let a = m[8] * side;
+        let s_of = |p: &[f64; 2]| p[0] * ux + p[1] * uy;
+        // The far side is the warp's box's (the pulled points may run out towards the vanishing
+        // point), the near side the nearest point.
+        let [x0, y0, x1, y1] = w.bounds;
+        let s_far = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].iter().map(s_of).fold(f64::NEG_INFINITY, f64::max);
+        let s_near = pts.iter().map(s_of).fold(f64::INFINITY, f64::min);
+        let (w_far, w_near) = (a + n * s_far, a + n * s_near);
+        if !(w_far > 0.0 && w_near.is_finite() && s_far > s_near) || w_near >= HORIZON_SQUEEZE * w_far {
+            return;
+        }
+        let k = (HORIZON_SQUEEZE - 1.0) * w_far / (n * (s_near - s_far));
+        if !(k > 0.0 && k < 1.0) {
+            return;
+        }
+        // S: p ↦ p + (k − 1)((p · u) − s_far) u, then the placement takes S first.
+        let sq = [
+            1.0 + (k - 1.0) * ux * ux,
+            (k - 1.0) * ux * uy,
+            -(k - 1.0) * s_far * ux,
+            (k - 1.0) * ux * uy,
+            1.0 + (k - 1.0) * uy * uy,
+            -(k - 1.0) * s_far * uy,
+            0.0,
+            0.0,
+            1.0,
+        ];
+        let placed = photocraft_algo::transform::Homography(m).mul(&photocraft_algo::transform::Homography(sq));
+        if placed.0.iter().all(|v| v.is_finite()) {
+            self.warp_place = Some(placed.0);
+        }
+    }
+
     /// A point of the warp being edited, where it shows in the document ([`Self::warp_place`]).
     pub fn warp_to_doc(&self, p: [f64; 2]) -> [f64; 2] {
         let Some(m) = self.warp_place else { return p };

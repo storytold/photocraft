@@ -182,6 +182,7 @@ pub(super) fn warp_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tol: f64, mod
             if matches!(ev, ToolEvent::Up { .. }) {
                 pv.warp_drag = None;
             }
+            t.keep_warp_before_horizon();
         }
     }
 }
