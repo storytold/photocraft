@@ -3420,10 +3420,25 @@ fn templates_open_untitled_without_their_path() {
     let path = format!("{dir}/card.psdt");
     let mut s = session(8, 8, 8);
     std::fs::write(&path, encode(doc(&s), "x.psd", None).unwrap().0).unwrap();
+    s.close(0).unwrap();
     s.execute("file.openAs", json!({"path": path})).unwrap();
     s.execute("file.openAs", json!({"path": path, "as": "psd"})).unwrap();
-    let opened: Vec<_> = s.documents()[1..].iter().map(|d| (d.doc.name.as_str(), d.path.as_deref())).collect();
+    let opened: Vec<_> = s.documents().iter().map(|d| (d.doc.name.as_str(), d.path.as_deref())).collect();
     assert_eq!(opened, [("Untitled-1", None), ("Untitled-2", None)]);
+}
+
+#[test]
+fn file_new_assigns_unique_default_names() {
+    let mut s = Session::new();
+    for expected in ["Untitled-1", "Untitled-2", "Untitled-3"] {
+        s.execute("file.new", json!({"width":4,"height":4})).unwrap();
+        assert_eq!(s.active().unwrap().doc.name, expected);
+    }
+    s.close(0).unwrap();
+    s.execute("file.new", json!({"width":4,"height":4})).unwrap();
+    assert_eq!(s.active().unwrap().doc.name, "Untitled-4");
+    s.execute("file.new", json!({"width":4,"height":4,"name":"Custom"})).unwrap();
+    assert_eq!(s.active().unwrap().doc.name, "Custom");
 }
 
 #[test]

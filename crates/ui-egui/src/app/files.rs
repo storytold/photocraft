@@ -4,6 +4,18 @@ use super::{
 };
 
 impl PhotocraftApp {
+    /// Reserve names for documents being decoded and New dialogs already on screen too.
+    pub(crate) fn untitled_document_name(&self) -> String {
+        let opening = self.jobs.opens.iter().map(|o| o.name.as_str());
+        let dialogs = self
+            .ui
+            .dialogs
+            .iter()
+            .filter(|d| d.kind == crate::state::DialogKind::NewDocument)
+            .filter_map(|d| d.fields.get("name").and_then(serde_json::Value::as_str));
+        photocraft_engine::file_cmds::untitled_document_name_with(&self.session, opening.chain(dialogs))
+    }
+
     /// Record `path` as the most-recently-opened file (File › Open Recent): de-duplicated, newest
     /// first, capped at Preferences › File Handling › Recent File List Contains. The list lives in
     /// the preferences (`fileHandling.recentFiles`), so it survives a restart; `ui.recent_files`
@@ -887,6 +899,8 @@ impl PhotocraftApp {
     /// request, so the OS clipboard is read here, as for a paste.
     pub(crate) fn new_document_fields(&mut self) -> serde_json::Map<String, serde_json::Value> {
         let mut f = crate::state::UiState::new_document_fields();
+        let default_name = self.untitled_document_name();
+        f.insert("name".into(), serde_json::Value::String(default_name));
         if let Some(serde_json::Value::Object(saved)) = self.session.prefs().dialogs.get(NEW_DOCUMENT) {
             for k in NEW_DOCUMENT_REMEMBERED {
                 if let Some(v) = saved.get(k).filter(|v| remembered_new_document_value(k, v)) {

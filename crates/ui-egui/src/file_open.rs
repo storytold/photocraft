@@ -7,7 +7,7 @@
 
 use crate::{PhotocraftApp, notices};
 use photocraft_doc::DocId;
-use photocraft_engine::file_cmds::{is_template, untitled_name};
+use photocraft_engine::file_cmds::is_template;
 
 /// A request from the operating system, delivered by the platform shell through
 /// [`Services::os_events`](crate::Services::os_events).
@@ -247,13 +247,13 @@ impl PhotocraftApp {
         self.push_recent(path);
     }
 
-    /// The name a file called `name` opens under: its own, or the first free "Untitled-N" for a
+    /// The name a file called `name` opens under: its own, or the next default name for a
     /// template.
     pub(crate) fn open_name(&self, name: &str) -> String {
         if !is_template(name) {
             return name.to_string();
         }
-        untitled_name(tl!("Untitled"), |n| self.session.documents().iter().any(|d| d.doc.name == n) || self.jobs.opens.iter().any(|o| o.name == n))
+        self.untitled_document_name()
     }
 
     /// Read and open the file at `path` (see [`open_file`](Self::open_file)).

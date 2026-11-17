@@ -261,6 +261,9 @@ pub struct Session {
     filter_mask_layer: Option<LayerId>,
     /// Edit › Preferences, keyboard shortcuts, menu and toolbar customisation (see `prefs`).
     pub prefs: prefs::PrefsStore,
+    /// Frontend translation of the default document-name base, using the current language
+    /// preference. `None` keeps headless sessions in English; explicit names are never translated.
+    pub untitled_name_base: Option<fn(&str) -> String>,
     /// Release checks use an injected platform transport; no network I/O in the engine.
     pub updates: updates_cmds::Updates,
     /// Edit menu state: Fade source, custom shape library (see `edit_menu_cmds`).

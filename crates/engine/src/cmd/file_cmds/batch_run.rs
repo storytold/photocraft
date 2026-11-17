@@ -920,6 +920,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     let raw_ppi = super::open::raw_open_resolution(s);
     let action_prefs = s.prefs().actions.clone();
     let prefs = s.prefs.clone();
+    let untitled_name_base = s.untitled_name_base;
     let color_settings = s.color.settings.clone();
     let raw_settings = s.batch_raw_open.as_ref().unwrap_or(&s.prefs().raw_defaults).clone();
     let script_count = s.actions.script_steps;
@@ -955,6 +956,10 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
             let read_only_source = std::cell::Cell::new(false);
             let prepare = |scratch: &mut Session, path: &str| -> Result<()> {
                 read_only_source.set(false);
+                // An unnamed document created by a Batch action uses the same language as
+                // interactive playback, even when profile/RAW prompt suppression is disabled.
+                scratch.untitled_name_base = untitled_name_base;
+                scratch.prefs.edit(|p| p.interface.language = prefs.get().interface.language.clone());
                 #[cfg(not(target_arch = "wasm32"))]
                 if check_folder_format && !super::paths::openable_name(path) {
                     return Err(EngineError::Other(format!("unsupported Batch folder input: {path}")));

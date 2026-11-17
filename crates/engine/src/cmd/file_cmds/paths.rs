@@ -170,10 +170,49 @@ pub fn untitled_name(base: &str, taken: impl Fn(&str) -> bool) -> String {
     (1..).map(|i| format!("{base}-{i}")).find(|n| !taken(n)).unwrap_or_default()
 }
 
-/// The name a document opened from `path` gets when `path` is a template: the first "Untitled-N"
-/// no open document has.
+/// One above the highest open untitled number, including saved stems and the legacy
+/// unnumbered default. Closing the highest number makes it reusable; closing a lower one doesn't.
+fn next_untitled_name<'a>(base: &str, names: impl Iterator<Item = &'a str>) -> String {
+    let number = |name: &str| {
+        if name == base {
+            return Some(1);
+        }
+        name.strip_prefix(base)?.strip_prefix('-')?.parse::<u64>().ok().filter(|n| *n > 0)
+    };
+    // Match the whole label first: a translated base may itself contain a period.
+    let numbers: std::collections::BTreeSet<u64> =
+        names.filter_map(|name| number(name).or_else(|| name.rsplit_once('.').and_then(|(stem, _)| number(stem)))).collect();
+    let highest = numbers.last().copied().unwrap_or(0);
+    // A hostile saved name can contain u64::MAX. Use a free lower number rather than overflow
+    // or return a duplicate; the gap search is bounded by the number of reserved documents.
+    let next = highest.checked_add(1).unwrap_or_else(|| {
+        let mut candidate = 1;
+        for &number in &numbers {
+            if number != candidate {
+                break;
+            }
+            candidate = candidate.saturating_add(1);
+        }
+        candidate
+    });
+    format!("{base}-{next}")
+}
+
+/// Shared File > New and template default, including headless command playback.
+pub fn untitled_document_name(s: &Session) -> String {
+    untitled_document_name_with(s, std::iter::empty())
+}
+
+/// Default name with additional reservations owned by the frontend (decoding files and dialogs).
+pub fn untitled_document_name_with<'a>(s: &'a Session, reserved: impl Iterator<Item = &'a str>) -> String {
+    let base = s.untitled_name_base.map(|translate| translate(&s.prefs().interface.language)).unwrap_or_else(|| "Untitled".into());
+    let base = if base.is_empty() { "Untitled" } else { &base };
+    next_untitled_name(base, s.reserved_document_names().chain(reserved))
+}
+
+/// The default name for a template opened as a new document without its original path.
 pub fn template_name(s: &Session, path: &str) -> Option<String> {
-    is_template(path).then(|| untitled_name("Untitled", |n| s.documents().iter().any(|d| d.doc.name == n)))
+    is_template(path).then(|| untitled_document_name(s))
 }
 
 pub(crate) fn stem(path: &str) -> String {

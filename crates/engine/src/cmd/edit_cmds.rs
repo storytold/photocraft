@@ -695,7 +695,8 @@ fn new_from_clipboard(s: &mut Session) -> Result<Value> {
     let fmt = clip.surface.format();
     let target = PixelFormat::new(fmt.mode, fmt.sample, true);
     let moved = if dx == 0 && dy == 0 { clip.surface } else { photocraft_algo::resample::translate_surface(&clip.surface, dx, dy) };
-    let mut doc = Document::new("Untitled", photocraft_geom::Size::new(w, h), fmt.mode, fmt.sample);
+    let name = crate::file_cmds::untitled_document_name(s);
+    let mut doc = Document::new(&name, photocraft_geom::Size::new(w, h), fmt.mode, fmt.sample);
     if let Some(r) = clip.resolution.filter(|r| r.is_finite() && *r > 0.0) {
         doc.resolution_dpi = r;
     }

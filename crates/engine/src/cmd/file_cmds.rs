@@ -58,7 +58,7 @@ use paths::is_file;
 pub(crate) use paths::openable_name;
 pub use paths::{
     extension, holds, holds_at, is_template, layered_extension, list_images, losses_at, portable_device_name, same_destination, same_file, saves_in_place,
-    template_name, untitled_name,
+    template_name, untitled_document_name, untitled_document_name_with, untitled_name,
 };
 pub(crate) use paths::{file_name, forward_slashes, is_windows_device_name, join, read_file, read_file_limited, sanitize, stem, write_file};
 pub(crate) use place_steps::PlaceSteps;

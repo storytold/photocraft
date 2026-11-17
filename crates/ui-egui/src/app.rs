@@ -37,6 +37,7 @@ impl PhotocraftApp {
     /// keeps the services' automation policy as the gate actions automation wrote play under.
     pub fn new(mut session: Session, mut services: Services) -> Self {
         session.updates.check = services.check_updates.take();
+        session.untitled_name_base = Some(|language| i18n::tr(i18n::Lang::from_pref(language), "Untitled").to_string());
         // Actions automation wrote keep this gate when the user plays them. Batch and droplets
         // copy steps instead of the action, so they do not keep the gate yet.
         session.automation_gate = session.automation_gate.or(services.automation_authorize);

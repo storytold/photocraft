@@ -298,7 +298,12 @@ fn build() -> Vec<CommandSpec> {
                 let mode = color_mode(p.get("mode").and_then(Value::as_str).unwrap_or("rgb")).unwrap_or(ColorMode::Rgb);
                 // A 1-bit Bitmap document is stored as 8-bit gray, like a converted Bitmap image.
                 let depth = sample_type(p.get("depth").and_then(Value::as_u64).unwrap_or(8)).filter(|_| mode != ColorMode::Bitmap).unwrap_or(SampleType::U8);
-                let name = p.get("name").and_then(Value::as_str).unwrap_or("Untitled").to_string();
+                let name = p
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .filter(|name| !name.is_empty())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| crate::file_cmds::untitled_document_name(s));
                 let res = p.get("resolution").and_then(Value::as_f64).unwrap_or(72.0).clamp(1.0, MAX_RESOLUTION) as f32;
                 // The background colour; `None` for Transparent.
                 let background = match p.get("background").and_then(Value::as_str).unwrap_or("white") {

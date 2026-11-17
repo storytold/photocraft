@@ -200,6 +200,11 @@ impl Session {
         self.held_opens.iter().any(|(_, d, _)| d.name == name)
     }
 
+    /// Names already admitted or awaiting an open prompt, reserved for default-name allocation.
+    pub(crate) fn reserved_document_names(&self) -> impl Iterator<Item = &str> {
+        self.docs.iter().map(|d| d.doc.name.as_str()).chain(self.held_opens.iter().map(|(_, d, _)| d.name.as_str()))
+    }
+
     /// Takes a document a background open held back for the profile prompt: the document and
     /// whether its source is read-only. `None` when there is no such document (already taken).
     pub fn take_held_open(&mut self, id: u64) -> Option<(Document, bool)> {
