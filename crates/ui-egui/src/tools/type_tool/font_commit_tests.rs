@@ -167,14 +167,12 @@ fn commit(h: &mut Harness<'_, Probe>, method: &str) {
     }
 }
 
+// A pattern picks the text's styles: 0 is all `FONTS[0]`, 2 is `FONTS[0]` with `FONTS[1]` on
+// [2, 4]. Patterns 1 and 3 would be the same with the two fonts swapped, and every case already
+// chooses each font as the target, so they would reach nothing new.
 #[test]
 fn selected_fonts_commit_pattern_0() {
     selected_fonts_commit_cases(0);
-}
-
-#[test]
-fn selected_fonts_commit_pattern_1() {
-    selected_fonts_commit_cases(1);
 }
 
 #[test]
@@ -182,10 +180,9 @@ fn selected_fonts_commit_pattern_2() {
     selected_fonts_commit_cases(2);
 }
 
-#[test]
-fn selected_fonts_commit_pattern_3() {
-    selected_fonts_commit_cases(3);
-}
+/// Each way to accept a font, committed with the checkmark, and each way to commit after an
+/// Enter: accepting and committing are separate steps, so their full grid repeats both.
+const ACCEPT_THEN_COMMIT: [(&str, &str); 4] = [("enter", "checkmark"), ("click", "checkmark"), ("arrow-enter", "checkmark"), ("enter", "outside")];
 
 fn selected_fonts_commit_cases(pattern: usize) {
     let mut cases = 0;
@@ -193,79 +190,76 @@ fn selected_fonts_commit_cases(pattern: usize) {
         for character in [false, true] {
             for range in [[0, 2], [2, 4], [4, 6], [0, 6], [4, 2], [1, 5]] {
                 for target in FONTS {
-                    for accept in ["enter", "click", "arrow-enter"] {
-                        for method in ["checkmark", "outside"] {
-                            let label = (new, pattern, character, range, target, accept, method);
-                            let (mut h, id) = fixture(new, pattern, character, "abcdef");
-                            select(&mut h, range);
-                            h.run();
-                            let mut expected = families(&saved(&h, id));
-                            for font in &mut expected[range[0].min(range[1])..range[0].max(range[1])] {
-                                *font = target.into();
-                            }
-                            choose(&mut h, target, accept);
-                            let applied = saved(&h, id);
-                            assert_eq!(families(&applied), expected, "{label:?}");
-                            assert_eq!(fields(&h)[0].as_deref(), Some(target), "selected font caption: {label:?}");
-                            let pixels = layer(&h.state().app.session.active().unwrap().doc, id).cache.clone();
-                            commit(&mut h, method);
-                            assert!(h.state().app.ui.text_edit.is_none(), "{label:?}");
-                            assert_eq!(saved(&h, id), applied, "{label:?}");
-                            assert_eq!(layer(&h.state().app.session.active().unwrap().doc, id).cache, pixels, "{label:?}");
-                            let uniform = expected.iter().all(|f| f == &expected[0]);
-                            assert_eq!(
-                                fields(&h)[0].clone().unwrap_or_default(),
-                                if uniform { expected[0].clone() } else { String::new() },
-                                "mixed caption after commit: {label:?}"
-                            );
-                            super::edit_active(&mut h.state_mut().app).unwrap();
-                            select(&mut h, range);
-                            h.run();
-                            assert_eq!(fields(&h)[0].as_deref(), Some(target), "reselected caption: {label:?}");
-                            cases += 1;
+                    for (accept, method) in ACCEPT_THEN_COMMIT {
+                        let label = (new, pattern, character, range, target, accept, method);
+                        let (mut h, id) = fixture(new, pattern, character, "abcdef");
+                        select(&mut h, range);
+                        h.run();
+                        let mut expected = families(&saved(&h, id));
+                        for font in &mut expected[range[0].min(range[1])..range[0].max(range[1])] {
+                            *font = target.into();
                         }
+                        choose(&mut h, target, accept);
+                        let applied = saved(&h, id);
+                        assert_eq!(families(&applied), expected, "{label:?}");
+                        assert_eq!(fields(&h)[0].as_deref(), Some(target), "selected font caption: {label:?}");
+                        let pixels = layer(&h.state().app.session.active().unwrap().doc, id).cache.clone();
+                        commit(&mut h, method);
+                        assert!(h.state().app.ui.text_edit.is_none(), "{label:?}");
+                        assert_eq!(saved(&h, id), applied, "{label:?}");
+                        assert_eq!(layer(&h.state().app.session.active().unwrap().doc, id).cache, pixels, "{label:?}");
+                        let uniform = expected.iter().all(|f| f == &expected[0]);
+                        assert_eq!(
+                            fields(&h)[0].clone().unwrap_or_default(),
+                            if uniform { expected[0].clone() } else { String::new() },
+                            "mixed caption after commit: {label:?}"
+                        );
+                        super::edit_active(&mut h.state_mut().app).unwrap();
+                        select(&mut h, range);
+                        h.run();
+                        assert_eq!(fields(&h)[0].as_deref(), Some(target), "reselected caption: {label:?}");
+                        cases += 1;
                     }
                 }
             }
         }
     }
-    assert_eq!(cases, 288);
+    assert_eq!(cases, 192);
 }
 
 #[test]
 fn caret_font_choices_style_only_subsequent_typing_including_ime() {
     for new in [false, true] {
         for character in [false, true] {
-            for original in 0..2 {
-                for text in ["abcdef", "AéB👩‍💻", "ab\ncdé"] {
-                    let n = text.chars().count();
-                    for caret in [0, n / 2, n] {
-                        for accept in ["enter", "click", "arrow-enter"] {
-                            let (mut h, id) = fixture(new, original, character, text);
-                            select(&mut h, [caret, caret]);
-                            h.run();
-                            let before = saved(&h, id);
-                            let steps = h.state().app.session.active().unwrap().history.entries().len();
-                            let font = FONTS[1 - original];
-                            choose(&mut h, font, accept);
-                            assert_eq!(saved(&h, id), before, "a font choice at a caret never restyles existing characters");
-                            assert_eq!(h.state().app.session.active().unwrap().history.entries().len(), steps);
-                            assert_eq!(fields(&h)[0].as_deref(), Some(font));
-                            crate::type_font_preview::set(&mut h.state_mut().app, font.into());
-                            assert!(crate::type_font_preview::display_doc(&mut h.state_mut().app, 0).is_none());
-                            // Multiple preedit replacements and final commit keep the pending font.
-                            super::ime_update(&mut h.state_mut().app, "é", false);
-                            super::ime_update(&mut h.state_mut().app, "éX", true);
-                            super::insert(&mut h.state_mut().app, "Z");
-                            let mut expected = families(&before);
-                            expected.splice(caret..caret, std::iter::repeat_n(font.to_string(), 3));
-                            assert_eq!(families(&saved(&h, id)), expected);
-                            let typed = saved(&h, id);
-                            commit(&mut h, "checkmark");
-                            assert_eq!(saved(&h, id), typed);
-                            assert!(h.state().app.ui.type_insertion_style.is_none());
-                        }
-                    }
+            // One original font and one acceptance: the original only decides which of the two
+            // fonts is chosen, and `selected_fonts_commit_cases` covers every acceptance.
+            let (original, accept) = (0, "enter");
+            for text in ["abcdef", "AéB👩‍💻", "ab\ncdé"] {
+                let n = text.chars().count();
+                for caret in [0, n / 2, n] {
+                    let (mut h, id) = fixture(new, original, character, text);
+                    select(&mut h, [caret, caret]);
+                    h.run();
+                    let before = saved(&h, id);
+                    let steps = h.state().app.session.active().unwrap().history.entries().len();
+                    let font = FONTS[1 - original];
+                    choose(&mut h, font, accept);
+                    assert_eq!(saved(&h, id), before, "a font choice at a caret never restyles existing characters");
+                    assert_eq!(h.state().app.session.active().unwrap().history.entries().len(), steps);
+                    assert_eq!(fields(&h)[0].as_deref(), Some(font));
+                    crate::type_font_preview::set(&mut h.state_mut().app, font.into());
+                    assert!(crate::type_font_preview::display_doc(&mut h.state_mut().app, 0).is_none());
+                    // Multiple preedit replacements and final commit keep the pending font.
+                    super::ime_update(&mut h.state_mut().app, "é", false);
+                    super::ime_update(&mut h.state_mut().app, "éX", true);
+                    super::insert(&mut h.state_mut().app, "Z");
+                    let mut expected = families(&before);
+                    expected.splice(caret..caret, std::iter::repeat_n(font.to_string(), 3));
+                    assert_eq!(families(&saved(&h, id)), expected);
+                    let typed = saved(&h, id);
+                    commit(&mut h, "checkmark");
+                    assert_eq!(saved(&h, id), typed);
+                    assert!(h.state().app.ui.type_insertion_style.is_none());
                 }
             }
         }
