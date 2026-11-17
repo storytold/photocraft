@@ -931,6 +931,15 @@ fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, panel: PresetPanel, names
             Act::CustomShapeTool => app.ui.tool = Tool::CustomShape,
             Act::ToolPreset(name) => tool_presets::select(app, &name),
             Act::Run(command, params) => {
+                // Picking a pattern is an explicit choice for the active tool too: the Pattern
+                // Stamp keeps its own pattern now (#12868), so a panel pick that only changed the
+                // shared selection would leave the next stroke painting the old one.
+                if command == "pattern.presets.select"
+                    && app.ui.tool == Tool::PatternStamp
+                    && let Some(id) = params.get("pattern").and_then(Value::as_str)
+                {
+                    app.ui.tool_options.pattern_stamp_pattern = Some(id.to_string());
+                }
                 let Some(reply) = run(app, &command, params) else { continue };
                 after(app, ctx, panel, &event, &reply);
             }
