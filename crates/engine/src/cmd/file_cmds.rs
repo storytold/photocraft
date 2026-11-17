@@ -462,6 +462,10 @@ mod tests;
 mod export_clut_cube_header_tests;
 
 #[cfg(test)]
+#[path = "file_cmds/place_group_stacking_tests.rs"]
+mod place_group_stacking_tests;
+
+#[cfg(test)]
 #[path = "file_cmds/place_job_tests.rs"]
 mod place_job_tests;
 
