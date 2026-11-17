@@ -344,6 +344,81 @@ fn select_channel_by_key(ui: &egui::Ui, id: egui::Id, count: usize) {
     }
 }
 
+/// Height of the strip under the graph's horizontal gradient bar that holds the black and white
+/// input sliders.
+const INPUT_SLIDER_H: f32 = 11.0;
+
+/// Closest an end point's input may come to its neighbour's.
+const INPUT_SLIDER_GAP: f32 = 4.0;
+
+/// A triangular input-slider handle: apex at `(x, y)`.
+fn input_handle(p: &egui::Painter, x: f32, y: f32, fill: Color32, stroke: Color32) {
+    p.add(egui::Shape::convex_polygon(vec![pos2(x, y), pos2(x + 5.5, y + 9.0), pos2(x - 5.5, y + 9.0)], fill, Stroke::new(1.0, stroke)));
+}
+
+/// Where the end point `which` (0 black = first, 1 white = last) of `pts` may be dragged to:
+/// whole levels, at least [`INPUT_SLIDER_GAP`] from the neighbouring point.
+fn input_slider_value(pts: &[[f32; 2]], which: u8, level: f32) -> Option<f32> {
+    let level = if level.is_finite() { level } else { 0.0 };
+    let (lo, hi) = if which == 0 {
+        (0.0, pts.get(1)?[0] - INPUT_SLIDER_GAP)
+    } else {
+        let n = pts.len().checked_sub(2)?;
+        (pts.get(n)?[0] + INPUT_SLIDER_GAP, 255.0)
+    };
+    // A neighbour closer than the gap leaves no room: the bound that cannot be met gives way.
+    let (lo, hi) = if which == 0 { (lo, hi.max(lo)) } else { (lo.min(hi), hi) };
+    Some(level.clamp(lo, hi).round())
+}
+
+/// Drags the black (first) or white (last) end point's input with the strip's pointer; outputs
+/// stay. The moved point becomes the selected one. Returns whether a value changed.
+fn drag_input_sliders(ui: &egui::Ui, cx: &EditorCx, sresp: &egui::Response, graph: Rect, pts: &mut [[f32; 2]], st: &mut CurveUi, e: &mut Edit) -> bool {
+    let strip = sresp.rect;
+    let track = Rect::from_min_max(pos2(graph.left(), strip.top()), pos2(graph.right(), strip.bottom()));
+    ui.data_mut(|d| d.insert_temp(cx.mem.with("curves-input-slider"), track));
+    let drag_id = cx.mem.with("curves-input-drag");
+    let xpos = |val: f32| graph.left() + val / 255.0 * graph.width();
+    let mut which: Option<u8> = ui.data(|d| d.get_temp(drag_id)).flatten();
+    let mut changed = false;
+    if sresp.is_pointer_button_down_on()
+        && ui.input(|i| i.pointer.primary_pressed())
+        && let Some(pos) = ui.input(|i| i.pointer.press_origin())
+        && let (Some(first), Some(last)) = (pts.first(), pts.last())
+    {
+        let (bx, wx) = (xpos(first[0]), xpos(last[0]));
+        // Nearest triangle; at the same spot the pointer's side picks.
+        which = Some(if (pos.x - bx).abs() < (pos.x - wx).abs() || ((bx - wx).abs() < f32::EPSILON && pos.x <= bx) { 0 } else { 1 });
+    }
+    if sresp.is_pointer_button_down_on()
+        && let (Some(k), Some(pos)) = (which, ui.input(|i| i.pointer.interact_pos()))
+    {
+        let level = (pos.x - graph.left()) / graph.width().max(1.0) * 255.0;
+        let idx = if k == 0 { 0 } else { pts.len().saturating_sub(1) };
+        if let Some(input) = input_slider_value(pts, k, level)
+            && let Some(q) = pts.get_mut(idx)
+        {
+            changed = q[0] != input;
+            q[0] = input;
+            st.gesture.selected = Some(idx);
+            st.gesture.drag = None;
+        }
+    }
+    if which.is_some() && !sresp.is_pointer_button_down_on() {
+        which = None;
+        e.commit = true;
+    }
+    ui.data_mut(|d| d.insert_temp(drag_id, which));
+    changed
+}
+
+fn draw_input_handles(sp: &egui::Painter, graph: Rect, strip: Rect, pts: &[[f32; 2]], t: &Tokens) {
+    if let (Some(first), Some(last)) = (pts.first(), pts.last()) {
+        input_handle(sp, graph.left() + first[0] / 255.0 * graph.width(), strip.top() + 1.0, Color32::BLACK, t.text_dim);
+        input_handle(sp, graph.left() + last[0] / 255.0 * graph.width(), strip.top() + 1.0, Color32::WHITE, t.text_dim);
+    }
+}
+
 pub(super) fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let t = Tokens::get(ui.ctx());
     let space = space_of(v);
@@ -368,8 +443,14 @@ pub(super) fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let mut map = read_map(v, key);
     let side = curve_side(ui);
     ui.add_space(4.0);
-    let (full, resp) = ui.allocate_exact_size(vec2(side, side + 14.0), Sense::click_and_drag());
+    // Input sliders sit under the graph in the dialog only (not the Properties panel or pencil mode).
+    let sliders = cx.dialog && !pencil && pts.len() >= 2;
+    let extra = if sliders { INPUT_SLIDER_H } else { 0.0 };
+    let (full, resp) = ui.allocate_exact_size(vec2(side, side + 14.0 + extra), Sense::click_and_drag());
     let graph = curve_graph(full, side);
+    // Registered after the graph so it wins the hit test where the two overlap.
+    let strip = Rect::from_min_max(pos2(graph.left() - 6.0, graph.bottom() + 13.0), pos2(graph.right() + 6.0, graph.bottom() + 13.0 + INPUT_SLIDER_H));
+    let strip_resp = sliders.then(|| ui.interact(strip, cx.mem.with("curves-input-sliders"), Sense::click_and_drag()));
     ui.data_mut(|d| d.insert_temp(cx.mem.with("curves-graph"), graph));
     let to_scr = |q: [f32; 2]| pos2(graph.left() + q[0] / 255.0 * graph.width(), graph.bottom() - q[1] / 255.0 * graph.height());
     let mut changed = false;
@@ -400,6 +481,9 @@ pub(super) fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
         changed = interaction.changed;
         e.commit |= interaction.commit;
     }
+    if let Some(sresp) = &strip_resp {
+        changed |= drag_input_sliders(ui, cx, sresp, graph, &mut pts, &mut st, &mut e);
+    }
 
     // Draw: histogram, quarter grid, baseline, gradient bars, other channels, the curve, points.
     let p = ui.painter_at(full.expand(2.0));
@@ -424,6 +508,9 @@ pub(super) fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let vbar = Rect::from_min_max(pos2(full.left(), graph.top()), pos2(full.left() + 8.0, graph.bottom()));
     gradient_bar(&p, hbar, Color32::BLACK, bar_color(&chan, &t), false);
     gradient_bar(&p, vbar, Color32::BLACK, bar_color(&chan, &t), true);
+    if sliders {
+        draw_input_handles(&ui.painter_at(strip.expand(2.0)), graph, strip, &pts, &t);
+    }
     let draw_curve = |key: &str, pts: &[[f32; 2]], color: Color32, width: f32| {
         let line = cached_curve_line(ui.ctx(), cx.mem.with(("curves-polyline", key)), pts, graph);
         p.add(egui::Shape::line(line, Stroke::new(width, color)));
@@ -910,3 +997,7 @@ mod channel_key_tests {
         assert_eq!(ctx.data(|d| d.get_temp::<usize>(cx.mem.with("curves-ch"))), Some(2));
     }
 }
+
+#[cfg(test)]
+#[path = "curves_input_sliders_tests.rs"]
+mod curves_input_sliders_tests;
