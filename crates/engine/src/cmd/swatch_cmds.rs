@@ -483,8 +483,14 @@ pub fn act_table(bytes: &[u8]) -> std::result::Result<(Vec<String>, Option<u64>)
 }
 
 /// Encode colors as `.act` bytes (at most [`ACT_COLORS`]); the transparent index is kept.
+///
+/// As Photoshop saves a Color Table: the count/transparent trailer follows the 256 colors only
+/// when the table is shorter than 256 colors or has a transparent index, so a full table without
+/// one is the bare 768-byte palette (#14375).
 pub fn act_bytes(colors: &[[u8; 3]], transparent: Option<u16>) -> std::result::Result<Vec<u8>, String> {
-    craft_psd::act::write(colors, Some(colors.len().min(ACT_COLORS) as u16), transparent).map_err(|e| e.to_string())
+    let used = colors.len().min(ACT_COLORS);
+    let count = (used < ACT_COLORS || transparent.is_some()).then_some(used as u16);
+    craft_psd::act::write(colors, count, transparent).map_err(|e| e.to_string())
 }
 
 /// Parse a swatch file into groups (`group` names the group for ungrouped colours).
@@ -880,3 +886,6 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod act_save_format_tests;
