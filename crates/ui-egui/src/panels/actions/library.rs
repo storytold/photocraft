@@ -122,30 +122,34 @@ pub(super) fn open(app: &mut PhotocraftApp, kind: Kind) -> Result<Value, String>
     if kind != Kind::Replace {
         return Ok(prompt(app, held));
     }
-    app.ask_file(FileDialogRequest::Open { multiple: false, initial_dir: None, extensions: Some(vec!["atn".into()]) }, move |app, answer| {
-        idle(app, command)?;
-        if app.session.actions.rev != revision || app.held_actions_library.is_some() {
-            return Err(tl!("The actions changed. Request Replace Actions again.").into());
-        }
-        let (name, bytes, path) = match answer {
-            FileDialogAnswer::Paths(paths) => {
-                let path = paths.into_iter().next().ok_or("cancelled")?;
-                self::authorize(app, command, &json!({"confirm":true,"path":path}), gate, automated)?;
-                let bytes = photocraft_format::read_file_limited(std::path::Path::new(&path), MAX_PICKED_BYTES).map_err(|error| format!("{path}: {error}"))?;
-                (crate::file_open::display_name(&path), bytes, Some(path))
+    app.ask_file(
+        FileDialogRequest::Open { multiple: false, initial_dir: None, extensions: Some(vec!["atn".into()]), title: None, filter_name: None },
+        move |app, answer| {
+            idle(app, command)?;
+            if app.session.actions.rev != revision || app.held_actions_library.is_some() {
+                return Err(tl!("The actions changed. Request Replace Actions again.").into());
             }
-            FileDialogAnswer::Contents(name, bytes) => (crate::file_open::display_name(&name), bytes, None),
-            _ => return Err(tl!("Choose one Actions file.").into()),
-        };
-        if bytes.len() as u64 > MAX_PICKED_BYTES {
-            return Err(tl!("The Actions file is too large.").into());
-        }
-        let params = json!({"confirm":true,"data":photocraft_engine::paint::tile::b64_encode(&bytes)});
-        self::authorize(app, command, &params, gate, automated)?;
-        let count = photocraft_engine::atn_cmds::validate_replacement(&bytes)?;
-        held.replace_data = Some(Replacement { name, count, params, path });
-        Ok(prompt(app, held))
-    })
+            let (name, bytes, path) = match answer {
+                FileDialogAnswer::Paths(paths) => {
+                    let path = paths.into_iter().next().ok_or("cancelled")?;
+                    self::authorize(app, command, &json!({"confirm":true,"path":path}), gate, automated)?;
+                    let bytes =
+                        photocraft_format::read_file_limited(std::path::Path::new(&path), MAX_PICKED_BYTES).map_err(|error| format!("{path}: {error}"))?;
+                    (crate::file_open::display_name(&path), bytes, Some(path))
+                }
+                FileDialogAnswer::Contents(name, bytes) => (crate::file_open::display_name(&name), bytes, None),
+                _ => return Err(tl!("Choose one Actions file.").into()),
+            };
+            if bytes.len() as u64 > MAX_PICKED_BYTES {
+                return Err(tl!("The Actions file is too large.").into());
+            }
+            let params = json!({"confirm":true,"data":photocraft_engine::paint::tile::b64_encode(&bytes)});
+            self::authorize(app, command, &params, gate, automated)?;
+            let count = photocraft_engine::atn_cmds::validate_replacement(&bytes)?;
+            held.replace_data = Some(Replacement { name, count, params, path });
+            Ok(prompt(app, held))
+        },
+    )
 }
 
 fn prompt(app: &mut PhotocraftApp, mut held: Held) -> Value {
