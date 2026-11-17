@@ -878,6 +878,24 @@ fn automation_cannot_choose_the_external_raw_editor() {
 }
 
 #[test]
+fn ordinary_raw_and_file_handling_preferences_remain_writable() {
+    for (path, value) in [
+        ("rawDefaults.demosaic", serde_json::json!("ahd")),
+        ("rawDefaults.applyAutoTone", serde_json::json!(true)),
+        ("fileHandling.autosave", serde_json::json!(false)),
+        ("fileHandling.saveInBackground", serde_json::json!(true)),
+    ] {
+        let normalized = format!(".{}.", path.replace('.', ".."));
+        for path in [path, normalized.as_str()] {
+            for params in [serde_json::json!({"path": path, "value": value}), serde_json::json!({"values": {(path): value}})] {
+                assert!(authorize_engine_command("prefs.set", &params).is_ok(), "{params}");
+                assert!(authorize_engine_step("prefs.set", &params).is_ok(), "{params}");
+            }
+        }
+    }
+}
+
+#[test]
 fn registry_filesystem_path_params_are_classified() {
     let probe = serde_json::json!({
         "path": "/outside/photocraft-probe",
