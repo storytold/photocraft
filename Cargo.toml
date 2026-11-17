@@ -62,7 +62,7 @@ craft-ora = { git = "https://github.com/storytold/craft-libs", rev = "fe6b443acf
 craft-kra = { git = "https://github.com/storytold/craft-libs", rev = "fe6b443acf3eccaf514064812e6e6bf24257652a" }
 craft-xcf = { git = "https://github.com/storytold/craft-libs", rev = "fe6b443acf3eccaf514064812e6e6bf24257652a" }
 craft-pdn = { git = "https://github.com/storytold/craft-libs", rev = "fe6b443acf3eccaf514064812e6e6bf24257652a" }
-craft-svg = { git = "https://github.com/storytold/craft-libs", rev = "96dd8c4e0996b3d85edf5c98070c261892ac30f3", features = ["tree-render", "tree-render-system-fonts"] }
+craft-svg = { git = "https://github.com/storytold/craft-libs", rev = "fcafab33d9fedbefb0992d7776db3b6ae8b918f6", features = ["tree-render", "tree-render-system-fonts"] }
 craft-raw = { git = "https://github.com/storytold/craft-libs", rev = "fe6b443acf3eccaf514064812e6e6bf24257652a" }
 craft-tiff = { git = "https://github.com/storytold/craft-libs", rev = "fe6b443acf3eccaf514064812e6e6bf24257652a" }
 # Camera-field EXIF reader/writer, shared prerequisite craft-libs#1563.
