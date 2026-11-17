@@ -1021,7 +1021,7 @@ fn import_stages(
         // SVG content wins over a misleading `.pdf` suffix, matching the preflight (which checks SVG
         // before PDF).
         if is_svg_input(name, bytes) {
-            return svg::import_svg_with_group_depth(name, bytes, opts.max_group_depth);
+            return svg::import_svg_with_group_depth_and_names(name, bytes, opts.max_group_depth, &opts.generated_layer_names);
         }
         // PDF (craft-pdf, pure Rust). `.ai` files that start with `%PDF-` are PDFs and take this
         // importer too; a recognized raster signature wins over a misleading `.pdf` suffix.
@@ -1051,7 +1051,7 @@ fn import_stages(
             opts.generated_layer_names.apply_to_flat(&mut imported.document);
             Ok(imported)
         }
-        Route::Svg => svg::import_svg_with_group_depth(name, bytes, opts.max_group_depth),
+        Route::Svg => svg::import_svg_with_group_depth_and_names(name, bytes, opts.max_group_depth, &opts.generated_layer_names),
         Route::Flat => flat::import_flat_with_options(name, bytes, opts, ctl),
     }
 }

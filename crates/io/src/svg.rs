@@ -941,7 +941,17 @@ pub fn import_svg(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
 /// Opens an SVG while rasterising any subtrees deeper than `max_group_depth` into single pixel
 /// layers. The document's hard nesting limit remains [`MAX_GROUP_DEPTH`].
 pub fn import_svg_with_group_depth(name: &str, bytes: &[u8], max_group_depth: usize) -> Result<ImportResult, IoError> {
-    on_svg_stack(|| import_svg_inner(name, bytes, max_group_depth, None, false))
+    import_svg_with_group_depth_and_names(name, bytes, max_group_depth, &Default::default())
+}
+
+/// Only unnamed SVG elements receive these labels; source ids and text remain literal.
+pub fn import_svg_with_group_depth_and_names(
+    name: &str,
+    bytes: &[u8],
+    max_group_depth: usize,
+    names: &crate::generated_names::GeneratedLayerNames,
+) -> Result<ImportResult, IoError> {
+    on_svg_stack(|| import_svg_inner(name, bytes, max_group_depth, None, false, names))
 }
 
 /// Opens an SVG with a conservative budget for eagerly rendered layer caches. A canvas above
@@ -949,7 +959,17 @@ pub fn import_svg_with_group_depth(name: &str, bytes: &[u8], max_group_depth: us
 /// When the canvas fits but its elements' combined caches would exceed the budget, the whole
 /// drawing becomes one pixel layer, with an explicit editability warning.
 pub fn import_svg_bounded(name: &str, bytes: &[u8], max_cached_pixels: u64) -> Result<ImportResult, IoError> {
-    on_svg_stack(|| import_svg_inner(name, bytes, MAX_GROUP_DEPTH, Some(max_cached_pixels), false))
+    import_svg_bounded_with_names(name, bytes, max_cached_pixels, &Default::default())
+}
+
+/// The same cache limits with generated labels supplied by the frontend.
+pub fn import_svg_bounded_with_names(
+    name: &str,
+    bytes: &[u8],
+    max_cached_pixels: u64,
+    names: &crate::generated_names::GeneratedLayerNames,
+) -> Result<ImportResult, IoError> {
+    on_svg_stack(|| import_svg_inner(name, bytes, MAX_GROUP_DEPTH, Some(max_cached_pixels), false, names))
 }
 
 /// Import a drawing with one aggregate pixel-work allowance and return its conservative charge.
@@ -1012,7 +1032,7 @@ fn import_svg_bounded_with_work_mode(name: &str, bytes: &[u8], max_work: u64, st
 /// use this variant so editing contents or changing Stack Mode fails before excessive caches
 /// are rendered, rather than silently changing the source's layer structure.
 pub fn import_svg_bounded_layers(name: &str, bytes: &[u8], max_cached_pixels: u64) -> Result<ImportResult, IoError> {
-    on_svg_stack(|| import_svg_inner(name, bytes, MAX_GROUP_DEPTH, Some(max_cached_pixels), true))
+    on_svg_stack(|| import_svg_inner(name, bytes, MAX_GROUP_DEPTH, Some(max_cached_pixels), true, &Default::default()))
 }
 
 /// Opens untrusted SVG (smart-object contents) as [`import_svg`] does, as editable layers under
@@ -1020,7 +1040,17 @@ pub fn import_svg_bounded_layers(name: &str, bytes: &[u8], max_cached_pixels: u6
 /// `max_decoded_pixels` (capped at 24 MP) in all, nested SVG images get the same budget, and
 /// compressed data inflates to at most 16 MiB.
 pub fn import_svg_bounded_images(name: &str, bytes: &[u8], max_decoded_pixels: u64) -> Result<ImportResult, IoError> {
-    on_svg_stack(|| import_parsed(name, parse_bounded(bytes, max_decoded_pixels)?, MAX_GROUP_DEPTH, None, false))
+    import_svg_bounded_images_with_names(name, bytes, max_decoded_pixels, &Default::default())
+}
+
+/// The same bounded smart-content import with defaults for unnamed elements.
+pub fn import_svg_bounded_images_with_names(
+    name: &str,
+    bytes: &[u8],
+    max_decoded_pixels: u64,
+    names: &crate::generated_names::GeneratedLayerNames,
+) -> Result<ImportResult, IoError> {
+    on_svg_stack(|| import_parsed_with_limits(name, parse_bounded(bytes, max_decoded_pixels)?, MAX_GROUP_DEPTH, None, false, MAX_PIXEL_BYTES, names))
 }
 
 /// The pixel bounds [`import_svg_bounded`] gives the drawing, found without rendering any layer
@@ -1047,12 +1077,13 @@ fn import_svg_inner(
     max_group_depth: usize,
     max_cached_pixels: Option<u64>,
     reject_cache_overflow: bool,
+    names: &crate::generated_names::GeneratedLayerNames,
 ) -> Result<ImportResult, IoError> {
     let parsed = match max_cached_pixels {
         Some(limit) => parse_bounded(bytes, limit)?,
         None => parse(bytes)?,
     };
-    import_parsed(name, parsed, max_group_depth, max_cached_pixels, reject_cache_overflow)
+    import_parsed_with_limits(name, parsed, max_group_depth, max_cached_pixels, reject_cache_overflow, MAX_PIXEL_BYTES, names)
 }
 
 /// [`import_parsed_with_limits`] with the default retained-pixel byte budget.
@@ -1063,12 +1094,12 @@ fn import_parsed(
     max_cached_pixels: Option<u64>,
     reject_cache_overflow: bool,
 ) -> Result<ImportResult, IoError> {
-    import_parsed_with_limits(name, parsed, max_group_depth, max_cached_pixels, reject_cache_overflow, MAX_PIXEL_BYTES)
+    import_parsed_with_limits(name, parsed, max_group_depth, max_cached_pixels, reject_cache_overflow, MAX_PIXEL_BYTES, &Default::default())
 }
 
 #[cfg(test)]
 fn import_parsed_with_budget(name: &str, parsed: Parsed, max_group_depth: usize, pixel_budget: u64) -> Result<ImportResult, IoError> {
-    import_parsed_with_limits(name, parsed, max_group_depth, None, false, pixel_budget)
+    import_parsed_with_limits(name, parsed, max_group_depth, None, false, pixel_budget, &Default::default())
 }
 
 /// Convert a parsed tree into a document. With `max_cached_pixels`, a canvas over the budget is
@@ -1082,6 +1113,7 @@ fn import_parsed_with_limits(
     max_cached_pixels: Option<u64>,
     reject_cache_overflow: bool,
     pixel_budget: u64,
+    names: &crate::generated_names::GeneratedLayerNames,
 ) -> Result<ImportResult, IoError> {
     let Parsed { tree, fontless_text } = parsed;
     let mut warnings = Vec::new();
@@ -1113,8 +1145,18 @@ fn import_parsed_with_limits(
     let fmt = doc.pixel_format();
     let global = tiny_skia::Transform::from_scale(cv.scale, cv.scale);
     let max_group_depth = (max_group_depth != 0).then_some(max_group_depth.clamp(1, MAX_GROUP_DEPTH));
-    let mut conv =
-        Conv { fmt, canvas: doc.bounds(), global, max_group_depth, warnings, noted: Vec::new(), counts: [0; 4], pixel_budget, retained_pixel_bytes: 0 };
+    let mut conv = Conv {
+        names: names.clone(),
+        fmt,
+        canvas: doc.bounds(),
+        global,
+        max_group_depth,
+        warnings,
+        noted: Vec::new(),
+        counts: [0; 4],
+        pixel_budget,
+        retained_pixel_bytes: 0,
+    };
     if nodes > MAX_NODES || over_cache_budget {
         if over_cache_budget {
             conv.warnings.push("SVG: combined layer caches exceed the clipboard cache budget; opened as one pixel layer instead of editable shapes".into());
@@ -1125,7 +1167,7 @@ fn import_parsed_with_limits(
         if u64::from(w) * u64::from(h) <= MAX_RASTER_PIXELS {
             let rendered = guarded(|| draw::render(&tree, global, w, h, 0, MAX_PEAK_PIXEL_BYTES));
             if let Some(Ok(rendered)) = rendered {
-                doc.layers.push(Layer::new("Background", LayerContent::Raster(surface(&rendered, doc.bounds(), fmt))));
+                doc.layers.push(Layer::new(names.background.clone(), LayerContent::Raster(surface(&rendered, doc.bounds(), fmt))));
             } else {
                 conv.note("raster-panic", "SVG: the drawing could not be rendered".to_string());
             }
@@ -1357,6 +1399,7 @@ fn check_filter_cost(tree: &usvg::Tree, scale: f32) -> Result<(), IoError> {
 
 /// Converts a parsed tree into layers.
 struct Conv {
+    names: crate::generated_names::GeneratedLayerNames,
     fmt: PixelFormat,
     canvas: Rect,
     /// Drawing units → canvas pixels.
@@ -1410,7 +1453,7 @@ impl Conv {
             *c += 1;
             *c
         });
-        format!("{label} {}", n.unwrap_or(0))
+        self.names.numbered(label, n.unwrap_or(0))
     }
 
     /// `nodes` in paint order (first = bottom), as layers in the same order. `parent` is the

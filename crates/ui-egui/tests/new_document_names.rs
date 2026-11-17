@@ -367,6 +367,46 @@ fn active_name(s: &Session) -> &str {
 }
 
 #[test]
+fn generated_svg_names_follow_the_session_and_preserve_source_ids() {
+    use photocraft_engine::{edit_cmds::Clip, smart_cmds};
+    let options = naming_session().import_options();
+    let grouped =
+        br#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><g opacity="0.5"><path id="Shape" d="M0 0H4V4H0Z"/><path d="M4 4H8V8H4Z"/></g></svg>"#;
+    let imported = photocraft_io::import_with_options("source.svg", grouped, &options).unwrap();
+    let names: Vec<_> = imported.document.walk().into_iter().map(|(_, _, l)| l.name.as_str()).collect();
+    assert_eq!(names, ["de[Group] 1", "Shape", "de[Shape] 1"]);
+    let collapsed = photocraft_io::svg::import_svg_bounded_with_names("source.svg", grouped, 64, &options.generated_layer_names).unwrap();
+    assert_eq!(collapsed.document.layers[0].name, "de[Background]");
+    for source_id in ["", " id=\"Shape\""] {
+        let bytes = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><path{source_id} d="M0 0H4V4H0Z"/></svg>"#).into_bytes();
+        let expected = if source_id.is_empty() { "de[Shape] 1" } else { "Shape" };
+        let mut s = naming_session();
+        let options = s.import_options();
+        let imported = photocraft_io::import_with_options("source.svg", &bytes, &options).unwrap();
+        assert_eq!(imported.document.layers[0].name, expected);
+        for imported in [
+            photocraft_io::svg::import_svg_bounded_with_names("source.svg", &bytes, 64, &options.generated_layer_names).unwrap(),
+            photocraft_io::svg::import_svg_bounded_images_with_names("source.svg", &bytes, 64, &options.generated_layer_names).unwrap(),
+        ] {
+            assert_eq!(imported.document.layers[0].name, expected);
+        }
+        for operation in ["paste", "editContents", "convertToLayers"] {
+            s = naming_session();
+            s.clipboard = Some(Clip::from_svg(&bytes).unwrap());
+            s.execute("edit.paste", json!({"as":"shape"})).unwrap();
+            assert_eq!(active_name(&s), expected);
+            if operation != "paste" {
+                s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+                let id = s.active().unwrap().active_layer.unwrap();
+                smart_cmds::replace_contents_bytes(&mut s, id, "source.svg", bytes.clone()).unwrap();
+                s.execute(&format!("layer.smartObjects.{operation}"), json!({})).unwrap();
+                assert_eq!(active_name(&s), expected, "{operation}");
+            }
+        }
+    }
+}
+
+#[test]
 fn other_generated_layer_bases_use_the_same_language_service() {
     for (command, params, expected) in [
         ("layer.new.layer", json!({}), "de[Layer] 1"),
@@ -375,6 +415,9 @@ fn other_generated_layer_bases_use_the_same_language_service() {
         ("layer.newAdjustmentLayer.curves", json!({}), "de[Curves] 1"),
         ("shape.create", json!({"kind":"rect","rect":[0,0,4,4]}), "de[Rectangle] 1"),
         ("layer.new.artboard", json!({}), "de[Artboard] 1"),
+        ("filter.render.flame", json!({"newLayer":true}), "de[Flame…]"),
+        ("filter.render.tree", json!({"newLayer":true,"leavesAmount":0}), "de[Tree…]"),
+        ("filter.render.pictureFrame", json!({"newLayer":true}), "de[Picture Frame…]"),
     ] {
         let mut s = naming_session();
         s.execute(command, params).unwrap();

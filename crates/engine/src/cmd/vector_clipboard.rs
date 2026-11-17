@@ -40,11 +40,11 @@ pub(super) fn mode(p: &Value) -> Result<Option<Mode>> {
 }
 
 /// Imported data is temporary; only original bytes and their raster mirror survive in Clip.
-fn prepare(bytes: &[u8]) -> Result<(Document, Vec<String>)> {
+fn prepare(bytes: &[u8], names: &photocraft_io::generated_names::GeneratedLayerNames) -> Result<(Document, Vec<String>)> {
     if bytes.is_empty() || bytes.len() > MAX_SOURCE_BYTES || !photocraft_io::svg::is_svg(bytes) {
         return Err(bad("SVG clipboard source must be valid markup between 1 byte and 16 MiB"));
     }
-    let mut imported = photocraft_io::svg::import_svg_bounded("Clipboard.svg", bytes, MAX_CACHE_PIXELS)
+    let mut imported = photocraft_io::svg::import_svg_bounded_with_names("Clipboard.svg", bytes, MAX_CACHE_PIXELS, names)
         .map_err(|e| EngineError::Other(format!("can't import clipboard SVG: {e}")))?;
     if imported.document.layers.is_empty() {
         return Err(bad("the SVG contains no drawable objects"));
@@ -54,7 +54,7 @@ fn prepare(bytes: &[u8]) -> Result<(Document, Vec<String>)> {
 }
 
 pub(super) fn from_svg(bytes: &[u8]) -> Result<Clip> {
-    let _ = prepare(bytes)?;
+    let _ = prepare(bytes, &Default::default())?;
     let image = crate::smart_cmds::svg_source_image(bytes, PixelFormat::RGBA32F, 1.0)?;
     let mut owned = crate::allocation::capacity(bytes.len(), "copying SVG clipboard source")?;
     owned.extend_from_slice(bytes);
@@ -192,7 +192,7 @@ pub(super) fn layer_target(s: &Session) -> Result<()> {
 pub(super) fn paste(s: &mut Session, p: &Value, mode: Mode) -> Result<Value> {
     let center = validate(s, p, false)?;
     let bytes = s.clipboard.as_ref().and_then(|clip| clip.svg.clone()).ok_or_else(|| bad("this Paste mode requires original vector clipboard source"))?;
-    let (mut copies, warnings) = prepare(&bytes)?;
+    let (mut copies, warnings) = prepare(&bytes, &s.import_options().generated_layer_names)?;
     let state = s.active().ok_or(EngineError::NoDocument)?;
     let destination = state.doc.clone();
     let (dx, dy) = ((center[0] - f64::from(copies.size.width) / 2.0).round(), (center[1] - f64::from(copies.size.height) / 2.0).round());

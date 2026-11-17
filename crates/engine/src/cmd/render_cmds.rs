@@ -101,6 +101,7 @@ fn flame_paths(s: &Session, p: &Value) -> Option<Vec<Vec<(f32, f32)>>> {
 
 /// Draws `prims` onto the target layer as one undo step.
 fn draw(s: &mut Session, label: &str, p: &Value, prims: Vec<Prim>, extra: Value) -> Result<Value> {
+    let name = s.translated_name_base(label).trim_end_matches('…').to_string();
     let want_new = p.get("newLayer").and_then(Value::as_bool).unwrap_or(false);
     let target = p.get("layer").map(|_| crate::commands::layer_param(s, p)).transpose()?;
     let count = prims.len();
@@ -108,7 +109,7 @@ fn draw(s: &mut Session, label: &str, p: &Value, prims: Vec<Prim>, extra: Value)
         let id = target.or(*active);
         let raster = id.and_then(|i| doc.layer(i)).is_some_and(|l| matches!(l.content, LayerContent::Raster(_)));
         let (id, created) = if want_new || !raster {
-            let l = Layer::new(label.trim_end_matches('…'), LayerContent::Raster(Surface::new(doc.pixel_format())));
+            let l = Layer::new(name, LayerContent::Raster(Surface::new(doc.pixel_format())));
             let nid = crate::layer_place::insert_new(doc, *active, l, crate::layer_place::Place::AutoEditable);
             *active = Some(nid);
             (nid, true)
