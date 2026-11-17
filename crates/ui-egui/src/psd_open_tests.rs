@@ -1019,8 +1019,7 @@ fn failed_inline_memory_approval_alerts_once_and_preserves_the_next_prompt_and_e
     // File-backed decoding reads the complete 26-byte header before parsing it. Give both
     // routes that same header so the unsupported version, rather than EOF, is the failure.
     let header = [
-        b'8', b'B', b'P', b'S',
-        0, 0, // unsupported version
+        b'8', b'B', b'P', b'S', 0, 0, // unsupported version
         0, 0, 0, 0, 0, 0, // reserved
         0, 3, // channels
         0, 0, 0, 1, // height
