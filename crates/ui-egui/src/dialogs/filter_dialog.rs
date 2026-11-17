@@ -1199,6 +1199,105 @@ fn indexed_matte_row(ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
     }
 }
 
+/// The Fade dialog's alert for an Opacity typed past its range, as the reference application words
+/// it (#13811).
+pub(crate) const FADE_OPACITY_RANGE_ALERT: &str = "An integer between 0 and 100 is required. Closest value inserted.";
+
+/// The Fade Opacity slider's gestures: a double-click puts the opacity back to 100, as it did before the
+/// row had a whole-number field.
+fn fade_slider_gestures() -> crate::widgets::RowGestures {
+    crate::widgets::RowGestures { reset: Some(100.0), ..Default::default() }
+}
+
+/// A value the Fade Opacity field holds, read as the reference application reads it: typed text loses
+/// its dot (`12.3` is 123, `0.4` is 4); anything else, a scrub drag's fractions included (`37.5`), is
+/// the number itself, rounded by the caller.
+fn read_fade_opacity(value: f32, text: Option<&str>, typing: bool) -> f32 {
+    // Without the field's text nothing was typed (a scrub, or an accessibility action that sets the number).
+    let (true, Some(text)) = (typing, text) else { return value };
+    // From the text as it was typed, so `0.40` is 40, `1.0` is 10 and `0.4` is 4: the number's own formatting has
+    // lost its trailing zeros and its dot.
+    text.replace('.', "").parse::<f32>().unwrap_or(value)
+}
+
+/// Edit › Fade's Opacity (#13811): whole percents 0..=100, a field with `%` and a slider. A typed
+/// fraction is read without its dot, as the reference application reads it (`12.3` is 123, `0.4`
+/// is 4); a typed value past the range becomes the closest end and, once the field is left,
+/// leaves `__rangeAlert` for the dialog to show. Text that isn't a number keeps the value.
+fn fade_opacity_row(ui: &mut egui::Ui, f: &mut Map<String, Value>, name: &str) {
+    const OUT_OF_RANGE: &str = "fade-opacity-out-of-range";
+    let t = Tokens::get(ui.ctx());
+    let stored = f.get("opacity").and_then(Value::as_f64).unwrap_or(100.0).round().clamp(0.0, 100.0) as f32;
+    // What was typed, kept while the field has the keyboard, so `150` isn't redrawn as 100 mid-entry.
+    let draft_id = ui.make_persistent_id("fade-opacity-typed");
+    // An arrow key steps the value (⌘/Ctrl by 0.1), which is not typed text (50.1 stays 50, not 501): read before the
+    // field, which consumes the key. It steps the stored percent, not the draft kept from the last entry.
+    // The mouse wheel steps it the same way (the field consumes it too).
+    let arrow = ui.input(|i| i.key_pressed(egui::Key::ArrowUp) || i.key_pressed(egui::Key::ArrowDown)) || crate::field_wheel::focused_wheel_pending(ui.ctx());
+    let mut draft = ui.ctx().data(|d| d.get_temp::<(f32, f32, Option<egui::Id>)>(draft_id));
+    // Tab in a dialog with this one field hands the focus back to it: that ends the entry too.
+    if let Some(field) = draft.and_then(|(_, _, field)| field).filter(|field| crate::field_tab::reached(ui.ctx(), *field)) {
+        draft = None;
+        ui.ctx().data_mut(|d| d.remove_temp::<(f32, f32, Option<egui::Id>)>(draft_id));
+        if ui.ctx().data_mut(|d| d.remove_temp::<bool>(field.with(OUT_OF_RANGE))).unwrap_or(false) {
+            f.insert("__rangeAlert".into(), json!(tl!(FADE_OPACITY_RANGE_ALERT)));
+        }
+    }
+    let draft = draft.filter(|(_, kept, field)| !arrow && *kept == stored && field.is_some_and(|f| ui.ctx().memory(|m| m.has_focus(f))));
+    let (mut typed, mut v) = (draft.map_or(stored, |(typed, _, _)| typed), stored);
+    let r = ui
+        .horizontal(|ui| {
+            ui.label(egui::RichText::new(name).color(t.text_dim));
+            crate::widgets::value_field_named(ui, name, &mut typed, -1.0e9..=1.0e9, "%", 58.0)
+        })
+        .inner;
+    let out_id = r.id.with(OUT_OF_RANGE);
+    // The typed text, which changes without the number changing (`0.4` then `0` is `0.40`: 0.4 both
+    // times): the entry is read again when either changed. What was typed before the field had the
+    // focus is not an entry, so the text it held on gaining it is the starting point.
+    let text_id = r.id.with("fade-opacity-text");
+    let text = crate::widgets::typed_text(ui.ctx(), r.id);
+    if r.gained_focus() {
+        ui.ctx().data_mut(|d| d.remove_temp::<bool>(out_id));
+        ui.ctx().data_mut(|d| d.insert_temp(text_id, text.clone()));
+    }
+    let text_changed = r.has_focus() && ui.ctx().data(|d| d.get_temp::<Option<String>>(text_id)).is_some_and(|before| before != text);
+    if text_changed {
+        ui.ctx().data_mut(|d| d.insert_temp(text_id, text.clone()));
+    }
+    // A text change the number did not follow is an entry only when the text is a number: after `0.4`,
+    // replacing it with `abc` leaves the parser's draft at 0.4, which is not to be read again (0.4 rounds
+    // to 0), so the value stays.
+    let reads_text = text_changed && crate::widgets::typed_text_parses(ui.ctx(), r.id) != Some(false);
+    // Text that is not a number takes back an out-of-range mark an earlier entry left (`150`, then `abc`).
+    if text_changed && !reads_text {
+        ui.ctx().data_mut(|d| d.remove_temp::<bool>(out_id));
+    }
+    if (r.changed() || reads_text) && typed.is_finite() {
+        // Typed text is read without its dot; a scrub drag, whose fractions come from the drag speed, is
+        // only rounded, as every other field's drag is (a drag to 37.5 is 38, not 375).
+        // Typed text is a change of the text itself (or the commit that leaves the field): a number the widget changed
+        // without parsing text (a wheel notch, an accessibility set-value) leaves the cached text behind and is not it.
+        let typing = (r.has_focus() || r.lost_focus()) && ui.ctx().dragged_id().is_none() && !arrow && (text_changed || r.lost_focus());
+        let whole = read_fade_opacity(typed, text.as_deref(), typing);
+        v = whole.round().clamp(0.0, 100.0);
+        ui.ctx().data_mut(|d| d.insert_temp(out_id, typing && !(0.0..=100.0).contains(&whole)));
+        if typing && r.has_focus() {
+            ui.ctx().data_mut(|d| d.insert_temp(draft_id, (typed, v, Some(r.id))));
+        }
+    }
+    if !r.has_focus() {
+        ui.ctx().data_mut(|d| d.remove_temp::<(f32, f32, Option<egui::Id>)>(draft_id));
+    }
+    if r.lost_focus() && ui.ctx().data_mut(|d| d.remove_temp::<bool>(out_id)).unwrap_or(false) {
+        f.insert("__rangeAlert".into(), json!(tl!(FADE_OPACITY_RANGE_ALERT)));
+    }
+    if crate::widgets::slider_with(ui, &mut v, 0.0..=100.0, None, fade_slider_gestures()).changed() {
+        v = v.round();
+    }
+    f.insert("opacity".into(), json!(v.clamp(0.0, 100.0) as i64));
+}
+
 /// Dialog body for filter commands.
 pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
@@ -1221,6 +1320,10 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         }
         if cmd == super::fade_modes::COMMAND && p.key == "mode" {
             super::fade_modes::row(ui, f, &label(&p.key));
+            continue;
+        }
+        if cmd == super::fade_modes::COMMAND && p.key == "opacity" {
+            fade_opacity_row(ui, f, &label(&p.key));
             continue;
         }
         if zoom_center::owns(&cmd, f) && matches!(p.key.as_str(), "centerX" | "centerY") {
@@ -1500,12 +1603,29 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         ui.add_space(4.0);
         ui.add(egui::Label::new(egui::RichText::new(note).color(t.text_dim)).wrap());
     }
+    // Fade draws Preview in its button column (#13815).
+    if cmd != super::fade_modes::COMMAND {
+        preview_checkbox(ui, f);
+    }
+}
+
+/// The dialog's Preview checkbox, when it has one.
+pub(crate) fn preview_checkbox(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     if let Some(mut preview) = f.get("__preview").and_then(Value::as_bool) {
         ui.add_space(4.0);
         crate::widgets::checkbox(ui, &mut preview, tl!("Preview"));
         f.insert("__preview".into(), json!(preview));
     }
 }
+
+/// Edit › Fade's dialog puts OK, Cancel and Preview in a column right of its fields (#13815).
+pub(crate) fn buttons_in_column(f: &Map<String, Value>) -> bool {
+    f.contains_key("__filter") && f.get("__command").and_then(Value::as_str) == Some(super::fade_modes::COMMAND)
+}
+
+#[cfg(test)]
+#[path = "fade_layout_tests.rs"]
+mod fade_layout_tests;
 
 /// A new seed for a dialog's Random button: 0..=30000 (what the field takes), never `current`.
 /// `entropy` varies per click (the input time); the process's random hasher keys mix it.
@@ -1848,6 +1968,10 @@ impl FilterPreviewKey {
 mod global_light_angle_range_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "fade_opacity_field_tests.rs"]
+mod fade_opacity_field_tests;
 
 #[cfg(test)]
 mod multi_channel_dialog_tests {

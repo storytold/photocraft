@@ -52,6 +52,12 @@ fn taken_id(ctx: &Context) -> Id {
     Id::unique("pc-field-wheel-taken").with(ctx.viewport_id())
 }
 
+/// Whether wheel events wait for the focused field this frame (a notch that steps its number): asked before the
+/// field is drawn, since the field takes them.
+pub fn focused_wheel_pending(ctx: &Context) -> bool {
+    ctx.data(|d| d.get_temp::<Vec<Event>>(taken_id(ctx))).is_some_and(|events| events.iter().any(|e| matches!(e, Event::MouseWheel { .. })))
+}
+
 fn pass_id(ctx: &Context) -> Id {
     Id::unique("pc-field-wheel-pass").with(ctx.viewport_id())
 }

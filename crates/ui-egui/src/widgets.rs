@@ -53,7 +53,7 @@ pub(crate) use fields::compact_wrapping_value_field;
 #[cfg(test)]
 use fields::{FieldOpts, NUMERIC_INPUT_LIMIT, value_field_in};
 pub use fields::{
-    POPUP_ARROW_W, PopupFieldResponse, VALUE_FIELD_H, compact_value_field, elided_label, elided_label_sensed, popup_value_field, typed_text_parses,
+    POPUP_ARROW_W, PopupFieldResponse, VALUE_FIELD_H, compact_value_field, elided_label, elided_label_sensed, popup_value_field, typed_text, typed_text_parses,
     value_field, value_field_alerting, value_field_alerting_prec, value_field_named, value_field_whole, value_field_whole_alerting, value_field_with_trailing,
 };
 pub use label_column::{LABEL_COLUMN_GAP, column_label, column_label_padded, label_column_width};
@@ -67,7 +67,7 @@ pub use scrub::{scrub_label, scrub_option_icon, scrub_option_label};
 #[cfg(test)]
 use slider::DOUBLE_CLICK_S;
 pub(crate) use slider::count_notches;
-pub use slider::{RowGestures, row_label, second_click, slider, slider_line, slider_row, slider_row_prec, slider_row_with};
+pub use slider::{RowGestures, row_label, second_click, slider, slider_line, slider_row, slider_row_prec, slider_row_with, slider_with};
 #[cfg(test)]
 pub(crate) use slider::{curve_fraction, curve_value};
 pub use text_field::{
