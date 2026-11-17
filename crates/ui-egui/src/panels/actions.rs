@@ -909,7 +909,11 @@ fn play_steps(app: &mut PhotocraftApp, params: &Value, suspended: Option<Suspend
             break;
         }
         let target = app.session.active().map(|d| d.doc.id);
-        let result = if let Some(call) = nested_call(id) {
+        // Share the engine player's no-op rules without changing menu availability. Normal
+        // completion below still counts and paces the step, including inside a called action.
+        let result = if actions_cmds::noop_step(&app.session, id, p) {
+            Ok(Value::Null)
+        } else if let Some(call) = nested_call(id) {
             call(app, p)
         } else if actions_cmds::saves_smart_contents(&app.session, id) {
             app.session.execute(actions_cmds::SAVE_CONTENTS, json!({})).map_err(|e| e.to_string())

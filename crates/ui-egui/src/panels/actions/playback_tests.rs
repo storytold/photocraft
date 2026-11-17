@@ -51,6 +51,102 @@ fn assert_released(app: &mut PhotocraftApp) {
 }
 
 #[test]
+fn deselect_atn_noop_keeps_nested_playback_pacing_and_parent_continuation() {
+    let child = Action::new(
+        "Clear",
+        vec![("select.deselect".into(), json!({})), ("select.deselect".into(), json!({})), ("layer.new.layer".into(), json!({"name":"Child"}))],
+    );
+    let parent = Action::new("Parent", vec![("actions.play".into(), json!({"action":"Clear"})), ("layer.new.layer".into(), json!({"name":"Parent"}))]);
+    let (bytes, skipped) = photocraft_engine::atn_cmds::export("Playback", &[&child, &parent], &[], false).unwrap();
+    assert!(skipped.is_empty());
+    for performance in ["accelerated", "step", "pause"] {
+        for single in [false, true] {
+            for selected in [false, true] {
+                let mut app = app_with(performance, 1, single);
+                if selected {
+                    app.run("select.rect", json!({"x":1,"y":1,"width":3,"height":2})).unwrap();
+                }
+                let before = app.session.active().unwrap().doc.clone();
+                let past = app.session.active().unwrap().history.past_len();
+                let imported = photocraft_engine::atn_cmds::import(&bytes).unwrap();
+                assert!(imported.unsupported.is_empty());
+                assert_eq!(imported.actions[0].steps[0].0, "select.deselect");
+                app.session.actions.list = imported.actions;
+                let result = play(&mut app, &json!({"action":"Parent"})).unwrap();
+                assert!(result.get("failed").is_none(), "{performance} single={single} selected={selected}: {result}");
+                if performance != "accelerated" {
+                    assert!(app.paused_playbacks.timer.is_some(), "a no-op still counts as a paced step");
+                    assert!(names(&app).is_empty(), "wait after Deselect, before making the child's layer");
+                }
+                let ctx = egui::Context::default();
+                for _ in 0..8 {
+                    if app.paused_playbacks.timer.is_none() {
+                        break;
+                    }
+                    next_step(&mut app, &ctx);
+                }
+                assert_idle(&app);
+                assert!(!app.ui.status_error, "{}", app.ui.status);
+                assert_eq!(names(&app), ["Child", "Parent"]);
+                let st = app.session.active().unwrap();
+                assert!(st.doc.selection.is_none());
+                assert_eq!(st.history.past_len(), past + if single { 1 } else { 2 + usize::from(selected) });
+                for _ in 0..if single { 1 } else { 2 + usize::from(selected) } {
+                    assert!(app.session.undo());
+                }
+                assert_eq!(app.session.active().unwrap().doc, before);
+            }
+        }
+    }
+}
+
+#[test]
+fn deselect_noop_preserves_history_redo_and_reselect() {
+    for single in [false, true] {
+        let mut app = app_with("accelerated", 1, single);
+        app.run("select.rect", json!({"x":1,"y":1,"width":3,"height":2})).unwrap();
+        let selection = app.session.active().unwrap().doc.selection.clone();
+        app.run("select.deselect", json!({})).unwrap();
+        app.run("layer.new.layer", json!({"name":"Redo"})).unwrap();
+        assert!(app.session.undo());
+        let st = app.session.active().unwrap();
+        let before = (st.doc.clone(), st.revision, st.history.past_len(), st.history.redo_label().map(str::to_owned));
+        let journal = app.session.journal.len();
+        assert!(!app.session.is_enabled("select.deselect"), "the ordinary menu stays grey");
+        assert!(app.session.execute("select.deselect", json!({})).is_err());
+        app.session.actions.list = vec![Action::new("Clear", vec![("select.deselect".into(), json!({})), ("select.deselect".into(), json!({}))])];
+        let result = play(&mut app, &json!({"action":"Clear"})).unwrap();
+        assert!(result.get("failed").is_none(), "{result}");
+        assert_eq!(result["ran"], 2);
+        let st = app.session.active().unwrap();
+        assert_eq!((st.doc.clone(), st.revision, st.history.past_len(), st.history.redo_label().map(str::to_owned)), before);
+        assert_eq!(app.session.journal.len(), journal);
+        app.run("select.reselect", json!({})).unwrap();
+        assert_eq!(app.session.active().unwrap().doc.selection, selection);
+    }
+}
+
+#[test]
+fn deselect_noop_does_not_bypass_document_authorization_or_other_preconditions() {
+    for case in ["no document", "denied", "other disabled step"] {
+        let mut app = app_with("accelerated", 1, false);
+        let id = if case == "other disabled step" { "select.inverse" } else { "select.deselect" };
+        app.session.actions.list = vec![Action::new("Clear", vec![(id.into(), json!({})), ("layer.new.layer".into(), json!({"name":"After"}))])];
+        if case == "no document" {
+            app.session.close(0).unwrap();
+        } else if case == "denied" {
+            app.session.authorize =
+                Some(|id, _| if id == "select.deselect" { Err(photocraft_engine::EngineError::Other("denied Deselect".into())) } else { Ok(()) });
+        }
+        let result = play(&mut app, &json!({"action":"Clear"})).unwrap();
+        assert_eq!(result["ran"], 0, "{case}: {result}");
+        assert_eq!(result["failed"]["step"], 0, "{case}: {result}");
+        assert_eq!(result["failed"]["id"], id);
+        assert!(app.session.active().is_none_or(|st| st.doc.walk().iter().all(|(_, _, l)| l.name != "After")));
+    }
+}
+
+#[test]
 fn step_by_step_plays_every_step_from_one_play_with_a_frame_between() {
     for single in [true, false] {
         let mut app = app_with("step", 1, single);
