@@ -1010,11 +1010,49 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
                 }),
             ))
         },
-        |s, (doc, mut info): (Document, Value)| {
-            info["document"] = json!(s.add_document(doc, None));
+        move |s, (doc, mut info): (Document, Value)| {
+            info["document"] = json!(open_photomerge_result(s, doc, blend, fill));
             Ok(info)
         },
     )
+}
+
+/// Opens a Photomerge result with the History and the targeted layers Photoshop leaves (#14094).
+/// The History panel holds the first snapshot and one state named after the merge's last step:
+/// "Fill" with the fill option, else "Auto-Blend Layers" with Blend Images Together on and "Move"
+/// with it off. The Auto-Blend snapshot holds the aligned layers without their seam masks, so
+/// going back to it leaves them unblended. Blend on targets every source layer, Blend off only
+/// the bottom one (the last source); the fill result keeps today's target, its top layer.
+fn open_photomerge_result(s: &mut Session, doc: Document, blend: bool, fill: bool) -> usize {
+    let label = match (blend, fill) {
+        (true, true) => "Fill",
+        (true, false) => "Auto-Blend Layers",
+        (false, _) => "Move",
+    };
+    let unblended = (blend && !fill).then(|| {
+        let mut d = doc.clone();
+        for l in &mut d.layers {
+            l.mask = None;
+        }
+        d
+    });
+    let all: Vec<photocraft_doc::LayerId> = doc.layers.iter().map(|l| l.id).collect();
+    let bottom = doc.layers.first().map(|l| l.id);
+    let idx = s.add_document(doc, None);
+    if let Some(st) = s.active_mut() {
+        st.history.set_current_label(label);
+        // The first snapshot (History Options › Automatically Create First Snapshot) is the
+        // document before the step; without it the state before the step is not kept.
+        if let (Some(d), Some(first)) = (unblended, st.snapshots.first_mut().filter(|snap| snap.id == 0)) {
+            first.doc = std::sync::Arc::new(d);
+        }
+    }
+    match (blend, fill) {
+        (true, false) => crate::layer_multi_cmds::reselect(s, all, None),
+        (false, _) => crate::layer_multi_cmds::reselect(s, bottom.into_iter().collect(), bottom),
+        (true, true) => {}
+    }
+    idx
 }
 
 /// Fills the transparent areas of a composite (inside its bounding rectangle) with
@@ -1415,3 +1453,6 @@ mod tests;
 
 #[cfg(test)]
 mod photomerge_name_tests;
+
+#[cfg(test)]
+mod photomerge_history_tests;
