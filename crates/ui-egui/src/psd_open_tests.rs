@@ -1029,10 +1029,20 @@ fn failed_inline_memory_approval_alerts_once_and_preserves_the_next_prompt_and_e
             |path| photocraft_engine::jobs::OpenSource::Path(path.clone()),
         );
         let fingerprint = photocraft_engine::jobs::SourceFingerprint::of(&source).unwrap();
-        let first = app.session.store_pending_preflight(photocraft_engine::jobs::PendingPsdPreflight {
-            id: 0, name: name.into(), source, fingerprint,
-            required: 1000, soft_limit: 500, hard_limit: 2000, available_ram: Some(4000), confirm_damage: true,
-        }).unwrap();
+        let first = app
+            .session
+            .store_pending_preflight(photocraft_engine::jobs::PendingPsdPreflight {
+                id: 0,
+                name: name.into(),
+                source,
+                fingerprint,
+                required: 1000,
+                soft_limit: 500,
+                hard_limit: 2000,
+                available_ram: Some(4000),
+                confirm_damage: true,
+            })
+            .unwrap();
         let second = store_preflight(&mut app, "next.psd", 1000, Some(4000));
         let batch = crate::jobs_ui::begin_batch(&mut app);
         let first_order = crate::jobs_ui::OpenOrder { batch, seq: 0 };
@@ -1051,7 +1061,9 @@ fn failed_inline_memory_approval_alerts_once_and_preserves_the_next_prompt_and_e
         let error_id = errors[0].id;
         assert_eq!(app.ui.status, wanted);
         assert_eq!(app.ui.status.matches(source_name).count(), 1);
-        if name != source_name { assert!(!app.ui.status.contains(name)); }
+        if name != source_name {
+            assert!(!app.ui.status.contains(name));
+        }
         assert!(app.ui.status_error);
         assert!(app.ui.notices.is_empty());
         assert!(app.session.documents().is_empty());
