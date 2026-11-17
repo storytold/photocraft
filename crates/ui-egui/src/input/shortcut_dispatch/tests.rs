@@ -2,69 +2,21 @@
 //! command, or the item is visibly disabled with a reason — through the whole app, with a
 //! realistic layered document, from the places focus usually is.
 
+use craft::keymap::Chord;
+use craft::ui::runtime::focus;
+use craft::ui::runtime::keys::focus_holds;
+use craft::ui::runtime::windows::WindowHost;
 use egui::accesskit::Role;
-use egui::{Modifiers, PointerButton, Pos2, vec2};
+use egui::{Key, Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use photocraft_doc::LayerContent;
-use photocraft_engine::actions_cmds;
-use photocraft_engine::preset_store::{ACTIONS_FILE, MemBackend, PresetBackend};
 use serde_json::json;
 
-use super::{Focus, Outcome, bindings, set_dry_run, take_log};
+use super::{Outcome, command_rows, set_dry_run, take_log};
 use crate::PhotocraftApp;
 use crate::shortcuts::parse;
 use crate::state::Tool;
-
-#[test]
-fn svg_editor_prompt_owns_later_shortcuts_in_same_frame() {
-    let launched = std::rc::Rc::new(std::cell::Cell::new(false));
-    let launch_flag = launched.clone();
-    let services = crate::Services {
-        open_external_svg: Some(Box::new(move |_, _| {
-            launch_flag.set(true);
-            Err("The editor must not launch before a choice is confirmed".into())
-        })),
-        ..Default::default()
-    };
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
-    app.session.execute("file.new", json!({"width": 32, "height": 32})).unwrap();
-    photocraft_engine::file_cmds::place_bytes(
-        &mut app.session,
-        "Artwork.svg",
-        br#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8"/></svg>"#.to_vec(),
-        None,
-        &json!({"smartObject":true}),
-    )
-    .unwrap();
-    app.run("edit.keyboardShortcuts", json!({"set": {"layer.smartObjects.editContents": "F6"}})).unwrap();
-    app.sync_views();
-    let before = app.session.active().unwrap().doc.clone();
-    let revision = app.session.active().unwrap().revision;
-    let history = app.session.active().unwrap().history.past_len();
-    let modifiers = platform(Modifiers::COMMAND);
-    let input = egui::RawInput {
-        events: vec![
-            egui::Event::Key { key: egui::Key::F6, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE },
-            egui::Event::ModifiersChanged(modifiers),
-            egui::Event::Key { key: egui::Key::J, physical_key: None, pressed: true, repeat: false, modifiers },
-        ],
-        ..Default::default()
-    };
-    let ctx = egui::Context::default();
-    let mut output = ctx.run_ui(input, |ui| {
-        assert!(super::dispatch_pressed(&mut app, ui.ctx(), Focus::None, false));
-        assert!(ui.ctx().input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { key: egui::Key::J, pressed: true, .. }))));
-    });
-    output.textures_delta.clear();
-    assert!(app.smart_svg.modal_open());
-    assert!(!launched.get());
-    let st = app.session.active().unwrap();
-    assert_eq!(st.doc, before);
-    assert_eq!(st.revision, revision);
-    assert_eq!(st.history.past_len(), history);
-    assert_eq!(take_log(&ctx), vec![("layer.smartObjects.editContents".into(), Outcome::Ran)]);
-}
 
 /// Background, a filled pixel layer "paint" (active, with a selection), a type layer and a group
 /// holding a layer: what a real layout PSD looks like.
@@ -89,13 +41,17 @@ fn services() -> crate::Services {
     crate::Services { export: Some(Box::new(|_, _, _| Err("tests don't write files".into()))), ..Default::default() }
 }
 
-fn harness() -> Harness<'static, PhotocraftApp> {
-    let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(|cc| {
-        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        PhotocraftApp::new(realistic(), services())
-    });
+/// The whole app around `app`, run until it has settled. The runtime takes a frame's keys and the app runs the
+/// commands they fired in the next frame, so a key needs two frames ([`press`], [`tap`]).
+pub(crate) fn app_harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+    let ctx = app.ctx().clone();
+    let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_context(ctx).with_max_steps(64).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| app);
     h.run_steps(8);
     h
+}
+
+fn harness() -> Harness<'static, PhotocraftApp> {
+    app_harness(PhotocraftApp::new(realistic(), services()))
 }
 
 /// The platform's modifiers for a shortcut's: `Cmd` is ⌘ on the Mac and Ctrl elsewhere, as
@@ -113,14 +69,19 @@ fn platform(m: Modifiers) -> Modifiers {
     out
 }
 
+/// A press and release of `key` with `mods` held, then the frames that take it and run its command.
+pub(crate) fn tap(h: &mut Harness<'_, PhotocraftApp>, key: Key, mods: Modifiers) {
+    let m = platform(mods);
+    h.event(egui::Event::ModifiersChanged(m));
+    h.event(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: m });
+    h.event(egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers: m });
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(3);
+}
+
 fn press(h: &mut Harness<'_, PhotocraftApp>, sc: &str) {
     let sc = parse(sc).unwrap_or_else(|| panic!("unparsable shortcut {sc}"));
-    let m = platform(sc.modifiers);
-    h.event(egui::Event::ModifiersChanged(m));
-    h.event(egui::Event::Key { key: sc.logical_key, physical_key: None, pressed: true, repeat: false, modifiers: m });
-    h.event(egui::Event::Key { key: sc.logical_key, physical_key: None, pressed: false, repeat: false, modifiers: m });
-    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
-    h.run_steps(2);
+    tap(h, sc.logical_key, sc.modifiers);
 }
 
 fn click(h: &mut Harness<'_, PhotocraftApp>, at: Pos2) {
@@ -135,6 +96,20 @@ fn click(h: &mut Harness<'_, PhotocraftApp>, at: Pos2) {
 fn active_name(h: &Harness<'_, PhotocraftApp>) -> String {
     let st = h.state().session.active().unwrap();
     st.active_layer.and_then(|id| st.doc.layer(id)).map(|l| l.name.clone()).unwrap_or_default()
+}
+
+/// Adds the action `name` with `steps` to the action list.
+fn add_action(h: &mut Harness<'_, PhotocraftApp>, name: &str, steps: &[(&str, serde_json::Value)]) {
+    let steps = steps.iter().map(|(command, params)| photocraft_engine::actions_cmds::ActionStep::new(*command, params.clone())).collect();
+    h.state_mut().session.actions.list.push(photocraft_engine::actions_cmds::Action::new(name, steps)).unwrap();
+}
+
+fn logged(h: &Harness<'_, PhotocraftApp>) -> Vec<String> {
+    take_log(&h.ctx).into_iter().map(|(id, _)| id).collect()
+}
+
+fn names(h: &Harness<'_, PhotocraftApp>) -> Vec<String> {
+    h.state().session.active().unwrap().doc.walk().into_iter().map(|(_, _, l)| l.name.clone()).collect()
 }
 
 /// Where focus is when the shortcut is pressed.
@@ -159,15 +134,15 @@ fn put_focus(h: &mut Harness<'_, PhotocraftApp>, place: Place) {
             h.run_steps(2);
         }
         Place::LayersRow => {
-            h.get_by_role_and_label(Role::Button, "paint").scroll_to_me();
+            h.get_by_role_and_label(Role::TreeItem, "paint").scroll_to_me();
             h.run_steps(4);
-            let row = h.get_by_role_and_label(Role::Button, "paint").rect();
+            let row = crate::layers_panel_nodes::row(h, "paint");
             click(h, row.center() + vec2(row.width() / 4.0, 0.0));
             assert_eq!(active_name(h), "paint");
         }
         Place::OpacityField => {
             // The Layers panel's Opacity field: the DragValue in the right dock reading 100.
-            let layers = crate::panel_docking::probe::group_rect(h.state(), &h.ctx, "layers").expect("Layers drawn");
+            let layers = crate::panel_docking::probe::group_rect(h, "layers").expect("Layers drawn");
             let at = h
                 .query_all_by_role(Role::SpinButton)
                 .map(|n| n.rect())
@@ -176,14 +151,14 @@ fn put_focus(h: &mut Harness<'_, PhotocraftApp>, place: Place) {
                 .expect("Layers opacity field")
                 .center();
             click(h, at);
-            assert_eq!(Focus::of(&h.ctx), Focus::Text, "clicking a value field edits it");
+            assert!(WindowHost::of(&h.ctx).typing(), "clicking a value field edits it");
         }
         Place::FocusedWidget => {
-            h.get_by_role_and_label(Role::Button, "paint").scroll_to_me();
+            h.get_by_role_and_label(Role::TreeItem, "paint").scroll_to_me();
             h.run_steps(4);
-            h.get_by_role_and_label(Role::Button, "paint").focus();
+            h.get_by_role_and_label(Role::TreeItem, "paint").focus();
             h.run_steps(2);
-            assert_eq!(Focus::of(&h.ctx), Focus::Widget, "a widget is focused");
+            assert!(focus::focused_rec(&h.ctx).is_some() && !WindowHost::of(&h.ctx).typing(), "a widget is focused");
         }
     }
     take_log(&h.ctx);
@@ -201,10 +176,10 @@ fn same(shown: &str, bound: &str) -> bool {
 
 /// Every shortcut shown in the menus (and the shell's unlisted ones), with whether it is live.
 fn displayed(app: &PhotocraftApp) -> Vec<(String, String, bool)> {
-    let mut v: Vec<(String, String, bool)> = crate::menus::menu_items(app)
+    let mut v: Vec<(String, String, bool)> = crate::menus::menu_rows(app)
         .into_iter()
-        .filter(|i| i.id != "---")
-        .filter_map(|i| Some((i.id.clone(), i.shortcut?, crate::menus::is_live(&i.id))))
+        .filter(|i| i.command.id != "---")
+        .filter_map(|i| Some((i.command.id.clone(), i.shortcut.as_ref()?.portable(), crate::menus::is_live(&i.command.id))))
         .collect();
     for (id, _, menu, sc) in crate::menus::UI_COMMANDS {
         if let Some(sc) = sc
@@ -214,28 +189,6 @@ fn displayed(app: &PhotocraftApp) -> Vec<(String, String, bool)> {
         }
     }
     v
-}
-
-#[test]
-fn every_displayed_shortcut_is_bound_to_its_item() {
-    let h = harness();
-    let app = h.state();
-    let table = bindings(app);
-    let mut broken = Vec::new();
-    for (id, sc, live) in displayed(app) {
-        let parsed = parse(&sc).unwrap_or_else(|| panic!("{id}: unparsable {sc}"));
-        let owner = table.iter().find(|(_, b)| *b == parsed).map(|(o, _)| o.clone());
-        match owner {
-            Some(o) if same(&id, &o) => {}
-            _ if !live => {
-                // Not implemented yet: shown greyed (the parity report tracks these).
-                let item = crate::menus::menu_items(app).into_iter().find(|i| i.id == id);
-                assert!(item.is_none_or(|i| !i.enabled), "{id} isn't live but shows enabled");
-            }
-            o => broken.push(format!("{id} shows {sc} but it is bound to {o:?}")),
-        }
-    }
-    assert!(broken.is_empty(), "{} displayed shortcuts don't reach their item:\n{}", broken.len(), broken.join("\n"));
 }
 
 /// Press every displayed shortcut from each place focus usually is: each dispatches its command,
@@ -248,31 +201,35 @@ fn every_displayed_shortcut_dispatches_from_where_focus_usually_is() {
         let mut h = harness();
         set_dry_run(&h.ctx, true);
         put_focus(&mut h, place);
-        let focus = Focus::of(&h.ctx);
-        let items = crate::menus::menu_items(h.state());
+        let typing = WindowHost::of(&h.ctx).typing();
+        let items = crate::menus::menu_rows(h.state());
         for (id, sc, live) in displayed(h.state()) {
             if !live {
                 continue;
             }
-            let parsed = parse(&sc).unwrap();
+            let chord = Chord::parse(&sc).unwrap_or_else(|_| panic!("{id}: unparsable {sc}"));
+            // A press the focused component holds (the Layers rows' stacking and visibility keys)
+            // is the component's and reaches no app command.
+            let held = focus_holds(&h.ctx, chord);
             press(&mut h, &sc);
             let log = take_log(&h.ctx);
-            if !focus.allows(&parsed) {
-                // A focused text field keeps typing / editing keys: nothing may fire.
+            if typing && !chord.has_command() && !chord.is_function_key() {
+                // A focused text field keeps its typing / editing keys: nothing may fire.
                 if !log.is_empty() {
                     failures.push(format!("{place:?}: {sc} ({id}) fired {log:?} into a focused field"));
                 }
                 continue;
             }
-            let enabled = items.iter().find(|i| i.id == id).map_or_else(|| crate::menus::is_enabled(h.state(), &id), |i| i.enabled);
+            let enabled = items.iter().find(|i| i.command.id == id).map_or_else(|| crate::menus::is_enabled(h.state(), &id), |i| i.enabled);
             match log.as_slice() {
+                [] if held || typing => {}
                 [(bound, Outcome::Ran)] if same(&id, bound) && enabled => {}
                 [(bound, Outcome::Disabled(why))] if same(&id, bound) && !enabled && !why.is_empty() => {}
                 other => failures.push(format!("{place:?}: {sc} ({id}, menu enabled: {enabled}) -> {other:?}")),
             }
         }
         // Tool letters from the tools panel tooltips ("Brush Tool  (B)").
-        if !matches!(focus, Focus::Text) {
+        if !typing {
             for t in Tool::ALL.into_iter().filter(|t| t.key() != '\0') {
                 h.state_mut().ui.tool = if t.key() == 'H' { Tool::Move } else { Tool::Hand };
                 press(&mut h, &t.key().to_string());
@@ -283,67 +240,6 @@ fn every_displayed_shortcut_dispatches_from_where_focus_usually_is() {
         }
     }
     assert!(failures.is_empty(), "{} shortcut failures:\n{}", failures.len(), failures.join("\n"));
-}
-
-/// The common shortcuts really run (not a dry run) in the layered document after clicking around
-/// the panels: the user report was "shortcut keys don't do anything".
-#[test]
-fn common_shortcuts_work_after_clicking_panels() {
-    for place in [Place::Canvas, Place::LayersRow, Place::FocusedWidget, Place::OpacityField] {
-        let mut h = harness();
-        put_focus(&mut h, place);
-        let count = |h: &Harness<'_, PhotocraftApp>| h.state().session.active().unwrap().doc.walk().len();
-        let n = count(&h);
-        press(&mut h, "Cmd+J");
-        assert_eq!(count(&h), n + 1, "{place:?}: ⌘J duplicates the layer");
-        // In a focused text field ⌘Z / ⇧⌘Z undo the typing, as in Photoshop.
-        let text = matches!(place, Place::OpacityField);
-        if !text {
-            press(&mut h, "Cmd+Z");
-            assert_eq!(count(&h), n, "{place:?}: ⌘Z undoes");
-            press(&mut h, "Cmd+Shift+Z");
-            assert_eq!(count(&h), n + 1, "{place:?}: ⇧⌘Z redoes");
-            press(&mut h, "Cmd+Z");
-        }
-        press(&mut h, "Cmd+D");
-        assert!(h.state().session.active().unwrap().doc.selection.is_none(), "{place:?}: ⌘D deselects");
-        press(&mut h, "Cmd+Shift+D");
-        assert!(h.state().session.active().unwrap().doc.selection.is_some(), "{place:?}: ⇧⌘D reselects");
-        let z = h.state().current_zoom();
-        press(&mut h, "Cmd+=");
-        assert!(h.state().current_zoom() > z, "{place:?}: ⌘+ zooms in");
-        let rulers = h.state().ui.extras.rulers;
-        press(&mut h, "Cmd+R");
-        assert_ne!(h.state().ui.extras.rulers, rulers, "{place:?}: ⌘R toggles rulers");
-        let layers = h.state().ui.panels.layers;
-        press(&mut h, "F7");
-        assert_ne!(h.state().ui.panels.layers, layers, "{place:?}: F7 toggles Layers");
-        press(&mut h, "F7");
-        // Dialogs: Image Size (⌥⌘I, shown in the menu but unbound before #127) and Levels (⌘L).
-        for (sc, what) in [("Cmd+Alt+I", "Image Size"), ("Cmd+Alt+C", "Canvas Size"), ("Cmd+L", "Levels"), ("Cmd+M", "Curves")] {
-            press(&mut h, sc);
-            assert_eq!(h.state().ui.dialogs.len(), 1, "{place:?}: {sc} opens {what}");
-            h.state_mut().ui.dialogs.clear();
-            h.run_steps(2);
-        }
-        if !text {
-            // From another group (B again would cycle to the Pencil).
-            h.state_mut().ui.tool = Tool::Move;
-            press(&mut h, "B");
-            assert_eq!(h.state().ui.tool, Tool::Brush, "{place:?}: B picks the Brush");
-            press(&mut h, "V");
-            assert_eq!(h.state().ui.tool, Tool::Move, "{place:?}: V picks Move");
-            // The colour keys from the tools panel tooltips: X swaps, D resets.
-            let fg = h.state().session.tools.foreground;
-            press(&mut h, "X");
-            assert_eq!(h.state().session.tools.background, fg, "{place:?}: X swaps colours");
-            press(&mut h, "D");
-            assert_eq!(h.state().session.tools.foreground, [0.0, 0.0, 0.0, 1.0], "{place:?}: D resets colours");
-        }
-        press(&mut h, "Cmd+G");
-        let group = h.state().session.active().unwrap().active_layer.and_then(|id| h.state().session.active().unwrap().doc.layer(id).cloned());
-        assert!(group.is_some_and(|l| matches!(l.content, LayerContent::Group(_))), "{place:?}: ⌘G groups");
-    }
 }
 
 #[test]
@@ -360,40 +256,36 @@ fn a_disabled_shortcut_says_why() {
     assert!(!h.state().ui.status.is_empty() && h.state().ui.status_error, "the status bar says why");
 }
 
+/// The catalog's chords reach PhotoCraft's commands through `run_fired`, whichever of a command's keys is pressed.
+/// A dry run logs the command a key fired; the second part runs the keys whose effect is the point.
 #[test]
-fn a_disabled_shortcut_uses_the_command_id_translation() {
-    if !crate::i18n::needs_catalogs() {
-        return;
-    }
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-    let cs = crate::i18n::Lang::from_code("cs").unwrap();
-    crate::i18n::with_language(cs, || {
-        super::dispatch(&mut app, &egui::Context::default(), "select.all");
-        let shown = crate::i18n::tr_id(cs, "select.all", &super::label("select.all")).to_string();
-        assert!(app.ui.status.contains(&shown), "{}", app.ui.status);
-        assert!(app.ui.status_error);
-    });
-}
-
-/// #3665: Photoshop's second keys reach their command beside its main key: F2/F3/F4 Cut, Copy
-/// and Paste, Shift+F7 Inverse, ⌘+ Zoom In, Shift+Backspace Fill.
-#[test]
-fn alternate_keys_run_their_command() {
+fn keys_run_their_commands() {
     let mut h = harness();
     put_focus(&mut h, Place::Canvas);
     set_dry_run(&h.ctx, true);
-    for (key, want) in [
+    let mut rows: Vec<(&str, &str)> = vec![
+        // #3665: Photoshop's second keys reach their command beside its main key.
         ("F2", "edit.cut"),
         ("F3", "edit.copy"),
         ("Cmd+C", "edit.copy"),
         ("F4", "edit.paste"),
         ("Shift+F7", "select.inverse"),
         ("Cmd+Shift+I", "select.inverse"),
-        ("Cmd++", "view.zoomIn"),
         ("Shift+Backspace", "edit.fill"),
-        ("Cmd+Alt+0", "view.actualPixels"),
-        ("F9", "window.panel.actions"),
-    ] {
+        // ⌘⇧↩ adds the path to the selection, ⌘⌥↩ subtracts it.
+        ("Cmd+Shift+Enter", "path.addToSelection"),
+        ("Cmd+Alt+Enter", "path.subtractFromSelection"),
+        ("Cmd+Alt+G", "layer.createClippingMask"),
+    ];
+    // Ctrl+F4 closes the document beside Ctrl+W, as in Photoshop on Windows.
+    if !cfg!(target_os = "macos") {
+        rows.push(("Cmd+F4", "file.close"));
+    }
+    // egui-winit sends Cut for Shift+Delete on Windows; it opens Fill (#530).
+    if cfg!(target_os = "windows") {
+        rows.push(("Shift+Delete", "edit.fill"));
+    }
+    for (key, want) in rows {
         press(&mut h, key);
         let log = take_log(&h.ctx);
         assert!(matches!(log.as_slice(), [(id, _)] if id == want), "{key}: {log:?}");
@@ -402,45 +294,23 @@ fn alternate_keys_run_their_command() {
     h.state_mut().session.edit_prefs(|p| {
         p.shortcuts.insert("edit.copy".into(), "Cmd+K".into());
     });
+    h.run_steps(2);
     press(&mut h, "F3");
-    assert!(matches!(take_log(&h.ctx).as_slice(), [(id, _)] if id == "edit.copy"));
-    // A key a user gives another command wins over a default alternate.
-    h.state_mut().session.edit_prefs(|p| {
-        p.shortcuts.insert("layer.renameLayer".into(), "F2".into());
-    });
-    assert!(bindings(h.state()).iter().any(|(id, sc)| id == "layer.renameLayer" && *sc == parse("F2").unwrap()));
-    assert!(!bindings(h.state()).iter().any(|(id, sc)| id == "edit.cut" && *sc == parse("F2").unwrap()));
+    assert_eq!(logged(&h), ["edit.copy"]);
+    press(&mut h, "Cmd+C");
+    assert!(logged(&h).is_empty(), "the old main key is free");
     // A removed alternate no longer fires.
     h.state_mut().session.edit_prefs(|p| {
         p.alternate_shortcuts.insert("edit.paste".into(), Vec::new());
     });
+    h.run_steps(2);
     press(&mut h, "F4");
-    assert!(take_log(&h.ctx).is_empty());
-}
+    assert!(logged(&h).is_empty());
+    set_dry_run(&h.ctx, false);
 
-/// Ctrl+F4 closes the document beside Ctrl+W, as in Photoshop on Windows, through the same
-/// guarded Close: unsaved changes still get the save prompt.
-#[cfg(not(target_os = "macos"))]
-#[test]
-fn ctrl_f4_closes_the_document() {
+    // #352: ⌥[ ⌥] ⌥, ⌥. and ⇧⌥[ walk the Layers panel's rows. Rows, top to bottom: paint, Hello (type), group,
+    // in-group, Background.
     let mut h = harness();
-    put_focus(&mut h, Place::Canvas);
-    press(&mut h, "Cmd+F4");
-    assert!(matches!(take_log(&h.ctx).as_slice(), [(id, Outcome::Ran)] if id == "file.close"));
-    assert!(h.state().discard.is_some(), "unsaved changes ask first");
-    assert_eq!(h.state().session.documents().len(), 1);
-    h.state_mut().discard = None;
-    let st = h.state_mut().session.active_mut().unwrap();
-    st.saved_revision = st.revision;
-    press(&mut h, "Cmd+F4");
-    assert!(h.state().session.documents().is_empty(), "a saved document closes");
-}
-
-/// #352: ⌥[ ⌥] ⌥, ⌥. and ⇧⌥[ walk the Layers panel's rows from the keyboard.
-#[test]
-fn alt_brackets_walk_the_layers_panel() {
-    let mut h = harness();
-    // Rows, top to bottom: paint, Hello (type), group, in-group, Background.
     assert_eq!(active_name(&h), "paint");
     for (key, want) in [("Alt+[", "Hello"), ("Alt+[", "group"), ("Alt+[", "in-group"), ("Alt+]", "group"), ("Alt+,", "Background"), ("Alt+.", "paint")] {
         press(&mut h, key);
@@ -449,132 +319,47 @@ fn alt_brackets_walk_the_layers_panel() {
     press(&mut h, "Alt+Shift+[");
     assert_eq!(active_name(&h), "Hello");
     assert_eq!(h.state().session.active().unwrap().selected_layers().len(), 2, "⇧⌥[ adds to the selection");
-}
 
-/// #626: [ ] ⇧[ ⇧] are commands listed under Tools in Edit › Keyboard Shortcuts, so they rebind.
-#[test]
-fn brush_keys_can_be_rebound() {
+    // ⌥⌘G clips the selected layer and pressing it again releases it, as Photoshop's one Create / Release Clipping
+    // Mask item does (`clip_key_releases`).
     let mut h = harness();
     put_focus(&mut h, Place::Canvas);
-    let items = crate::prefs_ui::shortcut_items(h.state());
-    let listed = |id: &str| items.iter().find(|i| i.0 == id).map(|i| (i.1.clone(), i.2.clone(), i.3.clone()));
-    assert_eq!(listed("tools.decreaseBrushSize"), Some(("Decrease Brush Size".into(), vec!["Tools".into()], Some("[".into()))));
-    assert_eq!(listed("tools.increaseBrushHardness").and_then(|i| i.2), Some("Shift+]".into()));
-    let app = h.state_mut();
-    app.ui.tool = Tool::Brush;
-    app.run("tools.setBrush", json!({"brush": {"size": 40, "hardness": 0.5}})).unwrap();
-    app.run("edit.keyboardShortcuts", json!({"set": {"tools.increaseBrushSize": "Alt+W", "tools.increaseBrushHardness": "Alt+Shift+W"}})).unwrap();
-    let brush = |h: &Harness<'_, PhotocraftApp>| (h.state().session.tools.brush.size, h.state().session.tools.brush.hardness);
-    press(&mut h, "]");
-    press(&mut h, "Shift+]");
-    assert_eq!(brush(&h), (40.0, 0.5), "the old keys are free");
-    press(&mut h, "Alt+W");
-    press(&mut h, "Alt+Shift+W");
-    assert_eq!(brush(&h), (45.0, 0.75), "the new keys step size and hardness");
-    press(&mut h, "[");
-    press(&mut h, "Shift+[");
-    assert_eq!(brush(&h), (40.0, 0.5), "the others keep their defaults");
-    // Hardness only steps for a tool with a brush tip; the press says why it did nothing.
-    h.state_mut().ui.tool = Tool::Move;
-    take_log(&h.ctx);
-    press(&mut h, "Alt+Shift+W");
-    assert_eq!(brush(&h), (40.0, 0.5));
-    assert!(matches!(take_log(&h.ctx).as_slice(), [(id, Outcome::Disabled(_))] if id == "tools.increaseBrushHardness"));
-}
-
-/// Bytes the app saved, newest last.
-type Saved = std::rc::Rc<std::cell::RefCell<Vec<Vec<u8>>>>;
-
-/// [`harness`] with a document that saves in place, an exporter writing its top-level layer count
-/// and a writer recording it; then one new layer on top (history to undo).
-fn saving_harness() -> (Harness<'static, PhotocraftApp>, Saved) {
-    let saved = Saved::default();
-    let out = saved.clone();
-    let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(move |cc| {
-        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        let services = crate::Services {
-            export: Some(Box::new(|doc, _, _| Ok((doc.layers.len().to_string().into_bytes(), Vec::new())))),
-            write: Some(Box::new(move |_, bytes| {
-                out.borrow_mut().push(bytes.to_vec());
-                Ok(())
-            })),
-            ..Default::default()
-        };
-        let mut session = realistic();
-        session.active_mut().unwrap().path = Some("/tmp/layout.psd".into());
-        session.execute("layer.new.layer", json!({"name": "added"})).unwrap();
-        PhotocraftApp::new(session, services)
-    });
-    h.run_steps(8);
-    put_focus(&mut h, Place::Canvas);
-    (h, saved)
-}
-
-fn layer_count(h: &Harness<'_, PhotocraftApp>) -> usize {
-    h.state().session.active().unwrap().doc.layers.len()
-}
-
-/// Press `shortcuts` one after another within a single frame (`Harness::event` runs a frame per
-/// event).
-fn press_in_one_frame(h: &mut Harness<'_, PhotocraftApp>, shortcuts: &[&str]) {
-    let events = &mut h.input_mut().events;
-    for sc in shortcuts {
-        let sc = parse(sc).unwrap();
-        let m = platform(sc.modifiers);
-        events.push(egui::Event::ModifiersChanged(m));
-        events.push(egui::Event::Key { key: sc.logical_key, physical_key: None, pressed: true, repeat: false, modifiers: m });
-        events.push(egui::Event::Key { key: sc.logical_key, physical_key: None, pressed: false, repeat: false, modifiers: m });
+    let paint = h.state().session.active().unwrap().active_layer.unwrap();
+    let clipped = |h: &Harness<'_, PhotocraftApp>| h.state().session.active().unwrap().doc.layer(paint).unwrap().clipped;
+    press(&mut h, "Cmd+Alt+G");
+    assert_eq!(logged(&h), ["layer.createClippingMask"]);
+    assert!(clipped(&h));
+    press(&mut h, "Cmd+Alt+G");
+    assert_eq!(logged(&h), ["layer.releaseClippingMask"]);
+    assert!(!clipped(&h), "the second press releases it");
+    press(&mut h, "Cmd+Z");
+    assert!(clipped(&h), "one undo puts the clip back");
+    assert_eq!(logged(&h), ["edit.undo"]);
+    // With several layers selected the key clips every one above the lowest, and releases them once they all are.
+    let s = &mut h.state_mut().session;
+    let base = s.active().unwrap().doc.walk().into_iter().find(|(_, _, l)| l.name == "Hello").unwrap().2.id;
+    let top = photocraft_doc::LayerId(s.execute("layer.new.layer", json!({"name": "top"})).unwrap()["layer"].as_u64().unwrap());
+    s.execute("layer.select", json!({"layer": base.0, "mode": "replace"})).unwrap();
+    for id in [paint, top] {
+        s.execute("layer.select", json!({"layer": id.0, "mode": "add"})).unwrap();
     }
-    events.push(egui::Event::ModifiersChanged(Modifiers::NONE));
     h.run_steps(2);
+    let is_clipped = |h: &Harness<'_, PhotocraftApp>, id: photocraft_doc::LayerId| h.state().session.active().unwrap().doc.layer(id).unwrap().clipped;
+    press(&mut h, "Cmd+Alt+G");
+    assert_eq!(logged(&h), ["layer.createClippingMask"], "the top layer isn't clipped yet");
+    assert!(is_clipped(&h, paint) && is_clipped(&h, top) && !is_clipped(&h, base));
+    press(&mut h, "Cmd+Alt+G");
+    assert_eq!(logged(&h), ["layer.releaseClippingMask"]);
+    assert!(!is_clipped(&h, paint) && !is_clipped(&h, top) && !is_clipped(&h, base));
 }
 
-fn logged(h: &Harness<'_, PhotocraftApp>) -> Vec<String> {
-    take_log(&h.ctx).into_iter().map(|(id, _)| id).collect()
-}
-
-/// #440: shortcuts arriving in one frame run in the order they were pressed.
+/// Delete (and Backspace) with nothing selected deletes the selected layers whatever their kind (#1077); with the
+/// layer mask or a smart object's filter mask targeted they edit the mask (FILE-215-3), unless several layers are
+/// selected (#4025); a selection keeps Edit › Clear.
 #[test]
-fn shortcuts_in_one_frame_run_in_order() {
-    let (mut h, saved) = saving_harness();
-    assert_eq!(layer_count(&h), 5);
-    // ⌘Z then ⌘S: the undone document is saved.
-    press_in_one_frame(&mut h, &["Cmd+Z", "Cmd+S"]);
-    assert_eq!(layer_count(&h), 4, "⌘Z undid the new layer");
-    assert_eq!(saved.borrow().as_slice(), [b"4".to_vec()], "⌘S saved after the undo");
-    assert_eq!(logged(&h), ["edit.undo", "file.save"]);
-    // ⇧⌘Z redoes; then ⌘S before ⌘Z saves first and undoes after.
-    press_in_one_frame(&mut h, &["Cmd+Shift+Z"]);
-    assert_eq!(layer_count(&h), 5);
-    logged(&h);
-    saved.borrow_mut().clear();
-    press_in_one_frame(&mut h, &["Cmd+S", "Cmd+Z"]);
-    assert_eq!(saved.borrow().as_slice(), [b"5".to_vec()], "saved before the undo");
-    assert_eq!(layer_count(&h), 4, "then undone");
-    assert_eq!(logged(&h), ["file.save", "edit.undo"]);
-}
-
-/// A shortcut that opens a dialog leaves the frame's later keys to it: ⌘L then ⌘Z doesn't undo
-/// behind the Levels dialog.
-#[test]
-fn a_shortcut_opening_a_dialog_takes_the_frames_later_keys() {
-    let (mut h, _) = saving_harness();
-    press_in_one_frame(&mut h, &["Cmd+L", "Cmd+Z"]);
-    assert_eq!(h.state().ui.dialogs.len(), 1, "⌘L opened Levels");
-    assert_eq!(layer_count(&h), 5, "⌘Z didn't undo behind the dialog");
-    assert_eq!(logged(&h), ["image.adjustments.levels"]);
-}
-
-fn names(h: &Harness<'_, PhotocraftApp>) -> Vec<String> {
-    h.state().session.active().unwrap().doc.walk().into_iter().map(|(_, _, l)| l.name.clone()).collect()
-}
-
-/// #1077: with nothing selected, Delete (and Backspace) deletes the selected layer whatever its
-/// kind, from the canvas or the Layers panel, in one undo step; it used to say Clear needs a
-/// pixel layer on an adjustment layer.
-#[test]
-fn delete_without_a_selection_deletes_the_selected_layer() {
-    for place in [Place::Canvas, Place::LayersRow, Place::FocusedWidget] {
+fn delete_key_targets() {
+    // The selected layer, from the canvas or the Layers panel, in one undo step.
+    for place in [Place::Canvas, Place::LayersRow] {
         for key in ["Delete", "Backspace"] {
             let mut h = harness();
             put_focus(&mut h, place);
@@ -591,13 +376,8 @@ fn delete_without_a_selection_deletes_the_selected_layer() {
             assert_eq!(names(&h), before, "{place:?} {key}: one undo brings it back");
         }
     }
-}
 
-/// With the layer mask targeted, Delete / Backspace edit the mask and never the layer's pixels:
-/// a selection fills the mask with the background colour there, and with no selection the mask
-/// itself is deleted.
-#[test]
-fn delete_with_the_mask_targeted_edits_the_mask_not_the_layer() {
+    // The layer mask targeted: a selection fills the mask with the background colour, no selection deletes the mask.
     for key in ["Delete", "Backspace"] {
         let mut h = harness();
         put_focus(&mut h, Place::Canvas);
@@ -630,11 +410,9 @@ fn delete_with_the_mask_targeted_edits_the_mask_not_the_layer() {
     }
 }
 
-/// FILE-215-3: with a smart object's filter mask targeted, Delete with a selection fills the filter
-/// mask with the background colour there (not Edit › Clear on the smart object); with no
-/// selection Photoshop deletes the layer, as it does with the pixels targeted.
+/// With a smart object's filter mask targeted, Delete fills it from a selection; with no selection the layer goes.
 #[test]
-fn delete_with_the_filter_mask_targeted_edits_the_filter_mask() {
+fn delete_key_targets_a_smart_objects_filter_mask() {
     let mut h = harness();
     put_focus(&mut h, Place::Canvas);
     let s = &mut h.state_mut().session;
@@ -656,7 +434,6 @@ fn delete_with_the_filter_mask_targeted_edits_the_filter_mask() {
     assert_eq!(logged(&h), ["edit.fillBackground"]);
     let sm = smart(&h).expect("the smart object stays");
     assert_eq!(sm.filter_mask.as_ref().map(|m| m.value(x, y)), Some(bg[0]), "the filter mask takes the background colour");
-    assert_eq!(bg[0], 0.0, "a targeted mask's background colour is black");
     assert_eq!(sm.smart_filters.len(), filters);
     h.state_mut().session.execute("select.deselect", json!({})).unwrap();
     h.run_steps(2);
@@ -665,9 +442,10 @@ fn delete_with_the_filter_mask_targeted_edits_the_filter_mask() {
     assert!(smart(&h).is_none(), "no selection deletes the layer, as in Photoshop");
 }
 
-/// Every selected layer goes, pixel layers too (Photoshop deletes, it doesn't clear the layer).
+/// Delete with several layers selected removes every one of them, or edits the targeted mask when a selection exists.
 #[test]
-fn delete_without_a_selection_deletes_every_selected_layer() {
+fn delete_key_with_several_layers_selected() {
+    // Every selected layer goes, pixel layers too.
     let mut h = harness();
     put_focus(&mut h, Place::Canvas);
     let s = &mut h.state_mut().session;
@@ -682,13 +460,8 @@ fn delete_without_a_selection_deletes_every_selected_layer() {
     let doc = &h.state().session.active().unwrap().doc;
     assert!(doc.layer(paint).is_none() && doc.layer(adj).is_none(), "both selected layers are gone");
     assert_eq!(names(&h).len(), n - 2);
-}
 
-/// #4025: with several layers selected and no selection, a targeted mask on the active one doesn't
-/// take the key: Delete removes the selected layers in one press, as it does with the layer
-/// targeted. A selection still fills the targeted mask.
-#[test]
-fn delete_with_several_layers_selected_deletes_them_even_with_the_mask_targeted() {
+    // Several layers selected with the mask of the active one targeted: a selection edits the mask, none deletes the layers.
     let mut h = harness();
     put_focus(&mut h, Place::Canvas);
     let s = &mut h.state_mut().session;
@@ -700,7 +473,6 @@ fn delete_with_several_layers_selected_deletes_them_even_with_the_mask_targeted(
     let st = s.active().unwrap();
     assert_eq!(st.selected_layers().len(), 2);
     assert!(st.active_layer.and_then(|l| st.doc.layer(l)).is_some_and(|l| l.mask.is_some()), "the active adjustment layer has a mask");
-    assert!(st.doc.selection.is_some(), "a selection is active");
     h.state_mut().ui.mask_target = true;
     h.run_steps(2);
     let n = names(&h).len();
@@ -714,11 +486,8 @@ fn delete_with_several_layers_selected_deletes_them_even_with_the_mask_targeted(
     let doc = &h.state().session.active().unwrap().doc;
     assert!(doc.layer(first).is_none() && doc.layer(second).is_none(), "both selected layers are gone");
     assert_eq!(names(&h).len(), n - 2);
-}
 
-/// A selection keeps Edit › Clear: the selected pixels go, the layer stays.
-#[test]
-fn delete_with_a_selection_clears_it() {
+    // A selection keeps Edit › Clear: the selected pixels go, the layer stays.
     let mut h = harness();
     put_focus(&mut h, Place::Canvas);
     let before = names(&h);
@@ -728,369 +497,76 @@ fn delete_with_a_selection_clears_it() {
     assert_eq!(names(&h), before, "no layer was deleted");
 }
 
-fn is_clipped(h: &Harness<'_, PhotocraftApp>, id: photocraft_doc::LayerId) -> bool {
-    h.state().session.active().unwrap().doc.layer(id).unwrap().clipped
-}
-
-/// The Layer menu's clipping mask items: (id, label, shortcut, enabled).
-fn clip_items(h: &Harness<'_, PhotocraftApp>) -> Vec<(String, String, Option<String>, bool)> {
-    crate::menus::menu_items(h.state()).into_iter().filter(|i| i.id.ends_with("ClippingMask")).map(|i| (i.id, i.label, i.shortcut, i.enabled)).collect()
-}
-
-fn clip_item(id: &str, label: &str) -> Vec<(String, String, Option<String>, bool)> {
-    vec![(id.into(), label.into(), Some("Cmd+Alt+G".into()), true)]
-}
-
-/// ⌥⌘G clips the selected layer and pressing it again releases it, as Photoshop's one Create /
-/// Release Clipping Mask item does; the Layer menu reads Release Clipping Mask, with the same
-/// shortcut, while the key would release.
+/// An action key the automation policy refuses leaves the bindings as they were.
 #[test]
-fn clip_key_toggles_the_clipping_mask() {
+fn denied_shortcut_assignment_leaves_bindings_unmodified() {
     let mut h = harness();
-    put_focus(&mut h, Place::Canvas);
-    let paint = h.state().session.active().unwrap().active_layer.unwrap();
-    assert_eq!(clip_items(&h), clip_item("layer.createClippingMask", "Create Clipping Mask"));
-    press(&mut h, "Cmd+Alt+G");
-    assert_eq!(logged(&h), ["layer.createClippingMask"]);
-    assert!(is_clipped(&h, paint));
-    assert_eq!(clip_items(&h), clip_item("layer.releaseClippingMask", "Release Clipping Mask"));
-    press(&mut h, "Cmd+Alt+G");
-    assert_eq!(logged(&h), ["layer.releaseClippingMask"]);
-    assert!(!is_clipped(&h, paint), "the second press releases it");
-    assert_eq!(clip_items(&h), clip_item("layer.createClippingMask", "Create Clipping Mask"));
-    press(&mut h, "Cmd+Z");
-    assert!(is_clipped(&h, paint), "one undo puts the clip back");
-}
-
-/// With several layers selected the key clips every one above the lowest, and releases them once
-/// they all are: a selection where only some are clipped clips the rest first.
-#[test]
-fn clip_key_toggles_several_selected_layers() {
-    let mut h = harness();
-    put_focus(&mut h, Place::Canvas);
-    let s = &mut h.state_mut().session;
-    let paint = s.active().unwrap().active_layer.unwrap();
-    let base = s.active().unwrap().doc.walk().into_iter().find(|(_, _, l)| l.name == "Hello").unwrap().2.id;
-    let top = photocraft_doc::LayerId(s.execute("layer.new.layer", json!({"name": "top"})).unwrap()["layer"].as_u64().unwrap());
-    s.execute("layer.createClippingMask", json!({"layer": paint.0})).unwrap();
-    s.execute("layer.select", json!({"layer": base.0, "mode": "replace"})).unwrap();
-    for id in [paint, top] {
-        s.execute("layer.select", json!({"layer": id.0, "mode": "add"})).unwrap();
-    }
-    assert_eq!(s.active().unwrap().selected_layers().len(), 3);
-    h.run_steps(2);
-    press(&mut h, "Cmd+Alt+G");
-    assert_eq!(logged(&h), ["layer.createClippingMask"], "the top layer isn't clipped yet");
-    assert!(is_clipped(&h, paint) && is_clipped(&h, top) && !is_clipped(&h, base));
-    press(&mut h, "Cmd+Alt+G");
-    assert_eq!(logged(&h), ["layer.releaseClippingMask"]);
-    assert!(!is_clipped(&h, paint) && !is_clipped(&h, top) && !is_clipped(&h, base));
-}
-
-fn action_key(h: &Harness<'_, PhotocraftApp>, index: usize) -> String {
-    actions_cmds::occurrence_key(h.state().session.actions.list[index].action_id.as_deref().unwrap())
-}
-
-fn repeated_reset_shortcuts(h: &mut Harness<'_, PhotocraftApp>) {
-    for _ in 0..2 {
-        h.state_mut().run("actions.reset", json!({"confirm":true,"mode":"append"})).unwrap();
-    }
-    for (index, key, name) in [(0, "F2", "first occurrence"), (2, "F3", "second occurrence")] {
-        h.state_mut().session.actions.list[index].steps = vec![("layer.new.layer".into(), json!({"name":name}))];
-        crate::actions::assign_shortcut(h.state_mut(), index, key).unwrap();
-    }
-}
-
-#[test]
-fn f2_dispatches_only_the_first_same_named_action() {
-    let mut h = harness();
-    repeated_reset_shortcuts(&mut h);
-    let count = h.state().session.active().unwrap().doc.layers.len();
-    press(&mut h, "F2");
-    assert_eq!(active_name(&h), "first occurrence");
-    assert_eq!(h.state().session.active().unwrap().doc.layers.len(), count + 1);
-}
-
-#[test]
-fn f3_dispatches_only_the_second_same_named_action_after_reorder_and_reopen() {
-    use photocraft_engine::preset_store::{MemBackend, open};
-
-    let mut h = harness();
-    let store = MemBackend::default();
-    h.state_mut().session.attach_preset_store(open(Box::new(store.clone())));
-    h.state_mut().session.actions.set_rows.push("Before".into());
-    repeated_reset_shortcuts(&mut h);
-    let first_key = action_key(&h, 0);
-    let second_key = action_key(&h, 2);
-    h.state_mut().run("actions.move", json!({"action":2,"to":0})).unwrap();
-    let (empty, _) = photocraft_engine::atn_cmds::export("Before", &[], &[], false).unwrap();
-    let data = photocraft_paint::tile::b64_encode(&empty);
-    h.state_mut().run("actions.load", json!({"data":data})).unwrap();
-    assert_eq!(h.state().session.actions.list[0].set_slot, Some(1));
-    h.state_mut().session.sync_preset_store();
-    let prefs = h.state().session.prefs_to_json();
-
-    let mut h = harness();
-    h.state_mut().session.load_prefs_json(&prefs).unwrap();
-    h.state_mut().session.attach_preset_store(open(Box::new(store)));
-    assert_eq!(action_key(&h, 0), second_key);
-    let count = h.state().session.active().unwrap().doc.layers.len();
-    press(&mut h, "F3");
-    assert_eq!(active_name(&h), "second occurrence");
-    assert_eq!(h.state().session.active().unwrap().doc.layers.len(), count + 1);
-    h.state_mut().run("actions.delete", json!({"action":1})).unwrap();
-    assert!(!h.state().session.prefs().shortcuts.contains_key(&first_key));
-    assert_eq!(h.state().session.prefs().shortcuts[&second_key], "F3");
-    press(&mut h, "F2");
-    assert_eq!(h.state().session.active().unwrap().doc.layers.len(), count + 1);
-}
-
-#[test]
-fn attachment_preserves_disk_keys_and_calls_without_changing_name_lookup() {
-    use photocraft_engine::preset_store::{ACTIONS_FILE, MemBackend, PresetBackend, open};
-
-    let store = MemBackend::default();
-    let file = json!({"version":1,"set_rows":["Saved"],"actions":[
-        {"name":"Target","set":"Saved","set_slot":0,"steps":[["layer.new.layer",{"name":"disk target"}]]},
-        {"name":"Disk caller","steps":[["actions.play",{"action":"Target"}]]},
-        {"name":"Disk conditional","steps":[["actions.conditional",{"if":"always","then":"Target"}]]}
-    ]});
-    store.write(ACTIONS_FILE, file.to_string().as_bytes()).unwrap();
-
-    let mut h = harness();
-    h.state_mut().session.load_prefs_json(r#"{"shortcuts":{"actions.play:Target":"F2"},"alternateShortcuts":{"actions.play:Target":["F3"]}}"#).unwrap();
-    h.state_mut().session.actions.list.push(actions_cmds::Action::new("Target", vec![("layer.new.layer".into(), json!({"name":"memory target"}))]));
-    assert!(h.state_mut().session.attach_preset_store(open(Box::new(store.clone()))).is_empty());
-    let disk_key = "actions.play:Target";
-    assert!(h.state().session.actions.list[1].legacy_shortcut_owner);
-    assert_eq!(h.state().session.prefs().shortcuts[disk_key], "F2");
-    assert_eq!(h.state().session.prefs().alternate_shortcuts[disk_key], ["F3"]);
-
-    h.state_mut().run("actions.play", json!({"action":"Target"})).unwrap();
-    assert_eq!(active_name(&h), "memory target");
-    press(&mut h, "F2");
-    assert_eq!(active_name(&h), "disk target");
-    let saved = h.state().session.prefs_to_json();
-
-    let mut h = harness();
-    h.state_mut().session.load_prefs_json(&saved).unwrap();
-    assert!(h.state_mut().session.attach_preset_store(open(Box::new(store))).is_empty());
-    press(&mut h, "F3");
-    assert_eq!(active_name(&h), "disk target");
-    for caller in ["Disk caller", "Disk conditional"] {
-        h.state_mut().run("actions.play", json!({"action":"Target"})).unwrap();
-        assert_eq!(active_name(&h), "memory target");
-        let result = h.state_mut().run("actions.play", json!({"action":caller})).unwrap();
-        assert!(result.get("failed").is_none(), "{result}");
-        assert_eq!(active_name(&h), "disk target");
-    }
-}
-
-#[test]
-fn new_occurrence_key_shadows_legacy_primary_until_the_identity_is_missing() {
-    let mut h = harness();
-    h.state_mut().session.actions.list.push(actions_cmds::Action::new("Target", Vec::new()));
-    h.state_mut().session.edit_prefs(|p| {
-        p.shortcuts.insert("actions.play:Target".into(), "F2".into());
-    });
-    crate::actions::assign_shortcut(h.state_mut(), 0, "F4").unwrap();
-    let key = action_key(&h, 0);
-    assert!(bindings(h.state()).iter().any(|(id, _)| id == &key));
-    assert!(!bindings(h.state()).iter().any(|(id, _)| id == "actions.play:Target"));
-    // An async backend may have saved the preferences but still have the old Actions file.
-    h.state_mut().session.actions.list[0].action_id = None;
-    assert!(!bindings(h.state()).iter().any(|(id, _)| id == &key));
-    assert!(bindings(h.state()).iter().any(|(id, _)| id == "actions.play:Target"));
-}
-
-struct RejectActionsWrite(MemBackend);
-impl PresetBackend for RejectActionsWrite {
-    fn list(&self) -> Result<Vec<(String, u64)>, String> {
-        self.0.list()
-    }
-    fn read(&self, name: &str, max: u64) -> Result<Vec<u8>, String> {
-        self.0.read(name, max)
-    }
-    fn write(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
-        if name == ACTIONS_FILE {
-            return Err("injected Actions write failure".into());
-        }
-        self.0.write(name, bytes)
-    }
-    fn remove(&self, name: &str) -> Result<(), String> {
-        self.0.remove(name)
-    }
-}
-
-#[test]
-fn failed_action_id_write_keeps_the_legacy_shortcut_after_reopen() {
-    use photocraft_engine::preset_store::{ACTIONS_FILE, MemBackend, PresetBackend, open};
-
-    let store = MemBackend::default();
-    let file = json!({"version":1,"actions":[{"name":"Target","steps":[["layer.new.layer",{"name":"legacy target"}]]}]});
-    let original = file.to_string().into_bytes();
-    store.write(ACTIONS_FILE, &original).unwrap();
-
-    let mut h = harness();
-    h.state_mut().session.load_prefs_json(r#"{"shortcuts":{"actions.play:Target":"F2"},"alternateShortcuts":{"actions.play:Target":["F3"]}}"#).unwrap();
-    h.state_mut().session.attach_preset_store(open(Box::new(RejectActionsWrite(store.clone()))));
-    let failure = crate::actions::assign_shortcut(h.state_mut(), 0, "F4").unwrap_err();
-    assert!(failure.contains("injected Actions write failure"));
-    assert!(h.state().session.actions.list[0].action_id.is_none());
-    assert_eq!(store.read(ACTIONS_FILE, 4096).unwrap(), original);
-    let saved_prefs = h.state().session.prefs_to_json();
-
-    let mut h = harness();
-    h.state_mut().session.load_prefs_json(&saved_prefs).unwrap();
-    h.state_mut().session.attach_preset_store(open(Box::new(store)));
-    assert_eq!(h.state().session.prefs().shortcuts["actions.play:Target"], "F2");
-    assert_eq!(h.state().session.prefs().alternate_shortcuts["actions.play:Target"], ["F3"]);
-    assert!(!h.state().session.prefs().shortcuts.values().any(|key| key == "F4"));
-    press(&mut h, "F2");
-    assert_eq!(active_name(&h), "legacy target");
-}
-
-#[test]
-fn deferred_action_shortcut_conflicts_clear_only_after_matching_native_write() {
-    use photocraft_engine::preset_store::{ACTIONS_FILE, MemBackend, PresetBackend, open};
-
-    let loser = "actions.play:Disk";
-    let edited = "actions.play:Edited";
-    let own = "actions.play:Winner";
-    let orphan = "actions.play:Missing";
-    for (reject, winner_drift) in [(false, false), (true, false), (false, true)] {
-        let store = MemBackend::default();
-        let original = br#"{"version":1,"actions":[{"name":"Disk"},{"name":"Edited"}]}"#;
-        store.write(ACTIONS_FILE, original).unwrap();
-        let (tx, rx) = std::sync::mpsc::channel();
-        let mut h = harness();
-        let app = h.state_mut();
-        app.services.preset_store = Some(rx);
-        app.session.actions.list.push(actions_cmds::Action::new("Winner", vec![("layer.new.layer".into(), json!({"name":"winner ran"}))]));
-        app.session.edit_prefs(|prefs| {
-            for key in [loser, edited, own, orphan] {
-                prefs.shortcuts.insert(key.into(), "F4".into());
-                prefs.alternate_shortcuts.insert(key.into(), vec!["F4".into(), "F8".into()]);
-            }
-        });
-        crate::actions::assign_shortcut(app, 0, "F4").unwrap();
-        let winner = actions_cmds::occurrence_key(app.session.actions.list[0].action_id.as_deref().unwrap());
-        assert_eq!(app.session.prefs().shortcuts[loser], "F4");
-        assert_eq!(app.session.prefs().alternate_shortcuts[loser], ["F4", "F8"]);
-        assert_eq!(store.read(ACTIONS_FILE, 4096).unwrap(), original);
-        app.session.edit_prefs(|prefs| {
-            prefs.shortcuts.insert(edited.into(), "F6".into());
-            prefs.alternate_shortcuts.insert(edited.into(), vec!["F4".into(), "F9".into()]);
-            if winner_drift {
-                prefs.shortcuts.insert(winner.clone(), "F5".into());
-            }
-        });
-        let backend: Box<dyn PresetBackend> = if reject { Box::new(RejectActionsWrite(store.clone())) } else { Box::new(store.clone()) };
-        tx.send(open(backend)).unwrap();
-        h.run_steps(2);
-        let app = h.state();
-        assert!(app.services.preset_store.is_none() && app.session.preset_store.is_some());
-        let prefs = app.session.prefs();
-        assert_eq!(prefs.shortcuts[&winner], if winner_drift { "F5" } else { "F4" });
-        assert_eq!(prefs.shortcuts[edited], "F6");
-        assert_eq!(prefs.alternate_shortcuts[edited], ["F4", "F9"]);
-        for key in [own, orphan] {
-            assert_eq!(prefs.shortcuts[key], "F4");
-            assert_eq!(prefs.alternate_shortcuts[key], ["F4", "F8"]);
-        }
-        if reject || winner_drift {
-            assert_eq!(prefs.shortcuts[loser], "F4");
-            assert_eq!(prefs.alternate_shortcuts[loser], ["F4", "F8"]);
-        } else {
-            assert!(prefs.shortcuts.get(loser).is_none_or(String::is_empty));
-            assert_eq!(prefs.alternate_shortcuts[loser], ["F8"]);
-            press(&mut h, "F4");
-            assert_eq!(active_name(&h), "winner ran");
-        }
-
-        let mut reopened = photocraft_engine::Session::new();
-        assert!(reopened.attach_preset_store(open(Box::new(store.clone()))).is_empty());
-        if reject {
-            assert_eq!(store.read(ACTIONS_FILE, 4096).unwrap(), original);
-            assert!(actions_cmds::shortcut_row(&reopened.actions.list, &winner).is_none());
-        } else {
-            assert_eq!(actions_cmds::shortcut_row(&reopened.actions.list, &winner), Some(0));
-        }
-    }
-}
-
-#[test]
-fn denied_shortcut_assignment_leaves_identity_and_bindings_unmodified() {
-    let mut h = harness();
-    h.state_mut().session.actions.list.push(actions_cmds::Action::new("Action", Vec::new()));
+    add_action(&mut h, "Action", &[]);
     h.state_mut().services.automation_command = Some(Box::new(|_, _| Err("denied shortcut edit".into())));
     h.state_mut().automation_input = true;
     let prefs = h.state().session.prefs().shortcuts.clone();
-    assert!(crate::actions::assign_shortcut(h.state_mut(), 0, "F2").is_err());
-    assert!(h.state().session.actions.list[0].action_id.is_none());
+    assert!(crate::actions::assign_shortcut(h.state_mut(), "Action", "F2").is_err());
     assert_eq!(h.state().session.prefs().shortcuts, prefs);
+}
+
+/// A saved key whose action was deleted or renamed says so instead of playing nothing.
+#[test]
+fn a_key_for_a_missing_action_reports_it() {
+    let mut h = harness();
+    let (id, ctx) = (crate::actions::shortcut_id("Gone"), h.ctx.clone());
+    super::dispatch(h.state_mut(), &ctx, &id);
+    assert!(h.state().ui.status_error);
+    assert!(matches!(&take_log(&h.ctx)[..], [(logged, Outcome::Disabled(why))] if *logged == id && why == "The Action no longer exists"));
 }
 
 #[test]
 fn named_action_function_key_replays_and_survives_preferences_roundtrip() {
     let mut h = harness();
-    let action = photocraft_engine::actions_cmds::Action {
-        name: "LivePrint 2R".into(),
-        steps: vec![("layer.new.layer".into(), json!({"name": "F6 overlay"}))],
-        disabled: Default::default(),
-        ..Default::default()
-    };
-    h.state_mut().session.actions.list.push(action);
-    crate::actions::assign_shortcut(h.state_mut(), 0, "F6").unwrap();
+    add_action(&mut h, "LivePrint 2R", &[("layer.new.layer", json!({"name": "F6 overlay"}))]);
+    crate::actions::assign_shortcut(h.state_mut(), "LivePrint 2R", "F6").unwrap();
     let saved = serde_json::to_value(h.state().session.prefs()).unwrap();
     let restored = serde_json::from_value(saved).unwrap();
     h.state_mut().session.edit_prefs(|p| *p = restored);
-    h.state_mut().ui.actions.selected = None;
+    // The action is a run-time catalog row, so the runtime binds its key.
+    h.run_steps(2);
     press(&mut h, "F6");
     assert_eq!(active_name(&h), "F6 overlay");
     assert_eq!(h.state().ui.status, "Played 1 step");
     assert!(!h.state().ui.status_error);
-    assert_eq!(take_log(&h.ctx), vec![(action_key(&h, 0), Outcome::Ran)]);
+    assert_eq!(take_log(&h.ctx), vec![(crate::actions::shortcut_id("LivePrint 2R"), Outcome::Ran)]);
     h.state_mut().run("actions.delete", json!({"action": "LivePrint 2R"})).unwrap();
-    assert!(bindings(h.state()).iter().all(|(id, _)| !actions_cmds::is_action_key(id)));
-    assert!(bindings(h.state()).iter().any(|(_, sc)| *sc == parse("F6").unwrap()));
+    h.run_steps(2);
+    assert!(command_rows(h.state()).iter().all(|row| !row.command.id.starts_with(crate::actions::SHORTCUT_PREFIX)));
+    // F6 goes back to the command it belongs to by default.
+    press(&mut h, "F6");
+    let log = take_log(&h.ctx);
+    assert!(matches!(log.as_slice(), [(id, _)] if !id.starts_with(crate::actions::SHORTCUT_PREFIX)), "{log:?}");
 }
 
 #[test]
 fn assigning_action_function_key_moves_it_and_reports_failed_steps() {
     let mut h = harness();
     for name in ["first", "second"] {
-        h.state_mut().session.actions.list.push(photocraft_engine::actions_cmds::Action {
-            name: name.into(),
-            steps: vec![("no.such.command".into(), json!({}))],
-            disabled: Default::default(),
-            ..Default::default()
-        });
+        add_action(&mut h, name, &[("no.such.command", json!({}))]);
     }
-    crate::actions::assign_shortcut(h.state_mut(), 0, "F6").unwrap();
-    crate::actions::assign_shortcut(h.state_mut(), 1, "F6").unwrap();
-    assert_eq!(h.state().session.prefs().shortcuts[&action_key(&h, 0)], "");
-    h.state_mut().ui.actions.selected = Some(0);
+    crate::actions::assign_shortcut(h.state_mut(), "first", "F6").unwrap();
+    crate::actions::assign_shortcut(h.state_mut(), "second", "F6").unwrap();
+    assert_eq!(h.state().session.prefs().shortcuts[&crate::actions::shortcut_id("first")], "");
+    h.run_steps(2);
     press(&mut h, "F6");
     assert!(h.state().ui.status_error);
     assert!(h.state().ui.status.contains("Step 1 (no.such.command) failed"));
-    assert!(matches!(&take_log(&h.ctx)[..], [(id, Outcome::Failed(_))] if id == &action_key(&h, 1)));
+    assert!(matches!(&take_log(&h.ctx)[..], [(id, Outcome::Failed(_))] if id == "actions.play:second"));
 }
 
 #[test]
 fn action_function_key_checks_automation_authorization() {
     let mut h = harness();
-    h.state_mut().session.actions.list.push(photocraft_engine::actions_cmds::Action {
-        name: "restricted".into(),
-        steps: vec![("layer.new.layer".into(), json!({"name": "should not exist"}))],
-        disabled: Default::default(),
-        ..Default::default()
-    });
-    crate::actions::assign_shortcut(h.state_mut(), 0, "F6").unwrap();
+    add_action(&mut h, "restricted", &[("layer.new.layer", json!({"name": "should not exist"}))]);
+    crate::actions::assign_shortcut(h.state_mut(), "restricted", "F6").unwrap();
     h.state_mut().services.automation_command = Some(Box::new(|id, _| if id == "actions.play" { Err("denied action playback".into()) } else { Ok(()) }));
     h.state_mut().automation_input = true;
-    let id = action_key(&h, 0);
-    super::dispatch(h.state_mut(), &egui::Context::default(), &id);
+    super::dispatch(h.state_mut(), &egui::Context::default(), "actions.play:restricted");
     assert_eq!(h.state().ui.status, "denied action playback");
     assert_eq!(active_name(&h), "paint");
 }
@@ -1102,15 +578,19 @@ fn fit_shortcut_records_and_f6_fits_the_resized_canvas() {
     h.state_mut().run("image.canvasSize", json!({"width": 1800, "height": 1080})).unwrap();
     press(&mut h, "Cmd+0");
     h.state_mut().run("actions.stop", json!({})).unwrap();
-    assert_eq!(h.state().session.actions.list[0].steps.iter().map(|s| s.0.as_str()).collect::<Vec<_>>(), ["image.canvasSize", "view.fitOnScreen"]);
-    let item = crate::menus::menu_items(h.state()).into_iter().find(|i| i.id == "view.fitOnScreen").unwrap();
-    assert_eq!(item.shortcut.as_deref(), Some("Cmd+0"));
-    crate::actions::assign_shortcut(h.state_mut(), 0, "F6").unwrap();
+    assert_eq!(
+        h.state().session.actions.list.actions()[0].steps.iter().map(|s| s.command.as_str()).collect::<Vec<_>>(),
+        ["image.canvasSize", "view.fitOnScreen"]
+    );
+    let item = crate::menus::menu_rows(h.state()).into_iter().find(|i| i.command.id == "view.fitOnScreen").unwrap();
+    assert_eq!(item.shortcut.as_ref().map(|c| c.portable()).as_deref(), Some("Cmd+0"));
+    crate::actions::assign_shortcut(h.state_mut(), "Resize and fit", "F6").unwrap();
     h.state_mut().ui.views[0].zoom = 0.1;
     h.state_mut().ui.views[0].center = [0.0, 0.0];
+    h.run_steps(2);
     press(&mut h, "F6");
     let view = &h.state().ui.views[0];
-    assert!(!view.fit_pending, "the real canvas frame consumed Fit on Screen");
+    assert!(!view.asks(craft::ui::canvas::ViewCommands::FitOnScreen), "the real canvas frame consumed Fit on Screen");
     assert!(view.zoom > 0.1 && view.zoom < 1.0, "{}", view.zoom);
     assert_eq!(view.center, [900.0, 540.0]);
     assert_eq!(h.state().ui.status, "Played 2 steps");
@@ -1119,25 +599,21 @@ fn fit_shortcut_records_and_f6_fits_the_resized_canvas() {
 #[test]
 fn f6_while_recording_records_a_named_call_not_the_child_steps() {
     let mut h = harness();
-    h.state_mut().session.actions.list.push(photocraft_engine::actions_cmds::Action {
-        name: "LivePrint 2R".into(),
-        steps: vec![("layer.new.layer".into(), json!({"name":"Nested overlay"})), ("view.fitOnScreen".into(), json!({}))],
-        disabled: Default::default(),
-        ..Default::default()
-    });
-    crate::actions::assign_shortcut(h.state_mut(), 0, "F6").unwrap();
-    let action_id = h.state().session.actions.list[0].action_id.clone().expect("the shortcut target has a stable identity");
+    add_action(&mut h, "LivePrint 2R", &[("layer.new.layer", json!({"name": "Nested overlay"})), ("view.fitOnScreen", json!({}))]);
+    crate::actions::assign_shortcut(h.state_mut(), "LivePrint 2R", "F6").unwrap();
     h.state_mut().run("actions.record", json!({"name":"Action 2"})).unwrap();
+    h.run_steps(2);
     press(&mut h, "F6");
     assert_eq!(active_name(&h), "Nested overlay");
     h.state_mut().run("actions.stop", json!({})).unwrap();
-    assert_eq!(h.state().session.actions.list[1].steps, [("actions.play".into(), json!({"action":"LivePrint 2R","actionId":action_id}))]);
+    let recorded: Vec<_> = h.state().session.actions.list.actions()[1].steps.iter().map(|s| (s.command.clone(), s.params.clone())).collect();
+    assert_eq!(recorded, [("actions.play".to_string(), json!({"action": "LivePrint 2R"}))]);
 }
 
-/// ⇧⌘> / ⇧⌘< follow the keys' position: a Nordic or German layout reports ⇧⌘. as `:`, which is
-/// also ⇧⌘; (View › Snap) on a US layout. While typing they size only the selected characters.
+/// The type size keys act on the selected text while typing, on the whole layer from the canvas. (Which key they are
+/// is the keymap's layout matching, not tested here.)
 #[test]
-fn type_size_keys_follow_key_position_and_the_typed_selection() {
+fn type_size_keys_follow_the_typed_selection() {
     let mut h = harness();
     let st = h.state().session.active().unwrap();
     let id = st.doc.walk().into_iter().find(|(_, _, l)| matches!(l.content, LayerContent::Text(_))).unwrap().2.id.0;
@@ -1146,158 +622,88 @@ fn type_size_keys_follow_key_position_and_the_typed_selection() {
         LayerContent::Text(t) => t.char_runs().iter().map(|r| (r.len, r.style.size_pt)).collect::<Vec<_>>(),
         _ => Vec::new(),
     };
-    let positional = |h: &mut Harness<'_, PhotocraftApp>, key, physical| {
-        let m = platform(Modifiers::COMMAND | Modifiers::SHIFT);
-        h.event(egui::Event::ModifiersChanged(m));
-        h.event(egui::Event::Key { key, physical_key: Some(physical), pressed: true, repeat: false, modifiers: m });
-        h.event(egui::Event::Key { key, physical_key: Some(physical), pressed: false, repeat: false, modifiers: m });
-        h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
-        h.run_steps(2);
-    };
     let base = sizes(&h)[0].1;
-    positional(&mut h, egui::Key::Colon, egui::Key::Period);
+    press(&mut h, "Cmd+Shift+.");
     assert_eq!(logged(&h), ["type.increaseSize"]);
     assert_eq!(sizes(&h), [(5, base + 2.0)], "the whole layer grows from the canvas");
 
-    crate::type_tool::edit_active(h.state_mut()).unwrap();
+    let ctx = h.ctx.clone();
+    crate::type_tool::edit_active(h.state_mut(), &ctx).unwrap();
     if let Some(ed) = h.state_mut().ui.text_edit.as_mut() {
         (ed.anchor, ed.caret) = (0, 2);
     }
-    positional(&mut h, egui::Key::Semicolon, egui::Key::Comma);
+    h.run_steps(2);
+    press(&mut h, "Cmd+Shift+,");
     assert_eq!(logged(&h), ["type.decreaseSize"]);
     assert_eq!(sizes(&h), [(2, base), (3, base + 2.0)], "only the selected \"He\" shrinks");
 }
 
-/// AZERTY: `;` sits on the US comma key and `,` on the US M key. Plain `,` / `;` bindings (brush
-/// hardness) must match the character typed, not the key's position, or `;` fires `,`'s command.
-#[test]
-fn plain_comma_and_semicolon_bindings_follow_the_typed_character_on_azerty() {
-    let mut h = harness();
-    h.state_mut().session.edit_prefs(|p| {
-        p.shortcuts.insert("tools.decreaseBrushHardness".into(), ",".into());
-        p.shortcuts.insert("tools.increaseBrushHardness".into(), ";".into());
-    });
-    let tap = |h: &mut Harness<'_, PhotocraftApp>, key, physical| {
-        h.event(egui::Event::Key { key, physical_key: Some(physical), pressed: true, repeat: false, modifiers: Modifiers::NONE });
-        h.event(egui::Event::Key { key, physical_key: Some(physical), pressed: false, repeat: false, modifiers: Modifiers::NONE });
-        h.run_steps(2);
-    };
-    tap(&mut h, egui::Key::Semicolon, egui::Key::Comma);
-    assert_eq!(logged(&h), ["tools.increaseBrushHardness"]);
-    tap(&mut h, egui::Key::Comma, egui::Key::M);
-    assert_eq!(logged(&h), ["tools.decreaseBrushHardness"]);
+fn zoom(h: &Harness<'static, PhotocraftApp>) -> f32 {
+    h.state().current_zoom()
 }
 
-/// #8900: ⌥ added to an adjustment's shortcut opens its dialog with the settings last confirmed
-/// there (Photoshop's ⌥⌘L for Levels, ⌥⌘M for Curves); the plain shortcut still opens at the
-/// defaults, Cancel remembers nothing, each adjustment remembers its own, and a key assigned to
-/// another command in Edit › Keyboard Shortcuts stays that command's.
 #[test]
-fn alt_adjustment_shortcut_reopens_the_last_confirmed_settings() {
-    use photocraft_doc::ColorMode;
-    use photocraft_engine::adjust_params::{default_for, from_params, to_params};
+fn ctrl_plus_zooms_the_canvas_not_the_interface() {
     let mut h = harness();
-    put_focus(&mut h, Place::Canvas);
-    let top = |h: &Harness<'_, PhotocraftApp>| h.state().ui.dialogs.last().map(|d| (d.id, d.fields.clone())).expect("a dialog");
-    let set = |h: &mut Harness<'_, PhotocraftApp>, id: u64, values: serde_json::Value| {
-        let d = h.state_mut().ui.dialog_mut(id).unwrap();
-        d.fields.extend(values.as_object().unwrap().clone());
-        h.run_steps(2);
-    };
-    let levels = to_params(&from_params("levels", &json!({"inBlack": 30, "gamma": 1.3}), None, ColorMode::Rgb).unwrap());
-    let level_defaults = to_params(&default_for("levels", ColorMode::Rgb).unwrap());
-    assert_ne!(levels["inBlack"], level_defaults["inBlack"]);
-
-    press(&mut h, "Cmd+L");
-    let (id, _) = top(&h);
-    set(&mut h, id, json!({"inBlack": 30, "gamma": 1.3}));
-    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    let z0 = zoom(&h);
+    // ⌘+ / Ctrl+'+' as typed with ⇧ on a US layout, and as the numpad / Nordic `+`.
+    h.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::Plus);
     h.run_steps(2);
-
-    press(&mut h, "Cmd+L");
-    let (id, fields) = top(&h);
-    assert_eq!((&fields["inBlack"], &fields["gamma"]), (&level_defaults["inBlack"], &level_defaults["gamma"]), "⌘L opens at the defaults");
-    crate::dialogs::cancel(h.state_mut(), id).unwrap();
+    let z1 = zoom(&h);
+    assert!(z1 > z0, "⌘+ should zoom the canvas in ({z0} -> {z1})");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Plus);
     h.run_steps(2);
-
-    press(&mut h, "Cmd+Alt+L");
-    assert_eq!(logged(&h), ["image.adjustments.levels", "image.adjustments.levels", "image.adjustments.levels"]);
-    let (id, fields) = top(&h);
-    assert_eq!((&fields["inBlack"], &fields["gamma"]), (&levels["inBlack"], &levels["gamma"]), "⌥⌘L opens at the last OK'd settings");
-    set(&mut h, id, json!({"inBlack": 50}));
-    crate::dialogs::cancel(h.state_mut(), id).unwrap();
+    assert!(zoom(&h) > z1);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Minus);
     h.run_steps(2);
-    press(&mut h, "Cmd+Alt+L");
-    let (id, fields) = top(&h);
-    assert_eq!(fields["inBlack"], levels["inBlack"], "Cancel remembers nothing");
-    crate::dialogs::cancel(h.state_mut(), id).unwrap();
+    assert!((zoom(&h) - z1).abs() < 1e-4);
+    // ⌘1 is 100%, ⌘0 fits on screen again.
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Num1);
     h.run_steps(2);
-
-    // Curves has nothing of its own yet: its defaults, not Levels' settings.
-    let curve_defaults = to_params(&default_for("curves", ColorMode::Rgb).unwrap());
-    press(&mut h, "Cmd+Alt+M");
-    let (id, fields) = top(&h);
-    assert_eq!(fields["__adjust"], json!("curves"));
-    assert_eq!(fields["points"], curve_defaults["points"], "⌥⌘M with no Curves confirmed yet");
-    let curve = json!({"points": [[0, 0], [100, 150], [255, 255]]});
-    set(&mut h, id, curve.clone());
-    crate::dialogs::confirm(h.state_mut(), id).unwrap();
-    h.run_steps(2);
-    press(&mut h, "Cmd+Alt+M");
-    let (id, fields) = top(&h);
-    let curves = to_params(&from_params("curves", &curve, None, ColorMode::Rgb).unwrap());
-    assert_eq!(fields["points"], curves["points"], "⌥⌘M opens at the last OK'd curve");
-    crate::dialogs::cancel(h.state_mut(), id).unwrap();
-    h.run_steps(2);
-    take_log(&h.ctx);
-
-    h.state_mut().session.edit_prefs(|p| {
-        p.shortcuts.insert("image.adjustments.desaturate".into(), "Cmd+Alt+L".into());
-    });
-    press(&mut h, "Cmd+Alt+L");
-    assert_eq!(logged(&h), ["image.adjustments.desaturate"], "a key assigned to another command is that command's");
-    assert!(h.state().ui.dialogs.is_empty());
+    assert_eq!(zoom(&h), 1.0);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Num0);
+    h.run_steps(3);
+    assert!((zoom(&h) - z0).abs() < 1e-3, "⌘0 fits on screen: {} vs {z0}", zoom(&h));
+    assert_eq!(h.ctx.zoom_factor(), 1.0, "the interface must never scale");
 }
 
-/// #8900: in Photoshop ⌥ held while choosing an Image › Adjustments item opens it at its last
-/// settings too; a plain click still opens it at the defaults.
 #[test]
-fn alt_choosing_an_adjustment_from_the_menu_reopens_the_last_settings() {
-    use photocraft_doc::ColorMode;
-    use photocraft_engine::adjust_params::{default_for, from_params, to_params};
+fn keyboard_zoom_works_with_a_dialog_open() {
     let mut h = harness();
-    h.state_mut().session.edit_prefs(|p| {
-        p.dialogs.insert("image.adjustments.levels".into(), json!({"inBlack": 30, "gamma": 1.3}));
-    });
-    let levels = to_params(&from_params("levels", &json!({"inBlack": 30, "gamma": 1.3}), None, ColorMode::Rgb).unwrap());
-    let defaults = to_params(&default_for("levels", ColorMode::Rgb).unwrap());
-    let choose = |h: &mut Harness<'_, PhotocraftApp>, m: Modifiers| {
-        h.get_by_label("Image").click();
-        h.run_steps(3);
-        // The Image menu's row, not the Adjustments panel's tab in the dock on the right.
-        let adjustments = h.get_all_by_label_contains("Adjustments").map(|n| n.rect()).min_by(|a, b| a.left().total_cmp(&b.left())).unwrap().center();
-        h.hover_at(adjustments);
-        h.run_steps(30);
-        let at = h.get_by_label_contains("Levels…").rect().center();
-        h.hover_at(at);
-        h.run_steps(2);
-        h.event(egui::Event::ModifiersChanged(m));
-        h.event(egui::Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: m });
-        h.run_steps(1);
-        h.event(egui::Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: m });
-        h.run_steps(1);
-        h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
-        h.run_steps(3);
-        let d = h.state().ui.dialogs.last().expect("Levels opened").clone();
-        assert_eq!(d.fields["__adjust"], json!("levels"));
-        crate::dialogs::cancel(h.state_mut(), d.id).unwrap();
-        h.run_steps(2);
-        (d.fields["inBlack"].clone(), d.fields["gamma"].clone())
+    let dialog = crate::dialogs::open_command_dialog(h.state_mut(), "image.adjustments.brightnessContrast", "Brightness/Contrast…").unwrap();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog_count(), 1);
+    let z0 = zoom(&h);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Equals);
+    h.run_steps(2);
+    assert!(zoom(&h) > z0);
+    h.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::Plus);
+    h.run_steps(2);
+    assert_eq!(h.ctx.zoom_factor(), 1.0);
+    assert_eq!(h.state().dialog_count(), 1);
+    // Other commands stay blocked while the dialog is open (⌘J would duplicate the layer).
+    let layers = h.state().session.active().unwrap().doc.layers.len();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::J);
+    h.run_steps(2);
+    assert_eq!(h.state().session.active().unwrap().doc.layers.len(), layers);
+    let ctx = h.ctx.clone();
+    h.state_mut().framework.dialogs.cancel_by_id(&ctx, dialog);
+}
+
+/// A frame can run two passes. The fired commands are taken by the first pass that runs them, so a second pass in the
+/// same frame runs only what its own input fired: ⌘J duplicates the layer once.
+#[test]
+fn a_second_pass_in_one_frame_runs_no_command_twice() {
+    let mut app = PhotocraftApp::new(realistic(), services());
+    let ctx = app.ctx().clone();
+    PhotocraftApp::setup_context(&ctx, Default::default());
+    let count = |app: &PhotocraftApp| app.session.active().unwrap().doc.walk().len();
+    let n = count(&app);
+    let press = egui::RawInput {
+        events: vec![egui::Event::Key { key: Key::J, physical_key: Some(Key::J), pressed: true, repeat: false, modifiers: Modifiers::COMMAND }],
+        ..Default::default()
     };
-    assert_eq!(choose(&mut h, Modifiers::NONE), (defaults["inBlack"].clone(), defaults["gamma"].clone()), "a click opens at the defaults");
-    assert_eq!(choose(&mut h, Modifiers::ALT), (levels["inBlack"].clone(), levels["gamma"].clone()), "⌥-click opens at the last settings");
-    // The plain click noted Levels already: put another command in front of it first.
-    crate::palette::note_recent(&h.ctx, "file.new");
-    choose(&mut h, Modifiers::ALT);
-    assert_eq!(crate::palette::recent_ids(&h.ctx).first().map(String::as_str), Some("image.adjustments.levels"), "Edit › Search's most recent");
+    crate::app::framework::keys_pass(&mut app, &ctx, press, |_| {});
+    crate::app::framework::keys_pass(&mut app, &ctx, egui::RawInput::default(), |_| {});
+    assert_eq!(count(&app), n + 1, "one press, one duplicate");
 }

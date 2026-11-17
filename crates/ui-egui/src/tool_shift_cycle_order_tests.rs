@@ -2,29 +2,24 @@
 //! anchor point tools have no letter so P never reaches them.
 
 use egui::{Key, Modifiers};
+use egui_kittest::Harness;
 use serde_json::json;
 
 use crate::PhotocraftApp;
 use crate::panels::toolbar::{TOOL_SECTIONS, toolbar_position};
+use crate::shortcut_dispatch::tests::{app_harness, tap};
 use crate::state::Tool;
 
-fn app() -> PhotocraftApp {
+/// The whole app with a small document and a second layer.
+fn app() -> Harness<'static, PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 20, "height": 10})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();
-    app
+    app_harness(app)
 }
 
-fn shift_press(app: &mut PhotocraftApp, key: Key) {
-    let modifiers = Modifiers::SHIFT;
-    let ctx = egui::Context::default();
-    let raw = egui::RawInput {
-        events: vec![egui::Event::ModifiersChanged(modifiers), egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }],
-        ..Default::default()
-    };
-    ctx.begin_pass(raw);
-    crate::shortcuts::handle(app, &ctx);
-    ctx.end_pass().textures_delta.clear();
+fn shift_press(h: &mut Harness<'static, PhotocraftApp>, key: Key) {
+    tap(h, key, Modifiers::SHIFT);
 }
 
 /// Every lettered tool group in toolbar order, with its letter.
@@ -46,49 +41,50 @@ fn key_for(letter: char) -> Key {
 }
 
 fn sequence(letter: char, steps: usize) -> Vec<Tool> {
-    let mut app = app();
-    app.ui.tool = Tool::Hand;
+    let mut h = app();
+    h.state_mut().ui.tool = Tool::Hand;
     (0..steps)
         .map(|_| {
-            shift_press(&mut app, key_for(letter));
-            app.ui.tool
+            shift_press(&mut h, key_for(letter));
+            h.state().ui.tool
         })
         .collect()
 }
 
 #[test]
 fn from_every_tool_shift_letter_lands_on_the_next_tool_in_toolbar_order() {
+    let mut h = app();
     for (letter, group) in groups() {
         for (i, from) in group.iter().enumerate() {
-            let mut app = app();
-            app.ui.tool = *from;
-            shift_press(&mut app, key_for(letter));
+            h.state_mut().ui.tool = *from;
+            shift_press(&mut h, key_for(letter));
             let want = group[(i + 1) % group.len()];
-            assert_eq!(app.ui.tool, want, "Shift+{letter} from {from:?}");
+            assert_eq!(h.state().ui.tool, want, "Shift+{letter} from {from:?}");
         }
     }
 }
 
 #[test]
 fn shift_letter_wraps_from_the_last_tool_to_the_first() {
+    let mut h = app();
     for (letter, group) in groups() {
-        let mut app = app();
-        app.ui.tool = *group.last().unwrap();
-        shift_press(&mut app, key_for(letter));
-        assert_eq!(app.ui.tool, group[0], "Shift+{letter} wraps");
+        h.state_mut().ui.tool = *group.last().unwrap();
+        shift_press(&mut h, key_for(letter));
+        assert_eq!(h.state().ui.tool, group[0], "Shift+{letter} wraps");
     }
 }
 
 #[test]
 fn the_first_shift_letter_from_another_tool_lands_on_the_groups_first_tool() {
+    let mut h = app();
     for (letter, group) in groups() {
-        let mut app = app();
-        app.ui.tool = Tool::Hand;
         if group.contains(&Tool::Hand) {
             continue;
         }
-        shift_press(&mut app, key_for(letter));
-        assert_eq!(app.ui.tool, group[0], "Shift+{letter} from the Hand tool");
+        h.state_mut().ui.tool = Tool::Hand;
+        h.state_mut().ui.group_tools.clear();
+        shift_press(&mut h, key_for(letter));
+        assert_eq!(h.state().ui.tool, group[0], "Shift+{letter} from the Hand tool");
     }
 }
 
@@ -127,38 +123,24 @@ fn the_cycle_order_is_the_flattened_toolbar_order() {
     }
 }
 
+/// With the Shift switch off the plain letter cycles too, in the flyout's order (the order Shift+letter steps in).
 #[test]
 fn with_the_shift_switch_preference_off_plain_w_keeps_the_old_order() {
-    let mut app = app();
-    app.session.edit_prefs(|p| p.tools.use_shift_key_for_tool_switch = false);
-    app.ui.tool = Tool::MagicWand;
+    let mut h = app();
+    h.state_mut().session.edit_prefs(|p| p.tools.use_shift_key_for_tool_switch = false);
+    h.state_mut().ui.tool = Tool::MagicWand;
     let mut seen = Vec::new();
     for _ in 0..3 {
-        let ctx = egui::Context::default();
-        let modifiers = Modifiers::NONE;
-        let raw = egui::RawInput {
-            events: vec![egui::Event::Key { key: Key::W, physical_key: None, pressed: true, repeat: false, modifiers }],
-            ..Default::default()
-        };
-        ctx.begin_pass(raw);
-        crate::shortcuts::handle(&mut app, &ctx);
-        ctx.end_pass().textures_delta.clear();
-        seen.push(app.ui.tool);
+        tap(&mut h, Key::W, Modifiers::NONE);
+        seen.push(h.state().ui.tool);
     }
-    assert_eq!(seen, vec![Tool::QuickSelection, Tool::ObjectSelection, Tool::MagicWand]);
+    assert_eq!(seen, vec![Tool::ObjectSelection, Tool::QuickSelection, Tool::MagicWand]);
 }
 
 #[test]
 fn a_plain_w_from_outside_the_group_keeps_selecting_what_it_selected_before() {
-    let mut app = app();
-    app.ui.tool = Tool::Move;
-    let ctx = egui::Context::default();
-    let raw = egui::RawInput {
-        events: vec![egui::Event::Key { key: Key::W, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }],
-        ..Default::default()
-    };
-    ctx.begin_pass(raw);
-    crate::shortcuts::handle(&mut app, &ctx);
-    ctx.end_pass().textures_delta.clear();
-    assert_eq!(app.ui.tool, Tool::ObjectSelection, "fresh W selects the first tool in the flyout");
+    let mut h = app();
+    h.state_mut().ui.tool = Tool::Move;
+    tap(&mut h, Key::W, Modifiers::NONE);
+    assert_eq!(h.state().ui.tool, Tool::ObjectSelection, "fresh W selects the first tool in the flyout");
 }

@@ -1,57 +1,37 @@
-//! #11962: the Pencil's options bar gets the two pressure toggles, editing the Pencil's own
-//! brush; the Brush keeps its own. Pro themes show the icon toggles, the others the labelled
-//! switches, both with the reference tooltips.
+//! #11962: the Pencil's options bar has the two pressure toggles, editing the Pencil's own brush;
+//! the Brush keeps its own. Every theme shows the same toggles.
 
 use egui::vec2;
 use egui_kittest::Harness;
-use egui_kittest::kittest::{NodeT, Queryable, by};
+use egui_kittest::kittest::{NodeT, Queryable};
 use serde_json::json;
 
 use crate::PhotocraftApp;
 use crate::state::Tool;
-use crate::theme::ThemeKind;
+use crate::theme::AppTheme;
 
-fn bar(theme: ThemeKind) -> Harness<'static, PhotocraftApp> {
+const OPACITY: &str = "Pressure controls opacity";
+const SIZE: &str = "Pressure controls size";
+
+fn bar(theme: AppTheme) -> Harness<'static, PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 100, "background": "white"})).unwrap();
     app.ui.tool = Tool::Pencil;
-    let mut h = Harness::builder().with_size(vec2(1600.0, 300.0)).build_ui_state(|ui, app| crate::panels::options_bar(app, ui), app);
+    let mut h =
+        Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1600.0, 300.0)).build_ui_state(|ui, app| crate::panels::options_bar(app, ui), app);
     PhotocraftApp::setup_context(&h.ctx, theme);
     h.run_steps(4);
     h
 }
 
-fn description(h: &Harness<'static, PhotocraftApp>, label: &str) -> Option<String> {
-    h.query_all_by_label(label).next().and_then(|n| n.accesskit_node().description().map(|d| d.to_string()))
-}
-
-const PRO: [(&str, &str); 2] = [
-    ("Always use pressure for opacity", "Always use Pressure for Opacity. When off, Brush Preset controls pressure"),
-    ("Always use pressure for size", "Always use Pressure for Size. When off, Brush Preset controls pressure"),
-];
-
-const CLASSIC: [(&str, &str); 2] = [
-    ("Pressure for Size", "Always use Pressure for Size. When off, Brush Preset controls pressure"),
-    ("Pressure for Opacity", "Always use Pressure for Opacity. When off, Brush Preset controls pressure"),
-];
-
 #[test]
-fn the_pro_bar_shows_both_toggles_with_the_reference_tooltips() {
-    let h = bar(ThemeKind::ProMedium);
-    for (label, tip) in PRO {
-        assert_eq!(h.query_all_by_label(label).count(), 1, "{label} exists once");
-        assert_eq!(description(&h, label).as_deref(), Some(tip), "{label} tooltip");
-    }
-}
-
-#[test]
-fn the_pro_toggles_edit_the_pencils_own_flags_and_brush_get_sees_them() {
-    let mut h = bar(ThemeKind::ProMedium);
+fn the_toggles_edit_the_pencils_own_flags_and_brush_get_sees_them() {
+    let mut h = bar(AppTheme::pro_medium());
     let flags = |h: &Harness<'static, PhotocraftApp>| (h.state().session.tools.brush.pressure_opacity, h.state().session.tools.brush.pressure_size);
     assert_eq!(flags(&h), (false, false), "both off on a fresh Pencil");
-    h.get_by_label("Always use pressure for opacity").click();
+    h.get_by_label(OPACITY).click();
     h.run_steps(2);
-    h.get_by_label("Always use pressure for size").click();
+    h.get_by_label(SIZE).click();
     h.run_steps(2);
     assert_eq!(flags(&h), (true, true));
     let got = h.state_mut().run("brush.get", json!({})).unwrap();
@@ -61,7 +41,7 @@ fn the_pro_toggles_edit_the_pencils_own_flags_and_brush_get_sees_them() {
 
 #[test]
 fn the_brush_keeps_its_own_pressure_flags() {
-    let mut h = bar(ThemeKind::ProMedium);
+    let mut h = bar(AppTheme::pro_medium());
     let flags = |h: &Harness<'static, PhotocraftApp>| (h.state().session.tools.brush.pressure_opacity, h.state().session.tools.brush.pressure_size);
     let toggle = |h: &mut Harness<'static, PhotocraftApp>, label: &str| {
         h.get_by_label(label).click();
@@ -78,8 +58,8 @@ fn the_brush_keeps_its_own_pressure_flags() {
 
     h.state_mut().ui.tool = Tool::Pencil;
     h.run_steps(4);
-    toggle(&mut h, "Always use pressure for opacity");
-    toggle(&mut h, "Always use pressure for size");
+    toggle(&mut h, OPACITY);
+    toggle(&mut h, SIZE);
     assert_eq!(flags(&h), (true, true), "the Pencil's flags are on");
 
     h.state_mut().ui.tool = Tool::Brush;
@@ -97,8 +77,8 @@ fn the_brush_keeps_its_own_pressure_flags() {
     h.run_steps(2);
     h.state_mut().ui.tool = Tool::Pencil;
     h.run_steps(4);
-    toggle(&mut h, "Always use pressure for opacity");
-    toggle(&mut h, "Always use pressure for size");
+    toggle(&mut h, OPACITY);
+    toggle(&mut h, SIZE);
     assert_eq!(flags(&h), (false, false), "the Pencil is off");
     h.state_mut().ui.tool = Tool::Brush;
     h.run_steps(4);
@@ -108,7 +88,7 @@ fn the_brush_keeps_its_own_pressure_flags() {
     assert_eq!(flags(&h), (false, false), "the Pencil stayed off");
 
     // A mixed setting: opacity on, size off, across a switch and back.
-    toggle(&mut h, "Always use pressure for opacity");
+    toggle(&mut h, OPACITY);
     assert_eq!(flags(&h), (true, false), "mixed: opacity on, size off");
     h.state_mut().ui.tool = Tool::Brush;
     h.run_steps(4);
@@ -117,37 +97,13 @@ fn the_brush_keeps_its_own_pressure_flags() {
     h.run_steps(4);
     assert_eq!(flags(&h), (true, false), "the mixed pair came back unchanged");
     // And the bar draws that pair, not just stores it.
-    let on = |h: &Harness<'static, PhotocraftApp>, label: &str| h.get_by_label(label).accesskit_node().toggled() == Some(egui::accesskit::Toggled::True);
-    assert!(on(&h, "Always use pressure for opacity"), "the opacity toggle reads as on");
-    assert!(!on(&h, "Always use pressure for size"), "the size toggle reads as off");
-}
-
-#[test]
-fn the_other_themes_show_the_labelled_toggles() {
-    let mut h = bar(ThemeKind::Classic);
-    // The switches are unnamed nodes: their tooltips are the descriptions in the bar.
-    let tips: Vec<String> =
-        h.query_all(by().predicate(|n| n.description().is_some())).filter_map(|n| n.accesskit_node().description().map(|d| d.to_string())).collect();
-    for (label, tip) in CLASSIC {
-        assert_eq!(h.query_all_by_label(label).count(), 1, "{label} exists once");
-        assert!(tips.iter().any(|d| d == tip), "{label} tooltip: {tips:?}");
-    }
-    for (label, tip, expect) in [("Pressure for Size", CLASSIC[0].1, true), ("Pressure for Opacity", CLASSIC[1].1, true)] {
-        let at = h
-            .query_all(by().predicate(move |n| n.description().map(|d| d == tip).unwrap_or(false)))
-            .next()
-            .unwrap_or_else(|| panic!("no switch for {label}"))
-            .rect()
-            .center();
-        h.hover_at(at);
-        h.run();
-        h.drag_at(at);
-        h.run();
-        h.drop_at(at);
-        h.run_steps(2);
-        let flag = if label.ends_with("Size") { h.state().session.tools.brush.pressure_size } else { h.state().session.tools.brush.pressure_opacity };
-        assert_eq!(flag, expect, "{label} toggles the Pencil's flag");
-    }
+    // The toggle button, not the tooltip of the same name the pointer resting on the opacity toggle shows. An off
+    // toggle button reports no toggled state.
+    let on = |h: &Harness<'static, PhotocraftApp>, label: &str| {
+        h.get_by_role_and_label(egui::accesskit::Role::Button, label).accesskit_node().toggled() == Some(egui::accesskit::Toggled::True)
+    };
+    assert!(on(&h, OPACITY), "the opacity toggle reads as on");
+    assert!(!on(&h, SIZE), "the size toggle reads as off");
 }
 
 /// Painted width at column `x` on the active layer, through the stroke's row band.
@@ -160,7 +116,7 @@ fn width(app: &PhotocraftApp, x: i32, y: i32) -> usize {
 
 #[test]
 fn pressure_for_size_narrows_a_low_pressure_pencil_stroke() {
-    let mut h = bar(ThemeKind::ProMedium);
+    let mut h = bar(AppTheme::pro_medium());
     let app = h.state_mut();
     app.run("layer.new.layer", json!({})).unwrap();
     app.run("tools.setBrush", json!({"brush": {"size": 13.0, "pressureSize": true, "smoothing": {"amount": 0.0}}})).unwrap();
