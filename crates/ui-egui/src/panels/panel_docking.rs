@@ -834,6 +834,14 @@ fn show_layout(app: &mut PhotocraftApp, ui: &mut egui::Ui, dock_only: bool) {
     let strip = style.tab_height;
     let card: std::collections::HashSet<String> =
         layout.floating.iter().filter(|window| window.id == PROPERTIES_WINDOW).flat_map(|window| window.panels().cloned()).collect();
+    // The layout leaves gaps (the dock gap, split gaps) that no body paints. Fill the area the
+    // layout owns first, behind everything the pass draws, with the dock's own colour, so a gap
+    // shows that instead of the window's black clear colour (#9819, #13460). The dock-edge layout
+    // (`dock_only`) draws into a column that is already filled, and its `ui` can span the whole
+    // window, so it must not fill.
+    if !dock_only {
+        ui.painter().rect_filled(ui.available_rect_before_wrap(), 0.0, t.dock);
+    }
     record::clear_bodies(ui.ctx());
     // The panel windows' passes, inside this call, note their keyboard focus again.
     keyboard_focus(ui.ctx()).lock().unwrap_or_else(|e| e.into_inner()).clear();
