@@ -1025,10 +1025,10 @@ fn do_print(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
                 // a closed source has no document left to modify, as for background saves.
                 let viewed = s.active().map(|st| st.doc.id);
                 if let Some(index) = s.documents().iter().position(|st| st.doc.id == doc_id) {
-                    s.set_active(index);
+                    s.set_active_for_edit(index);
                     crate::automate_cmds::fire_event(s, "print");
                     if let Some(index) = viewed.and_then(|id| s.documents().iter().position(|st| st.doc.id == id)) {
-                        s.set_active(index);
+                        s.set_active_for_edit(index);
                     }
                 }
                 Ok(result)

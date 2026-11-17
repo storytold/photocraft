@@ -233,13 +233,17 @@ pub(crate) fn duplicate_into_document(s: &mut Session, p: &Value, destination: u
     if let Some(layer) = crate::commands::explicit_layer(s, p)? {
         params["layers"] = json!([layer.0]);
     }
-    let result = copy_to_document(s, &params);
-    s.set_active(source);
+    let result = copy_to_document_with_activation(s, &params, false);
+    s.set_active_for_edit(source);
     result
 }
 
 /// `layer.copyToDocument`.
 fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
+    copy_to_document_with_activation(s, p, true)
+}
+
+fn copy_to_document_with_activation(s: &mut Session, p: &Value, activate: bool) -> Result<Value> {
     let names = s.default_names();
     let dest = doc_index(s, p, "document")?.ok_or_else(|| bad("missing `document` (the destination's index)"))?;
     let src = match doc_index(s, p, "source")? {
@@ -343,7 +347,8 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
     translate_copies(&mut copies, &ddoc, dx, dy);
     let patterns: Vec<_> = sdoc.patterns.iter().filter(|pat| !ddoc.patterns.iter().any(|d| d.id == pat.id)).cloned().collect();
     let styles = std::mem::take(&mut copies.text_styles);
-    s.set_active(dest);
+    // Duplicate Layer keeps the source active; only Copy to Document navigates to the result.
+    s.set_active_for_edit(dest);
     let label = if ids.len() == 1 { "Duplicate Layer" } else { "Duplicate Layers" };
     let edited = s.edit(label, |doc, active| {
         doc.patterns.extend(patterns);
@@ -368,6 +373,9 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
         s.set_active(src);
     }
     let new = edited?;
+    if activate {
+        s.set_active(dest);
+    }
     if let (Some(name), [id]) = (typed, new.as_slice()) {
         crate::type_cmds::note_typed_name(s, *id, &name);
     }

@@ -120,6 +120,16 @@ impl Session {
     }
 
     pub fn set_active(&mut self, index: usize) -> bool {
+        if !self.set_active_for_edit(index) {
+            return false;
+        }
+        self.remember_active_document();
+        true
+    }
+
+    /// Temporarily target another document without recording navigation. Callers must restore
+    /// their previous target with this method too; ordinary document switches use `set_active`.
+    pub fn set_active_for_edit(&mut self, index: usize) -> bool {
         if index < self.docs.len() {
             self.active = Some(index);
             self.note_active_change();
@@ -127,6 +137,15 @@ impl Session {
             true
         } else {
             false
+        }
+    }
+
+    /// Track explicit navigation and admission, not internal receiver switches such as a
+    /// background smart-content save. Keep one entry per open document, using stable ids.
+    fn remember_active_document(&mut self) {
+        if let Some(id) = self.active().map(|st| st.doc.id) {
+            self.document_activation_order.retain(|&known| known != id);
+            self.document_activation_order.push(id);
         }
     }
 
@@ -218,6 +237,7 @@ impl Session {
         self.docs.push(st);
         let i = self.docs.len() - 1;
         self.active = Some(i);
+        self.remember_active_document();
         self.note_active_change();
         i
     }
@@ -247,6 +267,8 @@ impl Session {
         Some((doc, read_only))
     }
 
+    /// Close a document, keeping another active document or restoring the most recently
+    /// activated survivor. Tab dragging and recorded opening-order references are independent.
     pub fn close(&mut self, index: usize) -> Option<DocState> {
         if index >= self.docs.len() {
             return None;
@@ -262,15 +284,23 @@ impl Session {
         }
         let d = self.docs.remove(index);
         self.open_document_order.retain(|&id| id != d.doc.id);
+        self.document_activation_order.retain(|&id| id != d.doc.id);
         self.active = if self.docs.is_empty() {
             None
         } else {
             Some(match self.active {
                 Some(active) if active > index => active - 1,
                 Some(active) if active < index => active,
-                _ => index.min(self.docs.len() - 1),
+                _ => self
+                    .document_activation_order
+                    .iter()
+                    .rev()
+                    .find_map(|id| self.docs.iter().position(|st| st.doc.id == *id))
+                    // Keep a remaining tab reachable even if no recorded activation survives.
+                    .unwrap_or_else(|| index.min(self.docs.len() - 1)),
             })
         };
+        self.remember_active_document();
         self.note_active_change();
         Some(d)
     }

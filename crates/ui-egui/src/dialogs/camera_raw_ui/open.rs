@@ -468,12 +468,12 @@ pub(super) fn sample_pixels(surf: &photocraft_raster::Surface, max_side: usize) 
 
 fn mark_unmodified(app: &mut PhotocraftApp, index: usize) {
     let active = app.session.active_index();
-    app.session.set_active(index);
+    app.session.set_active_for_edit(index);
     if let Some(st) = app.session.active_mut() {
         st.saved_revision = st.revision;
     }
     if let Some(i) = active {
-        app.session.set_active(i);
+        app.session.set_active_for_edit(i);
     }
     app.sync_views();
 }
@@ -492,7 +492,7 @@ pub fn on_redevelop_event(app: &mut PhotocraftApp, e: &photocraft_engine::jobs::
                 crate::notices::error(app, format!("{}: {err}", pending.raw.name));
             }
             if let Some(i) = active {
-                app.session.set_active(i);
+                app.session.set_active_for_edit(i);
             }
             if matches!(e.outcome, photocraft_engine::jobs::JobOutcome::Done(_)) {
                 mark_unmodified(app, index);

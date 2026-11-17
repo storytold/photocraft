@@ -211,6 +211,8 @@ pub struct Session {
     pub(crate) batch_raw_open: Option<prefs::RawDefaults>,
     /// Admitted document identities in opening order, independent of visual-tab reordering.
     open_document_order: Vec<photocraft_doc::DocId>,
+    /// Open documents in activation order, most recent last; independent of tab/opening order.
+    document_activation_order: Vec<photocraft_doc::DocId>,
     active: Option<usize>,
     /// Monotonic counter, bumped whenever a different document becomes active (including a
     /// switch away and back inside one pass). UI work that must not cross documents (control

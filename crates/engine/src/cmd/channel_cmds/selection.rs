@@ -19,7 +19,7 @@ pub(super) fn save_selection(s: &mut Session, p: &Value) -> Result<Value> {
     let channel = p.get("channel").cloned().unwrap_or(Value::Null);
     let name = p.get("name").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()).map(str::to_string);
     let prev = s.active_index();
-    s.set_active(di);
+    s.set_active_for_edit(di);
     let r = s.edit("Save Selection", |doc, _| {
         let fmt = channel_format(doc);
         let existing = match &channel {
@@ -53,7 +53,7 @@ pub(super) fn save_selection(s: &mut Session, p: &Value) -> Result<Value> {
         }
     });
     if let Some(i) = prev {
-        s.set_active(i);
+        s.set_active_for_edit(i);
     }
     let i = r?;
     let name = s.documents()[di].doc.channels[i].name.clone();

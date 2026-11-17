@@ -51,6 +51,31 @@ fn assert_released(app: &mut PhotocraftApp) {
 }
 
 #[test]
+fn close_returns_to_recent_document_before_parent_continues() {
+    let mut app = app_with("accelerated", 1, false);
+    let receiver = app.session.active().unwrap().doc.id;
+    app.run("layer.new.layer", json!({"name":"Receiver"})).unwrap();
+    for name in ["Copy", "Palette", "Work"] {
+        app.run("file.new", json!({"name":name,"width":8,"height":8})).unwrap();
+    }
+    app.session.set_active(0);
+    app.run("document.activate", json!({"offset":3})).unwrap();
+    let child = Action::new("Close and select", vec![("file.close".into(), json!({})), ("layer.select".into(), json!({"layer":"Receiver"}))]);
+    let parent =
+        Action::new("Parent", vec![("actions.play".into(), json!({"action":"Close and select"})), ("layer.new.layer".into(), json!({"name":"After"}))]);
+    let (bytes, skipped) = photocraft_engine::atn_cmds::export("Playback", &[&child, &parent], &[], false).unwrap();
+    assert!(skipped.is_empty());
+    let imported = photocraft_engine::atn_cmds::import(&bytes).unwrap();
+    assert!(imported.unsupported.is_empty());
+    app.session.actions.list = imported.actions;
+    let result = play(&mut app, &json!({"action":"Parent"})).unwrap();
+    assert!(result.get("failed").is_none(), "{result}");
+    assert_eq!(app.session.active().unwrap().doc.id, receiver);
+    assert_eq!(names(&app), ["Receiver", "After"]);
+    assert_eq!(app.session.documents().len(), 3);
+}
+
+#[test]
 fn deselect_atn_noop_keeps_nested_playback_pacing_and_parent_continuation() {
     let child = Action::new(
         "Clear",

@@ -119,7 +119,7 @@ pub(super) fn duplicate_channel(s: &mut Session, p: &Value) -> Result<Value> {
                 return Err(bad(cmd, "the destination document must have the same size"));
             }
             let prev = s.active_index();
-            s.set_active(di);
+            s.set_active_for_edit(di);
             let r = s.edit("Duplicate Channel", |doc, _| {
                 let fmt = channel_format(doc);
                 if ch.surface.format() != fmt {
@@ -129,7 +129,7 @@ pub(super) fn duplicate_channel(s: &mut Session, p: &Value) -> Result<Value> {
                 Ok(doc.channels.len() - 1)
             });
             if let Some(i) = prev {
-                s.set_active(i);
+                s.set_active_for_edit(i);
             }
             Ok(json!({ "channel": r?, "document": di }))
         }

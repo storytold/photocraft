@@ -36,7 +36,7 @@ pub(super) fn raw_conversions(d: &photocraft_engine::prefs::RawDefaults) -> Vec<
 /// Camera Raw Defaults (Preferences) after the Camera Raw step: the colour space and bit depth
 /// the developed document opens in, and Open as Smart Object.
 pub(super) fn apply_raw_conversions(app: &mut PhotocraftApp, index: usize, d: &photocraft_engine::prefs::RawDefaults) -> Result<(), String> {
-    app.session.set_active(index);
+    app.session.set_active_for_edit(index);
     for step in raw_conversions(d) {
         let (id, params) = match step {
             "colorSpace" => ("edit.convertToProfile", json!({"profile": d.color_space.profile_id(), "intent": "relative"})),
