@@ -106,6 +106,15 @@ fn take_active(app: &mut PhotocraftApp) -> Option<Pending> {
     Some(app.gradient.mask.pending.remove(i))
 }
 
+/// Puts a gradient [`take_active`] took back, when the paint it was taken for was refused and the
+/// line still describes the document. One drawn in the meantime wins: the newer line is the one
+/// the canvas has been showing.
+fn restore(app: &mut PhotocraftApp, q: Pending) {
+    if !app.gradient.mask.pending.iter().any(|p| p.doc == q.doc) {
+        app.gradient.mask.pending.push(q);
+    }
+}
+
 /// The line shown: the one being dragged, else the pending one.
 fn shown(app: &PhotocraftApp) -> Option<([f32; 2], [f32; 2])> {
     match app.gradient.mask.drag {
@@ -248,11 +257,26 @@ const STEPPING: [&str; 2] = ["edit.undo", "edit.redo"];
 /// level down, where the caller no longer asks — so the Classic Gradient commits the pending one
 /// before laying its own. A command the engine refuses (bad params, not enabled, a hidden target)
 /// changes nothing: the gradient stays pending. A gradient that can't be painted refuses the
-/// command, with its reason, rather than let it run over a gradient that was lost.
+/// command, with its reason, rather than let it run over a gradient that was lost, and so does
+/// one the document has moved out from under.
 pub(crate) fn before_command(app: &mut PhotocraftApp, id: &str, params: &Value) -> Result<(), String> {
     let edits = COMMITTING.iter().any(|p| id.starts_with(p)) || REPLAYING.contains(&id);
-    if pending_in_active(app).is_none() || STEPPING.contains(&id) || !edits {
+    let Some(q) = pending_in_active(app) else { return Ok(()) };
+    if STEPPING.contains(&id) || !edits {
         return Ok(());
+    }
+    // An edit made under the gradient (an undo, a history step chosen) leaves it describing a
+    // document that no longer exists. `tick` drops such a gradient, but it runs once a frame and a
+    // command reaching here first — the next step of a played action, a script — would paint the
+    // stale line before `tick` ever saw it. So drop it here too, say so, and refuse: the gradient
+    // is gone either way, and a refusal says that where a silent paint would not (CodeRabbit on
+    // #10722).
+    if target(app).is_some_and(|(_, _, revision)| revision != q.revision) {
+        cancel(app);
+        let e = "the gradient was dropped: the document changed under it".to_string();
+        app.ui.status = e.clone();
+        app.ui.status_error = true;
+        return Err(e);
     }
     // Paste reads the OS clipboard before it runs, and that read can empty an engine clipboard
     // that was mirrored from outside and is no longer there (`import_os_clipboard`). Without this
@@ -260,13 +284,28 @@ pub(crate) fn before_command(app: &mut PhotocraftApp, id: &str, params: &Value) 
     // then does nothing. The menu path makes the same call just before `app.run`, so for a paste
     // reached directly (automation, a script) this only brings it to the same starting point
     // (CodeRabbit on #10722).
+    //
+    // A read that *fails* is not an empty clipboard: `import_os_clipboard` keeps the mirrored copy
+    // and returns the error. Taking it here rather than dropping it matters, because the precheck
+    // would then pass on a copy the paste itself cannot re-read, and the gradient would go down
+    // for a paste that only reports the same failure. Refusing leaves the gradient pending, so
+    // nothing is lost by trying again (CodeRabbit on #10722).
     if id.starts_with("edit.paste") || id == "file.newFromClipboard" {
-        let _ = app.import_os_clipboard();
+        app.import_os_clipboard()?;
     }
     if photocraft_engine::commands::find(id).is_some() {
         app.session.precheck(id, params).map_err(|e| e.to_string())?;
     }
-    commit(app)
+    // A refused paint leaves the gradient where it was. The refusal wrote nothing, so the line
+    // still describes the document and the command's refusal is the whole remedy — where dropping
+    // it would lose the line with only a status message to show for it. What this buys is a second
+    // try at a reason that goes without touching the document: an automation policy that refuses
+    // `paint.gradient` alone, lifted. A reason whose removal is itself an edit (a layer unhidden)
+    // moves the revision, and the guard above then drops the line as stale, by design.
+    //
+    // `tick`'s commit still drops a failed gradient, because one kept there would be retried — and
+    // its failure reported — on every frame (CodeRabbit on #10722).
+    commit(app).inspect_err(|_| restore(app, q))
 }
 
 /// Once a frame: paints the pending gradient when the tool, the target or the layer changed, and
@@ -369,4 +408,11 @@ pub(crate) fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &Vi
 #[cfg(test)]
 pub(crate) fn pending(app: &PhotocraftApp) -> Option<([f32; 2], [f32; 2])> {
     pending_in_active(app).map(|q| (q.from, q.to))
+}
+
+/// The document revision the active document's pending gradient was drawn at, so a test can say
+/// whether it is stale rather than infer it from behaviour.
+#[cfg(test)]
+pub(crate) fn pending_revision(app: &PhotocraftApp) -> Option<u64> {
+    pending_in_active(app).map(|q| q.revision)
 }

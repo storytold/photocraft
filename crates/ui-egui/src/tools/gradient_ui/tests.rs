@@ -614,23 +614,94 @@ fn a_refused_command_does_not_paint_the_pending_gradient() {
     assert_eq!(mask_at(&app.session.active().unwrap().doc, layer, 150), 1.0);
 }
 
-/// CodeRabbit on #10722: a pending gradient that can't be painted (its layer hidden meanwhile)
-/// refuses the command that would paint it, with the reason, rather than let it run as though
-/// nothing was lost.
+/// CodeRabbit on #10722: a pending gradient that can't be painted (its layer hidden) refuses the
+/// command that would paint it, with the reason, rather than let it run as though nothing was
+/// lost.
+///
+/// The layer is hidden *before* the drag on purpose. Hiding it afterwards moves the revision too,
+/// and the gradient would then be refused for being stale — by the guard the test below covers —
+/// without the paint ever being attempted. Drawing after the hide leaves the revision matching, so
+/// what refuses the command here really is the failed paint.
 #[test]
 fn a_gradient_that_cannot_be_painted_refuses_the_command() {
     let (mut app, layer) = app_on_mask();
-    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
     app.session
         .edit("hide", |doc, _| {
             doc.layer_mut(layer).unwrap().visible = false;
             Ok(())
         })
         .unwrap();
-    // The edit above moved the revision, which `tick` would take as an undo; the command comes first.
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    assert!(mask::pending(&app).is_some(), "a gradient waits on the hidden layer's mask");
+    assert_eq!(
+        mask::pending_revision(&app),
+        Some(app.session.active().unwrap().revision),
+        "and it describes the document as it stands, so staleness cannot be what refuses the command"
+    );
     let err = app.run("select.all", json!({})).expect_err("the gradient could not be painted");
     assert!(!err.is_empty() && app.ui.status_error, "{err}");
     assert!(app.session.active().unwrap().doc.selection.is_none(), "Select All did not run");
+    // CodeRabbit on #10722: the refused paint does not cost the gradient. Nothing was written, so
+    // the line still describes the document and waits, rather than being dropped with only a
+    // status line to show for it.
+    assert_eq!(mask::pending(&app), Some(([20.0, 60.0], [120.0, 60.0])), "the line is still there");
+}
+
+/// CodeRabbit on #10722, the case it asked about: the automation policy refuses `paint.gradient`
+/// alone. The outer command must not cost the gradient, because nothing was written — the refusal
+/// left the document exactly as the line describes it, so lifting the policy is enough for the
+/// same command to paint it.
+///
+/// Unhiding a layer would not do as the "reason gone" here: that is itself an edit, so it moves the
+/// revision and the restored line is then stale by the rule above. A policy is lifted without
+/// touching the document, which is what makes this the case where keeping the gradient pays.
+#[test]
+fn a_nested_paint_refused_by_policy_keeps_the_gradient_for_the_next_try() {
+    let (mut app, layer) = app_on_mask();
+    app.services.automation_command =
+        Some(Box::new(|id: &str, _: &serde_json::Value| if id == "paint.gradient" { Err("not allowed".to_string()) } else { Ok(()) }));
+    app.automation_input = true;
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    let before = app.session.active().unwrap().revision;
+
+    let err = app.run("select.all", json!({})).expect_err("the refused paint refuses the command");
+    assert!(!err.is_empty() && app.ui.status_error, "{err}");
+    assert_eq!(mask::pending(&app), Some(([20.0, 60.0], [120.0, 60.0])), "the gradient is kept, not cleared");
+    assert_eq!(app.session.active().unwrap().revision, before, "and nothing was written");
+    assert!(app.session.active().unwrap().doc.selection.is_none(), "Select All did not run");
+    assert_eq!(mask_at(&app.session.active().unwrap().doc, layer, 150), 1.0, "the mask is untouched");
+
+    // The policy goes, the document is untouched, so the same command now paints the same line.
+    app.services.automation_command = None;
+    app.run("select.all", json!({})).expect("now it paints");
+    assert_eq!(mask::pending(&app), None, "the gradient went down");
+    assert!(mask_at(&app.session.active().unwrap().doc, layer, 150) < 0.05, "and it is in the mask");
+}
+
+/// CodeRabbit on #10722: after an undo the pending gradient describes a document that is gone.
+/// `tick` drops such a gradient, but it runs once a frame, so a command arriving before it — the
+/// next step of a played action, a script — would paint the stale line first. The gradient here is
+/// still perfectly paintable, which is what the test above cannot show: nothing but the staleness
+/// stops it. Neither the gradient nor the command may be applied.
+#[test]
+fn a_command_after_an_undo_paints_neither_the_stale_gradient_nor_itself() {
+    let (mut app, layer) = app_on_mask();
+    app.run("edit.fill", json!({"color": "#808080"})).unwrap();
+    let filled = app.session.active().unwrap().revision;
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    app.run("edit.undo", json!({})).unwrap();
+    let undone = app.session.active().unwrap().revision;
+    assert!(undone != filled, "the undo happened");
+    assert!(mask::pending(&app).is_some(), "the gradient is still waiting, as #10703 wants");
+    assert!(app.session.active().unwrap().doc.layer(layer).is_some_and(|l| l.visible), "and could still be painted");
+
+    // The command comes before `tick` would have dropped it.
+    let err = app.run("select.all", json!({})).expect_err("the stale gradient refuses the command");
+    assert!(!err.is_empty() && app.ui.status_error, "{err}");
+    assert_eq!(mask::pending(&app), None, "the stale gradient was dropped, not painted");
+    assert_eq!(app.session.active().unwrap().revision, undone, "and nothing was written to the document");
+    assert!(app.session.active().unwrap().doc.selection.is_none(), "Select All did not run either");
+    assert_eq!(mask_at(&app.session.active().unwrap().doc, layer, 150), 1.0, "the mask is untouched");
 }
 
 /// CodeRabbit on #10722: Esc through the shortcut dispatch drops the pending gradient.
@@ -851,6 +922,61 @@ fn a_paste_whose_mirrored_clipboard_has_gone_leaves_the_pending_mask_gradient_al
     let refused = app.run("edit.paste", json!({})).is_err();
     assert!(refused, "the paste is refused: the mirrored copy is gone");
     assert_eq!((mask::pending(&app), app.session.active().unwrap().revision), (Some(pending), revision), "nothing was painted for it");
+}
+
+/// CodeRabbit on #10722, the case beside the one above: the mirrored copy may still be on the OS
+/// clipboard, but the read of it *fails*. `import_os_clipboard` then keeps the copy and returns the
+/// error, so a swallowed error leaves the precheck passing on a copy the paste cannot re-read: the
+/// gradient goes down for a paste that only reports the same failure. The error must refuse the
+/// command instead, which leaves the gradient pending and nothing lost.
+#[test]
+fn a_paste_whose_clipboard_cannot_be_read_leaves_the_pending_mask_gradient_alone() {
+    // An OS clipboard that takes the copy and then fails every read.
+    type OsClip = std::sync::Arc<std::sync::Mutex<Option<(u32, u32, Vec<u8>)>>>;
+    let os: OsClip = std::sync::Arc::default();
+    let fail = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (set, get, flag) = (os.clone(), os.clone(), fail.clone());
+    let services = crate::Services {
+        clipboard_set_image: Some(Box::new(move |w: u32, h: u32, px: &[u8]| {
+            *set.lock().unwrap() = Some((w, h, px.to_vec()));
+            Ok(())
+        })),
+        clipboard_get_image: Some(Box::new(move || {
+            if flag.load(std::sync::atomic::Ordering::Relaxed) { Err("the clipboard could not be read".to_string()) } else { Ok(get.lock().unwrap().clone()) }
+        })),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    app.run("file.new", json!({"width": 200, "height": 120})).unwrap();
+    app.ui.tool = Tool::Gradient;
+    app.ui.tool_options.gradient_style = "linear".into();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+    app.ui.tool_options.gradient_dither = false;
+    app.ui.tool_options.gradient_classic = false;
+    app.sync_views();
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+
+    // An image from outside: imported, so mirrored and external.
+    *os.lock().unwrap() = Some((2, 1, vec![255; 8]));
+    assert!(app.import_os_clipboard().unwrap(), "the outside image is imported");
+    assert!(app.session.clipboard.is_some() && app.clip_external, "mirrored from outside");
+
+    // The reads start failing, and a gradient waits on the mask.
+    fail.store(true, std::sync::atomic::Ordering::Relaxed);
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    let pending = mask::pending(&app).expect("a gradient is pending");
+    let revision = app.session.active().unwrap().revision;
+    assert!(app.session.clipboard.is_some(), "the failed read keeps the copy rather than emptying it");
+
+    let err = app.run("edit.paste", json!({})).expect_err("the paste is refused: its clipboard cannot be read");
+    assert!(!err.is_empty() && app.ui.status_error, "{err}");
+    assert_eq!(
+        (mask::pending(&app), app.session.active().unwrap().revision),
+        (Some(pending), revision),
+        "the gradient still waits and nothing was painted for a paste that could not run"
+    );
+    assert_eq!(mask_at(&app.session.active().unwrap().doc, layer, 150), 1.0, "the mask is untouched");
 }
 
 /// CodeRabbit on #10722: playing an action edits the document through steps the engine runs
