@@ -752,3 +752,31 @@ fn help_letters_stay_typing_while_a_zoom_is_typed() {
     letter(&mut h, c);
     assert!(is_open(&h.ctx), "{c} ran no row: Help stays open");
 }
+
+/// Rows take Photoshop's letters where the first free letter differs (#15406, #15069, #15064):
+/// Alt+L, K links layers; Alt+L, F flattens; Alt+I, A, S opens Selective Color.
+#[test]
+fn layer_and_adjustments_rows_take_photoshop_s_letters() {
+    let mut h = bar();
+    alt_key(&mut h, egui::Key::L);
+    h.run_steps(2);
+    let level = rows(&h, 0);
+    let letter = |id: &str| level.iter().find(|r| r.command.as_deref() == Some(id)).and_then(|r| r.mnemonic);
+    assert_eq!(letter("layer.linkLayers"), Some('K'), "Lin_k Layers");
+    assert_eq!(letter("layer.flattenImage"), Some('F'), "_Flatten Image");
+    assert!(level.iter().any(|r| r.command.is_none() && r.mnemonic == Some('W')), "Ne_w Fill Layer");
+    for c in ['K', 'F', 'W'] {
+        assert_eq!(level.iter().filter(|r| r.mnemonic == Some(c)).count(), 1, "{c} is unique in the Layer menu");
+    }
+    key(&mut h, egui::Key::Escape);
+    alt_key(&mut h, egui::Key::I);
+    h.run_steps(2);
+    let adjustments = rows(&h, 0).iter().find(|r| r.command.is_none() && r.mnemonic == Some('A')).map(|r| r.mnemonic);
+    assert_eq!(adjustments, Some(Some('A')), "_Adjustments");
+    key(&mut h, egui::Key::A);
+    h.run_steps(3);
+    let level = rows(&h, 1);
+    let letter = |id: &str| level.iter().find(|r| r.command.as_deref() == Some(id)).and_then(|r| r.mnemonic);
+    assert_eq!(letter("image.adjustments.selectiveColor"), Some('S'), "_Selective Color…");
+    assert_eq!(letter("image.adjustments.shadowsHighlights"), Some('H'), "S_hadows/Highlights…");
+}
