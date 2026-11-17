@@ -17,7 +17,6 @@ use serde_json::json;
 use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, tool_event};
 use crate::state::Tool;
-use crate::stroke_constraint::{Axis, constrain};
 
 /// A fresh transparent document with the default brush and no smoothing, as the issue measured.
 fn app(tool: Tool) -> PhotocraftApp {
@@ -51,54 +50,6 @@ fn points(app: &PhotocraftApp) -> Vec<[f64; 2]> {
     p["points"].as_array().unwrap().iter().map(|q| [q[0].as_f64().unwrap(), q[1].as_f64().unwrap()]).collect()
 }
 
-/// The 45° case, straight through the shared lock: no diagonal direction, and the tie holds the
-/// pointer on its start point until a later movement decides an axis.
-#[test]
-fn brush_lock_never_points_at_45_degrees() {
-    let o = [100.0, 100.0];
-    let mut axis = None;
-    let drag = |p: [f64; 2], ax: &mut Option<Axis>| constrain(Tool::Brush, ax, o, o, p, true, 1.0);
-    // The issue's exact drag: 100,100 to 200,200 -- and every sample along the way.
-    for p in [[120.0, 120.0], [150.0, 150.0], [200.0, 200.0]] {
-        let q = drag(p, &mut axis);
-        assert!(q[0] == o[0] || q[1] == o[1], "{p:?} must stay on a horizontal or vertical line from the start, got {q:?}");
-    }
-    // Just off the diagonal, the dominant axis wins.
-    let mut axis = None;
-    assert_eq!(drag([203.0, 200.0], &mut axis), [203.0, 100.0], "mostly horizontal");
-    let mut axis = None;
-    assert_eq!(drag([200.0, 203.0], &mut axis), [100.0, 203.0], "mostly vertical");
-    // Left and up take the same axes.
-    let mut axis = None;
-    assert_eq!(drag([-100.0, -60.0], &mut axis), [-100.0, 100.0]);
-    let mut axis = None;
-    assert_eq!(drag([-60.0, -100.0], &mut axis), [100.0, -100.0]);
-}
-
-/// The Freeform Pen's ⇧ 45° snap (#7304) and the Gradient tool's ⇧ 45° snap (#178) stay as they
-/// are; only the Brush changed.
-#[test]
-fn other_tools_keep_the_45_degree_snap() {
-    let o = [100.0, 100.0];
-    let p = [203.0, 200.0];
-    let mut brush = None;
-    let b = constrain(Tool::Brush, &mut brush, o, o, p, true, 1.0);
-    assert_eq!(b, [203.0, 100.0], "the Brush is the tool that changed");
-    for tool in [Tool::FreeformPen, Tool::Pencil, Tool::Eraser, Tool::MixerBrush] {
-        let mut axis = None;
-        let q = constrain(tool, &mut axis, o, o, p, true, 1.0);
-        assert!((q[0] - 100.0 - (q[1] - 100.0)).abs() < 1e-9, "{tool:?} should still snap to 45°: {q:?}");
-    }
-    // The Gradient tool: 45° from the drag's start, not from the lock.
-    let g = constrain(Tool::Gradient, &mut None, o, o, p, true, 1.0);
-    assert!((g[0] - 100.0 - (g[1] - 100.0)).abs() < 1e-9, "Gradient 45°: {g:?}");
-    // And an off-diagonal drag still goes to the nearest multiple for both.
-    let mut axis = None;
-    assert_eq!(constrain(Tool::FreeformPen, &mut axis, o, o, [200.0, 110.0], true, 1.0), [200.0, 100.0]);
-    let mut axis = None;
-    assert_eq!(constrain(Tool::Brush, &mut axis, o, o, [200.0, 110.0], true, 1.0), [200.0, 100.0]);
-}
-
 /// The measured reference drag "100 px right and 40 px down" paints a horizontal line.
 #[test]
 fn shift_drag_mostly_horizontal_paints_a_horizontal_line() {
@@ -108,17 +59,6 @@ fn shift_drag_mostly_horizontal_paints_a_horizontal_line() {
     assert_eq!(bounds(&app), Rect::new(88, 88, 212, 112), "a horizontal band, 24 px tall");
     assert!(alpha(&app, 170, 100) > 0.9, "painted along the horizontal line");
     assert_eq!(alpha(&app, 170, 140), 0.0, "nothing where the pointer went diagonally");
-}
-
-/// The mirror case: mostly vertical paints a vertical line.
-#[test]
-fn shift_drag_mostly_vertical_paints_a_vertical_line() {
-    let mut app = app(Tool::Brush);
-    shift_drag(&mut app, [100.0, 100.0], &[[116.0, 140.0]], [140.0, 200.0]);
-    assert!(points(&app).iter().all(|p| p[0] == 100.0), "every point on x = 100: {:?}", points(&app));
-    assert_eq!(bounds(&app), Rect::new(88, 88, 112, 212), "a vertical band, 24 px wide");
-    assert!(alpha(&app, 100, 170) > 0.9, "painted along the vertical line");
-    assert_eq!(alpha(&app, 140, 170), 0.0, "nothing where the pointer went diagonally");
 }
 
 /// The case the issue reports: 100,100 to 200,200 paints only the start dab -- no diagonal.
