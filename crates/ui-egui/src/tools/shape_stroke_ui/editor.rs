@@ -248,8 +248,13 @@ pub fn button(
     };
     let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
     let outside = popup.is_some_and(|p| p.response.clicked_elsewhere()) && !children.clicked && !response.clicked();
+    // A command shortcut closes it, as it does egui's own popups (#9065).
+    let close = outside || crate::menu_keys::popups_closed(ui.ctx()) || escape && !children.shown;
+    if !close {
+        crate::menu_keys::own_popup_shown(ui.ctx());
+    }
     ui.data_mut(|d| d.insert_temp(egui::Id::unique(("stroke-children", key)), children.ids));
-    if outside || escape && !children.shown {
+    if close {
         close_children(ui.ctx(), key);
         *editor = None;
         if escape {
@@ -262,7 +267,7 @@ pub fn button(
 fn choice<T: Copy + PartialEq>(ui: &mut egui::Ui, label: &str, value: &mut T, choices: &[(T, &str)], children: &mut Children) {
     let parent_layer = ui.layer_id();
     let (press, close) = crate::press_menu::PressCombo::before(ui, label);
-    let response = egui::ComboBox::from_id_salt(label)
+    let response = craft_ui::ComboBox::from_id_salt(label)
         .width(152.0)
         .selected_text(choices.iter().find(|(v, _)| v == value).map_or("", |(_, n)| tl!(*n)))
         .close_behavior(close)

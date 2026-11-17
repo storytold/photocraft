@@ -1,7 +1,7 @@
 use super::blur::tent;
 use super::distance::{INSIDE_EPS, bevel_dists, par_fill, par_units};
 use super::paint::{apply_lut, bevel_contour_lut, contour_lut, lut_at, offset, satin_lut};
-use super::*;
+use super::{Bevel, BevelStyle, BevelTechnique, GlobalLight, Map, Pattern, Placement, PreparedPatterns, Rect};
 
 /// Where a bevel's maps paint: inside the shape (with the layer), outside it (onto the
 /// backdrop), or both (emboss styles: maps 0–1 inside, 2–3 outside).
@@ -108,8 +108,7 @@ fn bevel_height(shape: &Map, b: &Bevel, g: &BevelGeom, tex: &TextureCtx, pattern
             || (),
             |_, y, row, _| {
                 for (x, o) in row.iter_mut().enumerate() {
-                    let (u, v) = place.map(f64::from(x0 + x as i32) + 0.5, f64::from(y0 + y as i32) + 0.5);
-                    let p = tile.sample(u, v);
+                    let p = tile.sample_area(&place, f64::from(x0 + x as i32) + 0.5, f64::from(y0 + y as i32) + 0.5);
                     let l = (0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2]) * p[3];
                     *o += k * if t.invert { 1.0 - l } else { l };
                 }
@@ -269,9 +268,15 @@ pub(super) fn satin_map(shape: &Map, s: &photocraft_doc::effects::Satin) -> Map 
     let (dx, dy) = offset(s.angle, satin_distance(s));
     let mut a = shape.shifted(dx, dy, 0.0);
     let mut b = shape.shifted(-dx, -dy, 0.0);
-    // Two box passes of the satin size (fitted: 0.2 % mean error on psd-tools layer_effects).
-    tent(&mut a, s.size);
-    tent(&mut b, s.size);
+    if s.size == 1.0 {
+        // #14983: the measured edge has one quarter-strength pixel on either side.
+        super::blur::size_one_blur(&mut a);
+        super::blur::size_one_blur(&mut b);
+    } else {
+        // Two box passes of the satin size (fitted: 0.2 % mean error on psd-tools layer_effects).
+        tent(&mut a, s.size);
+        tent(&mut b, s.size);
+    }
     let mut m = Map { w: shape.w, h: shape.h, v: a.v.iter().zip(&b.v).map(|(x, y)| (x - y).abs()).collect() };
     if s.invert {
         m = m.map(|v| 1.0 - v);

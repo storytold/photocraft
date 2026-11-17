@@ -9,7 +9,7 @@ use serde_json::json;
 
 use super::*;
 
-/// Open, then New Layer, Fill, New Layer, Fill.
+/// New (the opening state of File › New), then New Layer, Fill, New Layer, Fill.
 fn harness() -> Harness<'static, PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
@@ -59,6 +59,57 @@ fn clicking_a_state_jumps_there_with_one_command() {
     assert_eq!(state(&h), (4, 0, rev + 2));
 }
 
+/// #14029: a document from File › New lists its opening state as "New" (an opened file's reads
+/// "Open"), at the top of the states, with the opening state's icon.
+#[test]
+fn a_new_documents_opening_state_reads_new_with_the_opening_icon() {
+    let h = harness();
+    assert!(h.query_by_label("Open").is_none(), "no state reads Open");
+    let new = h.get_by_label("New").rect();
+    let first_step = h.get_all_by_label("New Layer").next().expect("the first New Layer row").rect();
+    assert!(new.bottom() <= first_step.top() + 0.5, "New is the row above the first step: {new:?} {first_step:?}");
+    assert_eq!(history_step_icon("New"), "image");
+    assert_eq!(history_step_icon("New"), history_step_icon("Open"));
+}
+
+/// The ghost label that follows a History row being dragged to the trash (the text painted at
+/// the pointer, `layer_transfer::ghost`), if one is drawn.
+fn ghost_label(h: &Harness<'_, PhotocraftApp>, p: egui::Pos2) -> Option<String> {
+    let at = p + vec2(20.0, -6.0);
+    h.output().shapes.iter().find_map(|c| match &c.shape {
+        egui::Shape::Text(t) if (t.pos - at).length() < 1.0 => Some(t.galley.job.text.clone()),
+        _ => None,
+    })
+}
+
+/// Allow Non-Linear History lets a later (dimmed) state be dragged onto the trash: its row's
+/// label follows the pointer, as a past state's does.
+#[test]
+fn dragging_a_later_state_shows_its_label_at_the_pointer() {
+    let mut h = harness();
+    h.state_mut().run("history.options", json!({"allowNonLinearHistory": true})).unwrap();
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    h.run_steps(2);
+    // Rows: New, New Layer, Fill, New Layer (current), the dimmed Fill.
+    for (label, row) in [("New Layer", 1), ("Fill", 1)] {
+        let from = h.get_all_by_label(label).nth(row).expect("the row").rect().center();
+        let to = from + vec2(-60.0, 40.0);
+        h.hover_at(from);
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+        for i in 1..=4 {
+            h.hover_at(from + (to - from) * (i as f32 / 4.0));
+            h.run_steps(1);
+        }
+        assert_eq!(ghost_label(&h, to).as_deref(), Some(label), "the dragged {label} row's label follows the pointer");
+        // Released off the trash: nothing is deleted.
+        h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.run_steps(2);
+    }
+    assert_eq!(h.state().session.active().unwrap().history.entries().len() + h.state().session.active().unwrap().history.redo_labels().count(), 5);
+}
+
 #[test]
 fn new_history_steps_scroll_the_current_state_into_view() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
@@ -84,7 +135,7 @@ fn new_history_steps_scroll_the_current_state_into_view() {
     assert!(view.contains_rect(row), "the current history row must scroll into view: row {row:?} view {view:?}",);
 }
 
-/// Open plus 18 New Layer states in a dock that shows only a few rows.
+/// New plus 18 New Layer states in a dock that shows only a few rows.
 fn long_harness() -> Harness<'static, PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 64, "height": 48})).unwrap();

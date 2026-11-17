@@ -94,7 +94,8 @@ fn fields(id: &str) -> Option<&'static [(&'static str, Rule)]> {
             ("vertical", Number(f64::MIN, f64::MAX)),
             ("undefinedAreas", Choice("wrap|repeat|transparent")),
         ],
-        "filter.blur.blur"
+        "filter.blur.average"
+        | "filter.blur.blur"
         | "filter.blur.blurMore"
         | "filter.sharpen.sharpen"
         | "filter.sharpen.sharpenMore"
@@ -158,12 +159,25 @@ pub(crate) fn validate_params(id: &str, params: &Value) -> Result<()> {
             (rule.accepts(value), rule.expected())
         } else {
             match key.as_str() {
-                "layer" => (value.as_u64().is_some(), "an unsigned layer id".into()),
+                "shapeId" | "shapeName" if id == "filter.blur.shapeBlur" => (value.as_str().is_some_and(|s| !s.is_empty()), "a nonempty string".into()),
+                "shapePath" if id == "filter.blur.shapeBlur" => (
+                    crate::vector_cmds::parse_path(value).is_ok_and(|path| !path.is_empty() && path.control_bounds().is_some()),
+                    "a nonempty vector path".into(),
+                ),
+                "shapeOriginType" if id == "filter.blur.shapeBlur" => (value.as_i64() == Some(9), "the recorded custom-shape origin 9".into()),
+                "layer" => (value.as_u64().is_some() || value.is_string(), "an unsigned layer id or layer name".into()),
                 "coalesce" => (value.is_string(), "a string".into()),
                 "target" => (
                     value.as_str().is_some_and(|s| matches!(s, "pixels" | "mask" | "filterMask" | "quickMask"))
-                        || value.as_object().is_some_and(|o| o.len() == 1 && o.get("channel").and_then(Value::as_u64).is_some()),
-                    "pixels, mask, filterMask, quickMask or {\"channel\":index}".into(),
+                        || value.as_object().is_some_and(|o| {
+                            o.len() == 1
+                                && (o.get("channel").and_then(Value::as_u64).is_some()
+                                    || o.get("color").and_then(Value::as_u64).is_some()
+                                    || o.get("colors")
+                                        .and_then(Value::as_array)
+                                        .is_some_and(|a| !a.is_empty() && a.len() <= 64 && a.iter().all(|v| v.as_u64().is_some())))
+                        }),
+                    "pixels, mask, filterMask, quickMask, {\"channel\":index}, {\"color\":index} or {\"colors\":[indices]}".into(),
                 ),
                 _ => return Err(bad(format!("unknown parameter `{key}`"))),
             }

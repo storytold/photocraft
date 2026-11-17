@@ -1,5 +1,5 @@
 use super::descriptors::{Target, class, code, get_ref, target};
-use super::*;
+use super::{D, Descriptor, ReferenceItem};
 
 /// Photoshop's `BlnM` enumeration ↔ PhotoCraft's blend mode labels.
 const BLEND_MODES: &[(&str, &str)] = &[
@@ -47,8 +47,8 @@ const BLEND_MODES: &[(&str, &str)] = &[
     ("color", "Color"),
     ("Lmns", "Luminosity"),
     ("luminosity", "Luminosity"),
-    ("PsTh", "Pass Through"),
     ("passThrough", "Pass Through"),
+    ("PsTh", "Pass Through"),
 ];
 
 pub(super) fn blend_label(ps: &str) -> Option<&'static str> {
@@ -78,17 +78,24 @@ pub(super) const CHANNELS: &[(&str, &str)] = &[
     ("Mgnt", "magenta"),
     ("Yllw", "yellow"),
     ("Blck", "black"),
-    ("Lmnc", "lightness"),
+    // Lab Lightness: Photoshop rejects `Lmnc` ("luminance") on a Lab document (#9384).
+    ("Lght", "lightness"),
     ("A", "a"),
     ("B", "b"),
 ];
+
+/// The channel key of a `Chnl` enumeration. `Lmnc` is what PhotoCraft wrote for Lightness before
+/// #9384; reading it keeps those actions loading.
+pub(super) fn channel_of(code: &str) -> Option<&'static str> {
+    lookup(CHANNELS, code).or_else(|| (code.trim_end() == "Lmnc").then_some("lightness"))
+}
 
 /// The channel an adjustment entry's `Chnl` reference names: `None` = the composite.
 pub(super) fn channel_key(d: &Descriptor) -> Option<Option<&'static str>> {
     let r = get_ref(d, "Chnl")?;
     Some(match target(r) {
         Target::Ordinal(o) if o == "Trgt" || o == "Cmps" => None,
-        Target::Ordinal(o) => Some(lookup(CHANNELS, &o)?),
+        Target::Ordinal(o) => Some(channel_of(&o)?),
         _ => return None,
     })
 }
@@ -118,7 +125,8 @@ pub(super) const OFFSET_FILL: &[(&str, &str)] = &[("Wrp ", "wrap"), ("Rpt ", "re
 
 pub(super) const TRIM: &[(&str, &str)] = &[("Trns", "transparent"), ("topLeftPixelColor", "topLeft"), ("bottomRightPixelColor", "bottomRight")];
 
-pub(super) const EXTENSION: &[(&str, &str)] = &[("Bckg", "background"), ("Frgd", "foreground"), ("Wht ", "white"), ("Blck", "black"), ("Trns", "transparent")];
+pub(super) const EXTENSION: &[(&str, &str)] =
+    &[("Bckg", "background"), ("FrgC", "foreground"), ("Frgd", "foreground"), ("Wht ", "white"), ("Blck", "black"), ("Trns", "transparent")];
 
 pub(super) const FILL_CONTENTS: &[(&str, &str)] = &[
     ("FrgC", "foreground"),
@@ -131,9 +139,9 @@ pub(super) const FILL_CONTENTS: &[(&str, &str)] = &[
     ("contentAware", "contentAware"),
 ];
 
-pub(super) const STROKE_LOCATION: &[(&str, &str)] = &[("Insd", "inside"), ("Cntr", "center"), ("OtsF", "outside")];
+pub(super) const STROKE_LOCATION: &[(&str, &str)] = &[("Insd", "inside"), ("Cntr", "center"), ("Otsd", "outside"), ("OtsF", "outside")];
 
-pub(super) const INTENT: &[(&str, &str)] = &[("Img ", "perceptual"), ("Clrm", "relative"), ("Grp ", "saturation"), ("AbsC", "absolute")];
+pub(super) const INTENT: &[(&str, &str)] = &[("Img ", "perceptual"), ("Clrm", "relative"), ("Grp ", "saturation"), ("AClr", "absolute"), ("AbsC", "absolute")];
 
 pub(super) const PROFILES: &[(&str, &str)] =
     &[("sRGB IEC61966-2.1", "srgb"), ("Display P3", "display-p3"), ("Adobe RGB (1998)", "adobe-rgb-compat"), ("ProPhoto RGB", "prophoto-compat")];

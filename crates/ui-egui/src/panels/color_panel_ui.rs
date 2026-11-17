@@ -109,7 +109,7 @@ impl Model {
 }
 
 /// The colour the panel edits.
-fn active(app: &PhotocraftApp) -> [f32; 3] {
+pub(crate) fn active(app: &PhotocraftApp) -> [f32; 3] {
     let c = if app.ui.color_panel.background { app.session.tools.background } else { app.session.tools.foreground };
     [c[0], c[1], c[2]].map(|x| x.clamp(0.0, 1.0))
 }
@@ -347,13 +347,13 @@ fn sliders(app: &mut PhotocraftApp, ui: &mut egui::Ui, mode: ColorPanelMode) {
 
 /// Photoshop's alerts under the chips: ⚠ when the colour can't print (click: the nearest CMYK
 /// colour) and, for Web Color sliders, the cube when it isn't a web colour (click: the nearest).
-fn alerts(app: &mut PhotocraftApp, ui: &mut egui::Ui, col: Rect, rgb: [f32; 3], web: bool) {
+pub(crate) fn alerts(app: &mut PhotocraftApp, ui: &mut egui::Ui, col: Rect, rgb: [f32; 3], web: bool) {
     let t = Tokens::get(ui.ctx());
     let background = app.ui.color_panel.background;
     let mut y = col.top() + CHIPS_W + 2.0;
     let warnings = [
-        (out_of_gamut(rgb), "Out of gamut for printing: click for the nearest printable colour", false),
-        (if web { not_web_safe(rgb) } else { None }, "Not a web colour: click for the nearest web colour", true),
+        (out_of_gamut(rgb), "Out of gamut for printing: click for the nearest printable color", false),
+        (if web { not_web_safe(rgb) } else { None }, "Not a web color: click for the nearest web color", true),
     ];
     for (slot, (near, tip, cube)) in warnings.into_iter().enumerate() {
         let Some(near) = near else { continue };
@@ -537,6 +537,7 @@ fn rgb3(c: [f32; 4]) -> [f32; 3] {
 /// other corners; the add-to-swatches button sits under it.
 fn wheel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
+    let top = ui.cursor().top();
     let background = app.ui.color_panel.background;
     let rgb = active(app);
     let v = current_values(ui, Model::Hsb, background, rgb);
@@ -556,17 +557,25 @@ fn wheel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut changed = edited.is_some();
     ui.add_space(6.0);
     let fill = ui.data(|d| d.get_temp::<f32>(color_field_fill_id()));
-    let gaps = 2.0 * ui.spacing().item_spacing.y + 6.0;
     let w = ui.available_width();
-    let side = fill.filter(|f| f.is_finite()).map_or(w.min(220.0), |f| (f - top_h - gaps).min(w)).max(80.0);
+    // The wheel takes what the dock group has left under the sliders as drawn (they stand taller
+    // than `ROW_H`), down to 28 pt as the slider modes' ramp: an estimate and an 80 pt floor ran
+    // it past the bottom of the Color group at its default height.
+    let used = ui.cursor().top() - top;
+    let side = fill.filter(|f| f.is_finite()).map_or(w.min(220.0), |f| (f - used).min(w)).max(28.0);
     let (area, resp) = ui.allocate_exact_size(vec2(w, side), Sense::click_and_drag());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Unknown, ui.is_enabled(), "Color Wheel"));
     let (center, inner, outer) = wheel_geometry(area);
     let ring_w = outer - inner;
     let (h, s, b) = (v[0] / 360.0, v[1] / 100.0, v[2] / 100.0);
-    ui.painter().add(ring_mesh(center, inner, outer));
+    // Meshes aren't antialiased by egui: the ring and the triangle feather their own edges as
+    // egui's shapes do (#9996).
+    // Read outside the options' lock: asking the context for its scale inside it deadlocks.
+    let ppp = ui.ctx().pixels_per_point();
+    let feather = ui.ctx().tessellation_options(|o| if o.feathering { o.feathering_size_in_pixels / ppp } else { 0.0 });
+    ui.painter().add(ring_mesh(center, inner, outer, feather));
     let tri = triangle(center, inner - 1.0, h);
-    ui.painter().add(triangle_mesh(tri, h));
+    ui.painter().add(triangle_mesh(tri, h, feather));
     // Which part a drag began on: the ring sets the hue, the triangle saturation and brightness.
     // The ring or the triangle, from where the press began (kept for frames without a press
     // origin), so a drag that leaves the ring keeps turning the hue.
@@ -636,22 +645,29 @@ pub(crate) fn wheel_geometry(area: Rect) -> (Pos2, f32, f32) {
     (area.center(), outer - ring_w, outer)
 }
 
-/// The wheel's hue ring between radii `inner` and `outer`.
-fn ring_mesh(center: Pos2, inner: f32, outer: f32) -> Mesh {
+/// The wheel's hue ring between radii `inner` and `outer`, its edges fading out over `feather`
+/// points centred on them (0 for hard edges).
+pub(crate) fn ring_mesh(center: Pos2, inner: f32, outer: f32, feather: f32) -> Mesh {
     let mut m = Mesh::default();
     let steps = 96u32;
+    let half = feather / 2.0;
+    // Out from the centre: transparent, the hue, the hue, transparent (all the hue for hard edges).
+    let radii = [(inner - half).max(0.0), inner + half, outer - half, outer + half];
     for k in 0..=steps {
         let f = k as f32 / steps as f32;
         let a = f * TAU;
         let c = rgb32(hsb_to_rgb([f * 360.0, 1.0, 1.0]));
         let dir = vec2(a.cos(), -a.sin());
-        m.colored_vertex(center + dir * inner, c);
-        m.colored_vertex(center + dir * outer, c);
+        for (i, r) in radii.into_iter().enumerate() {
+            m.colored_vertex(center + dir * r, if feather > 0.0 && (i == 0 || i == 3) { Color32::TRANSPARENT } else { c });
+        }
     }
     for k in 0..steps {
-        let a = k * 2;
-        m.add_triangle(a, a + 1, a + 3);
-        m.add_triangle(a, a + 3, a + 2);
+        for band in 0..3 {
+            let a = k * 4 + band;
+            m.add_triangle(a, a + 1, a + 5);
+            m.add_triangle(a, a + 5, a + 4);
+        }
     }
     m
 }
@@ -690,14 +706,39 @@ pub(crate) fn triangle_sv([hue, white, black]: [Pos2; 3], p: Pos2) -> Option<(f3
     Some((if b > 0.0 { bs / b } else { 0.0 }, b))
 }
 
-/// The triangle shaded through saturation and brightness at hue `h`.
-fn triangle_mesh(tri: [Pos2; 3], h: f32) -> Mesh {
+/// `tri` with every edge moved out by `d` (in by a negative `d`): scaled about its incentre, so
+/// the point of a saturation and brightness moves with it. A degenerate triangle stays as it is.
+fn offset_triangle(tri: [Pos2; 3], d: f32) -> [Pos2; 3] {
+    let [p, q, r] = tri;
+    // Each corner weighs by the length of the side opposite it.
+    let (a, b, c) = ((q - r).length(), (r - p).length(), (p - q).length());
+    let perimeter = a + b + c;
+    let area2 = ((q - p).x * (r - p).y - (q - p).y * (r - p).x).abs();
+    if perimeter <= 0.0 || area2 <= 1e-6 {
+        return tri;
+    }
+    let incentre = ((p.to_vec2() * a + q.to_vec2() * b + r.to_vec2() * c) / perimeter).to_pos2();
+    let inradius = area2 / perimeter;
+    let k = ((inradius + d) / inradius).max(0.0);
+    tri.map(|v| incentre + (v - incentre) * k)
+}
+
+/// The triangle shaded through saturation and brightness at hue `h`, its edges fading out over
+/// `feather` points centred on them (0 for hard edges).
+pub(crate) fn triangle_mesh(tri: [Pos2; 3], h: f32, feather: f32) -> Mesh {
     let n = 16usize;
     let mut m = Mesh::default();
+    let (fill, fringe) = (offset_triangle(tri, -feather / 2.0), offset_triangle(tri, feather / 2.0));
+    // A vertex of the smaller triangle shows the colour picking reads at its position, which is
+    // on `tri`, so the drawn colour and the picked one agree.
+    let solid = |m: &mut Mesh, s: f32, b: f32| {
+        let p = triangle_point(fill, s, b);
+        let (s, b) = triangle_sv(tri, p).unwrap_or((s, b));
+        m.colored_vertex(p, rgb32(hsb_to_rgb([h * 360.0, s, b])));
+    };
     for j in 0..=n {
         for i in 0..=n {
-            let (s, b) = (i as f32 / n as f32, j as f32 / n as f32);
-            m.colored_vertex(triangle_point(tri, s, b), rgb32(hsb_to_rgb([h * 360.0, s, b])));
+            solid(&mut m, i as f32 / n as f32, j as f32 / n as f32);
         }
     }
     let row = (n + 1) as u32;
@@ -707,6 +748,25 @@ fn triangle_mesh(tri: [Pos2; 3], h: f32) -> Mesh {
             m.add_triangle(a, a + 1, a + row + 1);
             m.add_triangle(a, a + row + 1, a + row);
         }
+    }
+    if feather <= 0.0 {
+        return m;
+    }
+    // The edge, once round: black up to white (s = 0), white to the hue (b = 1), the hue down to
+    // black (s = 1). Each point gets a transparent twin on the larger triangle.
+    let t = |k: usize| k as f32 / n as f32;
+    let edge = (0..n).map(|k| (0.0, t(k))).chain((0..n).map(|k| (t(k), 1.0))).chain((0..n).map(|k| (1.0, t(n - k))));
+    let start = m.vertices.len() as u32;
+    let mut count = 0u32;
+    for (s, b) in edge {
+        solid(&mut m, s, b);
+        m.colored_vertex(triangle_point(fringe, s, b), Color32::TRANSPARENT);
+        count += 1;
+    }
+    for k in 0..count {
+        let (a, next) = (start + k * 2, start + (k + 1) % count * 2);
+        m.add_triangle(a, a + 1, next + 1);
+        m.add_triangle(a, next + 1, next);
     }
     m
 }
@@ -763,4 +823,27 @@ pub(crate) fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     ui.separator();
     ramp_menu(app, ui);
+}
+
+/// Remember the Color panel's options in the preferences when they change, so they survive a
+/// restart (#9592). Cheap: a small JSON compare per frame.
+pub fn persist(app: &mut PhotocraftApp) {
+    let stored = app.session.prefs().color_panel.clone();
+    // Changed outside the panel since the last sync (`prefs.set`, a reset): the panel takes it.
+    if app.ui.color_panel_synced.as_ref().is_some_and(|synced| *synced != stored) {
+        restore(app);
+        app.ui.color_panel_synced = Some(stored);
+        return;
+    }
+    let Ok(now) = serde_json::to_value(app.ui.color_panel) else { return };
+    if stored != now {
+        app.session.prefs.edit(|p| p.color_panel = now.clone());
+    }
+    app.ui.color_panel_synced = Some(now);
+}
+
+/// Restore the remembered Color panel options (at launch, or after a preference change made
+/// outside the panel); none stored (a reset) or unreadable ones are the defaults.
+pub fn restore(app: &mut PhotocraftApp) {
+    app.ui.color_panel = serde_json::from_value(app.session.prefs().color_panel.clone()).unwrap_or_default();
 }
