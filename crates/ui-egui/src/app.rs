@@ -217,6 +217,7 @@ impl PhotocraftApp {
             save_dirs: HashMap::new(),
             disk_stamps: HashMap::new(),
             targa_options: None,
+            raw_options: None,
             jpeg_options: None,
             dds_options: None,
             held_opens: Default::default(),

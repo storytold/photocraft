@@ -746,6 +746,8 @@ pub struct PhotocraftApp {
     pub(crate) disk_stamps: HashMap<photocraft_doc::DocId, (String, FileStamp)>,
     /// A save to an RGB Targa parked behind the Targa Options prompt (see `targa_options_ui`).
     pub(crate) targa_options: Option<targa_options_ui::Prompt>,
+    /// An Open As of a Photoshop Raw file waiting on Raw Options (see `raw_options_ui`).
+    pub(crate) raw_options: Option<dialogs::raw_options_ui::Prompt>,
     /// A save to a JPEG parked behind the JPEG Options prompt (see `jpeg_options_ui`).
     pub(crate) jpeg_options: Option<jpeg_options_ui::Prompt>,
     /// A save to a DDS texture parked behind the DDS Options prompt (see `dds_options_ui`).

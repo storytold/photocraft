@@ -1406,6 +1406,7 @@ mod paths_export_document_bounds_tests;
 pub(crate) mod pattern_fill_ui;
 pub mod preset_group_prompt;
 pub mod rasterize_prompt;
+pub mod raw_options_ui;
 pub mod replace_prompt;
 pub(super) mod rgb_histogram;
 pub mod screen_picker;

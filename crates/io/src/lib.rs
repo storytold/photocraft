@@ -70,6 +70,7 @@ mod pdf_editable;
 mod pdf_import;
 mod pdn;
 pub use pcraft_cache::PcraftExportCache;
+pub mod photoshop_raw;
 pub mod pixels;
 pub mod psd_budget;
 mod psd_export;
