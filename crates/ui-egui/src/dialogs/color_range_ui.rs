@@ -116,8 +116,94 @@ pub fn owns(f: &Map<String, Value>) -> bool {
     f.contains_key("__colorRange")
 }
 
+/// The `select.colorRange` params the dialog can produce. Any other recorded param (`mode`,
+/// `color`, `colors`, `sampleAllLayers`, ...) is not the dialog's to change and playback keeps it.
+const PARAM_KEYS: &[&str] = &["select", "invert", "fuzziness", "points", "subtractPoints", "order", "localized", "range", "tonalRange"];
+/// The dialog field holding the recorded params outside `PARAM_KEYS`.
+const KEPT: &str = "__kept";
+
+/// Show a recorded step in the dialog: the inverse of [`params`]. Tonal selects keep their
+/// fuzziness and level(s) in other fields than the sampling ones.
+pub fn load_step(f: &mut Map<String, Value>, step: &Value) {
+    let Some(o) = step.as_object() else { return };
+    let kept: Map<String, Value> =
+        o.iter().filter(|(k, _)| !PARAM_KEYS.contains(&k.as_str()) && !k.starts_with("__")).map(|(k, v)| (k.clone(), v.clone())).collect();
+    f.insert(KEPT.into(), Value::Object(kept));
+    for k in ["select", "invert", "fuzziness", "points", "subtractPoints", "localized", "range"] {
+        if let Some(v) = o.get(k) {
+            f.insert(k.into(), v.clone());
+        }
+    }
+    if let Some(v) = o.get("order") {
+        f.insert("__order".into(), v.clone());
+    }
+    let select = o.get("select").and_then(Value::as_str).unwrap_or("sampledColors");
+    if matches!(select, "highlights" | "midtones" | "shadows") {
+        // Sampled Colors keeps its own fuzziness.
+        f.insert("fuzziness".into(), json!(40.0));
+        if let Some(v) = o.get("fuzziness") {
+            f.insert("toneFuzziness".into(), v.clone());
+        }
+        let range = o.get("tonalRange");
+        let level = |i: usize| range.and_then(|r| r.as_array().map_or((i == 0).then_some(r), |a| a.get(i))).filter(|v| v.is_number()).cloned();
+        match select {
+            "shadows" => {
+                if let Some(v) = level(0) {
+                    f.insert("shadowsLevel".into(), v);
+                }
+            }
+            "highlights" => {
+                if let Some(v) = level(0) {
+                    f.insert("highlightsLevel".into(), v);
+                }
+            }
+            _ => {
+                if let (Some(lo), Some(hi)) = (level(0), level(1)) {
+                    f.insert("midtonesLow".into(), lo);
+                    f.insert("midtonesHigh".into(), hi);
+                }
+            }
+        }
+    }
+}
+
+/// Merge the recorded params the dialog doesn't edit (`__kept`) into `p`; its own keys win.
+fn merge_kept(f: &Map<String, Value>, p: &mut Map<String, Value>) {
+    if let Some(kept) = f.get(KEPT).and_then(Value::as_object) {
+        for (k, v) in kept {
+            p.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+    }
+}
+
 /// The `select.colorRange` params for the dialog's state: only what the Select mode uses.
 pub fn params(f: &Map<String, Value>) -> Value {
+    let mut p = own_params(f);
+    merge_kept(f, &mut p);
+    Value::Object(p)
+}
+
+/// How many recorded colours `__kept` still holds. The engine adds one fixed sample whenever `color`
+/// is present (string, array, null or anything else), plus one per entry of `colors`.
+fn kept_colors(f: &Map<String, Value>) -> usize {
+    let Some(kept) = f.get(KEPT).and_then(Value::as_object) else { return 0 };
+    usize::from(kept.contains_key("color")) + kept.get("colors").and_then(Value::as_array).map_or(0, Vec::len)
+}
+
+/// The (added, subtracted) samples the dialog shows: clicked points plus recorded colours.
+fn sample_counts(f: &Map<String, Value>) -> (usize, usize) {
+    (points(f, "points").len() + kept_colors(f), points(f, "subtractPoints").len())
+}
+
+/// A new replacing sample (plain eyedropper, Clear Samples) supersedes the recorded colours.
+fn forget_kept_colors(f: &mut Map<String, Value>) {
+    if let Some(kept) = f.get_mut(KEPT).and_then(Value::as_object_mut) {
+        kept.remove("color");
+        kept.remove("colors");
+    }
+}
+
+fn own_params(f: &Map<String, Value>) -> Map<String, Value> {
     let select = s(f, "select", "sampledColors");
     let c = controls(f);
     let mut p = Map::new();
@@ -155,13 +241,13 @@ pub fn params(f: &Map<String, Value>) -> Value {
         };
         p.insert("tonalRange".into(), range);
     }
-    Value::Object(p)
+    p
 }
 
 /// OK: run the command on the document (one history step).
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
     app.color_range = None;
-    app.run(COMMAND, params(f))
+    crate::actions::run_dialog_command(app, f, COMMAND, params(f))
 }
 
 /// Cached preview: the document proxy (per revision) and the textures drawn from it.
@@ -205,9 +291,17 @@ fn query_key(app: &PhotocraftApp, params: &Value) -> u64 {
 }
 
 /// Keep the accelerated preview paths in sync with the engine's Color Range replacement.
-/// The full-resolution engine handles other combine modes itself.
+/// A recorded `mode` of add, subtract or intersect combines the sampled mask with the document's
+/// selection (none counts as empty), as OK does; otherwise the mask is limited to the selection.
 fn scope_preview(proxy: &Document, params: &Value, mask: &mut [f32]) {
-    if matches!(params.get("mode").and_then(Value::as_str), Some("add" | "subtract" | "intersect")) {
+    let mode = photocraft_algo::selection::SelectionMode::parse(params.get("mode").and_then(Value::as_str).unwrap_or("replace"));
+    if mode != photocraft_algo::selection::SelectionMode::Replace {
+        let area = proxy.bounds();
+        let combined = photocraft_algo::selection::combine(proxy.selection.as_ref(), mask, area, mode);
+        let combined = photocraft_algo::selection::mask_from_surface(combined.as_ref(), area);
+        if combined.len() == mask.len() {
+            mask.copy_from_slice(&combined);
+        }
         return;
     }
     if let Some(selection) = proxy.selection.as_ref() {
@@ -526,7 +620,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                         }
                     }
                 });
-                let (add, sub) = (points(f, "points").len(), points(f, "subtractPoints").len());
+                let (add, sub) = sample_counts(f);
                 let what = match (add, sub) {
                     (0, 0) => tl!("Sample: foreground color").to_string(),
                     (a, 0) => crate::i18n::trn(crate::i18n::current(), a as u64, "{n} sample", "{n} samples"),
@@ -539,6 +633,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 if add + sub > 0 && widgets::secondary_button(ui, tl!("Clear Samples"), 0.0).clicked() {
                     set_points(f, "points", &[]);
                     set_points(f, "subtractPoints", &[]);
+                    forget_kept_colors(f);
                     f.insert("__order".into(), json!([]));
                 }
             });
@@ -728,6 +823,7 @@ pub fn pick(app: &PhotocraftApp, f: &mut Map<String, Value>, at: [f64; 2], mods:
             order.push(json!("-"));
         }
         _ => {
+            forget_kept_colors(f);
             set_points(f, "points", &[at]);
             set_points(f, "subtractPoints", &[]);
             order = vec![json!("+")];
