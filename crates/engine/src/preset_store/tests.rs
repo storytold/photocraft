@@ -1,5 +1,5 @@
 use super::*;
-use photocraft_psd::abr::{AbrSample, LegacyBrush, LegacyTip, write_v12};
+use craft_psd::abr::{AbrSample, LegacyBrush, LegacyTip, write_v12};
 use serde_json::json;
 use std::path::PathBuf;
 
@@ -101,7 +101,7 @@ fn tip_decoder_rejects_garbage() {
             })
             .collect();
         let _ = decode_tip(&v);
-        let mut w = TIP_MAGIC.to_vec();
+        let mut w = b"PCTIP1".to_vec();
         w.extend_from_slice(&v);
         let _ = decode_tip(&w);
     }
@@ -598,10 +598,10 @@ fn a_store_without_previews_makes_them_once_and_then_loads_lazily() {
 
 /// A v6 `.abr` whose presets sit in Photoshop folders (`phry`).
 fn abr_with_folders(presets: &[(&str, &[&str])]) -> Vec<u8> {
-    use photocraft_psd::descriptor::{Descriptor, UnicodeString, Value};
+    use craft_psd::descriptor::{Descriptor, UnicodeString, Value};
     let descs: Vec<Descriptor> = presets.iter().map(|(n, _)| Descriptor::new("brushPreset").with("Nm  ", Value::Text(UnicodeString::new_nul(n)))).collect();
     let folders: Vec<Vec<String>> = presets.iter().map(|(_, f)| f.iter().map(|x| x.to_string()).collect()).collect();
-    photocraft_psd::abr::write_v6_folders(2, &[], &[], &descs, &folders, true).unwrap()
+    craft_psd::abr::write_v6_folders(2, &[], &[], &descs, &folders, true).unwrap()
 }
 
 #[test]
@@ -711,8 +711,46 @@ fn an_actions_file_that_failed_to_load_is_not_overwritten() {
     s.execute("actions.record", json!({"name": "New"})).unwrap();
     s.execute("actions.stop", json!({})).unwrap();
     s.sync_preset_store();
+    assert!(!s.action_definitions_written(), "a skipped write must not acknowledge the revision");
     assert_eq!(mem.files.lock().unwrap().get(ACTIONS_FILE), Some(&newer), "an actions file the store could not read was overwritten");
     assert!(!s.preset_store.as_mut().unwrap().take_warnings().is_empty());
+}
+
+#[test]
+fn action_definitions_written_requires_a_successful_current_write() {
+    use crate::actions_cmds::commit_action_id;
+
+    let mem = MemBackend::default();
+    mem.write(ACTIONS_FILE, br#"{"version":1,"actions":[{"name":"First"},{"name":"Second"}]}"#).unwrap();
+    let mut s = Session::new();
+    assert!(!s.action_definitions_written());
+    s.attach_preset_store(open(Box::new(mem.clone())));
+    assert!(!s.action_definitions_written(), "loading definitions is not a write");
+
+    s.actions.list[0].name = "Renamed".into();
+    s.actions.touch();
+    assert!(!s.action_definitions_written());
+    s.sync_preset_store();
+    assert!(s.action_definitions_written());
+
+    let id = "00000000000000000000000000000001";
+    commit_action_id(&mut s, 1, id.into()).unwrap();
+    assert!(s.action_definitions_written());
+    let saved = load_actions(&mem, &mut Vec::new()).unwrap();
+    assert_eq!(saved.actions[0].name, "Renamed");
+    assert_eq!(saved.actions[1].action_id.as_deref(), Some(id));
+
+    let mut rejected = Session::new();
+    rejected.attach_preset_store(open(Box::new(MigrationFail { mem, fail_name: ACTIONS_FILE.into() })));
+    let rev = rejected.actions.rev;
+    assert!(commit_action_id(&mut rejected, 0, "00000000000000000000000000000002".into()).is_err());
+    assert_eq!(rejected.actions.rev, rev);
+    assert!(rejected.actions.list[0].action_id.is_none());
+    assert!(!rejected.action_definitions_written());
+    rejected.actions.list[0].name = "Unsaved".into();
+    rejected.actions.touch();
+    rejected.sync_preset_store();
+    assert!(!rejected.action_definitions_written());
 }
 
 /// A large pattern opens as a small preview (texture libraries run to gigabytes) and is read at
@@ -1135,4 +1173,33 @@ fn migration_preserves_duplicate_names_but_refuses_duplicate_ids() {
     assert!(!opened.warnings.is_empty());
     assert!(mem.read(PATTERNS_FILE, 1 << 20).is_err());
     assert_eq!(mem.read(LEGACY_PATTERNS_FILE, MAX_PATTERNS_BYTES).unwrap(), old);
+}
+
+/// A symlink planted among the presets must not carry a managed write to its target: the
+/// document writer follows links on purpose, the store confines itself to its directory.
+#[cfg(unix)]
+#[test]
+fn a_symlinked_preset_entry_is_refused_not_written_through() {
+    let dir = TempDir::new("symlink");
+    std::fs::create_dir_all(&dir.0).unwrap();
+    let outside = dir.0.join("outside.txt");
+    std::fs::write(&outside, b"victim").unwrap();
+    std::os::unix::fs::symlink(&outside, dir.0.join("planted.json")).unwrap();
+    let be = DirBackend::new(&dir.0);
+    let e = be.write("planted.json", b"{}").unwrap_err();
+    assert!(e.contains("symbolic link"), "{e}");
+    assert_eq!(std::fs::read(&outside).unwrap(), b"victim");
+    be.write("fresh.json", b"{}").unwrap();
+    assert_eq!(be.read("fresh.json", 1024).unwrap(), b"{}");
+}
+
+#[test]
+fn tip_adapter_matches_shared_codec_and_keeps_preview_limit() {
+    for t in [tip8(37, 21, 3), tip16(40, 33, 9)] {
+        let shared = craft_pcraft_tip::tip::encode(t.width, t.height, &t.data);
+        assert_eq!(encode_tip(&t), shared);
+        assert_eq!(decode_tip(&shared).unwrap(), t);
+        assert!(decode_tip_max(&shared, t.width - 1).is_err());
+        assert_eq!(decode_tip_max(&shared, t.width).unwrap(), t);
+    }
 }
