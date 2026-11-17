@@ -112,7 +112,7 @@ fn app_switches_to_the_cpu_canvas_and_keeps_the_documents() {
     let started = std::rc::Rc::new(std::cell::Cell::new(false));
     let flag = started.clone();
     app.on_started(move |_| flag.set(true));
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_ui_state(
+    let mut h = egui_kittest::Harness::builder().with_context(app.ctx().clone()).with_size(egui::vec2(1000.0, 700.0)).build_ui_state(
         |ui, app: &mut PhotocraftApp| {
             let ctx = ui.ctx().clone();
             if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
@@ -124,7 +124,7 @@ fn app_switches_to_the_cpu_canvas_and_keeps_the_documents() {
         },
         app,
     );
-    PhotocraftApp::setup_context(&h.ctx, photocraft_ui_egui::theme::ThemeKind::ALL[0]);
+    PhotocraftApp::setup_context(&h.ctx, photocraft_ui_egui::theme::AppTheme::pro());
     h.run_steps(4);
     assert!(h.state().gpu_active(), "GPU canvas in use before the loss");
     // The device is lost (e.g. the OS killed a huge submission).
@@ -136,7 +136,9 @@ fn app_switches_to_the_cpu_canvas_and_keeps_the_documents() {
     assert_eq!(app.ui.status, gpu_status::LOST_MESSAGE);
     assert!(app.ui.status_error);
     assert!(app.ui.gpu_fallback_notice.as_deref().unwrap_or("").contains("killed by the OS"));
-    assert!(app.ui.notices.is_empty(), "one recovery warning, no duplicate notice");
+    // UI passes drain the outbox into toasts, so the window's cards are checked as well.
+    let cards = craft::ui::runtime::toast::cards(&h.ctx, &craft::ui::runtime::env::WindowKey::main());
+    assert!(app.ui.notices.is_empty() && cards.is_empty(), "one recovery warning, no duplicate notice");
     assert!(app.perf.gpu_info.lost.as_deref().unwrap_or("").contains("killed by the OS"));
     assert_eq!(app.perf.gpu_info.canvas, "cpu");
     // The CPU path draws the document: a refresh after the loss is a CPU one.
@@ -157,7 +159,7 @@ fn started_hook_runs_once_after_the_first_frames() {
     let runs = std::rc::Rc::new(std::cell::Cell::new(0));
     let r = runs.clone();
     app.on_started(move |_| r.set(r.get() + 1));
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     for frame in 1..=2 {
         app.frame = frame;
         app.check_gpu(&ctx);
@@ -246,7 +248,7 @@ fn a_lost_window_device_saves_unsaved_work_for_recovery_and_closes() {
                 })),
                 ..Default::default()
             };
-            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+            let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), services);
             if let Some(rs) = cc.wgpu_render_state.as_ref() {
                 *window.lock().unwrap() = Some(rs.clone());
                 app.set_wgpu(rs.clone());
@@ -320,7 +322,7 @@ fn a_lost_window_device_closes_only_once_unsaved_work_is_saved() {
                 })),
                 ..Default::default()
             };
-            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+            let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), services);
             if let Some(rs) = cc.wgpu_render_state.as_ref() {
                 app.set_wgpu(rs.clone());
             }
@@ -405,13 +407,11 @@ fn tiled_canvas_keeps_tiles_in_place() {
                 zoom: 1.0,
                 center: [W as f32 / 2.0, H as f32 / 2.0],
                 rotation: 0.0,
-                shadow: false,
-                pixel_grid: false,
+
                 view_key: 1,
                 display: 0,
                 output: 0,
                 hdr: None,
-                offset: [0.0; 2],
             },
         }
     });
