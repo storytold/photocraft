@@ -124,7 +124,9 @@ pub(crate) fn channel_surface_for_filter<'a>(doc: &'a mut Document, layer: Optio
 /// with a mask, so ⌘I inverts an adjustment layer's mask (#780) and Fill fills it (#2456) as in
 /// Photoshop.
 fn edits_mask(id: &str) -> bool {
-    id.strip_prefix("image.adjustments.").is_some_and(|kind| crate::adjust_params::default_for(kind, ColorMode::Rgb).is_ok())
+    // Exposure does not work on a layer mask in the reference application (#14632): its own
+    // precondition refuses the mask target.
+    id.strip_prefix("image.adjustments.").is_some_and(|kind| kind != "exposure" && crate::adjust_params::default_for(kind, ColorMode::Rgb).is_ok())
         || crate::filters::params_for(id, &Value::Null).is_some()
         || id == "edit.fill"
         // Copying a targeted mask (#2928).

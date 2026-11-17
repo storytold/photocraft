@@ -335,6 +335,46 @@ pub(crate) fn has_adjustable(s: &Session) -> std::result::Result<(), String> {
     }
 }
 
+/// The reference application's alert for Image › Adjustments › Exposure on a target it refuses.
+pub(crate) const EXPOSURE_UNAVAILABLE: &str = "The command \"Exposure\" is not currently available.";
+/// The reference application's alert for Exposure on an empty pixel layer.
+pub(crate) const EXPOSURE_EMPTY: &str = "Could not complete the Exposure command because the active layer is empty.";
+
+/// Image › Adjustments › Exposure's targets, as the reference application has them (#14632):
+/// [`has_adjustable`]'s, minus a hidden layer and a targeted layer mask, which grey the item.
+/// Unlike Brightness/Contrast, Exposure does not work on a mask. An alpha channel or Quick Mask
+/// target keeps working; a layer inside a hidden group keeps today's behaviour (not measured).
+pub(crate) fn exposure_target_enabled(s: &Session) -> std::result::Result<(), String> {
+    has_adjustable(s)?;
+    if crate::channel_cmds::edits_channel(s) {
+        return Ok(());
+    }
+    let d = s.active().ok_or("no document open")?;
+    let hidden = d.active_layer.and_then(|id| d.doc.layer(id)).is_some_and(|l| !l.visible);
+    if hidden || d.channel_view.target == crate::channel_cmds::ChannelTarget::LayerMask {
+        return Err(EXPOSURE_UNAVAILABLE.into());
+    }
+    Ok(())
+}
+
+/// Why Exposure with `p` must stop before it edits anything (#14632): a mask target named in the
+/// params, or an empty pixel layer. `Ok` for every target Exposure works on.
+pub(crate) fn exposure_refusal(s: &Session, p: &Value) -> Result<()> {
+    if crate::commands::is_mask_target(p) {
+        return Err(EngineError::Disabled("image.adjustments.exposure".into(), EXPOSURE_UNAVAILABLE.into()));
+    }
+    if crate::channel_cmds::is_channel_target(p) || crate::channel_cmds::edits_channel(s) {
+        return Ok(());
+    }
+    let id = crate::commands::layer_param(s, p)?;
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    let layer = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+    if matches!(layer.content, LayerContent::Raster(_)) && crate::layer_multi_cmds::layer_bounds(layer).is_none() {
+        return Err(EngineError::Other(EXPOSURE_EMPTY.into()));
+    }
+    Ok(())
+}
+
 /// The smart object an adjustment's pixels would go to: the layer the params resolve to (the
 /// active one by default), when the command edits its pixels and that layer is a smart object.
 /// `None` for a mask or channel target, or a layer that is not a smart object.
