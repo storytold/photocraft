@@ -1,6 +1,7 @@
 //! Reproducible 24 MP channel-transform measurements; synthetic pixels, no external assets.
 //! cargo run --release -p photocraft-ui-egui --example channel_transform_bench
 //! Add --set for R+B instead of Red, or --commit-only to omit the interactive preview.
+//! Interactive timings include the production app frame; compare only runs with this driver.
 use photocraft_color::{Color, ColorMode, SampleType};
 use photocraft_doc::{Document, Size};
 use photocraft_engine::Session;
@@ -50,25 +51,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     session.execute("channel.target", if set { json!({"colors":[0,2]}) } else { json!({"channel":"red"}) })?;
     let mut app = PhotocraftApp::new(session, Services::default());
     app.sync_views();
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     let start = Instant::now();
     transform_tool::begin(&mut app, &ctx)?;
     println!("24MP isolated_begin_ms={:.2}", start.elapsed().as_secs_f64() * 1000.0);
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
-            if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                return;
-            }
-            egui::CentralPanel::default().show(ui, |ui| photocraft_ui_egui::canvas::document_area(app, ui));
-        },
-        app,
-    );
-    PhotocraftApp::setup_context(&h.ctx, Default::default());
+    // The shared canvas takes its app-scope command states from the production frame hooks.
+    let mut h = egui_kittest::Harness::builder().with_context(ctx).with_size(egui::vec2(1000.0, 700.0)).with_max_steps(64).build_eframe(move |_| app);
+    println!("driver=production_eframe_shared_host");
     let start = Instant::now();
     h.run_steps(2);
     println!("24MP isolated_first_preview_ms={:.2}", start.elapsed().as_secs_f64() * 1000.0);
     if let Some(t) = &mut h.state_mut().ui.transform {
-        t.quad = t.quad.map(|[x, y]| [x + 20.0, y]);
+        let before = *t.session.state();
+        let mut after = before;
+        after.quad = after.quad.map(|p| craft::behavior::kurbo::Point::new(p.x + 20.0, p.y));
+        t.session.apply(
+            craft::draw::ui::transform::TransformEdit::Box(craft::behavior::EditEvent::set(
+                craft::behavior::Mixed::Same(before),
+                after,
+                "Benchmark drag".into(),
+                None,
+            )),
+            0.0,
+        );
     }
     let start = Instant::now();
     h.run_steps(1);

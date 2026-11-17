@@ -10,13 +10,16 @@ use photocraft_engine::channel_cmds::ChannelView;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
-use crate::state::TransformSession;
+mod geometry;
+pub(crate) use geometry::Geometry;
+#[cfg(test)]
+pub(crate) use geometry::edit;
 
 pub(crate) struct Preview {
     base: Arc<Document>,
     native: Arc<Document>,
     affine_bounds: Option<(Value, photocraft_engine::channel_transform::AffinePreviewBounds)>,
-    checked: Option<(TransformSession, u64, Result<(), String>)>,
+    checked: Option<(Geometry, u64, Result<(), String>)>,
     layer: Option<LayerId>,
     background: [f32; 4],
     factor: u32,
@@ -30,7 +33,7 @@ pub(crate) struct Preview {
     gpu_attempted: bool,
     /// GPU-only frames don't resample `shown`. Replay this geometry once if native
     /// preflight later refuses a drag, so CPU fallback retains the last visible placement.
-    gpu_geometry: Option<TransformSession>,
+    gpu_geometry: Option<Geometry>,
     retry_after: f64,
 }
 
@@ -86,7 +89,7 @@ impl Preview {
         }
     }
 
-    fn check_native(&mut self, t: &TransformSession) -> Result<(), String> {
+    fn check_native(&mut self, t: &Geometry) -> Result<(), String> {
         for doc in [&self.native, &self.base, &self.shown] {
             if let Err(error) = doc.scratch_health() {
                 let now = crate::gpu_canvas::now_ms();
@@ -121,7 +124,7 @@ impl Preview {
         result
     }
 
-    fn check_affine(&mut self, t: &TransformSession, params: &Value) -> photocraft_engine::Result<()> {
+    fn check_affine(&mut self, t: &Geometry, params: &Value) -> photocraft_engine::Result<()> {
         if self.affine_bounds.as_ref().is_none_or(|(old, _)| old != params) {
             let bounds = photocraft_engine::channel_transform::AffinePreviewBounds::new(self.native.clone(), self.layer, params, self.background)?;
             self.affine_bounds = Some((params.clone(), bounds));
@@ -135,7 +138,7 @@ impl Preview {
     }
 
     /// Resample only when geometry changes; cache deterministic geometry failures as well.
-    fn update(&mut self, t: &TransformSession) -> Result<(), String> {
+    fn update(&mut self, t: &Geometry) -> Result<(), String> {
         let k = f64::from(self.factor);
         let mut params = json!({"target": t.target, "rect": t.rect.map(|v| v / k), "interpolation": t.interpolation});
         if let Some(layer) = self.layer {
@@ -278,6 +281,24 @@ fn limit_image(image: ColorImage, max_side: usize) -> ColorImage {
     ColorImage::new(size, pixels)
 }
 
+/// Paints the cached composited preview through the shared canvas placement, including view rotation and aspect.
+pub(crate) fn paint(texture: egui::TextureId, size: [u32; 2]) -> craft::ui::canvas::AppPaint<'static, craft::behavior::CanvasView> {
+    craft::ui::canvas::AppPaint::new(move |painter, view: craft::behavior::CanvasView| {
+        let mut mesh = egui::Mesh::with_texture(texture);
+        for ([x, y], uv) in
+            [([0.0, 0.0], [0.0, 0.0]), ([size[0] as f64, 0.0], [1.0, 0.0]), ([size[0] as f64, size[1] as f64], [1.0, 1.0]), ([0.0, size[1] as f64], [0.0, 1.0])]
+        {
+            mesh.vertices.push(egui::epaint::Vertex {
+                pos: view.to_screen(craft::behavior::kurbo::Point::new(x, y)),
+                uv: egui::pos2(uv[0], uv[1]),
+                color: Color32::WHITE,
+            });
+        }
+        mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
+        painter.painter.add(egui::Shape::mesh(mesh));
+    })
+}
+
 /// Free device-owned captures on fallback or renderer replacement. The immutable source and
 /// CPU textures stay valid, so the transform can continue and recapture on a recovered GPU.
 pub(crate) fn release_gpu(app: &mut PhotocraftApp) {
@@ -289,11 +310,14 @@ pub(crate) fn release_gpu(app: &mut PhotocraftApp) {
 
 /// Current preview texture: the eyes affect rendering only, never the captured source or target.
 pub(crate) fn texture(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, output: Option<u32>) -> Option<egui::TextureId> {
-    if app.session.active_index() != Some(idx) {
+    // Ordinary layer transforms have no native capture. Keep their frames out of the
+    // display-profile lookup and Warp snapshot copy below.
+    if app.session.active_index() != Some(idx) || app.transform_preview.as_ref().is_none_or(|pv| pv.channel.is_none()) {
         return None;
     }
     let (display, display_key) = crate::canvas::canvas_display(app, &app.session.documents().get(idx)?.doc, output);
-    let t = app.ui.transform.as_ref()?;
+    let geometry = Geometry::of(app.ui.transform.as_ref()?);
+    let t = &geometry;
     let pv = app.transform_preview.as_mut()?;
     let preview = pv.channel.as_mut()?;
     let st = app.session.documents().get(idx)?;
@@ -448,7 +472,7 @@ mod tests {
                     crate::channel_transform_gpu::test_wait(&rs, || crate::channel_transform_gpu::Preview::new(&gpu, doc, st.active_layer, [1.0; 4])).unwrap();
                 for interpolation in ["bilinear", "bicubic"] {
                     for perspective in [false, true] {
-                        let mut t = a.ui.transform.clone().unwrap();
+                        let mut t = crate::channel_transform_preview::Geometry::of(a.ui.transform.as_ref().unwrap());
                         t.interpolation = interpolation.into();
                         t.quad = t.quad.map(|[x, y]| [250.0 + (x - 250.0) * 16.0, y]);
                         if perspective {
@@ -538,7 +562,7 @@ mod tests {
                         crate::channel_transform_gpu::test_wait(&rs, || crate::channel_transform_gpu::Preview::new(&gpu, doc, st.active_layer, fill)).unwrap();
                     for interpolation in ["bilinear", "bicubic"] {
                         for geometry in 0..10 {
-                            let mut t = a.ui.transform.clone().unwrap();
+                            let mut t = crate::channel_transform_preview::Geometry::of(a.ui.transform.as_ref().unwrap());
                             t.interpolation = interpolation.into();
                             let factor = if geometry == 4 { 3 } else { 1 };
                             match geometry {
@@ -627,9 +651,9 @@ mod tests {
                     doc.selection = Some(sel);
                 }
                 let mut session = Session::new();
-                session.tools.background = [0.0, 0.0, 0.0, 1.0];
                 session.add_document(doc, None);
                 let mut a = PhotocraftApp::new(session, crate::Services::default());
+                a.session.tools.background = [0.0, 0.0, 0.0, 1.0];
                 a.run("channel.target", json!({"channel":"red"})).unwrap();
                 a.run("channel.setVisible", json!({"channel":"composite","visible":true})).unwrap();
                 crate::transform_tool::begin(&mut a, &egui::Context::default()).unwrap();
@@ -641,7 +665,7 @@ mod tests {
                 for factor in [1, 2] {
                     for offset in [0.0, 0.125] {
                         for interpolation in ["bilinear", "bicubic"] {
-                            let mut t = a.ui.transform.clone().unwrap();
+                            let mut t = crate::channel_transform_preview::Geometry::of(a.ui.transform.as_ref().unwrap());
                             let k = f64::from(factor);
                             // The 3 px source becomes a 90 px band with a 30 px sag. A grid sized
                             // only by the source has one cell across and loses the entire curve.
@@ -748,7 +772,7 @@ mod tests {
                 let fill = [0.15, 0.35, 0.65, 1.0];
                 let mut fast = crate::channel_transform_gpu::test_wait(&rs, || crate::channel_transform_gpu::Preview::new(&gpu, &doc, layer, fill))
                     .expect("GPU colour fast path");
-                let initial = a.ui.transform.clone().unwrap();
+                let initial = crate::channel_transform_preview::Geometry::of(a.ui.transform.as_ref().unwrap());
                 for (geometry, interpolation) in (0..9).flat_map(|g| ["nearest", "bilinear", "bicubic"].map(|i| (g, i))) {
                     for component in 1u32..8 {
                         let mut t = initial.clone();
@@ -902,8 +926,9 @@ mod tests {
         a.run("channel.setVisible", json!({"channel":"composite","visible":true})).unwrap();
         let ctx = egui::Context::default();
         crate::transform_tool::begin(&mut a, &ctx).unwrap();
-        let t = a.ui.transform.as_mut().unwrap();
-        t.quad = t.quad.map(|[x, y]| [x + 3.0, y]);
+        crate::channel_transform_preview::edit(&mut a, |t| {
+            t.quad = t.quad.map(|[x, y]| [x + 3.0, y]);
+        });
         let (document, view, transform) = (a.session.active().unwrap().doc.clone(), a.session.active().unwrap().channel_view.clone(), a.ui.transform.clone());
         let original = crate::channel_transform_gpu::test_wait(&rs, || texture(&mut a, &ctx, 0, None)).unwrap();
         let pixels = a.transform_preview.as_ref().unwrap().channel.as_ref().unwrap().gpu.as_ref().unwrap().readback();
@@ -984,8 +1009,9 @@ mod tests {
         assert!(idle.set.is_empty(), "steady previews need no new upload");
         idle.clear();
 
-        let transform = a.ui.transform.as_mut().unwrap();
-        transform.quad = transform.quad.map(|[x, y]| [x + 2.0, y]);
+        crate::channel_transform_preview::edit(&mut a, |transform| {
+            transform.quad = transform.quad.map(|[x, y]| [x + 2.0, y]);
+        });
         assert_eq!(texture(&mut a, &ctx, 0, Some(1)), Some(tex_a));
         assert_eq!(texture(&mut a, &ctx, 0, Some(4)), Some(tex_b));
         let mut changed = ctx.tex_manager().write().take_delta();
@@ -1050,7 +1076,7 @@ mod tests {
     #[test]
     fn linear_solo_channel_preview_keeps_dark_detail() {
         let mut doc = Document::with_background("linear shadow", Size::new(4, 4), ColorMode::Rgb, SampleType::F32, Color::rgb(0.001, 0.002, 0.003));
-        doc.icc_profile = Some(craft_cms::Builtin::LinearSrgb.profile().to_bytes());
+        doc.icc_profile = Some(craft::cms::Builtin::LinearSrgb.profile().to_bytes());
         let mut session = Session::new();
         session.add_document(doc, None);
         let mut a = PhotocraftApp::new(session, crate::Services::default());
@@ -1086,7 +1112,7 @@ mod tests {
         let gpu = crate::gpu_canvas::GpuCanvas::new(&rs);
         for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
             let mut doc = gpu_oracle_document(depth, 0);
-            doc.icc_profile = Some(craft_cms::Builtin::LinearSrgb.profile().to_bytes());
+            doc.icc_profile = Some(craft::cms::Builtin::LinearSrgb.profile().to_bytes());
             let mut a = app();
             a.session.add_document(doc, None);
             a.run("channel.target", json!({"channel":"green"})).unwrap();
@@ -1100,7 +1126,7 @@ mod tests {
             let mut gpu_preview =
                 crate::channel_transform_gpu::test_wait(&rs, || crate::channel_transform_gpu::Preview::new(&gpu, &doc, layer, [1.0; 4])).unwrap();
             for warp in [false, true] {
-                let mut t = a.ui.transform.clone().unwrap();
+                let mut t = crate::channel_transform_preview::Geometry::of(a.ui.transform.as_ref().unwrap());
                 t.interpolation = "bilinear".into();
                 if warp {
                     t.warp = Some(Warp::custom(BezierMesh::identity(t.rect, 1, 1).map_points(|p| [p[0] + 2.0, p[1]]), t.rect));
@@ -1165,7 +1191,7 @@ mod tests {
             let doc = st.doc.clone();
             let layer = st.active_layer;
             let view = st.channel_view.clone();
-            let mut t = a.ui.transform.clone().unwrap();
+            let mut t = crate::channel_transform_preview::Geometry::of(a.ui.transform.as_ref().unwrap());
             // Nearest already falls back for projective maps, independently of the horizon.
             t.interpolation = "bilinear".into();
             t.rect = [2.0, 2.0, 10.0, 10.0];
@@ -1188,7 +1214,8 @@ mod tests {
             a.run("channel.new", json!({"name":"saved"})).unwrap();
             a.run("channel.target", json!({"channel":"saved"})).unwrap();
             let text = a.run("type.create", json!({"text":"I","size":10,"x":5,"y":16})).unwrap()["layer"].as_u64().unwrap();
-            crate::type_tool::edit_active(&mut a).unwrap();
+            let ctx = a.ctx().clone();
+            crate::type_tool::edit_active(&mut a, &ctx).unwrap();
             let ed = a.ui.text_edit.as_mut().unwrap();
             ed.mask = true;
             ed.created = true;
@@ -1210,7 +1237,7 @@ mod tests {
                 let preview = a.transform_preview.as_ref().unwrap();
                 assert!(Arc::ptr_eq(&preview.doc, doc));
                 let b = doc.selection.as_ref().unwrap().content_bounds();
-                assert_eq!(a.ui.transform.as_ref().unwrap().rect, [b.x0, b.y0, b.x1, b.y1].map(f64::from));
+                assert_eq!(a.ui.transform.as_ref().unwrap().rect_array(), [b.x0, b.y0, b.x1, b.y1].map(f64::from));
             }
         }
     }
@@ -1222,7 +1249,7 @@ mod tests {
         crate::transform_tool::begin(&mut a, &egui::Context::default()).unwrap();
         let st = a.session.active().unwrap();
         let mut preview = Preview::new(&st.doc, st.active_layer, [1.0; 4], false).unwrap();
-        let mut t = a.ui.transform.clone().unwrap();
+        let mut t = crate::channel_transform_preview::Geometry::of(a.ui.transform.as_ref().unwrap());
         let valid = t.clone();
         let [x0, y0, x1, y1] = t.rect;
         let (w, h) = (x1 - x0, y1 - y0);
@@ -1264,8 +1291,9 @@ mod tests {
         a.run("channel.target", json!({"channel":"green"})).unwrap();
         let ctx = egui::Context::default();
         crate::transform_tool::begin(&mut a, &ctx).unwrap();
-        let t = a.ui.transform.as_mut().unwrap();
-        t.quad = t.quad.map(|[x, y]| [x + 3.0, y + 2.0]);
+        crate::channel_transform_preview::edit(&mut a, |t| {
+            t.quad = t.quad.map(|[x, y]| [x + 3.0, y + 2.0]);
+        });
         let captured = a.ui.transform.clone();
         let before = a.session.active().unwrap().doc.clone();
         let history = a.session.active().unwrap().history.past_len();
@@ -1306,12 +1334,14 @@ mod tests {
             crate::transform_tool::begin(&mut a, &ctx).unwrap();
             assert_eq!(a.ui.transform.as_ref().unwrap().target, Some(json!({"color":1})));
             assert_eq!(a.session.active().unwrap().channel_view, view);
-            let t = a.ui.transform.as_mut().unwrap();
-            t.quad = t.quad.map(|[x, y]| [x + 3.0, y]);
+            let mut t = crate::channel_transform_preview::edit(&mut a, |t| {
+                t.quad = t.quad.map(|[x, y]| [x + 3.0, y]);
+            });
             if warp {
                 t.warp = Some(Warp::custom(BezierMesh::identity(t.rect, 1, 1).map_points(|p| [p[0] + 3.0, p[1]]), t.rect));
             }
-            let t = a.ui.transform.clone().unwrap();
+            crate::channel_transform_preview::edit(&mut a, |state| *state = t.clone());
+            let t = crate::channel_transform_preview::Geometry::of(a.ui.transform.as_ref().unwrap());
             let pv = a.transform_preview.as_mut().unwrap().channel.as_mut().unwrap();
             pv.update(&t).unwrap();
             let shown = pv.shown.clone();
@@ -1362,7 +1392,7 @@ mod tests {
             crate::transform_tool::enter_warp(&mut a, &ctx);
             let captured = a.ui.transform.as_ref().unwrap().target.clone();
             crate::transform_tool::edit_session_warp(&mut a, "edit.transform.warpGrid", &json!({"size":3})).unwrap();
-            assert_eq!(a.ui.transform.as_ref().unwrap().warp.as_ref().unwrap().mesh.as_ref().unwrap().us.len(), 4);
+            assert_eq!(a.ui.transform.as_ref().unwrap().session.warp().unwrap().warp.mesh.as_ref().unwrap().us.len(), 4);
             for id in [
                 "edit.transform.splitWarpCrosswise",
                 "edit.transform.splitWarpHorizontally",
@@ -1385,7 +1415,7 @@ mod tests {
             let mut session = Session::new();
             let mut doc = Document::with_background("CMYK preview", Size::new(32, 24), ColorMode::Cmyk, SampleType::F32, Color::WHITE);
             doc.icc_profile = Some(
-                craft_cms::synth::cmyk_profile(&craft_cms::synth::CmykParams {
+                craft::cms::synth::cmyk_profile(&craft::cms::synth::CmykParams {
                     description: "Preview Uncoated".into(),
                     tvi: [0.26, 0.26, 0.26, 0.3],
                     grid_a2b: 5,
@@ -1403,14 +1433,18 @@ mod tests {
                 photocraft_color::convert::with_cmyk_space(Some(&space), || photocraft_raster::from_rgba(&doc.pixel_format(), session.tools.background))[1];
             session.add_document(doc, None);
             let mut a = PhotocraftApp::new(session, crate::Services::default());
+            // App startup restores the remembered swatches; choose the fixture colour afterward.
+            a.run("tools.setColors", json!({"background":[0.8,0.2,0.4,1.0]})).unwrap();
             a.run("channel.target", json!({"channel":{"color":1}})).unwrap();
             crate::transform_tool::begin(&mut a, &egui::Context::default()).unwrap();
-            let t = a.ui.transform.as_mut().unwrap();
-            t.quad = t.quad.map(|[x, y]| [x + 3.0, y]);
+            let mut t = crate::channel_transform_preview::edit(&mut a, |t| {
+                t.quad = t.quad.map(|[x, y]| [x + 3.0, y]);
+            });
             if warp {
                 t.warp = Some(Warp::custom(BezierMesh::identity(t.rect, 1, 1).map_points(|p| [p[0] + 3.0, p[1]]), t.rect));
             }
-            let t = a.ui.transform.clone().unwrap();
+            crate::channel_transform_preview::edit(&mut a, |state| *state = t.clone());
+            let t = crate::channel_transform_preview::Geometry::of(a.ui.transform.as_ref().unwrap());
             let pv = a.transform_preview.as_mut().unwrap().channel.as_mut().unwrap();
             pv.update(&t).unwrap();
             let shown = pv.shown.clone();
@@ -1431,9 +1465,10 @@ mod tests {
         a.run("channel.target", json!({"channel":"green"})).unwrap();
         a.run("select.rect", json!({"x":101,"y":101,"width":100,"height":100})).unwrap();
         crate::transform_tool::begin(&mut a, &egui::Context::default()).unwrap();
-        let t = a.ui.transform.as_mut().unwrap();
-        t.warp = Some(Warp::custom(BezierMesh::identity(t.rect, 1, 1).map_points(|p| [p[0] + 4.0, p[1]]), t.rect));
-        let t = a.ui.transform.clone().unwrap();
+        crate::channel_transform_preview::edit(&mut a, |t| {
+            t.warp = Some(Warp::custom(BezierMesh::identity(t.rect, 1, 1).map_points(|p| [p[0] + 4.0, p[1]]), t.rect));
+        });
+        let t = crate::channel_transform_preview::Geometry::of(a.ui.transform.as_ref().unwrap());
         let pv = a.transform_preview.as_mut().unwrap().channel.as_mut().unwrap();
         assert_eq!(pv.factor, 2);
         pv.update(&t).unwrap();
@@ -1495,13 +1530,15 @@ mod tests {
                         let eyes = a.session.active().unwrap().channel_view.clone();
                         crate::transform_tool::begin(&mut a, &egui::Context::default()).unwrap();
                         assert_eq!(a.session.active().unwrap().channel_view, eyes);
-                        let t = a.ui.transform.as_mut().unwrap();
-                        assert_eq!(t.target, Some(json!("quickMask")));
-                        t.quad = t.quad.map(|[x, y]| [x + 40.0, y + 24.0]);
+                        let mut t = crate::channel_transform_preview::edit(&mut a, |t| {
+                            assert_eq!(t.target, Some(json!("quickMask")));
+                            t.quad = t.quad.map(|[x, y]| [x + 40.0, y + 24.0]);
+                        });
                         if warp {
                             t.warp = Some(Warp::custom(BezierMesh::identity(t.rect, 1, 1).map_points(|p| [p[0] + 40.0, p[1] + 24.0]), t.rect));
                         }
-                        let t = a.ui.transform.clone().unwrap();
+                        crate::channel_transform_preview::edit(&mut a, |state| *state = t.clone());
+                        let t = crate::channel_transform_preview::Geometry::of(a.ui.transform.as_ref().unwrap());
                         let pv = a.transform_preview.as_mut().unwrap().channel.as_mut().unwrap();
                         assert_eq!(pv.factor, factor);
                         pv.update(&t).unwrap();
@@ -1602,12 +1639,14 @@ mod tests {
         let history = a.session.active().unwrap().history.past_len();
         crate::transform_tool::begin(&mut a, &egui::Context::default()).unwrap();
         assert_eq!(a.session.active().unwrap().channel_view, view, "start preserves every eye");
-        let t = a.ui.transform.as_mut().unwrap();
-        t.quad = t.quad.map(|[x, y]| [x + 3.0, y]);
+        let mut t = crate::channel_transform_preview::edit(&mut a, |t| {
+            t.quad = t.quad.map(|[x, y]| [x + 3.0, y]);
+        });
         if warp {
             t.warp = Some(Warp::custom(BezierMesh::identity(t.rect, 1, 1).map_points(|p| [p[0] + 3.0, p[1]]), t.rect));
         }
-        let t = a.ui.transform.clone().unwrap();
+        crate::channel_transform_preview::edit(&mut a, |state| *state = t.clone());
+        let t = crate::channel_transform_preview::Geometry::of(a.ui.transform.as_ref().unwrap());
         let pv = a.transform_preview.as_mut().unwrap().channel.as_mut().unwrap();
         pv.update(&t).unwrap();
         let shown = pv.shown.clone();
@@ -1621,11 +1660,11 @@ mod tests {
             ("history.selectState", json!({"state":0})),
         ] {
             assert!(a.run(cmd, p).is_err(), "{cmd}");
-            assert_eq!(a.ui.transform.as_ref().unwrap().quad, t.quad);
+            assert_eq!(a.ui.transform.as_ref().unwrap().quad_array(), t.quad);
         }
         let ctx = egui::Context::default();
         let (req, _) = crate::control::ControlRequest::new("ui.set", json!({"maskTarget":true}));
-        let crate::control::Outcome::Done(reply) = crate::control::handle(&mut a, &ctx, &req) else { panic!("immediate reply") };
+        let crate::control::Reply::Done(reply) = crate::control::handle(&mut a, &ctx, &req) else { panic!("immediate reply") };
         assert_eq!(reply["ok"], false);
         a.run("channel.setVisible", json!({"channel":"red","visible":false})).unwrap();
         assert!(a.ui.transform.is_some(), "hiding target keeps handles active");
@@ -1691,12 +1730,16 @@ mod tests {
         let ctx = egui::Context::default();
         a.run("channel.target", json!({"channel":"green"})).unwrap();
         crate::transform_tool::begin(&mut a, &ctx).unwrap();
-        let valid = a.ui.transform.as_ref().unwrap().quad.map(|[x, y]| [x + 3.0, y]);
-        a.ui.transform.as_mut().unwrap().quad = valid;
+        let valid = a.ui.transform.as_ref().unwrap().quad_array().map(|[x, y]| [x + 3.0, y]);
+        crate::channel_transform_preview::edit(&mut a, |t| {
+            t.quad = valid;
+        });
         let cpu = texture(&mut a, &ctx, 0, None).unwrap();
         uploaded_preview_pixels(&ctx, cpu);
         let last_valid = a.transform_preview.as_ref().unwrap().channel.as_ref().unwrap().shown.clone();
-        a.ui.transform.as_mut().unwrap().quad = [[0.0, 0.0], [20000.0, 0.0], [20000.0, 15000.0], [0.0, 15000.0]];
+        crate::channel_transform_preview::edit(&mut a, |t| {
+            t.quad = [[0.0, 0.0], [20000.0, 0.0], [20000.0, 15000.0], [0.0, 15000.0]];
+        });
         assert_eq!(texture(&mut a, &ctx, 0, None), Some(cpu));
         uploaded_preview_pixels(&ctx, cpu);
         assert!(a.ui.status_error);
@@ -1707,7 +1750,9 @@ mod tests {
         assert!(Arc::ptr_eq(&last_valid, &a.transform_preview.as_ref().unwrap().channel.as_ref().unwrap().shown));
         assert!(a.ui.status_error);
         assert_eq!(a.ui.status, message);
-        a.ui.transform.as_mut().unwrap().quad = valid;
+        crate::channel_transform_preview::edit(&mut a, |t| {
+            t.quad = valid;
+        });
         crate::channel_transform_gpu::test_wait(&rs, || texture(&mut a, &ctx, 0, None)).unwrap();
         assert!(!a.ui.status_error, "a valid resample really clears the owned error");
         let mut delta = ctx.tex_manager().write().take_delta();
@@ -1720,16 +1765,20 @@ mod tests {
         let ctx = egui::Context::default();
         a.run("channel.target", json!({"channel":"green"})).unwrap();
         crate::transform_tool::begin(&mut a, &ctx).unwrap();
-        let good = a.ui.transform.as_ref().unwrap().quad.map(|[x, y]| [x + 2.0, y]);
+        let good = a.ui.transform.as_ref().unwrap().quad_array().map(|[x, y]| [x + 2.0, y]);
         for unrelated in [false, true] {
-            a.ui.transform.as_mut().unwrap().quad = [[0.0; 2]; 4];
+            crate::channel_transform_preview::edit(&mut a, |t| {
+                t.quad = [[0.0; 2]; 4];
+            });
             let id = texture(&mut a, &ctx, 0, None).unwrap();
             uploaded_preview_pixels(&ctx, id);
             assert!(a.ui.status_error);
             if unrelated {
                 a.ui.status = "another command failed".into();
             }
-            a.ui.transform.as_mut().unwrap().quad = good;
+            crate::channel_transform_preview::edit(&mut a, |t| {
+                t.quad = good;
+            });
             texture(&mut a, &ctx, 0, None).unwrap();
             uploaded_preview_pixels(&ctx, id);
             assert_eq!(a.ui.status_error, unrelated);
@@ -1752,7 +1801,9 @@ mod tests {
         a.run("channel.setVisible", json!({"channel":"composite","visible":true})).unwrap();
         let ctx = egui::Context::default();
         crate::transform_tool::begin(&mut a, &ctx).unwrap();
-        a.ui.transform.as_mut().unwrap().quad = a.ui.transform.as_ref().unwrap().quad.map(|[x, y]| [x + 2.0, y]);
+        crate::channel_transform_preview::edit(&mut a, |t| {
+            t.quad = t.quad.map(|[x, y]| [x + 2.0, y]);
+        });
         let id = texture(&mut a, &ctx, 0, None).unwrap();
         let actual = uploaded_preview_pixels(&ctx, id).unwrap();
         let st = a.session.active().unwrap();
@@ -1804,7 +1855,7 @@ mod tests {
                     a.session.add_document(doc.clone(), None);
                     a.run("channel.target", json!({"colors":colors.indices().collect::<Vec<_>>()})).unwrap();
                     crate::transform_tool::begin(&mut a, &egui::Context::default()).unwrap();
-                    let initial = a.ui.transform.clone().unwrap();
+                    let initial = crate::channel_transform_preview::Geometry::of(a.ui.transform.as_ref().unwrap());
                     for (dx, dy) in [(1, 0), (0, 1), (-1, -3), (3, 2)] {
                         let mut expected = doc.clone();
                         photocraft_engine::channel_cmds::move_color_channels(&mut expected, id, colors, dx, dy, background).unwrap();
@@ -1858,16 +1909,18 @@ mod tests {
         let history = a.session.active().unwrap().history.past_len();
         let ctx = egui::Context::default();
         crate::transform_tool::begin(&mut a, &ctx).unwrap();
-        let t = a.ui.transform.as_mut().unwrap();
-        t.quad = t.quad.map(|[x, y]| [x + 3.0, y]);
+        crate::channel_transform_preview::edit(&mut a, |t| {
+            t.quad = t.quad.map(|[x, y]| [x + 3.0, y]);
+        });
         let id = texture(&mut a, &ctx, 0, None).unwrap();
         let original = uploaded_preview_pixels(&ctx, id).unwrap();
         assert!(original.iter().any(|p| *p != Color32::WHITE));
         let shown = a.transform_preview.as_ref().unwrap().channel.as_ref().unwrap().shown.clone();
-        let t = a.ui.transform.as_mut().unwrap();
-        let [x0, y0, x1, y1] = t.rect;
-        let (w, h) = (x1 - x0, y1 - y0);
-        t.quad = if horizon { [[x0, y0], [x0 + 3.0 * w, y0], [x0 + 0.6 * w, y0 + 0.6 * h], [x0, y0 + 3.0 * h]] } else { [[0.0; 2]; 4] };
+        edit(&mut a, |t| {
+            let [x0, y0, x1, y1] = t.rect;
+            let (w, h) = (x1 - x0, y1 - y0);
+            t.quad = if horizon { [[x0, y0], [x0 + 3.0 * w, y0], [x0 + 0.6 * w, y0 + 0.6 * h], [x0, y0 + 3.0 * h]] } else { [[0.0; 2]; 4] };
+        });
         let geometry = a.ui.transform.clone();
         crate::transform_tool::commit(&mut a);
         assert!(a.ui.status_error);
@@ -1929,17 +1982,20 @@ mod tests {
         let before = a.session.active().unwrap().doc.clone();
         let ctx = egui::Context::default();
         crate::transform_tool::begin(&mut a, &ctx).unwrap();
-        a.ui.transform.as_mut().unwrap().quad = [[0.0; 2]; 4];
+        crate::channel_transform_preview::edit(&mut a, |t| {
+            t.quad = [[0.0; 2]; 4];
+        });
         a.session.tools.background = [0.25, 0.5, 0.75, 1.0];
         crate::transform_tool::commit(&mut a);
         assert!(a.ui.status_error);
         assert!(a.session.active().unwrap().channel_transform.is_some());
-        assert_eq!(a.ui.transform.as_ref().unwrap().quad, [[0.0; 2]; 4]);
+        assert_eq!(a.ui.transform.as_ref().unwrap().quad_array(), [[0.0; 2]; 4]);
         assert!(a.run("channel.target", json!({"channel":"blue"})).is_err());
         assert!(Arc::ptr_eq(&before, &a.session.active().unwrap().doc));
         assert_eq!(a.session.tools.background, [0.25, 0.5, 0.75, 1.0]);
-        let t = a.ui.transform.as_mut().unwrap();
-        t.quad = crate::transform_tool::corners(t.rect).map(|[x, y]| [x + 1.0, y]);
+        crate::channel_transform_preview::edit(&mut a, |t| {
+            t.quad = crate::transform_tool::corners(t.rect).map(|[x, y]| [x + 1.0, y]);
+        });
         crate::transform_tool::commit(&mut a);
         assert!(a.ui.transform.is_none());
         assert!(a.session.active().unwrap().channel_transform.is_none());
@@ -1969,12 +2025,12 @@ mod tests {
         let ctx = egui::Context::default();
         crate::transform_tool::begin(&mut a, &ctx).unwrap();
         crate::transform_tool::enter_warp(&mut a, &ctx);
-        let t = a.ui.transform.clone().unwrap();
+        let t = crate::channel_transform_preview::Geometry::of(a.ui.transform.as_ref().unwrap());
         a.run("view.layerMask", json!({"mode":"off"})).unwrap();
         a.sync_mask_targets();
         assert!(a.ui.mask_target);
         assert_eq!(a.ui.transform.as_ref().unwrap().target, t.target);
-        assert!(a.ui.transform.as_ref().unwrap().warp.is_some());
+        assert!(a.ui.transform.as_ref().unwrap().session.warp().is_some());
         a.run("view.layerMask", json!({"mode":"overlay"})).unwrap();
         crate::transform_tool::cancel(&mut a);
         assert!(photocraft_engine::mask_view_cmds::current(a.session.active().unwrap()).is_some());
@@ -1992,7 +2048,7 @@ mod tests {
             a.run("view.layerMask", json!({"mode":"gray"})).unwrap();
             let ctx = egui::Context::default();
             crate::transform_tool::begin(&mut a, &ctx).unwrap();
-            let t = a.ui.transform.clone().unwrap();
+            let t = crate::channel_transform_preview::Geometry::of(a.ui.transform.as_ref().unwrap());
             let before = a.session.active().unwrap().doc.clone();
             let eyes = a.session.active().unwrap().channel_view.clone();
             assert!(a.run("channel.setVisible", json!({"channel":"mask","visible":true})).is_err());

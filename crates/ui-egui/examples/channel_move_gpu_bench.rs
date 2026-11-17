@@ -2,6 +2,7 @@
 //! cargo run --release -p photocraft-ui-egui --example channel_move_gpu_bench
 //! Add --cpu for the exact CPU fallback, or --save /tmp/move-preview for screenshots.
 //! Add --step 21 to exercise offsets between reduced-preview samples.
+//! Uses the production eframe/shared-input host and verifies the release against the engine oracle.
 
 use std::time::Instant;
 
@@ -15,10 +16,21 @@ use serde_json::json;
 fn pointer(app: &mut PhotocraftApp, ctx: &egui::Context, kind: &str, x: f64, y: f64) -> Result<(), String> {
     let (request, _) = control::ControlRequest::new("ui.pointer", json!({"tool":"Move", "events":[{"kind":kind,"x":x,"y":y}]}));
     match control::handle(app, ctx, &request) {
-        control::Outcome::Done(value) if value["ok"] == true => Ok(()),
-        control::Outcome::Done(value) => Err(format!("Move {kind} failed: {value}")),
+        control::Reply::Done(value) if value["ok"] == true => Ok(()),
+        control::Reply::Done(value) => Err(format!("Move {kind} failed: {value}")),
         _ => Err(format!("Move {kind} did not complete synchronously")),
     }
+}
+
+/// A control event queues input on the shared host; drain it through the production app frame.
+fn deliver(h: &mut egui_kittest::Harness<'static, PhotocraftApp>) -> Result<(), String> {
+    for _ in 0..64 {
+        h.run_steps(1);
+        if craft::ui::runtime::windows::WindowHost::of(&h.ctx).injected_idle() {
+            return Ok(());
+        }
+    }
+    Err("the Move benchmark input was not delivered in 64 frames".into())
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -61,33 +73,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !cpu {
         app.set_wgpu(rs.clone());
     }
+    let ctx = app.ctx().clone();
     let mut h = egui_kittest::Harness::builder()
+        .with_context(ctx)
         .with_size(egui::vec2(1000.0, 700.0))
+        .with_max_steps(64)
         .renderer(egui_kittest::wgpu::WgpuTestRenderer::from_render_state(rs))
-        .build_ui_state(
-            |ui, app: &mut PhotocraftApp| {
-                if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                    return;
-                }
-                egui::CentralPanel::default().show(ui, |ui| photocraft_ui_egui::canvas::document_area(app, ui));
-            },
-            app,
-        );
-    PhotocraftApp::setup_context(&h.ctx, Default::default());
-    h.run_steps(2);
+        .build_eframe(move |cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            app
+        });
+    h.run_steps(8);
     let _ = h.render()?;
     let ctx = h.ctx.clone();
+    let source = h.state().session.active().ok_or("no benchmark document")?.doc.clone();
+    let layer = h.state().session.active().and_then(|st| st.active_layer).ok_or("no benchmark layer")?;
+    // Start beyond the real pointer slop; subsequent samples can be one document pixel apart.
+    let cold_offset = stride.max(100);
     pointer(h.state_mut(), &ctx, "down", 3000.0, 2000.0)?;
-    pointer(h.state_mut(), &ctx, "move", 3000.0 + f64::from(stride), 2000.0)?;
+    pointer(h.state_mut(), &ctx, "move", 3000.0 + f64::from(cold_offset), 2000.0)?;
     let cold = Instant::now();
-    h.run_steps(1);
+    deliver(&mut h)?;
     let _ = h.render()?;
     let cold_ms = cold.elapsed().as_secs_f64() * 1000.0;
     let mut frames = Vec::new();
     for step in 2..=10 {
-        pointer(h.state_mut(), &ctx, "move", 3000.0 + f64::from(step * stride), 2000.0)?;
+        pointer(h.state_mut(), &ctx, "move", 3000.0 + f64::from(cold_offset + (step - 1) * stride), 2000.0)?;
         let start = Instant::now();
-        h.run_steps(1);
+        deliver(&mut h)?;
         let image = h.render()?;
         frames.push(start.elapsed().as_secs_f64() * 1000.0);
         if step == 10
@@ -103,6 +116,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             image.save(format!("{path}-{mode}-{}.png", if cpu { "cpu" } else { "gpu" }))?;
         }
     }
-    println!("{}", json!({"cpu":cpu,"whole":whole,"set":set,"step":stride,"cold_ms":cold_ms,"completed_frame_ms":frames}));
+    if !std::sync::Arc::ptr_eq(&source, &h.state().session.active().ok_or("benchmark document closed")?.doc) {
+        return Err("the Move preview modified its source before release".into());
+    }
+    let last_offset = cold_offset + 9 * stride;
+    pointer(h.state_mut(), &ctx, "up", 3000.0 + f64::from(last_offset), 2000.0)?;
+    deliver(&mut h)?;
+    let mut oracle = Session::new();
+    oracle.tools.background = h.state().session.tools.background;
+    oracle.add_document((*source).clone(), None);
+    let target = if whole {
+        json!("pixels")
+    } else if set {
+        json!({"colors":[0,2]})
+    } else {
+        json!({"color":0})
+    };
+    oracle.execute("layer.translate", json!({"target":target,"dx":last_offset,"dy":0}))?;
+    let actual = h.state().session.active().and_then(|st| st.doc.layer(layer)).and_then(|l| l.surface());
+    let expected = oracle.active().and_then(|st| st.doc.layer(layer)).and_then(|l| l.surface());
+    if actual.is_none() || actual != expected {
+        return Err(format!("the delivered Move drag did not commit the expected {last_offset}-pixel offset").into());
+    }
+    println!(
+        "{}",
+        json!({"driver":"production_eframe_shared_host","cpu":cpu,"whole":whole,"set":set,"step":stride,"cold_offset":cold_offset,"cold_ms":cold_ms,"completed_frame_ms":frames,"commit_verified":true})
+    );
     Ok(())
 }

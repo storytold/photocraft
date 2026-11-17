@@ -476,3 +476,19 @@ See the [compact current report](benchmarks/channel-transforms.md) for the
 measured revisions, results, limitations and reproduction commands. Its linked
 archive preserves the full historical and intermediate data, including the
 unresolved two-channel software Warp slowdown and earlier CPU Warp observations.
+
+### Shared canvas integration (2026-11-17)
+
+Native channel and colour-set transforms use the shared Craft transform session for
+handles, Warp controls and box history. The captured native samples and target remain
+fixed while channel eyes recompose the preview. The shared selection overlay carries
+the outline, including wrapped Move selections and selections with an implicit full
+canvas default. Target locks also cover Layers-row side effects and deferred file drops.
+
+The interactive channel benchmark examples now drive the production eframe host, which
+delivers the shared canvas's command state and injected pointer events. Their output
+identifies this driver as `production_eframe_shared_host`. Compare these frame timings
+only with measurements made using the same driver; the historical canvas-only samples
+in the linked report measure a different amount of UI work. Move measurements verify
+the committed offset against the engine oracle, and transform measurements check that
+Warp stays active and previewing leaves the source document unchanged.

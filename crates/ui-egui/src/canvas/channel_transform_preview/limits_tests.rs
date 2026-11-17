@@ -69,17 +69,21 @@ fn reduced_gpu_preview_reports_native_reach_before_any_commit_and_recovers() {
         let ctx = egui::Context::default();
         crate::transform_tool::begin(&mut a, &ctx).unwrap();
         let layer = a.session.active().unwrap().active_layer;
-        a.transform_preview.as_mut().unwrap().channel = Some(Preview::new(&before, layer, a.session.tools.background, true).unwrap());
-        a.ui.transform.as_mut().unwrap().quad = a.ui.transform.as_ref().unwrap().quad.map(|[x, y]| [x + 16.0, y]);
-        let good = a.ui.transform.as_ref().unwrap().quad;
+        a.transform_preview.as_mut().unwrap().channel = Some(Box::new(Preview::new(&before, layer, a.session.tools.background, true).unwrap()));
+        crate::channel_transform_preview::edit(&mut a, |t| {
+            t.quad = t.quad.map(|[x, y]| [x + 16.0, y]);
+        });
+        let good = a.ui.transform.as_ref().unwrap().quad_array();
         assert!(a.transform_preview.as_ref().unwrap().channel.as_ref().unwrap().factor > 1);
         let gpu = crate::channel_transform_gpu::test_wait(&rs, || texture(&mut a, &ctx, index, None)).unwrap();
         assert!(a.transform_preview.as_ref().unwrap().channel.as_ref().unwrap().gpu.is_some());
         let old = a.transform_preview.as_ref().unwrap().channel.as_ref().unwrap().shown.clone();
         let mut expected = Preview::new(&before, layer, a.session.tools.background, true).unwrap();
-        expected.update(a.ui.transform.as_ref().unwrap()).unwrap();
+        expected.update(&crate::channel_transform_preview::Geometry::of(a.ui.transform.as_ref().unwrap())).unwrap();
         let offset = f64::from(photocraft_algo::transform::WARP_REACH) + 64.0;
-        a.ui.transform.as_mut().unwrap().quad = good.map(|[x, y]| [x + offset, y]);
+        crate::channel_transform_preview::edit(&mut a, |t| {
+            t.quad = good.map(|[x, y]| [x + offset, y]);
+        });
         let cpu = texture(&mut a, &ctx, index, None).unwrap();
         assert_ne!(cpu, gpu, "a first refused geometry never returns the GPU texture");
         assert!(a.ui.status_error && a.ui.status.contains("reach"), "{}", a.ui.status);
@@ -91,7 +95,9 @@ fn reduced_gpu_preview_reports_native_reach_before_any_commit_and_recovers() {
         assert_eq!(texture(&mut a, &ctx, index, None), Some(cpu));
         assert_eq!(a.ui.status, message);
         assert!(Arc::ptr_eq(&before, &a.session.active().unwrap().doc));
-        a.ui.transform.as_mut().unwrap().quad = good;
+        crate::channel_transform_preview::edit(&mut a, |t| {
+            t.quad = good;
+        });
         assert_eq!(crate::channel_transform_gpu::test_wait(&rs, || texture(&mut a, &ctx, index, None)), Some(gpu));
         assert!(!a.ui.status_error, "{}", a.ui.status);
         crate::transform_tool::cancel(&mut a);
@@ -131,8 +137,8 @@ fn reduced_mask_saved_channel_and_quick_mask_refuse_native_reach() {
         crate::transform_tool::begin(&mut a, &ctx).unwrap();
         let before = a.session.active().unwrap().doc.clone();
         let layer = a.session.active().unwrap().active_layer;
-        a.transform_preview.as_mut().unwrap().channel = Some(Preview::new(&before, layer, a.session.tools.background, true).unwrap());
-        let mut t = a.ui.transform.as_ref().unwrap().clone();
+        a.transform_preview.as_mut().unwrap().channel = Some(Box::new(Preview::new(&before, layer, a.session.tools.background, true).unwrap()));
+        let mut t = crate::channel_transform_preview::Geometry::of(a.ui.transform.as_ref().unwrap());
         assert_eq!(t.target, Some(target));
         let preview = a.transform_preview.as_mut().unwrap().channel.as_mut().unwrap();
         assert!(preview.factor > 1);
@@ -187,8 +193,9 @@ fn sparse_selected_scalar_channel_transform_uses_a_bounded_native_display() {
             let before = app.session.active().unwrap().doc.clone();
             let ctx = egui::Context::default();
             crate::transform_tool::begin(&mut app, &ctx).unwrap();
-            let t = app.ui.transform.as_mut().unwrap();
-            t.quad = t.quad.map(|[x, y]| [x + 2.0, y]);
+            crate::channel_transform_preview::edit(&mut app, |t| {
+                t.quad = t.quad.map(|[x, y]| [x + 2.0, y]);
+            });
             let index = app.session.active_index().unwrap();
             texture(&mut app, &ctx, index, None).unwrap();
             crate::transform_tool::enter_warp(&mut app, &ctx);

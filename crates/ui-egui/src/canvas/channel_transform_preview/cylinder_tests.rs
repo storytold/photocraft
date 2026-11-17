@@ -17,14 +17,15 @@ fn cylinder_proxy_preview_matches_native_commit() {
         doc.layers.push(layer);
         for target in [json!({"color": 0}), json!({"colors": [0, 2]})] {
             let mut session = Session::new();
-            session.tools.background = background;
             session.add_document(doc.clone(), None);
             let mut app = PhotocraftApp::new(session, crate::Services::default());
+            app.session.tools.background = background;
             app.run("channel.target", json!({"colors": target.get("colors").cloned().unwrap_or_else(|| json!([0]))})).unwrap();
             crate::transform_tool::begin(&mut app, &egui::Context::default()).unwrap();
-            let t = app.ui.transform.as_mut().unwrap();
-            t.interpolation = "bilinear".into();
-            t.warp = Some(Warp::cylinder(&[24.0, 84.0, 120.0, 24.0, 0.6, 0.35, 0.7], t.rect).unwrap());
+            let t = crate::channel_transform_preview::edit(&mut app, |t| {
+                t.interpolation = "bilinear".into();
+                t.warp = Some(Warp::cylinder(&[24.0, 84.0, 120.0, 24.0, 0.6, 0.35, 0.7], t.rect).unwrap());
+            });
             let t = t.clone();
             let mut full = Session::new();
             full.tools.background = background;

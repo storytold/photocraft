@@ -15,8 +15,9 @@ use photocraft_engine::channel_cmds::ChannelTarget;
 use photocraft_geom::Rect;
 use serde_json::json;
 
+use super::channel_transform_preview::Geometry;
 use crate::PhotocraftApp;
-use crate::state::{Tool, TransformSession};
+use crate::state::Tool;
 
 pub(crate) const COPY_SET_DRAG_UNSUPPORTED: &str = "Copy-dragging selected colour channels is not supported; use Copy and Paste into the selected channels";
 
@@ -40,6 +41,18 @@ pub(crate) fn color_target(app: &PhotocraftApp) -> Option<photocraft_engine::col
 /// A native selected region cannot use the RGBA floating-copy route, even for one component.
 pub(crate) fn native_copy_unsupported(app: &PhotocraftApp) -> bool {
     color_target(app).is_some_and(|colors| colors.len() > 1 || app.session.active().is_some_and(|st| st.doc.selection.is_some()))
+}
+
+/// The native selected samples use the framework's selection cursors without floating RGBA.
+pub(crate) fn native_selection_cursor(app: &PhotocraftApp, mods: craft::keymap::Mods, dragging: bool) -> Option<craft::behavior::Cursor> {
+    use craft::behavior::{CursorBadge, CursorIcon, PaintedCursor};
+    if color_target(app).is_none() || !app.session.active().is_some_and(|st| st.doc.selection.is_some()) {
+        return None;
+    }
+    if mods.alt {
+        return Some(CursorIcon::Default.into());
+    }
+    Some(if dragging { PaintedCursor::arrow(true).into() } else { PaintedCursor::badged(CursorIcon::Default, CursorBadge::Scissors).into() })
 }
 
 /// Copying for a geometric edit keeps a shown mask on the copy. Otherwise changing the active layer
@@ -104,10 +117,7 @@ fn float_selected_as(app: &mut PhotocraftApp, copy: bool, dx: f64, dy: f64, step
     let floating = app.session.active().is_some_and(|st| photocraft_engine::float_cmds::floating(st).is_some());
     let dropped = if copy && floating { app.run("select.drop", json!({})) } else { Ok(json!(null)) };
     match dropped.and_then(|_| app.run("select.float", json!({"dx": dx, "dy": dy, "copy": copy, "stepName": step_name}))) {
-        Ok(_) => {
-            crate::snap_ui::follow_cut(app);
-            true
-        }
+        Ok(_) => true,
         Err(e) => {
             app.ui.status = e;
             app.ui.status_error = true;
@@ -311,7 +321,7 @@ pub(crate) fn channel_texture(app: &mut PhotocraftApp, idx: usize, output: Optio
         if !source_ok {
             preview = None;
         }
-        app.move_gpu_preview = Some(MoveGpuPreview {
+        app.move_gpu_preview = Some(Box::new(MoveGpuPreview {
             doc: doc.id,
             snapshot: Arc::downgrade(&doc),
             layer,
@@ -322,30 +332,14 @@ pub(crate) fn channel_texture(app: &mut PhotocraftApp, idx: usize, output: Optio
             pending: preview.is_none() && (crate::channel_transform_gpu::validation_pending(gpu) || !source_ok),
             gpu: preview,
             shown: false,
-        });
+        }));
     }
     let p = app.move_gpu_preview.as_mut()?;
     photocraft_engine::channel_cmds::color_move_destination(p.bounds, offset.0, offset.1).ok()?;
     let rect = [p.bounds.x0, p.bounds.y0, p.bounds.x1, p.bounds.y1].map(f64::from);
     let quad =
         [[rect[0], rect[1]], [rect[2], rect[1]], [rect[2], rect[3]], [rect[0], rect[3]]].map(|[x, y]| [x + f64::from(offset.0), y + f64::from(offset.1)]);
-    let t = TransformSession {
-        session: 0,
-        layer: layer.0,
-        rect,
-        quad,
-        pivot: [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0],
-        interpolation: "nearest".into(),
-        warp: None,
-        selection: false,
-        target: Some(colors.params()),
-        path: None,
-        made: None,
-        mode: Default::default(),
-        content_aware: None,
-        skew_v: 0.0,
-        layers: Vec::new(),
-    };
+    let t = Geometry { session: 0, layer: layer.0, rect, quad, interpolation: "nearest".into(), warp: None, target: Some(colors.params()) };
     let texture = p.gpu.as_mut().and_then(|g| {
         g.texture_move(&t, &view, app.session.prefs().interface.show_channels_in_color, display.as_ref().is_some_and(|d| d.encode_srgb), factor, p.bounds)
     });
@@ -407,12 +401,14 @@ pub(crate) fn pattern_wrap(app: &PhotocraftApp, mut args: serde_json::Value) -> 
 }
 
 /// The whole-pixel offset of the current Move drag on document `idx`, if one is under way.
-fn drag_offset(app: &PhotocraftApp) -> Option<(i32, i32)> {
-    let d = app.drag.as_ref().filter(|d| d.tool == Tool::Move)?;
-    let end = d.points.last().map_or(d.start, |p| [p[0], p[1]]);
-    let dx = (end[0] - d.start[0]).round().clamp(-1e7, 1e7) as i32;
-    let dy = (end[1] - d.start[1]).round().clamp(-1e7, 1e7) as i32;
-    Some((dx, dy))
+pub(super) fn drag_offset(app: &PhotocraftApp) -> Option<(i32, i32)> {
+    app.canvas_tools.mover.offset().or_else(|| color_target(app).and_then(|_| app.canvas_tools.selection.pixel_drag_offset()))
+}
+
+/// The offset of the drag in progress: the selection tools' drag of the selection, else the Move
+/// tool's drag of the selected pixels.
+fn drag_delta(app: &PhotocraftApp) -> (i32, i32) {
+    app.canvas_tools.selection.drag_offset().or_else(|| app.canvas_tools.mover.offset()).unwrap_or((0, 0))
 }
 
 /// Native wrapped samples carry a wrapped outline, rather than a translated copy of its
@@ -421,15 +417,6 @@ pub(crate) fn wrapped_selection_offset(app: &PhotocraftApp, idx: usize) -> Optio
     (app.ui.view.pattern_preview && app.session.active_index() == Some(idx) && color_target(app).is_some() && carries_selection(app))
         .then(|| drag_offset(app))
         .flatten()
-}
-
-/// The ΔX/ΔY values shown beside the pointer while the Move tool drags layers or selected pixels,
-/// as in Photoshop (#5727): the whole pixels the release will move them. Free Transform shows its
-/// own (`transform_tool::live_readout`). `None` until the pointer moves.
-pub(crate) fn offset_readout(app: &PhotocraftApp) -> Option<[String; 2]> {
-    app.drag.as_ref().filter(|d| d.points.len() > 1)?;
-    let (dx, dy) = drag_offset(app)?;
-    Some([dx, dy].map(|v| format!("{v} px")))
 }
 
 /// The document to show while a Move drag is under way on document `idx`: the moving layers at
@@ -574,7 +561,7 @@ pub(crate) fn shown_layer_offset(app: &PhotocraftApp, doc: DocId, revision: u64,
 /// A floating selection's offset plus a drag of it in progress (`canvas::selection_drag_delta`).
 pub(crate) fn floating_offset(app: &PhotocraftApp) -> Option<(i32, i32)> {
     let f = photocraft_engine::float_cmds::floating(app.session.active()?)?;
-    let d = crate::canvas::selection_drag_delta(app).unwrap_or((0, 0));
+    let d = drag_delta(app);
     Some((f.offset.0 + d.0, f.offset.1 + d.1))
 }
 
@@ -613,7 +600,7 @@ fn floating_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u
     let shown = app.move_preview.as_ref()?.offsets.last() != Some(&offset);
     if shown {
         let t0 = crate::gpu_canvas::now_ms();
-        let d = photocraft_engine::float_cmds::displayed(st, crate::canvas::selection_drag_delta(app).unwrap_or((0, 0)))?;
+        let d = photocraft_engine::float_cmds::displayed(st, drag_delta(app))?;
         let d = photocraft_engine::mode_cmds::display_document(&d).unwrap_or(d);
         let p = app.move_preview.as_mut()?;
         p.shown = Some(Arc::new(d));

@@ -1,4 +1,5 @@
-//! Compare CPU submission and completed offscreen frames; run the identical example on upstream.
+//! Compare CPU submission and completed offscreen production app frames.
+//! Run this identical driver on both revisions; earlier canvas-only samples are not comparable.
 //! cargo run --release -p photocraft-ui-egui --example channel_transform_gpu_bench
 //! Add --cpu to exercise the fallback, or --save /tmp/channel-preview for synthetic screenshots.
 use std::time::Instant;
@@ -52,28 +53,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if !cpu {
             app.set_wgpu(rs.clone());
         }
-        let ctx = egui::Context::default();
+        let source = app.session.active().ok_or("no preview document")?.doc.clone();
+        let ctx = app.ctx().clone();
         transform_tool::begin(&mut app, &ctx)?;
         let mut h = egui_kittest::Harness::builder()
+            .with_context(ctx)
             .with_size(egui::vec2(1000.0, 700.0))
+            .with_max_steps(64)
             .renderer(egui_kittest::wgpu::WgpuTestRenderer::from_render_state(rs.clone()))
-            .build_ui_state(
-                |ui, app: &mut PhotocraftApp| {
-                    if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                        return;
-                    }
-                    egui::CentralPanel::default().show(ui, |ui| photocraft_ui_egui::canvas::document_area(app, ui));
-                },
-                app,
-            );
-        PhotocraftApp::setup_context(&h.ctx, Default::default());
+            .build_eframe(move |_| app);
         h.run_steps(2);
         let _ = h.render()?;
         let mut geometry = Vec::new();
         let mut frames = Vec::new();
         for _ in 0..9 {
             if let Some(t) = &mut h.state_mut().ui.transform {
-                t.quad = t.quad.map(|[x, y]| [x + 20.0, y]);
+                let before = *t.session.state();
+                let mut after = before;
+                after.quad = after.quad.map(|p| craft::behavior::kurbo::Point::new(p.x + 20.0, p.y));
+                t.session.apply(
+                    craft::draw::ui::transform::TransformEdit::Box(craft::behavior::EditEvent::set(
+                        craft::behavior::Mixed::Same(before),
+                        after,
+                        "Benchmark drag".into(),
+                        None,
+                    )),
+                    0.0,
+                );
             }
             let start = Instant::now();
             h.run_steps(1);
@@ -89,9 +95,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut warp_frames = Vec::new();
         for _ in 0..9 {
             if let Some(t) = &mut h.state_mut().ui.transform
-                && let Some(w) = &mut t.warp
+                && let Some(w) = t.session.warp()
             {
-                *w = photocraft_geom::warp::Warp::custom(w.to_mesh(1, 1).map_points(|p| [p[0], p[1] + p[0] / 600.0]), w.bounds);
+                let warp = photocraft_geom::warp::Warp::custom(w.warp.to_mesh(1, 1).map_points(|p| [p[0], p[1] + p[0] / 600.0]), w.warp.bounds);
+                t.session.apply(craft::draw::ui::transform::TransformEdit::Warp(photocraft_ui_egui::state::SessionWarp::new(warp, false)), 0.0);
             }
             let start = Instant::now();
             h.run_steps(1);
@@ -102,7 +109,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 image.save(format!("{path}-{case}-warp.png"))?;
             }
         }
-        println!("{}", json!({"case":case,"cpu":cpu,"geometry_ms":geometry,"completed_frame_ms":frames,"warp_ms":warp,"completed_warp_frame_ms":warp_frames}));
+        if h.state().ui.transform.as_ref().is_none_or(|t| t.session.warp().is_none())
+            || h.state().session.active().is_none_or(|st| !std::sync::Arc::ptr_eq(&source, &st.doc))
+        {
+            return Err("the benchmark must retain its active Warp and immutable source".into());
+        }
+        println!(
+            "{}",
+            json!({"driver":"production_eframe_shared_host","source_verified":true,"case":case,"cpu":cpu,"geometry_ms":geometry,"completed_frame_ms":frames,"warp_ms":warp,"completed_warp_frame_ms":warp_frames})
+        );
     }
     Ok(())
 }

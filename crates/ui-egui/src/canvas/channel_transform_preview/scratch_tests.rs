@@ -64,7 +64,7 @@ fn proxy_and_bounds_retry(sample: SampleType) {
     let h = photocraft_algo::transform::Homography([2000.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
     let ctx = egui::Context::default();
     crate::transform_tool::begin(&mut a, &ctx).unwrap();
-    let good = a.ui.transform.as_ref().unwrap().clone();
+    let good = crate::channel_transform_preview::Geometry::of(a.ui.transform.as_ref().unwrap());
     crate::transform_tool::cancel(&mut a);
     let mut captured = Preview::new(&doc, layer, [0.0, 0.0, 0.0, 1.0], true).unwrap();
     let mut stretched = good.clone();
@@ -105,8 +105,9 @@ fn cpu_texture_retry() {
     let ctx = egui::Context::default();
     crate::transform_tool::begin(&mut a, &ctx).unwrap();
     // Refuse geometry before the first CPU resample, retaining the original native tiles.
-    let t = a.ui.transform.as_mut().unwrap();
-    t.quad = t.quad.map(|[x, y]| [x + f64::from(photocraft_algo::transform::WARP_REACH) + 64.0, y]);
+    crate::channel_transform_preview::edit(&mut a, |t| {
+        t.quad = t.quad.map(|[x, y]| [x + f64::from(photocraft_algo::transform::WARP_REACH) + 64.0, y]);
+    });
     let doc = a.session.active().unwrap().doc.clone();
     let mut damaged = Damaged::new("cpu-texture");
     texture(&mut a, &ctx, 0, None).unwrap();
@@ -147,7 +148,7 @@ fn scalar_proxy_retry() {
     a.run("channel.target", json!({"channel":0})).unwrap();
     let ctx = egui::Context::default();
     crate::transform_tool::begin(&mut a, &ctx).unwrap();
-    let mut t = a.ui.transform.as_ref().unwrap().clone();
+    let mut t = crate::channel_transform_preview::Geometry::of(a.ui.transform.as_ref().unwrap());
     t.quad = t.quad.map(|[x, y]| [x + 4.0, y]);
     let mut p = Preview::new(&a.session.active().unwrap().doc, a.session.active().unwrap().active_layer, [0.0; 4], true).unwrap();
     p.update(&t).unwrap();

@@ -22,8 +22,9 @@ fn ordinary_mask_target_starts_without_changing_eyes_and_previews_only_the_mask(
         crate::transform_tool::begin(&mut a, &ctx).unwrap();
         assert_eq!(a.session.active().unwrap().channel_view, eyes);
         assert_eq!(a.ui.transform.as_ref().unwrap().target, Some(json!("mask")));
-        let t = a.ui.transform.as_mut().unwrap();
-        t.quad = t.quad.map(|[x, y]| [x * 1.25, y]);
+        crate::channel_transform_preview::edit(&mut a, |t| {
+            t.quad = t.quad.map(|[x, y]| [x * 1.25, y]);
+        });
         texture(&mut a, &ctx, 0, None).unwrap();
         let shown = a.transform_preview.as_ref().unwrap().channel.as_ref().unwrap().shown.clone();
         let id = a.session.active().unwrap().active_layer.unwrap();
@@ -55,7 +56,9 @@ fn preview_uploads_match_canvas_sampling_for_full_reduced_and_capped_sources() {
         let idx = a.session.active_index().unwrap();
         let id = texture(&mut a, &ctx, idx, None).unwrap();
         assert_eq!(ctx.tex_manager().read().meta(id).unwrap().options.magnification, magnification, "large={large}, max_side={max_side}");
-        a.ui.transform.as_mut().unwrap().quad[2][0] += 1.0;
+        crate::channel_transform_preview::edit(&mut a, |t| {
+            t.quad[2][0] += 1.0;
+        });
         let again = texture(&mut a, &ctx, idx, None).unwrap();
         assert_eq!(again, id, "a geometry change retains the texture");
         assert_eq!(ctx.tex_manager().read().meta(id).unwrap().options.magnification, magnification, "updates retain sampling");

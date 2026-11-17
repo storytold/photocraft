@@ -2,12 +2,17 @@
 //! mask view, and displaying the preview must retain the canvas's full-resolution pixel sampling.
 //! Original synthetic artwork, actual thumbnail clicks, Ctrl+T and corner-handle drags.
 
+use craft::behavior::kurbo::Point;
+use craft::behavior::{CanvasView, EditEvent, Mixed};
+use craft::draw::ui::transform::TransformEdit;
+use craft::layers::ui::tree::{LayerInfo, LayerKind, LayerPart, MaskInfo};
 use egui::{Modifiers, PointerButton, Pos2};
+use egui_kittest::kittest::{NodeT, Queryable};
 use photocraft_color::PixelFormat;
 use photocraft_doc::LayerMask;
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
-use photocraft_ui_egui::{PhotocraftApp, canvas::ViewXform, mask_thumbs_ui};
+use photocraft_ui_egui::PhotocraftApp;
 use serde_json::json;
 
 type Harness = egui_kittest::Harness<'static, PhotocraftApp>;
@@ -16,7 +21,7 @@ fn harness(linked: bool, zoom: f32) -> Option<Harness> {
     let built = std::panic::catch_unwind(|| {
         egui_kittest::Harness::builder().with_size(egui::vec2(1280.0, 850.0)).with_pixels_per_point(1.0).with_max_steps(64).wgpu().build_eframe(move |cc| {
             PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), Default::default());
             app.background_jobs = false;
             app
         })
@@ -50,7 +55,7 @@ fn harness(linked: bool, zoom: f32) -> Option<Harness> {
             app.ui.tool = photocraft_ui_egui::state::Tool::Move;
             app.ui.views[0].zoom = zoom;
             app.ui.views[0].center = [160.0, 120.0];
-            app.ui.views[0].fit_pending = false;
+            app.ui.views[0].pending.clear();
             h.run_steps(8);
             Some(h)
         }
@@ -72,12 +77,12 @@ fn pointer(h: &mut Harness, pos: Pos2, pressed: Option<bool>) {
 struct Shot {
     width: u32,
     pixels: Vec<u8>,
-    view: ViewXform,
+    view: CanvasView,
 }
 
 impl Shot {
     fn at(&self, x: u32, y: u32) -> [u8; 4] {
-        let p = self.view.to_screen(x as f32 + 0.5, y as f32 + 0.5);
+        let p = self.view.to_screen(Point::new(x as f64 + 0.5, y as f64 + 0.5));
         let i = (p.y.floor() as usize * self.width as usize + p.x.floor() as usize) * 4;
         self.pixels[i..i + 4].try_into().unwrap()
     }
@@ -85,7 +90,7 @@ impl Shot {
 
 fn capture(h: &mut Harness, name: &str) -> Shot {
     h.run_steps(8);
-    let view = ViewXform::active(h.state()).unwrap();
+    let view = photocraft_ui_egui::canvas::active_view(h.state()).unwrap();
     let image = h.render().unwrap();
     if let Some(dir) = std::env::var_os("PHOTOCRAFT_MASK_TRANSFORM_EVIDENCE_DIR") {
         let dir = std::path::PathBuf::from(dir);
@@ -103,8 +108,10 @@ fn ordinary_mask_thumbnail_scaling_previews_and_commits_without_softening() {
             let Some(mut h) = harness(linked, zoom) else { return };
             let prefix = format!("mask-linked-{linked}-zoom-{zoom}");
             let id = h.state().session.active().unwrap().active_layer.unwrap();
-            let thumb =
-                mask_thumbs_ui::recorded(&h.ctx, id.0).unwrap().0.into_iter().find(|(kind, _)| *kind == mask_thumbs_ui::MaskKind::Pixel).unwrap().1.center();
+            let mut info = LayerInfo::new("Masked pattern", LayerKind::Pixel);
+            info.masks.push(MaskInfo::new(LayerPart::LayerMask, true, linked));
+            let node = h.get_by_role_and_label(egui::accesskit::Role::TreeItem, "Masked pattern").accesskit_node().locate().0;
+            let thumb = craft::layers::testing::thumb_rect(&h.ctx, node, &info, LayerPart::LayerMask).unwrap().center();
             pointer(&mut h, thumb, Some(true));
             pointer(&mut h, thumb, Some(false));
             assert!(h.state().ui.mask_target);
@@ -117,11 +124,11 @@ fn ordinary_mask_thumbnail_scaling_previews_and_commits_without_softening() {
             let t = h.state().ui.transform.clone().expect("a normally targeted mask must open without a separate mask view");
             assert_eq!(t.target, Some(json!("mask")));
             assert_eq!(h.state().session.active().unwrap().channel_view, eyes);
-            let view = ViewXform::active(h.state()).unwrap();
-            let start = view.to_screen(t.quad[2][0] as f32, t.quad[2][1] as f32);
+            let view = photocraft_ui_egui::canvas::active_view(h.state()).unwrap();
+            let start = view.to_screen(Point::new(t.quad_array()[2][0], t.quad_array()[2][1]));
             pointer(&mut h, start, Some(true));
             for step in 1..=4 {
-                let p = view.to_screen(t.quad[2][0] as f32 + step as f32 * 5.0, t.quad[2][1] as f32 + step as f32 * 3.0);
+                let p = view.to_screen(Point::new(t.quad_array()[2][0] + step as f64 * 5.0, t.quad_array()[2][1] + step as f64 * 3.0));
                 pointer(&mut h, p, None);
             }
             let middle = capture(&mut h, &format!("{prefix}-mid-drag"));
@@ -133,7 +140,7 @@ fn ordinary_mask_thumbnail_scaling_previews_and_commits_without_softening() {
             assert_ne!(middle.at(155, 110), first.at(155, 110), "the mask itself updates before release");
             let changed = (8..232).flat_map(|y| (8..312).map(move |x| (x, y))).filter(|&(x, y)| first.at(x, y) != middle.at(x, y)).count();
             assert!(changed > 500, "the live mask must visibly change during the drag");
-            let end = view.to_screen(t.quad[2][0] as f32 + 40.0, t.quad[2][1] as f32 + 24.0);
+            let end = view.to_screen(Point::new(t.quad_array()[2][0] + 40.0, t.quad_array()[2][1] + 24.0));
             pointer(&mut h, end, None);
             pointer(&mut h, end, Some(false));
             pointer(&mut h, Pos2::new(25.0, 110.0), None);
@@ -148,8 +155,8 @@ fn ordinary_mask_thumbnail_scaling_previews_and_commits_without_softening() {
             let after = h.state().session.active().unwrap().doc.clone();
             assert_eq!(after.layer(id).unwrap().surface(), before.layer(id).unwrap().surface(), "host samples remain stationary");
             assert_ne!(after.layer(id).unwrap().mask, before.layer(id).unwrap().mask);
-            let [left, top] = scaled.quad[0];
-            let [right, bottom] = scaled.quad[2];
+            let [left, top] = scaled.quad_array()[0];
+            let [right, bottom] = scaled.quad_array()[2];
             let mut compared = 0;
             for y in 8..232 {
                 for x in 8..312 {
@@ -157,7 +164,7 @@ fn ordinary_mask_thumbnail_scaling_previews_and_commits_without_softening() {
                     // Only the transform's controls are absent after Enter. Keep checker and
                     // internal mask edges in the comparison: they exposed the filtering bug.
                     if [p[0] - left, p[0] - right, p[1] - top, p[1] - bottom].iter().any(|d| d.abs() < 10.0)
-                        || (p[0] - scaled.pivot[0]).abs() < 10.0 && (p[1] - scaled.pivot[1]).abs() < 10.0
+                        || (p[0] - scaled.session.pivot().x).abs() < 10.0 && (p[1] - scaled.session.pivot().y).abs() < 10.0
                     {
                         continue;
                     }
@@ -171,7 +178,11 @@ fn ordinary_mask_thumbnail_scaling_previews_and_commits_without_softening() {
             assert_eq!(h.state().session.active().unwrap().doc, before);
             h.key_press_modifiers(Modifiers::COMMAND, egui::Key::T);
             h.run_steps(4);
-            h.state_mut().ui.transform.as_mut().unwrap().quad[2][0] += 10.0;
+            let t = h.state_mut().ui.transform.as_mut().unwrap();
+            let box_before = *t.session.state();
+            let mut after = box_before;
+            after.quad[2].x += 10.0;
+            t.session.apply(TransformEdit::Box(EditEvent::set(Mixed::Same(box_before), after, "Edit box".into(), None)), 0.0);
             h.run_steps(2);
             h.key_press(egui::Key::Escape);
             h.run_steps(4);

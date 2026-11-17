@@ -16,16 +16,18 @@ fn colour_set_box_locks_the_set_and_keeps_all_eyes_through_commit_cancel_and_und
             let ctx = egui::Context::default();
             crate::transform_tool::begin(&mut a, &ctx).unwrap();
             assert_eq!(a.session.active().unwrap().channel_view, eyes);
-            let t = a.ui.transform.as_mut().unwrap();
-            assert_eq!(t.target, Some(json!({"colors":[0,2]})));
-            t.quad = t.quad.map(|[x, y]| [x + 3.0, y]);
+            crate::channel_transform_preview::edit(&mut a, |t| {
+                assert_eq!(t.target, Some(json!({"colors":[0,2]})));
+                t.quad = t.quad.map(|[x, y]| [x + 3.0, y]);
+            });
             if warp {
                 crate::transform_tool::enter_warp(&mut a, &ctx);
-                let t = a.ui.transform.as_mut().unwrap();
-                assert!(t.warp.is_some());
-                t.warp = Some(Warp::custom(BezierMesh::identity(t.rect, 1, 1).map_points(|p| [p[0] + 3.0, p[1]]), t.rect));
+                crate::channel_transform_preview::edit(&mut a, |t| {
+                    assert!(t.warp.is_some());
+                    t.warp = Some(Warp::custom(BezierMesh::identity(t.rect, 1, 1).map_points(|p| [p[0] + 3.0, p[1]]), t.rect));
+                });
             }
-            let t = a.ui.transform.clone().unwrap();
+            let t = crate::channel_transform_preview::Geometry::of(a.ui.transform.as_ref().unwrap());
             let pv = a.transform_preview.as_mut().unwrap().channel.as_mut().unwrap();
             pv.update(&t).unwrap();
             let shown = pv.shown.clone();
@@ -39,7 +41,7 @@ fn colour_set_box_locks_the_set_and_keeps_all_eyes_through_commit_cancel_and_und
             }
             for channel in ["red", "green", "blue", "composite"] {
                 a.run("channel.setVisible", json!({"channel":channel,"visible":false})).unwrap();
-                assert_eq!(a.ui.transform, Some(t.clone()));
+                assert_eq!(a.ui.transform.as_ref().map(Geometry::of), Some(t.clone()));
                 let pv = a.transform_preview.as_mut().unwrap().channel.as_mut().unwrap();
                 pv.update(&t).unwrap();
                 assert!(Arc::ptr_eq(&pv.shown, &shown));
@@ -112,7 +114,7 @@ fn differently_sparse_colour_sets_use_scalar_outlines_or_the_cpu_oracle() {
     a.run("channel.target", json!({"colors":[0,2]})).unwrap();
     crate::transform_tool::begin(&mut a, &egui::Context::default()).unwrap();
     let view = a.session.active().unwrap().channel_view.clone();
-    let mut t = a.ui.transform.clone().unwrap();
+    let mut t = crate::channel_transform_preview::Geometry::of(a.ui.transform.as_ref().unwrap());
     t.quad = t.quad.map(|[x, y]| [x + 2.0, y]);
     let mut fast = crate::channel_transform_gpu::test_wait(&rs, || crate::channel_transform_gpu::Preview::new(&gpu, &doc, layer, [1.0; 4])).unwrap();
     assert!(

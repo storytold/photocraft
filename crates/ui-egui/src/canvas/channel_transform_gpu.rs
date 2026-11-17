@@ -8,7 +8,7 @@ use photocraft_color::{BlendMode, ColorMode, SampleType};
 use photocraft_doc::{Document, Layer, LayerId};
 use photocraft_engine::channel_cmds::ChannelView;
 
-use crate::state::TransformSession;
+use super::channel_transform_preview::Geometry;
 
 #[path = "channel_transform_gpu_validation.rs"]
 mod validation;
@@ -88,7 +88,7 @@ pub(crate) struct Preview {
     lifted: [photocraft_geom::Rect; 3],
     selection: Option<photocraft_geom::Rect>,
     selected: bool,
-    last: Option<(TransformSession, ChannelView, bool, bool, Option<photocraft_geom::Rect>)>,
+    last: Option<(Geometry, ChannelView, bool, bool, Option<photocraft_geom::Rect>)>,
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     native: Option<[u32; 3]>,
@@ -391,7 +391,7 @@ impl Preview {
         captured
     }
 
-    pub(crate) fn texture(&mut self, t: &TransformSession, view: &ChannelView, in_color: bool, encode: bool, factor: u32) -> Option<egui::TextureId> {
+    pub(crate) fn texture(&mut self, t: &Geometry, view: &ChannelView, in_color: bool, encode: bool, factor: u32) -> Option<egui::TextureId> {
         if self.native.is_some() {
             return None;
         }
@@ -402,7 +402,7 @@ impl Preview {
     /// channel's original content rectangle. Samples outside it retain their source value.
     pub(crate) fn texture_move(
         &mut self,
-        t: &TransformSession,
+        t: &Geometry,
         view: &ChannelView,
         in_color: bool,
         encode: bool,
@@ -420,7 +420,7 @@ impl Preview {
 
     fn texture_with_mode(
         &mut self,
-        t: &TransformSession,
+        t: &Geometry,
         view: &ChannelView,
         in_color: bool,
         encode: bool,
@@ -1181,7 +1181,7 @@ mod tests {
         let mut app = crate::PhotocraftApp::new(session, crate::Services::default());
         app.sync_views();
         crate::transform_tool::begin(&mut app, &egui::Context::default()).unwrap();
-        let mut t = app.ui.transform.clone().unwrap();
+        let mut t = crate::channel_transform_preview::Geometry::of(app.ui.transform.as_ref().unwrap());
         t.quad = t.quad.map(|[x, y]| [x + 1.0, y]);
         let view = app.session.active().unwrap().channel_view.clone();
         let gpu = crate::gpu_canvas::GpuCanvas::new(&rs);

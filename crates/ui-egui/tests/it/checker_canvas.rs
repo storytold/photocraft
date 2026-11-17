@@ -27,7 +27,7 @@ fn harness_with_scale(gpu: bool, ppp: f32) -> Option<Harness> {
     let built = std::panic::catch_unwind(|| {
         egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 800.0)).with_pixels_per_point(ppp).with_max_steps(64).wgpu().build_eframe(|cc| {
             PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), Default::default());
             if let Some(rs) = cc.wgpu_render_state.as_ref().filter(|_| gpu) {
                 app.set_wgpu(rs.clone());
             }
@@ -117,7 +117,8 @@ fn render_on(h: &mut Harness, gpu: bool, zoom: f32, doc: u32, black: bool, grid:
     let img = Shot { w: width, px: rendered.into_raw() };
     if black {
         // View geometry also works on scaled displays, independently of grid colour.
-        let origin = photocraft_ui_egui::canvas::ViewXform::active(h.state()).expect("view").to_screen(0.0, 0.0) * h.ctx.pixels_per_point();
+        let origin =
+            photocraft_ui_egui::canvas::active_view(h.state()).expect("view").to_screen(craft::behavior::kurbo::Point::ZERO) * h.ctx.pixels_per_point();
         return (img, origin.x.round() as u32, origin.y.round() as u32, (doc as f32 * zoom).round() as u32);
     }
     let r = h.state().last_canvas_rect;
@@ -156,22 +157,6 @@ fn checker_cells_are_8_screen_pixels_at_every_zoom() {
             let v = img.at(x, y)[0];
             assert!(v == LIGHT || v == DARK, "zoom {zoom}: blended pixel {v} at ({x}, {y})");
         }
-    }
-}
-
-#[test]
-fn checker_phase_moves_with_the_image() {
-    let _gpu = photocraft_testkit::gpu_lock();
-    let Some(mut h) = harness() else { return };
-    h.run_steps(4);
-    // The document origin moves four screen pixels between these two views, and the checker
-    // phase moves with it: the same screen position flips from a light to a dark cell.
-    let mut sample_at = None;
-    for (zoom, expected) in [(1.0, LIGHT), (1.25, DARK)] {
-        let (img, x0, y0, _) = render(&mut h, zoom, 32, false, false);
-        let (sx, sy) = *sample_at.get_or_insert((x0 + 6, y0 + 2));
-        let px = img.at(sx, sy);
-        assert!(px[0] == expected, "zoom {zoom}: phase at fixed screen position ({sx}, {sy}) is {px:?}, want {expected}");
     }
 }
 

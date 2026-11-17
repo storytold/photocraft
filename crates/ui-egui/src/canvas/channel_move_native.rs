@@ -2,8 +2,8 @@
 //! samples. Byte planes keep 8/16/32-bit sources compact without requiring normalized-16 formats.
 
 use super::{
-    Arc, ChannelView, Document, FLOAT, LayerId, OUTPUT, Pipelines, Preview, RenderState, SampleType, TransformSession, UNIFORM_BYTES, Validated, bytes,
-    render_pass, resource_scope, shader_source as transform_shader_source, source, supports_channels, track_resources, validated, wgpu,
+    Arc, ChannelView, Document, FLOAT, Geometry, LayerId, OUTPUT, Pipelines, Preview, RenderState, SampleType, UNIFORM_BYTES, Validated, bytes, render_pass,
+    resource_scope, shader_source as transform_shader_source, source, supports_channels, track_resources, validated, wgpu,
 };
 
 fn write_bytes(rs: &RenderState, texture: &wgpu::Texture, width: u32, y: u32, rows: u32, plane: u32, data: &[u8]) -> Option<()> {
@@ -288,7 +288,7 @@ impl Preview {
 
     pub(super) fn texture_native_move(
         &mut self,
-        t: &TransformSession,
+        t: &Geometry,
         view: &ChannelView,
         in_color: bool,
         encode: bool,
