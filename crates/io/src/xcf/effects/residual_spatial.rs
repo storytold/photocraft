@@ -981,7 +981,7 @@ fn newsprint_tile(kind: i32, c: &MappingContext) -> Result<photocraft_doc::Patte
 }
 /// Authors a native ink-reflectance lookup using actual profile-aware separation rather than a source color processor.
 fn newsprint_ink_filter(index: usize, pullout: f64, c: &MappingContext) -> Result<photocraft_doc::SmartFilter> {
-    use photocraft_cms::{Builtin, ColorSpace, Intent, Profile, Transform};
+    use craft_cms::{Builtin, ColorSpace, Intent, Profile, Transform};
     let fallback = if c.mode == photocraft_color::ColorMode::Grayscale || !c.linear { Builtin::Srgb } else { Builtin::LinearSrgb };
     let profile = if c.mode == photocraft_color::ColorMode::Grayscale { None } else { c.target_profile.as_ref() };
     let source = match profile {
@@ -995,17 +995,19 @@ fn newsprint_ink_filter(index: usize, pullout: f64, c: &MappingContext) -> Resul
         .map_err(|error| invalid(format!("Native screening separation: {error}")))?;
     let cancelled = std::cell::Cell::new(false);
     c.charge_generation(17usize.pow(3) * (3 * 8 + 36))?;
-    let mapped = super::resources::lookup(17, "Native screened ink reflectance", Vec::new(), |sample| {
+    let mapped = super::resources::lookup_fallible(17, "Native screened ink reflectance", Vec::new(), |sample| {
         if c.interrupt.check().is_err() {
             cancelled.set(true);
-            return [0.; 3];
+            return Err("Native screen separation was cancelled".into());
         }
         let mut ink = [0.; 4];
-        separation.convert_f32(&sample.map(|v| v as f32), 3, &mut ink, 4, false);
+        // One RGB sample produces exactly four CMYK components; conversion
+        // failure must not publish a table containing an invented black sample.
+        separation.convert_f32(&sample.map(|v| v as f32), 3, &mut ink, 4, false).map_err(|error| format!("Native screen separation sample: {error}"))?;
         let original_k = f64::from(ink[3]).clamp(0., 1.);
         let k = original_k * pullout;
         if index == 3 {
-            return [1. - k; 3];
+            return Ok([1. - k; 3]);
         }
         // Native GCR policy: preserve each multiplicative ink density while
         // moving the selected fraction of neutral density into the K plate.
@@ -1015,12 +1017,12 @@ fn newsprint_ink_filter(index: usize, pullout: f64, c: &MappingContext) -> Resul
         if let Some(value) = rgb.get_mut(index) {
             *value = 1. - remaining;
         }
-        rgb
-    })
-    .map_err(invalid)?;
+        Ok(rgb)
+    });
     if cancelled.get() {
         return Err(MappingFailure::resource("Native screen separation was cancelled"));
     }
+    let mapped = mapped.map_err(invalid)?;
     generation_check(c)?;
     mapped.filters.into_iter().next().ok_or_else(|| invalid("Native screen separation has no filter"))
 }
@@ -1755,8 +1757,7 @@ mod tests {
     fn normal_vector_lut_has_unit_length_and_observed_full_z_encoding() {
         let half = result("gegl:normal-map", Vec::new());
         let full = result("gegl:normal-map", vec![Argument { name: "full-z", value: ArgumentValue::Bool(true) }]);
-        let cube =
-            |mapping: &NativeMapping| photocraft_cms::lutfile::parse("normal.cube", mapping.filters[0].params["data"].as_str().unwrap().as_bytes()).unwrap();
+        let cube = |mapping: &NativeMapping| craft_cms::lutfile::parse("normal.cube", mapping.filters[0].params["data"].as_str().unwrap().as_bytes()).unwrap();
         let half = cube(&half);
         let full = cube(&full);
         let i = (8 * 17 * 17 + 8 * 17 + 16) * 3;
@@ -1824,7 +1825,7 @@ mod tests {
             for (actual, expected) in raw[4].into_iter().zip([0.5625, 0.625, 1., alpha]) {
                 assert!((actual - expected).abs() < 1e-6, "alpha{alpha}: {raw:?}");
             }
-            let lut = photocraft_cms::lutfile::parse("normal.cube", mapping.filters[0].params["data"].as_str().unwrap().as_bytes()).unwrap();
+            let lut = craft_cms::lutfile::parse("normal.cube", mapping.filters[0].params["data"].as_str().unwrap().as_bytes()).unwrap();
             let mut buffer = photocraft_compose::Buffer { rect: b, px: raw };
             photocraft_compose::adjust::apply(
                 &photocraft_doc::Adjustment::ColorLookup {
@@ -1859,7 +1860,7 @@ mod tests {
             let mapping = normal_map(&StoredEffect::test("gegl:normal-map", Vec::new()), &c).unwrap();
             assert!(mapping.working_rgb);
             let mut doc = Document::new("Gray normals", Size::new(4, 3), ColorMode::Grayscale, depth);
-            doc.icc_profile = Some(photocraft_cms::Builtin::GrayGamma22.profile().to_bytes());
+            doc.icc_profile = Some(craft_cms::Builtin::GrayGamma22.profile().to_bytes());
             let mut input = Layer::raster("Editable Gray height", doc.pixel_format());
             input.surface_mut().unwrap().fill_rect(b, &[0.25, 0.5]);
             let mut budget = 1 << 30;
@@ -1878,13 +1879,13 @@ mod tests {
             let rgb = photocraft_format::load_from_bytes(bytes).unwrap();
             assert_eq!(rgb.mode, ColorMode::Rgb);
             assert_eq!(rgb.depth, depth);
-            assert_eq!(rgb.icc_profile, Some(photocraft_cms::Builtin::Srgb.profile().to_bytes()));
+            assert_eq!(rgb.icc_profile, Some(craft_cms::Builtin::Srgb.profile().to_bytes()));
             doc.layers.push(Layer::new("Native Gray-projected normals", content));
             let saved = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
             let reopened = photocraft_format::load_from_bytes(&saved).unwrap();
             assert_eq!(reopened, doc);
             assert_eq!(reopened.mode, ColorMode::Grayscale);
-            assert_eq!(reopened.icc_profile, Some(photocraft_cms::Builtin::GrayGamma22.profile().to_bytes()));
+            assert_eq!(reopened.icc_profile, Some(craft_cms::Builtin::GrayGamma22.profile().to_bytes()));
         }
     }
     /// Exercises extreme gain with finite lookup output and native depth-dependent rendering.
@@ -1894,7 +1895,7 @@ mod tests {
         use photocraft_raster::Surface;
         for scale in [0., 0.0001, 1000., f32::MAX] {
             let mapping = result("gegl:normal-map", vec![float("scale", scale)]);
-            let lut = photocraft_cms::lutfile::parse("normal.cube", mapping.filters[0].params["data"].as_str().unwrap().as_bytes()).unwrap();
+            let lut = craft_cms::lutfile::parse("normal.cube", mapping.filters[0].params["data"].as_str().unwrap().as_bytes()).unwrap();
             assert!(lut.data.iter().all(|n| n.is_finite()));
             let adj = photocraft_doc::Adjustment::ColorLookup {
                 name: "Native vector gain".into(),
@@ -2006,7 +2007,7 @@ mod tests {
             linear: true,
             owner_bounds: b,
             native_filter_bounds: b,
-            target_profile: Some(photocraft_cms::Builtin::LinearSrgb.profile().to_bytes()),
+            target_profile: Some(craft_cms::Builtin::LinearSrgb.profile().to_bytes()),
             resolution_dpi: 72.0,
             ..context()
         };
@@ -2132,7 +2133,7 @@ mod tests {
             let Some(NativeStructure::Replace { patterns, .. }) = converted.structure else { panic!("native solid noise") };
             assert_ne!(patterns[0].id, original);
         }
-        let c = MappingContext { linear: true, target_profile: Some(photocraft_cms::Builtin::LinearSrgb.profile().to_bytes()), ..context() };
+        let c = MappingContext { linear: true, target_profile: Some(craft_cms::Builtin::LinearSrgb.profile().to_bytes()), ..context() };
         let source = StoredEffect::test(
             "gegl:noise-solid",
             vec![
@@ -2193,7 +2194,7 @@ mod tests {
         use photocraft_geom::Size;
         use photocraft_raster::{Interrupt, Surface};
         let mapped = result("gegl:image-gradient", vec![enm("output-mode", 1)]);
-        let cube = photocraft_cms::lutfile::parse("gradient.cube", mapped.filters[0].params["data"].as_str().unwrap().as_bytes()).unwrap();
+        let cube = craft_cms::lutfile::parse("gradient.cube", mapped.filters[0].params["data"].as_str().unwrap().as_bytes()).unwrap();
         let adjustment = Adjustment::ColorLookup {
             name: "Native direction".into(),
             lut: Some(std::sync::Arc::new(cube.data)),
@@ -2242,7 +2243,7 @@ mod tests {
                 assert_eq!(sample[3], source.pixel(index as i32, 0)[3]);
             }
             let mut doc = Document::new("Native angle data", Size::new(5, 1), ColorMode::Rgb, depth);
-            doc.icc_profile = Some(photocraft_cms::Builtin::LinearSrgb.profile().to_bytes());
+            doc.icc_profile = Some(craft_cms::Builtin::LinearSrgb.profile().to_bytes());
             doc.layers.push(Layer::new("Native pixels", LayerContent::Raster(native)));
             let before = photocraft_compose::render(&doc, b).into_px();
             let bytes = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
@@ -2285,7 +2286,7 @@ mod tests {
         );
         source.write_region(b, &monochrome.px.iter().flatten().copied().collect::<Vec<_>>());
         let mut doc = Document::new("Native derivative axes", Size::new(5, 5), ColorMode::Rgb, SampleType::F32);
-        doc.icc_profile = Some(photocraft_cms::Builtin::LinearSrgb.profile().to_bytes());
+        doc.icc_profile = Some(craft_cms::Builtin::LinearSrgb.profile().to_bytes());
         for (axis, branch) in branches.iter().enumerate() {
             let custom = &branch.filters[1].params;
             let kernel = custom["kernel"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap() as f32).collect();
@@ -2344,7 +2345,7 @@ mod tests {
             }
         }
         let mut doc = photocraft_doc::Document::new("Native screen pipeline", photocraft_geom::Size::new(8, 8), ColorMode::Rgb, depth);
-        doc.icc_profile = Some(photocraft_cms::Builtin::Srgb.profile().to_bytes());
+        doc.icc_profile = Some(craft_cms::Builtin::Srgb.profile().to_bytes());
         doc.patterns = mapping.patterns;
         let Some(NativeStructure::Composite { branches }) = mapping.structure else { panic!("native screen structure") };
         for branch in branches {
@@ -2364,7 +2365,7 @@ mod tests {
                     });
                     Adjustment::ChannelMixer { matrix, monochrome: mono }
                 } else if filter.command == "image.adjustments.colorLookup" {
-                    let table = photocraft_cms::lutfile::parse("native.cube", filter.params["data"].as_str().unwrap().as_bytes()).unwrap();
+                    let table = craft_cms::lutfile::parse("native.cube", filter.params["data"].as_str().unwrap().as_bytes()).unwrap();
                     Adjustment::ColorLookup {
                         name: "Native ink".into(),
                         size: table.size as u32,
@@ -2646,7 +2647,7 @@ mod tests {
             source.write_region(b, &pixels);
             let painted = photocraft_algo::apply_in_with(&source, &options, b, b, None, b, &Interrupt::NONE).unwrap();
             let mut doc = Document::new("Native independent component strokes", Size::new(9, 7), ColorMode::Rgb, depth);
-            doc.icc_profile = Some(photocraft_cms::Builtin::LinearSrgb.profile().to_bytes());
+            doc.icc_profile = Some(craft_cms::Builtin::LinearSrgb.profile().to_bytes());
             for (axis, branch) in branches.iter().enumerate() {
                 let mut isolated = source.clone();
                 let gray: Vec<_> =
