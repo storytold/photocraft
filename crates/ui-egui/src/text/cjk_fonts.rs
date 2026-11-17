@@ -13,7 +13,7 @@
 
 use std::sync::Arc;
 
-use craft::ui::fonts::{EmbeddedFace, OnDemandFonts, SystemCandidates, han_for_locale};
+use craft::ui::fonts::{EmbeddedFace, FontCandidates, OnDemandFonts, SystemCandidates, han_for_locale};
 use photocraft_text::craft_fonts::{self, CraftFont};
 
 /// The craft-fonts faces `faces` holds, as the stack's embedded faces, in manifest order. A face
@@ -29,6 +29,66 @@ fn embedded(faces: &[CraftFont]) -> Vec<EmbeddedFace> {
 /// The craft-fonts faces this build embeds, in manifest order; empty without craft-fonts.
 pub fn craft_faces() -> Vec<EmbeddedFace> {
     embedded(craft_fonts::CRAFT_FONTS)
+}
+
+/// A face for each script the interface can show that no craft face draws (Tamil, say): the
+/// language list writes every offered language in its own script, and the on-demand loader
+/// registers a face only after a pass drew a missing glyph. One pass too late: a release build
+/// shows a box for that pass, and a build that panics on a missing glyph (egui's
+/// `MissingGlyphPolicy::Panic`, which the tests use) dies on it.
+///
+/// Faces come from the installed fonts, one per script, read once per process; a script this
+/// machine has no font for is left to the loader (and to tofu). Empty on the web, which has no
+/// installed fonts. Inter, the interface face, already draws Latin, Cyrillic and Greek.
+pub fn uncovered_script_faces() -> &'static [EmbeddedFace] {
+    static FACES: std::sync::OnceLock<Vec<EmbeddedFace>> = std::sync::OnceLock::new();
+    FACES.get_or_init(uncovered_scripts).as_slice()
+}
+
+/// The scripts of the offered languages that no craft face and no interface face draws, with an
+/// installed face for each; empty on the web.
+fn uncovered_scripts() -> Vec<EmbeddedFace> {
+    #[cfg(target_arch = "wasm32")]
+    return Vec::new();
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let mut drawn: Vec<&str> = craft_fonts::CRAFT_FONTS.iter().flat_map(|face| face.scripts.iter().copied()).collect();
+        drawn.extend_from_slice(INTERFACE_SCRIPTS);
+        let mut scripts: Vec<&'static str> = Vec::new();
+        for language in crate::i18n::LANGUAGES.iter().map(|lang| lang.code) {
+            for script in craft::i18n::scripts(language) {
+                let code = script.code();
+                if !drawn.iter().any(|drawn| drawn.eq_ignore_ascii_case(code)) && !scripts.contains(&code) {
+                    scripts.push(code);
+                }
+            }
+        }
+        scripts.into_iter().filter_map(installed_face).collect()
+    }
+}
+
+/// The scripts Inter draws, so no system face is read for them.
+const INTERFACE_SCRIPTS: &[&str] = &["latn", "cyrl", "grek"];
+
+/// The largest installed face read for a script: a font collection of several CJK-sized faces
+/// buys nothing here.
+const MAX_SCRIPT_FACE_BYTES: u64 = 8 << 20;
+
+/// The first installed face that may draw `script`, as an embedded face of the UI stack.
+fn installed_face(script: &'static str) -> Option<EmbeddedFace> {
+    for path in SystemCandidates.files(script, None) {
+        let Some(size) = std::fs::metadata(&path).ok().map(|meta| meta.len()) else { continue };
+        if size == 0 || size > MAX_SCRIPT_FACE_BYTES {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(&path) else { continue };
+        let Some(family) = path.file_stem().and_then(|stem| stem.to_str()) else { continue };
+        let family: &'static str = Box::leak(family.to_owned().into_boxed_str());
+        let bytes: &'static [u8] = Box::leak(bytes.into_boxed_slice());
+        let scripts: &'static [&'static str] = Box::leak(vec![script].into_boxed_slice());
+        return Some(EmbeddedFace { family, style: "Regular", scripts, index: 0, bytes, role: None });
+    }
+    None
 }
 
 /// The OS locale (`ja_JP`), which decides the Han preference when the UI language names none. `None` on the web and

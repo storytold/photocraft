@@ -74,6 +74,28 @@ fn lazy_fallbacks_follow_ui_font_size_and_survive_size_changes() {
 }
 
 #[test]
+fn a_script_no_craft_face_draws_has_a_face_on_the_first_pass() {
+    // The language list writes every offered language in its own script. The craft fonts draw
+    // most of them; a script they don't (Tamil, here) comes from the installed fonts, because
+    // the on-demand loader registers its face only after a pass drew a missing glyph, and that
+    // pass panics wherever a missing glyph is an error.
+    let tamil = uncovered_script_faces().iter().any(|face| face.scripts.iter().any(|script| script.eq_ignore_ascii_case("taml")));
+    if !tamil {
+        eprintln!("skipping: no installed Tamil font");
+        return;
+    }
+    let ctx = egui::Context::default();
+    ctx.set_missing_glyph_policy(egui::MissingGlyphPolicy::Panic);
+    crate::theme::install_fonts(&ctx);
+    let text = "தமிழ்";
+    let mut out = ctx.run_ui(Default::default(), |ui| {
+        ui.label(text);
+    });
+    out.textures_delta.clear();
+    assert!(ctx.fonts_mut(|f| f.has_glyphs(&FontId::proportional(12.0), text)), "the first pass draws Tamil");
+}
+
+#[test]
 fn system_fonts_cover_other_script_samples() {
     // Like the CJK system-font test, run per script when this machine has a font for it.
     let samples = [("ภาพถ่าย/วันหยุดพักผ่อน", 'ภ'), ("مرحبا", 'م'), ("שלום", 'ש'), ("नमस्ते", 'न')];

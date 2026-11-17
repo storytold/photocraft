@@ -981,10 +981,16 @@ fn ui_fonts(ctx: &egui::Context, ui_language: &str) -> UiFonts<'static> {
     // The monochrome emoji face egui's `default_fonts` would add; the last resort after the system fonts.
     let mut emoji = Emoji::default();
     emoji.monochrome = craft::ui::fonts::noto_emoji();
+    // The craft faces, plus one installed face for each script they don't draw: the language list
+    // writes every offered language in its own script, and the pass that first draws one must find
+    // a face (the on-demand loader registers its own only a pass later, and a missing glyph panics
+    // where the tests ask for that).
+    let mut craft_faces = crate::cjk_fonts::craft_faces();
+    craft_faces.extend(crate::cjk_fonts::uncovered_script_faces());
     let mut fonts = UiFonts::new(&I18nScripts)
         .family(Family::named("medium").weight(500))
         .family(Family::named(SEMIBOLD).weight(600))
-        .craft_faces(&crate::cjk_fonts::craft_faces())
+        .craft_faces(&craft_faces)
         .ui_language(ui_language)
         .emoji(emoji);
     if let Some(locale) = crate::cjk_fonts::os_locale() {
