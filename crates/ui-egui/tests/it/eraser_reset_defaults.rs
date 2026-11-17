@@ -16,7 +16,7 @@ fn app() -> PhotocraftApp {
 
 /// A control request as the control channel sends it, then the frame's sync.
 fn control(app: &mut PhotocraftApp, method: &str, params: Value) -> Value {
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     let (req, rx) = ControlRequest::new(method, params);
     handle(app, &ctx, &req);
     app.sync_views();

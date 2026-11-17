@@ -18,6 +18,7 @@ fn deny_file(id: &str, _: &Value) -> photocraft_engine::Result<()> {
 }
 
 /// The Home screen with `path` as its one recent file, under the desktop's automation policy.
+/// The framework start screen is drawn through `canvas::document_area`, as in the app.
 fn home(path: &str) -> Harness<'static, (PhotocraftApp, bool)> {
     let services = Services {
         automation_authorize: Some(deny_file),
@@ -30,7 +31,7 @@ fn home(path: &str) -> Harness<'static, (PhotocraftApp, bool)> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
     app.background_jobs = false;
     app.push_recent(path);
-    let mut h = Harness::builder().with_size(egui::vec2(900.0, 760.0)).build_ui_state(
+    let mut h = Harness::builder().with_size(egui::vec2(900.0, 760.0)).with_context(app.ctx().clone()).build_ui_state(
         |ui, (app, ready): &mut (PhotocraftApp, bool)| {
             if *ready {
                 egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| crate::canvas::document_area(app, ui));
@@ -38,13 +39,14 @@ fn home(path: &str) -> Harness<'static, (PhotocraftApp, bool)> {
         },
         (app, false),
     );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::default());
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::AppTheme::default());
     h.state_mut().1 = true;
     h.run_steps(3);
     h
 }
 
-/// Click the row, as synthetic input when `automation` is set.
+/// Click the row, as synthetic input when `automation` is set. The framework start screen names
+/// a recent row by its file name, so that name is the access label the click finds.
 fn click(h: &mut Harness<'static, (PhotocraftApp, bool)>, automation: bool) {
     h.get_by_label("outsideroot.png").click();
     h.state_mut().0.automation_input = automation;
