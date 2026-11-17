@@ -1,7 +1,7 @@
 use super::filters::smart;
 use super::source::{
-    SourceImage, cache_get_authorized, cache_key_with_order, cache_put, convert_svg_source, decode_source_admitted_in_with_order, flattened_source,
-    source_bytes, source_image_in_with_order, source_image_with_order, source_surface_from_buffer, svg_source_image_in, vector_scale,
+    SourceImage, buffer_to_surface, cache_get_authorized, cache_key_with_order, cache_put, convert_svg_source, decode_source_admitted_in_with_order,
+    flattened_source, source_bytes, source_image_in_with_order, source_image_with_order, source_surface_from_buffer, svg_source_image_in, vector_scale,
 };
 use super::{
     Affine, Arc, BlendMode, Document, EngineError, Homography, JobCtx, Layer, LayerContent, LayerId, PixelFormat, Rect, Result, SmartFilter, SmartObject,
@@ -382,7 +382,12 @@ fn stack_image_in_with_order(
             return Err(other("the SVG has too many shapes for Stack Mode at this size"));
         }
     }
-    let img = prepared_source_image(&doc, fmt, Some(mode), ctx)?;
+    let img = if photocraft_io::is_svg_input(file_name, bytes) && fmt.mode == photocraft_color::ColorMode::Rgb {
+        let buffer = prepared_stack_buffer(&doc, mode, ctx)?;
+        SourceImage { surface: Arc::new(buffer_to_surface(&buffer, fmt)), bounds: buffer.rect }
+    } else {
+        prepared_source_image(&doc, fmt, Some(mode), ctx)?
+    };
     cache_put(key, img.clone(), recording.finish(), true);
     Ok(img)
 }
@@ -395,6 +400,16 @@ pub(crate) fn prepared_source_image(doc: &Document, fmt: PixelFormat, mode: Opti
         ctx.check()?;
         return Ok(image);
     };
+    let buf = prepared_stack_buffer(doc, mode, ctx)?;
+    let image = SourceImage { surface: Arc::new(source_surface_from_buffer(doc, &buf, fmt)?), bounds: buf.rect };
+    ctx.check()?;
+    Ok(image)
+}
+
+/// Only statistics belong here; interpreting native U8/F32 or SVG sRGB encoding
+/// belongs to the caller and must happen exactly once after the combination.
+fn prepared_stack_buffer(doc: &Document, mode: photocraft_doc::StackMode, ctx: &JobCtx) -> Result<photocraft_compose::Buffer> {
+    ctx.check()?;
     use photocraft_algo::stack::Stat;
     let layers: &[Layer] = match doc.layers.as_slice() {
         [only] if only.is_group() => only.children().unwrap_or_default(),
@@ -435,27 +450,19 @@ pub(crate) fn prepared_source_image(doc: &Document, fmt: PixelFormat, mode: Opti
     };
     let buf = photocraft_compose::Buffer { rect: bounds, px: photocraft_algo::stack::combine(&frames, stat) };
     ctx.check()?;
-    let image = SourceImage { surface: Arc::new(source_surface_from_buffer(doc, &buf, fmt)?), bounds };
-    ctx.check()?;
-    Ok(image)
+    Ok(buf)
 }
 
 /// Reuse admitted SVG layers in their sRGB encoding, then convert once to the parent's profile.
 /// The caller retains its shared preparation render reservation while this source is composed.
 pub(crate) fn prepared_svg_source_image(source: &Document, parent: &Document, mode: Option<photocraft_doc::StackMode>, ctx: &JobCtx) -> Result<SourceImage> {
     ctx.check()?;
-    let image = match mode {
-        Some(mode) => prepared_source_image(source, PixelFormat::RGBA32F, Some(mode), ctx)?,
-        None => {
-            let bounds = source.bounds();
-            if u64::from(bounds.width()) * u64::from(bounds.height()) > photocraft_compose::MAX_RENDER_PIXELS {
-                return Err(other("the SVG smart object's contents are too large to render"));
-            }
-            // SVG caches hold encoded sRGB. Native U8-to-F32 depth conversion would
-            // linearize them before the sRGB CMS transform and decode the transfer curve twice.
-            SourceImage { surface: Arc::new(photocraft_compose::composite_to_surface(source, bounds, PixelFormat::RGBA32F, None)), bounds }
-        }
-    };
+    let mode = mode.ok_or_else(|| other("non-Stack SVG preparation must use its original whole-drawing renderer"))?;
+    let buffer = prepared_stack_buffer(source, mode, ctx)?;
+    // Imported SVG layers hold encoded sRGB, including their native U8 caches.
+    // Generic native depth conversion would decode that transfer curve before
+    // convert_svg_source interprets it as sRGB, applying the transfer twice.
+    let image = SourceImage { surface: Arc::new(buffer_to_surface(&buffer, PixelFormat::RGBA32F)), bounds: buffer.rect };
     ctx.check()?;
     let image = convert_svg_source(image, parent)?;
     ctx.check()?;
