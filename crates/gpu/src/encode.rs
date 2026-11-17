@@ -133,6 +133,14 @@ impl Compositor {
         let canvas = doc.bounds();
         let region = region.intersect(&canvas);
         let plan = plan(doc)?;
+        // An isolated bright pixel at very low coverage can stay above the half-float range
+        // in the straight-alpha accumulator, even if it composites to an ordinary colour.
+        if self.acc_format == wgpu::TextureFormat::Rgba16Float
+            && (doc.depth == photocraft_color::SampleType::F32
+                || plan.passes.iter().any(|pass| pass.tex.as_ref().is_some_and(|tex| tex.surface.get().format().sample == photocraft_color::SampleType::F32)))
+        {
+            return Err(Unsupported("32-bit layer compositing requires a full-float GPU target".into()));
+        }
         self.check_fx(doc, &plan)?;
         self.pattern_mode = doc.pixel_format().mode;
         self.pattern_doc = doc.id;

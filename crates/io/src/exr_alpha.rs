@@ -3,9 +3,8 @@
 use craft_exr::decode::{Limits, PartInfo, SampleType};
 use photocraft_codecs::{Image, SampleType as CodecSample};
 
-// Give emission a little coverage so straight-alpha layers can carry it. The smallest
-// normal binary16 alpha survives the canvas's half-float texture upload and keeps ordinary
-// emission colours representable after division.
+// Give emission a little coverage so straight-alpha layers can carry it, then restore
+// zero coverage when writing associated colour on export.
 const EMISSION_ALPHA: f32 = 1.0 / 16_384.0;
 
 pub(crate) fn parts(bytes: &[u8]) -> Vec<PartInfo> {

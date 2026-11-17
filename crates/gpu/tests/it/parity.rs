@@ -85,6 +85,30 @@ fn hdr_adjustments_preserve_range_and_cpu_parity() {
     }
 }
 
+#[test]
+fn hdr_low_coverage_preserves_associated_colour() {
+    let Some(mut g) = gpu() else { return };
+    let mut doc = Document::new("HDR emission", Size::new(2, 1), ColorMode::Rgb, SampleType::F32);
+    let mut layer = Layer::raster("emission", PixelFormat::RGBA32F);
+    layer.surface_mut().unwrap().write_region(doc.bounds(), &[131_072.0, 0.0, 0.0, 1.0 / 16_384.0, 524_288.0, 0.0, 0.0, 1.0 / 1_048_576.0]);
+    doc.layers.push(layer);
+
+    let cpu = photocraft_compose::flatten(&doc);
+    for comp in [&mut g.comp, &mut g.paged] {
+        let actual = render_to_vec(comp, &g.device, &g.queue, &doc, doc.bounds()).unwrap();
+        assert_eq!(actual.len(), 2);
+        for ((pixel, reference), expected) in actual.iter().zip(&cpu.px).zip([8.0, 0.5]) {
+            assert!(pixel[0].is_finite(), "{pixel:?}");
+            assert_eq!(pixel[3], reference[3]);
+            assert!((pixel[0] * pixel[3] - expected).abs() < TOL, "{pixel:?}");
+        }
+    }
+
+    let mut half = Compositor::try_new_with_format(&g.device, wgpu::TextureFormat::Rgba16Float).unwrap();
+    let error = render_to_vec(&mut half, &g.device, &g.queue, &doc, doc.bounds()).unwrap_err();
+    assert!(error.to_string().contains("requires a full-float GPU target"), "{error}");
+}
+
 /// Phase timings for diagnosing expensive parity checks; nextest shows them only for the
 /// selected slow Windows tests, without changing their timeout or pass criteria.
 fn timed<T>(what: &str, run: impl FnOnce() -> T) -> T {
@@ -2529,7 +2553,7 @@ fn blend_mode_extremes() {
 
 /// Colours for the non-separable modes: in gamut, greys and near-greys above 1 (lum ≈ max, where
 /// ClipColor divided by rounding noise), saturated colours above 1, negatives and mixes. All are
-/// exact in half floats (the GPU's layer textures of 16/32-bit documents), so both compositors
+/// exact in half floats (the GPU's layer textures of 16-bit documents), so both compositors
 /// see the same inputs.
 const NONSEP_COLORS: [[f32; 3]; 12] = [
     [0.25, 0.5, 0.75],
