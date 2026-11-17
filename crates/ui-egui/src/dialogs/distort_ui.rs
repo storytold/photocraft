@@ -279,7 +279,6 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
         #[cfg(not(target_arch = "wasm32"))]
         "edit.contentAwareFill" if ui.is_some() && workspace_open(app, id) => Some(hosted(app, id, ui.unwrap_or(&Value::Null))),
         // `ui` addresses the workspace: closed, that is an error, not a fill with the defaults.
-        #[cfg(not(target_arch = "wasm32"))]
         "edit.contentAwareFill" if ui.is_some() => Some(Err("Content-Aware Fill is not open".into())),
         #[cfg(not(target_arch = "wasm32"))]
         "select.selectAndMask" if ui.is_some() && workspace_open(app, id) => Some(hosted(app, id, ui.unwrap_or(&Value::Null))),
@@ -377,6 +376,22 @@ mod tests {
 
     use craft::behavior::kurbo::Point;
     use craft::imaging::ui::warp::pin::{Pin, PinEdit};
+
+    /// A workspace request must never escape to the engine's default pixel fill, on any target.
+    #[test]
+    fn closed_content_aware_fill_ui_requests_are_consumed_without_editing() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let ctx = app.ctx().clone();
+        app.session.execute("file.new", json!({"width": 4, "height": 4})).unwrap();
+        app.session.execute("select.rect", json!({"x": 1, "y": 1, "width": 1, "height": 1})).unwrap();
+        let before = app.session.active().unwrap().history.past_len();
+        for ui in [Value::Null, json!({}), json!({"cancel": true}), json!({"sampling": "rectangular"})] {
+            let reply = menu(&mut app, &ctx, "edit.contentAwareFill", &json!({"ui": ui}));
+            assert!(matches!(reply, Some(Err(ref error)) if error.contains("not open")), "{reply:?}");
+        }
+        assert_eq!(app.session.active().unwrap().history.past_len(), before);
+        assert!(app.caf.is_none());
+    }
 
     fn paint_bar(app: &mut PhotocraftApp) {
         app.session
