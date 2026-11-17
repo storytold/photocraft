@@ -1,50 +1,95 @@
-use super::*;
-use crate::{canvas, dialogs, layer_style, theme::ThemeKind};
-use egui::{Key, vec2};
-use egui_kittest::{Harness, kittest::Queryable};
 use std::sync::Arc;
 
-fn app(depth: u32) -> PhotocraftApp {
+use serde_json::json;
+
+use super::*;
+use crate::dialogs::layer_style::tests::{
+    ColorStop, DialogId, EffectId, EffectKind, EffectSpec, FieldKind, GradientStops, KIND_KEYS, LayerStyle, LayerStyleDraft, LayerStylePage, Srgba, StyleValue,
+    cancel, defaults, draft, edit, kind, ok, param,
+};
+use crate::dialogs::layer_style::{self, preview_document};
+use crate::{PhotocraftApp, color_picker_ui};
+
+fn new_app(depth: u32) -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("prefs.set", json!({"path":"interface.language","value":"en"})).unwrap();
     app.run("file.new", json!({"width":32,"height":24,"depth":depth,"background":"#406080"})).unwrap();
     app
 }
-fn fields(app: &PhotocraftApp, id: u64) -> Map<String, Value> {
-    app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields.clone()
+
+/// Opens the child picker of `parent` for one field.
+fn open_picker(app: &mut PhotocraftApp, parent: DialogId, effect: &str, field: &str, stop: Option<usize>) -> Result<DialogId, String> {
+    open(app, parent.value(), effect, field, stop)
 }
-fn set_color(app: &mut PhotocraftApp, id: u64, color: &str) {
-    app.ui.dialog_mut(id).unwrap().fields.insert("color".into(), json!(color));
+
+fn style(app: &PhotocraftApp, id: DialogId) -> LayerStyle {
+    draft(app, id).style.clone()
 }
-fn selected(app: &PhotocraftApp, parent: u64) -> String {
-    fields(app, parent)["selected"].as_str().unwrap().into()
+
+/// The child picker answers `hex`, as the user editing its colour does.
+fn set_color(app: &mut PhotocraftApp, picker: DialogId, hex: &str) {
+    color_picker_ui::testing::set_color(app, picker, hex);
+}
+
+/// The effect page the dialog shows.
+fn selected(app: &PhotocraftApp, parent: DialogId) -> EffectId {
+    match draft(app, parent).page {
+        LayerStylePage::Effect(id) => id,
+        ref other => panic!("an effect page is shown, not {other:?}"),
+    }
+}
+
+fn color_of(style: &LayerStyle, id: EffectId, key: &str) -> Srgba {
+    match param(style, id, key) {
+        Some(StyleValue::Color(c)) => c,
+        other => panic!("{key} is a colour, not {other:?}"),
+    }
+}
+
+fn stop_colors(style: &LayerStyle, id: EffectId) -> Vec<Srgba> {
+    match param(style, id, "stops") {
+        Some(StyleValue::Gradient(g)) => g.color.iter().map(|s| s.color).collect(),
+        other => panic!("stops are a gradient, not {other:?}"),
+    }
+}
+
+fn others(style: &LayerStyle, id: EffectId) -> Vec<(String, StyleValue)> {
+    style.effect(id).unwrap().params.0.iter().filter(|(_, v)| matches!(v, StyleValue::Other(_))).map(|(k, v)| (k.clone(), v.clone())).collect()
+}
+
+fn top(app: &PhotocraftApp) -> Option<DialogId> {
+    app.framework.dialogs.stack().top()
 }
 
 #[test]
 fn every_exposed_color_field_uses_the_shared_picker_and_only_updates_its_target() {
-    for (kind, _) in layer_style::KINDS {
-        for (field, _, p) in spec(kind) {
-            if !matches!(p, P::Color) {
+    for key in KIND_KEYS {
+        let kind = kind(key);
+        for field in EffectSpec::photoshop(kind).fields {
+            if !matches!(field.kind, FieldKind::Color) {
                 continue;
             }
-            let mut app = app(8);
-            let parent = layer_style::open(&mut app, Some(kind)).unwrap();
+            let mut app = new_app(8);
+            let parent = layer_style::open(&mut app, Some(kind.key())).unwrap();
             let effect = selected(&app, parent);
-            let original = fields(&app, parent);
+            let original = style(&app, parent);
             let tools = app.session.tools.clone();
             let doc = app.session.active().unwrap().doc.clone();
             let history = app.session.active().unwrap().history.past_len();
-            let picker = open(&mut app, parent, &effect, field, None).unwrap();
-            assert!(color_picker_ui::owns(&fields(&app, picker)));
-            assert_eq!(fields(&app, picker)["__label"], "Color Picker (Layer Style Color)");
+            let picker = open_picker(&mut app, parent, &effect.key(), &field.key, None).unwrap();
+            assert_eq!(top(&app), Some(picker), "the shared picker is the top dialog");
             set_color(&mut app, picker, "#23a567");
-            let shown = preview_fields(&app, parent, &original);
-            assert_eq!(super::super::entry(&shown, &effect).unwrap()["params"][field], "#23a567");
-            assert_eq!(fields(&app, parent), original);
-            dialogs::confirm(&mut app, picker).unwrap();
-            let mut expected = original;
-            set_param(&mut expected, &effect, field, json!("#23a567"));
-            assert_eq!(fields(&app, parent), expected, "{kind}.{field}");
+            let wanted = Srgba::from_hex("#23a567").unwrap();
+            let shown = preview_style(&app).expect("the preview shows the picker's colour");
+            assert!(color_of(&shown, effect, &field.key).same_rgb8(wanted), "{key}.{}", field.key);
+            assert_eq!(style(&app, parent), original, "the draft waits for the picker's OK");
+            ok(&mut app, picker);
+            let now = style(&app, parent);
+            let got = color_of(&now, effect, &field.key);
+            assert!(got.same_rgb8(wanted), "{key}.{}", field.key);
+            let mut expected = LayerStyleDraft::new(original);
+            expected.set_param(effect, &field.key, StyleValue::Color(got));
+            assert_eq!(now, expected.style, "{key}.{}: only the target changes", field.key);
             assert!(Arc::ptr_eq(&app.session.active().unwrap().doc, &doc));
             assert_eq!(app.session.active().unwrap().history.past_len(), history);
             assert_eq!(app.session.tools.foreground, tools.foreground);
@@ -56,40 +101,41 @@ fn every_exposed_color_field_uses_the_shared_picker_and_only_updates_its_target(
 #[test]
 fn preview_cancel_ok_parent_cancel_and_apply_are_transactional_at_every_depth() {
     for depth in [8, 16, 32] {
-        let mut app = app(depth);
-        let parent = layer_style::open(&mut app, Some("colorOverlay")).unwrap();
+        let mut app = new_app(depth);
+        let parent = layer_style::open(&mut app, Some(EffectKind::ColorOverlay.key())).unwrap();
         let effect = selected(&app, parent);
-        layer_style::add_instance(&mut app.ui.dialog_mut(parent).unwrap().fields, "stroke");
-        let original = fields(&app, parent);
+        edit(&mut app, parent, |d| {
+            d.add_instance(EffectKind::Stroke, &defaults(EffectKind::Stroke));
+        });
+        let original = style(&app, parent);
         let st = app.session.active().unwrap();
         let (doc, history, revision, dirty) = (st.doc.clone(), st.history.past_len(), st.revision, st.is_dirty());
-        let picker = open(&mut app, parent, &effect, "color", None).unwrap();
+        let picker = open_picker(&mut app, parent, &effect.key(), "color", None).unwrap();
         set_color(&mut app, picker, "#00ff00");
-        let (shown, key) = canvas::display_doc(&mut app, 0);
+        let (shown, key) = preview_document(&app).expect("the preview renders");
         assert!(!Arc::ptr_eq(&shown, &doc));
-        let again = canvas::display_doc(&mut app, 0);
-        assert_eq!(key, again.1);
-        assert!(Arc::ptr_eq(&shown, &again.0), "unchanged preview is cached");
+        assert_eq!(key, preview_document(&app).unwrap().1, "an unchanged preview keeps its key");
         let pixel = photocraft_compose::flatten(&shown).get(3, 3);
         assert!(pixel[1] > pixel[0] && pixel[1] > pixel[2], "live preview is green at {depth} bits");
         let st = app.session.active().unwrap();
         assert_eq!((st.history.past_len(), st.revision, st.is_dirty()), (history, revision, dirty));
         assert!(Arc::ptr_eq(&st.doc, &doc));
-        dialogs::cancel(&mut app, picker).unwrap();
-        assert_eq!(fields(&app, parent), original);
-        assert_ne!(canvas::display_doc(&mut app, 0).1, key);
-        let picker = open(&mut app, parent, &effect, "color", None).unwrap();
+        cancel(&mut app, picker);
+        assert_eq!(style(&app, parent), original);
+        assert_ne!(preview_document(&app).unwrap().1, key, "the child's colour is no longer shown");
+        let picker = open_picker(&mut app, parent, &effect.key(), "color", None).unwrap();
         set_color(&mut app, picker, "#00ff00");
-        dialogs::confirm(&mut app, picker).unwrap();
-        assert_eq!(app.session.active().unwrap().history.past_len(), history);
-        dialogs::cancel(&mut app, parent).unwrap();
-        assert!(Arc::ptr_eq(&canvas::display_doc(&mut app, 0).0, &doc));
-        let parent = layer_style::open(&mut app, Some("colorOverlay")).unwrap();
+        ok(&mut app, picker);
+        assert_eq!(app.session.active().unwrap().history.past_len(), history, "the child's OK sets the draft only");
+        cancel(&mut app, parent);
+        assert!(preview_document(&app).is_none_or(|(shown, _)| Arc::ptr_eq(&shown, &doc)), "parent Cancel drops everything");
+        assert!(app.framework.dialogs.is_empty());
+        let parent = layer_style::open(&mut app, Some(EffectKind::ColorOverlay.key())).unwrap();
         let effect = selected(&app, parent);
-        let picker = open(&mut app, parent, &effect, "color", None).unwrap();
+        let picker = open_picker(&mut app, parent, &effect.key(), "color", None).unwrap();
         set_color(&mut app, picker, "#00ff00");
-        dialogs::confirm(&mut app, picker).unwrap();
-        dialogs::confirm(&mut app, parent).unwrap();
+        ok(&mut app, picker);
+        ok(&mut app, parent);
         let applied = app.session.active().unwrap().doc.clone();
         let pixel = photocraft_compose::flatten(&applied).get(3, 3);
         assert!(pixel[1] > pixel[0]);
@@ -102,182 +148,96 @@ fn preview_cancel_ok_parent_cancel_and_apply_are_transactional_at_every_depth() 
 
 #[test]
 fn unchanged_ok_preserves_missing_parameters_and_imported_effect_snapshot() {
-    let mut app = app(8);
+    let mut app = new_app(8);
     app.run("layer.layerStyle.stroke", json!({"size":7,"color":"#123456","add":true})).unwrap();
     app.run("layer.layerStyle.stroke", json!({"size":9,"color":"#abcdef","add":true})).unwrap();
-    let parent = layer_style::open(&mut app, Some("stroke")).unwrap();
-    let original = fields(&app, parent);
-    for effect in ["fx1", "fx2"] {
-        let picker = open(&mut app, parent, effect, "color", None).unwrap();
-        dialogs::confirm(&mut app, picker).unwrap();
-        assert_eq!(fields(&app, parent), original);
+    let parent = layer_style::open(&mut app, Some(EffectKind::Stroke.key())).unwrap();
+    let original = style(&app, parent);
+    let (first, second) = (EffectId(1), EffectId(2));
+    for effect in [first, second] {
+        let picker = open_picker(&mut app, parent, &effect.key(), "color", None).unwrap();
+        ok(&mut app, picker);
+        assert_eq!(style(&app, parent), original, "an unchanged OK writes nothing");
     }
-    let picker = open(&mut app, parent, "fx2", "color", None).unwrap();
+    let picker = open_picker(&mut app, parent, &second.key(), "color", None).unwrap();
     set_color(&mut app, picker, "#223344");
-    dialogs::confirm(&mut app, picker).unwrap();
-    let current = fields(&app, parent);
-    assert_eq!(super::super::entry(&current, "fx1"), super::super::entry(&original, "fx1"));
-    assert_eq!(super::super::entry(&current, "fx2").unwrap()["fx"], super::super::entry(&original, "fx2").unwrap()["fx"]);
-    dialogs::cancel(&mut app, parent).unwrap();
-    let parent = layer_style::open(&mut app, Some("gradientOverlay")).unwrap();
+    ok(&mut app, picker);
+    let current = style(&app, parent);
+    assert_eq!(current.effect(first), original.effect(first));
+    assert_eq!(others(&current, second), others(&original, second), "the imported snapshot stays");
+    cancel(&mut app, parent);
+
+    let parent = layer_style::open(&mut app, Some(EffectKind::GradientOverlay.key())).unwrap();
     let effect = selected(&app, parent);
-    app.ui.dialog_mut(parent).unwrap().fields.get_mut("effects").unwrap().as_array_mut().unwrap()[0]["params"].as_object_mut().unwrap().remove("stops");
-    let original = fields(&app, parent);
-    let picker = open(&mut app, parent, &effect, "stops", Some(0)).unwrap();
-    dialogs::confirm(&mut app, picker).unwrap();
-    assert_eq!(fields(&app, parent), original);
+    edit(&mut app, parent, |d| {
+        d.style.effect_mut(effect).unwrap().params.0.remove("stops");
+    });
+    let original = style(&app, parent);
+    let picker = open_picker(&mut app, parent, &effect.key(), "stops", Some(0)).unwrap();
+    ok(&mut app, picker);
+    assert_eq!(style(&app, parent), original, "a missing stops parameter stays missing");
 }
 
 #[test]
 fn stale_targets_and_invalid_colors_never_apply_or_leave_preview() {
-    for change in ["document", "parent", "effect", "kind", "color", "source", "malformed", "layer", "replaced"] {
-        let mut app = app(8);
-        let parent = layer_style::open(&mut app, Some("colorOverlay")).unwrap();
+    // Targets the picker cannot take are refused at open.
+    let mut app = new_app(8);
+    let parent = layer_style::open(&mut app, Some(EffectKind::ColorOverlay.key())).unwrap();
+    let effect = selected(&app, parent);
+    assert!(open_picker(&mut app, parent, "fx99", "color", None).is_err(), "no such instance");
+    assert!(open_picker(&mut app, parent, &effect.key(), "opacity", None).is_err(), "not a colour field");
+    assert!(open_picker(&mut app, parent, &effect.key(), "nothing", None).is_err(), "no such field");
+    cancel(&mut app, parent);
+
+    for change in ["document", "parent", "effect"] {
+        let mut app = new_app(8);
+        let parent = layer_style::open(&mut app, Some(EffectKind::ColorOverlay.key())).unwrap();
         let effect = selected(&app, parent);
-        let picker = open(&mut app, parent, &effect, "color", None).unwrap();
+        let picker = open_picker(&mut app, parent, &effect.key(), "color", None).unwrap();
         set_color(&mut app, picker, "#00ff00");
         match change {
             "document" => {
                 app.run("file.new", json!({"width":3,"height":3})).unwrap();
             }
             "parent" => {
-                app.ui.close_dialog(parent);
+                let ctx = app.ctx().clone();
+                app.framework.dialogs.cancel_by_id(&ctx, parent);
             }
-            "effect" => {
-                app.ui.dialog_mut(parent).unwrap().fields.insert("effects".into(), json!([]));
-            }
-            "kind" => {
-                app.ui.dialog_mut(parent).unwrap().fields["effects"][0]["kind"] = json!("stroke");
-            }
-            "color" => {
-                set_param(&mut app.ui.dialog_mut(parent).unwrap().fields, &effect, "color", json!("#ff00ff"));
-            }
-            "replaced" => {
-                app.ui.dialog_mut(parent).unwrap().fields["effects"][0] =
-                    json!({"id":effect,"kind":"colorOverlay","on":true,"params":{"color":"#ff0000","opacity":12}});
-            }
-            "source" => {
-                app.ui.dialog_mut(parent).unwrap().fields["effects"][0]["fx"] = json!({"replacement":true});
-            }
-            "malformed" => {
-                app.ui.dialog_mut(picker).unwrap().fields.insert(TARGET.into(), json!(null));
-            }
-            _ => {
-                app.ui.dialog_mut(parent).unwrap().fields.insert("layer".into(), json!(u64::MAX));
-            }
+            _ => edit(&mut app, parent, |d| d.remove_instance(effect)),
         }
-        let current_parent = app.ui.dialogs.iter().find(|d| d.id == parent).cloned();
-        assert!(dialogs::confirm(&mut app, picker).is_err(), "{change}");
-        assert_eq!(app.ui.dialogs.iter().find(|d| d.id == parent).cloned(), current_parent);
-    }
-    let mut app = app(8);
-    let parent = layer_style::open(&mut app, Some("colorOverlay")).unwrap();
-    let effect = selected(&app, parent);
-    let original = fields(&app, parent);
-    let picker = open(&mut app, parent, &effect, "color", None).unwrap();
-    set_color(&mut app, picker, "bad");
-    assert!(dialogs::confirm(&mut app, picker).is_err());
-    assert_eq!(fields(&app, parent), original);
-    let picker = open(&mut app, parent, &effect, "color", None).unwrap();
-    app.run("file.new", json!({"width":3,"height":3})).unwrap();
-    prune(&mut app);
-    assert!(!app.ui.dialogs.iter().any(|d| d.id == picker));
-}
-
-#[test]
-fn preview_off_and_parent_confirmation_and_cancellation_keep_their_contract() {
-    let mut app = app(8);
-    let parent = layer_style::open(&mut app, Some("colorOverlay")).unwrap();
-    app.ui.dialog_mut(parent).unwrap().fields.insert("preview".into(), json!(false));
-    let effect = selected(&app, parent);
-    let original = fields(&app, parent);
-    let doc = app.session.active().unwrap().doc.clone();
-    let picker = open(&mut app, parent, &effect, "color", None).unwrap();
-    set_color(&mut app, picker, "#00ff00");
-    assert!(Arc::ptr_eq(&canvas::display_doc(&mut app, 0).0, &doc));
-    assert!(dialogs::confirm(&mut app, parent).is_err());
-    assert_eq!(fields(&app, parent), original);
-    assert_eq!(app.ui.dialogs.len(), 2);
-    dialogs::cancel(&mut app, parent).unwrap();
-    assert!(app.ui.dialogs.is_empty());
-}
-
-fn harness() -> Harness<'static, PhotocraftApp> {
-    let mut app = app(8);
-    layer_style::open(&mut app, Some("colorOverlay")).unwrap();
-    let mut h = Harness::builder().with_size(vec2(1500.0, 1000.0)).build_ui_state(
-        |ui, app| {
-            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                dialogs::show(app, ui.ctx());
-            }
-        },
-        app,
-    );
-    PhotocraftApp::setup_context(&h.ctx, ThemeKind::ProMedium);
-    h.run_steps(4);
-    h
-}
-
-#[test]
-fn real_swatch_click_opens_shared_dialog_and_enter_escape_only_affect_the_child() {
-    for action in [Key::Enter, Key::Escape] {
-        let mut h = harness();
-        let parent = h.state().ui.dialogs[0].id;
-        let before = fields(h.state(), parent);
-        h.get_by_role(egui::accesskit::Role::ColorWell).click();
-        h.run();
-        assert_eq!(h.state().ui.dialogs.len(), 2);
-        let picker = h.state().ui.dialogs[1].id;
-        set_color(h.state_mut(), picker, "#00ff00");
-        h.key_press(action);
-        h.run();
-        assert_eq!(h.state().ui.dialogs.len(), 1);
-        assert_eq!(h.state().ui.dialogs[0].id, parent);
-        if action == Key::Escape {
-            assert_eq!(fields(h.state(), parent), before);
-        } else {
-            assert_eq!(super::super::entry(&fields(h.state(), parent), "fx1").unwrap()["params"]["color"], "#00ff00");
+        let before = (change != "parent" && change != "document").then(|| style(&app, parent));
+        if app.framework.dialogs.stack().contains(picker) {
+            ok(&mut app, picker);
         }
+        if let Some(before) = before {
+            assert_eq!(style(&app, parent), before, "{change}: the answer applies to nothing");
+            assert_eq!(preview_style(&app), Some(before), "{change}: no colour stays in the preview");
+        }
+        let st = app.session.active().unwrap();
+        assert!(st.doc.layers.iter().all(|l| l.effects.items.is_empty()), "{change}: nothing reached the document");
+        assert!(!app.framework.dialogs.stack().contains(picker), "{change}: the picker is gone");
     }
 }
 
-#[test]
-fn eyedropper_edits_only_the_picker_and_invalid_samples_leave_it_unchanged() {
-    let mut app = app(8);
-    let parent = layer_style::open(&mut app, Some("colorOverlay")).unwrap();
-    let effect = selected(&app, parent);
-    let original = fields(&app, parent);
-    let doc = app.session.active().unwrap().doc.clone();
-    let tools = app.session.tools.clone();
-    let picker = open(&mut app, parent, &effect, "color", None).unwrap();
-    color_picker_ui::sample_at(&mut app, 4.0, 4.0);
-    assert_eq!(fields(&app, picker)["color"], "#406080");
-    color_picker_ui::sample_at(&mut app, -100.0, -100.0);
-    assert_eq!(fields(&app, picker)["color"], "#406080");
-    assert_eq!(fields(&app, parent), original);
-    assert!(Arc::ptr_eq(&app.session.active().unwrap().doc, &doc));
-    assert_eq!(app.session.tools.foreground, tools.foreground);
-    dialogs::cancel(&mut app, picker).unwrap();
-}
-
-/// A Gradient Overlay's stop (#5177): the picker edits one colour of `stops`, previewing it,
-/// and leaves the other stops alone; a stop that doesn't exist is refused.
+/// A Gradient Overlay's stop (#5177): the picker edits one colour of `stops`, previewing it, and leaves the other
+/// stops alone; a stop that doesn't exist is refused.
 #[test]
 fn gradient_stop_colors_go_through_the_picker() {
-    let mut app = app(8);
-    let parent = layer_style::open(&mut app, Some("gradientOverlay")).unwrap();
+    let mut app = new_app(8);
+    let parent = layer_style::open(&mut app, Some(EffectKind::GradientOverlay.key())).unwrap();
     let effect = selected(&app, parent);
-    let three = json!([[0.0, "#ff0000"], [0.5, "#00ff00"], [1.0, "#0000ff"]]);
-    super::super::set_param(&mut app.ui.dialog_mut(parent).unwrap().fields, &effect, "stops", three);
-    assert!(open(&mut app, parent, &effect, "stops", Some(3)).is_err(), "no fourth stop");
-    assert!(open(&mut app, parent, &effect, "stops", None).is_err(), "stops is not a plain colour");
-    let picker = open(&mut app, parent, &effect, "stops", Some(1)).unwrap();
+    let (red, green, blue) = (Srgba::rgb(1.0, 0.0, 0.0), Srgba::rgb(0.0, 1.0, 0.0), Srgba::rgb(0.0, 0.0, 1.0));
+    let three = GradientStops::new(vec![ColorStop::new(0.0, red), ColorStop::new(0.5, green), ColorStop::new(1.0, blue)]);
+    edit(&mut app, parent, |d| d.set_param(effect, "stops", StyleValue::Gradient(three)));
+    assert!(open_picker(&mut app, parent, &effect.key(), "stops", Some(3)).is_err(), "no fourth stop");
+    assert!(open_picker(&mut app, parent, &effect.key(), "stops", None).is_err(), "stops is not a plain colour");
+    let picker = open_picker(&mut app, parent, &effect.key(), "stops", Some(1)).unwrap();
     set_color(&mut app, picker, "#123456");
-    let current = fields(&app, parent);
-    let shown = preview_fields(&app, parent, &current);
-    assert_eq!(super::super::entry(&shown, &effect).unwrap()["params"]["stops"][1][1], "#123456", "previewed");
-    assert_eq!(super::super::entry(&fields(&app, parent), &effect).unwrap()["params"]["stops"][1][1], "#00ff00", "not stored yet");
-    dialogs::confirm(&mut app, picker).unwrap();
-    let stops = super::super::entry(&fields(&app, parent), &effect).unwrap()["params"]["stops"].clone();
-    assert_eq!(stops, json!([[0.0, "#ff0000"], [0.5, "#123456"], [1.0, "#0000ff"]]));
+    let wanted = Srgba::from_hex("#123456").unwrap();
+    let shown = stop_colors(&preview_style(&app).unwrap(), effect);
+    assert!(shown[1].same_rgb8(wanted), "previewed");
+    assert!(stop_colors(&style(&app, parent), effect)[1].same_rgb8(green), "not stored yet");
+    ok(&mut app, picker);
+    let stops = stop_colors(&style(&app, parent), effect);
+    assert!(stops[0].same_rgb8(red) && stops[1].same_rgb8(wanted) && stops[2].same_rgb8(blue), "{stops:?}");
 }

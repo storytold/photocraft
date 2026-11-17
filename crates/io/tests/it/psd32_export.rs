@@ -9,11 +9,11 @@
 use crate::common;
 
 use common::Features;
+use craft_psd::{Compression, LayerInfoPlacement, PsdFile, hdr};
 use photocraft_color::{ColorMode, SampleType};
 use photocraft_doc::Document;
 use photocraft_geom::Size;
 use photocraft_io::*;
-use photocraft_psd::{Compression, LayerInfoPlacement, PsdFile, hdr};
 
 fn be32(b: &[u8], at: usize) -> u32 {
     u32::from_be_bytes(b[at..at + 4].try_into().unwrap())
@@ -300,7 +300,7 @@ fn merged_oracle_does_not_treat_extra_channels_as_transparency() {
         let mut file = PsdFile::from_bytes(&export_psd(&doc)).unwrap();
         let color_channels = if mode == ColorMode::Rgb { 3 } else { 1 };
         file.header.channels = color_channels + 1;
-        file.layer_info = Some(photocraft_psd::LayerInfo { merged_alpha: false, layers: Vec::new(), padding: None });
+        file.layer_info = Some(craft_psd::LayerInfo { merged_alpha: false, layers: Vec::new(), padding: None });
         file.image_data.compression = Compression::Raw;
         file.image_data.data = (0..color_channels).flat_map(|_| 2.0_f32.to_be_bytes()).chain(0.0_f32.to_be_bytes()).collect();
         assert!(!file.merged_has_alpha());
@@ -332,9 +332,9 @@ fn mt32_marks_the_merged_transparency() {
     let name: Vec<u8> = [0u8, 0, 0, 13].into_iter().chain("Transparency\0".encode_utf16().flat_map(u16::to_be_bytes)).collect();
     file.resources.retain(|r| !matches!(r.id, 1006 | 1045));
     assert!(!file.merged_has_alpha(), "a positive layer count alone");
-    file.global_blocks.push(photocraft_psd::TaggedBlock::new(*b"Mt32", Vec::new()));
+    file.global_blocks.push(craft_psd::TaggedBlock::new(*b"Mt32", Vec::new()));
     assert!(file.merged_has_alpha());
-    file.resources.push(photocraft_psd::ImageResource::new(1045, name));
+    file.resources.push(craft_psd::ImageResource::new(1045, name));
     let merged = merged_composite(&file).unwrap();
     assert_eq!(merged.iter().map(|p| p[3]).collect::<Vec<_>>(), vec![1.0, 0.0]);
     let opened = import("transparent.psd", &file.to_bytes().unwrap()).unwrap();
