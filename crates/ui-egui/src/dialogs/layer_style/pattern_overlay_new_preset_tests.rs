@@ -156,20 +156,24 @@ fn collision_session() -> Session {
 }
 
 #[test]
-fn fresh_ids_skip_library_and_document_collisions_and_replay_deterministically() {
+fn fresh_copy_ids_are_independent_uuid_v4_values_and_skip_local_collisions() {
     let mut first = collision_session();
-    let mut replay = collision_session();
+    let mut independent = collision_session();
     let source = first.patterns.items[0].id.clone();
     let params = json!({"fromPattern": source});
     let id = first.execute("edit.definePattern", params.clone()).unwrap()["pattern"].as_str().unwrap().to_owned();
-    let repeated = replay.execute("edit.definePattern", params.clone()).unwrap()["pattern"].as_str().unwrap().to_owned();
-    assert_eq!(id, repeated);
-    assert!(![FIRST_ID, SECOND_ID, &source].contains(&id.as_str()));
-    let parts = id.split('-').collect::<Vec<_>>();
-    assert_eq!(parts.iter().map(|part| part.len()).collect::<Vec<_>>(), [8, 4, 4, 4, 12]);
-    assert!(parts.iter().all(|part| part.chars().all(|c| c.is_ascii_hexdigit())));
+    let other = independent.execute("edit.definePattern", params.clone()).unwrap()["pattern"].as_str().unwrap().to_owned();
+    assert_ne!(id, other, "independent installations must create independent copy identities");
     let second = first.execute("edit.definePattern", params).unwrap()["pattern"].as_str().unwrap().to_owned();
     assert_ne!(second, id);
+    for id in [&id, &other, &second] {
+        assert!(![FIRST_ID, SECOND_ID, &source].contains(&id.as_str()));
+        let parts = id.split('-').collect::<Vec<_>>();
+        assert_eq!(parts.iter().map(|part| part.len()).collect::<Vec<_>>(), [8, 4, 4, 4, 12]);
+        assert!(parts.iter().all(|part| part.chars().all(|c| c.is_ascii_hexdigit())));
+        assert_eq!(parts[2].as_bytes()[0], b'4', "UUID version 4");
+        assert!(matches!(parts[3].as_bytes()[0], b'8' | b'9' | b'a' | b'b'), "UUID RFC variant");
+    }
 }
 
 fn tiled_pattern(sample: SampleType, width: u32) -> Pattern {
@@ -256,4 +260,82 @@ fn ordinary_define_keeps_selection_rect_name_and_same_content_deduplication() {
 fn non_pattern_overlay_pages_do_not_show_the_copy_button() {
     let h = harness(app(), "colorOverlay");
     assert!(h.query_by_label(COPY).is_none());
+}
+
+#[test]
+fn a_copied_pattern_survives_reload_beside_an_unreadable_reserved_store_id() {
+    let mem = MemBackend::default();
+    let mut seed = Session::new();
+    assert!(seed.attach_preset_store(preset_store::open(Box::new(mem.clone()))).is_empty());
+    let reserved = Pattern { id: FIRST_ID.into(), name: "Retained unreadable pattern".into(), ..seed.patterns.items[2].clone() };
+    seed.patterns.items.push(reserved);
+    seed.sync_preset_store();
+    let index: Value = serde_json::from_slice(mem.files.lock().unwrap().get(preset_store::PATTERNS_FILE).unwrap()).unwrap();
+    let reserved_entry = index["patterns"].as_array().unwrap().iter().find(|entry| entry["id"] == FIRST_ID).unwrap().clone();
+    let file = reserved_entry["file"].as_str().unwrap().to_owned();
+    let unreadable = b"retained but unreadable PAT asset".to_vec();
+    mem.files.lock().unwrap().insert(file.clone(), unreadable.clone());
+    drop(seed);
+
+    let mut s = Session::new();
+    assert!(!s.attach_preset_store(preset_store::open(Box::new(mem.clone()))).is_empty());
+    assert!(!s.patterns.items.iter().any(|pattern| pattern.id == FIRST_ID), "the reserved id is indexed but not loaded");
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let source = s.patterns.items[0].clone();
+    let result = s.execute("edit.definePattern", json!({"fromPattern": source.id})).unwrap();
+    let id = result["pattern"].as_str().unwrap().to_owned();
+    s.sync_preset_store();
+    assert_eq!(mem.files.lock().unwrap().get(&file), Some(&unreadable), "the unreadable asset remains untouched");
+    drop(s);
+
+    let mut reopened = Session::new();
+    assert!(!reopened.attach_preset_store(preset_store::open(Box::new(mem.clone()))).is_empty());
+    let copied = photocraft_engine::pattern_cmds::resolve(&reopened, &id).expect("the new copy must survive reload beside the retained unreadable asset");
+    same_contents(&copied, &source);
+    assert_ne!(id, FIRST_ID);
+    assert!(!reopened.patterns.items.iter().any(|pattern| pattern.id == FIRST_ID));
+    let index: Value = serde_json::from_slice(mem.files.lock().unwrap().get(preset_store::PATTERNS_FILE).unwrap()).unwrap();
+    let entries = index["patterns"].as_array().unwrap();
+    assert!(entries.contains(&reserved_entry), "the original unreadable pattern keeps its index entry");
+    assert!(entries.iter().any(|entry| entry["id"] == id));
+    assert_eq!(mem.files.lock().unwrap().get(&file), Some(&unreadable));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn copies_from_independent_installations_coexist_after_real_pat_export_and_import() {
+    let mut first = Session::new();
+    let mut second = Session::new();
+    assert!(first.attach_preset_store(preset_store::open(Box::new(MemBackend::default()))).is_empty());
+    assert!(second.attach_preset_store(preset_store::open(Box::new(MemBackend::default()))).is_empty());
+    first.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    second.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    assert_eq!(first.patterns.items, second.patterns.items, "the installations start with the same pattern identities");
+    assert!(first.active().unwrap().doc.patterns.is_empty());
+    assert!(second.active().unwrap().doc.patterns.is_empty());
+    let source_first = first.patterns.items[0].clone();
+    let source_second = second.patterns.items[1].clone();
+    let id_first = first.execute("edit.definePattern", json!({"fromPattern": source_first.id})).unwrap()["pattern"].as_str().unwrap().to_owned();
+    let id_second = second.execute("edit.definePattern", json!({"fromPattern": source_second.id})).unwrap()["pattern"].as_str().unwrap().to_owned();
+
+    let directory = std::env::temp_dir().join(format!("photocraft-pattern-copy-installations-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let first_path = directory.join("first.pat").to_string_lossy().into_owned();
+    let second_path = directory.join("second.pat").to_string_lossy().into_owned();
+    first.execute("pattern.export", json!({"path": first_path, "patterns": [id_first]})).unwrap();
+    second.execute("pattern.export", json!({"path": second_path, "patterns": [id_second]})).unwrap();
+    let mut combined = Session::new();
+    assert!(combined.attach_preset_store(preset_store::open(Box::new(MemBackend::default()))).is_empty());
+    combined.execute("pattern.import", json!({"path": first_path})).unwrap();
+    same_contents(&photocraft_engine::pattern_cmds::resolve(&combined, &id_first).unwrap(), &source_first);
+    combined.execute("pattern.import", json!({"path": second_path})).unwrap();
+    std::fs::remove_file(&first_path).unwrap();
+    std::fs::remove_file(&second_path).unwrap();
+    std::fs::remove_dir(&directory).unwrap();
+
+    let preserved_first = photocraft_engine::pattern_cmds::resolve(&combined, &id_first).unwrap();
+    assert_eq!(preserved_first.name, source_first.name, "importing the second installation must preserve the first copied pattern name");
+    same_contents(&preserved_first, &source_first);
+    same_contents(&photocraft_engine::pattern_cmds::resolve(&combined, &id_second).unwrap(), &source_second);
+    assert_ne!(id_first, id_second);
 }
