@@ -440,6 +440,28 @@ pub(crate) fn prepared_source_image(doc: &Document, fmt: PixelFormat, mode: Opti
     Ok(image)
 }
 
+/// Reuse admitted SVG layers in their sRGB encoding, then convert once to the parent's profile.
+/// The caller retains its shared preparation render reservation while this source is composed.
+pub(crate) fn prepared_svg_source_image(source: &Document, parent: &Document, mode: Option<photocraft_doc::StackMode>, ctx: &JobCtx) -> Result<SourceImage> {
+    ctx.check()?;
+    let image = match mode {
+        Some(mode) => prepared_source_image(source, PixelFormat::RGBA32F, Some(mode), ctx)?,
+        None => {
+            let bounds = source.bounds();
+            if u64::from(bounds.width()) * u64::from(bounds.height()) > photocraft_compose::MAX_RENDER_PIXELS {
+                return Err(other("the SVG smart object's contents are too large to render"));
+            }
+            // SVG caches hold encoded sRGB. Native U8-to-F32 depth conversion would
+            // linearize them before the sRGB CMS transform and decode the transfer curve twice.
+            SourceImage { surface: Arc::new(photocraft_compose::composite_to_surface(source, bounds, PixelFormat::RGBA32F, None)), bounds }
+        }
+    };
+    ctx.check()?;
+    let image = convert_svg_source(image, parent)?;
+    ctx.check()?;
+    Ok(image)
+}
+
 /// Replay an ordinary native filter with interruption, preserving unknown-filter fallback and native blend/opacity
 /// mixing.
 fn apply_smart_filter_in(
