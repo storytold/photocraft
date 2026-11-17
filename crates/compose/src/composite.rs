@@ -147,8 +147,9 @@ pub fn blend_if_active(layer: &Layer, mode: photocraft_color::ColorMode) -> bool
 fn blend_if_weight(layer: &Layer, cx: &Ctx, this: Option<[f32; 4]>, under: Option<[f32; 4]>) -> f32 {
     use photocraft_color::ColorMode as M;
     let bi = &layer.blend_if;
-    // 8-bit documents fade split points over both ends (#14855); deeper ones keep the plain ramp.
-    let levels = cx.depth == photocraft_color::SampleType::U8;
+    // 8-bit RGB documents fade split points over both ends (#14855); deeper documents and the
+    // one-channel modes (not measured) keep the plain ramp.
+    let levels = cx.depth == photocraft_color::SampleType::U8 && cx.mode == M::Rgb;
     let w = |r: photocraft_doc::BlendRange, v: f32| if levels { r.weight_8bit(v) } else { r.weight(v) };
     let mut k = 1.0;
     for (side, px) in [this, under].into_iter().enumerate() {

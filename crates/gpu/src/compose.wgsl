@@ -1060,7 +1060,7 @@ fn fs_lerp(in: VOut) -> @location(0) vec4<f32> {
 // ---- Blend If (photocraft_doc::BlendRange, compose::blend_if_weight) ---------------------------
 
 // 0 at or below `lo`, 1 at or above `hi`; a hard step at `lo` when unsplit. In an 8-bit
-// document (`p4.z`) a split ramp counts both ends, 0 only below `lo` (BlendRange::weight_8bit).
+// RGB document (`p4.z`) a split ramp counts both ends, 0 only below `lo` (BlendRange::weight_8bit).
 fn bi_ramp(lo: f32, hi: f32, x: f32) -> f32 {
     if (hi <= lo) {
         return select(0.0, 1.0, x >= lo);
