@@ -773,6 +773,15 @@ fn invoke_view_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p
             Some(crate::sizing::open(app, sz).map(|dialog| json!({"dialog": dialog})).ok_or_else(|| "no document".to_string()))
         }
         "view.newGuide" if params.as_object().is_none_or(|object| object.is_empty()) => Some(Ok(json!({"dialog": crate::new_guide_ui::open(app)}))),
+        // HDR Toning works on the flattened image: a layered document asks first (#10329).
+        // Its dialog is bound to the document it is for, as the prompt is.
+        crate::hdr_flatten_prompt::COMMAND if params.as_object().is_none_or(|object| object.is_empty()) => {
+            Some(Ok(json!({"dialog": if crate::hdr_flatten_prompt::needed(app) {
+                Some(crate::hdr_flatten_prompt::open(app))
+            } else {
+                crate::hdr_flatten_prompt::open_dialog(app)
+            }})))
+        }
         // Image › Adjustments › Equalize with a selection asks what to equalize, as in Photoshop.
         crate::equalize_ui::COMMAND if params.as_object().is_none_or(|object| object.is_empty()) && crate::equalize_ui::asks(app) => {
             Some(Ok(json!({"dialog": crate::equalize_ui::open(app)})))

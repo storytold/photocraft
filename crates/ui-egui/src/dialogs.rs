@@ -284,12 +284,14 @@ pub(crate) fn close_box(ui: &mut egui::Ui, rect: egui::Rect) -> bool {
 /// The body of a command dialog: the first handler whose marker the fields carry. The prompts and
 /// small editors come first; the rest are in `command_body_more`.
 /// The delete confirmations: a layer from the Layers panel's trash, a note (#11788), or all notes
-/// (#11791).
+/// (#11791); plus the Yes/No prompts that ask before a live shape is rasterized or HDR Toning
+/// flattens the image.
 fn delete_prompt(fields: &Fields) -> bool {
     crate::delete_layer_prompt::owns(fields)
         || crate::analysis_ui::owns_delete_note(fields)
         || crate::analysis_ui::owns_clear_notes(fields)
         || live_shape_prompt::owns(fields)
+        || crate::hdr_flatten_prompt::owns(fields)
 }
 
 fn delete_prompt_body(ui: &mut egui::Ui, fields: &mut Fields) {
@@ -299,6 +301,8 @@ fn delete_prompt_body(ui: &mut egui::Ui, fields: &mut Fields) {
         crate::analysis_ui::delete_note_body(ui, fields);
     } else if live_shape_prompt::owns(fields) {
         live_shape_prompt::body(ui, fields);
+    } else if crate::hdr_flatten_prompt::owns(fields) {
+        crate::hdr_flatten_prompt::body(ui, fields);
     } else {
         crate::delete_layer_prompt::body(ui, fields);
     }
@@ -505,7 +509,7 @@ fn button_row(
             tl!("Reset")
         } else if d.kind == DialogKind::NewDocument {
             tl!("Close")
-        } else if crate::analysis_ui::owns_delete_note(fields) || live_shape_prompt::owns(fields) {
+        } else if crate::analysis_ui::owns_delete_note(fields) || live_shape_prompt::owns(fields) || crate::hdr_flatten_prompt::owns(fields) {
             tl!("No")
         } else {
             tl!("Cancel")
@@ -582,7 +586,7 @@ fn ok_label(d: &Dialog) -> &'static str {
         tl!("Continue")
     } else if crate::delete_layer_prompt::owns(&d.fields) {
         tl!("Delete")
-    } else if crate::analysis_ui::owns_delete_note(&d.fields) || live_shape_prompt::owns(&d.fields) {
+    } else if crate::analysis_ui::owns_delete_note(&d.fields) || live_shape_prompt::owns(&d.fields) || crate::hdr_flatten_prompt::owns(&d.fields) {
         tl!("Yes")
     } else if crate::disk_change_prompt::owns(&d.fields) || crate::replace_prompt::owns(&d.fields) {
         tl!("Replace")
@@ -948,6 +952,7 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     merge_channels_ui::owns,
     crate::shape_dialog::owns,
     crate::delete_layer_prompt::owns,
+    crate::hdr_flatten_prompt::owns,
     crate::analysis_ui::owns_delete_note,
     crate::analysis_ui::owns_clear_notes,
     live_shape_prompt::owns,
@@ -1034,6 +1039,12 @@ fn confirm_generic_command(app: &mut PhotocraftApp, mut d: Dialog) -> Result<Val
         crate::actions::abandoned(app, &d.fields);
         return Err("dialog has no command".into());
     };
+    // HDR Toning flattens the image it runs on: never another document than its dialog's.
+    if let Err(e) = crate::hdr_flatten_prompt::check_dialog(app, &d.fields) {
+        app.filter_preview = None;
+        crate::actions::abandoned(app, &d.fields);
+        return Err(e);
+    }
     let mut params = crate::filter_dialog::params_of(&d.fields);
     let exact = if cmd == "file.automate.batch" {
         crate::actions::batch_dialog_params(app, d.id, d.fields.get(crate::actions::BATCH_OCCURRENCE), &mut params)
@@ -1206,6 +1217,7 @@ fn confirm_command_more(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, Str
         _ if crate::analysis_ui::owns_delete_note(&d.fields) => crate::analysis_ui::confirm_delete_note(app, &d.fields),
         _ if crate::analysis_ui::owns_clear_notes(&d.fields) => crate::analysis_ui::confirm_clear_notes(app, &d.fields),
         _ if live_shape_prompt::owns(&d.fields) => live_shape_prompt::confirm(app, &d.fields),
+        _ if crate::hdr_flatten_prompt::owns(&d.fields) => crate::hdr_flatten_prompt::confirm(app, &d.fields),
         _ if crate::file_ui::owns(&d.fields) => crate::file_ui::confirm(app, &d.fields),
         _ if crate::new_guide_ui::owns(&d.fields) => crate::new_guide_ui::confirm(app, &d.fields),
         _ if crate::color_picker_ui::owns(&d.fields) => {
@@ -1382,6 +1394,7 @@ mod fit_image_range_tests;
 pub mod gallery_ui;
 pub(crate) mod guide_edit;
 pub mod guide_layout_ui;
+pub mod hdr_flatten_prompt;
 pub mod history_options_ui;
 mod image_processor_ui;
 pub mod jpeg_options_ui;
