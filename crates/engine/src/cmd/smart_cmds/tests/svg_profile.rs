@@ -40,7 +40,12 @@ fn svg_smart_rerender_checks_embedded_raster_dimensions() {
 fn svg_smart_contents_and_stack_open_many_shapes_as_layers() {
     let svg = format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"256\" height=\"256\">{}</svg>", "<rect width=\"256\" height=\"256\"/>".repeat(400));
     assert_eq!(decode_source("Clipboard.svg", svg.as_bytes()).unwrap().layers.len(), 400);
-    assert!(stack_image("Clipboard.svg", svg.as_bytes(), PixelFormat::RGBA32F, photocraft_doc::StackMode::Mean).is_ok());
+    let stacked = stack_image("Clipboard.svg", svg.as_bytes(), PixelFormat::RGBA32F, photocraft_doc::StackMode::Mean).unwrap();
+    // Every frame is the same opaque black square, so their mean is that square.
+    let square = Rect::from_xywh(0, 0, 256, 256);
+    assert_eq!(stacked.bounds, square);
+    assert_eq!(stacked.surface.content_bounds(), square);
+    assert_eq!(stacked.surface.pixel(128, 128), [0.0, 0.0, 0.0, 1.0]);
 }
 
 /// Stack Mode renders a float frame per layer: an SVG whose shapes would need more than 1 GiB of
@@ -85,7 +90,13 @@ fn convert_to_layers_unpacks_full_canvas_shapes_in_a_4k_document() {
     let id = LayerId(placed["layer"].as_u64().unwrap());
     let LayerContent::Smart(sm) = &mut Arc::make_mut(&mut s.active_mut().unwrap().doc).layer_mut(id).unwrap().content else { panic!("smart") };
     sm.transform = Affine { m: [10.0, 0.0, 0.0, 10.0, 0.0, 0.0] };
-    s.execute("layer.smartObjects.convertToLayers", json!({"layer": id.0})).unwrap();
+    let r = s.execute("layer.smartObjects.convertToLayers", json!({"layer": id.0})).unwrap();
+    let doc = &s.active().unwrap().doc;
+    let shapes = doc.layer(LayerId(r["layer"].as_u64().unwrap())).unwrap().children().expect("Convert to Layers makes a group");
+    assert_eq!(shapes.len(), 4, "the four shapes become four layers");
+    for (i, shape) in shapes.iter().enumerate() {
+        assert_eq!(shape.surface().map(Surface::content_bounds), Some(doc.bounds()), "shape {i} is scaled to fill the 4K canvas");
+    }
 }
 
 /// An SVG with an embedded image the bounded resolver can't read (an unknown MIME type) places

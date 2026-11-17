@@ -1365,35 +1365,43 @@ mod tests {
         assert_eq!(steps(&app), count);
     }
 
-    /// Proves dragging across self-intersecting path crossings stays locked to the current branch based on previous arc length.
+    /// Proves dragging across self-intersecting path crossings stays locked to the current branch based on previous arc length,
+    /// both on an exact crossing and on one nudged off its symmetric position.
     #[test]
     fn pointer_crossing_gesture_stays_on_branch() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
-        app.sync_views();
-        app.ui.tool = Tool::PathSelection;
-        app.run("path.set", json!({"name":"work", "path":{"subpaths":[{"closed":true,"knots":[[20,20],[180,180],[20,180],[180,20]]}]}})).unwrap();
-        app.ui.selected_path = Some("work".into());
-        app.run("type.create", json!({"text":"ABC", "x":20, "y":20})).unwrap();
-        app.run("type.attachToPath", json!({"start":20})).unwrap();
-        app.run("type.setPathPlacement", json!({"end":80})).unwrap();
-        app.ui.views[0].zoom = 1.0;
+        // The path's knots, where the drag crosses itself, and the end it must keep (with its tolerance).
+        let cases = [
+            ("exact", [[20.0, 20.0], [180.0, 180.0], [20.0, 180.0], [180.0, 20.0]], [100.0, 100.0], 169.71, 1.0),
+            ("perturbed", [[20.0, 20.0], [180.2, 179.8], [20.0, 179.8], [180.2, 20.0]], [100.1, 99.9], 169.8, 2.0),
+        ];
+        for (case, knots, crossing, want, tolerance) in cases {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
+            app.sync_views();
+            app.ui.tool = Tool::PathSelection;
+            app.run("path.set", json!({"name":"work", "path":{"subpaths":[{"closed":true,"knots":knots}]}})).unwrap();
+            app.ui.selected_path = Some("work".into());
+            app.run("type.create", json!({"text":"ABC", "x":20, "y":20})).unwrap();
+            app.run("type.attachToPath", json!({"start":20})).unwrap();
+            app.run("type.setPathPlacement", json!({"end":80})).unwrap();
+            app.ui.views[0].zoom = 1.0;
 
-        let xf = ViewXform::active(&app).unwrap();
-        let ends = markers(active_text(&app).unwrap(), &xf).unwrap();
-        let tip = ends[1].0;
-        let from = xf.to_doc(tip);
-        assert!(pointer_with_view(&mut app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, Some(&xf)));
-        assert_eq!(app.ui.type_path_drag.as_ref().unwrap().endpoint, Some(1));
-        assert!(pointer_with_view(&mut app, ToolEvent::Move { x: 100.0, y: 100.0, pressure: 1.0 }, Some(&xf)));
-        assert!(pointer_with_view(&mut app, ToolEvent::Move { x: 140.0, y: 140.0, pressure: 1.0 }, Some(&xf)));
-        assert!(pointer_with_view(&mut app, ToolEvent::Up { x: 140.0, y: 140.0 }, Some(&xf)));
+            let xf = ViewXform::active(&app).unwrap();
+            let ends = markers(active_text(&app).unwrap(), &xf).unwrap();
+            let tip = ends[1].0;
+            let from = xf.to_doc(tip);
+            assert!(pointer_with_view(&mut app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, Some(&xf)));
+            assert_eq!(app.ui.type_path_drag.as_ref().unwrap().endpoint, Some(1), "{case}");
+            assert!(pointer_with_view(&mut app, ToolEvent::Move { x: crossing[0], y: crossing[1], pressure: 1.0 }, Some(&xf)));
+            assert!(pointer_with_view(&mut app, ToolEvent::Move { x: 140.0, y: 140.0, pressure: 1.0 }, Some(&xf)));
+            assert!(pointer_with_view(&mut app, ToolEvent::Up { x: 140.0, y: 140.0 }, Some(&xf)));
 
-        let (start, end, flip) = placement(&app);
-        assert_eq!(start, 20.0);
-        let end = end.expect("explicit end");
-        assert!((end - 169.71).abs() < 1.0, "end should stay on branch: {end}");
-        assert!(!flip);
+            let (start, end, flip) = placement(&app);
+            assert_eq!(start, 20.0, "{case}");
+            let end = end.expect("explicit end");
+            assert!((end - want).abs() < tolerance, "{case}: end must stay on branch 1 without jumping: {end}");
+            assert!(!flip, "{case}");
+        }
     }
 
     /// Verifies that hiding an ancestor layer group excludes child path text from marker rendering and pointer captures.
@@ -1695,36 +1703,6 @@ mod tests {
         let geom_flipped2 = active_path_geometry(&app, text_after_flip).expect("cached flipped geometry");
         assert!(Arc::ptr_eq(&geom_flipped, &geom_flipped2));
         assert_eq!(geom_flipped.sample(10.0).unwrap().1.0, -geom_new_path.sample(10.0).unwrap().1.0);
-    }
-
-    #[test]
-    fn pointer_perturbed_crossing_stays_on_branch_and_releases() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
-        app.sync_views();
-        app.ui.tool = Tool::PathSelection;
-        app.run("path.set", json!({"name":"work", "path":{"subpaths":[{"closed":true,"knots":[[20,20],[180.2,179.8],[20,179.8],[180.2,20]]}]}})).unwrap();
-        app.ui.selected_path = Some("work".into());
-        app.run("type.create", json!({"text":"ABC", "x":20, "y":20})).unwrap();
-        app.run("type.attachToPath", json!({"start":20})).unwrap();
-        app.run("type.setPathPlacement", json!({"end":80})).unwrap();
-        app.ui.views[0].zoom = 1.0;
-
-        let xf = ViewXform::active(&app).unwrap();
-        let ends = markers(active_text(&app).unwrap(), &xf).unwrap();
-        let tip = ends[1].0;
-        let from = xf.to_doc(tip);
-        assert!(pointer_with_view(&mut app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, Some(&xf)));
-        assert_eq!(app.ui.type_path_drag.as_ref().unwrap().endpoint, Some(1));
-        assert!(pointer_with_view(&mut app, ToolEvent::Move { x: 100.1, y: 99.9, pressure: 1.0 }, Some(&xf)));
-        assert!(pointer_with_view(&mut app, ToolEvent::Move { x: 140.0, y: 140.0, pressure: 1.0 }, Some(&xf)));
-        assert!(pointer_with_view(&mut app, ToolEvent::Up { x: 140.0, y: 140.0 }, Some(&xf)));
-
-        let (start, end, flip) = placement(&app);
-        assert_eq!(start, 20.0);
-        let end = end.expect("explicit end");
-        assert!((end - 169.8).abs() < 2.0, "end must stay on branch 1 without jumping: {end}");
-        assert!(!flip);
     }
 
     /// Proves markers and placement gestures work on shortened open geometry with stale explicit end, cancel preserves the original, and edits commit valid ranges.

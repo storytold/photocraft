@@ -812,6 +812,8 @@ mod brush_picker_escape_tests;
 #[cfg(test)]
 mod cam_no_pixels_alert_tests;
 #[cfg(test)]
+mod caption_scrub_tests;
+#[cfg(test)]
 mod eyedropper_context_menu_tests;
 #[cfg(test)]
 mod menu_automate_groups_tests;

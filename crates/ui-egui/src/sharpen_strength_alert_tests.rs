@@ -2,9 +2,7 @@
 //! past the range becomes the closest one and, once the field is left, the reference's "Closest value
 //! inserted" alert with OK says so. Text that is no number and a scrub to either end stay silent.
 
-use egui::accesskit::Role;
 use egui_kittest::Harness;
-use egui_kittest::kittest::{NodeT, Queryable};
 
 use super::eraser_range_alert_tests::{alerts, bar, ok, type_into};
 use crate::PhotocraftApp;
@@ -17,27 +15,8 @@ fn strength(h: &Harness<'static, PhotocraftApp>) -> f32 {
 
 /// Drags the Strength caption by `dx` in six steps while the field holds the keyboard, then leaves it.
 fn scrub_strength(h: &mut Harness<'static, PhotocraftApp>, dx: f32) {
-    let field = h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Strength:")).expect("the Strength field");
-    let rect = field.rect();
-    field.click();
-    h.run_steps(1);
-    let primary = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
-    // The caption sits just left of the field.
-    let from = egui::pos2(rect.left() - 25.0, rect.center().y);
-    h.event(egui::Event::PointerMoved(from));
-    h.run_steps(1);
-    h.event(primary(from, true));
-    h.run_steps(1);
-    let mut at = from;
-    for _ in 0..6 {
-        at.x += dx;
-        h.event(egui::Event::PointerMoved(at));
-        h.run_steps(1);
-    }
-    h.event(primary(at, false));
-    h.run_steps(3);
-    h.key_press(egui::Key::Tab);
-    h.run_steps(3);
+    let rect = crate::caption_scrub_tests::click_field(h, "Strength:");
+    crate::caption_scrub_tests::scrub_caption(h, rect, 25.0, dx);
 }
 
 #[test]

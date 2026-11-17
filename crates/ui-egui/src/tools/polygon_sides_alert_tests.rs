@@ -119,21 +119,7 @@ fn a_caption_scrub_past_either_end_does_not_alert() {
         type_sides(&mut h, start);
         // The field keeps the keyboard while its caption is scrubbed past the end.
         let rect = click_sides(&mut h);
-        // The caption sits just left of the field.
-        let from = egui::pos2(rect.left() - 20.0, rect.center().y);
-        h.event(egui::Event::PointerMoved(from));
-        h.run_steps(1);
-        h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
-        h.run_steps(1);
-        for k in 1..=6 {
-            h.event(egui::Event::PointerMoved(from + vec2(dx * k as f32, 0.0)));
-            h.run_steps(1);
-        }
-        let to = from + vec2(dx * 6.0, 0.0);
-        h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
-        h.run_steps(3);
-        h.key_press(egui::Key::Tab);
-        h.run_steps(3);
+        crate::caption_scrub_tests::scrub_caption(&mut h, rect, 20.0, dx);
         assert_eq!(sides(&h), want, "{start}: the scrub reached the end");
         assert!(alerts(&h).is_empty(), "{start}: a scrub stops at the end without an alert");
     }

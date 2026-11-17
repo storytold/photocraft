@@ -185,28 +185,8 @@ fn a_label_scrub_past_100_does_not_alert() {
     let mut h = app_harness();
     type_tolerance(&mut h, "90");
     // The field keeps the keyboard while the caption is scrubbed from 90 past the end.
-    let field = h
-        .query_all_by_role(egui::accesskit::Role::SpinButton)
-        .find(|n| n.accesskit_node().label().as_deref() == Some("Tolerance:"))
-        .expect("the Tolerance field");
-    let rect = field.rect();
-    field.click();
-    h.run_steps(1);
-    // The caption sits just left of the field.
-    let from = egui::pos2(rect.left() - 25.0, rect.center().y);
-    h.event(egui::Event::PointerMoved(from));
-    h.run_steps(1);
-    h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
-    h.run_steps(1);
-    for k in 1..=6 {
-        h.event(egui::Event::PointerMoved(from + vec2(50.0 * k as f32, 0.0)));
-        h.run_steps(1);
-    }
-    let to = from + vec2(300.0, 0.0);
-    h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
-    h.run_steps(3);
-    h.key_press(egui::Key::Tab);
-    h.run_steps(3);
+    let rect = crate::caption_scrub_tests::click_field(&mut h, "Tolerance:");
+    crate::caption_scrub_tests::scrub_caption(&mut h, rect, 25.0, 50.0);
     assert_eq!(tolerance(&h), 100.0, "the scrub reached the end");
     assert_eq!(alert(&h), None, "a scrub stops at 100 without an alert");
 }
