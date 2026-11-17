@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use super::lower::{
     Paint, adjustment_on_gpu, adjustment_program, check_gradient_stops, gradient_rows, placement, single_content_pass, stroke_widths, style_index,
 };
@@ -11,6 +13,8 @@ pub(super) struct Planner<'a> {
     cx: DocCtx<'a>,
     fx: Vec<FxLayer<'a>>,
     checkpoints: Vec<Checkpoint>,
+    /// Layers whose content is a layer operator's output.
+    pub(super) ops: HashSet<LayerId>,
     /// Layers planned so far, counting a layer each time it is planned (a clipped pass-through
     /// group is planned twice).
     visits: usize,
@@ -199,6 +203,7 @@ impl<'a> Planner<'a> {
             cx,
             fx: Vec::new(),
             checkpoints: Vec::new(),
+            ops: HashSet::new(),
             visits: 0,
             luts: std::cell::Cell::new(0),
         }
@@ -590,6 +595,10 @@ impl<'a> Planner<'a> {
     /// The rect a plain layer composites over: its composite bounds when they cover at most half
     /// the canvas (beyond that, compositing everywhere costs less than the copy back).
     fn local_clip(&self, layer: &Layer) -> Option<Rect> {
+        // An operator's output reaches past the layer's own pixels (a blur's halo).
+        if !self.ops.is_empty() && self.holds_op(layer, 0) {
+            return None;
+        }
         let canvas = self.cx.canvas;
         let b = bounds::composite_bounds(layer, canvas)?;
         (b.width() as u64 * b.height() as u64 * 2 <= canvas.width() as u64 * canvas.height() as u64).then_some(b)
@@ -698,10 +707,16 @@ impl<'a> Planner<'a> {
         Ok(p)
     }
 
+    /// Whether `layer` is, or (within a bounded depth) holds, a layer with an operator.
+    fn holds_op(&self, layer: &Layer, depth: usize) -> bool {
+        self.ops.contains(&layer.id) || (depth < 256 && layer.children().is_some_and(|c| c.iter().any(|l| self.holds_op(l, depth + 1))))
+    }
+
     fn surface_tex(&self, p: &mut Pass<'a>, id: LayerId, s: &'a Surface) {
         let dp = s.default_pixel();
         p.color = photocraft_raster::to_rgba(&s.format(), &dp);
-        if s.tile_count() > 0 {
+        // An operator's output can cover pixels the layer doesn't store (a blur of a dot).
+        if s.tile_count() > 0 || self.ops.contains(&id) {
             p.tex = Some(TexUse { layer: id, role: Role::Content, surface: SurfaceRef::Doc(s) });
         }
     }
@@ -805,6 +820,10 @@ impl<'a> Planner<'a> {
     /// Plans enabled layer effects in the same phase order as the CPU compositor.
     /// Consumes `backdrop`.
     fn effects(&mut self, layer: &'a Layer, clipped: &[&'a Layer], backdrop: Slot, atop: bool) -> Result<Slot, Unsupported> {
+        // Effect shapes and regions come from the layers' own pixels, not an operator's output.
+        if !self.ops.is_empty() && self.holds_op(layer, 0) {
+            return Err(Unsupported(format!("a layer operator under the effects of `{}` (previewed on the CPU)", layer.name)));
+        }
         let items: Vec<&'a Effect> = layer.effects.items.iter().filter(|e| e.enabled()).collect();
         check_effect_gradients(&items)?;
         let canvas = self.cx.canvas;

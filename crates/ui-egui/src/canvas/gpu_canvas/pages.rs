@@ -4,7 +4,7 @@
 
 use super::doc_textures::{catch_gpu_errors, init_buffer, tile_uniform};
 use super::resources::{DocTextures, Resources, Tile, f32_bytes};
-use super::texels::{texel_bytes, texels};
+use super::texels::{canvas_texels, texel_bytes};
 use super::{GpuCanvas, Ordering, wgpu};
 use photocraft_geom::Rect as DRect;
 
@@ -64,7 +64,7 @@ impl GpuCanvas {
         let format = texture.format();
         self.rs.queue.write_texture(
             wgpu::TexelCopyTextureInfo { texture, mip_level: 0, origin: wgpu::Origin3d { x: x as u32, y: y as u32, z: 0 }, aspect: wgpu::TextureAspect::All },
-            &texels(format, &buf.px),
+            &canvas_texels(format, &buf.px),
             wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * texel_bytes(format) as u32), rows_per_image: Some(h) },
             wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
         );
@@ -141,7 +141,7 @@ impl GpuCanvas {
             });
             queue.write_texture(
                 texture.as_image_copy(),
-                &texels(format, &buf.px),
+                &canvas_texels(format, &buf.px),
                 wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * texel_bytes(format) as u32), rows_per_image: Some(h) },
                 wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
             );
