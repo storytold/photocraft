@@ -150,11 +150,8 @@ pub fn export_stepped(doc: &Document, ctl: &Interrupt, step: &mut dyn FnMut(usiz
     let mut warnings = Vec::new();
     // One disposal for the file (storytold/craft-libs#1319 asks for it per frame): frames with holes must
     // not show what was drawn before them, and frames without any are fine either way.
-    let options = Options {
-        loop_forever: writer_loops(a.loops, &mut warnings),
-        disposal: if transparent { Disposal::Background } else { Disposal::Keep },
-        speed,
-    };
+    let options =
+        Options { loop_forever: writer_loops(a.loops, &mut warnings), disposal: if transparent { Disposal::Background } else { Disposal::Keep }, speed };
     let mut writer = AnimationWriter::new(Vec::new(), w as u32, h as u32, options).map_err(writer_err)?;
     for (frame, delay) in frames {
         writer.write_prepared_frame(frame, delay).map_err(writer_err)?;

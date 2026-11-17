@@ -350,8 +350,13 @@ pub(super) fn animated_gif(doc: &Document, piece: Rect, st: &WebSettings) -> Res
     let a = doc.frame_animation.as_ref().ok_or_else(|| other("the document has no frame animation"))?;
     // Every frame is flattened from the whole canvas, however small the slice kept of it.
     let canvas = doc.bounds();
-    photocraft_io::gif_anim::check_size_in(piece.width() as usize, piece.height() as usize, a.frames.len(), (canvas.width() as usize, canvas.height() as usize))
-        .map_err(other)?;
+    photocraft_io::gif_anim::check_size_in(
+        piece.width() as usize,
+        piece.height() as usize,
+        a.frames.len(),
+        (canvas.width() as usize, canvas.height() as usize),
+    )
+    .map_err(other)?;
     let bw = doc.size.width as usize;
     let mut frames = Vec::with_capacity(a.frames.len());
     let mut first: Option<Optimized> = None;
