@@ -133,8 +133,8 @@ fn several_files_are_placed_one_after_another_each_in_its_own_transform() {
 /// dialog returned them. A file that can't be read is reported and the next one placed.
 #[test]
 fn chosen_paths_are_read_in_turn_and_a_missing_one_is_reported() {
-    let dir = std::env::temp_dir().join(format!("photocraft-place-multiple-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
     let (b, a) = (dir.join("b.png"), dir.join("a.png"));
     std::fs::write(&b, png(20, 10)).unwrap();
     std::fs::write(&a, png(8, 6)).unwrap();
@@ -160,7 +160,6 @@ fn chosen_paths_are_read_in_turn_and_a_missing_one_is_reported() {
     ));
     crate::transform_tool::commit(&mut app);
     assert!(app.drop_places.is_empty());
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// With Skip Transform when Placing on, all the chosen files are placed and committed at once, one
@@ -224,4 +223,21 @@ fn a_single_chosen_file_is_placed_as_before() {
     assert!(app.ui.status.contains("photocraft-place-missing-"), "{}", app.ui.status);
     assert_eq!(names(&app), ["Background"]);
     assert!(app.ui.transform.is_none() && app.drop_places.is_empty());
+}
+
+/// Every chosen file is placed, even past the limits that bound drops waiting for their document
+/// (32 browser drops): the web's picks are already read when the dialog answers, so none is lost.
+#[test]
+fn every_chosen_file_is_placed_past_the_drop_queue_limit() {
+    let ctx = egui::Context::default();
+    let files: Vec<(String, Vec<u8>)> = (0..MAX_QUEUED_DROPS + 2).map(|i| (format!("f{i}.png"), png(2, 2))).collect();
+    let (mut app, _) = app_picking(FileDialogAnswer::ContentsMany(files));
+    app.session.execute("prefs.set", json!({"path": "general.skipTransformWhenPlacing", "value": true})).unwrap();
+    let steps = history_steps(&app);
+    place_embedded(&mut app, &ctx);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    assert!(app.drop_places.is_empty());
+    let expected: Vec<String> = std::iter::once("Background".to_string()).chain((0..MAX_QUEUED_DROPS + 2).map(|i| format!("f{i}"))).collect();
+    assert_eq!(names(&app), expected);
+    assert_eq!(history_steps(&app), steps + MAX_QUEUED_DROPS + 2);
 }

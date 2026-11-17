@@ -563,13 +563,19 @@ impl PhotocraftApp {
     /// so the next one is placed once the previous one's transform is committed or cancelled (Esc
     /// takes back only that file), and with Skip Transform when Placing all of them are placed at
     /// once. A file that can't be read or placed is reported and the next one placed.
+    ///
+    /// Every chosen file is queued: the drop queue's admission limits ([`queue_takes_drop`]) are
+    /// not applied to them. A desktop pick waits as its path, and a web pick's contents were
+    /// already read by the browser when the dialog answered, so refusing it would free nothing
+    /// and only lose a file the user chose. Each is released as soon as it is placed, and while
+    /// they wait they count against the limit for later drops.
     pub(crate) fn place_picked(&mut self, ctx: &egui::Context, doc: DocId, files: Vec<crate::file_dialog::PickedFile>) {
         for file in files {
             let place = match file {
                 crate::file_dialog::PickedFile::Path(path) => DropPlace::Path(path),
                 crate::file_dialog::PickedFile::Contents(name, bytes) => DropPlace::Bytes(name, bytes),
             };
-            self.queue_drop(doc, place);
+            self.drop_places.push_back((doc, place));
         }
         self.place_next_dropped(ctx);
     }
