@@ -28,6 +28,7 @@ mod native_masks;
 mod native_snapshot;
 #[cfg(test)]
 mod native_stage_tests;
+mod native_work;
 
 mod conversion;
 #[cfg(test)]
@@ -152,6 +153,7 @@ struct Image<'a> {
     colormap: Vec<[u8; 3]>,
     budget: usize,
     native_source_budget: usize,
+    native_work: native_work::Work,
     /// Remaining allowance for copied layer metadata (names, item paths). Repeated layer
     /// offsets referencing one record with a large name would otherwise allocate an owned
     /// copy per reference, multiplying a small file into gigabytes of retained metadata.
@@ -324,7 +326,7 @@ impl<'a> Image<'a> {
             let before = self.budget;
             let source_model = self.base_type;
             self.base_type = 1;
-            let decoded = self.hierarchy(record.hierarchy_offset, 1, true, ctl);
+            let decoded = self.native_mask_hierarchy(record.hierarchy_offset, ctl);
             self.base_type = source_model;
             own_pixel_charge = before.saturating_sub(self.budget);
             let pixels = decoded?;
@@ -333,6 +335,14 @@ impl<'a> Image<'a> {
             }
             let mut surface = Surface::new(PixelFormat::new(ColorMode::Grayscale, depth, false));
             let before = self.budget;
+            let Some(output_work) = pixels.data.len().checked_mul(4).and_then(|n| {
+                usize::try_from(photocraft_raster::tile_storage_bytes(Rect::new(0, 0, pixels.width as i32, pixels.height as i32), &surface.format()))
+                    .ok()
+                    .and_then(|tiles| n.checked_add(tiles))
+            }) else {
+                return self.native_work.refuse_unpriced("native mask output component count overflows", ctl);
+            };
+            self.native_work.charge_bytes(output_work, ctl)?;
             let written = write_pixels(&mut surface, &pixels, 0, 0, &mut self.budget);
             own_pixel_charge = own_pixel_charge.saturating_add(before.saturating_sub(self.budget));
             written?;
@@ -342,6 +352,7 @@ impl<'a> Image<'a> {
                     let target = Rect::new(translate(bounds.x0, dx)?, translate(bounds.y0, dy)?, translate(bounds.x1, dx)?, translate(bounds.y1, dy)?);
                     let bytes = usize::try_from(photocraft_raster::tile_storage_bytes(target, &surface.format()))
                         .map_err(|_| invalid("effect mask tile storage overflows"))?;
+                    self.native_work.charge_bytes(bytes, ctl)?;
                     self.budget = self.budget.checked_sub(bytes).ok_or_else(|| invalid("effect mask placement exceeds the pixel limit"))?;
                     own_pixel_charge = own_pixel_charge.saturating_add(bytes);
                     surface = photocraft_algo::resample::translate_surface(&surface, dx, dy);
@@ -355,6 +366,20 @@ impl<'a> Image<'a> {
             self.meta_budget = metadata_before;
         }
         result.map(|(mask, record, sample_flags)| NativeEffectMask { mask, record, sample_flags, pixel_charge: own_pixel_charge })
+    }
+
+    fn native_mask_hierarchy(&mut self, hptr: usize, ctl: &Interrupt<'_>) -> Result<Pixels> {
+        ctl.check().map_err(|_| IoError::Cancelled)?;
+        let mut c = self.c.at(hptr);
+        let (w, h) = (c.u32()?, c.u32()?);
+        if w == 0 || h == 0 || w > MAX_SIDE || h > MAX_SIDE {
+            return Err(invalid("native mask dimensions are out of range"));
+        }
+        let Some(bytes) = (w as usize).checked_mul(h as usize).and_then(|n| n.checked_mul(4)) else {
+            return self.native_work.refuse_unpriced("native mask component count overflows", ctl);
+        };
+        self.native_work.charge_bytes(bytes, ctl)?;
+        self.hierarchy(hptr, 1, true, ctl)
     }
 
     /// Reads a hierarchy (`hptr`): the first level's tiles into `channels` floats per pixel,
@@ -1179,6 +1204,7 @@ fn import_with_sample_order_and_parasite_work(
         colormap,
         budget: MAX_PIXEL_BYTES,
         native_source_budget: MAX_PIXEL_BYTES,
+        native_work: Default::default(),
         meta_budget: MAX_METADATA_BYTES,
         effect_decode_work: Default::default(),
         text_decode_work: Default::default(),
@@ -1419,6 +1445,7 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
                 target_profile: document.icc_profile.clone(),
                 resolution_dpi: document.resolution_dpi,
                 remaining_generation_bytes: image.budget.min(image.native_source_budget),
+                native_work: Some(&image.native_work),
                 remaining_metadata_bytes: image.meta_budget,
                 interrupt: *ctl,
             };
@@ -1445,6 +1472,7 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
                     _ => {}
                 }
             }
+            let generation_rejections = image.native_work.rejections();
             let mut parameter_charge = 0usize;
             let mapped = effects::map(&effect, &context).and_then(|mapping| {
                 let params = native_parameter_bytes(&mapping)
@@ -1468,7 +1496,14 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
                     // Generated native parameters (notably native LUT text) share the
                     // existing metadata ceiling; a tiny repeated source cannot grow it freely.
                     if builder.is_none() {
-                        match native_effects::NativeOwner::new(document, original, pending.bounds, &mut image.native_source_budget, ctl) {
+                        match native_effects::NativeOwner::new_with_work(
+                            document,
+                            original,
+                            pending.bounds,
+                            &mut image.native_source_budget,
+                            &image.native_work,
+                            ctl,
+                        ) {
                             Ok(owner) => builder = Some(owner),
                             Err(IoError::Cancelled) => return Err(IoError::Cancelled),
                             Err(error) => notes.push(format!("Native effect contents could not be prepared: {error}")),
@@ -1498,7 +1533,7 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
                         }
                         match mask {
                             Err(IoError::Cancelled) => return Err(IoError::Cancelled),
-                            Err(IoError::XcfMetadataLimit) => Err(effects::MappingFailure {
+                            Err(IoError::XcfMetadataLimit | IoError::XcfNativeWorkLimit | IoError::XcfNativeWorkUnpriced(_)) => Err(effects::MappingFailure {
                                 reason: ConversionReason::RetentionLimit,
                                 message: "Optional effect-mask metadata or decode work exceeds its shared allowance; stage not applied".into(),
                             }),
@@ -1518,6 +1553,10 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
                                     Ok(())
                                 }
                                 Err(IoError::Cancelled) => return Err(IoError::Cancelled),
+                                Err(IoError::XcfNativeWorkLimit | IoError::XcfNativeWorkUnpriced(_)) => Err(effects::MappingFailure {
+                                    reason: ConversionReason::RetentionLimit,
+                                    message: "Native generation exceeded its file-wide work allowance; stage not applied".into(),
+                                }),
                                 Err(IoError::Unsupported(message)) => Err(effects::MappingFailure::resource(message)),
                                 Err(error) => Err(effects::MappingFailure::from(format!("Native structure for this effect is unfinished: {error}"))),
                             },
@@ -1533,6 +1572,14 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
                 image.budget = image.budget.saturating_add(mask_pixel_charge);
                 image.meta_budget = image.meta_budget.saturating_add(parameter_charge);
             }
+            let result = if image.native_work.rejections() != generation_rejections {
+                Err(effects::MappingFailure {
+                    reason: ConversionReason::RetentionLimit,
+                    message: "Native generation exceeded the file-wide nonrefundable work allowance; usable native content preserved".into(),
+                })
+            } else {
+                result
+            };
             let mask_retained = mask_report.is_some() && result.is_ok();
             if effect.blend_space != 0 || effect.composite_space != 0 || effect.composite_mode != 0 || effect.clip || effect.region != 0 {
                 notes.push(format!("Native document blending/coverage applies; stored blend space {}, composite space {}, composite mode {}, clip {}, region {} are historical", effect.blend_space, effect.composite_space, effect.composite_mode, effect.clip, effect.region));

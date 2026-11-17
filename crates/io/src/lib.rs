@@ -137,6 +137,10 @@ pub enum IoError {
     /// Optional XCF metadata reached its shared retained-storage allowance.
     #[error("optional XCF metadata exceeds the document allowance")]
     XcfMetadataLimit,
+    #[error("native XCF generation exceeds the file-wide work allowance")]
+    XcfNativeWorkLimit,
+    #[error("native XCF work cannot be bounded before loading: {0}")]
+    XcfNativeWorkUnpriced(&'static str),
     /// PSD parse/write failure.
     #[error("PSD: {0}")]
     Psd(#[from] PsdError),

@@ -131,6 +131,7 @@ fn assimilation(e: &StoredEffect<'_>, context: &MappingContext) -> Result<Native
             message: "Native assimilation grid exceeds remaining metadata allowance".into(),
         });
     }
+    context.charge_generation(count.checked_mul(512).ok_or("native grid work overflow")?)?;
     let mut paths = Vec::new();
     paths.try_reserve_exact(count).map_err(|_| "native assimilation grid allocation unavailable")?;
     let half = period * thickness * 0.5;
@@ -520,6 +521,8 @@ pub(super) fn pattern_result(
     if target.color_space != expected {
         return Err("native pattern target ICC model mismatch".into());
     }
+    let generated = usize::try_from(count).ok().and_then(|n| n.checked_mul((4 + channels) * 4)).ok_or("native pattern work overflow")?;
+    c.charge_generation(generated)?;
     let mut rgba = Vec::new();
     rgba.try_reserve_exact(source_len).map_err(|_| "native source pattern row allocation unavailable")?;
     let mut pixels = Vec::new();
@@ -718,6 +721,7 @@ mod tests {
             target_profile: Some(craft_cms::Builtin::LinearSrgb.profile().to_bytes()),
             resolution_dpi: 72.0,
             remaining_generation_bytes: crate::xcf::MAX_PIXEL_BYTES,
+            native_work: None,
             remaining_metadata_bytes: crate::xcf::MAX_METADATA_BYTES,
             interrupt: photocraft_raster::Interrupt::NONE,
         }

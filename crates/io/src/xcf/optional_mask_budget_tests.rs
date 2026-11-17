@@ -13,6 +13,7 @@ fn image(bytes: &[u8], budget: usize) -> Image<'_> {
         colormap: Vec::new(),
         budget,
         native_source_budget: MAX_PIXEL_BYTES,
+        native_work: Default::default(),
         meta_budget: MAX_METADATA_BYTES,
         effect_decode_work: Default::default(),
         text_decode_work: Default::default(),
@@ -362,4 +363,41 @@ fn rejected_native_mask_placement_never_follows_its_pixel_hierarchy() {
         assert_eq!(image.meta_budget, MAX_METADATA_BYTES, "temporary header storage is refunded");
         assert!(image.effect_decode_work.stats().0 < work_before, "header scan work remains charged");
     }
+}
+
+#[test]
+fn late_failed_native_mask_refunds_storage_but_never_generation_work() {
+    let (bytes, channel, _, _) = fixture(false);
+    let mut image = image(&bytes, 32);
+    image.native_work = native_work::Work::with_units(1);
+    let storage = image.budget;
+    let first = image.native_effect_mask(channel, Rect::new(0, 0, 1, 1), SampleType::U8, &Interrupt::NONE);
+    assert!(matches!(first, Err(IoError::Xcf(_))), "first attempt reaches the malformed tile list");
+    assert_eq!(image.budget, storage);
+    assert_eq!(image.native_work.remaining_units(), 0);
+    let second = image.native_effect_mask(channel, Rect::new(0, 0, 1, 1), SampleType::U8, &Interrupt::NONE);
+    assert!(matches!(second, Err(IoError::XcfNativeWorkLimit)), "second attempt refuses before following the hierarchy");
+    assert_eq!(image.budget, storage);
+}
+
+#[test]
+fn valid_native_mask_generation_obeys_exact_component_boundary_and_cancellation() {
+    let (bytes, channel, _, _) = fixture(true);
+    for source_model in [0, 1] {
+        let mut image = image(&bytes, MAX_PIXEL_BYTES);
+        image.base_type = source_model;
+        let tile_bytes =
+            usize::try_from(photocraft_raster::tile_storage_bytes(Rect::new(0, 0, 1, 1), &PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false)))
+                .unwrap();
+        image.native_work = native_work::Work::with_units(2 + tile_bytes / 4); // decoded/write components plus actual padded native tile initialization
+        let mask = image.native_effect_mask(channel, Rect::new(0, 0, 1, 1), SampleType::U8, &Interrupt::NONE).unwrap();
+        assert_eq!(mask.mask.surface.read_region(Rect::new(0, 0, 1, 1)), vec![128. / 255.]);
+        assert_eq!(image.native_work.remaining_units(), 0);
+        assert_eq!(image.base_type, source_model);
+    }
+    let mut image = image(&bytes, MAX_PIXEL_BYTES);
+    image.native_work = native_work::Work::with_units(2);
+    let cancel = std::sync::atomic::AtomicBool::new(true);
+    assert!(matches!(image.native_effect_mask(channel, Rect::new(0, 0, 1, 1), SampleType::U8, &Interrupt::cancel_only(&cancel)), Err(IoError::Cancelled)));
+    assert_eq!(image.native_work.remaining_units(), 2);
 }

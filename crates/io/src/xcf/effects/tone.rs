@@ -337,6 +337,7 @@ mod tests {
             target_profile: None,
             resolution_dpi: 72.0,
             remaining_generation_bytes: crate::xcf::MAX_PIXEL_BYTES,
+            native_work: None,
             remaining_metadata_bytes: crate::xcf::MAX_METADATA_BYTES,
             interrupt: photocraft_raster::Interrupt::NONE,
         }

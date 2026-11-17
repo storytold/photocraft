@@ -1,16 +1,19 @@
 //! One-time bounded capture of ordinary native contents for static native resources.
 //! No source operation names, graph syntax, external reads or document rules live here.
 use super::coverage::{self, NativeFilterDomain};
+use super::native_work::Work;
 use super::{IoError, Result, invalid};
 use photocraft_color::{BlendMode, ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{Document, Layer, LayerContent, LayerMask, SmartObject, SmartSource};
 use photocraft_geom::Rect;
 use photocraft_raster::{Interrupt, Surface};
+use std::collections::HashMap;
 
 struct Admission {
     remaining: usize,
     source: usize,
     nodes: usize,
+    work: Work,
 }
 impl Admission {
     /// Debits the capture allowance with checked arithmetic before native preparation allocates additional
@@ -27,21 +30,304 @@ fn check(ctl: &Interrupt<'_>) -> Result<()> {
 
 /// Return owner-local native pixels. Admission and the caller's budget publish
 /// only after the entire capture succeeds; original encoded contents are immutable.
+#[cfg(test)]
 pub(super) fn capture(bytes: &[u8], target: &Document, budget: &mut usize, ctl: &Interrupt<'_>) -> Result<Surface> {
+    capture_with_work(bytes, target, budget, &Work::default(), ctl)
+}
+
+pub(super) fn capture_with_work(bytes: &[u8], target: &Document, budget: &mut usize, work: &Work, ctl: &Interrupt<'_>) -> Result<Surface> {
     check(ctl)?;
-    let mut admission = Admission { remaining: (*budget).min(super::MAX_PIXEL_BYTES), source: super::MAX_PIXEL_BYTES, nodes: super::MAX_LAYERS };
+    let mut admission =
+        Admission { remaining: (*budget).min(super::MAX_PIXEL_BYTES), source: super::MAX_PIXEL_BYTES, nodes: super::MAX_LAYERS, work: work.clone() };
     let (document, surface) = render_bytes(bytes, 0, &mut admission, ctl)?;
     if document.size != target.size {
         return Err(invalid("native snapshot current contents frame differs from its validated owner"));
     }
+    charge_frame(work, document.bounds(), target.pixel_format(), 3, ctl)?;
     let pixels = project_source(&surface, &document, target.pixel_format(), &mut admission.remaining, ctl)?;
     check(ctl)?;
     *budget = admission.remaining;
     Ok(pixels)
 }
+
+/// RFC 8878 section 3.1.1.1 (https://www.rfc-editor.org/rfc/rfc8878):
+/// inspect at most the 18-byte frame header.
+/// This is an admission claim only; the real loader still validates the frame.
+struct FrameHeader {
+    decoded: Option<u64>,
+    window: u64,
+    length: usize,
+    checksum: bool,
+    dictionary: u64,
+}
+
+fn frame_header(header: &[u8]) -> Result<FrameHeader> {
+    if header.get(..4) != Some(&[0x28, 0xb5, 0x2f, 0xfd]) {
+        return Err(invalid("native snapshot object has no ordinary zstd frame header"));
+    }
+    let descriptor = *header.get(4).ok_or_else(|| invalid("native snapshot zstd descriptor is truncated"))?;
+    if descriptor & 8 != 0 {
+        return Err(invalid("native snapshot zstd reserved flag is set"));
+    }
+    let single = descriptor & 32 != 0;
+    let mut at = 5usize;
+    let window = if !single {
+        let value = *header.get(at).ok_or_else(|| invalid("native snapshot zstd window is truncated"))?;
+        at += 1;
+        let base = 1u64.checked_shl(10 + u32::from(value >> 3)).ok_or_else(|| invalid("native snapshot zstd window overflows"))?;
+        Some(base + (base / 8) * u64::from(value & 7))
+    } else {
+        None
+    };
+    let dictionary_width = match descriptor & 3 {
+        0 => 0,
+        1 => 1,
+        2 => 2,
+        _ => 4,
+    };
+    let end = at.checked_add(dictionary_width).ok_or_else(|| invalid("native snapshot zstd header overflows"))?;
+    let mut dictionary = [0; 8];
+    dictionary
+        .get_mut(..dictionary_width)
+        .ok_or_else(|| invalid("native dictionary width"))?
+        .copy_from_slice(header.get(at..end).ok_or_else(|| invalid("native snapshot zstd dictionary id is truncated"))?);
+    at = end;
+    let count = match descriptor >> 6 {
+        0 => usize::from(single),
+        1 => 2,
+        2 => 4,
+        _ => 8,
+    };
+    let end = at.checked_add(count).ok_or_else(|| invalid("native snapshot zstd size range overflows"))?;
+    let raw = header.get(at..end).ok_or_else(|| invalid("native snapshot zstd content size is truncated"))?;
+    let mut bytes = [0; 8];
+    bytes.get_mut(..count).ok_or_else(|| invalid("native snapshot zstd size width is invalid"))?.copy_from_slice(raw);
+    let value = u64::from_le_bytes(bytes);
+    let decoded = if count == 0 { None } else { Some(if count == 2 { value + 256 } else { value }) };
+    Ok(FrameHeader {
+        decoded,
+        window: window.unwrap_or(decoded.unwrap_or(0)),
+        length: end,
+        checksum: descriptor & 4 != 0,
+        dictionary: u64::from_le_bytes(dictionary),
+    })
+}
+
+#[cfg(test)]
+fn zstd_decoded_size(header: &[u8]) -> Result<Option<u64>> {
+    Ok(frame_header(header)?.decoded)
+}
+
+/// RFC 8878 section 3.1.1.2: raw/RLE output lengths are explicit;
+/// compressed blocks produce at most min(window,128 KiB). Scan framing only,
+/// never entropy-decode. The pinned writer omits FCS, so this bounded upper
+/// bound is required for ordinary small native embedded-source blobs too.
+fn frame_bound(encoded: &[u8], memory: u64, work: &Work, ctl: &Interrupt<'_>) -> Result<(u64, u64)> {
+    if encoded.get(..4).is_some_and(|magic| magic.first().is_some_and(|byte| byte & 0xf0 == 0x50) && magic.get(1..) == Some(&[0x2a, 0x4d, 0x18])) {
+        return work.refuse_unpriced("optional native snapshot does not price skippable zstd frames", ctl);
+    }
+    let header = frame_header(encoded)?;
+    if header.dictionary != 0 {
+        return work.refuse_unpriced("optional native snapshot does not price dictionary-dependent zstd frames", ctl);
+    }
+    if header.window > memory || header.window > work.remaining_bytes() {
+        return work.refuse_unpriced("native snapshot zstd window exceeds available capture/work admission", ctl);
+    }
+    let block_max = header.window.min(128 * 1024);
+    let mut at = header.length;
+    let mut upper = 0u64;
+    loop {
+        work.charge_bytes(32, ctl)?;
+        let end = at.checked_add(3).ok_or(IoError::XcfNativeWorkLimit)?;
+        let bytes = encoded.get(at..end).ok_or_else(|| invalid("native snapshot zstd block header is truncated"))?;
+        let mut word_bytes = [0; 4];
+        word_bytes.get_mut(..3).ok_or_else(|| invalid("native block header width"))?.copy_from_slice(bytes);
+        let word = u32::from_le_bytes(word_bytes);
+        at = end;
+        let size = u64::from(word >> 3);
+        if size > block_max {
+            return Err(invalid("native snapshot zstd block exceeds its declared window/128 KiB limit"));
+        }
+        let (stored, output) = match (word >> 1) & 3 {
+            0 => (size, size),
+            1 => (1, size),
+            2 => (size, block_max),
+            _ => return Err(invalid("native snapshot zstd block uses reserved type")),
+        };
+        let end = at
+            .checked_add(usize::try_from(stored).map_err(|_| invalid("native snapshot block length exceeds platform"))?)
+            .ok_or(IoError::XcfNativeWorkLimit)?;
+        encoded.get(at..end).ok_or_else(|| invalid("native snapshot zstd block is truncated"))?;
+        at = end;
+        upper = upper.checked_add(output).ok_or(IoError::XcfNativeWorkLimit)?;
+        if word & 1 != 0 {
+            break;
+        }
+    }
+    if header.checksum {
+        let end = at.checked_add(4).ok_or(IoError::XcfNativeWorkLimit)?;
+        encoded.get(at..end).ok_or_else(|| invalid("native snapshot zstd checksum is truncated"))?;
+        at = end;
+    }
+    if at != encoded.len() {
+        return work.refuse_unpriced("optional native snapshot refuses unpriced concatenated/trailing zstd frames", ctl);
+    }
+    // Charge both the announced size and safe block upper bound. The real
+    // decoder still validates FCS, entropy contents and checksum.
+    Ok((upper.max(header.decoded.unwrap_or(0)), header.window))
+}
+
+#[derive(Default)]
+struct ObjectWork {
+    references: usize,
+    tile_bytes: usize,
+}
+
+fn object_references(value: &serde_json::Value, work: &Work, ctl: &Interrupt<'_>) -> Result<HashMap<String, ObjectWork>> {
+    let mut found: HashMap<String, ObjectWork> = HashMap::new();
+    let mut pending = vec![value];
+    while let Some(value) = pending.pop() {
+        work.charge_bytes(32, ctl)?;
+        if let Some(hash) = value.as_str().filter(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())) {
+            let entry = found.entry(hash.to_owned()).or_default();
+            entry.references = entry.references.checked_add(1).ok_or(IoError::XcfNativeWorkLimit)?;
+        }
+        match value {
+            serde_json::Value::Array(values) => {
+                pending.try_reserve(values.len()).map_err(|_| invalid("native snapshot reference stack allocation failed"))?;
+                pending.extend(values);
+            }
+            serde_json::Value::Object(values) => {
+                // SurfaceM carries the exact per-tile byte length enforced by
+                // LoadFetch::tile. This also prices legacy unsized tile frames.
+                if let (Some(format), Some(tiles)) = (values.get("format"), values.get("tiles").and_then(serde_json::Value::as_array)) {
+                    if let Ok(format) = serde_json::from_value::<PixelFormat>(format.clone()) {
+                        let bytes = (photocraft_geom::TILE_SIZE as usize)
+                            .checked_mul(photocraft_geom::TILE_SIZE as usize)
+                            .and_then(|n| n.checked_mul(format.bytes_per_pixel()))
+                            .ok_or(IoError::XcfNativeWorkLimit)?;
+                        for tile in tiles {
+                            if let Some(hash) = tile.get("hash").and_then(serde_json::Value::as_str) {
+                                let entry = found.entry(hash.to_owned()).or_default();
+                                entry.tile_bytes = entry.tile_bytes.max(bytes);
+                            }
+                        }
+                    }
+                }
+                pending.try_reserve(values.len()).map_err(|_| invalid("native snapshot reference stack allocation failed"))?;
+                pending.extend(values.values());
+            }
+            _ => {}
+        }
+    }
+    Ok(found)
+}
+
+fn charge_product(work: &Work, bytes: u64, count: usize, ctl: &Interrupt<'_>) -> Result<()> {
+    let Some(total) = bytes.checked_mul(count as u64).and_then(|n| usize::try_from(n).ok()) else {
+        return work.refuse_unpriced("native snapshot admission size exceeds platform work bounds", ctl);
+    };
+    work.charge_bytes(total, ctl)
+}
+
+#[cfg(test)]
+thread_local! { static NATIVE_LOADS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
+/// Price all potentially fetched references BEFORE the measured loader runs.
+/// Failed reads/hash checks spend this shared ledger, while storage is private.
+/// Callers need not charge ZIP inspection separately. Passed memory limits are
+/// preserved or made stricter; successful measurement is never a work debit.
+pub(super) fn load_with_work(bytes: &[u8], options: &photocraft_format::LoadOptions, work: &Work, ctl: &Interrupt<'_>) -> Result<(Document, u64)> {
+    let (document, measured, _) = load_priced(bytes, options, work, ctl)?;
+    Ok((document, measured))
+}
+
+fn load_priced(bytes: &[u8], options: &photocraft_format::LoadOptions, work: &Work, ctl: &Interrupt<'_>) -> Result<(Document, u64, usize)> {
+    charge_product(work, bytes.len() as u64, 4, ctl)?;
+    let zip = photocraft_format::zip::ZipReader::new(bytes).map_err(|e| invalid(format!("native snapshot archive: {e}")))?;
+    let declared = zip
+        .declared_size("manifest.json")
+        .map_err(|e| invalid(e.to_string()))?
+        .ok_or_else(|| invalid("uncached native snapshot contents require an embedded native document"))?;
+    let manifest_bytes = usize::try_from(declared).map_err(|_| invalid("native snapshot manifest exceeds platform bounds"))?;
+    if manifest_bytes > options.max_manifest_bytes || declared.saturating_mul(64) > options.max_total_bytes {
+        return Err(invalid("native snapshot manifest exceeds capture allowance"));
+    }
+    // Account for the prefix scan, JSON representation, the loader's second
+    // parse and manifest traversal before the first read can fail its checksum.
+    charge_product(work, declared, 64, ctl)?;
+    let manifest = zip.read_by_name("manifest.json", manifest_bytes).map_err(|e| invalid(format!("native snapshot manifest admission: {e}")))?;
+    check(ctl)?;
+    let json: serde_json::Value = serde_json::from_slice(&manifest).map_err(|e| invalid(format!("native snapshot reference manifest: {e}")))?;
+    let references = object_references(&json, work, ctl)?;
+    let mut decoded = 0u64;
+    let mut largest = 0u64;
+    let mut largest_window = 0u64;
+    let mut largest_encoded = 0u64;
+    for entry in &zip.entries {
+        work.charge_bytes(64, ctl)?;
+        let tile = entry.name.starts_with("tiles/");
+        let Some(hash) = entry.name.strip_prefix(if tile { "tiles/" } else { "blobs/" }).and_then(|name| name.strip_suffix(".zst")) else { continue };
+        let Some(reference) = references.get(hash).filter(|r| r.references != 0) else { continue };
+        let outer = zip.declared_size(&entry.name).map_err(|e| invalid(e.to_string()))?.ok_or_else(|| invalid("native snapshot entry has no declared size"))?;
+        let compressed =
+            zip.compressed_size(&entry.name).map_err(|e| invalid(e.to_string()))?.ok_or_else(|| invalid("native snapshot entry has no compressed size"))?;
+        charge_product(work, outer, reference.references.checked_mul(2).ok_or(IoError::XcfNativeWorkLimit)?, ctl)?;
+        charge_product(work, compressed, reference.references.checked_mul(2).ok_or(IoError::XcfNativeWorkLimit)?, ctl)?;
+        let head = zip
+            .read_head(&entry.name, 18)
+            .map_err(|e| invalid(format!("native snapshot object header: {e}")))?
+            .ok_or_else(|| invalid("native snapshot object header is missing"))?;
+        let info = frame_header(&head);
+        if let Ok(info) = &info {
+            if info.window > options.max_total_bytes || info.window > work.remaining_bytes() {
+                return work.refuse_unpriced("native snapshot zstd window exceeds available capture/work admission", ctl);
+            }
+        }
+        let encoded_limit = usize::try_from(options.max_total_bytes.min(super::MAX_PIXEL_BYTES as u64)).unwrap_or(usize::MAX);
+        if outer > encoded_limit as u64 {
+            return work.refuse_unpriced("native snapshot encoded object exceeds bounded inspection storage", ctl);
+        }
+        let encoded = zip.read_by_name(&entry.name, encoded_limit).map_err(|e| invalid(format!("native snapshot encoded object inspection: {e}")))?;
+        let (upper, window) = frame_bound(&encoded, options.max_total_bytes, work, ctl)?;
+        let size = upper.max(if tile { reference.tile_bytes as u64 } else { 0 });
+        let Some(priced_size) = size.checked_add(1) else {
+            return work.refuse_unpriced("native snapshot decoded size cannot be priced", ctl);
+        };
+        charge_product(work, priced_size, reference.references, ctl)?;
+        charge_product(work, window, reference.references, ctl)?;
+        largest_window = largest_window.max(window);
+        largest_encoded = largest_encoded.max(outer);
+        decoded = decoded.checked_add(size.checked_mul(reference.references as u64).ok_or(IoError::XcfNativeWorkLimit)?).ok_or(IoError::XcfNativeWorkLimit)?;
+        largest = largest.max(size);
+    }
+    let metadata = manifest_bytes.checked_mul(64).ok_or(IoError::XcfNativeWorkLimit)?;
+    let mut bounded = *options;
+    bounded.max_total_bytes = bounded
+        .max_total_bytes
+        .min(decoded)
+        .min(options.max_total_bytes.saturating_sub(metadata as u64).saturating_sub(largest_window).saturating_sub(largest_encoded));
+    bounded.max_blob_bytes = bounded.max_blob_bytes.min(usize::try_from(largest).unwrap_or(usize::MAX));
+    check(ctl)?;
+    #[cfg(test)]
+    NATIVE_LOADS.with(|count| count.set(count.get().saturating_add(1)));
+    let (document, measured) =
+        photocraft_format::load_from_bytes_measured(bytes, &bounded).map_err(|e| invalid(format!("native snapshot embedded contents: {e}")))?;
+    check(ctl)?;
+    Ok((document, measured, manifest_bytes))
+}
+
+/// Prepay a bounded frame operation using the same padded tile/scratch admission
+/// as native capture, rather than reserving the whole per-document byte ceiling.
+fn charge_frame(work: &Work, bounds: Rect, format: PixelFormat, passes: usize, ctl: &Interrupt<'_>) -> Result<()> {
+    let mut remaining = usize::MAX;
+    coverage::reserve_native_frame(bounds, format, &mut remaining)?;
+    charge_product(work, (usize::MAX - remaining) as u64, passes, ctl)
+}
+
 /// Recognizes admitted native archives without resolving external source locators or exceeding inspection
 /// memory.
-fn native_kind(bytes: &[u8], budget: usize, ctl: &Interrupt<'_>) -> Result<bool> {
+fn native_kind(bytes: &[u8], budget: usize, work: &Work, ctl: &Interrupt<'_>) -> Result<bool> {
     check(ctl)?;
     if bytes.get(..2) != Some(b"PK") {
         return Ok(false);
@@ -50,6 +336,7 @@ fn native_kind(bytes: &[u8], budget: usize, ctl: &Interrupt<'_>) -> Result<bool>
     if index > budget {
         return Err(invalid("native snapshot archive inspection exceeds remaining capture allowance"));
     }
+    work.charge_bytes(index, ctl)?;
     // ZipReader metadata allocation is admitted before signature inspection too.
     let native = photocraft_format::is_pcraft(bytes);
     check(ctl)?;
@@ -69,26 +356,17 @@ fn render_bytes(bytes: &[u8], depth: usize, admission: &mut Admission, ctl: &Int
     // separately before each load, including fan-out copies of earlier inputs.
     admission.charge(bytes.len().checked_mul(4).ok_or_else(|| invalid("native snapshot archive admission overflows"))?)?;
     let manifest_limit = super::MAX_METADATA_BYTES.min(admission.remaining / 64);
-    let manifest_bytes = {
-        let zip = photocraft_format::zip::ZipReader::new(bytes).map_err(|e| invalid(format!("native snapshot archive: {e}")))?;
-        if zip.find("manifest.json").is_none() {
-            return Err(invalid("uncached native snapshot contents require an embedded native document"));
-        }
-        let manifest = zip.read_by_name("manifest.json", manifest_limit).map_err(|e| invalid(format!("native snapshot manifest admission: {e}")))?;
-        manifest.len()
-    };
-    admission.charge(manifest_bytes.checked_mul(64).ok_or_else(|| invalid("native snapshot metadata admission overflows"))?)?;
     check(ctl)?;
     let options = photocraft_format::LoadOptions {
-        max_manifest_bytes: manifest_bytes,
+        max_manifest_bytes: manifest_limit,
         max_blob_bytes: admission.remaining,
         max_total_bytes: admission.remaining as u64,
         max_canvas_side: super::MAX_SIDE,
         max_canvas_pixels: (admission.remaining / 32) as u64,
         preserve_ids: false,
     };
-    let (mut document, measured) =
-        photocraft_format::load_from_bytes_measured(bytes, &options).map_err(|e| invalid(format!("native snapshot embedded contents: {e}")))?;
+    let (mut document, measured, manifest_bytes) = load_priced(bytes, &options, &admission.work, ctl)?;
+    admission.charge(manifest_bytes.checked_mul(64).ok_or_else(|| invalid("native snapshot metadata admission overflows"))?)?;
     admission.charge(usize::try_from(measured).map_err(|_| invalid("native snapshot decoded size exceeds platform limits"))?)?;
     check(ctl)?;
     // Layer data is prepared privately while the actual native document's frame,
@@ -99,6 +377,7 @@ fn render_bytes(bytes: &[u8], depth: usize, admission: &mut Admission, ctl: &Int
     }
     document.layers = layers;
     let format = document.pixel_format();
+    charge_frame(&admission.work, document.bounds(), format, super::MAX_LAYERS.saturating_sub(admission.nodes).saturating_add(1), ctl)?;
     let surface = coverage::render_prepared_document(&document, format, &mut admission.remaining, ctl)?;
     finite(&surface, document.bounds(), ctl)?;
     Ok((document, surface))
@@ -112,6 +391,8 @@ fn prepare_layer(layer: &mut Layer, document: &Document, depth: usize, groups: u
     if !layer.visible {
         return Ok(());
     }
+    admission.work.charge_bytes(256, ctl)?;
+    charge_frame(&admission.work, document.bounds(), document.pixel_format(), layer.effects.items.len().saturating_add(1), ctl)?;
     match &mut layer.content {
         LayerContent::Group(group) => {
             admission.nodes = admission.nodes.checked_sub(1).ok_or_else(|| invalid("native snapshot layer count exceeds limit"))?;
@@ -123,7 +404,7 @@ fn prepare_layer(layer: &mut Layer, document: &Document, depth: usize, groups: u
         LayerContent::Smart(smart) => {
             admission.nodes = admission.nodes.checked_sub(1).ok_or_else(|| invalid("native snapshot layer count exceeds limit"))?;
             let native_bytes = match &smart.source {
-                SmartSource::Embedded { bytes, .. } if native_kind(bytes, admission.remaining, ctl)? => Some(bytes.clone()),
+                SmartSource::Embedded { bytes, .. } if native_kind(bytes, admission.remaining, &admission.work, ctl)? => Some(bytes.clone()),
                 _ if smart.cache.is_some() => None,
                 SmartSource::Linked { .. } => {
                     return Err(invalid("uncached linked native contents require explicit resource resolution; snapshot performs no external read"));
@@ -133,8 +414,17 @@ fn prepare_layer(layer: &mut Layer, document: &Document, depth: usize, groups: u
             if let Some(bytes) = native_bytes {
                 // Actual native model wins over a historical/stale cache.
                 let (source, pixels) = render_bytes(&bytes, depth + 1, admission, ctl)?;
+                charge_frame(&admission.work, source.bounds(), document.pixel_format(), 3, ctl)?;
                 let pixels = project_source(&pixels, &source, document.pixel_format(), &mut admission.remaining, ctl)?;
+                charge_frame(&admission.work, pixels.content_bounds().union(&document.bounds()), document.pixel_format(), 3, ctl)?;
                 let placed = place(&pixels, source.bounds(), smart, &mut admission.remaining, ctl)?;
+                charge_frame(
+                    &admission.work,
+                    placed.content_bounds().union(&document.bounds()),
+                    document.pixel_format(),
+                    smart.smart_filters.len().saturating_add(2),
+                    ctl,
+                )?;
                 smart.cache = Some(replay_smart(&placed, smart, document, &mut admission.remaining, ctl)?);
             }
             admit_styles(layer, document, &mut admission.remaining)?;
@@ -553,6 +843,205 @@ mod tests {
         assert_eq!(allowance, before);
         assert_eq!(bytes(&source), original);
     }
+    fn header(single: bool, flag: u8, dictionary: u8, size: u64) -> Vec<u8> {
+        let mut bytes = vec![0x28, 0xb5, 0x2f, 0xfd, (flag << 6) | (u8::from(single) << 5) | dictionary];
+        if !single {
+            bytes.push(0);
+        }
+        bytes.extend(vec![
+            0;
+            match dictionary {
+                0 => 0,
+                1 => 1,
+                2 => 2,
+                _ => 4,
+            }
+        ]);
+        let count = match flag {
+            0 => usize::from(single),
+            1 => 2,
+            2 => 4,
+            _ => 8,
+        };
+        bytes.extend_from_slice(&size.to_le_bytes()[..count]);
+        bytes
+    }
+
+    #[test]
+    fn zstd_header_pricing_handles_all_size_dictionary_and_segment_flags() {
+        for single in [false, true] {
+            for dictionary in 0..4 {
+                for flag in 0..4 {
+                    let bytes = header(single, flag, dictionary, 19);
+                    let expected = match (flag, single) {
+                        (0, false) => None,
+                        (1, _) => Some(275),
+                        _ => Some(19),
+                    };
+                    assert_eq!(zstd_decoded_size(&bytes).unwrap(), expected);
+                    assert!(bytes.len() <= 18);
+                    for end in 0..bytes.len() {
+                        assert!(zstd_decoded_size(&bytes[..end]).is_err(), "single={single} flag={flag} dictionary={dictionary} end={end}");
+                    }
+                }
+            }
+        }
+        assert_eq!(zstd_decoded_size(&header(true, 0, 0, 0)).unwrap(), Some(0));
+        assert_eq!(zstd_decoded_size(&header(false, 3, 3, u64::MAX)).unwrap(), Some(u64::MAX));
+        let mut invalid = header(true, 0, 0, 0);
+        invalid[4] |= 8;
+        assert!(zstd_decoded_size(&invalid).is_err());
+        invalid[4] = 32 | 16; // RFC's unused bit is not interpreted by a decoder.
+        assert_eq!(zstd_decoded_size(&invalid).unwrap(), Some(0));
+    }
+
+    fn block(mut header: Vec<u8>, kind: u32, size: u32, payload: &[u8]) -> Vec<u8> {
+        let word = (size << 3) | (kind << 1) | 1;
+        header.extend_from_slice(&word.to_le_bytes()[..3]);
+        header.extend_from_slice(payload);
+        header
+    }
+
+    #[test]
+    fn zstd_block_pricing_bounds_unsized_canonical_frames_and_rejects_unpriced_forms() {
+        let raw = block(header(false, 0, 0, 0), 0, 3, &[1, 2, 3]);
+        assert_eq!(frame_bound(&raw, 4096, &Work::default(), &Interrupt::NONE).unwrap(), (3, 1024));
+        let rle = block(header(false, 0, 0, 0), 1, 900, &[7]);
+        assert_eq!(frame_bound(&rle, 4096, &Work::default(), &Interrupt::NONE).unwrap().0, 900);
+        let compressed = block(header(false, 0, 0, 0), 2, 2, &[1, 2]);
+        assert_eq!(frame_bound(&compressed, 4096, &Work::default(), &Interrupt::NONE).unwrap().0, 1024);
+        // Two-byte FCS includes the specified +256 in the single-segment window.
+        let sized = block(header(true, 1, 0, 19), 0, 275, &vec![0; 275]);
+        assert_eq!(frame_bound(&sized, 4096, &Work::default(), &Interrupt::NONE).unwrap(), (275, 275));
+        let empty = block(header(true, 0, 0, 0), 0, 0, &[]);
+        assert_eq!(frame_bound(&empty, 4096, &Work::default(), &Interrupt::NONE).unwrap(), (0, 0));
+        for end in 0..raw.len() {
+            assert!(frame_bound(&raw[..end], 4096, &Work::default(), &Interrupt::NONE).is_err());
+        }
+        let mut checked = raw.clone();
+        checked[4] |= 4;
+        assert!(frame_bound(&checked, 4096, &Work::default(), &Interrupt::NONE).is_err());
+        checked.extend([0; 4]);
+        assert_eq!(frame_bound(&checked, 4096, &Work::default(), &Interrupt::NONE).unwrap().0, 3);
+        assert!(frame_bound(&block(header(false, 0, 0, 0), 3, 0, &[]), 4096, &Work::default(), &Interrupt::NONE).is_err());
+        assert!(frame_bound(&block(header(false, 0, 0, 0), 0, 1025, &vec![0; 1025]), 4096, &Work::default(), &Interrupt::NONE).is_err());
+        let mut concatenated = raw.clone();
+        concatenated.extend_from_slice(&raw);
+        let mut dictionary = raw.clone();
+        dictionary[4] |= 1;
+        dictionary.insert(6, 1);
+        let mut huge_window = raw.clone();
+        huge_window[5] = 255;
+        for refused in [concatenated, dictionary, huge_window, vec![0x50, 0x2a, 0x4d, 0x18, 0, 0, 0, 0]] {
+            let work = Work::with_units(4096);
+            assert!(matches!(frame_bound(&refused, 4096, &work, &Interrupt::NONE), Err(IoError::XcfNativeWorkUnpriced(_))));
+            assert_eq!(work.remaining_units(), 0);
+        }
+        let work = Work::with_units(4096);
+        let cancel = || true;
+        assert!(matches!(frame_bound(&raw, 4096, &work, &Interrupt::cancel_only(&cancel)), Err(IoError::Cancelled)));
+        assert_eq!(work.remaining_units(), 4096);
+        let mut two_blocks = raw.clone();
+        let start = header(false, 0, 0, 0).len();
+        two_blocks[start] &= !1;
+        two_blocks.extend_from_slice(&[1, 0, 0]); // last empty raw block
+        let checks = std::sync::atomic::AtomicUsize::new(0);
+        let cancel = || checks.fetch_add(1, std::sync::atomic::Ordering::Relaxed) != 0;
+        assert!(matches!(frame_bound(&two_blocks, 4096, &work, &Interrupt::cancel_only(&cancel)), Err(IoError::Cancelled)));
+        assert_eq!(work.remaining_units(), 4096 - 8, "completed block inspection is not refunded on cancellation");
+    }
+
+    #[test]
+    fn snapshot_shared_work_exact_boundary_keeps_tiny_canonical_rgb_gray_admitted() {
+        for mode in [ColorMode::Rgb, ColorMode::Grayscale] {
+            for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+                let doc = raster(mode, depth);
+                let encoded = bytes(&doc);
+                let work = Work::default();
+                let before = work.remaining_units();
+                let mut allowance = super::super::MAX_PIXEL_BYTES;
+                let got = capture_with_work(&encoded, &doc, &mut allowance, &work, &Interrupt::NONE).unwrap();
+                assert_pixels(&got, doc.layers[0].surface().unwrap(), doc.bounds());
+                let spent = before - work.remaining_units();
+                assert!(spent > 0 && spent < (64 << 20) / 4, "tiny capture must not reserve a whole document ceiling");
+                let exact = Work::with_units(spent);
+                let mut memory = super::super::MAX_PIXEL_BYTES;
+                capture_with_work(&encoded, &doc, &mut memory, &exact, &Interrupt::NONE).unwrap();
+                assert_eq!(exact.remaining_units(), 0);
+                let short = Work::with_units(spent - 1);
+                let mut memory = super::super::MAX_PIXEL_BYTES;
+                assert!(capture_with_work(&encoded, &doc, &mut memory, &short, &Interrupt::NONE).is_err());
+                assert_eq!(memory, super::super::MAX_PIXEL_BYTES);
+                assert_eq!(short.remaining_units(), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn late_native_hash_failure_spends_shared_work_without_publishing_storage() {
+        use photocraft_format::zip::{ZipReader, ZipWriter};
+        let doc = raster(ColorMode::Rgb, SampleType::U8);
+        let original = bytes(&doc);
+        let mut changed = doc.clone();
+        changed.layers[0].surface_mut().unwrap().fill_rect(doc.bounds(), &[0.8, 0.7, 0.6, 0.5]);
+        let changed_bytes = bytes(&changed);
+        let other = ZipReader::new(&changed_bytes).unwrap();
+        let replacement = other.entries.iter().find(|entry| entry.name.starts_with("tiles/")).unwrap();
+        let replacement = other.read(replacement, super::super::MAX_PIXEL_BYTES).unwrap();
+        let zip = ZipReader::new(&original).unwrap();
+        let mut writer = ZipWriter::new();
+        let mut replaced = false;
+        for entry in &zip.entries {
+            let content = if entry.name.starts_with("tiles/") && !replaced {
+                replaced = true;
+                replacement.clone()
+            } else {
+                zip.read(entry, super::super::MAX_PIXEL_BYTES).unwrap()
+            };
+            writer.add(&entry.name, &content).unwrap();
+        }
+        assert!(replaced);
+        let damaged = writer.finish().unwrap();
+        let work = Work::default();
+        let fork = work.clone();
+        let before = work.remaining_units();
+        NATIVE_LOADS.with(|count| count.set(0));
+        for ledger in [&work, &fork] {
+            let previous = work.remaining_units();
+            let mut memory = super::super::MAX_PIXEL_BYTES;
+            assert!(capture_with_work(&damaged, &doc, &mut memory, ledger, &Interrupt::NONE).is_err());
+            assert_eq!(memory, super::super::MAX_PIXEL_BYTES);
+            assert!(work.remaining_units() < previous);
+        }
+        NATIVE_LOADS.with(|count| assert_eq!(count.get(), 2, "both failures reached the real loader after admission"));
+        let spent = (before - work.remaining_units()) / 2;
+        let limited = Work::with_units(spent - 1);
+        NATIVE_LOADS.with(|count| count.set(0));
+        let mut memory = super::super::MAX_PIXEL_BYTES;
+        assert!(capture_with_work(&damaged, &doc, &mut memory, &limited, &Interrupt::NONE).is_err());
+        NATIVE_LOADS.with(|count| assert_eq!(count.get(), 0, "work refusal precedes another loader attempt"));
+        assert_eq!(memory, super::super::MAX_PIXEL_BYTES);
+    }
+
+    #[test]
+    fn repeated_tile_references_are_priced_before_loader_and_cancel_never_publishes() {
+        let one = raster(ColorMode::Rgb, SampleType::F32);
+        let mut two = one.clone();
+        two.layers.push(two.layers[0].clone());
+        let options = photocraft_format::LoadOptions::default();
+        let a = Work::default();
+        let b = Work::default();
+        load_with_work(&bytes(&one), &options, &a, &Interrupt::NONE).unwrap();
+        load_with_work(&bytes(&two), &options, &b, &Interrupt::NONE).unwrap();
+        assert!(b.remaining_units() < a.remaining_units());
+        let work = Work::with_units(100);
+        let cancel = || true;
+        NATIVE_LOADS.with(|count| count.set(0));
+        assert!(matches!(load_with_work(&bytes(&one), &options, &work, &Interrupt::cancel_only(&cancel)), Err(IoError::Cancelled)));
+        NATIVE_LOADS.with(|count| assert_eq!(count.get(), 0));
+        assert_eq!(work.remaining_units(), 100);
+    }
+
     #[test]
     /// Checks filter-mask mixing across tiles against native density, HDR and default-coverage behavior.
     fn tiled_filter_mask_matches_native_density_hdr_and_tile_boundary_policy() {

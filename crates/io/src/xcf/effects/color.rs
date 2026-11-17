@@ -392,6 +392,7 @@ pub(super) fn native_lookup(
     let from_rgb =
         Transform::new(Builtin::Srgb.profile(), &profile, Intent::RelativeColorimetric, false).map_err(|error| format!("Native lookup output CMS: {error}"))?;
     let channels = if gray { 1 } else { 3 };
+    context.charge_generation(17usize.pow(3) * (3 * 8 + 36))?;
     super::resources::lookup_fallible(17, title, notes, |grid| {
         let samples = grid.map(|v| v as f32);
         let mut rgb = [0.0f32; 3];
@@ -757,6 +758,7 @@ mod tests {
             target_profile: None,
             resolution_dpi: 72.0,
             remaining_generation_bytes: crate::xcf::MAX_PIXEL_BYTES,
+            native_work: None,
             remaining_metadata_bytes: crate::xcf::MAX_METADATA_BYTES,
             interrupt: photocraft_raster::Interrupt::NONE,
         }

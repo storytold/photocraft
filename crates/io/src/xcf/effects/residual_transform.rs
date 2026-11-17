@@ -311,6 +311,7 @@ fn ripple(e: &StoredEffect<'_>, context: &MappingContext) -> Result<NativeMappin
             .remaining_metadata_bytes
             .checked_sub(mask_bytes)
             .ok_or_else(|| MappingFailure::resource("native ripple mask/map metadata"))?,
+        native_work: context.native_work,
         mode: context.mode,
         linear: context.linear,
         owner_bounds: context.owner_bounds,
@@ -727,6 +728,9 @@ pub(super) fn coordinate_mask(context: &MappingContext, frame: Rect, visible: im
     context.interrupt.check().map_err(|e| e.to_string())?;
     let mut surface = photocraft_raster::Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false));
     let mut row = Vec::new();
+    context.charge_generation(
+        (frame.width() as usize).checked_mul(frame.height() as usize).and_then(|n| n.checked_mul(4)).ok_or("native coordinate mask work overflow")?,
+    )?;
     row.try_reserve_exact(frame.width() as usize).map_err(|_| "Panorama mask row allocation unavailable")?;
     row.resize(frame.width() as usize, 0.);
     for y in 0..frame.height() {
@@ -772,6 +776,7 @@ pub(super) fn coordinate_map(context: &MappingContext, coordinate: impl Fn(u32, 
         let (u, v) = coordinate(x, y);
         (u - (f64::from(x) + 0.5), v - (f64::from(y) + 0.5))
     };
+    context.charge_generation(count.checked_mul(5 * 8).ok_or("native coordinate work overflow")?)?;
     let mut range_x = 0f64;
     let mut range_y = 0f64;
     for y in 0..height {
@@ -858,6 +863,7 @@ fn shift(e: &StoredEffect<'_>, context: &MappingContext) -> Result<NativeMapping
         });
     }
     let count = usize::try_from(length).ok().and_then(|n| n.checked_mul(3)).ok_or("native shift map sample overflow")?;
+    context.charge_generation(count.checked_mul(4).ok_or("native shift work overflow")?)?;
     let mut data = Vec::new();
     data.try_reserve_exact(count).map_err(|_| "native shift map allocation unavailable")?;
     for index in 0..length {
@@ -1145,6 +1151,7 @@ mod tests {
             target_profile: Some(craft_cms::Builtin::LinearSrgb.profile().to_bytes()),
             resolution_dpi: 72.0,
             remaining_generation_bytes: crate::xcf::MAX_PIXEL_BYTES,
+            native_work: None,
             remaining_metadata_bytes: crate::xcf::MAX_METADATA_BYTES,
             interrupt: photocraft_raster::Interrupt::NONE,
         }

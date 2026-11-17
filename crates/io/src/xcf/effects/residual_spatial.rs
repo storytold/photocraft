@@ -52,6 +52,7 @@ pub(super) fn geometry_bytes(c: &MappingContext, paths: usize, knots: usize) -> 
     if bytes > c.remaining_metadata_bytes {
         return Err(MappingFailure::resource("native geometry exceeds the actual remaining metadata allowance"));
     }
+    c.charge_generation(bytes)?;
     generation_bytes(c, bytes)
 }
 

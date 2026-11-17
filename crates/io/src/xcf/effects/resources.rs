@@ -199,9 +199,9 @@ fn native_notes(detail: &str) -> Vec<String> {
 pub(super) fn map(effect: &StoredEffect<'_>, context: &MappingContext) -> MappingResult {
     let mapped = match effect.operation {
         "gegl:color-overlay" => overlay(effect, context),
-        "gegl:color-exchange" => exchange(effect),
-        "gegl:color-rotate" => rotate(effect),
-        "gegl:color-warp" => warp(effect),
+        "gegl:color-exchange" => exchange(effect, context),
+        "gegl:color-rotate" => rotate(effect, context),
+        "gegl:color-warp" => warp(effect, context),
         "gegl:negative-darkroom" => {
             return Some(Err(MappingFailure::resource(
                 "the source names a photographic paper response but does not store its curve; no film preset is guessed or fetched",
@@ -342,7 +342,7 @@ fn overlay_color(rgba: [f32; 4], context: &MappingContext, note: String) -> Resu
 
 /// Author a bounded native lookup for independent channel-tolerance color replacement, preserving unaffected
 /// samples.
-fn exchange(effect: &StoredEffect<'_>) -> Result<NativeMapping, String> {
+fn exchange(effect: &StoredEffect<'_>, context: &MappingContext) -> Result<NativeMapping, String> {
     let from = color(effect, "from-color")?.map(f64::from);
     let to = color(effect, "to-color")?.map(f64::from);
     let thresholds = [number(effect, "red-threshold", 0.0)?, number(effect, "green-threshold", 0.0)?, number(effect, "blue-threshold", 0.0)?];
@@ -355,6 +355,7 @@ fn exchange(effect: &StoredEffect<'_>) -> Result<NativeMapping, String> {
     // points. Preserve a localized editable approximation with a half-cell floor
     // independently per channel, and disclose this native sampling difference.
     let [rt, gt, bt] = thresholds.map(|value| value.max(1.0 / 32.0));
+    context.charge_generation(17usize.pow(3) * (3 * 8 + 36)).map_err(|e| e.message)?;
     lookup(
         17,
         "Imported color exchange",
@@ -413,7 +414,7 @@ fn rgb([h, s, v]: [f64; 3]) -> [f64; 3] {
 
 /// Translate directed hue sectors and gray treatment into an ordinary native lookup, preserving full-turn and
 /// collapsed-sector distinctions.
-fn rotate(effect: &StoredEffect<'_>) -> Result<NativeMapping, String> {
+fn rotate(effect: &StoredEffect<'_>, context: &MappingContext) -> Result<NativeMapping, String> {
     let sf = number(effect, "src-from", 0.0)?;
     let st = number(effect, "src-to", 90.0)?;
     let df = number(effect, "dest-from", 0.0)?;
@@ -450,6 +451,7 @@ fn rotate(effect: &StoredEffect<'_>) -> Result<NativeMapping, String> {
                 .into(),
         );
     }
+    context.charge_generation(17usize.pow(3) * (3 * 8 + 36)).map_err(|e| e.message)?;
     lookup(17, "Imported hue sectors", notes, |input| {
         let [mut h, mut s, v] = hsv(input);
         let low_chroma = s < threshold;
@@ -472,7 +474,7 @@ fn rotate(effect: &StoredEffect<'_>) -> Result<NativeMapping, String> {
 
 /// Translate supported literal color-warp controls into native lookup data; unresolved external resources
 /// remain inert.
-fn warp(effect: &StoredEffect<'_>) -> Result<NativeMapping, String> {
+fn warp(effect: &StoredEffect<'_>, context: &MappingContext) -> Result<NativeMapping, String> {
     let mut pairs = Vec::with_capacity(8);
     for index in 0..8 {
         let weight = number(effect, &format!("weight-{index}"), 100.0)?;
@@ -482,6 +484,7 @@ fn warp(effect: &StoredEffect<'_>) -> Result<NativeMapping, String> {
     }
     let amount = number(effect, "amount", 1.0)?;
     let global_weight = number(effect, "weight", 1.0)?;
+    context.charge_generation(17usize.pow(3) * (3 * 8 + 36)).map_err(|e| e.message)?;
     lookup(
         17,
         "Imported weighted colors",
@@ -797,6 +800,7 @@ mod tests {
             target_profile: None,
             resolution_dpi: 72.0,
             remaining_generation_bytes: crate::xcf::MAX_PIXEL_BYTES,
+            native_work: None,
             remaining_metadata_bytes: crate::xcf::MAX_METADATA_BYTES,
             interrupt: photocraft_raster::Interrupt::NONE,
         }

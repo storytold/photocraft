@@ -48,9 +48,22 @@ pub(super) struct MappingContext<'a> {
     pub resolution_dpi: f32,
     /// Existing import allowance remaining before any generated resource allocation.
     pub remaining_generation_bytes: usize,
+    /// Production always borrows the one file-wide counter; isolated test contexts may omit it.
+    pub native_work: Option<&'a super::native_work::Work>,
     /// Existing copied/native parameter allowance, before encoding generated resources.
     pub remaining_metadata_bytes: usize,
     pub interrupt: photocraft_raster::Interrupt<'a>,
+}
+
+impl MappingContext<'_> {
+    pub(super) fn charge_generation(&self, bytes: usize) -> std::result::Result<(), MappingFailure> {
+        self.interrupt.check().map_err(|e| MappingFailure::from(e.to_string()))?;
+        if let Some(work) = self.native_work {
+            work.charge_bytes(bytes, &self.interrupt)
+                .map_err(|e| MappingFailure { reason: photocraft_doc::import_conversion::ConversionReason::RetentionLimit, message: e.to_string() })?;
+        }
+        Ok(())
+    }
 }
 
 /// One parsed effect; file order and argument order remain explicit.
@@ -515,6 +528,18 @@ pub(super) fn native_filter(command: &str, params: serde_json::Value) -> SmartFi
 /// Validate source errors, operation version and the frozen argument schema before dispatching to finite native mapping helpers.
 /// Unknown or unsupported cases return a reportable failure instead of applying defaults.
 pub(super) fn map(effect: &StoredEffect<'_>, context: &MappingContext) -> std::result::Result<NativeMapping, MappingFailure> {
+    let before = context.native_work.map_or(0, |work| work.rejections());
+    let result = map_inner(effect, context);
+    if context.native_work.is_some_and(|work| work.rejections() != before) {
+        return Err(MappingFailure {
+            reason: photocraft_doc::import_conversion::ConversionReason::RetentionLimit,
+            message: "Native generation exceeded the file-wide nonrefundable work allowance".into(),
+        });
+    }
+    result
+}
+
+fn map_inner(effect: &StoredEffect<'_>, context: &MappingContext) -> std::result::Result<NativeMapping, MappingFailure> {
     context
         .interrupt
         .check()
@@ -567,6 +592,7 @@ mod schema_tests {
             target_profile: None,
             resolution_dpi: 72.0,
             remaining_generation_bytes: crate::xcf::MAX_PIXEL_BYTES,
+            native_work: None,
             remaining_metadata_bytes: crate::xcf::MAX_METADATA_BYTES,
             interrupt: photocraft_raster::Interrupt::NONE,
         }
@@ -594,5 +620,43 @@ mod schema_tests {
         assert_eq!(schema::fields("gegl:motion-blur"), schema::fields("gegl:motion-blur-linear"));
         assert_eq!(schema::fields("gegl:invert"), schema::fields("gegl:invert-linear"));
         assert!(schema::fields("user-installed:operation").is_none());
+    }
+}
+
+#[cfg(test)]
+mod generation_work_tests {
+    use super::*;
+    #[test]
+    fn generated_lookup_prices_real_cells_before_allocation_and_preserves_exact_boundary() {
+        let effect = StoredEffect::test(
+            "gegl:color-exchange",
+            vec![
+                Argument { name: "from-color", value: ArgumentValue::LiteralColor { rgba: [0.1, 0.2, 0.3, 1.], linear: false } },
+                Argument { name: "to-color", value: ArgumentValue::LiteralColor { rgba: [0.4, 0.5, 0.6, 1.], linear: false } },
+            ],
+        );
+        let units = 17usize.pow(3) * (3 * 8 + 36) / 4;
+        let work = super::super::native_work::Work::with_units(units);
+        let context = MappingContext {
+            mode: photocraft_color::ColorMode::Rgb,
+            linear: false,
+            owner_bounds: photocraft_geom::Rect::new(0, 0, 1, 1),
+            native_filter_bounds: photocraft_geom::Rect::new(0, 0, 1, 1),
+            target_profile: None,
+            resolution_dpi: 72.,
+            remaining_generation_bytes: super::super::MAX_PIXEL_BYTES,
+            remaining_metadata_bytes: super::super::MAX_METADATA_BYTES,
+            native_work: Some(&work),
+            interrupt: photocraft_raster::Interrupt::NONE,
+        };
+        let accepted = map(&effect, &context).unwrap();
+        assert_eq!(accepted.filters.len(), 1);
+        assert_eq!(work.remaining_units(), 0);
+        let failure = map(&effect, &context).unwrap_err();
+        assert_eq!(failure.reason, photocraft_doc::import_conversion::ConversionReason::RetentionLimit);
+        let short = super::super::native_work::Work::with_units(units - 1);
+        let context = MappingContext { native_work: Some(&short), ..context };
+        assert_eq!(map(&effect, &context).unwrap_err().reason, photocraft_doc::import_conversion::ConversionReason::RetentionLimit);
+        assert_eq!(short.remaining_units(), 0);
     }
 }

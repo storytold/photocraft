@@ -21,6 +21,7 @@ pub(super) struct NativeEnvelope {
 }
 
 pub(super) struct NativeOwner {
+    work: super::native_work::Work,
     template: Arc<Document>,
     source: Arc<Vec<u8>>,
     // Import-private provenance, never serialized or derived from source identifiers.
@@ -33,7 +34,14 @@ pub(super) struct NativeOwner {
 
 /// Count ordinary native embedded contents before adding another owner wrapper.
 /// Only in-memory native bundles are inspected; no locator is ever resolved.
-fn nested_depth(layers: &[Layer], depth: usize, groups: usize, allowance: &mut u64, ctl: &Interrupt<'_>) -> Result<usize> {
+fn nested_depth_with_work(
+    layers: &[Layer],
+    depth: usize,
+    groups: usize,
+    allowance: &mut u64,
+    work: &super::native_work::Work,
+    ctl: &Interrupt<'_>,
+) -> Result<usize> {
     if depth > 64 || groups > super::MAX_DEPTH {
         return Err(invalid("native effect contents exceed the nested preparation limit"));
     }
@@ -41,11 +49,15 @@ fn nested_depth(layers: &[Layer], depth: usize, groups: usize, allowance: &mut u
     for layer in layers {
         ctl.check().map_err(|_| crate::IoError::Cancelled)?;
         match &layer.content {
-            LayerContent::Group(group) => deepest = deepest.max(nested_depth(&group.children, depth, groups + 1, allowance, ctl)?),
+            LayerContent::Group(group) => deepest = deepest.max(nested_depth_with_work(&group.children, depth, groups + 1, allowance, work, ctl)?),
             LayerContent::Smart(smart) => {
                 let SmartSource::Embedded { bytes, .. } = &smart.source else {
                     return Err(invalid("effect owner requires self-contained native smart contents"));
                 };
+                let Some(index_work) = bytes.len().checked_mul(4) else {
+                    return work.refuse_unpriced("native nesting archive index size overflows", ctl);
+                };
+                work.charge_bytes(index_work, ctl)?;
                 if !photocraft_format::is_pcraft(bytes) {
                     return Err(invalid("effect owner nesting requires native embedded contents"));
                 }
@@ -57,10 +69,9 @@ fn nested_depth(layers: &[Layer], depth: usize, groups: usize, allowance: &mut u
                     max_blob_bytes: usize::try_from(*allowance).unwrap_or(usize::MAX).min(super::MAX_PIXEL_BYTES),
                     ..Default::default()
                 };
-                let (document, bytes) =
-                    photocraft_format::load_from_bytes_measured(bytes, &options).map_err(|e| invalid(format!("native effect nesting: {e}")))?;
+                let (document, bytes) = super::native_snapshot::load_with_work(bytes, &options, work, ctl)?;
                 *allowance = allowance.checked_sub(bytes).ok_or_else(|| invalid("native effect nesting exceeds its load allowance"))?;
-                deepest = deepest.max(nested_depth(&document.layers, depth + 1, 0, allowance, ctl)?);
+                deepest = deepest.max(nested_depth_with_work(&document.layers, depth + 1, 0, allowance, work, ctl)?);
             }
             _ => {}
         }
@@ -71,7 +82,7 @@ fn nested_depth(layers: &[Layer], depth: usize, groups: usize, allowance: &mut u
 /// Conservative admission for this builder's private native documents, before
 /// format conversion clones metadata or creates compressed-object/ZIP buffers.
 /// This bounds admitted representation bytes, not the format writer's whole peak memory.
-fn encoded_preflight(doc: &Document, allowance: usize, ctl: &Interrupt<'_>) -> Result<()> {
+fn encoded_preflight_with_work(doc: &Document, allowance: usize, work: &super::native_work::Work, ctl: &Interrupt<'_>) -> Result<()> {
     use std::collections::HashSet;
     use std::io::Write;
     macro_rules! metadata {
@@ -79,11 +90,15 @@ fn encoded_preflight(doc: &Document, allowance: usize, ctl: &Interrupt<'_>) -> R
             let state = &mut *$state;
             let result = serde_json::to_writer_pretty(&mut *state, $value);
             state.ctl.check().map_err(|_| crate::IoError::Cancelled)?;
+            if state.work.rejections() != 0 {
+                return Err(crate::IoError::XcfNativeWorkLimit);
+            }
             result.map_err(|e| invalid(format!("native bundle metadata admission: {e}")))
         }};
     }
     struct Admission<'a, 'b> {
         left: usize,
+        work: &'a super::native_work::Work,
         blobs: HashSet<usize>,
         tiles: HashSet<(usize, SampleType)>,
         nodes: usize,
@@ -100,6 +115,7 @@ fn encoded_preflight(doc: &Document, allowance: usize, ctl: &Interrupt<'_>) -> R
             // Strings' internal newlines are escaped JSON, not indentation.
             let indent = bytes.iter().filter(|b| **b == b'\n').count().checked_mul(2 * (super::MAX_DEPTH + 20));
             let cost = indent.and_then(|n| n.checked_add(bytes.len())).ok_or_else(|| std::io::Error::other("native bundle metadata overflows"))?;
+            self.work.charge_bytes(bytes.len(), self.ctl).map_err(|e| std::io::Error::other(e.to_string()))?;
             self.left = self.left.checked_sub(cost).ok_or_else(|| std::io::Error::other("native bundle metadata exceeds remaining source allowance"))?;
             Ok(bytes.len())
         }
@@ -112,6 +128,7 @@ fn encoded_preflight(doc: &Document, allowance: usize, ctl: &Interrupt<'_>) -> R
         /// Debits native bundle admission atomically and propagates cancellation before serialization starts.
         fn charge(&mut self, bytes: usize) -> Result<()> {
             self.ctl.check().map_err(|_| crate::IoError::Cancelled)?;
+            self.work.charge_bytes(bytes, self.ctl)?;
             self.left =
                 self.left.checked_sub(bytes).ok_or_else(|| invalid("native bundle representation exceeds remaining source allowance before serialization"))?;
             Ok(())
@@ -259,7 +276,8 @@ fn encoded_preflight(doc: &Document, allowance: usize, ctl: &Interrupt<'_>) -> R
             Ok(())
         }
     }
-    let mut admission = Admission { left: allowance.min(super::MAX_PIXEL_BYTES), blobs: HashSet::new(), tiles: HashSet::new(), nodes: super::MAX_LAYERS, ctl };
+    let mut admission =
+        Admission { left: allowance.min(super::MAX_PIXEL_BYTES), work, blobs: HashSet::new(), tiles: HashSet::new(), nodes: super::MAX_LAYERS, ctl };
     // These fields are intentionally absent from private builder templates; do
     // not silently omit new variable metadata from this admission boundary.
     if doc.metadata != Default::default() || !doc.layer_comps.is_empty() || doc.last_document_state.is_some() {
@@ -296,12 +314,25 @@ fn encoded_preflight(doc: &Document, allowance: usize, ctl: &Interrupt<'_>) -> R
 
 /// Preflights an embedded native document, serializes it, and charges the shared source allowance only on
 /// success.
-fn encoded(doc: &Document, budget: &mut usize, ctl: &Interrupt<'_>) -> Result<Arc<Vec<u8>>> {
-    encoded_preflight(doc, *budget, ctl)?;
+fn encoded_with_work(doc: &Document, budget: &mut usize, work: &super::native_work::Work, ctl: &Interrupt<'_>) -> Result<Arc<Vec<u8>>> {
+    encoded_preflight_with_work(doc, *budget, work, ctl)?;
     let bytes = photocraft_format::save_to_bytes(doc, &Default::default()).map_err(|e| invalid(format!("native effect contents: {e}")))?;
     ctl.check().map_err(|_| crate::IoError::Cancelled)?;
     *budget = budget.checked_sub(bytes.len()).ok_or_else(|| invalid("native effect contents exceed the shared 1 GiB source allowance"))?;
     Ok(Arc::new(bytes))
+}
+
+#[cfg(test)]
+fn encoded_preflight(doc: &Document, allowance: usize, ctl: &Interrupt<'_>) -> Result<()> {
+    encoded_preflight_with_work(doc, allowance, &super::native_work::Work::default(), ctl)
+}
+#[cfg(test)]
+fn encoded(doc: &Document, budget: &mut usize, ctl: &Interrupt<'_>) -> Result<Arc<Vec<u8>>> {
+    encoded_with_work(doc, budget, &super::native_work::Work::default(), ctl)
+}
+#[cfg(test)]
+fn nested_depth(layers: &[Layer], depth: usize, groups: usize, allowance: &mut u64, ctl: &Interrupt<'_>) -> Result<usize> {
+    nested_depth_with_work(layers, depth, groups, allowance, &super::native_work::Work::default(), ctl)
 }
 
 /// Totals stored default and tile bytes using checked arithmetic for generated native resources.
@@ -802,9 +833,21 @@ fn move_layer(layer: &mut Layer, dx: i32, dy: i32, depth: usize, ctl: &Interrupt
 }
 
 impl NativeOwner {
+    #[cfg(test)]
+    pub(super) fn new(document: &Document, layer: &Layer, bounds: Rect, budget: &mut usize, ctl: &Interrupt<'_>) -> Result<Self> {
+        Self::new_with_work(document, layer, bounds, budget, &super::native_work::Work::default(), ctl)
+    }
+
     /// Embeds one owner as native contents, preserving its outer state and admitting source bytes before
     /// publication.
-    pub(super) fn new(document: &Document, layer: &Layer, bounds: Rect, budget: &mut usize, ctl: &Interrupt<'_>) -> Result<Self> {
+    pub(super) fn new_with_work(
+        document: &Document,
+        layer: &Layer,
+        bounds: Rect,
+        budget: &mut usize,
+        work: &super::native_work::Work,
+        ctl: &Interrupt<'_>,
+    ) -> Result<Self> {
         ctl.check().map_err(|_| crate::IoError::Cancelled)?;
         let width = u32::try_from(i64::from(bounds.x1) - i64::from(bounds.x0)).map_err(|_| invalid("invalid native effect owner width"))?;
         let height = u32::try_from(i64::from(bounds.y1) - i64::from(bounds.y0)).map_err(|_| invalid("invalid native effect owner height"))?;
@@ -813,10 +856,11 @@ impl NativeOwner {
         }
         let dx = bounds.x0.checked_neg().ok_or_else(|| invalid("native effect origin cannot be translated safely"))?;
         let dy = bounds.y0.checked_neg().ok_or_else(|| invalid("native effect origin cannot be translated safely"))?;
-        let existing_depth = nested_depth(std::slice::from_ref(layer), 0, 0, &mut (super::MAX_PIXEL_BYTES as u64), ctl)?;
+        let existing_depth = nested_depth_with_work(std::slice::from_ref(layer), 0, 0, &mut (super::MAX_PIXEL_BYTES as u64), work, ctl)?;
         if existing_depth >= 64 {
             return Err(invalid("native effect owner cannot add a wrapper beyond the native content depth"));
         }
+        work.charge_bytes(direct_layer_bytes(layer, 0, &mut 65536, ctl)?, ctl)?;
         let mut input = Layer::new(layer.name.clone(), layer.content.clone());
         // The original owner's mask/blend/opacity/locks stay on its admitted outer layer.
         // Child native state remains part of an editable embedded group.
@@ -829,16 +873,34 @@ impl NativeOwner {
         let mut base = template.clone();
         base.layers.push(input);
         let mut remaining = *budget;
-        let source = encoded(&base, &mut remaining, ctl)?;
+        let source = encoded_with_work(&base, &mut remaining, work, ctl)?;
         ctl.check().map_err(|_| crate::IoError::Cancelled)?;
         *budget = remaining;
-        Ok(Self { template: Arc::new(template), source, lineage: Arc::new(()), origin: (bounds.x0, bounds.y0), stages: 0, added_depth: 0, existing_depth })
+        Ok(Self {
+            work: work.clone(),
+            template: Arc::new(template),
+            source,
+            lineage: Arc::new(()),
+            origin: (bounds.x0, bounds.y0),
+            stages: 0,
+            added_depth: 0,
+            existing_depth,
+        })
+    }
+
+    fn charge_frame_work(&self, bounds: Rect, channels: usize, ctl: &Interrupt<'_>) -> Result<()> {
+        let Some(bytes) = (bounds.width() as usize).checked_mul(bounds.height() as usize).and_then(|n| n.checked_mul(channels)).and_then(|n| n.checked_mul(4))
+        else {
+            return self.work.refuse_unpriced("native frame component count overflows", ctl);
+        };
+        self.work.charge_bytes(bytes, ctl)
     }
 
     /// Snapshot the current accepted native stage. The immutable native bytes and
     /// private owner provenance are shared; subsequent pushes do not change this fork.
     pub(super) fn fork(&self) -> Self {
         Self {
+            work: self.work.clone(),
             template: self.template.clone(),
             source: self.source.clone(),
             lineage: self.lineage.clone(),
@@ -914,7 +976,7 @@ impl NativeOwner {
         // Existing admission prices the actual native blob allocations/metadata,
         // including distinct nested branch bytes; aliases share their native Arc.
         let mut remaining = *budget;
-        let source = encoded(&joined, &mut remaining, ctl)?;
+        let source = encoded_with_work(&joined, &mut remaining, &self.work, ctl)?;
         ctl.check().map_err(|_| crate::IoError::Cancelled)?;
         self.source = source;
         self.stages = stages;
@@ -967,6 +1029,13 @@ impl NativeOwner {
     /// One source operation becomes one native stage. A compound Normal stage's
     /// opacity is a native filter mask over its whole chain, never the last filter alone.
     pub(super) fn push(&mut self, mut mapping: NativeMapping, envelope: NativeEnvelope, budget: &mut usize, ctl: &Interrupt<'_>) -> Result<Vec<String>> {
+        ctl.check().map_err(|_| crate::IoError::Cancelled)?;
+        if let Some(mask) = &envelope.mask {
+            self.work.charge_bytes(surface_bytes(&mask.surface)?, ctl)?;
+        }
+        for pattern in &mapping.patterns {
+            self.work.charge_bytes(surface_bytes(&pattern.surface)?, ctl)?;
+        }
         if mapping.working_rgb {
             ctl.check().map_err(|_| crate::IoError::Cancelled)?;
             if self.template.mode != ColorMode::Grayscale {
@@ -977,6 +1046,7 @@ impl NativeOwner {
             template.mode = ColorMode::Rgb;
             template.icc_profile = Some(craft_cms::Builtin::Srgb.profile().to_bytes());
             let mut pending = Self {
+                work: self.work.clone(),
                 template: Arc::new(template),
                 source: self.source.clone(),
                 lineage: self.lineage.clone(),
@@ -1109,6 +1179,9 @@ impl NativeOwner {
                     None,
                 )),
             ));
+            if mask.is_some() {
+                self.charge_frame_work(Rect::new(0, 0, rotated_size.width as i32, rotated_size.height as i32), 2, ctl)?;
+            }
             mask = mask
                 .map(|mask| if degrees == 0.0 { rotate_mask(mask, self.template.size, turns, ctl) } else { warp_mask(mask, self.template.size, rotation, ctl) })
                 .transpose()?;
@@ -1120,7 +1193,7 @@ impl NativeOwner {
                 "Native smart-object placement rotates {} degrees for the native directional filter, then restores the original document orientation; native image interpolation and rotated canvas edge rules apply",
                 if degrees == 0.0 { f64::from(turns) * 90.0 } else { degrees }
             ));
-            encoded(&rotated, &mut remaining, ctl)?
+            encoded_with_work(&rotated, &mut remaining, &self.work, ctl)?
         };
         let mut smart = SmartObject::new(SmartSource::Embedded { file_name: "contents.pcraft".into(), bytes: input }, Affine::IDENTITY, None);
         smart.smart_filters = mapping.filters;
@@ -1129,7 +1202,7 @@ impl NativeOwner {
         stage.effects.items = mapping.layer_effects;
         let mut document = stage_template;
         document.layers.push(stage);
-        let mut source = encoded(&document, &mut remaining, ctl)?;
+        let mut source = encoded_with_work(&document, &mut remaining, &self.work, ctl)?;
         if rotated {
             let inverse = rotation.inverse().ok_or_else(|| invalid("native orientation placement is not invertible"))?;
             let mut restored = self.template.as_ref().clone();
@@ -1137,7 +1210,7 @@ impl NativeOwner {
                 "Native restored orientation",
                 LayerContent::Smart(SmartObject::new(SmartSource::Embedded { file_name: "oriented-filter.pcraft".into(), bytes: source }, inverse, None)),
             ));
-            source = encoded(&restored, &mut remaining, ctl)?;
+            source = encoded_with_work(&restored, &mut remaining, &self.work, ctl)?;
         }
         ctl.check().map_err(|_| crate::IoError::Cancelled)?;
         self.source = source;
@@ -1228,6 +1301,7 @@ impl NativeOwner {
                     let map = values.get(map).ok_or_else(|| invalid("native displacement map input disappeared"))?;
                     let pixels = map.snapshot(&mut remaining, ctl)?;
                     let frame = Rect::new(0, 0, input.template.size.width as i32, input.template.size.height as i32);
+                    input.charge_frame_work(frame, pixels.format().channels().saturating_add(3), ctl)?;
                     let mapping = super::native_displacement::mapping(
                         &pixels,
                         frame,
@@ -1248,6 +1322,7 @@ impl NativeOwner {
                     let input = values.get(input).ok_or_else(|| invalid("native channel input disappeared"))?;
                     let pixels = input.snapshot(&mut remaining, ctl)?;
                     let frame = Rect::new(0, 0, input.template.size.width as i32, input.template.size.height as i32);
+                    input.charge_frame_work(frame, pixels.format().channels().saturating_add(1), ctl)?;
                     let channel = super::native_masks::channel(&pixels, frame, component, &mut remaining, ctl)?;
                     let next = input.with_snapshot_raster(channel, &mut remaining, ctl)?;
                     notes.push(
@@ -1260,6 +1335,7 @@ impl NativeOwner {
                     let mask = values.get(mask).ok_or_else(|| invalid("native mask input disappeared"))?;
                     let pixels = mask.snapshot(&mut remaining, ctl)?;
                     let frame = Rect::new(0, 0, input.template.size.width as i32, input.template.size.height as i32);
+                    input.charge_frame_work(frame, pixels.format().channels().saturating_add(1), ctl)?;
                     let mask = super::native_masks::mask(&pixels, frame, component, invert, scale, &mut remaining, ctl)?;
                     let next = input.masked(mask, &mut remaining, ctl)?;
                     notes.push(
@@ -1362,11 +1438,12 @@ impl NativeOwner {
         match structure {
             NativeStructure::Replace { mut layer, patterns } => {
                 // The replacement is already in owner-local native coordinates.
-                let depth = nested_depth(std::slice::from_ref(&layer), 0, 0, &mut (super::MAX_PIXEL_BYTES as u64), ctl)?;
+                let depth = nested_depth_with_work(std::slice::from_ref(&layer), 0, 0, &mut (super::MAX_PIXEL_BYTES as u64), &self.work, ctl)?;
                 if depth != 0 {
                     return Err(invalid("native replacement must contain direct editable native data rather than further embedded contents"));
                 }
                 let allocation = direct_layer_bytes(&layer, 0, &mut 65536, ctl)?;
+                self.work.charge_bytes(allocation, ctl)?;
                 remaining = remaining.checked_sub(allocation).ok_or_else(|| invalid("native replacement allocation exceeds the shared source allowance"))?;
                 layer.visible &= computed_visible;
                 document.layers.push(*layer);
@@ -1471,7 +1548,7 @@ impl NativeOwner {
                             smart.smart_filters = branch.filters;
                         }
                         framed.layers.push(framed_input);
-                        let bytes = encoded(&framed, &mut remaining, ctl)?;
+                        let bytes = encoded_with_work(&framed, &mut remaining, &self.work, ctl)?;
                         layer.content = LayerContent::Smart(SmartObject::new(
                             SmartSource::Embedded { file_name: "native-filter-frame.pcraft".into(), bytes },
                             branch.transform.mul(&Affine::translate(f64::from(frame.x0), f64::from(frame.y0))),
@@ -1494,7 +1571,7 @@ impl NativeOwner {
                         layer.effects.enabled = true;
                         inner.fill_opacity = layer.fill_opacity;
                         inner_document.layers.push(inner);
-                        let bytes = encoded(&inner_document, &mut remaining, ctl)?;
+                        let bytes = encoded_with_work(&inner_document, &mut remaining, &self.work, ctl)?;
                         layer.content = LayerContent::Smart(SmartObject::new(
                             SmartSource::Embedded { file_name: "native-styled-branch.pcraft".into(), bytes },
                             Affine::IDENTITY,
@@ -1531,7 +1608,7 @@ impl NativeOwner {
         let NativeEnvelope { opacity, blend, visible, mask } = envelope;
         let has_post = !post_filters.is_empty();
         let envelope = opacity != 1.0 || blend != BlendMode::Normal || mask.is_some() || (!visible && has_post);
-        let mut source = encoded(&document, remaining, ctl)?;
+        let mut source = encoded_with_work(&document, remaining, &self.work, ctl)?;
         if has_post {
             if post_filters.len() > 64 {
                 return Err(invalid("native structural post-filter count exceeds its limit"));
@@ -1542,7 +1619,7 @@ impl NativeOwner {
             let mut smart = SmartObject::new(SmartSource::Embedded { file_name: "native-structure.pcraft".into(), bytes: source }, Affine::IDENTITY, None);
             smart.smart_filters = post_filters;
             post.layers.push(Layer::new("Native structural post-filters", LayerContent::Smart(smart)));
-            source = encoded(&post, remaining, ctl)?;
+            source = encoded_with_work(&post, remaining, &self.work, ctl)?;
         }
         if envelope {
             let mut wrapped = self.template.as_ref().clone();
@@ -1571,7 +1648,7 @@ impl NativeOwner {
             }
             output.mask = mask;
             wrapped.layers.push(output);
-            source = encoded(&wrapped, remaining, ctl)?;
+            source = encoded_with_work(&wrapped, remaining, &self.work, ctl)?;
         }
         ctl.check().map_err(|_| crate::IoError::Cancelled)?;
         Ok(source)
@@ -1580,7 +1657,7 @@ impl NativeOwner {
     /// Capture current ordinary native contents once for a static native resource.
     /// The native document remains editable and unchanged; returned pixels are owner-local.
     pub(super) fn snapshot(&self, budget: &mut usize, ctl: &Interrupt<'_>) -> Result<Surface> {
-        super::native_snapshot::capture(&self.source, &self.template, budget, ctl)
+        super::native_snapshot::capture_with_work(&self.source, &self.template, budget, &self.work, ctl)
     }
 
     /// Returns the current embedded native Smart content for installation on the imported owner.
@@ -3601,5 +3678,29 @@ mod tests {
         assert!(actual.push(make(1), fork_envelope(), &mut budget, &Interrupt::NONE).is_err());
         assert_eq!((budget, actual.stages, actual.added_depth), state);
         assert!(Arc::ptr_eq(&before, &actual.source));
+    }
+}
+
+#[cfg(test)]
+mod generation_work_tests {
+    use super::*;
+    #[test]
+    fn failed_native_encoding_refunds_no_generation_work_and_forks_share_it() {
+        let doc = Document::new("Tiny", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+        let work = super::super::native_work::Work::with_units(1);
+        let mut budget = super::super::MAX_PIXEL_BYTES;
+        let before = budget;
+        assert!(matches!(encoded_with_work(&doc, &mut budget, &work, &Interrupt::NONE), Err(crate::IoError::XcfNativeWorkLimit)));
+        assert_eq!(budget, before);
+        assert_eq!(work.remaining_units(), 0);
+        assert!(matches!(encoded_with_work(&doc, &mut budget, &work, &Interrupt::NONE), Err(crate::IoError::XcfNativeWorkLimit)));
+        let work = super::super::native_work::Work::default();
+        let layer = Layer::new("Pixels", LayerContent::Raster(Surface::new(PixelFormat::RGBA8)));
+        let owner = NativeOwner::new_with_work(&doc, &layer, Rect::new(0, 0, 1, 1), &mut budget, &work, &Interrupt::NONE).unwrap();
+        let fork = owner.fork();
+        let before = work.remaining_bytes();
+        fork.work.charge_bytes(4, &Interrupt::NONE).unwrap();
+        assert_eq!(owner.work.remaining_bytes(), before - 4);
+        assert_eq!(work.remaining_bytes(), before - 4);
     }
 }
