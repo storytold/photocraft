@@ -369,8 +369,11 @@ fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Res
             // to Standard, not on to the next full screen mode.
             "standard"
         } else if k == "cycle" {
+            // `back` steps the other way, as ⇧F does in Photoshop (#15404).
+            let n = SCREEN_MODES.len();
+            let step = if p.get("back").and_then(Value::as_bool).unwrap_or(false) { n - 1 } else { 1 };
             let i = SCREEN_MODES.iter().position(|m| *m == o.screen_mode).unwrap_or(0);
-            SCREEN_MODES[(i + 1) % SCREEN_MODES.len()]
+            SCREEN_MODES[(i + step) % n]
         } else {
             k
         };
