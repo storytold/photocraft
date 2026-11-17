@@ -652,13 +652,30 @@ pub(crate) fn open_layered(name: &str, bytes: &[u8], opts: &crate::ImportOptions
     let Ok(parts) = craft_exr::decode::parts(bytes, &limits) else { return Ok(None) };
     let Some(plan) = plan(&parts) else { return Ok(None) };
     let (cx, cy, cw, ch) = plan.canvas;
+    // The parts' own windows are within the limits; the canvas holding them all must be too.
+    let canvas_pixels = u64::from(cw).checked_mul(u64::from(ch));
+    if cw > limits.max_width || ch > limits.max_height || canvas_pixels.is_none_or(|n| n > limits.max_pixels) {
+        return Err(IoError::Codec(codecs::CodecError::LimitExceeded(format!(
+            "the EXR's parts span a {cw}x{ch} canvas, over the {} pixel limit",
+            limits.max_pixels
+        ))));
+    }
     let mut order = Vec::new();
     leaves(&plan.nodes, &mut order);
+    // Each part's data window, placed on the canvas.
+    let place = |at: i32, origin: i64| i32::try_from(i64::from(at) - origin).map_err(|_| IoError::Unsupported("EXR data window out of range".into()));
+    let rects = parts
+        .iter()
+        .map(|p| Ok(photocraft_geom::Rect::from_xywh(place(p.data_window.x, cx)?, place(p.data_window.y, cy)?, p.data_window.width, p.data_window.height)))
+        .collect::<Result<Vec<_>, IoError>>()?;
+    // A layer stores only the tiles its part's window touches (RGBA 32-bit: 16 bytes a pixel).
+    let tile_bytes = |leaves: usize, rect: photocraft_geom::Rect| {
+        let side = photocraft_geom::TILE_SIZE as u64;
+        rect.tile_count().saturating_mul(side * side * 16).saturating_mul(leaves as u64)
+    };
     // The layers' tiles must fit the RAM tile budget when no scratch disk can take cold ones.
     if !photocraft_raster::spill::enabled() {
-        let side = photocraft_geom::TILE_SIZE as u64;
-        let tiles = u64::from(cw).div_ceil(side).saturating_mul(u64::from(ch).div_ceil(side));
-        let growth = tiles.saturating_mul(side * side * 16).saturating_mul(order.len() as u64);
+        let growth = order.iter().fold(0u64, |sum, (k, _)| sum.saturating_add(rects.get(*k).map_or(0, |r| tile_bytes(1, *r))));
         ram_tile_capacity(photocraft_raster::spill::stats().resident_bytes as u64, photocraft_raster::memory::refresh().tile_bytes, growth)?;
     }
     // Leaves are built part by part, then placed in the tree in panel order.
@@ -666,15 +683,20 @@ pub(crate) fn open_layered(name: &str, bytes: &[u8], opts: &crate::ImportOptions
     for (k, info) in parts.iter().enumerate() {
         ctl.check().map_err(|_| IoError::Cancelled)?;
         let wanted: Vec<usize> = (0..order.len()).filter(|i| order[*i].0 == k).collect();
-        if wanted.is_empty() {
-            continue;
+        let Some(rect) = rects.get(k).copied().filter(|_| !wanted.is_empty()) else { continue };
+        // Admitted again for this part's layers: other opens' tiles, or a scratch disk that went
+        // away since the open started, count against the budget now.
+        if !photocraft_raster::spill::enabled() {
+            ram_tile_capacity(
+                photocraft_raster::spill::stats().resident_bytes as u64,
+                photocraft_raster::memory::stats().1.tile_bytes,
+                tile_bytes(wanted.len(), rect),
+            )?;
         }
         let w = info.data_window;
         let samples = u64::from(w.width).saturating_mul(u64::from(w.height)).saturating_mul(info.channels.len() as u64);
         let _working = photocraft_raster::memory::try_reserve_operation(samples.saturating_mul(4)).map_err(IoError::OutOfMemory)?;
         let part = craft_exr::decode::decode_part(bytes, k, &|_| true, &limits).map_err(exr_error)?;
-        let place = |at: i32, origin: i64| i32::try_from(i64::from(at) - origin).map_err(|_| IoError::Unsupported("EXR data window out of range".into()));
-        let rect = photocraft_geom::Rect::from_xywh(place(w.x, cx)?, place(w.y, cy)?, w.width, w.height);
         for i in wanted {
             built[i] = Some(leaf_layer(&part, order[i].1, rect, ctl)?);
         }

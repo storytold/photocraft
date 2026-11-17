@@ -325,6 +325,38 @@ fn layers_keep_their_pixels_in_place() {
     assert_eq!(px(depth, 0, 0)[3], 0.0, "nothing left of the depth part's window");
 }
 
+/// Two 2 × 2 RGB parts, the second one's data window at `(far, far)`.
+fn far_apart(far: i32) -> Vec<u8> {
+    let rgb = |v: f32| vec![("R", fill(v, 4)), ("G", fill(0.0, 4)), ("B", fill(0.0, 4))];
+    file(vec![part(Some("near"), None, (2, 2), (0, 0), rgb(0.25)), part(Some("far"), None, (2, 2), (far, far), rgb(0.75))], (2, 2))
+}
+
+#[test]
+fn sparse_parts_are_charged_only_the_tiles_they_touch() {
+    // A 32768 × 32768 canvas (2^30 pixels, the limit) holding two 2 × 2 parts: each layer stores
+    // one tile, not the canvas's 16384 (32 GiB for the two layers at 16 bytes a pixel).
+    assert!(!photocraft_raster::spill::enabled(), "the RAM tile budget applies");
+    let r = open(&far_apart(32766));
+    let d = &r.document;
+    assert_eq!(d.size, photocraft_doc::Size::new(32768, 32768));
+    assert_eq!(tree(&d.layers), "[G] near > (RGB) · [G] far > (RGB hidden)");
+    assert_eq!(px(leaf(d, &["near", "RGB"]), 1, 1), [0.25, 0.0, 0.0, 1.0]);
+    assert_eq!(px(leaf(d, &["far", "RGB"]), 32767, 32767), [0.75, 0.0, 0.0, 1.0]);
+    for (path, tiles) in [(["near", "RGB"], 1), (["far", "RGB"], 1)] {
+        let LayerContent::Raster(s) = &leaf(d, &path).content else { panic!() };
+        assert_eq!(s.tile_count(), tiles, "{path:?}");
+    }
+}
+
+#[test]
+fn a_canvas_past_the_pixel_limit_is_refused() {
+    // Each part is 2 × 2, but together they span 40002 × 40002, over 2^30 pixels.
+    match import("render.exr", &far_apart(40000)) {
+        Err(IoError::Codec(photocraft_codecs::CodecError::LimitExceeded(m))) => assert!(m.contains("40002x40002"), "{m}"),
+        other => panic!("expected the canvas limit, got {:?}", other.map(|r| r.document.size)),
+    }
+}
+
 #[test]
 fn one_layer_files_keep_a_background_or_name_the_layer_after_its_channels() {
     let opaque = open(&one_part(&RGB));
