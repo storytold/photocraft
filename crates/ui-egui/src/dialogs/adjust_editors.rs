@@ -37,7 +37,7 @@ pub(crate) use basic::row_value;
 #[cfg(test)]
 use basic::track_stops;
 pub use basic::{apply_auto, reset_adjustment_editor, reset_color_balance};
-use basic::{black_white, brightness_contrast, channel_mixer, color_balance, photo_filter, sliders, threshold};
+use basic::{black_white, brightness_contrast, channel_mixer, color_balance, photo_filter, slider, sliders, threshold};
 use curves::curves;
 #[cfg(test)]
 use curves::{CURVE_HANDLE_SIZE, curve_graph};
@@ -157,15 +157,14 @@ pub fn editor(ui: &mut egui::Ui, kind: &str, v: &mut Value, cx: &EditorCx) -> Ed
         "brightnessContrast" => brightness_contrast(ui, v),
         "levels" => levels(ui, v, cx),
         "curves" => curves(ui, v, cx),
-        "exposure" => sliders(
-            ui,
-            v,
-            &[
-                ("exposure", tl!("Exposure"), -20.0, 20.0, 0.0, "", Some(2)),
-                ("offset", tl!("Offset"), -0.5, 0.5, 0.0, "", Some(4)),
-                ("gamma", tl!("Gamma Correction"), 0.01, 9.99, 1.0, "", None),
-            ],
-        ),
+        "exposure" => {
+            let mut e = sliders(ui, v, &[("exposure", tl!("Exposure"), -20.0, 20.0, 0.0, "", Some(2)), ("offset", tl!("Offset"), -0.5, 0.5, 0.0, "", Some(4))]);
+            // The dialog's Gamma track runs 9.99 to 0.01 with 1 in the middle (Photoshop); the
+            // Properties panel keeps its plain track.
+            let pivot = cx.dialog.then_some(1.0);
+            e.add(slider(ui, v, ("gamma", tl!("Gamma Correction"), 0.01, 9.99, 1.0, "", None), pivot));
+            e
+        }
         "vibrance" => sliders(ui, v, &[("vibrance", "Vibrance", -100.0, 100.0, 0.0, "%", None), ("saturation", "Saturation", -100.0, 100.0, 0.0, "%", None)]),
         "hueSaturation" => hue_saturation(ui, v, cx),
         "colorBalance" => color_balance(ui, v, cx),
@@ -386,5 +385,7 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+mod exposure_gamma_slider_tests;
 #[cfg(test)]
 mod ui_tests;

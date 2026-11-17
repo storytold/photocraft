@@ -24,6 +24,27 @@ pub struct RowGestures {
     /// values get fine steps (Photoshop's mask Feather, #6545). Typed, scrubbed and stepped
     /// values stay linear; only the track maps through the curve.
     pub curve: Option<f32>,
+    /// A reversed track centred on this value: the range's high end at the left, the pivot in
+    /// the middle and the low end at the right, each half linear (Photoshop's Exposure Gamma
+    /// Correction, #14637). Takes the place of `curve`.
+    pub pivot: Option<f32>,
+}
+
+/// The value at fraction `f` of a track over `lo..=hi`, through `g`'s pivot or curve.
+fn track_value(f: f32, lo: f32, hi: f32, g: RowGestures) -> f32 {
+    match g.pivot {
+        Some(p) if f <= 0.5 => hi + (p - hi) * f * 2.0,
+        Some(p) => p + (lo - p) * (f * 2.0 - 1.0),
+        None => curve_value(f, lo, hi, g.curve),
+    }
+}
+
+/// Where `v` sits on a track over `lo..=hi`, as a fraction: the inverse of [`track_value`].
+fn track_fraction(v: f32, lo: f32, hi: f32, g: RowGestures) -> f32 {
+    let Some(p) = g.pivot else { return curve_fraction(v, lo, hi, g.curve) };
+    let f = if v >= p { (hi - v) / (hi - p) * 0.5 } else { 0.5 + (p - v) / (p - lo) * 0.5 };
+    // An unset (NaN) value draws the knob at the start rather than nowhere.
+    if f.is_finite() { f.clamp(0.0, 1.0) } else { 0.0 }
 }
 
 /// The value at fraction `f` of a track over `lo..=hi`, through `curve` (see [`RowGestures`]).
@@ -136,7 +157,7 @@ fn slider_with(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32
         && (resp.dragged() || resp.clicked())
     {
         let f = ((p.x - track.left()) / track.width()).clamp(0.0, 1.0);
-        let nv = curve_value(f, lo, hi, g.curve);
+        let nv = track_value(f, lo, hi, g);
         if (nv - *value).abs() > f32::EPSILON {
             *value = nv;
             resp.mark_changed();
@@ -159,7 +180,7 @@ fn slider_with(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32
             }
         }
     }
-    let f = curve_fraction(*value, lo, hi, g.curve);
+    let f = track_fraction(*value, lo, hi, g);
     let knob_x = track.left() + f * track.width();
     let painter = ui.painter();
     match gradient {
