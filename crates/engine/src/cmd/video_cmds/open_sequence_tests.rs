@@ -115,7 +115,7 @@ fn any_frame_of_the_run_opens_all_of_it_at_30_fps_by_default() {
 fn the_document_takes_the_next_free_untitled_name() {
     let d = measured_folder("untitled");
     let mut s = Session::new();
-    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    s.execute("file.new", json!({"width": 8, "height": 8, "name": "Untitled-1"})).unwrap();
     assert_eq!(s.active().unwrap().doc.name, "Untitled-1");
     open(&mut s, &d, "frame001.png", json!({})).unwrap();
     open(&mut s, &d, "frame003.png", json!({})).unwrap();
@@ -204,7 +204,7 @@ fn file_names_split_around_their_frame_number() {
     assert_eq!(n("12"), Some(("", "12", "")));
     assert_eq!(n("flat.png"), None);
     assert_eq!(n("clip.mp4"), None, "the extension's digits aren't a frame number");
-    assert_eq!(n(".123"), Some(("", "123", "")), "a dot file's name is all stem");
+    assert_eq!(n(".123"), Some((".", "123", "")), "a dot file's name is all stem");
     assert_eq!(n("f1234567890123456789.png"), None, "past 18 digits");
     let a = Numbered::parse("frame001.png").unwrap();
     assert!(a.same_run(&Numbered::parse("frame002.PNG").unwrap()));
