@@ -14,11 +14,12 @@ rust-version = "1.95"
 # `craft::egui_fork::REV` (checked by `cargo xtask ci`).
 craft = { git = "https://github.com/storytold/craft-libs", rev = "a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9", default-features = false }
 # The vendor-neutral cloud vocabulary (a file entry, a capability): types and contracts only, so
-# the crate opens no socket, names no provider and builds for the web. The craft framework above
-# has no cloud pages yet (storytold/craft-libs#160, open), and craft-cloud itself has no egui
-# dependency, so pinning it to wdunn001/craft-libs alone carries no framework-version risk. Once
-# #160 merges this moves to the same storytold revision as craft above.
-craft-cloud = { git = "https://github.com/wdunn001/craft-libs", rev = "6f0a6d2" }
+# the crate opens no socket, names no provider and builds for the web. Pinned to the revision that
+# merged storytold/craft-libs#160, where this crate landed. The cloud pages arrived with #160 too,
+# so the local stand-in in `crates/ui-egui/src/cloud.rs` can give way to `craft_ui::cloud` the next
+# time this workspace moves its craft framework revision. Nothing in Cargo.lock comes from outside
+# storytold now.
+craft-cloud = { git = "https://github.com/storytold/craft-libs", rev = "fd7232d7a3a03ca1ccfe059a8afc8391b65668f0" }
 # internal
 photocraft-geom = { path = "crates/geom" }
 photocraft-color = { path = "crates/color" }
