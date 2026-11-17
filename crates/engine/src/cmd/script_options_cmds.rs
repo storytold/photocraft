@@ -23,14 +23,12 @@ pub const MAX_VALUE_BYTES: usize = 64 << 10;
 /// Largest total of the persistent values, serialized.
 pub const MAX_PERSISTENT_BYTES: usize = 256 << 10;
 
-/// The options, in the preferences (persistent) and in memory (this session).
+/// The persistent options, in the preferences. Those for this session only live in the
+/// session (`Session::script_options`), so rebuilding the preferences can't drop them.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct CustomOptions {
     pub persistent: BTreeMap<String, Value>,
-    /// Not saved: gone when the app quits.
-    #[serde(skip)]
-    pub session: BTreeMap<String, Value>,
 }
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
@@ -51,8 +49,7 @@ fn size(v: &Value) -> usize {
 /// `scripts.customOptions.get`: the value kept under `key`, or null.
 fn get(s: &mut Session, p: &Value) -> Result<Value> {
     let k = key("scripts.customOptions.get", p)?;
-    let o = &s.prefs().scripts.custom_options;
-    Ok(o.session.get(k).or_else(|| o.persistent.get(k)).cloned().unwrap_or(Value::Null))
+    Ok(s.script_options.get(k).or_else(|| s.prefs().scripts.custom_options.persistent.get(k)).cloned().unwrap_or(Value::Null))
 }
 
 /// `scripts.customOptions.put`: keep `value` under `key`, replacing what was there.
@@ -66,8 +63,8 @@ fn put(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(CMD, format!("a value can be at most {} KiB", MAX_VALUE_BYTES >> 10)));
     }
     let o = &s.prefs().scripts.custom_options;
-    let known = o.persistent.contains_key(&k) || o.session.contains_key(&k);
-    if !known && o.persistent.len() + o.session.len() >= MAX_KEYS {
+    let known = o.persistent.contains_key(&k) || s.script_options.contains_key(&k);
+    if !known && o.persistent.len() + s.script_options.len() >= MAX_KEYS {
         return Err(bad(CMD, format!("at most {MAX_KEYS} custom options can be kept; erase some first")));
     }
     if persistent {
@@ -76,30 +73,32 @@ fn put(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(bad(CMD, format!("the kept custom options can take at most {} KiB in all", MAX_PERSISTENT_BYTES >> 10)));
         }
     }
-    s.edit_prefs(|pr| {
-        let o = &mut pr.scripts.custom_options;
-        o.persistent.remove(&k);
-        o.session.remove(&k);
-        if persistent {
-            o.persistent.insert(k, value);
-        } else {
-            o.session.insert(k, value);
+    s.script_options.remove(&k);
+    if persistent {
+        s.edit_prefs(|pr| {
+            pr.scripts.custom_options.persistent.insert(k, value);
+        });
+    } else {
+        if s.prefs().scripts.custom_options.persistent.contains_key(&k) {
+            s.edit_prefs(|pr| {
+                pr.scripts.custom_options.persistent.remove(&k);
+            });
         }
-    });
+        s.script_options.insert(k, value);
+    }
     Ok(Value::Null)
 }
 
 /// `scripts.customOptions.erase`: forget `key`.
 fn erase(s: &mut Session, p: &Value) -> Result<Value> {
     let k = key("scripts.customOptions.erase", p)?.to_owned();
-    let o = &s.prefs().scripts.custom_options;
-    let existed = o.persistent.contains_key(&k) || o.session.contains_key(&k);
-    if existed {
+    let kept = s.prefs().scripts.custom_options.persistent.contains_key(&k);
+    if kept {
         s.edit_prefs(|pr| {
             pr.scripts.custom_options.persistent.remove(&k);
-            pr.scripts.custom_options.session.remove(&k);
         });
     }
+    let existed = s.script_options.remove(&k).is_some() || kept;
     Ok(json!({ "erased": existed }))
 }
 
@@ -135,6 +134,16 @@ mod tests {
     }
 
     #[test]
+    fn session_options_outlive_a_change_to_the_preferences() {
+        let mut s = Session::default();
+        s.execute("scripts.customOptions.put", json!({"key": "k", "value": {"a": 1}, "persistent": false})).unwrap();
+        s.execute("prefs.set", json!({"path": "unitsAndRulers.rulers", "value": "cm"})).unwrap();
+        let json = s.prefs_to_json();
+        s.load_prefs_json(&json).unwrap();
+        assert_eq!(s.execute("scripts.customOptions.get", json!({"key": "k"})).unwrap(), json!({"a": 1}));
+    }
+
+    #[test]
     fn only_persistent_options_are_saved() {
         let mut s = Session::default();
         s.execute("scripts.customOptions.put", json!({"key": "kept", "value": {"a": 1}, "persistent": true})).unwrap();
@@ -165,7 +174,6 @@ mod tests {
         for i in 0..MAX_KEYS {
             let _ = s.execute("scripts.customOptions.put", json!({"key": format!("n{i}"), "value": {}, "persistent": false}));
         }
-        let o = &s.prefs().scripts.custom_options;
-        assert_eq!(o.persistent.len() + o.session.len(), MAX_KEYS, "the key count is bounded");
+        assert_eq!(s.prefs().scripts.custom_options.persistent.len() + s.script_options.len(), MAX_KEYS, "the key count is bounded");
     }
 }

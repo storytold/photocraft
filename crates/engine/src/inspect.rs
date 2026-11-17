@@ -63,6 +63,9 @@ fn document_with(d: &DocState, detail: bool) -> Value {
         // The History panel rows after the current state (its last `history` entry), as
         // `history.selectState` counts them.
         "historyRedo": d.history.redo_labels().collect::<Vec<_>>(),
+        // A stable id per History panel row, in the rows' order (`history` then `historyRedo`):
+        // a row keeps its id while it exists.
+        "historyIds": d.history.row_ids().collect::<Vec<_>>(),
         "historySource": crate::history_source_cmds::source_json(d),
         "snapshots": d.snapshots.iter().map(|snap| json!({"id": snap.id, "name": snap.name})).collect::<Vec<_>>(),
         "canUndo": d.history.can_undo(),
