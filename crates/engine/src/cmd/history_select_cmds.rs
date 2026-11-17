@@ -23,11 +23,25 @@ fn select_state(s: &mut Session, p: &Value) -> Result<Value> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let past = st.history.past_len();
     let last = past.saturating_add(st.history.redo_labels().count());
-    let v = match p.get("state") {
-        None | Some(Value::Null) => return Err(bad("missing `state` (the History entry to return to, 0 = oldest)")),
-        Some(_) => int(p, "state").ok_or_else(|| bad("`state` must be a number"))?,
+    let target = if let Some(value) = p.get("offset").filter(|v| !v.is_null()) {
+        if p.get("state").is_some_and(|v| !v.is_null()) {
+            return Err(bad("choose either `state` or `offset`, not both"));
+        }
+        let offset = value.as_i64().ok_or_else(|| bad("`offset` must be an integer"))?;
+        // Resolve against playback's current row and check the whole jump before moving it:
+        // repeated Undo calls would leave a partially reverted document on an invalid target.
+        isize::try_from(offset)
+            .ok()
+            .and_then(|offset| past.checked_add_signed(offset))
+            .filter(|i| *i <= last)
+            .ok_or_else(|| bad(format!("`offset` = {offset} is outside the available history")))?
+    } else {
+        let v = match p.get("state") {
+            None | Some(Value::Null) => return Err(bad("missing `state` or `offset` (0 = oldest History entry)")),
+            Some(_) => int(p, "state").ok_or_else(|| bad("`state` must be a number"))?,
+        };
+        usize::try_from(v).ok().filter(|i| *i <= last).ok_or_else(|| bad(format!("`state` = {v} is not a state (0..={last})")))?
     };
-    let target = usize::try_from(v).ok().filter(|i| *i <= last).ok_or_else(|| bad(format!("`state` = {v} is not a state (0..={last})")))?;
     // A background job is computing from the current state: it must not move under it.
     if s.active_job().is_some() {
         return Err(EngineError::Other("the history can't move while a command is still running on this document".into()));
@@ -94,7 +108,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Select History State",
         menu: &[],
         shortcut: None,
-        params: r##"{"state":index} (History entry as the panel lists them: 0 = oldest, then the current state, then the redo states) → {state,changed,current?}: returns the document to that state in one step; the states after it stay redoable"##,
+        params: r##"{"state":index} or {"offset":signed-integer} (History entry as the panel lists them: 0 = oldest; offset is relative to the current row) → {state,changed,current?}: returns the document to that state in one step; the states after it stay redoable; an out-of-range offset fails before changing history"##,
         enabled: can_select,
         run: select_state,
         journal: true,

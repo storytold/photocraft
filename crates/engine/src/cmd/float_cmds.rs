@@ -368,6 +368,8 @@ fn keeps_floating(id: &str) -> bool {
         id,
         "select.float"
             | "select.drop"
+            // Slice targeting is view state and must not commit floating pixels.
+            | "slice.select"
             | "layer.copyToDocument"
             | "file.scripts.imageProcessor"
             | "brush.mixer.sample"

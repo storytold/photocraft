@@ -40,7 +40,7 @@ fn safe_slice_url(url: &str) -> bool {
 }
 
 /// Keep the image folder relative to the selected export directory on every platform.
-fn web_images_folder(images: &str, cmd: &str) -> Result<String> {
+pub(crate) fn web_images_folder(images: &str, cmd: &str) -> Result<String> {
     if images.is_empty() {
         return Ok(String::new());
     }
@@ -227,6 +227,15 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     let st = WebSettings::from_params(p, cmd)?;
     // So are the slices: committing a floating move doesn't change them.
     let pick = slice_pick(p, cmd, &s.active().ok_or(EngineError::NoDocument)?.doc)?;
+    let custom_names = super::file_naming::plan(p, &s.active().ok_or(EngineError::NoDocument)?.doc, st.format.ext())?;
+    if let Some(names) = &custom_names {
+        let images = web_images_folder(p.get("imagesFolder").and_then(Value::as_str).unwrap_or("images"), cmd)?;
+        let dir = p.get("dir").and_then(Value::as_str).ok_or_else(|| bad(cmd, "fileNaming requires dir"))?;
+        for name in names.iter().filter(|name| !name.is_empty()) {
+            let relative = if images.is_empty() { name.clone() } else { format!("{images}/{name}") };
+            web_derived_path(dir, &relative, native_paths)?;
+        }
+    }
     // Direct platform calls must export the moved selection as it appears on the canvas,
     // just as Session::execute does before dispatching the native command.
     crate::float_cmds::before_command(s, cmd)?;
@@ -339,7 +348,11 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
             continue;
         }
         let o = optimize(&buf.px, bw, piece, &st, icc, exif, xmp.as_deref(), dpi, false)?;
-        let name = unique(&slice_file(&r.name), o.ext);
+        let name = if let Some(names) = &custom_names {
+            names.get(r.number.saturating_sub(1)).cloned().ok_or_else(|| bad(cmd, "fileNaming slice number changed during export"))?
+        } else {
+            unique(&slice_file(&r.name), o.ext)
+        };
         let rel = if images.is_empty() { name.clone() } else { format!("{images}/{name}") };
         let out = join(&dir, &rel);
         write(&web_derived_path(&dir, &rel, native_paths)?, &o.bytes)?;

@@ -35,6 +35,8 @@ pub struct DocState {
     pub coalesce: Option<String>,
     /// Channels panel: targeted channel and eye toggles (view state, not history).
     pub channel_view: channel_cmds::ChannelView,
+    /// Slice Select target for this document; view state, never saved with its pixels.
+    pub(crate) slice_selection: Option<crate::slice_cmds::SliceSelection>,
     /// Select › Isolate Layers: the Layers panel lists only these layers (empty = off; view state).
     pub isolated_layers: Vec<LayerId>,
     /// Painting symmetry preset or sampled path (tool state, not document pixels).
@@ -116,6 +118,7 @@ impl DocState {
             damage_span: None,
             coalesce: None,
             channel_view,
+            slice_selection: None,
             isolated_layers: Vec::new(),
             symmetry: None,
             fx_collapsed: Vec::new(),

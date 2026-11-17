@@ -576,14 +576,28 @@ fn build() -> Vec<CommandSpec> {
             "Duplicate Layer…",
             ["Layer"],
             None,
-            r##"{"layer":id?,"inPlace":bool=false (artboards: keep the copy on the original instead of beside it),"name":str? (one layer: the copy's name),"document":index|"new"=same document (Photoshop's Destination: "new" makes a new document the size of this canvas holding just the copies),"documentName":str? (the new document's name)} (no layer: every selected layer)"##,
+            r##"{"layer":id?,"inPlace":bool=false (artboards: keep the copy on the original instead of beside it),"name":str? (one layer: the copy's name),"document":index|{"name":str}|"new"=same document (a recorded name resolves an open destination at playback, refusing ambiguous names; the source stays active; "new" makes a new document the size of this canvas holding just the copies),"documentName":str? (the new document's name)} (no layer: every selected layer)"##,
             has_layer,
             |s, p| {
                 if let Some(d) = p.get("document") {
                     if d.as_str() == Some("new") {
                         return crate::layer_copy_cmds::duplicate_to_new_document(s, p);
                     }
-                    let same = d.as_u64().is_some_and(|i| s.active_index().is_some_and(|a| i == a as u64));
+                    let destination = if d.is_object() { Some(crate::layer_copy_cmds::named_duplicate_document(s, d)?) } else { None };
+                    if let Some(destination) = destination {
+                        if !matches!(p.get("inPlace"), None | Some(Value::Null | Value::Bool(false)))
+                            || !matches!(p.get("name"), None | Some(Value::Null | Value::String(_)))
+                            || p.as_object().is_some_and(|object| {
+                                object.iter().any(|(key, value)| !value.is_null() && !["document", "layer", "name", "inPlace"].contains(&key.as_str()))
+                            })
+                        {
+                            return Err(bad("layer.duplicate", "a named document destination accepts only layer/name and inPlace false"));
+                        }
+                        if s.active_index() != Some(destination) {
+                            return crate::layer_copy_cmds::duplicate_into_document(s, p, destination);
+                        }
+                    }
+                    let same = destination == s.active_index() || d.as_u64().is_some_and(|i| s.active_index().is_some_and(|a| i == a as u64));
                     if !same {
                         return Err(EngineError::BadParams {
                             cmd: "layer.duplicate".into(),

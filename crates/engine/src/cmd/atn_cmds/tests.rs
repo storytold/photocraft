@@ -235,6 +235,98 @@ fn batch_override_open_and_unrepresented_open_settings_round_trip() {
     assert!(super::steps_doc::open_to("file.openAs", &json!({"path":"/recorded.png","as":"png"})).is_none());
 }
 
+fn recorded_open_descriptor(path: &str) -> Descriptor {
+    let mut d =
+        desc("Opn ").with("dontRecord", D::Boolean(false)).with("forceNotify", D::Boolean(true)).with("null", path_value(path)).with("DocI", D::Integer(42));
+    d.name = UnicodeString::new_nul("Recorded Open");
+    d
+}
+
+#[test]
+fn mapped_open_recording_metadata_imports_and_round_trips() {
+    let path = "/recorded/image.png";
+    let canonical = desc("null").with("null", path_value(path));
+    let mut partial = recorded_open_descriptor(path);
+    partial.items.retain(|(key, _)| !key.is("DocI"));
+    let variants = [
+        canonical.clone(),
+        recorded_open_descriptor(path),
+        partial,
+        desc("Opn ").with("null", path_value(path)).with("dontRecord", D::Boolean(true)).with("forceNotify", D::Boolean(false)).with("DocI", D::Integer(0)),
+    ];
+    for descriptor in variants {
+        for event in [AtnEvent::Code(*b"Opn "), AtnEvent::name("open")] {
+            let source = one_action(vec![AtnItem { event, ..item("Opn ", "Open", Some(descriptor.clone())) }]);
+            let loaded = import(&atn::write(&source).unwrap()).unwrap();
+            assert!(loaded.unsupported.is_empty(), "{descriptor:?}");
+            assert_eq!(loaded.actions[0].steps, [("file.openAs".into(), json!({"path": path}))]);
+            let (saved, skipped) = export("Open", &[&loaded.actions[0]], &[], false).unwrap();
+            assert!(skipped.is_empty());
+            assert_eq!(atn::parse(&saved).unwrap().actions[0].items[0].descriptor, Some(canonical.clone()));
+            assert_eq!(import(&saved).unwrap().actions[0].steps, loaded.actions[0].steps);
+        }
+    }
+}
+
+#[test]
+fn mapped_open_recording_metadata_preserves_unsupported_forms() {
+    let base = recorded_open_descriptor("/recorded/image.png");
+    let mut invalid = vec![
+        base.clone().with("As  ", D::Class(class("PNGf"))),
+        base.clone().with("unknownOpenOption", D::Boolean(true)),
+        base.clone().with("null", path_value("/other.png")),
+        base.clone().with("forceNotify", D::Boolean(true)),
+    ];
+    for (key, value) in [
+        ("dontRecord", D::Integer(0)),
+        ("forceNotify", text("true")),
+        ("DocI", D::Integer(-1)),
+        ("DocI", D::Double(42.0)),
+        ("null", path_value("")),
+        ("null", text("/recorded/image.png")),
+    ] {
+        let mut changed = base.clone();
+        changed.items.iter_mut().find(|(k, _)| k.is(key)).unwrap().1 = value;
+        invalid.push(changed);
+    }
+    let mut missing_path = base;
+    missing_path.items.retain(|(key, _)| !key.is("null"));
+    invalid.push(missing_path);
+    for descriptor in invalid {
+        for event in [AtnEvent::Code(*b"Opn "), AtnEvent::name("open")] {
+            let source = one_action(vec![AtnItem { event: event.clone(), ..item("Opn ", "Open", Some(descriptor.clone())) }]);
+            let loaded = import(&atn::write(&source).unwrap()).unwrap();
+            assert_eq!(loaded.actions[0].steps[0].0, PHOTOSHOP_STEP, "{descriptor:?}");
+            let (saved, skipped) = export("Open", &[&loaded.actions[0]], &[], false).unwrap();
+            assert!(skipped.is_empty());
+            let written = atn::parse(&saved).unwrap().actions[0].items[0].clone();
+            assert_eq!(written.event, event);
+            assert_eq!(written.descriptor.unwrap().to_bytes(), descriptor.to_bytes());
+        }
+    }
+    assert!(event_and_descriptor("file.openAs", &json!({"path": "/recorded/image.png", "as": "png"})).is_none());
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn mapped_open_recording_metadata_plays_and_continues() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("recorded.png").to_string_lossy().into_owned();
+    let mut writer = Session::new();
+    writer.execute("file.new", json!({"width": 3, "height": 2, "background": "transparent"})).unwrap();
+    writer.execute("file.saveACopy", json!({"path": path})).unwrap();
+    let source = one_action(vec![
+        AtnItem { event: AtnEvent::name("open"), ..item("Opn ", "Open", Some(recorded_open_descriptor(&path))) },
+        item("Mk  ", "Make", Some(desc("null").with("null", class_ref("Lyr ")).with("Usng", D::Descriptor(desc("Lyr ").with("Nm  ", text("After Open")))))),
+    ]);
+    let mut session = Session::new();
+    session.execute("actions.load", json!({"data": b64(&atn::write(&source).unwrap())})).unwrap();
+    assert!(session.execute("actions.play", json!({"action": "A"})).unwrap().get("failed").is_none());
+    let doc = &session.active().unwrap().doc;
+    assert_eq!((doc.size.width, doc.size.height), (3, 2));
+    assert!(doc.layers.iter().any(|layer| layer.name == "After Open"));
+}
+
 /// Unsupported modes and misplaced fields must not lose data through a partial conversion.
 #[test]
 fn batch_unknown_components_wrong_start_placement_and_unsupported_modes_stay_whole() {
@@ -704,7 +796,19 @@ fn settings_at_the_value_the_event_plays_still_export() {
 #[test]
 /// Each mapped command retains its parameters through its corresponding ATN descriptor.
 fn every_mapped_command_exports_and_imports_back() {
+    let layer_export = desc("cjsp")
+        .with("Msge", text("Recorded script settings"))
+        .with("destination", text("output"))
+        .with("fileNamePrefix", text("Proof"))
+        .with("visibleOnly", D::Boolean(true))
+        .with("FlTy", D::Double(1.0))
+        .with("icc", D::Boolean(true))
+        .with("jpegQuality", text("8"));
+    let Mapped::Steps(layer_export) = super::steps_layers_to_files::from(&layer_export) else {
+        panic!("layer export fixture must map");
+    };
     let cases: Vec<(&str, Value)> = vec![
+        ("file.export.layersToFiles", layer_export[0].1.clone()),
         (
             "edit.perspectiveWarp",
             json!({"planes":[{"src":[[4,4],[16,4],[16,20],[4,20]],"dst":[[5,5],[17,4],[18,20],[4,19]]}],
@@ -735,6 +839,11 @@ fn every_mapped_command_exports_and_imports_back() {
         ("layer.linkLayers", json!({})),
         ("layer.new.artboard", json!({"rect": [10, 20, 100, 50], "name": "Hero"})),
         ("layer.new.artboardFromLayers", json!({"name": "Cards"})),
+        ("slice.new", json!({"rect": [3, 5, 11, 7]})),
+        ("slice.select", json!({"point": [10, 20]})),
+        ("slice.divide", json!({"horizontal": 5})),
+        ("slice.divide", json!({"vertical": 3})),
+        ("slice.divide", json!({"horizontal": 5, "vertical": 3})),
         ("layer.smartObjects.stackMode.range", json!({})),
         ("layer.smartObjects.stackMode.entropy", json!({})),
         ("layer.smartObjects.stackMode.kurtosis", json!({})),
@@ -753,6 +862,8 @@ fn every_mapped_command_exports_and_imports_back() {
         ("layer.distribute.topEdges", json!({})),
         ("layer.distribute.verticalCenters", json!({})),
         ("layer.distribute.bottomEdges", json!({})),
+        ("layer.distribute.horizontally", json!({})),
+        ("layer.distribute.vertically", json!({})),
         ("edit.definePattern", json!({})),
         ("layer.layerMask.delete", json!({"_atnEvent":"RmvL"})),
         ("layer.mergeLayers", json!({"_atnEvent":"MrgL"})),
@@ -869,6 +980,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("image.mode.grayscale", json!({})),
         ("image.mode.bits16", json!({})),
         ("layer.duplicate", json!({"name": "copy"})),
+        ("layer.duplicate", json!({"layer":{"index":1}, "document":{"name":"Destination.psd"}, "name":"copy"})),
         // Duplicate into a new document is a `Mk`, not a `Dplc` (the three shapes of
         // a recorded Duplicate Layer with Destination: New, plus a named layer).
         ("layer.duplicate", json!({"document": "new"})),
@@ -978,6 +1090,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("select.editInQuickMaskMode", json!({"on": true})),
         ("select.editInQuickMaskMode", json!({"on": false})),
         ("edit.transform", json!({"dx": 10, "dy": -5, "scaleX": 50, "scaleY": 75, "rotate": 12.5, "interpolation": "bicubic"})),
+        ("edit.transform", json!({"dx":0.36,"dy":-1.08,"offsetUnits":"pt","scaleX":50,"scaleY":75,"reference":"topLeft","interpolation":"nearest"})),
         ("edit.transform", json!({"layer": "Shadow", "dx": 0, "dy": 0, "scaleX": 200})),
         ("select.transformSelection", json!({"dx": 3, "dy": 4, "scaleX": 110, "scaleY": 110, "rotate": -30})),
         (
@@ -995,7 +1108,11 @@ fn every_mapped_command_exports_and_imports_back() {
         ),
         (
             "file.export.saveForWebLegacy",
-            json!({"path": "C:\\shots\\a.jpg", "format": "jpeg", "interlaced": false, "transparency": false, "embedIcc": true, "progressive": true, "optimized": true, "quality": 80, "matte": "none"}),
+            json!({"dir":"/tmp/out", "slices":"all", "html":false, "imagesFolder":"assets/tiles", "format":"png24", "interlaced":false, "transparency":true, "embedIcc":false, "progressive":false, "optimized":true, "matte":"#ffffff"}),
+        ),
+        (
+            "file.export.saveForWebLegacy",
+            json!({"path": "C:\\shots\\a.jpg", "format": "jpeg", "interlaced": false, "transparency": false, "embedIcc": true, "progressive": true, "optimized": true, "quality": 80, "matte": "none", "convertToSrgb": false, "metadata": "all"}),
         ),
         ("image.adjustments.gradientMap", json!({"stops": [[0, "#000000"], [0.5, "#ff8000"], [1, "#ffffff"]], "reverse": true, "dither": false})),
         ("image.adjustments.gradientMap", json!({"stops": [[0,[0.5,0,0]],[1,[0,1,0]]], "__atnGrMp":{"name":"Recorded","colors":[[127.5,0,0],[0,255,0]]}})),
@@ -1030,6 +1147,12 @@ fn every_mapped_command_exports_and_imports_back() {
         ("layer.layerStyle.copyLayerStyle", json!({})),
         ("layer.layerStyle.scaleEffects", json!({"scale": 200})),
         ("layer.layerStyle.createLayer", json!({})),
+        ("layer.layerStyle.replace", {
+            let effect = crate::layer_style::effect_from_params("colorOverlay", &json!({"color":"#3366cc"})).unwrap();
+            let mut params = json!({"effects":[{"kind":"colorOverlay","params":{},"fx":serde_json::to_value(effect).unwrap()}]});
+            normalise(&mut params);
+            params
+        }),
         ("layer.layerStyle.pasteLayerStyle", json!({"allowGroups": true})),
         ("layer.setExpanded", json!({"all": true, "expanded": false})),
         ("layerComp.apply", json!({"comp": "Original"})),
@@ -1128,6 +1251,8 @@ fn every_mapped_command_exports_and_imports_back() {
         ("filter.stylize.diffuse", json!({"mode": "normal", "seed": 321654})),
         ("history.clear", json!({})),
         ("history.newSnapshot", json!({"name": "CopyCat - action result", "from": "fullDocument", "replaceExisting": true})),
+        ("history.selectSnapshot", json!({"name": "Checkpoint"})),
+        ("history.selectState", json!({"offset": -2})),
         ("layerComp.apply", json!({"comp": "Comp 1"})),
         ("layerComp.apply", json!({"comp": {"index": 2}})),
         ("layerComp.apply", json!({"comp": {"id": 7}})),
@@ -1778,13 +1903,94 @@ fn colours_convert_both_ways() {
     assert_eq!(color_desc("#ééééé"), None);
 }
 
+fn conditional_descriptor(value: D) -> Descriptor {
+    desc("null")
+        .with("null", value)
+        .with(
+            "then",
+            D::Reference(vec![
+                ReferenceItem::Name { class: class("Actn"), name: UnicodeString::new_nul("FS8-Layers") },
+                ReferenceItem::Name { class: class("ASet"), name: UnicodeString::new_nul("FS") },
+            ]),
+        )
+        .with("else", D::Reference(vec![ReferenceItem::Name { class: class("Actn"), name: UnicodeString::new_nul("FS8-No-Layers") }]))
+}
+
+/// Extend the original Lyrs case using the same recorded branch references and ATN helpers.
+#[test]
+fn conditional_identifiers_import_and_export_in_their_photoshop_shapes() {
+    // Keep expected wire IDs independent of the production mapping, including padding.
+    for (code, condition) in [
+        ("Lyrs", "hasLayers"),
+        ("Ornt", "landscape"),
+        ("Sqr ", "square"),
+        ("RGB ", "modeIsRGB"),
+        ("CMYK", "modeIsCMYK"),
+        ("Gryc", "modeIsGrayscale"),
+        ("EghB", "depth8"),
+        ("16Bt", "depth16"),
+        ("32Bt", "depth32"),
+        ("Sved", "unsaved"),
+        ("fsel", "hasSelection"),
+        ("hasAlpha", "hasAlphaChannels"),
+        ("Opn ", "isOpen"),
+        ("Bckg", "isBackground"),
+        ("Pxel", "isPixelLayer"),
+        ("Adjs", "isAdjustmentLayer"),
+        ("Shp ", "isShapeLayer"),
+        ("Grup", "isLayerGroup"),
+        ("locked", "isLocked"),
+        ("Vsbl", "isVisible"),
+        ("hasUserMask", "hasPixelMask"),
+        ("hasVectorMask", "hasVectorMask"),
+        ("Effc", "hasEffects"),
+    ] {
+        for input in [code, condition] {
+            let recorded = conditional_descriptor(D::Enumerated { type_id: Id::new("Cndt"), value: Id::new(input) });
+            let loaded = mapped_recording("conditional", recorded);
+            assert!(loaded.unsupported.is_empty(), "{input}: {:?}", loaded.unsupported);
+            assert_eq!(
+                loaded.actions[0].steps,
+                [("actions.conditional".into(), json!({"if":condition,"then":"FS8-Layers","else":"FS8-No-Layers"}))],
+                "{input}"
+            );
+            let (bytes, skipped) = export("FS", &[&loaded.actions[0]], &[], false).unwrap();
+            assert!(skipped.is_empty(), "{input}");
+            let saved = atn::parse(&bytes).unwrap();
+            // Export qualifies both branches with the selected action set.
+            let mut expected = conditional_descriptor(D::Enumerated { type_id: Id::new("Cndt"), value: Id::new(code) });
+            expected.items.retain(|(key, _)| !key.is("else"));
+            let expected = expected.with(
+                "else",
+                D::Reference(vec![
+                    ReferenceItem::Name { class: class("Actn"), name: UnicodeString::new_nul("FS8-No-Layers") },
+                    ReferenceItem::Name { class: class("ASet"), name: UnicodeString::new_nul("FS") },
+                ]),
+            );
+            assert_eq!(saved.actions[0].items[0].descriptor.as_ref(), Some(&expected), "{input}");
+            assert_eq!(import(&bytes).unwrap().actions[0].steps, loaded.actions[0].steps, "{input}");
+        }
+    }
+    // Unsupported and malformed conditions must keep their original branches and descriptor.
+    for value in [enm("Cndt", "SRGB"), enm("Cndt", "unknownCondition"), D::Integer(42), D::Boolean(true), text("Vsbl")] {
+        let recorded = conditional_descriptor(value);
+        let loaded = mapped_recording("conditional", recorded.clone());
+        assert_eq!(loaded.unsupported.len(), 1);
+        assert_eq!(loaded.actions[0].steps[0].0, PHOTOSHOP_STEP);
+        assert!(!loaded.actions[0].disabled.contains(&0));
+        let (bytes, skipped) = export("FS", &[&loaded.actions[0]], &[], false).unwrap();
+        assert!(skipped.is_empty());
+        assert_eq!(atn::parse(&bytes).unwrap().actions[0].items[0].descriptor.as_ref(), Some(&recorded));
+    }
+}
+
 #[test]
 fn remaining_events_import_in_their_photoshop_shapes() {
     // Close with the Save answer becomes Save then Close.
     let close_yes = item("Cls ", "Close", Some(desc("null").with("Svng", enm("YsN ", "Ys  "))));
     let close_no = item("close", "Close", Some(desc("null").with("Svng", enm("YsN ", "N   "))));
     // A layer only moved is a translation; scaled, it is the relative Free Transform; the
-    // selection's frame goes to Transform Selection; points (not pixels) stay unsupported.
+    // selection's frame goes to Transform Selection; nonzero point offsets stay unsupported.
     let moved = desc("null")
         .with("null", target_ref("Lyr "))
         .with("FTcs", enm("QCSt", "Qcsa"))
@@ -1924,18 +2130,9 @@ fn remaining_events_import_in_their_photoshop_shapes() {
     assert_eq!(steps[13].1, json!({"points": [[1, 2], [30, 2], [15, 40]]}));
     assert_eq!(imp.unsupported.len(), 2);
 
-    // The frequency-separation set's own conditional, a percent Image Size, a Paint Bucket
-    // click in pixels (percent stays unsupported) and a Place.
-    let cond = desc("null")
-        .with("null", enm("Cndt", "Lyrs"))
-        .with(
-            "then",
-            D::Reference(vec![
-                ReferenceItem::Name { class: class("Actn"), name: UnicodeString::new_nul("FS8-Layers") },
-                ReferenceItem::Name { class: class("ASet"), name: UnicodeString::new_nul("FS") },
-            ]),
-        )
-        .with("else", D::Reference(vec![ReferenceItem::Name { class: class("Actn"), name: UnicodeString::new_nul("FS8-No-Layers") }]));
+    // The original frequency-separation conditional remains part of the mixed-event regression.
+    let cond = conditional_descriptor(enm("Cndt", "Lyrs"));
+    // A percent Image Size, a Paint Bucket click in pixels (percent stays unsupported) and a Place.
     let size = desc("null")
         .with("Wdth", pct(200.0))
         .with("scaleStyles", D::Boolean(true))
@@ -4725,6 +4922,117 @@ fn select_channel_export_rejects_mode_specific_gray_objects() {
     rgb.execute("actions.load", json!({"data":gray})).unwrap();
     assert_eq!(rgb.actions.list[0].steps[0], ("channel.target".into(), json!({"channel":"composite"})));
     assert!(rgb.execute("actions.play", json!({"action":"Pick"})).unwrap().get("failed").is_none());
+}
+
+fn user_slice_descriptor(edges: [f64; 4]) -> Descriptor {
+    let rect = ["Top ", "Left", "Btom", "Rght"].into_iter().zip(edges).fold(desc("Rctn"), |r, (key, value)| r.with(key, px(value)));
+    // Photoshop writes this four-byte enum value as a string ID, not a char ID.
+    let user = D::Enumerated { type_id: Id::Str(b"sliceType".to_vec()), value: Id::Str(b"user".to_vec()) };
+    desc("null").with("null", class_ref("slice")).with("Usng", D::Descriptor(desc("slice").with("Type", user).with("At  ", D::Descriptor(rect))))
+}
+
+#[test]
+fn mapped_make_user_slices_import_play_and_round_trip() {
+    for event in [AtnEvent::Code(*b"Mk  "), AtnEvent::name("make")] {
+        let descriptor = user_slice_descriptor([5.0, 3.0, 12.0, 14.0]);
+        let source = one_action(vec![AtnItem { event: event.clone(), ..item("Mk  ", "Make", Some(descriptor.clone())) }]);
+        let loaded = import(&atn::write(&source).unwrap()).unwrap();
+        assert!(loaded.unsupported.is_empty(), "{event:?}: {:?}", loaded.unsupported);
+        assert_eq!(loaded.actions[0].steps, vec![("slice.new".into(), json!({"rect": [3, 5, 11, 7]}))]);
+        let (saved, skipped) = export("Slices", &[&loaded.actions[0]], &[], false).unwrap();
+        assert!(skipped.is_empty());
+        assert_eq!(atn::parse(&saved).unwrap().actions[0].items[0].descriptor, Some(descriptor));
+        assert_eq!(import(&saved).unwrap().actions[0].steps, loaded.actions[0].steps);
+
+        let mut session = Session::new();
+        session.execute("file.new", json!({"width": 24, "height": 24})).unwrap();
+        session.execute("actions.load", json!({"data": b64(&saved)})).unwrap();
+        assert!(session.execute("actions.play", json!({"action": "A"})).unwrap().get("failed").is_none());
+        let slices = &session.active().unwrap().doc.slices.list;
+        assert_eq!(slices.len(), 1);
+        assert_eq!(slices[0].rect, photocraft_geom::Rect::new(3, 5, 14, 12));
+        assert_eq!(slices[0].origin, photocraft_doc::slices::SliceOrigin::User);
+    }
+}
+
+#[test]
+fn mapped_make_user_slices_preserve_unsupported_descriptors() {
+    let base = user_slice_descriptor([1.0, 2.0, 8.0, 10.0]);
+    let using = get_obj(&base, "Usng").unwrap();
+    let user = using.get("Type").unwrap().clone();
+    let replace_using = |u| desc("null").with("null", class_ref("slice")).with("Usng", D::Descriptor(u));
+    let mut unsupported = vec![
+        base.clone().with("futureOption", D::Boolean(true)),
+        base.clone().with("null", class_ref("slice")),
+        desc("null").with("null", target_ref("slice")).with("Usng", D::Descriptor(using.clone())),
+        replace_using(using.clone().with("futureOption", long(1.0))),
+        replace_using(
+            desc("slice")
+                .with("Type", D::Enumerated { type_id: Id::new("sliceType"), value: Id::Str(b"auto".to_vec()) })
+                .with("At  ", using.get("At  ").unwrap().clone()),
+        ),
+        replace_using(desc("slice").with("Type", enm("sliceType", "user")).with("At  ", using.get("At  ").unwrap().clone())),
+        replace_using(
+            desc("slice")
+                .with("Type", D::Enumerated { type_id: Id::new("otherType"), value: Id::Str(b"user".to_vec()) })
+                .with("At  ", using.get("At  ").unwrap().clone()),
+        ),
+        replace_using(desc("otherClass").with("Type", user.clone()).with("At  ", using.get("At  ").unwrap().clone())),
+        desc("null").with("null", class_ref("slice")),
+    ];
+    for edge in [f64::NAN, f64::INFINITY, 1.5, f64::from(i32::MIN) - 1.0, f64::from(i32::MAX) + 1.0] {
+        unsupported.push(user_slice_descriptor([edge, 2.0, 8.0, 10.0]));
+    }
+    for edges in [[1.0, 2.0, 1.0, 10.0], [8.0, 2.0, 1.0, 10.0], [1.0, 2.0, 8.0, 2.0], [1.0, -1.0, 8.0, f64::from(i32::MAX)]] {
+        unsupported.push(user_slice_descriptor(edges));
+    }
+    for rect in [
+        desc("Rctn").with("Top ", pct(1.0)).with("Left", px(2.0)).with("Btom", px(8.0)).with("Rght", px(10.0)),
+        desc("Rctn").with("Top ", long(1.0)).with("Left", px(2.0)).with("Btom", px(8.0)).with("Rght", px(10.0)),
+        desc("Rctn").with("Top ", px(1.0)).with("Left", px(2.0)).with("Btom", px(8.0)),
+        get_obj(using, "At  ").unwrap().clone().with("Left", px(4.0)),
+    ] {
+        unsupported.push(replace_using(desc("slice").with("Type", user.clone()).with("At  ", D::Descriptor(rect))));
+    }
+    for descriptor in unsupported {
+        let source = one_action(vec![AtnItem { event: AtnEvent::name("make"), ..item("Mk  ", "Make", Some(descriptor.clone())) }]);
+        let loaded = import(&atn::write(&source).unwrap()).unwrap();
+        assert_eq!(loaded.actions[0].steps[0].0, PHOTOSHOP_STEP, "{descriptor:?}");
+        let (saved, skipped) = export("Slices", &[&loaded.actions[0]], &[], false).unwrap();
+        assert!(skipped.is_empty());
+        let written = atn::parse(&saved).unwrap().actions[0].items[0].clone();
+        assert_eq!(written.event, source.actions[0].items[0].event);
+        assert_eq!(written.descriptor.unwrap().to_bytes(), descriptor.to_bytes());
+    }
+}
+
+#[test]
+fn mapped_make_user_slices_export_only_representable_native_params() {
+    for params in [json!({"rect": [2, 1, 8, 7]}), json!({"x": 2, "y": 1, "width": 8, "height": 7})] {
+        let (event, d) = event_and_descriptor("slice.new", &params).unwrap();
+        assert_eq!(event.name, "make");
+        assert_eq!(d, user_slice_descriptor([1.0, 2.0, 8.0, 10.0]));
+        let wire = d.to_bytes();
+        let user_enum = b"enum\0\0\0\tsliceType\0\0\0\x04user";
+        assert!(wire.windows(user_enum.len()).any(|bytes| bytes == user_enum), "user must be a length-4 string ID");
+    }
+    for params in [
+        json!({}),
+        json!({"rect": [2, 1, 8]}),
+        json!({"rect": [2, 1, 8, 0]}),
+        json!({"rect": [2, 1, -8, 7]}),
+        json!({"rect": [2.5, 1, 8, 7]}),
+        json!({"rect": [2, 1, 2147483647_i64, 7]}),
+        json!({"rect": [2, 1, 8, 7], "name": "Named slice"}),
+        json!({"rect": [2, 1, 8, 7], "kind": "noImage"}),
+        json!({"rect": [2, 1, 8, 7], "x": 3}),
+    ] {
+        let action = Action::new("Slice", vec![("slice.new".into(), params.clone())]);
+        assert!(export("Slices", &[&action], &[], false).is_err(), "{params}");
+        let (saved, skipped) = export("Slices", &[&action], &[], true).unwrap();
+        assert_eq!(skipped.len(), 1);
+        assert!(atn::parse(&saved).unwrap().actions[0].items.is_empty());
+    }
 }
 
 /// Newer Group from Layers recordings put the name outside Usng; existing nested names win.

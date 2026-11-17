@@ -28,6 +28,7 @@ pub(super) fn select_from(d: &Descriptor) -> Mapped {
         step("layer.select", p)
     };
     match (ref_class(r).as_deref(), target(r)) {
+        (Some("slice"), _) => super::steps_slice::select_from(d),
         (Some("Lyr"), Target::Name(_) | Target::Index(_) | Target::Ordinal(_)) => {
             let Some(params) = recorded_layer_target(r) else { return Mapped::Unsupported { harmless: false } };
             with_modifier(params)
@@ -57,6 +58,16 @@ pub(super) fn select_from(d: &Descriptor) -> Mapped {
         // History › Step Backward / Step Forward.
         (Some("HstS"), Target::Ordinal(o)) if o == "Prvs" => none("edit.undo"),
         (Some("HstS"), Target::Ordinal(o)) if o == "Nxt" => none("edit.redo"),
+        (Some("HstS"), Target::Offset(o)) if o != 0 && r.len() == 1 && d.items.len() == 1 => step("history.selectState", json!({"offset": o})),
+        (Some("SnpS"), Target::Name(n)) => {
+            // Keep unsupported scopes/options and names that cannot round-trip as Unicode.
+            let exact = matches!(r, [ReferenceItem::Name { name, .. }]
+                if *name == UnicodeString::new(&n) || *name == UnicodeString::new_nul(&n));
+            if d.items.len() != 1 || !exact || n.trim().is_empty() || n.contains('\0') {
+                return Mapped::Unsupported { harmless: false };
+            }
+            step("history.selectSnapshot", json!({"name": n}))
+        }
         (Some(c), Target::Class) if is_tool_class(c) => Mapped::Unsupported { harmless: true },
         // A menu item chosen while recording (`Mn`): the View menu's zoom items replay.
         (Some("Mn"), Target::Ordinal(item)) => match lookup(MENU_ITEMS, &item) {
@@ -78,6 +89,7 @@ pub(super) fn select_to(id: &str, p: &Value) -> Option<Descriptor> {
     let ord = |o: &str| D::Reference(vec![ReferenceItem::Enumerated { class: class("Lyr "), type_id: code("Ordn"), value: code(o) }]);
     let enumerated = |cls: &str, ty: &str, v: &str| D::Reference(vec![ReferenceItem::Enumerated { class: class(cls), type_id: code(ty), value: code(v) }]);
     Some(match id {
+        "slice.select" => return super::steps_slice::select_to(p),
         "layer.select" => {
             if p.get("occurrence").is_some() {
                 return None;
@@ -125,6 +137,22 @@ pub(super) fn select_to(id: &str, p: &Value) -> Option<Descriptor> {
         }
         "edit.undo" => desc("null").with("null", enumerated("HstS", "Ordn", "Prvs")),
         "edit.redo" => desc("null").with("null", enumerated("HstS", "Ordn", "Nxt ")),
+        "history.selectState" => {
+            // Only the relative form is mapped: an absolute native row is not a Photoshop id.
+            let offset = i32::try_from(p.get("offset")?.as_i64()?).ok()?;
+            if offset == 0 || p.as_object()?.len() != 1 {
+                return None;
+            }
+            desc("null").with("null", D::Reference(vec![ReferenceItem::Offset { class: class("HstS"), offset }]))
+        }
+        "history.selectSnapshot" => {
+            // Native ids belong to this session and have no recorded Photoshop identity.
+            let name = jstr(p, "name")?;
+            if p.as_object()?.len() != 1 || name.trim().is_empty() || name.contains('\0') {
+                return None;
+            }
+            desc("null").with("null", name_ref("SnpS", name))
+        }
         "layer.selectAbove" => desc("null").with("null", ord("Frwr")),
         "layer.selectBelow" => desc("null").with("null", ord("Bckw")),
         "layer.addAboveToSelection" => desc("null").with("null", ord("Frwr")).with("selectionModifier", enm("selectionModifierType", "addToSelection")),
@@ -350,17 +378,46 @@ pub(super) fn move_to(id: &str, p: &Value) -> Option<Descriptor> {
     Some(desc("null").with("null", recorded_layer_ref(p)?).with("T   ", t))
 }
 
+fn duplicate_text(value: &D) -> Option<String> {
+    let D::Text(name) = value else { return None };
+    let name = String::from_utf16(name.0.strip_suffix(&[0]).unwrap_or(&name.0)).ok()?;
+    (!name.trim().is_empty() && !name.contains('\0')).then_some(name)
+}
+
 pub(super) fn duplicate_from(d: &Descriptor) -> Mapped {
     let Some(r) = get_ref(d, "null") else { return Mapped::Unsupported { harmless: false } };
     match ref_class(r).as_deref() {
         Some("Lyr") => {
-            // A `T` document reference (duplicate into another open document) has no
-            // replayable meaning here: keep the step verbatim rather than misplay it.
-            if get_ref(d, "T   ").is_some() {
+            // Do not discard a placement option or a malformed recording hint.
+            const KEYS: &[&str] = &["null", "T   ", "Nm  ", "Vrsn", "Idnt", "MkVs"];
+            // Older same-document recordings use version 2; do not infer its destination semantics.
+            let version_supported = matches!(d.get("Vrsn"), None | Some(D::Integer(5))) || (d.get("T   ").is_none() && d.get("Vrsn") == Some(&D::Integer(2)));
+            if d.items.iter().enumerate().any(|(i, (key, _))| !KEYS.iter().any(|known| key.is(known)) || d.items.iter().take(i).any(|(old, _)| old == key))
+                || !version_supported
+                || !matches!(d.get("MkVs"), None | Some(D::Boolean(false)))
+                || d.get("Idnt").is_some_and(|value| !matches!(value, D::List(ids) if ids.iter().all(|id| matches!(id, D::Integer(_)))))
+                || r.len() != 1
+            {
                 return Mapped::Unsupported { harmless: false };
             }
-            let Some(mut p) = layer_target(r) else { return Mapped::Unsupported { harmless: false } };
-            if let Some(n) = get_text(d, "Nm  ") {
+            let params = if matches!(r, [ReferenceItem::Enumerated { type_id, value, .. }] if type_id.is("Ordn") && value.is("Trgt")) {
+                Some(Map::new())
+            } else if let [ReferenceItem::Name { name, .. }] = r {
+                duplicate_text(&D::Text(name.clone())).map(|name| Map::from_iter([("layer".into(), json!(name))]))
+            } else {
+                recorded_layer_target(r)
+            };
+            let Some(mut p) = params else { return Mapped::Unsupported { harmless: false } };
+            if let Some(value) = d.get("T   ") {
+                let D::Reference(reference) = value else { return Mapped::Unsupported { harmless: false } };
+                let [ReferenceItem::Name { class, name }] = reference.as_slice() else { return Mapped::Unsupported { harmless: false } };
+                let Some(name) = duplicate_text(&D::Text(name.clone())).filter(|_| class.class_id.is("Dcmn")) else {
+                    return Mapped::Unsupported { harmless: false };
+                };
+                p.insert("document".into(), json!({"name":name}));
+            }
+            if let Some(value) = d.get("Nm  ") {
+                let Some(n) = duplicate_text(value) else { return Mapped::Unsupported { harmless: false } };
                 p.insert("name".into(), n.into());
             }
             step("layer.duplicate", Value::Object(p))
@@ -380,6 +437,8 @@ pub(super) fn duplicate_from(d: &Descriptor) -> Mapped {
 }
 
 pub(super) fn duplicate_to(id: &str, p: &Value) -> Option<Descriptor> {
+    let empty = json!({});
+    let p = if p.is_null() { &empty } else { p };
     // Duplicate into a new document is a `Mk` (handled above); let it fall through.
     if id == "layer.duplicate" && jstr(p, "document") == Some("new") {
         return None;
@@ -390,7 +449,29 @@ pub(super) fn duplicate_to(id: &str, p: &Value) -> Option<Descriptor> {
         return None;
     }
     let mut d = match id {
-        "layer.duplicate" => desc("null").with("null", layer_ref(p)?),
+        "layer.duplicate" => {
+            if p.as_object()?.iter().any(|(key, value)| !value.is_null() && !["layer", "name", "document", "inPlace"].contains(&key.as_str()))
+                || !matches!(p.get("inPlace"), None | Some(Value::Null | Value::Bool(false)))
+            {
+                return None;
+            }
+            let mut d = desc("null").with("null", recorded_layer_ref(p)?);
+            if let Some(document) = p.get("document").filter(|v| !v.is_null()) {
+                let selector = document.as_object().filter(|object| object.len() == 1)?;
+                let name = selector.get("name")?.as_str()?;
+                if name.trim().is_empty() || name.contains('\0') {
+                    return None;
+                }
+                d = d.with("T   ", name_ref("Dcmn", name)).with("Vrsn", D::Integer(5));
+            }
+            if let Some(value) = p.get("name").filter(|v| !v.is_null()) {
+                let name = value.as_str()?;
+                if name.trim().is_empty() || name.contains('\0') {
+                    return None;
+                }
+            }
+            d
+        }
         "image.duplicate" => {
             desc("null").with("null", D::Reference(vec![ReferenceItem::Enumerated { class: class("Dcmn"), type_id: Id::new("Ordn"), value: Id::new("Frst") }]))
         }

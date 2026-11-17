@@ -804,9 +804,9 @@ pub(crate) fn composite_over(dst: &mut Surface, top: &Surface) {
 }
 
 /// The relative form (`scaleX`, `scaleY` in percent, `rotate` in degrees clockwise, `dx`, `dy`
-/// in pixels), as Photoshop records a Free Transform: scale and rotate about the frame's
+/// converted to pixels with `offset_scale`), as Photoshop records a Free Transform: scale and rotate about the frame's
 /// named reference point (the centre by default), then move. `None` when none of them is given.
-fn relative_matrix(p: &Value, rect: [f64; 4]) -> Result<Option<Homography>> {
+fn relative_matrix(p: &Value, rect: [f64; 4], offset_scale: f64) -> Result<Option<Homography>> {
     let num = |k: &str| -> Result<Option<f64>> {
         match p.get(k) {
             None | Some(Value::Null) => Ok(None),
@@ -817,6 +817,10 @@ fn relative_matrix(p: &Value, rect: [f64; 4]) -> Result<Option<Homography>> {
     if sx.is_none() && sy.is_none() && rot.is_none() && dx.is_none() && dy.is_none() {
         return Ok(None);
     }
+    let (dx, dy) = (dx.unwrap_or(0.0) * offset_scale, dy.unwrap_or(0.0) * offset_scale);
+    if !dx.is_finite() || !dy.is_finite() {
+        return Err(bad("offsets overflow at this document's resolution"));
+    }
     let (sx, sy) = (sx.unwrap_or(100.0) / 100.0, sy.unwrap_or(100.0) / 100.0);
     if sx.abs() < 1e-6 || sy.abs() < 1e-6 {
         return Err(bad("`scaleX` and `scaleY` must not be 0"));
@@ -825,8 +829,8 @@ fn relative_matrix(p: &Value, rect: [f64; 4]) -> Result<Option<Homography>> {
     let (sin, cos) = rot.unwrap_or(0.0).to_radians().sin_cos();
     // (x, y) → translate(-c) → scale → rotate → translate(c + d).
     let (a, b, c, d) = (sx * cos, sx * sin, -sy * sin, sy * cos);
-    let e = cx + dx.unwrap_or(0.0) - a * cx - c * cy;
-    let f = cy + dy.unwrap_or(0.0) - b * cx - d * cy;
+    let e = cx + dx - a * cx - c * cy;
+    let f = cy + dy - b * cx - d * cy;
     Ok(Some(Homography([a, c, e, b, d, f, 0.0, 0.0, 1.0])))
 }
 
@@ -867,6 +871,22 @@ fn transform(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let p = &with_panel_target(s, p);
     let st = s.active().ok_or(EngineError::NoDocument)?;
+    let offset_scale = match p.get("offsetUnits") {
+        None | Some(Value::Null) => 1.0,
+        Some(Value::String(units)) if units == "px" => 1.0,
+        Some(Value::String(units)) if units == "pt" => {
+            let dpi = f64::from(st.doc.resolution_dpi);
+            if !dpi.is_finite() || dpi <= 0.0 {
+                return Err(bad("point offsets need a finite positive document resolution"));
+            }
+            dpi / 72.0
+        }
+        _ => return Err(bad("`offsetUnits` must be px or pt")),
+    };
+    // A unit on a relative offset must not silently disappear when an absolute matrix wins.
+    if p.get("offsetUnits").is_some_and(|value| !value.is_null()) && ["quad", "matrix"].iter().any(|key| p.get(*key).is_some_and(|value| !value.is_null())) {
+        return Err(bad("`offsetUnits` belongs to the relative transform, not quad or matrix"));
+    }
     let many = layers_param(&st.doc, p)?;
     if many.is_some()
         && (!matches!(p.get("layer"), None | Some(Value::Null)) || !matches!(crate::channel_cmds::target_of(p), crate::channel_cmds::Target::Pixels))
@@ -932,7 +952,7 @@ fn transform(s: &mut Session, p: &Value) -> Result<Value> {
         }
         // Affine [a b c d e f] maps (x, y) → (a·x + c·y + e, b·x + d·y + f).
         Homography([v[0], v[2], v[4], v[1], v[3], v[5], 0.0, 0.0, 1.0])
-    } else if let Some(m) = relative_matrix(p, rect)? {
+    } else if let Some(m) = relative_matrix(p, rect, offset_scale)? {
         m
     } else {
         return Err(bad("pass `quad` (where the rect's corners go), `matrix`, or `scaleX`/`scaleY`/`rotate`/`dx`/`dy`"));
@@ -1037,7 +1057,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Free Transform",
         menu: &[],
         shortcut: None,
-        params: r##"{"layer":id?,"layers":[id,…]? (several layers moved by one box, one step; default with neither = the selected layers, as Photoshop's Free Transform with several selected; refused as locked when the Background is among several),"rect":[x0,y0,x1,y1]? (source frame; default = the layers' content ∩ selection),"quad":[[x,y]×4]? (where the frame's corners go, clockwise from top-left),"matrix":[a,b,c,d,e,f]? (affine alternative),"scaleX":%?,"scaleY":%?,"rotate":deg?,"dx":px?,"dy":px?,"reference":"center|topLeft|top|topRight|left|right|bottomLeft|bottom|bottomRight"|[x,y]="center" (relative alternative: scale and rotate about this point, then move),"interpolation":"bicubic|bilinear|nearest|bicubicSharper|bicubicSmoother|bicubicAutomatic"="bicubic" (Photoshop's bicubic variants render as Bicubic),"stepName":"Transform Path"? (History step name; the shape tools' bounding box sends it; default "Free Transform"; any other value is refused),"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target (an unlinked mask, an alpha channel or the Quick Mask transforms alone; a linked mask moves with its layer)}"##,
+        params: r##"{"layer":id?,"layers":[id,…]? (several layers moved by one box, one step; default with neither = the selected layers, as Photoshop's Free Transform with several selected; refused as locked when the Background is among several),"rect":[x0,y0,x1,y1]? (source frame; default = the layers' content ∩ selection),"quad":[[x,y]×4]? (where the frame's corners go, clockwise from top-left),"matrix":[a,b,c,d,e,f]? (affine alternative),"scaleX":%?,"scaleY":%?,"rotate":deg?,"dx":number?,"dy":number?,"offsetUnits":"px|pt"="px" (relative dx/dy: points use the document DPI),"reference":"center|topLeft|top|topRight|left|right|bottomLeft|bottom|bottomRight"|[x,y]="center" (relative alternative: scale and rotate about this point, then move),"interpolation":"bicubic|bilinear|nearest|bicubicSharper|bicubicSmoother|bicubicAutomatic"="bicubic" (Photoshop's bicubic variants render as Bicubic),"stepName":"Transform Path"? (History step name; the shape tools' bounding box sends it; default "Free Transform"; any other value is refused),"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target (an unlinked mask, an alpha channel or the Quick Mask transforms alone; a linked mask moves with its layer)}"##,
         enabled: has_layer,
         journal: true,
         run: transform,

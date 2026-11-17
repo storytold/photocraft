@@ -220,24 +220,30 @@ pub(super) fn link_to(_: &str, p: &Value) -> Option<Descriptor> {
     params(p, &[]).then(|| desc("null").with("null", target(false)))
 }
 
-/// Distribute shares the established ADSt edge/center codes used by Align.
+/// Equal gaps are distribution-only: adding these to ALIGN would accept nonexistent align commands.
+const DISTRIBUTE_SPACING: &[(&str, &str)] = &[("AdSH", "horizontally"), ("AdSV", "vertically")];
+
+/// Distribute shares Align's edge/center codes and adds its own equal-gap modes.
 pub(super) fn distribute_from(d: &Descriptor) -> Mapped {
     let mapped = || {
         if !keys(d, &["null", "Usng"]) || d.get("null") != Some(&target(false)) {
             return None;
         }
-        let edge = lookup(ALIGN, &enumeration(d, "Usng", "ADSt")?)?;
-        Some(format!("layer.distribute.{edge}"))
+        let value = enumeration(d, "Usng", "ADSt")?;
+        let mode = lookup(ALIGN, &value).or_else(|| lookup(DISTRIBUTE_SPACING, &value))?;
+        Some(format!("layer.distribute.{mode}"))
     };
     mapped().map_or(Mapped::Unsupported { harmless: false }, |id| step(&id, json!({})))
 }
 
-/// Equal-gap distribution is a different command and has no measured field here.
+/// Export edge/center and equal-gap modes on the selected layers, with no explicit native targets.
 pub(super) fn distribute_to(id: &str, p: &Value) -> Option<Descriptor> {
     if !params(p, &[]) {
         return None;
     }
-    Some(desc("null").with("null", target(false)).with("Usng", enm("ADSt", lookup_back(ALIGN, id.strip_prefix("layer.distribute.")?)?)))
+    let mode = id.strip_prefix("layer.distribute.")?;
+    let value = lookup_back(ALIGN, mode).or_else(|| lookup_back(DISTRIBUTE_SPACING, mode))?;
+    Some(desc("null").with("null", target(false)).with("Usng", enm("ADSt", value)))
 }
 
 /// Empty legacy events keep only their allowlisted origin, leaving native exports unchanged.

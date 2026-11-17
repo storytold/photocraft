@@ -174,7 +174,23 @@ fn new_snapshot(s: &mut Session, p: &Value) -> Result<Value> {
 /// Clicking a snapshot: the document returns to it as one new, undoable state named after it.
 fn select_snapshot(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "history.selectSnapshot";
-    let i = snapshot_index(s, CMD, p)?;
+    let i = if let Some(value) = p.get("name").filter(|v| !v.is_null()) {
+        if p.get("snapshot").is_some_and(|v| !v.is_null()) {
+            return Err(bad(CMD, "choose either `snapshot` or `name`, not both"));
+        }
+        let name = value.as_str().filter(|n| !n.trim().is_empty() && !n.contains('\0')).ok_or_else(|| bad(CMD, "`name` must be a non-empty snapshot name"))?;
+        let st = s.active().ok_or(EngineError::NoDocument)?;
+        let mut matches = st.snapshots.iter().enumerate().filter(|(_, snap)| snap.name == name);
+        let (i, _) = matches.next().ok_or_else(|| bad(CMD, format!("no snapshot named `{name}`")))?;
+        // Imported actions address names at playback, not ids from another session. If a name
+        // is ambiguous, restoring an arbitrary snapshot could discard the wrong edits.
+        if matches.next().is_some() {
+            return Err(bad(CMD, format!("more than one snapshot named `{name}`; use a snapshot id")));
+        }
+        i
+    } else {
+        snapshot_index(s, CMD, p)?
+    };
     // A background job is computing from the current state: it must not move under it.
     if s.active_job().is_some() {
         return Err(EngineError::Other("the document is busy with a background job".into()));
@@ -298,7 +314,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Select Snapshot",
             menu: &[],
             shortcut: None,
-            params: r##"{"snapshot":id} → {snapshot,name}: the document returns to the snapshot as a new history state named after it"##,
+            params: r##"{"snapshot":id} or {"name":str} → {snapshot,name}: the document returns to the snapshot as a new history state named after it; names match exactly at playback and must be unique"##,
             enabled: has_doc,
             run: select_snapshot,
             journal: true,

@@ -25,9 +25,19 @@ pub(super) fn place_to(id: &str, p: &Value) -> Option<Descriptor> {
     Some(d.with("Lnkd", D::Boolean(id == "file.placeLinked")).with("Antl", D::Boolean(true)))
 }
 
-/// `open`: File › Open of a recorded path.
+/// `open`: File › Open of a recorded path; session ids and recorder/notification flags are metadata.
 pub(super) fn open_from(d: &Descriptor) -> Mapped {
-    if d.items.len() != 1 || !d.class_id.is("null") || !d.name.to_string_lossy().is_empty() {
+    const KEYS: [&str; 4] = ["null", "dontRecord", "forceNotify", "DocI"];
+    let supported = |key: &Id, value: &D| {
+        key.is("null")
+            || ((key.is("dontRecord") || key.is("forceNotify")) && matches!(value, D::Boolean(_)))
+            || (key.is("DocI") && matches!(value, D::Integer(id) if *id >= 0))
+    };
+    // Decoder options must not disappear, and a duplicate key must not select just its first value.
+    if d.items.len() > KEYS.len()
+        || d.items.iter().any(|(key, value)| !supported(key, value))
+        || KEYS.iter().any(|key| d.items.iter().filter(|(k, _)| k.is(key)).count() > 1)
+    {
         return Mapped::Unsupported { harmless: false };
     }
     match d.get("null").and_then(path_text) {
@@ -102,8 +112,31 @@ pub(super) fn save_to(id: &str, p: &Value) -> Option<Descriptor> {
     Some(if id == "file.saveACopy" { d.with("Cpy ", D::Boolean(true)) } else { d })
 }
 
-/// Photoshop's four-character condition codes that differ from the string ids.
-const CONDITION_CODES: &[(&str, &str)] = &[("Lyrs", "hasLayers")];
+/// Photoshop condition identifiers that differ from the native predicate names.
+const CONDITION_CODES: &[(&str, &str)] = &[
+    ("Ornt", "landscape"),
+    ("Sqr ", "square"),
+    ("RGB ", "modeIsRGB"),
+    ("CMYK", "modeIsCMYK"),
+    ("Gryc", "modeIsGrayscale"),
+    ("EghB", "depth8"),
+    ("16Bt", "depth16"),
+    ("32Bt", "depth32"),
+    ("Sved", "unsaved"),
+    ("fsel", "hasSelection"),
+    ("Lyrs", "hasLayers"),
+    ("hasAlpha", "hasAlphaChannels"),
+    ("Opn ", "isOpen"),
+    ("Bckg", "isBackground"),
+    ("Pxel", "isPixelLayer"),
+    ("Adjs", "isAdjustmentLayer"),
+    ("Shp ", "isShapeLayer"),
+    ("Grup", "isLayerGroup"),
+    ("locked", "isLocked"),
+    ("Vsbl", "isVisible"),
+    ("hasUserMask", "hasPixelMask"),
+    ("Effc", "hasEffects"),
+];
 
 /// `conditional`: Insert Conditional, with its Then and Else actions by name.
 pub(super) fn conditional_from(d: &Descriptor) -> Mapped {
@@ -162,14 +195,255 @@ pub(super) fn close_to(_: &str, p: &Value) -> Option<Descriptor> {
 }
 
 const WEB_FORMATS: &[(&str, &str)] = &[("PN24", "png24"), ("PN8", "png8"), ("JPEG", "jpeg"), ("GIFf", "gif"), ("WBMP", "wbmp")];
+const WEB_METADATA: &[(&str, &str)] =
+    &[("MDNn", "none"), ("MDCp", "copyright"), ("MDCC", "copyrightAndContact"), ("MDAx", "allExceptCameraInfo"), ("MDAl", "all")];
 
-/// `export` (Save for Web): needs the destination path (`In`), as the command writes a file.
+/// Only represented settings may run: dropping slice/output options can write different files.
+pub(super) fn web_keys(d: &Descriptor, keys: &[&str]) -> bool {
+    d.items.len() <= keys.len()
+        && d.items.iter().all(|(key, _)| keys.iter().any(|known| key.is(known)))
+        && keys.iter().all(|key| d.items.iter().filter(|(k, _)| k.is(key)).count() <= 1)
+}
+
+fn web_whole(n: f64, min: f64, max: f64) -> bool {
+    n.is_finite() && n.fract() == 0.0 && (min..=max).contains(&n)
+}
+
+/// File destinations must decode exactly: lossy UTF-16 or an embedded NUL could name another file.
+fn web_path(v: &D) -> Option<String> {
+    let D::Path(b) = v else { return None };
+    if b.get(..4)? != b"txtu" {
+        return None;
+    }
+    let len = usize::try_from(u32::from_le_bytes(b.get(4..8)?.try_into().ok()?)).ok()?;
+    let units = usize::try_from(u32::from_le_bytes(b.get(8..12)?.try_into().ok()?)).ok()?;
+    if len != b.len() || units.checked_mul(2)?.checked_add(12)? != len {
+        return None;
+    }
+    let payload = b.get(12..)?.strip_suffix(&[0, 0])?;
+    let path: String = char::decode_utf16(payload.as_chunks::<2>().0.iter().map(|pair| u16::from_le_bytes(*pair))).collect::<Result<_, _>>().ok()?;
+    (!path.is_empty() && !path.contains('\0')).then_some(path)
+}
+
+const WEB_SLICE_OUTPUT_KEYS: &[&str] = &["SWsl", "SImg", "SHTM", "ovSF", "ovSN"];
+const WEB_NEUTRAL_JPEG_KEYS: &[&str] = &["blur", "QChS", "QCUI", "QChT", "QChV"];
+const WEB_SOURCE: &str = "_atnWebDescriptor";
+const WEB_INACTIVE_OUTPUT_KEYS: &[&str] = &[
+    "ohXH", "ohIC", "ohAA", "ohQA", "ohCA", "ohIZ", "ohTC", "ohAC", "ohIn", "ohLE", "ohEn", "olCS", "olEC", "olWH", "olSV", "olSH", "olNC", "obIA", "obCS",
+    "obIP", "ovCB",
+];
+
+/// HTML/layout preferences do not affect Images Only. A background filename, however, can
+/// request an extra copied asset: require an explicit, empty background block before mapping.
+fn web_inactive_output_supported(u: &Descriptor) -> bool {
+    if !WEB_INACTIVE_OUTPUT_KEYS.iter().any(|key| u.get(key).is_some()) {
+        return true;
+    }
+    if web_slice_images_folder(u).is_none()
+        || get_bool(u, "obIA").is_none()
+        || get_bool(u, "ovCB").is_none()
+        || !matches!(u.get("obIP"),Some(D::Text(s)) if s.0.iter().all(|v|*v==0))
+        || !matches!(u.get("obCS"),Some(D::Enumerated {type_id,value}) if type_id.is("STcs") && value.is("CS01"))
+    {
+        return false;
+    }
+    if ["ohXH", "ohIC", "ohAA", "ohQA", "ohCA", "ohIZ", "olCS"].iter().any(|key| !matches!(u.get(key), None | Some(D::Boolean(_))))
+        || !matches!(u.get("ohIn"), None | Some(D::Integer(-1)))
+    {
+        return false;
+    }
+    for (key, ty, code) in [
+        ("ohTC", "SToc", "OC03"),
+        ("ohAC", "SToc", "OC03"),
+        ("ohLE", "STle", "LE03"),
+        ("ohEn", "STen", "EN00"),
+        ("olEC", "STst", "ST00"),
+        ("olWH", "STwh", "WH01"),
+        ("olSV", "STsp", "SP04"),
+        ("olSH", "STsp", "SP04"),
+    ] {
+        if let Some(v) = u.get(key)
+            && !matches!(v,D::Enumerated {type_id,value} if type_id.is(ty)&&value.is(code))
+        {
+            return false;
+        }
+    }
+    if let Some(v) = u.get("olNC") {
+        let D::List(parts) = v else {
+            return false;
+        };
+        if parts.len() != 6 {
+            return false;
+        }
+        for part in parts {
+            let D::Descriptor(part) = part else {
+                return false;
+            };
+            if !part.class_id.is("SCnc") || !web_keys(part, &["ncTp", "ncSt"]) {
+                return false;
+            }
+            let Some(D::Enumerated { type_id, value }) = part.get("ncTp") else {
+                return false;
+            };
+            let code = value.as_bytes();
+            if !type_id.is("STnc")
+                || code.len() != 4
+                || code.get(..2) != Some(b"NC")
+                || !code
+                    .get(2..)
+                    .and_then(|v| std::str::from_utf8(v).ok())
+                    .filter(|v| v.bytes().all(|b| b.is_ascii_digit()))
+                    .and_then(|v| v.parse::<u8>().ok())
+                    .is_some_and(|v| v <= 28)
+            {
+                return false;
+            }
+            if value.is("NC25") {
+                if !matches!(part.get("ncSt"), Some(D::Text(_))) {
+                    return false;
+                }
+            } else if part.get("ncSt").is_some() {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// An explicit all-slices/images-only folder export, including its relative image subfolder.
+pub(super) fn web_slice_images_folder(u: &Descriptor) -> Option<String> {
+    if get_bool(u, "DIDr") != Some(true)
+        || get_bool(u, "SImg") != Some(true)
+        || get_bool(u, "SHTM") != Some(false)
+        || !matches!(u.get("SWsl"), Some(D::Enumerated { type_id, value }) if type_id.is("STsl") && value.is("SLAl"))
+    {
+        return None;
+    }
+    let subfolder = get_bool(u, "ovSF")?;
+    // Recordings can omit the unused name when images go straight into the output directory.
+    if !subfolder && u.get("ovSN").is_none() {
+        return Some(String::new());
+    }
+    let D::Text(name) = u.get("ovSN")? else { return None };
+    // Folder names must decode exactly; replacement characters could redirect generated files.
+    let units = name.0.strip_suffix(&[0]).unwrap_or(&name.0);
+    let name = String::from_utf16(units).ok()?;
+    let folder = crate::web_cmds::web_images_folder(&name, "file.export.saveForWebLegacy").ok()?;
+    if subfolder && folder.is_empty() {
+        return None;
+    }
+    Some(if subfolder { folder } else { String::new() })
+}
+
+fn web_settings_supported(u: &Descriptor) -> bool {
+    const KEYS: &[&str] = &[
+        "In  ", "DIDr", "Op  ", "Fmt ", "Intr", "Trns", "EICC", "Prgr", "Pass", "Optm", "Qlty", "NCol", "Mtt ", "MttR", "MttG", "MttB", "SWch", "SWmd", "SWsl",
+        "SImg", "SHTM", "ovSF", "ovSN", "blur", "QChS", "QCUI", "QChT", "QChV", "ohXH", "ohIC", "ohAA", "ohQA", "ohCA", "ohIZ", "ohTC", "ohAC", "ohIn", "ohLE",
+        "ohEn", "olCS", "olEC", "olWH", "olSV", "olSH", "olNC", "obIA", "obCS", "obIP", "ovCB", "ovFN", "ovNC", "ovCM", "ovCW", "ovCU",
+    ];
+    if !u.class_id.is("SaveForWeb") || !web_keys(u, KEYS) {
+        return false;
+    }
+    // A partial output block must not fall through to a whole-image save.
+    if WEB_SLICE_OUTPUT_KEYS.iter().any(|key| u.get(key).is_some()) && web_slice_images_folder(u).is_none() {
+        return false;
+    }
+    if !web_inactive_output_supported(u) {
+        return false;
+    }
+    if super::steps_web_naming::KEYS.iter().any(|key| u.get(key).is_some()) && super::steps_web_naming::from(u).is_none() {
+        return false;
+    }
+    if let Some(operation) = u.get("Op  ")
+        && !matches!(operation, D::Enumerated { type_id, value } if type_id.is("SWOp") && value.is("OpSa"))
+    {
+        return false;
+    }
+    if let Some(format) = u.get("Fmt ")
+        && !matches!(format, D::Enumerated { type_id, value } if type_id.is("IRFm") && WEB_FORMATS.iter().any(|(code, _)| value.is(code)))
+    {
+        return false;
+    }
+    if let Some(profile) = u.get("SWch")
+        && !matches!(profile, D::Enumerated { type_id, value } if type_id.is("STch") && (value.is("CHsR") || value.is("CHDc")))
+    {
+        return false;
+    }
+    if let Some(metadata) = u.get("SWmd")
+        && !matches!(metadata, D::Enumerated { type_id, value } if type_id.is("STmd") && WEB_METADATA.iter().any(|(code, _)| value.is(code)))
+    {
+        return false;
+    }
+    if ["DIDr", "Intr", "Trns", "EICC", "Prgr", "Optm", "Mtt "].iter().any(|key| !matches!(u.get(key), None | Some(D::Boolean(_)))) {
+        return false;
+    }
+    // Only the recorded baseline/progressive choices have a native switch. Do not guess when
+    // another pass count, format or competing legacy flag accompanies the choice.
+    if let Some(pass) = u.get("Pass")
+        && (!matches!(pass, D::Integer(1) | D::Integer(3)) || get_enum(u, "Fmt ").as_deref() != Some("JPEG") || u.get("Prgr").is_some())
+    {
+        return false;
+    }
+    if WEB_NEUTRAL_JPEG_KEYS.iter().any(|key| u.get(key).is_some()) {
+        // Only disabled options have an equivalent today. Keeping the active forms prevents
+        // an imported action from silently losing blur or a quality-modulation mask.
+        if get_enum(u, "Fmt ").as_deref() != Some("JPEG") || u.get("blur").is_some_and(|v| !matches!(v,D::Double(n) if *n==0.0)) {
+            return false;
+        }
+        if ["QChS", "QCUI"].iter().any(|key| !matches!(u.get(key), None | Some(D::Integer(0))))
+            || ["QChT", "QChV"].iter().any(|key| !matches!(u.get(key), None | Some(D::Boolean(false))))
+        {
+            return false;
+        }
+    }
+    for (key, min, max) in [("Qlty", 0.0, 100.0), ("NCol", 2.0, 256.0), ("MttR", 0.0, 255.0), ("MttG", 0.0, 255.0), ("MttB", 0.0, 255.0)] {
+        if let Some(v) = u.get(key) {
+            let n = match v {
+                D::Integer(n) => f64::from(*n),
+                D::Double(n) => *n,
+                _ => return false,
+            };
+            if !web_whole(n, min, max) {
+                return false;
+            }
+        }
+    }
+    let colors = ["MttR", "MttG", "MttB"].map(|key| u.get(key).is_some());
+    match get_bool(u, "Mtt ") {
+        Some(true) => colors.into_iter().all(|present| present),
+        Some(false) => true,
+        None => colors.into_iter().all(|present| !present),
+    }
+}
+
+/// `export` (Save for Web): recorded destinations live inside `Usng`; existing outer `In` is accepted.
 pub(super) fn export_from(d: &Descriptor) -> Mapped {
     let unsupported = Mapped::Unsupported { harmless: false };
     let Some(u) = get_obj(d, "Usng") else { return unsupported };
-    let Some(path) = d.get("In  ").and_then(path_text) else { return unsupported };
+    if !web_keys(d, &["Usng", "In  "]) || !web_settings_supported(u) {
+        return unsupported;
+    }
+    // Even equal paths in both places are ambiguous; do not choose one and discard the other.
+    let path = match (d.get("In  "), u.get("In  ")) {
+        (Some(path), None) | (None, Some(path)) => web_path(path),
+        _ => None,
+    };
+    let Some(path) = path else { return unsupported };
     // "Save in directory": `In` is only the folder, and each document saves under its own name.
-    let mut p = if get_bool(u, "DIDr") == Some(true) { json!({"folder": path}) } else { json!({"path": path}) };
+    let mut p = if let Some(images) = web_slice_images_folder(u) {
+        json!({"dir":path,"slices":"all","html":false,"imagesFolder":images})
+    } else if get_bool(u, "DIDr") == Some(true) {
+        json!({"folder":path})
+    } else {
+        json!({"path":path})
+    };
+    if let Some(profile) = get_enum(u, "SWch") {
+        p["convertToSrgb"] = json!(profile == "CHsR");
+    }
+    if let Some(metadata) = get_enum(u, "SWmd") {
+        let Some(metadata) = lookup(WEB_METADATA, &metadata) else { return unsupported };
+        p["metadata"] = json!(metadata);
+    }
     if let Some(f) = get_enum(u, "Fmt ") {
         match lookup(WEB_FORMATS, &f) {
             Some(f) => p["format"] = json!(f),
@@ -180,6 +454,9 @@ pub(super) fn export_from(d: &Descriptor) -> Mapped {
         if let Some(b) = get_bool(u, key) {
             p[param] = json!(b);
         }
+    }
+    if let Some(D::Integer(pass)) = u.get("Pass") {
+        p["progressive"] = json!(*pass == 3);
     }
     for (key, param) in [("Qlty", "quality"), ("NCol", "colors")] {
         if let Some(v) = get_num(u, key) {
@@ -192,27 +469,143 @@ pub(super) fn export_from(d: &Descriptor) -> Mapped {
         p["matte"] =
             json!(format!("#{:02x}{:02x}{:02x}", r.round().clamp(0.0, 255.0) as u8, g.round().clamp(0.0, 255.0) as u8, b.round().clamp(0.0, 255.0) as u8));
     }
+    if super::steps_web_naming::KEYS.iter().any(|key| u.get(key).is_some()) {
+        let Some(naming) = super::steps_web_naming::from(u) else { return unsupported };
+        p["fileNaming"] = naming;
+    }
+    if WEB_NEUTRAL_JPEG_KEYS.iter().chain(WEB_INACTIVE_OUTPUT_KEYS).chain(super::steps_web_naming::KEYS).any(|key| u.get(key).is_some())
+        && web_descriptor(&p).as_ref() != Some(d)
+    {
+        p[WEB_SOURCE] = photocraft_paint::tile::b64_encode(&d.to_bytes()).into();
+    }
     step("file.export.saveForWebLegacy", p)
 }
 
 pub(super) fn export_to(_: &str, p: &Value) -> Option<Descriptor> {
-    // A step recorded with the document's own name keeps only its folder (#5305).
-    let (path, in_folder) = match (jstr(p, "path").filter(|v| !v.is_empty()), jstr(p, "folder")) {
-        (Some(path), _) => (path, false),
-        (None, Some(folder)) => (folder, true),
-        (None, None) => return None,
+    let mut current = p.clone();
+    let source = current.as_object_mut()?.remove(WEB_SOURCE);
+    let canonical = web_descriptor(&current)?;
+    let Some(source) = source else {
+        return Some(canonical);
     };
+    let source = Descriptor::from_bytes(&photocraft_paint::tile::b64_decode(source.as_str()?)?).ok()?;
+    let Mapped::Steps(original) = export_from(&source) else {
+        return None;
+    };
+    let mut original = original.first()?.1.clone();
+    original.as_object_mut()?.remove(WEB_SOURCE);
+    let old = web_descriptor(&original)?;
+    // Unknown/malformed carried data must not be silently discarded. Supported edits write
+    // their current settings, including explicit neutral resets for Photoshop's sticky options.
+    Some(if old == canonical { source } else { canonical })
+}
+
+fn web_descriptor(p: &Value) -> Option<Descriptor> {
+    const KEYS: &[&str] = &[
+        "path",
+        "folder",
+        "format",
+        "interlaced",
+        "transparency",
+        "embedIcc",
+        "progressive",
+        "optimized",
+        "quality",
+        "colors",
+        "matte",
+        "convertToSrgb",
+        "metadata",
+        "dir",
+        "slices",
+        "imagesFolder",
+        "html",
+        "fileNaming",
+    ];
+    if p.as_object()?.iter().any(|(key, value)| !value.is_null() && !KEYS.contains(&key.as_str())) {
+        return None;
+    }
+    for key in ["interlaced", "transparency", "embedIcc", "progressive", "optimized", "convertToSrgb", "html"] {
+        if !matches!(p.get(key), None | Some(Value::Null | Value::Bool(_))) {
+            return None;
+        }
+    }
+    for key in ["path", "folder", "format", "matte", "metadata", "dir", "slices", "imagesFolder"] {
+        if !matches!(p.get(key), None | Some(Value::Null | Value::String(_))) {
+            return None;
+        }
+    }
+    for (key, min, max) in [("quality", 0.0, 100.0), ("colors", 2.0, 256.0)] {
+        if let Some(value) = p.get(key).filter(|v| !v.is_null())
+            && !value.as_f64().is_some_and(|n| web_whole(n, min, max))
+        {
+            return None;
+        }
+    }
+    let dir = jstr(p, "dir").filter(|v| !v.is_empty());
+    let images = if dir.is_some() {
+        if ["path", "folder"].iter().any(|key| p.get(key).is_some_and(|v| !v.is_null()))
+            || jstr(p, "slices").unwrap_or("all") != "all"
+            || jbool(p, "html") == Some(true)
+        {
+            return None;
+        }
+        Some(crate::web_cmds::web_images_folder(jstr(p, "imagesFolder").unwrap_or("images"), "file.export.saveForWebLegacy").ok()?)
+    } else {
+        if ["dir", "slices", "imagesFolder", "html"].iter().any(|key| p.get(key).is_some_and(|v| !v.is_null())) {
+            return None;
+        }
+        None
+    };
+    // A step recorded with the document's own name keeps only its folder (#5305).
+    let (path, in_folder) = if let Some(dir) = dir {
+        (dir, true)
+    } else {
+        match (jstr(p, "path").filter(|v| !v.is_empty()), jstr(p, "folder").filter(|v| !v.is_empty())) {
+            (Some(path), _) => (path, false),
+            (None, Some(folder)) => (folder, true),
+            (None, None) => return None,
+        }
+    };
+    if path.contains('\0') {
+        return None;
+    }
     let mut u = desc("SaveForWeb").with("Op  ", enm("SWOp", "OpSa")).with("Fmt ", enm("IRFm", lookup_back(WEB_FORMATS, jstr(p, "format").unwrap_or("png24"))?));
     if in_folder {
         u = u.with("DIDr", D::Boolean(true));
     }
-    for (key, param, default) in [
-        ("Intr", "interlaced", false),
-        ("Trns", "transparency", true),
-        ("EICC", "embedIcc", false),
-        ("Prgr", "progressive", false),
-        ("Optm", "optimized", true),
-    ] {
+    if let Some(images) = images {
+        u = u
+            .with("SWsl", enm("STsl", "SLAl"))
+            .with("SImg", D::Boolean(true))
+            .with("SHTM", D::Boolean(false))
+            .with("ovSF", D::Boolean(!images.is_empty()))
+            .with("ovSN", text(if images.is_empty() { "images" } else { &images }))
+            // Images Only has no background asset. Clear remembered paths/copying explicitly.
+            .with("obIA", D::Boolean(true))
+            .with("obCS", enm("STcs", "CS01"))
+            .with("obIP", text(""))
+            .with("ovCB", D::Boolean(false));
+    }
+    if let Some(naming) = p.get("fileNaming").filter(|v| !v.is_null()) {
+        if dir.is_none() {
+            return None;
+        }
+        u.items.extend(super::steps_web_naming::to(naming, jstr(p, "format").unwrap_or("png24"))?.items);
+    }
+    if let Some(convert) = jbool(p, "convertToSrgb") {
+        u = u.with("SWch", enm("STch", if convert { "CHsR" } else { "CHDc" }));
+    }
+    if let Some(metadata) = jstr(p, "metadata") {
+        let metadata = if metadata == "contact" { "copyrightAndContact" } else { metadata };
+        u = u.with("SWmd", enm("STmd", lookup_back(WEB_METADATA, metadata)?));
+    }
+    // JPEG uses Photoshop's recorded mode value; other formats retain the existing flag form.
+    if jstr(p, "format") == Some("jpeg") {
+        u = u.with("Pass", D::Integer(if jbool(p, "progressive") == Some(true) { 3 } else { 1 }));
+    } else {
+        u = u.with("Prgr", D::Boolean(jbool(p, "progressive").unwrap_or(false)));
+    }
+    for (key, param, default) in [("Intr", "interlaced", false), ("Trns", "transparency", true), ("EICC", "embedIcc", false), ("Optm", "optimized", true)] {
         u = u.with(key, D::Boolean(jbool(p, param).unwrap_or(default)));
     }
     if let Some(q) = jnum(p, "quality") {
@@ -222,9 +615,13 @@ pub(super) fn export_to(_: &str, p: &Value) -> Option<Descriptor> {
         u = u.with("NCol", long(c));
     }
     match jstr(p, "matte") {
-        Some("none") => u = u.with("Mtt ", D::Boolean(false)),
-        matte => {
-            let c = color_desc(matte.unwrap_or("#ffffff"))?;
+        None | Some("none") => u = u.with("Mtt ", D::Boolean(false)),
+        Some(matte) => {
+            let hex = matte.trim_start_matches('#');
+            if hex.len() != 6 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return None;
+            }
+            let c = color_desc(&format!("#{hex}"))?;
             u = u
                 .with("Mtt ", D::Boolean(true))
                 .with("MttR", get_num(&c, "Rd  ").map(long)?)
@@ -232,7 +629,17 @@ pub(super) fn export_to(_: &str, p: &Value) -> Option<Descriptor> {
                 .with("MttB", get_num(&c, "Bl  ").map(long)?);
         }
     }
-    Some(desc("null").with("Usng", D::Descriptor(u)).with("In  ", path_value(path)))
+    if jstr(p, "format") == Some("jpeg") {
+        // Photoshop remembers these options across exports; omission can inherit an old blur
+        // or mask even though native Save for Web does not apply one.
+        u = u
+            .with("blur", D::Double(0.0))
+            .with("QChS", D::Integer(0))
+            .with("QCUI", D::Integer(0))
+            .with("QChT", D::Boolean(false))
+            .with("QChV", D::Boolean(false));
+    }
+    Some(desc("null").with("Usng", D::Descriptor(u.with("In  ", path_value(path)))))
 }
 
 /// Import layer-retaining conversions; keep unsupported destructive choices verbatim.
@@ -367,7 +774,12 @@ pub(super) fn canvas_size_from(d: &Descriptor) -> Mapped {
     };
     p.insert("anchor".into(), anchor.into());
     if d.get("canvasExtensionColorType").is_some() {
-        let Some(c) = get_enum(d, "canvasExtensionColorType") else { return Mapped::Unsupported { harmless: false } };
+        let Some(D::Enumerated { type_id, value }) = d.get("canvasExtensionColorType") else { return Mapped::Unsupported { harmless: false } };
+        // A different enum type or a string spelling the char ID must not select a colour.
+        if !type_id.is("canvasExtensionColorType") || !matches!(value, Id::Code(_)) {
+            return Mapped::Unsupported { harmless: false };
+        }
+        let c = trimmed(value);
         match lookup(EXTENSION, &c) {
             Some(c) => {
                 p.insert("extensionColor".into(), c.into());

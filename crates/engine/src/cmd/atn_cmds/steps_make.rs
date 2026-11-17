@@ -540,11 +540,11 @@ fn type_shape_descriptor() -> Descriptor {
     desc("null").with("null", class_ref("contentLayer")).with("Usng", target_ref("textLayer"))
 }
 
-/// Make events another module maps: a type path, an artboard, a layer style or a frame,
-/// tried in that order.
+/// Make events another module maps: a user slice, a type path, an artboard, a layer style or a frame.
 fn delegated_make_from(d: &Descriptor) -> Option<Mapped> {
     let class = get_ref(d, "null").and_then(ref_class);
     match class.as_deref() {
+        Some("slice") => return Some(super::steps_slice::make_from(d)),
         Some("Path") => return Some(super::steps_type_path::from(d)),
         // Layer › New › Artboard and Artboard from Layers (#10723).
         Some("artboardSection") => return Some(super::steps_artboard_section::from(d)),
@@ -725,6 +725,9 @@ fn recorded_percent(opacity: f64) -> f64 {
 /// Write a creation step, refusing native options the target descriptor cannot carry; Type to
 /// Shape exports only without native options.
 pub(super) fn make_to(id: &str, p: &Value) -> Option<Descriptor> {
+    if id == "slice.new" {
+        return super::steps_slice::make_to(p);
+    }
     if id == "image.calculations" {
         return super::steps_calculations::to_descriptor(p);
     }
@@ -940,6 +943,21 @@ fn selection_from(d: &Descriptor) -> Mapped {
             "Prvs" => none("select.reselect"),
             _ => unsupported,
         },
+        Some(D::Reference(t)) if ref_class(t).as_deref() == Some("Path") => {
+            let destination = matches!(get_ref(d, "null"), Some([ReferenceItem::Property { class, key }])
+                if class.class_id.is("Chnl") && key.is("fsel"));
+            let source = matches!(t.as_slice(), [
+                ReferenceItem::Enumerated { class: path, type_id: path_type, value: path_value },
+                ReferenceItem::Enumerated { class: layer, type_id: layer_type, value: layer_value },
+            ] if path.class_id.is("Path") && path_type.is("Path") && path_value.is("vectorMask")
+                && layer.class_id.is("Lyr ") && layer_type.is("Ordn") && layer_value.is("Trgt"));
+            // Only the recorded plain replacement form is represented. Extra path-selection
+            // options or a different reference chain must not silently change the selection.
+            if d.items.len() != 4 || !destination || !source || d.get("Vrsn") != Some(&D::Integer(1)) || d.get("vectorMaskParams") != Some(&D::Boolean(true)) {
+                return unsupported;
+            }
+            step("select.loadSelection", json!({"channel": "vectorMask"}))
+        }
         Some(D::Reference(t)) => match (ref_class(t).as_deref(), target(t)) {
             (Some("Chnl"), Target::Ordinal(o)) if o == "Trsp" => {
                 let mut p = Map::new();
@@ -1184,6 +1202,7 @@ pub(super) fn set_from(d: &Descriptor) -> Mapped {
     let Some(r) = get_ref(d, "null") else { return Mapped::Unsupported { harmless: false } };
     let unsupported = Mapped::Unsupported { harmless: false };
     match (ref_class(r).as_deref(), target(r)) {
+        (Some("Prpr"), Target::Property(p)) if p == "Lefx" => super::steps_layer_style::replace_from(d),
         (Some("Path"), Target::Property(p)) if p == "WrPt" => super::steps_path::from(d),
         (Some("Chnl"), Target::Property(p)) if p == "fsel" => selection_from(d),
         // Quick Mask mode on (`set` of the document's quick-mask property); `clearEvent` turns it off.
@@ -1293,6 +1312,7 @@ pub(super) fn set_to(id: &str, p: &Value) -> Option<Descriptor> {
     let fsel = D::Reference(vec![ReferenceItem::Property { class: class("Chnl"), key: Id::new("fsel") }]);
     let sel = |t: D| desc("null").with("null", fsel.clone()).with("T   ", t);
     Some(match id {
+        super::steps_layer_style::REPLACE => return super::steps_layer_style::style_to(id, p),
         "path.set" => return super::steps_path::to(p),
         super::steps_measurement::SET_SCALE => return super::steps_measurement::to(p),
         "select.all" => sel(enm("Ordn", "Al  ")),
@@ -1307,6 +1327,22 @@ pub(super) fn set_to(id: &str, p: &Value) -> Option<Descriptor> {
             return None;
         }
         "select.loadSelection" => match jstr(p, "channel")? {
+            "vectorMask" => {
+                // This form addresses the active layer. Do not drop another layer/document
+                // selector, or fall through to writing a channel literally named vectorMask.
+                if p.get("layer").is_some_and(|v| !v.is_null())
+                    || p.get("document").is_some_and(|v| !v.is_null())
+                    || p.as_object()?.keys().any(|k| !matches!(k.as_str(), "channel" | "layer" | "document" | "invert" | "operation"))
+                {
+                    return None;
+                }
+                sel(D::Reference(vec![
+                    ReferenceItem::Enumerated { class: class("Path"), type_id: Id::new("Path"), value: Id::new("vectorMask") },
+                    ReferenceItem::Enumerated { class: class("Lyr "), type_id: Id::new("Ordn"), value: Id::new("Trgt") },
+                ]))
+                .with("Vrsn", D::Integer(1))
+                .with("vectorMaskParams", D::Boolean(true))
+            }
             "transparency" => {
                 let mut r = vec![ReferenceItem::Enumerated { class: class("Chnl"), type_id: Id::new("Chnl"), value: Id::new("Trsp") }];
                 if p.get("layer").is_some_and(|v| !v.is_null()) {

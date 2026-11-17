@@ -51,6 +51,7 @@ mod steps_gradient;
 mod steps_image;
 mod steps_layer;
 mod steps_layer_style;
+mod steps_layers_to_files;
 mod steps_lookup;
 mod steps_make;
 mod steps_measurement;
@@ -63,9 +64,11 @@ mod steps_other;
 mod steps_render;
 mod steps_selection;
 mod steps_shape_blur;
+mod steps_slice;
 mod steps_stack;
 mod steps_stylize;
 mod steps_video;
+mod steps_web_naming;
 mod tables;
 
 #[cfg(test)]

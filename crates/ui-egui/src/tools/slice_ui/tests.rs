@@ -7,6 +7,35 @@ fn app() -> PhotocraftApp {
 }
 
 #[test]
+fn action_slice_selection_and_pointer_selection_share_the_engine_target() {
+    let mut app = app();
+    app.ui.tool = Tool::SliceSelect;
+    let id = app.run("slice.new", json!({"rect":[10,10,30,20]})).unwrap()["slice"].clone();
+    app.session.actions.list = vec![photocraft_engine::actions_cmds::Action::new("Select", vec![("slice.select".into(), json!({"point":[90.0,70.0]}))])];
+    app.run("actions.play", json!({"action":"Select"})).unwrap();
+    let selected = app.session.execute("slice.list", json!({})).unwrap()["selected"].clone();
+    assert_eq!(selected["origin"], "auto");
+    assert_eq!(app.ui.slices.selected.map(|n| n as u64), selected["number"].as_u64());
+    assert_eq!(app.session.active().unwrap().doc.slices.list.len(), 1, "selection does not promote the auto slice");
+    pointer(&mut app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    pointer(&mut app, ToolEvent::Up { x: 20.0, y: 20.0 }, egui::Modifiers::NONE);
+    assert_eq!(app.session.execute("slice.list", json!({})).unwrap()["selected"]["id"], id);
+}
+
+#[test]
+fn slice_tool_selection_follows_the_active_document() {
+    let mut app = app();
+    app.ui.tool = Tool::SliceSelect;
+    let id = app.run("slice.new", json!({"rect":[10,10,30,20]})).unwrap()["slice"].clone();
+    app.run("file.new", json!({"width":100,"height":80})).unwrap();
+    assert_eq!(app.ui.slices.selected, None);
+    app.run("slice.select", json!({"point":[90.0,70.0]})).unwrap();
+    app.run("document.activate", json!({"offset":-1})).unwrap();
+    assert_eq!(app.session.execute("slice.list", json!({})).unwrap()["selected"]["id"], id);
+    assert!(app.ui.slices.selected.is_some());
+}
+
+#[test]
 fn slice_tool_draws_and_select_tool_moves() {
     let mut app = app();
     app.ui.tool = Tool::Slice;

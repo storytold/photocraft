@@ -1,5 +1,5 @@
 use super::descriptors::{
-    PX, Target, ang, boolean, class, code, desc, enm, enumerated, get_bool, get_enum, get_list, get_num, get_obj, get_ref, jbool, jnum, jstr, layer_ref,
+    PT, PX, Target, ang, boolean, class, code, desc, enm, enumerated, get_bool, get_enum, get_list, get_num, get_obj, get_ref, jbool, jnum, jstr, layer_ref,
     layer_target, long, num, pct, px, ref_class, target, trimmed,
 };
 use super::events::pixel_target;
@@ -31,17 +31,29 @@ pub(super) fn transform_from(d: &Descriptor) -> Mapped {
     let r: &[ReferenceItem] = get_ref(d, "null").unwrap_or(&target_layer);
     let unsupported = Mapped::Unsupported { harmless: false };
     let mut p = Map::new();
+    if d.get("Ofst").is_some() && get_obj(d, "Ofst").is_none() {
+        return unsupported;
+    }
     if let Some(o) = get_obj(d, "Ofst") {
-        let in_px = |k: &str| matches!(o.get(k), Some(D::UnitFloat { unit: PX, .. }));
-        if !in_px("Hrzn") || !in_px("Vrtc") {
+        let component = |key| match o.get(key) {
+            Some(D::UnitFloat { unit, value }) if value.is_finite() && (*unit == PX || *unit == PT) => Some((*unit, *value)),
+            _ => None,
+        };
+        let (Some((ux, x)), Some((uy, y))) = (component("Hrzn"), component("Vrtc")) else { return unsupported };
+        if o.items.len() != 2 {
             return unsupported;
         }
-        if let Some(x) = get_num(o, "Hrzn") {
-            p.insert("dx".into(), x.into());
+        let points = (ux == PT && x != 0.0) || (uy == PT && y != 0.0);
+        if points {
+            // The selection command has no physical-unit offset, and two nonzero mixed units
+            // cannot share one conversion at an unknown playback DPI. Exact zeros are unitless.
+            if ref_class(r).as_deref() != Some("Lyr") || (ux == PX && x != 0.0) || (uy == PX && y != 0.0) {
+                return unsupported;
+            }
+            p.insert("offsetUnits".into(), "pt".into());
         }
-        if let Some(y) = get_num(o, "Vrtc") {
-            p.insert("dy".into(), y.into());
-        }
+        p.insert("dx".into(), x.into());
+        p.insert("dy".into(), y.into());
     }
     for (key, param) in [("Wdth", "scaleX"), ("Hght", "scaleY"), ("Angl", "rotate")] {
         if let Some(v) = get_num(d, key) {
@@ -102,6 +114,19 @@ pub(super) fn transform_to(id: &str, p: &Value) -> Option<Descriptor> {
     if ["quad", "corners", "matrix", "rect"].iter().any(|k| given(k)) {
         return None;
     }
+    let unit = match p.get("offsetUnits") {
+        None | Some(Value::Null) => PX,
+        Some(Value::String(units)) if units == "px" => PX,
+        Some(Value::String(units)) if units == "pt" && id == "edit.transform" => PT,
+        _ => return None,
+    };
+    for key in ["dx", "dy"] {
+        if let Some(value) = p.get(key).filter(|value| !value.is_null())
+            && !value.as_f64().is_some_and(f64::is_finite)
+        {
+            return None;
+        }
+    }
     // Skew and warp still have no descriptor mapping (#7517, #7518, #7519).
     let nonzero = |k: &str| p.get(k).is_some_and(|v| !v.is_null() && v.as_f64() != Some(0.0));
     if nonzero("skewX") || nonzero("skewY") || ["warp", "style", "mesh", "grid"].iter().any(|k| given(k)) {
@@ -120,7 +145,14 @@ pub(super) fn transform_to(id: &str, p: &Value) -> Option<Descriptor> {
         None => "Qcsa",
     };
     let mut d = desc("null").with("null", target).with("FTcs", enm("QCSt", reference));
-    d = d.with("Ofst", D::Descriptor(desc("Ofst").with("Hrzn", px(jnum(p, "dx").unwrap_or(0.0))).with("Vrtc", px(jnum(p, "dy").unwrap_or(0.0)))));
+    d = d.with(
+        "Ofst",
+        D::Descriptor(
+            desc("Ofst")
+                .with("Hrzn", D::UnitFloat { unit, value: jnum(p, "dx").unwrap_or(0.0) })
+                .with("Vrtc", D::UnitFloat { unit, value: jnum(p, "dy").unwrap_or(0.0) }),
+        ),
+    );
     for (key, param) in [("Wdth", "scaleX"), ("Hght", "scaleY")] {
         if let Some(v) = jnum(p, param) {
             d = d.with(key, pct(v));

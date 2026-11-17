@@ -113,6 +113,7 @@ row; the action still adds only one Undo entry.
 | `Dspc` | despeckle | Despeckle | `filter.noise.despeckle` |
 | `DfrC` | differenceClouds | Difference Clouds | `filter.render.differenceClouds` |
 | `Dfs ` | diffuse | Diffuse | `filter.stylize.diffuse` |
+| (string ID only) | divide | Divide Slice | `slice.divide` |
 | `Dplc` | duplicate | Duplicate | `layer.duplicate`, `image.duplicate` |
 | `DstS` | dustAndScratches | Dust & Scratches | `filter.noise.dustAndScratches` |
 | (string ID only) | placedLayerEditContents | Edit Contents | `layer.smartObjects.editContents` |
@@ -139,7 +140,7 @@ row; the action still adds only one Undo entry.
 | `HghP` | highPass | High Pass | `filter.other.highPass` |
 | `HsbP` | HsbP | HSB/HSL | `filter.other.hsbHsl` |
 | `HStr` | hueSaturation | Hue/Saturation | `image.adjustments.hueSaturation` |
-| (string ID only) | conditional | If | `actions.conditional` |
+| (string ID only) | conditional | [If](#conditional-identifiers) | `actions.conditional` |
 | `ImgS` | imageSize | Image Size | `image.imageSize` |
 | `Invs` | inverse | Inverse | `select.inverse` |
 | `Invr` | invert | Invert | `image.adjustments.invert` |
@@ -147,8 +148,7 @@ row; the action still adds only one Undo entry.
 | `CtTL` | cutToLayer | Layer Via Cut | `layer.new.layerViaCut` |
 | `LnsF` | lensFlare | Lens Flare | `filter.render.lensFlare` |
 | `Lvls` | levels | Levels | `image.adjustments.levels`, `image.autoTone`, `image.autoContrast` |
-| `Mk  ` | make | Make | `image.calculations`, `layer.layerStyle.createLayer`, `layer.new.layer`, `layer.new.group`, `layer.groupLayers`, `layer.new.frameFromLayers` (Layer › New › Frame from Layers), `layer.duplicate`, `layer.new.layerViaCopy`, `layer.new.layerViaCut`, `layer.newFillLayer.solidColor`, `layer.newFillLayer.pattern`, `layer.newFillLayer.gradient`, `layer.newAdjustmentLayer.levels`, `layer.newAdjustmentLayer.curves`, `layer.newAdjustmentLayer.hueSaturation`, `layer.newAdjustmentLayer.brightnessContrast`, `layer.newAdjustmentLayer.threshold`, `layer.newAdjustmentLayer.posterize`, `layer.newAdjustmentLayer.invert`, `layer.newAdjustmentLayer.colorBalance`, `layer.newAdjustmentLayer.vibrance`, `layer.newAdjustmentLayer.exposure`, `layer.newAdjustmentLayer.photoFilter`, `layer.newAdjustmentLayer.blackWhite`, `layer.newAdjustmentLayer.channelMixer`, `layer.newAdjustmentLayer.selectiveColor`, `layer.newAdjustmentLayer.gradientMap`, `layer.layerMask.revealAll`, `layer.layerMask.hideAll`, `layer.layerMask.revealSelection`, `layer.layerMask.hideSelection`, `file.new`, `file.newFromClipboard`, `history.newSnapshot`, `type.convertToShape`, `type.createWorkPath` |
-| `Mk  ` | make | Make | `image.calculations`, `layer.layerStyle.createLayer`, `layer.new.layer`, `layer.new.group`, `layer.groupLayers`, `layer.duplicate`, `layer.new.layerViaCopy`, `layer.new.layerViaCut`, `layer.newFillLayer.solidColor`, `layer.newFillLayer.pattern`, `layer.newFillLayer.gradient`, `layer.newAdjustmentLayer.levels`, `layer.newAdjustmentLayer.curves`, `layer.newAdjustmentLayer.hueSaturation`, `layer.newAdjustmentLayer.brightnessContrast`, `layer.newAdjustmentLayer.threshold`, `layer.newAdjustmentLayer.posterize`, `layer.newAdjustmentLayer.invert`, `layer.newAdjustmentLayer.colorBalance`, `layer.newAdjustmentLayer.vibrance`, `layer.newAdjustmentLayer.exposure`, `layer.newAdjustmentLayer.photoFilter`, `layer.newAdjustmentLayer.blackWhite`, `layer.newAdjustmentLayer.channelMixer`, `layer.newAdjustmentLayer.selectiveColor`, `layer.newAdjustmentLayer.gradientMap`, `layer.layerMask.revealAll`, `layer.layerMask.hideAll`, `layer.layerMask.revealSelection`, `layer.layerMask.hideSelection`, `file.new`, `file.newFromClipboard`, `history.newSnapshot`, `type.convertToShape`, `type.createWorkPath`, `layer.new.artboard` (Layer › New › Artboard), `layer.new.artboardFromLayers` (Layer › New › Artboard from Layers) |
+| `Mk  ` | make | Make | `image.calculations`, `layer.layerStyle.createLayer`, `layer.new.layer`, `layer.new.group`, `layer.groupLayers`, `layer.new.frameFromLayers` (Layer › New › Frame from Layers), `layer.duplicate`, `layer.new.layerViaCopy`, `layer.new.layerViaCut`, `layer.newFillLayer.solidColor`, `layer.newFillLayer.pattern`, `layer.newFillLayer.gradient`, `layer.newAdjustmentLayer.levels`, `layer.newAdjustmentLayer.curves`, `layer.newAdjustmentLayer.hueSaturation`, `layer.newAdjustmentLayer.brightnessContrast`, `layer.newAdjustmentLayer.threshold`, `layer.newAdjustmentLayer.posterize`, `layer.newAdjustmentLayer.invert`, `layer.newAdjustmentLayer.colorBalance`, `layer.newAdjustmentLayer.vibrance`, `layer.newAdjustmentLayer.exposure`, `layer.newAdjustmentLayer.photoFilter`, `layer.newAdjustmentLayer.blackWhite`, `layer.newAdjustmentLayer.channelMixer`, `layer.newAdjustmentLayer.selectiveColor`, `layer.newAdjustmentLayer.gradientMap`, `layer.layerMask.revealAll`, `layer.layerMask.hideAll`, `layer.layerMask.revealSelection`, `layer.layerMask.hideSelection`, `file.new`, `file.newFromClipboard`, `history.newSnapshot`, `type.convertToShape`, `type.createWorkPath`, `layer.new.artboard` (Layer › New › Artboard), `layer.new.artboardFromLayers` (Layer › New › Artboard from Layers), `slice.new` (rectangular user slices)|
 | (string ID only) | animationFramesFromLayers | Make Frames from Layers |  |
 | (string ID only) | matchColor | Match Color | `image.adjustments.matchColor` |
 | `Mxm ` | maximum | Maximum | `filter.other.maximum` |
@@ -185,13 +185,13 @@ row; the action still adds only one Undo entry.
 | `Rple` | ripple | Ripple | `filter.distort.ripple` |
 | `Rtte` | rotateEventEnum | Rotate | `image.imageRotation.90cw`, `image.imageRotation.90ccw`, `image.imageRotation.180`, `image.rotation.arbitrary`, `edit.transform.rotate90Cw`, `edit.transform.rotate90Ccw`, `edit.transform.rotate180` |
 | `save` | save | Save | `file.save`, `file.saveAs`, `file.saveACopy` |
-| `slct` | select | Select | `layer.select`, `layer.selectAbove`, `layer.selectBelow`, `layer.addAboveToSelection`, `layer.addBelowToSelection`, `layer.selectTop`, `layer.selectBottom`, `channel.target`, `edit.undo`, `edit.redo`, `view.fitOnScreen`, `view.actualPixels`, `view.zoomIn`, `view.zoomOut`, `document.activate` |
+| `slct` | select | Select | `layer.select`, `layer.selectAbove`, `layer.selectBelow`, `layer.addAboveToSelection`, `layer.addBelowToSelection`, `layer.selectTop`, `layer.selectBottom`, `channel.target`, `edit.undo`, `edit.redo`, `history.selectState`, `history.selectSnapshot`, `slice.select`, `view.fitOnScreen`, `view.actualPixels`, `view.zoomIn`, `view.zoomOut`, `document.activate` |
 | (string ID only) | selectAllLayers | Select All Layers | `select.allLayers` |
 | (string ID only) | refineSelectionEdge | Select and Mask | `select.refineEdge` |
 | (string ID only) | smartBrushWorkspace | Select and Mask | `select.refineEdge` |
 | (string ID only) | autoCutout | Select Subject | `select.subject` |
 | `SlcC` | selectiveColor | Selective Color | `image.adjustments.selectiveColor` |
-| `setd` | set | Set | `select.all`, `select.deselect`, `select.reselect`, `select.loadSelection`, `select.rect`, `select.lasso`, `select.editInQuickMaskMode`, `tools.setColors`, `layer.setProps`, `layer.renameLayer`, `layer.setLabelColor`, `layer.setAdjustment`, `layer.fill.pattern.set`, `gradient.fill.set`, `layer.new.layerFromBackground`, `layer.layerStyle.blendingOptions`, `layer.smartFilter.blendingOptions`, `image.analysis.setMeasurementScale` (Set Measurement Scale › Custom) |
+| `setd` | set | Set | `select.all`, `select.deselect`, `select.reselect`, `select.loadSelection`, `select.rect`, `select.lasso`, `select.editInQuickMaskMode`, `tools.setColors`, `layer.setProps`, `layer.renameLayer`, `layer.setLabelColor`, `layer.setAdjustment`, `layer.fill.pattern.set`, `gradient.fill.set`, `layer.new.layerFromBackground`, `layer.layerStyle.blendingOptions`, `layer.layerStyle.replace`, `layer.smartFilter.blendingOptions`, `image.analysis.setMeasurementScale` (Set Measurement Scale › Custom) |
 | (string ID only) | adaptCorrect | Shadows/Highlights | `image.adjustments.shadowsHighlights` |
 | `Shrp` | sharpen | Sharpen | `filter.sharpen.sharpen` |
 | `ShrE` | sharpenEdges | Sharpen Edges | `filter.sharpen.sharpenEdges` |
@@ -242,6 +242,7 @@ row; the action still adds only one Undo entry.
 | (string ID only) | recordMeasurements | Record Measurements | `image.analysis.recordMeasurements` |
 | (string ID only) | CropPhotosAuto0001 | Crop and Straighten Photos | `file.automate.cropAndStraightenPhotos` |
 | (string ID only) | 3caa3434-cb67-11d1-bc43-0060b0a13dc4 | Fit Image (script event; pixel box sides) | `file.automate.fitImage` |
+| (string ID only) | 6f1c2cf5-4a97-4e32-8f59-f5d7a087adef | Export Layers to Files (recorded JPEG settings with ICC) | `file.export.layersToFiles` |
 | (string ID only) | placedLayerExportContents | Export Contents | `layer.smartObjects.exportContents` |
 | (string ID only) | placedLayerConvertToLinked | Convert to Linked | `layer.smartObjects.convertToLinked` |
 | (string ID only) | placedLayerRelinkToFile | Relink to File | `layer.smartObjects.relinkToFile` |
@@ -475,20 +476,130 @@ reference chains remain complete kept Photoshop steps. Native export supports
 the implicit active text layer only; explicit layer targets refuse export.
 This is another implemented subset of #10723, not support for its remaining events.
 
+### Conditional identifiers
+
+The `conditional` event stores its condition in the `null` field as a `Cndt` enumeration.
+These Photoshop IDs map to predicates already supported by `actions.conditional`:
+
+| Photoshop condition ID | Native predicate |
+|---|---|
+| `Ornt` | `landscape` |
+| `Sqr ` | `square` |
+| `RGB ` | `modeIsRGB` |
+| `CMYK` | `modeIsCMYK` |
+| `Gryc` | `modeIsGrayscale` |
+| `EghB` | `depth8` |
+| `16Bt` | `depth16` |
+| `32Bt` | `depth32` |
+| `Sved` | `unsaved` |
+| `fsel` | `hasSelection` |
+| `Lyrs` | `hasLayers` |
+| `hasAlpha` | `hasAlphaChannels` |
+| `Opn ` | `isOpen` |
+| `Bckg` | `isBackground` |
+| `Pxel` | `isPixelLayer` |
+| `Adjs` | `isAdjustmentLayer` |
+| `Shp ` | `isShapeLayer` |
+| `Grup` | `isLayerGroup` |
+| `locked` | `isLocked` |
+| `Vsbl` | `isVisible` |
+| `hasUserMask` | `hasPixelMask` |
+| `hasVectorMask` | `hasVectorMask` |
+| `Effc` | `hasEffects` |
+
+Import accepts the existing native predicate names too. Export writes the Photoshop IDs above,
+including their four-character space padding. `SRGB` (Document Profile Is sRGB) and unknown
+condition IDs remain kept Photoshop steps with their original descriptors.
+
 ### Settings retained by mapped events
 
-- Transform keeps its recorded `FTcs` reference point. Show with `TglO` true maps to
-  `layer.showOnly`; repeating it restores the other layers' visibility.
+- Export Layers to Files maps recorded JPEG (`FlTy` double 1) destinations, prefixes, Visible
+  Layers Only and text quality 0–12 when ICC embedding is enabled. It exports individual art
+  layers recursively, retains parent effects and clipping, and numbers art layers and groups
+  independently, including hidden siblings. The original script message and inactive file-type
+  settings survive saving and parameter edits. Other formats, ICC suppression and unknown fields
+  stay kept steps. Saving a native step to this event requires its valid recorded descriptor;
+  the locale-sensitive script message is never invented.
+
+- Transform keeps its recorded `FTcs` reference point. Exact zero offsets in points (`#Rlt`)
+  normalize to zero pixels on export. Nonzero layer offsets keep points as `offsetUnits: "pt"`
+  and resolve at the playback document's DPI; two nonzero mixed units and point offsets for
+  Transform Selection remain kept steps.
+  Show with `TglO` true maps to `layer.showOnly`; repeating it restores the other layers' visibility.
 - Make keeps top-level group names, new-layer clipping (`Usng.Grup`) and adjustment colour labels
   (`Usng.Clr `). Layer via Copy / Cut keeps names, blend modes, opacity and colour labels.
 - Loading another layer's transparency keeps its source reference. Background property references
   remain independent of translated names; ordinary layer-name references remain names.
+  Loading the active layer's vector mask (`Path.vectorMask`, `Vrsn` 1, `vectorMaskParams` true)
+  maps to `select.loadSelection` and saves back as a path reference. Other vector-mask source
+  references and additional path-selection options remain kept steps.
+- Selecting a named snapshot (`SnpS`) resolves its exact name at playback through
+  `history.selectSnapshot`; a missing or ambiguous name fails without restoring another snapshot.
+  Native snapshot ids are session-local and do not export as Photoshop references.
+- Selecting a relative history state keeps its nonzero `HstS` offset through
+  `history.selectState`. The target resolves at playback and must be within the available history;
+  an invalid target fails before moving. Zero offsets, index/ID references and extra options remain
+  kept steps.
+- Selecting a single slice by a pixel point maps to `slice.select`. It shares the Slice Select
+  tool's per-document target without editing or promoting auto slices. Stored slices retain their
+  identity when numbers change; an auto region that no longer exists is not replaced by its old
+  display number. Additive selection, other units and extra options remain kept steps; native
+  selection clearing does not export to ATN.
+- Slice division by `slicesDown` and/or `slicesAcross` maps to `slice.divide` on the current
+  selected user or auto slice. Counts are bounded by the native limits (1–1000 per axis and at
+  most 10,000 parts, with at least one axis greater than 1). Pixel-size division, scoped references
+  and extra options remain kept steps. Native division by stored ID or display number does not
+  export as a current-target reference.
 - Close without `Svng` preserves the unanswered save choice. Headless playback refuses to discard a
   changed document. Native `file.close` still defaults to discard; `save: "ask"` opts into this policy.
+- Save for Web accepts `In  ` inside `Usng` and the existing outer destination, exporting it inside
+  `Usng`. `DIDr` retains a folder destination under each playback document's name. Duplicate or
+  conflicting destinations, malformed paths and unrepresented slice/output settings remain kept
+  steps; unsupported native export options are refused. An omitted matte keeps the native no-matte
+  default.
+- Save for Web keeps its `SWch` choice independently of `EICC`: `CHsR` converts to sRGB and
+  `CHDc` keeps the document profile. Its `SWmd` values `MDNn`, `MDCp`, `MDCC`, `MDAx` and `MDAl`
+  map to the existing metadata modes None, Copyright, Copyright and Contact, All Except Camera
+  Info and All. Unknown enum values/types and additional unrepresented output settings remain
+  kept steps.
+- Save for Web JPEG's integer `Pass` values 1 and 3 map to the existing non-progressive and
+  progressive modes and export in that form. The existing `Prgr` flag still imports; simultaneous
+  `Pass`/`Prgr`, other pass values and unrepresented JPEG settings remain kept steps. The native
+  encoder determines the progressive scan layout; this mapping does not add a custom scan count.
+- Save for Web JPEG accepts disabled blur (`blur` double 0) and quality-mask options (`QChS`
+  and `QCUI` integer 0, `QChT` and `QChV` false). Saving native JPEG steps explicitly resets
+  these remembered options. Unchanged recordings retain their descriptor; active options,
+  malformed values and these fields on other formats remain kept steps.
+- Save for Web's explicit All Slices (`SWsl.STsl.SLAl`), Images Only (`SImg` true, `SHTM` false)
+  folder output maps to `dir` and `slices: "all"`, including auto slices. `ovSF`/`ovSN` keep images
+  beside the destination or in a validated relative subfolder. Partial output blocks, other slice
+  choices, HTML output, nonempty background paths and unrepresented naming settings remain kept steps.
+- Images Only recordings retain supported inactive HTML/layout preferences when their background
+  path is explicitly empty. Unchanged settings save verbatim; edited and native exports clear
+  background copying. Partial background blocks, other recorded forms and unknown fields stay kept.
+- Images Only naming maps document/slice names, literal text, decimal/alphabetic file serials,
+  separators and lower/uppercase extensions from a complete nine-component `ovNC` block with
+  Windows compatibility enabled. `ovFN` retains the whole-image filename and the basename for
+  generated slice names; `ovCU` converts spaces to hyphens. File serials skip no-image cells,
+  consecutive separator components use the first, and trailing separator components are omitted.
+  Unchanged recordings retain all original naming fields, including `ovCM`. Native playback
+  preserves Unicode text and refuses unrepresented ImageReady rollover documents, unsafe or
+  oversized filenames. Other naming components, partial blocks and unknown fields stay kept.
+- Duplicate Layer retains a named `T` document destination and resolves it against open documents
+  at playback, refusing absent or ambiguous names. It copies the referenced layer, or the selected
+  layers for `Trgt`, at their existing canvas positions and leaves the source active. Stack indexes
+  and ordinals retain their reference form; recording-session output ids are not reused. Other
+  destination forms, unknown options and malformed hints remain kept steps.
+- A Set of the active layer's whole `Lefx` property containing one complete RGB Color Overlay
+  at 100% style scale maps to `layer.layerStyle.replace`, clearing previous effects. Per-effect
+  enabled state, blend and opacity are retained; the native command keeps the layer's master
+  Effects visibility. Unedited steps retain their original descriptor. Other effects, colour
+  spaces, scale values, explicit master switches and unknown settings remain kept steps.
 - Photo Filter converts recorded Lab colours through `craft-cms`.
 - Direct Vibrance and Gradient Map save as the string events `vibrance` and `gradientMapEvent`.
   Stroke Outside uses `StrL.Otsd`, group Pass Through uses `BlnM.passThrough`, Canvas Size extension
-  colours use `FrgC` and `Clr `, and Absolute Colorimetric intent uses `Inte.AClr`.
+  colours use `FrgC`, `BckC` and `Clr `, and Absolute Colorimetric intent uses `Inte.AClr`.
+  Legacy `Bckg` still imports as the background colour.
 - Make adjustment layers keeps surrounding `Usng.Opct` as layer opacity, independently of the
   adjustment settings. Recorded percentages use eight-bit layer-opacity storage at every document
   depth: 70 % becomes 179/255. Native creation accepts an optional 0..1 `opacity` fraction.
@@ -694,11 +805,11 @@ own binding. Authorization sees the redirected path before opening. No executed
 Open is a per-file failure. Save and Close accepts only a document opened from
 that input or its recorded Save snapshot, including after Close.
 
-The Open ATN converter admits only its represented path field. Richer recorded
-Open settings remain complete steps; native format/decoder options execute but
-are refused on ATN export until their wire representation is supported. This does
-not claim parity for unrepresented Open options. Native Batch keeps automatic
-opening when overrideOpen is false or omitted.
+Open maps its recorded path, accepting optional Boolean `dontRecord` / `forceNotify`
+and non-negative integer `DocI` as recording metadata. Export omits that metadata.
+Decoder options, unknown or duplicate fields, and malformed metadata remain complete
+kept steps; native format/decoder options still refuse ATN export. Native Batch
+keeps automatic opening when overrideOpen is false or omitted.
 
 Suppress Color Profile Warnings applies a private snapshot of the caller's color
 and import settings to each scratch input without profile questions. Import
@@ -825,8 +936,9 @@ differences that do not change what a step does.
 - Save writes the 4-character event code where the file had the string ID, writes `null` as the
   top-level class (the application writes the event code), and writes an empty descriptor for steps that
   had none.
-- Ids of the recording session (`LyrI`, `DocI`, `Idnt`, `layerSectionStart`, `layerSectionEnd`, `Vrsn`,
-  `forceNotify`) and default flags (`MkVs` false, `Adjs` false) are not written back.
+- Ids of the recording session (`LyrI`, `DocI`, `Idnt`, `layerSectionStart`, `layerSectionEnd`, `Vrsn`),
+  recording flags (`dontRecord`, `forceNotify`) and default flags (`MkVs` false, `Adjs` false)
+  are not written back, except `Vrsn` 1 when loading a vector mask.
 - An adjustment layer's values equal to the defaults are not written back (other values are).
 - Colours are kept as 8-bit values (51.0031 becomes 51); gradient names become "Custom".
 - A loaded Gradient Fill Make or Set (`gradientLayer`) saves back as the recorded descriptor until
@@ -2341,8 +2453,10 @@ Nested values as recorded (example values):
 #### Distribute
 
 - Event: `Dstr` / `distort`
-- PhotoCraft command: `layer.distribute.leftEdges (one command per edge)`
-- `Usng` selects the edge or centre; one enum value per Distribute menu item.
+- PhotoCraft commands: the six edge/centre `layer.distribute.*` commands, plus
+  `layer.distribute.horizontally` and `layer.distribute.vertically` for equal gaps.
+- `Usng` selects the edge, centre or spacing mode; `ADSt.AdSH` and `ADSt.AdSV`
+  select equal horizontal and vertical gaps, respectively.
 - Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
 
 | Key | String ID | Type | Unit | Example value | Allowed |

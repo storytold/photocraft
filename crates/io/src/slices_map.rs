@@ -25,6 +25,8 @@ pub fn slices_from_psd(raw: Option<&[u8]>, doc: &Document) -> Slices {
     let list = res
         .slices
         .iter()
+        // PSD stores frontmost first; native slice edits put later slices on top.
+        .rev()
         .filter(|s| s.origin != 0)
         .map(|s| {
             let layer = s.layer_id.and_then(|p| by_psd_id.get(&p).copied()).filter(|_| s.origin == 1);
@@ -76,6 +78,8 @@ pub fn export_resource(doc: &Document, layer_ids: &HashMap<LayerId, u32>) -> (Op
         .slices
         .list
         .iter()
+        // Match Photoshop's front-to-back order, or overlapping slices hide the wrong one.
+        .rev()
         .map(|s| SliceRecord {
             id: s.id,
             group_id: s.group_id,
@@ -189,5 +193,44 @@ mod tests {
         assert!(ids.contains(&u32::MAX));
         assert!(ids.contains(&1));
         assert_eq!(ids.iter().collect::<std::collections::HashSet<_>>().len(), ids.len());
+    }
+
+    /// Photoshop's resource lists the inner (front) slice first. Native slice edits append
+    /// the new front slice, so importing that list unchanged would hide it behind the outer.
+    #[test]
+    fn photoshop_slice_order_keeps_the_front_slice_visible() {
+        let mut doc = Document::new("slices.psd", Size::new(32, 32), ColorMode::Rgb, SampleType::U8);
+        let resource = SlicesResource {
+            version: 6,
+            bounds: [0, 0, 32, 32],
+            group_name: "Slices".into(),
+            slices: vec![
+                SliceRecord { id: 2, origin: 2, kind: 1, name: "Inner".into(), rect: [8, 8, 24, 24], ..Default::default() },
+                SliceRecord { id: 1, origin: 2, kind: 1, name: "Outer".into(), rect: [0, 0, 32, 32], ..Default::default() },
+            ],
+        };
+        let raw = resource.to_bytes();
+        doc.slices = slices_from_psd(Some(&raw), &doc);
+        assert_eq!(doc.slices.list.iter().map(|s| s.id).collect::<Vec<_>>(), [1, 2]);
+        let visible = slices::resolve(&doc);
+        assert_eq!(visible.len(), 5, "the outer slice has four visible pieces around the inner");
+        assert_eq!(visible.iter().find(|s| s.id == Some(2)).unwrap().rect, Rect::new(8, 8, 24, 24));
+        doc.metadata.psd_resources.push((SLICES, String::new(), std::sync::Arc::new(raw)));
+        assert_eq!(export_resource(&doc, &HashMap::new()), (None, None), "preserve an unchanged original resource");
+    }
+
+    #[test]
+    fn native_slice_export_writes_frontmost_first_for_photoshop() {
+        let mut doc = Document::new("slices.psd", Size::new(32, 32), ColorMode::Rgb, SampleType::U8);
+        doc.slices.list = vec![
+            Slice { id: 1, name: "Outer".into(), rect: Rect::new(0, 0, 32, 32), ..Default::default() },
+            Slice { id: 2, name: "Inner".into(), rect: Rect::new(8, 8, 24, 24), ..Default::default() },
+        ];
+        let (raw, warning) = export_resource(&doc, &HashMap::new());
+        assert!(warning.is_none());
+        let raw = raw.flatten().unwrap();
+        let resource = SlicesResource::from_bytes(&raw).unwrap();
+        assert_eq!(resource.slices.iter().filter(|s| s.origin != 0).map(|s| s.id).collect::<Vec<_>>(), [2, 1]);
+        assert_eq!(slices_from_psd(Some(&raw), &doc).list, doc.slices.list);
     }
 }

@@ -80,7 +80,7 @@ fn a_result_past_the_warps_reach_is_refused_not_clipped() {
 fn a_gigapixel_layer_transforms_within_memory_usage() {
     let src = Rect::new(0, 0, 35_020, 31_171);
     let r = [0.0, 0.0, 35_020.0, 31_171.0];
-    let h = relative_matrix(&json!({"scaleX": 90, "scaleY": 90, "rotate": 15}), r).unwrap().unwrap();
+    let h = relative_matrix(&json!({"scaleX": 90, "scaleY": 90, "rotate": 15}), r, 1.0).unwrap().unwrap();
     assert_eq!(warp_output_size(src, &h), Some((37_708, 35_259)), "the report's result, past the old limit");
     assert!(check_budget_with_limit(src, &h, "layer \"Layer 1\"", PixelFormat::RGBA8, DEFAULT_BUDGET).is_ok());
     let err = check_budget_with_limit(src, &h, "layer \"Layer 1\"", PixelFormat::RGBA16, DEFAULT_BUDGET).unwrap_err().to_string();

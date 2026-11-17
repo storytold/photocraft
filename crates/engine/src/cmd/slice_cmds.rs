@@ -18,6 +18,10 @@ use serde_json::{Value, json};
 use crate::commands::{CommandSpec, layer_param};
 use crate::{EngineError, Result, Session};
 
+mod selection;
+pub(crate) use selection::SliceSelection;
+pub use selection::{selected_number, selected_number_in, slice_at};
+
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
 }
@@ -95,6 +99,7 @@ fn layer_slice_rect(doc: &Document, s: &Slice) -> Option<Rect> {
 /// was deleted (as Photoshop does). Not a history step.
 pub(crate) fn refresh(s: &mut Session) {
     let Some(st) = s.active_mut() else { return };
+    selection::prune(st);
     if !st.doc.slices.list.iter().any(|sl| sl.origin == SliceOrigin::Layer) {
         return;
     }
@@ -299,7 +304,9 @@ fn new_slice(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(id)
     })?;
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
-    let number = slices::resolve(doc).iter().find(|r| r.id == Some(id)).map(|r| r.number);
+    let selected = slices::resolve(doc).into_iter().find(|r| r.id == Some(id));
+    let number = selected.as_ref().map(|r| r.number);
+    selection::remember(s, selected.as_ref());
     Ok(json!({"slice": id, "number": number}))
 }
 
@@ -333,6 +340,7 @@ fn from_guides(s: &mut Session) -> Result<Value> {
         }
         Ok(())
     })?;
+    selection::remember(s, None);
     Ok(json!({"slices": n}))
 }
 
@@ -354,6 +362,7 @@ fn set_slice(s: &mut Session, p: &Value) -> Result<Value> {
         }
         Ok(id)
     })?;
+    selection::promoted(s, t, id);
     let d = s.active().ok_or(EngineError::NoDocument)?;
     stored_json(&d.doc, id, &slices::resolve(&d.doc)).ok_or_else(|| bad(cmd, "slice vanished"))
 }
@@ -377,6 +386,7 @@ fn promote(s: &mut Session, p: &Value) -> Result<Value> {
             Ok(id)
         })?,
     };
+    selection::promoted(s, t, id);
     Ok(json!({"slice": id}))
 }
 
@@ -406,11 +416,25 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
 /// The most parts one Divide Slice makes. Resolving the slice list is quadratic in the slice count
 /// (`slices::resolve`), so a 1000 x 1000 division, a million slices, left every later list or
 /// export with ~5e11 steps of work (#1020).
-const MAX_DIVIDE_PARTS: i32 = 10_000;
+pub(crate) const MAX_DIVIDE_PARTS: i32 = 10_000;
 
 fn divide(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "slice.divide";
-    let t = find(s, p, cmd)?;
+    let t = if p.get("slice").is_some() || p.get("number").is_some() {
+        find(s, p, cmd)?
+    } else {
+        let st = s.active().ok_or(EngineError::NoDocument)?;
+        let resolved = slices::resolve(&st.doc);
+        // ATN references the current target, never an arbitrary first slice or stale number.
+        let selected = selection::selected(st, &resolved).ok_or_else(|| bad(cmd, "select a slice first"))?;
+        if selected.origin == SliceOrigin::Layer {
+            return Err(bad(cmd, "a layer-based slice must be promoted before division"));
+        }
+        match selected.id {
+            Some(id) => Target::Stored(id),
+            None => Target::Auto(selected.rect),
+        }
+    };
     let down = crate::commands::int(p, "horizontal").unwrap_or(1).clamp(1, 1000) as i32;
     let across = crate::commands::int(p, "vertical").unwrap_or(1).clamp(1, 1000) as i32;
     if down == 1 && across == 1 {
@@ -485,7 +509,8 @@ fn list(s: &mut Session) -> Result<Value> {
     for sl in d.doc.slices.list.iter().filter(|sl| !listed.contains(&sl.id) && !sl.rect.intersect(&canvas).is_empty()) {
         all.extend(stored_json(&d.doc, sl.id, &resolved));
     }
-    Ok(json!({"slices": all, "locked": s.file_menu.slices_locked}))
+    let selected = selection::selected(d, &resolved).map(|r| resolved_json(&d.doc, r));
+    Ok(json!({"slices": all, "selected": selected, "locked": s.file_menu.slices_locked}))
 }
 
 fn layer_based(s: &mut Session, p: &Value) -> Result<Value> {
@@ -530,6 +555,7 @@ fn clear(s: &mut Session) -> Result<Value> {
         doc.slices.list.clear();
         Ok(())
     })?;
+    selection::remember(s, None);
     Ok(json!({"cleared": n}))
 }
 
@@ -540,6 +566,14 @@ pub fn specs() -> Vec<CommandSpec> {
         };
     }
     vec![
+        spec!(
+            "slice.select",
+            "Select Slice",
+            &[],
+            r##"{"point":[x,y] (document pixels) | "clear":true} → {slice,number}: selects one stored or auto slice without editing or promoting it"##,
+            has_doc,
+            selection::select
+        ),
         spec!(
             "slice.new",
             "Slice Tool",
@@ -565,7 +599,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "slice.divide",
             "Divide Slice…",
             &[],
-            r##"{"slice":id | "number":n,"horizontal":n=1 (slices down),"vertical":n=1 (slices across); at most 10000 parts} → {slices}"##,
+            r##"{"slice":id | "number":n (omit both to divide the current selected user/auto slice),"horizontal":n=1 (slices down),"vertical":n=1 (slices across); at most 10000 parts} → {slices}"##,
             unlocked,
             divide
         ),
@@ -574,7 +608,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "List Slices",
             menu: &[],
             shortcut: None,
-            params: "{} → {slices:[{number,id,origin:auto|layer|user,name,rect:[x,y,w,h],kind,layer,url,alt,…,pieces?:[{number,name,rect}] (a stored slice's visible parts; number null when wholly covered)}], locked}",
+            params: "{} → {slices:[{number,id,origin:auto|layer|user,name,rect:[x,y,w,h],kind,layer,url,alt,…,pieces?:[{number,name,rect}] (a stored slice's visible parts; number null when wholly covered)}], selected:slice|null, locked}",
             enabled: has_doc,
             journal: false,
             run: |s, _| list(s),
