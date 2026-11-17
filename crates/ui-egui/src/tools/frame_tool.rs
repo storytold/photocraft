@@ -1,93 +1,138 @@
 //! Frame Tool: persistent placeholders and independently selectable frame/image geometry.
+//!
+//! The canvas runs `tool`/`drain` for `Family::Frame`. The Frame-target box is a framework `TransformBox`
+//! shown by `show`; a Content or Both press opens Free Transform and drives its box.
 use crate::{
     PhotocraftApp,
-    canvas::{ToolEvent, ViewXform},
-    state::Tool,
+    canvas::{
+        document_display::CanvasHost,
+        tools::{FamilyTool, ToolScope},
+    },
+    state::{FreeTransform, Tool},
     theme::Tokens,
 };
-use egui::{CursorIcon, Pos2, Stroke, StrokeKind};
-use photocraft_doc::{DocId, Frame, Layer, LayerContent, LayerId};
+use craft::behavior::{
+    CancelReason, Cursor, CursorIcon, EditEvent, GestureId, IconId, Mixed, PointerButton,
+    geometry::{BoxAllow, BoxPart, BoxRules, BoxState, ConstrainStyle, Directions, MoveGesture, ScaleRule, drag as box_drag},
+    kurbo::{Point as KPoint, Rect as KRect},
+};
+use craft::draw::ui::{
+    ShapeDragEvent, ShapeDragOptions, ShapeDragTool, ShapeKind,
+    transform::{TransformBox, TransformEdit},
+};
+use craft::keymap::Mods;
+use craft::ui::canvas::{CanvasTool, ToolAction, ToolClaims, ToolContext, ToolHostResponse, ToolKey, ToolPath, ToolPointer};
+use craft::ui::choice::Segmented;
+use craft::ui::contract::{Bind, Entry, Show};
+use craft::ui::display::Divider;
+use craft::ui::primitives::Draw;
+use craft::ui::text::NumberField;
+use egui::{Pos2, Stroke, StrokeKind};
+use photocraft_doc::{Frame, Layer, LayerContent, LayerId};
 use photocraft_geom::{Affine, Point, Rect};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::sync::Arc;
 
-const CLICK_PX: f64 = 3.0;
-const HANDLE_PX: f64 = 7.0;
+mod properties;
+mod stroke;
+pub(crate) mod task_bar;
+pub(crate) use properties::properties;
+
+/// Which part of a frame the tool edits.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Target {
+    /// The frame's clip.
     #[default]
     Frame,
+    /// The frame's image.
     Content,
+    /// The frame and its image together.
     Both,
 }
+
+/// The Frame tool's options and selection, saved with the UI state.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FrameToolUi {
     /// Kept for old saved UI state; the current shape selector also supports polygons/custom shapes.
     pub ellipse: bool,
+    /// The shape new frames take.
     pub shape: String,
+    /// The polygon's sides.
     pub sides: u32,
+    /// The stroke new frames take.
     pub stroke: Option<photocraft_doc::ShapeStroke>,
+    /// The part of the selected frame the tool edits.
     pub target: Target,
+    /// The selected frame's layer.
     pub selected: Option<u64>,
-    #[serde(skip)]
-    pub drag: Option<FrameDrag>,
+    /// Set while a frame press runs Free Transform and commits it on release.
     #[serde(skip)]
     pub auto_transform: bool,
-    /// Space (the reposition key) is held: a frame being drawn moves instead of sizing (#13867).
-    #[serde(skip)]
-    pub space: bool,
 }
 impl Default for FrameToolUi {
     fn default() -> Self {
-        Self {
-            ellipse: false,
-            shape: "rectangle".into(),
-            sides: 5,
-            stroke: None,
-            target: Target::Frame,
-            selected: None,
-            drag: None,
-            auto_transform: false,
-            space: false,
-        }
+        Self { ellipse: false, shape: "rectangle".into(), sides: 5, stroke: None, target: Target::Frame, selected: None, auto_transform: false }
     }
 }
-#[derive(Clone, Debug, PartialEq)]
-pub enum FrameDrag {
-    New { start: [f64; 2], cur: [f64; 2], square: bool, centred: bool, doc: DocId, revision: u64 },
-    Edit { layer: LayerId, doc: DocId, revision: u64, original: Box<Frame>, proposed: Affine, start: [f64; 2], mode: EditMode },
-}
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum EditMode {
-    Move,
-    Resize(i8, i8),
-    Rotate,
-}
+
 pub(crate) struct Preview {
-    doc: std::sync::Arc<photocraft_doc::Document>,
+    doc: Arc<photocraft_doc::Document>,
     revision: u64,
     key: u64,
 }
 
-fn drawn(start: [f64; 2], cur: [f64; 2], square: bool, centred: bool) -> [i64; 4] {
-    let [sx, sy] = start;
-    let [x, y] = cur;
-    let (mut dx, mut dy) = (x - sx, y - sy);
-    if square {
-        // Shift squares from the drag's shorter side, as the reference application does (#13865).
-        let side = dx.abs().min(dy.abs());
-        dx = side.copysign(dx);
-        dy = side.copysign(dy);
-    }
-    let (a, b) = if centred { ([sx - dx, sy - dy], [sx + dx, sy + dy]) } else { (start, [sx + dx, sy + dy]) };
-    [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])].map(|v| v.round() as i64)
+/// A body drag of a Frame-target frame.
+struct FrameMove {
+    layer: LayerId,
+    original: Affine,
+    gesture: MoveGesture,
 }
-#[cfg(test)]
-mod shift_square_tests;
-#[cfg(test)]
-mod size_hud_tests;
+impl FrameMove {
+    /// The frame transform after moving by `delta`, rounded to whole document pixels.
+    fn proposed(&self, delta: craft::behavior::kurbo::Vec2) -> Affine {
+        // The original transform carries the frame's own shape; the move only adds a whole-pixel translation.
+        Affine::translate(delta.x.round(), delta.y.round()).mul(&self.original)
+    }
+}
+
+/// A press that opened Free Transform for a Content or Both target; its drag edits the open session's box.
+struct ContentPress {
+    id: GestureId,
+    start: KPoint,
+    origin: BoxState,
+    last: BoxState,
+    part: BoxPart,
+    begun: bool,
+}
+
+/// The Frame tool's state across passes: the shape drag and the gesture that owns the press.
+pub(crate) struct FrameTool {
+    draw: ShapeDragTool,
+    moving: Option<FrameMove>,
+    content: Option<ContentPress>,
+    next_gesture: GestureId,
+}
+impl Default for FrameTool {
+    fn default() -> Self {
+        Self { draw: ShapeDragTool::new(), moving: None, content: None, next_gesture: GestureId::new(1) }
+    }
+}
+impl FrameTool {
+    #[cfg(test)]
+    /// Whether a gesture of the tool runs.
+    pub(crate) fn busy(&self) -> bool {
+        self.moving.is_some() || self.content.is_some() || self.draw.shape().is_some()
+    }
+    fn next_id(&mut self) -> GestureId {
+        let id = self.next_gesture;
+        self.next_gesture = id.next();
+        id
+    }
+}
+
 pub fn selected(app: &PhotocraftApp) -> Option<&Layer> {
     let st = app.session.active()?;
     let id = photocraft_engine::frame_cmds::frame_of(&st.doc, st.active_layer?)?;
@@ -146,15 +191,28 @@ pub(crate) fn target(app: &PhotocraftApp, l: &Layer) -> Target {
         app.ui.frame_tool.target
     }
 }
-fn shape_params(app: &PhotocraftApp, r: [i64; 4]) -> Value {
-    let [x, y, x1, y1] = r;
-    let shape = if app.ui.frame_tool.ellipse {
+/// The shape the options bar has chosen.
+fn current_shape(f: &FrameToolUi) -> &str {
+    if f.ellipse {
         "ellipse"
-    } else if app.ui.frame_tool.shape.is_empty() {
+    } else if f.shape.is_empty() {
         "rectangle"
     } else {
-        &app.ui.frame_tool.shape
-    };
+        &f.shape
+    }
+}
+fn kind_of(shape: &str) -> ShapeKind {
+    match shape {
+        "ellipse" => ShapeKind::Ellipse,
+        "triangle" => ShapeKind::Triangle,
+        "polygon" => ShapeKind::Polygon,
+        // A custom shape is sized by a box drag like a rectangle.
+        _ => ShapeKind::Rectangle,
+    }
+}
+fn shape_params(app: &PhotocraftApp, r: [i64; 4]) -> Value {
+    let [x, y, x1, y1] = r;
+    let shape = current_shape(&app.ui.frame_tool);
     let mut p = json!({"x":x,"y":y,"width":x1.saturating_sub(x),"height":y1.saturating_sub(y),"shape":shape,"sides":app.ui.frame_tool.sides.clamp(3,100)});
     if shape == "custom" {
         let name = app.ui.presets_ui.shape();
@@ -163,39 +221,9 @@ fn shape_params(app: &PhotocraftApp, r: [i64; 4]) -> Value {
         }
     }
     if let Some(s) = &app.ui.frame_tool.stroke {
-        p["stroke"] = stroke_json(s);
+        p["stroke"] = stroke::json(s);
     }
     p
-}
-fn outline(app: &PhotocraftApp, r: [i64; 4]) -> Option<photocraft_doc::Path> {
-    let p = shape_params(app, r);
-    let shape = p.get("shape").and_then(Value::as_str)?;
-    if shape == "custom" {
-        let sh = photocraft_engine::vector_cmds::parse_path(p.get("path")?).ok()?;
-        let (x0, y0, x1, y1) = sh.control_bounds()?;
-        if x1 <= x0 || y1 <= y0 {
-            return None;
-        }
-        let [x, y, xe, ye] = r;
-        let (sx, sy) = ((xe - x) as f64 / (x1 - x0), (ye - y) as f64 / (y1 - y0));
-        return Some(sh.transform(&Affine { m: [sx, 0.0, 0.0, sy, x as f64 - x0 * sx, y as f64 - y0 * sy] }));
-    }
-    let [x, y, xe, ye] = r;
-    photocraft_engine::vector_cmds::shape_path(&json!({"kind":match shape{"ellipse"=>"ellipse","triangle"|"polygon"=>"polygon",_=>"rect"},"rect":[x,y,xe-x,ye-y],"sides":if shape=="triangle"{3}else{app.ui.frame_tool.sides.clamp(3,100)}})).ok()
-}
-fn handles(f: &Frame) -> [(Point, i8, i8); 8] {
-    [(0., 0., -1, -1), (0.5, 0., 0, -1), (1., 0., 1, -1), (1., 0.5, 1, 0), (1., 1., 1, 1), (0.5, 1., 0, 1), (0., 1., -1, 1), (0., 0.5, -1, 0)]
-        .map(|(x, y, hx, hy)| (f.transform.apply(Point::new(x, y)), hx, hy))
-}
-fn control_hit(f: &Frame, p: [f64; 2], zoom: f64) -> Option<EditMode> {
-    if let Some((_, hx, hy)) = handles(f).into_iter().find(|(q, _, _)| (q.x - p[0]).hypot(q.y - p[1]) * zoom <= HANDLE_PX) {
-        return Some(EditMode::Resize(hx, hy));
-    }
-    let local = f.transform.inverse()?.apply(Point::new(p[0], p[1]));
-    if (!(0.0..=1.0).contains(&local.x) || !(0.0..=1.0).contains(&local.y)) && f.corners().iter().any(|q| (q.x - p[0]).hypot(q.y - p[1]) * zoom <= 20.0) {
-        return Some(EditMode::Rotate);
-    }
-    None
 }
 fn on_border(f: &Frame, p: [f64; 2], zoom: f64) -> bool {
     let path = f.outline();
@@ -235,87 +263,43 @@ pub(crate) fn frame_at(app: &PhotocraftApp, p: [f64; 2]) -> Option<LayerId> {
         })
         .map(|(_, _, l)| l.id)
 }
-fn edit_transform(f: &Frame, mode: EditMode, start: [f64; 2], p: [f64; 2], mods: egui::Modifiers) -> Affine {
-    match mode {
-        EditMode::Move => {
-            let (mut dx, mut dy) = (p[0] - start[0], p[1] - start[1]);
-            if mods.shift {
-                if dx.abs() > dy.abs() { dy = 0.0 } else { dx = 0.0 }
-            }
-            Affine::translate(dx.round(), dy.round()).mul(&f.transform)
-        }
-        EditMode::Rotate => {
-            let center = f.transform.apply(Point::new(0.5, 0.5));
-            let mut a = (p[1] - center.y).atan2(p[0] - center.x) - (start[1] - center.y).atan2(start[0] - center.x);
-            if mods.shift {
-                let step = std::f64::consts::PI / 12.;
-                a = (a / step).round() * step;
-            }
-            Affine::translate(center.x, center.y).mul(&Affine::rotate(a)).mul(&Affine::translate(-center.x, -center.y)).mul(&f.transform)
-        }
-        EditMode::Resize(hx, hy) => {
-            let Some(inv) = f.transform.inverse() else { return f.transform };
-            let (s, c) = (inv.apply(Point::new(start[0], start[1])), inv.apply(Point::new(p[0], p[1])));
-            let (dx, dy) = (c.x - s.x, c.y - s.y);
-            let (mut x0, mut y0, mut x1, mut y1) = (0., 0., 1., 1.);
-            if hx < 0 {
-                x0 += dx;
-                if mods.alt {
-                    x1 -= dx;
-                }
-            } else if hx > 0 {
-                x1 += dx;
-                if mods.alt {
-                    x0 -= dx;
-                }
-            }
-            if hy < 0 {
-                y0 += dy;
-                if mods.alt {
-                    y1 -= dy;
-                }
-            } else if hy > 0 {
-                y1 += dy;
-                if mods.alt {
-                    y0 -= dy;
-                }
-            }
-            if mods.shift {
-                let k = if hx == 0 {
-                    (y1 - y0).abs()
-                } else if hy == 0 {
-                    (x1 - x0).abs()
-                } else {
-                    (x1 - x0).abs().max((y1 - y0).abs())
-                };
-                let anchor = |lo: f64, hi: f64, h: i8| {
-                    if mods.alt || h == 0 {
-                        ((lo + hi - k) / 2., (lo + hi + k) / 2.)
-                    } else if h < 0 {
-                        (hi - k, hi)
-                    } else {
-                        (lo, lo + k)
-                    }
-                };
-                (x0, x1) = anchor(x0, x1, hx);
-                (y0, y1) = anchor(y0, y1, hy);
-            }
-            let [a, b, c, d, _, _] = f.transform.m;
-            let minimum = |n: f64, size: f64| n.signum().copysign(if n == 0.0 { 1.0 } else { n }) * n.abs().max(1.0 / size.max(1.0));
-            let (w, h) = (minimum(x1 - x0, a.hypot(b)), minimum(y1 - y0, c.hypot(d)));
-            f.transform.mul(&Affine { m: [w, 0., 0., h, x0, y0] })
-        }
-    }
+
+/// The unit square through the frame transform, as a box with its reference point at the centre.
+fn frame_box(m: &Affine) -> BoxState {
+    let q = [(0., 0.), (1., 0.), (1., 1.), (0., 1.)].map(|(x, y)| {
+        let p = m.apply(Point::new(x, y));
+        KPoint::new(p.x, p.y)
+    });
+    BoxState::new(q, KPoint::new((q[0].x + q[2].x) / 2., (q[0].y + q[2].y) / 2.))
 }
-fn update_preview(app: &mut PhotocraftApp) {
-    let Some(FrameDrag::Edit { layer, doc, revision, proposed, .. }) = app.ui.frame_tool.drag.as_ref() else { return };
-    let Some(st) = app.session.active().filter(|st| st.doc.id == *doc && st.revision == *revision) else {
+/// The frame transform that maps the unit square onto the box (corners 0, 1 and 3 fix an affine map).
+fn frame_affine(b: &BoxState) -> Affine {
+    let [q0, q1, _, q3] = [b.quad[0], b.quad[1], b.quad[2], b.quad[3]];
+    Affine { m: [q1.x - q0.x, q1.y - q0.y, q3.x - q0.x, q3.y - q0.y, q0.x, q0.y] }
+}
+/// The frame's first child's bounds as a box.
+fn child_box(app: &PhotocraftApp, id: LayerId) -> Option<BoxState> {
+    let st = app.session.active()?;
+    let child = st.doc.layer(id)?.children()?.first()?;
+    let b = photocraft_engine::transform_cmds::transform_frame(&st.doc, child);
+    Some(BoxState::from_rect(KRect::new(f64::from(b.x0), f64::from(b.y0), f64::from(b.x1), f64::from(b.y1))))
+}
+
+/// The preview's transform of frame `id`, while a gesture shows one for the current revision.
+fn shown_transform(app: &PhotocraftApp, id: LayerId) -> Option<Affine> {
+    let st = app.session.active()?;
+    let p = app.frame_preview.as_ref().filter(|p| p.doc.id == st.doc.id && p.revision == st.revision)?;
+    p.doc.layer(id)?.frame.as_ref().map(|f| f.transform)
+}
+
+fn update_preview(app: &mut PhotocraftApp, layer: LayerId, proposed: Affine) {
+    let Some(st) = app.session.active() else {
         app.frame_preview = None;
         return;
     };
-    let (id, revision, proposed) = (*layer, *revision, *proposed);
+    let revision = st.revision;
     let mut shown = (*st.doc).clone();
-    if let Some(l) = shown.layer_mut(id) {
+    if let Some(l) = shown.layer_mut(layer) {
         if let Some(f) = &mut l.frame {
             f.transform = proposed;
             if !f.valid() {
@@ -326,66 +310,222 @@ fn update_preview(app: &mut PhotocraftApp) {
         photocraft_engine::frame_cmds::refresh(l);
     }
     let key = app.frame_preview.as_ref().map_or(1, |p| p.key.wrapping_add(1));
-    app.frame_preview = Some(Preview { doc: std::sync::Arc::new(shown), revision, key });
+    app.frame_preview = Some(Preview { doc: Arc::new(shown), revision, key });
 }
-pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(std::sync::Arc<photocraft_doc::Document>, u64)> {
-    if let Some(t) = app.ui.transform.clone().filter(frame_transform) {
-        let transform = transformed_frame(app, &t).ok()?;
+pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<photocraft_doc::Document>, u64)> {
+    let live = app.ui.transform.as_ref().filter(|t| frame_transform(t)).map(|t| (t.id, t.layer, transformed_frame(app, t)));
+    if let Some((id, layer, transform)) = live {
+        let transform = transform.ok()?;
         let st = app.session.documents().get(idx)?;
         if app.transform_preview.as_ref().is_none_or(|pv| pv.doc.id != st.doc.id) {
             return None;
         }
         use std::hash::Hasher;
         let mut hash = std::collections::hash_map::DefaultHasher::new();
-        hash.write_u64(t.session);
+        hash.write_u64(id);
         for value in transform.m {
             hash.write_u64(value.to_bits());
         }
         let key = hash.finish();
         if app.frame_preview.as_ref().is_none_or(|p| p.doc.id != st.doc.id || p.revision != st.revision || p.key != key) {
             let mut doc = (*st.doc).clone();
-            let l = doc.layer_mut(LayerId(t.layer))?;
+            let l = doc.layer_mut(LayerId(layer))?;
             l.frame.as_mut()?.transform = transform;
             photocraft_engine::frame_cmds::refresh(l);
-            app.frame_preview = Some(Preview { doc: std::sync::Arc::new(doc), revision: st.revision, key });
+            app.frame_preview = Some(Preview { doc: Arc::new(doc), revision: st.revision, key });
         }
     }
     let st = app.session.documents().get(idx)?;
     let p = app.frame_preview.as_ref()?;
     (app.ui.tool == Tool::Frame && st.doc.id == p.doc.id && st.revision == p.revision).then(|| (p.doc.clone(), (1 << 57) | p.key))
 }
-pub fn cancel(app: &mut PhotocraftApp) {
-    app.ui.frame_tool.drag = None;
+/// Drops the live preview (a tool change, a reset).
+pub fn clear(app: &mut PhotocraftApp) {
     app.frame_preview = None;
 }
-/// Space (the reposition key) for this canvas frame (#13867). Whether a frame is being drawn, which
-/// Space then moves: the canvas keeps the key from the temporary Hand tool meanwhile.
-pub fn set_space(app: &mut PhotocraftApp, down: bool) -> bool {
-    app.ui.frame_tool.space = down;
-    matches!(app.ui.frame_tool.drag, Some(FrameDrag::New { .. }))
-}
-#[cfg(test)]
-mod space_move_tests;
 
-/// Escape during a drag. A frame being drawn is made at the pointer, as the reference application
-/// does (#13866); the mouse movement and release after it change nothing. Moving, resizing or
-/// rotating an existing frame is cancelled.
-pub fn escape(app: &mut PhotocraftApp) {
-    let Some(FrameDrag::New { start, cur, square, centred, doc, revision }) = app.ui.frame_tool.drag.clone() else {
-        cancel(app);
-        return;
+// ---- the canvas tool ----
+
+/// What a press of the Frame tool turned into.
+enum Pressed {
+    /// Nothing of a frame: the shape drag takes the press.
+    Draw,
+    /// Handled whole.
+    Done,
+    Move(FrameMove),
+    Content(ContentPress),
+}
+
+/// The Frame tool's press rules: the double-click toggle, target selection, and what each target does.
+fn press_rule(app: &mut PhotocraftApp, at: KPoint, clicks: u32, reach: f64, style: &ConstrainStyle, mods: Mods) -> Pressed {
+    app.frame_preview = None;
+    if !at.x.is_finite() || !at.y.is_finite() || at.x.abs() > 600_000.0 || at.y.abs() > 600_000.0 {
+        app.ui.status = tl!("Frame coordinates must be finite and within 600000 pixels").into();
+        app.ui.status_error = true;
+        return Pressed::Done;
+    }
+    let p = [at.x, at.y];
+    // A repeated press with no frame under it is an ordinary press: a drag from where the last click was still draws.
+    if clicks >= 2
+        && let Some(id) = frame_at(app, p)
+    {
+        let next = if selected(app).is_some_and(|l| l.id == id && target(app, l) == Target::Content) { Target::Both } else { Target::Content };
+        select(app, id, next);
+        return Pressed::Done;
+    }
+    let zoom = f64::from(app.point_zoom());
+    let active = selected(app).map(|l| (l.id, target(app, l)));
+    // A handle of the selected image's bounds reaches outside the frame.
+    let content_control = active.is_some_and(|(id, t)| {
+        let reference_point = app.ui.tool_options.transform.show_reference_point;
+        t == Target::Content
+            && child_box(app, id).is_some_and(|b| matches!(content_part(&b, at, reach, reference_point), BoxPart::Corner(_) | BoxPart::Edge(_)))
+    });
+    let Some(id) = content_control.then(|| active.map(|(id, _)| id)).flatten().or_else(|| frame_at(app, p)) else { return Pressed::Draw };
+    let (frame, t) = {
+        let Some(st) = app.session.active() else { return Pressed::Done };
+        let Some(l) = st.doc.layer(id) else { return Pressed::Done };
+        let Some(f) = l.frame.clone() else { return Pressed::Done };
+        let locks = st.doc.effective_locks(id);
+        if locks.all || locks.position {
+            app.ui.status = tl!("The frame is locked").into();
+            app.ui.status_error = true;
+            return Pressed::Done;
+        }
+        let t = if content_control {
+            Target::Content
+        } else if on_border(&f, p, zoom) || l.children().is_none_or(|c| c.is_empty()) {
+            Target::Frame
+        } else if active.is_some_and(|(prev, t)| prev == id && t == Target::Content) {
+            Target::Content
+        } else {
+            Target::Both
+        };
+        (f, t)
     };
-    cancel(app);
-    if app.session.active().is_some_and(|st| st.doc.id == doc && st.revision == revision) {
-        commit_new(app, start, cur, square, centred);
+    select(app, id, t);
+    if t != Target::Frame {
+        let ctx = app.ctx().clone();
+        return match crate::transform_tool::begin_from_frame(app, &ctx) {
+            Ok(()) => {
+                let Some(t) = app.ui.transform.as_ref() else { return Pressed::Done };
+                let origin = *t.session.state();
+                let part = content_part(&origin, at, reach, t.session.reference_point());
+                Pressed::Content(ContentPress { id: GestureId::new(0), start: at, origin, last: origin, part, begun: false })
+            }
+            Err(e) => {
+                app.ui.status = e;
+                app.ui.status_error = true;
+                Pressed::Done
+            }
+        };
+    }
+    Pressed::Move(FrameMove { layer: id, original: frame.transform, gesture: MoveGesture::press(style, at, mods, Directions::Eight) })
+}
+
+/// The part of the image's box under `at`, as the Free Transform box takes presses: the reference point is a part only
+/// while Show Reference Point is on; hidden, the middle of the box is inside, so a press there moves the image
+/// (production `box_hit`).
+fn content_part(state: &BoxState, at: KPoint, reach: f64, reference_point: bool) -> BoxPart {
+    if reference_point {
+        return state.part_at(at, reach);
+    }
+    let q = state.quad;
+    let corners = (0..4u8).map(|i| (q[usize::from(i)], BoxPart::Corner(i)));
+    let edges = (0..4u8).map(|i| (q[usize::from(i)].midpoint(q[(usize::from(i) + 1) % 4]), BoxPart::Edge(i)));
+    let nearest = corners.chain(edges).map(|(p, part)| (p.distance(at), part)).filter(|(d, _)| *d < reach).min_by(|a, b| a.0.total_cmp(&b.0));
+    match nearest {
+        Some((_, part)) => part,
+        None if state.contains(at) => BoxPart::Inside,
+        None => BoxPart::Outside,
     }
 }
-/// Make the frame drawn from `start` to `cur`, unless the drag was a click or drew nothing.
-fn commit_new(app: &mut PhotocraftApp, start: [f64; 2], cur: [f64; 2], square: bool, centred: bool) {
-    if (cur[0] - start[0]).hypot(cur[1] - start[1]) * f64::from(app.point_zoom()) < CLICK_PX {
+
+/// A drag of the open Free Transform's box, as the box's own gesture: Begin at the first move, then Updates.
+fn drag_content(app: &mut PhotocraftApp, c: &mut ContentPress, to: KPoint, mods: Mods, time: f64) {
+    let Some(t) = app.ui.transform.as_mut() else { return };
+    let next = box_drag(&c.origin, &c.last, c.part, c.start, to, mods, &BoxRules::default());
+    if !c.begun {
+        c.begun = true;
+        let begin = EditEvent::begin(c.id, Mixed::Same(c.origin), Arc::from(tl!("Free Transform")), None);
+        let _ = t.session.apply(TransformEdit::Box(begin), time);
+    }
+    c.last = next;
+    let _ = t.session.apply(TransformEdit::Box(EditEvent::update(c.id, next)), time);
+}
+
+/// The release of a content press: the box's Commit (when it moved) and the automatic commit of the session.
+fn release_content(app: &mut PhotocraftApp, c: &ContentPress, to: KPoint, mods: Mods) {
+    if !c.begun {
+        // A click moved nothing: the session its press opened ends with the press, as the release of any press that
+        // opened one. The untouched box closes without a step.
+        if app.ui.frame_tool.auto_transform {
+            app.ui.frame_tool.auto_transform = false;
+            crate::transform_tool::commit(app);
+        }
         return;
     }
-    let r = drawn(start, cur, square, centred);
+    let after = box_drag(&c.origin, &c.last, c.part, c.start, to, mods, &BoxRules::default());
+    let edits = [TransformEdit::Box(EditEvent::commit(c.id, Mixed::Same(c.origin), after))];
+    crate::transform_tool::auto_commit(app, &edits);
+}
+
+fn cancel_content(app: &mut PhotocraftApp, c: &ContentPress, reason: CancelReason, time: f64) {
+    if c.begun
+        && let Some(t) = app.ui.transform.as_mut()
+    {
+        let _ = t.session.apply(TransformEdit::Box(EditEvent::cancel(c.id, reason, Some(Mixed::Same(c.origin)))), time);
+    }
+    // Ends the session and clears its automatic commit.
+    crate::transform_tool::cancel(app);
+}
+
+/// Arrow keys respect which thumbnail is selected; Shift moves ten document pixels. A run is one step.
+fn nudge(app: &mut PhotocraftApp, dx: f64, dy: f64, mods: Mods, now: f64) -> bool {
+    if app.ui.tool != Tool::Frame || app.ui.transform.is_some() || mods.cmd || mods.ctrl || mods.alt {
+        return false;
+    }
+    let Some(l) = selected(app) else { return false };
+    let (id, t, frame, child) = (l.id, target(app, l), l.frame.clone(), l.children().and_then(|c| c.first()).map(|l| l.id));
+    let k = if mods.shift { 10. } else { 1. };
+    let (dx, dy) = (dx.round() * k, dy.round() * k);
+    app.nudge_bundle.now = now;
+    let (command, params) = if t == Target::Frame {
+        let Some(mut f) = frame else { return true };
+        f.transform = Affine::translate(dx, dy).mul(&f.transform);
+        ("layer.frame.set", json!({"layer":id.0,"transform":f.transform.m}))
+    } else {
+        ("layer.translate", json!({"layer":if t==Target::Content{child.unwrap_or(id).0}else{id.0},"dx":dx,"dy":dy}))
+    };
+    let r = crate::nudge_bundle::run(app, "frame", command, params);
+    report(app, r);
+    true
+}
+
+/// One pass of the Frame tool over the app.
+struct FramePass<'a> {
+    scope: &'a ToolScope<'a>,
+    state: &'a mut FrameTool,
+}
+
+/// The Frame family's tool for one pass.
+pub(crate) fn tool<'a>(scope: &'a ToolScope<'a>, state: &'a mut FrameTool, _host: CanvasHost) -> FamilyTool<'a> {
+    let (shape, sides) = scope.with_app(|app| (current_shape(&app.ui.frame_tool).to_string(), app.ui.frame_tool.sides.clamp(3, 100)));
+    state.draw.options(ShapeDragOptions::new(kind_of(&shape)).sides(sides));
+    Box::new(FramePass { scope, state })
+}
+
+/// Makes the frames the shape drag committed this pass.
+pub(crate) fn drain(app: &mut PhotocraftApp, state: &mut FrameTool, _response: &ToolHostResponse) {
+    for event in state.draw.take_events() {
+        let ShapeDragEvent::Draw(EditEvent::Commit { after, .. }) = event else { continue };
+        make_frame(app, after.bounds());
+    }
+}
+
+/// Makes a frame in the drawn box, around the active layer's image when the box overlaps it, and selects it.
+fn make_frame(app: &mut PhotocraftApp, b: KRect) {
+    let r = [b.x0, b.y0, b.x1, b.y1].map(|v| v.round() as i64);
     if r[2] <= r[0] || r[3] <= r[1] {
         return;
     }
@@ -402,163 +542,132 @@ fn commit_new(app: &mut PhotocraftApp, start: [f64; 2], cur: [f64; 2], square: b
         Err(e) => report(app, Err(e)),
     }
 }
-#[cfg(test)]
-mod escape_commit_tests;
-/// A native double click (also driven by ui.click count=2) toggles content-only selection.
-pub fn double_click(app: &mut PhotocraftApp, p: [f64; 2]) {
-    let Some(id) = frame_at(app, p) else { return };
-    let next = if selected(app).is_some_and(|l| l.id == id && target(app, l) == Target::Content) { Target::Both } else { Target::Content };
-    select(app, id, next);
-    cancel(app);
-}
-pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> bool {
-    if app.ui.tool != Tool::Frame {
-        return false;
+
+impl CanvasTool for FramePass<'_> {
+    fn press(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) -> ToolAction {
+        let Some(view) = cx.space().map(|space| space.view) else { return ToolAction::Ignored };
+        let at = view.to_doc(pointer.pos);
+        let (reach, scope, mods, clicks) = (view.doc_len(cx.reach()), self.scope, pointer.mods, pointer.clicks);
+        let style = ConstrainStyle::new(f64::from(cx.slop), f64::from(cx.slop));
+        match scope.with_app(|app| press_rule(app, at, clicks, reach, &style, mods)) {
+            Pressed::Draw => self.state.draw.press(pointer, cx),
+            Pressed::Done => ToolAction::Done,
+            Pressed::Move(m) => {
+                self.state.moving = Some(m);
+                ToolAction::Claimed
+            }
+            Pressed::Content(mut c) => {
+                c.id = self.state.next_id();
+                self.state.content = Some(c);
+                ToolAction::Claimed
+            }
+        }
     }
-    if app.ui.frame_tool.drag.is_none() && crate::canvas::event_tool(app, mods) != Tool::Frame {
-        return false;
+
+    fn drag(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
+        let (scope, time) = (self.scope, cx.time);
+        let Some(view) = cx.space().map(|space| space.view) else { return };
+        let at = view.to_doc(pointer.pos);
+        if let Some(c) = self.state.content.as_mut() {
+            scope.with_app(|app| drag_content(app, c, at, pointer.mods, time));
+        } else if let Some(m) = self.state.moving.as_mut() {
+            if let Some(value) = m.gesture.follow(at, pointer.mods, view.zoom) {
+                let (layer, proposed) = (m.layer, m.proposed(value.delta));
+                scope.with_app(|app| update_preview(app, layer, proposed));
+            }
+        } else {
+            self.state.draw.drag(pointer, cx);
+        }
     }
-    let (x, y) = match ev {
-        ToolEvent::Down { x, y, .. } | ToolEvent::Move { x, y, .. } | ToolEvent::Up { x, y } => (x, y),
-    };
-    if !x.is_finite() || !y.is_finite() || x.abs() > 600_000.0 || y.abs() > 600_000.0 {
-        cancel(app);
-        app.ui.status = tl!("Frame coordinates must be finite and within 600000 pixels").into();
-        app.ui.status_error = true;
-        return true;
-    }
-    if app.ui.transform.is_none() {
-        app.ui.frame_tool.auto_transform = false;
-    }
-    match ev {
-        ToolEvent::Down { x, y, .. } => {
-            cancel(app);
-            let p = [x, y];
-            let zoom = f64::from(app.point_zoom());
-            let active = selected(app).map(|l| (l.id, l.frame.clone(), target(app, l)));
-            let selected_control =
-                active.as_ref().and_then(|(id, f, t)| (*t == Target::Frame).then(|| Some((*id, control_hit(f.as_ref()?, p, zoom)?))).flatten());
-            let content_control = active.as_ref().is_some_and(|(id, _, t)| {
-                if *t != Target::Content {
-                    return false;
+
+    fn release(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
+        let scope = self.scope;
+        let Some(view) = cx.space().map(|space| space.view) else { return };
+        let at = view.to_doc(pointer.pos);
+        if let Some(c) = self.state.content.take() {
+            scope.with_app(|app| release_content(app, &c, at, pointer.mods));
+        } else if let Some(m) = self.state.moving.take() {
+            let FrameMove { layer, original, gesture } = m;
+            let value = gesture.release(at, pointer.mods, view.zoom);
+            let transform = Affine::translate(value.delta.x.round(), value.delta.y.round()).mul(&original);
+            scope.with_app(|app| {
+                app.frame_preview = None;
+                // A click with no drag leaves the transform as it was.
+                if transform != original {
+                    let mut p = json!({"layer":layer.0,"transform":transform.m});
+                    // Moving an empty frame is a "Move" step (#13880); a frame with an image keeps "Frame Properties".
+                    let empty = app.session.active().and_then(|st| st.doc.layer(layer)).is_some_and(|l| l.children().is_none_or(<[Layer]>::is_empty));
+                    if empty {
+                        p["historyName"] = json!("Move");
+                    }
+                    let r = app.run("layer.frame.set", p);
+                    report(app, r);
                 }
-                let Some(st) = app.session.active() else { return false };
-                let Some(child) = st.doc.layer(*id).and_then(|l| l.children()).and_then(|c| c.first()) else { return false };
-                let b = photocraft_engine::transform_cmds::transform_frame(&st.doc, child);
-                let (x0, y0, x1, y1) = (f64::from(b.x0), f64::from(b.y0), f64::from(b.x1), f64::from(b.y1));
-                [(x0, y0), ((x0 + x1) / 2., y0), (x1, y0), (x1, (y0 + y1) / 2.), (x1, y1), ((x0 + x1) / 2., y1), (x0, y1), (x0, (y0 + y1) / 2.)]
-                    .iter()
-                    .any(|(x, y)| (x - p[0]).hypot(y - p[1]) * zoom <= HANDLE_PX)
             });
-            let id = selected_control
-                .map(|(id, _)| id)
-                .or_else(|| content_control.then(|| active.as_ref().map(|(id, _, _)| *id)).flatten())
-                .or_else(|| frame_at(app, p));
-            if let Some(id) = id {
-                let Some(st) = app.session.active() else { return true };
-                let Some(l) = st.doc.layer(id) else { return true };
-                let Some(f) = l.frame.clone() else { return true };
-                let locks = st.doc.effective_locks(id);
-                if locks.all || locks.position {
-                    app.ui.status = tl!("The frame is locked").into();
-                    app.ui.status_error = true;
-                    return true;
-                }
-                let t = if content_control {
-                    Target::Content
-                } else if selected_control.is_some() || on_border(&f, p, zoom) || l.children().is_none_or(|c| c.is_empty()) {
-                    Target::Frame
-                } else if active.as_ref().is_some_and(|(prev, _, t)| *prev == id && *t == Target::Content) {
-                    Target::Content
-                } else {
-                    Target::Both
-                };
-                select(app, id, t);
-                if t != Target::Frame {
-                    // The canvas's own context: preview textures loaded into another never draw.
-                    let Some(ctx) = app.frame_tool_ctx.clone() else { return true };
-                    match crate::transform_tool::begin(app, &ctx) {
-                        Ok(()) => {
-                            app.ui.frame_tool.auto_transform = true;
-                            crate::transform_tool::pointer(app, ev, mods);
-                        }
-                        Err(e) => {
-                            app.ui.status = e;
-                            app.ui.status_error = true;
-                        }
-                    }
-                    return true;
-                }
-                let Some(st) = app.session.active() else { return true };
-                app.ui.frame_tool.drag = Some(FrameDrag::Edit {
-                    layer: id,
-                    doc: st.doc.id,
-                    revision: st.revision,
-                    original: f.clone(),
-                    proposed: f.transform,
-                    start: p,
-                    mode: selected_control.map_or(EditMode::Move, |(_, m)| m),
-                });
-            } else if let Some(st) = app.session.active() {
-                app.ui.frame_tool.drag =
-                    Some(FrameDrag::New { start: p, cur: p, square: mods.shift, centred: mods.alt, doc: st.doc.id, revision: st.revision });
-            }
-        }
-        ToolEvent::Move { x, y, .. } => {
-            let space = app.ui.frame_tool.space;
-            if let Some(d) = &mut app.ui.frame_tool.drag {
-                match d {
-                    FrameDrag::New { start, cur, square, centred, .. } => {
-                        // Space held moves the whole frame with the pointer (#13867).
-                        if space {
-                            *start = [start[0] + x - cur[0], start[1] + y - cur[1]];
-                        }
-                        *cur = [x, y];
-                        *square = mods.shift;
-                        *centred = mods.alt;
-                    }
-                    FrameDrag::Edit { original, proposed, start, mode, .. } => *proposed = edit_transform(original, *mode, *start, [x, y], mods),
-                }
-            }
-            update_preview(app);
-        }
-        ToolEvent::Up { x, y } => {
-            let Some(d) = app.ui.frame_tool.drag.take() else { return true };
-            app.frame_preview = None;
-            let (doc, revision) = match &d {
-                FrameDrag::New { doc, revision, .. } | FrameDrag::Edit { doc, revision, .. } => (*doc, *revision),
-            };
-            if !app.session.active().is_some_and(|st| st.doc.id == doc && st.revision == revision) {
-                return true;
-            }
-            match d {
-                FrameDrag::New { start, cur, .. } => {
-                    // Released with Space still down: the last step moved the frame too (#13867).
-                    let start = if app.ui.frame_tool.space { [start[0] + x - cur[0], start[1] + y - cur[1]] } else { start };
-                    commit_new(app, start, [x, y], mods.shift, mods.alt)
-                }
-                FrameDrag::Edit { layer, original, start, mode, .. } => {
-                    let transform = edit_transform(&original, mode, start, [x, y], mods);
-                    if transform != original.transform {
-                        let mut p = json!({"layer":layer.0,"transform":transform.m});
-                        // Moving an empty frame is a "Move" step (#13880). Handle drags, and a
-                        // frame with an image (not measured yet), keep "Frame Properties".
-                        let empty = app.session.active().and_then(|st| st.doc.layer(layer)).is_some_and(|l| l.children().is_none_or(<[Layer]>::is_empty));
-                        if mode == EditMode::Move && empty {
-                            p["historyName"] = json!("Move");
-                        }
-                        let r = app.run("layer.frame.set", p);
-                        report(app, r);
-                    }
-                }
-            }
+        } else {
+            self.state.draw.release(pointer, cx);
         }
     }
-    true
+
+    fn cancel(&mut self, reason: CancelReason, cx: &mut ToolContext<'_>) {
+        let (scope, time) = (self.scope, cx.time);
+        let content = self.state.content.take();
+        self.state.moving = None;
+        // Escape while a frame is drawn makes it as drawn, as the reference application does (#13866); a drag still
+        // inside the click distance has no shape and makes nothing.
+        let drawn = (reason == CancelReason::Escape).then(|| self.state.draw.shape().map(|shape| shape.bounds())).flatten();
+        scope.with_app(|app| {
+            app.frame_preview = None;
+            if let Some(c) = &content {
+                cancel_content(app, c, reason, time);
+            }
+            if let Some(b) = drawn {
+                make_frame(app, b);
+            }
+        });
+        self.state.draw.cancel(reason, cx);
+    }
+
+    /// ⌘ is the Move tool's stand-in: with it held the press belongs to the stand-in, not to a frame.
+    fn takes(&self, button: PointerButton, mods: Mods) -> bool {
+        button == PointerButton::Primary && !mods.cmd
+    }
+
+    fn claims(&self) -> ToolClaims {
+        let nudges = self.scope.with_app(|app| app.ui.tool == Tool::Frame && app.ui.transform.is_none() && selected(app).is_some());
+        if nudges { ToolClaims::NONE.nudges() } else { ToolClaims::NONE }
+    }
+
+    fn key(&mut self, key: &ToolKey, cx: &mut ToolContext<'_>) -> bool {
+        let ToolKey::Nudge { direction, mods, .. } = key else { return false };
+        let (dx, dy, mods, now) = (direction.x as f64, direction.y as f64, *mods, cx.time);
+        self.scope.with_app(|app| nudge(app, dx, dy, mods, now))
+    }
+
+    fn paint(&self, draw: &Draw<'_>, cx: &ToolContext<'_>) {
+        self.state.draw.paint(draw, cx);
+    }
+
+    fn cursor(&self, cx: &ToolContext<'_>) -> Cursor {
+        let over = cx
+            .pointer
+            .as_ref()
+            .zip(cx.space())
+            .map(|(p, space)| space.view.to_doc(p.pos))
+            .is_some_and(|at| self.scope.with_app(|app| frame_at(app, [at.x, at.y]).is_some()));
+        if over { Cursor::System(CursorIcon::Move) } else { self.state.draw.cursor(cx) }
+    }
+
+    fn command_form(&self) -> ToolPath {
+        self.state.draw.command_form()
+    }
 }
-fn paint_path(painter: &egui::Painter, xf: &ViewXform, path: &photocraft_doc::Path, stroke: Stroke) {
-    for line in photocraft_vector::flatten::flatten_path(path, 0.5 / f64::from(xf.zoom).max(0.01)) {
-        let mut points: Vec<Pos2> = line.pts.iter().map(|&(x, y)| xf.to_screen(x as f32, y as f32)).collect();
+
+// ---- the canvas body ----
+
+fn paint_path(painter: &egui::Painter, view: &craft::behavior::CanvasView, path: &photocraft_doc::Path, stroke: Stroke) {
+    for line in photocraft_vector::flatten::flatten_path(path, 0.5 / view.zoom.max(0.01)) {
+        let mut points: Vec<Pos2> = line.pts.iter().map(|&(x, y)| view.to_screen(KPoint::new(x, y))).collect();
         if line.closed
             && let Some(first) = points.first().copied()
         {
@@ -567,9 +676,18 @@ fn paint_path(painter: &egui::Painter, xf: &ViewXform, path: &photocraft_doc::Pa
         painter.add(egui::Shape::line(points, stroke));
     }
 }
-pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
-    let t = Tokens::get(painter.ctx());
-    let stroke = Stroke::new(1.5, t.accent);
+fn paint_handle(p: &egui::Painter, at: Pos2, t: &Tokens) {
+    let r = egui::Rect::from_center_size(at, egui::vec2(6., 6.));
+    p.rect_filled(r, 0., t.card);
+    p.rect_stroke(r, 0., Stroke::new(1., t.accent), StrokeKind::Inside);
+}
+
+/// Shows the Frame tool's marks in the canvas body: placeholders of empty frames for every tool, and for the Frame
+/// tool the selected frame's outline with its box (Frame target), its image's bounds (Content) or its outline (Both).
+pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: egui::Rect) {
+    let Some(view) = crate::canvas::document_display::active_view(app) else { return };
+    let t = Tokens::get(ui.ctx());
+    let painter = ui.painter().clone();
     if let Some(st) = app.session.active() {
         for (path, _, l) in st.doc.walk() {
             if !path_visible(&st.doc, &path) {
@@ -577,317 +695,157 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
             }
             let Some(f) = &l.frame else { continue };
             if l.children().is_some_and(|c| c.is_empty()) {
-                let q = f.corners().map(|p| xf.to_screen(p.x as f32, p.y as f32));
-                paint_path(painter, xf, &f.outline(), Stroke::new(1., t.text_faint));
+                let q = f.corners().map(|p| view.to_screen(KPoint::new(p.x, p.y)));
+                paint_path(&painter, &view, &f.outline(), Stroke::new(1., t.text_faint));
                 painter.line_segment([q[0], q[2]], Stroke::new(1., t.text_faint));
                 painter.line_segment([q[1], q[3]], Stroke::new(1., t.text_faint));
             }
         }
     }
-    if app.ui.tool != Tool::Frame {
-        return;
-    }
-    if let Some(FrameDrag::New { start, cur, square, centred, .. }) = &app.ui.frame_tool.drag {
-        let r = drawn(*start, *cur, *square, *centred);
-        if let Some(path) = outline(app, r) {
-            paint_path(painter, xf, &path, stroke);
-        }
-        // The size the release would make, beside the pointer, like the marquee's (#13870).
-        let at = painter.ctx().input(|i| i.pointer.latest_pos()).unwrap_or_else(|| xf.to_screen(cur[0] as f32, cur[1] as f32));
-        let size = crate::canvas::size_readout(app, [0.0, 0.0, (r[2] - r[0]) as f64, (r[3] - r[1]) as f64]);
-        crate::canvas::draw_value_readout(app, painter.ctx(), "frame-size-readout", at, ["W:", "H:"], size);
+    if app.ui.tool != Tool::Frame || app.ui.transform.is_some() {
         return;
     }
     let Some(l) = selected(app) else { return };
     if !visible(app, l.id) {
         return;
     }
-    let Some(original) = &l.frame else { return };
-    let mut f = original.clone();
-    if let Some(t) = app.ui.transform.as_ref().filter(|t| frame_transform(t))
-        && let Ok(transform) = transformed_frame(app, t)
-    {
-        f.transform = transform;
-    }
-    if let Some(FrameDrag::Edit { proposed, .. }) = &app.ui.frame_tool.drag {
-        f.transform = *proposed;
+    let (id, tgt) = (l.id, target(app, l));
+    let Some(mut f) = l.frame.clone() else { return };
+    let original = f.transform;
+    if let Some(shown) = shown_transform(app, id) {
+        f.transform = shown;
     }
     if !f.valid() {
         return;
     }
-    paint_path(painter, xf, &f.outline(), stroke);
-    if app.ui.transform.is_some() {
-        return;
-    }
-    let target = target(app, l);
-    if target == Target::Content {
-        if let Some(st) = app.session.active()
-            && let Some(child) = l.children().and_then(|c| c.first())
-        {
-            let b = photocraft_engine::transform_cmds::transform_frame(&st.doc, child);
-            let r = egui::Rect::from_two_pos(xf.to_screen(b.x0 as f32, b.y0 as f32), xf.to_screen(b.x1 as f32, b.y1 as f32));
-            painter.rect_stroke(r, 0., stroke, StrokeKind::Inside);
-            for p in [r.left_top(), r.center_top(), r.right_top(), r.right_center(), r.right_bottom(), r.center_bottom(), r.left_bottom(), r.left_center()] {
-                paint_handle(painter, p, &t);
+    let stroke = Stroke::new(1.5, t.accent);
+    paint_path(&painter, &view, &f.outline(), stroke);
+    match tgt {
+        Target::Both => {}
+        Target::Content => {
+            if let Some(b) = child_box(app, id) {
+                let r = egui::Rect::from_two_pos(view.to_screen(b.quad[0]), view.to_screen(b.quad[2]));
+                painter.rect_stroke(r, 0., stroke, StrokeKind::Inside);
+                for p in [r.left_top(), r.center_top(), r.right_top(), r.right_center(), r.right_bottom(), r.center_bottom(), r.left_bottom(), r.left_center()]
+                {
+                    paint_handle(&painter, p, &t);
+                }
             }
         }
-    } else if target == Target::Frame {
-        for (p, _, _) in handles(&f) {
-            paint_handle(painter, xf.to_screen(p.x as f32, p.y as f32), &t);
-        }
-    }
-}
-fn paint_handle(p: &egui::Painter, at: Pos2, t: &Tokens) {
-    let r = egui::Rect::from_center_size(at, egui::vec2(6., 6.));
-    p.rect_filled(r, 0., t.card);
-    p.rect_stroke(r, 0., Stroke::new(1., t.accent), StrokeKind::Inside);
-}
-pub fn cursor(app: &PhotocraftApp, p: [f64; 2]) -> Option<CursorIcon> {
-    let zoom = f64::from(app.point_zoom());
-    if let Some(l) = selected(app)
-        && let Some(f) = &l.frame
-        && target(app, l) == Target::Frame
-        && let Some(hit) = control_hit(f, p, zoom)
-    {
-        return Some(match hit {
-            EditMode::Resize(0, _) => CursorIcon::ResizeVertical,
-            EditMode::Resize(_, 0) => CursorIcon::ResizeHorizontal,
-            EditMode::Resize(x, y) if x == y => CursorIcon::ResizeNwSe,
-            EditMode::Resize(..) => CursorIcon::ResizeNeSw,
-            _ => CursorIcon::Crosshair,
-        });
-    }
-    frame_at(app, p).map(|_| CursorIcon::Move)
-}
-fn stroke_json(s: &photocraft_doc::ShapeStroke) -> Value {
-    let fill = match &s.paint {
-        photocraft_doc::Fill::Solid(c) => {
-            let [r, g, b] = c.to_rgb();
-            json!([r, g, b, c.alpha])
-        }
-        _ => Value::Null,
-    };
-    json!({"color":fill,"width":s.width,"opacity":s.opacity*100.,"align":match s.align{photocraft_doc::StrokeAlign::Inside=>"inside",photocraft_doc::StrokeAlign::Outside=>"outside",_=>"center"}})
-}
-fn stroke_controls(ui: &mut egui::Ui, value: &mut Option<photocraft_doc::ShapeStroke>) -> bool {
-    let before = value.clone();
-    let mut enabled = value.is_some();
-    if crate::widgets::checkbox(ui, &mut enabled, tl!("Stroke")).changed() {
-        *value = enabled.then(photocraft_doc::ShapeStroke::default);
-    }
-    if let Some(s) = value {
-        let c = match s.paint {
-            photocraft_doc::Fill::Solid(c) => c,
-            _ => photocraft_doc::Color::BLACK,
-        };
-        let [r, g, b] = c.to_rgb();
-        let mut rgba = [r, g, b, c.alpha];
-        if ui.color_edit_button_rgba_unmultiplied(&mut rgba).changed() {
-            s.paint = photocraft_doc::Fill::Solid(photocraft_doc::Color::rgba(rgba[0], rgba[1], rgba[2], rgba[3]));
-        }
-        crate::widgets::value_field_named(ui, tl!("Stroke:"), &mut s.width, 0.0..=1000.0, "px", 58.0);
-        craft_ui::ComboBox::from_id_salt("frame-stroke-align")
-            .selected_text(match s.align {
-                photocraft_doc::StrokeAlign::Inside => tl!("Inside"),
-                photocraft_doc::StrokeAlign::Outside => tl!("Outside"),
-                _ => tl!("Center"),
-            })
-            .show_ui(ui, |ui| {
-                for (a, label) in [
-                    (photocraft_doc::StrokeAlign::Inside, tl!("Inside")),
-                    (photocraft_doc::StrokeAlign::Center, tl!("Center")),
-                    (photocraft_doc::StrokeAlign::Outside, tl!("Outside")),
-                ] {
-                    ui.selectable_value(&mut s.align, a, label);
-                }
+        Target::Frame => {
+            let locked = app.session.active().is_some_and(|st| {
+                let locks = st.doc.effective_locks(id);
+                locks.all || locks.position
             });
+            if locked {
+                return;
+            }
+            // The box is rebuilt from the frame each pass, so no box state outlives it.
+            let state = frame_box(&f.transform);
+            let start = KRect::from_points(state.quad[0], state.quad[2]);
+            let rules = BoxRules::default().with_scale(ScaleRule::Free).with_allow(BoxAllow::new(true, false, false));
+            let shown = TransformBox::new("Frame", Bind::given(state), start, 0.0).reference_point(false).inside_moves(false).rules(rules).show_at(ui, rect);
+            let events: Vec<_> = shown.edit.events.iter().cloned().collect();
+            for event in events {
+                match event {
+                    EditEvent::Update { value, .. } => update_preview(app, id, frame_affine(&value)),
+                    EditEvent::Commit { after, .. } | EditEvent::Set { after, .. } => {
+                        app.frame_preview = None;
+                        let transform = frame_affine(&after);
+                        if transform != original {
+                            let r = app.run("layer.frame.set", json!({"layer":id.0,"transform":transform.m}));
+                            report(app, r);
+                        }
+                    }
+                    EditEvent::Cancel { .. } => app.frame_preview = None,
+                    _ => {}
+                }
+            }
+        }
     }
-    *value != before
 }
+
+// ---- the options bar ----
+
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bool {
     if tool != Tool::Frame {
         return false;
     }
-    app.frame_tool_ctx = Some(ui.ctx().clone());
-    for (icon, shape, label) in [
+    // An icon entry's label is its tooltip and accessible name.
+    let entries: Vec<Entry<String>> = [
         ("square", "rectangle", tl!("Create a new rectangular frame")),
         ("circle", "ellipse", tl!("Create a new elliptical frame")),
         ("triangle", "triangle", tl!("Create a new triangular frame")),
         ("pentagon", "polygon", tl!("Create a new polygonal frame")),
         ("shapes", "custom", tl!("Create a new custom frame")),
-    ] {
-        let current = if app.ui.frame_tool.ellipse {
-            "ellipse"
-        } else if app.ui.frame_tool.shape.is_empty() {
-            "rectangle"
-        } else {
-            &app.ui.frame_tool.shape
-        };
-        if crate::icons::button(ui, icon, 24., current == shape, label).clicked() {
-            app.ui.frame_tool.shape = shape.into();
-            app.ui.frame_tool.ellipse = shape == "ellipse";
-        }
+    ]
+    .into_iter()
+    .map(|(icon, shape, label)| Entry::new(shape.to_string(), label).icon(IconId::new(icon)))
+    .collect();
+    let current = current_shape(&app.ui.frame_tool).to_string();
+    let mut shape = current.clone();
+    Segmented::new("Frame shape", Bind::bound(&mut shape), &entries).show(ui);
+    if shape != current {
+        app.ui.frame_tool.ellipse = shape == "ellipse";
+        app.ui.frame_tool.shape = shape;
     }
     if app.ui.frame_tool.shape == "polygon" {
-        ui.label(tl!("Sides:"));
-        let mut n = app.ui.frame_tool.sides.clamp(3, 100) as f32;
-        crate::widgets::value_field_named(ui, tl!("Sides:"), &mut n, 3.0..=100.0, "", 44.);
-        app.ui.frame_tool.sides = n as u32;
+        let mut sides = Some(f64::from(app.ui.frame_tool.sides.clamp(3, 100)));
+        NumberField::new("Sides", Bind::bound(&mut sides)).range(3.0..=100.0).show(ui);
+        if let Some(n) = sides {
+            app.ui.frame_tool.sides = (n.round() as u32).clamp(3, 100);
+        }
     }
     if app.ui.frame_tool.shape == "custom" {
         crate::preset_panels::shape_picker(app, ui);
     }
-    crate::widgets::vline(ui, 22.);
-    let gesture = crate::vector_ui::paint_gesture(ui, ui.scope_id().with("frame-options-gesture"));
-    let coalesce = format!("frame-stroke-{}-{gesture}", ui.scope_id().value());
-    let mut stroke = selected(app).and_then(|l| l.frame.as_ref()).map_or_else(|| app.ui.frame_tool.stroke.clone(), |f| f.stroke.clone());
-    if stroke_controls(ui, &mut stroke) {
-        app.ui.frame_tool.stroke = stroke.clone();
+    Divider::vertical().show(ui);
+    let mut value = selected(app).and_then(|l| l.frame.as_ref()).map_or_else(|| app.ui.frame_tool.stroke.clone(), |f| f.stroke.clone());
+    if let Some(change) = stroke::cells(ui, &mut value, "frame-bar") {
+        app.ui.frame_tool.stroke = value.clone();
         if let Some(id) = selected(app).map(|l| l.id) {
-            let params = stroke.as_ref().map(stroke_json).unwrap_or(Value::Null);
-            let r = app.run("layer.frame.set", json!({"layer":id.0,"stroke":params,"coalesce":coalesce}));
+            let r = app.run("layer.frame.set", json!({"layer":id.0,"stroke":stroke::param(&value),"coalesce":change.coalesce}));
             report(app, r);
         }
     }
     true
 }
-/// Frame-aware Properties: W/H/X/Y edit the container; the content can be selected/fitted/replaced.
-pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer) {
-    let Some(f) = &l.frame else { return };
-    if app.session.active().is_some_and(|st| {
-        let locks = st.doc.effective_locks(l.id);
-        locks.all || locks.position
-    }) {
-        ui.disable();
-    }
-    let gesture = crate::vector_ui::paint_gesture(ui, ui.scope_id().with("frame-properties-gesture"));
-    let coalesce = format!("frame-properties-{}-{gesture}", l.id.0);
-    let [a, b, c, d, x, y] = f.transform.m;
-    let (w, h) = (a.hypot(b), c.hypot(d));
-    let mut values = [w as f32, h as f32, x as f32, y as f32];
-    let mut changed = false;
-    ui.label(tl!("Frame"));
-    ui.horizontal(|ui| {
-        for (i, label) in [(0, tl!("W")), (1, tl!("H"))] {
-            ui.label(label);
-            if let Some(v) = values.get_mut(i) {
-                changed |= crate::widgets::value_field_named(ui, label, v, 1.0..=300_000.0, "px", 66.).changed();
-            }
-        }
-    });
-    ui.horizontal(|ui| {
-        for (i, label) in [(2, tl!("X")), (3, tl!("Y"))] {
-            ui.label(label);
-            if let Some(v) = values.get_mut(i) {
-                changed |= crate::widgets::value_field_named(ui, label, v, -300_000.0..=300_000.0, "px", 66.).changed();
-            }
-        }
-    });
-    if changed && w > 0. && h > 0. {
-        let [nw, nh, nx, ny] = values;
-        let r = app.run(
-            "layer.frame.set",
-            json!({"layer":l.id.0,"transform":[a*f64::from(nw)/w,b*f64::from(nw)/w,c*f64::from(nh)/h,d*f64::from(nh)/h,nx,ny],"coalesce":coalesce}),
-        );
-        report(app, r);
-    }
-    let mut stroke = f.stroke.clone();
-    ui.horizontal_wrapped(|ui| {
-        if stroke_controls(ui, &mut stroke) {
-            let r = app.run("layer.frame.set", json!({"layer":l.id.0,"stroke":stroke.as_ref().map(stroke_json).unwrap_or(Value::Null),"coalesce":coalesce}));
-            report(app, r);
-        }
-    });
-    ui.separator();
-    ui.horizontal_wrapped(|ui| {
-        if ui.selectable_label(target(app, l) == Target::Frame, tl!("Frame")).clicked() {
-            select(app, l.id, Target::Frame);
-        }
-        if l.children().is_some_and(|c| !c.is_empty()) {
-            if ui.selectable_label(target(app, l) == Target::Content, tl!("Image")).clicked() {
-                select(app, l.id, Target::Content);
-            }
-            if ui.selectable_label(target(app, l) == Target::Both, tl!("Both")).clicked() {
-                select(app, l.id, Target::Both);
-            }
-        }
-    });
-    if ui.button(if l.children().is_some_and(|c| !c.is_empty()) { tl!("Replace Image…") } else { tl!("Import Image…") }).clicked() {
-        select(app, l.id, Target::Frame);
-        let ctx = ui.ctx().clone();
-        let r = crate::menus::invoke(app, &ctx, "file.placeEmbedded", json!({}));
-        report(app, r);
-    }
-    if l.children().is_some_and(|c| !c.is_empty()) {
-        for (mode, label) in [("contentToFrame", tl!("Fit Content to Frame")), ("frameToContent", tl!("Fit Frame to Content"))] {
-            if ui.button(label).clicked() {
-                let r = app.run("layer.frame.fit", json!({"layer":l.id.0,"mode":mode}));
-                report(app, r);
-            }
-        }
-    }
-}
+
+#[cfg(test)]
+mod escape_commit_tests;
+#[cfg(test)]
+mod move_history_tests;
+#[cfg(test)]
+mod shift_square_tests;
+#[cfg(test)]
+mod size_hud_tests;
+#[cfg(test)]
+mod space_move_tests;
 #[cfg(test)]
 mod tests;
 
-/// A compact on-canvas import/replace bar, following the currently selected frame.
-pub fn task_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, xf: &ViewXform) {
-    if app.ui.tool != Tool::Frame || app.ui.frame_tool.drag.is_some() || app.ui.transform.is_some() || !app.ui.dialogs.is_empty() {
-        return;
-    }
-    let Some(l) = selected(app) else { return };
-    if !visible(app, l.id) {
-        return;
-    }
-    let (id, empty) = (l.id, l.children().is_none_or(|c| c.is_empty()));
-    let Some(f) = &l.frame else { return };
-    let bounds = f.bounds();
-    let p = xf.to_screen((f64::from(bounds.x0) + f64::from(bounds.x1)) as f32 / 2., bounds.y1 as f32);
-    let width = if empty { 170.0 } else { 290.0 };
-    let at = egui::pos2(
-        (p.x - width / 2.).clamp(xf.rect.left() + 8., (xf.rect.right() - width - 8.).max(xf.rect.left() + 8.)),
-        (p.y + 18.).min(xf.rect.bottom() - 42.).max(xf.rect.top() + 8.),
-    );
-    let ctx = ui.ctx().clone();
-    let t = Tokens::get(&ctx);
-    egui::Area::new(egui::Id::unique("frame-context-bar")).order(egui::Order::Middle).fixed_pos(at).show(&ctx, |ui| {
-        egui::Frame::NONE.fill(t.card).stroke(Stroke::new(1., t.field_border)).corner_radius(t.radius).inner_margin(6.).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                if ui.button(if empty { tl!("Import Image…") } else { tl!("Replace Image…") }).clicked() {
-                    select(app, id, Target::Frame);
-                    let r = crate::menus::invoke(app, &ctx, "file.placeEmbedded", json!({}));
-                    report(app, r);
-                }
-                if !empty && ui.button(tl!("Fit Content to Frame")).clicked() {
-                    let r = app.run("layer.frame.fit", json!({"layer":id.0}));
-                    report(app, r);
-                }
-            });
-        });
-    });
-}
-
 /// Free Transform on the frame thumbnail edits the clipping geometry, leaving its image intact.
-pub(crate) fn frame_transform(t: &crate::state::TransformSession) -> bool {
+pub(crate) fn frame_transform(t: &FreeTransform) -> bool {
     t.target.as_ref().and_then(|v| v.get("frame")).and_then(Value::as_u64) == Some(t.layer)
 }
-pub(crate) fn transformed_frame(app: &PhotocraftApp, t: &crate::state::TransformSession) -> Result<Affine, String> {
-    if t.warp.is_some() {
+pub(crate) fn transformed_frame(app: &PhotocraftApp, t: &FreeTransform) -> Result<Affine, String> {
+    if t.session.warp().is_some() {
         return Err(tl!("A frame supports affine transforms; select its image to warp it").into());
     }
-    let [x0, y0, x1, y1] = t.rect;
-    let (w, h) = (x1 - x0, y1 - y0);
-    let [q0, q1, q2, q3] = t.quad;
+    let r = t.session.rect();
+    let (x0, y0, w, h) = (r.x0, r.y0, r.width(), r.height());
+    let quad = t.session.quad();
+    let [q0, q1, q2, q3] = quad;
     if w <= 0.
         || h <= 0.
-        || !t.quad.iter().flatten().all(|v| v.is_finite())
-        || ((q1[0] + q3[0] - q0[0]) - q2[0]).abs() > 0.001
-        || ((q1[1] + q3[1] - q0[1]) - q2[1]).abs() > 0.001
+        || !quad.iter().all(|p| p.x.is_finite() && p.y.is_finite())
+        || ((q1.x + q3.x - q0.x) - q2.x).abs() > 0.001
+        || ((q1.y + q3.y - q0.y) - q2.y).abs() > 0.001
     {
         return Err(tl!("A frame supports affine transforms; select its image for perspective transforms").into());
     }
-    let (a, b, c, d) = ((q1[0] - q0[0]) / w, (q1[1] - q0[1]) / w, (q3[0] - q0[0]) / h, (q3[1] - q0[1]) / h);
-    let map = Affine { m: [a, b, c, d, q0[0] - a * x0 - c * y0, q0[1] - b * x0 - d * y0] };
+    let (a, b, c, d) = ((q1.x - q0.x) / w, (q1.y - q0.y) / w, (q3.x - q0.x) / h, (q3.y - q0.y) / h);
+    let map = Affine { m: [a, b, c, d, q0.x - a * x0 - c * y0, q0.y - b * x0 - d * y0] };
     let original = app
         .session
         .active()
@@ -901,37 +859,3 @@ pub(crate) fn transformed_frame(app: &PhotocraftApp, t: &crate::state::Transform
     }
     Ok(f.transform)
 }
-
-/// Arrow keys respect which thumbnail is selected; Shift moves ten document pixels.
-pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
-    if app.ui.tool != Tool::Frame
-        || app.ui.transform.is_some()
-        || app.ui.frame_tool.drag.is_some()
-        || ctx.input(|i| i.modifiers.command || i.modifiers.ctrl || i.modifiers.alt)
-    {
-        return false;
-    }
-    let Some(l) = selected(app) else { return false };
-    let (id, t, frame, child) = (l.id, target(app, l), l.frame.clone(), l.children().and_then(|c| c.first()).map(|l| l.id));
-    for (key, dx, dy) in [(egui::Key::ArrowLeft, -1., 0.), (egui::Key::ArrowRight, 1., 0.), (egui::Key::ArrowUp, 0., -1.), (egui::Key::ArrowDown, 0., 1.)] {
-        for mods in [egui::Modifiers::SHIFT, egui::Modifiers::NONE] {
-            if ctx.input_mut(|i| i.consume_key(mods, key)) {
-                let k = if mods.shift { 10. } else { 1. };
-                app.nudge_bundle.now = ctx.input(|i| i.time);
-                let (command, params) = if t == Target::Frame {
-                    let Some(mut f) = frame.clone() else { return true };
-                    f.transform = Affine::translate(dx * k, dy * k).mul(&f.transform);
-                    ("layer.frame.set", json!({"layer":id.0,"transform":f.transform.m}))
-                } else {
-                    ("layer.translate", json!({"layer":if t==Target::Content{child.unwrap_or(id).0}else{id.0},"dx":dx*k,"dy":dy*k}))
-                };
-                let r = crate::nudge_bundle::run(app, "frame", command, params);
-                report(app, r);
-                return true;
-            }
-        }
-    }
-    false
-}
-#[cfg(test)]
-mod move_history_tests;

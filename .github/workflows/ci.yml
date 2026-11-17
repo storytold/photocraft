@@ -78,7 +78,11 @@ jobs:
   # get both. Other PRs get Windows when they touch code whose behaviour differs by platform: the
   # app shell, UI, text and fonts, GPU, pen input, native saves, build scripts or the lockfile.
   # Format changes must exercise the Windows-only publication barriers (#8034). macOS is tested
-  # only by release.yml.
+  # only by release.yml. `windows_gpu`: whether those Windows legs run photocraft-gpu's tests, which
+  # render on WARP, the CPU Direct3D 12 rasterizer, and took half of the integration leg's test time.
+  # Pull requests run them only when they change the GPU crate, a workspace crate it builds on, any
+  # package manifest, or a file outside the workspace packages other than documentation
+  # (scripts/ci-windows-gpu-tests.py, #15247); the Linux gate runs them on every pull request, and main runs them on Windows too.
   platforms:
     if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
     timeout-minutes: 10
@@ -86,6 +90,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       windows: ${{ steps.pick.outputs.windows }}
+      windows_gpu: ${{ steps.pick.outputs.windows_gpu }}
       web: ${{ steps.pick.outputs.web }}
     steps:
       - name: Harden runner
@@ -103,8 +108,11 @@ jobs:
           FULL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') }}
         run: |
           if [ "$EVENT" != pull_request ] || [ "$FULL" = true ]; then
-            echo "windows=true" >> "$GITHUB_OUTPUT"
-            echo "web=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "windows=true"
+              echo "windows_gpu=true"
+              echo "web=true"
+            } >> "$GITHUB_OUTPUT"
             exit 0
           fi
           # The browser build (a fat-LTO wasm build) runs only when something it compiles or
@@ -121,6 +129,8 @@ jobs:
           else
             echo "windows=false" >> "$GITHUB_OUTPUT"
           fi
+          gpu=$(python3 scripts/ci-windows-gpu-tests.py "$BASE")
+          echo "windows_gpu=$gpu" >> "$GITHUB_OUTPUT"
 
   # The Linux gate. Its rust-cache entry is the one `test (without heif)` restores.
   gate:
@@ -144,7 +154,7 @@ jobs:
       timeout-minutes: 100
       # fmt, clippy, layers, panel-commands, scorecard, tests, panic_hunt, doctests and the wasm32 check, with
       # `--locked --features heif`, then the missing-translations report (xtask/src/main.rs).
-      command: python3 scripts/test-ci-gpu-lavapipe.py && cargo xtask ci && python3 scripts/ci-gpu-lavapipe.py
+      command: python3 scripts/test-ci-gpu-lavapipe.py && python3 scripts/test-ci-windows-gpu-tests.py && cargo xtask ci && python3 scripts/ci-gpu-lavapipe.py
 
   # Windows tests run as two legs in parallel: the unit tests and the integration tests. As one job
   # they took ~28 min on the Windows runner; the legs take ~13 and ~15. Splitting the integration
@@ -209,14 +219,33 @@ jobs:
           toolchain: stable
           components: clippy
 
+      # rust-cache only looks at `<workspace>/<target>` (it joins the two), so the short
+      # CARGO_TARGET_DIR above must be passed as a path relative to the checkout. Without it the
+      # cache found nothing to restore or save and every run built all dependencies from scratch.
+      - name: Target directory for the dependency cache
+        id: cache-target
+        # An empty path would make rust-cache treat the checkout itself as the target directory,
+        # which its cleanup then prunes, so stop rather than write one.
+        run: |
+          relative=$(realpath -m --relative-to="$(cygpath -u "$GITHUB_WORKSPACE")" "$(cygpath -u "$CARGO_TARGET_DIR")")
+          if [ -z "$relative" ] || [ "$relative" = . ]; then
+            echo "::error::no target directory for rust-cache from CARGO_TARGET_DIR='$CARGO_TARGET_DIR'"
+            exit 1
+          fi
+          echo "relative=$relative" >> "$GITHUB_OUTPUT"
+        shell: bash
+
       # Only main saves caches; PRs restore main's, so the repo's 10 GB cache budget keeps main's.
-      # A failing test still saves: the cache holds compiled dependencies, not test results.
       # Both legs share one key (same dependencies); the integration leg saves it, because it also
-      # runs Clippy and so leaves Clippy's dependency metadata in it.
+      # runs Clippy and so leaves Clippy's dependency metadata in it. A failed run saves nothing:
+      # when Clippy fails, the test build never ran, and an entry saved then would lack its
+      # dependencies. rust-cache never replaces an entry with the same key, so every later run
+      # would restore that half-filled entry until Cargo.lock changes.
       - uses: step-security/rust-cache@8871c8ba063416da7c32246932ea6ae08700453e # v2.9.2
         with:
+          workspaces: . -> ${{ steps.cache-target.outputs.relative }}
           save-if: ${{ github.ref == 'refs/heads/main' && matrix.part == 'integration' }}
-          cache-on-failure: true
+          cache-on-failure: false
 
       - name: Clippy
         if: matrix.part == 'integration'
@@ -232,16 +261,24 @@ jobs:
 
       # The unit leg runs `--lib --bins` and the integration leg `--test '*'` (every
       # integration-test target); the feature selection stays the same, so both legs share the
-      # dependency cache.
+      # dependency cache. photocraft-gpu's tests run when the `platforms` job says they can be
+      # affected (`windows_gpu`); excluding the package also skips building its test binaries.
       - name: Test
         env:
           PART: ${{ matrix.part }}
+          GPU: ${{ needs.platforms.outputs.windows_gpu }}
         run: |
           case "$PART" in
             unit) targets=(--lib --bins) ;;
             *) targets=(--test '*') ;;
           esac
-          cargo nextest run --profile ci --workspace --locked --features heif "${targets[@]}"
+          skip=()
+          # Only an explicit `false` skips them: a missing output runs everything.
+          if [ "$GPU" = false ]; then
+            skip=(--exclude photocraft-gpu)
+            echo "::notice::photocraft-gpu's tests are skipped on Windows: this pull request changes nothing they are built from (the Linux gate still runs them)."
+          fi
+          cargo nextest run --profile ci --workspace "${skip[@]}" --locked --features heif "${targets[@]}"
         shell: bash
 
       - name: Doctests
