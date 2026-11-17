@@ -162,7 +162,7 @@ fn every_missing_file_gets_a_row_in_path_order() {
     let bytes = std::fs::read(&s.doc).unwrap();
     photocraft_engine::file_cmds::open_bytes_as(&mut session, "doc.pcraft", &bytes, None, Some(abs(&s.doc))).unwrap();
     session.execute("file.placeLinked", json!({"path": abs(&other)})).unwrap();
-    session.execute("file.saveACopy", json!({"path": abs(&s.doc)})).unwrap();
+    session.execute("file.saveACopy", json!({"path": abs(&s.doc), "overwrite": true})).unwrap();
     std::fs::remove_file(&other).unwrap();
     let (mut app, _) = app();
     open_file(&mut app, &s.doc);
