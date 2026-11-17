@@ -27,10 +27,10 @@ pub fn open(app: &mut PhotocraftApp) -> Result<Value, String> {
         fields.insert("__label".into(), json!("Duplicate Layers…"));
     } else if layer.is_group() {
         fields.insert("__label".into(), json!("Duplicate Group…"));
-        fields.insert("name".into(), json!(st.doc.copy_name(&layer.name)));
+        fields.insert("name".into(), json!(app.session.default_names().copy(&st.doc, &layer.name)));
     } else {
         fields.insert("__label".into(), json!("Duplicate Layer…"));
-        fields.insert("name".into(), json!(st.doc.copy_name(&layer.name)));
+        fields.insert("name".into(), json!(app.session.default_names().copy(&st.doc, &layer.name)));
     }
     let id = app.ui.open_dialog(DialogKind::Command, fields);
     Ok(json!({"dialog": id}))

@@ -83,6 +83,7 @@ pub(super) fn new_spot(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 pub(super) fn duplicate_channel(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     let cmd = "channel.duplicate";
     let src = s.active().ok_or(EngineError::NoDocument)?;
     let area = src.doc.bounds();
@@ -108,7 +109,7 @@ pub(super) fn duplicate_channel(s: &mut Session, p: &Value) -> Result<Value> {
     match p.get("document") {
         Some(Value::String(x)) if x == "new" => {
             // Photoshop makes a multichannel document; ours is grayscale with the channel as pixels.
-            let doc = gray_document(&ch.name, &src.doc, &read_plane(&ch.surface, area));
+            let doc = gray_document(&ch.name, &src.doc, &read_plane(&ch.surface, area), &names);
             let i = s.add_document(doc, None);
             Ok(json!({ "document": i }))
         }
@@ -137,11 +138,11 @@ pub(super) fn duplicate_channel(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// A one-layer grayscale document whose pixels are `plane` (Split Channels, Duplicate Channel
 /// to a new document).
-pub(super) fn gray_document(name: &str, like: &Document, plane: &[f32]) -> Document {
+pub(super) fn gray_document(name: &str, like: &Document, plane: &[f32], names: &crate::default_names::DefaultNames) -> Document {
     let mut d = Document::new(name, like.size, ColorMode::Grayscale, like.depth);
     d.resolution_dpi = like.resolution_dpi;
     let fmt = d.pixel_format();
-    let mut bg = Layer::raster("Background", fmt);
+    let mut bg = Layer::raster(names.base("Background"), fmt);
     bg.locks.transparency = true;
     bg.locks.position = true;
     if let Some(s) = bg.surface_mut() {

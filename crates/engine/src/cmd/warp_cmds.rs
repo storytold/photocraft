@@ -450,6 +450,7 @@ fn warp_type_layer(s: &mut Session, cmd: &str, id: LayerId, w: &Warp) -> Result<
 }
 
 fn apply(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
+    let names = s.default_names();
     let (id, rect) = target(s, cmd, p)?;
     let w = warp_from_params(cmd, p, rect_f(rect))?;
     if matches!(s.active().and_then(|d| d.doc.layer(id)).map(|l| &l.content), Some(LayerContent::Text(_))) {
@@ -470,13 +471,15 @@ fn apply(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     crate::jobs::edit_job(
         s,
         "Warp",
-        move |doc, _, ctx| ctx.stage(0.0, 1.0, "Warping", |ctl| warp_doc(doc, id, &w, rect, interp, content_knots, ctl)),
+        move |doc, _, ctx| ctx.stage(0.0, 1.0, "Warping", |ctl| warp_doc(doc, id, &w, rect, interp, content_knots, ctl, &names.numbered("Layer", 0))),
         move |()| json!({"layer": id.0, "changed": true, "rect": [rect.x0, rect.y0, rect.x1, rect.y1]}),
     )
 }
 
 /// The edit of [`apply`]: the layer and the selection outline.
-fn warp_doc(doc: &mut Document, id: LayerId, w: &Warp, rect: Rect, interp: Interp, content_knots: bool, ctl: &Interrupt) -> Result<()> {
+// The worker receives the generated name with its geometry and cancellation inputs.
+#[allow(clippy::too_many_arguments)]
+fn warp_doc(doc: &mut Document, id: LayerId, w: &Warp, rect: Rect, interp: Interp, content_knots: bool, ctl: &Interrupt, zero_name: &str) -> Result<()> {
     let sel = doc.selection.clone();
     let frames = content_knots.then(|| {
         let mut f = Frames::new();
@@ -487,7 +490,7 @@ fn warp_doc(doc: &mut Document, id: LayerId, w: &Warp, rect: Rect, interp: Inter
     });
     let is_group = doc.layer(id).is_some_and(Layer::is_group);
     let group = crate::transform_cmds::group_locks(doc, id);
-    crate::extra_cmds::background_to_layer(doc, id);
+    crate::extra_cmds::background_to_layer(doc, id, zero_name);
     let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
     warp_layer(if is_group { None } else { sel.as_ref() }, group, l, w, rect, interp, frames.as_ref(), ctl)?;
     let snapshot = doc.clone();

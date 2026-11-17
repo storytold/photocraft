@@ -127,6 +127,7 @@ fn import_flat_impl_with_options(
         }
     };
     apply_flat_format(&mut r, bytes, format, img.as_ref())?;
+    opts.generated_layer_names.apply_to_flat(&mut r.document);
     Ok(r)
 }
 
@@ -535,6 +536,7 @@ pub fn import_tiff_page_with_options(
     if r.document.mode == ColorMode::Grayscale && tiff_is_bilevel(bytes, page) {
         r.document.mode = ColorMode::Bitmap;
     }
+    opts.generated_layer_names.apply_to_flat(&mut r.document);
     Ok(r)
 }
 
@@ -633,7 +635,9 @@ fn import_tiff_with_extras(
         Some(p) => (codecs::decode_tiff_page(bytes, p, &keep)?, codecs::tiff_page_orientation(bytes, p)),
     };
     ctl.check().map_err(|_| IoError::Cancelled)?;
-    image_to_document(name, &img.oriented(orientation)?)
+    let mut imported = image_to_document(name, &img.oriented(orientation)?)?;
+    opts.generated_layer_names.apply_to_flat(&mut imported.document);
+    Ok(imported)
 }
 
 /// Whether the TIFF page that opens (`page`, else the default one) is bilevel: one 1-bit sample

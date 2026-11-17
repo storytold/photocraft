@@ -1331,17 +1331,25 @@ impl Document {
     /// "Layer 1 copy 2", "Layer 1 copy 3"… A name that already ends in "copy" (or "copy N") is
     /// numbered from its root rather than growing another "copy".
     pub fn copy_name(&self, name: &str) -> String {
-        let root = match name.rsplit_once(" copy") {
+        self.copy_name_with_suffix(name, "copy")
+    }
+
+    /// The same collision and repeated-copy rules with a frontend-provided suffix. Names in
+    /// the document stay literal; the model has no language preference or catalog dependency.
+    pub fn copy_name_with_suffix(&self, name: &str, suffix: &str) -> String {
+        let suffix = if suffix.is_empty() { "copy" } else { suffix };
+        let marker = format!(" {suffix}");
+        let root = match name.rsplit_once(&marker) {
             Some((root, rest)) if rest.is_empty() || rest.strip_prefix(' ').is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())) => root,
             _ => name,
         };
         let names: std::collections::HashSet<&str> = self.walk().into_iter().map(|(_, _, l)| l.name.as_str()).collect();
-        let first = format!("{root} copy");
+        let first = format!("{root} {suffix}");
         if !names.contains(first.as_str()) {
             return first;
         }
         // At most `names.len() + 1` candidates are needed, so the search always succeeds.
-        (2..=names.len() + 2).map(|n| format!("{root} copy {n}")).find(|n| !names.contains(n.as_str())).unwrap_or(first)
+        (2..=names.len() + 2).map(|n| format!("{root} {suffix} {n}")).find(|n| !names.contains(n.as_str())).unwrap_or(first)
     }
 
     /// Top-most layer id, useful as the default active layer.
@@ -1587,6 +1595,23 @@ mod tests {
         assert_eq!(d.next_layer_name("Layer"), "Layer 1");
         d.insert_above(None, Layer::raster("Layer 1", d.pixel_format()));
         assert_eq!(d.next_layer_name("Layer"), "Layer 2");
+    }
+
+    #[test]
+    fn copy_suffixes_keep_literal_roots_and_find_collisions_in_groups() {
+        for suffix in ["copy", "Kopie", "副本", ""] {
+            let mut d = doc();
+            let marker = if suffix.is_empty() { "copy" } else { suffix };
+            let first = format!("Title {marker}");
+            assert_eq!(d.copy_name_with_suffix("Title", suffix), first);
+            let child = Layer::raster(&first, d.pixel_format());
+            d.layers.push(Layer::group("Literal", vec![child]));
+            assert_eq!(d.copy_name_with_suffix(&first, suffix), format!("Title {marker} 2"));
+            d.layers.push(Layer::raster(format!("Title {marker} 2"), d.pixel_format()));
+            assert_eq!(d.copy_name_with_suffix(&format!("Title {marker} 2"), suffix), format!("Title {marker} 3"));
+            let literal = format!("Title {marker} 2x");
+            assert_eq!(d.copy_name_with_suffix(&literal, suffix), format!("{literal} {marker}"));
+        }
     }
 
     #[test]

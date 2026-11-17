@@ -201,7 +201,7 @@ fn run_remove(doc: &mut Document, plan: &Plan, p: &Value, ctx: &crate::jobs::Job
 
 /// The fill on a new layer above `id`: the hole's pixels (opaque where the source had no alpha),
 /// transparent elsewhere. Returns the damage and the new layer.
-fn fill_to_new_layer(doc: &mut Document, id: Option<LayerId>, out: &Region, hole: &[bool]) -> Result<(Rect, LayerId)> {
+fn fill_to_new_layer(doc: &mut Document, id: Option<LayerId>, out: &Region, hole: &[bool], name_base: &str) -> Result<(Rect, LayerId)> {
     let base = doc.pixel_format();
     let fmt = PixelFormat::new(base.mode, base.sample, true);
     let n = fmt.channels();
@@ -221,7 +221,7 @@ fn fill_to_new_layer(doc: &mut Document, id: Option<LayerId>, out: &Region, hole
             *a = if out.ch == n { src.last().copied().unwrap_or(1.0) } else { 1.0 };
         }
     }
-    let mut l = Layer::raster(result_layer_name(doc), fmt);
+    let mut l = Layer::raster(result_layer_name(doc, name_base), fmt);
     crate::pixels_mut(&mut l)?.write_region(out.rect, &data);
     // Above the sampled layer and in its clipping mask, like Layer via Copy.
     let nid = crate::layer_place::insert_new(doc, id, l, crate::layer_place::Place::Above);
@@ -230,12 +230,12 @@ fn fill_to_new_layer(doc: &mut Document, id: Option<LayerId>, out: &Region, hole
 
 /// The new layer's name, as Photoshop names it (#12542): "Remove tool edits" while it is free,
 /// then the first free "Remove tool edits N" from 1.
-fn result_layer_name(doc: &Document) -> String {
-    const BASE: &str = "Remove tool edits";
-    if doc.walk().into_iter().any(|(_, _, l)| l.name == BASE) { doc.next_layer_name(BASE) } else { BASE.to_string() }
+fn result_layer_name(doc: &Document, base: &str) -> String {
+    if doc.walk().into_iter().any(|(_, _, l)| l.name == base) { doc.next_layer_name(base) } else { base.to_string() }
 }
 
 pub(super) fn remove(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     let plan = plan(s, p)?;
     let label = "Remove";
     let d = s.active().ok_or(EngineError::NoDocument)?;
@@ -259,7 +259,7 @@ pub(super) fn remove(s: &mut Session, p: &Value) -> Result<Value> {
             let Some((out, hole)) = filled else { return Ok(json!({"changed": false})) };
             if new_layer {
                 let (damage, nid) = s.edit(HISTORY, |doc, active| {
-                    let r = fill_to_new_layer(doc, id, &out, &hole)?;
+                    let r = fill_to_new_layer(doc, id, &out, &hole, &names.base("Remove tool edits"))?;
                     *active = Some(r.1);
                     Ok(r)
                 })?;

@@ -139,12 +139,12 @@ fn multi_copy_ids(d: &crate::DocState) -> Vec<LayerId> {
 /// Every selected layer, whole ([`multi_copy_ids`]), in a scratch document: Paste recreates them
 /// all, each with its mask, styles and content. The Background becomes an ordinary layer, as in
 /// Photoshop's Duplicate Layer.
-fn whole_layers(d: &crate::DocState, ids: &[LayerId]) -> Option<Box<Document>> {
+fn whole_layers(d: &crate::DocState, ids: &[LayerId], names: &crate::default_names::DefaultNames) -> Option<Box<Document>> {
     let mut copies = scratch_doc(&d.doc);
     for id in ids {
         let mut l = d.doc.layer(*id)?.clone();
         if d.doc.is_background(*id) {
-            l.name = "Layer 0".into();
+            l.name = names.numbered("Layer", 0);
             l.locks = Default::default();
         }
         copies.layers.push(l);
@@ -285,6 +285,7 @@ fn merged_surface(doc: &Document) -> Surface {
 }
 
 fn copy(s: &mut Session, merged: bool) -> Result<Value> {
+    let names = s.default_names();
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let canvas = d.doc.bounds();
     let clip = if merged {
@@ -292,7 +293,7 @@ fn copy(s: &mut Session, merged: bool) -> Result<Value> {
     } else {
         let id = d.active_layer.ok_or(EngineError::Other("no active layer".into()))?;
         let several = multi_copy_ids(d);
-        let mut layers = if several.is_empty() { whole_layer(d, id) } else { whole_layers(d, &several) };
+        let mut layers = if several.is_empty() { whole_layer(d, id) } else { whole_layers(d, &several, &names) };
         if let Some(copies) = &mut layers {
             copy_linked_sources(&d.doc, copies)?;
         }
@@ -489,6 +490,7 @@ pub(crate) fn clear_area(doc: &mut Document, id: LayerId, area: Rect, sel: Optio
 /// Paste as a new layer (or into the targeted mask or channel: [`paste_to_target`]). `in_place` keeps the original position; otherwise the pixels are centred
 /// on `center` (the view centre from the UI) or the canvas, unless they already overlap the canvas.
 fn paste(s: &mut Session, p: &Value, in_place: bool) -> Result<Value> {
+    let names = s.default_names();
     let mode = super::vector_clipboard::mode(p)?;
     if let Some(mode) = mode {
         super::vector_clipboard::validate(s, p, in_place)?;
@@ -531,7 +533,7 @@ fn paste(s: &mut Session, p: &Value, in_place: bool) -> Result<Value> {
     let target = PixelFormat::new(fmt.mode, fmt.sample, true);
     let surf = if moved.format() == target { moved } else { moved.convert(target) };
     let id = s.edit("Paste", |doc, active| {
-        let mut l = Layer::raster(doc.next_layer_name("Layer"), target);
+        let mut l = Layer::raster(doc.next_layer_name(&names.base("Layer")), target);
         *crate::pixels_mut(&mut l)? = surf;
         let id = crate::layer_place::insert_new(doc, *active, l, crate::layer_place::Place::AutoEditable);
         if let Some(b) = board {
@@ -683,6 +685,7 @@ pub(crate) fn paste_to_target(s: &mut Session, p: &Value, in_place: bool, limit:
 /// A new document the size of the clipboard image, holding it as its one layer, in the pixel
 /// format it was copied in (#368).
 fn new_from_clipboard(s: &mut Session) -> Result<Value> {
+    let names = s.default_names();
     let clip = s.clipboard.clone().ok_or(EngineError::Other("the clipboard is empty".into()))?;
     let b = clip.bounds;
     let (w, h) = (b.width(), b.height());
@@ -700,7 +703,7 @@ fn new_from_clipboard(s: &mut Session) -> Result<Value> {
     if let Some(r) = clip.resolution.filter(|r| r.is_finite() && *r > 0.0) {
         doc.resolution_dpi = r;
     }
-    let mut l = Layer::raster(doc.next_layer_name("Layer"), target);
+    let mut l = Layer::raster(doc.next_layer_name(&names.base("Layer")), target);
     *crate::pixels_mut(&mut l)? = if moved.format() == target { moved } else { moved.convert(target) };
     doc.layers.push(l);
     let i = s.add_document(doc, None);
@@ -712,6 +715,7 @@ fn new_from_clipboard(s: &mut Session) -> Result<Value> {
 }
 
 fn layer_via(s: &mut Session, cut: bool) -> Result<Value> {
+    let names = s.default_names();
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let id = active_id(s)?;
     let has_sel = d.doc.selection.is_some();
@@ -724,7 +728,7 @@ fn layer_via(s: &mut Session, cut: bool) -> Result<Value> {
         let nid = s.edit("Layer Via Copy", |doc, active| {
             let src = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
             let mut dup = src.duplicate();
-            dup.name = doc.copy_name(&src.name);
+            dup.name = names.copy(doc, &src.name);
             dup.locks = Default::default();
             let nid = doc.insert_above(Some(id), dup);
             // A lone copy joins its original's link group, as in the reference application (#11217).
@@ -745,7 +749,7 @@ fn layer_via(s: &mut Session, cut: bool) -> Result<Value> {
         if cut {
             clear_selected(doc, id, bg)?;
         }
-        let mut l = Layer::raster(doc.next_layer_name("Layer"), clip.surface.format());
+        let mut l = Layer::raster(doc.next_layer_name(&names.base("Layer")), clip.surface.format());
         *crate::pixels_mut(&mut l)? = clip.surface;
         let nid = crate::layer_place::insert_new(doc, Some(id), l, crate::layer_place::Place::Above);
         *active = Some(nid);

@@ -1260,7 +1260,7 @@ impl Session {
         let label = format!("Opening {name}");
         let name_w = name.to_string();
         let name_a = name.to_string();
-        let mut opts = import_options(self.prefs());
+        let mut opts = self.import_options();
         // An interactive raw open keeps its sensor data for the Camera Raw dialog it may show.
         opts.keep_raw = confirm_damage && self.prefs().raw_defaults.open_in_camera_raw;
         opts.psd_high_memory_approved = approve_high_memory;

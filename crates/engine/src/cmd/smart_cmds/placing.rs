@@ -190,6 +190,11 @@ fn any_layer(l: &Layer, f: &dyn Fn(&Layer) -> bool) -> bool {
 /// blend mode, clipping and label stay on the smart layer. The cache is the exact composite, so
 /// the document looks the same before and after.
 pub fn layer_to_smart(doc: &Document, l: &Layer) -> Result<Layer> {
+    layer_to_smart_with_names(doc, l, &Default::default())
+}
+
+/// Smart conversion using the caller's generated-name policy.
+pub fn layer_to_smart_with_names(doc: &Document, l: &Layer, names: &crate::default_names::DefaultNames) -> Result<Layer> {
     let background = doc.is_background(l.id);
     let mut inner = l.clone();
     inner.visible = true;
@@ -200,11 +205,11 @@ pub fn layer_to_smart(doc: &Document, l: &Layer) -> Result<Layer> {
         inner.blend = BlendMode::Normal;
     }
     if background {
-        inner.name = "Layer 0".into();
+        inner.name = names.numbered("Layer", 0);
     }
     let mut out = layers_to_smart(doc, &l.name, vec![inner])?;
     if background {
-        out.name = "Layer 0".into();
+        out.name = names.numbered("Layer", 0);
     }
     out.visible = l.visible;
     out.opacity = l.opacity;
@@ -266,6 +271,7 @@ pub fn layers_to_smart(doc: &Document, name: &str, layers: Vec<Layer>) -> Result
 }
 
 pub(super) fn convert(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     let ids = match crate::commands::explicit_layer(s, p)? {
         Some(id) => vec![id],
         None => crate::layer_multi_cmds::selected(s),
@@ -275,7 +281,7 @@ pub(super) fn convert(s: &mut Session, p: &Value) -> Result<Value> {
         let top = *ids.last().ok_or_else(|| other("no layer selected"))?;
         let l = doc.layer(top).ok_or(EngineError::NoLayer(top))?;
         let so = if ids.len() == 1 {
-            layer_to_smart(doc, l)?
+            layer_to_smart_with_names(doc, l, &names)?
         } else {
             let children = ids.iter().map(|id| doc.layer(*id).cloned().ok_or(EngineError::NoLayer(*id))).collect::<Result<Vec<_>>>()?;
             layers_to_smart(doc, &l.name, children)?
@@ -319,11 +325,12 @@ fn retarget_layer_refs(doc: &mut Document, from: LayerId, to: LayerId) {
 // ---------- contents ----------
 
 pub(super) fn via_copy(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     let id = layer_param(s, p)?;
     s.edit("New Smart Object via Copy", |doc, active| {
         let src = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
         let mut copy = src.duplicate();
-        copy.name = doc.copy_name(&src.name);
+        copy.name = names.copy(doc, &src.name);
         if let LayerContent::Smart(sm) = &mut copy.content {
             // Independent contents: resolve to embedded bytes and drop the shared PSD uuid.
             sm.contents_id = SmartContentsId::fresh();

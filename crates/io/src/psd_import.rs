@@ -46,6 +46,7 @@ pub(crate) const MAPPED_RESOURCES: [u16; 19] = [
 pub(crate) const REGENERATED: [&[u8; 4]; 9] = [b"luni", b"lyid", b"lsct", b"lsdk", b"iOpa", b"lspf", b"lclr", b"lfx2", b"lfxs"];
 
 pub(crate) struct Ctx<'a> {
+    pub generated_background_name: String,
     pub file: &'a PsdFile,
     /// Global blocks shared with the document.
     pub global: Vec<PsdGlobalBlock>,
@@ -1003,7 +1004,7 @@ pub(crate) fn parse_guides(data: &[u8], doc: &mut Document) {
 /// A flattened file's merged image as its layer: like Photoshop, an opaque one is the locked
 /// Background (Photoshop 27.11 opens psd-tools' flat Bitmap and Indexed files that way), so it is
 /// written back as one.
-fn flat_background(s: Surface) -> Layer {
+fn flat_background(s: Surface, name: &str) -> Layer {
     // A band of tile rows at a time (no full-size float copy), stopping at the first
     // transparent pixel.
     let opaque = {
@@ -1020,7 +1021,7 @@ fn flat_background(s: Surface) -> Layer {
         }
         opaque
     };
-    let mut l = Layer::new("Background", LayerContent::Raster(s));
+    let mut l = Layer::new(name, LayerContent::Raster(s));
     l.locks.transparency = opaque;
     l.locks.position = opaque;
     l
@@ -1059,9 +1060,19 @@ pub fn psd_to_document_with(file: &PsdFile, ctl: &photocraft_raster::Interrupt) 
 /// fourth value is a failure to read it, which fails the open (a layer is never left empty
 /// because its file became unreadable while it opened).
 pub(crate) fn psd_to_document_owned(
+    file: PsdFile,
+    ctl: &photocraft_raster::Interrupt,
+    decoded: Option<craft_psd::Result<Vec<u8>>>,
+) -> Option<(Document, Vec<String>, bool, Option<crate::IoError>)> {
+    psd_to_document_owned_with_background(file, ctl, decoded, "Background")
+}
+
+/// Only flattened/recovery layers receive this name; saved layer records keep theirs.
+pub(crate) fn psd_to_document_owned_with_background(
     mut file: PsdFile,
     ctl: &photocraft_raster::Interrupt,
     decoded: Option<craft_psd::Result<Vec<u8>>>,
+    background_name: &str,
 ) -> Option<(Document, Vec<String>, bool, Option<crate::IoError>)> {
     let global = file
         .global_blocks
@@ -1072,7 +1083,7 @@ pub(crate) fn psd_to_document_owned(
             (b.signature, b.key, Arc::new(data))
         })
         .collect();
-    psd_to_document_global(&file, ctl, decoded, global, true)
+    psd_to_document_global_named(&file, ctl, decoded, global, true, background_name)
 }
 
 /// Whether `file` stores spot planes the way earlier PhotoCraft versions (releases 0.1.0 to
@@ -1294,6 +1305,17 @@ fn psd_to_document_global(
     global: Vec<PsdGlobalBlock>,
     preflighted: bool,
 ) -> Option<(Document, Vec<String>, bool, Option<crate::IoError>)> {
+    psd_to_document_global_named(file, ctl, decoded, global, preflighted, "Background")
+}
+
+fn psd_to_document_global_named(
+    file: &PsdFile,
+    ctl: &photocraft_raster::Interrupt,
+    decoded: Option<craft_psd::Result<Vec<u8>>>,
+    global: Vec<PsdGlobalBlock>,
+    preflighted: bool,
+    background_name: &str,
+) -> Option<(Document, Vec<String>, bool, Option<crate::IoError>)> {
     // Legacy conversion APIs return warnings rather than Result. Reject before metadata or
     // pixels are decoded, and retain the fatal error for the ordinary import path. An import
     // that checked the file against its own limit first (`preflighted`) does not estimate twice.
@@ -1329,6 +1351,7 @@ fn psd_to_document_global(
     let fmt = doc.pixel_format();
     let cc = fmt.mode.color_channels();
     let mut cx = Ctx {
+        generated_background_name: background_name.into(),
         file,
         global: global.clone(),
         fmt,
@@ -1509,7 +1532,7 @@ fn import_layered(import: DecodedImport<'_>, doc: &mut Document, cx: &mut Ctx<'_
         }
     }
     surface.prune();
-    let mut bg = Layer::new("Background", LayerContent::Raster(surface));
+    let mut bg = Layer::new(cx.generated_background_name.clone(), LayerContent::Raster(surface));
     if alpha_idx.is_none() {
         bg.locks.transparency = true;
         bg.locks.position = true;
@@ -1570,7 +1593,7 @@ fn import_flattened(
             match written {
                 Ok(()) => {
                     surface.prune();
-                    doc.layers.push(flat_background(surface));
+                    doc.layers.push(flat_background(surface, &cx.generated_background_name));
                 }
                 Err(error) => cx.allocation_failed(format!("flattened image: {error}")),
             }

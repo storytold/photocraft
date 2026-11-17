@@ -53,7 +53,9 @@ fn open_exr_parts(s: &mut Session, p: &Value) -> Result<Value> {
         precomp: p.get("precomp").and_then(Value::as_bool).unwrap_or(false),
     };
     let bytes = read_file(&path)?;
-    let mut r = photocraft_io::exr_parts::import(&stem(&path), &bytes, &sel).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    let mut r =
+        photocraft_io::exr_parts::import_with_precomp_name(&stem(&path), &bytes, &sel, &s.default_names().format("{name} (precomp)", &[("name", "beauty")]))
+            .map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     crate::file_cmds::tag_exr_colorspace(s, &path, &mut r.document);
     // The file holds parts or layers the selection may have left out: Save doesn't write the
     // document back over them (#5733).

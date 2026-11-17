@@ -73,7 +73,7 @@ pub(super) fn prepare(s: &Session, name: &str, shown: &str, path: Option<&str>, 
     let crop = prior.as_ref().and_then(|(_, crop)| *crop);
     let prior = prior.map(|(settings, _)| settings);
     let mut settings = prior.clone().unwrap_or_default();
-    let opts = crate::jobs::import_options(s.prefs());
+    let opts = s.import_options();
     let mut imported = photocraft_io::import_with_options(name, bytes, &opts).map_err(|error| EngineError::Other(format!("{shown}: {error}")))?;
     if imported.preview_only || !imported.warnings.iter().any(|warning| warning.contains(photocraft_io::raw::DEVELOPED_NOTE)) {
         return Err(EngineError::Other(format!("{shown}: complete RAW development is required")));

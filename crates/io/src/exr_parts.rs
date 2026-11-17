@@ -186,6 +186,11 @@ fn layer_surface(img: &Image, max: &mut (u32, u32)) -> Result<(Surface, ColorMod
 /// `precomp` adds the additive sum of the file's AOV groups as a top layer and fails,
 /// naming the missing AOVs, when the light-path set is incomplete.
 pub fn import(name: &str, bytes: &[u8], sel: &Selection) -> Result<ImportResult, IoError> {
+    import_with_precomp_name(name, bytes, sel, "beauty (precomp)")
+}
+
+/// Named parts and channel groups remain literal; only the generated precomp gets this label.
+pub fn import_with_precomp_name(name: &str, bytes: &[u8], sel: &Selection, precomp_name: &str) -> Result<ImportResult, IoError> {
     let opts = DecodeOptions::default();
     let info = codecs::exr_info(bytes, &opts.limits)?;
     if info.is_empty() {
@@ -257,7 +262,7 @@ pub fn import(name: &str, bytes: &[u8], sel: &Selection) -> Result<ImportResult,
     }
 
     if sel.precomp {
-        let layer = precomp_layer(bytes, &all_groups, &opts, &mut max, &mut warnings)?;
+        let layer = precomp_layer(bytes, &all_groups, &opts, &mut max, &mut warnings, precomp_name)?;
         gray_only = false; // the precomp is an RGB layer by construction
         layers.push(layer);
     }
@@ -280,7 +285,14 @@ pub fn import(name: &str, bytes: &[u8], sel: &Selection) -> Result<ImportResult,
 /// The additive beauty from the file's AOV groups: premultiplied RGB summed over the
 /// light-path set, alpha the maximum coverage, straightened back. Fails naming the missing
 /// AOVs when the required set is incomplete; AOVs beyond the set are ignored.
-fn precomp_layer(bytes: &[u8], all_groups: &[Group], opts: &DecodeOptions, max: &mut (u32, u32), warnings: &mut Vec<String>) -> Result<Layer, IoError> {
+fn precomp_layer(
+    bytes: &[u8],
+    all_groups: &[Group],
+    opts: &DecodeOptions,
+    max: &mut (u32, u32),
+    warnings: &mut Vec<String>,
+    name: &str,
+) -> Result<Layer, IoError> {
     let have: Vec<String> = all_groups.iter().map(|g| normalize(&g.prefix)).collect();
     let missing: Vec<&str> = PRECOMP_REQUIRED.iter().copied().filter(|r| !have.iter().any(|h| h == *r)).collect();
     if !missing.is_empty() {
@@ -336,5 +348,5 @@ fn precomp_layer(bytes: &[u8], all_groups: &[Group], opts: &DecodeOptions, max: 
     max.1 = max.1.max(h);
     let (surface, _) = layer_surface(&img, max)?;
     warnings.push("beauty (precomp) is the additive sum of the file's AOVs; alpha is the maximum coverage".to_string());
-    Ok(Layer::new("beauty (precomp)", LayerContent::Raster(surface)))
+    Ok(Layer::new(name, LayerContent::Raster(surface)))
 }

@@ -319,7 +319,7 @@ fn build() -> Vec<CommandSpec> {
                     }
                 };
                 let mut doc = if p.get("artboard").and_then(Value::as_bool).unwrap_or(false) {
-                    crate::artboard_cmds::new_artboard_document(name, Size::new(w, h), mode, depth, background)
+                    crate::artboard_cmds::new_artboard_document_with_names(name, Size::new(w, h), mode, depth, background, &s.default_names())
                 } else if let Some(c) = background {
                     let mut d = Document::with_background(name, Size::new(w, h), mode, depth, c);
                     if let Some(layer) = d.layers.first_mut() {
@@ -328,7 +328,7 @@ fn build() -> Vec<CommandSpec> {
                     d
                 } else {
                     let mut d = Document::new(name, Size::new(w, h), mode, depth);
-                    d.layers.push(Layer::raster("Layer 1", d.pixel_format()));
+                    d.layers.push(Layer::raster(format!("{} 1", s.translated_name_base("Layer")), d.pixel_format()));
                     d
                 };
                 doc.resolution_dpi = res;
@@ -557,9 +557,10 @@ fn build() -> Vec<CommandSpec> {
             |s, p| {
                 let opts = crate::group_options::GroupOptions::parse("layer.new.group", p)?;
                 let below = crate::group_options::below("layer.new.group", p)?;
+                let name_base = s.translated_name_base("Group");
                 let place = if below { crate::layer_place::Place::Below } else { crate::layer_place::Place::Auto };
                 let id = s.edit("New Group", |doc, active| {
-                    let name = opts.name.clone().unwrap_or_else(|| doc.next_layer_name("Group"));
+                    let name = opts.name.clone().unwrap_or_else(|| doc.next_layer_name(&name_base));
                     let mut group = Layer::group(name, vec![]);
                     opts.apply(&mut group);
                     let bg = crate::background_cmds::background_id(doc);
@@ -628,8 +629,9 @@ fn build() -> Vec<CommandSpec> {
                 // The dialog offers Duplicate Layer's own name: only a different one was typed (#9023).
                 let mut typed = None;
                 let mut shift = (0, 0);
+                let names = s.default_names();
                 let nid = s.edit("Duplicate Layer", |doc, active| {
-                    let mut dup = layer_copy(doc, id, add_copy)?;
+                    let mut dup = layer_copy(doc, id, add_copy, &names)?;
                     if let Some(name) = name.as_ref().filter(|n| **n != dup.name) {
                         dup.name.clone_from(name);
                         typed = Some(name.clone());
@@ -737,6 +739,7 @@ fn build() -> Vec<CommandSpec> {
                 // Changes Undoable.
                 let only_visibility = changed.as_slice() == ["visible"];
                 let record = !only_visibility || s.visibility_undoable();
+                let names = s.default_names();
                 s.edit_with(label, record, |doc, _| {
                     // The Background has no opacity, fill or blend mode: like Photoshop, setting
                     // one that changes its look turns it into a normal layer ("Layer 0") first.
@@ -744,7 +747,7 @@ fn build() -> Vec<CommandSpec> {
                     let blends = p.get("blend").and_then(Value::as_str).and_then(blend_from_str).is_some_and(|b| b != photocraft_color::BlendMode::Normal);
                     for &id in &ids {
                         if num("opacity") || num("fill") || blends {
-                            crate::extra_cmds::background_to_layer(doc, id);
+                            crate::extra_cmds::background_to_layer(doc, id, &names.numbered("Layer", 0));
                         }
                         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
                         if let Some(v) = p.get("name").and_then(Value::as_str) {

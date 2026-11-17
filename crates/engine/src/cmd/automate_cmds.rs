@@ -538,6 +538,7 @@ fn contact_sheet_sources(p: &Value, cmd: &str) -> Result<Vec<Vec<String>>> {
 }
 
 fn contact_sheet(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     let cmd = "file.automate.contactSheetII";
     let groups = contact_sheet_sources(p, cmd)?;
     if groups.iter().all(Vec::is_empty) {
@@ -637,8 +638,8 @@ fn contact_sheet(s: &mut Session, p: &Value) -> Result<Value> {
             // The reference ends a flattened sheet with a normal layer, not a Background (#13702).
             s.edit("Make Layer", |doc, active| {
                 let l = doc.background_mut().ok_or(EngineError::Other("the flattened sheet has no Background layer".into()))?;
-                crate::extra_cmds::unlock_background(l);
-                l.name = "Contact Sheet II".into();
+                crate::extra_cmds::unlock_background(l, &names.numbered("Layer", 0));
+                l.name = names.base("Contact Sheet II");
                 *active = Some(l.id);
                 Ok(())
             })?;

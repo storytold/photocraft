@@ -485,16 +485,50 @@ fn visible_bounds(s: &photocraft_raster::Surface, canvas: Rect) -> Rect {
 // ---------- layers ----------
 
 fn layer_from_background(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
+    let bad = |msg: &str| EngineError::BadParams { cmd: "layer.new.layerFromBackground".into(), msg: msg.into() };
+    let name = p.get("name").map(|v| v.as_str().ok_or_else(|| bad("name must be a string"))).transpose()?;
+    let opacity =
+        p.get("opacity").map(|v| v.as_f64().filter(|n| n.is_finite() && (0.0..=1.0).contains(n)).ok_or_else(|| bad("opacity must be in 0..1"))).transpose()?;
+    let blend = p.get("blend").map(|v| v.as_str().and_then(crate::commands::blend_from_str).ok_or_else(|| bad("unknown blend mode"))).transpose()?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    if d.doc.background().is_none() && p.get("ifPresent").and_then(Value::as_bool) == Some(true) {
-        return Ok(json!({"layer": null}));
-    }
+    let zero_name = names.numbered("Layer", 0);
+    let existing = if d.doc.background().is_none() && p.get("ifPresent").and_then(Value::as_bool) == Some(true) {
+        if name.is_none() && opacity.is_none() && blend.is_none() {
+            return Ok(json!({"layer": null}));
+        }
+        // Recorded properties also applied to an already editable default layer before the
+        // conversion and Set were combined. Keep that behaviour with an exact, unique name.
+        let mut matches = d.doc.walk().into_iter().filter(|(_, _, layer)| layer.name == zero_name);
+        let id = matches.next().map(|(_, _, layer)| layer.id);
+        if id.is_none() || matches.next().is_some() {
+            return Err(EngineError::Other(format!("no unambiguous editable layer named {zero_name:?} for the recorded Background properties")));
+        }
+        id
+    } else {
+        None
+    };
     // `select: false`: the targeted layer stays targeted, as when a Photoshop action's `set`
     // names the Background while another layer is selected.
     let select = p.get("select").and_then(Value::as_bool).unwrap_or(true);
     let id = s.edit("Layer From Background", |doc, active| {
-        let l = doc.background_mut().ok_or(EngineError::Other("the document has no Background layer".into()))?;
-        unlock_background(l);
+        let l = if let Some(id) = existing {
+            doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?
+        } else {
+            let layer = doc.background_mut().ok_or(EngineError::Other("the document has no Background layer".into()))?;
+            unlock_background(layer, &zero_name);
+            layer
+        };
+        // Apply recorded properties to this id, not a language-dependent "Layer 0" lookup.
+        if let Some(name) = name {
+            l.name = name.into();
+        }
+        if let Some(opacity) = opacity {
+            l.opacity = opacity as f32;
+        }
+        if let Some(blend) = blend {
+            l.blend = blend;
+        }
         if select || active.is_none() {
             *active = Some(l.id);
         }
@@ -503,24 +537,24 @@ fn layer_from_background(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"layer": id.0}))
 }
 
-pub(crate) fn unlock_background(l: &mut Layer) {
-    l.name = "Layer 0".into();
+pub(crate) fn unlock_background(l: &mut Layer, name: &str) {
+    l.name = name.into();
     l.locks.transparency = false;
     l.locks.position = false;
 }
 
 /// Before `id` gets a layer mask: the Background can't have one, so it becomes a normal layer
 /// first ("Layer 0"), as when adding a mask to it in Photoshop. Other layers are left alone.
-pub(crate) fn background_to_layer_for_mask(doc: &mut photocraft_doc::Document, id: photocraft_doc::LayerId) {
-    background_to_layer(doc, id);
+pub(crate) fn background_to_layer_for_mask(doc: &mut photocraft_doc::Document, id: photocraft_doc::LayerId, name: &str) {
+    background_to_layer(doc, id, name);
 }
 
 /// If `id` is the Background ([`photocraft_doc::Document::background`], whatever its name), turns
 /// it into a normal layer ("Layer 0"), as Photoshop does before an edit the Background can't
 /// take (moving, transforming, exposing transparency, a style). Other layers are left alone.
-pub(crate) fn background_to_layer(doc: &mut photocraft_doc::Document, id: photocraft_doc::LayerId) {
+pub(crate) fn background_to_layer(doc: &mut photocraft_doc::Document, id: photocraft_doc::LayerId, name: &str) {
     if let Some(l) = doc.background_mut().filter(|l| l.id == id) {
-        unlock_background(l);
+        unlock_background(l, name);
     }
 }
 
@@ -1000,7 +1034,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Layer From Background…",
             &["Layer", "New"],
             None,
-            r##"{"ifPresent":bool=false (true: a document without a Background is left as it is, as a Photoshop action's step needs on an image that opened as a normal layer),"select":bool=true (false: the targeted layer stays targeted)}"##,
+            r##"{"ifPresent":bool=false (without a Background: no-op unless properties target one existing default Layer 0),"select":bool=true (false: the targeted layer stays targeted),"name":str?,"opacity":0..1?,"blend":str? (properties of the converted layer, in the same history step)}"##,
             has_background,
             layer_from_background
         ),
@@ -1052,6 +1086,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
                 let style = s.style_clipboard.clone().ok_or(EngineError::Other("no layer style has been copied".into()))?;
                 let mut fx = style.effects;
+                let names = s.default_names();
                 s.edit("Paste Layer Style", |doc, _| {
                     // A style copied from a document in another mode takes this one's colours.
                     let mode = doc.mode;
@@ -1069,7 +1104,7 @@ pub fn specs() -> Vec<CommandSpec> {
                         gray
                     };
                     for id in ids {
-                        background_to_layer(doc, id);
+                        background_to_layer(doc, id, &names.numbered("Layer", 0));
                         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
                         l.effects = fx.clone();
                         // Pass Through is a group's mode: a group's style pastes onto other layers as

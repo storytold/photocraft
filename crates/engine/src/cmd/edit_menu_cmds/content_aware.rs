@@ -485,6 +485,7 @@ fn mask_bounds(w: usize, h: usize, m: &[bool]) -> (usize, usize, usize, usize) {
 /// Write a Content-Aware Fill result (the job's apply step): into the layer, a new layer or a
 /// duplicate, as one undo step.
 fn apply_content_aware_fill(s: &mut Session, label: &str, id: LayerId, output: &str, fmt: PixelFormat, window: Rect, done: FilledWindow) -> Result<Value> {
+    let names = s.default_names();
     let n = fmt.channels();
     let (w, h) = (window.width() as usize, window.height() as usize);
     let FilledWindow { mut filled, bounds, original, cover, n_hole } = done;
@@ -492,7 +493,7 @@ fn apply_content_aware_fill(s: &mut Session, label: &str, id: LayerId, output: &
         let target = match output {
             "new" => {
                 let source_name = doc.layer(id).ok_or(EngineError::NoLayer(id))?.name.clone();
-                let mut l = Layer::raster(doc.copy_name(&source_name), PixelFormat { alpha: true, ..fmt });
+                let mut l = Layer::raster(names.copy(doc, &source_name), PixelFormat { alpha: true, ..fmt });
                 let mut px = vec![0.0f32; w * h * n.max(1)];
                 let lf = l.surface().map(|s| s.format()).unwrap_or(fmt);
                 let ln = lf.channels();
@@ -513,7 +514,7 @@ fn apply_content_aware_fill(s: &mut Session, label: &str, id: LayerId, output: &
             }
             "duplicate" => {
                 let mut dup = doc.layer(id).ok_or(EngineError::NoLayer(id))?.duplicate();
-                dup.name = doc.copy_name(&dup.name);
+                dup.name = names.copy(doc, &dup.name);
                 let nid = doc.insert_above(Some(id), dup);
                 *active = Some(nid);
                 nid

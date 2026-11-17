@@ -150,6 +150,7 @@ fn check_frame_growth(frames: usize, original_frames: Option<usize>) -> Result<(
 }
 
 fn new_blank(s: &mut Session, _p: &Value) -> Result<Value> {
+    let names = s.default_names();
     let id = s.edit("New Blank Video Layer", |doc, active| {
         store(doc);
         let fmt = doc.pixel_format();
@@ -163,7 +164,7 @@ fn new_blank(s: &mut Session, _p: &Value) -> Result<Value> {
             return Err(EngineError::Other(format!("the timeline is {n} frames; a video layer is limited to {} frames", crate::timeline_cmds::MAX_DURATION)));
         }
         let frames: Vec<Surface> = (0..n).map(|_| Surface::new(fmt)).collect();
-        let name = doc.next_layer_name("Video Layer");
+        let name = doc.next_layer_name(&names.base("Video Layer"));
         let mut l = Layer::raster(name, fmt);
         l.video = Some(VideoData::new(frames, fps));
         let id = crate::layer_place::insert_new(doc, *active, l, crate::layer_place::Place::AutoEditable);
@@ -323,9 +324,9 @@ fn footage_byte_limit() -> u64 {
 fn footage_import_options(s: &Session) -> photocraft_io::ImportOptions {
     #[cfg(test)]
     if let Some(limit) = limits::psd_max_pixel_bytes() {
-        return photocraft_io::ImportOptions { psd_max_pixel_bytes: limit, ..crate::jobs::import_options(s.prefs()) };
+        return photocraft_io::ImportOptions { psd_max_pixel_bytes: limit, ..s.import_options() };
     }
-    crate::jobs::import_options(s.prefs())
+    s.import_options()
 }
 
 /// Per-thread test overrides for the footage import limits. A scope restores the previous values
@@ -507,6 +508,7 @@ fn load_frames(path: &str, fmt: photocraft_color::PixelFormat, opts: &photocraft
 }
 
 fn new_from_file(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     let path = p
         .get("path")
         .and_then(Value::as_str)
@@ -524,7 +526,8 @@ fn new_from_file(s: &mut Session, p: &Value) -> Result<Value> {
         } else if let Some(t) = &mut doc.timeline {
             grow_duration(t, n);
         }
-        let name = doc.next_layer_name(std::path::Path::new(&path).file_stem().and_then(|s| s.to_str()).unwrap_or("Video"));
+        let name =
+            doc.next_layer_name(&std::path::Path::new(&path).file_stem().and_then(|s| s.to_str()).map(str::to_owned).unwrap_or_else(|| names.base("Video")));
         let mut l = Layer::raster(name, fmt);
         let mut v = VideoData::new(frames, fps);
         v.original_frames = Some(v.frames.clone());
@@ -613,6 +616,7 @@ fn tiff_pages(bytes: &[u8]) -> (Vec<usize>, bool) {
 
 /// Import › Video Frames to Layers: load frames from a file/sequence and add each as its own layer.
 fn frames_to_layers(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     let path = p
         .get("path")
         .and_then(Value::as_str)
@@ -625,7 +629,7 @@ fn frames_to_layers(s: &mut Session, p: &Value) -> Result<Value> {
         let mut above = *active;
         let mut place = crate::layer_place::Place::AutoEditable;
         for (i, f) in frames.into_iter().enumerate() {
-            let mut l = Layer::raster(format!("Frame {}", i + 1), fmt);
+            let mut l = Layer::raster(names.numbered_in("videoFrame", "Frame", i + 1), fmt);
             if let LayerContent::Raster(surf) = &mut l.content {
                 *surf = f;
             }

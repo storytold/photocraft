@@ -48,6 +48,7 @@ fn subject_area(l: &Layer, canvas: Rect, sample_all: bool) -> Rect {
 }
 
 fn run(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     let id = layer_param(s, p)?;
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
     let layer = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
@@ -77,7 +78,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
                     return Err(EngineError::Cancelled);
                 }
             }
-            crate::extra_cmds::background_to_layer_for_mask(doc, id);
+            crate::extra_cmds::background_to_layer_for_mask(doc, id, &names.numbered("Layer", 0));
             let mask = crate::commands::mask_at_depth(LayerMask { surface: surface.clone(), ..LayerMask::reveal_all() }, doc.depth)?;
             doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.mask = Some(mask);
             doc.selection = None;

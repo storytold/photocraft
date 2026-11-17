@@ -296,6 +296,7 @@ pub(crate) fn save_doc_as(doc: &Document, path: &str, format: &str, save: impl I
 }
 
 pub(super) fn save_a_copy(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     let path = str_param(p, "path", "file.saveACopy")?.to_string();
     let d = s.active().ok_or(EngineError::NoDocument)?;
     // A copy over the document's own file replaces it, and a flat or lossy format can't be
@@ -312,7 +313,7 @@ pub(super) fn save_a_copy(s: &mut Session, p: &Value) -> Result<Value> {
         // "Layers" unchecked in Save a Copy: write the flattened image.
         let fmt = doc.pixel_format();
         let px = flattened_checked(&doc, fmt, "file.saveACopy")?;
-        doc.layers = vec![Layer::new("Background", LayerContent::Raster(px))];
+        doc.layers = vec![Layer::new(names.base("Background"), LayerContent::Raster(px))];
     }
     let warnings = save_doc(&doc, &path, SaveOpts::from_params(s, p, "file.saveACopy")?)?;
     Ok(json!({"path": path, "warnings": warnings}))

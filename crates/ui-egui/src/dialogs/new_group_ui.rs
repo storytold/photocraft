@@ -28,7 +28,11 @@ pub fn fronts(id: &str) -> bool {
 /// Photoshop's defaults: the next "Group N", no colour, Pass Through, 100 %. Unlike Stroke the
 /// choices are not remembered, as in Photoshop.
 pub fn fields(app: &PhotocraftApp, command: &str) -> Map<String, Value> {
-    let name = app.session.active().map(|st| st.doc.next_layer_name("Group")).unwrap_or_else(|| "Group 1".into());
+    let name = app
+        .session
+        .active()
+        .map(|st| st.doc.next_layer_name(&app.session.translated_name_base("Group")))
+        .unwrap_or_else(|| app.session.default_names().numbered("Group", 1));
     let mut f = Map::new();
     f.insert(MARK.into(), json!(true));
     f.insert("__command".into(), json!(if command == FROM_LAYERS { FROM_LAYERS } else { NEW_GROUP }));

@@ -84,6 +84,7 @@ fn query(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(info(s.active().and_then(|st| st.doc.layer(id)).ok_or(EngineError::NoLayer(id))?))
 }
 fn new_frame(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     let f = geometry(p)?;
     let content = match p.get("layer") {
         None | Some(Value::Null) => None,
@@ -104,13 +105,16 @@ fn new_frame(s: &mut Session, p: &Value) -> Result<Value> {
                 if frame_of(doc, id).is_some() {
                     return Err(bad("that layer is already a frame's image"));
                 }
-                let mut child = if matches!(l.content, LayerContent::Smart(_)) { l.clone() } else { crate::smart_cmds::layer_to_smart(doc, l)? };
+                let mut child =
+                    if matches!(l.content, LayerContent::Smart(_)) { l.clone() } else { crate::smart_cmds::layer_to_smart_with_names(doc, l, &names)? };
                 child.id = id;
                 Some(child)
             }
         };
         // A frame drawn around a layer is named after it ("Red Frame"); an empty one is "Frame N".
-        let name = name.unwrap_or_else(|| child.as_ref().map_or_else(|| doc.next_layer_name("Frame"), |c| format!("{} Frame", c.name)));
+        let name = name.unwrap_or_else(|| {
+            child.as_ref().map_or_else(|| doc.next_layer_name(&names.base("Frame")), |c| names.format("{name} Frame", &[("name", &c.name)]))
+        });
         let mut g = Layer::group(name, vec![]);
         g.blend = BlendMode::Normal;
         g.frame = Some(Box::new(f));
@@ -269,6 +273,7 @@ pub fn put_content(doc: &mut Document, id: LayerId, layer: Layer) -> Result<()> 
     Ok(())
 }
 fn set_content(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     let id = frame_id(s, p)?;
     let source = LayerId(p.get("content").and_then(Value::as_u64).ok_or_else(|| bad("content must name an image layer"))?);
     let copy = p.get("copy").map_or(Some(false), Value::as_bool).ok_or_else(|| bad("copy must be a boolean"))?;
@@ -278,7 +283,8 @@ fn set_content(s: &mut Session, p: &Value) -> Result<Value> {
         if !matches!(src.content, LayerContent::Raster(_) | LayerContent::Smart(_)) || frame_of(doc, source) == Some(source) {
             return Err(bad("content must be a pixel or smart object layer"));
         }
-        let mut child = if matches!(src.content, LayerContent::Smart(_)) { src.clone() } else { crate::smart_cmds::layer_to_smart(doc, src)? };
+        let mut child =
+            if matches!(src.content, LayerContent::Smart(_)) { src.clone() } else { crate::smart_cmds::layer_to_smart_with_names(doc, src, &names)? };
         if copy {
             child = child.duplicate();
         } else {

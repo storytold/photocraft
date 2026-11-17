@@ -621,6 +621,7 @@ fn match_color(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn hdr_toning(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     let d = HdrToning::default();
     let curve: Vec<(f32, f32)> = p
         .get("curve")
@@ -647,7 +648,7 @@ fn hdr_toning(s: &mut Session, p: &Value) -> Result<Value> {
         tone::hdr_toning(&mut px, w, hgt, &h);
         let fmt = doc.pixel_format();
         let data: Vec<f32> = px.iter().flat_map(|q| photocraft_raster::from_rgba(&fmt, *q)).collect();
-        let mut bg = Layer::raster("Background", fmt);
+        let mut bg = Layer::raster(names.base("Background"), fmt);
         bg.locks.transparency = true;
         bg.locks.position = true;
         crate::pixels_mut(&mut bg)?.write_region(doc.bounds(), &data);

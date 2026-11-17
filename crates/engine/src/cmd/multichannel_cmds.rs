@@ -188,6 +188,7 @@ fn remap_view(s: &mut Session, (target, eyes): (ChannelTarget, Vec<bool>), map: 
 /// Image › Mode › RGB / CMYK / Lab / Grayscale from a Multichannel document (called by
 /// `color_cmds::convert_mode`). Profiles are not involved: Multichannel has none.
 pub(crate) fn convert_from(s: &mut Session, mode: ColorMode, _p: &Value) -> Result<Value> {
+    let names = s.default_names();
     if !matches!(mode, ColorMode::Rgb | ColorMode::Cmyk | ColorMode::Lab | ColorMode::Grayscale) {
         return Err(EngineError::Other(format!("a Multichannel document can't be converted to {mode:?}")));
     }
@@ -242,7 +243,7 @@ pub(crate) fn convert_from(s: &mut Session, mode: ColorMode, _p: &Value) -> Resu
         let mut surf = Surface::new(fmt);
         surf.write_region(canvas, &data);
         surf.prune();
-        let mut bg = Layer::new("Background", LayerContent::Raster(surf));
+        let mut bg = Layer::new(names.base("Background"), LayerContent::Raster(surf));
         bg.locks.transparency = true;
         bg.locks.position = true;
         *active = Some(bg.id);

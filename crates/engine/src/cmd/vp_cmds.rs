@@ -214,6 +214,7 @@ pub fn over(dst: &mut Surface, top: &Surface) {
 }
 
 fn vanishing_point(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let canvas = st.doc.bounds();
     let sc = scene(p, canvas)?;
@@ -251,7 +252,7 @@ fn vanishing_point(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let on = layer.or(*active);
         let id = if new_layer {
-            let l = Layer::raster(doc.next_layer_name("Vanishing Point"), doc.pixel_format());
+            let l = Layer::raster(doc.next_layer_name(&names.base("Vanishing Point")), doc.pixel_format());
             let nid = crate::layer_place::insert_new(doc, on, l, crate::layer_place::Place::AutoEditable);
             *active = Some(nid);
             nid

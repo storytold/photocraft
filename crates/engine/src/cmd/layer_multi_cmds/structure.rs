@@ -115,6 +115,7 @@ pub(crate) fn check_group_depth(doc: &Document, what: &str) -> Result<()> {
 /// into a new, collapsed group placed where the top-most of them was. Bottom-to-top order is
 /// preserved. The New Group dialog's colour, mode and opacity are set in the same history step.
 pub fn group_layers(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     let ids = match crate::commands::explicit_layer(s, p)? {
         Some(id) => vec![id],
         None => selected(s),
@@ -130,7 +131,7 @@ pub fn group_layers(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(EngineError::Other("artboards can't go into a group".into()));
         }
         let top = *ids.last().ok_or(EngineError::NoLayer(LayerId(0)))?;
-        let name = opts.name.clone().unwrap_or_else(|| doc.next_layer_name("Group"));
+        let name = opts.name.clone().unwrap_or_else(|| doc.next_layer_name(&names.base("Group")));
         // Photoshop creates the group collapsed, so the panel shows one row in place of the layers.
         let mut group = Layer::group(name, vec![]);
         if let LayerContent::Group(g) = &mut group.content {
@@ -269,6 +270,7 @@ pub fn delete_selected(s: &mut Session) -> Result<Value> {
 /// ([`crate::artboard_cmds::place_copy`]). `label` names the history step (Layer via Copy reuses
 /// this path, #2777).
 pub fn duplicate_selected(s: &mut Session, in_place: bool, label: &str) -> Result<Value> {
+    let names = s.default_names();
     let sel = selected(s);
     let old_active = s.active().and_then(|d| d.active_layer);
     let add_copy = crate::commands::layer_panel_option(s, "addCopyToCopiedLayersAndGroups", true);
@@ -279,7 +281,7 @@ pub fn duplicate_selected(s: &mut Session, in_place: bool, label: &str) -> Resul
         for id in top_level(doc, &sel) {
             // Match the single-layer duplicate path: Background copies become
             // ordinary layers, while normal copies retain their original locks.
-            let dup = crate::commands::layer_copy(doc, id, add_copy)?;
+            let dup = crate::commands::layer_copy(doc, id, add_copy, &names)?;
             let nid = doc.insert_above(Some(id), dup);
             if !in_place {
                 // Each copy's shift moved the whole document, so they add up.

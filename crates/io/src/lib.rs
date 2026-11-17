@@ -50,6 +50,7 @@ pub mod export_estimate;
 mod exr_native;
 pub mod exr_parts;
 mod flat;
+pub mod generated_names;
 pub mod gradient_bake;
 pub mod guides_map;
 mod png_steps;
@@ -578,8 +579,10 @@ pub fn import_with_svg_group_depth_and_interrupt(
 }
 
 /// The user's settings that shape an import.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ImportOptions {
+    /// Names newly generated during import. Saved layer names are preserved.
+    pub generated_layer_names: generated_names::GeneratedLayerNames,
     /// SVG groups nested deeper than this are rasterised.
     pub max_group_depth: usize,
     /// The demosaic method camera raws are developed with.
@@ -617,6 +620,7 @@ pub struct ImportOptions {
 impl Default for ImportOptions {
     fn default() -> Self {
         ImportOptions {
+            generated_layer_names: Default::default(),
             max_group_depth: photocraft_doc::MAX_GROUP_DEPTH,
             demosaic: raw::Demosaic::default(),
             keep_raw: false,
@@ -776,7 +780,8 @@ fn import_psd(
 
     // Read before the conversion, which moves the global blocks into the document.
     let txt2 = file.global_blocks.iter().find(|b| &b.key == b"Txt2").and_then(|b| photocraft_text::psd::parse_txt2(&b.data));
-    let (mut document, warnings, psd_damaged, fatal_error) = psd_import::psd_to_document_owned(file, ctl, merged).ok_or(IoError::Cancelled)?;
+    let (mut document, warnings, psd_damaged, fatal_error) =
+        psd_import::psd_to_document_owned_with_background(file, ctl, merged, &opts.generated_layer_names.background).ok_or(IoError::Cancelled)?;
     // Source reads and allocation failures fail the entire open; partial layers are discarded.
     if let Some(e) = fatal_error {
         return Err(e);
@@ -865,6 +870,9 @@ pub fn import_file_for_open_verified(
                 photocraft_raster::spill::check_since(before).map_err(IoError::Read)?;
                 ctl.check().map_err(|_| IoError::Cancelled)?;
                 result.document.name = name.to_string();
+                if let Some(layer) = result.document.layers.first_mut() {
+                    layer.name.clone_from(&opts.generated_layer_names.background);
+                }
                 streamed = Some(result);
             } else {
                 std::io::Seek::rewind(&mut file).map_err(read_failed)?;
@@ -1028,18 +1036,20 @@ fn import_stages(
             Ok(ImportResult { warnings: open_warnings(&document), document, source_read_only: false, preview_only: false })
         }
         Route::Psd | Route::NamedPsd => import_psd(name, ctl, damaged, opts, |want, recover| PsdFile::from_bytes_and_merged_preflight(bytes, want, recover)),
-        Route::Affinity => affinity::import(name, bytes, ctl),
+        Route::Affinity => affinity::import_with_names(name, bytes, ctl, &opts.generated_layer_names),
         Route::Ora => ora::import(name, bytes, ctl),
         Route::Kra => kra::import(name, bytes, ctl),
         Route::Xcf => xcf::import(name, bytes, ctl),
         Route::GzippedXcf => xcf::import(name, &xcf::gunzip(bytes)?, ctl),
         Route::Pdn => pdn::import(name, bytes, ctl),
         Route::Raw => {
-            if opts.keep_raw {
+            let mut imported = if opts.keep_raw {
                 raw::import_raw_demosaic_keeping(name, bytes, opts.demosaic)
             } else {
                 raw::import_raw_demosaic(name, bytes, opts.demosaic)
-            }
+            }?;
+            opts.generated_layer_names.apply_to_flat(&mut imported.document);
+            Ok(imported)
         }
         Route::Svg => svg::import_svg_with_group_depth(name, bytes, opts.max_group_depth),
         Route::Flat => flat::import_flat_with_options(name, bytes, opts, ctl),

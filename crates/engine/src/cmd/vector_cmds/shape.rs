@@ -439,6 +439,7 @@ fn default_name(kind: &str) -> &'static str {
 /// The Freeform Pen or Line Tool history override labels new layers; additions retain the Add
 /// Shape label.
 pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     const CMD: &str = "shape.create";
     let label = super::paths::pen_history_name(p, CMD, "New Shape Layer")?;
     let kind = p.get("kind").and_then(Value::as_str).unwrap_or("rect");
@@ -474,7 +475,7 @@ pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
     let mut sh = ShapeLayer { path, fill, stroke, live, ..Default::default() };
     let id = s.edit(label, |doc, active| {
         refresh_shape(doc, &mut sh);
-        let name = name.unwrap_or_else(|| doc.next_layer_name(default_name(kind)));
+        let name = name.unwrap_or_else(|| doc.next_layer_name(&names.base(default_name(kind))));
         let id = crate::layer_place::insert_new(doc, *active, Layer::new(name, LayerContent::Shape(sh)), crate::layer_place::Place::AutoEditable);
         *active = Some(id);
         Ok(id)
@@ -504,6 +505,7 @@ fn new_fill_stroke(s: &Session, cmd: &str, p: &Value) -> Result<(Option<Fill>, O
 /// Path. Unlike the other path commands, `"work"` never falls back to the active layer's path:
 /// that would duplicate the selected shape or vector mask.
 pub(super) fn path_to_shape(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     const CMD: &str = "path.toShape";
     let name = match p.get("name") {
         None | Some(Value::Null) => None,
@@ -537,7 +539,7 @@ pub(super) fn path_to_shape(s: &mut Session, p: &Value) -> Result<Value> {
     let mut sh = ShapeLayer { path, fill, stroke, ..Default::default() };
     let id = s.edit("New Shape Layer", |doc, active| {
         refresh_shape(doc, &mut sh);
-        let name = layer_name.unwrap_or_else(|| doc.next_layer_name(default_name("path")));
+        let name = layer_name.unwrap_or_else(|| doc.next_layer_name(&names.base(default_name("path"))));
         let id = crate::layer_place::insert_new(doc, *active, Layer::new(name, LayerContent::Shape(sh)), crate::layer_place::Place::AutoEditable);
         if consume_work {
             doc.work_path = None;

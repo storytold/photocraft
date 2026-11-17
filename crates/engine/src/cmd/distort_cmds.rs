@@ -293,6 +293,7 @@ type MaskFn<'a> = Option<&'a dyn Fn(&Surface, Option<&Surface>) -> Result<Surfac
 type LayerFn<'a> = &'a dyn Fn(&Surface, Option<&Surface>, Rect) -> Result<Surface>;
 
 fn run_on_layer(s: &mut Session, cmd: &str, label: &str, p: &Value, moves: bool, f: LayerFn, mask: MaskFn) -> Result<Value> {
+    let names = s.default_names();
     let id = target(s, p)?;
     let colors = crate::color_channels::target(s, p)?.is_some();
     let mut params = p.clone();
@@ -305,7 +306,7 @@ fn run_on_layer(s: &mut Session, cmd: &str, label: &str, p: &Value, moves: bool,
         let group = crate::transform_cmds::group_locks(doc, id);
         // A Background gains transparency when the distortion moves pixels (as in Photoshop).
         if moves && !colors {
-            crate::extra_cmds::background_to_layer(doc, id);
+            crate::extra_cmds::background_to_layer(doc, id, &names.numbered("Layer", 0));
         }
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         if let LayerContent::Smart(_) = l.content {

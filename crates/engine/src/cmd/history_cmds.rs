@@ -134,6 +134,7 @@ fn name_param(cmd: &str, p: &Value) -> Result<Option<String>> {
 /// "Snapshot N" by default. `from` is the New Snapshot dialog's From: the full document (default),
 /// its layers merged into one, or only the active layer. Not a history state.
 fn new_snapshot(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     const CMD: &str = "history.newSnapshot";
     let name = name_param(CMD, p)?;
     let from = match p.get("from") {
@@ -151,7 +152,7 @@ fn new_snapshot(s: &mut Session, p: &Value) -> Result<Value> {
     let (doc, layers) = match from {
         "mergedLayers" => {
             let fmt = st.doc.pixel_format();
-            one_layer(&st.doc, Layer::new("Merged Layers", LayerContent::Raster(crate::file_cmds::flattened(&st.doc, fmt))))
+            one_layer(&st.doc, Layer::new(names.base("Merged Layers"), LayerContent::Raster(crate::file_cmds::flattened(&st.doc, fmt))))
         }
         "currentLayer" => {
             let layer = st.active_layer.and_then(|id| st.doc.layer(id)).ok_or_else(|| bad(CMD, "no active layer"))?;

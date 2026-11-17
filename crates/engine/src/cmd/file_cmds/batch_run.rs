@@ -299,6 +299,7 @@ pub(super) fn process_document_copies(
         let prepare = |scratch: &mut Session, _: &str| {
             scratch.authorize = s.authorize;
             scratch.default_name_base = s.default_name_base;
+            scratch.default_name_variants = s.default_name_variants;
             scratch.prefs.edit(|prefs| *prefs = s.prefs().clone());
             scratch.add_document(state.doc.as_ref().clone(), state.path.clone());
             // The moved selection belongs to the displayed image; commit it only in the copy.
@@ -355,7 +356,7 @@ fn process_one(
             (input.prepare)(&mut scratch, path)?;
         } else {
             let bytes = read_file(path)?;
-            let doc = import_at_raw_ppi(raw_ppi, &file_name(path), &bytes)?;
+            let doc = import_at_raw_ppi(raw_ppi, &file_name(path), &bytes, &scratch.import_options())?;
             scratch.add_document(doc, Some(path.to_string()));
         }
         if let Some(ctx) = options.ctx {
@@ -922,6 +923,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     let action_prefs = s.prefs().actions.clone();
     let prefs = s.prefs.clone();
     let default_name_base = s.default_name_base;
+    let default_name_variants = s.default_name_variants;
     let color_settings = s.color.settings.clone();
     let raw_settings = s.batch_raw_open.as_ref().unwrap_or(&s.prefs().raw_defaults).clone();
     let script_count = s.actions.script_steps;
@@ -960,6 +962,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                 // Generated document and fill-layer names use the same language as
                 // interactive playback, even when profile/RAW prompt suppression is disabled.
                 scratch.default_name_base = default_name_base;
+                scratch.default_name_variants = default_name_variants;
                 scratch.prefs.edit(|p| p.interface.language = prefs.get().interface.language.clone());
                 #[cfg(not(target_arch = "wasm32"))]
                 if check_folder_format && !super::paths::openable_name(path) {
@@ -988,7 +991,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                         super::open::open_bytes_as(scratch, &file_name(path), &bytes, None, Some(path.to_string()))?;
                         read_only_source.set(scratch.active().is_some_and(|state| state.source_read_only));
                     } else {
-                        let (doc, read_only) = super::open::import_source_at_raw_ppi(raw_ppi, &file_name(path), &bytes)?;
+                        let (doc, read_only) = super::open::import_source_at_raw_ppi(raw_ppi, &file_name(path), &bytes, &scratch.import_options())?;
                         read_only_source.set(read_only);
                         scratch.add_document(doc, Some(path.to_string()));
                     }

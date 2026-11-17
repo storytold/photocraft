@@ -6,6 +6,7 @@ use super::{AlphaChannel, ColorMode, DocState, Document, EngineError, Layer, Res
 
 /// Merge Spot Channel: flattens the image and prints the spot ink into the colour channels.
 pub(super) fn merge_spot(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     let cmd = "channel.mergeSpot";
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
     let i = match p.get("channel") {
@@ -35,7 +36,7 @@ pub(super) fn merge_spot(s: &mut Session, p: &Value) -> Result<Value> {
                 from_rgba(&fmt, [rgb[0], rgb[1], rgb[2], 1.0])
             })
             .collect();
-        let mut bg = Layer::raster("Background", fmt);
+        let mut bg = Layer::raster(names.base("Background"), fmt);
         bg.locks.transparency = true;
         bg.locks.position = true;
         if let Some(sf) = bg.surface_mut() {
@@ -66,6 +67,7 @@ pub(super) const NOT_FLAT: &str = "only a single-layer image can be split: flatt
 
 /// Split Channels: one grayscale document per colour and alpha channel; closes the original.
 pub(super) fn split(s: &mut Session, p: &Value) -> Result<Value> {
+    let generated = s.default_names();
     let idx = s.active_index().ok_or(EngineError::NoDocument)?;
     if !s.documents().get(idx).is_some_and(|d| is_flat(&d.doc)) {
         return Err(bad("channel.split", NOT_FLAT));
@@ -92,10 +94,10 @@ pub(super) fn split(s: &mut Session, p: &Value) -> Result<Value> {
     let mut docs: Vec<Document> = Vec::new();
     for (c, name) in names.iter().enumerate() {
         let plane: Vec<f32> = px.chunks_exact(n).map(|p| tone(mode, p[c])).collect();
-        docs.push(gray_document(&format!("{}_{}", doc.name, short(name)), &doc, &plane));
+        docs.push(gray_document(&format!("{}_{}", doc.name, short(name)), &doc, &plane, &generated));
     }
     for ch in &doc.channels {
-        docs.push(gray_document(&format!("{}_{}", doc.name, ch.name), &doc, &read_plane(&ch.surface, area)));
+        docs.push(gray_document(&format!("{}_{}", doc.name, ch.name), &doc, &read_plane(&ch.surface, area), &generated));
     }
     if p.get("closeOriginal").and_then(Value::as_bool).unwrap_or(true) {
         s.close(idx);
@@ -116,6 +118,7 @@ pub(super) fn mergeable(s: &Session) -> Vec<usize> {
 /// Merge Channels: grayscale documents of one size become the channels of an RGB, CMYK or Lab
 /// document (extra documents become alpha channels); the sources close.
 pub(super) fn merge(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     let cmd = "channel.merge";
     let mode = match p.get("mode").and_then(Value::as_str).unwrap_or("rgb") {
         "rgb" => ColorMode::Rgb,
@@ -162,7 +165,7 @@ pub(super) fn merge(s: &mut Session, p: &Value) -> Result<Value> {
         }
         data.push(1.0);
     }
-    let mut bg = Layer::raster("Background", fmt);
+    let mut bg = Layer::raster(names.base("Background"), fmt);
     bg.locks.transparency = true;
     bg.locks.position = true;
     if let Some(sf) = bg.surface_mut() {

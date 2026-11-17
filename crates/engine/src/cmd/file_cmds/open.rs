@@ -51,24 +51,20 @@ pub(crate) fn import_with_options(name: &str, bytes: &[u8], opts: &photocraft_io
 /// Batch's scratch sessions use [`import_at_raw_ppi`]): a developed raw gets Preferences › Raw
 /// Defaults › Resolution, as it does through File › Open.
 pub(crate) fn import_opened(s: &Session, name: &str, bytes: &[u8]) -> Result<Document> {
-    import_at_raw_ppi(s.prefs().raw_defaults.resolution, name, bytes)
+    import_at_raw_ppi(s.prefs().raw_defaults.resolution, name, bytes, &s.import_options())
 }
 
-pub(super) fn import_at_raw_ppi(raw_ppi: f64, name: &str, bytes: &[u8]) -> Result<Document> {
-    import_source_at_raw_ppi(raw_ppi, name, bytes).map(|(doc, _)| doc)
+pub(super) fn import_at_raw_ppi(raw_ppi: f64, name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> Result<Document> {
+    import_source_at_raw_ppi(raw_ppi, name, bytes, opts).map(|(doc, _)| doc)
 }
 
 /// [`import_at_raw_ppi`], also telling whether the source must not be replaced by a save
 /// (`ImportResult::source_read_only`: Affinity, Krita, XCF, PDN, whatever its extension says).
-pub(super) fn import_source_at_raw_ppi(raw_ppi: f64, name: &str, bytes: &[u8]) -> Result<(Document, bool)> {
-    let r = import_result(name, bytes)?;
+pub(super) fn import_source_at_raw_ppi(raw_ppi: f64, name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> Result<(Document, bool)> {
+    let r = import_result_with(name, bytes, opts)?;
     let mut doc = r.document;
     raw_resolution(raw_ppi, &r.warnings, &mut doc);
     Ok((doc, r.source_read_only))
-}
-
-fn import_result(name: &str, bytes: &[u8]) -> Result<photocraft_io::ImportResult> {
-    import_result_with(name, bytes, &photocraft_io::ImportOptions::default())
 }
 
 /// The one import path every caller shares: allocation checkpoint, native `.pcraft` and format
@@ -193,7 +189,7 @@ pub fn open_bytes_as_with_options(
         Some(ext) => format!("{}.{}", stem(name), ext.trim_start_matches('.')),
         None => name.to_string(),
     };
-    let mut opts = crate::jobs::import_options(s.prefs());
+    let mut opts = s.import_options();
     opts.psd_high_memory_approved = approve_high_memory;
     opts.psd_approved_estimate = None;
     let raw = super::raw_open::prepare(s, &decode_name, &file_name(name), path.as_deref(), bytes)?;
@@ -423,7 +419,7 @@ impl PlaceInput {
                 return Err(EngineError::BadParams { cmd: "file.placeEmbedded".into(), msg: "expected boolean for \"approveHighMemory\"".into() });
             }
         };
-        let mut opts = crate::jobs::import_options(prefs);
+        let mut opts = s.import_options();
         opts.psd_high_memory_approved = approve;
         opts.psd_approved_estimate = None;
         Ok(Self {

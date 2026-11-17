@@ -92,13 +92,14 @@ pub(crate) fn preview_reorder(app: &mut PhotocraftApp, payload: &serde_json::Val
     payload.to_string().hash(&mut hasher);
     st.doc.id.0.hash(&mut hasher);
     st.revision.hash(&mut hasher);
+    app.session.prefs().interface.language.hash(&mut hasher);
     let signature = hasher.finish();
     if app.reorder_preview.as_ref().is_some_and(|cache| cache.signature == signature) {
         return;
     }
     let (source, revision) = (st.doc.id, st.revision);
     let add_copy = app.ui.layers_panel_options.add_copy_to_copied_layers_and_groups;
-    let preview = photocraft_engine::layer_multi_cmds::preview_move(&st.doc, payload, add_copy);
+    let preview = photocraft_engine::layer_multi_cmds::preview_move_with_names(&st.doc, payload, add_copy, &app.session.default_names());
     app.reorder_preview = preview.map(|document| ReorderPreview {
         source,
         revision,

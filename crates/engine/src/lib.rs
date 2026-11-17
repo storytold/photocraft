@@ -171,6 +171,7 @@ pub use cmd::warp_cmds;
 pub use cmd::web_cmds;
 use cmd::wia_cmds;
 pub use doc_state::{CopiedStyle, DocState, PRECHECKED, ToolState};
+pub mod default_names;
 pub use error::{EngineError, Result};
 pub use session::move_item;
 use session::restore_target;
@@ -263,7 +264,10 @@ pub struct Session {
     pub prefs: prefs::PrefsStore,
     /// Frontend translation of an automatic name's English base, using the current language
     /// preference. `None` keeps headless sessions in English; explicit names are never translated.
-    pub default_name_base: Option<fn(&str, &str) -> String>,
+    /// Arguments are the language preference, catalog context and English key.
+    pub default_name_base: Option<fn(&str, &str, &str) -> String>,
+    /// Catalog variants used to recognise generated type names after a language change.
+    pub default_name_variants: Option<fn(&str, &str) -> Vec<String>>,
     /// Release checks use an injected platform transport; no network I/O in the engine.
     pub updates: updates_cmds::Updates,
     /// Edit menu state: Fade source, custom shape library (see `edit_menu_cmds`).

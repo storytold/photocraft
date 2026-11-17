@@ -176,9 +176,9 @@ fn overlapping_stamp_preview_matches_commit_across_batches() {
         let s = app.distort.vanishing.as_mut().unwrap();
         s.new_layer = new_layer;
         s.strokes.push(CloneSpec { source: [76.0, 80.0], points: points[..2].to_vec(), size: 12.0, hardness: 0.8, opacity: 1.0 });
-        assert!(s.paint_preview(|| 1));
+        assert!(s.paint_preview(|| 1, "Vanishing Point"));
         s.strokes[0].points.extend_from_slice(&points[2..]);
-        assert!(s.paint_preview(|| 2));
+        assert!(s.paint_preview(|| 2, "Vanishing Point"));
         let (shown, _) = s.shown().unwrap();
         let expected = photocraft_compose::flatten(&shown).into_px();
         assert_ne!(expected, photocraft_compose::flatten(&app.session.active().unwrap().doc).px);

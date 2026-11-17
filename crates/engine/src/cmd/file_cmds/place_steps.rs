@@ -83,7 +83,11 @@ impl PlaceSteps {
                 self.read(ctx)?;
                 let input = &self.input;
                 let bytes = &self.bytes;
-                let png = if self.fine { PngImport::new(&input.name, bytes).map_err(|e| self.io_error(e))? } else { None };
+                let png = if self.fine {
+                    PngImport::with_names(&input.name, bytes, input.opts.generated_layer_names.clone()).map_err(|e| self.io_error(e))?
+                } else {
+                    None
+                };
                 match png {
                     Some(png) => self.stage = Stage::DecodePng(Box::new(png)),
                     None => {

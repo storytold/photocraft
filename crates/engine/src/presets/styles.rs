@@ -216,6 +216,7 @@ fn apply_to_layer(l: &mut Layer, style: &StylePreset, effects: &[Effect], add: b
 }
 
 fn apply(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     const CMD: &str = "style.presets.apply";
     let style = find_style(s, p, CMD)?.clone();
     let add = p.get("add").and_then(Value::as_bool).unwrap_or(false);
@@ -235,7 +236,7 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
         let effects: Vec<_> = effects.iter().cloned().map(|e| e.in_mode(mode)).collect();
         for id in &ids {
             // Styles can't sit on the Background: Photoshop turns it into a normal layer first.
-            crate::extra_cmds::background_to_layer(doc, *id);
+            crate::extra_cmds::background_to_layer(doc, *id, &names.numbered("Layer", 0));
             let l = doc.layer_mut(*id).ok_or(EngineError::NoLayer(*id))?;
             apply_to_layer(l, &style, &effects, add);
         }

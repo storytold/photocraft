@@ -23,7 +23,7 @@ const LABEL: &str = "Open As Smart Object";
 pub(super) fn open_as_smart_object(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path", CMD)?.to_string();
     let name = file_name(&path);
-    let opts = crate::jobs::import_options(s.prefs());
+    let opts = s.import_options();
     // An interactive caller (the app) asks before opening a PSD that had damaged data, as File > Open does.
     let confirm_damage = p.get("confirmDamage").and_then(Value::as_bool).unwrap_or(false);
     crate::jobs::run(

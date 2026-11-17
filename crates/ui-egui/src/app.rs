@@ -37,7 +37,26 @@ impl PhotocraftApp {
     /// keeps the services' automation policy as the gate actions automation wrote play under.
     pub fn new(mut session: Session, mut services: Services) -> Self {
         session.updates.check = services.check_updates.take();
-        session.default_name_base = Some(|language, english| i18n::tr(i18n::Lang::from_pref(language), english).to_string());
+        session.default_name_base = Some(|language, context, english| i18n::tr_ctx(i18n::Lang::from_pref(language), context, english).to_string());
+        session.default_name_variants = Some(|context, english| {
+            static COPIES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+            static TYPE_NAMES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+            let collect = || {
+                let mut names = Vec::new();
+                for lang in i18n::Lang::all() {
+                    names.push(i18n::tr_ctx(lang, context, english).to_string());
+                }
+                names.sort_unstable();
+                names.dedup();
+                names
+            };
+            // Type layers keep following their text after the interface language changes.
+            match (context, english) {
+                ("layerName", "copy") => COPIES.get_or_init(collect).clone(),
+                ("layerName", "Type Layer") => TYPE_NAMES.get_or_init(collect).clone(),
+                _ => collect(),
+            }
+        });
         // Actions automation wrote keep this gate when the user plays them. Batch and droplets
         // copy steps instead of the action, so they do not keep the gate yet.
         session.automation_gate = session.automation_gate.or(services.automation_authorize);

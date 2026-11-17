@@ -23,6 +23,7 @@ pub(super) fn vector_mask_info(s: &Session, id: LayerId) -> Result<Value> {
 }
 
 pub(super) fn vector_mask_add(s: &mut Session, p: &Value, from_path: bool) -> Result<Value> {
+    let names = s.default_names();
     const CMD: &str = "layer.vectorMask.add";
     let id = layer_id(s, p)?;
     let mut path = match p.get("path") {
@@ -50,7 +51,7 @@ pub(super) fn vector_mask_add(s: &mut Session, p: &Value, from_path: bool) -> Re
         if locked {
             return Err(EngineError::Other(format!("layer \"{}\" is locked", l.name)));
         }
-        crate::extra_cmds::background_to_layer(doc, id);
+        crate::extra_cmds::background_to_layer(doc, id, &names.numbered("Layer", 0));
         doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.vector_mask = Some(VectorMask::new(path));
         Ok(())
     })?;

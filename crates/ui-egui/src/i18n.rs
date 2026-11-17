@@ -1,7 +1,8 @@
 //! UI localisation. Strings in code stay English and are the default lookup keys; the craft-i18n
-//! catalogs map them to display text at render time. Command ids, menu paths used for logic, the
-//! control channel, the CLI and MCP never see translated text, so agents and scripts are
-//! unaffected. A string without a translation is shown in English, and a missing translation never
+//! catalogs map them to display text at render time. Command ids, menu paths used for logic and
+//! control method names stay English. Automatic document and layer names are resolved before
+//! creation and stored as literal data, so recorded name references find the name the UI shows.
+//! A string without a translation is shown in English, and a missing translation never
 //! fails a build or a release. A few tests check named rows of the pinned catalogs, so moving
 //! `craft-i18n.rev` to a commit that drops one fails that test until it is updated.
 //!
@@ -17,6 +18,8 @@
 //! In craft-i18n: add rows to `locales/<code>/photocraft.tsv` (its `docs/integration.md`). They
 //! show here once `craft-i18n.rev` moves to a commit that has them. A feature PR here adds the
 //! English only; `cargo xtask i18n-report` lists what each language lacks.
+//! Generated names use `documentName` and `layerName` contexts; `videoFrame` distinguishes a
+//! video frame's name from a Frame container. All fall back to the ordinary catalog rows.
 //!
 //! # Adding a language
 //! 1. craft-i18n gets `locales/<code>/photocraft.tsv` with its `@id language.name` row.

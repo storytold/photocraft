@@ -1015,9 +1015,7 @@ fn background_from(d: &Descriptor) -> Mapped {
     // On an image that opened as a normal layer there is no Background to convert;
     // Photoshop stops there, but the step's purpose (an editable layer) is met.
     // Photoshop's `set` of another layer doesn't target it: the selected layer stays.
-    let mut v = vec![("layer.new.layerFromBackground", json!({"ifPresent": true, "select": false}))];
-    let mut props = Map::new();
-    props.insert("layer".into(), "Layer 0".into());
+    let mut props = Map::from_iter([("ifPresent".into(), true.into()), ("select".into(), false.into())]);
     if let Some(t) = get_obj(d, "T   ") {
         if let Some(n) = get_text(t, "Nm  ") {
             props.insert("name".into(), n.into());
@@ -1035,10 +1033,7 @@ fn background_from(d: &Descriptor) -> Mapped {
             },
         }
     }
-    if props.len() > 1 {
-        v.push(("layer.setProps", Value::Object(props)));
-    }
-    steps(v)
+    step("layer.new.layerFromBackground", Value::Object(props))
 }
 
 /// The Layers panel lock buttons (`layerLocking`) ↔ `layer.lockLayers` params.
@@ -1307,6 +1302,23 @@ fn layer_set_to(p: &Value) -> Option<Descriptor> {
     Some(desc("null").with("null", layer_ref(p)?).with("T   ", D::Descriptor(t)))
 }
 
+fn background_to(p: &Value) -> Option<Descriptor> {
+    let bckg = D::Reference(vec![ReferenceItem::Property { class: class("Lyr "), key: Id::new("Bckg") }]);
+    let opacity = match p.get("opacity") {
+        None => 1.0,
+        Some(v) => v.as_f64().filter(|n| (0.0..=1.0).contains(n))?,
+    };
+    let blend = match p.get("blend") {
+        None => "Nrml",
+        Some(v) => blend_ps(v.as_str()?)?,
+    };
+    let mut t = desc("Lyr ").with("Opct", pct(opacity * 100.0)).with("Md  ", enm("BlnM", blend));
+    if let Some(name) = p.get("name") {
+        t = t.with("Nm  ", text(name.as_str()?));
+    }
+    Some(desc("null").with("null", bckg).with("T   ", D::Descriptor(t)))
+}
+
 /// Encode selection and colour-setting steps as Photoshop Set descriptors.
 pub(super) fn set_to(id: &str, p: &Value) -> Option<Descriptor> {
     let fsel = D::Reference(vec![ReferenceItem::Property { class: class("Chnl"), key: Id::new("fsel") }]);
@@ -1407,10 +1419,7 @@ pub(super) fn set_to(id: &str, p: &Value) -> Option<Descriptor> {
         "layer.setProps" | "layer.renameLayer" | "layer.setLabelColor" => {
             return layer_set_to(p);
         }
-        "layer.new.layerFromBackground" => {
-            let bckg = D::Reference(vec![ReferenceItem::Property { class: class("Lyr "), key: Id::new("Bckg") }]);
-            desc("null").with("null", bckg).with("T   ", D::Descriptor(desc("Lyr ").with("Opct", pct(100.0)).with("Md  ", enm("BlnM", "Nrml"))))
-        }
+        "layer.new.layerFromBackground" => return background_to(p),
         "layer.fill.pattern.set" => {
             if p.get("layer").is_some() || p.get("document").is_some() {
                 return None;

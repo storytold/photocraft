@@ -107,6 +107,7 @@ pub fn magic_eraser_refusal(doc: &Document) -> Option<&'static str> {
 
 /// `paint.magicEraser`: erase the wand region around `(x, y)`.
 fn magic_eraser(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     const CMD: &str = "paint.magicEraser";
     let coord = |k: &str| -> Result<f64> {
         p.get(k).and_then(Value::as_f64).filter(|v| v.is_finite() && v.abs() < 1e9).ok_or_else(|| bad(CMD, format!("missing or invalid `{k}`")))
@@ -153,7 +154,7 @@ fn magic_eraser(s: &mut Session, p: &Value) -> Result<Value> {
         // Photoshop converts the Background to a normal layer before erasing to transparency.
         doc.layer(id).ok_or(EngineError::NoLayer(id))?;
         if !channels {
-            crate::extra_cmds::background_to_layer(doc, id);
+            crate::extra_cmds::background_to_layer(doc, id, &names.numbered("Layer", 0));
         }
         let lock = doc.effective_locks(id).transparency || channels;
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
@@ -208,13 +209,14 @@ fn background_eraser_setup(s: &Session, p: &Value) -> Result<(Stroke, BgEraseSet
 
 /// `paint.backgroundEraser`: a stroke erasing colours similar to the sampled one.
 fn background_eraser(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     const CMD: &str = "paint.backgroundEraser";
     let (stroke, bs, id, colors) = background_eraser_setup(s, p)?;
     let bg = s.tools.background;
     let dmg = s.edit("Background Eraser", |doc, _| {
         let selection = doc.selection.clone();
         if colors.is_none() {
-            crate::extra_cmds::background_to_layer(doc, id);
+            crate::extra_cmds::background_to_layer(doc, id, &names.numbered("Layer", 0));
         }
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         let surf = l.surface_mut().ok_or_else(|| bad(CMD, "not a pixel layer"))?;
@@ -274,13 +276,14 @@ fn selected_background_effect(
 /// erasing per dab as the commit (on a Background already turned into a normal layer), so the
 /// preview at the last point is the committed result.
 pub fn live_background_eraser(s: &Session, p: &Value) -> Result<crate::retouch_cmds::LiveDab> {
+    let names = s.default_names();
     const CMD: &str = "paint.backgroundEraser";
     let (stroke, bs, id, colors) = background_eraser_setup(s, p)?;
     let mut doc = (*s.active().ok_or(EngineError::NoDocument)?.doc).clone();
     doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     let bg = s.tools.background;
     if colors.is_none() {
-        crate::extra_cmds::background_to_layer(&mut doc, id);
+        crate::extra_cmds::background_to_layer(&mut doc, id, &names.numbered("Layer", 0));
     }
     let mut stroke = background_eraser_stroke(&stroke);
     // The commit mixes back without the transparency lock (a locked layer is erased too, and a

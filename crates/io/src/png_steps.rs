@@ -48,6 +48,7 @@ pub struct PngImport {
     name: String,
     bytes: Arc<Vec<u8>>,
     stage: Stage,
+    names: crate::generated_names::GeneratedLayerNames,
 }
 
 impl PngImport {
@@ -55,6 +56,11 @@ impl PngImport {
     /// which reads the header and refuses what the import refuses; `None` for any other file,
     /// which only [`crate::import_with_options_and_interrupt`] reads. The decoder shares `bytes`.
     pub fn new(name: &str, bytes: &Arc<Vec<u8>>) -> Result<Option<Self>, IoError> {
+        Self::with_names(name, bytes, Default::default())
+    }
+
+    /// The same bounded PNG import with frontend-provided names for its generated layer.
+    pub fn with_names(name: &str, bytes: &Arc<Vec<u8>>, names: crate::generated_names::GeneratedLayerNames) -> Result<Option<Self>, IoError> {
         // A native bundle suffix must never start the PNG streaming path, even when the bytes
         // are a PNG (for example, an invalid `.pcraft` file). The ordinary importer still uses
         // content detection and can open a PNG copied to a bare name.
@@ -72,7 +78,7 @@ impl PngImport {
         } else {
             Stage::Rows(Box::new(Self::buffered(rows)?))
         };
-        Ok(Some(Self { name: name.to_string(), bytes: Arc::clone(bytes), stage }))
+        Ok(Some(Self { name: name.to_string(), bytes: Arc::clone(bytes), stage, names }))
     }
 
     /// A decoder that holds the whole image: its output is reserved up front.
@@ -131,6 +137,7 @@ impl PngImport {
                     let Pruning { stream, extras, .. } = *p;
                     let mut r = stream.into_document(&self.name, extras)?;
                     apply_flat_format(&mut r, &self.bytes, Some(Format::Png), None)?;
+                    self.names.apply_to_flat(&mut r.document);
                     return Ok(Some(r));
                 }
                 if !more() {
@@ -175,7 +182,9 @@ impl PngImport {
                     }
                     continue;
                 }
-                return build.finish(self.bytes.as_slice(), Some(Format::Png)).map(Some);
+                let mut imported = build.finish(self.bytes.as_slice(), Some(Format::Png))?;
+                self.names.apply_to_flat(&mut imported.document);
+                return Ok(Some(imported));
             },
             Stage::Spent => Err(IoError::Unsupported("the PNG was already imported".into())),
         }

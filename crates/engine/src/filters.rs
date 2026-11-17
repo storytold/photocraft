@@ -267,6 +267,7 @@ fn edits_transparency(filter: &FilterParams, layer: &Layer) -> bool {
 }
 
 pub(crate) fn run_filter(s: &mut Session, id: &str, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     validate_params(id, p)?;
     // Session state some filters read (colours) becomes explicit params; external inputs resolve here.
     let mut prepared = crate::filters_ext::prepare(s, id, p);
@@ -320,7 +321,7 @@ pub(crate) fn run_filter(s: &mut Session, id: &str, p: &Value) -> Result<Value> 
             // normal layer first, as the erasers do: it can't hold transparency.
             let changes_alpha = doc.layer(layer).is_some_and(|layer| edits_transparency(&fp, layer));
             if changes_alpha {
-                crate::extra_cmds::background_to_layer_for_mask(doc, layer);
+                crate::extra_cmds::background_to_layer_for_mask(doc, layer, &names.numbered("Layer", 0));
             }
             let locks = doc.effective_locks(layer);
             let l = doc.layer_mut(layer).ok_or(EngineError::NoLayer(layer))?;

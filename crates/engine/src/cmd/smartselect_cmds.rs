@@ -555,6 +555,7 @@ fn refine_strokes(p: &Value) -> Result<Vec<matting::EdgeStroke>> {
 /// `newLayerWithMask` (as Photoshop does). New-layer outputs hide the source layer; new-document
 /// outputs leave the source document untouched.
 fn refine_edge(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     let params = refine_params(p);
     let strokes = refine_strokes(p)?;
     let decontaminate = b(p, "decontaminate", false);
@@ -598,7 +599,7 @@ fn refine_edge(s: &mut Session, p: &Value) -> Result<Value> {
             let id = active.ok_or_else(|| EngineError::Other("no active layer".into()))?;
             s.edit("Select and Mask", |doc, _| {
                 let surface = region.clone().unwrap_or_else(|| photocraft_raster::Surface::new(photocraft_color::PixelFormat::GRAY8));
-                crate::extra_cmds::background_to_layer_for_mask(doc, id);
+                crate::extra_cmds::background_to_layer_for_mask(doc, id, &names.numbered("Layer", 0));
                 let existing = doc.layer(id).and_then(|l| l.mask.as_ref()).cloned().unwrap_or_else(LayerMask::reveal_all);
                 doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.mask = Some(LayerMask { surface, ..existing });
                 doc.selection = None;
@@ -612,7 +613,7 @@ fn refine_edge(s: &mut Session, p: &Value) -> Result<Value> {
             let src = src_layer.surface().ok_or_else(|| {
                 EngineError::Other(format!("the active layer is {} {} layer without pixels", src_layer.content.article(), src_layer.content.kind_name()))
             })?;
-            let name = d.doc.copy_name(&src_layer.name);
+            let name = names.copy(&d.doc, &src_layer.name);
             let empty = photocraft_raster::Surface::new(photocraft_color::PixelFormat::GRAY8);
             let reg = region.as_ref().unwrap_or(&empty);
             let pixels = if decontaminate { matting::decontaminate_surface(src, reg, params.radius, amount) } else { src.clone() };

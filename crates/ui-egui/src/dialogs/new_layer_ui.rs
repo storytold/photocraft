@@ -19,7 +19,7 @@ pub fn owns(fields: &Map<String, Value>) -> bool {
 
 /// Open the dialog for the active document, with the name the layer would get.
 pub fn open(app: &mut PhotocraftApp) -> Result<u64, String> {
-    let name = app.session.active().ok_or("no document open")?.doc.next_layer_name("Layer");
+    let name = app.session.active().ok_or("no document open")?.doc.next_layer_name(&app.session.translated_name_base("Layer"));
     let fields = json!({
         MARK: true, "__command": COMMAND, "__label": "New Layer",
         "name": name, "clipToPrevious": false, "color": "none", "mode": "Normal", "opacity": 100.0, "fillNeutral": false,

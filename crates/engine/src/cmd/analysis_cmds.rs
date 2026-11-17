@@ -1247,6 +1247,7 @@ fn nice_length(d: &Document) -> f64 {
 const MIN_SCALE_MARKER_HEIGHT: f64 = 8.0;
 
 fn place_scale_marker(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     const CMD: &str = "image.analysis.placeScaleMarker";
     let d = doc(s)?;
     let sc = d.measurement.scale.clone();
@@ -1294,12 +1295,12 @@ fn place_scale_marker(s: &mut Session, p: &Value) -> Result<Value> {
     compound(s, "Place Scale Marker", |s| {
         let fmt = doc(s)?.pixel_format();
         let bar_id = s.edit("Place Scale Marker", |doc, active| {
-            let mut l = Layer::raster("Scale Bar", fmt);
+            let mut l = Layer::raster(names.base("Scale Bar"), fmt);
             if let Some(surf) = l.surface_mut() {
                 surf.fill_rect(bar, &photocraft_raster::from_rgba(&fmt, [rgb[0], rgb[1], rgb[2], 1.0]));
             }
             let id = l.id;
-            doc.layers.push(Layer::group("Measurement Scale Marker", vec![l]));
+            doc.layers.push(Layer::group(names.base("Measurement Scale Marker"), vec![l]));
             *active = Some(id);
             Ok(id)
         })?;

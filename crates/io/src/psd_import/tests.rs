@@ -569,6 +569,7 @@ fn only_allocation_failures_are_fatal_to_a_layer_channel() {
     let file = testgen::small(Version::Psd, Compression::Raw);
     let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
     let mut cx = Ctx {
+        generated_background_name: "Background".into(),
         file: &file,
         global: Vec::new(),
         fmt,

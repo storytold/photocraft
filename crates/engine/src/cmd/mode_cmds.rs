@@ -324,6 +324,7 @@ fn indexed_matte(s: &Session, p: &Value) -> Result<Option<[f32; 3]>> {
 }
 
 fn indexed_color(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     const CMD: &str = "image.mode.indexedColor";
     let kind = PaletteKind::from_id(str_or(p, "palette", "selective"))
         .ok_or_else(|| bad(CMD, "palette: exact|systemMac|systemWindows|web|uniform|perceptual|selective|adaptive"))?;
@@ -368,7 +369,7 @@ fn indexed_color(s: &mut Session, p: &Value) -> Result<Value> {
         };
         let w = doc.size.width as usize;
         quantize::quantize(&mut px, w, &pal, dither, amount, transparent);
-        single_layer(doc, active, ColorMode::Indexed, &px, if transparent.is_some() { "Index" } else { "Background" }, transparent.is_none());
+        single_layer(doc, active, ColorMode::Indexed, &px, &names.base(if transparent.is_some() { "Index" } else { "Background" }), transparent.is_none());
         doc.color_table = Some(ColorTable { colors: pal.clone(), transparent: transparent.map(|t| t as u8) });
         Ok((pal.len(), transparent))
     })?;
@@ -600,6 +601,7 @@ fn custom_pattern_map(s: &Session, cmd: &str, p: &Value) -> Result<(Vec<f32>, us
 }
 
 fn bitmap(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     const CMD: &str = "image.mode.bitmap";
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let input = f64::from(d.doc.resolution_dpi.max(1.0));
@@ -689,7 +691,7 @@ fn bitmap(s: &mut Session, p: &Value) -> Result<Value> {
             out.write_region(band.rect, &data);
             Ok(())
         });
-        single_layer_surface(doc, active, ColorMode::Bitmap, out, "Background", true);
+        single_layer_surface(doc, active, ColorMode::Bitmap, out, &names.base("Background"), true);
         Ok(())
     })?;
     let size = s.active().ok_or(EngineError::NoDocument)?.doc.size;

@@ -73,7 +73,7 @@ fn reserved_stems_legacy_names_and_extreme_numbers_do_not_collide() {
     ] {
         assert_eq!(untitled_document_name_with(&s, names.iter().copied()), expected);
     }
-    s.default_name_base = Some(|_, _| "Draft.v2".into());
+    s.default_name_base = Some(|_, _, _| "Draft.v2".into());
     assert_eq!(untitled_document_name_with(&s, ["Draft.v2-1"].into_iter()), "Draft.v2-2");
     assert_eq!(untitled_document_name_with(&s, ["Draft.v2-1", "Draft.v2-3.psd"].into_iter()), "Draft.v2-4");
 }
@@ -166,7 +166,7 @@ fn batch_scratch_sessions_keep_the_default_name_language() {
     let input = dir.path().join("input.png");
     std::fs::write(&input, bytes).unwrap();
     // The engine receives a language service, not a dependency on any particular catalog.
-    s.default_name_base = Some(|language, english| if language == "de" { format!("Fixture {english}") } else { english.into() });
+    s.default_name_base = Some(|language, _, english| if language == "de" { format!("Fixture {english}") } else { english.into() });
     s.prefs.edit(|p| p.interface.language = "de".into());
     s.actions.list.push(Action::new(
         "Place",
@@ -222,7 +222,7 @@ fn unnamed_atn_fill_layers_can_be_targeted_by_the_localized_default_name() {
 fn fill_names_keep_numbering_explicit_names_and_preview_consistent() {
     for depth in [8, 16, 32] {
         let mut s = Session::new();
-        s.default_name_base = Some(|lang, base| format!("{lang}:{base}"));
+        s.default_name_base = Some(|lang, _, base| format!("{lang}:{base}"));
         s.prefs.edit(|p| p.interface.language = "de".into());
         s.execute("file.new", json!({"width":4,"height":4,"depth":depth})).unwrap();
         for (cmd, base, params) in [
@@ -270,7 +270,7 @@ fn absent_or_empty_name_translations_keep_english_defaults() {
     s.prefs.edit(|p| p.interface.language = "zh-hans".into());
     for empty_service in [false, true] {
         if empty_service {
-            s.default_name_base = Some(|_, _| String::new());
+            s.default_name_base = Some(|_, _, _| String::new());
         }
         s.execute("file.new", json!({"width":4,"height":4})).unwrap();
         s.execute("layer.newFillLayer.solidColor", json!({})).unwrap();
@@ -350,5 +350,280 @@ fn imported_background_names_remain_literal() {
         }));
         app.open_file("source.psd", &bytes).unwrap();
         assert_eq!(app.session.active().unwrap().doc.background().unwrap().name, "Background");
+    }
+}
+
+fn naming_session() -> Session {
+    let mut s = Session::new();
+    s.default_name_base = Some(|language, _, key| format!("{language}[{key}]"));
+    s.prefs.edit(|p| p.interface.language = "de".into());
+    s.execute("file.new", json!({"width":8,"height":8})).unwrap();
+    s
+}
+
+fn active_name(s: &Session) -> &str {
+    let st = s.active().unwrap();
+    &st.doc.layer(st.active_layer.unwrap()).unwrap().name
+}
+
+#[test]
+fn other_generated_layer_bases_use_the_same_language_service() {
+    for (command, params, expected) in [
+        ("layer.new.layer", json!({}), "de[Layer] 1"),
+        ("layer.new.group", json!({}), "de[Group] 1"),
+        ("layer.newAdjustmentLayer.levels", json!({}), "de[Levels] 1"),
+        ("layer.newAdjustmentLayer.curves", json!({}), "de[Curves] 1"),
+        ("shape.create", json!({"kind":"rect","rect":[0,0,4,4]}), "de[Rectangle] 1"),
+        ("layer.new.artboard", json!({}), "de[Artboard] 1"),
+    ] {
+        let mut s = naming_session();
+        s.execute(command, params).unwrap();
+        assert_eq!(active_name(&s), expected, "{command}");
+    }
+}
+
+#[test]
+fn implicit_background_conversions_localize_layer_zero() {
+    for (command, params) in [
+        ("layer.new.layerFromBackground", json!({})),
+        ("image.canvasSize", json!({"width":10,"height":10,"extensionColor":"transparent"})),
+        ("image.crop", json!({"x":0,"y":0,"width":8,"height":8,"deleteCroppedPixels":false})),
+    ] {
+        let mut s = naming_session();
+        s.execute(command, params).unwrap();
+        assert_eq!(active_name(&s), "de[Layer] 0", "{command}");
+    }
+}
+
+#[test]
+fn duplicate_names_localize_only_the_generated_suffix() {
+    let mut s = naming_session();
+    s.execute("layer.new.layer", json!({"name":"Literal"})).unwrap();
+    s.execute("layer.duplicate", json!({})).unwrap();
+    assert_eq!(active_name(&s), "Literal de[copy]");
+    s.execute("layer.duplicate", json!({})).unwrap();
+    assert_eq!(active_name(&s), "Literal de[copy] 2");
+    s.execute("layer.duplicate", json!({"name":"Custom copy"})).unwrap();
+    assert_eq!(active_name(&s), "Custom copy");
+}
+
+#[test]
+fn localized_default_dialog_names_are_the_values_committed() {
+    use photocraft_ui_egui::i18n::{Lang, tr_ctx};
+    for lang in Lang::all() {
+        for (command, key) in [("layer.new.layer", "Layer"), ("layer.new.group", "Group"), ("layer.duplicate", "copy")] {
+            let mut app = PhotocraftApp::new(Session::new(), Services::default());
+            app.session.prefs.edit(|p| p.interface.language = lang.code().into());
+            app.session.execute("file.new", json!({"width":4,"height":4})).unwrap();
+            app.session.execute("layer.new.layer", json!({"name":"Literal"})).unwrap();
+            let ctx = egui::Context::default();
+            call(&mut app, &ctx, "ui.menu.invoke", json!({"id":command}));
+            let dialog = app.ui.dialogs.last().unwrap();
+            let base = tr_ctx(lang, "layerName", key);
+            let expected = if command == "layer.duplicate" { format!("Literal {base}") } else { format!("{base} 1") };
+            assert_eq!(dialog.fields["name"], expected, "{} {command}", lang.code());
+            let id = dialog.id;
+            call(&mut app, &ctx, "ui.dialog.confirm", json!({"dialog":id}));
+            assert_eq!(active_name(&app.session), expected);
+        }
+    }
+}
+
+#[test]
+fn localized_empty_layer_detection_agrees_with_pattern_preview() {
+    let mut s = naming_session();
+    let id = s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
+    let p = json!({"pattern":"Checkerboard"});
+    let preview = photocraft_engine::pattern_fill_cmds::preview(&s, "layer.newFillLayer.pattern", &p).unwrap();
+    let result = s.execute("layer.newFillLayer.pattern", p).unwrap();
+    assert_eq!(result["layer"], id, "the unnamed empty pixel layer itself becomes the fill");
+    assert_eq!(active_name(&s), "de[Pattern Fill] 1");
+    assert_eq!(*s.active().unwrap().doc, preview);
+}
+
+#[test]
+fn localized_type_copy_names_follow_text_but_explicit_names_remain_literal() {
+    let mut s = naming_session();
+    s.execute("type.create", json!({"x":0,"y":4,"text":"Title"})).unwrap();
+    s.execute("layer.duplicate", json!({})).unwrap();
+    assert_eq!(active_name(&s), "Title de[copy]");
+    s.execute("type.setStyle", json!({"size":10})).unwrap();
+    assert_eq!(active_name(&s), "Title de[copy]", "a style edit keeps the copy name");
+    s.execute("type.edit", json!({"text":"Levels"})).unwrap();
+    assert_eq!(active_name(&s), "Levels", "text content is never translated");
+    s.execute("type.edit", json!({"name":"Literal","text":"Other"})).unwrap();
+    s.execute("type.edit", json!({"text":"Again"})).unwrap();
+    assert_eq!(active_name(&s), "Literal");
+    s.execute("type.create", json!({"x":0,"y":4,"text":""})).unwrap();
+    assert_eq!(active_name(&s), "de[Type Layer]");
+}
+
+#[test]
+fn recorded_background_properties_target_the_converted_id_in_every_language() {
+    use photocraft_color::BlendMode;
+    use photocraft_engine::{actions_cmds::Action, atn_cmds};
+    use photocraft_ui_egui::i18n::Lang;
+    for lang in Lang::all() {
+        let mut app = PhotocraftApp::new(Session::new(), Services::default());
+        app.session.prefs.edit(|p| p.interface.language = lang.code().into());
+        app.session.execute("file.new", json!({"width":4,"height":4})).unwrap();
+        let background = app.session.active().unwrap().active_layer.unwrap();
+        app.session.execute("layer.new.layer", json!({"name":"Selected"})).unwrap();
+        let selected = app.session.active().unwrap().active_layer;
+        let p = json!({"ifPresent":true,"select":false,"name":"Converted","opacity":0.5,"blend":"Multiply"});
+        let action = Action::new("Convert", vec![("layer.new.layerFromBackground".into(), p.clone())]);
+        let (bytes, skipped) = atn_cmds::export("Naming", &[&action], &[], false).unwrap();
+        assert!(skipped.is_empty());
+        let loaded = atn_cmds::import(&bytes).unwrap();
+        assert!(loaded.unsupported.is_empty());
+        assert_eq!(loaded.actions[0].steps, action.steps);
+        let (again, _) = atn_cmds::export("Naming", &[&loaded.actions[0]], &[], false).unwrap();
+        assert_eq!(atn_cmds::import(&again).unwrap().actions[0].steps, action.steps);
+        let before = app.session.active().unwrap().doc.clone();
+        app.session.execute("layer.new.layerFromBackground", p).unwrap();
+        let st = app.session.active().unwrap();
+        assert_eq!(st.active_layer, selected);
+        let layer = st.doc.layer(background).unwrap();
+        assert_eq!((layer.name.as_str(), layer.opacity, layer.blend), ("Converted", 0.5, BlendMode::Multiply));
+        app.session.undo();
+        assert_eq!(*app.session.active().unwrap().doc, *before);
+        app.session.actions.list = loaded.actions;
+        let result = app.session.execute("actions.play", json!({"action":"Convert"})).unwrap();
+        assert!(result.get("failed").is_none(), "{result}");
+        assert_eq!(app.session.active().unwrap().active_layer, selected);
+    }
+    let mut s = naming_session();
+    let before = s.active().unwrap().doc.clone();
+    for p in [json!({"name":17}), json!({"opacity":-1}), json!({"blend":"invalid"})] {
+        assert!(s.execute("layer.new.layerFromBackground", p).is_err());
+        assert_eq!(*s.active().unwrap().doc, *before);
+    }
+}
+
+#[test]
+fn recorded_background_properties_keep_the_existing_editable_layer_case() {
+    let mut s = naming_session();
+    s.execute("layer.new.layerFromBackground", json!({})).unwrap();
+    let zero = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.new.layer", json!({"name":"Selected"})).unwrap();
+    let selected = s.active().unwrap().active_layer;
+    let before = s.active().unwrap().doc.clone();
+    let p = json!({"ifPresent":true,"select":false,"name":"Converted","opacity":0.5});
+    s.execute("layer.new.layerFromBackground", p.clone()).unwrap();
+    assert_eq!(s.active().unwrap().active_layer, selected);
+    assert_eq!(s.active().unwrap().doc.layer(zero).unwrap().name, "Converted");
+    s.undo();
+    assert_eq!(*s.active().unwrap().doc, *before);
+    s.execute("layer.new.layer", json!({"name":"de[Layer] 0"})).unwrap();
+    let before = s.active().unwrap().doc.clone();
+    assert!(s.execute("layer.new.layerFromBackground", p).is_err(), "an ambiguous name cannot choose a different layer");
+    assert_eq!(*s.active().unwrap().doc, *before);
+}
+
+#[test]
+fn decoder_generated_names_are_localized_without_renaming_layered_file_content() {
+    use photocraft_io::{ExportOptions, import_with_options};
+    let mut s = naming_session();
+    let opts = s.import_options();
+    s.execute("file.new", json!({"width":4,"height":4,"background":"transparent"})).unwrap();
+    let source = &s.active().unwrap().doc;
+    for (ext, expected) in [("jpg", "de[Background]"), ("png", "de[Layer] 0"), ("tiff", "de[Layer] 0")] {
+        let file = format!("flat.{ext}");
+        let bytes = photocraft_io::export(source, &file, &ExportOptions::default()).unwrap().bytes;
+        let loaded = import_with_options(&file, &bytes, &opts).unwrap();
+        assert_eq!(loaded.document.layers[0].name, expected, "{ext}");
+        if ext == "png" {
+            let mut stepper = photocraft_io::PngImport::with_names(&file, &std::sync::Arc::new(bytes), opts.generated_layer_names.clone()).unwrap().unwrap();
+            let loaded = loop {
+                if let Some(loaded) = stepper.step(&mut || true).unwrap() {
+                    break loaded;
+                }
+            };
+            assert_eq!(loaded.document.layers[0].name, expected);
+        }
+    }
+    let mut flattened = source.as_ref().clone();
+    flattened.layers.clear();
+    let bytes = photocraft_io::export(&flattened, "flat.psd", &ExportOptions::default()).unwrap().bytes;
+    let flat = import_with_options("flat.psd", &bytes, &opts).unwrap();
+    assert_eq!(flat.document.layers[0].name, "de[Background]", "a PSD with no saved layers generates a new name");
+    let dir = tempfile::tempdir().unwrap();
+    let exr = dir.path().join("flat.exr");
+    let bytes = photocraft_io::export(source, "flat.exr", &ExportOptions::default()).unwrap().bytes;
+    std::fs::write(&exr, bytes).unwrap();
+    let opened = photocraft_io::import_file("flat.exr", &exr, &opts, &photocraft_raster::Interrupt::NONE).unwrap();
+    assert_eq!(opened.document.layers[0].name, "de[Background]", "streamed EXR uses the same policy");
+    s.execute("layer.renameLayer", json!({"name":"Layer 0"})).unwrap();
+    s.execute("layer.new.layer", json!({"name":"Background"})).unwrap();
+    for ext in ["psd", "tiff"] {
+        let file = format!("saved.{ext}");
+        let export = ExportOptions { tiff_layers: true, ..Default::default() };
+        let bytes = photocraft_io::export(&s.active().unwrap().doc, &file, &export).unwrap().bytes;
+        let loaded = import_with_options(&file, &bytes, &opts).unwrap();
+        assert_eq!(loaded.document.layers.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(), ["Layer 0", "Background"]);
+        if ext == "psd" {
+            let renamed = import_with_options("misleading.png", &bytes, &opts).unwrap();
+            assert_eq!(
+                renamed.document.layers.iter().map(|l| &l.name).collect::<Vec<_>>(),
+                loaded.document.layers.iter().map(|l| &l.name).collect::<Vec<_>>(),
+                "content detection preserves saved names"
+            );
+        }
+    }
+}
+
+#[test]
+fn generated_name_templates_do_not_reinterpret_user_text() {
+    let s = naming_session();
+    assert_eq!(s.default_names().format("{name}'s {effect}", &[("name", "Literal {effect}"), ("effect", "Glow")]), "de[Literal {effect}'s Glow]");
+    let mut s = s;
+    s.default_name_base = Some(|_, context, key| format!("{context}:{key}"));
+    assert_eq!(s.default_names().numbered_in("videoFrame", "Frame", 1), "videoFrame:Frame 1");
+    assert_eq!(s.default_names().numbered("Frame", 1), "layerName:Frame 1");
+}
+
+#[test]
+fn reorder_copy_preview_and_commit_use_the_same_suffix() {
+    let mut s = naming_session();
+    let layer = s.execute("layer.new.layer", json!({"name":"Literal"})).unwrap()["layer"].clone();
+    let target = s.execute("layer.new.layer", json!({"name":"Target"})).unwrap()["layer"].clone();
+    let params = json!({"layers":[layer],"target":target,"position":"above","copy":true});
+    let preview = photocraft_engine::layer_multi_cmds::preview_move_with_names(&s.active().unwrap().doc, &params, true, &s.default_names()).unwrap();
+    s.execute("layer.moveTo", params).unwrap();
+    let names = |doc: &photocraft_doc::Document| doc.layers.iter().map(|l| l.name.clone()).collect::<Vec<_>>();
+    assert_eq!(names(&s.active().unwrap().doc), names(&preview));
+    assert!(preview.layers.iter().any(|l| l.name == "Literal de[copy]"));
+}
+
+#[test]
+fn type_auto_names_survive_switching_interface_languages() {
+    use photocraft_ui_egui::i18n::Lang;
+    for lang in Lang::all() {
+        let mut app = PhotocraftApp::new(Session::new(), Services::default());
+        app.session.prefs.edit(|p| p.interface.language = lang.code().into());
+        app.session.execute("file.new", json!({"width":8,"height":8})).unwrap();
+        app.session.execute("type.create", json!({"x":0,"y":4,"text":"Title"})).unwrap();
+        app.session.execute("layer.duplicate", json!({})).unwrap();
+        let copy = active_name(&app.session).to_string();
+        app.session.prefs.edit(|p| p.interface.language = "en".into());
+        app.session.execute("type.setStyle", json!({"size":10})).unwrap();
+        assert_eq!(active_name(&app.session), copy);
+        app.session.execute("type.edit", json!({"text":"Revised"})).unwrap();
+        assert_eq!(active_name(&app.session), "Revised", "{} copy", lang.code());
+        app.session.execute("type.edit", json!({"name":copy,"text":"Title"})).unwrap();
+        app.session.execute("type.edit", json!({"text":"Literal"})).unwrap();
+        assert_eq!(active_name(&app.session), copy, "an explicit copy-looking name remains literal");
+        app.session.prefs.edit(|p| p.interface.language = lang.code().into());
+        app.session.execute("type.create", json!({"x":0,"y":4,"text":""})).unwrap();
+        app.session.prefs.edit(|p| p.interface.language = "en".into());
+        app.session.execute("type.edit", json!({"text":"Filled"})).unwrap();
+        assert_eq!(active_name(&app.session), "Filled", "{} empty type layer", lang.code());
+        app.session.prefs.edit(|p| p.interface.language = lang.code().into());
+        app.session.execute("type.create", json!({"x":0,"y":4,"text":"Title copy"})).unwrap();
+        app.session.execute("layer.duplicate", json!({})).unwrap();
+        app.session.prefs.edit(|p| p.interface.language = "en".into());
+        app.session.execute("layer.duplicate", json!({})).unwrap();
+        app.session.execute("type.edit", json!({"text":"Rewritten"})).unwrap();
+        assert_eq!(active_name(&app.session), "Rewritten", "{} copy markers must not consume literal text", lang.code());
     }
 }

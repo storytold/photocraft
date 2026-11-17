@@ -79,13 +79,14 @@ pub(super) fn set_mask_and_deselect(s: &mut Session, p: &Value, label: &str, mas
 }
 
 fn set_mask_with(s: &mut Session, p: &Value, label: &str, mask: Option<LayerMask>, deselect: bool) -> Result<Value> {
+    let names = s.default_names();
     let ids = if mask.is_some() { crate::layer_multi_cmds::mask_targets(s, p)? } else { vec![layer_param(s, p)?] };
     s.edit(label, |doc, _| {
         let mask = mask.clone().map(|mask| mask_at_depth(mask, doc.depth)).transpose()?;
         for id in &ids {
             check_all_unlocked(doc, *id)?;
             if mask.is_some() {
-                crate::extra_cmds::background_to_layer_for_mask(doc, *id);
+                crate::extra_cmds::background_to_layer_for_mask(doc, *id, &names.numbered("Layer", 0));
             }
             doc.layer_mut(*id).ok_or(EngineError::NoLayer(*id))?.mask = mask.clone();
         }
@@ -101,6 +102,7 @@ fn set_mask_with(s: &mut Session, p: &Value, label: &str, mask: Option<LayerMask
 /// there (⌥: a copy goes there and the original stays), as in Photoshop (#10485). A layer that
 /// already has a mask keeps it unless `replace` (Photoshop asks first). One history step.
 pub(super) fn move_mask(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     let bad = |m: &str| EngineError::BadParams { cmd: "layer.layerMask.moveTo".into(), msg: m.into() };
     let from = layer_param(s, p)?;
     let to = mask_destination(s, p)?;
@@ -120,7 +122,7 @@ pub(super) fn move_mask(s: &mut Session, p: &Value) -> Result<Value> {
             check_all_unlocked(doc, from)?;
         }
         // The Background can't hold a mask, so it becomes a normal layer first, as for Add Mask.
-        crate::extra_cmds::background_to_layer_for_mask(doc, to);
+        crate::extra_cmds::background_to_layer_for_mask(doc, to, &names.numbered("Layer", 0));
         doc.layer_mut(to).ok_or(EngineError::NoLayer(to))?.mask = Some(mask);
         if !copy {
             doc.layer_mut(from).ok_or(EngineError::NoLayer(from))?.mask = None;
@@ -215,13 +217,13 @@ pub(crate) fn translate_layer_wrapped(doc: &Document, l: &mut Layer, dx: i32, dy
 /// A copy of layer `id` as Layer › Duplicate Layer makes it, not yet in the document: a fresh id,
 /// "… copy" appended to the name, and a copy of the Background layer is an ordinary, unlocked
 /// layer (Photoshop).
-pub(crate) fn layer_copy(doc: &Document, id: LayerId, add_copy: bool) -> Result<Layer> {
+pub(crate) fn layer_copy(doc: &Document, id: LayerId, add_copy: bool, names: &crate::default_names::DefaultNames) -> Result<Layer> {
     let src = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     // A copy of the Background layer is an ordinary, unlocked layer (Photoshop).
     let from_background = doc.is_background(id);
     let mut dup = src.duplicate();
     if add_copy {
-        dup.name = doc.copy_name(&dup.name);
+        dup.name = names.copy(doc, &dup.name);
     }
     if from_background {
         dup.locks = Default::default();

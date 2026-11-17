@@ -685,6 +685,7 @@ pub(crate) fn check_text_unlocked(doc: &Document, id: LayerId) -> Result<()> {
 /// `name`), which is applied in the same step; otherwise an auto-named layer follows its text.
 /// `f` gets the document's resolution (dpi).
 fn with_text_layer<R>(s: &mut Session, p: &Value, label: &str, f: impl FnOnce(&mut TextLayer, f32, &mut Option<String>) -> Result<R>) -> Result<R> {
+    let names = s.default_names();
     let id = layer_id(s, p)?;
     check_text_unlocked(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?;
     let typed = typed_name(s, id);
@@ -692,7 +693,7 @@ fn with_text_layer<R>(s: &mut Session, p: &Value, label: &str, f: impl FnOnce(&m
     let (r, damage) = s.edit(label, |doc, _| {
         let (dpi, format) = (doc.resolution_dpi, doc.pixel_format());
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-        let auto_named = is_auto_named(l, typed.as_deref());
+        let auto_named = is_auto_named(l, typed.as_deref(), &names);
         let LayerContent::Text(t) = &mut l.content else {
             return Err(EngineError::Other(format!("layer {} is {} {} layer, not a type layer", id.0, l.content.article(), l.content.kind_name())));
         };
@@ -706,7 +707,7 @@ fn with_text_layer<R>(s: &mut Session, p: &Value, label: &str, f: impl FnOnce(&m
         // instead of the whole document (#124). Unknown old pixels mean a full refresh.
         let damage = before.zip(t.cache.as_ref().map(|c| c.tile_bounds())).map(|(a, b)| a.union(&b));
         named.clone_from(&rename);
-        let name = rename.or_else(|| old_text.is_some_and(|old| old != t.text).then(|| layer_name(&t.text)));
+        let name = rename.or_else(|| old_text.is_some_and(|old| old != t.text).then(|| names.text(&t.text)));
         if let Some(n) = name {
             l.name = n;
         }
@@ -816,11 +817,13 @@ fn shown_style_params<'a>(t: &TextLayer, p: &'a Value) -> Result<std::borrow::Co
 /// the text. A layer renamed to anything else keeps its name (#483). A duplicate's name ("Title
 /// copy", "Title copy 2") still comes from its text, so the copy is renamed after its new text
 /// as Photoshop does, unless the user typed that name (`typed`, #9023).
-pub(crate) fn is_auto_named(l: &Layer, typed: Option<&str>) -> bool {
+pub(crate) fn is_auto_named(l: &Layer, typed: Option<&str>, names: &crate::default_names::DefaultNames) -> bool {
     let LayerContent::Text(t) = &l.content else { return false };
-    let auto = layer_name(&t.text);
+    let auto = names.text(&t.text);
     // Duplicate Layer names a copy of "Title copy" "Title copy 2", not "Title copy copy".
-    l.name == auto || (typed != Some(l.name.as_str()) && copy_root(&l.name).is_some_and(|root| root == copy_root(&auto).unwrap_or(&auto)))
+    l.name == auto
+        || (typed != Some(l.name.as_str())
+            && ((t.text.trim().is_empty() && names.is_empty_text_name(&l.name)) || names.is_type_copy(&l.name, &auto, t.text.trim().is_empty())))
 }
 
 /// The name the user last gave layer `id` in the active document, if any (see
@@ -834,12 +837,6 @@ pub(crate) fn note_typed_name(s: &mut Session, id: LayerId, name: &str) {
     if let Some(d) = s.active_mut() {
         d.typed_names.insert(id, name.to_string());
     }
-}
-
-/// The name a Duplicate Layer copy was made from: "Title" for "Title copy" or "Title copy 2".
-fn copy_root(name: &str) -> Option<&str> {
-    let (root, rest) = name.rsplit_once(" copy")?;
-    (rest.is_empty() || rest.strip_prefix(' ').is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))).then_some(root)
 }
 
 /// The name a type layer gets from its text: its first non-empty line, at most 40 characters.
@@ -1019,8 +1016,9 @@ pub fn specs() -> Vec<CommandSpec> {
             journal: true,
             run: |s, p| {
                 let mut t = new_text_layer(s, p, "type.create")?;
+                let names = s.default_names();
                 let given = p.get("name").and_then(Value::as_str).map(str::to_string);
-                let name = given.clone().unwrap_or_else(|| layer_name(&t.text));
+                let name = given.clone().unwrap_or_else(|| names.text(&t.text));
                 // The reference application names new vertical text after its tool (#12058).
                 let label = if t.orientation == Orientation::Vertical { "New Vertical Type Layer" } else { NEW_TYPE_LAYER_LABEL };
                 let id = s.edit(label, |doc, active| {

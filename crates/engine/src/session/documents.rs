@@ -23,9 +23,35 @@ impl Session {
     /// Resolve a generated name before storing it: later action steps use exact names.
     pub fn translated_name_base(&self, english: &str) -> String {
         self.default_name_base
-            .map(|translate| translate(&self.prefs().interface.language, english))
+            .map(|translate| translate(&self.prefs().interface.language, "layerName", english))
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| english.into())
+    }
+
+    /// Capture the language for helpers and background jobs without borrowing the session
+    /// during an edit. English is the fallback for frontends without catalogs.
+    pub fn default_names(&self) -> crate::default_names::DefaultNames {
+        crate::default_names::DefaultNames {
+            language: self.prefs().interface.language.clone(),
+            translate: self.default_name_base,
+            variants: self.default_name_variants,
+        }
+    }
+
+    /// Import settings with generated layer names resolved by this frontend. Importers use
+    /// them only when the source has no name or no layer records, retaining saved names.
+    pub fn import_options(&self) -> photocraft_io::ImportOptions {
+        let mut options = crate::jobs::import_options(self.prefs());
+        let names = self.default_names();
+        options.generated_layer_names = photocraft_io::generated_names::GeneratedLayerNames {
+            background: names.base("Background"),
+            layer_zero: names.numbered("Layer", 0),
+            labels: ["Page", "Text", "Path", "Layer", "Group", "Artboard", "Shape", "Image", "Table", "Master", "Affinity preview"]
+                .into_iter()
+                .map(|key| (key.into(), names.base(key)))
+                .collect(),
+        };
+        options
     }
 
     pub fn documents(&self) -> &[DocState] {

@@ -203,7 +203,7 @@ impl SourceLoad {
     /// The decoded document and the flatten are still charged by [`Self::admit`].
     fn import_options(&self, s: &Session, name: &str, bytes: &[u8], available: usize, cmd: &str) -> Result<photocraft_io::ImportOptions> {
         use photocraft_io::ImportPreflight;
-        let mut opts = crate::jobs::import_options(s.prefs());
+        let mut opts = s.import_options();
         if available == 0 {
             return Err(crate::allocation::error(
                 cmd,
@@ -868,6 +868,7 @@ pub(crate) fn seam_order(warped: &[Surface], reference: usize) -> Vec<usize> {
 // ---------- Photomerge ----------
 
 fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     let cmd = "file.automate.photomerge";
     let t0 = Stopwatch::start();
     let layout_s = p.get("layout").and_then(Value::as_str).unwrap_or("auto");
@@ -980,7 +981,7 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
                 if fill {
                     ctx.progress(0.85, "Photomerge: filling edges");
                     let filled = content_aware_fill(&b.composite, canvas);
-                    doc.layers.push(Layer::new("Content-Aware Fill", LayerContent::Raster(filled)));
+                    doc.layers.push(Layer::new(names.base("Content-Aware Fill"), LayerContent::Raster(filled)));
                 }
             } else {
                 for (k, px) in warped.into_iter().enumerate().rev() {
@@ -1094,6 +1095,7 @@ fn shift_rgba(px: &[[f32; 4]], w: usize, h: usize, dx: i32, dy: i32) -> Vec<[f32
 }
 
 fn merge_to_hdr(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     let cmd = "file.automate.mergeToHdrPro";
     let t0 = Stopwatch::start();
     let (srcs, _fmt, icc) = load_sources(s, p, cmd, None)?;
@@ -1219,7 +1221,7 @@ fn merge_to_hdr(s: &mut Session, p: &Value) -> Result<Value> {
     let mut surf = Surface::new(fmt);
     surf.write_region(area, &data);
     // The merged result is opaque: a real Background, as Crop and Straighten makes.
-    let mut bg = Layer::new("Background", LayerContent::Raster(surf));
+    let mut bg = Layer::new(names.base("Background"), LayerContent::Raster(surf));
     bg.locks.transparency = true;
     bg.locks.position = true;
     doc.layers.push(bg);
@@ -1287,6 +1289,7 @@ fn mask_unselected(sel: &Surface, area: Rect, w: usize, h: usize, rgba: &mut [[f
 
 /// Validate the selected layer, then open cropped scan photos without editing the source document.
 fn crop_and_straighten(s: &mut Session, _p: &Value) -> Result<Value> {
+    let names = s.default_names();
     crop_ready(s)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let doc = st.doc.clone();
@@ -1343,7 +1346,7 @@ fn crop_and_straighten(s: &mut Session, _p: &Value) -> Result<Value> {
         nd.icc_profile = doc.icc_profile.clone();
         nd.resolution_dpi = doc.resolution_dpi;
         nd.duotone = doc.duotone.clone();
-        let mut bg = Layer::new("Background", LayerContent::Raster(px));
+        let mut bg = Layer::new(names.base("Background"), LayerContent::Raster(px));
         bg.locks.transparency = true;
         bg.locks.position = true;
         nd.layers.push(bg);

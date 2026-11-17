@@ -248,16 +248,28 @@ pub(crate) fn follow_shift(s: &mut Session, (dx, dy): (i32, i32)) {
     st.symmetry = st.symmetry.take().and_then(|sym| sym.transform(&a));
 }
 
-fn next_artboard_name(doc: &Document) -> String {
-    let names: Vec<&str> = doc.artboards().into_iter().map(|b| b.1).collect();
+fn next_artboard_name(doc: &Document, names: &crate::default_names::DefaultNames) -> String {
+    let taken: Vec<&str> = doc.artboards().into_iter().map(|b| b.1).collect();
     // `names.len() + 1` candidates always include a free one.
-    (1..=names.len() + 1).map(|n| format!("Artboard {n}")).find(|n| !names.contains(&n.as_str())).unwrap_or_else(|| "Artboard".into())
+    (1..=taken.len() + 1).map(|n| names.numbered("Artboard", n)).find(|n| !taken.contains(&n.as_str())).unwrap_or_else(|| names.base("Artboard"))
 }
 
 /// File › New with Artboards (#9086): one board over the whole canvas, its background the
 /// document's (white, black, a colour or transparent), holding an empty Layer 1. As in Photoshop,
 /// there is no Background layer.
 pub fn new_artboard_document(name: String, size: Size, mode: ColorMode, depth: SampleType, background: Option<Color>) -> Document {
+    new_artboard_document_with_names(name, size, mode, depth, background, &Default::default())
+}
+
+/// A File > New artboard using the caller's generated-name policy.
+pub fn new_artboard_document_with_names(
+    name: String,
+    size: Size,
+    mode: ColorMode,
+    depth: SampleType,
+    background: Option<Color>,
+    names: &crate::default_names::DefaultNames,
+) -> Document {
     let mut doc = Document::new(name, size, mode, depth);
     let background = match background {
         None => ArtboardBackground::Transparent,
@@ -265,7 +277,7 @@ pub fn new_artboard_document(name: String, size: Size, mode: ColorMode, depth: S
         Some(c) if c == Color::BLACK => ArtboardBackground::Black,
         Some(c) => ArtboardBackground::Custom(c),
     };
-    let mut board = Layer::group("Artboard 1", vec![Layer::raster("Layer 1", doc.pixel_format())]);
+    let mut board = Layer::group(names.numbered("Artboard", 1), vec![Layer::raster(names.numbered("Layer", 1), doc.pixel_format())]);
     set_artboard(&mut board, Artboard { rect: doc.bounds(), background, preset: String::new() });
     doc.layers.push(board);
     doc
@@ -281,6 +293,7 @@ fn set_artboard(l: &mut Layer, a: Artboard) {
 }
 
 fn new_artboard(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     let cmd = "layer.new.artboard";
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let preset = p.get("preset").and_then(Value::as_str).unwrap_or("").to_string();
@@ -315,13 +328,13 @@ fn new_artboard(s: &mut Session, p: &Value) -> Result<Value> {
         Some(v) => v.as_bool().ok_or_else(|| bad(cmd, "`takeBackground` must be true or false"))?,
     };
     let (id, shift) = s.edit("New Artboard", |doc, active| {
-        let mut g = Layer::group(name.unwrap_or_else(|| next_artboard_name(doc)), vec![]);
+        let mut g = Layer::group(name.unwrap_or_else(|| next_artboard_name(doc, &names)), vec![]);
         set_artboard(&mut g, Artboard { rect, background, preset });
         // Only the first board takes the Background in (decided before the board exists).
         let take = take_background && doc.artboards().is_empty() && doc.background().is_some();
         let id = doc.insert_above(None, g);
         if take {
-            move_background_into(doc, id);
+            move_background_into(doc, id, &names);
         }
         let shift = fit_canvas(doc);
         *active = Some(id);
@@ -334,10 +347,10 @@ fn new_artboard(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Turns the Background into a normal layer ("Layer 0") and makes it the child of board `board`,
 /// as the reference does when the first artboard is drawn. Does nothing without a Background.
-fn move_background_into(doc: &mut Document, board: LayerId) {
+fn move_background_into(doc: &mut Document, board: LayerId, names: &crate::default_names::DefaultNames) {
     let Some(bg) = doc.background().map(|l| l.id) else { return };
     let Some(mut layer) = doc.remove(bg) else { return };
-    crate::extra_cmds::unlock_background(&mut layer);
+    crate::extra_cmds::unlock_background(&mut layer, &names.numbered("Layer", 0));
     match doc.layer_mut(board).and_then(Layer::children_mut) {
         Some(children) => children.push(layer),
         // Unreachable for a group; put the layer back rather than lose it.
@@ -390,13 +403,15 @@ fn union_bounds<'a>(layers: impl IntoIterator<Item = &'a Layer>, canvas: Rect) -
 /// What Artboard from Layers' dialog opens with, as in the reference application: the name the
 /// board would get and the selected top-level layers' size (`None` without a document).
 pub fn from_layers_defaults(s: &Session) -> Option<(String, [i64; 2])> {
+    let names = s.default_names();
     let d = s.active()?;
     let ids = crate::layer_multi_cmds::top_level(&d.doc, &crate::layer_multi_cmds::selected(s));
     let [_, _, w, h] = xywh(union_bounds(ids.iter().filter_map(|id| d.doc.layer(*id)), d.doc.bounds()));
-    Some((next_artboard_name(&d.doc), [w, h]))
+    Some((next_artboard_name(&d.doc, &names), [w, h]))
 }
 
 fn artboard_from_layers(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     let sel = crate::layer_multi_cmds::selected(s);
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let canvas = d.doc.bounds();
@@ -421,7 +436,7 @@ fn artboard_from_layers(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let [x, y, w, h] = xywh(union_bounds(&children, canvas));
         let rect = board_rect(cmd, [x, y, size[0].unwrap_or(w), size[1].unwrap_or(h)])?;
-        let mut g = Layer::group(name.unwrap_or_else(|| next_artboard_name(doc)), children);
+        let mut g = Layer::group(name.unwrap_or_else(|| next_artboard_name(doc, &names)), children);
         set_artboard(&mut g, Artboard { rect, background, preset: String::new() });
         let gid = doc.insert_above(None, g);
         crate::layer_multi_cmds::check_group_depth(doc, "Artboard from Layers")?;
@@ -529,6 +544,7 @@ fn set_backgrounds(s: &mut Session, p: &Value) -> Result<Value> {
 /// copy with its contents. A board left of or above the canvas origin shifts the whole document
 /// right/down so the canvas can grow to show it. One undo step.
 fn add_beside(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     let cmd = "layer.artboard.addBeside";
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let id = crate::commands::explicit_layer(s, p)?.or_else(|| active_artboard(s)).ok_or_else(|| bad(cmd, "no artboard selected"))?;
@@ -583,7 +599,7 @@ fn add_beside(s: &mut Session, p: &Value) -> Result<Value> {
         let nid = if duplicate {
             let src_rect = doc.layer(id).and_then(Layer::artboard).map(|a| a.rect).ok_or(EngineError::NoLayer(id))?;
             let (dx, dy) = (rect.x0.saturating_sub(src_rect.x0), rect.y0.saturating_sub(src_rect.y0));
-            let copy = crate::commands::layer_copy(doc, id, add_copy)?;
+            let copy = crate::commands::layer_copy(doc, id, add_copy, &names)?;
             let nid = doc.insert_above(Some(id), copy);
             // Grow the canvas first, so shapes on the board re-render uncut where they land.
             let fit = |len: u32, edge: i32| i64::from(len).max(i64::from(edge)).clamp(1, 300_000) as u32;
@@ -594,7 +610,7 @@ fn add_beside(s: &mut Session, p: &Value) -> Result<Value> {
             crate::vector_cmds::translate_vectors(&snapshot, l, f64::from(dx), f64::from(dy));
             nid
         } else {
-            let mut g = Layer::group(next_artboard_name(doc), vec![]);
+            let mut g = Layer::group(next_artboard_name(doc, &names), vec![]);
             set_artboard(&mut g, Artboard { rect, background: src.background, preset: src.preset.clone() });
             doc.insert_above(Some(id), g)
         };
@@ -798,6 +814,7 @@ pub fn raster_pdf(pages: &[(u32, u32, f32, Vec<u8>)]) -> Vec<u8> {
 
 /// File › Export › Artboards to PDF: one page per board (flattened over white, JPEG-encoded).
 fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     let cmd = "file.export.artboardsToPdf";
     let path = str_param(p, "path", cmd)?.to_string();
     let d = s.active().ok_or(EngineError::NoDocument)?;
@@ -813,7 +830,7 @@ fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
         let mut surf = Surface::new(fmt);
         let vals: Vec<f32> = buf.px.iter().flat_map(|px| photocraft_raster::from_rgba(&fmt, *px)).collect();
         surf.write_region(one.bounds(), &vals);
-        flat.layers.push(Layer::new("Background", LayerContent::Raster(surf)));
+        flat.layers.push(Layer::new(names.base("Background"), LayerContent::Raster(surf)));
         let (jpeg, _) = encode(&flat, "page.jpg", quality)?;
         pages.push((one.size.width, one.size.height, doc.resolution_dpi, jpeg));
     }

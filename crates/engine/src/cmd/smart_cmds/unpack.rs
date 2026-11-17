@@ -36,7 +36,7 @@ fn contents(s: &Session, doc: &Document, sm: &SmartObject, intent: Intent, bpc: 
     let mut layers = std::mem::take(&mut src.layers);
     for l in &mut layers {
         if Some(l.id) == background_id {
-            l.name = "Layer 0".into();
+            l.name = s.default_names().numbered("Layer", 0);
             l.locks = Default::default();
         }
         embed_nested(&src.metadata, l);

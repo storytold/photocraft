@@ -695,6 +695,7 @@ fn extension_color(s: &Session, p: &Value) -> [f32; 4] {
 
 /// Image → Canvas Size.
 fn canvas_size(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let (ow, oh) = (d.doc.size.width as f64, d.doc.size.height as f64);
     let relative = p.get("relative").and_then(Value::as_bool).unwrap_or(false);
@@ -744,7 +745,7 @@ fn canvas_size(s: &mut Session, p: &Value) -> Result<Value> {
             && (nw > ow as u32 || nh > oh as u32)
             && let Some(bg) = doc.background_mut()
         {
-            crate::extra_cmds::unlock_background(bg);
+            crate::extra_cmds::unlock_background(bg, &names.numbered("Layer", 0));
         }
         // The locked Background layer is extended with the extension colour.
         if ext[3] > 0.0
@@ -777,13 +778,14 @@ pub(crate) fn crop_keeping_background(s: &mut Session, p: &Value) -> Result<Valu
 /// A Delete Cropped Pixels off crop turns the Background into a normal layer ("Layer 0", as Layer ›
 /// New › Layer from Background names it), as in Photoshop: it keeps the pixels past the canvas,
 /// and an extension is transparent on every layer (#10867).
-fn unlock_background_for_crop(doc: &mut Document) {
+fn unlock_background_for_crop(doc: &mut Document, names: &crate::default_names::DefaultNames) {
     if let Some(bg) = doc.background_mut() {
-        crate::extra_cmds::unlock_background(bg);
+        crate::extra_cmds::unlock_background(bg, &names.numbered("Layer", 0));
     }
 }
 
 fn crop_with(s: &mut Session, p: &Value, keep_background: bool) -> Result<Value> {
+    let names = s.default_names();
     let delete = p.get("deleteCroppedPixels").and_then(Value::as_bool).unwrap_or(true);
     // The Crop tool's Fill: Content-Aware Fill of what the crop uncovers (#3823).
     let content_aware = match p.get("contentAware") {
@@ -852,7 +854,7 @@ fn crop_with(s: &mut Session, p: &Value, keep_background: bool) -> Result<Value>
         let original = doc.size;
         let board = if tool_frame { canvas_artboard(doc) } else { None };
         if unlock {
-            unlock_background_for_crop(doc);
+            unlock_background_for_crop(doc, &names);
         }
         crop_doc(doc, "image.crop", r, delete, extension)?;
         fit_canvas_artboard(doc, board);
@@ -993,6 +995,7 @@ fn crop_angle(p: &Value) -> Result<Option<f64>> {
 /// the Background becomes a normal layer before the turn, so it turns like the others, keeping its
 /// overhang and leaving the uncovered corners transparent (#10867).
 fn rotated_crop(s: &mut Session, r: Rect, angle: f64, delete: bool, content_aware: bool, unlock: bool, crop_target: &CropTarget) -> Result<Value> {
+    let names = s.default_names();
     const CMD: &str = "image.crop";
     let size = s.active().ok_or(EngineError::NoDocument)?.doc.size;
     let (w, h) = (f64::from(r.width()), f64::from(r.height()));
@@ -1060,7 +1063,7 @@ fn rotated_crop(s: &mut Session, r: Rect, angle: f64, delete: bool, content_awar
         }
         if unlock {
             s.edit("Crop", |doc, _| {
-                unlock_background_for_crop(doc);
+                unlock_background_for_crop(doc, &names);
                 Ok(())
             })?;
         }
@@ -1193,6 +1196,7 @@ pub(crate) fn change_depth(doc: &mut Document, depth: SampleType) {
 
 /// Image → Duplicate.
 fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let mut doc = (*d.doc).clone();
     // As Photoshop: the copy starts without a selection (the source keeps its own); alpha
@@ -1210,7 +1214,7 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
         // As Photoshop: a source with a Background gives one (opaque, locked); otherwise a plain
         // "Layer 1" that keeps the composite's transparency.
         let has_background = doc.background().is_some();
-        let mut merged = Layer::new(if has_background { "Background" } else { "Layer 1" }, LayerContent::Raster(surf));
+        let mut merged = Layer::new(if has_background { names.base("Background") } else { names.numbered("Layer", 1) }, LayerContent::Raster(surf));
         merged.locks.transparency = has_background;
         merged.locks.position = has_background;
         doc.layers = vec![merged];

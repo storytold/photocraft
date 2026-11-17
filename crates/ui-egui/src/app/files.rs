@@ -102,10 +102,7 @@ impl PhotocraftApp {
             return Ok(Vec::new());
         }
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
-        let opts = photocraft_io::ImportOptions {
-            keep_raw: self.session.prefs().raw_defaults.open_in_camera_raw,
-            ..photocraft_engine::jobs::import_options(self.session.prefs())
-        };
+        let opts = photocraft_io::ImportOptions { keep_raw: self.session.prefs().raw_defaults.open_in_camera_raw, ..self.session.import_options() };
         // A PSD and a magic-detected TIFF both go through the typed IO path: only it carries
         // `PsdApprovalRequired` (and, for a PSD, the structured damaged flag), so a layered
         // TIFF's high-memory decision can raise its prompt instead of becoming a terminal
@@ -187,7 +184,7 @@ impl PhotocraftApp {
     /// events and no Color Settings policy (which may read user-configured profile paths).
     fn import_automation_document(&mut self, name: &str, bytes: &[u8], approved: bool) -> Result<Vec<String>, String> {
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
-        let mut opts = photocraft_engine::jobs::import_options(self.session.prefs());
+        let mut opts = self.session.import_options();
         opts.psd_high_memory_approved = approved;
         let (mut doc, warnings) = import(name, bytes, &opts)?;
         photocraft_engine::file_cmds::raw_defaults(&self.session, &warnings, &mut doc);

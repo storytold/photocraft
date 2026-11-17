@@ -177,6 +177,7 @@ fn apply_mask(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Layer › Layer Mask › From Transparency: the alpha becomes a layer mask and the pixels opaque.
 fn mask_from_transparency(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     let id = layer_param(s, p)?;
     s.edit("From Transparency", |doc, _| {
         let depth = doc.depth;
@@ -195,7 +196,7 @@ fn mask_from_transparency(s: &mut Session, p: &Value) -> Result<Value> {
             }
             write_rgba(surf, r, &px);
         }
-        crate::extra_cmds::background_to_layer_for_mask(doc, id);
+        crate::extra_cmds::background_to_layer_for_mask(doc, id, &names.numbered("Layer", 0));
         doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.mask = Some(mask);
         Ok(Value::Null)
     })
@@ -203,6 +204,7 @@ fn mask_from_transparency(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Layer › Layer Mask › Hide Selection: a mask that hides the selected area.
 fn hide_selection(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     let ids = crate::layer_multi_cmds::mask_targets(s, p)?;
     s.edit("Add Layer Mask", |doc, _| {
         let sel = doc.selection.clone().ok_or_else(|| other("no selection"))?;
@@ -216,7 +218,7 @@ fn hide_selection(s: &mut Session, p: &Value) -> Result<Value> {
         mask.surface.prune();
         for id in ids {
             crate::commands::check_all_unlocked(doc, id)?;
-            crate::extra_cmds::background_to_layer_for_mask(doc, id);
+            crate::extra_cmds::background_to_layer_for_mask(doc, id, &names.numbered("Layer", 0));
             doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.mask = Some(mask.clone());
         }
         doc.selection = None;
@@ -228,6 +230,7 @@ fn hide_selection(s: &mut Session, p: &Value) -> Result<Value> {
 /// layer, or the composite for non-pixel layers) and masks the layer to them. Photoshop makes one
 /// group per object; here the objects share one mask.
 fn mask_all_objects(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     let id = layer_param(s, p)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let doc = d.doc.clone();
@@ -254,7 +257,7 @@ fn mask_all_objects(s: &mut Session, p: &Value) -> Result<Value> {
         let v: Vec<f32> = region.mask.iter().map(|m| f32::from(*m) / 255.0).collect();
         mask.surface.write_region(bbox, &v);
         mask.surface.prune();
-        crate::extra_cmds::background_to_layer_for_mask(doc, id);
+        crate::extra_cmds::background_to_layer_for_mask(doc, id, &names.numbered("Layer", 0));
         doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.mask = Some(mask);
         Ok(())
     })?;
@@ -839,6 +842,7 @@ fn effect_common_mut(e: &mut Effect) -> Option<&mut photocraft_doc::FxCommon> {
 /// effect's blend mode and opacity. Shadows/glows/outer strokes go below the layer; inner effects
 /// and overlays go above it, clipped to it. The layer keeps its pixels and loses its effects.
 fn create_layer(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     let id = layer_param(s, p)?;
     let made = s.edit("Create Layers", |doc, active| {
         let canvas = doc.bounds();
@@ -882,7 +886,7 @@ fn create_layer(s: &mut Session, p: &Value) -> Result<Value> {
             let data: Vec<f32> = buf.px.iter().flat_map(|q| photocraft_raster::from_rgba(&fmt, *q)).collect();
             surf.write_region(area, &data);
             surf.prune();
-            let mut nl = Layer::new(format!("{}'s {}", l.name, e.label()), LayerContent::Raster(surf));
+            let mut nl = Layer::new(names.format("{name}'s {effect}", &[("name", &l.name), ("effect", &names.base(e.label()))]), LayerContent::Raster(surf));
             nl.blend = blend;
             nl.opacity = opacity;
             if is_below(&e) {

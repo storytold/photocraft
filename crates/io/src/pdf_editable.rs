@@ -73,7 +73,8 @@ pub enum EditableError {
 /// `Page::render_dimensions()` (CropBox, rotation and UserUnit already applied), so a point maps
 /// to `rect` by the per-axis scale `rect.size / render_dimensions`. Nothing here re-applies the
 /// CropBox offset or rotation.
-pub fn page(page: &Page<'_>, rect: Rect, ctl: &Interrupt) -> Result<Vec<Layer>, EditableError> {
+/// Editable import with frontend-provided defaults for paths and text objects.
+pub fn page_with_names(page: &Page<'_>, rect: Rect, ctl: &Interrupt, names: &crate::generated_names::GeneratedLayerNames) -> Result<Vec<Layer>, EditableError> {
     ctl.check().map_err(|_| EditableError::Cancelled)?;
     let (width_pt, height_pt) = page.render_dimensions();
     if !width_pt.is_finite() || !height_pt.is_finite() || width_pt <= 0.0 || height_pt <= 0.0 {
@@ -101,6 +102,7 @@ pub fn page(page: &Page<'_>, rect: Rect, ctl: &Interrupt) -> Result<Vec<Layer>, 
     };
     let cache = InterpreterCache::new();
     let mut device = PathDevice {
+        names: names.clone(),
         doc,
         clip: rect,
         fmt,
@@ -162,7 +164,7 @@ pub fn page(page: &Page<'_>, rect: Rect, ctl: &Interrupt) -> Result<Vec<Layer>, 
     }
     pair_fake_bold(&mut device.glyphs, device.strokes, ctl)?;
     let families = register_fonts(&device.fonts)?;
-    let texts = text_layers(&device.glyphs, &families, device.dpi, ctl)?;
+    let texts = text_layers(&device.glyphs, &families, device.dpi, ctl, names)?;
     if device.layers.len().saturating_add(texts.len()) > MAX_LAYERS {
         return Err(EditableError::Unsupported("too many objects"));
     }
@@ -233,6 +235,7 @@ fn text_layers(
     families: &std::collections::HashMap<u128, String>,
     dpi: f64,
     ctl: &Interrupt,
+    names: &crate::generated_names::GeneratedLayerNames,
 ) -> Result<Vec<(usize, Layer)>, EditableError> {
     let mut out = Vec::new();
     let mut i = 0;
@@ -276,7 +279,7 @@ fn text_layers(
             i += 1;
         }
         if !text.is_empty() && has_ink(&text) {
-            let layer = text_layer(text, first, out.len(), &family);
+            let layer = text_layer(text, first, out.len(), &family, names);
             if let LayerContent::Text(text) = &layer.content {
                 let shared = photocraft_text::shared();
                 let mut engine = shared.lock().unwrap_or_else(|error| error.into_inner());
@@ -319,7 +322,7 @@ fn same_style(a: &GlyphRun, b: &GlyphRun) -> bool {
 }
 
 /// One line's point-text layer, with the family the shared engine registered.
-fn text_layer(text: String, run: &GlyphRun, number: usize, family: &str) -> Layer {
+fn text_layer(text: String, run: &GlyphRun, number: usize, family: &str, names: &crate::generated_names::GeneratedLayerNames) -> Layer {
     let weight = if run.fake_bold { 700 } else { run.font.weight };
     let font_style = match (weight >= 600, run.font.italic) {
         (true, true) => "Bold Italic",
@@ -349,7 +352,7 @@ fn text_layer(text: String, run: &GlyphRun, number: usize, family: &str) -> Laye
         runs: vec![TextRun { len: text.len(), style }],
         ..TextLayer::default()
     };
-    Layer::new(format!("Text {}", number + 1), LayerContent::Text(layer))
+    Layer::new(names.numbered("Text", number + 1), LayerContent::Text(layer))
 }
 
 /// Registers each embedded face with the shared engine under its content-keyed family and returns
@@ -461,6 +464,7 @@ fn font_alias(postscript: &str, key: u128) -> String {
 
 /// Collects filled and stroked paths and glyph runs; anything else marks the page unsupported.
 struct PathDevice<'a> {
+    names: crate::generated_names::GeneratedLayerNames,
     /// Page points to document pixels: translation to the artboard plus the per-axis scale.
     doc: Affine,
     /// The page's artboard in document pixels; shape caches and strokes are clipped to it.
@@ -576,7 +580,7 @@ impl PathDevice<'_> {
             }
             shape.cache = Some(compiled.render(self.fmt, area));
         }
-        self.layers.push(Layer::new(format!("Path {}", self.layers.len() + 1), LayerContent::Shape(shape)));
+        self.layers.push(Layer::new(self.names.numbered("Path", self.layers.len() + 1), LayerContent::Shape(shape)));
     }
 }
 
@@ -1286,6 +1290,28 @@ mod tests {
         assert!((stroke.width - 3.0).abs() < 0.01, "stroke width {}", stroke.width);
         assert_eq!(stroke.dashes.len(), 2);
         assert!((stroke.dashes[0] - 3.0).abs() < 0.01 && (stroke.dashes[1] - 4.0 / 3.0).abs() < 0.01, "dashes {:?}", stroke.dashes);
+    }
+
+    #[test]
+    fn generated_names_preserve_pdf_text_content() {
+        let bytes = text_pdf("1 0 0 rg 20 20 60 40 re f BT /F1 14 Tf 1 0 0 1 10 20 Tm (Hi) Tj ET");
+        for editable in [false, true] {
+            let mut options = ImportOptions { pdf_dpi: 72.0, pdf_editable: editable, ..Default::default() };
+            for (key, value) in [("Page", "Generated page"), ("Text", "Generated text"), ("Path", "Generated path")] {
+                options.generated_layer_names.labels.insert(key.into(), value.into());
+            }
+            let imported = import_with_options_and_interrupt("names.pdf", &bytes, &options, &Interrupt::NONE).unwrap();
+            assert_eq!(imported.document.layers[0].name, "Generated page 1");
+            if editable {
+                let layers = children(&imported.document);
+                assert!(layers.iter().any(|l| l.name == "Generated path 1"));
+                let text = layers.iter().find(|l| l.name == "Generated text 1").unwrap();
+                let LayerContent::Text(text) = &text.content else { panic!("editable text") };
+                assert_eq!(text.text, "Hi");
+            } else {
+                assert_eq!(children(&imported.document)[0].name, "Generated page 1");
+            }
+        }
     }
 
     #[test]

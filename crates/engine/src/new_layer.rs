@@ -39,10 +39,11 @@ pub(crate) struct NewLayer {
 /// the active layer, inside it when it is an open group, below it with `position: below`, the Layers
 /// panel's ⌘/Ctrl-click), joining the clip group it lands in.
 pub fn run(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     let NewLayer { clip, mode, opacity, label, neutral, below, name } = parse(p)?;
     let place = if below { crate::layer_place::Place::Below } else { crate::layer_place::Place::Auto };
     let id = s.edit("New Layer", |doc, active| {
-        let name = name.clone().unwrap_or_else(|| doc.next_layer_name("Layer"));
+        let name = name.clone().unwrap_or_else(|| doc.next_layer_name(&names.base("Layer")));
         let mut layer = Layer::raster(name, doc.pixel_format());
         layer.blend = mode;
         layer.opacity = opacity;

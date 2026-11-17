@@ -205,7 +205,7 @@ pub fn untitled_document_name(s: &Session) -> String {
 
 /// Default name with additional reservations owned by the frontend (decoding files and dialogs).
 pub fn untitled_document_name_with<'a>(s: &'a Session, reserved: impl Iterator<Item = &'a str>) -> String {
-    let base = s.translated_name_base("Untitled");
+    let base = s.default_names().base_in("documentName", "Untitled");
     next_untitled_name(&base, s.reserved_document_names().chain(reserved))
 }
 

@@ -61,6 +61,7 @@ fn select_only(s: &mut Session, id: LayerId) {
 }
 
 fn stamp_visible(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     object(p, "layer.stampVisible")?;
     let id = s.edit("Stamp Visible", |doc, active| {
         if !doc.walk().iter().any(|(path, _, l)| !l.is_group() && (1..=path.len()).all(|n| doc.layer_at(&path[..n]).is_some_and(|a| a.visible))) {
@@ -73,7 +74,7 @@ fn stamp_visible(s: &mut Session, p: &Value) -> Result<Value> {
             *crate::pixels_mut(doc.layer_mut(empty).ok_or(EngineError::NoLayer(empty))?)? = surf;
             return Ok(empty);
         }
-        let layer = stamp_layer(doc, doc.next_layer_name("Layer"))?;
+        let layer = stamp_layer(doc, doc.next_layer_name(&names.base("Layer")))?;
         let id = crate::layer_place::insert_new(doc, *active, layer, crate::layer_place::Place::Above);
         *active = Some(id);
         Ok(id)
@@ -151,6 +152,7 @@ fn stamp_down(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Several layers selected: a copy of them merged into a new layer above the top one.
 fn stamp_selected(s: &mut Session, sel: &[LayerId]) -> Result<Value> {
+    let names = s.default_names();
     let id = s.edit("Stamp Layers", |doc, active| {
         let ids = crate::layer_multi_cmds::top_level(doc, sel);
         let top = *ids.last().ok_or_else(|| EngineError::Other("no layers selected".into()))?;
@@ -159,7 +161,7 @@ fn stamp_selected(s: &mut Session, sel: &[LayerId]) -> Result<Value> {
         if solo.layers.is_empty() {
             return Err(EngineError::Other("the selected layers are all hidden".into()));
         }
-        let name = format!("{} (merged)", doc.layer(top).map_or("Layer", |l| l.name.as_str()));
+        let name = names.format("{name} (merged)", &[("name", doc.layer(top).map_or("Layer", |l| l.name.as_str()))]);
         let layer = stamp_layer(&solo, name)?;
         let id = crate::layer_place::insert_new(doc, Some(top), layer, crate::layer_place::Place::Above);
         *active = Some(id);

@@ -862,6 +862,7 @@ fn with_panel_target(s: &Session, p: &Value) -> Value {
 }
 
 fn transform(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     // The shape tools' bounding box scales live shapes with this command and names the step as
     // the reference does. Passed in, not renamed after: the edit may land later as a job.
     let step_name = match p.get("stepName") {
@@ -972,7 +973,9 @@ fn transform(s: &mut Session, p: &Value) -> Result<Value> {
     crate::jobs::edit_job(
         s,
         step_name,
-        move |doc, _, ctx| ctx.stage(0.0, 1.0, "Transforming", |ctl| transform_doc(doc, id, &ids, &p, lone, &h, affine, interp, ctl)),
+        move |doc, _, ctx| {
+            ctx.stage(0.0, 1.0, "Transforming", |ctl| transform_doc(doc, id, &ids, &p, lone, &h, affine, interp, ctl, &names.numbered("Layer", 0)))
+        },
         move |()| json!({"rect": rect, "layers": layers}),
     )
 }
@@ -990,6 +993,7 @@ fn transform_doc(
     affine: Option<Affine>,
     interp: Interp,
     ctl: &Interrupt,
+    zero_name: &str,
 ) -> Result<()> {
     let sel = doc.selection.clone();
     // The selection outline moves too: price it before anything is built.
@@ -1026,7 +1030,7 @@ fn transform_doc(
     for &id in ids {
         let group = group_locks(doc, id);
         // Photoshop turns the Background into a normal layer before transforming it.
-        crate::extra_cmds::background_to_layer(doc, id);
+        crate::extra_cmds::background_to_layer(doc, id, zero_name);
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         let doc_sel = layer_sel(l);
         if !h.is_identity() {

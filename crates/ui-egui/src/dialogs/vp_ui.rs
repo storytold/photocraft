@@ -95,6 +95,7 @@ struct StampPreview {
     /// The session's `rev`, New Layer and paste it was painted with (any changing repaints it).
     rev: u64,
     new_layer: bool,
+    name_base: String,
     /// The paste (plane, top-left, width) baked in under the strokes, as OK pastes before it clones.
     paste: Option<(usize, [f64; 2], f64)>,
     /// The paste landed in `out` (it can fail, or miss the plane).
@@ -516,7 +517,7 @@ impl VpSession {
 
     /// Paints what the preview doesn't show yet (all of it after the planes changed). `key`
     /// names a new preview. False when nothing changed.
-    fn paint_preview(&mut self, key: impl FnOnce() -> u64) -> bool {
+    fn paint_preview(&mut self, key: impl FnOnce() -> u64, name_base: &str) -> bool {
         if self.strokes.is_empty() {
             let had = self.preview.is_some();
             self.preview = None;
@@ -528,7 +529,7 @@ impl VpSession {
         };
         let paste = self.paste_key();
         let canvas = self.canvas;
-        let stale = self.preview.as_ref().is_none_or(|p| p.rev != self.rev || p.new_layer != self.new_layer || p.paste != paste);
+        let stale = self.preview.as_ref().is_none_or(|p| p.rev != self.rev || p.new_layer != self.new_layer || p.paste != paste || p.name_base != name_base);
         let mut area = Rect::EMPTY;
         let mut baked = false;
         if stale {
@@ -556,6 +557,7 @@ impl VpSession {
             self.preview = Some(StampPreview {
                 rev: self.rev,
                 new_layer: self.new_layer,
+                name_base: name_base.into(),
                 paste,
                 baked,
                 work,
@@ -598,7 +600,7 @@ impl VpSession {
         }
         let mut d = (*self.base).clone();
         if self.new_layer {
-            let mut l = Layer::raster(d.next_layer_name("Vanishing Point"), d.pixel_format());
+            let mut l = Layer::raster(d.next_layer_name(name_base), d.pixel_format());
             l.content = LayerContent::Raster(pv.out.clone());
             d.insert_above(Some(self.layer), l);
         } else if let Some(LayerContent::Raster(s)) = d.layer_mut(self.layer).map(|l| &mut l.content) {
@@ -1006,7 +1008,7 @@ pub(crate) fn sync_preview(app: &mut PhotocraftApp) {
         return;
     }
     let ui = &mut app.ui;
-    s.paint_preview(|| ui.alloc_id());
+    s.paint_preview(|| ui.alloc_id(), &app.session.translated_name_base("Vanishing Point"));
 }
 
 /// What changed between stamp preview (or document) key `seen` and `now` of document `doc` at

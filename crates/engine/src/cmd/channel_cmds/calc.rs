@@ -100,6 +100,7 @@ pub(super) fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 pub(super) fn calculations(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     let cmd = "image.calculations";
     let blending = Blending::parse(p).map_err(|e| bad(cmd, e))?;
     let opacity = p.get("opacity").and_then(Value::as_f64).unwrap_or(100.0).clamp(0.0, 100.0) as f32 / 100.0;
@@ -123,7 +124,7 @@ pub(super) fn calculations(s: &mut Session, p: &Value) -> Result<Value> {
         }
         "newDocument" => {
             let like = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
-            let d = gray_document(name.as_deref().unwrap_or("Untitled"), &like, &out);
+            let d = gray_document(name.as_deref().unwrap_or("Untitled"), &like, &out, &names);
             let i = s.add_document(d, None);
             Ok(json!({ "document": i }))
         }

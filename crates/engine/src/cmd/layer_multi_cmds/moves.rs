@@ -682,6 +682,11 @@ fn wrap_pieces(
 /// Uses the same source ordering and insertion semantics as `move_to`, but never edits history.
 /// Invalid/self-referential hover targets return None (the committed image stays visible).
 pub fn preview_move(doc: &Document, p: &Value, add_copy: bool) -> Option<Document> {
+    preview_move_with_names(doc, p, add_copy, &Default::default())
+}
+
+/// The same placement preview with the caller's naming policy for copies.
+pub fn preview_move_with_names(doc: &Document, p: &Value, add_copy: bool, names: &crate::default_names::DefaultNames) -> Option<Document> {
     let target = LayerId(p.get("target")?.as_u64()?);
     let position = p.get("position")?.as_str()?;
     if !matches!(position, "above" | "below" | "into") {
@@ -716,7 +721,7 @@ pub fn preview_move(doc: &Document, p: &Value, add_copy: bool) -> Option<Documen
     // The very structural move the drop commits, so the preview shows the same clip groups,
     // Background handling and group-depth refusals; a drop `move_to` would refuse has no preview.
     let mut preview = doc.clone();
-    apply_move(&mut preview, &moved_ids, target, position, copy, add_copy).ok()?;
+    apply_move(&mut preview, &moved_ids, target, position, copy, add_copy, names).ok()?;
     Some(preview)
 }
 
@@ -777,7 +782,15 @@ fn board_offsets(doc: &Document, ids: &[LayerId], from: &[Origin]) -> Result<Vec
 /// (`clip_group::settle`). A layer dropped on a different artboard keeps its place on its board
 /// (see [`board_offsets`]). Returns the ids of the new copies (empty for a move). On `Err` `doc`
 /// is half edited: run it inside `Session::edit` or on a scratch copy.
-fn apply_move(doc: &mut Document, moved_ids: &[LayerId], target: LayerId, pos: &str, copy: bool, add_copy: bool) -> Result<Vec<LayerId>> {
+fn apply_move(
+    doc: &mut Document,
+    moved_ids: &[LayerId],
+    target: LayerId,
+    pos: &str,
+    copy: bool,
+    add_copy: bool,
+    names: &crate::default_names::DefaultNames,
+) -> Result<Vec<LayerId>> {
     const CMD: &str = "layer.moveTo";
     let background = crate::background_cmds::background_id(doc);
     let before = if copy { Default::default() } else { crate::clip_group::Before::read(doc, moved_ids) };
@@ -793,7 +806,7 @@ fn apply_move(doc: &mut Document, moved_ids: &[LayerId], target: LayerId, pos: &
         .collect();
     let mut moved = Vec::with_capacity(moved_ids.len());
     for &id in moved_ids {
-        moved.push(if copy { crate::commands::layer_copy(doc, id, add_copy)? } else { doc.remove(id).ok_or(EngineError::NoLayer(id))? });
+        moved.push(if copy { crate::commands::layer_copy(doc, id, add_copy, names)? } else { doc.remove(id).ok_or(EngineError::NoLayer(id))? });
     }
     let copies: Vec<LayerId> = if copy { moved.iter().map(|l| l.id).collect() } else { Vec::new() };
     // Look up the destination AFTER removing every source: its indices may have shifted.
@@ -833,6 +846,7 @@ fn apply_move(doc: &mut Document, moved_ids: &[LayerId], target: LayerId, pos: &
 /// Selected descendants of a moved group remain inside their parent; only top-level
 /// selected nodes are detached, and every reference is validated before editing.
 pub fn move_to(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     const CMD: &str = "layer.moveTo";
     let indexed = p.get("target").is_some_and(Value::is_object);
     let resolved;
@@ -942,7 +956,7 @@ pub fn move_to(s: &mut Session, p: &Value) -> Result<Value> {
     let original_active = st.active_layer;
     let add_copy = crate::commands::layer_panel_option(s, "addCopyToCopiedLayersAndGroups", true);
     let (count, copies) = s.edit(if copy { "Duplicate Layer" } else { "Reorder Layers" }, |doc, active| {
-        let copies = apply_move(doc, &moved_ids, target, pos, copy, add_copy)?;
+        let copies = apply_move(doc, &moved_ids, target, pos, copy, add_copy, &names)?;
         *active = if copy {
             copies.last().copied()
         } else if batch.is_some() {

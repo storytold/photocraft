@@ -240,6 +240,7 @@ pub(crate) fn duplicate_into_document(s: &mut Session, p: &Value, destination: u
 
 /// `layer.copyToDocument`.
 fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     let dest = doc_index(s, p, "document")?.ok_or_else(|| bad("missing `document` (the destination's index)"))?;
     let src = match doc_index(s, p, "source")? {
         Some(i) => i,
@@ -308,7 +309,7 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
         };
         // A dragged Background arrives as an ordinary layer (the destination keeps its own).
         if sdoc.is_background(*id) {
-            l.name = ddoc.next_layer_name("Layer");
+            l.name = ddoc.next_layer_name(&names.base("Layer"));
             l.locks = Default::default();
         }
         copies.layers.push(l);

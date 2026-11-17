@@ -42,10 +42,17 @@ pub fn has_extension(name: &str) -> bool {
     name.rsplit(['/', '\\']).next().and_then(|n| n.rsplit_once('.')).is_some_and(|(_, ext)| EXTENSIONS.iter().any(|e| ext.eq_ignore_ascii_case(e)))
 }
 
-pub(crate) fn import(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt) -> Result<ImportResult, IoError> {
+/// Source names are literal; only unnamed-node defaults use the frontend policy.
+pub(crate) fn import_with_names(
+    name: &str,
+    bytes: &[u8],
+    ctl: &photocraft_raster::Interrupt,
+    names: &crate::generated_names::GeneratedLayerNames,
+) -> Result<ImportResult, IoError> {
     match craft_affinity::read(bytes, craft_affinity::Limits::default()) {
         Ok(d) => {
             let mut b = Builder::new(name, &d)?;
+            b.names = names.clone();
             b.ctl = *ctl;
             b.document(&d)?;
             ctl.check().map_err(|_| IoError::Cancelled)?;
@@ -65,7 +72,13 @@ pub(crate) fn import(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrup
             // Save never writes back over the Affinity file.
             Ok(ImportResult { document, warnings, source_read_only: true, preview_only: false })
         }
-        Err(native) => preview(name, bytes, &native),
+        Err(native) => {
+            let mut imported = preview(name, bytes, &native)?;
+            if let Some(layer) = imported.document.layers.first_mut() {
+                layer.name = names.base("Affinity preview").into();
+            }
+            Ok(imported)
+        }
     }
 }
 
@@ -95,6 +108,7 @@ fn preview(name: &str, bytes: &[u8], native: &craft_affinity::Error) -> Result<I
 }
 
 struct Builder<'a> {
+    names: crate::generated_names::GeneratedLayerNames,
     doc: Document,
     warnings: Vec<String>,
     /// Document pixels (in the canvas) per Affinity document pixel: always 1; spreads are offset.
@@ -149,6 +163,7 @@ impl Builder<'_> {
         Ok(Self {
             doc,
             warnings: Vec::new(),
+            names: Default::default(),
             format: PixelFormat::RGBA8,
             canvas,
             pixel_budget: MAX_PIXEL_BYTES,
@@ -177,7 +192,7 @@ impl Builder<'_> {
                 let page = rects.first().copied().unwrap_or(spread.bounds);
                 let r = self.bbox(to_doc, page);
                 let mut g = Layer::new(
-                    format!("Page {}", i + 1),
+                    self.names.numbered("Page", i + 1),
                     LayerContent::Group(Group { children: std::mem::take(&mut children), expanded: true, artboard: None, frame_stroke: None }),
                 );
                 if let LayerContent::Group(gr) = &mut g.content {
@@ -196,7 +211,7 @@ impl Builder<'_> {
             // An opaque page: a white background below the art.
             let mut bg = Surface::with_default(self.format, &[1.0, 1.0, 1.0, 1.0]);
             bg.prune();
-            let mut l = Layer::new("Background", LayerContent::Raster(bg));
+            let mut l = Layer::new(self.names.background.clone(), LayerContent::Raster(bg));
             l.locks.transparency = true;
             l.locks.position = true;
             layers.insert(0, l);
@@ -261,7 +276,7 @@ impl Builder<'_> {
     }
 
     fn base(&mut self, n: &af::Node, content: LayerContent) -> Layer {
-        let mut l = Layer::new(if n.name.is_empty() { default_name(&n.kind) } else { n.name.clone() }, content);
+        let mut l = Layer::new(if n.name.is_empty() { self.names.base(&default_name(&n.kind)).to_string() } else { n.name.clone() }, content);
         l.visible = n.visible;
         l.opacity = n.opacity as f32;
         l.blend = self.blend(n.blend);
@@ -293,7 +308,7 @@ impl Builder<'_> {
                     self.base(n, LayerContent::Shape(shape))
                 } else {
                     // A shape clips its children: a group masked by the outline, the shape at its bottom.
-                    let mut own = Layer::new(if n.name.is_empty() { "Shape".to_string() } else { n.name.clone() }, LayerContent::Shape(shape));
+                    let mut own = Layer::new(if n.name.is_empty() { self.names.base("Shape").to_string() } else { n.name.clone() }, LayerContent::Shape(shape));
                     own.opacity = 1.0;
                     let mut kids = vec![own];
                     kids.extend(children);
@@ -754,6 +769,19 @@ mod tests {
         assert!(charge(&mut budget, 60));
         assert!(!charge(&mut budget, 60), "a later image cannot overdraw the import's budget");
         assert_eq!(budget, 40, "a refused charge leaves the budget alone");
+    }
+
+    #[test]
+    fn generated_names_do_not_replace_saved_affinity_names() {
+        let mut d = affinity_document(vec![(1, 1, Pixels::Rgba8(vec![0; 4])), (1, 1, Pixels::Rgba8(vec![0; 4]))]);
+        d.spreads[0].transparent = false;
+        d.spreads[0].nodes[0].name = "Image".into();
+        d.spreads[0].nodes[1].name.clear();
+        let mut b = Builder::new("names", &d).unwrap();
+        b.names.background = "Generated background".into();
+        b.names.labels.insert("Image".into(), "Generated image".into());
+        b.document(&d).unwrap();
+        assert_eq!(b.doc.layers.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(), ["Generated background", "Image", "Generated image"]);
     }
 
     #[test]

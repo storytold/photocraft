@@ -58,6 +58,7 @@ fn two_layers(s: &Session) -> std::result::Result<(), String> {
 }
 
 fn auto_align(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     let cmd = "edit.autoAlignLayers";
     let ids = selected_pixel_layers(s);
     if ids.len() < 2 {
@@ -135,7 +136,7 @@ fn auto_align(s: &mut Session, p: &Value) -> Result<Value> {
     s.edit("Auto-Align Layers", |doc, _| {
         for (id, px, mask) in &warped {
             // Photoshop turns the Background into a normal layer before moving it.
-            crate::extra_cmds::background_to_layer(doc, *id);
+            crate::extra_cmds::background_to_layer(doc, *id, &names.numbered("Layer", 0));
             let l = doc.layer_mut(*id).ok_or(EngineError::NoLayer(*id))?;
             if let Some(surf) = l.surface_mut() {
                 *surf = px.clone();
@@ -183,6 +184,7 @@ fn blend_bytes_per_pixel(layers: u64, channels: u64, fuse: bool) -> u64 {
 const BLEND_BUFFERS: &str = "Auto-Blend Layers";
 
 fn auto_blend(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     let cmd = "edit.autoBlendLayers";
     let ids = selected_pixel_layers(s);
     if ids.len() < 2 {
@@ -313,7 +315,7 @@ fn auto_blend(s: &mut Session, p: &Value) -> Result<Value> {
     let (new_layer, depth_layer) = s.edit(label, |doc, active| {
         for (id, wt) in ids.iter().zip(&weights) {
             // The Background can't have a mask: it becomes a normal layer first, as in Photoshop.
-            crate::extra_cmds::background_to_layer_for_mask(doc, *id);
+            crate::extra_cmds::background_to_layer_for_mask(doc, *id, &names.numbered("Layer", 0));
             let l = doc.layer_mut(*id).ok_or(EngineError::NoLayer(*id))?;
             let mut mask = LayerMask::hide_all();
             mask.surface.write_region(area, wt);
@@ -322,7 +324,7 @@ fn auto_blend(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let mut below = top;
         let depth_id = depth_px.as_ref().map(|px| {
-            let mut l = Layer::raster(doc.next_layer_name("Depth"), fmt);
+            let mut l = Layer::raster(doc.next_layer_name(&names.base("Depth")), fmt);
             l.visible = false;
             if let Some(surf) = l.surface_mut() {
                 surf.write_region(area, px);
@@ -337,7 +339,7 @@ fn auto_blend(s: &mut Session, p: &Value) -> Result<Value> {
             }
             return Ok((None, depth_id));
         };
-        let mut l = Layer::raster(doc.next_layer_name("Blended"), fmt);
+        let mut l = Layer::raster(doc.next_layer_name(&names.base("Blended")), fmt);
         if let Some(surf) = l.surface_mut() {
             surf.write_region(area, px);
             surf.prune();

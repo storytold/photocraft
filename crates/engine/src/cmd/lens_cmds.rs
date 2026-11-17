@@ -283,6 +283,7 @@ fn raw_enabled(s: &Session) -> std::result::Result<(), String> {
 /// Runs `f` on the target layer (pixel layer edited in place inside the selection; smart object
 /// gets a smart filter with `stored` params).
 fn run_filter(s: &mut Session, cmd: &str, label: &str, p: &Value, stored: Value, float_bg: bool, f: &dyn Fn(&Surface, Rect) -> Surface) -> Result<LayerId> {
+    let names = s.default_names();
     let state = s.active().ok_or(EngineError::NoDocument)?;
     let _working = photocraft_raster::memory::try_reserve_operation(state.doc.size.area().saturating_mul(64)).map_err(EngineError::Other)?;
     let id = target(s, p)?;
@@ -309,7 +310,7 @@ fn run_filter(s: &mut Session, cmd: &str, label: &str, p: &Value, stored: Value,
         if float_bg && background && !colors {
             l.locks.position = false;
             l.locks.transparency = false;
-            l.name = "Layer 0".into();
+            l.name = names.numbered("Layer", 0);
         }
         let LayerContent::Raster(surf) = &mut l.content else {
             return Err(EngineError::Other(format!("{label} needs a pixel layer")));

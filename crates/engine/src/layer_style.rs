@@ -987,6 +987,7 @@ const MAX_EFFECTS: usize = 256;
 /// dialog doesn't model) with the params present. Unknown kinds, kind/snapshot
 /// mismatches and malformed snapshots are errors, never panics.
 fn replace_effects(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     const CMD: &str = "layer.layerStyle.replace";
     crate::commands::check_f32_values(CMD, p)?;
     let id = crate::commands::layer_param(s, p)?;
@@ -1045,7 +1046,7 @@ fn replace_effects(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let mode = doc.mode;
         if !list.is_empty() {
-            crate::extra_cmds::background_to_layer(doc, id);
+            crate::extra_cmds::background_to_layer(doc, id, &names.numbered("Layer", 0));
         }
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         // The list's master switch (`layer.setEffectsVisible`, the Layers panel's "Effects" eye)
@@ -1058,6 +1059,7 @@ fn replace_effects(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn set_effect(s: &mut Session, p: &Value, kind: &str) -> Result<Value> {
+    let names = s.default_names();
     crate::commands::check_f32_values(&format!("layer.layerStyle.{kind}"), p)?;
     check_gradient_params(p, &format!("layer.layerStyle.{kind}"))?;
     let fx = effect_from_params(kind, p).ok_or_else(|| EngineError::Other(format!("unknown effect {kind}")))?;
@@ -1071,7 +1073,7 @@ fn set_effect(s: &mut Session, p: &Value, kind: &str) -> Result<Value> {
         }
         // Colours in the document's mode, as Image › Mode keeps them.
         let fx = fx.in_mode(doc.mode);
-        crate::extra_cmds::background_to_layer(doc, id);
+        crate::extra_cmds::background_to_layer(doc, id, &names.numbered("Layer", 0));
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         // Adding or replacing one effect leaves the list's master switch alone (#3648); a fresh
         // effects list already has the default `enabled: true`, so a first effect still shows.

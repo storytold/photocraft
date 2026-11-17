@@ -1100,7 +1100,7 @@ fn prepare_profile_smart_layers(doc: &mut Document, rasterize: bool) -> Result<(
 }
 
 /// Flatten in the source space so conversion preserves the composited appearance.
-fn flatten_for_profile(doc: &mut Document, active: &mut Option<photocraft_doc::LayerId>) -> Result<()> {
+fn flatten_for_profile(doc: &mut Document, active: &mut Option<photocraft_doc::LayerId>, name: &str) -> Result<()> {
     let bounds = doc.bounds();
     if u64::from(bounds.width()) * u64::from(bounds.height()) > photocraft_compose::MAX_RENDER_PIXELS {
         return Err(EngineError::BadParams {
@@ -1111,7 +1111,7 @@ fn flatten_for_profile(doc: &mut Document, active: &mut Option<photocraft_doc::L
     prepare_profile_smart_layers(doc, false)?;
     let format = doc.pixel_format();
     let surface = photocraft_compose::flatten_to_surface(doc, format, Some([1.0, 1.0, 1.0]));
-    let mut background = Layer::raster("Background", format);
+    let mut background = Layer::raster(name, format);
     background.locks.transparency = true;
     background.locks.position = true;
     *crate::pixels_mut(&mut background)? = surface;
@@ -1122,6 +1122,7 @@ fn flatten_for_profile(doc: &mut Document, active: &mut Option<photocraft_doc::L
 
 /// Optionally freeze placed pixels or flatten the source, then convert in one atomic edit.
 fn convert_to_profile(s: &mut Session, p: &Value) -> Result<Value> {
+    let names = s.default_names();
     let spec = p
         .get("profile")
         .and_then(Value::as_str)
@@ -1150,7 +1151,7 @@ fn convert_to_profile(s: &mut Session, p: &Value) -> Result<Value> {
     s.edit("Convert to Profile", |doc, active| {
         if flatten {
             // Flatten consumes the displayed image; discarded hidden objects need no source read.
-            flatten_for_profile(doc, active)?;
+            flatten_for_profile(doc, active, &names.base("Background"))?;
         } else if rasterize {
             prepare_profile_smart_layers(doc, true)?;
         }
