@@ -277,6 +277,10 @@ impl UiSet {
         // All fields are validated. Select the requested frame thumbnail before applying the
         // remaining view state, so a denied selection leaves the other fields intact.
         self.tools.select_frame_target(app)?;
+        let native_layout_changed = app.ui.docking.is_none()
+            && (self.panels.dock.as_ref().is_some_and(|dock| dock != &app.ui.dock)
+                || self.panels.dock_tabs.as_ref().is_some_and(|tabs| tabs != &app.ui.dock_tabs)
+                || self.panels.panels.as_ref().is_some_and(|panels| crate::dock::Group::ALL.iter().any(|g| g.shown(panels) != g.shown(&app.ui.panels))));
         self.tools.apply(app);
         self.crop.apply(app);
         self.panels.apply_options(app);
@@ -284,6 +288,9 @@ impl UiSet {
             app.set_theme(ctx, k);
         }
         self.panels.apply_dock(app);
+        if native_layout_changed {
+            crate::dock::discard_retained_layout(app);
+        }
         if let Some(update) = self.legacy_update {
             crate::panel_docking::commit_legacy_update(app, update, p);
         }

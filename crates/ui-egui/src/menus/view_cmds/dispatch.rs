@@ -291,11 +291,14 @@ fn flag_param(p: &Value, cur: bool) -> bool {
     p.get("on").and_then(Value::as_bool).unwrap_or(!cur)
 }
 
+/// Apply a recognized view command, preserving retained layouts for no-op panel requests.
 fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Result<Value, String> {
     if let Some((panel, tab)) = panel_tab(app, id) {
         let group = crate::dock::Group::from_key(panel);
         let collapsed = group.is_some_and(|g| app.ui.dock.is_collapsed(g));
+        let dock_before = app.ui.dock.clone();
         let (vis, cur) = panel_state(app, panel);
+        let before = (*vis, *cur);
         let requested = match p.get("show").or_else(|| p.get("on")) {
             None => None,
             Some(value) => Some(value.as_bool().ok_or("show must be a boolean")?),
@@ -316,8 +319,12 @@ fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Res
             }
         }
         let visible = *vis;
+        let selected = *cur;
         if let Some(g) = group.filter(|_| visible) {
             crate::dock::reveal(app, g);
+        }
+        if group.is_some() && (before != (visible, selected) || dock_before != app.ui.dock) {
+            crate::dock::discard_retained_layout(app);
         }
         return Ok(json!({"panel": panel, "tab": tab, "visible": visible}));
     }
