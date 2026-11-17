@@ -278,6 +278,18 @@ impl PhotocraftApp {
         })
     }
 
+    /// [`Self::pick_file_bytes`] letting the user choose several files (File › Place Embedded):
+    /// `then` gets every chosen file, in the order the dialog returns them. A desktop file is
+    /// handed over by path and read only when [`PickedFile::read`] is called, so files waiting
+    /// their turn hold no contents; the web hands over each file's contents.
+    pub(crate) fn pick_files_bytes(&mut self, then: impl FnOnce(&mut Self, Vec<PickedFile>) -> Result<Value, String> + 'static) -> Result<Value, String> {
+        let initial_dir = last_used_dir(&self.ui.recent_files);
+        self.ask_file(FileDialogRequest::Open { multiple: true, initial_dir, extensions: None }, move |app, answer| {
+            let files = picked_files(answer)?;
+            then(app, files)
+        })
+    }
+
     /// File › Open: opens every chosen file in the order the dialog returns them, reporting each
     /// failure (see [`Self::open_paths_in_order`]).
     pub fn open_dialog_file(&mut self) -> Result<Value, String> {
@@ -467,14 +479,51 @@ fn read_picked(answer: FileDialogAnswer) -> Result<(String, Vec<u8>), String> {
     match answer {
         FileDialogAnswer::Contents(name, bytes) => Ok((name, bytes)),
         FileDialogAnswer::ContentsMany(files) => files.into_iter().next().ok_or_else(|| CANCELLED.into()),
-        FileDialogAnswer::Paths(paths) => {
-            let path = paths.into_iter().next().ok_or(CANCELLED)?;
-            let bytes = photocraft_format::read_file(std::path::Path::new(&path)).map_err(|e| format!("{}: {e}", display_name(&path)))?;
-            Ok((path, bytes))
-        }
+        FileDialogAnswer::Paths(paths) => read_path(paths.into_iter().next().ok_or(CANCELLED)?),
         FileDialogAnswer::FolderTo(_) => Err(UNEXPECTED.into()),
         FileDialogAnswer::SaveTo(_) | FileDialogAnswer::Unavailable(_) => Err(UNEXPECTED.into()),
     }
+}
+
+/// The file at `path` with its contents; one that can't be read fails with "<file name>: <why>".
+fn read_path(path: String) -> Result<(String, Vec<u8>), String> {
+    let bytes = photocraft_format::read_file(std::path::Path::new(&path)).map_err(|e| format!("{}: {e}", display_name(&path)))?;
+    Ok((path, bytes))
+}
+
+/// One file chosen in the several-file picker ([`PhotocraftApp::pick_files_bytes`]).
+#[derive(Debug)]
+pub(crate) enum PickedFile {
+    /// A file on disk (desktop), by its full path: read when its turn comes.
+    Path(String),
+    /// A file's name and contents (the web, where the page gets contents rather than paths).
+    Contents(String, Vec<u8>),
+}
+
+impl PickedFile {
+    /// Its name (the full path on the desktop) and contents, reading a desktop file now; one that
+    /// can't be read fails with "<file name>: <why>", as in [`PhotocraftApp::pick_file_bytes`].
+    pub(crate) fn read(self) -> Result<(String, Vec<u8>), String> {
+        match self {
+            Self::Path(path) => read_path(path),
+            Self::Contents(name, bytes) => Ok((name, bytes)),
+        }
+    }
+}
+
+/// The files chosen in a several-file picker, in the order the dialog returns them (none: Cancel).
+fn picked_files(answer: FileDialogAnswer) -> Result<Vec<PickedFile>, String> {
+    let files: Vec<PickedFile> = match answer {
+        FileDialogAnswer::Paths(paths) => paths.into_iter().map(PickedFile::Path).collect(),
+        FileDialogAnswer::Contents(name, bytes) => vec![PickedFile::Contents(name, bytes)],
+        FileDialogAnswer::ContentsMany(files) => files.into_iter().map(|(name, bytes)| PickedFile::Contents(name, bytes)).collect(),
+        FileDialogAnswer::FolderTo(_) => return Err(UNEXPECTED.into()),
+        FileDialogAnswer::SaveTo(_) | FileDialogAnswer::Unavailable(_) => return Err(UNEXPECTED.into()),
+    };
+    if files.is_empty() {
+        return Err(CANCELLED.into());
+    }
+    Ok(files)
 }
 
 /// A fake dialog service for tests: answers each request with the next of `answers` (`None`:

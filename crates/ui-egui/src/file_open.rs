@@ -106,7 +106,8 @@ pub(crate) fn log_drag_over(ctx: &egui::Context, hovering: usize) {
 }
 
 /// A file dropped on the canvas, waiting its turn to be placed in the document it was dropped on
-/// (queued with its [`DocId`] in `drop_places`).
+/// (queued with its [`DocId`] in `drop_places`), or one of several files chosen at once in File ›
+/// Place Embedded's dialog, waiting its turn in the document the command was given in.
 pub(crate) enum DropPlace {
     /// Destination captured when the file is dropped, before a later pointer move.
     At { source: Box<DropPlace>, frame: Option<photocraft_doc::LayerId> },
@@ -115,6 +116,10 @@ pub(crate) enum DropPlace {
     /// Read by the shell itself (the browser reads dropped files asynchronously): its name and
     /// contents, delivered through [`Services::place_inbox`](crate::Services::place_inbox).
     Bytes(String, Vec<u8>),
+    /// Chosen in File › Place Embedded's dialog (desktop), by its full path: read when its turn
+    /// comes and placed as that dialog places a single file. The web's picks carry their contents
+    /// and wait as [`Self::Bytes`].
+    Path(String),
 }
 
 impl DropPlace {
@@ -122,7 +127,7 @@ impl DropPlace {
     fn queued_bytes(&self) -> usize {
         match self {
             Self::At { source, .. } => source.queued_bytes(),
-            Self::File(_) => 0,
+            Self::File(_) | Self::Path(_) => 0,
             Self::Bytes(_, bytes) => bytes.len(),
         }
     }
@@ -132,7 +137,7 @@ impl DropPlace {
     fn holds_bytes(&self) -> bool {
         match self {
             Self::At { source, .. } => source.holds_bytes(),
-            Self::File(_) => false,
+            Self::File(_) | Self::Path(_) => false,
             Self::Bytes(..) => true,
         }
     }
@@ -528,6 +533,12 @@ impl PhotocraftApp {
                     let placed = self.place_bytes_with(&name, bytes, None, &params);
                     (name, placed)
                 }
+                DropPlace::Path(path) => {
+                    let placed = photocraft_format::read_file(std::path::Path::new(&path))
+                        .map_err(|e| e.to_string())
+                        .and_then(|bytes| self.place_bytes_with(&path, bytes, None, &params));
+                    (display_name(&path), placed)
+                }
             };
             match placed {
                 // Running in the background: Free Transform starts when the layer has landed.
@@ -544,6 +555,23 @@ impl PhotocraftApp {
                 Err(e) => self.place_failed(&name, &e),
             }
         }
+    }
+
+    /// File › Place Embedded with several files chosen (#14107): as in the reference application,
+    /// each is placed in `doc` in turn, in the order the dialog returned them, with its own Free
+    /// Transform and its own history state. They wait in the queue of files dropped on the canvas,
+    /// so the next one is placed once the previous one's transform is committed or cancelled (Esc
+    /// takes back only that file), and with Skip Transform when Placing all of them are placed at
+    /// once. A file that can't be read or placed is reported and the next one placed.
+    pub(crate) fn place_picked(&mut self, ctx: &egui::Context, doc: DocId, files: Vec<crate::file_dialog::PickedFile>) {
+        for file in files {
+            let place = match file {
+                crate::file_dialog::PickedFile::Path(path) => DropPlace::Path(path),
+                crate::file_dialog::PickedFile::Contents(name, bytes) => DropPlace::Bytes(name, bytes),
+            };
+            self.queue_drop(doc, place);
+        }
+        self.place_next_dropped(ctx);
     }
 
     /// Queue the web drops onto the canvas that the shell has read since the last frame
@@ -710,5 +738,8 @@ fn same_file(p: &str, path: &str, canon: Option<&std::path::Path>) -> bool {
 
 #[cfg(test)]
 mod dialog_order_tests;
+#[cfg(test)]
+#[path = "place_multiple_files_tests.rs"]
+mod place_multiple_files_tests;
 #[cfg(test)]
 mod tests;
