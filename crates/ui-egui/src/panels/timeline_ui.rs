@@ -5,102 +5,6 @@ use craft::behavior::IconId;
 use craft::theme::variant::Tone;
 use craft::timeline::PlaybackClock;
 use craft::timeline::time::{FrameRate, Tick, TimeRange};
-
-/// The `timeline` panel body of a document with a frame animation: the strip of its frames, with its bar.
-fn frame_body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let ctx = ui.ctx().clone();
-    let Some((doc, revision, no_damage)) = app.session.active().map(|d| (d.doc.clone(), d.revision, d.last_damage.is_some_and(|r| r.is_empty()))) else {
-        return;
-    };
-    let Some(animation) = doc.frame_animation.as_ref() else { return };
-    let mut acts = Vec::new();
-    let mut toggle_play = false;
-    crate::frame_strip_ui::body(
-        ui,
-        &ctx,
-        crate::frame_strip_ui::Strip {
-            doc: &doc,
-            revision,
-            no_damage,
-            animation,
-            playing: app.ui.timeline.frame_playing,
-            acts: &mut acts,
-            toggle_play: &mut toggle_play,
-        },
-    );
-    apply(app, &ctx, acts, toggle_play);
-    playback(app, &ctx);
-}
-
-/// Carries out what the strip (or the empty panel) asked for.
-fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, acts: Vec<crate::frame_strip_ui::Act>, toggle_play: bool) {
-    if toggle_play {
-        let starting = !app.ui.timeline.frame_playing;
-        app.ui.timeline.frame_playing = starting;
-        app.ui.timeline.last_time = ctx.input(|i| i.time);
-        app.ui.timeline.plays_done = 0;
-        if starting {
-            restart_if_finished(app, ctx);
-        }
-    }
-    for (cmd, p) in acts {
-        let _ = app.run(cmd, p);
-        crate::frame_strip_ui::ran(app, ctx, cmd);
-    }
-}
-
-/// Play pressed with the last frame shown and a finite loop count: start again from the first frame,
-/// or the animation would stop at once.
-fn restart_if_finished(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    let at_end = app
-        .session
-        .active()
-        .and_then(|d| d.doc.frame_animation.as_ref())
-        .is_some_and(|a| a.loops != photocraft_doc::LoopCount::Forever && a.frames.len() > 1 && a.current + 1 == a.frames.len());
-    if at_end {
-        let _ = app.run("animation.selectFrame", json!({ "frame": 0 }));
-        crate::frame_strip_ui::ran(app, ctx, "animation.selectFrame");
-    }
-}
-
-/// Frame animation playback: each frame shows for its own delay, then the loop count decides.
-fn playback(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    if !app.ui.timeline.frame_playing {
-        return;
-    }
-    // Reads only what it needs, not a copy of the whole animation.
-    let Some((current, len, loops, delay)) = app
-        .session
-        .active()
-        .and_then(|d| d.doc.frame_animation.as_ref())
-        .map(|a| (a.current, a.frames.len(), a.loops, a.frames.get(a.current).map_or(0, |f| f.delay_ms)))
-    else {
-        app.ui.timeline.frame_playing = false;
-        return;
-    };
-    let now = ctx.input(|i| i.time);
-    let period = crate::frame_strip_ui::playback_period(delay);
-    if now - app.ui.timeline.last_time >= period {
-        app.ui.timeline.last_time = now;
-        match crate::frame_strip_ui::next_playback_frame(current, len, loops, app.ui.timeline.plays_done) {
-            // Counted only once the frame has changed: while a background job runs the engine refuses to
-            // select one, and the same tick must not be counted again and again.
-            Some((next, plays)) => {
-                if app.run("animation.selectFrame", json!({ "frame": next })).is_ok() {
-                    app.ui.timeline.plays_done = plays;
-                    crate::frame_strip_ui::ran(app, ctx, "animation.selectFrame");
-                }
-            }
-            None => app.ui.timeline.frame_playing = false,
-        }
-    }
-    // Wake up when the shown frame's time is up, not on every UI frame: a long delay needs no redraws.
-    let shown = app.session.active().and_then(|d| d.doc.frame_animation.as_ref()).map_or(0, |a| a.frames.get(a.current).map_or(0, |f| f.delay_ms));
-    let left = (app.ui.timeline.last_time + crate::frame_strip_ui::playback_period(shown) - now).max(0.0);
-    // The shell's own request: it also runs this body again, which a plain egui repaint of a retained panel doesn't.
-    request_repaint_after(ctx, left);
-}
-
 #[cfg(test)]
 use craft::timeline::ui::TransportWords;
 use craft::timeline::ui::{TransportBar, TransportButton};
@@ -270,6 +174,101 @@ pub(crate) fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if let Some((cmd, p)) = act {
         let _ = app.run(cmd, p);
     }
+}
+
+/// The `timeline` panel body of a document with a frame animation: the strip of its frames, with its bar.
+fn frame_body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let ctx = ui.ctx().clone();
+    let Some((doc, revision, no_damage)) = app.session.active().map(|d| (d.doc.clone(), d.revision, d.last_damage.is_some_and(|r| r.is_empty()))) else {
+        return;
+    };
+    let Some(animation) = doc.frame_animation.as_ref() else { return };
+    let mut acts = Vec::new();
+    let mut toggle_play = false;
+    crate::frame_strip_ui::body(
+        ui,
+        &ctx,
+        crate::frame_strip_ui::Strip {
+            doc: &doc,
+            revision,
+            no_damage,
+            animation,
+            playing: app.ui.timeline.frame_playing,
+            acts: &mut acts,
+            toggle_play: &mut toggle_play,
+        },
+    );
+    apply(app, &ctx, acts, toggle_play);
+    playback(app, &ctx);
+}
+
+/// Carries out what the strip (or the empty panel) asked for.
+fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, acts: Vec<crate::frame_strip_ui::Act>, toggle_play: bool) {
+    if toggle_play {
+        let starting = !app.ui.timeline.frame_playing;
+        app.ui.timeline.frame_playing = starting;
+        app.ui.timeline.last_time = ctx.input(|i| i.time);
+        app.ui.timeline.plays_done = 0;
+        if starting {
+            restart_if_finished(app, ctx);
+        }
+    }
+    for (cmd, p) in acts {
+        let _ = app.run(cmd, p);
+        crate::frame_strip_ui::ran(app, ctx, cmd);
+    }
+}
+
+/// Play pressed with the last frame shown and a finite loop count: start again from the first frame,
+/// or the animation would stop at once.
+fn restart_if_finished(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let at_end = app
+        .session
+        .active()
+        .and_then(|d| d.doc.frame_animation.as_ref())
+        .is_some_and(|a| a.loops != photocraft_doc::LoopCount::Forever && a.frames.len() > 1 && a.current + 1 == a.frames.len());
+    if at_end {
+        let _ = app.run("animation.selectFrame", json!({ "frame": 0 }));
+        crate::frame_strip_ui::ran(app, ctx, "animation.selectFrame");
+    }
+}
+
+/// Frame animation playback: each frame shows for its own delay, then the loop count decides.
+fn playback(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    if !app.ui.timeline.frame_playing {
+        return;
+    }
+    // Reads only what it needs, not a copy of the whole animation.
+    let Some((current, len, loops, delay)) = app
+        .session
+        .active()
+        .and_then(|d| d.doc.frame_animation.as_ref())
+        .map(|a| (a.current, a.frames.len(), a.loops, a.frames.get(a.current).map_or(0, |f| f.delay_ms)))
+    else {
+        app.ui.timeline.frame_playing = false;
+        return;
+    };
+    let now = ctx.input(|i| i.time);
+    let period = crate::frame_strip_ui::playback_period(delay);
+    if now - app.ui.timeline.last_time >= period {
+        app.ui.timeline.last_time = now;
+        match crate::frame_strip_ui::next_playback_frame(current, len, loops, app.ui.timeline.plays_done) {
+            // Counted only once the frame has changed: while a background job runs the engine refuses to
+            // select one, and the same tick must not be counted again and again.
+            Some((next, plays)) => {
+                if app.run("animation.selectFrame", json!({ "frame": next })).is_ok() {
+                    app.ui.timeline.plays_done = plays;
+                    crate::frame_strip_ui::ran(app, ctx, "animation.selectFrame");
+                }
+            }
+            None => app.ui.timeline.frame_playing = false,
+        }
+    }
+    // Wake up when the shown frame's time is up, not on every UI frame: a long delay needs no redraws.
+    let shown = app.session.active().and_then(|d| d.doc.frame_animation.as_ref()).map_or(0, |a| a.frames.get(a.current).map_or(0, |f| f.delay_ms));
+    let left = (app.ui.timeline.last_time + crate::frame_strip_ui::playback_period(shown) - now).max(0.0);
+    // The shell's own request: it also runs this body again, which a plain egui repaint of a retained panel doesn't.
+    request_repaint_after(ctx, left);
 }
 
 #[cfg(test)]
