@@ -73,6 +73,11 @@ fn invoke(args: &[&str]) -> (i32, String, String) {
 }
 
 #[test]
+fn cli_import_argument_structure_has_no_duplicate_ids() {
+    crate::command().debug_assert();
+}
+
+#[test]
 /// Require every CLI import route to accept only the declared historical sample-order choices.
 fn historical_choice_uses_upstream_clap_validation_for_all_import_commands() {
     use crate::args::{Command, parse};
@@ -116,7 +121,9 @@ fn historical_choice_requires_an_input_file_instead_of_a_new_document() {
     for order in ["little-endian", "big-endian"] {
         let mut args = argv(&base);
         args.extend(["--historical-xcf-sample-order".into(), order.into()]);
-        assert_eq!(crate::args::parse(&args).err().unwrap().exit_code(), 2);
+        let error = crate::args::parse(&args).err().unwrap();
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+        assert_eq!(error.exit_code(), 2);
     }
 }
 

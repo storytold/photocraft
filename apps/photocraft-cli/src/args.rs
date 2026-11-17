@@ -265,9 +265,6 @@ pub(crate) struct BatchArgs {
     /// Explicitly approve high-memory PSD/PSB imports within the hard memory budget
     #[arg(long)]
     pub(crate) approve_high_memory: bool,
-    /// Explicit sample byte order for ambiguous high-depth XCF 7–11 batch inputs; never guessed
-    #[arg(long, value_parser = ["little-endian", "big-endian"])]
-    pub(crate) historical_xcf_sample_order: Option<String>,
     #[command(flatten)]
     pub(crate) gpu: GpuArgs,
     #[command(flatten)]
@@ -526,8 +523,9 @@ fn steps(m: &ArgMatches) -> Vec<Step> {
 /// stray.psd --help`): clap reports the mistake first.
 pub(crate) fn parse(args: &[OsString]) -> Result<Cli, clap::Error> {
     let mut cmd = Cli::command().mut_subcommands(|sub| sub.mut_args(blank_env_is_unset));
-    // Historical byte order is a file-decoding policy, never an option for --new.
-    cmd = cmd.mut_subcommand("run", |sub| sub.mut_arg("historical_xcf_sample_order", |arg| arg.requires("file")));
+    // `requires(file)` alone accepts the other member of the required source group.
+    // Explicitly exclude --new: byte order is only a policy for an input file.
+    cmd = cmd.mut_subcommand("run", |sub| sub.mut_arg("historical_xcf_sample_order", |arg| arg.requires("file").conflicts_with("new")));
     // `mcp --headless` reaches no app: a PHOTOCRAFT_CONTROL_PORT exported for another tool is not
     // read, so a value it couldn't use anyway doesn't stop it.
     if args.first().is_some_and(|a| a == "mcp") && args.iter().take_while(|a| *a != "--").any(|a| a == "--headless") {
