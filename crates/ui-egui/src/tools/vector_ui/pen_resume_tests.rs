@@ -413,7 +413,8 @@ fn pen_undo_after_closing_a_shape_reopens_the_path() {
     let knots = close_triangle(&mut app);
     assert_eq!(app.session.active().unwrap().doc.layers.len(), layers + 1);
     menu(&mut app, "edit.undo");
-    assert_eq!(app.session.active().unwrap().doc.layers.len(), layers, "the shape layer is gone");
+    // The shape layer was made on the first click (#12909): Undo takes back only the closing.
+    assert_eq!(app.session.active().unwrap().doc.layers.len(), layers + 1, "the shape layer stays, open again");
     assert_eq!(app.ui.pen.as_ref().unwrap().knots, knots);
 }
 
@@ -588,11 +589,9 @@ fn redo_leaves_the_same_anchors_redrawn_in_shape_mode_alone() {
     }
     assert!(app.ui.pen.is_none());
     app.ui.tool_options.vector_mode = "shape".into();
-    for (x, y) in [(20.0, 20.0), (120.0, 20.0), (120.0, 120.0)] {
-        pen_down(&mut app, x, y, false);
-        pen_up(&mut app);
-    }
-    assert_eq!(app.ui.pen.as_ref().unwrap().knots, knots);
+    // Not through clicks: they would make the shape layer at once (#12909), a History step that
+    // clears Redo. This is a draft that has not been committed anywhere.
+    app.ui.pen = Some(PenPath { knots: knots.clone(), owner: capture_pen_owner(&app), ..Default::default() });
     assert!(!crate::menus::is_enabled(&app, "edit.redo"), "Redo greys out over the new draft");
     menu(&mut app, "edit.redo");
     assert_eq!(app.ui.pen.as_ref().map(|p| p.knots.clone()), Some(knots), "the Shape draft is still being drawn");
@@ -628,6 +627,11 @@ fn failed_library_draft(tool: Tool, shape: bool) -> PhotocraftApp {
     app.run("actions.clearAll", json!({"confirm": true})).unwrap();
     app.ui.tool = tool;
     app.ui.tool_options.vector_mode = if shape { "shape" } else { "path" }.into();
+    // A refused shape is refused from the first click on: the Pen makes its layer then (#12909).
+    if shape {
+        app.session.authorize =
+            Some(|id, _| if id == "shape.create" { Err(photocraft_engine::EngineError::Other("refused shape fixture".into())) } else { Ok(()) });
+    }
     for (x, y) in [(20.0, 20.0), (80.0, 60.0)] {
         if tool == Tool::CurvaturePen {
             curvature_down(&mut app, x, y);
@@ -636,10 +640,7 @@ fn failed_library_draft(tool: Tool, shape: bool) -> PhotocraftApp {
             pen_up(&mut app);
         }
     }
-    if shape {
-        app.session.authorize =
-            Some(|id, _| if id == "shape.create" { Err(photocraft_engine::EngineError::Other("refused shape fixture".into())) } else { Ok(()) });
-    } else {
+    if !shape {
         app.session.authorize = Some(|id, _| if id == "path.set" { Err(photocraft_engine::EngineError::Other("refused path fixture".into())) } else { Ok(()) });
     }
     assert!(!pen_commit(&mut app, false), "the fixture must actually refuse the commit");

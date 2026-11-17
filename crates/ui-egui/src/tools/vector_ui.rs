@@ -183,6 +183,10 @@ pub struct PenPath {
     /// endpoint drawing carries on from; only its outgoing handle bends into the new segment.
     #[serde(default)]
     pub fixed: Vec<[[f64; 2]; 3]>,
+    /// The draft's shape layer was made on its first click (#12909) and its path follows the
+    /// draft anchor by anchor; `resumes` names that layer and its subpath.
+    #[serde(skip)]
+    pub(crate) live_layer: bool,
 }
 
 /// The subpath a Pen path carries on: where it is and what it was when drawing resumed. The
@@ -363,6 +367,8 @@ pub(crate) fn pen_can_undo(app: &PhotocraftApp) -> bool {
 
 /// Commit a valid source-owned draft on a tab switch; otherwise cancel with an actionable diagnostic.
 pub(crate) fn cancel_stale_pen(app: &mut PhotocraftApp) -> bool {
+    // A live shape layer's draft follows the document through Undo, Redo and History (#12909).
+    pen::sync_live_draft_from_layer(app);
     let Some(pen) = app.ui.pen.as_ref() else { return false };
     if pen.owner.as_ref().is_some_and(|o| o.valid(app)) {
         return false;
