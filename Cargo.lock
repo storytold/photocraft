@@ -5698,6 +5698,7 @@ dependencies = [
  "photocraft-io",
  "photocraft-raster",
  "photocraft-raw",
+ "same-file",
  "serde",
  "serde_json",
  "tempfile",

@@ -348,7 +348,6 @@ fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: 
         _ if crate::duplicate_layer_ui::owns(fields) => crate::duplicate_layer_ui::body(app, ui, fields),
         _ if crate::stack_dialog::owns(fields) => crate::stack_dialog::body(app, ui, fields, d.id),
         _ if crate::tool_reset::owns(fields) => crate::tool_reset::body(ui),
-        _ if crate::crop_presets::owns(fields) => crate::crop_presets::body(app, ui, fields),
         _ => return command_body_more(app, ui, d, fields, id),
     }
     outcome
@@ -359,6 +358,7 @@ fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fie
     let mut outcome: Option<bool> = None;
     match d.kind {
         _ if crate::actions::library::owns(fields) => crate::actions::library::body(app, ui, d.id),
+        _ if crate::crop_presets::owns(fields) => crate::crop_presets::body(app, ui, fields),
         _ if crate::variables_ui::owns(fields) => crate::variables_ui::body(app, ui, fields),
         _ if merge_channels_ui::owns(fields) => merge_channels_ui::body(ui, fields),
         _ if crate::file_ui::owns(fields) => crate::file_ui::body(app, ui, fields, d.id),
@@ -626,6 +626,7 @@ fn default_max_width(d: &Dialog, compact: bool, curves: bool, about_tabs: bool, 
     }
 }
 
+/// Render stacked agent-visible dialogs with only the top interactive, routing confirmation and cancellation to their owning flow.
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if crate::guide_edit::sync(app) {
         ctx.request_repaint();
@@ -780,6 +781,12 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 {
                     app.ui.status = error;
                 }
+            }
+            if fields.get("__command").and_then(Value::as_str) == Some("file.fileInfo")
+                && crate::import_report::available(app)
+                && ui.button(format!("{}…", tl!("Import Conversion Report"))).clicked()
+            {
+                crate::import_report::open(app);
             }
             if let Some(Value::String(key)) = fields.remove(BROWSE_FIELD) {
                 browse_field(app, d.id, &fields, &key);
@@ -990,6 +997,7 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     crate::color_range_ui::owns,
     crate::prefs_ui::owns,
     crate::open_prompt::owns,
+    historical_xcf::owns,
     crate::replace_prompt::owns,
     crate::actions::library::owns,
     crate::preset_group_prompt::owns,
@@ -1227,7 +1235,6 @@ fn confirm_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> 
         _ if crate::stack_dialog::owns(&d.fields) => crate::stack_dialog::confirm(app, &d.fields),
         _ if crate::tool_reset::owns(&d.fields) => crate::tool_reset::confirm(app),
         _ if crate::crop_presets::owns(&d.fields) => crate::crop_presets::confirm(app, &d.fields),
-        _ if crate::variables_ui::owns(&d.fields) => crate::variables_ui::confirm(app, &d.fields),
         _ => confirm_command_more(app, d),
     }
 }
@@ -1236,6 +1243,7 @@ fn confirm_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> 
 fn confirm_command_more(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> {
     match d.kind {
         _ if crate::actions::library::owns(&d.fields) => crate::actions::library::confirm(app, d.id),
+        _ if crate::variables_ui::owns(&d.fields) => crate::variables_ui::confirm(app, &d.fields),
         _ if merge_channels_ui::owns(&d.fields) => merge_channels_ui::confirm(app, &d.fields),
         _ if crate::analysis_ui::owns_delete_note(&d.fields) => crate::analysis_ui::confirm_delete_note(app, &d.fields),
         _ if crate::analysis_ui::owns_clear_notes(&d.fields) => crate::analysis_ui::confirm_clear_notes(app, &d.fields),
@@ -1258,6 +1266,9 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     confirm_preflight(app, id)?;
     image_processor_ui::preflight(&mut app.ui, id)?;
     fit_image_range::preflight(&mut app.ui, id)?;
+    if let Some(fields) = app.ui.dialogs.iter().find(|dialog| dialog.id == id && historical_xcf::owns(&dialog.fields)).map(|dialog| dialog.fields.clone()) {
+        return historical_xcf::answer(app, &fields, true);
+    }
     let d = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
     match d.kind {
         DialogKind::NewDocument => {
@@ -1285,6 +1296,11 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
 
 /// Cancel a dialog and its dependent Layer Style picker, without applying edits.
 pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
+    if let Some(fields) = app.ui.dialogs.iter().find(|dialog| dialog.id == id && historical_xcf::owns(&dialog.fields)).map(|dialog| dialog.fields.clone()) {
+        let value = historical_xcf::answer(app, &fields, false)?;
+        crate::actions::stopped(app, &fields);
+        return Ok(value);
+    }
     let closed = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
     dont_show_again::closed(app, &closed);
     crate::guide_edit::cancel(app, id);

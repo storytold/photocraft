@@ -264,6 +264,11 @@ impl PhotocraftApp {
     /// Record that the active document was just opened from `path`: File › Save writes back to it
     /// (unless it's a template or derivative preview) and it goes to the top of Open Recent.
     pub(crate) fn opened_from(&mut self, path: &str) {
+        if let Some(st) = self.session.active_mut()
+            && st.source_read_only
+        {
+            st.protected_import_source = Some(path.to_string());
+        }
         if !is_template(path)
             && let Some(st) = self.session.active_mut()
             && !st.source_read_only
@@ -368,7 +373,12 @@ impl PhotocraftApp {
     pub(crate) fn show_if_open(&mut self, path: &str) -> bool {
         let canon = canonical(path);
         let same = |p: &str| same_file(p, path, canon.as_deref());
-        if let Some(i) = self.session.documents().iter().position(|d| d.path.as_deref().is_some_and(same)) {
+        if let Some(i) = self
+            .session
+            .documents()
+            .iter()
+            .position(|d| d.path.as_deref().is_some_and(same) || (d.source_read_only && d.protected_import_source.as_deref().is_some_and(same)))
+        {
             self.session.set_active(i);
             self.jobs.focus = None;
         } else if let Some(o) = self.jobs.opens.iter().find(|o| o.path.as_deref().is_some_and(|p| !is_template(p) && same(p))) {
@@ -572,7 +582,11 @@ impl PhotocraftApp {
                     if result.get("frame").and_then(serde_json::Value::as_u64).is_some() {
                         continue;
                     }
-                    if let Err(e) = crate::transform_tool::begin_placed(self, ctx) {
+                    let published = result.get("layer").and_then(serde_json::Value::as_u64).map(photocraft_doc::LayerId);
+                    if self.session.active().is_some_and(|state| {
+                        state.doc.id == active && published.is_some_and(|layer| state.active_layer == Some(layer) && state.doc.layer(layer).is_some())
+                    }) && let Err(e) = crate::transform_tool::begin_placed(self, ctx)
+                    {
                         self.ui.status = e;
                     }
                 }

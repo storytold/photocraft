@@ -42,6 +42,7 @@ pub mod home_recent_ui;
 pub mod i18n;
 mod icon_data;
 pub mod icons;
+pub mod import_report;
 pub mod jobs_ui;
 pub(crate) mod last_brush;
 pub mod levels_clipping;
@@ -76,6 +77,12 @@ use serde_json::{Value, json};
 pub use control::{ControlRequest, ControlResponse};
 pub use file_dialog::{FileDialogAnswer, FileDialogFn, FileDialogReply, FileDialogRequest};
 pub use file_open::OsEvent;
+
+#[cfg(test)]
+/// Construct a writable native fixture without source-only protection or imported view hints.
+pub(crate) fn test_import_result(document: Document, warnings: Vec<String>) -> photocraft_io::ImportResult {
+    photocraft_io::ImportResult { document, warnings, initial_view: None, source_read_only: false, preview_only: false }
+}
 pub use state::{Tool, UiState};
 
 mod app;
@@ -266,11 +273,11 @@ pub(crate) use services::SAVE_OPTIONS_OPEN;
 pub(crate) use services::saved_revision_after_write;
 pub use services::{
     AdoptAutosaveFn, AgentLink, AgentLinkFn, AgentLinkStatus, AppendTextFn, AutomationAuthorizeFn, AutomationCommandFn, AutomationOpenPcraftFn,
-    AutomationReadFn, AutomationServices, AutomationWriteFn, AutosaveFn, AutosaveResultsFn, CapsLockFn, CaptionStyleFn, ClipboardGetFn, ClipboardGetSvgFn,
-    ClipboardSetFn, ClipboardUnreadableFn, CursorPosFn, DiscardAutosaveFn, EncodePngFn, ExportFn, ExportSettings, ExternalSvgEditor, ExternalSvgSession,
-    ExternalVectorSave, ExternalVectorSource, FileStamp, FileStampFn, FormatChoices, ImportFn, Inbox, LastUpdateFn, LoadTextFn, OpenExternalSvgFn, OpenUrlFn,
-    OsEventsFn, PenEndFn, PenScreenFn, PhotoshopShortcutsFn, PlaceInbox, QuitFn, RecoverFn, Recoverable, RightButtonDownFn, SameFileFn, SaveFileFn, SaveTextFn,
-    Services, SystemThemeFn, TabletPollFn, WindowFrameFn, WriteFn,
+    AutomationReadFn, AutomationSameFileFn, AutomationServices, AutomationWriteFn, AutosaveFn, AutosaveResultsFn, CapsLockFn, CaptionStyleFn, ClipboardGetFn,
+    ClipboardGetSvgFn, ClipboardSetFn, ClipboardUnreadableFn, CursorPosFn, DiscardAutosaveFn, EncodePngFn, ExportFn, ExportSettings, ExternalSvgEditor,
+    ExternalSvgSession, ExternalVectorSave, ExternalVectorSource, FileStamp, FileStampFn, FormatChoices, ImportFn, Inbox, LastUpdateFn, LoadTextFn,
+    OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PenEndFn, PenScreenFn, PhotoshopShortcutsFn, PlaceInbox, QuitFn, RecoverFn, Recoverable, RightButtonDownFn,
+    SameFileFn, SaveFileFn, SaveTextFn, Services, SystemThemeFn, TabletPollFn, WindowFrameFn, WriteFn,
 };
 pub(crate) use services::{opaque_layer, saves_flat_in_place};
 pub use text::bidi_text;

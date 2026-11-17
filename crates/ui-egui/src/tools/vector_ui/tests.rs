@@ -1064,6 +1064,7 @@ fn new_document_preserves_a_single_pen_anchor_as_a_work_path() {
 }
 
 #[test]
+/// Keep a pending pen path attached to its original document when the active tab changes before commit.
 fn stale_pen_commits_to_its_owner_across_document_changes() {
     use photocraft_doc::{ColorMode, SampleType, Size};
     for tool in [Tool::Pen, Tool::CurvaturePen] {

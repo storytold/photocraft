@@ -14,14 +14,14 @@ use std::sync::Arc;
 #[cfg(test)]
 mod recovery_tests;
 
-/// Everything File › Open reads: PhotoCraft, Photoshop, OpenRaster, Krita and Affinity documents, flat images, and
+/// Everything File â€º Open reads: PhotoCraft, Photoshop, OpenRaster, Krita and Affinity documents, flat images, and
 /// Photoshop brushes (.abr), gradients (.grd), layer styles (.asl), swatches (.aco, .act, .ase) and keyboard shortcut sets
-/// (.kys), which go to the preset libraries and Edit › Keyboard Shortcuts.
+/// (.kys), which go to the preset libraries and Edit â€º Keyboard Shortcuts.
 const OPEN_EXTS: &[&str] = &[
-    "pcraft", "pdn", "ora", "xcf", "xcfgz", "gz", "kra", "krz", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "dib", "tga",
-    "ico", "qoi", "exr", "hdr", "pbm", "pgm", "ppm", "pnm", "pam", "pfm", "pcx", "dds", "xpm", "fits", "fit", "fts", "dpx", "cin", "dcm", "dicom", "dc3",
-    "iff", "lbm", "ilbm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "asl", "svg", "svgz",
-    "aco", "act", "ase", "kys", "af", "afdesign", "afphoto", "afpub",
+    "pcraft", "pdn", "ora", "xcf", "xcfgz", "xcfbz2", "xcfxz", "bz2", "xz", "gz", "kra", "krz", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff",
+    "webp", "gif", "bmp", "dib", "tga", "ico", "qoi", "exr", "hdr", "pbm", "pgm", "ppm", "pnm", "pam", "pfm", "pcx", "dds", "xpm", "fits", "fit", "fts", "dpx",
+    "cin", "dcm", "dicom", "dc3", "iff", "lbm", "ilbm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr",
+    "grd", "asl", "svg", "svgz", "aco", "act", "ase", "kys", "af", "afdesign", "afphoto", "afpub",
 ];
 const SVG_EXTS: &[&str] = &["svg", "svgz"];
 
@@ -35,7 +35,7 @@ fn open_filter_extensions(extensions: &[&str]) -> Vec<String> {
     extensions.iter().map(|ext| if case_sensitive_globs { ext.chars().map(class).collect() } else { ext.to_string() }).collect()
 }
 
-/// File › Open's file types after All Formats, as Photoshop lists them: one per format, so a folder
+/// File â€º Open's file types after All Formats, as Photoshop lists them: one per format, so a folder
 /// of mixed files can be narrowed to one kind (#6337). The document formats, the rest by name as in
 /// [`SAVE_FILTERS`], then the app's own resources. Together they cover every extension of
 /// [`OPEN_EXTS`]. An explicit SVG filter also keeps vector artwork discoverable when a native
@@ -51,7 +51,7 @@ const OPEN_FILTERS: &[(&str, &[&str])] = &[
     ("DPX and Cineon", &["dpx", "cin"]),
     ("FITS", &["fits", "fit", "fts"]),
     ("GIF", &["gif"]),
-    ("GIMP", &["xcf", "xcfgz", "gz"]),
+    ("GIMP", &["xcf", "xcfgz", "xcfbz2", "xcfxz", "gz", "bz2", "xz"]),
     ("HEIF", &["heic", "heif", "hif"]),
     ("ICO", &["ico"]),
     ("JPEG", &["jpg", "jpeg"]),
@@ -83,7 +83,7 @@ fn open_filters() -> Vec<(&'static str, Vec<String>)> {
         .collect()
 }
 
-/// File › Save As formats: (filter name, extensions). PSD, PSB and PhotoCraft's own format, which
+/// File â€º Save As formats: (filter name, extensions). PSD, PSB and PhotoCraft's own format, which
 /// keep the most of a document, then the rest by name, so a long list stays easy to search. The
 /// filter matching the suggested name's extension comes first, so a .pcraft document saves as
 /// .pcraft by default and everything else keeps defaulting to PSD. The PSD type takes `.psb` too:
@@ -102,7 +102,7 @@ const SAVE_FILTERS: &[(&str, &[&str])] = &[
     ("FITS", &["fits", "fit"]),
     ("GIF", &["gif"]),
     // BMP and GIF are also in Photoshop's Save As list; ICO is PhotoCraft's own (#4357): up to
-    // 256×256, with alpha.
+    // 256Ã—256, with alpha.
     ("ICO", &["ico"]),
     ("JPEG", &["jpg", "jpeg"]),
     ("JPEG XL", &["jxl"]),
@@ -234,7 +234,7 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
             if let Some(dir) = initial_dir {
                 dialog = dialog.set_directory(dir);
             }
-            // A command-specific filter must not inherit the image formats used by File › Open.
+            // A command-specific filter must not inherit the image formats used by File â€º Open.
             let dialog = if let Some(exts) = extensions {
                 dialog.add_filter("Supported Files", &open_filter_extensions(&exts.iter().map(String::as_str).collect::<Vec<_>>()))
             } else {
@@ -598,7 +598,7 @@ fn image_from_files(paths: &[PathBuf]) -> Option<(u32, u32, Vec<u8>)> {
     })
 }
 
-/// Largest clipboard image payload read on Wayland (1 GiB, a 16K × 16K RGBA BMP), so no real
+/// Largest clipboard image payload read on Wayland (1 GiB, a 16K Ã— 16K RGBA BMP), so no real
 /// screenshot is turned away, while a broken or hostile source can't make us allocate without end.
 #[cfg(target_os = "linux")]
 const MAX_CLIPBOARD_IMAGE_BYTES: u64 = 4 * 16384 * 16384;
@@ -734,6 +734,10 @@ pub fn automation(workspace: Option<photocraft_automation::AuthorizedWorkspace>)
     let write = workspace.clone().map(|workspace| {
         Box::new(move |path: &str, bytes: &[u8]| workspace.write(path, bytes).map_err(|error| error.to_string())) as photocraft_ui_egui::AutomationWriteFn
     });
+    let same_file = workspace.clone().map(|workspace| {
+        Box::new(move |source: &str, target: &str| workspace.is_import_source(source, target).map_err(|error| error.to_string()))
+            as photocraft_ui_egui::AutomationSameFileFn
+    });
     let open_pcraft = workspace.clone().map(|workspace| {
         Box::new(move |path: &str| {
             let name = Path::new(path).file_name().and_then(|name| name.to_str()).unwrap_or(path).to_string();
@@ -753,7 +757,7 @@ pub fn automation(workspace: Option<photocraft_automation::AuthorizedWorkspace>)
             photocraft_automation::workspace::authorize_desktop_engine_command(id, params).map_err(|error| error.to_string())
         }) as photocraft_ui_egui::AutomationCommandFn
     });
-    photocraft_ui_egui::AutomationServices { read, write, open_pcraft, save, command, authorize }
+    photocraft_ui_egui::AutomationServices { read, write, same_file, open_pcraft, save, command, authorize }
 }
 
 pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) -> Services {
@@ -779,6 +783,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         same_file: Some(Box::new(|a: &str, b: &str| same_entry(Path::new(a), Path::new(b), same_file))),
         automation_read: automation.read,
         automation_write: automation.write,
+        automation_same_file: automation.same_file,
         automation_open_pcraft: automation.open_pcraft,
         automation_save: automation.save,
         automation_command: automation.command,
@@ -878,13 +883,13 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
     }
 }
 
-/// Preferences ▸ General ▸ Beep When Done: the platform's default information beep.
+/// Preferences â–¸ General â–¸ Beep When Done: the platform's default information beep.
 fn platform_beep() {
     #[cfg(target_os = "windows")]
     {
         let _ = winsafe::MessageBeep(winsafe::co::MBP::OK);
     }
-    // The user's alert sound, at the alert volume set in System Settings ▸ Sound. The terminal
+    // The user's alert sound, at the alert volume set in System Settings â–¸ Sound. The terminal
     // bell below is silent for an app started from the Finder or the Dock.
     #[cfg(target_os = "macos")]
     objc2_app_kit::NSBeep();

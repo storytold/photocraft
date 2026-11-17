@@ -779,7 +779,7 @@ pub(crate) fn finish_open_with_held(
     }
     let warnings: Vec<String> =
         v.get("warnings").and_then(Value::as_array).map(|a| a.iter().filter_map(|w| w.as_str().map(str::to_string)).collect()).unwrap_or_default();
-    let held = |doc, read_only, initial_view, question, policy_applied| crate::open_prompt::Held {
+    let held = |doc, read_only, initial_view, question, policy_applied, color_settings, ignore_exif_profile_tag| crate::open_prompt::Held {
         doc,
         read_only,
         initial_view,
@@ -793,12 +793,25 @@ pub(crate) fn finish_open_with_held(
         question,
         policy_applied,
         smart_object: v.get("smartObject").and_then(Value::as_bool).unwrap_or(false),
+        color_settings,
+        ignore_exif_profile_tag,
     };
     // Held back for the profile prompt (Ask When Opening).
     if let Some(id) = v.get("held").and_then(Value::as_u64) {
-        let (doc, read_only, initial_view) = app.session.take_held_open_with_view(id).ok_or("the open job's document is gone")?;
-        let document = doc.id;
-        crate::open_prompt::arrive(app, held(doc, read_only, initial_view, v.get("color").filter(|q| !q.is_null()).cloned(), false));
+        let pending = app.session.take_held_open_with_policy(id).ok_or("the open job's document is gone")?;
+        let document = pending.document.id;
+        crate::open_prompt::arrive(
+            app,
+            held(
+                pending.document,
+                pending.source_read_only,
+                pending.initial_view,
+                v.get("color").filter(|q| !q.is_null()).cloned(),
+                false,
+                pending.color_settings,
+                pending.ignore_exif_profile_tag,
+            ),
+        );
         return Ok(Some(document));
     }
     // poll_jobs applies all ready jobs before the shell handles their events. An earlier
@@ -830,7 +843,7 @@ pub(crate) fn finish_open_with_held(
         app.session.sync_tools_mask_target();
         app.sync_views();
         let doc = Arc::try_unwrap(st.doc).unwrap_or_else(|d| (*d).clone());
-        crate::open_prompt::arrive(app, held(doc, read_only, initial_view, None, true));
+        crate::open_prompt::arrive(app, held(doc, read_only, initial_view, None, true, None, None));
         return Ok(Some(document));
     }
     if let Some(slot) = tab_slot(app, slot, order) {
@@ -865,9 +878,9 @@ pub(crate) fn after_open(
     // A raw opens in Camera Raw first; the dialog says how it was developed.
     if crate::camera_raw_ui::wants_open_dialog(app, warnings) {
         crate::camera_raw_ui::queue_open_dialog(app, document, name, path, bytes, warnings)?;
-        notices::io_warnings(app, &opened, &crate::camera_raw_ui::without_develop_note(warnings));
+        notices::import_warnings(app, &opened, &crate::camera_raw_ui::without_develop_note(warnings));
     } else {
-        notices::io_warnings(app, &opened, warnings);
+        notices::import_warnings(app, &opened, warnings);
         // A raw that opened without the dialog is developed by its sidecar / Camera Raw Defaults.
         if let Some(index) = app.session.active_index() {
             crate::camera_raw_ui::opened_without_dialog(app, index, name, path, warnings);

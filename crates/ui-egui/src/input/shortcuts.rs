@@ -492,7 +492,7 @@ fn preflight_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     // Camera Raw is modal like Photoshop's filter dialog: no application shortcut (Save, Undo,
     // tools) runs beneath it, and it handles its own keys (Y, U, O, S). Unlike the other dialogs
     // below it covers the canvas, so canvas zoom keys are blocked too.
-    if app.camera_raw.is_some() {
+    if app.camera_raw.is_some() || app.ui.import_report.open {
         return false;
     }
     // A foreground save (Save in Background off, #6207) blocks the app until the file is written;

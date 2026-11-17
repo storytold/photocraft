@@ -48,6 +48,9 @@ pub struct Held {
     /// Held by Open as Smart Object: the document holds the smart object layer already, and is
     /// admitted by [`photocraft_engine::file_cmds::admit_as_smart_object`].
     pub smart_object: bool,
+    /// Worker-time Color Settings policy retained while the prompt waits.
+    pub color_settings: Option<photocraft_engine::color_cmds::ColorSettings>,
+    pub ignore_exif_profile_tag: Option<bool>,
 }
 
 /// Dialog field for the high-memory confirmation prompt.
@@ -165,10 +168,8 @@ pub fn advance(app: &mut PhotocraftApp) {
                     continue;
                 };
                 app.prompt_order.pop_front();
-                let name = held.name.clone();
-                if let Err(error) = open(app, held, None) {
-                    app.open_failed(&name, &error);
-                }
+                // The shared admission wrapper reports failures once; later queued files still advance.
+                let _ = open(app, held, None);
                 if has_open_dialog(app) {
                     return;
                 }
@@ -265,6 +266,9 @@ pub fn answer(app: &mut PhotocraftApp, action: Option<&str>) -> Result<Value, St
         return Ok(json!({"cancelled": dropped}));
     };
     let Some(held) = app.held_opens.pop_front() else { return Err("no file is waiting to open".into()) };
+    // Direct answers and dialog dispatch share this path. Release the answered
+    // profile modal before advancing, including when this file's admission fails.
+    app.ui.dialogs.retain(|dialog| !owns(&dialog.fields));
     if let Some(pos) = app.prompt_order.iter().position(|p| *p == PromptKind::Open) {
         app.prompt_order.remove(pos);
     }
@@ -296,6 +300,9 @@ pub fn answer_remembering(app: &mut PhotocraftApp, action: &str) -> Result<Value
         !h.damage_pending && policy_key(h.doc.mode) == Some(key) && h.question.as_ref().is_some_and(|q| q.get("missing").and_then(Value::as_bool) != Some(true))
     };
     let Some(held) = app.held_opens.pop_front() else { return Err("no file is waiting to open".into()) };
+    // Direct answers and dialog dispatch share this path. Release the answered
+    // profile modal before advancing, including when this file's admission fails.
+    app.ui.dialogs.retain(|dialog| !owns(&dialog.fields));
     if let Some(pos) = app.prompt_order.iter().position(|p| *p == PromptKind::Open) {
         app.prompt_order.remove(pos);
     }
@@ -376,32 +383,54 @@ pub(crate) fn answer_damage(app: &mut PhotocraftApp, accept: bool) -> Result<Val
 /// Opens a queued file, applying `action` (the prompt's answer) or else the Color Settings
 /// policy, then does what any open does afterwards.
 fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Value, String> {
+    let name = held.name.clone();
+    let result = open_document(app, held, action);
+    if let Err(error) = &result {
+        app.open_failed(&name, error);
+    }
+    result
+}
+
+/// Perform admission without posting diagnostics; every caller uses the reporting wrapper.
+fn open_document(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Value, String> {
     if held.damage_pending {
         return Err("damaged PSD cannot be opened before confirmation".into());
     }
-    let Held { mut doc, read_only, initial_view, damage_pending: _, name, path, mut warnings, bytes, slot, order, question, policy_applied, smart_object } =
-        held;
-    if (question.is_some() || policy_applied)
-        && let Some(action) = action
-        && let Err(e) = app.session.color.resolve_open(&mut doc, action)
-    {
-        app.open_failed(&name, &e.to_string());
-        return Err(e.to_string());
+    let Held {
+        mut doc,
+        read_only,
+        initial_view,
+        damage_pending: _,
+        name,
+        path,
+        mut warnings,
+        bytes,
+        slot,
+        order,
+        question: _,
+        policy_applied,
+        smart_object,
+        color_settings,
+        ignore_exif_profile_tag,
+    } = held;
+    let captured_color = color_settings.map(|settings| {
+        let mut color = photocraft_engine::color_cmds::ColorState::default();
+        color.settings = settings;
+        color
+    });
+    let color = captured_color.as_ref().unwrap_or(&app.session.color);
+    if let Some(action) = action {
+        color.resolve_open(&mut doc, action).map_err(|error| error.to_string())?;
+    } else if !policy_applied {
+        let ignore_exif = ignore_exif_profile_tag.unwrap_or_else(|| app.session.prefs().file_handling.ignore_exif_profile_tag);
+        color.open_policy(&mut doc, ignore_exif);
     }
+    // Prepare private content before admitting a tab. Optional saved views are applied only by admission.
+    app.session.prepare_imported_document(&mut doc, &photocraft_engine::jobs::JobCtx::new()).map_err(|error| error.to_string())?;
     let (index, (), view_warning) = app
         .session
         .admit_import_with_initial_view(read_only, initial_view, |session| {
-            let index = if question.is_some() || policy_applied {
-                if smart_object { photocraft_engine::file_cmds::admit_as_smart_object(session, doc) } else { session.add_document(doc, None) }
-            } else if smart_object {
-                // A damage-only hold has no colour question: apply the policy as the engine's open does,
-                // then admit it as the smart object document it is (name, history label, snapshot).
-                let ignore_exif = session.prefs().file_handling.ignore_exif_profile_tag;
-                session.color.open_policy(&mut doc, ignore_exif);
-                photocraft_engine::file_cmds::admit_as_smart_object(session, doc)
-            } else {
-                session.open_document(doc, None).0
-            };
+            let index = if smart_object { photocraft_engine::file_cmds::admit_as_smart_object(session, doc) } else { session.add_document(doc, None) };
             (index, ())
         })
         .map_err(|error| error.to_string())?;
@@ -556,3 +585,6 @@ pub(crate) fn answer_memory(app: &mut PhotocraftApp, accept: bool) -> Result<Val
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
