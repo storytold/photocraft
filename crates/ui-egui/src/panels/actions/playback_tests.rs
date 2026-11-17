@@ -51,6 +51,36 @@ fn assert_released(app: &mut PhotocraftApp) {
 }
 
 #[test]
+fn recorded_move_inside_a_hidden_group_continues_in_the_desktop_player() {
+    let mut app = app_with("accelerated", 1, true);
+    let id = app.run("shape.create", json!({"kind":"rect","rect":[1,1,3,2],"name":"Tile"})).unwrap()["layer"].as_u64().unwrap();
+    app.run("layer.groupLayers", json!({})).unwrap();
+    let group = app.session.active().unwrap().active_layer.unwrap();
+    app.run("layer.setProps", json!({"visible":false})).unwrap();
+    app.run("layer.select", json!({"layer":id})).unwrap();
+    let child = Action::new("Move", vec![("layer.translate".into(), json!({"dx":-19,"dy":0}))]);
+    let parent = Action::new("Parent", vec![("actions.play".into(), json!({"action":"Move"})), ("layer.new.layer".into(), json!({"name":"After"}))]);
+    let (bytes, skipped) = photocraft_engine::atn_cmds::export("Moves", &[&child, &parent], &[], false).unwrap();
+    assert!(skipped.is_empty());
+    let imported = photocraft_engine::atn_cmds::import(&bytes).unwrap();
+    assert!(imported.unsupported.is_empty());
+    app.session.actions.list = imported.actions;
+    let played = app.run("actions.play", json!({"action":"Parent"})).unwrap();
+    assert!(played.get("failed").is_none(), "{played}");
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    let doc = &app.session.active().unwrap().doc;
+    let tile = doc.layer(photocraft_doc::LayerId(id)).unwrap();
+    let photocraft_doc::LayerContent::Shape(shape) = &tile.content else { panic!("shape") };
+    let photocraft_doc::LiveShape::Rect { rect, .. } = shape.live.as_ref().unwrap() else { panic!("rectangle") };
+    assert_eq!(*rect, [-18.0, 1.0, 3.0, 2.0]);
+    assert!(tile.visible);
+    assert!(!doc.layer(group).unwrap().visible);
+    assert!(doc.walk().iter().any(|(_, _, layer)| layer.name == "After"));
+    assert_eq!(app.session.actions.playing, 0);
+    assert!(app.session.actions.playback_stack.is_empty());
+}
+
+#[test]
 fn close_returns_to_recent_document_before_parent_continues() {
     let mut app = app_with("accelerated", 1, false);
     let receiver = app.session.active().unwrap().doc.id;

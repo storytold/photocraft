@@ -1,7 +1,6 @@
-//! Photoshop refuses to paint on or move a hidden layer (#571): the painting and retouching
-//! tools, the Paint Bucket, the Gradient and the Move tool stop with "the target layer is hidden"
-//! instead of changing pixels nobody can see. A layer inside a hidden group is hidden too. An
-//! alpha channel or Quick Mask target has no layer, so it is never refused.
+//! Painting and interactive Move refuse hidden targets (#571), including layers inside hidden
+//! groups. Recorded Move steps can move them without changing visibility. Alpha channel and
+//! Quick Mask targets have no layer, so the hidden-layer guard does not apply to them.
 
 use photocraft_doc::{Document, LayerId};
 use serde_json::Value;
@@ -45,6 +44,11 @@ fn shown(doc: &Document, id: LayerId) -> bool {
 /// commands, channel targets, and visible layers.
 pub fn refusal(s: &Session, id: &str, params: &Value) -> Option<&'static str> {
     if !GATED.contains(&id) {
+        return None;
+    }
+    // Photoshop's recorded Move runs on hidden layers too. Keep the interactive tool and
+    // painting guards; playback must neither reveal its target nor skip the recorded move.
+    if id == "layer.translate" && s.actions.playing > 0 {
         return None;
     }
     let params = crate::channel_cmds::inject_target(s, id, params.clone());
@@ -112,6 +116,78 @@ mod tests {
         s.execute("layer.setProps", json!({"layer": id, "visible": false})).unwrap();
         s.execute("channel.new", json!({})).unwrap();
         s.execute("paint.stroke", json!({"points": [[10, 10], [20, 20]], "target": {"channel": 0}})).unwrap();
+    }
+
+    #[test]
+    fn recorded_move_keeps_hidden_layers_and_groups_hidden() {
+        use crate::actions_cmds::Action;
+        use photocraft_doc::LayerId;
+        use photocraft_geom::Rect;
+
+        let action = Action::new("Move", vec![("layer.translate".into(), json!({"dx":-19,"dy":0})), ("layer.setProps".into(), json!({"name":"After"}))]);
+        let (bytes, skipped) = crate::atn_cmds::export("Moves", &[&action], &[], false).unwrap();
+        assert!(skipped.is_empty());
+        for shape in [false, true] {
+            for (visible, parent_visible) in [(true, true), (true, false), (false, true), (false, false)] {
+                let (mut s, raster) = session();
+                let id = if shape {
+                    LayerId(s.execute("shape.create", json!({"kind":"rect","rect":[4,4,8,8],"fill":"#ff0000"})).unwrap()["layer"].as_u64().unwrap())
+                } else {
+                    s.edit("Pixels", |doc, _| {
+                        doc.layer_mut(LayerId(raster)).unwrap().surface_mut().unwrap().fill_rect(Rect::new(4, 4, 12, 12), &[1.0, 0.0, 0.0, 1.0]);
+                        Ok(())
+                    })
+                    .unwrap();
+                    LayerId(raster)
+                };
+                s.execute("layer.groupLayers", json!({})).unwrap();
+                let group = s.active().unwrap().active_layer.unwrap();
+                s.execute("layer.setProps", json!({"layer":group.0,"visible":parent_visible})).unwrap();
+                s.execute("layer.setProps", json!({"layer":id.0,"visible":visible})).unwrap();
+                s.execute("layer.select", json!({"layer":id.0})).unwrap();
+                let before = s.active().unwrap().doc.clone();
+                let imported = crate::atn_cmds::import(&bytes).unwrap();
+                assert!(imported.unsupported.is_empty());
+                s.actions.list = imported.actions;
+                let played = s.execute("actions.play", json!({"action":"Move"})).unwrap();
+                assert!(played.get("failed").is_none(), "{played}");
+                let doc = &s.active().unwrap().doc;
+                let layer = doc.layer(id).unwrap();
+                if let photocraft_doc::LayerContent::Shape(shape) = &layer.content {
+                    let photocraft_doc::LiveShape::Rect { rect, .. } = shape.live.as_ref().unwrap() else { panic!("expected a live rectangle") };
+                    assert_eq!(*rect, [-15.0, 4.0, 8.0, 8.0]);
+                } else {
+                    assert_eq!(crate::layer_multi_cmds::layer_bounds(layer), Some(Rect::new(-15, 4, -7, 12)), "visible={visible}, parent={parent_visible}");
+                }
+                assert_eq!(layer.name, "After", "the action continues after Move");
+                assert_eq!(layer.visible, visible);
+                assert_eq!(doc.layer(group).unwrap().visible, parent_visible);
+                assert_eq!(s.actions.playing, 0);
+                if !visible || !parent_visible {
+                    assert!(s.execute("layer.translate", json!({"dx":1})).unwrap_err().to_string().contains(HIDDEN), "interactive Move still refuses");
+                }
+                assert!(s.undo());
+                assert_eq!(s.active().unwrap().doc.layers, before.layers, "Undo restores the move and the following step together");
+            }
+        }
+    }
+
+    #[test]
+    fn recorded_move_does_not_bypass_painting_or_position_locks() {
+        use crate::actions_cmds::Action;
+
+        let (mut s, id) = session();
+        s.execute("layer.setProps", json!({"layer":id,"visible":false})).unwrap();
+        s.actions.list.push(Action::new("Paint", vec![("paint.bucket".into(), json!({"x":10,"y":10}))]));
+        let painted = s.execute("actions.play", json!({"action":"Paint"})).unwrap();
+        assert!(painted.get("failed").is_some() && painted.to_string().contains(HIDDEN));
+        s.execute("layer.lockLayers", json!({"position":true})).unwrap();
+        let before = s.active().unwrap().doc.clone();
+        s.actions.list.push(Action::new("Locked move", vec![("layer.translate".into(), json!({"dx":-19,"dy":0}))]));
+        let moved = s.execute("actions.play", json!({"action":"Locked move"})).unwrap();
+        assert!(moved.get("failed").is_some() && moved.to_string().contains("position-locked"));
+        assert_eq!(s.active().unwrap().doc.layers, before.layers);
+        assert_eq!(s.actions.playing, 0);
     }
 
     #[test]

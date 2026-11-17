@@ -600,6 +600,8 @@ condition IDs remain kept Photoshop steps with their original descriptors.
   layers for `Trgt`, at their existing canvas positions and leaves the source active. Stack indexes
   and ordinals retain their reference form; recording-session output ids are not reused. Other
   destination forms, unknown options and malformed hints remain kept steps.
+- Recorded layer Move offsets run on hidden layers, including layers in hidden groups, without
+  changing visibility. Position locks still apply; interactive Move and painting keep their hidden-target checks.
 - A Set of the active layer's whole `Lefx` property containing one complete RGB Color Overlay
   at 100% style scale maps to `layer.layerStyle.replace`, clearing previous effects. Per-effect
   enabled state, blend and opacity are retained; the native command keeps the layer's master
