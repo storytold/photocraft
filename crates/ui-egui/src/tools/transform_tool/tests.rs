@@ -590,6 +590,7 @@ fn land_jobs(app: &mut PhotocraftApp) {
 /// (app, the placed layer, its frame before the move, history steps before the place).
 fn moved_place() -> (PhotocraftApp, LayerId, photocraft_geom::Rect, usize) {
     let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+    app.session.execute("prefs.set", json!({"path": "general.skipTransformWhenPlacing", "value": false})).unwrap();
     app.session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
     let steps = app.session.active().unwrap().history.past_len();
     app.session.execute("layer.duplicate", json!({"inPlace": true})).unwrap();

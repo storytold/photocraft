@@ -319,6 +319,8 @@ mod tests {
     #[test]
     fn transition_between_place_action_bar_and_transform_task_bar() {
         let mut app = app_with_doc();
+        app.session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        app.sync_views();
         app.ui.panels.context_task_bar = true;
 
         // Initially place action bar is eligible, transform task bar is not

@@ -559,6 +559,7 @@ fn png_bytes(w: u32, h: u32) -> Vec<u8> {
 /// An app with one open document whose canvas showed at (100, 50)–(700, 550) last frame.
 fn app_with_canvas() -> PhotocraftApp {
     let (mut app, _) = app_with(Vec::new());
+    app.session.execute("prefs.set", serde_json::json!({"path": "general.skipTransformWhenPlacing", "value": false})).unwrap();
     app.open_bytes("canvas.psd", b"x").unwrap();
     app.drop_canvas_rect = Some(egui::Rect::from_min_max(egui::pos2(100.0, 50.0), egui::pos2(700.0, 550.0)));
     app
@@ -1320,6 +1321,7 @@ fn drag_and_drop_in_the_running_app() {
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1280.0, 800.0)).with_max_steps(8).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let mut s = photocraft_engine::Session::new();
+        s.execute("prefs.set", json!({"path": "general.skipTransformWhenPlacing", "value": false})).unwrap();
         for _ in 0..2 {
             s.execute("file.new", json!({"width": 320, "height": 240, "background": "white"})).unwrap();
         }

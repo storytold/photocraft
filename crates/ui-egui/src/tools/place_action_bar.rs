@@ -28,8 +28,31 @@ pub struct PlaceActionBar {
 
 // ── guards ──────────────────────────────────────────────────────────────────
 
+/// Whether `layer_id` is an image layer that should show the image Quick Actions contextual task bar.
+///
+/// Returns true for:
+/// - Smart Objects (placed/embedded/linked image assets);
+/// - Non-empty pixel/raster layers (unless it is the canvas background of a newly created sheet).
+pub fn is_image_layer(st: &photocraft_engine::DocState, layer_id: photocraft_doc::LayerId) -> bool {
+    let Some(layer) = st.doc.layer(layer_id) else { return false };
+    match &layer.content {
+        photocraft_doc::LayerContent::Smart(_) => true,
+        photocraft_doc::LayerContent::Raster(_) => {
+            // A brand new sheet (File › New): the initial Background layer is just the blank canvas,
+            // not an image, so quick actions like Select Subject or Remove Background do not apply.
+            let is_new_sheet = st.history.entries().first().is_some_and(|e| e == "New");
+            if is_new_sheet && st.doc.is_background(layer_id) {
+                return false;
+            }
+            // An empty raster layer (zero content pixels) is not an image.
+            !bounds(&st.doc, layer).is_empty()
+        }
+        _ => false,
+    }
+}
+
 /// All conditions for the bar to show: the toggle is on, no dialog, no transform box open,
-/// no modal tool (Crop or Type) task bar active, and an active raster or smart-object layer.
+/// no modal tool (Crop or Type) task bar active, and an active image layer is selected.
 fn wanted(app: &PhotocraftApp) -> bool {
     if !app.ui.panels.context_task_bar {
         return false;
@@ -48,17 +71,17 @@ fn wanted(app: &PhotocraftApp) -> bool {
     }
     let Some(st) = app.session.active() else { return false };
 
-    // Check if place_action_bar is set and still matches active doc
+    let Some(active_id) = st.active_layer else { return false };
+
     if let Some(bar) = &app.place_action_bar
-        && st.doc.id == bar.doc && st.doc.layer(bar.layer).is_some()
+        && bar.doc == st.doc.id
+        && bar.layer == active_id
+        && st.doc.layer(bar.layer).is_some()
     {
         return true;
     }
 
-    // Or if the active layer is a pixel or smart-object layer
-    let Some(active_id) = st.active_layer else { return false };
-    let Some(layer) = st.doc.layer(active_id) else { return false };
-    matches!(layer.content, photocraft_doc::LayerContent::Raster(_) | photocraft_doc::LayerContent::Smart(_))
+    is_image_layer(st, active_id)
 }
 
 /// Whether the bar can show now — called from `ui.inspect` so a bar hidden by `ui.set` before
@@ -86,7 +109,7 @@ fn bounds(doc: &photocraft_doc::Document, l: &photocraft_doc::Layer) -> photocra
 /// when the layer has no content bounds (an empty or brand-new layer).
 fn anchor(app: &PhotocraftApp, xf: &ViewXform) -> Option<egui::Rect> {
     let st = app.session.active()?;
-    let active_id = app.place_action_bar.as_ref().filter(|b| b.doc == st.doc.id).map(|b| b.layer).or(st.active_layer)?;
+    let active_id = st.active_layer?;
     let layer = st.doc.layer(active_id)?;
 
     let doc_rect = bounds(&st.doc, layer);
@@ -149,7 +172,7 @@ fn action_button(ui: &mut egui::Ui, icon: &str, label: &str) -> egui::Response {
 /// - Free Transform
 /// - More options (⋯)
 fn contents(app: &mut PhotocraftApp, ui: &mut egui::Ui, more: &mut task_bar::MoreMenu) {
-    let target_layer = app.place_action_bar.as_ref().map(|b| b.layer).or_else(|| app.session.active().and_then(|s| s.active_layer));
+    let target_layer = app.session.active().and_then(|s| s.active_layer);
     let layer_param = if let Some(id) = target_layer {
         json!({"layer": id.0})
     } else {
@@ -268,23 +291,37 @@ mod tests {
         app
     }
 
+    fn app_with_image() -> PhotocraftApp {
+        let mut app = app_with_doc();
+        app.session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        app.sync_views();
+        app
+    }
+
     #[test]
     fn eligible_false_when_context_task_bar_off() {
-        let mut app = app_with_doc();
+        let mut app = app_with_image();
         app.ui.panels.context_task_bar = false;
         assert!(!eligible(&app));
     }
 
     #[test]
-    fn eligible_true_with_doc_and_raster_layer() {
+    fn eligible_false_on_new_empty_sheet() {
         let mut app = app_with_doc();
+        app.ui.panels.context_task_bar = true;
+        assert!(!eligible(&app), "new empty sheet without image must not show image quick actions");
+    }
+
+    #[test]
+    fn eligible_true_with_image_layer() {
+        let mut app = app_with_image();
         app.ui.panels.context_task_bar = true;
         assert!(eligible(&app));
     }
 
     #[test]
     fn eligible_false_while_transforming() {
-        let mut app = app_with_doc();
+        let mut app = app_with_image();
         app.ui.panels.context_task_bar = true;
         app.ui.transform = Some(crate::state::TransformSession {
             session: 1,
@@ -308,7 +345,7 @@ mod tests {
 
     #[test]
     fn free_transform_transitions_to_transform_task_bar() {
-        let mut app = app_with_doc();
+        let mut app = app_with_image();
         app.ui.panels.context_task_bar = true;
         assert!(eligible(&app));
         assert!(!crate::tools::transform_task_bar::eligible(&app));
