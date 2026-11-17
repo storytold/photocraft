@@ -36,6 +36,7 @@ pub mod memory_gate;
 pub mod new_layer;
 mod param_check;
 mod pixels;
+pub mod plugin;
 pub mod prefs;
 pub mod preset_store;
 pub mod presets;
@@ -260,6 +261,10 @@ pub struct Session {
     filter_mask_layer: Option<LayerId>,
     /// Edit › Preferences, keyboard shortcuts, menu and toolbar customisation (see `prefs`).
     pub prefs: prefs::PrefsStore,
+    /// Bundle plug-ins (command plug-ins, and filters that came in a bundle), the user's
+    /// `Plug-ins` folder, the HTTPS client installs use and the plug-ins' saved settings (see
+    /// [`plugin`]). Bare `.wasm` filters stay in `photocraft_plugins::registry`.
+    pub plugins: plugin::Runtime,
     /// Edit menu state: Fade source, custom shape library (see `edit_menu_cmds`).
     pub edit_state: edit_menu_cmds::EditState,
     /// The pattern library (Window › Patterns; see `pattern.*`).

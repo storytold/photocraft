@@ -234,6 +234,12 @@ fn set_quiet(s: &mut Session, f: impl FnOnce(&mut Document)) -> Result<()> {
 /// as it was and the journal forgets the commands `f` ran, so an action being recorded does not
 /// replay an edit that was taken back.
 pub(crate) fn compound<R>(s: &mut Session, label: &str, f: impl FnOnce(&mut Session) -> Result<R>) -> Result<R> {
+    compound_with(s, label, true, f)
+}
+
+/// [`compound`], recording its step only when the document changed unless `record_unchanged`: a
+/// plug-in run that only read the document leaves no empty step behind.
+pub(crate) fn compound_with<R>(s: &mut Session, label: &str, record_unchanged: bool, f: impl FnOnce(&mut Session) -> Result<R>) -> Result<R> {
     crate::actions_cmds::before_action_edit(s);
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let (before, history, prior) = (st.doc.clone(), st.history.clone(), st.layer_target());
@@ -256,6 +262,10 @@ pub(crate) fn compound<R>(s: &mut Session, label: &str, f: impl FnOnce(&mut Sess
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
     st.history = history;
     let result = match r {
+        Ok(v) if !record_unchanged && Arc::ptr_eq(&before, &st.doc) => {
+            st.coalesce = coalesce;
+            Ok(v)
+        }
         Ok(v) => {
             // As in `Session::edit`: undo targets what was selected just before the step (#1356).
             st.history.set_current_layers(prior);

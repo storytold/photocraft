@@ -1424,6 +1424,14 @@ dependencies = [
 [[package]]
 name = "craft-atomic"
 version = "0.1.0"
+source = "git+https://github.com/Dasemu/craft-libs?rev=77f66b33f7366abb9927113f1f5e427e2593ef84#77f66b33f7366abb9927113f1f5e427e2593ef84"
+dependencies = [
+ "rustix 1.1.5",
+]
+
+[[package]]
+name = "craft-atomic"
+version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9#a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9"
 dependencies = [
  "rustix 1.1.5",
@@ -1436,7 +1444,7 @@ source = "git+https://github.com/storytold/craft-libs?rev=a6b9d9c986f7c4c399632d
 dependencies = [
  "base64 0.22.1",
  "craft-ai-agents",
- "craft-atomic",
+ "craft-atomic 0.1.0 (git+https://github.com/storytold/craft-libs?rev=a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9)",
  "craft-behavior",
  "craft-flags",
  "craft-host",
@@ -1550,7 +1558,7 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9#a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9"
 dependencies = [
  "block2 0.6.2",
- "craft-atomic",
+ "craft-atomic 0.1.0 (git+https://github.com/storytold/craft-libs?rev=a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9)",
  "craft-behavior",
  "craft-host",
  "craft-i18n",
@@ -1622,7 +1630,7 @@ name = "craft-flags"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9#a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9"
 dependencies = [
- "craft-atomic",
+ "craft-atomic 0.1.0 (git+https://github.com/storytold/craft-libs?rev=a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9)",
  "dirs",
  "toml_edit",
 ]
@@ -1667,7 +1675,7 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9#a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9"
 dependencies = [
  "cap-primitives",
- "craft-atomic",
+ "craft-atomic 0.1.0 (git+https://github.com/storytold/craft-libs?rev=a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9)",
  "craft-font-catalog",
  "flate2",
  "log",
@@ -1898,7 +1906,7 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9#a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9"
 dependencies = [
  "blake3",
- "craft-atomic",
+ "craft-atomic 0.1.0 (git+https://github.com/storytold/craft-libs?rev=a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9)",
  "craft-pcraft-format",
  "craft-zip",
  "ruzstd",
@@ -1949,7 +1957,7 @@ dependencies = [
  "async-io",
  "async-process",
  "core-graphics2",
- "craft-atomic",
+ "craft-atomic 0.1.0 (git+https://github.com/storytold/craft-libs?rev=a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9)",
  "craft-docpath",
  "craft-host",
  "craft-theme",
@@ -1972,6 +1980,19 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9#a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9"
 dependencies = [
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-plugin"
+version = "0.1.0"
+source = "git+https://github.com/Dasemu/craft-libs?rev=77f66b33f7366abb9927113f1f5e427e2593ef84#77f66b33f7366abb9927113f1f5e427e2593ef84"
+dependencies = [
+ "craft-atomic 0.1.0 (git+https://github.com/Dasemu/craft-libs?rev=77f66b33f7366abb9927113f1f5e427e2593ef84)",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.21",
+ "wasmi",
 ]
 
 [[package]]
@@ -2054,7 +2075,7 @@ name = "craft-settings"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9#a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9"
 dependencies = [
- "craft-atomic",
+ "craft-atomic 0.1.0 (git+https://github.com/storytold/craft-libs?rev=a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9)",
  "craft-host",
  "dirs",
  "serde",
@@ -2135,7 +2156,7 @@ name = "craft-theme-store"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9#a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9"
 dependencies = [
- "craft-atomic",
+ "craft-atomic 0.1.0 (git+https://github.com/storytold/craft-libs?rev=a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9)",
  "craft-behavior",
  "craft-theme",
  "craft-ui",
@@ -2369,7 +2390,7 @@ name = "craft-window"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9#a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9"
 dependencies = [
- "craft-atomic",
+ "craft-atomic 0.1.0 (git+https://github.com/storytold/craft-libs?rev=a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9)",
  "craft-behavior",
  "craft-host",
  "craft-settings",
@@ -6418,6 +6439,7 @@ dependencies = [
  "craft-file-formats",
  "craft-image-codecs",
  "craft-pcraft-format",
+ "craft-plugin",
  "craft-print",
  "craft-psd",
  "craft-xml",

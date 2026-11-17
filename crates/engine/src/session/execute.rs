@@ -99,7 +99,8 @@ impl Session {
     /// may run.
     pub(crate) fn admit(&mut self, id: &str, spec: &commands::CommandSpec, params: &Value) -> Result<Value> {
         let run_params = channel_cmds::inject_target(self, id, commands::inject_kind(id, params.clone()));
-        if let Some(why) = color_channels::refusal(self, id, &run_params) {
+        let command_plugin = id == crate::plugin_cmds::RUN && crate::plugin_cmds::names_command_plugin(self, params);
+        if let Some(why) = color_channels::refusal(self, id, &run_params).filter(|_| !command_plugin) {
             return Err(EngineError::Disabled(id.into(), why));
         }
         if let Err(why) = self.explicit_layer_enabled(spec, params)?.unwrap_or_else(|| self.precondition(spec, &run_params)) {
@@ -140,6 +141,11 @@ impl Session {
 
     /// The command's own precondition for a call with `params` (their target filled in).
     fn precondition(&self, spec: &commands::CommandSpec, params: &Value) -> std::result::Result<(), String> {
+        // A command plug-in acts through other commands, each with its own precondition: it needs
+        // no pixel layer (and no document), unlike a filter plug-in.
+        if spec.id == crate::plugin_cmds::RUN && crate::plugin_cmds::names_command_plugin(self, params) {
+            return Ok(());
+        }
         if let Some(why) = color_channels::refusal(self, spec.id, params) {
             return Err(why);
         }

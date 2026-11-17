@@ -70,6 +70,10 @@ craft-crs = { git = "https://github.com/storytold/craft-libs", rev = "a6b9d9c986
 craft-i18n = { git = "https://github.com/storytold/craft-libs", rev = "a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9" }
 # craft-update: app-specific pretend versions apply to startup and manual checks.
 craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9", features = ["ui"] }
+# WebAssembly plug-ins shared by the Craft apps (RFC-0041): sandbox, manifest, permissions, bundles,
+# the per-user plug-in store, catalogs and GitHub installs. Pinned to the fork commit of the
+# upstream pull request until it merges (re-pin to storytold/craft-libs then).
+craft-plugin = { git = "https://github.com/Dasemu/craft-libs", rev = "77f66b33f7366abb9927113f1f5e427e2593ef84" }
 thiserror = "2"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"

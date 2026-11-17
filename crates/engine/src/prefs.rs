@@ -1794,6 +1794,8 @@ pub struct SavedPrefs {
     pub color_settings: crate::color_cmds::ColorSettings,
     /// The preset libraries, as [`PresetState::to_json`](crate::presets::PresetState::to_json) writes them.
     pub presets: Value,
+    /// Plug-in catalogs and each plug-in's settings ([`crate::plugin::SavedPlugins`]).
+    pub plugins: crate::plugin::SavedPlugins,
 }
 
 /// Written through [`strip_nulls`]: TOML has no null, and the store refuses a document holding one
@@ -1804,6 +1806,10 @@ impl Serialize for SavedPrefs {
         if let Value::Object(m) = &mut v {
             m.insert("colorSettings".into(), serde_json::to_value(&self.color_settings).map_err(serde::ser::Error::custom)?);
             m.insert("presets".into(), self.presets.clone());
+            // Only once a catalog or a plug-in setting exists: files without plug-ins stay as they were.
+            if self.plugins != crate::plugin::SavedPlugins::default() {
+                m.insert("plugins".into(), serde_json::to_value(&self.plugins).map_err(serde::ser::Error::custom)?);
+            }
         }
         strip_nulls(&mut v);
         v.serialize(serializer)
@@ -1879,7 +1885,7 @@ pub fn parse_prefs_json(s: &str) -> std::result::Result<(SavedPrefs, Vec<Invalid
     let mut invalid = Vec::new();
     let prefs: Preferences = read_lenient(v, &[], &mut invalid);
     let color_settings = color.map(|c| read_lenient(c, &["colorSettings"], &mut invalid)).unwrap_or_default();
-    Ok((SavedPrefs { prefs, color_settings, presets }, invalid))
+    Ok((SavedPrefs { prefs, color_settings, presets, plugins: crate::plugin::SavedPlugins::default() }, invalid))
 }
 
 /// [`parse_prefs_json`] as the settings store's legacy import calls it
@@ -2021,7 +2027,12 @@ impl Session {
 
     /// Everything the settings file holds, as the session has it now.
     pub fn saved_prefs(&self) -> SavedPrefs {
-        SavedPrefs { prefs: self.prefs().clone(), color_settings: self.color.settings.clone(), presets: self.presets.to_json(self) }
+        SavedPrefs {
+            prefs: self.prefs().clone(),
+            color_settings: self.color.settings.clone(),
+            presets: self.presets.to_json(self),
+            plugins: self.plugins.saved.clone(),
+        }
     }
 
     /// Takes `saved` as the session's preferences, colour settings and presets, from either source
@@ -2029,7 +2040,8 @@ impl Session {
     /// applies the engine-side ones. Values that read but that this build no longer accepts are
     /// put back to their defaults (or the nearest accepted value) and returned.
     pub fn set_saved_prefs(&mut self, saved: SavedPrefs) -> Vec<InvalidPref> {
-        let SavedPrefs { mut prefs, color_settings, presets } = saved;
+        let SavedPrefs { mut prefs, color_settings, presets, plugins } = saved;
+        self.plugins.saved = plugins;
         let mut invalid = Vec::new();
         // An Effect Cache the field no longer accepts (above the 32-bit cap, saved before the cap
         // or by a 64-bit build; a hand-edited 0) loads as the nearest value it does. Otherwise

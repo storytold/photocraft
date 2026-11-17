@@ -1,36 +1,121 @@
-# Plug-ins: the WebAssembly plug-in API (ABI v1)
+# Plug-ins
 
 PhotoCraft does not host native Photoshop plug-ins (`.8BF`, CEP, UXP): that needs unsafe FFI into
 arbitrary machine code and cannot work in the browser build. Instead, plug-ins are **WebAssembly
-modules** run in a sandbox. One `.wasm` file works on macOS, Windows, Linux and the web.
+modules** run in a sandbox. One module works on macOS, Windows, Linux and the web.
 
-This page is the contract for plug-in authors and the reference for the host
-(`crates/plugins`, the `plugin.*` commands in `crates/engine/src/plugin_cmds.rs`).
+PhotoCraft runs two kinds:
+
+- **Filters** (`"kind": "filter"`, PhotoCraft's own, ABI v1 below): change the pixels of the
+  active layer, a targeted channel or a smart object, with live preview. Host: `crates/plugins`.
+- **Command plug-ins** (`"kind": "command"`, shared by every Craft app): act on the document only
+  through PhotoCraft's commands, the same ones the menus, the CLI, the control channel and MCP
+  run. Host: the shared [`craft-plugin`](https://github.com/storytold/craft-libs/tree/main/crates/plugin)
+  crate ([RFC-0041](https://github.com/storytold/craft-contrib/blob/main/rfcs/0041-shared-plugin-runtime.md)),
+  whose README documents the manifest (`craft-plugin.json`), the bundle and the ABI.
+
+The engine side is `crates/engine/src/plugin.rs` (rules, runs, installing) and the `plugin.*`
+commands in `crates/engine/src/cmd/plugin_cmds.rs`.
 
 ## Using plug-ins
 
+In the app: **Filter › Plug-ins** lists the installed filters, then each command plug-in's
+commands (a generated dialog asks for their parameters), then **Install Plug-in…** (a `.wasm`
+filter by path) and **Manage Plug-ins…**: the installed plug-ins, Remove, Install from File… (a
+`.craftplugin` bundle or a `.wasm` filter), install from a GitHub repository (`owner/repo` or
+`owner/repo@tag`), catalogs (add, remove, browse and install their packages) and Check for
+Updates.
+
+Installing a bundle always shows a **confirmation** first: the plug-in's name, version, author,
+kind, the permissions it asks for and the commands it may call, the menu items it adds, where it
+comes from, its SHA-256 and its licence. A plug-in from a repository that no catalog you use lists
+says so plainly ("not in any catalog you use"). Nothing is written before **Install**. An update
+that asks for other permissions is confirmed again.
+
 | Command | Params | What it does |
 |---|---|---|
-| `plugin.install` | `{"path": "/x/y.wasm"}` (native) or `{"data": "<base64>"}`, `"replace": bool = true` | Validates and installs a module; returns its description. |
-| `plugin.list` | `{}` | `{"plugins": [{id, name, version, kind, author, description, params, paramsSchema, overlap, area, size, source}], "folder": report}` |
-| `plugin.run` | `{"id": "…", "params": {…}}` (plug-in params may also be top-level keys) | Runs a filter plug-in on the active pixel layer, targeted alpha channel / Quick Mask, or smart object. One undo step. |
-| `plugin.remove` | `{"id": "…"}` | Uninstalls. |
+| `plugin.list` | `{}` | `{"plugins": [filters {id, name, version, kind, author, description, params, paramsSchema, overlap, area, size, source, sha256?, origin?, stored?}, then command plug-ins {id, name, version, kind, permissions, commands, sha256, origin, stored}], "folder": report, "problems", "catalogs", "store", "last"}` |
+| `plugin.install` | `{"path": "/x/y.wasm"}` (native) or `{"data": "<base64>"}`, `"replace": bool = true` | A bare filter module: validates and installs it for the process; returns its description. |
+| `plugin.install` | `{"path": "/x/y.craftplugin"}`, `{"data": "<base64 bundle>", "name"?}`, `{"repo": "owner/repo[@tag]"}` or `{"catalog": "<index.json URL>", "id", "version"?}`; `"review"?`, `"sha256"?`, `"replace"?` | A bundle (either kind). `review: true` checks and describes it without installing (the confirmation); `sha256` installs only that reviewed bundle, without downloading it again. |
+| `plugin.update` | `{"id"?, "apply"?: bool}` | Checks each bundle plug-in's catalog or repository; `apply` installs the updates that ask for no other permissions. |
+| `plugin.remove` | `{"id": "…"}` | Uninstalls (a bundle leaves the Plug-ins folder, with its settings). |
+| `plugin.run` | `{"id": "…", "params": {…}}` (plug-in params may also be top-level keys), `"command"?`, `"fuel"?` | A filter runs on the active pixel layer, targeted alpha channel / Quick Mask, or smart object. A command plug-in runs `command` (default: its first). Either is one undo step. |
 | `plugin.reload` | `{"path": "folder"}` (default: the preference folder) | Loads every `*.wasm` in a folder; a bad module is reported and skipped. |
+| `plugin.catalog.list` | `{"url"?}` | The packages PhotoCraft can run in one catalog, or in every catalog added. |
+| `plugin.catalog.add` | `{"url", "remove"?: bool}` | Adds (or removes) a catalog: an `index.json` on GitHub's hosts over `https://`, or `file://`. |
 
-In the app, installed filters appear under **Filter › Plug-ins** (with a generated dialog and live
-preview when they have parameters), next to **Install Plug-in…**.
+### Where plug-ins are kept
 
-**Preference folder.** Edit › Preferences › Plug-ins › *Use Additional Plug-ins Folder* plus
-*Additional Plug-ins Folder*: when both are set, every `*.wasm` in that folder (not recursive) is
-installed at startup and whenever the preference changes (native builds only; the web build installs
-from bytes).
+- **Bundles** (both kinds) go to the per-user store, `Plug-ins/` in PhotoCraft's settings folder
+  (`PHOTOCRAFT_CONFIG_DIR`, the portable `PhotoCraftData`, or the platform's), one folder per
+  plug-in named by a hash of its id, with the bundle and a record of where it came from and its
+  SHA-256 (craft-plugin's `store`). The app reads it at startup: filters found there join
+  Filter › Plug-ins. The CLI, MCP and the web build install bundles for the session only.
+- **Bare `.wasm` filters** are installed per process, as before: `plugin.install` with a `.wasm`
+  path or base64 module, or the preference folder. Edit › Preferences › Plug-ins › *Use Additional
+  Plug-ins Folder* plus *Additional Plug-ins Folder*: when both are set, every `*.wasm` in that
+  folder (not recursive) is installed at startup and whenever the preference changes (native builds
+  only). That folder is still read as it was; nothing is moved out of it.
+- **Catalogs and plug-in settings** are kept with the preferences, in the `[plugins]` section of
+  the settings file.
 
-Plug-ins are installed **per process**, not per document. A smart filter recorded from a plug-in
-(`{"command": "plugin.run", "params": {"id", "params"}}`) re-runs on re-render while that plug-in is
-installed; if it is missing, the filter is skipped (the cached pixels stay as they were), like other
-filters PhotoCraft does not implement.
+Plug-ins are installed per process, not per document. A smart filter recorded from a filter
+plug-in (`{"command": "plugin.run", "params": {"id", "params"}}`) re-runs on re-render while that
+plug-in is installed; if it is missing, the filter is skipped (the cached pixels stay as they
+were), like other filters PhotoCraft does not implement.
 
-## The sandbox
+### Installing from GitHub and catalogs
+
+Downloads are `https://` on GitHub's hosts only and are checked before anything is kept: size
+limits, the SHA-256 (pinned by the catalog, or from the release's `SHA256SUMS` or GitHub's asset
+digest), the manifest, the API version, the `apps` entry (a bundle must name `photocraft`), and the
+module compiled but not run. The desktop app downloads with the client it checks for updates with;
+the CLI and MCP have no network access for plug-ins. Automation (MCP, the control channel) cannot
+read `file://` catalogs, cannot install from a path outside its file access, and installs for
+the session only, never into the Plug-ins folder.
+
+## Command plug-ins
+
+A command plug-in's manifest names PhotoCraft in `apps` with the shared command ABI it was written
+for (1–6), asks for `read` or `write` access and may narrow the commands it calls:
+
+```json
+{
+  "id": "io.github.example.tidy-layers",
+  "name": "Tidy layers",
+  "version": "1.0.0",
+  "main": "tidy.wasm",
+  "kind": "command",
+  "apps": { "photocraft": { "api": 6 } },
+  "permissions": { "access": "write", "commands": ["layer.*"] },
+  "commands": [{ "id": "run", "label": "Tidy Layers", "params": [] }]
+}
+```
+
+- **One undo step.** A run's commands become one history step named after the plug-in (and the
+  command, when it has several). A run that fails (a trap, an exhausted budget, a non-zero status)
+  puts the document, its targeted layers and the history back as they were, and none of its calls
+  is journaled. A run that changed nothing leaves no step. A recorded action records the
+  `plugin.run`, not its calls.
+- **Read access.** Every call runs as its own nested step; when a `read` plug-in's call changed the
+  document (its selection included), the call is taken back and refused with "… may only read it".
+- **Refused commands.** Whatever the manifest says, a plug-in may not call: `plugin.*`, `file.*`,
+  `app.*`, `pref.*`, `window.*`, Undo and Redo (craft-plugin's shared list), and PhotoCraft's
+  preferences and settings dialogs (`prefs.*`, `edit.preferences*`, Color Settings, shortcuts,
+  menus, toolbar, presets), the history (`history.*`, step backward/forward, purge), other
+  documents (`document.activate`, `document.move`, document presets and recent files, Duplicate),
+  actions, scripts and batches (`actions.*`, `automate.*`), view, workspace, panels, tools and the
+  interface, the clipboard (copy, cut, paste), the user's preset libraries (brushes, swatches,
+  gradients, patterns, styles, shapes: listing and applying stay), the session and its jobs, and
+  sharing. Parameters that name a file or folder
+  (`path`, `folder`, `file`, `url`, a profile given as a file…) or another document (`document`,
+  `sourceDocument`…) are refused for every command. A call that opens, closes or switches
+  documents is taken back and refused.
+- **Settings.** A plug-in keeps its own settings (JSON values, keys up to 128 characters, 64 KiB in
+  all), saved with the preferences and removed with the plug-in.
+- **Not yet:** plug-in panels (`ui_show`; the run says so in its result) and `saveFile`.
+
+## The sandbox (filters)
 
 The host is [`wasmi`](https://github.com/wasmi-labs/wasmi), a pure-Rust WebAssembly interpreter
 (MIT OR Apache-2.0). It builds for `wasm32-unknown-unknown` too, so plug-ins also run in the web
@@ -59,9 +144,9 @@ wasmi is built with its *portable* (loop) dispatcher: the default tail-call disp
 sibling-call optimisation, and when that doesn't happen a long-running module overflows the host
 stack, which aborts the process instead of returning an error.
 
-## ABI v1
+## Filter ABI v1
 
-A plug-in is a core WebAssembly module (MVP + the usual post-MVP features: bulk memory, sign
+A filter is a core WebAssembly module (MVP + the usual post-MVP features: bulk memory, sign
 extension, multi-value, saturating conversions; no SIMD, no memory64) with **no imports** and these
 exports. All integers are `i32` unless noted; pointers are offsets into the module's memory.
 
@@ -74,6 +159,10 @@ exports. All integers are `i32` unless noted; pointers are offsets into the modu
 | `pc_filter` | `(buf, buf_len, width, height, channels, format, params, params_len) -> i32` | Filters the pixels in place; `0` = success, anything else is an error code. |
 
 ### Manifest
+
+A filter's manifest is embedded in its module (`pc_manifest`). In a `.craftplugin` bundle it also
+has a `craft-plugin.json` with `"kind": "filter"` and `"apps": {"photocraft": {"api": 1}}`, whose
+`id` must be the module's own.
 
 ```json
 {
