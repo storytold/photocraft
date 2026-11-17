@@ -157,6 +157,10 @@ impl Owner {
         self.validation.borrow().computations
     }
 
+    pub(crate) fn tool(&self) -> Tool {
+        self.tool
+    }
+
     fn same_target(&self, app: &PhotocraftApp) -> bool {
         self.same_path_target(app) && app.ui.tool == self.tool
     }
@@ -938,9 +942,13 @@ fn marquee(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2], add: bool) {
 /// 1 px (⇧ 10 px) through `path.moveAnchors`, one history step per press. Not while a drag is
 /// in progress. Returns true when a key was used.
 pub fn arrow_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
+    // Path Selection's Delete handler still needs to see its stale components.
+    if app.ui.tool != Tool::DirectSelection {
+        return false;
+    }
     cancel_stale(app);
     let ds = &app.ui.direct_selection;
-    let Some(target) = ds.target.filter(|_| app.ui.tool == Tool::DirectSelection && !ds.anchors.is_empty() && ds.drag.is_none()) else {
+    let Some(target) = ds.target.filter(|_| !ds.anchors.is_empty() && ds.drag.is_none()) else {
         return false;
     };
     // The anchors belong to a path the canvas no longer offers (another saved path picked in the
