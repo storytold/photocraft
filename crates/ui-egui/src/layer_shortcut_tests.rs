@@ -248,9 +248,9 @@ fn a_click_below_the_layers_deselects_them() {
     assert_eq!(selected(&h), vec![photocraft_doc::LayerId(top)], "a row still selects");
 }
 
-/// Over a thumbnail ⌘-click would load, the pointer is a hand with the selection mode's badge:
-/// none for a new selection, + with ⇧, − with ⌥, × with ⇧⌥ (#7824). Without ⌘, and over the
-/// Background (which has nothing to load), it stays the plain pointer.
+/// Over a layer row the pointer is the hand (#12666), and over a thumbnail ⌘-click would load it
+/// carries the selection mode's badge: none for a new selection, + with ⇧, − with ⌥, × with ⇧⌥
+/// (#7824). The Background's row takes the hand too, and has nothing to load.
 #[test]
 fn command_over_a_thumbnail_shows_the_load_cursor() {
     use egui::{CursorIcon, Event, pos2, vec2};
@@ -283,9 +283,18 @@ fn command_over_a_thumbnail_shows_the_load_cursor() {
         h.run_steps(1);
         icon
     };
-    for m in [Modifiers::COMMAND, Modifiers::COMMAND | Modifiers::SHIFT, Modifiers::COMMAND | Modifiers::ALT] {
-        assert_eq!(cursor(&mut h, shape, m), CursorIcon::PointingHand, "{m:?}");
+    for m in [Modifiers::NONE, Modifiers::COMMAND, Modifiers::COMMAND | Modifiers::SHIFT, Modifiers::COMMAND | Modifiers::ALT] {
+        assert_eq!(cursor(&mut h, shape, m), CursorIcon::PointingHand, "the row is a hand ({m:?})");
     }
-    assert_ne!(cursor(&mut h, shape, Modifiers::NONE), CursorIcon::PointingHand, "a plain click selects the layer");
-    assert_ne!(cursor(&mut h, background, Modifiers::COMMAND), CursorIcon::PointingHand, "the Background has nothing to load");
+    for m in [Modifiers::NONE, Modifiers::COMMAND] {
+        assert_eq!(cursor(&mut h, background, m), CursorIcon::PointingHand, "the Background's row is a hand too ({m:?})");
+    }
+    // The eye column is its own widget: a hover there takes the hand as well.
+    let eye_cursor = |h: &mut egui_kittest::Harness<'_, PhotocraftApp>, layer: u64| {
+        let row = crate::layer_row_ui::recorded(&h.ctx).into_iter().find(|r| r.layer == layer).unwrap().row;
+        h.hover_at(pos2(row.left() + 15.0, row.center().y));
+        h.run_steps(2);
+        h.output().platform_output.cursor_icon
+    };
+    assert_eq!(eye_cursor(&mut h, shape), CursorIcon::PointingHand, "the eye column takes the hand too");
 }
