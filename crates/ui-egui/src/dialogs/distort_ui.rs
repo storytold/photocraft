@@ -217,6 +217,7 @@ pub(crate) fn workspace_fields(app: &PhotocraftApp, key: &str) -> Option<Value> 
 }
 
 /// Whether the workspace `key` names is open.
+#[cfg(not(target_arch = "wasm32"))]
 fn workspace_open(app: &PhotocraftApp, key: &str) -> bool {
     app.framework.dialogs.open_dialogs().iter().any(|d| d.key.as_deref() == Some(key))
 }
@@ -266,16 +267,23 @@ pub fn display_doc(app: &PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u6
 pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
     let empty = params.as_object().is_none_or(|o| o.is_empty());
     let ui = params.get("ui");
+    #[cfg(not(target_arch = "wasm32"))]
     let hosted = |app: &mut PhotocraftApp, key: &str, ui: &Value| crate::control::dialogs::workspace_ui(app, ctx, key, ui);
     match id {
         "filter.filterGallery" if empty => Some(crate::gallery_ui::open(app).map(|_| json!({"gallery": crate::gallery_ui::describe(app)}))),
+        #[cfg(not(target_arch = "wasm32"))]
         "filter.filterGallery" if ui.is_some() && workspace_open(app, id) => Some(hosted(app, id, ui.unwrap_or(&Value::Null))),
         "filter.liquify" if empty => Some(crate::liquify_ui::open(app, ctx).map(|_| json!({"liquify": crate::liquify_ui::describe(app)}))),
+        #[cfg(not(target_arch = "wasm32"))]
         "filter.liquify" if ui.is_some() && workspace_open(app, id) => Some(hosted(app, id, ui.unwrap_or(&Value::Null))),
+        #[cfg(not(target_arch = "wasm32"))]
         "edit.contentAwareFill" if ui.is_some() && workspace_open(app, id) => Some(hosted(app, id, ui.unwrap_or(&Value::Null))),
         // `ui` addresses the workspace: closed, that is an error, not a fill with the defaults.
+        #[cfg(not(target_arch = "wasm32"))]
         "edit.contentAwareFill" if ui.is_some() => Some(Err("Content-Aware Fill is not open".into())),
+        #[cfg(not(target_arch = "wasm32"))]
         "select.selectAndMask" if ui.is_some() && workspace_open(app, id) => Some(hosted(app, id, ui.unwrap_or(&Value::Null))),
+        #[cfg(not(target_arch = "wasm32"))]
         "select.selectAndMask" if ui.is_some() => Some(Err("Select and Mask is not open".into())),
         "select.selectAndMask" => Some(crate::select_mask_ui::open(app).map(|_| json!({"selectAndMask": crate::select_mask_ui::describe(app)}))),
         "edit.puppetWarp" | "layer.smartObjects.puppetWarp" if empty => {
@@ -291,6 +299,7 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
             Some(crate::perspective_ui::control(app, ui.unwrap_or(&Value::Null)))
         }
         "filter.vanishingPoint" if empty => Some(crate::vp_ui::begin(app, ctx).map(|_| json!({"vanishingPoint": crate::vp_ui::describe(app)}))),
+        #[cfg(not(target_arch = "wasm32"))]
         "filter.vanishingPoint" if ui.is_some() && workspace_open(app, id) => Some(hosted(app, id, ui.unwrap_or(&Value::Null))),
         _ => None,
     }
