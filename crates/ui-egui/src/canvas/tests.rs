@@ -1,3 +1,217 @@
+// Regression-first #11560: these tests deliberately specify the missing off-state demand.
+// Run against unchanged production before implementing the policy; no cached fixture alone
+// establishes that the real canvas request path computes while Preview is unchecked.
+mod issue_11560 {
+    use super::*;
+
+    fn fixture(command: &str, depth: u32, alpha: bool) -> (PhotocraftApp, u64) {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.background_jobs = false;
+        app.run("file.new", json!({"width": 64, "height": 48, "depth": depth})).unwrap();
+        if alpha {
+            app.run("channel.new", json!({"name": "Preview target", "fill": "black"})).unwrap();
+        }
+        app.session
+            .edit("Preview fixture", |doc, active| {
+                let surface = if alpha { &mut doc.channels[0].surface } else { doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap() };
+                for x in 0..64 {
+                    // Midtones, a step and fine texture: neither sharpening amount clips to a
+                    // binary/no-op oracle, and the two requested amounts have distinct output.
+                    let v = 0.25 + x as f32 / 256.0 + if x >= 32 { 0.15 } else { 0.0 } + if x % 3 == 0 { 0.04 } else { 0.0 };
+                    if alpha {
+                        surface.fill_rect(DRect::new(x, 0, x + 1, 48), &[v]);
+                    } else {
+                        surface.fill_rect(DRect::new(x, 0, x + 1, 48), &[v, v, v, 1.0]);
+                    }
+                }
+                Ok(())
+            })
+            .unwrap();
+        let id = crate::filter_dialog::open(&mut app, command).unwrap();
+        (app, id)
+    }
+
+    fn parameters(app: &mut PhotocraftApp, id: u64, amount: u32, on: bool) {
+        let f = &mut app.ui.dialog_mut(id).unwrap().fields;
+        f.insert("amount".into(), json!(amount));
+        f.insert("radius".into(), json!(2.0));
+        let detail = match f["__command"].as_str().unwrap() {
+            "filter.sharpen.unsharpMask" => "threshold",
+            "filter.sharpen.smartSharpen" => "reduceNoise",
+            _ => panic!("unexpected sharpening fixture command"),
+        };
+        f.insert(detail.into(), json!(0));
+        f.insert("__preview".into(), json!(on));
+    }
+
+    fn oracle(app: &PhotocraftApp, id: u64) -> photocraft_doc::Document {
+        let d = app.ui.dialogs.iter().find(|d| d.id == id).unwrap();
+        let st = app.session.active().unwrap();
+        let command = d.fields["__command"].as_str().unwrap();
+        let params = app.with_mask_target(command, crate::filter_dialog::params_of(&d.fields));
+        // Independent full-resolution engine execution: do not reuse either preview gate
+        // or the preview-document helper as the expected-pixels oracle.
+        let mut engine = photocraft_engine::Session::new();
+        engine.color.settings = app.session.color.settings.clone();
+        engine.add_document(st.doc.as_ref().clone(), None);
+        if let Some(active) = st.active_layer {
+            engine.select_layer(active).unwrap();
+        }
+        engine.active_mut().unwrap().channel_view.target = st.channel_view.target;
+        engine.execute(command, params).expect("the real filter accepts the fixture");
+        engine.active().unwrap().doc.as_ref().clone()
+    }
+
+    fn texture_pixels(ctx: &egui::Context, id: egui::TextureId) -> Vec<egui::Color32> {
+        let mut delta = ctx.tex_manager().write().take_delta();
+        let pixels = delta.set.get(&id).and_then(|d| d.last()).map(|d| {
+            let egui::ImageData::Color(image) = &d.image;
+            image.pixels.clone()
+        });
+        delta.clear();
+        pixels.expect("the production canvas or channel texture was uploaded")
+    }
+
+    fn off_first_and_edits(command: &str) {
+        for depth in [8, 16, 32] {
+            let (mut app, id) = fixture(command, depth, false);
+            let ctx = egui::Context::default();
+            let before = app.session.active().unwrap().doc.clone();
+            let revision = app.session.active().unwrap().revision;
+            let history = app.session.active().unwrap().history.past_len();
+            let plain = photocraft_compose::flatten(&before).into_px();
+            let mut last = plain.clone();
+            for amount in [60, 180] {
+                parameters(&mut app, id, amount, false);
+                let expected = photocraft_compose::flatten(&oracle(&app, id)).into_px();
+                assert_ne!(expected, plain, "{command}/{depth}: a nonzero sharpening oracle");
+                assert_ne!(expected, last, "{command}/{depth}: parameter edits must be observable");
+                assert!(ensure_filter_preview(&mut app, 0, &ctx).is_none(), "off still means no canvas frame");
+                let preview = app.filter_preview.as_ref().expect("unchecked generic mini still demands computation, even before the first completion");
+                assert_eq!(preview.key.params["amount"], json!(amount));
+                assert_eq!(photocraft_compose::flatten(preview.result.as_ref().unwrap()).px, expected);
+                assert!(super::super::filter_preview::filter_channel_preview(&mut app, 0, &ctx).is_none(), "no filtered channel substitution while off");
+                // Cross the real CPU presentation path in both directions. Cycling through
+                // checked also guarantees a new upload instead of reading an unchanged cache.
+                parameters(&mut app, id, amount, true);
+                let (tex, _) = ensure_texture(&mut app, &ctx, 0, None).unwrap();
+                let filtered_pixels = texture_pixels(&ctx, tex);
+                let result = app.filter_preview.as_ref().unwrap().result.as_ref().unwrap();
+                let (display, _) = canvas_display(&app, result, None);
+                assert_eq!(filtered_pixels, display_image(display.as_deref(), &photocraft_compose::flatten(result)).pixels);
+                parameters(&mut app, id, amount, false);
+                let (tex, _) = ensure_texture(&mut app, &ctx, 0, None).unwrap();
+                let pixels = texture_pixels(&ctx, tex);
+                let (display, _) = canvas_display(&app, &before, None);
+                assert_eq!(pixels, display_image(display.as_deref(), &photocraft_compose::flatten(&before)).pixels, "off CPU canvas stays original");
+                last = expected;
+            }
+            assert!(std::sync::Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+            assert_eq!(app.session.active().unwrap().revision, revision);
+            assert_eq!(app.session.active().unwrap().history.past_len(), history);
+            crate::dialogs::cancel(&mut app, id).unwrap();
+            assert!(app.filter_preview.is_none());
+            assert!(ensure_filter_preview(&mut app, 0, &ctx).is_none());
+            assert!(std::sync::Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+        }
+    }
+
+    #[test]
+    fn unsharp_off_before_first_completion_and_two_edits() {
+        off_first_and_edits("filter.sharpen.unsharpMask");
+    }
+
+    #[test]
+    fn smart_sharpen_off_before_first_completion_and_two_edits() {
+        off_first_and_edits("filter.sharpen.smartSharpen");
+    }
+
+    #[test]
+    fn off_alpha_channel_canvas_is_original_while_the_mini_result_changes() {
+        use photocraft_engine::channel_cmds::ChannelTarget;
+        for depth in [8, 16, 32] {
+            let (mut app, id) = fixture("filter.sharpen.unsharpMask", depth, true);
+            app.session.active_mut().unwrap().channel_view.target = ChannelTarget::Alpha(0);
+            let ctx = egui::Context::default();
+            let source = app.session.active().unwrap().doc.clone();
+            let original = crate::channel_view::render(
+                &source,
+                &app.session.active().unwrap().channel_view,
+                source.bounds(),
+                1,
+                crate::channel_view::Look::of(&app.session),
+                app.session.active().unwrap().active_layer,
+            )
+            .unwrap();
+            for on in [true, false, true, false] {
+                parameters(&mut app, id, if on { 60 } else { 180 }, on);
+                assert_eq!(ensure_filter_preview(&mut app, 0, &ctx).is_some(), on);
+                let expected = oracle(&app, id);
+                assert_ne!(expected.channels[0].surface.read_region(source.bounds()), source.channels[0].surface.read_region(source.bounds()));
+                let p = app.filter_preview.as_ref().expect("off-state alpha computation");
+                assert_eq!(
+                    p.result.as_ref().unwrap().channels[0].surface.read_region(source.bounds()),
+                    expected.channels[0].surface.read_region(source.bounds())
+                );
+                let texture = crate::channel_view::ensure(&mut app, &ctx, 0, None).expect("opaque alpha overlay");
+                let pixels = texture_pixels(&ctx, texture);
+                let shown = if on { &expected } else { source.as_ref() };
+                let expected_pixels = crate::channel_view::render(
+                    shown,
+                    &app.session.active().unwrap().channel_view,
+                    source.bounds(),
+                    1,
+                    crate::channel_view::Look::of(&app.session),
+                    app.session.active().unwrap().active_layer,
+                )
+                .unwrap();
+                assert_eq!(pixels, expected_pixels, "channel overlay obeys the checkbox at depth {depth}");
+                if !on {
+                    assert_eq!(pixels, original);
+                }
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn native_off_state_compute_survives_logic_cleanup_and_converges() {
+        let (mut app, id) = fixture("filter.sharpen.unsharpMask", 8, false);
+        app.background_jobs = true;
+        let ctx = egui::Context::default();
+        for amount in [60, 180] {
+            parameters(&mut app, id, amount, false);
+            let expected = photocraft_compose::flatten(&oracle(&app, id)).into_px();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                // The real logic-frame lifetime gate must not cancel unchecked mini demand.
+                crate::dialogs::filter_preview_worker::discard_closed(&mut app);
+                assert!(ensure_filter_preview(&mut app, 0, &ctx).is_none());
+                if let Some(p) = &app.filter_preview
+                    && p.key.params["amount"] == json!(amount)
+                    && p.result.is_some()
+                {
+                    assert_eq!(photocraft_compose::flatten(p.result.as_ref().unwrap()).px, expected);
+                    break;
+                }
+                assert!(std::time::Instant::now() < deadline, "unchecked native preview never converged to amount {amount}");
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
+        crate::dialogs::cancel(&mut app, id).unwrap();
+        crate::dialogs::filter_preview_worker::discard_closed(&mut app);
+        assert!(app.filter_preview.is_none());
+    }
+
+    #[test]
+    fn off_non_mini_rotation_does_not_compute() {
+        let (mut app, id) = fixture("image.rotation.arbitrary", 8, false);
+        app.ui.dialog_mut(id).unwrap().fields.insert("__preview".into(), json!(false));
+        assert!(ensure_filter_preview(&mut app, 0, &egui::Context::default()).is_none());
+        assert!(app.filter_preview.is_none(), "no demand without a mini or checked canvas");
+    }
+}
+
 /// #5472: a ⇧ square pressed between pixels snapped to 101 × 102; the short side grows to
 /// match, on the side the drag points to.
 #[test]
