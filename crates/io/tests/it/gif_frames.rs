@@ -201,7 +201,8 @@ fn an_animated_export_can_be_cancelled_between_frames_and_is_bounded() {
     use photocraft_io::gif_anim::{MAX_STAGED_BYTES, export_stepped};
     let animated = |side: u32, n: usize| {
         let mut d = Document::new("a", photocraft_geom::Size { width: side, height: side }, ColorMode::Rgb, SampleType::U8);
-        d.frame_animation = Some(FrameAnimation { frames: vec![AnimFrame::default().into(); n], current: 0, loops: LoopCount::Forever, defaults: Default::default() });
+        d.frame_animation =
+            Some(FrameAnimation { frames: vec![AnimFrame::default().into(); n], current: 0, loops: LoopCount::Forever, defaults: Default::default() });
         d
     };
     // Stopping at the second step stops the export with `Cancelled`, having rendered one frame.
@@ -262,7 +263,8 @@ fn a_play_count_is_saved_as_forever_with_a_warning_until_the_shared_writer_store
     use photocraft_doc::{AnimFrame, ColorMode, Document, FrameAnimation, LoopCount, SampleType};
     use photocraft_io::gif_anim::export_stepped;
     let mut d = Document::new("a", photocraft_geom::Size { width: 2, height: 2 }, ColorMode::Rgb, SampleType::U8);
-    d.frame_animation = Some(FrameAnimation { frames: vec![AnimFrame::default().into(); 2], current: 0, loops: LoopCount::Times(3), defaults: Default::default() });
+    d.frame_animation =
+        Some(FrameAnimation { frames: vec![AnimFrame::default().into(); 2], current: 0, loops: LoopCount::Times(3), defaults: Default::default() });
     let (bytes, warnings) = export_stepped(&d, &photocraft_raster::Interrupt::NONE, &mut |_, _| true).unwrap().unwrap();
     assert_eq!(repeats(&bytes), Some(0));
     assert!(warnings.iter().any(|w| w.contains("play count of 3")), "{warnings:?}");
@@ -274,7 +276,8 @@ fn three_plays_export_as_two_repeats() {
     use photocraft_doc::{AnimFrame, ColorMode, Document, FrameAnimation, LoopCount, SampleType};
     use photocraft_io::gif_anim::export_stepped;
     let mut d = Document::new("a", photocraft_geom::Size { width: 2, height: 2 }, ColorMode::Rgb, SampleType::U8);
-    d.frame_animation = Some(FrameAnimation { frames: vec![AnimFrame::default().into(); 2], current: 0, loops: LoopCount::Times(3), defaults: Default::default() });
+    d.frame_animation =
+        Some(FrameAnimation { frames: vec![AnimFrame::default().into(); 2], current: 0, loops: LoopCount::Times(3), defaults: Default::default() });
     let (bytes, _) = export_stepped(&d, &photocraft_raster::Interrupt::NONE, &mut |_, _| true).unwrap().unwrap();
     assert_eq!(repeats(&bytes), Some(2), "three plays are two repeats");
 }
@@ -321,7 +324,8 @@ fn tagged(mode: photocraft_doc::ColorMode, icc: Vec<u8>, colour: &[f32]) -> phot
     l.surface_mut().unwrap().fill_rect(d.bounds(), colour);
     d.layers = vec![l];
     d.icc_profile = Some(std::sync::Arc::new(icc));
-    d.frame_animation = Some(FrameAnimation { frames: vec![AnimFrame::default().into(); 2], current: 0, loops: LoopCount::Forever, defaults: Default::default() });
+    d.frame_animation =
+        Some(FrameAnimation { frames: vec![AnimFrame::default().into(); 2], current: 0, loops: LoopCount::Forever, defaults: Default::default() });
     d
 }
 
@@ -380,7 +384,8 @@ fn an_export_that_cannot_be_held_at_once_is_refused() {
     use photocraft_io::gif_anim::{MAX_STAGED_BYTES, WORKING_BYTES_PER_PIXEL, export_stepped};
     let animated = |side: u32, n: usize| {
         let mut d = Document::new("a", photocraft_geom::Size { width: side, height: side }, ColorMode::Rgb, SampleType::U8);
-        d.frame_animation = Some(FrameAnimation { frames: vec![AnimFrame::default().into(); n], current: 0, loops: LoopCount::Forever, defaults: Default::default() });
+        d.frame_animation =
+            Some(FrameAnimation { frames: vec![AnimFrame::default().into(); n], current: 0, loops: LoopCount::Forever, defaults: Default::default() });
         d
     };
     // One frame of 4500 × 4500 is within the old frame limit, but rendering it takes more than the budget.
