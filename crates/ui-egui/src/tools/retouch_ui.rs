@@ -641,10 +641,12 @@ pub fn finish_object_selection(app: &mut PhotocraftApp, start: [f64; 2], end: [f
     let hard_edge = app.ui.tool_options.object_hard_edge;
     let mode = crate::tool_feedback::selection_mode(Tool::ObjectSelection, app.ui.selection_mode, mods);
     if (w < 2.0 || h < 2.0) && app.ui.tool_options.object_finder {
-        // Object Finder (#4087): the object under the click, as hovering highlighted it.
-        let r = app.run("select.object", json!({"point": [end[0], end[1]], "mode": mode, "sampleAllLayers": sample_all, "hardEdge": hard_edge}));
+        // Object Finder (#4087): the object under the click, as hovering highlighted it. A
+        // click that finds nothing stays silent, as the reference application measures it
+        // (#12863; the silent click is shared with #12861). A completely empty active layer
+        // still gets the engine's #5246 error through run.
+        let _ = app.run("select.object", json!({"point": [end[0], end[1]], "mode": mode, "sampleAllLayers": sample_all, "hardEdge": hard_edge}));
         crate::object_finder::clear(app);
-        report_smart_result(app, r, tl!("No object found there — drag a rectangle around it"));
         return;
     }
     if w < 2.0 || h < 2.0 {
