@@ -89,6 +89,18 @@ impl Transfer {
     }
 }
 
+/// Where Exposure's encode in RGB documents turns from the 2.2 power into a straight line, and
+/// that line's slope, which meets the power at the turn. Fitted on Photoshop's 8-bit Exposure
+/// ramps (#14635), not derived: a pure power is up to 2 levels off in the darkest results.
+const EXPOSURE_TOE: f32 = 2.44e-4;
+const EXPOSURE_TOE_SLOPE: f32 = 93.4;
+
+/// Linear light → an RGB document's tone, for Exposure only: `x ^ (1/2.2)` with a linear toe
+/// below [`EXPOSURE_TOE`]. compose.wgsl's `exposure_encode` does the same.
+fn exposure_encode(v: f32) -> f32 {
+    if v < EXPOSURE_TOE { v.max(0.0) * EXPOSURE_TOE_SLOPE } else { v.powf(1.0 / 2.2) }
+}
+
 /// Applies an adjustment assuming an sRGB document.
 pub fn apply(adj: &Adjustment, buf: &mut Buffer) {
     apply_with(adj, buf, Transfer::Srgb);
@@ -140,8 +152,13 @@ fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, dept
             // through the document tone curve (fitted on the corpus).
             let m = 2f32.powf(*exposure);
             let g = gamma.max(0.01);
-            let transfer = transfer.for_exposure();
             let hdr = depth == Some(SampleType::F32);
+            // The toe would darken inputs 1..4 of an identity Exposure, which Photoshop leaves as they are.
+            if !hdr && m == 1.0 && *offset == 0.0 && g == 1.0 {
+                return;
+            }
+            let transfer = transfer.for_exposure();
+            let toe = transfer == Transfer::Gamma(2.2);
             map_rgb(buf, |c| {
                 c.map(|v| {
                     if hdr {
@@ -152,7 +169,7 @@ fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, dept
                     }
                     let lin = (transfer.decode(v) * m + offset).max(0.0);
                     let lin = if g == 1.0 { lin } else { lin.powf(1.0 / g) };
-                    transfer.encode(lin).clamp(0.0, 1.0)
+                    if toe { exposure_encode(lin) } else { transfer.encode(lin) }.clamp(0.0, 1.0)
                 })
             })
         }
