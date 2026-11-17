@@ -1647,3 +1647,27 @@ fn selective_color_editor_survives_malformed_params() {
     assert!(row.as_array().is_some_and(|a| a.len() == 4 && a.iter().all(Value::is_number)), "rebuilt as four numbers: {row}");
     assert!(row[1].as_f64().unwrap() > 0.0);
 }
+
+/// #13496: Levels and Curves histograms (and Levels Auto) follow the active selection.
+#[test]
+fn levels_and_curves_histograms_follow_the_selection() {
+    for cmd in ["image.adjustments.levels", "image.adjustments.curves"] {
+        let mut app = app_with_image();
+        app.run("select.rect", json!({"x": 0, "y": 0, "width": 32, "height": 48})).unwrap();
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        let id = open(h.state_mut(), cmd).unwrap();
+        h.run_steps(2);
+        let (_, _, _, hist) = h.state().tone_hist.as_ref().expect("dialog populated tone_hist").clone();
+        assert_eq!(hist.pixel_count, 32 * 48, "{cmd}: only the selected half should be counted");
+        assert_eq!(hist.ch[0][255], 0, "{cmd}: unselected white half should not appear in the histogram");
+        if cmd == "image.adjustments.levels" {
+            let auto = h.get_by_label("Auto").rect();
+            let click =
+                |pressed| egui::Event::PointerButton { pos: auto.center(), button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+            input(&mut h, egui::Modifiers::NONE, &[egui::Event::PointerMoved(auto.center()), click(true), click(false)]);
+            let in_white = field(&h, id, "inWhite").as_f64().unwrap();
+            assert!(in_white < 200.0, "Levels Auto should snap to the selected region (max 176), got {in_white}");
+        }
+    }
+}

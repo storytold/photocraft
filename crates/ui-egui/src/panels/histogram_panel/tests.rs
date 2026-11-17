@@ -537,17 +537,26 @@ fn the_panel_reports_the_selection_size_over_transparent_pixels() {
     frame(&mut app);
 }
 
-/// The tone editors' histogram shows the adjustment's whole input (Photoshop's dialogs are not
-/// selection-masked), so a selection change — view-only, no pixels moved — keeps the cached
-/// histogram (#125). The panel's masked histogram is covered above.
+/// The tone editors' histogram tracks the active selection, so changing the selection updates the
+/// cached histogram while an unchanged selection reuses it (#13496).
 #[test]
-fn the_tone_histogram_cache_ignores_selection_changes() {
+fn the_tone_histogram_cache_tracks_selection_changes() {
     let mut app = app_with(json!({"width": 64, "height": 64}));
+    app.run("select.rect", json!({"x": 0, "y": 0, "width": 32, "height": 64})).unwrap();
+    app.run("edit.fill", json!({"color": "#000000"})).unwrap();
+    app.run("select.deselect", json!({})).unwrap();
     let src = tone::IMAGE;
     let first = tone::histograms(&mut app, src, ToneSpace::Rgb);
     assert!(Arc::ptr_eq(&first, &tone::histograms(&mut app, src, ToneSpace::Rgb)), "unchanged state reuses the cache");
-    app.run("select.rect", json!({"x": 0, "y": 0, "width": 8, "height": 8})).unwrap();
-    assert!(Arc::ptr_eq(&first, &tone::histograms(&mut app, src, ToneSpace::Rgb)), "a selection change is view-only for the whole-input histogram");
+    assert_eq!(first.pixel_count, 64 * 64);
+    app.run("select.rect", json!({"x": 0, "y": 0, "width": 32, "height": 64})).unwrap();
+    let selected = tone::histograms(&mut app, src, ToneSpace::Rgb);
+    assert!(!Arc::ptr_eq(&first, &selected), "a selection change recomputes the tone histogram");
+    assert_eq!(selected.pixel_count, 32 * 64);
+    assert_eq!(selected.ch[0][255], 0);
     app.run("select.deselect", json!({})).unwrap();
-    assert!(Arc::ptr_eq(&first, &tone::histograms(&mut app, src, ToneSpace::Rgb)), "deselecting keeps it too");
+    let deselected = tone::histograms(&mut app, src, ToneSpace::Rgb);
+    assert!(!Arc::ptr_eq(&selected, &deselected), "deselecting restores the whole-image histogram");
+    assert_eq!(deselected.pixel_count, 64 * 64);
+    assert!(deselected.ch[0][255] > 0);
 }
