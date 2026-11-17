@@ -77,9 +77,9 @@ fn the_width_and_height_given_shape_the_rows() {
     let doc = &s.active().unwrap().doc;
     assert_eq!((doc.size.width, doc.size.height), (8, 2));
     let surface = doc.layers[0].surface().unwrap();
-    // Row 2 starts at the ninth byte, `r`.
+    // Row 1 is `hello wo`, row 2 starts at the ninth byte, `r`.
     assert_eq!((surface.pixel(0, 1)[0] * 255.0).round() as u8, b'r');
-    assert_eq!((surface.pixel(7, 0)[0] * 255.0).round() as u8, b'w');
+    assert_eq!((surface.pixel(7, 0)[0] * 255.0).round() as u8, b'o');
     assert_eq!(gray_bytes(&s), NOTES);
 }
 
