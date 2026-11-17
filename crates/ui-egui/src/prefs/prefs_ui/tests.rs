@@ -102,7 +102,7 @@ fn seed(files: &MemoryFiles, saved: &Value, version: Option<u32>) {
     if let (Some(map), Some(version)) = (saved.as_object_mut(), version) {
         map.insert("schema_version".into(), json!(version));
     }
-    files.write(&config_path(), &toml::to_string(&saved).unwrap()).unwrap();
+    files.write(&config_path(), &toml_edit::ser::to_string(&saved).unwrap()).unwrap();
 }
 
 /// The settings file as JSON; `null` while nothing was written.
