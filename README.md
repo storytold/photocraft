@@ -13,6 +13,13 @@
 
 <h1 align="center">PhotoCraft</h1>
 
+> **PhotoCraftAI Fork**：这个仓库在原版 PhotoCraft 里内置了右侧 AI 操作面板，
+> 支持 DeepSeek / Qwen / OpenAI，能真实点菜单、选工具、建图层。
+> 快速开始与架构见 **[README-AI.md](README-AI.md)**。
+>
+> ![PhotoCraftAI](ai-agent/docs/native-panel.jpg)
+
+
 <p align="center">
   <b>Image editing; an open-source, clean-room reimplementation of Adobe Photoshop, rebuilt in pure Rust.</b><br>
   Layers, masks, adjustment layers, layer styles, type, vectors, brushes and real PSD files,<br>

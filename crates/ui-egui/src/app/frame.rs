@@ -311,6 +311,7 @@ impl PhotocraftApp {
         if chrome && self.ui.panels.status_bar && !home {
             panels::status_bar(self, ui);
         }
+        self.ai_chat.panel(ui);
         let toolbar_shown = ((chrome && self.ui.panels.toolbar) || tabbed_in) && !home;
         // craft-ui's layout holds the canvas as its protected `canvas` panel.
         let docking = ((chrome && self.ui.panels.dock) || tabbed_in) && !home;
@@ -388,6 +389,7 @@ impl PhotocraftApp {
         if self.custom_titlebar {
             titlebar::resize_zones(ui);
         }
+        self.ai_chat.overlay(&ctx);
         // A device lost while drawing this frame: switch to the CPU canvas before the next one.
         gpu_status::check(self, &ctx);
         // The Brush Preset picker's view (its gear's card parts and the footer scale) is

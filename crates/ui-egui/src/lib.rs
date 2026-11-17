@@ -25,6 +25,7 @@ macro_rules! tl {
     };
 }
 mod brush_mode_menu;
+mod ai_chat;
 pub mod canvas;
 pub mod control;
 pub mod dialogs;
@@ -353,6 +354,8 @@ pub struct PhotocraftApp {
     pub session: Session,
     pub ui: UiState,
     pub services: Services,
+    /// In-app 说画 AI chat panel (floating right).
+    pub ai_chat: ai_chat::AiChat,
     /// Canvas caches per (document, display): CPU textures hold monitor values; the GPU
     /// canvas state is shared (`canvas::GPU_OUTPUT`).
     canvases: HashMap<(DocId, u32), canvas::CanvasCache>,

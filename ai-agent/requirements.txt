@@ -1,0 +1,12 @@
+# Official MCP Python SDK (stdio client + pydantic models).
+mcp>=2.0,<3
+
+# FastAPI backend
+fastapi>=0.115
+uvicorn>=0.30
+
+# OpenAI-compatible client: DeepSeek / Qwen (DashScope) / OpenAI
+openai>=1.40
+
+# .env loading
+python-dotenv>=1.0

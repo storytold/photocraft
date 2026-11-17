@@ -44,6 +44,7 @@ impl PhotocraftApp {
             session,
             ui: UiState::default(),
             services,
+            ai_chat: crate::ai_chat::AiChat::default(),
             canvases: HashMap::new(),
             navigator_textures: HashMap::new(),
             display_memo: HashMap::new(),
