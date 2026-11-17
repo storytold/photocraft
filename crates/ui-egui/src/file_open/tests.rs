@@ -170,7 +170,7 @@ fn the_web_opens_every_selected_file() {
     // Each good file is its own tab; the broken one is reported without stopping the rest.
     let names: Vec<_> = app.session.documents().iter().map(|st| st.doc.name.as_str()).collect();
     assert_eq!(names, ["one.png", "two.jpg"]);
-    assert!(app.ui.notices.iter().any(|n| n.error && n.title.contains("broken.png")), "{:?}", app.ui.notices);
+    assert!(open_error_messages(&app).iter().any(|message| message.contains("broken.png")), "{:?}", app.ui.dialogs);
 }
 
 /// #5749: the web shell reads dropped files itself, so it asks where they landed: image files
@@ -401,7 +401,7 @@ fn open_failures_are_errors_and_leave_no_document() {
     assert!(app.ui.recent_files.is_empty());
     assert!(app.ui.status_error);
     assert!(app.ui.status.starts_with("Couldn't open broken.psd"), "{}", app.ui.status);
-    assert!(app.ui.notices.last().is_some_and(|n| n.error));
+    assert_eq!(open_error_messages(&app).len(), 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -414,8 +414,11 @@ fn a_picked_file_that_cannot_be_read_is_reported_like_any_open_failure() {
     answer(&mut app);
     assert!(app.session.documents().is_empty());
     assert!(app.ui.status_error);
-    let notice = app.ui.notices.last().unwrap();
-    assert!(notice.error && notice.title.starts_with("Couldn't open big.psb: "), "{}", notice.title);
+    let messages = open_error_messages(&app);
+    assert_eq!(messages.len(), 1);
+    assert!(messages[0].starts_with("Couldn't open big.psb: "), "{}", messages[0]);
+    let alert = app.ui.dialogs.last().unwrap().id;
+    crate::dialogs::confirm(&mut app, alert).unwrap();
     // Commands that read a picked file (scripts, notes, Place) fail with the file's name.
     app.ui.status_error = false;
     app.pick_file_bytes(|_, _, _| Err("read".into())).unwrap();
@@ -436,7 +439,8 @@ fn open_paths_reports_each_failure_without_panicking() {
     assert_eq!(n, 0);
     assert!(app.session.documents().is_empty());
     assert!(app.ui.status_error);
-    assert_eq!(app.ui.notices.len(), notices::MAX_NOTICES);
+    assert_eq!(open_error_messages(&app).len(), 4, "every failing path has its own alert");
+    assert!(app.ui.notices.is_empty());
     // Bad control params error instead of panicking.
     let ctx = egui::Context::default();
     assert!(menus::invoke(&mut app, &ctx, "file.open", json!({ "path": "" })).is_err());
@@ -545,7 +549,7 @@ fn dropped_files_open_with_path_and_recent() {
     assert_eq!(app.session.documents()[1].path, None);
     assert_eq!(app.ui.recent_files, vec![abs_s]);
     assert!(app.ui.status_error);
-    assert_eq!(app.ui.notices.iter().filter(|n| n.error).count(), 2);
+    assert_eq!(open_error_messages(&app).len(), 2);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1860,6 +1864,10 @@ fn error_titles(app: &PhotocraftApp) -> Vec<String> {
     app.ui.notices.iter().filter(|n| n.error).map(|n| n.title.clone()).collect()
 }
 
+fn open_error_messages(app: &PhotocraftApp) -> Vec<String> {
+    app.ui.dialogs.iter().filter(|d| d.kind == crate::state::DialogKind::Error).map(|d| d.fields["message"].as_str().unwrap().to_owned()).collect()
+}
+
 /// The Home screen (no document open) is where a first drop lands: every file opens as its own
 /// document, in drop order, whatever the type, and nothing is placed.
 #[test]
@@ -1882,6 +1890,7 @@ fn files_dropped_with_no_document_open_all_open() {
     assert_eq!(doc_names(&app), names);
     assert!(app.drop_places.is_empty());
     assert!(error_titles(&app).is_empty(), "{:?}", app.ui.notices);
+    assert!(open_error_messages(&app).is_empty(), "{:?}", app.ui.dialogs);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1899,7 +1908,7 @@ fn a_dropped_folder_is_refused_with_a_clear_message() {
     let (mut app, _) = app_with(Vec::new());
     app.open_dropped(&ctx, vec![dropped(folder.clone(), Err("read from the path".into())), dropped(file, Err("read from the path".into()))], None);
     assert_eq!(doc_names(&app), ["ok.psd"]);
-    let errors = error_titles(&app);
+    let errors = open_error_messages(&app);
     assert_eq!(errors.len(), 1, "{errors:?}");
     assert!(errors[0].starts_with("Couldn't open Holiday photos: ") && errors[0].contains("folder"), "{errors:?}");
     // On the canvas: not queued for placing, and the layers stay as they were.
@@ -1927,7 +1936,7 @@ fn a_dropped_file_that_is_not_an_image_reports_why() {
     app.open_dropped(&ctx, vec![dropped(file.clone(), Err("read from the path".into()))], None);
     assert!(app.session.documents().is_empty());
     assert!(app.ui.status_error);
-    assert!(error_titles(&app).iter().any(|t| t.starts_with("Couldn't open notes.txt: ")), "{:?}", app.ui.notices);
+    assert!(open_error_messages(&app).iter().any(|t| t.starts_with("Couldn't open notes.txt: ")), "{:?}", app.ui.dialogs);
     let mut app = app_with_canvas();
     let layers = layer_count(&app);
     app.open_dropped(&ctx, vec![dropped(file, Err("read from the path".into()))], Some(egui::pos2(300.0, 300.0)));
@@ -1962,7 +1971,7 @@ fn several_files_dropped_on_the_canvas_are_queued_in_order() {
         })
         .collect();
     assert_eq!(queued, ["one.png", "two.jpg"]);
-    assert!(error_titles(&app).iter().any(|t| t.starts_with("Couldn't open set.abr: ")), "{:?}", app.ui.notices);
+    assert!(open_error_messages(&app).iter().any(|t| t.starts_with("Couldn't open set.abr: ")), "{:?}", app.ui.dialogs);
 }
 
 #[test]
@@ -1997,7 +2006,10 @@ fn open_as_smart_object_dialog_opens_one_document_per_selected_file() {
 
     assert_eq!(app.session.documents().iter().map(|d| d.doc.name.as_str()).collect::<Vec<_>>(), ["one-1", "two-1"]);
     assert!(app.session.documents().iter().all(|d| d.path.is_none() && d.doc.layers.len() == 1));
-    assert!(app.ui.notices.iter().any(|n| n.error && n.title.starts_with("Couldn't open bad.png")), "the unreadable file is reported");
+    assert!(
+        open_error_messages(&app).iter().any(|message| message == "Could not open \"bad.png\" because PhotoCraft does not recognize this type of file."),
+        "the unreadable file is reported"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -2019,7 +2031,10 @@ fn open_as_smart_object_opens_in_the_background_in_name_order() {
     tick_until(&mut app, &ctx, |app| app.jobs.opens.is_empty());
     assert_eq!(app.session.documents().iter().map(|d| d.doc.name.as_str()).collect::<Vec<_>>(), ["one-1", "two-1"]);
     assert!(app.session.documents().iter().all(|d| d.path.is_none() && d.doc.layers.len() == 1));
-    assert!(app.ui.notices.iter().any(|n| n.error && n.title.starts_with("Couldn't open bad.png")), "the unreadable file is reported");
+    assert!(
+        open_error_messages(&app).iter().any(|message| message == "Could not open \"bad.png\" because PhotoCraft does not recognize this type of file."),
+        "the unreadable file is reported"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
