@@ -394,8 +394,7 @@ mod tests {
         assert_eq!(shape(&first), shape(&build_slots(&default)), "the cached slots are the built ones");
         assert!(Rc::ptr_eq(&first, &slots(&default)), "the same layout is served from the cache");
 
-        let mut changed = ToolbarCustomization::default();
-        changed.hidden = vec!["Brush".to_string()];
+        let changed = ToolbarCustomization { hidden: vec!["Brush".to_string()], ..ToolbarCustomization::default() };
         let after = slots(&changed);
         assert_eq!(shape(&after), shape(&build_slots(&changed)), "a changed layout builds its own slots");
         assert_ne!(shape(&after), shape(&first), "hiding a tool changes the slots");
