@@ -121,11 +121,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
             lbl(ui, label);
             sides_alert = sides_field(ui, label, &mut o.polygon_sides);
         }
-        Tool::Triangle => {
-            crate::widgets::vline(ui, 22.0);
-            // Only a shape layer has pixel edges to align: greyed in Path mode (and in a pixels mode).
-            ui.add_enabled_ui(o.shape_mode == "shape", |ui| crate::widgets::checkbox(ui, &mut o.align_edges, tl!("Align Edges")));
-        }
+        Tool::Triangle => align_edges_checkbox(ui, o),
         Tool::Line => {
             crate::widgets::vline(ui, 22.0);
             lbl(ui, tl!("Weight:"));
@@ -134,6 +130,8 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
         Tool::CustomShape => {
             crate::widgets::vline(ui, 22.0);
             crate::preset_panels::shape_picker(app, ui);
+            // At the bar's right end, after the Shape picker (#13470).
+            align_edges_checkbox(ui, &mut app.ui.tool_options);
         }
         _ if matches!(tool, Tool::PathSelection | Tool::DirectSelection) => {
             if let Some(photocraft_doc::LiveShape::Rect { radii, .. }) = target.as_ref().and_then(|s| s.live.as_ref()) {
@@ -201,6 +199,13 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
     }
     range_alert(app, radius_alert, RADIUS_RANGE_ALERT);
     range_alert(app, sides_alert, SIDES_RANGE_ALERT);
+}
+
+/// The Triangle and Custom Shape tools' Align Edges checkbox (#13370, #13470). Only a shape layer
+/// has pixel edges to align, so it is greyed in Path mode (and in a pixels mode).
+fn align_edges_checkbox(ui: &mut egui::Ui, o: &mut crate::state::ToolOptions) {
+    crate::widgets::vline(ui, 22.0);
+    ui.add_enabled_ui(o.shape_mode == "shape", |ui| crate::widgets::checkbox(ui, &mut o.align_edges, tl!("Align Edges")));
 }
 
 /// The Rectangle tool's corner radius in px, as the reference takes it (#13336).

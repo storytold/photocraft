@@ -267,6 +267,9 @@ mod ellipse_path_menus_tests;
 mod triangle_align_edges_tests;
 
 #[cfg(test)]
+mod custom_shape_align_edges_tests;
+
+#[cfg(test)]
 mod triangle_shift_equilateral_tests;
 
 #[cfg(test)]
