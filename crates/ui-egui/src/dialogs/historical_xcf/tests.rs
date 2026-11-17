@@ -1,4 +1,5 @@
 use super::*;
+use crate::dialogs::historical_sample_order::tests_support::{cancel, confirm, dialogs, profile_id, set_order};
 use crate::historical_xcf_fixture as fixture;
 
 fn app() -> PhotocraftApp {
@@ -14,10 +15,9 @@ fn app() -> PhotocraftApp {
 }
 
 fn choose(app: &mut PhotocraftApp, choice: &str) {
-    let dialog = app.ui.dialogs.iter_mut().find(|dialog| owns(&dialog.fields)).unwrap();
-    dialog.fields.insert("historicalXcfSampleOrder".into(), json!(choice));
-    let id = dialog.id;
-    crate::dialogs::confirm(app, id).unwrap();
+    let id = dialogs(app).into_iter().find(|dialog| owns(&dialog.fields)).unwrap().id;
+    set_order(app, id, json!(choice));
+    confirm(app, id).unwrap();
 }
 
 fn assert_pixel(app: &PhotocraftApp) {
@@ -37,7 +37,7 @@ fn explicit_historical_orders_open_exact_native_samples_and_never_preselect() {
         let mut app = app();
         app.open_file("/source/renamed.dat", &fixture::historical_pixel(little)).unwrap();
         assert!(app.session.documents().is_empty());
-        let dialog = app.ui.dialogs.iter().find(|dialog| owns(&dialog.fields)).unwrap();
+        let dialog = dialogs(&app).into_iter().find(|dialog| owns(&dialog.fields)).unwrap();
         assert_eq!(dialog.fields["historicalXcfSampleOrder"], Value::Null);
         assert!(!can_confirm(&dialog.fields));
         assert!(app.show_if_open("/source/renamed.dat"));
@@ -56,17 +56,17 @@ fn missing_or_invalid_choice_keeps_dialog_source_and_document_unchanged_then_can
     app.run("file.new", json!({"width":2,"height":2})).unwrap();
     let control = app.session.active().unwrap().doc.clone();
     app.open_bytes("old.xcf", &fixture::historical_pixel(true)).unwrap();
-    let dialog = app.ui.dialogs.iter().find(|dialog| owns(&dialog.fields)).unwrap().id;
+    let dialog = dialogs(&app).into_iter().find(|dialog| owns(&dialog.fields)).unwrap().id;
     for invalid in [Value::Null, json!("native"), json!(true)] {
-        app.ui.dialog_mut(dialog).unwrap().fields.insert("historicalXcfSampleOrder".into(), invalid);
-        assert!(crate::dialogs::confirm(&mut app, dialog).is_err());
-        assert!(app.ui.dialog_mut(dialog).is_some());
+        set_order(&mut app, dialog, invalid);
+        assert!(confirm(&mut app, dialog).is_err());
+        assert!(app.framework.dialogs.stack().contains(dialog));
         assert_eq!(app.historical_opens.len(), 1);
         assert_eq!(app.session.documents().len(), 1);
         assert!(std::sync::Arc::ptr_eq(&control, &app.session.active().unwrap().doc));
     }
     let source = app.historical_opens[0].id;
-    crate::dialogs::cancel(&mut app, dialog).unwrap();
+    cancel(&mut app, dialog).unwrap();
     assert!(app.historical_opens.is_empty());
     assert!(app.prompt_order.is_empty());
     assert!(!app.session.cancel_historical_xcf_open(source));
@@ -125,7 +125,7 @@ fn direct_historical_completion_leaves_next_historical_ahead_of_unrelated_decode
     assert_eq!(app.held_opens[0].name, "later");
     assert_eq!(app.session.documents().len(), 1);
     assert_eq!(app.session.active().unwrap().doc.id, document);
-    assert_eq!(app.ui.dialogs[0].fields[FIELD], 102);
+    assert_eq!(dialogs(&app)[0].fields[FIELD], 102);
 }
 
 #[test]
@@ -142,7 +142,7 @@ fn resumed_held_completion_replaces_only_its_own_reservation() {
     assert_eq!(app.held_opens[0].name, "later");
     assert_eq!(app.session.documents().len(), 1);
     assert_eq!(app.session.active().unwrap().doc.id, document);
-    assert_eq!(app.ui.dialogs[0].fields[FIELD], 102);
+    assert_eq!(dialogs(&app)[0].fields[FIELD], 102);
 }
 
 #[test]
@@ -154,7 +154,7 @@ fn failed_resumed_completion_does_not_claim_an_unrelated_held_open() {
     assert_eq!(app.held_opens.len(), 1);
     assert_eq!(app.held_opens[0].name, "later");
     assert!(app.session.documents().is_empty());
-    assert_eq!(app.ui.dialogs[0].fields[FIELD], 102);
+    assert_eq!(dialogs(&app)[0].fields[FIELD], 102);
 }
 
 #[test]
@@ -186,8 +186,8 @@ fn historical_resume_keeps_its_position_before_later_file_and_profile_prompt() {
         }
         assert!(app.session.documents().is_empty());
         assert_eq!(app.held_opens.front().unwrap().name, "first.xcf");
-        let prompt = app.ui.dialogs.iter().find(|dialog| crate::open_prompt::owns(&dialog.fields)).unwrap().id;
-        crate::dialogs::confirm(&mut app, prompt).unwrap();
+        let prompt = profile_id(&app);
+        confirm(&mut app, prompt).unwrap();
         assert_eq!(app.session.documents().iter().map(|state| state.doc.name.as_str()).collect::<Vec<_>>(), ["first.xcf", "later"]);
         app.session.set_active(0);
         assert_pixel(&app);
@@ -221,13 +221,13 @@ fn earlier_profile_prompt_stays_ahead_of_historical_choice() {
     first.name = "earlier".into();
     first.question = Some(json!({"missing":true,"working":"sRGB"}));
     crate::open_prompt::arrive(&mut app, first);
-    let earlier = app.ui.dialogs[0].id;
+    let earlier = dialogs(&app)[0].id;
     app.open_bytes("historical.xcf", &fixture::historical_pixel(false)).unwrap();
-    assert_eq!(app.ui.dialogs.len(), 1);
-    assert!(!owns(&app.ui.dialogs[0].fields));
-    crate::dialogs::confirm(&mut app, earlier).unwrap();
+    assert_eq!(dialogs(&app).len(), 1);
+    assert!(!owns(&dialogs(&app)[0].fields));
+    confirm(&mut app, earlier).unwrap();
     assert_eq!(app.session.documents().len(), 1);
-    assert!(owns(&app.ui.dialogs[0].fields));
+    assert!(owns(&dialogs(&app)[0].fields));
     choose(&mut app, "big-endian");
     assert_pixel(&app);
     assert_eq!(app.session.documents().len(), 2);
@@ -248,7 +248,7 @@ fn automation_open_forwards_choice_before_read_and_preserves_source_protection()
         let ctx = egui::Context::default();
         for choice in [json!("invalid"), json!(order)] {
             let (request, _) = crate::control::ControlRequest::new("app.open", json!({"path":"source.xcf","historicalXcfSampleOrder":choice}));
-            let crate::control::Outcome::Done(reply) = crate::control::handle(&mut app, &ctx, &request) else { panic!("immediate") };
+            let crate::control::Reply::Done(reply) = crate::control::handle(&mut app, &ctx, &request) else { panic!("immediate") };
             if choice == "invalid" {
                 assert_eq!(reply["ok"], false);
                 assert_eq!(reads.get(), 0);
@@ -272,13 +272,13 @@ fn refused_historical_start_restores_choice_ahead_of_later_open_then_retries_ret
     app.open_file("/source/retained.xcf", &fixture::historical_pixel(false)).unwrap();
     let source = app.historical_opens[0].id;
     crate::open_prompt::arrive(&mut app, later_document());
-    let dialog = app.ui.dialogs.iter_mut().find(|dialog| owns(&dialog.fields)).unwrap();
-    dialog.fields.insert("historicalXcfSampleOrder".into(), json!("big-endian"));
-    let dialog_id = dialog.id;
+    let dialog_id = dialogs(&app).into_iter().find(|dialog| owns(&dialog.fields)).unwrap().id;
+    set_order(&mut app, dialog_id, json!("big-endian"));
     let cancelled = photocraft_engine::jobs::JobCtx::new();
     cancelled.cancel();
     app.session.set_inline_job_ctx(Some(cancelled));
-    assert!(crate::dialogs::confirm(&mut app, dialog_id).is_err());
+    confirm(&mut app, dialog_id).unwrap();
+    assert!(app.ui.status_error);
     assert!(app.session.holds_historical_xcf_open(source));
     assert_eq!(app.historical_opens.len(), 1);
     assert_eq!(app.historical_opens[0].id, source);
@@ -286,7 +286,7 @@ fn refused_historical_start_restores_choice_ahead_of_later_open_then_retries_ret
     assert_eq!(app.held_opens.len(), 1, "the later decoded file cannot pass the retry choice");
     assert_eq!(app.session.documents().len(), 1);
     assert!(std::sync::Arc::ptr_eq(&original, &app.session.active().unwrap().doc));
-    let retry = app.ui.dialogs.iter().find(|dialog| owns(&dialog.fields)).unwrap();
+    let retry = dialogs(&app).into_iter().find(|dialog| owns(&dialog.fields)).unwrap();
     assert_eq!(retry.fields[FIELD], source);
     assert_eq!(retry.fields["historicalXcfSampleOrder"], Value::Null, "a recreated choice requires an explicit answer");
     app.session.set_inline_job_ctx(None);
@@ -300,4 +300,12 @@ fn refused_historical_start_restores_choice_ahead_of_later_open_then_retries_ret
     app.session.set_active(1);
     assert_pixel(&app);
     assert!(std::sync::Arc::ptr_eq(&original, &app.session.documents()[0].doc));
+}
+
+fn owns(fields: &serde_json::Map<String, Value>) -> bool {
+    fields.contains_key(FIELD)
+}
+
+fn can_confirm(fields: &serde_json::Map<String, Value>) -> bool {
+    matches!(fields.get("historicalXcfSampleOrder").and_then(Value::as_str), Some("little-endian" | "big-endian"))
 }

@@ -47,7 +47,7 @@ fn background_open_action_invalidates_saved_path_keeps_pixels_warns_and_continue
     )
     .unwrap();
     arrive(&mut app, held(document("earlier"), "earlier.pcraft", Some(json!({"missing":true,"working":"sRGB"}))));
-    let profile_prompt = app.ui.dialogs.iter().find(|dialog| owns(&dialog.fields)).unwrap().id;
+    let profile_prompt = crate::dialogs::historical_sample_order::tests_support::profile_id(&app);
 
     let mut imported = document("embedded original name");
     imported.layers[0].surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(0, 0, 2, 2), &[0.2, 0.4, 0.6, 1.]);
@@ -108,7 +108,7 @@ fn background_open_action_invalidates_saved_path_keeps_pixels_warns_and_continue
     let later = document("later");
     let later_id = later.id;
     arrive(&mut app, held(later, "later.pcraft", None));
-    crate::dialogs::confirm(&mut app, profile_prompt).unwrap();
+    crate::dialogs::confirm(&mut app, &egui::Context::default(), profile_prompt).unwrap();
 
     assert_eq!(app.session.documents().len(), 4, "the optional view failure must retain the imported pixels and every queued document");
     let imported = app.session.documents().iter().find(|state| state.doc.id == imported_id).unwrap();
@@ -124,7 +124,7 @@ fn background_open_action_invalidates_saved_path_keeps_pixels_warns_and_continue
     assert!(Arc::ptr_eq(&control, &state.doc), "an optional view failure cannot change an accepted document");
     assert_eq!((state.path.clone(), state.revision, state.saved_revision, state.history.past_len()), identity);
     assert!(app.ui.recent_files.iter().any(|path| path == source_path), "the pixels opened successfully from this source");
-    assert!(app.ui.notices.iter().all(|notice| !notice.error));
+    assert!(app.ui.notices.iter().all(|notice| notice.tone != craft::theme::variant::Tone::Bad));
     let warnings: Vec<_> =
         app.ui.notices.iter().filter(|notice| notice.lines.iter().any(|line| line.contains("Native initial view was not applied"))).collect();
     assert_eq!(warnings.len(), 1);

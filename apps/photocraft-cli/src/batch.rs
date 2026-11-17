@@ -2,7 +2,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use photocraft_automation::Headless;
-use photocraft_engine::actions_cmds::Action;
+use photocraft_engine::actions_cmds::{Action, ActionList, ActionsFile};
 use photocraft_io::ExportOptions;
 use serde_json::json;
 
@@ -35,8 +35,8 @@ pub(crate) fn is_input(p: &Path) -> bool {
 fn strip_shell_steps(action: &mut Action) {
     use photocraft_engine::actions_cmds::{shell_save_command, shell_view_command};
     let (mut steps, mut disabled, mut dialogs) = (Vec::new(), std::collections::BTreeSet::new(), std::collections::BTreeSet::new());
-    for (i, (id, p)) in std::mem::take(&mut action.steps).into_iter().enumerate() {
-        if shell_save_command(&id) || shell_view_command(&id) {
+    for (i, step) in std::mem::take(&mut action.steps).into_iter().enumerate() {
+        if shell_save_command(&step.command) || shell_view_command(&step.command) {
             continue;
         }
         if action.disabled.contains(&i) {
@@ -45,7 +45,7 @@ fn strip_shell_steps(action: &mut Action) {
         if action.dialogs.contains(&i) {
             dialogs.insert(steps.len());
         }
-        steps.push((id, p));
+        steps.push(step);
     }
     (action.steps, action.disabled, action.dialogs) = (steps, disabled, dialogs);
 }
@@ -129,7 +129,7 @@ pub(crate) fn batch(a: &BatchArgs, out: &mut dyn Write, err: &mut dyn Write) -> 
             }
             // Steps that play another action find it in the set; the session's playback stack
             // stops an action that calls itself.
-            h.session.actions.list = set.clone();
+            h.session.actions.list = ActionList::from_file(ActionsFile::new(set.clone(), Vec::new()));
             h.open_with_parameters(input, &json!({"approveHighMemory":a.approve_high_memory,"historicalXcfSampleOrder":a.historical_xcf_sample_order}))?;
             for (id, p) in &actions {
                 if photocraft_engine::actions_cmds::shell_view_command(id)

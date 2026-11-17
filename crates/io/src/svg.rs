@@ -95,8 +95,13 @@ fn fonts() -> Arc<usvg::fontdb::Database> {
         for f in photocraft_text::CRAFT_FONTS {
             db.load_font_data(f.bytes.to_vec());
         }
+        // The same installed files the shaper registers: one scan serves both.
         #[cfg(not(target_arch = "wasm32"))]
-        db.load_system_fonts();
+        {
+            for path in photocraft_text::fonts::installed_font_files() {
+                let _ = db.load_font_file(path);
+            }
+        }
         resolve_generic_families(&mut db, system_generic_family);
         Arc::new(db)
     })

@@ -3,7 +3,7 @@ use crate::{PhotocraftApp, open_prompt::PromptKind};
 use photocraft_engine::jobs::{JobId, Started};
 use serde_json::{Value, json};
 
-const FIELD: &str = "__historicalXcfOpen";
+pub(super) const FIELD: &str = "__historicalXcfOpen";
 
 pub(crate) struct Historical {
     pub id: u64,
@@ -16,14 +16,6 @@ pub(crate) struct Historical {
     pub job: Option<JobId>,
 }
 
-pub(crate) fn owns(fields: &serde_json::Map<String, Value>) -> bool {
-    fields.contains_key(FIELD)
-}
-
-pub(crate) fn can_confirm(fields: &serde_json::Map<String, Value>) -> bool {
-    !owns(fields) || matches!(fields.get("historicalXcfSampleOrder").and_then(Value::as_str), Some("little-endian" | "big-endian"))
-}
-
 pub(crate) fn arrive(app: &mut PhotocraftApp, held: Historical) {
     app.prompt_order.push_back(PromptKind::Historical(held.id));
     app.historical_opens.push(held);
@@ -32,29 +24,7 @@ pub(crate) fn arrive(app: &mut PhotocraftApp, held: Historical) {
 
 pub(crate) fn show(app: &mut PhotocraftApp, id: u64) {
     let Some(held) = app.historical_opens.iter().find(|held| held.id == id) else { return };
-    let fields = [
-        (FIELD.into(), json!(id)),
-        ("__label".into(), json!("Historical XCF sample order")),
-        ("name".into(), json!(held.name)),
-        ("version".into(), json!(held.version)),
-        ("bitsPerSample".into(), json!(held.bits)),
-        ("historicalXcfSampleOrder".into(), Value::Null),
-    ]
-    .into_iter()
-    .collect();
-    app.ui.open_dialog(crate::state::DialogKind::Command, fields);
-}
-
-pub(crate) fn body(ui: &mut egui::Ui, fields: &mut serde_json::Map<String, Value>) {
-    let name = fields.get("name").and_then(Value::as_str).unwrap_or_default();
-    ui.label(crate::i18n::fmt(tl!("The older XCF document “{name}” does not declare the byte order of its multibyte samples."), &[("name", name)]));
-    ui.label(tl!("Choose the sample byte order used when this file was saved. No order is selected automatically."));
-    let mut order = fields.get("historicalXcfSampleOrder").and_then(Value::as_str).unwrap_or_default().to_string();
-    ui.radio_value(&mut order, "little-endian".into(), tl!("Little-endian"));
-    ui.radio_value(&mut order, "big-endian".into(), tl!("Big-endian"));
-    if !order.is_empty() {
-        fields.insert("historicalXcfSampleOrder".into(), json!(order));
-    }
+    super::historical_sample_order::show(app, PromptKind::Historical(id), &held.name.clone(), held.version, held.bits);
 }
 
 pub(crate) fn validate(app: &PhotocraftApp, fields: &serde_json::Map<String, Value>) -> Result<(), String> {

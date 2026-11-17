@@ -5,7 +5,7 @@ use photocraft_engine::jobs::{JobCtx, JobEvent, JobId, JobOutcome, Started, Step
 use serde_json::{Value, json};
 use std::sync::Arc;
 
-const FIELD: &str = "__historicalXcfReplacement";
+pub(super) const FIELD: &str = "__historicalXcfReplacement";
 const COMMAND: &str = "layer.smartObjects.replaceContents";
 
 #[derive(Clone, Copy)]
@@ -222,14 +222,6 @@ fn replace(
     result
 }
 
-pub(crate) fn owns(fields: &serde_json::Map<String, Value>) -> bool {
-    fields.contains_key(FIELD)
-}
-
-pub(crate) fn can_confirm(fields: &serde_json::Map<String, Value>) -> bool {
-    !owns(fields) || matches!(fields.get("historicalXcfSampleOrder").and_then(Value::as_str), Some("little-endian" | "big-endian"))
-}
-
 pub(crate) fn show(app: &mut PhotocraftApp, id: u64) {
     let Some(position) = app.historical_replacements.held.iter().position(|held| held.id == id) else { return };
     let held = &app.historical_replacements.held[position];
@@ -246,17 +238,13 @@ pub(crate) fn show(app: &mut PhotocraftApp, id: u64) {
         crate::open_prompt::advance(app);
         return;
     };
-    let fields = [
-        (FIELD.into(), json!(id)),
-        ("__label".into(), json!("Historical XCF sample order")),
-        ("name".into(), json!(held.name)),
-        ("version".into(), json!(question.version)),
-        ("bitsPerSample".into(), json!(question.bits_per_sample)),
-        ("historicalXcfSampleOrder".into(), Value::Null),
-    ]
-    .into_iter()
-    .collect();
-    app.ui.open_dialog(crate::state::DialogKind::Command, fields);
+    super::historical_sample_order::show(
+        app,
+        PromptKind::Replacement(id),
+        &held.name.clone(),
+        u64::from(question.version),
+        u64::from(question.bits_per_sample),
+    );
 }
 
 pub(crate) fn validate(app: &PhotocraftApp, fields: &serde_json::Map<String, Value>) -> Result<(), String> {

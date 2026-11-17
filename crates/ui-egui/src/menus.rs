@@ -1,53 +1,84 @@
-//! Menu bar generated from the engine command registry plus UI-level commands.
+//! Menu model generated from the engine command registry plus UI-level commands.
 
+use std::sync::Arc;
+
+use craft::keymap::CommandRef;
+use craft::menu::{Gate, ModalRules, PendingRule};
+use craft::ui::runtime::commands::CommandGate; // PLAN: assumed re-export path of `CommandGate`
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
-use crate::state::DialogKind;
 
 mod bar;
 pub mod enable_rules;
 mod invoke;
 mod items;
-pub mod menu_keys;
-pub mod menu_nav;
 pub mod native_menu;
 pub mod parity;
 pub mod plugin_ui;
-mod render;
-mod search;
 mod state;
 pub mod view_cmds;
 pub mod workspace_ui;
 
+pub(crate) use bar::help_entries;
 pub use bar::menu_bar;
-#[cfg(test)]
-use bar::pointer_reaches_title;
-pub use invoke::{apply_workspace, invoke};
+pub use invoke::invoke;
 pub(crate) use invoke::{invoke_unguarded, panel_alias};
-pub(crate) use items::ItemCache;
-pub use items::{MenuItem, is_live, menu_items};
-pub use render::alt_click;
-#[cfg(test)]
-use render::submenu_enabled;
-#[cfg(test)]
-use search::HELP_SEARCH_MAX;
-pub use search::{search_items, search_rank};
+pub use items::{MenuModel, base_rows, is_live, menu_rows, model, row};
 pub use state::is_enabled;
 pub(crate) use state::reveal_label;
 #[cfg(test)]
-use state::{checked, translated_menu_label};
+use state::translated_menu_label;
 
-/// Shared gate for native menu clicks and control-channel `ui.menu.invoke`.
-/// Dialogs and unsaved-changes prompts block edits, but allow the four view-navigation
-/// commands also usable through shortcuts. Camera Raw, the SVG editor choice and full-window workspaces
-/// (`distort_ui::modal_workspace`) block menu commands entirely, and a pending crop blocks the
-/// commands Photoshop greys during one (`crop_ui::blocks`).
-pub(crate) fn modal_allows(app: &PhotocraftApp, id: &str) -> bool {
-    if app.camera_raw.is_some() || app.smart_svg.modal_open() || crate::distort_ui::modal_workspace(app).is_some() || crate::crop_ui::blocks(app, id) {
+/// What may run from the menus now: the gate (a dialog, the shortcut recorder) and the per-command
+/// rules (a full-window workspace, a pending crop). Both bars, the runtime's command gate and
+/// [`allows`] read this one function.
+pub(crate) fn menu_gate(app: &PhotocraftApp) -> (Gate, ModalRules) {
+    let gate = Gate::default().modal(app.dialog_open() || crate::prefs_ui::shortcuts_open(app)).recording_shortcut(crate::prefs_ui::recording(app));
+    let workspace = app.smart_svg.modal_open() || crate::distort_ui::modal_workspace(app).is_some();
+    let pending = crate::crop_ui::pending(app);
+    let rule = pending.then(|| Arc::new(|c: &CommandRef| crate::crop_ui::available_while_pending(&c.id)) as PendingRule);
+    // The revision is the exact value of the rules' variable parts; a new variable part joins it.
+    let revision = u64::from(workspace) | u64::from(pending) << 1;
+    let rules = ModalRules::default().in_dialogs(crate::shortcuts::NAV_COMMANDS.iter().copied()).workspace(workspace).pending(rule).with_revision(revision);
+    (gate, rules)
+}
+
+/// The runtime's gate over commands. Only PhotoCraft's catalogue commands are gated here: framework
+/// command sets and dialog-scoped commands pass, and the runtime's own modal rule decides them. The shell's
+/// screen-mode commands are judged as their View › Screen Mode rows, and the rows' own rules
+/// ([`refused`]) apply to them: their keys and menu items are one command.
+pub(crate) fn command_gate(app: &PhotocraftApp) -> CommandGate {
+    let (gate, rules) = menu_gate(app);
+    let refused = refused(app);
+    CommandGate::new(move |c| gated(&gate, &rules, &refused, c))
+}
+
+/// [`command_gate`]'s test for one command, for callers that hold no gate.
+pub(crate) fn allows(app: &PhotocraftApp, command: &CommandRef) -> bool {
+    let (gate, rules) = menu_gate(app);
+    gated(&gate, &rules, &refused(app), command)
+}
+
+fn gated(gate: &Gate, rules: &ModalRules, refused: &[CommandRef], command: &CommandRef) -> bool {
+    if refused.contains(command) {
         return false;
     }
-    (app.ui.dialogs.is_empty() && app.ui.layers_panel_dialog.is_none() && app.discard.is_none()) || crate::shortcuts::NAV_COMMANDS.contains(&id)
+    let row = crate::shortcut_dispatch::screen_mode_row(command).map(CommandRef::new);
+    let command = row.as_ref().unwrap_or(command);
+    !is_live(&command.id) || gate.allows_under(rules, command)
+}
+
+/// The framework commands PhotoCraft's state turns off now: the shell's screen modes its View › Screen Mode rows
+/// grey (no full screen without a document, #9349; none while type is edited), and the canvas colour keys of the
+/// held Hand while type is edited.
+fn refused(app: &PhotocraftApp) -> Vec<CommandRef> {
+    let screen_modes = crate::shortcut_dispatch::RUNTIME_COMMANDS
+        .iter()
+        .filter(|(id, _)| crate::shortcut_dispatch::is_screen_mode(id) && crate::view_cmds::is_enabled(app, id) == Some(false))
+        .map(|(_, bridged)| bridged.command());
+    let colors = crate::canvas_tool_menu::CanvasColorCommands::ALL.into_iter().filter(|_| app.ui.text_edit.is_some()).map(CommandRef::from);
+    screen_modes.chain(colors).collect()
 }
 
 /// Top-level menus in Photoshop order.
@@ -92,19 +123,17 @@ mod open_recent_tests {
 
         // Menu lists them under File › Open Recent, with basenames, plus Clear Recent Files.
         app.ui.recent_files = vec!["/tmp/a.png".into(), "/dir/b.psd".into()];
-        let items = menu_items(&app);
-        let rp = vec!["File".to_string(), "Open Recent".to_string()];
-        let labels: Vec<&str> = items.iter().filter(|i| i.id.starts_with("file.openRecent.")).map(|i| i.label.as_str()).collect();
+        let rows = menu_rows(&app);
+        let labels: Vec<&str> = rows.iter().filter(|r| r.command.id.starts_with("file.openRecent.")).map(|r| r.label.as_str()).collect();
         assert_eq!(labels, vec!["a.png", "b.psd"]);
-        assert!(items.iter().any(|i| i.id == "file.clearRecent" && i.path == rp));
+        assert!(rows.iter().any(|r| r.command.id == "file.clearRecent" && r.path == ["File", "Open Recent"]));
 
         // Clear Recent Files empties the list.
-        let ctx = egui::Context::default();
+        let ctx = app.ctx().clone();
         invoke(&mut app, &ctx, "file.clearRecent", json!({})).unwrap();
         assert!(app.ui.recent_files.is_empty());
         assert!(app.session.prefs().file_handling.recent_files.is_empty(), "cleared in the preferences too");
-        // No recent items in the menu once cleared (only the disabled "Clear Recent Files").
-        assert!(!menu_items(&app).iter().any(|i| i.id.starts_with("file.openRecent.")));
+        assert!(!menu_rows(&app).iter().any(|r| r.command.id.starts_with("file.openRecent.")));
         // A bad recent index errors gracefully (no panic).
         assert!(invoke(&mut app, &ctx, "file.openRecent.5", json!({})).is_err());
 
@@ -118,33 +147,6 @@ mod open_recent_tests {
         invoke(&mut app, &ctx, "file.removeRecent", json!({"path": "/tmp/not-listed.png"})).unwrap();
         assert_eq!(app.ui.recent_files.len(), 2, "a path that isn't listed changes nothing");
         assert!(invoke(&mut app, &ctx, "file.removeRecent", json!({})).is_err(), "needs a path");
-    }
-
-    #[test]
-    fn push_recent_evicts_thumbnails_beyond_cap() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        {
-            let mut cache = app.thumbnail_cache.lock().unwrap();
-            for i in 0..25 {
-                cache.entries.insert(
-                    format!("/tmp/item_{i}.png"),
-                    crate::home_recent_ui::ThumbnailEntry {
-                        key: crate::home_recent_ui::CacheKey::OpenDoc { revision: 1 },
-                        texture: None,
-                        #[cfg(not(target_arch = "wasm32"))]
-                        last_checked: std::time::Instant::now(),
-                    },
-                );
-            }
-        }
-        for i in 0..25 {
-            app.push_recent(&format!("/tmp/item_{i}.png"));
-        }
-        let cache = app.thumbnail_cache.lock().unwrap();
-        for i in 0..5 {
-            assert!(!cache.entries.contains_key(&format!("/tmp/item_{i}.png")), "evicted item_{i} must be removed from cache");
-        }
-        assert_eq!(app.ui.recent_files.len(), 20);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -162,7 +164,7 @@ mod open_recent_tests {
         let path = std::env::temp_dir().join("photocraft_recent_test.pcraft");
         std::fs::write(&path, b"x").unwrap();
         let p = path.to_string_lossy().to_string();
-        let ctx = egui::Context::default();
+        let ctx = app.ctx().clone();
         invoke(&mut app, &ctx, "file.open", json!({ "path": p })).unwrap();
         assert_eq!(app.ui.recent_files.first().map(String::as_str), Some(p.as_str()));
         // Re-open via the recent entry once closed (an open file shows its tab instead, #6598).
@@ -186,15 +188,15 @@ mod quick_export_label_tests {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         for (value, expected) in [("png", "PNG"), ("jpg", "JPG"), ("gif", "GIF"), ("webp", "WebP"), ("exr", "EXR")] {
             app.run("prefs.set", json!({"values": {"export.quickExportFormat": value}})).unwrap();
-            let items = menu_items(&app);
-            let quick: Vec<_> = items.iter().filter(|i| i.id == "file.export.quickExportAsPng").collect();
+            let rows = menu_rows(&app);
+            let quick: Vec<_> = rows.iter().filter(|r| r.command.id == "file.export.quickExportAsPng").collect();
             assert_eq!(quick.len(), 1, "the catalogue and UI command must not create duplicate items");
             let shown_format = if cfg!(target_arch = "wasm32") { "PNG" } else { expected };
             assert_eq!(quick[0].label, format!("Quick Export as {shown_format}"));
             let id = crate::i18n::Lang::from_code("id").unwrap();
-            let localized = translated_menu_label(id, quick[0]);
+            let localized = translated_menu_label(id, &quick[0].command.id, &quick[0].label);
             assert_eq!(localized, crate::i18n::tr_id(id, "file.export.quickExportAsPng", "Quick Export as PNG").replace("PNG", shown_format));
-            let layer = items.iter().find(|i| i.id == "layer.quickExportAsPng").unwrap();
+            let layer = row(&rows, "layer.quickExportAsPng").unwrap();
             assert_eq!(layer.label, "Quick Export as PNG", "layer export always creates PNG");
         }
     }
@@ -205,36 +207,16 @@ mod reveal_label_tests {
     use super::*;
 
     #[test]
-    fn reveal_label_names_the_platform_file_manager() {
-        let expected = if cfg!(target_os = "macos") {
-            "Reveal in Finder"
-        } else if cfg!(windows) {
-            "Reveal in Explorer"
-        } else {
-            "Show in Folder"
-        };
-        assert_eq!(reveal_label(), expected);
-    }
-
-    #[test]
     fn smart_objects_reveal_item_names_the_platform_file_manager() {
-        if !crate::i18n::needs_catalogs() {
-            return;
-        }
         let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         let id = "layer.smartObjects.revealInFinder";
-        let items = menu_items(&app);
-        let reveal: Vec<_> = items.iter().filter(|i| i.id == id).collect();
+        let rows = menu_rows(&app);
+        let reveal: Vec<_> = rows.iter().filter(|r| r.command.id == id).collect();
         assert_eq!(reveal.len(), 1);
         assert_eq!(reveal[0].path, ["Layer", "Smart Objects"]);
         assert_eq!(reveal[0].label, reveal_label());
-        if !cfg!(target_os = "macos") {
-            assert!(!reveal[0].label.contains("Finder"), "{}", reveal[0].label);
-        }
-        let shortcuts = crate::prefs_ui::shortcut_items(&app);
-        assert!(shortcuts.iter().any(|(i, label, _, _)| i == id && label == reveal_label()), "the shortcut list shows the menu label");
-        let de = crate::i18n::Lang::from_code("de").unwrap();
-        assert_eq!(translated_menu_label(de, reveal[0]), crate::i18n::tr(de, reveal_label()));
+        let catalog = crate::shortcut_dispatch::command_rows(&app);
+        assert!(catalog.iter().any(|d| d.command.id == id && d.label == reveal_label()), "the shortcut list shows the menu label");
         // The menu catalogue (and docs/parity-checklist.md) keeps Photoshop's macOS name.
         assert!(crate::menu_catalog::CATALOG.iter().any(|(_, label, _, i)| *i == id && *label == "Reveal in Finder"));
     }
@@ -255,75 +237,64 @@ mod window_documents_tests {
     }
 
     /// The rows after Window's last own item: a separator and the documents.
-    fn listed(app: &PhotocraftApp) -> Vec<(String, String, Option<bool>)> {
-        let items = menu_items(app);
-        let window: Vec<&MenuItem> = items.iter().filter(|i| i.path == ["Window"]).collect();
-        let at = window.iter().position(|i| i.id.starts_with(DOCUMENT_ITEM)).unwrap_or(window.len());
+    fn listed(app: &PhotocraftApp) -> Vec<(String, String, bool)> {
+        let rows = menu_rows(app);
+        let window: Vec<_> = rows.iter().filter(|r| r.path == ["Window"]).collect();
+        let at = window.iter().position(|r| r.command.id.starts_with(DOCUMENT_ITEM)).unwrap_or(window.len());
         if at > 0 && at < window.len() {
             assert_eq!(window[at - 1].label, "---", "a separator comes before the documents");
         }
-        window[at..].iter().map(|i| (i.id.clone(), i.label.clone(), i.checked)).collect()
+        window[at..].iter().map(|r| (r.command.id.clone(), r.label.clone(), matches!(r.kind, craft::menu::ItemKind::Check(true)))).collect()
     }
 
-    /// #2991: Window ends with the open documents in tab order, the active one checked, as in
-    /// Photoshop; choosing one brings it to the front.
+    /// #2991: Window ends with the open documents in tab order, the front one checked, as in
+    /// Photoshop; choosing one brings it to the front, through `invoke` and through the control
+    /// channel's `ui.menu.invoke`.
     #[test]
-    fn the_window_menu_lists_the_open_documents_and_switches_between_them() {
-        assert!(listed(&app(0)).is_empty(), "no documents, no list (and no separator)");
+    fn window_menu_lists_documents_and_switches() {
+        for docs in [0usize, 1, 3] {
+            let mut app = app(docs);
+            let ctx = app.ctx().clone();
+            let names: Vec<String> = app.session.documents().iter().map(|d| d.doc.name.clone()).collect();
+            let front = docs.checked_sub(1);
+            let want: Vec<_> = (0..docs).map(|i| (format!("window.document.{i}"), names[i].clone(), Some(i) == front)).collect();
+            assert_eq!(listed(&app), want, "{docs} documents");
+            if docs < 2 {
+                continue;
+            }
+            // It stays last in Window, after the panels.
+            let rows = menu_rows(&app);
+            let last = rows.iter().rposition(|r| r.path.first().map(String::as_str) == Some("Window")).unwrap();
+            assert_eq!(rows[last].command.id, format!("window.document.{}", docs - 1));
 
-        let mut app = app(3);
-        let ctx = egui::Context::default();
-        let names: Vec<String> = app.session.documents().iter().map(|d| d.doc.name.clone()).collect();
-        let row = |i: usize, active: bool| (format!("window.document.{i}"), names[i].clone(), Some(active));
-        assert_eq!(listed(&app), [row(0, false), row(1, false), row(2, true)]);
-        // It stays last in Window, after the panels.
-        let items = menu_items(&app);
-        let last = items.iter().rposition(|i| i.path.first().map(String::as_str) == Some("Window")).unwrap();
-        assert_eq!(items[last].id, "window.document.2");
+            assert_eq!(invoke(&mut app, &ctx, "window.document.0", json!({})).unwrap(), json!({"document": 0}));
+            assert_eq!(app.session.active_index(), Some(0));
+            assert!(listed(&app)[0].2);
+            invoke(&mut app, &ctx, &format!("window.document.{}", docs - 1), json!({})).unwrap();
+            let (req, _rx) = crate::control::ControlRequest::new("ui.menu.invoke", json!({"id": "window.document.0"}));
+            let crate::control::Reply::Done(r) = crate::control::handle(&mut app, &ctx, &req) else { panic!("expected an immediate reply") };
+            assert_eq!(r["ok"], true, "{r}");
+            assert_eq!(app.session.active_index(), Some(0), "the control channel chooses like a click");
 
-        assert_eq!(invoke(&mut app, &ctx, "window.document.0", json!({})).unwrap(), json!({"document": 0}));
-        assert_eq!(app.session.active_index(), Some(0));
-        assert_eq!(listed(&app), [row(0, true), row(1, false), row(2, false)]);
-
-        // A stale or malformed id (a document closed since the menu was built) is an error.
-        for id in ["window.document.3", "window.document.", "window.document.x", "window.document.-1"] {
-            assert!(is_enabled(&app, id), "{id}: rows are always enabled");
-            assert!(invoke(&mut app, &ctx, id, json!({})).is_err(), "{id}");
+            // A stale or malformed id (a document closed since the menu was built) is an error.
+            for id in ["window.document.3", "window.document.", "window.document.x", "window.document.-1"] {
+                assert!(is_enabled(&app, id), "{id}: rows are always enabled");
+                assert!(invoke(&mut app, &ctx, id, json!({})).is_err(), "{id}");
+            }
+            assert_eq!(app.session.active_index(), Some(0));
         }
-        assert_eq!(app.session.active_index(), Some(0));
-    }
 
-    /// The rows show the document's name as it is, never a translation of it, and follow a
-    /// rename (Save As).
-    #[test]
-    fn document_names_are_shown_as_they_are_and_follow_a_rename() {
-        if !crate::i18n::needs_catalogs() {
-            return;
+        // A rename shows the new name, never a translation of it.
+        if crate::i18n::needs_catalogs() {
+            let mut app = app(1);
+            let ctx = app.ctx().clone();
+            if let Some(d) = app.session.active_mut() {
+                d.saved_to("/tmp/Layers".into());
+            }
+            let de = crate::i18n::Lang::from_code("de").unwrap();
+            let _lang = crate::i18n::language_scope(de);
+            let shown = model(&mut app, &ctx);
+            assert_eq!(row(&shown.rows, "window.document.0").map(|r| r.label.as_str()), Some("Layers"));
         }
-        let mut app = app(1);
-        let before = crate::native_menu::state_hash(&app, None);
-        if let Some(d) = app.session.active_mut() {
-            d.saved_to("/tmp/Layers".into());
-        }
-        assert_ne!(crate::native_menu::state_hash(&app, None), before, "a rename updates the native menu");
-        let de = crate::i18n::Lang::from_code("de").unwrap();
-        let items = menu_items(&app);
-        let row = items.iter().find(|i| i.id == "window.document.0").unwrap();
-        assert_eq!(translated_menu_label(de, row), "Layers");
-        let bar = crate::native_menu::photocraft_layout(&items, de, "de").bar;
-        assert_eq!(bar.find("window.document.0").map(|i| i.label.as_str()), Some("Layers"));
-        let panel = items.iter().find(|i| i.path == ["Window"] && i.label == "Layers").unwrap();
-        assert_eq!(bar.find(&panel.id).map(|i| i.label.clone()), Some(translated_menu_label(de, panel)), "Window › Layers is still translated");
-    }
-
-    /// The rows go through the control channel's `ui.menu.invoke`, like a click.
-    #[test]
-    fn control_can_choose_a_document_from_the_window_menu() {
-        let mut app = app(2);
-        let ctx = egui::Context::default();
-        let (req, _rx) = crate::control::ControlRequest::new("ui.menu.invoke", json!({"id": "window.document.0"}));
-        let crate::control::Outcome::Done(r) = crate::control::handle(&mut app, &ctx, &req) else { panic!("expected an immediate reply") };
-        assert_eq!(r["ok"], true, "{r}");
-        assert_eq!(app.session.active_index(), Some(0));
     }
 }

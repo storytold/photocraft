@@ -77,7 +77,8 @@ pub use fx_cache::{
 #[cfg(test)]
 use fx_cache::{effect_maps, effect_region, fx_region_bytes};
 pub use reduced::{
-    PROXY_THUMBNAIL_PIXELS, render_reduced, render_reduced_damage, render_reduced_rect, thumbnail, thumbnail_buffer, thumbnail_proxy, thumbnail_size,
+    PROXY_THUMBNAIL_PIXELS, render_reduced, render_reduced_by, render_reduced_damage, render_reduced_rect, thumbnail, thumbnail_buffer, thumbnail_proxy,
+    thumbnail_size,
 };
 #[cfg(test)]
 use reduced::{ReducedStats, render_reduced_in_bands, render_reduced_with};

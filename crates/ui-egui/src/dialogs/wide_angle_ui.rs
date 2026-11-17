@@ -1,133 +1,240 @@
-//! Filter › Adaptive Wide Angle…: a full-window dialog like Photoshop's. Drag on the image to
-//! draw a constraint (the scene line between the two points, curved by the lens model); hold
-//! Shift when releasing to make it horizontal or vertical; right-click a constraint for its menu
-//! (Free, Horizontal, Vertical, Delete), as in Photoshop. The right panel holds the correction model, focal length, crop factor, scale and the
-//! constraint list. The preview solves the mesh warp on a CPU proxy (≤ 800 px); OK runs
-//! `filter.adaptiveWideAngle` with the constraints in document pixels.
-//!
-//! Control channel: `ui.menu.invoke {"id":"filter.adaptiveWideAngle","params":{"ui":{"set":{…},
-//! "add":{"a":[x,y],"b":[x,y],"orientation":"…"}, "orient":{"index":i,"orientation":"…"}, "remove":i,
-//! "commit":true | "cancel":true}}}`.
+//! Filter › Adaptive Wide Angle…: the framework's Adaptive Wide Angle workspace on the app's
+//! dialog host. Dragging on the image draws a constraint (the scene line between the two points,
+//! curved by the lens model); Shift on release makes it horizontal or vertical; a right-click on a
+//! constraint opens its menu. The workspace owns the layout, the constraints and their history;
+//! this module gives it the layer's proxy (≤ 800 px), the lens geometry, the solve-and-warp
+//! preview job, and what OK runs: `filter.adaptiveWideAngle` with the constraints in document
+//! pixels. Automation drives the open workspace through `control::dialogs::workspace_ui`.
 
-use egui::{Align2, Color32, FontId, Pos2, Rect as ERect, Sense, Stroke, TextureHandle, pos2, vec2};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use craft::behavior::kurbo::Point;
+use craft::imaging::ui::wide_angle::{PreviewDone, WideAngleGeometry, WideAngleOpen, WideAngleSource, WideAngleWorkspace};
+use craft::imaging::wide_angle::WideAngleSession;
+use craft::ui::canvas::RasterSource;
+use craft::ui::dialog::HostedWorkspace;
+use craft::ui::dialog::{DialogId, DialogResult};
+use craft::ui::runtime::pending::Job;
 use photocraft_algo::transform::Interp;
-use photocraft_algo::wideangle::{self, Camera, Constraint, Orientation, WideAngle, WideMesh, WideModel};
-use photocraft_doc::LayerId;
+use photocraft_algo::wideangle::{self, Camera, Constraint, WideAngle, WideMesh};
+use photocraft_doc::{DocId, LayerId};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
-use crate::edit_history::{EditHistory, Step};
-use crate::theme::Tokens;
-use crate::widgets;
+use crate::gallery_ui::SharedPicture;
 
 const PROXY_SIDE: usize = 800;
-const PANEL_W: f32 = 300.0;
+const KEY: &str = "filter.adaptiveWideAngle";
 
-pub struct WideAngleDialog {
-    pub layer: LayerId,
-    layer_name: String,
-    pub params: WideAngle,
+/// The hosted Adaptive Wide Angle dialog.
+pub(crate) type Hosted = HostedWorkspace<WideAngleWorkspace>;
+
+/// The last solved warp and the session it solves, shared by the preview job and the geometry.
+struct Solved {
+    session: WideAngle,
+    mesh: Arc<WideMesh>,
+}
+
+type SolvedSlot = Arc<Mutex<Option<Solved>>>;
+
+/// The session scaled onto the proxy: constraints move from document pixels to proxy pixels.
+fn proxy_params(session: &WideAngle, frame: Rect, scale: f64) -> WideAngle {
+    let mut p = session.clone();
+    let (fx, fy) = (frame.x0 as f64, frame.y0 as f64);
+    p.constraints = session
+        .constraints
+        .iter()
+        .map(|c| Constraint::new([(c.a[0] - fx) * scale, (c.a[1] - fy) * scale], [(c.b[0] - fx) * scale, (c.b[1] - fy) * scale], c.orientation))
+        .collect();
+    p
+}
+
+/// The corrected proxy for `params` (already in proxy pixels), warped by `mesh` or by a fresh
+/// solve; the mesh comes back so the geometry can map through it.
+fn preview_surface(proxy: &Surface, params: &WideAngle, pf: Rect, target: &Value, mesh: Option<Arc<WideMesh>>) -> Result<(Surface, Arc<WideMesh>), String> {
+    let mesh = mesh.unwrap_or_else(|| Arc::new(wideangle::solve(params, pf)));
+    let mut out = photocraft_algo::warp::warp_triangles(proxy, pf, &mesh.verts, &mesh.triangles(), Interp::Bilinear);
+    if let Some(colors) =
+        photocraft_engine::color_channels::explicit(&json!({"target": target}), proxy.format().mode.color_channels()).map_err(|e| e.to_string())?
+    {
+        photocraft_engine::color_channels::restrict_surface_in(proxy, &mut out, colors, pf).map_err(|e| e.to_string())?;
+    }
+    Ok((out, mesh))
+}
+
+/// The lens geometry the constraint overlays read: arcs on the source and the solved warp's map.
+pub(crate) struct PcGeometry {
     /// Canvas frame (document px) and the proxy scale (proxy px per document px).
     frame: Rect,
     scale: f64,
-    proxy: Surface,
+    proxy_rect: Rect,
+    solved: SolvedSlot,
+}
+
+impl WideAngleGeometry for PcGeometry {
+    fn arc(&self, session: &WideAngleSession, a: [f64; 2], b: [f64; 2], segments: usize) -> Vec<Point> {
+        // PLAN: assumed `Point::new(x: f64, y: f64)`.
+        Camera::new(session, self.frame).arc(a, b, segments).into_iter().map(|q| Point::new(q[0], q[1])).collect()
+    }
+
+    fn corrected(&self, session: &WideAngleSession, at: Point) -> Option<Point> {
+        let solved = self.solved.lock().ok()?;
+        let s = solved.as_ref().filter(|s| s.session == *session)?;
+        let (fx, fy, k) = (self.frame.x0 as f64, self.frame.y0 as f64, self.scale);
+        // PLAN: assumed `Point` has public `x` and `y`.
+        let pq = s.mesh.map(self.proxy_rect, [(at.x - fx) * k, (at.y - fy) * k]);
+        Some(Point::new(pq[0] / k + fx, pq[1] / k + fy))
+    }
+}
+
+/// The layer as the workspace shows it: the proxy, the corrected picture the preview job writes
+/// and the lens geometry.
+pub(crate) struct PcWideAngleSource {
+    proxy: Arc<Surface>,
     target: Value,
-    pw: usize,
-    ph: usize,
-    src_tex: Option<TextureHandle>,
-    out_tex: Option<TextureHandle>,
-    /// The proxy warp used by both the rendered preview and its constraint overlays. It is
-    /// replaced only by `render`, so every edit to `params` must set `dirty`.
-    mesh: Option<WideMesh>,
-    dirty: bool,
-    pub preview: bool,
-    drag: Option<([f64; 2], [f64; 2])>,
-    /// The constraint a right-click opened the constraint menu on.
-    menu_for: Option<usize>,
-    pub residual: f64,
-    pub render_ms: f64,
-    history: EditHistory<WideAngle>,
+    original: SharedPicture,
+    corrected: SharedPicture,
+    ready: Arc<AtomicBool>,
+    geometry: PcGeometry,
 }
 
-fn tex_image(s: &Surface, w: usize, h: usize) -> egui::ColorImage {
-    let mut row = vec![[0u8; 4]; w * h];
-    s.read_rgba8_into(Rect::new(0, 0, w as i32, h as i32), &mut row);
-    egui::ColorImage::new([w, h], row.iter().map(|p| Color32::from_rgba_unmultiplied(p[0], p[1], p[2], p[3])).collect())
-}
-
-impl WideAngleDialog {
-    pub fn describe(&self) -> Value {
-        json!({"layer": self.layer.0, "params": serde_json::to_value(&self.params).unwrap_or(Value::Null), "proxy": [self.pw, self.ph], "residual": self.residual, "renderMs": self.render_ms, "preview": self.preview})
-    }
-
-    fn proxy_params(&self) -> WideAngle {
-        let k = self.scale;
-        let mut p = self.params.clone();
-        let (fx, fy) = (self.frame.x0 as f64, self.frame.y0 as f64);
-        p.constraints = p
-            .constraints
-            .iter()
-            .map(|c| Constraint { a: [(c.a[0] - fx) * k, (c.a[1] - fy) * k], b: [(c.b[0] - fx) * k, (c.b[1] - fy) * k], orientation: c.orientation })
-            .collect();
-        p
-    }
-
-    /// The proxy rectangle shared by the preview and overlays.
-    fn proxy_rect(&self) -> Rect {
-        Rect::new(0, 0, self.pw as i32, self.ph as i32)
-    }
-
-    fn preview_surface(&mut self) -> Result<Surface, String> {
-        let pf = self.proxy_rect();
-        let p = self.proxy_params();
-        let mesh = wideangle::solve(&p, pf);
-        self.residual = mesh.residual / self.scale;
-        let mut out = photocraft_algo::warp::warp_triangles(&self.proxy, pf, &mesh.verts, &mesh.triangles(), Interp::Bilinear);
-        if let Some(colors) =
-            photocraft_engine::color_channels::explicit(&json!({"target":self.target}), self.proxy.format().mode.color_channels()).map_err(|e| e.to_string())?
-        {
-            photocraft_engine::color_channels::restrict_surface_in(&self.proxy, &mut out, colors, pf).map_err(|e| e.to_string())?;
+impl PcWideAngleSource {
+    fn new(proxy: Surface, frame: Rect, k: usize, size: (usize, usize), target: Value) -> Self {
+        let (pw, ph) = size;
+        let picture_size = craft::behavior::PixelSize::new(pw as u32, ph as u32);
+        let original = SharedPicture::new(picture_size);
+        original.replace(crate::gallery_ui::image(&proxy, pw, ph), 1, [0, 0]);
+        PcWideAngleSource {
+            proxy: Arc::new(proxy),
+            target,
+            original,
+            corrected: SharedPicture::new(picture_size),
+            ready: Arc::new(AtomicBool::new(false)),
+            geometry: PcGeometry { frame, scale: 1.0 / k as f64, proxy_rect: Rect::new(0, 0, pw as i32, ph as i32), solved: Arc::default() },
         }
-        self.mesh = Some(mesh);
-        Ok(out)
     }
 
-    fn render(&mut self, ctx: &egui::Context) {
+    /// What the preview job runs on, cloned into it.
+    fn state(&self) -> PreviewState {
+        PreviewState {
+            proxy: self.proxy.clone(),
+            target: self.target.clone(),
+            picture: self.corrected.clone(),
+            ready: self.ready.clone(),
+            solved: self.geometry.solved.clone(),
+            frame: self.geometry.frame,
+            scale: self.geometry.scale,
+            pf: self.geometry.proxy_rect,
+        }
+    }
+
+    /// The warp of the last finished preview job.
+    #[cfg(test)]
+    fn mesh(&self) -> Option<Arc<WideMesh>> {
+        self.geometry.solved.lock().ok()?.as_ref().map(|s| s.mesh.clone())
+    }
+}
+
+impl WideAngleSource for PcWideAngleSource {
+    fn geometry(&self) -> &dyn WideAngleGeometry {
+        &self.geometry
+    }
+
+    fn source(&self) -> &dyn RasterSource {
+        &self.original
+    }
+
+    fn corrected(&self) -> Option<&dyn RasterSource> {
+        self.ready.load(Ordering::Acquire).then_some(&self.corrected as &dyn RasterSource)
+    }
+
+    /// Solves (unless the last solve was for this very session) and warps the proxy, then writes the
+    /// corrected picture. The mesh stays in the geometry for the overlays.
+    fn preview_job(&self, session: &WideAngleSession) -> Job<PreviewDone, String> {
+        let (state, session) = (self.state(), session.clone());
+        Job::new(move |_progress, _cancel| state.run(&session))
+    }
+}
+
+/// What the preview job needs of the source.
+#[derive(Clone)]
+struct PreviewState {
+    proxy: Arc<Surface>,
+    target: Value,
+    picture: SharedPicture,
+    ready: Arc<AtomicBool>,
+    solved: SolvedSlot,
+    frame: Rect,
+    scale: f64,
+    pf: Rect,
+}
+
+impl PreviewState {
+    /// The job's body: reuses the last solve when it was for `session`, warps the proxy, writes the
+    /// corrected picture and keeps the mesh for the overlays.
+    fn run(&self, session: &WideAngle) -> Result<PreviewDone, String> {
         let t0 = crate::gpu_canvas::now_ms();
-        let Ok(out) = self.preview_surface() else { return };
-        let img = tex_image(&out, self.pw, self.ph);
-        match &mut self.out_tex {
-            Some(t) => t.set(img, egui::TextureOptions::LINEAR),
-            None => self.out_tex = Some(ctx.load_texture("awa-out", img, egui::TextureOptions::LINEAR)),
+        let reuse = self.solved.lock().ok().and_then(|g| g.as_ref().filter(|s| s.session == *session).map(|s| s.mesh.clone()));
+        let (out, mesh) = preview_surface(&self.proxy, &proxy_params(session, self.frame, self.scale), self.pf, &self.target, reuse)?;
+        self.picture.replace(crate::gallery_ui::image(&out, self.pf.width() as usize, self.pf.height() as usize), 1, [0, 0]);
+        if let Ok(mut slot) = self.solved.lock() {
+            *slot = Some(Solved { session: session.clone(), mesh });
         }
-        if self.src_tex.is_none() {
-            self.src_tex = Some(ctx.load_texture("awa-src", tex_image(&self.proxy, self.pw, self.ph), egui::TextureOptions::LINEAR));
-        }
-        self.render_ms = crate::gpu_canvas::now_ms() - t0;
-        self.dirty = false;
-    }
-
-    pub(crate) fn step(&mut self, step: Step) {
-        if self.history.step(&mut self.params, step) {
-            self.drag = None;
-            self.dirty = true;
-        }
-    }
-
-    fn command_params(&self) -> Value {
-        let mut v = serde_json::to_value(&self.params).unwrap_or(json!({}));
-        v["layer"] = json!(self.layer.0);
-        crate::distort_ui::with_filter_target(v, &self.target)
+        self.ready.store(true, Ordering::Release);
+        Ok(PreviewDone::new(Duration::from_secs_f64(((crate::gpu_canvas::now_ms() - t0) / 1000.0).max(0.0))))
     }
 }
 
-pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
-    photocraft_engine::commands::find("filter.adaptiveWideAngle").map(|c| (c.enabled)(&app.session)).unwrap_or(Err("unknown command".into()))?;
+/// What the app keeps of the open Adaptive Wide Angle: the dialog's id and what OK needs to run.
+pub(crate) struct WideAngleApp {
+    id: DialogId,
+    document: DocId,
+    layer: LayerId,
+    target: Value,
+    #[cfg(test)]
+    source: Arc<PcWideAngleSource>,
+}
+
+/// The open workspace's fields for automation, with the layer it edits.
+pub(crate) fn describe(app: &PhotocraftApp) -> Option<Value> {
+    let w = app.wide_angle.as_ref()?;
+    let mut v: Value = crate::distort_ui::workspace_fields(app, KEY).unwrap_or_else(|| json!({}));
+    if let Some(o) = v.as_object_mut() {
+        o.insert("document".into(), json!(w.document.0));
+        o.insert("layer".into(), json!(w.layer.0));
+    }
+    Some(v)
+}
+
+/// Runs OK's session as `filter.adaptiveWideAngle` when the workspace finished. The constraint
+/// events need no action: the workspace applied and recorded them already.
+pub(crate) fn take(app: &mut PhotocraftApp, _ctx: &egui::Context) {
+    let Some(id) = app.wide_angle.as_ref().map(|w| w.id) else { return };
+
+    if let Some(h) = app.framework.dialogs.get_mut_by_id::<Hosted>(id) {
+        drop(h.take_events());
+    }
+    let Some(result) = app.framework.dialogs.take_by_id::<Hosted>(id) else { return };
+    let Some(w) = app.wide_angle.take() else { return };
+    let DialogResult::Ok(session) = result else { return };
+    let mut v = serde_json::to_value(&session).unwrap_or(json!({}));
+    v["layer"] = json!(w.layer.0);
+    if let Err(e) = app.run(KEY, crate::distort_ui::with_filter_target(v, &w.target)) {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
+}
+
+pub fn open(app: &mut PhotocraftApp, _ctx: &egui::Context) -> Result<(), String> {
+    photocraft_engine::commands::find(KEY).map(|c| (c.enabled)(&app.session)).unwrap_or(Err("unknown command".into()))?;
     let (layer, surf, _) = crate::distort_ui::active_filter_target(app)?;
     let st = app.session.active().ok_or("no document")?;
     let frame = st.doc.bounds();
+    let document = st.doc.id;
     let name = st.doc.layer(layer).map(|l| l.name.clone()).unwrap_or_default();
     let (w, h) = (frame.width() as usize, frame.height() as usize);
     let k = w.max(h).div_ceil(PROXY_SIDE).max(1);
@@ -148,405 +255,63 @@ pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> 
     px.write_region(Rect::new(0, 0, pw as i32, ph as i32), &proxy.read_region(src_r));
     // EXIF focal length / crop factor, as the engine would resolve them.
     let info = st.doc.metadata.exif.as_ref().map(|e| photocraft_algo::exif::read(e));
-    let params = photocraft_engine::lens_cmds::wide_params("filter.adaptiveWideAngle", &json!({}), info.as_ref()).unwrap_or_default();
-    let mut d = WideAngleDialog {
+    let params = photocraft_engine::lens_cmds::wide_params(KEY, &json!({}), info.as_ref()).unwrap_or_default();
+    let target = crate::distort_ui::colour_set_target(app);
+    let source = Arc::new(PcWideAngleSource::new(px, frame, k, (pw, ph), target.clone()));
+    let workspace = WideAngleWorkspace::new(WideAngleOpen::new([w as u32, h as u32], name).session(params));
+    let shared: Arc<dyn WideAngleSource> = source.clone();
+    let id = app.framework.dialogs.open(HostedWorkspace::new(workspace, shared));
+    app.wide_angle = Some(WideAngleApp {
+        id,
+        document,
         layer,
-        layer_name: name,
-        history: EditHistory::new(&params),
-        params,
-        frame,
-        scale: 1.0 / k as f64,
-        proxy: px,
-        target: crate::distort_ui::colour_set_target(app),
-        pw,
-        ph,
-        src_tex: None,
-        out_tex: None,
-        mesh: None,
-        dirty: true,
-        preview: true,
-        drag: None,
-        menu_for: None,
-        residual: 0.0,
-        render_ms: 0.0,
-    };
-    d.render(ctx);
-    app.wide_angle = Some(d);
+        target,
+        #[cfg(test)]
+        source,
+    });
     Ok(())
 }
 
-fn parse_orientation(s: &str) -> Orientation {
-    match s {
-        "horizontal" => Orientation::Horizontal,
-        "vertical" => Orientation::Vertical,
-        _ => Orientation::Free,
-    }
-}
-
+/// Opens the workspace for the menu command; a `{ui}` request addresses the open workspace (`workspace_ui`), and is an
+/// error while it is closed rather than a run with the defaults.
 pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
-    if id != "filter.adaptiveWideAngle" {
+    if id != KEY {
         return None;
     }
-    if params.as_object().is_none_or(|o| o.is_empty()) {
-        return Some(open(app, ctx).map(|_| app.wide_angle.as_ref().map(|d| d.describe()).unwrap_or(Value::Null)));
-    }
-    let ui = params.get("ui")?;
-    if app.wide_angle.is_none()
-        && let Err(e) = open(app, ctx)
-    {
-        return Some(Err(e));
-    }
-    let d = app.wide_angle.as_mut()?;
-    if let Some(set) = ui.get("set") {
-        let mut cur = serde_json::to_value(&d.params).unwrap_or(json!({}));
-        if let (Value::Object(c), Value::Object(s)) = (&mut cur, set) {
-            for (k, v) in s {
-                c.insert(k.clone(), v.clone());
-            }
-        }
-        match serde_json::from_value::<WideAngle>(cur) {
-            Ok(p) => d.params = p,
-            Err(e) => return Some(Err(format!("bad Adaptive Wide Angle settings: {e}"))),
-        }
-        d.dirty = true;
-    }
-    if let Some(a) = ui.get("add") {
-        let pt = |k: &str| -> Option<[f64; 2]> { Some([a.get(k)?.get(0)?.as_f64()?, a.get(k)?.get(1)?.as_f64()?]) };
-        let (Some(pa), Some(pb)) = (pt("a"), pt("b")) else { return Some(Err("`add` needs a and b points".into())) };
-        d.params.constraints.push(Constraint { a: pa, b: pb, orientation: parse_orientation(a.get("orientation").and_then(Value::as_str).unwrap_or("free")) });
-        d.dirty = true;
-    }
-    if let Some(o) = ui.get("orient") {
-        let i = o.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok());
-        let Some(c) = i.and_then(|i| d.params.constraints.get_mut(i)) else { return Some(Err("`orient` needs the index of a constraint".into())) };
-        c.orientation = parse_orientation(o.get("orientation").and_then(Value::as_str).unwrap_or("free"));
-        d.dirty = true;
-    }
-    if let Some(i) = ui.get("remove").and_then(Value::as_u64)
-        && (i as usize) < d.params.constraints.len()
-    {
-        d.params.constraints.remove(i as usize);
-        d.dirty = true;
-    }
-    d.history.settle(&d.params, false);
-    if d.dirty {
-        d.render(ctx);
-    }
-    if ui.get("cancel").and_then(Value::as_bool) == Some(true) {
-        app.wide_angle = None;
-        return Some(Ok(json!({"cancelled": true})));
-    }
-    if ui.get("commit").and_then(Value::as_bool) == Some(true) {
-        return Some(commit(app));
-    }
-    Some(Ok(app.wide_angle.as_ref().map(|d| d.describe()).unwrap_or(Value::Null)))
-}
-
-fn commit(app: &mut PhotocraftApp) -> Result<Value, String> {
-    let d = app.wide_angle.take().ok_or(tl!("Adaptive Wide Angle isn't open"))?;
-    app.run("filter.adaptiveWideAngle", d.command_params())
-}
-
-/// Photoshop's right-click menu on a constraint: its orientation (the current one checked) and
-/// Delete. A right-click away from every constraint opens nothing.
-fn constraint_menu(ui: &mut egui::Ui, d: &mut WideAngleDialog) {
-    let Some(i) = d.menu_for.filter(|i| *i < d.params.constraints.len()) else {
-        ui.close();
-        return;
-    };
-    for (o, label) in [(Orientation::Free, tl!("Free")), (Orientation::Horizontal, tl!("Horizontal")), (Orientation::Vertical, tl!("Vertical"))] {
-        let current = d.params.constraints.get(i).is_some_and(|c| c.orientation == o);
-        if ui.radio(current, label).clicked() {
-            if let Some(c) = d.params.constraints.get_mut(i) {
-                c.orientation = o;
-                d.dirty = true;
-            }
-            ui.close();
-        }
-    }
-    ui.separator();
-    if ui.button(tl!("Delete")).clicked() {
-        d.params.constraints.remove(i);
-        d.menu_for = None;
-        d.dirty = true;
-        ui.close();
-    }
-}
-
-pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    if app.wide_angle.is_none() {
-        return;
-    }
-    let t = Tokens::get(ctx);
-    let screen = ctx.content_rect();
-    let mut action: Option<&str> = None;
-    let shift = ctx.input(|i| i.modifiers.shift);
-    egui::Area::new(egui::Id::unique("awa-dialog")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
-        let Some(d) = app.wide_angle.as_mut() else { return };
-        d.history.settle(&d.params, ctx.input(|i| i.pointer.any_down()));
-        if d.dirty {
-            d.render(ctx);
-        }
-        let (full, _) = ui.allocate_exact_size(screen.size(), Sense::hover());
-        let painter = ui.painter().clone();
-        painter.rect_filled(full, 0.0, t.chrome);
-        let title = ERect::from_min_size(full.min, vec2(full.width(), 30.0));
-        painter.rect_filled(title, 0.0, t.dock);
-        painter.text(title.center(), Align2::CENTER_CENTER, format!("Adaptive Wide Angle ({})", d.layer_name), FontId::proportional(13.0), t.text);
-        let footer_h = 48.0;
-        let body = ERect::from_min_max(pos2(full.left(), title.bottom()), pos2(full.right(), full.bottom() - footer_h));
-        let view = ERect::from_min_max(body.min, pos2(body.right() - PANEL_W, body.bottom())).shrink(16.0);
-        painter.rect_filled(view, 0.0, t.canvas);
-        let s = (view.width() / d.pw as f32).min(view.height() / d.ph as f32);
-        let img_r = ERect::from_center_size(view.center(), vec2(d.pw as f32 * s, d.ph as f32 * s));
-        // Screen ↔ document mapping.
-        let k = d.scale;
-        let (fx, fy) = (d.frame.x0 as f64, d.frame.y0 as f64);
-        let to_screen = |p: [f64; 2]| pos2(img_r.left() + ((p[0] - fx) * k) as f32 * s, img_r.top() + ((p[1] - fy) * k) as f32 * s);
-        let to_doc = |q: Pos2| [fx + ((q.x - img_r.left()) / s) as f64 / k, fy + ((q.y - img_r.top()) / s) as f64 / k];
-        let resp = ui.interact(img_r, ui.scope_id().with("awa-image"), Sense::click_and_drag());
-        if let Some(p) = resp.interact_pointer_pos() {
-            if resp.drag_started() {
-                d.drag = Some((to_doc(p), to_doc(p)));
-            } else if resp.dragged()
-                && let Some(dr) = d.drag.as_mut()
-            {
-                dr.1 = to_doc(p);
-            }
-        }
-        if resp.drag_stopped()
-            && let Some((a, b)) = d.drag.take()
-            && (a[0] - b[0]).hypot(a[1] - b[1]) * k * s as f64 > 6.0
-        {
-            let orientation = if shift {
-                if (b[0] - a[0]).abs() >= (b[1] - a[1]).abs() { Orientation::Horizontal } else { Orientation::Vertical }
-            } else {
-                Orientation::Free
-            };
-            d.params.constraints.push(Constraint { a, b, orientation });
-            d.dirty = true;
-        }
-        let cam = Camera::new(&d.params, d.frame);
-        if resp.secondary_clicked()
-            && let Some(p) = resp.interact_pointer_pos()
-        {
-            // The constraint whose curve passes nearest the click gets the menu.
-            let near = d
-                .params
-                .constraints
-                .iter()
-                .enumerate()
-                .map(|(i, c)| (i, cam.arc(c.a, c.b, 24).iter().map(|q| (to_screen(*q) - p).length()).fold(f32::MAX, f32::min)))
-                .min_by(|a, b| a.1.total_cmp(&b.1));
-            d.menu_for = near.filter(|(_, dist)| *dist < 10.0).map(|(i, _)| i);
-        }
-        resp.context_menu(|ui| constraint_menu(ui, d));
-        let show_src = !d.preview || d.drag.is_some();
-        let tex = if show_src { d.src_tex.as_ref() } else { d.out_tex.as_ref() };
-        widgets::checker(&painter, img_r, 8.0);
-        if let Some(tex) = tex {
-            painter.image(tex.id(), img_r, ERect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-        }
-        // Constraints: curved over the source; straight end-to-end over the corrected preview.
-        let color = |o: Orientation| match o {
-            Orientation::Free => t.accent,
-            Orientation::Horizontal => t.warning,
-            Orientation::Vertical => t.danger,
-        };
-        let pf = d.proxy_rect();
-        let mesh = if show_src { None } else { d.mesh.as_ref() };
-        for c in &d.params.constraints {
-            let pts: Vec<Pos2> = match mesh {
-                Some(m) => cam
-                    .arc(c.a, c.b, 24)
-                    .iter()
-                    .map(|q| {
-                        let pq = m.map(pf, [(q[0] - fx) * k, (q[1] - fy) * k]);
-                        to_screen([pq[0] / k + fx, pq[1] / k + fy])
-                    })
-                    .collect(),
-                None => cam.arc(c.a, c.b, 24).iter().map(|q| to_screen(*q)).collect(),
-            };
-            if let (Some(a), Some(b)) = (pts.first(), pts.last()) {
-                painter.circle_filled(*a, 3.5, color(c.orientation));
-                painter.circle_filled(*b, 3.5, color(c.orientation));
-            }
-            painter.add(egui::Shape::line(pts, Stroke::new(2.0, color(c.orientation))));
-        }
-        if let Some((a, b)) = d.drag {
-            let pts: Vec<Pos2> = cam.arc(a, b, 24).iter().map(|q| to_screen(*q)).collect();
-            painter.add(egui::Shape::line(pts, Stroke::new(2.0, t.accent_soft)));
-        }
-        // Panel.
-        let right = ERect::from_min_max(pos2(body.right() - PANEL_W, body.top()), body.max);
-        painter.rect_filled(right, 0.0, t.dock);
-        painter.line_segment([right.left_top(), right.left_bottom()], Stroke::new(1.0, t.separator));
-        let mut props = ui.new_child(egui::UiBuilder::new().max_rect(right.shrink2(vec2(14.0, 10.0))));
-        egui::ScrollArea::vertical().id_salt("awa-props").show(&mut props, |ui| {
-            ui.spacing_mut().item_spacing.y = 5.0;
-            widgets::section_label(ui, tl!("Correction"));
-            let mut model = d.params.model;
-            if widgets::dropdown(
-                ui,
-                "awa-model",
-                tl!("Correction"),
-                &mut model,
-                &[
-                    (WideModel::Auto, tl!("Auto")),
-                    (WideModel::Fisheye, tl!("Fisheye")),
-                    (WideModel::Perspective, tl!("Perspective")),
-                    (WideModel::FullSpherical, tl!("Full Spherical")),
-                ],
-                200.0,
-            ) {
-                d.params.model = model;
-                d.dirty = true;
-            }
-            let mut v = d.params.scale as f32;
-            if widgets::slider_row(ui, tl!("Scale"), &mut v, 50.0..=150.0, "%", None).changed() {
-                d.params.scale = v as f64;
-                d.dirty = true;
-            }
-            let mut v = d.params.focal_length as f32;
-            if widgets::slider_row(ui, tl!("Focal Length"), &mut v, 0.0..=200.0, "mm", None).changed() {
-                d.params.focal_length = v as f64;
-                d.dirty = true;
-            }
-            let mut v = d.params.crop_factor as f32;
-            if widgets::slider_row(ui, tl!("Crop Factor"), &mut v, 0.1..=10.0, "", None).changed() {
-                d.params.crop_factor = v as f64;
-                d.dirty = true;
-            }
-            widgets::hairline(ui);
-            widgets::section_label(ui, &crate::i18n::fmt(tl!("Constraints ({n})"), &[("n", &d.params.constraints.len().to_string())]));
-            let mut remove = None;
-            for (i, c) in d.params.constraints.iter_mut().enumerate() {
-                ui.horizontal(|ui| {
-                    ui.label(format!("{}", i + 1));
-                    let mut o = c.orientation;
-                    if widgets::dropdown(
-                        ui,
-                        &format!("awa-o-{i}"),
-                        tl!("Orientation"),
-                        &mut o,
-                        &[(Orientation::Free, tl!("Free")), (Orientation::Horizontal, tl!("Horizontal")), (Orientation::Vertical, tl!("Vertical"))],
-                        120.0,
-                    ) {
-                        c.orientation = o;
-                        d.dirty = true;
-                    }
-                    if widgets::secondary_button(ui, tl!("Delete"), 60.0).clicked() {
-                        remove = Some(i);
-                    }
-                });
-            }
-            if let Some(i) = remove {
-                d.params.constraints.remove(i);
-                d.dirty = true;
-            }
-            widgets::hairline(ui);
-            widgets::checkbox(ui, &mut d.preview, tl!("Preview"));
-            ui.label(
-                egui::RichText::new(tl!(
-                    "Drag on the image to add a constraint; Shift for horizontal/vertical; right-click a constraint to change or delete it."
-                ))
-                .color(t.text_faint)
-                .size(11.0),
-            );
+    if let Some(ui) = params.get("ui") {
+        return Some(if app.wide_angle.is_some() {
+            crate::control::dialogs::workspace_ui(app, ctx, KEY, ui)
+        } else {
+            Err("Adaptive Wide Angle is not open".into())
         });
-        let foot = ERect::from_min_max(pos2(full.left(), full.bottom() - footer_h), full.max);
-        painter.rect_filled(foot, 0.0, t.dock);
-        let mut fu = ui.new_child(egui::UiBuilder::new().max_rect(foot.shrink2(vec2(16.0, 9.0))).layout(egui::Layout::right_to_left(egui::Align::Center)));
-        if let Some(role) = widgets::dialog_buttons(
-            &mut fu,
-            &[
-                widgets::DialogButton::new(widgets::ButtonRole::Default, tl!("OK"), 90.0),
-                widgets::DialogButton::new(widgets::ButtonRole::Cancel, tl!("Cancel"), 90.0),
-            ],
-        ) {
-            action = Some(if role == widgets::ButtonRole::Default { "ok" } else { "cancel" });
-        }
-        fu.label(egui::RichText::new(format!("{:.0} ms · straightness {:.1} px", d.render_ms, d.residual)).color(t.text_faint));
-        // Panel edits mark the warp dirty after the overlays were drawn: redraw so they catch up.
-        if d.dirty {
-            ctx.request_repaint();
-        }
-    });
-    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-        action = Some("cancel");
     }
-    match action {
-        Some("ok") => {
-            if let Err(e) = commit(app) {
-                app.ui.status = e;
-            }
-        }
-        Some("cancel") => app.wide_angle = None,
-        _ => {}
+    if params.as_object().is_none_or(|o| o.is_empty()) {
+        return Some(open(app, ctx).map(|_| describe(app).unwrap_or(Value::Null)));
     }
+    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn native_component_wide_angle_previews_and_commit_keep_unselected_samples() {
-        for mode in ["rgb", "cmyk", "lab"] {
-            for depth in [8, 16, 32] {
-                for alpha in [true, false] {
-                    let fixture = crate::distort_ui::component_tests::app(mode, depth);
-                    let mut app = if alpha { fixture } else { crate::distort_ui::component_tests::without_alpha(fixture) };
-                    open(&mut app, &egui::Context::default()).unwrap();
-                    let d = app.wide_angle.as_mut().unwrap();
-                    d.params.model = WideModel::Fisheye;
-                    d.params.focal_length = 10.0;
-                    d.params.constraints.push(Constraint { a: [8.0, 8.0], b: [56.0, 16.0], orientation: Orientation::Horizontal });
-                    let layer = d.layer;
-                    let before = d.proxy.clone();
-                    let bounds = Rect::new(0, 0, d.pw as i32, d.ph as i32);
-                    let preview = d.preview_surface().unwrap();
-                    crate::distort_ui::component_tests::protected(&before, &preview, bounds);
-                    assert_ne!(preview.read_region(bounds), before.read_region(bounds));
-                    app.run("channel.target", json!({"channel":{"color":1}})).unwrap();
-                    commit(&mut app).unwrap();
-                    let after = app.session.active().unwrap().doc.layer(layer).unwrap().surface().unwrap();
-                    crate::distort_ui::component_tests::protected(&before, after, bounds);
-                    assert_ne!(after.read_region(bounds), before.read_region(bounds));
-                }
-            }
-        }
+    fn ui(app: &mut PhotocraftApp, v: Value) -> Result<Value, String> {
+        let ctx = app.ctx().clone();
+
+        crate::control::dialogs::workspace_ui(app, &ctx, KEY, &v)
     }
 
-    #[test]
-    fn dialog_adds_constraints_and_commits() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-        let ctx = egui::Context::default();
-        app.run("file.new", json!({"width": 160, "height": 100})).unwrap();
-        app.run("layer.new.layer", json!({})).unwrap();
-        app.run("edit.fill", json!({"color": "#808080"})).unwrap();
-        let r = menu(&mut app, &ctx, "filter.adaptiveWideAngle", &json!({})).unwrap().unwrap();
-        assert_eq!(r["proxy"], json!([160, 100]));
-        let r = menu(
-            &mut app,
-            &ctx,
-            "filter.adaptiveWideAngle",
-            &json!({"ui": {"set": {"model": "fisheye", "focalLength": 10.0}, "add": {"a": [20, 20], "b": [140, 20], "orientation": "horizontal"}}}),
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(r["params"]["constraints"].as_array().unwrap().len(), 1);
-        assert!(r["residual"].as_f64().unwrap() < 3.0, "{r}");
-        let r = menu(&mut app, &ctx, "filter.adaptiveWideAngle", &json!({"ui": {"commit": true}})).unwrap().unwrap();
-        assert_eq!(r["model"], "fisheye");
-        assert!(app.wide_angle.is_none());
-        menu(&mut app, &ctx, "filter.adaptiveWideAngle", &json!({})).unwrap().unwrap();
-        assert!(menu(&mut app, &ctx, "filter.adaptiveWideAngle", &json!({"ui": {"add": {"a": [1, 1]}}})).unwrap().is_err());
-        menu(&mut app, &ctx, "filter.adaptiveWideAngle", &json!({"ui": {"cancel": true}})).unwrap().unwrap();
-        assert!(app.wide_angle.is_none());
+    /// The session the open workspace holds.
+    fn session_of(app: &PhotocraftApp) -> WideAngle {
+        let id = app.wide_angle.as_ref().unwrap().id;
+        app.framework.dialogs.get_by_id::<Hosted>(id).unwrap().workspace().session().clone()
     }
 
-    /// A 160 × 100 grey layer to open the dialog on.
+    fn source_of(app: &PhotocraftApp) -> Arc<PcWideAngleSource> {
+        app.wide_angle.as_ref().unwrap().source.clone()
+    }
+
+    /// A 160 × 100 grey layer to open the workspace on.
     fn grey_layer() -> PhotocraftApp {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
         app.run("file.new", json!({"width": 160, "height": 100})).unwrap();
@@ -555,150 +320,114 @@ mod tests {
         app
     }
 
-    /// Open the dialog with one free constraint across the middle of the layer.
-    fn open_with_a_constraint(app: &mut PhotocraftApp, ctx: &egui::Context) {
-        menu(app, ctx, "filter.adaptiveWideAngle", &json!({"ui": {"add": {"a": [20, 50], "b": [140, 50]}}})).unwrap().unwrap();
+    /// Open the workspace with one free constraint across the middle of the layer.
+    fn open_with_a_constraint(app: &mut PhotocraftApp) {
+        let ctx = app.ctx().clone();
+        open(app, &ctx).unwrap();
+        ui(app, json!({"add": {"a": [20, 50], "b": [140, 50]}})).unwrap();
+    }
+
+    #[test]
+    fn native_component_wide_angle_previews_and_commit_keep_unselected_samples() {
+        for mode in ["rgb", "cmyk", "lab"] {
+            for depth in [8, 16, 32] {
+                for alpha in [true, false] {
+                    let fixture = crate::distort_ui::component_tests::app(mode, depth);
+                    let mut app = if alpha { fixture } else { crate::distort_ui::component_tests::without_alpha(fixture) };
+                    let ctx = app.ctx().clone();
+                    open(&mut app, &ctx).unwrap();
+                    ui(&mut app, json!({"set": {"model": "fisheye", "focalLength": 10.0}})).unwrap();
+                    ui(&mut app, json!({"add": {"a": [8, 8], "b": [56, 16], "orientation": "horizontal"}})).unwrap();
+                    let layer = app.wide_angle.as_ref().unwrap().layer;
+                    let source = source_of(&app);
+                    let session = session_of(&app);
+                    let before = source.proxy.as_ref().clone();
+                    let pf = source.geometry.proxy_rect;
+                    let (preview, _) =
+                        preview_surface(&before, &proxy_params(&session, source.geometry.frame, source.geometry.scale), pf, &source.target, None).unwrap();
+                    source.state().run(&session).unwrap();
+                    crate::distort_ui::component_tests::protected(&before, &preview, pf);
+                    assert_ne!(preview.read_region(pf), before.read_region(pf));
+                    app.run("channel.target", json!({"channel":{"color":1}})).unwrap();
+                    ui(&mut app, json!({"commit": true})).unwrap();
+                    take(&mut app, &ctx);
+                    let after = app.session.active().unwrap().doc.layer(layer).unwrap().surface().unwrap();
+                    crate::distort_ui::component_tests::protected(&before, after, pf);
+                    assert_ne!(after.read_region(pf), before.read_region(pf));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn dialog_adds_constraints_and_commits() {
+        let mut app = grey_layer();
+        let ctx = app.ctx().clone();
+        menu(&mut app, &ctx, KEY, &json!({})).unwrap().unwrap();
+        assert!(app.wide_angle.is_some());
+        ui(&mut app, json!({"set": {"model": "fisheye", "focalLength": 10.0}})).unwrap();
+        ui(&mut app, json!({"add": {"a": [20, 20], "b": [140, 20], "orientation": "horizontal"}})).unwrap();
+        let session = session_of(&app);
+        assert_eq!(session.constraints.len(), 1);
+        let source = source_of(&app);
+        let mesh = wideangle::solve(&proxy_params(&session, source.geometry.frame, source.geometry.scale), source.geometry.proxy_rect);
+        assert!(mesh.residual / source.geometry.scale < 3.0, "{}", mesh.residual);
+        ui(&mut app, json!({"commit": true})).unwrap();
+        take(&mut app, &ctx);
+        let (id, p) = app.session.journal.last().cloned().unwrap();
+        assert_eq!((id.as_str(), &p["model"]), (KEY, &json!("fisheye")));
+        assert!(app.wide_angle.is_none());
+        menu(&mut app, &ctx, KEY, &json!({})).unwrap().unwrap();
+        // A constraint without `b` is refused and changes nothing.
+        assert!(ui(&mut app, json!({"add": {"a": [1, 1]}})).is_err());
+        assert!(session_of(&app).constraints.is_empty());
+        ui(&mut app, json!({"cancel": true})).unwrap();
+        take(&mut app, &ctx);
+        assert!(app.wide_angle.is_none());
     }
 
     #[test]
     fn constraint_overlay_reuses_the_preview_mesh_on_redraw() {
-        fn constraint_line(shape: &egui::Shape) -> Option<&[Pos2]> {
-            match shape {
-                egui::Shape::Path(p) if p.points.len() == 25 => Some(&p.points),
-                egui::Shape::Vec(shapes) => shapes.iter().find_map(constraint_line),
-                _ => None,
-            }
-        }
         let mut app = grey_layer();
-        let ctx = egui::Context::default();
-        PhotocraftApp::setup_context(&ctx, Default::default());
-        open_with_a_constraint(&mut app, &ctx);
-        let input = || egui::RawInput { screen_rect: Some(ERect::from_min_size(Pos2::ZERO, vec2(1000.0, 600.0))), ..Default::default() };
-        // Baseline: the source-space line, from which the screen scale and centre are measured.
-        app.wide_angle.as_mut().unwrap().preview = false;
-        // egui panics if a frame's texture uploads are dropped unhandled, hence `clear`.
-        ctx.run_ui(input(), |ui| show(&mut app, ui.ctx())).textures_delta.clear();
-        let mut output = ctx.run_ui(input(), |ui| show(&mut app, ui.ctx()));
-        output.textures_delta.clear();
-        let line = output.shapes.iter().find_map(|s| constraint_line(&s.shape)).expect("baseline constraint line");
-        let (first, last) = (line.first().unwrap().x, line.last().unwrap().x);
-        let base_x = (first + last) * 0.5;
-        // The constraint spans x = 20..140 of the 160 px layer; the proxy is 1:1 with it.
-        let px = (last - first) / 120.0;
-        // Move only the cached warp. A fresh solve would draw the original line instead.
-        let d = app.wide_angle.as_mut().unwrap();
-        for (out, _) in &mut d.mesh.as_mut().unwrap().verts {
-            out[0] += 10.0;
+        open_with_a_constraint(&mut app);
+        let source = source_of(&app);
+        let session = session_of(&app);
+        assert!(source.geometry().corrected(&session, Point::new(80.0, 50.0)).is_none(), "no solve is ready before the job");
+        source.state().run(&session).unwrap();
+        let first = source.mesh().unwrap();
+        let at = |s: &PcWideAngleSource| s.geometry().corrected(&session, Point::new(80.0, 50.0)).map(|p| (p.x, p.y)).unwrap();
+        let mapped = at(&source);
+        // Redraws under the unchanged session read the same mesh.
+        for _ in 0..3 {
+            assert_eq!(at(&source), mapped);
+            assert!(Arc::ptr_eq(&first, &source.mesh().unwrap()));
         }
-        let verts = d.mesh.as_ref().unwrap().verts.clone();
-        let render_ms = d.render_ms;
-        for (preview, dragging, shifted) in [(true, false, true), (false, false, false), (true, true, false), (true, false, true)] {
-            let d = app.wide_angle.as_mut().unwrap();
-            d.preview = preview;
-            d.drag = dragging.then_some(([20.0, 30.0], [140.0, 30.0]));
-            let mut output = ctx.run_ui(input(), |ui| show(&mut app, ui.ctx()));
-            output.textures_delta.clear();
-            let line = output.shapes.iter().find_map(|s| constraint_line(&s.shape)).expect("painted constraint line");
-            // The source line is centred on the image; the altered cached warp moves its
-            // centre ten proxy pixels to the right. Measure against the unshifted baseline.
-            let centre_x = (line.first().unwrap().x + line.last().unwrap().x) * 0.5;
-            let expected_x = base_x + if shifted { 10.0 * px } else { 0.0 };
-            assert!((centre_x - expected_x).abs() < 0.1, "preview={preview}, dragging={dragging}: centre={centre_x}, expected={expected_x}");
-            let d = app.wide_angle.as_ref().unwrap();
-            assert_eq!(d.mesh.as_ref().unwrap().verts, verts, "redraw retains the cached warp");
-            assert_eq!(d.render_ms, render_ms, "redraw does not render the preview again");
-        }
+        // A second job for the same session warps again but does not solve again.
+        source.state().run(&session).unwrap();
+        assert!(Arc::ptr_eq(&first, &source.mesh().unwrap()), "the solve is reused");
     }
 
     #[test]
     fn preview_mesh_refreshes_after_edits_and_history_steps() {
         let mut app = grey_layer();
-        let ctx = egui::Context::default();
-        open_with_a_constraint(&mut app, &ctx);
-        let original = app.wide_angle.as_ref().unwrap().mesh.as_ref().unwrap().verts.clone();
-        menu(&mut app, &ctx, "filter.adaptiveWideAngle", &json!({"ui": {"set": {"scale": 120.0}}})).unwrap().unwrap();
-        let edited = app.wide_angle.as_ref().unwrap().mesh.as_ref().unwrap().verts.clone();
+        open_with_a_constraint(&mut app);
+        let source = source_of(&app);
+        let original = session_of(&app);
+        source.state().run(&original).unwrap();
+        let first = source.mesh().unwrap();
+        ui(&mut app, json!({"set": {"scale": 120.0}})).unwrap();
+        let edited = session_of(&app);
         assert_ne!(edited, original);
-        for (step, expected) in [(Step::Undo, &original), (Step::Redo, &edited)] {
-            let d = app.wide_angle.as_mut().unwrap();
-            d.step(step);
-            assert!(d.dirty);
-            d.render(&ctx);
-            assert!(!d.dirty);
-            assert_eq!(&d.mesh.as_ref().unwrap().verts, expected);
-        }
-    }
-
-    /// `orient` sets a constraint's orientation, as the right-click menu does; a bad index is
-    /// an error that changes nothing.
-    #[test]
-    fn orient_sets_a_constraint_orientation() {
-        let mut app = grey_layer();
-        let ctx = egui::Context::default();
-        open_with_a_constraint(&mut app, &ctx);
-        let r = menu(&mut app, &ctx, "filter.adaptiveWideAngle", &json!({"ui": {"orient": {"index": 0, "orientation": "vertical"}}})).unwrap().unwrap();
-        assert_eq!(r["params"]["constraints"][0]["orientation"], "vertical");
-        for bad in [json!({"index": 1, "orientation": "horizontal"}), json!({"orientation": "horizontal"}), json!({"index": -1})] {
-            assert!(menu(&mut app, &ctx, "filter.adaptiveWideAngle", &json!({"ui": {"orient": bad}})).unwrap().is_err(), "{bad}");
-        }
-        assert_eq!(app.wide_angle.as_ref().unwrap().params.constraints[0].orientation, Orientation::Vertical);
-    }
-
-    /// Right-clicking a constraint opens Photoshop's constraint menu: an orientation (the
-    /// current one checked) or Delete. A right-click away from every constraint deletes nothing
-    /// and opens no menu (it used to delete the nearest constraint outright).
-    #[test]
-    fn right_click_on_a_constraint_opens_its_menu() {
-        use egui_kittest::kittest::Queryable;
-        let size = vec2(1000.0, 600.0);
-        let mut h = egui_kittest::Harness::builder().with_size(size).build_ui_state(|ui, app: &mut PhotocraftApp| show(app, ui.ctx()), grey_layer());
-        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
-        let ctx = h.ctx.clone();
-        open_with_a_constraint(h.state_mut(), &ctx);
-        h.run_steps(2);
-        // The image view (see `show`): the window less the title, footer and panel, inset 16 pt.
-        let view = ERect::from_min_max(pos2(16.0, 30.0 + 16.0), pos2(size.x - PANEL_W - 16.0, size.y - 48.0 - 16.0));
-        let right_click = |h: &mut egui_kittest::Harness<'_, PhotocraftApp>, p: Pos2| {
-            let button = |pressed| egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE };
-            h.input_mut().events.extend([egui::Event::PointerMoved(p), button(true)]);
-            h.run_steps(1);
-            h.input_mut().events.push(button(false));
-            h.run_steps(2);
-        };
-        let constraints = |h: &egui_kittest::Harness<'_, PhotocraftApp>| h.state().wide_angle.as_ref().unwrap().params.constraints.clone();
-        // The constraint runs through the document's centre, which the view centres.
-        right_click(&mut h, view.center());
-        h.get_by_label("Horizontal").click();
-        h.run_steps(2);
-        assert_eq!(constraints(&h).len(), 1, "choosing an orientation keeps the constraint");
-        assert_eq!(constraints(&h)[0].orientation, Orientation::Horizontal);
-        // Away from it: no menu, nothing deleted.
-        right_click(&mut h, view.left_top() + vec2(4.0, 4.0));
-        assert!(h.query_by_label("Horizontal").is_none(), "no menu away from a constraint");
-        assert_eq!(constraints(&h).len(), 1);
-        // Delete from the menu (the panel's list has its own Delete button too).
-        right_click(&mut h, view.center());
-        h.get_all_by_label("Delete").last().expect("the menu's Delete").click();
-        h.run_steps(2);
-        assert!(constraints(&h).is_empty());
-    }
-
-    #[test]
-    fn command_z_steps_the_dialog_not_the_document() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-        let ctx = egui::Context::default();
-        app.run("file.new", json!({"width": 160, "height": 100})).unwrap();
-        app.run("layer.new.layer", json!({})).unwrap();
-        app.run("edit.fill", json!({"color": "#808080"})).unwrap();
-        let steps = app.session.active().unwrap().history.past_len();
-        menu(&mut app, &ctx, "filter.adaptiveWideAngle", &json!({})).unwrap().unwrap();
-        for y in [20, 60] {
-            menu(&mut app, &ctx, "filter.adaptiveWideAngle", &json!({"ui": {"add": {"a": [20, y], "b": [140, y]}}})).unwrap().unwrap();
-        }
-        crate::edit_history::tests::press_z(&mut app, &ctx, egui::Modifiers::COMMAND);
-        assert_eq!(app.wide_angle.as_ref().unwrap().params.constraints.len(), 1, "⌘Z removes the last constraint");
-        assert_eq!(app.session.active().unwrap().history.past_len(), steps, "the document beneath is untouched");
-        crate::edit_history::tests::press_z(&mut app, &ctx, egui::Modifiers::COMMAND | egui::Modifiers::SHIFT);
-        assert_eq!(app.wide_angle.as_ref().unwrap().params.constraints.len(), 2, "⇧⌘Z puts it back");
+        assert!(source.geometry().corrected(&edited, Point::new(80.0, 50.0)).is_none(), "the old solve is not the edited session's");
+        source.state().run(&edited).unwrap();
+        let second = source.mesh().unwrap();
+        assert_ne!(second.verts, first.verts);
+        // Undo through the workspace returns the session; the next job solves it again.
+        ui(&mut app, json!({"undo": true})).unwrap();
+        assert_eq!(session_of(&app), original);
+        source.state().run(&original).unwrap();
+        let third = source.mesh().unwrap();
+        assert!(!Arc::ptr_eq(&second, &third));
+        assert_eq!(third.verts, first.verts);
     }
 }
