@@ -521,6 +521,33 @@ fn duplicating_a_group_counts_every_layer_it_copies() {
     assert!(err.contains("layers"), "{err}");
 }
 
+/// What a duplicate is charged is what it makes: the layers the document gains, or the layers
+/// of the new document.
+#[test]
+fn duplicates_are_charged_the_layers_they_make() {
+    let log = Log::default();
+    let mut app = app(vec![], &log);
+    app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+    let group = app.run("layer.new.group", json!({"name": "G"})).unwrap()["layer"].as_u64().unwrap();
+    for name in ["a", "b"] {
+        let l = app.run("layer.new.layer", json!({"name": name})).unwrap()["layer"].as_u64().unwrap();
+        app.run("layer.moveTo", json!({"layer": l, "target": group, "position": "into"})).unwrap();
+    }
+    let serial = app.session.active().unwrap().serial;
+    let layers = |app: &PhotocraftApp| u32::try_from(app.session.active().unwrap().doc.layer_count()).unwrap();
+    let mut budget = RunBudget::default();
+    let mut commands = AppCommands { app: &mut app, automation: false, budget: &mut budget };
+    let before = layers(commands.app);
+    commands.execute("layer.duplicate", json!({"layer": group, ON_DOCUMENT: serial})).unwrap();
+    assert_eq!(layers(commands.app) - before, commands.budget.layers, "a group and the two layers in it");
+    for merged in [false, true] {
+        let charged = commands.budget.layers;
+        commands.execute("image.duplicate", json!({"name": "copy", "mergedOnly": merged, ON_DOCUMENT: serial})).unwrap();
+        assert_ne!(commands.app.session.active().unwrap().serial, serial, "the copy is active");
+        assert_eq!(layers(commands.app), commands.budget.layers - charged, "merged: {merged}");
+    }
+}
+
 /// Opening a file makes a document, which the run's document count bounds.
 #[test]
 fn opening_files_counts_against_the_documents_a_run_may_make() {
