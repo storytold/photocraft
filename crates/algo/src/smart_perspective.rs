@@ -444,14 +444,14 @@ fn cascade(src: &Surface, bounds: Rect, h: &[f64; 9], clear: bool) -> Option<Sur
     };
     if turned {
         let (ts, tb) = transposed_surface(src, bounds)?;
-        let out = cascade_normal(&ts, tb, &transposed(h), &p, clear)?;
+        let out = cascade_normal(&ts, tb, &transposed(h), &p, clear, false)?;
         let r = out.content_bounds();
         if r.is_empty() {
             return Some(Surface::new(out.format()));
         }
         return transposed_surface(&out, r).map(|(s, _)| s);
     }
-    cascade_normal(src, bounds, h, &p, clear)
+    cascade_normal(src, bounds, h, &p, clear, true)
 }
 
 /// `s` without the rows at or below `end` (document rows; `end` is exclusive).
@@ -472,7 +472,7 @@ fn clip_rows_below(s: Surface, end: f64) -> Option<Surface> {
     Some(out)
 }
 
-fn cascade_normal(src: &Surface, bounds: Rect, h: &[f64; 9], p: &Plan, clear: bool) -> Option<Surface> {
+fn cascade_normal(src: &Surface, bounds: Rect, h: &[f64; 9], p: &Plan, clear: bool, clip_last_row: bool) -> Option<Surface> {
     let flat = |v: f64| v.abs() <= FLAT;
     let w = f64::from(bounds.width());
     if flat(p.stage2_shear) && flat(p.h2) {
@@ -498,9 +498,13 @@ fn cascade_normal(src: &Surface, bounds: Rect, h: &[f64; 9], p: &Plan, clear: bo
     // when the top's fraction passes a half and the bottom's does not exceed it, the bottom row of
     // the drawn range falls outside the buffer and is lost. The reference loses it too (its
     // distort-everything references have no bottom row; a one-way draw keeps its last row).
-    let (top, bottom) = (p.b[1], p.b[3]);
-    let buffer_end = top.floor() + (bottom - top).ceil();
-    let inter = clip_rows_below(inter, buffer_end)?;
+    // Vertical first (drawn turned), the reference keeps that row, which is then its last column.
+    let inter = if clip_last_row {
+        let (top, bottom) = (p.b[1], p.b[3]);
+        clip_rows_below(inter, top.floor() + (bottom - top).ceil())?
+    } else {
+        inter
+    };
     let ib = alpha_bounds(&inter)?;
     let m2 = mul(&mul(h, &inverse(&m1s)?), &translation(f64::from(ib.x0), f64::from(ib.y0)));
     if m2[8].abs() <= FLAT {
@@ -545,6 +549,30 @@ mod tests {
         let (n, m) = (plan(&h, 302.0, 202.0).unwrap(), plan(&transposed(&h), 202.0, 302.0).unwrap());
         assert!((n.area - m.area).abs() < 1e-6, "{} {}", n.area, m.area);
         assert!(vertical_first(&n, &m));
+    }
+
+    /// Drawn vertical first, the cascade keeps the intermediate's last row (the final last
+    /// column), as the reference does: its render of this distort covers column 479 (52..252), the
+    /// corner dragged to (480, 80).
+    #[test]
+    fn a_distort_drawn_vertical_first_keeps_its_last_column() {
+        use photocraft_color::{ColorMode, PixelFormat, SampleType};
+        let h = [
+            0.8031477062498324,
+            0.056304796632436926,
+            150.0,
+            -0.1972678767729308,
+            1.1227444566587126,
+            125.0,
+            -0.0006032656782046813,
+            0.0003753653108829128,
+            1.0,
+        ];
+        let mut s = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::U8, true));
+        s.fill_rect(Rect::new(0, 0, 302, 202), &[1.0, 0.0, 0.0, 1.0]);
+        let out = render(&s, Rect::new(0, 0, 302, 202), h).unwrap();
+        let r = out.content_bounds();
+        assert_eq!(r.x1, 480, "{r:?}");
     }
 
     /// A quad far off the canvas is refused, not overflowed: its box is reckoned in 1/256 px.
