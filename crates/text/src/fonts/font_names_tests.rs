@@ -133,22 +133,6 @@ fn collection_isolation_preserves_requested_face() {
     assert_eq!(font.localized_strings(StringId::POSTSCRIPT_NAME).english_or_first().unwrap().to_string(), "Collection30");
 }
 
-#[test]
-#[ignore = "requires locally installed Yoon 500 fonts; no font files are distributed"]
-fn installed_yoon_numeric_faces() {
-    let mut db = FontDb::with_system_fonts();
-    for family in ["Yoon YoonGothic500", "Yoon YoonMyungjo500"] {
-        let faces = db.faces(family);
-        for name in ["20", "30", "40", "50"] {
-            let face = faces.iter().find(|f| f.style == name).expect("installed numeric face");
-            let mut style =
-                CharStyle { font_family: family.into(), font_style: name.into(), postscript_name: face.postscript_name.clone(), ..Default::default() };
-            db.select_named_face(&mut style);
-            assert_eq!(db.faces(&style.font_family)[0].postscript_name, face.postscript_name);
-        }
-    }
-}
-
 /// A copy of `source` whose name table spells the family in English and in Japanese.
 fn localized_font(source: &[u8], english: &str, japanese: &str) -> Vec<u8> {
     let mut bytes = source.to_vec();

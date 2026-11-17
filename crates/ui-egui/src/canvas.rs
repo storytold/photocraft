@@ -3501,15 +3501,11 @@ mod multi_channel_ui_tests {
 pub(crate) use drag::cancel_stale_vector_drag;
 
 #[cfg(test)]
-#[path = "pen_gesture_owner_tests.rs"]
-mod pen_gesture_owner_tests;
-#[cfg(test)]
-#[path = "pen_path_visual_tests.rs"]
-mod pen_path_visual_tests;
-
-#[cfg(test)]
 #[path = "path_selection_cursor_tests.rs"]
 mod path_selection_cursor_tests;
+#[cfg(test)]
+#[path = "pen_gesture_owner_tests.rs"]
+mod pen_gesture_owner_tests;
 
 /// Between Polygonal Lasso clicks, reveal more of the image near or beyond the viewport edge.
 /// Only the view moves: fixed vertices stay in document coordinates, including while button-up.

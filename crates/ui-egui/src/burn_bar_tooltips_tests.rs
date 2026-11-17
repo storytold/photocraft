@@ -176,41 +176,6 @@ fn tool_switching_clears_the_old_tooltip_and_leaves_other_percentage_fields_unch
     }
 }
 
-/// Run explicitly to inspect the rendered tooltips; no GPU is required by the normal regressions.
-#[test]
-#[ignore = "offscreen visual inspection; writes PNGs to PHOTOCRAFT_TOOLTIP_IMAGES or the temp directory"]
-fn render_tooltips_for_visual_inspection() {
-    let out = std::env::var_os("PHOTOCRAFT_TOOLTIP_IMAGES").map(std::path::PathBuf::from).unwrap_or_else(|| std::env::temp_dir().join("photocraft-12670"));
-    let lang = std::env::var("PHOTOCRAFT_TOOLTIP_LANGUAGE").ok().and_then(|code| Lang::from_code(&code)).unwrap_or(Lang::EN);
-    std::fs::create_dir_all(&out).unwrap();
-    for theme in crate::theme::ThemeKind::ALL {
-        for tool in [Tool::Burn, Tool::Dodge] {
-            for (i, (role, label, tip)) in CONTROLS.into_iter().enumerate() {
-                let mut h = bar(tool, lang, 1000.0, 1.0, false);
-                PhotocraftApp::setup_context(&h.ctx, theme);
-                h.run_steps(4);
-                h.render().unwrap().save(out.join(format!("{theme:?}-{tool:?}-{i}-before.png"))).unwrap();
-                let name = control_name(&h, lang, role, label);
-                hover(&mut h, role, &name, tr(lang, tip));
-                h.render().unwrap().save(out.join(format!("{theme:?}-{tool:?}-{i}-hover.png"))).unwrap();
-            }
-        }
-    }
-    for tool in [Tool::Burn, Tool::Dodge] {
-        for (i, (role, label, tip)) in CONTROLS.into_iter().enumerate() {
-            let mut h = bar(tool, lang, 480.0, 3.0, true);
-            let name = control_name(&h, lang, role, label);
-            hover(&mut h, role, &name, tr(lang, tip));
-            h.render().unwrap().save(out.join(format!("narrow-3x-{tool:?}-{i}.png"))).unwrap();
-            crate::theme::set_ui_font_size(&h.ctx, photocraft_engine::prefs::UiFontSize::Large);
-            h.run_steps(8);
-            let name = control_name(&h, lang, role, label);
-            hover(&mut h, role, &name, tr(lang, tip));
-            h.render().unwrap().save(out.join(format!("narrow-3x-large-font-{tool:?}-{i}.png"))).unwrap();
-        }
-    }
-}
-
 /// Require descriptions on the named controls and reject anonymous duplicates while preserving checkbox keyboard focus.
 #[test]
 fn tooltip_descriptions_do_not_create_anonymous_accessibility_nodes() {

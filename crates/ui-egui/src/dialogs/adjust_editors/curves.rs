@@ -748,7 +748,7 @@ mod polyline_tests {
     }
 
     #[test]
-    #[ignore = "release timing probe; run on GitHub Actions with --release --ignored --nocapture"]
+    #[ignore = "manual release timing probe; no CI job runs it; run on demand with --release --ignored --nocapture"]
     fn curve_polyline_release_comparison() {
         use std::{hint::black_box, time::Instant};
         let graph = Rect::from_min_size(pos2(20.0, 30.0), vec2(300.0, 300.0));

@@ -2022,28 +2022,6 @@ mod layer_click_type_commit_tests {
             preserved(h.state(), text);
         }
     }
-
-    #[test]
-    #[ignore = "offscreen visual evidence for #5584"]
-    fn layer_click_synthetic_visual_evidence() {
-        let _gpu = photocraft_testkit::gpu_lock();
-        let (h, text, _) = harness(theme::ThemeKind::ProMedium);
-        let mut app = h.into_state();
-        app.ui.tool = Tool::Type;
-        let mut h = Harness::builder().with_size(vec2(1280.0, 900.0)).with_step_dt(1.0 / 60.0).with_max_steps(64).wgpu().build_eframe(move |cc| {
-            PhotocraftApp::setup_context(&cc.egui_ctx, theme::ThemeKind::ProMedium);
-            app
-        });
-        h.run_steps(4);
-        assert!(h.state().ui.text_edit.is_some());
-        h.render().unwrap().save("5584-before.png").unwrap();
-        let row = h.get_by_label("Other pixels").rect();
-        click(&mut h, pos2(row.left() + 120.0, row.center().y), egui::Modifiers::NONE);
-        assert!(h.state().ui.text_edit.is_none());
-        preserved(h.state(), text);
-        h.run_steps(4);
-        h.render().unwrap().save("5584-after.png").unwrap();
-    }
 }
 
 #[cfg(test)]

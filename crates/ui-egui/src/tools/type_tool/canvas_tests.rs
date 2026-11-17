@@ -1679,63 +1679,6 @@ fn temporary_type_transform_captures_press_and_rejects_collapsed_geometry() {
     assert!(restored.type_transform.is_none());
 }
 
-/// Render on demand with the same offscreen wgpu infrastructure as the snapshot example.
-#[test]
-#[ignore = "writes visual evidence to target/issue-1091; run explicitly for visual QA"]
-fn temporary_type_transform_visual_evidence() {
-    let _gpu = photocraft_testkit::gpu_lock();
-    let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/issue-1091");
-    std::fs::create_dir_all(&out).unwrap();
-    for (index, theme) in crate::theme::ThemeKind::ALL.into_iter().enumerate() {
-        let (app, _) = transform_app(false, false, Affine::translate(450.0, 350.0));
-        let mut h = make_harness(if index == 0 { 2.0 } else { 1.0 }, app, true);
-        let ctx = h.ctx.clone();
-        h.state_mut().set_theme(&ctx, theme);
-        h.run_steps(4);
-        h.render().unwrap().save(out.join(format!("{index}-normal.png"))).unwrap();
-        hold(&mut h, type_command());
-        h.render().unwrap().save(out.join(format!("{index}-handles.png"))).unwrap();
-        let f = crate::type_transform::frame(h.state_mut()).unwrap();
-        let mut handles = f.quad.to_vec();
-        handles.extend((0..4).map(|i| [(f.quad[i][0] + f.quad[(i + 1) % 4][0]) / 2.0, (f.quad[i][1] + f.quad[(i + 1) % 4][1]) / 2.0]));
-        for (i, q) in handles.into_iter().enumerate() {
-            h.hover_at(frame_point(h.state(), q));
-            h.run_steps(2);
-            h.render().unwrap().save(out.join(format!("{index}-handle-{i}.png"))).unwrap();
-        }
-        let a = frame_point(h.state(), f.quad[2]);
-        transform_press(&mut h, a, true, type_command());
-        h.hover_at(a + vec2(70.0, 35.0));
-        h.run_steps(2);
-        h.render().unwrap().save(out.join(format!("{index}-scaling.png"))).unwrap();
-        crate::type_transform::cancel_drag(h.state_mut());
-        transform_press(&mut h, a + vec2(70.0, 35.0), false, type_command());
-        h.state_mut().ui.type_transform_pivot = None;
-        let ed = h.state().ui.text_edit.as_ref().unwrap().layer;
-        h.state_mut().run("type.edit", json!({"layer": ed, "transform": Affine::translate(450.0, 350.0).mul(&Affine::rotate(-0.3)).m})).unwrap();
-        h.run_steps(3);
-        h.render().unwrap().save(out.join(format!("{index}-rotated.png"))).unwrap();
-        let f = crate::type_transform::frame(h.state_mut()).unwrap();
-        let q = [f.quad[1][0] + 20.0, f.quad[1][1] - 15.0];
-        let a = frame_point(h.state(), q);
-        h.hover_at(a);
-        h.run_steps(2);
-        transform_press(&mut h, a, true, type_command());
-        let b = frame_point(h.state(), [q[0] + 35.0, q[1] + 60.0]);
-        h.hover_at(b);
-        h.run_steps(2);
-        h.render().unwrap().save(out.join(format!("{index}-rotating.png"))).unwrap();
-        transform_press(&mut h, b, false, type_command());
-        h.state_mut().run("type.edit", json!({"layer": ed, "box": [400, 300, 260, 180]})).unwrap();
-        crate::type_transform::reset(h.state_mut());
-        hold(&mut h, Modifiers::NONE);
-        h.run_steps(3);
-        h.render().unwrap().save(out.join(format!("{index}-paragraph.png"))).unwrap();
-        hold(&mut h, type_command());
-        h.render().unwrap().save(out.join(format!("{index}-paragraph-transform.png"))).unwrap();
-    }
-}
-
 #[test]
 fn temporary_type_transform_imported_psd_retains_editability_and_styles() {
     let (mut app, original_id) = transform_app(false, false, Affine { m: [1.5, 0.2, 0.1, 0.8, 400.0, 350.0] });
@@ -1770,64 +1713,6 @@ fn temporary_type_transform_imported_psd_retains_editability_and_styles() {
     assert!(app.ui.transform.is_none());
     super::cancel(&mut app);
     assert_affine(text(&app, id).transform, before.transform);
-}
-
-#[test]
-#[ignore = "release benchmark for issue #1091: 24 MP, eight text layers, 60 preview updates"]
-fn temporary_type_transform_large_document_preview() {
-    use crate::canvas::{ToolEvent, tool_event};
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    app.run("file.new", json!({"width": 6000, "height": 4000})).unwrap();
-    for i in 0..8 {
-        app.run("type.create", json!({"text": "PhotoCraft transform preview", "size": 60, "x": 300, "y": 300 + i * 200})).unwrap();
-    }
-    super::edit_active(&mut app).unwrap();
-    let frame = crate::type_transform::frame(&mut app).unwrap();
-    let a = frame.quad[2];
-    let revision = app.session.active().unwrap().revision;
-    let doc = app.session.active().unwrap().doc.id;
-    let index = app.session.active_index().unwrap();
-    let count = app.session.active().unwrap().history.entries().len();
-    let source = (*app.session.active().unwrap().doc).clone();
-    let layer = app.ui.text_edit.as_ref().unwrap().layer;
-    tool_event(&mut app, ToolEvent::Down { x: a[0], y: a[1], pressure: 1.0 }, type_command());
-    let mut times = Vec::new();
-    let mut transforms = Vec::new();
-    let mut before = 0;
-    for i in 1..=60 {
-        let started = std::time::Instant::now();
-        tool_event(&mut app, ToolEvent::Move { x: a[0] + f64::from(i) * 2.0, y: a[1] + f64::from(i), pressure: 1.0 }, type_command());
-        let (_, after) = crate::type_transform::display_doc(&mut app, index).unwrap();
-        times.push(started.elapsed().as_secs_f64() * 1000.0);
-        transforms.push(crate::type_transform::current_transform(&app, LayerId(layer)).unwrap());
-        let damage = crate::type_transform::damage(&app, doc, revision, before, after).unwrap();
-        assert!(i64::from(damage.width()) * i64::from(damage.height()) < 2_000_000, "preview only damages the type layer");
-        let (_, same) = crate::type_transform::display_doc(&mut app, index).unwrap();
-        assert_eq!(same, after, "stationary pointer reuses the rendered preview");
-        before = after;
-    }
-    assert_eq!(app.session.active().unwrap().revision, revision);
-    assert_eq!(app.session.active().unwrap().history.entries().len(), count);
-    times.sort_by(f64::total_cmp);
-    println!(
-        "24 MP / 8 type layers / 60 previews: p50 {:.3} ms, p95 {:.3} ms, max {:.3} ms (render + gesture; composite excluded)",
-        times[29], times[56], times[59]
-    );
-    // Compare the same matrices with the existing live-command path on the same document.
-    let mut commands = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    commands.session.add_document(source, None);
-    let mut command_times = Vec::new();
-    for transform in transforms {
-        let started = std::time::Instant::now();
-        commands.run("type.edit", json!({"layer": layer, "transform": transform.m, "coalesce": "1091-bench"})).unwrap();
-        command_times.push(started.elapsed().as_secs_f64() * 1000.0);
-    }
-    command_times.sort_by(f64::total_cmp);
-    println!(
-        "existing type.edit per update: p50 {:.3} ms, p95 {:.3} ms, max {:.3} ms (command + render; composite excluded)",
-        command_times[29], command_times[56], command_times[59]
-    );
-    crate::type_transform::cancel_drag(&mut app);
 }
 
 #[test]
