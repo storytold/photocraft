@@ -47,16 +47,21 @@ pub fn overflow_button(ui: &mut Ui, id: egui::Id, r: Rect, tip: &str, labels: &[
     crate::icons::paint(&paint_ui, r, "chevrons-right", 16.0, t.text);
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tip));
     let resp = resp.on_hover_text(tip);
-    egui::Popup::menu(&resp).show(|ui| {
+    // A click on the scroll bar's track is not a pick: only an entry, Escape or a click outside closes it.
+    egui::Popup::menu(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         ui.set_min_width(140.0);
-        for &i in overflow {
-            let Some(name) = labels.get(i) else { continue };
-            let text = if checked.is_some() { format!("{} {name}", if checked == Some(i) { "✔" } else { "  " }) } else { (*name).to_owned() };
-            if ui.button(text).clicked() {
-                *picked = Some(i);
-                ui.close();
+        // Taller than the room below the popup's top (many documents open): scroll (#13189).
+        let room = (ui.ctx().content_rect().bottom() - ui.min_rect().top() - 12.0).max(80.0);
+        egui::ScrollArea::vertical().max_height(room).auto_shrink([true, true]).show(ui, |ui| {
+            for &i in overflow {
+                let Some(name) = labels.get(i) else { continue };
+                let text = if checked.is_some() { format!("{} {name}", if checked == Some(i) { "✔" } else { "  " }) } else { (*name).to_owned() };
+                if ui.button(text).clicked() {
+                    *picked = Some(i);
+                    ui.close();
+                }
             }
-        }
+        });
     });
 }
 
@@ -237,6 +242,132 @@ mod tests {
                     assert!(picked.is_none());
                 }
             }
+        }
+    }
+
+    /// #13189: with many documents open the » list is taller than the window; it scrolls instead
+    /// of running off the screen, and a short list looks as it always did.
+    mod popup {
+        use super::super::*;
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        const WINDOW: egui::Vec2 = egui::Vec2::new(800.0, 500.0);
+
+        type State = (Vec<String>, Option<usize>);
+
+        fn click_at(h: &mut Harness<'static, State>, pos: egui::Pos2) {
+            h.hover_at(pos);
+            h.run_steps(1);
+            for pressed in [true, false] {
+                h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+                h.run_steps(1);
+            }
+        }
+
+        fn open(count: usize) -> Harness<'static, State> {
+            let names: Vec<String> = (0..count).map(|i| format!("Document {i}")).collect();
+            let mut h = Harness::builder().with_size(WINDOW).build_ui_state(
+                |ui, (names, picked): &mut State| {
+                    crate::PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::Pro);
+                    let labels: Vec<&str> = names.iter().map(String::as_str).collect();
+                    let every: Vec<usize> = (0..labels.len()).collect();
+                    let r = Rect::from_min_size(pos2(760.0, 10.0), vec2(CHEVRON_W, 26.0));
+                    let mut got = None;
+                    overflow_button(ui, ui.scope_id().with("docs-overflow"), r, "More documents", &labels, &every, None, &mut got);
+                    if got.is_some() {
+                        *picked = got;
+                    }
+                },
+                (names, None),
+            );
+            h.run_steps(4);
+            h.get_by_label("More documents").click();
+            h.run_steps(4);
+            h.run_steps(4);
+            h
+        }
+
+        #[test]
+        fn a_long_list_scrolls_and_its_last_entry_can_be_picked() {
+            let mut h = open(60);
+            let last = 59;
+            let first_row = h.get_by_label("Document 0").rect();
+            assert!(first_row.bottom() <= WINDOW.y, "the list starts inside the window: {first_row:?}");
+            assert!(h.query_by_label("Document 59").is_none_or(|n| n.rect().bottom() > WINDOW.y), "not all of it fits");
+            h.hover_at(first_row.center());
+            for _ in 0..40 {
+                h.event(egui::Event::MouseWheel {
+                    source: egui::MouseWheelSource::Wheel,
+                    unit: egui::MouseWheelUnit::Line,
+                    delta: vec2(0.0, -10.0),
+                    modifiers: egui::Modifiers::NONE,
+                    phase: egui::TouchPhase::Move,
+                });
+                h.run_steps(4);
+            }
+            let row = h.get_by_label(&format!("Document {last}")).rect();
+            assert!(row.top() >= 0.0 && row.bottom() <= WINDOW.y + 0.5, "the last entry scrolled into view: {row:?}");
+            h.get_by_label(&format!("Document {last}")).click();
+            h.run_steps(4);
+            assert_eq!(h.state().1, Some(last));
+        }
+
+        #[test]
+        fn clicking_the_scrollbar_track_keeps_the_list_open() {
+            let mut h = open(60);
+            let first_row = h.get_by_label("Document 0").rect();
+            // The popup's own rect, then the scroll bar's track: the right edge inside the frame, below the thumb.
+            let popup = h.ctx.memory(|m| m.layer_ids().last().and_then(|l| m.area_rect(l.id))).expect("the open list is the topmost layer");
+            assert!(popup.contains_rect(first_row), "the first row is inside the popup: {popup:?} vs {first_row:?}");
+            let style = h.ctx.global_style();
+            let bar = style.spacing.scroll;
+            let frame_right = f32::from(egui::Frame::popup(&style).inner_margin.right);
+            let x = popup.right() - frame_right - bar.bar_outer_margin - bar.bar_width / 2.0;
+            let at = pos2(x, popup.bottom() - 20.0);
+            assert!(popup.contains(at), "the click lands in the popup: {at:?} in {popup:?}");
+            assert!(at.y > popup.top() + popup.height() * 0.5, "below the thumb at the top: {at:?} in {popup:?}");
+            h.hover_at(at);
+            h.run_steps(2);
+            click_at(&mut h, at);
+            h.run_steps(4);
+            assert!(h.query_by_label("Document 0").is_some(), "the list is still open after a click on the scroll bar track");
+            assert_eq!(h.state().1, None, "nothing was picked");
+            assert!(h.query_by_label("Document 0").is_none_or(|n| n.rect().top() < first_row.top()), "the track click paged the list (x = {x})");
+        }
+
+        #[test]
+        fn picking_an_entry_closes_the_list() {
+            let mut h = open(5);
+            h.get_by_label("Document 2").click();
+            h.run_steps(4);
+            assert_eq!(h.state().1, Some(2));
+            assert!(h.query_by_label("Document 2").is_none(), "the list closed after the pick");
+        }
+
+        #[test]
+        fn a_click_outside_closes_the_list() {
+            let mut h = open(5);
+            click_at(&mut h, pos2(100.0, 400.0));
+            h.run_steps(4);
+            assert!(h.query_by_label("Document 2").is_none(), "the list closed");
+            assert_eq!(h.state().1, None);
+        }
+
+        #[test]
+        fn escape_closes_the_list() {
+            let mut h = open(5);
+            h.key_press(egui::Key::Escape);
+            h.run_steps(4);
+            assert!(h.query_by_label("Document 2").is_none(), "the list closed");
+        }
+
+        #[test]
+        fn a_short_list_shows_every_entry_without_a_scroll_bar() {
+            let h = open(3);
+            let rows: Vec<Rect> = (0..3).map(|i| h.get_by_label(&format!("Document {i}")).rect()).collect();
+            assert!(rows.windows(2).all(|w| w[0].bottom() <= w[1].top() + 0.5 && w[1].top() - w[0].bottom() < 12.0), "{rows:?}");
+            let height = rows[2].bottom() - rows[0].top();
+            assert!(height < 120.0, "three entries take their natural height: {height}");
         }
     }
 }
