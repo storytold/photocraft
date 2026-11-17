@@ -557,12 +557,12 @@ fn historical_v19_font_objects_named_cubic_paths_and_precision_are_native_and_pe
 
 #[test]
 #[ignore = "Requires expanded upstream XCF corpus pin (T081)"]
-/// Verifies stock-writer-resaved bootstrap graph cases retain original pixels inside ordinary native
+/// Verifies application-authored graph cases retain original pixels inside ordinary native
 /// contents.
-fn historical_stock_resaved_bootstrap_graphs_preserve_original_pixels_as_native_contents() {
+fn application_authored_graphs_preserve_original_pixels_as_native_contents() {
     use photocraft_doc::import_conversion::{ConversionDisposition, ImportConversion};
-    // Disclosed documented-wire seeds were loaded, saved to NEW XCF files, deleted,
-    // reopened and merged by unmodified stock2.99.18. They were not GUI authored.
+    // Stock GIMP 3.2.6 public Image/DrawableFilter APIs create these from scratch,
+    // then save, delete and reopen them. No handcrafted XCF seed is used.
     // Stock PNG behavior is source observation, not expected PhotoCraft compositing.
     let expected = (0..6)
         .flat_map(|y| {
@@ -577,8 +577,8 @@ fn historical_stock_resaved_bootstrap_graphs_preserve_original_pixels_as_native_
         })
         .collect::<Vec<_>>();
     for suffix in ["invert-linear", "original-over-inverted"] {
-        let stem = format!("historical-2-99-18-graph-{suffix}");
-        assert_eq!(&fixture(&format!("{stem}.xcf"))[..14], b"gimp xcf v020\0");
+        let stem = format!("graph-{suffix}");
+        assert_eq!(&fixture(&format!("{stem}.xcf"))[..14], b"gimp xcf v022\0");
         let doc = open(&stem);
         assert_eq!((doc.size.width, doc.size.height, doc.mode, doc.depth), (8, 6, ColorMode::Rgb, SampleType::U8));
         let mut stages = Vec::new();
