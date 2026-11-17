@@ -94,11 +94,8 @@ fn check_reopening_cases(tool: Tool, modifiers: Modifiers, popup: Popup, distinc
             let aligned = pos2((center.x * scale).round() / scale, (center.y * scale).round() / scale);
             // Integer offsets repeat the same physical-pixel fraction. The selection row keeps
             // the fractional and aligned positions, plus an initial opening and one reopening.
-            let mut points = if distinct_positions_only {
-                vec![center, aligned]
-            } else {
-                vec![center, center + vec2(40.0, 20.0), center - vec2(40.0, 20.0), aligned]
-            };
+            let mut points =
+                if distinct_positions_only { vec![center, aligned] } else { vec![center, center + vec2(40.0, 20.0), center - vec2(40.0, 20.0), aligned] };
             if popup == Popup::Brush {
                 let canvas = crate::rulers::content_rect(h.state(), h.state().last_canvas_rect);
                 points.extend([canvas.center(), canvas.left_top() + vec2(40.0, 40.0), canvas.right_bottom() - vec2(40.0, 40.0)]);
@@ -132,13 +129,7 @@ fn check_reopening_cases(tool: Tool, modifiers: Modifiers, popup: Popup, distinc
 fn secondary_taps_keep_selection_menus_open() {
     // Quick Selection too, though it has a brush: Photoshop's right-click there is the selection
     // menu (#7268), the brush is set from the options bar.
-    for tool in [
-        Tool::RectMarquee,
-        Tool::Lasso,
-        Tool::PolygonLasso,
-        Tool::MagneticLasso,
-        Tool::QuickSelection,
-    ] {
+    for tool in [Tool::RectMarquee, Tool::Lasso, Tool::PolygonLasso, Tool::MagneticLasso, Tool::QuickSelection] {
         check_reopening_cases(tool, Modifiers::NONE, Popup::Tool, true);
     }
 }
