@@ -79,10 +79,11 @@ fn frames(h: &Harness<'_, PhotocraftApp>, area: Rect) -> Vec<(Rect, Color32, Col
     rects.iter().filter(|r| r.fill != Color32::TRANSPARENT).filter_map(|r| Some((r.rect, r.fill, border(r.rect)?))).collect()
 }
 
-/// The colours of the icons (tinted images other than the layer thumbnails) painted inside `area`.
+/// The tints of the icons painted inside `area`. An icon is an image, which egui paints as a
+/// textured rect filled with its tint.
 fn icon_tints(h: &Harness<'_, PhotocraftApp>, area: Rect) -> Vec<Color32> {
     let tints = h.output().shapes.iter().filter_map(|s| match &s.shape {
-        egui::Shape::Mesh(m) if m.texture_id != egui::TextureId::default() && area.contains_rect(m.calc_bounds()) => m.vertices.first().map(|v| v.color),
+        egui::Shape::Rect(r) if r.brush.is_some() && area.contains_rect(r.rect) => Some(r.fill),
         _ => None,
     });
     tints.collect()
