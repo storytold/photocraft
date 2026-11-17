@@ -12,6 +12,7 @@ fn image(bytes: &[u8], budget: usize) -> Image<'_> {
         base_type: 0,
         colormap: Vec::new(),
         budget,
+        native_source_budget: MAX_PIXEL_BYTES,
         meta_budget: MAX_METADATA_BYTES,
         effect_decode_work: Default::default(),
         text_decode_work: Default::default(),
@@ -298,4 +299,67 @@ fn checked_float_and_indexed_tile_access_preserves_samples_and_rejects_truncatio
     truncated.base_type = 2;
     truncated.colormap.push([17, 31, 57]);
     assert!(truncated.hierarchy(offset, 2, false, &Interrupt::NONE).is_err());
+}
+
+#[test]
+fn failed_native_effect_mask_releases_samples_before_later_admission() {
+    for (valid, placement) in [(false, Vec::new()), (true, vec![(15, [1i32.to_be_bytes(), 0i32.to_be_bytes()].concat())])] {
+        let (bytes, channel, layer, _) = fixture_with_mask(valid, 1, &placement);
+        let mut image = image(&bytes, later_layer_allowance());
+        let before = image.meta_budget;
+        let work_before = image.effect_decode_work.stats().0;
+        assert!(image.native_effect_mask(channel, Rect::new(0, 0, 1, 1), SampleType::U8, &Interrupt::NONE).is_err());
+        assert_eq!(image.budget, later_layer_allowance(), "discarded mask samples must not starve the next drawable");
+        assert_eq!(image.meta_budget, before, "discarded header storage is released");
+        assert!(image.effect_decode_work.stats().0 < work_before, "parsed metadata work stays spent independently of storage");
+        admit_later_layer(&mut image, layer);
+    }
+}
+
+#[test]
+fn native_effect_mask_translation_is_admitted_before_allocating_and_refunds_failures() {
+    let (bytes, channel, _, _) = fixture(true);
+    let format = PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false);
+    let allowance = 4 + usize::try_from(photocraft_raster::tile_storage_bytes(Rect::new(0, 0, 1, 1), &format)).unwrap();
+    for owner in [Rect::new(1, 0, 2, 1), Rect::new(i32::MIN, 0, i32::MIN + 1, 1)] {
+        let mut image = image(&bytes, allowance);
+        let error = match image.native_effect_mask(channel, owner, SampleType::U8, &Interrupt::NONE) {
+            Ok(_) => panic!("new mask placement must require admitted storage and checked coordinates"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains(if owner.x0 == 1 { "pixel limit" } else { "origin overflow" }));
+        assert_eq!(image.budget, allowance, "discarded samples and tiles are released even after successful decoding");
+    }
+}
+
+#[test]
+fn successful_native_effect_mask_keeps_its_own_pixels_charged() {
+    let (bytes, channel, layer, _) = fixture(true);
+    let format = PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false);
+    let mask_charge = 4 + usize::try_from(photocraft_raster::tile_storage_bytes(Rect::new(0, 0, 1, 1), &format)).unwrap();
+    let mut image = image(&bytes, later_layer_allowance() + mask_charge);
+    let prepared = image.native_effect_mask(channel, Rect::new(0, 0, 1, 1), SampleType::U8, &Interrupt::NONE).unwrap();
+    assert_eq!(prepared.pixel_charge, mask_charge);
+    assert_eq!(prepared.record.name, "Optional mask");
+    assert!((prepared.mask.value(0, 0) - 128. / 255.).abs() < 1e-6);
+    assert_eq!(image.budget, later_layer_allowance());
+    admit_later_layer(&mut image, layer);
+}
+
+#[test]
+fn rejected_native_mask_placement_never_follows_its_pixel_hierarchy() {
+    for owner in [Rect::new(0, 0, 1, 1), Rect::new(i32::MIN, 0, i32::MIN + 1, 1)] {
+        let placement = if owner.x0 == 0 { vec![(15, [1i32.to_be_bytes(), 0i32.to_be_bytes()].concat())] } else { Vec::new() };
+        let (bytes, channel, _, _) = fixture_with_mask(false, 1, &placement);
+        let mut image = image(&bytes, 0);
+        let work_before = image.effect_decode_work.stats().0;
+        let error = match image.native_effect_mask(channel, owner, SampleType::U8, &Interrupt::NONE) {
+            Ok(_) => panic!("unsupported placement must not decode invalid pixels"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains(if owner.x0 == 0 { "unestablished placement" } else { "origin overflow" }), "{error}");
+        assert_eq!(image.budget, 0, "no pixel admission is attempted");
+        assert_eq!(image.meta_budget, MAX_METADATA_BYTES, "temporary header storage is refunded");
+        assert!(image.effect_decode_work.stats().0 < work_before, "header scan work remains charged");
+    }
 }

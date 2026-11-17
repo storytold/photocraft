@@ -72,6 +72,7 @@ fn image(bytes: &[u8]) -> Image<'_> {
         base_type: 0,
         colormap: Vec::new(),
         budget: MAX_PIXEL_BYTES,
+        native_source_budget: MAX_PIXEL_BYTES,
         meta_budget: MAX_METADATA_BYTES,
         effect_decode_work: Default::default(),
         text_decode_work: Default::default(),

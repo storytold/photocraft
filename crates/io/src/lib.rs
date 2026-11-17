@@ -661,6 +661,8 @@ pub use photocraft_doc::HistoricalXcfSampleOrder;
 pub struct HistoricalXcfSampleOrderRequest {
     pub version: u32,
     pub bits_per_sample: u32,
+    /// Validated document model, available before reading profiles or drawable samples.
+    pub mode: photocraft_color::ColorMode,
 }
 
 impl std::fmt::Display for HistoricalXcfSampleOrderRequest {

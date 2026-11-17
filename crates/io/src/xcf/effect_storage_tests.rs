@@ -17,6 +17,7 @@ fn image(bytes: &[u8], metadata: usize) -> Image<'_> {
         base_type: 0,
         colormap: Vec::new(),
         budget: 16 + usize::try_from(photocraft_raster::tile_storage_bytes(Rect::new(0, 0, 1, 1), &PixelFormat::RGBA8)).unwrap(),
+        native_source_budget: MAX_PIXEL_BYTES,
         meta_budget: metadata,
         effect_decode_work: Default::default(),
         text_decode_work: Default::default(),

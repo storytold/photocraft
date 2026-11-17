@@ -115,7 +115,7 @@ pub(crate) fn pick(app: &mut PhotocraftApp, target: Target, name: String, bytes:
             "Reading replacement header",
             false,
             ProbeWork { name, bytes },
-            |_, question| Ok(json!({"historical":question.map(|question| json!({"version":question.version,"bitsPerSample":question.bits_per_sample}))})),
+            |_, question| Ok(json!({"historical":question.map(|question| json!({"version":question.version,"bitsPerSample":question.bits_per_sample,"mode":question.mode}))})),
         );
         match started {
             Ok(Started::Job(job)) => {
@@ -154,6 +154,8 @@ fn finish_probe(app: &mut PhotocraftApp, id: u64, value: &Value) -> Result<(), S
                 .and_then(Value::as_u64)
                 .and_then(|value| u32::try_from(value).ok())
                 .ok_or("invalid replacement header result")?,
+            mode: serde_json::from_value(value.get("mode").cloned().ok_or("missing replacement header mode")?)
+                .map_err(|_| "invalid replacement header mode")?,
         }),
         None => return Err("missing replacement header result".into()),
     };
