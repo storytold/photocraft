@@ -78,7 +78,7 @@ fn setup(h: &mut Harness, background: &str, r: [i32; 4]) {
     {
         let app = h.state_mut();
         while app.session.active().is_some() {
-            app.run("file.close", json!({"discard": true})).expect("close");
+            app.run("file.close", json!({"save": "discard"})).expect("close");
         }
         app.run("file.new", json!({"width": 400, "height": 300, "background": background})).expect("new");
         app.sync_views();

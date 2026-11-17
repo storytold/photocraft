@@ -176,7 +176,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Calculations…",
             ["Image"],
             None,
-            r##"{"source1":{"document","layer","channel","invert"},"source2":{…},"blending":"multiply|…"="multiply","opacity":0..100=100,"scale":1..2=1,"offset":-255..255=0,"mask":{…}?,"result":"newChannel|newDocument|selection"="newChannel","name":str?} (source channel: {"targeted":true} for one targeted colour/alpha, {"name":text} for a literal alpha name, {"color":text} for a colour component; source layer: {"name":text} for a literal layer name)"##,
+            r##"{"source1":{"document","layer","channel","invert"},"source2":{…},"blending":"multiply|…"="multiply","opacity":0..100=100,"scale":1..2=1,"offset":-255..255=0,"mask":{…}?,"result":"newChannel|newDocument|selection"="newChannel","name":str?} (source channel: {"targeted":true} for one targeted colour/alpha, {"name":text} for a literal alpha name, {"color":text} for a colour component; source layer: {"name":text} for a literal layer name) + {"source1Document":index|name?,"source1Layer":index|name?,"source1Channel":name?,"source1Invert":bool?,"source2Document":index|name?,"source2Layer":index|name?,"source2Channel":name?,"source2Invert":bool?,"maskDocument":index|name?,"maskLayer":index|name?,"maskChannel":name?} (flat dialog spelling of a spec: <prefix>Document, <prefix>Layer, <prefix>Channel, <prefix>Invert)"##,
             has_doc,
             calculations
         ),

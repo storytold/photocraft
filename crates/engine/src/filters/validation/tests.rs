@@ -305,6 +305,58 @@ fn stored_extended_filter_records_still_decode_tolerantly() {
 }
 
 #[test]
+fn stored_records_keep_out_of_range_values_while_new_calls_are_bounded() {
+    // The documented bounds gate new invocations in `validate_params`; a smart-filter record
+    // keeps its stored value, so an old document renders exactly as it did before (#7597).
+    use photocraft_algo::FilterParams;
+    let emboss = crate::filters::params_for("filter.stylize.emboss", &json!({"angle": 225.0})).unwrap();
+    assert!(matches!(emboss, FilterParams::Emboss { angle, .. } if (angle - 225.0).abs() < 1e-3), "{emboss:?}");
+    let radial = crate::filters::params_for("filter.blur.radialBlur", &json!({"centerX": 1.2, "centerY": -0.3})).unwrap();
+    assert!(
+        matches!(radial, FilterParams::RadialBlur { center_x, center_y, .. } if (center_x - 1.2).abs() < 1e-3 && (center_y + 0.3).abs() < 1e-3),
+        "{radial:?}"
+    );
+    let motion = crate::filters::params_for("filter.blur.motionBlur", &json!({"angle": 450.0})).unwrap();
+    assert!(matches!(motion, FilterParams::MotionBlur { angle, .. } if (angle - 450.0).abs() < 1e-3), "{motion:?}");
+    // The same values are refused when a command runs now.
+    for (id, key, v) in
+        [("filter.stylize.emboss", "angle", json!(225.0)), ("filter.blur.radialBlur", "centerX", json!(1.2)), ("filter.blur.motionBlur", "angle", json!(450.0))]
+    {
+        let err = validate_params(id, &json!({ key: v })).expect_err(&format!("{id}.{key}={v}"));
+        assert!(err.to_string().contains(key), "{err}");
+    }
+}
+
+#[test]
+fn fibers_seed_takes_the_whole_u32_range_and_the_signed_i32_range() {
+    // The doc says `u32|i32`: a negative seed is its 32-bit pattern, as actions record it.
+    // The signed alternative stops at the i32 bounds; beyond them nothing silently wraps.
+    for v in [json!(0), json!(u32::MAX), json!(i32::MIN), json!(-1)] {
+        validate_params("filter.render.fibers", &json!({"seed": v})).unwrap();
+    }
+    for v in [json!(4_294_967_296_u64), json!(-2_147_483_649_i64), json!(0.5), json!("12")] {
+        let err = validate_params("filter.render.fibers", &json!({"seed": v})).expect_err(&format!("seed={v}"));
+        assert!(err.to_string().contains("seed"), "{err}");
+    }
+}
+
+#[test]
+fn shape_blur_optional_shape_keys_accept_explicit_null() {
+    // The doc marks shapeId, shapeName and shapePath optional (`?`): null means "absent",
+    // as `Param::accepts` already treats it for every other optional key.
+    for key in ["shapeId", "shapeName", "shapePath"] {
+        validate_params("filter.blur.shapeBlur", &json!({"shape": "circle", key: Value::Null})).unwrap();
+    }
+    // Non-null values keep their checks: an empty name and an empty path are still refused.
+    for key in ["shapeId", "shapeName"] {
+        let err = validate_params("filter.blur.shapeBlur", &json!({ key: "" })).expect_err("{key}=''");
+        assert!(err.to_string().contains(key), "{err}");
+    }
+    let err = validate_params("filter.blur.shapeBlur", &json!({"shapePath": []})).expect_err("empty path");
+    assert!(err.to_string().contains("shapePath"), "{err}");
+}
+
+#[test]
 fn invalid_filters_leave_floating_selection_and_background_jobs_alone() {
     let mut s = session(16);
     s.execute("select.rect", json!({"x":0,"y":0,"width":4,"height":4})).unwrap();

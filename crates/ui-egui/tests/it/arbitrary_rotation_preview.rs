@@ -45,7 +45,7 @@ fn control(h: &mut Harness, method: &str, params: Value) -> Value {
 
 fn setup(h: &mut Harness, width: u32, height: u32, zoom: f32, center: [f32; 2]) {
     while h.state().session.active().is_some() {
-        control(h, "engine.execute", json!({"command":"file.close","params":{"discard":true}}));
+        control(h, "engine.execute", json!({"command":"file.close","params":{"save":"discard"}}));
     }
     control(h, "engine.execute", json!({"command":"prefs.set","params":{"path":"interface.language","value":"en"}}));
     control(h, "engine.execute", json!({"command":"file.new","params":{"width":width,"height":height,"background":"white"}}));

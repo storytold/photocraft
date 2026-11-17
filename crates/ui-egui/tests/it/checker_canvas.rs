@@ -99,7 +99,7 @@ fn render_on(h: &mut Harness, gpu: bool, zoom: f32, doc: u32, black: bool, grid:
     {
         let app = h.state_mut();
         while app.session.active().is_some() {
-            app.run("file.close", json!({"discard": true})).expect("close");
+            app.run("file.close", json!({"save": "discard"})).expect("close");
         }
         let background = if black { "white" } else { "transparent" };
         app.run("file.new", json!({"width": doc, "height": doc, "background": background})).expect("new");
@@ -257,7 +257,7 @@ fn grid_line_contrast_over_grey(h: &mut Harness, grey: u8) -> i32 {
     {
         let app = h.state_mut();
         while app.session.active().is_some() {
-            app.run("file.close", json!({"discard": true})).expect("close");
+            app.run("file.close", json!({"save": "discard"})).expect("close");
         }
         app.run("file.new", json!({"width": 48, "height": 48, "background": "white"})).expect("new");
         app.run("edit.fill", json!({"color": format!("#{grey:02x}{grey:02x}{grey:02x}")})).expect("fill");

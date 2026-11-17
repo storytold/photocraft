@@ -1064,6 +1064,8 @@ fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
             | "layer.vectorMask.add"
             | "layer.vectorMask.edit"
             | "layer.vectorMask.info"
+            // The note describes the vector mask's path, not a host file.
+            | "layer.vectorMask.currentPath"
             | "paint.symmetryFromPath"
             | "edit.defineCustomShape"
             // `"as":"path"` pastes the clipboard as a vector path (#10694).

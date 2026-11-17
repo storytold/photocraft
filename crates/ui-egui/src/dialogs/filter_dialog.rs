@@ -105,7 +105,7 @@ fn field_kind(p: &photocraft_engine::param_schema::Param) -> Kind {
         [K::Type { ty: Ty::Doc, .. }] => Kind::Document,
         [K::Sized { ty: Ty::Int, len, .. }] => Kind::Grid(*len),
         // Integers, and numbers in a unit (`px=0`).
-        kinds if kinds.iter().all(|k| matches!(k, K::Type { ty: Ty::Int | Ty::U32, .. })) => Kind::Int { default: number(0.0) as i64 },
+        kinds if kinds.iter().all(|k| matches!(k, K::Type { ty: Ty::Int | Ty::U32 | Ty::I32, .. })) => Kind::Int { default: number(0.0) as i64 },
         [K::Type { ty: Ty::Number, word }] if word != "number" && !word.starts_with('f') && word != "num" => Kind::Int { default: number(0.0) as i64 },
         // A choice of numbers (`8|16|32=8`).
         kinds if kinds.iter().all(|k| matches!(k, K::Number { .. })) => Kind::Int { default: number(0.0) as i64 },
@@ -934,6 +934,12 @@ fn field_scale(command: &str, key: &str, min: f32, max: f32) -> f32 {
     }
 }
 
+/// Round a field value to its decimal scale in f64. In f32 a typed `0.01` (Lighting Effects'
+/// minimum radius) lands under the documented minimum after widening, and validation refuses it.
+fn round_field(v: f32, scale: f32) -> f64 {
+    (f64::from(v) * f64::from(scale)).round() / f64::from(scale)
+}
+
 /// Replace Color (#4143): the dialog's "From" colour, sampled from the image with a canvas
 /// eyedropper like Photoshop's. While armed, the next click on the image writes the merged
 /// composite colour into the `color` field (the same sampler the Color Picker uses).
@@ -1261,8 +1267,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 // dragged this frame is the widget's f32, so it rounds from that.
                 let w = match (wide_decimals, src) {
                     (true, Some(rounded)) if !edited => json!(rounded),
-                    (true, _) => json!(round64(f64::from(v))),
-                    (false, _) => json!((v * scale).round() / scale),
+                    _ => json!(round_field(v, scale)),
                 };
                 f.insert(p.key, w);
             }

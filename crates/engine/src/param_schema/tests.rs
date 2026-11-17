@@ -104,16 +104,45 @@ fn type_words_alternatives_and_choices_keep_every_member() {
 }
 
 #[test]
+fn sized_arrays_check_their_length_and_element_type() {
+    // `int[25]` means exactly 25 integers: an empty or wrong-sized array, or a non-integer
+    // element, is not that value.
+    let p = parse(r#"{"kernel":int[25]}"#);
+    let kernel = p.param("kernel").unwrap();
+    let ints = |n: usize| serde_json::Value::Array((0..n).map(|i| json!(i)).collect());
+    assert!(kernel.accepts(&ints(25)));
+    assert!(kernel.accepts(&serde_json::Value::Array((0..25).map(|_| json!(1.0)).collect())), "whole floats are integers");
+    for bad in [serde_json::Value::Array(vec![]), ints(24), ints(26), json!(["bad"]), serde_json::Value::Array((0..25).map(|_| json!(1.5)).collect())] {
+        assert!(!kernel.accepts(&bad), "{bad}");
+    }
+    assert!(!kernel.accepts(&json!("not an array")));
+}
+
+#[test]
 fn input_keys_are_the_top_level_ones_of_the_input_objects() {
     // Nested keys, `→ {result}` keys and keys in trailing prose are not input parameters.
     assert_eq!(keys(r#"{"a":{"b":0..1},"c":bool} (per channel {"hue","saturation"}) → {"d":id}"#), ["a", "c"]);
     // A composed object (` + {…}`) adds its keys.
     assert_eq!(keys(r#"{"x":bool} + {"opacity":0..1=1,"name":str?}"#), ["x", "opacity", "name"]);
+    // …even when a note sits between the objects, as it does for every new adjustment layer
+    // (the kind's own doc, its note, then the layer options composed with ` + {…}`).
+    assert_eq!(keys(r##"{"stops":json} (stops [[0, "#rrggbb"], …]) + {"opacity":0..1=1,"name":str?}"##), ["stops", "opacity", "name"]);
+    let composed = parse(r##"{"stops":json} (stops [[0, "#rrggbb"], …]) + {"opacity":0..1=1,"name":str?} → {"layer":id}"##);
+    assert!(composed.param("opacity").unwrap().accepts(&json!(0.7)));
+    assert!(!composed.param("opacity").unwrap().accepts(&json!(1.5)));
+    assert_eq!(composed.render(), r##"{"stops":json} (stops [[0, "#rrggbb"], …]) + {"opacity":0..1=1,"name":str?} → {"layer":id}"##);
     // `"all","pixels":bool`, `"quad"|"corners":…`, `"key"?:…`, a bare `"key"?` and ` or "key":` alternatives.
     assert_eq!(
         keys(r#"{"locks":{"all","pixels":bool}?,"all","pixels":bool,"quad"|"corners":json?,"historyName"?:text,"stops"?,"layer":id? or "layers":[id,…]?}"#),
         ["locks", "all", "pixels", "quad", "corners", "historyName", "stops", "layer", "layers"]
     );
+    // The comma-joined keys share their value: both are booleans, not one typed and one free.
+    let grouped = parse(r#"{"all","pixels":bool}"#);
+    for key in ["all", "pixels"] {
+        let p = grouped.param(key).unwrap_or_else(|| panic!("{key}"));
+        assert!(p.accepts(&json!(true)), "{key} must take a boolean");
+        assert!(!p.accepts(&json!("bad")), "{key} must reject a string");
+    }
     // A nested `…` leaves that object open, not the command's keys.
     let p = parse(r#"{"curve":[[in,out],…],"opts":{"a":bool,…}}"#);
     assert!(!p.open());

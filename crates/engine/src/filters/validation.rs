@@ -34,12 +34,28 @@ pub(crate) fn validate_params(id: &str, params: &Value) -> Result<()> {
     for (key, value) in map {
         let (valid, expected) = match (schema.param(key), key.as_str()) {
             (Some(p), _) if DIALOG_RANGES.contains(&(id, key.as_str())) => (value.is_number() || (value.is_null() && p.optional()), "a number".into()),
-            (Some(_), "shapeId" | "shapeName") if id == "filter.blur.shapeBlur" => (value.as_str().is_some_and(|s| !s.is_empty()), "a nonempty string".into()),
-            (Some(_), "shapePath") if id == "filter.blur.shapeBlur" => {
-                (crate::vector_cmds::parse_path(value).is_ok_and(|path| !path.is_empty() && path.control_bounds().is_some()), "a nonempty vector path".into())
+            (Some(p), "shapeId" | "shapeName") if id == "filter.blur.shapeBlur" => {
+                ((value.is_null() && p.optional()) || value.as_str().is_some_and(|s| !s.is_empty()), "a nonempty string".into())
             }
+            (Some(p), "shapePath") if id == "filter.blur.shapeBlur" => (
+                (value.is_null() && p.optional())
+                    || crate::vector_cmds::parse_path(value).is_ok_and(|path| !path.is_empty() && path.control_bounds().is_some()),
+                "a nonempty vector path".into(),
+            ),
             (Some(p), _) => (p.accepts(value), p.expected()),
-            (None, "layer") => (value.as_u64().is_some() || value.is_string(), "an unsigned layer id or layer name".into()),
+            // The forms `explicit_layer` resolves: an id, a name, or a recorded reference
+            // (`{"name":…}`, `{"background":true}`, `{"index":…}` / `{"ordinal":…}`); an
+            // unresolvable one fails later with the layer listing.
+            (None, "layer") => (
+                value.as_u64().is_some()
+                    || value.is_string()
+                    || value.as_object().is_some_and(|o| {
+                        o.contains_key("index")
+                            || o.contains_key("ordinal")
+                            || (o.len() == 1 && (o.get("name").is_some_and(Value::is_string) || o.get("background") == Some(&Value::Bool(true))))
+                    }),
+                "an unsigned layer id, a layer name or a recorded layer reference".into(),
+            ),
             (None, "coalesce") => (value.is_string(), "a string".into()),
             (None, "target") if id.starts_with("filter.") => (
                 value.as_str().is_some_and(|s| matches!(s, "pixels" | "mask" | "filterMask" | "quickMask"))

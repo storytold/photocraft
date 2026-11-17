@@ -90,7 +90,7 @@ fn assert_document_size_is_physical(gpu: bool) {
         {
             let app = h.state_mut();
             while app.session.active().is_some() {
-                app.run("file.close", json!({"discard": true})).expect("close");
+                app.run("file.close", json!({"save": "discard"})).expect("close");
             }
             app.run("prefs.set", json!({"values": {"interface.uiScale": ui_scale}})).expect("ui scale");
             app.run("file.new", json!({"width": DOC, "height": DOC, "background": "white"})).expect("new");

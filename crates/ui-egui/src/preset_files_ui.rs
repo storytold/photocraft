@@ -102,7 +102,11 @@ pub fn open(app: &mut PhotocraftApp, name: &str, bytes: &[u8]) -> Option<Result<
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| tl!("Imported").into());
     let mut p = source(name, bytes);
-    p["group"] = json!(stem);
+    if cmd != "pattern.import" {
+        // The pattern library has no groups: `pattern.import` ignores `group`, and dispatch
+        // rejects params the command doesn't document.
+        p["group"] = json!(stem);
+    }
     if what == "brushes" {
         p["select"] = json!(true);
     }
