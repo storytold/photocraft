@@ -861,39 +861,25 @@ fn bitmap_pixels(d: &Document) -> Vec<f32> {
 #[test]
 fn bitmap_in_bands_matches_one_full_canvas_conversion() {
     // #8477: the composite is converted in bands (32768 px wide: 256 rows each, so 300 rows are
-    // two). Diffusion carries its error across the band edge, and pattern, halftone and custom
-    // pattern stay anchored to the image's rows: the result equals one full-canvas conversion.
+    // two). Keep the Engine checks for diffusion's carried error and custom-pattern row anchoring;
+    // bitmap_strips_match_the_whole_image_however_it_is_cut in Algo covers every method's strips.
     let (w, h) = (32_768u32, 300u32);
     let mut s = session(w, h, 8, "grayscale");
     paint(&mut s, |x, y| {
         let v = ((x % 509) as f32 / 509.0 * 0.6 + (y as f32 / 300.0) * 0.4).fract();
         [v, v, v, 1.0]
     });
-    add_pattern(&mut s, "Cells", 3, 2, &[10, 200, 90, 250, 150, 40]);
-    let cases = [
-        ("threshold", None, Some(BitmapMethod::Threshold)),
-        ("pattern", None, Some(BitmapMethod::Pattern)),
-        ("diffusion", None, Some(BitmapMethod::Diffusion)),
-        ("halftone", Some(53.0), None),
-        ("customPattern", None, None),
-    ];
-    for (method, freq, m) in cases {
+    // Three pattern rows do not divide the 256-row band: restarting at its edge changes the result.
+    add_pattern(&mut s, "Cells", 3, 3, &[10, 200, 90, 250, 150, 40, 70, 220, 120]);
+    let cases = [("diffusion", Some(BitmapMethod::Diffusion)), ("customPattern", None)];
+    for (method, m) in cases {
         let before = doc(&s).clone();
         let mut p = json!({"method": method});
-        if let Some(f) = freq {
-            p["frequency"] = json!(f);
-            p["angle"] = json!(30);
-            p["shape"] = json!("diamond");
-        }
         if method == "customPattern" {
             p["pattern"] = json!("Cells");
         }
         s.execute("image.mode.bitmap", p.clone()).unwrap();
         let want = match method {
-            "halftone" => {
-                let cell = (before.resolution_dpi / 53.0).max(2.0);
-                bitmap_oracle(&before, Some(BitmapMethod::Halftone { cell, angle: 30.0, shape: HalftoneShape::Diamond }), None)
-            }
             "customPattern" => {
                 let (map, mw, mh) = custom_pattern_map(&s, "t", &p).unwrap();
                 bitmap_oracle(&before, None, Some((&map, mw, mh)))
