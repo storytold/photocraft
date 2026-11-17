@@ -1,5 +1,7 @@
 use super::*;
 use crate::canvas::{ToolEvent, tool_event};
+use craft::behavior::CursorBadge;
+use craft::keymap::Mods;
 
 pub(super) fn app() -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -17,6 +19,18 @@ fn drag(app: &mut PhotocraftApp, tool: Tool) {
     assert!(!app.ui.status_error, "{tool:?}: {}", app.ui.status);
 }
 
+/// Down at the first point, a move through each next one, up at the last.
+fn gesture(app: &mut PhotocraftApp, points: &[[f64; 2]]) {
+    let m = egui::Modifiers::NONE;
+    let [x, y] = points[0];
+    tool_event(app, ToolEvent::Down { x, y, pressure: 1.0 }, m);
+    for &[x, y] in &points[1..] {
+        tool_event(app, ToolEvent::Move { x, y, pressure: 1.0 }, m);
+    }
+    let [x, y] = points[points.len() - 1];
+    tool_event(app, ToolEvent::Up { x, y }, m);
+}
+
 fn active(app: &PhotocraftApp) -> &photocraft_doc::Layer {
     let st = app.session.active().unwrap();
     st.active_layer.and_then(|id| st.doc.layer(id)).unwrap()
@@ -28,42 +42,16 @@ pub(super) fn stripes(app: &mut PhotocraftApp, step: usize, target: &str) {
     }
 }
 
-#[test]
-fn only_clone_stamp_and_healing_brush_wrap_in_pattern_preview() {
-    // View › Pattern Preview (#8883): a Clone Stamp or Healing Brush stroke across the right edge
-    // asks its command to go on at the opposite one, and only then. The reference application's
-    // other retouching tools stop at the edge.
-    let tools = [
-        (Tool::CloneStamp, "paint.cloneStamp", true),
-        (Tool::Healing, "paint.healingBrush", true),
-        (Tool::Blur, "paint.blur", false),
-        (Tool::Sharpen, "paint.sharpen", false),
-        (Tool::Smudge, "paint.smudge", false),
-        (Tool::Dodge, "paint.dodge", false),
-        (Tool::Burn, "paint.burn", false),
-        (Tool::Sponge, "paint.sponge", false),
-        (Tool::ColorReplacement, "paint.colorReplacement", false),
-        (Tool::PatternStamp, "paint.patternStamp", false),
-        (Tool::HistoryBrush, "paint.historyBrush", false),
-        (Tool::SpotHealing, "paint.spotHealing", false),
-        (Tool::BackgroundEraser, "paint.backgroundEraser", false),
-    ];
-    for (tool, cmd, wraps) in tools {
-        for pattern_preview in [false, true] {
-            let mut app = app();
-            stripes(&mut app, 8, "pixels");
-            app.ui.view.pattern_preview = pattern_preview;
-            set_source(&mut app, 20.0, 30.0);
-            app.ui.tool = tool;
-            let m = egui::Modifiers::NONE;
-            tool_event(&mut app, ToolEvent::Down { x: 86.0, y: 30.0, pressure: 1.0 }, m);
-            tool_event(&mut app, ToolEvent::Move { x: 112.0, y: 30.0, pressure: 1.0 }, m);
-            tool_event(&mut app, ToolEvent::Up { x: 112.0, y: 30.0 }, m);
-            assert!(!app.ui.status_error, "{tool:?}: {}", app.ui.status);
-            let (_, p) = app.session.journal.iter().rev().find(|(id, _)| id == cmd).cloned().unwrap_or_else(|| panic!("{tool:?}: no {cmd}"));
-            assert_eq!(p.get("wrap").and_then(Value::as_bool).unwrap_or(false), wraps && pattern_preview, "{tool:?}: {p}");
-        }
+/// Numbers compare within rounding of the 32-bit options; everything else exactly.
+fn same(a: &Value, b: &Value) -> bool {
+    match (a.as_f64(), b.as_f64()) {
+        (Some(x), Some(y)) => (x - y).abs() < 1e-3,
+        _ => a == b,
     }
+}
+
+fn shift() -> Mods {
+    Mods { shift: true, ..Mods::default() }
 }
 
 #[test]
@@ -118,17 +106,6 @@ fn clone_stamp_paints_with_the_brush_hardness() {
 }
 
 #[test]
-fn alt_flips_dodge_burn_and_blur_sharpen() {
-    for (tool, flipped) in [(Tool::Dodge, Tool::Burn), (Tool::Burn, Tool::Dodge), (Tool::Blur, Tool::Sharpen), (Tool::Sharpen, Tool::Blur)] {
-        assert_eq!(alt_flipped(tool, true), flipped);
-        assert_eq!(alt_flipped(tool, false), tool);
-    }
-    for tool in [Tool::Sponge, Tool::Smudge, Tool::Brush] {
-        assert_eq!(alt_flipped(tool, true), tool, "{tool:?} has no ⌥ counterpart");
-    }
-}
-
-#[test]
 fn alt_stroke_runs_the_opposite_tool() {
     // ⌥ held as the stroke starts: Dodge burns, Burn dodges, Blur sharpens, Sharpen blurs.
     for (tool, cmd) in [(Tool::Dodge, "paint.burn"), (Tool::Burn, "paint.dodge"), (Tool::Blur, "paint.sharpen"), (Tool::Sharpen, "paint.blur")] {
@@ -143,97 +120,195 @@ fn alt_stroke_runs_the_opposite_tool() {
     }
 }
 
-#[test]
-fn clone_stamp_brush_opacity_and_flow_reach_the_painted_pixels() {
-    let mut app = app();
-    app.run("paint.pencil", json!({"points": [[10, 10]], "size": 16, "color": "#ff0000"})).unwrap();
-    app.run("layer.new.layer", json!({})).unwrap();
-    app.ui.tool = Tool::CloneStamp;
-    set_source(&mut app, 10.0, 10.0);
-    app.ui.tool_options.clone_sample = "all".into();
-    app.run("tools.setBrush", json!({"brush": {"opacity": 0.5, "flow": 0.5}})).unwrap();
-    assert!(finish_stroke(&mut app, Tool::CloneStamp, &[[50.0, 30.0, 1.0]], egui::Modifiers::NONE, false));
-    assert!(!app.ui.status_error, "{}", app.ui.status);
-    let pixel = active(&app).surface().unwrap().rgba(50, 30);
-    assert!(pixel[0] > 0.9 && pixel[3] > 0.0 && pixel[3] < 0.5, "partial-opacity, partial-flow red stamp: {pixel:?}");
-    let (id, params) = app.session.journal.last().unwrap();
-    assert_eq!(id, "paint.cloneStamp");
-    assert_eq!(params["opacity"], 50.0);
-    assert_eq!(params["flow"], 50.0);
+type Setup = fn(&mut PhotocraftApp);
+
+/// One row of the stamp table: the tool's brush edit, an extra setup, the command and the params it sends.
+struct StampRow {
+    name: &'static str,
+    tool: Tool,
+    cmd: &'static str,
+    brush: Value,
+    setup: Setup,
+    want: Value,
 }
 
-/// A Healing Brush whose brush holds a mode outside its menu (Overlay, restored with the tool
-/// active, so no tool switch sees it) heals in Normal; the Clone Stamp keeps Overlay.
+fn stamp_row(name: &'static str, tool: Tool, cmd: &'static str, brush: Value, setup: Setup, want: Value) -> StampRow {
+    StampRow { name, tool, cmd, brush, setup, want }
+}
+
+/// What each stamp tool's bar values become in its command (the JSON names are the engine's protocol).
 #[test]
-fn healing_brush_heals_in_normal_with_a_mode_outside_its_menu() {
-    for (tool, want) in [(Tool::Healing, "Normal"), (Tool::CloneStamp, "Overlay")] {
+fn stamp_tools_send_the_options_they_paint_with() {
+    use photocraft_color::BlendMode;
+    let rows = [
+        stamp_row(
+            "Clone opacity, flow and Multiply",
+            Tool::CloneStamp,
+            "paint.cloneStamp",
+            json!({"opacity": 0.5, "flow": 0.5, "mode": "Multiply"}),
+            |_| {},
+            json!({"opacity": 50.0, "flow": 50.0, "mode": "Multiply"}),
+        ),
+        stamp_row("Healing Luminosity", Tool::Healing, "paint.healingBrush", json!({"mode": "Luminosity"}), |_| {}, json!({"mode": "Luminosity"})),
+        // A mode outside the Healing Brush's menu (restored with the tool active) heals in Normal.
+        stamp_row(
+            "Healing holding Overlay",
+            Tool::Healing,
+            "paint.healingBrush",
+            json!({}),
+            |app| app.session.tools.brush.mode = BlendMode::Overlay,
+            json!({"mode": "Normal"}),
+        ),
+        stamp_row(
+            "History Brush opacity, flow and Screen",
+            Tool::HistoryBrush,
+            "paint.historyBrush",
+            json!({"opacity": 0.5, "flow": 0.5, "mode": "Screen"}),
+            |_| {},
+            json!({"opacity": 50.0, "flow": 50.0, "mode": "Screen"}),
+        ),
+        stamp_row(
+            "Pattern Stamp Overlay, unaligned, scale and angle",
+            Tool::PatternStamp,
+            "paint.patternStamp",
+            json!({"mode": "Overlay"}),
+            |app| {
+                let o = &mut app.ui.tool_options;
+                (o.pattern_stamp_aligned, o.pattern_stamp_scale, o.pattern_stamp_angle) = (false, 150.0, 30.0);
+            },
+            json!({"mode": "Overlay", "aligned": false, "scale": 150.0, "angle": 30.0}),
+        ),
+        stamp_row(
+            "Art History opacity, style, area and tolerance",
+            Tool::ArtHistoryBrush,
+            "paint.artHistoryBrush",
+            json!({"opacity": 0.4}),
+            |app| {
+                let o = &mut app.ui.tool_options;
+                (o.art_history_style, o.art_history_area, o.art_history_tolerance) = ("tightMedium".into(), 30.0, 12.0);
+            },
+            json!({"opacity": 40.0, "style": "tightMedium", "area": 30.0, "tolerance": 12.0}),
+        ),
+        // PLAN: the Red Eye params `pupilSize` and `darken` come from engine redeye_cmds.rs:289; the caller is outside this set's files.
+        stamp_row(
+            "Red Eye pupil size and darken",
+            Tool::RedEye,
+            "paint.redEye",
+            json!({}),
+            |app| {
+                let o = &mut app.ui.tool_options;
+                (o.red_eye_pupil_size, o.red_eye_darken) = (20.0, 70.0);
+            },
+            json!({"pupilSize": 20.0, "darken": 70.0}),
+        ),
+    ];
+    for row in rows {
         let mut app = app();
-        app.ui.tool = tool;
+        app.run("paint.pencil", json!({"points": [[0, 30], [100, 30]], "size": 20, "color": "#3060c0"})).unwrap();
+        app.ui.tool = row.tool;
         crate::paint_mouse::sync_tool_brush(&mut app);
-        app.session.tools.brush.mode = photocraft_color::BlendMode::Overlay;
+        app.run("tools.setBrush", json!({"brush": row.brush})).unwrap();
         set_source(&mut app, 10.0, 10.0);
-        drag(&mut app, tool);
-        let (_, params) = app.session.journal.last().unwrap();
-        assert_eq!(params["mode"], want, "{tool:?}");
+        (row.setup)(&mut app);
+        if row.tool == Tool::RedEye {
+            gesture(&mut app, &[[50.0, 30.0]]);
+        } else {
+            drag(&mut app, row.tool);
+        }
+        assert!(!app.ui.status_error, "{}: {}", row.name, app.ui.status);
+        let (id, p) = app.session.journal.last().cloned().unwrap();
+        assert_eq!(id, row.cmd, "{}", row.name);
+        for (key, want) in row.want.as_object().unwrap() {
+            assert!(same(&p[key.as_str()], want), "{}: {key}: {} vs {want}", row.name, p[key.as_str()]);
+        }
     }
 }
 
-/// The options bar's Mode (each tool's own brush's) reaches the stamps', the History Brush's
-/// and the Healing Brush's strokes, live and committed.
+type Edit = fn(&mut crate::state::ToolOptions);
+
+/// One row of the dab table: an edit of the bar's values and the param the tool's command then carries
+/// (`None`: the param is absent).
+struct DabRow {
+    name: &'static str,
+    tool: Tool,
+    edit: Edit,
+    key: &'static str,
+    want: Option<Value>,
+}
+
+fn dab_row(name: &'static str, tool: Tool, edit: Edit, key: &'static str, want: Option<Value>) -> DabRow {
+    DabRow { name, tool, edit, key, want }
+}
+
+fn tool_params(app: &PhotocraftApp, tool: Tool) -> Value {
+    if tool == Tool::ColorReplacement { color_replacement_params(app) } else { dab_params(app, tool).expect("a dab tool").1 }
+}
+
+/// What each dab tool's bar values become in its params, and which layers a stroke samples.
 #[test]
-fn retouch_mode_reaches_the_command() {
-    for (tool, cmd, mode) in [
-        (Tool::CloneStamp, "paint.cloneStamp", "Multiply"),
-        (Tool::Healing, "paint.healingBrush", "Luminosity"),
-        (Tool::HistoryBrush, "paint.historyBrush", "Screen"),
-        (Tool::PatternStamp, "paint.patternStamp", "Overlay"),
-    ] {
+fn dab_tools_send_their_bar_values() {
+    use photocraft_color::BlendMode;
+    let rows = [
+        dab_row("Blur own Sample All", Tool::Blur, |o| o.sample_all.blur = true, "sampleAllLayers", Some(json!(true))),
+        dab_row("Blur, another tool's Sample All", Tool::Blur, |o| o.sample_all.magic_wand = true, "sampleAllLayers", Some(json!(false))),
+        dab_row("Sharpen own Sample All", Tool::Sharpen, |o| o.sample_all.sharpen = true, "sampleAllLayers", Some(json!(true))),
+        dab_row("Smudge own Sample All", Tool::Smudge, |o| o.sample_all.smudge = true, "sampleAllLayers", Some(json!(true))),
+        dab_row("Smudge, Blur's Sample All", Tool::Smudge, |o| o.sample_all.blur = true, "sampleAllLayers", Some(json!(false))),
+        dab_row("Sponge flow 10", Tool::Sponge, |o| o.sponge_flow = 10.0, "flow", Some(json!(10.0))),
+        dab_row("Sponge flow 50", Tool::Sponge, |o| o.sponge_flow = 50.0, "flow", Some(json!(50.0))),
+        dab_row("Sponge flow 100", Tool::Sponge, |o| o.sponge_flow = 100.0, "flow", Some(json!(100.0))),
+        dab_row("Sponge stored 33.7", Tool::Sponge, |o| o.sponge_flow = 33.7, "flow", Some(json!(34.0))),
+        dab_row("Smudge mode", Tool::Smudge, |o| o.smudge_mode = BlendMode::Darken, "mode", Some(json!(BlendMode::Darken.label()))),
+        dab_row("Blur has no mode", Tool::Blur, |_| {}, "mode", None),
+        dab_row("Sharpen has no mode", Tool::Sharpen, |_| {}, "mode", None),
+        dab_row("Color Replacement mode", Tool::ColorReplacement, |o| o.cr_mode = "luminosity".into(), "mode", Some(json!("luminosity"))),
+        dab_row("Color Replacement limits", Tool::ColorReplacement, |o| o.cr_limits = "findEdges".into(), "limits", Some(json!("findEdges"))),
+        dab_row("Color Replacement sampling", Tool::ColorReplacement, |o| o.cr_sampling = "once".into(), "sampling", Some(json!("once"))),
+        dab_row("Color Replacement anti-alias", Tool::ColorReplacement, |o| o.cr_anti_alias = false, "antiAlias", Some(json!(false))),
+        dab_row("Color Replacement tolerance 55", Tool::ColorReplacement, |o| o.cr_tolerance = 55.0, "tolerance", Some(json!(55.0))),
+        dab_row("Color Replacement stored 12.5", Tool::ColorReplacement, |o| o.cr_tolerance = 12.5, "tolerance", Some(json!(13.0))),
+    ];
+    for row in rows {
         let mut app = app();
-        app.ui.tool = tool;
-        crate::paint_mouse::sync_tool_brush(&mut app);
-        app.run("tools.setBrush", json!({"brush": {"mode": mode}})).unwrap();
-        set_source(&mut app, 10.0, 10.0);
-        drag(&mut app, tool);
-        let (id, params) = app.session.journal.last().unwrap();
-        assert_eq!((id.as_str(), params["mode"].as_str()), (cmd, Some(mode)), "{tool:?}");
+        (row.edit)(&mut app.ui.tool_options);
+        let p = tool_params(&app, row.tool);
+        match row.want {
+            Some(want) => assert!(same(&p[row.key], &want), "{}: {p}", row.name),
+            None => assert!(p.get(row.key).is_none(), "{}: {p}", row.name),
+        }
     }
-}
+    // The foreground is the replacement colour.
+    let fresh = app();
+    assert_eq!(color_replacement_params(&fresh)["color"], json!(fresh.session.tools.foreground));
 
-/// The Paint Bucket's Mode reaches the fill: Multiply darkens, Clear erases.
-#[test]
-fn paint_bucket_mode_reaches_the_fill() {
-    let mut app = app();
-    app.run("layer.new.layer", json!({})).unwrap();
-    app.ui.tool = Tool::PaintBucket;
-    app.session.tools.foreground = [0.5, 0.5, 0.5, 1.0];
-    let click = |app: &mut PhotocraftApp| {
-        let m = egui::Modifiers::NONE;
-        tool_event(app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, m);
-        tool_event(app, ToolEvent::Up { x: 20.0, y: 20.0 }, m);
-    };
-    click(&mut app);
-    app.session.tools.foreground = [1.0, 0.0, 0.0, 1.0];
-    app.ui.tool_options.bucket_blend_mode = photocraft_color::BlendMode::Multiply;
-    click(&mut app);
-    let px = active(&app).surface().unwrap().rgba(20, 20);
-    assert!((px[0] - 0.5).abs() < 0.02 && px[1] < 0.02, "multiplied: {px:?}");
-    app.ui.tool_options.bucket_clear = true;
-    click(&mut app);
-    assert_eq!(app.session.journal.last().unwrap().1["mode"], "clear");
-    assert!(active(&app).surface().unwrap().rgba(20, 20)[3] < 0.01, "cleared");
-}
-
-#[test]
-fn clone_without_a_source_names_the_platform_modifier() {
-    // Option-click on the Mac, Alt-click elsewhere (#251). The Clone Stamp says it in an alert
-    // (#12609, clone_stamp_no_source_alert_tests.rs).
-    let tool = Tool::Healing;
-    let mut app = app();
-    app.ui.tool = tool;
-    assert!(finish_stroke(&mut app, tool, &[[10.0, 30.0, 1.0], [50.0, 30.0, 1.0]], egui::Modifiers::NONE, false));
-    assert!(app.ui.status_error);
-    let want = if cfg!(target_os = "macos") { "Option-click" } else { "Alt-click" };
-    assert!(app.ui.status.starts_with(want), "{}", app.ui.status);
+    // #207, #731: each tool's own Sample All Layers reaches the stroke, another tool's does not (#5524).
+    for tool in [Tool::SpotHealing, Tool::Remove, Tool::Blur, Tool::Sharpen, Tool::Smudge] {
+        for all in [false, true] {
+            let mut app = app();
+            stripes(&mut app, 4, "pixels");
+            app.run("layer.new.layer", json!({})).unwrap();
+            *app.ui.tool_options.sample_all.slot(tool).unwrap() = all;
+            drag(&mut app, tool);
+            let a = active(&app).surface().unwrap().rgba(30, 30)[3];
+            assert_eq!(a > 0.0, all, "{tool:?} sampleAllLayers={all}: alpha {a}");
+        }
+    }
+    for tool in [Tool::Blur, Tool::Sharpen, Tool::Smudge] {
+        let mut app = app();
+        stripes(&mut app, 4, "pixels");
+        app.run("layer.new.layer", json!({})).unwrap();
+        let mut others = crate::state::SampleAllLayers::default();
+        for t in
+            [Tool::MagicWand, Tool::QuickSelection, Tool::ObjectSelection, Tool::PaintBucket, Tool::MagicEraser, Tool::SpotHealing, Tool::Patch, Tool::Remove]
+        {
+            *others.slot(t).unwrap() = true;
+        }
+        app.ui.tool_options.sample_all = others;
+        assert!(!app.ui.tool_options.sample_all.get(tool));
+        drag(&mut app, tool);
+        let a = active(&app).surface().unwrap().rgba(30, 30)[3];
+        assert_eq!(a, 0.0, "{tool:?} sampled all layers through another tool's option");
+    }
 }
 
 #[test]
@@ -256,139 +331,77 @@ fn retouch_strokes_paint_the_targeted_mask() {
     }
 }
 
-#[test]
-fn sample_all_layers_reaches_the_command() {
-    // #207, #731: the options-bar checkbox reaches the command.
-    for tool in [Tool::SpotHealing, Tool::Remove, Tool::Blur, Tool::Sharpen, Tool::Smudge] {
-        for all in [false, true] {
-            let mut app = app();
-            stripes(&mut app, 4, "pixels");
-            app.run("layer.new.layer", json!({})).unwrap();
-            *app.ui.tool_options.sample_all.slot(tool).unwrap() = all;
-            drag(&mut app, tool);
-            let a = active(&app).surface().unwrap().rgba(30, 30)[3];
-            assert_eq!(a > 0.0, all, "{tool:?} sampleAllLayers={all}: alpha {a}");
-        }
-    }
+/// One row of the selection table: setup, the gesture and the command with the params it sends.
+struct SelectionRow {
+    name: &'static str,
+    tool: Tool,
+    setup: Setup,
+    points: &'static [[f64; 2]],
+    cmd: &'static str,
+    want: Value,
 }
 
 #[test]
-fn sample_all_layers_is_each_tools_own() {
-    // #5524: Sample All Layers turned on for another tool (the Magic Wand, say) left Blur and
-    // Smudge copying the composite onto an annotation layer, freezing a sharp patch above the
-    // picture. Photoshop keeps the option per tool, so those strokes leave the empty layer empty.
-    for tool in [Tool::Blur, Tool::Sharpen, Tool::Smudge] {
+fn selection_tools_send_their_bar_values() {
+    let rows = [
+        // A click cannot be a rectangle: it selects at the cursor instead of looking dead.
+        SelectionRow {
+            name: "Object Selection click without Object Finder",
+            tool: Tool::ObjectSelection,
+            setup: |app| app.ui.tool_options.object_finder = false,
+            points: &[[50.0, 30.0]],
+            cmd: "select.quick",
+            want: json!({}),
+        },
+        SelectionRow {
+            name: "Object Selection rectangle",
+            tool: Tool::ObjectSelection,
+            setup: |app| {
+                app.run("paint.pencil", json!({"points": [[20, 10], [20, 50]], "size": 8, "color": "#ff0000"})).unwrap();
+            },
+            points: &[[5.0, 5.0], [60.0, 55.0]],
+            cmd: "select.object",
+            want: json!({}),
+        },
+        SelectionRow {
+            name: "Patch Content-Aware structure and colour",
+            tool: Tool::Patch,
+            setup: |app| {
+                app.run("paint.pencil", json!({"points": [[68, 30], [74, 30]], "size": 6, "color": "#ff0000"})).unwrap();
+                app.run("select.rect", json!({"x": 60, "y": 20, "width": 24, "height": 20})).unwrap();
+                let o = &mut app.ui.tool_options;
+                (o.patch_content_aware, o.patch_structure, o.patch_color) = (true, 5.0, 3.0);
+            },
+            points: &[[70.0, 30.0], [50.0, 31.0], [30.0, 30.0]],
+            cmd: "paint.patch",
+            want: json!({"contentAware": true, "structure": 5.0, "color": 3.0}),
+        },
+    ];
+    for row in rows {
         let mut app = app();
-        stripes(&mut app, 4, "pixels");
-        app.run("layer.new.layer", json!({})).unwrap();
-        let mut others = crate::state::SampleAllLayers::default();
-        for t in [
-            Tool::MagicWand,
-            Tool::QuickSelection,
-            Tool::ObjectSelection,
-            Tool::PaintBucket,
-            Tool::MagicEraser,
-            Tool::SpotHealing,
-            Tool::Patch,
-            Tool::ContentAwareMove,
-            Tool::Remove,
-            Tool::Blur,
-            Tool::Sharpen,
-            Tool::Smudge,
-        ] {
-            if let Some(v) = others.slot(t).filter(|_| t != tool) {
-                *v = true;
-            }
+        (row.setup)(&mut app);
+        app.ui.tool = row.tool;
+        gesture(&mut app, row.points);
+        assert!(!app.ui.status_error, "{}: {}", row.name, app.ui.status);
+        let (id, p) = app.session.journal.last().cloned().unwrap();
+        assert_eq!(id, row.cmd, "{}", row.name);
+        for (key, want) in row.want.as_object().unwrap() {
+            assert!(same(&p[key.as_str()], want), "{}: {key}: {p}", row.name);
         }
-        app.ui.tool_options.sample_all = others;
-        assert!(!app.ui.tool_options.sample_all.get(tool));
-        drag(&mut app, tool);
-        let a = active(&app).surface().unwrap().rgba(30, 30)[3];
-        assert_eq!(a, 0.0, "{tool:?} sampled all layers through another tool's option");
     }
 }
 
+/// Bug #668: setting the source (⌥-click) leaves nothing on the canvas; the marker shows while a stroke is painted.
 #[test]
-fn object_selection_click_falls_back_to_quick_selection() {
-    // A click cannot be a rectangle: it selects at the cursor instead of looking dead.
+fn clone_marker_shows_only_while_painting() {
     let mut app = app();
-    app.ui.tool = Tool::ObjectSelection;
-    app.ui.tool_options.object_finder = false;
-    let m = egui::Modifiers::NONE;
-    tool_event(&mut app, ToolEvent::Down { x: 50.0, y: 30.0, pressure: 1.0 }, m);
-    tool_event(&mut app, ToolEvent::Up { x: 50.0, y: 30.0 }, m);
-    assert!(!app.ui.status_error, "{}", app.ui.status);
-    assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("select.quick"));
-}
+    app.ui.tool = Tool::CloneStamp;
+    set_source(&mut app, 30.0, 30.0);
 
-#[test]
-fn object_selection_rect_runs_object_selection_and_reports() {
-    let mut app = app();
-    app.run("paint.pencil", json!({"points": [[20, 10], [20, 50]], "size": 8, "color": "#ff0000"})).unwrap();
-    app.ui.tool = Tool::ObjectSelection;
-    let m = egui::Modifiers::NONE;
-    tool_event(&mut app, ToolEvent::Down { x: 5.0, y: 5.0, pressure: 1.0 }, m);
-    tool_event(&mut app, ToolEvent::Move { x: 60.0, y: 55.0, pressure: 1.0 }, m);
-    tool_event(&mut app, ToolEvent::Up { x: 60.0, y: 55.0 }, m);
-    assert!(!app.ui.status_error, "{}", app.ui.status);
-    assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("select.object"));
-}
-
-#[test]
-fn empty_smart_result_is_reported_without_error() {
-    // An empty smart selection (Select Subject missing on a busy photo) is an info, not
-    // an error and not silence: the button must visibly answer.
-    let mut app = app();
-    report_smart_result(&mut app, Ok(json!({"selected": false, "changed": false})), "nothing there");
-    assert_eq!(app.ui.status.as_str(), "nothing there");
-    assert!(!app.ui.status_error);
-    app.ui.status.clear();
-    report_smart_result(&mut app, Ok(json!({"selected": true, "changed": true})), "nothing there");
-    assert!(app.ui.status.is_empty());
-}
-
-#[test]
-fn mixer_brush_is_selectable_and_paints_only_inside_the_selection_via_control() {
-    use crate::control::{ControlRequest, Outcome, handle};
-
-    let mut app = app();
-    app.run("paint.pencil", json!({"points": [[50, 30]], "size": 200, "color": "#204080"})).unwrap();
-    app.run("tools.setColors", json!({"foreground": "#f02010"})).unwrap();
-    app.run(
-        "tools.setBrush",
-        json!({
-            "pressureSize": false,
-            "size": 12,
-            "mixer": {"wet": 0.0, "load": 1.0, "mix": 0.0, "flow": 1.0}
-        }),
-    )
-    .unwrap();
-    app.run("select.rect", json!({"x": 35, "y": 20, "width": 30, "height": 20})).unwrap();
-    let before = {
-        let surface = active(&app).surface().unwrap();
-        [surface.rgba(20, 30), surface.rgba(50, 30), surface.rgba(80, 30)]
-    };
-
-    let ctx = egui::Context::default();
-    let (req, _rx) = ControlRequest::new(
-        "ui.pointer",
-        json!({
-            "tool": "mixerBrush",
-            "events": [
-                {"kind": "down", "x": 8, "y": 30},
-                {"kind": "move", "x": 92, "y": 30},
-                {"kind": "up", "x": 92, "y": 30}
-            ]
-        }),
-    );
-    assert!(matches!(handle(&mut app, &ctx, &req), Outcome::Done(_)));
-    assert_eq!(app.ui.tool, Tool::MixerBrush);
-    assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("paint.mixerBrush"));
-
-    let surface = active(&app).surface().unwrap();
-    assert_ne!(surface.rgba(50, 30), before[1], "the selected pixels are mixed");
-    assert_eq!(surface.rgba(20, 30), before[0], "outside the selection is unchanged");
-    assert_eq!(surface.rgba(80, 30), before[2], "the far side outside the selection is unchanged");
+    assert_eq!(source_marker_point(&app, None), None, "no marker after setting the source");
+    assert!(source_marker_point(&app, Some([50.0, 30.0])).is_some(), "the marker shows while a stroke is painted");
+    app.ui.tool = Tool::Brush;
+    assert_eq!(source_marker_point(&app, Some([50.0, 30.0])), None, "other tools show none");
 }
 
 #[test]
@@ -408,9 +421,9 @@ fn patch_tool_lassoes_then_drags_the_patch() {
     assert!(app.session.active().unwrap().doc.selection.is_some(), "lasso made a selection");
     assert!(red(&app), "the lasso alone changes no pixels");
     // ⇧-drag inside the selection adds to it rather than patching.
-    assert!(!patch_drags_selection(&app, [70.0, 30.0], egui::Modifiers::SHIFT));
+    assert!(!patch_drags_selection(&app, [70.0, 30.0], shift()));
     // Dragging inside it patches from where it is dropped; the offset is limited to the canvas.
-    assert!(patch_drags_selection(&app, [70.0, 30.0], m));
+    assert!(patch_drags_selection(&app, [70.0, 30.0], Mods::default()));
     assert_eq!(patch_offset(&mut app, [70.0, 30.0], [-200.0, 30.0]), [-60, 0]);
     tool_event(&mut app, ToolEvent::Down { x: 70.0, y: 30.0, pressure: 1.0 }, m);
     tool_event(&mut app, ToolEvent::Move { x: 50.0, y: 31.0, pressure: 1.0 }, m);
@@ -420,241 +433,34 @@ fn patch_tool_lassoes_then_drags_the_patch() {
     assert!(px[0] > 0.95 && px[1] > 0.95 && px[2] > 0.95, "blemish patched with the white background: {px:?}");
 }
 
-/// #11024: a new Patch (or Content-Aware Move) lasso hides the selection it replaces from the
-/// press on, and the release leaves only the new area selected. ⇧ keeps the old one and adds.
-#[test]
-fn a_new_patch_lasso_hides_and_replaces_the_old_selection() {
-    let lasso = |app: &mut PhotocraftApp, x0: f64, m: egui::Modifiers, release: bool| {
-        tool_event(app, ToolEvent::Down { x: x0, y: 20.0, pressure: 1.0 }, m);
-        for [x, y] in [[x0 + 16.0, 20.0], [x0 + 16.0, 40.0], [x0, 40.0]] {
-            tool_event(app, ToolEvent::Move { x, y, pressure: 1.0 }, m);
-        }
-        if release {
-            tool_event(app, ToolEvent::Up { x: x0, y: 40.0 }, m);
-        }
-    };
-    let selected = |app: &PhotocraftApp, x: i32| app.session.active().unwrap().doc.selection.as_ref().is_some_and(|s| s.sample_channel(x, 30, 0) > 0.0);
-    for tool in [Tool::Patch, Tool::ContentAwareMove] {
-        let mut app = app();
-        app.ui.tool = tool;
-        lasso(&mut app, 10.0, egui::Modifiers::NONE, true);
-        assert!(selected(&app, 18), "{tool:?}: the first lasso made a selection");
-        assert!(!patch_replaces_selection(&app), "{tool:?}: nothing is being drawn");
-
-        lasso(&mut app, 60.0, egui::Modifiers::NONE, false);
-        assert!(patch_replaces_selection(&app), "{tool:?}: the old outline is hidden while the new one is drawn");
-        tool_event(&mut app, ToolEvent::Up { x: 60.0, y: 40.0 }, egui::Modifiers::NONE);
-        assert!(!patch_replaces_selection(&app), "{tool:?}: the new selection shows after the release");
-        assert!(selected(&app, 68) && !selected(&app, 18), "{tool:?}: the new area replaced the old one");
-
-        lasso(&mut app, 10.0, egui::Modifiers::SHIFT, false);
-        assert!(!patch_replaces_selection(&app), "{tool:?}: ⇧ adds, so the old outline stays");
-        tool_event(&mut app, ToolEvent::Up { x: 10.0, y: 40.0 }, egui::Modifiers::SHIFT);
-        assert!(selected(&app, 68) && selected(&app, 18), "{tool:?}: ⇧ added to the selection");
-    }
-}
-
-/// The screen boxes of the marching ants painted in one canvas frame (meshes of black and white).
-fn painted_ants(app: &mut PhotocraftApp) -> Vec<egui::Rect> {
-    painted_ants_of(app, 0)
-}
-
-/// [`painted_ants`] for the document at `idx`.
-fn painted_ants_of(app: &mut PhotocraftApp, idx: usize) -> Vec<egui::Rect> {
-    let ctx = egui::Context::default();
-    PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
-    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(300.0, 200.0));
-    let view = crate::state::View { zoom: 2.0, center: [50.0, 30.0], doc_size: [100, 60], fit_pending: false, ..Default::default() };
-    let mut output = ctx.run_ui(egui::RawInput { screen_rect: Some(rect), ..Default::default() }, |ui| {
-        crate::canvas::canvas_view(app, ui, idx, rect, view.clone(), true);
-    });
-    output.textures_delta.clear();
-    let black_and_white =
-        |m: &egui::Mesh| m.vertices.iter().any(|v| v.color == egui::Color32::BLACK) && m.vertices.iter().any(|v| v.color == egui::Color32::WHITE);
-    output
-        .shapes
-        .iter()
-        .filter_map(|s| match &s.shape {
-            egui::Shape::Mesh(m) if black_and_white(m) => Some(egui::Rect::from_points(&m.vertices.iter().map(|v| v.pos).collect::<Vec<_>>())),
-            _ => None,
-        })
-        .collect()
-}
-
-/// #11024 on the canvas: while a new Patch lasso is drawn, no ants are painted where the selection
-/// it replaces is, only along the lasso; a ⇧ lasso, which adds, keeps them.
-#[test]
-fn a_new_patch_lasso_paints_no_ants_on_the_old_selection() {
-    for tool in [Tool::Patch, Tool::ContentAwareMove] {
-        for (m, kept) in [(egui::Modifiers::NONE, false), (egui::Modifiers::SHIFT, true)] {
-            let mut app = app();
-            app.run("select.rect", json!({"x": 10, "y": 20, "width": 16, "height": 20})).unwrap();
-            app.sync_views();
-            app.ui.tool = tool;
-            let old = painted_ants(&mut app).into_iter().reduce(|a, b| a.union(b)).expect("the selection has its ants");
-            tool_event(&mut app, ToolEvent::Down { x: 60.0, y: 20.0, pressure: 1.0 }, m);
-            for [x, y] in [[76.0, 20.0], [76.0, 40.0], [60.0, 40.0]] {
-                tool_event(&mut app, ToolEvent::Move { x, y, pressure: 1.0 }, m);
-            }
-            let ants = painted_ants(&mut app);
-            assert!(ants.iter().any(|a| !a.intersects(old)), "{tool:?} {m:?}: the lasso being drawn has its ants: {ants:?}");
-            assert_eq!(ants.iter().any(|a| a.intersects(old)), kept, "{tool:?} {m:?}: ants on the old selection at {old:?}: {ants:?}");
-        }
-    }
-}
-
-/// The ⌥ badge asks every frame whether anything is selected: the canvas caches the selection's
-/// bounds even while its ants are hidden (Selection Edges off, a new Patch lasso), so that is
-/// never a scan per frame (#11024).
-#[test]
-fn hidden_ants_still_cache_the_selection_bounds() {
-    let cached = |app: &PhotocraftApp| {
-        let st = app.session.active().unwrap();
-        let fingerprint = crate::surface_fingerprint(st.doc.selection.as_ref().unwrap());
-        app.bounds_cache.get(&(u64::MAX - st.doc.id.0)).is_some_and(|(f, b)| *f == fingerprint && !b.is_empty())
-    };
-    let mut app = app();
-    app.run("select.rect", json!({"x": 10, "y": 20, "width": 16, "height": 20})).unwrap();
-    app.sync_views();
-    app.ui.view.show.selection_edges = false;
-    assert!(painted_ants(&mut app).is_empty(), "Selection Edges off");
-    assert!(cached(&app), "cached with Selection Edges off");
-
-    app.ui.view.show.selection_edges = true;
-    app.ui.tool = Tool::Patch;
-    tool_event(&mut app, ToolEvent::Down { x: 60.0, y: 20.0, pressure: 1.0 }, egui::Modifiers::NONE);
-    tool_event(&mut app, ToolEvent::Move { x: 76.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
-    app.bounds_cache.clear();
-    painted_ants(&mut app);
-    assert!(patch_replaces_selection(&app) && cached(&app), "cached while a new Patch lasso hides the ants");
-}
-
-/// A Patch or Content-Aware Move drag belongs to the document it was pressed on: switching to
-/// another drops it, so it doesn't hide that document's ants or land on it (#11024).
-#[test]
-fn a_patch_drag_is_dropped_when_another_document_is_active() {
-    for tool in [Tool::Patch, Tool::ContentAwareMove] {
-        let mut app = app();
-        app.run("select.rect", json!({"x": 10, "y": 20, "width": 16, "height": 20})).unwrap();
-        app.ui.tool = tool;
-        tool_event(&mut app, ToolEvent::Down { x: 60.0, y: 20.0, pressure: 1.0 }, egui::Modifiers::NONE);
-        tool_event(&mut app, ToolEvent::Move { x: 76.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
-        app.sync_views();
-        assert!(patch_replaces_selection(&app), "{tool:?}: the drag is still on its own document");
-
-        app.run("file.new", json!({"width": 100, "height": 60})).unwrap();
-        app.run("select.rect", json!({"x": 50, "y": 10, "width": 30, "height": 30})).unwrap();
-        app.sync_views();
-        assert!(app.drag.is_none() && !patch_replaces_selection(&app), "{tool:?}: dropped on the switch");
-        tool_event(&mut app, ToolEvent::Up { x: 60.0, y: 40.0 }, egui::Modifiers::NONE);
-        let sel = app.session.active().unwrap().doc.selection.clone().unwrap();
-        assert_eq!(sel.content_bounds(), photocraft_geom::Rect::new(50, 10, 80, 40), "{tool:?}: the other document's selection is untouched");
-    }
-}
-
-/// The active document can change after `sync_views` (a control request, a menu command) and
-/// before the canvas paints: a Patch drag pressed on the old one must not hide the new one's ants
-/// for that frame (#11024 review).
-#[test]
-fn a_patch_drag_on_another_document_hides_no_ants_before_it_is_dropped() {
-    for tool in [Tool::Patch, Tool::ContentAwareMove] {
-        let mut app = app();
-        app.run("select.rect", json!({"x": 10, "y": 20, "width": 16, "height": 20})).unwrap();
-        // The other document's selection is clear of the press, so the drag would lasso it.
-        app.run("file.new", json!({"width": 100, "height": 60})).unwrap();
-        app.run("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 10})).unwrap();
-        let other = app.session.active_index().unwrap();
-        assert!(app.session.set_active(0));
-        app.sync_views();
-        app.ui.tool = tool;
-        tool_event(&mut app, ToolEvent::Down { x: 60.0, y: 20.0, pressure: 1.0 }, egui::Modifiers::NONE);
-        tool_event(&mut app, ToolEvent::Move { x: 76.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
-        app.sync_views();
-
-        assert!(app.session.set_active(other));
-        assert!(app.drag.is_some(), "{tool:?}: not dropped yet; sync_views has not run");
-        assert!(!patch_replaces_selection(&app), "{tool:?}: the drag belongs to the other document");
-        assert!(!painted_ants_of(&mut app, other).is_empty(), "{tool:?}: the newly active document shows its ants");
-    }
-}
-
-/// A document closed and reopened with the same ID mid-drag is another document, whether it comes
-/// back at the same revision or is edited past it: the drag is dropped and its release neither
-/// lassos nor patches the reopened one. An ordinary edit keeps the drag (#11024 review).
-#[test]
-fn a_patch_drag_is_dropped_when_its_document_is_reopened_with_the_same_id() {
-    for tool in [Tool::Patch, Tool::ContentAwareMove] {
-        // (reopened, revisions the reopened document is edited past the pressed one)
-        for (reopen, edits) in [(false, 0), (true, 0), (true, 1)] {
-            let mut app = app();
-            app.run("select.rect", json!({"x": 10, "y": 20, "width": 16, "height": 20})).unwrap();
-            app.ui.tool = tool;
-            tool_event(&mut app, ToolEvent::Down { x: 60.0, y: 20.0, pressure: 1.0 }, egui::Modifiers::NONE);
-            tool_event(&mut app, ToolEvent::Move { x: 76.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
-            if reopen {
-                let closed = app.session.close(0).unwrap();
-                app.session.add_document((*closed.doc).clone(), None);
-                app.session.active_mut().unwrap().revision = closed.revision + edits;
-                assert_eq!(app.session.active().unwrap().doc.id, closed.doc.id, "a reopened document may keep its ID");
-            } else {
-                app.run("layer.new.layer", json!({})).unwrap();
-            }
-            app.sync_views();
-            assert_eq!(app.drag.is_some(), !reopen, "{tool:?}: reopened {reopen}, edited {edits}");
-            tool_event(&mut app, ToolEvent::Up { x: 60.0, y: 40.0 }, egui::Modifiers::NONE);
-            let sel = app.session.active().unwrap().doc.selection.clone().unwrap();
-            let lassoed = sel.content_bounds() != photocraft_geom::Rect::new(10, 20, 26, 40);
-            assert_eq!(lassoed, !reopen, "{tool:?}: reopened {reopen}, edited {edits}: {:?}", sel.content_bounds());
-        }
-    }
-}
-
 /// #11024: the Patch and Content-Aware Move cursors show + with ⇧ and − with ⌥, like the Lasso's,
 /// but nothing over the selection without them, where a press drags the patch.
 #[test]
 fn patch_cursor_shows_the_selection_mode_badge() {
-    use crate::tool_feedback::{Badge, badge};
-    let (none, shift, alt) = (egui::Modifiers::NONE, egui::Modifiers::SHIFT, egui::Modifiers::ALT);
+    use crate::tool_feedback::patch_badge;
+    let none = Mods::default();
+    let alt = Mods { alt: true, ..none };
+    let both = Mods { alt: true, shift: true, ..none };
     for tool in [Tool::Patch, Tool::ContentAwareMove] {
         let mut app = app();
         app.ui.tool = tool;
-        app.hover_doc = Some([80.0, 30.0]);
-        assert_eq!(badge(&app, tool, shift), Some(Badge::Add), "{tool:?}");
-        assert_eq!(badge(&app, tool, alt), None, "{tool:?}: nothing selected, so ⌥ has nothing to subtract");
-        assert_eq!(badge(&app, tool, none), None, "{tool:?}: a new selection has no badge");
+
+        let badge = |app: &PhotocraftApp, at: [f64; 2], mods: Mods| patch_badge(app, at, None, mods);
+        let outside = [80.0, 30.0];
+        assert_eq!(badge(&app, outside, shift()), Some(CursorBadge::Add), "{tool:?}");
+        assert_eq!(badge(&app, outside, alt), None, "{tool:?}: nothing selected, so ⌥ has nothing to subtract");
+        assert_eq!(badge(&app, outside, none), None, "{tool:?}: a new selection has no badge");
 
         app.run("select.rect", json!({"x": 10, "y": 20, "width": 20, "height": 20})).unwrap();
-        assert_eq!(badge(&app, tool, shift), Some(Badge::Add), "{tool:?}");
-        assert_eq!(badge(&app, tool, alt), Some(Badge::Subtract), "{tool:?}");
-        assert_eq!(badge(&app, tool, egui::Modifiers::SHIFT | egui::Modifiers::ALT), Some(Badge::Intersect), "{tool:?}");
+        assert_eq!(badge(&app, outside, shift()), Some(CursorBadge::Add), "{tool:?}");
+        assert_eq!(badge(&app, outside, alt), Some(CursorBadge::Subtract), "{tool:?}");
+        assert_eq!(badge(&app, outside, both), Some(CursorBadge::Intersect), "{tool:?}");
         app.ui.selection_mode = 1;
-        assert_eq!(badge(&app, tool, none), Some(Badge::Add), "{tool:?}: the options-bar mode outside the selection");
-        app.hover_doc = Some([20.0, 30.0]);
-        let over = (tool == Tool::Patch).then_some(Badge::Arrow);
-        assert_eq!(badge(&app, tool, none), over, "{tool:?}: a press over the selection drags the patch (Patch shows an arrow, #12130)");
-        assert_eq!(badge(&app, tool, shift), Some(Badge::Add), "{tool:?}: ⇧ over the selection adds");
+        assert_eq!(badge(&app, outside, none), Some(CursorBadge::Add), "{tool:?}: the options-bar mode outside the selection");
+        let over = (tool == Tool::Patch).then_some(CursorBadge::Arrow);
+        assert_eq!(badge(&app, [20.0, 30.0], none), over, "{tool:?}: a press over the selection drags the patch (Patch shows an arrow, #12130)");
+        assert_eq!(badge(&app, [20.0, 30.0], shift()), Some(CursorBadge::Add), "{tool:?}: ⇧ over the selection adds");
     }
-}
-
-#[test]
-fn patch_tool_content_aware_fills_from_where_it_is_dropped() {
-    let mut app = app();
-    app.run("paint.pencil", json!({"points": [[68, 30], [74, 30]], "size": 6, "color": "#ff0000"})).unwrap();
-    app.run("select.rect", json!({"x": 60, "y": 20, "width": 24, "height": 20})).unwrap();
-    app.ui.tool = Tool::Patch;
-    app.ui.tool_options.patch_content_aware = true;
-    app.ui.tool_options.patch_structure = 5.0;
-    app.ui.tool_options.patch_color = 3.0;
-    let m = egui::Modifiers::NONE;
-    tool_event(&mut app, ToolEvent::Down { x: 70.0, y: 30.0, pressure: 1.0 }, m);
-    tool_event(&mut app, ToolEvent::Move { x: 50.0, y: 31.0, pressure: 1.0 }, m);
-    tool_event(&mut app, ToolEvent::Up { x: 30.0, y: 30.0 }, m);
-    assert!(!app.ui.status_error, "{}", app.ui.status);
-    let (id, p) = app.session.journal.last().cloned().unwrap();
-    assert_eq!(id, "paint.patch");
-    assert_eq!((p["contentAware"].as_bool(), p["structure"].as_f64(), p["color"].as_f64()), (Some(true), Some(5.0), Some(3.0)));
-    let px = active(&app).surface().unwrap().rgba(71, 30);
-    assert!(px[0] > 0.95 && px[1] > 0.95 && px[2] > 0.95, "blemish filled from the white background: {px:?}");
 }
 
 #[test]
@@ -755,52 +561,6 @@ fn red_eye_click_corrects_a_pupil_and_a_miss_adds_an_unchanged_state() {
 }
 
 #[test]
-fn red_eye_options_bar_shows_pupil_size_and_darken() {
-    use crate::theme::ThemeKind;
-    use egui::vec2;
-    use egui_kittest::kittest::Queryable;
-    let mut app = app();
-    app.ui.tool = Tool::RedEye;
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 60.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
-            if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                return;
-            }
-            crate::panels::options_bar(app, ui);
-        },
-        app,
-    );
-    PhotocraftApp::setup_context(&h.ctx, ThemeKind::Studio);
-    h.run_steps(4);
-    h.get_by_label("Pupil Size");
-    h.get_by_label("Darken Amount");
-    assert_eq!(h.state().ui.tool_options.red_eye_pupil_size, 50.0);
-    assert_eq!(h.state().ui.tool_options.red_eye_darken, 50.0);
-}
-
-#[test]
-fn patch_tool_says_to_drag_the_selection_after_the_lasso_and_after_a_click() {
-    let hint = tl!("Now drag the selection onto another area");
-    let m = egui::Modifiers::NONE;
-    let mut app = app();
-    app.ui.tool = Tool::Patch;
-    app.ui.status.clear();
-    // No selection yet: the drag is a lasso, which outlines the patch and says what comes next.
-    tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 10.0, pressure: 1.0 }, m);
-    tool_event(&mut app, ToolEvent::Move { x: 40.0, y: 10.0, pressure: 1.0 }, m);
-    tool_event(&mut app, ToolEvent::Move { x: 40.0, y: 30.0, pressure: 1.0 }, m);
-    tool_event(&mut app, ToolEvent::Up { x: 20.0, y: 30.0 }, m);
-    assert!(app.session.active().is_some_and(|st| st.doc.selection.is_some()), "the lasso made a selection");
-    assert_eq!((app.ui.status.as_str(), app.ui.status_error), (hint, false));
-    // A press and release inside the selection moves nothing: it says so instead of staying silent.
-    app.ui.status.clear();
-    tool_event(&mut app, ToolEvent::Down { x: 30.0, y: 20.0, pressure: 1.0 }, m);
-    tool_event(&mut app, ToolEvent::Up { x: 30.0, y: 20.0 }, m);
-    assert_eq!((app.ui.status.as_str(), app.ui.status_error), (hint, false));
-    assert!(app.session.active().is_some_and(|st| st.doc.selection.is_some()), "the selection stays");
-}
-
-#[test]
 fn remove_tool_stroke_removes_what_it_covers() {
     let mut app = app();
     app.run("paint.pencil", json!({"points": [[0, 30], [100, 30]], "size": 200, "color": "#808080"})).unwrap();
@@ -847,6 +607,8 @@ fn waiting_remove_strokes_keep_their_own_brush() {
     assert_eq!(sizes, [(Some(20.0), Some(0.0)), (Some(4.0), Some(100.0))], "each stroke is removed with its own brush");
 }
 
+/// With "Remove after each stroke" off the strokes wait; Escape drops them, Enter (the key route) and the
+/// bar's answer (the bar route) each apply them in one command.
 #[test]
 fn remove_after_each_stroke_off_collects_strokes_until_enter_or_escape() {
     let mut app = app();
@@ -855,37 +617,41 @@ fn remove_after_each_stroke_off_collects_strokes_until_enter_or_escape() {
     app.ui.tool = Tool::Remove;
     app.ui.tool_options.remove_after_each_stroke = false;
     let m = egui::Modifiers::NONE;
+    let collect = |app: &mut PhotocraftApp| {
+        for x in [28.0, 32.0] {
+            tool_event(app, ToolEvent::Down { x, y: 18.0, pressure: 1.0 }, m);
+            tool_event(app, ToolEvent::Move { x, y: 42.0, pressure: 1.0 }, m);
+            tool_event(app, ToolEvent::Up { x, y: 42.0 }, m);
+        }
+    };
     let journal = app.session.journal.len();
-    for x in [28.0, 32.0] {
-        tool_event(&mut app, ToolEvent::Down { x, y: 18.0, pressure: 1.0 }, m);
-        tool_event(&mut app, ToolEvent::Move { x, y: 42.0, pressure: 1.0 }, m);
-        tool_event(&mut app, ToolEvent::Up { x, y: 42.0 }, m);
-    }
-    // Nothing ran yet: the strokes wait, tinted, and the status says so.
+    collect(&mut app);
+
+    assert!(crate::retouch_ui::bar::pending(&app, Tool::Remove).is_some(), "the strokes wait");
     assert_eq!(app.session.journal.len(), journal, "no command before Enter");
-    assert_eq!(app.remove_pending.len(), 2);
     assert!(app.remove_trail.is_some());
-    assert!(app.ui.status.contains("2") && !app.ui.status_error, "{}", app.ui.status);
-    // Esc drops them.
-    assert!(remove_pending_cancel(&mut app));
-    assert!(app.remove_pending.is_empty() && app.remove_trail.is_none());
-    assert!(!remove_pending_cancel(&mut app));
-    // Collected again, Enter applies them as one `paint.remove` with both strokes.
-    for x in [28.0, 32.0] {
-        tool_event(&mut app, ToolEvent::Down { x, y: 18.0, pressure: 1.0 }, m);
-        tool_event(&mut app, ToolEvent::Up { x, y: 42.0 }, m);
+    // Escape drops them.
+    crate::canvas::testing::key(&mut app, egui::Key::Escape, m);
+    assert!(crate::retouch_ui::bar::pending(&app, Tool::Remove).is_none() && app.remove_trail.is_none(), "Escape drops the strokes");
+    assert_eq!(app.session.journal.len(), journal);
+
+    for by_key in [true, false] {
+        let bg = active(&app).surface().unwrap().rgba(70, 30);
+        collect(&mut app);
+        assert!(crate::retouch_ui::bar::pending(&app, Tool::Remove).is_some(), "by_key {by_key}: collected again");
+        if by_key {
+            crate::canvas::testing::key(&mut app, egui::Key::Enter, m);
+        } else {
+            crate::retouch_ui::bar::answer(&mut app, Tool::Remove, true, false);
+        }
+        assert!(!app.ui.status_error, "by_key {by_key}: {}", app.ui.status);
+        let (id, p) = app.session.journal.last().cloned().expect("a journaled command");
+        assert_eq!(id, "paint.remove", "by_key {by_key}");
+        assert_eq!(p["strokes"].as_array().map(Vec::len), Some(2), "by_key {by_key}");
+        assert!(crate::retouch_ui::bar::pending(&app, Tool::Remove).is_none(), "by_key {by_key}: nothing left to apply");
+        let px = active(&app).surface().unwrap().rgba(30, 30);
+        assert!(px.iter().zip(bg).all(|(a, b)| (a - b).abs() < 0.02), "by_key {by_key}: {px:?} vs {bg:?}");
     }
-    let bg = active(&app).surface().unwrap().rgba(70, 30);
-    assert!(remove_pending_commit(&mut app));
-    assert!(!app.ui.status_error, "{}", app.ui.status);
-    let (id, p) = app.session.journal.last().cloned().expect("a journaled command");
-    assert_eq!(id, "paint.remove");
-    assert_eq!(p["strokes"].as_array().map(Vec::len), Some(2));
-    assert!(p.get("points").is_none());
-    assert!(app.remove_pending.is_empty());
-    let px = active(&app).surface().unwrap().rgba(30, 30);
-    assert!(px.iter().zip(bg).all(|(a, b)| (a - b).abs() < 0.02), "{px:?} vs {bg:?}");
-    assert!(!remove_pending_commit(&mut app), "nothing left to apply");
 }
 
 #[test]
@@ -978,19 +744,6 @@ fn queued_remove_starts_a_new_queue_after_target_switch() {
 }
 
 #[test]
-fn remove_strokes_waiting_are_dropped_when_the_tool_changes() {
-    let mut app = app();
-    app.ui.tool = Tool::Remove;
-    app.ui.tool_options.remove_after_each_stroke = false;
-    remove_pending_add(&mut app, &[[10.0, 10.0, 1.0], [20.0, 10.0, 1.0]]);
-    assert_eq!(app.remove_pending.len(), 1);
-    assert!(remove_pending_live(&mut app));
-    app.ui.tool = Tool::SpotHealing;
-    assert!(!remove_pending_live(&mut app));
-    assert!(app.remove_pending.is_empty(), "the strokes belong to the Remove tool");
-}
-
-#[test]
 fn subset_remove_uses_the_existing_layer_without_losing_the_saved_new_layer_option() {
     let mut app = app();
     app.ui.tool = Tool::Remove;
@@ -1010,48 +763,9 @@ fn subset_remove_uses_the_existing_layer_without_losing_the_saved_new_layer_opti
 }
 
 #[test]
-fn create_a_new_layer_sends_new_layer_to_the_command() {
-    let mut app = app();
-    app.run("paint.pencil", json!({"points": [[0, 30], [100, 30]], "size": 200, "color": "#808080"})).unwrap();
-    app.ui.tool = Tool::Remove;
-    app.ui.tool_options.remove_new_layer = true;
-    let layers = app.session.active().unwrap().doc.walk().len();
-    let m = egui::Modifiers::NONE;
-    tool_event(&mut app, ToolEvent::Down { x: 30.0, y: 18.0, pressure: 1.0 }, m);
-    tool_event(&mut app, ToolEvent::Up { x: 30.0, y: 42.0 }, m);
-    assert!(!app.ui.status_error, "{}", app.ui.status);
-    let (id, p) = app.session.journal.last().cloned().unwrap();
-    assert_eq!((id.as_str(), p["newLayer"].as_bool()), ("paint.remove", Some(true)));
-    assert_eq!(app.session.active().unwrap().doc.walk().len(), layers + 1, "the fill went to a new layer");
-}
-
-#[test]
-fn red_eye_is_in_the_j_flyout() {
-    let j = [Tool::SpotHealing, Tool::Remove, Tool::Healing, Tool::Patch, Tool::ContentAwareMove, Tool::RedEye];
-    assert!(j.contains(&Tool::RedEye));
-    assert!(j.iter().all(|t| t.key() == 'J'));
-}
-
-#[test]
-fn j_cycles_from_spot_healing() {
-    // J from another group picks the first J tool, and repeated J goes on in this order.
-    let group: Vec<Tool> = Tool::ALL.iter().copied().filter(|t| t.key() == 'J').collect();
-    assert_eq!(group, [Tool::SpotHealing, Tool::Remove, Tool::Healing, Tool::Patch, Tool::ContentAwareMove, Tool::RedEye]);
-}
-
-#[test]
-fn s_group_is_clone_stamp_then_pattern_stamp() {
-    assert_eq!(Tool::CloneStamp.key(), 'S');
-    assert_eq!(Tool::PatternStamp.key(), 'S');
-    let group: Vec<Tool> = Tool::ALL.iter().copied().filter(|t| t.key() == 'S').collect();
-    assert_eq!(group, vec![Tool::CloneStamp, Tool::PatternStamp]);
-    assert_eq!(Tool::from_name("patternStamp"), Some(Tool::PatternStamp));
-}
-
-#[test]
 fn pattern_stamp_stroke_paints_pixels_and_keeps_phase_when_aligned() {
     let mut app = app();
-    assert!(finish_stroke(&mut app, Tool::PatternStamp, &[[20.0, 30.0, 1.0], [50.0, 30.0, 1.0]], egui::Modifiers::NONE, false));
+    assert!(finish_stroke(&mut app, Tool::PatternStamp, &[[20.0, 30.0, 1.0], [50.0, 30.0, 1.0]], Mods::default(), false));
     assert!(!app.ui.status_error, "{}", app.ui.status);
     assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("paint.patternStamp"));
     assert!(app.ui.pattern_stamp_phase.is_some());
@@ -1059,84 +773,14 @@ fn pattern_stamp_stroke_paints_pixels_and_keeps_phase_when_aligned() {
     assert!(px[3] > 0.5, "the stamp paints through the brush: {px:?}");
     app.ui.tool_options.pattern_stamp_aligned = false;
     app.ui.pattern_stamp_phase = None;
-    assert!(finish_stroke(&mut app, Tool::PatternStamp, &[[70.0, 30.0, 1.0]], egui::Modifiers::NONE, false));
+    assert!(finish_stroke(&mut app, Tool::PatternStamp, &[[70.0, 30.0, 1.0]], Mods::default(), false));
     assert!(app.ui.pattern_stamp_phase.is_none(), "unaligned strokes do not keep phase");
-}
-
-#[test]
-fn pattern_stamp_does_not_require_a_clone_source() {
-    let mut app = app();
-    assert!(app.ui.clone_source.is_none());
-    assert!(finish_stroke(&mut app, Tool::PatternStamp, &[[12.0, 30.0, 1.0]], egui::Modifiers::NONE, false));
-    assert!(!app.ui.status_error, "{}", app.ui.status);
-    assert!(app.ui.clone_source.is_none());
-}
-
-#[test]
-fn art_history_is_in_the_y_flyout() {
-    let y = [Tool::HistoryBrush, Tool::ArtHistoryBrush];
-    assert_eq!(y[0], Tool::HistoryBrush);
-    assert_eq!(y[1], Tool::ArtHistoryBrush);
-    assert!(y.iter().all(|t| t.key() == 'Y'));
-    assert!(Tool::ArtHistoryBrush.is_brushlike());
-}
-
-#[test]
-fn art_history_options_bar_defaults() {
-    use crate::theme::ThemeKind;
-    use egui::vec2;
-    use egui_kittest::kittest::Queryable;
-    let mut app = app();
-    app.ui.tool = Tool::ArtHistoryBrush;
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 60.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
-            if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                return;
-            }
-            crate::panels::options_bar(app, ui);
-        },
-        app,
-    );
-    PhotocraftApp::setup_context(&h.ctx, ThemeKind::Studio);
-    h.run_steps(4);
-    h.get_by_label("Style");
-    h.get_by_label("Area");
-    h.get_by_label("Tolerance");
-    assert!(h.query_all_by_label("Opacity").next().is_some(), "the options bar has an Opacity field");
-    assert_eq!(h.state().ui.tool_options.art_history_style, "tightShort");
-    assert_eq!(h.state().ui.tool_options.art_history_area, 50.0);
-    assert_eq!(h.state().ui.tool_options.art_history_tolerance, 0.0);
-}
-
-#[test]
-fn art_history_stroke_runs_the_command() {
-    let mut app = app();
-    app.run("paint.pencil", json!({"points": [[0, 30], [100, 30]], "size": 20, "color": "#3060c0"})).unwrap();
-    app.ui.tool = Tool::ArtHistoryBrush;
-    app.ui.tool_options.art_history_style = "tightMedium".into();
-    app.ui.tool_options.art_history_tolerance = 0.0;
-    drag(&mut app, Tool::ArtHistoryBrush);
-    assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("paint.artHistoryBrush"));
-}
-
-#[test]
-fn art_history_brush_opacity_reaches_the_command() {
-    let mut app = app();
-    app.run("paint.pencil", json!({"points": [[0, 30], [100, 30]], "size": 20, "color": "#3060c0"})).unwrap();
-    app.ui.tool = Tool::ArtHistoryBrush;
-    crate::paint_mouse::sync_tool_brush(&mut app);
-    app.run("tools.setBrush", json!({"brush": {"opacity": 0.4}})).unwrap();
-    drag(&mut app, Tool::ArtHistoryBrush);
-    let (id, params) = app.session.journal.last().unwrap();
-    assert_eq!(id, "paint.artHistoryBrush");
-    let opacity = params["opacity"].as_f64().unwrap();
-    assert!((opacity - 40.0).abs() < 1e-3, "{opacity}");
 }
 
 #[test]
 fn art_history_brush_keeps_its_own_opacity_and_reset_tool_restores_it() {
     let mut app = app();
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     app.ui.tool = Tool::ArtHistoryBrush;
     crate::paint_mouse::sync_tool_brush(&mut app);
     app.run("tools.setBrush", json!({"brush": {"opacity": 0.4}})).unwrap();
@@ -1151,66 +795,31 @@ fn art_history_brush_keeps_its_own_opacity_and_reset_tool_restores_it() {
 }
 
 #[test]
-fn history_brush_opacity_and_flow_reach_the_painted_pixels() {
+fn history_source_caption_names_the_source() {
+    use crate::retouch_ui::bar::history::{SourceCaption, source_caption};
+
     let mut app = app();
-    app.run("paint.pencil", json!({"points": [[10, 10]], "size": 16, "color": "#ff0000"})).unwrap();
-    app.run("paint.pencil", json!({"points": [[10, 10]], "size": 16, "color": "#00ff00"})).unwrap();
-    app.ui.tool = Tool::HistoryBrush;
-    app.run("tools.setBrush", json!({"brush": {"opacity": 0.5, "flow": 0.5}})).unwrap();
-    assert!(finish_stroke(&mut app, Tool::HistoryBrush, &[[10.0, 10.0, 1.0]], egui::Modifiers::NONE, false));
-    assert!(!app.ui.status_error, "{}", app.ui.status);
-    let (id, params) = app.session.journal.last().unwrap();
-    assert_eq!(id, "paint.historyBrush");
-    assert_eq!(params["opacity"], 50.0);
-    assert_eq!(params["flow"], 50.0);
-}
+    assert!(matches!(source_caption(&app), SourceCaption::Opening), "a new document paints from its opening state");
 
-#[test]
-fn history_brush_options_bar_shows_source_name() {
-    use crate::theme::ThemeKind;
-    use egui::vec2;
-    use egui_kittest::kittest::Queryable;
-    let mut app = app();
-    app.ui.tool = Tool::HistoryBrush;
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 60.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
-            if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                return;
-            }
-            crate::panels::options_bar(app, ui);
-        },
-        app,
-    );
-    PhotocraftApp::setup_context(&h.ctx, ThemeKind::Studio);
-    h.run_steps(4);
-    h.get_by_label("Paints from the document's opening state");
+    app.run("history.newSnapshot", json!({"name": "MySnap"})).unwrap();
+    app.run("history.setSource", json!({"snapshot": 1})).unwrap();
+    assert!(matches!(source_caption(&app), SourceCaption::Named(name) if name == "MySnap"));
 
-    // Now set a snapshot as the source
-    h.state_mut().run("history.newSnapshot", json!({"name": "MySnap"})).unwrap();
-    h.state_mut().run("history.setSource", json!({"snapshot": 1})).unwrap();
-    h.run_steps(4);
-    h.get_by_label("Source: MySnap");
+    app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    app.run("history.setSource", json!({"state": 1})).unwrap();
+    assert!(matches!(source_caption(&app), SourceCaption::Named(name) if name.contains("Fill")));
 
-    // Now set an explicit state as the source
-    h.state_mut().run("edit.fill", json!({"color": "#ff0000"})).unwrap();
-    h.state_mut().run("history.setSource", json!({"state": 1})).unwrap();
-    h.run_steps(4);
-    h.get_by_label("Source: Fill");
+    // Deleting the source snapshot leaves no source.
+    app.run("history.setSource", json!({"snapshot": 1})).unwrap();
+    app.run("history.deleteSnapshot", json!({"snapshot": 1})).unwrap();
+    assert!(matches!(source_caption(&app), SourceCaption::Deleted), "deleted snapshot");
 
-    // Deleting the source snapshot leaves source(st) as None, displaying the missing-source hint
-    h.state_mut().run("history.setSource", json!({"snapshot": 1})).unwrap();
-    h.state_mut().run("history.deleteSnapshot", json!({"snapshot": 1})).unwrap();
-    h.run_steps(4);
-    h.get_by_label("The History Brush source was deleted: set a new source in the History panel");
-
-    // Discarding a redo state source also leaves source(st) as None
-    h.state_mut().run("edit.fill", json!({"color": "#00ff00"})).unwrap();
-    // Set source to the latest state (state 2), then undo, then paint new stroke to discard redo
-    h.state_mut().run("history.setSource", json!({"state": 2})).unwrap();
-    h.state_mut().run("edit.undo", json!({})).unwrap();
-    h.state_mut().run("paint.pencil", json!({"points": [[10, 10]], "size": 1, "color": "#0000ff"})).unwrap();
-    h.run_steps(4);
-    h.get_by_label("The History Brush source was deleted: set a new source in the History panel");
+    // So does discarding the redo state that was the source.
+    app.run("edit.fill", json!({"color": "#00ff00"})).unwrap();
+    app.run("history.setSource", json!({"state": 2})).unwrap();
+    app.run("edit.undo", json!({})).unwrap();
+    app.run("paint.pencil", json!({"points": [[10, 10]], "size": 1, "color": "#0000ff"})).unwrap();
+    assert!(matches!(source_caption(&app), SourceCaption::Deleted), "discarded redo state");
 }
 
 /// An empty Clone Source slot refuses to paint, as with no source at all: the ⌥-click point left

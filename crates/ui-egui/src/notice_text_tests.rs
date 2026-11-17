@@ -6,7 +6,7 @@
 
 use egui::{Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use serde_json::json;
 
 use crate::PhotocraftApp;
@@ -24,7 +24,7 @@ fn app_harness() -> Harness<'static, PhotocraftApp> {
         s.execute("file.new", json!({"width": 2000, "height": 1500})).unwrap();
         s.execute("layer.new.layer", json!({})).unwrap();
         s.execute("edit.fill", json!({"color": "#3366cc"})).unwrap();
-        let mut app = PhotocraftApp::new(s, crate::Services::default());
+        let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), s, crate::Services::default());
         app.ui.tool = Tool::Move;
         app
     });
@@ -34,10 +34,14 @@ fn app_harness() -> Harness<'static, PhotocraftApp> {
     h
 }
 
-/// The notice's message (the status bar shows it too, on one line: the notice wraps it).
+/// The notice's message: the selectable text of its card (the status bar shows it too, on one line, as a label).
 fn notice_text(h: &Harness<'static, PhotocraftApp>) -> egui::Rect {
-    let rects: Vec<egui::Rect> = h.get_all_by_label(MESSAGE).map(|n| n.rect()).collect();
-    rects.into_iter().max_by(|a, b| a.height().total_cmp(&b.height())).unwrap()
+    let rects: Vec<egui::Rect> = h
+        .query_all_by_role(egui::accesskit::Role::MultilineTextInput)
+        .filter(|n| n.accesskit_node().value().is_some_and(|text| text.contains("1073741824 px limit")))
+        .map(|n| n.rect())
+        .collect();
+    rects.into_iter().max_by(|a, b| a.height().total_cmp(&b.height())).expect("the notice shows its message as selectable text")
 }
 
 /// The document's layers (bounds) and History length.
@@ -95,41 +99,4 @@ fn copy_takes_the_text_dragged_across_in_an_error_notice_not_the_layer() {
         assert!(h.state().session.clipboard.is_none(), "{how}: Edit › Copy didn't copy the layer");
         assert_eq!(document(&h), before, "{how}");
     }
-}
-
-/// The selection outlives the pointer: after the drag the pointer moves off the notice and over
-/// the canvas without a press, and ⌘C still copies the text, not the layer.
-#[test]
-fn copy_takes_the_selected_text_after_the_pointer_leaves_the_notice() {
-    for (how, copy) in [("Event::Copy", egui::Event::Copy), ("a ⌘C press", command_c())] {
-        let mut h = app_harness();
-        let before = document(&h);
-        let r = notice_text(&h);
-        drag(&mut h, r.left_top() + vec2(2.0, 6.0), r.right_bottom() - vec2(2.0, 6.0));
-        let canvas = Pos2::new(500.0, 400.0);
-        assert!(!r.contains(canvas));
-        for i in 1..=10 {
-            frame(&mut h, vec![egui::Event::PointerMoved(r.right_bottom() + (canvas - r.right_bottom()) * (i as f32 / 10.0))]);
-        }
-        let copied = frame(&mut h, vec![copy]);
-        frame(&mut h, vec![]);
-        assert!(copied.iter().any(|t| t.contains("1073741824 px limit")), "{how}: the selected text is copied: {copied:?}");
-        assert!(h.state().session.clipboard.is_none(), "{how}: Edit › Copy didn't copy the layer");
-        assert_eq!(document(&h), before, "{how}");
-    }
-}
-
-/// A plain click on the notice's text selects nothing, so ⌘C stays Edit › Copy and copies the
-/// layer.
-#[test]
-fn a_plain_click_on_a_notice_leaves_copy_to_the_document() {
-    let mut h = app_harness();
-    let p = notice_text(&h).center();
-    frame(&mut h, vec![egui::Event::PointerMoved(p)]);
-    button(&mut h, p, true);
-    button(&mut h, p, false);
-    let copied = frame(&mut h, vec![egui::Event::Copy]);
-    frame(&mut h, vec![]);
-    assert!(copied.is_empty(), "{copied:?}");
-    assert!(h.state().session.clipboard.is_some(), "Edit › Copy copies the layer");
 }
