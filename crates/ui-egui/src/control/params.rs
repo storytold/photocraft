@@ -1,10 +1,12 @@
-use super::{Outcome, PhotocraftApp, Value, json};
+#[cfg(test)]
+use super::PhotocraftApp;
+use super::{Reply, Value, json};
 
 /// The fields `ui.set` reads. Anything else is rejected before a field is applied, and every
 /// field's value is validated before the first one is applied, so a typo, an unknown field, a
 /// bad value or a bad nested key can't reply with success while nothing — or only half of it —
 /// changed (#412).
-pub const UI_SET_FIELDS: [&str; 49] = [
+pub const UI_SET_FIELDS: [&str; 56] = [
     "updatesOpen",
     "tool",
     "strokeTrace",
@@ -54,23 +56,21 @@ pub const UI_SET_FIELDS: [&str; 49] = [
     "histogramPanel",
     "histogramRange",
     "histogramRefresh",
+    "statusInfo",
+    "marqueeStyle",
+    "marqueeSize",
+    "actionsPanel",
+    "presetBrowsers",
+    "toolbarColumns",
+    "recentView",
 ];
 
-/// Most clicks one `ui.click` may queue (#982). Each click is a press and a release that the app
-/// feeds in its own frame before replying, so `count` sizes both the input queue and the wait;
-/// the same ceiling as the steps of one batch request.
-pub const MAX_CLICKS: u64 = 256;
-
-/// Largest `ui.click` / `ui.move` coordinate, in screen points either way (#9137). Far beyond any
-/// display, yet small enough that egui's pointer delta between two such points stays finite.
-pub const MAX_SCREEN_POINT: f64 = 1e6;
-
-pub(super) fn ok(v: Value) -> Outcome {
-    Outcome::Done(json!({"ok": true, "result": v}))
+pub(super) fn ok(v: Value) -> Reply {
+    Reply::from_result(Ok(v))
 }
 
-pub(super) fn err(e: impl std::fmt::Display) -> Outcome {
-    Outcome::Done(json!({"ok": false, "error": e.to_string()}))
+pub(super) fn err(e: impl std::fmt::Display) -> Reply {
+    Reply::from_result(Err(e.to_string()))
 }
 
 /// A `ui.set` boolean field: `Ok(None)` when absent, an error when present with another type.
@@ -136,32 +136,10 @@ pub(super) fn merged_object<T: serde::Serialize + serde::de::DeserializeOwned>(
     serde_json::from_value(cur).map(Some).map_err(|e| format!("{field}: {e}"))
 }
 
-/// A `ui.set` object field applied by whole-value replacement (e.g. `dock`):
-/// unknown nested keys are rejected like [`merged_object`] does, but the value replaces the
-/// state instead of merging into it.
-pub(super) fn whole_object<T: serde::Serialize + serde::de::DeserializeOwned>(
-    current: &T,
-    v: Option<&Value>,
-    field: &str,
-) -> std::result::Result<Option<T>, String> {
-    let Some(v) = v else { return Ok(None) };
-    let Some(patch) = v.as_object() else { return Err(format!("{field} must be an object")) };
-    let cur = serde_json::to_value(current).map_err(|e| e.to_string())?;
-    let known: std::collections::HashSet<&str> = cur.as_object().map(|o| o.keys().map(String::as_str).collect()).unwrap_or_default();
-    for k in patch.keys() {
-        if !known.contains(k.as_str()) {
-            return Err(format!("unknown {field} field `{k}`"));
-        }
-    }
-    serde_json::from_value(v.clone()).map(Some).map_err(|e| format!("{field}: {e}"))
-}
-
-/// The buttons `ui.pointer` and `ui.click` accept (`right` and `secondary` are the same one).
+/// The buttons `ui.pointer` accepts (`right` and `secondary` are the same one).
 pub(super) const BUTTONS: [&str; 4] = ["left", "right", "secondary", "middle"];
 
-/// The modifier flags `ui.key` reads, top-level or under `modifiers`; `ui.pointer` adds `space`.
-pub(super) const KEY_MODIFIERS: [&str; 4] = ["shift", "alt", "command", "ctrl"];
-
+/// The modifier flags `ui.pointer` reads, top-level or under `modifiers`; `space` is the momentary pan.
 pub(super) const POINTER_MODIFIERS: [&str; 5] = ["shift", "alt", "command", "ctrl", "space"];
 
 /// A synthetic input method's params (or one nested object, named `what`): an object whose keys
@@ -213,11 +191,12 @@ pub(super) fn input_modifiers(p: &Value, flags: &[&str]) -> std::result::Result<
     Ok(m)
 }
 
-/// Screen position of document point (x, y) on the main canvas, where a `ui.pointer` right-click
-/// opens its menu (the mouse's opens at the pointer); the canvas centre when it can't be mapped.
+/// Screen position of document point (x, y) on the main canvas, where a `ui.pointer` event lands;
+/// the canvas centre when it can't be mapped.
+#[cfg(test)]
 pub(super) fn screen_point(app: &PhotocraftApp, x: f64, y: f64) -> [f32; 2] {
-    let p = crate::canvas::ViewXform::active(app)
-        .map(|xf| xf.to_screen(x as f32, y as f32))
+    let p = crate::canvas::document_display::active_view(app)
+        .map(|view| view.to_screen(craft::behavior::kurbo::Point::new(x, y)))
         .filter(|p| p.is_finite())
         .unwrap_or_else(|| app.last_canvas_rect.center());
     [p.x, p.y]

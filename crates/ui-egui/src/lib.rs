@@ -12,10 +12,10 @@
 /// PhotoCraft as craft-update knows it, with its 128 px icon and accent colour: the update
 /// prompt shows both, and an AppImage's menu entry gets the icon.
 #[cfg(not(target_arch = "wasm32"))]
-pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
+pub const UPDATE_APP: craft::update::app::App = craft::update::app::App {
     icon_png: Some(include_bytes!("../../../assets/app-icon/hicolor/128x128/apps/ai.storyteller.photocraft.png")),
     accent: Some([0x2f, 0x7b, 0xf5]),
-    ..craft_update::suite::PHOTOCRAFT
+    ..craft::update::suite::PHOTOCRAFT
 };
 
 /// Translate a string literal into the current UI language: `tl!("Image Size…")`.
@@ -26,6 +26,7 @@ macro_rules! tl {
 }
 mod brush_mode_menu;
 pub mod canvas;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod control;
 pub mod dialogs;
 pub mod dock;
@@ -35,6 +36,7 @@ pub mod file_open;
 pub mod frame_stages;
 pub mod gpu_memo;
 pub mod gpu_status;
+mod history_keys;
 pub mod home_recent_ui;
 pub mod i18n;
 mod icon_data;
@@ -46,6 +48,7 @@ pub mod links;
 pub mod memory_warning;
 pub mod menu_catalog;
 pub mod menus;
+mod modifier_keys;
 pub mod monitor_status;
 pub mod notices;
 pub mod os_window;
@@ -53,25 +56,26 @@ pub mod panels;
 pub mod preset_files_ui;
 pub mod proxy;
 pub mod render_path;
-pub mod screenshot;
 pub mod state;
 pub mod texel_guard;
 pub mod theme;
-pub use titlebar::{Caption, CaptionFamily, CaptionIcon, CaptionIcons, CaptionStyle, MIN_WINDOW_SIZE, RenderIconFn};
+pub mod tone;
 pub(crate) mod tool_memory;
 pub mod updates_ui;
-pub mod widgets;
 pub mod work_area;
 
 use std::collections::HashMap;
-use std::sync::mpsc::{Receiver, Sender};
 
 use photocraft_doc::{DocId, Document};
 use photocraft_engine::Session;
 use serde_json::{Value, json};
 
+#[cfg(not(target_arch = "wasm32"))]
 pub use control::{ControlRequest, ControlResponse};
-pub use file_dialog::{FileDialogAnswer, FileDialogFn, FileDialogReply, FileDialogRequest};
+pub use craft::window::{
+    Prefix,
+    policy::{self as window_policy, Backend, Decision, Frame, TitleBarPref},
+};
 pub use file_open::OsEvent;
 pub use state::{Tool, UiState};
 
@@ -87,17 +91,13 @@ mod smart_svg_ui;
 mod text;
 mod tools;
 
+pub(crate) use app::adjustment_layer_active;
 #[cfg(test)]
 use app::layer_thumb_frame;
-use app::read_dropped;
 pub use app::surface_fingerprint;
-pub(crate) use app::{adjustment_layer_active, remember_new_document};
-use canvas::ants;
 pub use canvas::artboard_ui;
 pub(crate) use canvas::background_redraw;
 pub(crate) use canvas::cam_preview;
-pub use canvas::canvas_autoscroll;
-use canvas::canvas_popup;
 pub use canvas::canvas_tool_menu;
 pub use canvas::channel_view;
 pub use canvas::gpu_canvas;
@@ -107,23 +107,13 @@ pub use canvas::move_ui;
 pub use canvas::outline;
 pub use canvas::paint_mouse;
 pub use canvas::patch_preview;
-pub use canvas::pattern_preview;
-pub use canvas::pixel_grid;
 pub use canvas::quick_pick;
-pub use canvas::rotate_view;
 pub use canvas::rulers;
+pub use canvas::sampling;
 pub use canvas::scroll_all_windows;
-pub use canvas::scrollbars;
 pub use canvas::select_mask_view;
 pub use canvas::snap_ui;
-use canvas::tile_overlay;
-use canvas::tool_cursor;
 pub use canvas::tool_feedback;
-pub use canvas::wheel_nav;
-pub use canvas::zoom_field;
-pub use canvas::zoom_hold;
-pub use canvas::zoom_levels;
-pub use canvas::zoom_window_fit;
 pub use dialogs::adjust_dialog;
 pub use dialogs::adjust_editors;
 pub use dialogs::adjust_preview;
@@ -131,32 +121,28 @@ pub(crate) use dialogs::bitmap_dialog;
 pub use dialogs::blur_pins;
 pub use dialogs::brush_preset_dialog;
 pub use dialogs::caf_ui;
-use dialogs::camera_raw_detail_ui;
 use dialogs::camera_raw_gpu;
-use dialogs::camera_raw_preview_ui;
-use dialogs::camera_raw_scope_ui;
 pub use dialogs::camera_raw_ui;
 pub use dialogs::channel_options_ui;
 pub(crate) use dialogs::color_picker_preview;
 pub use dialogs::color_picker_ui;
 pub use dialogs::color_range_ui;
 pub use dialogs::color_table_ui;
+pub use dialogs::count_group_name_ui;
 pub use dialogs::credits;
 pub use dialogs::dds_options_ui;
 pub use dialogs::delete_layer_prompt;
-pub use dialogs::dialog_alt_reset;
-pub use dialogs::dialog_blend_ui;
 pub use dialogs::discard_ui;
 pub use dialogs::disk_change_prompt;
 pub use dialogs::distort_ui;
 pub use dialogs::duplicate_layer_ui;
-pub use dialogs::edit_history;
 pub use dialogs::equalize_ui;
 pub use dialogs::export_dialog;
 pub use dialogs::file_ui;
 pub use dialogs::fill_ui;
 pub use dialogs::filter_dialog;
 use dialogs::filter_preview_ui;
+pub(crate) use dialogs::format_prompts;
 pub use dialogs::gallery_ui;
 use dialogs::guide_edit;
 pub use dialogs::guide_layout_ui;
@@ -175,8 +161,6 @@ pub use dialogs::palette;
 pub(crate) use dialogs::pattern_fill_ui;
 pub use dialogs::preset_group_prompt;
 pub use dialogs::rasterize_prompt;
-pub use dialogs::replace_prompt;
-use dialogs::rgb_histogram;
 pub use dialogs::screen_picker;
 pub use dialogs::select_mask_ui;
 pub use dialogs::shape_dialog;
@@ -193,23 +177,17 @@ pub use dialogs::vp_ui;
 pub use dialogs::wide_angle_ui;
 use input::alt_grab;
 use input::blend_keys;
-use input::control_click;
 pub use input::hold_keys;
-use input::layout_keys;
 pub use input::nudge_bundle;
 use input::opacity_keys;
-use input::page_keys;
-use input::scrub_wrap;
 pub use input::shortcut_dispatch;
 pub use input::shortcuts;
-use input::single_line_drag;
 pub use input::spring_tools;
 pub use input::stylus;
 use input::tool_shortcuts;
 pub use input::touch_twins;
+pub use input::window_keys;
 pub use menus::enable_rules;
-pub use menus::menu_keys;
-pub use menus::menu_nav;
 pub use menus::native_menu;
 pub use menus::parity;
 pub use menus::plugin_ui;
@@ -219,11 +197,9 @@ pub use panels::actions;
 pub use panels::adjust_ui;
 pub use panels::apply_color;
 pub(crate) use panels::blend_preview;
-use panels::brand;
 pub use panels::brush_panel;
 pub use panels::brush_preview;
 pub use panels::brush_sections;
-pub use panels::brushes_tab;
 pub use panels::channels_panel;
 pub use panels::chrome_ui;
 pub use panels::clip_line_ui;
@@ -239,45 +215,38 @@ pub use panels::layer_props_ui;
 use panels::layer_reveal;
 pub use panels::layer_row_ui;
 use panels::layer_transfer;
-pub use panels::layer_tree_ui;
 pub use panels::layers_panel_ui;
 use panels::mask_props_ui;
 pub use panels::mask_thumbs_ui;
 use panels::panel_docking;
 pub use panels::preset_panels;
-pub use panels::props_layout;
 pub use panels::smart_ui;
 pub use panels::swatches_ui;
 use panels::timeline_ui;
-use panels::titlebar;
 pub use panels::type_panels_ui;
 use panels::variables_ui;
-pub use prefs::flick_pan;
 pub use prefs::kys_import;
 pub use prefs::prefs_ui;
 use prefs::pressure_curve_ui;
+#[cfg(not(target_arch = "wasm32"))]
+pub use services::AgentAutomationFn;
 pub use services::AutomationReadResult;
 pub(crate) use services::SAVE_OPTIONS_OPEN;
 #[cfg(test)]
 pub(crate) use services::saved_revision_after_write;
 pub use services::{
-    AdoptAutosaveFn, AppendTextFn, AutomationCommandFn, AutomationOpenPcraftFn, AutomationReadFn, AutomationWriteFn, AutosaveFn, AutosaveResultsFn, CapsLockFn,
-    CaptionStyleFn, ClipboardGetFn, ClipboardGetSvgFn, ClipboardSetFn, ClipboardUnreadableFn, CursorPosFn, DiscardAutosaveFn, EncodePngFn, ExportFn,
-    ExportSettings, ExternalSvgEditor, ExternalSvgSession, ExternalVectorSave, ExternalVectorSource, FileStamp, FileStampFn, FormatChoices, ImportFn, Inbox,
-    LastUpdateFn, LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PenEndFn, PenScreenFn, PhotoshopShortcutsFn, PlaceInbox, QuitFn, RecoverFn,
-    Recoverable, RightButtonDownFn, SameFileFn, SaveFileFn, SaveTextFn, Services, SystemThemeFn, TabletPollFn, WindowFrameFn, WriteFn,
+    AdoptAutosaveFn, AppendTextFn, AutomationAuthorizeFn, AutomationCommandFn, AutomationOpenPcraftFn, AutomationReadFn, AutomationServices, AutomationWriteFn,
+    AutosaveFn, AutosaveResultsFn, CapsLockFn, ClipboardGetFn, ClipboardGetSvgFn, ClipboardSetFn, ClipboardUnreadableFn, CursorPosFn, DiscardAutosaveFn,
+    ExportFn, ExportSettings, ExternalSvgEditor, ExternalSvgSession, ExternalVectorSave, ExternalVectorSource, FileStamp, FileStampFn, FormatChoices, ImportFn,
+    Inbox, LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PenEndFn, PhotoshopShortcutsFn, PlaceInbox, RecoverFn, Recoverable, RightButtonDownFn,
+    SameFileFn, SaveFileFn, SaveTextFn, Services, SystemThemeFn, TabletPollFn, WindowFrameFn, WriteFn,
 };
 pub(crate) use services::{opaque_layer, saves_flat_in_place};
-pub use text::bidi_text;
 pub use text::cjk_fonts;
 pub use text::direction;
-pub use text::egui_fonts;
-use text::font_filters;
-use text::font_preview;
 pub use text::served_fonts;
 use tools::align_bar;
-pub use tools::analysis_ui;
-pub use tools::anchor_tools;
+pub use tools::analysis;
 pub use tools::artboard_tool;
 pub use tools::bg_eraser_popup;
 pub(crate) use tools::brush_cursor;
@@ -286,13 +255,7 @@ pub use tools::brush_refusal;
 pub use tools::brush_resize;
 use tools::cam_transform;
 pub use tools::cas_transform;
-pub use tools::corner_radius;
-pub use tools::crop_mode;
-pub use tools::crop_overlay;
 pub use tools::crop_presets;
-pub use tools::crop_shield;
-pub use tools::crop_size;
-pub use tools::crop_straighten;
 pub use tools::crop_task_bar;
 pub use tools::crop_ui;
 pub use tools::direct_select;
@@ -300,7 +263,6 @@ pub use tools::eraser_ui;
 pub use tools::eyedropper_ui;
 pub use tools::frame_tool;
 pub use tools::gradient_ui;
-pub use tools::lasso_ui;
 pub use tools::magnetic_lasso_ui;
 pub use tools::move_box;
 pub use tools::move_distance;
@@ -308,13 +270,14 @@ pub use tools::move_hover;
 pub use tools::move_lock;
 pub use tools::move_mods;
 pub use tools::object_finder;
+pub use tools::option_cells;
 use tools::paint_picker;
 use tools::path_components;
 pub use tools::perspective_crop_ui;
 pub use tools::perspective_ui;
 pub use tools::puppet_ui;
 pub use tools::retouch_ui;
-pub use tools::shape_bounds_box;
+pub use tools::shape_controls;
 use tools::shape_gradient_ui;
 use tools::shape_options;
 use tools::shape_paint_ui;
@@ -326,7 +289,6 @@ pub use tools::stroke_trail;
 pub use tools::symmetry_ui;
 use tools::tool_reset;
 pub use tools::transform_fx;
-pub use tools::transform_tex;
 pub use tools::transform_tool;
 use tools::type_box_preview;
 use tools::type_font_preview;
@@ -334,17 +296,6 @@ use tools::type_path_placement;
 pub use tools::type_tool;
 use tools::type_transform;
 pub use tools::vector_ui;
-pub use tools::warp_preview;
-pub use tools::zoom_tool;
-pub use widgets::field_tab;
-pub use widgets::field_wheel;
-use widgets::numeric_expression;
-pub use widgets::point_curve;
-pub use widgets::press_menu;
-pub use widgets::swap_arrow;
-use widgets::tab_strip;
-pub use widgets::text_field_menu;
-pub use widgets::tone;
 
 /// The Info panel's cached sample: pixel x, y, document revision, Eyedropper Sample Size and the view zoom's bits.
 type InfoSampleKey = (i32, i32, u64, u32, u32);
@@ -356,6 +307,8 @@ pub struct PhotocraftApp {
     /// Canvas caches per (document, display): CPU textures hold monitor values; the GPU
     /// canvas state is shared (`canvas::GPU_OUTPUT`).
     canvases: HashMap<(DocId, u32), canvas::CanvasCache>,
+    /// The revisions each document's canvas raster sources handed out per display (`canvas::PhotoComposite`, `canvas::ChannelOverlay`).
+    raster_logs: HashMap<(DocId, u32), canvas::SourceLogs>,
     /// Navigator textures belong to open documents, not the lifetime of the egui context.
     navigator_textures: HashMap<DocId, canvas::NavigatorCache>,
     /// `canvas::display_doc`'s live-adjust and Duotone documents per document: (snapshot,
@@ -373,17 +326,9 @@ pub struct PhotocraftApp {
     /// Display profile readings (#569).
     monitors: monitor_status::State,
     pub(crate) thumbnail_cache: std::sync::Arc<std::sync::Mutex<crate::home_recent_ui::ThumbnailCache>>,
-    checker: Option<egui::TextureHandle>,
-    drag: Option<canvas::Drag>,
-    /// An owned vector drag was cancelled (`canvas::cancel_stale_vector_drag`): the rest of its
-    /// pointer events go nowhere.
-    pub(crate) cancelled_vector_drag: bool,
-    /// A Move-tool press landed on a locked layer: the first pointer move shows Photoshop's
-    /// message (`move_lock`), a plain click shows nothing.
-    pub(crate) move_blocked: bool,
-    /// The tool pointer events go to this frame when it isn't the selected one: the Move tool
-    /// while ⌘ is held (`hold_keys::cmd_moves`). Set by the canvas for its gestures, never saved.
-    pub(crate) tool_override: Option<state::Tool>,
+    /// The canvas tools' own state: every tool family's gesture, hover and option state
+    /// (`canvas::tools`).
+    pub(crate) canvas_tools: canvas::tools::CanvasTools,
     /// Brush/Eraser stroke being drawn, rendered by the engine (see `canvas::LiveStroke`).
     live_stroke: Option<canvas::LiveStroke>,
     /// A live stroke just committed with its own pixels: the canvas caches that showed it
@@ -401,8 +346,9 @@ pub struct PhotocraftApp {
     pub(crate) remove_pending: Vec<serde_json::Value>,
     pub(crate) remove_pending_target: Option<retouch_ui::RemoveTarget>,
     pub(crate) remove_trail: Option<stroke_trail::Trail>,
-    /// The open menus' items, reused between frames (`menus::ItemCache`).
-    pub(crate) menu_cache: Option<menus::ItemCache>,
+    /// The menu bar's rows and the English text of its titles, rebuilt when their inputs change
+    /// (`menus::MenuModel`).
+    pub(crate) menu_model: Option<menus::MenuModel>,
     /// Move tool drag shown live (`move_ui`).
     pub(crate) move_preview: Option<move_ui::MovePreview>,
     /// Move tool › Show Highlight on Rollover: the last hover answer (`move_hover`).
@@ -421,80 +367,39 @@ pub struct PhotocraftApp {
     pub(crate) patch_preview: Option<patch_preview::PatchPreview>,
     /// Content-Aware Move drag or box shown with its result (`cam_preview`).
     pub(crate) cam_preview: Option<cam_preview::CamPreview>,
-    /// The pixels a Magnetic Lasso border follows (`magnetic_lasso_ui`).
-    pub(crate) magnetic: magnetic_lasso_ui::Runtime,
-    /// The next tool `Down` is a right-button drag that erases (see `paint_mouse`).
-    secondary_erase: bool,
     /// The Brush or Pencil erase key is held this frame (`hold_keys::erase_held`, #3439).
     held_erase: bool,
-    /// While a batch of recovered pointer samples is replayed, defer the live-stroke update to one
-    /// call for the whole frame (see `canvas::canvas_view`).
-    defer_live_stroke: bool,
-    /// A live painting stroke started on the press (`canvas_view`): the drag egui recognises later,
-    /// or the click, continues or ends it rather than starting another.
-    press_stroke: bool,
     /// Position and pen pressure at the last stroke's endpoint: ⇧-click interpolates from them (#178, #2827).
     last_stroke_end: Option<(DocId, [f64; 3])>,
     /// Control+Alt-drag brush resize in progress (`brush_resize`, #231).
-    pub(crate) brush_resize: Option<brush_resize::Resize>,
-    /// A ⌘⌥⌃-click layer pick is in progress; its drag and release are swallowed (`quick_pick`).
-    pub(crate) quick_pick: bool,
+    pub(crate) brush_resize: brush_resize::PaintResize,
     /// The layer a canvas click picked the Move tool way (its Auto-Select, or a ⌘-click from another
     /// tool) and the engine's active-layer change count right after that pick
     /// (`Session::active_layer_changes`). The Layers panel's reveal reads it when it next draws, and
     /// accepts it only if nothing changed the active layer since, however long ago (`layer_reveal`, #11381).
     pub(crate) move_pick: Option<(photocraft_doc::LayerId, u64)>,
-    /// The next tool `Down` is an Alt+right-drag that resizes the brush (#297). `tool_event`
-    /// takes it on every event, so a press another handler consumes can't leave it set.
-    pub(crate) brush_resize_armed: bool,
-    /// This press began with ⌥ (Alt) held on a painting tool, so it samples colours instead of
-    /// painting until it is released (`canvas::alt_eyedropper`, #417).
-    pub(crate) alt_sampling: bool,
-    /// This press began with ⌥ (Alt) held on the Mixer Brush, so it loaded paint from the canvas
-    /// and paints nothing until it is released, even with ⌥ let go (`canvas::tool_event`).
-    pub(crate) mixer_sampling: bool,
     /// Caps Lock toggled on, read from the OS each frame (`services.caps_lock`): painting tools
     /// show the precise crosshair whatever the cursor preference (#1758).
     pub caps_lock: bool,
     /// The first digit of a two-digit opacity typed on the number keys (`opacity_keys`, #352).
-    pub(crate) opacity_keys: opacity_keys::Pending,
-    control_rx: Option<Receiver<ControlRequest>>,
-    /// `ui.screenshot` requests: bounded admission, a weak-slot callback per issuance, monotonic
-    /// deadlines and a capture-time geometry epoch (see `screenshot.rs`).
-    captures: screenshot::Captures,
-    /// The custom Type tool's IME owner/generation/receipt tracker (`type_tool::sync_ime`).
-    pub(crate) type_ime: type_tool::ImeState,
-    /// Control replies waiting for queued synthetic input to be processed.
-    input_waiters: Vec<Sender<ControlResponse>>,
+    pub(crate) opacity_keys: craft::behavior::DigitKeys,
+    /// The control channel: requests from a transport, the replies waiting on input, jobs and
+    /// screenshots, and the screenshot queue (`app/control.rs`).
+    #[cfg(not(target_arch = "wasm32"))]
+    control: Option<craft::automation::ControlChannel>,
     /// Live (uncommitted) adjustment edit shown on canvas while a slider is dragged.
     pub live_adjust: Option<(photocraft_doc::LayerId, Value)>,
     /// Frames rendered (for tests and the status bar).
     pub frame: u64,
-    /// The pointer rested on the notice stack last frame. Used to give a fresh auto-hide delay in
-    /// the frame the pointer leaves, so a long stationary hover never counts as elapsed time
-    /// (#2022); set by `notices::show`.
-    pub(crate) notices_hovered: bool,
+    /// What the notice stack keeps between frames: the pointer rest that gives a fresh auto-hide
+    /// delay in the frame the pointer leaves (`notices::show`).
+    pub(crate) notices_live: notices::Live,
     /// The low-memory warning's schedule and state (`memory_warning`).
     pub(crate) low_memory: memory_warning::Watch,
-    /// Apply theme on first frame.
-    styled: bool,
-    /// Whether the window uses an integrated (transparent) macOS title bar.
-    pub integrated_titlebar: bool,
-    /// Windows and Linux: the window has no OS decorations and the app's top bar is the title bar
-    /// (caption buttons, window dragging and edge resizing, `titlebar`).
-    pub custom_titlebar: bool,
-    /// Last window title sent to the OS (`ViewportCommand::Title`, see `panels::sync_window_title`):
-    /// sent again only when it changes, so idle frames don't spam the backend.
-    last_window_title: String,
-    fonts_ready: bool,
     /// Screen rect of the main canvas last frame (for overlays and the navigator).
     pub last_canvas_rect: egui::Rect,
-    /// Window › Arrange: the first document of the shown run of tiles, when there are more
-    /// documents than tiles (`canvas::arranged_cells`).
-    pub(crate) arrange_start: usize,
-    /// The document window (`DocWindow::id`) whose canvas `canvas::extra_windows` is drawing.
-    /// `scroll_all_windows::source` reads it to skip the view that a Hand drag moves itself.
-    pub(crate) drawing_window: Option<u64>,
+    /// The egui layer the main canvas was drawn on last frame: preset drops target it.
+    pub last_canvas_layer: egui::LayerId,
     /// Physical pixels per egui point of the canvas last frame (`ctx.pixels_per_point`, which
     /// folds in both the display scale and Interface › UI Scale). The canvas maps document pixels
     /// to physical pixels, so point-space geometry divides the view zoom by this (see
@@ -503,9 +408,10 @@ pub struct PhotocraftApp {
     /// The document area showing the active document's canvas last frame (not the tabs, the
     /// start screen or an opening file's card): files dropped here are placed as layers.
     pub(crate) drop_canvas_rect: Option<egui::Rect>,
-    /// The document tab strip last frame: a drop there opens the file at the slot under it.
-    pub(crate) tab_strip: Option<canvas::TabStrip>,
-    pub(crate) frame_tool_ctx: Option<egui::Context>,
+    /// The window's one egui context, for code without one in hand: SAVED-tier reads and writes,
+    /// the Frame tool's transforms from pointer events, and the mapping and panels that read the
+    /// canvas's zoom ease (`document_display::shown_camera`). Read it through [`Self::ctx`].
+    ctx: egui::Context,
     pub(crate) frame_preview: Option<frame_tool::Preview>,
     /// Files dropped on the canvas still to place, one Free Transform at a time, each with the
     /// document it was dropped on.
@@ -517,27 +423,50 @@ pub struct PhotocraftApp {
     path_document: Option<(DocId, u64, std::sync::Weak<Document>)>,
     pub fps: f32,
     pub(crate) last_frame_time: f64,
-    thumbs: HashMap<(photocraft_doc::LayerId, u8), (u64, egui::TextureHandle)>,
-    /// The document area each layer thumbnail in `thumbs` frames (the canvas, or the layer's
-    /// bounds with Clip Thumbnails to Layer Bounds; #4281).
-    thumb_frames: HashMap<photocraft_doc::LayerId, photocraft_geom::Rect>,
-    /// History snapshot thumbnails by (document, snapshot id), each with the snapshot document it
-    /// shows (`snapshot_thumb`, #2966): made once, and again only when that is a different one (a
-    /// preserved-ID reopen, or the first snapshot refreshed for a served font, #6087).
-    snapshot_thumbs: HashMap<(DocId, u64), (std::sync::Weak<Document>, egui::TextureHandle)>,
-    /// Snapshots whose live layer/mask keys were last used to prune thumbnail handles.
-    thumb_documents: Vec<(DocId, std::sync::Weak<Document>)>,
     /// Content bounds cached per (key, revision): scanning a 36 MP layer every frame cost ~77 ms.
     bounds_cache: HashMap<u64, (u64, photocraft_geom::Rect)>,
     /// Downsampled proxy of the active document for live previews: (doc, revision, k, proxy).
     pub(crate) proxy: Option<(DocId, u64, u32, std::sync::Arc<Document>)>,
     /// Key of the preview currently uploaded to the GPU (doc, params hash).
     pub(crate) proxy_uploaded: Option<(DocId, u64)>,
-    /// Selection outline cache: (doc, revision, segments).
     /// Live filter preview (proxy document with the filter applied).
     pub(crate) guide_edit: Option<guide_edit::Draft>,
     pub(crate) filter_preview: Option<filter_dialog::FilterPreview>,
-    pub(crate) smart_filter_targets: smart_filter_dialog::Targets,
+    /// The live preview of the parameter dialogs' own filters, on the dialog lane.
+    pub(crate) filter_live: craft::imaging::ui::LivePreview,
+    /// The Image › Adjustments dialog that is open: its layer and values (`adjust_dialog`).
+    pub(crate) adjust_open: Option<adjust_dialog::OpenAdjust>,
+    /// The Properties panel's adjustment edit in progress, with the tone editor's shown channel
+    /// (`adjust_editors::PropertiesAdjust`).
+    pub(crate) adjust_session: Option<adjust_editors::PropertiesAdjust>,
+    /// The Color Picker dialog asking for a screen sample: the dialog and the field that took it.
+    pub(crate) dialog_dropper: Option<(craft::ui::dialog::DialogId, String)>,
+    /// The child dialog (colour picker or contour editor) the open Layer Style dialog has, with that dialog's id.
+    pub(crate) layer_style_child: Option<(craft::ui::dialog::DialogId, dialogs::layer_style::Child)>,
+    /// What each open Color Picker edits (`color_picker_ui`).
+    pub(crate) color_targets: HashMap<craft::ui::dialog::DialogId, color_picker_ui::PickTarget>,
+    /// Colours a Color Picker answered with OK, waiting for their owner: (dialog, field, colour).
+    pub(crate) color_answers: Vec<(craft::ui::dialog::DialogId, String, craft::theme::Srgba)>,
+    /// The screen-colour pick in progress (`screen_picker`).
+    pub(crate) screen_pick: craft::color_ui::ui::ScreenPick,
+    /// Select and Mask / Content-Aware Fill / Liquify / Gallery / Vanishing Point sessions.
+    pub(crate) caf: Option<caf_ui::CafApp>,
+    pub(crate) liquify: Option<liquify_ui::LiquifyApp>,
+    pub(crate) gallery: Option<gallery_ui::GalleryApp>,
+    pub(crate) vanishing: Option<vp_ui::VpApp>,
+    /// The Layer Style, Select and Mask and parameter dialogs' open targets, one field per family,
+    /// keyed by the dialog.
+    pub(crate) layer_style_target: Option<(craft::ui::dialog::DialogId, DocId, photocraft_doc::LayerId)>,
+    pub(crate) select_mask_target: Option<(craft::ui::dialog::DialogId, DocId, photocraft_doc::LayerId, std::sync::Arc<select_mask_ui::PcSelectMaskSource>)>,
+    /// The Guide Layout dialog's document.
+    pub(crate) guide_layout_doc: Option<(craft::ui::dialog::DialogId, DocId)>,
+    /// The Export As dialog that is open.
+    pub(crate) export_open: Option<export_dialog::ExportOpen>,
+    /// The layer the Layers panel reveals when it next draws, with the groups to open for it
+    /// (`layer_reveal::{mark, file}`).
+    pub(crate) pending_reveal: Option<(photocraft_doc::LayerId, craft::layers::ui::panel::Groups)>,
+    /// The Pattern Fill dialog's preview and open state (`pattern_fill_ui`).
+    pub(crate) pattern_fill: pattern_fill_ui::State,
     #[cfg(not(target_arch = "wasm32"))]
     filter_preview_worker: crate::dialogs::filter_preview_worker::Worker,
     /// Full CPU canvas redraws running in the background, by document (#4024).
@@ -553,25 +482,13 @@ pub struct PhotocraftApp {
     pub(crate) live_adjust_preview: Option<adjust_preview::LiveAdjust>,
     /// The Levels dialog's Alt-drag clipping display over the canvas.
     pub(crate) levels_clipping: Option<levels_clipping::Cache>,
-    /// Synthetic input events queued by automation (`ui.click`, `ui.key`, …), injected next frame.
-    pub(crate) synthetic: Vec<egui::Event>,
-    /// The one synthetic batch currently being delivered.
-    ///
-    /// eframe preserves input appended by `raw_input_hook` across hidden (`update_logic_only`)
-    /// ticks, so draining another step every hidden tick would deliver several host iterations
-    /// as one burst. At most one batch is ever in flight; the next step waits for a pass.
-    synthetic_batch: Option<Vec<egui::Event>>,
-    /// A pass consumed the batch but returned before handling input (fonts not ready): put the
-    /// same events back on the next hook so the step is not lost. Cleared as soon as they are
-    /// re-appended, so two hidden ticks cannot deliver the same step twice.
-    synthetic_reinject: bool,
-    /// Document/focus identity the batch was created for. A batch queued against one document is
-    /// cancelled, not replayed, after the active document (including a switch away and back) or
-    /// the focus changes; an edit in the same document does not cancel it.
-    synthetic_snapshot: Option<SyntheticTarget>,
-    /// True only while a frame is processing synthetic automation input. It
-    /// makes shortcut- and dialog-triggered commands pass the same policy as
-    /// direct control calls.
+    /// The active document injected input was queued for (`ui.click`, `ui.key`, …), while it is
+    /// queued: a switch of the active document withdraws it (`withdraw_stale_input`).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) input_queued_for: Option<InputTarget>,
+    /// True only while a pass's input carries injected automation input
+    /// (`WindowHost::injected_pass`). It makes shortcut- and dialog-triggered commands pass the
+    /// same policy as direct control calls.
     pub(crate) automation_input: bool,
     /// The direct control-command route keeps Actions playback synchronous and dialog-free.
     pub(crate) programmatic_playback: bool,
@@ -592,8 +509,12 @@ pub struct PhotocraftApp {
     pub(crate) hist_job: Option<histogram_panel::HistJob>,
     /// The (document, revision) an Uncached Refresh asked to count at cache level 1.
     pub(crate) hist_uncached: Option<(DocId, u64)>,
+    /// Memoized `tone::selection_key` of the active document's current revision
+    /// (`histogram_panel::update` refreshes it once per frame; the hash walks every tile of the
+    /// selection mask, while any change to the selection arrives as a new document revision).
+    pub(crate) hist_sel_key: Option<(DocId, u64, u64)>,
     /// Free Transform preview (document without the moving pixels + their texture).
-    pub(crate) transform_preview: Option<transform_tool::TransformPreview>,
+    pub(crate) transform_preview: Option<transform_tool::OpenPreview>,
     /// The canvas area the last Free Transform box's preview changes (`transform_tool::damage`).
     transform_area: Option<crate::transform_tool::OpenArea>,
     /// A large layer's Free Transform box being prepared in the background.
@@ -607,19 +528,17 @@ pub struct PhotocraftApp {
     /// Live Layer Style dialog preview: (key over revision + style fields, preview or validation error).
     pub(crate) style_preview: Option<(u64, Result<std::sync::Arc<Document>, String>)>,
     pub(crate) solid_fill_preview: Option<solid_fill_ui::Preview>,
-    /// Live Pattern Fill dialog preview (pattern_fill_ui).
-    pub(crate) pattern_fill_preview: Option<pattern_fill_ui::Preview>,
     /// Shape fill Color Picker preview (shape_fill_ui).
     pub(crate) shape_fill_preview: Option<shape_fill_ui::Preview>,
-    /// Colours a colour swatch widget's Color Picker returned with OK, waiting for the widget to
-    /// take them next frame (`color_picker_ui::widget_tick`): (widget id, sRGB).
-    pub(crate) widget_colors: Vec<(u64, [f32; 3])>,
     /// Liquify dialog, Puppet Warp and Perspective Warp sessions (distort_ui).
     pub(crate) distort: distort_ui::Distort,
     /// Gradient tool live-mode drags and previews (gradient_ui).
     pub(crate) gradient: gradient_ui::LiveGradient,
-    /// Filter › Camera Raw Filter dialog (camera_raw_ui).
-    pub(crate) camera_raw: Option<camera_raw_ui::CameraRawDialog>,
+    /// The Camera Raw session that is open: the open-time dialog or the Filter (`camera_raw_ui`).
+    pub(crate) raw: Option<crate::dialogs::camera_raw_ui::RawSession>,
+    /// The reply of the Camera Raw finish or cancel the result pump ran last, for the menu request that confirmed it:
+    /// the request clears it when it starts and takes it when it ends (`camera_raw_ui::menu`).
+    pub(crate) raw_reply: Option<Result<serde_json::Value, String>>,
     /// Raws just opened interactively, waiting in the open-time Camera Raw dialog (shown on the
     /// next frame, which has the egui context); several share it in a filmstrip.
     pub(crate) raw_shelf: Vec<camera_raw_ui::HeldRaw>,
@@ -627,15 +546,10 @@ pub struct PhotocraftApp {
     /// raw being opened.
     pub(crate) raw_redevelop: Vec<camera_raw_ui::Redevelop>,
     /// Filter › Adaptive Wide Angle dialog (wide_angle_ui).
-    pub(crate) wide_angle: Option<wide_angle_ui::WideAngleDialog>,
-    /// ⌘Z history of each open parameter dialog (edit_history).
-    pub(crate) dialog_edits: edit_history::DialogEdits,
+    pub(crate) wide_angle: Option<wide_angle_ui::WideAngleApp>,
     /// What each open Color Picker's live target was when it opened, to put back on Cancel
     /// (`color_picker_ui::live_preview`).
     pub(crate) color_picker_live: Vec<color_picker_ui::live_preview::Live>,
-    /// The filter a "Rasterize?" prompt answered for, run after the dialog closes, where the
-    /// egui context is available again (rasterize_prompt).
-    pub(crate) pending_after_prompt: Option<(String, serde_json::Value)>,
     /// A command clicked while Free Transform commits in the background, run when it lands.
     pub(crate) after_transform_commit: Option<(String, serde_json::Value)>,
     /// Last mirrored or imported OS image; this can predate the current internal copy.
@@ -656,23 +570,31 @@ pub struct PhotocraftApp {
     pub(crate) hover_doc: Option<[f64; 2]>,
     /// Layer hovered in the Layers panel, outlined on the canvas.
     pub(crate) hover_layer: Option<photocraft_doc::LayerId>,
+    /// The commands run from any source (`menus::invoke`, the control channel). Every settling region's version
+    /// holds it (`panels::region_versions`): a command may change anything a region shows.
+    pub(crate) commands_run: u64,
+    /// A layer whose row the Layers panel opens for renaming in its next pass (Layer › Rename
+    /// Layer, the row menu's Rename Layer…).
+    pub(crate) layers_rename: Option<photocraft_doc::LayerId>,
+    /// The Smart Filter row selected on its own, per document ([`crate::smart_ui::selected`]).
+    pub(crate) smart_filter_picks: crate::smart_ui::FilterPicks,
+    /// Select › Find Layers: the Layers panel's Name filter takes the focus in its next pass.
+    pub(crate) find_layers_focus: bool,
     /// Layer hovered on the canvas, highlighted in the Layers panel.
     pub(crate) canvas_hover_layer: Option<photocraft_doc::LayerId>,
     pub(crate) clone_preview: Option<crate::canvas::ClonePreviewCache>,
     /// Info panel sample cache: ((x, y, revision, Sample Size), composite RGBA).
     info_sample: Option<(InfoSampleKey, [f32; 4])>,
-    /// Guide being dragged (from a ruler or with the Move tool).
-    pub(crate) guide_drag: Option<rulers::GuideDrag>,
     /// Move tool marquee selecting layers (`move_box`).
     pub(crate) layer_box: Option<move_box::LayerBox>,
-    /// Crop tool gesture in progress (see `crop_ui`).
-    pub(crate) crop: crop_ui::CropState,
-    /// Perspective Crop tool gesture and clicked corners (see `perspective_crop_ui`).
-    pub(crate) pcrop: perspective_crop_ui::PerspectiveCrop,
+    /// Pen paths finished, which Undo back to their finish gives back to the Pen
+    /// (`vector_ui::pen_resume_on_undo`).
+    pub(crate) finished_pens: Vec<vector_ui::FinishedPen>,
     /// Type tool layout cache: ((doc, revision, layer), layout).
     pub(crate) type_layout: Option<((u64, u64, u64), std::sync::Arc<photocraft_text::TextLayout>)>,
-    /// Type tool: (layer, clicks in the current run) for word / line / paragraph / all selection.
-    pub(crate) type_clicks: Option<(u64, u32)>,
+    /// The path a Type tool click on a path would place its text on, shown before the click
+    /// (`type_path_placement`).
+    pub(crate) type_path_preview: Option<type_path_placement::Preview>,
     pub(crate) type_transform_preview: Option<type_transform::Preview>,
     pub(crate) type_path_damage: Option<type_path_placement::Damage>,
     /// A paragraph-box handle drag rendered in the background (`type_box_preview`).
@@ -681,12 +603,15 @@ pub struct PhotocraftApp {
     pub(crate) type_font_preview: Option<type_font_preview::TypeFontPreview>,
     /// The colour under a text or gradient stop Color Picker, shown live before OK (`color_picker_preview`).
     pub(crate) color_picker_preview: Option<color_picker_preview::Preview>,
-    /// Channel thumbnails for one document snapshot; view-only revisions reuse their pixels.
-    channel_thumbs: Option<(DocId, std::sync::Weak<Document>, bool, Vec<egui::TextureHandle>)>,
-    /// Channels panel overlays / channel views drawn over the canvas, per document id.
-    pub(crate) channel_views: HashMap<u64, channel_view::Cache>,
-    /// Selection outline keyed by (document, mask identity × step × visible region).
-    pub(crate) outline_cache: Option<(DocId, u64, std::sync::Arc<Vec<outline::Segment>>)>,
+    /// The brush tip last drawn for the cursor, with the key it was built for (`brush_cursor`).
+    pub(crate) brush_tip: Option<(brush_cursor::TipKey, craft::ui::canvas_controls::brush::BrushTip)>,
+    /// Snap targets of the active document, derived data keyed on (document, revision,
+    /// `SnapOptions`, excluded layers); `snap_ui::snap` reads and refills it through `&self`.
+    pub(crate) snap_cache: std::sync::Mutex<Option<snap_ui::SnapCache>>,
+    /// The saved workspaces and the one shown (`workspace_ui`).
+    pub workspaces: workspace_ui::Workspaces,
+    /// Autosave timing and its retry state (`prefs_ui`).
+    pub(crate) autosave: craft::platform::autosave::Autosave,
     /// GPU canvas renderer, when running on the wgpu backend (see [`Self::set_wgpu`]). Dropped
     /// for the rest of the session when the device is lost (see `gpu_status`).
     gpu: Option<gpu_canvas::GpuCanvas>,
@@ -720,39 +645,33 @@ pub struct PhotocraftApp {
     pub(crate) updates_rt: updates_ui::Runtime,
     /// Close, Revert or Exit parked behind the unsaved-changes prompt (see `discard_ui`).
     pub(crate) discard: Option<discard_ui::Prompt>,
-    /// The Open or Save dialog in progress, and the action waiting on it (see `file_dialog`).
-    pub(crate) file_dialog: Option<file_dialog::Pending>,
-    /// A Save As or Save a Copy to a TIFF parked behind the TIFF Options prompt (see `tiff_options_ui`).
-    pub(crate) tiff_options: Option<tiff_options_ui::Prompt>,
-    /// The last TIFF Options compression and pyramid answer, where the next prompt starts. Session-only.
-    pub(crate) tiff_remembered: tiff_options_ui::Remembered,
+    /// A save parked behind a format's options prompt (TIFF, Targa, JPEG, DDS), run when the
+    /// prompt closes (`format_prompts`).
+    pub(crate) parked_save: Option<format_prompts::ParkedSave>,
     /// Where each document was last saved or exported to through a dialog (#1826): its next Save
     /// As or export dialog starts there rather than beside the document. Session-only.
     pub(crate) save_dirs: HashMap<photocraft_doc::DocId, std::path::PathBuf>,
     /// Each document's own file as it was when the document was opened from it or saved to it
     /// (see [`FileStamp`]).
     pub(crate) disk_stamps: HashMap<photocraft_doc::DocId, (String, FileStamp)>,
-    /// A save to an RGB Targa parked behind the Targa Options prompt (see `targa_options_ui`).
-    pub(crate) targa_options: Option<targa_options_ui::Prompt>,
-    /// A save to a JPEG parked behind the JPEG Options prompt (see `jpeg_options_ui`).
-    pub(crate) jpeg_options: Option<jpeg_options_ui::Prompt>,
-    /// A save to a DDS texture parked behind the DDS Options prompt (see `dds_options_ui`).
-    pub(crate) dds_options: Option<dds_options_ui::Prompt>,
     /// Files read but not opened yet: the first waits on its profile prompt, the rest behind it
     /// (see `open_prompt`).
     pub(crate) held_opens: std::collections::VecDeque<open_prompt::Held>,
     /// PSD files whose memory preflight requires user approval before pixel decoding (see `open_prompt`).
     pub(crate) held_memory_prompts: std::collections::VecDeque<open_prompt::MemoryPrompt>,
     pub(crate) prompt_order: std::collections::VecDeque<open_prompt::PromptKind>,
-    /// A brush or gradient file waiting on the group-name prompt (see `preset_group_prompt`).
-    pub(crate) held_preset_import: Option<preset_group_prompt::Held>,
     pub(crate) held_record_again: Option<actions::record_again::Held>,
     pub(crate) held_insert_menu: Option<actions::menu_item::Held>,
     /// Set once the user has agreed to quit, so the resulting close request goes through.
     pub(crate) allow_close: bool,
+    /// The craft framework's host and the framework dialogs open in it (`app/framework.rs`).
+    pub(crate) framework: app::framework::Framework,
+    /// The file dialog in progress (see `file_dialog`).
+    pub(crate) file_dialog: Option<file_dialog::Pending>,
+    /// What the last TIFF Options answer chose; it outlives a prompt.
+    pub(crate) tiff_remembered: tiff_options_ui::Remembered,
     /// Pen pressure/tilt from the platform (see `stylus`).
     pub stylus: stylus::Stylus,
-    control_click: control_click::ControlClick,
     /// Run long commands and file opens as background jobs with progress and Cancel (#210; see
     /// `jobs_ui`). The desktop app turns it on; off (the default), everything runs inline as
     /// before, which tests and scripts rely on.
@@ -769,24 +688,13 @@ pub struct PhotocraftApp {
     live_tokens: theme::live::LiveTokens,
 }
 
-/// The state a synthetic input batch was queued for.
+/// The active document injected input was queued for.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct SyntheticTarget {
-    document: Option<screenshot::DocumentId>,
-    focus: Option<egui::Id>,
-}
-
-impl SyntheticTarget {
-    /// The document must be the same one in the same activation (a switch away and back is a
-    /// change); its revision is attribution only, so an edit does not cancel a queued step.
-    fn matches(self, other: Self) -> bool {
-        self.focus == other.focus
-            && match (self.document, other.document) {
-                (Some(a), Some(b)) => a.same_activation(b),
-                (None, None) => true,
-                _ => false,
-            }
-    }
+struct InputTarget {
+    /// The active document's generation: it changes on every switch of the active document, a
+    /// switch away and back included, and not on an edit, so an edit does not withdraw the input.
+    document: Option<u64>,
 }
 
 #[cfg(test)]
@@ -794,25 +702,97 @@ mod artboard_add_mode_tests;
 #[cfg(test)]
 mod background_eraser_tolerance_field_tests;
 #[cfg(test)]
-mod brush_options_tooltips_tests;
-#[cfg(test)]
 mod brush_picker_escape_tests;
 #[cfg(test)]
 mod cam_no_pixels_alert_tests;
 #[cfg(test)]
 mod eyedropper_context_menu_tests;
 #[cfg(test)]
+mod menu_automate_groups_tests;
+#[cfg(test)]
 mod patch_shift_constrain_tests;
 #[cfg(test)]
-mod pencil_pressure_toggles_tests;
+mod paths_scroll_tests;
 #[cfg(test)]
-mod shape_bounds_box_tests;
+mod pencil_pressure_toggles_tests;
 
 #[cfg(test)]
 mod lifecycle_tests;
 
 #[cfg(test)]
+mod stroke_frames_tests;
+
+#[cfg(test)]
 mod screenshot_tests;
+
+/// Helpers shared by the tests of more than one module.
+#[cfg(test)]
+pub(crate) mod testing {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use craft::settings::testing::MemoryFiles;
+    use craft::settings::{Location, OpenOptions, SettingsStore};
+
+    use crate::Services;
+
+    /// The folder of the scratch settings store; its file lives in `files`.
+    const DIR: &str = "/memory/photocraft";
+
+    /// Services whose preferences store reads and writes `files`, so a second app over the same files reads what the
+    /// first one stored. A zero debounce makes the first frame after a change write it.
+    pub(crate) fn services_over(files: &Arc<MemoryFiles>) -> Services {
+        let options = OpenOptions::new(Location::Dir(DIR.into())).debounce(Duration::ZERO).files(files.clone());
+        Services { settings: Some(SettingsStore::<photocraft_engine::prefs::SavedPrefs>::open_with(options)), ..Default::default() }
+    }
+
+    /// Makes the input a test hands `ctx` carry its modifiers as the window's does. egui reads the held modifiers only
+    /// from `Event::ModifiersChanged`; the window's integration announces each change before the press, key or wheel
+    /// that carries it, and stamps every event with the held set. A kittest event carries its modifiers on the event
+    /// alone, so this announces them where they differ from the held ones. It runs after the runtime's input hook and
+    /// sees the input egui will read, the runtime's injected events included.
+    pub(crate) fn announce_modifiers(ctx: &egui::Context) {
+        ctx.add_plugin(AnnouncedModifiers::default());
+    }
+
+    /// The modifiers each viewport's input has held so far.
+    #[derive(Default)]
+    struct AnnouncedModifiers(std::collections::HashMap<egui::ViewportId, egui::Modifiers>);
+
+    impl egui::Plugin for AnnouncedModifiers {
+        fn debug_name(&self) -> &'static str {
+            "photocraft.testing.announced_modifiers"
+        }
+
+        fn input_hook(&mut self, _ctx: &egui::Context, input: &mut egui::RawInput) {
+            let held = self.0.entry(input.viewport_id).or_default();
+            let mut events = Vec::with_capacity(input.events.len());
+            for event in std::mem::take(&mut input.events) {
+                match &event {
+                    egui::Event::ModifiersChanged(now) => *held = *now,
+                    egui::Event::WindowFocused(false) => *held = egui::Modifiers::NONE,
+                    egui::Event::PointerButton { modifiers, .. } | egui::Event::Key { modifiers, .. } | egui::Event::MouseWheel { modifiers, .. }
+                        if *modifiers != *held =>
+                    {
+                        *held = *modifiers;
+                        events.push(egui::Event::ModifiersChanged(*modifiers));
+                    }
+                    _ => {}
+                }
+                events.push(event);
+            }
+            input.events = events;
+        }
+    }
+
+    /// One pass of `ui` on `ctx` with `input`, its output taken as the window's renderer takes it: no renderer applies
+    /// the texture changes in a test, so they are consumed here and the output drops clean.
+    pub(crate) fn run_ui(ctx: &egui::Context, input: egui::RawInput, ui: impl FnMut(&mut egui::Ui)) -> egui::FullOutput {
+        let mut output = ctx.run_ui(input, ui);
+        output.textures_delta.clear();
+        output
+    }
+}
 
 #[cfg(test)]
 mod navigator_gpu_tests;
@@ -824,13 +804,8 @@ mod color_swatch_tests;
 mod profile_open_tests;
 
 #[cfg(test)]
-mod profile_prompt_tests;
-
-#[cfg(test)]
 mod input_tests;
 
-#[cfg(test)]
-mod empty_workspace_tests;
 #[cfg(test)]
 mod home_chrome_tests;
 
@@ -842,7 +817,7 @@ mod color_replacement_tests;
 #[cfg(test)]
 mod home_recent_gate_tests;
 #[cfg(test)]
-mod layer_shortcut_tests;
+mod layers_panel_nodes;
 #[cfg(test)]
 mod live_retouch_tests;
 #[cfg(test)]
@@ -852,15 +827,13 @@ mod pencil_tests;
 #[cfg(test)]
 mod smart_objects_menu_tests;
 #[cfg(test)]
-mod tool_options_theme_tests;
-#[cfg(test)]
 mod tool_shift_cycle_order_tests;
 #[cfg(test)]
 mod tool_shortcut_tests;
 #[cfg(test)]
-mod toolbar_group_order_tests;
+mod toolbar_custom_group_layout_tests;
 #[cfg(test)]
-mod toolbar_more_slot_flyout_tests;
+mod toolbar_group_order_tests;
 
 #[cfg(test)]
 mod pixel_aspect_tests;
@@ -872,7 +845,11 @@ mod transform_fx_tests;
 
 #[cfg(test)]
 mod transform_commit_click_tests;
+#[cfg(test)]
+mod transform_drag_start_tests;
 
+#[cfg(test)]
+mod artboard_from_group_label_tests;
 #[cfg(test)]
 mod layer_props_ui_tests;
 #[cfg(test)]
@@ -883,25 +860,16 @@ mod transform_switch_tests;
 mod transform_undo_tests;
 
 #[cfg(test)]
-mod transform_rotate_snap_tests;
-
-#[cfg(test)]
 mod transform_type_tests;
-
-#[cfg(test)]
-mod transform_reference_point_tests;
-
-#[cfg(test)]
-mod transform_relative_position_tests;
 
 #[cfg(test)]
 mod star_tool_tests;
 
 #[cfg(test)]
-mod transform_several_tests;
+mod new_doc_bitmap_mode_tests;
 
 #[cfg(test)]
-mod transform_corner_projection_tests;
+mod transform_several_tests;
 
 #[cfg(test)]
 mod transform_selection_rules_tests;
@@ -911,8 +879,6 @@ mod psd_open_tests;
 #[cfg(test)]
 mod save_identity_tests;
 
-#[cfg(test)]
-mod move_auto_select_tests;
 #[cfg(test)]
 mod move_shift_click_tests;
 
@@ -928,7 +894,11 @@ mod move_history_names_tests;
 mod move_shift_diagonal_tests;
 
 #[cfg(test)]
-mod new_group_button_tests;
+mod layers_footer_tests;
+#[cfg(test)]
+mod layers_rows_tests;
+#[cfg(test)]
+mod layers_thumbnail_tests;
 
 #[cfg(test)]
 mod color_panel_tests;
@@ -937,9 +907,6 @@ mod color_tab_theme_tests;
 
 #[cfg(test)]
 mod new_layer_button_tests;
-
-#[cfg(test)]
-mod layer_via_label_tests;
 
 #[cfg(test)]
 mod smart_filter_rows_tests;
@@ -968,18 +935,7 @@ mod new_doc_remember_tests;
 mod hidden_layer_tests;
 
 #[cfg(test)]
-mod blend_dropdown_keys_tests;
-
-#[cfg(test)]
 mod warp_text_dialog_tests;
-
-#[cfg(test)]
-mod blend_dropdown_wheel_tests;
-#[cfg(test)]
-mod paths_scroll_tests;
-
-#[cfg(test)]
-mod blend_dropdown_groups_tests;
 
 #[cfg(test)]
 mod options_bar_mode_wheel_tests;
@@ -988,10 +944,8 @@ mod options_bar_mode_wheel_tests;
 mod field_wheel_app_tests;
 
 #[cfg(test)]
-mod dropdown_press_tests;
+mod brush_shift_drag_axis_tests;
 
-#[cfg(test)]
-mod marquee_press_mods_tests;
 #[cfg(test)]
 mod marquee_tests;
 
@@ -1021,14 +975,12 @@ mod alt_click_tests;
 #[cfg(test)]
 mod artboard_first_board_tests;
 #[cfg(test)]
-mod status_bar_tests;
-#[cfg(test)]
 mod stroke_timing_tests;
 
 #[cfg(test)]
-mod patch_tool_history_names_tests;
+mod patch_reset_tool_tests;
 #[cfg(test)]
-mod polygon_lasso_step_snap_tests;
+mod patch_tool_history_names_tests;
 #[cfg(test)]
 mod polygon_lasso_tests;
 
@@ -1040,40 +992,21 @@ mod browse_field_tests;
 #[cfg(test)]
 mod export_quality_tests;
 #[cfg(test)]
-mod options_hit_area_tests;
-#[cfg(test)]
 mod select_and_mask_button_tests;
+#[cfg(test)]
+mod wand_tolerance_field_tests;
 
 #[cfg(test)]
 mod saved_path_edit_tests;
 
 #[cfg(test)]
-mod menu_item_labels_tests;
-#[cfg(test)]
 mod pen_path_ownership_tests;
 
 #[cfg(test)]
 mod artboard_options_bar_tests;
-#[cfg(test)]
-mod background_eraser_bar_angle_tests;
-#[cfg(test)]
-mod brush_alt_digit_smoothing_tests;
-#[cfg(test)]
-mod brush_opacity_minimum_tests;
-#[cfg(test)]
-mod burn_default_tip_tests;
-
-#[cfg(test)]
-mod pencil_shift_digit_opacity_tests;
 
 #[cfg(test)]
 mod doc_tab_menu_tests;
-#[cfg(test)]
-mod dodge_default_tip_tests;
-#[cfg(test)]
-mod layers_empty_area_menu_tests;
-#[cfg(test)]
-mod pencil_auto_erase_tooltip_tests;
 #[cfg(test)]
 mod preferences_submenu_tests;
 #[cfg(test)]
@@ -1082,7 +1015,16 @@ mod selection_move_step_tests;
 mod view_guides_submenu_tests;
 
 #[cfg(test)]
-mod background_eraser_digit_keys_tests;
+mod lasso_click_tests;
+#[cfg(test)]
+mod reset_tip_tests;
+#[cfg(test)]
+mod rotate_steps_tests;
+#[cfg(test)]
+mod zoom_mode_tests;
 
 #[cfg(test)]
-mod clone_stamp_reset_tip_tests;
+mod red_eye_context_menu_tests;
+
+#[cfg(test)]
+mod clone_stamp_indexed_bar_tests;

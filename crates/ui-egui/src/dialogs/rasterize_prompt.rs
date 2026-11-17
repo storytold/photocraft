@@ -3,7 +3,7 @@
 //! proceeding. Its text will no longer be editable. Rasterize the type?"), instead of failing
 //! with a status-bar message.
 //!
-//! The prompt is an ordinary dialog in the UI state (`ui.inspect` shows it, `ui.dialog.confirm`
+//! The prompt is a `StandardPrompt` on the dialog host (`ui.inspect` shows it, `ui.dialog.confirm`
 //! and `ui.dialog.cancel` answer it). OK runs the matching `layer.rasterize.*` command and nothing
 //! else: the click that opened the prompt is not replayed, as in Photoshop (#8806), so the next
 //! click paints. Cancel does nothing.
@@ -11,14 +11,14 @@
 //! A filter on a type layer asks the same question (#4303), with Photoshop's Convert to Smart
 //! Object / Rasterize / Cancel: the layer is converted or rasterized, then the filter is chosen
 //! again from the menu (its dialog, window or mode opens, or it runs), a smart filter on the Smart
-//! Object. `ui.dialog.set` with `"choice": "smartObject"` picks the conversion.
+//! Object. `ui.dialog.set` with `"choice": "alternate"` picks the conversion.
 
-use serde_json::{Map, Value, json};
+use craft::ui::dialog::{DialogId, PromptAnswer, PromptChoice, StandardPrompt};
+use serde_json::{Value, json};
 
+use super::alerts;
 use crate::PhotocraftApp;
-use crate::state::{DialogKind, Tool};
-
-const MARK: &str = "__rasterize";
+use crate::state::Tool;
 
 /// A layer kind that must be rasterized before its pixels can be painted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -29,17 +29,17 @@ pub enum Kind {
     Fill,
 }
 
+/// What the prompt asked about: rasterize `layer` (a `kind` layer); with `filter`, then run that
+/// filter and its params on it.
+// Whether Convert is offered is fixed when the prompt opens (the button exists or not), so the tag does not carry it.
+pub(crate) struct Rasterize {
+    kind: Kind,
+    layer: u64,
+    filter: Option<(String, Value)>,
+}
+
 impl Kind {
     pub const ALL: [Kind; 4] = [Kind::Type, Kind::Shape, Kind::SmartObject, Kind::Fill];
-
-    fn key(self) -> &'static str {
-        match self {
-            Kind::Type => "type",
-            Kind::Shape => "shape",
-            Kind::SmartObject => "smartObject",
-            Kind::Fill => "fill",
-        }
-    }
 
     /// The command that rasterizes it.
     pub fn command(self) -> &'static str {
@@ -62,10 +62,6 @@ impl Kind {
             }
             Kind::Fill => "The fill for this layer must be rasterized before proceeding. It will no longer be editable as a fill. Rasterize the fill?",
         }
-    }
-
-    fn from_key(k: &str) -> Option<Kind> {
-        Kind::ALL.into_iter().find(|x| x.key() == k)
     }
 }
 
@@ -101,30 +97,32 @@ pub fn needed(app: &PhotocraftApp) -> Option<(Kind, photocraft_doc::LayerId)> {
     Some((kind, id))
 }
 
-/// A tool's pointer press: when it would paint a layer that must be rasterized first, park it
-/// behind the prompt and return true (the tool must not see the press).
+/// A tool's pointer press: when it would paint a layer that must be rasterized first, open the
+/// prompt, or drop the press (the Remove tool on a type layer), and return true (the tool must not
+/// see the press).
 pub fn intercept(app: &mut PhotocraftApp, tool: Tool, x: f64, y: f64, pressure: f32) -> bool {
     if !paints_pixels(app, tool) {
         return false;
     }
     let Some((kind, layer)) = needed(app) else { return false };
-    if !app.ui.dialogs.iter().any(|d| owns(&d.fields)) {
-        open(app, kind, layer, tool, [x, y, f64::from(pressure)]);
+    // The reference's Remove tool ignores a type layer: no prompt and no stroke (#12553).
+    if tool == Tool::Remove && kind == Kind::Type {
+        return true;
     }
+    open(app, kind, layer, tool, [x, y, f64::from(pressure)]);
     true
 }
 
-/// Open the prompt for `layer`; OK rasterizes it. `tool` and `at` (x, y, pressure) only record the press that opened it.
-pub fn open(app: &mut PhotocraftApp, kind: Kind, layer: photocraft_doc::LayerId, tool: Tool, at: [f64; 3]) -> u64 {
-    let mut f = Map::new();
-    f.insert(MARK.into(), json!(kind.key()));
-    f.insert("__command".into(), json!(kind.command()));
-    f.insert("__label".into(), json!("PhotoCraft"));
-    f.insert("message".into(), json!(kind.message()));
-    f.insert("layer".into(), json!(layer.0));
-    f.insert("tool".into(), json!(format!("{tool:?}")));
-    f.insert("at".into(), json!(at));
-    app.ui.open_dialog(DialogKind::Command, f)
+/// Opens the prompt for `layer`; OK rasterizes it, and the id of the prompt already open comes back
+/// when there is one. `tool` and `at` (x, y, pressure) name the press that opened it; the press is
+/// never replayed, so they change nothing.
+pub fn open(app: &mut PhotocraftApp, kind: Kind, layer: photocraft_doc::LayerId, _tool: Tool, _at: [f64; 3]) -> DialogId {
+    let prompt = StandardPrompt::custom(tl!(kind.message()).to_owned())
+        .title(tl!("PhotoCraft").to_owned())
+        .button(PromptChoice::Proceed, tl!("OK").to_owned())
+        .button(PromptChoice::Cancel, tl!("Cancel").to_owned())
+        .tag(Rasterize { kind, layer: layer.0, filter: None });
+    alerts::open_prompt(app, prompt).unwrap_or_else(|open| open)
 }
 
 /// The active type layer when `id` is a filter that only needs it rasterized: the engine greys it
@@ -158,55 +156,39 @@ pub fn filter_needs(app: &PhotocraftApp, id: &str) -> Option<(photocraft_doc::La
 /// A filter chosen on a type layer: open the prompt instead and return its answer to the caller.
 pub fn intercept_filter(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
     let (layer, smart) = filter_needs(app, id)?;
-    if let Some(d) = app.ui.dialogs.iter().find(|d| owns(&d.fields)) {
-        return Some(Ok(json!({"dialog": d.id})));
+    let mut prompt = StandardPrompt::custom(tl!(Kind::Type.message()).to_owned())
+        .title(tl!("PhotoCraft").to_owned())
+        .button(PromptChoice::Proceed, tl!("Rasterize").to_owned());
+    if smart {
+        prompt = prompt.button(PromptChoice::Alternate, tl!("Convert to Smart Object").to_owned());
     }
-    let mut f = Map::new();
-    f.insert(MARK.into(), json!(Kind::Type.key()));
-    f.insert("__label".into(), json!("PhotoCraft"));
-    f.insert("message".into(), json!(Kind::Type.message()));
-    f.insert("layer".into(), json!(layer.0));
-    f.insert("filter".into(), json!(id));
-    f.insert("params".into(), params.clone());
-    f.insert("choice".into(), json!("rasterize"));
-    f.insert("smartObject".into(), json!(smart));
-    Some(Ok(json!({"dialog": app.ui.open_dialog(DialogKind::Command, f)})))
-}
-
-/// Is this the filter prompt (Convert to Smart Object / Rasterize / Cancel)?
-pub fn is_filter(fields: &Map<String, Value>) -> bool {
-    owns(fields) && fields.contains_key("filter")
-}
-
-/// Does the filter prompt offer Convert to Smart Object?
-pub fn offers_smart_object(fields: &Map<String, Value>) -> bool {
-    fields.get("smartObject").and_then(Value::as_bool) == Some(true)
-}
-
-/// Is this dialog the prompt?
-pub fn owns(fields: &Map<String, Value>) -> bool {
-    fields.contains_key(MARK)
-}
-
-/// The prompt's body: the question, with a caution mark.
-pub fn body(ui: &mut egui::Ui, f: &Map<String, Value>) {
-    let t = crate::theme::Tokens::get(ui.ctx());
-    let text = f.get("message").and_then(Value::as_str).unwrap_or("This layer must be rasterized before proceeding.");
-    ui.horizontal_top(|ui| {
-        ui.spacing_mut().item_spacing.x = 12.0;
-        let (r, _) = ui.allocate_exact_size(egui::vec2(32.0, 32.0), egui::Sense::hover());
-        crate::icons::paint(ui, r, "triangle-alert", 30.0, t.warning);
-        ui.add(egui::Label::new(egui::RichText::new(tl!(text)).color(t.text).size(13.0)).wrap());
+    let prompt = prompt.button(PromptChoice::Cancel, tl!("Cancel").to_owned()).tag(Rasterize {
+        kind: Kind::Type,
+        layer: layer.0,
+        filter: Some((id.to_owned(), params.clone())),
     });
+    let dialog = alerts::open_prompt(app, prompt).unwrap_or_else(|open| open);
+    Some(Ok(json!({"dialog": dialog})))
+}
+
+/// The `PROMPTS` entry: Proceed rasterizes, Alternate converts to a Smart Object (the filter prompt
+/// only), Cancel does nothing. The filter of a filter prompt runs at once, as the menu would, now
+/// that the layer can take it. `false` for another family's answer.
+pub(crate) fn answer(app: &mut PhotocraftApp, ctx: &egui::Context, answer: &mut PromptAnswer) -> bool {
+    let Some(Rasterize { kind, layer, filter }) = answer.take_tag::<Rasterize>() else { return false };
+    let result = match (answer.choice, filter) {
+        (PromptChoice::Proceed, None) => rasterize(app, kind, layer),
+        (PromptChoice::Proceed | PromptChoice::Alternate, Some((filter, params))) => {
+            convert_for_filter(app, ctx, answer.choice == PromptChoice::Alternate, &filter, params, layer)
+        }
+        _ => return true,
+    };
+    alerts::report(app, result);
+    true
 }
 
 /// OK: rasterize the layer. The click that opened the prompt does not paint.
-pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
-    let kind = f.get(MARK).and_then(Value::as_str).and_then(Kind::from_key).ok_or("not a rasterize prompt")?;
-    let layer = f.get("layer").and_then(Value::as_u64).ok_or("the prompt has no layer")?;
-    if let Some(filter) = f.get("filter").and_then(Value::as_str) {
-        return confirm_filter(app, f, filter, layer);
-    }
+fn rasterize(app: &mut PhotocraftApp, kind: Kind, layer: u64) -> Result<Value, String> {
     let revision = app.session.active().map(|st| st.revision);
     let r = app.run(kind.command(), json!({ "layer": layer }))?;
     // A painting tool's type prompt names its step as the reference does (#12888); Layer ›
@@ -221,28 +203,12 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     Ok(json!({ "rasterized": r }))
 }
 
-/// The filter prompt's answer: convert or rasterize the layer, then queue the filter for
-/// [`run_pending`]. Liquify, Camera Raw and the other filters with their own window need the
-/// egui context to open, which a dialog's answer doesn't have.
-fn confirm_filter(app: &mut PhotocraftApp, f: &Map<String, Value>, filter: &str, layer: u64) -> Result<Value, String> {
-    let smart = f.get("choice").and_then(Value::as_str) == Some("smartObject");
-    if smart && !offers_smart_object(f) {
-        return Err(format!("{filter} can't run as a smart filter"));
-    }
+/// The filter prompt's answer: convert (`smart`) or rasterize the layer, then run the filter.
+fn convert_for_filter(app: &mut PhotocraftApp, ctx: &egui::Context, smart: bool, filter: &str, params: Value, layer: u64) -> Result<Value, String> {
     let command = if smart { "layer.smartObjects.convertToSmartObject" } else { Kind::Type.command() };
-    let r = app.run(command, json!({ "layer": layer }))?;
-    let params = f.get("params").cloned().unwrap_or(Value::Null);
-    app.pending_after_prompt = Some((filter.to_string(), params));
-    Ok(json!({ "converted": r, "filter": filter }))
-}
-
-/// Runs the filter a prompt was answered for, as the menu would, now that the layer can take it.
-pub fn run_pending(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    let Some((filter, params)) = app.pending_after_prompt.take() else { return };
-    if let Err(e) = crate::menus::invoke(app, ctx, &filter, params) {
-        app.ui.status = e;
-        app.ui.status_error = true;
-    }
+    let converted = app.run(command, json!({ "layer": layer }))?;
+    crate::menus::invoke(app, ctx, filter, params)?;
+    Ok(json!({ "converted": converted, "filter": filter }))
 }
 
 #[cfg(test)]
@@ -259,3 +225,7 @@ mod rasterize_prompt_fill_text_tests;
 #[cfg(test)]
 #[path = "../rasterize_prompt_history_name_tests.rs"]
 mod rasterize_prompt_history_name_tests;
+
+#[cfg(test)]
+#[path = "../tools/remove_type_layer_tests.rs"]
+mod remove_type_layer_tests;

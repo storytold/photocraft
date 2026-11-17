@@ -2,116 +2,24 @@
 //! letter picks one (⇧⌥M Multiply, ⇧⌥S Screen…). With a painting tool that has a Mode of its own
 //! (`tool_modes`: Brush, Pencil, Paint Bucket, Gradient, the stamps, History Brush, Healing) they
 //! set that tool's mode within its menu and never the layer's. With a tool that has no blend mode
-//! (Move, the selection tools, the Erasers…) they set every selected layer's mode.
-//! The step list wraps at either end. Each press is one call of an engine command
+//! (Move, the selection tools, the Erasers…) they set every selected layer's mode. With the Color
+//! Replacement tool the ⇧⌥ letters for Normal, Multiply, Hue and Luminosity set the active layer's
+//! mode too and its own Mode stays, as measured in the reference application (#11928); its other
+//! letters, the letters with several layers selected, and ⇧+ / ⇧− do nothing.
+//! The step list wraps at either end. Each key is one call of an engine command
 //! (`tools.setBrush`, `layer.setProps` with every target layer), so it is one undo step.
+//!
+//! The keys arrive as fired `BlendStep` and `BlendShortcut` commands; the framework's `BlendKeys` reads them over
+//! the list of modes the target accepts.
 
-use egui::{Event, Key};
+use craft::ui::patterns::blend_keys::{BlendKeyEntry, BlendKeyPick, BlendKeys, BlendShortcut, BlendStep};
+use craft::ui::runtime::commands::{CommandSet as _, Fired};
 use photocraft_color::BlendMode;
 use serde_json::json;
 
-use crate::PhotocraftApp;
+use crate::brush_mode_menu::Item;
 use crate::state::Tool;
-
-/// The mode `step` places after (or before, when negative) `current` in `modes`, wrapping around.
-/// A mode that isn't listed steps from the top of the list.
-pub fn stepped<T: Copy + PartialEq>(modes: &[T], current: T, step: i32) -> Option<T> {
-    let n = i32::try_from(modes.len()).ok().filter(|n| *n > 0)?;
-    let at = modes.iter().position(|m| *m == current).and_then(|i| i32::try_from(i).ok());
-    let next = match at {
-        Some(i) => (i + step).rem_euclid(n),
-        None if step > 0 => 0,
-        None => n - 1,
-    };
-    modes.get(usize::try_from(next).ok()?).copied()
-}
-
-/// What a blend mode key asks for.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Pick {
-    Mode(BlendMode),
-    /// Painting tools only: paint transparency.
-    Clear,
-    /// Brush, Pencil and Pattern Stamp: paint behind the layer's pixels.
-    Behind,
-}
-
-/// Photoshop's ⇧⌥ letter for each mode. Darker Color, Lighter Color, Subtract and Divide have none.
-pub fn letter_pick(key: Key) -> Option<Pick> {
-    use BlendMode as B;
-    Some(Pick::Mode(match key {
-        Key::N => B::Normal,
-        Key::I => B::Dissolve,
-        Key::Q => return Some(Pick::Behind),
-        Key::R => return Some(Pick::Clear),
-        Key::P => B::PassThrough,
-        Key::K => B::Darken,
-        Key::M => B::Multiply,
-        Key::B => B::ColorBurn,
-        Key::A => B::LinearBurn,
-        Key::G => B::Lighten,
-        Key::S => B::Screen,
-        Key::D => B::ColorDodge,
-        Key::W => B::LinearDodge,
-        Key::O => B::Overlay,
-        Key::F => B::SoftLight,
-        Key::H => B::HardLight,
-        Key::V => B::VividLight,
-        Key::J => B::LinearLight,
-        Key::Z => B::PinLight,
-        Key::L => B::HardMix,
-        Key::E => B::Difference,
-        Key::X => B::Exclusion,
-        Key::U => B::Hue,
-        Key::T => B::Saturation,
-        Key::C => B::Color,
-        Key::Y => B::Luminosity,
-        _ => return None,
-    }))
-}
-
-/// One key's request: a step through the list, or a mode picked by letter.
-enum Press {
-    Step(i32),
-    Pick(Pick),
-}
-
-/// Consumes this frame's ⇧+ / ⇧− presses (⇧= on a US layout is `+`; on a German one
-/// `layout_keys::apply` has already turned ⇧+ and ⇧- into `+` and `-`) and ⇧⌥ letters, and
-/// applies them. Runs before the tool letters, which would otherwise take ⇧⌥M as M.
-pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    let presses: Vec<Press> = ctx.input_mut(|i| {
-        let mut out = Vec::new();
-        i.events.retain(|e| match e {
-            Event::Key { key, physical_key, pressed: true, modifiers, .. } if modifiers.shift && !modifiers.command && !modifiers.ctrl => {
-                if modifiers.alt {
-                    // The layout's letter (⇧⌥Z on a German keyboard is Pin Light), else the
-                    // physical one: on a Mac ⌥ turns the letter into another character (⇧⌥M
-                    // types Â) that may arrive as some other key.
-                    match letter_pick(*key).or_else(|| physical_key.and_then(letter_pick)) {
-                        Some(p) => out.push(Press::Pick(p)),
-                        None => return true,
-                    }
-                } else {
-                    match key {
-                        Key::Plus | Key::Equals => out.push(Press::Step(1)),
-                        Key::Minus => out.push(Press::Step(-1)),
-                        _ => return true,
-                    }
-                }
-                false
-            }
-            _ => true,
-        });
-        out
-    });
-    for p in presses {
-        match p {
-            Press::Step(step) => press(app, step),
-            Press::Pick(pick) => pick_mode(app, pick),
-        }
-    }
-}
+use crate::{PhotocraftApp, brush_mode_menu};
 
 /// Photoshop's Healing Brush modes, less Replace (not implemented yet).
 pub const HEALING_MODES: [BlendMode; 7] =
@@ -143,20 +51,26 @@ pub fn tool_modes(tool: Tool) -> Option<Vec<Option<BlendMode>>> {
 
 /// Where the active tool's blend mode keys go.
 enum Target {
-    /// The tool's own Mode, one of these.
-    Tool(Vec<Option<BlendMode>>),
+    /// The tool's own Mode menu (`brush_mode_menu::items`).
+    Tool,
     /// A painting tool with a blend mode in Photoshop but no Mode control here yet: the keys do
     /// nothing, and never reach the layer.
     Nothing,
     Layers,
+    /// The ⇧⌥ letters for these modes set the active layer's mode while it is the only one
+    /// selected; the other letters, several selected layers and ⇧+ / ⇧− do nothing (the Color
+    /// Replacement tool, #11928: only these letters on one layer were measured).
+    LayerLetters(&'static [BlendMode]),
 }
 
 fn target(tool: Tool) -> Target {
-    if let Some(modes) = tool_modes(tool) {
-        return Target::Tool(modes);
+    if tool_modes(tool).is_some() {
+        return Target::Tool;
     }
     match tool {
-        Tool::SpotHealing | Tool::ColorReplacement | Tool::Blur | Tool::Sharpen | Tool::Smudge | Tool::ArtHistoryBrush => Target::Nothing,
+        Tool::SpotHealing | Tool::Blur | Tool::Sharpen | Tool::Smudge | Tool::ArtHistoryBrush => Target::Nothing,
+        // Its ⇧⌥ letters set the active layer's mode and leave the tool's own Mode (#11928).
+        Tool::ColorReplacement => Target::LayerLetters(&[BlendMode::Normal, BlendMode::Multiply, BlendMode::Hue, BlendMode::Luminosity]),
         // Photoshop's ⇧⌥S/M/H pick the Dodge and Burn Range and ⇧⌥D/S the Sponge's mode: never
         // the layer's.
         Tool::Dodge | Tool::Burn | Tool::Sponge => Target::Nothing,
@@ -165,6 +79,7 @@ fn target(tool: Tool) -> Target {
     }
 }
 
+#[cfg(test)]
 /// The active tool's mode, `None` being Clear. A brush-based tool's lives in its own brush.
 pub fn tool_mode(app: &mut PhotocraftApp) -> Option<BlendMode> {
     let o = &app.ui.tool_options;
@@ -218,6 +133,23 @@ fn set_tool_mode(app: &mut PhotocraftApp, mode: Option<BlendMode>) {
     }
 }
 
+/// Selects Behind on the Brush, Pencil or Pattern Stamp, through the menu's own engine call.
+fn set_behind(app: &mut PhotocraftApp) {
+    let tool = app.ui.tool;
+    if app.session.active().is_none() {
+        return;
+    }
+    let Some((id, params)) = brush_mode_menu::engine_call(app, tool, Item::Behind) else { return };
+    crate::paint_mouse::sync_tool_brush(app);
+    if app.run(id, params).is_ok() {
+        match tool {
+            Tool::Brush => app.ui.tool_options.brush_clear = false,
+            Tool::Pencil => app.ui.tool_options.pencil_clear = false,
+            _ => {}
+        }
+    }
+}
+
 pub(crate) fn set_gradient_mode(app: &mut PhotocraftApp, mode: BlendMode) {
     let before = app.ui.tool_options.clone();
     app.ui.tool_options.gradient_blend_mode = mode;
@@ -241,65 +173,86 @@ fn set_layers_mode(app: &mut PhotocraftApp, mode: BlendMode) {
     }
 }
 
-/// One ⇧+ (`step` 1) or ⇧− (`step` -1) press. Selected layers all take the mode after the active
-/// layer's.
-pub fn press(app: &mut PhotocraftApp, step: i32) {
+/// The entries of the active tool's own Mode menu, in the menu's order; Behind and Clear only where the menu offers
+/// them and the active layer takes them.
+fn tool_entries(app: &PhotocraftApp) -> Vec<BlendKeyEntry<Item>> {
+    brush_mode_menu::items(app.ui.tool)
+        .into_iter()
+        .filter(|item| matches!(item, Item::Blend(_) | Item::Behind | Item::Clear) && brush_mode_menu::enabled(app, *item))
+        .map(|item| match item {
+            Item::Blend(m) => crate::panels::blend_entry(item, m),
+            Item::Behind => BlendKeyEntry::behind(item),
+            _ => BlendKeyEntry::clear(item),
+        })
+        .collect()
+}
+
+/// The entries of the layer modes the active layer takes: Pass Through first for a group.
+fn layer_entries(is_group: bool) -> Vec<BlendKeyEntry<BlendMode>> {
+    std::iter::once(BlendMode::PassThrough).filter(|_| is_group).chain(BlendMode::LAYER_MODES).map(|m| crate::panels::blend_entry(m, m)).collect()
+}
+
+/// Applies a fired `BlendStep` or `BlendShortcut` command to the active tool's target. Returns whether the command is
+/// one of these: it is taken even when it picks nothing, so its letter never reaches the single-letter tool keys.
+pub(crate) fn fired(app: &mut PhotocraftApp, f: &Fired) -> bool {
+    let step = BlendStep::from_ref(&f.command).is_some();
+    if !step && BlendShortcut::from_ref(&f.command).is_none() {
+        return false;
+    }
     match target(app.ui.tool) {
-        Target::Tool(modes) => {
-            let current = tool_mode(app);
-            if let Some(mode) = stepped(&modes, current, step) {
-                set_tool_mode(app, mode);
+        Target::Tool => {
+            // The brush the keys read is the tool's own.
+            if !matches!(app.ui.tool, Tool::Gradient | Tool::PaintBucket) {
+                crate::paint_mouse::sync_tool_brush(app);
+            }
+            let entries = tool_entries(app);
+            let current = brush_mode_menu::current(app, app.ui.tool);
+            let keys = BlendKeys::new(&entries);
+            let pick = match &current {
+                Some(c) => keys.current(c),
+                None => keys,
+            }
+            .fired(f);
+            match pick.map(BlendKeyPick::into_key) {
+                Some(Item::Blend(m)) => set_tool_mode(app, Some(m)),
+                Some(Item::Clear) => set_tool_mode(app, None),
+                Some(Item::Behind) => set_behind(app),
+                _ => {}
             }
         }
         Target::Nothing => {}
         Target::Layers => {
-            let Some(st) = app.session.active() else { return };
-            let Some(layer) = st.active_layer.and_then(|id| st.doc.layer(id)) else { return };
-            // The locked Background has no blend mode.
-            if crate::doc_props_ui::is_background(&st.doc, layer) {
-                return;
+            let Some(st) = app.session.active() else { return true };
+            let Some(layer) = st.active_layer.and_then(|id| st.doc.layer(id)) else { return true };
+            // The locked Background has no blend mode of its own to step from.
+            if step && crate::doc_props_ui::is_background(&st.doc, layer) {
+                return true;
             }
-            let modes: Vec<BlendMode> = std::iter::once(BlendMode::PassThrough).filter(|_| layer.is_group()).chain(BlendMode::LAYER_MODES).collect();
-            if let Some(mode) = stepped(&modes, layer.blend, step) {
-                set_layers_mode(app, mode);
+            let entries = layer_entries(layer.is_group());
+            let current = layer.blend;
+            if let Some(pick) = BlendKeys::new(&entries).current(&current).fired(f) {
+                set_layers_mode(app, pick.into_key());
             }
         }
-    }
-}
-
-/// One ⇧⌥ letter press. A mode the target's menu doesn't have (Clear or Behind for layers, Pass
-/// Through for a painting tool, Overlay for the Healing Brush) does nothing.
-pub fn pick_mode(app: &mut PhotocraftApp, pick: Pick) {
-    let want = match pick {
-        Pick::Mode(m) => Some(m),
-        Pick::Clear => None,
-        Pick::Behind => {
-            let item = crate::brush_mode_menu::Item::Behind;
-            let tool = app.ui.tool;
-            if app.session.active().is_none() || !crate::brush_mode_menu::enabled(app, item) {
-                return;
-            }
-            let Some((id, params)) = crate::brush_mode_menu::engine_call(app, tool, item) else { return };
-            crate::paint_mouse::sync_tool_brush(app);
-            if app.run(id, params).is_ok() {
-                match tool {
-                    Tool::Brush => app.ui.tool_options.brush_clear = false,
-                    Tool::Pencil => app.ui.tool_options.pencil_clear = false,
-                    _ => {}
-                }
-            }
-            return;
-        }
-    };
-    match target(app.ui.tool) {
-        Target::Tool(modes) if modes.contains(&want) => set_tool_mode(app, want),
-        Target::Layers => {
-            if let Some(m) = want {
+        Target::LayerLetters(modes) => {
+            // Only one selected layer was measured; several keep today's (nothing).
+            let one = app.session.active().is_some_and(|st| st.selected_layers().len() == 1);
+            let entries: Vec<_> = modes.iter().map(|m| crate::panels::blend_entry(*m, *m)).collect();
+            if let Some(BlendKeyPick::Lettered(m)) = BlendKeys::new(&entries).fired(f)
+                && one
+            {
                 set_layers_mode(app, m);
             }
         }
-        _ => {}
     }
+    true
+}
+
+/// A key-press `Fired` for `command`, for the trials of the modules that read fired commands.
+#[cfg(test)]
+pub(crate) fn test_fired(command: craft::ui::runtime::commands::CommandRef) -> Fired {
+    use craft::ui::runtime::commands::{FirePhase, FireSource};
+    Fired::new(command, FireSource::Key, FirePhase::Press, 0.0)
 }
 
 #[cfg(test)]

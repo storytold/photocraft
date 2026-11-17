@@ -33,13 +33,22 @@ const INKS: [[f32; 4]; 8] = [
     [0.1, 0.0, 0.6, 0.3],
 ];
 
+/// The test profile, synthesised once per process. Synthesis samples and inverts whole LUTs, and
+/// `CmykSpace::for_profile` caches by allocation, so one shared `Arc` also builds the transforms
+/// once instead of for every document.
 fn profile() -> Arc<Vec<u8>> {
-    photocraft_cms::synth::cmyk_profile(&photocraft_cms::synth::CmykParams {
-        description: "Test Uncoated".into(),
-        tvi: [0.26, 0.26, 0.26, 0.3],
-        ..Default::default()
-    })
-    .to_bytes()
+    static PROFILE: std::sync::OnceLock<Arc<Vec<u8>>> = std::sync::OnceLock::new();
+    PROFILE
+        .get_or_init(|| {
+            craft_cms::synth::cmyk_profile(&craft_cms::synth::CmykParams {
+                description: "Test Uncoated".into(),
+                tvi: [0.26, 0.26, 0.26, 0.3],
+                ..Default::default()
+            })
+            .unwrap()
+            .to_bytes()
+        })
+        .clone()
 }
 
 /// A one-layer (Background) CMYK document, tagged with `profile()` when `tag`: the first row is
@@ -88,22 +97,23 @@ fn max_diff(a: &[[f32; 4]], b: &[[f32; 4]]) -> f32 {
     a.iter().zip(b).flat_map(|(p, q)| (0..4).map(move |c| (p[c] - q[c]).abs())).fold(0.0, f32::max)
 }
 
-/// Runs `run` on a document and returns how far the inks of `row` (0 = separations, 1 = any
+/// Runs `run` on a document and returns how far the inks of each row (0 = separations, 1 = any
 /// inks) moved.
-fn drift(depth: u32, tag: bool, row: usize, run: impl FnOnce(&mut Session)) -> f32 {
+fn drift(depth: u32, tag: bool, run: impl FnOnce(&mut Session)) -> [f32; 2] {
     let mut s = document(depth, tag);
     let before = inks(&s);
     run(&mut s);
     let after = inks(&s);
-    let r = row * W as usize..(row + 1) * W as usize;
-    max_diff(&before[r.clone()], &after[r])
+    [0, 1].map(|row| {
+        let r = row * W as usize..(row + 1) * W as usize;
+        max_diff(&before[r.clone()], &after[r])
+    })
 }
 
 fn exact(what: &str, run: impl Fn(&mut Session)) {
     for depth in [8, 16] {
         for tag in [true, false] {
-            for row in [0, 1] {
-                let d = drift(depth, tag, row, &run);
+            for (row, d) in drift(depth, tag, &run).into_iter().enumerate() {
                 assert!(d == 0.0, "{depth}-bit {what} (tagged: {tag}, row {row}): inks moved by {d}");
             }
         }
@@ -156,7 +166,7 @@ const ROUND_TRIP: f32 = 10.0 / 255.0;
 #[test]
 fn merge_down_separates_through_the_document_profile() {
     for depth in [8, 16] {
-        let d = drift(depth, true, 0, |s| {
+        let [d, _] = drift(depth, true, |s| {
             s.execute("layer.new.layer", json!({})).unwrap();
             s.execute("layer.mergeDown", json!({})).unwrap();
         });
@@ -167,7 +177,7 @@ fn merge_down_separates_through_the_document_profile() {
 #[test]
 fn merge_visible_separates_through_the_document_profile() {
     for depth in [8, 16] {
-        let d = drift(depth, true, 0, |s| {
+        let [d, _] = drift(depth, true, |s| {
             s.execute("layer.new.layer", json!({})).unwrap();
             s.execute("layer.mergeVisible", json!({})).unwrap();
         });
@@ -182,7 +192,7 @@ fn merge_visible_separates_through_the_document_profile() {
 #[test]
 fn rasterize_layer_style_separates_through_the_document_profile() {
     for depth in [8, 16] {
-        let d = drift(depth, true, 0, |s| {
+        let [d, _] = drift(depth, true, |s| {
             s.execute("layer.new.layerFromBackground", json!({})).unwrap();
             s.execute("layer.layerStyle.dropShadow", json!({"distance": 40, "size": 0})).unwrap();
             s.execute("layer.rasterize.layerStyle", json!({})).unwrap();

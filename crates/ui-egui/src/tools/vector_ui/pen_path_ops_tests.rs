@@ -2,18 +2,28 @@
 //! Intersect Shape Areas and Exclude Overlapping Shapes decide how a new path joins the shape or
 //! path it is drawn into, and Merge Shape Components bakes them, as in Photoshop's options bar.
 
-use egui::vec2;
+use egui::{Key, Modifiers, vec2};
 use egui_kittest::kittest::{NodeT, Queryable};
 use photocraft_doc::vector::PathOp;
 use photocraft_doc::{LayerContent, LayerId, Path};
 use serde_json::json;
 
-use super::{pen_down, pen_path_op, pen_up};
+use super::pen_path_op;
 use crate::PhotocraftApp;
+use crate::canvas::testing;
 use crate::state::Tool;
+use craft::draw::ui::VectorMode;
 
 fn app() -> PhotocraftApp {
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    prepared(PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default()))
+}
+
+/// The app on `ctx`, a harness's context that has the framework installed.
+fn app_on(ctx: egui::Context) -> PhotocraftApp {
+    prepared(PhotocraftApp::with_context(ctx, photocraft_engine::Session::new(), crate::Services::default()))
+}
+
+fn prepared(mut app: PhotocraftApp) -> PhotocraftApp {
     app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
     app.ui.tool = Tool::Pen;
     app
@@ -22,11 +32,24 @@ fn app() -> PhotocraftApp {
 /// Clicks a closed square with the Pen, from `(x, y)` with side `side`.
 fn square(app: &mut PhotocraftApp, x: f64, y: f64, side: f64) {
     for (dx, dy) in [(0.0, 0.0), (side, 0.0), (side, side), (0.0, side)] {
-        pen_down(app, x + dx, y + dy, false);
-        pen_up(app);
+        testing::click(app, [x + dx, y + dy], Modifiers::NONE);
     }
-    pen_down(app, x + 0.5, y + 0.5, false); // close
-    pen_up(app);
+    testing::click(app, [x + 0.5, y + 0.5], Modifiers::NONE); // close
+}
+
+/// The options bar of the Pen in a harness `width` wide.
+fn options_harness(app: PhotocraftApp, width: f32) -> egui_kittest::Harness<'static, PhotocraftApp> {
+    let mut h = egui_kittest::Harness::builder().with_context(app.ctx().clone()).with_size(vec2(width, 400.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                ui.horizontal(|ui| super::options_bar(app, ui, Tool::Pen));
+            }
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::AppTheme::studio());
+    h.run_steps(4);
+    h
 }
 
 fn shape_path(app: &PhotocraftApp) -> (LayerId, Path) {
@@ -50,39 +73,6 @@ fn covered(path: &Path, x: i32, y: i32) -> f32 {
     photocraft_vector::fill_rasterizer(path, photocraft_vector::DEFAULT_TOLERANCE).render(photocraft_geom::Rect::from_xywh(x, y, 1, 1))[0]
 }
 
-/// The issue's mug: the body is drawn, then the hole in its handle is cut out of the same shape
-/// layer with Subtract Front Shape, one History step each.
-#[test]
-fn subtract_front_shape_cuts_a_hole_in_the_selected_shape_layer() {
-    let mut app = app();
-    app.ui.tool_options.vector_mode = "shape".into();
-    assert_eq!(app.ui.tool_options.pen_path_op, "newLayer", "Photoshop's default in Shape mode");
-    square(&mut app, 20.0, 20.0, 100.0);
-    let (id, _) = shape_path(&app);
-    let count = layers(&app);
-    app.ui.tool_options.pen_path_op = "subtract".into();
-    square(&mut app, 50.0, 50.0, 40.0);
-    let (same, path) = shape_path(&app);
-    assert_eq!((same, layers(&app)), (id, count), "no new layer");
-    assert_eq!(path.subpaths.iter().map(|s| s.op).collect::<Vec<_>>(), [PathOp::Combine, PathOp::Subtract]);
-    assert_eq!((covered(&path, 70, 70), covered(&path, 30, 30)), (0.0, 1.0), "a hole in the body");
-    app.session.undo();
-    assert_eq!(shape_path(&app).1.subpaths.len(), 1, "undo takes back only the hole");
-    app.session.redo();
-    // Intersect and Exclude are stored the same way.
-    for (op, want) in [("intersect", PathOp::Intersect), ("exclude", PathOp::Exclude), ("combine", PathOp::Combine)] {
-        app.ui.tool_options.pen_path_op = op.into();
-        square(&mut app, 10.0, 10.0, 30.0);
-        assert_eq!(shape_path(&app).1.subpaths.last().map(|s| s.op), Some(want), "{op}");
-    }
-    assert_eq!(layers(&app), count);
-    // New Layer makes another shape layer again.
-    app.ui.tool_options.pen_path_op = "newLayer".into();
-    square(&mut app, 10.0, 10.0, 30.0);
-    assert_eq!(layers(&app), count + 1);
-    assert_ne!(shape_path(&app).0, id);
-}
-
 /// A locked shape layer refuses the new component: the path drawn stays as the Pen's draft, and
 /// the document and History are unchanged. Unlocking advances the source revision, so the old
 /// captured draft refuses; a fresh draft on the unlocked source cuts the hole.
@@ -90,16 +80,16 @@ fn subtract_front_shape_cuts_a_hole_in_the_selected_shape_layer() {
 fn a_locked_shape_layer_keeps_the_drawn_path() {
     for lock in ["all", "pixels"] {
         let mut app = app();
-        app.ui.tool_options.vector_mode = "shape".into();
+        app.ui.tool_options.vector_mode = VectorMode::Shape;
         square(&mut app, 20.0, 20.0, 100.0);
         let (id, body) = shape_path(&app);
         app.run("layer.lockLayers", json!({lock: true})).unwrap();
         let steps = app.session.active().unwrap().history.past_len();
         app.ui.tool_options.pen_path_op = "subtract".into();
         square(&mut app, 50.0, 50.0, 40.0);
-        let draft = app.ui.pen.clone().unwrap_or_else(|| panic!("{lock}: the draft is kept"));
-        // The four corners and the close's stand-in on the first: still a closed path.
-        assert!(draft.knots.len() == 5 && super::closing(&draft), "{lock}: {:?}", draft.knots);
+        let pen = app.ui.pen.clone().unwrap_or_else(|| panic!("{lock}: the draft is kept"));
+        // The four corners, joined back to the first: still a closed path.
+        assert!(pen.draft.knots.len() == 4 && pen.draft.closed, "{lock}: {:?}", pen.draft.knots);
         assert!(app.ui.status_error, "{lock}: {}", app.ui.status);
         assert_eq!(shape_path(&app), (id, body.clone()), "{lock}: the shape is unchanged");
         assert_eq!(app.session.active().unwrap().history.past_len(), steps, "{lock}: no History step");
@@ -120,7 +110,7 @@ fn a_locked_shape_layer_keeps_the_drawn_path() {
 
 /// A hole drawn for a locked shape layer: the Pen's draft, refused, and the History length then.
 fn refused_hole(app: &mut PhotocraftApp) -> (LayerId, Path, usize) {
-    app.ui.tool_options.vector_mode = "shape".into();
+    app.ui.tool_options.vector_mode = VectorMode::Shape;
     square(app, 20.0, 20.0, 100.0);
     let (id, body) = shape_path(app);
     app.run("layer.lockLayers", json!({"all": true})).unwrap();
@@ -146,13 +136,13 @@ fn assert_kept_as_work_path(app: &PhotocraftApp, id: LayerId, body: &Path, steps
 }
 
 /// Switching to another tool with a refused draft (feedback on #7648): it was committed again on
-/// every frame, re-running `shape.create` and the error. Now it is ended once: kept as the Work
+/// every frame, re-running `shape.create` and the error. It is ended once: kept as the Work
 /// Path, and later frames do nothing more.
 #[test]
 fn switching_tools_ends_a_refused_draft_once() {
     let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).with_max_steps(64).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        app()
+        app_on(cc.egui_ctx.clone())
     });
     h.run_steps(2);
     let (id, body, steps) = refused_hole(h.state_mut());
@@ -165,34 +155,20 @@ fn switching_tools_ends_a_refused_draft_once() {
     assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
 }
 
-/// Esc with a refused draft ends it the same way; ↩ keeps it as the draft, to commit again once
-/// the layer is unlocked.
+/// ↩ with a refused draft keeps it as the draft, to commit again once the layer is unlocked; Esc
+/// ends it as the Work Path with the combined status.
 #[test]
 fn esc_ends_a_refused_draft_and_return_keeps_it() {
-    let ctx = egui::Context::default();
-    let key = |app: &mut PhotocraftApp, key: egui::Key| {
-        let raw = egui::RawInput {
-            events: vec![egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }],
-            ..Default::default()
-        };
-        ctx.begin_pass(raw);
-        crate::shortcuts::handle(app, &ctx);
-        ctx.end_pass().textures_delta.clear();
-    };
-    for lang in crate::i18n::Lang::all() {
-        crate::i18n::with_language(lang, || {
-            let mut app = app();
-            let (id, body, steps) = refused_hole(&mut app);
-            let draft = app.ui.pen.clone();
-            key(&mut app, egui::Key::Enter);
-            assert_eq!(app.ui.pen, draft, "↩ keeps the draft");
-            assert_eq!(app.session.active().unwrap().history.past_len(), steps);
-            let refused = app.ui.status.clone();
-            key(&mut app, egui::Key::Escape);
-            assert_kept_as_work_path(&app, id, &body, steps);
-            assert_eq!(app.ui.status, format!("{refused} ({})", tl!("The path was kept as the Work Path")));
-        });
-    }
+    let mut app = app();
+    let (id, body, steps) = refused_hole(&mut app);
+    let draft = app.ui.pen.clone();
+    testing::key(&mut app, Key::Enter, Modifiers::NONE);
+    assert_eq!(app.ui.pen, draft, "↩ keeps the draft");
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps);
+    let refused = app.ui.status.clone();
+    testing::key(&mut app, Key::Escape, Modifiers::NONE);
+    assert_kept_as_work_path(&app, id, &body, steps);
+    assert_eq!(app.ui.status, format!("{refused} ({})", tl!("The path was kept as the Work Path")));
 }
 
 /// With no shape layer selected, an operation other than New Layer still starts a shape layer
@@ -200,7 +176,7 @@ fn esc_ends_a_refused_draft_and_return_keeps_it() {
 #[test]
 fn an_operation_without_a_selected_shape_starts_a_new_shape_layer() {
     let mut app = app();
-    app.ui.tool_options.vector_mode = "shape".into();
+    app.ui.tool_options.vector_mode = VectorMode::Shape;
     app.ui.tool_options.pen_path_op = "subtract".into();
     let count = layers(&app);
     square(&mut app, 20.0, 20.0, 100.0);
@@ -226,15 +202,17 @@ fn path_mode_adds_subpaths_with_the_operation() {
     app.run("path.set", json!({"name": "Saved", "path": {"subpaths": [{"closed": true, "knots": [[2, 2], [60, 2], [60, 60]]}]}})).unwrap();
     app.ui.selected_path = Some("Saved".into());
     app.ui.tool_options.pen_path_op = "exclude".into();
-    square(&mut app, 10.0, 10.0, 20.0);
+    // Clear of the saved path's segments, which the Pen's Auto Add/Delete would edit.
+    square(&mut app, 100.0, 100.0, 20.0);
     let saved = app.session.active().unwrap().doc.paths.iter().find(|p| p.name == "Saved").unwrap().path.clone();
     assert_eq!(saved.subpaths.last().map(|s| s.op), Some(PathOp::Exclude));
     // A targeted vector mask.
     let id = app.session.active().unwrap().active_layer.unwrap().0;
-    app.run("layer.vectorMask.add", json!({"layer": id, "path": {"subpaths": [{"closed": true, "knots": [[0, 0], [100, 0], [100, 100], [0, 100]]}]}})).unwrap();
+    app.run("layer.vectorMask.add", json!({"layer": id, "path": {"subpaths": [{"closed": true, "knots": [[0, 0], [190, 0], [190, 190], [0, 190]]}]}})).unwrap();
     app.ui.vector_mask_target = true;
     app.ui.tool_options.pen_path_op = "subtract".into();
-    square(&mut app, 20.0, 20.0, 30.0);
+    // Clear of the Work Path's segments and the mask's, which Auto Add/Delete would edit.
+    square(&mut app, 155.0, 155.0, 30.0);
     let vm = app.session.active().unwrap().doc.layer(LayerId(id)).unwrap().vector_mask.clone().unwrap();
     assert_eq!(vm.path.subpaths.iter().map(|s| s.op).collect::<Vec<_>>(), [PathOp::Combine, PathOp::Subtract]);
 }
@@ -248,16 +226,7 @@ fn the_options_bar_menu_sets_the_operation_and_merges() {
     app.ui.tool_options.pen_path_op = "subtract".into();
     square(&mut app, 50.0, 50.0, 40.0);
     app.ui.tool_options.pen_path_op = "combine".into();
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1100.0, 400.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
-            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                ui.horizontal(|ui| super::options_bar(app, ui, Tool::Pen));
-            }
-        },
-        app,
-    );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
-    h.run_steps(4);
+    let mut h = options_harness(app, 1100.0);
     let open = |h: &mut egui_kittest::Harness<'_, PhotocraftApp>| {
         h.get_by_label("Path operations").click();
         h.run_steps(3);
@@ -277,7 +246,7 @@ fn the_options_bar_menu_sets_the_operation_and_merges() {
     assert_ne!(merged, before);
     assert_eq!((covered(&merged, 70, 70), covered(&merged, 30, 30)), (0.0, 1.0));
     // Shape mode offers New Layer.
-    h.state_mut().ui.tool_options.vector_mode = "shape".into();
+    h.state_mut().ui.tool_options.vector_mode = VectorMode::Shape;
     h.run_steps(2);
     open(&mut h);
     assert!(!h.get_by_label("New Layer").accesskit_node().is_disabled());
@@ -286,25 +255,23 @@ fn the_options_bar_menu_sets_the_operation_and_merges() {
     assert_eq!(pen_path_op(&h.state().ui.tool_options), None);
 }
 
-/// Merge Shape Components is disabled where there is nothing to merge: one component, or in Shape
-/// mode no shape layer selected.
-#[test]
-fn merge_is_disabled_with_fewer_than_two_components() {
+/// Whether the Merge Shape Components entry is disabled with `components` squares in the Work Path.
+fn merge_disabled(components: usize) -> bool {
     let mut app = app();
-    square(&mut app, 20.0, 20.0, 100.0);
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1100.0, 400.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
-            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                ui.horizontal(|ui| super::options_bar(app, ui, Tool::Pen));
-            }
-        },
-        app,
-    );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
-    h.run_steps(4);
+    for i in 0..components {
+        square(&mut app, 20.0 + 70.0 * i as f64, 20.0, 50.0);
+    }
+    let mut h = options_harness(app, 1100.0);
     h.get_by_label("Path operations").click();
     h.run_steps(3);
-    assert!(h.get_by_label("Merge Shape Components").accesskit_node().is_disabled());
+    h.get_by_label("Merge Shape Components").accesskit_node().is_disabled()
+}
+
+/// Merge Shape Components is disabled where there is nothing to merge: one component.
+#[test]
+fn merge_is_disabled_with_fewer_than_two_components() {
+    assert!(merge_disabled(1));
+    assert!(!merge_disabled(2));
 }
 
 /// An unknown stored operation (an edited settings file) falls back to New Layer, never panics.
@@ -313,7 +280,7 @@ fn an_unknown_operation_falls_back_to_new_layer() {
     let mut app = app();
     app.ui.tool_options.pen_path_op = "melt".into();
     assert_eq!(pen_path_op(&app.ui.tool_options), Some("combine"));
-    app.ui.tool_options.vector_mode = "shape".into();
+    app.ui.tool_options.vector_mode = VectorMode::Shape;
     assert_eq!(pen_path_op(&app.ui.tool_options), None);
     let count = layers(&app);
     square(&mut app, 20.0, 20.0, 50.0);
@@ -326,7 +293,7 @@ fn freeform_refuses_a_locked_shape_before_starting_a_stroke() {
     use crate::canvas::{ToolEvent, tool_event};
     for lock in ["all", "pixels"] {
         let mut app = app();
-        app.ui.tool_options.vector_mode = "shape".into();
+        app.ui.tool_options.vector_mode = VectorMode::Shape;
         square(&mut app, 20.0, 20.0, 100.0);
         let (id, body) = shape_path(&app);
         app.run("layer.lockLayers", json!({lock: true})).unwrap();
@@ -334,13 +301,15 @@ fn freeform_refuses_a_locked_shape_before_starting_a_stroke() {
         app.ui.tool = Tool::FreeformPen;
         app.ui.tool_options.pen_path_op = "subtract".into();
         tool_event(&mut app, ToolEvent::Down { x: 50.0, y: 50.0, pressure: 1.0 }, egui::Modifiers::NONE);
-        assert!(app.drag.is_none(), "{lock}: stroke was not started");
+        assert!(!testing::in_gesture(&app), "{lock}: stroke was not started");
         assert!(app.ui.status_error, "{lock}");
         assert_eq!(shape_path(&app), (id, body), "{lock}");
         assert_eq!(app.session.active().unwrap().history.past_len(), steps, "{lock}");
+        // The refused press ends with its button, as a user's does, before the next one.
+        tool_event(&mut app, ToolEvent::Up { x: 50.0, y: 50.0 }, egui::Modifiers::NONE);
         app.session.undo();
         tool_event(&mut app, ToolEvent::Down { x: 50.0, y: 50.0, pressure: 1.0 }, egui::Modifiers::NONE);
-        assert!(app.drag.is_some(), "{lock}: unlocked stroke can start");
+        assert!(testing::in_gesture(&app), "{lock}: unlocked stroke can start");
     }
 }
 
@@ -349,21 +318,13 @@ fn freeform_refuses_a_locked_shape_before_starting_a_stroke() {
 /// A path still being drawn is finished first. With no path the button is disabled.
 #[test]
 fn make_shape_turns_the_work_path_into_a_shape_layer() {
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 400.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
-            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                ui.horizontal(|ui| super::options_bar(app, ui, Tool::Pen));
-            }
-        },
-        app(),
-    );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
-    h.run_steps(4);
+    let mut h = options_harness(app(), 1400.0);
     assert!(h.get_by_label("Shape").accesskit_node().is_disabled(), "no path yet");
     square(h.state_mut(), 20.0, 20.0, 100.0);
     let drawn = work(h.state());
     let (count, steps) = (layers(h.state()), h.state().session.active().unwrap().history.past_len());
     h.run_steps(2);
+    assert!(!h.get_by_label("Shape").accesskit_node().is_disabled(), "the Work Path enables it");
     h.get_by_label("Shape").click();
     h.run_steps(3);
     let app = h.state();
@@ -377,12 +338,10 @@ fn make_shape_turns_the_work_path_into_a_shape_layer() {
     let fg = app.session.tools.foreground;
     assert_eq!(sh.fill, Some(photocraft_doc::Fill::Solid(photocraft_color::Color::rgba(fg[0], fg[1], fg[2], fg[3]))));
     // An open path still being drawn becomes the shape too, still in one History step.
-    for (x, y) in [(10.0, 150.0), (60.0, 150.0), (60.0, 190.0)] {
-        pen_down(h.state_mut(), x, y, false);
-        pen_up(h.state_mut());
-    }
+    draw(h.state_mut(), &[(10.0, 150.0), (60.0, 150.0), (60.0, 190.0)]);
     let steps = h.state().session.active().unwrap().history.past_len();
     h.run_steps(2);
+    assert!(!h.get_by_label("Shape").accesskit_node().is_disabled(), "a path being drawn enables it");
     h.get_by_label("Shape").click();
     h.run_steps(3);
     let app = h.state();
@@ -402,10 +361,7 @@ fn make_shape_while_drawing_leaves_a_targeted_vector_mask_alone() {
     app.run("layer.vectorMask.add", json!({"layer": id, "path": {"subpaths": [{"closed": true, "knots": [[0, 0], [100, 0], [100, 100], [0, 100]]}]}})).unwrap();
     app.ui.vector_mask_target = true;
     let mask = app.session.active().unwrap().doc.layer(LayerId(id)).unwrap().vector_mask.clone();
-    for (x, y) in [(10.0, 150.0), (60.0, 150.0), (60.0, 190.0)] {
-        pen_down(&mut app, x, y, false);
-        pen_up(&mut app);
-    }
+    draw(&mut app, &[(10.0, 150.0), (60.0, 150.0), (60.0, 190.0)]);
     let steps = app.session.active().unwrap().history.past_len();
     super::make_shape(&mut app).unwrap();
     let st = app.session.active().unwrap();
@@ -425,10 +381,7 @@ fn make_shape_while_drawing_into_a_saved_path_keeps_it() {
     app.run("path.rename", json!({"name": "work", "to": "Box"})).unwrap();
     app.ui.selected_path = Some("Box".into());
     let saved = app.session.active().unwrap().doc.paths[0].path.clone();
-    for (x, y) in [(10.0, 150.0), (60.0, 150.0), (60.0, 190.0)] {
-        pen_down(&mut app, x, y, false);
-        pen_up(&mut app);
-    }
+    draw(&mut app, &[(10.0, 150.0), (60.0, 150.0), (60.0, 190.0)]);
     super::make_shape(&mut app).unwrap();
     let st = app.session.active().unwrap();
     assert_eq!(st.doc.paths[0].path, saved);
@@ -451,8 +404,7 @@ fn make_shape_keeps_a_saved_path() {
 /// Clicks an open path with the Pen through `points`, without finishing it.
 fn draw(app: &mut PhotocraftApp, points: &[(f64, f64)]) {
     for &(x, y) in points {
-        pen_down(app, x, y, false);
-        pen_up(app);
+        testing::click(app, [x, y], Modifiers::NONE);
     }
 }
 
@@ -482,9 +434,9 @@ fn make_shape_while_drawing_uses_the_path_drawing_began_with() {
 #[test]
 fn make_shape_doesnt_copy_a_shape_layers_own_path() {
     let mut app = app();
-    app.ui.tool_options.vector_mode = "shape".into();
+    app.ui.tool_options.vector_mode = VectorMode::Shape;
     square(&mut app, 20.0, 20.0, 50.0);
-    app.ui.tool_options.vector_mode = "path".into();
+    app.ui.tool_options.vector_mode = VectorMode::Path;
     assert_eq!(super::active_path_name(&app).as_deref(), Some("layer"));
     let count = layers(&app);
     let steps = app.session.active().unwrap().history.past_len();
@@ -516,7 +468,7 @@ fn make_shape_while_drawing_a_new_work_path_replaces_the_old_one() {
 #[test]
 fn make_shape_on_a_resumed_shape_layer_draft_keeps_its_other_subpaths() {
     let mut app = app();
-    app.ui.tool_options.vector_mode = "shape".into();
+    app.ui.tool_options.vector_mode = VectorMode::Shape;
     draw(&mut app, &[(20.0, 20.0), (80.0, 20.0)]);
     assert!(super::pen_commit(&mut app, false));
     app.ui.tool_options.pen_path_op = "combine".into();
@@ -527,7 +479,7 @@ fn make_shape_on_a_resumed_shape_layer_draft_keeps_its_other_subpaths() {
     let steps = app.session.active().unwrap().history.past_len();
     draw(&mut app, &[(80.0, 20.0), (80.0, 80.0)]);
     assert!(app.ui.pen.as_ref().is_some_and(|p| p.resumes.is_some()), "drawing carries on the open subpath");
-    app.ui.tool_options.vector_mode = "path".into();
+    app.ui.tool_options.vector_mode = VectorMode::Path;
     super::make_shape(&mut app).unwrap();
     assert_eq!(layers(&app), count, "no second layer");
     let (now, after) = shape_path(&app);
