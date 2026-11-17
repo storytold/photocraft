@@ -13,6 +13,18 @@ fn key(h: &mut Harness<'_, PhotocraftApp>, key: Key, pressed: bool, modifiers: M
     h.event(Event::Key { key, physical_key: None, pressed, repeat: false, modifiers });
 }
 
+/// Enter: the key pressed into the field joins the set (#14310). A field already closed (a
+/// refused key) gets no Enter, which would be the dialog's OK.
+fn commit(h: &mut Harness<'_, PhotocraftApp>) {
+    if !crate::prefs_ui::capturing_shortcut(h.state()) {
+        return;
+    }
+    key(h, Key::Enter, true, Modifiers::NONE);
+    h.run_steps(1);
+    key(h, Key::Enter, false, Modifiers::NONE);
+    h.run_steps(2);
+}
+
 fn input_state(events: Vec<Event>, modifiers: Modifiers) -> egui::InputState {
     let ctx = egui::Context::default();
     ctx.begin_pass(egui::RawInput { events, ..Default::default() });
@@ -70,6 +82,7 @@ fn toolbar_shortcut_can_be_captured_and_restored_on_restart() {
     h.run_steps(2);
     h.key_press(Key::F6);
     h.run_steps(2);
+    commit(&mut h);
     assert_eq!(field(&h, id, "overrides")["tools.select.pencil"], json!("F6"));
     crate::dialogs::confirm(h.state_mut(), id).unwrap();
     h.run_steps(2);
@@ -163,6 +176,7 @@ fn capture(h: &mut Harness<'_, PhotocraftApp>, button: &str, modifier: Key, held
     key(h, k, false, held);
     key(h, modifier, false, Modifiers::NONE);
     h.run_steps(2);
+    commit(h);
 }
 
 fn captured_ctrl_k(ppp: f32, gpu: bool) -> Harness<'static, PhotocraftApp> {
@@ -211,6 +225,10 @@ fn shift_is_recorded_when_modifier_key_events_carry_no_bits() {
     h.run_steps(1);
     key(&mut h, Key::F6, true, Modifiers::NONE);
     h.run_steps(2);
+    key(&mut h, Key::F6, false, Modifiers::NONE);
+    key(&mut h, Key::ShiftLeft, false, Modifiers::NONE);
+    h.run_steps(1);
+    commit(&mut h);
     assert_eq!(field(&h, id, "overrides")["edit.search"], json!("Shift+F6"));
     assert_eq!(field(&h, id, "capture"), json!(false));
 }
@@ -279,6 +297,10 @@ fn every_modifier_key_waits_for_the_real_key() {
         assert!(field(&h, id, "overrides").get("edit.search").is_none(), "{modifier:?} alone assigns nothing");
         key(&mut h, Key::J, true, held);
         h.run_steps(2);
+        key(&mut h, Key::J, false, held);
+        key(&mut h, modifier, false, Modifiers::NONE);
+        h.run_steps(1);
+        commit(&mut h);
         let want = crate::prefs_ui::shortcut_text(Key::J, held).unwrap();
         assert_eq!(field(&h, id, "overrides")["edit.search"], json!(want), "{modifier:?}");
     }
@@ -316,6 +338,7 @@ fn a_function_key_moved_off_a_panel_toggle_runs_its_new_command() {
     h.run_steps(1);
     key(&mut h, Key::F5, false, Modifiers::NONE);
     h.run_steps(2);
+    commit(&mut h);
     let message = field(&h, id, "message");
     assert!(message.as_str().unwrap().contains("already in use"), "{message}");
     crate::dialogs::confirm(h.state_mut(), id).unwrap();
@@ -354,6 +377,7 @@ fn capture_key(h: &mut Harness<'_, PhotocraftApp>, id: u64, k: Key, m: Modifiers
     h.run_steps(2);
     key(h, k, false, m);
     h.run_steps(2);
+    commit(h);
 }
 
 fn click(h: &mut Harness<'_, PhotocraftApp>, label: &str) {
@@ -555,6 +579,7 @@ fn the_mac_menu_bar_hands_its_keys_to_a_waiting_shortcut_field() {
         h.event(e);
     }
     h.run_steps(2);
+    commit(&mut h);
     assert_eq!(field(&h, id, "overrides")["edit.search"], json!("Cmd+Alt+Z"));
     assert_eq!(document_state(&h), before, "⌘⌥Z didn't step the History");
     assert_eq!(field(&h, id, "capture"), json!(false));
