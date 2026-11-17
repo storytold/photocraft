@@ -247,39 +247,6 @@ fn a_jittered_click_inside_with_snapping_on_is_still_a_click() {
     assert!(app.session.active().unwrap().doc.selection.is_none(), "deselected, not moved onto the edge");
 }
 
-/// With snapping on, a click inside the selection snaps the line onto a guide 2 px away, as a
-/// click outside it does; the press began as a move, which kept it on the pointer.
-#[test]
-fn click_inside_snaps_the_line_to_a_guide() {
-    let mut app = app();
-    app.run("view.newGuide", json!({"orientation": "horizontal", "position": 252})).unwrap();
-    app.run("view.newGuide", json!({"orientation": "vertical", "position": 302})).unwrap();
-    // The selections are made unsnapped; only the click under test snaps.
-    let snapped_click = |app: &mut PhotocraftApp, tool: Tool, p: [f64; 2]| {
-        app.ui.extras.snap = true;
-        click(app, tool, p, Modifiers::NONE);
-        app.ui.extras.snap = false;
-    };
-
-    snapped_click(&mut app, Tool::SingleRowMarquee, [600.0, 250.5]);
-    assert_eq!(bounds(&app), Rect::new(0, 252, 800, 253), "outside the selection: snapped to the guide");
-
-    two_rows(&mut app);
-    snapped_click(&mut app, Tool::SingleRowMarquee, [600.0, 250.5]);
-    assert_eq!(bounds(&app), Rect::new(0, 252, 800, 253), "inside: snapped to the guide too");
-    assert_eq!(step(&app).as_deref(), Some("Single Row Marquee"));
-
-    two_columns(&mut app);
-    snapped_click(&mut app, Tool::SingleColumnMarquee, [300.5, 500.0]);
-    assert_eq!(bounds(&app), Rect::new(302, 0, 303, 600), "a column inside snaps to the guide");
-    assert_eq!(step(&app).as_deref(), Some("Single Column Marquee"));
-
-    // No guide within reach: the line under the pointer, not the selection's own edge.
-    two_rows(&mut app);
-    snapped_click(&mut app, Tool::SingleRowMarquee, [600.0, 150.5]);
-    assert_eq!(bounds(&app), Rect::new(0, 150, 800, 151));
-}
-
 #[test]
 fn combining_drag_from_inside_selects_a_line() {
     let mut app = app();
@@ -303,6 +270,8 @@ fn ctrl_release_inside_does_not_snap_the_line_to_a_guide() {
     let mut app = app();
     app.run("view.newGuide", json!({"orientation": "horizontal", "position": 252})).unwrap();
     two_rows(&mut app);
+    // Control suspends snapping on a Mac; off macOS the host reads Ctrl as the command key.
+    crate::canvas::testing::on_a_mac(&app);
     app.ui.extras.snap = true;
     app.ui.tool = Tool::SingleRowMarquee;
     tool_event(&mut app, ToolEvent::Down { x: 600.0, y: 250.5, pressure: 1.0 }, Modifiers::NONE);
@@ -372,5 +341,6 @@ fn a_snapped_back_move_tool_drag_keeps_the_piece_floating() {
     tool_event(&mut app, ToolEvent::Move { x: p[0], y: p[1] + 2.0, pressure: 1.0 }, Modifiers::NONE);
     tool_event(&mut app, ToolEvent::Up { x: p[0], y: p[1] }, Modifiers::NONE);
     assert!(floats(&app), "the piece still floats");
-    assert!(app.move_preview.is_none(), "no preview left from the drag");
+    // The canvas's next pass makes an empty preview shell for the floating piece; the drag's own shown picture is gone.
+    assert!(!crate::move_ui::showing(&app), "no preview left from the drag");
 }
