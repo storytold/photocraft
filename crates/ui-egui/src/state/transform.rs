@@ -1,212 +1,164 @@
 use super::{Deserialize, Serialize};
 
-/// Edit › Transform's mode: what a handle drag does with no modifier keys held.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum TransformMode {
-    /// Free Transform and Scale: handles scale, drag outside rotates.
-    #[default]
-    Free,
-    /// Edit › Transform › Rotate: handle drags rotate about the reference point (#3941).
-    Rotate,
-    /// Edge and corner handles skew: each moves along one axis.
-    Skew,
-    /// Corner handles move freely, one at a time; nothing else moves them (no rotating, no
-    /// edges) and nothing snaps.
-    Distort,
-    /// Corner handles move in pairs, mirrored (one-point perspective).
-    Perspective,
+use craft::behavior::geometry::TransformMode;
+use craft::behavior::kurbo::{Point, Rect};
+use craft::draw::ui::transform::{TransformSession, TransformWarp};
+use craft::imaging::ui::warp::WarpMesh;
+use serde_json::{Value, json};
+
+/// The source frame as `[x0, y0, x1, y1]`, the form the engine commands and the record take.
+fn rect_array(r: Rect) -> [f64; 4] {
+    [r.x0, r.y0, r.x1, r.y1]
 }
 
-impl TransformMode {
-    /// The mode an `edit.transform.*` / `edit.freeTransform` menu id starts.
-    pub fn for_command(id: &str) -> Self {
-        match id {
-            "edit.transform.rotate" => Self::Rotate,
-            "edit.transform.skew" => Self::Skew,
-            "edit.transform.distort" => Self::Distort,
-            "edit.transform.perspective" => Self::Perspective,
-            _ => Self::Free,
-        }
+/// A box's corners as `[[x, y]; 4]`, the form the engine commands and the record take.
+fn quad_array(q: [Point; 4]) -> [[f64; 2]; 4] {
+    q.map(|p| [p.x, p.y])
+}
+
+/// The camelCase name the record gives a mode.
+fn mode_name(mode: TransformMode) -> &'static str {
+    match mode {
+        TransformMode::Rotate => "rotate",
+        TransformMode::Skew => "skew",
+        TransformMode::Distort => "distort",
+        TransformMode::Perspective => "perspective",
+        _ => "free",
     }
 }
 
-/// Free Transform in progress: the source frame `rect` and where its corners currently are.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct TransformSession {
-    pub session: u64,
+/// The app's warp as the framework session holds it in the Warp phase: PhotoCraft's [`Warp`](photocraft_geom::warp::Warp)
+/// with the control mesh the imaging warp grid edits, copied once when the warp is made.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SessionWarp {
+    /// The warp the engine commands take.
+    pub warp: photocraft_geom::warp::Warp,
+    /// The same warp's control mesh in the imaging library's form.
+    pub mesh: WarpMesh,
+    /// The warp is Warp Text on an editable type layer: committing it changes the style even when it is the
+    /// identity warp (a Warp Text set back to None).
+    pub on_type: bool,
+    /// The warp is a smart object's stored warp, edited over its unwarped source: the session's frame is the
+    /// warp's bounds, not the render's.
+    pub stored: bool,
+}
+
+impl SessionWarp {
+    /// The session warp of `warp`; `on_type` for Warp Text.
+    pub fn new(warp: photocraft_geom::warp::Warp, on_type: bool) -> Self {
+        let source = warp.to_mesh(1, 1);
+        let points = source.points.iter().map(|p| Point::new(p[0], p[1])).collect();
+        let bounds = Rect::new(warp.bounds[0], warp.bounds[1], warp.bounds[2], warp.bounds[3]);
+        let mesh = WarpMesh::new(source.us, source.vs, points).unwrap_or_else(|| WarpMesh::identity(bounds, 1, 1));
+        Self { warp, mesh, on_type, stored: false }
+    }
+}
+
+impl SessionWarp {
+    /// This warp as a smart object's stored warp ([`stored`](Self::stored)).
+    pub fn stored(mut self) -> Self {
+        self.stored = true;
+        self
+    }
+}
+
+impl TransformWarp for SessionWarp {
+    fn frame(&self) -> Option<Rect> {
+        self.stored.then(|| Rect::new(self.warp.bounds[0], self.warp.bounds[1], self.warp.bounds[2], self.warp.bounds[3]))
+    }
+
+    fn is_identity(&self) -> bool {
+        !self.on_type && self.warp.is_identity()
+    }
+}
+
+/// Free Transform in progress: the framework session (box, mode, warp, undo steps) and what PhotoCraft
+/// adds to say what the box moves.
+#[derive(Clone, Debug)]
+pub struct FreeTransform {
+    /// The box, its mode, the Warp phase and the session's own undo steps.
+    pub session: TransformSession<SessionWarp>,
+    /// The session's id (the canvas key of its preview document derives from it).
+    pub id: u64,
+    /// The active layer.
     pub layer: u64,
-    pub rect: [f64; 4],
-    /// Corners clockwise from top-left (document px).
-    pub quad: [[f64; 2]; 4],
-    /// Reference point (rotation / ⌥-scale centre).
-    pub pivot: [f64; 2],
-    pub interpolation: String,
-    /// Warp mode (Edit › Transform › Warp): the warp being edited over `rect`, in document px.
-    #[serde(default)]
-    pub warp: Option<photocraft_geom::warp::Warp>,
-    /// Select › Transform Selection: the box transforms the selection outline, not pixels.
-    #[serde(default)]
-    pub selection: bool,
-    /// `edit.transform`'s `"target"` when the box moves an unlinked layer mask, an alpha channel or
-    /// the Quick Mask by itself (`None`: the layer, with its linked masks).
-    #[serde(default)]
-    pub target: Option<serde_json::Value>,
-    /// Free Transform Path: `path.transform`'s `name` (and `layer`) when the box moves a
-    /// path's anchors and handles instead of pixels.
-    #[serde(default)]
-    pub path: Option<serde_json::Value>,
-    /// The layer was made for this session (⌥⌘T's copy, #352; a file dropped on the canvas), so
-    /// Cancel takes it back and OK folds it into one history step with the transform.
-    #[serde(default)]
-    pub made: Option<MadeLayer>,
-    /// Edit › Transform › Rotate / Skew / Distort / Perspective (`Free` for Free Transform and Scale).
-    #[serde(default)]
-    pub mode: TransformMode,
-    /// Edit › Content-Aware Scale (#3096): the box only scales and moves, and OK runs
-    /// `edit.contentAwareScale` with these options instead of `edit.transform`.
-    #[serde(default)]
-    pub content_aware: Option<ContentAwareOptions>,
-    /// The options bar's V (vertical skew, degrees) last typed. Any box can be read as scale,
-    /// skew and rotation with any vertical skew, so the bar keeps showing the typed one.
-    #[serde(default)]
-    pub skew_v: f64,
     /// Free Transform of several selected layers (#6501): every layer the box moves, in
     /// `edit.transform`'s `layers` order. Empty when it moves `layer` alone. `layer` stays the
     /// active layer, which need not be one of them (a selected group carries its selected
     /// children).
-    #[serde(default)]
     pub layers: Vec<u64>,
-    /// Where the box opened when that isn't `rect`'s corners: a smart object's placement, rotated,
-    /// skewed or distorted, as Photoshop keeps it (#3649). `rect` is then a frame of the same
-    /// size, so W and H start at 100 % and the angle and skew read the placement's; the commit
-    /// transforms from here to `quad`.
-    #[serde(default)]
-    pub start: Option<[[f64; 2]; 4]>,
-    /// Warp mode on a smart object: `warp` is in the contents' own space, and this (row-major 3×3,
-    /// contents → document) is where the placement and the box's move put it on screen, as
-    /// Photoshop shows a smart object's warp through its Distort (#8927). `None`: `warp` is in
-    /// document space.
-    #[serde(default)]
-    pub warp_place: Option<[f64; 9]>,
-    /// A warp made in Warp mode and kept when the box went back to another mode before Enter (one
-    /// transform session, as in Photoshop): the box then transforms the warped result. In the same
-    /// space as `warp` was (a smart object's contents, with `held_place` its placement; else
-    /// document space). Enter applies both in one step.
-    #[serde(default)]
-    pub held_warp: Option<photocraft_geom::warp::Warp>,
-    #[serde(default)]
-    pub held_place: Option<[f64; 9]>,
-    /// Warp mode: the warp it opened with (leaving with another one holds it, `held_warp`) and
-    /// the box as it was before (an untouched leave brings it back). In the session, so the
-    /// box's own Undo restores them with the rest.
-    #[serde(default)]
-    pub warp_entry: Option<photocraft_geom::warp::Warp>,
-    #[serde(default)]
-    pub warp_box: Option<WarpBox>,
-    /// Warp mode on a smart object: its stored warp and placement when Warp mode opened, which
-    /// the commit compares with and the selection outline is moved from.
-    #[serde(default)]
-    pub warp_origin: Option<(photocraft_geom::warp::Warp, [f64; 9])>,
+    /// Select › Transform Selection: the box transforms the selection outline, not pixels.
+    pub selection: bool,
+    /// `edit.transform`'s `"target"` when the box moves an unlinked layer mask, an alpha channel or
+    /// the Quick Mask by itself (`None`: the layer, with its linked masks).
+    pub target: Option<Value>,
+    /// Free Transform Path: `path.transform`'s `name` (and `layer`) when the box moves a
+    /// path's anchors and handles instead of pixels.
+    pub path: Option<Value>,
+    /// The layer was made for this session (⌥⌘T's copy, #352; a file dropped on the canvas), so
+    /// Cancel takes it back and OK folds it into one history step with the transform.
+    pub made: Option<MadeLayer>,
+    /// Edit › Content-Aware Scale (#3096): the box only scales and moves, and OK runs
+    /// `edit.contentAwareScale` with these options instead of `edit.transform`.
+    pub content_aware: Option<ContentAwareOptions>,
 }
 
-/// How many patches per side [`TransformSession::held_doc_warp`] cuts a held warp into under a
-/// projective box.
-pub const HELD_SPLITS: usize = 16;
+impl FreeTransform {
+    /// The source frame as `[x0, y0, x1, y1]`.
+    pub fn rect_array(&self) -> [f64; 4] {
+        rect_array(self.session.rect())
+    }
 
-/// The box as it was when Warp mode took over ([`TransformSession::warp_box`]).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct WarpBox {
-    pub rect: [f64; 4],
-    pub quad: [[f64; 2]; 4],
-    pub start: Option<[[f64; 2]; 4]>,
-    pub pivot: [f64; 2],
+    /// The box's corners, clockwise from the top left.
+    pub fn quad_array(&self) -> [[f64; 2]; 4] {
+        quad_array(self.session.quad())
+    }
+
+    /// The session as the control channel and the `ui` dump show it.
+    pub fn record(&self) -> Value {
+        let s = &self.session;
+        let pivot = s.pivot();
+        json!({
+            "session": self.id,
+            "layer": self.layer,
+            "rect": rect_array(s.rect()),
+            "quad": quad_array(s.quad()),
+            "pivot": [pivot.x, pivot.y],
+            "interpolation": s.interpolation().id(),
+            "warp": s.warp().map(|w| &w.warp),
+            "selection": self.selection,
+            "target": self.target,
+            "path": self.path,
+            "made": self.made,
+            "mode": mode_name(s.current_mode()),
+            "contentAware": self.content_aware,
+            "skewV": s.skew_v(),
+            "layers": self.layers,
+        })
+    }
+
+    /// Sets the box through the session as a typed field would: one undo step.
+    #[cfg(test)]
+    pub(crate) fn edit_box(&mut self, f: impl FnOnce(&mut craft::behavior::geometry::BoxState)) {
+        use craft::behavior::{EditEvent, Mixed};
+        use craft::draw::ui::transform::TransformEdit;
+        let before = *self.session.state();
+        let mut after = before;
+        f(&mut after);
+        let label: std::sync::Arc<str> = std::sync::Arc::from("Edit box");
+        self.session.apply(TransformEdit::Box(EditEvent::set(Mixed::Same(before), after, label, None)), 0.0);
+    }
 }
 
-impl TransformSession {
-    /// A point of the warp being edited, where it shows in the document ([`Self::warp_place`]).
-    pub fn warp_to_doc(&self, p: [f64; 2]) -> [f64; 2] {
-        match self.warp_place.map(photocraft_algo::transform::Homography) {
-            Some(h) => {
-                let (x, y) = h.apply(p[0], p[1]);
-                [x, y]
-            }
-            None => p,
-        }
+impl Serialize for FreeTransform {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.record().serialize(serializer)
     }
+}
 
-    /// A document point in the warp's own space (the inverse of [`Self::warp_to_doc`]).
-    pub fn doc_to_warp(&self, p: [f64; 2]) -> [f64; 2] {
-        match self.warp_place.and_then(|m| photocraft_algo::transform::Homography(m).inverse()) {
-            Some(h) => {
-                let (x, y) = h.apply(p[0], p[1]);
-                [x, y]
-            }
-            None => p,
-        }
-    }
-
-    /// The box's move since it opened (identity when it can't be inverted).
-    pub fn box_move(&self) -> photocraft_algo::transform::Homography {
-        use photocraft_algo::transform::Homography;
-        Homography::quad_to_quad(self.start_quad(), self.quad).unwrap_or(Homography::IDENTITY)
-    }
-
-    /// Where a smart object's held warp ([`Self::held_warp`], in its contents' space) shows a
-    /// point now: through its placement, then the box's move since it opened.
-    pub fn held_to_doc(&self) -> impl Fn([f64; 2]) -> [f64; 2] + use<> {
-        use photocraft_algo::transform::Homography;
-        let h = self.box_move().mul(&Homography(self.held_place.unwrap_or(Homography::IDENTITY.0)));
-        move |p| {
-            let (x, y) = h.apply(p[0], p[1]);
-            [x, y]
-        }
-    }
-
-    /// A layer's warp held under the box ([`Self::held_warp`] with no placement), as the box
-    /// leaves it, in document space: what Enter applies, and what the preview and the selection
-    /// outline show. An affine box maps the mesh's control points exactly; a Distort or
-    /// Perspective bends each patch, so the mesh is cut into [`HELD_SPLITS`]² finer patches first
-    /// and those are mapped, close enough to the curve that it shows as one.
-    pub fn held_doc_warp(&self) -> Option<photocraft_geom::warp::Warp> {
-        let w = self.held_warp.as_ref().filter(|_| self.held_place.is_none())?;
-        let d = self.box_move();
-        let mut mesh = w.to_mesh(1, 1);
-        let m = d.0;
-        if (m[6].abs() > 1e-12 || m[7].abs() > 1e-12) && mesh.us.len() <= HELD_SPLITS + 1 {
-            for k in 1..HELD_SPLITS {
-                let at = k as f64 / HELD_SPLITS as f64;
-                let _ = mesh.split_u(at);
-                let _ = mesh.split_v(at);
-            }
-        }
-        let mesh = mesh.map_points(|q| {
-            let (x, y) = d.apply(q[0], q[1]);
-            [x, y]
-        });
-        Some(photocraft_geom::warp::Warp::custom(mesh, w.bounds))
-    }
-
-    /// Document pixels per warp-space pixel near document point `p`: hit tolerances are given
-    /// in document pixels.
-    pub fn warp_scale_at(&self, p: [f64; 2]) -> f64 {
-        1.0 / self.warp_unit(self.doc_to_warp(p))
-    }
-
-    /// How long one document pixel is in the warp's space at warp-space point `q`: 1, or for a
-    /// smart object's warp the inverse of its placement's scale there, so hit tolerances and
-    /// snapping distances stay the same on screen whatever the contents' size.
-    pub fn warp_unit(&self, q: [f64; 2]) -> f64 {
-        let Some(h) = self.warp_place.map(photocraft_algo::transform::Homography) else { return 1.0 };
-        let s = h.local_scale(q[0], q[1]);
-        if s.is_finite() && s > 1e-9 { 1.0 / s } else { 1.0 }
-    }
-
-    /// The corners the box opened on: [`Self::start`], else `rect`'s. A box still there is
-    /// untouched.
-    pub fn start_quad(&self) -> [[f64; 2]; 4] {
-        let r = self.rect;
-        self.start.unwrap_or([[r[0], r[1]], [r[2], r[1]], [r[2], r[3]], [r[0], r[3]]])
+impl PartialEq for FreeTransform {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id && self.record() == other.record()
     }
 }
 
@@ -239,77 +191,43 @@ pub enum MadeLayer {
     Place,
 }
 
-/// A paragraph-box handle drag: the handle, and the box (text-space) and layer transform as
-/// they were at the press. Every move recomputes from this snapshot, so ⌥ pressed or released
-/// mid-drag mirrors about the centre the box started with — as if it had been held from the
-/// start.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct BoxResize {
-    pub handle: u8,
-    pub shape: [f32; 4],
-    pub aff: photocraft_geom::Affine,
-}
-
-/// A font choice for subsequent typing, invalidated by navigation or a document edit.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct TypeInsertionStyle {
-    pub document: u64,
-    pub layer: u64,
-    pub session: String,
-    pub revision: u64,
-    pub caret: usize,
-    pub style: photocraft_doc::text::CharStyle,
-}
-
-/// In-progress inline type editing (Type tool). Offsets are character indices.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct TextEdit {
-    pub layer: u64,
-    /// Id of the document being edited (layer ids can repeat across documents, e.g. one .pcraft
-    /// opened twice). `None`: the active document.
-    #[serde(default)]
-    pub document: Option<u64>,
-    pub caret: usize,
-    pub anchor: usize,
-    /// History coalescing key: the whole editing session is one "Edit Type Layer" step.
-    pub session: String,
-    /// The layer was created by this session (its name follows the text; empty on commit = delete).
-    pub created: bool,
-    /// A Type Mask tool session: the layer is temporary and commits as a selection.
-    #[serde(default)]
-    pub mask: bool,
-    #[serde(skip)]
-    pub dragging: bool,
-    /// Paragraph-box handle being dragged (0-3 corners from top-left clockwise, 4-7 top/right/bottom/left edges).
-    #[serde(skip)]
-    pub resize: Option<BoxResize>,
-    /// IME composition in progress: (start, length) in characters. The preedit text lives in the
-    /// layer so it lays out like typed text; each IME update replaces it.
-    #[serde(skip)]
-    pub preedit: Option<(usize, usize)>,
-}
-
-/// Temporary Type-tool drag. The document is unchanged until release; this frame is view state.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct TypeTransform {
-    pub document: u64,
-    pub revision: u64,
-    pub original: photocraft_geom::Affine,
-    pub frame: TransformSession,
-    pub(crate) gesture: crate::transform_tool::Gesture,
-}
-
 /// Content-Aware Move with Transform On Drop: the box on the dropped patch. The document is
 /// unchanged until it is committed; this is view state.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct CamTransform {
     pub document: u64,
     pub revision: u64,
-    /// How far the selection was dragged; the box's `rect` is the selection's bounds there.
+    /// How far the selection was dragged; the session's frame is the selection's bounds there.
     pub offset: [i32; 2],
-    pub frame: TransformSession,
-    #[serde(skip)]
-    pub(crate) gesture: Option<crate::transform_tool::Gesture>,
+    /// The box over the dropped patch.
+    pub session: TransformSession<()>,
+}
+
+impl CamTransform {
+    /// The box as the control channel and the `ui` dump show it.
+    pub fn record(&self) -> Value {
+        let pivot = self.session.pivot();
+        json!({
+            "document": self.document,
+            "revision": self.revision,
+            "offset": self.offset,
+            "rect": rect_array(self.session.rect()),
+            "quad": quad_array(self.session.quad()),
+            "pivot": [pivot.x, pivot.y],
+        })
+    }
+}
+
+impl Serialize for CamTransform {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.record().serialize(serializer)
+    }
+}
+
+impl PartialEq for CamTransform {
+    fn eq(&self, other: &Self) -> bool {
+        self.record() == other.record()
+    }
 }
 
 /// View-menu overlays.

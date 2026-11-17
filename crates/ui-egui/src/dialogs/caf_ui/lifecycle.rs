@@ -1,69 +1,82 @@
-use super::preview::{Base, Preview, cancel_preview, compute_base, plan_params, points_limit, rebase, refresh};
-use super::{CMD, CafOpts, CafTool, CafWorkspace, MAX_CAF_EDITS, MAX_CAF_POINTS, PROXY_SIDE, PhotocraftApp, REMEMBERED, Rect, Step, Value};
-use super::{JobEvent, JobId, JobOutcome, PendingFill, json};
+use std::sync::atomic::AtomicUsize;
+use std::sync::{Arc, Mutex};
+
+use craft::behavior::PixelSize;
+use craft::imaging::ui::fill::{FillCommand, FillEvent, FillLimits, FillOpen, FillStrokeEvent};
+use craft::ui::dialog::{DialogId, dialog_id};
+use craft::ui::runtime::env::Label;
+use photocraft_engine::edit_menu_cmds::{MAX_CAF_EDITS, MAX_CAF_POINTS};
+use photocraft_geom::Rect;
+use serde_json::{Value, json};
+
+use super::preview::{Base, compute_base, plan_params};
+use super::{CMD, CafApp, Hosted, PROXY_SIDE, PhotocraftApp, REMEMBERED};
+use crate::dialogs::shared_picture::SharedPicture;
 
 /// Opens the workspace on the active layer and its selection.
-pub fn open(app: &mut PhotocraftApp) -> Result<(), String> {
+pub fn open(app: &mut PhotocraftApp) -> Result<DialogId, String> {
     if !app.session.is_enabled(CMD) {
         return Err("Content-Aware Fill needs a selection on a pixel layer".into());
     }
     let st = app.session.active().ok_or("no document")?;
-    let document = st.doc.id;
     let layer = st.active_layer.ok_or("no active layer")?;
     let canvas = st.doc.bounds();
-    let revision = st.revision;
+    let (revision, document) = (st.revision, st.doc.id);
     let name = st.doc.layer(layer).map(|l| l.name.clone()).unwrap_or_default();
+    let doc = Arc::clone(&st.doc);
     let k = (canvas.width().max(canvas.height()) as usize).div_ceil(PROXY_SIDE).max(1);
     let (pw, ph) = ((canvas.width() as usize).div_ceil(k), (canvas.height() as usize).div_ceil(k));
-    let mut opts = CafOpts::default();
-    if let Some(saved) = app.session.prefs().dialogs.get(REMEMBERED) {
-        let _ = opts.apply(saved);
-    }
-    let mut w = CafWorkspace {
+
+    // The workspace reads its remembered settings itself; the plan is made for what it opens with.
+    let open = FillOpen::new([canvas.width(), canvas.height()], name, FillLimits::new(MAX_CAF_EDITS, MAX_CAF_POINTS));
+    let mut workspace = craft::imaging::ui::fill::ContentAwareFillWorkspace::new(open).remember(REMEMBERED);
+    let base = compute_base(&doc, layer, &workspace.command())?;
+    workspace.set_brush(photocraft_algo::content_aware::default_brush_size(bounds(&base)));
+
+    let picture_size = PixelSize::new(canvas.width(), canvas.height());
+    let mut caf = CafApp {
+        id: dialog_id(CMD),
         document,
         layer,
-        layer_name: name,
         canvas,
         revision,
-        opts,
-        tool: CafTool::Brush,
-        brush_add: false,
-        brush_size: 20.0,
-        lasso_op: 0,
-        expand_by: 3.0,
-        strokes: Vec::new(),
-        fill_edits: Vec::new(),
-        undo: Vec::new(),
-        redo: Vec::new(),
-        cur: None,
-        lasso: None,
-        base: Base { window: Rect::EMPTY, rect: Rect::EMPTY, hole: Vec::new(), base: Vec::new() },
-        outline: None,
+        doc,
         k,
         pw,
         ph,
+        base: Base { window: Rect::EMPTY, rect: Rect::EMPTY, hole: Vec::new(), base: Vec::new() },
         base_px: vec![false; pw * ph],
         hole_px: vec![false; pw * ph],
         mask: vec![false; pw * ph],
-        pressed: false,
-        texture_limit: 2048,
-        image_tex: None,
-        overlay_tex: None,
-        overlay_dirty: true,
-        zoom: 0.0,
-        center: [f64::from(canvas.x0 + canvas.x1) / 2.0, f64::from(canvas.y0 + canvas.y1) / 2.0],
-        hover: None,
-        preview: Preview::default(),
-        pending_fill: None,
+        known: workspace.session().clone(),
+        sample_all: workspace.settings().sample_all_layers,
+        last: None,
         error: None,
+        dirty: false,
+        image: SharedPicture::new(picture_size),
+        picture: SharedPicture::new(picture_size),
+        preview_error: Arc::new(Mutex::new(None)),
+        preview_runs: Arc::new(AtomicUsize::new(0)),
     };
-    w.brush_add = w.opts.sampling == "custom";
-    let base = compute_base(app, &w)?;
-    w.brush_size = photocraft_algo::content_aware::default_brush_size(bounds(&base));
-    w.set_base(base);
-    w.stale();
-    app.distort.caf = Some(w);
-    Ok(())
+    if let Some(image) = composite(app, pw, ph) {
+        caf.image.replace(image, k as u32);
+    }
+    caf.set_base(base, &caf.known.strokes.clone());
+    caf.dirty = false;
+    let source = caf.source(2048);
+    let host = craft::ui::dialog::HostedWorkspace::new(workspace, source).held_ok();
+    let id = app.framework.dialogs.open(host);
+    caf.id = id;
+    app.caf = Some(caf);
+    Ok(id)
+}
+
+/// The visible layers composited at the proxy size, as the canvas shows them (so an Apply to a new layer shows).
+fn composite(app: &PhotocraftApp, pw: usize, ph: usize) -> Option<egui::ColorImage> {
+    let st = app.session.active()?;
+    let buf = photocraft_compose::render_reduced(&st.doc, pw as u32, ph as u32);
+    let (display, _) = crate::canvas::canvas_display(app, &st.doc, None);
+    Some(crate::canvas::display_image(display.as_deref(), &buf))
 }
 
 /// Bounds of the fill area.
@@ -75,268 +88,227 @@ pub(super) fn bounds(b: &Base) -> Rect {
     })
 }
 
-fn remember(app: &mut PhotocraftApp, opts: &CafOpts) {
-    let v = opts.to_json();
-    app.session.prefs.edit(|p| p.dialogs.insert(REMEMBERED.into(), v));
-}
-
-/// Apply: fill with the current state (one history step); the workspace stays open.
-pub fn apply(app: &mut PhotocraftApp) -> Result<Value, String> {
-    let Some(w) = app.distort.caf.as_mut() else { return Err("Content-Aware Fill is not open".into()) };
-    if w.pending_fill.is_some() {
-        return Err("Content-Aware Fill is still processing".into());
-    }
-    w.end_stroke();
-    w.pressed = false;
-    let p = plan_params(w, true);
-    let opts = w.opts.clone();
-    remember(app, &opts);
-    let r = app.run(CMD, p);
-    match &r {
-        Ok(v) if v.get("pending").and_then(Value::as_bool) == Some(true) => {
-            let job = v.get("job").and_then(Value::as_u64).map(JobId).ok_or("background Content-Aware Fill returned no job id")?;
-            if let Some(w) = app.distort.caf.as_mut() {
-                w.pending_fill = Some(PendingFill { job, close_on_success: false });
-            }
-        }
-        Ok(_) => refresh(app),
-        Err(_) => {}
-    }
-    r
-}
-
-/// OK: fill and close. A fill that fails (nothing to sample from, a fill area too large, …)
-/// leaves the workspace open with the error in its panel, so the areas can be fixed and OK
-/// pressed again instead of the work being thrown away.
-pub fn commit(app: &mut PhotocraftApp) {
-    if let Err(e) = commit_fill(app) {
-        report(app, e);
-    }
-}
-
-/// The control channel's OK result; a pending result is accepted, not yet committed.
-pub(super) fn commit_fill(app: &mut PhotocraftApp) -> Result<Value, String> {
-    let r = apply(app)?;
-    if r.get("pending").and_then(Value::as_bool) == Some(true) {
-        let job = r.get("job").and_then(Value::as_u64).map(JobId).ok_or("background Content-Aware Fill returned no job id")?;
-        let pending =
-            app.distort.caf.as_mut().and_then(|w| w.pending_fill.as_mut()).filter(|p| p.job == job).ok_or("Content-Aware Fill job is no longer pending")?;
-        pending.close_on_success = true;
-        Ok(json!({"committed": false, "pending": true, "job": job.0}))
-    } else {
-        close(app);
-        Ok(json!({"committed": true, "result": r}))
-    }
-}
-
-/// A background fill ended (see `jobs_ui::on_event`). Only the job this workspace started on its
-/// own document counts. A failed or cancelled fill keeps the workspace open with the reason in
-/// its panel, as a failed synchronous OK does; a successful OK closes it, a successful Apply
-/// refreshes it.
-pub(crate) fn on_job_event(app: &mut PhotocraftApp, e: &JobEvent) {
-    if e.command != CMD {
-        return;
-    }
-    let Some(w) = app.distort.caf.as_mut() else { return };
-    let Some(pending) = w.pending_fill.filter(|p| p.job == e.id) else { return };
-    w.pending_fill = None;
-    if e.document != Some(w.document) {
-        return;
-    }
-    match &e.outcome {
-        JobOutcome::Done(_) => {}
-        JobOutcome::Failed(err) => {
-            w.error = Some(err.clone());
-            return;
-        }
-        JobOutcome::Cancelled => {
-            w.error = Some("cancelled".into());
-            return;
+/// The workspace's facts for the automation surface: the app's (the plan's window and areas, the preview, the last
+/// error) with the workspace's own fields.
+pub(crate) fn describe(app: &PhotocraftApp) -> Option<Value> {
+    let c = app.caf.as_ref()?;
+    let host = app.framework.dialogs.get_by_id::<Hosted>(c.id)?;
+    let workspace = host.workspace();
+    let sampled = c.mask.iter().zip(&c.hole_px).filter(|(m, h)| **m && !**h).count();
+    let w = c.base.window;
+    let mut d = json!({
+        "layer": c.layer.0,
+        "strokes": workspace.session().strokes.len(),
+        "fillEdits": workspace.session().fill_edits.len(),
+        "window": [w.x0, w.y0, w.width(), w.height()],
+        "fillArea": c.base.hole.iter().filter(|h| **h).count(),
+        "sampledProxyPixels": sampled,
+        "proxyScale": c.k,
+        "settings": serde_json::to_value(workspace.settings()).unwrap_or(Value::Null),
+        "previewReady": c.picture.is_ready(),
+        "previewRevision": craft::ui::canvas::RasterSource::revision(&*c.picture).get(),
+        "previewError": c.preview_error.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone(),
+        "previewRuns": c.preview_runs.load(std::sync::atomic::Ordering::Relaxed),
+        "error": c.error,
+    });
+    if let (Some(Value::Object(fields)), Some(map)) = (crate::distort_ui::workspace_fields(app, CMD), d.as_object_mut()) {
+        for (key, value) in fields {
+            map.entry(key).or_insert(value);
         }
     }
-    let document = w.document;
-    // Another document is active: the workspace is dropped with it (`distort_ui::drop_foreign`).
-    if !app.session.active().is_some_and(|st| st.doc.id == document) {
-        return;
-    }
-    if pending.close_on_success {
-        close(app);
-    } else {
-        if let Some(w) = app.distort.caf.as_mut() {
-            w.error = None;
-        }
-        refresh(app);
-    }
+    Some(d)
 }
 
-/// An Apply or OK that failed: the error in the panel and the status bar.
-pub(super) fn report(app: &mut PhotocraftApp, e: String) {
-    if let Some(w) = app.distort.caf.as_mut() {
-        w.error = Some(e.clone());
+/// An Apply or OK that failed: the error in the panel (the caller answers the workspace) and the status bar.
+fn report(app: &mut PhotocraftApp, e: &str) {
+    if let Some(c) = app.caf.as_mut() {
+        c.error = Some(e.to_string());
     }
-    app.ui.status = e;
+    app.ui.status = e.to_string();
     app.ui.status_error = true;
 }
 
-/// Cancel (button, Esc): closes; what was applied stays. The settings are kept.
-pub fn cancel(app: &mut PhotocraftApp) {
-    if let Some(w) = app.distort.caf.as_ref() {
-        let opts = w.opts.clone();
-        let pending_job = w.pending_fill.map(|p| p.job);
-        remember(app, &opts);
-        if let Some(job) = pending_job {
-            app.session.cancel_job(job);
+/// Fills with `command` (one history step); the workspace stays as it is. A refusal is reported.
+pub(super) fn apply(app: &mut PhotocraftApp, command: &FillCommand) -> Result<(), String> {
+    let layer = app.caf.as_ref().ok_or("Content-Aware Fill is not open")?.layer;
+    match app.run(CMD, plan_params(command, layer)) {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            report(app, &e);
+            Err(e)
         }
-    }
-    close(app);
-}
-
-pub(super) fn close(app: &mut PhotocraftApp) {
-    if let Some(w) = app.distort.caf.take() {
-        cancel_preview(w);
     }
 }
 
-pub(super) fn undo(app: &mut PhotocraftApp) {
-    let Some(w) = app.distort.caf.as_mut() else { return };
-    w.end_stroke();
-    let Some(step) = w.undo.pop() else { return };
-    let rebuild = match &step {
-        Step::Stroke(_) => {
-            w.strokes.pop();
-            w.redo.push(step);
-            w.restate_all();
-            w.stale();
-            // The sampling area changed, as with a new stroke: an error a failed OK or Apply left
-            // in the panel no longer applies (the other steps rebase, which clears it too).
-            w.error = None;
-            false
-        }
-        Step::Fill(_) => {
-            w.fill_edits.pop();
-            w.redo.push(step);
-            true
-        }
-        Step::State { sampling, strokes, fill_edits } => {
-            let now = Step::State { sampling: w.opts.sampling.clone(), strokes: w.strokes.clone(), fill_edits: w.fill_edits.clone() };
-            w.opts.sampling = sampling.clone();
-            w.strokes = strokes.clone();
-            w.fill_edits = fill_edits.clone();
-            w.brush_add = w.opts.sampling == "custom";
-            w.redo.push(now);
-            true
-        }
+fn host(app: &mut PhotocraftApp, id: DialogId) -> Option<&mut Hosted> {
+    app.framework.dialogs.get_mut_by_id::<Hosted>(id)
+}
+
+/// Acts on what the workspace reported since the last call: the host's answer to OK, the events of its passes and
+/// the colour the picker child returned. Every pass may call it: what it drains is gone for the next call, so a
+/// second pass in one frame finds nothing to apply twice.
+pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let Some(id) = app.caf.as_ref().map(|c| c.id) else { return };
+    let Some(hosted) = host(app, id) else {
+        // Finished (OK answered, Cancel, or cancelled from outside): the workspace remembered its settings.
+        let _ = app.framework.dialogs.take_by_id::<Hosted>(id);
+        app.caf = None;
+        return;
     };
-    if rebuild {
-        rebase(app);
-    }
-}
+    let events = hosted.take_events();
+    let ok = hosted.take_ok();
 
-pub(super) fn redo(app: &mut PhotocraftApp) {
-    let Some(w) = app.distort.caf.as_mut() else { return };
-    w.end_stroke();
-    let Some(step) = w.redo.pop() else { return };
-    let rebuild = match &step {
-        Step::Stroke(s) => {
-            w.strokes.push(s.clone());
-            w.undo.push(step);
-            w.restate_all();
-            w.stale();
-            w.error = None;
-            false
-        }
-        Step::Fill(e) => {
-            w.fill_edits.push(e.clone());
-            w.undo.push(step);
-            true
-        }
-        Step::State { sampling, strokes, fill_edits } => {
-            let now = Step::State { sampling: w.opts.sampling.clone(), strokes: w.strokes.clone(), fill_edits: w.fill_edits.clone() };
-            w.opts.sampling = sampling.clone();
-            w.strokes = strokes.clone();
-            w.fill_edits = fill_edits.clone();
-            w.brush_add = w.opts.sampling == "custom";
-            w.undo.push(now);
-            true
-        }
-    };
-    if rebuild {
-        rebase(app);
-    }
-}
-
-/// A lasso edit of the fill area (or Expand / Contract), undoable.
-pub(super) fn fill_edit(app: &mut PhotocraftApp, edit: Value) {
-    let Some(w) = app.distort.caf.as_mut() else { return };
-    w.end_stroke();
-    // The engine's limits, kept here (see `begin_stroke`).
-    if w.fill_edits.len() >= MAX_CAF_EDITS {
-        w.error = Some(format!("at most {MAX_CAF_EDITS} lasso edits: undo some, or reset the fill area"));
-        return;
-    }
-    if w.points_used() + edit.get("points").and_then(Value::as_array).map_or(0, Vec::len) > MAX_CAF_POINTS {
-        w.error = Some(points_limit());
-        return;
-    }
-    w.fill_edits.push(edit.clone());
-    w.push(Step::Fill(edit));
-    rebase(app);
-    // An edit that empties the fill area is refused (the plan says so): undo it.
-    if app.distort.caf.as_ref().is_some_and(|w| w.error.is_some()) {
-        let msg = app.distort.caf.as_ref().and_then(|w| w.error.clone());
-        undo(app);
-        if let Some(w) = app.distort.caf.as_mut() {
-            w.redo.clear();
-            w.error = msg;
-        }
-    }
-}
-
-/// A new sampling option (Auto, Rectangular, Custom): the brush strokes start over and the brush
-/// takes the option's mode (Custom adds, the others subtract).
-pub(super) fn set_sampling(app: &mut PhotocraftApp, sampling: &str) {
-    let Some(w) = app.distort.caf.as_mut() else { return };
-    if w.opts.sampling == sampling && w.strokes.is_empty() {
-        return;
-    }
-    w.end_stroke();
-    let prev = Step::State { sampling: w.opts.sampling.clone(), strokes: std::mem::take(&mut w.strokes), fill_edits: w.fill_edits.clone() };
-    w.push(prev);
-    w.opts.sampling = sampling.to_string();
-    w.brush_add = sampling == "custom";
-    rebase(app);
-}
-
-/// Reset buttons: the sampling options, the fill settings, or everything.
-pub(super) fn reset(app: &mut PhotocraftApp, what: &str) {
-    let Some(w) = app.distort.caf.as_mut() else { return };
-    let d = CafOpts::default();
-    match what {
-        "fill" => {
-            w.opts.color_adaptation = d.color_adaptation;
-            w.opts.rotation = d.rotation;
-            w.opts.scale = d.scale;
-            w.opts.mirror = d.mirror;
-            w.stale();
-        }
-        "sampling" => {
-            w.opts.sample_all = false;
-            set_sampling(app, "auto");
-        }
-        "lasso" => {
-            if !w.fill_edits.is_empty() {
-                let prev = Step::State { sampling: w.opts.sampling.clone(), strokes: w.strokes.clone(), fill_edits: std::mem::take(&mut w.fill_edits) };
-                w.push(prev);
-                rebase(app);
+    // `rebased`: the plan's inputs outside the session changed (the document, Sample All Layers).
+    let (mut replan, mut rebased, mut committed) = (false, false, false);
+    let (mut applies, mut picks) = (Vec::new(), Vec::new());
+    if let Some(c) = app.caf.as_mut() {
+        for event in events {
+            match event {
+                FillEvent::Stroke(FillStrokeEvent::Begin(s)) => c.begin_stroke(&s),
+                FillEvent::Stroke(FillStrokeEvent::Update(s)) => c.extend_stroke(&s),
+                FillEvent::Stroke(FillStrokeEvent::Commit(s)) => {
+                    c.commit_stroke(&s);
+                    committed = true;
+                }
+                // The painted part is taken back: the planes are rebuilt from the session.
+                FillEvent::Stroke(_) => {
+                    c.last = None;
+                    c.dirty = true;
+                    replan |= !c.known.strokes.is_empty() || c.mask != c.base_px;
+                }
+                FillEvent::FillArea(_) | FillEvent::Reset(_) => replan = true,
+                FillEvent::SettingsChanged(settings) => {
+                    if settings.sample_all_layers != c.sample_all {
+                        c.sample_all = settings.sample_all_layers;
+                        (replan, rebased) = (true, true);
+                    }
+                }
+                FillEvent::Apply(command) => applies.push(command),
+                FillEvent::PickColor(request) => picks.push(request),
+                _ => {}
             }
         }
-        _ => {
-            let prev =
-                Step::State { sampling: w.opts.sampling.clone(), strokes: std::mem::take(&mut w.strokes), fill_edits: std::mem::take(&mut w.fill_edits) };
-            w.push(prev);
-            w.opts = CafOpts::default();
-            w.brush_add = false;
-            rebase(app);
+    }
+
+    // A fill the engine refused stays reported: the replan that follows (the document changed under the workspace)
+    // starts from a clean error otherwise.
+    let mut refused = None;
+    for command in applies {
+        let answer = apply(app, &command);
+        if let Err(e) = &answer {
+            refused = Some(e.clone());
+        }
+        if let Some(h) = host(app, id) {
+            h.workspace_mut().answer_apply(answer);
+        }
+    }
+    if let Some(command) = ok {
+        let answer = apply(app, &command);
+        if let Err(e) = &answer {
+            refused = Some(e.clone());
+        }
+        let answer = answer.map_err(Label::from);
+        if let Some(h) = host(app, id) {
+            h.answer_ok(answer);
+        }
+    }
+
+    if sync_document(app) {
+        (replan, rebased) = (true, true);
+    }
+    reconcile(app, id, replan, rebased, committed);
+    if let (Some(e), Some(c)) = (refused, app.caf.as_mut()) {
+        c.error = Some(e);
+    }
+
+    for request in picks {
+        crate::color_picker_ui::open_for_request(app, id, request);
+    }
+    if let Some((key, color)) = crate::color_picker_ui::answer_for(app, id)
+        && let Some(h) = host(app, id)
+    {
+        h.workspace_mut().set_color(&key, color);
+    }
+
+    // The workspace reads a new source only when the planes or the document changed (its pending key follows).
+    let limit = ctx.input(|i| i.max_texture_side);
+    if let Some(c) = app.caf.as_mut()
+        && std::mem::take(&mut c.dirty)
+    {
+        let source = c.source(limit);
+        if let Some(h) = app.framework.dialogs.get_mut_by_id::<Hosted>(id) {
+            h.set_source(source);
+        }
+        ctx.request_repaint();
+    }
+}
+
+/// The document changed under the open workspace (an Apply): a new composite and document. `true` when it did, for
+/// a new plan.
+fn sync_document(app: &mut PhotocraftApp) -> bool {
+    let Some(c) = app.caf.as_ref() else { return false };
+    let Some(st) = app.session.active() else { return false };
+    if st.doc.id != c.document || st.revision == c.revision {
+        return false;
+    }
+    let (revision, doc, k) = (st.revision, Arc::clone(&st.doc), c.k as u32);
+    let image = composite(app, c.pw, c.ph);
+    let Some(c) = app.caf.as_mut() else { return false };
+    c.revision = revision;
+    c.doc = doc;
+    if let Some(image) = image {
+        c.image.replace(image, k);
+    }
+    c.dirty = true;
+    true
+}
+
+/// Brings the planes to the workspace's session. Undo and redo change the session without an event, so it is
+/// compared with the one the planes were made for: strokes alone repaint, a changed sampling option or fill area
+/// (and `replan`) plan again. A plan that refuses a lasso edit (an empty fill area) is reported back to the
+/// workspace, which takes the edit out; the refusal stays shown while a plan of the same session over the same inputs
+/// (`rebased` false) follows, as nothing it could answer changed.
+fn reconcile(app: &mut PhotocraftApp, id: DialogId, replan: bool, rebased: bool, committed: bool) {
+    let Some((session, command)) = app.framework.dialogs.get_by_id::<Hosted>(id).map(|h| (h.workspace().session().clone(), h.workspace().command())) else {
+        return;
+    };
+    let Some(c) = app.caf.as_mut() else { return };
+    if !replan && session == c.known {
+        return;
+    }
+    c.dirty = true;
+    if !replan && session.sampling == c.known.sampling && session.fill_edits == c.known.fill_edits {
+        // A committed stroke was painted as it was drawn; undo and redo of strokes repaint.
+        if !committed {
+            c.restate_all(&session.strokes);
+        }
+        c.error = None;
+        c.known = session;
+        return;
+    }
+    match compute_base(&c.doc, c.layer, &command) {
+        Ok(base) => {
+            c.set_base(base, &session.strokes);
+            if rebased || session != c.known {
+                c.error = None;
+            }
+            c.known = session;
+        }
+        Err(e) => {
+            c.error = Some(e.clone());
+            let edited = session.fill_edits != c.known.fill_edits;
+            match app.framework.dialogs.get_mut_by_id::<Hosted>(id) {
+                Some(h) if edited => {
+                    h.workspace_mut().refuse_fill_edit(e);
+                    let now = h.workspace().session().clone();
+                    c.restate_all(&now.strokes);
+                    c.known = now;
+                }
+                _ => {
+                    c.restate_all(&session.strokes);
+                    c.known = session;
+                }
+            }
         }
     }
 }

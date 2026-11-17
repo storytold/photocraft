@@ -2647,6 +2647,17 @@ fn shared_missing_glyph_protection_follows_the_setting() {
     assert!(read());
 }
 
+/// Test processes of other crates (run by cargo-nextest, `NEXTEST` set) skip the shared engine's
+/// system font scan like this crate's own tests do (#15377); the app keeps it.
+#[test]
+fn test_processes_under_nextest_skip_the_system_font_scan() {
+    let with = |vars: &'static [&'static str]| move |name: &str| vars.contains(&name);
+    assert!(crate::scans_system_fonts(true, with(&[])), "the app scans the installed fonts");
+    assert!(!crate::scans_system_fonts(true, with(&["NEXTEST"])), "a nextest test process doesn't");
+    assert!(!crate::scans_system_fonts(true, with(&["PHOTOCRAFT_NO_SYSTEM_FONTS"])), "the opt-out still works");
+    assert!(!crate::scans_system_fonts(false, with(&[])), "the web build and this crate's tests never scan");
+}
+
 #[test]
 fn translate_tysh_moves_only_the_translation() {
     let mut t = point("Hello!", 26.0);
