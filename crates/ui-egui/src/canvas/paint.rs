@@ -26,7 +26,15 @@ pub(super) fn paint_mapped_image_at(painter: &egui::Painter, xf: &ViewXform, tex
 /// A document-area texture over the canvas, rotated or flipped like the view.
 pub(super) fn paint_overlay(painter: &egui::Painter, xf: &ViewXform, tex: egui::TextureId, tint: Color32, area: DRect, flip: bool) {
     if xf.rotation.abs() > 0.05 {
-        paint_mapped_image_at(painter, xf, tex, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), [area.x0 as f32, area.y0 as f32], [area.width() as f32, area.height() as f32], tint);
+        paint_mapped_image_at(
+            painter,
+            xf,
+            tex,
+            Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
+            [area.x0 as f32, area.y0 as f32],
+            [area.width() as f32, area.height() as f32],
+            tint,
+        );
     } else {
         let uv = if flip { Rect::from_min_max(pos2(1.0, 0.0), pos2(0.0, 1.0)) } else { Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)) };
         painter.image(tex, xf.doc_rect(area), uv, tint);

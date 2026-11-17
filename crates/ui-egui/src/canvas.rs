@@ -20,7 +20,6 @@ pub mod canvas_autoscroll;
 pub(super) mod canvas_popup;
 pub mod canvas_tool_menu;
 pub mod channel_view;
-pub(crate) mod onion_skin;
 mod cursors;
 mod display;
 mod drag;
@@ -31,6 +30,7 @@ pub mod guide_select;
 pub mod layer_pick_ui;
 pub mod move_ui;
 mod navigator;
+pub(crate) mod onion_skin;
 pub mod outline;
 mod paint;
 pub mod paint_mouse;
@@ -96,8 +96,8 @@ pub use navigator::{NAVIGATOR_SIDE, navigator_gpu_view, navigator_texture, navig
 use paint::draw_tool_state;
 pub(crate) use paint::{clip_line, marching_ants_line_shapes, marching_ants_mapped};
 use paint::{
-    draw_beyond_canvas, draw_drag_preview, marching_ants_segment_shapes, paint_cpu_detail, paint_cpu_document, paint_gpu_view, paint_mapped_image_at, paint_overlay,
-    pattern_xf,
+    draw_beyond_canvas, draw_drag_preview, marching_ants_segment_shapes, paint_cpu_detail, paint_cpu_document, paint_gpu_view, paint_mapped_image_at,
+    paint_overlay, pattern_xf,
 };
 use selection::selection_shown_offset;
 pub use selection::{SelCursor, selection_cursor};
