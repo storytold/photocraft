@@ -12,6 +12,7 @@
 #[allow(unused_imports, dead_code)]
 mod mac_menu;
 
+/// Exercise the installed AppKit menu and dispatch its events on the main thread.
 #[cfg(target_os = "macos")]
 fn main() {
     use objc2::MainThreadMarker;
@@ -19,7 +20,7 @@ fn main() {
     use objc2_app_kit::{NSApplication, NSEvent, NSEventMask, NSEventModifierFlags, NSEventSubtype, NSEventType, NSMenu};
     use objc2_foundation::{NSPoint, NSString};
     use photocraft_ui_egui::PhotocraftApp;
-    use photocraft_ui_egui::native_menu;
+    use photocraft_ui_egui::{i18n, native_menu};
     use serde_json::json;
 
     // Without a harness nothing answers cargo-nextest's `--list`, so it ran the whole test as its
@@ -54,6 +55,27 @@ fn main() {
             .unwrap_or_else(|| panic!("no {title} in {:?}", titles(menu)))
     };
     let main_menu = || nsapp.mainMenu().expect("a main menu");
+    let checked = |menu: &NSMenu, at: isize| menu.itemAtIndex(at).is_some_and(|it| it.state() == 1);
+    let assert_chinese_app_menu = |bar: &NSMenu, lang| {
+        let app_menu = submenu(bar, "PhotoCraft");
+        let names = titles(&app_menu);
+        for (source, want) in [("Settings", "设置"), ("Services", "服务"), ("Hide Others", "隐藏其他"), ("Show All", "全部显示")] {
+            assert!(names.iter().any(|n| n == want), "{want} missing from the Simplified Chinese app menu: {names:?}");
+            assert!(!names.iter().any(|n| n == source), "stale English item {source} in the Simplified Chinese app menu");
+        }
+        // App-specific translations can arrive in a later craft-i18n pin.
+        for source in ["About {app}", "Hide {app}", "Quit {app}"] {
+            let want = i18n::fmt(i18n::tr(lang, source), &[("app", "PhotoCraft")]);
+            assert!(names.contains(&want), "{want} missing from the Simplified Chinese app menu: {names:?}");
+            let english = i18n::fmt(source, &[("app", "PhotoCraft")]);
+            if want != english {
+                assert!(!names.contains(&english), "stale English item {english} in the Simplified Chinese app menu");
+            }
+        }
+        let language = submenu(&app_menu, "语言");
+        assert!(checked(&language, index(&language, "简体中文")));
+        assert!(!checked(&language, index(&language, "English")));
+    };
     // Make `event` AppKit's current event, as the run loop does before dispatching it.
     let dequeue = |event: &NSEvent| {
         nsapp.postEvent_atStart(event, true);
@@ -93,7 +115,9 @@ fn main() {
         .expect("an application-defined event")
     };
 
+    let chinese = i18n::Lang::from_code("zh-hans");
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), photocraft_ui_egui::Services::default());
+    app.session.prefs.edit(|prefs| prefs.interface.language = chinese.map_or("en", i18n::Lang::code).into());
     let ctx = egui::Context::default();
     let frame = |app: &mut PhotocraftApp, raw: egui::RawInput| {
         let mut out = ctx.run_ui(raw, |ui| {
@@ -105,6 +129,33 @@ fn main() {
     };
     app.services.native_menu = mac_menu::install(&ctx, &app);
     assert!(app.services.native_menu.is_some(), "the menu bar installed");
+
+    let app_frame = |app: &mut PhotocraftApp| {
+        let mut raw = egui::RawInput::default();
+        let mut host = eframe::Frame::_new_kittest();
+        eframe::App::raw_input_hook(app, &ctx, &mut raw);
+        let _ = ctx.run_logic(&raw, |ctx| eframe::App::logic(app, ctx, &mut host));
+        let mut out = ctx.run_ui(raw, |ui| eframe::App::ui(app, ui, &mut host));
+        out.textures_delta.clear();
+    };
+    let switch_language = |app: &mut PhotocraftApp, menu_title: &str, name: &str, code: &str| {
+        let previous = main_menu();
+        let language = submenu(&submenu(&previous, "PhotoCraft"), menu_title);
+        dequeue(&other());
+        language.performActionForItemAtIndex(index(&language, name));
+        app_frame(app);
+        assert_eq!(app.session.prefs().interface.language, code);
+        assert_ne!(Retained::as_ptr(&previous), Retained::as_ptr(&main_menu()), "switching languages replaces the installed menu bar");
+    };
+
+    if let Some(lang) = chinese {
+        // The saved language must reach AppKit before the first frame sets the drawing language.
+        assert_chinese_app_menu(&main_menu(), lang);
+        assert_eq!(i18n::current(), i18n::Lang::EN, "install restores the caller's drawing language");
+        // Warm the fonts on the first frame, then switch to English with no document open.
+        app_frame(&mut app);
+        switch_language(&mut app, "语言", "English", "en");
+    }
 
     // The Mac layout, as AppKit has it.
     let bar = main_menu();
@@ -185,11 +236,14 @@ fn main() {
     let window = submenu(&main_menu(), "Window");
     assert!(nsapp.windowsMenu().is_some_and(|w| Retained::as_ptr(&w) == Retained::as_ptr(&window)), "AppKit knows the new Window menu");
     let names: Vec<String> = app.session.documents().iter().map(|d| d.doc.name.clone()).collect();
-    // The last rows (both documents are "Untitled").
-    let rows = [window.numberOfItems() - 2, window.numberOfItems() - 1];
-    let shown: Vec<String> = rows.iter().filter_map(|&i| window.itemAtIndex(i)).map(|it| it.title().to_string()).collect();
-    assert_eq!(shown, names, "in tab order, after Bring All to Front: {:?}", titles(&window));
-    let checked = |menu: &NSMenu, at: isize| menu.itemAtIndex(at).is_some_and(|it| it.state() == 1);
+    let document_rows = |window: &NSMenu| {
+        // The last rows are the two documents, in tab order.
+        let rows = [window.numberOfItems() - 2, window.numberOfItems() - 1];
+        let shown: Vec<String> = rows.iter().filter_map(|&i| window.itemAtIndex(i)).map(|it| it.title().to_string()).collect();
+        assert_eq!(shown, names, "document rows at the end of the Window menu: {:?}", titles(window));
+        rows
+    };
+    let rows = document_rows(&window);
     assert!(!checked(&window, rows[0]) && checked(&window, rows[1]), "the active document is checked");
     dequeue(&other());
     window.performActionForItemAtIndex(rows[0]);
@@ -201,6 +255,30 @@ fn main() {
     assert_eq!(app.session.active_index(), Some(0), "choosing the first row brought it forward");
     let window = submenu(&main_menu(), "Window");
     assert!(checked(&window, rows[0]) && !checked(&window, rows[1]), "the check moved in place");
+
+    if let Some(lang) = chinese {
+        // Switch back with documents open and read the localized menu from AppKit again.
+        switch_language(&mut app, "Language", "简体中文", "zh-hans");
+        assert_chinese_app_menu(&main_menu(), lang);
+        let window = submenu(&main_menu(), "窗口");
+        let rows = document_rows(&window);
+        assert!(checked(&window, rows[0]) && !checked(&window, rows[1]), "the active document stays checked after rebuilding the menu");
+        dequeue(&other());
+        window.performActionForItemAtIndex(rows[1]);
+        app_frame(&mut app);
+        assert_eq!(app.session.active_index(), Some(1), "choosing a document from the localized menu brings it forward");
+        let window = submenu(&main_menu(), "窗口");
+        assert!(!checked(&window, rows[0]) && checked(&window, rows[1]), "the localized menu checks the newly selected document");
+
+        // A preference commit can trigger a menu sync before drawing picks up the new language.
+        switch_language(&mut app, "语言", "English", "en");
+        app.run("prefs.set", json!({"values": {"interface.language": "zh-hans"}})).expect("commit Simplified Chinese");
+        i18n::with_language(i18n::Lang::EN, || {
+            frame(&mut app, egui::RawInput::default());
+            assert_eq!(i18n::current(), i18n::Lang::EN, "menu sync restores the drawing language");
+        });
+        assert_chinese_app_menu(&main_menu(), lang);
+    }
 
     println!("mac_menu_appkit: ok");
 }

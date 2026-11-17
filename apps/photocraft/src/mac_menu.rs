@@ -258,6 +258,8 @@ pub fn install(ctx: &egui::Context, app: &photocraft_ui_egui::PhotocraftApp) -> 
     // Never crash for a menu: if AppKit refuses, keep the in-window menus.
     let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut menu = MacMenu::new(ctx);
+        // AppKit's standard items translate before the first frame sets the drawing language.
+        let _menu_language = photocraft_ui_egui::i18n::language_scope(lang);
         menu.sync(&bar);
         menu
     }));

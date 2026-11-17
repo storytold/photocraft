@@ -767,7 +767,9 @@ pub fn sync(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if menu.state == Some(state) && !menu.dirty {
         return;
     }
-    let lang = crate::i18n::current();
+    // Preferences can change after the frame has set its drawing language.
+    let lang = Lang::from_pref(&app.session.prefs().interface.language);
+    let _menu_language = crate::i18n::language_scope(lang);
     let mut items = crate::menus::menu_items(app);
     // AppKit swallows a key equivalent whose item is disabled: no action, no key-down for the
     // window (#8965). While a Keyboard Shortcuts field waits for keys, every item with a key
