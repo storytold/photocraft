@@ -233,3 +233,48 @@ fn batch_rejects_a_destination_that_is_not_none_folder_or_save_and_close() {
     }
     assert_eq!(s.documents().len(), 0);
 }
+
+/// An input that will not open is reported as a played failure is: in the answer's errors and in
+/// the Log to File the run writes, while the input that did open stays on a tab, played.
+#[test]
+fn batch_destination_none_lists_an_unreadable_input_in_its_error_log() {
+    let dir = destination_dir("none-error-log");
+    let good = source_png(&dir, "good.png", "#ff0000");
+    let corrupt = join(&dir, "corrupt.png");
+    std::fs::write(&corrupt, b"not a PNG").unwrap();
+    let log = join(&dir, "batch.log");
+    let mut s = Session::new();
+    let result = s
+        .execute(
+            "file.automate.batch",
+            json!({"input": [corrupt.clone(), good.clone()], "destination": "none", "errorLog": log.clone(), "steps": [["image.adjustments.invert", {}]]}),
+        )
+        .unwrap();
+    assert_eq!(result["errors"].as_array().unwrap().len(), 1, "{result}");
+    assert_eq!(result["errors"][0]["file"], json!(corrupt), "{result}");
+    assert_eq!(result["files"], json!([]), "None writes no result: {result}");
+    assert_eq!(result["documents"], json!(1), "the readable input still ran: {result}");
+    assert_eq!(s.documents().len(), 1, "and stayed open");
+    assert_eq!(top_left_pixel(&s.active().unwrap().doc), [0.0, 1.0, 1.0, 1.0]);
+    // Photoshop's Batch log encoding: UTF-16 LE with a BOM, one File/Error pair per failure.
+    let bytes = std::fs::read(&log).unwrap();
+    assert!(bytes.starts_with(&[0xff, 0xfe]), "the log keeps its UTF-16 LE BOM");
+    let words: Vec<u16> = bytes[2..].chunks(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).collect();
+    let text = String::from_utf16(&words).unwrap();
+    assert!(text.contains(&format!("File: \"{corrupt}\"")), "the open failure is in the log: {text}");
+    assert!(!text.contains(&format!("File: \"{good}\"")), "the file that opened is not an error: {text}");
+}
+
+/// The dialog can now ask for Source: Opened Files beside Save and Close. The issue measured no
+/// such combination, and the command keeps its existing rule: Save and Close needs a folder source.
+#[test]
+fn batch_destination_save_and_close_still_refuses_an_opened_files_source() {
+    let dir = destination_dir("save-close-open-source");
+    let a = source_png(&dir, "a.png", "#ff0000");
+    let bytes = std::fs::read(&a).unwrap();
+    let mut s = Session::new();
+    open_bytes_as(&mut s, "a.png", &bytes, None, Some(a.clone())).unwrap();
+    let error = s.execute("file.automate.batch", json!({"source": "open", "destination": "saveAndClose", "steps": []})).unwrap_err().to_string();
+    assert!(error.contains("require a folder source"), "{error}");
+    assert_eq!(std::fs::read(&a).unwrap(), bytes, "the refused run wrote nothing");
+}

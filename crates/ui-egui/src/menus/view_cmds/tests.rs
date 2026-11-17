@@ -154,15 +154,15 @@ fn show_snap_extras_and_screen_modes_are_state() {
 #[test]
 fn full_screen_and_maximized_never_overlap_on_windows() {
     use egui::ViewportCommand::{Fullscreen, Maximized};
-    // Maximized â†’ full screen: un-maximize first, and remember it.
+    // Maximized → full screen: un-maximize first, and remember it.
     let (cmds, remember) = screen_mode_commands(true, false, true, false, "fullScreenWithMenuBar");
     assert_eq!(cmds, vec![Maximized(false), Fullscreen(true)]);
     assert!(remember);
-    // Full screen â†’ the other full-screen mode: nothing about maximized changes.
+    // Full screen → the other full-screen mode: nothing about maximized changes.
     let (cmds, remember) = screen_mode_commands(true, true, false, true, "fullScreen");
     assert_eq!(cmds, vec![Fullscreen(true)]);
     assert!(remember);
-    // Full screen â†’ Standard: maximize again after leaving, then forget.
+    // Full screen → Standard: maximize again after leaving, then forget.
     let (cmds, remember) = screen_mode_commands(true, true, false, true, "standard");
     assert_eq!(cmds, vec![Fullscreen(false), Maximized(true)]);
     assert!(!remember);
@@ -353,7 +353,7 @@ fn dragged_arrange_borders_resize_the_cells_beside_them() {
 fn damaged_or_stale_arrange_splits_lay_out_even_cells() {
     let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 600.0));
     let even = cells("threeUpVertical", rect, 3, &[]).unwrap();
-    // From a settings file or another layout: wrong count, out of order, outside 0â€“1, NaN.
+    // From a settings file or another layout: wrong count, out of order, outside 0–1, NaN.
     for bad in [vec![0.5], vec![0.6, 0.3], vec![0.0, 0.5], vec![0.3, 1.5], vec![f32::NAN, 0.7], vec![0.2, 0.4, 0.6]] {
         assert_eq!(cells("threeUpVertical", rect, 3, &bad).unwrap(), even, "{bad:?}");
         assert_eq!(borders("threeUpVertical", rect, 3, &bad).len(), 2);
@@ -1136,7 +1136,7 @@ fn float_all_in_windows_gives_each_document_its_own_view() {
 
 #[test]
 fn save_selection_opens_its_dialog_and_saves_on_confirm() {
-    // #3713: Select â€º Save Selectionâ€¦ asks for the channel, name and operation first.
+    // #3713: Select › Save Selection… asks for the channel, name and operation first.
     let (mut app, ctx) = app_with(1);
     app.run("select.all", json!({})).unwrap();
     let revision = app.session.active().unwrap().revision;
@@ -1158,7 +1158,7 @@ fn save_selection_opens_its_dialog_and_saves_on_confirm() {
 
 #[test]
 fn load_selection_opens_its_dialog_and_loads_on_confirm() {
-    // #3713: Select â€º Load Selectionâ€¦ used to fail with "missing `channel`".
+    // #3713: Select › Load Selection… used to fail with "missing `channel`".
     let (mut app, ctx) = app_with(1);
     app.run("select.all", json!({})).unwrap();
     app.run("select.saveSelection", json!({"name": "Keep"})).unwrap();
@@ -1501,7 +1501,7 @@ fn a_press_on_a_dialog_over_an_arranged_tile_keeps_the_active_document() {
                 .fixed_pos(egui::pos2(60.0, 120.0))
                 .fixed_size(egui::vec2(260.0, 200.0))
                 .show(ui.ctx(), |ui| ui.label("Levels"));
-            // An open menu (View â€º Pixel Aspect Ratio, say): a foreground popup below the dialog.
+            // An open menu (View › Pixel Aspect Ratio, say): a foreground popup below the dialog.
             egui::Area::new(egui::Id::unique("arrange-test-menu")).order(egui::Order::Foreground).fixed_pos(egui::pos2(60.0, 360.0)).show(ui.ctx(), |ui| {
                 ui.set_min_size(egui::vec2(200.0, 80.0));
                 ui.label("Anamorphic 2:1 (2)")

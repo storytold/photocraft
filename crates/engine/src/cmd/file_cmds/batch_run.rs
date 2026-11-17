@@ -920,7 +920,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         // Destination None takes the folder's files as tabs first, so the action plays on a
         // document the user keeps (#13659).
         let open_inputs: &[BatchInput] = if open_each_source && source == "folder" { &inputs } else { &[] };
-        let result = batch_live_run(s, &steps, p, &policy, save, LiveRun { output: &output, format: &format }, open_inputs);
+        let result = batch_live_run(s, &steps, p, &policy, save, LiveRun { output: &output, format: &format, errors: Vec::new() }, open_inputs);
         if owns_history {
             crate::actions_cmds::finish_document_history(s);
         }
@@ -1238,10 +1238,13 @@ fn open_batch_source_files(s: &mut Session, inputs: &[BatchInput], errors: &mut 
 }
 
 /// Where a live run would write its results. An empty `output` means it writes nothing: Source
-/// Opened Files with no destination folder, or Destination None (#13659).
+/// Opened Files with no destination folder, or Destination None (#13659). `errors` are per-file
+/// failures already known before playback (inputs that would not open): they ride into the error
+/// log and the answer beside the playback failures, as the scratch folder run reports its own.
 struct LiveRun<'a> {
     output: &'a str,
     format: &'a str,
+    errors: Vec<Value>,
 }
 
 /// The live run of Source: Opened Files, and of Destination None over a folder source (#13659).
@@ -1268,12 +1271,7 @@ fn batch_live_run(
         value["documents"] = json!(0);
         return Ok(value);
     }
-    batch_open_documents(s, steps, p, policy, save, originals, run).map(|mut value| {
-        if let Some(errors) = value.get_mut("errors").and_then(Value::as_array_mut) {
-            errors.append(&mut open_errors);
-        }
-        value
-    })
+    batch_open_documents(s, steps, p, policy, save, originals, LiveRun { output: run.output, format: run.format, errors: open_errors })
 }
 
 /// Source: Opened Files runs on the live documents, so edits remain in their histories.
@@ -1289,7 +1287,7 @@ fn batch_open_documents(
     originals: Vec<(u64, String, String)>,
     run: LiveRun<'_>,
 ) -> Result<Value> {
-    let LiveRun { output, format } = run;
+    let LiveRun { output, format, errors } = run;
     if originals.is_empty() {
         return Err(EngineError::NoDocument);
     }
@@ -1318,7 +1316,9 @@ fn batch_open_documents(
     }
     validate_error_log(policy, originals.iter().map(|(_, _, path)| path.clone()), planned.iter().flat_map(|paths| paths.iter().cloned()))?;
     let mut files = Vec::new();
-    let mut errors = Vec::new();
+    // Seeded with the inputs that failed before playback reached them (#13659: Destination None
+    // opens each file itself), so the error log and the answer carry them beside playback failures.
+    let mut errors = errors;
     let mut stopped = None;
     let mut done = 0;
     let mut written = OutputClaims::default();
