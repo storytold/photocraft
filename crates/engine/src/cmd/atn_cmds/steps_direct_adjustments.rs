@@ -29,7 +29,7 @@ pub(super) fn gradient_from(d: &Descriptor) -> Mapped {
         let D::Text(name) = g.get("Nm  ")? else { return None };
         let mut stops = Vec::new();
         let mut colors = Vec::new();
-        for s in get_list(g, "Clrs").filter(|s| (2..=64).contains(&s.len()))? {
+        for s in get_list(g, "Clrs").filter(|s| (1..=64).contains(&s.len()))? {
             let D::Descriptor(s) = s else { return None };
             let c = get_obj(s, "Clr ")?;
             let rgb = [get_num(c, "Rd  ")?, get_num(c, "Grn ")?, get_num(c, "Bl  ")?];
@@ -64,7 +64,7 @@ pub(super) fn gradient_to(_: &str, p: &Value) -> Option<Descriptor> {
     }
     let name = origin.get("name")?.as_str()?;
     let colors = origin.get("colors")?.as_array()?;
-    let stops = p.get("stops")?.as_array().filter(|s| (2..=64).contains(&s.len()) && s.len() == colors.len())?;
+    let stops = p.get("stops")?.as_array().filter(|s| (1..=64).contains(&s.len()) && s.len() == colors.len())?;
     let mut encoded = Vec::with_capacity(stops.len());
     let mut previous = -1.0;
     for (stop, color) in stops.iter().zip(colors) {
