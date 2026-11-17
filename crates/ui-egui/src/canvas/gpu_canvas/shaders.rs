@@ -174,6 +174,7 @@ fn srgb_encode(c: vec3<f32>) -> vec3<f32> {
 fn fs(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     let c = textureLoad(acc, vec2<i32>(floor(pos.xy)) - offset.xy, 0);
     let a = clamp(c.a, 0.0, 1.0);
+    let emission = bitcast<u32>(c.a) == 0x80000000u;
     var rgb = max(c.rgb, vec3(0.0));
     if (offset.w == 0) {
         rgb = min(rgb, vec3(1.0));
@@ -182,7 +183,7 @@ fn fs(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
         // Linear composite: store its sRGB encoding (8-bit precision where it matters).
         rgb = srgb_encode(rgb);
     }
-    return vec4(rgb * a, a);
+    return vec4(min(rgb * select(a, 1.0, emission), vec3(65504.0)), a);
 }
 "#;
 

@@ -2,6 +2,7 @@
 
 use craft_exr::decode::{Limits, PartInfo, SampleType};
 use photocraft_codecs::{Image, SampleType as CodecSample};
+use photocraft_color::{EMISSIVE_ALPHA, is_emissive_alpha};
 
 // Give emission a little coverage so straight-alpha layers can carry it, then restore
 // zero coverage when writing associated colour on export.
@@ -59,6 +60,12 @@ pub(crate) fn unpremultiply(data: &mut [u8], channels: usize) {
         // associated colour. Round the bound upward so division cannot overflow again.
         let peak = f64::from(peak);
         let max = f64::from(f32::MAX);
+        if zero_coverage && peak > max * f64::from(coverage) {
+            // This emission cannot fit as straight colour at the tiny marker coverage.
+            // Keep the colour associated and mark it with signed zero instead.
+            *alpha = EMISSIVE_ALPHA.to_ne_bytes();
+            continue;
+        }
         if peak > max * f64::from(coverage) {
             let needed = peak / max;
             coverage = needed as f32;
@@ -88,6 +95,10 @@ pub(crate) fn premultiply_image(image: &mut Image) {
     for pixel in image.data_mut().chunks_exact_mut(layout.channels() * 4) {
         let Some((alpha, colours)) = pixel.as_chunks_mut::<4>().0.split_last_mut() else { continue };
         let a = f32::from_ne_bytes(*alpha);
+        if is_emissive_alpha(a) {
+            *alpha = 0.0f32.to_ne_bytes();
+            continue;
+        }
         if !(0.0..1.0).contains(&a) {
             continue;
         }

@@ -84,6 +84,30 @@ fn exr_straight_float_overflow_preserves_associated_colour() {
 }
 
 #[test]
+fn exr_bright_emission_keeps_zero_coverage() {
+    let red = f32::MAX / 2.0;
+    let bytes = fixture(ChannelLayout::Rgba, &[red, 0.0, 0.0, 0.0], &[0.0, 0.0, 0.0, 0.0]);
+    let mut doc = import("emission.exr", &bytes).unwrap().document;
+
+    let buf = photocraft_compose::flatten(&doc);
+    assert_eq!(buf.over_background([0.0; 3]).get(4, 4), [red, 0.0, 0.0, 1.0]);
+    assert_eq!(buf.over_background([1.0; 3]).get(4, 4), [red, 1.0, 1.0, 1.0]);
+    // Export a composite as well as the native single-layer path.
+    doc.layers.insert(0, photocraft_doc::Layer::raster("empty", doc.pixel_format()));
+    let saved = export(&doc, "exr", &ExportOptions::default()).unwrap();
+    let raw = codecs::decode(&saved.bytes).unwrap();
+    assert_eq!(raw.get(4, 4, 0), red);
+    assert_eq!(raw.get(4, 4, 3).to_bits(), 0);
+    assert_eq!(raw.get(24, 4, 0), 0.0);
+    let reopened = import("emission.exr", &saved.bytes).unwrap().document;
+    assert_eq!(photocraft_compose::flatten(&reopened).over_background([1.0; 3]).get(4, 4), [red, 1.0, 1.0, 1.0]);
+
+    let bounds = doc.bounds();
+    doc.layers[0].surface_mut().unwrap().fill_rect(bounds, &[1.0, 1.0, 1.0, 1.0]);
+    assert_eq!(photocraft_compose::flatten(&doc).get(4, 4), [red, 1.0, 1.0, 1.0]);
+}
+
+#[test]
 fn exr_emission_survives_half_float_texture_samples() {
     let bytes = fixture(ChannelLayout::Rgba, &[0.5, 0.25, 0.125, 0.0], &[0.5, 0.25, 0.125, 1.0 / 16_384.0]);
     let doc = import("emission.exr", &bytes).unwrap().document;

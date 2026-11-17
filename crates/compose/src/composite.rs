@@ -334,7 +334,7 @@ pub(crate) fn composite_pixel_layer(layer: &Layer, surf: &Surface, backdrop: &mu
         surf.read_rgba_into(Rect::new(rect.x0, y, rect.x1, y + 1), &mut row);
         if let Some(m) = mv.as_ref().and_then(|m| m.get(ry * w..(ry + 1) * w)) {
             for (p, k) in row.iter_mut().zip(m) {
-                p[3] *= k;
+                psblend::mask_pixel(p, *k);
             }
         }
         blend_span_fill(dst, &row, rect.x0, y, layer.blend, layer.opacity, layer.fill_opacity, gamma);
@@ -495,10 +495,13 @@ pub(crate) fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: 
         && layer.vector_mask.is_none()
         && text_gamma(layer) == 1.0
         && !psblend::LAB_MIX.with(|l| l.get())
-        && backdrop.px.iter().all(|p| p[3] <= 0.0)
+        && backdrop.px.iter().all(|p| p[3] <= 0.0 && !photocraft_color::is_emissive_alpha(p[3]))
     {
         s.read_rgba_into(rect, &mut backdrop.px);
         for p in &mut backdrop.px {
+            if photocraft_color::is_emissive_alpha(p[3]) {
+                continue;
+            }
             if p[3] <= 0.0 {
                 *p = [0.0; 4];
             } else if p[3] < 1.0 {
@@ -735,7 +738,9 @@ fn blend_span_fill(dst: &mut [[f32; 4]], src: &[[f32; 4]], x0: i32, y: i32, mode
         return blend_span_g(dst, src, x0, y, mode, opacity * fill, gamma);
     }
     for (b, s) in dst.iter_mut().zip(src) {
-        if s[3] > 0.0 {
+        if let Some(pixel) = psblend::composite_emission(*b, *s, opacity * fill) {
+            *b = pixel;
+        } else if s[3] > 0.0 {
             *b = psblend::composite_fill(mode, *b, *s, opacity, fill, gamma);
         }
     }
@@ -750,6 +755,10 @@ fn blend_span_g(dst: &mut [[f32; 4]], src: &[[f32; 4]], x0: i32, y: i32, mode: B
     }
     for (x, (b, s)) in (x0..).zip(dst.iter_mut().zip(src)) {
         let mut s = *s;
+        if let Some(pixel) = psblend::composite_emission(*b, s, opacity) {
+            *b = pixel;
+            continue;
+        }
         if s[3] <= 0.0 {
             continue;
         }

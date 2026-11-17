@@ -227,9 +227,44 @@ pub fn composite(mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], opacity:
     out
 }
 
+/// Mask coverage scales the light of a zero-coverage emitter without changing its coverage.
+pub(crate) fn mask_pixel(pixel: &mut [f32; 4], weight: f32) {
+    if photocraft_color::is_emissive_alpha(pixel[3]) {
+        for channel in &mut pixel[..3] {
+            *channel *= weight;
+        }
+    } else {
+        pixel[3] *= weight;
+    }
+}
+
+/// Associated over for a signed-zero emitter on either side. The stored colour of an
+/// emitter already represents the light it adds, so it contributes even at zero coverage.
+pub(crate) fn composite_emission(backdrop: [f32; 4], source: [f32; 4], opacity: f32) -> Option<[f32; 4]> {
+    use photocraft_color::{EMISSIVE_ALPHA, is_emissive_alpha};
+    let be = is_emissive_alpha(backdrop[3]);
+    let se = is_emissive_alpha(source[3]);
+    if !be && !se {
+        return None;
+    }
+    let ab = backdrop[3].max(0.0);
+    let as_ = source[3].max(0.0) * opacity;
+    let ao = as_ + ab * (1.0 - as_);
+    let wb = (if be { 1.0 } else { ab }) * (1.0 - as_);
+    let ws = if se { opacity } else { as_ };
+    let divisor = if ao == 0.0 { 1.0 } else { f64::from(ao) };
+    let channel = |i: usize| {
+        ((f64::from(backdrop[i]) * f64::from(wb) + f64::from(source[i]) * f64::from(ws)) / divisor).clamp(f64::from(f32::MIN), f64::from(f32::MAX)) as f32
+    };
+    Some([channel(0), channel(1), channel(2), if ao == 0.0 { EMISSIVE_ALPHA } else { ao }])
+}
+
 /// Normal mixing outside Lab, for callers that select the blend space once per buffer.
 #[inline]
 pub(crate) fn composite_normal_rgb(backdrop: [f32; 4], source: [f32; 4], opacity: f32) -> [f32; 4] {
+    if let Some(pixel) = composite_emission(backdrop, source, opacity) {
+        return pixel;
+    }
     let ab = backdrop[3];
     let as_ = source[3] * opacity;
     if as_ <= 0.0 {
@@ -246,13 +281,15 @@ pub(crate) fn composite_normal_rgb_span(dst: &mut [[f32; 4]], src: &[[f32; 4]], 
     let (dc, dt) = dst[..n].as_chunks_mut::<LANES>();
     let (sc, st) = src[..n].as_chunks::<LANES>();
     for (b, s) in dc.iter_mut().zip(sc) {
-        normal_lanes(b, s, opacity);
+        if b.iter().chain(s).any(|p| photocraft_color::is_emissive_alpha(p[3])) {
+            for (b, s) in b.iter_mut().zip(s) {
+                *b = composite_normal_rgb(*b, *s, opacity);
+            }
+        } else {
+            normal_lanes(b, s, opacity);
+        }
     }
     for (b, s) in dt.iter_mut().zip(st) {
-        // Not `s[3] > 0`: a NaN alpha is blended (into NaN), as the scalar loop does.
-        if s[3] <= 0.0 {
-            continue;
-        }
         *b = composite_normal_rgb(*b, *s, opacity);
     }
 }

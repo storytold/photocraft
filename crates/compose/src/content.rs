@@ -57,7 +57,7 @@ pub(crate) fn render_content(layer: &Layer, rect: Rect, cx: &Ctx) -> Option<Buff
     };
     if let Some(m) = mask_vals(layer, rect, cx) {
         for (p, k) in buf.px.iter_mut().zip(&m) {
-            p[3] *= k;
+            crate::psblend::mask_pixel(p, *k);
         }
         recycle_mask(Some(m));
     }
