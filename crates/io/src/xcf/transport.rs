@@ -81,25 +81,18 @@ impl Read for Input<'_, '_> {
     }
 }
 
-struct GzipPolicy {
-    strict: std::cell::Cell<bool>,
-    verified_output: std::cell::Cell<usize>,
-    rollback: std::cell::Cell<Option<usize>>,
-}
-
-/// XCF requires verified members and terminal zero padding. SVGZ retains its
-/// existing policy: ignore nonmember tails and discard a failed later member.
+/// XCF requires verified members and terminal zero padding. SVGZ ignores
+/// nonmember tails, while every recognized member must pass its checksum.
 /// The prefix probe selects the policy without restarting the decoder.
 struct Gzip<'p, R: BufRead> {
     member: Option<flate2::bufread::GzDecoder<R>>,
-    policy: &'p GzipPolicy,
-    total_output: usize,
+    strict: &'p std::cell::Cell<bool>,
     verified_member: bool,
 }
 
 impl<'p, R: BufRead> Gzip<'p, R> {
-    fn new(input: R, policy: &'p GzipPolicy) -> Self {
-        Self { member: Some(flate2::bufread::GzDecoder::new(input)), policy, total_output: 0, verified_member: false }
+    fn new(input: R, strict: &'p std::cell::Cell<bool>) -> Self {
+        Self { member: Some(flate2::bufread::GzDecoder::new(input)), strict, verified_member: false }
     }
 }
 
@@ -112,27 +105,29 @@ impl<R: BufRead> Read for Gzip<'_, R> {
             let Some(member) = &mut self.member else { return Ok(0) };
             let count = match member.read(output) {
                 Ok(count) => count,
-                Err(_) if !self.policy.strict.get() && self.verified_member => {
-                    self.policy.rollback.set(Some(self.policy.verified_output.get()));
+                Err(error)
+                    if !self.strict.get()
+                        && self.verified_member
+                        && member.header().is_none()
+                        && matches!(error.kind(), io::ErrorKind::UnexpectedEof | io::ErrorKind::InvalidInput) =>
+                {
                     self.member = None;
                     return Ok(0);
                 }
                 Err(error) => return Err(error),
             };
             if count != 0 {
-                self.total_output = self.total_output.checked_add(count).ok_or_else(|| io::Error::other("gzip output count overflow"))?;
                 return Ok(count);
             }
             // Single-member EOF means its CRC and size trailer were checked.
             self.verified_member = true;
-            self.policy.verified_output.set(self.total_output);
             let member = self.member.take().ok_or_else(|| io::Error::other("missing gzip member"))?;
             let mut input = member.into_inner();
             let next = input.fill_buf()?;
             if next.is_empty() {
                 return Ok(0);
             }
-            if !self.policy.strict.get() && !next.starts_with(&[0x1f, 0x8b]) {
+            if !self.strict.get() && !next.starts_with(&[0x1f, 0x8b]) {
                 return Ok(0);
             }
             if next.first() == Some(&0) {
@@ -181,10 +176,10 @@ fn decode_inner(name: &str, bytes: &[u8], ctl: &Interrupt<'_>, limit: usize, pre
 fn make_compressed_reader<'a, 'bytes: 'a, 'ctl: 'a>(
     kind: crate::ImportCompression,
     input: &'a mut Input<'bytes, 'ctl>,
-    policy: &'a GzipPolicy,
+    strict: &'a std::cell::Cell<bool>,
 ) -> Box<dyn Read + 'a> {
     match kind {
-        crate::ImportCompression::Gzip => Box::new(Gzip::new(input, policy)),
+        crate::ImportCompression::Gzip => Box::new(Gzip::new(input, strict)),
         crate::ImportCompression::Bzip2 => Box::new(bzip::Reader::new(input)),
         // The decoder limit includes fixed LZMA2 buffers as well as the dictionary.
         // Admit the 64 MiB dictionary used by -9/-9e without admitting larger ones.
@@ -234,8 +229,8 @@ fn with_xcf_prefix_limit<T>(name: &str, bytes: &[u8], ctl: &Interrupt<'_>, limit
     }
     let Some(kind) = crate::import_compression(bytes) else { return Ok(None) };
     let mut input = Input { remaining: bytes, ctl: *ctl };
-    let policy = GzipPolicy { strict: std::cell::Cell::new(true), verified_output: std::cell::Cell::new(0), rollback: std::cell::Cell::new(None) };
-    let mut decoder = compressed_reader(kind, &mut input, &policy);
+    let strict = std::cell::Cell::new(true);
+    let mut decoder = compressed_reader(kind, &mut input, &strict);
     let mut magic = [0; MAGIC.len()];
     let result = decoder.read_exact(&mut magic);
     ctl.check().map_err(|_| IoError::Cancelled)?;
@@ -270,8 +265,8 @@ fn decode_stream(name: &str, bytes: &[u8], ctl: &Interrupt<'_>, limit: usize, pr
     let declared = crate::is_xcf_input_name(name) && !lower.ends_with(".xcf");
     let declared_svg = lower.ends_with(".svg") || lower.ends_with(".svgz");
     let mut input = Input { remaining: bytes, ctl: *ctl };
-    let gzip_policy = GzipPolicy { strict: std::cell::Cell::new(!allow_svg), verified_output: std::cell::Cell::new(0), rollback: std::cell::Cell::new(None) };
-    let mut decoder = compressed_reader(kind, &mut input, &gzip_policy);
+    let strict = std::cell::Cell::new(!allow_svg);
+    let mut decoder = compressed_reader(kind, &mut input, &strict);
     let mut prefix = [0; MAGIC.len()];
     let mut prefix_len = 0usize;
     while prefix_len < prefix.len() {
@@ -280,7 +275,7 @@ fn decode_stream(name: &str, bytes: &[u8], ctl: &Interrupt<'_>, limit: usize, pr
             Ok(0) => break,
             Ok(count) => prefix_len += count,
             Err(error) => {
-                ctl.check().map_err(|_| IoError::Cancelled)?;
+                check_decoder_error(&error, ctl)?;
                 return if declared {
                     Err(invalid(format!("{compression}: {error}")))
                 } else if allow_svg && (declared_svg || svg_signature(prefix.get(..prefix_len).unwrap_or_default())) {
@@ -294,7 +289,7 @@ fn decode_stream(name: &str, bytes: &[u8], ctl: &Interrupt<'_>, limit: usize, pr
     ctl.check().map_err(|_| IoError::Cancelled)?;
     let is_xcf = prefix_len == prefix.len() && prefix == MAGIC;
     if is_xcf {
-        gzip_policy.strict.set(true);
+        strict.set(true);
     }
     if !is_xcf && (declared || !allow_svg) {
         return if declared { Err(invalid(format!("{compression} content is not a plain XCF file; recursive wrapping is unsupported"))) } else { Ok(None) };
@@ -317,7 +312,7 @@ fn decode_stream(name: &str, bytes: &[u8], ctl: &Interrupt<'_>, limit: usize, pr
         return Err(oversized());
     }
     output.extend_from_slice(prefix.get(..prefix_len).ok_or_else(|| invalid("invalid transport prefix length"))?);
-    if !is_xcf && !declared_svg && !probe_svg(decoder.as_mut(), &mut output, ctl, limit, &gzip_policy)? {
+    if !is_xcf && !declared_svg && !probe_svg(decoder.as_mut(), &mut output, ctl, limit)? {
         return Ok(None);
     }
     let mut chunk = [0; CHUNK];
@@ -329,7 +324,7 @@ fn decode_stream(name: &str, bytes: &[u8], ctl: &Interrupt<'_>, limit: usize, pr
         let capacity = if prefix_only { limit.saturating_sub(output.len()).min(CHUNK) } else { CHUNK };
         let target = chunk.get_mut(..capacity).ok_or_else(|| invalid("invalid decoded output capacity"))?;
         let count = decoder.read(target).map_err(|error| {
-            if ctl.cancelled() {
+            if check_decoder_error(&error, ctl).is_err() {
                 IoError::Cancelled
             } else if is_xcf {
                 invalid(format!("{compression}: {error}"))
@@ -348,12 +343,7 @@ fn decode_stream(name: &str, bytes: &[u8], ctl: &Interrupt<'_>, limit: usize, pr
     // Readers verify every member and consume only their admitted terminal padding
     // (zero bytes for gzip, standard stream padding for XZ). No unchecked tail remains.
     drop(decoder);
-    // A cancellation while checking a later gzip member must never turn into the
-    // SVGZ compatibility fallback that discards a damaged later member.
     ctl.check().map_err(|_| IoError::Cancelled)?;
-    if let Some(verified) = gzip_policy.rollback.get() {
-        output.truncate(verified);
-    }
     if !prefix_only && !input.remaining.is_empty() && is_xcf {
         return Err(invalid(format!("unconsumed data after the {compression} stream")));
     }
@@ -365,7 +355,7 @@ fn decode_stream(name: &str, bytes: &[u8], ctl: &Interrupt<'_>, limit: usize, pr
 
 /// Unknown gzip bodies need only a bounded signature before filename fallback.
 /// A claimed SVG keeps this decoder, including its existing member/tail policy.
-fn probe_svg(decoder: &mut dyn Read, output: &mut Vec<u8>, ctl: &Interrupt<'_>, limit: usize, policy: &GzipPolicy) -> Result<bool> {
+fn probe_svg(decoder: &mut dyn Read, output: &mut Vec<u8>, ctl: &Interrupt<'_>, limit: usize) -> Result<bool> {
     let probe_limit = SVG_PROBE_BYTES.min(limit);
     let mut chunk = [0; SVG_PROBE_BYTES];
     while output.len() < probe_limit {
@@ -375,7 +365,7 @@ fn probe_svg(decoder: &mut dyn Read, output: &mut Vec<u8>, ctl: &Interrupt<'_>, 
         let count = match decoder.read(target) {
             Ok(count) => count,
             Err(error) => {
-                ctl.check().map_err(|_| IoError::Cancelled)?;
+                check_decoder_error(&error, ctl)?;
                 return if svg_signature(output) { Err(IoError::Svg(format!("gzip: {error}"))) } else { Ok(false) };
             }
         };
@@ -384,13 +374,15 @@ fn probe_svg(decoder: &mut dyn Read, output: &mut Vec<u8>, ctl: &Interrupt<'_>, 
         }
         output.extend_from_slice(chunk.get(..count).ok_or_else(|| invalid("invalid SVG probe length"))?);
     }
-    // A failed later member can roll back tentative bytes. Cancellation must
-    // precede that compatibility fallback and ordinary filename routing.
     ctl.check().map_err(|_| IoError::Cancelled)?;
-    if let Some(verified) = policy.rollback.get() {
-        output.truncate(verified);
-    }
     Ok(svg_signature(output))
+}
+
+fn check_decoder_error(error: &io::Error, ctl: &Interrupt<'_>) -> Result<()> {
+    if error.get_ref().is_some_and(|cause| cause.is::<photocraft_raster::Cancelled>()) {
+        return Err(IoError::Cancelled);
+    }
+    ctl.check().map_err(|_| IoError::Cancelled)
 }
 
 /// Recognizes plain XML using the shared bounded UTF-8/UTF-16/Latin-1 policy.

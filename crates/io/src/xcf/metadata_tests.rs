@@ -210,11 +210,9 @@ fn finite_extended_overlay_colors_are_preserved_and_nonfinite_optional_values_st
     assert!(report.attachments.iter().any(|a| a.kind == "xcf.property.33"));
 }
 
-/// Verify independently sized source masks retain their full native extent at layer offsets and survive native reopen.
+/// A disabled layer mask keeps its complete coverage at a negative layer offset through native reopen.
 #[test]
-fn differing_mask_extents_are_positioned_in_native_document_coordinates() {
-    // Source layer 3x1 at (-2, 2), independently stored mask 2x3. A native surface has
-    // document coordinates and does not need a matching-extents exception or evaluator.
+fn disabled_mask_at_negative_layer_origin_survives_native_reopen() {
     let mut w = W::new(11);
     w.u32(4);
     w.u32(5);
@@ -227,16 +225,16 @@ fn differing_mask_extents_are_positioned_in_native_document_coordinates() {
     w.ptr(0);
     let at = w.out.len();
     w.patch(layer_slot, at);
+    w.u32(2);
     w.u32(3);
     w.u32(1);
-    w.u32(1);
-    w.string("unequal mask");
+    w.string("off-canvas mask");
     w.prop(15, &[(-2i32).to_be_bytes(), 2i32.to_be_bytes()].concat());
     w.prop_u32(11, 0);
     w.end();
     let layer_pixels = w.slot();
     let mask_slot = w.slot();
-    let at = hierarchy(&mut w, 3, 1, 4, &[255; 12], Compression::None);
+    let at = hierarchy(&mut w, 2, 3, 4, &[255; 24], Compression::None);
     w.patch(layer_pixels, at);
     let at = w.out.len();
     w.patch(mask_slot, at);

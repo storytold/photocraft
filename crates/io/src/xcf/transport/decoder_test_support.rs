@@ -7,7 +7,7 @@ thread_local! {
 pub(super) fn compressed_reader<'a, 'bytes: 'a, 'ctl: 'a>(
     kind: crate::ImportCompression,
     input: &'a mut super::Input<'bytes, 'ctl>,
-    policy: &'a super::GzipPolicy,
+    policy: &'a std::cell::Cell<bool>,
 ) -> Box<dyn std::io::Read + 'a> {
     DECODER_STARTS.with(|starts| starts.set(starts.get() + 1));
     super::make_compressed_reader(kind, input, policy)

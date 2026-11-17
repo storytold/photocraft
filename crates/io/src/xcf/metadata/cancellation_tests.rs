@@ -61,13 +61,13 @@ fn pre_cancelled_metadata_changes_neither_document_view_budget_nor_report() {
 fn cancellation_interrupts_guide_records_and_uncancelled_guides_keep_their_order() {
     let payload = guides(4096);
     let properties = [Prop { kind: 18, data: &payload, offset: 0 }];
-    for cancel_during in [false, true] {
+    for cancel_at in [None, Some(11), Some(4107)] {
         let mut doc = Document::new("Guides", Size::new(8, 8), ColorMode::Rgb, SampleType::U8);
         let (mut outcomes, owner) = outcomes();
         let mut budget = 1 << 20;
         let calls = AtomicUsize::new(0);
         // A one-shot request proves the error is propagated rather than rescued by a later outer check.
-        let cancel = || calls.fetch_add(1, Ordering::Relaxed) == 11 && cancel_during;
+        let cancel = || Some(calls.fetch_add(1, Ordering::Relaxed)) == cancel_at;
         let result = image(
             &mut doc,
             &properties,
@@ -79,10 +79,15 @@ fn cancellation_interrupts_guide_records_and_uncancelled_guides_keep_their_order
             &mut Default::default(),
             &Interrupt::cancel_only(&cancel),
         );
-        if cancel_during {
+        if let Some(stop) = cancel_at {
             assert!(matches!(result, Err(crate::IoError::Cancelled)));
-            assert_eq!(calls.load(Ordering::Relaxed), 12);
-            assert!(!doc.guides.horizontal.is_empty() && doc.guides.horizontal.len() < 16);
+            assert_eq!(calls.load(Ordering::Relaxed), stop + 1);
+            if stop == 11 {
+                assert!(doc.guides.horizontal.is_empty());
+                assert_eq!(budget, 1 << 20, "the counting pass has not reserved storage");
+            } else {
+                assert!(!doc.guides.horizontal.is_empty() && doc.guides.horizontal.len() < 16);
+            }
         } else {
             result.unwrap();
             assert_eq!(doc.guides.horizontal, vec![1.; 4096]);

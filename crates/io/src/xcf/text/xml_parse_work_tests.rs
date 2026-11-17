@@ -104,15 +104,19 @@ fn namespace_inheritance_work_boundary_counts_scope_copying_and_prefix_lookups()
 #[test]
 fn inherited_namespace_amplification_never_reaches_the_dom_parser() {
     let mut markup = String::from("<markup>");
-    for level in 0..8 {
+    // Keep every inherited scope inside craft-xml's 256-attribute cap and
+    // accumulate enough repeated inheritance for the DOM admission guard.
+    for level in 0..15 {
         markup.push_str("<span ");
-        for index in 0..128 {
+        for index in 0..15 {
             markup.push_str(&format!("xmlns:n{level}_{index}='urn:{level}:{index}' "));
         }
         markup.push('>');
     }
-    markup.push('x');
-    markup.push_str(&"</span>".repeat(8));
+    for leaf in 0..24 {
+        markup.push_str(&format!("<span xmlns:leaf='urn:leaf:{leaf}'/>"));
+    }
+    markup.push_str(&"</span>".repeat(15));
     markup.push_str("</markup>");
     assert!(!craft_svg::guard::too_wide(&markup, 256, 1 << 20), "local attribute widths alone admit the hostile inherited work");
     assert!(!craft_svg::guard::deeper_than(&markup, MAX_DEPTH));

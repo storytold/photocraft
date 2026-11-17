@@ -1346,7 +1346,8 @@ fn parse_markup_with<'a, T>(markup: &'a str, parse: impl FnOnce(&'a str) -> Resu
 
 /// A child with declarations makes the DOM reader copy its parent's scope via
 /// repeated prefix searches. Local attribute widths alone miss that inherited
-/// quadratic work. The streaming reader keeps raw names and never builds scope.
+/// quadratic work. The shared event reader bounds its own namespace scope,
+/// and this check accounts for the separate DOM reader's scope copying.
 fn check_markup_namespace_work(markup: &str, mut work_left: usize) -> Result<()> {
     let options = craft_xml::Options {
         names: craft_xml::Names::AsWritten,

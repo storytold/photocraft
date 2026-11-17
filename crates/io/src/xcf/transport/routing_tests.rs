@@ -234,13 +234,13 @@ fn renamed_utf16_svg_keeps_signature_at_bom_and_surrogate_boundaries() {
 }
 
 #[test]
-fn svgz_legacy_tail_and_later_member_fallback_preserves_verified_output() {
+fn svgz_follows_shared_member_and_tail_validation() {
     let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>"#;
     let first = wrappers(svg).remove(0);
     let mut corrupt_second = wrappers(&vec![b'x'; CHUNK * 3]).remove(0);
     let crc = corrupt_second.len() - 8;
     corrupt_second[crc] ^= 1;
-    let tails = [b"arbitrary tail".to_vec(), [vec![0; 17], b"tail".to_vec()].concat(), vec![0x1f], vec![0x1f, 0x8b], corrupt_second.clone()];
+    let tails = [b"arbitrary tail".to_vec(), [vec![0; 17], b"tail".to_vec()].concat(), vec![0x1f], vec![0x1f, 0x8b]];
     let xcf = wrappers(&plain()).remove(0);
     for tail in tails {
         let bytes = [first.as_slice(), tail.as_slice()].concat();
@@ -262,12 +262,18 @@ fn svgz_legacy_tail_and_later_member_fallback_preserves_verified_output() {
         assert!(decode("strict.xcf.gz", &strict, &Interrupt::NONE).is_err());
         assert!(crate::import("strict.bin", &strict).is_err(), "claiming the XCF prefix must enable strict policy in the automatic probe too");
     }
-    // Roll back only the failed member, preserving all earlier verified members.
     let second = wrappers(b" ").remove(0);
-    let bytes = [first, second, corrupt_second].concat();
-    let legacy = craft_svg::svgz::inflate(&bytes, crate::svg::MAX_INFLATED_BYTES as usize).unwrap();
-    assert_eq!(legacy.as_ref(), [svg.as_slice(), b" "].concat());
-    assert_eq!(decode_import("three.svgz", &bytes, &Interrupt::NONE, true).unwrap().unwrap().bytes, legacy.as_ref());
+    let bytes = [first.as_slice(), second.as_slice()].concat();
+    let shared = craft_svg::svgz::inflate(&bytes, crate::svg::MAX_INFLATED_BYTES as usize).unwrap();
+    assert_eq!(shared.as_ref(), [svg.as_slice(), b" "].concat());
+    assert_eq!(decode_import("two.svgz", &bytes, &Interrupt::NONE, true).unwrap().unwrap().bytes, shared.as_ref());
+
+    let corrupt = [first, second, corrupt_second].concat();
+    assert!(craft_svg::svgz::inflate(&corrupt, crate::svg::MAX_INFLATED_BYTES as usize).is_err());
+    for name in ["broken.svgz", "renamed.psd"] {
+        assert!(matches!(decode_import(name, &corrupt, &Interrupt::NONE, true), Err(IoError::Svg(_))));
+        assert!(matches!(crate::import(name, &corrupt), Err(IoError::Svg(_))));
+    }
 }
 
 #[test]
@@ -280,6 +286,25 @@ fn svgz_first_member_damage_remains_an_error_and_cancellation_is_not_a_fallback(
     assert!(matches!(crate::import("first.svgz", &bad), Err(IoError::Svg(_))));
     let cancelled = Interrupt::cancel_only(&|| true);
     assert!(matches!(crate::import_with("cancelled.svgz", &[wrappers(svg).remove(0), bad].concat(), &cancelled), Err(IoError::Cancelled)));
+}
+
+#[test]
+fn a_one_shot_cancel_during_a_late_svgz_header_stays_cancelled() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>"#;
+    let bytes = [wrappers(svg).remove(0), vec![0x1f, 0x8b]].concat();
+    let calls = AtomicUsize::new(0);
+    let count = || {
+        calls.fetch_add(1, Ordering::Relaxed);
+        false
+    };
+    assert!(decode_import("drawing.svgz", &bytes, &Interrupt::cancel_only(&count), true).unwrap().is_some());
+    let checks = calls.load(Ordering::Relaxed);
+    for index in 0..checks {
+        calls.store(0, Ordering::Relaxed);
+        let cancel = || calls.fetch_add(1, Ordering::Relaxed) == index;
+        assert!(matches!(decode_import("drawing.svgz", &bytes, &Interrupt::cancel_only(&cancel), true), Err(IoError::Cancelled)), "check {index}");
+    }
 }
 
 #[test]
