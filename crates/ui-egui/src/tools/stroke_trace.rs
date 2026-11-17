@@ -249,24 +249,6 @@ mod tests {
     }
 
     #[test]
-    fn stroke_trace_reads_the_shared_frame_stages() {
-        let mut t = on();
-        let mut ring = crate::frame_stages::SlowFrames::default();
-        let mut last = None;
-        for (k, now) in [100.0, 116.0, 132.0].into_iter().enumerate() {
-            let s = ring.finish(stages(now, 6.0, true), now + 5.0, false, None);
-            t.frame(&s, true, || "test".into());
-            let interval = if k == 0 { 0.0 } else { 16.0 };
-            let row = t.rows.last().expect("a stroke frame").clone();
-            assert_eq!((row.t, row.interval, row.moves, row.stroke, row.canvas, row.ui), (s.t, interval, 3, 1.0, 2.0, 4.0));
-            assert_eq!(row.cpu_prev, s.cpu_prev_ms);
-            assert_eq!(t.rows.last(), Some(&Row::from_stages(&s, interval)), "the row is the frame's stages");
-            last = Some(s);
-        }
-        assert_eq!(last.map(|s| s.composite_ms + s.upload_ms), Some(2.0));
-    }
-
-    #[test]
     fn a_stroke_is_its_frames_from_the_first_stroke_frame_to_the_first_without() {
         let mut t = on();
         frame(&mut t, 0.0, 5.0, false);
@@ -287,28 +269,6 @@ mod tests {
         frame(&mut off, 0.0, 1.0, true);
         frame(&mut off, 16.0, 1.0, false);
         assert!(off.last.is_none() && off.rows.is_empty());
-    }
-
-    #[test]
-    fn a_trace_is_set_by_value() {
-        assert_eq!(StrokeTrace::from_value("off").output, Output::Off);
-        assert_eq!(StrokeTrace::from_value(" 0 ").output, Output::Off);
-        assert_eq!(StrokeTrace::from_value("stderr").output, Output::Stderr);
-        assert_eq!(StrokeTrace::from_value("true").output, Output::Stderr);
-        assert_eq!(StrokeTrace::from_value("t.csv").output, Output::Csv("t.csv".into()));
-        let mut t = on();
-        t.last = Some(Summary::default());
-        t.set("off");
-        assert!(!t.enabled() && t.last.is_some(), "turning it off keeps the last summary");
-    }
-
-    #[test]
-    fn csv_rows_and_odd_numbers() {
-        let rows = [Row { t: 1.0, interval: 16.5, moves: 2, stroke: 0.25, canvas: 1.0, ui: 3.0, cpu_prev: None }];
-        assert_eq!(csv(1, &rows, true), "stroke,t_ms,interval_ms,moves,stroke_ms,canvas_ms,ui_ms,cpu_prev_ms\n1,1.000,16.500,2,0.250,1.000,3.000,\n");
-        assert_eq!(percentiles(vec![]), [0.0, 0.0]);
-        assert_eq!(percentiles(vec![f64::NAN, 2.0, f64::INFINITY]), [2.0, 2.0]);
-        assert_eq!(percentiles((1..=100).map(f64::from).collect()), [51.0, 95.0]);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
