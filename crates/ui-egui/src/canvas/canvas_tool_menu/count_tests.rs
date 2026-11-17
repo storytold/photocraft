@@ -18,7 +18,7 @@ fn app() -> (PhotocraftApp, egui::Context) {
     (app, egui::Context::default())
 }
 
-fn call(app: &mut PhotocraftApp, ctx: &egui::Context, method: &str, params: Value) -> Value {
+pub(crate) fn call(app: &mut PhotocraftApp, ctx: &egui::Context, method: &str, params: Value) -> Value {
     let (req, _rx) = ControlRequest::new(method, params);
     match handle(app, ctx, &req) {
         Outcome::Done(v) => v,
@@ -26,13 +26,13 @@ fn call(app: &mut PhotocraftApp, ctx: &egui::Context, method: &str, params: Valu
     }
 }
 
-fn right_click(app: &mut PhotocraftApp, ctx: &egui::Context, x: f64, y: f64) {
+pub(crate) fn right_click(app: &mut PhotocraftApp, ctx: &egui::Context, x: f64, y: f64) {
     let r = call(app, ctx, "ui.pointer", json!({"button": "secondary", "events": [{"kind": "down", "x": x, "y": y}, {"kind": "up", "x": x, "y": y}]}));
     assert_eq!(r["ok"], true, "{r}");
 }
 
 /// The open menu's rows as `ui.inspect` lists them: ids, with "―" for separators.
-fn listed(app: &mut PhotocraftApp, ctx: &egui::Context) -> Vec<String> {
+pub(crate) fn listed(app: &mut PhotocraftApp, ctx: &egui::Context) -> Vec<String> {
     let inspected = call(app, ctx, "ui.inspect", json!({}));
     let entries = inspected.pointer("/result/canvasToolMenu/entries").and_then(Value::as_array).cloned().unwrap_or_default();
     entries.iter().map(|e| e["id"].as_str().map_or_else(|| "―".to_string(), str::to_string)).collect()

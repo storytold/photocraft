@@ -9,7 +9,7 @@ use serde_json::json;
 
 use super::tests::{click, steps};
 use crate::PhotocraftApp;
-use crate::direct_select::{PathRef, active_paths, candidates};
+use crate::direct_select::{Drag, PathRef, active_paths, candidates};
 use crate::state::Tool;
 
 /// The issue's document: 800 x 600 with the saved path "Path 1", a corner square with an anchor
@@ -141,4 +141,44 @@ fn escape_while_renaming_path_1_cancels_the_rename() {
     let names: Vec<String> = h.state().session.active().unwrap().doc.paths.iter().map(|p| p.name.clone()).collect();
     assert_eq!(names, ["Path 1"], "Esc cancels the rename");
     assert_eq!(h.state().ui.selected_path.as_deref(), Some("Path 1"));
+}
+
+#[test]
+fn the_first_escape_without_a_selected_anchor_keeps_path_1_targeted() {
+    let mut app = app();
+    let n = steps(&app);
+    escape(&mut app);
+    assert_eq!(app.ui.selected_path.as_deref(), Some("Path 1"), "the first Esc keeps Path 1 targeted");
+    assert!(!active_paths(&app).is_empty(), "its outline stays");
+    escape(&mut app);
+    assert_eq!(app.ui.selected_path, None, "the second Esc deselects Path 1");
+    assert!(candidates(&app).is_empty(), "no outline or anchors are drawn");
+    assert_eq!(steps(&app), n, "Esc adds no History step");
+}
+
+#[test]
+fn an_escape_during_a_direct_selection_drag_keeps_the_anchors() {
+    let mut app = app();
+    // Cmd is Direct Selection while held: it selects the anchor instead of deleting it.
+    click(&mut app, [300.0, 300.0], Modifiers::COMMAND);
+    assert_eq!(app.ui.direct_selection.anchors, vec![[0, 1]]);
+    app.ui.direct_selection.drag = Some(Drag::Marquee { start: [200.0, 200.0], end: [400.0, 400.0], add: false });
+    escape(&mut app);
+    assert_eq!(app.ui.direct_selection.anchors, vec![[0, 1]], "the drag's release still moves them");
+    assert!(app.ui.direct_selection.drag.is_some(), "and Esc does not end the drag");
+    assert_eq!(app.ui.selected_path.as_deref(), Some("Path 1"), "nor deactivates the path");
+}
+
+#[test]
+fn a_newly_targeted_path_starts_at_the_first_escape_again() {
+    let mut app = app();
+    let line = json!({"subpaths": [{"knots": [[600, 100], [700, 100]]}]});
+    app.run("path.set", json!({"name": "Path 2", "path": line})).unwrap();
+    escape(&mut app);
+    assert_eq!(app.ui.selected_path.as_deref(), Some("Path 1"), "the first Esc keeps Path 1 targeted");
+    app.ui.selected_path = Some("Path 2".into());
+    escape(&mut app);
+    assert_eq!(app.ui.selected_path.as_deref(), Some("Path 2"), "the first Esc on a new path keeps it targeted");
+    escape(&mut app);
+    assert_eq!(app.ui.selected_path, None, "and the second Esc deselects it");
 }
