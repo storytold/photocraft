@@ -598,7 +598,7 @@ fn canvas_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.horizontal(|ui| {
         label(ui, "", 90.0);
         let mut rel = relative;
-        if crate::widgets::checkbox(ui, &mut rel, tl!("Relative")).changed() {
+        if crate::widgets::checkbox(ui, &mut rel, tl!("Relative to current dimension")).changed() {
             // Convert between absolute and delta so the resulting canvas is unchanged.
             let (w, h) = (num(f, "width"), num(f, "height"));
             let (w, h) = if rel { (w - ow, h - oh) } else { (w + ow, h + oh) };
@@ -685,6 +685,8 @@ fn anchor_grid(ui: &mut egui::Ui, current: &str, dw: f64, dh: f64) -> Option<&'s
     picked
 }
 
+#[cfg(test)]
+mod canvas_relative_label_tests;
 #[cfg(test)]
 #[path = "image_size_readout_tests.rs"]
 mod image_size_readout_tests;
