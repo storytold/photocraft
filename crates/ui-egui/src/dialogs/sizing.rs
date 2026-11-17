@@ -507,9 +507,24 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     }
     ui.horizontal(|ui| {
         label(ui, tl!("Resolution:"), 90.0);
-        let mut r = f.get("resolution").and_then(Value::as_f64).unwrap_or(72.0) as f32;
-        if crate::widgets::value_field(ui, &mut r, 1.0..=30000.0, "", 90.0).accessible_name(tl!("Resolution")).changed() {
-            let r = r.max(1.0) as f64;
+        // `resolution` is always stored in pixels per inch, so an untouched value stays exactly the
+        // document's whatever unit is shown; only the display converts, and only a typed change
+        // writes it back (#14782).
+        const CM: f64 = 2.54;
+        let ppcm = f.get("__resUnit").and_then(Value::as_str) == Some("ppcm");
+        let stored = f.get("resolution").and_then(Value::as_f64).unwrap_or(72.0);
+        let (typed, changed) = if ppcm {
+            let mut shown = (stored / CM) as f32;
+            let range = (1.0 / CM) as f32..=(30000.0 / CM) as f32;
+            let resp = crate::widgets::value_field_prec(ui, &mut shown, range, "", 90.0, 3).accessible_name(tl!("Resolution"));
+            (f64::from(shown) * CM, resp.changed())
+        } else {
+            let mut r = stored as f32;
+            let resp = crate::widgets::value_field(ui, &mut r, 1.0..=30000.0, "", 90.0).accessible_name(tl!("Resolution"));
+            (f64::from(r), resp.changed())
+        };
+        if changed && typed.is_finite() {
+            let r = typed.clamp(1.0, 30000.0);
             if !resampling {
                 // Without resampling the pixel count is fixed: physical size follows resolution.
                 f.insert("width".into(), json!(ow));
@@ -532,7 +547,11 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             }
             f.insert("resolution".into(), json!(r));
         }
-        ui.label(egui::RichText::new(tl!("Pixels/Inch")).color(t.text_dim).size(12.0));
+        let mut cur = if ppcm { "ppcm" } else { "ppi" }.to_string();
+        let opts = [("ppi".to_string(), tl!("Pixels/Inch")), ("ppcm".to_string(), tl!("Pixels/Centimeter"))];
+        if crate::widgets::dropdown(ui, "is-res-unit", tl!("Units"), &mut cur, &opts, 130.0) {
+            f.insert("__resUnit".into(), json!(cur));
+        }
     });
     ui.add_space(4.0);
     ui.horizontal(|ui| {
@@ -694,3 +713,7 @@ mod tests;
 #[cfg(test)]
 #[path = "image_size_resample_shortcuts_tests.rs"]
 mod image_size_resample_shortcuts_tests;
+
+#[cfg(test)]
+#[path = "image_size_resolution_unit_tests.rs"]
+mod image_size_resolution_unit_tests;
