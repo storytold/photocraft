@@ -231,6 +231,42 @@ fn vscg_pattern_shape_fill_is_not_doubled_by_a_fill_block() {
     assert_vscg_fill_is_not_doubled(d, fill, edited);
 }
 
+/// #1281: a shape saved by an earlier PhotoCraft keeps its fill in `vscg` and also in a standalone
+/// `SoCo`/`GdFl` block. After the fill is edited, PSD and PSB saves hold the edited fill in
+/// `vscg` alone: the standalone block, which would still hold the old fill, is dropped.
+#[test]
+fn vscg_shape_drops_a_stale_standalone_fill_block() {
+    let (red, blue, green) = (Color::rgb(1.0, 0.0, 0.0), Color::rgb(0.0, 0.0, 1.0), Color::rgb(0.0, 1.0, 0.0));
+    let gradient = Fill::gradient(vec![(0.0, red), (1.0, blue)], 45.0, 0.5, GradientStyle::Radial, true);
+    for (fill, edited) in [(Fill::Solid(red), Fill::Solid(blue)), (gradient, Fill::Solid(green))] {
+        let mut d = doc();
+        let mut layer = shape_layer(ShapeLayer { path: path(), fill: Some(fill.clone()), ..Default::default() });
+        layer.psd_blocks.push((*b"vscg", std::sync::Arc::new(photocraft_io::vector_map::vscg_bytes(&fill))));
+        let (key, mut stale) = photocraft_io::blocks::write_fill(&fill);
+        stale.resize(stale.len().next_multiple_of(4), 0);
+        layer.psd_blocks.push((key, std::sync::Arc::new(stale)));
+        let at = d.layers.len();
+        d.layers.push(layer);
+        let LayerContent::Shape(s) = &mut d.layers[at].content else { panic!("not a shape") };
+        s.fill = Some(edited.clone());
+        let fresh = shape_pixels(&d, &d.layers[at]);
+        let LayerContent::Shape(s) = &mut d.layers[at].content else { panic!("not a shape") };
+        s.cache = Some(fresh);
+        for psb in [false, true] {
+            let name = if psb { "x.psb" } else { "x.psd" };
+            let out = export(&d, name, &ExportOptions { force_psb: psb, ..Default::default() }).unwrap();
+            let f = craft_psd::PsdFile::from_bytes(&out.bytes).unwrap();
+            let l = f.layers().iter().find(|l| l.name() == "Shape").expect("shape record");
+            let fills: Vec<_> = l.blocks.iter().filter(|b| matches!(&b.key, b"vscg" | b"SoCo" | b"GdFl" | b"PtFl")).collect();
+            assert_eq!(fills.iter().map(|b| b.key).collect::<Vec<_>>(), vec![*b"vscg"], "{name}: {key:?}");
+            assert_eq!(photocraft_io::vector_map::fill_from_vscg(&fills[0].data).as_ref(), Some(&edited), "{name}: vscg");
+            let back = import(name, &out.bytes).unwrap().document;
+            let LayerContent::Shape(s) = &back.layers[at].content else { panic!("{name}: not a shape") };
+            assert_eq!(s.fill.as_ref(), Some(&edited), "{name}");
+        }
+    }
+}
+
 /// #6180: Appearance fill and stroke alphas survive PSD save/load, and a redraw
 /// (move/crop) uses those values instead of snapping to opaque.
 #[test]
