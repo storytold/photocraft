@@ -1091,7 +1091,7 @@ fn blending_page(ui: &mut egui::Ui, p: &mut Value, names: &[String]) {
         }
     }
     widgets::hairline(ui);
-    // Blend If: the channel, then Current Layer / Underlying Layer split sliders (Alt-drag splits).
+    // Blend If: the channel, then Current Layer / Underlying Layer split sliders (Alt-click or Alt-drag splits).
     let entries = p.get("blendIf").and_then(Value::as_array).map_or(0, Vec::len);
     if entries == 0 {
         return;
@@ -1126,7 +1126,7 @@ fn blending_page(ui: &mut egui::Ui, p: &mut Value, names: &[String]) {
                 ui.label(RichText::new(format!("{}    {}", side(q[0], q[1]), side(q[2], q[3]))).color(t.text));
             });
         });
-        if blend_if_bar(ui, ui.scope_id().with(("blendIf", key)), &mut q)
+        if blend_if_bar(ui, ui.scope_id().with(("blendIf", key, sel)), &mut q)
             && let Some(e) = p.get_mut("blendIf").and_then(|a| a.get_mut(sel))
         {
             e[key] = json!(q);
@@ -1251,8 +1251,17 @@ pub(crate) fn step_blend_drag(mode: &mut BlendDrag, q: &[u8; 4], target: u8, alt
     n
 }
 
+/// The half of the black (`pair` 0) or white (`pair` 2) handle a press at value `v` grabs: the
+/// nearer one, and when both sit at one value, the one on the pressed side.
+fn blend_half(q: &[u8; 4], pair: usize, v: u8) -> usize {
+    let (lo, hi) = (q[pair], q[pair + 1]);
+    let nearer_lo = if lo == hi { v < lo || (v == lo && pair == 2) } else { v.abs_diff(lo) <= v.abs_diff(hi) };
+    if nearer_lo { pair } else { pair + 1 }
+}
+
 /// A Blend If slider: a black-to-white ramp with a black and a white handle, each split in two
-/// halves by Alt-dragging (the layer fades between them). Returns whether `q` changed.
+/// halves by Alt-clicking or Alt-dragging (the layer fades between them). Returns whether `q`
+/// changed.
 fn blend_if_bar(ui: &mut egui::Ui, id: egui::Id, q: &mut [u8; 4]) -> bool {
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width().clamp(120.0, 320.0);
@@ -1273,33 +1282,40 @@ fn blend_if_bar(ui: &mut egui::Ui, id: egui::Id, q: &mut [u8; 4]) -> bool {
     let mut changed = false;
     let drag_key = id.with("blend_drag");
     let alt = ui.input(|i| i.modifiers.alt);
+    // Alt-click splits a handle in place (both halves at its value), as in Photoshop, so a plain
+    // drag then moves one half; Alt-click on halves that meet joins them again.
+    let split_key = id.with("blend_split");
+    let mut split: [bool; 2] = ui.data(|d| d.get_temp(split_key)).unwrap_or_default();
+    let solid = |q: &[u8; 4], split: &[bool; 2], pair: usize| q[pair] == q[pair + 1] && !split[pair / 2];
+    let nearest_pair = |x: f32, split: &[bool; 2]| {
+        let d = |pair: usize| {
+            if solid(q, split, pair) { (x - x_of(q[pair])).abs() } else { (x - (x_of(q[pair]) - 2.5)).abs().min((x - (x_of(q[pair + 1]) + 2.5)).abs()) }
+        };
+        if d(0) <= d(2) { 0 } else { 2 }
+    };
+    if resp.clicked()
+        && alt
+        && let Some(pos) = resp.interact_pointer_pos()
+    {
+        let pair = nearest_pair(pos.x, &split);
+        if q[pair] == q[pair + 1] {
+            split[pair / 2] = !split[pair / 2];
+            ui.data_mut(|d| d.insert_temp(split_key, split));
+        }
+    }
     if resp.drag_started()
         && let Some(pos) = resp.interact_pointer_pos()
     {
-        let d_black = if q[0] == q[1] { (pos.x - x_of(q[0])).abs() } else { (pos.x - (x_of(q[0]) - 2.5)).abs().min((pos.x - (x_of(q[1]) + 2.5)).abs()) };
-        let d_white = if q[2] == q[3] { (pos.x - x_of(q[2])).abs() } else { (pos.x - (x_of(q[2]) - 2.5)).abs().min((pos.x - (x_of(q[3]) + 2.5)).abs()) };
-        let mode = if d_black <= d_white {
-            if q[0] == q[1] {
-                if alt {
-                    let h = if pos.x >= x_of(q[0]) { 1 } else { 0 };
-                    BlendDrag::Split { handle: h, origin: q[0] }
-                } else {
-                    BlendDrag::Pair { pair: 0, origin_v: q[0] }
-                }
-            } else {
-                let h = if (pos.x - x_of(q[0])).abs() <= (pos.x - x_of(q[1])).abs() { 0 } else { 1 };
-                BlendDrag::Single(h)
-            }
-        } else if q[2] == q[3] {
-            if alt {
-                let h = if pos.x <= x_of(q[2]) { 2 } else { 3 };
-                BlendDrag::Split { handle: h, origin: q[2] }
-            } else {
-                BlendDrag::Pair { pair: 2, origin_v: q[2] }
-            }
+        // The handle is the one pressed: a drag only starts some way off it, maybe across a split.
+        let press = ui.input(|i| i.pointer.press_origin()).unwrap_or(pos);
+        let pair = nearest_pair(press.x, &split);
+        let mode = if !solid(q, &split, pair) {
+            BlendDrag::Single(blend_half(q, pair, v_of(press.x)))
+        } else if alt {
+            let h = if pair == 0 { usize::from(pos.x >= x_of(q[0])) } else { 2 + usize::from(pos.x > x_of(q[2])) };
+            BlendDrag::Split { handle: h, origin: q[pair] }
         } else {
-            let h = if (pos.x - x_of(q[2])).abs() <= (pos.x - x_of(q[3])).abs() { 2 } else { 3 };
-            BlendDrag::Single(h)
+            BlendDrag::Pair { pair, origin_v: q[pair] }
         };
         ui.data_mut(|d| d.insert_temp(drag_key, mode));
     }
@@ -1328,7 +1344,7 @@ fn blend_if_bar(ui: &mut egui::Ui, id: egui::Id, q: &mut [u8; 4]) -> bool {
     let light = Color32::from_gray(240);
     for (pair, fill) in [(0usize, dark), (2, light)] {
         let (a, b) = (q[pair], q[pair + 1]);
-        if a == b {
+        if solid(q, &split, pair) {
             tri(x_of(a), 0, fill);
         } else {
             tri(x_of(a), -1, fill);
