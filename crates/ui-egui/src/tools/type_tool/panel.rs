@@ -236,11 +236,28 @@ pub fn character_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bo
     type_sections(app, ui, !paragraph, paragraph, true);
 }
 
+/// Whether a background job re-rendering type holds the shared font engine, such as Free
+/// Transform of a storyboard folder full of type layers (each layer re-rendered with the engine
+/// held). The panels' fields read fonts through the same engine, and waiting for it froze the
+/// window for the whole job (14 s), long enough for Wayland to drop it. Other holds are short:
+/// the fields' reads wait them out (`fonts::engine_unless_busy`).
+fn font_engine_busy() -> bool {
+    // Checked every frame: unless a job holds the engine, it doesn't even try the lock.
+    photocraft_text::background_holds_shared()
+        && photocraft_text::try_shared().is_some_and(|m| matches!(m.try_lock(), Err(std::sync::TryLockError::WouldBlock)))
+}
+
 /// The Character and/or Paragraph sections, with the shared collapsible headers and fields that
 /// fill the panel width (#155).
 fn type_sections(app: &mut PhotocraftApp, ui: &mut egui::Ui, character: bool, paragraph: bool, show_defaults: bool) {
     use crate::props_layout::{COL_GAP, LABEL_GAP, LABEL_W, field_width, section};
     use crate::theme::ROW_GAP;
+    if font_engine_busy() {
+        // Back as soon as the engine is free; the fields need it to draw.
+        ui.spinner();
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+        return;
+    }
     let Some((c, para)) = styles_at(app).or_else(|| show_defaults.then(|| default_styles(app))) else { return };
     // Preferences ▸ Units & Rulers ▸ Type, as in the options bar: the model keeps points.
     let (u, unit) = type_unit(app);

@@ -191,6 +191,77 @@ pub fn try_shared() -> Option<&'static std::sync::Mutex<TextEngine>> {
     SHARED.try_get(new_shared, uses_system_fonts())
 }
 
+thread_local! {
+    /// This thread runs a background job ([`background_thread`]).
+    static BACKGROUND: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+/// How many background jobs hold [`shared`] through [`lock_shared`], or are waiting for it.
+static BACKGROUND_HOLDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Marks the calling thread as a background job's until the returned value is dropped. While
+/// such a thread holds [`shared`] through [`lock_shared`] (re-rendering type, say),
+/// [`background_holds_shared`] is true, so code drawn every UI frame can skip what needs the
+/// engine instead of waiting for the job.
+pub fn background_thread() -> BackgroundThread {
+    BackgroundThread { was: BACKGROUND.with(|b| b.replace(true)) }
+}
+
+/// See [`background_thread`]: puts the thread back as it was when dropped.
+#[must_use = "the thread is a background job's only while this is alive"]
+pub struct BackgroundThread {
+    was: bool,
+}
+
+impl Drop for BackgroundThread {
+    fn drop(&mut self) {
+        BACKGROUND.with(|b| b.set(self.was));
+    }
+}
+
+/// Whether a background job ([`background_thread`]) holds [`shared`] through [`lock_shared`], or
+/// is waiting to. Never true on the web, which runs jobs on its one thread.
+pub fn background_holds_shared() -> bool {
+    BACKGROUND_HOLDS.load(std::sync::atomic::Ordering::SeqCst) > 0
+}
+
+/// [`shared`] locked. On a background job's thread this counts for [`background_holds_shared`]
+/// from before it waits for the lock until the guard is dropped. Use it where a job holds the
+/// engine for long, such as rendering a type layer.
+pub fn lock_shared() -> SharedGuard {
+    let background = BACKGROUND.with(std::cell::Cell::get);
+    if background {
+        BACKGROUND_HOLDS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+    SharedGuard { engine: shared().lock().unwrap_or_else(std::sync::PoisonError::into_inner), background }
+}
+
+/// [`shared`] locked by [`lock_shared`].
+pub struct SharedGuard {
+    engine: std::sync::MutexGuard<'static, TextEngine>,
+    background: bool,
+}
+
+impl std::ops::Deref for SharedGuard {
+    type Target = TextEngine;
+    fn deref(&self) -> &TextEngine {
+        &self.engine
+    }
+}
+
+impl std::ops::DerefMut for SharedGuard {
+    fn deref_mut(&mut self) -> &mut TextEngine {
+        &mut self.engine
+    }
+}
+
+impl Drop for SharedGuard {
+    fn drop(&mut self) {
+        if self.background {
+            BACKGROUND_HOLDS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+}
+
 /// Preferences › Type › Enable Missing Glyph Protection for [`shared`]: 0 = not set yet,
 /// 1 = off, 2 = on. Read under the engine's lock, so the newest setting always wins.
 static WANT_GLYPH_PROTECTION: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);

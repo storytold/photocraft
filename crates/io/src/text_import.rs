@@ -121,7 +121,8 @@ pub(crate) fn prepare_within(
     }
     let dpi = doc.resolution_dpi;
     let format = doc.pixel_format();
-    let mut eng = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
+    // Tracked: an Open on a background job renders type here, and the panels skip font reads meanwhile.
+    let mut eng = photocraft_text::lock_shared();
     let mut skipped = 0;
     visit(&mut doc.layers, &mut eng, dpi, format, txt2, budget, ctl, &mut skipped)?;
     Ok(skipped)

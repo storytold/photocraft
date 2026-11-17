@@ -131,18 +131,28 @@ pub(super) fn default_styles(app: &PhotocraftApp) -> (photocraft_doc::text::Char
     let (mut c, mut para) = app.session.type_defaults.clone().unwrap_or_default();
     let mut p = default_style_params(app);
     // The saved panels can appear on the very first frame. Style parsing resolves the named
-    // font through shared(), which waits for the font scan; display the saved names meanwhile,
-    // and let fonts_ready/axis_sliders expose the font controls when try_shared is ready.
-    if photocraft_text::try_shared().is_none() {
-        c.font_family = app.ui.tool_options.type_font.clone();
-        c.font_style = app.ui.tool_options.type_style.clone();
-        c.postscript_name = None;
-        if let Some(p) = p.as_object_mut() {
-            p.remove("font");
-            p.remove("fontStyle");
+    // font through the font engine, which waits for the font scan; display the saved names
+    // meanwhile, and let fonts_ready/axis_sliders expose the font controls when try_shared is
+    // ready. The same while a background job holds the engine (re-rendering type): resolving the
+    // font would wait for the job, so the saved names stand in and the other defaults still
+    // apply. The engine is taken once, before the lookups, so a job that starts meanwhile can't
+    // make them wait.
+    let mut engine = photocraft_text::try_shared().and_then(|_| super::fonts::engine_unless_busy());
+    let fonts = match engine.as_deref_mut() {
+        Some(engine) => photocraft_engine::type_cmds::FontLookup::Held(engine),
+        None => {
+            c.font_family = app.ui.tool_options.type_font.clone();
+            c.font_style = app.ui.tool_options.type_style.clone();
+            c.postscript_name = None;
+            if let Some(p) = p.as_object_mut() {
+                p.remove("font");
+                p.remove("fontStyle");
+            }
+            photocraft_engine::type_cmds::FontLookup::Skip
         }
-    }
-    photocraft_engine::type_cmds::apply_char_props(&mut c, &p);
+    };
+    photocraft_engine::type_cmds::apply_char_props_with(&mut c, &p, fonts);
+    drop(engine);
     photocraft_engine::type_cmds::apply_para_props(&mut para, &p);
     (c, para)
 }

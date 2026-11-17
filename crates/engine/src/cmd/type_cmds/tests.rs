@@ -1052,3 +1052,37 @@ fn apply_box_clamps_sizes_to_a_finite_minimum_and_maximum() {
     apply_box(&mut t, [0.0, 0.0, -20.0, 0.25]);
     assert_eq!(box_size(&t), (1.0, 1.0));
 }
+
+/// Code drawn every UI frame resolves font names without waiting for the shared font engine:
+/// with [`FontLookup::Skip`] the names stay as given, and with [`FontLookup::Held`] the engine the
+/// caller holds is used, never locked again. Run where another thread holds the engine, so a
+/// lookup that locked it would time out instead of passing.
+#[test]
+fn style_params_resolve_fonts_without_waiting_for_the_shared_engine() {
+    let props = json!({"font": "Nowhere Sans", "weight": 700, "italic": true, "size": 30});
+    let held = photocraft_text::shared().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let p = props.clone();
+    std::thread::spawn(move || {
+        let mut s = CharStyle::default();
+        let any = apply_char_props_with(&mut s, &p, FontLookup::Skip);
+        let _ = tx.send((any, s));
+    });
+    let skipped = rx.recv_timeout(std::time::Duration::from_secs(20));
+    drop(held);
+    let (any, s) = skipped.expect("Skip waited for the font engine");
+    assert!(any);
+    assert_eq!((s.font_family.as_str(), s.weight, s.italic, s.size_pt), ("Nowhere Sans", 700, true, 30.0));
+    assert_eq!(s.postscript_name, None, "no face looked up");
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut engine = photocraft_text::shared().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut s = CharStyle::default();
+        let any = apply_char_props_with(&mut s, &props, FontLookup::Held(&mut engine));
+        let _ = tx.send((any, s));
+    });
+    let (any, s) = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("Held locked the font engine again");
+    assert!(any);
+    assert_eq!((s.font_family.as_str(), s.weight, s.italic), ("Nowhere Sans", 700, true));
+}
