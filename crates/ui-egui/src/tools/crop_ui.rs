@@ -1183,6 +1183,16 @@ fn finish_frame(app: &mut PhotocraftApp, drag: CropDrag) {
     }
 }
 
+/// Drop an in-progress crop drag without committing it, restoring the frame it started from.
+pub fn abort_drag(app: &mut PhotocraftApp) {
+    let Some(drag) = app.crop.drag.take() else { return };
+    match drag {
+        CropDrag::Draw { prev, .. } => app.ui.crop_rect = prev,
+        CropDrag::Move { rect, .. } | CropDrag::Resize { rect, .. } | CropDrag::MoveImage { rect, .. } => app.ui.crop_rect = Some(rect),
+        CropDrag::Rotate { from, .. } | CropDrag::TurnImage { from, .. } => app.ui.crop_angle = from,
+    }
+}
+
 /// The frame follows the pointer at `p`.
 fn update(app: &mut PhotocraftApp, p: [f64; 2], mods: Modifiers) {
     if follow_view_drag(app, p, mods) {
