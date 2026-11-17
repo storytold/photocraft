@@ -32,17 +32,34 @@ const MAX_SIDE: u16 = if cfg!(any(target_os = "windows", target_os = "macos")) {
 /// What a bitmap cursor shows. `Hand` is the Hand tool's open hand, or its fist while it drags;
 /// `Zoom` is the Zoom tool's magnifier, with a minus when it zooms out. `Outline` is a brush tip
 /// outline: closed rings of logical-point offsets from the hotspot. `Arrow` is the black arrow
-/// pointer, its tip on the hotspot.
+/// pointer, its tip on the hotspot. `SmallTip` is a tip too small for a readable outline: the tip
+/// at its real size with a crosshair around it (see [`small_tip`]).
 #[derive(Clone, Debug, PartialEq)]
 enum Shape {
     Arrow,
     Circle { radius: f32, centre: bool },
     Crosshair { length: f32, gap: f32 },
+    SmallTip { radius: f32 },
     Hand { closed: bool },
     Zoom { out: bool },
     Pipette,
     Outline { rings: Arc<[Vec<Vec2>]>, centre: bool },
 }
+
+/// Below this screen radius (points) a brush tip outline is unreadable on its own, so the cursor
+/// adds a crosshair around it ([`small_tip`]).
+pub(crate) const SMALL_TIP_RADIUS: f32 = 3.0;
+
+/// The clear space (points) between a small tip's edge and its crosshair arms. Wide enough that
+/// a fully transparent pixel separates the tip's outline from the arms' at every display scale,
+/// so the arms never cover the tip they point at.
+pub(crate) const SMALL_TIP_CLEARANCE: f32 = 5.0;
+
+/// The length (points) of each arm of a small tip's crosshair.
+pub(crate) const SMALL_TIP_ARM: f32 = 5.0;
+
+/// The smallest radius (points) a small tip is drawn at: a dot, so a one-pixel tip still shows.
+const SMALL_TIP_DOT: f32 = 0.5;
 
 /// The visible canvas crosshair used by the Gradient tool and other standard crosshair tools.
 const STANDARD_CROSSHAIR: Shape = Shape::Crosshair { length: 8.0, gap: 2.0 };
@@ -163,6 +180,26 @@ pub(crate) fn circle(painter: &Painter, at: Pos2, radius: f32, centre: bool) -> 
 
 pub(crate) fn crosshair(painter: &Painter, at: Pos2, length: f32, gap: f32) -> CursorIcon {
     show(painter, at, Shape::Crosshair { length, gap })
+}
+
+/// A brush tip whose outline reaches `radius` points from its centre on screen, too small to read
+/// alone (below [`SMALL_TIP_RADIUS`]), as Photoshop draws one: the tip as a circle at its real size (a
+/// dot at the least) with a crosshair around it whose arms stop [`SMALL_TIP_CLEARANCE`] short of
+/// the tip, so they show where it is without hiding how big it is (#13602).
+pub(crate) fn small_tip(painter: &Painter, at: Pos2, radius: f32) -> CursorIcon {
+    show(painter, at, Shape::SmallTip { radius: small_tip_radius(radius) })
+}
+
+/// The radius a small tip is drawn at: its own, from a dot up to [`SMALL_TIP_RADIUS`].
+fn small_tip_radius(radius: f32) -> f32 {
+    if radius.is_finite() { radius.clamp(SMALL_TIP_DOT, SMALL_TIP_RADIUS) } else { SMALL_TIP_DOT }
+}
+
+/// The gap and length of the crosshair arms around a tip outline reaching `radius` points from
+/// the hotspot: they start [`SMALL_TIP_CLEARANCE`] beyond it and run [`SMALL_TIP_ARM`] long.
+pub(crate) fn small_tip_arms(radius: f32) -> (f32, f32) {
+    let gap = radius + SMALL_TIP_CLEARANCE;
+    (gap, gap + SMALL_TIP_ARM)
 }
 
 /// The Perspective Crop's pointer for what a press at `at` does (#11974): with no quad a small
@@ -657,6 +694,11 @@ fn paint(painter: &Painter, at: Pos2, shape: &Shape) -> bool {
                 }
             }
             Shape::Crosshair { length, gap } => paint_crosshair(painter, at, *length, *gap, stroke),
+            Shape::SmallTip { radius } => {
+                painter.circle_stroke(at, *radius, stroke);
+                let (gap, length) = small_tip_arms(*radius);
+                paint_crosshair(painter, at, length, gap, stroke);
+            }
             Shape::Outline { rings, centre } => {
                 for ring in rings.iter() {
                     if ring.len() >= 2 {
@@ -702,6 +744,12 @@ fn extent(shape: &Shape) -> Option<f32> {
             }
             *length
         }
+        Shape::SmallTip { radius } => {
+            if !radius.is_finite() || *radius <= 0.0 {
+                return None;
+            }
+            small_tip_arms(*radius).1
+        }
         Shape::Outline { rings, centre } => {
             let mut e = 0.0f32;
             for ring in rings.iter() {
@@ -746,6 +794,11 @@ fn coverage(shape: &Shape, dx: f32, dy: f32, scale: f32) -> (f32, f32) {
             stroke_coverage(distance, scale)
         }
         Shape::Crosshair { length, gap } => stroke_coverage(cross_distance(x, y, length * scale, gap * scale), scale),
+        Shape::SmallTip { radius } => {
+            let (gap, length) = small_tip_arms(*radius);
+            let ring = (x.hypot(y) - radius * scale).abs();
+            stroke_coverage(ring.min(cross_distance(x, y, length * scale, gap * scale)), scale)
+        }
         Shape::Outline { rings, centre } => {
             let (lx, ly) = (dx / scale, dy / scale);
             let mut distance = f32::INFINITY;
