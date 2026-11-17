@@ -47,6 +47,27 @@ fn range(black: [u8; 2], white: [u8; 2]) -> BlendRange {
 }
 
 #[test]
+fn eight_bit_weight_counts_both_ends_of_a_split_point() {
+    // Black side (v − low + 1) / (high − low + 1): 0 only below the low half.
+    let black = range([68, 136], [255, 255]);
+    assert_eq!(black.weight_8bit(67.0), 0.0);
+    assert_eq!(black.weight_8bit(68.0), 1.0 / 69.0);
+    assert_eq!(black.weight_8bit(85.0), 18.0 / 69.0);
+    assert_eq!(black.weight_8bit(136.0), 1.0);
+    // White side (high − v + 1) / (high − low + 1): 0 only above the high half.
+    let white = range([0, 0], [140, 160]);
+    assert_eq!(white.weight_8bit(140.0), 1.0);
+    assert_eq!(white.weight_8bit(152.0), 9.0 / 21.0);
+    assert_eq!(white.weight_8bit(160.0), 1.0 / 21.0);
+    assert_eq!(white.weight_8bit(161.0), 0.0);
+    // Deep documents keep (v − low) / (high − low), and unsplit points are hard either way.
+    assert_eq!(white.weight(152.0), 0.4);
+    assert_eq!(black.weight(68.0), 0.0);
+    let hard = range([152, 152], [152, 152]);
+    assert_eq!([hard.weight_8bit(151.0), hard.weight_8bit(152.0), hard.weight_8bit(153.0)], [0.0, 1.0, 0.0]);
+}
+
+#[test]
 fn split_this_layer_white_point_fades_with_both_ends_inclusive() {
     // Top's Gray is 152: alpha (160 − 152 + 1) / (160 − 140 + 1) = 9/21, not (160 − 152) / 20.
     let d = band_doc(SampleType::U8, range([0, 0], [140, 160]), BlendRange::FULL);
