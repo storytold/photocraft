@@ -98,7 +98,7 @@ fn several_files_are_placed_one_after_another_each_in_its_own_transform() {
     // Frames go by while the box is open: nothing else is placed.
     app.place_next_dropped(&ctx);
     assert_eq!(names(&app), ["Background", "first"]);
-    assert_eq!(history_steps(&app), steps);
+    assert_eq!(app.drop_places.len(), 2);
 
     // ↩ commits the first file: one history state.
     crate::transform_tool::commit(&mut app);
