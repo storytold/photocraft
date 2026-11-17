@@ -49,7 +49,9 @@ fn original_xml_guards_run_before_repair_or_conversion() {
         write!(attributes, " a{index}='x'").unwrap();
     }
     let rejected = format!("{opening}<g{attributes}>{image}</g></svg>");
-    let error = svg::parse_with(rejected.as_bytes(), empty_fonts).err().expect("original attribute limits must apply before URL repair");
+    let Err(error) = svg::parse_with(rejected.as_bytes(), empty_fonts) else {
+        panic!("original attribute limits must apply before URL repair");
+    };
     assert!(error.to_string().contains("attribute"), "{error}");
 
     let accepted = format!(
