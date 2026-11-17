@@ -536,6 +536,32 @@ fn assert_native_browser_redownload(
     assert_eq!(first_native_bytes, bytes);
 }
 
+/// Complete this browser Open through the ordinary job lifecycle before inspecting Save identity.
+fn finish_browser_open(app: &mut PhotocraftApp, name: &str, writes: &RefCell<Vec<(String, Vec<u8>)>>) {
+    // Wrapped bytes intentionally open on a worker even with the general inline
+    // preference. Exercise the normal completion path before testing Save identity.
+    let pending_job = app.jobs.opens.first().map(|tab| tab.job);
+    if pending_job.is_some() {
+        assert_eq!(app.jobs.opens.len(), 1, "{name}: exactly this Open is pending");
+        assert!(app.session.documents().is_empty(), "{name}: pending Open must not publish early");
+        assert!(writes.borrow().is_empty(), "{name}: opening never invokes the download writer");
+    }
+    let ctx = egui::Context::default();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !app.jobs.opens.is_empty() {
+        crate::jobs_ui::tick(app, &ctx);
+        assert!(std::time::Instant::now() < deadline, "{name}: Open did not complete: {}", app.ui.status);
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(!app.ui.status_error, "{name}: Open failed: {}", app.ui.status);
+    assert!(app.held_opens.is_empty() && app.historical_opens.is_empty(), "{name}: no unanswered Open prompt remains");
+    if let Some(pending_job) = pending_job {
+        assert!(app.session.jobs_with_recent().iter().any(|job| job.id == pending_job && job.state == "done"), "{name}: tracked Open completed successfully");
+    }
+    assert_eq!(app.session.documents().len(), 1, "{name}: completed Open must admit its document: {}", app.ui.status);
+    assert!(writes.borrow().is_empty(), "{name}: no download before Save As");
+}
+
 /// Exercise one decoded transport through unconfirmed native downloads, confirmed Save As, and source-free browser reopen.
 fn assert_xcf_browser_download_route(name: &str, input: Vec<u8>) {
     let original = input.clone();
@@ -558,6 +584,7 @@ fn assert_xcf_browser_download_route(name: &str, input: Vec<u8>) {
     );
     app.session.color.settings.ask_on_missing = false;
     app.open_bytes(name, &input).unwrap();
+    finish_browser_open(&mut app, name, &writes);
     assert!(app.session.active().unwrap().source_read_only);
     let report = app.session.active().unwrap().doc.metadata.import_conversion.clone();
     assert!(report.is_some());

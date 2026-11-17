@@ -45,10 +45,17 @@ fn queued_invalid_initial_view_is_visible_and_preserves_existing_documents() {
     assert!(app.held_opens.is_empty());
     assert_eq!(app.session.active_index(), Some(2));
     assert_eq!(app.session.documents().iter().take(2).map(|state| state.doc.clone()).collect::<Vec<_>>(), before);
-    assert!(!app.ui.status_error);
+    // Ordinary IO warnings use the attention status style, while their notices
+    // remain non-errors: retaining admitted pixels must still expose the warning.
+    assert!(app.ui.status_error);
     assert!(app.ui.status.contains("invalid-view.xcf"));
+    assert!(app.ui.status.contains("Native initial view was not applied"));
+    assert!(app.ui.notices.iter().all(|notice| !notice.error));
     assert!(app.session.active().unwrap().source_read_only);
     assert!(app.session.active().unwrap().color_samplers.is_empty());
+    let admitted = app.session.active().unwrap();
+    assert_eq!(admitted.doc.layers[0].surface().unwrap().read_region(admitted.doc.bounds()), vec![1.; 16]);
+    assert_eq!(admitted.history.past_len(), 0);
     assert_eq!(
         app.ui.notices.iter().filter(|notice| notice.title.contains("invalid-view.xcf") && notice.lines.iter().any(|line| line.contains("sampler"))).count(),
         1
