@@ -215,3 +215,25 @@ fn damaged_remembered_settings_are_skipped_without_a_panic() {
     assert!(result.get("failed").is_some(), "{result}");
     assert_eq!(s.active().unwrap().doc, before);
 }
+
+#[test]
+fn folder_batch_plays_an_empty_step_with_the_remembered_settings() {
+    let dir = tempfile::tempdir().unwrap();
+    let join = |name: &str| dir.path().join(name).to_string_lossy().into_owned();
+    let mut source = session();
+    source.execute("file.saveACopy", json!({"path": join("in.png")})).unwrap();
+    let steps = json!([["select.rect", {"x":3,"y":3,"width":2,"height":2}], [CMD, {MARK: true}]]);
+    // The layer count of each output: Current Layer fills the background, New Layer adds one.
+    let layers = |s: &mut Session, out: &str| {
+        let result = s.execute("file.automate.batch", json!({"input":[join("in.png")],"output":join(out),"format":"psd","steps":steps})).unwrap();
+        assert!(result["errors"].as_array().unwrap().is_empty(), "{result}");
+        let bytes = std::fs::read(dir.path().join(out).join("in.psd")).unwrap();
+        photocraft_io::import("in.psd", &bytes).unwrap().document.layers.len()
+    };
+    let mut s = Session::new();
+    assert_eq!(layers(&mut s, "default"), 2, "nothing remembered: a new layer");
+    remember(&mut s, json!({"output":"current"}));
+    assert_eq!(layers(&mut s, "remembered"), 1, "the remembered Current Layer");
+    // Playing in Batch remembers nothing in the caller either.
+    assert_eq!(s.prefs().dialogs.get(CAF_WORKSPACE_PREFS), Some(&json!({"output":"current"})));
+}
