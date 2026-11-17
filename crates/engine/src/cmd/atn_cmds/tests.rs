@@ -4981,9 +4981,11 @@ fn playing_a_recorded_set_background_step_reveals_a_hidden_background() {
     let bg = s.active().unwrap().doc.background().unwrap().id;
     s.execute("layer.setProps", json!({"layer": bg.0, "visible": false})).unwrap();
     assert!(!s.active().unwrap().doc.layer(bg).unwrap().visible, "the Background is hidden");
-    for (id, p) in steps {
-        s.execute(id, p.clone()).unwrap();
-    }
+    // Replays the mapped steps with `Session::execute`, as the sibling playback tests do. Only the
+    // first step runs, so the reveal comes from `layer.new.layerFromBackground` itself and not
+    // from a later `layer.setProps`.
+    let (id, p) = &steps[0];
+    s.execute(id, p.clone()).unwrap();
     let doc = &s.active().unwrap().doc;
     assert!(doc.background().is_none(), "the Background was converted");
     assert!(doc.layer(bg).unwrap().visible, "playing the step revealed it");
