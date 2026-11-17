@@ -6,7 +6,7 @@ use super::*;
 
 /// One colour per 5x5 block of a 700x300 scene, hashed from the block, over a horizontal ramp.
 fn scene_pixel(x: usize, y: usize) -> [f32; 4] {
-    let h = ((x / 5) as u64 * 73_856_093 ^ (y / 5) as u64 * 19_349_663).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    let h = (((x / 5) as u64 * 73_856_093) ^ ((y / 5) as u64 * 19_349_663)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     let c = |shift: u32| ((h >> shift) & 0xff) as f32 / 255.0;
     [0.5 * c(8) + 0.5 * x as f32 / 700.0, c(24), c(40), 1.0]
 }
@@ -65,10 +65,10 @@ fn blend_on_is_one_auto_blend_layers_step_targeting_every_source() {
         assert_eq!(merge(&mut s, json!({"layout": layout})), ["Auto-Blend Layers"], "{layout}");
         assert_eq!(stack(&s), expect(&SOURCES, true), "{layout}");
         assert_eq!(targeted(&s), SOURCES, "{layout}: every source layer is targeted");
-        let st = s.active().unwrap();
-        assert_eq!(st.active_layer, st.doc.top_layer(), "{layout}: the top layer stays the key layer");
         let inspect = s.execute("document.inspect", json!({})).unwrap();
         assert_eq!(inspect["selectedLayers"].as_array().map(Vec::len), Some(3), "{layout}: {inspect}");
+        let st = s.active().unwrap();
+        assert_eq!(st.active_layer, st.doc.top_layer(), "{layout}: the top layer stays the key layer");
         // The first snapshot stays, named after the document.
         assert_eq!(st.snapshots.len(), 1, "{layout}");
         assert_eq!(st.snapshots[0].name, st.doc.name, "{layout}");
@@ -102,9 +102,9 @@ fn blend_off_is_one_move_step_targeting_only_the_bottom_layer() {
     assert_eq!(merge(&mut s, json!({"layout": "reposition", "blend": false})), ["Move"]);
     assert_eq!(stack(&s), expect(&SOURCES, false));
     assert_eq!(targeted(&s), ["t3.tif"], "only the last source, the bottom layer");
+    let inspect = s.execute("document.inspect", json!({})).unwrap();
     let st = s.active().unwrap();
     assert_eq!(st.active_layer, st.doc.layers.first().map(|l| l.id));
-    let inspect = s.execute("document.inspect", json!({})).unwrap();
     assert_eq!(inspect["selectedLayers"], json!([st.doc.layers[0].id.0]), "{inspect}");
     assert_eq!(inspect["activeLayer"], json!(st.doc.layers[0].id.0), "{inspect}");
 }
