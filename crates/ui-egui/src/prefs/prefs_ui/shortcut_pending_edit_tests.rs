@@ -406,23 +406,15 @@ fn ok_at_capacity_says_the_pending_key_was_not_taken() {
     // Plain letters under ⌘⌥⇧, valid on every platform (the F keys under ⌘⌥ are reserved on some).
     let full: Vec<String> = ('A'..='Z').filter(|c| *c != 'Y').take(photocraft_engine::prefs::MAX_ALTERNATES).map(|c| format!("Cmd+Alt+Shift+{c}")).collect();
     h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("alternates".into(), json!({ "edit.cut": full }));
-    // Eight further keys make the dialog taller than the default window with the fonts of some platforms, which leaves OK
-    // out of view: a tall window keeps it clickable everywhere.
-    h.set_size(egui::vec2(1100.0, 1800.0));
     h.run_steps(3);
     click(&mut h, "Add Shortcut");
     press(&mut h, FREE.0, FREE.1);
     assert_eq!(field(&h, id, super::PENDING), json!(FREE_TEXT));
-    h.get_by_role_and_label(egui::accesskit::Role::Button, "OK").click();
-    h.run_steps(4);
-    assert!(
-        !open(&h, id),
-        "OK closed the dialog: status {:?}, error {}, alternates {:?}, pending {:?}",
-        h.state().ui.status,
-        h.state().ui.status_error,
-        field(&h, id, "alternates"),
-        field(&h, id, super::PENDING)
-    );
+    // OK is the dialog's confirm; calling it keeps the test independent of where the platform's fonts put the button
+    // in a dialog with eight further keys.
+    let saved = crate::dialogs::confirm(h.state_mut(), id);
+    assert!(saved.is_ok(), "OK failed: {saved:?}");
+    assert!(!open(&h, id), "OK closes the dialog");
     assert_eq!(h.state().ui.status, "This command can't take another shortcut; the key stays where it is.");
     assert!(h.state().ui.status_error);
     let keys = h.state().session.prefs().alternates("edit.cut", Some("Cmd+X"));
