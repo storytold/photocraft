@@ -128,7 +128,7 @@ fn duplicated_last_document_state_restores_the_copied_layout() {
 }
 
 #[test]
-fn merged_only_duplicate_does_not_carry_comps_for_removed_source_layers() {
+fn merged_only_duplicate_keeps_comps_but_not_the_saved_layout() {
     let (mut s, source) = scene();
     s.execute("layerComp.new", json!({"name": "Original"})).unwrap();
     s.execute("layer.setProps", json!({"layer": source.0, "visible": false})).unwrap();
@@ -138,10 +138,12 @@ fn merged_only_duplicate_does_not_carry_comps_for_removed_source_layers() {
     s.execute("image.duplicate", json!({"mergedOnly": true})).unwrap();
     let d = &s.active().unwrap().doc;
     assert_eq!(d.layers.len(), 1, "merged-only copy is a single composite layer");
-    assert!(d.layer_comps.is_empty(), "old comps cannot address discarded layers");
+    // As the reference application (#14598): the comps come along; their layers are missing.
+    assert_eq!(d.layer_comps.len(), 1, "the merged copy keeps the source's comps");
+    assert_eq!(d.layer_comps[0].name, "Original");
     assert_eq!(d.last_applied_comp, None);
     assert!(d.last_document_state.is_none(), "no stale saved layout on a flattened copy");
-    assert!(!s.is_enabled("layerComp.apply"));
+    assert!(s.is_enabled("layerComp.apply"));
 
     s.set_active(0);
     assert_eq!(s.active().unwrap().doc.layer_comps.len(), 1, "original comps are preserved");
