@@ -337,6 +337,8 @@ fn exportable_layers(doc: &Document, ids: &[photocraft_doc::LayerId]) -> Result<
 }
 
 #[cfg(test)]
+mod artboard_export_area_tests;
+#[cfg(test)]
 mod layer_empty_skip_tests;
 #[cfg(test)]
 mod layer_folder_export_tests;
