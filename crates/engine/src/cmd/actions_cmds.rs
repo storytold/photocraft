@@ -7,20 +7,29 @@
 //! `edit.transform.againCopy`) into an action. A replayable command's journal entry replaces the
 //! entries of the commands it ran on its own behalf, so they are recorded once (#3067). Playback
 //! runs those steps with [`Session::execute`] and stops at the first error, leaving one history
-//! step per step that ran. Steps switched off with `actions.toggle` (the Actions panel check
-//! marks) are skipped by playback, Batch and droplets.
+//! entry for the whole play by default (`actions.setHistory` opts into per-step history).
+//! Steps switched off with `actions.toggle` (the Actions panel check marks) are skipped by
+//! playback, Batch and droplets.
 //!
 //! An untrusted session installs [`Session::authorize`]. `actions.play` calls it for every nested
 //! step, because the outer `actions.play` id would otherwise hide a recorded `file.*` command from
 //! the top-level check.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
+
+mod history;
+mod identity;
+pub(crate) use history::ActionHistory;
+pub use history::{ActionHistoryContinuation, finish_pending_history, suspend_history};
+pub(crate) use history::{before_edit as before_action_edit, begin_document_history, finish_document_history, history_rows, reconcile_history_removal};
+pub use identity::{action_shortcut, action_shortcuts, commit_action_id, is_action_key, occurrence_key, playback_row, prepare_action_id, shortcut_row};
+pub(crate) use identity::{has_legacy_shortcut, invalidate_duplicate_ids, remove_shortcuts, resolve_action_id, valid_action_id};
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
@@ -31,6 +40,12 @@ fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Action {
     pub name: String,
+    /// Stable identity for occurrence shortcuts and stored calls. Legacy rows have no ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_id: Option<String>,
+    /// Resolves a legacy shortcut to its original row even after a same-name row comes first.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub legacy_shortcut_owner: bool,
     #[serde(default)]
     pub steps: Vec<(String, Value)>,
     /// Indices of steps excluded from playback (unchecked in the Actions panel).
@@ -45,17 +60,78 @@ pub struct Action {
     /// filled by Load Actions (`actions.load`) and written by Save Actions (`actions.save`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub set: Option<String>,
+    /// Index of an explicit folder occurrence in the Actions library.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub set_slot: Option<usize>,
     /// Button Mode colour. Empty is none; otherwise one of [`BUTTON_COLORS`].
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub color: String,
+    /// Written by automation: loaded, recorded, or had its steps edited while
+    /// [`Session::authorize`] was installed (a control, MCP or synthetic-input request).
+    /// Playback keeps automation's gate ([`Session::automation_gate`]) for it even when the user
+    /// starts it (a key, the Actions panel), so a client confined to its automation roots
+    /// can't plant steps that later run with the user's file access. Batch and droplets copy
+    /// steps instead of the action, so they do not keep the gate yet.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub automation: bool,
+}
+
+/// Mark action `idx` as written by automation when an automation gate is installed.
+pub(crate) fn note_automation_edit(s: &mut Session, idx: usize) {
+    if s.authorize.is_some()
+        && let Some(action) = s.actions.list.get_mut(idx)
+    {
+        action.automation = true;
+    }
+}
+
+/// Mark the action being recorded as automation's when `id` (with `params`) becomes one of its
+/// steps while an automation gate is installed: a step a control client, MCP or synthetic input
+/// runs during the user's recording keeps automation's gate when the action plays.
+pub fn note_automation_step(s: &mut Session, id: &str, params: &Value) {
+    note_step_origin(s, s.authorize.is_some(), id, params);
+}
+
+/// Mark the action being recorded as automation's when `id` (with `params`) becomes one of its
+/// steps on behalf of a request that ran under an automation gate (`automation`). A background
+/// job's step is journaled when the job is applied, after its request returned and its gate was
+/// removed, so the job passes the origin it captured when it was admitted rather than whatever
+/// gate the caller polling it has.
+pub(crate) fn note_step_origin(s: &mut Session, automation: bool, id: &str, params: &Value) {
+    if automation
+        && recorded(id, params)
+        && let Some((_, idx)) = s.actions.recording
+        && let Some(action) = s.actions.list.get_mut(idx)
+    {
+        action.automation = true;
+    }
+}
+
+/// The gate to install while `action` plays: automation's, for an action automation wrote that
+/// plays with none installed. `None` when the session's own gate (or none) applies.
+pub fn kept_gate(s: &Session, action: &Action) -> Option<fn(&str, &Value) -> Result<()>> {
+    if action.automation && s.authorize.is_none() { s.automation_gate } else { None }
 }
 
 /// Button Mode colours, in Photoshop's order. Empty is no colour.
 pub const BUTTON_COLORS: [&str; 8] = ["", "red", "orange", "yellow", "green", "blue", "violet", "gray"];
 
 impl Action {
+    /// A new action named `name` with `steps`: every step on, no dialogs, no set or colour,
+    /// and not written by automation (see [`Action::automation`]).
     pub fn new(name: impl Into<String>, steps: Vec<(String, Value)>) -> Self {
-        Self { name: name.into(), steps, disabled: BTreeSet::new(), dialogs: BTreeSet::new(), set: None, color: String::new() }
+        Self {
+            name: name.into(),
+            action_id: None,
+            legacy_shortcut_owner: false,
+            steps,
+            disabled: BTreeSet::new(),
+            dialogs: BTreeSet::new(),
+            set: None,
+            set_slot: None,
+            color: String::new(),
+            automation: false,
+        }
     }
 
     /// Apply `f` to every per-step index set (`disabled`, `dialogs`) after steps moved.
@@ -74,38 +150,102 @@ impl Action {
     }
 }
 
-/// On-disk form of [`ActionState::list`] (`actions.json` in the preset store).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// Active playback identity. Registered rows are scoped to their current library.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlaybackTarget {
+    pub name: String,
+    pub id: Option<String>,
+    pub(crate) position: Option<(usize, usize)>,
+}
+
+impl From<&Action> for PlaybackTarget {
+    fn from(action: &Action) -> Self {
+        Self { name: action.name.clone(), id: action.action_id.clone().filter(|id| identity::valid_action_id(id)), position: None }
+    }
+}
+
+impl PlaybackTarget {
+    pub(crate) fn at(s: &Session, row: usize, action: &Action) -> Self {
+        Self { position: Some((s.actions.playback_namespace, row)), ..Self::from(action) }
+    }
+
+    fn matches(&self, s: &Session, row: usize, action: &Action) -> bool {
+        match (self.id.as_deref(), action.action_id.as_deref().filter(|id| identity::valid_action_id(id))) {
+            (None, None) => self.position.map_or_else(|| self.name == action.name, |position| position == (s.actions.playback_namespace, row)),
+            (Some(left), Some(right)) => left == right && self.position.is_none_or(|(namespace, _)| namespace == s.actions.playback_namespace),
+            _ => false,
+        }
+    }
+}
+
+/// On-disk Actions library (`actions.json` in the preset store).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ActionsFile {
     pub version: u32,
     pub actions: Vec<Action>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sets: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub set_rows: Vec<String>,
 }
 
 pub const MAX_PLAYBACK_STEPS: u64 = 100_000;
 
-/// Actions list and the recording / playback flags. Only `list` is persisted.
+/// How deep batches and droplets may run inside one another (a droplet whose steps run a droplet).
+pub const MAX_BATCH_DEPTH: u8 = 4;
+
+/// Actions definitions and the live recording/playback flags.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ActionState {
     pub list: Vec<Action>,
+    /// Painting-tool strokes are recorded only when the user enables them for this session.
+    #[serde(skip)]
+    pub record_tools: bool,
     /// Journal length when recording started, and the action index being recorded into.
     #[serde(skip)]
     pub recording: Option<(usize, usize)>,
     /// Nesting depth of `actions.play`, bounded by the playback stack limit.
     #[serde(skip)]
     pub playing: u8,
-    /// Active action names, for cycle detection in engine and desktop playback.
+    /// Active action occurrences, for cycle detection in engine and desktop playback.
     #[serde(skip)]
-    pub playback_stack: Vec<String>,
+    pub playback_stack: Vec<PlaybackTarget>,
+    /// Depth of embedded Batch libraries in this synchronous playback tree.
+    #[serde(skip)]
+    pub playback_namespace: usize,
     /// Number of steps executed by the current top-level playback tree.
     #[serde(skip)]
     pub playback_steps: u64,
+    /// Set for a batch nested in a played action or another batch: the playback counter it carries
+    /// is shared by every input, so a played action inside it does not restart the count.
+    #[serde(skip)]
+    pub budget_shared: bool,
+    /// How many batches (`file.automate.batch`, and droplets through it) are running inside one
+    /// another: each runs its steps in a scratch session that carries this on, plus one.
+    #[serde(skip)]
+    pub batch_depth: u8,
     /// How many scripts (`file.scripts.browse`) are running inside one another.
     #[serde(skip)]
     pub script_depth: u8,
     /// Steps run by the current top-level script and everything it calls.
     #[serde(skip)]
     pub script_steps: u64,
+    /// Named folders made with New Set or loaded without actions through Load Actions.
+    #[serde(skip)]
+    pub sets: Vec<String>,
+    /// Ordered folder occurrences from whole-library commands, including empty and same-name rows.
+    #[serde(skip)]
+    pub set_rows: Vec<String>,
+    /// Changes when old physical folder positions may name different occurrences.
+    #[serde(skip)]
+    pub set_rows_revision: u64,
+    /// The latest destructive panel edit, separate from document History.
+    #[serde(skip)]
+    pub library_undo: Option<Box<crate::actions_edit_cmds::LibraryUndo>>,
+    /// An explicit replacement of the in-memory library before its preset store arrived.
+    #[serde(skip)]
+    pub(crate) replaced_before_attachment: bool,
     /// Bumped whenever `list` changes, so the preset store can skip unchanged writes.
     #[serde(skip)]
     pub rev: u64,
@@ -131,9 +271,38 @@ pub(crate) fn recorded_params(s: &Session, id: &str, mut p: Value) -> Value {
     p
 }
 
-/// Resolve the recorded visibility target identically in engine and shell playback.
+/// Resolve the recorded visibility target identically in engine and shell playback, and drop
+/// the `.atn` event or Custom descriptor remembered for Save Actions: the command, its journal
+/// entry (Last Filter), a smart filter and the step's dialog never see it.
 pub fn playback_params(s: &Session, id: &str, p: &Value) -> Result<Value> {
     let mut p = p.clone();
+    if id == "type.create" && (p.get("xPercent").is_some() || p.get("yPercent").is_some()) {
+        if p.get("box").is_some() || p.get("x").is_some() || p.get("y").is_some() {
+            return Err(bad(id, "recorded type position cannot mix percentages with pixel coordinates or a box"));
+        }
+        let size = s.active().ok_or(EngineError::NoDocument)?.doc.size;
+        for (percent_key, pixel_key, dimension) in [("xPercent", "x", size.width), ("yPercent", "y", size.height)] {
+            let percent = p.get(percent_key).and_then(Value::as_f64).ok_or_else(|| bad(id, format!("invalid `{percent_key}`")))?;
+            let pixel = percent / 100.0 * f64::from(dimension);
+            if !pixel.is_finite() || pixel.abs() > f64::from(f32::MAX) {
+                return Err(bad(id, format!("`{percent_key}` is outside the canvas coordinate range")));
+            }
+            if let Some(object) = p.as_object_mut() {
+                object.remove(percent_key);
+                object.insert(pixel_key.into(), json!(pixel));
+            }
+        }
+    }
+    if (id.starts_with("filter.gallery.") || id == crate::atn_cmds::MENU_ITEM)
+        && let Some(object) = p.as_object_mut()
+    {
+        object.remove(crate::atn_cmds::RECORDED_EVENT);
+    }
+    if id == "filter.other.custom"
+        && let Some(object) = p.as_object_mut()
+    {
+        object.remove("__atnCustom");
+    }
     if id == "layer.setProps"
         && let Some(target) = p.get("_actionLayer")
     {
@@ -158,6 +327,7 @@ pub fn playback_params(s: &Session, id: &str, p: &Value) -> Result<Value> {
 
 impl ActionState {
     pub(crate) fn touch(&mut self) {
+        self.library_undo = None;
         self.rev = self.rev.saturating_add(1);
     }
 }
@@ -212,6 +382,22 @@ pub fn consume_playback_step(s: &mut Session) -> bool {
         true
     }
 }
+
+/// Steps of the playback tree the next `actions.play` starts in has charged so far: a top-level
+/// call starts a new tree ([`begin_playback`] resets the counter).
+fn playback_steps_used(s: &Session) -> u64 {
+    if s.actions.playing > 0 || s.actions.budget_shared { s.actions.playback_steps } else { 0 }
+}
+
+/// Steps of `action` playback walks past without running them: the ones before `from` and the
+/// disabled ones after it. [`begin_playback`] charges them, so every stored step costs one unit
+/// of the playback budget once per call, run or not.
+fn skipped_steps(action: &Action, from: usize) -> u64 {
+    let len = action.steps.len();
+    let from = from.min(len);
+    let disabled = action.disabled.range(from..len).count();
+    u64::try_from(from.saturating_add(disabled)).unwrap_or(u64::MAX)
+}
 /// View-only menu commands recorded by the desktop shell. Headless playback reports
 /// them as unsupported instead of silently dropping them; Batch and droplets skip them.
 pub fn shell_view_command(id: &str) -> bool {
@@ -220,63 +406,219 @@ pub fn shell_view_command(id: &str) -> bool {
 
 /// Shared validation for headless and shell playback. Does not start playback.
 pub fn playback_plan(s: &Session, p: &Value) -> Result<(Action, usize)> {
+    playback_plan_at(s, p).map(|(_, action, from)| (action, from))
+}
+
+/// Resolve the row once so playback, Batch and a dialog can preserve its occurrence.
+pub fn playback_plan_at(s: &Session, p: &Value) -> Result<(usize, Action, usize)> {
     if s.actions.playing > 0 && s.actions.playback_stack.is_empty() {
         return Err(bad("actions.play", "an action is already playing"));
     }
-    let idx = resolve(&s.actions.list, p, "actions.play")?;
+    let idx = resolve_play_target(&s.actions.list, p, "actions.play")?;
+    // Every stored step of the call is charged to the playback tree (run, disabled or skipped),
+    // so refuse a call whose steps no longer fit before copying it: repeated calls to a large
+    // action would otherwise copy and walk it each time for free.
+    let len = s.actions.list.get(idx).map_or(0, |a| a.steps.len());
+    if playback_steps_used(s).saturating_add(u64::try_from(len).unwrap_or(u64::MAX)) > MAX_PLAYBACK_STEPS {
+        // A limit, not a bad parameter: an enclosing batch must fail the input instead of saving it.
+        return Err(EngineError::BatchLimit(format!("invalid parameters for `actions.play`: action playback exceeded the {MAX_PLAYBACK_STEPS}-step limit")));
+    }
     let action = s.actions.list.get(idx).cloned().ok_or_else(|| bad("actions.play", "no such action"))?;
-    if s.actions.playback_stack.iter().any(|name| name == &action.name) || s.actions.recording.is_some_and(|(_, i)| i == idx) {
+    if s.actions.playback_stack.iter().any(|target| target.matches(s, idx, &action)) || s.actions.recording.is_some_and(|(_, i)| i == idx) {
         return Err(bad("actions.play", format!("recursive action call to `{}`", action.name)));
     }
     if s.actions.playback_stack.len() >= 16 {
         return Err(bad("actions.play", "action nesting exceeds 16 levels"));
     }
     let from = from_step(p, action.steps.len())?;
-    Ok((action, from))
+    Ok((idx, action, from))
 }
 
-/// The actions that `steps` call through Play Action steps and the branches of Conditional steps,
-/// followed transitively, in list order, so a droplet can run without the Actions panel that made
-/// it (#2794, #6804). Index references in `steps` and in the copies become names, which resolve
-/// without the rest of the list. A target that doesn't resolve is left alone: it fails at
-/// playback, as it would have before.
-pub fn called_actions(list: &[Action], steps: &mut [(String, Value)]) -> Vec<Action> {
-    fn targets(list: &[Action], steps: &mut [(String, Value)], depth: usize, queue: &mut Vec<(usize, usize)>) {
-        for (id, params) in steps.iter_mut() {
-            match id.as_str() {
-                "actions.play" => {
-                    let Ok(i) = resolve(list, params, "actions.play") else { continue };
-                    if let (Some(action), Some(obj)) = (list.get(i), params.as_object_mut()) {
-                        obj.insert("action".into(), json!(action.name));
-                    }
-                    queue.push((i, depth));
+/// Visit calls in the current namespace, leaving embedded inline Batch scopes untouched.
+pub(crate) fn visit_calls(steps: &mut [(String, Value)], f: &mut impl FnMut(&str, &mut Value, bool)) {
+    let mut pending: Vec<_> = steps.iter_mut().rev().map(|(id, params)| (id.clone(), params)).collect();
+    while let Some((id, params)) = pending.pop() {
+        let scoped = id == "file.automate.batch" && params.get("calledActions").is_some_and(|v| !v.is_null());
+        if id == "file.automate.batch" {
+            let inline = if params.get("steps").is_some() { Some("steps") } else { params.get("action").is_some_and(Value::is_array).then_some("action") };
+            if let Some(key) = inline {
+                if scoped {
+                    continue;
                 }
-                // Conditional branches only take names, so there is nothing to rewrite.
-                "actions.conditional" => {
-                    for key in ["then", "else"] {
-                        let Some(name) = params.get(key).and_then(Value::as_str) else { continue };
-                        if let Some(i) = list.iter().position(|a| a.name == name) {
-                            queue.push((i, depth));
+                // A present invalid `steps` still wins over `action`, just as at runtime.
+                let Some(steps) = params.get_mut(key).and_then(Value::as_array_mut) else { continue };
+                for step in steps.iter_mut().rev() {
+                    let call = match step {
+                        Value::Array(a) => {
+                            let Some(id) = a.first().and_then(Value::as_str).map(str::to_owned) else { continue };
+                            a.get_mut(1).map(|params| (id, params))
                         }
+                        Value::Object(o) => {
+                            let Some(id) = o.get("command").or_else(|| o.get("id")).and_then(Value::as_str).map(str::to_owned) else { continue };
+                            o.get_mut("params").map(|params| (id, params))
+                        }
+                        // String steps and omitted params use `{}`, with no action target.
+                        _ => None,
+                    };
+                    if let Some(call) = call {
+                        pending.push(call);
                     }
                 }
-                _ => {}
+                continue;
             }
         }
+        f(&id, params, scoped);
     }
-    let mut queue = Vec::new();
-    targets(list, steps, 1, &mut queue);
+}
+
+/// Shift numeric selectors in the session list, including calls in unscoped inline Batch steps.
+pub(crate) fn shift_action_calls(list: &mut [Action], at: usize, count: usize) {
+    for action in list {
+        visit_calls(&mut action.steps, &mut |id, params, _| {
+            if !matches!(id, "actions.play" | "file.automate.batch") {
+                return;
+            }
+            let Some(value) = params.get("action") else { return };
+            let Some(index) = num(value).and_then(|i| usize::try_from(i).ok()) else { return };
+            if index >= at {
+                params["action"] = if let Some(fractional) = value.as_f64().filter(|_| value.is_f64()) {
+                    json!(fractional + count as f64)
+                } else {
+                    json!(index.saturating_add(count))
+                };
+            }
+        });
+    }
+}
+
+/// Capture transitive Play Action, Conditional and Batch dependencies for a standalone droplet
+/// (#2794, #6804). Ordinary references become names; normalized copies keep source-list order.
+/// A named Batch with its own action list selects an untouched source copy at an exported index,
+/// after the ordinary copies. Inline embedded bodies retain their own references. Missing
+/// targets remain deferred failures, as before.
+pub fn called_actions(list: &[Action], steps: &mut [(String, Value)]) -> Vec<Action> {
+    /// Resolve in the current namespace before capture rewrites the reference.
+    fn target(list: &[Action], params: &Value, id: &str) -> Result<usize> {
+        if id == "file.automate.batch" { crate::file_cmds::batch_action(list, params) } else { resolve_play_target(list, params, id) }
+    }
+    /// Capture ordinary calls transitively, but retain an untouched source for scoped named Batch.
+    fn targets(list: &[Action], steps: &mut [(String, Value)], depth: usize, queue: &mut VecDeque<(usize, usize)>, scoped: &mut BTreeSet<usize>) {
+        if depth > 16 {
+            return;
+        }
+        visit_calls(steps, &mut |id, params, own_actions| match id {
+            "actions.play" | "file.automate.batch" => {
+                let Ok(i) = target(list, params, id) else { return };
+                // The reference is rewritten by `remap` once the exported list is known.
+                if own_actions {
+                    scoped.insert(i);
+                } else {
+                    queue.push_back((i, depth));
+                }
+            }
+            "actions.conditional" => {
+                for key in ["then", "else"] {
+                    if let Ok(Some(branch)) = conditional_branch(params, key)
+                        && let Ok(i) = resolve_play_target(list, &branch, id)
+                    {
+                        queue.push_back((i, depth));
+                    }
+                }
+            }
+            _ => {}
+        });
+    }
+    let mut queue = VecDeque::new();
+    let mut scoped = BTreeSet::new();
+    targets(list, steps, 1, &mut queue, &mut scoped);
     let mut found = std::collections::BTreeMap::new();
-    while let Some((i, depth)) = queue.pop() {
-        // Playback stops at 16 levels, so deeper calls never run.
+    // Visit shallow calls first, so a deeper path cannot hide a reachable dependency.
+    while let Some((i, depth)) = queue.pop_front() {
         if depth > 16 || found.contains_key(&i) {
             continue;
         }
         let Some(mut action) = list.get(i).cloned() else { continue };
-        targets(list, &mut action.steps, depth + 1, &mut queue);
+        // Disabled steps never play, so the actions they call are not dependencies.
+        for (step, call) in action.steps.iter_mut().enumerate() {
+            if !action.disabled.contains(&step) {
+                targets(list, std::slice::from_mut(call), depth + 1, &mut queue, &mut scoped);
+            }
+        }
         found.insert(i, action);
     }
-    found.into_values().collect()
+    // Where each captured source action lands in the exported list (source order).
+    let exported: std::collections::BTreeMap<usize, usize> = found.keys().enumerate().map(|(at, &i)| (i, at)).collect();
+    let mut found: Vec<_> = found.into_values().collect();
+    let names: Vec<String> = found.iter().map(|a| a.name.clone()).collect();
+    let mut originals = Vec::new();
+    let mut slots = std::collections::BTreeMap::new();
+    for i in scoped {
+        if let Some(action) = list.get(i) {
+            slots.insert(i, found.len() + originals.len());
+            let mut original = action.clone();
+            if exported.contains_key(&i) {
+                // The scoped caller already selects this copy by index.
+                original.action_id = None;
+            }
+            originals.push(original);
+        }
+    }
+    // A named Batch selects from the caller before switching to its embedded list. Its source
+    // must keep raw references, even when normal Play needs a normalized copy of the same action.
+    let final_len = found.len() + originals.len();
+    let mut remap = |id: &str, params: &mut Value, scoped: bool| {
+        if !matches!(id, "actions.play" | "file.automate.batch") {
+            return;
+        }
+        if scoped
+            && let Ok(i) = target(list, params, id)
+            && let Some(slot) = slots.get(&i)
+        {
+            params["action"] = json!(slot);
+            // The pinned source slot identifies its set; a numeric Batch choice cannot carry a named set.
+            if let Some(object) = params.as_object_mut() {
+                object.remove("set");
+                object.remove("actionId");
+            }
+            return;
+        }
+        // An ordinary call becomes the captured action's name, which reads well and resolves to
+        // it while the name is unique in the exported list. Two captured actions of one name (in
+        // different sets) would both resolve to the first, so such a call keeps its exported index.
+        if !scoped && let Ok(i) = target(list, params, id) {
+            let Some(name) = list.get(i).map(|a| a.name.clone()) else { return };
+            match exported.get(&i) {
+                Some(&at) if names.iter().filter(|n| **n == name).count() > 1 => {
+                    params["action"] = json!(at);
+                    if let Some(object) = params.as_object_mut() {
+                        object.remove("set");
+                    }
+                }
+                _ => params["action"] = json!(name),
+            }
+            if let Some(object) = params.as_object_mut()
+                && object.remove("actionId").is_some()
+                && id == "file.automate.batch"
+            {
+                // The source ID superseded this legacy qualifier.
+                object.remove("set");
+            }
+            return;
+        }
+        // Appended source copies must not make an originally missing numeric target valid.
+        if let Some(i) = params.get("action").and_then(num).and_then(|i| usize::try_from(i).ok())
+            && i >= list.len()
+            && i < final_len
+        {
+            params["action"] = json!(final_len);
+        }
+    };
+    visit_calls(steps, &mut remap);
+    for action in &mut found {
+        visit_calls(&mut action.steps, &mut remap);
+    }
+    found.extend(originals);
+    found
 }
 
 fn always(_: &Session) -> std::result::Result<(), String> {
@@ -285,6 +627,32 @@ fn always(_: &Session) -> std::result::Result<(), String> {
 
 fn num(v: &Value) -> Option<i64> {
     v.as_i64().or_else(|| v.as_f64().filter(|f| f.is_finite()).map(|f| f.round() as i64))
+}
+
+pub(crate) fn resolve_play_target(list: &[Action], p: &Value, cmd: &str) -> Result<usize> {
+    match p.get("actionId") {
+        Some(id) => id.as_str().and_then(|id| resolve_action_id(list, id)).ok_or_else(|| bad(cmd, "invalid, missing, or duplicate action ID")),
+        None => resolve(list, p, cmd),
+    }
+}
+
+pub(crate) fn branch_id_field(branch: &str) -> &'static str {
+    if branch == "then" { "thenActionId" } else { "elseActionId" }
+}
+
+/// A Conditional's selected branch takes the same target as Play Action.
+pub fn conditional_branch(p: &Value, branch: &str) -> Result<Option<Value>> {
+    let id = p.get(branch_id_field(branch));
+    let name = match p.get(branch) {
+        None | Some(Value::Null) => None,
+        Some(Value::String(name)) if name.trim().is_empty() => None,
+        Some(Value::String(name)) => Some(name),
+        Some(_) => return Err(bad("actions.conditional", format!("'{branch}' must be an action name or null"))),
+    };
+    Ok(match id {
+        Some(id) => Some(json!({"action": name, "actionId": id})),
+        None => name.map(|name| json!({"action": name})),
+    })
 }
 
 pub(crate) fn resolve(list: &[Action], p: &Value, cmd: &str) -> Result<usize> {
@@ -330,10 +698,27 @@ fn from_step(p: &Value, len: usize) -> Result<usize> {
     Ok(i)
 }
 
+/// List distinct captions and, when present, the ordered physical occurrences separately.
 fn list(s: &mut Session, _p: &Value) -> Result<Value> {
-    let actions: Vec<Value> = s.actions.list.iter().map(|a| json!({"name": a.name, "steps": a.steps.len(), "set": a.set})).collect();
+    let actions: Vec<Value> = s
+        .actions
+        .list
+        .iter()
+        .map(|a| {
+            let mut action = json!({"name": a.name, "steps": a.steps.len(), "set": a.set});
+            if let Some(slot) = a.set_slot {
+                action["setSlot"] = json!(slot);
+            }
+            action
+        })
+        .collect();
     let recording = s.actions.recording.and_then(|(_, i)| s.actions.list.get(i).map(|a| a.name.clone()));
-    Ok(json!({"actions": actions, "recording": recording}))
+    let mut result =
+        json!({"actions": actions, "sets": crate::actions_edit_cmds::set_names(s), "recording": recording, "toolRecording": s.actions.record_tools});
+    if !s.actions.set_rows.is_empty() {
+        result["setRows"] = json!(s.actions.set_rows);
+    }
+    Ok(result)
 }
 
 fn get(s: &mut Session, p: &Value) -> Result<Value> {
@@ -343,12 +728,17 @@ fn get(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"name": action.name, "steps": steps, "disabled": action.disabled, "dialogs": action.dialogs, "set": action.set, "color": action.color}))
 }
 
+/// `actions.record`: start recording into an existing `action` or a new one named `name`, and mark
+/// it as automation's when an automation gate is installed.
 fn record(s: &mut Session, p: &Value) -> Result<Value> {
     not_playing(s, "actions.record")?;
     if s.actions.recording.is_some() {
         return Err(bad("actions.record", "already recording; stop first"));
     }
     let idx = if p.get("action").is_some() {
+        if p.get("setSlot").is_some_and(|slot| !slot.is_null()) {
+            return Err(bad("actions.record", "setSlot is only for a new action"));
+        }
         resolve(&s.actions.list, p, "actions.record")?
     } else {
         let name = match p.get("name") {
@@ -366,20 +756,64 @@ fn record(s: &mut Session, p: &Value) -> Result<Value> {
         if s.actions.list.iter().any(|action| action.name == name) {
             return Err(bad("actions.record", "an action with this name already exists"));
         }
-        s.actions.list.push(Action::new(name, Vec::new()));
+        let set = match p.get("set") {
+            None | Some(Value::Null) => None,
+            // An existing set, empty ones included, keeps its exact name (an older actions.json or
+            // a `.atn` may pad it); a new one is trimmed.
+            Some(Value::String(n)) if crate::actions_edit_cmds::set_names(s).contains(n) => Some(n.clone()),
+            Some(Value::String(n)) if !n.trim().is_empty() => Some(n.trim().to_string()),
+            Some(_) => return Err(bad("actions.record", "\"set\" must be a set name or null")),
+        };
+        let set_slot = crate::actions_edit_cmds::assignment_slot(s, p, set.as_deref(), "actions.record")?;
+        s.actions.list.push(Action { set, set_slot, ..Action::new(name, Vec::new()) });
         s.actions.touch();
         s.actions.list.len() - 1
     };
     s.actions.recording = Some((s.journal.len(), idx));
+    note_automation_edit(s, idx);
     s.actions.take = s.actions.take.wrapping_add(1);
     let name = s.actions.list.get(idx).map(|a| a.name.clone()).unwrap_or_default();
     Ok(json!({"action": name, "index": idx}))
 }
 
+/// Whether a journal entry is recorded as an action step: a replayable command, except Check
+/// Spelling's corrections and lookups.
+fn recorded(id: &str, p: &Value) -> bool {
+    replayable(id) && (id != "edit.checkSpelling" || crate::type_spell_cmds::records(p))
+}
+
+/// Commands recorded with their step's dialog on: Check Spelling.
+const RECORDED_WITH_DIALOG: &[&str] = &["edit.checkSpelling"];
+
 /// Replayable journal entries not yet committed to this action while recording.
 pub fn pending_steps(s: &Session, action: usize) -> impl Iterator<Item = &(String, Value)> {
     let from = s.actions.recording.filter(|(_, i)| *i == action).map_or(s.journal.len(), |(from, _)| from);
-    s.journal.iter().skip(from).filter(|(id, _)| replayable(id))
+    s.journal.iter().skip(from).filter(|(id, p)| recorded(id, p) && (s.actions.record_tools || !tool_stroke(id)))
+}
+
+/// The point-based painting tools committed by the canvas; fills and gradients remain commands.
+pub(crate) fn tool_stroke(id: &str) -> bool {
+    matches!(
+        id,
+        "paint.stroke"
+            | "paint.pencil"
+            | "paint.mixerBrush"
+            | "paint.colorReplacement"
+            | "paint.blur"
+            | "paint.sharpen"
+            | "paint.smudge"
+            | "paint.dodge"
+            | "paint.burn"
+            | "paint.sponge"
+            | "paint.cloneStamp"
+            | "paint.healingBrush"
+            | "paint.historyBrush"
+            | "paint.artHistoryBrush"
+            | "paint.patternStamp"
+            | "paint.backgroundEraser"
+            | "paint.spotHealing"
+            | "paint.remove"
+    )
 }
 
 pub(crate) fn flush_recording(s: &mut Session) -> Result<()> {
@@ -387,13 +821,66 @@ pub(crate) fn flush_recording(s: &mut Session) -> Result<()> {
     if idx >= s.actions.list.len() {
         return Err(bad("actions.stop", "the action being recorded no longer exists"));
     }
-    let steps: Vec<_> = pending_steps(s, idx).cloned().collect();
+    let steps = fold_recorded_nudges(pending_steps(s, idx).cloned());
     s.actions.recording = Some((s.journal.len(), idx));
     if !steps.is_empty() {
-        s.actions.list[idx].steps.extend(steps);
+        let action = &mut s.actions.list[idx];
+        let first = action.steps.len();
+        action.dialogs.extend(steps.iter().enumerate().filter(|(_, (id, _))| RECORDED_WITH_DIALOG.contains(&id.as_str())).map(|(i, _)| first + i));
+        action.steps.extend(steps);
         s.actions.touch();
     }
     Ok(())
+}
+
+/// Consecutive Move-tool keystrokes in one UI nudge run are one relative action step.
+/// The UI's `coalesce` run id distinguishes a held key from a later, separate gesture.
+fn fold_recorded_nudges(steps: impl IntoIterator<Item = (String, Value)>) -> Vec<(String, Value)> {
+    let mut out: Vec<(String, Value)> = Vec::new();
+    let mut last_run: Option<String> = None;
+    for (id, mut params) in steps {
+        let wrap_of = |p: &Value| p.get("wrap").and_then(Value::as_bool).unwrap_or(false);
+        let run = (id == "layer.translate")
+            .then(|| params.as_object())
+            .flatten()
+            .filter(|p| p.keys().all(|key| matches!(key.as_str(), "dx" | "dy" | "coalesce" | "wrap")) && p.get("wrap").is_none_or(|v| v.is_boolean()))
+            .and_then(|p| p.get("coalesce").and_then(Value::as_str).filter(|run| run.starts_with("nudge:")))
+            .map(str::to_string);
+        if let Some(run) = &run {
+            // `layer.translate` moves each step by whole pixels, so the fold adds rounded steps.
+            let dx = params.get("dx").and_then(Value::as_f64).map(f64::round);
+            let dy = params.get("dy").and_then(Value::as_f64).map(f64::round);
+            if let (Some(dx), Some(dy)) = (dx, dy)
+                && dx.is_finite()
+                && dy.is_finite()
+            {
+                if last_run.as_ref() == Some(run)
+                    && let Some((last_id, previous)) = out.last_mut()
+                    && last_id == &id
+                    && wrap_of(previous) == wrap_of(&params)
+                {
+                    let sum_x = previous.get("dx").and_then(Value::as_f64).unwrap_or(0.0) + dx;
+                    let sum_y = previous.get("dy").and_then(Value::as_f64).unwrap_or(0.0) + dy;
+                    if sum_x.is_finite() && sum_y.is_finite() {
+                        previous["dx"] = json!(sum_x);
+                        previous["dy"] = json!(sum_y);
+                        continue;
+                    }
+                }
+                if let Some(object) = params.as_object_mut() {
+                    object.remove("coalesce");
+                    object.insert("dx".into(), json!(dx));
+                    object.insert("dy".into(), json!(dy));
+                }
+                last_run = Some(run.clone());
+                out.push((id, params));
+                continue;
+            }
+        }
+        last_run = None;
+        out.push((id, params));
+    }
+    out
 }
 
 fn stop(s: &mut Session, _p: &Value) -> Result<Value> {
@@ -427,14 +914,17 @@ pub fn saves_smart_contents(s: &Session, id: &str) -> bool {
     id == "file.save" && s.is_enabled(SAVE_CONTENTS)
 }
 
+/// Run enabled steps from `from`, retaining child results when nested work fails.
 fn run_recorded(s: &mut Session, action: &Action, from: usize) -> (u64, Option<Value>) {
     let mut ran = 0u64;
     let mut failed = None;
     for (i, (id, params)) in action.enabled_steps().skip_while(|(i, _)| *i < from) {
         if !consume_playback_step(s) {
-            failed = Some(json!({"step": i, "id": id, "error": format!("action playback exceeded the {}-step limit", MAX_PLAYBACK_STEPS)}));
+            failed = Some(json!({"step": i, "id": id, "error": format!("action playback exceeded the {}-step limit", MAX_PLAYBACK_STEPS), "limit": true}));
             break;
         }
+        let effective = crate::file_cmds::batch_open_params(s, id, params);
+        let params = effective.as_ref().unwrap_or(params);
         if let Some(auth) = s.authorize
             && let Err(e) = auth(id, params)
         {
@@ -447,14 +937,30 @@ fn run_recorded(s: &mut Session, action: &Action, from: usize) -> (u64, Option<V
         }
         match playback_params(s, id, params).and_then(|p| if saves_smart_contents(s, id) { s.execute(SAVE_CONTENTS, json!({})) } else { s.execute(id, p) }) {
             Ok(value) => {
+                // A nested batch or action that stopped at a limit stops this action too.
+                if let Some(error) = limit_stop(&value) {
+                    // The child result stays, so the files a nested batch wrote before the stop are visible.
+                    let mut failure = json!({"step": i, "id": id, "error": error, "limit": true});
+                    failure["result"] = value;
+                    failed = Some(failure);
+                    break;
+                }
                 if let Some(error) = nested_failure(id, &value) {
-                    failed = Some(json!({"step": i, "id": id, "error": error}));
+                    // Like Scripts, retain the child result so partial Batch outputs remain visible.
+                    let mut failure = json!({"step": i, "id": id, "error": error});
+                    failure["result"] = value;
+                    failed = Some(failure);
                     break;
                 }
                 ran += 1;
             }
             Err(e) => {
                 failed = Some(json!({"step": i, "id": id, "error": e.to_string()}));
+                if matches!(e, EngineError::BatchLimit(_))
+                    && let Some(f) = failed.as_mut()
+                {
+                    f["limit"] = json!(true);
+                }
                 break;
             }
         }
@@ -465,37 +971,152 @@ fn run_recorded(s: &mut Session, action: &Action, from: usize) -> (u64, Option<V
 /// Suspend recording while a called action executes. Keep its commands in the journal
 /// for diagnostics, but record just the named call in the parent action.
 pub fn begin_playback(s: &mut Session, action: &Action) -> Result<Option<(usize, usize)>> {
+    begin_playback_from(s, action, 0)
+}
+
+/// [`begin_playback`] for a call that starts at step `from`: the steps before it are charged to the
+/// playback budget too.
+pub fn begin_playback_from(s: &mut Session, action: &Action, from: usize) -> Result<Option<(usize, usize)>> {
     flush_recording(s)?;
+    // Registered identities belong to this library even when the caller uses the public
+    // unpositioned helper. Embedded Batch libraries can legitimately reuse their IDs/names.
+    let row = match action.action_id.as_deref() {
+        Some(id) => identity::resolve_action_id(&s.actions.list, id),
+        None => {
+            let mut rows = s.actions.list.iter().enumerate().filter(|(_, row)| row.name == action.name);
+            let first = rows.next().map(|(index, _)| index);
+            rows.next().is_none().then_some(first).flatten()
+        }
+    };
+    // A duplicate legacy caption cannot identify which registered occurrence the caller owns.
+    // Preserve conservative name recursion rather than position it at the first matching row.
+    let target = row.map_or_else(|| PlaybackTarget::from(action), |row| PlaybackTarget::at(s, row, action));
+    push_playback(s, target, action, from)
+}
+
+/// Begin a resolved library row. A recorded call to either same-name row needs a durable ID.
+pub fn begin_playback_at(s: &mut Session, row: usize, action: &mut Action) -> Result<Option<(usize, usize)>> {
+    begin_playback_at_from(s, row, action, 0)
+}
+
+/// Resolved-row playback with the same skipped/disabled-step budget as `begin_playback_from`.
+pub fn begin_playback_at_from(s: &mut Session, row: usize, action: &mut Action, from: usize) -> Result<Option<(usize, usize)>> {
+    if s.actions.list.get(row) != Some(&*action) {
+        return Err(bad("actions.play", "action selection changed"));
+    }
+    flush_recording(s)?;
+    if s.actions.recording.is_some() && s.actions.list.iter().filter(|other| other.name == action.name).take(2).count() > 1 {
+        let id = prepare_action_id(&s.actions.list, row)?;
+        commit_action_id(s, row, id.clone())?;
+        action.action_id = Some(id);
+    }
+    let target = PlaybackTarget::at(s, row, action);
+    push_playback(s, target, action, from)
+}
+
+fn push_playback(s: &mut Session, target: PlaybackTarget, action: &Action, from: usize) -> Result<Option<(usize, usize)>> {
+    // The steps that run are charged one by one as they run; the ones walked past are charged
+    // here ([`playback_plan`] checked that the whole action fits). Refused before the history
+    // scope opens, so a rejected call leaves none behind.
+    let skipped = skipped_steps(action, from);
+    let max = crate::automate_cmds::MAX_SCRIPT_STEPS;
+    if s.actions.script_depth > 0 && s.actions.script_steps.saturating_add(skipped) > max {
+        return Err(bad("actions.play", format!("the script ran more than {max} steps in all")));
+    }
     if s.actions.playing == 0 {
-        s.actions.playback_steps = 0;
+        history::begin(s, &target.name);
+        // A batch nested in a played action or another batch carries the shared count on.
+        if !s.actions.budget_shared {
+            s.actions.playback_steps = 0;
+        }
+    }
+    s.actions.playback_steps = s.actions.playback_steps.saturating_add(skipped);
+    if s.actions.script_depth > 0 {
+        s.actions.script_steps = s.actions.script_steps.saturating_add(skipped);
     }
     let recording = s.actions.recording.take();
     s.actions.playing = s.actions.playing.saturating_add(1);
-    s.actions.playback_stack.push(action.name.clone());
+    s.actions.playback_stack.push(target);
     Ok(recording)
 }
 
+/// Unwind the playback stack and finish grouping only at the outer boundary, then restore suspended recording.
 pub fn finish_playback(s: &mut Session, recording: Option<(usize, usize)>, action: &Action, from: usize) {
     s.actions.playback_stack.pop();
     s.actions.playing = s.actions.playing.saturating_sub(1);
+    if s.actions.playing == 0 {
+        history::finish_playback(s);
+    }
     if let Some((_, idx)) = recording {
-        restore_recording(s, idx, &action.name, from);
+        let params = recorded_target(s, action, from);
+        restore_recording(s, idx, params);
     }
 }
 
 /// Resume recording into action `idx` and journal the named call that suspended it.
-pub fn restore_recording(s: &mut Session, idx: usize, action: &str, from: usize) {
+pub fn restore_recording(s: &mut Session, idx: usize, params: Value) {
     s.actions.recording = Some((s.journal.len(), idx));
-    let mut params = json!({"action": action});
-    if from > 0 {
-        params["from"] = json!(from);
-    }
     s.journal.push(("actions.play".into(), params));
 }
 
-/// Nested playback returns a structured failure even though the command itself succeeded.
+pub fn recorded_target(s: &Session, action: &Action, from: usize) -> Value {
+    let mut params = json!({"action": action.name});
+    if let Some(id) = action.action_id.as_deref().filter(|id| resolve_action_id(&s.actions.list, id).is_some()) {
+        params["actionId"] = json!(id);
+    }
+    if from > 0 {
+        params["from"] = json!(from);
+    }
+    params
+}
+
+/// The message of a nesting or playback-limit stop reported by `value`, the result of a step: an
+/// input of a nested batch or droplet marked `"limit": true` in `errors`, or a played action whose
+/// failed step carries it. Such a stop fails the enclosing input rather than being swallowed.
+pub fn limit_stop(value: &Value) -> Option<String> {
+    let flagged = |v: &Value| v.get("limit") == Some(&json!(true));
+    let found =
+        value.get("errors").and_then(Value::as_array).and_then(|a| a.iter().find(|e| flagged(e))).or_else(|| value.get("failed").filter(|f| flagged(f)))?;
+    Some(found.get("error").and_then(Value::as_str).unwrap_or("batch limit reached").to_string())
+}
+
+/// What stops the caller of a Batch even where per-file errors don't (a direct Batch in a script
+/// or a CLI command list): the script ran out of steps inside it, it was cancelled, or its
+/// requested error log could not be written.
+pub fn batch_stop(value: &Value) -> Option<String> {
+    if let Some(error) = value.get("scriptLimitError").and_then(Value::as_str) {
+        return Some(error.to_string());
+    }
+    if value.get("cancelled") == Some(&Value::Bool(true)) {
+        return Some("Batch was cancelled".into());
+    }
+    value.get("errorLogError").and_then(Value::as_str).map(|error| format!("Batch error log failed: {error}"))
+}
+
+/// Nested playback and Batch return structured failures even though the command succeeded.
 /// Promote it to the caller's failed step so no later parent steps run after a child fails.
+/// Batch text summarizes counts and the first failure; its full result retains every file outcome.
 pub fn nested_failure(id: &str, value: &Value) -> Option<String> {
+    if id == "file.scripts.browse" && value.get("ok") == Some(&Value::Bool(false)) {
+        let error = value
+            .get("results")
+            .and_then(Value::as_array)
+            .and_then(|results| results.iter().find_map(|result| result.get("error").and_then(Value::as_str)))
+            .unwrap_or("unknown error");
+        return Some(format!("script failed: {error}"));
+    }
+    if id == "file.automate.batch" {
+        let errors = value.get("errors").and_then(Value::as_array).map_or(&[][..], Vec::as_slice);
+        let Some(first) = errors.first() else {
+            // Every input succeeded, yet the run was stopped or its requested log is missing:
+            // later parent steps must not run as if the Batch had finished.
+            return batch_stop(value);
+        };
+        let error = first.get("error")?.as_str()?;
+        let file = first.get("file").or_else(|| first.get("document")).and_then(Value::as_str).unwrap_or("unknown input");
+        let saved = value.get("files").and_then(Value::as_array).map_or(0, Vec::len);
+        return Some(format!("Batch: {} file(s) failed, {saved} saved; first failure `{file}`: {error}", errors.len()));
+    }
     (id == "actions.play" || id == "actions.conditional").then(|| value.get("failed")).flatten().map(|failure| {
         format!(
             "action `{}` step {} failed: {}",
@@ -506,11 +1127,25 @@ pub fn nested_failure(id: &str, value: &Value) -> Option<String> {
     })
 }
 
+/// `actions.play`: run an action's enabled steps from `from`, under automation's kept gate
+/// ([`kept_gate`]) when automation wrote it and no gate is installed. A call journaled into a
+/// recording while a gate is installed marks the recorded action ([`note_automation_step`]).
 fn play(s: &mut Session, p: &Value) -> Result<Value> {
-    let (action, from) = playback_plan(s, p)?;
-    let recording = begin_playback(s, &action)?;
+    let (row, mut action, from) = playback_plan_at(s, p)?;
+    let recording = begin_playback_at_from(s, row, &mut action, from)?;
+    // Nested calls and commands the steps run on their own behalf see the kept gate too.
+    let kept = kept_gate(s, &action);
+    if kept.is_some() {
+        s.authorize = kept;
+    }
     let (ran, failed) = run_recorded(s, &action, from);
+    if kept.is_some() {
+        s.authorize = None;
+    }
     finish_playback(s, recording, &action, from);
+    // The call journaled into a recording is automation's step when its caller runs under a gate
+    // (the kept gate is already removed, so the user's own play of a marked action is not).
+    note_automation_step(s, "actions.play", p);
     Ok(match failed {
         Some(f) => json!({"action": action.name, "ran": ran, "failed": f}),
         None => json!({"action": action.name, "ran": ran}),
@@ -546,11 +1181,21 @@ fn move_item(s: &mut Session, p: &Value) -> Result<Value> {
         action.steps.insert(to, moved);
         action.remap_steps(|i| Some(moved_index(i, step, to)));
         let result = json!({"action": action.name, "step": to});
+        note_automation_edit(s, idx);
         s.actions.touch();
         Ok(result)
     } else {
         if to >= s.actions.list.len() {
             return Err(bad("actions.move", "destination is out of range"));
+        }
+        let name = &s.actions.list[idx].name;
+        let first = s.actions.list.iter().position(|action| &action.name == name).unwrap_or(idx);
+        let changes_owner = if first == idx { to > idx && s.actions.list[idx + 1..=to].iter().any(|action| &action.name == name) } else { to <= first };
+        if changes_owner && has_legacy_shortcut(s, name) {
+            let key = format!("{PLAY_SHORTCUT_PREFIX}{name}");
+            if let Some(owner) = shortcut_row(&s.actions.list, &key) {
+                s.actions.list[owner].legacy_shortcut_owner = true;
+            }
         }
         let moved = s.actions.list.remove(idx);
         let result = json!({"action": moved.name, "index": to});
@@ -576,6 +1221,8 @@ pub fn moved_index(index: usize, from: usize, to: usize) -> usize {
     }
 }
 
+/// `actions.delete`: delete an action, or with `step` one of its steps (which marks the action
+/// as automation's when an automation gate is installed).
 fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     not_playing(s, "actions.delete")?;
     let idx = resolve(&s.actions.list, p, "actions.delete")?;
@@ -602,21 +1249,16 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
             }
         });
         let result = json!({"action": action.name, "deletedStep": step, "steps": action.steps.len()});
+        note_automation_edit(s, idx);
         s.actions.touch();
         return Ok(result);
     }
     if s.actions.recording.is_some() {
         return Err(bad("actions.delete", "stop recording before deleting an action"));
     }
+    remove_shortcuts(s, |row, _| row == idx);
     let name = s.actions.list.remove(idx).name;
     s.actions.touch();
-    // Its function key goes with it, or the next action given the same name would inherit it.
-    let key = format!("{PLAY_SHORTCUT_PREFIX}{name}");
-    if s.prefs().shortcuts.contains_key(&key) {
-        s.edit_prefs(|prefs| {
-            prefs.shortcuts.remove(&key);
-        });
-    }
     Ok(json!({"deleted": name}))
 }
 
@@ -655,6 +1297,7 @@ fn toggle(s: &mut Session, p: &Value) -> Result<Value> {
         None => action.disabled = (0..action.steps.len()).collect(),
     }
     let result = json!({"action": action.name, "disabled": action.disabled});
+    note_automation_edit(s, idx);
     s.actions.touch();
     Ok(result)
 }
@@ -662,7 +1305,7 @@ fn toggle(s: &mut Session, p: &Value) -> Result<Value> {
 /// Prefix of the persisted shortcut override that plays a named action (`actions.play:<name>`).
 pub const PLAY_SHORTCUT_PREFIX: &str = "actions.play:";
 
-/// Rename an action in place. Nested `actions.play` steps and `actions.conditional` branches
+/// Rename an action in place. Nested `actions.play` steps, named Batch steps and `actions.conditional` branches
 /// that call it by name, and its function-key binding, follow the new name so nothing silently
 /// stops working.
 fn rename(s: &mut Session, p: &Value) -> Result<Value> {
@@ -682,14 +1325,26 @@ fn rename(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad("actions.rename", "an action with this name already exists"));
     }
     let pending = s.actions.recording.map_or(s.journal.len(), |(start, _)| start);
+    // A loaded library can hold two actions of one name (in different sets): a call follows the
+    // rename only if it resolved to this action before it, so one reaching the other stays put.
+    let before = s.actions.list.clone();
+    let owned_shortcut = shortcut_row(&before, &format!("{PLAY_SHORTCUT_PREFIX}{old}")) == Some(idx);
     let calls = s.actions.list.iter_mut().flat_map(|a| a.steps.iter_mut()).chain(s.journal.iter_mut().skip(pending));
     for (id, params) in calls {
         let keys: &[&str] = match id.as_str() {
-            "actions.play" => &["action"],
+            "actions.play" if resolve_play_target(&before, params, id).ok() == Some(idx) => &["action"],
             "actions.conditional" => &["then", "else"],
+            // A named Batch selects from the caller's list, by name alone or within its set;
+            // explicit `steps` run instead of any named action, so those are left alone.
+            "file.automate.batch" if params.get("steps").is_none() && crate::file_cmds::batch_action(&before, params).ok() == Some(idx) => &["action"],
             _ => &[],
         };
         for key in keys {
+            if id == "actions.conditional"
+                && conditional_branch(params, key).ok().flatten().and_then(|target| resolve_play_target(&before, &target, id).ok()) != Some(idx)
+            {
+                continue;
+            }
             if params.get(*key).and_then(Value::as_str) == Some(old.as_str()) {
                 params[*key] = json!(name);
             }
@@ -700,10 +1355,13 @@ fn rename(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.actions.touch();
     let (from, to) = (format!("{PLAY_SHORTCUT_PREFIX}{old}"), format!("{PLAY_SHORTCUT_PREFIX}{name}"));
-    if s.prefs().shortcuts.contains_key(&from) {
+    if owned_shortcut && (s.prefs().shortcuts.contains_key(&from) || s.prefs().alternate_shortcuts.contains_key(&from)) {
         s.edit_prefs(|prefs| {
             if let Some(key) = prefs.shortcuts.remove(&from) {
-                prefs.shortcuts.insert(to, key);
+                prefs.shortcuts.insert(to.clone(), key);
+            }
+            if let Some(keys) = prefs.alternate_shortcuts.remove(&from) {
+                prefs.alternate_shortcuts.insert(to, keys);
             }
         });
     }
@@ -729,8 +1387,87 @@ fn set_color(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"action": name, "color": color}))
 }
 
+/// Active playback and retained dialog continuations keep their chosen history policy.
+pub(crate) fn history_policy_in_use(s: &Session) -> bool {
+    s.actions.playing != 0 || s.action_history.is_some() || s.paused_action_history.iter().any(|lease| lease.strong_count() != 0)
+}
+
+/// Create a single history state alone; `actions.setPlayback` sets it with the performance mode.
+fn set_history(s: &mut Session, p: &Value) -> Result<Value> {
+    not_playing(s, "actions.setHistory")?;
+    if history_policy_in_use(s) {
+        return Err(bad("actions.setHistory", "cannot change action history settings during playback"));
+    }
+    let enabled = p.get("singleState").and_then(Value::as_bool).ok_or_else(|| bad("actions.setHistory", "singleState must be a boolean"))?;
+    s.edit_prefs(|prefs| prefs.actions.create_single_history_state = enabled);
+    Ok(json!({"singleState":enabled}))
+}
+
+/// Playback Options: `performance`, Pause For's whole `seconds` (1 to 60) and `singleState`, each
+/// optional, all validated before any is stored, and saved in preferences. `{}` reads them.
+fn set_playback(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "actions.setPlayback";
+    not_playing(s, CMD)?;
+    if !p.is_object() {
+        return Err(bad(CMD, "params must be an object"));
+    }
+    let performance = match p.get("performance") {
+        None => None,
+        Some(v) => {
+            Some(v.as_str().and_then(crate::prefs::PlaybackPerformance::parse).ok_or_else(|| bad(CMD, "performance must be accelerated, step or pause"))?)
+        }
+    };
+    let range = crate::prefs::Actions::PAUSE_SECONDS;
+    let seconds = match p.get("seconds") {
+        None => None,
+        Some(v) => Some(
+            v.as_u64()
+                .and_then(|n| u8::try_from(n).ok())
+                .filter(|n| range.contains(n))
+                .ok_or_else(|| bad(CMD, format!("seconds must be a whole number from {} to {}", range.start(), range.end())))?,
+        ),
+    };
+    let single = match p.get("singleState") {
+        None => None,
+        Some(v) => Some(v.as_bool().ok_or_else(|| bad(CMD, "singleState must be a boolean"))?),
+    };
+    if single.is_some_and(|single| single != s.prefs().actions.create_single_history_state) && history_policy_in_use(s) {
+        return Err(bad(CMD, "cannot change action history settings during playback"));
+    }
+    if performance.is_some() || seconds.is_some() || single.is_some() {
+        s.edit_prefs(|prefs| {
+            let a = &mut prefs.actions;
+            a.performance = performance.unwrap_or(a.performance);
+            a.pause_seconds = seconds.unwrap_or(a.pause_seconds);
+            a.create_single_history_state = single.unwrap_or(a.create_single_history_state);
+        });
+    }
+    let a = &s.prefs().actions;
+    Ok(json!({"performance": a.performance.name(), "seconds": a.pause_seconds(), "singleState": a.create_single_history_state}))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        CommandSpec {
+            id: "actions.setHistory",
+            label: "Set Actions History",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"singleState":bool} → {singleState}. Persist Create a single history state (default true). Playback Options can use this setting without changing its performance mode."##,
+            enabled: always,
+            run: set_history,
+            journal: false,
+        },
+        CommandSpec {
+            id: "actions.setPlayback",
+            label: "Playback Options",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"performance":"accelerated"|"step"|"pause"?, "seconds":1..60?, "singleState":bool?} → {performance, seconds, singleState}. The Actions panel menu's Playback Options, saved in preferences (`actions.performance`, `actions.pauseSeconds`, `actions.createSingleHistoryState`). Step by Step and Pause For pace a person's Play in the app, about one second between steps plus Pause For's whole seconds; actions.play from agents, the CLI and Batch always runs at once. Omitted keys keep their value; {} reads them. Every value is checked before any is stored."##,
+            enabled: always,
+            run: set_playback,
+            journal: false,
+        },
         CommandSpec {
             id: "actions.move",
             label: "Move Action or Step",
@@ -746,7 +1483,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "List Actions",
             menu: &[],
             shortcut: None,
-            params: "{} → {actions:[{name, steps:count, set:name|null}], recording:name|null}",
+            params: "{} → {actions:[{name, steps:count, set:name|null, setSlot:index?}], sets:[name…] (distinct captions), setRows:[name…]? (ordered physical folders), recording:name|null, toolRecording:bool}",
             enabled: always,
             run: list,
             journal: false,
@@ -766,7 +1503,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Record Action",
             menu: &[],
             shortcut: None,
-            params: r##"{"name":str? (new action, default "Action N")} or {"action":name|index} (append) → {action, index}"##,
+            params: r##"{"name":str? (new action, default "Action N"),"set":name?,"setSlot":index? (folder occurrence from actions.list)} or {"action":name|index} (append) → {action, index}"##,
             enabled: always,
             run: record,
             journal: false,
@@ -786,7 +1523,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Play Action",
             menu: &[],
             shortcut: None,
-            params: r##"{"action":name|index, "from":step?} → {action, ran, failed?:{step, id, error}}. step and from are 0-based; steps switched off with actions.toggle are skipped. Stops at the first error (the command still returns ok, with failed set) and leaves one history step per step that ran. Nested calls are supported up to 16 levels; cycles are rejected. Recording stores a named call rather than its expanded commands. Each step is checked with Session::authorize when one is installed."##,
+            params: r##"{"action":name|index, "from":step?} → {action, ran, failed?:{step, id, error}}. step and from are 0-based; steps switched off with actions.toggle are skipped. Stops at the first error (the command still returns ok, with failed set) and groups document edits in one Action: <name> history entry by default; actions.setHistory can retain per-step history. Nested calls are supported up to 16 levels; cycles are rejected. Recording stores a named call rather than its expanded commands. Each step is checked with Session::authorize when one is installed."##,
             enabled: always,
             run: play,
             journal: false,
@@ -838,6 +1575,9 @@ pub fn specs() -> Vec<CommandSpec> {
 mod tests;
 
 #[cfg(test)]
+mod playback_tests;
+
+#[cfg(test)]
 mod security_tests {
     use super::*;
 
@@ -847,5 +1587,63 @@ mod security_tests {
         session.actions.playback_steps = MAX_PLAYBACK_STEPS - 1;
         assert!(consume_playback_step(&mut session));
         assert!(!consume_playback_step(&mut session));
+    }
+
+    /// A played action inside a nested batch (no enclosing playback) continues the shared count the
+    /// batch carries instead of restarting it for each input.
+    #[test]
+    fn a_nested_batch_input_does_not_reset_the_shared_playback_count() {
+        let mut session = Session::new();
+        session.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        session.actions.list.push(Action::new("A", vec![("select.all".to_string(), json!({}))]));
+        session.actions.budget_shared = true;
+        session.actions.playback_steps = MAX_PLAYBACK_STEPS;
+        let r = session.execute("actions.play", json!({"action": "A"}));
+        assert!(matches!(r, Err(EngineError::BatchLimit(_))), "the carried count leaves no room for the action: {r:?}");
+        session.actions.budget_shared = false;
+        let r = session.execute("actions.play", json!({"action": "A"})).unwrap();
+        assert_eq!(r["ran"], 1, "a top-level call starts its own count");
+    }
+
+    /// An action of mostly disabled steps, called over and over from a parent, is charged for
+    /// every step it stores, so the calls stop at the shared limit instead of each copying and
+    /// walking the whole action for free.
+    #[test]
+    fn disabled_steps_are_charged_to_the_playback_budget() {
+        let mut session = Session::new();
+        let mut child = Action::new("Child", (0..1000).map(|_| ("select.all".to_string(), json!({}))).collect());
+        child.disabled = (0..1000).collect();
+        let calls = MAX_PLAYBACK_STEPS as usize / 1000 * 2;
+        let parent = Action::new("Parent", (0..calls).map(|_| ("actions.play".to_string(), json!({"action": "Child"}))).collect());
+        session.actions.list.push(child);
+        session.actions.list.push(parent);
+        let r = session.execute("actions.play", json!({"action": "Parent"})).unwrap();
+        let failed = r["failed"]["error"].as_str().unwrap();
+        assert!(failed.contains("step limit"), "{failed}");
+        // Each call charges its 1000 stored steps plus the Play step itself.
+        let ran = r["ran"].as_u64().unwrap();
+        assert!(ran < MAX_PLAYBACK_STEPS / 1000, "{ran}");
+    }
+
+    /// Limit stops are recognised from a nested batch's `errors` and from a played action's `failed`;
+    /// an ordinary failure is not one.
+    #[test]
+    fn limit_stops_are_found_in_nested_results() {
+        let batch = json!({"files": [], "errors": [{"file": "a", "error": "x"}, {"file": "b", "error": "too deep", "limit": true}]});
+        assert_eq!(limit_stop(&batch).as_deref(), Some("too deep"));
+        let played = json!({"action": "A", "failed": {"step": 2, "id": "x", "error": "over", "limit": true}});
+        assert_eq!(limit_stop(&played).as_deref(), Some("over"));
+        assert_eq!(limit_stop(&json!({"errors": [{"file": "a", "error": "x"}], "failed": {"step": 0, "error": "y"}})), None);
+    }
+
+    #[test]
+    fn steps_before_from_are_charged() {
+        let action = Action::new("A", (0..10).map(|_| ("select.all".to_string(), json!({}))).collect());
+        assert_eq!(skipped_steps(&action, 7), 7);
+        assert_eq!(skipped_steps(&action, 50), 10);
+        let mut disabled = action.clone();
+        disabled.disabled = [1, 8, 9, 40].into_iter().collect();
+        assert_eq!(skipped_steps(&disabled, 7), 9);
+        assert_eq!(skipped_steps(&disabled, 0), 3);
     }
 }

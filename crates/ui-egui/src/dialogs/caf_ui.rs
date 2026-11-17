@@ -25,8 +25,9 @@
 
 use egui::{Align2, Color32, FontId, Pos2, Rect as ERect, Sense, Stroke, TextureHandle, pos2, vec2};
 use photocraft_algo::content_aware::{SamplingStroke, paint_strokes};
-use photocraft_doc::LayerId;
+use photocraft_doc::{DocId, LayerId};
 use photocraft_engine::edit_menu_cmds::{MAX_CAF_EDITS, MAX_CAF_POINTS};
+use photocraft_engine::jobs::{JobEvent, JobId, JobOutcome};
 use photocraft_geom::Rect;
 use serde_json::{Value, json};
 
@@ -41,6 +42,7 @@ mod preview;
 mod view;
 
 pub use controls::{control, keys, pointer};
+pub(crate) use lifecycle::on_job_event;
 pub use lifecycle::{apply, cancel, commit, open};
 #[cfg(test)]
 use preview::plan_params;
@@ -56,8 +58,8 @@ const BAR_H: f32 = 36.0;
 const PANEL_W: f32 = 300.0;
 const PREVIEW_W: f32 = 380.0;
 const UNDO_LIMIT: usize = 100;
-/// Outlines with more edges than this are drawn at the proxy's resolution.
-const MAX_OUTLINE_EDGES: usize = 200_000;
+/// Outlines with more runs than this are drawn as the fill area's bounding box.
+const MAX_OUTLINE_SEGMENTS: usize = 200_000;
 /// Photoshop's overlay colour as it shows (a 50 % tint of grey 200 reads 171, 204, 153).
 const OVERLAY_COLOR: [u8; 3] = [142, 208, 106];
 /// The `prefs.dialogs` key under which the settings are remembered.
@@ -218,6 +220,7 @@ fn stroke_json(s: &SamplingStroke) -> Value {
 }
 
 pub struct CafWorkspace {
+    document: DocId,
     pub layer: LayerId,
     layer_name: String,
     canvas: Rect,
@@ -237,8 +240,8 @@ pub struct CafWorkspace {
     /// The lasso polygon being drawn and its selection mode.
     lasso: Option<(usize, Vec<[f64; 2]>)>,
     base: Base,
-    /// Fill-area outline edges (document px), or `None` when there are too many.
-    outline: Option<Vec<[[f32; 2]; 2]>>,
+    /// The fill area's outline (document px), or `None` when there are too many runs.
+    outline: Option<Vec<crate::outline::Segment>>,
     /// Document px per proxy px, and the proxy size.
     k: usize,
     pw: usize,
@@ -261,7 +264,14 @@ pub struct CafWorkspace {
     center: [f64; 2],
     hover: Option<[f64; 2]>,
     preview: Preview,
+    pending_fill: Option<PendingFill>,
     pub error: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PendingFill {
+    job: JobId,
+    close_on_success: bool,
 }
 
 impl CafWorkspace {
@@ -283,6 +293,8 @@ impl CafWorkspace {
             "sampledProxyPixels": sampled,
             "proxyScale": self.k,
             "settings": self.opts.to_json(),
+            "pending": self.pending_fill.is_some(),
+            "pendingJob": self.pending_fill.map(|p| p.job.0),
             "previewReady": self.preview.tex.is_some() && self.preview.shown == self.preview.want,
             "previewError": self.preview.error,
             "error": self.error,

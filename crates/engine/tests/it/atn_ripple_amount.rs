@@ -1,7 +1,7 @@
 //! #7670: integer ATN Ripple amounts must never silently replace native fractions.
+use craft_psd::{atn, descriptor::Value as D};
 use photocraft_engine::actions_cmds::Action;
 use photocraft_engine::{Session, atn_cmds};
-use photocraft_psd::{atn, descriptor::Value as D};
 use serde_json::{Value, json};
 
 const RIPPLE: &str = "filter.distort.ripple";
@@ -24,7 +24,7 @@ fn fixture(depth: u32) -> Session {
 
 /// Flatten the active document to compare direct, native and ATN playback pixels.
 fn pixels(s: &Session) -> Vec<[f32; 4]> {
-    photocraft_compose::flatten(&s.active().unwrap().doc).px
+    photocraft_compose::flatten(&s.active().unwrap().doc).into_px()
 }
 
 /// Fractions are valid native edits, but the existing integer event cannot carry them.
