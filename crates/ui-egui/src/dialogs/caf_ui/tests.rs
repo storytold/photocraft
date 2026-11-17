@@ -657,6 +657,19 @@ fn strokes_past_the_engines_limits_are_refused_at_the_brush() {
     assert!(d["error"].as_str().is_some_and(|e| e.contains("at most")), "{d}");
 }
 
+/// #9514: the Sampling Brush tips name the two options bar buttons, and differ in every language
+/// (an untranslated label falls back to English).
+#[test]
+fn brush_mode_tips_name_the_sampling_area_buttons_in_every_language() {
+    let english = crate::i18n::with_language(crate::i18n::Lang::EN, view::brush_mode_tips);
+    assert_eq!(english, ("Add to sampling area", "Subtract from sampling area"));
+    for lang in crate::i18n::Lang::all() {
+        let (add, subtract) = crate::i18n::with_language(lang, view::brush_mode_tips);
+        assert!(!add.is_empty() && !subtract.is_empty(), "{lang:?}");
+        assert_ne!(add, subtract, "{lang:?}");
+    }
+}
+
 /// A plan over `rect` whose fill area is the union of `parts`.
 fn base_with_hole(rect: Rect, parts: &[Rect]) -> Base {
     let (w, h) = (rect.width() as usize, rect.height() as usize);

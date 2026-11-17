@@ -28,15 +28,22 @@ impl View {
     }
 }
 
+/// The Sampling Brush's Add and Subtract tooltips, named like the reference application's options
+/// bar buttons (#9514). A missing translation falls back to the English label.
+pub(super) fn brush_mode_tips() -> (&'static str, &'static str) {
+    (tl!("Add to sampling area"), tl!("Subtract from sampling area"))
+}
+
 /// Upload what changed: the document proxy, the overlay, a finished preview.
 /// The options bar of the Content-Aware Fill workspace, for the active tool.
 fn caf_options_bar(bui: &mut egui::Ui, w: &mut CafWorkspace, fill_btn: &mut Option<Value>, reset_what: &mut Option<&str>) {
     match w.tool {
         CafTool::Brush => {
-            if crate::icons::button(bui, "plus", 26.0, w.brush_add, tl!("Add")).clicked() {
+            let (add_tip, subtract_tip) = brush_mode_tips();
+            if crate::icons::button(bui, "plus", 26.0, w.brush_add, add_tip).clicked() {
                 w.brush_add = true;
             }
-            if crate::icons::button(bui, "minus", 26.0, !w.brush_add, tl!("Subtract")).clicked() {
+            if crate::icons::button(bui, "minus", 26.0, !w.brush_add, subtract_tip).clicked() {
                 w.brush_add = false;
             }
             bui.add_space(8.0);
