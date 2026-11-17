@@ -698,5 +698,5 @@ fn draw_layer_thumb(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &egui::Ui,
         Stroke::new(1.0, t.field_border)
     };
     p.rect_stroke(rect, CornerRadius::same(if t.pro { 0 } else { 5 }), stroke, StrokeKind::Outside);
-    crate::smart_ui::thumb_badge(ui, l, rect);
+    crate::smart_ui::thumb_badge(ui, doc, l, rect, |path| crate::smart_ui::link_missing(ctx, &app.session, path));
 }
