@@ -3,6 +3,227 @@ use photocraft_engine::Session;
 use photocraft_engine::channel_cmds::ChannelTarget;
 use serde_json::json;
 
+/// #11820: inspect the options actually sent to egui, not just the canvas policy helper.
+mod sampling_upload_tests {
+    use super::*;
+
+    #[derive(Clone, Copy, Debug)]
+    enum Route {
+        Create,
+        Replace,
+        Damage,
+    }
+
+    fn mask_app(depth: u32, feather: f32, mode: &str) -> PhotocraftApp {
+        let mut app = PhotocraftApp::new(Session::new(), crate::Services::default());
+        app.background_jobs = false;
+        app.run("file.new", json!({"width": 513, "height": 60, "depth": depth, "background": "white"})).unwrap();
+        app.run("layer.layerMask.revealAll", json!({})).unwrap();
+        app.session
+            .edit("Mask sampling fixture", |doc, active| {
+                let mask = doc.layer_mut(active.unwrap()).unwrap().mask.as_mut().unwrap();
+                mask.surface.fill_rect(Rect::new(0, 0, 255, 60), &[0.0]);
+                mask.feather = feather;
+                Ok(())
+            })
+            .unwrap();
+        app.run("view.layerMask", json!({"mode": mode})).unwrap();
+        app.sync_views();
+        app
+    }
+
+    fn context(reduced: bool) -> egui::Context {
+        let ctx = egui::Context::default();
+        // The production clamp permits 256: 513 document pixels then require factor 3.
+        ctx.input_mut(|i| i.max_texture_side = if reduced { 256 } else { 4096 });
+        ctx
+    }
+
+    fn seed(app: &mut PhotocraftApp, ctx: &egui::Context) -> egui::TextureId {
+        let texture = ensure(app, ctx, 0, None).expect("seed channel texture");
+        ctx.tex_manager().write().take_delta().clear();
+        texture
+    }
+
+    fn prepare(app: &mut PhotocraftApp, ctx: &egui::Context, route: Route) -> Option<egui::TextureId> {
+        match route {
+            Route::Create => {
+                assert!(app.channel_views.is_empty());
+                None
+            }
+            Route::Replace => {
+                let texture = seed(app, ctx);
+                // A real view-key change forces a full set on the same-sized allocation.
+                app.run("channel.options", json!({"channel": "mask", "color": "#00ff00", "opacity": 70})).unwrap();
+                Some(texture)
+            }
+            Route::Damage => {
+                let texture = seed(app, ctx);
+                let previous = app.session.active().unwrap().revision;
+                app.session
+                    .edit("Mask sampling damage", |doc, active| {
+                        doc.layer_mut(active.unwrap()).unwrap().mask.as_mut().unwrap().surface.fill_rect(Rect::new(9, 9, 15, 15), &[1.0]);
+                        Ok(())
+                    })
+                    .unwrap();
+                let st = app.session.active().unwrap();
+                assert_eq!(st.revision, previous + 1, "one edit after the cached revision");
+                let damage = st.last_damage.expect("real engine mask damage").intersect(&st.doc.bounds());
+                assert!(!damage.is_empty() && damage != st.doc.bounds(), "bounded mask damage: {damage:?}");
+                Some(texture)
+            }
+        }
+    }
+
+    fn assert_upload(app: &mut PhotocraftApp, ctx: &egui::Context, route: Route, prior: Option<egui::TextureId>, factor: u32) {
+        // Fixture commands/edits above intentionally create history. Only rendering must be read-only.
+        let st = app.session.active().unwrap();
+        let before = st.doc.clone();
+        let revision = (st.revision, st.view_revision, st.saved_revision);
+        let history = (st.history.entries(), st.history.past_len(), st.history.row_ids().collect::<Vec<_>>());
+        let redo: Vec<_> = st.history.redo_labels().map(str::to_owned).collect();
+        let layer = st.active_layer.unwrap();
+        let mask = before.layer(layer).unwrap().mask.as_ref().unwrap();
+        let raw = mask.surface.read_region(before.bounds());
+        let feather = mask.feather;
+        let damage = st.last_damage;
+
+        let texture = ensure(app, ctx, 0, None).expect("channel view uploads a texture");
+        let mut delta = ctx.tex_manager().write().take_delta();
+        let uploads = delta.set.remove(&texture).expect("actual channel texture upload delta");
+        delta.clear(); // There is no renderer in this fixture; do not drop unapplied egui deltas.
+        assert_eq!(uploads.len(), 1, "one upload through {route:?}");
+        let upload = &uploads[0];
+        let egui::ImageData::Color(image) = &upload.image;
+        let st = app.session.active().unwrap();
+        let cache = app.channel_views.get(&st.doc.id.0).unwrap();
+        assert_eq!(cache.factor, factor, "exercise the intended resolution, not a helper argument");
+        let bounds = before.bounds();
+        let full_size = [bounds.width().div_ceil(factor) as usize, bounds.height().div_ceil(factor) as usize];
+        let rect = match route {
+            Route::Create => {
+                assert!(prior.is_none());
+                assert!(upload.pos.is_none(), "load_texture sends a full image");
+                assert_eq!(image.size, full_size);
+                bounds
+            }
+            Route::Replace => {
+                assert_eq!(Some(texture), prior, "set reuses the allocation");
+                assert!(upload.pos.is_none(), "set replaces the full image, not a partial upload");
+                assert_eq!(image.size, full_size);
+                bounds
+            }
+            Route::Damage => {
+                assert_eq!(Some(texture), prior, "set_partial reuses the allocation");
+                let f = factor as i32;
+                let d = damage.unwrap().intersect(&bounds);
+                let rect = Rect::new(d.x0.div_euclid(f) * f, d.y0.div_euclid(f) * f, d.x1, d.y1).intersect(&bounds);
+                assert_eq!(upload.pos, Some([(rect.x0 / f) as usize, (rect.y0 / f) as usize]), "set_partial uses the damage grid");
+                assert_eq!(image.size, [rect.width().div_ceil(factor) as usize, rect.height().div_ceil(factor) as usize]);
+                assert!(image.pixels.len() < full_size[0] * full_size[1], "damage must not upload the whole mask");
+                rect
+            }
+        };
+        let expected = render(&before, &st.channel_view, rect, factor, Look::of(&app.session), st.active_layer).unwrap();
+        assert_eq!(image.pixels, expected, "filter options do not change uploaded mask/channel values");
+        if feather == 0.0 {
+            assert!(raw.iter().all(|v| *v == 0.0 || *v == 1.0), "zero-feather mask stores a hard edge");
+        }
+        assert!(std::sync::Arc::ptr_eq(&before, &st.doc), "rendering must not replace the document");
+        let mask = st.doc.layer(layer).unwrap().mask.as_ref().unwrap();
+        assert_eq!(mask.surface.read_region(bounds), raw, "rendering preserves every stored mask pixel");
+        assert_eq!(mask.feather, feather, "sampling must not change Feather");
+        assert_eq!((st.revision, st.view_revision, st.saved_revision), revision);
+        assert_eq!((st.history.entries(), st.history.past_len(), st.history.row_ids().collect::<Vec<_>>()), history);
+        assert_eq!(st.history.redo_labels().map(str::to_owned).collect::<Vec<_>>(), redo);
+        assert_eq!(upload.options.minification, egui::TextureFilter::Linear, "zoomed-out filtering stays linear");
+        assert_eq!(upload.options.wrap_mode, egui::TextureOptions::LINEAR.wrap_mode);
+        assert_eq!(upload.options.mipmap_mode, egui::TextureOptions::LINEAR.mipmap_mode);
+        let magnification = if factor == 1 { egui::TextureFilter::Nearest } else { egui::TextureFilter::Linear };
+        assert_eq!(upload.options.magnification, magnification, "{route:?}: full-resolution mask pixels stay crisp; reduced texels stay filtered");
+
+        assert_eq!(ensure(app, ctx, 0, None), Some(texture));
+        let mut idle = ctx.tex_manager().write().take_delta();
+        let unchanged = idle.set.is_empty();
+        idle.clear();
+        assert!(unchanged, "unchanged channel view must not upload again");
+    }
+
+    fn mask_routes(route: Route, reduced: bool) {
+        for depth in [8, 16, 32] {
+            for feather in [0.0, 4.0] {
+                for mode in ["gray", "overlay"] {
+                    let mut app = mask_app(depth, feather, mode);
+                    let ctx = context(reduced);
+                    let prior = prepare(&mut app, &ctx, route);
+                    assert_upload(&mut app, &ctx, route, prior, if reduced { 3 } else { 1 });
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mask_sampling_full_resolution_creation() {
+        mask_routes(Route::Create, false);
+    }
+
+    #[test]
+    fn mask_sampling_full_resolution_replacement() {
+        mask_routes(Route::Replace, false);
+    }
+
+    #[test]
+    fn mask_sampling_full_resolution_damage_update() {
+        mask_routes(Route::Damage, false);
+    }
+
+    #[test]
+    fn mask_sampling_reduced_creation_stays_linear() {
+        mask_routes(Route::Create, true);
+    }
+
+    #[test]
+    fn mask_sampling_reduced_replacement_stays_linear() {
+        mask_routes(Route::Replace, true);
+    }
+
+    #[test]
+    fn mask_sampling_reduced_damage_update_stays_linear() {
+        mask_routes(Route::Damage, true);
+    }
+
+    fn sibling_routes(route: Route) {
+        for target in ["alpha", "quickMask", "green"] {
+            let mut app = mask_app(8, 0.0, "gray");
+            app.run("view.layerMask", json!({"mode": "off"})).unwrap();
+            match target {
+                "alpha" => {
+                    app.run("channel.new", json!({"fill": "white"})).unwrap();
+                }
+                "quickMask" => {
+                    app.run("select.editInQuickMaskMode", json!({})).unwrap();
+                }
+                _ => {
+                    app.run("channel.target", json!({"channel": target})).unwrap();
+                }
+            }
+            let ctx = context(false);
+            let prior = prepare(&mut app, &ctx, route);
+            assert_upload(&mut app, &ctx, route, prior, 1);
+        }
+    }
+
+    #[test]
+    fn mask_sampling_sibling_channel_creation() {
+        sibling_routes(Route::Create);
+    }
+
+    #[test]
+    fn mask_sampling_sibling_channel_replacement() {
+        sibling_routes(Route::Replace);
+    }
+}
+
 fn session() -> Session {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 8, "height": 4})).unwrap();
