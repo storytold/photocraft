@@ -68,6 +68,7 @@ mod steps_slice;
 mod steps_stack;
 mod steps_stylize;
 mod steps_video;
+mod steps_web_naming;
 mod tables;
 
 #[cfg(test)]

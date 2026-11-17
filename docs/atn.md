@@ -577,6 +577,14 @@ condition IDs remain kept Photoshop steps with their original descriptors.
 - Images Only recordings retain supported inactive HTML/layout preferences when their background
   path is explicitly empty. Unchanged settings save verbatim; edited and native exports clear
   background copying. Partial background blocks, other recorded forms and unknown fields stay kept.
+- Images Only naming maps document/slice names, literal text, decimal/alphabetic file serials,
+  separators and lower/uppercase extensions from a complete nine-component `ovNC` block with
+  Windows compatibility enabled. `ovFN` retains the whole-image filename and the basename for
+  generated slice names; `ovCU` converts spaces to hyphens. File serials skip no-image cells,
+  consecutive separator components use the first, and trailing separator components are omitted.
+  Unchanged recordings retain all original naming fields, including `ovCM`. Native playback
+  preserves Unicode text and refuses unrepresented ImageReady rollover documents, unsafe or
+  oversized filenames. Other naming components, partial blocks and unknown fields stay kept.
 - Duplicate Layer retains a named `T` document destination and resolves it against open documents
   at playback, refusing absent or ambiguous names. It copies the referenced layer, or the selected
   layers for `Trgt`, at their existing canvas positions and leaves the source active. Stack indexes

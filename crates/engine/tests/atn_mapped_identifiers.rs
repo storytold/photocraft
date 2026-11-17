@@ -2015,6 +2015,226 @@ fn web_images_only_metadata(mut d: Descriptor) -> Descriptor {
     d
 }
 
+fn web_recorded_naming(path: &str, parts: &[(&str, Option<&str>)], filename: Option<&str>, unix: bool) -> Descriptor {
+    let mut d = web_images_only_metadata(web_all_slice_images(web_destination(path, true, true), false));
+    let Some(D::Descriptor(u)) = d.items.iter_mut().find(|(k, _)| k.is("Usng")).map(|(_, v)| v) else { panic!("SaveForWeb") };
+    let mut list: Vec<_> = parts
+        .iter()
+        .map(|(code, literal)| {
+            let mut part = Descriptor::new("SCnc").with("ncTp", enm("STnc", code));
+            if let Some(literal) = literal {
+                part = part.with("ncSt", D::Text(UnicodeString::new_nul(literal)));
+            }
+            D::Descriptor(part)
+        })
+        .collect();
+    while list.len() < 9 {
+        list.push(D::Descriptor(Descriptor::new("SCnc").with("ncTp", enm("STnc", "NC24"))));
+    }
+    u.items.extend([
+        (Id::new("ovNC"), D::List(list)),
+        (Id::new("ovCM"), D::Boolean(true)),
+        (Id::new("ovCW"), D::Boolean(true)),
+        (Id::new("ovCU"), D::Boolean(unix)),
+    ]);
+    if let Some(name) = filename {
+        u.items.push((Id::new("ovFN"), D::Text(UnicodeString::new_nul(name))));
+    }
+    d
+}
+
+#[test]
+fn recorded_web_naming_identifiers_map_and_keep_the_original_descriptor() {
+    for (code, component) in [
+        ("NC00", json!("document")),
+        ("NC01", json!("slice")),
+        ("NC02", json!("none")),
+        ("NC06", json!("none")),
+        ("NC08", json!("serial")),
+        ("NC09", json!("serial2")),
+        ("NC10", json!("letter")),
+        ("NC11", json!("LETTER")),
+        ("NC19", json!("underscore")),
+        ("NC20", json!("hyphen")),
+        ("NC21", json!("space")),
+        ("NC24", json!("none")),
+        ("NC25", json!({"text":"图像Ωé"})),
+    ] {
+        let d = web_recorded_naming(
+            "/out",
+            &[("NC25", Some("X")), (code, (code == "NC25").then_some("图像Ωé")), ("NC25", Some("Y")), ("NC22", None)],
+            Some("Version.2.PNG"),
+            true,
+        );
+        for event in [AtnEvent::Code(*b"Expr"), AtnEvent::name("export")] {
+            let action = recorded(event, d.clone());
+            assert_eq!(action.steps[0].0, "file.export.saveForWebLegacy", "{code}");
+            let naming = &action.steps[0].1["fileNaming"];
+            assert_eq!(naming["components"][1], component, "{code}");
+            assert_eq!(naming["fileName"], "Version.2.PNG");
+            assert_eq!(naming["wholeImage"], true);
+            assert_eq!(naming["windows"], true);
+            assert_eq!(naming["unix"], true);
+            assert_eq!(naming["extension"], "lower");
+            assert_eq!(saved(&action).descriptor.unwrap().to_bytes(), d.to_bytes());
+            let mut edited = action.clone();
+            edited.steps[0].1["fileNaming"]["fileName"] = json!("Edited.PNG");
+            let written = saved(&edited).descriptor.unwrap();
+            let Some(D::Descriptor(settings)) = written.get("Usng") else { panic!("SaveForWeb") };
+            assert_eq!(settings.get("ovFN"), Some(&D::Text(UnicodeString::new_nul("Edited.PNG"))));
+            let back = recorded(AtnEvent::Code(*b"Expr"), written);
+            assert_eq!(back.steps[0].1["fileNaming"], edited.steps[0].1["fileNaming"]);
+        }
+    }
+    let upper = web_recorded_naming("/out", &[("NC01", None), ("NC23", None)], None, false);
+    let action = recorded(AtnEvent::Code(*b"Expr"), upper.clone());
+    assert_eq!(action.steps[0].1["fileNaming"]["extension"], "upper");
+    assert_eq!(saved(&action).descriptor.unwrap().to_bytes(), upper.to_bytes());
+    for (format, filename, native) in
+        [("JPEG", "Recorded.JPG", "jpeg"), ("GIFf", "Recorded.GIF", "gif"), ("PN8", "Recorded.PNG", "png8"), ("WBMP", "Recorded.WBMP", "wbmp")]
+    {
+        let mut d = web_recorded_naming("/out", &[("NC01", None), ("NC22", None)], Some(filename), false);
+        let Some(D::Descriptor(u)) = d.items.iter_mut().find(|(k, _)| k.is("Usng")).map(|(_, v)| v) else { panic!("SaveForWeb") };
+        u.items.iter_mut().find(|(k, _)| k.is("Fmt ")).unwrap().1 = enm("IRFm", format);
+        let action = recorded(AtnEvent::Code(*b"Expr"), d.clone());
+        assert_eq!(action.steps[0].0, "file.export.saveForWebLegacy");
+        assert_eq!(action.steps[0].1["format"], native);
+        assert_eq!(saved(&action).descriptor.unwrap().to_bytes(), d.to_bytes());
+    }
+}
+
+#[test]
+fn recorded_web_naming_exports_only_represented_native_settings() {
+    let naming = json!({"components":["slice"],"fileName":"Recorded.png","wholeImage":true,"windows":true,"unix":false,"extension":"lower"});
+    let params = json!({"dir":"/out","format":"png24","slices":"all","html":false,"imagesFolder":"","fileNaming":naming});
+    let action = Action::new("Recorded", vec![("file.export.saveForWebLegacy".into(), params.clone())]);
+    let back = recorded(AtnEvent::Code(*b"Expr"), saved(&action).descriptor.unwrap());
+    assert_eq!(back.steps[0].1["fileNaming"], naming);
+    for extra in [
+        json!({"windows":false}),
+        json!({"wholeImage":false}),
+        json!({"extension":"none"}),
+        json!({"fileName":"Recorded.jpg"}),
+        json!({"name":"unrepresented"}),
+        json!({"unix":null}),
+        json!({"components":["unknown"]}),
+        json!({"components":vec!["document";9]}),
+    ] {
+        let mut params = params.clone();
+        params["fileNaming"].as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        let action = Action::new("Recorded", vec![("file.export.saveForWebLegacy".into(), params)]);
+        assert!(atn_cmds::export("Identifiers", &[&action], &[], false).is_err(), "{extra}");
+    }
+}
+
+#[test]
+fn recorded_web_naming_replays_whole_images_slices_and_serials_at_every_depth() {
+    let root = tempfile::tempdir().unwrap();
+    for depth in [8, 16, 32] {
+        for kind in ["whole", "slices", "serial"] {
+            let out = root.path().join(format!("{depth}-{kind}"));
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width":32,"height":24,"depth":depth,"background":"white","name":"Input.psd"})).unwrap();
+            if kind != "whole" {
+                s.execute("slice.new", json!({"rect":[0,0,16,24],"kind":if kind=="serial" {"noImage"}else{"image"}})).unwrap();
+            }
+            let parts = if kind == "serial" {
+                vec![("NC25", Some("片")), ("NC08", None), ("NC21", None), ("NC22", None)]
+            } else {
+                vec![
+                    ("NC01", None),
+                    ("NC20", None),
+                    ("NC02", None),
+                    ("NC19", None),
+                    ("NC06", None),
+                    ("NC24", None),
+                    ("NC24", None),
+                    ("NC24", None),
+                    ("NC22", None),
+                ]
+            };
+            let action = recorded(AtnEvent::Code(*b"Expr"), web_recorded_naming(&out.to_string_lossy(), &parts, Some("Archive.PNG"), true));
+            assert_eq!(action.steps[0].0, "file.export.saveForWebLegacy");
+            let before = s.active().unwrap().doc.clone();
+            replay_saved(&mut s, &action);
+            assert_eq!(s.active().unwrap().doc, before, "export does not mutate the document");
+            let mut names: Vec<_> = std::fs::read_dir(&out).unwrap().map(|f| f.unwrap().file_name().to_string_lossy().into_owned()).collect();
+            names.sort();
+            let expected = match kind {
+                "whole" => vec!["Archive.PNG"],
+                "slices" => vec!["Archive_01.png", "Archive_02.png"],
+                _ => vec!["片1.png"],
+            };
+            assert_eq!(names, expected, "{depth}/{kind}");
+            for name in names {
+                let image = photocraft_codecs::decode(&std::fs::read(out.join(name)).unwrap()).unwrap();
+                assert_eq!(image.dimensions(), (if kind == "whole" { 32 } else { 16 }, 24));
+            }
+        }
+    }
+}
+
+#[test]
+fn recorded_web_naming_keeps_unrepresented_partial_and_malformed_settings() {
+    let base = web_recorded_naming("/out", &[("NC01", None), ("NC22", None)], Some("Recorded.png"), false);
+    let mut cases = Vec::new();
+    for (key, value) in [
+        ("ovCW", D::Boolean(false)),
+        ("ovCM", D::Integer(1)),
+        ("ovCU", D::Integer(0)),
+        ("ovFN", D::Integer(1)),
+        ("ovFN", D::Text(UnicodeString::new_nul("../bad.png"))),
+        ("ovFN", D::Text(UnicodeString::new_nul("Recorded.jpg"))),
+        ("ovFN", D::Text(UnicodeString(vec![0xd800, 0]))),
+        ("ovFN", D::Text(UnicodeString::new_nul("bad\0name.png"))),
+        ("ovNC", D::List(vec![])),
+        ("SHTM", D::Boolean(true)),
+    ] {
+        let mut d = base.clone();
+        let Some(D::Descriptor(u)) = d.items.iter_mut().find(|(k, _)| k.is("Usng")).map(|(_, v)| v) else { panic!("SaveForWeb") };
+        u.items.iter_mut().find(|(k, _)| k.is(key)).unwrap().1 = value;
+        cases.push(d);
+    }
+    for key in ["ovNC", "ovCM", "ovCW", "ovCU"] {
+        let mut d = base.clone();
+        let Some(D::Descriptor(u)) = d.items.iter_mut().find(|(k, _)| k.is("Usng")).map(|(_, v)| v) else { panic!("SaveForWeb") };
+        u.items.retain(|(k, _)| !k.is(key));
+        cases.push(d);
+    }
+    for code in ["NC12", "NC03", "NC99"] {
+        cases.push(web_recorded_naming("/out", &[(code, None), ("NC22", None)], None, false));
+    }
+    for mutation in 0..7 {
+        let mut d = base.clone();
+        let Some(D::Descriptor(u)) = d.items.iter_mut().find(|(k, _)| k.is("Usng")).map(|(_, v)| v) else { panic!("SaveForWeb") };
+        let Some(D::List(parts)) = u.items.iter_mut().find(|(k, _)| k.is("ovNC")).map(|(_, v)| v) else { panic!("naming") };
+        if mutation == 0 {
+            parts.pop();
+        } else if mutation == 1 {
+            parts.push(parts[0].clone());
+        } else {
+            let D::Descriptor(part) = &mut parts[0] else { panic!("component") };
+            match mutation {
+                2 => part.class_id = Id::new("Other"),
+                3 => part.items.push(part.items[0].clone()),
+                4 => part.items.push((Id::new("extra"), D::Boolean(false))),
+                5 => {
+                    part.items[0].1 = enm("wrong", "NC01");
+                }
+                _ => {
+                    part.items[0].1 = enm("STnc", "NC25");
+                }
+            }
+        }
+        cases.push(d);
+    }
+    for d in cases {
+        let action = recorded(AtnEvent::name("export"), d.clone());
+        assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP, "{d:?}");
+        assert_eq!(saved(&action).descriptor.unwrap().to_bytes(), d.to_bytes());
+    }
+}
+
 #[test]
 fn recorded_web_images_only_metadata_maps_and_preserves_inactive_settings() {
     let d = web_images_only_metadata(web_all_slice_images(web_destination("/out/images", true, true), false));

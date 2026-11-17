@@ -199,7 +199,7 @@ const WEB_METADATA: &[(&str, &str)] =
     &[("MDNn", "none"), ("MDCp", "copyright"), ("MDCC", "copyrightAndContact"), ("MDAx", "allExceptCameraInfo"), ("MDAl", "all")];
 
 /// Only represented settings may run: dropping slice/output options can write different files.
-fn web_keys(d: &Descriptor, keys: &[&str]) -> bool {
+pub(super) fn web_keys(d: &Descriptor, keys: &[&str]) -> bool {
     d.items.len() <= keys.len()
         && d.items.iter().all(|(key, _)| keys.iter().any(|known| key.is(known)))
         && keys.iter().all(|key| d.items.iter().filter(|(k, _)| k.is(key)).count() <= 1)
@@ -311,7 +311,7 @@ fn web_inactive_output_supported(u: &Descriptor) -> bool {
 }
 
 /// An explicit all-slices/images-only folder export, including its relative image subfolder.
-fn web_slice_images_folder(u: &Descriptor) -> Option<String> {
+pub(super) fn web_slice_images_folder(u: &Descriptor) -> Option<String> {
     if get_bool(u, "DIDr") != Some(true)
         || get_bool(u, "SImg") != Some(true)
         || get_bool(u, "SHTM") != Some(false)
@@ -339,7 +339,7 @@ fn web_settings_supported(u: &Descriptor) -> bool {
     const KEYS: &[&str] = &[
         "In  ", "DIDr", "Op  ", "Fmt ", "Intr", "Trns", "EICC", "Prgr", "Pass", "Optm", "Qlty", "NCol", "Mtt ", "MttR", "MttG", "MttB", "SWch", "SWmd", "SWsl",
         "SImg", "SHTM", "ovSF", "ovSN", "blur", "QChS", "QCUI", "QChT", "QChV", "ohXH", "ohIC", "ohAA", "ohQA", "ohCA", "ohIZ", "ohTC", "ohAC", "ohIn", "ohLE",
-        "ohEn", "olCS", "olEC", "olWH", "olSV", "olSH", "olNC", "obIA", "obCS", "obIP", "ovCB",
+        "ohEn", "olCS", "olEC", "olWH", "olSV", "olSH", "olNC", "obIA", "obCS", "obIP", "ovCB", "ovFN", "ovNC", "ovCM", "ovCW", "ovCU",
     ];
     if !u.class_id.is("SaveForWeb") || !web_keys(u, KEYS) {
         return false;
@@ -349,6 +349,9 @@ fn web_settings_supported(u: &Descriptor) -> bool {
         return false;
     }
     if !web_inactive_output_supported(u) {
+        return false;
+    }
+    if super::steps_web_naming::KEYS.iter().any(|key| u.get(key).is_some()) && super::steps_web_naming::from(u).is_none() {
         return false;
     }
     if let Some(operation) = u.get("Op  ")
@@ -466,7 +469,13 @@ pub(super) fn export_from(d: &Descriptor) -> Mapped {
         p["matte"] =
             json!(format!("#{:02x}{:02x}{:02x}", r.round().clamp(0.0, 255.0) as u8, g.round().clamp(0.0, 255.0) as u8, b.round().clamp(0.0, 255.0) as u8));
     }
-    if WEB_NEUTRAL_JPEG_KEYS.iter().chain(WEB_INACTIVE_OUTPUT_KEYS).any(|key| u.get(key).is_some()) && web_descriptor(&p).as_ref() != Some(d) {
+    if super::steps_web_naming::KEYS.iter().any(|key| u.get(key).is_some()) {
+        let Some(naming) = super::steps_web_naming::from(u) else { return unsupported };
+        p["fileNaming"] = naming;
+    }
+    if WEB_NEUTRAL_JPEG_KEYS.iter().chain(WEB_INACTIVE_OUTPUT_KEYS).chain(super::steps_web_naming::KEYS).any(|key| u.get(key).is_some())
+        && web_descriptor(&p).as_ref() != Some(d)
+    {
         p[WEB_SOURCE] = photocraft_paint::tile::b64_encode(&d.to_bytes()).into();
     }
     step("file.export.saveForWebLegacy", p)
@@ -510,6 +519,7 @@ fn web_descriptor(p: &Value) -> Option<Descriptor> {
         "slices",
         "imagesFolder",
         "html",
+        "fileNaming",
     ];
     if p.as_object()?.iter().any(|(key, value)| !value.is_null() && !KEYS.contains(&key.as_str())) {
         return None;
@@ -575,6 +585,12 @@ fn web_descriptor(p: &Value) -> Option<Descriptor> {
             .with("obCS", enm("STcs", "CS01"))
             .with("obIP", text(""))
             .with("ovCB", D::Boolean(false));
+    }
+    if let Some(naming) = p.get("fileNaming").filter(|v| !v.is_null()) {
+        if dir.is_none() {
+            return None;
+        }
+        u.items.extend(super::steps_web_naming::to(naming, jstr(p, "format").unwrap_or("png24"))?.items);
     }
     if let Some(convert) = jbool(p, "convertToSrgb") {
         u = u.with("SWch", enm("STch", if convert { "CHsR" } else { "CHDc" }));
