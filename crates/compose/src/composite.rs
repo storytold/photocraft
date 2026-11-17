@@ -761,3 +761,7 @@ fn blend_span_g(dst: &mut [[f32; 4]], src: &[[f32; 4]], x0: i32, y: i32, mode: B
         *b = blend::composite_gamma(mode, *b, s, opacity, gamma);
     }
 }
+
+#[cfg(test)]
+#[path = "blend_if_split_fade_tests.rs"]
+mod blend_if_split_fade_tests;
