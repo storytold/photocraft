@@ -349,7 +349,7 @@ fn tysh_preservation_fallback_survives_missing_descriptor() {
 
 #[test]
 fn oversized_tysh_preserves_fallback_geometry_without_decoding_text() {
-    let mut bytes = vec![0u8; craft_psd_tysh::text::envelope::MAX_BYTES + 1];
+    let mut bytes = vec![0u8; craft_psd::text::envelope::MAX_BYTES + 1];
     let expected = [1.0f64, 0.0, 0.0, 1.0, 25.0, 30.0];
     for (i, v) in expected.iter().enumerate() {
         bytes[2 + i * 8..10 + i * 8].copy_from_slice(&v.to_be_bytes());

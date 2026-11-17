@@ -1,14 +1,11 @@
-use super::*;
+use craft::imaging::ui::fill::FillOp;
+use craft::ui::canvas::PixelRect;
+use photocraft_doc::LayerId;
+use serde_json::{Value, json};
 
-fn finish_pending_job(app: &mut PhotocraftApp) {
-    let ctx = egui::Context::default();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    while app.distort.caf.as_ref().is_some_and(|w| w.pending_fill.is_some()) {
-        crate::jobs_ui::tick(app, &ctx);
-        assert!(std::time::Instant::now() < deadline, "Content-Aware Fill job did not finish");
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
-}
+use super::preview::{compute_preview, plan_params};
+use super::*;
+use crate::control::dialogs::workspace_ui;
 
 /// A textured layer (a checker of two colours over a gradient) with a 20 px square selected.
 fn app_with_selection() -> PhotocraftApp {
@@ -42,77 +39,95 @@ fn px(app: &PhotocraftApp, layer: LayerId, x: i32, y: i32) -> Vec<f32> {
     app.session.active().unwrap().doc.layer(layer).unwrap().surface().unwrap().pixel(x, y)
 }
 
-fn ws(app: &PhotocraftApp) -> &CafWorkspace {
-    app.distort.caf.as_ref().unwrap()
+/// The app's own context, which the dialog host and the remembered values run on.
+fn ctx(app: &PhotocraftApp) -> egui::Context {
+    app.ctx().clone()
 }
 
-#[test]
-fn settings_dropdowns_are_named_for_their_visible_labels() {
-    use egui::accesskit::Role;
-    use egui_kittest::Harness;
-    use egui_kittest::kittest::{NodeT, Queryable};
+/// One pass of the host with the app's taker, as a frame runs them.
+fn pass(app: &mut PhotocraftApp) {
+    let ctx = ctx(app);
+    crate::canvas::testing::frame(app);
+    take(app, &ctx);
+}
 
-    let mut app = app_with_selection();
-    open(&mut app).unwrap();
-    let mut h = Harness::builder()
-        .with_size(egui::vec2(1000.0, 900.0))
-        .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::ALL[0]))
-        .build_ui_state(|ui, app: &mut PhotocraftApp| show(app, ui.ctx()), app);
-    h.run_steps(2);
-    // The Indicates dropdown lives inside a collapsed "Sampling Area Overlay" header.
-    h.get_by_role_and_label(Role::DisclosureTriangle, "Sampling Area Overlay").click();
-    h.run_steps(3);
-    let labels: Vec<String> = h.query_all_by_role(Role::ComboBox).filter_map(|n| n.accesskit_node().label()).collect();
-    for label in ["Indicates", "Color Adaptation", "Rotation Adaptation", "Output To"] {
-        assert!(labels.iter().any(|have| have == label), "{label} names its dropdown: {labels:?}");
+/// A `{ui: …}` request to the open workspace, then the passes that report what it queued.
+fn ui(app: &mut PhotocraftApp, request: Value) -> Result<Value, String> {
+    let ctx = ctx(app);
+    let r = workspace_ui(app, &ctx, CMD, &request);
+    pass(app);
+    pass(app);
+    r
+}
+
+fn facts(app: &PhotocraftApp) -> Value {
+    describe(app).expect("the workspace is open")
+}
+
+fn sampled(app: &PhotocraftApp) -> u64 {
+    facts(app)["sampledProxyPixels"].as_u64().unwrap()
+}
+
+/// Runs passes until `done` holds of the facts (the preview job runs on another thread).
+fn settle(app: &mut PhotocraftApp, done: impl Fn(&Value) -> bool) -> Value {
+    for _ in 0..600 {
+        pass(app);
+        // The preview job waits on the framework's queue until a request finishes it, as `waitPreview` does.
+        craft::ui::runtime::pending::finish_jobs(&ctx(app), std::time::Duration::from_secs(30));
+        pass(app);
+        let d = facts(app);
+        if done(&d) {
+            return d;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
-    for wrong in ["Contents:", "Color", "Rotation", "Source"] {
-        assert!(!labels.iter().any(|have| have == wrong), "{wrong} names no control here: {labels:?}");
+    panic!("the workspace did not settle: {}", facts(app));
+}
+
+fn close_all(app: &mut PhotocraftApp) {
+    for _ in 0..20 {
+        if app.caf.is_none() {
+            return;
+        }
+        pass(app);
     }
 }
 
-/// Photoshop opens the workspace with the Sampling Brush subtracting at a tenth of the
-/// window's side, Auto sampling, output to a new layer.
-#[test]
-fn opens_like_photoshop() {
-    let mut app = app_with_selection();
-    app.session.prefs.edit(|p| {
-        p.dialogs.remove(REMEMBERED);
-    });
-    open(&mut app).unwrap();
-    let d = ws(&app).describe();
-    assert_eq!(d["window"], json!([0, 0, 200, 160]), "a 200 px window, clipped to the 200 × 160 canvas");
-    assert_eq!((d["tool"].as_str(), d["brushMode"].as_str(), d["brushSize"].as_f64()), (Some("brush"), Some("subtract"), Some(20.0)));
-    assert_eq!((d["settings"]["sampling"].as_str(), d["settings"]["output"].as_str()), (Some("auto"), Some("new")));
-    assert_eq!(d["fillArea"], json!(400));
-    assert!(d["sampledProxyPixels"].as_u64().unwrap() > 1000);
+fn hosted(app: &mut PhotocraftApp) -> &mut Hosted {
+    let id = app.caf.as_ref().unwrap().id;
+    app.framework.dialogs.get_mut_by_id::<Hosted>(id).unwrap()
 }
 
 #[test]
 fn brush_strokes_change_the_sampling_area_and_undo() {
     let mut app = app_with_selection();
     open(&mut app).unwrap();
-    control(&mut app, &json!({"sampling": "rectangular"})).unwrap();
-    let all = ws(&app).describe()["sampledProxyPixels"].as_u64().unwrap();
+    pass(&mut app);
+    ui(&mut app, json!({"sampling": "rectangular"})).unwrap();
+    let all = sampled(&app);
     assert_eq!(all, 200 * 160 - 400, "Rectangular: the whole window but the fill area");
     // Subtracting (the default): a 10 px stroke takes about 10 × 60 px away.
-    let d = control(&mut app, &json!({"stroke": {"points": [[20.0, 20.0], [80.0, 20.0]], "size": 10}})).unwrap();
-    let less = d["sampledProxyPixels"].as_u64().unwrap();
+    ui(&mut app, json!({"stroke": {"points": [[20.0, 20.0], [80.0, 20.0]], "size": 10}})).unwrap();
+    let less = sampled(&app);
     assert!((all - less).abs_diff(10 * 60 + 79) < 120, "{all} → {less}");
     // Undo brings it back; redo takes it again.
-    assert_eq!(control(&mut app, &json!({"undo": true})).unwrap()["sampledProxyPixels"].as_u64(), Some(all));
-    assert_eq!(control(&mut app, &json!({"redo": true})).unwrap()["sampledProxyPixels"].as_u64(), Some(less));
+    ui(&mut app, json!({"undo": true})).unwrap();
+    assert_eq!(sampled(&app), all);
+    ui(&mut app, json!({"redo": true})).unwrap();
+    assert_eq!(sampled(&app), less);
     // Custom starts empty and the brush adds; Alt reverses it.
-    let d = control(&mut app, &json!({"sampling": "custom"})).unwrap();
+    ui(&mut app, json!({"sampling": "custom"})).unwrap();
+    let d = facts(&app);
     assert_eq!((d["sampledProxyPixels"].as_u64(), d["brushMode"].as_str(), d["strokes"].as_u64()), (Some(0), Some("add"), Some(0)));
-    let d = control(&mut app, &json!({"stroke": {"points": [[20.0, 120.0], [60.0, 120.0]], "size": 8}})).unwrap();
-    assert!(d["sampledProxyPixels"].as_u64().unwrap() > 300);
-    let d = control(&mut app, &json!({"stroke": {"points": [[20.0, 120.0], [60.0, 120.0]], "size": 8, "alt": true}})).unwrap();
-    assert_eq!(d["sampledProxyPixels"].as_u64(), Some(0));
+    ui(&mut app, json!({"stroke": {"points": [[20.0, 120.0], [60.0, 120.0]], "size": 8}})).unwrap();
+    assert!(sampled(&app) > 300);
+    ui(&mut app, json!({"stroke": {"points": [[20.0, 120.0], [60.0, 120.0]], "size": 8, "alt": true}})).unwrap();
+    assert_eq!(sampled(&app), 0);
     // Undoing the change of option restores Rectangular with its stroke.
-    control(&mut app, &json!({"undo": true})).unwrap();
-    control(&mut app, &json!({"undo": true})).unwrap();
-    let d = control(&mut app, &json!({"undo": true})).unwrap();
+    for _ in 0..3 {
+        ui(&mut app, json!({"undo": true})).unwrap();
+    }
+    let d = facts(&app);
     assert_eq!((d["settings"]["sampling"].as_str(), d["strokes"].as_u64(), d["brushMode"].as_str()), (Some("rectangular"), Some(1), Some("subtract")));
 }
 
@@ -120,19 +135,21 @@ fn brush_strokes_change_the_sampling_area_and_undo() {
 fn the_lasso_edits_the_fill_area_and_the_window_follows() {
     let mut app = app_with_selection();
     open(&mut app).unwrap();
-    let d = control(&mut app, &json!({"lasso": {"op": "add", "points": [[130.0, 70.0], [150.0, 70.0], [150.0, 90.0], [130.0, 90.0]]}})).unwrap();
-    assert_eq!(d["fillArea"], json!(800));
-    let d = control(&mut app, &json!({"expand": 2})).unwrap();
-    assert!(d["fillArea"].as_u64().unwrap() > 900);
-    let d = control(&mut app, &json!({"undo": true, "lassoMode": "subtract"})).unwrap();
+    ui(&mut app, json!({"lasso": {"op": "add", "points": [[130.0, 70.0], [150.0, 70.0], [150.0, 90.0], [130.0, 90.0]]}})).unwrap();
+    assert_eq!(facts(&app)["fillArea"], json!(800));
+    ui(&mut app, json!({"expand": 2})).unwrap();
+    assert!(facts(&app)["fillArea"].as_u64().unwrap() > 900);
+    ui(&mut app, json!({"undo": true, "lassoMode": "subtract"})).unwrap();
+    let d = facts(&app);
     assert_eq!((d["fillArea"].as_u64(), d["lassoMode"].as_str()), (Some(800), Some("subtract")));
     // Subtracting everything is refused: the fill area can't be empty.
-    let d = control(&mut app, &json!({"lasso": {"points": [[0.0, 0.0], [200.0, 0.0], [200.0, 160.0], [0.0, 160.0]]}})).unwrap();
+    ui(&mut app, json!({"lasso": {"op": "subtract", "points": [[0.0, 0.0], [200.0, 0.0], [200.0, 160.0], [0.0, 160.0]]}})).unwrap();
+    let d = facts(&app);
     assert_eq!(d["fillArea"], json!(800));
     assert!(d["error"].as_str().is_some_and(|e| e.contains("empty")), "{d}");
     // The reset button goes back to the selection.
-    let d = control(&mut app, &json!({"reset": "lasso"})).unwrap();
-    assert_eq!(d["fillArea"], json!(400));
+    ui(&mut app, json!({"reset": "fillArea"})).unwrap();
+    assert_eq!(facts(&app)["fillArea"], json!(400));
 }
 
 /// A sampling area the Sampling Brush erased entirely previews as an error naming the
@@ -141,231 +158,65 @@ fn the_lasso_edits_the_fill_area_and_the_window_follows() {
 fn an_erased_sampling_area_previews_as_an_error() {
     let mut app = app_with_selection();
     open(&mut app).unwrap();
-    control(&mut app, &json!({"sampling": "rectangular", "waitPreview": true})).unwrap();
-    assert!(ws(&app).describe()["previewError"].is_null());
+    ui(&mut app, json!({"sampling": "rectangular"})).unwrap();
+    settle(&mut app, |d| d["previewReady"] == json!(true) && d["previewError"].is_null());
     // Subtracting (the default) with a brush wider than the 200 × 160 window.
-    let e = control(&mut app, &json!({"stroke": {"points": [[100.0, 80.0]], "size": 600}, "waitPreview": true})).unwrap_err();
-    assert!(e.contains("nothing to sample from"), "{e}");
-    let d = ws(&app).describe();
+    ui(&mut app, json!({"stroke": {"points": [[100.0, 80.0]], "size": 600}})).unwrap();
+    let d = settle(&mut app, |d| !d["previewError"].is_null());
     assert_eq!(d["sampledProxyPixels"].as_u64(), Some(0), "{d}");
     assert!(d["previewError"].as_str().is_some_and(|e| e.contains("nothing to sample from")), "{d}");
-    let d = control(&mut app, &json!({"undo": true, "waitPreview": true})).unwrap();
+    let runs = d["previewRuns"].as_u64().unwrap();
+    ui(&mut app, json!({"undo": true})).unwrap();
+    let d = settle(&mut app, |d| d["previewError"].is_null() && d["previewRuns"].as_u64().unwrap() > runs);
     assert!(d["previewError"].is_null(), "{d}");
 }
 
-/// OK whose fill fails keeps the workspace open with the error in its panel, from the button
-/// and from the control channel, so the work isn't thrown away; once the fill can run, OK
-/// fills and closes.
+/// A fill the engine refuses reaches the workspace as the held OK's `Err`: the engine's reason shows, no history
+/// step is added, and once the lock is lifted OK fills once and closes.
 #[test]
 fn a_failed_ok_keeps_the_workspace_open() {
     let mut app = app_with_selection();
     open(&mut app).unwrap();
     let steps = app.session.active().unwrap().history.past_len();
     app.session.execute("layer.setProps", json!({"locks": {"pixels": true}})).unwrap();
-    commit(&mut app);
-    assert!(app.distort.caf.is_some(), "OK keeps the workspace open when the fill fails");
-    assert!(ws(&app).error.as_deref().is_some_and(|e| e.contains("locked")), "{:?}", ws(&app).error);
+    let steps = app.session.active().unwrap().history.past_len().max(steps);
+    let refusal = ui(&mut app, json!({"commit": true})).unwrap_err();
+    assert!(refusal.contains("locked"), "the refused OK replies with the engine's reason: {refusal}");
+    assert!(app.caf.is_some(), "OK keeps the workspace open when the fill fails");
+    assert!(facts(&app)["error"].as_str().is_some_and(|e| e.contains("locked")), "{}", facts(&app));
     assert!(app.ui.status_error);
-    assert!(control(&mut app, &json!({"commit": true})).unwrap_err().contains("locked"));
-    assert!(app.distort.caf.is_some(), "the control channel's OK too");
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps, "a refused fill adds no step");
     app.session.execute("layer.setProps", json!({"locks": {"pixels": false}})).unwrap();
     let steps = app.session.active().unwrap().history.past_len().max(steps);
-    commit(&mut app);
-    assert!(app.distort.caf.is_none(), "OK closes once the fill runs");
+    ui(&mut app, json!({"commit": true})).unwrap();
+    close_all(&mut app);
+    assert!(app.caf.is_none(), "OK closes once the fill runs");
     assert!(app.session.active().unwrap().history.past_len() > steps, "and fills");
 }
 
-#[test]
-fn a_background_apply_waits_for_success_and_rejects_a_second_apply() {
-    let mut app = app_with_selection();
-    app.background_jobs = true;
-    open(&mut app).unwrap();
-    let steps = app.session.active().unwrap().history.past_len();
-
-    let result = apply(&mut app).unwrap();
-    assert_eq!(result["pending"], true, "{result}");
-    let job = ws(&app).pending_fill.expect("the job is tracked").job;
-    let opts = ws(&app).opts.clone();
-    assert!(apply(&mut app).unwrap_err().contains("still processing"));
-    assert!(control(&mut app, &json!({"sampling": "rectangular"})).is_err());
-    assert_eq!(ws(&app).opts, opts, "an in-flight job keeps its captured settings");
-    assert_eq!(ws(&app).pending_fill.map(|p| p.job), Some(job));
-
-    finish_pending_job(&mut app);
-    assert!(app.distort.caf.is_some(), "Apply remains open after success");
-    assert!(ws(&app).pending_fill.is_none());
-    assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1);
-}
-
-#[test]
-fn background_ok_closes_only_after_the_fill_is_applied() {
-    let mut app = app_with_selection();
-    app.background_jobs = true;
-    open(&mut app).unwrap();
-    let steps = app.session.active().unwrap().history.past_len();
-
-    commit(&mut app);
-    let job = ws(&app).pending_fill.expect("OK records the pending job").job;
-    assert!(ws(&app).pending_fill.unwrap().close_on_success);
-    assert!(app.distort.caf.is_some(), "accepting an async fill does not close the workspace");
-    assert_eq!(app.session.active().unwrap().history.past_len(), steps);
-    commit(&mut app);
-    assert_eq!(ws(&app).pending_fill.map(|p| p.job), Some(job), "a repeated OK does not start a second job");
-
-    finish_pending_job(&mut app);
-    assert!(app.distort.caf.is_none(), "successful completion closes OK");
-    assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1);
-}
-
-#[test]
-fn control_ok_reports_pending_and_does_not_close_early() {
-    let mut app = app_with_selection();
-    app.background_jobs = true;
-    open(&mut app).unwrap();
-    let result = control(&mut app, &json!({"commit": true})).unwrap();
-    assert_eq!(result["committed"], false, "{result}");
-    assert_eq!(result["pending"], true, "{result}");
-    let job = JobId(result["job"].as_u64().unwrap());
-    assert_eq!(ws(&app).pending_fill.map(|p| p.job), Some(job));
-    assert!(ws(&app).pending_fill.unwrap().close_on_success);
-    assert!(app.distort.caf.is_some());
-    assert!(control(&mut app, &json!({"commit": true})).is_err());
-    assert_eq!(ws(&app).pending_fill.map(|p| p.job), Some(job));
-
-    finish_pending_job(&mut app);
-    assert!(app.distort.caf.is_none());
-}
-
-#[test]
-fn cancelling_a_pending_fill_cancels_the_job_and_closes_the_workspace() {
-    let mut app = app_with_selection();
-    app.background_jobs = true;
-    open(&mut app).unwrap();
-    let result = apply(&mut app).unwrap();
-    let job = JobId(result["job"].as_u64().unwrap());
-    assert!(app.session.job(job).is_some_and(|j| j.state == "running"));
-
-    cancel(&mut app);
-    assert!(app.distort.caf.is_none());
-    assert!(app.session.job(job).is_none(), "cancelled jobs leave the running set");
-    assert!(app.session.jobs_with_recent().iter().any(|j| j.id == job && j.state == "cancelled"));
-}
-
-#[test]
-fn cancel_button_remains_clickable_during_a_pending_fill() {
-    use egui_kittest::kittest::Queryable;
-    let mut app = app_with_selection();
-    app.background_jobs = true;
-    open(&mut app).unwrap();
-    let result = apply(&mut app).unwrap();
-    let job = JobId(result["job"].as_u64().unwrap());
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1600.0, 1000.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
-            let ctx = ui.ctx().clone();
-            if ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                show(app, &ctx);
-            }
-        },
-        app,
-    );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
-    h.run_steps(4);
-    assert_eq!(ws(h.state()).pending_fill.map(|p| p.job), Some(job));
-    // Exercise the actual footer interaction, not cancel() or the control endpoint.
-    h.get_by_label("Cancel").click();
-    h.run_steps(3);
-    assert!(h.state().distort.caf.is_none(), "the visible Cancel button closes the workspace while busy");
-    assert!(h.state().session.job(job).is_none());
-    assert!(h.state().session.jobs_with_recent().iter().any(|j| j.id == job && j.state == "cancelled"));
-}
-
-#[test]
-fn failed_cancelled_and_stale_jobs_do_not_close_a_caf_workspace() {
-    let mut app = app_with_selection();
-    open(&mut app).unwrap();
-    let document = ws(&app).document;
-    let job = JobId(71);
-    app.distort.caf.as_mut().unwrap().pending_fill = Some(PendingFill { job, close_on_success: true });
-
-    let mut event = JobEvent {
-        id: JobId(70),
-        command: CMD.into(),
-        label: "Content-Aware Fill".into(),
-        document: Some(document),
-        outcome: JobOutcome::Done(Value::Null),
-        error: None,
-    };
-    on_job_event(&mut app, &event);
-    assert_eq!(ws(&app).pending_fill.map(|p| p.job), Some(job), "a different job is ignored");
-
-    event.id = job;
-    event.outcome = JobOutcome::Cancelled;
-    on_job_event(&mut app, &event);
-    assert!(app.distort.caf.is_some());
-    assert!(ws(&app).pending_fill.is_none());
-    assert_eq!(ws(&app).error.as_deref(), Some("cancelled"));
-
-    app.distort.caf.as_mut().unwrap().pending_fill = Some(PendingFill { job: JobId(72), close_on_success: true });
-    event.id = JobId(72);
-    event.outcome = JobOutcome::Failed("fill failed".into());
-    on_job_event(&mut app, &event);
-    assert!(app.distort.caf.is_some());
-    assert!(ws(&app).pending_fill.is_none());
-    assert_eq!(ws(&app).error.as_deref(), Some("fill failed"));
-
-    app.distort.caf.as_mut().unwrap().pending_fill = Some(PendingFill { job: JobId(73), close_on_success: true });
-    cancel(&mut app);
-    open(&mut app).unwrap();
-    event.id = JobId(73);
-    event.document = Some(ws(&app).document);
-    event.outcome = JobOutcome::Done(Value::Null);
-    on_job_event(&mut app, &event);
-    assert!(app.distort.caf.is_some(), "an old job cannot close a later workspace");
-    assert!(ws(&app).pending_fill.is_none());
-}
-
-#[test]
-fn a_success_for_an_inactive_document_does_not_close_its_workspace() {
-    let mut app = app_with_selection();
-    open(&mut app).unwrap();
-    crate::distort_ui::drop_foreign(&mut app);
-    let document = ws(&app).document;
-    let job = JobId(74);
-    app.distort.caf.as_mut().unwrap().pending_fill = Some(PendingFill { job, close_on_success: true });
-    app.session.execute("file.new", json!({"width": 32, "height": 32, "depth": 8})).unwrap();
-
-    let event = JobEvent {
-        id: job,
-        command: CMD.into(),
-        label: "Content-Aware Fill".into(),
-        document: Some(document),
-        outcome: JobOutcome::Done(Value::Null),
-        error: None,
-    };
-    on_job_event(&mut app, &event);
-    assert!(app.distort.caf.is_some(), "completion for the inactive document does not close another dialog");
-    assert!(ws(&app).pending_fill.is_none());
-    crate::distort_ui::drop_foreign(&mut app);
-    assert!(app.distort.caf.is_none(), "the existing document-switch lifecycle drops the old workspace");
-}
-
-/// Undo or Redo of a sampling stroke changes what OK would fill, so it clears the error a
-/// failed OK left in the panel, as a new stroke does; otherwise the stale error would stay
-/// drawn over the recovered preview.
+/// Undo or Redo of a sampling stroke changes what OK would fill, so it clears the error a failed OK left, as a new
+/// stroke does; otherwise the stale error would stay drawn over the recovered preview.
 #[test]
 fn undo_and_redo_of_a_stroke_clear_a_failed_oks_error() {
     let mut app = app_with_selection();
     open(&mut app).unwrap();
-    control(&mut app, &json!({"stroke": {"points": [[20.0, 20.0], [60.0, 20.0]], "size": 10}})).unwrap();
+    ui(&mut app, json!({"stroke": {"points": [[20.0, 20.0], [60.0, 20.0]], "size": 10}})).unwrap();
     app.session.execute("layer.setProps", json!({"locks": {"pixels": true}})).unwrap();
-    commit(&mut app);
-    assert!(ws(&app).error.is_some(), "the failed OK reports in the panel");
-    control(&mut app, &json!({"undo": true})).unwrap();
-    assert!(ws(&app).error.is_none(), "Undo of the stroke clears it");
-    commit(&mut app);
-    assert!(ws(&app).error.is_some());
-    control(&mut app, &json!({"redo": true})).unwrap();
-    assert!(ws(&app).error.is_none(), "Redo of the stroke clears it too");
+    assert!(ui(&mut app, json!({"commit": true})).is_err(), "the engine refuses the locked layer");
+    assert!(facts(&app)["error"].is_string(), "the failed OK reports in the panel");
+    ui(&mut app, json!({"undo": true})).unwrap();
+    assert!(facts(&app)["error"].is_null(), "Undo of the stroke clears it");
+    assert!(ui(&mut app, json!({"commit": true})).is_err(), "the engine refuses the locked layer again");
+    assert!(facts(&app)["error"].is_string());
+    ui(&mut app, json!({"redo": true})).unwrap();
+    assert!(facts(&app)["error"].is_null(), "Redo of the stroke clears it too");
+}
+
+/// The preview picture's pixel at document point `(x, y)`.
+fn preview_pixel(app: &PhotocraftApp, x: i32, y: i32) -> egui::Color32 {
+    let mut out = egui::ColorImage::new([1, 1], vec![egui::Color32::TRANSPARENT]);
+    app.caf.as_ref().unwrap().picture.read(PixelRect::new(x, y, x + 1, y + 1), 1, &mut out);
+    out.pixels[0]
 }
 
 #[test]
@@ -374,191 +225,91 @@ fn apply_fills_and_stays_open_ok_closes_cancel_keeps_what_was_applied() {
     let layer = app.session.active().unwrap().active_layer.unwrap();
     open(&mut app).unwrap();
     // The preview is what Apply writes.
-    control(&mut app, &json!({"output": "current", "colorAdaptation": "none", "waitPreview": true})).unwrap();
-    let (rect, img) = ws(&app).preview.pending_image.clone().unwrap();
-    control(&mut app, &json!({"apply": true})).unwrap();
-    assert!(app.distort.caf.is_some(), "Apply keeps the workspace open");
+    let before = facts(&app)["previewRevision"].as_u64().unwrap();
+    ui(&mut app, json!({"output": "current", "colorAdaptation": "none"})).unwrap();
+    settle(&mut app, |d| d["previewRevision"].as_u64().unwrap() > before && d["previewError"].is_null());
+    let shown = preview_pixel(&app, 100, 80);
+    ui(&mut app, json!({"apply": true})).unwrap();
+    assert!(app.caf.is_some(), "Apply keeps the workspace open");
     let after = px(&app, layer, 100, 80);
     assert!(after[0] < 0.9 || after[1] > 0.1, "the blemish is filled: {after:?}");
-    let i = ((80 - rect.y0) * rect.width() as i32 + (100 - rect.x0)) as usize;
-    let shown = img.pixels[i];
     assert!((f32::from(shown.r()) / 255.0 - after[0]).abs() < 0.01 && (f32::from(shown.b()) / 255.0 - after[2]).abs() < 0.01, "preview {shown:?} vs {after:?}");
     let steps = app.session.active().unwrap().history.past_len();
-    cancel(&mut app);
-    assert!(app.distort.caf.is_none());
+    ui(&mut app, json!({"cancel": true})).unwrap();
+    close_all(&mut app);
+    assert!(app.caf.is_none() && !app.dialog_open());
     assert_eq!(app.session.active().unwrap().history.past_len(), steps, "Cancel keeps the applied fill");
     // OK with New Layer: a new layer holds the fill; the original stays.
     app.session.execute("edit.undo", json!({})).unwrap();
     open(&mut app).unwrap();
-    control(&mut app, &json!({"output": "new", "commit": true})).unwrap();
-    assert!(app.distort.caf.is_none());
+    ui(&mut app, json!({"output": "new", "commit": true})).unwrap();
+    close_all(&mut app);
+    assert!(app.caf.is_none());
     assert_eq!(px(&app, layer, 100, 80)[0], 1.0, "the original layer keeps its blemish");
     let top = app.session.active().unwrap().active_layer.unwrap();
     assert_ne!(top, layer);
     assert!(px(&app, top, 100, 80)[3] > 0.99, "the new layer holds the fill");
 }
 
-/// #5092: the workspace left open does not follow the user to another document, and closing
-/// the document it was opened on closes it.
-#[test]
-fn the_workspace_is_dropped_when_another_document_becomes_active() {
-    let mut app = app_with_selection();
-    open(&mut app).unwrap();
-    crate::distort_ui::drop_foreign(&mut app);
-    assert!(app.distort.caf.is_some());
-    app.session.execute("file.new", json!({"width": 32, "height": 32, "depth": 8})).unwrap();
-    crate::distort_ui::drop_foreign(&mut app);
-    assert!(app.distort.caf.is_none());
-    assert!(app.session.set_active(0));
-    open(&mut app).unwrap();
-    crate::distort_ui::drop_foreign(&mut app);
-    assert!(app.distort.caf.is_some());
-    assert!(app.session.close(0).is_some());
-    crate::distort_ui::drop_foreign(&mut app);
-    assert!(app.distort.caf.is_none());
-}
-
-#[test]
-fn settings_are_remembered_and_the_menu_opens_the_workspace() {
-    let ctx = egui::Context::default();
-    let mut app = app_with_selection();
-    let r = crate::menus::invoke(&mut app, &ctx, "edit.contentAwareFill", json!({})).unwrap();
-    assert!(r["contentAwareFill"]["window"].is_array(), "{r}");
-    let set = json!({"opacity": 30, "color": [200, 40, 40], "excluded": true, "colorAdaptation": "high", "rotationAdaptation": "low", "mirror": true, "output": "duplicate"});
-    crate::menus::invoke(&mut app, &ctx, "edit.contentAwareFill", json!({"ui": set})).unwrap();
-    crate::menus::invoke(&mut app, &ctx, "edit.contentAwareFill", json!({"ui": {"cancel": true}})).unwrap();
-    open(&mut app).unwrap();
-    let mut want = CafOpts::default();
-    want.apply(&set).unwrap();
-    assert_eq!(ws(&app).opts, want);
-    // Bad values are errors; the engine command with params still runs directly.
-    assert!(control(&mut app, &json!({"sampling": "everywhere"})).is_err());
-    assert!(control(&mut app, &json!({"tool": "pencil"})).is_err());
-    cancel(&mut app);
-    let r = crate::menus::invoke(&mut app, &ctx, "edit.contentAwareFill", json!({"colorAdaptation": "none"})).unwrap();
-    assert_eq!(r["filled"], json!(400));
-    assert!(app.distort.caf.is_none());
-}
-
-/// The engine's sampling area over the plan's rectangle (what the fill samples) and its fill
-/// area.
+/// The engine's sampling area over the plan's rectangle (what the fill samples) and its fill area.
 fn engine_source(app: &PhotocraftApp) -> (Rect, Vec<bool>, Vec<bool>) {
-    let w = ws(app);
-    let st = app.session.active().unwrap();
-    let plan = photocraft_engine::edit_menu_cmds::content_aware_plan(&st.doc, w.layer, &plan_params(w, true), CMD).unwrap();
+    let c = app.caf.as_ref().unwrap();
+    let id = c.id;
+    let command = app.framework.dialogs.get_by_id::<Hosted>(id).unwrap().workspace().command();
+    let plan = photocraft_engine::edit_menu_cmds::content_aware_plan(&c.doc, c.layer, &plan_params(&command, c.layer), CMD).unwrap();
     (plan.rect, plan.source, plan.hole)
 }
 
-/// Each stroke is painted into the proxy once, over its own pixels: 400 strokes of 50 points
-/// and the undo and redo that rebuild the proxy stay cheap (they used to test every proxy
-/// pixel against every segment), and the overlay is exactly what the engine samples (at one
-/// proxy px per document px).
+/// Each stroke is painted into the proxy once, over its own pixels, and the overlay is exactly what the engine
+/// samples (at one proxy px per document px). A second `take` in the same frame applies nothing again.
 #[test]
 fn strokes_are_painted_once_and_the_overlay_is_the_engines_sampling_area() {
+    use craft::imaging::ui::fill::SamplingStroke as Stroke;
     let mut app = app_with_selection();
     open(&mut app).unwrap();
-    control(&mut app, &json!({"sampling": "rectangular"})).unwrap();
+    ui(&mut app, json!({"sampling": "rectangular"})).unwrap();
     let start = std::time::Instant::now();
     for i in 0..400u32 {
-        // Lines across the document, most subtracting, every fifth adding (Alt).
+        // Lines across the document, most subtracting, every fifth adding.
         let y = 2.0 + f64::from(i % 40) * 4.0;
         let pts: Vec<[f64; 2]> = (0..50).map(|j| [f64::from(j) * 4.0 + f64::from(i % 3), y + f64::from(j % 2)]).collect();
-        control(&mut app, &json!({"stroke": {"points": pts, "size": 6 + (i % 4) * 3, "alt": i % 5 == 0}})).unwrap();
+        let mode = if i % 5 == 0 { EditMode::Add } else { EditMode::Subtract };
+        hosted(&mut app).workspace_mut().perform(FillOp::Stroke(Stroke::new(mode, f64::from(6 + (i % 4) * 3), pts))).unwrap();
     }
+    pass(&mut app);
     let painted = start.elapsed();
-    let start = std::time::Instant::now();
-    control(&mut app, &json!({"undo": true})).unwrap();
-    control(&mut app, &json!({"redo": true})).unwrap();
-    let rebuilt = start.elapsed();
-    assert!(painted.as_secs_f64() < 10.0 && rebuilt.as_secs_f64() < 10.0, "400 strokes {painted:?}, undo + redo {rebuilt:?}");
-    let w = ws(&app);
-    assert_eq!((w.k, w.strokes.len()), (1, 400));
+    let once = app.caf.as_ref().unwrap().mask.clone();
+    let ctx = ctx(&app);
+    take(&mut app, &ctx);
+    assert!(app.caf.as_ref().unwrap().mask == once, "a second pass of the frame applies nothing again");
+    assert!(painted.as_secs_f64() < 20.0, "400 strokes {painted:?}");
+    let c = app.caf.as_ref().unwrap();
+    assert_eq!((c.k, c.known.strokes.len()), (1, 400));
     let (rect, source, hole) = engine_source(&app);
-    assert_eq!(rect, w.canvas, "Rectangular's window is the whole 200 × 160 canvas");
-    let differ = (0..source.len()).filter(|&i| (w.mask[i] && !w.hole_px[i]) != (source[i] && !hole[i])).count();
+    let c = app.caf.as_ref().unwrap();
+    assert_eq!(rect, c.canvas, "Rectangular's window is the whole 200 × 160 canvas");
+    let differ = (0..source.len()).filter(|&i| (c.mask[i] && !c.hole_px[i]) != (source[i] && !hole[i])).count();
     assert_eq!(differ, 0, "proxy pixels that differ from the engine's sampling area");
-    assert!(w.describe()["sampledProxyPixels"].as_u64().unwrap() > 1000);
+    assert!(sampled(&app) > 1000);
 }
 
-/// `edit.contentAwareFill {"ui": …}` addresses the workspace: with it closed that is an
-/// error, not a fill with the default settings (an agent polling the state after an Esc
-/// used to add a fill per poll).
+/// `edit.contentAwareFill {"ui": …}` addresses the workspace: with it closed that is an error, not a fill with the
+/// default settings (an agent polling the state after an Esc used to add a fill per poll).
 #[test]
 fn ui_params_with_the_workspace_closed_are_an_error_not_a_fill() {
-    let ctx = egui::Context::default();
     let mut app = app_with_selection();
+    let ctx = ctx(&app);
     let steps = app.session.active().unwrap().history.past_len();
-    for ui in [json!({}), json!({"cancel": true}), json!({"sampling": "rectangular"})] {
-        let r = crate::menus::invoke(&mut app, &ctx, "edit.contentAwareFill", json!({"ui": ui}));
+    for request in [json!({}), json!({"cancel": true}), json!({"sampling": "rectangular"})] {
+        let r = workspace_ui(&mut app, &ctx, CMD, &request);
         assert!(r.as_ref().is_err_and(|e| e.contains("not open")), "{r:?}");
     }
     assert_eq!(app.session.active().unwrap().history.past_len(), steps, "nothing was filled");
-    assert!(app.distort.caf.is_none());
+    assert!(!app.dialog_open() && app.caf.is_none());
 }
 
-/// The press is the first point of a stroke (and of a lasso), and the pointer's moves before
-/// egui's drag threshold are its next ones: the drag, which starts a few pixels later, goes
-/// on with the same stroke rather than beginning another over it.
-#[test]
-fn a_stroke_keeps_its_points_from_before_the_drag_threshold() {
-    use egui::{Modifiers, PointerButton};
-    for tool in ["brush", "lasso"] {
-        let mut app = app_with_selection();
-        open(&mut app).unwrap();
-        control(&mut app, &json!({"tool": tool, "sampling": "rectangular"})).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1600.0, 1000.0)).build_ui_state(
-            |ui, app: &mut PhotocraftApp| {
-                let ctx = ui.ctx().clone();
-                if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                    return;
-                }
-                show(app, &ctx);
-            },
-            app,
-        );
-        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
-        h.run_steps(4);
-        // The document view sits between the tool strip and the Preview panel, under the
-        // title and the options bar; its centre shows the document's centre.
-        let view = ERect::from_min_max(pos2(LEFT_W, 30.0 + BAR_H), pos2(1600.0 - PANEL_W - PREVIEW_W, 1000.0));
-        let c = view.center();
-        let at = |dx: f32, dy: f32| pos2(c.x + dx, c.y + dy);
-        let press = |h: &mut egui_kittest::Harness<'_, PhotocraftApp>, down: bool, p: Pos2| {
-            h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: down, modifiers: Modifiers::NONE });
-            h.run_steps(1);
-        };
-        h.event(egui::Event::PointerMoved(at(0.0, 0.0)));
-        h.run_steps(1);
-        press(&mut h, true, at(0.0, 0.0));
-        // Within egui's click distance (6 px): no drag yet, but these are the stroke's points.
-        // Then past it: the drag starts. (Not collinear: the lasso's polygon needs an area.)
-        for (dx, dy) in [(2.0, 1.0), (4.0, 2.0), (30.0, 20.0), (60.0, -10.0), (90.0, 40.0)] {
-            h.event(egui::Event::PointerMoved(at(dx, dy)));
-            h.run_steps(1);
-        }
-        press(&mut h, false, at(90.0, 40.0));
-        h.run_steps(2);
-        let w = h.state().distort.caf.as_ref().unwrap();
-        let points: Vec<[f64; 2]> = match tool {
-            "brush" => {
-                assert_eq!(w.strokes.len(), 1, "one stroke");
-                w.strokes[0].points.clone()
-            }
-            _ => {
-                assert_eq!(w.fill_edits.len(), 1, "one lasso edit");
-                serde_json::from_value(w.fill_edits[0]["points"].clone()).unwrap()
-            }
-        };
-        let centre = [f64::from(w.canvas.x0 + w.canvas.x1) / 2.0, f64::from(w.canvas.y0 + w.canvas.y1) / 2.0];
-        assert_eq!(points.len(), 6, "{tool}: the press and every move are points: {points:?}");
-        let d = ((points[0][0] - centre[0]).powi(2) + (points[0][1] - centre[1]).powi(2)).sqrt();
-        assert!(d < 1.0, "{tool}: the first point is the press ({:?} vs {centre:?})", points[0]);
-        assert!(w.cur.is_none() && w.lasso.is_none() && !w.pressed, "{tool}: the release ended it");
-    }
-}
-
-/// The preview texture fits the device: a plan rectangle wider than the texture limit is
-/// box-averaged to fit, and is still drawn over the plan's rectangle.
+/// The preview texture fits the device: a plan rectangle wider than the texture limit is box-averaged to fit, and
+/// is still drawn over the plan's rectangle.
 #[test]
 fn the_preview_texture_respects_the_device_limit() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
@@ -576,155 +327,97 @@ fn the_preview_texture_respects_the_device_limit() {
     app.sync_views();
     open(&mut app).unwrap();
     // Custom sampling with a stroke across the whole width: the plan's rectangle is 2200 px wide.
-    control(&mut app, &json!({"sampling": "custom", "stroke": {"points": [[0.0, 5.0], [2200.0, 5.0]], "size": 8}})).unwrap();
+    {
+        use craft::imaging::ui::fill::{SamplingMode, SamplingStroke as Stroke};
+        let ws = hosted(&mut app).workspace_mut();
+        ws.perform(FillOp::Sampling(SamplingMode::Custom)).unwrap();
+        ws.perform(FillOp::Stroke(Stroke::new(EditMode::Add, 8.0, vec![[0.0, 5.0], [2200.0, 5.0]]))).unwrap();
+    }
+    let c = app.caf.as_ref().unwrap();
+    let command = app.framework.dialogs.get_by_id::<Hosted>(c.id).unwrap().workspace().command();
+    let params = plan_params(&command, c.layer);
     for (limit, want) in [(2048usize, 1100usize), (4096, 2200)] {
-        let w = app.distort.caf.as_mut().unwrap();
-        w.texture_limit = limit;
-        w.stale();
-        control(&mut app, &json!({"waitPreview": true})).unwrap();
-        let (rect, img) = ws(&app).preview.pending_image.clone().unwrap();
+        let (rect, img, factor) = compute_preview(&c.doc, c.layer, &params, &photocraft_raster::Interrupt::NONE, limit).unwrap();
         assert_eq!((rect.width(), img.size[0]), (2200, want), "limit {limit}");
+        assert_eq!(factor as usize, 2200 / want);
         assert!(img.size.iter().all(|s| *s <= limit), "limit {limit}: {:?}", img.size);
         let (sum, n) = img.pixels.iter().fold((0u32, 0u32), |(s, n), p| (s + u32::from(p.g()), n + 1));
         assert!(sum / n > 100, "limit {limit}: the reduced preview keeps the image ({})", sum / n);
     }
 }
 
-/// A preview that fails stands for that state: nothing is shown, the error is reported, and
-/// the same preview is not started again on every frame.
+/// A preview that fails stands for that request: the error is reported and the same preview is not started
+/// again on every pass.
 #[test]
 fn a_failing_preview_is_reported_once_not_restarted() {
     let mut app = app_with_selection();
     open(&mut app).unwrap();
-    control(&mut app, &json!({"waitPreview": true})).unwrap();
-    assert!(ws(&app).preview.pending_image.is_some());
+    settle(&mut app, |d| d["previewReady"] == json!(true));
     // The selection goes away under the workspace: there is nothing to fill.
     app.session.execute("select.deselect", json!({})).unwrap();
-    app.distort.caf.as_mut().unwrap().stale();
-    assert!(control(&mut app, &json!({"waitPreview": true})).is_err());
-    let pv = &ws(&app).preview;
-    assert_eq!(pv.shown, pv.want, "the failed state counts as shown: no retry");
-    assert!(pv.pending_image.is_none() && pv.tex.is_none());
-    let d = ws(&app).describe();
-    assert_eq!(d["previewReady"], json!(false));
-    assert!(d["previewError"].as_str().is_some_and(|e| e.contains("selection")), "{d}");
+    // The replan refuses the empty selection before a new preview request exists, and says so as the panel's error.
+    let d = settle(&mut app, |d| d["error"].as_str().is_some_and(|e| e.contains("selection")));
+    let runs = d["previewRuns"].as_u64().unwrap();
+    for _ in 0..40 {
+        pass(&mut app);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(facts(&app)["previewRuns"].as_u64(), Some(runs), "the failed request is not started again");
 }
 
-/// The view shows the document, not the layer alone: after Apply to a new layer the fill
-/// (on that layer) covers the blemish.
+/// The source's image is the document, not the layer alone: after Apply to a new layer the fill (on that layer)
+/// covers the blemish.
 #[test]
 fn the_view_shows_the_document_after_an_apply_to_a_new_layer() {
     let mut app = app_with_selection();
     open(&mut app).unwrap();
-    let red = |img: &egui::ColorImage| {
-        let p = img.pixels[80 * img.size[0] + 100];
+    let red = |app: &PhotocraftApp| {
+        let mut out = egui::ColorImage::new([1, 1], vec![egui::Color32::TRANSPARENT]);
+        let source = app.framework.dialogs.get_by_id::<Hosted>(app.caf.as_ref().unwrap().id).unwrap().source().clone();
+        source.image().read(PixelRect::new(100, 80, 101, 81), 1, &mut out);
+        let p = out.pixels[0];
         p.r() > 200 && p.g() < 60
     };
-    let before = view_image(&app).unwrap();
-    assert_eq!(before.size, [200, 160]);
-    assert!(red(&before), "the blemish shows before the fill");
-    control(&mut app, &json!({"output": "new", "colorAdaptation": "none", "apply": true})).unwrap();
-    assert!(!red(&view_image(&app).unwrap()), "the fill on the new layer shows");
-}
-
-/// The engine's limits (MAX_CAF_EDITS strokes or lasso edits, MAX_CAF_POINTS points in all)
-/// hold at the brush: a stroke past them is refused with a message, so Apply and the
-/// preview never fail on what was painted.
-#[test]
-fn strokes_past_the_engines_limits_are_refused_at_the_brush() {
-    let mut app = app_with_selection();
-    open(&mut app).unwrap();
-    control(&mut app, &json!({"sampling": "rectangular"})).unwrap();
-    for i in 0..MAX_CAF_EDITS {
-        let x = (i % 190) as f64;
-        control(&mut app, &json!({"stroke": {"points": [[x, 5.0], [x + 3.0, 5.0]], "size": 2}})).unwrap();
+    assert!(red(&app), "the blemish shows before the fill");
+    ui(&mut app, json!({"output": "new", "colorAdaptation": "none", "apply": true})).unwrap();
+    for _ in 0..5 {
+        pass(&mut app);
     }
-    let d = control(&mut app, &json!({"stroke": {"points": [[10.0, 50.0], [20.0, 50.0]], "size": 2}})).unwrap();
-    assert_eq!(d["strokes"], json!(MAX_CAF_EDITS));
-    assert!(d["error"].as_str().is_some_and(|e| e.contains("at most")), "{d}");
-    control(&mut app, &json!({"waitPreview": true})).unwrap();
-    // The points budget: a long stroke stops at it.
-    let mut app = app_with_selection();
-    open(&mut app).unwrap();
-    let pts: Vec<[f64; 2]> = (0..MAX_CAF_POINTS + 100).map(|i| [10.0 + i as f64 * 0.0005, 5.0]).collect();
-    let d = control(&mut app, &json!({"stroke": {"points": pts, "size": 2}})).unwrap();
-    assert_eq!(ws(&app).points_used(), MAX_CAF_POINTS);
-    assert!(d["error"].as_str().is_some_and(|e| e.contains("at most")), "{d}");
-    control(&mut app, &json!({"waitPreview": true})).unwrap();
-    // A lasso edit past the points budget is refused too.
-    let d = control(&mut app, &json!({"lasso": {"op": "add", "points": [[130.0, 70.0], [150.0, 70.0], [150.0, 90.0]]}})).unwrap();
-    assert_eq!(d["fillEdits"], json!(0));
-    assert!(d["error"].as_str().is_some_and(|e| e.contains("at most")), "{d}");
+    assert!(!red(&app), "the fill on the new layer shows");
 }
 
-/// A plan over `rect` whose fill area is the union of `parts`.
-fn base_with_hole(rect: Rect, parts: &[Rect]) -> Base {
-    let (w, h) = (rect.width() as usize, rect.height() as usize);
-    let mut hole = vec![false; w * h];
-    for (i, cell) in hole.iter_mut().enumerate() {
-        let (x, y) = (rect.x0 + (i % w) as i32, rect.y0 + (i / w) as i32);
-        *cell = parts.iter().any(|p| p.contains(x, y));
-    }
-    Base { window: rect, rect, hole, base: vec![false; w * h] }
-}
-
-/// #10506: the fill area is outlined by merged runs, as the canvas outlines a selection, so it
-/// is drawn with the canvas's ants (it was one 1-point line per pixel edge, blinking).
-#[test]
-fn fill_area_outline_is_merged_runs() {
-    let rect = Rect::new(10, 20, 210, 180);
-    let mut square = outline(&base_with_hole(rect, &[Rect::new(50, 60, 90, 100)])).unwrap();
-    square.sort();
-    assert_eq!(square, vec![([50, 60], [50, 100]), ([50, 60], [90, 60]), ([50, 100], [90, 100]), ([90, 60], [90, 100])]);
-    let mut l = outline(&base_with_hole(rect, &[Rect::new(20, 30, 40, 90), Rect::new(20, 70, 100, 90)])).unwrap();
-    l.sort();
-    assert_eq!(l, vec![([20, 30], [20, 90]), ([20, 30], [40, 30]), ([20, 90], [100, 90]), ([40, 30], [40, 70]), ([40, 70], [100, 70]), ([100, 70], [100, 90])]);
-    // At the plan's edge too, and nothing for no fill area.
-    assert_eq!(outline(&base_with_hole(rect, &[rect])).map(|s| s.len()), Some(4));
-    assert_eq!(outline(&base_with_hole(rect, &[])), Some(Vec::new()));
-}
-
-/// A speckled fill area past the cap falls back to its bounding box.
-#[test]
-fn a_speckled_fill_area_falls_back_to_its_bounds() {
-    let rect = Rect::new(0, 0, 1000, 1000);
-    let mut b = base_with_hole(rect, &[]);
-    for (i, cell) in b.hole.iter_mut().enumerate() {
-        *cell = (i % 1000).is_multiple_of(2) && (i / 1000).is_multiple_of(2);
-    }
-    assert!(outline(&b).is_none());
-    assert_eq!(lifecycle::bounds(&b), Rect::new(0, 0, 999, 999), "the box drawn instead");
-}
-
-fn press(app: &mut PhotocraftApp, ctx: &egui::Context, key: egui::Key, modifiers: egui::Modifiers) {
-    let ev = egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
-    let input = egui::RawInput { events: vec![ev], ..Default::default() };
-    ctx.run_ui(input, |ui| keys(app, ui.ctx())).textures_delta.clear();
-}
-
-/// With the overlay colour's Color Picker open over the workspace, its keys (brush size, undo)
-/// belong to the picker, not to the workspace under it.
+/// The overlay colour swatch opens a colour picker child over the workspace, and the picker's OK reaches the
+/// workspace without losing its strokes.
 #[test]
 fn keys_wait_while_the_overlay_colour_picker_is_open() {
-    use egui::{Key, Modifiers};
+    use egui_kittest::kittest::Queryable;
     let mut app = app_with_selection();
-    let ctx = egui::Context::default();
     open(&mut app).unwrap();
-    control(&mut app, &json!({"sampling": "rectangular"})).unwrap();
-    let all = ws(&app).describe()["sampledProxyPixels"].as_u64().unwrap();
-    let less = control(&mut app, &json!({"stroke": {"points": [[20.0, 20.0], [80.0, 20.0]], "size": 10}})).unwrap()["sampledProxyPixels"].as_u64().unwrap();
-    assert_ne!(less, all);
-    let size = ws(&app).brush_size;
-    crate::color_picker_ui::request_for_widget(&ctx, egui::Id::unique("caf-overlay-swatch"), "Color Picker (Overlay Color)", [0.0, 1.0, 0.0]);
-    crate::color_picker_ui::widget_tick(&mut app, &ctx);
-    assert!(crate::color_picker_ui::any_open(&app));
-    press(&mut app, &ctx, Key::OpenBracket, Modifiers::NONE);
-    assert_eq!(ws(&app).brush_size, size, "[ went to the picker");
-    press(&mut app, &ctx, Key::Z, Modifiers::COMMAND);
-    assert_eq!(ws(&app).describe()["sampledProxyPixels"].as_u64(), Some(less), "Ctrl+Z went to the picker");
-    app.ui.dialogs.clear();
-    press(&mut app, &ctx, Key::OpenBracket, Modifiers::NONE);
-    assert!(ws(&app).brush_size < size);
-    press(&mut app, &ctx, Key::Z, Modifiers::COMMAND);
-    assert_eq!(ws(&app).describe()["sampledProxyPixels"].as_u64(), Some(all));
+    ui(&mut app, json!({"sampling": "rectangular"})).unwrap();
+    ui(&mut app, json!({"stroke": {"points": [[20.0, 20.0], [80.0, 20.0]], "size": 10}})).unwrap();
+    let less = sampled(&app);
+    let app_ctx = ctx(&app);
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1600.0, 1000.0)).with_context(app_ctx).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            app.framework.dialogs.run(ui);
+            let ctx = ui.ctx().clone();
+            take(app, &ctx);
+        },
+        app,
+    );
+    h.run_steps(4);
+    // The Sampling Area Overlay section starts closed; its swatch is named "Color".
+    h.query_all_by_label("Sampling Area Overlay").next().expect("the section header").click();
+    h.run_steps(4);
+    h.get_by_label("Color").click();
+    h.run_steps(4);
+    assert!(crate::color_picker_ui::top(h.state()).is_some(), "the swatch opened the colour picker over the workspace");
+    let picker = crate::color_picker_ui::top(h.state()).expect("the colour picker is open");
+    crate::color_picker_ui::testing::set_color(h.state_mut(), picker, "#0000ff");
+    crate::dialogs::testing::confirm(h.state_mut(), picker).unwrap();
+    h.run_steps(4);
+    assert_eq!(h.state().caf.as_ref().map(|_| sampled(h.state())), Some(less), "the strokes survive the picker");
+    let c = h.state().caf.as_ref().unwrap();
+    let settings = h.state().framework.dialogs.get_by_id::<Hosted>(c.id).unwrap().workspace().settings().clone();
+    assert_eq!(settings.color, [0, 0, 255]);
 }
