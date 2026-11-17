@@ -586,7 +586,7 @@ fn embedded_ai_link_table_handoff_preserves_source_until_saved_and_undo_restores
     assert_eq!(app.ui.notices.len(), 1);
     let notice = &app.ui.notices[0];
     assert!(notice.title.contains("Vector"), "{notice:?}");
-    assert!(!notice.error);
+    assert_eq!(notice.tone, craft::theme::variant::Tone::Neutral);
     assert!(notice.lines.iter().any(|line| line.contains("nothing to draw")));
     let layer = app.session.active().unwrap().doc.layer(id).unwrap();
     assert!(
@@ -682,7 +682,7 @@ fn external_svg_save_back_reports_omissions_once_and_keeps_silent_updates_quiet(
             assert_eq!(app.ui.notices.len(), 1);
             assert!(app.ui.notices[0].title.contains("SVG"));
             assert!(app.ui.notices[0].lines.iter().any(|line| line.contains("embedded") && line.contains("omitted")));
-            assert!(!app.ui.notices[0].error);
+            assert_eq!(app.ui.notices[0].tone, craft::theme::variant::Tone::Neutral);
         } else {
             assert!(app.ui.notices.is_empty(), "{:?}", app.ui.notices);
         }
