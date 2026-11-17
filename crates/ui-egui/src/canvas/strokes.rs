@@ -764,6 +764,10 @@ pub(super) fn commit_brush_stroke(app: &mut PhotocraftApp, d: &Drag) {
         for step in steps.into_iter().chain((!rest.is_empty()).then(|| stroke.push(&rest))) {
             damage.push(step.ok()?);
         }
+        // Pen up: the smoothing catch-up the live stroke held back.
+        if let EngineStroke::Brush(brush) = &mut stroke {
+            damage.push(brush.finish().ok()?);
+        }
         Some(stroke)
     });
     // The live stroke can't show these points: the commit renders the stroke itself.
