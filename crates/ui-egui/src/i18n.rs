@@ -263,7 +263,6 @@ pub static LANGUAGES: [LangInfo; 28] = [
     // resolve here (see `candidates`).
     LangInfo { code: "nb", name: "Norsk bokmål", source: catalog!("nb"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
     // Lithuanian.
-    // Lithuanian.
     LangInfo { code: "lt", name: "Lietuvių", source: catalog!("lt"), plural: plural_lithuanian, complete_menus: false, catalog: OnceLock::new() },
 ];
 
