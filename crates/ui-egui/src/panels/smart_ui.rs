@@ -91,7 +91,7 @@ pub fn thumb_badge(ui: &egui::Ui, l: &Layer, thumb: Rect, missing: impl FnOnce(&
         ThumbBadge::Linked | ThumbBadge::LinkMissing => {
             let (icon, tint, name) = if kind == ThumbBadge::Linked { ("link", t.icon, LINKED_BADGE) } else { ("unlink", t.danger, LINK_MISSING_BADGE) };
             icons::paint(ui, r, icon, r.width() - 2.0, tint);
-            let resp = ui.interact(r, ui.id().with(("link-badge", l.id.0)), Sense::hover());
+            let resp = ui.interact(r, ui.scope_id().with(("link-badge", l.id.0)), Sense::hover());
             resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, true, tl!(name)));
         }
         // Photoshop's shape mark: a path with an anchor point on each corner. Painted rather

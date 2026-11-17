@@ -63,13 +63,20 @@ fn thumb(h: &Harness<'_, PhotocraftApp>, id: u64) -> Rect {
     r
 }
 
-/// The badge frames painted over `area`: (rect, fill, border colour).
+/// The badge frames painted over `area`: (rect, fill, border colour). A frame is painted as a
+/// filled rect and a 1 px border on the same rect, so the two are paired here.
 fn frames(h: &Harness<'_, PhotocraftApp>, area: Rect) -> Vec<(Rect, Color32, Color32)> {
-    let frames = h.output().shapes.iter().filter_map(|s| match &s.shape {
-        egui::Shape::Rect(r) if area.contains_rect(r.rect) && r.stroke.width == 1.0 && r.fill != Color32::TRANSPARENT => Some((r.rect, r.fill, r.stroke.color)),
-        _ => None,
-    });
-    frames.collect()
+    let output = h.output();
+    let rects: Vec<&egui::epaint::RectShape> = output
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::Shape::Rect(r) if area.contains_rect(r.rect) => Some(r),
+            _ => None,
+        })
+        .collect();
+    let border = |rect: Rect| rects.iter().find(|r| r.rect == rect && r.stroke.width == 1.0 && r.fill == Color32::TRANSPARENT).map(|r| r.stroke.color);
+    rects.iter().filter(|r| r.fill != Color32::TRANSPARENT).filter_map(|r| Some((r.rect, r.fill, border(r.rect)?))).collect()
 }
 
 /// The colours of the icons (tinted images other than the layer thumbnails) painted inside `area`.
@@ -211,7 +218,7 @@ fn only_a_linked_file_gets_a_link_badge() {
         true
     });
     assert_eq!(kind, Some(ThumbBadge::LinkMissing));
-    assert_eq!(asked, [stored.clone()], "asked once, with the path as stored");
+    assert_eq!(asked, [stored.as_str()], "asked once, with the path as stored");
     assert_eq!(thumb_badge_kind(&layer(linked), |_| false), Some(ThumbBadge::Linked));
     assert_eq!(thumb_badge_kind(&layer(embedded), |_| true), Some(ThumbBadge::Smart));
     let mut psd = layer(embedded);
