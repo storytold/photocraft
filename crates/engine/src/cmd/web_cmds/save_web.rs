@@ -228,8 +228,15 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     // So are the slices: committing a floating move doesn't change them.
     let pick = slice_pick(p, cmd, &s.active().ok_or(EngineError::NoDocument)?.doc)?;
     let custom_names = super::file_naming::plan(p, &s.active().ok_or(EngineError::NoDocument)?.doc, st.format.ext())?;
+    let whole_image = custom_names.as_ref().is_some_and(|names| names.len() == 1) && p.pointer("/fileNaming/wholeImage").and_then(Value::as_bool) == Some(true);
+    let images_folder = || -> Result<String> {
+        let folder = web_images_folder(p.get("imagesFolder").and_then(Value::as_str).unwrap_or("images"), cmd)?;
+        // Recorded Images Only exports put a single full-canvas image beside the
+        // destination, even when slice output has an image subfolder configured.
+        Ok(if whole_image { String::new() } else { folder })
+    };
     if let Some(names) = &custom_names {
-        let images = web_images_folder(p.get("imagesFolder").and_then(Value::as_str).unwrap_or("images"), cmd)?;
+        let images = images_folder()?;
         let dir = p.get("dir").and_then(Value::as_str).ok_or_else(|| bad(cmd, "fileNaming requires dir"))?;
         for name in names.iter().filter(|name| !name.is_empty()) {
             let relative = if images.is_empty() { name.clone() } else { format!("{images}/{name}") };
@@ -299,7 +306,7 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     let dir =
         dir.map(str::to_string).or_else(|| single.and_then(|f| std::path::Path::new(f).parent().map(|d| d.to_string_lossy().into_owned()))).unwrap_or_default();
     let html = p.get("html").and_then(Value::as_bool).unwrap_or(false);
-    let images = web_images_folder(p.get("imagesFolder").and_then(Value::as_str).unwrap_or("images"), cmd)?;
+    let images = images_folder()?;
     let trusted_slice_html = p.get("trustedSliceHtml").and_then(Value::as_bool).unwrap_or(false);
     let base = portable_generated_stem(single.map(stem).unwrap_or_else(|| slices::base_name(&doc)));
     let mut files = Vec::new();

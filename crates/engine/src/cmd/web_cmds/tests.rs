@@ -1619,6 +1619,82 @@ fn web_file_naming_recorded_whole_image_name_overrides_components_only_for_a_sin
 }
 
 #[test]
+fn web_file_naming_recorded_whole_image_bypasses_the_slice_subfolder() {
+    // Observed in Photoshop 2020: Images Only ignores the image subfolder for a
+    // single full-canvas slice, including an explicitly created user slice.
+    for full_user_slice in [false, true] {
+        let mut s = session(8);
+        if full_user_slice {
+            s.execute("slice.new", json!({"rect":[0,0,64,48],"name":"Full"})).unwrap();
+        }
+        for folder in ["assets", "画像", "Ã©"] {
+            let p = json!({"dir":"output","imagesFolder":folder,"format":"png24",
+                "fileNaming":{"wholeImage":true,"fileName":"Canvas.png","components":["serial"]}});
+            let mut paths = Vec::new();
+            let result = save_for_web_with_writer(&mut s, &p, &mut |path, data| {
+                let image = photocraft_codecs::decode(data).unwrap();
+                assert_eq!((image.width(), image.height()), (64, 48));
+                paths.push(path.to_string());
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(paths, ["output/Canvas.png"], "{full_user_slice}: {folder}");
+            assert_eq!(result["files"], json!(paths));
+            assert_eq!(s.file_menu.last_web.as_ref(), Some(&p), "keep the folder preference for subsequent sliced documents");
+            let mut p = p;
+            p["fileNaming"].as_object_mut().unwrap().remove("fileName");
+            save_for_web_with_writer(&mut s, &p, &mut |path, _| {
+                assert_eq!(path, "output/web.png", "the document name supplies an omitted filename");
+                Ok(())
+            })
+            .unwrap();
+        }
+    }
+    // Native naming without the recorded whole-image rule retains its explicit folder.
+    let mut s = session(8);
+    let mut paths = Vec::new();
+    save_for_web_with_writer(
+        &mut s,
+        &json!({"dir":"output","imagesFolder":"画像",
+        "fileNaming":{"components":["serial"]}}),
+        &mut |path, _| {
+            paths.push(path.to_string());
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(paths, ["output/画像/1.png"]);
+    assert!(
+        save_for_web_with_writer(
+            &mut s,
+            &json!({"dir":"output","imagesFolder":"../outside",
+        "fileNaming":{"wholeImage":true,"components":["serial"]}}),
+            &mut |_, _| panic!("invalid folder must be refused before writing")
+        )
+        .is_err()
+    );
+
+    // One exported image and a no-image cell are still a sliced layout.
+    for no_image in [false, true] {
+        let mut s = session(8);
+        s.execute("slice.new", json!({"rect":[0,0,32,48],"kind":if no_image {"noImage"} else {"image"}})).unwrap();
+        let mut paths = Vec::new();
+        save_for_web_with_writer(
+            &mut s,
+            &json!({"dir":"output","imagesFolder":"assets",
+            "fileNaming":{"wholeImage":true,"components":["serial"]}}),
+            &mut |path, _| {
+                paths.push(path.to_string());
+                Ok(())
+            },
+        )
+        .unwrap();
+        let expected = if no_image { vec!["output/assets/1.png"] } else { vec!["output/assets/1.png", "output/assets/2.png"] };
+        assert_eq!(paths, expected);
+    }
+}
+
+#[test]
 fn web_file_naming_windows_characters_and_unicode_are_explicit_and_bounded() {
     let mut s = session(8);
     s.execute("slice.new", json!({"rect":[0,0,32,48]})).unwrap();

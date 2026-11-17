@@ -590,6 +590,8 @@ condition IDs remain kept Photoshop steps with their original descriptors.
   Windows compatibility enabled. `ovFN` retains the whole-image filename and the basename for
   generated slice names; `ovCU` converts spaces to hyphens. File serials skip no-image cells,
   consecutive separator components use the first, and trailing separator components are omitted.
+  A single full-canvas image saves directly in the destination folder, including a full-canvas
+  user slice; multiple resolved slices use the configured image subfolder.
   Unchanged recordings retain all original naming fields, including `ovCM`. Native playback
   preserves Unicode text and refuses unrepresented ImageReady rollover documents, unsafe or
   oversized filenames. Other naming components, partial blocks and unknown fields stay kept.
