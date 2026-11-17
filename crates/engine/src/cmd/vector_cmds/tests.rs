@@ -1598,7 +1598,10 @@ fn path_delete_layer_form_refuses_without_a_vector_mask_and_adds_no_step() {
 #[test]
 fn path_delete_named_layer_without_a_layer_key_is_a_saved_path() {
     let mut s = session(100, 100, 8);
-    s.execute("path.set", json!({"name": "layer", "path": {"subpaths": [{"knots": [[0, 0], [50, 0], [50, 50]]}]}})).unwrap();
+    // `path.set` reads "layer" as the active layer's path; a saved path gets that name by renaming.
+    s.execute("path.set", json!({"name": "Path 1", "path": {"subpaths": [{"knots": [[0, 0], [50, 0], [50, 50]]}]}})).unwrap();
+    s.execute("path.rename", json!({"name": "Path 1", "to": "layer"})).unwrap();
+    assert!(doc(&s).paths.iter().any(|p| p.name == "layer"));
     s.execute("path.delete", json!({"name": "layer"})).unwrap();
     assert!(doc(&s).paths.iter().all(|p| p.name != "layer"));
 }
