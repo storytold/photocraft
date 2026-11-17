@@ -135,6 +135,27 @@ fn shape_layer_typed_roundtrip() {
     }
 }
 
+/// The pixels the unstroked shape `layer` renders over the 256-px canvas. `render_shape` leaves a
+/// pattern fill transparent (it has no pattern table), so a pattern is laid out from `d`'s
+/// patterns by the compositor's fill-layer renderer and clipped to the shape's coverage.
+fn shape_pixels(d: &Document, layer: &Layer) -> photocraft_raster::Surface {
+    let (fmt, canvas) = (photocraft_color::PixelFormat::RGBA8, Rect::new(0, 0, 256, 256));
+    let LayerContent::Shape(sh) = &layer.content else { panic!("not a shape") };
+    assert!(sh.stroke.is_none(), "shape_pixels renders the fill only");
+    let Some(f @ Fill::Pattern { .. }) = &sh.fill else { return photocraft_vector::render_shape(sh, fmt, canvas) };
+    let coverage = photocraft_vector::render_shape(&ShapeLayer { fill: Some(Fill::Solid(Color::WHITE)), ..sh.clone() }, fmt, canvas);
+    let paint = photocraft_compose::render_fill_content(layer, f, canvas, &d.patterns);
+    assert_eq!(paint.rect, canvas);
+    let mut data = Vec::with_capacity(paint.px.len() * 4);
+    for (i, p) in paint.px.iter().enumerate() {
+        let (x, y) = ((i % 256) as i32, (i / 256) as i32);
+        data.extend_from_slice(&[p[0], p[1], p[2], p[3] * coverage.pixel(x, y)[3]]);
+    }
+    let mut out = photocraft_raster::Surface::new(fmt);
+    out.write_region(canvas, &data);
+    out
+}
+
 /// Saves `d` with a "Shape" layer whose fill `fill` lives in a kept `vscg` block, as PSD and
 /// as PSB, first unedited and then with the fill changed to `edited` (a fill of the same type).
 /// Each save must keep the fill in `vscg` alone, with no `SoCo`/`GdFl`/`PtFl` next to it, and
@@ -156,9 +177,12 @@ fn assert_vscg_fill_is_not_doubled(mut d: Document, fill: Fill, edited: Fill) {
         let LayerContent::Shape(s) = &mut d.layers[at].content else { panic!("not a shape") };
         s.fill = Some(want.clone());
         // Re-render the layer pixels too, as an edit does, so the save carries the new fill's
-        // pixels. Sample a point inside the path, outside its subtracted triangle.
-        let fresh = photocraft_vector::render_shape(s, photocraft_color::PixelFormat::RGBA8, Rect::new(0, 0, 256, 256));
+        // pixels. Sample a point inside the path, outside its subtracted triangle: every fixture
+        // fill is opaque there, so a blank sample would make the pixel check below vacuous.
+        let fresh = shape_pixels(&d, &d.layers[at]);
         let expected = fresh.pixel(60, 80);
+        assert!(expected.get(3).is_some_and(|a| *a > 0.0), "{step}: the rendered fill is blank: {expected:?}");
+        let LayerContent::Shape(s) = &mut d.layers[at].content else { panic!("not a shape") };
         s.cache = Some(fresh);
         for psb in [false, true] {
             let name = if psb { "x.psb" } else { "x.psd" };
