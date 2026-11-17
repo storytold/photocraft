@@ -357,7 +357,8 @@ fn a_redraw_finishing_after_memory_usage_drops_keeps_nothing_over_it() {
     let Some(mut g) = small_gpu_app() else { return };
     let doc = cpu_only_document(g.harness.state_mut(), SMALL_W, SMALL_H);
     let held = start_held_redraw(&mut g, doc);
-    // Less than the document's own pixels: nothing is left for kept composites.
+    // Less than the document's memory_bytes (layers plus history, over 1 MB even for 400x300):
+    // nothing is left for kept composites.
     g.harness.state_mut().session.edit_prefs(|p| p.performance.memory_usage_mb = 1);
     drop(held);
     settle(&mut g);
