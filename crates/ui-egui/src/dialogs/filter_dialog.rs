@@ -434,6 +434,14 @@ fn default_value(app: &PhotocraftApp, command: &str, p: &Param) -> Option<Value>
     })
 }
 
+/// Shows a failed OK as an alert where the reference application does: Define Pattern over an
+/// area with nothing visible (#14299). Other failures stay in the status bar.
+pub fn alert_failure(app: &mut PhotocraftApp, command: &str, error: &str) {
+    if command == "edit.definePattern" && error == photocraft_engine::pattern_cmds::EMPTY_AREA {
+        app.ui.open_dialog(crate::state::DialogKind::Error, json!({ "message": error }).as_object().cloned().unwrap_or_default());
+    }
+}
+
 /// Command-specific open defaults (ruler straighten, warp from layer, …), not remembered prefs.
 fn apply_command_defaults(app: &PhotocraftApp, command: &str, fields: &mut Map<String, Value>) {
     if command == "image.mode.indexedColor" {
