@@ -289,7 +289,17 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
             opt_label(ui, tl!("Mode"));
             let held = app.held_erase;
             paint_mode_dropdown(ui, "pencil-mode", b, &mut app.ui.tool_options.pencil_clear, held);
-            whole_percent_field(ui, tl!("Opacity"), &mut b.opacity, 1.0..=100.0, if t.pro { 62.0 } else { 66.0 });
+            // Whole percents 1…100; a typed value past them is clamped with the reference's alert
+            // (#11965), as on the Eraser's bar.
+            opt_label(ui, tl!("Opacity"));
+            let mut opacity = b.opacity * 100.0;
+            let (r, alert) = widgets::value_field_whole_alerting(ui, tl!("Opacity"), &mut opacity, 1.0..=100.0, "%", if t.pro { 62.0 } else { 66.0 });
+            if r.changed() {
+                b.opacity = opacity / 100.0;
+            }
+            if alert {
+                range_alert(&mut app.ui, ONE_TO_100);
+            }
             if t.pro {
                 // Between Opacity and Smoothing, as measured (#11962).
                 let pressure = pressure_button(ui, b.pressure_opacity, tl!("Always use pressure for opacity"), true);
@@ -298,7 +308,25 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
                 }
             }
             opt_label(ui, tl!("Smoothing"));
-            smoothing_field(ui, b, if t.pro { 58.0 } else { 66.0 });
+            // Whole percents on the bar, but a typed decimal keeps today's value (25.5 % is 0.255; not
+            // measured, #11965), so the field is the decimal one that still reports a clamp.
+            let mut smoothing = (b.smoothing.amount * 100.0).round();
+            let (r, alert) = widgets::value_field_alerting(ui, tl!("Smoothing"), &mut smoothing, 0.0..=100.0, "%", if t.pro { 58.0 } else { 66.0 });
+            if r.changed() {
+                b.smoothing.enabled = true;
+                b.smoothing.amount = (smoothing / 100.0).clamp(0.0, 1.0);
+            }
+            if alert {
+                range_alert(&mut app.ui, ZERO_TO_100);
+            }
+            // The Smoothing Options gear, right after the field as on the Brush (#11963); the
+            // Pencil keeps its own options, and at 0 % they are greyed (#11939).
+            smoothing_options(ui, b, true);
+            // The brush tip's Angle, as the Background Eraser's bar has it (#11964): whole degrees
+            // −180…180, the same angle the Brush Settings panel edits.
+            if crate::eraser_ui::angle_field(ui, b) {
+                range_alert(&mut app.ui, crate::eraser_ui::ANGLE_RANGE_MESSAGE);
+            }
             widgets::vline(ui, 22.0);
             widgets::checkbox(ui, &mut app.ui.tool_options.pencil_auto_erase, tl!("Auto Erase"))
                 .on_hover_text(tl!("Draws background color over foreground colors"));
@@ -1056,6 +1084,10 @@ fn hint(ui: &mut egui::Ui, s: &str) {
 #[cfg(test)]
 #[path = "../eraser_range_alert_tests.rs"]
 mod eraser_range_alert_tests;
+
+#[cfg(test)]
+#[path = "../pencil_field_range_alerts_tests.rs"]
+mod pencil_field_range_alerts_tests;
 
 #[cfg(test)]
 #[path = "../blur_strength_alert_tests.rs"]
