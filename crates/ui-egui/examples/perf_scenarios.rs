@@ -942,7 +942,7 @@ fn full_canvas_layer_scenarios(b: &mut Bench, sz: &Sizes) {
 }
 
 /// #1015, #9330: a huge document with one painted layer, zoomed out: times only the reduced CPU
-/// composite `canvas::ensure_texture` draws when the document is too large for GPU textures.
+/// composite the canvas draws when the document is too large for GPU textures.
 fn huge_document_scenarios(b: &mut Bench, sz: &Sizes) {
     let name = "zoomed-out reduced composite of the huge document with one painted layer";
     if !b.wanted(name) {
@@ -1263,7 +1263,7 @@ fn full_refresh_frame_scenario(b: &mut Bench, name: &str, w: u32, h: u32) {
     };
     let mut harness = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_max_steps(4).build_eframe(move |cc| {
         photocraft_ui_egui::PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        photocraft_ui_egui::PhotocraftApp::new(s, photocraft_ui_egui::Services::default())
+        photocraft_ui_egui::PhotocraftApp::with_context(cc.egui_ctx.clone(), s, photocraft_ui_egui::Services::default())
     });
     harness.run_steps(6);
     b.current = Some(name.to_string());
@@ -1300,7 +1300,7 @@ fn frame_scenario(b: &mut Bench, name: &str, w: u32, h: u32) {
     let doc = std::mem::take(&mut s);
     let mut harness = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_max_steps(4).build_eframe(move |cc| {
         photocraft_ui_egui::PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        let mut app = photocraft_ui_egui::PhotocraftApp::new(doc, photocraft_ui_egui::Services::default());
+        let mut app = photocraft_ui_egui::PhotocraftApp::with_context(cc.egui_ctx.clone(), doc, photocraft_ui_egui::Services::default());
         app.background_jobs = true;
         app
     });
@@ -1442,7 +1442,7 @@ fn algorithm_scenarios(b: &mut Bench, sz: &Sizes) {
 }
 
 /// #4017: File > New at 10 × 5 m, 200 ppi (3.1 GP), and the first refresh of the canvas that
-/// draws a document too large for GPU textures (the reduced CPU canvas, `canvas::ensure_texture`).
+/// draws a document too large for GPU textures (the reduced CPU canvas).
 fn huge_new_scenario(b: &mut Bench, sz: &Sizes) {
     let name = "new 3 GP document + first reduced canvas refresh";
     if !b.wanted(name) {
@@ -1771,7 +1771,7 @@ fn paste_into_frame_scenario(b: &mut Bench, name: &str, w: u32, h: u32) {
     let doc = std::mem::take(&mut s);
     let mut harness = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_max_steps(4).build_eframe(move |cc| {
         photocraft_ui_egui::PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        photocraft_ui_egui::PhotocraftApp::new(doc, photocraft_ui_egui::Services::default())
+        photocraft_ui_egui::PhotocraftApp::with_context(cc.egui_ctx.clone(), doc, photocraft_ui_egui::Services::default())
     });
     // Warm up: first frames build the canvas cache of the 24 MP document.
     harness.run_steps(6);

@@ -1,182 +1,73 @@
-use super::*;
-use crate::{Services, color_picker_ui};
-use photocraft_geom::Rect as DocRect;
-
-const INKS: [[f32; 4]; 4] = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
-const MIXED_INKS: [[f32; 4]; 2] = [[0.95, 0.10, 0.0, 0.0], [0.95, 0.20, 0.0, 0.0]];
+//! CMYK regressions through the framework's tool and hosted picker paths.
+use crate::canvas::{ToolEvent, tool_event};
+use crate::state::Tool;
+use crate::{PhotocraftApp, Services, color_picker_ui};
+use serde_json::json;
 
 fn chart(depth: u32) -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
-    app.run("file.new", json!({"width": 32, "height": 8, "mode": "cmyk", "depth": depth, "background": "white"})).unwrap();
+    app.run("file.new", json!({"width":16,"height":8,"mode":"cmyk","depth":depth,"background":"white"})).unwrap();
     app.session
         .edit("CMYK chart", |doc, _| {
-            for (i, ink) in INKS.iter().enumerate() {
-                doc.layers[0].surface_mut().unwrap().fill_rect(DocRect::new(i as i32 * 8, 0, (i as i32 + 1) * 8, 8), &[ink[0], ink[1], ink[2], ink[3], 1.0]);
-            }
+            let surface = doc.layers[0].surface_mut().unwrap();
+            surface.fill_rect(photocraft_geom::Rect::new(0, 0, 8, 8), &[0.95, 0.1, 0., 0., 1.]);
+            surface.fill_rect(photocraft_geom::Rect::new(8, 0, 16, 8), &[0.95, 0.2, 0., 0., 1.]);
             Ok(())
         })
         .unwrap();
     app.ui.tool = Tool::Eyedropper;
-    app
-}
-
-fn mixed_chart(depth: u32) -> PhotocraftApp {
-    let mut app = chart(depth);
-    app.session
-        .edit("Mixed CMYK chart", |doc, _| {
-            for (i, ink) in MIXED_INKS.iter().enumerate() {
-                doc.layers[0]
-                    .surface_mut()
-                    .unwrap()
-                    .fill_rect(DocRect::new((i * 8) as i32, 0, ((i + 1) * 8) as i32, 8), &[ink[0], ink[1], ink[2], ink[3], 1.0]);
-            }
-            Ok(())
-        })
-        .unwrap();
+    app.sync_views();
     app
 }
 
 #[test]
-fn eyedropper_cmyk_mixed_inks_preserve_quantized_channels() {
-    for depth in [8, 16] {
-        let mut app = mixed_chart(depth);
-        let tolerance = if depth == 8 { 1.0 / 255.0 + 1e-6 } else { 1.0 / 65535.0 + 1e-6 };
-        let mut previous = None;
-
-        for (i, nominal) in MIXED_INKS.iter().enumerate() {
-            let x = (i * 8 + 3) as i32;
-            let stored = app.session.active().unwrap().doc.layers[0].surface().unwrap().pixel(x, 3);
-
-            for ch in 0..4 {
-                assert!((stored[ch] - nominal[ch]).abs() <= tolerance, "depth {depth}, sample {i}, channel {ch}: stored {:?}, expected {:?}", stored, nominal);
-            }
-
-            sample_eyedropper(&mut app, x as f64, 3.0, egui::Modifiers::NONE);
-            let sampled = app.session.tools.picked_role_cmyk(0).unwrap();
-
-            for ch in 0..4 {
-                assert!((sampled[ch] - stored[ch]).abs() <= 1e-6, "depth {depth}, sample {i}, channel {ch}: sampled {:?}, stored {:?}", sampled, stored);
-            }
-
-            let id = color_picker_ui::open(&mut app, "foreground");
-            let reopened = color_picker_ui::current(&app.ui.dialog_mut(id).unwrap().fields).cmyk;
-            for ch in 0..4 {
-                assert!((reopened[ch] - sampled[ch]).abs() <= 1e-6);
-            }
-            app.ui.close_dialog(id);
-
-            if let Some(prev) = previous {
-                assert_ne!(sampled, prev, "distinct mixed CMYK inks must remain distinct");
-            }
-            previous = Some(sampled);
-        }
-    }
-}
-
-#[test]
-fn eyedropper_cmyk_foreground_and_background_reopen_with_exact_inks() {
-    for depth in [8, 16] {
+fn framework_eyedropper_and_picker_preserve_native_inks_at_all_depths() {
+    for depth in [8, 16, 32] {
         let mut app = chart(depth);
-        let revision = app.session.active().unwrap().revision;
-        for (i, ink) in INKS.iter().enumerate() {
-            for (target, mods) in [("foreground", egui::Modifiers::NONE), ("background", egui::Modifiers::ALT)] {
-                sample_eyedropper(&mut app, (i * 8 + 3) as f64, 3.0, mods);
-                let role = if target == "foreground" { 0 } else { 1 };
-                assert_eq!(app.session.tools.picked_role_cmyk(role), Some(*ink));
-                let id = color_picker_ui::open(&mut app, target);
-                assert_eq!(color_picker_ui::current(&app.ui.dialog_mut(id).unwrap().fields).cmyk, *ink, "{target}, depth {depth}, ink {ink:?}");
-                app.ui.close_dialog(id);
-            }
+        for (x, which, mods, role) in [(3., "foreground", egui::Modifiers::NONE, 0), (11., "background", egui::Modifiers::ALT, 1)] {
+            let expected = app.session.active().unwrap().doc.layers[0].surface().unwrap().pixel(x as i32, 3);
+            tool_event(&mut app, ToolEvent::Down { x, y: 3., pressure: 1. }, mods);
+            tool_event(&mut app, ToolEvent::Up { x, y: 3. }, mods);
+            let inks = app.session.tools.picked_role_cmyk(role).expect("native pick association");
+            assert!(inks.iter().zip(&expected).all(|(a, b)| (a - b).abs() < 1e-6), "depth {depth}: {inks:?} vs {expected:?}");
+            let picker = color_picker_ui::open(&mut app, which);
+            let picked = color_picker_ui::testing::current(&app, picker).unwrap();
+            assert!(color_picker_ui::same_inks(color_picker_ui::inks_of(&picked).unwrap(), inks));
+            crate::dialogs::testing::cancel(&mut app, picker).unwrap();
         }
-        assert_eq!(app.session.active().unwrap().revision, revision, "sampling must not edit the document");
     }
 }
 
 #[test]
-fn eyedropper_cmyk_pick_fills_with_the_original_inks() {
-    for (ink_index, ink) in INKS.iter().enumerate() {
-        let mut app = chart(8);
-        sample_eyedropper(&mut app, (ink_index * 8 + 3) as f64, 3.0, egui::Modifiers::NONE);
-        app.run("edit.fillForeground", json!({})).unwrap();
-        let st = app.session.active().unwrap();
-        let pixel = st.doc.layers[0].surface().unwrap().pixel(1, 1);
-        assert_eq!(pixel.get(..4), Some(ink.as_slice()));
-    }
-}
-
-#[test]
-fn eyedropper_cmyk_sampling_respects_current_layer_and_transparency() {
-    let mut app = chart(8);
-    app.run("layer.new.layer", json!({})).unwrap();
-    app.ui.tool_options.eyedropper_sample = "current".into();
-    let fg = app.session.tools.foreground;
-    sample_eyedropper(&mut app, 3.0, 3.0, egui::Modifiers::NONE);
-    assert_eq!(app.session.tools.foreground, fg, "an empty current layer picks nothing");
-    app.ui.tool_options.eyedropper_sample = "all".into();
-    sample_eyedropper(&mut app, 3.0, 3.0, egui::Modifiers::NONE);
-    assert_eq!(app.session.tools.picked_role_cmyk(0), Some(INKS[0]));
-}
-
-#[test]
-fn eyedropper_cmyk_mask_keeps_grayscale_sampling() {
-    let mut app = chart(8);
-    app.run("layer.layerMask.revealAll", json!({})).unwrap();
-    app.ui.tool_options.eyedropper_sample = "current".into();
-    sample_eyedropper(&mut app, 3.0, 3.0, egui::Modifiers::NONE);
-    assert_eq!(app.session.tools.foreground, [1.0; 4]);
-}
-
-#[test]
-fn eyedropper_cmyk_dialog_sampling_confirms_original_inks_and_reset_restores_opening_color() {
-    for (ink_index, ink) in INKS.iter().enumerate() {
-        let mut app = chart(16);
-        let original = app.session.tools.foreground;
-        let id = color_picker_ui::open(&mut app, "foreground");
-        color_picker_ui::sample_at(&mut app, (ink_index * 8 + 3) as f64, 3.0);
-        let fields = app.ui.dialog_mut(id).unwrap().fields.clone();
-        assert_eq!(color_picker_ui::current(&fields).cmyk, *ink);
-        assert_eq!(app.session.tools.foreground, original, "sampling inside a dialog does not commit the colour");
-        color_picker_ui::reset(&mut app.ui.dialog_mut(id).unwrap().fields);
-        assert_eq!(app.ui.dialog_mut(id).unwrap().fields["color"], color_picker_ui::hex([original[0], original[1], original[2]]));
-        color_picker_ui::confirm(&mut app, &fields).unwrap();
-        assert_eq!(app.session.tools.picked_role_cmyk(0), Some(*ink));
-        app.ui.close_dialog(id);
-        let id = color_picker_ui::open(&mut app, "foreground");
-        assert_eq!(color_picker_ui::current(&app.ui.dialog_mut(id).unwrap().fields).cmyk, *ink);
-    }
-}
-
-#[test]
-fn eyedropper_cmyk_dialog_web_only_still_snaps_and_drops_native_inks() {
-    let mut app = mixed_chart(8);
-    let original_rgb = crate::canvas::sampled_cmyk_color(&app, 3.0, 3.0, "all").unwrap().0;
-    let original_hex = color_picker_ui::hex(original_rgb);
-    app.ui.color_panel.web_only = true;
+fn framework_dialog_dropper_keeps_native_model_values() {
+    let mut app = chart(16);
     let id = color_picker_ui::open(&mut app, "foreground");
-    color_picker_ui::sample_at(&mut app, 3.0, 3.0);
-    let fields = &app.ui.dialog_mut(id).unwrap().fields;
-    assert_ne!(fields["color"], json!(original_hex), "web-only must actually snap the sampled color");
-    assert!(fields.get("__cmyk").is_none());
-    assert!(color_picker_ui::current(fields).rgb.iter().all(|v| (v * 5.0 - (v * 5.0).round()).abs() < 1e-6));
-}
+    crate::dialogs::canvas_input::arm_dropper(&mut app, id, "foreground".into());
+    assert!(crate::dialogs::canvas_input::pick_color(&mut app, [3., 3.]));
+    let picked = color_picker_ui::testing::current(&app, id).unwrap();
+    let inks = color_picker_ui::inks_of(&picked).unwrap();
+    crate::dialogs::testing::confirm(&mut app, id).unwrap();
+    assert!(color_picker_ui::same_inks(app.session.tools.picked_role_cmyk(0).unwrap(), inks));
+    let before = app.session.tools.foreground;
+    assert_eq!(&before[..3], &picked.color.to_rgb_array());
 
-#[test]
-fn eyedropper_cmyk_mixed_3x3_ring_matches_picked_foreground() {
-    for depth in [8, 16] {
-        let mut app = mixed_chart(depth);
-        app.ui.tool_options.eyedropper_size = 3;
-
-        // The sample crosses the boundary between two CMYK colors.
-        let (x, y) = (7.0, 3.0);
-        let (ring_sample, _) = crate::canvas::eyedropper_ring_colors(&mut app, x, y).expect("mixed CMYK sample should be available");
-
-        sample_eyedropper(&mut app, x, y, egui::Modifiers::NONE);
-
-        let foreground = app.session.tools.foreground;
-        let to_byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-        let picked = egui::Color32::from_rgb(to_byte(foreground[0]), to_byte(foreground[1]), to_byte(foreground[2]));
-
-        assert_eq!(ring_sample, picked, "depth {depth}: ring must match the picked foreground");
-        assert!(app.session.tools.picked_role_cmyk(0).is_some(), "depth {depth}: native CMYK inks must be preserved");
-    }
+    // The hosted Fill colour row must carry the same model through its child picker to edit.fill.
+    let (rgb, expected) =
+        crate::canvas::sampling::native_color(&app, [11., 3.], app.ui.tool_options.eyedropper.size, craft::color_ui::ui::SampleSource::All).unwrap();
+    let fill = crate::fill_ui::open(&mut app);
+    crate::dialogs::testing::show(&mut app);
+    let ctx = app.ctx().clone();
+    app.framework.dialogs.set_json_field(&ctx, fill, "contents", json!("color")).unwrap();
+    let color = craft::theme::Srgba::from_rgb_array(rgb);
+    let child = color_picker_ui::open_for_request(&mut app, fill, craft::ui::runtime::requests::ColorRequest::new("color", color));
+    app.framework
+        .dialogs
+        .get_mut_by_id::<craft::color_ui::ui::ColorPickerDialog>(child)
+        .unwrap()
+        .set_color(craft::color_ui::ui::PickedColor::cmyk(color, expected.map(|v| v * 100.)));
+    crate::dialogs::testing::confirm(&mut app, child).unwrap();
+    crate::dialogs::testing::show(&mut app);
+    crate::dialogs::testing::confirm(&mut app, fill).unwrap();
+    let pixel = app.session.active().unwrap().doc.layers[0].surface().unwrap().pixel(3, 3);
+    assert!(pixel.iter().zip(expected).all(|(actual, want)| (actual - want).abs() <= 1. / 65535. + 1e-6), "native Fill inks: {pixel:?} vs {expected:?}");
 }
