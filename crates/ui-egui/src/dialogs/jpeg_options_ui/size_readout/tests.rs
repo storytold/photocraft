@@ -1,6 +1,4 @@
 use super::*;
-use egui_kittest::kittest::Queryable;
-use serde_json::json;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
@@ -30,18 +28,6 @@ fn source(own_quality: Option<u8>) -> Source {
     Source { doc: detailed(), revision: 1, base: ExportSettings::default(), own_quality }
 }
 
-/// The readout: kilobytes with one decimal under a megabyte, then megabytes.
-#[test]
-fn sizes_read_in_kilobytes_then_megabytes() {
-    assert_eq!(size_label(0), "0.0K");
-    assert_eq!(size_label(155_955), "152.3K");
-    assert_eq!(size_label(1023 * 1024), "1023.0K");
-    assert_eq!(size_label(1024 * 1024 - 1), "1.0M", "1024.0K would round up past a megabyte");
-    assert_eq!(size_label(1024 * 1024), "1.0M");
-    assert_eq!(size_label(3 * 1024 * 1024 / 2), "1.5M");
-    assert_eq!(size_label(8_703_181), "8.3M");
-}
-
 /// The readout is the size of the file the save writes: Maximum (12) is larger than Low (0), and
 /// each matches the bytes written with the settings OK would use.
 #[test]
@@ -69,7 +55,7 @@ fn the_files_own_quality_is_what_is_estimated() {
 fn answer(readout: &mut Readout, key: Key, job: impl Fn() -> Option<u64> + Send + Sync + Clone + 'static) -> Option<u64> {
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
-        if let Estimate::Known(size) = readout.update(key, || job.clone(), || {}) {
+        if let Some(size) = readout.update(key, || job.clone(), || {}) {
             return size;
         }
         assert!(Instant::now() < deadline, "no size arrived for {key:?}");
@@ -77,9 +63,8 @@ fn answer(readout: &mut Readout, key: Key, job: impl Fn() -> Option<u64> + Send 
     }
 }
 
-/// A frame that changes nothing encodes nothing: the size is kept per settings. A change encodes
-/// once, showing the earlier size marked as pending until the new one is ready, and only one
-/// encode runs at a time.
+/// A pass that changes nothing encodes nothing: the size is kept per settings. A change encodes
+/// once, answering `None` until the new size is ready, and only one encode runs at a time.
 #[test]
 fn unchanged_settings_are_not_encoded_again() {
     let encodes = Arc::new(AtomicU32::new(0));
@@ -94,7 +79,7 @@ fn unchanged_settings_are_not_encoded_again() {
     let mut readout = Readout::default();
     assert_eq!(answer(&mut readout, key, counted(1000)), Some(1000));
     for _ in 0..10 {
-        assert_eq!(readout.update(key, || counted(1), || {}), Estimate::Known(Some(1000)));
+        assert_eq!(readout.update(key, || counted(1), || {}), Some(Some(1000)));
     }
     assert_eq!(encodes.load(Ordering::SeqCst), 1, "the same settings are encoded once");
 
@@ -109,9 +94,9 @@ fn unchanged_settings_are_not_encoded_again() {
             Some(2000)
         }
     };
-    assert_eq!(readout.update(progressive, || slow.clone(), || {}), Estimate::Pending(Some(1000)), "the earlier size stands in, pending");
+    assert_eq!(readout.update(progressive, || slow.clone(), || {}), None, "no size while the encode runs");
     let other = Key { quality: 92, ..key };
-    assert_eq!(readout.update(other, || counted(3), || {}), Estimate::Pending(Some(1000)), "a second encode waits for the first");
+    assert_eq!(readout.update(other, || counted(3), || {}), None, "a second encode waits for the first");
     gate.send(()).unwrap();
     assert_eq!(answer(&mut readout, progressive, slow), Some(2000));
     assert_eq!(answer(&mut readout, other, counted(3)), Some(3), "the waiting change encodes next");
@@ -132,7 +117,7 @@ fn unchanged_settings_are_not_encoded_again() {
     );
     // Release even if the assertion fails, so no worker is left waiting.
     gate.send(()).unwrap();
-    assert_eq!(pending, Estimate::Pending(None), "an edited document shows no size of the old one");
+    assert_eq!(pending, None, "an edited document shows no size of the old one");
     assert_eq!(answer(&mut readout, edited, || None), None, "the completed edit never reuses the old size");
 }
 
@@ -152,8 +137,8 @@ fn earlier_settings_are_not_encoded_again() {
     let mut readout = Readout::default();
     assert_eq!(answer(&mut readout, at(84), counted(1000)), Some(1000));
     assert_eq!(answer(&mut readout, at(92), counted(2000)), Some(2000));
-    assert_eq!(readout.update(at(84), || counted(1), || {}), Estimate::Known(Some(1000)), "back to 84: its size, at once");
-    assert_eq!(readout.update(at(92), || counted(1), || {}), Estimate::Known(Some(2000)));
+    assert_eq!(readout.update(at(84), || counted(1), || {}), Some(Some(1000)), "back to 84: its size, at once");
+    assert_eq!(readout.update(at(92), || counted(1), || {}), Some(Some(2000)));
     assert_eq!(encodes.load(Ordering::SeqCst), 2);
 
     for q in 1..=KEPT as u8 {
@@ -162,46 +147,4 @@ fn earlier_settings_are_not_encoded_again() {
     assert_eq!(encodes.load(Ordering::SeqCst), 2 + KEPT as u32);
     assert_eq!(answer(&mut readout, at(84), counted(1000)), Some(1000), "the oldest sizes make room");
     assert_eq!(encodes.load(Ordering::SeqCst), 3 + KEPT as u32);
-}
-
-/// The readout marks a size that stands in for one still being worked out.
-#[test]
-fn a_pending_size_is_marked() {
-    assert_eq!(Estimate::Known(Some(155_955)).label(), "152.3K");
-    assert_eq!(Estimate::Pending(Some(155_955)).label(), "152.3K…");
-    assert_eq!(Estimate::Pending(None).label(), "…");
-    assert_eq!(Estimate::Known(None).label(), "—");
-}
-
-/// Documents larger than the limit are not encoded: the readout is a dash.
-#[test]
-fn large_documents_are_not_encoded() {
-    assert!(estimable(photocraft_doc::Size::new(6000, 4000)), "24 MP");
-    assert!(!estimable(photocraft_doc::Size::new(10_000, 10_000)), "100 MP");
-    assert!(!estimable(photocraft_doc::Size::new(u32::MAX, u32::MAX)));
-}
-
-/// The dialog shows the size its settings write, next to its buttons.
-#[test]
-fn the_dialog_shows_the_size_it_will_write() {
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
-    app.sync_views();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(800.0, 600.0)).build_ui_state(
-        |ui, app| {
-            super::super::show(app, ui.ctx());
-        },
-        app,
-    );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
-    super::super::park(h.state_mut(), "p.jpg".into(), false, "file.saveAs").unwrap();
-    let src = Source::of(h.state()).unwrap();
-    let quality = h.state().jpeg_options.as_ref().unwrap().quality;
-    let expected = size_label(encoded_size(&src.doc, &src.settings(quality, JpegFormat::Baseline)).unwrap());
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while h.query_by_label(&expected).is_none() {
-        assert!(Instant::now() < deadline, "JPEG Options never showed {expected}");
-        h.run_steps(1);
-        std::thread::sleep(Duration::from_millis(5));
-    }
 }

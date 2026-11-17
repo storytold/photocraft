@@ -3,13 +3,13 @@
 //! the layer menu, its rows greyed as measured over the Background, a type and a shape layer. The
 //! marquees', lassos' and Magic Wand's menus are unchanged.
 
-use egui::{Context, Modifiers};
+use egui::Modifiers;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use serde_json::{Value, json};
 
-use super::tests::{app, harness, labels, right_click};
-use super::{COUNT_MENU, NO_SELECTION_MENU, SELECTION_MENU, available, open, rows};
+use super::tests::{app, harness, labels, open_here, right_click};
+use super::{COUNT_MENU, NO_SELECTION_MENU, SELECTION_MENU, available, rows};
 use crate::PhotocraftApp;
 use crate::state::Tool;
 
@@ -118,7 +118,7 @@ fn background_type_and_shape_layers_get_the_layer_menu_greyed_as_measured() {
         let layer = st.doc.layer(st.active_layer.unwrap()).unwrap();
         assert_eq!(if st.doc.is_background(layer.id) { "Background" } else { layer.content.kind_name() }, kind);
         app.ui.tool = Tool::ObjectSelection;
-        assert!(open(&mut app, &Context::default(), Tool::ObjectSelection, [10.0, 10.0]), "{kind}");
+        assert!(open_here(&mut app, Tool::ObjectSelection, [10.0, 10.0]), "{kind}");
         let menu = app.ui.canvas_tool_menu.clone().unwrap();
         assert_eq!(labels(rows(&menu)), labels(COUNT_MENU), "{kind}");
         let wrong: Vec<_> = rows(&menu)
@@ -139,13 +139,13 @@ fn group_from_layers_is_greyed_with_the_background_among_the_selected_layers() {
     let st = app.session.active().unwrap();
     let pixel = st.active_layer.unwrap();
     let background = st.doc.layers.iter().map(|l| l.id).find(|id| st.doc.is_background(*id)).unwrap();
-    assert!(open(&mut app, &Context::default(), Tool::ObjectSelection, [10.0, 10.0]));
+    assert!(open_here(&mut app, Tool::ObjectSelection, [10.0, 10.0]));
     let menu = app.ui.canvas_tool_menu.clone().unwrap();
     assert!(available(&app, &menu, "layer.new.groupFromLayers"), "a pixel layer alone can be grouped");
     app.run("layer.select", json!({"layer": background.0, "mode": "add"})).unwrap();
     app.session.set_active_layer(Some(pixel));
     assert_eq!(app.session.active().unwrap().selected_layers().len(), 2);
-    assert!(open(&mut app, &Context::default(), Tool::ObjectSelection, [10.0, 10.0]));
+    assert!(open_here(&mut app, Tool::ObjectSelection, [10.0, 10.0]));
     let menu = app.ui.canvas_tool_menu.clone().unwrap();
     assert!(!available(&app, &menu, "layer.new.groupFromLayers"), "the Background is selected too");
 }
@@ -153,14 +153,14 @@ fn group_from_layers_is_greyed_with_the_background_among_the_selected_layers() {
 #[test]
 fn every_object_selection_row_runs_a_known_command() {
     let mut app = pixel_layer(&[]);
-    let items = crate::menus::menu_items(&app);
+    let items = crate::menus::menu_rows(&app);
     // Selected first, then deselected.
     for id in ["select.all", "select.deselect"] {
         app.run(id, json!({})).unwrap();
-        assert!(open(&mut app, &Context::default(), Tool::ObjectSelection, [10.0, 10.0]));
+        assert!(open_here(&mut app, Tool::ObjectSelection, [10.0, 10.0]));
         let menu = app.ui.canvas_tool_menu.clone().unwrap();
         for (label, id) in rows(&menu).iter().flatten() {
-            assert!(items.iter().any(|i| i.id == *id) || photocraft_engine::commands::find(id).is_some(), "{label}: unknown command {id}");
+            assert!(items.iter().any(|i| i.command.id == *id) || photocraft_engine::commands::find(id).is_some(), "{label}: unknown command {id}");
         }
     }
 }
@@ -184,7 +184,7 @@ fn the_other_selection_tools_keep_their_menus() {
                 app.run("select.all", json!({})).unwrap();
             }
             app.ui.tool = tool;
-            assert!(open(&mut app, &Context::default(), tool, [10.0, 10.0]), "{tool:?}");
+            assert!(open_here(&mut app, tool, [10.0, 10.0]), "{tool:?}");
             let open_rows = rows(app.ui.canvas_tool_menu.as_ref().unwrap());
             assert_eq!(labels(open_rows), labels(menu), "{tool:?}, selection {selection}");
         }
