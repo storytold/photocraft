@@ -108,7 +108,7 @@ fn export_as_with_all_boards_covers_the_canvas_between_them() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     three_boards(&mut app);
     let png = export(&app.session.active().unwrap().doc, &fields(&[("format", json!("png")), ("transparency", json!(true)), ("scale", json!(100))]));
-    assert_eq!((png.size.width, png.size.height), (350, 200), "the canvas, not the boards' 300 x 150 union");
+    assert_eq!((png.size.width, png.size.height), (350, 200), "the canvas, not the boards' own 350 x 150 union");
     assert_eq!(at(&png, 125, 125), [0.0, 0.0, 0.0, 0.0], "the gap between the boards travels with it");
 }
 
