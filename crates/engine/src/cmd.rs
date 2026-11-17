@@ -321,7 +321,11 @@ fn build() -> Vec<CommandSpec> {
                 let mut doc = if p.get("artboard").and_then(Value::as_bool).unwrap_or(false) {
                     crate::artboard_cmds::new_artboard_document(name, Size::new(w, h), mode, depth, background)
                 } else if let Some(c) = background {
-                    Document::with_background(name, Size::new(w, h), mode, depth, c)
+                    let mut d = Document::with_background(name, Size::new(w, h), mode, depth, c);
+                    if let Some(layer) = d.layers.first_mut() {
+                        layer.name = s.translated_name_base("Background");
+                    }
+                    d
                 } else {
                     let mut d = Document::new(name, Size::new(w, h), mode, depth);
                     d.layers.push(Layer::raster("Layer 1", d.pixel_format()));
@@ -898,9 +902,10 @@ fn build() -> Vec<CommandSpec> {
             merge_group(s, id)
         }),
         cmd!("layer.flattenImage", "Flatten Image", ["Layer"], None, "{}", has_doc, |s, _| {
+            let name = s.translated_name_base("Background");
             s.edit("Flatten Image", |doc, active| {
                 let fmt = doc.pixel_format();
-                let mut bg = Layer::raster("Background", fmt);
+                let mut bg = Layer::raster(name, fmt);
                 bg.locks.transparency = true;
                 bg.locks.position = true;
                 *crate::pixels_mut(&mut bg)? = photocraft_compose::flatten_to_surface(doc, fmt, Some([1.0, 1.0, 1.0]));

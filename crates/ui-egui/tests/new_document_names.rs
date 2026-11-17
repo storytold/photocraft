@@ -279,3 +279,76 @@ fn absent_or_empty_name_translations_keep_english_defaults() {
         assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().name, "Color Fill 1");
     }
 }
+
+#[test]
+fn generated_backgrounds_can_be_targeted_by_recorded_localized_names() {
+    use photocraft_engine::{actions_cmds::Action, atn_cmds};
+    use photocraft_ui_egui::i18n::{Lang, tr};
+    for lang in Lang::all() {
+        for depth in [8, 16, 32] {
+            for command in ["file.new", "layer.flattenImage"] {
+                let mut app = PhotocraftApp::new(Session::new(), Services::default());
+                app.session.prefs.edit(|p| p.interface.language = lang.code().into());
+                app.session.execute("file.new", json!({"width":4,"height":4,"depth":depth,"background":"transparent"})).unwrap();
+                let name = tr(lang, "Background");
+                let params = if command == "file.new" { json!({"width":4,"height":4,"depth":depth}) } else { json!({}) };
+                let action = Action::new(
+                    "Background",
+                    vec![(command.into(), params), ("layer.select".into(), json!({"layer":name})), ("layer.new.layer".into(), json!({"name":"After"}))],
+                );
+                let (bytes, skipped) = atn_cmds::export("Naming", &[&action], &[], false).unwrap();
+                assert!(skipped.is_empty(), "{command}: {skipped:?}");
+                let imported = atn_cmds::import(&bytes).unwrap();
+                assert!(imported.unsupported.is_empty());
+                app.session.actions.list = imported.actions;
+                let result = app.session.execute("actions.play", json!({"action":"Background"})).unwrap();
+                assert!(result.get("failed").is_none(), "{} {depth} {command}: {result}", lang.code());
+                let st = app.session.active().unwrap();
+                let bg = st.doc.background().unwrap();
+                assert_eq!(bg.name, name);
+                assert!(bg.locks.transparency && bg.locks.position);
+                assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().name, "After");
+            }
+        }
+    }
+}
+
+#[test]
+fn background_conversion_localizes_new_names_and_undo_restores_the_original() {
+    use photocraft_ui_egui::i18n::{Lang, tr};
+    for lang in Lang::all() {
+        for depth in [8, 16, 32] {
+            let mut app = PhotocraftApp::new(Session::new(), Services::default());
+            app.session.prefs.edit(|p| p.interface.language = lang.code().into());
+            app.session.execute("file.new", json!({"width":4,"height":4,"depth":depth,"background":"transparent"})).unwrap();
+            app.session.execute("layer.renameLayer", json!({"name":"Literal"})).unwrap();
+            let before = app.session.active().unwrap().doc.clone();
+            app.session.execute("layer.new.backgroundFromLayer", json!({})).unwrap();
+            let converted = app.session.active().unwrap().doc.clone();
+            assert_eq!(converted.background().unwrap().name, tr(lang, "Background"));
+            app.session.undo();
+            assert_eq!(*app.session.active().unwrap().doc, *before);
+            app.session.redo();
+            assert_eq!(*app.session.active().unwrap().doc, *converted);
+            app.session.prefs.edit(|p| p.interface.language = "en".into());
+            assert_eq!(*app.session.active().unwrap().doc, *converted, "language changes do not rename existing layers");
+        }
+    }
+}
+
+#[test]
+fn imported_background_names_remain_literal() {
+    use photocraft_ui_egui::i18n::Lang;
+    let mut source = Session::new();
+    source.execute("file.new", json!({"width":4,"height":4})).unwrap();
+    let bytes = photocraft_io::export(&source.active().unwrap().doc, "source.psd", &Default::default()).unwrap().bytes;
+    for lang in Lang::all() {
+        let mut app = PhotocraftApp::new(Session::new(), Services::default());
+        app.session.prefs.edit(|p| p.interface.language = lang.code().into());
+        app.services.import = Some(Box::new(|name, bytes, options| {
+            photocraft_io::import_with_options(name, bytes, options).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
+        }));
+        app.open_file("source.psd", &bytes).unwrap();
+        assert_eq!(app.session.active().unwrap().doc.background().unwrap().name, "Background");
+    }
+}

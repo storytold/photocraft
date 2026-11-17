@@ -56,6 +56,7 @@ fn background_from_layer(s: &mut Session, p: &Value) -> Result<Value> {
         Some(v) => LayerId(v.as_u64().ok_or_else(|| EngineError::BadParams { cmd: CMD.into(), msg: "`layer` must be a layer id".into() })?),
     };
     let bg = s.tools.background;
+    let name = s.translated_name_base("Background");
     s.edit("Background From Layer", |doc, active| {
         if background_id(doc).is_some() {
             return Err(EngineError::Other("the document already has a Background layer".into()));
@@ -72,7 +73,7 @@ fn background_from_layer(s: &mut Session, p: &Value) -> Result<Value> {
         let rest = std::mem::replace(&mut doc.layers, vec![only]);
         let pixels = photocraft_compose::flatten_to_surface(doc, fmt, Some([bg[0], bg[1], bg[2]]));
         doc.layers = rest;
-        let mut out = Layer::raster("Background", fmt);
+        let mut out = Layer::raster(name, fmt);
         out.id = id;
         out.visible = visible;
         out.locks.transparency = true;
