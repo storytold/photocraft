@@ -160,7 +160,9 @@ impl PlaceSteps {
             )));
         }
         self.warnings = imported.warnings;
-        let src = imported.document;
+        ctx.check()?;
+        let mut src = imported.document;
+        crate::import_prepare::prepare_imported_document(&mut src, ctx)?;
         let (w, h) = (src.size.width as f64, src.size.height as f64);
         let (cw, ch) = self.input.canvas;
         let p = &self.input.params;

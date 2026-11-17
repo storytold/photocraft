@@ -70,20 +70,12 @@ pub fn encode_source(doc: &Document) -> Result<Vec<u8>> {
 
 /// Decodes smart-object contents (a `.pcraft` bundle, PSD/PSB, or any flat image format).
 pub fn decode_source(file_name: &str, bytes: &[u8]) -> Result<Document> {
-    decode_source_with_order(file_name, bytes, None)
+    source::decode_source_in(file_name, bytes, &JobCtx::new())
 }
 
-/// Decode with the persisted interpretation of historical XCF sample bytes, without inferring an order.
+/// Decode using the persisted interpretation without inferring historical sample order.
 pub fn decode_source_with_order(file_name: &str, bytes: &[u8], order: Option<photocraft_doc::HistoricalXcfSampleOrder>) -> Result<Document> {
-    if photocraft_io::is_svg_input(file_name, bytes) {
-        // This API has no warning channel. Stack/source caches and contents edits must not
-        // turn a partial SVG import into silently complete smart-object contents.
-        return photocraft_io::svg::import_svg_bounded_images_strict(file_name, bytes, 24_000_000)
-            .map(|imported| imported.document)
-            .map_err(|e| other(format!("can't read SVG smart object contents: {e}")));
-    }
-    let options = photocraft_io::ImportOptions { historical_xcf_sample_order: order, ..Default::default() };
-    crate::file_cmds::import_with_options(file_name, bytes, &options).map_err(|e| other(format!("can't read smart object contents \"{file_name}\": {e}")))
+    source::decode_source_in_with_order(file_name, bytes, order, &JobCtx::new())
 }
 
 fn base_name(path: &str) -> String {
@@ -211,7 +203,7 @@ use rendering::{NativeDigests, blend_surfaces, place, render_in};
 pub use rendering::{
     apply_smart_filters, purge_stack_cache, refresh, refresh_layer, render, render_below_filter, stack_cache_bytes, stack_image, stack_image_with_order,
 };
-pub(crate) use rendering::{render_with_warnings, source_box};
+pub(crate) use rendering::{prepare_layer_with_source, prepared_source_image, render_below_filter_with_source, render_with_warnings, source_box};
 #[cfg(test)]
 use source::svg_source_image_in;
 pub use source::{
@@ -219,7 +211,7 @@ pub use source::{
     source_image_with_order, svg_source_image,
 };
 use source::{authorize_source, authorized_source_bytes};
-pub(crate) use source::{restore_unrendered, take_caches, vector_scale};
+pub(crate) use source::{embedded_source_bytes, restore_unrendered, take_caches, vector_scale};
 
 const SO: &[&str] = &["Layer", "Smart Objects"];
 const SF: &[&str] = &["Layer", "Smart Filter"];
