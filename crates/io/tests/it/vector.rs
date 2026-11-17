@@ -141,7 +141,7 @@ fn shape_layer_typed_roundtrip() {
 /// reopen as a shape with the fill it was saved with (#1281).
 fn assert_vscg_fill_is_not_doubled(mut d: Document, fill: Fill, edited: Fill) {
     let fill_keys = |bytes: &[u8]| -> Vec<[u8; 4]> {
-        let f = photocraft_psd::PsdFile::from_bytes(bytes).unwrap();
+        let f = craft_psd::PsdFile::from_bytes(bytes).unwrap();
         let l = f.layers().iter().find(|l| l.name() == "Shape").expect("shape record");
         l.blocks.iter().map(|b| b.key).filter(|k| matches!(k, b"vscg" | b"SoCo" | b"GdFl" | b"PtFl")).collect()
     };
