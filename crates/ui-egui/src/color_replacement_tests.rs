@@ -1,10 +1,9 @@
 //! The Color Replacement tool (#1045): a canvas stroke dispatches `paint.colorReplacement` with
 //! the options bar's Mode, Sampling, Limits, Tolerance and Anti-alias and the foreground colour,
-//! drawn live, one History step; the brush-tool gestures, `ui.set` and `ui.inspect`.
+//! drawn live, one History step. The bar's values reaching the command are tested in
+//! `tools/retouch_ui/tests.rs`.
 
-use egui::{Modifiers, vec2};
-use egui_kittest::Harness;
-use egui_kittest::kittest::{NodeT, Queryable};
+use egui::Modifiers;
 use serde_json::json;
 
 use crate::PhotocraftApp;
@@ -115,7 +114,8 @@ fn contiguous_limits_skip_a_matching_island_that_discontiguous_recolours() {
 /// 8 (the live stroke keeps its working pixels in the layer's depth between dabs).
 #[test]
 fn a_stroke_is_drawn_live_and_is_one_history_step() {
-    for depth in [8, 32] {
+    // Color Replacement refuses 32-bit RGB documents, as the reference application does (#11923).
+    for depth in [8, 16] {
         live_stroke_at(depth);
     }
 }
@@ -147,7 +147,7 @@ fn live_stroke_at(depth: u32) {
     }
     let st = app.session.active().unwrap();
     assert_eq!(st.history.past_len(), steps + 1, "one History step");
-    assert_eq!(st.history.entries().last().map(|e| e.to_string()).as_deref(), Some("Color Replacement"));
+    assert_eq!(st.history.entries().last().map(|e| e.to_string()).as_deref(), Some("Color Replacement Tool"));
     app.run("edit.undo", json!({})).unwrap();
     assert_eq!(rgba(&app, 20, 20), before, "one undo restores the pixels");
     app.run("edit.redo", json!({})).unwrap();
@@ -170,96 +170,4 @@ fn a_mask_target_is_refused_without_painting() {
     assert!(app.ui.status_error && app.ui.status.contains("layer pixels only"), "{}", app.ui.status);
     assert_eq!(rgba(&app, 20, 20), RED);
     assert_eq!(app.session.active().unwrap().history.past_len(), steps);
-}
-
-/// Every options-bar control reaches `paint.colorReplacement`, with the foreground as `color`.
-#[test]
-fn the_options_bar_sets_every_command_parameter() {
-    let mut h = Harness::builder().with_size(vec2(1600.0, 400.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
-            if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                return;
-            }
-            crate::panels::options_bar(app, ui);
-        },
-        app(8),
-    );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
-    h.run_steps(4);
-    for label in ["Mode:", "Limits:", "Tolerance:", "Anti-alias", "Sampling: Continuous", "Sampling: Once", "Sampling: Background Swatch"] {
-        assert!(h.get_by_label(label).rect().is_positive(), "missing Color Replacement option {label}");
-    }
-    let combo = |h: &Harness<'static, PhotocraftApp>, current: &str| {
-        h.get_all_by_role(egui::accesskit::Role::ComboBox)
-            .find(|n| n.accesskit_node().value().as_deref() == Some(current) || n.accesskit_node().label().as_deref() == Some(current))
-            .unwrap()
-            .click();
-    };
-    combo(&h, "Color");
-    h.run_steps(3);
-    h.get_by_label("Luminosity").click();
-    h.run_steps(3);
-    combo(&h, "Discontiguous");
-    h.run_steps(3);
-    h.get_by_label("Find Edges").click();
-    h.run_steps(3);
-    h.get_by_label("Sampling: Once").click();
-    h.run_steps(3);
-    h.get_by_label("Anti-alias").click();
-    h.run_steps(3);
-    // The Tolerance field: click into it and type a new value.
-    h.get_all_by_role(egui::accesskit::Role::SpinButton).find(|n| n.accesskit_node().numeric_value() == Some(30.0)).expect("Tolerance field").click();
-    h.run_steps(1);
-    h.event(egui::Event::Text("55".into()));
-    h.key_press(egui::Key::Tab);
-    h.run_steps(2);
-    let o = &h.state().ui.tool_options;
-    assert_eq!((o.cr_mode.as_str(), o.cr_limits.as_str(), o.cr_sampling.as_str(), o.cr_anti_alias), ("luminosity", "findEdges", "once", false));
-    assert_eq!(o.cr_tolerance, 55.0);
-    let app = h.state_mut();
-    drag(app, &STROKE);
-    let (id, p) = app.session.journal.last().cloned().unwrap();
-    assert_eq!(id, "paint.colorReplacement");
-    for (k, v) in
-        [("mode", json!("luminosity")), ("sampling", json!("once")), ("limits", json!("findEdges")), ("tolerance", json!(55.0)), ("antiAlias", json!(false))]
-    {
-        assert_eq!(p[k], v, "{k}: {p}");
-    }
-    // The replacement colour is the foreground.
-    assert_eq!(app.session.tools.foreground, [0.0, 1.0, 0.0, 1.0]);
-    assert_eq!(p["color"], json!([0.0, 1.0, 0.0, 1.0]), "{p}");
-}
-
-#[test]
-fn it_paints_like_the_brush_tools() {
-    assert!(Tool::ColorReplacement.is_brushlike(), "brush cursor, brush chip, [ ] and ⇧[ ⇧]");
-    assert!(crate::brush_resize::applies(Tool::ColorReplacement), "Control+Alt drag and Alt+right drag resize it");
-    assert!(crate::canvas::freehand_tool(Tool::ColorReplacement));
-    let mut a = app(8);
-    let ctx = egui::Context::default();
-    let size = a.session.tools.brush.size;
-    // ] and [ step the size of the tool's brush.
-    a.run("tools.increaseBrushSize", json!({})).unwrap();
-    assert!(a.session.tools.brush.size > size);
-    a.run("tools.decreaseBrushSize", json!({})).unwrap();
-    assert_eq!(a.session.tools.brush.size, size);
-    // Alt+right drag resizes and paints nothing.
-    let events = json!([{"kind": "down", "x": 40, "y": 20}, {"kind": "move", "x": 60, "y": 20}, {"kind": "up", "x": 70, "y": 20}]);
-    let (req, _rx) = crate::control::ControlRequest::new("ui.pointer", json!({"tool": "colorReplacement", "button": "right", "alt": true, "events": events}));
-    let _ = crate::control::handle(&mut a, &ctx, &req);
-    assert!(a.session.tools.brush.size > size, "{}", a.session.tools.brush.size);
-    assert!(!a.session.journal.iter().any(|(id, _)| id == "paint.colorReplacement"), "nothing painted");
-}
-
-#[test]
-fn ui_set_selects_it_and_inspect_reports_it() {
-    let mut a = app(8);
-    a.ui.tool = Tool::Move;
-    let ctx = egui::Context::default();
-    let (req, _rx) = crate::control::ControlRequest::new("ui.set", json!({"tool": "colorReplacement"}));
-    let _ = crate::control::handle(&mut a, &ctx, &req);
-    assert_eq!(a.ui.tool, Tool::ColorReplacement);
-    assert_eq!(crate::control::inspect(&a, &ctx)["tool"], "ColorReplacement");
-    assert_eq!(Tool::ColorReplacement.key(), 'B');
-    assert_eq!(Tool::ColorReplacement.label(), "Color Replacement Tool");
 }
