@@ -112,16 +112,35 @@ pub fn draw_content(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         None => (&pv.texture, r),
     };
     if let Some(w) = &t.warp {
-        draw_warp_content(painter, xf, t.rect, w, &|p| t.warp_to_doc(p), t.interpolation == "nearest", texels(t.warp_place.is_some(), t.rect), pv, display);
+        // Through a Perspective or Distort placement, the warp's control points are carried into
+        // the document and the surface drawn there, as the render does.
+        let carried = t
+            .warp_place
+            .filter(|m| m[6] != 0.0 || m[7] != 0.0)
+            .and_then(|m| photocraft_algo::warp::warp_in_document(w, &photocraft_algo::transform::Homography(m)));
+        draw_warp_content(
+            painter,
+            xf,
+            t.rect,
+            w,
+            carried.as_ref(),
+            &|p| t.warp_to_doc(p),
+            t.interpolation == "nearest",
+            texels(t.warp_place.is_some(), t.rect),
+            pv,
+            display,
+        );
         return;
     }
     // A warp kept from Warp mode: the box transforms the warped result (one session).
     if let Some(w) = t.held_doc_warp() {
-        draw_warp_content(painter, xf, w.bounds, &w, &|p| p, t.interpolation == "nearest", texels(false, w.bounds), pv, display);
+        draw_warp_content(painter, xf, w.bounds, &w, None, &|p| p, t.interpolation == "nearest", texels(false, w.bounds), pv, display);
         return;
     }
     if let Some(w) = &t.held_warp {
-        draw_warp_content(painter, xf, w.bounds, w, &t.held_to_doc(), t.interpolation == "nearest", texels(true, w.bounds), pv, display);
+        let place = t.box_move().mul(&photocraft_algo::transform::Homography(t.held_place.unwrap_or(photocraft_algo::transform::Homography::IDENTITY.0)));
+        let carried = (place.0[6] != 0.0 || place.0[7] != 0.0).then(|| photocraft_algo::warp::warp_in_document(w, &place)).flatten();
+        draw_warp_content(painter, xf, w.bounds, w, carried.as_ref(), &t.held_to_doc(), t.interpolation == "nearest", texels(true, w.bounds), pv, display);
         return;
     }
     let ctx = painter.ctx();
@@ -641,6 +660,7 @@ fn draw_warp_content(
     xf: &ViewXform,
     r: [f64; 4],
     w: &Warp,
+    carried: Option<&Warp>,
     to_doc: &dyn Fn([f64; 2]) -> [f64; 2],
     nearest: bool,
     (texels, covers): (&crate::transform_tex::PreviewTextures, [f64; 4]),
@@ -656,9 +676,18 @@ fn draw_warp_content(
     for v in &vs {
         for u in &us {
             let (sx, sy) = (r[0] + u * (r[2] - r[0]), r[1] + v * (r[3] - r[1]));
-            let (x, y) = w.map(sx, sy);
-            // A smart object's warp is in its contents' space: shown through its placement.
-            let [x, y] = to_doc([x, y]);
+            // A smart object's warp is in its contents' space: shown through its placement, or
+            // already carried into the document (`carried`).
+            let [x, y] = match carried {
+                Some(c) => {
+                    let (x, y) = c.map(sx, sy);
+                    [x, y]
+                }
+                None => {
+                    let (x, y) = w.map(sx, sy);
+                    to_doc([x, y])
+                }
+            };
             let tex = pos2((along(sx, covers[0], covers[2]) * f64::from(uv[0])) as f32, (along(sy, covers[1], covers[3]) * f64::from(uv[1])) as f32);
             mesh.vertices.push(egui::epaint::Vertex { pos: pos2(x as f32, y as f32), uv: tex, color: tint });
         }

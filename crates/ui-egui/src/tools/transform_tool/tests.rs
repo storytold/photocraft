@@ -4966,3 +4966,42 @@ fn a_warp_pull_near_the_document_centre_does_not_snap() {
     let got = t.warp_to_doc(t.warp.as_ref().unwrap().mesh.as_ref().unwrap().eval(0.5, 0.5));
     assert!((got[0] - centre[0]).abs() < 1e-6 && (got[1] - (centre[1] - 4.0)).abs() < 1e-6, "{got:?}");
 }
+
+/// A warp dragged past a Perspective placement's horizon (the reference application's bell) is
+/// applied: the smart object keeps its perspective and a warp, and nothing tears.
+#[test]
+fn a_warp_pulled_past_the_vanishing_point_is_applied() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_square(600, photocraft_geom::Rect::new(150, 125, 452, 327));
+    app.ui.extras.snap = false;
+    app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    begin(&mut app, &ctx).unwrap();
+    {
+        let t = app.ui.transform.as_mut().unwrap();
+        t.mode = TransformMode::Perspective;
+        t.quad = [[270.0, 125.0], [332.0, 125.0], [452.0, 327.0], [150.0, 327.0]];
+    }
+    enter_warp(&mut app, &ctx);
+    // Past the horizon (y 73 here) the pointer stays on the picture's side, far out towards the
+    // vanishing point, never behind the picture.
+    {
+        let t = app.ui.transform.as_ref().unwrap();
+        let (near, past) = (t.doc_to_warp([301.0, 80.0]), t.doc_to_warp([301.0, -24.0]));
+        assert!(near[1] < -1000.0 && past[1] <= near[1] && past[1] > -20_000.0, "{near:?} {past:?}");
+    }
+    let none = egui::Modifiers::NONE;
+    crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 301.0, y: 226.0, pressure: 1.0 }, none);
+    for k in 1..=10 {
+        crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 301.0, y: 226.0 - 25.0 * k as f64, pressure: 1.0 }, none);
+    }
+    crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 301.0, y: -24.0 }, none);
+    let mesh = app.ui.transform.as_ref().unwrap().warp.as_ref().unwrap().mesh.clone().unwrap();
+    assert!(mesh.points.iter().all(|p| p[0].is_finite() && p[1].is_finite()), "{:?}", mesh.points);
+    // The grab is low in the picture's own space, so the lower rows reach out the farthest.
+    assert!(mesh.points[9][1] < -5000.0, "{:?}", mesh.points[9]);
+    commit(&mut app);
+    let st = app.session.active().unwrap();
+    let LayerContent::Smart(sm) = &st.doc.layers.last().unwrap().content else { panic!("smart object") };
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    assert!(sm.perspective.is_some() && sm.warp.is_some(), "applied");
+}

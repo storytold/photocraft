@@ -154,14 +154,22 @@ pub fn scale_snapped(src: &Surface, bounds: Rect, t: [f64; 4]) -> Option<Surface
     crate::smart_scale::scale(src, bounds, w, h, (x0, y0))
 }
 
-/// [`place_source`] through a projective map `h` (source → document; Distort, Perspective): the
-/// warp first (in source space), then `h`; bilinear through a warp, as there.
+/// [`place_source`] through a projective map `h` (source → document; Distort, Perspective).
+///
+/// With a warp, as the reference application draws it: the warp's control points are carried
+/// through `h` into the document and the Bézier surface is drawn there, rather than the warped
+/// surface being sent through `h` point by point (measured on its own files: 1 px and 171 px of
+/// 270 000 apart, against about 20 000 for the exact composition). When a control point lies on
+/// or past the horizon of `h` it can't be carried, and the exact composition draws it instead.
 pub fn place_source_projective(
     src: &Surface,
     src_rect: Rect,
     h: &crate::transform::Homography,
     warp: Option<&photocraft_geom::warp::Warp>,
 ) -> Result<Surface, photocraft_raster::AllocationError> {
+    if let Some(doc_warp) = warp.filter(|w| !w.is_identity()).and_then(|w| warp_in_document(w, h)) {
+        return place_source(src, src_rect, &photocraft_geom::Affine::IDENTITY, Some(&doc_warp));
+    }
     if let Some(w) = warp.filter(|w| !w.is_identity()) {
         let map = |x: f64, y: f64| {
             let (u, v) = w.map(x, y);
@@ -177,6 +185,27 @@ pub fn place_source_projective(
         return Ok(out);
     }
     crate::transform::warp_surface(src, src_rect, h, Interp::Bicubic)
+}
+
+/// `w` with its control points carried through `h` into the document (see
+/// [`place_source_projective`]); `None` when a control point is on or past `h`'s horizon. The
+/// transform preview draws a smart object's warp the same way.
+pub fn warp_in_document(w: &photocraft_geom::warp::Warp, h: &crate::transform::Homography) -> Option<photocraft_geom::warp::Warp> {
+    let m = &h.0;
+    let mesh = w.to_mesh(1, 1);
+    // Every point on the same side of the horizon as the warp's first corner (inside the
+    // picture), by a margin relative to the map's own scale (it may be scaled by -1 as a whole).
+    let w_of = |p: [f64; 2]| m[6] * p[0] + m[7] * p[1] + m[8];
+    let side = w_of(*mesh.points.first()?).signum();
+    let margin = 1e-9 * m[8].abs().max(1e-300);
+    if !mesh.points.iter().all(|&p| w_of(p) * side > margin) {
+        return None;
+    }
+    let doc = mesh.map_points(|p| {
+        let (x, y) = h.apply(p[0], p[1]);
+        [x, y]
+    });
+    doc.points.iter().all(|p| p[0].is_finite() && p[1].is_finite()).then(|| photocraft_geom::warp::Warp::custom(doc, w.bounds))
 }
 
 /// Warps the content of `src` inside `src_rect` through the forward map `f` (source document
@@ -2110,6 +2139,43 @@ mod tests {
             }
         }
         surf
+    }
+
+    /// A Perspective or Distort smart object's warp is drawn as the reference application draws
+    /// it: its control points carried into the document, the surface drawn there. A control point
+    /// past the horizon can't be carried; that falls back to the exact composition, without panic.
+    #[test]
+    fn a_projective_warp_draws_its_carried_control_points() {
+        let src = sample(SampleType::U8);
+        let r = Rect::new(5, 3, 45, 27);
+        let b = [5.0, 3.0, 45.0, 27.0];
+        let mut mesh = BezierMesh::identity(b, 1, 1);
+        mesh.points[5] = [mesh.points[5][0] + 6.0, mesh.points[5][1] - 9.0];
+        mesh.points[10] = [mesh.points[10][0] - 4.0, mesh.points[10][1] + 5.0];
+        let warp = Warp::custom(mesh, b);
+        // A perspective: the top edge narrowed (vanishing point well above).
+        let h = crate::transform::Homography::quad_to_quad(
+            [[5.0, 3.0], [45.0, 3.0], [45.0, 27.0], [5.0, 27.0]],
+            [[15.0, 3.0], [35.0, 3.0], [45.0, 27.0], [5.0, 27.0]],
+        )
+        .unwrap();
+        let out = place_source_projective(&src, r, &h, Some(&warp)).unwrap();
+        let carried = warp_in_document(&warp, &h).unwrap();
+        let want = place_source(&src, r, &photocraft_geom::Affine::IDENTITY, Some(&carried)).unwrap();
+        let (a, z) = (out.content_bounds(), want.content_bounds());
+        assert_eq!(a, z);
+        assert_eq!(out.read_region(a), want.read_region(z), "drawn as the carried surface");
+        // Far above, a point converges on the vanishing point and is carried (the bell); the line
+        // that this perspective sends to infinity lies far below, and a point past it can't be
+        // carried: drawn the exact way.
+        let mut up = warp.to_mesh(1, 1);
+        up.points[5] = [up.points[5][0], -1.0e6];
+        assert!(warp_in_document(&Warp::custom(up, b), &h).is_some());
+        let mut far = warp.to_mesh(1, 1);
+        far.points[5] = [far.points[5][0], 1.0e6];
+        let far = Warp::custom(far, b);
+        assert!(warp_in_document(&far, &h).is_none());
+        assert!(place_source_projective(&src, r, &h, Some(&far)).is_ok());
     }
 
     #[test]

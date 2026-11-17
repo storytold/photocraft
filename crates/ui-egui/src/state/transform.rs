@@ -123,6 +123,14 @@ pub struct WarpBox {
     pub pivot: [f64; 2],
 }
 
+/// How close to a Perspective or Distort placement's horizon a warp drag may go, as a share of
+/// the homogeneous weight at the warp's centre ([`TransformSession::doc_to_warp`]).
+const HORIZON_MARGIN: f64 = 1e-3;
+/// How far from its centre (in the warp's own space) a drag near the horizon may reach: a pull
+/// moves a control point up to about five times as far, which keeps the grid within the 100 000 px
+/// a warp may store.
+const HORIZON_REACH: f64 = 15_000.0;
+
 impl TransformSession {
     /// A point of the warp being edited, where it shows in the document ([`Self::warp_place`]).
     pub fn warp_to_doc(&self, p: [f64; 2]) -> [f64; 2] {
@@ -136,14 +144,45 @@ impl TransformSession {
     }
 
     /// A document point in the warp's own space (the inverse of [`Self::warp_to_doc`]).
+    ///
+    /// Past the horizon of a Perspective or Distort placement there is no such point: the inverse
+    /// would put it on the far side, behind the picture, and a drag there tore the warp apart.
+    /// A pointer that far is held just short of the horizon, along the line from the warp's centre,
+    /// so the grid reaches out towards the vanishing point instead, as in the reference application.
     pub fn doc_to_warp(&self, p: [f64; 2]) -> [f64; 2] {
-        match self.warp_place.and_then(|m| photocraft_algo::transform::Homography(m).inverse()) {
-            Some(h) => {
-                let (x, y) = h.apply(p[0], p[1]);
-                [x, y]
-            }
-            None => p,
+        let Some(h) = self.warp_place.and_then(|m| photocraft_algo::transform::Homography(m).inverse()) else { return p };
+        let w_at = |q: [f64; 2]| h.0[6] * q[0] + h.0[7] * q[1] + h.0[8];
+        let centre = self.warp.as_ref().map(|w| self.warp_to_doc([(w.bounds[0] + w.bounds[2]) / 2.0, (w.bounds[1] + w.bounds[3]) / 2.0]));
+        let map = |q: [f64; 2]| {
+            let (x, y) = h.apply(q[0], q[1]);
+            [x, y]
+        };
+        let Some(c) = centre.filter(|&c| w_at(c).abs() > 1e-300) else { return map(p) };
+        let (wc, wp) = (w_at(c), w_at(p));
+        let p = if wp / wc < HORIZON_MARGIN {
+            let k = (HORIZON_MARGIN * wc - wc) / (wp - wc);
+            [c[0] + k * (p[0] - c[0]), c[1] + k * (p[1] - c[1])]
+        } else {
+            p
+        };
+        // Near the horizon the warp's own space runs out to enormous distances: no farther than
+        // [`HORIZON_REACH`] from the centre there (still at the vanishing point on screen), so the
+        // grid stays within what a warp may store.
+        let (wc_space, q) = (map(c), map(p));
+        let far = |q: [f64; 2]| (q[0] - wc_space[0]).hypot(q[1] - wc_space[1]) > HORIZON_REACH;
+        if !far(q) {
+            return q;
         }
+        let (mut lo, mut hi) = (0.0f64, 1.0f64);
+        for _ in 0..60 {
+            let mid = (lo + hi) / 2.0;
+            if far(map([c[0] + mid * (p[0] - c[0]), c[1] + mid * (p[1] - c[1])])) {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+        }
+        map([c[0] + lo * (p[0] - c[0]), c[1] + lo * (p[1] - c[1])])
     }
 
     /// The box's move since it opened (identity when it can't be inverted).
