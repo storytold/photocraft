@@ -102,7 +102,7 @@ fn tx_texture_does_not_acquire_its_path() {
     let img = photocraft_codecs::Image::from_u8(2, 2, photocraft_codecs::ChannelLayout::Gray, vec![40; 4]).unwrap();
     let tiff = photocraft_codecs::encode(&img, photocraft_codecs::Format::Tiff, &Default::default()).unwrap();
     for automation in [false, true] {
-        let (mut app, _written) = app_with(vec![None]);
+        let (mut app, _written) = app_with(vec![Picked::Cancelled]);
         if automation {
             app.open_automation_bytes("wall.tx", &tiff).unwrap();
         } else {
@@ -114,7 +114,7 @@ fn tx_texture_does_not_acquire_its_path() {
         assert_eq!(menus::invoke(&mut app, &egui::Context::default(), "file.save", json!({})).unwrap(), json!({"fileDialog": "save"}));
     }
     // The same bytes under a TIFF name keep their path, as before.
-    let (mut app, _written) = app_with(vec![None]);
+    let (mut app, _written) = app_with(vec![Picked::Cancelled]);
     app.open_file("/tex/wall.tif", &tiff).unwrap();
     assert!(!app.session.active().unwrap().source_read_only);
 }

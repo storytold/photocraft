@@ -3,7 +3,6 @@
 //! (Save asks for a new name, so the texture is never replaced by a plain TIFF), without the
 //! "more pages" warning a MIP chain doesn't deserve. Every file here is hand-built by `tiffgen`.
 
-#[path = "../../../codecs/tests/it/common/tiffgen.rs"]
 mod tiffgen;
 use tiffgen::*;
 
@@ -13,7 +12,7 @@ const ORDERS: [(bool, bool); 4] = [(true, false), (false, false), (true, true), 
 /// writes them (no NewSubfileType).
 fn level(w: u32, h: u32, rgb: [u8; 3], tile: usize) -> Dir {
     let px: Vec<u8> = (0..w * h).flat_map(|_| rgb).collect();
-    let d = Dir { entries: base(w, h, 8, 3, 2), chunks: tile_split(&px, w as usize, h as usize, 3, 1, tile, tile, false), tiled: true };
+    let d = Dir { entries: base(w, h, 8, 3, 2), chunks: tile_split(&px, w as usize, h as usize, 3, 1, tile, tile), tiled: true };
     d.tag(322, SHORT, &[tile as u64]).tag(323, SHORT, &[tile as u64])
 }
 
