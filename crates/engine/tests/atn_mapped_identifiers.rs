@@ -4,7 +4,11 @@ use craft_psd::{
     atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem},
     descriptor::{Class, Descriptor, Id, ReferenceItem, UnicodeString, Value as D},
 };
-use photocraft_engine::{Session, actions_cmds::Action, atn_cmds};
+use photocraft_engine::{
+    Session,
+    actions_cmds::{Action, ActionList, ActionStep, ActionsFile},
+    atn_cmds,
+};
 use serde_json::json;
 
 /// A small marked document makes canvas translation and image resampling distinguishable.
@@ -26,7 +30,7 @@ fn replay_saved(s: &mut Session, action: &Action) {
     let imported = atn_cmds::import(&bytes).unwrap();
     assert!(imported.unsupported.is_empty());
     assert_eq!(imported.actions[0].steps, action.steps);
-    s.actions.list = imported.actions;
+    s.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
     let result = s.execute("actions.play", json!({"action":"Recorded"})).unwrap();
     assert_eq!(result["ran"], 1);
     assert!(result.get("failed").is_none(), "{result}");
@@ -44,8 +48,8 @@ fn recorded_canvas_percent_resolves_at_playback_and_keeps_an_omitted_side() {
             d = d.with("Hght", D::UnitFloat { unit: *b"#Prc", value: 200.0 });
         }
         let action = recorded(AtnEvent::Code(*b"CnvS"), d);
-        assert_eq!(action.steps[0].0, "image.canvasSize", "recorded canvas percentages must map");
-        assert_eq!(action.steps[0].1["units"], "percent");
+        assert_eq!(action.steps[0].command, "image.canvasSize", "recorded canvas percentages must map");
+        assert_eq!(action.steps[0].params["units"], "percent");
         assert!(matches!(saved(&action).descriptor.unwrap().get("Wdth"), Some(D::UnitFloat {unit,value}) if unit==b"#Prc" && *value==200.0));
         for (width, height) in [(40, 30), (10, 15)] {
             let mut s = sized_document(width, height, 72);
@@ -69,7 +73,7 @@ fn review_point_resize_without_interpolation_stays_kept() {
                 d = d.with("Intr", value);
             }
             let action = recorded(AtnEvent::Code(*b"ImgS"), d.clone());
-            assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP, "point sizes without a valid Intr must stay unsupported");
+            assert_eq!(action.steps[0].command, atn_cmds::PHOTOSHOP_STEP, "point sizes without a valid Intr must stay unsupported");
             assert_eq!(saved(&action).descriptor, Some(d));
         }
     }
@@ -81,12 +85,12 @@ fn review_point_resize_exports_with_null_optional_values() {
     for extras in [json!({"resolution":null}), json!({"percent":null}), json!({"resolution":null,"percent":null})] {
         let mut params = json!({"width":72,"units":"pt","resample":"nearest","scaleStyles":false});
         params.as_object_mut().unwrap().extend(extras.as_object().unwrap().clone());
-        let action = Action::new("Recorded", vec![("image.imageSize".into(), params)]);
+        let action = Action::new("Recorded", vec![ActionStep::new("image.imageSize", params)]);
         let (bytes, skipped) = atn_cmds::export("Points", &[&action], &[], false).expect("null values must not prevent point-size export");
         assert!(skipped.is_empty());
         let imported = atn_cmds::import(&bytes).unwrap();
         assert!(imported.unsupported.is_empty());
-        assert_eq!(imported.actions[0].steps[0].1, json!({"width":72,"units":"pt","resample":"nearest","scaleStyles":false}));
+        assert_eq!(imported.actions[0].steps[0].params, json!({"width":72,"units":"pt","resample":"nearest","scaleStyles":false}));
     }
 }
 
@@ -96,16 +100,16 @@ fn review_point_resize_exports_the_default_resampler() {
     for extras in [json!({}), json!({"resample":null})] {
         let mut params = json!({"width":72,"units":"pt","scaleStyles":false});
         params.as_object_mut().unwrap().extend(extras.as_object().unwrap().clone());
-        let action = Action::new("Recorded", vec![("image.imageSize".into(), params.clone())]);
+        let action = Action::new("Recorded", vec![ActionStep::new("image.imageSize", params.clone())]);
         let (bytes, skipped) = atn_cmds::export("Points", &[&action], &[], false).unwrap();
         assert!(skipped.is_empty());
         let imported = atn_cmds::import(&bytes).unwrap();
         assert!(imported.unsupported.is_empty(), "a point-size export must include its native default resampler");
-        assert_eq!(imported.actions[0].steps[0].1["resample"], "bicubic");
+        assert_eq!(imported.actions[0].steps[0].params["resample"], "bicubic");
         let mut expected = sized_document(40, 20, 144);
         expected.execute("image.imageSize", params).unwrap();
         let mut actual = sized_document(40, 20, 144);
-        actual.actions.list = imported.actions;
+        actual.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
         let result = actual.execute("actions.play", json!({"action":"Recorded"})).unwrap();
         assert!(result.get("failed").is_none(), "{result}");
         let (a, b) = (&actual.active().unwrap().doc, &expected.active().unwrap().doc);
@@ -124,11 +128,11 @@ fn review_copy_cut_opacity_is_validated_before_any_step_runs() {
                 .with("Usng", enm("UsrM", "Slct"))
                 .with("Cpy ", D::Boolean(copy));
             let action = recorded(AtnEvent::Code(*b"Mk  "), d);
-            assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP, "invalid opacity must keep Copy/Cut before mutation");
+            assert_eq!(action.steps[0].command, atn_cmds::PHOTOSHOP_STEP, "invalid opacity must keep Copy/Cut before mutation");
             let mut s = sized_document(8, 6, 72);
             s.execute("select.rect", json!({"x":0,"y":0,"width":2,"height":2})).unwrap();
             let before = s.active().unwrap().doc.clone();
-            s.actions.list = vec![action];
+            s.actions.list = ActionList::from_file(ActionsFile::new(vec![action], Vec::new()));
             let result = s.execute("actions.play", json!({"action":"Recorded"})).unwrap();
             assert!(result.get("failed").is_some());
             assert_eq!(s.active().unwrap().doc, before);
@@ -139,8 +143,8 @@ fn review_copy_cut_opacity_is_validated_before_any_step_runs() {
                 .with("Usng", enm("UsrM", "Slct"))
                 .with("Cpy ", D::Boolean(copy));
             let action = recorded(AtnEvent::Code(*b"Mk  "), d);
-            assert!(action.steps.iter().all(|(id, _)| id != atn_cmds::PHOTOSHOP_STEP));
-            assert_eq!(action.steps.iter().find(|(id, _)| id == "layer.setProps").unwrap().1["opacity"], opacity / 100.0);
+            assert!(action.steps.iter().all(|step| step.command != atn_cmds::PHOTOSHOP_STEP));
+            assert_eq!(action.steps.iter().find(|step| step.command == "layer.setProps").unwrap().params["opacity"], opacity / 100.0);
         }
     }
 }
@@ -223,9 +227,9 @@ fn recorded_image_points_use_current_resolution_and_keep_style_scaling() {
                 d = d.with("scaleStyles", D::Boolean(value));
             }
             let action = recorded(AtnEvent::Code(*b"ImgS"), d);
-            assert_eq!(action.steps[0].0, "image.imageSize", "recorded point dimensions must map");
-            assert_eq!(action.steps[0].1["units"], "pt");
-            assert_eq!(action.steps[0].1["width"], 72);
+            assert_eq!(action.steps[0].command, "image.imageSize", "recorded point dimensions must map");
+            assert_eq!(action.steps[0].params["units"], "pt");
+            assert_eq!(action.steps[0].params["width"], 72);
             assert!(matches!(saved(&action).descriptor.unwrap().get("Wdth"), Some(D::UnitFloat {unit,value}) if unit==b"#Rlt" && *value==72.0));
             let mut s = sized_document(40, 20, dpi);
             s.edit("Style", |doc, _| {
@@ -264,7 +268,7 @@ fn recorded_image_points_use_current_resolution_and_keep_style_scaling() {
 fn recorded_mode_uses_a_class_and_retains_layers_with_false_flags() {
     let d = Descriptor::new("null").with("T   ", D::Class(class("Grys"))).with("Fltt", D::Boolean(false)).with("Rstr", D::Boolean(false));
     let action = recorded(AtnEvent::Code(*b"CnvM"), d);
-    assert_eq!(action.steps, vec![("image.mode.grayscale".into(), json!({}))]);
+    assert_eq!(action.steps, vec![ActionStep::new("image.mode.grayscale", json!({}))]);
     let written = saved(&action).descriptor.unwrap();
     assert!(matches!(written.get("T   "),Some(D::Class(c)) if c.class_id.is("Grys")), "mode target must save as a class");
     assert_eq!(written.get("Fltt"), Some(&D::Boolean(false)));
@@ -293,7 +297,7 @@ fn unrepresented_units_and_mode_choices_stay_verbatim() {
         (*b"ImgS", point().with("CnsP", D::Boolean(false))),
     ] {
         let action = recorded(AtnEvent::Code(event), d.clone());
-        assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP);
+        assert_eq!(action.steps[0].command, atn_cmds::PHOTOSHOP_STEP);
         assert_eq!(saved(&action).descriptor, Some(d));
     }
 }
@@ -308,7 +312,7 @@ fn review_10702_depth_conversion_accepts_false_layer_flags() {
                 d = d.with(key, D::Boolean(false));
             }
             let action = recorded(AtnEvent::Code(*b"CnvM"), d);
-            assert_eq!(action.steps, vec![(command.into(), json!({}))]);
+            assert_eq!(action.steps, vec![ActionStep::new(command, json!({}))]);
             let mut s = sized_document(2, 1, 72);
             s.execute("layer.new.layer", json!({"name":"Retained"})).unwrap();
             replay_saved(&mut s, &action);
@@ -320,7 +324,7 @@ fn review_10702_depth_conversion_accepts_false_layer_flags() {
         for value in [D::Boolean(true), D::Integer(0), D::Text(UnicodeString::new_nul("false"))] {
             let d = Descriptor::new("null").with("Dpth", D::Integer(16)).with(key, value);
             let action = recorded(AtnEvent::Code(*b"CnvM"), d.clone());
-            assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP);
+            assert_eq!(action.steps[0].command, atn_cmds::PHOTOSHOP_STEP);
             assert_eq!(saved(&action).descriptor, Some(d));
         }
     }
@@ -341,7 +345,7 @@ fn review_10702_transparency_names_resolve_at_playback() {
             ]),
         );
         let action = recorded(AtnEvent::Code(*b"setd"), d.clone());
-        assert_eq!(action.steps[0].0, "select.loadSelection");
+        assert_eq!(action.steps[0].command, "select.loadSelection");
         let mut s = sized_document(2, 1, 72);
         for alpha in [[1.0, 0.0], [0.0, 1.0]] {
             let id = LayerId(s.execute("layer.new.layer", json!({"name":"Placeholder"})).unwrap()["layer"].as_u64().unwrap());
@@ -355,7 +359,7 @@ fn review_10702_transparency_names_resolve_at_playback() {
         }
         s.execute("layer.new.layer", json!({"name":"Active"})).unwrap();
         s.execute("edit.fill", json!({"contents":"color","color":"#ffffff"})).unwrap();
-        s.actions.list = vec![action.clone()];
+        s.actions.list = ActionList::from_file(ActionsFile::new(vec![action.clone()], Vec::new()));
         let played = s.execute("actions.play", json!({"action":"Recorded"})).unwrap();
         assert_eq!(played["ran"], 1, "{played}");
         let doc = &s.active().unwrap().doc;
@@ -371,9 +375,9 @@ fn review_10702_transparency_names_resolve_at_playback() {
             assert_eq!(s.active().unwrap().doc.selection.as_ref().unwrap().read_region(Rect::from_xywh(0, 0, 2, 1)), vec![0.0, 1.0]);
         }
         for sentinel in ["merged", ""] {
-            let native = Action::new("Recorded", vec![("select.loadSelection".into(), json!({"channel":"transparency","layer":sentinel}))]);
+            let native = Action::new("Recorded", vec![ActionStep::new("select.loadSelection", json!({"channel":"transparency","layer":sentinel}))]);
             let reloaded = recorded(AtnEvent::Code(*b"setd"), saved(&native).descriptor.unwrap());
-            let (id, params) = &reloaded.steps[0];
+            let ActionStep { command: id, params } = &reloaded.steps[0];
             s.execute(id, params.clone()).unwrap();
             let doc = &s.active().unwrap().doc;
             assert_eq!(doc.selection.as_ref().map(|mask| mask.read_region(doc.bounds())).unwrap_or(vec![1.0; 2]), vec![1.0, 1.0]);
@@ -414,7 +418,7 @@ fn group_transparency_sources_load_the_canvas() {
             ]),
         );
         let action = recorded(AtnEvent::Code(*b"setd"), descriptor.clone());
-        let (id, params) = &action.steps[0];
+        let ActionStep { command: id, params } = &action.steps[0];
         let result = s.execute(id, params.clone());
         let doc = &s.active().unwrap().doc;
         let alpha = doc.selection.as_ref().map(|mask| mask.read_region(doc.bounds())).unwrap_or(vec![1.0; 2]);
@@ -452,14 +456,14 @@ fn native_units_validate_before_edit_and_no_resample_remains_resolution_only() {
         let before = s.execute("document.inspect", json!({})).unwrap();
         assert!(s.execute(id, params.clone()).is_err(), "{id} {params}");
         assert_eq!(s.execute("document.inspect", json!({})).unwrap(), before);
-        let action = Action::new("Invalid", vec![(id.into(), params)]);
+        let action = Action::new("Invalid", vec![ActionStep::new(id, params)]);
         assert_eq!(atn_cmds::export("Identifiers", &[&action], &[], false).is_err(), refuse_export);
     }
     let params = json!({"width":1e308,"units":"pt","resolution":144,"resample":"none"});
     s.execute("image.imageSize", params.clone()).unwrap();
     assert_eq!(s.active().unwrap().doc.size, photocraft_geom::Size::new(40, 20));
     assert_eq!(s.active().unwrap().doc.resolution_dpi, 144.0);
-    let action = Action::new("Resolution", vec![("image.imageSize".into(), params)]);
+    let action = Action::new("Resolution", vec![ActionStep::new("image.imageSize", params)]);
     let d = saved(&action).descriptor.unwrap();
     assert!(d.get("Wdth").is_none() && d.get("Hght").is_none());
 }
@@ -525,7 +529,7 @@ fn recorded_vibrance_uses_the_string_event_and_keeps_legacy_playback() {
     for depth in [8, 16, 32] {
         for event in [AtnEvent::name("vibrance"), AtnEvent::Code(*b"Vbrn")] {
             let action = recorded(event, d.clone());
-            assert_eq!(action.steps, vec![("image.adjustments.vibrance".into(), json!({"vibrance":47,"saturation":-19}))]);
+            assert_eq!(action.steps, vec![ActionStep::new("image.adjustments.vibrance", json!({"vibrance":47,"saturation":-19}))]);
             let written = saved(&action);
             assert_eq!(written.event, AtnEvent::name("vibrance"), "Vibrance must save by its string event");
             // Saved with the `vibrance` class the reference application records (#8534); the
@@ -542,7 +546,7 @@ fn recorded_vibrance_uses_the_string_event_and_keeps_legacy_playback() {
             let mut actual = create();
             replay_saved(&mut actual, &action);
             let mut expected = create();
-            expected.execute("image.adjustments.vibrance", action.steps[0].1.clone()).unwrap();
+            expected.execute("image.adjustments.vibrance", action.steps[0].params.clone()).unwrap();
             for channel in 0..4 {
                 assert_eq!(
                     actual.active().unwrap().doc.layers[0].surface().unwrap().sample_channel(1, 1, channel),
@@ -556,16 +560,17 @@ fn recorded_vibrance_uses_the_string_event_and_keeps_legacy_playback() {
 /// The reported Gradient Map Make and the metadata-only default both round-trip atomically.
 #[test]
 fn recorded_adjustment_opacity_keeps_gradient_settings_and_defaults() {
-    let full =
-        saved(&Action::new("Recorded", vec![("image.adjustments.gradientMap".into(), json!({"stops":[[0,"#0000ff"],[1,"#ff0000"]]}))])).descriptor.unwrap();
+    let full = saved(&Action::new("Recorded", vec![ActionStep::new("image.adjustments.gradientMap", json!({"stops":[[0,"#0000ff"],[1,"#ff0000"]]}))]))
+        .descriptor
+        .unwrap();
     let default = Descriptor::new("GdMp").with("presetKind", enm("presetKindType", "presetKindDefault"));
     for t in [full, default] {
         let action = recorded(AtnEvent::Code(*b"Mk  "), adjustment_make(t.clone(), Some(D::UnitFloat { unit: *b"#Prc", value: 70.0 })));
         assert_eq!(action.steps.len(), 1);
-        assert_eq!(action.steps[0].0, "layer.newAdjustmentLayer.gradientMap");
-        assert_eq!(action.steps[0].1["opacity"], json!(179.0 / 255.0), "Make must retain surrounding opacity");
+        assert_eq!(action.steps[0].command, "layer.newAdjustmentLayer.gradientMap");
+        assert_eq!(action.steps[0].params["opacity"], json!(179.0 / 255.0), "Make must retain surrounding opacity");
         if t.get("Grad").is_some() {
-            assert_eq!(action.steps[0].1["stops"], json!([[0, "#0000ff"], [1, "#ff0000"]]));
+            assert_eq!(action.steps[0].params["stops"], json!([[0, "#0000ff"], [1, "#ff0000"]]));
         }
         let written = saved(&action).descriptor.unwrap();
         let Some(D::Descriptor(using)) = written.get("Usng") else { panic!("missing adjustment metadata") };
@@ -601,7 +606,7 @@ fn adjustment_opacity_validation_and_endpoints_are_atomic() {
         D::Double(f64::NAN),
     ] {
         let action = recorded(AtnEvent::Code(*b"Mk  "), adjustment_make(t.clone(), Some(bad)));
-        assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP);
+        assert_eq!(action.steps[0].command, atn_cmds::PHOTOSHOP_STEP);
         saved(&action);
     }
     let mut s = Session::new();
@@ -611,8 +616,13 @@ fn adjustment_opacity_validation_and_endpoints_are_atomic() {
         assert!(s.execute("layer.newAdjustmentLayer.gradientMap", json!({"opacity":bad})).is_err());
         assert_eq!(s.execute("document.inspect", json!({})).unwrap(), before);
         assert!(
-            atn_cmds::export("Identifiers", &[&Action::new("Bad", vec![("layer.newAdjustmentLayer.gradientMap".into(), json!({"opacity":bad}))])], &[], false)
-                .is_err()
+            atn_cmds::export(
+                "Identifiers",
+                &[&Action::new("Bad", vec![ActionStep::new("layer.newAdjustmentLayer.gradientMap", json!({"opacity":bad}))])],
+                &[],
+                false
+            )
+            .is_err()
         );
     }
     for opacity in [None, Some(0.0), Some(1.0)] {
@@ -620,13 +630,13 @@ fn adjustment_opacity_validation_and_endpoints_are_atomic() {
         s.execute("layer.newAdjustmentLayer.gradientMap", p.clone()).unwrap();
         let state = s.active().unwrap();
         assert_eq!(state.doc.layer(state.active_layer.unwrap()).unwrap().opacity, opacity.unwrap_or(1.0));
-        let action = Action::new("Recorded", vec![("layer.newAdjustmentLayer.gradientMap".into(), p)]);
+        let action = Action::new("Recorded", vec![ActionStep::new("layer.newAdjustmentLayer.gradientMap", p)]);
         let reloaded = recorded(AtnEvent::Code(*b"Mk  "), saved(&action).descriptor.unwrap());
         assert_eq!(reloaded.steps.len(), 1);
-        assert_eq!(reloaded.steps[0].0, action.steps[0].0);
+        assert_eq!(reloaded.steps[0].command, action.steps[0].command);
         match opacity {
-            None => assert_eq!(reloaded.steps[0].1, json!({})),
-            Some(opacity) => assert_eq!(reloaded.steps[0].1["opacity"].as_f64(), Some(f64::from(opacity))),
+            None => assert_eq!(reloaded.steps[0].params, json!({})),
+            Some(opacity) => assert_eq!(reloaded.steps[0].params["opacity"].as_f64(), Some(f64::from(opacity))),
         }
         s.execute("edit.undo", json!({})).unwrap();
     }
@@ -645,12 +655,15 @@ fn gradient_map_writes_the_named_event_and_keeps_legacy_code_imports() {
         .with("Dthr", D::Boolean(false));
     for event in [AtnEvent::name("gradientMapEvent"), AtnEvent::Code(*b"GdMp")] {
         let action = recorded(event, d.clone());
-        assert_eq!(action.steps, vec![("image.adjustments.gradientMap".into(), json!({"stops":[[0,"#0000ff"],[1,"#ff0000"]],"reverse":true,"dither":false}))]);
+        assert_eq!(
+            action.steps,
+            vec![ActionStep::new("image.adjustments.gradientMap", json!({"stops":[[0,"#0000ff"],[1,"#ff0000"]],"reverse":true,"dither":false}))]
+        );
         let written = saved(&action);
         assert_eq!(written.event, AtnEvent::name("gradientMapEvent"));
         assert!(written.descriptor.unwrap().class_id.is("GdMp"));
     }
-    assert_eq!(recorded(AtnEvent::name("GdMp"), d).steps[0].0, atn_cmds::PHOTOSHOP_STEP);
+    assert_eq!(recorded(AtnEvent::name("GdMp"), d).steps[0].command, atn_cmds::PHOTOSHOP_STEP);
 }
 
 /// The measured outside identifier changes while inside, centre and unknown values stay safe.
@@ -662,13 +675,13 @@ fn stroke_outside_writes_otsd_without_changing_inside_or_center() {
             .with("Lctn", enm("StrL", input))
             .with("Clr ", D::Descriptor(blue()));
         let action = recorded(AtnEvent::Code(*b"Strk"), d);
-        assert_eq!(action.steps[0].0, "edit.stroke");
-        assert_eq!(action.steps[0].1["location"], location);
+        assert_eq!(action.steps[0].command, "edit.stroke");
+        assert_eq!(action.steps[0].params["location"], location);
         assert_eq!(*enum_value(saved(&action).descriptor.as_ref().unwrap(), "Lctn", "StrL"), Id::new(canonical));
     }
     let unknown = Descriptor::new("null").with("Lctn", enm("StrL", "futureLocation"));
     let action = recorded(AtnEvent::Code(*b"Strk"), unknown.clone());
-    assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP);
+    assert_eq!(action.steps[0].command, atn_cmds::PHOTOSHOP_STEP);
     assert_eq!(saved(&action).descriptor, Some(unknown));
 }
 
@@ -679,7 +692,7 @@ fn pass_through_uses_the_string_identifier_and_replays_on_a_group() {
         let target = D::Reference(vec![ReferenceItem::Name { class: class("Lyr "), name: UnicodeString::new_nul("Group") }]);
         let d = Descriptor::new("null").with("null", target).with("T   ", D::Descriptor(Descriptor::new("Lyr ").with("Md  ", enm("BlnM", input))));
         let action = recorded(AtnEvent::Code(*b"setd"), d);
-        assert_eq!(action.steps, vec![("layer.setProps".into(), json!({"layer":"Group","blend":"Pass Through"}))]);
+        assert_eq!(action.steps, vec![ActionStep::new("layer.setProps", json!({"layer":"Group","blend":"Pass Through"}))]);
         let written = saved(&action).descriptor.unwrap();
         let Some(D::Descriptor(props)) = written.get("T   ") else { panic!("layer properties lost") };
         assert_eq!(*enum_value(props, "Md  ", "BlnM"), Id::new("passThrough"));
@@ -687,7 +700,7 @@ fn pass_through_uses_the_string_identifier_and_replays_on_a_group() {
         s.execute("file.new", json!({"width":4,"height":4})).unwrap();
         s.execute("layer.new.group", json!({"name":"Group"})).unwrap();
         s.execute("layer.setProps", json!({"blend":"Normal"})).unwrap();
-        let (id, p) = &action.steps[0];
+        let ActionStep { command: id, params: p } = &action.steps[0];
         s.execute(id, p.clone()).unwrap();
         let st = s.active().unwrap();
         assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().blend, photocraft_color::BlendMode::PassThrough);
@@ -716,12 +729,12 @@ fn canvas_extension_identifiers_preserve_foreground_and_custom_color() {
             d = d.with("canvasExtensionColor", D::Descriptor(blue()));
         }
         let action = recorded(AtnEvent::Code(*b"CnvS"), d);
-        assert_eq!(action.steps[0].0, "image.canvasSize");
+        assert_eq!(action.steps[0].command, "image.canvasSize");
         assert_eq!(*enum_value(saved(&action).descriptor.as_ref().unwrap(), "canvasExtensionColorType", "canvasExtensionColorType"), Id::new(canonical));
         let mut s = Session::new();
         s.execute("file.new", json!({"width":4,"height":4,"background":"white"})).unwrap();
         s.execute("tools.setColors", json!({"foreground":"#ff0000","background":"#00ff00"})).unwrap();
-        let (id, p) = &action.steps[0];
+        let ActionStep { command: id, params: p } = &action.steps[0];
         s.execute(id, p.clone()).unwrap();
         let pixel: Vec<f32> = serde_json::from_value(s.execute("document.pixel", json!({"x":5,"y":1})).unwrap()).unwrap();
         assert_eq!(pixel, expected);
@@ -732,7 +745,7 @@ fn canvas_extension_identifiers_preserve_foreground_and_custom_color() {
         canvas().with("canvasExtensionColorType", enm("canvasExtensionColorType", "Clr ")),
     ] {
         let action = recorded(AtnEvent::Code(*b"CnvS"), d.clone());
-        assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP);
+        assert_eq!(action.steps[0].command, atn_cmds::PHOTOSHOP_STEP);
         assert_eq!(saved(&action).descriptor, Some(d));
     }
 }
@@ -745,14 +758,17 @@ fn absolute_colorimetric_writes_aclr_and_rejects_unknown_intents() {
         let action = recorded(AtnEvent::name("convertToProfile"), profile().with("Inte", enm("Inte", input)));
         assert_eq!(
             action.steps,
-            vec![("edit.convertToProfile".into(), json!({"profile":"srgb","intent":"absolute","dither":false,"flatten":false,"rasterizePlaced":false}))]
+            vec![ActionStep::new(
+                "edit.convertToProfile",
+                json!({"profile":"srgb","intent":"absolute","dither":false,"flatten":false,"rasterizePlaced":false})
+            )]
         );
         assert_eq!(*enum_value(saved(&action).descriptor.as_ref().unwrap(), "Inte", "Inte"), Id::new("AClr"));
     }
     for value in [enm("Inte", "futureIntent"), D::Integer(1)] {
         let d = profile().with("Inte", value);
         let action = recorded(AtnEvent::name("convertToProfile"), d.clone());
-        assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP);
+        assert_eq!(action.steps[0].command, atn_cmds::PHOTOSHOP_STEP);
         assert_eq!(saved(&action).descriptor, Some(d));
     }
 }
@@ -773,9 +789,9 @@ fn document_offsets_wrap_in_opening_order_and_zero_atn_offsets_stay_kept() {
     for offset in [-2, 2] {
         let d = Descriptor::new("null").with("null", D::Reference(vec![ReferenceItem::Offset { class: class("Dcmn"), offset }]));
         let action = recorded(AtnEvent::Code(*b"slct"), d);
-        assert_eq!(action.steps[0].0, "document.activate");
+        assert_eq!(action.steps[0].command, "document.activate");
         s.execute("document.activate", json!({"document":2})).unwrap();
-        let (id, p) = &action.steps[0];
+        let ActionStep { command: id, params: p } = &action.steps[0];
         s.execute(id, p.clone()).unwrap();
         assert_eq!(s.active().unwrap().doc.name, if offset < 0 { "c" } else { "a" });
         let written = saved(&action).descriptor.unwrap();
@@ -783,7 +799,7 @@ fn document_offsets_wrap_in_opening_order_and_zero_atn_offsets_stay_kept() {
     }
     let zero = Descriptor::new("null").with("null", D::Reference(vec![ReferenceItem::Offset { class: class("Dcmn"), offset: 0 }]));
     let action = recorded(AtnEvent::Code(*b"slct"), zero.clone());
-    assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP);
+    assert_eq!(action.steps[0].command, atn_cmds::PHOTOSHOP_STEP);
     assert_eq!(saved(&action).descriptor, Some(zero));
-    assert!(atn_cmds::export("Identifiers", &[&Action::new("Zero", vec![("document.activate".into(), json!({"offset":0}))])], &[], false).is_err());
+    assert!(atn_cmds::export("Identifiers", &[&Action::new("Zero", vec![ActionStep::new("document.activate", json!({"offset":0}))])], &[], false).is_err());
 }
