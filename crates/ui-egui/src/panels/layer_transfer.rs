@@ -31,6 +31,11 @@ struct Transfer {
     /// What the ghost by the pointer says.
     label: String,
     selection_only: bool,
+    /// The layer's mask is the content that travels (`"target": "mask"`), not its pixels.
+    mask: bool,
+    /// The viewport the transfer was armed in: only that viewport completes it, so a document
+    /// window's `finish` cannot clear a transfer the main window is still dragging.
+    viewport: egui::ViewportId,
 }
 
 fn key() -> egui::Id {
@@ -77,6 +82,8 @@ fn panel_transfer(app: &PhotocraftApp, ctx: &egui::Context) -> Option<Transfer> 
         grab: None,
         label: label_of(&source.doc, &layers),
         selection_only: false,
+        mask: false,
+        viewport: ctx.viewport_id(),
     })
 }
 
@@ -87,9 +94,26 @@ fn begin(app: &PhotocraftApp, ctx: &egui::Context, layers: Vec<LayerId>, grab: [
     // Several selected layers move whole; the engine's selected-pixel copy intentionally accepts
     // exactly one raster layer.
     let selection_only = layers.len() == 1 && st.doc.selection.is_some();
-    let t = Transfer { source: st.doc.id, layers: layers.iter().map(|l| l.0).collect(), grab: Some(grab), label: label_of(&st.doc, &layers), selection_only };
+    // A mask target travels as the mask, not as the layer's pixels: the mask's own selection is what
+    // the pointer grabbed. A floating piece's kind decides when one exists.
+    let mask = selection_only && st.floating.as_ref().map_or_else(|| app.layer_mask_targeted(), |f| f.parts.is_mask());
+    let t = Transfer {
+        source: st.doc.id,
+        layers: layers.iter().map(|l| l.0).collect(),
+        grab: Some(grab),
+        label: label_of(&st.doc, &layers),
+        selection_only,
+        mask,
+        viewport: ctx.viewport_id(),
+    };
     ctx.data_mut(|d| d.insert_temp(key(), t));
     true
+}
+
+/// Is a cross-document transfer armed in the app's context? The tool events have no context of
+/// their own, so the app's answers it.
+pub(crate) fn armed(app: &PhotocraftApp) -> bool {
+    get(app.ctx()).is_some()
 }
 
 /// The document a transfer under way started in.
@@ -228,7 +252,7 @@ pub fn over_tab(app: &mut PhotocraftApp, ctx: &egui::Context, index: usize) {
         app.session.set_active(index);
         app.jobs.focus = None;
     }
-    if ctx.input(|i| i.pointer.any_released()) {
+    if ctx.input(|i| i.pointer.primary_released()) {
         drop(app, ctx, index, None);
     }
 }
@@ -248,7 +272,12 @@ pub fn finish(app: &mut PhotocraftApp, ctx: &egui::Context) {
         app.layer_box = None;
     }
     let Some(t) = transfer(app, ctx) else { return };
-    let (pos, released, down) = ctx.input(|i| (i.pointer.latest_pos(), i.pointer.any_released(), i.pointer.primary_down()));
+    // Only the viewport that armed the transfer completes it: a document window's pointer state
+    // must not clear a transfer the main window is still dragging.
+    if t.viewport != ctx.viewport_id() {
+        return;
+    }
+    let (pos, released, down) = ctx.input(|i| (i.pointer.latest_pos(), i.pointer.primary_released(), i.pointer.primary_down()));
     let target = pos.and_then(|p| target_at(app, p));
     if !released {
         if !down {
@@ -286,7 +315,7 @@ pub(crate) fn prepare(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // Do not consume a source drag merely because it passes over another tile. On release this
     // runs before canvas input, so a destination can take ownership without the source committing;
     // returning to the source still releases as the original move.
-    if !ctx.input(|i| i.pointer.any_released()) {
+    if !ctx.input(|i| i.pointer.primary_released()) {
         return;
     }
     let Some(pos) = pointer_if_armed(app, ctx) else { return };
@@ -341,7 +370,16 @@ fn drop(app: &mut PhotocraftApp, ctx: &egui::Context, dest: usize, at: Option<[f
     let Some(to) = docs.get(dest).filter(|_| dest != src) else { return };
     let same_size = to.doc.size == docs[src].doc.size;
     let mut p = json!({"document": dest, "source": src, "layers": t.layers});
-    p["selectionOnly"] = json!(t.selection_only);
+    if t.selection_only {
+        // The selection travels as pixels (or as the mask, `target`) and is not cut.
+        p["selection"] = json!(true);
+        p["cut"] = json!(false);
+        if t.mask {
+            p["target"] = json!("mask");
+        }
+    } else {
+        p["selectionOnly"] = json!(false);
+    }
     match at.filter(|_| !ctx.input(|i| i.modifiers.shift)) {
         Some(at) => match t.grab {
             Some(g) => p["offset"] = json!([(at[0] - g[0]).round(), (at[1] - g[1]).round()]),
