@@ -38,7 +38,7 @@ fn nearest(app: &mut PhotocraftApp) {
 /// A 200 × 200 document: "Paint" with a red block at x 10..50, y 10..30, and a type layer over it.
 /// Both are selected with Paint active, as after ⌘-clicking Paint in the Layers panel (the
 /// reporter's steps).
-fn app() -> (PhotocraftApp, LayerId, LayerId) {
+fn app() -> (Box<PhotocraftApp>, LayerId, LayerId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 200, "background": "white"})).unwrap();
     app.sync_views();
@@ -204,7 +204,7 @@ fn picking_another_layer_applies_the_box_to_all_of_them() {
 }
 
 /// Paint with a 6 px outside stroke, then both layers selected again (Paint active).
-fn stroked() -> (PhotocraftApp, LayerId, LayerId) {
+fn stroked() -> (Box<PhotocraftApp>, LayerId, LayerId) {
     let (mut app, paint, text) = app();
     app.run("layer.select", json!({"layer": paint.0})).unwrap();
     app.run("layer.layerStyle.stroke", json!({"size": 6, "color": "#00ff00", "position": "outside"})).unwrap();

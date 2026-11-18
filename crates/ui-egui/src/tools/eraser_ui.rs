@@ -274,7 +274,7 @@ mod tests {
 
     /// The app with a white 64x48 document in `mode` open and the Magic Eraser picked: a click on
     /// it would wipe the flat canvas out.
-    fn app_in(mode: ColorMode) -> PhotocraftApp {
+    fn app_in(mode: ColorMode) -> Box<PhotocraftApp> {
         let mut s = photocraft_engine::Session::new();
         s.add_document(Document::with_background("p", Size::new(64, 48), mode, SampleType::U8, Color::WHITE), None);
         let mut app = PhotocraftApp::new(s, crate::Services::default());
