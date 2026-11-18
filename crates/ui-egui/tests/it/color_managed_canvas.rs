@@ -10,7 +10,7 @@ use photocraft_ui_egui::PhotocraftApp;
 use serde_json::json;
 
 /// Cancels the open dialog `id` names (the `dialog` of a menu invoke reply), as its Cancel button does.
-fn close_dialog(harness: &mut egui_kittest::Harness<'_, PhotocraftApp>, id: serde_json::Value) {
+fn close_dialog(harness: &mut egui_kittest::Harness<'_, Box<PhotocraftApp>>, id: serde_json::Value) {
     let ctx = harness.ctx.clone();
     let (request, _) = photocraft_ui_egui::control::ControlRequest::new("ui.dialog.cancel", json!({"dialog": id}));
     let photocraft_ui_egui::control::Reply::Done(reply) = photocraft_ui_egui::control::handle(harness.state_mut(), &ctx, &request) else {
@@ -57,7 +57,7 @@ fn render(profile: &str, rgb: [f32; 3], reopen: bool) -> Option<([u8; 3], [u8; 3
     if reopen {
         app.session.active_mut().expect("active document").revision = 1;
     }
-    let sample = |harness: &mut egui_kittest::Harness<'_, PhotocraftApp>| {
+    let sample = |harness: &mut egui_kittest::Harness<'_, Box<PhotocraftApp>>| {
         harness.run_steps(6);
         let img = harness.render().expect("render");
         // The document is fitted into the canvas area: its centre lies on the document.

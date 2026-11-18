@@ -12,7 +12,7 @@ use crate::state::Tool;
 const PRESSURE: &str = "Always use pressure for size";
 const TOOLTIP: &str = "Always use Pressure for Size. When off, Brush Preset controls pressure";
 
-fn bar(tool: Tool) -> Harness<'static, PhotocraftApp> {
+fn bar(tool: Tool) -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 80, "height": 80})).unwrap();
     app.ui.tool = tool;
@@ -24,12 +24,12 @@ fn bar(tool: Tool) -> Harness<'static, PhotocraftApp> {
     h
 }
 
-fn toggle(h: &mut Harness<'static, PhotocraftApp>) {
+fn toggle(h: &mut Harness<'static, Box<PhotocraftApp>>) {
     h.get_by_label(PRESSURE).click();
     h.run_steps(3);
 }
 
-fn brush_commands(h: &Harness<'static, PhotocraftApp>) -> usize {
+fn brush_commands(h: &Harness<'static, Box<PhotocraftApp>>) -> usize {
     h.state().session.journal.iter().filter(|(id, _)| id == "tools.setBrush").count()
 }
 

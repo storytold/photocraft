@@ -11,7 +11,7 @@ use crate::canvas::ToolEvent;
 use crate::state::Tool;
 
 /// A 64×64 document with two painted layers: A covers (8..24)², B covers (40..56)². B is active.
-fn app() -> (PhotocraftApp, LayerId, LayerId) {
+fn app() -> (Box<PhotocraftApp>, LayerId, LayerId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
     app.sync_views();
@@ -137,7 +137,7 @@ fn shift_click_adds_shape_layers_one_after_another() {
 
 /// Opens B's transform controls (Show Transform Controls on) and resizes the box to twice B's
 /// size from its top-left corner, so it covers (40..72)².
-fn resized_box() -> (PhotocraftApp, LayerId, LayerId) {
+fn resized_box() -> (Box<PhotocraftApp>, LayerId, LayerId) {
     let (mut app, a, b) = app();
     app.ui.tool_options.move_show_transform = true;
     crate::transform_tool::begin(&mut app, &egui::Context::default()).unwrap();
