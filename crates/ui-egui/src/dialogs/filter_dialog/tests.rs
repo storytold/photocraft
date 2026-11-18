@@ -9,7 +9,7 @@ const COLOR_LOOKUP: &str = "image.adjustments.colorLookup";
 const LENS_BLUR: &str = "filter.blur.lensBlur";
 const REPLACE_COLOR: &str = "image.adjustments.replaceColor";
 
-fn new_app() -> PhotocraftApp {
+fn new_app() -> Box<PhotocraftApp> {
     PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default())
 }
 
@@ -66,8 +66,9 @@ fn history(app: &PhotocraftApp) -> usize {
 }
 
 /// The app drawn through `dialogs::run`, as the window shows its dialogs.
-fn harness(app: PhotocraftApp, size: egui::Vec2) -> Harness<'static, PhotocraftApp> {
-    let h = Harness::builder().with_context(app.ctx().clone()).with_size(size).build_ui_state(|ui, app: &mut PhotocraftApp| crate::dialogs::run(app, ui), app);
+fn harness(app: Box<PhotocraftApp>, size: egui::Vec2) -> Harness<'static, Box<PhotocraftApp>> {
+    let h =
+        Harness::builder().with_context(app.ctx().clone()).with_size(size).build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app);
     PhotocraftApp::setup_context(&h.ctx, crate::theme::AppTheme::pro());
     h
 }

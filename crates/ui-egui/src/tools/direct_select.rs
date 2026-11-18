@@ -526,7 +526,7 @@ mod freeform_command_tests {
     use crate::canvas::testing::{move_to, press, release};
     use egui::Modifiers;
 
-    fn app(tool: Tool) -> PhotocraftApp {
+    fn app(tool: Tool) -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
         for name in ["work", "Saved drawing"] {
