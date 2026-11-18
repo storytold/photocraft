@@ -45,6 +45,7 @@ impl<T: Clone, C> EditSession<T, C> {
 }
 
 impl<T, C> EditSession<T, C> {
+    #[cfg(test)]
     pub fn original(&self) -> &T {
         &self.original
     }

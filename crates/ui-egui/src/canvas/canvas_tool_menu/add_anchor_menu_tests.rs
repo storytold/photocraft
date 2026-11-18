@@ -2,36 +2,37 @@
 //! with the entry for the point under the pointer on top, as for Delete Anchor Point (#12771).
 //! A right-click on an anchor selects it, and with anchors selected the Fill, Stroke and transform
 //! rows name what they act on: Fill / Stroke Subpath… (one subpath), Subpaths… (several), Free
-//! Transform Points. The shared steps live in `delete_anchor_menu_tests`.
+//! Transform Points. The shared steps live in `delete_anchor_menu_tests`. The rows are read on a
+//! menu opened on the square's right edge (300,400): a right-click on empty canvas under the anchor
+//! tools is the path overlay's background part and opens no menu, as for Delete Anchor Point.
 
 use egui::Modifiers;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use serde_json::json;
 
-use super::delete_anchor_menu_tests::{assert_top_entry, empty_canvas, right_clicked, saved, setup, steps};
+use super::delete_anchor_menu_tests::{assert_top_entry, right_clicked, saved, setup, steps};
 use super::tests::{harness, right_click, screen_of};
 use super::{PEN_MENU, rows};
 use crate::PhotocraftApp;
-use crate::canvas::{ToolEvent, tool_event};
+use crate::canvas::testing;
 use crate::state::Tool;
 
 const TOOL: Tool = Tool::AddAnchorPoint;
 
-/// The Add Anchor Point tool with Ctrl held (its temporary Direct Selection) clicks `anchors`: the
-/// first with Ctrl, the rest with Ctrl+Shift.
-fn with_selected(anchors: &[[f64; 2]]) -> PhotocraftApp {
+/// The Add Anchor Point tool with ⌘ held (its temporary Direct Selection) clicks `anchors`: the
+/// first with ⌘, the rest with ⌘⇧.
+fn with_selected(anchors: &[[f64; 2]]) -> Box<PhotocraftApp> {
     let mut app = setup(TOOL);
-    for (i, [x, y]) in anchors.iter().copied().enumerate() {
+    for (i, at) in anchors.iter().copied().enumerate() {
         let mods = if i == 0 { Modifiers::COMMAND } else { Modifiers::COMMAND | Modifiers::SHIFT };
-        tool_event(&mut app, ToolEvent::Down { x, y, pressure: 1.0 }, mods);
-        tool_event(&mut app, ToolEvent::Up { x, y }, mods);
+        testing::click(&mut app, at, mods);
     }
     assert_eq!(app.ui.direct_selection.anchors.len(), anchors.len(), "the anchors are selected");
     app
 }
 
-fn right_click_at(app: PhotocraftApp, at: [f32; 2]) -> Harness<'static, PhotocraftApp> {
+fn right_click_at(app: Box<PhotocraftApp>, at: [f32; 2]) -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = harness(app);
     let p = screen_of(h.state(), at);
     right_click(&mut h, p, Modifiers::NONE);
@@ -40,8 +41,8 @@ fn right_click_at(app: PhotocraftApp, at: [f32; 2]) -> Harness<'static, Photocra
 }
 
 /// The Fill, Stroke and transform rows of the open menu read `labels`, and none of the others.
-fn assert_rows(h: &Harness<'static, PhotocraftApp>, labels: [&str; 3]) {
-    const ALL: [&str; 11] = [
+fn assert_rows(h: &Harness<'static, Box<PhotocraftApp>>, labels: [&str; 3]) {
+    const ALL: [&str; 9] = [
         "Fill Path…",
         "Fill Subpath…",
         "Fill Subpaths…",
@@ -51,8 +52,6 @@ fn assert_rows(h: &Harness<'static, PhotocraftApp>, labels: [&str; 3]) {
         "Free Transform Path",
         "Free Transform Points",
         "Free Transform",
-        "Fill Subpath(s)…",
-        "Stroke Subpath(s)…",
     ];
     for label in ALL {
         assert_eq!(h.query_by_label(label).is_some(), labels.contains(&label), "{label}: expected only {labels:?}");
@@ -96,11 +95,6 @@ fn right_click_on_an_anchor_selects_it_and_offers_delete_anchor_point() {
     assert_eq!(h.state().session.active().unwrap().history.undo_label(), Some("Delete Anchor Point"));
 }
 
-#[test]
-fn right_click_on_empty_canvas_opens_the_path_menu_without_a_top_entry() {
-    empty_canvas(TOOL);
-}
-
 /// Opening the menu on an anchor only selects it: no history step and no path change.
 #[test]
 fn right_click_on_an_anchor_changes_no_path() {
@@ -111,24 +105,25 @@ fn right_click_on_an_anchor_changes_no_path() {
     assert_eq!(saved(h.state()), path);
 }
 
-/// Nothing selected, path targeted: the table's labels.
+/// Nothing selected, path targeted: the table's labels (a right-click on a segment selects nothing).
 #[test]
 fn with_no_anchor_selected_the_rows_name_the_path() {
-    let h = right_clicked(TOOL, [500.0, 100.0]);
+    let h = right_clicked(TOOL, [300.0, 400.0]);
+    assert!(h.state().ui.direct_selection.anchors.is_empty(), "a segment right-click selects no anchor");
     assert_rows(&h, ["Fill Path…", "Stroke Path…", "Free Transform Path"]);
 }
 
 /// Anchors of one subpath selected: the singular labels and Free Transform Points.
 #[test]
 fn with_anchors_of_one_subpath_selected_the_rows_name_the_subpath() {
-    let h = right_click_at(with_selected(&[[100.0, 300.0], [300.0, 300.0]]), [500.0, 100.0]);
+    let h = right_click_at(with_selected(&[[100.0, 300.0], [300.0, 300.0]]), [300.0, 400.0]);
     assert_rows(&h, ["Fill Subpath…", "Stroke Subpath…", "Free Transform Points"]);
 }
 
 /// Anchors in two subpaths selected: the plural labels.
 #[test]
 fn with_anchors_of_two_subpaths_selected_the_rows_name_the_subpaths() {
-    let h = right_click_at(with_selected(&[[100.0, 300.0], [400.0, 300.0]]), [500.0, 100.0]);
+    let h = right_click_at(with_selected(&[[100.0, 300.0], [400.0, 300.0]]), [300.0, 400.0]);
     assert_rows(&h, ["Fill Subpaths…", "Stroke Subpaths…", "Free Transform Points"]);
 }
 
@@ -157,7 +152,8 @@ fn with_no_path_targeted_the_transform_row_reads_free_transform() {
     assert_rows(&h, ["Fill Path…", "Stroke Path…", "Free Transform"]);
 }
 
-/// The labels belong to this tool: Delete Anchor Point's menu keeps the table's, also on an anchor.
+/// The labels belong to this tool: Delete Anchor Point's and Convert Point's menus keep the table's,
+/// also on an anchor.
 #[test]
 fn other_anchor_tools_keep_the_path_labels() {
     for tool in [Tool::DeleteAnchorPoint, Tool::ConvertPoint] {
@@ -166,11 +162,11 @@ fn other_anchor_tools_keep_the_path_labels() {
     }
 }
 
-/// A selection the control channel set on another document revision does not rename the rows.
+/// A selection made on another document revision does not rename the rows.
 #[test]
 fn a_stale_selection_does_not_rename_the_rows() {
     let mut app = with_selected(&[[100.0, 300.0]]);
     app.run("path.addAnchor", json!({"name": "Path 1", "subpath": 1, "knot": 0, "t": 0.5})).unwrap();
-    let h = right_click_at(app, [500.0, 100.0]);
+    let h = right_click_at(app, [300.0, 400.0]);
     assert_rows(&h, ["Fill Path…", "Stroke Path…", "Free Transform Path"]);
 }
