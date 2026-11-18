@@ -8,7 +8,7 @@ use craft::ui::display::Progress;
 use craft::ui::runtime::env::Env;
 use craft::ui::style::{UiTokens, rgba_color};
 use craft::window::desktop::{WindowState, visible_part};
-use egui::{CornerRadius, FontId, Rect, RichText, Shadow, Stroke, Ui, vec2};
+use egui::{CornerRadius, FontId, Rect, RichText, Shadow, Stroke, TextStyle, Ui, vec2};
 
 /// Threshold in seconds before the splash screen appears. If startup completes faster than
 /// this short duration, the splash is not presented to prevent visual flickering.
@@ -119,7 +119,7 @@ impl SplashState {
         let inner_rect = card_rect.shrink2(vec2(28.0, 20.0));
         let mut inner_ui = ui.new_child(egui::UiBuilder::new().max_rect(inner_rect));
         inner_ui.spacing_mut().item_spacing = vec2(0.0, 4.0);
-        paint_card_contents(&mut inner_ui, &tokens, elapsed);
+        paint_card_contents(&mut inner_ui, &tokens);
     }
 }
 
@@ -168,10 +168,11 @@ fn paint_backdrop_and_card(painter: &egui::Painter, tokens: &UiTokens, screen_re
 }
 
 /// Renders the brand mark, app title, version tagline, progress bar, status text, and skip hint.
-fn paint_card_contents(ui: &mut Ui, tokens: &UiTokens, elapsed: f64) {
+fn paint_card_contents(ui: &mut Ui, tokens: &UiTokens) {
     let text_normal = rgba_color(tokens.color.text.normal);
     let text_muted = rgba_color(tokens.color.text.muted);
     let text_faint = rgba_color(tokens.color.text.faint);
+    let title_size = (TextStyle::Body.resolve(ui.style()).size * (26.0 / 12.0)).max(1.0);
 
     ui.vertical_centered(|ui| {
         ui.add_space(10.0);
@@ -184,39 +185,30 @@ fn paint_card_contents(ui: &mut Ui, tokens: &UiTokens, elapsed: f64) {
         ui.add_space(8.0);
 
         // App Title
-        ui.label(RichText::new("PhotoCraft").font(FontId::proportional(26.0)).color(text_normal).strong());
+        ui.label(RichText::new("PhotoCraft").font(FontId::proportional(title_size)).color(text_normal).strong());
 
         // Version & Subtitle
         let version_text = crate::i18n::fmt(tl!("v{version}  ·  Open Source Native Image Editor"), &[("version", env!("CARGO_PKG_VERSION"))]);
-        ui.label(RichText::new(version_text).font(FontId::proportional(12.0)).color(text_faint));
+        ui.label(RichText::new(version_text).text_style(TextStyle::Body).color(text_faint));
 
         ui.add_space(16.0);
 
-        let font_ready = photocraft_text::try_shared().is_some();
-        let progress = if font_ready { 1.0_f32 } else { (elapsed as f32 / 1.5).clamp(0.15, 0.90) };
-        let status_msg = if font_ready {
-            tl!("Ready")
-        } else if progress < 0.5 {
-            tl!("Initializing graphics & engine…")
-        } else {
-            tl!("Loading workspace & font assets…")
-        };
-
+        let status_msg = tl!("Loading workspace & font assets…");
         let bar_width = 340.0;
         let bar_height = tokens.size.groove * 2.0;
         ui.allocate_ui(vec2(bar_width, bar_height), |ui| {
-            let _ = Progress::new(progress).label(status_msg).sizing(Sizing::FillWidth).show(ui);
+            let _ = Progress::indeterminate().label(status_msg).sizing(Sizing::FillWidth).show(ui);
         });
 
         ui.add_space(8.0);
 
         // Status message
-        ui.label(RichText::new(status_msg).font(FontId::proportional(11.5)).color(text_muted));
+        ui.label(RichText::new(status_msg).text_style(TextStyle::Body).color(text_muted));
 
         ui.add_space(10.0);
 
         // Skip hint
-        ui.label(RichText::new(tl!("Click anywhere to skip")).font(FontId::proportional(10.0)).color(text_faint));
+        ui.label(RichText::new(tl!("Click anywhere to skip")).text_style(TextStyle::Small).color(text_faint));
     });
 }
 
@@ -339,8 +331,6 @@ mod tests {
             }
         }
         let catalog = "\tv{version}  ·  Open Source Native Image Editor\tv{version}  ·  Translated Editor\n\
-                       \tReady\tTranslated Ready\n\
-                       \tInitializing graphics & engine…\tTranslated Init…\n\
                        \tLoading workspace & font assets…\tTranslated Load…\n\
                        \tClick anywhere to skip\tTranslated Skip\n";
         let lang = crate::i18n::fixture_lang("fr", catalog);
@@ -361,9 +351,6 @@ mod tests {
         assert!(drawn.iter().any(|s| s == "PhotoCraft"), "product name stays English: {drawn:?}");
         assert!(drawn.iter().any(|s| s == &expected_tagline), "tagline must be translated: {drawn:?}");
         assert!(drawn.iter().any(|s| s == "Translated Skip"), "skip hint must be translated: {drawn:?}");
-        assert!(
-            drawn.iter().any(|s| matches!(s.as_str(), "Translated Ready" | "Translated Init…" | "Translated Load…")),
-            "status message must be translated: {drawn:?}"
-        );
+        assert!(drawn.iter().any(|s| s == "Translated Load…"), "status message must be translated: {drawn:?}");
     }
 }
