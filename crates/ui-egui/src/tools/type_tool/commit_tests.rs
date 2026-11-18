@@ -18,7 +18,7 @@ use super::mask_replace_selection_tests::click;
 use crate::PhotocraftApp;
 use crate::canvas::testing;
 
-fn new_app() -> PhotocraftApp {
+fn new_app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 200})).unwrap();
     app.sync_views();
@@ -48,7 +48,7 @@ pub(super) fn key(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
 
 /// Runs the whole app (logic and UI) on the app's own context: a warm-up so the fonts and the
 /// editor's focus are in place, then two frames after each of `events`.
-pub(super) fn frames(app: PhotocraftApp, events: Vec<egui::Event>) -> PhotocraftApp {
+pub(super) fn frames(app: Box<PhotocraftApp>, events: Vec<egui::Event>) -> Box<PhotocraftApp> {
     let ctx = app.ctx().clone();
     let mut h = Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_context(ctx).build_app(
         |ui, app: &mut PhotocraftApp| {
@@ -60,7 +60,7 @@ pub(super) fn frames(app: PhotocraftApp, events: Vec<egui::Event>) -> Photocraft
     );
     // Between passes, as eframe's input hook does: the runtime's output of the pass is taken (the
     // commands it fired run in the next frame's logic) and its input for the next is set.
-    let step = |h: &mut Harness<'_, PhotocraftApp>, n: usize| {
+    let step = |h: &mut Harness<'_, Box<PhotocraftApp>>, n: usize| {
         for _ in 0..n {
             h.step();
             let ctx = h.ctx.clone();
