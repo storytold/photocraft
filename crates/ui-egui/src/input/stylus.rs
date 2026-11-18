@@ -5,10 +5,11 @@
 //!
 //! - **Windows**: winit turns `WM_POINTER` pen and touch input into `WindowEvent::Touch` with a
 //!   normalised force (`POINTER_PEN_INFO::pressure / 1024`); egui-winit forwards it as
-//!   `egui::Event::Touch { force }` alongside the emulated pointer. [`Stylus::update`] reads it.
-//!   winit drops the pen's tilt and rotation, so those stay 0, and reports pressure 0 (a tap
-//!   lighter than the pen's first pressure level) as no force, which [`Stylus::update`] reads as
-//!   pressure 0 once it knows a pen is in use. The desktop app's pointer message hook
+//!   `egui::Event::Touch { force }` alongside the emulated pointer. The runtime's pen source reads
+//!   it and gives each pointer move its [`PointerSample`]. winit drops the pen's tilt and
+//!   rotation, so those stay 0, and reports pressure 0 (a tap lighter than the pen's first
+//!   pressure level) as no force, which the pen source reads as pressure 0 once it knows a pen is
+//!   in use. The desktop app's pointer message hook
 //!   (`photocraft-tablet`) reports which end of the pen is in use through `Services::pen_end`.
 //! - **Web**: eframe forwards touch force but not pen pointer events, so the web runner listens
 //!   to `pointerdown`/`pointermove` itself and writes `pressure`, `tiltX`, `tiltY`, `twist` and
@@ -30,8 +31,8 @@
 //! Automation simulates a pen with `ui.pointer` events carrying `pressure`, `tiltX`, `tiltY`
 //! and `rotation`.
 
-use std::collections::VecDeque;
-use std::sync::{Arc, Mutex, PoisonError};
+use craft::behavior::PointerSample;
+use craft::ui::runtime::pen::PenSource;
 
 /// One stylus reading. Tilt is in degrees (-90..90, W3C Pointer Events convention), rotation in
 /// degrees 0..360.
@@ -64,47 +65,65 @@ impl PenSample {
             eraser: self.eraser,
         }
     }
+
+    /// The reading as the runtime's pointer feed carries it (radians).
+    fn pointer(self) -> PointerSample {
+        let mut p = PointerSample::new(self.pressure);
+        p.tilt = [self.tilt_x.to_radians(), self.tilt_y.to_radians()];
+        p.rotation = self.rotation.to_radians();
+        p.eraser = self.eraser;
+        p
+    }
+
+    /// The runtime's reading `p` in degrees, in the documented ranges.
+    fn of_pointer(p: PointerSample) -> Self {
+        let p = p.sanitized();
+        PenSample { pressure: p.pressure, tilt_x: p.tilt[0].to_degrees(), tilt_y: p.tilt[1].to_degrees(), rotation: p.rotation.to_degrees(), eraser: p.eraser }
+            .sanitized()
+    }
 }
 
-/// Most samples a [`StylusFeed`] keeps between two frames (a stalled UI drops the oldest).
-const FEED_QUEUE: usize = 1024;
+/// The pen readings a platform backend writes: the runtime's pen source (`InstallSpec::pen`), which gives each pointer
+/// move the canvas takes its own reading. Cloning shares it.
+#[derive(Clone, Default)]
+pub struct StylusFeed(PenSource);
 
-#[derive(Debug, Default)]
-struct FeedState {
-    /// The current sample (`None` = no pen down).
-    latest: Option<PenSample>,
-    /// Every sample set since the canvas last drained them, oldest first.
-    queue: VecDeque<PenSample>,
+impl std::fmt::Debug for StylusFeed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("StylusFeed").field(&self.get()).finish()
+    }
 }
-
-/// Shared state a platform backend writes pen samples into. Cloning shares it. Each sample both
-/// becomes the current one and is queued, so a frame sees every sample the pen reported, in
-/// order, not just the last one (the pressure of each pointer move is interpolated from them).
-#[derive(Clone, Debug, Default)]
-pub struct StylusFeed(Arc<Mutex<FeedState>>);
 
 impl StylusFeed {
-    /// The current sample (`None` = no pen down); a sample is also queued for [`Self::drain`].
+    /// The feed installed with the runtime on `ctx` (`app::framework::install`); a feed of its own, which reaches no
+    /// pointer, on a context without one.
+    pub(crate) fn of(ctx: &egui::Context) -> Self {
+        ctx.data(|d| d.get_temp::<StylusFeed>(feed_id())).unwrap_or_default()
+    }
+
+    /// Keeps `self` as the feed of `ctx`, the one the runtime was installed with.
+    pub(crate) fn keep_on(&self, ctx: &egui::Context) {
+        ctx.data_mut(|d| d.insert_temp(feed_id(), self.clone()));
+    }
+
+    /// The runtime's pen source behind the feed.
+    pub(crate) fn source(&self) -> PenSource {
+        self.0.clone()
+    }
+
+    /// Queues one reading in order; `None` = the pen left the tablet (a mouse).
     pub fn set(&self, s: Option<PenSample>) {
-        let mut g = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        let s = s.map(PenSample::sanitized);
-        g.latest = s;
-        if let Some(s) = s {
-            if g.queue.len() >= FEED_QUEUE {
-                g.queue.pop_front();
-            }
-            g.queue.push_back(s);
-        }
+        self.0.set(s.map(|s| s.sanitized().pointer()));
     }
 
+    /// The current reading (`None` = no pen down).
     pub fn get(&self) -> Option<PenSample> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner).latest
+        self.0.current().map(PenSample::of_pointer)
     }
+}
 
-    /// The samples set since the last drain, oldest first.
-    pub fn drain(&self) -> Vec<PenSample> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner).queue.drain(..).collect()
-    }
+fn feed_id() -> egui::Id {
+    egui::Id::unique("photocraft::stylus::feed")
 }
 
 /// Per-app stylus state.
@@ -121,141 +140,58 @@ pub struct Stylus {
     end: Option<bool>,
     /// The tool to restore when the pen tip comes back after the eraser end switched tools.
     pub(crate) tool_before_eraser: Option<crate::state::Tool>,
-    /// Force of the touch/pen contact currently down (egui `Event::Touch`).
-    touch: Option<f32>,
-    /// The touch contacts currently down, so a touch move outside them is a hovering pen.
-    contacts: Vec<egui::TouchId>,
-    /// A pen reported through touch events (it hovered, or a contact carried a force): its
-    /// contacts without a force are at pressure 0, not a finger's full pressure.
-    touch_pen: bool,
-    /// The contact ended this frame: keep its force for this frame's last tool events, clear next frame.
-    lifted: bool,
-    /// This frame's pen samples, oldest first (the feed's queue and the touch forces).
-    frame: Vec<PenSample>,
-    /// The last pen sample of an earlier frame: where this frame's interpolation starts.
-    prev: Option<PenSample>,
-    /// The sample [`Self::select`] interpolated for the pointer move being processed.
-    current: Option<PenSample>,
+    /// The pen reading of the last pointer the tool host delivered to the paint tool
+    /// ([`Self::record_pointer`]); `None` for a pointer with no sample.
+    pose: Option<PenSample>,
+    /// The time of that pointer, in milliseconds.
+    time_ms: f64,
     /// The highest pen pressure (before the curve) since the drag began, for a tap's one dab.
     peak: f32,
     /// The pen's touch contacts in the raw input, so a held pen is no press-and-hold right click.
     pub(crate) pen_contacts: PenContacts,
-    /// The egui frame [`Self::update_for_frame`] last ran in.
-    updated_frame: Option<u64>,
     /// Tilt X, tilt Y, rotation of each point of the current drag (parallel to its points).
     pub(crate) stroke: Vec<[f32; 3]>,
-    /// Time in milliseconds of each point of the current drag (parallel to its points), from
-    /// [`Stylus::clock_ms`]. Speed spacing, airbrush build-up and smoothing catch-up use it.
+    /// Time in milliseconds of each point of the current drag (parallel to its points), from the
+    /// pointers' times. Speed spacing, airbrush build-up and smoothing catch-up use it.
     pub(crate) times: Vec<f64>,
-    /// Time of the tool event being processed, in milliseconds. The canvas spreads a frame's
-    /// samples between the previous and the current frame time (egui's events carry none).
-    pub(crate) clock_ms: f64,
 }
 
 impl Default for Stylus {
     fn default() -> Self {
+        Self::over(StylusFeed::default())
+    }
+}
+
+impl Stylus {
+    /// The stylus state of an app whose platform writes the pen into `feed`.
+    pub(crate) fn over(feed: StylusFeed) -> Self {
         Self {
-            feed: StylusFeed::default(),
+            feed,
             use_pressure: true,
             pressure_curve: None,
             curve_points: Vec::new(),
             end: None,
             tool_before_eraser: None,
-            touch: None,
-            contacts: Vec::new(),
-            touch_pen: false,
-            lifted: false,
-            frame: Vec::new(),
-            prev: None,
-            current: None,
+            pose: None,
+            time_ms: 0.0,
             peak: 0.0,
             pen_contacts: PenContacts::default(),
-            updated_frame: None,
             stroke: Vec::new(),
             times: Vec::new(),
-            clock_ms: 0.0,
         }
     }
 }
 
 impl Stylus {
-    /// [`Self::update`] once per egui frame: the canvas runs once per view, and egui can run a
-    /// frame in several passes; a second update would drain an empty queue and lose the frame's
-    /// pen samples.
-    pub fn update_for_frame(&mut self, frame: u64, events: &[egui::Event]) {
-        if self.updated_frame.replace(frame) != Some(frame) {
-            self.update(events);
-        }
-    }
-
-    /// Track touch/pen contacts from this frame's input events.
-    pub fn update(&mut self, events: &[egui::Event]) {
-        if std::mem::take(&mut self.lifted) {
-            self.touch = None;
-        }
-        if let Some(last) = self.frame.last() {
-            self.prev = Some(*last);
-        }
-        self.frame = self.feed.drain();
-        self.current = None;
-        for e in events {
-            if let egui::Event::Touch { id, phase, force, .. } = e {
-                let force = force.filter(|f| f.is_finite()).map(|f| f.clamp(0.0, 1.0));
-                match phase {
-                    egui::TouchPhase::Start | egui::TouchPhase::Move => {
-                        let start = *phase == egui::TouchPhase::Start;
-                        if start {
-                            // A new contact keeps its force into the next frame, even when an
-                            // earlier contact lifted in this one.
-                            self.lifted = false;
-                            if !self.contacts.contains(id) {
-                                if self.contacts.len() >= 16 {
-                                    self.contacts.remove(0);
-                                }
-                                self.contacts.push(*id);
-                            }
-                        }
-                        let down = start || self.contacts.contains(id);
-                        // Only a pen moves without touching, and only a pen (or a force-sensing
-                        // screen) reports a force.
-                        if !down || force.is_some() {
-                            self.touch_pen = true;
-                        }
-                        // Windows reports a pen pressed lighter than its first pressure level with
-                        // no force at all (winit maps pressure 0 to `None`): a light tap is
-                        // pressure 0, never a mouse click's full pressure. A finger on a screen
-                        // without force sensing stays at full pressure.
-                        let force = force.or((down && self.touch_pen && (start || self.touch.is_none())).then_some(0.0));
-                        if let Some(f) = force {
-                            self.touch = Some(f);
-                            self.frame.push(PenSample { pressure: f, ..Default::default() });
-                        }
-                    }
-                    egui::TouchPhase::End | egui::TouchPhase::Cancel => {
-                        self.lifted = true;
-                        self.contacts.retain(|c| c != id);
-                    }
-                }
-            }
-        }
-        // A pen reports pressure 0 while it hovers and as it lifts (X11, macOS): that is no
-        // contact, so a frame that also touched keeps only its contact samples. A stroke's last
-        // moves then keep the pressure the pen left with, and a tap its own (#1798).
-        if self.frame.iter().any(|s| s.pressure > 0.0) {
-            self.frame.retain(|s| s.pressure > 0.0);
-        }
-        self.peak = self.frame.iter().fold(self.peak, |m, s| m.max(s.pressure));
-    }
-
-    /// The pen's current sample. When the pen touched during this frame but has lifted since
-    /// (the feed is cleared or back at pressure 0 by the time the UI runs, as for a tap shorter
-    /// than a frame), the frame's last contact sample: never full pressure as for a mouse, and
-    /// never the lift's 0.
-    fn latest(&self) -> Option<PenSample> {
-        let feed = self.feed.get();
-        match self.frame.last() {
-            Some(s) if s.pressure > 0.0 && feed.is_none_or(|f| f.pressure <= 0.0) => Some(*s),
-            _ => feed,
+    /// Records the pointer the paint tool is handling: its time in milliseconds and its pen
+    /// reading (the runtime's pen source gives each move its own, interpolated). `None` is a
+    /// pointer with no reading. The pose is state of one pointer, so a second pass of a frame
+    /// that records the same pointer again changes nothing.
+    pub fn record_pointer(&mut self, time_ms: f64, sample: Option<PointerSample>) {
+        self.time_ms = time_ms;
+        self.pose = sample.map(PenSample::of_pointer);
+        if let Some(p) = self.pose {
+            self.peak = self.peak.max(p.pressure);
         }
     }
 
@@ -265,7 +201,7 @@ impl Stylus {
         if !self.use_pressure {
             return None;
         }
-        let s = self.current.or_else(|| self.latest()).or(self.touch.map(|pressure| PenSample { pressure, ..Default::default() }))?;
+        let s = self.pose?;
         // The pen's pressure through Preferences › Tools › Pressure Curve, before any brush sees it.
         Some(match &self.pressure_curve {
             Some(c) => PenSample { pressure: c.eval(s.pressure), ..s },
@@ -282,41 +218,6 @@ impl Stylus {
         }
     }
 
-    /// Choose the pen sample for move `k` of the `n` pointer moves this frame delivered: the pen
-    /// reports at its own rate, so each move takes the samples interpolated at its share of the
-    /// frame (from the previous frame's last sample), instead of all sharing the latest one. A
-    /// mouse, or a frame without pen samples, keeps the current sample.
-    pub(crate) fn select(&mut self, k: usize, n: usize) {
-        self.current = None;
-        if !self.use_pressure || n == 0 || self.frame.is_empty() || self.sample().is_none() {
-            return;
-        }
-        let m = self.frame.len();
-        let start = self.prev.or(self.frame.first().copied()).unwrap_or_default();
-        let at = |i: usize| if i == 0 { start } else { self.frame.get(i - 1).copied().unwrap_or(start) };
-        let pos = (k + 1).min(n) as f32 / n as f32 * m as f32;
-        let i = pos.floor() as usize;
-        let (a, b, t) = (at(i), at((i + 1).min(m)), pos - pos.floor());
-        let lerp = |x: f32, y: f32| x + (y - x) * t;
-        // Rotation takes the shorter way round.
-        let dr = (b.rotation - a.rotation + 540.0).rem_euclid(360.0) - 180.0;
-        self.current = Some(
-            PenSample {
-                pressure: lerp(a.pressure, b.pressure),
-                tilt_x: lerp(a.tilt_x, b.tilt_x),
-                tilt_y: lerp(a.tilt_y, b.tilt_y),
-                rotation: a.rotation + dr * t,
-                eraser: b.eraser,
-            }
-            .sanitized(),
-        );
-    }
-
-    /// Back to the current sample after a frame's moves.
-    pub(crate) fn clear_selection(&mut self) {
-        self.current = None;
-    }
-
     /// Did the pen just flip to its eraser end (`Some(true)`) or back to its tip (`Some(false)`)?
     /// Each flip is reported once; a mouse in between changes nothing. `platform_end` is the end
     /// a platform reports outside the feed (Windows), read when the feed has no pen.
@@ -331,7 +232,8 @@ impl Stylus {
     /// the tip does (Photoshop). Not during a drag. Returns whether the tool changed.
     pub fn sync_eraser_tool(app: &mut crate::PhotocraftApp) -> bool {
         use crate::state::Tool;
-        if app.drag.is_some() {
+        // PLAN: `in_gesture(app)` is cw.P1's (canvas-widgets-w14, `canvas/tools/mod.rs`); the module path is theirs to make visible.
+        if crate::canvas::tools::in_gesture(app) {
             return false;
         }
         let platform_end = app.services.pen_end.as_ref().and_then(|f| f());
@@ -371,12 +273,11 @@ impl Stylus {
         if self.peak > 0.0 { peak.max(s.pressure) } else { s.pressure }
     }
 
-    /// Start recording a drag's tilt/rotation.
+    /// Start recording a drag's tilt/rotation, from the press's pointer ([`Self::record_pointer`]
+    /// is called for it first). The tap peak restarts at that pointer's pressure, so a new stroke
+    /// never starts from an earlier stroke's.
     pub(crate) fn begin_stroke(&mut self) {
-        // A new stroke's first moves interpolate from this frame's samples, never from a sample
-        // left over from an earlier stroke.
-        self.prev = None;
-        self.peak = self.frame.iter().fold(0.0, |m, s| m.max(s.pressure));
+        self.peak = self.pose.map_or(0.0, |p| p.pressure);
         self.stroke.clear();
         self.times.clear();
         self.record_point();
@@ -386,7 +287,13 @@ impl Stylus {
     pub(crate) fn record_point(&mut self) {
         let s = self.sample().unwrap_or_default();
         self.stroke.push([s.tilt_x, s.tilt_y, s.rotation]);
-        self.times.push(self.clock_ms);
+        self.times.push(self.time_ms);
+    }
+
+    /// Record a point the held pen repeats at `time_ms` (the pose stays the last pointer's).
+    pub(crate) fn repeat_point(&mut self, time_ms: f64) {
+        self.time_ms = time_ms;
+        self.record_point();
     }
 
     /// Time of the drag's last recorded point.

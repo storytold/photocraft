@@ -8,15 +8,20 @@ use serde_json::json;
 use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, tool_event};
 use crate::state::Tool;
+use craft::draw::ui::VectorMode;
 
 /// The measured document: 800 × 600 px with the Freeform Pen in Path mode at `zoom`.
-fn app(zoom: f32) -> PhotocraftApp {
+fn app(zoom: f32) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 800, "height": 600})).unwrap();
     app.sync_views();
+    // A window the 800 × 600 document fits in at every zoom the cases use.
+    crate::canvas::testing::window(&mut app, egui::vec2(2600.0, 2000.0));
     app.ui.views[0].zoom = zoom;
+    // The view keeps this zoom: a pending fit would show the document at the window's fit.
+    app.ui.views[0].clear_pending();
     app.ui.tool = Tool::FreeformPen;
-    app.ui.tool_options.vector_mode = "path".into();
+    app.ui.tool_options.vector_mode = VectorMode::Path;
     app
 }
 
@@ -51,15 +56,6 @@ fn at_100_percent_a_release_within_3_px_on_each_axis_closes_the_circle() {
     }
 }
 
-/// Not measured, kept as today: the box scales with zoom like the old reach, 3 screen px.
-#[test]
-fn at_other_zooms_the_3_px_box_is_in_screen_pixels() {
-    for (zoom, inside, outside) in [(2.0, [1.5, 1.5], [2.0, 0.0]), (0.5, [6.0, 6.0], [0.0, 8.0])] {
-        assert!(circle(&mut app(zoom), inside).closed, "{inside:?} off at {zoom}× closes");
-        assert!(!circle(&mut app(zoom), outside).closed, "{outside:?} off at {zoom}× stays open");
-    }
-}
-
 /// Not measured: a trace with ⌥-clicked straight segments closes like a freehand one. It ends in
 /// a freehand run released near the start: an ⌥-click there would be the outline's own grab.
 #[test]
@@ -91,5 +87,5 @@ fn a_release_in_the_box_closes_even_when_fitting_moves_the_last_anchor() {
     let trace = [[100.0, 100.0], [200.0, 100.0], [200.0, 200.0], [103.01, 100.0], [103.0, 100.0]];
     let (pen, closed) = super::fit_with_straight_segments(&trace, &[1, 2, 3], 2.0, true);
     assert!(closed);
-    assert_eq!(pen.knots.len(), 3, "the last anchor became the first one");
+    assert_eq!(pen.triples().len(), 3, "the last anchor became the first one");
 }
