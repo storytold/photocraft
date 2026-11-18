@@ -12,7 +12,7 @@ use serde_json::json;
 
 const NONE: Modifiers = Modifiers::NONE;
 
-fn app(depth: SampleType) -> PhotocraftApp {
+fn app(depth: SampleType) -> Box<PhotocraftApp> {
     let doc = Document::with_background("crop", Size::new(200, 100), ColorMode::Rgb, depth, Color::WHITE);
     let mut s = photocraft_engine::Session::new();
     s.add_document(doc, None);
@@ -381,7 +381,7 @@ fn another_tool_commits_a_drawn_frame_at_8_and_16_bit() {
 }
 
 /// A layer 300..350 × 200..260 on a 400 × 300 canvas: the snap target of the two snap trials.
-fn board() -> PhotocraftApp {
+fn board() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
     app.sync_views();

@@ -10,7 +10,7 @@ use serde_json::json;
 use crate::PhotocraftApp;
 
 /// "LinkA", "Other" and "LinkB" over the Background, "Other" selected.
-fn harness() -> Harness<'static, PhotocraftApp> {
+fn harness() -> Harness<'static, Box<PhotocraftApp>> {
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
     for name in ["LinkA", "Other", "LinkB"] {
@@ -27,7 +27,7 @@ fn harness() -> Harness<'static, PhotocraftApp> {
     h
 }
 
-fn id(h: &Harness<'_, PhotocraftApp>, name: &str) -> LayerId {
+fn id(h: &Harness<'_, Box<PhotocraftApp>>, name: &str) -> LayerId {
     h.state()
         .session
         .active()
@@ -40,16 +40,16 @@ fn id(h: &Harness<'_, PhotocraftApp>, name: &str) -> LayerId {
         .unwrap_or_else(|| panic!("no layer {name}"))
 }
 
-fn selected(h: &Harness<'_, PhotocraftApp>) -> Vec<LayerId> {
+fn selected(h: &Harness<'_, Box<PhotocraftApp>>) -> Vec<LayerId> {
     h.state().session.active().unwrap().selected_layers()
 }
 
 /// The names the panel's filter lists, top to bottom.
-fn listed(h: &Harness<'_, PhotocraftApp>) -> Vec<String> {
+fn listed(h: &Harness<'_, Box<PhotocraftApp>>) -> Vec<String> {
     super::tests::listed_app(h.state())
 }
 
-fn find(h: &mut Harness<'_, PhotocraftApp>, params: serde_json::Value) -> serde_json::Value {
+fn find(h: &mut Harness<'_, Box<PhotocraftApp>>, params: serde_json::Value) -> serde_json::Value {
     let ctx = h.ctx.clone();
     let reply = crate::menus::invoke(h.state_mut(), &ctx, "select.findLayers", params).unwrap();
     h.run_steps(4);

@@ -15,7 +15,7 @@ use serde_json::json;
 use crate::PhotocraftApp;
 use crate::state::Tool;
 
-fn capslock_harness() -> Harness<'static, PhotocraftApp> {
+fn capslock_harness() -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
     app.run("tools.setBrush", json!({"brush": {"size": 40, "hardness": 1.0}})).unwrap();
@@ -23,7 +23,7 @@ fn capslock_harness() -> Harness<'static, PhotocraftApp> {
     app.ui.extras.rulers = false;
     app.ui.tool = Tool::Brush;
     let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(egui::vec2(900.0, 600.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        |ui, app: &mut Box<PhotocraftApp>| {
             let ctx = ui.ctx().clone();
             if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
@@ -63,7 +63,7 @@ struct CursorFp {
     shapes: Vec<egui::epaint::ClippedShape>,
 }
 
-fn fp(h: &Harness<'_, PhotocraftApp>) -> CursorFp {
+fn fp(h: &Harness<'_, Box<PhotocraftApp>>) -> CursorFp {
     let out = h.output();
     CursorFp {
         icon: out.platform_output.cursor_icon,
@@ -74,12 +74,12 @@ fn fp(h: &Harness<'_, PhotocraftApp>) -> CursorFp {
 
 /// Caps Lock reaches the tool host from the runtime's injected Caps Lock (`WindowHost`), which the
 /// frame reads in place of the platform's.
-fn caps(h: &mut Harness<'_, PhotocraftApp>, on: bool) {
+fn caps(h: &mut Harness<'_, Box<PhotocraftApp>>, on: bool) {
     WindowHost::of(&h.ctx).set_caps_lock(Some(on));
     h.run_steps(2);
 }
 
-fn other(h: &mut Harness<'_, PhotocraftApp>, value: &str) {
+fn other(h: &mut Harness<'_, Box<PhotocraftApp>>, value: &str) {
     h.state_mut().run("prefs.set", json!({"path": "cursors.other", "value": value})).unwrap();
     h.run_steps(2);
 }
