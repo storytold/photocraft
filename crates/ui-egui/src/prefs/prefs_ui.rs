@@ -57,9 +57,9 @@ mod save;
 pub(crate) mod shortcuts;
 mod startup;
 
-// PLAN: assumed top-w18's appearance file keeps `display_scale` and `selected_theme` and exports `appearance_button` and `theme_menu`.
-pub(crate) use appearance::{appearance_button, cycle_appearance, interface_zoom, show_selected_theme, step_brightness, sync_appearance, theme_menu};
+// PLAN: assumed top-w18's appearance file keeps `display_scale` and `selected_theme` and exports `theme_menu`.
 pub use appearance::{canvas_style, pasteboard_color};
+pub(crate) use appearance::{cycle_appearance, interface_zoom, show_selected_theme, step_brightness, sync_appearance, theme_menu};
 #[cfg(test)]
 pub(crate) use dialogs::set_draft;
 pub use dialogs::{apply_window, invoke, open_preferences, window_open};
