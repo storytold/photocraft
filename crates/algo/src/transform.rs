@@ -189,11 +189,12 @@ impl Interp {
 }
 
 /// The scale per axis of an affine `h` that keeps the axes (no rotation or skew, maybe a flip),
-/// or `None` for any other.
+/// or `None` for any other, including one with any projective term.
 fn axis_scales(h: &Homography) -> Option<(f64, f64)> {
     let m = &normalized(h)?.0;
     let tiny = |v: f64| v.abs() < 1e-9;
-    (tiny(m[1]) && tiny(m[3]) && tiny(m[6]) && tiny(m[7]) && (m[8] - 1.0).abs() < 1e-9).then(|| (m[0].abs(), m[4].abs()))
+    // No projective term at all: a tiny one dropped here would move pixels far from the origin by many pixels.
+    (tiny(m[1]) && tiny(m[3]) && m[6] == 0.0 && m[7] == 0.0).then(|| (m[0].abs(), m[4].abs()))
 }
 
 /// `h` scaled so its last entry is 1 (the same map), or `None` when that entry is zero or not finite.

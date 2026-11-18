@@ -97,8 +97,8 @@ fn scale_in_bands(src: &Surface, bounds: Rect, [sx, sy, x0, y0]: [f64; 4], filte
     let rows = |r0: usize, r1: usize| -> Option<Image> {
         let top = bounds.y0.checked_add(i32::try_from(r0).ok()?)?;
         let bottom = bounds.y0.checked_add(i32::try_from(r1).ok()?)?;
-        let img = load(src, Rect::new(bounds.x0, top, bounds.x1, bottom), depth);
-        Some(if nx != w { axis(&img, nx, depth, false, along_x, filter) } else { img })
+        let img = load(src, Rect::new(bounds.x0, top, bounds.x1, bottom), depth)?;
+        if nx != w { axis(&img, nx, depth, false, along_x, filter) } else { Some(img) }
     };
     let mut out = Surface::new(fmt);
     let band = (band_samples / nx.saturating_mul(n).max(1)).clamp(1, ny);
@@ -124,7 +124,7 @@ fn scale_in_bands(src: &Surface, bounds: Rect, [sx, sy, x0, y0]: [f64; 4], filte
             return None;
         }
         let img = rows(0, h)?;
-        let (mid, a, stretch) = prepared(&img, ny, depth, true, filter);
+        let (mid, a, stretch) = prepared(&img, ny, depth, true, filter)?;
         let along_y = along_y.read(h, mid.as_ref().map_or(h, |m| m.h));
         let img = mid.unwrap_or(img);
         let taps: Vec<Taps> = (0..ny).map(|o| taps(o, img.h, a, stretch, along_y)).collect();
@@ -164,26 +164,35 @@ fn scale_in_bands(src: &Surface, bounds: Rect, [sx, sy, x0, y0]: [f64; 4], filte
 }
 
 /// One axis resized to `len` samples (`vertical`: the rows) with `filter`, through the averaged
-/// image below ¼.
-fn axis(img: &Image, len: usize, depth: Depth, vertical: bool, exact: Exact, filter: Filter) -> Image {
-    let (mid, a, stretch) = prepared(img, len, depth, vertical, filter);
+/// image below ¼. `None` if its pixels can't be allocated.
+fn axis(img: &Image, len: usize, depth: Depth, vertical: bool, exact: Exact, filter: Filter) -> Option<Image> {
+    let (mid, a, stretch) = prepared(img, len, depth, vertical, filter)?;
     let have = |i: &Image| if vertical { i.h } else { i.w };
     let exact = exact.read(have(img), mid.as_ref().map_or(have(img), have));
     pass(mid.as_ref().unwrap_or(img), len, a, stretch, depth, vertical, exact)
 }
 
 /// What an axis's filtering pass to `len` samples works with: the averaged image it reads (below
-/// ¼; otherwise it reads `img` itself), then the Keys parameter and stretch for its scale.
-fn prepared(img: &Image, len: usize, depth: Depth, vertical: bool, filter: Filter) -> (Option<Image>, f64, f64) {
+/// ¼; otherwise it reads `img` itself), then the Keys parameter and stretch for its scale. `None` if the averaged
+/// image can't be allocated.
+fn prepared(img: &Image, len: usize, depth: Depth, vertical: bool, filter: Filter) -> Option<(Option<Image>, f64, f64)> {
     let have = if vertical { img.h } else { img.w };
     let k = len as f64 / have.max(1) as f64;
     if k < 0.25 {
         let (a, stretch) = filter.kernel(0.25);
-        (Some(average(img, 4 * len, depth, vertical)), a, stretch)
+        Some((Some(average(img, len.checked_mul(4)?, depth, vertical)?), a, stretch))
     } else {
         let (a, stretch) = filter.kernel(k);
-        (None, a, stretch)
+        Some((None, a, stretch))
     }
+}
+
+/// `len` zero samples, or `None` if they can't be allocated (a large layer must not abort the app).
+fn zeros(len: usize) -> Option<Vec<f32>> {
+    let mut px = Vec::new();
+    px.try_reserve_exact(len).ok()?;
+    px.resize(len, 0.0);
+    Some(px)
 }
 
 /// The weights' unit: 14 bits.
@@ -285,11 +294,11 @@ const LOAD_ROWS: usize = 32;
 
 /// The pixels of `src` inside `bounds` as an [`Image`]: whole levels at 8 and 16 bits, the stored
 /// values at 32. Bands of rows are read on all cores.
-pub(crate) fn load(src: &Surface, bounds: Rect, depth: Depth) -> Image {
+pub(crate) fn load(src: &Surface, bounds: Rect, depth: Depth) -> Option<Image> {
     /// Rows read at a time.
     const READ_ROWS: usize = 4;
     let (w, h, n) = (bounds.width() as usize, bounds.height() as usize, src.channels());
-    let mut px = vec![0.0f32; w * h * n];
+    let mut px = zeros(w.checked_mul(h)?.checked_mul(n)?)?;
     crate::par::chunks_mut(&mut px, LOAD_ROWS * w * n, true, |i, part| {
         // A few rows at a time, through one buffer that stays in the cache.
         let mut band = Vec::new();
@@ -304,7 +313,7 @@ pub(crate) fn load(src: &Surface, bounds: Rect, depth: Depth) -> Image {
             }
         }
     });
-    Image { w, h, n, px }
+    Some(Image { w, h, n, px })
 }
 
 /// Output samples one band of rows covers: each band loads and filters along x only the source
@@ -399,12 +408,12 @@ fn taps(o: usize, have: usize, a: f64, stretch: f64, exact: Exact) -> Taps {
 
 /// One filtering pass along an axis to `len` samples at the placement `exact` (rule 3 of the
 /// module).
-fn pass(img: &Image, len: usize, a: f64, stretch: f64, depth: Depth, vertical: bool, exact: Exact) -> Image {
+fn pass(img: &Image, len: usize, a: f64, stretch: f64, depth: Depth, vertical: bool, exact: Exact) -> Option<Image> {
     let have = if vertical { img.h } else { img.w };
     let n = img.n;
     let taps: Vec<Taps> = (0..len).map(|o| taps(o, have, a, stretch, exact)).collect();
     let (ow, oh) = if vertical { (img.w, len) } else { (len, img.h) };
-    let mut px = vec![0.0f32; ow * oh * n];
+    let mut px = zeros(ow.checked_mul(oh)?.checked_mul(n)?)?;
     crate::par::chunks_mut(&mut px, ow * n, true, |y, row| {
         if vertical {
             if let Some(t) = taps.get(y) {
@@ -414,7 +423,7 @@ fn pass(img: &Image, len: usize, a: f64, stretch: f64, depth: Depth, vertical: b
             blend_line(line, n, &taps, depth, row);
         }
     });
-    Image { w: ow, h: oh, n, px }
+    Some(Image { w: ow, h: oh, n, px })
 }
 
 /// One row of a horizontal pass: output pixel `o` of `row` is `taps[o]` over the pixels of `line`
@@ -488,12 +497,12 @@ fn span(o: usize, have: usize, len: usize) -> (usize, usize) {
 
 /// An axis averaged down to `len` samples: each the rounded mean of the samples it covers
 /// (rule 4 of the module).
-fn average(img: &Image, len: usize, depth: Depth, vertical: bool) -> Image {
+fn average(img: &Image, len: usize, depth: Depth, vertical: bool) -> Option<Image> {
     let have = if vertical { img.h } else { img.w };
     let n = img.n;
     let spans: Vec<(usize, usize)> = (0..len).map(|o| span(o, have, len)).collect();
     let (ow, oh) = if vertical { (img.w, len) } else { (len, img.h) };
-    let mut px = vec![0.0f32; ow * oh * n];
+    let mut px = zeros(ow.checked_mul(oh)?.checked_mul(n)?)?;
     crate::par::chunks_mut(&mut px, ow * n, true, |y, row| {
         for (x, out) in row.chunks_exact_mut(n).enumerate() {
             let (o, line) = if vertical { (y, x) } else { (x, y) };
@@ -504,7 +513,7 @@ fn average(img: &Image, len: usize, depth: Depth, vertical: bool) -> Image {
             }
         }
     });
-    Image { w: ow, h: oh, n, px }
+    Some(Image { w: ow, h: oh, n, px })
 }
 
 #[cfg(test)]

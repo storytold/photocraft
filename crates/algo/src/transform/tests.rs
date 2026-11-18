@@ -463,3 +463,13 @@ fn a_cancelled_scale_with_a_bicubic_variant_reports_the_cancel() {
         assert!(warp_surface_with(&src, r, &h, interp, &Interrupt::cancel_only(&always)).unwrap().is_none(), "{interp:?}");
     }
 }
+
+#[test]
+fn a_scale_with_any_projective_term_takes_the_general_path() {
+    // A projective term of 7.5e-10 after normalising: dropping it would move pixels far from the origin.
+    let src = ramp_surface(PixelFormat::RGBA8, 30, 20);
+    let r = Rect::new(0, 0, 30, 20);
+    let h = Homography([3.0, 0.0, 0.0, 0.0, 3.0, 0.0, 1.5e-9, 0.0, 2.0]);
+    let (auto, bicubic) = (warp_surface(&src, r, &h, Interp::BicubicAutomatic).unwrap(), warp_surface(&src, r, &h, Interp::Bicubic).unwrap());
+    assert_eq!(auto.read_region(bicubic.content_bounds()), bicubic.read_region(bicubic.content_bounds()), "Automatic is Bicubic off the fast path");
+}
