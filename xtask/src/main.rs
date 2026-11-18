@@ -290,6 +290,8 @@ struct CiOptions {
 }
 
 type StepFn = fn(&CiOptions) -> Result<(), String>;
+/// The steps a `cargo xtask ci` call runs, in order, by name.
+type CiPlan = Vec<(&'static str, StepFn)>;
 
 /// The CI gate's steps, in the order `cargo xtask ci` runs them.
 const CI_STEPS: [(&str, Part, StepFn); 12] = [
@@ -462,7 +464,7 @@ fn ci_exclude() -> Vec<String> {
 
 /// The steps `cargo xtask ci <args>` runs, and how: no argument runs every step; a part (`lint`,
 /// `build`, `tests`) runs the steps of one gate job; a step's name runs that step.
-fn ci_from_args(args: &[&str], exclude: Vec<String>) -> Result<(Vec<(&'static str, StepFn)>, CiOptions), String> {
+fn ci_from_args(args: &[&str], exclude: Vec<String>) -> Result<(CiPlan, CiOptions), String> {
     let mut options = CiOptions { build_only: false, partition: None, selection: Selection::All, exclude };
     let mut what = None;
     for &arg in args {
@@ -506,8 +508,8 @@ fn tests_partition(selection: Selection, env: Option<String>) -> Option<String> 
 
 /// The steps of `parts`, in CI_STEPS order. When the tests are only built, the test steps become
 /// that one build.
-fn ci_plan(parts: &[Part], build_only: bool) -> Vec<(&'static str, StepFn)> {
-    let mut plan: Vec<(&'static str, StepFn)> = Vec::new();
+fn ci_plan(parts: &[Part], build_only: bool) -> CiPlan {
+    let mut plan: CiPlan = Vec::new();
     for &(name, part, f) in &CI_STEPS {
         if !parts.contains(&part) {
             continue;
