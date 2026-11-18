@@ -133,3 +133,7 @@ mod vector_paste_options;
 mod wand_transparent_copy;
 mod working_rgb_profile;
 mod xmp_charref;
+
+// Shared by atn_shape_blur and csh_import.
+#[path = "../common/csh_fixture.rs"]
+mod csh_fixture;
