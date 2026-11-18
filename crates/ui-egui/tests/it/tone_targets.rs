@@ -68,26 +68,28 @@ fn value(app: &PhotocraftApp, target: ChannelTarget) -> f32 {
 }
 
 /// Render real modal controls with accessibility enabled for input-driven assertions.
+/// The app's context is set up already ([`PhotocraftApp::new`]).
 fn harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
-    let h = Harness::builder().with_context(app.ctx().clone()).with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| dialogs::run(app, ui), app);
-    PhotocraftApp::setup_context(&h.ctx, Default::default());
-    h
+    Harness::builder().with_context(app.ctx().clone()).with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| dialogs::run(app, ui), app)
 }
 
-/// The whole app, canvas included: the pointer requests of a picker's samples reach the canvas pass only here.
-fn canvas_harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
-    // The app keeps the context it was made on: the harness runs the frames on it, so the canvas the app reads is the one drawn.
-    let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(egui::vec2(1200.0, 900.0)).with_max_steps(64).build_eframe(move |cc| {
-        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        app
-    });
+/// The document canvas and the dialogs over it: a picker's samples are pointer requests the canvas pass takes, as in
+/// the app. The rest of the window (panels, menus, bars) plays no part in sampling, so it is left out.
+fn canvas_harness(mut app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
+    // The window's frame keeps a view per document; the canvas alone draws the views it is given.
+    app.sync_views();
+    let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(egui::vec2(1200.0, 900.0)).with_max_steps(64).build_ui_state(
+        |ui, app| {
+            egui::CentralPanel::default().show(ui, |ui| photocraft_ui_egui::canvas::document_area(app, ui));
+            dialogs::run(app, ui);
+        },
+        app,
+    );
     h.run_steps(3);
-    // A 32 px document at 100 % sits under the dialog's centred window, which stops the picker's press: zoom to 12x so the left part of the image lies clear of the dialog (no animation, so the view is final at once).
-    h.state_mut().run("prefs.set", json!({"values": {"general.animatedZoom": false}})).unwrap();
-    for _ in 0..8 {
-        h.state_mut().run("view.zoomIn", json!({})).unwrap();
-        h.run_steps(2);
-    }
+    // The dialog's window is centred and stops a press under it: at 12x with the view centred right of the 32 px image,
+    // the image's top-left part lies clear of the dialog, at the canvas's left.
+    let reply = control(&mut h, "ui.set", json!({"zoom": 12, "center": [38, 16]}));
+    assert_eq!(reply["ok"], true, "the view zooms: {reply}");
     h
 }
 
