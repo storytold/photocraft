@@ -94,11 +94,11 @@ async fn video_export_progress_ping_cancel_and_scoped_cleanup() {
     assert!(photocraft_codecs::decode(&std::fs::read(root.join("gif/clip.gif")).unwrap()).is_ok());
     // A collision must preserve the earlier file and remove only frames from this failed run.
     std::fs::create_dir(root.join("collision")).unwrap();
-    std::fs::write(root.join("collision/clip_0001.png"), b"earlier export").unwrap();
+    std::fs::write(root.join("collision/clip0001.png"), b"earlier export").unwrap();
     send!(render(7, "collision", "png", None));
     assert_eq!(next!()["result"]["isError"], true);
     assert_eq!(std::fs::read_dir(root.join("collision")).unwrap().count(), 1);
-    assert_eq!(std::fs::read(root.join("collision/clip_0001.png")).unwrap(), b"earlier export");
+    assert_eq!(std::fs::read(root.join("collision/clip0001.png")).unwrap(), b"earlier export");
     send!(render(8, "../outside", "png", None));
     assert_eq!(next!()["result"]["isError"], true);
     send!(call(9, "doc_new", json!({"width":1600,"height":1200,"name":"clip"})));
@@ -106,7 +106,7 @@ async fn video_export_progress_ping_cancel_and_scoped_cleanup() {
     send!(call(10, "command_run", json!({"id":"timeline.create", "params":{"duration":100,"fps":30}})));
     assert_eq!(next!()["result"]["isError"], false);
     std::fs::create_dir(root.join("cancel")).unwrap();
-    std::fs::write(root.join("cancel/clip_9999.png"), b"unrelated").unwrap();
+    std::fs::write(root.join("cancel/clip9999.png"), b"unrelated").unwrap();
     send!(render(11, "cancel", "png", Some(json!(11))));
     let mut pinged = false;
     loop {
@@ -140,7 +140,7 @@ async fn video_export_progress_ping_cancel_and_scoped_cleanup() {
         }
     }
     assert_eq!(std::fs::read_dir(root.join("cancel")).unwrap().count(), 1);
-    assert_eq!(std::fs::read(root.join("cancel/clip_9999.png")).unwrap(), b"unrelated");
+    assert_eq!(std::fs::read(root.join("cancel/clip9999.png")).unwrap(), b"unrelated");
     drop(input);
     tokio::time::timeout(Duration::from_secs(5), server).await.unwrap().unwrap().unwrap();
     std::fs::remove_dir_all(root).unwrap();

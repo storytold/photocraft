@@ -45,6 +45,9 @@ fn the_defaults_are_the_document_name_from_0_with_4_digits() {
     let s = session("rv-test.psd", 3);
     let got = names(&s, json!({"format": "png"})).unwrap();
     assert_eq!(got, ["rv-test0000.png", "rv-test0001.png", "rv-test0002.png"]);
+    // A `null` counts as unset, as it does for `format` and the engine's other params.
+    let got = names(&s, json!({"format": "png", "name": null, "startNumber": null, "digits": null})).unwrap();
+    assert_eq!(got, ["rv-test0000.png", "rv-test0001.png", "rv-test0002.png"]);
 }
 
 #[test]
