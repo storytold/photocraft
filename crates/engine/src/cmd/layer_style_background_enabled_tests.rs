@@ -109,3 +109,36 @@ fn style_queries_validate_explicit_targets_without_a_selection() {
         }
     }
 }
+
+#[test]
+fn background_refusal_preserves_a_pending_floating_selection() {
+    for background in [false, true] {
+        for (id, mut params) in style_commands() {
+            let mut s = white_document();
+            let bg = s.active().unwrap().doc.background().unwrap().id.0;
+            s.execute("layer.new.layer", json!({"name": "Paint"})).unwrap();
+            let paint = s.active().unwrap().active_layer.unwrap().0;
+            s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+            s.execute("select.rect", json!({"x": 0, "y": 0, "width": 2, "height": 2})).unwrap();
+            s.execute("select.float", json!({"dx": 3, "dy": 0})).unwrap();
+            params["layer"] = json!(bg);
+            let st = s.active().unwrap();
+            let before = Arc::clone(&st.doc);
+            let revision = st.revision;
+            let history = st.history.entries();
+            let parts = Arc::clone(&crate::float_cmds::floating(st).unwrap().parts);
+            let result = if background { s.start(&id, params.clone()).map(|_| ()) } else { s.execute(&id, params.clone()).map(|_| ()) };
+            assert!(matches!(result, Err(EngineError::Disabled(_, why)) if why.contains("Background")), "{id}");
+            let st = s.active().unwrap();
+            assert!(Arc::ptr_eq(&before, &st.doc), "{id}: background={background}");
+            assert_eq!(st.revision, revision);
+            assert_eq!(st.history.entries(), history);
+            let floating = crate::float_cmds::floating(st).unwrap();
+            assert_eq!(floating.offset, (3, 0));
+            assert!(Arc::ptr_eq(&parts, &floating.parts));
+            params["layer"] = json!(paint);
+            s.execute(&id, params).unwrap();
+            assert!(crate::float_cmds::floating(s.active().unwrap()).is_none(), "{id} on Paint still commits the floating piece");
+        }
+    }
+}

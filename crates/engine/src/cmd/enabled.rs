@@ -118,3 +118,32 @@ pub(super) fn can_redo(s: &Session) -> std::result::Result<(), String> {
 pub(super) fn has_selection(s: &Session) -> std::result::Result<(), String> {
     s.active().filter(|d| d.doc.selection.is_some()).map(|_| ()).ok_or_else(|| "no selection".into())
 }
+
+/// Only the individual effects and Blending Options refuse Background receivers.
+pub(crate) fn layer_style_rejects_background(id: &str) -> bool {
+    matches!(
+        id,
+        "layer.layerStyle.blendingOptions"
+            | "layer.layerStyle.bevelEmboss"
+            | "layer.layerStyle.stroke"
+            | "layer.layerStyle.innerShadow"
+            | "layer.layerStyle.innerGlow"
+            | "layer.layerStyle.satin"
+            | "layer.layerStyle.colorOverlay"
+            | "layer.layerStyle.gradientOverlay"
+            | "layer.layerStyle.patternOverlay"
+            | "layer.layerStyle.outerGlow"
+            | "layer.layerStyle.dropShadow"
+    )
+}
+
+/// This refusal must precede committing a pending floating selection. Other preconditions
+/// keep their normal position after the floating selection has dropped.
+pub(crate) fn layer_style_background_refusal(s: &Session, id: &str, params: &Value) -> Option<String> {
+    if !layer_style_rejects_background(id) {
+        return None;
+    }
+    let st = s.active()?;
+    let target = super::layer_param(s, params).ok()?;
+    check_layer_style_target(&st.doc, target).err().map(|err| err.to_string())
+}

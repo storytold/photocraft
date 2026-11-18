@@ -1763,6 +1763,9 @@ impl Session {
         }
         crate::param_check::check(spec, &params)?;
         crate::filters::validate_params(id, &params)?;
+        if let Some(why) = crate::commands::layer_style_background_refusal(self, id, &params) {
+            return Err(EngineError::Disabled(id.into(), why));
+        }
         // A floating selection drops before any other command (Undo puts it back instead).
         if let Some(v) = crate::float_cmds::before_command(self, id)? {
             return Ok(Started::Done(v));
