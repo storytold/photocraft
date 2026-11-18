@@ -748,6 +748,43 @@ fn transparency_shapes_off_blends_a_clipped_layers_alpha_as_fill() {
     }
 }
 
+/// A Photoshop Frame's stroke lies outside the frame's vector mask, so the mask doesn't cover it.
+/// Clipped in one of the special eight with Transparency Shapes Layer off, the stroke still draws
+/// as it does with the option on, and the frame's content still blends its alpha as Fill.
+#[test]
+fn transparency_shapes_off_keeps_a_clipped_frames_stroke() {
+    use photocraft_doc::vector::{Path, ShapeStroke, StrokeAlign, Subpath, VectorMask};
+    let base_px = [90.0 / 255.0, 110.0 / 255.0, 130.0 / 255.0, 1.0];
+    for depth in DEPTHS {
+        for mode in [BlendMode::ColorDodge, BlendMode::Difference] {
+            let make = |tsl: bool| {
+                let mut d = doc(depth, false);
+                let base = solid(&d, "base", full(&d), base_px);
+                let photo = solid(&d, "photo", full(&d), [200.0 / 255.0, 150.0 / 255.0, 80.0 / 255.0, 0.3]);
+                // The frame is x 4..8, y 2..6; its 2 px outside stroke covers x 2..4 left of it.
+                let mut frame = Layer::group("Frame 1", vec![photo]);
+                frame.vector_mask = Some(VectorMask::new(Path::new(vec![Subpath::polygon(&[(4.0, 2.0), (8.0, 2.0), (8.0, 6.0), (4.0, 6.0)])])));
+                if let LayerContent::Group(g) = &mut frame.content {
+                    g.frame_stroke =
+                        Some(ShapeStroke { width: 2.0, align: StrokeAlign::Outside, paint: Fill::Solid(Color::rgb(0.0, 0.0, 1.0)), ..Default::default() });
+                }
+                frame.clipped = true;
+                frame.blend = mode;
+                frame.advanced.transparency_shapes = tsl;
+                d.layers.extend([base, frame]);
+                d
+            };
+            let (off, on) = (make(false), make(true));
+            let at = |d: &Document, x: i32, y: i32| render(d, Rect::from_xywh(x, y, 1, 1)).px[0];
+            let what = format!("{mode:?} ({depth:?})");
+            assert!(!close(at(&on, 3, 4), base_px), "{what}: the stroke draws with the option on: {:?}", at(&on, 3, 4));
+            check(&off, 3, 4, at(&on, 3, 4), &format!("{what}: the stroke outside the frame's mask"));
+            assert!(!close(at(&off, 6, 4), at(&on, 6, 4)), "{what}: the content's alpha is Fill with the option off: {:?}", at(&off, 6, 4));
+            assert!(close(at(&off, 0, 4), base_px), "{what}: nothing past the stroke: {:?}", at(&off, 0, 4));
+        }
+    }
+}
+
 /// A clipped knockout in a Transparency Shapes Layer off base of the special eight: the knockout
 /// stops at the base's own content (Blend Clipped Layers as Group), so it gives back the base's
 /// colour without touching its alpha, and the base's transparency still blends as Fill under a

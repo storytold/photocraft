@@ -732,11 +732,14 @@ fn composite_atop_any_with<A: BufferAlloc>(layer: &Layer, base: &mut Buffer, cx:
         }
         let s = content.px[i];
         if alpha_as_fill {
-            // `content` carries alpha × masks; split them again.
+            // `content` carries alpha × masks; split them again. A Frame's stroke lies over its
+            // masked content, so alpha can be more than the masks let through: it covers there,
+            // as with the option on, instead of vanishing where the mask is 0.
             let m = mv.as_ref().map_or(1.0, |v| v.get(i).copied().unwrap_or(1.0));
-            if s[3] > 0.0 && m > 0.0 {
-                let fill = (s[3] / m).clamp(0.0, 1.0);
-                let r = psblend::composite_fill(layer.blend, [p[0], p[1], p[2], 1.0], [s[0], s[1], s[2], m], opacity, fill, gamma);
+            if s[3] > 0.0 {
+                let cover = m.max(s[3]);
+                let fill = (s[3] / cover).clamp(0.0, 1.0);
+                let r = psblend::composite_fill(layer.blend, [p[0], p[1], p[2], 1.0], [s[0], s[1], s[2], cover], opacity, fill, gamma);
                 *p = [r[0], r[1], r[2], alpha];
             }
             continue;
