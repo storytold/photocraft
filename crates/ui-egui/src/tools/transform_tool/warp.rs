@@ -218,6 +218,18 @@ pub(super) fn in_contents(
         RuleEdit::SplitOnePatch { .. } => return None,
     };
     let bounds = contents.control_bounds();
+    // A surface pull presses [`PULL_PRESS`] from the pointer in the document, at the contents' point found there; off
+    // the surface it keeps the pointer's own.
+    let (press, edit) = match edit {
+        RuleEdit::Surface { by, .. } => {
+            let q = [press[0] + PULL_PRESS[0], press[1] + PULL_PRESS[1]];
+            match on_surface(&contents, doc_to_contents(to_doc, back, bounds, q)) {
+                Some((s, t)) => (q, RuleEdit::Surface { s, t, by }),
+                None => (press, edit),
+            }
+        }
+        _ => (press, edit),
+    };
     let (from, to) = (doc_to_contents(to_doc, back, bounds, press), doc_to_contents(to_doc, back, bounds, [press[0] + by[0], press[1] + by[1]]));
     let by = [to[0] - from[0], to[1] - from[1]];
     let scale = to_doc.local_scale(from[0], from[1]);
@@ -232,28 +244,32 @@ pub(super) fn in_contents(
     WarpMesh::new(placed.us, placed.vs, placed.points.iter().map(|p| craft::behavior::kurbo::Point::new(p[0], p[1])).collect())
 }
 
-/// `mesh` after `edit`, as the reference application moves it: a point drag moves an anchor with its handles and
-/// the twist points beside it (`BezierMesh::drag_point`), a pull of the surface moves the points the reference moves
-/// (`BezierMesh::pull_at`, with its thirds and a line reach of [`LINE_REACH_PX`] screen pixels, `unit` each), and a
-/// split of the one-patch Default grid adds only its own lines: the grid's thirds stay drawn handles. `None` when
-/// the result is no mesh.
 /// How far from the pointer the reference presses a pull of the warp's surface, in document pixels: half a pixel up
-/// and left. Measured on 154 Default-grid pull probes at 100 % (median error 2.05 → 1.29 px, worst 7.58 → 3.85) and
-/// 12 at 50 %, where it is half a document pixel, not half a screen pixel (1.59 → 1.23; a whole pixel, half a screen
-/// pixel there, made it worse). Box handles and warp points take the pointer itself.
+/// and left, also under a smart object's placement. Measured on 154 Default-grid pull probes at 100 % (median error
+/// 2.05 → 1.29 px, worst 7.58 → 3.85), 12 at 50 %, where it is half a document pixel, not half a screen pixel (1.59 →
+/// 1.23; a whole pixel, half a screen pixel there, made it worse), and the pulls under a perspective (pixels off by
+/// more than 32 levels, 189,166 → 141,476 over the catalogue). Box handles and warp points take the pointer itself.
 const PULL_PRESS: [f64; 2] = [-0.5, -0.5];
 
 /// The parameters of the surface point a pull at `(s, t)` presses: the point [`PULL_PRESS`] away from the pointer's,
 /// or the pointer's own where that lies off the surface (past an edge of the grid).
 pub(super) fn pressed(base: &BezierMesh, s: f64, t: f64) -> (f64, f64) {
     let p = base.eval(s, t);
-    let q = [p[0] + PULL_PRESS[0], p[1] + PULL_PRESS[1]];
-    let (s2, t2) = base.param_at(q);
-    let found = base.eval(s2, t2);
-    let on_surface = (0.0..=1.0).contains(&s2) && (0.0..=1.0).contains(&t2) && (found[0] - q[0]).hypot(found[1] - q[1]) < 0.05;
-    if on_surface { (s2, t2) } else { (s, t) }
+    on_surface(base, [p[0] + PULL_PRESS[0], p[1] + PULL_PRESS[1]]).unwrap_or((s, t))
 }
 
+/// The parameters of `base`'s surface point at `q`, or `None` where `q` lies off the surface.
+fn on_surface(base: &BezierMesh, q: [f64; 2]) -> Option<(f64, f64)> {
+    let (s, t) = base.param_at(q);
+    let found = base.eval(s, t);
+    ((0.0..=1.0).contains(&s) && (0.0..=1.0).contains(&t) && (found[0] - q[0]).hypot(found[1] - q[1]) < 0.05).then_some((s, t))
+}
+
+/// `mesh` after `edit`, as the reference application moves it: a point drag moves an anchor with its handles and
+/// the twist points beside it (`BezierMesh::drag_point`), a pull of the surface moves the points the reference moves
+/// (`BezierMesh::pull_at`, with its thirds and a line reach of [`LINE_REACH_PX`] screen pixels, `unit` each), and a
+/// split of the one-patch Default grid adds only its own lines: the grid's thirds stay drawn handles. `None` when
+/// the result is no mesh.
 pub(super) fn rule_mesh(mesh: &WarpMesh, edit: RuleEdit, unit: f64) -> Option<WarpMesh> {
     let base = bezier_of(mesh);
     let mut moved = base.clone();

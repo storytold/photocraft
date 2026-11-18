@@ -2390,10 +2390,12 @@ fn a_pull_under_a_perspective_starts_from_the_pressed_point_of_the_contents() {
     let (px, py) = back.apply(301.0, 226.0);
     let (s, t) = contents.param_at([px, py]);
     let got = super::warp::in_contents(&mesh, super::warp::RuleEdit::Surface { s, t, by: [-200.0, 0.0] }, 1.0, &to_doc, &back).unwrap();
-    // Point 9 in the contents, as pull_at moves it from the pressed point: the carried mesh's point at (s, t) lies
-    // 36 px below the press under this perspective, and a pull from there moved it to about -478 instead.
+    // Point 9 in the contents, as pull_at moves it from the pressed point: the contents' point half a document pixel up
+    // and left of the pointer, (300.5, 225.5), found again on the contents. The carried mesh's point at (s, t) lies
+    // 36 px below the press under this perspective, and a pull from there moved it to about -478 instead; a press at
+    // the pointer itself moved it to -614.
     let (x, y) = back.apply(got.points[9].x, got.points[9].y);
-    assert!((x - -614.39).abs() < 0.5 && (y - 134.67).abs() < 0.01, "{x}, {y}");
+    assert!((x - -633.48).abs() < 0.5 && (y - 134.67).abs() < 0.01, "{x}, {y}");
 }
 
 #[test]
