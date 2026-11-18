@@ -190,7 +190,7 @@ mod tests {
     use super::*;
     use crate::canvas::testing::{ToolEvent, tool_event};
 
-    fn app_with(documents: &[(&str, u32, u32)]) -> PhotocraftApp {
+    fn app_with(documents: &[(&str, u32, u32)]) -> Box<PhotocraftApp> {
         let mut s = photocraft_engine::Session::new();
         for (name, w, h) in documents {
             s.add_document(Document::with_background(*name, DocSize::new(*w, *h), ColorMode::Rgb, SampleType::U8, Color::WHITE), None);

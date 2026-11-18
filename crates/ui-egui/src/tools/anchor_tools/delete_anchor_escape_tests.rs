@@ -16,16 +16,16 @@ use crate::state::Tool;
 
 /// The issue's document: 800 x 600 with the saved path "Path 1", a corner square with an anchor
 /// at (300, 300), targeted in the Paths panel.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     prepared(PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default()))
 }
 
 /// The app on `ctx`, a harness's context that has the framework installed.
-fn app_on(ctx: egui::Context) -> PhotocraftApp {
+fn app_on(ctx: egui::Context) -> Box<PhotocraftApp> {
     prepared(PhotocraftApp::with_context(ctx, photocraft_engine::Session::new(), crate::Services::default()))
 }
 
-fn prepared(mut app: PhotocraftApp) -> PhotocraftApp {
+fn prepared(mut app: Box<PhotocraftApp>) -> Box<PhotocraftApp> {
     app.run("file.new", json!({"width": 800, "height": 600, "background": "white"})).unwrap();
     let square = json!({"subpaths": [{"closed": true, "knots": [[100, 300], [300, 300], [300, 500], [100, 500]]}]});
     app.run("path.set", json!({"name": "Path 1", "path": square})).unwrap();
