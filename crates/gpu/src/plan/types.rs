@@ -31,6 +31,9 @@ pub enum Kernel {
     FxStroke,
     /// Outside strokes: resolve the accumulated strokes over the exterior result.
     FxStrokeEnd,
+    /// The cached stack above a boundary applied to its backdrop (never planned: the executor
+    /// draws it in place of those passes, see `suffix`).
+    Suffix,
     /// Copy slot A into `dst` (an existing slot) over the pass clip (no draw).
     CopyRect,
     /// Copy all of slot A into the fresh slot `dst` (no draw).
@@ -67,6 +70,7 @@ impl Kernel {
             Kernel::FxMerge => "fs_fxmerge",
             Kernel::FxStroke => "fs_fxstroke",
             Kernel::FxStrokeEnd => "fs_fxstrokeend",
+            Kernel::Suffix => "fs_suffix",
             Kernel::MShift => "fs_mshift",
             Kernel::MDilate => "fs_mdilate",
             Kernel::MBlur => "fs_mblur",
@@ -96,7 +100,7 @@ impl Kernel {
     }
 
     /// Every kernel with a pipeline.
-    pub const DRAWN: [Kernel; 24] = [
+    pub const DRAWN: [Kernel; 25] = [
         Kernel::Content,
         Kernel::Mask,
         Kernel::Blend,
@@ -112,6 +116,7 @@ impl Kernel {
         Kernel::FxMerge,
         Kernel::FxStroke,
         Kernel::FxStrokeEnd,
+        Kernel::Suffix,
         Kernel::MShift,
         Kernel::MDilate,
         Kernel::MBlur,

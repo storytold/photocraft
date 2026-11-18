@@ -41,6 +41,12 @@ pub struct Stats {
     pub prefix_hits: usize,
     /// Planned prefix passes skipped, summed over the reused chunks.
     pub prefix_passes_skipped: usize,
+    /// Chunks that drew the cached stack above the edit in one pass (`suffix`).
+    pub suffix_hits: usize,
+    /// Planned passes above the edit skipped that way, summed over the chunks.
+    pub suffix_passes_skipped: usize,
+    /// Chunks that rendered the stack above the edit over the three backdrops to cache it.
+    pub suffix_builds: usize,
     /// Plain layers blended inside another layer's pass (`fs_layerbatch`), summed over chunks.
     pub layers_batched: usize,
     /// Batched passes drawn with Normal's code alone (`fs_layerbatch_normal`), summed over chunks.

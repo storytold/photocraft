@@ -1,4 +1,4 @@
-use super::batch::{batch_runs, run_starts, submit_batch, tile_grid};
+use super::batch::{batch_runs, break_runs_at, run_starts, submit_batch, tile_grid};
 use super::consts::{FLUSH_BYTES, FLUSH_OPS, FLUSH_WORK, PATTERN_IDLE_FRAMES};
 use super::convert::lut_texture;
 use super::kit::FrameRes;
@@ -92,6 +92,7 @@ impl Compositor {
         // Cache metadata advances while recording. A failed encoder may never execute its
         // texture uploads or effect maps, so none of those cached pixels can be trusted.
         self.prefix.clear();
+        self.suffix.clear();
         self.residents.clear();
         self.fx.clear();
         self.patterns.clear();
@@ -165,13 +166,21 @@ impl Compositor {
         // Runs of plain layers drawn as one pass each (`fs_layerbatch`). The grouping is the same
         // for every render of this plan, so a layer's bits don't depend on the cache: renders
         // capture and resume only where a run starts.
-        let runs = batch_runs(&plan);
-        let checkpoint = if flush {
+        let mut runs = batch_runs(&plan);
+        let (checkpoint, suffix) = if flush {
+            // The stack above shares the lower-stack allowance: zero switches both off.
+            let enabled = self.prefix.budget() > 0;
+            let suffix = self.suffix.prepare(doc, &plan, &plan.checkpoints, enabled);
+            // Hiding the edited layer removes its passes, which regroups the runs above it: end
+            // any run that would cross the cached boundary, so the executor can stop there.
+            if let Some(u) = suffix {
+                break_runs_at(&plan, &mut runs, u.at.pass_end);
+            }
             let starts = run_starts(&runs);
             let resumable: Vec<_> = plan.checkpoints.iter().filter(|c| starts.get(c.pass_end).copied().unwrap_or(false)).copied().collect();
-            self.prefix.prepare(doc, &resumable)
+            (self.prefix.prepare(doc, &resumable), suffix)
         } else {
-            None
+            (None, None)
         };
 
         // Effect maps of whole regions first (they may render group shapes through sub-plans);
@@ -217,7 +226,7 @@ impl Compositor {
             stats.chunks += chunks.len();
             work += part.width() as u64 * part.height() as u64 * plan.passes.len() as u64;
             let mut batch = flush.then_some(&mut last_submit);
-            self.run_cell(device, queue, encoder, doc.id, &plan, &runs, &paged, cell, &fr, &chunks, checkpoint, &mut stats, sink, &mut batch);
+            self.run_cell(device, queue, encoder, doc.id, &plan, &runs, &paged, cell, &fr, &chunks, checkpoint, suffix, &mut stats, sink, &mut batch);
             // The device was lost in a submit inside the cell: issue no more work.
             if let Some(f) = self.fault() {
                 return Err(Unsupported(f.to_string()));
@@ -251,7 +260,7 @@ impl Compositor {
                     return Err(Unsupported(f.to_string()));
                 }
                 let mut batch = Some(&mut last_submit);
-                self.run_cell(device, queue, encoder, doc.id, &plan, &runs, &paged, cell, &fr, &chunks, checkpoint, &mut stats, sink, &mut batch);
+                self.run_cell(device, queue, encoder, doc.id, &plan, &runs, &paged, cell, &fr, &chunks, checkpoint, suffix, &mut stats, sink, &mut batch);
                 if let Some(f) = self.fault() {
                     return Err(Unsupported(f.to_string()));
                 }
