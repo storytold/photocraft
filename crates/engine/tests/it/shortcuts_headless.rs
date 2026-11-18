@@ -61,7 +61,10 @@ fn system_keys_are_refused_and_dropped_from_imports() {
     let r = ks(&mut s, json!({"importKys": set}));
     assert_eq!(r["overrides"]["edit.copy"], json!("F9"));
     assert!(r["overrides"].get("edit.cut").is_none(), "the reserved key is left out: {}", r["overrides"]);
-    assert_eq!(r["import"]["reserved"].as_array().map(Vec::len), Some(1));
+    // Each command that held the reserved key is reported with it: Copy's second key and Cut's only one.
+    let reserved: Vec<&str> = r["import"]["reserved"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    assert_eq!(reserved.len(), 2, "{reserved:?}");
+    assert!(reserved.iter().any(|r| r.starts_with("edit.copy")) && reserved.iter().any(|r| r.starts_with("edit.cut")), "{reserved:?}");
     assert_eq!(r["overrides"]["tools.select.pencil"], json!("N"), "tool keys import headless");
     assert!(r["overrides"].get("tools.select.move").is_none(), "Move's own V keeps its cycling");
 }
@@ -77,7 +80,7 @@ fn sets_read_and_write_files_and_export_everything() {
     let r = ks(&mut s, json!({"exportKys": {"path": kys.to_str().unwrap()}, "summarize": {"path": html.to_str().unwrap(), "mac": false}}));
     assert!(r.get("kys").is_none() && r["kysPath"].is_string() && r["htmlPath"].is_string(), "{r}");
     let text = std::fs::read_to_string(&kys).unwrap();
-    assert!(text.contains("pc-id=\"tools.select.pencil\">F6</tool>") && text.contains("pc-id=\"view.zoomIn\""), "the whole set: {text}");
+    assert!(text.contains("craft-id=\"tools.select.pencil\">F6</tool>") && text.contains("craft-id=\"view.zoomIn\""), "the whole set: {text}");
     assert!(std::fs::read_to_string(&html).unwrap().contains("<h2>Tools</h2>"));
     // Back to the defaults, then the file restores the set, tools included.
     ks(&mut s, json!({"useSet": ""}));
