@@ -6,13 +6,13 @@ use egui_kittest::kittest::{NodeT, Queryable};
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
-use crate::canvas::testing;
 use crate::app::framework::BuildApp as _;
+use crate::canvas::testing;
+use crate::control::{ControlRequest, Reply, handle};
+use crate::state::Tool;
 use craft::behavior::geometry::{BoxPart, CropBox};
 use craft::behavior::kurbo::{Point, Rect as DocRect};
 use std::cell::Cell;
-use crate::control::{ControlRequest, Reply, handle};
-use crate::state::Tool;
 
 type AppHarness = Harness<'static, Box<PhotocraftApp>>;
 
@@ -82,8 +82,6 @@ fn outside_box(app: &PhotocraftApp, at: egui::Pos2) -> BoxPart {
     app.ui.transform.as_ref().unwrap().session.state().part_at(v.to_doc(at), reach)
 }
 
-
-
 /// Settle the floating area's measured size before exercising its controls.
 fn open_box() -> AppHarness {
     let mut h = harness();
@@ -103,7 +101,9 @@ fn queue_control(h: &mut AppHarness, method: &str, params: Value) -> Value {
 
 fn control(h: &mut AppHarness, method: &str, params: Value) -> Value {
     let reply = queue_control(h, method, params);
-    if method == "ui.pointer" { h.run_steps(4); }
+    if method == "ui.pointer" {
+        h.run_steps(4);
+    }
     reply
 }
 
@@ -292,8 +292,12 @@ fn transform_task_bar_inspection_keeps_crop_and_free_transform_rects_separate_be
     let mut h = open_box();
     assert_eq!(bar(&mut h)["visible"], true);
     control(&mut h, "ui.set", json!({"tool": "crop"}));
-    queue_control(&mut h, "ui.pointer", json!({"tool": "crop", "events": [
-        {"kind": "down", "x": 40, "y": 40}, {"kind": "move", "x": 230, "y": 170}, {"kind": "up", "x": 230, "y": 170}]}));
+    queue_control(
+        &mut h,
+        "ui.pointer",
+        json!({"tool": "crop", "events": [
+        {"kind": "down", "x": 40, "y": 40}, {"kind": "move", "x": 230, "y": 170}, {"kind": "up", "x": 230, "y": 170}]}),
+    );
     // Current ui.pointer is queued: before its real canvas pass neither bar can inherit the previous rect.
     assert!(!crate::transform_task_bar::eligible(h.state()));
     assert!(bar(&mut h)["rect"].is_null(), "Crop must wait for its own draw");
@@ -351,8 +355,12 @@ fn transform_task_bar_does_not_report_its_rect_as_crop_after_cancel() {
     assert!(crate::transform_task_bar::shown_rect(h.state(), &h.ctx).is_none());
 
     control(&mut h, "ui.set", json!({"tool": "crop"}));
-    queue_control(&mut h, "ui.pointer", json!({"tool": "crop", "events": [
-        {"kind": "down", "x": 40, "y": 40}, {"kind": "move", "x": 230, "y": 170}, {"kind": "up", "x": 230, "y": 170}]}));
+    queue_control(
+        &mut h,
+        "ui.pointer",
+        json!({"tool": "crop", "events": [
+        {"kind": "down", "x": 40, "y": 40}, {"kind": "move", "x": 230, "y": 170}, {"kind": "up", "x": 230, "y": 170}]}),
+    );
     // No pass has consumed the queued Crop gesture: never expose the canceled Transform rectangle.
     let crop_bar = bar(&mut h);
     assert_eq!(crop_bar["visible"], false);
