@@ -22,23 +22,24 @@ fn mv(app: &mut PhotocraftApp, x: f64, y: f64, m: Modifiers) {
     tool_event(app, ToolEvent::Move { x, y, pressure: 1.0 }, m);
 }
 
-/// Press at 140,140 without ⇧, move past the first 60 px, then to `to` with `m` held.
-fn drag_to(app: &mut PhotocraftApp, to: [f64; 2], m: Modifiers) {
+/// Press at 140,140 without ⇧, move past the first 60 px, then to `to` with `m` held. Returns the press as
+/// captured at the Down, the last point and whether ⇧ is held there.
+fn drag_to(app: &mut PhotocraftApp, to: [f64; 2], m: Modifiers) -> (crate::retouch_ui::PatchPress, [f64; 2], bool) {
+    let press = crate::retouch_ui::PatchPress::new(Tool::Patch, [140.0, 140.0], craft::keymap::Mods::default());
     tool_event(app, ToolEvent::Down { x: 140.0, y: 140.0, pressure: 1.0 }, Modifiers::NONE);
     mv(app, 200.0, 145.0, Modifiers::NONE);
     mv(app, to[0], to[1], m);
+    (press, to, m.shift)
 }
 
 fn patch_offsets(app: &PhotocraftApp) -> Vec<serde_json::Value> {
     app.session.journal.iter().filter(|(id, _)| id == "paint.patch").map(|(_, p)| p["offset"].clone()).collect()
 }
 
-fn outline_offset(app: &mut PhotocraftApp) -> [i32; 2] {
-    let (start, end) = {
-        let d = app.drag.as_ref().unwrap();
-        (d.start, crate::retouch_ui::patch_end(d, d.points.last().map_or(d.start, |p| [p[0], p[1]])))
-    };
-    crate::retouch_ui::patch_offset(app, start, end)
+/// The offset the outline shows for the press `drag_to` made, ending at `last`.
+fn outline_offset(app: &mut PhotocraftApp, (press, last, shift): (crate::retouch_ui::PatchPress, [f64; 2], bool)) -> [i32; 2] {
+    let end = crate::retouch_ui::patch_end(&press, last, shift);
+    crate::retouch_ui::patch_offset(app, press.start, end)
 }
 
 #[test]
@@ -60,16 +61,16 @@ fn shift_during_the_drag_snaps_the_offset_to_the_dominant_axis() {
 #[test]
 fn the_outline_the_preview_and_the_applied_patch_use_the_snapped_offset() {
     let mut app = app();
-    drag_to(&mut app, [380.0, 170.0], Modifiers::SHIFT);
-    assert_eq!(outline_offset(&mut app), [240, 0], "outline");
+    let drag = drag_to(&mut app, [380.0, 170.0], Modifiers::SHIFT);
+    assert_eq!(outline_offset(&mut app, drag), [240, 0], "outline");
     assert_eq!(crate::patch_preview::drag_offset(&mut app), Some([240, 0]), "preview");
     tool_event(&mut app, ToolEvent::Up { x: 380.0, y: 170.0 }, Modifiers::SHIFT);
     assert!(!app.ui.status_error, "{}", app.ui.status);
     assert_eq!(patch_offsets(&app), vec![json!([240, 0])], "applied patch");
 
     let mut app = self::app();
-    drag_to(&mut app, [380.0, 170.0], Modifiers::NONE);
-    assert_eq!(outline_offset(&mut app), [240, 30]);
+    let drag = drag_to(&mut app, [380.0, 170.0], Modifiers::NONE);
+    assert_eq!(outline_offset(&mut app, drag), [240, 30]);
     tool_event(&mut app, ToolEvent::Up { x: 380.0, y: 170.0 }, Modifiers::NONE);
     assert_eq!(patch_offsets(&app), vec![json!([240, 30])]);
 }
