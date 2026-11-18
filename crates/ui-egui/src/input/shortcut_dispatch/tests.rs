@@ -84,6 +84,19 @@ fn press(h: &mut Harness<'_, Box<PhotocraftApp>>, sc: &str) {
     tap(h, sc.logical_key, sc.modifiers);
 }
 
+/// Queue one press/release in one input frame, then let the runtime collect and the app dispatch it.
+fn press_in_one_frame(h: &mut Harness<'_, Box<PhotocraftApp>>, sc: &str) {
+    let sc = parse(sc).unwrap_or_else(|| panic!("unparsable shortcut {sc}"));
+    let m = platform(sc.modifiers);
+    h.input_mut().events.extend([
+        egui::Event::ModifiersChanged(m),
+        egui::Event::Key { key: sc.logical_key, physical_key: None, pressed: true, repeat: false, modifiers: m },
+        egui::Event::Key { key: sc.logical_key, physical_key: None, pressed: false, repeat: false, modifiers: m },
+        egui::Event::ModifiersChanged(Modifiers::NONE),
+    ]);
+    h.run_steps(2);
+}
+
 fn click(h: &mut Harness<'_, Box<PhotocraftApp>>, at: Pos2) {
     h.hover_at(at);
     h.run_steps(1);
@@ -209,7 +222,7 @@ fn every_displayed_shortcut_dispatches_from_where_focus_usually_is_for(place: Pl
         // A press the focused component holds (the Layers rows' stacking and visibility keys)
         // is the component's and reaches no app command.
         let held = focus_holds(&h.ctx, chord);
-        press(&mut h, &sc);
+        press_in_one_frame(&mut h, &sc);
         let log = take_log(&h.ctx);
         if typing && !chord.has_command() && !chord.is_function_key() {
             // A focused text field keeps its typing / editing keys: nothing may fire.
@@ -230,7 +243,7 @@ fn every_displayed_shortcut_dispatches_from_where_focus_usually_is_for(place: Pl
     if !typing {
         for t in Tool::ALL.into_iter().filter(|t| t.key() != '\0') {
             h.state_mut().ui.tool = if t.key() == 'H' { Tool::Move } else { Tool::Hand };
-            press(&mut h, &t.key().to_string());
+            press_in_one_frame(&mut h, &t.key().to_string());
             if h.state().ui.tool.key() != t.key() {
                 failures.push(format!("{place:?}: tool key {} left {:?}", t.key(), h.state().ui.tool));
             }
