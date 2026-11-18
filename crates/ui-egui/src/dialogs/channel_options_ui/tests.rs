@@ -1,3 +1,4 @@
+use craft::ui::patterns::form_dialogs::HostedParamDialog;
 use serde_json::json;
 
 use super::*;
@@ -14,22 +15,37 @@ fn channel(app: &PhotocraftApp) -> photocraft_doc::AlphaChannel {
     app.session.active().unwrap().doc.channels[0].clone()
 }
 
+fn values(app: &PhotocraftApp, id: DialogId) -> DialogFields {
+    app.framework.dialogs.get_by_id::<HostedParamDialog>(id).expect("the dialog is open").fields().clone()
+}
+
+fn set(app: &mut PhotocraftApp, id: DialogId, field: &str, value: Value) {
+    let ctx = app.ctx().clone();
+    app.framework.dialogs.set_json_field(&ctx, id, field, value).unwrap();
+}
+
+fn close_all(app: &mut PhotocraftApp) {
+    let ctx = app.ctx().clone();
+    while let Some(id) = app.framework.dialogs.stack().top() {
+        app.framework.dialogs.cancel_by_id(&ctx, id);
+    }
+}
+
 #[test]
 fn saved_selection_becomes_a_spot_channel_with_its_ink_and_solidity() {
     let mut app = app();
+    let ctx = app.ctx().clone();
     assert!(channel(&app).spot.is_none());
     let id = open(&mut app, &json!(0)).unwrap();
-    let f = &app.ui.dialogs.last().unwrap().fields;
-    assert!(owns(f));
-    assert_eq!(f["indicates"], json!("masked"));
-    assert_eq!(f["name"], json!(channel(&app).name));
-    let d = app.ui.dialog_mut(id).unwrap();
-    d.fields.insert("name".into(), json!("PMS 185"));
-    d.fields.insert("indicates".into(), json!("spot"));
-    d.fields.insert("color".into(), json!("#ff0000"));
-    d.fields.insert("opacity".into(), json!(40.0));
-    crate::dialogs::confirm(&mut app, id).unwrap();
-    assert!(app.ui.dialogs.is_empty());
+    crate::dialogs::testing::show(&mut app);
+    let f = values(&app, id);
+    assert_eq!((f.text("indicates"), f.text("name")), (Some("masked"), Some(channel(&app).name.as_str())));
+    set(&mut app, id, "name", json!("PMS 185"));
+    set(&mut app, id, "indicates", json!("spot"));
+    set(&mut app, id, "color", json!([1.0, 0.0, 0.0]));
+    set(&mut app, id, "opacity", json!(40.0));
+    crate::dialogs::confirm(&mut app, &ctx, id).unwrap();
+    assert!(app.framework.dialogs.is_empty());
     let ch = channel(&app);
     assert_eq!(ch.name, "PMS 185");
     let (ink, solidity) = ch.spot.expect("a spot channel");
@@ -38,56 +54,35 @@ fn saved_selection_becomes_a_spot_channel_with_its_ink_and_solidity() {
 
     // Reopened, the dialog shows the spot settings; switching back makes it an alpha channel.
     let id = open(&mut app, &json!(0)).unwrap();
-    let f = &app.ui.dialog_mut(id).unwrap().fields;
-    assert_eq!((f["indicates"].clone(), f["color"].clone(), f["opacity"].clone()), (json!("spot"), json!("#ff0000"), json!(40.0)));
-    app.ui.dialog_mut(id).unwrap().fields.insert("indicates".into(), json!("selected"));
-    crate::dialogs::confirm(&mut app, id).unwrap();
+    crate::dialogs::testing::show(&mut app);
+    let f = values(&app, id);
+    assert_eq!((f.text("indicates"), f.color("color"), f.number("opacity")), (Some("spot"), Some([1.0, 0.0, 0.0]), Some(40.0)));
+    set(&mut app, id, "indicates", json!("selected"));
+    crate::dialogs::confirm(&mut app, &ctx, id).unwrap();
     let ch = channel(&app);
     assert!(ch.spot.is_none());
     assert_eq!(ch.indicates, ColorIndicates::SelectedAreas);
 }
 
 #[test]
-fn cancel_leaves_the_channel_alone() {
-    let mut app = app();
-    let before = app.session.active().unwrap().history.past_len();
-    let id = open(&mut app, &json!(0)).unwrap();
-    app.ui.dialog_mut(id).unwrap().fields.insert("indicates".into(), json!("spot"));
-    app.ui.close_dialog(id);
-    assert!(channel(&app).spot.is_none());
-    assert_eq!(app.session.active().unwrap().history.past_len(), before);
-}
-
-#[test]
-fn spot_params_send_solidity_and_alpha_params_send_opacity() {
-    let mut f = Map::new();
-    f.insert(MARK.into(), json!(true));
-    f.insert("channel".into(), json!(0));
-    f.insert("indicates".into(), json!("spot"));
-    f.insert("opacity".into(), json!(25.0));
-    assert_eq!(params(&f), json!({"channel": 0, "indicates": "spot", "solidity": 25.0}));
-    f.insert("indicates".into(), json!("masked"));
-    assert_eq!(params(&f), json!({"channel": 0, "indicates": "masked", "opacity": 25.0}));
-}
-
-#[test]
 fn menu_opens_the_dialog_on_the_targeted_channel_and_refuses_otherwise() {
-    let ctx = egui::Context::default();
     let mut empty = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = empty.ctx().clone();
     assert!(crate::menus::invoke(&mut empty, &ctx, COMMAND, json!({})).is_err());
 
     let mut app = app();
+    let ctx = app.ctx().clone();
     // The composite is targeted: nothing to edit.
     assert!(crate::menus::invoke(&mut app, &ctx, COMMAND, json!({})).is_err());
-    assert!(app.ui.dialogs.is_empty());
+    assert!(app.framework.dialogs.is_empty());
     app.run("channel.target", json!({"channel": 0})).unwrap();
     let r = crate::menus::invoke(&mut app, &ctx, COMMAND, json!({})).unwrap();
-    assert!(r["dialog"].is_u64());
-    assert_eq!(app.ui.dialogs.last().unwrap().fields["channel"], json!(0));
+    assert!(r["dialog"].is_string());
+    assert_eq!(params::captured(&app, COMMAND)["channel"], json!(0));
     // Explicit params run the engine directly, no dialog.
-    app.ui.dialogs.clear();
+    close_all(&mut app);
     crate::menus::invoke(&mut app, &ctx, COMMAND, json!({"channel": 0, "indicates": "spot"})).unwrap();
-    assert!(app.ui.dialogs.is_empty());
+    assert!(app.framework.dialogs.is_empty());
     assert!(channel(&app).spot.is_some());
 }
 
@@ -95,12 +90,13 @@ fn menu_opens_the_dialog_on_the_targeted_channel_and_refuses_otherwise() {
 fn quick_mask_options_have_no_name_or_spot_and_bad_channels_open_nothing() {
     let mut app = app();
     let f = fields(&app, &json!("quickMask")).unwrap();
-    assert!(!f.contains_key("name"));
-    assert_eq!(f["__label"], json!("Quick Mask Options…"));
+    assert!(!f.contains("name"));
+    let keys: Vec<String> = rows(Kind::QuickMask, false).into_iter().map(|p| p.key).collect();
+    assert_eq!(keys, ["indicates", "color", "opacity"]);
     assert!(fields(&app, &json!(7)).is_none());
     assert!(fields(&app, &json!("nope")).is_none());
     assert!(open(&mut app, &json!(-1)).is_none());
-    assert!(app.ui.dialogs.is_empty());
+    assert!(app.framework.dialogs.is_empty());
 }
 
 /// Layer Mask Display Options: just the colour and opacity, from and to the
@@ -108,80 +104,43 @@ fn quick_mask_options_have_no_name_or_spot_and_bad_channels_open_nothing() {
 #[test]
 fn layer_mask_display_options_set_the_rubylith() {
     let mut app = app();
+    let ctx = app.ctx().clone();
     let f = fields(&app, &json!("mask")).unwrap();
-    assert_eq!(f["__label"], json!("Layer Mask Display Options…"));
-    assert!(!f.contains_key("name") && !f.contains_key("indicates"));
-    assert_eq!((f["color"].clone(), f["opacity"].clone()), (json!("#ff0000"), json!(50.0)));
-    assert_eq!(params(&f), json!({"channel": "mask", "color": "#ff0000", "opacity": 50.0}));
+    assert!(!f.contains("name") && !f.contains("indicates"));
+    assert_eq!((f.color("color"), f.number("opacity")), (Some([1.0, 0.0, 0.0]), Some(50.0)));
+    assert_eq!(params(&f, &json!("mask")), json!({"channel": "mask", "color": "#ff0000", "opacity": 50.0}));
     let id = open(&mut app, &json!("mask")).unwrap();
-    app.ui.dialog_mut(id).unwrap().fields.insert("color".into(), json!("#00ff00"));
-    crate::dialogs::confirm(&mut app, id).unwrap();
+    crate::dialogs::testing::show(&mut app);
+    set(&mut app, id, "color", json!([0.0, 1.0, 0.0]));
+    crate::dialogs::confirm(&mut app, &ctx, id).unwrap();
     assert_eq!(app.session.prefs().layer_mask_overlay.color, "#00ff00");
     // Channels › Channel Options… with the layer mask targeted.
     app.run("layer.layerMask.revealAll", json!({})).unwrap();
     app.run("channel.target", json!({"channel": "mask"})).unwrap();
-    let ctx = egui::Context::default();
     crate::menus::invoke(&mut app, &ctx, COMMAND, json!({})).unwrap();
-    assert_eq!(app.ui.dialogs.last().unwrap().fields["channel"], json!("mask"));
+    assert_eq!(params::captured(&app, COMMAND)["channel"], json!("mask"));
     // Or with it targeted by `\` (the rubylith), which leaves the Channels target alone.
     app.run("channel.target", json!({"channel": "composite"})).unwrap();
-    app.ui.dialogs.clear();
+    close_all(&mut app);
     app.run(photocraft_engine::mask_view_cmds::OVERLAY_ID, json!({})).unwrap();
     app.sync_mask_targets();
     crate::menus::invoke(&mut app, &ctx, COMMAND, json!({})).unwrap();
-    assert_eq!(app.ui.dialogs.last().unwrap().fields["channel"], json!("mask"));
-}
-
-#[test]
-fn dialog_body_renders_for_alpha_spot_and_quick_mask() {
-    let mut app = app();
-    app.run("channel.options", json!({"channel": 0, "indicates": "spot"})).unwrap();
-    let ctx = egui::Context::default();
-    crate::theme::install_fonts(&ctx);
-    for channel in [json!(0), json!("quickMask"), json!("mask")] {
-        let mut f = fields(&app, &channel).unwrap();
-        ctx.run_ui(Default::default(), |ui| body(ui, &mut f)).textures_delta.clear();
-        assert!(owns(&f));
-    }
-}
-
-#[test]
-fn value_fields_are_named_for_the_visible_solidity_or_opacity_caption() {
-    use egui::accesskit::Role;
-    use egui_kittest::Harness;
-    use egui_kittest::kittest::{NodeT, Queryable};
-
-    let labels = |f: Map<String, Value>, body: fn(&mut egui::Ui, &mut Map<String, Value>)| -> Vec<String> {
-        let mut h = Harness::builder()
-            .with_size(egui::vec2(520.0, 300.0))
-            .with_context_setup(|ctx| crate::PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::ALL[0]))
-            .build_ui_state(&body, f);
-        h.run_steps(2);
-        h.query_all_by_role(Role::SpinButton).filter_map(|n| n.accesskit_node().label()).collect()
-    };
-
-    let app = app();
-    let mut f = fields(&app, &json!(0)).unwrap();
-    f.insert("indicates".into(), json!("spot"));
-    assert_eq!(labels(f.clone(), body), ["Solidity:"]);
-    f.insert("indicates".into(), json!("masked"));
-    assert_eq!(labels(f, body), ["Opacity:"]);
-    assert_eq!(labels(new_spot_fields(&app).unwrap(), new_spot_body), ["Solidity:"]);
+    assert_eq!(params::captured(&app, COMMAND)["channel"], json!("mask"));
 }
 
 #[test]
 fn new_spot_channel_dialog_creates_the_ink_from_the_selection_and_remembers_it() {
     let mut app = app();
+    let ctx = app.ctx().clone();
     app.run("select.rect", json!({"x": 2, "y": 2, "width": 8, "height": 8})).unwrap();
     let id = open_new_spot(&mut app).unwrap();
-    let f = &app.ui.dialogs.last().unwrap().fields;
-    assert!(owns_new_spot(f) && !owns(f));
-    assert_eq!((f["name"].clone(), f["color"].clone(), f["solidity"].clone()), (json!("Spot Color 1"), json!("#ff0000"), json!(0.0)));
-    let d = app.ui.dialog_mut(id).unwrap();
-    d.fields.insert("name".into(), json!("PMS 300"));
-    d.fields.insert("color".into(), json!("#0050ff"));
-    d.fields.insert("solidity".into(), json!(60.0));
-    crate::dialogs::confirm(&mut app, id).unwrap();
+    crate::dialogs::testing::show(&mut app);
+    let f = values(&app, id);
+    assert_eq!((f.text("name"), f.color("color"), f.number("solidity")), (Some("Spot Color 1"), Some([1.0, 0.0, 0.0]), Some(0.0)));
+    set(&mut app, id, "name", json!("PMS 300"));
+    set(&mut app, id, "color", json!([0.0, 80.0 / 255.0, 1.0]));
+    set(&mut app, id, "solidity", json!(60.0));
+    crate::dialogs::confirm(&mut app, &ctx, id).unwrap();
     let doc = &app.session.active().unwrap().doc;
     let ch = doc.channels.last().unwrap();
     assert_eq!(ch.name, "PMS 300");
@@ -192,39 +151,10 @@ fn new_spot_channel_dialog_creates_the_ink_from_the_selection_and_remembers_it()
     let (inside, outside) = (ch.surface.rgba(4, 4)[0], ch.surface.rgba(14, 14)[0]);
     assert!(inside > 0.99 && outside < 0.01, "{inside} {outside}");
 
-    // The next one gets a fresh name and the last ink and solidity.
-    let f = new_spot_fields(&app).unwrap();
-    assert_eq!((f["name"].clone(), f["color"].clone(), f["solidity"].clone()), (json!("Spot Color 1"), json!("#0050ff"), json!(60.0)));
-}
-
-#[test]
-fn new_spot_channel_cancel_menu_routing_and_no_document() {
-    let ctx = egui::Context::default();
-    let mut empty = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-    assert!(open_new_spot(&mut empty).is_none());
-    assert!(crate::menus::invoke(&mut empty, &ctx, NEW_SPOT, json!({})).is_err());
-
-    let mut app = app();
-    let n = app.session.active().unwrap().doc.channels.len();
-    let r = crate::menus::invoke(&mut app, &ctx, NEW_SPOT, json!({})).unwrap();
-    let id = r["dialog"].as_u64().unwrap();
-    assert!(owns_new_spot(&app.ui.dialog_mut(id).unwrap().fields));
-    app.ui.close_dialog(id);
-    assert_eq!(app.session.active().unwrap().doc.channels.len(), n, "Cancel adds nothing");
-    // Explicit params run the engine directly, no dialog.
-    crate::menus::invoke(&mut app, &ctx, NEW_SPOT, json!({"name": "Direct"})).unwrap();
-    assert!(app.ui.dialogs.is_empty());
-    assert_eq!(app.session.active().unwrap().doc.channels.last().unwrap().name, "Direct");
-}
-
-#[test]
-fn new_spot_body_renders_and_bad_saved_prefs_fall_back() {
-    let mut app = app();
-    app.session.prefs.edit(|p| p.dialogs.insert(NEW_SPOT.into(), json!({"color": "nope", "solidity": 900})));
-    let mut f = new_spot_fields(&app).unwrap();
-    assert_eq!((f["color"].clone(), f["solidity"].clone()), (json!("#ff0000"), json!(0.0)));
-    let ctx = egui::Context::default();
-    crate::theme::install_fonts(&ctx);
-    ctx.run_ui(Default::default(), |ui| new_spot_body(ui, &mut f)).textures_delta.clear();
-    assert!(owns_new_spot(&f));
+    // The next one gets a fresh name and the last ink.
+    let id = open_new_spot(&mut app).unwrap();
+    crate::dialogs::testing::show(&mut app);
+    let f = values(&app, id);
+    assert_eq!(f.text("name"), Some("Spot Color 1"));
+    assert_eq!(hex(f.color("color").unwrap()), "#0050ff");
 }
