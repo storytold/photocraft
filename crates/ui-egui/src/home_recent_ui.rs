@@ -489,7 +489,7 @@ mod tests {
 
     /// An app with a 64 x 64 document open at `path`, at document revision 0.
     #[cfg(not(target_arch = "wasm32"))]
-    fn app_with_open_document(path: &str) -> PhotocraftApp {
+    fn app_with_open_document(path: &str) -> Box<PhotocraftApp> {
         use photocraft_doc::{ColorMode, Document, SampleType, Size};
 
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
