@@ -151,6 +151,20 @@ fn a_disabled_layer_mask_keeps_todays_result() {
 }
 
 #[test]
+fn a_feathered_layer_mask_keeps_todays_result() {
+    // Not measured: a feathered mask's edge is partly visible where its raw value is 0, so the
+    // mask is not read, as today (CodeRabbit on #15572).
+    let mut s = session();
+    s.edit("feather mask", |doc, active| {
+        let id = active.unwrap();
+        doc.layer_mut(id).unwrap().mask.as_mut().unwrap().feather = 10.0;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(calculate(&mut s, json!({"layer": "Masked", "channel": "red"}), json!({})), [255, 255, 255, 255]);
+}
+
+#[test]
 fn a_layer_as_source_2_keeps_todays_result() {
     // Not measured: Source 2's transparent pixels still read as black.
     let mut s = session();
