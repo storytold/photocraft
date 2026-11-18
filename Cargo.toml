@@ -73,7 +73,7 @@ craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.
 # WebAssembly plug-ins shared by the Craft apps (RFC-0046): sandbox, manifest, permissions, bundles,
 # the per-user plug-in store, catalogs and GitHub installs. Pinned to the fork commit of the
 # upstream pull request until it merges (re-pin to storytold/craft-libs then).
-craft-plugin = { git = "https://github.com/Dasemu/craft-libs", rev = "77f66b33f7366abb9927113f1f5e427e2593ef84" }
+craft-plugin = { git = "https://github.com/Dasemu/craft-libs", rev = "b9821a27936e4f8a5ef3ad30a9559ecb897c5cc4" }
 thiserror = "2"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"

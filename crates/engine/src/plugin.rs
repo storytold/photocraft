@@ -20,7 +20,7 @@ use std::sync::{Arc, OnceLock};
 
 pub use craft_plugin;
 use craft_plugin::fetch::{self, Fetch};
-use craft_plugin::{API_VERSION, Access, AppInfo, Instance, KIND_COMMAND, Limits, Manifest, Policy, RunOutput, UiChange, bundle, catalog, github};
+use craft_plugin::{API_VERSION, Access, AppInfo, Instance, KIND_COMMAND, KindApi, Limits, Manifest, Policy, RunOutput, UiChange, bundle, catalog, github};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -29,11 +29,20 @@ use crate::{EngineError, Result, Session};
 /// PhotoCraft's own plug-in kind: a pixel filter (`photocraft-plugins`, ABI 1).
 pub const KIND_FILTER: &str = "filter";
 
+/// The filter ABI PhotoCraft runs ([`photocraft_plugins::ABI_VERSION`]).
+pub const FILTER_ABI: u32 = photocraft_plugins::ABI_VERSION.unsigned_abs();
+
 /// PhotoCraft as manifests name it: command plug-ins of every shared ABI version, and filters,
 /// only from manifests that name `photocraft` in `apps`. A filter's `apps.photocraft.api` is the
-/// filter ABI ([`photocraft_plugins::ABI_VERSION`], checked by [`target`]).
-pub const APP: AppInfo<'static> =
-    AppInfo { id: "photocraft", version: env!("CARGO_PKG_VERSION"), api: 1..=API_VERSION, kinds: &[KIND_COMMAND, KIND_FILTER], accept_legacy: false };
+/// filter ABI ([`FILTER_ABI`], its `kind_api`).
+pub const APP: AppInfo<'static> = AppInfo {
+    id: "photocraft",
+    version: env!("CARGO_PKG_VERSION"),
+    api: 1..=API_VERSION,
+    kinds: &[KIND_COMMAND, KIND_FILTER],
+    accept_legacy: false,
+    kind_api: &[KindApi { kind: KIND_FILTER, api: FILTER_ABI..=FILTER_ABI }],
+};
 
 /// What one plug-in may keep in its settings (keys and JSON values, in bytes), and its longest key.
 pub const MAX_SETTINGS_BYTES: usize = 64 * 1024;
@@ -204,14 +213,16 @@ fn looks_like_a_file(v: &str) -> bool {
     v.contains(['/', '\\', ':']) || lower.ends_with(".icc") || lower.ends_with(".icm")
 }
 
-/// Whether `app` can run plug-in `m`, and with which API: [`Manifest::target`], and for a filter
-/// the filter ABI PhotoCraft runs.
+/// Whether PhotoCraft can run plug-in `m`, and with which API: [`Manifest::target`] (for a filter,
+/// the filter ABI [`APP`] declares). A filter for another filter ABI is refused in PhotoCraft's
+/// own words.
 pub fn target(m: &Manifest) -> std::result::Result<u32, String> {
-    let api = m.target(&APP)?.api();
-    if m.kind == KIND_FILTER && i64::from(api) != i64::from(photocraft_plugins::ABI_VERSION) {
-        return Err(format!("it is a filter for plug-in ABI {api}, and PhotoCraft runs filter ABI {}", photocraft_plugins::ABI_VERSION));
-    }
-    Ok(api)
+    m.target(&APP).map(|t| t.api()).map_err(|why| match m.apps.get(APP.id) {
+        Some(t) if m.kind == KIND_FILTER && !APP.api_for(KIND_FILTER).contains(&t.api) => {
+            format!("it is a filter for plug-in ABI {}, and PhotoCraft runs filter ABI {FILTER_ABI}", t.api)
+        }
+        _ => why,
+    })
 }
 
 /// Checks a bundle's module before it is kept or installed (compiled, never run): a command
@@ -716,7 +727,7 @@ pub(crate) fn install(s: &mut Session, cmd: &str, c: Candidate) -> Result<Plugin
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(store) = s.plugins.store.as_ref().filter(|_| !untrusted(s)) {
         let source: craft_plugin::store::Source = serde_json::from_value(c.source.clone()).map_err(|e| bad(cmd, e.to_string()))?;
-        let i = store.install_with(&c.bytes, source, &check_module).map_err(|e| bad(cmd, e))?;
+        let (i, _) = store.install_with_for(&APP, &c.bytes, source, &check_module).map_err(|e| bad(cmd, e))?;
         let plugin = Plugin { manifest: i.manifest, sha256: i.record.sha256, source: c.source, stored: true, wasm: Arc::new(i.bundle.wasm) };
         return keep(s, plugin).map_err(|e| bad(cmd, e));
     }
