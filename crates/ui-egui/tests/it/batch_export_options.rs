@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-type Harness = egui_kittest::Harness<'static, PhotocraftApp>;
+type Harness = egui_kittest::Harness<'static, Box<PhotocraftApp>>;
 
 /// The open form's values as `ui.inspect` lists the top dialog's fields.
 fn form_fields(h: &mut Harness) -> Value {
@@ -20,13 +20,10 @@ fn form_fields(h: &mut Harness) -> Value {
 }
 
 fn harness() -> Harness {
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1100.0, 760.0)).with_max_steps(64).wgpu().build_eframe(|cc| {
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1100.0, 760.0)).with_max_steps(64).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), Default::default());
         app.session.prefs.edit(|p| p.interface.language = "en".into());
-        if let Some(rs) = cc.wgpu_render_state.as_ref() {
-            app.set_wgpu(rs.clone());
-        }
         app.run("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
         app.run("actions.record", json!({"name": "Invert"})).unwrap();
         app.run("image.adjustments.invert", json!({})).unwrap();
@@ -81,7 +78,6 @@ fn edit_path(h: &mut Harness, name: &str, value: &Path) {
 
 #[test]
 fn batch_menu_offers_webp() {
-    let _gpu = photocraft_testkit::gpu_lock();
     let mut h = harness();
     open(&mut h, "file.automate.batch");
     open_format_choices(&mut h);
@@ -91,7 +87,6 @@ fn batch_menu_offers_webp() {
 
 #[test]
 fn batch_menu_offers_quality() {
-    let _gpu = photocraft_testkit::gpu_lock();
     let mut h = harness();
     open(&mut h, "file.automate.batch");
     evidence(&mut h, "batch-quality");
@@ -100,7 +95,6 @@ fn batch_menu_offers_quality() {
 
 #[test]
 fn image_processor_menu_offers_independent_file_types() {
-    let _gpu = photocraft_testkit::gpu_lock();
     let mut h = harness();
     open(&mut h, "file.scripts.imageProcessor");
     for label in ["Save as JPEG", "Save as PSD", "Save as TIFF"] {
@@ -182,7 +176,6 @@ fn existing_engine_batch_and_image_processor_support_webp_quality() {
 
 #[test]
 fn batch_naming_controls_export_the_requested_names_and_reset_on_cancel() {
-    let _gpu = photocraft_testkit::gpu_lock();
     let dir = Scratch::new();
     let input = dir.0.join("input");
     let output = dir.0.join("output");
@@ -232,7 +225,6 @@ fn batch_naming_controls_export_the_requested_names_and_reset_on_cancel() {
 
 #[test]
 fn batch_default_quality_keeps_lossless_webp_and_existing_jpeg_bytes() {
-    let _gpu = photocraft_testkit::gpu_lock();
     let dir = Scratch::new();
     let input = dir.0.join("input");
     std::fs::create_dir(&input).unwrap();
