@@ -1,0 +1,227 @@
+//! Runs in a web Worker, for the web build. Each run gets its own Worker, so the page stays
+//! responsive while a script computes.
+//!
+//! - **The Worker** runs the engine ([`serve_worker`]). It sends its requests to the page as
+//!   messages, then waits for the page's answer with `Atomics.wait` on a shared mailbox, so a
+//!   run continues where it left off after a command or a dialog, as on the desktop.
+//! - **The page** reaches the Worker through [`WorkerTransport`], a [`Transport`] for
+//!   [`WebJob`](super::web_job::WebJob). The page checks every request there.
+//!
+//! The mailbox is a `SharedArrayBuffer`, which a browser gives only to a cross-origin-isolated
+//! page. Its layout:
+//! - two `Int32` slots, the state ([`EMPTY`] or [`FULL`]) and the answer's length in bytes;
+//! - then the answer's bytes, JSON text of a [`ToHost`].
+
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use js_sys::{Atomics, Int32Array, Object, Reflect, SharedArrayBuffer, Uint8Array};
+use wasm_bindgen::JsCast;
+use wasm_bindgen::prelude::*;
+use web_sys::{DedicatedWorkerGlobalScope, ErrorEvent, MessageEvent, Worker};
+
+use super::HostAllocator;
+use super::link::{self, Link};
+use super::protocol::{FromHost, MAX_FROM_HOST, ToHost, parse_body};
+use super::web_job::{Incoming, Transport};
+
+/// Bytes before the answer: the state and the length.
+const HEADER: u32 = 8;
+/// Largest answer the mailbox holds: a command's result or a dialog's answer. Larger answers
+/// end the run by name.
+pub const MAILBOX_BYTES: u32 = 32 << 20;
+/// The mailbox holds no answer: the Worker waits, or computes.
+const EMPTY: i32 = 0;
+/// The page left an answer for the Worker.
+const FULL: i32 = 1;
+/// What the Worker sends once it is listening, before the run starts. Messages that arrive
+/// before then would be lost.
+const READY: &str = "ready";
+
+/// Why scripts can't run in this page.
+pub const NOT_ISOLATED: &str = "Scripts need a page served with cross-origin isolation (the COOP and COEP headers); \
+     this one is not, so its browser offers no shared memory for the script Worker.";
+
+/// Whether this page (or Worker) may use shared memory.
+#[must_use]
+pub fn cross_origin_isolated() -> bool {
+    Reflect::get(&js_sys::global(), &JsValue::from_str("crossOriginIsolated")).ok().and_then(|v| v.as_bool()).unwrap_or(false)
+}
+
+// ---------- the Worker's side ----------
+
+/// The Worker's channel to the page: messages out, the mailbox in.
+struct WorkerLink {
+    scope: DedicatedWorkerGlobalScope,
+    state: Int32Array,
+    body: Uint8Array,
+}
+
+fn post(scope: &DedicatedWorkerGlobalScope, msg: &FromHost) -> Result<(), String> {
+    let text = serde_json::to_string(msg).map_err(|e| e.to_string())?;
+    if text.len() > MAX_FROM_HOST {
+        return Err(format!("larger than {} MiB", MAX_FROM_HOST >> 20));
+    }
+    scope.post_message(&JsValue::from_str(&text)).map_err(|_| "the page is gone".to_owned())
+}
+
+impl Link for WorkerLink {
+    fn send(&mut self, msg: &FromHost) -> Result<(), String> {
+        post(&self.scope, msg)
+    }
+
+    fn recv(&mut self) -> Result<ToHost, String> {
+        // Sleep until the page fills the mailbox; a wake-up with the mailbox still empty
+        // sleeps again.
+        while Atomics::load(&self.state, 0).map_err(|_| "the mailbox can't be read".to_owned())? != FULL {
+            Atomics::wait(&self.state, 0, EMPTY).map_err(|_| "this browser can't wait for the page's answer".to_owned())?;
+        }
+        let len = Atomics::load(&self.state, 1).map_err(|_| "the mailbox can't be read".to_owned())?;
+        let len = u32::try_from(len).ok().filter(|n| *n <= self.body.length()).ok_or("the page left a malformed answer")?;
+        let bytes = self.body.subarray(0, len).to_vec();
+        Atomics::store(&self.state, 0, EMPTY).map_err(|_| "the mailbox can't be written".to_owned())?;
+        parse_body(&bytes, usize::try_from(MAILBOX_BYTES).unwrap_or(usize::MAX)).map_err(|e| e.to_string())
+    }
+}
+
+/// The script Worker's entry point. Call it from the Worker executable's `main`, with the
+/// allocator that executable installs. It waits for the page's start message, then runs that
+/// one script.
+pub fn serve_worker(heap: &'static HostAllocator) {
+    let scope: DedicatedWorkerGlobalScope = js_sys::global().unchecked_into();
+    let listener = scope.clone();
+    let on_message = Closure::<dyn FnMut(MessageEvent)>::new(move |event: MessageEvent| {
+        // One run per Worker: later messages are not starts.
+        listener.set_onmessage(None);
+        let result = run(&listener, heap, &event.data());
+        let _ = post(&listener, &FromHost::Finished { error: result.err() });
+    });
+    scope.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
+    // The Worker's lifetime; it ends when the page terminates the Worker.
+    on_message.forget();
+    let _ = scope.post_message(&JsValue::from_str(READY));
+}
+
+fn run(scope: &DedicatedWorkerGlobalScope, heap: &'static HostAllocator, data: &JsValue) -> Result<(), String> {
+    let field = |name: &str| Reflect::get(data, &JsValue::from_str(name)).ok();
+    let start = field("start").and_then(|v| v.as_string()).ok_or("internal error: the page sent no start message")?;
+    let mailbox: SharedArrayBuffer = field("mailbox").and_then(|v| v.dyn_into().ok()).ok_or("internal error: the page sent no mailbox")?;
+    let Ok(ToHost::Start { source, app_name, script_name, memory_limit }) = serde_json::from_str(&start) else {
+        return Err("internal error: the page sent a malformed start message".into());
+    };
+    super::heap::cap_heap(heap, memory_limit)?;
+    let state = Int32Array::new_with_byte_offset_and_length(&mailbox, 0, 2);
+    let body = Uint8Array::new_with_byte_offset(&mailbox, HEADER);
+    let link = WorkerLink { scope: scope.clone(), state, body };
+    link::run(Rc::new(RefCell::new(link)), &source, app_name, script_name)
+}
+
+// ---------- the page's side ----------
+
+/// One run's Worker, as [`WebJob`](super::web_job::WebJob) drives it from the page.
+pub struct WorkerTransport {
+    worker: Worker,
+    inbox: Rc<RefCell<Vec<Incoming>>>,
+    /// The start message, until the Worker says it listens.
+    pending: Rc<RefCell<Option<Object>>>,
+    mailbox: SharedArrayBuffer,
+    state: Int32Array,
+    body: Uint8Array,
+    _on_message: Closure<dyn FnMut(MessageEvent)>,
+    _on_error: Closure<dyn FnMut(ErrorEvent)>,
+}
+
+impl WorkerTransport {
+    /// Start a Worker from `url`: the Worker executable's loader script.
+    ///
+    /// # Errors
+    /// The page is not cross-origin isolated ([`NOT_ISOLATED`]), or the browser refused the
+    /// Worker.
+    pub fn new(url: &str) -> Result<Self, String> {
+        if !cross_origin_isolated() {
+            return Err(NOT_ISOLATED.into());
+        }
+        let worker = Worker::new(url).map_err(|e| format!("Couldn't start the script Worker: {}", describe(&e)))?;
+        let inbox: Rc<RefCell<Vec<Incoming>>> = Rc::default();
+        let pending: Rc<RefCell<Option<Object>>> = Rc::default();
+        let on_message = {
+            let (inbox, pending, worker) = (inbox.clone(), pending.clone(), worker.clone());
+            Closure::<dyn FnMut(MessageEvent)>::new(move |event: MessageEvent| {
+                let incoming = match event.data().as_string() {
+                    Some(text) if text == READY => {
+                        if let Some(start) = pending.borrow_mut().take()
+                            && let Err(e) = worker.post_message(&start)
+                        {
+                            inbox.borrow_mut().push(Incoming::Error(format!("the run could not be started: {}", describe(&e))));
+                        }
+                        return;
+                    }
+                    Some(text) => Incoming::Message(text, web_time::Instant::now()),
+                    None => Incoming::Error("the script Worker sent something that is not text".into()),
+                };
+                inbox.borrow_mut().push(incoming);
+            })
+        };
+        let on_error = {
+            let inbox = inbox.clone();
+            Closure::<dyn FnMut(ErrorEvent)>::new(move |event: ErrorEvent| {
+                // Reported to the user with the run; not again in the console as uncaught.
+                event.prevent_default();
+                inbox.borrow_mut().push(Incoming::Error(event.message()));
+            })
+        };
+        worker.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
+        worker.set_onerror(Some(on_error.as_ref().unchecked_ref()));
+        let mailbox = SharedArrayBuffer::new(HEADER + MAILBOX_BYTES);
+        let state = Int32Array::new_with_byte_offset_and_length(&mailbox, 0, 2);
+        let body = Uint8Array::new_with_byte_offset(&mailbox, HEADER);
+        Ok(Self { worker, inbox, pending, mailbox, state, body, _on_message: on_message, _on_error: on_error })
+    }
+}
+
+fn describe(e: &JsValue) -> String {
+    e.as_string()
+        .or_else(|| Reflect::get(e, &JsValue::from_str("message")).ok().and_then(|m| m.as_string()))
+        .unwrap_or_else(|| "the browser gave no reason".into())
+}
+
+impl Transport for WorkerTransport {
+    fn start(&mut self, start: &str) -> Result<(), String> {
+        let msg = Object::new();
+        Reflect::set(&msg, &JsValue::from_str("start"), &JsValue::from_str(start)).map_err(|e| describe(&e))?;
+        Reflect::set(&msg, &JsValue::from_str("mailbox"), &self.mailbox).map_err(|e| describe(&e))?;
+        // Sent when the Worker says it listens (see `READY`).
+        *self.pending.borrow_mut() = Some(msg);
+        Ok(())
+    }
+
+    fn take(&mut self) -> Vec<Incoming> {
+        std::mem::take(&mut *self.inbox.borrow_mut())
+    }
+
+    fn answer(&mut self, answer: &str) -> Result<(), String> {
+        let len = u32::try_from(answer.len()).ok().filter(|n| *n <= MAILBOX_BYTES).ok_or_else(|| format!("larger than {} MiB", MAILBOX_BYTES >> 20))?;
+        if Atomics::load(&self.state, 0).map_err(|e| describe(&e))? != EMPTY {
+            return Err("internal error: the Worker has not taken the last answer".into());
+        }
+        self.body.subarray(0, len).copy_from(answer.as_bytes());
+        let len = i32::try_from(len).map_err(|_| "too large")?;
+        Atomics::store(&self.state, 1, len).map_err(|e| describe(&e))?;
+        Atomics::store(&self.state, 0, FULL).map_err(|e| describe(&e))?;
+        Atomics::notify(&self.state, 0).map_err(|e| describe(&e))?;
+        Ok(())
+    }
+
+    fn terminate(&mut self) {
+        self.worker.set_onmessage(None);
+        self.worker.set_onerror(None);
+        self.worker.terminate();
+        self.pending.borrow_mut().take();
+    }
+}
+
+impl Drop for WorkerTransport {
+    fn drop(&mut self) {
+        self.terminate();
+    }
+}

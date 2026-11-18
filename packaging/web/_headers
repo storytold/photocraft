@@ -1,6 +1,9 @@
 # Netlify / Cloudflare Pages header rules (see HOSTING.md). Other hosts: set the same headers.
 /*
   X-Content-Type-Options: nosniff
+  # Cross-origin isolation: the page and the script Worker share memory (HOSTING.md › Scripts).
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
 
 /*.wasm
   Content-Type: application/wasm
@@ -22,5 +25,10 @@
   Cache-Control: no-cache
 
 /app/parts.txt
+  ! Cache-Control
+  Cache-Control: no-cache
+
+# The script Worker's loader keeps its name; the Worker's files it loads carry a content hash.
+/photocraft-script-worker_loader.js
   ! Cache-Control
   Cache-Control: no-cache

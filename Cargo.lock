@@ -6910,11 +6910,14 @@ dependencies = [
  "boa_engine",
  "boa_gc",
  "cap",
+ "js-sys",
  "photocraft-engine",
  "rustix 1.1.5",
  "serde",
  "serde_json",
  "sysinfo",
+ "wasm-bindgen",
+ "web-sys",
  "web-time",
  "win32job",
 ]
@@ -7031,12 +7034,14 @@ dependencies = [
  "photocraft-io",
  "photocraft-paint",
  "photocraft-raster",
+ "photocraft-script-js",
  "photocraft-ui-egui",
  "rfd",
  "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+ "web-time",
 ]
 
 [[package]]

@@ -558,9 +558,9 @@ fn services(inbox: Inbox, place_inbox: PlaceInbox, cursor_pos: photocraft_ui_egu
         export: Some(Box::new(|doc: &Document, path: &str, settings: &photocraft_ui_egui::ExportSettings| {
             photocraft_io::export(doc, path, &settings.io_options()).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string())
         })),
-        // Off until scripts run in a Worker the page can stop: on the page's own thread a
-        // crafted script could freeze or crash the tab.
-        scripts: None,
+        // Each run in its own Worker the page checks and can stop (`scripts`); without
+        // cross-origin isolation a run refuses to start and says why.
+        scripts: Some(crate::scripts::service()),
         file_dialog: Some(Box::new(|request, _parent, reply| match request {
             // The browser's file picker hands over the files' contents, not paths. File › Open
             // asks for several files (`multiple`), each opened in its own tab.

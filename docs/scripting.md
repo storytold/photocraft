@@ -13,7 +13,7 @@ test. Update it when a platform gains a test run or a feature.
 | Windows | As on Linux | Time; memory by the heap cap and resident-size polling (a job-object memory limit would need unsafe code); a job object ends the host with the app |
 | FreeBSD, OpenBSD | As on Linux | Time; memory by the heap cap and resident-size polling; process group stopped with the run |
 | 32-bit systems | As above, with a 64 MiB script stack and a 1 GiB default limit, to fit 2 GiB of address space | As above |
-| Web (wasm) | Not at all: scripts are off until they can run in a Worker the page can stop | — |
+| Web (wasm) | In a Worker of its own (`photocraft-script-worker`), started per run; the page checks every request the Worker makes as the desktop app checks a script host's (`isolate/web_job.rs`). Needs a cross-origin-isolated page (`packaging/web/README.md`); otherwise scripts stay off and say why | Time (the page counts it and terminates the Worker); memory (the Worker's heap cap, 1 GiB) |
 
 **The memory limit.** The host's heap is capped on every platform: the executable installs a
 counting allocator, and once a run starts, an allocation that would take the heap past the run's
@@ -31,6 +31,15 @@ window updates together are capped in number per run; output lines at 32 MiB, wi
 256 MiB. Waiting for a busy interface to take the run's output does not count against its time,
 up to 30 seconds at a time.
 
+**In the browser.** Each run gets its own Worker. The Worker posts its requests to the page and
+waits for each answer in shared memory (`Atomics.wait`), so a run continues where it was after a
+command or a dialog, as on the desktop. The page checks every message as it arrives: the command
+and its parameters, dialogs, windows, the per-run bounds, and a Worker that sends while it should
+wait. The page counts the run's time from the messages' arrival, with the clock stopped while
+the Worker waits, so a hidden tab drawing no frames does not eat a run's time, and terminates the
+Worker at the limit. A crash in the Worker (a failed allocation, a stack overflow, an engine
+panic) ends that run only.
+
 On every platform a script reaches only the commands in `script-js/src/commands.rs`, each
 parameter checked, writes only to files and folders the user chose in that run
 (`script-js/src/grants.rs`), and its commands go through the app's own command path with a
@@ -45,7 +54,7 @@ per-run budget (`ui-egui/src/scripts.rs`).
 | macOS | Not run on pull requests | Not run | Not run | Not yet |
 | Windows ARM64 and x86 | Compile-checked only | Not run | Not run | Not yet |
 | FreeBSD | Not run on pull requests | Not run | Not run | Not yet |
-| Web (wasm) | `script-js` is compile-checked for wasm32 by the web build job; the web app no longer links it | — | — | — |
+| Web (wasm) | The page's side (`isolate/web_job.rs`) on every platform, with a fake Worker; the Worker itself is compile-checked for wasm32 by the web build job | — | The web app's script service with a fake Worker (`photocraft-web/src/scripts.rs`) | Not yet |
 
 The tests run scripts against a real session (`tests/dom.rs`, `tests/run.rs`), against hostile
 script hosts that forge or flood messages (`tests/isolate.rs`), and through the app with a fake
@@ -82,6 +91,8 @@ request. A script that breaks the engine still only breaks its own host process.
 
 - Run the tests on macOS and FreeBSD, and by hand on every platform.
 - Run real-world community scripts end to end and keep them as fixtures.
-- A web Worker that holds the engine and that the page can stop, then scripts on the web.
+- Try scripts by hand in a browser. In the browser a run's commands go about one per frame, since
+  the page reads the Worker's messages between frames; a shared-memory channel both ways would
+  let a frame take several.
 - A CI run that starts the script host on 32-bit Windows, and the `script-js/fuzz` target in the
   fuzz job's list (both are CI changes, for `craft-common-actions`).

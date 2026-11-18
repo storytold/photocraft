@@ -41,19 +41,18 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-// The web build's script Worker serves runs through these too; until it does they are unused there.
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 mod heap;
 #[cfg(not(target_arch = "wasm32"))]
 mod host;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod limits;
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 mod link;
 pub mod protocol;
 #[cfg(not(target_arch = "wasm32"))]
 mod supervisor;
 pub mod web_job;
+#[cfg(target_arch = "wasm32")]
+pub mod worker;
 
 pub use heap::{HostAllocator, host_allocator};
 #[cfg(not(target_arch = "wasm32"))]
@@ -63,6 +62,9 @@ pub use supervisor::{
     COMMAND_REPLY_LIMIT, Crash, CrashCause, DEFAULT_MEMORY_LIMIT, DIALOG_REPLY_LIMIT, Event, Failure, FailureKind, HelperCommand, IsolateOptions, IsolatedJob,
     MIN_MEMORY_LIMIT, QUEUE_GRACE, Reply,
 };
+
+#[cfg(target_arch = "wasm32")]
+pub use worker::{WorkerTransport, cross_origin_isolated, serve_worker};
 
 /// The message a cancelled run ends with.
 pub const CANCELLED: &str = "The script was cancelled.";

@@ -81,11 +81,7 @@ pub trait ScriptRun {
 }
 
 /// Why a run can't start without a script service.
-pub(crate) const NO_SCRIPTS: &str = if cfg!(target_arch = "wasm32") {
-    "Scripts aren't available in the browser yet: they will run once PhotoCraft can run them in a separate worker"
-} else {
-    "this build of PhotoCraft can't run JavaScript scripts"
-};
+pub(crate) const NO_SCRIPTS: &str = "this build of PhotoCraft can't run JavaScript scripts";
 
 /// Where a run's commands go: the app's own command path ([`PhotocraftApp::run`]), with its
 /// authorization and handling, never a bare session.
