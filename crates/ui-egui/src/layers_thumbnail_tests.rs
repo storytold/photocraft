@@ -10,7 +10,7 @@ use serde_json::json;
 use crate::PhotocraftApp;
 use crate::layers_panel_nodes::{click, layer_id, thumb};
 
-type H = Harness<'static, PhotocraftApp>;
+type H = Harness<'static, Box<PhotocraftApp>>;
 
 fn harness(s: Session) -> H {
     let mut h = Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).with_max_steps(64).build_eframe(|cc| {

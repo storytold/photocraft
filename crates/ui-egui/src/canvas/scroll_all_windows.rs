@@ -131,7 +131,7 @@ mod tests {
     }
 
     /// The app with the views at known centers and the windows of `layout`.
-    fn app_with(layout: Layout) -> PhotocraftApp {
+    fn app_with(layout: Layout) -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         for (w, h) in [(400, 300), (800, 600), (200, 100)] {
             app.run("file.new", json!({"width": w, "height": h})).unwrap();

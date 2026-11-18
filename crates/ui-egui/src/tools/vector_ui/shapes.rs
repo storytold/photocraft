@@ -468,7 +468,7 @@ mod triangle_history_ui_tests {
     use super::*;
     use crate::canvas::testing;
 
-    fn app() -> PhotocraftApp {
+    fn app() -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
         app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
         app.ui.tool = Tool::Triangle;
