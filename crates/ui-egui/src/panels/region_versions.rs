@@ -39,6 +39,16 @@ pub(crate) fn panel(app: &PhotocraftApp, id: &str) -> u64 {
     }
 }
 
+/// The version of the Toolbar's rail: the toolbar slots (the preferences revision), the remembered group tools, the
+/// Edit Toolbar drawer, the side its flyouts open on, Quick Mask and the screen mode. The active tool and the colours
+/// are in every version.
+pub(crate) fn toolbar(app: &PhotocraftApp) -> u64 {
+    let quick_mask = app.session.active().is_some_and(|st| st.doc.quick_mask.is_some());
+    let opens_start = crate::panel_docking::toolbar_opens(app) == craft::behavior::overlay::Side::Start;
+    let screen_mode = format!("{:?}", app.ui.view.screen_mode);
+    version(app, (app.session.prefs.rev(), &app.ui.group_tools, app.ui.toolbar_drawer, opens_start, quick_mask, screen_mode))
+}
+
 /// What every region may show, joined with `extra`: the commands run (any of them may change anything), the active
 /// document, its revision and its active layers, the tool, the colours and the brush.
 fn version(app: &PhotocraftApp, extra: impl Hash) -> u64 {

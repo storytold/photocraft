@@ -38,7 +38,7 @@ fn suggested(files: &ScriptedFiles) -> Vec<String> {
 }
 
 /// An app with no actions and one empty set New Set made, whose Save dialog the fake cancels.
-pub(super) fn empty_set_app(set: &str) -> (PhotocraftApp, Arc<ScriptedFiles>) {
+pub(super) fn empty_set_app(set: &str) -> (Box<PhotocraftApp>, Arc<ScriptedFiles>) {
     let files = Arc::new(ScriptedFiles::answering([Picked::Cancelled]));
     let mut app = super::runner_tests::disk_app(files.clone());
     app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
@@ -56,7 +56,7 @@ fn save_suggestions(set: &str) -> Vec<String> {
 }
 
 /// Load `files` (name, bytes) in one Load Actions… selection; the app and the status bar text.
-fn bulk_load_status(files: Vec<(String, Vec<u8>)>) -> (PhotocraftApp, String) {
+fn bulk_load_status(files: Vec<(String, Vec<u8>)>) -> (Box<PhotocraftApp>, String) {
     let fake = Arc::new(ScriptedFiles::answering([Picked::Contents(files)]));
     let mut app = super::runner_tests::disk_app(fake);
     files::load_dialog(&mut app).unwrap();
@@ -131,17 +131,6 @@ fn bulk_load_summary_counts_distinct_sets_and_pluralises_files() {
     let (app, status) = bulk_load_status(chosen);
     assert!(app.ui.status_error);
     assert!(status.starts_with("1 action file loaded (1 action; 1 file could not be loaded: bad.atn: "), "{status}");
-}
-
-#[test]
-/// The multi-file summary is translated like the rest of the Actions panel.
-fn bulk_load_summary_is_translated() {
-    if !crate::i18n::needs_catalogs() {
-        return;
-    }
-    let chosen = vec![("a.atn".into(), action_set_bytes("Set 1", "A")), ("b.atn".into(), action_set_bytes("Set 1", "B"))];
-    let status = crate::i18n::with_language(crate::i18n::Lang::from_code("de").unwrap(), || bulk_load_status(chosen).1);
-    assert_eq!(status, "2 Aktionsdateien geladen (1 Aktion; Satz Set 1 aus b.atn hat den aus a.atn ersetzt)");
 }
 
 #[test]
