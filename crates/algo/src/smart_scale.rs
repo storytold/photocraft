@@ -430,18 +430,21 @@ fn blend_rows(img: &Image, t: &Taps, x: usize, depth: Depth, out: &mut [f32]) {
     }
 }
 
+/// The source samples `[a, b)` output sample `o` of `len` averages over `have` (at least one). The products are
+/// taken in 64 bits: on 32-bit targets `(o + 1) * have` overflows `usize` for long axes (100,000 samples to 80,000).
+fn span(o: usize, have: usize, len: usize) -> (usize, usize) {
+    let (o, have64, len) = (o as u64, have as u64, (len as u64).max(1));
+    let a = o * have64 / len;
+    let b = ((o + 1) * have64 / len).max(a + 1).min(have64);
+    (usize::try_from(a).unwrap_or(have), usize::try_from(b).unwrap_or(have))
+}
+
 /// An axis averaged down to `len` samples: each the rounded mean of the samples it covers
 /// (rule 4 of the module).
 fn average(img: &Image, len: usize, depth: Depth, vertical: bool) -> Image {
     let have = if vertical { img.h } else { img.w };
     let n = img.n;
-    let spans: Vec<(usize, usize)> = (0..len)
-        .map(|o| {
-            let a = o * have / len;
-            let b = ((o + 1) * have / len).max(a + 1).min(have);
-            (a, b)
-        })
-        .collect();
+    let spans: Vec<(usize, usize)> = (0..len).map(|o| span(o, have, len)).collect();
     let (ow, oh) = if vertical { (img.w, len) } else { (len, img.h) };
     let mut px = vec![0.0f32; ow * oh * n];
     crate::par::chunks_mut(&mut px, ow * n, true, |y, row| {
@@ -706,6 +709,16 @@ fn strip(visible: &[bool], w: usize, h: usize, x0: usize, x1: usize, halo: impl 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_axes_average_over_the_right_spans_without_overflow() {
+        // 100,000 samples to 80,000: (o + 1) * have passes 2^32 from o = 42,949 on, which a 32-bit usize can't hold.
+        let (have, len) = (100_000usize, 80_000usize);
+        for o in [0, 1, 42_948, 42_949, 42_950, 79_999] {
+            let want = ((o as u128 * have as u128 / len as u128) as usize, ((o as u128 + 1) * have as u128 / len as u128) as usize);
+            assert_eq!(span(o, have, len), (want.0, want.1.max(want.0 + 1).min(have)), "{o}");
+        }
+    }
 
     /// A straight RGBA 8-bit image from levels.
     fn image(w: usize, h: usize, px: &[[f32; 4]]) -> Image {
