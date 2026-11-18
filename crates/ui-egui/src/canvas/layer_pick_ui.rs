@@ -64,7 +64,7 @@ mod tests {
 
     /// 200 × 200: a white Background, "Red" (a square in the middle), and "Hidden" (all over,
     /// hidden). Returns the app and the (background, red, hidden) ids.
-    fn app() -> (PhotocraftApp, u64, u64, u64) {
+    fn app() -> (Box<PhotocraftApp>, u64, u64, u64) {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
         let bg = app.session.active().unwrap().active_layer.unwrap().0;
@@ -124,11 +124,11 @@ mod tests {
         assert!(!a.ui.status.is_empty());
     }
 
-    fn harness(a: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+    fn harness(a: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
         let mut a = a;
         a.sync_views();
         let mut h = Harness::builder().with_context(a.ctx().clone()).with_size(vec2(1000.0, 700.0)).build_ui_state(
-            |ui, app: &mut PhotocraftApp| {
+            |ui, app: &mut Box<PhotocraftApp>| {
                 let ctx = ui.ctx().clone();
                 if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                     return;
@@ -142,7 +142,7 @@ mod tests {
         h
     }
 
-    fn right_click(h: &mut Harness<'static, PhotocraftApp>, p: Pos2, modifiers: Modifiers) {
+    fn right_click(h: &mut Harness<'static, Box<PhotocraftApp>>, p: Pos2, modifiers: Modifiers) {
         h.event(egui::Event::ModifiersChanged(modifiers));
         h.event(egui::Event::PointerMoved(p));
         h.run_steps(1);

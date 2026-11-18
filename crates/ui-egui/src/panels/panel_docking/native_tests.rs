@@ -84,13 +84,13 @@ impl Host {
 }
 
 struct Desktop {
-    h: Harness<'static, PhotocraftApp>,
+    h: Harness<'static, Box<PhotocraftApp>>,
     host: Rc<RefCell<Host>>,
 }
 
 impl Desktop {
     /// The whole app in an eframe harness whose floated panels open OS windows on the stand-in host.
-    fn new(app: PhotocraftApp) -> Self {
+    fn new(app: Box<PhotocraftApp>) -> Self {
         let size = vec2(1400.0, 900.0);
         let host = Rc::new(RefCell::new(Host { size, ..Default::default() }));
         let shared = host.clone();
@@ -179,7 +179,7 @@ impl Desktop {
     }
 }
 
-fn app_with_document() -> PhotocraftApp {
+fn app_with_document() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
     app

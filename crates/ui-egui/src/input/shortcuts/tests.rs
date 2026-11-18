@@ -24,7 +24,7 @@ fn pen_knots(app: &PhotocraftApp) -> usize {
 }
 
 /// A document with the Pen tool selected and its points placed by clicks at `points`.
-fn pen_app(points: &[[f64; 2]]) -> PhotocraftApp {
+fn pen_app(points: &[[f64; 2]]) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
     app.ui.tool = Tool::Pen;

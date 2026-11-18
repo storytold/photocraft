@@ -16,7 +16,7 @@ const PRESSURE: &str = "Always use pressure for size";
 const PRESSURE_TIP: &str = "Always use Pressure for Size. When off, Brush Preset controls pressure";
 const ANGLE_ALERT: &str = "An integer between -180 ° and 180 ° is required. Closest value inserted.";
 
-fn bar(tool: Tool) -> Harness<'static, PhotocraftApp> {
+fn bar(tool: Tool) -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 80, "height": 80})).unwrap();
     app.ui.tool = tool;
@@ -26,11 +26,11 @@ fn bar(tool: Tool) -> Harness<'static, PhotocraftApp> {
     h
 }
 
-fn angle<'a>(h: &'a Harness<'static, PhotocraftApp>) -> egui_kittest::Node<'a> {
+fn angle<'a>(h: &'a Harness<'static, Box<PhotocraftApp>>) -> egui_kittest::Node<'a> {
     h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().description().as_deref() == Some("Set the brush angle")).expect("Healing Angle")
 }
 
-fn type_angle(h: &mut Harness<'static, PhotocraftApp>, text: &str) {
+fn type_angle(h: &mut Harness<'static, Box<PhotocraftApp>>, text: &str) {
     angle(h).click();
     h.run_steps(1);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
@@ -40,7 +40,7 @@ fn type_angle(h: &mut Harness<'static, PhotocraftApp>, text: &str) {
     h.run_steps(2);
 }
 
-fn alerts(h: &Harness<'static, PhotocraftApp>) -> Vec<String> {
+fn alerts(h: &Harness<'static, Box<PhotocraftApp>>) -> Vec<String> {
     h.state().framework.dialogs.open_dialogs().iter().filter_map(|d| d.fields.as_ref()?.get("message")?.as_str().map(str::to_owned)).collect()
 }
 
