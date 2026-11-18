@@ -1,314 +1,17 @@
-//! Native platform services: file dialogs (rfd), filesystem, codecs.
+//! Native platform services: filesystem, codecs, clipboard, crash recovery, the settings store and
+//! the file panels.
 
-use photocraft_codecs::{ChannelLayout, EncodeOptions, Image};
 use photocraft_doc::Document;
 use photocraft_format::RecoveryStore;
-use photocraft_ui_egui::{FileDialogAnswer, FileDialogReply, FileDialogRequest, Recoverable, Services};
+use photocraft_ui_egui::{Recoverable, Services};
 use std::cell::{Cell, RefCell};
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
 
 #[cfg(test)]
 mod recovery_tests;
-
-/// Everything File › Open reads: PhotoCraft, Photoshop, OpenRaster, Krita and Affinity documents, flat images, and
-/// Photoshop brushes (.abr), gradients (.grd), layer styles (.asl), swatches (.aco, .act, .ase) and keyboard shortcut sets
-/// (.kys), which go to the preset libraries and Edit › Keyboard Shortcuts.
-const OPEN_EXTS: &[&str] = &[
-    "pcraft", "pdn", "ora", "xcf", "xcfgz", "gz", "kra", "krz", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "dib", "tga",
-    "ico", "qoi", "exr", "hdr", "pbm", "pgm", "ppm", "pnm", "pam", "pfm", "pcx", "dds", "xpm", "fits", "fit", "fts", "dpx", "cin", "dcm", "dicom", "dc3",
-    "iff", "lbm", "ilbm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "asl", "svg", "svgz",
-    "aco", "act", "ase", "kys", "af", "afdesign", "afphoto", "afpub",
-];
-const SVG_EXTS: &[&str] = &["svg", "svgz"];
-
-/// Open dialog extensions that also match uppercase and mixed-case names (`IMG_0001.JPG`).
-/// On Linux and the BSDs rfd turns each extension into a case-sensitive `*.ext` glob for the XDG
-/// portal or zenity, so every letter becomes a character class, as the portal spec suggests
-/// (`*.[iI][cC][oO]`). Windows and macOS take literal extensions and ignore case already.
-fn open_filter_extensions(extensions: &[&str]) -> Vec<String> {
-    let case_sensitive_globs = cfg!(all(unix, not(target_os = "macos")));
-    let class = |c: char| if c.is_ascii_alphabetic() { format!("[{}{}]", c.to_ascii_lowercase(), c.to_ascii_uppercase()) } else { c.to_string() };
-    extensions.iter().map(|ext| if case_sensitive_globs { ext.chars().map(class).collect() } else { ext.to_string() }).collect()
-}
-
-/// File › Open's file types after All Formats, as Photoshop lists them: one per format, so a folder
-/// of mixed files can be narrowed to one kind (#6337). Together they cover every extension of
-/// [`OPEN_EXTS`]. An explicit SVG filter also keeps vector artwork discoverable when a native
-/// picker defaults to another filter.
-const OPEN_FILTERS: &[(&str, &[&str])] = &[
-    ("PhotoCraft", &["pcraft"]),
-    ("Photoshop", &["psd", "psb", "psdt"]),
-    ("Affinity", &["af", "afdesign", "afphoto", "afpub"]),
-    ("Krita", &["kra", "krz"]),
-    ("GIMP", &["xcf", "xcfgz", "gz"]),
-    ("OpenRaster", &["ora"]),
-    ("Paint.NET", &["pdn"]),
-    ("SVG", SVG_EXTS),
-    ("PNG", &["png"]),
-    ("JPEG", &["jpg", "jpeg"]),
-    ("HEIF", &["heic", "heif", "hif"]),
-    ("TIFF", &["tif", "tiff"]),
-    ("WebP", &["webp"]),
-    ("GIF", &["gif"]),
-    ("BMP", &["bmp", "dib"]),
-    ("Targa", &["tga"]),
-    ("ICO", &["ico"]),
-    ("QOI", &["qoi"]),
-    ("PCX", &["pcx"]),
-    ("DDS", &["dds"]),
-    ("XPM", &["xpm"]),
-    ("Portable Bitmap", &["pbm", "pgm", "ppm", "pnm", "pam", "pfm"]),
-    ("OpenEXR", &["exr"]),
-    ("Radiance HDR", &["hdr"]),
-    ("FITS", &["fits", "fit", "fts"]),
-    ("DPX and Cineon", &["dpx", "cin"]),
-    ("Amiga IFF", &["iff", "lbm", "ilbm"]),
-    ("DICOM", &["dcm", "dicom", "dc3"]),
-    ("RAW images", &["dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf"]),
-    ("Brushes", &["abr"]),
-    ("Gradients", &["grd"]),
-    ("Styles", &["asl"]),
-    ("Swatches", &["aco", "act", "ase"]),
-    ("Keyboard Shortcuts", &["kys"]),
-];
-
-fn open_filters() -> Vec<(&'static str, Vec<String>)> {
-    std::iter::once(("All Formats", open_filter_extensions(OPEN_EXTS)))
-        .chain(OPEN_FILTERS.iter().map(|(name, exts)| (*name, open_filter_extensions(exts))))
-        .collect()
-}
-
-/// File › Save As formats: (filter name, extensions). The filter matching the suggested name's
-/// extension comes first, so a .pcraft document saves as .pcraft by default and everything else
-/// keeps defaulting to PSD.
-const SAVE_FILTERS: &[(&str, &[&str])] = &[
-    ("PSD Document", &["psd", "psb"]),
-    ("PDF", &["pdf"]),
-    ("PhotoCraft", &["pcraft"]),
-    ("OpenRaster", &["ora"]),
-    ("PNG", &["png"]),
-    ("JPEG", &["jpg", "jpeg"]),
-    ("JPEG XL", &["jxl"]),
-    ("WebP", &["webp"]),
-    ("TIFF", &["tif", "tiff"]),
-    ("Targa", &["tga"]),
-    // Also in Photoshop's Save As list; ICO is PhotoCraft's own (#4357): up to 256×256, with alpha.
-    ("BMP", &["bmp", "dib"]),
-    ("GIF", &["gif"]),
-    ("ICO", &["ico"]),
-    ("OpenEXR", &["exr"]),
-    // The encoder picks P5, P6, P7 or PFM from the image, not from the name, so only the neutral
-    // .pnm is offered: a .pbm or .pgm name would hold pixmap data (CodeRabbit on #9775).
-    ("Netpbm", &["pnm"]),
-    ("Radiance HDR", &["hdr"]),
-    ("FITS", &["fits", "fit"]),
-    ("DPX", &["dpx"]),
-    // Game and 3D textures; DDS Options asks for the compression and mipmaps (#1327).
-    ("DDS", &["dds"]),
-    ("Cineon", &["cin"]),
-    ("Amiga IFF", &["iff"]),
-];
-
-/// Non-document files the shell saves (Swatches panel exports): offered alone, so the dialog
-/// never swaps their extension for a document format's.
-const OTHER_SAVE_FILTERS: &[(&str, &[&str])] = &[("Color Swatches", &["aco"]), ("Color Table", &["act"]), ("Swatch Exchange", &["ase"])];
-
-/// `suggested` with a Netpbm subtype's extension (an opened .pgm) as the neutral .pnm, the name
-/// every save dialog starts from: the encoder picks P5, P6, P7 or PFM from the image, so the old
-/// suffix could name other data, and macOS and rfd keep the suggested name as it is.
-fn netpbm_as_pnm(suggested: &str) -> String {
-    let path = Path::new(suggested);
-    let subtype = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).is_some_and(|e| ["pbm", "pgm", "ppm", "pam", "pfm"].contains(&e.as_str()));
-    if subtype { path.with_extension("pnm").to_string_lossy().into_owned() } else { suggested.to_string() }
-}
-
-/// Lists the save dialog's file types with the `suggested` type first (added if unlisted), so the dialog keeps that extension instead of .psd.
-fn save_filters(suggested: &str) -> Vec<(String, Vec<String>)> {
-    let ext = Path::new(suggested).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-    // A Netpbm subtype's name (an opened .pgm) starts on the Netpbm type as .pnm: the encoder picks
-    // the subtype from the image, so the old name could describe other data (CodeRabbit on #9775).
-    let ext = if ["pbm", "pgm", "ppm", "pam", "pfm"].contains(&ext.as_str()) { "pnm".to_string() } else { ext };
-    if let Some((name, exts)) = OTHER_SAVE_FILTERS.iter().find(|(_, exts)| exts.contains(&ext.as_str())) {
-        return vec![(name.to_string(), exts.iter().map(|e| e.to_string()).collect())];
-    }
-    let mut v: Vec<(String, Vec<String>)> = SAVE_FILTERS.iter().map(|(name, exts)| (name.to_string(), exts.iter().map(|e| e.to_string()).collect())).collect();
-    match v.iter().position(|(_, exts)| exts.contains(&ext)) {
-        Some(i) => {
-            let (name, mut exts) = v.remove(i);
-            // Windows adds the first type's first extension to a bare name: `.psb`, not `.psd`.
-            exts.retain(|e| *e != ext);
-            exts.insert(0, ext);
-            v.insert(0, (name, exts));
-        }
-        None if !ext.is_empty() => v.insert(0, (ext.to_ascii_uppercase(), vec![ext])),
-        None => {}
-    }
-    v
-}
-
-/// `path` with the extension of the file type picked in the save dialog (`chosen`), where the
-/// dialog left the name alone (#6121): the format follows the extension, and the GTK file chooser
-/// keeps the typed name when another type is picked. Only a name that still has the extension the
-/// dialog opened with (`opened_with`, `Untitled-1.psd` with PNG picked) or none gets the type's
-/// extension, as PolyMeilex/rfd#341 does. An extension the user typed that PhotoCraft saves
-/// (`art.png` with the PSD type untouched, the way to save a PNG before this) is theirs and stays,
-/// and so does one of the type's own (`.psb` for PSD). One PhotoCraft doesn't save (`scan.2024`)
-/// is part of the name, and the type's extension is added after it.
-#[cfg(any(target_os = "linux", test))]
-pub(crate) fn with_chosen_type(path: &Path, opened_with: Option<&str>, chosen: &[String]) -> PathBuf {
-    let Some(first) = chosen.first() else { return path.to_path_buf() };
-    let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
-    let opened_ext = opened_with.and_then(|n| Path::new(n).extension()).and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
-    match ext {
-        Some(ext) if chosen.contains(&ext) => path.to_path_buf(),
-        Some(ext) if opened_ext.as_ref() == Some(&ext) => path.with_extension(first),
-        Some(ext) if SAVE_FILTERS.iter().chain(OTHER_SAVE_FILTERS).any(|(_, exts)| exts.contains(&ext.as_str())) => path.to_path_buf(),
-        _ => {
-            let mut name = path.as_os_str().to_owned();
-            name.push(".");
-            name.push(first);
-            PathBuf::from(name)
-        }
-    }
-}
-
-/// The name the save dialog starts with. Where the type picked gives a bare name its extension
-/// (`adds_extension`), the dialog gets the stem and the suggested type (listed first by
-/// [`save_filters`]) supplies `.psd`:
-/// - On Windows a visible extension stays put when the user picks another type (with File name
-///   extensions shown, `image.psd` saved as PhotoCraft stayed `image.psd`, #4394).
-/// - On Linux the portal's dialog keeps the name as typed, and before returning asks whether to
-///   replace a file of that name, so `test.psd` with PNG picked asked to replace test.psd, which
-///   the save leaves alone (#6121). From the stem [`with_chosen_type`] gives the picked type's
-///   extension, and a name that then exists is asked about under that name
-///   (`portal_save::save_as`).
-///
-/// A stem that still has a dot (`scan.jpg.psd`: Windows could keep `scan.jpg`) or an upper-case
-/// extension (the user's spelling) keeps the whole name. Elsewhere the whole name is kept: the
-/// macOS panel has no type list, and rfd's Linux dialogs don't say which type was picked.
-fn dialog_file_name(suggested: &str, adds_extension: bool) -> Option<String> {
-    let path = Path::new(suggested);
-    let name = path.file_name()?.to_string_lossy().into_owned();
-    let (Some(stem), Some(ext)) = (path.file_stem(), path.extension().and_then(|e| e.to_str())) else { return Some(name) };
-    let bare = adds_extension && Path::new(stem).extension().is_none() && !ext.is_empty() && ext == ext.to_ascii_lowercase();
-    Some(if bare { stem.to_string_lossy().into_owned() } else { name })
-}
-
-/// Shows an Open or Save dialog without blocking the event loop (#673, #574): rfd's async dialog
-/// is created here, on the main thread, with the window as its parent (a sheet on macOS, an owned
-/// modal window elsewhere), and a helper thread waits for it and hands the answer to the app.
-fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, reply: FileDialogReply) {
-    let mut dialog = rfd::AsyncFileDialog::new();
-    if let Some(parent) = parent {
-        dialog = dialog.set_parent(parent);
-    }
-    let answer: Pin<Box<dyn Future<Output = Option<FileDialogAnswer>> + Send>> = match request {
-        FileDialogRequest::Open { multiple, initial_dir, extensions } => {
-            if let Some(dir) = initial_dir {
-                dialog = dialog.set_directory(dir);
-            }
-            // A command-specific filter must not inherit the image formats used by File › Open.
-            let dialog = if let Some(exts) = extensions {
-                dialog.add_filter("Supported Files", &open_filter_extensions(&exts.iter().map(String::as_str).collect::<Vec<_>>()))
-            } else {
-                open_filters().into_iter().fold(dialog, |dialog, (name, extensions)| dialog.add_filter(name, &extensions))
-            };
-            if multiple {
-                let picked = dialog.pick_files();
-                Box::pin(async move { picked.await.map(|files| answer(files.iter().map(|f| f.path()), false, FileDialogAnswer::Paths)) })
-            } else {
-                let picked = dialog.pick_file();
-                Box::pin(async move { picked.await.map(|file| answer([file.path()], false, FileDialogAnswer::Paths)) })
-            }
-        }
-        FileDialogRequest::Folder { initial_dir } => {
-            if let Some(dir) = initial_dir {
-                dialog = dialog.set_directory(dir);
-            }
-            let picked = dialog.pick_folder();
-            Box::pin(async move { picked.await.map(|folder| answer_one(folder.path(), true, FileDialogAnswer::FolderTo)) })
-        }
-        FileDialogRequest::Save { suggested } => {
-            let suggested = netpbm_as_pnm(&suggested);
-            let filters = save_filters(&suggested);
-            let name = dialog_file_name(&suggested, cfg!(windows));
-            let dir = Path::new(&suggested).parent().filter(|p| !p.as_os_str().is_empty()).map(Path::to_path_buf);
-            for (name, exts) in &filters {
-                dialog = dialog.add_filter(name, exts);
-            }
-            if let Some(name) = &name {
-                dialog = dialog.set_file_name(name);
-            }
-            if let Some(dir) = &dir {
-                dialog = dialog.set_directory(dir);
-            }
-            // On Linux the portal's own dialog, which reports the file type picked (#6121); rfd if
-            // the portal can't show it.
-            #[cfg(target_os = "linux")]
-            {
-                use eframe::wgpu::rwh::HasWindowHandle;
-                let parent = crate::portal_save::parent_id(parent.and_then(|p| p.window_handle().ok()).map(|h| h.as_raw()));
-                let req = crate::portal_save::SaveRequest {
-                    parent,
-                    name: dialog_file_name(&suggested, true),
-                    suggested: Path::new(&suggested).file_name().map(|n| n.to_string_lossy().into_owned()),
-                    folder: dir,
-                    filters,
-                    current: Some(0),
-                };
-                Box::pin(async move {
-                    let portal = zbus::blocking::connection::Builder::session()
-                        .and_then(|b| b.build())
-                        .map_err(|e| e.to_string())
-                        .and_then(|conn| crate::portal_save::save_as(&conn, req));
-                    match portal {
-                        Ok(path) => path.map(|p| answer_one(&p, true, FileDialogAnswer::SaveTo)),
-                        Err(e) => {
-                            log::info!("portal save dialog unavailable ({e}), using rfd");
-                            dialog.save_file().await.map(|file| answer_one(file.path(), true, FileDialogAnswer::SaveTo))
-                        }
-                    }
-                })
-            }
-            #[cfg(not(target_os = "linux"))]
-            {
-                let _ = filters;
-                let picked = dialog.save_file();
-                Box::pin(async move { picked.await.map(|file| answer_one(file.path(), true, FileDialogAnswer::SaveTo)) })
-            }
-        }
-    };
-    // Without the thread the reply is dropped unanswered, which the app takes as Cancel.
-    if let Err(e) = std::thread::Builder::new().name("file dialog".into()).spawn(move || {
-        // An empty answer from a system with no dialog backend isn't a Cancel (#3354).
-        let answer = block_on(answer).or_else(|| crate::file_dialog_probe::known_problem().map(FileDialogAnswer::Unavailable));
-        reply.send(answer)
-    }) {
-        log::error!("couldn't wait for the file dialog: {e}");
-    }
-}
-
-/// The dialog's answer for the chosen `paths`, or the error for one whose name isn't valid
-/// Unicode, which a lossy copy would turn into another file's name (#6601). `saving`: the paths
-/// are to be written to.
-fn answer<'a>(paths: impl IntoIterator<Item = &'a Path>, saving: bool, make: impl FnOnce(Vec<String>) -> FileDialogAnswer) -> FileDialogAnswer {
-    match paths.into_iter().map(|p| photocraft_ui_egui::file_open::path_text(p, saving)).collect() {
-        Ok(paths) => make(paths),
-        Err(e) => FileDialogAnswer::Unavailable(e),
-    }
-}
-
-/// [`answer`] for a dialog that picks one path.
-fn answer_one(path: &Path, saving: bool, make: impl FnOnce(String) -> FileDialogAnswer) -> FileDialogAnswer {
-    match photocraft_ui_egui::file_open::path_text(path, saving) {
-        Ok(path) => make(path),
-        Err(e) => FileDialogAnswer::Unavailable(e),
-    }
-}
 
 /// Runs `future` to completion on this thread, sleeping until it is woken.
 pub(crate) fn block_on<T>(future: impl Future<Output = T>) -> T {
@@ -337,8 +40,16 @@ pub fn config_dir() -> Option<PathBuf> {
     crate::app_dirs::config_dir()
 }
 
-pub fn prefs_file() -> Option<PathBuf> {
-    config_dir().map(|d| d.join("preferences.json"))
+/// The preferences store in [`config_dir`] (in memory when there is none), importing the older
+/// `preferences.json` on the first run (`photocraft_engine::prefs::store_options`).
+fn settings_store() -> (craft::settings::SettingsStore<photocraft_engine::prefs::SavedPrefs>, craft::settings::LoadReport) {
+    craft::settings::SettingsStore::open_with(photocraft_engine::prefs::store_options(config_dir().as_deref()))
+}
+
+/// The preferences [`settings_store`] would load, read without opening it: the launch reads
+/// before the window opens.
+pub fn saved_prefs() -> photocraft_engine::prefs::SavedPrefs {
+    photocraft_engine::prefs::read_saved(config_dir().as_deref())
 }
 
 fn gpu_memo_file() -> Option<PathBuf> {
@@ -698,38 +409,59 @@ fn shell_word(s: &str) -> String {
     if s.bytes().all(|b| b.is_ascii_alphanumeric() || b"/._-+:,@".contains(&b)) { s.to_string() } else { format!("'{}'", s.replace('\'', r"'\''")) }
 }
 
-pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) -> Services {
-    let clip: Rc<RefCell<Option<arboard::Clipboard>>> = Rc::default();
-    let clip_unreadable: Rc<Cell<bool>> = Rc::default();
-    let automation_read = automation.clone().map(|workspace| {
+/// What control and MCP requests may read, write and run, through `workspace` (`None`: no
+/// automation, as without `--control` or an agent connection).
+pub fn automation(workspace: Option<photocraft_automation::AuthorizedWorkspace>) -> photocraft_ui_egui::AutomationServices {
+    let read = workspace.clone().map(|workspace| {
         Box::new(move |path: &str| {
             let (bytes, save_path) = workspace.read_with_save_path(path).map_err(|error| error.to_string())?;
             let name = Path::new(path).file_name().and_then(|name| name.to_str()).unwrap_or(path).to_string();
             Ok(photocraft_ui_egui::AutomationReadResult { name, bytes, save_path })
         }) as photocraft_ui_egui::AutomationReadFn
     });
-    let automation_write = automation.clone().map(|workspace| {
+    let write = workspace.clone().map(|workspace| {
         Box::new(move |path: &str, bytes: &[u8]| workspace.write(path, bytes).map_err(|error| error.to_string())) as photocraft_ui_egui::AutomationWriteFn
     });
-    let automation_open_pcraft = automation.clone().map(|workspace| {
+    let open_pcraft = workspace.clone().map(|workspace| {
         Box::new(move |path: &str| {
             let name = Path::new(path).file_name().and_then(|name| name.to_str()).unwrap_or(path).to_string();
             let opened = crate::crash_guard::guard("Open", || workspace.open_pcraft(path).map_err(|e| e.to_string()))?;
             Ok(opened.map(|doc| (name, doc)))
         }) as photocraft_ui_egui::AutomationOpenPcraftFn
     });
-    let automation_save = automation.clone().map(|workspace| {
+    let save = workspace.clone().map(|workspace| {
         std::sync::Arc::new(move |doc: &Document, path: &str, settings: &photocraft_ui_egui::ExportSettings, ctl: &photocraft_ui_egui::jobs_ui::SaveCtl| {
             save_through(doc, path, settings, ctl, |p, encoded, _| workspace.write_stream(p, &mut |w| encoded.write_to(w)).map_err(|e| e.to_string()))
         }) as photocraft_ui_egui::SaveFileFn
     });
-    let step: fn(&str, &serde_json::Value) -> photocraft_engine::Result<()> = photocraft_automation::workspace::authorize_desktop_engine_step;
-    let automation_authorize = automation.is_some().then_some(step);
-    let automation_command = automation.map(|_| {
+    let step: photocraft_ui_egui::AutomationAuthorizeFn = photocraft_automation::workspace::authorize_desktop_engine_step;
+    let authorize = workspace.is_some().then_some(step);
+    let command = workspace.map(|_| {
         Box::new(|id: &str, params: &serde_json::Value| {
             photocraft_automation::workspace::authorize_desktop_engine_command(id, params).map_err(|error| error.to_string())
         }) as photocraft_ui_egui::AutomationCommandFn
     });
+    photocraft_ui_egui::AutomationServices { read, write, open_pcraft, save, command, authorize }
+}
+
+/// What agent requests may read, write and run with the agent settings' folders
+/// (`Services::agent_automation`): the automation policy always, and without folders no file
+/// access. A folder that can't be opened, or isn't an absolute path, is left out (that direction
+/// fails closed) and named, as at launch.
+pub fn agent_automation(settings: &craft::automation::agents::AgentSettings) -> (photocraft_ui_egui::AutomationServices, Option<String>) {
+    let no_flags = photocraft_automation::args::AutomationArgs { automation_read_root: Vec::new(), automation_write_root: None };
+    match crate::automation_workspace(&no_flags, settings) {
+        Ok((workspace, warning)) => (automation(Some(workspace)), warning.map(|w| format!("Agents can connect, but without file access there: {w}"))),
+        Err(e) => (automation(Some(photocraft_automation::AuthorizedWorkspace::default())), Some(format!("Agents can connect, but without file access: {e}"))),
+    }
+}
+
+/// Every native service. `wake` requests a repaint from any thread; the file panels answer through it.
+pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>, wake: craft::dialogs::Wake) -> Services {
+    let (files, file_panels) = craft::dialogs::service::FileService::new(wake);
+    let clip: Rc<RefCell<Option<arboard::Clipboard>>> = Rc::default();
+    let clip_unreadable: Rc<Cell<bool>> = Rc::default();
+    let automation = self::automation(automation);
     Services {
         import: Some(Box::new(|name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions| {
             crate::crash_guard::guard("Open", || {
@@ -741,7 +473,9 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
             crate::crash_guard::guard("Export", || photocraft_io::export(doc, path, &opts).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string()))
         })),
         save_file: Some(Arc::new(save_file)),
-        file_dialog: Some(Box::new(show_file_dialog)),
+        files: Some(Arc::new(files)),
+        file_panels: Some(file_panels),
+        settings: Some(settings_store()),
         write: Some(Box::new(|path: &str, bytes: &[u8]| write_atomic(Path::new(path), bytes))),
         file_stamp: Some(Box::new(|path: &str| {
             // Follows a symlink, as Save writes through it to the file it points at.
@@ -749,21 +483,15 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
             Some(photocraft_ui_egui::FileStamp { len: meta.len(), modified: meta.modified().ok() })
         })),
         same_file: Some(Box::new(|a: &str, b: &str| same_entry(Path::new(a), Path::new(b), same_file))),
-        automation_read,
-        automation_write,
-        automation_open_pcraft,
-        automation_save,
-        automation_command,
-        automation_authorize,
-        encode_png: Some(Box::new(|w, h, rgba| {
-            let img = Image::from_u8(w, h, ChannelLayout::Rgba, rgba.to_vec()).map_err(|e| e.to_string())?;
-            photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &EncodeOptions::default()).map_err(|e| e.to_string())
-        })),
+        automation_read: automation.read,
+        automation_write: automation.write,
+        automation_open_pcraft: automation.open_pcraft,
+        automation_save: automation.save,
+        automation_command: automation.command,
+        automation_authorize: automation.authorize,
         inbox: None,
         open_url: Some(Box::new(|url: &str| open::that(url).map_err(|e| e.to_string()))),
         beep: Some(platform_beep),
-        check_updates: Some(crate::updates::service()),
-        last_update: Some(crate::updates::last_update),
         clipboard_set_image: Some({
             let clip = clip.clone();
             guarded_clipboard_set(move |w: u32, h: u32, px: &[u8]| {
@@ -824,9 +552,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
             })
         }),
         clipboard_unreadable: Some(Box::new(move || clip_unreadable.get())),
-        load_prefs: Some(Box::new(|| std::fs::read_to_string(prefs_file()?).ok())),
         photoshop_shortcuts: Some(Box::new(|| crate::photoshop_settings::live_keyboard_shortcuts(&|k| std::env::var_os(k)))),
-        save_prefs: Some(Box::new(|text: &str| write_atomic(&prefs_file().ok_or("no config directory")?, text.as_bytes()))),
         load_gpu_memo: Some(Box::new(load_gpu_memo_text)),
         save_gpu_memo: Some(Box::new(|text: &str| {
             if text.len() > photocraft_ui_egui::gpu_memo::MAX_GPU_MEMO_BYTES {
@@ -835,7 +561,6 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
             write_atomic(&gpu_memo_file().ok_or("no config directory")?, text.as_bytes())
         })),
         shader_compiler: Some(shader_compiler_identity()),
-        system_theme: crate::appearance::service(),
         append_text: Some(Box::new(|path: &str, text: &str| {
             use std::io::Write;
             let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path).map_err(|e| e.to_string())?;

@@ -36,7 +36,7 @@ building locally; the downloaded app is still subject to Windows application-con
 
 ## Build and run
 
-On Linux, PhotoCraft keeps its integrated client-side decorated title bar by default (#4439), including desktop-matched buttons. Enabling **System Title Bar** in Preferences switches to the system frame at the next launch: on GNOME/Wayland, winit provides font-free Adwaita controls; on X11, the window manager supplies the frame. Explicit saved choices are respected and Windows/macOS defaults are unchanged.
+On Linux and FreeBSD, PhotoCraft keeps its integrated client-side decorated title bar by default (#4439), including desktop-matched buttons. Enabling **System Title Bar** in Preferences switches to the system frame at the next launch: on GNOME/Wayland, winit provides font-free Adwaita controls; on X11, the window manager supplies the frame. Explicit saved choices are respected and Windows/macOS defaults are unchanged.
 
 ```sh
 cargo run --release -p photocraft -- path/to/image.psd      # desktop app
@@ -180,6 +180,8 @@ The desktop app writes its `log` records to standard error and to `logs/photocra
 
 By default PhotoCraft's own crates log at `info` and everything else at `warn`. `RUST_LOG` replaces that with env_logger-style directives, for example `RUST_LOG=debug`, `RUST_LOG=warn,photocraft_gpu=trace` or `RUST_LOG=info,wgpu_core=warn`; a directive ending in `*` covers every target starting with it (`photocraft*=debug`). The logger is `apps/photocraft/src/logging.rs`; the web build logs to the browser console instead.
 
+A file dragged in from the desktop logs two lines at `info` (`file_open.rs`; file names are left out): `N file(s) dragged over the window` when the drag reaches the window, and `N file(s) dropped on the window: <target>, pointer known|unknown` when it is released. Neither line means the operating system never offered the files to PhotoCraft: on Windows, a PhotoCraft started with Run as administrator gets nothing from a File Explorer that is not elevated, and a drag from a browser or a zip folder carries no file path. Only the first line means PhotoCraft saw the drag but not the drop. Both lines with no document opened are normal for a drop on the canvas (the file is placed as a layer) and for a preset file (it is imported into its library). A routing or open error also shows as a notice.
+
 ## Environment variables
 
 `photocraft --help` lists the desktop app's flags and, beside the control, automation-root and in-window-menu flags, the variable that stands in for each. A flag wins over its variable and an empty variable counts as unset. A bad flag value is a usage error naming the flag (exit status 2), as is an unknown option, a repeated flag or a flag without its value; a bad value in one of those listed variables is a usage error naming the variable. `PHOTOCRAFT_PRESENT_MODE` and `PHOTOCRAFT_FRAME_LATENCY` are not listed: a bad value there is logged and ignored. On Windows, release builds use the GUI subsystem and have no console, so `--help`, `--version` and usage errors print nothing in a terminal; redirect them to see the text (`photocraft --help | more` or `photocraft --help > help.txt`). The exit status is the same either way.
@@ -258,7 +260,7 @@ See `docs/control-protocol.md` for every method. Tips:
 - **macOS does not render occluded windows.** `ui.screenshot` raises the window first (`focus: true` by default). Use `ui.focus` before other visual checks.
 - **Capture only our own window.** For native captures (to see the real title bar and traffic lights), capture by window id (`screencapture -l <CGWindowID>`), never a screen region, which can grab other apps.
 - **Pointer gestures:** `ui.pointer` takes events in *document* coordinates and runs them through the same tool state machine as the mouse.
-- **Seeing tile storage:** `ui.set {"tileGrid": true}` overlays the active layer's stored tiles, which shows how sparse a layer is and which tiles share pixels (`ui-egui/src/tile_overlay.rs`).
+- **Seeing tile storage:** `ui.set {"tileGrid": true}` overlays the active layer's stored tiles, which shows how sparse a layer is and which tiles share pixels (`ui-egui/src/canvas/tile_overlay.rs`).
 
 ## Headless CLI
 
@@ -320,8 +322,9 @@ At startup the desktop lists recovery metadata, then decodes one document at a t
 
 `photocraft-cli mcp` serves MCP on stdio using `crates/automation`, which is built on `rmcp`:
 
-- **Headless:** `photocraft-cli mcp --automation-read-root <project> --automation-read-root <library> --automation-write-root <project>`. It drives an in-process engine session with ordered read directories and one write directory.
+- **Headless:** `photocraft-cli mcp --headless --automation-read-root <project> --automation-read-root <library> --automation-write-root <project>`. Use `--headless` in scripts, tests and agent sessions: without it `mcp` works in the open window while the ArtCraft Launcher's agents switch is on, and may start PhotoCraft (When PhotoCraft Is Closed defaults to starting it). It drives an in-process engine session with ordered read directories and one write directory.
 - **Live app:** start `photocraft --control 7878 --control-token-file <private-path> --automation-read-root <project> --automation-read-root <library> --automation-write-root <project>`, then run `photocraft-cli mcp --bridge 127.0.0.1:7878 --control-token-file <private-path>`. The desktop process owns the roots; root flags on the bridging CLI are a usage error. See `docs/control-protocol.md#mcp-bridge`.
+- **Live app, no flags:** with the `AI-MCP` flag, turn on ArtCraft Launcher › Settings › AI agents and add the MCP client there; plain `photocraft-cli mcp` then works in the open window. The app publishes its port and token file in `agent-connection.json` in the settings folder; `mcp` reads it on every call. Without a launcher, a scratch `CRAFT_MCP_DIR` with an `apps.json` naming `photocraft` (the format in storytold/craft-ai-integrations, crate `craft-ai-agents`) turns the switch on for a test. See [MCP conventions](mcp.md#connecting-the-desktop-app-no-terminal). Test it against a scratch settings folder with `PHOTOCRAFT_CONFIG_DIR`, which both the app and the CLI honour.
 
 For headless MCP clients, pass absolute paths to deliberately chosen trusted workspace directories in the launch arguments. Desktop `PHOTOCRAFT_AUTOMATION_READ_ROOT` and `PHOTOCRAFT_AUTOMATION_WRITE_ROOT` environment variables do **not** grant headless CLI access. Omitting a root flag deliberately denies that direction of access.
 
@@ -365,7 +368,7 @@ Claude Code (`.mcp.json` in the repo root, or `claude mcp add`):
   "mcpServers": {
     "photocraft": {
       "command": "/path/to/photocraft/target/release/photocraft-cli",
-      "args": ["mcp", "--automation-read-root", "/absolute/path/to/trusted/workspace", "--automation-read-root", "/absolute/path/to/reference/library", "--automation-write-root", "/absolute/path/to/trusted/workspace"]
+      "args": ["mcp", "--headless", "--automation-read-root", "/absolute/path/to/trusted/workspace", "--automation-read-root", "/absolute/path/to/reference/library", "--automation-write-root", "/absolute/path/to/trusted/workspace"]
     },
     "photocraft-live": {
       "command": "/path/to/photocraft/target/release/photocraft-cli",
@@ -378,7 +381,7 @@ Claude Code (`.mcp.json` in the repo root, or `claude mcp add`):
 ```sh
 cargo build --release -p photocraft-cli
 mkdir -p "$PWD/photocraft-work"
-claude mcp add photocraft -- "$PWD/target/release/photocraft-cli" mcp \
+claude mcp add photocraft -- "$PWD/target/release/photocraft-cli" mcp --headless \
   --automation-read-root "$PWD/photocraft-work" \
   --automation-write-root "$PWD/photocraft-work"
 ```
@@ -407,15 +410,15 @@ A typical agent loop (place inputs under a configured read root and outputs unde
 
 ## Colour management
 
-`crates/cms` is our own pure-Rust ICC engine (v2/v4 parsing, matrix/TRC and LUT profiles, all four
+`craft-cms` ([storytold/craft-libs](https://github.com/storytold/craft-libs/tree/main/crates/cms)) is our own pure-Rust ICC engine (v2/v4 parsing, matrix/TRC and LUT profiles, all four
 intents, black point compensation). It ships CC0 built-in profiles, including a synthetic
-"PhotoCraft Coated CMYK", because Adobe's CMYK profiles are proprietary (see `crates/cms/README.md`).
+"PhotoCraft Coated CMYK", because Adobe's CMYK profiles are proprietary (see its README).
 
 - Documents carry an optional embedded ICC profile (`Document::icc_profile`); `edit.assignProfile`
   and `edit.convertToProfile` change it. Mode changes (`image.mode.*`) convert through cms.
 - **Proof Colors** (⌘Y), **Proof Setup** and **Gamut Warning** (⇧⌘Y) bake a 3D LUT
   (`cms::Lut3d`) that the canvas shader applies; the document pixels never change.
-- Convert colours with `photocraft_cms::transform::cached(src, dst, opts)`: transforms are cached
+- Convert colours with `craft_cms::transform::cached(src, dst, opts)`: transforms are cached
   process-wide and integer buffers use precomputed tables or a device link.
 
 ## Menu parity
@@ -770,19 +773,26 @@ so a following `ui.inspect` observes their effect.
 
 ## Photoshop Actions (.atn)
 
-`photocraft-psd` reads Photoshop Actions files (`atn`, versions 12 and 16) and writes version 16
+`craft-psd` reads Photoshop Actions files (`atn`, versions 12 and 16) and writes version 16
 (Photoshop 6 and later); `photocraft-engine`'s `atn_cmds` maps their events onto commands (`actions.load`,
 `actions.save`; the Actions panel menu's Load/Save Actions…; `photocraft-cli batch --actions
 set.atn`). To see what a set holds (event ids, panel names, the parameter keys Photoshop
 recorded) when adding an event to the table:
 
 ```sh
-cargo run -p photocraft-psd --example atn_dump -- "Default Actions.atn"
-cargo run -p photocraft-psd --example atn_roundtrip -- "Default Actions.atn"   # parse, write, diff
+cargo run -p craft-psd --example atn_dump -- "Default Actions.atn"
+cargo run -p craft-psd --example atn_roundtrip -- "Default Actions.atn"   # parse, write, diff
 ```
 
+The Classic Actions panel asks before clearing, resetting, or replacing the library. Reset
+offers OK, Cancel, and Append for PhotoCraft Basics. Replace validates the entire ATN archive
+before it removes existing sets. The latest library change can be undone through Edit › Undo
+without changing document History. Command callers use `confirm: true` with `actions.clearAll`,
+`actions.reset` (mode `append` or `replace`), or `actions.replace`, then `actions.undoLibrary`
+to undo. Use `actions.load` for a same-set import.
+
 The real-file oracles are `corpus/atn/` (16 sets from seven public repositories, see *Test
-corpora*): `photocraft-psd`'s corpus test parses every file and rewrites it byte for byte;
+corpora*): `craft-psd`'s corpus test parses every file and rewrites it byte for byte;
 `photocraft-engine`'s loads, saves and reloads every set and caps the steps that still have no
 PhotoCraft equivalent.
 
@@ -807,7 +817,7 @@ recorded rectangle/preset are retained for saving, without resizing the target.
 
 `crates/psd/tests/it/atn_contract.rs` checks the parser's public API against small, independently
 encoded version-16 fixtures (the version-12 ones are read by `atn_v12::`) in `crates/psd/tests/fixtures/atn/` (provenance and checksums in
-its README): `cargo test -p photocraft-psd --test it atn_contract::`.
+its README): `cargo test -p craft-psd --test it atn_contract::`.
 Recorded layer indexes and ordinals resolve against the full stack, including collapsed children
 and hidden group-end positions. Indexed moves use the stack before the move. Recorded document
 indexes are one-based opening order; a native numeric `document` parameter remains a zero-based
@@ -883,7 +893,7 @@ physical RAM (excluding swap) and, where measurable, system commit headroom:
 - These budgets apply to an import's **aggregate peak estimate**, not to one allocation: a peak
   may sum many layer, mask, merged and workspace buffers. Each individual buffer must still fit
   the target's layout limit (`isize::MAX`) and the decoder's own per-buffer allowance
-  (`photocraft-psd`'s `MAX_DECODED_BYTES`, `photocraft-codecs`' `Limits::max_alloc`), which is
+  (`craft-psd`'s `MAX_DECODED_BYTES`, `photocraft-codecs`' `Limits::max_alloc`), which is
   enforced by fallible allocation or an explicit cap where that buffer is created. A 64-bit
   native process has no measurable aggregate address-space cap, so admission relies on explicit
   approval plus those per-buffer checks; 32-bit native uses a 2 GiB project cap
@@ -1049,7 +1059,7 @@ scripts/fetch-corpus.sh            # the same as cargo xtask corpus --all
 
 **Opt-in locally, strict when opted in, always in CI.**
 
-- The corpus tests sit behind the `corpus` cargo feature of `photocraft-psd`, `photocraft-codecs`,
+- The corpus tests sit behind the `corpus` cargo feature of `craft-psd`, `photocraft-codecs`,
   `photocraft-io` and `photocraft-engine`, so plain `cargo test` neither compiles nor needs them.
   The HEIF ones also need the `heif` feature of `photocraft-codecs`/`photocraft-io` (test-corpus
   turns it on).

@@ -11,13 +11,10 @@
 //! render-pass blit chain. Documents larger than the device's maximum texture size are split
 //! into tiles.
 //!
-//! Per frame the shader draws, in *device pixels*:
-//! - a soft analytic drop shadow around the document on the pasteboard (erf-blurred box),
-//! - a transparency checkerboard (8 pt squares, grays 255/204, the same size at every zoom)
-//!   under the document, anchored to the document's top-left corner so it moves with the image,
-//! - the document itself, sampled trilinearly when zoomed out, bilinearly between 1× and 2×, and
-//!   with an anti-aliased "sharp nearest" filter at integer scales and ≥ 2×,
-//! - a one-device-pixel pixel grid above 500% zoom, over pixels with content only.
+//! Per frame the shader draws, in *device pixels*, the document's pixels alone, premultiplied: sampled trilinearly
+//! when zoomed out, bilinearly between 1× and 2×, and with an anti-aliased "sharp nearest" filter at integer scales
+//! and ≥ 2×. The framework canvas's `RasterDisplay` draws the checkerboard under them and the edge around them, and
+//! its pixel grid draws over them.
 //!
 //! GPU resources live in the renderer's `callback_resources` type map; the per-frame callback only
 //! carries plain view parameters, so it is `Send + Sync` on every target (including wasm).
@@ -121,10 +118,6 @@ pub struct ViewParams {
     /// Camera rotation in radians, clockwise in Y-down screen space. Rotate around [`Self::center`]
     /// before sampling. Flip stays on the CPU path.
     pub rotation: f32,
-    /// Draw the drop shadow on the pasteboard.
-    pub shadow: bool,
-    /// Draw the pixel grid at high zoom.
-    pub pixel_grid: bool,
     /// Distinguishes views painted in the same frame (main canvas, extra windows).
     pub view_key: u64,
     /// Display transform: 0 none, 1 the document's display LUT (document → monitor profile,
@@ -136,10 +129,6 @@ pub struct ViewParams {
     /// before the display LUT; `None` when off. The display LUT must then leave it out
     /// (`ColorState::gpu_canvas_lut`).
     pub hdr: Option<[f32; 2]>,
-    /// Where this draw puts the document, in document pixels from its own place: `[0, 0]` for the
-    /// document, a whole number of widths and heights for a View › Pattern Preview copy (#1067).
-    /// A copy samples the same texture, so nothing is composited again.
-    pub offset: [f32; 2],
 }
 
 /// When high-bit documents get an `Rgba16Float` canvas texture.
@@ -448,17 +437,6 @@ impl GpuCanvas {
         }
     }
 
-    /// Act as if the driver couldn't build the compositor's pipelines (the DX12 FXC X3507 case,
-    /// #8733): every later refresh goes to the CPU compositor with `msg` as the reason.
-    #[cfg(test)]
-    pub(crate) fn fail_compositor(&self, msg: &str) {
-        let mut r = self.rs.renderer.write();
-        if let Some(res) = r.callback_resources.get_mut::<Resources>() {
-            res.compositor = None;
-            res.compositor_failed = Some(photocraft_gpu::Unsupported(msg.into()));
-        }
-    }
-
     #[cfg(test)]
     pub(crate) fn simulate_compositor_build(&self) {
         *self.compositor_build.lock().unwrap() = compositor_build::BuildState::Building;
@@ -570,7 +548,7 @@ impl GpuCanvas {
         r.callback_resources.get::<Resources>()?.layer_fit
     }
 
-    /// Set the checkerboard and gamut warning colours.
+    /// Set the gamut warning colours.
     pub fn set_style(&self, style: CanvasStyle) {
         let mut r = self.rs.renderer.write();
         if let Some(res) = r.callback_resources.get_mut::<Resources>() {
@@ -814,7 +792,7 @@ impl GpuCanvas {
                         multiview_mask: None,
                     });
                     pass.set_pipeline(pipe);
-                    pass.set_bind_group(0, &bg, &[]);
+                    pass.set_bind_group(0, &bg, &[0]);
                     pass.set_scissor_rect((r.x0 - tx) as u32, (r.y0 - ty) as u32, r.width(), r.height());
                     pass.draw(0..3, 0..1);
                 }
@@ -1061,7 +1039,7 @@ impl GpuCanvas {
 
     /// Set a separately sampled curve/matrix/curve display transform. CMS validates this
     /// representation and provides bounded tables; no profile interpretation lives in the UI.
-    pub fn set_display_matrix_shaper(&self, doc: u64, output: u32, shaper: &photocraft_cms::GpuMatrixShaper) {
+    pub fn set_display_matrix_shaper(&self, doc: u64, output: u32, shaper: &craft::cms::GpuMatrixShaper) {
         if !self.health.is_ok() {
             return;
         }
@@ -1130,6 +1108,9 @@ impl GpuCanvas {
 
 #[cfg(test)]
 mod mip_tests;
+
+#[cfg(test)]
+mod sharp_tests;
 
 #[cfg(test)]
 mod tests;

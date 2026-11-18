@@ -1,9 +1,13 @@
 //! #10723: recorded frame edits use the active video layer and the current playhead.
-use photocraft_doc::{LayerContent, LayerId};
-use photocraft_engine::{Session, actions_cmds::Action, atn_cmds};
-use photocraft_psd::{
+use craft_psd::{
     atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem},
     descriptor::{Descriptor, UnicodeString, Value as D},
+};
+use photocraft_doc::{LayerContent, LayerId};
+use photocraft_engine::{
+    Session,
+    actions_cmds::{Action, ActionStep},
+    atn_cmds,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -99,7 +103,7 @@ fn descriptors_and_step_flags_round_trip_including_an_absent_descriptor() {
                 let imported = atn_cmds::import(&file(source)).unwrap();
                 assert!(imported.unsupported.is_empty());
                 let action = &imported.actions[0];
-                assert_eq!(action.steps[0].0, command);
+                assert_eq!(action.steps[0].command, command);
                 assert_eq!(action.disabled.contains(&0), !enabled);
                 assert!(action.dialogs.contains(&0));
                 let back = saved(action);
@@ -179,7 +183,7 @@ fn unrepresented_settings_and_descriptor_metadata_stay_complete_kept_steps() {
         for descriptor in [Descriptor::default().with("frame", D::Integer(2)), Descriptor::new("other"), named.clone()] {
             let imported = atn_cmds::import(&file(item(event, Some(descriptor.clone())))).unwrap();
             assert_eq!(imported.unsupported.len(), 1);
-            assert_eq!(imported.actions[0].steps[0].0, "actions.photoshopStep");
+            assert_eq!(imported.actions[0].steps[0].command, "actions.photoshopStep");
             assert_eq!(saved(&imported.actions[0]).descriptor, Some(descriptor));
         }
     }
@@ -196,7 +200,7 @@ fn native_options_and_damaged_absence_metadata_refuse_export() {
             json!({"_atnVideoFrameNoDescriptor":false}),
             json!({"_atnVideoFrameNoDescriptor":"true"}),
         ] {
-            let action = Action::new("Invalid", vec![(command.into(), params)]);
+            let action = Action::new("Invalid", vec![ActionStep::new(command, params)]);
             assert!(atn_cmds::export("Video", &[&action], &[], false).is_err(), "{command}");
         }
     }

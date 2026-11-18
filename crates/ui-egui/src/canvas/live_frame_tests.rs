@@ -1,8 +1,13 @@
-//! Live painting tools show this frame's pointer input in this frame (no extra frame of delay),
-//! and the deferred image follows the animated camera.
+//! Live painting tools show this frame's pointer input in this frame (no extra frame of delay): the tools run before
+//! the canvas shows. The tools map through the canvas's zoom ease.
 
-use super::*;
+use egui::{PointerButton, Pos2, Rect, vec2};
 use serde_json::json;
+
+use super::document_display::{CanvasHost, shown_camera};
+use super::{canvas_display, canvas_view, document_area};
+use crate::PhotocraftApp;
+use crate::state::{Tool, View};
 
 #[test]
 fn live_brush_texture_includes_this_frames_press_and_moves() {
@@ -13,8 +18,8 @@ fn live_brush_texture_includes_this_frames_press_and_moves() {
         app.run("tools.setBrush", json!({"brush": {"size": 12, "hardness": 1.0, "smoothing": {"amount": 0.0}}})).unwrap();
         app.ui.tool = tool;
         app.sync_views();
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(900.0, 640.0)).build_ui_state(
-            |ui, app: &mut PhotocraftApp| {
+        let mut h = egui_kittest::Harness::builder().with_context(app.ctx().clone()).with_size(vec2(900.0, 640.0)).build_ui_state(
+            |ui, app: &mut Box<PhotocraftApp>| {
                 if !ui.ctx().fonts(|fonts| fonts.families().contains(&egui::FontFamily::Name("medium".into()))) {
                     return;
                 }
@@ -24,17 +29,20 @@ fn live_brush_texture_includes_this_frames_press_and_moves() {
         );
         PhotocraftApp::setup_context(&h.ctx, Default::default());
         h.run_steps(3);
+        // One pass a frame: a second pass would show the input whatever the order of tools and canvas.
+        h.ctx.options_mut(|o| o.max_passes = std::num::NonZeroUsize::MIN);
         let p = h.state().last_canvas_rect.center();
         h.input_mut().events.push(egui::Event::PointerMoved(p));
         h.input_mut().events.push(egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
         h.run_steps(1);
-        let shown = |h: &mut egui_kittest::Harness<'_, PhotocraftApp>| {
+        let shown = |h: &mut egui_kittest::Harness<'_, Box<PhotocraftApp>>| {
             let app = h.state_mut();
             let live = app.live_stroke.as_ref().expect("painting starts on press");
             let key = live.display_key();
-            let doc = live.stroke.doc().clone();
+            let doc = live.doc().clone();
             let (_, display) = canvas_display(app, &doc, None);
-            assert_eq!(app.canvases.values().next().unwrap().tex_preview_key, key ^ display, "{tool:?}: texture includes this frame's input");
+            let shown = app.raster_logs.values().next().and_then(|log| log.composite_seen()).map(|seen| seen.1);
+            assert_eq!(shown, Some(key ^ display), "{tool:?}: the canvas picture includes this frame's input");
         };
         shown(&mut h);
         h.input_mut().events.push(egui::Event::PointerMoved(p + vec2(25.0, 0.0)));
@@ -64,33 +72,31 @@ fn live_tools_paint_the_interpolated_camera_during_zoom_animation() {
         app.sync_views();
         app.ui.tool = tool;
         let v = &mut app.ui.views[0];
-        v.fit_pending = false;
-        v.zoom = 2.0;
+        v.clear_pending();
+        v.zoom = 1.0;
         v.center = [32.0, 32.0];
         v.doc_size = [64, 64];
-        v.zoom_animating = true;
-        v.display_camera = Some((1.0, [32.0, 32.0]));
-        v.zoom_transition = Some(crate::state::ZoomTransition { from: (1.0, [32.0, 32.0]), target: (2.0, [32.0, 32.0]), started: 0.0 });
-        let view = v.clone();
-        let ctx = egui::Context::default();
-        let tex = ensure_texture(&mut app, &ctx, 0, None).unwrap().0;
+        let ctx = app.ctx().clone();
+        PhotocraftApp::setup_context(&ctx, Default::default());
         let rect = Rect::from_min_size(Pos2::ZERO, vec2(500.0, 400.0));
-        let mut out = ctx.run_ui(egui::RawInput { screen_rect: Some(rect), time: Some(0.1), ..Default::default() }, |ui| {
-            canvas_view(&mut app, ui, 0, rect, view.clone(), true);
-        });
-        out.textures_delta.clear();
-        let mesh = out
-            .shapes
-            .iter()
-            .find_map(|s| match &s.shape {
-                egui::Shape::Mesh(mesh) if mesh.texture_id == tex => Some(mesh),
-                _ => None,
-            })
-            .unwrap();
-        let min = mesh.vertices.iter().map(|v| v.pos.x).fold(f32::INFINITY, f32::min);
-        let max = mesh.vertices.iter().map(|v| v.pos.x).fold(f32::NEG_INFINITY, f32::max);
-        let shown = app.ui.views[0].display_camera.unwrap().0;
-        assert!(shown > 1.0 && shown < 2.0, "{tool:?}: animation is between endpoints");
-        assert!(((max - min) - 64.0 * shown).abs() < 0.01, "{tool:?}: image must use the animated camera, width {} at zoom {shown}", max - min);
+        let pass = |app: &mut PhotocraftApp, view: View, time: f64| {
+            let mut shown = view.clone();
+            let mut out = ctx.run_ui(egui::RawInput { screen_rect: Some(rect), time: Some(time), ..Default::default() }, |ui| {
+                (shown, _) = canvas_view(app, ui, CanvasHost::main(0), rect, view.clone(), true);
+            });
+            out.textures_delta.clear();
+            shown
+        };
+        let first = app.ui.views[0].clone();
+        let mut view = pass(&mut app, first, 0.0);
+        // A discrete zoom to 200 % eases from the zoom it was asked from: the tools map through the camera in between.
+        view.request_zoom_animation(true);
+        view.zoom = 2.0;
+        let view = pass(&mut app, view, 0.1);
+        let view = pass(&mut app, view, 0.15);
+        let ppp = ctx.pixels_per_point();
+        let shown = shown_camera(&ctx, CanvasHost::main(0), &view, ppp).0;
+        assert!(shown > 1.0 && shown < 2.0, "{tool:?}: the canvas's ease is between the endpoints, {shown}");
+        assert_eq!(view.zoom, 2.0, "{tool:?}: the requested zoom stays the target");
     }
 }
