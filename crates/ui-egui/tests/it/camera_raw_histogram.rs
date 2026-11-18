@@ -4,14 +4,14 @@ use photocraft_ui_egui::{PhotocraftApp, camera_raw_ui, control, theme::AppTheme}
 use serde_json::{Value, json};
 
 /// The open dialog's description as the agent entry point reports it.
-fn described(h: &Harness<'_, PhotocraftApp>) -> Value {
+fn described(h: &Harness<'_, Box<PhotocraftApp>>) -> Value {
     control::inspect(h.state(), &h.ctx)["cameraRaw"].clone()
 }
 
 /// Runs the app's frames until the develop of the settings in force has landed, and returns the dialog's
 /// description. The develop waits on the framework's queue until a request finishes it, as the agent entry
 /// point's `waitPreview` does.
-fn settled(h: &mut Harness<'_, PhotocraftApp>) -> Value {
+fn settled(h: &mut Harness<'_, Box<PhotocraftApp>>) -> Value {
     h.run_steps(2);
     for _ in 0..2000 {
         craft::ui::runtime::pending::finish_jobs(&h.ctx, std::time::Duration::from_secs(30));
@@ -26,7 +26,7 @@ fn settled(h: &mut Harness<'_, PhotocraftApp>) -> Value {
 }
 
 /// A control request, then the develop it asks for.
-fn request(h: &mut Harness<'_, PhotocraftApp>, params: Value) -> Value {
+fn request(h: &mut Harness<'_, Box<PhotocraftApp>>, params: Value) -> Value {
     let ctx = h.ctx.clone();
     let reply = camera_raw_ui::menu(h.state_mut(), &ctx, "filter.cameraRaw", &params).unwrap().unwrap();
     if described(h).is_null() {
