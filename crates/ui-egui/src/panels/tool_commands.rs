@@ -4,8 +4,6 @@
 use craft::ui::contract::CommandSet;
 use craft::ui::rails::{RailTool, SlotId, ToolSlot};
 use photocraft_engine::prefs::ToolbarCustomization;
-use std::cell::RefCell;
-use std::rc::Rc;
 
 use super::toolbar::layout_sections;
 use crate::state::Tool;
@@ -325,33 +323,9 @@ pub(crate) fn rail_tool(tool: Tool) -> RailTool<Tool> {
     RailTool::new(tool, command_of(tool))
 }
 
-/// A layout and the slots it built.
-type KeptSlots = (ToolbarCustomization, Rc<Vec<ToolSlot<Tool>>>);
-
-/// The rail's slots for `toolbar`, built once per layout. The toolbar measures and shows its rail on every frame, and
-/// building the slots (the stored layout's names parsed back to tools, every rail tool made anew) cost about a sixth
-/// of the UI pass (#15493). The slots depend on the layout alone ([`rail_tool`] on the tool alone), so the last layout
-/// and its slots are kept and a different layout builds them again.
-pub(crate) fn slots(toolbar: &ToolbarCustomization) -> Rc<Vec<ToolSlot<Tool>>> {
-    thread_local! {
-        static LAST: RefCell<Option<KeptSlots>> = const { RefCell::new(None) };
-    }
-    LAST.with(|last| {
-        let mut last = last.borrow_mut();
-        if let Some((layout, slots)) = last.as_ref()
-            && layout == toolbar
-        {
-            return Rc::clone(slots);
-        }
-        let slots = Rc::new(build_slots(toolbar));
-        *last = Some((toolbar.clone(), Rc::clone(&slots)));
-        slots
-    })
-}
-
 /// The rail's slots: one per toolbar group of the stored layout ([`layout_sections`]), the last of each section ending a
 /// group. A slot's id is its first tool's default slot index, so a slot keeps its id when others move.
-fn build_slots(toolbar: &ToolbarCustomization) -> Vec<ToolSlot<Tool>> {
+pub(crate) fn slots(toolbar: &ToolbarCustomization) -> Vec<ToolSlot<Tool>> {
     let mut slots = Vec::new();
     for section in layout_sections(toolbar) {
         let last = section.len().saturating_sub(1);
@@ -362,6 +336,28 @@ fn build_slots(toolbar: &ToolbarCustomization) -> Vec<ToolSlot<Tool>> {
         }
     }
     slots
+}
+
+/// The rail's [`slots`] for the stored layout, built once per preferences revision ([`PrefsStore::rev`]): the toolbar, its
+/// measure and the dock's grid read them several times a frame, and the layout changes only with the preferences.
+///
+/// [`PrefsStore::rev`]: photocraft_engine::prefs::PrefsStore::rev
+#[derive(Default)]
+pub(crate) struct ToolbarSlots(std::cell::RefCell<Option<(u64, std::sync::Arc<[ToolSlot<Tool>]>)>>);
+
+impl ToolbarSlots {
+    /// The slots of `prefs`' toolbar layout.
+    pub(crate) fn get(&self, prefs: &photocraft_engine::prefs::PrefsStore) -> std::sync::Arc<[ToolSlot<Tool>]> {
+        let mut held = self.0.borrow_mut();
+        match &*held {
+            Some((rev, slots)) if *rev == prefs.rev() => slots.clone(),
+            _ => {
+                let built: std::sync::Arc<[ToolSlot<Tool>]> = slots(&prefs.get().toolbar).into();
+                *held = Some((prefs.rev(), built.clone()));
+                built
+            }
+        }
+    }
 }
 
 /// `slots` as the group layout `edit.toolbar {"toolbar": ..}` stores: one list of `Tool` names per slot.
@@ -378,27 +374,5 @@ mod tests {
         for tool in Tool::ALL {
             assert_eq!(tool_of(command_of(tool)), tool);
         }
-    }
-
-    /// The slots as the rail reads them: each slot's id, whether it ends a group, and its tools.
-    fn shape(slots: &[ToolSlot<Tool>]) -> String {
-        format!("{slots:?}")
-    }
-
-    /// `slots` keeps the last layout's slots: the same layout is served from the cache, and a different layout (or
-    /// back to the first) gets the slots that layout builds, never the kept ones.
-    #[test]
-    fn slots_are_built_once_per_layout_and_follow_a_layout_change() {
-        let default = ToolbarCustomization::default();
-        let first = slots(&default);
-        assert_eq!(shape(&first), shape(&build_slots(&default)), "the cached slots are the built ones");
-        assert!(Rc::ptr_eq(&first, &slots(&default)), "the same layout is served from the cache");
-
-        let changed = ToolbarCustomization { hidden: vec!["Brush".to_string()], ..ToolbarCustomization::default() };
-        let after = slots(&changed);
-        assert_eq!(shape(&after), shape(&build_slots(&changed)), "a changed layout builds its own slots");
-        assert_ne!(shape(&after), shape(&first), "hiding a tool changes the slots");
-
-        assert_eq!(shape(&slots(&default)), shape(&build_slots(&default)), "back to the first layout, its slots again");
     }
 }

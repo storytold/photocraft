@@ -144,7 +144,7 @@ fn last_used(slots: &[ToolSlot<Tool>], group_tools: &[Tool]) -> LastUsed<Tool> {
 /// The cells of the toolbar's grid: its visible slots and the Edit Toolbar button. The dock column's width in steps goes
 /// up to this many content columns.
 pub(crate) fn cells(app: &PhotocraftApp) -> usize {
-    visible_slots(&tool_commands::slots(&app.session.prefs().toolbar), &[]).len() + 1
+    visible_slots(&app.toolbar_slots.get(&app.session.prefs), &[]).len() + 1
 }
 
 /// The Edit in Quick Mask Mode command, which the rail's footer shows as a rail button.
@@ -183,15 +183,15 @@ fn footer(app: &mut PhotocraftApp, ui: &mut egui::Ui, rail: RailFooter) {
     });
 }
 
-/// What the rail's measured height depends on: the width and room it is laid out in, the slots (the same `Rc` while
-/// the layout is the same), where its flyouts open, the Edit Toolbar drawer, and the scale, direction and resolved
+/// What the rail's measured height depends on: the width and room it is laid out in, the slots (the same `Arc` while
+/// the preferences are the same), where its flyouts open, the Edit Toolbar drawer, and the scale, direction and resolved
 /// tokens (theme, density, text size) it is drawn with. The current and remembered tools change which icon a button
 /// shows, not its size, and the footer's buttons keep their sizes whatever they show.
 #[derive(Clone)]
 struct MeasureKey {
     width: u32,
     room: [u32; 2],
-    slots: std::rc::Rc<Vec<ToolSlot<Tool>>>,
+    slots: std::sync::Arc<[ToolSlot<Tool>]>,
     opens: Side,
     editing: bool,
     pixels_per_point: u32,
@@ -203,7 +203,7 @@ impl PartialEq for MeasureKey {
     fn eq(&self, other: &Self) -> bool {
         (self.width, self.room, self.opens, self.editing, self.pixels_per_point, self.rtl)
             == (other.width, other.room, other.opens, other.editing, other.pixels_per_point, other.rtl)
-            && std::rc::Rc::ptr_eq(&self.slots, &other.slots)
+            && std::sync::Arc::ptr_eq(&self.slots, &other.slots)
             && std::sync::Arc::ptr_eq(&self.tokens, &other.tokens)
     }
 }
@@ -217,14 +217,14 @@ pub(crate) fn measure(app: &mut PhotocraftApp, ui: &egui::Ui, width: f32) -> f32
     thread_local! {
         static LAST: std::cell::RefCell<Option<(MeasureKey, f32)>> = const { std::cell::RefCell::new(None) };
     }
-    let slots = tool_commands::slots(&app.session.prefs().toolbar);
+    let slots = app.toolbar_slots.get(&app.session.prefs);
     let (opens, editing) = (crate::panel_docking::toolbar_opens(app), app.ui.toolbar_drawer);
     let env = craft::ui::runtime::env::Env::of(ui);
     let room = ui.available_size();
     let key = MeasureKey {
         width: width.to_bits(),
         room: [room.x.to_bits(), room.y.to_bits()],
-        slots: std::rc::Rc::clone(&slots),
+        slots: std::sync::Arc::clone(&slots),
         opens,
         editing,
         pixels_per_point: ui.ctx().pixels_per_point().to_bits(),
@@ -241,7 +241,7 @@ pub(crate) fn measure(app: &mut PhotocraftApp, ui: &egui::Ui, width: f32) -> f32
 
 /// [`measure`] without the kept height: a measuring run of the rail.
 fn measure_now(app: &mut PhotocraftApp, ui: &egui::Ui, width: f32) -> f32 {
-    let slots = tool_commands::slots(&app.session.prefs().toolbar);
+    let slots = app.toolbar_slots.get(&app.session.prefs);
     let remembered = last_used(&slots, &app.ui.group_tools);
     let current = app.ui.tool;
     let (opens, editing) = (crate::panel_docking::toolbar_opens(app), app.ui.toolbar_drawer);
@@ -256,7 +256,7 @@ fn measure_now(app: &mut PhotocraftApp, ui: &egui::Ui, width: f32) -> f32 {
 /// remembered tools are read again at the start of each pass, so a second pass applies only its own input.
 pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
-    let slots = tool_commands::slots(&app.session.prefs().toolbar);
+    let slots = app.toolbar_slots.get(&app.session.prefs);
     let remembered = last_used(&slots, &app.ui.group_tools);
     let current = app.ui.tool;
     let (opens, editing) = (crate::panel_docking::toolbar_opens(app), app.ui.toolbar_drawer);

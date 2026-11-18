@@ -38,5 +38,5 @@ jobs:
       free-disk-space: false
       # Prebuilt mdBook, the version cargo install built before.
       tools: mdbook@0.4.52
-      cache-version: v1-docs
+      cache-version: v2-docs
       command: mdbook build book
