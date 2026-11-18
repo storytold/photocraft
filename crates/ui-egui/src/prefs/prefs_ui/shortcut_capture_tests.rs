@@ -12,7 +12,7 @@ use serde_json::json;
 use super::shortcuts::{press_ok, rebind};
 use crate::PhotocraftApp;
 
-pub(super) fn harness_with(session: photocraft_engine::Session) -> Harness<'static, PhotocraftApp> {
+pub(super) fn harness_with(session: photocraft_engine::Session) -> Harness<'static, Box<PhotocraftApp>> {
     let mut session = Some(session);
     Harness::builder().with_size(egui::vec2(1100.0, 760.0)).with_max_steps(64).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
@@ -20,12 +20,12 @@ pub(super) fn harness_with(session: photocraft_engine::Session) -> Harness<'stat
     })
 }
 
-pub(super) fn harness() -> Harness<'static, PhotocraftApp> {
+pub(super) fn harness() -> Harness<'static, Box<PhotocraftApp>> {
     harness_with(photocraft_engine::Session::new())
 }
 
 /// A key tap: press and release, so the next press isn't a held key's repeat.
-pub(super) fn tap(h: &mut Harness<'_, PhotocraftApp>, key: Key, modifiers: Modifiers) {
+pub(super) fn tap(h: &mut Harness<'_, Box<PhotocraftApp>>, key: Key, modifiers: Modifiers) {
     h.event(Event::ModifiersChanged(modifiers));
     h.event(Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
     h.event(Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers });
@@ -34,7 +34,7 @@ pub(super) fn tap(h: &mut Harness<'_, PhotocraftApp>, key: Key, modifiers: Modif
 
 /// Opens the dialog, gives `command` the key `text` as the dialog's own edit does (taking it from
 /// its holders), and presses OK.
-fn edit_and_ok(h: &mut Harness<'_, PhotocraftApp>, command: &str, text: &str) {
+fn edit_and_ok(h: &mut Harness<'_, Box<PhotocraftApp>>, command: &str, text: &str) {
     let ctx = h.ctx.clone();
     crate::prefs_ui::open_shortcuts(h.state_mut(), 0);
     rebind(h.state_mut(), &CommandRef::new(command), Binding::parse(text).unwrap(), Policy::Steal).unwrap();

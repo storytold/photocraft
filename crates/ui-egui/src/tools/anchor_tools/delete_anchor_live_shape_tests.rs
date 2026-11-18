@@ -15,7 +15,7 @@ use crate::state::Tool;
 const CORNER: [f64; 2] = [650.0, 250.0];
 
 /// The tool with the live rectangle active.
-fn live(tool: Tool) -> (PhotocraftApp, u64) {
+fn live(tool: Tool) -> (Box<PhotocraftApp>, u64) {
     let (mut app, shape) = setup_asking(tool);
     select_layer(&mut app, shape);
     (app, shape)
