@@ -1,5 +1,5 @@
 //! `photocraft-cli mcp`: tools go to the open desktop app when the person lets agents use it,
-//! found through its connection file ([`crate::agent_link`]), and otherwise to a session without
+//! found through its connection file (`craft::automation::agents`), and otherwise to a session without
 //! a window, as `mcp` always did (`--headless` forces that). The file is looked up again on every
 //! tool call, so the app may start, quit or move to another port while the MCP client stays
 //! connected, and the MCP client's own start never opens a window.
@@ -13,9 +13,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use craft::automation::agents::{self, Connection, PROBE_TIMEOUT};
 use photocraft_engine::prefs::WhenAppClosed;
 
-use crate::agent_link::{self, Connection, PROBE_TIMEOUT};
+use crate::agent_link;
 use crate::bridge::BridgeClient;
 use crate::headless::Headless;
 use crate::{AuthorizedWorkspace, security};
@@ -119,15 +120,11 @@ impl Live {
             // this command. The app's own folders are for agents the person let in.
             return self.headless(&self.cfg.read_roots, self.cfg.write_root.clone(), "the automation roots can't be used");
         }
-        match self.cfg.when_closed.unwrap_or(integrations.when_app_closed) {
+        match self.cfg.when_closed.unwrap_or(integrations.agents.when_app_closed) {
             WhenAppClosed::Error => Err("PhotoCraft isn't running: open it, then try again.".into()),
             WhenAppClosed::Headless => {
-                let reads = if self.cfg.read_roots.is_empty() {
-                    agent_link::folder(&integrations.read_root).into_iter().collect()
-                } else {
-                    self.cfg.read_roots.clone()
-                };
-                let write = self.cfg.write_root.clone().or_else(|| agent_link::folder(&integrations.write_root));
+                let reads = if self.cfg.read_roots.is_empty() { integrations.agents.read_folder().into_iter().collect() } else { self.cfg.read_roots.clone() };
+                let write = self.cfg.write_root.clone().or_else(|| integrations.agents.write_folder());
                 self.headless(&reads, write, "PhotoCraft isn't running and its agent folders can't be used")
             }
             WhenAppClosed::Launch => self.launch_and_wait().await,
@@ -187,8 +184,8 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> 
 /// The running app's connection and token: `None` when no app accepts agents (no connection
 /// file, or one left by an app that crashed).
 fn find_app(dir: &Path) -> Result<Option<(Connection, String)>, String> {
-    let Some(c) = agent_link::read_connection(dir).map_err(|e| e.to_string())? else { return Ok(None) };
-    if !agent_link::probe(c.port, PROBE_TIMEOUT) {
+    let Some(c) = agents::read_connection(dir).map_err(|e| e.to_string())? else { return Ok(None) };
+    if !agents::probe(c.port, PROBE_TIMEOUT) {
         return Ok(None);
     }
     let token = security::client_token(None, Some(&c.token_file)).map_err(|e| format!("PhotoCraft's agent token: {e}"))?;
