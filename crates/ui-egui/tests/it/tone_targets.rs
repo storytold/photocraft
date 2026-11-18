@@ -1155,9 +1155,7 @@ fn review_mask_action_context_matches_the_addressed_layer_for(mode: ColorMode) {
                     assert_eq!(doc.layers, preview.layers);
                     assert_eq!(doc.layers[0], original.layers[0]);
                     assert_eq!(doc.channels, original.channels);
-                    assert!(
-                        photocraft_engine::mask_view_cmds::viewed_mask(doc.layer(layer).unwrap(), filter).unwrap().surface.sample_channel(8, 8, 0) > 0.99
-                    );
+                    assert!(photocraft_engine::mask_view_cmds::viewed_mask(doc.layer(layer).unwrap(), filter).unwrap().surface.sample_channel(8, 8, 0) > 0.99);
                     assert_eq!(h.state().session.active().unwrap().active_layer, active);
                 }
             }
