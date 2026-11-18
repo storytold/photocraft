@@ -148,19 +148,24 @@ fn real_app_keys_set_only_mixer_wet_flow_and_smoothing_with_either_airbrush_mode
         let options = h.state().ui.tool_options.clone();
         let before_layer = layer(h.state());
         let mut expected = h.state().session.tools.brush.clone();
-        for (key, modifiers) in [(Key::Num4, Modifiers::NONE), (Key::Num6, Modifiers::SHIFT), (Key::Num3, Modifiers::ALT)] {
+        for (key, modifiers, wet, flow, smoothing) in [
+            (Key::Num4, Modifiers::NONE, Some(0.4), None, None),
+            (Key::Num6, Modifiers::SHIFT, None, Some(0.6), None),
+            (Key::Num3, Modifiers::ALT, None, None, Some(0.3)),
+        ] {
             h.event(Event::ModifiersChanged(modifiers));
             h.event(Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers });
             h.event(Event::Key { key, physical_key: Some(key), pressed: false, repeat: false, modifiers });
             h.run_steps(2);
-            match key {
-                Key::Num4 => expected.mixer.wet = 0.4,
-                Key::Num6 => expected.mixer.flow = 0.6,
-                Key::Num3 => {
-                    expected.smoothing.enabled = true;
-                    expected.smoothing.amount = 0.3;
-                }
-                _ => unreachable!(),
+            if let Some(wet) = wet {
+                expected.mixer.wet = wet;
+            }
+            if let Some(flow) = flow {
+                expected.mixer.flow = flow;
+            }
+            if let Some(smoothing) = smoothing {
+                expected.smoothing.enabled = true;
+                expected.smoothing.amount = smoothing;
             }
             assert_eq!(h.state().session.tools.brush, expected);
             assert_eq!(h.state().ui.tool_options, options);
