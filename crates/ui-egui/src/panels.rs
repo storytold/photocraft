@@ -47,6 +47,7 @@ pub(super) mod layer_transfer;
 mod layers;
 pub(crate) mod layers_events;
 pub mod layers_panel_ui;
+pub mod luminosity_panel;
 pub(crate) mod layers_tree;
 pub(super) mod mask_props_ui;
 pub mod mask_thumbs_ui;

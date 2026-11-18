@@ -177,6 +177,7 @@ pub(crate) static PANELS: &[PanelEntry] = &[
         ..panel("channels", || tl!("Channels").to_string(), "squares_subtract", 110.0, super::channels_panel::show)
     },
     panel("paths", || tl!("Paths").to_string(), "pen_tool", 110.0, crate::vector_ui::paths_panel),
+    panel("luminosity", || tl!("Luminosity").to_string(), "contrast", 110.0, super::luminosity_panel::show),
     PanelEntry { heights: Some(BRUSHES_HEIGHTS), ..panel("brushes", || tl!("Brushes").to_string(), "brush", 70.0, super::brush_panel::brushes::panel) },
     PanelEntry {
         rows: super::preset_browser::styles_rows,
@@ -287,7 +288,7 @@ pub(crate) const LEGACY_GROUPS: &[(&str, &[&str])] = &[
     ("character", &["character", "paragraph"]),
     ("navigator", &["navigator", "histogram", "info"]),
     ("history", &["history", "actions", "layerComps"]),
-    ("layers", &["layers", "channels", "paths"]),
+    ("layers", &["layers", "channels", "paths", "luminosity"]),
     ("brushes", &["brushes"]),
 ];
 
