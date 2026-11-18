@@ -33,7 +33,10 @@ pub(crate) fn panel(app: &PhotocraftApp, id: &str) -> u64 {
         "info" => version(app, (app.hover_doc.map(|at| at.map(f64::to_bits)), app.current_zoom().to_bits())),
         "cloneSource" => version(app, app.ui.presets_ui.clone_cursor.map(|(document, at)| (document, at.map(f64::to_bits)))),
         "modifierKeys" => version(app, app.ui.shell.latched),
-        "properties" => version(app, crate::color_picker_ui::window_picker_state(app, PickWindow::Properties)),
+        // The channel an adjustment layer's editor shows can change from outside the panel (Alt+2 to Alt+5).
+        "properties" => {
+            version(app, (crate::color_picker_ui::window_picker_state(app, PickWindow::Properties), app.adjust_session.as_ref().map(|r| (r.layer, r.channel))))
+        }
         _ => version(app, ()),
     }
 }

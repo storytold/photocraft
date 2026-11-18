@@ -34,6 +34,7 @@ use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 
+pub(crate) mod channel_keys;
 mod session;
 pub mod values;
 
@@ -241,6 +242,9 @@ fn show(kind: &str, setup: &EditorSetup, ui: &mut Ui, value: &mut AdjustValue, c
             if setup.pickers_unavailable {
                 panel = panel.pickers_unavailable();
             }
+            if !context.is_dialog() {
+                panel = panel.channel_keys(channel_keys::commands());
+            }
             let out = panel.show(ui);
             if setup.reported_clipping.replace(out.clipping) != out.clipping {
                 *cx.clipping = out.clipping;
@@ -267,6 +271,9 @@ fn show(kind: &str, setup: &EditorSetup, ui: &mut Ui, value: &mut AdjustValue, c
             // dialog sizes itself to its content, so there it stays square and grows with the dialog's width.
             if let Some(reserve) = setup.fill_reserve {
                 panel = panel.fill_height(reserve);
+            }
+            if !context.is_dialog() {
+                panel = panel.channel_keys(channel_keys::commands());
             }
             let out = panel.show(ui);
             if setup.reported_clipping.replace(out.clipping) != out.clipping {

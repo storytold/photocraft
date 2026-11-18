@@ -581,3 +581,58 @@ fn properties_curves_show_clipping_shows_the_display_without_alt() {
     press(&mut h, white, false);
     assert_eq!(clipping(&h), None, "released");
 }
+
+/// Photoshop's Alt+2 to Alt+5 pick the Channel select's entry of a Levels or Curves layer in Properties: the
+/// composite, Red, Green and Blue; Alt+6, past an RGB document's list, changes nothing. The key matches by its position,
+/// so the character Option types with it on a Mac (£ for Option+3) doesn't matter; they work with the panel docked and
+/// floating. While the Input field has the keys, Alt+3 stays with its text. The select shows each key.
+#[test]
+fn properties_alt_digits_pick_the_channel() {
+    use egui::{Key, Modifiers};
+    for kind in ["curves", "levels"] {
+        let mut h = app_harness(kind, "rgb", 8);
+        let channel = |h: &Harness<'_, Box<PhotocraftApp>>| h.state().adjust_session.as_ref().map(|r| r.channel);
+        let alt_digit = |h: &mut Harness<'_, Box<PhotocraftApp>>, key: Key, typed: &str| {
+            h.event(egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers: Modifiers::ALT });
+            h.event(egui::Event::Text(typed.into()));
+            h.event(egui::Event::Key { key, physical_key: Some(key), pressed: false, repeat: false, modifiers: Modifiers::ALT });
+            h.run_steps(3);
+        };
+        assert_eq!(channel(&h), Some(0), "{kind}: the composite to begin with");
+        let version = |h: &Harness<'_, Box<PhotocraftApp>>| crate::panels::region_versions::panel(h.state(), "properties");
+        for (key, typed, want) in [(Key::Num3, "£", 1), (Key::Num4, "¢", 2), (Key::Num5, "∞", 3), (Key::Num6, "§", 3), (Key::Num2, "™", 0)] {
+            let before = (channel(&h), version(&h));
+            alt_digit(&mut h, key, typed);
+            assert_eq!(channel(&h), Some(want), "{kind}: Alt+{key:?}");
+            // An idle panel replays its last run until its content version changes.
+            assert_eq!(version(&h) != before.1, channel(&h) != before.0, "{kind}: Alt+{key:?} renews the panel's content version");
+        }
+        let ctx = h.ctx.clone();
+        let shown: Vec<String> = super::channel_keys::commands()
+            .iter()
+            .take(4)
+            .map(|command| craft::ui::runtime::commands::chord(&ctx, command).map(|chord| chord.display(craft::host::target::Os::Linux)).unwrap_or_default())
+            .collect();
+        assert_eq!(shown, ["Alt+2", "Alt+3", "Alt+4", "Alt+5"], "{kind}: the keys the select shows");
+        // Properties floating in a window of its own takes the keys too.
+        crate::panel_docking::apply(
+            h.state_mut(),
+            vec![Action::float("properties".to_owned(), Rect::from_min_size(Pos2::new(400.0, 200.0), vec2(320.0, 560.0)))],
+        )
+        .unwrap();
+        h.run_steps(4);
+        alt_digit(&mut h, Key::Num4, "¢");
+        assert_eq!(channel(&h), Some(2), "{kind}: Alt+4 with Properties floating");
+    }
+    // A text field with the keys keeps Alt+3: the Curves Input field.
+    let mut h = app_harness("curves", "rgb", 8);
+    let white = h.get_by_label(WHITE_SLIDER).rect().center();
+    click(&mut h, white);
+    let input = h.get_by_label("Input").rect().center();
+    click(&mut h, input);
+    h.run_steps(2);
+    h.event(egui::Event::Key { key: Key::Num3, physical_key: Some(Key::Num3), pressed: true, repeat: false, modifiers: Modifiers::ALT });
+    h.event(egui::Event::Text("£".into()));
+    h.run_steps(3);
+    assert_eq!(h.state().adjust_session.as_ref().map(|r| r.channel), Some(0), "typing in Input: the channel stays");
+}
