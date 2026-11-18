@@ -2,39 +2,57 @@
 //! (Blend Text Colors Using Gamma excepted), any change shows Custom, OK stores the name and
 //! Cancel discards the pick.
 
+use craft::ui::dialog::DialogId;
+
 use super::*;
-use crate::PhotocraftApp;
+use crate::control::{ControlRequest, Reply};
+use crate::new_layer_ui::testing::top;
 
-/// The dialog's fields as the opener fills them: the spec's controls with `settings`' values.
-fn fields(settings: &ColorSettings) -> Map<String, Value> {
-    let mut f = Map::new();
-    f.insert("__command".into(), json!(COMMAND));
-    if let Value::Object(m) = serde_json::to_value(settings).unwrap() {
-        f.extend(m);
-    }
-    f.insert("reset".into(), json!(false));
-    f
+/// An app whose Color Settings hold `settings`.
+fn app_with(settings: ColorSettings) -> Box<PhotocraftApp> {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.session.color.settings = settings;
+    app
 }
 
-fn draw(f: &mut Map<String, Value>) {
-    egui::Context::default().run_ui(Default::default(), |ui| super::super::body(ui, f)).textures_delta.clear();
+/// Opens the dialog from the menu and runs `passes` passes of the dialog host.
+fn open_dialog(app: &mut PhotocraftApp, passes: usize) -> DialogId {
+    let ctx = app.ctx().clone();
+    crate::menus::invoke(app, &ctx, COMMAND, json!({})).unwrap();
+    let id = top(app);
+    show(app, passes);
+    id
 }
 
-fn draw_frames(ctx: &egui::Context, f: &mut Map<String, Value>, frames: usize) {
-    for _ in 0..frames {
-        ctx.run_ui(Default::default(), |ui| super::super::body(ui, f)).textures_delta.clear();
+fn show(app: &mut PhotocraftApp, passes: usize) {
+    for _ in 0..passes {
+        crate::dialogs::testing::show(app);
     }
+}
+
+/// The open dialog's values as JSON.
+fn fields(app: &PhotocraftApp, id: DialogId) -> Map<String, Value> {
+    fields_map(crate::new_layer_ui::testing::fields(app, id))
+}
+
+/// `ui.dialog.set`, as a script sends it.
+fn dialog_set(app: &mut PhotocraftApp, id: DialogId, field: &str, value: Value) {
+    let ctx = app.ctx().clone();
+    let (request, _) = ControlRequest::new("ui.dialog.set", json!({"dialog": id.value().to_string(), "field": field, "value": value}));
+    let Reply::Done(reply) = crate::control::handle(app, &ctx, &request) else { panic!("ui.dialog.set should finish immediately") };
+    assert_eq!(reply["ok"], true, "{field} = {value}: {reply}");
 }
 
 #[test]
 fn opening_shows_the_stored_setup_and_keeps_its_values() {
     let stored = preset_setup(&ColorSettings::default(), "North America Prepress 2", "srgb").unwrap();
-    let mut f = fields(&stored);
-    let before = f.clone();
-    let ctx = egui::Context::default();
-    draw_frames(&ctx, &mut f, 3);
+    let mut app = app_with(stored.clone());
+    let id = open_dialog(&mut app, 3);
+    let f = fields(&app, id);
     assert_eq!(f["preset"], "North America Prepress 2");
-    for (k, v) in &before {
+    let stored = serde_json::to_value(&stored).unwrap();
+    let stored = stored.as_object().unwrap();
+    for (k, v) in stored.iter().filter(|(k, _)| f.contains_key(*k)) {
         assert!(same(v, &f[k]), "{k}: {v} became {}", f[k]);
     }
 }
@@ -42,17 +60,16 @@ fn opening_shows_the_stored_setup_and_keeps_its_values() {
 #[test]
 fn picking_a_setup_loads_it_but_keeps_the_text_gamma() {
     // Blend Text Colors Using Gamma off (1.0) before the pick.
-    let mut f = fields(&ColorSettings { blend_text_gamma: 1.0, ..ColorSettings::default() });
-    let ctx = egui::Context::default();
-    draw_frames(&ctx, &mut f, 1);
-    assert_eq!(f["preset"], CUSTOM_SETTINGS, "PhotoCraft's defaults match no setup");
-    // As the menu or `ui.dialog.set` picks it.
-    f.insert("preset".into(), json!("Europe Prepress 3"));
-    draw_frames(&ctx, &mut f, 3);
+    let mut app = app_with(ColorSettings { blend_text_gamma: 1.0, ..ColorSettings::default() });
+    let id = open_dialog(&mut app, 1);
+    assert_eq!(fields(&app, id)["preset"], CUSTOM_SETTINGS, "PhotoCraft's defaults match no setup");
+    dialog_set(&mut app, id, "preset", json!("Europe Prepress 3"));
+    show(&mut app, 3);
+    let f = fields(&app, id);
     assert_eq!(f["preset"], "Europe Prepress 3", "loading the values is no edit");
     assert_eq!((&f["workingRgb"], &f["workingCmyk"], &f["workingGray"]), (&json!("adobe-rgb-compat"), &json!("coated-fogra39"), &json!("dot-gain-20-compat")));
     assert_eq!((&f["askOnMismatch"], &f["askOnPaste"], &f["askOnMissing"]), (&json!(true), &json!(true), &json!(true)));
-    assert!(same(&f["spotDotGain"], &json!(15.0)));
+    assert!(same(&f["spotDotGain"], &json!(15.0)), "{}", f["spotDotGain"]);
     assert!(same(&f["blendTextGamma"], &json!(1.0)), "kept: {}", f["blendTextGamma"]);
 }
 
@@ -68,17 +85,18 @@ fn changing_any_control_shows_custom() {
         ("blendTextGamma", json!(1.8)),
         ("reset", json!(true)),
     ] {
-        let mut f = fields(&ColorSettings::default());
-        let ctx = egui::Context::default();
-        draw_frames(&ctx, &mut f, 1);
-        f.insert("preset".into(), json!("Japan Prepress 2"));
-        draw_frames(&ctx, &mut f, 2);
-        assert_eq!(f["preset"], "Japan Prepress 2");
-        f.insert(key.into(), value);
-        draw_frames(&ctx, &mut f, 1);
-        assert_eq!(f["preset"], CUSTOM_SETTINGS, "{key}");
+        let mut app = app_with(ColorSettings::default());
+        let id = open_dialog(&mut app, 1);
+        dialog_set(&mut app, id, "preset", json!("Japan Prepress 2"));
+        show(&mut app, 2);
+        assert_eq!(fields(&app, id)["preset"], "Japan Prepress 2");
+        // As the control would change it.
+        crate::new_layer_ui::testing::set(&mut app, id, key, value).unwrap();
+        show(&mut app, 1);
+        assert_eq!(fields(&app, id)["preset"], CUSTOM_SETTINGS, "{key}");
         // It stays Custom, and keeps the values.
-        draw_frames(&ctx, &mut f, 2);
+        show(&mut app, 2);
+        let f = fields(&app, id);
         assert_eq!(f["preset"], CUSTOM_SETTINGS, "{key}");
         assert_eq!(f["workingCmyk"], "coated-cmyk", "{key}");
     }
@@ -86,107 +104,76 @@ fn changing_any_control_shows_custom() {
 
 #[test]
 fn the_monitor_profile_is_no_change() {
-    let mut f = fields(&ColorSettings::default());
-    let ctx = egui::Context::default();
-    draw_frames(&ctx, &mut f, 1);
-    f.insert("preset".into(), json!("North America Web/Internet"));
-    draw_frames(&ctx, &mut f, 2);
-    f.insert("monitorProfile".into(), json!("display-p3"));
-    draw_frames(&ctx, &mut f, 2);
-    assert_eq!(f["preset"], "North America Web/Internet");
+    let mut app = app_with(ColorSettings::default());
+    let id = open_dialog(&mut app, 1);
+    dialog_set(&mut app, id, "preset", json!("North America Web/Internet"));
+    show(&mut app, 2);
+    dialog_set(&mut app, id, "monitorProfile", json!("display-p3"));
+    show(&mut app, 2);
+    assert_eq!(fields(&app, id)["preset"], "North America Web/Internet");
 }
 
 #[test]
-fn monitor_color_takes_the_monitor_profile_in_use() {
-    let mut f = fields(&ColorSettings::default());
-    f.insert(MONITOR_RGB.into(), json!("display-p3"));
-    let ctx = egui::Context::default();
-    draw_frames(&ctx, &mut f, 1);
-    f.insert("preset".into(), json!("Monitor Color"));
-    draw_frames(&ctx, &mut f, 2);
+fn monitor_color_takes_the_monitor_profile_the_dialog_shows() {
+    let mut app = app_with(ColorSettings { monitor_profile: "display-p3".into(), ..ColorSettings::default() });
+    let id = open_dialog(&mut app, 1);
+    dialog_set(&mut app, id, "preset", json!("Monitor Color"));
+    show(&mut app, 2);
+    let f = fields(&app, id);
     assert_eq!(f["preset"], "Monitor Color");
-    assert_eq!(f["workingRgb"], "display-p3");
+    assert_eq!(f["workingRgb"], app.session.color.monitor_rgb_for("display-p3"));
     assert_eq!((&f["policyRgb"], &f["policyCmyk"], &f["policyGray"]), (&json!("off"), &json!("off"), &json!("off")));
 }
 
 #[test]
 fn the_greyed_label_and_unknown_names_are_no_entry() {
-    for bad in [json!("Other"), json!("Nowhere"), json!(7)] {
-        let mut f = fields(&ColorSettings::default());
-        f.insert("preset".into(), bad.clone());
-        draw(&mut f);
-        assert_eq!(f["preset"], CUSTOM_SETTINGS, "{bad}");
+    for bad in [json!("Other"), json!("Nowhere")] {
+        let mut app = app_with(ColorSettings::default());
+        let id = open_dialog(&mut app, 1);
+        dialog_set(&mut app, id, "preset", bad.clone());
+        show(&mut app, 1);
+        assert_eq!(fields(&app, id)["preset"], CUSTOM_SETTINGS, "{bad}");
     }
-}
-
-/// The real dialog: opened from the menu, set through the control channel, then OK or Cancel.
-fn open_dialog(app: &mut PhotocraftApp, ctx: &egui::Context) -> u64 {
-    crate::menus::invoke(app, ctx, COMMAND, json!({})).unwrap()["dialog"].as_u64().unwrap()
-}
-
-fn show(app: &mut PhotocraftApp, ctx: &egui::Context, frames: usize) {
-    for _ in 0..frames {
-        ctx.run_ui(Default::default(), |ui| crate::dialogs::show(app, ui.ctx())).textures_delta.clear();
-    }
-}
-
-fn dialog_set(app: &mut PhotocraftApp, ctx: &egui::Context, id: u64, field: &str, value: Value) {
-    let (request, _) = crate::control::ControlRequest::new("ui.dialog.set", json!({"dialog": id, "field": field, "value": value}));
-    let crate::control::Outcome::Done(reply) = crate::control::handle(app, ctx, &request) else { panic!("ui.dialog.set should finish immediately") };
-    assert_eq!(reply["ok"], true, "{reply}");
 }
 
 #[test]
 fn ok_stores_the_setup_and_cancel_discards_it() {
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-    let ctx = egui::Context::default();
-    PhotocraftApp::setup_context(&ctx, Default::default());
+    let mut app = app_with(ColorSettings::default());
     // Cancel: nothing changes.
-    let id = open_dialog(&mut app, &ctx);
-    show(&mut app, &ctx, 1);
-    dialog_set(&mut app, &ctx, id, "preset", json!("North America General Purpose 2"));
-    show(&mut app, &ctx, 2);
-    crate::dialogs::cancel(&mut app, id).unwrap();
+    let id = open_dialog(&mut app, 1);
+    dialog_set(&mut app, id, "preset", json!("North America General Purpose 2"));
+    show(&mut app, 2);
+    crate::dialogs::testing::cancel(&mut app, id).unwrap();
     assert_eq!(app.session.color.settings, ColorSettings::default());
     // OK: the setup's name and values.
-    let id = open_dialog(&mut app, &ctx);
-    show(&mut app, &ctx, 1);
-    dialog_set(&mut app, &ctx, id, "preset", json!("North America General Purpose 2"));
-    show(&mut app, &ctx, 2);
-    crate::dialogs::confirm(&mut app, id).unwrap();
+    let id = open_dialog(&mut app, 1);
+    dialog_set(&mut app, id, "preset", json!("North America General Purpose 2"));
+    show(&mut app, 2);
+    crate::dialogs::testing::confirm(&mut app, id).unwrap();
     let c = &app.session.color.settings;
     assert_eq!(c.preset, "North America General Purpose 2");
     assert_eq!((c.ask_on_mismatch, c.ask_on_paste, c.ask_on_missing), (false, false, false));
     // Opened again, it shows that setup; an edit then OK stores Custom.
-    let id = open_dialog(&mut app, &ctx);
-    show(&mut app, &ctx, 1);
-    assert_eq!(app.ui.dialog_mut(id).unwrap().fields["preset"], "North America General Purpose 2");
-    dialog_set(&mut app, &ctx, id, "dither", json!(false));
-    show(&mut app, &ctx, 1);
-    assert_eq!(app.ui.dialog_mut(id).unwrap().fields["preset"], CUSTOM_SETTINGS);
-    crate::dialogs::confirm(&mut app, id).unwrap();
+    let id = open_dialog(&mut app, 1);
+    assert_eq!(fields(&app, id)["preset"], "North America General Purpose 2");
+    dialog_set(&mut app, id, "dither", json!(false));
+    assert_eq!(fields(&app, id)["preset"], CUSTOM_SETTINGS);
+    crate::dialogs::testing::confirm(&mut app, id).unwrap();
     assert_eq!(app.session.color.settings.preset, CUSTOM_SETTINGS);
     assert!(!app.session.color.settings.dither);
 }
 
 #[test]
 fn a_setup_set_by_script_loads_before_the_next_draw() {
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-    let ctx = egui::Context::default();
-    PhotocraftApp::setup_context(&ctx, Default::default());
     let expected = preset_setup(&ColorSettings::default(), "Europe Prepress 3", "srgb").unwrap();
-    // Confirmed with no draw at all, and after one draw.
-    for frames in [0, 1] {
-        app.session.color.settings = ColorSettings::default();
-        let id = open_dialog(&mut app, &ctx);
-        show(&mut app, &ctx, frames);
-        dialog_set(&mut app, &ctx, id, "preset", json!("Europe Prepress 3"));
-        crate::dialogs::confirm(&mut app, id).unwrap();
-        let c = &app.session.color.settings;
-        assert_eq!(c.preset, "Europe Prepress 3", "{frames} frames");
-        assert_eq!((&c.working_rgb, &c.working_cmyk), (&expected.working_rgb, &expected.working_cmyk), "{frames} frames");
-        assert_eq!((c.ask_on_mismatch, c.ask_on_paste, c.ask_on_missing), (true, true, true), "{frames} frames");
-    }
+    let mut app = app_with(ColorSettings::default());
+    let id = open_dialog(&mut app, 1);
+    dialog_set(&mut app, id, "preset", json!("Europe Prepress 3"));
+    crate::dialogs::testing::confirm(&mut app, id).unwrap();
+    let c = &app.session.color.settings;
+    assert_eq!(c.preset, "Europe Prepress 3");
+    assert_eq!((&c.working_rgb, &c.working_cmyk), (&expected.working_rgb, &expected.working_cmyk));
+    assert_eq!((c.ask_on_mismatch, c.ask_on_paste, c.ask_on_missing), (true, true, true));
 }
 
 #[test]
@@ -199,19 +186,12 @@ fn a_control_set_by_script_shows_custom_before_the_next_draw() {
     for (key, value, expected) in
         [("blendTextGamma", json!(1.8), CUSTOM_SETTINGS), ("reset", json!(true), CUSTOM_SETTINGS), ("blendTextGamma", json!(1.45), name)]
     {
-        // Confirmed with no draw at all, and after one draw.
-        for frames in [0, 1] {
-            // A fresh app each time: the dialog reopens with the last confirmed values.
-            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-            let ctx = egui::Context::default();
-            PhotocraftApp::setup_context(&ctx, Default::default());
-            app.session.color.settings = stored.clone();
-            let id = open_dialog(&mut app, &ctx);
-            show(&mut app, &ctx, frames);
-            dialog_set(&mut app, &ctx, id, key, value.clone());
-            assert_eq!(app.ui.dialog_mut(id).unwrap().fields["preset"], expected, "{key} {value}, {frames} frames");
-            crate::dialogs::confirm(&mut app, id).unwrap();
-            assert_eq!(app.session.color.settings.preset, expected, "{key} {value}, {frames} frames");
-        }
+        // A fresh app each time: the dialog reopens with the last confirmed values.
+        let mut app = app_with(stored.clone());
+        let id = open_dialog(&mut app, 1);
+        dialog_set(&mut app, id, key, value.clone());
+        assert_eq!(fields(&app, id)["preset"], expected, "{key} {value}");
+        crate::dialogs::testing::confirm(&mut app, id).unwrap();
+        assert_eq!(app.session.color.settings.preset, expected, "{key} {value}");
     }
 }

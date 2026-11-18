@@ -1,73 +1,58 @@
 //! Reveal the active layer in the Layers panel (#152), like Photoshop: whenever the active
 //! layer changes, by whatever means (a click on the canvas with Auto-Select, Select › layer
-//! commands, ⌥[ / ⌥], undo, automation), its closed parent groups open (`layer.setExpanded`)
-//! and the panel scrolls just enough to show its row, unless the row is already in view.
+//! commands, ⌥[ / ⌥], undo, automation), its closed parent groups open and the panel scrolls
+//! just enough to show its row, unless the row is already in view. The panel does both
+//! (`LayersPanel::reveal`); this module decides when, and whether the groups open.
+//!
+//! The command dispatch takes a [`mark`] before a command and calls [`file`] after it; when the
+//! active layer moved, the reveal waits in `PhotocraftApp::pending_reveal` until the panel next
+//! draws and [`take`]s it, so a hidden panel reveals the layer when it is shown again.
 //!
 //! Only a change of the active layer reveals: closing the group that holds it, or scrolling
 //! away, is left alone until the next change.
 
-use egui::{Rect, pos2};
-use photocraft_doc::{LayerContent, LayerId};
-use serde_json::json;
+use craft::layers::ui::panel::Groups;
+use photocraft_doc::LayerId;
 
 use crate::PhotocraftApp;
 
-/// Last active layer the panel saw: (document index, layer).
-#[derive(Clone, Copy, PartialEq)]
-struct Seen(usize, Option<LayerId>);
-
-fn seen_id() -> egui::Id {
-    egui::Id::unique("layers-reveal-seen")
+/// The active document and layer at one moment: what [`file`] compares across a command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Mark {
+    document: Option<usize>,
+    layer: Option<LayerId>,
 }
 
-/// Called once per Layers panel frame, before its rows are listed. When the active layer
-/// changed since the last frame, opens its closed parent groups and returns it: the row to
-/// scroll into view (see [`scroll_to_row`]). The first frame of a document only records it.
-pub fn track(app: &mut PhotocraftApp, ctx: &egui::Context) -> Option<LayerId> {
-    let index = app.session.active_index()?;
-    let active = app.session.active()?.active_layer;
-    let now = Seen(index, active);
+/// The active document index and active layer now.
+pub(crate) fn mark(app: &PhotocraftApp) -> Mark {
+    Mark { document: app.session.active_index(), layer: app.session.active().and_then(|st| st.active_layer) }
+}
+
+/// Called after a command ran, with the [`mark`] taken before it. When the active layer changed
+/// inside the same document, files the reveal for the Layers panel's next draw; a switch of
+/// document reveals nothing.
+pub(crate) fn file(app: &mut PhotocraftApp, before: Mark) {
+    let after = mark(app);
     // The marker says the latest active-layer change was a Move-way pick of that layer: it holds only
-    // while no later change happened (the engine's change count is unchanged), however many frames a
-    // hidden panel missed, and whether or not the final layer is the same id.
+    // while no later change happened (the engine's change count is unchanged), whether or not the
+    // final layer is the same id.
     let changes = app.session.active_layer_changes();
-    let pick = app.move_pick.take().filter(|&(id, at)| Some(id) == active && at == changes).map(|(id, _)| id);
-    let before = ctx.data(|d| d.get_temp::<Seen>(seen_id()));
-    ctx.data_mut(|d| d.insert_temp(seen_id(), now));
-    match before {
-        Some(Seen(i, prev)) if i == index && prev != active => {}
-        _ => return None,
+    let pick = app.move_pick.take().filter(|&(id, at)| Some(id) == after.layer && at == changes).map(|(id, _)| id);
+    if before.document.is_none() || before.document != after.document || before.layer == after.layer {
+        return;
     }
-    let id = active?;
+    let Some(id) = after.layer else { return };
     // Expand layer group on click (Move gear menu, #11381) governs a canvas click that picked this
     // layer the Move tool way (Auto-Select, or a ⌘-click from another tool); every other change
-    // opens the groups. The row still scrolls into view.
+    // opens the groups. The row (or its outermost closed group's) still scrolls into view.
     let move_pick = pick == Some(id);
-    let expand = !move_pick || app.ui.tool_options.move_expand_group_on_click;
-    for group in closed_ancestors(app, id).into_iter().filter(|_| expand) {
-        // A view change (no history step); a failure just leaves the group closed.
-        let _ = app.session.execute("layer.setExpanded", json!({"layer": group.0, "expanded": true}));
-    }
-    Some(id)
+    let groups = if !move_pick || app.ui.tool_options.move_expand_group_on_click { Groups::Open } else { Groups::Keep };
+    app.pending_reveal = Some((id, groups));
 }
 
-/// The groups containing `id` that are closed, outermost first.
-fn closed_ancestors(app: &PhotocraftApp, id: LayerId) -> Vec<LayerId> {
-    let Some(doc) = app.session.active().map(|s| &s.doc) else { return Vec::new() };
-    let Some(path) = doc.path_of(id) else { return Vec::new() };
-    (1..path.len()).filter_map(|n| doc.layer_at(path.get(..n)?)).filter(|l| matches!(&l.content, LayerContent::Group(g) if !g.expanded)).map(|l| l.id).collect()
+/// The pending reveal, for the Layers panel's draw: the layer and what its closed parent groups
+/// do. The first pass of a frame takes it, so a second pass in the same frame reveals nothing
+/// again.
+pub(crate) fn take(app: &mut PhotocraftApp) -> Option<(LayerId, Groups)> {
+    app.pending_reveal.take()
 }
-
-/// After drawing the row that started at `top` in the Layers scroll area, scroll it into view
-/// if any of it is hidden (no animation: Photoshop jumps).
-pub fn scroll_to_row(ui: &egui::Ui, top: f32) {
-    let bottom = ui.min_rect().bottom().max(top);
-    let row = Rect::from_min_max(pos2(ui.min_rect().left(), top), pos2(ui.min_rect().right(), bottom));
-    let view = ui.clip_rect();
-    if row.top() < view.top() - 0.5 || row.bottom() > view.bottom() + 0.5 {
-        ui.scroll_to_rect_animation(row, None, egui::style::ScrollAnimation::none());
-    }
-}
-
-#[cfg(test)]
-mod tests;

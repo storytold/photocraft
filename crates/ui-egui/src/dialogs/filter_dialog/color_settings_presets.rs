@@ -1,13 +1,20 @@
 //! Color Settings' Settings menu (#14229): picking a named setup loads its values into the
 //! dialog's controls, except Blend Text Colors Using Gamma, which keeps what it shows; changing
 //! any control afterwards shows "Custom" at once. OK sends the menu's entry as `preset`.
+//!
+//! The menu is a custom row ([`row`]); [`reconcile`] does the rest after each pass of the dialog
+//! host and after each `ui.dialog.set`, so a confirm that follows a script's set sends the same
+//! name and values a draw would have shown.
 
-use egui::Ui;
-use photocraft_engine::Session;
+use craft::ui::contract::{Bind, Entry, Outcome as _, Show as _};
+use craft::ui::dialog::dialog_id;
+use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog, Param};
+use craft::ui::pickers::Select;
+use craft::ui::runtime::env::Label;
 use photocraft_engine::color_cmds::{COLOR_SETTINGS_PRESETS, CUSTOM_SETTINGS, ColorSettings, is_settings_preset, preset_setup};
 use serde_json::{Map, Value, json};
 
-use crate::theme::Tokens;
+use crate::PhotocraftApp;
 
 pub(super) const COMMAND: &str = "edit.colorSettings";
 const KEY: &str = "preset";
@@ -19,128 +26,115 @@ const GROUP_STARTS: [&str; 3] = [OTHER, "Europe General Purpose 3", "Japan Color
 const APPLIED: &str = "__presetApplied";
 /// The controls' values at that moment: an edit makes them differ.
 const BASE: &str = "__presetBase";
-/// The working RGB "Monitor Color" sets: the monitor profile in use, refreshed by the dialog.
-pub(crate) const MONITOR_RGB: &str = "__monitorRgb";
 /// What a setup leaves as the controls show it.
 const KEPT: [&str; 2] = ["blendTextGamma", "monitorProfile"];
 
-pub(super) fn owns(command: &str, key: &str) -> bool {
-    command == COMMAND && key == KEY
+/// The menu entry `value` names (Custom for anything the menu doesn't have).
+fn entry_of(value: Option<&str>) -> String {
+    value.filter(|n| is_settings_preset(n)).unwrap_or(CUSTOM_SETTINGS).to_string()
 }
 
-/// The menu entry the fields hold (Custom for anything the menu doesn't have).
-fn current(f: &Map<String, Value>) -> String {
-    f.get(KEY).and_then(Value::as_str).filter(|n| is_settings_preset(n)).unwrap_or(CUSTOM_SETTINGS).to_string()
+/// The Settings row, in place of the spec's plain choice: Custom, the greyed Other label and the
+/// named setups in their groups.
+pub(super) fn row(label: Label) -> Param {
+    let name = label.clone();
+    Param::custom(KEY, label, move |ui, fields, _| {
+        let mut entries = Vec::new();
+        let named = COLOR_SETTINGS_PRESETS.iter().map(|n| (*n, *n));
+        for (value, label) in [(CUSTOM_SETTINGS, tl!("Custom")), (OTHER, tl!("Other"))].into_iter().chain(named) {
+            if GROUP_STARTS.contains(&value) {
+                entries.push(Entry::separator());
+            }
+            entries.push(Entry::new(value.to_string(), Label::from(label)).enabled(value != OTHER));
+        }
+        let out = Select::new(name.clone(), Bind::given(entry_of(fields.text(KEY))), &entries).show(ui);
+        if let Some(picked) = out.value().cloned() {
+            fields.set(KEY, FieldValue::Text(picked));
+        }
+        out.response().clone()
+    })
 }
 
-/// The Settings row, on top of the dialog.
-pub(super) fn row(ui: &mut Ui, f: &mut Map<String, Value>) {
-    let t = Tokens::get(ui.ctx());
-    let mut cur = current(f);
-    let mut opts: Vec<(String, &str)> = vec![(CUSTOM_SETTINGS.to_string(), CUSTOM_SETTINGS), (OTHER.to_string(), OTHER)];
-    opts.extend(COLOR_SETTINGS_PRESETS.iter().map(|n| (n.to_string(), *n)));
-    let before = cur.clone();
-    ui.horizontal(|ui| {
-        let name = super::label("settings");
-        ui.label(egui::RichText::new(&name).color(t.text_dim));
-        crate::widgets::dropdown_wheel_grouped_enabled(
-            ui,
-            "flt-edit.colorSettings-preset",
-            &name,
-            &mut cur,
-            &opts,
-            250.0,
-            |v| GROUP_STARTS.contains(&v.as_str()),
-            |v| v != OTHER,
-        );
-    });
-    // The keys step onto the greyed label too; it is no value.
-    if cur == OTHER {
-        cur = before;
+/// After a pass or a set: shows Custom for a name the menu doesn't have, loads a newly picked setup
+/// (from the menu or `ui.dialog.set`), or shows Custom once a control differs from the values the
+/// shown setup gave.
+pub(crate) fn reconcile(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let Some(dialog) = app.framework.dialogs.get_by_id::<HostedParamDialog>(dialog_id(COMMAND)) else { return };
+    let f = fields_map(dialog.fields());
+    let shown = entry_of(f.get(KEY).and_then(Value::as_str));
+    if f.get(KEY).and_then(Value::as_str) != Some(shown.as_str()) {
+        set_hidden(app, KEY, json!(shown));
     }
-    f.insert(KEY.into(), json!(cur));
-}
-
-/// After the controls drew: load a newly picked setup (from the menu or `ui.dialog.set`), or show
-/// Custom once a control differs from the values the shown setup gave.
-pub(super) fn sync(ctx: &egui::Context, f: &mut Map<String, Value>) {
-    let shown = current(f);
     let Some(applied) = f.get(APPLIED).and_then(Value::as_str).map(str::to_string) else {
         // Opening: the controls hold the stored setup's values.
-        f.insert(APPLIED.into(), json!(shown));
-        f.insert(BASE.into(), Value::Object(tracked(f)));
+        set_hidden(app, APPLIED, json!(shown));
+        set_hidden(app, BASE, Value::Object(tracked(&f)));
         return;
     };
     if shown != applied {
-        load(f, &shown);
-        ctx.request_repaint();
+        load(app, ctx, &f, &shown);
         return;
     }
     if shown == CUSTOM_SETTINGS {
         return;
     }
-    let mut base = match f.remove(BASE) {
-        Some(Value::Object(b)) => b,
+    let mut base = match f.get(BASE) {
+        Some(Value::Object(b)) => b.clone(),
         _ => Map::new(),
     };
-    let mut edited = false;
-    for (k, v) in tracked(f) {
+    let (mut edited, mut grew) = (false, false);
+    for (k, v) in tracked(&f) {
         match base.get(&k) {
             Some(b) => edited |= !same(b, &v),
             // A control that filled in its default after opening is no edit.
             None => {
                 base.insert(k, v);
+                grew = true;
             }
         }
     }
-    f.insert(BASE.into(), Value::Object(base));
     if edited {
-        f.insert(KEY.into(), json!(CUSTOM_SETTINGS));
-        f.insert(APPLIED.into(), json!(CUSTOM_SETTINGS));
-        ctx.request_repaint();
-    }
-}
-
-/// `ui.dialog.set` does at once what the next draw would, so a confirm before that draw sends the
-/// same name and values: picking an entry loads its setup, and changing a control (`old` is the
-/// value it replaced) while a setup shows makes it Custom.
-pub(crate) fn after_dialog_set(session: &Session, f: &mut Map<String, Value>, field: &str, old: Option<&Value>) {
-    if f.get("__command").and_then(Value::as_str) != Some(COMMAND) {
-        return;
-    }
-    if field != KEY {
-        if !is_tracked(field) || current(f) == CUSTOM_SETTINGS {
-            return;
-        }
-        // The value the shown setup gave, or before the first draw the one the dialog opened with.
-        let base = f.get(BASE).and_then(|b| b.get(field)).or(old);
-        if matches!((base, f.get(field)), (Some(b), Some(v)) if !same(b, v)) {
-            f.insert(KEY.into(), json!(CUSTOM_SETTINGS));
-            f.insert(APPLIED.into(), json!(CUSTOM_SETTINGS));
-        }
-        return;
-    }
-    let monitor = f.get("monitorProfile").and_then(Value::as_str).unwrap_or("auto");
-    let rgb = session.color.monitor_rgb_for(monitor);
-    f.insert(MONITOR_RGB.into(), Value::String(rgb));
-    let shown = current(f);
-    if f.get(APPLIED).and_then(Value::as_str) != Some(shown.as_str()) {
-        load(f, &shown);
+        set_hidden(app, KEY, json!(CUSTOM_SETTINGS));
+        set_hidden(app, APPLIED, json!(CUSTOM_SETTINGS));
+    } else if grew {
+        set_hidden(app, BASE, Value::Object(base));
     }
 }
 
 /// Loads the named setup into the controls (but the [`KEPT`] ones) and makes it the one they show.
-fn load(f: &mut Map<String, Value>, name: &str) {
-    let monitor_rgb = f.get(MONITOR_RGB).and_then(Value::as_str).unwrap_or("srgb").to_string();
+/// "Monitor Color" takes the monitor profile the dialog shows as its working RGB.
+fn load(app: &mut PhotocraftApp, ctx: &egui::Context, f: &Map<String, Value>, name: &str) {
+    let monitor = f.get("monitorProfile").and_then(Value::as_str).unwrap_or("auto");
+    let monitor_rgb = app.session.color.monitor_rgb_for(monitor);
+    let id = dialog_id(COMMAND);
     if let Some(Value::Object(setup)) = preset_setup(&ColorSettings::default(), name, &monitor_rgb).and_then(|c| serde_json::to_value(c).ok()) {
         for (k, v) in setup {
-            if is_tracked(&k) && !KEPT.contains(&k.as_str()) {
-                f.insert(k, v);
+            if is_tracked(&k) && !KEPT.contains(&k.as_str()) && f.contains_key(&k) {
+                // A value a row refuses keeps what the row shows; the setups' values all fit the rows.
+                let _ = app.framework.dialogs.set_json_field(ctx, id, &k, v);
             }
         }
     }
-    f.insert(APPLIED.into(), json!(name));
-    f.insert(BASE.into(), Value::Object(tracked(f)));
+    let Some(dialog) = app.framework.dialogs.get_by_id::<HostedParamDialog>(id) else { return };
+    let base = tracked(&fields_map(dialog.fields()));
+    set_hidden(app, APPLIED, json!(name));
+    set_hidden(app, BASE, Value::Object(base));
+}
+
+/// Writes `value` under `key` of the open dialog: the menu's entry as text, the bookkeeping as JSON.
+fn set_hidden(app: &mut PhotocraftApp, key: &str, value: Value) {
+    let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedParamDialog>(dialog_id(COMMAND)) else { return };
+    match value {
+        Value::String(text) => dialog.set_field(key, FieldValue::Text(text)),
+        value => dialog.set_field(key, FieldValue::Json(value)),
+    }
+}
+
+fn fields_map(fields: &DialogFields) -> Map<String, Value> {
+    match serde_json::to_value(fields) {
+        Ok(Value::Object(map)) => map,
+        _ => Map::new(),
+    }
 }
 
 /// Keys whose change makes the values Custom: the params but the menu and the monitor profile.
