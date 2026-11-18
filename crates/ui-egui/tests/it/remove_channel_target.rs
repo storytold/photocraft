@@ -74,8 +74,20 @@ fn probe(input: Input) {
         Input::ControlPointer => {
             let ctx = h.ctx.clone();
             let (req, _rx) = control::ControlRequest::new("ui.pointer", r#"{"tool":"type","events":[{"kind":"down","x":4,"y":14}]}"#.parse().unwrap());
-            let _ = control::handle(h.state_mut(), &ctx, &req);
-            h.run_steps(2);
+            match control::handle(h.state_mut(), &ctx, &req) {
+                control::Reply::Done(reply) => assert_eq!(reply["ok"], true, "the pointer request is accepted: {reply}"),
+                _ => panic!("ui.pointer must reply immediately"),
+            }
+            // The control channel queues input for the canvas; wait for delivery rather than
+            // assuming two passes suffice on every host.
+            let host = craft::ui::runtime::windows::WindowHost::of(&ctx);
+            for _ in 0..8 {
+                if host.injected_idle() {
+                    break;
+                }
+                h.run_steps(1);
+            }
+            assert!(host.injected_idle(), "the canvas consumed the queued pointer input");
         }
     }
     let selected = if matches!(input, Input::None) { target } else { text };
