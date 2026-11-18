@@ -102,16 +102,19 @@ fn offset_raster_and_whole_moving_layers_keep_their_size_with_a_selection() {
     app.run("select.rect", json!({"x":250,"y":130,"width":60,"height":60})).unwrap();
     assert_eq!(content_layer(&app, [250, 130, 316, 196]), None);
     assert_eq!(content_layer(&app, [250, 130, 318, 198]), Some(layer.0));
-    for kind in ["shape", "smart"] {
-        let (mut app, _) = candidate(Rect::new(50, 50, 250, 250));
-        if kind == "shape" {
-            app.run("shape.create", json!({"kind":"rect","rect":[50,50,200,200],"fill":"#3366cc"})).unwrap();
-        } else {
-            app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
-        }
-        let id = app.session.active().unwrap().active_layer.unwrap();
-        app.run("select.rect", json!({"x":60,"y":60,"width":20,"height":20})).unwrap();
-        assert_eq!(content_layer(&app, [60, 60, 126, 126]), None, "{kind}");
-        assert_eq!(content_layer(&app, [60, 60, 128, 128]), Some(id.0), "{kind}");
-    }
+    // A Smart Object still uses its whole bounds for the threshold, even with a smaller selection.
+    // Shapes stay ineligible as frame content (they are skipped by the #14366 candidate walk).
+    let (mut app, _) = candidate(Rect::new(50, 50, 250, 250));
+    app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    let id = app.session.active().unwrap().active_layer.unwrap();
+    app.run("select.rect", json!({"x":60,"y":60,"width":20,"height":20})).unwrap();
+    assert_eq!(content_layer(&app, [60, 60, 126, 126]), None, "smart");
+    assert_eq!(content_layer(&app, [60, 60, 128, 128]), Some(id.0), "smart");
+
+    let (mut app, _) = candidate(Rect::new(50, 50, 250, 250));
+    app.run("shape.create", json!({"kind":"rect","rect":[50,50,200,200],"fill":"#3366cc"})).unwrap();
+    let id = app.session.active().unwrap().active_layer.unwrap();
+    app.run("select.rect", json!({"x":60,"y":60,"width":20,"height":20})).unwrap();
+    assert_eq!(content_layer(&app, [60, 60, 128, 128]), None, "shape is not image frame content");
+    assert_ne!(id.0, 0);
 }
