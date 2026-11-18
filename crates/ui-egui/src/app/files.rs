@@ -250,8 +250,7 @@ impl PhotocraftApp {
         // only when it keeps the whole document (no layers, depth, colour model, profile,
         // metadata, alpha channels or, for JPEG, transparency to lose), since such a save isn't a
         // copy and marks the document saved.
-        let default_format = self.session.prefs().file_handling.default_save_format;
-        let default_ext = if default_format.is_flat() && !flat_keeps(&st.doc, default_format.name()) { "psd" } else { default_format.name() };
+        let mut guarded_flat = None;
         let suggested = match &st.path {
             Some(p) if transparent_jpeg => std::path::Path::new(p).with_extension("png").to_string_lossy().into_owned(),
             Some(p) if writable => p.clone(),
@@ -260,7 +259,19 @@ impl PhotocraftApp {
                 let ext = match photocraft_engine::file_cmds::extension(source).as_deref() {
                     Some("pdn") => "pcraft",
                     Some("kra" | "krz") => "ora",
-                    _ => default_ext,
+                    _ => {
+                        let format = self.session.prefs().file_handling.default_save_format;
+                        if format.is_flat() {
+                            if flat_keeps(&st.doc, format.name()) {
+                                guarded_flat = photocraft_codecs::from_extension(format.name());
+                                format.name()
+                            } else {
+                                "psd"
+                            }
+                        } else {
+                            format.name()
+                        }
+                    }
                 };
                 std::path::Path::new(source).with_extension(ext).to_string_lossy().into_owned()
             }
@@ -268,6 +279,11 @@ impl PhotocraftApp {
         let doc = st.doc.id;
         self.pick_save(&suggested, move |app, path| {
             app.with_document(doc, |app| {
+                let picked_format = photocraft_engine::file_cmds::extension(&path).and_then(|e| photocraft_codecs::from_extension(&e));
+                let preserve_flat = guarded_flat.is_some() && guarded_flat == picked_format;
+                if preserve_flat {
+                    app.ensure_preserving_flat_save(&path)?;
+                }
                 let own = app.session.active().and_then(|st| st.path.clone());
                 // Confirming the document's own file: ask first if another app changed it (#6596).
                 if plain_save
@@ -278,12 +294,31 @@ impl PhotocraftApp {
                 }
                 let from = app.session.journal.len();
                 let r = app.save_to(path.clone(), choices)?;
+                // JPEG Options can defer the write again. Carry the same promise through
+                // that dialog, without changing explicitly chosen flat exports.
+                if preserve_flat
+                    && let Some(save) = app.parked_save.as_mut().filter(|save| save.doc == doc && save.path == path)
+                    && let crate::format_prompts::ParkedFormat::Jpeg(parked) = &mut save.format
+                {
+                    parked.preserve_flat = true;
+                }
                 if plain_save && own.as_deref() == Some(path.as_str()) {
                     app.journal_as_plain_save(&path, from);
                 }
                 Ok(r)
             })
         })
+    }
+
+    /// Recheck an automatically offered flat default when a deferred save resumes:
+    /// commands can add data while a picker or format-options dialog is open.
+    pub(crate) fn ensure_preserving_flat_save(&self, path: &str) -> Result<(), String> {
+        let st = self.session.active().ok_or("no document")?;
+        if photocraft_engine::file_cmds::extension(path).is_some_and(|e| flat_keeps(&st.doc, &e)) {
+            Ok(())
+        } else {
+            Err(tl!("The document changed. Use Save As again to choose a format that preserves it.").into())
+        }
     }
 
     /// [`Self::save_as_with`] once the path is known.

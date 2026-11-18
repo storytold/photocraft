@@ -189,6 +189,8 @@ fn remember(app: &PhotocraftApp, choice: JpegChoice) {
 
 /// What a parked JPEG save keeps besides the hosted dialog's answer.
 pub struct Parked {
+    /// A flat default offered as preserving the document must still do so after the dialog.
+    pub(crate) preserve_flat: bool,
     /// See [`Start::own_quality`].
     own_quality: Option<u8>,
     /// The sizes worked out for the dialog's footer.
@@ -200,7 +202,7 @@ pub struct Parked {
 impl Parked {
     /// A parked JPEG save whose prompt started at `own_quality` (see [`Start::own_quality`]).
     fn new(own_quality: Option<u8>) -> Self {
-        Parked { own_quality, readout: size_readout::Readout::default(), asked: None }
+        Parked { preserve_flat: false, own_quality, readout: size_readout::Readout::default(), asked: None }
     }
 }
 
@@ -295,6 +297,13 @@ pub(crate) fn poll_estimate(app: &mut PhotocraftApp, ctx: &egui::Context) {
 
 /// OK: writes the parked save with the dialog's quality and format, and journals it.
 pub(crate) fn finish(app: &mut PhotocraftApp, ctx: &egui::Context, save: ParkedSave, options: JpegOptions) {
+    if matches!(&save.format, ParkedFormat::Jpeg(parked) if parked.preserve_flat)
+        && let Err(e) = app.with_document(save.doc, |app| app.ensure_preserving_flat_save(&save.path))
+    {
+        app.ui.status = crate::i18n::fmt(tl!("Save failed: {error}"), &[("error", &e)]);
+        app.ui.status_error = true;
+        return;
+    }
     let own_quality = match &save.format {
         ParkedFormat::Jpeg(parked) => parked.own_quality,
         _ => None,

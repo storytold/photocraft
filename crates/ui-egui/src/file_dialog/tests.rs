@@ -265,6 +265,8 @@ fn default_flat_formats_preserve_layer_data() {
             match case {
                 "locked transparency" => {
                     assert!(layer.locks.transparency && layer.locks.position);
+                    // The flat importer reconstructs transparent pixels as Layer 0.
+                    layer.name = "Layer 0".into();
                     layer.surface_mut().unwrap().write_pixel(0, 0, &[1.0, 0.0, 0.0, 0.5]);
                 }
                 "left" | "top" | "right" | "bottom" => {
@@ -278,8 +280,17 @@ fn default_flat_formats_preserve_layer_data() {
                 }
                 "layer XMP" => layer.xmp = Some("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"/>".into()),
                 "PSD block" => layer.psd_blocks.push((*b"test", Arc::new(vec![1, 2, 3, 4]))),
-                "JPEG width" => doc.size.width = 65_536,
-                "JPEG height" => doc.size.height = 65_536,
+                "JPEG width" | "JPEG height" => {
+                    // Keep the enlarged canvas opaque so only the encoder's size limit is
+                    // tested, not transparency that would also rename Background on import.
+                    let pixel_format = layer.surface().unwrap().format();
+                    *layer.surface_mut().unwrap() = photocraft_raster::Surface::with_default(pixel_format, &[1.0, 1.0, 1.0, 1.0]);
+                    if case == "JPEG width" {
+                        doc.size.width = 65_536;
+                    } else {
+                        doc.size.height = 65_536;
+                    }
+                }
                 _ => panic!("unknown test case: {case}"),
             }
             menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
@@ -292,6 +303,76 @@ fn default_flat_formats_preserve_layer_data() {
             assert!(written.borrow().is_empty());
         }
     }
+}
+
+#[test]
+fn default_save_picker_rechecks_flat_preservation() {
+    let ctx = egui::Context::default();
+    for (format, path) in [("png", "picked.png"), ("jpg", "picked.JPEG")] {
+        let (mut app, files, written) = boxed_jpeg_app(None, false);
+        app.run("prefs.set", json!({"path": "fileHandling.defaultSaveFormat", "value": format})).unwrap();
+        menus::invoke(&mut app, &ctx, "file.saveAs", json!({"quality": 12})).unwrap();
+        assert_eq!(asked_save(&files), format!("My image.{format}"));
+        app.session.execute("view.newGuide", json!({"orientation": "vertical", "position": 2})).unwrap();
+        answer(&files, chose(path));
+        app.poll_file_dialog();
+        assert!(written.borrow().is_empty(), "{format}: a changed document needs a new format choice");
+        let st = app.session.active().unwrap();
+        assert!(st.path.is_none() && st.is_dirty(), "{format}: no data may be marked saved");
+        assert!(app.ui.status_error);
+        assert!(!app.session.journal.iter().any(|(id, _)| id == "file.saveAs"));
+    }
+}
+
+#[test]
+fn default_save_jpeg_options_recheck_flat_preservation() {
+    let ctx = egui::Context::default();
+    let (mut app, files, written) = boxed_jpeg_app(None, false);
+    app.run("prefs.set", json!({"path": "fileHandling.defaultSaveFormat", "value": "jpg"})).unwrap();
+    menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+    answer(&files, chose("picked.jpg"));
+    app.poll_file_dialog();
+    assert!(app.parked_save.is_some());
+    app.session.execute("view.newGuide", json!({"orientation": "vertical", "position": 2})).unwrap();
+    confirm_options(&mut app);
+    assert!(written.borrow().is_empty());
+    let st = app.session.active().unwrap();
+    assert!(st.path.is_none() && st.is_dirty());
+    assert!(app.ui.status_error);
+    assert!(!app.session.journal.iter().any(|(id, _)| id == "file.saveAs"));
+}
+
+#[test]
+fn default_save_picker_keeps_compatible_and_explicit_choices() {
+    let ctx = egui::Context::default();
+    for format in ["png", "jpg"] {
+        let (mut app, files, written) = boxed_jpeg_app(None, false);
+        app.run("prefs.set", json!({"path": "fileHandling.defaultSaveFormat", "value": format})).unwrap();
+        menus::invoke(&mut app, &ctx, "file.saveAs", json!({"quality": 12})).unwrap();
+        let path = format!("My image.{format}");
+        answer(&files, chose(&path));
+        app.poll_file_dialog();
+        assert_eq!(written.borrow().as_slice(), std::slice::from_ref(&path));
+        assert_eq!(app.session.active().unwrap().path.as_deref(), Some(path.as_str()));
+        assert!(!app.session.active().unwrap().is_dirty());
+    }
+    // An unchanged JPEG default still saves after its deferred quality dialog.
+    let (mut app, files, written) = boxed_jpeg_app(None, false);
+    app.run("prefs.set", json!({"path": "fileHandling.defaultSaveFormat", "value": "jpg"})).unwrap();
+    menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+    answer(&files, chose("confirmed.jpg"));
+    app.poll_file_dialog();
+    confirm_options(&mut app);
+    assert_eq!(*written.borrow(), ["confirmed.jpg"]);
+    assert!(!app.session.active().unwrap().is_dirty());
+    // An explicit flat choice after a PSD suggestion keeps the existing manual Save As behavior.
+    let (mut app, files, written) = boxed_jpeg_app(None, false);
+    app.run("view.newGuide", json!({"orientation": "vertical", "position": 2})).unwrap();
+    menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+    assert_eq!(asked_save(&files), "My image.psd");
+    answer(&files, chose("manual.png"));
+    app.poll_file_dialog();
+    assert_eq!(*written.borrow(), ["manual.png"]);
 }
 
 /// The written files, by path.
@@ -379,8 +460,11 @@ fn default_flat_formats_reopen_unchanged() {
             let flat = format!("Shot.{format}");
             let r = photocraft_io::export(&before, &flat, &Default::default()).unwrap();
             let back = photocraft_io::import(&flat, &r.bytes).unwrap().document;
-            let lost = !r.warnings.is_empty() || back.mode != before.mode || back.depth != before.depth || back.metadata.text != before.metadata.text;
-            assert!(lost, "{case}: a {format} would have kept everything, so PSD wasn't needed");
+            if text {
+                assert_ne!(back.metadata.text, before.metadata.text, "{case}: the text itself is lost, not just JPEG compression");
+            } else {
+                assert!(back.mode != before.mode || back.depth != before.depth, "{case}: the original mode or depth is lost");
+            }
             continue;
         }
         // Saved as Save As writes it (JPEG Options answered at Maximum quality).
@@ -401,8 +485,43 @@ fn default_flat_formats_reopen_unchanged() {
         assert_eq!(back.metadata.text, before.metadata.text, "{case}: text metadata");
         assert!(back.channels.is_empty() && back.layers.len() == 1, "{case}");
         let (a, b) = (before.layers[0].surface().unwrap().pixel(4, 4), back.layers[0].surface().unwrap().pixel(4, 4));
+        assert_eq!(a.len(), b.len(), "{case}: every color and alpha sample is compared");
         let tolerance = if format == "jpg" { 3.0 / 255.0 } else { 1e-6 };
         assert!(a.iter().zip(&b).all(|(x, y)| (x - y).abs() <= tolerance), "{case}: pixels {a:?} → {b:?}");
+    }
+}
+
+#[test]
+fn default_png_round_trip_preserves_distinct_alpha_samples() {
+    let ctx = egui::Context::default();
+    let (mut app, files, written) = exporting_app();
+    app.run("file.new", json!({"width": 4, "height": 2, "background": "#336699", "name": "Alpha"})).unwrap();
+    app.run("prefs.set", json!({"path": "fileHandling.defaultSaveFormat", "value": "png"})).unwrap();
+    app.session
+        .edit("Alpha samples", |doc, _| {
+            let layer = &mut doc.layers[0];
+            layer.name = "Layer 0".into();
+            layer.locks = Default::default();
+            let surface = layer.surface_mut().unwrap();
+            surface.write_pixel(0, 0, &[0.2, 0.4, 0.6, 0.0]);
+            surface.write_pixel(1, 0, &[0.2, 0.4, 0.6, 0.5]);
+            surface.write_pixel(2, 0, &[0.2, 0.4, 0.6, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+    assert_eq!(asked_save(&files), "Alpha.png");
+    answer(&files, chose("Alpha.png"));
+    app.poll_file_dialog();
+    assert!(!app.session.active().unwrap().is_dirty());
+    let bytes = written.borrow().iter().find(|(path, _)| path == "Alpha.png").unwrap().1.clone();
+    let back = photocraft_io::import("Alpha.png", &bytes).unwrap().document;
+    let surface = back.layers[0].surface().unwrap();
+    assert!(surface.format().alpha);
+    for (x, alpha) in [(0, 0.0), (1, 0.5), (2, 1.0)] {
+        let pixel = surface.pixel(x, 0);
+        assert_eq!(pixel.len(), 4);
+        assert!((pixel[3] - alpha).abs() <= 1.0 / 255.0, "x={x}: {pixel:?}");
     }
 }
 
