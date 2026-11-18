@@ -1,0 +1,156 @@
+//! Edit › Fill… (Shift+F5, Shift+Backspace): Photoshop's Fill dialog in front of `edit.fill`.
+//!
+//! Contents (Foreground, Background, Color, Content-Aware, Pattern, History, Black, 50% Gray,
+//! White) with the content's own options, then Blending: Mode, Opacity and Preserve
+//! Transparency. OK remembers the choices in the saved tier.
+
+use std::borrow::Cow;
+
+use craft::ui::contract::Bind;
+use craft::ui::dialog::DialogId;
+use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamKind, ParamResult};
+use craft::ui::runtime::env::Label;
+use craft::ui::runtime::memory::SaveKey;
+use photocraft_color::BlendMode;
+use serde_json::{Value, json};
+
+use crate::PhotocraftApp;
+use crate::dialogs::blend_options::{blending_params, blending_rows};
+use crate::dialogs::params::{captured, open_param};
+use crate::panels::layers_tree::blend_key;
+
+/// The command of the dialog, which is also its dialog key.
+pub const COMMAND: &str = "edit.fill";
+const REMEMBER: &str = "photocraft.dialog.edit.fill";
+
+/// The Contents menu: (param, label), in Photoshop's order. Color reads without an ellipsis: choosing it opens nothing.
+pub const CONTENTS: [(&str, &str); 9] = [
+    ("foreground", "Foreground Color"),
+    ("background", "Background Color"),
+    ("color", "Color"),
+    ("contentAware", "Content-Aware"),
+    ("pattern", "Pattern"),
+    ("history", "History"),
+    ("black", "Black"),
+    ("gray", "50% Gray"),
+    ("white", "White"),
+];
+
+/// `#rrggbb` of an sRGB colour: the form the engine's colour params take.
+pub(crate) fn hex(c: [f32; 3]) -> String {
+    let b = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    format!("#{:02x}{:02x}{:02x}", b(c[0]), b(c[1]), b(c[2]))
+}
+
+/// The dialog's rows.
+fn rows(foreground: [f32; 3], first_pattern: Option<String>) -> Vec<Param> {
+    let contents = CONTENTS.iter().map(|(k, l)| (k.to_string(), Label::from(tl!(l)))).collect();
+    let mut rows = vec![
+        Param::new("contents", tl!("Contents:"), ParamKind::choice(contents, Some("foreground".into()))),
+        Param::new("color", tl!("Color:"), ParamKind::color(Some(foreground))).visible_when("contents", "color"),
+        Param::new("pattern", tl!("Custom Pattern:"), ParamKind::pattern(first_pattern)).visible_when("contents", "pattern"),
+        Param::new("colorAdaptation", tl!("Color Adaptation"), ParamKind::bool(true)).visible_when("contents", "contentAware"),
+    ];
+    rows.extend(blending_rows());
+    rows
+}
+
+/// Photoshop's Fill defaults, which Alt+Reset restores instead of the last-used values.
+fn defaults(foreground: [f32; 3], first_pattern: Option<String>) -> DialogFields {
+    let mut f = DialogFields::new();
+    f.set("contents", "foreground");
+    f.set("color", FieldValue::Color(foreground));
+    if let Some(id) = first_pattern {
+        f.set("pattern", id);
+    }
+    f.set("colorAdaptation", true);
+    f.set("mode", blend_key(BlendMode::Normal));
+    f.set("opacity", 100.0);
+    f.set("preserveTransparency", false);
+    f
+}
+
+/// Open Fill with the current editing target captured, so live UI changes cannot redirect confirmation.
+pub fn open(app: &mut PhotocraftApp) -> DialogId {
+    let target = app.with_mask_target(COMMAND, json!({}));
+    let target = target.get("target").cloned().unwrap_or_else(|| crate::canvas::paint_target(app));
+    // Alpha and Quick Mask belong to the document, independently of its active layer.
+    let layer_bound = target.as_str() != Some("quickMask") && target.get("channel").is_none();
+    let mut held = json!({ "target": target });
+    if let Some(st) = app.session.active() {
+        held["document"] = json!(st.doc.id.0);
+        if layer_bound {
+            held["layer"] = json!(st.active_layer);
+        }
+    }
+    let [r, g, b, _] = app.session.tools.foreground;
+    let first = app.session.patterns.items.first().map(|p| p.id.clone());
+    let ctx = app.ctx().clone();
+    let patterns = crate::panels::preset_browser::pattern_rows(app, &ctx);
+    let rows = rows([r, g, b], first.clone());
+    let reset = defaults([r, g, b], first);
+    let title = Label::from(tl!("Fill"));
+    open_param(app, COMMAND, DialogFields::new(), held, move |fields| {
+        ParamDialog::new(COMMAND, title.clone(), rows.clone())
+            .values(Bind::bound(fields))
+            .remember(SaveKey::named(REMEMBER))
+            .reset_to(reset.clone())
+            .patterns(Cow::Owned(patterns.clone()))
+    })
+}
+
+/// The `edit.fill` params of the dialog's fields: only the options of the chosen contents, and the captured target.
+pub fn params(f: &DialogFields, held: &Value) -> Value {
+    let contents = f.text("contents").unwrap_or("foreground");
+    let mut p = blending_params(f);
+    p.insert("contents".into(), json!(contents));
+    match contents {
+        "color" => {
+            if let Some(c) = f.color("color") {
+                p.insert("color".into(), json!(hex(c)));
+            }
+        }
+        "pattern" => {
+            if let Some(id) = f.text("pattern") {
+                p.insert("pattern".into(), json!(id));
+            }
+        }
+        "contentAware" => {
+            if let Some(on) = f.bool("colorAdaptation") {
+                p.insert("colorAdaptation".into(), json!(on));
+            }
+        }
+        _ => {}
+    }
+    if let Some(target) = held.get("target") {
+        p.insert("target".into(), target.clone());
+    }
+    Value::Object(p)
+}
+
+/// Whether the dialog `key` is the Fill dialog.
+pub(crate) fn owns(key: &str) -> bool {
+    key == COMMAND
+}
+
+/// OK is held until the document and layer are the ones the dialog opened on.
+pub(crate) fn check(app: &mut PhotocraftApp, result: &ParamResult) -> Result<(), Label> {
+    let captured = &captured(app, &result.key);
+    let st = app.session.active().ok_or_else(|| Label::from(tl!("The document is closed")))?;
+    if captured.get("document").and_then(Value::as_u64) != Some(st.doc.id.0) || captured.get("layer").is_some_and(|layer| layer != &json!(st.active_layer)) {
+        return Err(Label::from(tl!("The document or active layer changed. Open Fill again.")));
+    }
+    Ok(())
+}
+
+/// Fill with the confirmed choices; they are remembered only when the fill succeeded.
+pub(crate) fn run(app: &mut PhotocraftApp, ctx: &egui::Context, result: ParamResult) {
+    let captured = captured(app, &result.key);
+    match app.run(COMMAND, params(&result.fields, &captured)) {
+        Ok(_) => result.remember(ctx),
+        Err(e) => crate::notices::error(app, e),
+    }
+}
+
+#[cfg(test)]
+mod tests;
