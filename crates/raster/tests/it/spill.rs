@@ -44,6 +44,7 @@ fn check(s: &Surface, seed: u32, n: i32) {
 
 #[test]
 fn tiles_spill_and_come_back() {
+    let _scratch = crate::lock(&crate::SCRATCH);
     let dir = std::env::temp_dir().join(format!("photocraft-spill-test-{}", std::process::id()));
     let budget = 8 * TILE_BYTES;
     spill::configure(Some(&dir), budget).unwrap();

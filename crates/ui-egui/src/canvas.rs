@@ -614,11 +614,11 @@ mod zoom_animation_tests {
 mod display_memo_tests;
 
 #[cfg(test)]
-mod cpu_background_tests;
+mod cpu_background_gpu_tests;
 
 #[cfg(test)]
-#[path = "canvas/blend_viewport_tests.rs"]
-mod blend_viewport_regression;
+#[path = "canvas/blend_viewport_gpu_tests.rs"]
+mod blend_viewport_gpu_tests;
 
 #[cfg(test)]
 #[path = "canvas/pixel_alignment_tests.rs"]

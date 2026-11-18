@@ -1,5 +1,5 @@
 //! A scripted `.pcraft` save refuses to write previews or a full-size composite rendered from
-//! scratch tiles that could not be read. Its own test binary: the scratch store is per process.
+//! scratch tiles that could not be read. The scratch store is per process, so the test needs its own (nextest runs every test in one).
 #![cfg(not(target_arch = "wasm32"))]
 
 use photocraft_automation::{AutomationError, files};
