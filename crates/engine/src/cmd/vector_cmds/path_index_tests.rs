@@ -332,7 +332,7 @@ fn path_index_actions_record_positions_and_refuse_lossy_atn_export() {
         ("layer.vectorMask.currentPath", json!({"pathIndex":1})),
         ("layer.vectorMask.add", json!({"pathIndex":1})),
     ] {
-        let action = crate::actions_cmds::Action::new("Indexed", vec![(cmd.into(), p)]);
+        let action = crate::actions_cmds::Action::new("Indexed", vec![craft::automation::actions::ActionStep::new(cmd, p)]);
         assert!(crate::atn_cmds::export("Test", &[&action], &[], false).is_err(), "{cmd}: strict export must refuse");
         let (_, skipped) = crate::atn_cmds::export("Test", &[&action], &[], true).unwrap();
         assert_eq!(skipped.len(), 1, "{cmd}: explicit skip mode reports the loss");
@@ -343,9 +343,9 @@ fn path_index_actions_record_positions_and_refuse_lossy_atn_export() {
 fn path_index_ui_consumers_capture_the_second_path() {
     let mut s = duplicate_paths(8);
     let expected = doc(&s).paths[1].path.clone();
-    s.actions.list.push(crate::actions_cmds::Action::new("Capture", vec![]));
+    s.actions.list.push(crate::actions_cmds::Action::new("Capture", vec![])).unwrap();
     s.execute("actions.insertPath", json!({"action":"Capture","pathIndex":1})).unwrap();
-    assert_eq!(s.actions.list.last().unwrap().steps[0].1["path"], path_json(&expected));
+    assert_eq!(s.actions.list.actions().last().unwrap().steps[0].params["path"], path_json(&expected));
     s.execute("paint.symmetryFromPath", json!({"pathIndex":1})).unwrap();
     let Some(crate::symmetry_cmds::PaintingSymmetry::Path(axis)) = &s.active().unwrap().symmetry else { panic!("path symmetry") };
     assert!(axis.segments.iter().flatten().all(|point| point[0] >= 60.0));
@@ -355,7 +355,7 @@ fn path_index_ui_consumers_capture_the_second_path() {
         }
         assert!(s.execute(command, json!({"action":"Capture","pathIndex":1,"name":"??"})).is_err());
     }
-    assert_eq!(s.actions.list.last().unwrap().steps.len(), 1);
+    assert_eq!(s.actions.list.actions().last().unwrap().steps.len(), 1);
     s.execute("edit.defineCustomShape", json!({"name":"Right","path":path_json(&expected)})).unwrap();
     assert_eq!(s.edit_state.custom_shapes.last().unwrap().path, expected);
 }
