@@ -14,10 +14,8 @@ fn a_timed_out_request_can_be_waited_for_before_exit() {
     let _gpu = GPU_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
     let opts = NativeContextOptions { timeout: Some(Duration::ZERO), ..Default::default() };
     let res = NativeContext::request(&opts);
-    assert!(
-        matches!(&res, Err(GpuContextError::NoAdapter(msg)) if msg.contains("timed out")),
-        "a zero timeout must give up before the adapter is ready: {res:?}"
-    );
-    assert!(NativeContext::wait_for_abandoned_requests(Duration::from_secs(120)), "the abandoned initialization thread never finished");
+    let Err(GpuContextError::TimedOut { pending, .. }) = &res else { panic!("a zero timeout must give up before the adapter is ready: {res:?}") };
+    assert!(pending.wait(Duration::from_secs(120)), "the abandoned initialization thread never finished");
+    assert!(pending.is_finished());
     assert!(NativeContext::wait_for_abandoned_requests(Duration::ZERO), "a finished thread must not count as running");
 }

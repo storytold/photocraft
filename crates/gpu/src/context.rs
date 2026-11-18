@@ -18,6 +18,10 @@ pub enum GpuContextError {
     Compositor(String),
     #[error("GPU device was lost: {0}")]
     DeviceLost(String),
+    /// Initialization did not finish within [`NativeContextOptions::timeout`]. Its thread is
+    /// still running inside wgpu and the driver; `pending` tells when it has finished.
+    #[error("no suitable GPU adapter found: timed out after {timeout:?} requesting GPU adapter/device")]
+    TimedOut { timeout: Duration, pending: AbandonedRequest },
 }
 
 impl From<Unsupported> for GpuContextError {
@@ -43,8 +47,11 @@ pub struct NativeContextOptions {
     /// If initialization times out, the background initialization thread cannot be forcibly terminated
     /// in standard Rust and continues detached until wgpu completes or fails. Callers should avoid
     /// repeatedly requesting initialization in tight loops when timeouts occur to prevent thread and
-    /// resource leaks. Before the process exits, call [`NativeContext::wait_for_abandoned_requests`]:
-    /// exiting while that thread is still inside the driver can crash the process.
+    /// resource leaks. Exiting while that thread is still inside the driver can crash the process,
+    /// so wait for it first: [`AbandonedRequest::wait`] on the one in
+    /// [`GpuContextError::TimedOut`], or [`NativeContext::wait_for_abandoned_requests`] for all.
+    /// Either returns `false` when the thread is still running at the limit; the process then
+    /// either waits longer or exits accepting that risk.
     pub timeout: Option<Duration>,
 }
 
@@ -135,26 +142,11 @@ impl NativeContext {
         };
 
         if let Some(timeout) = options.timeout {
-            let (tx, rx) = std::sync::mpsc::channel();
-            let request = Arc::new(InitThread::default());
-            let thread_request = Arc::clone(&request);
-            let thread_res = std::thread::Builder::new().name("pc_gpu_init".into()).spawn(move || {
-                // Declared first so it is dropped last: an abandoned request counts as running
-                // until the context nobody waits for any more has been dropped too.
-                let _finish = FinishOnDrop(thread_request);
-                let res = init_work();
-                let _ = tx.send(res);
-            });
-            match thread_res {
-                Ok(_handle) => match rx.recv_timeout(timeout) {
-                    Ok(res) => res,
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                        request.abandon();
-                        Err(GpuContextError::NoAdapter(format!("timed out after {timeout:?} requesting GPU adapter/device")))
-                    }
-                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(GpuContextError::NoAdapter("GPU initialization thread disconnected".into())),
-                },
-                Err(e) => Err(GpuContextError::NoAdapter(format!("failed to spawn GPU initialization thread: {e}"))),
+            match run_with_timeout("pc_gpu_init", timeout, init_work) {
+                Ok(res) => res,
+                Err(InitWait::TimedOut(pending)) => Err(GpuContextError::TimedOut { timeout, pending }),
+                Err(InitWait::Disconnected) => Err(GpuContextError::NoAdapter("GPU initialization thread disconnected".into())),
+                Err(InitWait::Spawn(e)) => Err(GpuContextError::NoAdapter(format!("failed to spawn GPU initialization thread: {e}"))),
             }
         } else {
             init_work()
@@ -167,24 +159,12 @@ impl NativeContext {
     /// A request that timed out leaves its thread inside wgpu and the driver. If the process
     /// exits meanwhile, the driver's state is torn down under that thread, and software drivers
     /// such as Lavapipe crash the whole process (a SIGSEGV or heap corruption after every test
-    /// already passed). Call this before exiting after a timed-out request.
+    /// already passed). Call this before exiting after a timed-out request. To wait for one
+    /// request only, use the [`AbandonedRequest`] in its [`GpuContextError::TimedOut`].
+    ///
+    /// Returns `false` when one is still running at `limit`; see [`NativeContextOptions::timeout`].
     pub fn wait_for_abandoned_requests(limit: Duration) -> bool {
-        // A limit too far ahead to represent waits as long as it takes.
-        let deadline = Instant::now().checked_add(limit);
-        let mut running = ABANDONED.running.lock().unwrap_or_else(PoisonError::into_inner);
-        while *running > 0 {
-            running = match deadline {
-                Some(deadline) => {
-                    let left = deadline.saturating_duration_since(Instant::now());
-                    if left.is_zero() {
-                        return false;
-                    }
-                    ABANDONED.done.wait_timeout(running, left).unwrap_or_else(PoisonError::into_inner).0
-                }
-                None => ABANDONED.done.wait(running).unwrap_or_else(PoisonError::into_inner),
-            };
-        }
-        true
+        wait_until(&ABANDONED.running, &ABANDONED.done, limit, |running| *running == 0)
     }
 
     /// Build a new [`Compositor`] wired to this context's device and health flag.
@@ -259,6 +239,90 @@ impl NativeContext {
     }
 }
 
+/// Why [`run_with_timeout`] returned without the work's result.
+enum InitWait {
+    TimedOut(AbandonedRequest),
+    Disconnected,
+    Spawn(std::io::Error),
+}
+
+/// Run `work` on a thread named `name` and wait up to `timeout` for its result. On a timeout the
+/// thread keeps running, and the returned [`AbandonedRequest`] tells when it has finished.
+fn run_with_timeout<T, F>(name: &str, timeout: Duration, work: F) -> Result<T, InitWait>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    // A rendezvous channel: a result is either handed to this thread or, once it stopped
+    // waiting, dropped on the worker before the worker counts as finished.
+    let (tx, rx) = std::sync::mpsc::sync_channel(0);
+    let request = AbandonedRequest(Arc::new(InitThread::default()));
+    let thread_request = request.clone();
+    let spawned = std::thread::Builder::new().name(name.into()).spawn(move || {
+        // Declared first so it is dropped last, after an unclaimed result.
+        let _finish = FinishOnDrop(thread_request);
+        let res = work();
+        let _ = tx.send(res);
+    });
+    if let Err(e) = spawned {
+        return Err(InitWait::Spawn(e));
+    }
+    match rx.recv_timeout(timeout) {
+        Ok(res) => Ok(res),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            request.0.abandon();
+            // Stop taking the result, so the worker drops it itself.
+            drop(rx);
+            Err(InitWait::TimedOut(request))
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(InitWait::Disconnected),
+    }
+}
+
+/// Wait up to `limit` until `done` holds for the state behind `lock`, re-checking whenever `cv`
+/// is notified. A limit too far ahead to represent waits as long as it takes.
+fn wait_until<S>(lock: &Mutex<S>, cv: &Condvar, limit: Duration, done: impl Fn(&S) -> bool) -> bool {
+    let deadline = Instant::now().checked_add(limit);
+    let mut state = lock.lock().unwrap_or_else(PoisonError::into_inner);
+    while !done(&state) {
+        state = match deadline {
+            Some(deadline) => {
+                let left = deadline.saturating_duration_since(Instant::now());
+                if left.is_zero() {
+                    return false;
+                }
+                cv.wait_timeout(state, left).unwrap_or_else(PoisonError::into_inner).0
+            }
+            None => cv.wait(state).unwrap_or_else(PoisonError::into_inner),
+        };
+    }
+    true
+}
+
+/// An initialization thread that [`NativeContext::request`] stopped waiting for after its
+/// timeout, still running inside wgpu and the driver until it finishes.
+#[derive(Clone)]
+pub struct AbandonedRequest(Arc<InitThread>);
+
+impl AbandonedRequest {
+    /// Wait up to `limit` for this thread to finish. Returns `false` when it is still running;
+    /// see [`NativeContextOptions::timeout`].
+    pub fn wait(&self, limit: Duration) -> bool {
+        wait_until(&self.0.state, &self.0.done, limit, |state| state.finished)
+    }
+
+    /// Whether the thread has finished, including dropping a context nobody claimed.
+    pub fn is_finished(&self) -> bool {
+        self.0.state.lock().unwrap_or_else(PoisonError::into_inner).finished
+    }
+}
+
+impl fmt::Debug for AbandonedRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AbandonedRequest").field("finished", &self.is_finished()).finish()
+    }
+}
+
 /// How many initialization threads [`NativeContext::request`] gave up on are still running.
 struct Abandoned {
     running: Mutex<usize>,
@@ -267,28 +331,36 @@ struct Abandoned {
 
 static ABANDONED: Abandoned = Abandoned { running: Mutex::new(0), done: Condvar::new() };
 
-/// One initialization thread: whether its request gave up on it, and whether it has finished.
+#[derive(Default)]
+struct ThreadState {
+    /// The request stopped waiting for the thread.
+    abandoned: bool,
+    /// The thread has finished.
+    finished: bool,
+}
+
+/// One initialization thread and a condition variable notified when it finishes.
 #[derive(Default)]
 struct InitThread {
-    state: Mutex<(bool, bool)>,
+    state: Mutex<ThreadState>,
+    done: Condvar,
 }
 
 impl InitThread {
     /// The request stopped waiting: count the thread in [`ABANDONED`] unless it already finished.
     fn abandon(&self) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        let (abandoned, finished) = &mut *state;
-        if !*finished && !*abandoned {
-            *abandoned = true;
+        if !state.finished && !state.abandoned {
+            state.abandoned = true;
             *ABANDONED.running.lock().unwrap_or_else(PoisonError::into_inner) += 1;
         }
     }
 
     fn finish(&self) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        let (abandoned, finished) = &mut *state;
-        *finished = true;
-        if *abandoned {
+        state.finished = true;
+        self.done.notify_all();
+        if state.abandoned {
             let mut running = ABANDONED.running.lock().unwrap_or_else(PoisonError::into_inner);
             *running = running.saturating_sub(1);
             ABANDONED.done.notify_all();
@@ -297,10 +369,13 @@ impl InitThread {
 }
 
 /// Marks the initialization thread finished when it ends, also when it panics.
-struct FinishOnDrop(Arc<InitThread>);
+struct FinishOnDrop(AbandonedRequest);
 
 impl Drop for FinishOnDrop {
     fn drop(&mut self) {
-        self.0.finish();
+        self.0.0.finish();
     }
 }
+
+#[cfg(test)]
+mod tests;
