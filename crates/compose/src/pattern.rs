@@ -449,12 +449,24 @@ impl Placement {
 /// Renders `tile` over `rect` (row-major straight RGBA).
 pub fn render(tile: &Tile, place: &Placement, rect: Rect) -> Vec<[f32; 4]> {
     let mut out = Vec::with_capacity(rect.width() as usize * rect.height() as usize);
+    render_into(tile, place, rect, &mut out);
+    out
+}
+
+/// Render into caller-owned storage for fallible compositor allocations.
+pub(crate) fn render_into(tile: &Tile, place: &Placement, rect: Rect, out: &mut Vec<[f32; 4]>) {
+    let len = rect.width() as usize * rect.height() as usize;
+    if out.len() != len {
+        out.clear();
+        out.resize(len, [0.0; 4]);
+    }
+    let mut i = 0;
     for y in rect.y0..rect.y1 {
         for x in rect.x0..rect.x1 {
-            out.push(tile.sample_area(place, f64::from(x) + 0.5, f64::from(y) + 0.5));
+            out[i] = tile.sample_area(place, f64::from(x) + 0.5, f64::from(y) + 0.5);
+            i += 1;
         }
     }
-    out
 }
 
 #[cfg(test)]
