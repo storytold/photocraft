@@ -312,7 +312,7 @@ mod app_tests {
     /// hook starts the record once, and each pass's UI build ends in `finish_frame`. Every pass but
     /// the last asks egui for another, as a sizing pass does. `stroke`: each pass renders stroke
     /// points for 1 ms. Returns the first pass's input time, before any UI work.
-    fn frame(app: &mut PhotocraftApp, ctx: &egui::Context, passes: usize, pass_ms: u64, stroke: bool) -> f64 {
+    fn frame(app: &mut PhotocraftApp, ctx: &egui::Context, passes: usize, pass_ms: u64, stroke: bool) -> Option<f64> {
         let mut first_input_ms = None;
         app.perf.stage.start(crate::gpu_canvas::now_ms(), 1);
         ctx.run_ui(egui::RawInput::default(), |ui| {
@@ -330,7 +330,7 @@ mod app_tests {
             app.finish_frame(&ctx, crate::gpu_canvas::now_ms() - t0);
         })
         .drop_without_applying_deltas();
-        first_input_ms.expect("the frame ran at least one UI pass")
+        first_input_ms
     }
 
     #[test]
@@ -344,7 +344,7 @@ mod app_tests {
         assert!(f.frame_ms >= 60.0 && f.ui_ms >= 60.0, "both passes: {f:?}");
         // Context initialization or scheduler delays before the first pass are real input time.
         // The invariant is that a later pass does not replace it with the first pass's UI time.
-        assert_eq!(f.input_ms, first_input_ms, "the first pass isn't the second's input: {f:?}");
+        assert_eq!(Some(f.input_ms), first_input_ms, "the first pass isn't the second's input: {f:?}");
         assert_eq!(app.perf.stage, super::FrameStages::default(), "the last pass closed the record");
     }
 
@@ -354,9 +354,9 @@ mod app_tests {
         app.stroke_trace.output = crate::stroke_trace::Output::Stderr;
         let ctx = app.ctx().clone();
         for _ in 0..3 {
-            frame(&mut app, &ctx, 2, 1, true);
+            assert!(frame(&mut app, &ctx, 2, 1, true).is_some(), "the frame ran at least one UI pass");
         }
-        frame(&mut app, &ctx, 2, 1, false);
+        assert!(frame(&mut app, &ctx, 2, 1, false).is_some(), "the frame ran at least one UI pass");
         let s = app.stroke_trace.last.clone().expect("the stroke ended");
         assert_eq!(s.frames, 3, "{s:?}");
         assert_eq!(s.moves, [1.0, 1.0], "each row has its frame's moves: {s:?}");
@@ -382,7 +382,7 @@ mod app_tests {
         })
         .drop_without_applying_deltas();
         assert!(app.live_stroke.is_none() && app.stroke_trace.last.is_none());
-        frame(&mut app, &ctx, 2, 1, false);
+        assert!(frame(&mut app, &ctx, 2, 1, false).is_some(), "the frame ran at least one UI pass");
         let s = app.stroke_trace.last.clone().expect("the stroke ended");
         assert_eq!(s.frames, 1, "the frame whose stroke the last pass cancelled: {s:?}");
     }
