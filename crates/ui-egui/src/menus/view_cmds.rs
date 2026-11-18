@@ -81,6 +81,20 @@ impl Default for SnapTo {
     }
 }
 
+/// Path Options › Thickness and Color (#9713): how paths are drawn on the canvas. One display
+/// setting shared by every path tool, as in Photoshop, not a tool option: remembered with the View
+/// items (`persist`) and left alone by Reset Tool and Reset All Tools. The Pen's Rubber Band, in
+/// the same gear, stays the Pen's own tool option (`ToolOptions::path_options.rubber_band`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PathOptions {
+    /// The path colour as sRGB bytes; `None` is the theme's overlay line colour.
+    pub color: Option<[u8; 3]>,
+    /// The path line's width in screen points, within `PathOptionsSettings::THICKNESS_RANGE`;
+    /// `None` is the theme's line.
+    pub thickness: Option<f32>,
+}
+
 /// View-, window- and type-preference state of the shell.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -108,6 +122,8 @@ pub struct ViewOptions {
     /// Developer overlay of the active layer's storage tiles (tile_overlay.rs), set with the
     /// control channel's `ui.set {"tileGrid": true}`.
     pub tile_grid: bool,
+    /// The Pen and shape tools' Path Options: Thickness and Color (#9713).
+    pub path_options: PathOptions,
 }
 
 /// Factory New Guide Layout values (Alt+Reset and a fresh ViewOptions).
@@ -133,6 +149,7 @@ impl Default for ViewOptions {
             middle_eastern_composer: false,
             guide_layout: default_guide_layout(),
             tile_grid: false,
+            path_options: PathOptions::default(),
         }
     }
 }

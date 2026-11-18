@@ -1,4 +1,4 @@
-use super::{Map, PhotocraftApp, Show, SnapTo, Value, ViewOptions};
+use super::{Map, PathOptions, PhotocraftApp, Show, SnapTo, Value, ViewOptions};
 
 /// Pixel aspect ratio (width / height of a pixel) of a preset id.
 pub fn pixel_aspect_ratio(id: &str) -> f32 {
@@ -81,9 +81,40 @@ fn changed_flags<T: Copy>(now: T, def: T, keys: &[&str], slot: impl for<'a> Fn(&
     (!diff.is_empty()).then_some(Value::Object(diff))
 }
 
-/// View › Extras, Show and Snap To as remembered across restarts (`Preferences::view_extras`):
-/// only what differs from the defaults, so a default changed in a later release still reaches
-/// users who never touched that item. `Null` when nothing differs.
+/// The Path Options as remembered (#9713): the colour as `[r, g, b]` and the thickness, each only
+/// when set (`None` when neither is).
+fn changed_path_options(now: &PathOptions) -> Option<Value> {
+    let mut m = Map::new();
+    if let Some(rgb) = now.color {
+        m.insert("color".into(), serde_json::json!(rgb));
+    }
+    if let Some(px) = now.thickness {
+        m.insert("thickness".into(), serde_json::json!(px));
+    }
+    (!m.is_empty()).then_some(Value::Object(m))
+}
+
+/// A remembered Path Options colour: three bytes, `[r, g, b]`.
+fn saved_color(v: &Value) -> Option<[u8; 3]> {
+    let rgb = v.as_array().filter(|a| a.len() == 3)?;
+    let byte = |i: usize| rgb[i].as_u64().and_then(|b| u8::try_from(b).ok());
+    Some([byte(0)?, byte(1)?, byte(2)?])
+}
+
+/// Restore the remembered Path Options (#9713): a colour that isn't three bytes, or a thickness
+/// that isn't a number in the popover's range, keeps its default.
+fn restore_path_options(o: &mut PathOptions, saved: &Value) {
+    if let Some(rgb) = saved.get("color").and_then(saved_color) {
+        o.color = Some(rgb);
+    }
+    if let Some(px) = saved.get("thickness").and_then(Value::as_f64).map(|px| px as f32).filter(|px| crate::vector_ui::thickness_in_range(*px)) {
+        o.thickness = Some(px);
+    }
+}
+
+/// View › Extras, Show and Snap To, and the Path Options, as remembered across restarts
+/// (`Preferences::view_extras`): only what differs from the defaults, so a default changed in a
+/// later release still reaches users who never touched that item. `Null` when nothing differs.
 fn remembered(app: &PhotocraftApp) -> Value {
     let (v, e, def) = (&app.ui.view, &app.ui.extras, crate::state::Extras::default());
     let mut m = Map::new();
@@ -106,6 +137,9 @@ fn remembered(app: &PhotocraftApp) -> Value {
     if let Some(snap) = changed_flags(v.snap_to, SnapTo::default(), &SNAP_KEYS, snap_slot) {
         m.insert("snapTo".into(), snap);
     }
+    if let Some(paths) = changed_path_options(&v.path_options) {
+        m.insert("pathOptions".into(), paths);
+    }
     if m.is_empty() { Value::Null } else { Value::Object(m) }
 }
 
@@ -122,9 +156,11 @@ pub fn persist(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
-/// Restore the remembered View › Extras, Show and Snap To items at launch. A hand-edited file
-/// can't break them: an unknown key or a value that isn't a boolean keeps its default.
+/// Restore the remembered View › Extras, Show and Snap To items and the Path Options at launch. A
+/// hand-edited file can't break them: an unknown key or a value that isn't a boolean (for the Path
+/// Options, a colour or thickness that doesn't read) keeps its default.
 pub fn restore(app: &mut PhotocraftApp) {
+    adopt_tool_path_options(app);
     let saved = app.session.prefs().view_extras.clone();
     if !saved.is_null() && !saved.is_object() {
         log::warn!("Preferences: the remembered View › Show items are not an object; using the defaults");
@@ -153,4 +189,18 @@ pub fn restore(app: &mut PhotocraftApp) {
             *slot = on;
         }
     }
+    if let Some(paths) = saved.get("pathOptions") {
+        restore_path_options(&mut app.ui.view.path_options, paths);
+    }
+}
+
+/// An earlier build kept the Path Options' Color and Thickness with the Pen's tool options, which
+/// `tool_memory::restore` has just loaded: they move to the shared display setting, where the
+/// remembered View items, restored after this, win. The tool options keep only the Rubber Band.
+fn adopt_tool_path_options(app: &mut PhotocraftApp) {
+    let tool = &mut app.ui.tool_options.path_options;
+    let (color, thickness) = (tool.color.take(), tool.thickness.take());
+    let view = &mut app.ui.view.path_options;
+    view.color = view.color.or(color);
+    view.thickness = view.thickness.or(thickness.filter(|px| crate::vector_ui::thickness_in_range(*px)));
 }

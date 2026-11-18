@@ -104,7 +104,7 @@ fn configure(app: &PhotocraftApp, state: &mut VectorTools) -> Which {
                 .mode(if curvature { PenMode::Curvature } else { PenMode::Pen })
                 .sensing(sensing)
                 .auto_add_delete(!curvature && o.pen_auto_add_delete)
-                .path_options(o.path_options)
+                .path_options(super::path_options(app))
                 .ends(&if idle { pen::ends(app) } else { Vec::new() })
                 .carry_on(carry.as_ref().map(|(key, knot, draft)| (*key, *knot, draft)))
                 // A draft the selected tool did not draw (a refused one kept after a tool switch) is foreign: Delete,
