@@ -573,6 +573,29 @@ fn unedited_inner_shadow_keeps_imported_out_of_range_values() {
     }
 }
 
+/// The other side of the guard above: while the effect follows the shared light, the Angle field
+/// shows that light and not the effect's own angle, so an untouched OK keeps writing the light's
+/// angle as it did before this change - the imported angle was never what the field showed.
+/// Guard test: it passes before and after the change on purpose.
+#[test]
+fn an_inner_shadow_lit_by_the_global_light_still_takes_the_shown_angle() {
+    let mut s = session();
+    s.execute("layer.layerStyle.innerShadow", json!({})).unwrap();
+    s.edit("imported angle while lit", |doc, active| {
+        let Effect::InnerShadow(sh) = &mut doc.layer_mut(active.unwrap()).unwrap().effects.items[0] else { panic!("inner shadow") };
+        sh.angle = 200.0;
+        sh.use_global_light = true;
+        Ok(())
+    })
+    .unwrap();
+    s.execute("layer.layerStyle.globalLight", json!({"angle": 45.0})).unwrap();
+    let id = s.active().unwrap().active_layer.unwrap();
+    let d = LayerStyleDraft::new(drafted(&s));
+    apply(&d.style, id, Some(45.0), |cmd, p| s.execute(cmd, p).map_err(|e| e.to_string())).unwrap();
+    let Effect::InnerShadow(after) = &layer_effects(&s)[0] else { panic!("inner shadow") };
+    assert_eq!(f64::from(after.angle), 45.0, "the field showed the light's 45, so OK stores 45");
+}
+
 fn overlay_color(doc: &photocraft_doc::Document, layer: photocraft_doc::LayerId) -> photocraft_color::Color {
     match &doc.layer(layer).unwrap().effects.items[0] {
         Effect::ColorOverlay { color, .. } => *color,
