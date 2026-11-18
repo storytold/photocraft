@@ -3,9 +3,9 @@
 Shape stroke defaults are drivable with `ui.set {shapeStroke: {width, align, cap, join,
 miterLimit, dashes, dashOffset, opacity}}`; partial fields merge, null disables the stroke.
 Values use the existing `shape.edit` names and units. Colour uses `tools.setColors`.
-`ui.inspect` exposes `toolOptions.shape_stroke`, `stroke_width`, and `strokeEditor`.
-Stroke Options applies valid UI edits immediately; `strokeEditor` is the open editor state,
-not an uncommitted document preview. Escape/outside clicks close it without reverting edits.
+`ui.inspect` exposes `toolOptions.shape_stroke`, `stroke_width`, and `strokeOptionsOpen`.
+Stroke Options applies valid UI edits immediately; `strokeOptionsOpen` is whether the editor is
+open, not an uncommitted document preview. Escape/outside clicks close it without reverting edits.
 See [Shape stroke options](shape-strokes.md) for limits, preview and persistence behavior.
 
 The desktop app listens on `127.0.0.1:<port>` (loopback only). Start it with a token file so the credential is not exposed in the process command line:
@@ -48,7 +48,7 @@ While agents may connect, the app keeps its token in its settings folder, in `ag
 
 A local client reads that file, then the token from `tokenFile`, connects to `127.0.0.1:<port>` and authenticates as below. The file holds no secret. A `--control` launch publishes nothing: whoever started it chose the port and token.
 
-On Windows and Linux the app removes the file when it quits. On macOS (quitting ends the process inside AppKit) and after a crash the file stays behind, naming a `port` nothing listens on: a client should treat a refused connection as "not running", and the next launch replaces or removes the file. Until then, another local program could be listening on that port. A program running as the same user can read the token file anyway, so this matters only against one that can listen on a loopback port but can't read that `0600` file (another user's, or a sandboxed app). A client must check that the process `pid` names is still running before it sends the token, and treat the file as stale otherwise. That check narrows the gap but doesn't close it: the pid can be reused, and the app can quit between the check and the connection. A client that must rule this out should not send the token on the strength of this file at all; it should use challenge authentication (below), which never sends the token to the listener, with no fallback to sending the token. `version` changes only with an incompatible format. The settings folder is the one that holds `preferences.json` (see [Preferences](#preferences); `PHOTOCRAFT_CONFIG_DIR` moves it).
+On Windows and Linux the app removes the file when it quits. On macOS (quitting ends the process inside AppKit) and after a crash the file stays behind, naming a `port` nothing listens on: a client should treat a refused connection as "not running", and the next launch replaces or removes the file. Until then, another local program could be listening on that port. A program running as the same user can read the token file anyway, so this matters only against one that can listen on a loopback port but can't read that `0600` file (another user's, or a sandboxed app). A client must check that the process `pid` names is still running before it sends the token, and treat the file as stale otherwise. That check narrows the gap but doesn't close it: the pid can be reused, and the app can quit between the check and the connection. A client that must rule this out should not send the token on the strength of this file at all; it should use challenge authentication (below), which never sends the token to the listener, with no fallback to sending the token. `version` changes only with an incompatible format. The settings folder is the one that holds `config.toml` (see [Preferences](#preferences); `PHOTOCRAFT_CONFIG_DIR` moves it).
 
 The first request on every TCP connection must authenticate. No other method is dispatched before this succeeds. There are two ways; a refused frame gets `{"ok": false, "error": "authentication required"}` and the connection is closed.
 
@@ -88,7 +88,7 @@ Each reply is one JSON line with the same `id`:
 
 The desktop server waits up to 60 seconds for a reply. A request still queued at that deadline is rejected before dispatch; a timeout does not cancel work that has already started. The two timeouts read differently, both starting with `timeout`: a request that was never dispatched (still queued at the deadline) says `timeout: not run` and is safe to re-send, while `timeout: no reply in 60s` means the command was dispatched and may still be running and still apply, so check the document before re-sending it. The timeout error names the likely causes: the command may still be running, or the request was queued while the window was not drawing frames — on Wayland the frame update (and with it the control drain) only runs on compositor frame callbacks, so a display that is asleep or a fully occluded window makes every request time out while the app itself is healthy.
 
-The transport is `apps/photocraft/src/control_server.rs`, and the handlers are in `crates/ui-egui/src/control.rs`. The MCP server (`photocraft-cli mcp --bridge 127.0.0.1:<port>`, crate `photocraft-automation`) wraps this same protocol. See [MCP bridge](#mcp-bridge) below.
+The transport is the framework's control server (`craft::automation::server` in craft-libs), and the handlers are in `crates/ui-egui/src/control.rs`. The MCP server (`photocraft-cli mcp --bridge 127.0.0.1:<port>`, crate `photocraft-automation`) wraps this same protocol. See [MCP bridge](#mcp-bridge) below.
 
 ## Methods
 
@@ -99,6 +99,7 @@ The transport is `apps/photocraft/src/control_server.rs`, and the handlers are i
   - `typeTransform` is `null` outside a temporary Ctrl/Cmd Type-tool drag. During a drag it reports its source document/revision, original affine, oriented `frame` (layer, local bounds, document-space corners and pivot), and captured `gesture`. Drive it with `ui.pointer` and `command: true` at `down`; `move`/`up` may release the modifier. The document/history remain unchanged during preview, and `up` applies one `type.edit` within `textEdit`'s session. Pressing Escape during the drag cancels only the preview. This pointer state is never restored from saved UI state.
 - `ui.menu.invoke {id, params?, wait?}` / `ui.menu.list`: activate a menu item by id; list the menu tree. A menu item that starts a background job (a filter without a dialog, such as Blur More) replies with the job's result once it has been applied; with `"wait": false` the reply is `{job, pending: true}` at once. Window ends with the open documents as `window.document.<index>` (tab order, the active one checked, #2991); invoking one brings that document to the front and replies `{document: index}`. Camera Raw and the full-window workspaces (Liquify, Content-Aware Fill, Filter Gallery, Adaptive Wide Angle) are modal: while one is open, `ui.menu.invoke` refuses every other menu item ("menu command is unavailable while a modal dialog is open") and accepts only that workspace's own `{"ui": {...}}` requests (`filter.liquify`, `edit.contentAwareFill`, `filter.filterGallery`, `filter.adaptiveWideAngle`, `filter.cameraRaw`; `params` must hold only the `ui` object), so finish it with `{"ui":{"commit":true}}` or `{"ui":{"cancel":true}}` first. Those requests are refused too while a dialog, an unsaved-changes prompt or a crop that blocks the command is open: resolve that first, then commit or cancel the workspace. `ui.menu.list` reports the same gate: an item the modal state refuses is listed with `enabled: false`. `engine.execute` is not a menu click and is not gated
 - `ui.set` also accepts `gradientBlendMode` (a layer blend mode name, such as `Difference`) and `gradientClassic` (boolean) for the Gradient tool options bar.
+- `ui.set` also accepts `statusInfo` (the status bar item next to the zoom field), `marqueeStyle` (`normal`, `fixedRatio`, `fixedSize`; the size stays as the options bar's Style dropdown leaves it) and `marqueeSize` (`[width, height]` within the style's range), `actionsPanel` (an object patching `buttonMode` and `collapsed`), `presetBrowsers` (`{<panel>: {view, zoom}}`, each patching that preset panel's browser), `toolbarColumns` (1 up to the number of toolbar cells: the toolbar column's width in tool columns) and `recentView` (`grid` or `list`, the Home screen's recent files). `ui.inspect` reports `statusInfo`.
 - `ui.set` also accepts `moveShowTransform` (boolean), the Move tool's Show Transform Controls checkbox (`ui.inspect` › `toolOptions.move_show_transform`). With Move active and the controls visible, a primary `ui.pointer` down on a handle or in the rotation zone starts the same Free Transform session as the canvas, framing all selected non-Background layers. `move` and `up` drive the existing preview; `ui.key {"key":"Enter"}` commits one "Free Transform" history step. A press inside the box keeps the ordinary Move behavior. Hidden or disabled controls do not start a transform. An invalid value rejects the whole `ui.set` request before any fields change.
 - `ui.set` also accepts `camTransformOnDrop` (boolean), the Content-Aware Move tool's Transform On Drop checkbox: a drop then puts a scale/rotate box on the patch (`ui.inspect` › `camTransform`: its document/revision, drag `offset` and `frame`), driven with `ui.pointer` (handles as Free Transform's; outside the box rotates), committed with `ui.key Enter` (one `paint.contentAwareMove` with `scaleX`, `scaleY`, `rotate`) or dropped with `Escape`.
 - `ui.set` also accepts `tileGrid` (boolean), a developer overlay of the active layer's storage tiles: the tile grid over the document, every stored tile filled and labelled `tx,ty`, tiles with identical pixels in a shared colour and unique ones in blue. It has no menu item and View › Extras doesn't hide it. `ui.inspect` reports it as `view.tile_grid`.
@@ -118,14 +119,14 @@ The transport is `apps/photocraft/src/control_server.rs`, and the handlers are i
 - `ui.set` also accepts the Pen tools' options bar (#1397): `penMode` (`path` or `shape`) and `penPathOp`, the Path Operations menu (`newLayer`, `combine`, `subtract`, `intersect`, `exclude`): how the next Pen, Freeform Pen or Curvature Pen path joins the selected shape layer (Shape mode; `newLayer` makes a new one) or the targeted vector mask, selected path or Work Path (Path mode, where `newLayer` combines). `ui.inspect` reports them under `toolOptions` (`vector_mode`, `pen_path_op`). Merge Shape Components is the engine command `path.mergeShapeComponents` (work, saved or `layer` path) or `layer.combineShapes.mergeShapeComponents` (shape layers).
 - `ui.set` also accepts `cropFill` (`background`, the Fill dropdown's first entry, which reads Background (default), or Transparent (default) with Delete Cropped Pixels off, or `contentAware`), the Crop tool's Fill dropdown (#3823, #10872): with `contentAware`, committing a turned or extending frame passes `contentAware: true` to `image.crop`, which fills the area the image doesn't cover from its surroundings. `ui.inspect` reports it as `toolOptions.crop_content_aware`.
   Both gradient modes use the current preset, including its opacity stops. Select `Foreground to Transparent` through `gradient.presets.select`, or pass custom `stops` and `transparency: [[0,100],[1,0]]` (location 0..1, opacity 0..100). Use `applyToLayer: false` to edit only the tool preset. Classic gradient drags dispatch `paint.gradient` without overriding them.
-- `ui.set` also accepts the Crop tool's gear menu (#1919) as `cropShield`, an object patching any of `show_cropped_area` (Show Cropped Area; off hides everything outside the box behind the canvas colour, H in the app), `enabled` (Enable Crop Shield), `color` (`matchCanvas`, the pasteboard colour, or `custom`), `custom_color` (`[r, g, b]`, 0..255), `opacity` (0..100, default 75), `auto_adjust` (Auto Adjust Opacity: half the opacity while the box is dragged), `classic_mode` (Use Classic Mode, default off: the box turns and moves over the image; off is Photoshop's default mode, where the box stays upright and the view turns and pans the image behind it while the Crop tool shows a frame, P in the app; in both modes picking the tool turns a rotated view upright about its centre, Classic Mode keeping the camera upright with the frame drawn turned, and the view stays upright after a commit or cancel; Classic Mode greys out Show Cropped Area, which then acts as on, and Auto Center Preview) and `auto_center_preview` (default on: in default mode a box being resized keeps its centre where it is on screen, also after a pan, a drawn one moves to the middle of the canvas, and X re-centres it; a move never re-centres the box). `ui.inspect` reports it as `toolOptions.crop_shield`. The pending frame (`crop_rect`, `crop_angle`: its turn on the image) and the `image.crop` a commit runs are the same in both modes.
+- `ui.set` also accepts the Crop tool's gear menu (#1919) as `cropShield`, an object patching any of `show_cropped_area` (Show Cropped Area; off hides everything outside the box behind the canvas colour, H in the app), `enabled` (Enable Crop Shield), `color` (`matchCanvas`, the pasteboard colour, or `custom`), `custom_color` (`[r, g, b]`, 0..255), `opacity` (0..100, default 75), `auto_adjust` (Auto Adjust Opacity: half the opacity while the box is dragged), `classic_mode` (Use Classic Mode, default off: the box turns and moves over the image; off is Photoshop's default mode, where the box stays upright and the view turns and pans the image behind it while the Crop tool shows a frame, P in the app; in both modes picking the tool turns a rotated view upright about its centre, Classic Mode keeping the camera upright with the frame drawn turned, and the view stays upright after a commit or cancel; Classic Mode greys out Show Cropped Area, which then acts as on, and Auto Center Preview) and `auto_center_preview` (default on: in default mode a box being resized keeps its centre where it is on screen, also after a pan, a drawn one moves to the middle of the canvas, and X re-centres it; a move never re-centres the box). `ui.inspect` reports it as `toolOptions.crop.shield`. The pending frame (`crop_rect`, `crop_angle`: its turn on the image) and the `image.crop` a commit runs are the same in both modes.
 - The contextual task bar (#10890) is the small floating bar under the Crop tool's frame: a grip, the crop preset dropdown (the options bar's), Straighten, a ⋯ menu (Hide bar, Reset bar position, Pin bar position) and, while a crop is pending, Cancel and Done (the options bar's cancel and commit). It sits centred under the frame with its top 11 points below the frame's bottom edge, follows the frame, and stays inside the canvas area; dragged by its grip or pinned, it stays where it is. `ui.inspect` › `taskBar` reports `enabled` (Window › Contextual Task Bar, `window.panel.contextualTaskBar`), `visible` (a bar shows now), `rect` (its screen rect `[x0, y0, x1, y1]` in points, `null` while hidden), `pinned` and `at` (its top-left in points from the canvas area's top-left once dragged or pinned, `null` while it follows the frame). `ui.set {"panels": {"context_task_bar": false}}` hides it (as Hide bar does) and `true` shows it; `ui.set {"panels": {"task_bar": {"pinned": true}}}` pins it where it is (`"at": null` with it first puts it back under the frame), `{"pinned": false, "at": null}` is Reset bar position, and `at: [x, y]` places it; a field left out keeps its value. Both are kept with the panel layout across restarts.
 - `ui.dialog.open {kind, fields?}` (kinds `newDocument`, `about`, `layerStyle {effect?}`, `colorPicker {target: foreground|background}`, `command {command}` (`layer.new.group` / `layer.new.groupFromLayers` open the New Group dialog: fields `name`, `color`, `mode`, `opacity`), `newCropPreset` / `deleteCropPreset`: the Crop tool's New / Delete Crop Preset… dialogs, fields `name` and `selected: [names]`; crop presets are `crop` tool presets, so `tool.presets.new/list/edit {"tool":"crop"}` drive them too) / `ui.dialog.set {dialog, field, value}` / `ui.dialog.confirm {dialog, wait?}` / `ui.dialog.cancel {dialog}`. Like `ui.menu.invoke`, `ui.dialog.confirm` waits for a background job its command starts (a filter dialog's OK) and replies with the result; `"wait": false` replies `{job, pending: true}` at once
   - A Layer Style color field opens the shared picker with `ui.dialog.open {"kind":"colorPicker","parent":12,"effect":"fx2","field":"color"}`. `parent` is the Layer Style dialog id; `effect` is its effect instance id. `field` must be one of that instance's color parameters (`color`, or `from`/`to` for Gradient Overlay). The picker previews over the pending style without changing the document. Picker OK changes only the parent parameter; Cancel discards the preview. Confirm the parent afterwards to apply the style. Parent confirmation is refused while its picker is open; parent cancellation closes both. The binding is exposed in `ui.inspect` as `__layerStyleColor`; changed/closed targets or a document switch invalidate it.
 
   - Gradient Overlay color stops use `colorPicker {parent, effect, field: "stops", stop: index}`; the stop must exist.
   - `ui.dialog.open {kind:"colorPicker", textStyle:{kind:"character"|"paragraph", id:u32}}` opens the shared Color Picker for an explicitly enabled Color attribute in Style Options. It opens the matching style panel/editor after validation; inherited colors must first be enabled through the existing style command. The picker reports its bound document/revision/style under `__textStyleColor` in `ui.inspect`. Changes preview in an isolated document; OK runs the existing style `set` command once, Cancel changes nothing. Document edits/switches or closed/changed Style Options discard the picker. `textStyle` cannot be combined with `parent`, `effect`, `field` or `target`.
-  - The shell's own dialogs (Window › Workspace › New Workspace / Delete Workspace, View › Pixel Aspect Ratio › Custom Pixel Aspect Ratio…, View › Show › Show Extras Options…, View › 32-bit Preview Options…) are listed in `ui.inspect`'s `dialogs` with the id `"shell"` (at most one is open). `ui.dialog.set`, `ui.dialog.confirm` and `ui.dialog.cancel` take `{"dialog": "shell"}`; OK runs the dialog's command and keeps the dialog open if it fails
+  - Every dialog is hosted: `ui.inspect`'s `dialogs` lists them in stack order (top last) with a decimal-string `id`, and `ui.dialog.set`, `ui.dialog.confirm`, `ui.dialog.cancel` and `ui.dialog.apply` take that id as `dialog`, or `"top"` for the top one (the shell's workspace and pixel-aspect dialogs and the unsaved-changes prompt are listed like any other; the prompt's `ui.dialog.confirm` takes a `choice`). OK runs the dialog's command and keeps the dialog open if it fails. Camera Raw and the other full-window workspaces are hosted dialogs too: `{ui: …}` requests and `ui.dialog.set` field keys drive them (see Camera Raw below)
   - The unsaved-changes prompt (closing a document, Revert, quitting with unsaved work) is listed in `ui.inspect`'s `dialogs` with the id `"discard"` while it is up: `fields` gives the waiting `command` (`file.close`, `file.exit`…), the `document` it asks about, how many are `remaining`, and its `choices`. `ui.dialog.confirm` takes `{"dialog": "discard", "choice": "save" | "saveAll" | "dontSave" | "dontSaveAll" | "cancel"}` (default `save`; Revert takes `dontSave` or `cancel`) and answers it as the window's buttons do, one document at a time. `saveAll` and `dontSaveAll` tick "Apply to All": they answer for every document still to ask about, and are listed in `choices` only while more than one is left. A document whose save is cancelled or fails is asked about again; `ui.dialog.cancel` with `{"dialog": "discard"}` cancels it. Save of an untitled document opens the save dialog first, so the reply's `fileDialog` is true and the prompt stays open until that is answered.
   - A save dialog's answer that PhotoCraft changes, by giving a name without an extension the suggested file's or by lowercasing the extension (Preferences › File Handling › Lowercase Extension), opens a replace prompt when a file exists under the changed name: a dialog with `__replaceSaved`, `message`, `detail` and `path` (the file the save would replace). `ui.dialog.confirm` writes the file; `ui.dialog.cancel` ends the save without writing, as Cancel in the save dialog does. The file dialog counts as open until the prompt is answered. A name that differs only in letter case and reaches the same file (Windows and macOS by default) does not open it.
   - Layer Style (`layerStyle {effect?}` opens on that effect kind): the fields hold the dialog's whole state, so agents read and drive it like a user. `effects` lists every effect instance in the layer's order as `{id, kind, on, params, fx}` (`fx` is the effect snapshot the dialog loaded; OK edits that snapshot with `params`, so anything the dialog doesn't model survives). `selected` picks the page (`blendingOptions` or an instance id), `preview` (default on) gates the live canvas preview, `p:blendingOptions` edits blend mode/opacity/fill opacity, and `patternList` names the usable patterns. OK replaces the layer's effects in one step (`layer.layerStyle.replace`); Cancel discards. "New Style…" saves the pending state via `style.presets.new {effects}`, a swatch click applies a style preset, and Make/Reset Default use `layer.layerStyle.makeDefault` / `layer.layerStyle.defaultFor`
@@ -153,7 +154,10 @@ The transport is `apps/photocraft/src/control_server.rs`, and the handlers are i
 - `ui.type {text}`: type text (goes to the focused widget, or to the canvas while the Type tool is editing)
 - `ui.resize {width, height}`: resize the main window
 - `ui.gpu.simulateLoss {error?}`: act as if the wgpu device was lost (or reported an error with `error: true`). The app switches to the CPU image compositor (after a loss for the rest of the session; after an error until a successful Retry GPU) and shows the same recovery warning as on a real loss. `gpuFallbackNotice` in `ui.inspect` contains the reason while the warning is open. Keep Using CPU saves CPU compatibility for the next launch. Retry GPU saves GPU mode; after an error (`error: true`) it also builds a new GPU canvas on the same device at once (`gpuInfo.canvas` is `gpu` again, #6577), and after a loss it asks the user to save and restart. The window renderer still requires a working graphics or software adapter. Returns `wasActive` and `gpuInfo`. For testing the fallback. With `destroy: true` it destroys the window's real wgpu device instead, as a driver reset does (see `docs/development.md` › device loss): the app saves every unsaved document for recovery and closes. Returns `destroyed`
-- `ui.screenshot {path?, focus?}`: capture the main window (PNG). With no path the reply contains
+- `ui.notice.post {title, lines?, tone?}`: show a notice (`tone`: `neutral`, `accent`, `info`, `good`, `warn`, `bad`); the reply is `{id}`. `ui.inspect` `notices` lists the notices posted and the cards on screen (`{window, id, title, lines, tone}`)
+- `ui.inspect` `rects` maps each open document's canvas (`canvas.<index>`), each hosted dialog (its `dialogs` id) and `taskBar` to its last on-screen rect `[x0, y0, x1, y1]` in screen points; an id with no rect (absent, behind a modal dialog) is left out
+- `ui.pointer` queues its events for the active document's canvas and replies at once; the canvas takes them on its next frame, so a following request sees their effect only after a frame has run. With no open document or no canvas shown it fails with `no canvas to drive` and queues nothing. `modifiers.space` is held as the Space key for the request
+- `ui.screenshot {path?, focus?, window?}`: capture the main window, or the document window `window` (its id as `ui.window.open` replied it; `main` is the main window) (PNG). With no path the reply contains
   base64 PNG data; a path is relative to the automation write root. Raises the window first
   (default) because occluded macOS windows stop rendering. A request sent before the first frame
   is queued (within the same limits and deadline) and captures once the window geometry is known,
@@ -208,7 +212,7 @@ store expose and persist the same setting; scripts keep using canonical command 
 | `type.hitTest` | `{"layer":id?,"x":px,"y":px}`: character under a document point. No `layer` picks the topmost visible type layer there. Result `{"layer","index","line","inside"}` |
 | `type.caret` | `{"layer":id?,"index":char}`: caret segment in document pixels, `{"index","line","segment":[[x,y],[x,y]]}` (rotated and vertical type included) |
 | `type.navigate` | `{"layer":id?,"index":char,"move":"wordPrev\|wordNext\|linePrev\|lineNext\|lineStart\|lineEnd\|start\|end","x":px?}`: neighbouring caret. `x` keeps the column across line moves. Result `{"index"}` |
-| `actions.list` | `{}` → `{actions:[{name, steps, set, setSlot?}], sets, setRows?, recording, toolRecording}`. `sets` lists distinct captions, while `setRows` lists physical folders in order, including empty folders and repeated captions. |
+| `actions.list` | `{}` → `{actions:[{name, steps, set}], sets, recording, toolRecording}`. `sets` lists every set in panel order, empty ones included. Action and set names are unique |
 | `actions.get` | `{"action": name or index}` → `{name, steps:[[id, params], …], disabled:[step, …]}`. `steps` is the shape `file.automate.batch` and droplets take; `disabled` lists the 0-based steps playback skips |
 | `actions.record` | `{"name":"Red"}` starts a new action (default name `Action N`). `{"action": name or index}` appends to one that exists |
 | `actions.stop` | `{}` → `{action, steps}`. Copies replayable journal entries since `actions.record` (queries and action-editing commands omitted). For portable playback, an active `layer` id is dropped only when it is the sole selected layer and does not supply source content (`layer.new.frame`, `select.loadSelection`, `type.createSelection`, `edit.checkSpelling`; a Check Spelling step keeps only `allLayers`, as the reference application's step does). Otherwise, including when several layers are selected, it is recorded by its unique name; `layer.select` records `{"name":"Layer","occurrence":0}`. Type tool keystrokes on a new layer fold into its `type.create` step; edits on an existing text layer retain separate replacements so styled text between edited spans survives replay. For commands other than `layer.select`, ambiguous layer names keep the id and require a unique name for portable playback |
@@ -238,15 +242,16 @@ Select an action and press Record to append steps; the plus button starts a new 
 A final `["view.fitOnScreen", {}]` step fits the resized document when the canvas is laid out.
 Headless playback reports unsupported view commands as failed steps.
 
-In the desktop Actions panel, right-click an action occurrence to assign a function key (F1–F12),
-or choose None to remove it. The panel stores the binding by stable occurrence ID (`actions.playById:<id>`),
-so duplicate names can have independent shortcuts. The name-based `actions.play:<name>` form remains
-supported for legacy bindings; for an action with both keys, its valid occurrence binding takes
-precedence. For example, `edit.keyboardShortcuts` accepts
-`{"set":{"actions.play:My action":"F6"},"allowUnknown":true,"removeConflicts":false}`
-for a legacy name-based binding. Removing the applicable binding or deleting the action restores
-the ordinary menu shortcut. The panel moves a key away from another action when assigning it.
-Action playback still checks each nested command's automation permissions.
+In the desktop Actions panel, right-click an action to assign a function key (F1–F12),
+or choose None to remove it. The binding follows the action name (`actions.play:<name>`), which is
+unique in the library, and is saved in preferences. For example, the existing
+`edit.keyboardShortcuts` command accepts
+`{"set":{"actions.play:My action":"F6"},"allowUnknown":true,"removeConflicts":false}`.
+A named action takes precedence over the ordinary menu shortcut while it exists and is bound;
+removing its binding or deleting it restores that menu shortcut. The panel moves a key away
+from another action when assigning it. An actions file that stored keys and calls by action id
+(`actions.playById:<id>`, `actionId`) loads with them moved to the names once. Action playback
+still checks each nested command's automation permissions.
 
 UI-level commands (`view.zoomIn`, `window.theme.pro`, `edit.search`, …) are also accepted by `engine.execute` and `ui.menu.invoke`.
 
@@ -346,7 +351,7 @@ nudge the layers, selection outline or Free Transform box as one history step; a
 keyboard shortcuts, hidden and coloured menu items, autosave interval and crash recovery, and the history
 log text file. GPU on/off and the GPU tile size apply at the next launch.
 
-The desktop app stores them in `preferences.json` in the platform config directory (macOS
+The desktop app stores them in `config.toml` (read from an older `preferences.json` until the first save) in the platform config directory (macOS
 `~/Library/Application Support/Photocraft`, Windows `%APPDATA%\Photocraft`, Linux
 `$XDG_CONFIG_HOME/photocraft`; override with `PHOTOCRAFT_CONFIG_DIR`); autosaves go to its
 `Recovery` folder (on Windows to `%LOCALAPPDATA%\Photocraft\Recovery`, out of the roaming
@@ -394,11 +399,11 @@ presets and preferences still load. Automatic Recent configurations are separate
 
 ## Update checks
 
-On desktop, `engine.execute` with `help.checkForUpdates` and `{}` starts a background
-check; `updates.status` returns `{supported, currentVersion, result}`. The result's `status`
-is `idle`, `checking`, `upToDate`, `available` (with `release: {version, url}`), or `failed`
-(with `message`). No document is required and neither command adds history or journal entries.
-Headless and web sessions without a release transport report `supported: false`.
+On desktop, Help › Check for Updates (`ui.menu.invoke` with `help.checkForUpdates`) starts a
+background check; `ui.inspect` `updates` is `{supported, currentVersion, status}`, where `status`
+is the update window's message (`null` while idle). No document is required and the check adds
+no history or journal entries. Headless and web sessions without a release transport report
+`supported: false`.
 
 Set `general.automaticallyCheckUpdates` with `prefs.set` to enable or disable the next
 desktop startup's single check (enabled by default). Manual checks still work when automatic checks are off.
@@ -633,12 +638,11 @@ a driver process crash is detected by the startup marker on the next launch.
 
 ### Camera Raw dialog
 
-On the desktop the dialog is a window of its own (title bar, moved and resized like any window), as Adobe Camera Raw is; the main window is dimmed and takes no input while it is open, and closing the window is Cancel. Where the platform has no extra windows (the web build) it is drawn over the main window.
+Camera Raw is a hosted full-window workspace over the main window: it is listed in `ui.inspect`'s `dialogs`, the main window takes no input while it is open, and closing it is Cancel. Drive it with `{ui: …}` requests (below) or with `ui.dialog.set {dialog, field, value}` on its field keys.
 
-**Screenshots:** `ui.screenshot` captures the main window only, and eframe cannot capture an
-immediate viewport, so while Camera Raw has its own window the PNG shows the dimmed main window,
-not the dialog. Read the dialog's state through `ui.inspect` (`cameraRaw`: params, histogram,
-zoom, control rectangles) and drive it with the `ui` params below. To *see* it, render offscreen
+**Screenshots:** `ui.screenshot` captures the main window, which shows the workspace. Read the
+dialog's state through `ui.inspect` (`cameraRaw`: params, histogram,
+zoom, control rectangles) and drive it with the `ui` params below. To render offscreen
 (`cargo run -p photocraft-ui-egui --example snapshot -- --script '[["ui.menu.invoke", {"id": "filter.cameraRaw"}]]'`
 or an `egui_kittest` harness): those embed
 viewports, so the dialog is drawn over the main window and appears in the image.
@@ -791,12 +795,7 @@ the named call again if desired.
 Actions sit in **set folders** (`set` on `actions.list` / `actions.get`, filled by Load Actions,
 written by Save Actions, changed with `actions.assignSet`): the panel shows loose actions first,
 then each set as a collapsible folder (`ui.actions.collapsedSets`); dropping an action among
-another set's rows moves it into that set. When recording a new action or assigning it to a folder,
-pass the caption and its zero-based `setSlot` from `setRows` to select a particular occurrence.
-Omitting `setSlot` infers a physical folder only if the caption identifies one occurrence and no
-legacy group shares it. Explicit null keeps name-only assignment. For Duplicate, a numeric
-`setSlot` selects one physical folder, null selects the implicit group, and omission selects by
-caption. Each step has Photoshop's two toggles: the check
+another set's rows moves it into that set. Each step has Photoshop's two toggles: the check
 (`actions.toggle`, skipped when off) and the **dialog** toggle (`actions.dialog`). Playing a
 step with its dialog on opens that command's dialog seeded with the recorded values and pauses:
 the play result carries `paused: {step, id, dialog}`, OK runs the dialog's values and continues
@@ -835,7 +834,10 @@ by ID or label, and `onto` is accepted for `anchor`.
 - `window.panel.activate {panel}` reveals and selects a panel, restoring its saved
   position when possible. `window.panel.close {panel}` hides it; `window.panel.closeGroup` and
   `window.panel.closeOthers` close its group or the group's other panels.
-- `window.panel.minimize {panel, minimized?}` collapses a floating window to its title bar.
+- `window.panel.minimize {panel, minimized?}` minimizes the panel's group to its tab strip, or restores it.
+- `window.panel.iconic {panel, iconic?}` collapses the column holding the panel, docked or floating, to icons,
+  or expands it; without `iconic` it toggles. The Toolbar never collapses. `window.panel.<id>` on a panel in a
+  collapsed column opens or closes its flyout and leaves the layout as it is.
 - `window.panel.window {panel, native?}` floats a docked panel's group and gives its floating
   window its own OS window. On the desktop every floating window has one, except the Studio
   themes' Properties card, which stays over the canvas, and on Wayland, where floating windows
@@ -862,13 +864,13 @@ split paths return an error without changing the workspace.
 
 The `docking` object in `ui.state` and in saved workspaces is craft-ui's `Workspace`:
 `version` (2), `layout`, `hidden` (each closed panel with its return place), `saved` and
-`locked`. `dockingReturns` holds where each floating panel docks back, and
-`dockingCollapsed` the panels of collapsed custom groups. Any other saved `docking` value,
-such as a bare layout with `dockingHidden`, loads as the default layout, built from the
-saved `panels`, `dockTabs` and `dock`.
+`locked`. That one workspace holds every panel's place, return place and collapsed state;
+`ui.inspect` derives `panels` and `dockTabs` from it for older readers. Any other saved
+`docking` value, such as a bare layout with `dockingHidden`, loads as the default layout.
 
 The existing `ui.set` panel visibility, `dockTabs` selection and `dockWidth` controls
-remain available after customization. Width requests use the window-dependent range
+remain available after customization; one request's `panels`, `dockTabs`, `dock` and
+`dockWidth` run as one list of workspace actions. Width requests use the window-dependent range
 250..max(520, window width − 400), with achieved widths subject to column minimums
 and iconic caps; constrained dock-edge rendering still reserves canvas space. Named
 `dock.hidden_tabs` and intact native-group collapse settings are also preserved. A
@@ -883,9 +885,11 @@ or `down` to the panel's entire current group. With `operation:"move"`, provide
 `anchor` and optional `zone`/`before` (as for panel.move), or a serialized `placement`,
 to transfer all members atomically while preserving their order and selecting the
 requested `panel`.
-A floating group's drag bar or title bar also transfers the whole group when dropped on a
-dock target. The panel menu and icon rail remain
-available in custom workspaces. `window.panel.<id> {show:true}` always reveals, selects
+A floating window is one column, so a floating group's drag bar or its column bar transfers
+the whole column when dropped on a dock target. The panel menu remains available in custom
+workspaces. The Toolbar (`toolbar`, labelled Tools) is a panel of its own column, as many tool
+columns wide as `window.panel.layout {SetColumnSteps}` or `ui.set {toolbarColumns}` say; it takes
+no tabs, no other group and no collapse, and moves like any panel. `window.panel.<id> {show:true}` always reveals, selects
 and expands the panel, including when another tab is selected. Workspace snapshots
 retain custom collapse settings and Timeline visibility.
 
