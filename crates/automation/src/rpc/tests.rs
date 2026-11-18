@@ -1186,3 +1186,49 @@ fn doc_place_forwards_high_memory_approval() {
     drop(t);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn doc_save_rejects_malformed_requests_without_writing_the_stored_path() {
+    let dir = std::env::temp_dir().join(format!("pc-rpc-save-path-{}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    let workspace = crate::AuthorizedWorkspace::new(Some(&dir), Some(&dir)).unwrap();
+    let mut h = Headless::with_workspace(workspace);
+    h.handle("doc.new", json!({"width": 8, "height": 8})).unwrap();
+    h.handle("doc.save", json!({"path": "saved.pcraft"})).unwrap();
+    let path = dir.join("saved.pcraft");
+    let original = std::fs::read(&path).unwrap();
+    h.handle("engine.execute", json!({"command": "layer.new.layer", "params": {"name": "Unsaved"}})).unwrap();
+    let unsaved = h.inspect(None).unwrap();
+
+    for field in ["path", "format"] {
+        for value in [json!(123), json!(false), json!([]), json!({})] {
+            let mut params = json!({});
+            params[field] = value.clone();
+            let error = h.handle("doc.save", params).unwrap_err().to_string();
+            assert!(error.contains(field), "{field} {value}: {error}");
+            assert_eq!(std::fs::read(&path).unwrap(), original, "invalid {field} {value} wrote the stored file");
+            assert_eq!(h.inspect(None).unwrap(), unsaved, "invalid {field} {value} changed the document");
+        }
+    }
+    for params in [json!(123), json!(false), json!([]), json!("saved.pcraft")] {
+        let error = h.handle("doc.save", params.clone()).unwrap_err().to_string();
+        assert!(error.contains("object"), "{params}: {error}");
+        assert_eq!(std::fs::read(&path).unwrap(), original, "invalid params {params} wrote the stored file");
+        assert_eq!(h.inspect(None).unwrap(), unsaved, "invalid params {params} changed the document");
+    }
+
+    let mut previous = original;
+    for params in [json!({}), json!({"path": null}), json!({"format": null}), Value::Null] {
+        h.handle("engine.execute", json!({"command": "layer.new.layer"})).unwrap();
+        let saved = h.handle("doc.save", params).unwrap();
+        assert_eq!(saved["path"], "saved.pcraft");
+        let bytes = std::fs::read(&path).unwrap();
+        assert_ne!(bytes, previous, "an implicit save did not write the edited document");
+        previous = bytes;
+    }
+    let saved = h.handle("doc.save", json!({"path": "copy.pcraft", "format": "pcraft"})).unwrap();
+    assert_eq!(saved["path"], "copy.pcraft");
+    assert!(dir.join("copy.pcraft").is_file());
+    drop(h);
+    std::fs::remove_dir_all(dir).unwrap();
+}
