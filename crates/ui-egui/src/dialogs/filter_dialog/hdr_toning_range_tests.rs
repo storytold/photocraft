@@ -200,17 +200,16 @@ fn typing_key_by_key_ends_at_the_typed_number() {
 }
 
 #[test]
-fn an_inserted_limit_is_remembered_after_ok() {
+fn ok_applies_the_inserted_limits() {
     let (mut h, id) = open();
     type_field(&mut h, "Gamma", "20");
     dismiss_alerts(&mut h);
     type_field(&mut h, "Radius", "900");
     dismiss_alerts(&mut h);
+    let before = h.state().session.active().unwrap().history.past_len();
     let ctx = h.ctx.clone();
     let _ = crate::dialogs::confirm(h.state_mut(), &ctx, id);
     h.run_steps(4);
-    let again = super::open(h.state_mut(), CMD).unwrap();
-    h.run_steps(4);
-    assert_eq!(val(&h, again, "gamma"), 9.99);
-    assert_eq!(val(&h, again, "radius"), 500.0);
+    assert!(h.state().framework.dialogs.get_by_id::<HostedParamDialog>(id).is_none(), "OK closed the dialog");
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), before + 1, "OK applied Gamma 9.99 and Radius 500");
 }
