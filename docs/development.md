@@ -762,12 +762,13 @@ position is its index, and the ones the table does not have yet are dashed. A cl
 Color Picker for that entry, and the picked colour is folded back into the table field
 (`paletteColors` for a Custom palette, `colors` for Color Table); a click on a dashed slot first
 grows the table up to it with opaque black entries, as a new entry's colour, and then opens the
-picker on that black. The **Set Transparent** switch makes the next click mark an entry instead
-(the marked entry is drawn as a checkerboard with an X, and is the one named in `transparent`;
-click it again to clear). The **Color Picker** pipette beside it arms the canvas: a press on the
-image highlights the entry that pixel uses — the one matching its colour (an exact match, else the
-nearest, for a dithered edge), or the table's transparent entry over a clear pixel — with an accent
-ring around the slot. Palette: Custom… is seeded with the document's table on an Indexed
+picker on that black. The **Set Transparent** switch and the **Color Picker** pipette stand under the
+grid, on the same row (a row of their own would make the dialog take the window's width). The switch
+makes the next click mark an entry instead of editing it (the marked entry is drawn as a checkerboard
+with an X, and is the one named in `transparent`; click it again to clear). The pipette arms the
+canvas: a press on the image highlights the entry that pixel uses — the one matching its colour (an
+exact match, else the nearest, for a dithered edge), or the table's transparent entry over a clear
+pixel — with an accent ring around the slot. Palette: Custom… is seeded with the document's table on an Indexed
 document, else with the palette the dialog opens on, and Color Table is seeded with the document's
 table and its transparent entry every time, so the grid always has the table it shows to edit;
 `colors`/`forced` grey out while a Custom table is chosen, and **Transparency** and **1st Index as

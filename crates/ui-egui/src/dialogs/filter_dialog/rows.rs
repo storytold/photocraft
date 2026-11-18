@@ -141,16 +141,12 @@ fn indexed_color(app: &PhotocraftApp, params: &mut Vec<Param>) {
 
     // Palette: Custom… gives the table itself: the count and the forced colours are the table's
     // own then, so their rows grey out (as in Photoshop). The grid and its pipette belong to it too.
-    let armed = crate::dialogs::palette_file_ui::armed_row().visible_when("palette", "custom");
-    let grid = crate::dialogs::palette_file_ui::grid_row(INDEXED_COLOR, Label::from(tl!("Colors"))).visible_when("palette", "custom").not_remembered();
-    let pipette = crate::dialogs::palette_file_ui::eyedropper_row().visible_when("palette", "custom");
+    let table = crate::dialogs::palette_file_ui::controls_row(INDEXED_COLOR, Label::from(tl!("Colors"))).visible_when("palette", "custom").not_remembered();
     match params.iter().position(|p| p.key == "colors") {
         Some(i) => {
-            params.insert(i + 1, grid);
-            params.insert(i + 1, armed);
-            params.insert(i + 2, pipette);
+            params.insert(i + 1, table);
         }
-        None => params.extend([armed, grid, pipette]),
+        None => params.push(table),
     }
     for key in ["colors", "forced"] {
         tap(params, key, |p| p.enabled_when_in("palette", BUILT_IN_PALETTES));

@@ -22,7 +22,7 @@ use craft::ui::buttons::ToggleButton;
 use craft::ui::contract::{Bind, Props as _, Show as _};
 use craft::ui::dialog::DialogId;
 use craft::ui::dialog::StackDialog as _;
-use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog, Param, ParamKind};
+use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog, Param};
 use craft::ui::primitives::IconSpec;
 use craft::ui::runtime::env::Label;
 use craft::ui::runtime::requests::EyedropperRequest;
@@ -53,6 +53,8 @@ const COLS: usize = 16;
 const CELLS: usize = COLS * COLS;
 /// A cell's side in logical pixels, about a colour table's slot on screen.
 const CELL: f32 = 22.0;
+/// The space between the grid and its switches, and between the two switches.
+const SWITCH_GAP: f32 = 8.0;
 
 /// The field holding the table for `command`'s dialog.
 pub fn colors_field(command: &str) -> &'static str {
@@ -136,35 +138,62 @@ fn materialize(fields: &mut DialogFields, command: &str, key: &str, colors: &[[u
     }
 }
 
-/// The "Set Transparent" switch: while it is on, a click on the grid marks that entry as the
-/// table's transparent one instead of opening its colour. A row of its own, so its label reads
-/// like the dialog's other rows and its state is visible.
-pub fn armed_row() -> Param {
-    Param::new(TRANSPARENT_ARMED, Label::from(tl!("Set Transparent")), ParamKind::bool(false)).not_remembered()
-}
-
-/// The palette pipette ("Color Picker"): while it is on, a press on the image highlights the entry
-/// the pixel under it uses ([`sample`]). A row of its own, as the switch above is.
-pub fn eyedropper_row() -> Param {
-    Param::custom(EYEDROPPER, Label::from(tl!("Color Picker")), |ui, fields, cx| {
+/// The "Set Transparent" switch and the palette pipette ("Color Picker"), under the grid: a row of
+/// their own would widen the dialog (a custom row fills the width it is offered), and Photoshop's
+/// palette dialogs keep them beside each other under the table anyway.
+pub fn controls_row(command: &'static str, label: Label) -> Param {
+    let key = colors_field(command);
+    Param::custom(key, label, move |ui, fields, cx| {
+        apply_picks(fields, key);
+        let (colors, transparent) = shown(fields, command, key);
+        let armed = fields.bool(TRANSPARENT_ARMED).unwrap_or(false);
         let mut on = fields.bool(EYEDROPPER).unwrap_or(false);
-        let was = on;
-        let shown = ToggleButton::new(tl!("Pick a Palette Colour From the Image"), Bind::bound(&mut on))
-            .icon(IconSpec::svg(IconId::new("pipette")))
-            .icon_only()
-            .escape_disarms()
-            .tooltip(tl!("Pick a Palette Colour From the Image"))
-            .show(ui);
-        if on != was {
-            fields.set(EYEDROPPER, on);
+        let highlight = fields.int(HIGHLIGHT).and_then(|i| usize::try_from(i).ok());
+        let (response, hit) = grid(ui, &colors, transparent, highlight);
+        if let Some(i) = hit {
+            if armed {
+                // Mark the entry the click landed on; clicking the marked entry clears it, as the
+                // switch does.
+                if transparent == Some(i) {
+                    fields.remove(TRANSPARENT);
+                } else {
+                    materialize(fields, command, key, &pad_to(&colors, i));
+                    fields.set(TRANSPARENT, FieldValue::Int(i as i64));
+                }
+            } else if let Some(color) = click_entry(command, fields, &colors, i) {
+                // The Color Picker opens on the entry's colour and files its answer under the
+                // private key `apply_picks` folds back in.
+                cx.pick_color(&pick_key(i), srgba(color));
+            }
         }
-        if on {
-            // The next press on the image answers `SAMPLE_KEY` with the colour under it, which the
-            // host hands to `sample` (the dialog's own pipette, not a row's colour).
-            cx.arm_eyedropper(EyedropperRequest::new(SAMPLE_KEY));
-            cx.sampling(true);
-        }
-        shown.response
+        // The switches under the grid: [Set Transparent] [pipette] Color Picker.
+        ui.add_space(SWITCH_GAP);
+        ui.horizontal(|ui| {
+            let mut switch = armed;
+            // A toggle button carries its own label (a bare checkbox draws none), as the pre-framework
+            // dialog's switch did; its pressed state is the armed state.
+            ToggleButton::new(tl!("Set Transparent"), Bind::bound(&mut switch)).show(ui);
+            if switch != armed {
+                fields.set(TRANSPARENT_ARMED, switch);
+            }
+            ui.add_space(SWITCH_GAP);
+            let was = on;
+            ToggleButton::new(tl!("Color Picker"), Bind::bound(&mut on))
+                .icon(IconSpec::svg(IconId::new("pipette")))
+                .escape_disarms()
+                .tooltip(tl!("Pick a Palette Colour From the Image"))
+                .show(ui);
+            if on != was {
+                fields.set(EYEDROPPER, on);
+            }
+            if on {
+                // The next press on the image answers `SAMPLE_KEY` with the colour under it, which
+                // the host hands to `sample` (the dialog's own pipette, not a row's colour).
+                cx.arm_eyedropper(EyedropperRequest::new(SAMPLE_KEY));
+                cx.sampling(true);
+            }
+        });
+        response
     })
 }
 
@@ -234,36 +263,6 @@ pub fn match_entry(colors: &[[u8; 3]], target: [f32; 3]) -> Option<usize> {
             })
             .min_by_key(|(d, _)| *d)
             .map(|(_, i)| i)
-    })
-}
-
-/// The palette grid of `command`'s dialog: 16×16 slots, the table's entries painted and the rest
-/// dashed. The table is the dialog's own field (seeded from the document when the dialog opens).
-pub fn grid_row(command: &'static str, label: Label) -> Param {
-    let key = colors_field(command);
-    Param::custom(key, label, move |ui, fields, cx| {
-        apply_picks(fields, key);
-        let (colors, transparent) = shown(fields, command, key);
-        let armed = fields.bool(TRANSPARENT_ARMED).unwrap_or(false);
-        let highlight = fields.int(HIGHLIGHT).and_then(|i| usize::try_from(i).ok());
-        let (response, hit) = grid(ui, &colors, transparent, highlight);
-        if let Some(i) = hit {
-            if armed {
-                // Mark the entry the click landed on; clicking the marked entry clears it, as the
-                // switch does.
-                if transparent == Some(i) {
-                    fields.remove(TRANSPARENT);
-                } else {
-                    materialize(fields, command, key, &pad_to(&colors, i));
-                    fields.set(TRANSPARENT, FieldValue::Int(i as i64));
-                }
-            } else if let Some(color) = click_entry(command, fields, &colors, i) {
-                // The Color Picker opens on the entry's colour and files its answer under the
-                // private key `apply_picks` folds back in.
-                cx.pick_color(&pick_key(i), srgba(color));
-            }
-        }
-        response
     })
 }
 
