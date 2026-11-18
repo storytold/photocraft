@@ -13,20 +13,20 @@ use serde_json::{Value, json};
 use crate::PhotocraftApp;
 
 /// The app under a window, as a frame runs it.
-pub(crate) type AppHarness = Harness<'static, PhotocraftApp>;
+pub(crate) type AppHarness = Harness<'static, Box<PhotocraftApp>>;
 
-pub(crate) fn app() -> PhotocraftApp {
+pub(crate) fn app() -> Box<PhotocraftApp> {
     PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default())
 }
 
 /// `app` with the hosted dialogs run each frame, the way the app's frame runs them (their pumps included).
-pub(crate) fn harness(app: PhotocraftApp) -> AppHarness {
+pub(crate) fn harness(app: Box<PhotocraftApp>) -> AppHarness {
     let ctx = app.ctx().clone();
     let mut h = Harness::builder()
         .with_size(vec2(1400.0, 900.0))
         .with_step_dt(1.0 / 60.0)
         .with_context(ctx)
-        .build_ui_state(|ui, app: &mut PhotocraftApp| crate::dialogs::run(app, ui), app);
+        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app);
     h.run_steps(2);
     h
 }

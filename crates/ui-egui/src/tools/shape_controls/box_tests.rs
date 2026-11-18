@@ -14,7 +14,7 @@ use crate::state::Tool;
 const NONE: Modifiers = Modifiers::NONE;
 
 /// A 1000 × 700 document with the two measured rectangles, both selected, fitted on the screen.
-fn app_with_two_shapes(tool: Tool) -> (PhotocraftApp, u64, u64) {
+fn app_with_two_shapes(tool: Tool) -> (Box<PhotocraftApp>, u64, u64) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 1000, "height": 700, "background": "white"})).unwrap();
     app.run("shape.create", json!({"kind": "rect", "rect": [100, 98, 303, 203], "fill": "#e02020"})).unwrap();

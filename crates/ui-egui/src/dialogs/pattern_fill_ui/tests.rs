@@ -3,7 +3,7 @@ use serde_json::json;
 
 use super::*;
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 40, "height": 30, "depth": 16})).unwrap();
     app
