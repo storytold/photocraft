@@ -32,15 +32,14 @@ commands:
   wasm            cargo check --target wasm32-unknown-unknown for the wasm-safe crates (one call, plus
                   one per optional web feature)
   test            workspace tests (cargo nextest when installed, else cargo test), then doctests
-  ci [lint | archive | build | tests --from <dir> [--gpu | --no-gpu] | <step>]
+  ci [lint | build | tests [--gpu | --no-gpu] | <step>]
                   the CI gate: fmt --check, egui-fork, clippy -D warnings, layers, panel-commands, scorecard --check,
                   tests (nextest --profile ci), panic_hunt, doctests, wasm and the i18n-report, with --locked
                   --features heif (stops at first failure). The gate splits it over its jobs: `lint` runs the
-                  steps that need no test build; `archive` builds the tests into the nextest archive at
-                  $NEXTEST_ARCHIVE_FILE and runs the doctests; `tests --from <dir>` runs the tests from that
-                  archive extracted to <dir>, on the partition in $NEXTEST_PARTITION (`--gpu`: only nextest's
-                  gpu test group, each test's output shown; `--no-gpu`: every other test); `build` only builds
-                  the tests (the cache warm-up). $PHOTOCRAFT_CI_EXCLUDE (packages separated by spaces) leaves
+                  steps that need no test build; `tests` runs the tests and panic_hunt on the partition in
+                  $NEXTEST_PARTITION (`--gpu`: only nextest's gpu test group, each test's output shown;
+                  `--no-gpu`: every other test); `doctest` runs the doctests; `build` only builds what `tests`
+                  builds (the cache warm-up). $PHOTOCRAFT_CI_EXCLUDE (packages separated by spaces) leaves
                   packages out of the test build and the doctests
   corpus [--all | --pngsuite | --psd | --psd-tools | --pixls | --atn | --photoshop | --gimp] [--local] [--update-manifest]
                   show where test corpora live and their pins (xtask/src/corpus_pins.rs), or fetch
@@ -255,29 +254,15 @@ const GATE_ARGS: [&str; 4] = ["--workspace", "--locked", "--features", "heif"];
 /// every step, in the order of [`CI_STEPS`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Part {
-    /// Checks that need no test build: the gate's lint leg.
+    /// Checks that need no test build: the gate's lint leg (`ci lint`).
     Lint,
-    /// Steps that need the test build, in the job that builds it.
-    Build,
-    /// The tests, which the gate builds once and runs from the archive in several shards.
+    /// The tests, which the gate splits over its shards (`ci tests`).
     Test,
+    /// The doctests, which the gate runs in one shard (`ci doctest`).
+    Doc,
 }
 
-/// How `ci` gets the test binaries.
-#[derive(Clone, Debug, PartialEq)]
-enum TestSource {
-    /// Builds and runs them here.
-    InPlace,
-    /// Builds them only (the cache warm-up).
-    BuildOnly,
-    /// Builds them into a nextest archive at this path instead of running them.
-    Archive(PathBuf),
-    /// Runs them from a nextest archive extracted to this directory (`--extract-to`), on the
-    /// partition given, if any.
-    Extracted { dir: PathBuf, partition: Option<String> },
-}
-
-/// Which tests a run from the archive takes, by nextest's `gpu` test group.
+/// Which tests a test step takes, by nextest's `gpu` test group.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Selection {
     All,
@@ -290,7 +275,10 @@ enum Selection {
 
 #[derive(Clone, Debug, PartialEq)]
 struct CiOptions {
-    tests: TestSource,
+    /// Build the tests without running them (`ci build`, the cache warm-up).
+    build_only: bool,
+    /// The nextest partition the test steps run ($NEXTEST_PARTITION with `ci tests`).
+    partition: Option<String>,
     selection: Selection,
     /// Workspace packages left out of the test build and the doctests ($PHOTOCRAFT_CI_EXCLUDE).
     exclude: Vec<String>,
@@ -308,7 +296,7 @@ const CI_STEPS: [(&str, Part, StepFn); 11] = [
     ("scorecard", Part::Lint, |_| scorecard::run(&root(), &["--check"])),
     ("test", Part::Test, |o| step_tests(o, false)),
     ("panic_hunt", Part::Test, |o| step_tests(o, true)),
-    ("doctest", Part::Build, step_doctest),
+    ("doctest", Part::Doc, step_doctest),
     ("wasm", Part::Lint, |_| cmd_wasm()),
     ("i18n", Part::Lint, step_i18n),
 ];
@@ -382,7 +370,7 @@ fn read_gpu_filter() -> Result<String, String> {
 }
 
 /// The nextest command line of a test step. `panic_hunt` runs only the engine's `#[ignore]`d panic
-/// hunt (AGENTS.md Rule 9), from the same test build as the tests, so nothing rebuilds. `gpu` is
+/// hunt (AGENTS.md Rule 9), with the same build arguments as the tests, so nothing rebuilds. `gpu` is
 /// the group's filter, read only when the selection needs it. nextest's `ci` profile terminates
 /// hung tests and repeats every failure at the end of the log (.config/nextest.toml).
 fn nextest_args(o: &CiOptions, panic_hunt: bool, gpu: Option<&str>) -> Vec<String> {
@@ -392,29 +380,13 @@ fn nextest_args(o: &CiOptions, panic_hunt: bool, gpu: Option<&str>) -> Vec<Strin
         args.extend(["--run-ignored", "only"].map(String::from));
         filters.push("binary_id(photocraft-engine::panic_hunt)".to_string());
     }
-    match &o.tests {
-        TestSource::Extracted { dir, partition } => {
-            let target = dir.join("target");
-            let path = |p: PathBuf| p.to_string_lossy().into_owned();
-            args.extend([
-                "--binaries-metadata".to_string(),
-                path(target.join("nextest").join("binaries-metadata.json")),
-                "--cargo-metadata".to_string(),
-                path(target.join("nextest").join("cargo-metadata.json")),
-                "--target-dir-remap".to_string(),
-                path(target.clone()),
-                "--workspace-remap".to_string(),
-                path(root()),
-            ]);
-            if let Some(partition) = partition {
-                args.extend(["--partition".to_string(), partition.clone()]);
-            }
-            // A partition or a selection may hold no panic hunt; the shard that does runs it.
-            if panic_hunt {
-                args.extend(["--no-tests", "warn"].map(String::from));
-            }
-        }
-        _ => args.extend(test_build_args(&o.exclude)),
+    args.extend(test_build_args(&o.exclude));
+    if let Some(partition) = &o.partition {
+        args.extend(["--partition".to_string(), partition.clone()]);
+    }
+    // A partition or a selection may hold no panic hunt; the shard that does runs it.
+    if panic_hunt && (o.partition.is_some() || o.selection != Selection::All) {
+        args.extend(["--no-tests", "warn"].map(String::from));
     }
     match (o.selection, gpu) {
         (Selection::Gpu, Some(gpu)) => {
@@ -437,7 +409,7 @@ fn shown(c: &Command) -> String {
 /// The `test` and `panic_hunt` steps.
 fn step_tests(o: &CiOptions, panic_hunt: bool) -> Result<(), String> {
     let mut c = cargo();
-    if o.tests == TestSource::InPlace && !nextest_available() {
+    if o.partition.is_none() && o.selection == Selection::All && !nextest_available() {
         if panic_hunt {
             // `-- --ignored` across the workspace would run every ignored test, not only the hunt. The
             // engine has no `heif` feature of its own; it reaches the decoder through photocraft-io.
@@ -454,19 +426,11 @@ fn step_tests(o: &CiOptions, panic_hunt: bool) -> Result<(), String> {
     run(c, &what)
 }
 
-/// Builds the test steps' binaries without running them: into a nextest archive the shards run
-/// from, or only into the target directory (the cache warm-up). The `ci` profile's archive also
-/// carries this xtask binary, so a shard runs the test steps without building anything.
+/// Builds the test steps' binaries without running them: what every shard builds, so the cache
+/// warm-up's entry covers each shard's build.
 fn build_tests(o: &CiOptions) -> Result<(), String> {
     let mut c = cargo();
-    match &o.tests {
-        TestSource::Archive(file) => {
-            c.args(["nextest", "archive", "--profile", "ci"]).args(test_build_args(&o.exclude)).arg("--archive-file").arg(file);
-        }
-        _ => {
-            c.args(["test", "--no-run"]).args(test_build_args(&o.exclude));
-        }
-    }
+    c.args(["test", "--no-run"]).args(test_build_args(&o.exclude));
     let what = shown(&c);
     run(c, &what)
 }
@@ -491,40 +455,30 @@ fn ci_exclude() -> Vec<String> {
 }
 
 /// The steps `cargo xtask ci <args>` runs, and how: no argument runs every step; a part (`lint`,
-/// `archive`, `build`, `tests`) runs the steps of one gate job; a step's name runs that step.
+/// `build`, `tests`) runs the steps of one gate job; a step's name runs that step.
 fn ci_from_args(args: &[&str], exclude: Vec<String>) -> Result<(Vec<(&'static str, StepFn)>, CiOptions), String> {
-    let mut options = CiOptions { tests: TestSource::InPlace, selection: Selection::All, exclude };
+    let mut options = CiOptions { build_only: false, partition: None, selection: Selection::All, exclude };
     let mut what = None;
-    let mut from = None;
-    let mut it = args.iter();
-    while let Some(&arg) = it.next() {
+    for &arg in args {
         match arg {
-            "--from" => {
-                let dir = it.next().ok_or("--from needs the directory the archive was extracted to")?;
-                from = Some(std::path::absolute(dir).map_err(|e| format!("--from {dir}: {e}"))?);
-            }
             "--gpu" => options.selection = Selection::Gpu,
             "--no-gpu" => options.selection = Selection::NoGpu,
             _ if what.is_none() && !arg.starts_with('-') => what = Some(arg),
             _ => return Err(format!("ci: unexpected argument `{arg}`")),
         }
     }
+    if options.selection != Selection::All && what != Some("tests") {
+        return Err("ci: --gpu and --no-gpu go with `ci tests`".into());
+    }
     let parts: &[Part] = match what {
-        None => &[Part::Lint, Part::Test, Part::Build],
+        None => &[Part::Lint, Part::Test, Part::Doc],
         Some("lint") => &[Part::Lint],
-        Some("archive") => {
-            let file = std::env::var_os("NEXTEST_ARCHIVE_FILE").ok_or("ci archive: set NEXTEST_ARCHIVE_FILE to the archive to write")?;
-            options.tests = TestSource::Archive(file.into());
-            &[Part::Test, Part::Build]
-        }
         Some("build") => {
-            options.tests = TestSource::BuildOnly;
+            options.build_only = true;
             &[Part::Test]
         }
         Some("tests") => {
-            let dir = from.take().ok_or("ci tests: --from <dir> names the directory the archive was extracted to")?;
-            let partition = std::env::var("NEXTEST_PARTITION").ok().filter(|p| !p.is_empty());
-            options.tests = TestSource::Extracted { dir, partition };
+            options.partition = std::env::var("NEXTEST_PARTITION").ok().filter(|p| !p.is_empty());
             &[Part::Test]
         }
         Some(step) => {
@@ -535,32 +489,23 @@ fn ci_from_args(args: &[&str], exclude: Vec<String>) -> Result<(Vec<(&'static st
             return Ok((plan, options));
         }
     };
-    if from.is_some() || (options.selection != Selection::All && !matches!(options.tests, TestSource::Extracted { .. })) {
-        return Err("ci: --from, --gpu and --no-gpu go with `ci tests`".into());
-    }
-    Ok((ci_plan(parts, &options.tests), options))
+    Ok((ci_plan(parts, options.build_only), options))
 }
 
-/// The steps of `parts`, in CI_STEPS order. When the tests are only built (into an archive or the
-/// target directory), the test steps become that one build.
-fn ci_plan(parts: &[Part], tests: &TestSource) -> Vec<(&'static str, StepFn)> {
-    let build_only = match tests {
-        TestSource::Archive(_) => Some("archive"),
-        TestSource::BuildOnly => Some("build"),
-        _ => None,
-    };
+/// The steps of `parts`, in CI_STEPS order. When the tests are only built, the test steps become
+/// that one build.
+fn ci_plan(parts: &[Part], build_only: bool) -> Vec<(&'static str, StepFn)> {
     let mut plan: Vec<(&'static str, StepFn)> = Vec::new();
     for &(name, part, f) in &CI_STEPS {
         if !parts.contains(&part) {
             continue;
         }
-        match (part, build_only) {
-            (Part::Test, Some(build)) => {
-                if !plan.iter().any(|s| s.0 == build) {
-                    plan.push((build, build_tests));
-                }
+        if part == Part::Test && build_only {
+            if !plan.iter().any(|s| s.0 == "build") {
+                plan.push(("build", build_tests));
             }
-            _ => plan.push((name, f)),
+        } else {
+            plan.push((name, f));
         }
     }
     plan
@@ -600,11 +545,9 @@ mod ci_tests {
         let all = names(&[]);
         assert_eq!(all, CI_STEPS.map(|s| s.0));
         let lint = names(&["lint"]);
-        let tests = names(&["tests", "--from", "x"]);
+        let tests = names(&["tests", "--no-gpu"]);
         assert_eq!(tests, ["test", "panic_hunt"]);
-        let archive = ci_plan(&[Part::Test, Part::Build], &TestSource::Archive("a.tar.zst".into())).into_iter().map(|s| s.0).collect::<Vec<_>>();
-        assert_eq!(archive, ["archive", "doctest"]);
-        let mut split: Vec<_> = lint.iter().chain(&tests).chain(archive.iter().filter(|s| **s != "archive")).copied().collect();
+        let mut split: Vec<_> = lint.iter().chain(&tests).chain(&names(&["doctest"])).copied().collect();
         split.sort_unstable();
         let mut every = all.clone();
         every.sort_unstable();
@@ -616,26 +559,19 @@ mod ci_tests {
     }
 
     #[test]
-    fn a_shard_runs_its_partition_from_the_extracted_archive() {
-        let options = CiOptions {
-            tests: TestSource::Extracted { dir: "/x".into(), partition: Some("hash:2/3".into()) },
-            selection: Selection::NoGpu,
-            exclude: Vec::new(),
-        };
+    fn a_shard_builds_what_the_warm_up_builds_and_runs_its_partition() {
+        let options = CiOptions { build_only: false, partition: Some("hash:2/3".into()), selection: Selection::NoGpu, exclude: vec!["photocraft-web".into()] };
+        let build = "--workspace --locked --features heif --exclude photocraft-web --lib --bins --tests";
         let args = nextest_args(&options, false, Some("package(g)")).join(" ");
-        assert!(args.starts_with("nextest run --profile ci --binaries-metadata /x/target/nextest/binaries-metadata.json"), "{args}");
-        assert!(args.contains("--target-dir-remap /x/target --workspace-remap ") && args.contains("--partition hash:2/3"), "{args}");
-        assert!(args.ends_with("-E not (package(g))") && !args.contains("--workspace "), "{args}");
-        let gpu = CiOptions { selection: Selection::Gpu, ..options.clone() };
+        assert_eq!(args, format!("nextest run --profile ci {build} --partition hash:2/3 -E not (package(g))"));
+        let gpu = CiOptions { selection: Selection::Gpu, partition: None, ..options.clone() };
         let hunt = nextest_args(&gpu, true, Some("package(g)")).join(" ");
         assert!(hunt.contains("--run-ignored only") && hunt.contains("--no-tests warn") && hunt.contains("--success-output immediate"), "{hunt}");
         assert!(hunt.ends_with("-E binary_id(photocraft-engine::panic_hunt) & (package(g))"), "{hunt}");
-        // In place, a test step builds what the archive holds.
-        let here = CiOptions { tests: TestSource::InPlace, selection: Selection::All, exclude: vec!["photocraft-web".into()] };
-        assert_eq!(
-            nextest_args(&here, false, None).join(" "),
-            "nextest run --profile ci --workspace --locked --features heif --exclude photocraft-web --lib --bins --tests"
-        );
+        // The whole run keeps nextest's default: a panic hunt that matches nothing fails.
+        let here = CiOptions { partition: None, selection: Selection::All, ..options };
+        assert!(!nextest_args(&here, true, None).join(" ").contains("--no-tests"));
+        assert_eq!(test_build_args(&here.exclude).join(" "), build);
     }
 
     #[test]
