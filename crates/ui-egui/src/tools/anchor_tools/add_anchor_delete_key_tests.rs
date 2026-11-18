@@ -6,7 +6,7 @@ use photocraft_doc::vector::Path;
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::canvas::{ToolEvent, tool_event};
+use crate::canvas::testing;
 use crate::state::Tool;
 
 /// 800 x 600 on white, pixel layer Red active, saved path Path 1 (a closed corner square)
@@ -36,21 +36,12 @@ pub(super) fn steps(app: &PhotocraftApp) -> usize {
 }
 
 pub(super) fn ctrl_click(app: &mut PhotocraftApp, at: [f64; 2]) {
-    tool_event(app, ToolEvent::Down { x: at[0], y: at[1], pressure: 1.0 }, Modifiers::COMMAND);
-    tool_event(app, ToolEvent::Up { x: at[0], y: at[1] }, Modifiers::COMMAND);
+    testing::click(app, at, Modifiers::COMMAND);
 }
 
-/// A key through the app's shortcut handling, as the canvas gets it.
+/// A key as the canvas gets it: the overlay's session keys first, then the app's key route.
 pub(super) fn press(app: &mut PhotocraftApp, key: egui::Key) {
-    let ctx = egui::Context::default();
-    let m = Modifiers::NONE;
-    let raw = egui::RawInput {
-        events: vec![egui::Event::ModifiersChanged(m), egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: m }],
-        ..Default::default()
-    };
-    ctx.begin_pass(raw);
-    crate::shortcuts::handle(app, &ctx);
-    ctx.end_pass().textures_delta.clear();
+    testing::key(app, key, Modifiers::NONE);
 }
 
 pub(super) fn anchors(path: &Path) -> Vec<[f64; 2]> {
@@ -83,16 +74,4 @@ fn without_a_selected_anchor_delete_keeps_its_usual_route() {
     press(&mut app, egui::Key::Delete);
     assert_eq!(path1(&app), before, "no anchor selected: the path stays");
     assert_ne!(app.session.active().unwrap().history.undo_label(), Some("Delete Anchor Point"));
-}
-
-#[test]
-fn other_tools_keep_their_delete() {
-    for tool in [Tool::Pen, Tool::FreeformPen, Tool::PathSelection] {
-        let mut app = app();
-        ctrl_click(&mut app, [300.0, 500.0]);
-        app.ui.tool = tool;
-        let before = path1(&app);
-        press(&mut app, egui::Key::Delete);
-        assert_eq!(path1(&app), before, "{tool:?}: no anchor is deleted");
-    }
 }

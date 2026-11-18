@@ -14,7 +14,9 @@ corpus = []
 [dependencies]
 photocraft-geom = { workspace = true }
 photocraft-color = { workspace = true }
-photocraft-cms = { workspace = true }
+craft-cms = { workspace = true }
+# PCTIP codec from craft-libs#1564; isolated pin until the shared revision is adopted workspace-wide.
+craft-pcraft-tip = { package = "craft-pcraft-format", git = "https://github.com/storytold/craft-libs", rev = "a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9" }
 photocraft-raster = { workspace = true }
 photocraft-doc = { workspace = true }
 photocraft-ops = { workspace = true }
@@ -30,18 +32,22 @@ photocraft-algo = { workspace = true }
 photocraft-text = { workspace = true }
 photocraft-vector = { workspace = true }
 photocraft-io = { workspace = true }
-photocraft-psd = { workspace = true }
+craft-xml = { workspace = true }
+craft-psd = { workspace = true }
 photocraft-format = { workspace = true }
 photocraft-plugins = { workspace = true }
 base64 = "0.22"
 blake3 = { version = "1.8", default-features = false, features = ["pure"] }
 photocraft-codecs = { workspace = true }
+photocraft-formats = { workspace = true }
 flate2 = { workspace = true }
 craft-print = { workspace = true }
+# The framework through its facade: the actions model (`craft::automation`), the `.kys` model
+# (`craft::keymap`), the palette (`craft::color_ui`), preferences storage and autosave
+# (`craft::settings`, `craft::platform`), and `craft::theme::ThemeId`, the theme ids the
+# appearance preferences hold.
+craft = { workspace = true, features = ["automation", "color-ui", "keymap", "platform", "settings"] }
 
-# Photoshop `.kys` shortcut sets (`edit.keyboardShortcuts` `importKys`); already in the tree
-# through photocraft-ui-egui and usvg.
-roxmltree = "0.21"
 # Release tags use the same semantic versions as Cargo.
 semver = "1"
 
@@ -64,12 +70,12 @@ winsafe = { version = "=0.0.29", default-features = false, features = ["kernel"]
 photocraft-ipp = { workspace = true }
 
 [dev-dependencies]
-photocraft-affinity = { workspace = true, features = ["synth"] }
+craft-affinity = { workspace = true, features = ["synth"] }
 photocraft-io = { workspace = true, features = ["testgen"] }
 # Synthetic camera raw files for the open tests.
 photocraft-raw = { workspace = true, features = ["testgen"] }
 photocraft-testkit = { workspace = true }
+exr = { version = "1.73", default-features = false }
 # WebAssembly text -> binary for plug-in test modules (Apache-2.0 WITH LLVM-exception).
 wat = "1.228"
 # Synthetic multi-part EXR fixtures for the parts-commands tests.
-exr = { version = "1.73", default-features = false }
