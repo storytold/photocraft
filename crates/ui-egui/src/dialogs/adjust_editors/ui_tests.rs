@@ -134,11 +134,24 @@ fn sliders(h: &Harness<'_, Box<PhotocraftApp>>) -> Vec<Rect> {
 /// Issue #12: every adjustment kind, on a new document at 8/16/32 bits and in RGB, Grayscale,
 /// CMYK and Lab, opens its Properties editor and takes an edit through real input without
 /// panicking; slider kinds commit exactly one history step per gesture and end the preview with it.
+/// One app per document: Undo takes back each kind's layer and edit before the next kind's layer
+/// is added, so every kind meets the new document with its two tones.
 #[test]
 fn every_adjustment_layer_edits_through_properties() {
     for (mode, depth) in [("rgb", 8), ("rgb", 16), ("rgb", 32), ("gray", 8), ("cmyk", 8), ("lab", 16)] {
-        for kind in ALL_KINDS {
-            let mut h = app_harness(kind, mode, depth);
+        let mut h = app_harness(ALL_KINDS[0], mode, depth);
+        // The document's history before its adjustment layer.
+        let base = history_len(&h) - 1;
+        for (i, kind) in ALL_KINDS.into_iter().enumerate() {
+            if i > 0 {
+                while history_len(&h) > base {
+                    let steps = history_len(&h);
+                    h.state_mut().run("edit.undo", json!({})).unwrap_or_else(|e| panic!("{kind} {mode}: undo: {e}"));
+                    assert!(history_len(&h) < steps, "{kind} {mode}: undo to the new document");
+                }
+                h.state_mut().run(&format!("layer.newAdjustmentLayer.{kind}"), json!({})).unwrap();
+                h.run_steps(8);
+            }
             let (_, before) = layer(&h);
             let steps = history_len(&h);
             let slider = sliders(&h).first().copied();
