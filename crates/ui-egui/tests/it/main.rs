@@ -34,7 +34,6 @@ mod magnetic_lasso_right_click;
 mod paint_bucket_all_layers;
 mod pattern_preview_canvas;
 mod radial_blur_center;
-mod remove_channel_target;
 mod system_locale;
 mod tone_targets;
 mod ui_scale_canvas;

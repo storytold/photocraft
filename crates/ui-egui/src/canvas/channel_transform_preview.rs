@@ -895,7 +895,7 @@ mod tests {
         assert!(crate::channel_transform_gpu::test_wait(&rs, || crate::channel_transform_gpu::Preview::new(&gpu, &doc, layer, [1.0; 4])).is_none());
     }
 
-    pub(super) fn app() -> PhotocraftApp {
+    pub(super) fn app() -> Box<PhotocraftApp> {
         let mut session = Session::new();
         let mut doc = Document::with_background("channel preview", Size::new(32, 24), ColorMode::Rgb, SampleType::F32, Color::WHITE);
         let s = doc.layers[0].surface_mut().unwrap();

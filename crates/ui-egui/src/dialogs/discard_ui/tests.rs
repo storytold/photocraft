@@ -5,13 +5,13 @@ use craft::ui::dialog::DialogId;
 use egui::Key;
 use std::sync::Arc;
 
-fn app_with_docs(n: usize) -> PhotocraftApp {
+fn app_with_docs(n: usize) -> Box<PhotocraftApp> {
     app_with_docs_over(n, None)
 }
 
 /// `n` new documents in an app whose host serves `files`: the host takes them when the app is made, so a
 /// later `services.files` assignment would not reach the pickers.
-fn app_with_docs_over(n: usize, files: Option<Arc<dyn Files>>) -> PhotocraftApp {
+fn app_with_docs_over(n: usize, files: Option<Arc<dyn Files>>) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { files, ..Default::default() });
     for _ in 0..n {
         app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
@@ -192,11 +192,11 @@ fn exit_is_held_back_until_confirmed() {
     assert!(app.allow_close);
 }
 
-type Prompted = egui_kittest::Harness<'static, PhotocraftApp>;
+type Prompted = egui_kittest::Harness<'static, Box<PhotocraftApp>>;
 
 /// The unsaved-changes prompt for `command` over `app`'s dirty documents, as `os` draws it (with
 /// the file dialogs answered at the end of each frame, as the app does).
-fn prompt_for(app: PhotocraftApp, command: &str, os: craft::host::target::Os) -> Prompted {
+fn prompt_for(app: Box<PhotocraftApp>, command: &str, os: craft::host::target::Os) -> Prompted {
     let mut h = egui_kittest::Harness::builder().with_context(app.ctx().clone()).with_size(egui::vec2(800.0, 600.0)).build_ui_state(
         |ui, app| {
             // As `ui_frame` starts: a pass carrying injected input acts for the automation client.

@@ -688,6 +688,24 @@ fn define_brush_from_selection_survives_failure_of_the_second_allocation() {
 }
 
 #[test]
+fn define_brush_from_selection_propagates_compositor_allocation_error_transactionally() {
+    let mut s = session(40, 40);
+    s.execute("select.rect", json!({"x": 5, "y": 5, "width": 20, "height": 20})).unwrap();
+    let doc = s.active().unwrap().doc.clone();
+    let brush_before = s.tools.brush.clone();
+    let presets_before = s.tools.presets.clone();
+    let history_before = s.active().unwrap().history.past_len();
+    let result = define_from_selection_with_renderer(&mut s, &json!({"name": "Blob"}), |_, _, _| {
+        Err(photocraft_compose::RenderBandsError::Allocation(photocraft_raster::AllocationError::NotEnoughMemory { bytes: 64 }))
+    });
+    assert!(result.is_err_and(|e| e.to_string().contains("defining a brush from the selection")));
+    assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
+    assert_eq!(s.tools.brush, brush_before);
+    assert_eq!(s.tools.presets, presets_before);
+    assert_eq!(s.active().unwrap().history.past_len(), history_before);
+}
+
+#[test]
 fn works_on_cmyk_and_16_bit() {
     for (mode, depth) in [("cmyk", 8), ("rgb", 16), ("grayscale", 32)] {
         let mut s = Session::new();

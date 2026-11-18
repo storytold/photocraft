@@ -44,7 +44,7 @@ fn frame_transform_bar_keeps_commit_and_cancel_without_a_warp_toggle() {
     let ctx = app.ctx().clone();
     crate::transform_tool::begin(&mut app, &ctx).unwrap();
     let mut h = egui_kittest::Harness::builder().with_context(ctx).with_size(egui::vec2(1200.0, 100.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        |ui, app: &mut Box<PhotocraftApp>| {
             ui.horizontal(|ui| crate::transform_tool::options_bar(app, ui));
         },
         app,

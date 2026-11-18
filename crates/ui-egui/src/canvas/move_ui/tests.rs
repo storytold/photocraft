@@ -333,7 +333,7 @@ fn the_estimate_follows_a_group_into_its_contents() {
 
 /// A `width` × `height` `depth`-bit document whose new layer covers the canvas, one fill per tile
 /// with its own colour (a photo: no two tiles share pixels), and the Move tool on.
-fn photo(width: u32, height: u32, depth: u32) -> PhotocraftApp {
+fn photo(width: u32, height: u32, depth: u32) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": width, "height": height, "depth": depth})).unwrap();
     app.sync_views();
@@ -440,7 +440,7 @@ fn bounding_box_preference_turns_the_live_drag_off() {
 
 /// A `depth`-bit transparent document whose layer holds a red square (8..24)² and a blue one
 /// (40..56)×(8..24), the red one selected; the Move tool with Auto-Select on.
-fn selected_pixels(depth: u32) -> (PhotocraftApp, photocraft_doc::LayerId) {
+fn selected_pixels(depth: u32) -> (Box<PhotocraftApp>, photocraft_doc::LayerId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 64, "height": 64, "background": "transparent", "depth": depth})).unwrap();
     app.sync_views();
@@ -598,7 +598,7 @@ fn floating_selection_does_not_snap_to_its_own_starting_outline_or_preview_at_ze
 
 /// Board "A" at (10, 10, 50, 50) holding a red square at (10..30)², and an empty board "B" at
 /// (200, 20, 240, 60); the red layer selected, no selection, the Move tool without Auto-Select.
-fn two_boards() -> (PhotocraftApp, photocraft_doc::LayerId, photocraft_doc::LayerId, photocraft_doc::LayerId) {
+fn two_boards() -> (Box<PhotocraftApp>, photocraft_doc::LayerId, photocraft_doc::LayerId, photocraft_doc::LayerId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 300, "height": 100, "background": "transparent"})).unwrap();
     app.sync_views();

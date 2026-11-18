@@ -15,7 +15,7 @@ use photocraft_raster::Surface;
 use photocraft_ui_egui::PhotocraftApp;
 use serde_json::json;
 
-type Harness = egui_kittest::Harness<'static, PhotocraftApp>;
+type Harness = egui_kittest::Harness<'static, Box<PhotocraftApp>>;
 
 fn harness(linked: bool, zoom: f32) -> Option<Harness> {
     let built = std::panic::catch_unwind(|| {

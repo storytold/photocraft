@@ -28,7 +28,7 @@ fn colour_set_selected_drag_snaps_its_selection_frame_to_guides() {
     }
 }
 
-fn app_with_linked_channel_mover(colors: &[usize]) -> PhotocraftApp {
+fn app_with_linked_channel_mover(colors: &[usize]) -> Box<PhotocraftApp> {
     let mut app = app_with_box();
     app.run("layer.new.layer", json!({"name":"linked"})).unwrap();
     app.run("select.rect", json!({"x":150,"y":120,"width":40,"height":20})).unwrap();

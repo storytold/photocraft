@@ -262,6 +262,9 @@ what an agent can't finish alone.
 - **Estimate:** 250–400 h (many overlap with other gaps; count each fix once).
 
 ### G4. Brush feel
+- **Progress (2026-10-24, stale entries corrected):** an image file can be imported as a brush
+  tip (TOOL-213-12, #3279), and each brush dynamic has its own pressure curve (TOOL-213-11,
+  #3294). The other brush-feel gaps remain open.
 - **Progress (2026-10-25):** Shift-selected colour sets now constrain raster drawing,
   erasers, tone adjustments and supported filters at native depths. Live previews,
   transparency and unselected encoded components are protected. Move/transform on
@@ -313,21 +316,23 @@ what an agent can't finish alone.
   interpolation and smoothing problems (#2138), edge falloff (#2149), pixelated cursor vs
   Photoshop (#1433), brush rotation not driven by pen rotation (#1301); no live preview for the
   Mixer Brush yet (TOOL-213-7, in PR #3627; the other brush tools draw live, Spot Healing and Remove
-  compute on release as in Photoshop); no image file as a brush tip (TOOL-213-12); per-control pressure
-  curves (TOOL-213-11); 4 of Photoshop's symmetry modes.
+  compute on release as in Photoshop); 4 of Photoshop's symmetry modes.
 - **Detail:** [`brush-parity.md`](brush-parity.md).
 - **Estimate:** 100–180 h. **Human:** checking feel on real tablets.
 
 ### G5. Transform, handles and modifiers
-
 > **Channel transform update · 2026-10-15 · minor:** isolated native channel transforms retain their edit target through background commits and permit live eye toggles. Cached RGB GPU previews have scoped CPU fallbacks; remaining estimates are unchanged. Stretched thin Warp previews share the CPU destination-aware grid (#5793), with native-depth, feathered-selection and reduced-coordinate regressions. Pixel-centre edge ties and curved outlines affected by raster-grid rounding retain CPU coverage to match commit.
 
 - **Done 2026-10-12:** isolated RGB/CMYK/Lab colour components, alpha/spot channels, Quick Mask and raster masks (including linked) across native depths and selection states, including Warp. The captured edit target stays locked while every eye remains usable; visibility persists after commit/cancel and undo. Warp of selected raster pixels moves the same selected region of a linked mask, accounting for #4175 / #4176; whole Smart Objects and shapes carry their linked masks without selection clipping. Evidence: engine `channel_transform` and UI `channel_transform_preview` / canvas drag regressions. Remaining estimates and aggregate parity numbers unchanged.
 - **Partial 2026-10-13:** cached GPU dragging for isolated RGB transforms of one visible raster layer with an identity monitor transform. Other stacks/modes, Bicubic reductions, Warp footprints needing multisampling, off-canvas selections and fractional Nearest retain the CPU oracle; curved maps share CPU tessellation and sparse/fractional source coverage; no general transform-preview performance claim. Evidence: `channel_transform_gpu_bench` (24 MP release, CPU submission plus completed offscreen frames) and native-depth GPU/CPU readback comparisons; aggregate numbers unchanged.
-- **Missing:** the full interpolation list; blend mode/opacity edits during
-  a transform (#1384); path-point nudge; autoscroll at the edge while selecting (#2231);
-  wheel and pinch behaviour (#2485, #2463, #1989);
-  toolbar press-and-hold flyouts (#2301).
+- **Progress (2026-10-24, stale entries corrected):** a toolbar button held or dragged off opens
+  its tool flyout (#2324; issue #2301 is still open), and Direct Selection's arrow keys nudge
+  the selected anchor points (#4486; a selected segment is not nudged yet). The other transform
+  and modifier gaps remain open.
+- **Missing:** Direct Selection arrow nudge of a selected path segment; the full
+  interpolation list; blend mode/opacity edits during a transform (#1384);
+  autoscroll at the edge while selecting (#2231);
+  wheel and pinch behaviour (#2485, #2463, #1989).
 - **Done since the re-measure (2026-10-10 to 12):** right-click menu during Free Transform
   (TOOL-214-5); commit/cancel buttons in the options bar (#2442); transform keeps the layer's
   place in the stack (#2439, #2480); Hand tool no longer interrupts a transform (#2302, #2327);
@@ -534,6 +539,7 @@ what an agent can't finish alone.
 | 2026-10-26 | minor | G15: classical Select › Sky can seed substantial high-confidence components beneath an obstructed top band; learned segmentation remains open; percentages and estimates unchanged |
 | 2026-10-25 | minor | G9: the count of preferences that do nothing is the scorecard's again, 12 of 178 (it still said 24 of 171, from 2026-10-15); no estimate changed |
 | 2026-10-25 | minor | G6: Art History Brush landed as partial (TOOL-213-20, #1610), so no toolbar tool is missing; no percentage or estimate changed |
+| 2026-10-24 | minor | Stale entries corrected against main: G4 image brush tips (TOOL-213-12, #3279) and per-control pressure curves (TOOL-213-11, #3294) are done; G5 tool flyouts on press-and-hold or click-drag (#2324) are done, and Direct Selection nudge of anchors (#4486) is done while segment nudge stays listed; estimates unchanged |
 | 2026-10-23 | minor | G4: hard-round built-in presets use 5% spacing (#8842), guarded by large-stroke outline and pressure-opacity pixel regressions at 8/16/32-bit; percentages and estimates unchanged |
 | 2026-10-23 | minor | G10: PSD stores and reads spot channels as Photoshop does (ink 0 = solid) with their identifiers (1053); PSDs from PhotoCraft 0.1.0–0.16.0 keep their ink (#7415 split, part 4); FILE-215-17 stays partial; estimate unchanged |
 | 2026-10-23 | minor | G10: TIFF alpha and spot channels written and read as extra samples with Photoshop's channel resources, PSD output unchanged (#7415); FILE-215-7 leaves the list, FILE-215-17 narrows to RGB/CMYK spot preview and PDF Separation |

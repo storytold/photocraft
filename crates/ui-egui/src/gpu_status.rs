@@ -373,7 +373,7 @@ mod tests {
 
     /// An app whose settings live in `files` (a scratch location), so a second launch reads what
     /// the first one stored.
-    fn launch(files: &std::sync::Arc<craft::settings::testing::MemoryFiles>) -> PhotocraftApp {
+    fn launch(files: &std::sync::Arc<craft::settings::testing::MemoryFiles>) -> Box<PhotocraftApp> {
         let scratch = std::env::temp_dir().join("photocraft-gpu-status");
         let options = craft::settings::OpenOptions::new(craft::settings::Location::Dir(scratch)).files(files.clone());
         let services = crate::Services { settings: Some(craft::settings::SettingsStore::open_with(options)), ..Default::default() };

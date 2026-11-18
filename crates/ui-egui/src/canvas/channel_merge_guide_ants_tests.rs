@@ -4,7 +4,7 @@ use super::*;
 
 const GUIDE: Color32 = Color32::from_rgb(0x4a, 0xff, 0xff);
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 600, "height": 400})).unwrap();
     for (orientation, position) in [("vertical", 100), ("vertical", 300), ("horizontal", 100), ("horizontal", 260)] {

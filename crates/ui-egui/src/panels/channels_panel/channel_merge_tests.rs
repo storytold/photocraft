@@ -10,7 +10,7 @@ fn live_transform_eyes_accept_clicks_while_channel_rows_stay_locked() {
     app.run("channel.target", json!({"channel":"red"})).unwrap();
     app.sync_views();
     let mut h = egui_kittest::Harness::builder().with_size(vec2(300.0, 400.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        |ui, app: &mut Box<PhotocraftApp>| {
             if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 show(app, ui);
             }
@@ -51,7 +51,7 @@ fn colour_eye_exits_grayscale_mask_view_without_unlocking_the_transform_target()
     app.run("channel.target", json!({"channel":"mask"})).unwrap();
     app.run("view.layerMask", json!({"mode":"gray"})).unwrap();
     let mut h = egui_kittest::Harness::builder().with_size(vec2(300.0, 400.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        |ui, app: &mut Box<PhotocraftApp>| {
             if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 show(app, ui);
             }

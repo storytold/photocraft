@@ -696,7 +696,7 @@ fn colour_set_exposed_before_alt_drag_duplication_cancels_without_moving_the_ori
 
 #[test]
 fn selected_background_channel_drags_match_keyboard_and_native_oracles() {
-    fn background(depth: u32, colors: &[usize]) -> PhotocraftApp {
+    fn background(depth: u32, colors: &[usize]) -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 64, "height": 64, "depth": depth})).unwrap();
         app.session

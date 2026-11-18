@@ -23,7 +23,7 @@ fn pointer(app: &mut PhotocraftApp, ctx: &egui::Context, kind: &str, x: f64, y: 
 }
 
 /// A control event queues input on the shared host; drain it through the production app frame.
-fn deliver(h: &mut egui_kittest::Harness<'static, PhotocraftApp>) -> Result<(), String> {
+fn deliver(h: &mut egui_kittest::Harness<'static, Box<PhotocraftApp>>) -> Result<(), String> {
     for _ in 0..64 {
         h.run_steps(1);
         if craft::ui::runtime::windows::WindowHost::of(&h.ctx).injected_idle() {
