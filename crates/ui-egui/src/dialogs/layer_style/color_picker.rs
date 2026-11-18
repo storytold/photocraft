@@ -1,181 +1,103 @@
-//! A Color Picker transaction over one pending Layer Style parameter.
-use std::borrow::Cow;
+//! The Color Picker child of the Layer Style dialog: one picker over one colour of the draft, named
+//! by the key the dialog's colour request carries (`"fx2/color"`, or `"fx2/stops/1"` for colour stop 1 of
+//! a gradient).
 
-use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value, json};
+use craft::color_ui::ui::{ColorPickerDialog, ColorPickerResult};
+use craft::imaging::layer_style::{EffectId, EffectSpec, FieldKind, LayerStyle, LayerStyleDraft, StyleValue};
+use craft::imaging::ui::layer_style::{HostedLayerStyle, LayerStyleDialog};
+use craft::theme::Srgba;
+use craft::ui::dialog::{DialogId, DialogResult};
+use craft::ui::runtime::requests::ColorRequest;
 
-use super::{P, defaults, effects_of, set_param, spec};
-use crate::{PhotocraftApp, color_picker_ui, state::DialogKind};
+use super::{Child, child_of, take_child};
+use crate::PhotocraftApp;
 
-const TARGET: &str = "__layerStyleColor";
-pub(super) const REQUEST: &str = "__openColorPicker";
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct Target {
-    parent: u64,
-    document: photocraft_doc::DocId,
-    layer: photocraft_doc::LayerId,
-    effect: String,
-    field: String,
-    /// The colour stop edited when `field` is the Gradient Overlay's `stops` (#5177).
-    #[serde(default)]
-    stop: Option<usize>,
-    color: String,
-    // A reused effect id after loading another style must not redirect the transaction.
-    source: Value,
-}
-
-fn target(fields: &Map<String, Value>) -> Result<Target, String> {
-    serde_json::from_value(fields.get(TARGET).cloned().ok_or("picker has no Layer Style target")?).map_err(|_| "invalid Layer Style color target".into())
-}
-
-pub(crate) fn owns(fields: &Map<String, Value>) -> bool {
-    fields.contains_key(TARGET)
-}
-
-pub(crate) fn child_of(fields: &Map<String, Value>, parent: u64) -> bool {
-    fields.get(TARGET).and_then(|v| v.get("parent")).and_then(Value::as_u64) == Some(parent)
-}
-
-pub(crate) fn has_child(app: &PhotocraftApp, parent: u64) -> bool {
-    app.ui.dialogs.iter().any(|d| child_of(&d.fields, parent))
-}
-
-struct ColorField {
-    source: Value,
-    color: String,
-}
-
-fn color_value(fields: &Map<String, Value>, effect: &str, field: &str, stop: Option<usize>) -> Result<ColorField, String> {
-    let mut matches = effects_of(fields).iter().filter(|e| e.get("id").and_then(Value::as_str) == Some(effect));
-    let e = matches.next().ok_or("Layer Style effect no longer exists")?;
-    if matches.next().is_some() {
-        return Err("ambiguous Layer Style effect id".into());
-    }
-    let kind = e.get("kind").and_then(Value::as_str).ok_or("invalid effect kind")?;
-    let params = e.get("params").and_then(Value::as_object).ok_or("invalid effect parameters")?;
-    let base = defaults(kind);
-    let original = params.get(field).or_else(|| base.get(field));
-    let rgb = match stop {
-        // A gradient stop: the colour at that index of the effect's `stops`.
-        Some(i) => {
-            if !spec(kind).iter().any(|(key, _, p)| *key == field && matches!(p, P::Gradient)) {
-                return Err("not a Layer Style gradient parameter".into());
-            }
-            let stops = super::gradient_field::stops_of(original).ok_or("invalid effect gradient")?;
-            stops.get(i).map(|s| s.1.to_rgb()).ok_or("no such gradient stop")?
-        }
-        None => {
-            if !spec(kind).iter().any(|(key, _, p)| *key == field && matches!(p, P::Color)) {
-                return Err("not a Layer Style color parameter".into());
-            }
-            let color = original.and_then(Value::as_str).ok_or("invalid effect color")?;
-            color_picker_ui::parse_hex(color).ok_or("invalid effect color")?
-        }
+/// The effect, field and colour stop a request key names.
+fn parse(key: &str) -> Result<(&str, &str, Option<usize>), String> {
+    let mut parts = key.split('/');
+    let (Some(effect), Some(field)) = (parts.next(), parts.next()) else { return Err("invalid colour key".into()) };
+    let stop = match parts.next() {
+        None => None,
+        Some(i) => Some(i.parse::<usize>().map_err(|_| "invalid gradient stop")?),
     };
-    Ok(ColorField { source: e.clone(), color: color_picker_ui::hex(rgb) })
+    Ok((effect, field, stop))
 }
 
-/// The value the picker's colour becomes for the target: the colour itself, or the effect's
-/// `stops` with stop `i` recoloured.
-fn picked_value(fields: &Map<String, Value>, t: &Target, color: &str) -> Result<Value, String> {
-    let Some(i) = t.stop else { return Ok(json!(color)) };
-    let e = effects_of(fields).iter().find(|e| e.get("id").and_then(Value::as_str) == Some(t.effect.as_str())).ok_or("Layer Style effect no longer exists")?;
-    let kind = e.get("kind").and_then(Value::as_str).ok_or("invalid effect kind")?;
-    let base = defaults(kind);
-    let current = e.get("params").and_then(|p| p.get(&t.field)).or_else(|| base.get(&t.field));
-    let mut stops = super::gradient_field::stops_of(current).ok_or("invalid effect gradient")?;
-    let [r, g, b] = color_picker_ui::parse_hex(color).ok_or("invalid picker color")?;
-    stops.get_mut(i).ok_or("no such gradient stop")?.1 = photocraft_color::Color::rgb(r, g, b);
-    Ok(super::gradient_field::stops_json(&stops))
+/// The colour the draft of the dialog `parent` holds at `key`; refuses a stale dialog or effect, an
+/// unknown field and a field that is not a colour (or, with a stop, not a gradient).
+fn color_at(app: &PhotocraftApp, parent: DialogId, key: &str) -> Result<Srgba, String> {
+    let (effect, field, stop) = parse(key)?;
+    let dialog = app.framework.dialogs.get_by_id::<HostedLayerStyle>(parent).ok_or("no Layer Style dialog")?;
+    let id = EffectId::from_key(effect).ok_or("Layer Style effect no longer exists")?;
+    let instance = dialog.draft().style.effect(id).ok_or("Layer Style effect no longer exists")?;
+    let spec = EffectSpec::photoshop(instance.kind);
+    let kind = &spec.field(field).ok_or("unknown Layer Style field")?.kind;
+    let shown = instance.params.over(&spec.defaults);
+    match (stop, kind, shown.get(field)) {
+        (None, FieldKind::Color, Some(StyleValue::Color(c))) => Ok(*c),
+        (None, ..) => Err("not a Layer Style color parameter".into()),
+        (Some(i), FieldKind::Gradient, Some(StyleValue::Gradient(g))) => g.color.get(i).map(|s| s.color).ok_or_else(|| "no such gradient stop".into()),
+        (Some(_), ..) => Err("not a Layer Style gradient parameter".into()),
+    }
 }
 
-fn validate<'a>(app: &'a PhotocraftApp, t: &Target) -> Result<&'a Map<String, Value>, String> {
-    let st = app.session.active().ok_or("no active document")?;
-    if st.doc.id != t.document || st.doc.layer(t.layer).is_none() {
-        return Err("Layer Style color target document or layer changed".into());
+/// Opens the picker a request of the dialog `parent` asked for, as a child of it.
+pub(super) fn open_request(app: &mut PhotocraftApp, parent: DialogId, request: ColorRequest) -> Result<DialogId, String> {
+    if child_of(app, parent).is_some() {
+        return Err("a Layer Style child dialog is already open".into());
     }
-    let parent = app.ui.dialogs.iter().find(|d| d.id == t.parent && d.kind == DialogKind::LayerStyle).ok_or("Layer Style dialog closed")?;
-    if parent.fields.get("__document").and_then(Value::as_u64) != Some(t.document.0) {
-        return Err("Layer Style dialog belongs to another document".into());
-    }
-    if parent.fields.get("layer").and_then(Value::as_u64) != Some(t.layer.0) {
-        return Err("Layer Style target layer changed".into());
-    }
-    let ColorField { source, .. } = color_value(&parent.fields, &t.effect, &t.field, t.stop)?;
-    if source != t.source {
-        return Err("Layer Style color target changed while the picker was open".into());
-    }
-    Ok(&parent.fields)
+    let opening = color_at(app, parent, &request.key)?;
+    let key = request.key.clone();
+    // An instance keeps the picker's result apart from the other pickers' (`take_by_id` only).
+    let picker = ColorPickerDialog::from_request(request).instance(parent);
+    let id = app.framework.dialogs.open_child(picker, parent);
+    app.layer_style_child = Some((parent, Child::Picker { id, key, opening }));
+    Ok(id)
 }
 
-/// Both swatch clicks and the control protocol use the same bound target.
-pub(crate) fn open(app: &mut PhotocraftApp, parent: u64, effect: &str, field: &str, stop: Option<usize>) -> Result<u64, String> {
-    if app.ui.dialogs.last().map(|d| d.id) != Some(parent) || has_child(app, parent) {
-        return Err("open the picker from the top Layer Style dialog".into());
-    }
-    let d = app.ui.dialogs.iter().find(|d| d.id == parent && d.kind == DialogKind::LayerStyle).ok_or("no Layer Style dialog")?;
-    let st = app.session.active().ok_or("no active document")?;
-    let layer = photocraft_doc::LayerId(d.fields.get("layer").and_then(Value::as_u64).ok_or("invalid layer id")?);
-    let ColorField { source, color } = color_value(&d.fields, effect, field, stop)?;
-    let t = Target { parent, document: st.doc.id, layer, effect: effect.into(), field: field.into(), stop, color: color.clone(), source };
-    validate(app, &t)?;
-    let rgb = color_picker_ui::parse_hex(&color).ok_or("invalid effect color")?;
-    let mut fields = color_picker_ui::fields_with_web(app, "dialog", "Color Picker (Layer Style Color)", rgb);
-    fields.insert(TARGET.into(), serde_json::to_value(t).map_err(|e| e.to_string())?);
-    Ok(app.ui.open_dialog(DialogKind::Command, fields))
-}
-
-pub(crate) fn take_request(app: &mut PhotocraftApp, parent: u64) -> Result<(), String> {
-    let request = app.ui.dialog_mut(parent).and_then(|d| d.fields.remove(REQUEST));
-    if let Some(r) = request {
-        let effect = r.get("effect").and_then(Value::as_str).ok_or("invalid effect request")?;
-        let field = r.get("field").and_then(Value::as_str).ok_or("invalid color request")?;
-        let stop = match r.get("stop") {
-            None | Some(Value::Null) => None,
-            Some(v) => Some(v.as_u64().and_then(|i| usize::try_from(i).ok()).ok_or("invalid gradient stop")?),
-        };
-        open(app, parent, effect, field, stop)?;
-    }
-    Ok(())
-}
-
-/// Overlay only for rendering. Cancel therefore needs no rollback of parent fields.
-pub(crate) fn preview_fields<'a>(app: &PhotocraftApp, parent: u64, fields: &'a Map<String, Value>) -> Cow<'a, Map<String, Value>> {
-    let Some(d) = app.ui.dialogs.last().filter(|d| child_of(&d.fields, parent)) else { return Cow::Borrowed(fields) };
-    let Ok(t) = target(&d.fields) else { return Cow::Borrowed(fields) };
-    if validate(app, &t).is_err() {
-        return Cow::Borrowed(fields);
-    }
-    let Some(color) = d.fields.get("color").and_then(Value::as_str).and_then(color_picker_ui::parse_hex).map(color_picker_ui::hex) else {
-        return Cow::Borrowed(fields);
+/// Opens the picker on `effect`'s `field` (and colour `stop` of a gradient) for the open Layer Style
+/// dialog whose id value is `parent`: the control protocol's `colorPicker`.
+pub(crate) fn open(app: &mut PhotocraftApp, parent: u64, effect: &str, field: &str, stop: Option<usize>) -> Result<DialogId, String> {
+    let (id, ..) = app.layer_style_target.filter(|(id, ..)| id.value() == parent).ok_or("no Layer Style dialog")?;
+    let key = match stop {
+        Some(i) => format!("{effect}/{field}/{i}"),
+        None => format!("{effect}/{field}"),
     };
-    if t.color == color {
-        return Cow::Borrowed(fields);
-    }
-    let Ok(value) = picked_value(fields, &t, &color) else { return Cow::Borrowed(fields) };
-    let mut shown = fields.clone();
-    set_param(&mut shown, &t.effect, &t.field, value);
-    Cow::Owned(shown)
+    let color = color_at(app, id, &key)?;
+    open_request(app, id, ColorRequest::new(key, color).title(tl!("Color Picker (Layer Style Color)").to_string()))
 }
 
-pub(crate) fn confirm(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<Value, String> {
-    let t = target(fields)?;
-    validate(app, &t)?;
-    let color = fields.get("color").and_then(Value::as_str).and_then(color_picker_ui::parse_hex).map(color_picker_ui::hex).ok_or("invalid picker color")?;
-    if t.color != color {
-        let parent = app.ui.dialog_mut(t.parent).ok_or("Layer Style dialog closed")?;
-        let value = picked_value(&parent.fields, &t, &color)?;
-        set_param(&mut parent.fields, &t.effect, &t.field, value);
+/// The draft's style with the open picker's colour laid over it, for the canvas preview only: Cancel
+/// needs no rollback. `None` when the dialog is closed.
+pub(super) fn preview_style(app: &PhotocraftApp) -> Option<LayerStyle> {
+    let (parent, ..) = app.layer_style_target?;
+    let style = app.framework.dialogs.get_by_id::<HostedLayerStyle>(parent)?.draft().style.clone();
+    let Some(Child::Picker { id, key, opening }) = child_of(app, parent) else { return Some(style) };
+    let Some(current) = app.framework.dialogs.get_by_id::<ColorPickerDialog>(*id).and_then(ColorPickerDialog::current) else { return Some(style) };
+    if current.color == *opening {
+        return Some(style);
     }
-    Ok(Value::Null)
+    let mut draft = LayerStyleDraft::new(style);
+    LayerStyleDialog::set_color(&mut draft, key, current.color);
+    Some(draft.style)
 }
 
-/// Handles document switches and direct automation edits without stale previews.
-pub(crate) fn prune(app: &mut PhotocraftApp) {
-    let invalid: Vec<_> =
-        app.ui.dialogs.iter().filter(|d| owns(&d.fields) && target(&d.fields).and_then(|t| validate(app, &t)).is_err()).map(|d| d.id).collect();
-    app.ui.dialogs.retain(|d| !invalid.contains(&d.id));
+/// Once per pass: while the picker is open nothing is written (the preview reads it); when it is
+/// gone, OK sets the draft's colour and Cancel leaves it.
+pub(super) fn answered(app: &mut PhotocraftApp, parent: DialogId) {
+    let Some(Child::Picker { id, opening, .. }) = child_of(app, parent) else { return };
+    let (id, opening) = (*id, *opening);
+    if app.framework.dialogs.get_by_id::<ColorPickerDialog>(id).is_some() {
+        return;
+    }
+    take_child(app, parent);
+    // An OK with the colour it opened with writes nothing: a parameter the effect lacks stays missing.
+    if let Some(DialogResult::Ok(ColorPickerResult { key, picked, .. })) = app.framework.dialogs.take_by_id::<ColorPickerDialog>(id)
+        && picked.color != opening
+        && let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedLayerStyle>(parent)
+    {
+        dialog.set_color(&key, picked.color);
+    }
 }
 
 #[cfg(test)]
