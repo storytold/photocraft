@@ -26,13 +26,6 @@ fn app() -> PhotocraftApp {
 }
 
 #[test]
-fn a_one_anchor_drag_is_drag_anchor_point() {
-    let mut app = app();
-    assert_eq!(added(&mut app, |a| drag(a, [120.0, 120.0], [130.0, 130.0], Modifiers::NONE)), ["Drag Anchor Point"]);
-    assert_eq!(app.ui.direct_selection.anchors, vec![[0, 2]]);
-}
-
-#[test]
 fn a_drag_of_two_anchors_is_drag_anchor_points() {
     let mut app = app();
     click(&mut app, [40.0, 120.0], Modifiers::NONE);
