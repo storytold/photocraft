@@ -20,7 +20,8 @@ fn bar(tool: Tool) -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 80, "height": 80})).unwrap();
     app.ui.tool = tool;
-    let mut h = Harness::builder().with_size(vec2(1800.0, 300.0)).with_context(app.ctx().clone()).build_ui_state(|ui, app| crate::panels::options_bar(app, ui), app);
+    let mut h =
+        Harness::builder().with_size(vec2(1800.0, 300.0)).with_context(app.ctx().clone()).build_ui_state(|ui, app| crate::panels::options_bar(app, ui), app);
     PhotocraftApp::setup_context(&h.ctx, AppTheme::pro_medium());
     h.run_steps(4);
     h
@@ -90,14 +91,24 @@ fn clone_source_toggle_uses_the_existing_panel_command_in_both_directions() {
 
 #[test]
 fn healing_angle_truncates_fractions_and_clamps_typed_limits_with_one_ok_alert() {
-    for (text, want, alert) in [("45.5", 45.0, false), ("-45.5", -45.0, false), ("180.5", 180.0, false), ("-180.5", -180.0, false), ("400", 180.0, true), ("-400", -180.0, true)] {
+    for (text, want, alert) in
+        [("45.5", 45.0, false), ("-45.5", -45.0, false), ("180.5", 180.0, false), ("-180.5", -180.0, false), ("400", 180.0, true), ("-400", -180.0, true)]
+    {
         let mut h = bar(Tool::Healing);
         type_angle(&mut h, text);
         assert_eq!(h.state().session.tools.brush.angle, want, "{text}");
         assert_eq!(angle(&h).accesskit_node().numeric_value(), Some(f64::from(want)));
         if alert {
             assert_eq!(alerts(&h), vec![ANGLE_ALERT.to_string()], "{text}");
-            let id = h.state().framework.dialogs.open_dialogs().into_iter().find(|d| d.fields.as_ref().and_then(|f| f.get("message")).and_then(|v| v.as_str()) == Some(ANGLE_ALERT)).expect("range alert").id;
+            let id = h
+                .state()
+                .framework
+                .dialogs
+                .open_dialogs()
+                .into_iter()
+                .find(|d| d.fields.as_ref().and_then(|f| f.get("message")).and_then(|v| v.as_str()) == Some(ANGLE_ALERT))
+                .expect("range alert")
+                .id;
             let ctx = h.ctx.clone();
             crate::dialogs::confirm(h.state_mut(), &ctx, id).unwrap();
             h.run_steps(3);
