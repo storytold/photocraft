@@ -170,7 +170,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        part: [unit, integration]
+        part: [unit, integration, clippy]
     env:
       # Released sccache expands Cargo's response files and exceeds Windows' rustc spawn limit
       # (#13543). Let Cargo handle long commands until a release includes mozilla/sccache#3026.
@@ -252,8 +252,10 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' && matrix.part == 'integration' }}
           cache-on-failure: false
 
+      # Clippy has its own parallel leg: after the test build it ran in the integration leg's
+      # critical path (#15446).
       - name: Clippy
-        if: matrix.part == 'integration'
+        if: matrix.part == 'clippy'
         run: cargo clippy --workspace --all-targets --locked --features heif -- -D warnings
 
       - name: Dependency layering
@@ -261,6 +263,7 @@ jobs:
         run: cargo xtask layers
 
       - uses: step-security/taiki-e-install-action@76747d22a7567cc4438546a84f11bdf18e670ab8 # v2.87.32
+        if: matrix.part != 'clippy'
         with:
           tool: cargo-nextest@0.9.150
 
@@ -269,6 +272,7 @@ jobs:
       # dependency cache. photocraft-gpu's tests run when the `platforms` job says they can be
       # affected (`windows_gpu`); excluding the package also skips building its test binaries.
       - name: Test
+        if: matrix.part != 'clippy'
         env:
           PART: ${{ matrix.part }}
           GPU: ${{ needs.platforms.outputs.windows_gpu }}
@@ -290,7 +294,7 @@ jobs:
 
       # Per-crate compile and link times of this leg's build (open the HTML in a browser).
       - name: Upload cargo build timings
-        if: always()
+        if: always() && matrix.part != 'clippy'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cargo-timings-windows-${{ matrix.part }}
