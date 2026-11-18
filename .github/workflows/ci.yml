@@ -183,6 +183,11 @@ jobs:
       # The Windows compiler command line carries one -L path per built dependency; keep each
       # target path short enough for CreateProcess when the graph is large.
       CARGO_TARGET_DIR: 'D:\t'
+      # rust-lld (shipped with the toolchain) links the test binaries instead of link.exe, and the
+      # test links skip identical-code folding and PDBs. The link arguments in build.rs
+      # (/DELAYLOAD, delayimp.lib) are lld-link options too.
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: rust-lld
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: -Clink-arg=/OPT:NOICF -Clink-arg=/DEBUG:NONE
       # The all-language UI tests shape real Japanese, Chinese, Korean and Devanagari labels
       # with kittest's strict `MissingGlyphPolicy::Panic`. A hosted Windows image has no
       # guaranteed Japanese or Simplified Chinese system font, and egui 0.37 panics on a
