@@ -5,10 +5,10 @@ use egui_kittest::kittest::Queryable;
 // `frame` would have no caller once the other tests are gone.
 
 /// A harness that draws the toolbar in a window tall enough for every slot. The first pass installs the theme and fonts.
-fn toolbar_harness(app: PhotocraftApp) -> egui_kittest::Harness<'static, PhotocraftApp> {
+fn toolbar_harness(app: Box<PhotocraftApp>) -> egui_kittest::Harness<'static, Box<PhotocraftApp>> {
     let mut ready = false;
     let mut harness = egui_kittest::Harness::builder().with_context(app.ctx().clone()).with_size(vec2(400.0, 1800.0)).build_ui_state(
-        move |ui, app: &mut PhotocraftApp| {
+        move |ui, app: &mut Box<PhotocraftApp>| {
             if !ready {
                 egui_extras::install_image_loaders(ui.ctx());
                 theme::install_fonts(ui.ctx());
