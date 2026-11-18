@@ -506,11 +506,13 @@ mod tests {
     fn assert_recent_picture(frames: &mut craft::ui::testing::Frames, state: craft::ui::primitives::TextureState, rgba: [u8; 4]) {
         let craft::ui::primitives::TextureState::Ready(texture) = state else { panic!("the completed decoder must supply a ready picture") };
         assert_eq!((texture.size.width, texture.size.height), (4, 4));
-        let paint = frames.take_paint().expect("texture uploads were recorded");
+        let mut paint = frames.take_paint().expect("texture uploads were recorded");
         let delta = paint.textures_delta.set.get(&texture.id).and_then(|changes| changes.last()).expect("the real decoder's texture was uploaded");
         let egui::ImageData::Color(image) = &delta.image;
         assert_eq!(image.size, [4, 4]);
         assert!(image.pixels.iter().all(|pixel| pixel.to_array() == rgba), "the picture contains the decoded file's pixels");
+        // The headless test inspected the uploads instead of rendering them.
+        paint.textures_delta.clear();
     }
 
     #[cfg(not(target_arch = "wasm32"))]
