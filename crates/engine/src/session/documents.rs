@@ -2,6 +2,7 @@ use crate::{EngineError, Result};
 
 use super::history::fix_selection;
 use super::{DocState, Document, LayerId, Session, channel_cmds, smart_cmds};
+use crate::{HeldImportedDocument, color_cmds};
 
 /// Move item `i` of `v` to position `to`, clamped to the end. Returns where it went; `None` when
 /// `i` is out of range.
@@ -197,13 +198,35 @@ impl Session {
     /// Admission validates the hints against the document that is actually installed.
     pub(crate) fn hold_open_with_view(&mut self, doc: Document, source_read_only: bool, initial_view: Option<photocraft_io::NativeInitialView>) -> u64 {
         self.next_held_open = self.next_held_open.wrapping_add(1);
-        self.held_opens.push((self.next_held_open, doc, source_read_only, initial_view));
+        self.held_opens.push((
+            self.next_held_open,
+            HeldImportedDocument { document: doc, source_read_only, initial_view, color_settings: None, ignore_exif_profile_tag: None },
+        ));
         self.next_held_open
     }
 
     /// Whether a document held back for its prompt already has `name`.
     pub(crate) fn held_open_named(&self, name: &str) -> bool {
-        self.held_opens.iter().any(|(_, d, _, _)| d.name == name)
+        self.held_opens.iter().any(|(_, held)| held.document.name == name)
+    }
+
+    /// Hold decoded native data with the request-time color settings used by its pending prompt.
+    /// The snapshot stays in memory and is consumed with the held document, never added to its metadata.
+    pub(crate) fn hold_open_with_policy(
+        &mut self,
+        doc: Document,
+        source_read_only: bool,
+        initial_view: Option<photocraft_io::NativeInitialView>,
+        color_settings: Option<color_cmds::ColorSettings>,
+        ignore_exif_profile_tag: Option<bool>,
+    ) -> u64 {
+        let id = self.hold_open_with_view(doc, source_read_only, initial_view);
+        // The entry just appended above is the only one this call updates.
+        if let Some((_, held)) = self.held_opens.last_mut() {
+            held.color_settings = color_settings;
+            held.ignore_exif_profile_tag = ignore_exif_profile_tag;
+        }
+        id
     }
 
     /// Takes a document a background open held back for the profile prompt: the document and
@@ -214,11 +237,18 @@ impl Session {
         self.take_held_open_with_view(id).map(|(doc, read_only, _)| (doc, read_only))
     }
 
-    /// Consume a pending document together with its source protection and initial view exactly once.
+    /// Take a pending open with its validated, one-time native view handoff.
+    /// Hosts answering a captured color question should use [`Self::take_held_open_with_policy`]
+    /// to retain the request-time settings as well.
     pub fn take_held_open_with_view(&mut self, id: u64) -> Option<(Document, bool, Option<photocraft_io::NativeInitialView>)> {
-        let i = self.held_opens.iter().position(|(h, _, _, _)| *h == id)?;
-        let (_, doc, read_only, initial_view) = self.held_opens.remove(i);
-        Some((doc, read_only, initial_view))
+        self.take_held_open_with_policy(id).map(|held| (held.document, held.source_read_only, held.initial_view))
+    }
+
+    /// Consume a pending import once, preserving the color-policy snapshot needed to answer its original prompt.
+    /// Unknown or already-consumed identities return `None` without changing other pending opens.
+    pub fn take_held_open_with_policy(&mut self, id: u64) -> Option<HeldImportedDocument> {
+        let i = self.held_opens.iter().position(|(held, _)| *held == id)?;
+        Some(self.held_opens.remove(i).1)
     }
 
     pub fn close(&mut self, index: usize) -> Option<DocState> {
