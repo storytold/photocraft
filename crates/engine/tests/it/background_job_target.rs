@@ -1,14 +1,12 @@
-//! #7366: a background Remove on a Red-only target keeps G/B/alpha intact when a Type click
-//! selects another layer while the job is pending.
+//! #7366: a background job applies to the layer and channels it started on, whatever the user
+//! selects while it runs. A job's result is applied only by `poll_jobs` or `wait_job` on the
+//! session's thread, so a selection made after `start` always comes first.
 
 use photocraft_doc::LayerId;
 use photocraft_engine::Session;
 use photocraft_engine::jobs::Started;
-use photocraft_ui_egui::{PhotocraftApp, Services, control};
 
 const REMOVE: &str = r#"{"points":[[12,10],[16,12]],"size":6}"#;
-
-type Harness = egui_kittest::Harness<'static, PhotocraftApp>;
 
 fn run(s: &mut Session, id: &str, p: &str) {
     s.execute(id, p.parse().unwrap()).unwrap();
@@ -19,13 +17,9 @@ fn pixels(s: &Session, doc: usize, id: LayerId) -> Vec<f32> {
     d.layer(id).unwrap().surface().unwrap().read_region(d.bounds())
 }
 
-#[derive(Clone, Copy)]
-enum Input {
-    None,
-    ControlPointer,
-}
-
-fn probe(input: Input) {
+/// Starts a Red-only Remove on the target layer, optionally selects the text layer (what a Type
+/// click does) while it is pending, then waits for it.
+fn probe(select_text_while_pending: bool) {
     let mut a = Session::new();
     run(&mut a, "file.new", r#"{"name":"A","width":32,"height":24,"background":"transparent"}"#);
     run(&mut a, "type.create", r#"{"text":"X","x":2,"y":18,"size":14}"#);
@@ -56,50 +50,28 @@ fn probe(input: Input) {
     run(&mut inline, "paint.remove", REMOVE);
     let expected = pixels(&inline, 0, target);
 
-    // The app runs in a harness so the canvas takes the control channel's pointer input on the
-    // frames after the call.
-    let mut h = Harness::builder().with_size(egui::vec2(1100.0, 720.0)).with_max_steps(64).build_eframe(move |cc| {
-        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        // The app shares the harness's context, which is where the control channel's pointer input arrives.
-        PhotocraftApp::with_context(cc.egui_ctx.clone(), a, Services::default())
-    });
-    h.run_steps(4);
-
-    let job = match h.state_mut().session.start("paint.remove", REMOVE.parse().unwrap()).unwrap() {
+    let job = match a.start("paint.remove", REMOVE.parse().unwrap()).unwrap() {
         Started::Job(id) => id,
         v => panic!("must start a background job: {v:?}"),
     };
-    match input {
-        Input::None => {}
-        Input::ControlPointer => {
-            let ctx = h.ctx.clone();
-            let (req, _rx) = control::ControlRequest::new("ui.pointer", r#"{"tool":"type","events":[{"kind":"down","x":4,"y":14}]}"#.parse().unwrap());
-            let _ = control::handle(h.state_mut(), &ctx, &req);
-            h.run_steps(2);
-        }
+    let selected = if select_text_while_pending { text } else { target };
+    if select_text_while_pending {
+        a.select_layer(text).unwrap();
     }
-    let selected = if matches!(input, Input::None) { target } else { text };
-    assert_eq!(h.state().session.active().unwrap().active_layer, Some(selected), "the input selects the text layer");
-
-    let a = h.state_mut();
-    a.session.set_active(1);
-    a.session.wait_job(job).unwrap();
-    assert_eq!(a.session.documents()[1].doc, b, "B is unchanged");
-    let st = &a.session.documents()[0];
+    a.set_active(1);
+    a.wait_job(job).unwrap();
+    assert_eq!(a.documents()[1].doc, b, "B is unchanged");
+    let st = &a.documents()[0];
     assert_eq!(st.doc.layer(text).unwrap(), &text_before, "the text layer is unchanged");
     assert_eq!(st.active_layer, Some(selected), "the user's selection survives the job");
-    let actual = pixels(&a.session, 0, target);
+    let actual = pixels(&a, 0, target);
     let wrong = expected.as_chunks::<4>().0.iter().zip(actual.as_chunks::<4>().0).filter(|(e, r)| e[1..] != r[1..]).count();
     assert_eq!(wrong, 0, "pixels with G/B/alpha changed outside the Red target");
     assert_eq!(actual, expected);
 }
 
 #[test]
-fn no_input_keeps_red_restriction() {
-    probe(Input::None);
-}
-
-#[test]
-fn control_pointer_click_keeps_red_restriction() {
-    probe(Input::ControlPointer);
+fn a_background_job_applies_to_the_layer_and_channels_it_started_on() {
+    probe(false);
+    probe(true);
 }

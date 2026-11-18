@@ -511,7 +511,7 @@ fn extras_options() -> [(&'static str, &'static str); 13] {
 mod tests {
     use super::*;
 
-    fn app() -> (PhotocraftApp, egui::Context) {
+    fn app() -> (Box<PhotocraftApp>, egui::Context) {
         let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         let ctx = app.ctx().clone();
         (app, ctx)

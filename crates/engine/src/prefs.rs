@@ -1897,6 +1897,7 @@ pub const LEGACY_PREFS_FILE: &str = "preferences.json";
 
 /// The settings store's options for the folder `dir` (in memory without one): `config.toml` there, importing
 /// [`LEGACY_PREFS_FILE`] through [`parse_legacy_prefs`] while there is none.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn store_options(dir: Option<&std::path::Path>) -> craft::settings::OpenOptions<SavedPrefs> {
     let location = dir.map_or(craft::settings::Location::Memory, |dir| craft::settings::Location::Dir(dir.to_path_buf()));
     let legacy = dir.map(|dir| craft::settings::LegacyFile { path: dir.join(LEGACY_PREFS_FILE), parse: parse_legacy_prefs }).into_iter().collect();
@@ -1906,6 +1907,7 @@ pub fn store_options(dir: Option<&std::path::Path>) -> craft::settings::OpenOpti
 /// The preferences saved in `dir` as the app's settings store loads them, read without opening the store
 /// (`craft::settings::SettingsStore::read`, which writes nothing): the launch reads before the window opens and
 /// `photocraft-cli mcp`. Defaults without a folder.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn read_saved(dir: Option<&std::path::Path>) -> SavedPrefs {
     craft::settings::SettingsStore::read(&store_options(dir)).0
 }
