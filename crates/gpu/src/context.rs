@@ -1,8 +1,8 @@
 //! Native windowless wgpu context creation for headless composition and export.
 
 use std::fmt;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use crate::health::DeviceHealth;
 use crate::{Compositor, Unsupported};
@@ -43,7 +43,8 @@ pub struct NativeContextOptions {
     /// If initialization times out, the background initialization thread cannot be forcibly terminated
     /// in standard Rust and continues detached until wgpu completes or fails. Callers should avoid
     /// repeatedly requesting initialization in tight loops when timeouts occur to prevent thread and
-    /// resource leaks.
+    /// resource leaks. Before the process exits, call [`NativeContext::wait_for_abandoned_requests`]:
+    /// exiting while that thread is still inside the driver can crash the process.
     pub timeout: Option<Duration>,
 }
 
@@ -135,7 +136,12 @@ impl NativeContext {
 
         if let Some(timeout) = options.timeout {
             let (tx, rx) = std::sync::mpsc::channel();
+            let request = Arc::new(InitThread::default());
+            let thread_request = Arc::clone(&request);
             let thread_res = std::thread::Builder::new().name("pc_gpu_init".into()).spawn(move || {
+                // Declared first so it is dropped last: an abandoned request counts as running
+                // until the context nobody waits for any more has been dropped too.
+                let _finish = FinishOnDrop(thread_request);
                 let res = init_work();
                 let _ = tx.send(res);
             });
@@ -143,6 +149,7 @@ impl NativeContext {
                 Ok(_handle) => match rx.recv_timeout(timeout) {
                     Ok(res) => res,
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        request.abandon();
                         Err(GpuContextError::NoAdapter(format!("timed out after {timeout:?} requesting GPU adapter/device")))
                     }
                     Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(GpuContextError::NoAdapter("GPU initialization thread disconnected".into())),
@@ -152,6 +159,32 @@ impl NativeContext {
         } else {
             init_work()
         }
+    }
+
+    /// Wait up to `limit` for initialization threads that [`NativeContext::request`] gave up on
+    /// after its timeout. Returns whether none is still running.
+    ///
+    /// A request that timed out leaves its thread inside wgpu and the driver. If the process
+    /// exits meanwhile, the driver's state is torn down under that thread, and software drivers
+    /// such as Lavapipe crash the whole process (a SIGSEGV or heap corruption after every test
+    /// already passed). Call this before exiting after a timed-out request.
+    pub fn wait_for_abandoned_requests(limit: Duration) -> bool {
+        // A limit too far ahead to represent waits as long as it takes.
+        let deadline = Instant::now().checked_add(limit);
+        let mut running = ABANDONED.running.lock().unwrap_or_else(PoisonError::into_inner);
+        while *running > 0 {
+            running = match deadline {
+                Some(deadline) => {
+                    let left = deadline.saturating_duration_since(Instant::now());
+                    if left.is_zero() {
+                        return false;
+                    }
+                    ABANDONED.done.wait_timeout(running, left).unwrap_or_else(PoisonError::into_inner).0
+                }
+                None => ABANDONED.done.wait(running).unwrap_or_else(PoisonError::into_inner),
+            };
+        }
+        true
     }
 
     /// Build a new [`Compositor`] wired to this context's device and health flag.
@@ -223,5 +256,51 @@ impl NativeContext {
     /// Whether the device is healthy and has not reported a lost device or uncaptured error.
     pub fn is_healthy(&self) -> bool {
         self.health.is_ok()
+    }
+}
+
+/// How many initialization threads [`NativeContext::request`] gave up on are still running.
+struct Abandoned {
+    running: Mutex<usize>,
+    done: Condvar,
+}
+
+static ABANDONED: Abandoned = Abandoned { running: Mutex::new(0), done: Condvar::new() };
+
+/// One initialization thread: whether its request gave up on it, and whether it has finished.
+#[derive(Default)]
+struct InitThread {
+    state: Mutex<(bool, bool)>,
+}
+
+impl InitThread {
+    /// The request stopped waiting: count the thread in [`ABANDONED`] unless it already finished.
+    fn abandon(&self) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let (abandoned, finished) = &mut *state;
+        if !*finished && !*abandoned {
+            *abandoned = true;
+            *ABANDONED.running.lock().unwrap_or_else(PoisonError::into_inner) += 1;
+        }
+    }
+
+    fn finish(&self) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let (abandoned, finished) = &mut *state;
+        *finished = true;
+        if *abandoned {
+            let mut running = ABANDONED.running.lock().unwrap_or_else(PoisonError::into_inner);
+            *running = running.saturating_sub(1);
+            ABANDONED.done.notify_all();
+        }
+    }
+}
+
+/// Marks the initialization thread finished when it ends, also when it panics.
+struct FinishOnDrop(Arc<InitThread>);
+
+impl Drop for FinishOnDrop {
+    fn drop(&mut self) {
+        self.0.finish();
     }
 }

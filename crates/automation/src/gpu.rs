@@ -9,6 +9,9 @@ use photocraft_io::{BandRenderer, IoError, RenderBand, RenderError};
 
 use crate::AutomationError;
 
+/// The shortest time a dropped renderer waits for its timed-out GPU request to finish.
+const ABANDONED_REQUEST_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Headless GPU renderer implementing [`BandRenderer`] with device and compositor reuse.
 pub struct GpuRenderer {
     context: Option<Arc<NativeContext>>,
@@ -142,6 +145,20 @@ impl GpuRenderer {
             comp.reset_cache();
         }
         self.last_doc_id = None;
+    }
+}
+
+impl Drop for GpuRenderer {
+    /// A request that timed out left its thread inside the driver. Give it time to finish, so the
+    /// process does not exit under it: Lavapipe then crashes the process. A driver that really
+    /// hangs costs this wait once, after its request already failed.
+    fn drop(&mut self) {
+        if self.context.is_none()
+            && self.init_error.is_some()
+            && let Some(timeout) = self.options.timeout
+        {
+            NativeContext::wait_for_abandoned_requests(timeout.max(ABANDONED_REQUEST_WAIT));
+        }
     }
 }
 
