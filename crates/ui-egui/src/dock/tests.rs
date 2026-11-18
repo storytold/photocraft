@@ -8,7 +8,7 @@ use serde_json::json;
 use super::*;
 use crate::panels::registry;
 
-fn app_with_layers() -> (PhotocraftApp, photocraft_doc::LayerId, photocraft_doc::LayerId) {
+fn app_with_layers() -> (Box<PhotocraftApp>, photocraft_doc::LayerId, photocraft_doc::LayerId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 150})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();
@@ -21,7 +21,7 @@ fn app_with_layers() -> (PhotocraftApp, photocraft_doc::LayerId, photocraft_doc:
 }
 
 /// A new app that starts from `prefs`, with Remember Workspace Changes `remember`.
-fn app_from_prefs(prefs: &str, remember: bool) -> PhotocraftApp {
+fn app_from_prefs(prefs: &str, remember: bool) -> Box<PhotocraftApp> {
     let mut session = photocraft_engine::Session::new();
     session.load_prefs_json(prefs).unwrap();
     session.prefs.edit(|p| p.workspace.remember_workspace_changes = remember);

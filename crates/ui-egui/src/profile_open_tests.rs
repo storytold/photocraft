@@ -24,7 +24,7 @@ fn adobe_png() -> Vec<u8> {
     photocraft_io::export(&d, "t.png", &Default::default()).unwrap().bytes
 }
 
-fn harness(background: bool) -> Harness<'static, PhotocraftApp> {
+fn harness(background: bool) -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = Harness::builder().with_size(vec2(1400.0, 900.0)).with_max_steps(64).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         PhotocraftApp::with_context(
@@ -45,7 +45,7 @@ fn harness(background: bool) -> Harness<'static, PhotocraftApp> {
 }
 
 /// Open a.png, b.png and c.png together and let every read finish.
-fn open_three(h: &mut Harness<'static, PhotocraftApp>) {
+fn open_three(h: &mut Harness<'static, Box<PhotocraftApp>>) {
     let png = adobe_png();
     for name in ["a.png", "b.png", "c.png"] {
         h.state_mut().open_file(&format!("/pics/{name}"), &png).unwrap();
@@ -54,7 +54,7 @@ fn open_three(h: &mut Harness<'static, PhotocraftApp>) {
 }
 
 /// Run frames until no open is still reading.
-fn settle(h: &mut Harness<'static, PhotocraftApp>) {
+fn settle(h: &mut Harness<'static, Box<PhotocraftApp>>) {
     for _ in 0..200 {
         h.run_steps(2);
         if h.state().jobs.opens.is_empty() && h.state().session.jobs().is_empty() {
@@ -65,12 +65,12 @@ fn settle(h: &mut Harness<'static, PhotocraftApp>) {
     h.run_steps(6);
 }
 
-fn docs(h: &Harness<'static, PhotocraftApp>) -> Vec<String> {
+fn docs(h: &Harness<'static, Box<PhotocraftApp>>) -> Vec<String> {
     h.state().session.documents().iter().map(|d| d.doc.name.clone()).collect()
 }
 
 /// The one prompt up: its host id.
-fn prompt(h: &Harness<'static, PhotocraftApp>) -> DialogId {
+fn prompt(h: &Harness<'static, Box<PhotocraftApp>>) -> DialogId {
     let host = &h.state().framework.dialogs;
     assert!(host.is_open::<ProfileMismatchDialog>(), "a prompt is up");
     let open = host.open_dialogs();
@@ -79,12 +79,12 @@ fn prompt(h: &Harness<'static, PhotocraftApp>) -> DialogId {
 }
 
 /// Whether no dialog is open on the host.
-fn no_prompt(h: &Harness<'static, PhotocraftApp>) -> bool {
+fn no_prompt(h: &Harness<'static, Box<PhotocraftApp>>) -> bool {
     h.state().framework.dialogs.is_empty()
 }
 
 /// Sets the prompt's `action` and, when `remember`, ticks "Remember this choice"; then presses OK.
-fn answer_with(h: &mut Harness<'static, PhotocraftApp>, action: &str, remember: bool) {
+fn answer_with(h: &mut Harness<'static, Box<PhotocraftApp>>, action: &str, remember: bool) {
     let (ctx, id) = (h.ctx.clone(), prompt(h));
     let host = &mut h.state_mut().framework.dialogs;
     host.set_json_field(&ctx, id, "action", json!(action)).unwrap();
@@ -95,17 +95,17 @@ fn answer_with(h: &mut Harness<'static, PhotocraftApp>, action: &str, remember: 
     settle(h);
 }
 
-fn answer(h: &mut Harness<'static, PhotocraftApp>, action: &str) {
+fn answer(h: &mut Harness<'static, Box<PhotocraftApp>>, action: &str) {
     answer_with(h, action, false);
 }
 
-fn profile(h: &Harness<'static, PhotocraftApp>, name: &str) -> Option<String> {
+fn profile(h: &Harness<'static, Box<PhotocraftApp>>, name: &str) -> Option<String> {
     let st = h.state().session.documents().iter().find(|d| d.doc.name == name).unwrap();
     st.doc.icc_profile.as_ref().map(|b| photocraft_engine::color_cmds::profile_from_bytes(b).unwrap().description.clone())
 }
 
 /// The file the prompt on screen asks about: the front of the held files.
-fn asked(h: &Harness<'static, PhotocraftApp>) -> &'static str {
+fn asked(h: &Harness<'static, Box<PhotocraftApp>>) -> &'static str {
     prompt(h);
     let name = &h.state().held_opens.front().expect("a file is held").name;
     ["a.png", "b.png", "c.png", "d.png"].into_iter().find(|n| n == name).unwrap_or_else(|| panic!("an unexpected file is held: {name}"))

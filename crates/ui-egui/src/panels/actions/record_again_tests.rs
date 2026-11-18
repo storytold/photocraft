@@ -16,7 +16,7 @@ use crate::PhotocraftApp;
 use crate::control::{ControlRequest, Reply, handle};
 
 /// Draw the actual dialog host over one selected command, without a GPU or file service.
-fn harness(command: &str, params: Value) -> Harness<'static, PhotocraftApp> {
+fn harness(command: &str, params: Value) -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(Session::new(), Default::default());
     app.background_jobs = false;
     app.run("file.new", json!({"width":8,"height":6})).unwrap();
@@ -34,7 +34,7 @@ fn harness(command: &str, params: Value) -> Harness<'static, PhotocraftApp> {
 }
 
 /// One control request through the public channel; the reply is the request's answer.
-fn control(h: &mut Harness<'static, PhotocraftApp>, method: &str, params: Value) -> Value {
+fn control(h: &mut Harness<'static, Box<PhotocraftApp>>, method: &str, params: Value) -> Value {
     let ctx = h.ctx.clone();
     let (request, _reply) = ControlRequest::new(method, params);
     let reply = match handle(h.state_mut(), &ctx, &request) {
@@ -46,7 +46,7 @@ fn control(h: &mut Harness<'static, PhotocraftApp>, method: &str, params: Value)
 }
 
 /// Open by firing the panel menu's Record Again row, preserving its selected-step and enablement checks.
-fn open(h: &mut Harness<'static, PhotocraftApp>) -> DialogId {
+fn open(h: &mut Harness<'static, Box<PhotocraftApp>>) -> DialogId {
     let ctx = h.ctx.clone();
     assert!(super::menu::run_fired(h.state_mut(), &ctx, &CommandRef::from(ActionsPanelCommands::RecordAgain)), "the Actions panel owns the row");
     h.run_steps(3);
@@ -54,33 +54,33 @@ fn open(h: &mut Harness<'static, PhotocraftApp>) -> DialogId {
 }
 
 /// Sets one field of dialog `id` as an agent would.
-fn set_field(h: &mut Harness<'static, PhotocraftApp>, id: DialogId, field: &str, value: Value) -> Value {
+fn set_field(h: &mut Harness<'static, Box<PhotocraftApp>>, id: DialogId, field: &str, value: Value) -> Value {
     control(h, "ui.dialog.set", json!({"dialog": id, "field": field, "value": value}))
 }
 
 /// Answers OK on dialog `id`; the error is the reason the dialog refused.
-fn confirm(h: &mut Harness<'static, PhotocraftApp>, id: DialogId) -> Result<(), String> {
+fn confirm(h: &mut Harness<'static, Box<PhotocraftApp>>, id: DialogId) -> Result<(), String> {
     let reply = control(h, "ui.dialog.confirm", json!({"dialog": id}));
     if reply["ok"] == true { Ok(()) } else { Err(reply["error"].as_str().unwrap_or("refused").to_string()) }
 }
 
 /// Cancels dialog `id`.
-fn cancel(h: &mut Harness<'static, PhotocraftApp>, id: DialogId) {
+fn cancel(h: &mut Harness<'static, Box<PhotocraftApp>>, id: DialogId) {
     control(h, "ui.dialog.cancel", json!({"dialog": id}));
 }
 
 /// The number the open dialog `id` lists under `key`, whatever kind of hosted dialog it is.
-fn number(h: &Harness<'static, PhotocraftApp>, id: DialogId, key: &str) -> Option<f64> {
+fn number(h: &Harness<'static, Box<PhotocraftApp>>, id: DialogId, key: &str) -> Option<f64> {
     h.state().framework.dialogs.open_dialogs().into_iter().find(|d| d.id == id)?.fields?.get(key)?.as_f64()
 }
 
 /// Whether dialog `id` is still open.
-fn is_open(h: &Harness<'static, PhotocraftApp>, id: DialogId) -> bool {
+fn is_open(h: &Harness<'static, Box<PhotocraftApp>>, id: DialogId) -> bool {
     h.state().framework.dialogs.stack().contains(id)
 }
 
 /// A resize with different recorded and document sizes exposes seeding from the wrong source.
-fn sizing() -> Harness<'static, PhotocraftApp> {
+fn sizing() -> Harness<'static, Box<PhotocraftApp>> {
     harness("image.imageSize", json!({"width":4,"height":3,"resample":"nearest"}))
 }
 

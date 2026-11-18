@@ -205,7 +205,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 mod tests {
     use super::*;
 
-    fn perspective_app() -> PhotocraftApp {
+    fn perspective_app() -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
         app.session.execute("file.new", json!({"width": 200, "height": 120, "depth": 8})).unwrap();
         app.session.execute("layer.new.layer", json!({})).unwrap();
