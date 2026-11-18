@@ -1,0 +1,111 @@
+//! The options-bar members of the History Brush, Art History Brush, Pattern Stamp and Red Eye
+//! tools. Mode, Opacity and Flow come before them, from the bar's stamp arm.
+
+use craft::ui::choice::Checkbox;
+use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, SideLabel, Sizing};
+use craft::ui::display::{Divider, Shade, Text};
+use craft::ui::form::Field;
+use craft::ui::pickers::Select;
+use craft::ui::text::RangeAlert;
+use serde_json::json;
+
+use crate::PhotocraftApp;
+use crate::tools::option_cells::{hint, number};
+
+/// What the History Brush paints from.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum SourceCaption {
+    /// The document's opening state.
+    Opening,
+    /// A snapshot or history state, by name.
+    Named(String),
+    /// The source no longer exists.
+    Deleted,
+}
+
+/// The History Brush's source as the bar names it.
+pub(crate) fn source_caption(app: &PhotocraftApp) -> SourceCaption {
+    use photocraft_engine::history_source_cmds::{HistorySource, source};
+    let Some(st) = app.session.active() else { return SourceCaption::Deleted };
+    let named = || match source(st)? {
+        HistorySource::Snapshot(id) => st.snapshots.iter().find(|s| s.id == id).map(|s| SourceCaption::Named(s.name.clone())),
+        HistorySource::State(idx) => {
+            let entries = st.history.entries();
+            let name = if idx < entries.len() { entries.get(idx).cloned() } else { st.history.redo_labels().nth(idx - entries.len()).map(str::to_string) }?;
+            // The opening state is "Open" for a file and "New" for a new document (#14029).
+            Some(if idx == 0 && matches!(name.as_str(), "Open" | "New") { SourceCaption::Opening } else { SourceCaption::Named(name) })
+        }
+    };
+    named().unwrap_or(SourceCaption::Deleted)
+}
+
+/// History Brush: the caption of its source.
+pub(super) fn history_brush(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeAlert> {
+    let text = match source_caption(app) {
+        SourceCaption::Opening => tl!("Paints from the document's opening state").to_string(),
+        SourceCaption::Named(name) => crate::i18n::fmt(tl!("Source: {name}"), &[("name", &name)]),
+        SourceCaption::Deleted => tl!("The History Brush source was deleted: set a new source in the History panel").to_string(),
+    };
+    hint(ui, text);
+    None
+}
+
+/// Art History Brush: Style, Area, Tolerance.
+pub(super) fn art_history(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeAlert> {
+    let styles: Vec<Entry<String>> = [
+        ("tightShort", tl!("Tight Short")),
+        ("tightMedium", tl!("Tight Medium")),
+        ("tightLong", tl!("Tight Long")),
+        ("looseMedium", tl!("Loose Medium")),
+        ("looseLong", tl!("Loose Long")),
+        ("dab", tl!("Dab")),
+        ("tightCurl", tl!("Tight Curl")),
+        ("looseCurl", tl!("Loose Curl")),
+    ]
+    .into_iter()
+    .map(|(k, l)| Entry::new(k.to_string(), l.to_string()))
+    .collect();
+    let o = &mut app.ui.tool_options;
+    Field::new(tl!("Style")).side(SideLabel::new().scrub(true)).sizing(Sizing::Content).show(ui, |ui, _| {
+        Select::new(tl!("Style"), Bind::bound(&mut o.art_history_style), &styles).show(ui);
+    });
+    let area = number(tl!("Area"), &mut o.art_history_area, 0.0..=100.0).show(ui).out_of_range;
+    let tolerance = number(tl!("Tolerance"), &mut o.art_history_tolerance, 0.0..=100.0).show(ui).out_of_range;
+    Divider::vertical().show(ui);
+    hint(ui, tl!("Stylized dabs from a history state"));
+    area.or(tolerance)
+}
+
+/// Pattern Stamp: Aligned, Impressionist, Pattern, Scale, Angle.
+pub(super) fn pattern_stamp(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeAlert> {
+    let patterns: Vec<Entry<String>> = app.session.patterns.items.iter().map(|p| Entry::new(p.id.clone(), p.display_name().to_string())).collect();
+    let held = photocraft_engine::presets::patterns::current(&app.session).or(app.session.patterns.items.first()).map(|p| p.id.clone());
+    let mut picked = held.clone().unwrap_or_default();
+    let o = &mut app.ui.tool_options;
+    Checkbox::new(Bind::bound(&mut o.pattern_stamp_aligned)).label(tl!("Aligned")).show(ui);
+    Checkbox::new(Bind::bound(&mut o.pattern_stamp_impressionist)).label(tl!("Impressionist")).show(ui);
+    Divider::vertical().show(ui);
+    if patterns.is_empty() {
+        Text::new(tl!("No patterns")).shade(Shade::Faint).show(ui);
+    } else {
+        Field::new(tl!("Pattern")).side(SideLabel::new().scrub(true)).sizing(Sizing::Content).show(ui, |ui, _| {
+            Select::new(tl!("Pattern"), Bind::bound(&mut picked), &patterns).show(ui);
+        });
+    }
+    let scale = number(tl!("Scale"), &mut o.pattern_stamp_scale, 1.0..=1000.0).unit("%").show(ui).out_of_range;
+    let angle = number(tl!("Angle"), &mut o.pattern_stamp_angle, -180.0..=180.0).unit("°").show(ui).out_of_range;
+    if !patterns.is_empty() && held.as_deref() != Some(picked.as_str()) {
+        let _ = app.run("pattern.presets.select", json!({"pattern": picked}));
+    }
+    scale.or(angle)
+}
+
+/// Red Eye: Pupil Size and Darken Amount.
+pub(super) fn red_eye(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeAlert> {
+    let o = &mut app.ui.tool_options;
+    let pupil = number(tl!("Pupil Size"), &mut o.red_eye_pupil_size, 1.0..=100.0).show(ui).out_of_range;
+    let darken = number(tl!("Darken Amount"), &mut o.red_eye_darken, 0.0..=100.0).show(ui).out_of_range;
+    Divider::vertical().show(ui);
+    hint(ui, tl!("Click a red pupil to neutralize it"));
+    pupil.or(darken)
+}

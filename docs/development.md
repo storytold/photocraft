@@ -260,7 +260,7 @@ See `docs/control-protocol.md` for every method. Tips:
 - **macOS does not render occluded windows.** `ui.screenshot` raises the window first (`focus: true` by default). Use `ui.focus` before other visual checks.
 - **Capture only our own window.** For native captures (to see the real title bar and traffic lights), capture by window id (`screencapture -l <CGWindowID>`), never a screen region, which can grab other apps.
 - **Pointer gestures:** `ui.pointer` takes events in *document* coordinates and runs them through the same tool state machine as the mouse.
-- **Seeing tile storage:** `ui.set {"tileGrid": true}` overlays the active layer's stored tiles, which shows how sparse a layer is and which tiles share pixels (`ui-egui/src/tile_overlay.rs`).
+- **Seeing tile storage:** `ui.set {"tileGrid": true}` overlays the active layer's stored tiles, which shows how sparse a layer is and which tiles share pixels (`ui-egui/src/canvas/tile_overlay.rs`).
 
 ## Headless CLI
 
@@ -783,6 +783,13 @@ recorded) when adding an event to the table:
 cargo run -p craft-psd --example atn_dump -- "Default Actions.atn"
 cargo run -p craft-psd --example atn_roundtrip -- "Default Actions.atn"   # parse, write, diff
 ```
+
+The Classic Actions panel asks before clearing, resetting, or replacing the library. Reset
+offers OK, Cancel, and Append for PhotoCraft Basics. Replace validates the entire ATN archive
+before it removes existing sets. The latest library change can be undone through Edit › Undo
+without changing document History. Command callers use `confirm: true` with `actions.clearAll`,
+`actions.reset` (mode `append` or `replace`), or `actions.replace`, then `actions.undoLibrary`
+to undo. Use `actions.load` for a same-set import.
 
 The real-file oracles are `corpus/atn/` (16 sets from seven public repositories, see *Test
 corpora*): `craft-psd`'s corpus test parses every file and rewrites it byte for byte;
