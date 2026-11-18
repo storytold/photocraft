@@ -105,7 +105,7 @@ pub static LANGUAGES: [LangInfo; LANGUAGE_COUNT] = [
     LangInfo { code: "fr", complete_menus: true },
     LangInfo { code: "id", complete_menus: true },
     LangInfo { code: "ko", complete_menus: true },
-    LangInfo { code: "lo", complete_menus: true },
+    LangInfo { code: "lo", complete_menus: false },
     LangInfo { code: "pl", complete_menus: true },
     LangInfo { code: "de", complete_menus: true },
     // Brazilian Portuguese; `pt`, `pt-BR` and `pt-PT` locales all resolve here (see `candidates`).

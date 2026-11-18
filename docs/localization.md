@@ -16,6 +16,7 @@ the commit in `craft-i18n.rev`; without it PhotoCraft builds and runs in English
 | 简体中文 | `zh-hans` | one form |
 | 日本語 | `ja` | one form |
 | 한국어 | `ko` | one form |
+| ພາສາລາວ | `lo` | one form |
 | Русский | `ru` | one / few / many |
 | Українська | `uk` | one / few / many (teens use many) |
 | Français | `fr` | singular for 0 and 1 / plural for 2+ |
@@ -51,6 +52,8 @@ such as `az-AZ` and `az-Latn-AZ` select it. The catalog includes the existing ca
 dynamic labels, contextual translations and two integer plural forms. Machine-assisted
 drafts have edited core terminology; native-speaker review is pending. See
 [`localization-az.md`](localization-az.md) for terminology, provenance and validation limits.
+
+Lao (`lo`, Lao script) is registered. Full UI text rendering depends on the font rollout in [craft-fonts#33](https://github.com/storytold/craft-fonts/pull/33); environments without a Lao font may display tofu glyphs until font integration lands.
 
 Languages registered with `complete_menus` cover the current menu labels, `tl!` literals, blend
 mode names, and generated preference labels. A string a catalog lacks shows in English:
