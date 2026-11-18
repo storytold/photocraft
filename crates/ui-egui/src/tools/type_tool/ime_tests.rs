@@ -13,7 +13,7 @@ use crate::PhotocraftApp;
 use crate::canvas::testing;
 
 /// A document with a Type session on new text reading "abc", the caret at its end.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 400, "height": 200})).unwrap();
     app.sync_views();

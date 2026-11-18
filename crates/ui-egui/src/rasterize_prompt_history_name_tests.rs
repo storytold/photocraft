@@ -18,7 +18,7 @@ fn active_layer_content(app: &PhotocraftApp) -> photocraft_doc::LayerContent {
 
 /// A `kind` layer whose prompt is raised by a press of `tool`, or by Gaussian Blur from the menu
 /// when `tool` is `None`, and answered with OK. Returns the app and the history length before.
-fn answered(kind: Kind, tool: Option<Tool>) -> (PhotocraftApp, usize) {
+fn answered(kind: Kind, tool: Option<Tool>) -> (Box<PhotocraftApp>, usize) {
     let mut app = app_with(kind);
     let before = past(&app);
     match tool {

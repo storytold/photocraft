@@ -18,15 +18,15 @@ use craft::ui::runtime::memory::set_saved_value;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 
-type AppHarness = Harness<'static, PhotocraftApp>;
+type AppHarness = Harness<'static, Box<PhotocraftApp>>;
 
 /// An app with a `width` × `height` document whose exporter and writer accept everything.
-fn export_app(width: u32, height: u32) -> PhotocraftApp {
+fn export_app(width: u32, height: u32) -> Box<PhotocraftApp> {
     export_app_over(width, height, None)
 }
 
 /// [`export_app`] over the file service `files` (the framework takes it when the app is built).
-fn export_app_over(width: u32, height: u32, files: Option<std::sync::Arc<dyn craft::host::Files>>) -> PhotocraftApp {
+fn export_app_over(width: u32, height: u32, files: Option<std::sync::Arc<dyn craft::host::Files>>) -> Box<PhotocraftApp> {
     let services =
         crate::Services { files, export: Some(Box::new(|_, _, _| Ok((Vec::new(), Vec::new())))), write: Some(Box::new(|_, _| Ok(()))), ..Default::default() };
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
@@ -35,12 +35,12 @@ fn export_app_over(width: u32, height: u32, files: Option<std::sync::Arc<dyn cra
 }
 
 /// The dialog host and its answers, as a frame runs them, on the app's own context.
-fn harness(app: PhotocraftApp) -> AppHarness {
+fn harness(app: Box<PhotocraftApp>) -> AppHarness {
     let mut h = Harness::builder()
         .with_size(egui::vec2(900.0, 700.0))
         .with_step_dt(1.0 / 60.0)
         .with_context(app.ctx().clone())
-        .build_ui_state(|ui, app: &mut PhotocraftApp| crate::dialogs::run(app, ui), app);
+        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app);
     h.run_steps(2);
     h
 }

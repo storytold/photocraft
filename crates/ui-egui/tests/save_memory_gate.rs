@@ -14,7 +14,7 @@ use serde_json::json;
 /// The simulation is process-wide: the tests take turns.
 static LOCK: Mutex<()> = Mutex::new(());
 
-fn app(writes: Rc<RefCell<u32>>) -> PhotocraftApp {
+fn app(writes: Rc<RefCell<u32>>) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(
         Session::new(),
         Services {
