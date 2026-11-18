@@ -486,12 +486,12 @@ fn shadows_and_highlights_with_per_pixel_stages() {
             cr! { shadows: 30.0, highlights: -30.0, whites: 40.0, blacks: -30.0, encoding_gamma: 1.8},
         ],
     );
-    // At the dialog's proxy size.
+    // At the dialog's proxy size, at one depth: the depth only changes how the input is
+    // quantized (8 and 16 bits both develop with `float = false`), and every depth already ran
+    // above at 171×113. The size is what matters here (subsampled pyramid levels).
     let Some(mut g) = gpu() else { return };
-    for depth in DEPTHS {
-        let d = compare_at(&mut g, &all, depth, (858, 572));
-        eprintln!("shadows/highlights + per pixel 858x572 {depth:?}: max |GPU - CPU| = {d:.2e}");
-    }
+    let d = compare_at(&mut g, &all, Depth::Sixteen, (858, 572));
+    eprintln!("shadows/highlights + per pixel 858x572: max |GPU - CPU| = {d:.2e}");
 }
 
 /// Asserts that each of `sets` moves some pixel of the test image by over 2 %, so a comparison
@@ -565,12 +565,11 @@ fn clarity_texture_and_dehaze_with_shadows_highlights_and_per_pixel_stages() {
     check("clarity/texture/dehaze + shadows/highlights + per pixel", &sets);
     let Some(mut g) = gpu() else { return };
     // At the dialog's proxy size (Dehaze and Clarity on a copy subsampled twice), and wider (three
-    // times).
-    for size in [(858, 572), (1600, 900)] {
-        for depth in DEPTHS {
-            let d = compare_at(&mut g, &all, depth, size);
-            eprintln!("everything {size:?} {depth:?}: max |GPU - CPU| = {d:.2e}");
-        }
+    // times). One depth per size: the depth only changes how the input is quantized (8 and 16
+    // bits both develop with `float = false`), and every depth already ran above at 171×113.
+    for (size, depth) in [((858, 572), Depth::Eight), ((1600, 900), Depth::Float)] {
+        let d = compare_at(&mut g, &all, depth, size);
+        eprintln!("everything {size:?} {depth:?}: max |GPU - CPU| = {d:.2e}");
     }
 }
 
