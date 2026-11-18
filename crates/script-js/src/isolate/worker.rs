@@ -18,7 +18,7 @@ use std::rc::Rc;
 use js_sys::{Atomics, Int32Array, Object, Reflect, SharedArrayBuffer, Uint8Array};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
-use web_sys::{DedicatedWorkerGlobalScope, ErrorEvent, MessageEvent, Worker};
+use web_sys::{DedicatedWorkerGlobalScope, ErrorEvent, Event, MessageEvent, Worker};
 
 use super::HostAllocator;
 use super::link::{self, Link};
@@ -37,6 +37,11 @@ const FULL: i32 = 1;
 /// What the Worker sends once it is listening, before the run starts. Messages that arrive
 /// before then would be lost.
 const READY: &str = "ready";
+
+/// Longest a Worker may take to load before it says it listens. A Worker whose engine can't load
+/// (a missing or blocked file) reports nothing to the page, so without this the run would sit
+/// until its time limit.
+const START_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Why scripts can't run in this page.
 pub const NOT_ISOLATED: &str = "Scripts need a page served with cross-origin isolation (the COOP and COEP headers); \
@@ -127,8 +132,10 @@ pub struct WorkerTransport {
     mailbox: SharedArrayBuffer,
     state: Int32Array,
     body: Uint8Array,
+    /// When the Worker was started, until it says it listens ([`START_LIMIT`]).
+    starting: Option<web_time::Instant>,
     _on_message: Closure<dyn FnMut(MessageEvent)>,
-    _on_error: Closure<dyn FnMut(ErrorEvent)>,
+    _on_error: Closure<dyn FnMut(Event)>,
 }
 
 impl WorkerTransport {
@@ -164,10 +171,13 @@ impl WorkerTransport {
         };
         let on_error = {
             let inbox = inbox.clone();
-            Closure::<dyn FnMut(ErrorEvent)>::new(move |event: ErrorEvent| {
+            // A script that fails to load fires a plain `Event`, an error in it an `ErrorEvent`.
+            Closure::<dyn FnMut(Event)>::new(move |event: Event| {
                 // Reported to the user with the run; not again in the console as uncaught.
                 event.prevent_default();
-                inbox.borrow_mut().push(Incoming::Error(event.message()));
+                let why = event.dyn_ref::<ErrorEvent>().map(ErrorEvent::message).filter(|m| !m.is_empty());
+                let why = why.unwrap_or_else(|| "the script Worker could not be loaded".into());
+                inbox.borrow_mut().push(Incoming::Error(why));
             })
         };
         worker.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
@@ -175,7 +185,7 @@ impl WorkerTransport {
         let mailbox = SharedArrayBuffer::new(HEADER + MAILBOX_BYTES);
         let state = Int32Array::new_with_byte_offset_and_length(&mailbox, 0, 2);
         let body = Uint8Array::new_with_byte_offset(&mailbox, HEADER);
-        Ok(Self { worker, inbox, pending, mailbox, state, body, _on_message: on_message, _on_error: on_error })
+        Ok(Self { worker, inbox, pending, mailbox, state, body, starting: None, _on_message: on_message, _on_error: on_error })
     }
 }
 
@@ -192,11 +202,20 @@ impl Transport for WorkerTransport {
         Reflect::set(&msg, &JsValue::from_str("mailbox"), &self.mailbox).map_err(|e| describe(&e))?;
         // Sent when the Worker says it listens (see `READY`).
         *self.pending.borrow_mut() = Some(msg);
+        self.starting = Some(web_time::Instant::now());
         Ok(())
     }
 
     fn take(&mut self) -> Vec<Incoming> {
-        std::mem::take(&mut *self.inbox.borrow_mut())
+        let mut taken = std::mem::take(&mut *self.inbox.borrow_mut());
+        if self.pending.borrow().is_none() {
+            // It said it listens: the start message went out.
+            self.starting = None;
+        } else if self.starting.is_some_and(|t| t.elapsed() > START_LIMIT) {
+            self.starting = None;
+            taken.push(Incoming::Error(format!("the script Worker didn't start within {} s", START_LIMIT.as_secs())));
+        }
+        taken
     }
 
     fn answer(&mut self, answer: &str) -> Result<(), String> {

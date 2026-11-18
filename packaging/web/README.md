@@ -10,7 +10,7 @@ static site in `photocraft-web-<version>/`:
 | `app/photocraft-web-<hash>.part-aa`, `-ab`, … | The app's WebAssembly, gzipped and cut into parts of at most 20 MiB (see [Sizes](#sizes)) |
 | `app/parts.txt` | The parts, in order |
 | `app/photocraft-web.js` | The app's wasm-bindgen glue (generated, ES module) |
-| `photocraft-script-worker_loader.js`, `photocraft-script-worker-<hash>.js`, `photocraft-script-worker-<hash>_bg.wasm` | The script Worker, one per run: its loader, glue and engine (see the server notes on scripts) |
+| `photocraft-script-worker_loader.js`, `photocraft-script-worker.js`, `photocraft-script-worker_bg.wasm` | The script Worker, one per run: its loader, glue and engine (see [Scripts](#scripts)) |
 | `_headers`, `.htaccess` | Sample header rules for Netlify/Cloudflare Pages and Apache |
 | `fonts/` (optional) | Fonts loaded on demand, listed in `fonts/manifest.txt` (see [Fonts](#fonts)) |
 
@@ -132,19 +132,12 @@ their names and need revalidation.
   the download, since the parts are compressed already; it shrinks the two `.js` files and the
   small boot module. You can also precompress and let the server send `Content-Encoding: br`.
 - **Caching:** `Cache-Control: public, max-age=31536000, immutable` on the files whose names
-  carry a hash (the parts, `photocraft-web-boot-<hash>.*` and `photocraft-script-worker-<hash>.*`),
-  and `no-cache` on `index.html`, `app/photocraft-web.js`, `app/parts.txt` and
-  `photocraft-script-worker_loader.js`. The sample `_headers` and `.htaccess` do this.
+  carry a hash (the parts and `photocraft-web-boot-<hash>.*`), and `no-cache` on `index.html`,
+  `app/photocraft-web.js`, `app/parts.txt` and the three `photocraft-script-worker*` files,
+  whose names don't change between releases. The sample `_headers` and `.htaccess` do this.
 - **HTTPS:** WebGPU (and the clipboard) only work in a secure context, which means `https://`
   or `http://localhost`. Over plain HTTP elsewhere, the app falls back to WebGL2.
-- **Scripts need cross-origin isolation:** each script runs in its own Worker that shares memory
-  with the page (`SharedArrayBuffer`), which a browser allows only on a cross-origin-isolated
-  page. Send `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy:
-  require-corp` on every file of the site; the sample `_headers`, `.htaccess` and `nginx.conf` do.
-  Without them the app works the same, and File › Scripts says scripts need these headers. With
-  COEP `require-corp`, anything the page loads from another origin needs
-  `Cross-Origin-Resource-Policy` (PhotoCraft loads nothing from other origins); when the app's own
-  files live on a CDN, send `Cross-Origin-Resource-Policy: cross-origin` on them.
+- **Scripts need cross-origin isolation:** see [Scripts](#scripts).
 
 nginx example:
 
@@ -155,7 +148,7 @@ location /photocraft/ {
     gzip_types application/wasm text/javascript text/html;
     # The first matching line wins, so the files that keep their names come first.
     # nginx drops inherited add_header lines in a location with its own, so each repeats them.
-    location ~* (index\.html|app/photocraft-web\.js|app/parts\.txt|photocraft-script-worker_loader\.js)$ {
+    location ~* (index\.html|app/photocraft-web\.js|app/parts\.txt|photocraft-script-worker[^/]*)$ {
         add_header Cache-Control "no-cache";
         add_header Cross-Origin-Opener-Policy same-origin;
         add_header Cross-Origin-Embedder-Policy require-corp;
@@ -227,9 +220,28 @@ fetches them with `fetch()`, so a Content Security Policy needs them allowed by 
   `allow-same-origin` there's no storage. Without `allow-downloads`, Save and Export (browser
   downloads) are blocked.
 - Don't send `X-Frame-Options: DENY` or a `frame-ancestors` CSP that excludes the embedding page.
-- **Scripts in an iframe** run only when the embedding page is cross-origin isolated too (it sends
-  the same two headers) and the iframe has `allow="cross-origin-isolated"`. Otherwise the app
-  works as usual, and File › Scripts says why scripts are off.
+- **Scripts in an iframe** run only when the embedding page is cross-origin isolated too (see
+  [Scripts](#scripts)).
+
+## Scripts
+
+Each script runs in its own Worker that shares memory with the page (`SharedArrayBuffer`), which
+a browser allows only on a cross-origin-isolated page. Send `Cross-Origin-Opener-Policy:
+same-origin` and `Cross-Origin-Embedder-Policy: require-corp` on every file of the site; the
+sample `_headers`, `.htaccess` and `nginx.conf` do. Without them the app works the same, and a
+script refuses to start and says these headers are missing.
+
+- With COEP `require-corp`, anything the page loads from another origin needs
+  `Cross-Origin-Resource-Policy`. PhotoCraft loads nothing from other origins; when its own files
+  live on a CDN, send `Cross-Origin-Resource-Policy: cross-origin` on them.
+- In an iframe, scripts need the embedding page to send the same two headers, the iframe to have
+  `allow="cross-origin-isolated"`, and, when the app is on another origin than the embedding page,
+  `Cross-Origin-Resource-Policy: cross-origin` on the app's files (an isolated page embeds only
+  documents that allow it). Without these the app still works in the iframe, without scripts;
+  but an embedding page that is isolated and gets no such header from the app can't show the app
+  at all.
+- A command's answer to a script holds at most 32 MiB in the browser (the shared memory the Worker
+  reads it from); a larger one ends that run.
 
 ## Renderer selection and fallback flags
 
