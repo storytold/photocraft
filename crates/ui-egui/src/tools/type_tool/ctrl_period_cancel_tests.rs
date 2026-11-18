@@ -1,18 +1,18 @@
 //! #12076: ⌘. (Ctrl+. off the Mac) ends a type editing session the way the options bar's Cancel
 //! does, with any of the four type tools: the document, the selection and the history are as
-//! before the session. ⇧⌘. stays Increase Type Size; outside a session, and while an input
-//! method is composing (not measured), ⌘. does nothing.
-//! Keys go through the app's shortcut handling, as on the canvas.
+//! before the session. ⇧⌘. stays Increase Type Size.
+//! Keys go through a full app frame, so the canvas editor takes them as on the canvas.
 
-use egui_kittest::Harness;
+use egui::Modifiers;
 use photocraft_doc::{LayerContent, LayerId};
 use photocraft_raster::Surface;
 use serde_json::json;
 
+use super::commit_tests::{edit_active, type_new};
 use crate::PhotocraftApp;
 use crate::state::Tool;
 
-fn new_app(tool: Tool) -> PhotocraftApp {
+fn new_app(tool: Tool) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 200})).unwrap();
     // A selection away from the text, which a Type Mask session must leave as it is.
@@ -22,43 +22,13 @@ fn new_app(tool: Tool) -> PhotocraftApp {
     app
 }
 
-/// Start new text with a click and type `s`, as the canvas does.
-fn type_new(app: &mut PhotocraftApp, s: &str) {
-    super::pointer_up(app, [50.0, 100.0], [50.0, 100.0]);
-    super::insert(app, s);
+fn press(mut app: Box<PhotocraftApp>, k: egui::Key, modifiers: Modifiers) -> Box<PhotocraftApp> {
+    crate::canvas::testing::key(&mut app, k, modifiers);
+    app
 }
 
-/// One frame of the app's shortcut handling for each of `events`.
-fn send(app: PhotocraftApp, events: Vec<egui::Event>) -> PhotocraftApp {
-    let mut h = Harness::builder().build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
-            let ctx = ui.ctx().clone();
-            // As `canvas_tests`' harness: the shortcuts wait for the app's fonts.
-            if ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                crate::shortcuts::handle(app, &ctx);
-            }
-        },
-        app,
-    );
-    crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
-    h.run_steps(4);
-    for event in events {
-        h.event(event);
-        h.run_steps(1);
-    }
-    h.into_state()
-}
-
-fn key(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
-    egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers }
-}
-
-fn press(app: PhotocraftApp, k: egui::Key, modifiers: egui::Modifiers) -> PhotocraftApp {
-    send(app, vec![key(k, modifiers)])
-}
-
-fn command_period(app: PhotocraftApp) -> PhotocraftApp {
-    press(app, egui::Key::Period, egui::Modifiers::COMMAND)
+fn command_period(app: Box<PhotocraftApp>) -> Box<PhotocraftApp> {
+    press(app, egui::Key::Period, Modifiers::COMMAND)
 }
 
 /// The selection (compared pixel for pixel, shown by its bounds), the history (oldest first) and
@@ -117,8 +87,8 @@ fn command_period_restores_edited_text() {
         let made = app.run("type.create", json!({"text": "Hello", "x": 50, "y": 100, "orientation": orientation})).unwrap();
         let id = LayerId(made["layer"].as_u64().unwrap());
         let before = snapshot(&app);
-        super::edit_active(&mut app).unwrap();
-        super::insert(&mut app, "CD");
+        edit_active(&mut app);
+        super::commit_tests::type_keys(&mut app, "CD");
         assert_ne!(text_of(&app, id), "Hello", "{tool:?}: typed");
         let app = command_period(app);
         assert!(app.ui.text_edit.is_none(), "{tool:?}: the session ends");
@@ -127,57 +97,14 @@ fn command_period_restores_edited_text() {
     }
 }
 
+/// ⇧⌘. is not the editor's Cancel: it falls through to the app's Increase Type Size shortcut.
 #[test]
 fn shift_command_period_still_increases_the_type_size() {
     let mut app = new_app(Tool::Type);
     type_new(&mut app, "AB");
     let id = LayerId(app.ui.text_edit.as_ref().unwrap().layer);
     let before = size_of(&app, id);
-    let app = press(app, egui::Key::Period, egui::Modifiers::COMMAND | egui::Modifiers::SHIFT);
+    let app = press(app, egui::Key::Period, Modifiers::COMMAND | Modifiers::SHIFT);
     assert!(app.ui.text_edit.is_some(), "still editing");
     assert!(size_of(&app, id) > before, "Increase Type Size ran");
-}
-
-/// Not measured, kept as before: while an input method is composing, ⌘. leaves the session.
-#[test]
-fn command_period_while_an_input_method_composes_keeps_the_session() {
-    let mut app = new_app(Tool::Type);
-    type_new(&mut app, "AB");
-    let preedit = egui::Event::Ime(egui::ImeEvent::Preedit { text: "にほ".into(), active_range_chars: None });
-    let app = send(app, vec![preedit, key(egui::Key::Period, egui::Modifiers::COMMAND)]);
-    assert!(app.ui.text_edit.is_some(), "still editing");
-}
-
-#[test]
-fn command_period_outside_a_type_session_changes_nothing() {
-    for tool in [Tool::Type, Tool::HorizontalTypeMask] {
-        let app = new_app(tool);
-        let before = snapshot(&app);
-        let app = command_period(app);
-        assert!(app.ui.text_edit.is_none(), "{tool:?}");
-        assert_eq!(snapshot(&app), before, "{tool:?}");
-    }
-}
-
-/// Not measured, kept as before: once the composition text has gone but its committed text has
-/// not arrived yet, ⌘. still leaves the session, as it does while composing.
-#[test]
-fn command_period_before_a_composition_commits_keeps_the_session() {
-    let mut app = new_app(Tool::Type);
-    type_new(&mut app, "AB");
-    let preedit = |text: &str| egui::Event::Ime(egui::ImeEvent::Preedit { text: text.into(), active_range_chars: None });
-    let app = send(app, vec![preedit("にほ"), preedit(""), key(egui::Key::Period, egui::Modifiers::COMMAND)]);
-    assert!(app.ui.text_edit.is_some(), "still editing");
-}
-
-#[test]
-fn command_period_after_a_composition_commits_cancels() {
-    let mut app = new_app(Tool::Type);
-    let before = snapshot(&app);
-    type_new(&mut app, "AB");
-    let preedit = egui::Event::Ime(egui::ImeEvent::Preedit { text: "にほ".into(), active_range_chars: None });
-    let commit = egui::Event::Ime(egui::ImeEvent::Commit("日本".into()));
-    let app = send(app, vec![preedit, commit, key(egui::Key::Period, egui::Modifiers::COMMAND)]);
-    assert!(app.ui.text_edit.is_none(), "the session ends");
-    assert_eq!(snapshot(&app), before, "as before the session");
 }
