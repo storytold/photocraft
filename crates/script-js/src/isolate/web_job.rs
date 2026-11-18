@@ -102,9 +102,6 @@ pub struct WebJob<T: Transport> {
     since: Option<Instant>,
     /// Since when it waits for an answer, and whether to a dialog.
     waiting: Option<(Instant, bool)>,
-    /// When the last answer was handed to the Worker: a message that arrived before then was
-    /// sent while the Worker should have been waiting.
-    answered: Option<Instant>,
     /// The run's end, not yet handed out.
     ending: Option<Result<(), String>>,
     finished: bool,
@@ -132,7 +129,6 @@ impl<T: Transport> WebJob<T> {
             spent: Duration::ZERO,
             since: Some(Instant::now()),
             waiting: None,
-            answered: None,
             ending: None,
             finished: false,
             calls: 0,
@@ -268,7 +264,7 @@ impl<T: Transport> WebJob<T> {
             }
         };
         // A Worker waits for each answer; it sends nothing meanwhile, not even its end.
-        if self.waiting.is_some() || self.answered.is_some_and(|t| at < t) {
+        if self.waiting.is_some() {
             self.violation("a message while it waited for an answer");
             return None;
         }
@@ -339,11 +335,20 @@ impl<T: Transport> WebJob<T> {
         if self.waiting.map(|(_, d)| d) != Some(dialog) || self.request_queued() {
             return Err("the script is not waiting for that reply".into());
         }
+        // Anything the Worker sent that is here before this answer was sent while it should have
+        // waited: refused now, before the answer goes out (with `waiting` set, `handle` ends
+        // the run on the first one). A message still on its way to the page can't be told from
+        // one sent after the answer; the order is the Worker's to keep, and every message is
+        // checked and bounded either way.
+        if let Some(early) = self.transport.take().into_iter().next() {
+            let _ = self.handle(early);
+        }
+        if self.ending.is_some() {
+            return Err("the script has ended".into());
+        }
         let text = serde_json::to_string(msg).map_err(|e| e.to_string())?;
         self.waiting = None;
-        let now = Instant::now();
-        self.since = Some(now);
-        self.answered = Some(now);
+        self.since = Some(Instant::now());
         if let Err(e) = self.transport.answer(&text) {
             let what = if dialog { "a dialog's answer" } else { "a command's result" };
             self.end(Err(format!("The script was stopped: {what} could not be sent to the script Worker ({e}).")));
@@ -355,7 +360,8 @@ impl<T: Transport> WebJob<T> {
     /// Answer the command the run waits on.
     ///
     /// # Errors
-    /// When the run waits for no command, or the answer could not be handed over (the run ends).
+    /// When the run waits for no command, the run ended (the Worker broke the protocol, or the
+    /// answer came past the reply limit), or the answer could not be handed over (the run ends).
     pub fn reply_executed(&mut self, result: Result<Value, String>) -> Result<(), String> {
         self.reply(false, &ToHost::Executed { result })
     }
@@ -363,7 +369,8 @@ impl<T: Transport> WebJob<T> {
     /// Answer the dialog the run waits on.
     ///
     /// # Errors
-    /// When the run waits for no dialog, or the answer could not be handed over (the run ends).
+    /// When the run waits for no dialog, the run ended (the Worker broke the protocol, or the
+    /// answer came past the reply limit), or the answer could not be handed over (the run ends).
     pub fn reply_dialog(&mut self, answer: Value) -> Result<(), String> {
         self.reply(true, &ToHost::Dialog { answer })
     }
@@ -536,18 +543,18 @@ mod tests {
         assert!(matches!(j.poll(), Some(WebEvent::Finished(Err(m))) if m.contains("while it waited")));
     }
 
-    /// A message sent while the Worker should have waited is refused even when the page answered
-    /// before it got to that message.
+    /// A message the Worker sent while it should have waited, already at the page when the page
+    /// answers, is refused even though no poll took it first.
     #[test]
-    fn a_message_sent_before_the_answer_is_refused_however_late_it_is_read() {
+    fn a_message_at_the_page_before_the_answer_is_refused() {
         let fake = Fake::default();
         let mut j = job(&fake, options());
         fake.send(&FromHost::Execute { id: "session.inspect".into(), params: json!({}) });
         assert!(matches!(j.poll(), Some(WebEvent::Execute { .. })));
-        // Sent before the answer, but taken only by the next poll.
+        // At the page before the answer, not taken by a poll.
         fake.send(&FromHost::Finished { error: None });
-        std::thread::sleep(Duration::from_millis(5));
-        j.reply_executed(Ok(Value::Null)).unwrap();
+        assert!(j.reply_executed(Ok(Value::Null)).is_err());
+        assert!(fake.answers.borrow().is_empty(), "no answer goes to a Worker that broke the protocol");
         assert!(matches!(j.poll(), Some(WebEvent::Finished(Err(m))) if m.contains("while it waited")));
     }
 
