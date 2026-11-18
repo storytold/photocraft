@@ -19,7 +19,7 @@ fn quad(app: &PhotocraftApp) -> [[f64; 2]; 4] {
 
 /// A 200 × 200 document with a red block (x 20..60, y 20..60) on layer "Paint", Free Transform
 /// open on it, and the box moved 10 px to the right as in the measurement.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 200, "background": "white"})).unwrap();
     app.sync_views();

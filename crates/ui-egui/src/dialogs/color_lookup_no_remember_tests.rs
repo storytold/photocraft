@@ -18,12 +18,12 @@ use crate::dialogs::filter_dialog::open;
 const COLOR_LOOKUP: &str = "image.adjustments.colorLookup";
 const GAUSSIAN_BLUR: &str = "filter.blur.gaussianBlur";
 
-fn new_app() -> PhotocraftApp {
+fn new_app() -> Box<PhotocraftApp> {
     PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default())
 }
 
 /// An 8x8 RGB document, so `image.adjustments.colorLookup` has something to adjust.
-fn app_with_doc() -> PhotocraftApp {
+fn app_with_doc() -> Box<PhotocraftApp> {
     let mut app = new_app();
     app.run("file.new", json!({"width": 8, "height": 8, "background": "#000000"})).unwrap();
     app
