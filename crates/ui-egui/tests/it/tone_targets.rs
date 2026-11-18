@@ -20,6 +20,14 @@ const MODES: [ColorMode; 3] = [ColorMode::Rgb, ColorMode::Cmyk, ColorMode::Lab];
 const GRAY_TARGET_MODES: [ColorMode; 4] = [ColorMode::Rgb, ColorMode::Cmyk, ColorMode::Lab, ColorMode::Grayscale];
 const DEPTHS: [SampleType; 3] = [SampleType::U8, SampleType::U16, SampleType::F32];
 const TARGETS: [ChannelTarget; 3] = [ChannelTarget::Alpha(0), ChannelTarget::LayerMask, ChannelTarget::Composite];
+/// Every mode and every depth once, for the whole-app tests. The planes they edit are single-channel
+/// gray whatever the document mode (the mode only changes the colour layer, which each case asserts
+/// stays untouched), and the depth does not interact with the mode, so the full cross product reaches
+/// no new code and ran a single test past nextest's 600 s limit on Windows (#15636).
+const MODE_DEPTHS: [(ColorMode, SampleType); 3] = [(ColorMode::Rgb, SampleType::U8), (ColorMode::Cmyk, SampleType::U16), (ColorMode::Lab, SampleType::F32)];
+/// [`MODE_DEPTHS`] plus a grayscale document, for the tests that also cover gray documents.
+const GRAY_MODE_DEPTHS: [(ColorMode, SampleType); 4] =
+    [(ColorMode::Rgb, SampleType::U8), (ColorMode::Cmyk, SampleType::U16), (ColorMode::Lab, SampleType::F32), (ColorMode::Grayscale, SampleType::U16)];
 
 /// The keys the hosted adjustment dialog lists beside its engine parameters.
 const DIALOG_STATE: [&str; 4] = ["preview", "picker", "channel", "clipping"];
@@ -68,26 +76,28 @@ fn value(app: &PhotocraftApp, target: ChannelTarget) -> f32 {
 }
 
 /// Render real modal controls with accessibility enabled for input-driven assertions.
+/// The app's context is set up already ([`PhotocraftApp::new`]).
 fn harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
-    let h = Harness::builder().with_context(app.ctx().clone()).with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| dialogs::run(app, ui), app);
-    PhotocraftApp::setup_context(&h.ctx, Default::default());
-    h
+    Harness::builder().with_context(app.ctx().clone()).with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| dialogs::run(app, ui), app)
 }
 
-/// The whole app, canvas included: the pointer requests of a picker's samples reach the canvas pass only here.
-fn canvas_harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
-    // The app keeps the context it was made on: the harness runs the frames on it, so the canvas the app reads is the one drawn.
-    let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(egui::vec2(1200.0, 900.0)).with_max_steps(64).build_eframe(move |cc| {
-        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        app
-    });
+/// The document canvas and the dialogs over it: a picker's samples are pointer requests the canvas pass takes, as in
+/// the app. The rest of the window (panels, menus, bars) plays no part in sampling, so it is left out.
+fn canvas_harness(mut app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
+    // The window's frame keeps a view per document; the canvas alone draws the views it is given.
+    app.sync_views();
+    let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(egui::vec2(1200.0, 900.0)).with_max_steps(64).build_ui_state(
+        |ui, app| {
+            egui::CentralPanel::default().show(ui, |ui| photocraft_ui_egui::canvas::document_area(app, ui));
+            dialogs::run(app, ui);
+        },
+        app,
+    );
     h.run_steps(3);
-    // A 32 px document at 100 % sits under the dialog's centred window, which stops the picker's press: zoom to 12x so the left part of the image lies clear of the dialog (no animation, so the view is final at once).
-    h.state_mut().run("prefs.set", json!({"values": {"general.animatedZoom": false}})).unwrap();
-    for _ in 0..8 {
-        h.state_mut().run("view.zoomIn", json!({})).unwrap();
-        h.run_steps(2);
-    }
+    // The dialog's window is centred and stops a press under it: at 12x with the view centred right of the 32 px image,
+    // the image's top-left part lies clear of the dialog, at the canvas's left.
+    let reply = control(&mut h, "ui.set", json!({"zoom": 12, "center": [38, 16]}));
+    assert_eq!(reply["ok"], true, "the view zooms: {reply}");
     h
 }
 
@@ -411,36 +421,34 @@ fn levels_auto_uses_the_selected_colour_channels_histogram() {
 #[test]
 fn grayscale_picker_controls_sample_the_plane_and_change_the_visible_curve() {
     for kind in ["curves", "levels"] {
-        for mode in GRAY_TARGET_MODES {
-            for depth in DEPTHS {
-                for target in TARGETS {
-                    let mut h = open_on_canvas(fixture(mode, depth, target), kind);
-                    assert!(h.get_by_label("Set Neutral Gray Point").accesskit_node().is_disabled());
-                    assert!(!h.get_by_label("Set White Point").accesskit_node().is_disabled());
-                    h.get_by_label("Set White Point").click();
-                    h.run_steps(2);
-                    assert!(picker_armed(&h));
-                    let before = params(&h);
-                    let original = h.state().session.active().unwrap().doc.clone();
-                    sample_at(&mut h, 4.0, 4.0);
-                    let after = params(&h);
-                    let key = if kind == "curves" { "points" } else { "inWhite" };
-                    assert_ne!(before[key], after[key], "{kind} {mode:?} {depth:?} {target:?}");
-                    let sampled_level = if kind == "curves" {
-                        after["points"].as_array().unwrap().last().unwrap()[0].as_f64().unwrap()
-                    } else {
-                        after["inWhite"].as_f64().unwrap()
-                    };
-                    assert!((sampled_level - 63.75).abs() < 0.3, "sample the plane's 25% gray, not the colour layer: {after}");
-                    for key in ["red", "green", "blue"] {
-                        assert_eq!(before[key], after[key], "hidden {key} must not change");
-                    }
-                    assert!(std::sync::Arc::ptr_eq(&original, &h.state().session.active().unwrap().doc));
-                    let id = top(&h);
-                    confirm(&mut h, id).unwrap();
-                    assert!(value(h.state(), target) > 0.99, "{kind} {mode:?} {depth:?} {target:?}");
-                    assert_eq!(h.state().session.active().unwrap().doc.layers[0].content, original.layers[0].content);
+        for (mode, depth) in GRAY_MODE_DEPTHS {
+            for target in TARGETS {
+                let mut h = open_on_canvas(fixture(mode, depth, target), kind);
+                assert!(h.get_by_label("Set Neutral Gray Point").accesskit_node().is_disabled());
+                assert!(!h.get_by_label("Set White Point").accesskit_node().is_disabled());
+                h.get_by_label("Set White Point").click();
+                h.run_steps(2);
+                assert!(picker_armed(&h));
+                let before = params(&h);
+                let original = h.state().session.active().unwrap().doc.clone();
+                sample_at(&mut h, 4.0, 4.0);
+                let after = params(&h);
+                let key = if kind == "curves" { "points" } else { "inWhite" };
+                assert_ne!(before[key], after[key], "{kind} {mode:?} {depth:?} {target:?}");
+                let sampled_level = if kind == "curves" {
+                    after["points"].as_array().unwrap().last().unwrap()[0].as_f64().unwrap()
+                } else {
+                    after["inWhite"].as_f64().unwrap()
+                };
+                assert!((sampled_level - 63.75).abs() < 0.3, "sample the plane's 25% gray, not the colour layer: {after}");
+                for key in ["red", "green", "blue"] {
+                    assert_eq!(before[key], after[key], "hidden {key} must not change");
                 }
+                assert!(std::sync::Arc::ptr_eq(&original, &h.state().session.active().unwrap().doc));
+                let id = top(&h);
+                confirm(&mut h, id).unwrap();
+                assert!(value(h.state(), target) > 0.99, "{kind} {mode:?} {depth:?} {target:?}");
+                assert_eq!(h.state().session.active().unwrap().doc.layers[0].content, original.layers[0].content);
             }
         }
     }
@@ -895,38 +903,36 @@ fn filter_mask_fixture(mode: ColorMode, depth: SampleType, stored: bool) -> Box<
 /// New upstream filter masks use the same scalar controls, picker and preserved targeting in every document space.
 #[test]
 fn filter_mask_tone_dialogs_preserve_the_target_and_sample_its_own_levels() {
-    for mode in GRAY_TARGET_MODES {
-        for depth in DEPTHS {
-            for kind in ["levels", "curves"] {
-                for stored in [false, true] {
-                    let app = filter_mask_fixture(mode, depth, stored);
-                    let st = app.session.active().unwrap();
-                    let layer = st.active_layer.unwrap();
-                    let expected_name = format!("{} Filter Mask", st.doc.layer(layer).unwrap().name);
-                    let before = st.doc.clone();
-                    let mut h = open_on_canvas(app, kind);
-                    assert_eq!(names(&h), [expected_name], "{mode:?} {depth:?} {kind}");
-                    assert_eq!(params(&h)["target"], "filterMask");
-                    let id = top(&h);
-                    arm(&mut h, "white");
-                    sample_at(&mut h, 4.0, 4.0);
-                    assert!(picker_armed(&h), "the picker stays armed on {mode:?} {depth:?} stored={stored}");
-                    assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.active().unwrap().doc), "sampling is read-only");
-                    assert_eq!(params(&h)["target"], "filterMask");
-                    if kind == "levels" {
-                        let expected = if stored { 64.0 } else { 255.0 };
-                        assert!((params(&h)["inWhite"].as_f64().unwrap() - expected).abs() < 1.0);
-                    }
-                    confirm(&mut h, id).unwrap();
-                    let after = &h.state().session.active().unwrap().doc;
-                    let LayerContent::Smart(old) = &before.layer(layer).unwrap().content else { panic!("smart fixture") };
-                    let LayerContent::Smart(new) = &after.layer(layer).unwrap().content else { panic!("smart result") };
-                    assert_eq!(new.smart_filters, old.smart_filters, "the adjustment edits the mask rather than adding a filter");
-                    assert_eq!(new.source, old.source);
-                    assert_eq!(after.channels, before.channels);
-                    assert_eq!(after.layer(layer).unwrap().mask, before.layer(layer).unwrap().mask);
-                    assert!(new.filter_mask.as_ref().unwrap().surface.sample_channel(8, 8, 0) > 0.99);
+    for (mode, depth) in GRAY_MODE_DEPTHS {
+        for kind in ["levels", "curves"] {
+            for stored in [false, true] {
+                let app = filter_mask_fixture(mode, depth, stored);
+                let st = app.session.active().unwrap();
+                let layer = st.active_layer.unwrap();
+                let expected_name = format!("{} Filter Mask", st.doc.layer(layer).unwrap().name);
+                let before = st.doc.clone();
+                let mut h = open_on_canvas(app, kind);
+                assert_eq!(names(&h), [expected_name], "{mode:?} {depth:?} {kind}");
+                assert_eq!(params(&h)["target"], "filterMask");
+                let id = top(&h);
+                arm(&mut h, "white");
+                sample_at(&mut h, 4.0, 4.0);
+                assert!(picker_armed(&h), "the picker stays armed on {mode:?} {depth:?} stored={stored}");
+                assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.active().unwrap().doc), "sampling is read-only");
+                assert_eq!(params(&h)["target"], "filterMask");
+                if kind == "levels" {
+                    let expected = if stored { 64.0 } else { 255.0 };
+                    assert!((params(&h)["inWhite"].as_f64().unwrap() - expected).abs() < 1.0);
                 }
+                confirm(&mut h, id).unwrap();
+                let after = &h.state().session.active().unwrap().doc;
+                let LayerContent::Smart(old) = &before.layer(layer).unwrap().content else { panic!("smart fixture") };
+                let LayerContent::Smart(new) = &after.layer(layer).unwrap().content else { panic!("smart result") };
+                assert_eq!(new.smart_filters, old.smart_filters, "the adjustment edits the mask rather than adding a filter");
+                assert_eq!(new.source, old.source);
+                assert_eq!(after.channels, before.channels);
+                assert_eq!(after.layer(layer).unwrap().mask, before.layer(layer).unwrap().mask);
+                assert!(new.filter_mask.as_ref().unwrap().surface.sample_channel(8, 8, 0) > 0.99);
             }
         }
     }
@@ -1119,49 +1125,47 @@ fn addressed_mask_app(mode: ColorMode, depth: SampleType, filter: bool) -> (Box<
 /// switching the selected layer. The matrix includes native raster and Smart Filter masks.
 #[test]
 fn review_mask_action_context_matches_the_addressed_layer() {
-    for mode in MODES {
-        for depth in DEPTHS {
-            for kind in ["levels", "curves"] {
-                for filter in [false, true] {
-                    let (app, layer) = addressed_mask_app(mode, depth, filter);
-                    for selector in [json!(layer.0), json!("Receiver"), json!({"name":"Receiver"})] {
-                        let mut app = fixture_for_addressed_replay(&app);
-                        let command = format!("image.adjustments.{kind}");
-                        let target = if filter { "filterMask" } else { "mask" };
-                        let raw = json!({"layer":selector,"target":target});
-                        add_action(&mut app, "Other mask", command.clone(), raw, true);
-                        let original = app.session.active().unwrap().doc.clone();
-                        let active = app.session.active().unwrap().active_layer;
-                        let expected =
-                            photocraft_engine::mask_view_cmds::viewed_mask(original.layer(layer).unwrap(), filter).unwrap().surface.sample_channel(8, 8, 0);
-                        let mut h = canvas_harness(app);
-                        play(&mut h, "Other mask");
-                        assert_eq!(names(&h), [if filter { "Receiver Filter Mask" } else { "Receiver Mask" }]);
-                        let id = top(&h);
-                        arm(&mut h, "white");
-                        sample_at(&mut h, 4.0, 4.0);
-                        let p = params(&h);
-                        let want = photocraft_engine::adjust_params::adjustment_eyedropper(
-                            kind,
-                            &json!({}),
-                            photocraft_engine::adjust_params::CurvesEyedropper::White,
-                            [expected; 3],
-                            ColorMode::Grayscale,
-                        )
-                        .unwrap();
-                        let got = photocraft_engine::adjust_params::from_params(kind, &p, None, ColorMode::Grayscale).unwrap();
-                        assert_eq!(got, want, "{mode:?} {depth:?} {kind} {target}");
-                        let preview = filter_dialog::preview_document(&original, active, &command, &p, 1).unwrap();
-                        confirm(&mut h, id).unwrap();
-                        let doc = &h.state().session.active().unwrap().doc;
-                        assert_eq!(doc.layers, preview.layers);
-                        assert_eq!(doc.layers[0], original.layers[0]);
-                        assert_eq!(doc.channels, original.channels);
-                        assert!(
-                            photocraft_engine::mask_view_cmds::viewed_mask(doc.layer(layer).unwrap(), filter).unwrap().surface.sample_channel(8, 8, 0) > 0.99
-                        );
-                        assert_eq!(h.state().session.active().unwrap().active_layer, active);
-                    }
+    for (pair, (mode, depth)) in MODE_DEPTHS.into_iter().enumerate() {
+        for kind in ["levels", "curves"] {
+            for filter in [false, true] {
+                let (app, layer) = addressed_mask_app(mode, depth, filter);
+                // Resolving the address does not depend on the mode or depth: every selector form on the first pair.
+                let selectors = [json!(layer.0), json!("Receiver"), json!({"name":"Receiver"})];
+                for selector in selectors.into_iter().take(if pair == 0 { 3 } else { 1 }) {
+                    let mut app = fixture_for_addressed_replay(&app);
+                    let command = format!("image.adjustments.{kind}");
+                    let target = if filter { "filterMask" } else { "mask" };
+                    let raw = json!({"layer":selector,"target":target});
+                    add_action(&mut app, "Other mask", command.clone(), raw, true);
+                    let original = app.session.active().unwrap().doc.clone();
+                    let active = app.session.active().unwrap().active_layer;
+                    let expected =
+                        photocraft_engine::mask_view_cmds::viewed_mask(original.layer(layer).unwrap(), filter).unwrap().surface.sample_channel(8, 8, 0);
+                    let mut h = canvas_harness(app);
+                    play(&mut h, "Other mask");
+                    assert_eq!(names(&h), [if filter { "Receiver Filter Mask" } else { "Receiver Mask" }]);
+                    let id = top(&h);
+                    arm(&mut h, "white");
+                    sample_at(&mut h, 4.0, 4.0);
+                    let p = params(&h);
+                    let want = photocraft_engine::adjust_params::adjustment_eyedropper(
+                        kind,
+                        &json!({}),
+                        photocraft_engine::adjust_params::CurvesEyedropper::White,
+                        [expected; 3],
+                        ColorMode::Grayscale,
+                    )
+                    .unwrap();
+                    let got = photocraft_engine::adjust_params::from_params(kind, &p, None, ColorMode::Grayscale).unwrap();
+                    assert_eq!(got, want, "{mode:?} {depth:?} {kind} {target}");
+                    let preview = filter_dialog::preview_document(&original, active, &command, &p, 1).unwrap();
+                    confirm(&mut h, id).unwrap();
+                    let doc = &h.state().session.active().unwrap().doc;
+                    assert_eq!(doc.layers, preview.layers);
+                    assert_eq!(doc.layers[0], original.layers[0]);
+                    assert_eq!(doc.channels, original.channels);
+                    assert!(photocraft_engine::mask_view_cmds::viewed_mask(doc.layer(layer).unwrap(), filter).unwrap().surface.sample_channel(8, 8, 0) > 0.99);
+                    assert_eq!(h.state().session.active().unwrap().active_layer, active);
                 }
             }
         }

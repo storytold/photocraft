@@ -9,7 +9,7 @@ use photocraft_plugins::{Error, Limits, Plugin};
 use photocraft_raster::Surface;
 use serde_json::json;
 
-const INVERT: &[u8] = include_bytes!("fixtures/invert.wasm");
+const INVERT: &[u8] = include_bytes!("../fixtures/invert.wasm");
 
 /// A module implementing the ABI whose pieces can be swapped: `manifest` JSON, `version`,
 /// `filter` body (params `$buf $len $w $h $ch $fmt $pp $pl`, result i32) and extra items.

@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 #[test]
 fn scratch_pixels_history_and_failed_save_are_transactional() {
+    let _scratch = crate::lock(&crate::PROCESS);
     let dir = std::env::temp_dir().join(format!("photocraft-engine-scratch-{}", std::process::id()));
     let mut session = Session::new();
     session.edit_prefs(|p| {
