@@ -175,7 +175,6 @@ mod type_indexed_mode_tests;
 pub mod type_mask_cmds;
 pub mod type_spell_cmds;
 pub mod type_styles_cmds;
-pub mod updates_cmds;
 pub(super) mod variables_cmds;
 mod vector_clipboard;
 pub mod vector_cmds;
@@ -382,7 +381,7 @@ fn build() -> Vec<CommandSpec> {
             "edit.clear",
             "Clear",
             ["Edit"],
-            Some("Delete"),
+            None,
             r##"{"target":"mask"|{"color":i}|{"colors":[i,…]}?=Channels panel target,"layer":id|name?=active} (a targeted mask, channel or Quick Mask is cleared alone)"##,
             has_pixel_or_channel,
             |s, p| {
@@ -652,7 +651,7 @@ fn build() -> Vec<CommandSpec> {
             "Select Layer",
             [],
             None,
-            r##"{"layer":id|str|{"index":uint}|{"ordinal":"Trgt|Frwr|Bckw|Frnt|Back"} | "name":str,"occurrence":index?,"mode":"replace|toggle|range|add|remove"="replace"} (typed references use the recorded full layer stack; name occurrence: zero-based document walk order; required for duplicate names; toggle = ⌘-click, range = ⇧-click, remove = deselect it, keeping at least one)"##,
+            r##"{"layer":id|str|{"index":uint}|{"ordinal":"Trgt|Frwr|Bckw|Frnt|Back"} | "name":str,"occurrence":index?,"mode":"replace|toggle|range|add|remove"="replace"} | {"layers":[id,…]} (layers: exactly these selected, the last active; typed references use the recorded full layer stack; name occurrence: zero-based document walk order; required for duplicate names; toggle = ⌘-click, range = ⇧-click, remove = deselect it, keeping at least one)"##,
             has_doc,
             crate::layer_multi_cmds::select
         ),
@@ -1401,7 +1400,6 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::layer_multi_cmds::specs());
     v.extend(crate::layer_copy_cmds::specs());
     v.extend(crate::prefs::specs());
-    v.extend(crate::updates_cmds::specs());
     v.extend(crate::edit_menu_cmds::specs());
     v.extend(crate::fill_key_cmds::specs());
     v.extend(crate::sample_cmds::specs());

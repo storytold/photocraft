@@ -101,7 +101,7 @@ fn tip_decoder_rejects_garbage() {
             })
             .collect();
         let _ = decode_tip(&v);
-        let mut w = TIP_MAGIC.to_vec();
+        let mut w = b"PCTIP1".to_vec();
         w.extend_from_slice(&v);
         let _ = decode_tip(&w);
     }
@@ -397,7 +397,7 @@ fn a_store_directory_that_does_not_exist_yet_opens_without_warnings() {
     assert!(!dir.exists());
     let opened = open_dir(&dir);
     assert!(opened.warnings.is_empty(), "{:?}", opened.warnings);
-    assert!(opened.actions.is_empty());
+    assert!(opened.actions.actions().is_empty());
     let err = DirBackend::new(&dir).read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap_err();
     assert!(missing_file(&err), "{err}");
 }
@@ -713,6 +713,34 @@ fn an_actions_file_that_failed_to_load_is_not_overwritten() {
     s.sync_preset_store();
     assert_eq!(mem.files.lock().unwrap().get(ACTIONS_FILE), Some(&newer), "an actions file the store could not read was overwritten");
     assert!(!s.preset_store.as_mut().unwrap().take_warnings().is_empty());
+}
+
+// A PhotoCraft actions file that keyed calls and shortcuts by stored action id loads with names
+// only: the calls and the `actions.playById:<id>` keys move to the names loading gave the ids, and
+// the file is written back once without them.
+#[test]
+fn stored_action_ids_move_to_names_on_load() {
+    let id = "0123456789abcdef0123456789abcdef";
+    let mem = MemBackend::default();
+    let file = format!(
+        r#"{{"version":1,"actions":[
+            {{"name":"Same","steps":[],"legacy_shortcut_owner":true}},
+            {{"name":"Same","steps":[],"action_id":"{id}"}},
+            {{"name":"Caller","steps":[["actions.play",{{"action":"Same","actionId":"{id}"}}]]}}]}}"#
+    );
+    mem.files.lock().unwrap().insert(ACTIONS_FILE.into(), file.into_bytes());
+    let mut s = Session::new();
+    s.edit_prefs(|prefs| {
+        prefs.shortcuts.insert(format!("actions.playById:{id}"), "F6".into());
+    });
+    s.attach_preset_store(open(Box::new(mem.clone())));
+    let names: Vec<&str> = s.actions.list.actions().iter().map(|action| action.name.as_str()).collect();
+    assert_eq!(names, ["Same", "Same 2", "Caller"]);
+    assert_eq!(s.actions.list.actions()[2].steps[0].params, json!({"action": "Same 2"}));
+    assert_eq!(s.prefs().shortcuts.get("actions.play:Same 2").map(String::as_str), Some("F6"));
+    assert!(!s.prefs().shortcuts.keys().any(|key| key.starts_with("actions.playById:")));
+    let saved = String::from_utf8(mem.files.lock().unwrap()[ACTIONS_FILE].clone()).unwrap();
+    assert!(!saved.contains(id), "{saved}");
 }
 
 /// A large pattern opens as a small preview (texture libraries run to gigabytes) and is read at
@@ -1153,4 +1181,15 @@ fn a_symlinked_preset_entry_is_refused_not_written_through() {
     assert_eq!(std::fs::read(&outside).unwrap(), b"victim");
     be.write("fresh.json", b"{}").unwrap();
     assert_eq!(be.read("fresh.json", 1024).unwrap(), b"{}");
+}
+
+#[test]
+fn tip_adapter_matches_shared_codec_and_keeps_preview_limit() {
+    for t in [tip8(37, 21, 3), tip16(40, 33, 9)] {
+        let shared = craft_pcraft_tip::tip::encode(t.width, t.height, &t.data);
+        assert_eq!(encode_tip(&t), shared);
+        assert_eq!(decode_tip(&shared).unwrap(), t);
+        assert!(decode_tip_max(&shared, t.width - 1).is_err());
+        assert_eq!(decode_tip_max(&shared, t.width).unwrap(), t);
+    }
 }
