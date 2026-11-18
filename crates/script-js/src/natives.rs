@@ -49,7 +49,8 @@ pub(crate) fn error(message: impl Into<String>) -> JsError {
 /// A catchable `Error` with a `number` existing scripts read, e.g. 1302 when no document is active.
 pub(crate) fn error_with_number(ctx: &mut Context, message: impl Into<String>, number: i32) -> JsError {
     let obj = JsNativeError::error().with_message(message.into()).into_opaque(ctx);
-    match obj.set(js_string!("number"), number, true, ctx) {
+    // Defined, not assigned: a setter on `Error.prototype` must not take the value or throw.
+    match obj.create_data_property_or_throw(js_string!("number"), number, ctx) {
         Ok(_) => JsError::from_opaque(obj.into()),
         Err(e) => e,
     }
@@ -215,10 +216,14 @@ fn prompt(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue>
 fn writeln(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let line = value::texts(args, ctx)?.concat();
     if let Err(at) = begin(ctx, Call::Output(line.clone()))? {
-        let s = shared(ctx)?;
-        let mut st = s.borrow_mut();
-        st.host.write_line(&line);
-        st.tape.finish(at, Outcome::Return(Value::Null));
+        {
+            let s = shared(ctx)?;
+            let mut st = s.borrow_mut();
+            st.host.write_line(&line);
+            st.tape.finish(at, Outcome::Return(Value::Null));
+        }
+        // The write's own time counts too, also when it is the script's last act.
+        checkpoint(ctx)?;
     }
     Ok(JsValue::undefined())
 }

@@ -185,7 +185,7 @@ fn layer_sel(
             v["smartContents"] = json!({"id": sm.contents_id.0, "instances": instances.get(&sm.contents_id).copied().unwrap_or(1)});
         }
         LayerContent::Text(t) => {
-            v["text"] = json!({"text": t.text, "font": t.font_family, "sizePt": t.size_pt});
+            v["text"] = json!({"text": t.text, "font": t.font_family, "sizePt": t.size_pt, "transform": t.transform.m});
             if detail {
                 v["text"]["antialias"] = serde_json::to_value(t.antialias).unwrap_or(Value::Null);
                 v["text"]["runs"] = serde_json::to_value(t.char_runs()).unwrap_or(Value::Null);

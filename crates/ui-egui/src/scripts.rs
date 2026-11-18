@@ -157,6 +157,9 @@ impl RunBudget {
 struct AppCommands<'a> {
     app: &'a mut PhotocraftApp,
     automation: bool,
+    /// Started by automation under an agent policy: with that policy gone (the agent link
+    /// stopped), its commands are refused rather than run without one.
+    gated: bool,
     budget: &'a mut RunBudget,
 }
 
@@ -195,6 +198,9 @@ impl ScriptCommands for AppCommands<'_> {
             }
             return Ok(Value::Null);
         }
+        if self.gated && self.app.services.automation_command.is_none() && self.app.services.automation_authorize.is_none() {
+            return Err("the agent link that started this script has stopped".into());
+        }
         let target = params.as_object_mut().and_then(|m| m.remove(ON_DOCUMENT)).and_then(|v| v.as_u64());
         let copies = self.copies(id, target, &params);
         self.budget.charge(id, copies)?;
@@ -204,7 +210,11 @@ impl ScriptCommands for AppCommands<'_> {
             if let Some(serial) = target
                 && !self.app.session.active().is_some_and(|d| d.serial == serial)
             {
-                self.app.run("document.activate", json!({ "serial": serial })).map_err(|_| "the document is no longer open".to_owned())?;
+                if !self.app.session.documents().iter().any(|d| d.serial == serial) {
+                    return Err("the document is no longer open".to_owned());
+                }
+                // Refused for another reason (automation's policy): that reason, not a closed document.
+                self.app.run("document.activate", json!({ "serial": serial }))?;
             }
             self.app.run(id, params)
         })();
@@ -262,6 +272,8 @@ struct Active {
     resume: Option<u64>,
     /// Started by automation input (MCP, the control channel): its commands keep that gate.
     automation: bool,
+    /// Started by automation while an agent policy was installed (see [`AppCommands::gated`]).
+    gated: bool,
     /// What it has asked of the app so far.
     budget: RunBudget,
     started_ms: f64,
@@ -315,6 +327,7 @@ pub(crate) fn start(app: &mut PhotocraftApp, start: ScriptStart, resume: Option<
     app.scripts.last_id += 1;
     let id = app.scripts.last_id;
     let automation = app.automation_input;
+    let gated = automation && (app.services.automation_command.is_some() || app.services.automation_authorize.is_some());
     app.scripts.run = Some(Active {
         id,
         run,
@@ -323,6 +336,7 @@ pub(crate) fn start(app: &mut PhotocraftApp, start: ScriptStart, resume: Option<
         windows: BTreeMap::new(),
         resume,
         automation,
+        gated,
         budget: RunBudget::default(),
         started_ms: crate::gpu_canvas::now_ms(),
         busy_since_ms: None,
@@ -486,10 +500,10 @@ pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let kept = last.clone();
     let pump = move |app: &mut PhotocraftApp| {
         let Some(mut active) = app.scripts.run.take() else { return Vec::new() };
-        let automation = active.automation;
+        let (automation, gated) = (active.automation, active.gated);
         app.scripts.pumping = true;
         let pumped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            active.run.pump(&mut AppCommands { app: &mut *app, automation, budget: &mut active.budget }, PUMP_BUDGET)
+            active.run.pump(&mut AppCommands { app: &mut *app, automation, gated, budget: &mut active.budget }, PUMP_BUDGET)
         }));
         app.scripts.pumping = false;
         let events = match pumped {
@@ -815,7 +829,8 @@ fn dialog(ctx: &egui::Context, open: &mut Open) -> Option<Value> {
             });
             if esc {
                 chosen = Some(false);
-            } else if enter {
+            } else if enter && chosen.is_none() {
+                // Enter on a focused button clicks it; the default is for Enter elsewhere.
                 chosen = Some(!no_default);
             }
             chosen.map(Value::Bool)

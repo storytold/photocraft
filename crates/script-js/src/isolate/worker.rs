@@ -12,7 +12,7 @@
 //! - two `Int32` slots, the state ([`EMPTY`] or [`FULL`]) and the answer's length in bytes;
 //! - then the answer's bytes, JSON text of a [`ToHost`].
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use js_sys::{Atomics, Int32Array, Object, Reflect, SharedArrayBuffer, Uint8Array};
@@ -42,6 +42,21 @@ const READY: &str = "ready";
 /// (a missing or blocked file) reports nothing to the page, so without this the run would sit
 /// until its time limit.
 const START_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// When a Worker was started: by the clock, and by the page's clock that stamps its messages
+/// (`performance.now()`, `None` where there is none to read).
+#[derive(Clone, Copy)]
+struct Started {
+    at: web_time::Instant,
+    page_ms: Option<f64>,
+}
+
+/// `performance.now()`: the clock a message event's `timeStamp` is on.
+fn page_now() -> Option<f64> {
+    let performance = Reflect::get(&js_sys::global(), &JsValue::from_str("performance")).ok()?;
+    let now: js_sys::Function = Reflect::get(&performance, &JsValue::from_str("now")).ok()?.dyn_into().ok()?;
+    now.call0(&performance).ok()?.as_f64()
+}
 
 /// Why scripts can't run in this page.
 pub const NOT_ISOLATED: &str = "Scripts need a page served with cross-origin isolation (the COOP and COEP headers); \
@@ -132,8 +147,9 @@ pub struct WorkerTransport {
     mailbox: SharedArrayBuffer,
     state: Int32Array,
     body: Uint8Array,
-    /// When the Worker was started, until it says it listens ([`START_LIMIT`]).
-    starting: Option<web_time::Instant>,
+    /// When the Worker was started, until it says it listens ([`START_LIMIT`]). Shared with the
+    /// message handler, which doesn't send the start message once the limit has passed.
+    starting: Rc<Cell<Option<Started>>>,
     _on_message: Closure<dyn FnMut(MessageEvent)>,
     _on_error: Closure<dyn FnMut(Event)>,
 }
@@ -148,14 +164,26 @@ impl WorkerTransport {
         if !cross_origin_isolated() {
             return Err(NOT_ISOLATED.into());
         }
+        // Allocated first: a browser can refuse 32 MiB of shared memory, and nothing is started yet
+        // to clean up then.
+        let mailbox: SharedArrayBuffer =
+            Reflect::construct(&SharedArrayBuffer::new(0).constructor(), &js_sys::Array::of1(&JsValue::from(HEADER + MAILBOX_BYTES)))
+                .map_err(|e| format!("Couldn't reserve the script mailbox: {}", describe(&e)))?
+                .unchecked_into();
         let worker = Worker::new(url).map_err(|e| format!("Couldn't start the script Worker: {}", describe(&e)))?;
         let inbox: Rc<RefCell<Vec<Incoming>>> = Rc::default();
         let pending: Rc<RefCell<Option<Object>>> = Rc::default();
+        let starting: Rc<Cell<Option<Started>>> = Rc::default();
         let on_message = {
-            let (inbox, pending, worker) = (inbox.clone(), pending.clone(), worker.clone());
+            let (inbox, pending, worker, starting) = (inbox.clone(), pending.clone(), worker.clone(), starting.clone());
             Closure::<dyn FnMut(MessageEvent)>::new(move |event: MessageEvent| {
                 let incoming = match event.data().as_string() {
                     Some(text) if text == READY => {
+                        // Too late by when it arrived (not when the page got to it: a busy page
+                        // handles messages late): left pending, so `take` reports the start limit.
+                        if starting.get().and_then(|s| s.page_ms).is_some_and(|ms| event.time_stamp() - ms > START_LIMIT.as_secs_f64() * 1000.0) {
+                            return;
+                        }
                         if let Some(start) = pending.borrow_mut().take()
                             && let Err(e) = worker.post_message(&start)
                         {
@@ -186,10 +214,9 @@ impl WorkerTransport {
         };
         worker.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
         worker.set_onerror(Some(on_error.as_ref().unchecked_ref()));
-        let mailbox = SharedArrayBuffer::new(HEADER + MAILBOX_BYTES);
         let state = Int32Array::new_with_byte_offset_and_length(&mailbox, 0, 2);
         let body = Uint8Array::new_with_byte_offset(&mailbox, HEADER);
-        Ok(Self { worker, inbox, pending, mailbox, state, body, starting: None, _on_message: on_message, _on_error: on_error })
+        Ok(Self { worker, inbox, pending, mailbox, state, body, starting, _on_message: on_message, _on_error: on_error })
     }
 }
 
@@ -206,7 +233,7 @@ impl Transport for WorkerTransport {
         Reflect::set(&msg, &JsValue::from_str("mailbox"), &self.mailbox).map_err(|e| describe(&e))?;
         // Sent when the Worker says it listens (see `READY`).
         *self.pending.borrow_mut() = Some(msg);
-        self.starting = Some(web_time::Instant::now());
+        self.starting.set(Some(Started { at: web_time::Instant::now(), page_ms: page_now() }));
         Ok(())
     }
 
@@ -214,9 +241,10 @@ impl Transport for WorkerTransport {
         let mut taken = std::mem::take(&mut *self.inbox.borrow_mut());
         if self.pending.borrow().is_none() {
             // It said it listens: the start message went out.
-            self.starting = None;
-        } else if self.starting.is_some_and(|t| t.elapsed() > START_LIMIT) {
-            self.starting = None;
+            self.starting.set(None);
+        } else if self.starting.get().is_some_and(|s| s.at.elapsed() > START_LIMIT) {
+            self.starting.set(None);
+            self.pending.borrow_mut().take();
             taken.push(Incoming::Unavailable(format!("the script Worker didn't start within {} s", START_LIMIT.as_secs())));
         }
         taken

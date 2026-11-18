@@ -36,8 +36,12 @@ waits for each answer in shared memory (`Atomics.wait`), so a run continues wher
 command or a dialog, as on the desktop. The page checks every message as it arrives: the command
 and its parameters, dialogs, windows, the per-run bounds, and a Worker that sends while it should
 wait. The page counts the run's time from the messages' arrival, with the clock stopped while
-the Worker waits, so a hidden tab drawing no frames does not eat a run's time, and terminates the
-Worker at the limit. A crash in the Worker (a failed allocation, a stack overflow, an engine
+the Worker waits, so a hidden tab drawing no frames does not eat a run's time. It checks the
+limit each time it polls the run, every frame while one runs, and terminates the Worker on the
+first poll past it; while the page draws no frames the Worker can compute on past the limit
+until the next one. A poll checks at most 64 of the Worker's messages, so a large batch is spread
+over frames; while some wait, each is checked against the limit by when it arrived, and the run
+clock is read again once they are through. A crash in the Worker (a failed allocation, a stack overflow, an engine
 panic) ends that run only. The Worker's stack in its memory is 64 MiB, as the script host's; the browser's own call stack still limits how deeply a script nests there, a little less deeply than on the desktop. A command's answer to
 a script holds at most 32 MiB there (the shared memory the Worker reads it from).
 
@@ -79,6 +83,17 @@ it also refuses a target that is a link (or, on Windows, a junction or other rep
 on Windows, a name with an alternate data stream (`photo.png:hidden`). A race remains: another
 program that swaps a granted file for a link between the check and the write redirects the write.
 A script has no other way to touch the file system, so it can't arrange that by itself.
+
+In the browser a script can't save at all: the browser's file and folder pickers give back a bare
+name (`out.png`), not a path, and a bare name grants nothing, so a save after the picker fails.
+
+## Scripts that check the app's name
+
+`app.name` is "PhotoCraft" and `app.version` is "15.0.0", the scripting interface's
+compatibility level, so version checks pass. Many published scripts also refuse to run unless
+`app.name` matches the application they were written for. For those, give the script a tag in the
+Scripts Manager: a listed script's first tag is what it sees as `app.name` when run from the
+list, so the check passes and nothing else about the run changes.
 
 ## Actions and replays
 

@@ -232,10 +232,16 @@ sample `_headers`, `.htaccess` and `nginx.conf` do. Without them the app works t
 script refuses to start and says these headers are missing.
 
 - With COEP `require-corp`, anything the page loads from another origin needs
-  `Cross-Origin-Resource-Policy`. PhotoCraft loads nothing from other origins; when its own files
-  live on a CDN, send `Cross-Origin-Resource-Policy: cross-origin` on them.
-- In an iframe, scripts need the embedding page to send the same two headers, the iframe to have
-  `allow="cross-origin-isolated"`, and, when the app is on another origin than the embedding page,
+  `Cross-Origin-Resource-Policy`. PhotoCraft loads nothing from other origins. The simplest CDN
+  setup serves the whole site from one CDN origin, which keeps every file same-origin. Splitting
+  it across origins needs more: the app's modules (`.js`) and the files the boot module
+  fetches (`app/parts.txt` and the wasm parts) from another origin need CORS
+  (`Access-Control-Allow-Origin`) as well as `Cross-Origin-Resource-Policy: cross-origin`, and the
+  three `photocraft-script-worker*` files must stay on the page's own origin, since the page
+  starts the Worker from a relative URL and a Worker can't come from another origin.
+- In an iframe, scripts need the embedding page to send the same two headers, the iframe to add
+  `cross-origin-isolated` to its `allow` list (with the example above,
+  `allow="fullscreen; clipboard-read; clipboard-write; cross-origin-isolated"`), and, when the app is on another origin than the embedding page,
   `Cross-Origin-Resource-Policy: cross-origin` on the app's files (an isolated page embeds only
   documents that allow it). Without these the app still works in the iframe, without scripts;
   but an embedding page that is isolated and gets no such header from the app can't show the app

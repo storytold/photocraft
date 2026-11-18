@@ -60,9 +60,15 @@ fn drive(job: &mut IsolatedJob, mut session: Option<&mut Session>, answers: &[Va
         let Some(event) = job.poll(Duration::from_millis(20)) else { continue };
         each(job, &event);
         match event {
-            Event::Execute { id, params } => {
+            Event::Execute { id, mut params } => {
                 let result = match session.as_deref_mut() {
-                    Some(s) => s.execute(&id, params).map_err(|e| e.to_string()),
+                    // As the app does: the command's document is made active first.
+                    Some(s) => match params.as_object_mut().and_then(|m| m.remove(photocraft_script_js::commands::ON_DOCUMENT)).and_then(|v| v.as_u64()) {
+                        Some(serial) => {
+                            s.execute("document.activate", json!({ "serial": serial })).and_then(|_| s.execute(&id, params)).map_err(|e| e.to_string())
+                        }
+                        None => s.execute(&id, params).map_err(|e| e.to_string()),
+                    },
                     None => Ok(json!({"active": null, "documents": []})),
                 };
                 let _ = job.reply(Reply::Executed(result));
@@ -661,7 +667,13 @@ fn a_host_that_exits_while_a_descendant_holds_the_output_is_reported() {
 #[cfg(unix)]
 fn gone(pid: &str) -> bool {
     // `kill` must run: a failure to start it says nothing about the process.
-    let alive = || std::process::Command::new("kill").args(["-0", pid]).stderr(std::process::Stdio::null()).status().expect("kill runs").success();
+    let signalable = || std::process::Command::new("kill").args(["-0", pid]).stderr(std::process::Stdio::null()).status().expect("kill runs").success();
+    // On Linux a zombie still takes a signal, though it has stopped and closed its pipes; a
+    // container that is slow to reap orphans leaves one behind.
+    #[cfg(target_os = "linux")]
+    let alive = || signalable() && !pid.parse().is_ok_and(exited);
+    #[cfg(not(target_os = "linux"))]
+    let alive = signalable;
     let start = Instant::now();
     while alive() && start.elapsed() < Duration::from_secs(3) {
         std::thread::sleep(Duration::from_millis(50));
@@ -849,6 +861,22 @@ fn the_document_model_works_through_the_script_host() {
     assert_eq!(h, 2, "the run's edits are one History step after the new document");
 }
 
+/// A script edits the document it names, not whichever is active: with B active, selecting all
+/// in A changes A only.
+#[test]
+fn a_command_on_a_document_that_is_not_active_edits_that_document() {
+    let mut session = Session::new();
+    session.execute("file.new", json!({"width": 40, "height": 20, "name": "A"})).unwrap();
+    session.execute("file.new", json!({"width": 30, "height": 10, "name": "B"})).unwrap();
+    let src = "var a = app.documents[0]; app.activeDocument = app.documents[1]; a.selection.selectAll(); $.writeln(a.name);";
+    let mut job = IsolatedJob::spawn(src.into(), options("two-docs")).unwrap();
+    let seen = drive(&mut job, Some(&mut session), &[], |_, _| {});
+    assert_eq!(seen.result, Ok(()), "{:?}", seen.lines);
+    let selected = |s: &mut Session, i: usize| s.execute("document.inspect", json!({ "document": i })).unwrap()["hasSelection"] == json!(true);
+    assert!(selected(&mut session, 0), "A has the selection");
+    assert!(!selected(&mut session, 1), "B has none");
+}
+
 /// The script host is its own process: a parser stack overflow there is a named crash, so it
 /// runs deeply nested scripts the in-process guard would refuse.
 #[test]
@@ -948,6 +976,27 @@ fn an_answer_too_large_to_send_ends_the_run_with_the_reason() {
     let f = failure(&seen);
     assert_eq!(f.kind, FailureKind::Script, "{f}");
     assert!(f.message.contains("a dialog's answer could not be sent"), "{f}");
+}
+
+/// A command's result within the byte limit but with more values than the host reads is
+/// refused to the script as a command error, not sent to break the host's input.
+#[test]
+fn a_result_with_too_many_values_is_a_command_error() {
+    let src = "try { app.documents; $.writeln('sent') } catch (e) { $.writeln('refused ', e.message.indexOf('too large') >= 0) }";
+    let mut job = IsolatedJob::spawn(src.into(), options("many values")).unwrap();
+    let many = Value::Array(vec![json!(0); photocraft_script_js::isolate::protocol::MAX_FRAME_VALUES + 1]);
+    let (start, mut lines) = (Instant::now(), Vec::new());
+    let seen = loop {
+        assert!(start.elapsed() < Duration::from_secs(60), "the run never finished");
+        match job.poll(Duration::from_millis(20)) {
+            Some(Event::Execute { .. }) => job.reply(Reply::Executed(Ok(many.clone()))).unwrap(),
+            Some(Event::Finished(result)) => break result,
+            Some(Event::Output(line)) => lines.push(line),
+            _ => {}
+        }
+    };
+    assert_eq!(seen, Ok(()), "{lines:?}");
+    assert_eq!(lines, ["refused true"]);
 }
 
 /// Runaway recursion after an `await` ends the run by name: it must not finish as a success with

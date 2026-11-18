@@ -20,7 +20,9 @@ use std::collections::VecDeque;
 use serde_json::Value;
 use web_time::{Duration, Instant};
 
-use super::protocol::{FromHost, MAX_FROM_HOST, MAX_LINE, MAX_MESSAGE, MAX_TO_HOST, ToHost, check_dialog_args, check_window, cut, parse_body};
+use super::protocol::{
+    FromHost, MAX_FRAME_VALUES, MAX_FROM_HOST, MAX_LINE, MAX_MESSAGE, MAX_TO_HOST, ToHost, check_dialog_args, check_window, cut, parse_body, values_in,
+};
 use crate::commands::check_command;
 use crate::tape::{MAX_ENTRIES, MAX_OUTPUT_BYTES, MAX_WINDOW_BYTES};
 use crate::{Modal, ModalKind};
@@ -91,6 +93,9 @@ pub enum WebEvent {
     Finished(Result<(), String>),
 }
 
+/// How many of the Worker's messages one [`WebJob::poll`] checks at most.
+const CHECKS_PER_POLL: usize = 64;
+
 /// One run in a Worker.
 pub struct WebJob<T: Transport> {
     transport: T,
@@ -99,6 +104,10 @@ pub struct WebJob<T: Transport> {
     /// when it is taken from the Worker, so what is held here is already within the run's
     /// bounds (calls, output and window bytes) however fast the Worker sends.
     events: VecDeque<WebEvent>,
+    /// Messages taken from the Worker and not checked yet: each poll checks at most
+    /// [`CHECKS_PER_POLL`], so a large batch is spread over the page's polls (and frames) rather
+    /// than parsed in one. Each keeps its arrival time.
+    backlog: VecDeque<Incoming>,
     /// Time computed before the current stretch, and since when it computes (`None` while it
     /// waits for an answer).
     spent: Duration,
@@ -129,6 +138,7 @@ impl<T: Transport> WebJob<T> {
             transport,
             options,
             events: VecDeque::new(),
+            backlog: VecDeque::new(),
             spent: Duration::ZERO,
             since: Some(Instant::now()),
             waiting: None,
@@ -160,6 +170,7 @@ impl<T: Transport> WebJob<T> {
     fn end(&mut self, result: Result<(), String>) {
         if self.ending.is_none() && !self.finished {
             self.events.clear();
+            self.backlog.clear();
             self.stop(result);
         }
     }
@@ -196,16 +207,26 @@ impl<T: Transport> WebJob<T> {
         // What arrived is taken first: a request that came in time stopped the clock when it
         // came, however late this poll is.
         if self.ending.is_none() {
-            for incoming in self.transport.take() {
+            self.backlog.extend(self.transport.take());
+            // Every message but the last (the run's end) is a host call: more than the run may
+            // make is refused at once, which bounds the backlog and how far it lags.
+            if self.calls.saturating_add(self.backlog.len()) > MAX_ENTRIES + 1 {
+                self.backlog.clear();
+                self.violation(&format!("more than {MAX_ENTRIES} commands, dialogs, output lines and window updates"));
+            }
+            for _ in 0..CHECKS_PER_POLL {
                 if self.ending.is_some() {
                     break;
                 }
+                let Some(incoming) = self.backlog.pop_front() else { break };
                 if let Some(event) = self.handle(incoming) {
                     self.events.push_back(event);
                 }
             }
         }
-        if self.ending.is_none() {
+        // With messages still unchecked the clock can't be read yet: one of them may be a request
+        // that stopped it. Each is checked against the time limit by its arrival time instead.
+        if self.ending.is_none() && self.backlog.is_empty() {
             self.check_limits();
         }
         if let Some(event) = self.events.pop_front() {
@@ -220,9 +241,11 @@ impl<T: Transport> WebJob<T> {
         self.ending.take().map(WebEvent::Finished)
     }
 
-    /// A request taken from the Worker but not handed out to the page yet.
+    /// A request taken from the Worker but not handed out to the page yet. Nothing is queued
+    /// after a request (the Worker waits, and a message meanwhile ends the run), so only the last
+    /// event can be one.
     fn request_queued(&self) -> bool {
-        self.events.iter().any(|e| matches!(e, WebEvent::Execute { .. } | WebEvent::Dialog(_)))
+        matches!(self.events.back(), Some(WebEvent::Execute { .. } | WebEvent::Dialog(_)))
     }
 
     fn over_time(&mut self) {
@@ -347,13 +370,31 @@ impl<T: Transport> WebJob<T> {
         // the run on the first one). A message still on its way to the page can't be told from
         // one sent after the answer; the order is the Worker's to keep, and every message is
         // checked and bounded either way.
-        if let Some(early) = self.transport.take().into_iter().next() {
+        if let Some(early) = self.backlog.pop_front().or_else(|| self.transport.take().into_iter().next()) {
             let _ = self.handle(early);
         }
         if self.ending.is_some() {
             return Err("the script has ended".into());
         }
-        let text = serde_json::to_string(msg).map_err(|e| e.to_string())?;
+        let mut text = serde_json::to_string(msg).map_err(|e| e.to_string())?;
+        // The Worker's limits, checked here as the desktop app checks the script host's: an
+        // answer it would refuse can't be told from a broken link there.
+        let too_big = if text.len() > MAX_TO_HOST {
+            Some(format!("{} MiB, over the limit of {} MiB", text.len().div_ceil(1 << 20), MAX_TO_HOST >> 20))
+        } else if values_in(text.as_bytes()) > MAX_FRAME_VALUES {
+            Some(format!("more than {MAX_FRAME_VALUES} values"))
+        } else {
+            None
+        };
+        if let Some(why) = too_big {
+            if dialog {
+                self.end(Err(format!("The script was stopped: a dialog's answer could not be sent to the script Worker: {why}.")));
+                return Err(why);
+            }
+            // A command's result: the script gets the reason as the command's error.
+            let result: Result<Value, String> = Err(format!("the command's result is too large for a script: {why}"));
+            text = serde_json::to_string(&ToHost::Executed { result }).map_err(|e| e.to_string())?;
+        }
         self.waiting = None;
         self.since = Some(Instant::now());
         if let Err(e) = self.transport.answer(&text) {
@@ -593,6 +634,81 @@ mod tests {
         std::thread::sleep(Duration::from_millis(600));
         assert!(matches!(j.poll(), Some(WebEvent::Execute { .. })), "its time to answer had not started");
         j.reply_executed(Ok(Value::Null)).unwrap();
+    }
+
+    /// A result the Worker would refuse (more values than it reads) reaches the script as the
+    /// command's error, as on the desktop, not as a broken link.
+    #[test]
+    fn a_result_with_too_many_values_is_the_command_error() {
+        let fake = Fake::default();
+        let mut j = job(&fake, options());
+        fake.send(&FromHost::Execute { id: "session.inspect".into(), params: json!({}) });
+        assert!(matches!(j.poll(), Some(WebEvent::Execute { .. })));
+        j.reply_executed(Ok(Value::Array(vec![json!(0); MAX_FRAME_VALUES + 1]))).unwrap();
+        let answer = &fake.answers.borrow()[0];
+        assert!(answer["result"]["Err"].as_str().is_some_and(|e| e.contains("values")), "{answer}");
+        assert!(!j.is_finished());
+    }
+
+    /// A batch with more messages than a run may send ends the run on the poll it arrives, not
+    /// after the page has worked through it share by share.
+    #[test]
+    fn a_batch_over_the_call_bound_ends_the_run_at_once() {
+        let fake = Fake::default();
+        let mut j = job(&fake, options());
+        for _ in 0..MAX_ENTRIES + 2 {
+            fake.send(&FromHost::Output { line: String::new() });
+        }
+        assert!(matches!(j.poll(), Some(WebEvent::Finished(Err(m))) if m.contains("commands, dialogs, output lines")));
+        assert!(j.backlog.is_empty());
+    }
+
+    /// One poll checks a bounded share of a large batch, so the page's frame budget applies
+    /// between them; the rest is checked by later polls, in order.
+    #[test]
+    fn a_large_batch_is_checked_over_several_polls() {
+        let fake = Fake::default();
+        let mut j = job(&fake, options());
+        for i in 0..CHECKS_PER_POLL * 3 {
+            fake.send(&FromHost::Output { line: i.to_string() });
+        }
+        assert_eq!(j.poll(), Some(WebEvent::Output("0".into())));
+        assert_eq!(j.backlog.len(), CHECKS_PER_POLL * 2, "only one share checked");
+        let mut lines = vec!["0".to_owned()];
+        while let Some(WebEvent::Output(line)) = j.poll() {
+            lines.push(line);
+        }
+        assert_eq!(lines, (0..CHECKS_PER_POLL * 3).map(|i| i.to_string()).collect::<Vec<_>>());
+    }
+
+    /// Output queued before a request doesn't make each poll look through the whole queue for
+    /// it: a hundred thousand lines and then a dialog are handed out in time linear in the lines.
+    #[test]
+    fn output_queued_before_a_request_is_handed_out_in_linear_time() {
+        let fake = Fake::default();
+        let mut j = job(&fake, options());
+        for _ in 0..100_000 {
+            fake.send(&FromHost::Output { line: String::new() });
+        }
+        fake.send(&FromHost::Dialog { kind: ModalKind::Alert.into(), args: json!(["done"]) });
+        // All checked up front, as when the batch arrived while the page was busy.
+        for incoming in j.transport.take() {
+            if let Some(event) = j.handle(incoming) {
+                j.events.push_back(event);
+            }
+        }
+        assert_eq!(j.events.len(), 100_001);
+        let start = Instant::now();
+        let mut outputs = 0;
+        loop {
+            match j.poll() {
+                Some(WebEvent::Output(_)) => outputs += 1,
+                Some(WebEvent::Dialog(_)) => break,
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+        assert_eq!(outputs, 100_000);
+        assert!(start.elapsed() < Duration::from_secs(3), "took {:?}", start.elapsed());
     }
 
     /// An answer that comes after the reply limit is not taken.

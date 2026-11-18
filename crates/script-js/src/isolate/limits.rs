@@ -102,6 +102,20 @@ impl Containment {
         Ok(status)
     }
 
+    /// Wait for the host to exit and reap it, as after [`Self::end`]. It is then known as reaped:
+    /// its pid, its group's id, may go to another process, and its group is not signalled again.
+    ///
+    /// # Errors
+    /// What `wait` returns.
+    pub fn wait(&self, child: &mut Child) -> std::io::Result<std::process::ExitStatus> {
+        let status = child.wait()?;
+        #[cfg(unix)]
+        self.reaped.store(true, std::sync::atomic::Ordering::SeqCst);
+        #[cfg(windows)]
+        self.close_job();
+        Ok(status)
+    }
+
     /// Stop the host and everything it started. `child` is the host, locked by the caller.
     pub fn end(&self, child: &mut Child) {
         #[cfg(all(unix, not(target_os = "openbsd")))]
@@ -249,6 +263,17 @@ mod tests {
     fn alive(pid: i32) -> bool {
         let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else { return false };
         stat.rsplit_once(')').is_some_and(|(_, rest)| !rest.trim_start().starts_with('Z'))
+    }
+
+    /// A host reaped by a plain wait (a run that failed to start) counts as reaped too, so its
+    /// group, whose id is free again, is not signalled afterwards.
+    #[test]
+    fn a_host_reaped_by_waiting_is_known_as_reaped() {
+        let mut host = Command::new("true").process_group(0).spawn().expect("spawn");
+        let containment = contain(&host);
+        containment.end(&mut host);
+        assert!(containment.wait(&mut host).is_ok());
+        assert!(containment.is_reaped());
     }
 
     #[test]

@@ -75,7 +75,9 @@ part_count=$(($(wc -l <"$WORK/$NAME/app/parts.txt") - 1))
 echo "$(basename "$WASM"): $wasm_bytes bytes ($((wasm_bytes / 1048576)) MiB), shipped as $gzip_bytes bytes of gzip in $part_count part(s) of up to $PART_BYTES"
 # The script Worker (one per run): its loader, which keeps its name, and the glue and wasm it
 # loads, beside the page, which starts it as ./photocraft-script-worker_loader.js.
-[[ -f "$APP/photocraft-script-worker_loader.js" ]] || { echo "error: $APP/photocraft-script-worker_loader.js missing" >&2; exit 1; }
+for f in photocraft-script-worker_loader.js photocraft-script-worker.js photocraft-script-worker_bg.wasm; do
+  [[ -f "$APP/$f" ]] || { echo "error: $APP/$f missing" >&2; exit 1; }
+done
 cp "$APP"/photocraft-script-worker* "$WORK/$NAME/"
 # Sample server configs (MIME type, caching, compression, isolation); harmless where unused.
 cp "$HERE/_headers" "$HERE/.htaccess" "$WORK/$NAME/"

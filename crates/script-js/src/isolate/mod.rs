@@ -29,15 +29,13 @@
 //! The web build has no processes. Its isolation runs the same [`protocol`] messages over
 //! `postMessage` to a dedicated Worker that holds the engine; [`web_job`] is the page's side,
 //! checking every request as the desktop supervisor does. The Worker waits for each answer in
-//! shared memory, so a run continues where it was after a command or a dialog; the time limit
-//! calls the Worker's `terminate()`, and the Worker's heap is capped the way the script host's is.
+//! shared memory, so a run continues where it was after a command or a dialog. The page checks
+//! the time limit each time it polls the run (every frame while one runs; while messages from a
+//! large batch wait to be checked, by each one's arrival time) and calls the Worker's
+//! `terminate()` on the first poll past it, and the Worker's heap is capped the way the script
+//! host's is. A page that can't be cross-origin isolated runs no scripts.
 //! WebAssembly builds abort on panic, so the in-process panic guard in [`crate::Runner::step`]
 //! does nothing there: the Worker boundary is what turns an engine panic into a failed run.
-//!
-//! Until that supervisor exists the web build runs scripts in-process only, and it has no
-//! watchdog: the in-process time budget is checked on host calls, so a pure-compute loop that
-//! makes none (for example `for (;;) new Date()`) runs past it. The Worker is the follow-up that
-//! bounds such loops there.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 

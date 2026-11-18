@@ -180,6 +180,7 @@ pub const COMMANDS: &[Spec] = &[
             ("text", Text(TEXT), Required),
             ("size", Number(0.01, 10_000.0), Optional),
             ("font", Text(NAME), Optional),
+            ("layer", Id, Optional),
         ],
     ),
     ("type.edit", &[("layer", Id, Required), ("text", Text(TEXT), Optional), ("runs", Runs, Optional), ("move", Param::Number(-SIDE, SIDE), Optional)]),

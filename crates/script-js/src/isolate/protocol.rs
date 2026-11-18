@@ -110,6 +110,9 @@ pub enum FrameError {
     Truncated,
     /// The length prefix is over the cap.
     TooLarge(usize),
+    /// A message within the byte cap that holds more values than the reader takes
+    /// ([`MAX_FRAME_VALUES`]).
+    TooManyValues,
     /// Not a message of the expected type.
     Malformed(String),
 }
@@ -120,6 +123,7 @@ impl std::fmt::Display for FrameError {
             Self::Io(e) => write!(f, "{e}"),
             Self::Truncated => f.write_str("the message was cut off"),
             Self::TooLarge(n) => write!(f, "a message of {n} bytes is over the limit"),
+            Self::TooManyValues => write!(f, "a message holds more than {MAX_FRAME_VALUES} values"),
             Self::Malformed(e) => write!(f, "a malformed message ({e})"),
         }
     }
@@ -128,11 +132,16 @@ impl std::fmt::Display for FrameError {
 /// Write one frame. A message over `cap` is not written.
 ///
 /// # Errors
-/// [`FrameError::TooLarge`] over the cap; the stream's error.
+/// [`FrameError::TooLarge`] over the cap, [`FrameError::TooManyValues`] with more values than
+/// the reader takes ([`MAX_FRAME_VALUES`]); the stream's error. Nothing is written then.
 pub fn write_frame<W: Write, T: Serialize>(w: &mut W, msg: &T, cap: usize) -> Result<(), FrameError> {
     let body = serde_json::to_vec(msg).map_err(|e| FrameError::Malformed(e.to_string()))?;
+    // The reader's limits, checked here: a frame it would refuse ends its side of the link.
     if body.len() > cap {
         return Err(FrameError::TooLarge(body.len()));
+    }
+    if values_in(&body) > MAX_FRAME_VALUES {
+        return Err(FrameError::TooManyValues);
     }
     let len = u32::try_from(body.len()).map_err(|_| FrameError::TooLarge(body.len()))?;
     w.write_all(&len.to_le_bytes()).map_err(FrameError::Io)?;
@@ -192,7 +201,7 @@ pub const MAX_FRAME_VALUES: usize = 1 << 20;
 
 /// About how many JSON values `body` holds: the structural characters outside strings, which
 /// open or separate values. Stops counting just past [`MAX_FRAME_VALUES`].
-fn values_in(body: &[u8]) -> usize {
+pub(crate) fn values_in(body: &[u8]) -> usize {
     let (mut n, mut in_string, mut escaped) = (1usize, false, false);
     for &b in body {
         if in_string {

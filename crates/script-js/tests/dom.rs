@@ -123,6 +123,29 @@ fn a_layer_moves_and_reports_its_bounds_in_the_ruler_unit() {
     assert_eq!(lines, ["5 px,7 px,15 px,27 px", "Units.INCHES 2 in 77"]);
 }
 
+/// Reading a text's position doesn't switch documents, and setting it lands where asked even
+/// when converting the new position moves the text first.
+#[test]
+fn text_position_reads_in_place_and_sets_from_where_the_text_is() {
+    let s = session(200, 100);
+    s.borrow_mut().execute("file.new", json!({"width": 50, "height": 50, "name": "Other"})).unwrap();
+    let lines = run(
+        &s,
+        r#"
+        var a = app.documents[0];
+        app.activeDocument = a;
+        var t = a.artLayers.add(); t.kind = LayerKind.TEXT; t.textItem.contents = 'Hi'; t.textItem.position = [10, 50];
+        app.activeDocument = app.documents[1];
+        var at = t.textItem.position;
+        $.writeln(at[0].value, ',', at[1].value, ' ', app.activeDocument.name);
+        var x = { valueOf: function () { t.textItem.position = [20, 50]; return 30; } };
+        t.textItem.position = [x, 50];
+        $.writeln(t.textItem.position[0].value);
+        "#,
+    );
+    assert_eq!(lines, ["10,50 Other", "30"]);
+}
+
 #[test]
 fn text_layers_are_made_and_edited() {
     let s = session(200, 100);
@@ -397,6 +420,41 @@ fn a_spent_time_limit_stays_uncatchable_at_a_document_read() {
     assert!(m.contains("time limit"), "{m}");
     // A caught stop would let the loop go on until something else ends it.
     assert!(started.elapsed() < std::time::Duration::from_secs(10), "stopped only after {:?}", started.elapsed());
+}
+
+/// A fresh run can name the keys of custom options it reads before it uses those names itself.
+#[test]
+fn custom_options_keep_their_key_names_between_runs() {
+    let s = session(8, 8);
+    run(&s, "var d = new ActionDescriptor(); d.putString(stringIDToTypeID('lastName'), 'Ada'); app.putCustomOptions('names', d, true);");
+    let lines = run(&s, "var d = app.getCustomOptions('names'); $.writeln(typeIDToStringID(d.getKey(0)));");
+    assert_eq!(lines, ["lastName"]);
+}
+
+/// Key names are saved only when they fit: a descriptor that fits without them still saves.
+#[test]
+fn custom_options_that_fit_only_without_key_names_still_save() {
+    let s = session(8, 8);
+    let lines = run(
+        &s,
+        "var d = new ActionDescriptor(), v = new Array(32001).join('x');
+         d.putString(stringIDToTypeID(new Array(901).join('a')), v);
+         d.putString(stringIDToTypeID(new Array(901).join('b')), v);
+         app.putCustomOptions('big', d, true);
+         var back = app.getCustomOptions('big'); $.writeln(back.count, ' ', back.getString(back.getKey(1)).length);",
+    );
+    assert_eq!(lines, ["2 32000"]);
+}
+
+/// Two strings that hash to one ID are refused, not mixed up as one descriptor key.
+#[test]
+fn string_ids_that_collide_are_refused() {
+    let s = session(8, 8);
+    let lines = run(
+        &s,
+        "var a = stringIDToTypeID('costarring'); try { stringIDToTypeID('liquid'); $.writeln('same key') } catch (e) { $.writeln('refused') } $.writeln(stringIDToTypeID('costarring') == a);",
+    );
+    assert_eq!(lines, ["refused", "true"]);
 }
 
 #[test]

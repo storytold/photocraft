@@ -1127,6 +1127,9 @@ fn build() -> Vec<CommandSpec> {
                     None => true,
                 };
                 let d = if let Some(serial) = p.get("serial").filter(|v| !v.is_null()) {
+                    if p.get("document").is_some_and(|v| !v.is_null()) {
+                        return Err(bad("document.inspect", "give `document` or `serial`, not both"));
+                    }
                     let n = serial.as_u64().ok_or_else(|| bad("document.inspect", "`serial` must be a document serial"))?;
                     s.documents().iter().find(|d| d.serial == n).ok_or_else(|| EngineError::Other(format!("no open document has serial {n}")))?
                 } else {

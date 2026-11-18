@@ -136,7 +136,8 @@ fn the_time_limit_stops_the_run_and_cannot_be_caught() {
     let p = Probe::default();
     let lines = p.lines.clone();
     let src = "for (;;) { try { $.writeln('x') } catch (e) {} }";
-    let mut r = Runner::new(src, Box::new(p), Box::new(WallClock::new(Duration::from_millis(20))), RunOptions::default()).unwrap();
+    // A counted budget, not a clock: room for a few writes whatever the machine's speed.
+    let mut r = Runner::new(src, Box::new(p), Box::new(Countdown(8)), RunOptions::default()).unwrap();
     let Step::Failed(m) = r.step() else { panic!("stopped") };
     assert!(m.contains("time limit"), "{m}");
     assert!(!lines.borrow().is_empty());
@@ -385,6 +386,15 @@ fn reading_active_document_with_none_open_is_no_such_element() {
                  $.writeln((e2 instanceof Error) + ' ' + e2.message + ' ' + e2.number + ' ' + (e2.number === 1302));
                }";
     assert_eq!(lines_of(src), ["true No such element 1302 true", "true No such element 1302 true"]);
+}
+
+/// The error's `number` is its own: a setter a script put on `Error.prototype` neither swallows
+/// it nor replaces the error.
+#[test]
+fn an_error_number_is_its_own_property() {
+    let src = "Object.defineProperty(Error.prototype, 'number', { set: function (v) { throw new TypeError('setter') }, get: function () { return 7 }, configurable: true });
+               try { app.activeDocument } catch (e) { $.writeln(e.message + ' ' + e.number + ' ' + e.hasOwnProperty('number')) }";
+    assert_eq!(lines_of(src), ["No such element 1302 true"]);
 }
 
 #[test]
@@ -781,6 +791,35 @@ impl Host for SlowDialogs {
         std::thread::sleep(self.wait);
         Some(Ok(Value::Null))
     }
+}
+
+/// A host whose output takes time: each line moves `clock` on by `wait`.
+struct SlowWrites {
+    clock: Arc<ManualClock>,
+    wait: Duration,
+    lines: Log,
+}
+
+impl Host for SlowWrites {
+    fn execute(&mut self, _: &str, _: Value) -> Result<Value, HostError> {
+        Ok(json!({"active": null, "documents": []}))
+    }
+
+    fn write_line(&mut self, line: &str) {
+        self.clock.advance(self.wait);
+        self.lines.borrow_mut().push(line.to_owned());
+    }
+}
+
+/// Time spent writing a line counts, also when the line is the script's last act.
+#[test]
+fn a_slow_last_output_line_is_charged() {
+    let (clock, lines) = (Arc::new(ManualClock::default()), Log::default());
+    let host = SlowWrites { clock: clock.clone(), wait: Duration::from_millis(400), lines: lines.clone() };
+    let budget = WallClock::with_clock(Duration::from_millis(200), clock);
+    let mut r = Runner::new("$.writeln('x');", Box::new(host), Box::new(budget), RunOptions::default()).unwrap();
+    assert_eq!(r.step(), Step::Failed("The script was stopped: it ran longer than its time limit.".into()));
+    assert_eq!(*lines.borrow(), ["x"], "the line was written once");
 }
 
 #[test]

@@ -1,4 +1,5 @@
-# Apache (see HOSTING.md). Needs mod_mime; mod_deflate and mod_headers are optional.
+# Apache (see HOSTING.md). Needs mod_mime; mod_deflate is optional. mod_headers is optional for
+# the editor but scripts need it: without it the isolation headers below are not sent.
 AddType application/wasm .wasm
 AddType text/javascript .js
 

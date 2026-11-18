@@ -14,8 +14,8 @@ use serde_json::Value;
 
 use super::limits::{self, Containment, Exit, Meter, STATUS_ACCESS_VIOLATION, STATUS_STACK_BUFFER_OVERRUN, STATUS_STACK_OVERFLOW};
 use super::protocol::{
-    FrameError, FromHost, MAX_FROM_HOST, MAX_LINE, MAX_MESSAGE, MAX_TO_HOST, ToHost, check_command, check_dialog_args, check_window, cut, read_frame,
-    write_frame,
+    FrameError, FromHost, MAX_FRAME_VALUES, MAX_FROM_HOST, MAX_LINE, MAX_MESSAGE, MAX_TO_HOST, ToHost, check_command, check_dialog_args, check_window, cut,
+    read_frame, write_frame,
 };
 use super::{SCRIPT_HOST_FLAG, host};
 use crate::tape::{MAX_ENTRIES, MAX_OUTPUT_BYTES, MAX_WINDOW_BYTES};
@@ -91,7 +91,8 @@ pub struct IsolateOptions {
     /// Longest the app may take to answer one command, and one dialog
     /// ([`COMMAND_REPLY_LIMIT`], [`DIALOG_REPLY_LIMIT`]).
     pub reply_limits: (Duration, Duration),
-    /// How long at a time a full queue of events stops the run's clock ([`QUEUE_GRACE`]).
+    /// How long at a time a full queue of events, or sending the app's answer to the host,
+    /// stops the run's clock ([`QUEUE_GRACE`]).
     pub queue_grace: Duration,
 }
 
@@ -245,6 +246,27 @@ impl Clock {
     }
 }
 
+impl Watch {
+    /// The answer on its way to the host is out: its time is charged past what is left of
+    /// `delivery_free`, and the clock goes on unless the host waits again.
+    fn delivered(&mut self) {
+        if let Some(t) = self.delivering.take() {
+            let took = t.elapsed();
+            let free = took.min(self.delivery_free);
+            self.delivery_free -= free;
+            self.clock.spent += took - free;
+            if self.waiting.is_none() {
+                self.clock.resume();
+            }
+        }
+    }
+
+    /// The delivery time so far that counts against the run.
+    fn delivery_charge(&self) -> Duration {
+        self.delivering.map_or(Duration::ZERO, |t| t.elapsed().saturating_sub(self.delivery_free))
+    }
+}
+
 struct Watch {
     clock: Clock,
     /// Since when the host has waited for the app's answer, and whether to a dialog.
@@ -252,6 +274,13 @@ struct Watch {
     /// Since when the reader has been blocked handing an event to a full queue while the run's
     /// clock was stopped for it.
     queued: Option<Instant>,
+    /// Since when the app's answer has been on its way to the host: the run's clock stays stopped
+    /// until it is written (a large answer takes time to encode and send), as long as
+    /// `delivery_free` lasts.
+    delivering: Option<Instant>,
+    /// Delivery time left that the run is not charged for: one grace for the whole run, so a
+    /// host that stops reading its answers can't stretch the clock answer after answer.
+    delivery_free: Duration,
     verdict: Option<Verdict>,
     exit: Option<Exit>,
     peak: u64,
@@ -306,8 +335,17 @@ impl Shared {
     /// Stop the host for `why` (the first reason wins; a host that already exited keeps its
     /// own exit status).
     fn kill(&self, why: Verdict) {
+        self.kill_if(why, |_| true);
+    }
+
+    /// [`Self::kill`], if `still` holds of the watch state as the verdict is recorded: checked
+    /// under the same lock, so a reply that came meanwhile is seen.
+    fn kill_if(&self, why: Verdict, still: impl FnOnce(&Watch) -> bool) -> bool {
         {
             let mut w = lock(&self.watch);
+            if !still(&w) {
+                return false;
+            }
             if w.verdict.is_none() && w.exit.is_none() {
                 w.verdict = Some(why);
             }
@@ -315,6 +353,7 @@ impl Shared {
         }
         // Anything the host started too: one of them may hold its output open.
         self.containment.end(&mut lock(&self.child));
+        true
     }
 
     /// Send the run's [`Event::Finished`] unless it was sent already.
@@ -339,6 +378,8 @@ impl Shared {
     /// and the wait's own clock starts.
     fn await_reply(&self, dialog: bool) {
         let mut w = lock(&self.watch);
+        // The host asked again before the writer saw its last answer out: it had that answer.
+        w.delivered();
         w.clock.pause();
         w.waiting = Some((Instant::now(), dialog));
     }
@@ -354,7 +395,7 @@ impl Shared {
             Err(mpsc::TrySendError::Full(event)) => {
                 let running = {
                     let mut w = lock(&self.watch);
-                    let running = w.waiting.is_none();
+                    let running = w.waiting.is_none() && w.delivering.is_none();
                     if running {
                         w.clock.pause();
                         w.queued = Some(Instant::now());
@@ -367,7 +408,8 @@ impl Shared {
                     if let Some(blocked) = w.queued.take() {
                         w.clock.spent += blocked.elapsed().saturating_sub(self.queue_grace);
                     }
-                    if w.waiting.is_none() {
+                    // Not while an answer is on its way: `delivered` restarts the clock then.
+                    if w.waiting.is_none() && w.delivering.is_none() {
                         w.clock.resume();
                     }
                 }
@@ -544,6 +586,8 @@ impl IsolatedJob {
                 clock: Clock { spent: Duration::ZERO, since: Some(Instant::now()) },
                 waiting: None,
                 queued: None,
+                delivering: None,
+                delivery_free: options.queue_grace,
                 verdict: None,
                 exit: None,
                 peak: 0,
@@ -569,8 +613,9 @@ impl IsolatedJob {
         let started = start_threads(&shared, &cancel, input, output, errors, host_rx, events_tx, options.coalesce.clone(), pid);
         if let Err(e) = started {
             shared.kill(Verdict::Cancelled);
-            // No watchdog may be there to reap it: reap it here, so it leaves no zombie.
-            let _ = lock(&shared.child).wait();
+            // No watchdog may be there to reap it: reap it here, so it leaves no zombie, and as
+            // reaped, so its group is not signalled again.
+            let _ = shared.containment.wait(&mut lock(&shared.child));
             return Err(unavailable(e.to_string()));
         }
         let start = ToHost::Start { source, app_name: options.run.app_name, script_name: options.run.script_name, memory_limit };
@@ -622,16 +667,17 @@ impl IsolatedJob {
     /// When the run waits for no reply, or for a different kind.
     pub fn reply(&mut self, reply: Reply) -> Result<(), String> {
         let msg = match (self.waiting, reply) {
+            // The clock restarts once the answer is written to the host (see `write_host`).
             (Some(Waiting::Execute), Reply::Executed(result)) => {
                 let mut w = lock(&self.shared.watch);
                 w.waiting = None;
-                w.clock.resume();
+                w.delivering = Some(Instant::now());
                 ToHost::Executed { result }
             }
             (Some(Waiting::Dialog), Reply::Dialog(answer)) => {
                 let mut w = lock(&self.shared.watch);
                 w.waiting = None;
-                w.clock.resume();
+                w.delivering = Some(Instant::now());
                 ToHost::Dialog { answer }
             }
             _ => return Err("the script is not waiting for that reply".into()),
@@ -734,14 +780,16 @@ fn watchdog(shared: &Shared, cancel: &AtomicBool, pid: u32, events: &SyncSender<
                 // A block on a full queue counts past its grace while it lasts, not only once it
                 // ends: an interface that stopped taking events must not hold the run forever.
                 let queued = w.queued.map_or(Duration::ZERO, |t| t.elapsed().saturating_sub(shared.queue_grace));
-                (w.clock.elapsed() + queued, w.waiting)
+                // So does sending an answer the host doesn't take.
+                (w.clock.elapsed() + queued + w.delivery_charge(), w.waiting)
             };
             if elapsed > shared.time_limit {
                 shared.kill(Verdict::Timeout);
             } else if let Some((since, dialog)) = waiting
                 && since.elapsed() > if dialog { shared.reply_limits.1 } else { shared.reply_limits.0 }
             {
-                shared.kill(Verdict::NoReply(dialog));
+                // Only if that same request still waits: the app may have answered since it was read.
+                shared.kill_if(Verdict::NoReply(dialog), |w| w.waiting == Some((since, dialog)));
             }
         }
         if metered.is_none_or(|t| t.elapsed() >= METER_EVERY) {
@@ -762,15 +810,30 @@ fn watchdog(shared: &Shared, cancel: &AtomicBool, pid: u32, events: &SyncSender<
 }
 
 /// After the host exited: if the reader stays blocked reading its output for [`READER_GRACE`]
-/// (a process the host started holds the pipe open), report the run from here. A reader that
-/// is handing events to a slow interface is not stalled and is left to report.
+/// (a process the host started holds the pipe open), stop what the host started and give the
+/// reader as long again to read what is left; only a reader still blocked then is reported from
+/// here. A reader that is handing events to a slow interface is not stalled and is left to report.
 fn report_if_reader_stalls(shared: &Shared, events: &SyncSender<Event>) {
     let mut stalled: Option<Instant> = None;
     while !shared.reported.load(Ordering::SeqCst) {
         if shared.reading.load(Ordering::SeqCst) {
             if stalled.get_or_insert_with(Instant::now).elapsed() >= READER_GRACE {
-                // Stop whatever holds the pipe, so the reader thread ends too.
+                // Stop whatever holds the pipe, so the reader thread ends too (the group is
+                // stopped already when the host was reaped; this covers a host not reaped yet).
                 shared.containment.end(&mut lock(&shared.child));
+                // A reader that was only slow to run (the host wrote its result and exited)
+                // reads what is in the pipe now and reports that itself. Handing those events to
+                // a slow interface is not a stall either.
+                let mut drained = Instant::now();
+                while drained.elapsed() < READER_GRACE {
+                    if shared.reported.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    if !shared.reading.load(Ordering::SeqCst) {
+                        drained = Instant::now();
+                    }
+                    std::thread::sleep(TICK);
+                }
                 let result = shared.stopped().unwrap_or_else(|| {
                     shared.wait_stderr();
                     shared.classify()
@@ -831,6 +894,14 @@ fn known_too_large(msg: &ToHost) -> Option<usize> {
     text.filter(|n| *n > MAX_TO_HOST)
 }
 
+/// Why an answer can't go to the host, for the script.
+fn too_big(e: &FrameError) -> String {
+    match e {
+        FrameError::TooLarge(n) => format!("{} MiB, over the limit of {} MiB", n.div_ceil(1 << 20), MAX_TO_HOST >> 20),
+        _ => format!("more than {MAX_FRAME_VALUES} values"),
+    }
+}
+
 fn write_host(mut input: ChildStdin, rx: &Receiver<ToHost>, shared: &Shared) {
     for msg in rx {
         let first = match known_too_large(&msg) {
@@ -843,21 +914,21 @@ fn write_host(mut input: ChildStdin, rx: &Receiver<ToHost>, shared: &Shared) {
                 shared.kill(Verdict::TooLarge(n));
                 return;
             }
-            Err(FrameError::TooLarge(n)) if matches!(msg, ToHost::Dialog { .. }) => {
+            Err(e @ (FrameError::TooLarge(_) | FrameError::TooManyValues)) if matches!(msg, ToHost::Dialog { .. }) => {
                 // Nothing was sent: the host is still waiting, so the run ends here with the reason.
-                shared.kill(Verdict::Unsent(format!(
-                    "a dialog's answer could not be sent to the script host ({} MiB, over the limit of {} MiB)",
-                    n.div_ceil(1 << 20),
-                    MAX_TO_HOST >> 20
-                )));
+                shared.kill(Verdict::Unsent(format!("a dialog's answer could not be sent to the script host: {}", too_big(&e))));
                 return;
             }
-            Err(FrameError::TooLarge(n)) if matches!(msg, ToHost::Executed { .. }) => {
-                let result = Err(format!("the command's result is too large for a script ({} MiB)", n >> 20));
+            Err(e @ (FrameError::TooLarge(_) | FrameError::TooManyValues)) if matches!(msg, ToHost::Executed { .. }) => {
+                let result = Err(format!("the command's result is too large for a script: {}", too_big(&e)));
                 write_frame(&mut input, &ToHost::Executed { result }, MAX_TO_HOST)
             }
             r => r,
         };
+        if matches!(msg, ToHost::Executed { .. } | ToHost::Dialog { .. }) {
+            // Out (or failed): the run's clock goes on, unless the host already asked again.
+            lock(&shared.watch).delivered();
+        }
         if let Err(e) = written {
             // A host that is gone is classified by how it ended; one still running waits for an
             // answer it will never get, so the run ends here with the reason.
@@ -922,7 +993,7 @@ fn relay(output: &mut ChildStdout, shared: &Shared, events: &SyncSender<Event>, 
             Ok(Some(m)) => m,
             // The host ended, or died in the middle of a message.
             Ok(None) | Err(FrameError::Truncated | FrameError::Io(_)) => return None,
-            Err(e @ (FrameError::TooLarge(_) | FrameError::Malformed(_))) => {
+            Err(e @ (FrameError::TooLarge(_) | FrameError::TooManyValues | FrameError::Malformed(_))) => {
                 shared.kill(Verdict::Violation(e.to_string()));
                 return None;
             }

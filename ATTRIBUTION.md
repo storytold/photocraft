@@ -107,7 +107,7 @@ Files copied into `corpus/` by hand (tiff, exr, raw) must be MIT, BSD or CC0.
 
 ## Community script fixtures
 
-Real-world Photoshop scripts, unchanged, that `crates/script-js/tests/community.rs` runs end to end. Each licence sits next to its script.
+Real-world Photoshop scripts, unchanged, that `crates/script-js/tests/community.rs` runs as far as scripts can go today: Export Layer Coordinates reaches its report but writes no file, and Export Layers To Files (Fast) stops where it reads its dialog's resource file. Each licence sits next to its script.
 
 | Path | Title | Author | Source | License |
 |---|---|---|---|---|

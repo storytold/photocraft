@@ -605,54 +605,10 @@ fn layer_set_kind(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResu
     if want != "LayerKind.TEXT" || !empty || !plain {
         return Err(error("only an empty pixel layer can be made a text layer (kind = LayerKind.TEXT); other kinds can't be set"));
     }
-    edit(ctx, doc, "layer.select", json!({ "layer": id }))?;
-    let made = edit(ctx, doc, "type.create", json!({ "x": 0, "y": 0, "text": "" }))?;
-    let new = made["layer"].as_u64().ok_or_else(|| error("the text layer was not reported"))?;
-    // Either the text layer replaces the old one, or the document is left with the old one only.
-    if let Err(e) = become_text(ctx, doc, id, new, &n) {
-        let _ = edit(ctx, doc, "layer.delete", json!({ "layer": new }));
-        return Err(e);
-    }
-    if let Some(o) = this.as_object() {
-        if let Some(l) = o.downcast_ref::<LayerRef>() {
-            l.id.set(new);
-        }
-        uncache(ctx, (LAYER, doc.id, doc.serial, id));
-        cache(ctx, (LAYER, doc.id, doc.serial, new), &o);
-    }
+    // One edit: the layer becomes the text layer in place, its id and settings kept, so a run
+    // stopped right after leaves nothing half done.
+    edit(ctx, doc, "type.create", json!({ "x": 0, "y": 0, "text": "", "layer": id }))?;
     Ok(JsValue::undefined())
-}
-
-/// Give text layer `new` the settings of layer `id` (described by `n`), then delete `id`.
-fn become_text(ctx: &mut Context, doc: DocKey, id: u64, new: u64, n: &Value) -> JsResult<()> {
-    // The layer's own settings carry over; only its kind changes. A name the user or script
-    // gave it stays, while a default one ("Layer 3") is left for the type engine to name.
-    let mut props = json!({ "layer": new });
-    if let Some(v) = n["visible"].as_bool() {
-        props["visible"] = json!(v);
-    }
-    for k in ["opacity", "fill"] {
-        if let Some(v) = n[k].as_f64().filter(|v| (0.0..=1.0).contains(v)) {
-            props[k] = json!(v);
-        }
-    }
-    if let Some(b) = n["blend"].as_str().and_then(blend_label) {
-        props["blend"] = json!(b);
-    }
-    // Only what there is to carry over: each command is a History step.
-    if props.as_object().is_some_and(|m| m.len() > 1) {
-        edit(ctx, doc, "layer.setProps", props)?;
-    }
-    if let Some(name) = n["name"].as_str().filter(|name| !is_default_name(name)) {
-        edit(ctx, doc, "layer.renameLayer", json!({ "layer": new, "name": name }))?;
-    }
-    edit(ctx, doc, "layer.delete", json!({ "layer": id }))?;
-    Ok(())
-}
-
-/// A name the app gives a new layer itself: "Layer" and a number.
-fn is_default_name(name: &str) -> bool {
-    name.strip_prefix("Layer ").is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
 fn layer_typename(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
@@ -884,12 +840,15 @@ fn text_set_font(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResul
     restyle(ctx, t, json!({ "font": font }))
 }
 
-/// Where the text is anchored: the transform's translation (the baseline start of point text).
+/// Where text `t` is anchored, in pixels (the transform's translation: the baseline start of point
+/// text), and its document's resolution. Read from the document's inspection, so reading it
+/// doesn't make that document the active one.
 fn text_anchor(ctx: &mut Context, t: TextRef) -> JsResult<(f64, f64, f64)> {
-    let info = edit(ctx, t.doc, "type.info", json!({ "layer": t.layer }))?;
-    let tr = |i: usize| info["transform"].get(i).and_then(Value::as_f64).unwrap_or(0.0);
     let d = inspect(ctx, t.doc)?;
-    Ok((tr(4), tr(5), dpi(&d)))
+    let (n, _) = find(&d["layers"], t.layer).ok_or_else(|| error("the layer no longer exists"))?;
+    let transform = &n["text"]["transform"];
+    let tr = |i: usize| transform.get(i).and_then(Value::as_f64).ok_or_else(|| error("the layer is no longer a text layer"));
+    Ok((tr(4)?, tr(5)?, dpi(&d)))
 }
 
 fn text_position(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
@@ -903,8 +862,11 @@ fn text_set_position(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsR
     let t = text_ref(this)?;
     let p = args.first().and_then(JsValue::as_object).ok_or_else(|| type_error("a position is [x, y]"))?;
     let (px, py) = (p.get(0, ctx)?, p.get(1, ctx)?);
-    let (x, y, r) = text_anchor(ctx, t)?;
+    let r = dpi(&inspect(ctx, t.doc)?);
+    // Converted first: a `valueOf` may itself move the text, and the move is from where it is
+    // once the target is known.
     let (nx, ny) = (to_px(ctx, &px, r)?, to_px(ctx, &py, r)?);
+    let (x, y, _) = text_anchor(ctx, t)?;
     edit(ctx, t.doc, "type.edit", json!({ "layer": t.layer, "move": [nx - x, ny - y] }))?;
     Ok(JsValue::undefined())
 }

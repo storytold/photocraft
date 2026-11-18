@@ -209,6 +209,20 @@ fn escape_clicks_the_cancel_button_of_a_scriptui_dialog() {
     assert_eq!(*log.answers.borrow(), [json!({"event": "click", "id": 5, "values": []})]);
 }
 
+/// Enter takes the default answer only when it activates no button: with No focused, it's No.
+#[test]
+fn enter_on_a_focused_button_of_a_confirm_answers_that_button() {
+    let log = Log::default();
+    let mut h = harness(vec![vec![dialog(ScriptDialog::Confirm, json!(["Go?"]))]], &log, vec![]);
+    start_named(h.state_mut(), "ask.jsx");
+    h.run_steps(4);
+    h.get_by_label("No").focus();
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+    assert_eq!(*log.answers.borrow(), [json!(false)]);
+}
+
 #[test]
 fn pickers_answer_the_chosen_path_or_null() {
     let log = Log::default();
@@ -492,11 +506,11 @@ fn a_command_naming_its_document_runs_on_that_document() {
     let first = app.session.active().unwrap().serial;
     app.run("file.new", json!({"width": 16, "height": 16, "name": "Second"})).unwrap();
     let mut budget = RunBudget::default();
-    let mut commands = AppCommands { app: &mut app, automation: false, budget: &mut budget };
+    let mut commands = AppCommands { app: &mut app, automation: false, gated: false, budget: &mut budget };
     commands.execute("layer.new.layer", json!({"name": "There", ON_DOCUMENT: first})).unwrap();
     assert_eq!(app.session.active().unwrap().doc.name, "First");
     assert_eq!(layer_names(&app)[0], "There");
-    let mut commands = AppCommands { app: &mut app, automation: false, budget: &mut budget };
+    let mut commands = AppCommands { app: &mut app, automation: false, gated: false, budget: &mut budget };
     let gone = commands.execute("layer.new.layer", json!({ON_DOCUMENT: 9999})).unwrap_err();
     assert_eq!(gone, "the document is no longer open");
 }
@@ -515,6 +529,38 @@ fn a_run_started_by_automation_keeps_its_gate() {
     assert!(layer_names(&app).iter().all(|n| n != "late"), "{:?}", layer_names(&app));
     assert!(app.scripts.log.iter().any(|l| l.contains("not for automation")), "{:?}", app.scripts.log);
     assert!(!app.automation_input);
+}
+
+/// A run an agent started under the agent policy doesn't go on without it: once the policy is
+/// gone (the agent link stopped), its commands are refused, not run ungated.
+#[test]
+fn a_run_started_under_an_agent_policy_stops_when_the_policy_goes() {
+    let log = Log::default();
+    let mut app = app(vec![vec![Act::Try("layer.new.layer", json!({"name": "late"}))]], &log);
+    app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+    app.services.automation_command = Some(Box::new(|_, _| Ok(())));
+    app.automation_input = true;
+    start_named(&mut app, "agent.jsx");
+    app.automation_input = false;
+    app.services.automation_command = None;
+    settle(&mut app);
+    assert!(layer_names(&app).iter().all(|n| n != "late"), "{:?}", layer_names(&app));
+    assert!(app.scripts.log.iter().any(|l| l.contains("agent link")), "{:?}", app.scripts.log);
+}
+
+/// A document the policy won't switch to is refused with the policy's reason.
+#[test]
+fn a_refused_switch_to_the_target_document_keeps_its_reason() {
+    let log = Log::default();
+    let mut app = app(vec![], &log);
+    app.run("file.new", json!({"width": 16, "height": 16, "name": "First"})).unwrap();
+    let first = app.session.active().unwrap().serial;
+    app.run("file.new", json!({"width": 16, "height": 16, "name": "Second"})).unwrap();
+    app.services.automation_command = Some(Box::new(|id, _| if id == "document.activate" { Err("no switching".into()) } else { Ok(()) }));
+    let mut budget = RunBudget::default();
+    let mut commands = AppCommands { app: &mut app, automation: true, gated: true, budget: &mut budget };
+    let err = commands.execute("layer.new.layer", json!({ON_DOCUMENT: first})).unwrap_err();
+    assert!(err.contains("no switching"), "{err}");
 }
 
 /// The work a run asks of the app is bounded, whatever the script's own time.
@@ -544,7 +590,7 @@ fn duplicating_a_group_counts_every_layer_it_copies() {
     }
     let serial = app.session.active().unwrap().serial;
     let mut budget = RunBudget { layers: MAX_RUN_LAYERS - 2, ..RunBudget::default() };
-    let mut commands = AppCommands { app: &mut app, automation: false, budget: &mut budget };
+    let mut commands = AppCommands { app: &mut app, automation: false, gated: false, budget: &mut budget };
     assert_eq!(commands.copies("layer.duplicate", Some(serial), &json!({"layer": group})), 3);
     let err = commands.execute("layer.duplicate", json!({"layer": group, ON_DOCUMENT: serial})).unwrap_err();
     assert!(err.contains("layers"), "{err}");
@@ -570,7 +616,7 @@ fn duplicates_are_charged_the_layers_they_make() {
     let serial = app.session.active().unwrap().serial;
     let layers = |app: &PhotocraftApp| u32::try_from(app.session.active().unwrap().doc.layer_count()).unwrap();
     let mut budget = RunBudget::default();
-    let mut commands = AppCommands { app: &mut app, automation: false, budget: &mut budget };
+    let mut commands = AppCommands { app: &mut app, automation: false, gated: false, budget: &mut budget };
     let before = layers(commands.app);
     commands.execute("layer.duplicate", json!({"layer": group, ON_DOCUMENT: serial})).unwrap();
     assert_eq!(layers(commands.app) - before, commands.budget.layers, "a group and the two layers in it");
@@ -629,8 +675,10 @@ fn a_run_that_panics_while_pumping_leaves_scripts_usable() {
     let log = Log::default();
     let mut app = app(vec![vec![Act::Run("no.such.command", json!({}))], vec![]], &log);
     start_named(&mut app, "boom.jsx");
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| settle(&mut app)));
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| settle(&mut app))).is_err();
+    assert!(panicked, "the run panics on the unknown command");
     assert!(!app.scripts.pumping, "the pump is over");
+    assert!(!app.scripts.running(), "and the run with it");
     finish(&mut app, Ok(()));
     assert!(start(&mut app, ScriptStart { name: "next.jsx".into(), source: String::new(), app_name: None }, None).is_ok());
 }

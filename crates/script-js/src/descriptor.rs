@@ -312,6 +312,10 @@ fn string_to_id(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<Js
     let id = string_id(&s);
     if let Some(r) = ctx.realm().host_defined().get::<Registry>() {
         let mut strings = r.strings.borrow_mut();
+        // Two strings with one id would be one descriptor key: refused rather than mixed up.
+        if let Some(other) = strings.get(&id).filter(|other| **other != s) {
+            return Err(error(format!("stringIDToTypeID: \"{}\" has the same ID as \"{other}\"; use another name", cut_id(&s))));
+        }
         // Only ids short enough to be identifiers are remembered for `typeIDToStringID`.
         if strings.len() < 1 << 16 && s.len() <= MAX_ID_TEXT {
             strings.entry(id).or_insert(s);
@@ -326,6 +330,41 @@ fn id_to_string(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<Js
     Ok(JsValue::from(JsString::from(s.as_str())))
 }
 
+/// `s`, cut to an identifier's length for a message.
+fn cut_id(s: &str) -> String {
+    s.chars().take(MAX_ID_TEXT).collect()
+}
+
+/// The ids in `items` (keys, units, enumerations) and the strings this run made them from.
+fn names_of(items: &[(u32, Item)], ctx: &Context) -> serde_json::Map<String, Value> {
+    let host = ctx.realm().host_defined();
+    let Some(r) = host.get::<Registry>() else { return serde_json::Map::new() };
+    let strings = r.strings.borrow();
+    let ids = items.iter().flat_map(|(k, item)| {
+        let more = match item {
+            Item::Unit(u, _) => vec![*u],
+            Item::Enum(t, v) => vec![*t, *v],
+            _ => Vec::new(),
+        };
+        std::iter::once(*k).chain(more)
+    });
+    ids.filter_map(|id| strings.get(&id).map(|s| (id.to_string(), Value::String(s.clone())))).collect()
+}
+
+/// Make the strings saved with custom options known again, so `typeIDToStringID` answers for
+/// their keys in a later run. Only a name whose id is its own is taken.
+fn restore_names(names: &Value, ctx: &Context) {
+    let host = ctx.realm().host_defined();
+    let (Some(names), Some(r)) = (names.as_object(), host.get::<Registry>()) else { return };
+    let mut strings = r.strings.borrow_mut();
+    for (id, name) in names.iter().take(MAX_KEYS * 3) {
+        let (Ok(id), Some(name)) = (id.parse::<u32>(), name.as_str()) else { continue };
+        if name.len() <= MAX_ID_TEXT && string_id(name) == id && strings.len() < 1 << 16 {
+            strings.entry(id).or_insert_with(|| name.to_owned());
+        }
+    }
+}
+
 // ---------- custom options ----------
 
 fn put_custom(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
@@ -336,8 +375,18 @@ fn put_custom(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
     }
     .ok_or_else(|| type_error("putCustomOptions takes a key and an ActionDescriptor"))?;
     let persistent = args.get(2).is_none_or(|v| v.is_undefined() || v.to_boolean());
-    let value = json!({ "items": items.iter().map(|(k, v)| v.to_json(*k)).collect::<Vec<_>>() });
-    if serde_json::to_vec(&value).map_or(usize::MAX, |b| b.len()) > crate::commands::MAX_JSON_BYTES {
+    let mut value = json!({ "items": items.iter().map(|(k, v)| v.to_json(*k)).collect::<Vec<_>>() });
+    let size = |v: &Value| serde_json::to_vec(v).map_or(usize::MAX, |b| b.len());
+    let names = names_of(&items, ctx);
+    if !names.is_empty() {
+        let mut named = value.clone();
+        named["names"] = Value::Object(names);
+        // The names are a convenience: saved when they fit, never the reason a save fails.
+        if size(&named) <= crate::commands::MAX_JSON_BYTES {
+            value = named;
+        }
+    }
+    if size(&value) > crate::commands::MAX_JSON_BYTES {
         return Err(JsNativeError::range()
             .with_message(format!("custom options can hold at most {} KiB; this descriptor holds more", crate::commands::MAX_JSON_BYTES >> 10))
             .into());
@@ -352,6 +401,7 @@ fn get_custom(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
     if v.is_null() {
         return Err(error_with_number(ctx, format!("there are no custom options for {key}"), 8500));
     }
+    restore_names(&v["names"], ctx);
     let items: Vec<(u32, Item)> = v["items"].as_array().map(|a| a.iter().take(MAX_KEYS).filter_map(Item::from_json).collect()).unwrap_or_default();
     new_descriptor(ctx, items)
 }
