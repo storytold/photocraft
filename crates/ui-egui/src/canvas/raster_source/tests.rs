@@ -188,39 +188,6 @@ fn a_channel_view_draws_its_own_picture() {
     assert_eq!(composite[6], Color32::WHITE, "the composite stays the document's");
 }
 
-/// The proxy preview is the GPU canvas's: without a GPU a large document's adjustment previews through the CPU proxy,
-/// and the layer path shows nothing (`adjust_preview::cheap`).
-#[test]
-fn during_a_proxy_adjustment_the_overlay_reads_the_preview_and_the_composite_the_document() {
-    let _gpu = photocraft_testkit::gpu_lock();
-    let rs = match std::panic::catch_unwind(|| egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())) {
-        Ok(rs) => rs,
-        Err(error) if std::env::var_os("PHOTOCRAFT_REQUIRE_GPU_TESTS").is_some() => std::panic::resume_unwind(error),
-        Err(_) => return,
-    };
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-    app.set_wgpu(rs);
-    app.run("file.new", json!({"width": 2400, "height": 2200, "background": "#808080"})).unwrap();
-    let st = app.session.active().unwrap();
-    assert!(crate::proxy::preview_factor(&st.doc, crate::proxy::reduced_previews(&app)) > 1, "large enough for a proxy preview");
-    // Only the red channel shows: an opaque view over the composite.
-    let view = &mut app.session.active_mut().unwrap().channel_view;
-    view.set_color_visible(1, false);
-    view.set_color_visible(2, false);
-    let ctx = app.ctx().clone();
-    let at = PixelRect::new(0, 0, 1, 1);
-    let overlay_before = read(&OverlayPrep::new(&mut app, &ctx, 0, None, None).unwrap().source(&app), at, 1).pixels;
-    let composite_before = read(&CompositePrep::new(&mut app, &ctx, 0, None, None).unwrap().source(&app), at, 1).pixels;
-    let id = crate::adjust_dialog::open(&mut app, "image.adjustments.levels").unwrap();
-
-    assert!(crate::adjust_dialog::apply_params(&mut app, id, &json!({"inBlack": 100})), "the dialog takes the black point");
-    assert!(crate::adjust_preview::display_doc(&mut app, 0).is_some(), "the adjustment previews");
-    let overlay = read(&OverlayPrep::new(&mut app, &ctx, 0, None, None).unwrap().source(&app), at, 1).pixels;
-    let composite = read(&CompositePrep::new(&mut app, &ctx, 0, None, None).unwrap().source(&app), at, 1).pixels;
-    assert_ne!(overlay, overlay_before, "the overlay shows the live preview");
-    assert_eq!(composite, composite_before, "the composite shows the document");
-}
-
 /// The CPU canvas (no usable GPU; a flipped or pixel-aspect-corrected view, or a GPU fallback, on a GPU machine) shows
 /// a filter dialog's live preview. It showed the document unfiltered.
 #[test]
@@ -338,5 +305,42 @@ fn channel_views_show_live_strokes_and_drop_discarded_ones() {
         assert!(std::sync::Arc::ptr_eq(&original, &app.session.documents()[0].doc), "{target}: nothing committed");
         crate::canvas::testing::key(&mut app, egui::Key::Escape, egui::Modifiers::NONE);
         assert_eq!(shown(&mut app), view(&app, &original), "{target}: a dropped stroke shows the channel as it was");
+    }
+}
+
+mod gpu_tests {
+    use super::*;
+
+    /// The proxy preview is the GPU canvas's: without a GPU a large document's adjustment previews through the CPU proxy,
+    /// and the layer path shows nothing (`adjust_preview::cheap`).
+    #[test]
+    fn during_a_proxy_adjustment_the_overlay_reads_the_preview_and_the_composite_the_document() {
+        let _gpu = photocraft_testkit::gpu_lock();
+        let rs = match std::panic::catch_unwind(|| egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())) {
+            Ok(rs) => rs,
+            Err(error) if std::env::var_os("PHOTOCRAFT_REQUIRE_GPU_TESTS").is_some() => std::panic::resume_unwind(error),
+            Err(_) => return,
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.set_wgpu(rs);
+        app.run("file.new", json!({"width": 2400, "height": 2200, "background": "#808080"})).unwrap();
+        let st = app.session.active().unwrap();
+        assert!(crate::proxy::preview_factor(&st.doc, crate::proxy::reduced_previews(&app)) > 1, "large enough for a proxy preview");
+        // Only the red channel shows: an opaque view over the composite.
+        let view = &mut app.session.active_mut().unwrap().channel_view;
+        view.set_color_visible(1, false);
+        view.set_color_visible(2, false);
+        let ctx = app.ctx().clone();
+        let at = PixelRect::new(0, 0, 1, 1);
+        let overlay_before = read(&OverlayPrep::new(&mut app, &ctx, 0, None, None).unwrap().source(&app), at, 1).pixels;
+        let composite_before = read(&CompositePrep::new(&mut app, &ctx, 0, None, None).unwrap().source(&app), at, 1).pixels;
+        let id = crate::adjust_dialog::open(&mut app, "image.adjustments.levels").unwrap();
+
+        assert!(crate::adjust_dialog::apply_params(&mut app, id, &json!({"inBlack": 100})), "the dialog takes the black point");
+        assert!(crate::adjust_preview::display_doc(&mut app, 0).is_some(), "the adjustment previews");
+        let overlay = read(&OverlayPrep::new(&mut app, &ctx, 0, None, None).unwrap().source(&app), at, 1).pixels;
+        let composite = read(&CompositePrep::new(&mut app, &ctx, 0, None, None).unwrap().source(&app), at, 1).pixels;
+        assert_ne!(overlay, overlay_before, "the overlay shows the live preview");
+        assert_eq!(composite, composite_before, "the composite shows the document");
     }
 }
