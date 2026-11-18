@@ -428,3 +428,44 @@ fn black_white_auto_button_sets_the_weights() {
     assert_ne!(after, before, "the red and blue are told apart");
     assert_eq!(history_len(&h), steps + 1);
 }
+
+/// The screen x of input `level` (0..=255) on the Curves graph, from its end points' nodes.
+fn curve_x(h: &Harness<'_, Box<PhotocraftApp>>, points: &[[f32; 2]], level: f32) -> f32 {
+    let n = points.len();
+    let first = h.get_by_label(&format!("Point 1 of {n}")).rect().center();
+    let last = h.get_by_label(&format!("Point {n} of {n}")).rect().center();
+    let (a, b) = (points[0][0], points[n - 1][0]);
+    first.x + (level - a) / (b - a) * (last.x - first.x)
+}
+
+/// The master curve of the Curves layer, in levels.
+fn master_points(h: &Harness<'_, Box<PhotocraftApp>>) -> Vec<[f32; 2]> {
+    match layer(h).1 {
+        Adjustment::Curves { master, .. } => master.iter().map(|p| [(p.input * 255.0).round(), (p.output * 255.0).round()]).collect(),
+        other => panic!("{other:?}"),
+    }
+}
+
+const BLACK_SLIDER: &str = "Input levels, Black input";
+const WHITE_SLIDER: &str = "Input levels, White input";
+
+/// #14384 in the Properties panel: the black and white input sliders under a Curves layer's graph move the end points'
+/// inputs and keep their outputs, an end point keeps 4 levels from its neighbour, and each drag is one history step.
+#[test]
+fn properties_curves_input_sliders_move_the_end_points() {
+    let mut h = app_harness("curves", "rgb", 8);
+    assert_eq!(master_points(&h), vec![[0.0, 0.0], [255.0, 255.0]]);
+    let steps = history_len(&h);
+    let black = h.get_by_label(BLACK_SLIDER).rect().center();
+    let to = curve_x(&h, &[[0.0, 0.0], [255.0, 255.0]], 40.0);
+    drag(&mut h, black, Pos2::new(to, black.y));
+    assert_eq!(master_points(&h), vec![[40.0, 0.0], [255.0, 255.0]], "the black end's input moves, its output stays");
+    assert_eq!(history_len(&h), steps + 1, "one history step");
+    // The panel's scroll bar takes presses along its right edge, over the right half of the white thumb.
+    let white = h.get_by_label(WHITE_SLIDER).rect();
+    let from = Pos2::new(white.left() + 1.0, white.center().y);
+    let to = curve_x(&h, &[[40.0, 0.0], [255.0, 255.0]], 0.0);
+    drag(&mut h, from, Pos2::new(to, from.y));
+    assert_eq!(master_points(&h), vec![[40.0, 0.0], [44.0, 255.0]], "the white end stops 4 levels past the black one");
+    assert_eq!(history_len(&h), steps + 2);
+}
