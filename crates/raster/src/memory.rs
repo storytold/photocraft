@@ -6,6 +6,8 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 
+pub mod system;
+
 const MIB: u64 = 1 << 20;
 
 #[derive(Clone, Copy, Debug, Default, serde::Serialize)]
@@ -76,14 +78,23 @@ pub fn configuration_generation() -> u64 {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn measure() -> Snapshot {
     use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
-    static SYSTEM: OnceLock<Mutex<System>> = OnceLock::new();
-    let mut s = SYSTEM.get_or_init(|| Mutex::new(System::new())).lock().unwrap_or_else(PoisonError::into_inner);
+    static SYSTEM: OnceLock<Mutex<Option<System>>> = OnceLock::new();
+    let mut guard = SYSTEM.get_or_init(|| Mutex::new(System::new().ok())).lock().unwrap_or_else(PoisonError::into_inner);
+    // No provider: an unknown total keeps the configured ceiling (see [`budgets`]).
+    let Some(s) = guard.as_mut() else { return Snapshot::default() };
     s.refresh_memory();
     let pid = Pid::from_u32(std::process::id());
     s.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), true, ProcessRefreshKind::nothing().with_memory());
+    // The shared detector bounds host memory by the process's cgroup and, on macOS, counts only
+    // reclaimable pages. A constraint it could not read keeps the host figure here: the tile
+    // budget only decides what to spill, and a fail-closed zero would stall every operation.
+    let available = match system::current() {
+        system::SystemMemory { available_ram: Some(ram), constraint_unreadable: false, .. } => ram,
+        _ => s.available_memory(),
+    };
     Snapshot {
         total_bytes: s.total_memory(),
-        available_bytes: s.available_memory(),
+        available_bytes: available,
         process_resident_bytes: s.process(pid).map_or(0, |p| p.memory()),
         process_virtual_bytes: s.process(pid).map_or(0, |p| p.virtual_memory()),
     }
@@ -184,6 +195,13 @@ impl Drop for Reservation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// `RESERVED` is process-wide, and `cargo test` runs this module's tests on threads of one
+    /// process (nextest gives each test its own), so the tests that reserve take turns: one's
+    /// reservation must not show up in another's before/after count.
+    static RESERVING: Mutex<()> = Mutex::new(());
+    fn reserving() -> std::sync::MutexGuard<'static, ()> {
+        RESERVING.lock().unwrap_or_else(PoisonError::into_inner)
+    }
     #[test]
     fn ceiling_includes_non_tile_memory_and_other_apps() {
         let s = Snapshot { total_bytes: 64 << 30, available_bytes: 10 << 30, process_resident_bytes: 20 << 30, process_virtual_bytes: 100 << 30 };
@@ -206,6 +224,7 @@ mod tests {
     }
     #[test]
     fn an_operation_that_fits_alone_waits_for_a_concurrent_one() {
+        let _turn = reserving();
         let available = refresh().transient_bytes;
         let first = try_reserve_operation(available / 2 + 1).unwrap();
         let releaser = std::thread::spawn(move || {
@@ -219,6 +238,7 @@ mod tests {
     }
     #[test]
     fn reservations_are_bounded_and_returned() {
+        let _turn = reserving();
         let before = stats().2;
         let r = try_reserve(1024).unwrap();
         assert_eq!(stats().2, before + 1024);
