@@ -642,13 +642,15 @@ fn structured_open_document_batch_guards_destinations_before_editing() {
             assert_eq!(result["errors"].as_array().unwrap().len(), 1, "{result}");
             assert!(result["errors"][0]["error"].as_str().unwrap().contains("not written"));
             assert_eq!(pixel, [0.0, 1.0, 1.0, 1.0], "the first result remains intact");
-            assert_eq!(s.documents()[1].history.past_len(), before);
-            assert_eq!(photocraft_compose::render(&s.documents()[1].doc, Rect::new(0, 0, 1, 1)).px[0], [0.0, 0.0, 1.0, 1.0]);
+            // #13673: the written document closed, so the refused one is the only tab left.
+            assert_eq!(s.documents().len(), 1, "{result}");
+            assert_eq!(s.documents()[0].history.past_len(), before);
+            assert_eq!(photocraft_compose::render(&s.documents()[0].doc, Rect::new(0, 0, 1, 1)).px[0], [0.0, 0.0, 1.0, 1.0]);
         } else {
             assert_eq!(result["files"].as_array().unwrap().len(), 2, "{result}");
             assert_eq!(result["errors"], json!([]), "{result}");
             assert_eq!(pixel, [1.0, 1.0, 0.0, 1.0], "native naming keeps the later result");
-            assert_eq!(s.documents()[1].history.past_len(), before + 1);
+            assert!(s.documents().is_empty(), "both written documents closed (#13673)");
         }
     }
 }
@@ -1270,7 +1272,7 @@ fn future_folder_case_variants_follow_the_nearest_existing_ancestor() {
 }
 
 #[test]
-fn batch_open_source_edits_each_live_document_and_restores_the_active_one() {
+fn batch_open_source_edits_each_live_document_and_closes_it_after_the_write() {
     let dir = tmp("batch-open-documents");
     let mut session = Session::new();
     session.execute("file.new", json!({"name": "First", "width": 8, "height": 6})).unwrap();
@@ -1285,11 +1287,14 @@ fn batch_open_source_edits_each_live_document_and_restores_the_active_one() {
     assert!(result["errors"].as_array().unwrap().is_empty(), "{result}");
     assert_eq!(result["documents"], 2);
     assert_eq!(result["files"].as_array().map(Vec::len), Some(2), "{result}");
-    assert_eq!(session.active_index(), Some(0));
-    assert_eq!((session.documents()[0].doc.size.width, session.documents()[0].doc.size.height), (6, 8));
-    assert_eq!((session.documents()[1].doc.size.width, session.documents()[1].doc.size.height), (5, 12));
-    assert!(std::path::Path::new(&join(&dir, "01_FIRST.PNG")).is_file());
-    assert!(std::path::Path::new(&join(&dir, "02_SECOND.PNG")).is_file());
+    // #13673: with a destination folder every document closes once its copy is written, so both
+    // live documents' edits are read back from the results.
+    assert!(session.documents().is_empty(), "{result}");
+    assert_eq!(session.active_index(), None);
+    for (name, width, height) in [("01_FIRST.PNG", 6u32, 8u32), ("02_SECOND.PNG", 5u32, 12u32)] {
+        let saved = photocraft_io::import(name, &std::fs::read(join(&dir, name)).unwrap()).unwrap().document;
+        assert_eq!((saved.size.width, saved.size.height), (width, height), "{name} holds the rotated live document");
+    }
 }
 
 #[test]

@@ -1155,6 +1155,8 @@ fn recorded_output_guard(p: &Value) -> bool {
 /// Source: Opened Files runs on the live documents, so edits remain in their histories.
 /// Documents are identified before playback; a step that closes or reorders tabs cannot make
 /// the next input silently become a different document.
+/// With a destination folder every document whose copy was written closes when the run ends, as
+/// the reference application does (#13673); a document whose step or write failed keeps its tab.
 fn batch_open_documents(
     s: &mut Session,
     steps: &[(String, Value)],
@@ -1203,6 +1205,7 @@ fn batch_open_documents(
     let mut errors = Vec::new();
     let mut stopped = None;
     let mut done = 0;
+    let mut closed: Vec<u64> = Vec::new();
     let mut written = OutputClaims::default();
     let check_duplicates = recorded_output_guard(p);
     for (index, (id, name, path)) in originals.iter().enumerate() {
@@ -1268,6 +1271,16 @@ fn batch_open_documents(
                 stopped = Some(name.clone());
                 break;
             }
+        } else if planned.is_some() {
+            // The copy is written, so this tab closes with the run (#13673).
+            closed.push(*id);
+        }
+    }
+    // Closing waits for the end of the loop: a step that picks a tab by index still sees the tabs
+    // it was recorded against, and a step that closed the document itself leaves nothing to close.
+    for id in closed {
+        if let Some(position) = s.documents().iter().position(|state| state.doc.id.0 == id) {
+            s.close(position);
         }
     }
     if let Some(id) = previous

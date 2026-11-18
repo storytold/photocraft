@@ -474,6 +474,10 @@ mod open_as_smart_object_tests;
 mod open_as_error_name_tests;
 
 #[cfg(test)]
+#[path = "file_cmds/batch_opened_files_close_tests.rs"]
+mod batch_opened_files_close_tests;
+
+#[cfg(test)]
 mod aces_exr_tests {
     use super::*;
 
