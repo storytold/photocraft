@@ -16,6 +16,8 @@ chrono = { workspace = true }
 toml = "1"
 # `i18n-report` looks the UI strings up in the craft-i18n catalogs as the app does.
 craft-i18n = { workspace = true }
+# `egui-fork` checks Cargo.lock against `craft::egui_fork`.
+craft = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
