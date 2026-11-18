@@ -9,7 +9,7 @@ use craft::ui::contract::{Bind, Props as _, Show as _};
 use craft::ui::dialog::{Alert, HostedAlert};
 use craft::ui::display::Divider;
 use craft::ui::runtime::env::Env;
-use photocraft_doc::{Fill, LayerContent};
+use photocraft_doc::{Fill, LayerContent, LayerId};
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
@@ -39,6 +39,41 @@ fn selected_shape(session: &photocraft_engine::Session) -> Option<SelectedShape>
         LayerContent::Shape(sh) => Some(SelectedShape { doc: st.doc.id, layer, fill: sh.fill.clone(), stroke: sh.stroke.clone(), live: sh.live.clone() }),
         _ => None,
     }
+}
+
+/// Runs the `shape.edit` `patch` of a Fill or Stroke edit on the `active` shape layer and on every other selected
+/// shape layer that is not locked, as Photoshop does (#15586). A layer without a stroke takes `new_stroke` as its
+/// stroke paint, and a 0 px width does not give it one. Stops at the first refused edit.
+pub(crate) fn edit_selected_shapes(app: &mut PhotocraftApp, active: LayerId, patch: &Value, new_stroke: Option<&Value>) -> Result<(), String> {
+    let Some(st) = app.session.active() else { return Ok(()) };
+    let targets: Vec<(LayerId, bool)> = st
+        .selected_layers()
+        .into_iter()
+        .filter_map(|id| {
+            let LayerContent::Shape(sh) = &st.doc.layer(id)?.content else { return None };
+            let locks = st.doc.effective_locks(id);
+            (id == active || !(locks.all || locks.pixels)).then_some((id, sh.stroke.is_some()))
+        })
+        .collect();
+    // Several layers edited by one click are still one History step.
+    let mut patch = patch.clone();
+    if patch.get("coalesce").is_none_or(Value::is_null) && targets.len() > 1 {
+        patch["coalesce"] = json!(format!("selected-shapes-{}", app.ui.alloc_id()));
+    }
+    for (layer, stroked) in targets {
+        let mut p = patch.clone();
+        p["layer"] = json!(layer.0);
+        if !stroked && let Some(stroke) = p.get_mut("stroke").and_then(Value::as_object_mut) {
+            if stroke.get("width").and_then(Value::as_f64) == Some(0.0) {
+                continue;
+            }
+            if let Some(paint) = new_stroke {
+                stroke.entry("color").or_insert_with(|| paint.clone());
+            }
+        }
+        app.run("shape.edit", p)?;
+    }
+    Ok(())
 }
 
 /// The geometry the bar shows: the tool's, or for Path and Direct Selection the selected live shape's.
@@ -270,11 +305,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
                 app.ui.tool_options.stroke_width = w;
                 // A 0 px "change" (an arrow step clamped at the minimum) must not add a stroke.
                 if has_stroke || w > 0.0 {
-                    let mut p = json!({"width": w});
-                    if !has_stroke {
-                        p["color"] = app.ui.tool_options.shape_stroke_gradient.as_ref().map_or_else(|| json!(bg), paint_param);
-                    }
-                    edit = Some(json!({"stroke": p}));
+                    edit = Some(json!({"stroke": {"width": w}}));
                 }
             }
             ShapeChange::StrokeStyle { style, width: enabled, .. } => {
@@ -282,9 +313,6 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
                 let mut p = options.params();
                 if let Some(w) = enabled {
                     p["width"] = json!(w);
-                }
-                if !has_stroke {
-                    p["color"] = app.ui.tool_options.shape_stroke_gradient.as_ref().map_or_else(|| json!(bg), paint_param);
                 }
                 app.ui.tool_options.shape_stroke = options;
                 app.ui.tool_options.stroke_width = enabled_stroke_width(app.ui.tool_options.stroke_width);
@@ -309,10 +337,17 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
             _ => {}
         }
         if let (Some(mut p), Some(s)) = (edit, &target) {
-            p["layer"] = json!(s.layer.0);
             let key = crate::history_keys::coalesce(&format!("shape-options-{:?}-{}-{}", s.doc, s.layer.0, field_of(change)), event);
             p["coalesce"] = json!(key);
-            if let Err(e) = app.run("shape.edit", p) {
+            let result = if matches!(field_of(change), "fill" | "stroke" | "stroke-w" | "stroke-style") {
+                // A layer without a stroke takes the next shape's stroke paint, as the active one does.
+                let new_stroke = app.ui.tool_options.shape_stroke_gradient.as_ref().map_or_else(|| json!(bg), paint_param);
+                edit_selected_shapes(app, s.layer, &p, Some(&new_stroke))
+            } else {
+                p["layer"] = json!(s.layer.0);
+                app.run("shape.edit", p).map(|_| ())
+            };
+            if let Err(e) = result {
                 app.ui.status = e;
                 app.ui.status_error = true;
                 applied = false;
@@ -383,3 +418,7 @@ mod rectangle_radius_target_tests;
 #[cfg(test)]
 #[path = "polygon_sides_alert_tests.rs"]
 mod polygon_sides_alert_tests;
+
+#[cfg(test)]
+#[path = "selected_shapes_paint_tests.rs"]
+mod selected_shapes_paint_tests;
