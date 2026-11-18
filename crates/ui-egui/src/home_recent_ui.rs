@@ -486,13 +486,7 @@ mod tests {
         let ctx = app.ctx().clone();
         let mut state = None;
         frames.frame(Vec::new(), |_| {
-            state = Some(thumbnails(&ctx).state(
-                &ctx,
-                &source(app, &ctx),
-                key,
-                &ThumbRequest::for_cell(64.0, 1.0),
-                craft::ui::primitives::Priority::VISIBLE,
-            ));
+            state = Some(thumbnails(&ctx).state(&ctx, &source(app, &ctx), key, &ThumbRequest::for_cell(64.0, 1.0), craft::ui::primitives::Priority::VISIBLE));
         });
         state.expect("the Home thumbnail caller ran")
     }
@@ -564,7 +558,10 @@ mod tests {
         std::fs::write(&path_string, flat_png([20, 100, 60, 255])).unwrap();
 
         // The former picture may be a stand-in, but it cannot satisfy the invalidated revision as Ready.
-        assert!(matches!(recent_thumbnail_pass(&app, &mut frames, &key), craft::ui::primitives::TextureState::Loading { .. }), "the completed old result is not current");
+        assert!(
+            matches!(recent_thumbnail_pass(&app, &mut frames, &key), craft::ui::primitives::TextureState::Loading { .. }),
+            "the completed old result is not current"
+        );
         assert_eq!(jobs.waiting(), 1, "the production source requests a replacement decoder");
         assert!(jobs.run_next(), "the replacement decoder completes");
         let state = recent_thumbnail_pass(&app, &mut frames, &key);

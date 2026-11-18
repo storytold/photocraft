@@ -193,7 +193,6 @@ fn worker_preview_matches_the_synchronous_render_and_ends_on_the_latest_settings
     );
 }
 
-
 /// An old job held after its real cancellation check. Drop always releases it and drains its queue, including on
 /// an assertion failure; all waits have bounds. This never substitutes for the production menu or develop job.
 #[cfg(not(target_arch = "wasm32"))]
@@ -233,7 +232,8 @@ fn hold_old_preview(app: &PhotocraftApp) -> (HeldPreview, std::sync::mpsc::Recei
         let _ = arrived.send(order);
         let (released, wake) = &*release;
         let released = released.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let (released, _) = wake.wait_timeout_while(released, std::time::Duration::from_secs(30), |released| !*released).unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (released, _) =
+            wake.wait_timeout_while(released, std::time::Duration::from_secs(30), |released| !*released).unwrap_or_else(std::sync::PoisonError::into_inner);
         if !*released {
             timed_out.store(true, std::sync::atomic::Ordering::Relaxed);
         }
@@ -247,7 +247,11 @@ fn wait_for_newer_preview(app: &mut PhotocraftApp, order: u64) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         frame(app);
-        if session(app).source.developed().is_some_and(|result| result.revision > order && result.settings.exposure == -1.0 && result.settings.highlights == 0.0) {
+        if session(app)
+            .source
+            .developed()
+            .is_some_and(|result| result.revision > order && result.settings.exposure == -1.0 && result.settings.highlights == 0.0)
+        {
             return;
         }
         assert!(std::time::Instant::now() < deadline, "the real newer request must publish while the older job is held");
@@ -279,9 +283,17 @@ fn a_stale_worker_never_replaces_a_newer_synchronous_render() {
         frame(&mut app);
         let later = describe(&app);
         assert_eq!(later["previewPending"], false);
-        assert_eq!((&later["previewRevision"], &later["histogram"]), (&landed["previewRevision"], &landed["histogram"]), "the old result reached publication last and did not replace the newer frame");
+        assert_eq!(
+            (&later["previewRevision"], &later["histogram"]),
+            (&landed["previewRevision"], &landed["histogram"]),
+            "the old result reached publication last and did not replace the newer frame"
+        );
         assert_eq!(processed(&app), shown_pixels, "the old result did not replace the displayed proxy pixels");
-        assert_eq!(session(&app).source.proxy_job(&shown(&app)).run().px, shown_pixels, "the pixels still match a synchronous develop of the control channel's settings");
+        assert_eq!(
+            session(&app).source.proxy_job(&shown(&app)).run().px,
+            shown_pixels,
+            "the pixels still match a synchronous develop of the control channel's settings"
+        );
         assert_eq!(landed["histogram"], single_develop_histogram(json!({"exposure": -1.0})), "the frame shown is the one for the latest settings");
     }
     #[cfg(target_arch = "wasm32")]
