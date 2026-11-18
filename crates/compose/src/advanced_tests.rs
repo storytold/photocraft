@@ -748,7 +748,7 @@ fn transparency_shapes_off_blends_a_clipped_layers_alpha_as_fill() {
             };
             let (off, on) = (masked(false), masked(true));
             assert!(off.iter().zip(&on).all(|(a, b)| close(*a, *b)), "{mode:?} ({depth:?}): a mask is not the layer's transparency");
-            assert!(off.iter().all(|p| close(*p, px(on30, 1.0))), "{mode:?} ({depth:?}): the mask is 30 % coverage: {:?}", off[0]);
+            assert!(off.iter().chain(&on).all(|p| close(*p, px(on30, 1.0))), "{mode:?} ({depth:?}): the mask is 30 % coverage: {:?}, {:?}", off[0], on[0]);
         }
     }
 }
