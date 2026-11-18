@@ -815,7 +815,9 @@ pub fn run<T: Send + 'static>(
     }
     let mut job = new_job(s, label, lock_document, authorization, document.clone(), apply)?;
     // A desktop that watches its jobs can answer this worker's Stop For Errors question;
-    // an inline or scripted run never parks (#13667).
+    // an inline or scripted run never parks (#13667). The flag is re-evaluated per
+    // file.automate.batch spawn; reset after the threaded spawn if a second spawn site
+    // ever appears.
     if s.jobs.batch_failure_questions {
         job.ctx.enable_batch_questions();
     }

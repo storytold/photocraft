@@ -989,8 +989,47 @@ fn stop_for_errors_stop_answers_with_the_partial_result_of_an_unasked_run() {
     assert_eq!(asked["skipped"], json!([inputs[2]]), "{asked}");
 }
 
-/// A run no desktop can answer (the CLI, the control channel, MCP): Stop For Errors keeps
-/// today's behaviour and ends at the first failure without parking.
+/// A jobs.cancel landing while the worker is parked on the failure question wakes it
+/// instead of hanging it: the run ends like the Stop answer does and its report says the
+/// run was cancelled as well (#13667).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn cancelling_while_parked_on_the_failure_question_ends_the_run_and_says_so() {
+    use std::time::Duration;
+
+    let dir = tmp("batch-stop-ask-cancel");
+    let first = png(&dir, "first.png", 8, 6, "#ff0000");
+    let second = png(&dir, "second.png", 8, 6, "#00ff00");
+    let third = png(&dir, "third.png", 8, 6, "#0000ff");
+    let outputs =
+        vec![(first.clone(), join(&dir, "out/first.png")), (second.clone(), join(&dir, "out/second.png")), (third.clone(), join(&dir, "out/third.png"))];
+    let ctx = crate::jobs::JobCtx::new();
+    ctx.enable_batch_questions();
+    let worker_ctx = ctx.clone();
+    let worker = std::thread::spawn(move || {
+        let policy = super::batch_run::BatchPolicy { stop_on_error: true, error_log: None };
+        super::batch_run::process_batch_outputs(72.0, outputs, "png", SaveOpts::default(), &policy, &worker_ctx, &|_, out| {
+            if out.ends_with("second.png") {
+                return Err(EngineError::Other("boom".into()));
+            }
+            Ok(false)
+        })
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !ctx.batch_waiting_for_decision() && std::time::Instant::now() < deadline {
+        std::thread::yield_now();
+    }
+    assert!(ctx.batch_waiting_for_decision(), "the failing input parked the run");
+    ctx.cancel();
+    let result = worker.join().expect("the parked worker wakes on cancel instead of hanging").unwrap();
+    assert_eq!(result["stopped"], json!(second), "{result}");
+    assert_eq!(result["skipped"], json!([third]), "{result}");
+    assert_eq!(result["errors"].as_array().map(Vec::len), Some(1), "{result}");
+    assert_eq!(result["cancelled"], json!(true), "{result}");
+}
+
+/// A run no desktop can answer (the CLI, the control channel's `engine.execute`, MCP):
+/// Stop For Errors keeps today's behaviour and ends at the first failure without parking.
 #[test]
 fn stop_for_errors_without_a_question_channel_ends_at_the_first_failure() {
     let dir = tmp("batch-stop-no-channel");
