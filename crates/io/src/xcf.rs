@@ -17,6 +17,19 @@
 //! The reader is written from the specification and from files GIMP 3.2 writes; no GIMP code.
 
 mod color;
+mod coverage;
+mod coverage_color;
+mod coverage_geometry;
+mod coverage_spatial;
+mod native_alignment;
+mod native_displacement;
+mod native_effects;
+mod native_masks;
+mod native_snapshot;
+#[cfg(test)]
+mod native_stage_tests;
+mod native_work;
+
 mod conversion;
 #[cfg(test)]
 mod dpi_tests;
@@ -139,6 +152,8 @@ struct Image<'a> {
     base_type: u32,
     colormap: Vec<[u8; 3]>,
     budget: usize,
+    native_source_budget: usize,
+    native_work: native_work::Work,
     /// Remaining allowance for copied layer metadata (names, item paths). Repeated layer
     /// offsets referencing one record with a large name would otherwise allocate an owned
     /// copy per reference, multiplying a small file into gigabytes of retained metadata.
@@ -181,7 +196,14 @@ struct CoverageMaskHeader<'a> {
     properties: Vec<Prop<'a>>,
     width: u32,
     height: u32,
+    hierarchy_offset: usize,
     children: Vec<usize>,
+}
+struct NativeEffectMask<'a> {
+    mask: LayerMask,
+    record: CoverageMaskHeader<'a>,
+    sample_flags: Pixels,
+    pixel_charge: usize,
 }
 
 struct PendingLayerEffects {
@@ -289,6 +311,83 @@ impl<'a> Image<'a> {
                 Ok((Vec::new(), false))
             }
         }
+    }
+
+    /// Keep the reviewed per-mask ownership accounting when a layer effect starts
+    /// installing masks: failed masks release only their own samples and tiles.
+    fn native_effect_mask(&mut self, offset: usize, owner: Rect, depth: SampleType, ctl: &Interrupt<'_>) -> Result<NativeEffectMask<'a>> {
+        ctl.check().map_err(|_| IoError::Cancelled)?;
+        let mut own_pixel_charge = 0usize;
+        let metadata_before = self.meta_budget;
+        let result = (|| -> Result<(LayerMask, CoverageMaskHeader<'a>, Pixels)> {
+            // Validate optional placement before following a pixel hierarchy.
+            // Rejected headers refund storage only; their shared scan work stays spent.
+            let record = self.coverage_mask_header(offset, ctl)?;
+            if record.properties.iter().any(|property| property.kind == 15 && property.data.iter().any(|byte| *byte != 0)) {
+                return Err(invalid("Source effect-mask channel has an unestablished placement property"));
+            }
+            let dx = owner.x0.checked_neg().ok_or_else(|| invalid("effect mask origin overflow"))?;
+            let dy = owner.y0.checked_neg().ok_or_else(|| invalid("effect mask origin overflow"))?;
+            let translate = |value: i32, delta: i32| value.checked_add(delta).ok_or_else(|| invalid("effect mask placement overflow"));
+            translate(record.width as i32, dx)?;
+            translate(record.height as i32, dy)?;
+            let before = self.budget;
+            let source_model = self.base_type;
+            self.base_type = 1;
+            let decoded = self.native_mask_hierarchy(record.hierarchy_offset, ctl);
+            self.base_type = source_model;
+            own_pixel_charge = before.saturating_sub(self.budget);
+            let pixels = decoded?;
+            if (pixels.width, pixels.height) != (record.width, record.height) {
+                return Err(invalid("native effect mask hierarchy dimensions differ from its declared frame"));
+            }
+            let mut surface = Surface::new(PixelFormat::new(ColorMode::Grayscale, depth, false));
+            let before = self.budget;
+            let Some(output_work) = pixels.data.len().checked_mul(4).and_then(|n| {
+                usize::try_from(photocraft_raster::tile_storage_bytes(Rect::new(0, 0, pixels.width as i32, pixels.height as i32), &surface.format()))
+                    .ok()
+                    .and_then(|tiles| n.checked_add(tiles))
+            }) else {
+                return self.native_work.refuse_unpriced("native mask output component count overflows", ctl);
+            };
+            self.native_work.charge_bytes(output_work, ctl)?;
+            let written = write_pixels(&mut surface, &pixels, 0, 0, &mut self.budget);
+            own_pixel_charge = own_pixel_charge.saturating_add(before.saturating_sub(self.budget));
+            written?;
+            if (dx, dy) != (0, 0) {
+                let bounds = surface.content_bounds();
+                if !bounds.is_empty() {
+                    let target = Rect::new(translate(bounds.x0, dx)?, translate(bounds.y0, dy)?, translate(bounds.x1, dx)?, translate(bounds.y1, dy)?);
+                    let bytes = usize::try_from(photocraft_raster::tile_storage_bytes(target, &surface.format()))
+                        .map_err(|_| invalid("effect mask tile storage overflows"))?;
+                    self.native_work.charge_bytes(bytes, ctl)?;
+                    self.budget = self.budget.checked_sub(bytes).ok_or_else(|| invalid("effect mask placement exceeds the pixel limit"))?;
+                    own_pixel_charge = own_pixel_charge.saturating_add(bytes);
+                    surface = photocraft_algo::resample::translate_surface(&surface, dx, dy);
+                }
+            }
+            ctl.check().map_err(|_| IoError::Cancelled)?;
+            Ok((LayerMask { surface, ..LayerMask::reveal_all() }, record, Pixels { data: Vec::new(), ..pixels }))
+        })();
+        if !matches!(&result, Ok(_) | Err(IoError::Cancelled)) {
+            self.budget = self.budget.saturating_add(own_pixel_charge);
+            self.meta_budget = metadata_before;
+        }
+        result.map(|(mask, record, sample_flags)| NativeEffectMask { mask, record, sample_flags, pixel_charge: own_pixel_charge })
+    }
+
+    fn native_mask_hierarchy(&mut self, hptr: usize, ctl: &Interrupt<'_>) -> Result<Pixels> {
+        ctl.check().map_err(|_| IoError::Cancelled)?;
+        let mut c = self.c.at(hptr);
+        let (w, h) = (c.u32()?, c.u32()?);
+        if w == 0 || h == 0 || w > MAX_SIDE || h > MAX_SIDE {
+            return Err(invalid("native mask dimensions are out of range"));
+        }
+        let Some(bytes) = (w as usize).checked_mul(h as usize).and_then(|n| n.checked_mul(4)) else {
+            return self.native_work.refuse_unpriced("native mask component count overflows", ctl);
+        };
+        self.native_work.charge_bytes(bytes, ctl)?;
+        self.hierarchy(hptr, 1, true, ctl)
     }
 
     /// Reads a hierarchy (`hptr`): the first level's tiles into `channels` floats per pixel,
@@ -446,6 +545,42 @@ impl<'a> Image<'a> {
         Ok(Channel { name, properties: props, pixels: px, effects: effect_pointers, name_limited, effects_limited })
     }
 
+    /// A distinct source identity for the ordinary native mask on a layer effect.
+    /// Call after the parent stage result is known, retaining raw display/unknown props.
+    fn layer_effect_mask_outcome(&mut self, parent: usize, offset: usize, name: &str, properties: &[Prop<'a>], committed: bool) -> Result<usize> {
+        let parent = self.outcomes.entry(parent)?.clone();
+        let mut targets = parent.targets;
+        for target in &mut targets {
+            target.label = if committed { "Native layer-effect mask" } else { "Native parent layer; auxiliary source coverage was not installed" }.into();
+        }
+        let outcome = self.outcomes.push(ConversionEntry {
+            feature_code: "xcf.layer_effect_mask".into(),
+            source: conversion::source(
+                "layer_effect_mask",
+                parent.source.ordinal as usize,
+                offset,
+                name,
+                &parent.source.item_path,
+                properties.iter().find(|property| property.kind == 20).and_then(|property| be_u32(property.data)),
+            ),
+            targets,
+            disposition: if committed { ConversionDisposition::NativeEquivalent } else { ConversionDisposition::RetainedUnapplied },
+            reason: ConversionReason::NativePolicy,
+            source_description: "Stored image-global layer-effect mask coverage".into(),
+            native_description: if committed {
+                "Stored coverage became an ordinary editable native layer/filter mask; supported nested coverage conversions are reported separately"
+            } else {
+                "The owning source operation was not committed; temporary auxiliary coverage was discarded and its configuration remains inert"
+            }
+            .into(),
+            attachments: Vec::new(),
+        })?;
+        for property in properties {
+            self.outcomes.property(outcome, property.kind, property.offset, property.data)?;
+        }
+        Ok(outcome)
+    }
+
     /// Follow only bounded mask framing and child-effect references. The hierarchy
     /// pointer is read as inert data and is never followed or materialized.
     fn coverage_mask_header(&mut self, offset: usize, ctl: &Interrupt<'_>) -> Result<CoverageMaskHeader<'a>> {
@@ -461,14 +596,14 @@ impl<'a> Image<'a> {
         let (name, name_limited) = self.metadata_name(&mut c, "Mask")?;
         let properties = wire::props_with_work(&mut c, ctl, &mut |bytes| self.effect_decode_work.charge(bytes))?;
         self.effect_decode_work.charge(8)?;
-        let _hierarchy = c.ptr()?;
+        let hierarchy_offset = c.ptr()?;
         let children =
             if self.version >= 26 { effects::read_pointers_with_work(&mut c, &mut self.meta_budget, &mut self.effect_decode_work, ctl)? } else { Vec::new() };
         // metadata_name already charged the admitted name allocation. The fallback
         // is bounded; never materialize a source-sized name before checking its allowance.
         let bytes = std::mem::size_of::<CoverageMaskHeader<'_>>().saturating_add(properties.len().saturating_mul(std::mem::size_of::<Prop<'_>>()));
         self.meta_budget = self.meta_budget.checked_sub(bytes).ok_or(IoError::XcfMetadataLimit)?;
-        Ok(CoverageMaskHeader { name, name_limited, properties, width, height, children })
+        Ok(CoverageMaskHeader { name, name_limited, properties, width, height, hierarchy_offset, children })
     }
 
     /// Current P2 has no coverage adapters: inventory source configuration once,
@@ -835,10 +970,12 @@ fn validate_canvas(w: u32, h: u32) -> Result<()> {
 }
 
 /// Returns an explicit byte-order choice request for historically ambiguous high-depth storage.
-fn sample_order_request(version: u32, precision: Precision) -> Result<Option<crate::HistoricalXcfSampleOrderRequest>> {
+fn sample_order_request(version: u32, precision: Precision, base_type: u32) -> Result<Option<crate::HistoricalXcfSampleOrderRequest>> {
     if (7..=11).contains(&version) && precision.bytes > 1 {
         let bits_per_sample = precision.bytes.checked_mul(8).and_then(|n| u32::try_from(n).ok()).ok_or_else(|| invalid("precision bit count overflows"))?;
-        Ok(Some(crate::HistoricalXcfSampleOrderRequest { version, bits_per_sample }))
+        // Both callers validate the base type and reject high-depth indexed data first.
+        let mode = if base_type == 1 { ColorMode::Grayscale } else { ColorMode::Rgb };
+        Ok(Some(crate::HistoricalXcfSampleOrderRequest { version, bits_per_sample, mode }))
     } else {
         Ok(None)
     }
@@ -875,7 +1012,7 @@ fn read_header(bytes: &[u8]) -> Result<(Cursor<'_>, Header)> {
 /// Inspects only the shared fixed header, without decoding document pixels.
 pub(crate) fn historical_sample_order_request(bytes: &[u8]) -> Result<Option<crate::HistoricalXcfSampleOrderRequest>> {
     let (_, header) = read_header(bytes)?;
-    sample_order_request(header.version, header.precision)
+    sample_order_request(header.version, header.precision, header.base_type)
 }
 
 /// Imports unwrapped XCF; ambiguous historical samples require an explicit choice.
@@ -991,7 +1128,7 @@ fn import_with_sample_order_and_parasite_work(
     }
     // Development writers did not define high-depth sample byte order in XCF7–11.
     // Neither source pixels nor producer names establish the original host order.
-    let request = sample_order_request(version, precision)?;
+    let request = sample_order_request(version, precision, base_type)?;
     let historical_sample_order_ambiguous = request.is_some();
     let sample_order = match request {
         Some(request) => selected_order.ok_or(IoError::HistoricalXcfSampleOrderRequired(request))?,
@@ -1081,6 +1218,8 @@ fn import_with_sample_order_and_parasite_work(
         base_type,
         colormap,
         budget: MAX_PIXEL_BYTES,
+        native_source_budget: MAX_PIXEL_BYTES,
+        native_work: Default::default(),
         meta_budget: MAX_METADATA_BYTES,
         effect_decode_work: Default::default(),
         text_decode_work: Default::default(),
@@ -1274,7 +1413,11 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
     for pending in std::mem::take(&mut image.pending_effects) {
         ctl.check().map_err(|_| IoError::Cancelled)?;
         let original = document.layer(pending.layer).ok_or_else(|| invalid("native effect owner is missing"))?;
-        // GIMP's serialized list is top-first; its last stored filter is the first
+        let original_name = original.name.clone();
+        let mut builder = None;
+        let mut applied = false;
+        let mut omitted = false;
+        // The stored list is top-first; its last stored filter is the first
         // operation on the drawable. Independently saved stack evidence verifies this.
         for pointer in pending.pointers.iter().rev().copied() {
             ctl.check().map_err(|_| IoError::Cancelled)?;
@@ -1295,6 +1438,9 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
                 Err(error) => {
                     // Failed decoding retains no effect allocation; preserve only the caller's traversal charges.
                     image.meta_budget = before_effect;
+                    // A fixed general note deduplicates hostile offsets without
+                    // copying owner names, and survives optional report truncation.
+                    image.warnings.note("Optional stored effect data could not be decoded; usable pixels were preserved. See the conversion report");
                     image.outcomes.push(ConversionEntry {
                         feature_code: "xcf.layer_effect".into(),
                         source,
@@ -1309,6 +1455,18 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
                 }
             };
             source.name = effect.name.into();
+            let context = effects::MappingContext {
+                mode: document.mode,
+                linear: image.precision.linear,
+                owner_bounds: Rect::from_xywh(0, 0, pending.bounds.width(), pending.bounds.height()),
+                native_filter_bounds: Rect::from_xywh(0, 0, pending.bounds.width(), pending.bounds.height()),
+                target_profile: document.icc_profile.clone(),
+                resolution_dpi: document.resolution_dpi,
+                remaining_generation_bytes: image.budget.min(image.native_source_budget),
+                native_work: Some(&image.native_work),
+                remaining_metadata_bytes: image.meta_budget,
+                interrupt: *ctl,
+            };
             let mut notes = Vec::new();
             if !effect.icon.is_empty() {
                 notes.push("Source icon identity remains inert presentation metadata".into());
@@ -1332,15 +1490,138 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
                     _ => {}
                 }
             }
+            let generation_rejections = image.native_work.rejections();
+            let mut parameter_charge = 0usize;
+            let mapped = effects::map(&effect, &context).and_then(|mapping| {
+                let params = native_parameter_bytes(&mapping)
+                    .map_err(|error| effects::MappingFailure { reason: ConversionReason::RetentionLimit, message: error.to_string() })?;
+                let Some(remaining) = image.meta_budget.checked_sub(params) else {
+                    return Err(effects::MappingFailure {
+                        reason: ConversionReason::RetentionLimit,
+                        message: "Native effect parameters exceed the shared metadata allowance".into(),
+                    });
+                };
+                image.meta_budget = remaining;
+                parameter_charge = params;
+                Ok(mapping)
+            });
+            ctl.check().map_err(|_| IoError::Cancelled)?;
+            let mut mask_report = None;
+            let mut mask_pixel_charge = 0usize;
+            let result = match mapped {
+                Err(failure) => Err(failure),
+                Ok(mapping) => {
+                    // Generated native parameters (notably native LUT text) share the
+                    // existing metadata ceiling; a tiny repeated source cannot grow it freely.
+                    if builder.is_none() {
+                        match native_effects::NativeOwner::new_with_work(
+                            document,
+                            original,
+                            pending.bounds,
+                            &mut image.native_source_budget,
+                            &image.native_work,
+                            ctl,
+                        ) {
+                            Ok(owner) => builder = Some(owner),
+                            Err(IoError::Cancelled) => return Err(IoError::Cancelled),
+                            Err(error) => notes.push(format!("Native effect contents could not be prepared: {error}")),
+                        }
+                    }
+                    if let Some(owner) = &mut builder {
+                        let mask = (|| -> Result<Option<LayerMask>> {
+                            if effect.mask_offset == 0 {
+                                Ok(None)
+                            } else {
+                                let prepared = image.native_effect_mask(effect.mask_offset, pending.bounds, document.depth, ctl)?;
+                                mask_pixel_charge = prepared.pixel_charge;
+                                if !prepared.record.children.is_empty() {
+                                    notes.push(
+                                        "Stored mask child effects remain inactive in this slice; the parent uses the retained original native mask coverage"
+                                            .into(),
+                                    );
+                                }
+                                mask_report = Some((prepared.record, prepared.sample_flags));
+                                Ok(Some(prepared.mask))
+                            }
+                        })();
+                        // The source Replace filter mode becomes the normal native filter mix.
+                        let (blend, approximation) = if effect.mode == 62 { (BlendMode::Normal, None) } else { blend_mode(effect.mode as u32) };
+                        if let Some(name) = approximation {
+                            notes.push(format!("Source stage blend {name} uses the native {blend:?} approximation"));
+                        }
+                        match mask {
+                            Err(IoError::Cancelled) => return Err(IoError::Cancelled),
+                            Err(IoError::XcfMetadataLimit | IoError::XcfNativeWorkLimit | IoError::XcfNativeWorkUnpriced(_)) => Err(effects::MappingFailure {
+                                reason: ConversionReason::RetentionLimit,
+                                message: "Optional effect-mask metadata or decode work exceeds its shared allowance; stage not applied".into(),
+                            }),
+                            Err(error) => Err(effects::MappingFailure {
+                                reason: ConversionReason::InvalidOptionalData,
+                                message: format!("Optional effect mask could not be translated; stage not applied: {error}"),
+                            }),
+                            Ok(mask) => match owner.push(
+                                mapping,
+                                native_effects::NativeEnvelope { opacity: effect.opacity, blend, visible: effect.visible, mask },
+                                &mut image.native_source_budget,
+                                ctl,
+                            ) {
+                                Ok(stage_notes) => {
+                                    applied = true;
+                                    notes.extend(stage_notes);
+                                    Ok(())
+                                }
+                                Err(IoError::Cancelled) => return Err(IoError::Cancelled),
+                                Err(IoError::XcfNativeWorkLimit | IoError::XcfNativeWorkUnpriced(_)) => Err(effects::MappingFailure {
+                                    reason: ConversionReason::RetentionLimit,
+                                    message: "Native generation exceeded its file-wide work allowance; stage not applied".into(),
+                                }),
+                                Err(IoError::Unsupported(message)) => Err(effects::MappingFailure::resource(message)),
+                                Err(error) => Err(effects::MappingFailure::from(format!("Native structure for this effect is unfinished: {error}"))),
+                            },
+                        }
+                    } else {
+                        Err(effects::MappingFailure::from(notes.join("; ")))
+                    }
+                }
+            };
+            if result.is_err() {
+                // A rejected owner drops this mask, but converted child-mask records
+                // still belong to the retained report and keep their own charges.
+                image.budget = image.budget.saturating_add(mask_pixel_charge);
+                image.meta_budget = image.meta_budget.saturating_add(parameter_charge);
+            }
+            let result = if image.native_work.rejections() != generation_rejections {
+                Err(effects::MappingFailure {
+                    reason: ConversionReason::RetentionLimit,
+                    message: "Native generation exceeded the file-wide nonrefundable work allowance; usable native content preserved".into(),
+                })
+            } else {
+                result
+            };
+            let mask_retained = mask_report.is_some() && result.is_ok();
             if effect.blend_space != 0 || effect.composite_space != 0 || effect.composite_mode != 0 || effect.clip || effect.region != 0 {
                 notes.push(format!("Native document blending/coverage applies; stored blend space {}, composite space {}, composite mode {}, clip {}, region {} are historical", effect.blend_space, effect.composite_space, effect.composite_mode, effect.clip, effect.region));
             }
-            let disposition = ConversionDisposition::RetainedUnapplied;
-            let reason = ConversionReason::MissingMapping;
-            let native = format!(
-                "Effect not applied; usable separate native content preserved. Native effect mapping is not implemented; stored configuration remains inert. {}",
-                notes.join("; ")
-            );
+            if omitted {
+                notes.push(
+                    "An earlier source stage was omitted; this stage receives the preserved native result rather than the complete source pipeline".into(),
+                );
+            }
+            let (disposition, reason, native) = match result {
+                Ok(()) => (
+                    ConversionDisposition::NativeApproximation,
+                    ConversionReason::NativePolicy,
+                    format!("Editable owner-local native smart contents and native filter/style rules. {}", notes.join("; ")),
+                ),
+                Err(failure) => {
+                    omitted = true;
+                    (
+                        ConversionDisposition::RetainedUnapplied,
+                        failure.reason,
+                        format!("Effect not applied; usable native owner preserved. {} {}", failure.message, notes.join("; ")),
+                    )
+                }
+            };
             let outcome = image.outcomes.push(ConversionEntry {
                 feature_code: "xcf.layer_effect".into(),
                 source,
@@ -1348,19 +1629,28 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
                 disposition,
                 reason,
                 source_description: format!(
-                    "{} ({}) version {}; visible {}, opacity {}, owner bounds {:?}",
+                    "{} ({}) version {}; visible {}, opacity {}",
                     effect.name,
                     effect.operation,
                     effect.version.unwrap_or("absent"),
                     effect.visible,
-                    effect.opacity,
-                    pending.bounds
+                    effect.opacity
                 ),
                 native_description: native,
                 attachments: Vec::new(),
             })?;
             image.outcomes.property_with_reason(outcome, 45, effect.record_offset, effect.raw, reason)?;
-            if effect.mask_offset != 0 {
+            if let Some((record, sample_flags)) = mask_report {
+                let owner = image.layer_effect_mask_outcome(outcome, effect.mask_offset, &record.name, &record.properties, mask_retained)?;
+                if record.name_limited {
+                    image.metadata_limit(owner, "xcf.mask_name", "Effect mask name omitted after metadata retention limits")?;
+                }
+                if mask_retained {
+                    image.precision_underflow(owner, &sample_flags)?;
+                }
+                image.inventory_coverage_effects(owner, &record.children, ctl)?;
+            }
+            if effect.mask_offset != 0 && !mask_retained {
                 // This slice retains the envelope, not the referenced mask channel/tiles.
                 // A later mask adapter must replace this loss disclosure when it retains
                 // or installs that data; the envelope pointer alone is not preservation.
@@ -1379,15 +1669,87 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
                             .into(),
                     attachments: Vec::new(),
                 })?;
-                image.warnings.layer(&original.name, "has a deferred effect mask whose referenced data is not retained; see the conversion report");
+                image.warnings.layer(&original_name, "has a deferred effect mask whose referenced data is not retained; see the conversion report");
             }
             for property in effect.unknown_properties {
                 image.outcomes.property(outcome, property.kind, property.offset, property.bytes)?;
             }
         }
-        image.warnings.layer(&original.name, "contains source effects that were retained without application; see the conversion report");
+        if applied && let Some(builder) = builder {
+            let layer = document.layer_mut(pending.layer).ok_or_else(|| invalid("native effect owner disappeared"))?;
+            layer.content = builder.content();
+        }
+        image.warnings.layer(
+            &original_name,
+            if omitted {
+                "contains source effects that were retained without application; see the conversion report"
+            } else {
+                "uses editable native filter contents with PhotoCraft compositing rules; see the conversion report"
+            },
+        );
     }
     Ok(())
+}
+
+/// Count generated native filter data without allocating a second JSON copy.
+/// Composite branches are ordinary native filters and share this same ceiling.
+fn native_parameter_bytes(mapping: &effects::NativeMapping) -> Result<usize> {
+    struct Count(usize);
+    impl std::io::Write for Count {
+        /// Counts native filter parameter serialization without another JSON copy, rejecting overflow or
+        /// exhausted metadata allowance.
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 = self
+                .0
+                .checked_add(bytes.len())
+                .filter(|n| *n <= MAX_METADATA_BYTES)
+                .ok_or_else(|| std::io::Error::other("native effect parameters exceed the metadata allowance"))?;
+            Ok(bytes.len())
+        }
+        /// Completes the native parameter counting writer without buffering output.
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut count = Count(0);
+    let mut pending = vec![mapping];
+    let mut visited = 0usize;
+    while let Some(mapping) = pending.pop() {
+        visited = visited.saturating_add(1);
+        if visited > 65 {
+            return Err(invalid("native effect construction exceeds its flat stage allowance"));
+        }
+        for filter in &mapping.filters {
+            serde_json::to_writer(&mut count, &filter.params).map_err(|e| invalid(e.to_string()))?;
+        }
+        match &mapping.structure {
+            Some(effects::NativeStructure::Composite { branches }) => {
+                for branch in branches {
+                    for filter in &branch.filters {
+                        serde_json::to_writer(&mut count, &filter.params).map_err(|e| invalid(e.to_string()))?;
+                    }
+                }
+            }
+            Some(effects::NativeStructure::Stages { steps, output }) => {
+                effects::validate_stages(steps, *output).map_err(|e| invalid(e.message))?;
+                for step in steps {
+                    match step {
+                        effects::NativeStage::Apply { mapping, .. } => pending.push(mapping),
+                        effects::NativeStage::Displace { metadata_limit, .. } => {
+                            count.0 = count
+                                .0
+                                .checked_add(*metadata_limit)
+                                .filter(|n| *n <= MAX_METADATA_BYTES)
+                                .ok_or_else(|| invalid("native dynamic maps exceed shared parameter allowance"))?;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(count.0)
 }
 
 /// Translate saved cubic geometry into ordinary native Paths panel entries.
