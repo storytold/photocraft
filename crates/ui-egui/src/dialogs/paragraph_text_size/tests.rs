@@ -1,7 +1,9 @@
 //! Alt+drag with the Type tool and the Paragraph Text Size dialog it opens (#12044): the dialog is
 //! measured (prefilled with the dragged size, decimals kept, OK creates the box at the drag start,
-//! Cancel creates nothing), and the two unmeasured neighbours of that route are checked to keep
-//! today's behaviour: a plain drag still makes the box directly, and Alt+click is still point text.
+//! Cancel creates nothing), and the neighbours of that route are checked to keep today's behaviour:
+//! a plain drag still makes the box directly, Alt+click is still point text, ⌥ is read at the press
+//! so it can come up or go down mid-drag, and a second drag while the dialog is open is swallowed
+//! by that dialog.
 //!
 //! The gestures go through the canvas pass (`canvas::testing`), the way the released Type tool does
 //! on the hosted framework: a press with ⌥ held, a move, a release. The dialog is driven the way a
@@ -19,7 +21,7 @@ use crate::state::Tool;
 use crate::type_tool::PLACEHOLDER;
 
 /// A 400 × 200 document with the Type tool ready.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 200})).unwrap();
     app.sync_views();
@@ -27,14 +29,15 @@ fn app() -> PhotocraftApp {
     app
 }
 
-/// Press at `from`, drag to `to` and release, holding `mods` through the gesture, as the canvas
-/// pass sees it: the Alt+drag rule reads ⌥ from the press of the gesture.
-fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2], mods: Modifiers) {
-    tool_event(app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, mods);
+/// Press at `from` with `down` held, drag to `to` and release with `up` held, as the canvas pass
+/// sees it (the move carries `up`, the state just before the release). ⌥ can change mid-gesture:
+/// the Alt+drag rule reads it from the press, and these two modifiers are how a test says so.
+fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2], down: Modifiers, up: Modifiers) {
+    tool_event(app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, down);
     if from != to {
-        tool_event(app, ToolEvent::Move { x: to[0], y: to[1], pressure: 1.0 }, mods);
+        tool_event(app, ToolEvent::Move { x: to[0], y: to[1], pressure: 1.0 }, up);
     }
-    tool_event(app, ToolEvent::Up { x: to[0], y: to[1] }, mods);
+    tool_event(app, ToolEvent::Up { x: to[0], y: to[1] }, up);
 }
 
 fn layers(app: &PhotocraftApp) -> usize {
@@ -82,7 +85,7 @@ fn box_rect(app: &PhotocraftApp, id: u64) -> [f64; 4] {
 fn alt_drag_opens_the_dialog_prefilled_with_the_dragged_size() {
     let mut app = app();
     let before = layers(&app);
-    drag(&mut app, [10.0, 10.0], [109.5, 60.0], Modifiers::ALT);
+    drag(&mut app, [10.0, 10.0], [109.5, 60.0], Modifiers::ALT, Modifiers::ALT);
     let (_id, f) = only_dialog(&app);
     assert_eq!((f["width"].as_f64(), f["height"].as_f64()), (Some(99.5), Some(50.0)), "the dragged size, decimals kept");
     assert_eq!(layers(&app), before, "the drag itself creates nothing");
@@ -94,7 +97,7 @@ fn alt_drag_opens_the_dialog_prefilled_with_the_dragged_size() {
 #[test]
 fn confirming_creates_the_paragraph_box_at_the_drag_start() {
     let mut app = app();
-    drag(&mut app, [10.0, 10.0], [109.5, 60.0], Modifiers::ALT);
+    drag(&mut app, [10.0, 10.0], [109.5, 60.0], Modifiers::ALT, Modifiers::ALT);
     let (d, _) = only_dialog(&app);
     set(&mut app, d, [("width", json!(250.0)), ("height", json!(120.0))]);
     let ctx = app.ctx().clone();
@@ -111,7 +114,7 @@ fn confirming_creates_the_paragraph_box_at_the_drag_start() {
 #[test]
 fn cancelling_creates_nothing() {
     let mut app = app();
-    drag(&mut app, [10.0, 10.0], [109.5, 60.0], Modifiers::ALT);
+    drag(&mut app, [10.0, 10.0], [109.5, 60.0], Modifiers::ALT, Modifiers::ALT);
     let (id, _) = only_dialog(&app);
     let before = layers(&app);
     let ctx = app.ctx().clone();
@@ -127,7 +130,7 @@ fn cancelling_creates_nothing() {
 #[test]
 fn confirming_after_another_document_became_active_creates_nothing() {
     let mut app = app();
-    drag(&mut app, [10.0, 10.0], [109.5, 60.0], Modifiers::ALT);
+    drag(&mut app, [10.0, 10.0], [109.5, 60.0], Modifiers::ALT, Modifiers::ALT);
     let (d, _) = only_dialog(&app);
     let first = app.session.active_index().unwrap();
     let first_layers = layers(&app);
@@ -149,7 +152,7 @@ fn confirming_after_another_document_became_active_creates_nothing() {
 #[test]
 fn a_plain_drag_still_makes_the_box_directly() {
     let mut app = app();
-    drag(&mut app, [10.0, 10.0], [110.0, 60.0], Modifiers::NONE);
+    drag(&mut app, [10.0, 10.0], [110.0, 60.0], Modifiers::NONE, Modifiers::NONE);
     assert!(app.framework.dialogs.open_dialogs().is_empty(), "a plain drag opens no dialog");
     let ed = app.ui.text_edit.as_ref().expect("the drag creates the text at once");
     assert_eq!(box_rect(&app, ed.layer), [10.0, 10.0, 100.0, 50.0]);
@@ -159,10 +162,65 @@ fn a_plain_drag_still_makes_the_box_directly() {
 #[test]
 fn an_alt_click_is_still_point_text() {
     let mut app = app();
-    drag(&mut app, [50.0, 100.0], [50.0, 100.0], Modifiers::ALT);
+    drag(&mut app, [50.0, 100.0], [50.0, 100.0], Modifiers::ALT, Modifiers::ALT);
     assert!(app.framework.dialogs.open_dialogs().is_empty(), "a click opens no dialog");
     let ed = app.ui.text_edit.as_ref().expect("the click creates point text");
     let t = text(&app, ed.layer);
     assert!(matches!(t.shape, photocraft_doc::text::TextShape::Point), "point text");
     assert_eq!([t.transform.m[4], t.transform.m[5]], [50.0, 100.0]);
+}
+
+/// Guard (pattern 8, the order of checks): ⌥ is read at the press of the gesture, so letting it up
+/// mid-drag does not take the dialog away. Pinning the chosen latch, so it passes with the rule read
+/// at the release too only if that rule were in the code: with the release read instead, this drag
+/// has no ⌥ left at the release and no dialog opens - seen red.
+#[test]
+fn alt_released_mid_drag_still_opens_the_dialog() {
+    let mut app = app();
+    let before = layers(&app);
+    drag(&mut app, [10.0, 10.0], [109.5, 60.0], Modifiers::ALT, Modifiers::NONE);
+    let (_id, f) = only_dialog(&app);
+    assert_eq!((f["width"].as_f64(), f["height"].as_f64()), (Some(99.5), Some(50.0)), "the dragged size, decimals kept");
+    assert_eq!(layers(&app), before, "the drag itself still creates nothing");
+    assert!(app.ui.text_edit.is_none(), "and still starts no edit session");
+}
+
+/// The same latch the other way, guard as well: ⌥ pressed only as the button comes up opens nothing,
+/// the gesture stays today's plain drag (rounded to the pixel, as it has always been).
+#[test]
+fn alt_pressed_mid_drag_makes_the_plain_box_instead() {
+    let mut app = app();
+    drag(&mut app, [10.0, 10.0], [109.5, 60.0], Modifiers::NONE, Modifiers::ALT);
+    assert!(app.framework.dialogs.open_dialogs().is_empty(), "⌥ pressed mid-drag opens no dialog");
+    let ed = app.ui.text_edit.as_ref().expect("the drag creates the text at once");
+    assert_eq!(box_rect(&app, ed.layer), [10.0, 10.0, 100.0, 50.0], "the plain drag's rounded box");
+}
+
+/// Guard: the dialog the first drag opened stays the only one, and a second canvas gesture while it
+/// is open reaches neither the rule nor `type.create`: nothing is created, nothing is edited.
+#[test]
+fn a_second_drag_while_the_dialog_is_open_creates_nothing() {
+    let mut app = app();
+    drag(&mut app, [10.0, 10.0], [109.5, 60.0], Modifiers::ALT, Modifiers::ALT);
+    let (_id, _) = only_dialog(&app);
+    let before = layers(&app);
+    drag(&mut app, [200.0, 20.0], [260.0, 70.0], Modifiers::ALT, Modifiers::ALT);
+    assert_eq!(app.framework.dialogs.open_dialogs().len(), 1, "the second drag opens no second dialog");
+    assert_eq!(layers(&app), before, "and creates nothing");
+    assert!(app.ui.text_edit.is_none(), "and starts no edit session");
+}
+
+/// Guard (pattern 9, no guessing from a name): the drag's top-left and the document it was made in
+/// are the family's captured value, not fields - a control `set_json_field` for a name the dialog
+/// does not show is refused, so the geometry cannot be pushed in through the field map.
+#[test]
+fn a_name_the_dialog_does_not_show_as_a_field_is_refused() {
+    let mut app = app();
+    drag(&mut app, [10.0, 10.0], [109.5, 60.0], Modifiers::ALT, Modifiers::ALT);
+    let (id, _) = only_dialog(&app);
+    let ctx = app.ctx().clone();
+    for field in ["at", "document", "box", "text"] {
+        assert!(app.framework.dialogs.set_json_field(&ctx, id, field, json!(1.0)).is_err(), "`{field}` is not a field of this dialog");
+    }
+    assert_eq!(only_dialog(&app).1["width"].as_f64(), Some(99.5), "and the two real fields keep the dragged size");
 }
