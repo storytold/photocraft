@@ -16,7 +16,14 @@
 //! the most spread-out ones (the bimodal 60/200 image is the worst); the exact spread of an image
 //! changes the real curve more than the mean does, and is not modelled.
 
-use super::auto_levels;
+use craft::imaging::ui::adjust::{CurvesMode, Levels, ToneCurves};
+use craft::imaging::ui::curve::Curve;
+
+/// The black and white inputs Levels' Auto finds in `h` (0.1 % clipped at each end).
+fn auto_levels(h: &[u32; 256]) -> (f32, f32) {
+    let levels = Levels::new(0.0, 1.0, 255.0, 0.0, 255.0).auto(h);
+    (levels.in_black as f32, levels.in_white as f32)
+}
 
 /// The white input of a Curves Auto curve that does not reach white (the reference application's Auto: about 228).
 const WHITE_FLOOR: f32 = 228.0;
@@ -62,6 +69,22 @@ pub(super) fn auto_curve(h: &[u32; 256]) -> Vec<[f32; 2]> {
     }
     points.push([white, 255.0]);
     points
+}
+
+/// `curves` after Auto on `channel` (an index into its channels, `histograms` in the same order): that channel's
+/// curve becomes [`auto_curve`] of its histogram, as points, or drawn into its map in pencil mode; the other
+/// channels are kept. `None` when the channel has no histogram or an empty one (a fully transparent layer).
+pub(super) fn auto(curves: &ToneCurves, channel: usize, histograms: &[[u32; 256]]) -> Option<ToneCurves> {
+    let h = histograms.get(channel).filter(|h| h.iter().any(|&n| n != 0))?;
+    let points = auto_curve(h);
+    let mut next = curves.clone();
+    let slot = next.curves.get_mut(channel)?;
+    *slot = match curves.mode {
+        // The levels of the same natural spline the point curve would draw.
+        CurvesMode::Pencil => Curve::Map(super::values::curve_sampler(&points).into_iter().map(|y| y.clamp(0.0, 255.0)).collect()),
+        _ => Curve::smooth(points),
+    };
+    Some(next)
 }
 
 #[cfg(test)]
@@ -132,6 +155,71 @@ mod tests {
                 let got = at(&curve, *x);
                 assert!((got - want).abs() <= tolerance, "{lo}..{hi} at {x}: {got} vs {want}: {curve:?}");
             }
+        }
+    }
+
+    fn two_tone_counts() -> [u32; 256] {
+        let mut h = [0u32; 256];
+        h[60] = 1536;
+        h[190] = 1536;
+        h
+    }
+
+    /// #9229, #9237: Auto sets the shown channel's point curve to the fitted curve of its own histogram and keeps the
+    /// other channels.
+    #[test]
+    fn auto_sets_only_the_shown_channel_as_points() {
+        let red = Curve::smooth(vec![[0.0, 0.0], [128.0, 160.0], [255.0, 255.0]]);
+        let curves = ToneCurves::new(vec![Curve::identity(255.0), red.clone(), Curve::identity(255.0), Curve::identity(255.0)], CurvesMode::Points);
+        let histograms = [[0u32; 256], two_tone_counts(), [0u32; 256], [0u32; 256]];
+        let next = auto(&curves, 1, &histograms).expect("a histogram to fit");
+        assert_eq!(next.curves[1], Curve::smooth(vec![[0.0, 0.0], [64.0, 57.0], [146.0, 168.0], [187.0, 220.0], [228.0, 255.0]]));
+        assert_eq!((&next.curves[0], &next.curves[2], &next.curves[3]), (&curves.curves[0], &curves.curves[2], &curves.curves[3]));
+        assert_eq!(next.mode, CurvesMode::Points);
+    }
+
+    /// With the pencil, Auto draws the shown channel's map as the levels of that same curve and stays in pencil mode,
+    /// so a map drawn on another channel keeps every one of its levels (CodeRabbit review on curves.rs:381: leaving
+    /// the pencil refits every channel's map).
+    #[test]
+    fn auto_with_the_pencil_redraws_only_the_shown_channel() {
+        let red: Vec<f32> = (0..256).map(|i| if i % 2 == 0 { i as f32 } else { (255 - i) as f32 }).collect();
+        let composite: Vec<f32> = (0..256).map(|i| (255 - i) as f32).collect();
+        let curves = ToneCurves::new(vec![Curve::Map(composite), Curve::Map(red.clone())], CurvesMode::Pencil);
+        let next = auto(&curves, 0, &[two_tone_counts(), [0u32; 256]]).expect("a histogram to fit");
+        assert_eq!(next.mode, CurvesMode::Pencil, "Auto keeps the pencil");
+        assert_eq!(next.curves[1], Curve::Map(red), "the red map is untouched");
+        let Curve::Map(got) = &next.curves[0] else { panic!("{:?}", next.curves[0]) };
+        let want = [[0.0f32, 0.0], [64.0, 57.0], [146.0, 168.0], [187.0, 220.0], [228.0, 255.0]];
+        assert_eq!(got.len(), 256);
+        for x in [0usize, 64, 146, 187, 228, 255] {
+            assert!((got[x] - at(&want, x)).abs() < 0.01, "level {x}: {} vs {}", got[x], at(&want, x));
+        }
+        assert_eq!((got[0], got[255]), (0.0, 255.0));
+    }
+
+    /// CodeRabbit on #9237: a fully transparent layer has an empty histogram, so Curves' Auto leaves the curve alone
+    /// instead of clipping it to the levels 253..255; a channel without a histogram changes nothing either.
+    #[test]
+    fn auto_on_an_empty_or_missing_histogram_changes_nothing() {
+        let curves = ToneCurves::new(vec![Curve::smooth(vec![[0.0, 0.0], [128.0, 160.0], [255.0, 255.0]])], CurvesMode::Points);
+        assert_eq!(auto(&curves, 0, &[[0u32; 256]]), None);
+        assert_eq!(auto(&curves, 0, &[]), None);
+        assert_eq!(auto(&curves, 3, &[two_tone_counts()]), None);
+    }
+
+    /// #9237 review: on a flat image (all one level) Curves' Auto gives finite points with distinct inputs, so the
+    /// curve never collapses to a vertical line: black at (0, 0) and the white end at 228, or at the image's own white
+    /// (255) when it is white.
+    #[test]
+    fn a_flat_image_keeps_a_finite_non_vertical_curve() {
+        for (level, white) in [(0usize, 228.0), (128, 228.0), (255, 255.0)] {
+            let mut h = [0u32; 256];
+            h[level] = 3072;
+            let pts = auto_curve(&h);
+            assert!(pts.iter().flatten().all(|x| x.is_finite()), "{level}: {pts:?}");
+            assert!(pts.windows(2).all(|w| w[1][0] > w[0][0]), "{level}: the inputs increase, no vertical segment: {pts:?}");
+            assert_eq!((pts.first(), pts.last()), (Some(&[0.0, 0.0]), Some(&[white, 255.0])), "{level}: {pts:?}");
         }
     }
 

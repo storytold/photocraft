@@ -7,16 +7,15 @@
 //! presets first, which can't be undone; Cancel imports nothing. Without a clash the file imports
 //! at once, as before.
 //!
-//! The prompt is an ordinary dialog in the UI state: `ui.inspect` shows it, `ui.dialog.confirm`
-//! imports as a new group, `ui.dialog.set` with `"choice": "replace"` then `ui.dialog.confirm`
-//! replaces, and `ui.dialog.cancel` imports nothing.
+//! The prompt is a `StandardPrompt` on the dialog host and the held import travels in its tag:
+//! `ui.inspect` shows it, `ui.dialog.confirm` imports as a new group, `ui.dialog.set` with
+//! `"choice": "alternate"` then `ui.dialog.confirm` replaces, and `ui.dialog.cancel` imports nothing.
 
-use serde_json::{Map, Value, json};
+use craft::ui::dialog::{PromptAnswer, PromptChoice, StandardPrompt};
+use serde_json::{Value, json};
 
+use super::alerts;
 use crate::PhotocraftApp;
-use crate::state::DialogKind;
-
-const MARK: &str = "__presetGroupClash";
 
 /// An import held back while the prompt is up.
 pub struct Held {
@@ -26,9 +25,8 @@ pub struct Held {
     pub params: Value,
 }
 
-pub fn owns(fields: &Map<String, Value>) -> bool {
-    fields.contains_key(MARK)
-}
+/// The tag of the prompt: the import it holds back.
+pub(crate) struct PresetClash(Held);
 
 /// How many of the user's presets a group named `group` holds in the library `cmd` imports to
 /// (built-in brushes are never replaced, so they don't count).
@@ -46,17 +44,14 @@ pub(crate) fn intercept(app: &mut PhotocraftApp, held: Held) -> Result<Option<He
     if n == 0 {
         return Ok(Some(held));
     }
-    if app.ui.dialogs.iter().any(|d| owns(&d.fields)) {
-        return Err(tl!("Answer the open import question first, then import this file again.").into());
-    }
-    let (label, message) = if held.what == "gradients" {
+    let (title, message) = if held.what == "gradients" {
         let text = crate::i18n::trn(
             crate::i18n::current(),
             n as u64,
             "The gradient group “{group}” already exists ({n} gradient).",
             "The gradient group “{group}” already exists ({n} gradients).",
         );
-        ("Import Gradients", text)
+        (tl!("Import Gradients"), text)
     } else {
         let text = crate::i18n::trn(
             crate::i18n::current(),
@@ -64,35 +59,40 @@ pub(crate) fn intercept(app: &mut PhotocraftApp, held: Held) -> Result<Option<He
             "The brush group “{group}” already has {n} brush of yours.",
             "The brush group “{group}” already has {n} brushes of yours.",
         );
-        ("Import Brushes", text)
+        (tl!("Import Brushes"), text)
     };
-    let message = crate::i18n::fmt(&message, &[("group", &held.stem)]);
-    let fields = json!({MARK: true, "__label": label, "message": message, "group": held.stem, "kind": held.what, "choice": "new"});
-    app.held_preset_import = Some(held);
-    app.ui.open_dialog(DialogKind::Command, fields.as_object().cloned().unwrap_or_default());
+    let group = held.stem.clone();
+    let prompt = StandardPrompt::custom(crate::i18n::fmt(&message, &[("group", &group)]))
+        .title(title.to_owned())
+        .paragraph(crate::i18n::fmt(tl!("Import as New Group keeps “{group}” and adds the file as a new group beside it."), &[("group", &group)]))
+        .paragraph(crate::i18n::fmt(
+            tl!("Replace deletes everything in “{group}” first, including presets you edited or moved there. This can't be undone."),
+            &[("group", &group)],
+        ))
+        .button(PromptChoice::Proceed, tl!("Import as New Group").to_owned())
+        .button(PromptChoice::Alternate, tl!("Replace").to_owned())
+        .button(PromptChoice::Cancel, tl!("Cancel").to_owned())
+        .tag(PresetClash(held));
+    alerts::open_prompt(app, prompt).map_err(|_| tl!("Answer the open import question first, then import this file again.").to_owned())?;
     Ok(None)
 }
 
-pub fn body(ui: &mut egui::Ui, fields: &Map<String, Value>) {
-    ui.label(fields.get("message").and_then(Value::as_str).unwrap_or_default());
-    ui.add_space(6.0);
-    let group = fields.get("group").and_then(Value::as_str).unwrap_or_default();
-    ui.label(crate::i18n::fmt(tl!("Import as New Group keeps “{group}” and adds the file as a new group beside it."), &[("group", group)]));
-    ui.add_space(4.0);
-    ui.label(crate::i18n::fmt(
-        tl!("Replace deletes everything in “{group}” first, including presets you edited or moved there. This can't be undone."),
-        &[("group", group)],
-    ));
+/// The `PROMPTS` entry: Import as New Group keeps the existing group, Replace imports into its
+/// place, Cancel imports nothing. `false` for another family's answer.
+pub(crate) fn answer(app: &mut PhotocraftApp, _ctx: &egui::Context, answer: &mut PromptAnswer) -> bool {
+    let Some(PresetClash(held)) = answer.take_tag::<PresetClash>() else { return false };
+    let replace = match answer.choice {
+        PromptChoice::Proceed => false,
+        PromptChoice::Alternate => true,
+        _ => return true,
+    };
+    let Held { cmd, what, stem, mut params } = held;
+    params["replace"] = json!(replace);
+    if let Err(error) = crate::preset_files_ui::run_import(app, cmd, what, &stem, params) {
+        alerts::report_error(app, error);
+    }
+    true
 }
 
-/// The held import: as a new group, or replacing the group when `choice` is "replace".
-pub fn confirm(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<Value, String> {
-    let Held { cmd, what, stem, mut params } = app.held_preset_import.take().ok_or(tl!("No import is waiting. Import the file again."))?;
-    params["replace"] = json!(fields.get("choice").and_then(Value::as_str) == Some("replace"));
-    crate::preset_files_ui::run_import(app, cmd, what, &stem, params).map(|()| Value::Null)
-}
-
-/// Cancel: nothing is imported.
-pub fn cancel(app: &mut PhotocraftApp) {
-    app.held_preset_import = None;
-}
+#[cfg(test)]
+mod tests;

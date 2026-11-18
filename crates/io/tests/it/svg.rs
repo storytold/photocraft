@@ -8,10 +8,59 @@ use photocraft_io::*;
 
 const NS: &str = "xmlns=\"http://www.w3.org/2000/svg\"";
 
-fn open(svg: &str) -> ImportResult {
-    import("drawing.svg", svg.as_bytes()).unwrap_or_else(|e| panic!("{e}\n{svg}"))
+fn svg_input_diagnostic(svg: &str) -> String {
+    // Generated data URLs can be megabytes long; dumping one line can stall a CI log reader.
+    // Keep a UTF-8-safe, escaped prefix and the full byte length without changing the failure.
+    const MAX_PREVIEW_CHARS: usize = 256;
+    let prefix: String = svg.chars().take(MAX_PREVIEW_CHARS).collect();
+    let truncated = if prefix.len() < svg.len() { " [truncated]" } else { "" };
+    format!("SVG input ({} bytes): {prefix:?}{truncated}", svg.len())
 }
 
+fn open(svg: &str) -> ImportResult {
+    import("drawing.svg", svg.as_bytes()).unwrap_or_else(|e| panic!("{e}\n{}", svg_input_diagnostic(svg)))
+}
+
+#[test]
+fn svg_diagnostic_keeps_short_input_and_byte_length() {
+    for source in ["", "<svg/>\n", "<svg><!-- é界🙂 --></svg>", "\r\n\0"] {
+        assert_eq!(svg_input_diagnostic(source), format!("SVG input ({} bytes): {source:?}", source.len()));
+    }
+    for count in [255, 256] {
+        let source = "界".repeat(count);
+        assert_eq!(svg_input_diagnostic(&source), format!("SVG input ({} bytes): {source:?}", source.len()));
+    }
+}
+
+#[test]
+fn svg_diagnostic_bounds_large_ascii_utf8_and_control_inputs() {
+    for prefix in ["A".repeat(256), format!("{}🙂", "界".repeat(255)), "\0".repeat(256), "\u{10ffff}".repeat(256)] {
+        for tail in ["Z".to_owned(), "DO_NOT_DUMP_TAIL".repeat(128_000)] {
+            let source = format!("{prefix}{tail}");
+            let diagnostic = svg_input_diagnostic(&source);
+            // Check the size before assert_eq! so a regressed cap cannot dump the whole fixture.
+            assert!(diagnostic.len() < 4096, "{} diagnostic bytes", diagnostic.len());
+            assert_eq!(diagnostic, format!("SVG input ({} bytes): {prefix:?} [truncated]", source.len()));
+            assert!(!diagnostic.contains("DO_NOT_DUMP_TAIL"));
+        }
+    }
+}
+
+#[test]
+fn failed_svg_import_keeps_the_error_and_fixture_context() {
+    let source = "<svg";
+    let error = match import("drawing.svg", source.as_bytes()) {
+        Err(error) => error.to_string(),
+        Ok(_) => panic!("the malformed SVG must fail to import"),
+    };
+    let failure = match std::panic::catch_unwind(|| open(source)) {
+        Err(failure) => failure,
+        Ok(_) => panic!("the test helper must still fail on an import error"),
+    };
+    let message = failure.downcast_ref::<String>().map(String::as_str).or_else(|| failure.downcast_ref::<&str>().copied()).expect("string panic");
+    assert!(message.starts_with(&format!("{error}\n")), "{message}");
+    assert!(message.contains(&svg_input_diagnostic(source)), "{message}");
+}
 fn px(doc: &photocraft_doc::Document, x: i32, y: i32) -> [f32; 4] {
     photocraft_compose::flatten(doc).get(x, y)
 }
@@ -388,6 +437,84 @@ fn an_embedded_svg_gets_only_the_nesting_depth_the_drawing_left() {
         .unwrap();
 }
 
+/// Accepted maximum-depth markup and deep embedded drawings must render correctly on the caller's unchanged small stack.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn accepted_deep_svg_and_embedded_children_do_not_exhaust_a_small_caller_stack() {
+    std::thread::Builder::new()
+        .stack_size(1 << 20)
+        .spawn(|| {
+            let top = nested(svg::MAX_XML_DEPTH - 1);
+            let imported = open(&top);
+            assert!(close(px(&imported.document, 4, 4), [0., 0., 0., 1.]), "near-limit top-level shape must remain visible");
+            let (_, _, pixels) = svg::rasterize_rgba8(top.as_bytes()).unwrap();
+            assert_eq!(&pixels[(4 * 8 + 4) * 4..(4 * 8 + 4) * 4 + 4], &[0, 0, 0, 255]);
+            let (preview, _) = svg::import_svg_preview_with_work("drawing.svg", top.as_bytes(), u64::MAX).unwrap();
+            assert!(close(px(&preview.document, 4, 4), [0., 0., 0., 1.]), "near-limit preview shape must remain visible");
+            // The outer drawing alone is shallow. Its decoded child must receive the same
+            // isolation as a deep top-level drawing, without increasing the shared depth cap.
+            for inner in [126, 500] {
+                let url = base64_data_url("image/svg+xml", nested(inner).as_bytes());
+                let embedded = format!("<svg {NS} width=\"8\" height=\"8\"><g><image width=\"8\" height=\"8\" href=\"{url}\"/></g></svg>");
+                let imported = open(&embedded);
+                assert!(close(px(&imported.document, 4, 4), [0., 0., 0., 1.]), "shallow outer/deep child {inner} must remain visible");
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+/// Multiple children and opacity retain the groups: parsing alone on a worker is insufficient.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn retained_deep_svg_groups_lower_render_and_drop_on_a_bounded_worker() {
+    // Native document compositing has its own recursive stack requirements. Keep only this
+    // independent pixel oracle off the small caller; SVG APIs and native document destruction
+    // below must still complete there, with all retained groups intact.
+    let pixel = |doc: &photocraft_doc::Document| {
+        std::thread::scope(|scope| {
+            std::thread::Builder::new()
+                .name("svg-native-pixel-oracle".into())
+                .stack_size(8 << 20)
+                .spawn_scoped(scope, || px(doc, 0, 0))
+                .unwrap()
+                .join()
+                .unwrap()
+        })
+    };
+    std::thread::Builder::new()
+        .stack_size(512 << 10)
+        .spawn(move || {
+            let source = format!(
+                "<svg {NS} width=\"8\" height=\"8\">{}<rect width=\"8\" height=\"8\"/>{}</svg>",
+                "<g opacity=\"0.99\"><rect width=\"1\" height=\"1\"/>".repeat(500),
+                "</g>".repeat(500)
+            );
+            let imported = svg::import_svg("retained.svg", source.as_bytes()).unwrap();
+            assert_eq!(imported.document.max_group_depth(), 100);
+            assert!(pixel(&imported.document)[3] > 0.5);
+            let (preview, _) = svg::import_svg_preview_with_work("retained.svg", source.as_bytes(), u64::MAX).unwrap();
+            assert_eq!(preview.document.max_group_depth(), 100);
+            assert!(pixel(&preview.document)[3] > 0.5);
+            // Whole-drawing rasterisation refuses more than 200 nested layers (#10953) with an
+            // error, not a crash; a drawing within that limit still renders on this small stack.
+            let refused = svg::rasterize_rgba8(source.as_bytes()).unwrap_err().to_string();
+            assert!(refused.contains("layers are nested too deeply"), "{refused}");
+            let within = format!(
+                "<svg {NS} width=\"8\" height=\"8\">{}<rect width=\"8\" height=\"8\"/>{}</svg>",
+                "<g opacity=\"0.99\"><rect width=\"1\" height=\"1\"/>".repeat(150),
+                "</g>".repeat(150)
+            );
+            let (w, h, pixels) = svg::rasterize_rgba8(within.as_bytes()).unwrap();
+            assert_eq!((w, h), (8, 8));
+            assert!(pixels[3] > 127);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 /// 8 000 nested groups (70 KB) overflowed the XML parser's recursion on a 2 MB thread stack, an
 /// abort nothing can catch. It is an error now, found before the parser runs; the thread here
 /// has a small stack so a regression aborts the test instead of passing by luck.
@@ -686,4 +813,15 @@ fn image_hrefs_to_local_files_are_never_read() {
         open(&format!("<svg {NS} width=\"20\" height=\"20\"><image width=\"20\" height=\"20\" href=\"{}\"/></svg>", png_data_url())).document.layers[0].content,
         LayerContent::Raster(_)
     ));
+}
+
+#[test]
+fn warning_bearing_raster_preserves_readable_artwork_without_relaxing_strict_api() {
+    let bytes = br##"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><image width="4" height="4" href="data:image/bmp,BM"/><rect x="4" width="4" height="8" fill="#ff0000"/></svg>"##;
+    let (pixels, warnings) = svg::rasterize_bounded_with_warnings(bytes, 1.0, 24_000_000).unwrap();
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("embedded image was omitted"));
+    assert_eq!(pixels.px[4 * 8 + 6], [1.0, 0.0, 0.0, 1.0]);
+    assert!(svg::rasterize_bounded(bytes, 1.0, 24_000_000).is_err());
+    assert!(svg::rasterize(bytes, 1.0).is_err());
 }

@@ -46,6 +46,7 @@ pub(crate) fn convert(a: &ConvertArgs, _out: &mut dyn Write, err: &mut dyn Write
         psd_high_memory_approved: a.approve_high_memory,
         pdf_dpi: a.pdf_dpi.unwrap_or(300.0),
         pdf_pages: a.pdf_pages.as_deref().map(parse_pdf_pages).transpose()?,
+        pdf_editable: a.pdf_editable,
         ..Default::default()
     };
     let mut o = files::open_with_options(input, &import_opts)?;

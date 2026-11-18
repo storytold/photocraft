@@ -24,8 +24,13 @@ pub struct DocState {
     pub pcraft_cache: photocraft_io::PcraftExportCache,
     /// How much of `revision` came from view-only changes (channel eyes, targeting): pixel caches can ignore those.
     pub view_revision: u64,
-    /// Area changed by the latest revision (None = assume everything changed).
+    /// Area changed since revision [`DocState::damage_from`] (None = assume everything changed):
+    /// the latest revision's, or a whole command's when it made several.
     pub last_damage: Option<photocraft_geom::Rect>,
+    /// `(from, to)`: the command that moved `revision` from `from` to `to` in more than one step,
+    /// whose whole span `last_damage` covers. Written only by `Session::dispatch`; any later
+    /// revision makes it stale, so [`DocState::damage_from`] falls back to one revision.
+    pub(crate) damage_span: Option<(u64, u64)>,
     /// Coalescing key of the latest history step (see [`Session::execute`]'s `coalesce` param).
     pub coalesce: Option<String>,
     /// Channels panel: targeted channel and eye toggles (view state, not history).
@@ -64,6 +69,10 @@ pub struct DocState {
     /// type layer keeps such a name although it looks like a copy's ("Title copy 2"), while a
     /// name Duplicate Layer made still follows the text (#9023). Kept for the session only.
     pub(crate) typed_names: std::collections::HashMap<LayerId, String>,
+    /// The count of steps whose damage was not empty: pixel thumbnails (the Channels panel's composite and colour
+    /// rows) change only when it moves, so a selection-only or view-only step keeps them. Written only by
+    /// `Session::dispatch` and the job apply path.
+    pub pixel_revision: u64,
 }
 
 impl DocState {
@@ -108,6 +117,7 @@ impl DocState {
             pcraft_cache: Default::default(),
             view_revision: 0,
             last_damage: None,
+            damage_span: None,
             coalesce: None,
             channel_view,
             isolated_layers: Vec::new(),
@@ -121,15 +131,14 @@ impl DocState {
             save_snapshot: None,
             source_snapshot: None,
             typed_names: Default::default(),
+            pixel_revision: 0,
         }
     }
     /// The selected layers in bottom-to-top document order, always including the active layer.
     /// Robust against stale state: ids no longer in the document are skipped, and if the active
     /// layer was changed without updating the set, the selection is just the active layer.
     pub fn selected_layers(&self) -> Vec<LayerId> {
-        let Some(active) = self.active_layer else { return Vec::new() };
-        let set: &[LayerId] = if self.selected_layers.contains(&active) { &self.selected_layers } else { std::slice::from_ref(&active) };
-        self.doc.walk().into_iter().map(|(_, _, l)| l.id).filter(|id| set.contains(id)).collect()
+        selected_in(&self.doc, self.active_layer, &self.selected_layers)
     }
     pub fn is_layer_selected(&self, id: LayerId) -> bool {
         self.active_layer == Some(id) || (self.active_layer.is_some_and(|a| self.selected_layers.contains(&a)) && self.selected_layers.contains(&id))
@@ -143,6 +152,15 @@ impl DocState {
     /// not an edit, so it neither marks the file modified nor makes closing ask to save.
     pub(crate) fn keeps_clean(&self, before: &Document) -> bool {
         self.saved_revision == self.revision && layer_multi_cmds::selection_only_change(before, &self.doc)
+    }
+    /// The revision [`DocState::last_damage`] is measured from: the revision before the command
+    /// that made it, or the previous revision. A canvas that showed any revision from this one
+    /// up to (not including) `revision` needs only `last_damage` redrawn.
+    pub fn damage_from(&self) -> u64 {
+        match self.damage_span {
+            Some((from, to)) if to == self.revision => from,
+            _ => self.revision.saturating_sub(1),
+        }
     }
     /// Move to the next revision; `keep_clean` (from [`Self::keeps_clean`]) moves the saved
     /// revision with it.
@@ -219,6 +237,19 @@ impl ToolState {
     /// background (reveal-paint first).
     pub const MASK_COLORS: [[f32; 4]; 2] = [[1.0, 1.0, 1.0, 1.0], [0.0, 0.0, 0.0, 1.0]];
 
+    /// The pixel colour pair a fresh session starts with: black foreground, white background.
+    pub const PIXEL_COLORS: [[f32; 4]; 2] = [[0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0]];
+
+    /// The swatches as `Preferences::tool_colors` keeps them: the pixel pair, the mask pair and the CMYK picks.
+    pub fn saved_colors(pairs: [[[f32; 4]; 2]; 2], cmyk_picks: &[([f32; 3], [f32; 4])]) -> serde_json::Value {
+        let [[foreground, background], [mask_foreground, mask_background]] = pairs;
+        serde_json::json!({
+            "foreground": foreground, "background": background,
+            "maskForeground": mask_foreground, "maskBackground": mask_background,
+            "cmykPicks": cmyk_picks,
+        })
+    }
+
     /// Note that `brush` or `current_preset` changed. Every setter of either (commands and the
     /// shell's tool-switch paths) calls this; the last-brush persistence only serialises when the
     /// revision has moved since the stored value ([`Self::brush_saved_rev`]).
@@ -246,8 +277,8 @@ impl ToolState {
 impl Default for ToolState {
     fn default() -> Self {
         Self {
-            foreground: [0.0, 0.0, 0.0, 1.0],
-            background: [1.0, 1.0, 1.0, 1.0],
+            foreground: Self::PIXEL_COLORS[0],
+            background: Self::PIXEL_COLORS[1],
             // Photoshop's Brush tool starts at 10 % Smoothing.
             brush: photocraft_paint::BrushSettings {
                 smoothing: photocraft_paint::brush::Smoothing { amount: 0.1, ..Default::default() },
@@ -289,3 +320,11 @@ pub struct CopiedStyle {
 /// Cut aren't: whether they have anything to copy (a selection over transparent pixels, a group
 /// or fill layer) is known only when they run.
 pub const PRECHECKED: &[&str] = &["layer.new.layer", "layer.new.group", "layer.new.groupFromLayers", "layer.new.layerFromBackground"];
+
+/// The selected layers of `doc` whose active layer is `active` and whose selection set is `selected`, in bottom-to-top
+/// order ([`DocState::selected_layers`]), for a reader that holds the document without its editing state.
+pub fn selected_in(doc: &Document, active: Option<LayerId>, selected: &[LayerId]) -> Vec<LayerId> {
+    let Some(active) = active else { return Vec::new() };
+    let set: &[LayerId] = if selected.contains(&active) { selected } else { std::slice::from_ref(&active) };
+    doc.walk().into_iter().map(|(_, _, l)| l.id).filter(|id| set.contains(id)).collect()
+}

@@ -101,7 +101,7 @@ fn timed<T>(what: &str, run: impl FnOnce() -> T) -> T {
 fn gpu() -> Option<Gpu> {
     let lock = GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let required = std::env::var_os("WGPU_BACKEND").is_some();
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+    let instance = crate::instance();
     let adapter = match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) {
         Ok(a) => a,
         Err(e) => {
@@ -145,10 +145,7 @@ fn gpu() -> Option<Gpu> {
 /// The returned guard holds [`GPU_LOCK`] until the device is dropped.
 fn any_device() -> Option<(wgpu::Adapter, wgpu::Device, wgpu::Queue, std::sync::MutexGuard<'static, ()>)> {
     let lock = GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let adapter = pollster::block_on(
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env()).request_adapter(&wgpu::RequestAdapterOptions::default()),
-    )
-    .ok()?;
+    let adapter = pollster::block_on(crate::instance().request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()?;
     Some((adapter, device, queue, lock))
 }
@@ -742,8 +739,13 @@ fn adjustments() -> Vec<Adjustment> {
         Adjustment::PhotoFilter { color: [0.2, 0.6, 0.9], density: 0.3, preserve_luminosity: false },
         Adjustment::BlackWhite { weights: [40.0, 60.0, 40.0, 60.0, 20.0, 80.0], tint: None },
         Adjustment::BlackWhite { weights: [70.0, 20.0, 50.0, 10.0, 90.0, 30.0], tint: Some([0.9, 0.7, 0.5]) },
-        Adjustment::GradientMap { stops: vec![(0.0, [0.1, 0.0, 0.3]), (0.5, [0.9, 0.3, 0.1]), (1.0, [1.0, 1.0, 0.8])], reverse: false, dither: false },
-        Adjustment::GradientMap { stops: vec![(0.0, [0.0, 0.0, 0.0]), (1.0, [1.0, 1.0, 1.0])], reverse: true, dither: true },
+        Adjustment::GradientMap {
+            stops: vec![(0.0, [0.1, 0.0, 0.3]), (0.5, [0.9, 0.3, 0.1]), (1.0, [1.0, 1.0, 0.8])],
+            reverse: false,
+            dither: false,
+            source: None,
+        },
+        Adjustment::GradientMap { stops: vec![(0.0, [0.0, 0.0, 0.0]), (1.0, [1.0, 1.0, 1.0])], reverse: true, dither: true, source: None },
         Adjustment::ColorBalance { shadows: [20.0, -10.0, 5.0], midtones: [-15.0, 10.0, 30.0], highlights: [0.0, 5.0, -20.0], preserve_luminosity: true },
         Adjustment::ColorBalance { shadows: [10.0, 0.0, 0.0], midtones: [0.0, 0.0, 0.0], highlights: [0.0, 0.0, 10.0], preserve_luminosity: false },
         Adjustment::SelectiveColor { relative: true, adjustments: selective() },
@@ -1059,6 +1061,7 @@ fn hard_stop_effects_and_gradient_maps_request_cpu() {
             stops: vec![(0.0, [0.0; 3]), (0.5, [1.0; 3]), (0.5, [0.0; 3]), (1.0, [1.0; 3])],
             reverse: false,
             dither: false,
+            source: None,
         }),
     ));
     assert_gradient_fallback(&d);
@@ -1341,6 +1344,30 @@ use photocraft_doc::{
     Bevel, BevelStyle, BevelTechnique, Contour, Effect, FxCommon, FxPaint, Glow, GlowSource, GlowTechnique, Gradient, Pattern, Satin, Shadow, StrokeFx,
     StrokePosition,
 };
+
+/// #14983: the Size 1 Satin transition agrees with the CPU across whole textures and pages.
+#[test]
+fn satin_size_one_gpu_matches_cpu() {
+    let Some(mut g) = gpu() else { return };
+    let mut doc = Document::new("Satin size 1", Size::new(400, 300), ColorMode::Rgb, SampleType::U8);
+    doc.layers.push(Layer::new("Background", LayerContent::Fill(Fill::Solid(Color::WHITE))));
+    let mut layer = Layer::raster("Orange", PixelFormat::RGBA8);
+    layer.surface_mut().unwrap().fill_rect(Rect::new(100, 75, 300, 225), &[1.0, 128.0 / 255.0, 0.0, 1.0]);
+    layer.effects.items.push(Effect::Satin(Satin {
+        common: FxCommon::new(BlendMode::Normal, 1.0),
+        color: Color::BLACK,
+        angle: 90.0,
+        distance: 20.0,
+        size: 1.0,
+        contour: Contour::Linear,
+        anti_alias: true,
+        invert: false,
+    }));
+    doc.layers.push(layer);
+
+    let stats = diff_rect(&mut g, &doc, doc.bounds(), "Satin size 1").unwrap();
+    assert_eq!(stats.fx_programs, 1, "the GPU built the Satin effect map");
+}
 
 /// An anti-aliased blob (disc plus a soft-edged bar and a hole) with partially transparent parts,
 /// so effects see real edge coverage, concavities and interior alpha.
@@ -1641,6 +1668,11 @@ fn effect_cases() -> Vec<(&'static str, Vec<Effect>)> {
     ds_global.use_global_light = true;
     let mut og_contour = glow(FxPaint::Color(Color::rgb(1.0, 0.9, 0.2)), GlowTechnique::Softer, 9.0, 0.0, GlowSource::Edge);
     og_contour.contour = contour();
+    // #11361: a flat "always 100 %" contour paints a solid band up to the glow's reach on both
+    // renderers, not the whole effect rectangle.
+    let flat = Contour::Custom { name: "flat".into(), points: vec![Cp { input: 0.0, output: 1.0 }, Cp { input: 1.0, output: 1.0 }], corners: vec![] };
+    let og_flat_precise = Glow { contour: flat.clone(), ..glow(FxPaint::Color(Color::rgb(0.2, 0.9, 1.0)), GlowTechnique::Precise, 4.0, 0.0, GlowSource::Edge) };
+    let og_flat_softer = Glow { contour: flat, ..glow(FxPaint::Color(Color::rgb(0.2, 0.9, 1.0)), GlowTechnique::Softer, 10.0, 0.0, GlowSource::Edge) };
     let mut satin_inv = Satin {
         common: FxCommon::new(BlendMode::Multiply, 0.6),
         color: Color::rgb(0.3, 0.0, 0.4),
@@ -1682,6 +1714,8 @@ fn effect_cases() -> Vec<(&'static str, Vec<Effect>)> {
         ("inner shadow choke", vec![Effect::InnerShadow(shadow(BlendMode::Normal, 0.9, 300.0, 3.0, 7.0, 0.4))]),
         ("outer glow softer", vec![Effect::OuterGlow(glow(FxPaint::Color(Color::rgb(1.0, 0.9, 0.2)), GlowTechnique::Softer, 10.0, 0.3, GlowSource::Edge))]),
         ("outer glow contour", vec![Effect::OuterGlow(og_contour)]),
+        ("outer glow flat contour precise", vec![Effect::OuterGlow(og_flat_precise)]),
+        ("outer glow flat contour softer", vec![Effect::OuterGlow(og_flat_softer)]),
         ("outer glow precise gradient", vec![Effect::OuterGlow(glow(FxPaint::Gradient(gradient()), GlowTechnique::Precise, 8.0, 0.25, GlowSource::Edge))]),
         (
             "outer glow softer gradient",
@@ -1738,7 +1772,7 @@ fn effect_cases() -> Vec<(&'static str, Vec<Effect>)> {
             vec![Effect::BevelEmboss(Bevel { technique: BevelTechnique::ChiselHard, ..bevel(BevelStyle::PillowEmboss, false, 7.0, 0.0) })],
         ),
         ("bevel emboss smooth wide", vec![Effect::BevelEmboss(bevel(BevelStyle::Emboss, true, 21.0, 0.0))]),
-        ("bevel stroke emboss", vec![Effect::BevelEmboss(bevel(BevelStyle::StrokeEmboss, true, 6.0, 0.0))]),
+        // Stroke Emboss is composited on the CPU (`plan::tests::stroke_emboss_defers_to_the_cpu`, #8639).
         (
             "bevel texture",
             vec![Effect::BevelEmboss(Bevel {
@@ -1877,6 +1911,55 @@ fn layer_effects_every_kind() {
             if let Err(e) = fx_diff(&mut g, &d, &format!("{name} {depth:?}")) {
                 failures.push(e);
             }
+        }
+    }
+    assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
+}
+
+/// A Normal inside or center stroke replaces the layer beneath it instead of blending with it
+/// (#6513): opaque red under a 50 % green stroke ends as green at 50 % alpha, on the GPU as on
+/// the CPU (`effects.rs`: `layer * (1 - coverage) + stroke * opacity * coverage`).
+#[test]
+fn semi_transparent_normal_stroke_knocks_out_the_layer_beneath_it() {
+    let Some(mut g) = gpu() else { return };
+    let mut failures = Vec::new();
+    for position in [StrokePosition::Inside, StrokePosition::Center] {
+        for (opacity, paint) in
+            [(0.5, FxPaint::Color(Color::rgb(0.0, 1.0, 0.0))), (0.5, FxPaint::Gradient(gradient())), (1.0, FxPaint::Color(Color::rgb(0.0, 1.0, 0.0)))]
+        {
+            let mut d = Document::new("fx", Size::new(48, 48), ColorMode::Rgb, SampleType::U8);
+            let mut l = Layer::raster("red", d.pixel_format());
+            l.surface_mut().unwrap().fill_rect(Rect::new(12, 12, 36, 36), &[1.0, 0.0, 0.0, 1.0]);
+            let mut st = stroke(4.0, position, paint);
+            st.common.opacity = opacity;
+            l.effects.items = vec![Effect::Stroke(st)];
+            d.layers.push(l);
+            let what = format!("{position:?} stroke at {opacity}");
+            // The CPU reference itself: the edge pixel is the stroke colour at the stroke's alpha.
+            let cpu = photocraft_compose::render(&d, d.bounds());
+            if matches!(d.layers[0].effects.items.first(), Some(Effect::Stroke(StrokeFx { paint: FxPaint::Color(_), .. }))) && opacity < 1.0 {
+                let px = cpu.px[24 * 48 + 12];
+                if (px[1] - 1.0).abs() > 0.01 || px[0] > 0.01 || (px[3] - 0.5).abs() > 0.01 {
+                    failures.push(format!("{what}: CPU edge pixel {px:?}, want [0, 1, 0, 0.5]"));
+                }
+            }
+            if let Err(e) = fx_diff(&mut g, &d, &what) {
+                failures.push(e);
+            }
+        }
+    }
+    // Lab documents replace the layer the same way (no CIELAB mix).
+    for position in [StrokePosition::Inside, StrokePosition::Center] {
+        let mut d = Document::new("lab", Size::new(48, 40), ColorMode::Lab, SampleType::U16);
+        let fmt = d.pixel_format();
+        d.layers.push(noise_layer("bg", fmt, Rect::new(0, 0, 48, 40), 81, 0.7));
+        let mut fx = blob("fx", fmt, 24.0, 20.0, 12.0, [0.7, 0.3, 0.2]);
+        let mut st = stroke(4.0, position, FxPaint::Color(Color::rgb(0.1, 0.8, 0.3)));
+        st.common.opacity = 0.5;
+        fx.effects.items = vec![Effect::Stroke(st)];
+        d.layers.push(fx);
+        if let Err(e) = fx_diff(&mut g, &d, &format!("lab {position:?} stroke at 0.5")) {
+            failures.push(e);
         }
     }
     assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));

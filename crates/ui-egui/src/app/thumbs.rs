@@ -1,141 +1,38 @@
-use super::{DocId, Document, PhotocraftApp, mask_thumbs_ui};
+use std::cell::OnceCell;
 
-impl PhotocraftApp {
-    pub(super) fn prune_thumbs(&mut self) {
-        let documents = self.session.documents();
-        if self.thumb_documents.len() == documents.len()
-            && self.thumb_documents.iter().zip(documents).all(|((id, snapshot), st)| *id == st.doc.id && snapshot.ptr_eq(&std::sync::Arc::downgrade(&st.doc)))
-        {
-            return;
-        }
-        // Check snapshots every sync, but walk the layer tree only after it changes. A Weak
-        // tracks replacement (including undo and preserved-ID reopen) without retaining pixels.
-        if !self.thumbs.is_empty() {
-            let mut live = std::collections::HashSet::new();
-            let mut pending: Vec<_> = documents.iter().flat_map(|st| &st.doc.layers).collect();
-            while let Some(layer) = pending.pop() {
-                live.insert((layer.id, mask_thumbs_ui::THUMB_LAYER));
-                if layer.mask.is_some() {
-                    live.insert((layer.id, mask_thumbs_ui::THUMB_MASK));
-                }
-                if layer.vector_mask.is_some() {
-                    live.insert((layer.id, mask_thumbs_ui::THUMB_VECTOR));
-                }
-                if matches!(&layer.content, photocraft_doc::LayerContent::Smart(sm) if sm.filter_mask.is_some()) {
-                    live.insert((layer.id, mask_thumbs_ui::THUMB_SMART_MASK));
-                }
-                if let Some(children) = layer.children() {
-                    pending.extend(children);
-                }
-            }
-            // Native files can restore IDs: retain the union across all open documents, rather
-            // than deleting an ID just because one document containing it was closed.
-            self.thumbs.retain(|key, _| live.contains(key));
-            self.thumb_frames.retain(|id, _| live.contains(&(*id, mask_thumbs_ui::THUMB_LAYER)));
-        }
-        self.thumb_documents = documents.iter().map(|st| (st.doc.id, std::sync::Arc::downgrade(&st.doc))).collect();
+// PLAN: assumed `craft::behavior::PixelSize` (behavior/src/pixel_size.rs).
+use craft::behavior::PixelSize;
+use craft::ui::primitives::{Revision, ThumbRender, ThumbRequest, ThumbSource, thumb_image as frame_image};
+
+use super::{DocId, Document, PhotocraftApp};
+use crate::channels_panel::Row;
+
+/// The History panel's snapshot thumbnails (#2966): the composite of each snapshot of one document. A snapshot's
+/// document never changes; a preserved-ID reopen or the refreshed first snapshot has a new `Arc` (#6087), which
+/// the revision follows.
+pub(crate) struct SnapshotThumbs<'a> {
+    doc: DocId,
+    snapshots: &'a [photocraft_engine::history_cmds::Snapshot],
+}
+
+impl<'a> SnapshotThumbs<'a> {
+    /// The thumbnails of the snapshots of document `doc` (none when it is not open).
+    pub(crate) fn new(app: &'a PhotocraftApp, doc: DocId) -> Self {
+        let snapshots = app.session.documents().iter().find(|st| st.doc.id == doc).map_or(&[][..], |st| &st.snapshots[..]);
+        Self { doc, snapshots }
+    }
+}
+
+impl ThumbSource<u64> for SnapshotThumbs<'_> {
+    fn revision(&self, key: &u64, _request: &ThumbRequest) -> Revision {
+        let shown = self.snapshots.iter().find(|s| s.id == *key).map(|s| std::sync::Arc::as_ptr(&s.doc) as usize);
+        Revision::of(&(self.doc.0, *key, shown))
     }
 
-    /// Cached 64px thumbnail of a pixel-ish layer, letterboxed in a square, and the document
-    /// area it frames: the canvas, or with Clip Thumbnails to Layer Bounds the layer's pixels.
-    pub fn layer_thumb(&mut self, ctx: &egui::Context, doc: &Document, layer: &photocraft_doc::Layer) -> (egui::TextureId, photocraft_geom::Rect) {
-        let clip = self.session.prefs().interface.clip_thumbnails_to_layer_bounds;
-        // Key by content, not document revision: COW tiles change pointer only when their pixels
-        // change, so unrelated edits (e.g. painting another layer) don't rebuild this thumbnail.
-        let rev = layer.surface().map_or(0, surface_fingerprint) ^ (doc.size.width as u64) << 40 ^ u64::from(clip) << 63;
-        let key = (layer.id, mask_thumbs_ui::THUMB_LAYER);
-        if let Some((r, tex)) = self.thumbs.get(&key)
-            && *r == rev
-            && let Some(frame) = self.thumb_frames.get(&layer.id)
-        {
-            return (tex.id(), *frame);
-        }
-        let canvas = doc.bounds();
-        let frame = layer_thumb_frame(layer, canvas, clip);
-        let mut px = [0.0f32; 8];
-        let img = thumb_image(frame, 64, |x, y| {
-            let Some(s) = layer.surface() else { return [0.0; 4] };
-            let n = s.channels();
-            s.read_pixel(x, y, &mut px[..n]);
-            photocraft_raster::to_rgba(&s.format(), &px[..n])
-        });
-        self.thumb_frames.insert(layer.id, frame);
-        (self.store_thumb(ctx, key, rev, img), frame)
-    }
-
-    /// Drops the thumbnails of `doc`'s snapshots not in `live` (deleted ones). Those of closed
-    /// documents go in `sync_views`.
-    pub fn retain_snapshot_thumbs(&mut self, doc: DocId, live: &[u64]) {
-        self.snapshot_thumbs.retain(|(d, id), _| *d != doc || live.contains(id));
-    }
-
-    /// The History panel thumbnail of snapshot `snap` of document `doc` (#2966): its composite,
-    /// centred in a square.
-    pub fn snapshot_thumb(&mut self, ctx: &egui::Context, doc: DocId, snap: &photocraft_engine::history_cmds::Snapshot) -> egui::TextureId {
-        if let Some((shown, tex)) = self.snapshot_thumbs.get(&(doc, snap.id))
-            && shown.ptr_eq(&std::sync::Arc::downgrade(&snap.doc))
-        {
-            return tex.id();
-        }
-        let comp = photocraft_compose::thumbnail(&snap.doc, 56);
-        let (w, h) = (comp.width as usize, comp.height as usize);
-        let side = w.max(h);
-        let (ox, oy) = ((side - w) / 2, (side - h) / 2);
-        let mut px = vec![egui::Color32::TRANSPARENT; side * side];
-        for (i, &[r, g, b, a]) in comp.pixels.as_chunks::<4>().0.iter().enumerate() {
-            if let Some(out) = px.get_mut((i / w + oy) * side + i % w + ox) {
-                *out = egui::Color32::from_rgba_unmultiplied(r, g, b, a);
-            }
-        }
-        let tex = ctx.load_texture(format!("snapshot-{}", snap.id), egui::ColorImage::new([side, side], px), egui::TextureOptions::LINEAR);
-        let id = tex.id();
-        self.snapshot_thumbs.insert((doc, snap.id), (std::sync::Arc::downgrade(&snap.doc), tex));
-        id
-    }
-
-    /// The cached thumbnail of `mask`, the layer mask of layer `id`.
-    pub fn mask_thumb(&mut self, ctx: &egui::Context, doc: &Document, id: photocraft_doc::LayerId, mask: &photocraft_doc::LayerMask) -> egui::TextureId {
-        self.mask_thumb_kind(ctx, doc, id, mask, mask_thumbs_ui::THUMB_MASK)
-    }
-
-    /// The thumbnail of `mask` under cache `kind`, re-rendered only when the mask's pixels or the document size change; Smart Filter and layer masks are cached apart.
-    pub(crate) fn mask_thumb_kind(
-        &mut self,
-        ctx: &egui::Context,
-        doc: &Document,
-        id: photocraft_doc::LayerId,
-        mask: &photocraft_doc::LayerMask,
-        kind: u8,
-    ) -> egui::TextureId {
-        let rev = surface_fingerprint(&mask.surface) ^ (doc.size.width as u64) << 40 ^ (doc.size.height as u64) << 16;
-        let key = (id, kind);
-        if let Some((r, tex)) = self.thumbs.get(&key)
-            && *r == rev
-        {
-            return tex.id();
-        }
-        let mut v = [0.0f32; 1];
-        let img = thumb_image(doc.bounds(), 64, |x, y| {
-            mask.surface.read_pixel(x, y, &mut v);
-            [v[0], v[0], v[0], 1.0]
-        });
-        self.store_thumb(ctx, key, rev, img)
-    }
-
-    pub(crate) fn store_thumb(&mut self, ctx: &egui::Context, key: (photocraft_doc::LayerId, u8), rev: u64, img: egui::ColorImage) -> egui::TextureId {
-        match self.thumbs.get_mut(&key) {
-            Some((r, tex)) => {
-                tex.set(img, egui::TextureOptions::LINEAR);
-                *r = rev;
-                tex.id()
-            }
-            None => {
-                let tex = ctx.load_texture(format!("thumb-{}-{}", key.0.0, key.1), img, egui::TextureOptions::LINEAR);
-                let id = tex.id();
-                self.thumbs.insert(key, (rev, tex));
-                id
-            }
-        }
+    fn render(&self, key: &u64, request: &ThumbRequest) -> ThumbRender {
+        let Some(snap) = self.snapshots.iter().find(|s| s.id == *key) else { return ThumbRender::Blank };
+        let comp = photocraft_compose::thumbnail(&snap.doc, request.side);
+        ThumbRender::Ready(egui::ColorImage::from_rgba_unmultiplied([comp.width as usize, comp.height as usize], &comp.pixels))
     }
 }
 
@@ -162,28 +59,6 @@ pub(crate) fn layer_thumb_frame(layer: &photocraft_doc::Layer, canvas: photocraf
     }
     let bounds = layer.surface().map_or(photocraft_geom::Rect::EMPTY, photocraft_compose::bounds::content_bounds).intersect(&canvas);
     if bounds.is_empty() { canvas } else { bounds }
-}
-
-/// Square thumbnail of the document area `frame`, letterboxed, sampling `f(x, y)` in document
-/// space.
-fn thumb_image(frame: photocraft_geom::Rect, side: usize, mut f: impl FnMut(i32, i32) -> [f32; 4]) -> egui::ColorImage {
-    let (w, h) = (frame.width().max(1) as f32, frame.height().max(1) as f32);
-    let scale = w.max(h) / side as f32;
-    let (ox, oy) = ((side as f32 - w / scale) / 2.0, (side as f32 - h / scale) / 2.0);
-    let mut px = vec![egui::Color32::TRANSPARENT; side * side];
-    for ty in 0..side {
-        for tx in 0..side {
-            let dx = (tx as f32 - ox + 0.5) * scale;
-            let dy = (ty as f32 - oy + 0.5) * scale;
-            if dx < 0.0 || dy < 0.0 || dx >= w || dy >= h {
-                continue;
-            }
-            let c = f(frame.x0.saturating_add(dx as i32), frame.y0.saturating_add(dy as i32));
-            let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-            px[ty * side + tx] = egui::Color32::from_rgba_unmultiplied(q(c[0]), q(c[1]), q(c[2]), q(c[3]));
-        }
-    }
-    egui::ColorImage::new([side, side], px)
 }
 
 impl PhotocraftApp {
@@ -238,107 +113,155 @@ impl PhotocraftApp {
     }
 }
 
-impl PhotocraftApp {
-    /// Channels panel thumbnails of the active document snapshot: the composite,
-    /// each colour channel (when there is more than one), each alpha channel, then the Quick Mask.
-    pub fn channel_thumbs(&mut self, ctx: &egui::Context) -> Vec<egui::TextureId> {
-        let Some(st) = self.session.active() else {
-            self.channel_thumbs = None;
-            return Vec::new();
-        };
-        let (id, doc) = (st.doc.id, st.doc.clone());
-        // View-only commands bump revision without changing pixels. Keeping a Weak pins allocation
-        // identity against address reuse without retaining the document's pixel data.
-        let snapshot = std::sync::Arc::downgrade(&doc);
-        let show_color = self.session.prefs().interface.show_channels_in_color;
-        // A step that changes only the selection (a marquee, Deselect) makes a new snapshot with
-        // the same pixels: keep the thumbnails, a full composite at 56 px costs ~0.7 s on a
-        // layered 20 MP document (#4518).
-        let current = match &mut self.channel_thumbs {
-            Some((d, old, in_color, _)) if *d == id && *in_color == show_color => {
-                let same = old.ptr_eq(&snapshot) || old.upgrade().is_some_and(|prev| same_but_selection(&prev, &doc));
-                if same {
-                    *old = snapshot.clone();
-                }
-                same
-            }
-            _ => false,
-        };
-        if !current {
-            let comp = photocraft_compose::thumbnail(&doc, 56);
-            let (w, h) = (comp.width as usize, comp.height as usize);
-            let side = w.max(h);
-            let make = |f: &dyn Fn(&[u8]) -> egui::Color32, name: &str| {
-                let mut px = vec![egui::Color32::TRANSPARENT; side * side];
-                let (ox, oy) = ((side - w) / 2, (side - h) / 2);
-                for y in 0..h {
-                    for x in 0..w {
-                        let o = (y * w + x) * 4;
-                        px[(y + oy) * side + x + ox] = f(&comp.pixels[o..o + 4]);
-                    }
-                }
-                (format!("chan-{name}"), egui::ColorImage::new([side, side], px))
-            };
-            let fmt = doc.pixel_format();
-            let colors = fmt.mode.color_channels();
-            let mut texs = vec![make(&|p| egui::Color32::from_rgb(p[0], p[1], p[2]), "composite")];
-            if colors > 1 {
-                for k in 0..colors {
-                    let cmyk = fmt.mode == photocraft_doc::ColorMode::Cmyk;
-                    texs.push(make(
-                        &|p| {
-                            let rgba = [p[0], p[1], p[2], 255].map(|v| f32::from(v) / 255.0);
-                            let x = photocraft_raster::from_rgba(&fmt, rgba)[k];
-                            let g = if cmyk { 1.0 - x } else { x };
-                            let byte = (g.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-                            channel_tint(fmt.mode, k, byte, show_color)
-                        },
-                        &format!("c{k}"),
-                    ));
-                }
-            }
-            // Alpha channels and the Quick Mask, sampled at thumbnail resolution.
-            let (dw, dh) = (doc.size.width.max(1) as f32, doc.size.height.max(1) as f32);
-            for (i, ch) in doc.channels.iter().chain(doc.quick_mask.as_ref()).enumerate() {
-                let mut px = vec![egui::Color32::TRANSPARENT; side * side];
-                let (ox, oy) = ((side - w) / 2, (side - h) / 2);
-                for y in 0..h {
-                    for x in 0..w {
-                        let sx = ((x as f32 + 0.5) * dw / w as f32) as i32;
-                        let sy = ((y as f32 + 0.5) * dh / h as f32) as i32;
-                        let v = ch.surface.sample_channel(sx, sy, 0);
-                        px[(y + oy) * side + x + ox] = egui::Color32::from_gray((v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
-                    }
-                }
-                texs.push((format!("chan-a{i}"), egui::ColorImage::new([side, side], px)));
-            }
-            // Update the textures already uploaded rather than allocating new ones.
-            let mut handles = match self.channel_thumbs.take() {
-                Some((d, _, _, h)) if d == id => h,
-                _ => Vec::new(),
-            };
-            handles.truncate(texs.len());
-            for (i, (name, image)) in texs.into_iter().enumerate() {
-                match handles.get_mut(i) {
-                    Some(h) => h.set(image, egui::TextureOptions::LINEAR),
-                    None => handles.push(ctx.load_texture(name, image, egui::TextureOptions::LINEAR)),
-                }
-            }
-            self.channel_thumbs = Some((id, snapshot, show_color, handles));
-        }
-        self.channel_thumbs.as_ref().map(|(_, _, _, t)| t.iter().map(|t| t.id()).collect()).unwrap_or_default()
+/// The document's composite reduced to thumbnail size, with the document's own inks when it is CMYK: made once per
+/// pass and shared by every composite and colour row (a full composite at 56 px costs ~0.7 s on a layered 20 MP
+/// document, #4518).
+struct Reduced {
+    pixels: Vec<u8>,
+    w: usize,
+    h: usize,
+    inks: Option<Vec<[f32; 4]>>,
+}
+
+impl Reduced {
+    fn of(doc: &Document) -> Reduced {
+        // `thumbnail(&doc, 56)` with its proxy kept, so the ink thumbnails sample the same proxy instead of building another.
+        let proxy = photocraft_compose::thumbnail_proxy(doc, 56);
+        let src = proxy.as_ref().unwrap_or(doc);
+        let (tw, th) = photocraft_compose::thumbnail_size(doc, 56);
+        let comp = photocraft_compose::render_reduced(src, tw, th).to_rgba8();
+        let (w, h) = (comp.width as usize, comp.height as usize);
+        let inks = (doc.pixel_format().mode == photocraft_doc::ColorMode::Cmyk).then(|| match &proxy {
+            Some(proxy) => ink_thumbnail(proxy, w, h),
+            None => match ink_proxy(doc, 56) {
+                Some(proxy) => ink_thumbnail(&proxy, w, h),
+                None => ink_thumbnail(doc, w, h),
+            },
+        });
+        Reduced { pixels: comp.pixels, w, h, inks }
+    }
+
+    /// The index of the reduced pixel under document pixel `(x, y)` of a `dw`×`dh` document.
+    fn at(&self, x: u32, y: u32, dw: u32, dh: u32) -> usize {
+        let rx = (x as usize * self.w / dw as usize).min(self.w - 1);
+        let ry = (y as usize * self.h / dh as usize).min(self.h - 1);
+        ry * self.w + rx
     }
 }
 
-/// Whether `new` differs from `old` at most in its selection, so every composite and channel
-/// thumbnail of it is unchanged. Tiles compare by pointer first, so this costs little.
-fn same_but_selection(old: &Document, new: &Document) -> bool {
-    if old.selection == new.selection {
-        return old == new;
+/// The Channels panel's pictures of one document, made per pass: the source the framework thumbnail store asks.
+pub(crate) struct ChannelThumbs<'a> {
+    st: &'a photocraft_engine::DocState,
+    show_color: bool,
+    reduced: OnceCell<Reduced>,
+}
+
+impl<'a> ChannelThumbs<'a> {
+    /// The thumbnails of `doc`, tinted as the preferences' Show Channels in Color says.
+    pub(crate) fn new(app: &'a PhotocraftApp, doc: &'a photocraft_engine::DocState) -> Self {
+        Self { st: doc, show_color: app.session.prefs().interface.show_channels_in_color, reduced: OnceCell::new() }
     }
-    let mut o = old.clone();
-    o.selection = new.selection.clone();
-    o == *new
+
+    fn reduced(&self) -> &Reduced {
+        self.reduced.get_or_init(|| Reduced::of(&self.st.doc))
+    }
+
+    /// The surface a mask, alpha or Quick Mask row shows.
+    fn surface(&self, key: &Row) -> Option<&photocraft_raster::Surface> {
+        let doc = &self.st.doc;
+        match *key {
+            Row::Alpha(i) => doc.channels.get(i).map(|c| &c.surface),
+            Row::QuickMask => doc.quick_mask.as_ref().map(|c| &c.surface),
+            Row::LayerMask => self.st.active_layer.and_then(|id| doc.layer(id)).and_then(|l| l.mask.as_ref()).map(|m| &m.surface),
+            Row::Composite | Row::Color(_) => None,
+        }
+    }
+}
+
+/// The pixel rect `(x0, y0, x1, y1)` of a `w`×`h` frame that `region` (fractions of it) names, at least one pixel each way.
+fn pixel_span(region: Option<egui::Rect>, w: u32, h: u32) -> (u32, u32, u32, u32) {
+    let Some(r) = region else { return (0, 0, w, h) };
+    let lo = |v: f32, n: u32| ((v.max(0.0) * n as f32).floor() as u32).min(n - 1);
+    let hi = |v: f32, n: u32, from: u32| ((v.max(0.0) * n as f32).ceil() as u32).clamp(from + 1, n);
+    let (x0, y0) = (lo(r.min.x, w), lo(r.min.y, h));
+    (x0, y0, hi(r.max.x, w, x0), hi(r.max.y, h, y0))
+}
+
+impl ThumbSource<Row> for ChannelThumbs<'_> {
+    fn revision(&self, key: &Row, _request: &ThumbRequest) -> Revision {
+        let doc = &self.st.doc;
+        let size = (doc.size.width, doc.size.height);
+        match key {
+            Row::Composite | Row::Color(_) => Revision::of(&(doc.id.0, self.st.pixel_revision, self.show_color, size)),
+            // A channel-list change with empty damage still refreshes these: they follow their own surface.
+            _ => Revision::of(&(doc.id.0, self.st.active_layer, self.surface(key).map(surface_fingerprint), size)),
+        }
+    }
+
+    fn render(&self, key: &Row, request: &ThumbRequest) -> ThumbRender {
+        let doc = &self.st.doc;
+        let (dw, dh) = (doc.size.width.max(1), doc.size.height.max(1));
+        let (x0, y0, x1, y1) = pixel_span(request.region, dw, dh);
+        let frame = PixelSize::new(x1 - x0, y1 - y0);
+        let image = match *key {
+            Row::Composite => {
+                let r = self.reduced();
+                frame_image(frame, request.side, |x, y| {
+                    let i = r.at(x0 + x, y0 + y, dw, dh) * 4;
+                    [r.pixels[i], r.pixels[i + 1], r.pixels[i + 2], 255]
+                })
+            }
+            Row::Color(k) => {
+                let r = self.reduced();
+                let fmt = doc.pixel_format();
+                frame_image(frame, request.side, |x, y| {
+                    let i = r.at(x0 + x, y0 + y, dw, dh);
+                    let g = match &r.inks {
+                        // Ink channels read dark where there is ink.
+                        Some(inks) => 1.0 - inks[i][k],
+                        None => {
+                            let p = &r.pixels[i * 4..i * 4 + 4];
+                            photocraft_raster::from_rgba(&fmt, [p[0], p[1], p[2], 255].map(|v| f32::from(v) / 255.0))[k]
+                        }
+                    };
+                    let byte = (g.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+                    channel_tint(fmt.mode, k, byte, self.show_color).to_array()
+                })
+            }
+            Row::Alpha(_) | Row::QuickMask | Row::LayerMask => {
+                let Some(surface) = self.surface(key) else { return ThumbRender::Blank };
+                frame_image(frame, request.side, |x, y| {
+                    let v = surface.sample_channel((x0 + x) as i32, (y0 + y) as i32, 0);
+                    let g = (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+                    [g, g, g, 255]
+                })
+            }
+        };
+        ThumbRender::Ready(image)
+    }
+}
+
+/// The inks of a CMYK document's `w`×`h` channel thumbnails, row by row: the document's own
+/// inks, not the RGB thumbnail separated again (#8359). Sampled at the thumbnail's pixel centres
+/// from `src`: the document, or on large documents the proxy its composite thumbnail is reduced
+/// from ([`photocraft_compose::thumbnail_proxy`]).
+fn ink_thumbnail(src: &Document, w: usize, h: usize) -> Vec<[f32; 4]> {
+    let (sw, sh) = (src.size.width.max(1) as f32, src.size.height.max(1) as f32);
+    let xs: Vec<i32> = (0..w).map(|x| ((x as f32 + 0.5) * sw / w as f32) as i32).collect();
+    let ys: Vec<i32> = (0..h).map(|y| ((y as f32 + 0.5) * sh / h as f32) as i32).collect();
+    crate::canvas::channel_view::ink_samples(src, &xs, &ys)
+}
+
+/// A proxy the ink thumbnails can sample when the composite thumbnail has none: up to
+/// `PROXY_THUMBNAIL_PIXELS` the composite reduces the document itself, which its one-colour
+/// areas keep cheap, but compositing the inks of the whole document in bands costs ~170 ms at
+/// 16 MP on every refresh. `None` when the proxy wouldn't composite the same (layer effects,
+/// vector or feathered masks, uncached pattern fills: [`crate::canvas::channel_view::proxy_matches`])
+/// or the document is too small to need one.
+fn ink_proxy(doc: &Document, max_side: u32) -> Option<Document> {
+    let b = doc.bounds();
+    let k = b.width().max(b.height()).max(1) / max_side.max(1).saturating_mul(2);
+    (k >= 2 && crate::canvas::channel_view::proxy_matches(doc)).then(|| photocraft_compose::proxy::proxy_document(doc, k))
 }
 
 /// A channel thumbnail pixel whose lightness is `byte` (255 = white: full light, no ink).
@@ -378,5 +301,73 @@ mod channel_tint_tests {
         assert_eq!(channel_tint(Cmyk, 3, 0, true), Color32::BLACK);
         assert_eq!(channel_tint(Grayscale, 0, 77, true), Color32::from_gray(77));
         assert_eq!(channel_tint(Rgb, 0, 77, false), Color32::from_gray(77));
+    }
+}
+
+#[cfg(test)]
+mod ink_thumbnail_tests {
+    use super::ink_thumbnail;
+    use photocraft_engine::Session;
+    use serde_json::json;
+
+    /// Rich black 100/100/100/0 keeps its inks in the channel thumbnails: no K (#8359).
+    #[test]
+    fn cmyk_channel_thumbnails_show_the_document_inks() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 120, "height": 60, "mode": "cmyk"})).unwrap();
+        s.execute("tools.setColors", json!({"foregroundCmyk": [1.0, 1.0, 1.0, 0.0]})).unwrap();
+        s.execute("edit.fillForeground", json!({})).unwrap();
+        let doc = &s.active().unwrap().doc;
+        let (w, h) = photocraft_compose::thumbnail_size(doc, 56);
+        let inks = ink_thumbnail(doc, w as usize, h as usize);
+        assert_eq!(inks.len(), (w * h) as usize);
+        assert!(inks.iter().all(|p| p.iter().zip([1.0, 1.0, 1.0, 0.0]).all(|(a, b)| (a - b).abs() < 0.01)), "{:?}", inks[0]);
+    }
+
+    /// Below `PROXY_THUMBNAIL_PIXELS` the inks still come from a proxy when it composites the
+    /// same, and give the same inks as the full document; with a feathered mask or a layer
+    /// effect they don't.
+    #[test]
+    fn mid_size_cmyk_ink_thumbnails_use_a_proxy_only_when_faithful() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 2400, "height": 1600, "mode": "cmyk"})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 1200, "height": 1600})).unwrap();
+        s.execute("tools.setColors", json!({"foregroundCmyk": [1.0, 1.0, 1.0, 0.0]})).unwrap();
+        s.execute("edit.fillForeground", json!({})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        let doc = s.active().unwrap().doc.clone();
+        assert!(photocraft_compose::thumbnail_proxy(&doc, 56).is_none(), "3.8 MP: the composite reduces the document");
+        let proxy = super::ink_proxy(&doc, 56).expect("plain layers: the inks sample a proxy");
+        let (w, h) = photocraft_compose::thumbnail_size(&doc, 56);
+        let (w, h) = (w as usize, h as usize);
+        assert_eq!(ink_thumbnail(&proxy, w, h), ink_thumbnail(&doc, w, h));
+        // A feather is in document pixels, which the proxy doesn't scale.
+        s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+        s.execute("layer.layerMask.edit", json!({"feather": 4})).unwrap();
+        assert!(super::ink_proxy(&s.active().unwrap().doc, 56).is_none(), "a feathered mask: no proxy");
+        s.execute("layer.layerMask.edit", json!({"feather": 0})).unwrap();
+        assert!(super::ink_proxy(&s.active().unwrap().doc, 56).is_some(), "the feather gone: the proxy again");
+        s.execute("layer.layerStyle.dropShadow", json!({})).unwrap();
+        assert!(super::ink_proxy(&s.active().unwrap().doc, 56).is_none(), "a layer effect: no proxy");
+    }
+
+    /// Above `PROXY_THUMBNAIL_PIXELS` the inks come from the thumbnail's proxy and still land on
+    /// the right side: rich black on the left half, paper on the right.
+    #[test]
+    fn large_cmyk_channel_thumbnails_read_the_proxy() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 4200, "height": 4200, "mode": "cmyk"})).unwrap();
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 2100, "height": 4200})).unwrap();
+        s.execute("tools.setColors", json!({"foregroundCmyk": [1.0, 1.0, 1.0, 0.0]})).unwrap();
+        s.execute("edit.fillForeground", json!({})).unwrap();
+        let doc = &s.active().unwrap().doc;
+        let proxy = photocraft_compose::thumbnail_proxy(doc, 56).expect("a 17.6 MP document thumbnails from a proxy");
+        let (w, h) = photocraft_compose::thumbnail_size(doc, 56);
+        let inks = ink_thumbnail(&proxy, w as usize, h as usize);
+        let at = |x: u32, y: u32| inks[(y * w + x) as usize];
+        let near = |p: [f32; 4], q: [f32; 4]| p.iter().zip(q).all(|(a, b)| (a - b).abs() < 0.01);
+        assert!(near(at(5, h / 2), [1.0, 1.0, 1.0, 0.0]), "{:?}", at(5, h / 2));
+        assert!(near(at(w - 5, h / 2), [0.0; 4]), "{:?}", at(w - 5, h / 2));
     }
 }
