@@ -177,7 +177,8 @@ pub(crate) fn is_screen_mode(id: &str) -> bool {
 /// The PhotoCraft row of a screen-mode command of the shell: the command gate judges the framework command as the
 /// menus judge that row.
 pub(crate) fn screen_mode_row(command: &CommandRef) -> Option<&'static str> {
-    bridge_of(command).filter(|(_, bridged)| matches!(bridged, Bridged::ScreenMode(_))).map(|(id, _)| id)
+    // The command gate asks this for every command a pass resolves: only the screen-mode rows build their command.
+    RUNTIME_COMMANDS.iter().find(|(_, bridged)| matches!(bridged, Bridged::ScreenMode(_)) && bridged.command() == *command).map(|(id, _)| *id)
 }
 
 /// The id of the command that steps a tool group to its next tool: the group is named by its key.
