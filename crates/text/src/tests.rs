@@ -1640,16 +1640,22 @@ fn new_text_layer_gets_a_txt2_object_and_frame() {
     assert_eq!(object.path(&["0", "0"]).and_then(E::as_str), Some("v1.0\r"));
     assert_eq!(object.path(&["1", "0"]), Some(&E::Array(vec![E::Dict(vec![("0".into(), E::Int(1))])])), "the view names its own frame");
     assert!(object.get("21").is_none());
-    assert_eq!(
-        object.path(&["1", "2"]).and_then(E::as_array).and_then(|s| s[0].get("6")).and_then(E::as_array).and_then(|f| f[0].get("10")),
-        Some(&E::Int(1)),
-        "the frame strike names its own frame"
-    );
+    // The template's laid-out lines are of the template's text: the new object is written as
+    // type not laid out yet, its strike root without frame strikes.
+    let strike_root = |object: &E| object.path(&["1", "2"]).and_then(E::as_array).and_then(|s| s.first()).cloned().unwrap();
+    assert_eq!(strike_root(object), E::Dict(vec![("99".into(), E::Name("PC".into()))]), "the template's lines are not copied");
     let lens =
         |path: &[&str]| -> Vec<i64> { object.path(path).and_then(E::as_array).unwrap().iter().map(|r| r.get("1").and_then(E::as_i64).unwrap()).collect() };
     assert_eq!(lens(&["0", "5", "0"]), vec![5]);
     assert_eq!(lens(&["0", "6", "0"]), vec![5]);
     assert_eq!(lens(&["1", "1", "0"]), vec![5], "view runs follow the new paragraphs");
+    assert_eq!(object.path(&["1", "1", "0"]).and_then(E::as_array).unwrap()[0].path(&["0", "1"]), Some(&E::Int(0)), "the view run is marked not laid out");
+    // A new layer holding the template's own text keeps the lines, which count that text; their
+    // frame strike names the new object's frame.
+    let same = crate::psd::parse_txt2(&crate::psd::build_txt2(&[(0, &old), (1, &old)], Some(&prev))).unwrap();
+    let twin = &same.path(&["1", "1"]).and_then(E::as_array).unwrap()[1];
+    assert_eq!(strike_root(twin).get("6").and_then(E::as_array).and_then(|f| f[0].get("10")), Some(&E::Int(1)), "the frame strike names its own frame");
+    assert_eq!(twin.path(&["1", "1"]), kept.path(&["1", "1"]), "and its view runs stay laid out");
 
     // Re-saving the file with the stub repairs it: the stub is replaced like a missing object.
     assert_eq!(crate::psd::parse_txt2(&broken).unwrap().path(&["1", "1"]).and_then(E::as_array).unwrap().len(), 2);

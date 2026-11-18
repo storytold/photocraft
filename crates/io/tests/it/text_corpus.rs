@@ -169,6 +169,114 @@ fn corpus_photoshop_txt2_survives_an_unedited_save() {
     println!("Txt2 kept byte-for-byte in {checked} Photoshop type files");
 }
 
+/// What every text object of a `Txt2` block holds in Photoshop's own files: its model's paragraph
+/// and style runs, its view runs and the segments of its laid-out lines (`/99 /S`, count at
+/// `/15 /0`) each add up to the text's UTF-16 length, with one paragraph run and one view run per
+/// paragraph. Returns how many objects were checked.
+#[cfg(feature = "corpus")]
+fn assert_txt2_views_cover_their_text(txt2: &[u8], what: &str) -> usize {
+    use photocraft_text::engine_data::Value as E;
+    fn segments(node: &E, total: &mut (i64, usize)) {
+        match node {
+            E::Dict(items) => {
+                if node.get("99") == Some(&E::Name("S".into())) {
+                    total.0 += node.path(&["15", "0"]).and_then(E::as_i64).unwrap_or(0);
+                    total.1 += 1;
+                }
+                items.iter().for_each(|(_, v)| segments(v, total));
+            }
+            E::Array(items) => items.iter().for_each(|v| segments(v, total)),
+            _ => {}
+        }
+    }
+    let lengths = |runs: Option<&E>| -> Option<Vec<i64>> {
+        Some(runs?.get("0").and_then(E::as_array)?.iter().map(|r| r.get("1").and_then(E::as_i64).unwrap_or(-1)).collect())
+    };
+    let parsed = photocraft_text::psd::parse_txt2(txt2).unwrap_or_else(|| panic!("{what}: Txt2 does not parse"));
+    let objects = parsed.path(&["1", "1"]).and_then(E::as_array).unwrap_or(&[]);
+    let mut checked = 0;
+    for (i, object) in objects.iter().enumerate() {
+        let Some(text) = object.path(&["0", "0"]).and_then(E::as_str) else { continue };
+        let len = text.encode_utf16().count() as i64;
+        let paragraphs = text.split_inclusive('\r').count();
+        let who = format!("{what}: object {i} {text:?}");
+        let paragraph_runs = lengths(object.path(&["0", "5"])).unwrap_or_else(|| panic!("{who}: no paragraph runs"));
+        assert_eq!((paragraph_runs.iter().sum::<i64>(), paragraph_runs.len()), (len, paragraphs), "{who}: paragraph runs {paragraph_runs:?}");
+        let style_runs = lengths(object.path(&["0", "6"])).unwrap_or_else(|| panic!("{who}: no style runs"));
+        assert_eq!(style_runs.iter().sum::<i64>(), len, "{who}: style runs {style_runs:?}");
+        let view = object.get("1").unwrap_or_else(|| panic!("{who}: no view"));
+        if let Some(view_runs) = lengths(view.get("1")) {
+            assert_eq!((view_runs.iter().sum::<i64>(), view_runs.len()), (len, paragraphs), "{who}: view runs {view_runs:?}");
+        }
+        let mut laid_out = (0, 0);
+        if let Some(strikes) = view.get("2") {
+            segments(strikes, &mut laid_out);
+        }
+        assert!(laid_out.1 == 0 || laid_out.0 == len, "{who}: its laid-out lines hold {} characters", laid_out.0);
+        checked += 1;
+    }
+    checked
+}
+
+/// In Photoshop's own type files every text object's view covers its text, and it still does in
+/// a save after each type layer's text was edited (a longer text with one more paragraph). The
+/// save used to keep the view of the old text.
+#[cfg(feature = "corpus")]
+#[test]
+fn corpus_photoshop_txt2_views_cover_their_text_after_an_edit() {
+    fn edit(layers: &mut [Layer], dpi: f32, edited: &mut usize) {
+        for l in layers {
+            if let LayerContent::Text(t) = &mut l.content {
+                let added = "!\nx";
+                t.text.push_str(added);
+                if let Some(r) = t.runs.last_mut() {
+                    r.len += added.len();
+                }
+                if let Some(p) = t.paragraphs.last_mut() {
+                    p.len += added.len();
+                }
+                t.sync_summary();
+                // As the engine's type commands do after an edit.
+                t.psd_raw = photocraft_text::psd::build_tysh(t, dpi, None).map(std::sync::Arc::new);
+                *edited += 1;
+            }
+            if let Some(children) = l.children_mut() {
+                edit(children, dpi, edited);
+            }
+        }
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/photoshop/text");
+    assert!(root.is_dir(), "{} is missing: run `cargo xtask corpus --photoshop`", root.display());
+    let mut files = Vec::new();
+    collect(&root, &mut files);
+    files.sort();
+    let txt2 = |bytes: &[u8]| craft_psd::PsdFile::from_bytes(bytes).unwrap().global_blocks.iter().find(|b| &b.key == b"Txt2").map(|b| b.data.clone());
+    let (mut objects, mut layers) = (0, 0);
+    for f in &files {
+        let name = f.file_name().unwrap().to_string_lossy().to_string();
+        let bytes = std::fs::read(f).unwrap();
+        let Some(before) = txt2(&bytes) else { continue };
+        objects += assert_txt2_views_cover_their_text(&before, &format!("{name} as Photoshop saved it"));
+        let mut doc = photocraft_io::import(&name, &bytes).unwrap().document;
+        let dpi = doc.resolution_dpi;
+        edit(&mut doc.layers, dpi, &mut layers);
+        let out = photocraft_io::export(&doc, &name, &Default::default()).unwrap().bytes;
+        let after = txt2(&out).unwrap_or_else(|| panic!("{name}: the save after an edit has no Txt2"));
+        assert_txt2_views_cover_their_text(&after, &format!("{name} saved after an edit"));
+        // And the edited text is what the saved file's type layers hold.
+        let back = photocraft_io::import(&name, &out).unwrap().document;
+        let mut all = Vec::new();
+        walk(&back.layers, &mut all);
+        for l in all {
+            if let LayerContent::Text(t) = &l.content {
+                assert!(t.text.ends_with("!\nx"), "{name}: layer {:?} reopened as {:?}", l.name, t.text);
+            }
+        }
+    }
+    assert!(objects > 0 && layers > 0, "no Photoshop type files with Txt2 in {}", root.display());
+    println!("Txt2 views cover their text in {objects} Photoshop text objects, and after editing {layers} type layers");
+}
+
 /// #7962: Photoshop's type on a path (`Txt2` frames, EngineData calls it a text box) opens on its
 /// path, at the anchors the generator gave Photoshop; the circle re-renders where Photoshop drew
 /// it; and a save after an edit (new text, a moved path) reopens on the layer's path.

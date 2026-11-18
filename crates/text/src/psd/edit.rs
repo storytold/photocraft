@@ -142,22 +142,70 @@ pub(super) fn pad_frames(outer: &mut E, count: usize) {
     }
 }
 
+/// Whether the view (`/1`) of the text object `object` covers `text` (`\r` breaks, trailing
+/// `\r`): its runs (`/1 /0`, one per paragraph, each `<< … /1 length >>`) add up to the text's
+/// length in UTF-16 units. Photoshop writes them so in every file it saves (all 59 text objects
+/// of the corpus); a view left from another text, as releases before this check kept one after
+/// an edit, does not. A view without runs covers any text: it says nothing about one.
+pub(super) fn view_covers(object: &E, text: &str) -> bool {
+    let Some(runs) = object.path(&["1", "1", "0"]).and_then(E::as_array) else { return true };
+    let total = runs.iter().try_fold(0usize, |sum, r| sum.checked_add(usize::try_from(r.get("1").and_then(E::as_i64)?).ok()?));
+    total == Some(utf16_len(text) as usize)
+}
+
+/// Makes `view` (a text object's `/1`) the view of a text that has not been laid out, with the
+/// paragraph lengths `paragraphs` (UTF-16 units): the shape Photoshop writes for such type
+/// (`text/path-wave-open.psd` in the corpus). Its runs (`/1 /0`) become one per paragraph, each
+/// marked not laid out (`/0 << /1 0 >>`), and its rendered strikes (`/2 [ << /99 /PC … /6 [ … ]
+/// >> ]`) lose their frame strikes (`/6`): the lines, glyph numbers and per-strike character
+/// counts of the text they were laid out for. Photoshop lays the text out again. The frame the
+/// view names (`/0`) and its other keys stay. `None` when the run budget is exceeded.
+fn unrendered_view(view: &mut E, paragraphs: &[usize], nodes: &mut usize, bytes: &mut usize) -> Option<()> {
+    if let Some(runs) = view.path(&["1", "0"]).and_then(E::as_array).filter(|r| r.iter().all(|x| matches!(x, E::Dict(_)) && x.get("1").is_some())) {
+        let mut fitted = runs_per(runs, paragraphs, "1", nodes, bytes)?;
+        for run in &mut fitted {
+            if let Some(state @ E::Dict(_)) = run.get_mut("0")
+                && state.get("1").is_some()
+            {
+                state.set("1", E::Int(0));
+            }
+        }
+        view.get_mut("1")?.set("0", E::Array(fitted));
+    }
+    if let Some(E::Array(strikes)) = view.get_mut("2") {
+        for strike in strikes.iter_mut() {
+            if let E::Dict(items) = strike {
+                items.retain(|(k, _)| k != "6");
+            }
+        }
+    }
+    Some(())
+}
+
 /// The file's `Txt2` text object `object` (`<< /0 model /1 view … >>`) for the changed engine
 /// text `text` (`\r` breaks, trailing `\r`): the model's text replaced, its paragraph runs (`/5`)
 /// one per paragraph of the new text (each keeping the style of the file's paragraph at that
 /// position, else its last), and every other run array of the model (style runs `/6`, …) cut or
-/// extended at its end to the new length. The view and the other keys are kept, except the glyph
-/// pen positions (`/21`), which belong to the old text. `None` when the object or one of its run
-/// arrays isn't shaped as Photoshop writes it: the caller writes a fresh object instead.
+/// extended at its end to the new length. The glyph pen positions (`/21`) belong to the old text
+/// and are dropped. So does the view's layout when the text changed, or when the view does not
+/// cover the text ([`view_covers`]): it is written as the view of type not laid out yet
+/// ([`unrendered_view`]). Kept, it counted the old text's characters beside the new text, a
+/// state no file Photoshop saved is in. The frame the view names and the other keys are kept.
+/// `None` when the object or one of its run arrays isn't shaped as Photoshop writes it: the
+/// caller writes a fresh object instead.
 pub(super) fn edited_object(object: &E, text: &str) -> Option<E> {
+    let stale = object.path(&["0", "0"]).and_then(E::as_str) != Some(text) || !view_covers(object, text);
     let mut object = object.clone();
     let E::Dict(items) = &mut object else { return None };
     items.retain(|(k, _)| k != "21");
-    let model = object.get_mut("0").filter(|m| matches!(m, E::Dict(_)))?;
     let total = utf16_len(text) as usize;
     let paragraphs: Vec<usize> = text.split_inclusive('\r').map(|p| p.encode_utf16().count()).collect();
-    let E::Dict(entries) = model else { return None };
     let (mut nodes, mut bytes) = (MAX_REFIT_RUN_NODES, MAX_REFIT_RUN_BYTES);
+    if stale && let Some(view @ E::Dict(_)) = object.get_mut("1") {
+        unrendered_view(view, &paragraphs, &mut nodes, &mut bytes)?;
+    }
+    let model = object.get_mut("0").filter(|m| matches!(m, E::Dict(_)))?;
+    let E::Dict(entries) = model else { return None };
     for (key, value) in entries.iter_mut() {
         if key.as_str() == "0" {
             *value = E::String(text.to_string());
@@ -433,5 +481,88 @@ mod copy_budget_tests {
         let kept = vec![run(100, 1 << 20), run(100, 1 << 20)];
         let modes = [(1, 100), (1, 100)];
         assert_eq!(with_modes(kept.clone(), &modes), Some(kept));
+    }
+}
+
+#[cfg(test)]
+mod view_tests {
+    use super::{E, edited_object, utf16_len, view_covers};
+
+    /// A laid-out object as Photoshop writes one: `text` in the model, and a view of `counted`
+    /// UTF-16 units in one run and one line.
+    fn laid_out(text: &str, counted: i64) -> E {
+        let run = |len: i64| E::Dict(vec![("0".into(), E::Dict(vec![("1".into(), E::Int(1))])), ("1".into(), E::Int(len))]);
+        let segment = E::Dict(vec![("99".into(), E::Name("S".into())), ("15".into(), E::Dict(vec![("0".into(), E::Int(counted))]))]);
+        let frame_strike = E::Dict(vec![("99".into(), E::Name("F".into())), ("10".into(), E::Int(3)), ("6".into(), E::Array(vec![segment]))]);
+        let root = E::Dict(vec![("99".into(), E::Name("PC".into())), ("5".into(), E::Int(0)), ("6".into(), E::Array(vec![frame_strike]))]);
+        let view = E::Dict(vec![
+            ("0".into(), E::Array(vec![E::Dict(vec![("0".into(), E::Int(3))])])),
+            ("1".into(), E::Dict(vec![("0".into(), E::Array(vec![run(counted)]))])),
+            ("2".into(), E::Array(vec![root])),
+        ]);
+        let runs = |len: i64| E::Dict(vec![("0".into(), E::Array(vec![E::Dict(vec![("0".into(), E::dict()), ("1".into(), E::Int(len))])]))]);
+        let len = utf16_len(text);
+        let model = E::Dict(vec![("0".into(), E::String(text.into())), ("5".into(), runs(len)), ("6".into(), runs(len))]);
+        E::Dict(vec![("0".into(), model), ("1".into(), view)])
+    }
+
+    fn view_run_lengths(object: &E) -> Vec<i64> {
+        object.path(&["1", "1", "0"]).and_then(E::as_array).unwrap().iter().map(|r| r.get("1").and_then(E::as_i64).unwrap()).collect()
+    }
+
+    /// The view of an edited object is the view of the new text, not laid out: the lines Photoshop
+    /// stored count the old text's characters, and its own files never hold a view that disagrees
+    /// with the text.
+    #[test]
+    fn an_edited_object_leaves_out_the_old_texts_lines() {
+        let edited = edited_object(&laid_out("Old\r", 4), "A\rBC\r").unwrap();
+        assert_eq!(edited.path(&["0", "0"]).and_then(E::as_str), Some("A\rBC\r"));
+        assert_eq!(view_run_lengths(&edited), [2, 3], "one view run per paragraph of the new text");
+        for run in edited.path(&["1", "1", "0"]).and_then(E::as_array).unwrap() {
+            assert_eq!(run.path(&["0", "1"]), Some(&E::Int(0)), "marked not laid out");
+        }
+        let root = &edited.path(&["1", "2"]).and_then(E::as_array).unwrap()[0];
+        assert_eq!(root, &E::Dict(vec![("99".into(), E::Name("PC".into())), ("5".into(), E::Int(0))]), "the strike root keeps no lines");
+        assert_eq!(edited.path(&["1", "0"]), laid_out("Old\r", 4).path(&["1", "0"]), "the view still names its frame");
+        assert!(view_covers(&edited, "A\rBC\r"));
+        // The same length, another text: the lines hold the old text's glyphs.
+        let edited = edited_object(&laid_out("Old\r", 4), "New\r").unwrap();
+        assert!(edited.path(&["1", "2"]).and_then(E::as_array).unwrap()[0].get("6").is_none());
+    }
+
+    /// Refitting an object to the text it already holds (a style-only edit) keeps its layout,
+    /// unless the view counts another text: the state an earlier release left after an edit.
+    #[test]
+    fn a_refit_to_the_same_text_keeps_a_view_that_covers_it() {
+        let object = laid_out("Old\r", 4);
+        assert_eq!(edited_object(&object, "Old\r").unwrap().get("1"), object.get("1"));
+        let stale = laid_out("Newer!!\r", 4);
+        assert!(!view_covers(&stale, "Newer!!\r"));
+        let repaired = edited_object(&stale, "Newer!!\r").unwrap();
+        assert_eq!(view_run_lengths(&repaired), [8]);
+        assert!(repaired.path(&["1", "2"]).and_then(E::as_array).unwrap()[0].get("6").is_none());
+    }
+
+    /// A view without runs says nothing about a text; lengths that are no counts never cover one,
+    /// and never overflow.
+    #[test]
+    fn view_cover_reads_hostile_lengths() {
+        let with_runs = |lens: &[E]| {
+            let runs = lens.iter().map(|l| E::Dict(vec![("1".into(), l.clone())])).collect();
+            E::Dict(vec![("1".into(), E::Dict(vec![("1".into(), E::Dict(vec![("0".into(), E::Array(runs))]))]))])
+        };
+        assert!(view_covers(&E::dict(), "AV\r"));
+        assert!(view_covers(&E::Dict(vec![("1".into(), E::Dict(vec![("0".into(), E::Array(vec![]))]))]), "AV\r"));
+        assert!(view_covers(&with_runs(&[E::Int(1), E::Int(2)]), "AV\r"));
+        assert!(!view_covers(&with_runs(&[E::Int(2)]), "AV\r"));
+        assert!(!view_covers(&with_runs(&[E::Int(-1), E::Int(4)]), "AV\r"));
+        assert!(!view_covers(&with_runs(&[E::Int(i64::MAX), E::Int(i64::MAX)]), "AV\r"));
+        assert!(!view_covers(&with_runs(&[E::String("3".into())]), "AV\r"));
+        assert!(!view_covers(&with_runs(&[]), "AV\r"));
+        // And a view that isn't shaped as runs is refitted without a panic.
+        let mut odd = laid_out("Old\r", 4);
+        odd.get_mut("1").unwrap().set("1", E::Int(7));
+        odd.get_mut("1").unwrap().set("2", E::Bool(true));
+        assert!(edited_object(&odd, "AV\r").is_some());
     }
 }

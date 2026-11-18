@@ -1,5 +1,5 @@
 use super::edit::{
-    TEMPLATE_NODES, compact, copies_fit_plus, edited_object, fits, is_stub, names_one_frame, new_object, pad_frames, td_edited_object, with_modes,
+    TEMPLATE_NODES, compact, copies_fit_plus, edited_object, fits, is_stub, names_one_frame, new_object, pad_frames, td_edited_object, view_covers, with_modes,
 };
 use super::import::{OPENTYPE_KEYS, TXT2_FEATURES, TXT2_STYLISTIC_SETS, kern_units, manual, object_frame, pair_runs, parse_txt2, postscript_for, real};
 use super::{
@@ -803,13 +803,19 @@ pub fn build_txt2_at(objects: &[(i32, &TextLayer)], previous: Option<&[u8]>, dpi
         // Kept only while its style runs still say what the layer says (#8415): Photoshop reads
         // the character style from them, so a style-only edit (font, faux bold, size, …) must
         // restyle the object the way an edited one is, or the file's old style shows on reopen.
+        // And only while its view covers its text: an earlier release kept the view of the text
+        // from before an edit, a state no file Photoshop saved is in, so re-saving such a file
+        // repairs the object the way an edit does.
         let kept = slot.filter(|o| {
             let model = o.get("0");
-            model.and_then(|m| m.get("0")).and_then(E::as_str) == Some(text.as_str()) && model.is_some_and(|m| txt2_style_matches(layer, m, &fonts, dpi))
+            model.and_then(|m| m.get("0")).and_then(E::as_str) == Some(text.as_str())
+                && view_covers(o, &text)
+                && model.is_some_and(|m| txt2_style_matches(layer, m, &fonts, dpi))
         });
         // An edited object (#6968): the file's object at this slot with its text changed. It keeps
         // the file's structure — paragraph runs, the view naming its frame, the rest — with every
-        // run array refitted to the new text. A bare `<< /0 << /0 text /6 runs >> >>` stub in
+        // run array refitted to the new text and the view's layout of the old text left out
+        // (`edited_object`). A bare `<< /0 << /0 text /6 runs >> >>` stub in
         // Photoshop's block (no paragraph runs, no view) made Photoshop quit while opening the file.
         let edited = kept.is_none().then(|| slot.and_then(|o| edited_object(o, &text))).flatten();
         // A new object (#7698): a layer the file's block has no object for (a type layer added

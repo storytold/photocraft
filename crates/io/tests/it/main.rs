@@ -68,6 +68,7 @@ mod psd_roundtrip_bytes;
 mod psd_structure;
 mod psd_style_sheets;
 mod psd_thumbnail;
+mod psd_txt2_view;
 mod psd_type_bounds;
 mod psd_type_photoshop_bytes;
 mod psd_unknown_adjustment;
