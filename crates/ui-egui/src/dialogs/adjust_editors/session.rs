@@ -56,6 +56,12 @@ impl PropertiesAdjust {
     }
 }
 
+/// Where the Properties panel keeps the height of its controls under an adjustment's editor, measured in the pass
+/// before (`EditorSetup::fill_reserve`).
+pub(crate) fn controls_below_id() -> egui::Id {
+    egui::Id::unique("photocraft.properties.adjustment-controls-below")
+}
+
 /// Kinds whose Properties edits follow Photoshop's history and Reset (measured for Color Balance,
 /// Photoshop 25.4): consecutive edits of the layer make one history step, and Reset first returns
 /// to the settings the layer had when the panel started showing it.
@@ -198,6 +204,7 @@ pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj
         gradients: if kind == "gradientMap" { gradient_presets(app) } else { Vec::new() },
         swatches: swatches(app),
         tone: record.tone.take(),
+        fill_reserve: Some(ui.ctx().data(|d| d.get_temp::<f32>(controls_below_id())).unwrap_or(0.0)),
         ..Default::default()
     };
     let armed = crate::layer_picker::armed(app).filter(|(layer, _)| *layer == id).map(|(_, picker)| picker);

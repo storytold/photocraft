@@ -37,7 +37,7 @@ use crate::PhotocraftApp;
 mod session;
 pub mod values;
 
-pub(crate) use session::PropertiesAdjust;
+pub(crate) use session::{PropertiesAdjust, controls_below_id};
 pub use session::{layer_editor, layer_reset};
 
 /// Kinds edited here (Color Lookup has its own editor in `adjust_ui`; Invert has none).
@@ -192,6 +192,8 @@ pub struct EditorSetup {
     pub tone: Option<ColorBalanceTone>,
     /// The Smart Filter the dialog edits is not reachable from the active document: the editor shows no controls.
     pub stale: bool,
+    /// The height the Properties panel shows under the editor: Curves sizes its graph to the panel less this.
+    pub fill_reserve: Option<f32>,
     /// The clipping display the Levels editor reported on the pass before: the dialog's display changes when the editor's
     /// report does (an Alt-held thumb), so a display set from outside (automation) stays until the editor next reports.
     pub reported_clipping: std::cell::Cell<Option<craft::imaging::ui::adjust::LevelsClip>>,
@@ -207,6 +209,7 @@ impl Default for EditorSetup {
             swatches: [[0.0; 3], [1.0; 3]],
             tone: None,
             stale: false,
+            fill_reserve: None,
             reported_clipping: Default::default(),
         }
     }
@@ -258,6 +261,11 @@ fn show(kind: &str, setup: &EditorSetup, ui: &mut Ui, value: &mut AdjustValue, c
             }
             if setup.pickers_unavailable {
                 panel = panel.pickers_unavailable();
+            }
+            // In Properties the graph takes the panel's width and the height left under the panel's other controls. The
+            // dialog sizes itself to its content, so there it stays square and grows with the dialog's width.
+            if let Some(reserve) = setup.fill_reserve {
+                panel = panel.fill_height(reserve);
             }
             let out = panel.show(ui);
             let mut edit = out.edit.map(|curves| AdjustValue::Curves { curves });

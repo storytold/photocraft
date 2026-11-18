@@ -135,6 +135,7 @@ fn adjustment_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, 
     }
     ui.add_space(6.0);
     crate::adjust_editors::layer_editor(app, ui, id, adj);
+    let below = ui.cursor().top();
     ui.add_space(6.0);
     if let Some((_, visible)) = layer(app)
         && let Some(&on) = Switch::new(Bind::given(visible)).label(tl!("Adjustment visible")).show(ui).events.committed()
@@ -147,6 +148,11 @@ fn adjustment_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, 
         let params = crate::adjust_editors::layer_reset(app, id, adj);
         let _ = app.run("layer.setAdjustment", params);
         app.live_adjust = None;
+    }
+    // The editor above sizes itself to leave these controls in view (Curves' graph).
+    let height = ui.cursor().top() - below;
+    if height.is_finite() && !craft::ui::runtime::measure::active(ui.ctx()) {
+        ui.ctx().data_mut(|d| d.insert_temp(crate::adjust_editors::controls_below_id(), height.max(0.0)));
     }
 }
 

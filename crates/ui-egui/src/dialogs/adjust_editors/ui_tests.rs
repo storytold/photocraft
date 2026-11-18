@@ -469,3 +469,22 @@ fn properties_curves_input_sliders_move_the_end_points() {
     assert_eq!(master_points(&h), vec![[40.0, 0.0], [44.0, 255.0]], "the white end stops 4 levels past the black one");
     assert_eq!(history_len(&h), steps + 2);
 }
+
+/// #10110: in the Properties panel the Curves graph takes the panel's width and the height left above the controls
+/// under it, so it isn't square, and the controls under it stay in view. Its points still map levels on each axis.
+#[test]
+fn properties_curves_graph_fills_the_panel() {
+    let mut h = app_harness("curves", "rgb", 8);
+    let black = h.get_by_label("Point 1 of 2").rect().center();
+    let white = h.get_by_label("Point 2 of 2").rect().center();
+    let (wide, tall) = (white.x - black.x, black.y - white.y);
+    assert!((wide - tall).abs() > 20.0, "not a square: {wide} × {tall}");
+    let reset = h.get_by_label("Reset to defaults").rect();
+    assert!(reset.bottom() <= h.ctx.content_rect().bottom(), "the controls under the editor stay in view: {reset:?}");
+    let input = h.get_by_label(BLACK_SLIDER).rect().center();
+    assert!((input.x - black.x).abs() < 0.5, "the black slider sits under the black end point");
+    // A click at the levels (64, 192) of this graph adds a point there.
+    let at = Pos2::new(black.x + wide * 64.0 / 255.0, black.y - tall * 192.0 / 255.0);
+    click(&mut h, at);
+    assert_eq!(master_points(&h), vec![[0.0, 0.0], [64.0, 192.0], [255.0, 255.0]]);
+}
