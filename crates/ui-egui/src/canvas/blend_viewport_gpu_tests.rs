@@ -36,12 +36,14 @@ fn blend_hover_pattern_tiles_and_multiple_views_reuse_current_pixels() {
     let Some(rs) = render_state() else { return };
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.set_wgpu(rs);
-    app.run("file.new", json!({"width":1024,"height":768,"background":"#336699"})).unwrap();
+    // Half the 1024 × 768 canvas these views were first written for (see `check_blend_viewport`): `a` still runs off
+    // the right edge and `b` still lies apart from it.
+    app.run("file.new", json!({"width":512,"height":384,"background":"#336699"})).unwrap();
     let layer = app.run("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
     app.run("edit.fill", json!({"color":"#cc8844"})).unwrap();
     let ctx = app.ctx().clone();
-    let a = DRect::new(724, 200, 1324, 500);
-    let b = DRect::new(0, 200, 300, 500);
+    let a = DRect::new(362, 100, 662, 250);
+    let b = DRect::new(0, 100, 150, 250);
     assert!(ensure_gpu(&mut app, &ctx, 0, a, None));
     app.ui.view.pattern_preview = true;
     crate::blend_preview::hover(&mut app, &[photocraft_doc::LayerId(layer)], Some(BlendMode::Multiply));
@@ -136,7 +138,11 @@ fn check_blend_viewport(cpu_fallback: bool, multiple_layers: bool) {
     let Some(rs) = render_state() else { return };
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.set_wgpu(rs);
-    app.run("file.new", json!({"width":1024,"height":768,"background":"#336699"})).unwrap();
+    // Every view and count below is half of the 1024 × 768 fixture first used: the clip to the view
+    // (`blend_preview::clip_damage`) and the catch-up (`blend_preview::uncovered`) are rectangle arithmetic with no
+    // size threshold, and the canvas stays far below the background redraw's (that case is
+    // `blend_hover_during_background_redraw_restores_committed_pixels`). The whole-canvas pixel checks cost a quarter.
+    app.run("file.new", json!({"width":512,"height":384,"background":"#336699"})).unwrap();
     let layer = app.run("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
     app.run("edit.fill", json!({"color":"#cc8844"})).unwrap();
     if cpu_fallback {
@@ -150,7 +156,7 @@ fn check_blend_viewport(cpu_fallback: bool, multiple_layers: bool) {
         layers.push(photocraft_doc::LayerId(other));
     }
     let ctx = app.ctx().clone();
-    let visible = DRect::new(256, 256, 512, 512);
+    let visible = DRect::new(128, 128, 256, 256);
     assert!(ensure_gpu(&mut app, &ctx, 0, visible, None));
     assert!(app.redraws.is_empty(), "small fixture must finish synchronously");
     if cpu_fallback {
@@ -161,23 +167,23 @@ fn check_blend_viewport(cpu_fallback: bool, multiple_layers: bool) {
     let original = gpu.read_texels(id.0).unwrap();
     crate::blend_preview::hover(&mut app, &layers, Some(BlendMode::Multiply));
     assert!(ensure_gpu(&mut app, &ctx, 0, visible, None));
-    println!("BLEND_VIEWPORT kind={} pixels={} expected={} adapter={:?}", app.perf.last_refresh, app.perf.last_refresh_px, 256 * 256, app.perf.gpu_info);
-    assert_eq!(app.perf.last_refresh_px, 256 * 256, "hover must not recomposite offscreen pixels of a full-canvas layer");
+    println!("BLEND_VIEWPORT kind={} pixels={} expected={} adapter={:?}", app.perf.last_refresh, app.perf.last_refresh_px, 128 * 128, app.perf.gpu_info);
+    assert_eq!(app.perf.last_refresh_px, 128 * 128, "hover must not recomposite offscreen pixels of a full-canvas layer");
     assert_visible_pixels(&mut app, visible);
     app.perf.last_refresh_px = 0;
     assert!(ensure_gpu(&mut app, &ctx, 0, visible, None));
     assert_eq!(app.perf.last_refresh_px, 0, "unchanged view and mode must reuse the texture");
-    let zoomed_out = DRect::new(128, 128, 640, 640);
+    let zoomed_out = DRect::new(64, 64, 320, 320);
     assert!(ensure_gpu(&mut app, &ctx, 0, zoomed_out, None));
-    assert_eq!(app.perf.last_refresh_px, 512 * 512, "zooming out catches up the larger visible area");
-    let panned = DRect::new(640, 256, 896, 512);
+    assert_eq!(app.perf.last_refresh_px, 256 * 256, "zooming out catches up the larger visible area");
+    let panned = DRect::new(320, 128, 448, 256);
     assert!(ensure_gpu(&mut app, &ctx, 0, panned, None));
-    assert_eq!(app.perf.last_refresh_px, 256 * 256, "newly exposed pixels must catch up without a mode change");
+    assert_eq!(app.perf.last_refresh_px, 128 * 128, "newly exposed pixels must catch up without a mode change");
     crate::blend_preview::hover(&mut app, &layers, Some(BlendMode::Screen));
     assert!(ensure_gpu(&mut app, &ctx, 0, panned, None));
-    assert_eq!(app.perf.last_refresh_px, 256 * 256);
+    assert_eq!(app.perf.last_refresh_px, 128 * 128);
     assert!(ensure_gpu(&mut app, &ctx, 0, visible, None));
-    assert_eq!(app.perf.last_refresh_px, 256 * 256, "returning view must show the current mode");
+    assert_eq!(app.perf.last_refresh_px, 128 * 128, "returning view must show the current mode");
     assert_visible_pixels(&mut app, visible);
     assert_visible_pixels(&mut app, panned);
     crate::blend_preview::hover(&mut app, &layers, None);
@@ -189,7 +195,7 @@ fn check_blend_viewport(cpu_fallback: bool, multiple_layers: bool) {
     assert!(ensure_gpu(&mut app, &ctx, 0, visible, None));
     let bounds = app.session.active().unwrap().doc.bounds();
     assert_visible_pixels(&mut app, bounds);
-    app.run("file.new", json!({"width":1024,"height":768,"background":"white"})).unwrap();
+    app.run("file.new", json!({"width":512,"height":384,"background":"white"})).unwrap();
     assert!(ensure_gpu(&mut app, &ctx, 1, visible, None));
     app.session.set_active(0);
     app.sync_views();
