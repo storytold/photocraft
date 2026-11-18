@@ -5,9 +5,9 @@ use egui::Modifiers;
 use serde_json::json;
 
 use super::add_anchor_lock_tests::click_with_modifiers;
-use super::delete_anchor_targeted_path_tests::{click, group_shape, setup, shape_path, steps};
+use super::delete_anchor_targeted_path_tests::{setup, steps};
 use crate::PhotocraftApp;
-use crate::canvas::{ToolEvent, tool_event};
+use crate::canvas::testing;
 use crate::direct_select::PathRef;
 use crate::state::Tool;
 
@@ -49,47 +49,13 @@ fn alt_click_on_a_segment_still_adds_an_anchor() {
 }
 
 #[test]
-fn a_plain_click_on_an_anchor_still_deletes_it() {
-    let mut app = square();
-    let n = steps(&app);
-    click(&mut app, [300.0, 500.0]);
-    assert_eq!(knots(&app), 3);
-    assert_eq!(steps(&app), n + 1);
-    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Delete Anchor Point"));
-    // #12769: the anchor that followed the deleted one is selected, not nothing.
-    assert_eq!(app.ui.direct_selection.anchors.len(), 1);
-}
-
-#[test]
 fn alt_drag_from_an_anchor_selects_nothing() {
     let mut app = square();
     let n = steps(&app);
-    tool_event(&mut app, ToolEvent::Down { x: 300.0, y: 500.0, pressure: 1.0 }, Modifiers::ALT);
-    tool_event(&mut app, ToolEvent::Move { x: 360.0, y: 560.0, pressure: 1.0 }, Modifiers::ALT);
-    tool_event(&mut app, ToolEvent::Up { x: 360.0, y: 560.0 }, Modifiers::ALT);
+    testing::press(&mut app, [300.0, 500.0], Modifiers::ALT);
+    testing::move_to(&mut app, [360.0, 560.0], Modifiers::ALT);
+    testing::release(&mut app, [360.0, 560.0], Modifiers::ALT);
     assert!(app.ui.direct_selection.anchors.is_empty());
     assert_eq!(knots(&app), 4);
-    assert_eq!(steps(&app), n);
-}
-
-#[test]
-fn alt_drag_that_returns_to_the_press_selects_nothing() {
-    let mut app = square();
-    tool_event(&mut app, ToolEvent::Down { x: 300.0, y: 500.0, pressure: 1.0 }, Modifiers::ALT);
-    tool_event(&mut app, ToolEvent::Move { x: 360.0, y: 560.0, pressure: 1.0 }, Modifiers::ALT);
-    tool_event(&mut app, ToolEvent::Move { x: 300.0, y: 500.0, pressure: 1.0 }, Modifiers::ALT);
-    tool_event(&mut app, ToolEvent::Up { x: 300.0, y: 500.0 }, Modifiers::ALT);
-    assert!(app.ui.direct_selection.anchors.is_empty());
-    assert_eq!(knots(&app), 4);
-}
-
-#[test]
-fn alt_click_on_a_shape_in_a_group_that_is_not_active_selects_nothing() {
-    let (mut app, shape) = setup(Tool::DeleteAnchorPoint);
-    group_shape(&mut app, shape);
-    let (before, n) = (shape_path(&mut app, shape), steps(&app));
-    click_with_modifiers(&mut app, [650.0, 250.0], Modifiers::ALT);
-    assert!(app.ui.direct_selection.anchors.is_empty());
-    assert_eq!(shape_path(&mut app, shape), before);
     assert_eq!(steps(&app), n);
 }

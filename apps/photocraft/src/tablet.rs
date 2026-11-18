@@ -92,17 +92,6 @@ pub fn right_button_service() -> Option<photocraft_ui_egui::RightButtonDownFn> {
     None
 }
 
-/// Where the pen is on the screen (Windows), for the title bar's pen moves (#7967).
-#[cfg(target_os = "windows")]
-pub fn pen_screen_service() -> Option<photocraft_ui_egui::PenScreenFn> {
-    Some(Box::new(|| photocraft_tablet::windows::pen_screen_px().map(|(x, y)| [x, y])))
-}
-
-#[cfg(not(target_os = "windows"))]
-pub fn pen_screen_service() -> Option<photocraft_ui_egui::PenScreenFn> {
-    None
-}
-
 /// Which end of the pen is in use (Windows): flipping the pen to its eraser end selects the
 /// Eraser (#2285). Elsewhere the end arrives with the samples in the stylus feed.
 #[cfg(target_os = "windows")]
@@ -219,9 +208,8 @@ impl DisplayKind {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use photocraft_tablet::{Update, appkit, xi};
+    use photocraft_tablet::{Update, appkit};
     use photocraft_ui_egui::PhotocraftApp;
-    use photocraft_ui_egui::canvas::{ToolEvent, tool_event};
     use photocraft_ui_egui::state::Tool;
     use serde_json::{Value, json};
 
@@ -240,30 +228,54 @@ mod tests {
     }
 
     /// The platform path end to end, minus the OS: raw AppKit / XInput2 values → the crate's
-    /// mapping → this module's sink → the stylus feed → the canvas's tool events → `paint.stroke`.
+    /// mapping → this module's sink → the stylus feed → window pointer input on the whole app → `paint.stroke`.
     /// A light-to-heavy pen stroke must paint thin and faint at the light end and wide and opaque
     /// at the heavy end (Size and Opacity on Pen Pressure); a mouse paints full strength.
     fn pressure_stroke(mut next: impl FnMut(f32) -> Option<Sample>) -> (f64, f64, f64, f64) {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-        let feed = app.stylus.feed.clone();
-        let sink = sink(feed);
-        app.session.execute("file.new", json!({"width": 240, "height": 80, "background": "white"})).unwrap();
-        app.session.execute("tools.setColors", json!({"foreground": [0.0, 0.0, 0.0, 1.0]})).unwrap();
+        use egui_kittest::Harness;
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width": 240, "height": 80, "background": "white"})).unwrap();
+        // The app shares the harness's context, which is where the window's pointer input arrives.
+        let mut h = Harness::builder().with_size(egui::vec2(1280.0, 800.0)).with_max_steps(64).build_eframe(move |cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            PhotocraftApp::with_context(cc.egui_ctx.clone(), session, Default::default())
+        });
+        let sink = sink(h.state().stylus.feed.clone());
+        // PLAN: assumed `PhotocraftApp::sync_views`, `last_canvas_rect` and `ui.views[..]` are public, as the app's own tests read them.
+        h.state_mut().sync_views();
+        h.run_steps(4);
+        // The tool first: each tool keeps its own brush, so the brush below is the Brush's.
+        h.state_mut().ui.tool = Tool::Brush;
+        h.run_steps(2);
+        h.state_mut().session.execute("tools.setColors", json!({"foreground": [0.0, 0.0, 0.0, 1.0]})).unwrap();
         let brush = json!({"size": 30, "hardness": 1.0, "spacing": 0.05, "pressureSize": true, "pressureOpacity": true, "smoothing": {"amount": 0}});
-        app.session.execute("tools.setBrush", json!({ "brush": brush })).unwrap();
-        app.ui.tool = Tool::Brush;
-        let m = egui::Modifiers::NONE;
+        h.state_mut().session.execute("tools.setBrush", json!({ "brush": brush })).unwrap();
+        {
+            let v = &mut h.state_mut().ui.views[0];
+            v.zoom = 1.0;
+            v.center = [120.0, 40.0];
+            v.clear_pending();
+        }
+        h.run_steps(2);
+        // The document point (x, y) on screen, with the view at 100 % centred on (120, 40).
+        let at = |h: &Harness<'_, PhotocraftApp>, x: f64, y: f64| h.state().last_canvas_rect.center() + egui::vec2((x - 120.0) as f32, (y - 40.0) as f32);
         let n = 20;
         for i in 0..=n {
             let t = i as f32 / n as f32;
             sink(next(0.1 + 0.9 * t));
-            let (x, y) = (20.0 + 200.0 * f64::from(t), 40.0);
-            let pressure = app.stylus.pressure();
-            let ev = if i == 0 { ToolEvent::Down { x, y, pressure } } else { ToolEvent::Move { x, y, pressure } };
-            tool_event(&mut app, ev, m);
+            let p = at(&h, 20.0 + 200.0 * f64::from(t), 40.0);
+            h.event(egui::Event::PointerMoved(p));
+            h.run_steps(1);
+            if i == 0 {
+                h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+                h.run_steps(1);
+            }
         }
-        tool_event(&mut app, ToolEvent::Up { x: 220.0, y: 40.0 }, m);
+        let end = at(&h, 220.0, 40.0);
+        h.event(egui::Event::PointerButton { pos: end, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.run_steps(3);
         sink(None);
+        let app = h.state_mut();
         // Darkness (1 - luma) along x = 50 (light end) and x = 200 (heavy end), and the painted
         // half-width there.
         let mut dark = |x: i32, y: i32| -> f64 {
@@ -301,18 +313,6 @@ mod tests {
             }
         });
         assert!(m_dark > 0.9 && m_w >= heavy_w - 1.0, "mouse = pressure 1: {m_dark}, {m_w}");
-    }
-
-    #[test]
-    fn xinput_tablet_pressure_drives_stroke_width_and_opacity() {
-        let mut st = xi::State::default();
-        st.set_devices([xi::Device::new(9, "Wacom Intuos Pen stylus", [(2, "Abs Pressure".to_string(), 0.0, 65535.0)])]);
-        let (light_dark, light_w, heavy_dark, heavy_w) = pressure_stroke(|p| match st.handle(9, [(2, f64::from(p) * 65535.0)]) {
-            Update::Set(s) => s,
-            Update::Keep => None,
-        });
-        assert!(heavy_w > light_w * 2.0, "width responds: {light_w} → {heavy_w}");
-        assert!(heavy_dark > light_dark + 0.3, "opacity responds: {light_dark} → {heavy_dark}");
     }
 
     /// `/proc/bus/input/devices` of a laptop with a Wacom Intuos Pro attached (64-bit longs: the

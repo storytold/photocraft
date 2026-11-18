@@ -76,7 +76,7 @@ fn older_or_hand_edited_preferences_load_within_range() {
 fn set_playback_keeps_the_history_policy_of_a_running_play() {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
-    s.actions.list.push(Action::new("Change", vec![("actions.setPlayback".to_string(), json!({"singleState": false}))]));
+    s.actions.list.push(Action::new("Change", vec![ActionStep::new("actions.setPlayback", json!({"singleState": false}))])).unwrap();
     let played = s.execute("actions.play", json!({"action": "Change"})).unwrap();
     assert!(played.get("failed").is_some(), "an action can't change Playback Options while it plays: {played}");
     assert!(s.prefs().actions.create_single_history_state);
@@ -91,8 +91,8 @@ fn headless_play_runs_the_whole_action_in_every_mode() {
             let mut s = Session::new();
             s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
             s.execute("actions.setPlayback", json!({"performance": performance, "seconds": 60, "singleState": single})).unwrap();
-            let steps = ["A", "B", "C"].map(|n| ("layer.new.layer".to_string(), json!({"name": n}))).to_vec();
-            s.actions.list.push(Action::new("Three", steps));
+            let steps = ["A", "B", "C"].map(|n| ActionStep::new("layer.new.layer", json!({"name": n}))).to_vec();
+            s.actions.list.push(Action::new("Three", steps)).unwrap();
             let layers = s.active().unwrap().doc.layers.len();
             let past = s.active().unwrap().history.past_len();
             let t0 = std::time::Instant::now();
