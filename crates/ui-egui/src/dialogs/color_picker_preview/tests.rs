@@ -9,7 +9,7 @@ thread_local! {
     pub(super) static BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-fn app_at(depth: u32) -> PhotocraftApp {
+fn app_at(depth: u32) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 200, "depth": depth})).unwrap();
     app.sync_views();
