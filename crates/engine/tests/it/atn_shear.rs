@@ -3,7 +3,7 @@ use craft_psd::atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem};
 use craft_psd::descriptor::{Descriptor, Id, UnicodeString, Value as D};
 use photocraft_engine::{
     Session,
-    actions_cmds::Action,
+    actions_cmds::{Action, ActionStep},
     atn_cmds::{Imported, export, import},
 };
 use serde_json::{Value, json};
@@ -39,7 +39,7 @@ fn mapped_recording(event: &str, descriptor: Descriptor) -> Imported {
 }
 /// Save one real native action and parse its public output, rather than calling a private converter.
 fn export_item(id: &str, params: &Value, set: &str) -> Option<AtnItem> {
-    let action = Action::new("A", vec![(id.into(), params.clone())]);
+    let action = Action::new("A", vec![ActionStep::new(id, params.clone())]);
     let bytes = export(set, &[&action], &[], false).ok()?.0;
     atn::parse(&bytes).ok()?.actions.first()?.items.first().cloned()
 }
@@ -59,7 +59,7 @@ fn shear_steps_roundtrip_curves_defaults_and_flags() {
             let loaded = mapped_recording(event, d.clone());
             assert!(loaded.unsupported.is_empty());
             let action = &loaded.actions[0];
-            assert_eq!(action.steps[0].0, "filter.distort.shear");
+            assert_eq!(action.steps[0].command, "filter.distort.shear");
             let bytes = export("S", &[action], &[], false).unwrap().0;
             let saved = atn::parse(&bytes).unwrap();
             assert_eq!(saved.actions[0].items[0].event, AtnEvent::Code(*b"Shr "));
@@ -69,8 +69,8 @@ fn shear_steps_roundtrip_curves_defaults_and_flags() {
     }
     let loaded = mapped_recording("Shr ", desc("null"));
     assert!(loaded.unsupported.is_empty());
-    assert_eq!(loaded.actions[0].steps[0].1, json!({"points":[[0,0],[1,0]],"undefinedAreas":"wrap"}));
-    assert_eq!(export_item("filter.distort.shear", &loaded.actions[0].steps[0].1, "S").unwrap().descriptor, Some(factory));
+    assert_eq!(loaded.actions[0].steps[0].params, json!({"points":[[0,0],[1,0]],"undefinedAreas":"wrap"}));
+    assert_eq!(export_item("filter.distort.shear", &loaded.actions[0].steps[0].params, "S").unwrap().descriptor, Some(factory));
     let mut step = item("Shr ", "Shear", Some(shear_descriptor(&[[0.0, 1.0], [0.0, 128.0]], "RptE")));
     step.enabled = false;
     step.with_dialog = true;
@@ -87,14 +87,14 @@ fn shear_clamps_points_and_preserves_fractional_wire_values() {
     let raw = shear_descriptor(&[[-10000.0, -1000.0], [10000.0, 1000.0]], "WrpA");
     let loaded = mapped_recording("Shr ", raw);
     assert!(loaded.unsupported.is_empty());
-    let p = &loaded.actions[0].steps[0].1;
+    let p = &loaded.actions[0].steps[0].params;
     assert_eq!(p["points"], json!([[0, -1], [1, 63.0 / 64.0]]));
     assert_eq!(export_item("filter.distort.shear", p, "S").unwrap().descriptor, Some(shear_descriptor(&[[-64.0, 1.0], [63.0, 128.0]], "WrpA")));
 
     let d = shear_descriptor(&[[0.0, 1.0], [7.97, 4.975609756097561], [0.0, 128.0]], "RptE");
     let loaded = mapped_recording("shear", d.clone());
     assert!(loaded.unsupported.is_empty());
-    let mut p = loaded.actions[0].steps[0].1.clone();
+    let mut p = loaded.actions[0].steps[0].params.clone();
     assert!(p.get("_atnShearPoints").is_some(), "the measured inverse loses a wire bit");
     assert_eq!(export_item("filter.distort.shear", &p, "S").unwrap().descriptor, Some(d));
     let mut edited = p.clone();
@@ -120,11 +120,11 @@ fn shear_point_budget_preserves_recordings_and_refuses_oversized_native_exports(
         let action = &loaded.actions[0];
         if count == LIMIT {
             assert!(loaded.unsupported.is_empty());
-            assert_eq!(action.steps[0].0, "filter.distort.shear");
-            assert_eq!(action.steps[0].1["points"].as_array().unwrap().len(), LIMIT);
+            assert_eq!(action.steps[0].command, "filter.distort.shear");
+            assert_eq!(action.steps[0].params["points"].as_array().unwrap().len(), LIMIT);
         } else {
             assert_eq!(loaded.unsupported.len(), 1);
-            assert_eq!(action.steps[0].0, "actions.photoshopStep");
+            assert_eq!(action.steps[0].command, "actions.photoshopStep");
         }
         let saved = export("S", &[action], &[], false).unwrap().0;
         assert!(atn::parse(&saved).unwrap().actions[0].items[0] == source, "{count}-point item changed on save");
@@ -177,7 +177,9 @@ fn shear_unrepresentable_steps_stay_kept_without_partial_playback() {
         let before = s.active().unwrap().doc.clone();
         let past = s.active().unwrap().history.past_len();
         let name = loaded.actions[0].name.clone();
-        s.actions.list.extend(loaded.actions);
+        for action in loaded.actions {
+            s.actions.list.push(action).unwrap();
+        }
         let report = s.execute("actions.play", json!({"action":name})).unwrap();
         assert_eq!(report["ran"], 0);
         assert!(report.get("failed").is_some());
@@ -200,7 +202,7 @@ fn shear_native_exports_keep_effective_defaults_and_refuse_lossy_options() {
         assert!(loaded.unsupported.is_empty());
         let steps = &loaded.actions[0].steps;
         assert_eq!(
-            photocraft_engine::filters_ext::params_for("filter.distort.shear", &steps[0].1),
+            photocraft_engine::filters_ext::params_for("filter.distort.shear", &steps[0].params),
             photocraft_engine::filters_ext::params_for("filter.distort.shear", &p)
         );
     }

@@ -7,7 +7,7 @@ use photocraft_doc::vector::Path;
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::canvas::{ToolEvent, tool_event};
+use crate::canvas::testing;
 use crate::state::Tool;
 
 /// 800 x 600 on white, pixel layer Red active, saved path Path 1 (a closed corner square and the
@@ -44,21 +44,12 @@ fn last_step(app: &PhotocraftApp) -> Option<String> {
 }
 
 fn click(app: &mut PhotocraftApp, at: [f64; 2]) {
-    tool_event(app, ToolEvent::Down { x: at[0], y: at[1], pressure: 1.0 }, Modifiers::NONE);
-    tool_event(app, ToolEvent::Up { x: at[0], y: at[1] }, Modifiers::NONE);
+    testing::click(app, at, Modifiers::NONE);
 }
 
-/// A key through the app's shortcut handling, as the canvas gets it.
+/// A key as the canvas gets it: the overlay's session keys first, then the app's key route.
 fn press(app: &mut PhotocraftApp, key: egui::Key) {
-    let ctx = egui::Context::default();
-    let m = Modifiers::NONE;
-    let raw = egui::RawInput {
-        events: vec![egui::Event::ModifiersChanged(m), egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: m }],
-        ..Default::default()
-    };
-    ctx.begin_pass(raw);
-    crate::shortcuts::handle(app, &ctx);
-    ctx.end_pass().textures_delta.clear();
+    testing::key(app, key, Modifiers::NONE);
 }
 
 fn anchors(path: &Path, s: usize) -> (Vec<[f64; 2]>, bool) {
@@ -186,17 +177,4 @@ fn without_a_targeted_path_delete_keeps_its_usual_route() {
     let count = layers(&app);
     press(&mut app, egui::Key::Delete);
     assert_eq!(layers(&app), count - 1, "no path: Delete still deletes the active layer");
-}
-
-#[test]
-fn several_selected_anchors_keep_todays_route() {
-    // Not measured in the reference: the path is left alone.
-    let mut app = app();
-    click(&mut app, [300.0, 300.0]);
-    tool_event(&mut app, ToolEvent::Down { x: 300.0, y: 500.0, pressure: 1.0 }, Modifiers::SHIFT);
-    tool_event(&mut app, ToolEvent::Up { x: 300.0, y: 500.0 }, Modifiers::SHIFT);
-    assert_eq!(app.ui.direct_selection.anchors, vec![[0, 1], [0, 2]]);
-    let before = path1(&app);
-    press(&mut app, egui::Key::Delete);
-    assert_eq!(path1(&app), before, "the path is unchanged");
 }

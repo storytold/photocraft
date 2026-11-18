@@ -7,7 +7,7 @@ use egui_kittest::kittest::{NodeT, Queryable};
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::state::{DialogKind, Tool};
+use crate::state::Tool;
 use crate::theme::ThemeKind;
 
 const PANEL: &str = "Toggle the Clone Source panel";
@@ -20,7 +20,7 @@ fn bar(tool: Tool) -> Harness<'static, PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 80, "height": 80})).unwrap();
     app.ui.tool = tool;
-    let mut h = Harness::builder().with_size(vec2(1800.0, 300.0)).build_ui_state(|ui, app| crate::panels::options_bar(app, ui), app);
+    let mut h = Harness::builder().with_size(vec2(1800.0, 300.0)).with_context(app.ctx().clone()).build_ui_state(|ui, app| crate::panels::options_bar(app, ui), app);
     PhotocraftApp::setup_context(&h.ctx, ThemeKind::ProMedium);
     h.run_steps(4);
     h
@@ -41,7 +41,7 @@ fn type_angle(h: &mut Harness<'static, PhotocraftApp>, text: &str) {
 }
 
 fn alerts(h: &Harness<'static, PhotocraftApp>) -> Vec<String> {
-    h.state().ui.dialogs.iter().filter(|d| d.kind == DialogKind::Error).filter_map(|d| d.fields.get("message")?.as_str().map(str::to_owned)).collect()
+    h.state().framework.dialogs.open_dialogs().iter().filter_map(|d| d.fields.as_ref()?.get("message")?.as_str().map(str::to_owned)).collect()
 }
 
 #[test]
@@ -71,20 +71,20 @@ fn healing_bar_orders_source_angle_and_pressure_without_extra_brush_controls() {
 #[test]
 fn clone_source_toggle_uses_the_existing_panel_command_in_both_directions() {
     let mut h = bar(Tool::Healing);
-    assert!(!h.state().ui.presets_ui.clone_source);
+    assert!(!crate::panel_docking::is_shown(h.state(), "cloneSource"));
     h.get_by_label(PANEL).click();
     h.run_steps(3);
-    assert!(h.state().ui.presets_ui.clone_source);
-    assert!(!h.state().ui.panels.brush_settings);
+    assert!(crate::panel_docking::is_shown(h.state(), "cloneSource"));
+    assert!(!crate::panel_docking::is_shown(h.state(), "brushSettings"));
     h.get_by_label(PANEL).click();
     h.run_steps(3);
-    assert!(!h.state().ui.presets_ui.clone_source);
+    assert!(!crate::panel_docking::is_shown(h.state(), "cloneSource"));
     let ctx = h.ctx.clone();
     crate::menus::invoke(h.state_mut(), &ctx, "window.panel.cloneSource", json!({"show": true})).unwrap();
     h.run_steps(3);
     h.get_by_label(PANEL).click();
     h.run_steps(3);
-    assert!(!h.state().ui.presets_ui.clone_source, "the button reads the panel's current state");
+    assert!(!crate::panel_docking::is_shown(h.state(), "cloneSource"), "the button reads the panel's current state");
     assert!(!h.state().ui.status_error, "{}", h.state().ui.status);
 }
 
@@ -97,8 +97,9 @@ fn healing_angle_truncates_fractions_and_clamps_typed_limits_with_one_ok_alert()
         assert_eq!(angle(&h).accesskit_node().numeric_value(), Some(f64::from(want)));
         if alert {
             assert_eq!(alerts(&h), vec![ANGLE_ALERT.to_string()], "{text}");
-            let id = h.state().ui.dialogs.iter().find(|d| d.kind == DialogKind::Error).expect("range alert").id;
-            crate::dialogs::confirm(h.state_mut(), id).unwrap();
+            let id = h.state().framework.dialogs.open_dialogs().into_iter().find(|d| d.fields.as_ref().and_then(|f| f.get("message")).and_then(|v| v.as_str()) == Some(ANGLE_ALERT)).expect("range alert").id;
+            let ctx = h.ctx.clone();
+            crate::dialogs::confirm(h.state_mut(), &ctx, id).unwrap();
             h.run_steps(3);
             assert!(alerts(&h).is_empty(), "OK closes the alert");
             assert_eq!(h.state().session.tools.brush.angle, want);

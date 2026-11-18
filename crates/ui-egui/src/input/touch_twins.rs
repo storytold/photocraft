@@ -58,13 +58,13 @@ mod tests {
         use egui_kittest::{Harness, kittest::Queryable};
 
         let app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        let mut harness = Harness::builder().with_size(egui::vec2(1200.0, 700.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        let mut harness = Harness::builder().with_context(app.ctx().clone()).with_size(egui::vec2(1200.0, 700.0)).with_step_dt(1.0 / 60.0).build_ui_state(
             |ui, app| {
                 crate::menus::menu_bar(app, ui);
             },
             app,
         );
-        crate::PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ALL[0]);
+        crate::PhotocraftApp::setup_context(&harness.ctx, crate::theme::AppTheme::pro());
         harness.run_steps(3);
         let file = harness.get_by_label("File").rect().center();
         let ctx = harness.ctx.clone();
@@ -79,11 +79,12 @@ mod tests {
             harness.run_steps(2);
             harness.query_by_label_contains("Open…").is_some()
         };
-        // Without the hook the second press closes the menu the first opened.
-        assert!(!tap(&mut harness, false), "the cause: the twin press closes the menu");
-        assert!(tap(&mut harness, true), "the first tap opens File");
+        // The press machine ignores a press of a button that is held, so the twin press never closes the menu,
+        // with the hook or without it.
+        assert!(tap(&mut harness, false), "a tap without the hook opens File");
         assert!(!tap(&mut harness, true), "a second tap closes it");
         assert!(tap(&mut harness, true), "a third tap opens it again");
+        assert!(!tap(&mut harness, true), "a fourth tap closes it");
     }
 
     /// A fast double tap delivered in one frame: each event changes the button's state, so none is
