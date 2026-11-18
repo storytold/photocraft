@@ -3,21 +3,19 @@
 //! an error when their estimated need won't fit (#10024). The simulation switch is process-wide,
 //! so every test here holds `LOCK` and resets it when it ends.
 
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::MutexGuard;
 
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_engine::Session;
 use photocraft_raster::headroom;
 use serde_json::json;
 
-static LOCK: Mutex<()> = Mutex::new(());
-
 /// Holds the lock and the simulated room; resets the simulation when dropped.
 struct Room(#[allow(dead_code)] MutexGuard<'static, ()>);
 
 impl Room {
     fn new(bytes: Option<u64>) -> Room {
-        let guard = Room(LOCK.lock().unwrap_or_else(PoisonError::into_inner));
+        let guard = Room(crate::lock(&crate::PROCESS));
         headroom::simulate_available(bytes);
         guard
     }

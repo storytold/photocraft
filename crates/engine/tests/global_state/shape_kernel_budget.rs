@@ -1,6 +1,6 @@
 //! A custom Shape Blur kernel is admitted against the working-memory budget before its coverage
-//! buffer is allocated, also when a smart filter re-renders it. Its own binary: the budget is
-//! process-wide.
+//! buffer is allocated, also when a smart filter re-renders it. The budget is
+//! process-wide, so this test needs its own process (nextest runs every test in one).
 
 use photocraft_geom::Rect;
 use photocraft_raster::memory::{self, Policy};
@@ -8,6 +8,7 @@ use serde_json::json;
 
 #[test]
 fn custom_shape_kernel_is_admitted_before_allocation() {
+    let _process = crate::lock(&crate::PROCESS);
     let knots = json!([[0, 0], [10, 0], [10, 10], [0, 10]]);
     let params = json!({"radius":1000,"shapePath":{"subpaths":[{"closed":true,"knots":knots}]}});
     let mut surface = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8);

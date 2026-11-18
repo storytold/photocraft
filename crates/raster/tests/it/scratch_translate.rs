@@ -6,6 +6,7 @@ use photocraft_raster::{Surface, spill};
 
 #[test]
 fn translations_and_shared_fills_preserve_spilled_pixels_at_every_depth() {
+    let _scratch = crate::lock(&crate::SCRATCH);
     let dir = std::env::temp_dir().join(format!("photocraft-translate-spill-{}", std::process::id()));
     for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
         let format = PixelFormat::RGBA8.with_sample(depth);

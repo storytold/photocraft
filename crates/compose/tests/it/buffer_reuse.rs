@@ -11,7 +11,7 @@ impl Drop for IdleReleaseOff {
     }
 }
 
-/// Runs in its own binary so other compositor tests cannot consume the pooled allocation.
+/// Needs its own process (nextest runs every test in one) so other compositor tests cannot consume the pooled allocation.
 #[test]
 fn dropped_buffer_storage_is_reused() {
     scratch::set_idle_release(false);
