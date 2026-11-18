@@ -528,7 +528,9 @@ condition IDs remain kept Photoshop steps with their original descriptors.
   normalize to zero pixels on export. Nonzero layer offsets keep points as `offsetUnits: "pt"`
   and resolve at the playback document's DPI; two nonzero mixed units and point offsets for
   Transform Selection remain kept steps.
-  Show with `TglO` true maps to `layer.showOnly`; repeating it restores the other layers' visibility.
+- Hide and Show retain all of their layer targets in one edit. A recorded Hide leaves an
+  already hidden layer hidden. Show with `TglO` true maps to `layer.showOnly`; repeating it
+  restores the other layers' visibility.
 - Make keeps top-level group names, new-layer clipping (`Usng.Grup`) and adjustment colour labels
   (`Usng.Clr `). Layer via Copy / Cut keeps names, blend modes, opacity and colour labels.
 - Loading another layer's transparency keeps its source reference. Background property references

@@ -1056,7 +1056,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("layer.addAboveToSelection", json!({})),
         ("layer.delete", json!({})),
         ("edit.clear", json!({})),
-        ("layer.hideLayers", json!({"layer": "Background"})),
+        ("layer.hideLayers", json!({"layer": "Background", "toggle": false})),
         ("layer.showLayers", json!({})),
         ("layer.translate", json!({"dx": 3, "dy": -4})),
         ("layer.arrange.sendToBack", json!({})),
@@ -5100,6 +5100,61 @@ fn mapped_recording(event: &str, descriptor: Descriptor) -> Imported {
     import(&atn::write(&one_action(vec![item(event, event, Some(descriptor))])).unwrap()).unwrap()
 }
 
+#[test]
+fn recorded_visibility_list_exports_the_right_pixels_and_undoes_as_one_step() {
+    for combined in [true, false] {
+        let references: Vec<_> =
+            ["Green", "Blue"].into_iter().map(|name| ReferenceItem::Name { class: class("Lyr "), name: UnicodeString::new_nul(name) }).collect();
+        let targets = if combined { vec![D::Reference(references.clone())] } else { references.iter().cloned().map(|r| D::Reference(vec![r])).collect() };
+        let descriptor = desc("null").with("null", D::List(targets));
+        let hide = mapped_recording("Hd  ", descriptor.clone());
+        let show = mapped_recording("Shw ", descriptor);
+        assert!(hide.unsupported.is_empty() && show.unsupported.is_empty());
+        let (bytes, skipped) = export("Visibility", &[&hide.actions[0]], &[], false).unwrap();
+        assert!(skipped.is_empty());
+        let saved = atn::parse(&bytes).unwrap();
+        assert_eq!(saved.actions[0].items.len(), 1);
+        assert_eq!(saved.actions[0].items[0].descriptor.as_ref().unwrap().get("null"), Some(&D::List(vec![D::Reference(references)])));
+
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width":4,"height":4,"background":"transparent"})).unwrap();
+        for (name, color) in [("Red", "#ff0000"), ("Green", "#00ff00"), ("Blue", "#0000ff")] {
+            s.execute("layer.newFillLayer.solidColor", json!({"color":color})).unwrap();
+            s.execute("layer.setProps", json!({"name":name})).unwrap();
+        }
+        s.execute("select.deselectLayers", json!({})).unwrap();
+        let pixel = |s: &mut Session| {
+            let mut output = Vec::new();
+            crate::web_cmds::save_for_web_with_writer(s, &json!({"path":"preview.png","format":"png24","transparency":true}), &mut |_, bytes| {
+                output.extend_from_slice(bytes);
+                Ok(())
+            })
+            .unwrap();
+            let image = photocraft_codecs::decode(&output).unwrap().convert(photocraft_codecs::ChannelLayout::Rgba, photocraft_codecs::SampleType::U8);
+            <[u8; 4]>::try_from(&image.data()[..4]).unwrap()
+        };
+        s.actions.list = import(&bytes).unwrap().actions;
+        assert_eq!(pixel(&mut s), [0, 0, 255, 255]);
+        let played = s.execute("actions.play", json!({"action":"A"})).unwrap();
+        assert_eq!(played["ran"], 1, "{played}");
+        assert_eq!(pixel(&mut s), [255, 0, 0, 255]);
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(pixel(&mut s), [0, 0, 255, 255]);
+        for _ in 0..2 {
+            let played = s.execute("actions.play", json!({"action":"A"})).unwrap();
+            assert_eq!(played["ran"], 1, "{played}");
+            assert_eq!(pixel(&mut s), [255, 0, 0, 255]);
+        }
+        let (command, params) = &show.actions[0].steps[0];
+        s.execute(command, params.clone()).unwrap();
+        assert_eq!(pixel(&mut s), [0, 0, 255, 255]);
+        assert!(s.execute("layer.hideLayers", json!({"layers":["Blue","Missing"],"toggle":false})).is_err());
+        assert!(s.execute("layer.hideLayers", json!({"layers":["Blue"],"toggle":"false"})).is_err());
+        assert_eq!(pixel(&mut s), [0, 0, 255, 255]);
+        assert!(s.active().unwrap().selected_layers().is_empty());
+    }
+}
+
 /// Every frame anchor survives import/export; unknown anchors stay available verbatim.
 #[test]
 fn mapped_transform_reference_points_round_trip() {
@@ -5276,7 +5331,7 @@ fn mapped_named_layer_transparency_survives_export() {
 fn mapped_background_property_survives_export_and_playback() {
     let r = D::Reference(vec![ReferenceItem::Property { class: class("Lyr "), key: code("Bckg") }]);
     let loaded = mapped_recording("Hd  ", desc("null").with("null", D::List(vec![r.clone()])));
-    assert_eq!(loaded.actions[0].steps, vec![("layer.hideLayers".into(), json!({"layer":{"background":true}}))]);
+    assert_eq!(loaded.actions[0].steps, vec![("layer.hideLayers".into(), json!({"layer":{"background":true},"toggle":false}))]);
     let (bytes, _) = export("Background", &[&loaded.actions[0]], &[], false).unwrap();
     assert_eq!(get_list(atn::parse(&bytes).unwrap().actions[0].items[0].descriptor.as_ref().unwrap(), "null"), Some(&[r][..]));
     let mut s = Session::new();
@@ -5288,6 +5343,8 @@ fn mapped_background_property_survives_export_and_playback() {
     let layers = &s.active().unwrap().doc.layers;
     assert!(!layers[0].visible);
     assert!(layers[1].visible);
+    s.execute(id, p.clone()).unwrap();
+    assert!(!s.active().unwrap().doc.layers[0].visible, "a recorded Hide must leave a hidden Background hidden");
     s.execute("layer.hideLayers", json!({"layer":"Background"})).unwrap();
     assert!(!s.active().unwrap().doc.layers[1].visible);
     assert!(s.execute("layer.showLayers", json!({"layer":{"background":false}})).is_err());

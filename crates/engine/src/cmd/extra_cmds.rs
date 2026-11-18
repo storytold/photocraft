@@ -661,25 +661,36 @@ fn ungroup(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(Value::Null)
 }
 
-fn set_visible(s: &mut Session, p: &Value, visible: bool) -> Result<Value> {
-    if crate::layer_multi_cmds::multi(s, p) {
-        return crate::layer_multi_cmds::set_visible_selected(s, visible);
+fn visibility_targets(s: &Session, p: &Value, cmd: &str) -> Result<Vec<LayerId>> {
+    let Some(layers) = p.get("layers") else { return crate::layer_multi_cmds::targets(s, p) };
+    let bad = |msg: &str| EngineError::BadParams { cmd: cmd.into(), msg: msg.into() };
+    if p.get("layer").is_some() {
+        return Err(bad("pass either `layer` or `layers`"));
     }
-    let id = layer_param(s, p)?;
-    s.edit_visibility(if visible { "Show Layer" } else { "Hide Layer" }, |doc, _| {
-        doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.visible = visible;
-        Ok(())
-    })?;
-    Ok(Value::Null)
+    let layers = layers.as_array().filter(|layers| !layers.is_empty()).ok_or_else(|| bad("`layers` must be a nonempty array of layer references"))?;
+    let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+    layers
+        .iter()
+        .map(|layer| {
+            let id = crate::commands::explicit_layer(s, &json!({"layer":layer}))?.ok_or_else(|| bad("`layers` requires explicit layer references"))?;
+            doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+            Ok(id)
+        })
+        .collect()
 }
 
 /// Layer › Hide Layers (⌘,): hide the targeted layers, or show them when every one is already
 /// hidden, as Photoshop's item does (it reads Show Layers then), so ⌘, toggles.
 fn hide_or_show(s: &mut Session, p: &Value) -> Result<Value> {
+    let toggle = match p.get("toggle") {
+        None => true,
+        Some(Value::Bool(toggle)) => *toggle,
+        Some(_) => return Err(EngineError::BadParams { cmd: "layer.hideLayers".into(), msg: "`toggle` must be a boolean".into() }),
+    };
+    let targets = visibility_targets(s, p, "layer.hideLayers")?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    let targets = if crate::layer_multi_cmds::multi(s, p) { crate::layer_multi_cmds::selected(s) } else { vec![layer_param(s, p)?] };
-    let all_hidden = targets.iter().all(|id| st.doc.layer(*id).is_some_and(|l| !l.visible));
-    set_visible(s, p, all_hidden)
+    let show = toggle && targets.iter().all(|id| st.doc.layer(*id).is_some_and(|l| !l.visible));
+    crate::layer_multi_cmds::set_visible_targets(s, &targets, show)
 }
 
 /// `/`: Lock Transparent Pixels on or off for the targeted layers, as the Layers panel's first lock
@@ -1205,11 +1216,14 @@ pub fn specs() -> Vec<CommandSpec> {
             "Hide Layers",
             &["Layer"],
             Some("Cmd+,"),
-            r##"{"layer":id?} (shows them instead when every targeted layer is already hidden, so ⌘, toggles)"##,
+            r##"{"layer":id?,"layers":[id|name|reference]?,"toggle":bool=true} (with toggle on, shows the targets when all are hidden; recorded Hide sets toggle false)"##,
             has_layer,
             hide_or_show
         ),
-        spec!("layer.showLayers", "Show Layers", &[], None, r##"{"layer":id?}"##, has_layer, |s, p| set_visible(s, p, true)),
+        spec!("layer.showLayers", "Show Layers", &[], None, r##"{"layer":id?,"layers":[id|name|reference]?}"##, has_layer, |s, p| {
+            let targets = visibility_targets(s, p, "layer.showLayers")?;
+            crate::layer_multi_cmds::set_visible_targets(s, &targets, true)
+        }),
         spec!(
             "layer.toggleLockTransparency",
             "Lock Transparent Pixels",

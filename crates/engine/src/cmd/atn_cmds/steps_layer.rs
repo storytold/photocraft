@@ -4,7 +4,7 @@ use super::descriptors::{
     layer_target, long, name_ref, pct, px, recorded_layer_ref, recorded_layer_target, ref_class, target, target_ref, text, trimmed,
 };
 use super::events::pixel_target;
-use super::fields::{F, Kind, Mapped, fields_to, none, step, steps};
+use super::fields::{F, Kind, Mapped, fields_to, none, step};
 use super::steps_make::is_tool_class;
 
 use super::tables::{CHANNELS, FILL_CONTENTS, INTERPOLATION, MENU_ITEMS, STROKE_LOCATION, blend_label, blend_ps, lookup, lookup_back};
@@ -250,34 +250,73 @@ pub(super) fn delete_to(id: &str, p: &Value) -> Option<Descriptor> {
 
 /// Import visibility references; a single Show with TglO is the reversible Show Only command.
 pub(super) fn visibility_from(d: &Descriptor, id: &str) -> Mapped {
-    let refs: Vec<&[ReferenceItem]> = match d.get("null") {
-        Some(D::List(l)) => {
-            let Some(refs) = l.iter().map(|v| if let D::Reference(r) = v { Some(r.as_slice()) } else { None }).collect() else {
-                return Mapped::Unsupported { harmless: false };
-            };
-            refs
+    let unsupported = || Mapped::Unsupported { harmless: false };
+    let mut targets = Vec::new();
+    let mut append = |value: &D| -> Option<()> {
+        let D::Reference(items) = value else { return None };
+        if items.is_empty() {
+            return None;
         }
-        Some(D::Reference(r)) => vec![r.as_slice()],
-        _ => return Mapped::Unsupported { harmless: false },
-    };
-    let id = match d.get("TglO") {
-        Some(D::Boolean(true)) if id == "layer.showLayers" && refs.len() == 1 => "layer.showOnly",
-        Some(D::Boolean(false)) | None => id,
-        _ => return Mapped::Unsupported { harmless: false },
-    };
-    let mut v = Vec::new();
-    for r in refs {
-        match layer_target(r) {
-            Some(p) => v.push((id, Value::Object(p))),
-            None => return Mapped::Unsupported { harmless: false },
+        for item in items {
+            let reference = std::slice::from_ref(item);
+            if ref_class(reference).as_deref() != Some("Lyr") || matches!(item, ReferenceItem::Enumerated { type_id, .. } if !type_id.is("Ordn")) {
+                return None;
+            }
+            targets.push(layer_target(reference)?.remove("layer"));
         }
+        Some(())
+    };
+    let parsed = match d.get("null") {
+        Some(D::List(list)) => list.iter().try_for_each(&mut append),
+        Some(value) => append(value),
+        None => None,
+    };
+    if parsed.is_none() {
+        return unsupported();
     }
-    if v.is_empty() { Mapped::Unsupported { harmless: false } } else { steps(v) }
+    let id = match d.get("TglO") {
+        Some(D::Boolean(true)) if id == "layer.showLayers" && targets.len() == 1 => "layer.showOnly",
+        Some(D::Boolean(false)) | None => id,
+        _ => return unsupported(),
+    };
+    let mut params = match targets.as_slice() {
+        [] => return unsupported(),
+        [None] => json!({}),
+        [Some(layer)] => json!({"layer":layer}),
+        _ => {
+            let Some(layers) = targets.into_iter().collect::<Option<Vec<_>>>() else { return unsupported() };
+            json!({"layers":layers})
+        }
+    };
+    if id == "layer.hideLayers" {
+        params["toggle"] = Value::Bool(false);
+    }
+    step(id, params)
 }
 
 /// Write the layer reference and preserve Show Only's toggle flag.
 pub(super) fn visibility_to(id: &str, p: &Value) -> Option<Descriptor> {
-    let mut d = desc("null").with("null", D::List(vec![layer_ref(p)?]));
+    if p.get("toggle").is_some_and(|toggle| id != "layer.hideLayers" || toggle != &Value::Bool(false)) {
+        return None;
+    }
+    let reference = match p.get("layers") {
+        None => layer_ref(p)?,
+        Some(Value::Array(layers))
+            if p.get("layer").is_none() && !layers.is_empty() && (id == "layer.showLayers" || p.get("toggle") == Some(&Value::Bool(false))) =>
+        {
+            let mut items = Vec::new();
+            for layer in layers {
+                if layer.is_null() {
+                    return None;
+                }
+                let D::Reference(target) = layer_ref(&json!({"layer":layer}))? else { return None };
+                items.extend(target);
+            }
+            D::Reference(items)
+        }
+        _ => return None,
+    };
+    let mut d = desc("null").with("null", D::List(vec![reference]));
     if id == "layer.showOnly" {
         d = d.with("TglO", D::Boolean(true));
     }

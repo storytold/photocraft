@@ -169,6 +169,9 @@ impl Session {
             let d = self.active().ok_or_else(|| "no document open".to_string())?;
             return if d.selected_layers().is_empty() { Err("no layer selected".into()) } else { Ok(()) };
         }
+        if matches!(spec.id, "layer.hideLayers" | "layer.showLayers") && params.get("layers").is_some() {
+            return self.active().map(|_| ()).ok_or_else(|| "no document open".into());
+        }
         if let Some(why) = bitmap_mode_refusal(self, spec.id, params) {
             return Err(why.into());
         }

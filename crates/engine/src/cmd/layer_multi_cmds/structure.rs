@@ -349,9 +349,18 @@ pub(crate) fn relink_copies(doc: &mut Document, copies: &[LayerId]) -> Result<()
 
 /// Show/hide every selected layer in one step.
 pub fn set_visible_selected(s: &mut Session, visible: bool) -> Result<Value> {
-    let sel = selected(s);
-    s.edit_visibility(if visible { "Show Layers" } else { "Hide Layers" }, |doc, _| {
-        for id in &sel {
+    set_visible_targets(s, &selected(s), visible)
+}
+
+pub(crate) fn set_visible_targets(s: &mut Session, targets: &[LayerId], visible: bool) -> Result<Value> {
+    let label = match (visible, targets.len() == 1) {
+        (true, true) => "Show Layer",
+        (true, false) => "Show Layers",
+        (false, true) => "Hide Layer",
+        (false, false) => "Hide Layers",
+    };
+    s.edit_visibility(label, |doc, _| {
+        for id in targets {
             doc.layer_mut(*id).ok_or(EngineError::NoLayer(*id))?.visible = visible;
         }
         Ok(())
