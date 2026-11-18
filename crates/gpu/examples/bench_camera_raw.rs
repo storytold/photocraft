@@ -5,7 +5,7 @@
 //! `cargo run --release -p photocraft-gpu --example bench_camera_raw [-- --quick]`
 use std::time::Instant;
 
-use photocraft_algo::camera_raw::{CameraRaw, Wheel, develop, per_pixel, white_black_points};
+use photocraft_algo::camera_raw::{CameraRaw, DevelopInputs, Wheel, develop, per_pixel, spatial, white_black_points};
 use photocraft_gpu::CameraRawDevelop;
 
 fn median(mut v: Vec<f64>) -> f64 {
@@ -65,54 +65,90 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut hsl = [0.0; 8];
     hsl[1] = 30.0;
     hsl[5] = -40.0;
-    let per_pixel_stages = CameraRaw {
-        temperature: 20.0,
-        tint: 5.0,
-        exposure: 0.4,
-        contrast: 25.0,
-        whites: 30.0,
-        blacks: -20.0,
-        vibrance: 30.0,
-        saturation: 10.0,
-        curve_lights: 20.0,
-        point_curve: vec![[0.0, 8.0], [128.0, 140.0], [255.0, 250.0]],
-        hsl_hue: hsl,
-        hsl_sat: hsl,
-        hsl_lum: hsl,
-        grade_shadows: Wheel { hue: 210.0, sat: 30.0, lum: 0.0 },
-        grade_highlights: Wheel { hue: 40.0, sat: 20.0, lum: 5.0 },
-        vignette_amount: -30.0,
-        grain_amount: 25.0,
-        pixel_scale: scale,
-        ..Default::default()
+    // `CameraRaw` is `#[non_exhaustive]`: each case is the base settings with some fields assigned, plus the job inputs.
+    let inputs = DevelopInputs { pixel_scale: scale, ..Default::default() };
+    let with = |base: &CameraRaw, set: &dyn Fn(&mut CameraRaw)| {
+        let mut p = base.clone();
+        set(&mut p);
+        (p, inputs)
     };
+    let none = CameraRaw::default();
+    let mut per_pixel_stages = CameraRaw::default();
+    per_pixel_stages.temperature = 20.0;
+    per_pixel_stages.tint = 5.0;
+    per_pixel_stages.exposure = 0.4;
+    per_pixel_stages.contrast = 25.0;
+    per_pixel_stages.whites = 30.0;
+    per_pixel_stages.blacks = -20.0;
+    per_pixel_stages.vibrance = 30.0;
+    per_pixel_stages.saturation = 10.0;
+    per_pixel_stages.curve_lights = 20.0;
+    per_pixel_stages.point_curve = vec![[0.0, 8.0], [128.0, 140.0], [255.0, 250.0]];
+    per_pixel_stages.hsl_hue = hsl;
+    per_pixel_stages.hsl_sat = hsl;
+    per_pixel_stages.hsl_lum = hsl;
+    per_pixel_stages.grade_shadows = Wheel { hue: 210.0, sat: 30.0, lum: 0.0 };
+    per_pixel_stages.grade_highlights = Wheel { hue: 40.0, sat: 20.0, lum: 5.0 };
+    per_pixel_stages.vignette_amount = -30.0;
+    per_pixel_stages.grain_amount = 25.0;
     let sets = [
         (
             "Basic (WB, Exposure, Contrast, Whites, Blacks)",
-            CameraRaw { temperature: 20.0, exposure: 0.4, contrast: 25.0, whites: 30.0, blacks: -20.0, pixel_scale: scale, ..Default::default() },
+            with(&none, &|p| {
+                p.temperature = 20.0;
+                p.exposure = 0.4;
+                p.contrast = 25.0;
+                p.whites = 30.0;
+                p.blacks = -20.0;
+            }),
         ),
-        ("every per-pixel stage", per_pixel_stages.clone()),
-        ("Shadows +50", CameraRaw { shadows: 50.0, pixel_scale: scale, ..Default::default() }),
-        ("Highlights -50", CameraRaw { highlights: -50.0, pixel_scale: scale, ..Default::default() }),
-        ("Shadows +50, Highlights -50", CameraRaw { shadows: 50.0, highlights: -50.0, pixel_scale: scale, ..Default::default() }),
-        ("Shadows +50, Highlights -50, every per-pixel stage", CameraRaw { shadows: 50.0, highlights: -50.0, ..per_pixel_stages.clone() }),
-        ("Clarity +50", CameraRaw { clarity: 50.0, pixel_scale: scale, ..Default::default() }),
-        ("Texture +50", CameraRaw { texture: 50.0, pixel_scale: scale, ..Default::default() }),
-        ("Dehaze +40", CameraRaw { dehaze: 40.0, pixel_scale: scale, ..Default::default() }),
-        ("Clarity +50, Texture +50, Dehaze +40, every per-pixel stage", CameraRaw { clarity: 50.0, texture: 50.0, dehaze: 40.0, ..per_pixel_stages.clone() }),
+        ("every per-pixel stage", (per_pixel_stages.clone(), inputs)),
+        ("Shadows +50", with(&none, &|p| p.shadows = 50.0)),
+        ("Highlights -50", with(&none, &|p| p.highlights = -50.0)),
+        (
+            "Shadows +50, Highlights -50",
+            with(&none, &|p| {
+                p.shadows = 50.0;
+                p.highlights = -50.0;
+            }),
+        ),
+        (
+            "Shadows +50, Highlights -50, every per-pixel stage",
+            with(&per_pixel_stages, &|p| {
+                p.shadows = 50.0;
+                p.highlights = -50.0;
+            }),
+        ),
+        ("Clarity +50", with(&none, &|p| p.clarity = 50.0)),
+        ("Texture +50", with(&none, &|p| p.texture = 50.0)),
+        ("Dehaze +40", with(&none, &|p| p.dehaze = 40.0)),
+        (
+            "Clarity +50, Texture +50, Dehaze +40, every per-pixel stage",
+            with(&per_pixel_stages, &|p| {
+                p.clarity = 50.0;
+                p.texture = 50.0;
+                p.dehaze = 40.0;
+            }),
+        ),
         (
             "Clarity, Texture, Dehaze, Shadows, Highlights, every per-pixel stage",
-            CameraRaw { clarity: 50.0, texture: 50.0, dehaze: 40.0, shadows: 50.0, highlights: -50.0, ..per_pixel_stages },
+            with(&per_pixel_stages, &|p| {
+                p.clarity = 50.0;
+                p.texture = 50.0;
+                p.dehaze = 40.0;
+                p.shadows = 50.0;
+                p.highlights = -50.0;
+            }),
         ),
     ];
-    for (name, p) in &sets {
-        let toned = p.spatial();
+    for (name, (p, inputs)) in &sets {
+        let toned = spatial(p);
         let cpu = time(if toned { runs.min(10) } else { runs }, || {
             let mut px = src.clone();
-            develop(&mut px, w, h, p, false);
+            develop(&mut px, w, h, p, inputs, false);
         });
-        let points = white_black_points(&src, w, h, p);
-        let stages = per_pixel(p, w, h, false, points).ok_or("not developed on the GPU")?;
+        let points = white_black_points(&src, w, h, p, inputs);
+        let stages = per_pixel(p, inputs, w, h, false, points).ok_or("not developed on the GPU")?;
         let size = [w as u32, h as u32];
         let upload = try_time(runs, || pass.develop(&device, &queue, None, &src, None, size, &stages).map(drop))?;
         let cached = try_time(runs, || pass.develop(&device, &queue, None, &src, Some(1), size, &stages).map(drop))?;
@@ -122,7 +158,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  GPU, source cached (slider drag)     {cached:7.2} ms");
         if !toned && (p.whites != 0.0 || p.blacks != 0.0) {
             let points_ms = time(runs, || {
-                std::hint::black_box(white_black_points(&src, w, h, p));
+                std::hint::black_box(white_black_points(&src, w, h, p, inputs));
             });
             println!("  Whites/Blacks points on the CPU      {points_ms:7.2} ms (cached per WB/Exposure/Contrast in the dialog)");
         }
