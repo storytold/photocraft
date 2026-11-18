@@ -19,6 +19,7 @@ mod crop_task_bar;
 mod display_shadows;
 mod drag_preview_canvas;
 mod eraser_reset_defaults;
+mod free_transform_preview_canvas;
 mod full_res_preview;
 mod gpu_device_loss;
 mod healing_reset_tip;
