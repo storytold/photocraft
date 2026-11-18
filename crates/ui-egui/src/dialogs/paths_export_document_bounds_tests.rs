@@ -1,12 +1,15 @@
 //! #13771: Export Paths to File's dropdown starts with Document Bounds, and in a document
 //! without paths it holds only Document Bounds, selected.
 
-use crate::PhotocraftApp;
+use craft::ui::dialog::DialogId;
+use craft::ui::patterns::form_dialogs::{HostedParamDialog, ParamKind};
 use serde_json::{Value, json};
+
+use crate::PhotocraftApp;
 
 const COMMAND: &str = "file.export.pathsToIllustrator";
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 300, "height": 200})).unwrap();
     app
@@ -14,10 +17,15 @@ fn app() -> PhotocraftApp {
 
 /// Opens the dialog as the menu item does and returns the dropdown's entries and selection.
 fn open(app: &mut PhotocraftApp) -> (Vec<String>, Value) {
-    let r = super::file_ui::invoke(app, &egui::Context::default(), COMMAND, &json!({})).unwrap().unwrap();
-    let fields = &app.ui.dialog_mut(r["dialog"].as_u64().unwrap()).unwrap().fields;
-    let names = fields["__choices"]["paths"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_owned()).collect();
-    (names, fields["paths"].clone())
+    let ctx = app.ctx().clone();
+    let r = super::file_ui::invoke(app, &ctx, COMMAND, &json!({})).unwrap().unwrap();
+    let id: DialogId = serde_json::from_value(r["dialog"].clone()).expect("the menu opened the dialog");
+    let dialog = app.framework.dialogs.get_by_id::<HostedParamDialog>(id).expect("the hosted form");
+    let paths = dialog.fields().text("paths").map_or(Value::Null, |p| json!(p));
+    assert!(app.framework.dialogs.cancel_by_id(&ctx, id));
+    let rows = super::file_forms::paths_to_file_rows(app);
+    let Some(ParamKind::Choice { options, .. }) = rows.iter().find(|p| p.key == "paths").map(|p| &p.kind) else { panic!("a Paths choice") };
+    (options.iter().map(|(id, _)| id.clone()).collect(), paths)
 }
 
 #[test]
