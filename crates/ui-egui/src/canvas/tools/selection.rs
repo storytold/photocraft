@@ -691,6 +691,7 @@ pub(crate) fn shown_offset(app: &PhotocraftApp) -> Option<(i32, i32)> {
     crate::move_ui::floating_offset(app)
         .or_else(|| app.canvas_tools.selection.drag_offset())
         .or_else(|| app.canvas_tools.retouch.drag_offset())
+        .or_else(|| app.canvas_tools.paint.drag_offset())
         .or_else(|| crate::move_ui::carries_selection(app).then(|| app.canvas_tools.mover.offset()).flatten())
 }
 

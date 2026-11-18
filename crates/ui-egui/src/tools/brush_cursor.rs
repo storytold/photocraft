@@ -143,6 +143,13 @@ pub(crate) fn cursor(app: &PhotocraftApp, cx: &ToolContext<'_>) -> Cursor {
     }
     let centre = crate::canvas::cursor_policy::brush_tip_centre(tool, option, prefs.show_crosshair_in_brush_tip);
     let painting = crate::canvas::paint_tool::stroking(app).is_some();
+    let badge = (tool == Tool::QuickSelection)
+        .then(|| {
+            let mods = crate::canvas::paint_tool::stroking(app).map_or(cx.mods, |s| s.live);
+            let bar = crate::tool_feedback::bar_mode(app, tool);
+            crate::tool_feedback::selection_op(tool, bar, mods, crate::tool_feedback::has_selection(app)).badge()
+        })
+        .flatten();
     // The framework's Standard cursor is the tool's icon.
     let icon = crate::icons::tool_icon(tool);
     let brush = &app.session.tools.brush;
@@ -154,10 +161,10 @@ pub(crate) fn cursor(app: &PhotocraftApp, cx: &ToolContext<'_>) -> Cursor {
 
         let round = !block && crate::canvas::cursor_policy::pencil_tip_is_round(size);
         let tip = BrushTip::new(f64::from(size), BrushTipOutline::pixels(Rect::new(x0, y0, x1, y1), round));
-        return BrushCursor::new(&tip).centre(centre).painting(painting).icon(icon).cursor(cx, &options, &space.view);
+        return BrushCursor::new(&tip).centre(centre).painting(painting).icon(icon).badge(badge).cursor(cx, &options, &space.view);
     }
     let Some((_, tip)) = &app.brush_tip else { return arrow };
-    BrushCursor::new(tip).pose(pose(brush, cx.pointer.as_ref().map(|p| p.sample))).centre(centre).painting(painting).icon(icon).cursor(
+    BrushCursor::new(tip).pose(pose(brush, cx.pointer.as_ref().map(|p| p.sample))).centre(centre).painting(painting).icon(icon).badge(badge).cursor(
         cx,
         &options,
         &space.view,

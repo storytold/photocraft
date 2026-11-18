@@ -63,16 +63,19 @@ pub(crate) fn operation_segments(app: &mut PhotocraftApp, ui: &mut egui::Ui, ena
     }
 }
 
-/// The New, Add and Subtract segments over `app.ui.selection_mode`: the Quick Selection's own bar, which has
-/// no Intersect, as in Photoshop (#11837). A mode the tool can't have reads as New.
-pub(crate) fn operation_segments_three(app: &mut PhotocraftApp, ui: &mut egui::Ui, enabled: bool) {
+/// The Quick Selection's New, Add and Subtract segments over `app.ui.tool_options.quick_selection_mode`:
+/// its own bar, which has no Intersect, as in Photoshop (#11837). An out-of-range value clamps to Add.
+pub(crate) fn quick_selection_segments(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    if app.ui.tool_options.quick_selection_mode > 2 {
+        app.ui.tool_options.quick_selection_mode = 1;
+    }
     let words = Env::of(ui).words::<SelectionOpWords>();
     let [new, add, subtract, _intersect] = selection_operations(&words);
     let entries = [new, add, subtract];
-    let current = operation_of(app.ui.selection_mode.min(2));
-    let picked = Segmented::new(label("Selection mode"), Bind::given(current), &entries).enabled(enabled).show(ui).value().copied();
+    let current = operation_of(app.ui.tool_options.quick_selection_mode);
+    let picked = Segmented::new(label("Selection mode"), Bind::given(current), &entries).show(ui).value().copied();
     if let Some(operation) = picked {
-        app.ui.selection_mode = selection_mode_of(operation);
+        app.ui.tool_options.quick_selection_mode = selection_mode_of(operation).min(2);
     }
 }
 
@@ -131,7 +134,7 @@ pub(crate) fn command_states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandSta
 }
 
 /// The Select and Mask… button; its enabled state is [`command_states`]'.
-fn select_and_mask(ui: &mut egui::Ui) {
+pub(crate) fn select_and_mask(ui: &mut egui::Ui) {
     Button::command(SELECT_AND_MASK).show(ui);
 }
 

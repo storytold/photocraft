@@ -20,24 +20,14 @@ fn select_subject(ui: &mut egui::Ui, app: &mut PhotocraftApp, empty: &str) {
 
 /// Quick Selection's options.
 pub(super) fn quick_selection(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeAlert> {
-    // The Quick Selection's New / Add / Subtract buttons (#11837), its own mode as in Photoshop;
-    // the framework's segmented control binds the document's mode, so it is swapped in for the
-    // frame and taken back out.
-    if app.ui.tool_options.quick_selection_mode > 2 {
-        app.ui.tool_options.quick_selection_mode = 1;
-    }
-    let saved = app.ui.selection_mode;
-    app.ui.selection_mode = app.ui.tool_options.quick_selection_mode;
-    crate::panels::options_bar::selection::operation_segments_three(app, ui, true);
-    app.ui.tool_options.quick_selection_mode = app.ui.selection_mode.min(2);
-    app.ui.selection_mode = saved;
-    Divider::vertical().show(ui);
     let o = &mut app.ui.tool_options;
     check(ui, tl!("Sample All Layers"), &mut o.sample_all.quick_selection, true, None);
     check(ui, tl!("Enhance Edge"), &mut o.enhance_edge, true, None);
     hint(ui, crate::i18n::fmt(tl!("{key} to subtract"), &[("key", &crate::shortcuts::pretty("Alt"))]));
     Divider::vertical().show(ui);
     select_subject(ui, app, tl!("No subject found — try Object Selection or the Lasso"));
+    Divider::vertical().show(ui);
+    crate::panels::options_bar::selection::select_and_mask(ui);
     None
 }
 

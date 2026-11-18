@@ -27,16 +27,13 @@ fn app() -> PhotocraftApp {
 }
 
 fn harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
-    let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1400.0, 120.0)).build_ui_state(
+    use crate::app::framework::BuildApp;
+    let mut h = Harness::builder().with_size(vec2(1400.0, 120.0)).build_app(
         |ui, app: &mut PhotocraftApp| {
-            if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                return;
-            }
             crate::panels::options_bar(app, ui);
         },
         app,
     );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::AppTheme::studio());
     h.run_steps(4);
     h
 }
@@ -49,6 +46,11 @@ fn the_quick_selection_bar_offers_its_own_three_modes() {
     }
     assert!(h.query_by_label(INTERSECT).is_none(), "the Quick Selection has no Intersect mode");
     assert_eq!(h.state().ui.selection_mode, 3, "the bar leaves the other selection tools' mode alone");
+    assert!(
+        h.get_by_label(SUBTRACT).rect().right() < h.get_by_label("Toggle the Brush Settings panel").rect().left(),
+        "the mode buttons sit before the brush controls"
+    );
+    assert!(h.query_by_label("Select and Mask…").is_some(), "Select and Mask… is at the right end of the bar");
 }
 
 #[test]

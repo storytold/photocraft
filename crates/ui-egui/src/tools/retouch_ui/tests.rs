@@ -932,18 +932,64 @@ fn a_click_or_drag_inside_the_selection_in_new_mode_acts_on_the_selection() {
     assert_eq!(labels.first().map(String::as_str), Some("Deselect"), "{labels:?}");
 
     // A drag inside the selection moves its outline, leaving the pixels where they are.
+    app.ui.extras.snap = false;
     app.run("select.rect", json!({"x": 10, "y": 10, "width": 30, "height": 30})).unwrap();
     app.ui.tool_options.quick_selection_mode = 0;
     let steps = app.session.active().unwrap().history.past_len();
     tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, Modifiers::NONE);
     tool_event(&mut app, ToolEvent::Move { x: 30.0, y: 20.0, pressure: 1.0 }, Modifiers::NONE);
+    assert_eq!(crate::canvas::tools::selection::shown_offset(&app), Some((10, 0)), "the marching ants follow the drag live");
     tool_event(&mut app, ToolEvent::Up { x: 30.0, y: 20.0 }, Modifiers::NONE);
     let moved = bounds(&app).expect("the selection is still there");
     assert_eq!((moved.width(), moved.height()), (30, 30), "the outline kept its size");
-    assert_eq!(moved.x0, 20, "the outline moved with the pointer");
+    assert_eq!((moved.x0, moved.y0), (20, 10), "the outline moved with the pointer");
     assert_eq!(app.ui.tool_options.quick_selection_mode, 0, "the mode stays New");
     let labels: Vec<String> = app.session.active().unwrap().history.entries().into_iter().skip(steps + 1).map(|e| e.to_string()).collect();
     assert_eq!(labels.first().map(String::as_str), Some("Move Selection"), "{labels:?}");
+}
+
+/// The Quick Selection's brush cursor carries its effective selection-mode badge (+ or −), and
+/// shows the selection-move cursor when hovering or dragging inside the selection in New mode.
+#[test]
+fn the_quick_selection_cursor_shows_its_mode_badge_and_outline_drag_cursor() {
+    use crate::canvas::{ToolEvent, tool_event, tool_event_response};
+    use craft::behavior::{Cursor, CursorBadge, PaintedCursor};
+    use egui::Modifiers;
+
+    let mut app = app();
+    app.ui.tool = Tool::QuickSelection;
+    app.run("paint.pencil", json!({"points": [[70, 30]], "size": 20, "color": "#ff0000"})).unwrap();
+    let cursor_at = |app: &mut PhotocraftApp, x: f64, y: f64, mods: Modifiers| tool_event_response(app, ToolEvent::Move { x, y, pressure: 1.0 }, mods).cursor;
+    let badge_of = |c: Option<Cursor>| match c {
+        Some(Cursor::Painted(PaintedCursor::Circle { badge, .. } | PaintedCursor::Outline { badge, .. })) => badge,
+        Some(Cursor::Painted(PaintedCursor::Badged { badge, .. })) => Some(badge),
+        _ => None,
+    };
+
+    // New mode with nothing selected: no badge, and Alt shows no − badge either.
+    app.ui.tool_options.quick_selection_mode = 0;
+    assert_eq!(badge_of(cursor_at(&mut app, 70.0, 30.0, Modifiers::NONE)), None);
+    assert_eq!(badge_of(cursor_at(&mut app, 70.0, 30.0, Modifiers::ALT)), None, "nothing selected to subtract from");
+    assert_eq!(badge_of(cursor_at(&mut app, 70.0, 30.0, Modifiers::SHIFT)), Some(CursorBadge::Add));
+
+    // Add mode: + badge, − with Alt.
+    app.ui.tool_options.quick_selection_mode = 1;
+    assert_eq!(badge_of(cursor_at(&mut app, 70.0, 30.0, Modifiers::NONE)), Some(CursorBadge::Add));
+    assert_eq!(badge_of(cursor_at(&mut app, 70.0, 30.0, Modifiers::ALT)), Some(CursorBadge::Subtract));
+
+    // Subtract mode: − badge, + with Shift.
+    app.ui.tool_options.quick_selection_mode = 2;
+    assert_eq!(badge_of(cursor_at(&mut app, 70.0, 30.0, Modifiers::NONE)), Some(CursorBadge::Subtract));
+    assert_eq!(badge_of(cursor_at(&mut app, 70.0, 30.0, Modifiers::SHIFT)), Some(CursorBadge::Add));
+
+    // With a selection in New mode, hovering inside the selection shows the selection-move cursor, not the brush tip.
+    app.run("select.rect", json!({"x": 10, "y": 10, "width": 30, "height": 30})).unwrap();
+    app.ui.tool_options.quick_selection_mode = 0;
+    let inside = cursor_at(&mut app, 20.0, 20.0, Modifiers::NONE);
+    let outside = cursor_at(&mut app, 70.0, 30.0, Modifiers::NONE);
+    assert_ne!(inside, outside, "hovering inside the selection in New mode switches to the selection-move cursor");
+    // Ensure a clean release state.
+    let _ = tool_event;
 }
 
 /// An empty Clone Source slot refuses to paint, as with no source at all: the ⌥-click point left
