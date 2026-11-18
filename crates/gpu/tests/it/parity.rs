@@ -101,7 +101,7 @@ fn timed<T>(what: &str, run: impl FnOnce() -> T) -> T {
 fn gpu() -> Option<Gpu> {
     let lock = GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let required = std::env::var_os("WGPU_BACKEND").is_some();
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+    let instance = crate::instance();
     let adapter = match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) {
         Ok(a) => a,
         Err(e) => {
@@ -135,7 +135,7 @@ fn gpu() -> Option<Gpu> {
             None
         }
     };
-    let comp = timed("pipeline creation", compositor)?;
+    let comp = timed("compositor creation", compositor)?;
     let mut paged = comp.sibling();
     paged.set_texture_limit(PAGED_LIMIT);
     Some(Gpu { device, queue, comp, paged, _lock: lock })
@@ -145,10 +145,7 @@ fn gpu() -> Option<Gpu> {
 /// The returned guard holds [`GPU_LOCK`] until the device is dropped.
 fn any_device() -> Option<(wgpu::Adapter, wgpu::Device, wgpu::Queue, std::sync::MutexGuard<'static, ()>)> {
     let lock = GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let adapter = pollster::block_on(
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env()).request_adapter(&wgpu::RequestAdapterOptions::default()),
-    )
-    .ok()?;
+    let adapter = pollster::block_on(crate::instance().request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()?;
     Some((adapter, device, queue, lock))
 }
@@ -1348,6 +1345,30 @@ use photocraft_doc::{
     StrokePosition,
 };
 
+/// #14983: the Size 1 Satin transition agrees with the CPU across whole textures and pages.
+#[test]
+fn satin_size_one_gpu_matches_cpu() {
+    let Some(mut g) = gpu() else { return };
+    let mut doc = Document::new("Satin size 1", Size::new(400, 300), ColorMode::Rgb, SampleType::U8);
+    doc.layers.push(Layer::new("Background", LayerContent::Fill(Fill::Solid(Color::WHITE))));
+    let mut layer = Layer::raster("Orange", PixelFormat::RGBA8);
+    layer.surface_mut().unwrap().fill_rect(Rect::new(100, 75, 300, 225), &[1.0, 128.0 / 255.0, 0.0, 1.0]);
+    layer.effects.items.push(Effect::Satin(Satin {
+        common: FxCommon::new(BlendMode::Normal, 1.0),
+        color: Color::BLACK,
+        angle: 90.0,
+        distance: 20.0,
+        size: 1.0,
+        contour: Contour::Linear,
+        anti_alias: true,
+        invert: false,
+    }));
+    doc.layers.push(layer);
+
+    let stats = diff_rect(&mut g, &doc, doc.bounds(), "Satin size 1").unwrap();
+    assert_eq!(stats.fx_programs, 1, "the GPU built the Satin effect map");
+}
+
 /// An anti-aliased blob (disc plus a soft-edged bar and a hole) with partially transparent parts,
 /// so effects see real edge coverage, concavities and interior alpha.
 /// Small layers composite only over their bounds and are copied back into the backdrop (#125):
@@ -1647,6 +1668,11 @@ fn effect_cases() -> Vec<(&'static str, Vec<Effect>)> {
     ds_global.use_global_light = true;
     let mut og_contour = glow(FxPaint::Color(Color::rgb(1.0, 0.9, 0.2)), GlowTechnique::Softer, 9.0, 0.0, GlowSource::Edge);
     og_contour.contour = contour();
+    // #11361: a flat "always 100 %" contour paints a solid band up to the glow's reach on both
+    // renderers, not the whole effect rectangle.
+    let flat = Contour::Custom { name: "flat".into(), points: vec![Cp { input: 0.0, output: 1.0 }, Cp { input: 1.0, output: 1.0 }], corners: vec![] };
+    let og_flat_precise = Glow { contour: flat.clone(), ..glow(FxPaint::Color(Color::rgb(0.2, 0.9, 1.0)), GlowTechnique::Precise, 4.0, 0.0, GlowSource::Edge) };
+    let og_flat_softer = Glow { contour: flat, ..glow(FxPaint::Color(Color::rgb(0.2, 0.9, 1.0)), GlowTechnique::Softer, 10.0, 0.0, GlowSource::Edge) };
     let mut satin_inv = Satin {
         common: FxCommon::new(BlendMode::Multiply, 0.6),
         color: Color::rgb(0.3, 0.0, 0.4),
@@ -1688,6 +1714,8 @@ fn effect_cases() -> Vec<(&'static str, Vec<Effect>)> {
         ("inner shadow choke", vec![Effect::InnerShadow(shadow(BlendMode::Normal, 0.9, 300.0, 3.0, 7.0, 0.4))]),
         ("outer glow softer", vec![Effect::OuterGlow(glow(FxPaint::Color(Color::rgb(1.0, 0.9, 0.2)), GlowTechnique::Softer, 10.0, 0.3, GlowSource::Edge))]),
         ("outer glow contour", vec![Effect::OuterGlow(og_contour)]),
+        ("outer glow flat contour precise", vec![Effect::OuterGlow(og_flat_precise)]),
+        ("outer glow flat contour softer", vec![Effect::OuterGlow(og_flat_softer)]),
         ("outer glow precise gradient", vec![Effect::OuterGlow(glow(FxPaint::Gradient(gradient()), GlowTechnique::Precise, 8.0, 0.25, GlowSource::Edge))]),
         (
             "outer glow softer gradient",
@@ -2255,6 +2283,55 @@ fn stroke_effects_on_filled_and_stroked_shapes() {
             fx_check(&mut g, &d, &format!("{depth:?} fill {fill_kind} vector stroke {vector_stroke} masked {masked}"));
         }
     }
+}
+
+/// Whole-level gray rounds half down at Blend If cutoffs; fractional gray retains its precision.
+#[test]
+fn blend_if_gray_rounding_at_whole_levels() {
+    use photocraft_doc::BlendRange;
+    let Some(mut g) = gpu() else { return };
+    // Exact .51, half-down ties, and nearby values from the CPU gray-rounding oracle.
+    for (rgb, gray) in [
+        ([29u8, 141, 42], 97u8),
+        ([65, 0, 0], 19),
+        ([66, 0, 0], 20),
+        ([0, 0, 250], 27),
+        ([0, 0, 251], 28),
+        ([123, 126, 151], 128),
+        ([120, 129, 149], 128),
+        ([121, 129, 149], 129),
+    ] {
+        let c = rgb.map(|v| f32::from(v) / 255.0);
+        for side in 0..2 {
+            for cut in [gray, gray + 1] {
+                let color = [c[0], c[1], c[2], 1.0];
+                let other = [1.0, 0.0, 1.0, 1.0];
+                let pixels = if side == 0 { [other, color] } else { [color, other] };
+                let mut d = Document::new("gray rounding", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+                for px in pixels {
+                    let mut l = Layer::raster("pixel", PixelFormat::RGBA8);
+                    l.surface_mut().unwrap().write_region(d.bounds(), &px);
+                    d.layers.push(l);
+                }
+                let mut ranges = [BlendRange::FULL; 2];
+                ranges[side] = BlendRange { black: [cut, cut], white: [255, 255] };
+                d.layers[1].blend_if.set(0, ranges);
+                let expected = pixels[usize::from(cut == gray)];
+                assert_eq!(photocraft_compose::render(&d, d.bounds()).px[0], expected);
+                check(&mut g, &d, &format!("gray {rgb:?}, side {side}, black {cut}"));
+            }
+        }
+    }
+
+    // Deeper colors between whole levels retain fractional gray: 115.3875, not 115.
+    let mut d = Document::new("fractional gray", Size::new(1, 1), ColorMode::Rgb, SampleType::F32);
+    for px in [[0.25, 0.5, 0.75, 1.0], [1.0; 4]] {
+        let mut l = Layer::raster("pixel", PixelFormat::RGBA32F);
+        l.surface_mut().unwrap().write_region(d.bounds(), &px);
+        d.layers.push(l);
+    }
+    d.layers[1].blend_if.set(0, [BlendRange::FULL, BlendRange { black: [115, 116], white: [255, 255] }]);
+    check(&mut g, &d, "fractional gray");
 }
 
 /// Blend If on the GPU matches `compose::apply_blend_if` (#4395): this-layer and underlying
@@ -2990,15 +3067,16 @@ fn rgba16f_fallback_path_renders() {
 
 #[test]
 fn unbuildable_pipelines_are_an_error_not_a_panic() {
-    // The app falls back to the CPU compositor on Err; a panic here would crash it (as FXC once
-    // did on D3D12). A depth format can't be a colour target, so its pipelines fail to build.
+    // The app builds every pipeline up front and falls back to the CPU compositor on Err; a panic
+    // here would crash it (as FXC once did on D3D12). A depth format can't be a colour target, so
+    // its pipelines fail to build.
     let Some((adapter, device, _, _lock)) = any_device() else { return };
-    let e = Compositor::try_new_with_format(&device, wgpu::TextureFormat::Depth32Float).err().expect("depth target must fail");
+    let e = Compositor::try_new_with_format_threads(&device, wgpu::TextureFormat::Depth32Float, 4).err().expect("depth target must fail");
     assert!(e.0.contains("pipelines"), "{e}");
     // The format the app picks builds (effect maps the adapter can't render are left out, not fatal).
     let f = Compositor::preferred_acc_format(&adapter);
     if adapter.get_texture_format_features(f).allowed_usages.contains(wgpu::TextureUsages::RENDER_ATTACHMENT) {
-        assert!(Compositor::try_new_with_format(&device, f).is_ok());
+        assert!(Compositor::try_new_with_format_threads(&device, f, 4).is_ok());
     }
 }
 
