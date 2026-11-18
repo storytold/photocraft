@@ -40,7 +40,7 @@ containing filenames, never absolute paths. If no usable installed or bundled pr
 existing RAW calibration/fallback behavior. An explicit invalid, wrong-model or usage-restricted
 `PHOTOCRAFT_CAMERA_PROFILE` produces an error; it is never silently replaced by another profile.
 
-The Camera Raw dialog displays the applied profile. `document.inspect.rawProfile` and
+The RAW Develop dialog displays the applied profile. `document.inspect.rawProfile` and
 `ui.inspect.cameraRaw.openingRaw.profile` expose source, name, model, filename, license/notice,
 usage policy, digest, calibration/table/curve information, Picture Control and limitations.
 XMP preserves provenance, without embedding the profile payload or absolute filesystem path.
@@ -66,8 +66,8 @@ installed profiles and carry that decision into background processing; the path 
 alone grants no authority.
 
 Capability-scoped headless and desktop automation use bundled-only imports, including
-indirect RAW bytes embedded in other formats. Deferred prompts, background opens and Camera
-Raw dialogs retain the original request's authority after the request gate is restored;
+indirect RAW bytes embedded in other formats. Deferred prompts, background opens and RAW
+Develop dialogs retain the original request's authority after the request gate is restored;
 both deferred tone-curve previews and re-development narrow captured authority when the
 current session has an authorization gate.
 
@@ -119,3 +119,11 @@ under the same policy as installed ICC-profile discovery; trusted local sessions
 References: [DNG 1.7.1 specification, ProfileEmbedPolicy](https://helpx.adobe.com/content/dam/help/en/camera-raw/digital-negative/jcr_content/root/content/flex/items/position/position-par/download_section_733958301/download-1/DNG_Spec_1_7_1_0.pdf),
 [ExifTool Nikon tag tables](https://exiftool.org/TagNames/Nikon.html),
 [Nikon Z f Picture Controls](https://onlinemanual.nikonimglib.com/zf/en/picture_controls_37.html).
+
+## Shared decoder integration
+
+The RAW sensor model comes from the pinned `craft-raw` dependency, with DCP directories
+and Nikon metadata read through `craft-tiff`. Retained `RawDecode` instances carry the
+profile authority used to select their calibration. A re-development request with different
+authority decodes and selects again; the retained-open cache only yields matching authority.
+The DCP colour and tone stages run in both the fused band renderer and the full-frame path.

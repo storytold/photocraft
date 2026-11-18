@@ -126,6 +126,15 @@ fn isolated_profile_authority_child() {
     let (tuned, _) = import_raw_tuned("synthetic.dng", &bytes, &RawTuning { exposure: 0.5, ..Default::default() }).unwrap();
     assert_eq!(profile_info(&tuned.document).unwrap()["source"], "bundled-dcp");
 
+    // Retained sensor data must not carry installed authority into a byte-only re-development.
+    let decoded = photocraft_io::raw::RawDecode::with_policy(&bytes, photocraft_io::CameraProfilePolicy::Installed).unwrap();
+    let (cached, _) = photocraft_io::raw::import_raw_tuned_from("synthetic.dng", &bytes, &RawTuning::default(), &decoded).unwrap();
+    assert_eq!(profile_info(&cached.document).unwrap()["source"], "bundled-dcp");
+    let opts = photocraft_io::ImportOptions { keep_raw: true, camera_profiles: photocraft_io::CameraProfilePolicy::Installed, ..Default::default() };
+    photocraft_io::import_with_options("synthetic.dng", &bytes, &opts).unwrap();
+    assert!(photocraft_io::raw::take_kept_decode(&bytes).is_none(), "bundled readers cannot take an installed decode");
+    assert!(photocraft_io::raw::take_kept_decode_with_policy(&bytes, photocraft_io::CameraProfilePolicy::Installed).is_some());
+
     // An unreadable DCP must still be irrelevant to scoped opens; explicit trusted overrides
     // remain hard errors, while automatic discovery falls back to the bundled calibration.
     std::fs::write(root.join("outside/private-profile.dcp"), b"invalid profile").unwrap();

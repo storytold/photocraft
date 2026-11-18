@@ -10,7 +10,7 @@ use photocraft_geom::Rect;
 use photocraft_raster::{Cancelled, Interrupt};
 
 use super::gmm::{DEFAULT_REG, Gmm};
-use super::{FREE, HARD_BG, HARD_FG, Region, RgbImage, Sampler, contrast_beta, data_costs, grid_cut_cancellable, subsample};
+use super::{FREE, HARD_BG, HARD_FG, Region, RgbImage, Sampler, contrast_beta, data_costs, grid_cut_bk_cancellable, subsample};
 
 /// Definite background.
 pub const BG: u8 = 0;
@@ -67,7 +67,7 @@ pub fn grabcut_with(img: &RgbImage, trimap: &mut [u8], iters: usize, ctl: &Inter
         };
         let (cf, cb) = data_costs(img, &fg, &bg);
         // `grid_cut`'s weight, with the cut stopping on cancel.
-        let cut = grid_cut_cancellable(img, &cf, &cb, &fixed, |d2| GAMMA * (-beta * d2).exp(), &cancel).ok_or(Cancelled)?;
+        let cut = grid_cut_bk_cancellable(img, &cf, &cb, &fixed, |d2| GAMMA * (-beta * d2).exp(), &cancel).ok_or(Cancelled)?;
         let mut changed = 0usize;
         for (t, fgnd) in trimap.iter_mut().zip(&cut) {
             if *t == PR_BG || *t == PR_FG {
@@ -141,11 +141,15 @@ pub const OBJECT_AT_WORK_PX: usize = 60_000;
 /// A heuristic, not a semantic segmenter (that is #2788): on a working-resolution copy of the
 /// canvas the area around the point is grown over pixels of similar colour (CIELAB, bounded both
 /// by the distance to the seed's running mean and by the local edge step), so it stops at the
-/// object's outline. A region that grows over most of the canvas is the background: nothing is
-/// found. Otherwise GrabCut refines it inside its padded bounding box (the grown area probable
+/// object's outline. A region covering most of the canvas boundary is treated as background.
+/// Otherwise GrabCut refines it inside its padded bounding box (the grown area probable
 /// foreground, the cursor definite foreground, outside the box definite background), the part
 /// connected to the cursor is kept and the boundary is re-cut at full resolution, as the
 /// rectangle mode does.
+///
+/// When the whole-canvas pass finds nothing in a large document (an object only a few working
+/// pixels wide blurs into its surroundings), the search is repeated at finer steps in windows of
+/// the same working size around the point, down to full resolution.
 pub fn object_at(sampler: &dyn Sampler, canvas: Rect, x: f32, y: f32, work_px: usize) -> Option<Region> {
     if canvas.width() < 4 || canvas.height() < 4 || !x.is_finite() || !y.is_finite() {
         return None;
@@ -154,20 +158,51 @@ pub fn object_at(sampler: &dyn Sampler, canvas: Rect, x: f32, y: f32, work_px: u
     if !canvas.contains(px, py) {
         return None;
     }
-    let step = super::scale_for(canvas, work_px.max(1024));
-    let img = sampler.rgb_scaled(canvas, step);
-    let (w, h) = (img.w, img.h);
-    if w < 2 || h < 2 {
+    let work_px = work_px.max(1024);
+    let mut step = super::scale_for(canvas, work_px);
+    if let Some(r) = object_in(sampler, canvas, px, py, step) {
+        return Some(r);
+    }
+    // Side (working pixels) of the square windows of the finer passes.
+    let side = (work_px as f64).sqrt() as usize;
+    while step > 1 {
+        step = (step / 4).max(1);
+        let half = (side.saturating_mul(step) / 2).min(i32::MAX as usize / 4) as i32;
+        let window = Rect::new(px.saturating_sub(half), py.saturating_sub(half), px.saturating_add(half), py.saturating_add(half)).intersect(&canvas);
+        if window.width() < 4 || window.height() < 4 {
+            continue;
+        }
+        if let Some(r) = object_in(sampler, window, px, py, step) {
+            return Some(r);
+        }
+    }
+    None
+}
+
+/// One [`object_at`] pass over `canvas` (the document or a window of it) at working step `step`;
+/// `(px, py)` lies inside `canvas`.
+fn object_in(sampler: &dyn Sampler, canvas: Rect, px: i32, py: i32, step: usize) -> Option<Region> {
+    // Alpha is kept, so a transparent pixel is a boundary rather than the mid grey `from_rgba`
+    // would composite it to: a mid-grey object on a transparent layer stays an object (#12852).
+    let rgba = sampler.rgba_scaled(canvas, step);
+    let (w, h) = ((canvas.width() as usize).div_ceil(step), (canvas.height() as usize).div_ceil(step));
+    if w < 2 || h < 2 || rgba.len() < w * h {
         return None;
     }
+    let opaque: Vec<bool> = rgba.iter().take(w * h).map(|p| p[3] >= 0.5).collect();
+    let img = RgbImage::from_rgba(&rgba, w, h);
     // Lightly smoothed, so noise and texture don't stop the growth; edges survive.
     let lab: Vec<[f32; 3]> = box3(&box3(&img.px, w, h), w, h).iter().map(|c| super::slic::rgb_to_lab(*c)).collect();
     let sx = (((px - canvas.x0) as usize) / step).min(w - 1);
     let sy = (((py - canvas.y0) as usize) / step).min(h - 1);
-    let grown = grow_similar(&lab, w, h, sx, sy);
+    if !opaque[sy * w + sx] {
+        return None;
+    }
+    let grown = grow_similar(&lab, w, h, sx, sy, &opaque);
     let count = grown.iter().filter(|g| **g).count();
-    // Background (or a flat image): no single object under the cursor.
-    if count * 10 > w * h * 6 || count < 4 {
+    let boundary = grown.iter().enumerate().filter(|(i, on)| **on && (i % w == 0 || i % w + 1 == w || i / w == 0 || i / w + 1 == h)).count();
+    // shortcut: cropped objects covering most of the frame need a semantic segmenter (#2788).
+    if boundary * 2 >= 2 * w + 2 * h - 4 || count < 4 {
         return None;
     }
     let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0usize, 0usize);
@@ -187,6 +222,10 @@ pub fn object_at(sampler: &dyn Sampler, canvas: Rect, x: f32, y: f32, work_px: u
             let inside = xx >= bx0 && xx < bx1 && yy >= by0 && yy < by1;
             trimap[i] = if grown[i] {
                 PR_FG
+            } else if !opaque[i] {
+                // Transparency is background, whatever it was composited to.
+                any_bg = true;
+                BG
             } else if inside {
                 PR_BG
             } else {
@@ -222,13 +261,17 @@ pub fn object_at(sampler: &dyn Sampler, canvas: Rect, x: f32, y: f32, work_px: u
 
 /// Region growing (4-connected) from `(sx, sy)` over pixels whose CIELAB colour is within a
 /// distance of the seed area's running mean and whose step from the neighbour it was reached
-/// from is small, so it stops at edges.
-fn grow_similar(lab: &[[f32; 3]], w: usize, h: usize, sx: usize, sy: usize) -> Vec<bool> {
+/// from is small, so it stops at edges. A pixel that is not `opaque` is never entered, so
+/// transparency stops the growth too.
+fn grow_similar(lab: &[[f32; 3]], w: usize, h: usize, sx: usize, sy: usize, opaque: &[bool]) -> Vec<bool> {
     const MEAN_DIST: f32 = 32.0;
     const EDGE_STEP: f32 = 10.0;
     let d = |a: [f32; 3], b: [f32; 3]| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt();
     let mut out = vec![false; w * h];
     let Some(&seed) = lab.get(sy * w + sx) else { return out };
+    if !opaque.get(sy * w + sx).copied().unwrap_or(false) {
+        return out;
+    }
     let (mut sum, mut n) = ([seed[0] as f64, seed[1] as f64, seed[2] as f64], 1.0f64);
     let mut stack = vec![(sx, sy)];
     out[sy * w + sx] = true;
@@ -241,7 +284,7 @@ fn grow_similar(lab: &[[f32; 3]], w: usize, h: usize, sx: usize, sy: usize) -> V
                 continue;
             }
             let i = ny * w + nx;
-            if out[i] {
+            if out[i] || !opaque.get(i).copied().unwrap_or(true) {
                 continue;
             }
             let q = lab[i];

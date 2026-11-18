@@ -25,6 +25,7 @@ pub(super) fn available(refresh: bool) -> Vec<Value> {
 }
 
 /// Validated calibration and its serializable provenance, kept separate from profile payloads.
+#[derive(Clone)]
 pub(super) struct Loaded {
     pub profile: Arc<CameraProfile>,
     pub report: Value,
@@ -236,7 +237,7 @@ pub(super) fn record(doc: &mut photocraft_doc::Document, loaded: &Loaded) {
     let json = loaded.report.to_string().replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
     doc.metadata.xmp = Some(format!(
         r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:pc="https://photocraft.app/ns/raw/1.0/"><pc:CameraProfile>{json}</pc:CameraProfile></rdf:Description></rdf:RDF></x:xmpmeta>"#
-    ));
+    ).into());
 }
 /// Recover saved profile provenance, ignoring malformed JSON or reports larger than 16 KiB.
 pub(super) fn report(doc: &photocraft_doc::Document) -> Option<Value> {

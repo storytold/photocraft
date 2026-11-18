@@ -1,9 +1,6 @@
 //! Public Nikon MakerNote / PictureControl layouts documented by ExifTool tag tables.
 //! Numeric controls are retained as raw codes: Auto and n/a are not invented slider values.
-use crate::{
-    tiff::{Tiff, tag},
-    tiffep,
-};
+use craft_tiff::{ParseOptions, Tiff, tags};
 
 /// Recognized Nikon Picture Control metadata with adjustment bytes preserved verbatim.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,15 +62,19 @@ pub fn picture_control(bytes: &[u8]) -> Option<PictureControl> {
 /// Extracts camera identity and recognized Nikon settings from TIFF-based RAW bytes.
 /// Invalid TIFF or a missing make returns `None`; absent optional metadata stays unset.
 pub fn camera_settings(bytes: &[u8]) -> Option<CameraSettings> {
-    let t = Tiff::new(bytes)?;
+    let opts = ParseOptions { max_ifds: 64, max_depth: 8, value_budget: Some(1 << 20), ..Default::default() };
+    let t = Tiff::parse_with(bytes, &opts).ok()?;
     let ifds = t.all_ifds();
-    let make = ifds.iter().find_map(|i| t.tag_ascii(i, tag::MAKE))?;
-    let model = ifds.iter().find_map(|i| t.tag_ascii(i, tag::MODEL)).unwrap_or_default();
-    let (picture_control, color_space) = if let Some((note, ifd)) = tiffep::nikon_maker_note(&t, &ifds) {
-        let control = ifd.get(0x0023).and_then(|e| note.raw(e)).and_then(picture_control);
-        (control, note.tag_uint(&ifd, 0x001e).filter(|v| matches!(v, 1 | 2)))
-    } else {
-        (None, None)
-    };
+    let make = ifds.iter().find_map(|i| i.string(tags::MAKE))?;
+    let model = ifds.iter().find_map(|i| i.string(tags::MODEL)).unwrap_or_default();
+    let note = ifds
+        .iter()
+        .find_map(|i| i.get(tags::MAKER_NOTE))
+        .and_then(|e| craft_tiff::makernote::parse_makernote(bytes, e.offset, e.count() as u64, t.order, &make));
+    let (picture_control, color_space) =
+        match note.filter(|n| matches!(n.kind, craft_tiff::makernote::MakerNoteKind::NikonV1 | craft_tiff::makernote::MakerNoteKind::NikonV3)) {
+            Some(note) => (note.ifd.bytes(0x0023).and_then(picture_control), note.ifd.u32(0x001e).filter(|v| matches!(v, 1 | 2))),
+            None => (None, None),
+        };
     Some(CameraSettings { make, model, picture_control, color_space })
 }

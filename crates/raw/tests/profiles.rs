@@ -55,7 +55,10 @@ fn external_profile_calibrates_and_renders_both_byte_orders() {
     spec.model = "Test Body".into();
     spec.bits = 12;
     spec.white = 4095;
-    let sensor = decode(&spec.build(), &Limits::default()).unwrap();
+    let mut sensor = decode(&spec.build(), &Limits::default()).unwrap();
+    // The shared decoder no longer emits this legacy notice; supplied sensor notices still
+    // must drop only the calibration warning that a valid DCP resolves.
+    sensor.warnings.push("the DNG has no colour matrix; colours are approximate".into());
     for big in [false, true] {
         let p = CameraProfile::from_dcp(&dcp(big)).unwrap();
         assert_eq!(p.name, "Test Look");

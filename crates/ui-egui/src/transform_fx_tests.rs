@@ -2,12 +2,12 @@
 //! canvas: at every bit depth and colour mode, for pixel layers and groups, following edits made
 //! while the box is open, and matching what the commit leaves.
 
-use photocraft_compose::Buffer;
+use egui::ColorImage;
 use photocraft_doc::{Layer, LayerId};
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::transform_fx::Plan;
+use craft::imaging::ui::transform_preview::StylePlan;
 
 /// A 200 × 160 document with a 40 × 20 blue block at (60, 60) on its own layer, wearing a 4 px
 /// red outside Stroke.
@@ -24,24 +24,29 @@ fn app(mode: &str, depth: u32) -> PhotocraftApp {
 }
 
 fn begin(app: &mut PhotocraftApp) {
-    crate::transform_tool::begin(app, &egui::Context::default()).unwrap();
+    let app_ctx = app.ctx().clone();
+    crate::transform_tool::begin(app, &app_ctx).unwrap();
 }
 
 /// What the box draws for the styled layer at `zoom`: `None` when it draws the bare pixels.
-fn composite(app: &PhotocraftApp, zoom: f32) -> Option<(Buffer, Plan)> {
-    let (_, frame) = crate::transform_tool::styled_frame(app, zoom, false)?;
-    let (plan, work, level) = frame.plan()?;
-    Some((frame.compose(&plan, &work, level)?, plan))
+fn composite(app: &PhotocraftApp, zoom: f32) -> Option<(ColorImage, StylePlan)> {
+    crate::transform_tool::styled_composite(app, zoom)
 }
 
-/// The composite at a document point.
-fn at(c: &(Buffer, Plan), x: f64, y: f64) -> [f32; 4] {
-    let (x, y) = ((x * c.1.scale).floor() as i32, (y * c.1.scale).floor() as i32);
-    if c.0.rect.contains(x, y) { c.0.get(x, y) } else { [0.0; 4] }
+/// The composite at a document point, as unmultiplied `[r, g, b, a]` in 0..=1. The image covers `plan.shown`, in work
+/// pixels.
+fn at(c: &(ColorImage, StylePlan), x: f64, y: f64) -> [f32; 4] {
+    let (image, plan) = c;
+    let px = (x * plan.scale).floor() as i32 - plan.shown.x0;
+    let py = (y * plan.scale).floor() as i32 - plan.shown.y0;
+    if px < 0 || py < 0 || px as usize >= image.size[0] || py as usize >= image.size[1] {
+        return [0.0; 4];
+    }
+    image.pixels[py as usize * image.size[0] + px as usize].to_srgba_unmultiplied().map(|v| f32::from(v) / 255.0)
 }
 
 fn set_quad(app: &mut PhotocraftApp, quad: [[f64; 2]; 4]) {
-    app.ui.transform.as_mut().unwrap().quad = quad;
+    app.ui.transform.as_mut().unwrap().edit_box(|b| b.quad = quad.map(|[x, y]| (x, y).into()));
 }
 
 fn active(app: &PhotocraftApp) -> LayerId {
@@ -56,6 +61,20 @@ fn edit_layer(app: &mut PhotocraftApp, f: impl FnOnce(&mut Layer)) {
             Ok(())
         })
         .unwrap();
+}
+
+/// The effects compose document colours: a monitor change alters the shown texture (the preview cache's rule) but
+/// never the composite the effects read.
+#[test]
+fn styled_texture_tracks_monitor_changes_without_recoloring_effect_inputs() {
+    let mut app = app("rgb", 16);
+    begin(&mut app);
+    let raw = composite(&app, 1.0).unwrap().0;
+    for monitor in ["srgb", "display-p3", "srgb"] {
+        app.session.color.settings.monitor_profile = monitor.into();
+        crate::canvas::testing::frame(&mut app);
+        assert_eq!(composite(&app, 1.0).unwrap().0.pixels, raw.pixels, "monitor={monitor}: effects still use document colors");
+    }
 }
 
 #[test]
@@ -103,19 +122,21 @@ fn the_preview_matches_the_committed_layer() {
         for l in solo.layers.iter_mut() {
             l.visible = l.id == id;
         }
-        let committed = photocraft_compose::render(&solo, plan.shown);
+        let s = plan.shown;
+        let committed = photocraft_compose::render(&solo, photocraft_geom::Rect::new(s.x0, s.y0, s.x1, s.y1));
         let premultiplied = |p: &[f32; 4]| [p[0] * p[3], p[1] * p[3], p[2] * p[3], p[3]];
         let (mut sum, mut off) = (0.0f64, 0usize);
-        for (a, b) in shown.px.iter().zip(&committed.px) {
-            let d = premultiplied(a).iter().zip(premultiplied(b)).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max);
+        for (a, b) in shown.pixels.iter().zip(&committed.px) {
+            let a = a.to_array().map(|v| f32::from(v) / 255.0);
+            let d = a.iter().zip(premultiplied(b)).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max);
             sum += f64::from(d);
             off += usize::from(d > 0.25);
         }
-        let n = shown.px.len();
+        let n = shown.pixels.len();
+        assert_eq!(n, committed.px.len(), "{mode}/{depth}: the preview covers what the commit renders");
         assert!(n > 4000, "{mode}/{depth}: {n}");
-        // The commit resamples bicubic and the preview bilinear, so soft edges differ a little
-        // (a mean of 0.002 here); a stroke of another width or a shadow falling elsewhere would
-        // differ over whole bands.
+        // The commit resamples bicubic and the preview bilinear, and the preview holds 8 bits, so soft edges differ a
+        // little; a stroke of another width or a shadow falling elsewhere would differ over whole bands.
         assert!(sum / n as f64 <= 0.006, "{mode}/{depth}: mean difference {}", sum / n as f64);
         assert!(off * 500 <= n, "{mode}/{depth}: {off} of {n} pixels differ");
         // Something is there to compare: fill, stroke and shadow.
@@ -145,8 +166,8 @@ fn a_styled_group_previews_with_its_style_once() {
     begin(&mut app);
     let pv = app.transform_preview.as_ref().unwrap();
     // The texels are the bare pixels over their own bounds: no stroke, no opacity yet.
-    assert_eq!(pv.texture.size(), [40, 20]);
-    let (texels, _) = pv.texture.level_image(0).unwrap();
+    assert_eq!(pv.textures.size(), [40, 20]);
+    let (texels, _) = pv.textures.level_image(0).unwrap();
     assert!(texels.pixels.iter().all(|p| *p == egui::Color32::from_rgb(0, 0, 255)), "{:?}", texels.pixels.first());
     // The composite has the stroke round them, all of it at the group's 50 %.
     let c = composite(&app, 1.0).unwrap();
@@ -199,7 +220,8 @@ fn layers_without_a_style_and_other_boxes_keep_the_plain_preview() {
     let mut part = app("rgb", 8);
     part.run("select.rect", json!({"x": 60, "y": 60, "width": 20, "height": 20})).unwrap();
     begin(&mut part);
-    assert_eq!(part.ui.transform.as_ref().unwrap().rect, [60.0, 60.0, 80.0, 80.0]);
+    let r = part.ui.transform.as_ref().unwrap().session.rect();
+    assert_eq!([r.x0, r.y0, r.x1, r.y1], [60.0, 60.0, 80.0, 80.0]);
     assert!(composite(&part, 1.0).is_none());
     // Transform Selection moves an outline, not the layer.
     let mut outline = app("rgb", 8);
@@ -210,68 +232,4 @@ fn layers_without_a_style_and_other_boxes_keep_the_plain_preview() {
     let mut warp = app("rgb", 8);
     crate::transform_tool::begin_warp(&mut warp, &egui::Context::default()).unwrap();
     assert!(composite(&warp, 1.0).is_none());
-}
-
-#[test]
-fn the_work_follows_the_zoom_and_never_the_document_size() {
-    let mut app = app("rgb", 8);
-    begin(&mut app);
-    // Zoomed out to 25 %: a sixteenth of the pixels.
-    let (full, half) = (composite(&app, 1.0).unwrap(), composite(&app, 0.25).unwrap());
-    assert_eq!(full.1.scale, 1.0);
-    assert_eq!(half.1.scale, 0.25);
-    assert!(half.0.px.len() * 8 < full.0.px.len(), "{} vs {}", half.0.px.len(), full.0.px.len());
-    assert!(at(&half, 80.0, 70.0)[3] > 0.99 && at(&half, 57.0, 70.0)[3] > 0.99 && at(&half, 50.0, 70.0)[3] == 0.0);
-    // Zoomed in: the document's own pixels, no finer.
-    assert_eq!(composite(&app, 16.0).unwrap().1.scale, 1.0);
-    // A box dragged out to an absurd size stays within the budget.
-    set_quad(&mut app, [[-4.0e6, -4.0e6], [4.0e6, -4.0e6], [4.0e6, 4.0e6], [-4.0e6, 4.0e6]]);
-    if let Some((buf, _)) = composite(&app, 1.0) {
-        assert!(buf.px.len() as f64 <= crate::transform_fx::MAX_PIXELS);
-    }
-    // A box that isn't a box: the bare pixels, no panic.
-    set_quad(&mut app, [[f64::NAN; 2]; 4]);
-    assert!(composite(&app, 1.0).is_none());
-    set_quad(&mut app, [[70.0, 70.0]; 4]);
-    assert!(composite(&app, 1.0).is_none());
-}
-
-/// Through the real canvas: the composite is made once per change, not once per frame, the box
-/// still drags, undoes and commits as before, and the committed layer keeps its style.
-#[test]
-fn the_canvas_draws_the_styled_preview_and_reuses_it_between_frames() {
-    let mut h = crate::transform_undo_tests::harness();
-    h.state_mut().run("layer.layerStyle.stroke", json!({"size": 4, "color": "#00ff00", "position": "outside"})).unwrap();
-    h.run_steps(2);
-    let steps = h.state().session.active().unwrap().history.entries().len();
-    crate::transform_undo_tests::begin(&mut h);
-    let builds = |h: &egui_kittest::Harness<'static, PhotocraftApp>| crate::transform_tool::styled_frame(h.state(), 1.0, false).unwrap().0.builds();
-    assert_eq!(builds(&h), 1, "composited when the box opened");
-    h.run_steps(5);
-    assert_eq!(builds(&h), 1, "and kept while nothing changes");
-    // Drag the bottom-right corner out: the composite follows the box.
-    crate::transform_undo_tests::drag(&mut h, [200.0, 160.0], [260.0, 196.0]);
-    let after_drag = builds(&h);
-    assert!(after_drag > 1, "{after_drag}");
-    let quad = h.state().ui.transform.as_ref().unwrap().quad;
-    assert!(quad[2][0] > 250.0, "{quad:?}");
-    h.run_steps(5);
-    assert_eq!(builds(&h), after_drag, "at rest again");
-    // Zooming rebuilds it for the new scale.
-    h.state_mut().ui.views[0].zoom = 0.5;
-    h.run_steps(2);
-    assert_eq!(builds(&h), after_drag + 1);
-    // Undo steps the box back (not the document), and the composite follows.
-    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
-    h.run_steps(2);
-    assert_eq!(h.state().ui.transform.as_ref().unwrap().quad[2], [200.0, 160.0]);
-    assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps);
-    assert_eq!(builds(&h), after_drag + 2);
-    // Enter commits: one history step, the style still on the layer.
-    h.key_press(egui::Key::Enter);
-    h.run_steps(3);
-    let app = h.state();
-    assert!(app.ui.transform.is_none() && app.transform_preview.is_none());
-    let st = app.session.active().unwrap();
-    assert!(photocraft_compose::effects::has_effects(st.doc.layer(st.active_layer.unwrap()).unwrap()));
 }

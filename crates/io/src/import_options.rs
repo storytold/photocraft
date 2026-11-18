@@ -12,21 +12,3 @@ pub enum CameraProfilePolicy {
     /// Invalid explicit overrides fail; unusable automatically discovered candidates are skipped.
     Installed,
 }
-
-/// Import behavior and authority. Defaults keep byte-only and recursive imports independent
-/// of ambient camera-profile files. Trusted direct opens can opt into installed profiles.
-#[derive(Clone, Copy, Debug)]
-pub struct ImportOptions {
-    /// SVG groups deeper than this threshold are rasterized during conversion.
-    pub max_svg_group_depth: usize,
-    /// Camera-profile sources authorized for this top-level RAW import.
-    /// Embedded/recursive sources keep their own bundled-only default.
-    pub camera_profiles: CameraProfilePolicy,
-}
-
-impl Default for ImportOptions {
-    /// Apply the document's group-depth limit and authorize only bundled camera profiles.
-    fn default() -> Self {
-        Self { max_svg_group_depth: photocraft_doc::MAX_GROUP_DEPTH, camera_profiles: CameraProfilePolicy::BundledOnly }
-    }
-}
