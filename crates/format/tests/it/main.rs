@@ -10,5 +10,6 @@ mod frame_stroke;
 mod historical_smart_order;
 mod layer_labels;
 mod roundtrip;
+mod scratch_retry;
 mod smart_contents;
 mod triangle_live;
