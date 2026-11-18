@@ -339,4 +339,53 @@ mod tests {
         assert!(c.covered(6, 0, m, None), "x = 4");
         assert!(!c.covered(7, 0, m, None), "x = 5");
     }
+
+    /// The active layer is a second fill target only as a visible, unlocked pixel layer with
+    /// visible, unlocked ancestors: each unmeasured state keeps the Background alone. Every state
+    /// here is a pure function of the layer tree; `crop_content_aware_layers.rs` runs a few of them
+    /// through `image.crop`.
+    #[test]
+    fn only_a_visible_unlocked_active_raster_adds_a_target() {
+        use photocraft_doc::{Layer, LayerContent, TextLayer};
+        let mut s = crate::Session::new();
+        s.execute("file.new", serde_json::json!({"width": 8, "height": 8, "background": "white"})).unwrap();
+        let base = (*s.active().unwrap().doc).clone();
+        let fmt = base.pixel_format();
+        let background = base.background().unwrap().id;
+        // The active layer `layer`, at the root or inside a group that `ancestor` edits.
+        let with = |layer: Layer, ancestor: Option<fn(&mut Layer)>| {
+            let mut d = base.clone();
+            let id = layer.id;
+            match ancestor {
+                None => d.layers.push(layer),
+                Some(edit) => {
+                    let mut group = Layer::group("Ancestor", vec![layer]);
+                    edit(&mut group);
+                    d.layers.push(group);
+                }
+            }
+            (additional_target(&d, Some(id)), id)
+        };
+        let (got, id) = with(Layer::raster("Active", fmt), None);
+        assert_eq!(got, Some(id), "a visible, unlocked raster");
+        let plain_group: fn(&mut Layer) = |_| {};
+        let (got, id) = with(Layer::raster("Active", fmt), Some(plain_group));
+        assert_eq!(got, Some(id), "inside a visible, unlocked group");
+        let text = Layer::new("T", LayerContent::Text(TextLayer { text: "T".into(), ..Default::default() }));
+        assert_eq!(with(text, None).0, None, "a type layer");
+        let mut hidden = Layer::raster("Active", fmt);
+        hidden.visible = false;
+        assert_eq!(with(hidden, None).0, None, "a hidden layer");
+        for lock in ["all", "pixels", "transparency", "position", "artboard"] {
+            let mut locked = Layer::raster("Active", fmt);
+            assert!(locked.locks.set(lock, true));
+            assert_eq!(with(locked, None).0, None, "lock {lock}");
+        }
+        let hidden_group: fn(&mut Layer) = |g| g.visible = false;
+        assert_eq!(with(Layer::raster("Active", fmt), Some(hidden_group)).0, None, "a hidden ancestor");
+        let locked_group: fn(&mut Layer) = |g| assert!(g.locks.set("pixels", true));
+        assert_eq!(with(Layer::raster("Active", fmt), Some(locked_group)).0, None, "a locked ancestor");
+        assert_eq!(additional_target(&base, Some(background)), None, "the Background itself");
+        assert_eq!(additional_target(&base, None), None, "no active layer");
+    }
 }
