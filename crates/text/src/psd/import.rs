@@ -570,7 +570,23 @@ pub(crate) fn char_style(base: &[Option<&E>], d: &E, fonts: &[String], k: f32) -
     let flag = |key: &str| g(key).and_then(E::as_bool);
     let mut s = CharStyle::default();
     if let Some(ps) = g("Font").and_then(E::as_i64).and_then(|i| usize::try_from(i).ok()).and_then(|i| fonts.get(i)).filter(|ps| !ps.is_empty()) {
-        let r = guess_from_postscript(ps);
+        if let Some(instance) = crate::fonts::VariationName::parse(ps) {
+            s.variations = instance.axes;
+        } else if let Some(axes) = d.get(super::VARIATION_OVERRIDES).and_then(E::as_array) {
+            s.variations = axes
+                .iter()
+                .take(crate::fonts::MAX_COLLECTION_AXES)
+                .filter_map(|v| {
+                    let [tag, value] = v.as_array()? else {
+                        return None;
+                    };
+                    let axis = tag.as_str().filter(|tag| tag.len() == 4 && tag.is_ascii())?;
+                    let value = value.as_f64()? as f32;
+                    value.is_finite().then(|| photocraft_doc::text::FontVariation { axis: axis.into(), value })
+                })
+                .collect();
+        }
+        let r = guess_from_postscript(ps).with_variations(&s.variations);
         s.font_family = r.family;
         s.weight = r.weight;
         s.italic = r.italic;

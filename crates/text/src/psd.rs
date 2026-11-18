@@ -21,6 +21,10 @@ use photocraft_geom::{Affine, Point};
 use crate::engine_data::{self as ed, Value as E};
 use crate::fonts::guess_from_postscript;
 
+// A real face name can also carry explicit overrides, e.g. when a TN 5902 name
+// would exceed 127 bytes. Keep those coordinates per run, independent of the FontSet index.
+const VARIATION_OVERRIDES: &str = "PhotoCraftVariations";
+
 mod build;
 mod edit;
 mod import;
@@ -184,6 +188,25 @@ mod nonfinite_tests {
         assert_eq!(para_style(&[], &d, 1.0).start_indent_pt, 0.0);
         let d = parse(b"<< /FontSize 24.0 >>").unwrap();
         assert_eq!(char_style(&[], &d, &[], 1.0).size_pt, 24.0);
+    }
+
+    #[test]
+    fn real_face_names_keep_per_run_axes_when_a_custom_name_cannot_be_used() {
+        use photocraft_doc::text::FontVariation;
+        let name = "SplitVariable-Roman".to_string();
+        for width in [72.5, 81.0] {
+            let s = CharStyle {
+                postscript_name: Some(name.clone()),
+                variations: vec![FontVariation { axis: "wdth".into(), value: width }, FontVariation { axis: "wght".into(), value: 512.0 }],
+                weight: 512,
+                ..Default::default()
+            };
+            let encoded = style_sheet_data(&s, 0, 1.0);
+            let back = char_style(&[], &encoded, std::slice::from_ref(&name), 1.0);
+            assert_eq!(back.variations, s.variations);
+            assert_eq!(back.weight, 512);
+            assert_eq!(back.postscript_name, s.postscript_name);
+        }
     }
 
     /// #9470: `BaselineDirection` sets vertical type's roman text upright (1, what Photoshop's

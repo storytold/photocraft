@@ -58,8 +58,13 @@ pub(super) fn replace(app: &mut PhotocraftApp, start: usize, end: usize, text: &
     if let Some(p) = &pending
         && !text.is_empty()
     {
-        let mut run = json!({"start": start, "end": caret, "font": p.style.font_family, "weight": p.style.weight, "italic": p.style.italic});
-        // Setting weight clears an inherited wght axis; restore the chosen font's axes last.
+        let mut run =
+            json!({"start": start, "end": caret, "resetVariations": true, "font": p.style.font_family, "weight": p.style.weight, "italic": p.style.italic});
+        // The pending style is a snapshot. An axis absent here must not come back from
+        // the preceding text, including after several font choices at the same caret.
+        if !p.style.font_style.is_empty() {
+            run["fontStyle"] = json!(p.style.font_style);
+        }
         run["variations"] = p.style.variations.iter().map(|v| (v.axis.clone(), json!(v.value))).collect::<serde_json::Map<_, _>>().into();
         if let Some(face) = &p.style.postscript_name {
             run["postscriptName"] = json!(face);

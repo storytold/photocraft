@@ -189,7 +189,14 @@ pub(crate) fn style_names(app: &PhotocraftApp, values: &CharacterValues) -> Vec<
         return Vec::new();
     }
     let family = values.family.clone().or_else(|| target_styles(app).0.first().map(|c| c.font_family.clone())).unwrap_or_default();
-    fonts::styles(&family)
+    let mut names = fonts::styles(&family);
+    if let Some(current) = &values.style
+        && !current.is_empty()
+        && !names.contains(current)
+    {
+        names.push(current.clone());
+    }
+    names
 }
 
 /// The variable-font axes and named instances of the target's face, cloned from the font engine.
@@ -216,8 +223,15 @@ pub(crate) fn face_axes(app: &PhotocraftApp) -> Option<TargetFace> {
         return None;
     }
     let engine = photocraft_text::try_shared()?;
-    let faces = engine.lock().unwrap_or_else(PoisonError::into_inner).fonts.faces(&first.font_family);
-    let face = faces.iter().find(|f| f.italic == first.italic && !f.font_axes.is_empty()).or_else(|| faces.iter().find(|f| !f.font_axes.is_empty()))?;
+    let mut engine = engine.lock().unwrap_or_else(PoisonError::into_inner);
+    let faces = engine.fonts.faces(&first.font_family);
+    let named = first.postscript_name.as_deref().and_then(|ps| {
+        faces
+            .iter()
+            .find(|f| f.postscript_name.as_deref() == Some(ps) && !f.font_axes.is_empty())
+            .or_else(|| engine.fonts.instance_by_postscript(&first.font_family, ps).and_then(|inst| faces.get(inst.face_index)))
+    });
+    let face = named.or_else(|| faces.iter().filter(|f| !f.font_axes.is_empty()).min_by_key(|f| f.italic != first.italic))?;
     Some(TargetFace { axes: face.font_axes.clone(), instances: face.instances.clone(), weight: Some(f32::from(first.weight)), italic: first.italic })
 }
 
