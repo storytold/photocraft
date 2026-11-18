@@ -14,7 +14,7 @@ use crate::direct_select::PathRef;
 use crate::state::Tool;
 use crate::vector_ui::pen_commit;
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
     app.ui.tool = Tool::Pen;
