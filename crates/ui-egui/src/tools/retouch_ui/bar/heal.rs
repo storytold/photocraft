@@ -189,7 +189,8 @@ fn healing_brush_controls(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<
     if let Some(shown) = shown {
         brush.angle = angle.0;
         key = shown.edit.events.iter().find_map(|e| crate::history_keys::coalesce("brush", e));
-        alert = shown.out_of_range;
+        // The original angle control truncates before deciding whether a typed value is out of range.
+        alert = shown.out_of_range.filter(|alert| !alert.range.contains(&alert.typed.trunc()));
     }
     let pressure = ToggleButton::new(tl!("Always use pressure for size"), Bind::given(brush.pressure_size))
         .icon(IconId::new("target"))

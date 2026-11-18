@@ -90,7 +90,7 @@ fn clone_source_toggle_uses_the_existing_panel_command_in_both_directions() {
 
 #[test]
 fn healing_angle_truncates_fractions_and_clamps_typed_limits_with_one_ok_alert() {
-    for (text, want, alert) in [("45.5", 45.0, false), ("-45.5", -45.0, false), ("400", 180.0, true), ("-400", -180.0, true)] {
+    for (text, want, alert) in [("45.5", 45.0, false), ("-45.5", -45.0, false), ("180.5", 180.0, false), ("-180.5", -180.0, false), ("400", 180.0, true), ("-400", -180.0, true)] {
         let mut h = bar(Tool::Healing);
         type_angle(&mut h, text);
         assert_eq!(h.state().session.tools.brush.angle, want, "{text}");
