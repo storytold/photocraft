@@ -146,38 +146,43 @@ fn visible(app: &PhotocraftApp, id: LayerId) -> bool {
 }
 fn content_layer(app: &PhotocraftApp, r: [i64; 4]) -> Result<Option<u64>, String> {
     let Some(st) = app.session.active() else { return Ok(None) };
-    st.doc.walk().into_iter().rev().find_map(|(path, _, l)| {
-        if !matches!(l.content, LayerContent::Raster(_) | LayerContent::Smart(_)) || st.doc.is_background(l.id) || !path_visible(&st.doc, &path) {
-            return None;
-        }
-        let locks = st.doc.effective_locks(l.id);
-        if locks.position || locks.all || photocraft_engine::frame_cmds::frame_of(&st.doc, l.id).is_some() {
-            return None;
-        }
-        let b = photocraft_engine::transform_cmds::transform_bounds(&st.doc, l);
-        if b.is_empty() || !(i64::from(b.x0) < r[2] && r[0] < i64::from(b.x1) && i64::from(b.y0) < r[3] && r[1] < i64::from(b.y1)) {
-            return None;
-        }
-        // Each frame dimension must reach one third of the layer's unclipped bounds, not just overlap it (#13861).
-        // Widen before subtracting so even extreme input coordinates cannot overflow.
-        let whole = photocraft_engine::transform_cmds::whole_layer_bounds(&st.doc, l);
-        let width = i128::from(r[2]) - i128::from(r[0]);
-        let height = i128::from(r[3]) - i128::from(r[1]);
-        if width * 3 < i128::from(whole.x1) - i128::from(whole.x0) || height * 3 < i128::from(whole.y1) - i128::from(whole.y0) {
-            return None;
-        }
-        // Raster capture converts the complete layer to a Smart Object. Its raw bounds
-        // can survive a mask that leaves nothing to convert; try the next usable layer.
-        // Existing Smart Objects are captured directly, without this conversion.
-        if matches!(l.content, LayerContent::Raster(_)) {
-            match photocraft_engine::smart_cmds::layer_has_smart_content(&st.doc, l) {
-                Ok(true) => {}
-                Ok(false) => return None,
-                Err(e) => return Some(Err(e.to_string())),
+    st.doc
+        .walk()
+        .into_iter()
+        .rev()
+        .find_map(|(path, _, l)| {
+            if !matches!(l.content, LayerContent::Raster(_) | LayerContent::Smart(_)) || st.doc.is_background(l.id) || !path_visible(&st.doc, &path) {
+                return None;
             }
-        }
-        Some(Ok(l.id.0))
-    }).transpose()
+            let locks = st.doc.effective_locks(l.id);
+            if locks.position || locks.all || photocraft_engine::frame_cmds::frame_of(&st.doc, l.id).is_some() {
+                return None;
+            }
+            let b = photocraft_engine::transform_cmds::transform_bounds(&st.doc, l);
+            if b.is_empty() || !(i64::from(b.x0) < r[2] && r[0] < i64::from(b.x1) && i64::from(b.y0) < r[3] && r[1] < i64::from(b.y1)) {
+                return None;
+            }
+            // Each frame dimension must reach one third of the layer's unclipped bounds, not just overlap it (#13861).
+            // Widen before subtracting so even extreme input coordinates cannot overflow.
+            let whole = photocraft_engine::transform_cmds::whole_layer_bounds(&st.doc, l);
+            let width = i128::from(r[2]) - i128::from(r[0]);
+            let height = i128::from(r[3]) - i128::from(r[1]);
+            if width * 3 < i128::from(whole.x1) - i128::from(whole.x0) || height * 3 < i128::from(whole.y1) - i128::from(whole.y0) {
+                return None;
+            }
+            // Raster capture converts the complete layer to a Smart Object. Its raw bounds
+            // can survive a mask that leaves nothing to convert; try the next usable layer.
+            // Existing Smart Objects are captured directly, without this conversion.
+            if matches!(l.content, LayerContent::Raster(_)) {
+                match photocraft_engine::smart_cmds::layer_has_smart_content(&st.doc, l) {
+                    Ok(true) => {}
+                    Ok(false) => return None,
+                    Err(e) => return Some(Err(e.to_string())),
+                }
+            }
+            Some(Ok(l.id.0))
+        })
+        .transpose()
 }
 #[cfg(test)]
 mod content_pick_tests;
