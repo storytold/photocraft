@@ -10,7 +10,7 @@ use crate::PhotocraftApp;
 use crate::state::Tool;
 
 /// A square work path; knot 1 at (120, 40) is smooth with handles at (100, 40) and (140, 40).
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
     app.sync_views();
