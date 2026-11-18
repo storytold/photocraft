@@ -8,7 +8,7 @@ use super::*;
 use crate::canvas::testing::{ToolEvent, frame, tool_event};
 
 /// A 200 × 150 document with a selection and the Perspective Crop tool.
-fn app(selection: bool) -> PhotocraftApp {
+fn app(selection: bool) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 150})).unwrap();
     if selection {

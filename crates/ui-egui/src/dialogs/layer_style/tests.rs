@@ -30,7 +30,7 @@ pub(super) fn defaults(kind: EffectKind) -> StyleParams {
 }
 
 /// An app with a `size` square document and one empty layer.
-pub(super) fn app_with_layer(size: u32) -> PhotocraftApp {
+pub(super) fn app_with_layer(size: u32) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": size, "height": size})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();
@@ -128,9 +128,9 @@ fn row(setup: &[(&str, Value)]) -> (photocraft_engine::Session, LayerStyle) {
     (s, style)
 }
 
-fn harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+fn harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = Harness::builder().with_size(vec2(1500.0, 1000.0)).with_context(app.ctx().clone()).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        |ui, app: &mut Box<PhotocraftApp>| {
             app.framework.dialogs.run(ui);
             take(app, ui.ctx());
         },
