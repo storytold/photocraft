@@ -146,9 +146,6 @@ fn main() {
             if let Some(path) = &open {
                 app.open_path(path).expect("open --open file");
             }
-            if let Some(count) = report_demo {
-                import_report_demo(&mut app, count);
-            }
             app
         });
     if let Some((mw, mh)) = arg(&args, "--monitor").and_then(|s| s.split_once('x').and_then(|(a, b)| Some((a.parse::<f32>().ok()?, b.parse::<f32>().ok()?)))) {
@@ -170,6 +167,10 @@ fn main() {
         };
     }
     harness.run_steps(4);
+    if let Some(count) = report_demo {
+        import_report_demo(harness.state_mut(), count);
+        harness.run_steps(2);
+    }
     let ctx = harness.ctx.clone();
     let timing = std::env::var_os("SNAPSHOT_TIMING").is_some();
     let reruns = std::env::var_os("SNAPSHOT_RERUNS").is_some();
