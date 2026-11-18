@@ -88,7 +88,8 @@ fn fixture(pattern: usize, content: &str) -> (H, LayerId) {
     (h, id)
 }
 
-/// Picks `font` in the first family field: open it, type the name, Enter, as `accept` says.
+/// Picks `font` in the first family field: open it, type the name, then accept it as `accept` says
+/// (Enter, ArrowDown then Enter, a click on its row, or a hover).
 fn choose(h: &mut H, font: &str, accept: &str) {
     h.query_all_by_label("Font family").next().unwrap().click();
     h.run();
@@ -96,6 +97,11 @@ fn choose(h: &mut H, font: &str, accept: &str) {
     h.run();
     match accept {
         "enter" => h.key_press(Key::Enter),
+        "arrow-enter" => {
+            h.key_press(Key::ArrowDown);
+            h.run();
+            h.key_press(Key::Enter);
+        }
         "click" => h.get_by_role_and_label(egui::accesskit::Role::TreeItem, font).click(),
         "hover" => h.get_by_role_and_label(egui::accesskit::Role::TreeItem, font).hover(),
         _ => panic!("unknown acceptance"),
@@ -111,19 +117,23 @@ fn checkmark(h: &mut H) {
 
 #[test]
 fn caret_font_choices_style_only_subsequent_typing_including_ime() {
-    for original in 0..2 {
+    // Every acceptance, as each reaches the caret's pending style by its own route through the
+    // family field. One original font, as it only decides which font is chosen, and the carets at
+    // both ends.
+    let original = 0;
+    for accept in ["enter", "click", "arrow-enter"] {
         for text in ["abcdef", "AéB👩‍💻", "ab\ncdé"] {
-            let n = text.chars().count();
-            for caret in [0, n / 2, n] {
+            for caret in [0, text.chars().count()] {
+                let label = (accept, text, caret);
                 let (mut h, id) = fixture(original, text);
                 select(&mut h, [caret, caret]);
                 h.run();
                 let before = saved(&h, id);
                 let steps = h.state().session.active().unwrap().history.entries().len();
                 let font = FONTS[1 - original];
-                choose(&mut h, font, "enter");
-                assert_eq!(saved(&h, id), before, "a font choice at a caret never restyles existing characters");
-                assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps);
+                choose(&mut h, font, accept);
+                assert_eq!(saved(&h, id), before, "a font choice at a caret never restyles existing characters: {label:?}");
+                assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps, "{label:?}");
                 crate::type_font_preview::set(h.state_mut(), font.into());
                 assert!(crate::type_font_preview::display_doc(h.state_mut(), 0).is_none());
                 // Two preedit replacements and the final commit keep the pending font.
@@ -138,11 +148,11 @@ fn caret_font_choices_style_only_subsequent_typing_including_ime() {
                 h.run();
                 let mut expected = families(&before);
                 expected.splice(caret..caret, std::iter::repeat_n(font.to_string(), 3));
-                assert_eq!(families(&saved(&h, id)), expected);
+                assert_eq!(families(&saved(&h, id)), expected, "{label:?}");
                 let typed = saved(&h, id);
                 checkmark(&mut h);
-                assert_eq!(saved(&h, id), typed);
-                assert!(h.state().ui.type_insertion_style.is_none());
+                assert_eq!(saved(&h, id), typed, "{label:?}");
+                assert!(h.state().ui.type_insertion_style.is_none(), "{label:?}");
             }
         }
     }
