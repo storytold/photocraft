@@ -351,6 +351,8 @@ pub struct PhotocraftApp {
     /// The menu bar's rows and the English text of its titles, rebuilt when their inputs change
     /// (`menus::MenuModel`).
     pub(crate) menu_model: Option<menus::MenuModel>,
+    /// The toolbar's slots for the stored layout (`tool_commands::ToolbarSlots`).
+    pub(crate) toolbar_slots: panels::tool_commands::ToolbarSlots,
     /// Move tool drag shown live (`move_ui`).
     pub(crate) move_preview: Option<move_ui::MovePreview>,
     /// Move tool › Show Highlight on Rollover: the last hover answer (`move_hover`).
