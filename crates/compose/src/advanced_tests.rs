@@ -779,7 +779,15 @@ fn transparency_shapes_off_keeps_a_clipped_frames_stroke() {
             let what = format!("{mode:?} ({depth:?})");
             assert!(!close(at(&on, 3, 4), base_px), "{what}: the stroke draws with the option on: {:?}", at(&on, 3, 4));
             check(&off, 3, 4, at(&on, 3, 4), &format!("{what}: the stroke outside the frame's mask"));
-            assert!(!close(at(&off, 6, 4), at(&on, 6, 4)), "{what}: the content's alpha is Fill with the option off: {:?}", at(&off, 6, 4));
+            // Alpha as Fill: the photo opaque over the base at a Fill of 30 % reads the same pixel.
+            let mut filled = doc(depth, false);
+            let mut opaque = solid(&filled, "photo", full(&filled), [200.0 / 255.0, 150.0 / 255.0, 80.0 / 255.0, 1.0]);
+            opaque.blend = mode;
+            opaque.fill_opacity = 0.3;
+            filled.layers.extend([solid(&filled, "base", full(&filled), base_px), opaque]);
+            let want = at(&filled, 6, 4);
+            assert!(!close(want, base_px) && !close(want, at(&on, 6, 4)), "{what}: Fill 30 % is neither the base nor the option on: {want:?}");
+            check(&off, 6, 4, want, &format!("{what}: the content's alpha is Fill with the option off"));
             assert!(close(at(&off, 0, 4), base_px), "{what}: nothing past the stroke: {:?}", at(&off, 0, 4));
         }
     }
