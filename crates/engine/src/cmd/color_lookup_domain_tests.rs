@@ -100,6 +100,41 @@ fn a_1d_cube_with_a_domain_keeps_todays_baked_domain() {
 }
 
 #[test]
+fn a_layer_with_domain_lines_reopens_from_psd_and_psb() {
+    use photocraft_doc::{Adjustment, LayerContent};
+    // The layer embeds its file in a PSD, and a PSD read still refuses a custom domain, so the
+    // save writes the same table as a plain 0..1 `.cube` and the layer reopens as Color Lookup.
+    // An inverting table, so a dropped or identity table would not pass.
+    let mut invert = String::from("TITLE \"inv\"\nLUT_3D_SIZE 2\nDOMAIN_MAX 2 2 2\n");
+    for b in 0..2 {
+        for g in 0..2 {
+            for r in 0..2 {
+                invert.push_str(&format!("{} {} {}\n", 1 - r, 1 - g, 1 - b));
+            }
+        }
+    }
+    let (mut s, _) = session();
+    let r = s.execute("layer.newAdjustmentLayer.colorLookup", json!({"data": invert, "fileName": "dom2.cube"})).unwrap();
+    let id = photocraft_doc::LayerId(r["layer"].as_u64().unwrap());
+    let doc = &s.active().unwrap().doc;
+    let Some(LayerContent::Adjustment(Adjustment::ColorLookup { lut: Some(want), size: 2, .. })) = doc.layer(id).map(|l| &l.content) else {
+        panic!("not a 2³ Color Lookup layer")
+    };
+    assert_eq!(want.get(..3), Some(&[1.0, 1.0, 1.0][..]), "the table inverts");
+    for (file, psb) in [("x.psd", false), ("x.psb", true)] {
+        let opts = photocraft_io::ExportOptions { force_psb: psb, ..Default::default() };
+        let bytes = photocraft_io::export(doc, file, &opts).unwrap().bytes;
+        let back = photocraft_io::import(file, &bytes).unwrap().document;
+        let layer = back.walk().into_iter().map(|(_, _, l)| l).find(|l| l.name == doc.layer(id).unwrap().name).unwrap();
+        let LayerContent::Adjustment(Adjustment::ColorLookup { name, lut, size, .. }) = &layer.content else {
+            panic!("{file}: reopened as {:?}", layer.content)
+        };
+        assert_eq!((name.as_str(), *size), ("dom2.cube", 2), "{file}");
+        assert_eq!(lut.as_deref(), Some(&**want), "{file}: the same table");
+    }
+}
+
+#[test]
 fn a_cube_without_domain_lines_is_unchanged() {
     let (mut s, before) = session();
     lookup(&mut s, &identity_cube("")).unwrap();
