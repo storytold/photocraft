@@ -7,7 +7,7 @@ use super::tests::{
 use super::*;
 use crate::PhotocraftApp;
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     app_with_layer(32)
 }
 
