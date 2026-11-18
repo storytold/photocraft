@@ -695,3 +695,14 @@ fn a_flat_split_grid_is_identity_but_not_plain() {
     assert!(split.is_identity(), "renders as no warp");
     assert!(!split.is_plain_identity(), "but is kept");
 }
+
+/// Points within a step of the far edges are found too: the Newton steps there difference inward, not across the
+/// clamped edge (where they read no slope and stayed on the coarse grid's edge point).
+#[test]
+fn param_at_finds_points_beside_the_far_edges() {
+    let m = BezierMesh::identity([0.0, 0.0, 90.0, 60.0], 1, 1);
+    for (p, want) in [([89.5, 59.5], (89.5 / 90.0, 59.5 / 60.0)), ([89.9, 30.0], (89.9 / 90.0, 0.5)), ([45.0, 59.8], (0.5, 59.8 / 60.0))] {
+        let (s, t) = m.param_at(p);
+        assert!((s - want.0).abs() < 1e-9 && (t - want.1).abs() < 1e-9, "{p:?}: {s} {t}");
+    }
+}

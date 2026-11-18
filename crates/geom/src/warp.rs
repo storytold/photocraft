@@ -889,10 +889,11 @@ impl BezierMesh {
     fn refine(&self, p: [f64; 2], s: f64, t: f64) -> (f64, f64) {
         let (mut s, mut t) = (s, t);
         for _ in 0..12 {
-            let h = 1e-5;
+            // Differences step inward at the far edges, where a step outward reads the clamped edge and no slope.
+            let (hs, ht) = (if s + 1e-5 > 1.0 { -1e-5 } else { 1e-5 }, if t + 1e-5 > 1.0 { -1e-5 } else { 1e-5 });
             let q = self.eval(s, t);
-            let (qs, qt) = (self.eval(s + h, t), self.eval(s, t + h));
-            let (a, b, c, d) = ((qs[0] - q[0]) / h, (qt[0] - q[0]) / h, (qs[1] - q[1]) / h, (qt[1] - q[1]) / h);
+            let (qs, qt) = (self.eval(s + hs, t), self.eval(s, t + ht));
+            let (a, b, c, d) = ((qs[0] - q[0]) / hs, (qt[0] - q[0]) / ht, (qs[1] - q[1]) / hs, (qt[1] - q[1]) / ht);
             let det = a * d - b * c;
             if det.abs() < 1e-12 {
                 break;

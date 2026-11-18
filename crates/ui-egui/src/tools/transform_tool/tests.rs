@@ -2306,11 +2306,22 @@ fn a_pull_moves_the_points_the_reference_moves() {
     let mesh = WarpMesh::identity(Rect::new(0.0, 0.0, 90.0, 60.0), 1, 1);
     let got = super::warp::rule_mesh(&mesh, super::warp::RuleEdit::Surface { s: 0.5, t: 0.5, by: [0.0, -10.0] }, 2.0).unwrap();
     let base = BezierMesh::identity([0.0, 0.0, 90.0, 60.0], 1, 1);
+    // The reference presses half a pixel up and left of the pointer, at (44.5, 29.5) here.
+    let (s, t) = (44.5 / 90.0, 29.5 / 60.0);
     let mut want = base.clone();
-    want.pull_at(&base.points, 0.5, 0.5, base.eval(0.5, 0.5), [0.0, -10.0], 46.0);
+    want.pull_at(&base.points, s, t, base.eval(s, t), [0.0, -10.0], 46.0);
     for (g, w) in got.points.iter().zip(&want.points) {
-        assert!((g.x - w[0]).abs() < 1e-12 && (g.y - w[1]).abs() < 1e-12, "{g:?} vs {w:?}");
+        assert!((g.x - w[0]).abs() < 1e-9 && (g.y - w[1]).abs() < 1e-9, "{g:?} vs {w:?}");
     }
+}
+
+#[test]
+fn a_pull_pressed_at_the_grids_corner_keeps_the_pointers_point() {
+    // Half a pixel up and left of the top-left corner is off the surface: the pull presses the corner itself.
+    let base = BezierMesh::identity([0.0, 0.0, 90.0, 60.0], 1, 1);
+    assert_eq!(super::warp::pressed(&base, 0.0, 0.0), (0.0, 0.0));
+    let (s, t) = super::warp::pressed(&base, 1.0, 1.0);
+    assert!((s - 89.5 / 90.0).abs() < 1e-9 && (t - 59.5 / 60.0).abs() < 1e-9, "inside from the far corner: {s} {t}");
 }
 
 #[test]

@@ -237,14 +237,31 @@ pub(super) fn in_contents(
 /// (`BezierMesh::pull_at`, with its thirds and a line reach of [`LINE_REACH_PX`] screen pixels, `unit` each), and a
 /// split of the one-patch Default grid adds only its own lines: the grid's thirds stay drawn handles. `None` when
 /// the result is no mesh.
+/// How far from the pointer the reference presses a pull of the warp's surface, in document pixels: half a pixel up
+/// and left. Measured on 154 Default-grid pull probes at 100 % (median error 2.05 → 1.29 px, worst 7.58 → 3.85) and
+/// 12 at 50 %, where it is half a document pixel, not half a screen pixel (1.59 → 1.23; a whole pixel, half a screen
+/// pixel there, made it worse). Box handles and warp points take the pointer itself.
+const PULL_PRESS: [f64; 2] = [-0.5, -0.5];
+
+/// The parameters of the surface point a pull at `(s, t)` presses: the point [`PULL_PRESS`] away from the pointer's,
+/// or the pointer's own where that lies off the surface (past an edge of the grid).
+pub(super) fn pressed(base: &BezierMesh, s: f64, t: f64) -> (f64, f64) {
+    let p = base.eval(s, t);
+    let q = [p[0] + PULL_PRESS[0], p[1] + PULL_PRESS[1]];
+    let (s2, t2) = base.param_at(q);
+    let found = base.eval(s2, t2);
+    let on_surface = (0.0..=1.0).contains(&s2) && (0.0..=1.0).contains(&t2) && (found[0] - q[0]).hypot(found[1] - q[1]) < 0.05;
+    if on_surface { (s2, t2) } else { (s, t) }
+}
+
 pub(super) fn rule_mesh(mesh: &WarpMesh, edit: RuleEdit, unit: f64) -> Option<WarpMesh> {
     let base = bezier_of(mesh);
     let mut moved = base.clone();
     match edit {
         RuleEdit::Point { index, by } => moved.drag_point(&base.points, index, by),
         RuleEdit::Surface { s, t, by } => {
-            let press = base.eval(s, t);
-            moved.pull_at(&base.points, s, t, press, by, LINE_REACH_PX * unit);
+            let (s, t) = pressed(&base, s, t);
+            moved.pull_at(&base.points, s, t, base.eval(s, t), by, LINE_REACH_PX * unit);
         }
         RuleEdit::SplitOnePatch { split, s, t } => return Some(mesh.split(split, 0, 0, s, t)),
     }
