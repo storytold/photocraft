@@ -629,6 +629,20 @@ fn batch_check_row(key: &'static str, caption: &'static str) -> Param {
     .visible_when("source", "folder")
 }
 
+/// A Choose… pick whose form has closed is forgotten, the way the application's own Browse route
+/// forgets a pick of a dialog that closed: the host does not hold a ticket nobody will read, and an
+/// answer that arrives later cannot walk into the next Batch form's folder row.
+fn forget_closed_pick(app: &PhotocraftApp, ctx: &egui::Context) {
+    if app.framework.dialogs.open_dialogs().into_iter().any(|dialog| dialog.key.as_deref() == Some("file.automate.batch")) {
+        return;
+    }
+    let slot = batch_pick_slot();
+    let waiting = ctx.data_mut(|data| std::mem::take(data.get_temp_mut_or_default::<BatchPick>(slot)));
+    if let Some(ticket) = waiting.0 {
+        app.framework.host().files().forget(ticket);
+    }
+}
+
 /// What each open Batch form had for `overrideOpen` when the pass last looked: the message answers a
 /// tick, not a value the form opened with.
 #[derive(Clone, Default)]
@@ -637,6 +651,7 @@ struct OverrideSeen(Vec<(DialogId, bool)>);
 /// The Batch form's pass (a `dialogs::TAKERS` row): ticking Override Action "Open" Commands shows the
 /// reference application's message with OK and Don't show again; unticking it shows nothing.
 pub(crate) fn batch_source_take(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    forget_closed_pick(app, ctx);
     let open: Vec<(DialogId, bool)> = app
         .framework
         .dialogs
@@ -685,9 +700,12 @@ fn batch_form(app: &PhotocraftApp, dir: &str) -> Option<(Vec<Param>, DialogField
     rows.extend([
         choice("action", tl!("Action"), named(&names), &name),
         // The reference application's three sources, in its order: Import greyed while the app has no
-        // import plug-in, Opened Files only while a document is open (#13668).
+        // import plug-in, Opened Files only while a document is open (#13668). Changing the source
+        // takes the Source options with it where it is written, before OK can read them; the folder
+        // row's own sweep catches the same keys on the way to the screen.
         choice("source", tl!("Source"), opts(&[("folder", tl!("Folder")), ("import", tl!("Import")), ("open", tl!("Opened Files"))]), "folder")
-            .disabled_options(source_disabled(app)),
+            .disabled_options(source_disabled(app))
+            .resets(BATCH_SOURCE_KEYS),
     ]);
     // Choose… and the folder it answered, then the four Source check boxes: one row each, so the form
     // gives every control its own room and a Source of Opened Files leaves the whole group out.

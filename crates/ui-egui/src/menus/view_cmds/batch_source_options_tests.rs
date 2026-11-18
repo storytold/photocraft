@@ -305,3 +305,51 @@ fn the_override_open_tick_is_the_command_s_override_open() {
     assert!(h.state().ui.status_error, "the refused input is reported in the status bar");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Choosing Opened Files over the control channel takes the Source options out at once: an OK in the
+/// same frame, before the form drew again, must not carry them to the engine's rule that they need a
+/// folder source.
+#[test]
+fn switching_the_source_over_the_control_channel_drops_the_options_before_ok_reads_them() {
+    let dir = std::env::temp_dir().join(format!("photocraft-batch-open-source-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("in")).unwrap();
+    let mut h = harness(1, Arc::new(ScriptedFiles::new()));
+    h.state_mut().run("file.saveACopy", json!({"path": dir.join("in").join("a.png").to_string_lossy()})).unwrap();
+    let id = open(&mut h);
+    set(&mut h, id, "input", json!(dir.join("in").to_string_lossy())).unwrap();
+    set(&mut h, id, "output", json!(dir.join("out").to_string_lossy())).unwrap();
+    // Nothing runs a frame between these writes and the OK: the fields are exactly as the last write
+    // left them, with no draw to sweep them.
+    for key in &KEYS[1..] {
+        set(&mut h, id, key, json!(true)).unwrap();
+    }
+    set(&mut h, id, "source", json!("open")).unwrap();
+    let ctx = h.ctx.clone();
+    crate::dialogs::confirm(h.state_mut(), &ctx, id).unwrap();
+    h.run_steps(4);
+    assert!(!h.state().ui.status_error, "the options went with an open source: {:?}", h.state().ui.status.clone());
+    assert_eq!(std::fs::read_dir(dir.join("out")).map(|entries| entries.count()).unwrap_or_default(), 1, "the opened document was still written");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A folder pick Choose… filed for a form that closed is forgotten: the host is not left holding it,
+/// and its late answer does not walk into the next form.
+#[test]
+fn a_pick_filed_for_a_form_that_closed_is_forgotten() {
+    let dir = std::env::temp_dir().join(format!("photocraft-batch-late-pick-{}", std::process::id()));
+    let files = Arc::new(ScriptedFiles::held());
+    let mut h = harness(0, files.clone());
+    let id = open(&mut h);
+    h.get_by_label(CHOOSE).click();
+    h.run_steps(2);
+    assert_eq!(files.open(), 1, "Choose… leaves one pick open with the host");
+    let ctx = h.ctx.clone();
+    assert!(h.state_mut().framework.dialogs.cancel_by_id(&ctx, id), "the form closes");
+    h.run_steps(3);
+    assert_eq!(files.open(), 0, "the pick of a form that closed is forgotten");
+    files.answer(Picked::Paths(vec![dir.clone()]));
+    let next = open(&mut h);
+    assert!(field(&h, next, "input").is_none(), "its late answer does not reach the next form");
+    assert!(h.query_by_label(&format!("{}{MAIN_SEPARATOR}", dir.to_string_lossy())).is_none(), "and no path label appears");
+}
