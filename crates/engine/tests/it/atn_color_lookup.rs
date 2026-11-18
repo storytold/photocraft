@@ -1,6 +1,7 @@
 use craft_psd::atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem};
 use craft_psd::descriptor::{Descriptor, Id, UnicodeString, Value as D};
 use photocraft_doc::{Adjustment, LayerContent};
+use photocraft_engine::actions_cmds::{ActionList, ActionsFile};
 use photocraft_engine::{Session, atn_cmds};
 use serde_json::json;
 
@@ -72,7 +73,7 @@ fn embedded_lookup_bytes_replay_invert_and_save_the_exact_descriptor() {
         let imported = atn_cmds::import(&encoded(d.clone())).unwrap();
         assert!(imported.unsupported.is_empty());
         let a = &imported.actions[0];
-        assert_eq!(a.steps[0].0, "image.adjustments.colorLookup");
+        assert_eq!(a.steps[0].command, "image.adjustments.colorLookup");
         let (out, skipped) = atn_cmds::export("Lookup", &[a], &[], false).unwrap();
         assert!(skipped.is_empty());
         assert_eq!(atn::parse(&out).unwrap().actions[0].items[0].descriptor, Some(d));
@@ -80,7 +81,7 @@ fn embedded_lookup_bytes_replay_invert_and_save_the_exact_descriptor() {
             let mut s = fixture(depth);
             let before = saved(&s);
             let original = pixels(&s);
-            s.actions.list = imported.actions.clone();
+            s.actions.list = ActionList::from_file(ActionsFile::new(imported.actions.clone(), Vec::new()));
             assert_eq!(s.execute("actions.play", json!({"action":"Lookup"})).unwrap()["ran"], 1);
             for (got, old) in pixels(&s).iter().zip(&original) {
                 for c in 0..3 {
@@ -104,16 +105,16 @@ fn lookup_filename_and_outer_metadata_survive_unrelated_edits() {
         let imported = atn_cmds::import(&encoded(d.clone())).unwrap();
         assert!(imported.unsupported.is_empty());
         let mut action = imported.actions[0].clone();
-        assert_eq!(action.steps[0].0, "image.adjustments.colorLookup");
+        assert_eq!(action.steps[0].command, "image.adjustments.colorLookup");
         for edited in [false, true] {
-            action.steps[0].1["dither"] = json!(edited);
+            action.steps[0].params["dither"] = json!(edited);
             let (out, skipped) = atn_cmds::export("Lookup", &[&action], &[], false).unwrap();
             assert!(skipped.is_empty());
             let mut expected = d.clone();
             expected.items.iter_mut().find(|(key, _)| key.is("Dthr")).unwrap().1 = D::Boolean(edited);
             assert_eq!(atn::parse(&out).unwrap().actions[0].items[0].descriptor, Some(expected));
         }
-        action.steps[0].1["fileName"] = json!("renamed.cube");
+        action.steps[0].params["fileName"] = json!("renamed.cube");
         let (out, _) = atn_cmds::export("Lookup", &[&action], &[], false).unwrap();
         let result = atn::parse(&out).unwrap().actions[0].items[0].descriptor.clone().unwrap();
         assert_eq!(result.name, d.name);
@@ -127,7 +128,7 @@ fn lookup_filename_and_outer_metadata_survive_unrelated_edits() {
 fn encoded_lookup_keeps_its_bytes_in_a_saved_adjustment() {
     for (format, bytes) in samples() {
         let imported = atn_cmds::import(&encoded(descriptor(format, &bytes))).unwrap();
-        let mut p = imported.actions[0].steps[0].1.clone();
+        let mut p = imported.actions[0].steps[0].params.clone();
         p.as_object_mut().unwrap().remove("__atnColorLookup");
         let mut s = fixture(8);
         s.execute("layer.newAdjustmentLayer.colorLookup", p).unwrap();
@@ -161,14 +162,14 @@ fn embedded_three_dl_retains_its_nonlinear_shaper_through_action_playback() {
     let d = descriptor("LUTFormat3DL", table.as_bytes());
     let imported = atn_cmds::import(&encoded(d.clone())).unwrap();
     assert!(imported.unsupported.is_empty());
-    assert_eq!(imported.actions[0].steps[0].0, "image.adjustments.colorLookup");
+    assert_eq!(imported.actions[0].steps[0].command, "image.adjustments.colorLookup");
     let (out, skipped) = atn_cmds::export("Lookup", &[&imported.actions[0]], &[], false).unwrap();
     assert!(skipped.is_empty());
     assert_eq!(atn::parse(&out).unwrap().actions[0].items[0].descriptor, Some(d));
     for depth in [8, 16, 32] {
         let mut s = fixture(depth);
         let original = pixels(&s);
-        s.actions.list = imported.actions.clone();
+        s.actions.list = ActionList::from_file(ActionsFile::new(imported.actions.clone(), Vec::new()));
         assert_eq!(s.execute("actions.play", json!({"action":"Lookup"})).unwrap()["ran"], 1);
         for (got, old) in pixels(&s).iter().zip(&original) {
             for c in 0..3 {
@@ -184,7 +185,7 @@ fn embedded_three_dl_retains_its_nonlinear_shaper_through_action_playback() {
     // just its identity table and reporting a successful Color Lookup.
     let bad = descriptor("LUTFormat3DL", table.replacen("0 0 512 1023", "0 NaN 512 1023", 1).as_bytes());
     let imported = atn_cmds::import(&encoded(bad.clone())).unwrap();
-    assert_eq!(imported.actions[0].steps[0].0, atn_cmds::PHOTOSHOP_STEP);
+    assert_eq!(imported.actions[0].steps[0].command, atn_cmds::PHOTOSHOP_STEP);
     let (out, _) = atn_cmds::export("Lookup", &[&imported.actions[0]], &[], false).unwrap();
     assert_eq!(atn::parse(&out).unwrap().actions[0].items[0].descriptor, Some(bad));
 }
@@ -195,12 +196,12 @@ fn unknown_lookup_forms_stay_whole_and_changed_native_steps_refuse_export() {
     let d = descriptor("LUTFormatCUBE", CUBE);
     let imported = atn_cmds::import(&encoded(d.clone())).unwrap();
     let mut edited = imported.actions[0].clone();
-    edited.steps[0].1["dither"] = json!(true);
+    edited.steps[0].params["dither"] = json!(true);
     let (out, _) = atn_cmds::export("Lookup", &[&edited], &[], false).unwrap();
     assert_eq!(atn::parse(&out).unwrap().actions[0].items[0].descriptor.as_ref().unwrap().get("Dthr"), Some(&D::Boolean(true)));
     for (key, value) in [("target", json!("mask")), ("lutFormat", json!("look")), ("interpolation", json!("tetrahedral"))] {
         let mut a = imported.actions[0].clone();
-        a.steps[0].1[key] = value;
+        a.steps[0].params[key] = value;
         assert!(atn_cmds::export("Lookup", &[&a], &[], false).is_err());
     }
     for (key, value) in [
@@ -214,7 +215,7 @@ fn unknown_lookup_forms_stay_whole_and_changed_native_steps_refuse_export() {
         odd.items.retain(|(k, _)| !k.is(key));
         odd = odd.with(key, value);
         let a = atn_cmds::import(&encoded(odd.clone())).unwrap().actions.remove(0);
-        assert_eq!(a.steps[0].0, atn_cmds::PHOTOSHOP_STEP);
+        assert_eq!(a.steps[0].command, atn_cmds::PHOTOSHOP_STEP);
         let (out, _) = atn_cmds::export("Lookup", &[&a], &[], false).unwrap();
         assert_eq!(atn::parse(&out).unwrap().actions[0].items[0].descriptor, Some(odd));
     }
@@ -239,7 +240,7 @@ fn recorded_dither_changes_float_pixels_within_its_documented_bound() {
         let imported = atn_cmds::import(&encoded(d)).unwrap();
         assert!(imported.unsupported.is_empty());
         let mut s = fixture(32);
-        s.actions.list = imported.actions;
+        s.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
         assert_eq!(s.execute("actions.play", json!({"action":"Lookup"})).unwrap()["ran"], 1);
         pixels(&s)
     };

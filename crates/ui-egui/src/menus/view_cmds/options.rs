@@ -1,45 +1,4 @@
-use super::{Map, PathOptions, PhotocraftApp, Show, SnapTo, Value, ViewOptions};
-
-/// Whether the window was maximized when a screen mode took it full screen (egui temp data).
-pub(super) fn was_maximized_id() -> egui::Id {
-    egui::Id::unique("pc-full-screen-was-maximized")
-}
-
-/// The window commands for switching to screen mode `next`, and whether the window should be
-/// maximized again when it leaves full screen. With `keep_apart` (Windows), full screen and
-/// maximized never overlap: a maximized window is un-maximized before it goes full screen and
-/// maximized again after it leaves. Why: winit on Windows keeps the maximized style on a window
-/// that goes full screen from maximized, and the shell then draws the taskbar black instead of
-/// hiding it; on the way out the window stays maximized at the monitor's full size, over the
-/// taskbar (#3550, #4018, #4230). [OBSERVED 2026-10-12, Windows 11, eframe 0.36.2, winit 0.30.13,
-/// a minimal eframe window; un-maximizing first gave a clean full screen and a work-area maximize.]
-///
-/// WORKAROUND(winit#4756): remove `keep_apart` once the winit in Cargo.lock (0.30.13 today) has
-/// the fix; check first with https://gist.github.com/aweussom/3f80ffb82df7f0102341858afbbffd9b
-/// (`--max`, no `--fix`: full screen must have no WS_MAXIMIZE and hide the taskbar).
-pub(super) fn screen_mode_commands(
-    keep_apart: bool,
-    full_screen: bool,
-    maximized: bool,
-    was_maximized: bool,
-    next: &str,
-) -> (Vec<egui::ViewportCommand>, bool) {
-    let want = next != "standard";
-    let mut commands = Vec::new();
-    let mut remember = was_maximized;
-    if keep_apart && want && !full_screen && maximized {
-        commands.push(egui::ViewportCommand::Maximized(false));
-        remember = true;
-    }
-    commands.push(egui::ViewportCommand::Fullscreen(want));
-    if !want {
-        if keep_apart && full_screen && remember {
-            commands.push(egui::ViewportCommand::Maximized(true));
-        }
-        remember = false;
-    }
-    (commands, remember)
-}
+use super::{Map, PhotocraftApp, Show, SnapTo, Value, ViewOptions};
 
 /// Pixel aspect ratio (width / height of a pixel) of a preset id.
 pub fn pixel_aspect_ratio(id: &str) -> f32 {
@@ -122,33 +81,9 @@ fn changed_flags<T: Copy>(now: T, def: T, keys: &[&str], slot: impl for<'a> Fn(&
     (!diff.is_empty()).then_some(Value::Object(diff))
 }
 
-/// The Path Options fields that differ from the defaults (#9713), by key (`None` when none do).
-fn changed_path_options(now: &PathOptions) -> Option<Value> {
-    let def = PathOptions::default();
-    let mut m = Map::new();
-    if now.color != def.color {
-        m.insert("color".into(), Value::String(now.color.clone()));
-    }
-    if now.thickness != def.thickness {
-        m.insert("thickness".into(), serde_json::json!(now.thickness));
-    }
-    (!m.is_empty()).then_some(Value::Object(m))
-}
-
-/// Restore the remembered Path Options (#9713): an unknown colour, or a thickness that isn't a
-/// number in `PATH_THICKNESS`, keeps its default.
-fn restore_path_options(o: &mut PathOptions, saved: &Value) {
-    if let Some(id) = saved.get("color").and_then(Value::as_str).filter(|id| crate::vector_ui::PATH_COLORS.iter().any(|c| c.0 == *id)) {
-        o.color = id.to_string();
-    }
-    if let Some(px) = saved.get("thickness").and_then(Value::as_f64).map(|px| px as f32).filter(|px| crate::vector_ui::PATH_THICKNESS.contains(px)) {
-        o.thickness = px;
-    }
-}
-
-/// View › Extras, Show and Snap To, and the Path Options, as remembered across restarts
-/// (`Preferences::view_extras`): only what differs from the defaults, so a default changed in a
-/// later release still reaches users who never touched that item. `Null` when nothing differs.
+/// View › Extras, Show and Snap To as remembered across restarts (`Preferences::view_extras`):
+/// only what differs from the defaults, so a default changed in a later release still reaches
+/// users who never touched that item. `Null` when nothing differs.
 fn remembered(app: &PhotocraftApp) -> Value {
     let (v, e, def) = (&app.ui.view, &app.ui.extras, crate::state::Extras::default());
     let mut m = Map::new();
@@ -171,14 +106,11 @@ fn remembered(app: &PhotocraftApp) -> Value {
     if let Some(snap) = changed_flags(v.snap_to, SnapTo::default(), &SNAP_KEYS, snap_slot) {
         m.insert("snapTo".into(), snap);
     }
-    if let Some(paths) = changed_path_options(&v.path_options) {
-        m.insert("pathOptions".into(), paths);
-    }
     if m.is_empty() { Value::Null } else { Value::Object(m) }
 }
 
-/// Remember View › Extras, Show and Snap To and the Path Options in the preferences once the
-/// user lets go of the pointer (#3762). Cheap: a small JSON compare per frame. Run every frame, so items set by the
+/// Remember View › Extras, Show and Snap To in the preferences once the user lets go of the
+/// pointer (#3762). Cheap: a small JSON compare per frame. Run every frame, so items set by the
 /// control channel or the Show Extras Options dialog are remembered too.
 pub fn persist(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if ctx.input(|i| i.pointer.any_down()) {
@@ -190,9 +122,8 @@ pub fn persist(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
-/// Restore the remembered View › Extras, Show and Snap To items and the Path Options at launch.
-/// A hand-edited file can't break them: an unknown key or a value that isn't a boolean (for the
-/// Path Options, a valid colour or thickness) keeps its default.
+/// Restore the remembered View › Extras, Show and Snap To items at launch. A hand-edited file
+/// can't break them: an unknown key or a value that isn't a boolean keeps its default.
 pub fn restore(app: &mut PhotocraftApp) {
     let saved = app.session.prefs().view_extras.clone();
     if !saved.is_null() && !saved.is_object() {
@@ -221,44 +152,5 @@ pub fn restore(app: &mut PhotocraftApp) {
         if let (Some(slot), Some(on)) = (snap_slot(&mut app.ui.view.snap_to, k), v.as_bool()) {
             *slot = on;
         }
-    }
-    if let Some(paths) = saved.get("pathOptions") {
-        restore_path_options(&mut app.ui.view.path_options, paths);
-    }
-}
-
-/// Window › <panel>: (panel, dock tab) for panels that live as tabs of a dock card.
-pub(super) fn panel_tab(app: &PhotocraftApp, id: &str) -> Option<(&'static str, usize)> {
-    let pro = app.ui.theme.is_pro();
-    Some(match id {
-        "window.panel.info" => ("navigator", 2),
-        "window.panel.histogram" => ("navigator", 1),
-        "window.panel.navigator" => ("navigator", 0),
-        "window.panel.actions" => ("history", 1),
-        "window.panel.layerComps" => ("history", 2),
-        "window.panel.history" => ("history", 0),
-        "window.panel.channels" => ("layers", 1),
-        "window.panel.paths" => ("layers", 2),
-        "window.panel.layers" => ("layers", 0),
-        "window.panel.adjustments" => ("properties", 1),
-        "window.panel.properties" => ("properties", 0),
-        // Their own Character | Paragraph group, so Properties stays open (#150).
-        "window.panel.character" | "type.panels.character" => ("character", 0),
-        "window.panel.paragraph" | "type.panels.paragraph" => ("character", 1),
-        "window.panel.swatches" => ("color", usize::from(pro)),
-        "window.panel.color" => ("color", usize::from(!pro)),
-        _ => return None,
-    })
-}
-
-pub(super) fn panel_state<'a>(app: &'a mut PhotocraftApp, panel: &str) -> (&'a mut bool, &'a mut usize) {
-    let (p, t) = (&mut app.ui.panels, &mut app.ui.dock_tabs);
-    match panel {
-        "navigator" => (&mut p.navigator, &mut t.navigator),
-        "history" => (&mut p.history, &mut t.history),
-        "layers" => (&mut p.layers, &mut t.layers),
-        "color" => (&mut p.color, &mut t.color),
-        "character" => (&mut p.character, &mut t.character),
-        _ => (&mut p.properties, &mut t.properties),
     }
 }

@@ -27,20 +27,7 @@ fn edge_texture(edge: usize, vertical: bool) -> Buffer {
 
 fn view(doc: u64, doc_size: [u32; 2], zoom: f32) -> ViewParams {
     let center = [doc_size[0] as f32 / 2.0, doc_size[1] as f32 / 2.0];
-    ViewParams {
-        doc,
-        doc_size,
-        zoom,
-        center,
-        rotation: 0.0,
-        shadow: false,
-        pixel_grid: false,
-        view_key: doc,
-        display: 0,
-        output: 0,
-        hdr: None,
-        offset: [0.0, 0.0],
-    }
+    ViewParams { doc, doc_size, zoom, center, rotation: 0.0, view_key: doc, display: 0, output: 0, hdr: None }
 }
 
 /// One comparison: the same texels as a page reduced by `factor` and at full resolution, both

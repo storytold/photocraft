@@ -1,13 +1,10 @@
 //! #11896: Behind is one of the painting modes, so after Behind a Shift+Alt letter or a
 //! Shift+minus/plus step that sets another mode leaves Behind, in the same one `tools.setBrush`.
-//! With Behind off the keys work as before.
 
-use egui::{Key, Modifiers};
+use craft::ui::runtime::commands::CommandRef;
 use serde_json::{Value, json};
 
 use super::*;
-
-const SHIFT_ALT: Modifiers = Modifiers { alt: true, ctrl: false, shift: true, mac_cmd: false, command: false };
 
 /// A 64 × 64 document with a layer filled 220,30,30, black foreground, the Brush.
 fn app(tool: Tool) -> PhotocraftApp {
@@ -20,23 +17,17 @@ fn app(tool: Tool) -> PhotocraftApp {
     app
 }
 
-/// One key press with `modifiers` through the app's shortcut handling.
-fn key(app: &mut PhotocraftApp, ctx: &egui::Context, key: Key, modifiers: Modifiers) {
-    let raw = egui::RawInput {
-        events: vec![egui::Event::ModifiersChanged(modifiers), egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }],
-        ..Default::default()
-    };
-    ctx.begin_pass(raw);
-    crate::shortcuts::handle(app, ctx);
-    ctx.end_pass().textures_delta.clear();
+/// One blend key command through the module's entry point; every blend key is taken.
+fn fire(app: &mut PhotocraftApp, command: impl Into<CommandRef>) {
+    assert!(fired(app, &test_fired(command.into())));
 }
 
 fn brush(app: &mut PhotocraftApp) -> Value {
     app.run("brush.get", json!({})).unwrap()
 }
 
-fn behind_on(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    key(app, ctx, Key::Q, SHIFT_ALT);
+fn behind_on(app: &mut PhotocraftApp) {
+    fire(app, BlendShortcut::Behind);
     assert_eq!(brush(app)["behind"], true, "Shift+Alt+Q turns Behind on");
 }
 
@@ -53,11 +44,10 @@ fn pixel(app: &PhotocraftApp, x: i32, y: i32) -> [u8; 3] {
 
 #[test]
 fn shift_alt_m_after_behind_multiplies_over_the_pixels() {
-    let ctx = egui::Context::default();
     let mut app = app(Tool::Brush);
-    behind_on(&mut app, &ctx);
+    behind_on(&mut app);
     let n = journal(&app);
-    key(&mut app, &ctx, Key::M, SHIFT_ALT);
+    fire(&mut app, BlendShortcut::Multiply);
     let b = brush(&mut app);
     assert_eq!((b["behind"].clone(), b["mode"].clone()), (json!(false), json!("Multiply")), "{b}");
     assert_eq!(journal(&app), n + 1, "one tools.setBrush");
@@ -68,12 +58,11 @@ fn shift_alt_m_after_behind_multiplies_over_the_pixels() {
 
 #[test]
 fn shift_alt_n_l_and_r_after_behind_leave_it() {
-    let ctx = egui::Context::default();
-    for (letter, mode) in [(Key::N, "Normal"), (Key::L, "HardMix")] {
+    for (letter, mode) in [(BlendShortcut::Normal, "Normal"), (BlendShortcut::HardMix, "HardMix")] {
         let mut app = app(Tool::Brush);
-        behind_on(&mut app, &ctx);
+        behind_on(&mut app);
         let n = journal(&app);
-        key(&mut app, &ctx, letter, SHIFT_ALT);
+        fire(&mut app, letter);
         let b = brush(&mut app);
         assert_eq!(b["behind"], false, "{letter:?}: {b}");
         assert_eq!(b["mode"], json!(mode), "{letter:?}: {b}");
@@ -81,42 +70,27 @@ fn shift_alt_n_l_and_r_after_behind_leave_it() {
     }
     // Clear: Behind off and Clear on.
     let mut app = app(Tool::Brush);
-    behind_on(&mut app, &ctx);
+    behind_on(&mut app);
     let n = journal(&app);
-    key(&mut app, &ctx, Key::R, SHIFT_ALT);
+    fire(&mut app, BlendShortcut::Clear);
     assert_eq!(brush(&mut app)["behind"], false);
     assert!(app.ui.tool_options.brush_clear, "Clear on");
     assert_eq!(journal(&app), n + 1, "one tools.setBrush");
     // The Pencil too.
     let mut app = self::app(Tool::Pencil);
-    behind_on(&mut app, &ctx);
-    key(&mut app, &ctx, Key::M, SHIFT_ALT);
+    behind_on(&mut app);
+    fire(&mut app, BlendShortcut::Multiply);
     assert_eq!(brush(&mut app)["behind"], false);
 }
 
 #[test]
 fn a_shift_step_after_behind_leaves_it() {
-    let ctx = egui::Context::default();
-    for step in [Key::Minus, Key::Plus] {
+    for step in [BlendStep::Previous, BlendStep::Next] {
         let mut app = app(Tool::Brush);
-        behind_on(&mut app, &ctx);
+        behind_on(&mut app);
         let n = journal(&app);
-        key(&mut app, &ctx, step, Modifiers::SHIFT);
+        fire(&mut app, step);
         assert_eq!(brush(&mut app)["behind"], false, "{step:?}");
         assert_eq!(journal(&app), n + 1, "{step:?}: one tools.setBrush");
     }
-}
-
-#[test]
-fn with_behind_off_the_keys_send_what_they_did() {
-    let ctx = egui::Context::default();
-    let mut app = app(Tool::Brush);
-    key(&mut app, &ctx, Key::M, SHIFT_ALT);
-    let (id, params) = app.session.journal.last().cloned().unwrap();
-    assert_eq!((id.as_str(), params), ("tools.setBrush", json!({"brush": {"mode": "Multiply"}})), "only the mode, as before");
-    // Clear with Behind off sends nothing, as before (Clear is the options' flag).
-    let n = journal(&app);
-    key(&mut app, &ctx, Key::R, SHIFT_ALT);
-    assert_eq!(journal(&app), n);
-    assert!(app.ui.tool_options.brush_clear);
 }
