@@ -45,10 +45,12 @@ fn vectorcraft_place_shows_import_warnings_from_bytes_and_commands() {
             app.run("actions.stop", json!({})).unwrap();
             app.ui.notices.clear();
             app.ui.status.clear();
+            app.ui.status_error = false;
             let played = app.run("actions.play", json!({"action": 0})).unwrap();
             assert!(played.get("failed").is_none(), "{played}");
             assert!(app.ui.notices.iter().any(|n| n.lines.iter().any(|line| line.contains("2 artboards"))));
             assert!(app.ui.status.contains("2 artboards"), "{}", app.ui.status);
+            assert!(app.ui.status_error, "{}", app.ui.status);
         }
     }
     std::fs::remove_dir_all(dir).unwrap();

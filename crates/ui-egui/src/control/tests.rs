@@ -73,6 +73,8 @@ fn action_placement_over_control_replaces_a_stale_error_with_its_warning() {
         let reply = call(&mut app, &egui::Context::default(), "engine.execute", json!({"command": "actions.play", "params": {"action": "Place"}}));
         assert_eq!(reply["ok"], true, "{reply}");
         assert!(app.ui.status.contains("2 artboards"), "{}", app.ui.status);
+        let label = if command == "file.placeLinked" { "Place Linked" } else { "Place Embedded" };
+        assert!(app.ui.status.starts_with(label), "{}", app.ui.status);
         assert!(!app.ui.status.contains("earlier command"));
         assert!(app.ui.status_error);
         assert!(app.ui.notices.iter().any(|n| n.lines.iter().any(|line| line.contains("2 artboards"))));
