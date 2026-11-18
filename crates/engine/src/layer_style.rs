@@ -2,6 +2,7 @@
 
 use photocraft_color::{BlendMode, Color};
 use photocraft_doc::adjust::CurvePoint;
+use photocraft_doc::effects::PATTERN_SCALE_RANGE;
 use photocraft_doc::{
     Bevel, BevelStyle, BevelTechnique, Contour, Effect, FxCommon, FxPaint, Glow, GlowSource, GlowTechnique, Gradient, GradientStyle, Satin, Shadow, StrokeFx,
     StrokePosition,
@@ -47,6 +48,9 @@ fn color_of(p: &Value, k: &str) -> Option<Color> {
             let h = |i: usize| s.get(i..i + 2).and_then(|x| u8::from_str_radix(x, 16).ok()).map_or(0.0, |v| f32::from(v) / 255.0);
             (s.len() >= 6).then_some(Color::rgb(h(0), h(2), h(4)))
         }
+        Some(v @ Value::Object(_)) => serde_json::from_value::<Color>(v.clone())
+            .ok()
+            .filter(|c| c.c.iter().all(|v| v.is_finite()) && c.alpha.is_finite() && (0.0..=1.0).contains(&c.alpha)),
         _ => None,
     }
 }
@@ -66,15 +70,77 @@ fn gradient_stops(p: &Value, from: Color, to: Color) -> Vec<(f32, Color)> {
         None => stops,
     }
 }
+/// The gradient of a stroke or overlay's params. Bad `stops` are ignored here, as bad values of
+/// any other key are; the commands refuse them first ([`check_gradient_params`]).
 fn gradient(p: &Value) -> Gradient {
+    let stops = match stops_param(p, "layer.layerStyle").ok().flatten() {
+        Some(stops) => stops,
+        None => gradient_stops(p, color(p, "from", [0.0; 3]), color(p, "to", [1.0; 3])),
+    };
     Gradient {
-        stops: gradient_stops(p, color(p, "from", [0.0; 3]), color(p, "to", [1.0; 3])),
+        stops,
+        opacity_stops: opacity_stops_param(p, "layer.layerStyle").ok().flatten().unwrap_or_default(),
         style: gradient_style(p.get("style").and_then(Value::as_str).unwrap_or("linear")),
         angle: f(p, "angle", 90.0),
         scale: (f(p, "scale", 100.0) / 100.0).clamp(0.1, 1.5),
         reverse: b(p, "reverse", false),
         ..Gradient::default()
     }
+}
+
+/// `Err` when `stops` or `opacityStops` are present but malformed, so a command refuses them
+/// instead of silently keeping the old gradient.
+pub fn check_gradient_params(p: &Value, cmd: &str) -> Result<()> {
+    stops_param(p, cmd)?;
+    opacity_stops_param(p, cmd)?;
+    Ok(())
+}
+
+/// Most stops a gradient parameter may carry.
+const MAX_STOPS: usize = 256;
+
+/// Explicit colour stops (#5177): `"stops": [[position 0..1, "#rrggbb" | [r, g, b]], …]`, at
+/// least 2 and at most [`MAX_STOPS`], returned sorted by position. `None` without the key.
+fn stops_param(p: &Value, cmd: &str) -> Result<Option<Vec<(f32, Color)>>> {
+    let Some(v) = p.get("stops") else { return Ok(None) };
+    let bad = |msg: String| EngineError::BadParams { cmd: cmd.into(), msg };
+    let a = v.as_array().ok_or_else(|| bad("\"stops\" must be an array of [position, colour]".into()))?;
+    if a.len() < 2 {
+        return Err(bad("\"stops\" needs at least 2 stops".into()));
+    }
+    if a.len() > MAX_STOPS {
+        return Err(bad(format!("\"stops\": at most {MAX_STOPS} stops")));
+    }
+    let mut stops = Vec::with_capacity(a.len());
+    for (i, s) in a.iter().enumerate() {
+        let t = s.get(0).and_then(Value::as_f64).filter(|t| t.is_finite()).ok_or_else(|| bad(format!("\"stops\"[{i}] must be [position 0..1, colour]")))?;
+        let c = s.get(1).and_then(|c| color_of(&json!({"c": c}), "c")).ok_or_else(|| bad(format!("\"stops\"[{i}]: no colour (\"#rrggbb\" or [r, g, b])")))?;
+        stops.push((t.clamp(0.0, 1.0) as f32, c));
+    }
+    stops.sort_by(|a, b| a.0.total_cmp(&b.0));
+    Ok(Some(stops))
+}
+
+/// Explicit transparency stops: `"opacityStops": [[position 0..1, opacity 0..100], …]`; an empty
+/// array means fully opaque. `None` without the key.
+fn opacity_stops_param(p: &Value, cmd: &str) -> Result<Option<Vec<(f32, f32)>>> {
+    let Some(v) = p.get("opacityStops") else { return Ok(None) };
+    let bad = |msg: String| EngineError::BadParams { cmd: cmd.into(), msg };
+    let a = v.as_array().ok_or_else(|| bad("\"opacityStops\" must be an array of [position, opacity]".into()))?;
+    if a.len() > MAX_STOPS {
+        return Err(bad(format!("\"opacityStops\": at most {MAX_STOPS} stops")));
+    }
+    if a.len() == 1 {
+        return Err(bad("\"opacityStops\" needs at least 2 stops (or none)".into()));
+    }
+    let mut stops = Vec::with_capacity(a.len());
+    for (i, s) in a.iter().enumerate() {
+        let num = |k: usize| s.get(k).and_then(Value::as_f64).filter(|x| x.is_finite());
+        let (t, o) = num(0).zip(num(1)).ok_or_else(|| bad(format!("\"opacityStops\"[{i}] must be [position 0..1, opacity 0..100]")))?;
+        stops.push((t.clamp(0.0, 1.0) as f32, (o / 100.0).clamp(0.0, 1.0) as f32));
+    }
+    stops.sort_by(|a, b| a.0.total_cmp(&b.0));
+    Ok(Some(stops))
 }
 
 /// Factory defaults for each effect kind, in the command's parameter units
@@ -446,7 +512,7 @@ pub fn contour_from_param(v: &Value) -> Option<Contour> {
 /// The contours of an `.shc` contour preset file (Contour Editor › Load…), as `contour` params.
 /// Points are rescaled from the file's `0..=255` levels; unusable curves are skipped.
 pub fn contours_from_shc(bytes: &[u8]) -> Result<Vec<Value>> {
-    let file = photocraft_psd::shc::parse(bytes).map_err(|e| EngineError::Other(format!("not a contour file: {e}")))?;
+    let file = craft_psd::shc::parse(bytes).map_err(|e| EngineError::Other(format!("not a contour file: {e}")))?;
     Ok(file
         .into_iter()
         .filter_map(|c| {
@@ -467,7 +533,7 @@ pub fn contour_to_shc(contour: &Contour) -> Result<Vec<u8>> {
 
 /// An `.shc` file holding every contour of `list` (Save Contours…).
 pub fn contour_to_shc_all(list: &[&Contour]) -> Result<Vec<u8>> {
-    let file: Vec<photocraft_psd::shc::ShcContour> = list
+    let file: Vec<craft_psd::shc::ShcContour> = list
         .iter()
         .map(|contour| {
             let (name, points) = match contour {
@@ -477,12 +543,12 @@ pub fn contour_to_shc_all(list: &[&Contour]) -> Result<Vec<u8>> {
             let points = points
                 .iter()
                 .enumerate()
-                .map(|(i, p)| photocraft_psd::shc::ShcPoint { input: p.input * 255.0, output: p.output * 255.0, continuous: !contour.is_corner(i) })
+                .map(|(i, p)| craft_psd::shc::ShcPoint { input: p.input * 255.0, output: p.output * 255.0, continuous: !contour.is_corner(i) })
                 .collect();
-            photocraft_psd::shc::ShcContour { name, points }
+            craft_psd::shc::ShcContour { name, points }
         })
         .collect();
-    photocraft_psd::shc::write(&file).map_err(|e| EngineError::Other(format!("can't write the contour: {e}")))
+    craft_psd::shc::write(&file).map_err(|e| EngineError::Other(format!("can't write the contour: {e}")))
 }
 
 /// An effect of `kind` with its factory settings (before params are applied).
@@ -572,11 +638,18 @@ fn fresh_effect(kind: &str) -> Option<Effect> {
     })
 }
 
-/// Edits an existing gradient in place: only the end colours and geometry.
-/// Intermediate stops, opacity stops, alignment and offset survive a round trip.
+/// Edits an existing gradient in place: explicit `stops` / `opacityStops` replace the lists;
+/// otherwise only the end colours and geometry change, and intermediate stops, opacity stops,
+/// alignment and offset survive a round trip.
 fn overlay_gradient(g: &mut Gradient, p: &Value) {
+    if let Some(stops) = stops_param(p, "layer.layerStyle").ok().flatten() {
+        g.stops = stops;
+    }
+    if let Some(os) = opacity_stops_param(p, "layer.layerStyle").ok().flatten() {
+        g.opacity_stops = os;
+    }
     // A method rebuilds the gradient from its end colours (the stops between are the old curve).
-    if p.get("method").and_then(Value::as_str).is_some_and(|m| photocraft_io::GradientMethod::from_name(m).is_some()) {
+    if p.get("stops").is_none() && p.get("method").and_then(Value::as_str).is_some_and(|m| photocraft_io::GradientMethod::from_name(m).is_some()) {
         let ends = (g.stops.first().map(|s| s.1), g.stops.last().map(|s| s.1));
         let from = color_of(p, "from").or(ends.0).unwrap_or(Color::BLACK);
         let to = color_of(p, "to").or(ends.1).unwrap_or(Color::WHITE);
@@ -603,6 +676,15 @@ fn overlay_gradient(g: &mut Gradient, p: &Value) {
     }
     if let Some(x) = b_of(p, "reverse") {
         g.reverse = x;
+    }
+    // The gradient's centre as a fraction of the layer's bounds, `[x, y]` (0: centred); a drag on
+    // the image with the Layer Style dialog on the page moves it (#10763).
+    if let Some(a) = p.get("offset").and_then(Value::as_array)
+        && let (Some(x), Some(y)) = (a.first().and_then(Value::as_f64), a.get(1).and_then(Value::as_f64))
+        && x.is_finite()
+        && y.is_finite()
+    {
+        g.offset = (x.clamp(-4.0, 4.0) as f32, y.clamp(-4.0, 4.0) as f32);
     }
 }
 
@@ -708,7 +790,7 @@ fn overlay_stroke(s: &mut StrokeFx, p: &Value) {
         };
     }
     overlay_bool(p, "overprint", &mut s.overprint);
-    if p.get("from").is_some() {
+    if p.get("from").is_some() || p.get("stops").is_some() {
         s.paint = FxPaint::Gradient(gradient(p));
     } else if let Some(c) = color_of(p, "color") {
         s.paint = FxPaint::Color(c);
@@ -723,7 +805,7 @@ fn overlay_pattern(fx: &mut Effect, p: &Value) {
         *id = String::new();
     }
     if let Some(x) = f_of(p, "scale") {
-        *scale = (x / 100.0).clamp(0.01, 10.0);
+        *scale = (x / 100.0).clamp(PATTERN_SCALE_RANGE.0, PATTERN_SCALE_RANGE.1);
     }
     if let Some(x) = f_of(p, "angle") {
         *angle = x;
@@ -831,7 +913,7 @@ fn overlay_bevel(bv: &mut Bevel, p: &Value) {
         bv.texture = Some(photocraft_doc::BevelTexture {
             name: t.to_string(),
             id: t.to_string(),
-            scale: (f(p, "textureScale", 100.0) / 100.0).clamp(0.01, 10.0),
+            scale: (f(p, "textureScale", 100.0) / 100.0).clamp(PATTERN_SCALE_RANGE.0, PATTERN_SCALE_RANGE.1),
             depth: (f(p, "textureDepth", 100.0) / 100.0).clamp(-10.0, 10.0),
             invert: b(p, "textureInvert", false),
             link: b(p, "textureLink", true),
@@ -916,7 +998,7 @@ fn replace_effects(s: &mut Session, p: &Value) -> Result<Value> {
     let mut pats = Vec::new();
     for e in entries {
         let kind = e.get("kind").and_then(Value::as_str).ok_or_else(|| bad(CMD, "each effect needs a `kind` string"))?;
-        let params = match e.get("params") {
+        let mut params = match e.get("params") {
             None | Some(Value::Null) => json!({}),
             Some(Value::Object(_)) => e.get("params").cloned().unwrap_or_default(),
             Some(_) => return Err(bad(CMD, "`params` must be an object")),
@@ -927,10 +1009,27 @@ fn replace_effects(s: &mut Session, p: &Value) -> Result<Value> {
                 if kind_of(&fx) != kind {
                     return Err(bad(CMD, format!("effect snapshot is a {}, not `{kind}`", kind_of(&fx))));
                 }
+                if let Effect::GradientOverlay { gradient, interpolation, .. } = &fx {
+                    let stops = interpolation.as_ref().map_or(&gradient.stops, |s| &s.stops);
+                    if exact_stops(&params).as_ref() == Some(stops)
+                        && let Some(o) = params.as_object_mut()
+                    {
+                        o.remove("stops");
+                    }
+                    if opacity_stops_param(&params, CMD).ok().flatten().as_ref() == Some(&gradient.opacity_stops)
+                        && let Some(o) = params.as_object_mut()
+                    {
+                        o.remove("opacityStops");
+                    }
+                }
+                check_gradient_params(&params, CMD)?;
                 overlay_effect(&mut fx, &params);
                 fx
             }
-            None => effect_from_params(kind, &params).ok_or_else(|| bad(CMD, format!("unknown effect {kind}")))?,
+            None => {
+                check_gradient_params(&params, CMD)?;
+                effect_from_params(kind, &params).ok_or_else(|| bad(CMD, format!("unknown effect {kind}")))?
+            }
         };
         let (fx, pat) = crate::pattern_cmds::resolve_effect(s, fx)?;
         if let Some(pat) = pat {
@@ -960,6 +1059,7 @@ fn replace_effects(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn set_effect(s: &mut Session, p: &Value, kind: &str) -> Result<Value> {
     crate::commands::check_f32_values(&format!("layer.layerStyle.{kind}"), p)?;
+    check_gradient_params(p, &format!("layer.layerStyle.{kind}"))?;
     let fx = effect_from_params(kind, p).ok_or_else(|| EngineError::Other(format!("unknown effect {kind}")))?;
     let (fx, pattern) = crate::pattern_cmds::resolve_effect(s, fx)?;
     let label = format!("Layer Style: {}", fx.label());
@@ -1068,7 +1168,7 @@ pub fn specs() -> Vec<CommandSpec> {
         style_cmd!(
             "gradientOverlay",
             "Gradient Overlay…",
-            r##"{"from":"#rrggbb","to":"#rrggbb","method":"classic|perceptual|linear|smooth"? (Photoshop's interpolation; omitted on new effects: straight stops; edits retain the recorded method),"smoothness":0..100=100,"style":"linear|radial|angle|reflected|diamond","angle":deg=90,"scale":10..150=100,"reverse":bool,"opacity":0..100,"blend":str,"add":bool}"##
+            r##"{"from":"#rrggbb","to":"#rrggbb","stops":[[0..1,"#rrggbb"],.]? (2..256 source stops),"opacityStops":[[0..1,0..100],.]?,"method":"classic|perceptual|linear|smooth"? (Photoshop's interpolation; omitted on new effects: straight stops; edits retain the recorded method),"smoothness":0..100=100,"style":"linear|radial|angle|reflected|diamond","angle":deg=90,"scale":10..150=100,"reverse":bool,"opacity":0..100,"blend":str,"add":bool}"##
         ),
         style_cmd!(
             "patternOverlay",
@@ -1167,3 +1267,15 @@ fn delete_effect(s: &mut Session, p: &Value, effect: &Value) -> Result<Value> {
 
 #[cfg(test)]
 mod tests;
+
+fn exact_stops(p: &Value) -> Option<Vec<(f32, Color)>> {
+    p.get("stops")?
+        .as_array()?
+        .iter()
+        .map(|s| {
+            let t = s.get(0)?.as_f64()? as f32;
+            let color = color_of(&json!({"c":s.get(1)?}), "c")?;
+            Some((t, color))
+        })
+        .collect()
+}

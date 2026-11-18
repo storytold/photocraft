@@ -6,10 +6,10 @@
 
 use std::sync::Arc;
 
+use craft_cms::Intent;
 use photocraft_algo::transform::Interp;
-use photocraft_cms::Intent;
 use photocraft_color::BlendMode;
-use photocraft_doc::{Document, Group, Layer, LayerContent, LayerId, Metadata, SmartObject, SmartSource};
+use photocraft_doc::{Document, Group, Knockout, Layer, LayerContent, LayerId, Metadata, SmartObject, SmartSource};
 use serde_json::{Value, json};
 
 use super::{authorize_source, authorized_source_bytes, decode_source, detach_psd, other, placement, shift_layer, smart};
@@ -89,6 +89,12 @@ fn place(s: &Session, doc: &Document, sm: &SmartObject, layers: &mut [Layer]) ->
     }
     let h = placement(sm);
     let affine = sm.perspective.is_none().then_some(sm.transform);
+    if let SmartSource::Embedded { bytes, .. } = &sm.source
+        && photocraft_io::svg::is_svg(bytes)
+        && let Some(transform) = affine
+    {
+        check_destination_shapes(layers, transform, doc.size, doc.pixel_format().bytes_per_pixel()).map_err(other)?;
+    }
     for l in layers {
         released(l, |l| crate::transform_cmds::transform_layer(None, photocraft_doc::Locks::default(), l, &h, affine, Interp::Bicubic))?;
         crate::transform_cmds::refresh_text(doc, l);
@@ -125,7 +131,8 @@ fn released(l: &mut Layer, f: impl FnOnce(&mut Layer) -> Result<()>) -> Result<(
 /// Whether the smart layer's own properties fold into its one unpacked layer `c` without
 /// changing the look: nothing on the smart layer acts on `c`'s composite (masks, style, fill
 /// opacity, Blend If, channel exclusions), and `c` blends normally and doesn't look at what's
-/// beneath it (alone in the smart object, it lands on transparency).
+/// beneath it (alone in the smart object, it lands on transparency; a knockout there stops at
+/// the smart object's bottom instead of punching through to the Background, #9753).
 fn foldable(so: &Layer, c: &Layer) -> bool {
     so.mask.is_none()
         && so.vector_mask.is_none()
@@ -137,6 +144,7 @@ fn foldable(so: &Layer, c: &Layer) -> bool {
         && matches!(c.blend, BlendMode::Normal | BlendMode::PassThrough)
         && c.blend_if.is_default()
         && c.excluded_channels == 0
+        && c.advanced.knockout == Knockout::None
 }
 
 /// What replaces smart layer `so`: its one unpacked layer with `so`'s properties folded in, or a
@@ -185,4 +193,33 @@ pub(super) fn convert_to_layers(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(())
     })?;
     Ok(json!({"layer": new_id.0, "group": group, "discardedSmartFilters": discarded}))
+}
+
+/// Preflight transformed SVG shape caches before an operation refreshes their raster caches:
+/// together they may take 1 GiB in the document's pixel format, the budget the SVG import
+/// itself keeps its layer caches under (several full-canvas shapes in a 24 MP document fit).
+fn check_destination_shapes(
+    layers: &[Layer],
+    transform: photocraft_geom::Affine,
+    size: photocraft_geom::Size,
+    bytes_per_pixel: usize,
+) -> std::result::Result<(), String> {
+    const MAX_CACHE_BYTES: u64 = 1 << 30;
+    let max_pixels = MAX_CACHE_BYTES / u64::try_from(bytes_per_pixel.max(1)).unwrap_or(u64::MAX);
+    let canvas = photocraft_geom::Rect::from_size(size);
+    let mut pixels = 0u64;
+    let mut pending: Vec<&Layer> = layers.iter().collect();
+    while let Some(layer) = pending.pop() {
+        pending.extend(layer.children().into_iter().flatten());
+        let LayerContent::Shape(shape) = &layer.content else { continue };
+        let mut shape = shape.clone();
+        crate::vector_cmds::transform_shape(&mut shape, &transform);
+        let compiled = photocraft_vector::CompiledShape::new(&shape, photocraft_vector::DEFAULT_TOLERANCE, canvas);
+        let area = compiled.bounds().map_or(0, |bounds| bounds.intersect(&canvas).size().area());
+        pixels = pixels.checked_add(area).ok_or("The unpacked shape caches exceed the smart-object cache budget")?;
+        if pixels > max_pixels {
+            return Err("The unpacked shape caches exceed the smart-object cache budget".into());
+        }
+    }
+    Ok(())
 }
