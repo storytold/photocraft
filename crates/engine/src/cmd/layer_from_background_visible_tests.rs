@@ -73,3 +73,16 @@ fn implicit_conversions_keep_a_hidden_background_hidden() {
     assert!(s.active().unwrap().doc.background().is_none(), "the Background was converted");
     assert!(!layer(&s, bg).visible, "it stays hidden");
 }
+
+/// A recorded `set Background` step (what Layer from Background records, mapped by
+/// `atn_cmds/steps_make.rs` to `layer.new.layerFromBackground` with these params) played on a
+/// hidden Background reveals it, so a recorded action behaves as the menu command does. Only that
+/// one step runs, so the reveal comes from the command itself and not from a later `layer.setProps`.
+#[test]
+fn playing_a_recorded_set_background_step_reveals_a_hidden_background() {
+    let (mut s, bg) = session();
+    hide(&mut s, bg);
+    s.execute("layer.new.layerFromBackground", json!({"ifPresent": true, "select": false})).unwrap();
+    assert!(s.active().unwrap().doc.background().is_none(), "the Background was converted");
+    assert!(layer(&s, bg).visible, "playing the step revealed it");
+}

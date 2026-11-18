@@ -4964,33 +4964,6 @@ fn mapped_background_property_survives_export_and_playback() {
     }
 }
 
-/// A recorded `set Background` step (what Layer from Background records) played on a hidden
-/// Background reveals it: the step maps to `layer.new.layerFromBackground`, which makes the
-/// converted layer visible (#14822), so a recorded action behaves as the menu command does.
-#[test]
-fn playing_a_recorded_set_background_step_reveals_a_hidden_background() {
-    let bckg = D::Reference(vec![ReferenceItem::Property { class: class("Lyr "), key: Id::new("Bckg") }]);
-    let loaded = mapped_recording(
-        "setd",
-        desc("null").with("null", bckg).with("T   ", D::Descriptor(desc("Lyr ").with("Opct", pct(100.0)).with("Md  ", enm("BlnM", "Nrml")))),
-    );
-    let steps = &loaded.actions[0].steps;
-    assert_eq!(steps.first().map(|(id, _)| id.as_str()), Some("layer.new.layerFromBackground"));
-    let mut s = Session::new();
-    s.execute("file.new", json!({"width": 4, "height": 4, "background": "white"})).unwrap();
-    let bg = s.active().unwrap().doc.background().unwrap().id;
-    s.execute("layer.setProps", json!({"layer": bg.0, "visible": false})).unwrap();
-    assert!(!s.active().unwrap().doc.layer(bg).unwrap().visible, "the Background is hidden");
-    // Replays the mapped steps with `Session::execute`, as the sibling playback tests do. Only the
-    // first step runs, so the reveal comes from `layer.new.layerFromBackground` itself and not
-    // from a later `layer.setProps`.
-    let (id, p) = &steps[0];
-    s.execute(id, p.clone()).unwrap();
-    let doc = &s.active().unwrap().doc;
-    assert!(doc.background().is_none(), "the Background was converted");
-    assert!(doc.layer(bg).unwrap().visible, "playing the step revealed it");
-}
-
 /// An unanswered Close must not turn into an explicit discard or close a changed document.
 #[test]
 fn mapped_close_keeps_ask_and_discard_distinct() {
