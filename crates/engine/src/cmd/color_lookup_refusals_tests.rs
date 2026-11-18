@@ -166,11 +166,13 @@ fn an_explicit_alpha_channel_target_ignores_an_empty_active_layer() {
     s.execute("channel.target", json!({"channel": "composite"})).unwrap();
     let empty = s.execute("layer.new.layer", json!({"name": "empty"})).unwrap()["layer"].as_u64().unwrap();
     let past = s.active().unwrap().history.past_len();
+    let before_channel = s.active().unwrap().doc.channels[0].surface.sample_channel(16, 12, 0);
     s.execute("image.adjustments.colorLookup", json!({"lut": "warm", "target": {"channel": 0}}))
         .expect("a step naming an alpha channel runs although the active layer is empty");
     assert_eq!(s.active().unwrap().history.past_len(), past + 1, "one history step");
     let st = s.active().unwrap();
     assert!(st.doc.layer(photocraft_doc::LayerId(empty)).unwrap().surface().unwrap().content_bounds().is_empty(), "the empty layer was not the edit target");
+    assert_ne!(st.doc.channels[0].surface.sample_channel(16, 12, 0), before_channel, "the warm LUT moves the filled channel's value: the step really wrote it");
     assert_eq!(st.doc.channels[0].surface.content_bounds(), st.doc.bounds(), "the alpha channel is what the step wrote");
 }
 
@@ -210,11 +212,13 @@ fn a_channel_step_naming_a_hidden_layer_reaches_the_channel_edit() {
     let step = json!({"lut": "warm", "layer": {"background": true}, "target": {"channel": 0}});
     assert!(s.is_enabled_with("image.adjustments.colorLookup", &step), "the availability query says the step can run");
     let (before_bg, before_top, past) = (pixel(&s, bg), pixel(&s, top), s.active().unwrap().history.past_len());
+    let before_channel = s.active().unwrap().doc.channels[0].surface.sample_channel(16, 12, 0);
     s.execute("image.adjustments.colorLookup", step).expect("a channel step naming a hidden layer runs, as it did on main");
     assert_eq!(s.active().unwrap().history.past_len(), past + 1, "one history step");
     assert_eq!(pixel(&s, bg), before_bg, "the hidden layer named in the params stays untouched");
     assert_eq!(pixel(&s, top), before_top, "the visible active layer stays untouched: the step edits the channel");
     let st = s.active().unwrap();
+    assert_ne!(st.doc.channels[0].surface.sample_channel(16, 12, 0), before_channel, "the warm LUT moves the filled channel's value: the step really wrote it");
     assert_eq!(st.doc.channels[0].surface.content_bounds(), st.doc.bounds(), "the alpha channel is what the step wrote");
 }
 
@@ -237,6 +241,75 @@ fn a_quick_mask_step_naming_a_hidden_layer_reaches_the_channel_path() {
     };
     assert_eq!(got, "not in Quick Mask mode", "the channel path answers, not the hidden-layer refusal");
     assert_eq!(pixel(&s, bg), before, "the hidden layer named in the params stays untouched");
+}
+
+#[test]
+fn a_step_naming_a_hidden_layer_edits_a_real_quick_mask() {
+    // Review #14485 follow-up: the same shape with an actual Quick Mask (entered with a
+    // selection). The step names the hidden Background as `layer` and the Quick Mask as its
+    // target, so the mask is what the edit writes: its value moves where the selection was,
+    // and the hidden named layer (and the visible one) stay untouched.
+    let (mut s, bg, top) = bg_and_top(true);
+    s.execute("layer.hideLayers", json!({"layer": bg})).unwrap();
+    s.execute("select.rect", json!({"x": 4, "y": 4, "width": 16, "height": 12, "mode": "replace"})).unwrap();
+    s.execute("select.editInQuickMaskMode", json!({"on": true})).unwrap();
+    let step = json!({"lut": "warm", "layer": {"background": true}, "target": "quickMask"});
+    assert!(s.is_enabled_with("image.adjustments.colorLookup", &step), "with a real Quick Mask the step is available too");
+    let (before_bg, before_top, past) = (pixel(&s, bg), pixel(&s, top), s.active().unwrap().history.past_len());
+    let before_mask = s.active().unwrap().doc.quick_mask.as_ref().expect("Quick Mask mode is on").surface.sample_channel(16, 12, 0);
+    s.execute("image.adjustments.colorLookup", step).expect("the step edits the Quick Mask, as on main");
+    assert_eq!(s.active().unwrap().history.past_len(), past + 1, "one history step");
+    let st = s.active().unwrap();
+    assert_ne!(st.doc.quick_mask.as_ref().unwrap().surface.sample_channel(16, 12, 0), before_mask, "the Quick Mask is what the step wrote");
+    assert_eq!(pixel(&s, bg), before_bg, "the hidden layer named in the params stays untouched");
+    assert_eq!(pixel(&s, top), before_top, "the visible active layer stays untouched too");
+}
+
+#[test]
+fn a_channel_step_naming_a_missing_group_or_malformed_layer_runs_as_on_main() {
+    // Shape honesty for the owner's decision (#14485): the admission hook ignores the
+    // `"layer"` param for a channel-target step, and upstream/main did the same for ALL of
+    // those shapes (independent review checked at c1f1b4290) - a name no document has, a
+    // group, or a value that is not a layer selector at all: the step edits the channel and
+    // nothing on its path resolves the named value. Pin the three shapes: each runs, writes
+    // the channel, and touches no layer.
+    let (mut s, bg, top) = bg_and_top(true);
+    s.execute("layer.hideLayers", json!({"layer": bg})).unwrap();
+    s.execute("channel.new", json!({"name": "A", "fill": "white"})).unwrap();
+    s.execute("channel.target", json!({"channel": "composite"})).unwrap();
+    let group = s.execute("layer.new.group", json!({"name": "G"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.select", json!({"layer": top})).unwrap();
+    for (case, layer) in [("a missing name", json!("NoSuchLayer")), ("a group", json!(group)), ("a malformed value", json!(true))] {
+        let past = s.active().unwrap().history.past_len();
+        let (before_bg, before_top) = (pixel(&s, bg), pixel(&s, top));
+        let before_channel = s.active().unwrap().doc.channels[0].surface.sample_channel(16, 12, 0);
+        let step = json!({"lut": "warm", "layer": layer, "target": {"channel": 0}});
+        s.execute("image.adjustments.colorLookup", step).unwrap_or_else(|e| panic!("{case}: the step runs, as on main: {e}"));
+        assert_eq!(s.active().unwrap().history.past_len(), past + 1, "{case}: one history step");
+        assert_eq!(pixel(&s, bg), before_bg, "{case}: the hidden Background stays untouched");
+        assert_eq!(pixel(&s, top), before_top, "{case}: the filled active layer stays untouched");
+        assert_ne!(s.active().unwrap().doc.channels[0].surface.sample_channel(16, 12, 0), before_channel, "{case}: the channel is what the run wrote");
+    }
+}
+
+#[test]
+fn precheck_agrees_with_execute_for_a_channel_step_naming_any_layer() {
+    // Shape honesty for the owner's decision (#14485), second half: `Session::precheck`'s
+    // named-layer existence check (what the Actions panel and other precheck callers see)
+    // refused shapes `execute` accepts - a Color Lookup step whose params name a channel
+    // ignores its `"layer"` param at admission, so precheck must ignore it too. Pin the
+    // agreement: all three shapes pass precheck, the availability query and execute alike.
+    let (mut s, _bg, top) = bg_and_top(true);
+    s.execute("channel.new", json!({"name": "A", "fill": "white"})).unwrap();
+    s.execute("channel.target", json!({"channel": "composite"})).unwrap();
+    let group = s.execute("layer.new.group", json!({"name": "G"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.select", json!({"layer": top})).unwrap();
+    for (case, layer) in [("a missing name", json!("NoSuchLayer")), ("a group", json!(group)), ("a malformed value", json!(true))] {
+        let step = json!({"lut": "warm", "layer": layer, "target": {"channel": 0}});
+        s.precheck("image.adjustments.colorLookup", &step).unwrap_or_else(|e| panic!("{case}: precheck refuses a shape execute accepts: {e}"));
+        assert!(s.is_enabled_with("image.adjustments.colorLookup", &step), "{case}: the availability query agrees");
+        s.execute("image.adjustments.colorLookup", step).unwrap_or_else(|e| panic!("{case}: execute runs it: {e}"));
+    }
 }
 
 #[test]

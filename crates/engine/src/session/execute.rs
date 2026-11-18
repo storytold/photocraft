@@ -83,14 +83,26 @@ impl Session {
             crate::group_options::GroupOptions::parse(id, params)?;
         }
         // A command that takes `"layer"` (an id or a name, as it resolves it) fails on one the
-        // document doesn't have.
+        // document doesn't have - except a Color Lookup step whose params name a channel or the
+        // Quick Mask: it never resolves its `"layer"` param (#14485), so precheck must not
+        // refuse a shape `execute` runs - the Actions panel and `execute` then agree.
         if spec.params.contains("\"layer\":id")
+            && !Self::channel_step_ignores_named_layer(id, params)
             && let Some(l) = commands::explicit_layer(self, params)?
             && self.active().is_none_or(|st| st.doc.layer(l).is_none())
         {
             return Err(EngineError::BadParams { cmd: id.to_string(), msg: format!("no layer {}", l.0) });
         }
         self.admit(id, spec, params).map(|_| ())
+    }
+
+    /// The one narrow #14485 owner-decision key, shared by `precheck` and
+    /// `explicit_layer_enabled`: a Color Lookup step whose own params name an alpha channel
+    /// or Quick Mask target never writes the layer its `"layer"` param names, so that layer
+    /// is not resolved, checked or required for it. Raster and mask targets keep the
+    /// named-layer checks.
+    fn channel_step_ignores_named_layer(id: &str, params: &Value) -> bool {
+        id == "image.adjustments.colorLookup" && channel_cmds::is_channel_target(params)
     }
 
     /// What `dispatch` checks once the params are valid and a floating selection has dropped:
@@ -200,7 +212,7 @@ impl Session {
         // edit. Answer `None` so `admit` falls back to the plain precondition on the real active
         // layer, exactly what `is_enabled_with` does; the step then reaches
         // `destructive_adjust`'s channel branch. Raster and mask targets keep the named-layer check.
-        if spec.id == "image.adjustments.colorLookup" && channel_cmds::is_channel_target(params) {
+        if Self::channel_step_ignores_named_layer(spec.id, params) {
             return Ok(None);
         }
         // An ATN group-end index is a valid no-op only for Select. Let that command validate
