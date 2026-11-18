@@ -11,7 +11,7 @@ use crate::state::Tool;
 
 /// The item's test document: a saved path "Path 1", selected in the Paths panel, with a closed
 /// corner square, an open straight line and an open S-curve.
-fn document(tool: Tool) -> PhotocraftApp {
+fn document(tool: Tool) -> Box<PhotocraftApp> {
     let (mut app, _) = setup(tool);
     let path = json!({"subpaths": [
         {"closed": true, "knots": [[100, 300], [300, 300], [300, 500], [100, 500]]},

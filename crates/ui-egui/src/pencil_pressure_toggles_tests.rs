@@ -13,7 +13,7 @@ use crate::theme::AppTheme;
 const OPACITY: &str = "Pressure controls opacity";
 const SIZE: &str = "Pressure controls size";
 
-fn bar(theme: AppTheme) -> Harness<'static, PhotocraftApp> {
+fn bar(theme: AppTheme) -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 100, "background": "white"})).unwrap();
     app.ui.tool = Tool::Pencil;
@@ -27,7 +27,7 @@ fn bar(theme: AppTheme) -> Harness<'static, PhotocraftApp> {
 #[test]
 fn the_toggles_edit_the_pencils_own_flags_and_brush_get_sees_them() {
     let mut h = bar(AppTheme::pro_medium());
-    let flags = |h: &Harness<'static, PhotocraftApp>| (h.state().session.tools.brush.pressure_opacity, h.state().session.tools.brush.pressure_size);
+    let flags = |h: &Harness<'static, Box<PhotocraftApp>>| (h.state().session.tools.brush.pressure_opacity, h.state().session.tools.brush.pressure_size);
     assert_eq!(flags(&h), (false, false), "both off on a fresh Pencil");
     h.get_by_label(OPACITY).click();
     h.run_steps(2);
@@ -42,8 +42,8 @@ fn the_toggles_edit_the_pencils_own_flags_and_brush_get_sees_them() {
 #[test]
 fn the_brush_keeps_its_own_pressure_flags() {
     let mut h = bar(AppTheme::pro_medium());
-    let flags = |h: &Harness<'static, PhotocraftApp>| (h.state().session.tools.brush.pressure_opacity, h.state().session.tools.brush.pressure_size);
-    let toggle = |h: &mut Harness<'static, PhotocraftApp>, label: &str| {
+    let flags = |h: &Harness<'static, Box<PhotocraftApp>>| (h.state().session.tools.brush.pressure_opacity, h.state().session.tools.brush.pressure_size);
+    let toggle = |h: &mut Harness<'static, Box<PhotocraftApp>>, label: &str| {
         h.get_by_label(label).click();
         h.run_steps(2);
     };
@@ -99,7 +99,7 @@ fn the_brush_keeps_its_own_pressure_flags() {
     // And the bar draws that pair, not just stores it.
     // The toggle button, not the tooltip of the same name the pointer resting on the opacity toggle shows. An off
     // toggle button reports no toggled state.
-    let on = |h: &Harness<'static, PhotocraftApp>, label: &str| {
+    let on = |h: &Harness<'static, Box<PhotocraftApp>>, label: &str| {
         h.get_by_role_and_label(egui::accesskit::Role::Button, label).accesskit_node().toggled() == Some(egui::accesskit::Toggled::True)
     };
     assert!(on(&h, OPACITY), "the opacity toggle reads as on");

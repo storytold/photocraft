@@ -15,7 +15,7 @@ use crate::options_bar_mode_wheel_tests::harness;
 use crate::state::Tool;
 
 /// The Clone Stamp in a new document, Sample set to All Layers; `indexed` converts it first.
-fn bar(indexed: bool) -> Harness<'static, PhotocraftApp> {
+fn bar(indexed: bool) -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = harness(Tool::CloneStamp);
     let app = h.state_mut();
     if indexed {
@@ -27,18 +27,18 @@ fn bar(indexed: bool) -> Harness<'static, PhotocraftApp> {
 }
 
 /// The Sample dropdown: the one showing one of its choices.
-fn sample<'a>(h: &'a Harness<'_, PhotocraftApp>) -> Node<'a> {
+fn sample<'a>(h: &'a Harness<'_, Box<PhotocraftApp>>) -> Node<'a> {
     let choices = ["Current Layer", "Current & Below", "All Layers"];
     h.query_all_by_role(Role::ComboBox).find(|n| n.value().is_some_and(|v| choices.contains(&v.as_str()))).expect("the Sample dropdown")
 }
 
 /// The options bar's field or checkbox named `name` ("Opacity:" in the Photoshop-look themes).
-fn control<'a>(h: &'a Harness<'_, PhotocraftApp>, role: Role, name: &str) -> Node<'a> {
+fn control<'a>(h: &'a Harness<'_, Box<PhotocraftApp>>, role: Role, name: &str) -> Node<'a> {
     h.query_all_by_role(role).find(|n| n.accesskit_node().label().is_some_and(|l| l.trim_end_matches(':') == name)).unwrap_or_else(|| panic!("{name}"))
 }
 
 /// An Alt-click for the source, then a drag, through the canvas: the committed stroke's params.
-fn clone_stroke(h: &mut Harness<'_, PhotocraftApp>) -> Value {
+fn clone_stroke(h: &mut Harness<'_, Box<PhotocraftApp>>) -> Value {
     let app = h.state_mut();
     tool_event(app, ToolEvent::Down { x: 40.0, y: 20.0, pressure: 1.0 }, Modifiers::ALT);
     tool_event(app, ToolEvent::Up { x: 40.0, y: 20.0 }, Modifiers::ALT);
@@ -67,7 +67,7 @@ fn a_stroke_in_an_indexed_document_samples_the_current_layer() {
     assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1, "one Clone Stamp state");
 }
 
-fn shows(h: &Harness<'_, PhotocraftApp>, value: &str) -> bool {
+fn shows(h: &Harness<'_, Box<PhotocraftApp>>, value: &str) -> bool {
     h.query_all_by_role(Role::ComboBox).any(|n| n.value().as_deref() == Some(value))
 }
 
