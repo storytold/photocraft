@@ -13,12 +13,12 @@ type Written = Rc<RefCell<Vec<String>>>;
 
 /// An app with an untitled document, whose file dialogs stay open until the test answers them
 /// (`answer`), and whose writer records the paths it wrote.
-fn app() -> (PhotocraftApp, Arc<ScriptedFiles>, Written) {
+fn app() -> (Box<PhotocraftApp>, Arc<ScriptedFiles>, Written) {
     app_with(Arc::new(ScriptedFiles::held()))
 }
 
 /// [`app`] over `files`, for a test whose dialogs answer themselves.
-fn app_with(files: Arc<ScriptedFiles>) -> (PhotocraftApp, Arc<ScriptedFiles>, Written) {
+fn app_with(files: Arc<ScriptedFiles>) -> (Box<PhotocraftApp>, Arc<ScriptedFiles>, Written) {
     let written: Written = Default::default();
     let w = written.clone();
     let services = Services {
@@ -50,11 +50,11 @@ fn chose(path: &str) -> Picked {
     Picked::Paths(vec![PathBuf::from(path)])
 }
 
-/// The file a Save request suggests: its folder and name together.
+/// The file a Save request suggests: its folder and name together (see [`joined`]).
 fn suggested(request: &PickRequest) -> String {
     let name = request.file_name.clone().unwrap_or_default();
     match &request.directory {
-        Some(dir) => dir.join(name).to_string_lossy().into_owned(),
+        Some(dir) => joined(&dir.to_string_lossy(), &name),
         None => name,
     }
 }
@@ -89,7 +89,7 @@ fn pdn_save_requests_a_native_copy_without_overwriting_the_source() {
 
 /// A real flat JPEG import, optionally edited to contain another layer. A filename without a
 /// path is the web/download case; desktop opens also retain their source location.
-fn jpeg_app(path: Option<&str>, layered: bool) -> (PhotocraftApp, Arc<ScriptedFiles>, Written) {
+fn jpeg_app(path: Option<&str>, layered: bool) -> (Box<PhotocraftApp>, Arc<ScriptedFiles>, Written) {
     let (mut app, files, written) = app();
     let bytes = photocraft_io::export(&app.session.active().unwrap().doc, "My image.JPEG", &Default::default()).unwrap().bytes;
     let doc = photocraft_io::import("My image.JPEG", &bytes).unwrap().document;
@@ -589,10 +589,10 @@ fn save_and_export_dialogs_start_beside_the_document() {
     }
 }
 
-/// The path `pick_save` suggests for `name` in `dir` on this platform: it joins with `Path::join`,
-/// which uses `\` on Windows, so the expected values must be built the same way (#2745).
+/// `name` in the folder `dir`, joined with `/` as the tests' paths are written. A Save request
+/// carries its folder and name apart, and `Path::join` would put `\` between them on Windows.
 fn joined(dir: &str, name: &str) -> String {
-    Path::new(dir).join(name).to_string_lossy().into_owned()
+    format!("{}/{name}", dir.trim_end_matches('/'))
 }
 
 /// #1826: after the user navigates a save or export dialog elsewhere, the document's next dialog
@@ -743,7 +743,7 @@ fn an_answer_of_the_wrong_kind_is_an_error_not_a_crash() {
 }
 
 /// The app with a painted layer converted to a smart object and a duplicate instance of it.
-fn smart_app() -> (PhotocraftApp, Arc<ScriptedFiles>, Written, [u64; 2]) {
+fn smart_app() -> (Box<PhotocraftApp>, Arc<ScriptedFiles>, Written, [u64; 2]) {
     let (mut app, files, written) = app();
     app.run("layer.new.layer", json!({})).unwrap();
     app.session
@@ -1253,7 +1253,7 @@ type Qualities = Rc<RefCell<Vec<Option<u8>>>>;
 
 /// [`jpeg_app`] opened from `path` and edited, whose exporter records the JPEG quality of each
 /// save (#2223).
-fn flat_jpeg_app(path: &str) -> (PhotocraftApp, Arc<ScriptedFiles>, Written, Qualities) {
+fn flat_jpeg_app(path: &str) -> (Box<PhotocraftApp>, Arc<ScriptedFiles>, Written, Qualities) {
     let (mut app, files, written) = jpeg_app(Some(path), false);
     let qualities = Qualities::default();
     let q = qualities.clone();
@@ -1428,7 +1428,7 @@ fn a_scripted_quality_survives_the_changed_on_disk_prompt() {
 fn save_a_copy_appends_copy_unless_the_preference_says_not_to() {
     let ctx = egui::Context::default();
     for (off, name) in [(false, "My image copy.psd"), (true, "My image.psd")] {
-        let want = Path::new("/pics").join(name).to_string_lossy().into_owned();
+        let want = joined("/pics", name);
         let (mut app, files, _) = jpeg_app(Some("/pics/My image.JPEG"), false);
         app.run("prefs.set", json!({"path": "fileHandling.doNotAppendCopy", "value": off})).unwrap();
         menus::invoke(&mut app, &ctx, "file.saveACopy", json!({})).unwrap();

@@ -2,7 +2,7 @@ use serde_json::json;
 
 use super::*;
 
-fn app(dpi: f64, depth: u64) -> PhotocraftApp {
+fn app(dpi: f64, depth: u64) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 40, "height": 20, "mode": "grayscale", "depth": depth, "resolution": dpi})).unwrap();
     app

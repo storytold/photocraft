@@ -2,7 +2,7 @@
 use super::*;
 use serde_json::json;
 
-type Harness = egui_kittest::Harness<'static, PhotocraftApp>;
+type Harness = egui_kittest::Harness<'static, Box<PhotocraftApp>>;
 
 /// The CPU-canvas fixture on the offscreen software adapter, or `None` when this machine has no
 /// graphics adapter. Only creating the renderer may be skipped: a failing fixture command or a
@@ -16,7 +16,7 @@ fn harness(size: [u32; 2], background: &str) -> Option<Harness> {
     app.run("select.deselect", json!({})).unwrap();
     // `wgpu()` creates the render state and panics when no adapter is found.
     let builder = std::panic::catch_unwind(|| {
-        egui_kittest::Harness::<PhotocraftApp>::builder().with_size(egui::vec2(1440.0, 900.0)).with_pixels_per_point(1.0).with_max_steps(64).wgpu()
+        egui_kittest::Harness::<Box<PhotocraftApp>>::builder().with_size(egui::vec2(1440.0, 900.0)).with_pixels_per_point(1.0).with_max_steps(64).wgpu()
     })
     .ok()?;
     let mut h = builder.build_eframe(move |cc| {
