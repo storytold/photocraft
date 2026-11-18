@@ -151,6 +151,7 @@ mod open_recent_tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
+    /// Open a real temporary path, verify its recent entry and reopen from that entry after closing the original tab.
     fn opening_a_file_records_it_as_recent() {
         use photocraft_color::{ColorMode, SampleType};
         use photocraft_geom::Size;

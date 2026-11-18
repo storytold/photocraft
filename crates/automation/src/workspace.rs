@@ -38,6 +38,28 @@ pub struct AuthorizedWorkspace {
 }
 
 impl AuthorizedWorkspace {
+    /// Compare an imported read-root source with a write-root destination using only held
+    /// directory capabilities. No file contents or ambient path lookups are used.
+    /// Relative source names protect matching files in every granted read root: a source
+    /// must not become writable when an earlier root gains a same-named file after import.
+    /// Absolute source names remain restricted to their matching root capabilities.
+    pub fn is_import_source(&self, source: &str, destination: &str) -> Result<bool, AutomationError> {
+        if self.read.is_empty() {
+            return Err(AutomationError::BadRequest(format!("{DENIED}: read authority is absent")));
+        }
+        let destination = request_path(destination, self.write.as_ref())?;
+        let write = self.write.as_ref().ok_or_else(|| AutomationError::BadRequest(format!("{DENIED}: write authority is absent")))?;
+        let mut candidate = false;
+        for read in &self.read {
+            let Some(relative) = scoped_path(source, read)? else { continue };
+            candidate = true;
+            if import_source_in(read, &relative, write, &destination)? {
+                return Ok(true);
+            }
+        }
+        if candidate { Ok(false) } else { Err(path_error(source, "absolute paths must be inside an automation read root")) }
+    }
+
     /// Open the configured roots as capabilities. Either authority may be
     /// omitted; omitted authority fails closed.
     pub fn new(read_root: Option<&Path>, write_root: Option<&Path>) -> Result<Self, AutomationError> {
@@ -245,6 +267,49 @@ impl Drop for TempRemoval<'_> {
         if self.armed {
             let _ = remove_file_in(self.dir, self.path);
         }
+    }
+}
+
+/// Compare one granted source candidate, retaining same-directory spelling protection even
+/// after removal. Metadata/open errors refuse the write rather than ignoring a candidate.
+fn import_source_in(read: &RootCapability, source: &Path, write: &RootCapability, destination: &Path) -> Result<bool, AutomationError> {
+    let identity_error = |e| AutomationError::Io(format!("cannot inspect import source identity: {e}"));
+    if source == destination {
+        let a = read.dir.try_clone().map_err(identity_error)?.into_std_file();
+        let b = write.dir.try_clone().map_err(identity_error)?.into_std_file();
+        if photocraft_engine::file_cmds::same_open_files(&a, &b).map_err(identity_error)? {
+            return Ok(true);
+        }
+    }
+    // Inspect both candidates before opening them: FIFOs/devices must not block this check.
+    // A missing destination never bypasses a refusal to inspect the protected source.
+    if !import_identity_regular_file(&read.dir, source, "source")? {
+        return Ok(false);
+    }
+    let destination_exists = import_identity_regular_file(&write.dir, destination, "destination")?;
+    let a = match read.dir.open(source) {
+        Ok(file) => file.into_std(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(file_error("inspect source", &source.to_string_lossy(), error)),
+    };
+    if !destination_exists {
+        return Ok(false);
+    }
+    let b = match write.dir.open(destination) {
+        Ok(file) => file.into_std(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(file_error("inspect destination", &destination.to_string_lossy(), error)),
+    };
+    photocraft_engine::file_cmds::same_open_files(&a, &b).map_err(identity_error)
+}
+
+/// Refuse nonregular identity candidates before opening them; a missing file has no current alias.
+fn import_identity_regular_file(dir: &Dir, relative: &Path, role: &str) -> Result<bool, AutomationError> {
+    match dir.metadata(relative) {
+        Ok(metadata) if metadata.is_file() => Ok(true),
+        Ok(_) => Err(AutomationError::BadRequest(format!("automation inspect {role} path is not a regular file: `{}`", relative.display()))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(file_error(&format!("inspect {role}"), &relative.to_string_lossy(), error)),
     }
 }
 
@@ -679,11 +744,29 @@ pub fn authorize_engine_command(id: &str, params: &Value) -> Result<(), Automati
 /// when their request parameters contain no path. Fresh headless sessions
 /// cannot acquire such settings through the automation interface.
 pub fn authorize_desktop_engine_command(id: &str, params: &Value) -> Result<(), AutomationError> {
+    if id == "file.open" && held_historical_open_only(params) {
+        return Ok(());
+    }
     authorize_engine_command(id, params)?;
     if id.starts_with("image.mode.") {
         return Err(command_error(id));
     }
     Ok(())
+}
+
+/// Continuing an existing session capability may use only its identity and an explicit choice or cancellation.
+/// No path, format override or unknown field can turn this exception into an ambient file open.
+fn held_historical_open_only(params: &Value) -> bool {
+    let Some(fields) = params.as_object() else { return false };
+    if fields.get("heldHistoricalXcfOpen").and_then(Value::as_u64).is_none_or(|id| id == 0) {
+        return false;
+    }
+    if fields.get("cancel") == Some(&Value::Bool(true)) {
+        return fields.keys().all(|key| matches!(key.as_str(), "heldHistoricalXcfOpen" | "cancel"));
+    }
+    fields.keys().all(|key| matches!(key.as_str(), "heldHistoricalXcfOpen" | "historicalXcfSampleOrder" | "interactive"))
+        && matches!(fields.get("historicalXcfSampleOrder").and_then(Value::as_str), Some("little-endian" | "big-endian"))
+        && fields.get("interactive").is_none_or(|value| value == &Value::Bool(true))
 }
 
 /// [`authorize_engine_command`] as the function pointer [`photocraft_engine::Session::authorize`]

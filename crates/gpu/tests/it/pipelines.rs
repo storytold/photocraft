@@ -45,6 +45,7 @@ fn every_compositor_pipeline_builds() {
                 continue;
             };
             let info = adapter.get_info();
+            eprintln!("compositor pipeline check: backend {:?}, adapter {}, driver {}, compiler {compiler:?}", info.backend, info.name, info.driver);
             let format = photocraft_gpu::Compositor::preferred_acc_format(&adapter);
             if let Err(e) = photocraft_gpu::Compositor::try_new_with_format(&device, format) {
                 panic!("{:?} adapter {} (driver {}): {e}", info.backend, info.name, info.driver_info);
