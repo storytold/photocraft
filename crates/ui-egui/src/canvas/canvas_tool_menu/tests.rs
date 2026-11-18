@@ -5,7 +5,7 @@ use craft::ui::patterns::form_dialogs::HostedParamDialog;
 use egui::{Modifiers, PointerButton, Pos2, pos2, vec2};
 use egui_kittest::{Harness, kittest::Queryable};
 
-pub(super) fn app() -> PhotocraftApp {
+pub(super) fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
     app
@@ -90,10 +90,10 @@ pub(super) fn pen_clicks(app: &mut PhotocraftApp, at: &[(f64, f64)]) {
     }
 }
 
-pub(crate) fn harness(mut app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+pub(crate) fn harness(mut app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     app.sync_views();
     let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).with_context(app.ctx().clone()).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        |ui, app: &mut Box<PhotocraftApp>| {
             let ctx = ui.ctx().clone();
             if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
@@ -107,7 +107,7 @@ pub(crate) fn harness(mut app: PhotocraftApp) -> Harness<'static, PhotocraftApp>
     h
 }
 
-pub(crate) fn right_click(h: &mut Harness<'static, PhotocraftApp>, p: Pos2, modifiers: Modifiers) {
+pub(crate) fn right_click(h: &mut Harness<'static, Box<PhotocraftApp>>, p: Pos2, modifiers: Modifiers) {
     h.event(egui::Event::ModifiersChanged(modifiers));
     h.event(egui::Event::PointerMoved(p));
     h.run_steps(1);
@@ -119,7 +119,7 @@ pub(crate) fn right_click(h: &mut Harness<'static, PhotocraftApp>, p: Pos2, modi
 }
 
 /// The right button goes down at `at` with `mods` held and comes up as `gesture` says.
-fn secondary_press(h: &mut Harness<'static, PhotocraftApp>, at: Pos2, mods: Modifiers, gesture: Gesture) {
+fn secondary_press(h: &mut Harness<'static, Box<PhotocraftApp>>, at: Pos2, mods: Modifiers, gesture: Gesture) {
     let by = match gesture {
         Gesture::Still => return right_click(h, at, mods),
         Gesture::Moved => vec2(7.0, 3.0),
@@ -189,7 +189,7 @@ fn committed_type(app: &mut PhotocraftApp) -> u64 {
 
 /// A 32 × 32 document with the Crop tool picked (Classic Mode, so the view stays put) and its
 /// untouched default frame.
-fn crop_app() -> PhotocraftApp {
+fn crop_app() -> Box<PhotocraftApp> {
     let mut app = app();
     app.ui.tool = Tool::Crop;
     app.ui.tool_options.crop.shield.classic_mode = true;
@@ -361,7 +361,7 @@ fn kind_name(kind: &MenuKind) -> &'static str {
     }
 }
 
-fn row_app(row: &Case) -> PhotocraftApp {
+fn row_app(row: &Case) -> Box<PhotocraftApp> {
     let mut app = if matches!(row.setup, Setup::UntouchedCrop | Setup::PendingCrop) { crop_app() } else { self::app() };
     match row.setup {
         // Zoomed needs a canvas to run its view command: `context_popup_table` zooms once the canvas shows.
@@ -682,7 +682,7 @@ fn pen_options_bar_makes_a_selection_from_the_path() {
 
 /// A document with the Pen tool picked and a Work Path. Every route to the Stroke Path dialog ends in
 /// `pen_dialogs::open`, so driving that covers the Paths panel's routes.
-fn stroke_app() -> PhotocraftApp {
+fn stroke_app() -> Box<PhotocraftApp> {
     let mut app = app();
     app.ui.tool = Tool::Pen;
     work_path(&mut app);
