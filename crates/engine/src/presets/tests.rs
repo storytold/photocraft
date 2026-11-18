@@ -158,6 +158,36 @@ fn preset_stop_edits_the_current_gradient() {
     assert!(s.execute("gradient.presets.stop", json!({"action": "midpoint", "index": 0, "location": 0.4})).is_err());
 }
 
+/// `gradient.presets.stop {action: "set"}` is the Gradient Editor's commit: it replaces every stop
+/// of the tool gradient at once, keeps the live foreground/background names and the preset's name,
+/// refuses a one-stop and a 1025-stop list, and leaves the document alone.
+#[test]
+fn the_tool_gradient_takes_a_whole_set_of_stops() {
+    let mut s = session(8);
+    let revision = s.active().unwrap().revision;
+    let name = s.presets.gradient.name.clone();
+    let v = s
+        .execute(
+            "gradient.presets.stop",
+            json!({"action": "set", "stops": [[0.0, "foreground"], [0.25, "#ff0000"], [1.0, "background"]], "transparency": [[0.0, 100.0], [1.0, 20.0]]}),
+        )
+        .unwrap();
+    assert_eq!(v["current"]["name"], json!(name));
+    assert_eq!(v["current"]["stops"], json!([[0.0, "foreground"], [0.25, "#ff0000"], [1.0, "background"]]));
+    assert_eq!(v["current"]["transparency"], json!([[0.0, 100.0], [1.0, 20.0]]));
+    assert_eq!(s.active().unwrap().revision, revision, "a tool gradient edit is no document step");
+    // A shorter list replaces; it does not merge with the old stops.
+    let v = s.execute("gradient.presets.stop", json!({"action": "set", "stops": [[0.0, "#000000"], [1.0, "#ffffff"]], "transparency": []})).unwrap();
+    assert_eq!(v["current"]["stops"].as_array().unwrap().len(), 2, "{v}");
+    assert_eq!(v["current"]["transparency"], json!([]));
+    // Refusals leave the gradient as it was.
+    assert!(s.execute("gradient.presets.stop", json!({"action": "set", "stops": [[0.0, "#000000"]]})).is_err());
+    let many: Vec<Value> = (0..1025).map(|i| json!([i as f64 / 1024.0, "#808080"])).collect();
+    assert!(s.execute("gradient.presets.stop", json!({"action": "set", "stops": many})).is_err());
+    let v = s.execute("gradient.presets.list", json!({})).unwrap();
+    assert_eq!(v["current"]["stops"], json!([[0.0, "#000000"], [1.0, "#ffffff"]]));
+}
+
 /// A many-stop gradient survives editor gymnastics: five adds build a seven-stop ramp, a stop
 /// dragged past its neighbour keeps the list sorted, the paint follows the edited stops, and
 /// trimming back down ends at a plain two-stop gradient.
