@@ -8,10 +8,20 @@ use photocraft_ui_egui::{PhotocraftApp, Services, control};
 
 const REMOVE: &str = r#"{"points":[[12,10],[16,12]],"size":6}"#;
 
-type Harness = egui_kittest::Harness<'static, PhotocraftApp>;
+type Harness = egui_kittest::Harness<'static, Box<PhotocraftApp>>;
 
 fn run(s: &mut Session, id: &str, p: &str) {
     s.execute(id, p.parse().unwrap()).unwrap();
+}
+
+/// Context for assertion messages: who is active, whether a text edit is open, and whether the job is done.
+fn state_line(app: &PhotocraftApp, job: photocraft_engine::jobs::JobId) -> String {
+    format!(
+        "active layer {:?}, text-edit session open {}, job finished {}",
+        app.session.active().and_then(|d| d.active_layer),
+        app.ui.text_edit.is_some(),
+        app.session.job(job).is_none()
+    )
 }
 
 fn pixels(s: &Session, doc: usize, id: LayerId) -> Vec<f32> {
@@ -74,12 +84,28 @@ fn probe(input: Input) {
         Input::ControlPointer => {
             let ctx = h.ctx.clone();
             let (req, _rx) = control::ControlRequest::new("ui.pointer", r#"{"tool":"type","events":[{"kind":"down","x":4,"y":14}]}"#.parse().unwrap());
-            let _ = control::handle(h.state_mut(), &ctx, &req);
-            h.run_steps(2);
+            match control::handle(h.state_mut(), &ctx, &req) {
+                control::Reply::Done(reply) => assert_eq!(reply["ok"], true, "the pointer request is accepted: {reply}"),
+                _ => panic!("ui.pointer must reply immediately"),
+            }
+            // The control channel queues input for the canvas; wait for delivery rather than
+            // assuming two passes suffice on every host.
+            let host = craft::ui::runtime::windows::WindowHost::of(&ctx);
+            for _ in 0..8 {
+                if host.injected_idle() {
+                    break;
+                }
+                h.run_steps(1);
+            }
+            let state = state_line(h.state(), job);
+            assert!(host.injected_idle(), "the canvas consumed the queued pointer input; {state}");
+            // `injected_idle` is also true when the step was withdrawn (focus change before its
+            // pass) instead of delivered, so delivery is asserted separately.
+            assert!(!host.take_injected_withdrawn(), "the injected press was delivered, not withdrawn; {state}");
         }
     }
     let selected = if matches!(input, Input::None) { target } else { text };
-    assert_eq!(h.state().session.active().unwrap().active_layer, Some(selected), "the input selects the text layer");
+    assert_eq!(h.state().session.active().unwrap().active_layer, Some(selected), "the input selects the text layer; {}", state_line(h.state(), job));
 
     let a = h.state_mut();
     a.session.set_active(1);

@@ -14,7 +14,7 @@ enum Popup {
     Layers,
 }
 
-fn harness(tool: Tool, selection: bool, scale: f32) -> Harness<'static, PhotocraftApp> {
+fn harness(tool: Tool, selection: bool, scale: f32) -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = Harness::builder().with_size(vec2(1200.0, 800.0)).with_pixels_per_point(scale).with_step_dt(1.0 / 60.0).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), Services::default());
@@ -31,16 +31,16 @@ fn harness(tool: Tool, selection: bool, scale: f32) -> Harness<'static, Photocra
     h
 }
 
-fn fractional_point(h: &Harness<'_, PhotocraftApp>, scale: f32) -> Pos2 {
+fn fractional_point(h: &Harness<'_, Box<PhotocraftApp>>, scale: f32) -> Pos2 {
     let center = crate::canvas::testing::view(h.state()).expect("the canvas shows a view").rect.center();
     pos2(((center.x * scale).floor() + 0.75) / scale, ((center.y * scale).floor() + 0.75) / scale)
 }
 
-fn press(h: &mut Harness<'_, PhotocraftApp>, at: Pos2, button: PointerButton, pressed: bool, modifiers: Modifiers) {
+fn press(h: &mut Harness<'_, Box<PhotocraftApp>>, at: Pos2, button: PointerButton, pressed: bool, modifiers: Modifiers) {
     h.input_mut().events.push(Event::PointerButton { pos: at, button, pressed, modifiers });
 }
 
-fn tap(h: &mut Harness<'_, PhotocraftApp>, at: Pos2, modifiers: Modifiers, same_frame: bool) {
+fn tap(h: &mut Harness<'_, Box<PhotocraftApp>>, at: Pos2, modifiers: Modifiers, same_frame: bool) {
     h.event(Event::ModifiersChanged(modifiers));
     h.event(Event::PointerMoved(at));
     h.run_steps(2);
@@ -54,13 +54,13 @@ fn tap(h: &mut Harness<'_, PhotocraftApp>, at: Pos2, modifiers: Modifiers, same_
     h.run_steps(3);
 }
 
-fn document_state(h: &Harness<'_, PhotocraftApp>) -> impl PartialEq + use<> {
+fn document_state(h: &Harness<'_, Box<PhotocraftApp>>) -> impl PartialEq + use<> {
     let state = h.state().session.active().unwrap();
     let strokes = h.state().session.journal.iter().filter(|(id, _)| id == "paint.stroke").count();
     (state.doc.clone(), state.revision, state.history.past_len(), state.active_layer, state.selected_layers(), strokes)
 }
 
-fn is_open(h: &Harness<'_, PhotocraftApp>, popup: Popup) -> bool {
+fn is_open(h: &Harness<'_, Box<PhotocraftApp>>, popup: Popup) -> bool {
     let layers = |m: &crate::canvas_tool_menu::CanvasToolMenu| matches!(m.kind, MenuKind::Layers { .. });
     match popup {
         Popup::Tool => h.state().ui.canvas_tool_menu.as_ref().is_some_and(|m| !layers(m)),
@@ -68,7 +68,7 @@ fn is_open(h: &Harness<'_, PhotocraftApp>, popup: Popup) -> bool {
     }
 }
 
-fn dismiss_outside(h: &mut Harness<'_, PhotocraftApp>, popup: Popup) {
+fn dismiss_outside(h: &mut Harness<'_, Box<PhotocraftApp>>, popup: Popup) {
     // The status-bar corner is outside every popup and does not edit the document.
     let at = pos2(1190.0, 790.0);
     h.event(Event::PointerMoved(at));
@@ -131,7 +131,7 @@ fn reopened_canvas_menus_still_choose_their_actions() {
 }
 
 /// The automation request opens the menu through the frames the harness runs, as a user's click does.
-fn control_tap(h: &mut Harness<'_, PhotocraftApp>, at: Pos2, popup: Popup) {
+fn control_tap(h: &mut Harness<'_, Box<PhotocraftApp>>, at: Pos2, popup: Popup) {
     use crate::control::{ControlRequest, Reply, handle};
 
     let doc = crate::canvas::document_display::active_view(h.state()).expect("the canvas shows a view").to_doc(at);

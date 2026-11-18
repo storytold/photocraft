@@ -9,7 +9,7 @@ use serde_json::json;
 use crate::PhotocraftApp;
 use crate::state::Tool;
 
-fn harness() -> Harness<'static, PhotocraftApp> {
+fn harness() -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
     app.sync_views();
@@ -17,7 +17,7 @@ fn harness() -> Harness<'static, PhotocraftApp> {
     app.ui.tool = Tool::PolygonLasso;
     // 60 fps, so a double-click's two clicks fall inside egui's 0.3 s window.
     let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1000.0, 700.0)).with_step_dt(1.0 / 60.0).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        |ui, app: &mut Box<PhotocraftApp>| {
             let ctx = ui.ctx().clone();
             if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
@@ -38,17 +38,17 @@ fn harness() -> Harness<'static, PhotocraftApp> {
 }
 
 /// Where the canvas shows document point `(x, y)`.
-fn screen(h: &Harness<'static, PhotocraftApp>, x: f32, y: f32) -> Pos2 {
+fn screen(h: &Harness<'static, Box<PhotocraftApp>>, x: f32, y: f32) -> Pos2 {
     crate::canvas::testing::to_screen(h.state(), [f64::from(x), f64::from(y)])
 }
 
-fn button(h: &mut Harness<'static, PhotocraftApp>, p: Pos2, down: bool, m: Modifiers) {
+fn button(h: &mut Harness<'static, Box<PhotocraftApp>>, p: Pos2, down: bool, m: Modifiers) {
     h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: down, modifiers: m });
     h.run_steps(1);
 }
 
 /// A click at document point `(x, y)`, the pointer still between press and release.
-fn click(h: &mut Harness<'static, PhotocraftApp>, x: f32, y: f32, m: Modifiers) {
+fn click(h: &mut Harness<'static, Box<PhotocraftApp>>, x: f32, y: f32, m: Modifiers) {
     let p = screen(h, x, y);
     h.event(egui::Event::PointerMoved(p));
     h.run_steps(1);
@@ -56,7 +56,7 @@ fn click(h: &mut Harness<'static, PhotocraftApp>, x: f32, y: f32, m: Modifiers) 
     button(h, p, false, m);
 }
 
-fn polygon_app() -> PhotocraftApp {
+fn polygon_app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 300, "background": "transparent"})).unwrap();
     app.sync_views();
@@ -166,7 +166,7 @@ fn polygon_outline_lifecycle() {
 }
 
 /// Two vertices placed with the Polygonal Lasso, well apart in time so they aren't a double-click.
-fn two_vertices(h: &mut Harness<'static, PhotocraftApp>) {
+fn two_vertices(h: &mut Harness<'static, Box<PhotocraftApp>>) {
     click(h, 50.0, 50.0, Modifiers::NONE);
     h.run_steps(30);
     click(h, 150.0, 50.0, Modifiers::NONE);

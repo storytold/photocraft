@@ -5,7 +5,7 @@ use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedSaveForW
 use super::*;
 use std::sync::Arc;
 
-pub(super) fn app() -> PhotocraftApp {
+pub(super) fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.printer_source =
         Some(Arc::new(|| vec![craft::print::Printer { name: "Test printer".into(), default: true, two_sided: None, description: String::new() }]));
@@ -442,12 +442,12 @@ fn save_for_web_downloads_images_and_html_through_the_platform_writer() {
 }
 
 /// Presses Save… in the dialog's own UI and hands the app back.
-fn press_save(app: PhotocraftApp) -> PhotocraftApp {
+fn press_save(app: Box<PhotocraftApp>) -> Box<PhotocraftApp> {
     use egui_kittest::kittest::Queryable;
     let mut h = egui_kittest::Harness::builder()
         .with_size(egui::vec2(1600.0, 1100.0))
         .with_context(app.ctx().clone())
-        .build_ui_state(|ui, app: &mut PhotocraftApp| crate::dialogs::run(app, ui), app);
+        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app);
     h.run_steps(5);
     h.get_by_role_and_label(egui::accesskit::Role::Button, "Save…").click();
     h.run_steps(3);
