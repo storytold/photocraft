@@ -752,11 +752,12 @@ fn a_kept_pen_draft_takes_delete_only_under_its_own_tool() {
         app.session.authorize = None;
         assert_eq!(app.ui.pen.as_ref().unwrap().draft.knots.len(), 3);
         let layers = app.session.active().unwrap().doc.layers.len();
+        let kept = app.ui.pen.as_ref().unwrap().draft.clone();
 
         switch_tool(&mut app, Tool::AddAnchorPoint);
         press(&mut app, egui::Key::Delete, egui::Modifiers::NONE);
         assert_eq!(app.session.active().unwrap().doc.layers.len(), layers - 1, "{tool:?}: Delete is the other tool's: the layer goes");
-        assert_eq!(app.ui.pen.as_ref().map(|p| p.draft.knots.len()), Some(3), "{tool:?}: the kept draft is untouched");
+        assert_eq!(app.ui.pen.as_ref().map(|p| &p.draft), Some(&kept), "{tool:?}: the kept draft is untouched");
 
         switch_tool(&mut app, tool);
         for left in [2, 1] {
@@ -766,5 +767,6 @@ fn a_kept_pen_draft_takes_delete_only_under_its_own_tool() {
         assert_eq!(app.session.active().unwrap().doc.layers.len(), layers - 1, "{tool:?}: no other layer went");
         press(&mut app, egui::Key::Delete, egui::Modifiers::NONE);
         assert!(app.ui.pen.is_none(), "{tool:?}: the last anchor drops the draft");
+        assert_eq!(app.session.active().unwrap().doc.layers.len(), layers - 1, "{tool:?}: the last Delete is the drawing tool's too");
     }
 }
