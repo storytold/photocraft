@@ -1,11 +1,15 @@
 //! The wasmi host: loading, instantiating and calling a plug-in under resource limits.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 
 use wasmi::{
-    Config, EnforcedLimits, Engine, Instance, Linker, Memory, Module, Store, StoreLimits, StoreLimitsBuilder, TypedFunc, TypedResumableCall, WasmParams,
-    WasmResults,
+    Config, EnforcedLimits, Engine, Instance, Linker, Memory, Module, ResourceLimiter, Store, StoreLimits, StoreLimitsBuilder, TypedFunc, TypedResumableCall,
+    WasmParams, WasmResults,
 };
+use wasmi_core::LimiterError;
 
 use crate::manifest::Manifest;
 use crate::{Error, Result};
@@ -23,9 +27,9 @@ pub struct Limits {
     pub max_module_bytes: usize,
     /// Cap on a plug-in's linear memory.
     pub max_memory_bytes: usize,
-    /// Cap on the linear memory of all of one run's instances together: bands run in parallel
-    /// only as far as their [`Limits::max_memory_bytes`] fit in it, so a run's peak memory does
-    /// not grow with the number of cores (#8603).
+    /// Cap on the linear memory actually allocated by all of one run's instances together.
+    /// Values below `max_memory_bytes` use that per-instance cap as the effective total, so
+    /// at least one instance can run.
     pub max_total_memory_bytes: usize,
     /// Target size of one band of `f32` pixels handed to the plug-in.
     pub band_bytes: usize,
@@ -57,12 +61,118 @@ impl Default for Limits {
 }
 
 impl Limits {
-    /// How many bands of one run may hold an instance at once on `threads` workers: no more
-    /// than [`Limits::max_memory_bytes`] fits into [`Limits::max_total_memory_bytes`], and always
-    /// at least one, so a tight budget runs bands one at a time instead of refusing the run.
+    /// Conservative parallelism when each instance could reach its full memory cap.
     pub fn parallel_bands(&self, threads: usize) -> usize {
         let fit = self.max_total_memory_bytes.checked_div(self.max_memory_bytes).unwrap_or(threads);
         threads.min(fit).max(1)
+    }
+
+    /// Schedule against a measured band's peak, while the shared limiter enforces the actual
+    /// total if a later band allocates more. One instance may use its full individual cap.
+    pub(crate) fn parallel_bands_for(&self, threads: usize, measured_bytes: usize) -> usize {
+        let budget = self.max_total_memory_bytes.max(self.max_memory_bytes);
+        let fit = budget.checked_div(measured_bytes.max(1)).unwrap_or(1);
+        threads.min(fit).max(1)
+    }
+}
+
+#[derive(Default)]
+struct MemoryUsage {
+    used: usize,
+    peak_instance: usize,
+    denials: usize,
+}
+
+/// All instances in one filter run charge their allocated linear memory here. A separate budget
+/// is used while loading the module; there are no host imports or additional Wasm memories.
+pub(crate) struct RunBudget {
+    limit: usize,
+    usage: Mutex<MemoryUsage>,
+}
+
+impl RunBudget {
+    pub(crate) fn new(limits: &Limits) -> Arc<Self> {
+        Arc::new(Self { limit: limits.max_total_memory_bytes.max(limits.max_memory_bytes), usage: Mutex::new(MemoryUsage::default()) })
+    }
+
+    pub(crate) fn snapshot(&self) -> (usize, usize) {
+        let usage = self.usage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        (usage.peak_instance, usage.denials)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn occupy_for_test(&self, bytes: usize) {
+        self.usage.lock().unwrap_or_else(std::sync::PoisonError::into_inner).used = bytes;
+    }
+}
+
+struct BandLimiter {
+    limits: StoreLimits,
+    budget: Arc<RunBudget>,
+    denied: Arc<AtomicBool>,
+    charged: usize,
+    pending_old: Option<usize>,
+}
+
+impl BandLimiter {
+    fn new(limits: &Limits, budget: Arc<RunBudget>, denied: Arc<AtomicBool>) -> Self {
+        let limits = StoreLimitsBuilder::new().memory_size(limits.max_memory_bytes).memories(1).tables(4).table_elements(100_000).instances(1).build();
+        Self { limits, budget, denied, charged: 0, pending_old: None }
+    }
+}
+
+impl Drop for BandLimiter {
+    fn drop(&mut self) {
+        let mut usage = self.budget.usage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        // A failed growth is refunded before drop; only completed allocations inform later groups.
+        usage.peak_instance = usage.peak_instance.max(self.charged);
+        usage.used = usage.used.saturating_sub(self.charged);
+    }
+}
+
+impl ResourceLimiter for BandLimiter {
+    fn memory_growing(&mut self, current: usize, desired: usize, maximum: Option<usize>) -> std::result::Result<bool, LimiterError> {
+        if !self.limits.memory_growing(current, desired, maximum)? {
+            return Ok(false);
+        }
+        let mut usage = self.budget.usage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let delta = desired.saturating_sub(self.charged);
+        if usage.used.checked_add(delta).is_none_or(|total| total > self.budget.limit) {
+            self.denied.store(true, Ordering::Relaxed);
+            usage.denials = usage.denials.saturating_add(1);
+            return Ok(false);
+        }
+        usage.used += delta;
+        self.charged = desired;
+        self.pending_old = Some(current);
+        Ok(true)
+    }
+
+    fn memory_grow_failed(&mut self, error: &wasmi::errors::MemoryError) -> std::result::Result<(), LimiterError> {
+        if let Some(old) = self.pending_old.take() {
+            let mut usage = self.budget.usage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            usage.used = usage.used.saturating_sub(self.charged.saturating_sub(old));
+            self.charged = old;
+        }
+        self.limits.memory_grow_failed(error)
+    }
+
+    fn table_growing(&mut self, current: usize, desired: usize, maximum: Option<usize>) -> std::result::Result<bool, LimiterError> {
+        self.limits.table_growing(current, desired, maximum)
+    }
+
+    fn table_grow_failed(&mut self, error: &wasmi::errors::TableError) -> std::result::Result<(), LimiterError> {
+        self.limits.table_grow_failed(error)
+    }
+
+    fn instances(&self) -> usize {
+        self.limits.instances()
+    }
+    fn tables(&self) -> usize {
+        self.limits.tables()
+    }
+    fn memories(&self) -> usize {
+        self.limits.memories()
     }
 }
 
@@ -106,6 +216,14 @@ impl Deadline {
         // generic cancellation error, even when results are collected in a different order.
         self.abort.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get_or_insert(error);
     }
+    /// Keep the run's wall-clock limit while isolating cancellation for a retried chunk.
+    pub(crate) fn attempt(&self) -> Self {
+        Self {
+            #[cfg(not(target_arch = "wasm32"))]
+            at: self.at,
+            abort: Arc::new(Mutex::new(None)),
+        }
+    }
     fn check(&self) -> Result<()> {
         if let Some(error) = self.abort.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone() {
             return Err(error);
@@ -122,7 +240,7 @@ impl Deadline {
 
 /// One live instance: a store with its own memory limit, and the module's exports.
 pub(crate) struct Live {
-    store: Store<StoreLimits>,
+    store: Store<BandLimiter>,
     instance: Instance,
     memory: Memory,
 }
@@ -214,7 +332,7 @@ impl Plugin {
         }
         let mut p = Plugin { manifest: placeholder_manifest(), engine, module, limits, size: bytes.len(), source: None };
         let deadline = Deadline::new(&p.limits);
-        let mut live = p.instantiate(&deadline)?;
+        let mut live = p.instantiate(&deadline, RunBudget::new(&p.limits), Arc::new(AtomicBool::new(false)))?;
         let version: TypedFunc<(), i32> = live.func("pc_abi_version")?;
         let v = p.call(&mut live, &version, (), p.limits.fuel_base, &deadline)?;
         if v != ABI_VERSION {
@@ -256,15 +374,14 @@ impl Plugin {
         self
     }
 
-    pub(crate) fn instantiate(&self, deadline: &Deadline) -> Result<Live> {
+    pub(crate) fn instantiate(&self, deadline: &Deadline, budget: Arc<RunBudget>, denied: Arc<AtomicBool>) -> Result<Live> {
         deadline.check()?;
-        let limits = StoreLimitsBuilder::new().memory_size(self.limits.max_memory_bytes).memories(1).tables(4).table_elements(100_000).instances(1).build();
-        let mut store = Store::new(&self.engine, limits);
+        let mut store = Store::new(&self.engine, BandLimiter::new(&self.limits, budget, denied));
         store.limiter(|l| l);
         // The start function (if any) runs on this fuel. It cannot be interrupted to check the
         // deadline the way a call can, so it gets no more than one slice, however much a call may use.
         store.set_fuel(self.limits.fuel_base.min(FUEL_SLICE)).map_err(wasm_err)?;
-        let linker = Linker::<StoreLimits>::new(&self.engine);
+        let linker = Linker::<BandLimiter>::new(&self.engine);
         let instance = linker.instantiate_and_start(&mut store, &self.module).map_err(wasm_err)?;
         let memory = instance.get_memory(&store, "memory").ok_or_else(|| Error::Abi("the module must export its linear memory as `memory`".into()))?;
         Ok(Live { store, instance, memory })
@@ -298,10 +415,21 @@ impl Plugin {
 
     /// Runs `pc_filter` on `data` (interleaved `f32`, `w × h × channels`) in a fresh instance.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn filter_buffer(&self, data: &mut [f32], w: u32, h: u32, channels: u32, format: u32, params: &[u8], deadline: &Deadline) -> Result<()> {
+    pub(crate) fn filter_buffer(
+        &self,
+        data: &mut [f32],
+        w: u32,
+        h: u32,
+        channels: u32,
+        format: u32,
+        params: &[u8],
+        deadline: &Deadline,
+        budget: Arc<RunBudget>,
+        denied: Arc<AtomicBool>,
+    ) -> Result<()> {
         let bytes = data.len().checked_mul(4).filter(|b| *b <= i32::MAX as usize && *b + params.len() <= self.limits.max_memory_bytes);
         let bytes = bytes.ok_or_else(|| Error::Limit("memory budget (band too large)".into()))?;
-        let mut live = self.instantiate(deadline)?;
+        let mut live = self.instantiate(deadline, budget, denied)?;
         let alloc: TypedFunc<i32, i32> = live.func("pc_alloc")?;
         let filter: TypedFunc<FilterArgs, i32> = live.func("pc_filter")?;
         let ptr = self.call(&mut live, &alloc, bytes as i32, self.limits.fuel_base, deadline)? as u32 as usize;
@@ -356,5 +484,57 @@ fn placeholder_manifest() -> Manifest {
         params: Vec::new(),
         overlap: 0,
         area: crate::Area::Content,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_budget_charges_actual_growth_and_releases_on_drop() {
+        let limits = Limits { max_memory_bytes: 8 << 20, max_total_memory_bytes: 10 << 20, ..Limits::default() };
+        let budget = RunBudget::new(&limits);
+        let mut a = BandLimiter::new(&limits, Arc::clone(&budget), Arc::new(AtomicBool::new(false)));
+        let mut b = BandLimiter::new(&limits, Arc::clone(&budget), Arc::new(AtomicBool::new(false)));
+        assert!(matches!(a.memory_growing(0, 4 << 20, None), Ok(true)));
+        assert!(matches!(b.memory_growing(0, 4 << 20, None), Ok(true)));
+        assert_eq!(budget.usage.lock().unwrap().used, 8 << 20);
+        assert!(matches!(a.memory_growing(4 << 20, 7 << 20, None), Ok(false)));
+        assert_eq!(budget.usage.lock().unwrap().used, 8 << 20);
+        assert_eq!(budget.snapshot(), (0, 1));
+        drop(b);
+        assert_eq!(budget.snapshot(), (4 << 20, 1));
+        assert!(matches!(a.memory_growing(4 << 20, 7 << 20, None), Ok(true)));
+        assert_eq!(budget.usage.lock().unwrap().used, 7 << 20);
+        drop(a);
+        assert_eq!(budget.usage.lock().unwrap().used, 0);
+    }
+
+    #[test]
+    fn failed_growth_refunds_reservation_and_instance_cap_still_applies() {
+        let limits = Limits { max_memory_bytes: 8 << 20, max_total_memory_bytes: 10 << 20, ..Limits::default() };
+        let budget = RunBudget::new(&limits);
+        let mut a = BandLimiter::new(&limits, Arc::clone(&budget), Arc::new(AtomicBool::new(false)));
+        assert!(matches!(a.memory_growing(0, 2 << 20, None), Ok(true)));
+        assert!(matches!(a.memory_growing(2 << 20, 7 << 20, None), Ok(true)));
+        a.memory_grow_failed(&wasmi::errors::MemoryError::OutOfSystemMemory).unwrap();
+        assert_eq!(budget.usage.lock().unwrap().used, 2 << 20);
+        assert_eq!(budget.snapshot().0, 0, "in-flight growth is not a measured peak");
+        assert!(matches!(a.memory_growing(2 << 20, 9 << 20, None), Ok(false)));
+        assert_eq!(budget.snapshot().1, 0, "individual cap is separate from the run budget");
+        drop(a);
+        assert_eq!(budget.snapshot().0, 2 << 20, "failed growth does not inflate later group widths");
+        assert_eq!(budget.usage.lock().unwrap().used, 0);
+    }
+
+    #[test]
+    fn observed_footprint_can_fill_all_workers() {
+        let limits = Limits::default();
+        assert_eq!(limits.parallel_bands(16), 4, "the public conservative estimate remains available");
+        assert_eq!(limits.parallel_bands_for(16, 20 << 20), 16);
+        assert_eq!(limits.parallel_bands_for(16, 512 << 20), 4);
+        let larger_instance = Limits { max_memory_bytes: 1 << 30, ..limits };
+        assert_eq!(larger_instance.parallel_bands_for(16, 20 << 20), 16);
     }
 }

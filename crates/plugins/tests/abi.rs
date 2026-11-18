@@ -412,6 +412,35 @@ fn one_band_at_a_time_matches_parallel_bands() {
     assert_ne!(serial, s, "the filter ran");
 }
 
+/// A filter may allocate more on later bands than it did in the first group. The shared cap
+/// must cause those bands to retry with fewer workers, without changing the pixels or failing.
+#[test]
+fn later_memory_growth_retries_under_the_run_budget() {
+    let filter = r#"(local $i i32)
+      (if (f32.gt (f32.load (local.get $buf)) (f32.const 0.5))
+        (then
+          (if (i32.eq (memory.grow (i32.const 16)) (i32.const -1))
+            (then (return (i32.const 7))))
+          (block $done (loop $spin
+            (br_if $done (i32.ge_u (local.get $i) (i32.const 200000)))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br $spin)))))
+      (f32.store (local.get $buf) (f32.const 0.25))
+      (i32.const 0)"#;
+    let pool = rayon::ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+    let mut s = Surface::new(PixelFormat::RGBA8);
+    s.fill_rect(Rect::new(0, 0, 256, 256), &[0.0, 0.0, 0.0, 1.0]);
+    s.fill_rect(Rect::new(0, 256, 256, 1280), &[1.0, 0.0, 0.0, 1.0]);
+    let canvas = Rect::new(0, 0, 256, 1280);
+    let limits = Limits { max_memory_bytes: 4 << 20, max_total_memory_bytes: 5 << 20, band_bytes: 1, ..Limits::default() };
+    let p = Plugin::load(&ok_module(filter), limits.clone()).unwrap();
+    let actual = pool.install(|| p.apply(&s, canvas, None, &json!({}))).unwrap();
+    let serial = Plugin::load(&ok_module(filter), Limits { max_total_memory_bytes: 4 << 20, ..limits }).unwrap();
+    let expected = pool.install(|| serial.apply(&s, canvas, None, &json!({}))).unwrap();
+    assert_eq!(actual, expected);
+    assert_ne!(actual, s);
+}
+
 /// #8603: one run on 16 workers must not hold 16 instances at the 512 MiB cap (8 GiB). With the
 /// default limits it holds at most four (2 GiB); a smaller per-instance cap lets every worker
 /// run, and a budget under one cap still runs one band at a time rather than none.
