@@ -130,6 +130,20 @@ fn a_smart_object_still_takes_exposure() {
 }
 
 #[test]
+fn a_hidden_smart_object_still_takes_exposure() {
+    // Not measured: only hidden pixel layers are refused; a hidden smart object keeps today's
+    // behaviour and takes Exposure as a smart filter (CodeRabbit on #15522).
+    let mut s = session(8);
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    s.execute("layer.setProps", json!({"visible": false})).unwrap();
+    assert!(s.is_enabled(EXPOSURE), "{:?}", s.disabled_reason(EXPOSURE));
+    exposure(&mut s).expect("recorded as a smart filter");
+    let st = s.active().unwrap();
+    let Some(photocraft_doc::LayerContent::Smart(sm)) = st.doc.layer(st.active_layer.unwrap()).map(|l| &l.content) else { panic!("a smart object") };
+    assert_eq!(sm.smart_filters.len(), 1);
+}
+
+#[test]
 fn an_alpha_channel_target_keeps_working_over_a_hidden_empty_layer() {
     let mut s = session(8);
     s.execute("select.rect", json!({"x": 2, "y": 2, "width": 6, "height": 6})).unwrap();

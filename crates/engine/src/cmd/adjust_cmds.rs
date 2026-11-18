@@ -360,7 +360,9 @@ pub(crate) fn exposure_enabled_with(s: &Session, p: &Value) -> Option<std::resul
     use crate::channel_cmds::Target;
     let hidden = || {
         let Ok(id) = crate::commands::layer_param(s, p) else { return false };
-        s.active().and_then(|d| d.doc.layer(id)).is_some_and(|l| !l.visible)
+        // Hidden pixel layers only: a hidden smart object (not measured) still takes Exposure as a
+        // smart filter, as today.
+        s.active().and_then(|d| d.doc.layer(id)).is_some_and(|l| !l.visible && matches!(l.content, LayerContent::Raster(_)))
     };
     match crate::channel_cmds::target_of(p) {
         Target::Mask => Some(Err(EXPOSURE_UNAVAILABLE.into())),
