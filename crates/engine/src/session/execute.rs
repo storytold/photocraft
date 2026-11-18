@@ -217,6 +217,9 @@ impl Session {
         };
         let Some(d) = self.active_mut() else { return Ok(None) };
         if d.doc.layer(target).is_none() {
+            if commands::layer_style_rejects_background(spec.id) {
+                return Err(EngineError::UnknownLayer { id: target, known: commands::layer_listing(&d.doc) });
+            }
             return Ok(None);
         }
         let active = d.active_layer.replace(target);

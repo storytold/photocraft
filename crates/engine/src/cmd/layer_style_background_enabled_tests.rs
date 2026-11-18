@@ -118,8 +118,8 @@ fn background_refusal_preserves_a_pending_floating_selection() {
             let bg = s.active().unwrap().doc.background().unwrap().id.0;
             s.execute("layer.new.layer", json!({"name": "Paint"})).unwrap();
             let paint = s.active().unwrap().active_layer.unwrap().0;
-            s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
             s.execute("select.rect", json!({"x": 0, "y": 0, "width": 2, "height": 2})).unwrap();
+            s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
             s.execute("select.float", json!({"dx": 3, "dy": 0})).unwrap();
             params["layer"] = json!(bg);
             let st = s.active().unwrap();
@@ -138,7 +138,76 @@ fn background_refusal_preserves_a_pending_floating_selection() {
             assert!(Arc::ptr_eq(&parts, &floating.parts));
             params["layer"] = json!(paint);
             s.execute(&id, params).unwrap();
-            assert!(crate::float_cmds::floating(s.active().unwrap()).is_none(), "{id} on Paint still commits the floating piece");
+            let st = s.active().unwrap();
+            assert!(crate::float_cmds::floating(st).is_none(), "{id} on Paint still commits the floating piece");
+            let pixels = st.doc.layer(photocraft_doc::LayerId(paint)).unwrap().surface().unwrap();
+            assert_eq!(pixels.pixel(3, 0), vec![1.0, 0.0, 0.0, 1.0], "{id}: the piece reaches its destination");
+            assert_eq!(pixels.pixel(0, 0), vec![0.0; 4], "{id}: the piece leaves its original position");
+        }
+    }
+}
+
+#[test]
+fn missing_style_targets_report_available_layer_ids() {
+    for background in [false, true] {
+        let mut s = white_document();
+        let bg = s.active().unwrap().doc.background().unwrap().id;
+        for selected in [true, false] {
+            s.active_mut().unwrap().active_layer = selected.then_some(bg);
+            let before = Arc::clone(&s.active().unwrap().doc);
+            for (id, mut params) in style_commands() {
+                params["layer"] = json!(u64::MAX);
+                assert!(!s.is_enabled_with(&id, &params));
+                let result = if background { s.start(&id, params).map(|_| ()) } else { s.execute(&id, params).map(|_| ()) };
+                assert!(
+                    matches!(result, Err(EngineError::UnknownLayer { id: missing, known })
+                    if missing.0 == u64::MAX && known.contains(&format!("{} \"Background\"", bg.0))),
+                    "{id}"
+                );
+                assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
+                assert_eq!(s.active().unwrap().active_layer, selected.then_some(bg));
+            }
+        }
+    }
+}
+
+#[test]
+fn background_refusal_defers_pending_history_budget_changes() {
+    for background in [false, true] {
+        let mut s = white_document();
+        let bg = s.active().unwrap().doc.background().unwrap().id;
+        // Model the pending scratch epoch without changing the process-wide scratch policy.
+        // Direct preference storage leaves the old, unlimited History policy in place.
+        s.prefs.edit(|p| p.performance.memory_usage_mb = 1);
+        s.active_mut().unwrap().history.max_bytes = 0;
+        for i in 0..8 {
+            s.edit("Paint", |doc, _| {
+                doc.layer_mut(bg).unwrap().surface_mut().unwrap().fill_rect(photocraft_geom::Rect::from_xywh(0, 0, 1, 1), &[i as f32 / 8.0, 0.0, 0.0, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+        }
+        s.scratch_epoch = photocraft_raster::spill::epoch().wrapping_sub(1);
+        let pending_epoch = s.scratch_epoch;
+        let st = s.active().unwrap();
+        let history = st.history.entries();
+        let before = Arc::clone(&st.doc);
+        assert!(st.memory_bytes() > s.prefs().performance.history_budget_bytes());
+        for (id, params) in style_commands() {
+            let result = if background { s.start(&id, params).map(|_| ()) } else { s.execute(&id, params).map(|_| ()) };
+            assert!(matches!(result, Err(EngineError::Disabled(_, why)) if why.contains("Background")), "{id}");
+            assert_eq!(s.scratch_epoch, pending_epoch);
+            let st = s.active().unwrap();
+            assert_eq!(st.history.max_bytes, 0, "{id}: a refusal must not apply a pending budget");
+            assert_eq!(st.history.entries(), history, "{id}: a refusal must not remove undo states");
+            assert!(Arc::ptr_eq(&st.doc, &before));
+        }
+        s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        assert_ne!(s.scratch_epoch, pending_epoch);
+        let cap = s.active().unwrap().history.max_bytes;
+        assert!(cap == 0 || cap == s.prefs().performance.history_budget_bytes());
+        if cap > 0 {
+            assert!(s.active().unwrap().history.entries().len() < history.len());
         }
     }
 }
