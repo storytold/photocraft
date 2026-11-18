@@ -8,7 +8,7 @@ use serde_json::json;
 
 use crate::PhotocraftApp;
 use crate::state::Tool;
-use crate::theme::ThemeKind;
+use crate::theme::AppTheme;
 
 const PANEL: &str = "Toggle the Clone Source panel";
 const SETTINGS: &str = "Toggle the Brush Settings panel";
@@ -21,7 +21,7 @@ fn bar(tool: Tool) -> Harness<'static, Box<PhotocraftApp>> {
     app.run("file.new", json!({"width": 80, "height": 80})).unwrap();
     app.ui.tool = tool;
     let mut h = Harness::builder().with_size(vec2(1800.0, 300.0)).with_context(app.ctx().clone()).build_ui_state(|ui, app| crate::panels::options_bar(app, ui), app);
-    PhotocraftApp::setup_context(&h.ctx, ThemeKind::ProMedium);
+    PhotocraftApp::setup_context(&h.ctx, AppTheme::pro_medium());
     h.run_steps(4);
     h
 }
