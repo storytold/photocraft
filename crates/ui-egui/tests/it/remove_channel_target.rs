@@ -14,6 +14,16 @@ fn run(s: &mut Session, id: &str, p: &str) {
     s.execute(id, p.parse().unwrap()).unwrap();
 }
 
+/// Context for assertion messages: who is active, whether a text edit is open, and whether the job is done.
+fn state_line(app: &PhotocraftApp, job: photocraft_engine::jobs::JobId) -> String {
+    format!(
+        "active layer {:?}, text-edit session open {}, job finished {}",
+        app.session.active().and_then(|d| d.active_layer),
+        app.ui.text_edit.is_some(),
+        app.session.job(job).is_none()
+    )
+}
+
 fn pixels(s: &Session, doc: usize, id: LayerId) -> Vec<f32> {
     let d = &s.documents()[doc].doc;
     d.layer(id).unwrap().surface().unwrap().read_region(d.bounds())
@@ -87,11 +97,15 @@ fn probe(input: Input) {
                 }
                 h.run_steps(1);
             }
-            assert!(host.injected_idle(), "the canvas consumed the queued pointer input");
+            let state = state_line(h.state(), job);
+            assert!(host.injected_idle(), "the canvas consumed the queued pointer input; {state}");
+            // `injected_idle` is also true when the step was withdrawn (focus change before its
+            // pass) instead of delivered, so delivery is asserted separately.
+            assert!(!host.take_injected_withdrawn(), "the injected press was delivered, not withdrawn; {state}");
         }
     }
     let selected = if matches!(input, Input::None) { target } else { text };
-    assert_eq!(h.state().session.active().unwrap().active_layer, Some(selected), "the input selects the text layer");
+    assert_eq!(h.state().session.active().unwrap().active_layer, Some(selected), "the input selects the text layer; {}", state_line(h.state(), job));
 
     let a = h.state_mut();
     a.session.set_active(1);
