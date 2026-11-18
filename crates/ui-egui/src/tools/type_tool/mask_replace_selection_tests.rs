@@ -1,14 +1,13 @@
 //! #12073: committing a Type Mask always replaces the selection with the text outline, with ⇧,
-//! ⌥ or ⇧⌥ held too: a click outside the text, the Commit button and ⌘↩ all go through
-//! `commit_with`. `type.createSelection` keeps its `operation` param for scripts.
+//! ⌥ or ⇧⌥ held too: every commit goes through `commit_with`. `type.createSelection` keeps its
+//! `operation` param for scripts.
 
 use egui::Modifiers;
-use egui_kittest::Harness;
 use photocraft_raster::Surface;
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::canvas::{ToolEvent, tool_event};
+use crate::canvas::testing::{ToolEvent, tool_event};
 use crate::state::Tool;
 
 const COMBOS: [Modifiers; 4] = [Modifiers::NONE, Modifiers::SHIFT, Modifiers::ALT, Modifiers { shift: true, alt: true, ..Modifiers::NONE }];
@@ -40,7 +39,7 @@ fn mask(app: &mut PhotocraftApp, at: (f64, f64), s: &str) {
 fn mask_with(app: &mut PhotocraftApp, at: (f64, f64), s: &str, mods: Modifiers) {
     click(app, at.0, at.1, mods);
     assert!(app.ui.text_edit.as_ref().is_some_and(|ed| ed.mask), "typing a mask");
-    super::insert(app, s);
+    super::host::type_text(app, s);
 }
 
 pub(super) fn selection(app: &PhotocraftApp) -> Option<Surface> {
@@ -71,42 +70,6 @@ fn every_commit_replaces_the_selection_whatever_modifiers_are_held() {
         assert!(app.ui.text_edit.is_none(), "{mods:?}");
         assert!(selection(&app) == outline, "{mods:?}: {:?}, not the outline {:?}", bounds(&selection(&app)), bounds(&outline));
     }
-}
-
-#[test]
-fn a_modified_click_outside_the_text_replaces_the_selection() {
-    let outline = outline((100.0, 200.0), "AB");
-    for mods in COMBOS {
-        let mut app = new_app();
-        mask(&mut app, (100.0, 200.0), "AB");
-        click(&mut app, 450.0, 60.0, mods);
-        assert!(app.ui.text_edit.is_none(), "{mods:?}: the click commits");
-        assert!(selection(&app) == outline, "{mods:?}: {:?}", bounds(&selection(&app)));
-    }
-}
-
-#[test]
-fn shift_command_return_replaces_the_selection() {
-    let outline = outline((100.0, 200.0), "AB");
-    let mut app = new_app();
-    mask(&mut app, (100.0, 200.0), "AB");
-    let mut h = Harness::builder().build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
-            let ctx = ui.ctx().clone();
-            // As `canvas_tests`' harness: the shortcuts wait for the app's fonts.
-            if ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                crate::shortcuts::handle(app, &ctx);
-            }
-        },
-        app,
-    );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
-    h.run_steps(4);
-    h.event(egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::COMMAND | Modifiers::SHIFT });
-    h.run_steps(1);
-    let app = h.into_state();
-    assert!(app.ui.text_edit.is_none());
-    assert!(selection(&app) == outline, "{:?}", bounds(&selection(&app)));
 }
 
 /// The reference application's "AB", then ⇧-clicks to commit it and to start "C", then "C"

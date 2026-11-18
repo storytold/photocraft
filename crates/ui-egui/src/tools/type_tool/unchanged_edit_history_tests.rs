@@ -50,7 +50,8 @@ fn first_size(app: &PhotocraftApp, id: LayerId) -> f32 {
 
 /// Click into the existing layer: an edit session with nothing changed yet.
 fn click_into(app: &mut PhotocraftApp, id: LayerId) {
-    crate::type_tool::edit_active(app).unwrap();
+    let ctx = crate::canvas::testing::ctx(app);
+    crate::type_tool::edit_active(app, &ctx).unwrap();
     let ed = app.ui.text_edit.as_ref().expect("the edit session is open");
     assert_eq!(ed.layer, id.0, "the session edits the layer");
     assert!(!ed.created, "it is an existing layer");
@@ -91,8 +92,9 @@ fn a_click_outside_the_text_records_one_edit_type_state() {
     let (mut app, id) = app();
     click_into(&mut app, id);
     let before = history(&app);
-    // Far from the glyphs and from the box: the Type tool's press commits the session.
-    assert!(crate::type_tool::pointer_down(&mut app, 380.0, 20.0, egui::Modifiers::NONE), "the Type tool took the click");
+    // Far from the glyphs and from the box: the editor commits on this background press (#15449
+    // pipeline: the canvas press ends the session, the tool only sees that it ended).
+    super::mask_replace_selection_tests::click(&mut app, 380.0, 20.0, egui::Modifiers::NONE);
     ended(&app, id, &before, "click outside the text");
 }
 
@@ -115,7 +117,7 @@ fn a_changed_edit_still_gives_one_state_not_two() {
     let (mut app, id) = app();
     click_into(&mut app, id);
     let before = history(&app);
-    super::insert(&mut app, "x");
+    super::host::type_text(&mut app, "x");
     assert_eq!(text_of(&app, id), "x", "the session changed the text");
     assert_eq!(history(&app).len(), before.len() + 1, "typing opened the session's state");
     crate::type_tool::commit(&mut app);
