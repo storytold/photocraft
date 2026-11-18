@@ -11,12 +11,19 @@ nextest-version = "0.9.150"
 #
 # GPU tests: each test is its own process here, so the in-process `gpu_lock()` mutexes no longer
 # serialize them. Too many concurrent wgpu devices time out (`PollError: ... Wait timed out`), so
-# this group caps them at 4. scripts/ci-gpu-lavapipe.py reads this group's filters directly.
+# this group caps them at 4. `cargo xtask ci tests --gpu` reads this group's filters directly: the
+# Linux gate runs the group in a shard of its own on lavapipe (scripts/ci-gpu-lavapipe.py).
+#
+# The group is photocraft-gpu and every test in a module named `gpu_tests` or `<name>_gpu_tests`.
+# A test that builds a wgpu device (a kittest `.wgpu()` harness, `create_render_state`, its own
+# instance, or a harness `.render()`) lives in such a module and takes `gpu_lock()`. Every other
+# test runs on the CPU canvas (the app draws on it unless `set_wgpu` hands it a device) at full
+# parallelism.
 [test-groups]
 gpu = { max-threads = 4 }
 
 [[profile.default.overrides]]
-filter = 'package(photocraft-gpu) | (package(photocraft-ui-egui) & (kind(test) | test(/canvas|gpu|mip|type_tool|background_redraw::|floating_group_titles|swap_arrow::tests::rendered_glyph/))) | (package(photocraft-automation) & test(/^gpu_backend::/))'
+filter = 'package(photocraft-gpu) | test(/(^|::|_)gpu_tests::/)'
 test-group = 'gpu'
 
 # CI (`--profile ci`, .github/workflows/ci.yml). Collect all failures in one integration run
@@ -48,11 +55,10 @@ threads-required = 2
 
 # Slowest tests start first. nextest starts higher-priority tests first, so a long test no longer
 # begins at the end of the run and extends the job. Every test that took over 60 s on the Windows
-# runner in the cold run of #15474 (unit and integration legs); the list names the test, so a test
-# that gets faster stays harmless and a new slow one is added here. Priority only orders the
-# start; it changes no timeout, group or result.
+# runner in the cold run of #15474 (unit and integration legs); the same tests are the slowest on
+# Linux. The list names the test, so a test that gets faster stays harmless and a new slow one is
+# added here. Priority only orders the start; it changes no timeout, group or result.
 [[profile.ci.overrides]]
-platform = 'cfg(target_os = "windows")'
 # over 200 s
 filter = '''
   (package(photocraft-ui-egui) & test(=input::shortcut_dispatch::tests::every_displayed_shortcut_dispatches_from_where_focus_usually_is)) |
@@ -64,7 +70,6 @@ filter = '''
 priority = 100
 
 [[profile.ci.overrides]]
-platform = 'cfg(target_os = "windows")'
 # 60 to 200 s
 filter = '''
   (package(photocraft-gpu) & test(=camera_raw::clarity_texture_and_dehaze_with_shadows_highlights_and_per_pixel_stages)) |
@@ -72,16 +77,16 @@ filter = '''
   (package(photocraft-engine) & test(=crop_content_aware_layers::unmeasured_active_targets_and_delete_off_keep_the_legacy_target)) |
   (package(photocraft-engine) & test(=cmd::retouch_cmds::content_aware_move::color_tests::a_flat_patch_matches_the_new_surroundings_at_color_ten)) |
   (package(photocraft-ui-egui) & test(=tools::type_tool::canvas_tests::every_paragraph_box_handle_resizes_the_box_with_snapping_on)) |
-  (package(photocraft-ui-egui) & test(=checker_canvas::pixel_grid_is_solid_and_visible_gpu_2x)) |
+  (package(photocraft-ui-egui) & test(=gpu_tests::checker_canvas::pixel_grid_is_solid_and_visible_gpu_2x)) |
   (package(photocraft-engine) & test(=cmd::retouch_cmds::tests::content_aware_move_coarse_preview_handles_transform_extend_and_limits)) |
-  (package(photocraft-ui-egui) & test(=checker_canvas::pixel_grid_is_solid_and_visible_cpu_2x)) |
-  (package(photocraft-ui-egui) & test(=drag_preview_canvas::marquee_previews_show_while_dragging_on_white_and_black_at_1x_and_2x)) |
+  (package(photocraft-ui-egui) & test(=gpu_tests::checker_canvas::pixel_grid_is_solid_and_visible_cpu_2x)) |
+  (package(photocraft-ui-egui) & test(=gpu_tests::drag_preview_canvas::marquee_previews_show_while_dragging_on_white_and_black_at_1x_and_2x)) |
   (package(photocraft-gpu) & test(=camera_raw::shadows_and_highlights_with_per_pixel_stages)) |
   (package(photocraft-engine) & test(=cmd::retouch_cmds::content_aware_move::color_tests::a_brightness_change_shifts_the_middle_only_past_color_five)) |
   (package(photocraft-engine) & test(=cmd::retouch_cmds::tests::content_aware_move_previews_large_selections_coarse_then_exact_at_all_depths)) |
-  (package(photocraft-ui-egui) & test(=live_stroke_canvas::live_tool_camera_navigation_is_visible_in_the_input_frame)) |
-  (package(photocraft-ui-egui) & test(=live_stroke_canvas::the_canvas_shows_the_committed_stroke_part_0)) |
-  (package(photocraft-ui-egui) & test(=full_res_preview::adjustment_layer_drag_previews_at_full_resolution_when_low_res_is_off)) |
+  (package(photocraft-ui-egui) & test(=gpu_tests::live_stroke_canvas::live_tool_camera_navigation_is_visible_in_the_input_frame)) |
+  (package(photocraft-ui-egui) & test(=gpu_tests::live_stroke_canvas::the_canvas_shows_the_committed_stroke_part_0)) |
+  (package(photocraft-ui-egui) & test(=gpu_tests::full_res_preview::adjustment_layer_drag_previews_at_full_resolution_when_low_res_is_off)) |
   (package(photocraft-ui-egui) & test(=input::hold_keys::tests::cmd_gives_the_move_tool_only_where_the_tool_does_not_take_cmd)) |
   (package(photocraft-ui-egui) & test(=guide_cursor_tests::command_over_a_guide_takes_it_where_command_is_the_move_tool)) |
   (package(photocraft-gpu) & test(=parity::documents_larger_than_the_texture_limit)) |
