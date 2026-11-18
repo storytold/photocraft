@@ -60,6 +60,7 @@ mod other2;
 pub mod paint;
 pub mod panorama;
 mod par;
+mod peel_frontier;
 pub mod perspective;
 mod photo_util;
 mod pixelate;
