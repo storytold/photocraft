@@ -246,7 +246,7 @@ fn auto_uses_native_system_theme_when_egui_does_not_report_one() {
 }
 
 #[test]
-fn appearance_button_cycles_modes_without_losing_theme_choices() {
+fn next_appearance_mode_cycles_modes_without_losing_theme_choices() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     let ctx = app.ctx().clone();
     app.run("prefs.set", json!({"values": {"interface.darkTheme": "studio", "interface.lightTheme": "classic"}})).unwrap();
