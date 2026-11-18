@@ -89,8 +89,10 @@ fn a_red_color_overlay_is_grey_in_a_grayscale_document() {
         let mut s = session("gray", depth);
         s.execute("layer.layerStyle.colorOverlay", json!({"color": "#ff0000"})).unwrap();
         let p = pixel(&mut s, 20, 15);
-        // Red painted into a Gray document: 0.299.
-        assert!((p[0] - 0.299).abs() < 0.01 && p[0] == p[1] && p[1] == p[2], "{depth}-bit: {p:?}");
+        // 8 bit: red through Gray Gamma 2.2, grey 129 (#14874). 16 and 32 bit (not measured):
+        // red painted into a Gray document, 0.299.
+        let want = if depth == 8 { 129.0 / 255.0 } else { 0.299 };
+        assert!((p[0] - want).abs() < 0.01 && p[0] == p[1] && p[1] == p[2], "{depth}-bit: {p:?}");
     }
 }
 

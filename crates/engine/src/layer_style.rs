@@ -1039,6 +1039,7 @@ fn replace_effects(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let count = list.len();
     let label = if list.is_empty() { "Clear Layer Style" } else { "Edit Layer Style" };
+    let gray = EffectGray::of(s);
     s.edit(label, |doc, _| {
         for pat in &pats {
             crate::pattern_cmds::ensure_in_doc(doc, pat);
@@ -1051,10 +1052,53 @@ fn replace_effects(s: &mut Session, p: &Value) -> Result<Value> {
         // The list's master switch (`layer.setEffectsVisible`, the Layers panel's "Effects" eye)
         // survives the edit: the dialog models per-effect state, not the switch (#3648). A layer
         // with no effects yet still has the default `enabled: true`, so its style shows.
-        l.effects.items = list.into_iter().map(|e| e.in_mode(mode)).collect();
+        l.effects.items = list.into_iter().map(|e| gray.colors(e).in_mode(mode)).collect();
         Ok(())
     })?;
     Ok(json!({ "layer": id.0, "effects": count }))
+}
+
+/// How a Grayscale document takes an effect colour set on it (#14874): an RGB colour becomes its
+/// grey through Gray Gamma 2.2 (D50), as the reference application stores it, so pure blue is
+/// grey 71 (K 72 %), not the Rec.601 luma 29 that [`Color::in_mode`] gives. Only in 8-bit
+/// documents in the default gray working space, as [`crate::color_cmds::swatch_in_doc`] decides
+/// it; other depths, modes and gray spaces (not measured, Duotone included) keep
+/// [`Effect::in_mode`]. So do neutral greys (R = G = B, not measured): the Layer Style dialog sends
+/// a stored grey back that way, and the profile would move it a level on every OK. Colours
+/// already in another model are left to `in_mode`.
+struct EffectGray(Option<std::sync::Arc<craft_cms::Transform>>);
+
+impl EffectGray {
+    fn of(s: &Session) -> Self {
+        use craft_cms::{Builtin, Intent, TransformOptions};
+        let measured = |d: &photocraft_doc::Document| d.mode == photocraft_color::ColorMode::Grayscale && d.depth == photocraft_color::SampleType::U8;
+        let Some(st) = s.active().filter(|st| measured(&st.doc)) else { return Self(None) };
+        let default_gray = Builtin::DotGain20Compat;
+        let doc_profile = crate::color_cmds::document_profile(&st.doc);
+        if s.color.settings.working_gray != default_gray.id() || doc_profile.content_hash() != default_gray.profile().content_hash() {
+            return Self(None);
+        }
+        let opts = TransformOptions { intent: Intent::RelativeColorimetric, bpc: true, ..Default::default() };
+        let gamma22 = std::sync::Arc::new(Builtin::GrayGamma22.profile().clone());
+        Self(craft_cms::cached(&crate::color_cmds::working_profile(photocraft_color::ColorMode::Rgb), &gamma22, opts).ok())
+    }
+
+    fn colors(&self, fx: Effect) -> Effect {
+        let Some(t) = &self.0 else { return fx };
+        fx.map_colors(|c| {
+            let [r, g, b] = [c.c[0], c.c[1], c.c[2]];
+            if c.mode != photocraft_color::ColorMode::Rgb || (r == g && g == b) {
+                return c;
+            }
+            let mut out = [0.0f32; 16];
+            match t.eval(&[r, g, b], &mut out) {
+                Ok(_) if out[0].is_finite() => {
+                    Color { mode: photocraft_color::ColorMode::Grayscale, c: [out[0].clamp(0.0, 1.0), 0.0, 0.0, 0.0], alpha: c.alpha }
+                }
+                _ => c,
+            }
+        })
+    }
 }
 
 fn set_effect(s: &mut Session, p: &Value, kind: &str) -> Result<Value> {
@@ -1065,12 +1109,13 @@ fn set_effect(s: &mut Session, p: &Value, kind: &str) -> Result<Value> {
     let label = format!("Layer Style: {}", fx.label());
     let add = b(p, "add", false);
     let id = crate::commands::layer_param(s, p)?;
+    let gray = EffectGray::of(s);
     s.edit(&label, |doc, _| {
         if let Some(pat) = &pattern {
             crate::pattern_cmds::ensure_in_doc(doc, pat);
         }
         // Colours in the document's mode, as Image › Mode keeps them.
-        let fx = fx.in_mode(doc.mode);
+        let fx = gray.colors(fx).in_mode(doc.mode);
         crate::extra_cmds::background_to_layer(doc, id);
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         // Adding or replacing one effect leaves the list's master switch alone (#3648); a fresh
@@ -1265,6 +1310,9 @@ fn delete_effect(s: &mut Session, p: &Value, effect: &Value) -> Result<Value> {
     Ok(Value::Null)
 }
 
+#[cfg(test)]
+#[path = "layer_style/effect_color_grayscale_tests.rs"]
+mod effect_color_grayscale_tests;
 #[cfg(test)]
 mod tests;
 

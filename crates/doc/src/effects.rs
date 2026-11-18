@@ -317,8 +317,15 @@ pub enum Effect {
 impl Effect {
     /// This effect with its colours in `mode`'s model ([`Color::in_mode`]): a layer's effect
     /// colours are in its document's mode, as Image › Mode keeps them.
-    pub fn in_mode(mut self, mode: photocraft_color::ColorMode) -> Effect {
-        let cc = |c: &mut Color| *c = c.in_mode(mode);
+    pub fn in_mode(self, mode: photocraft_color::ColorMode) -> Effect {
+        self.map_colors(|c| c.in_mode(mode))
+    }
+
+    /// This effect with every colour it paints passed through `f`: its colour, the stops of its
+    /// gradients, its glow or stroke paint and a bevel's highlight and shadow. Patterns are left
+    /// alone.
+    pub fn map_colors(mut self, f: impl Fn(Color) -> Color) -> Effect {
+        let cc = |c: &mut Color| *c = f(*c);
         let paint = |p: &mut FxPaint| match p {
             FxPaint::Color(c) => cc(c),
             FxPaint::Gradient(g) => g.stops.iter_mut().for_each(|s| cc(&mut s.1)),
