@@ -169,64 +169,61 @@ debug = "line-tables-only"
 opt-level = 0
 
 # Test builds compile the craft UI framework (the `craft` facade and the craft-libs crates behind
-# it) at the levels craft-libs builds it at itself, not at the opt-level 2 of `package."*"` above.
-# The workspace unifies the facade's features, so every crate that uses `craft`, photocraft-text
-# included, waits for the whole framework. At opt-level 2 the chain from craft-host to the facade
-# took 38 of the 77 build minutes of the Windows unit leg, and rustc shares no generic
-# instantiations across crates at 2. craft-theme, craft-behavior, craft-imaging, craft-text and
-# craft-font-catalog (colour maths, behaviour cores, pixel editing, hyphenation, font loading) stay
-# optimized at 1; the rest builds at 0, as in craft-libs. Measured on 8 cores (`cargo build
-# --profile test --workspace --features heif --lib --bins`, empty target): 34m53s -> 21m32s; the
-# framework's crates took 7359 -> 1317 s of compile time. `cargo run` and `cargo build` use the
-# dev profile and are unaffected.
+# it) at opt-level 1, not at the 2 of `package."*"` above. The workspace unifies the facade's
+# features, so every crate that uses `craft`, photocraft-text included, waits for the whole
+# framework. At opt-level 2 the chain from craft-host to the facade took 38 of the 77 build minutes
+# of the Windows unit leg, and rustc shares no generic instantiations across crates at 2 (it does
+# at 0 and 1). Not 0, as craft-libs builds most of these: unoptimized frames overflowed the
+# 2 MiB stack of ten more photocraft-ui-egui tests on Windows. `cargo run` and `cargo build` use
+# the dev profile and are unaffected.
 [profile.test.package.craft]
-opt-level = 0
+opt-level = 1
 [profile.test.package.craft-ui]
-opt-level = 0
+opt-level = 1
 [profile.test.package.craft-ui-contract]
-opt-level = 0
+opt-level = 1
 [profile.test.package.craft-ui-widgets]
-opt-level = 0
+opt-level = 1
 [profile.test.package.craft-ui-panels]
-opt-level = 0
+opt-level = 1
 [profile.test.package.craft-ui-patterns]
-opt-level = 0
+opt-level = 1
 [profile.test.package.craft-ui-canvas]
-opt-level = 0
+opt-level = 1
 [profile.test.package.craft-ui-shell]
-opt-level = 0
+opt-level = 1
 [profile.test.package.craft-host]
-opt-level = 0
+opt-level = 1
 [profile.test.package.craft-keymap]
-opt-level = 0
+opt-level = 1
 [profile.test.package.craft-settings]
-opt-level = 0
+opt-level = 1
 [profile.test.package.craft-platform]
-opt-level = 0
+opt-level = 1
 [profile.test.package.craft-window]
-opt-level = 0
+opt-level = 1
 [profile.test.package.craft-font-store]
-opt-level = 0
+opt-level = 1
 [profile.test.package.craft-font-manager]
-opt-level = 0
+opt-level = 1
 [profile.test.package.craft-color-ui]
-opt-level = 0
+opt-level = 1
 [profile.test.package.craft-update]
-opt-level = 0
+opt-level = 1
 [profile.test.package.craft-timeline]
-opt-level = 0
+opt-level = 1
 [profile.test.package.craft-automation]
-opt-level = 0
+opt-level = 1
 [profile.test.package.craft-dialogs]
-opt-level = 0
+opt-level = 1
 [profile.test.package.craft-draw]
-opt-level = 0
+opt-level = 1
 [profile.test.package.craft-theme-store]
-opt-level = 0
+opt-level = 1
 [profile.test.package.craft-menu]
-opt-level = 0
+opt-level = 1
 [profile.test.package.craft-layers]
-opt-level = 0
+opt-level = 1
 [profile.test.package.craft-theme]
 opt-level = 1
 [profile.test.package.craft-behavior]
