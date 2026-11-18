@@ -1,9 +1,17 @@
 use super::*;
+use craft::behavior::CanvasView;
+use craft::behavior::kurbo::Point;
+use craft::ui::dialog::DialogId;
 use egui_kittest::Harness;
 use photocraft_color::{Color, PixelFormat};
 use photocraft_compose::Buffer;
 use photocraft_compose::adjust::{Transfer, apply_depth};
 use photocraft_doc::{Document, Size};
+use serde_json::{Value, json};
+
+use crate::adjust_dialog::HostedAdjustDialog as Hosted;
+use crate::adjust_editors::values::{self, ValueCx};
+use crate::canvas::document_display::CanvasHost;
 
 const DEPTHS: [SampleType; 3] = [SampleType::U8, SampleType::U16, SampleType::F32];
 
@@ -109,14 +117,14 @@ fn thresholds_agree_with_classify() {
 #[test]
 fn colours_follow_the_clipped_channels() {
     let rgb = Color32::from_rgb;
-    assert_eq!(colour(ClipEnd::Shadows, 0, 7), Color32::WHITE);
-    assert_eq!(colour(ClipEnd::Shadows, 0b001, 0), rgb(0, 255, 255), "red alone: cyan");
-    assert_eq!(colour(ClipEnd::Shadows, 0b110, 0), rgb(255, 0, 0), "green and blue: red");
-    assert_eq!(colour(ClipEnd::Shadows, 7, 0), Color32::BLACK);
-    assert_eq!(colour(ClipEnd::Highlights, 7, 0), Color32::BLACK);
-    assert_eq!(colour(ClipEnd::Highlights, 0, 0b001), rgb(255, 0, 0), "red alone: red");
-    assert_eq!(colour(ClipEnd::Highlights, 0, 0b011), rgb(255, 255, 0));
-    assert_eq!(colour(ClipEnd::Highlights, 0, 7), Color32::WHITE);
+    assert_eq!(colour(LevelsClip::Shadows, 0, 7), Color32::WHITE);
+    assert_eq!(colour(LevelsClip::Shadows, 0b001, 0), rgb(0, 255, 255), "red alone: cyan");
+    assert_eq!(colour(LevelsClip::Shadows, 0b110, 0), rgb(255, 0, 0), "green and blue: red");
+    assert_eq!(colour(LevelsClip::Shadows, 7, 0), Color32::BLACK);
+    assert_eq!(colour(LevelsClip::Highlights, 7, 0), Color32::BLACK);
+    assert_eq!(colour(LevelsClip::Highlights, 0, 0b001), rgb(255, 0, 0), "red alone: red");
+    assert_eq!(colour(LevelsClip::Highlights, 0, 0b011), rgb(255, 255, 0));
+    assert_eq!(colour(LevelsClip::Highlights, 0, 7), Color32::WHITE);
 }
 
 fn surface(fmt: PixelFormat, w: u32, h: u32, px: impl Fn(u32, u32) -> Vec<f32>) -> Surface {
@@ -142,9 +150,9 @@ fn blocks_keep_lone_extremes_of_the_pixels_that_count() {
     for (selection, top_right) in [(None, Color32::WHITE), (Some(&grey), Color32::BLACK)] {
         let stats = scan(&s, selection, Rect::new(0, 0, 8, 8), 4);
         assert_eq!(stats.size, [2, 2]);
-        let black = image(&stats, &thr, ClipEnd::Shadows);
+        let black = image(&stats, &thr, LevelsClip::Shadows);
         assert_eq!(black, vec![Color32::WHITE, Color32::WHITE, Color32::WHITE, Color32::from_rgb(0, 255, 255)], "{selection:?}");
-        let white = image(&stats, &thr, ClipEnd::Highlights);
+        let white = image(&stats, &thr, LevelsClip::Highlights);
         assert_eq!(white, vec![Color32::BLACK, top_right, Color32::BLACK, Color32::BLACK], "{selection:?}");
     }
 }
@@ -156,10 +164,10 @@ fn gray_layers_show_black_and_white_only() {
     let adj = levels(lv(100.0, 1.0, 180.0), Default::default());
     let thr = thresholds(&adj, SampleType::U8).unwrap();
     let stats = scan(&s, None, Rect::new(0, 0, 16, 1), 1);
-    for end in [ClipEnd::Shadows, ClipEnd::Highlights] {
+    for end in [LevelsClip::Shadows, LevelsClip::Highlights] {
         for (x, c) in image(&stats, &thr, end).into_iter().enumerate() {
             let v = x as f32 / 15.0 * 255.0;
-            let clipped = if end == ClipEnd::Shadows { v <= 100.0 } else { v >= 180.0 };
+            let clipped = if end == LevelsClip::Shadows { v <= 100.0 } else { v >= 180.0 };
             assert!(c == Color32::BLACK || c == Color32::WHITE, "x={x}: {c:?}");
             assert_eq!(c == colour(end, 7, 7), clipped, "{end:?} x={x}");
         }
@@ -202,33 +210,36 @@ fn ramp_app(mode: ColorMode, depth: SampleType) -> PhotocraftApp {
     PhotocraftApp::new(session, crate::Services::default())
 }
 
-fn open_levels(app: &mut PhotocraftApp, params: Value, end: Option<&str>) -> u64 {
+/// The hosted Levels dialog `id` names.
+fn hosted(app: &mut PhotocraftApp, id: DialogId) -> &mut Hosted {
+    app.framework.dialogs.get_mut_by_id::<Hosted>(id).expect("the hosted Levels dialog is open")
+}
+
+/// Opens Levels with the keys of `params` written over its settings and the clipping display at `end`.
+fn open_levels(app: &mut PhotocraftApp, params: Value, end: Option<LevelsClip>) -> DialogId {
     let id = crate::adjust_dialog::open(app, "image.adjustments.levels").unwrap();
-    let fields = &mut app.ui.dialog_mut(id).unwrap().fields;
-    if let Value::Object(p) = params {
-        fields.extend(p);
+    let mode = app.session.active().unwrap().doc.mode;
+    let cx = ValueCx::new(mode, Value::Null);
+    let mut merged = values::to_params(&hosted(app, id).value().value, &cx, true);
+    if let (Some(merged), Value::Object(extra)) = (merged.as_object_mut(), params) {
+        merged.extend(extra);
     }
-    if let Some(end) = end {
-        fields.insert(FIELD.into(), json!(end));
-    }
+    let dialog = hosted(app, id);
+    dialog.value_mut().value = values::from_params("levels", &merged, &cx).unwrap();
+    dialog.set_clipping(end);
     id
 }
 
 /// A canvas view of the 16×8 document at `zoom` points per pixel (1 pixel per point).
-fn view(zoom: f32) -> ViewXform {
-    ViewXform {
-        rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(16.0 * zoom, 8.0 * zoom)),
-        zoom,
-        center: [8.0, 4.0],
-        flip: false,
-        rotation: 0.0,
-        aspect: 1.0,
-    }
+// PLAN: the sheet names `canvas::testing::view(app)` for these views, which shows the app's own canvas; the zoom
+// cases here need exact views, so they are built with `CanvasView::new`.
+fn view(zoom: f32) -> CanvasView {
+    CanvasView::new(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(16.0 * zoom, 8.0 * zoom)), Point::new(8.0, 4.0), f64::from(zoom))
 }
 
 /// [`paint`] in a frame of its own (so its mesh doesn't spill into a later frame's shapes), then
 /// the colours of the blocks it shows.
-fn paint_view(app: &mut PhotocraftApp, ctx: &egui::Context, xf: &ViewXform) -> Option<Vec<Color32>> {
+fn paint_view(app: &mut PhotocraftApp, ctx: &egui::Context, xf: &CanvasView) -> Option<Vec<Color32>> {
     let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
         let painter = egui::Painter::new(ui.ctx().clone(), egui::LayerId::background(), egui::Rect::EVERYTHING);
         paint(app, ui.ctx(), &painter, xf, 0);
@@ -241,16 +252,9 @@ fn paint_view(app: &mut PhotocraftApp, ctx: &egui::Context, xf: &ViewXform) -> O
 
 /// A view at one device pixel per document pixel whose visible document rect (with
 /// `visible_doc_rect`'s 2 px margin) is exactly `x0..x1` × `y0..y1`.
-fn xf_over(x0: i32, x1: i32, y0: i32, y1: i32) -> ViewXform {
+fn xf_over(x0: i32, x1: i32, y0: i32, y1: i32) -> CanvasView {
     let size = egui::vec2((x1 - x0 - 4) as f32, (y1 - y0 - 4) as f32);
-    ViewXform {
-        rect: egui::Rect::from_min_size(egui::Pos2::ZERO, size),
-        zoom: 1.0,
-        center: [(x0 + x1) as f32 / 2.0, (y0 + y1) as f32 / 2.0],
-        flip: false,
-        rotation: 0.0,
-        aspect: 1.0,
-    }
+    CanvasView::new(egui::Rect::from_min_size(egui::Pos2::ZERO, size), Point::new(f64::from(x0 + x1) / 2.0, f64::from(y0 + y1) / 2.0), 1.0)
 }
 
 /// Snapping the area to the block grid can widen it by up to a block; the blocks grow until the
@@ -291,13 +295,15 @@ fn a_huge_display_grows_the_blocks() {
 /// The main canvas's view of the 16×8 document at 10 device pixels per pixel.
 fn main_view(app: &mut PhotocraftApp) -> crate::state::View {
     app.sync_views();
-    crate::state::View { zoom: 10.0, center: [8.0, 4.0], fit_pending: false, fill_pending: false, ..app.ui.views[0].clone() }
+    crate::state::View { zoom: 10.0, center: [8.0, 4.0], pending: Vec::new(), ..app.ui.views[0].clone() }
 }
 
 /// The shapes of one 160×80 canvas frame of document 0 in `view`.
 fn canvas_frame(ctx: &egui::Context, app: &mut PhotocraftApp, view: &crate::state::View, primary: bool) -> Vec<egui::epaint::ClippedShape> {
+    // An extra document window is its own canvas (a window id in its host), so the framework keeps its paint apart from the main one's.
+    let host = CanvasHost { window: (!primary).then_some(1), ..CanvasHost::main(0) };
     let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
-        crate::canvas::canvas_view(app, ui, 0, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(160.0, 80.0)), view.clone(), primary);
+        crate::canvas::canvas_view(app, ui, host, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(160.0, 80.0)), view.clone(), primary);
     });
     out.textures_delta.clear();
     out.shapes
@@ -319,9 +325,9 @@ fn meshes_with(shapes: &[egui::epaint::ClippedShape], tex: egui::TextureId) -> u
 /// canvas (not primary) neither draws it nor replaces that cache with its own view.
 #[test]
 fn only_the_main_canvas_draws_the_display() {
-    let ctx = egui::Context::default();
     let mut app = ramp_app(ColorMode::Rgb, SampleType::U8);
-    open_levels(&mut app, json!({"inBlack": 100}), Some("shadows"));
+    let ctx = app.ctx().clone();
+    open_levels(&mut app, json!({"inBlack": 100}), Some(LevelsClip::Shadows));
     let main = main_view(&mut app);
     let other = crate::state::View { zoom: 0.25, ..main.clone() };
     let shapes = canvas_frame(&ctx, &mut app, &main, true);
@@ -337,12 +343,12 @@ fn only_the_main_canvas_draws_the_display() {
 /// and goes away with the dialog.
 #[test]
 fn paint_shows_the_target_clipping_for_the_view() {
-    let ctx = egui::Context::default();
     for (mode, depth) in
         [(ColorMode::Rgb, SampleType::U8), (ColorMode::Rgb, SampleType::U16), (ColorMode::Rgb, SampleType::F32), (ColorMode::Grayscale, SampleType::U8)]
     {
         let mut app = ramp_app(mode, depth);
-        let id = open_levels(&mut app, json!({"inBlack": 100, "inWhite": 200}), Some("shadows"));
+        let ctx = app.ctx().clone();
+        let id = open_levels(&mut app, json!({"inBlack": 100, "inWhite": 200}), Some(LevelsClip::Shadows));
         let px = paint_view(&mut app, &ctx, &view(10.0)).unwrap_or_else(|| panic!("{mode:?} {depth:?}"));
         assert_eq!(app.levels_clipping.as_ref().unwrap().stats.size, [16, 8]);
         let gray = mode == ColorMode::Grayscale;
@@ -351,7 +357,7 @@ fn paint_shows_the_target_clipping_for_the_view() {
             let want = if x as f32 / 15.0 * 255.0 <= 100.0 { clipped } else { Color32::WHITE };
             assert_eq!(*p, want, "{mode:?} {depth:?} shadows x={x}");
         }
-        app.ui.dialog_mut(id).unwrap().fields.insert(FIELD.into(), json!("highlights"));
+        hosted(&mut app, id).set_clipping(Some(LevelsClip::Highlights));
         let px = paint_view(&mut app, &ctx, &view(10.0)).unwrap();
         for (x, p) in px.iter().skip(16 * 7).enumerate() {
             let red = x as f32 / 15.0 * 255.0 >= 200.0;
@@ -372,13 +378,13 @@ fn paint_shows_the_target_clipping_for_the_view() {
         let shapes = canvas_frame(&ctx, &mut app, &main, true);
         let tex = app.levels_clipping.as_ref().and_then(|c| c.tex.as_ref()).map(egui::TextureHandle::id).unwrap();
         assert_eq!(meshes_with(&shapes, tex), 1, "{mode:?} {depth:?}: on, it draws");
-        app.ui.dialog_mut(id).unwrap().fields.insert(FIELD.into(), Value::Null);
+        hosted(&mut app, id).set_clipping(None);
         assert!(request(&app, 0).is_none());
         let shapes = canvas_frame(&ctx, &mut app, &main, true);
         assert_eq!(meshes_with(&shapes, tex), 0, "{mode:?} {depth:?}: off, it draws nothing");
         assert!(app.levels_clipping.is_some(), "{mode:?} {depth:?}: the cache stays while the dialog is open");
         // Closed: the cache goes.
-        app.ui.close_dialog(id);
+        app.framework.dialogs.cancel_by_id(&ctx, id);
         paint_view(&mut app, &ctx, &view(10.0));
         assert!(app.levels_clipping.is_none(), "{mode:?} {depth:?}");
     }
@@ -392,17 +398,17 @@ fn ineligible_documents_show_no_display() {
         let mut session = photocraft_engine::Session::new();
         session.execute("file.new", json!({"width": 8, "height": 8, "mode": mode})).unwrap();
         let mut app = PhotocraftApp::new(session, crate::Services::default());
-        open_levels(&mut app, json!({}), Some("shadows"));
+        open_levels(&mut app, json!({}), Some(LevelsClip::Shadows));
         assert!(request(&app, 0).is_none(), "{mode}");
     }
     let mut app = ramp_app(ColorMode::Rgb, SampleType::U8);
     app.run("select.editInQuickMaskMode", json!({})).unwrap();
     assert!(app.session.active().unwrap().doc.quick_mask.is_some());
-    open_levels(&mut app, json!({}), Some("shadows"));
+    open_levels(&mut app, json!({}), Some(LevelsClip::Shadows));
     assert!(request(&app, 0).is_none(), "Quick Mask");
     let mut app = ramp_app(ColorMode::Rgb, SampleType::U8);
     app.run("layer.newFillLayer.solidColor", json!({"color": "#808080"})).unwrap();
-    open_levels(&mut app, json!({}), Some("shadows"));
+    open_levels(&mut app, json!({}), Some(LevelsClip::Shadows));
     assert!(request(&app, 0).is_none(), "fill layer");
 }
 
@@ -412,9 +418,9 @@ fn ineligible_documents_show_no_display() {
 fn a_running_job_holds_the_display() {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
-    let ctx = egui::Context::default();
     let mut app = ramp_app(ColorMode::Rgb, SampleType::U8);
-    open_levels(&mut app, json!({"inBlack": 100}), Some("shadows"));
+    let ctx = app.ctx().clone();
+    open_levels(&mut app, json!({"inBlack": 100}), Some(LevelsClip::Shadows));
     let gate = Arc::new(AtomicBool::new(false));
     let open = gate.clone();
     let started = app
@@ -447,9 +453,9 @@ fn a_running_job_holds_the_display() {
 /// Closing the last document drops the display's cache: no canvas is left to paint it away.
 #[test]
 fn closing_the_last_document_drops_the_cache() {
-    let ctx = egui::Context::default();
     let mut app = ramp_app(ColorMode::Rgb, SampleType::U8);
-    open_levels(&mut app, json!({"inBlack": 100}), Some("shadows"));
+    let ctx = app.ctx().clone();
+    open_levels(&mut app, json!({"inBlack": 100}), Some(LevelsClip::Shadows));
     assert!(paint_view(&mut app, &ctx, &view(10.0)).is_some());
     app.run("file.close", json!({})).unwrap();
     assert!(app.session.documents().is_empty());
@@ -460,93 +466,43 @@ fn closing_the_last_document_drops_the_cache() {
 /// cache goes as if no Levels dialog were open, even over a pixel layer.
 #[test]
 fn smart_filter_levels_show_no_display() {
-    let ctx = egui::Context::default();
     let mut app = ramp_app(ColorMode::Rgb, SampleType::U8);
-    let id = open_levels(&mut app, json!({"inBlack": 100}), Some("shadows"));
+    let ctx = app.ctx().clone();
+    let id = open_levels(&mut app, json!({"inBlack": 100}), Some(LevelsClip::Shadows));
     assert!(paint_view(&mut app, &ctx, &view(10.0)).is_some(), "a plain Levels dialog shows it");
     let layer = app.session.active().and_then(|s| s.active_layer).unwrap();
-    app.ui.dialog_mut(id).unwrap().fields.insert("__smartFilter".into(), json!({"layer": layer.0}));
+    app.framework.dialogs.cancel_by_id(&ctx, id);
+    let smart = crate::adjust_dialog::open_smart_filter(&mut app, "image.adjustments.levels", &json!({"inBlack": 100}), json!({"layer": layer.0, "index": 0}))
+        .expect("the Smart Filter's dialog opens");
+    hosted(&mut app, smart).set_clipping(Some(LevelsClip::Shadows));
     assert!(request(&app, 0).is_none());
     assert!(paint_view(&mut app, &ctx, &view(10.0)).is_none());
     assert!(app.levels_clipping.is_none(), "the cache goes");
 }
 
 fn dialog_harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
-    let h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    let h = Harness::builder()
+        .with_context(app.ctx().clone())
+        .with_size(egui::vec2(1200.0, 900.0))
+        .with_step_dt(1.0 / 60.0)
+        .build_ui_state(|ui, app| crate::dialogs::run(app, ui), app);
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::AppTheme::pro());
     h
 }
 
+/// The `clipping` field of the first open dialog as automation lists it: `"shadows"`, `"highlights"` or `None`.
 fn clipping(h: &Harness<'static, PhotocraftApp>) -> Option<Value> {
-    h.state().ui.dialogs.first().and_then(|d| d.fields.get(FIELD).cloned())
+    let dialogs = h.state().framework.dialogs.open_dialogs();
+    dialogs.first().and_then(|d| d.fields.as_ref()).map(|fields| fields["clipping"].clone()).filter(|clip| !clip.is_null())
 }
 
-fn press(h: &mut Harness<'static, PhotocraftApp>, at: egui::Pos2, pressed: bool, modifiers: egui::Modifiers) {
-    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers });
-    h.run_steps(1);
-}
-
-fn modifiers(h: &mut Harness<'static, PhotocraftApp>, m: egui::Modifiers) {
-    h.event(egui::Event::ModifiersChanged(m));
-    h.run_steps(1);
-}
-
-/// Alt-dragging the black slider shows the shadows display while both are held, the white slider
-/// the highlights; the gamma slider, a drag without Alt and the Properties panel show nothing.
-/// The document stays untouched throughout.
-#[test]
-fn alt_drag_on_the_black_and_white_sliders_turns_the_display_on() {
-    let mut h = dialog_harness(ramp_app(ColorMode::Rgb, SampleType::U8));
-    let original = h.state().session.active().unwrap().doc.clone();
-    let id = crate::adjust_dialog::open(h.state_mut(), "image.adjustments.levels").unwrap();
-    h.run_steps(3);
-    let track = h.ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::unique(("adjust-dialog", "levels")).with("levels-slider"))).unwrap();
-    let at = |level: f32| egui::pos2(track.left() + level / 255.0 * track.width(), track.center().y + 4.0);
-    let alt = egui::Modifiers::ALT;
-    // Black slider: on while Alt and the button are held, off with either.
-    modifiers(&mut h, alt);
-    h.event(egui::Event::PointerMoved(at(0.0)));
-    press(&mut h, at(0.0), true, alt);
-    assert_eq!(clipping(&h), Some(json!("shadows")));
-    h.event(egui::Event::PointerMoved(at(60.0)));
-    h.run_steps(1);
-    let in_black = h.state().ui.dialogs[0].fields["inBlack"].as_f64().unwrap();
-    assert!((55.0..=65.0).contains(&in_black), "the drag still moves the slider: {in_black}");
-    assert_eq!(clipping(&h), Some(json!("shadows")));
-    modifiers(&mut h, egui::Modifiers::NONE);
-    assert_eq!(clipping(&h), None, "releasing Alt shows the preview");
-    modifiers(&mut h, alt);
-    assert_eq!(clipping(&h), Some(json!("shadows")), "Alt again");
-    press(&mut h, at(60.0), false, alt);
-    assert_eq!(clipping(&h), None, "releasing the mouse shows the preview");
-    // White slider.
-    h.event(egui::Event::PointerMoved(at(255.0)));
-    press(&mut h, at(255.0), true, alt);
-    assert_eq!(clipping(&h), Some(json!("highlights")));
-    press(&mut h, at(255.0), false, alt);
-    assert_eq!(clipping(&h), None);
-    // Gamma slider (halfway between 60 and 255 at gamma 1).
-    let gamma = 60.0 + (255.0 - 60.0) / 2.0;
-    h.event(egui::Event::PointerMoved(at(gamma)));
-    press(&mut h, at(gamma), true, alt);
-    assert_eq!(clipping(&h), None, "the gamma slider has no display");
-    press(&mut h, at(gamma), false, alt);
-    // No Alt.
-    modifiers(&mut h, egui::Modifiers::NONE);
-    h.event(egui::Event::PointerMoved(at(60.0)));
-    press(&mut h, at(60.0), true, egui::Modifiers::NONE);
-    assert_eq!(clipping(&h), None, "no Alt, no display");
-    press(&mut h, at(60.0), false, egui::Modifiers::NONE);
-    assert!(std::sync::Arc::ptr_eq(&h.state().session.active().unwrap().doc, &original));
-    assert!(h.state().ui.dialogs.iter().any(|d| d.id == id));
-}
-
-/// Set through automation, the display stays until cleared; it never re-keys the live preview,
-/// touches the document or reaches OK.
+/// Set through automation (`ui.dialog.set`), the display stays until cleared; it never re-keys the
+/// live preview, touches the document or reaches OK.
 #[test]
 fn the_display_never_reaches_the_document() {
     let commit = |end: Option<&str>| {
         let mut h = dialog_harness(ramp_app(ColorMode::Rgb, SampleType::U8));
+        let ctx = h.ctx.clone();
         let original = h.state().session.active().unwrap().doc.clone();
         let steps = h.state().session.active().unwrap().history.past_len();
         let id = open_levels(h.state_mut(), json!({"inBlack": 60, "gamma": 1.2}), None);
@@ -554,14 +510,14 @@ fn the_display_never_reaches_the_document() {
         let _ = crate::adjust_preview::display_doc(h.state_mut(), 0);
         let key = crate::adjust_preview::shown_key(h.state());
         if let Some(end) = end {
-            h.state_mut().ui.dialog_mut(id).unwrap().fields.insert(FIELD.into(), json!(end));
+            h.state_mut().framework.dialogs.set_json_field(&ctx, id, "clipping", json!(end)).unwrap();
             h.run_steps(3);
             assert_eq!(clipping(&h), Some(json!(end)), "an automation-set display stays");
             let _ = crate::adjust_preview::display_doc(h.state_mut(), 0);
             assert_eq!(crate::adjust_preview::shown_key(h.state()), key, "the preview is not re-keyed");
             assert!(std::sync::Arc::ptr_eq(&h.state().session.active().unwrap().doc, &original));
         }
-        crate::dialogs::confirm(h.state_mut(), id).unwrap();
+        crate::dialogs::confirm(h.state_mut(), &ctx, id).unwrap();
         let st = h.state().session.active().unwrap();
         assert_eq!(st.history.past_len(), steps + 1);
         let mut px = Vec::new();
@@ -571,55 +527,5 @@ fn the_display_never_reaches_the_document() {
     let plain = commit(None);
     for end in ["shadows", "highlights"] {
         assert_eq!(commit(Some(end)), plain, "{end}: OK commits only the levels");
-    }
-}
-
-/// Scan once per view, then per slider move thresholds + colours (the texture upload comes on
-/// top). `CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 cargo test
-/// --release -p photocraft-ui-egui --lib levels_clipping_bench -- --ignored --nocapture`
-#[test]
-#[ignore = "benchmark"]
-fn levels_clipping_bench() {
-    let adj = levels(lv(40.0, 1.3, 215.0), [lv(5.0, 1.0, 250.0), LevelsChannel::default(), lv(0.0, 0.8, 240.0)]);
-    for (w, h) in [(6000u32, 4000u32), (7360, 4912)] {
-        let mut s = Surface::new(PixelFormat::RGBA8);
-        for y0 in (0..h).step_by(256) {
-            let rows = 256.min(h - y0);
-            let data: Vec<f32> = (0..rows * w)
-                .flat_map(|i| {
-                    let (x, y) = (i % w, y0 + i / w);
-                    let n = ((x.wrapping_mul(2_654_435_761) ^ y.wrapping_mul(40_503)) >> 7) % 64;
-                    let v = (x as f32 / w as f32 * 0.8 + n as f32 / 255.0).min(1.0);
-                    [v, 1.0 - v, (y as f32 / h as f32), 1.0]
-                })
-                .collect();
-            s.write_region(Rect::new(0, y0 as i32, w as i32, (y0 + rows) as i32), &data);
-        }
-        let fit = w.div_ceil(2400);
-        for (name, rect, factor) in [("fit", Rect::new(0, 0, w as i32, h as i32), fit), ("100%", Rect::new(1000, 1000, 3560, 2440), 1)] {
-            let best = |f: &mut dyn FnMut()| {
-                (0..5)
-                    .map(|_| {
-                        let t = std::time::Instant::now();
-                        f();
-                        t.elapsed().as_secs_f64() * 1000.0
-                    })
-                    .fold(f64::MAX, f64::min)
-            };
-            let scan_ms = best(&mut || {
-                std::hint::black_box(scan(&s, None, rect, factor));
-            });
-            let stats = scan(&s, None, rect, factor);
-            let update_ms = best(&mut || {
-                let thr = thresholds(&adj, SampleType::U8).unwrap();
-                std::hint::black_box(egui::ColorImage::new(stats.size, image(&stats, &thr, ClipEnd::Shadows)));
-            });
-            println!(
-                "{} MP {name} (1/{factor}, {}×{} texels): scan {scan_ms:.1} ms, update {update_ms:.1} ms",
-                (w * h) / 1_000_000,
-                stats.size[0],
-                stats.size[1]
-            );
-        }
     }
 }

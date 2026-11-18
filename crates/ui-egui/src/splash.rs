@@ -3,8 +3,12 @@
 //!
 //! Closes immediately when the system is ready without waiting for an artificial timer.
 
-use crate::theme::Tokens;
-use egui::{Color32, CornerRadius, FontId, Rect, RichText, Stroke, Ui, vec2};
+use craft::ui::contract::{Props as _, Show as _, Sizing};
+use craft::ui::display::Progress;
+use craft::ui::runtime::env::Env;
+use craft::ui::style::{UiTokens, rgba_color};
+use craft::window::desktop::{WindowState, visible_part};
+use egui::{CornerRadius, FontId, Rect, RichText, Shadow, Stroke, Ui, vec2};
 
 /// Threshold in seconds before the splash screen appears. If startup completes faster than
 /// this short duration, the splash is not presented to prevent visual flickering.
@@ -14,7 +18,7 @@ pub const SPLASH_APPEAR_DELAY: f64 = 0.15;
 /// to ensure the workspace is never blocked indefinitely.
 pub const SPLASH_SAFETY_TIMEOUT: f64 = 5.0;
 
-/// State for managing the startup splash screen overlay, display timing, and font preloading.
+/// State for managing the startup splash screen overlay and display timing.
 #[derive(Clone, Debug)]
 pub struct SplashState {
     /// Start time of the splash display in seconds (from egui `time`).
@@ -23,8 +27,6 @@ pub struct SplashState {
     pub duration: f64,
     /// Whether the splash screen has been explicitly dismissed by the user or system.
     pub dismissed: bool,
-    /// Retained for test compatibility; font loading does not hold the splash hostage.
-    pub fonts_preloaded: bool,
 }
 
 impl Default for SplashState {
@@ -37,7 +39,7 @@ impl Default for SplashState {
 impl SplashState {
     /// Creates a new startup splash screen state.
     pub fn new() -> Self {
-        Self { start_time: 0.0, duration: SPLASH_SAFETY_TIMEOUT, dismissed: false, fonts_preloaded: true }
+        Self { start_time: 0.0, duration: SPLASH_SAFETY_TIMEOUT, dismissed: false }
     }
 
     /// Ensures that `start_time` is initialized to the current time on the first tick before checks.
@@ -91,14 +93,14 @@ impl SplashState {
         self.dismissed = true;
     }
 
-    /// Renders the startup splash screen card, brand mark, and animated progress bar.
+    /// Renders the startup splash screen card, brand mark, and progress bar using the framework tokens.
     pub fn show(&mut self, ctx: &egui::Context, ui: &mut Ui) {
         let now = ctx.input(|i| i.time);
         self.ensure_started(now);
 
         let elapsed = (now - self.start_time).max(0.0);
 
-        // Any explicit user click or keypress after appear delay dismisses the splash screen
+        // Any explicit user click or keypress after appear delay dismisses the splash screen.
         let dismissed_by_user = ctx.input(|i| i.pointer.any_click() || i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. })));
         if dismissed_by_user && elapsed > SPLASH_APPEAR_DELAY {
             self.dismiss();
@@ -106,103 +108,116 @@ impl SplashState {
             return;
         }
 
-        // Request repaint while splash is active for smooth progress animation
+        // Request repaint while splash is active for smooth progress animation.
         ctx.request_repaint();
 
-        let t = Tokens::get(ctx);
+        let tokens = Env::of(ui).tokens.clone();
         let screen_rect = ctx.content_rect();
+        let card_rect = splash_card_rect(ctx, screen_rect);
+        paint_backdrop_and_card(ui.painter(), &tokens, screen_rect, card_rect);
 
-        // Dark dim backdrop covering the entire window
-        let painter = ui.painter();
-        painter.rect_filled(screen_rect, CornerRadius::ZERO, Color32::from_black_alpha(240));
-
-        // Splash card dimensions: 520 x 310 pt
-        let card_size = vec2(520.0, 310.0);
-
-        // Center on the visible work area of the monitor (accounting for taskbar & monitor bounds)
-        let visible_area = crate::work_area::visible_rect(ctx);
-        let center = if visible_area.is_finite() && visible_area.width() > 100.0 && visible_area.height() > 100.0 {
-            visible_area.center()
-        } else {
-            screen_rect.center()
-        };
-
-        // Optical center: adjust 8pt upward for natural human visual balance
-        let optical_center = egui::pos2(center.x, center.y - 8.0);
-        let card_rect = Rect::from_center_size(optical_center, card_size);
-
-        // Soft elevation drop shadow with balanced ambient glow
-        for (offset_y, blur, alpha) in [(4.0, 18.0, 25), (2.0, 10.0, 40), (0.0, 4.0, 60)] {
-            let shadow_rect = card_rect.translate(vec2(0.0, offset_y)).expand(blur * 0.5);
-            painter.rect_filled(shadow_rect, CornerRadius::same(16), Color32::from_black_alpha(alpha));
-        }
-
-        // Splash card container
-        painter.rect(card_rect, CornerRadius::same(14), t.card, Stroke::new(1.0, t.card_border), egui::StrokeKind::Inside);
-
-        // Elegant accent highlight line along the top card edge
-        let top_bar = Rect::from_min_size(card_rect.min, vec2(card_size.x, 2.5));
-        painter.rect_filled(top_bar, CornerRadius { nw: 14, ne: 14, sw: 0, se: 0 }, t.accent);
-
-        // Inner layout with symmetrical top/bottom padding
         let inner_rect = card_rect.shrink2(vec2(28.0, 20.0));
         let mut inner_ui = ui.new_child(egui::UiBuilder::new().max_rect(inner_rect));
         inner_ui.spacing_mut().item_spacing = vec2(0.0, 4.0);
-
-        inner_ui.vertical_centered(|ui| {
-            ui.add_space(10.0);
-
-            // Brand icon (72 x 72 pt) - uses existing clean-room vector brand mark
-            let icon_size = 72.0;
-            let (rect, _) = ui.allocate_exact_size(vec2(icon_size, icon_size), egui::Sense::hover());
-            crate::brand::paint_mark(ui, rect);
-
-            ui.add_space(8.0);
-
-            // App Title
-            ui.label(RichText::new("PhotoCraft").font(FontId::proportional(26.0)).color(t.text).strong());
-
-            // Version & Subtitle
-            let version_text = crate::i18n::fmt(tl!("v{version}  ·  Open Source Native Image Editor"), &[("version", env!("CARGO_PKG_VERSION"))]);
-            ui.label(RichText::new(version_text).font(FontId::proportional(12.0)).color(t.text_faint));
-
-            ui.add_space(16.0);
-
-            // Progress Bar
-            let bar_width = 340.0;
-            let bar_height = 5.0;
-            let (bar_rect, _) = ui.allocate_exact_size(vec2(bar_width, bar_height), egui::Sense::hover());
-
-            // Track
-            ui.painter().rect_filled(bar_rect, CornerRadius::same(2), Color32::from_white_alpha(20));
-
-            let font_ready = photocraft_text::try_shared().is_some();
-            let progress = if font_ready { 1.0_f32 } else { (elapsed as f32 / 1.5).clamp(0.15, 0.90) };
-
-            // Filled progress
-            let filled_width = (bar_width * progress).max(5.0);
-            let filled_rect = Rect::from_min_size(bar_rect.min, vec2(filled_width, bar_height));
-            ui.painter().rect_filled(filled_rect, CornerRadius::same(2), t.accent);
-
-            ui.add_space(8.0);
-
-            // Status message
-            let status_msg = if font_ready {
-                tl!("Ready")
-            } else if progress < 0.5 {
-                tl!("Initializing graphics & engine…")
-            } else {
-                tl!("Loading workspace & font assets…")
-            };
-
-            ui.label(RichText::new(status_msg).font(FontId::proportional(11.5)).color(t.text_dim));
-
-            ui.add_space(10.0);
-
-            // Skip hint
-            ui.label(RichText::new(tl!("Click anywhere to skip")).font(FontId::proportional(10.0)).color(Color32::from_white_alpha(45)));
-        });
+        paint_card_contents(&mut inner_ui, &tokens, elapsed);
     }
+}
+
+/// Computes the centered card rectangle within the visible work area of the monitor.
+fn splash_card_rect(ctx: &egui::Context, screen_rect: Rect) -> Rect {
+    let card_size = vec2(520.0, 310.0);
+    let visible_area = ctx.input(|i| {
+        let v = i.viewport();
+        visible_part(screen_rect, v.monitor_size, v.inner_rect, WindowState::of(v))
+    });
+    let center =
+        if visible_area.is_finite() && visible_area.width() > 100.0 && visible_area.height() > 100.0 { visible_area.center() } else { screen_rect.center() };
+    // Optical center: adjust 8pt upward for natural human visual balance.
+    let optical_center = egui::pos2(center.x, center.y - 8.0);
+    Rect::from_center_size(optical_center, card_size)
+}
+
+/// Paints the backdrop, elevation shadow, card surface, and top accent highlight from theme tokens.
+fn paint_backdrop_and_card(painter: &egui::Painter, tokens: &UiTokens, screen_rect: Rect, card_rect: Rect) {
+    painter.rect_filled(screen_rect, CornerRadius::ZERO, rgba_color(tokens.color.surface.background));
+    painter.rect_filled(screen_rect, CornerRadius::ZERO, rgba_color(tokens.color.surface.scrim));
+
+    let radius_window = UiTokens::corner(tokens.shape.radius.window);
+    let shadow_color = rgba_color(tokens.color.surface.shadow);
+    if shadow_color.a() > 0 {
+        let elev = tokens.elevation.popup;
+        let shadow = Shadow {
+            offset: [elev.offset[0].round().clamp(-128.0, 127.0) as i8, elev.offset[1].round().clamp(-128.0, 127.0) as i8],
+            blur: elev.blur.round().clamp(0.0, 255.0) as u8,
+            spread: elev.spread.round().clamp(0.0, 255.0) as u8,
+            color: shadow_color,
+        };
+        painter.add(shadow.as_shape(card_rect, radius_window));
+    }
+
+    painter.rect(
+        card_rect,
+        radius_window,
+        rgba_color(tokens.color.surface.panel),
+        Stroke::new(tokens.stroke.thin, rgba_color(tokens.color.line.border)),
+        egui::StrokeKind::Inside,
+    );
+
+    let top_bar = Rect::from_min_size(card_rect.min, vec2(card_rect.width(), 2.5));
+    painter.rect_filled(top_bar, CornerRadius { nw: radius_window.nw, ne: radius_window.ne, sw: 0, se: 0 }, rgba_color(tokens.color.accent.solid));
+}
+
+/// Renders the brand mark, app title, version tagline, progress bar, status text, and skip hint.
+fn paint_card_contents(ui: &mut Ui, tokens: &UiTokens, elapsed: f64) {
+    let text_normal = rgba_color(tokens.color.text.normal);
+    let text_muted = rgba_color(tokens.color.text.muted);
+    let text_faint = rgba_color(tokens.color.text.faint);
+
+    ui.vertical_centered(|ui| {
+        ui.add_space(10.0);
+
+        // Brand icon (72 x 72 pt) - uses the app's clean-room brand mark texture.
+        let icon_size = 72.0;
+        let (rect, _) = ui.allocate_exact_size(vec2(icon_size, icon_size), egui::Sense::hover());
+        crate::panels::brand::paint_mark(ui, rect);
+
+        ui.add_space(8.0);
+
+        // App Title
+        ui.label(RichText::new("PhotoCraft").font(FontId::proportional(26.0)).color(text_normal).strong());
+
+        // Version & Subtitle
+        let version_text = crate::i18n::fmt(tl!("v{version}  ·  Open Source Native Image Editor"), &[("version", env!("CARGO_PKG_VERSION"))]);
+        ui.label(RichText::new(version_text).font(FontId::proportional(12.0)).color(text_faint));
+
+        ui.add_space(16.0);
+
+        let font_ready = photocraft_text::try_shared().is_some();
+        let progress = if font_ready { 1.0_f32 } else { (elapsed as f32 / 1.5).clamp(0.15, 0.90) };
+        let status_msg = if font_ready {
+            tl!("Ready")
+        } else if progress < 0.5 {
+            tl!("Initializing graphics & engine…")
+        } else {
+            tl!("Loading workspace & font assets…")
+        };
+
+        let bar_width = 340.0;
+        let bar_height = tokens.size.groove * 2.0;
+        ui.allocate_ui(vec2(bar_width, bar_height), |ui| {
+            let _ = Progress::new(progress).label(status_msg).sizing(Sizing::FillWidth).show(ui);
+        });
+
+        ui.add_space(8.0);
+
+        // Status message
+        ui.label(RichText::new(status_msg).font(FontId::proportional(11.5)).color(text_muted));
+
+        ui.add_space(10.0);
+
+        // Skip hint
+        ui.label(RichText::new(tl!("Click anywhere to skip")).font(FontId::proportional(10.0)).color(text_faint));
+    });
 }
 
 #[cfg(test)]
@@ -288,7 +303,6 @@ mod tests {
         let new = SplashState::new();
         assert_eq!(default.duration, new.duration);
         assert_eq!(default.dismissed, new.dismissed);
-        assert_eq!(default.fonts_preloaded, new.fonts_preloaded);
     }
 
     /// Verifies calculation of remaining time until appearance before and after the appear delay threshold.
