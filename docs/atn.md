@@ -936,10 +936,11 @@ A Play Action (`Ply `) step names its target as a reference: `Actn` by child nam
 reference application also records `ASet` by action-set name (as a named Batch step's `Usng` does,
 see the Batch table). Load Actions keeps a cross-set qualifier as
 `actions.play {"action": child, "set": set}`, and playback resolves a qualified call inside that
-set only, by the exact name: a set holding no action of that name is an error, never a same-named
-child of another set and never an action whose name merely looks like a rename (a set holding only a
-genuine `Child 2` has no `Child`; #11523). When a load renames a child to keep names unique (`Child 2`
-for a second `Child`) it records the rename for the session and binds the qualified calls it can,
+set only, by the exact name: a set holding no action of that name is an error, never the action of
+that name in another set and never an action whose name merely looks like a rename (a set holding
+only a genuine `Child 2` has no `Child`; #11523). Action names are unique in the list, so a load
+renames a child whose name another set already uses (`Child 2` for a second `Child`); it records
+the rename for the session and binds the qualified calls it can,
 those in the files loaded later and those already in the library, to the loaded name; a call
 loaded in a later session than the rename, or after the set was edited, finds no `Child` and is
 reported. A call of the loaded file's own set stays unqualified,
@@ -948,9 +949,9 @@ recorded call, an older file) still resolves by name; a `set` that is not a name
 is refused rather than ignored, because falling back to the name is how a call lands in the wrong
 set. A qualified call whose set the session has not loaded is reported in `actions.load`'s
 `warnings` and fails at playback naming the set it could not find — the warning says which of the
-two is missing when the set is loaded but holds no such child. While recording, a call whose child
-name the library holds in more than one set is journaled with its set, so the recording replays the
-action it recorded; a uniquely named call is journaled bare, as before.
+two is missing when the set is loaded but holds no such child. Renaming an action follows only the
+calls that reach it: a call qualified with another set that names it reaches nothing and keeps the
+name.
 
 ## Newer events (string ID only)
 

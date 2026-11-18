@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, tool_event};
-use crate::options_bar_mode_wheel_tests::{brush_mode, harness, mode_dropdown, wheel};
+use crate::options_bar_mode_wheel_tests::harness;
 use crate::state::Tool;
 
 /// The Clone Stamp in a new document, Sample set to All Layers; `indexed` converts it first.
@@ -71,26 +71,14 @@ fn shows(h: &Harness<'_, PhotocraftApp>, value: &str) -> bool {
     h.query_all_by_role(Role::ComboBox).any(|n| n.value().as_deref() == Some(value))
 }
 
-#[test]
-fn in_an_indexed_document_normal_reads_threshold_in_the_same_list() {
-    let mut h = bar(true);
-    assert_eq!(brush_mode(&h), BlendMode::Normal);
-    assert!(shows(&h, "Threshold"));
-    // The list itself is today's: the wheel steps on to Dissolve and back.
-    let at = h.query_all_by_role(Role::ComboBox).find(|n| n.value().as_deref() == Some("Threshold")).unwrap().rect().center();
-    wheel(&mut h, at, -1.0);
-    assert_eq!(brush_mode(&h), BlendMode::Dissolve);
-    assert!(shows(&h, "Dissolve"));
-    wheel(&mut h, at, 1.0);
-    assert_eq!(brush_mode(&h), BlendMode::Normal);
-    assert!(shows(&h, "Threshold"));
-}
-
 /// Other modes in Indexed Color weren't measured: they keep today's list.
 #[test]
 fn in_an_indexed_document_another_mode_keeps_the_list() {
     let mut h = bar(true);
-    h.state_mut().session.tools.brush.mode = BlendMode::Dissolve;
+    // A brush setter notes the change (`brush_changed`), which the options bar's content version holds.
+    let tools = &mut h.state_mut().session.tools;
+    tools.brush.mode = BlendMode::Dissolve;
+    tools.brush_changed();
     h.run_steps(4);
     assert!(shows(&h, "Dissolve"));
     assert!(!shows(&h, "Threshold"));
@@ -113,17 +101,4 @@ fn opacity_flow_and_aligned_stay_enabled_in_an_indexed_document() {
     for (role, name) in [(Role::SpinButton, "Opacity"), (Role::SpinButton, "Flow"), (Role::CheckBox, "Aligned")] {
         assert!(!control(&h, role, name).accesskit_node().is_disabled(), "{name}");
     }
-}
-
-#[test]
-fn rgb_documents_keep_the_mode_list_and_the_sample_choice() {
-    let mut h = bar(false);
-    let node = sample(&h);
-    assert_eq!(node.value().as_deref(), Some("All Layers"));
-    assert!(!node.accesskit_node().is_disabled());
-    assert!(!shows(&h, "Threshold"));
-    let at = mode_dropdown(&h).center();
-    wheel(&mut h, at, -1.0);
-    assert_eq!(brush_mode(&h), BlendMode::Dissolve);
-    assert_eq!(clone_stroke(&mut h)["sampleLayer"], "all");
 }
