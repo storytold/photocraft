@@ -57,6 +57,13 @@ impl AlphaIndex {
         Some(Self { format, coverage })
     }
 
+    pub(crate) fn allocated_bytes(&self) -> usize {
+        match &self.coverage {
+            Coverage::Bits(bits) => bits.capacity() * size_of::<u64>(),
+            Coverage::Empty | Coverage::Full => 0,
+        }
+    }
+
     pub(crate) fn contains(&self, area: Rect) -> bool {
         let area = area.intersect(&Rect::new(0, 0, TILE_SIZE, TILE_SIZE));
         if area.is_empty() {
@@ -97,11 +104,13 @@ impl Surface {
     /// Whether any pixel in the half-open `area` has alpha strictly greater than zero.
     /// Formats without alpha are opaque, including missing tiles; an empty area is never a hit.
     ///
-    /// Stored tiles lazily index their encoded alpha once, then query exact bits without decoding
-    /// pixels or allocating. Every byte write invalidates that backing's index, including raw tile
-    /// writes and copy-on-write edits. Moving or replacing tiles carries the appropriate index.
-    /// Huge sparse areas visit stored tiles, never an unbounded grid of missing tiles. Failed
-    /// scratch reads never seed an index from the display API's temporary transparent placeholder.
+    /// Stored tiles lazily index their encoded alpha, then query exact bits without decoding
+    /// pixels or allocating. Heap-backed indexes count toward residency and are discarded with
+    /// spilled pixels; allocation-free uniform coverage can stay warm on disk. Every byte write
+    /// invalidates that backing's index, including raw tile writes and copy-on-write edits.
+    /// Moving or replacing tiles carries the appropriate index. Huge sparse areas visit stored
+    /// tiles, never an unbounded grid of missing tiles. Failed scratch reads invalidate coverage
+    /// and never seed an index from the display API's temporary transparent placeholder.
     pub fn has_positive_alpha(&self, area: Rect) -> bool {
         if area.is_empty() {
             return false;
