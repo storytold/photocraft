@@ -222,6 +222,7 @@ fn a_panic_after_a_command_ran_still_reports_its_committed_edit() {
     for step in ["damage", "shape path", "after_command"] {
         let mut s = session(64, 64);
         let (rev, journaled) = (s.active().unwrap().revision, s.journal.len());
+        let pixels = s.active().unwrap().pixel_revision;
         super::PANIC_AFTER_COMMAND.set(Some(step));
         let r = s.execute("filter.blur.gaussianBlur", json!({"radius": 1}));
         super::PANIC_AFTER_COMMAND.set(None);
@@ -232,6 +233,8 @@ fn a_panic_after_a_command_ran_still_reports_its_committed_edit() {
         assert_eq!(s.journal.last().map(|(id, _)| id.as_str()), Some("filter.blur.gaussianBlur"), "{step}");
         if step == "damage" {
             assert!(s.active().unwrap().last_damage.is_none(), "a lost damage note redraws the whole document");
+            // The pixels changed all the same, so thumbnails keyed on the pixel revision redraw.
+            assert_eq!(s.active().unwrap().pixel_revision, pixels + 1, "a lost damage note still counts as a pixel change");
         }
         // The session still works.
         s.execute("filter.blur.gaussianBlur", json!({"radius": 1})).unwrap();
