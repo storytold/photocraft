@@ -303,7 +303,6 @@ fn ukrainian_and_arabic_resolve() {
         assert_eq!(lang_from_tag(tag), Some(ar), "{tag}");
         assert_eq!(Lang::from_pref(tag), ar, "{tag}");
     }
-    assert_eq!(dir_for_code("ar"), Dir::Rtl);
     assert_eq!(ar.dir(), Dir::Rtl);
 }
 

@@ -10,7 +10,7 @@ use super::*;
 
 /// The fixture's history: 0 Open, 1 New Layer, 2 Fill; the source is the Open state, which holds
 /// only the Background, so a stroke paints from row 1, which holds the active layer.
-fn art_history() -> PhotocraftApp {
+fn art_history() -> Box<PhotocraftApp> {
     let mut app = app(Tool::ArtHistoryBrush);
     app.run("history.setSource", json!({"state": 1})).unwrap();
     app
