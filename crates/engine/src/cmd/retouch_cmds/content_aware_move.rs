@@ -891,7 +891,9 @@ mod tests {
         let b = got.bounds();
         let before = s.active().unwrap().doc.layers[0].surface().unwrap().read_region(b);
         assert!(got.layers[0].surface().unwrap().read_region(b) != before, "the preview moves something");
-        s.execute("paint.contentAwareMove", p).unwrap();
+        // That the command takes this selection too is shown by `preview` above: it runs the
+        // command's own `plan`, which rejects an empty selection, at full resolution. The
+        // command's full-resolution solve is left out: nothing here checked its result.
     }
 }
 

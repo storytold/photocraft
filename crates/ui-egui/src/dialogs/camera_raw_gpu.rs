@@ -186,7 +186,7 @@ impl CameraRawGpu {
 }
 
 #[cfg(test)]
-mod tests {
+mod gpu_tests {
     use super::*;
     use crate::camera_raw_ui::proxy::ProxyJob;
     use craft::imaging::ui::raw_develop::RawPreviewRequest;
@@ -212,7 +212,7 @@ mod tests {
     const TOL: f32 = 1.0 / 4096.0;
 
     /// The app on egui_kittest's device (a software adapter where there is one), or `None`.
-    fn gpu_app(depth: u32) -> Option<PhotocraftApp> {
+    fn gpu_app(depth: u32) -> Option<Box<PhotocraftApp>> {
         let Ok(rs) = std::panic::catch_unwind(|| egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())) else {
             eprintln!("skipping: no GPU adapter");
             return None;

@@ -8,7 +8,7 @@ use photocraft_ui_egui::control::{ControlRequest, Reply, handle};
 use photocraft_ui_egui::crop_ui;
 use serde_json::json;
 
-type App = Harness<'static, PhotocraftApp>;
+type App = Harness<'static, Box<PhotocraftApp>>;
 
 /// The label of the Fill help button in the bar.
 const HELP_BUTTON: &str = "Displays pop-up help for the fill methods";
