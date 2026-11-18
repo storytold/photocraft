@@ -483,3 +483,29 @@ fn deleting_the_captured_target_cancels_without_recreating_it() {
     assert_eq!(steps(&app), n);
     assert!(app.session.active().unwrap().doc.paths.is_empty());
 }
+
+#[test]
+fn draining_a_switched_pen_draft_never_masks_a_fill_with_the_destinations_row() {
+    for sync_first in [false, true] {
+        let mut app = app(Tool::Pen);
+        seed(&mut app, "Source", 20.0);
+        app.run("file.new", json!({"width":200,"height":200})).unwrap();
+        seed(&mut app, "Destination", 100.0);
+        app.session.set_active(0);
+        app.sync_views();
+        app.ui.selected_path = Some(crate::state::PathSelection::Saved { index: 0 });
+        draft(&mut app);
+        app.session.set_active(1);
+        if sync_first {
+            app.sync_views();
+        }
+        vector_ui::host::drain(&mut app, &mut Default::default(), &Default::default());
+        app.sync_views();
+        assert!(app.ui.pen.is_none());
+        assert_eq!(app.session.documents()[0].doc.paths[0].path.subpaths.len(), 2);
+        assert!(app.ui.selected_path.is_none());
+        app.run("layer.newFillLayer.solidColor", json!({"color":"#808080"})).unwrap();
+        let dest = app.session.active().unwrap();
+        assert!(dest.doc.layer(dest.active_layer.unwrap()).unwrap().vector_mask.is_none());
+    }
+}

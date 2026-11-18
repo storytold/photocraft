@@ -383,6 +383,18 @@ pub(crate) fn cancel_stale_pen(app: &mut PhotocraftApp) -> bool {
             .position(|st| st.doc.id == owner.document && st.revision == owner.revision && owner.source.ptr_eq(&Arc::downgrade(&st.doc)));
         if let Some(index) = index {
             let active = app.session.active_index();
+            // Drain may run before sync_views observes a tab switch. Validate the selection
+            // before saving it and before the temporary switch changes the activation again.
+            // A legacy name unique to the destination can already have been explicitly selected.
+            let destination_only_name = app.ui.selected_path.as_ref().is_some_and(|selection| {
+                selection.name().is_some_and(|name| {
+                    app.session.active().is_some_and(|st| selection.saved_index(&st.doc).is_some())
+                        && app.path_document.as_ref().and_then(|old| old.source.upgrade()).is_some_and(|doc| doc.paths.iter().all(|path| path.name != name))
+                })
+            });
+            if !destination_only_name {
+                app.reconcile_path_selection(crate::PathDocument::capture(&app.session).as_ref());
+            }
             let saved_ui = app.ui.clone();
             let draft = app.ui.pen.take();
             app.session.set_active(index);

@@ -587,3 +587,29 @@ fn script_reopens_same_id_then_edits_before_selection_sync() {
     assert_cleared(&app);
     assert!(crate::vector_ui::with_active_path(&app, "layer.newFillLayer.solidColor", json!({})).get("path").is_none());
 }
+
+#[test]
+fn failed_record_again_clears_the_shifted_row_before_the_next_fill() {
+    let mut app = app();
+    select(&mut app, 1);
+    let original = paths(&app);
+    app.session.actions.list.push(action("Script", vec![("file.scripts.browse".into(), json!({}))])).unwrap();
+    // The nested script deletes A. Changing the action library makes the enclosing
+    // Record Again fail after the deletion, before the next frame can reconcile the panel.
+    let error = app
+        .run(
+            "actions.recordAgain",
+            json!({"action":"Script","step":0,"params":{"steps":[
+                ["path.delete",{"pathIndex":0}],["actions.rename",{"action":"Script","name":"Changed"}]
+            ]}}),
+        )
+        .unwrap_err();
+    assert!(error.contains("action changed"), "{error}");
+    assert_eq!(app.ui.status, error);
+    assert!(app.ui.status_error);
+    assert_eq!(paths(&app), original[1..]);
+    assert_cleared(&app);
+    app.run("layer.newFillLayer.solidColor", json!({"color":"#808080"})).unwrap();
+    let st = app.session.active().unwrap();
+    assert!(st.doc.layer(st.active_layer.unwrap()).unwrap().vector_mask.is_none());
+}

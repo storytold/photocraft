@@ -191,6 +191,10 @@ pub(crate) fn open_recorded(app: &mut PhotocraftApp, command: &str, values: &Val
         && let Some(matrix) = values.get("matrix")
     {
         matrix_rows(matrix, &mut fields)?
+    } else if command == "path.transform" && ["quad", "warp", "style", "mesh"].iter().any(|key| values.get(*key).is_some()) {
+        // The engine applies the recorded distortion before scalar transform parameters.
+        // Leave the geometry in the hosted fields for preview, confirmation and replay.
+        vec![Param::read_only_text("__transformNote", Label::Empty, tl!("OK applies the recorded transform.")).full_width()]
     } else {
         build(app)
     };

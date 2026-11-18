@@ -307,3 +307,42 @@ fn recorded_matrix_numeric_edit_changes_translation_and_preserves_shear() {
     assert_eq!(recorded["matrix"][2].as_f64(), Some(0.5));
     assert_eq!(recorded["matrix"][4].as_f64(), Some(8.0));
 }
+
+#[test]
+fn recorded_distortions_hide_scalar_controls_and_replay_the_original_geometry() {
+    let mesh = photocraft_geom::warp::BezierMesh::identity([10.0, 10.0, 30.0, 20.0], 1, 1).map_points(|[x, y]| [x + 1.0, y]);
+    for params in [
+        json!({"pathIndex":0,"quad":[[12,8],[40,5],[45,30],[5,25]]}),
+        json!({"pathIndex":0,"warp":{"style":"arc","bend":50,"bounds":[10,10,30,20]},"translateX":80}),
+        json!({"pathIndex":0,"style":"arc","bend":50}),
+        json!({"pathIndex":0,"mesh":mesh}),
+    ] {
+        let mut h = harness("path.transform", params.clone());
+        h.state_mut().run("path.set", json!({"name":"A","path":{"subpaths":[{"closed":true,"knots":[[10,10],[30,10],[30,20],[10,20]]}]}})).unwrap();
+        let before = h.state().session.active().unwrap().doc.paths.clone();
+        let dialog = open(&mut h);
+        for field in ["translateX", "translateY", "scaleX", "scaleY", "angle"] {
+            assert_eq!(set_field(&mut h, dialog, field, json!(80))["ok"], false, "{field} accepted an ineffective edit");
+        }
+        assert_eq!(crate::control::dialogs::hosted_command(h.state(), dialog).unwrap().1, params);
+        confirm(&mut h, dialog).unwrap();
+        let recorded = h.state().session.actions.list.action(0).unwrap().steps[0].clone();
+        assert_eq!(recorded.params, params);
+        let after = h.state().session.active().unwrap().doc.paths.clone();
+        assert_ne!(before, after);
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        assert_eq!(h.state().session.active().unwrap().doc.paths, before);
+
+        let mut playback = Action::new("Replay", vec![recorded]);
+        playback.dialogs.insert(0);
+        h.state_mut().session.actions.list.push(playback).unwrap();
+        let reply = h.state_mut().run("actions.play", json!({"action":"Replay"})).unwrap();
+        assert!(reply.get("paused").is_some(), "{reply}");
+        h.run_steps(3);
+        let paused = h.state().framework.dialogs.stack().top().unwrap();
+        assert_eq!(crate::control::dialogs::hosted_command(h.state(), paused).unwrap().1, params);
+        confirm(&mut h, paused).unwrap();
+        assert_eq!(h.state().session.active().unwrap().doc.paths, after);
+        assert_eq!(h.state().session.actions.playing, 0);
+    }
+}
