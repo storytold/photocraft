@@ -215,44 +215,48 @@ fn the_move_preview_is_what_the_move_commits() {
     }
 }
 
-#[test]
-fn layout_document_composites_on_the_gpu_like_the_cpu() {
-    let _gpu = photocraft_testkit::gpu_lock();
-    use eframe::wgpu;
-    fn block_on<F: std::future::Future>(f: F) -> F::Output {
-        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
-        let mut f = std::pin::pin!(f);
-        loop {
-            if let std::task::Poll::Ready(v) = f.as_mut().poll(&mut cx) {
-                return v;
+mod gpu_tests {
+    use super::*;
+
+    #[test]
+    fn layout_document_composites_on_the_gpu_like_the_cpu() {
+        let _gpu = photocraft_testkit::gpu_lock();
+        use eframe::wgpu;
+        fn block_on<F: std::future::Future>(f: F) -> F::Output {
+            let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+            let mut f = std::pin::pin!(f);
+            loop {
+                if let std::task::Poll::Ready(v) = f.as_mut().poll(&mut cx) {
+                    return v;
+                }
+                std::thread::yield_now();
             }
-            std::thread::yield_now();
         }
-    }
-    let Ok(adapter) =
-        block_on(wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env()).request_adapter(&wgpu::RequestAdapterOptions::default()))
-    else {
-        eprintln!("skipping: no GPU adapter");
-        return;
-    };
-    if photocraft_gpu::Compositor::preferred_acc_format(&adapter) != wgpu::TextureFormat::Rgba32Float {
-        eprintln!("skipping: adapter can't render Rgba32Float");
-        return;
-    }
-    let Ok((device, queue)) = block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())) else { return };
-    let Ok(mut comp) = photocraft_gpu::Compositor::try_new_with_format(&device, wgpu::TextureFormat::Rgba32Float) else { return };
-    let (d, _) = layout_doc::build(layout_doc::Spec::small());
-    let (_, texts) = layout_doc::count(&d);
-    assert!(texts >= 10);
-    assert!(d.walk().iter().any(|(_, _, l)| matches!(l.content, LayerContent::Smart(_))));
-    let cpu = photocraft_compose::flatten(&d);
-    let gpu = photocraft_gpu::render_to_vec(&mut comp, &device, &queue, &d, d.bounds()).expect("the layout composites on the GPU");
-    let mut worst = 0.0f32;
-    for (c, g) in cpu.px.iter().zip(&gpu) {
-        for k in 0..4 {
-            let (a, b) = if k == 3 { (c[3], g[3]) } else { (c[k] * c[3], g[k] * g[3]) };
-            worst = worst.max((a - b).abs());
+        let Ok(adapter) = block_on(
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env()).request_adapter(&wgpu::RequestAdapterOptions::default()),
+        ) else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        if photocraft_gpu::Compositor::preferred_acc_format(&adapter) != wgpu::TextureFormat::Rgba32Float {
+            eprintln!("skipping: adapter can't render Rgba32Float");
+            return;
         }
+        let Ok((device, queue)) = block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())) else { return };
+        let Ok(mut comp) = photocraft_gpu::Compositor::try_new_with_format(&device, wgpu::TextureFormat::Rgba32Float) else { return };
+        let (d, _) = layout_doc::build(layout_doc::Spec::small());
+        let (_, texts) = layout_doc::count(&d);
+        assert!(texts >= 10);
+        assert!(d.walk().iter().any(|(_, _, l)| matches!(l.content, LayerContent::Smart(_))));
+        let cpu = photocraft_compose::flatten(&d);
+        let gpu = photocraft_gpu::render_to_vec(&mut comp, &device, &queue, &d, d.bounds()).expect("the layout composites on the GPU");
+        let mut worst = 0.0f32;
+        for (c, g) in cpu.px.iter().zip(&gpu) {
+            for k in 0..4 {
+                let (a, b) = if k == 3 { (c[3], g[3]) } else { (c[k] * c[3], g[k] * g[3]) };
+                worst = worst.max((a - b).abs());
+            }
+        }
+        assert!(worst <= 2.0 / 255.0, "GPU differs from the CPU by {}/255", worst * 255.0);
     }
-    assert!(worst <= 2.0 / 255.0, "GPU differs from the CPU by {}/255", worst * 255.0);
 }
