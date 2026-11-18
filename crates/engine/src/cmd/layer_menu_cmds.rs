@@ -290,12 +290,7 @@ pub fn defringe(px: &mut [[f32; 4]], w: usize, h: usize, width: usize) {
         }
         // For a wide, constant-alpha feather band, only its outermost row seeds
         // the transform; its inner rows must remain outside the requested width.
-        let outermost = px
-            .iter()
-            .enumerate()
-            .filter(|(_, q)| q[3] <= min_alpha + 1e-6)
-            .map(|(i, _)| to_core[i])
-            .fold(0.0_f32, f32::max);
+        let outermost = px.iter().enumerate().filter(|(_, q)| q[3] <= min_alpha + 1e-6).map(|(i, _)| to_core[i]).fold(0.0_f32, f32::max);
         px.iter().enumerate().map(|(i, q)| q[3] <= min_alpha + 1e-6 && to_core[i] >= outermost - 1e-6).collect()
     };
 
