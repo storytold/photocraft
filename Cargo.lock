@@ -6477,7 +6477,6 @@ name = "photocraft-format"
 version = "0.23.1"
 dependencies = [
  "blake3",
- "craft-file-formats",
  "craft-image-codecs",
  "craft-pcraft-bundle",
  "craft-pcraft-format",
