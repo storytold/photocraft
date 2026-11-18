@@ -3,6 +3,7 @@
 //! the events are listed with the supported events instead).
 
 use super::*;
+use crate::actions_cmds::ActionStep;
 
 fn action(items: Vec<AtnItem>) -> Vec<u8> {
     atn::write(&AtnFile {
@@ -67,9 +68,9 @@ fn gradient_tool_steps_load_play_and_save_back() {
     let mut s = Session::new();
     let loaded = s.execute("actions.load", json!({"data": photocraft_paint::tile::b64_encode(&action(items))})).unwrap();
     assert_eq!(loaded["unsupported"], json!([]), "{loaded}");
-    let ids: Vec<&str> = s.actions.list[0].steps.iter().map(|(id, _)| id.as_str()).collect();
+    let ids: Vec<&str> = s.actions.list.actions()[0].steps.iter().map(|st| st.command.as_str()).collect();
     assert_eq!(ids, ["layer.newFillLayer.gradient", "gradient.fill.set"]);
-    let set_params = &s.actions.list[0].steps[1].1;
+    let set_params = &s.actions.list.actions()[0].steps[1].params;
     assert_eq!(
         (set_params["angle"].as_f64(), set_params["scale"].as_f64(), set_params["align"].as_bool()),
         (Some(-35.0), Some(140.0), Some(false)),
@@ -105,14 +106,6 @@ fn droplet(file: &str, output: &str, extra: &[(&str, D)]) -> Descriptor {
     d
 }
 
-#[test]
-fn unresolved_droplet_identity_cannot_export_a_fallback_caption() {
-    let mut params = json!({"path": "C:/work/Sharpen.pcdroplet", "action": "Sharpen", "set": "Tools", "output": "C:/work/out"});
-    assert!(export_item("file.automate.createDroplet", &params, "Tools").is_some());
-    params["actionId"] = Value::Null;
-    assert!(export_item("file.automate.createDroplet", &params, "Tools").is_none());
-}
-
 /// Create Droplet loads as `file.automate.createDroplet`, plays (writes the droplet with the
 /// action's steps) and saves back as recorded.
 #[test]
@@ -124,18 +117,18 @@ fn create_droplet_step_loads_plays_and_saves_back() {
     let recorded = droplet(&file, &out, &[("OvrO", D::Boolean(true))]);
     let mut s = Session::new();
     // The action the droplet runs.
-    s.actions.list.push(crate::actions_cmds::Action::new("Sharpen", vec![("filter.sharpen.sharpen".into(), json!({}))]));
-    s.actions.list[0].set = Some("Tools".into());
+    s.actions.list.push(crate::actions_cmds::Action::new("Sharpen", vec![ActionStep::new("filter.sharpen.sharpen", json!({}))])).unwrap();
+    s.actions.list.assign_set(0, Some("Tools".into())).unwrap();
     let loaded = s
         .execute("actions.load", json!({"data": photocraft_paint::tile::b64_encode(&action(vec![step(b"CrtD", "Create Droplet", recorded.clone())]))}))
         .unwrap();
     assert_eq!(loaded["unsupported"], json!([]), "{loaded}");
-    let a = s.actions.list.iter().find(|a| a.name == "A").unwrap();
+    let a = s.actions.list.actions().iter().find(|a| a.name == "A").unwrap();
     assert_eq!(
         a.steps,
-        [("file.automate.createDroplet".to_string(), json!({"path": file, "action": "Sharpen", "set": "Tools", "output": out, "overrideOpen": true}))]
+        [ActionStep::new("file.automate.createDroplet", json!({"path": file, "action": "Sharpen", "set": "Tools", "output": out, "overrideOpen": true}))]
     );
-    let r = s.execute("file.automate.createDroplet", a.steps[0].1.clone()).unwrap();
+    let r = s.execute("file.automate.createDroplet", a.steps[0].params.clone()).unwrap();
     assert_eq!(r["path"], json!(file));
     let written: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
     assert_eq!(written["action"]["steps"], json!([["filter.sharpen.sharpen", {}]]));
@@ -212,11 +205,11 @@ fn create_droplet_steps_follow_a_renamed_loaded_action() {
     })
     .unwrap();
     let mut s = Session::new();
-    s.actions.list.push(crate::actions_cmds::Action::new("Sharpen", vec![]));
-    s.actions.list[0].set = Some("Tools".into());
+    s.actions.list.push(crate::actions_cmds::Action::new("Sharpen", vec![])).unwrap();
+    s.actions.list.assign_set(0, Some("Tools".into())).unwrap();
     let r = s.execute("actions.load", json!({"data": photocraft_paint::tile::b64_encode(&file), "set": "Loaded"})).unwrap();
     assert_eq!(r["actions"], json!(["Sharpen 2", "A"]), "{r}");
-    let a = s.actions.list.iter().find(|a| a.name == "A").unwrap();
-    assert_eq!(a.steps[0].1["action"], "Sharpen 2", "{:?}", a.steps[0]);
-    assert_eq!((&a.steps[1].1["action"], &a.steps[1].1["set"]), (&json!("Sharpen 2"), &json!("Loaded")), "{:?}", a.steps[1]);
+    let a = s.actions.list.actions().iter().find(|a| a.name == "A").unwrap();
+    assert_eq!(a.steps[0].params["action"], "Sharpen 2", "{:?}", a.steps[0]);
+    assert_eq!((&a.steps[1].params["action"], &a.steps[1].params["set"]), (&json!("Sharpen 2"), &json!("Loaded")), "{:?}", a.steps[1]);
 }

@@ -101,6 +101,38 @@ fn try_take_exact_reuses_and_allocates() {
 }
 
 #[test]
+/// Verifies fallible takes preserve the slack policy of their infallible counterparts.
+fn try_take_preserves_slack_and_exact_variant_stays_exact() {
+    let _g = serial();
+    release();
+    let pooled = Vec::<f32>::with_capacity(150_000);
+    let pooled_ptr = pooled.as_ptr();
+    give(pooled);
+    let slack = try_take(100_000, 1.0f32);
+    assert_eq!(slack.as_ref().map(|v| v.as_ptr()), Some(pooled_ptr));
+    assert!(slack.is_some_and(|v| v.len() == 100_000 && v.iter().all(|&sample| sample == 1.0)));
+    release();
+
+    let pooled = Vec::<f32>::with_capacity(150_000);
+    let pooled_ptr = pooled.as_ptr();
+    give(pooled);
+    let exact = try_take_exact(100_000, 2.0f32);
+    assert!(exact.is_some());
+    assert_ne!(exact.as_ref().map(|v| v.as_ptr()), Some(pooled_ptr));
+    assert!(exact.is_some_and(|v| v.iter().all(|&sample| sample == 2.0)));
+    release();
+}
+
+#[test]
+/// A request beyond Vec's representable capacity returns an allocation failure, not a panic.
+fn fallible_take_reports_capacity_overflow() {
+    let _g = serial();
+    release();
+    assert!(try_take::<[f32; 4]>(usize::MAX, [0.0; 4]).is_none());
+    release();
+}
+
+#[test]
 /// Verifies buffers below the pooling threshold are not retained.
 fn small_buffers_are_not_retained() {
     let _g = serial();
