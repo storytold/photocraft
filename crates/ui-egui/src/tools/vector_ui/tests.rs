@@ -31,6 +31,28 @@ fn shape_drag(app: &mut PhotocraftApp, tool: Tool, from: [f64; 2], to: [f64; 2])
     tool_event(app, ToolEvent::Up { x: to[0], y: to[1] }, none);
 }
 
+#[test]
+fn line_drag_with_a_path_operation_records_one_line_tool_step() {
+    let mut app = app();
+    app.ui.tool_options.shape_mode = VectorMode::Shape;
+    shape_drag(&mut app, Tool::Line, [20.0, 20.0], [120.0, 100.0]);
+    let initial = app.run("shape.info", json!({})).unwrap();
+    let steps = app.session.active().unwrap().history.past_len();
+
+    for op in ["combine", "subtract", "intersect"] {
+        app.ui.tool_options.shape_path_op = op.into();
+        shape_drag(&mut app, Tool::Line, [30.0, 30.0], [120.0, 85.0]);
+        let result = app.run("shape.info", json!({})).unwrap();
+        assert_eq!(result["layer"], initial["layer"], "{op}");
+        assert_eq!(result["path"]["subpaths"][1]["op"], op);
+        let history = &app.session.active().unwrap().history;
+        assert_eq!(history.past_len(), steps + 1, "{op}");
+        assert_eq!(history.undo_label(), Some("Line Tool"), "{op}");
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(app.run("shape.info", json!({})).unwrap(), initial, "{op}");
+    }
+}
+
 /// A plain click at each point, with the current tool.
 fn clicks(app: &mut PhotocraftApp, points: &[[f64; 2]]) {
     for at in points {
