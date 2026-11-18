@@ -9,11 +9,12 @@ use egui_kittest::kittest::{NodeT, Queryable};
 use photocraft_doc::{LayerContent, LayerId, LiveShape};
 use serde_json::{Value, json};
 
-use super::{finish_shape, shape_properties};
+use super::shape_properties;
 use crate::PhotocraftApp;
+use crate::canvas::{ToolEvent, tool_event};
 use crate::state::Tool;
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 800, "height": 600})).unwrap();
     app.sync_views();
@@ -24,39 +25,32 @@ fn active_id(app: &PhotocraftApp) -> LayerId {
     app.session.active().unwrap().active_layer.unwrap()
 }
 
-fn fonts_ready(ui: &egui::Ui) -> bool {
-    ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into())))
-}
-
-fn harness(app: PhotocraftApp, id: LayerId) -> Harness<'static, PhotocraftApp> {
-    let mut h = Harness::builder().with_size(vec2(400.0, 900.0)).build_ui_state(
-        move |ui, app| {
-            if fonts_ready(ui) {
-                shape_properties(app, ui, id);
-            }
-        },
-        app,
-    );
-    PhotocraftApp::setup_context(&h.ctx, Default::default());
+fn harness(app: Box<PhotocraftApp>, id: LayerId) -> Harness<'static, Box<PhotocraftApp>> {
+    let mut h =
+        Harness::builder().with_context(app.ctx().clone()).with_size(vec2(400.0, 900.0)).build_ui_state(move |ui, app| shape_properties(app, ui, id), app);
     h.run_steps(4);
     h
 }
 
-fn labels(h: &Harness<'static, PhotocraftApp>) -> Vec<String> {
+fn labels(h: &Harness<'static, Box<PhotocraftApp>>) -> Vec<String> {
     h.query_all_by_role(Role::SpinButton).filter_map(|n| n.accesskit_node().label()).map(|l| l.to_string()).collect()
 }
 
-fn only_corner_radius(h: &Harness<'static, PhotocraftApp>) {
+fn only_corner_radius(h: &Harness<'static, Box<PhotocraftApp>>) {
     let l = labels(h);
     assert!(l.iter().any(|s| s == "Corner radius"), "{l:?}");
     assert!(!l.iter().any(|s| s == "Sides" || s == "Star ratio"), "{l:?}");
 }
 
-fn drag(tool: Tool, sides: u32) -> (PhotocraftApp, LayerId) {
+fn drag(tool: Tool, sides: u32) -> (Box<PhotocraftApp>, LayerId) {
     let mut app = app();
     app.ui.tool = tool;
     app.ui.tool_options.polygon_sides = sides;
-    finish_shape(&mut app, tool, [400.0, 300.0], [600.0, 400.0], Modifiers::NONE);
+    let none = Modifiers::NONE;
+    tool_event(&mut app, ToolEvent::Down { x: 400.0, y: 300.0, pressure: 1.0 }, none);
+    tool_event(&mut app, ToolEvent::Move { x: 500.0, y: 350.0, pressure: 1.0 }, none);
+    tool_event(&mut app, ToolEvent::Move { x: 600.0, y: 400.0, pressure: 1.0 }, none);
+    tool_event(&mut app, ToolEvent::Up { x: 600.0, y: 400.0 }, none);
     let id = active_id(&app);
     (app, id)
 }
@@ -84,7 +78,7 @@ fn corner_radius(app: &PhotocraftApp, id: LayerId) -> f64 {
     }
 }
 
-fn type_radius(h: &mut Harness<'static, PhotocraftApp>, text: &str) {
+fn type_radius(h: &mut Harness<'static, Box<PhotocraftApp>>, text: &str) {
     h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Corner radius")).expect("the Corner radius field").click();
     h.run_steps(1);
     h.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
@@ -103,13 +97,10 @@ fn a_dragged_triangle_shows_only_corner_radius() {
 
 #[test]
 fn a_create_triangle_shape_shows_only_corner_radius() {
-    // Runs the command Create Triangle, OK sends (same geometry as the dialog, see
+    // The command Create Triangle's OK sends (same geometry as the dialog, see
     // triangle_box_geometry_tests) rather than driving the dialog.
     let mut app = app();
-    let fields = json!({"__createShape": "triangle", "__at": [400.0, 300.0], "width": 100.0, "height": 100.0, "fromCenter": false});
-    let Value::Object(fields) = fields else { panic!("an object") };
-    let geometry = crate::shape_dialog::geometry(&fields).unwrap();
-    app.run("shape.create", geometry).unwrap();
+    app.run("shape.create", json!({"kind": "triangle", "rect": [400.0, 300.0, 100.0, 100.0]})).unwrap();
     let id = active_id(&app);
     assert!(matches!(live(&app, id), LiveShape::Triangle { .. }));
     only_corner_radius(&harness(app, id));

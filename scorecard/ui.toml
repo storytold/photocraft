@@ -94,14 +94,14 @@ id = "UI-217-13"
 target = "Numeric fields accept arithmetic and units; scrubby labels; double-click resets a slider"
 status = "done"
 issue = 217
-note = "widgets::value_field: arithmetic plus units (1in, 5mm, 72pt, 50%) converted at the document resolution (#3099); widgets::scrub_label makes options-bar, slider-row and Character labels scrubby (Shift x10, Alt fine); slider rows with a known default reset on double-click"
+note = "NumberField: arithmetic plus units (1in, 5mm, 72pt, 50%) through env.units() at the document resolution (#3099); the Field label scrub makes options-bar, slider-row and Character labels scrubby (Shift x10, Alt fine); slider rows with a known default reset on double-click"
 
 [[item]]
 id = "UI-217-14"
 target = "Layers panel: wheel steps blend modes, drop on New/Trash duplicates/deletes, checker behind art"
 status = "done"
 issue = 217
-note = "panels.rs: the wheel steps the blend-mode dropdown (widgets::dropdown_wheel_hovered, #1747); rows dropped on New Layer/Group/Delete duplicate/group/delete them (footer_drop, #736), effect rows dropped on Delete delete that effect or the whole style (fx_trash_drop, #3102); pixel thumbnails draw widgets::checker behind the art; Shift+Plus/Minus step the layer's or the painting tool's blend mode (blend_keys.rs, #3102), and Shift+Alt+letter picks one (Photoshop's letters; every selected layer, one undo step)"
+note = "panels.rs: the wheel steps the blend-mode dropdown (Select wheel stops, #1747); rows dropped on New Layer/Group/Delete duplicate/group/delete them (footer_drop, #736), effect rows dropped on Delete delete that effect or the whole style (fx_trash_drop, #3102); pixel thumbnails draw Draw::checker behind the art; Shift+Plus/Minus step the layer's or the painting tool's blend mode (blend_keys.rs, #3102), and Shift+Alt+letter picks one (Photoshop's letters; every selected layer, one undo step)"
 
 [[item]]
 id = "UI-217-15"
