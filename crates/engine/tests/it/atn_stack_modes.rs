@@ -5,7 +5,11 @@ use craft_psd::{
     descriptor::{Class, Descriptor, Id, UnicodeString, Value as D},
 };
 use photocraft_doc::{Group, Layer, LayerContent, StackMode};
-use photocraft_engine::{Session, actions_cmds::Action, atn_cmds};
+use photocraft_engine::{
+    Session,
+    actions_cmds::{Action, ActionList, ActionStep, ActionsFile},
+    atn_cmds,
+};
 use photocraft_geom::Rect;
 use serde_json::json;
 
@@ -60,7 +64,7 @@ fn measured_stack_modes_and_none_import_export_and_reload() {
         let original = item(APPLY, Some(descriptor(code, name)));
         let imported = load(original.clone());
         assert!(imported.unsupported.is_empty());
-        assert_eq!(imported.actions[0].steps, vec![(format!("layer.smartObjects.stackMode.{}", mode.id()), json!({}))]);
+        assert_eq!(imported.actions[0].steps, vec![ActionStep::new(format!("layer.smartObjects.stackMode.{}", mode.id()), json!({}))]);
         let out = saved(&imported.actions[0]);
         assert_eq!(out.event, original.event);
         assert_eq!(out.descriptor, original.descriptor);
@@ -69,13 +73,13 @@ fn measured_stack_modes_and_none_import_export_and_reload() {
     for original in [item(CLEAR, None), item(CLEAR, Some(Descriptor::new("null")))] {
         let imported = load(original.clone());
         assert!(imported.unsupported.is_empty());
-        assert_eq!(imported.actions[0].steps[0].0, "layer.smartObjects.stackMode.none");
+        assert_eq!(imported.actions[0].steps[0].command, "layer.smartObjects.stackMode.none");
         let out = saved(&imported.actions[0]);
         assert_eq!(out.event, original.event);
         assert_eq!(out.descriptor, original.descriptor);
         assert_eq!(load(out).actions[0].steps, imported.actions[0].steps);
     }
-    let native = Action::new("Mode", vec![("layer.smartObjects.stackMode.none".into(), json!({}))]);
+    let native = Action::new("Mode", vec![ActionStep::new("layer.smartObjects.stackMode.none", json!({}))]);
     let out = saved(&native);
     assert_eq!(out.event, AtnEvent::name(CLEAR));
     assert!(out.descriptor.is_none());
@@ -97,7 +101,7 @@ fn localized_stack_descriptors_keep_original_metadata_and_flags() {
         original.dialog_options = 2;
         let imported = load(original.clone());
         assert!(imported.unsupported.is_empty());
-        assert_eq!(imported.actions[0].steps[0].0, "layer.smartObjects.stackMode.mean");
+        assert_eq!(imported.actions[0].steps[0].command, "layer.smartObjects.stackMode.mean");
         let out = saved(&imported.actions[0]);
         assert_eq!(out.descriptor, original.descriptor);
         assert!(!out.enabled);
@@ -154,7 +158,7 @@ fn stack_recordings_play_native_modes_and_undo_at_each_depth() {
             let expected = s.active().unwrap().doc.clone();
             s.execute("edit.undo", json!({})).unwrap();
             let imported = load(source);
-            s.actions.list = imported.actions;
+            s.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
             let result = s.execute("actions.play", json!({"action":"Mode","set":"Stacks"})).unwrap();
             assert_eq!(result["ran"], 1, "{result}");
             let actual = s.active().unwrap();
@@ -192,7 +196,7 @@ fn unsupported_stack_recordings_save_whole_and_refuse_playback() {
     ] {
         let imported = load(original.clone());
         assert_eq!(imported.unsupported.len(), 1);
-        assert_eq!(imported.actions[0].steps[0].0, atn_cmds::PHOTOSHOP_STEP);
+        assert_eq!(imported.actions[0].steps[0].command, atn_cmds::PHOTOSHOP_STEP);
         let out = saved(&imported.actions[0]);
         assert_eq!(out.event, original.event);
         assert_eq!(out.descriptor, original.descriptor);
@@ -200,7 +204,7 @@ fn unsupported_stack_recordings_save_whole_and_refuse_playback() {
         s.execute("layer.smartObjects.stackMode.maximum", json!({})).unwrap();
         let before = s.active().unwrap().doc.clone();
         let history = s.active().unwrap().history.past_len();
-        s.actions.list = imported.actions;
+        s.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
         let result = s.execute("actions.play", json!({"action":"Mode","set":"Stacks"})).unwrap();
         assert!(result.get("failed").is_some(), "{result}");
         assert_eq!(s.active().unwrap().doc.layers, before.layers);
@@ -213,16 +217,16 @@ fn unsupported_stack_recordings_save_whole_and_refuse_playback() {
 fn stack_mode_edits_and_unrepresented_native_parameters_are_safe() {
     let imported = load(item(APPLY, Some(descriptor("medn", "Médiane"))));
     let mut action = imported.actions[0].clone();
-    action.steps[0].0 = "layer.smartObjects.stackMode.maximum".into();
+    action.steps[0].command = "layer.smartObjects.stackMode.maximum".into();
     assert_eq!(saved(&action).descriptor, Some(descriptor("maxx", "Maximum")));
 
-    action.steps[0].0 = "layer.smartObjects.stackMode.none".into();
+    action.steps[0].command = "layer.smartObjects.stackMode.none".into();
     let cleared = saved(&action);
     assert_eq!(cleared.event, AtnEvent::name(CLEAR));
     assert_eq!(cleared.descriptor, Some(Descriptor::new("null")));
 
     let mut action = load(item(CLEAR, Some(Descriptor::new("null")))).actions.remove(0);
-    action.steps[0].0 = "layer.smartObjects.stackMode.mean".into();
+    action.steps[0].command = "layer.smartObjects.stackMode.mean".into();
     let applied = saved(&action);
     assert_eq!(applied.event, AtnEvent::name(APPLY));
     assert_eq!(applied.descriptor, Some(descriptor("avrg", "Mean")));
@@ -231,12 +235,12 @@ fn stack_mode_edits_and_unrepresented_native_parameters_are_safe() {
     let unknown_class = photocraft_engine::paint::tile::b64_encode(&descriptor("nope", "Mean").to_bytes());
     for command in ["layer.smartObjects.stackMode.mean", "layer.smartObjects.stackMode.none"] {
         for params in [json!(null), json!([]), json!({"layer":12}), json!({"layer":"Named"}), json!({"target":"mask"}), json!({"unknown":true})] {
-            let action = Action::new("Mode", vec![(command.into(), params)]);
+            let action = Action::new("Mode", vec![ActionStep::new(command, params)]);
             assert!(atn_cmds::export("Stacks", &[&action], &[], false).is_err());
         }
         for origin in [json!(false), json!("!invalid-base64"), json!(""), json!(unknown_class), json!(unknown_empty)] {
-            let mut action = Action::new("Mode", vec![(command.into(), json!({}))]);
-            action.steps[0].1[ORIGIN] = origin;
+            let mut action = Action::new("Mode", vec![ActionStep::new(command, json!({}))]);
+            action.steps[0].params[ORIGIN] = origin;
             assert!(atn_cmds::export("Stacks", &[&action], &[], false).is_err());
         }
     }
