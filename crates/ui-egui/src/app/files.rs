@@ -549,7 +549,7 @@ impl PhotocraftApp {
 
     /// Whether saving the active document to `path` writes a copy. `tiff_layers` is the TIFF
     /// Options answer: `Some(false)` discards the layers and saves a copy.
-    fn saves_copy(&self, path: &str, tiff_layers: Option<bool>) -> Result<bool, String> {
+    pub(crate) fn saves_copy(&self, path: &str, tiff_layers: Option<bool>) -> Result<bool, String> {
         // A flat file that can't hold the document (its layers, or the layered file it lives in)
         // is written as a copy, as in Photoshop: the document keeps its file, so Save still
         // writes the layered original and the edits stay unsaved (#2550).
@@ -683,6 +683,10 @@ impl PhotocraftApp {
                     // The job locked the document, but record the revision that was written.
                     st.saved_revision = revision;
                     app.remember_stamp(doc, path);
+                    // This document's own file is on this computer now, so a cloud copy it was
+                    // opened from is a different file that this document no longer edits. File ›
+                    // Save from here writes the path just armed (see `cloud::prefers_cloud`).
+                    crate::cloud::forget_origin(app, doc.0);
                     // History Options › Automatically Create New Snapshot When Saving (#2966).
                     photocraft_engine::history_options_cmds::snapshot_on_save(&mut app.session);
                 }

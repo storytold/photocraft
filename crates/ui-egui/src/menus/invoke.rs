@@ -402,6 +402,11 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
     if let Some(result) = invoke_early_commands(app, ctx, id, &params) {
         return result;
     }
+    // Open from the Cloud, Save to the Cloud, and File › Save for a document that came from the
+    // cloud (it writes back there, not to a file on this computer).
+    if let Some(result) = crate::cloud::menu(app, id, &params) {
+        return result;
+    }
     if let Some(result) = invoke_shell_commands(app, ctx, id, &params) {
         return result;
     }

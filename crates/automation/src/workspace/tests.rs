@@ -697,6 +697,23 @@ fn filesystem_commands_fail_closed() {
     }
 }
 
+/// Cloud storage is a service no automation capability grants, so every cloud command is refused
+/// rather than allowed unjudged. Reading a listing discloses somebody's file names and a save puts
+/// a document on a server, and the read and write roots scope neither.
+#[test]
+fn cloud_commands_fail_closed() {
+    for id in ["cloud.status", "cloud.open", "cloud.openFile", "cloud.browse", "cloud.save", "cloud.saveAs"] {
+        let refused = authorize_engine_command(id, &serde_json::json!({}));
+        assert!(refused.is_err(), "{id} must be refused");
+        assert!(refused.unwrap_err().to_string().contains("cloud storage"), "{id} is refused as a cloud command");
+        assert!(authorize_desktop_engine_command(id, &serde_json::json!({})).is_err(), "{id} on the desktop too");
+        assert!(authorize_engine_step(id, &serde_json::json!({})).is_err(), "{id} as an action step");
+    }
+    // A save answered on the unsaved-changes prompt is judged as the command that will run, so a
+    // document whose only home is the cloud is judged by the id above rather than `file.save`.
+    assert!(authorize_engine_command("cloud.save", &serde_json::json!({})).is_err());
+}
+
 #[test]
 fn filesystem_command_paths_and_profiles_fail_closed() {
     // The UI-level examples in docs/control-protocol.md.

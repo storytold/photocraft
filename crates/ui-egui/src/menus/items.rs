@@ -29,6 +29,7 @@ pub fn is_live(id: &str) -> bool {
         || proof_preset(id).is_some()
         || crate::analysis::handles(id)
         || crate::view_cmds::handles(id)
+        || crate::cloud::handles(id)
         || crate::shortcut_dispatch::is_bridged(id)
         || crate::workspace_ui::handles(id)
 }
@@ -201,6 +202,7 @@ pub fn base_rows(app: &PhotocraftApp) -> Vec<Row> {
         }
     }
     crate::plugin_ui::rows(app, &mut rows);
+    crate::cloud::rows(app, &mut rows);
     if let Some(mask) = app.session.active().and_then(|s| s.active_layer.and_then(|id| s.doc.layer(id))).and_then(|l| l.mask.as_ref())
         && let Some(item) = find(&mut rows, "layer.layerMask.enabled")
     {

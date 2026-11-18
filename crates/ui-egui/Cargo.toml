@@ -10,6 +10,10 @@ workspace = true
 [dependencies]
 chrono = { workspace = true }
 craft-print = { workspace = true }
+# The vendor-neutral cloud types (a file entry, a capability). Types and contracts only: the crate
+# opens no socket and names no provider, so this builds for the web too. The service is reached
+# through the backend the host application connects (see `cloud`).
+craft-cloud = { workspace = true }
 craft = { workspace = true, features = ["ui", "layers", "color-ui", "draw", "imaging", "window", "keymap", "automation", "theme-store", "print", "menu", "timeline", "text", "text-font-picker", "font-manager", "quit", "cms"] }
 # Interface translations over the embedded craft-i18n catalogs (`build.rs`, `src/i18n.rs`).
 craft-i18n = { workspace = true }

@@ -26,6 +26,7 @@ macro_rules! tl {
 }
 mod brush_mode_menu;
 pub mod canvas;
+pub mod cloud;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod control;
 pub mod dialogs;
@@ -688,6 +689,12 @@ pub struct PhotocraftApp {
     last_frame_start_ms: f64,
     /// Background job bookkeeping: opening tabs, control replies waiting on a job.
     pub jobs: jobs_ui::JobsUi,
+    /// Open and Save against cloud storage ([`cloud`]). Nothing cloud-shaped is offered until the
+    /// host connects a backend, so a build with no service configured is the app as it was.
+    pub cloud: cloud::CloudFiles,
+    /// The revision of each document a cloud save in flight encoded, so a save that lands marks
+    /// exactly that revision saved and an edit made meanwhile stays unsaved.
+    pub(crate) cloud_sent: cloud::Sent,
     #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
     live_tokens: theme::live::LiveTokens,
 }
@@ -1032,3 +1039,6 @@ mod red_eye_context_menu_tests;
 
 #[cfg(test)]
 mod clone_stamp_indexed_bar_tests;
+
+#[cfg(test)]
+mod cloud_menu_tests;

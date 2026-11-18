@@ -224,9 +224,13 @@ fn save(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId) -> bool {
     match saved {
         // A Save Document script may have edited the document after it was written: still dirty.
         // A write the platform can't confirm (a web download) leaves it dirty too, and counts.
+        // A save to the cloud is on the wire when this returns, so it counts as not yet saved
+        // here. `cloud::pump` calls `saved_document` when the answer lands, exactly as `jobs_ui`
+        // does for a background write.
         Ok(_) => {
             !app.save_options_open()
                 && !app.saving()
+                && !crate::cloud::saving(app)
                 && index_of(app, doc).is_some_and(|i| app.services.write_unconfirmed || !app.session.documents()[i].is_dirty())
         }
         // Backing out of the file dialog is the user's choice, not an error.
@@ -266,8 +270,10 @@ fn couldnt_save(e: String) -> String {
 pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // Save can ask for a path and then TIFF or Targa Options, and then write in the background.
     // Wait for all three; cancellation or a failed save brings us back. The question is closed
-    // meanwhile: the answer that started the save closed it.
-    if app.file_dialog_open() || app.save_options_open() || app.saving() {
+    // meanwhile: the answer that started the save closed it. A save to the cloud waits the same
+    // way: it is on the wire, and asking again would invite a second answer to a question the
+    // user has already answered (`cloud::saving`).
+    if app.file_dialog_open() || app.save_options_open() || app.saving() || crate::cloud::saving(app) {
         return;
     }
     close_stale_question(app, ctx);
@@ -402,19 +408,26 @@ fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId, answer: Answe
 /// services' policy) and the command callback both judge it, and with neither available the
 /// Save is refused rather than run unjudged. A control client's `ui.dialog.confirm` calls it with
 /// `from_control` before it confirms a Save, so a refusal leaves the question open.
+///
+/// The id judged is the one that will actually run. Answering Save for a document whose only home
+/// is the cloud sends the bytes to a service, not to a file, so it is judged as `cloud.save`. A
+/// client allowed to write files on this computer has not thereby been allowed to put a document
+/// in somebody's cloud storage, and the two are different enough that one policy answer must not
+/// stand for the other.
 pub(crate) fn authorize_save(app: &PhotocraftApp, from_control: bool) -> Result<(), String> {
     if !(from_control || app.automation_input || app.session.authorize.is_some()) {
         return Ok(());
     }
+    let id = if crate::cloud::prefers_cloud(app) { "cloud.save" } else { "file.save" };
     let params = json!({});
     let gate = app.session.authorize.or(app.services.automation_authorize);
     if let Some(gate) = gate {
-        gate("file.save", &params).map_err(|e| e.to_string())?;
+        gate(id, &params).map_err(|e| e.to_string())?;
     }
     match app.services.automation_command.as_ref() {
-        Some(authorize) => authorize("file.save", &params),
+        Some(authorize) => authorize(id, &params),
         None if gate.is_some() => Ok(()),
-        None => Err("automation command `file.save` is refused: no automation policy is available to judge it".into()),
+        None => Err(format!("automation command `{id}` is refused: no automation policy is available to judge it")),
     }
 }
 

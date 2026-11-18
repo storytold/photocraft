@@ -1,9 +1,9 @@
 use super::services::{ExportSettings, FormatChoices, SAVE_OPTIONS_OPEN, SaveKind, Services, plain_raster, saved_revision_after_write};
 use super::{
-    DocId, Document, HashMap, PhotocraftApp, Session, UiState, Value, actions, canvas, delete_layer_prompt, discard_ui, file_open, gpu_canvas, gpu_status,
-    histogram_panel, i18n, jobs_ui, json, kys_import, last_brush, layers_panel_ui, mask_thumbs_ui, mask_trash_prompt, monitor_status, native_menu, notices,
-    open_prompt, paint_mouse, panel_docking, panels, prefs_ui, preset_files_ui, screen_picker, shortcuts, smart_svg_ui, state, stroke_trace, stylus, theme,
-    tool_memory, transform_tool, type_tool, type_transform, updates_ui, vector_ui, view_cmds, work_area,
+    DocId, Document, HashMap, PhotocraftApp, Session, UiState, Value, actions, canvas, cloud, delete_layer_prompt, discard_ui, file_open, gpu_canvas,
+    gpu_status, histogram_panel, i18n, jobs_ui, json, kys_import, last_brush, layers_panel_ui, mask_thumbs_ui, mask_trash_prompt, monitor_status, native_menu,
+    notices, open_prompt, paint_mouse, panel_docking, panels, prefs_ui, preset_files_ui, screen_picker, shortcuts, smart_svg_ui, state, stroke_trace, stylus,
+    theme, tool_memory, transform_tool, type_tool, type_transform, updates_ui, vector_ui, view_cmds, work_area,
 };
 
 mod clipboard;
@@ -225,6 +225,8 @@ impl PhotocraftApp {
             min_frame_ms: None,
             last_frame_start_ms: 0.0,
             jobs: Default::default(),
+            cloud: cloud::CloudFiles::new(),
+            cloud_sent: cloud::Sent::new(),
             #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
             live_tokens: theme::live::LiveTokens::from_env(),
         };
