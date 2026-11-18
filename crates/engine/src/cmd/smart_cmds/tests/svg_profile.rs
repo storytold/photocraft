@@ -50,9 +50,9 @@ fn svg_smart_contents_and_stack_open_many_shapes_as_layers() {
     let square = Rect::from_xywh(0, 0, 256, 256);
     assert_eq!(stacked.bounds, square);
     assert_eq!(stacked.surface.content_bounds(), square);
-    let [r, g, b, a] = stacked.surface.pixel(128, 128);
-    assert_eq!(a, 1.0, "every frame is opaque");
-    for c in [r, g, b] {
+    let px = stacked.surface.pixel(128, 128);
+    assert_eq!(px[3], 1.0, "every frame is opaque");
+    for &c in &px[..3] {
         assert!((c - 0.25).abs() < 1e-4, "the mean of 100 white and 300 black frames is 0.25, got {c}");
     }
 }
