@@ -177,3 +177,14 @@ fn gradient_presets_stop_documents_the_set_keys() {
     assert!(schema.has_key("transparency"), "{}", spec.params);
     assert!(schema.has_key("opacity"), "{}", spec.params);
 }
+
+/// `shape.presets.importCsh` documents `path` and `data` as alternative keys, so a base64
+/// `data` payload is accepted and not rejected as unknown (#15255).
+#[test]
+fn import_csh_documents_path_and_data() {
+    let spec = crate::commands::find("shape.presets.importCsh").expect("registered");
+    let schema = parse(spec.params);
+    assert!(schema.has_key("path"), "{}", spec.params);
+    assert!(schema.has_key("data"), "{}", spec.params);
+    assert!(schema.has_key("group"), "{}", spec.params);
+}
