@@ -365,11 +365,7 @@ pub fn defringe(px: &mut [[f32; 4]], w: usize, h: usize, width: usize) {
         if component.iter().any(|&i| known[i]) {
             continue; // This component already has a clean, distant source.
         }
-        let best_alpha = component
-            .iter()
-            .filter(|&&i| !seeds[i] && px[i][3] > 0.01)
-            .map(|&i| px[i][3])
-            .fold(0.0_f32, f32::max);
+        let best_alpha = component.iter().filter(|&&i| !seeds[i] && px[i][3] > 0.01).map(|&i| px[i][3]).fold(0.0_f32, f32::max);
         if best_alpha <= 0.0 {
             continue; // Nothing eligible to borrow from in this component.
         }
