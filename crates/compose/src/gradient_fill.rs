@@ -130,7 +130,14 @@ pub fn render(f: &Fill, rect: Rect, frame: Rect) -> Vec<[f32; 4]> {
 /// [`render`] with dithered pixels rounded to `quantum` steps (the document depth's levels, see
 /// [`crate::adjustment_quantum`]), as a gradient painted into a layer of that depth stores them.
 pub fn render_quantized(f: &Fill, rect: Rect, frame: Rect, quantum: Option<f32>) -> Vec<[f32; 4]> {
-    render_ramp(f, rect, frame, Ramp::new(f), quantum)
+    let mut px = vec![[0.0f32; 4]; rect.width() as usize * rect.height() as usize];
+    render_quantized_into(f, rect, frame, quantum, &mut px);
+    px
+}
+
+/// Render into caller-owned pixels so compositor paths can use fallible pooled storage.
+pub(crate) fn render_quantized_into(f: &Fill, rect: Rect, frame: Rect, quantum: Option<f32>, px: &mut [[f32; 4]]) {
+    render_ramp_into(f, rect, frame, Ramp::new(f), quantum, px);
 }
 
 /// Native CMYK solid/gradient pixels at document depth; patterns return `None`.
@@ -155,10 +162,18 @@ pub fn render_cmyk_fill(f: &Fill, rect: Rect, frame: Rect, depth: photocraft_col
 
 fn render_ramp<const N: usize>(f: &Fill, rect: Rect, frame: Rect, ramp: Option<Ramp<N>>, quantum: Option<f32>) -> Vec<[f32; N]> {
     let mut px = vec![[0.0f32; N]; rect.width() as usize * rect.height() as usize];
-    let (Some(ramp), Fill::Gradient { angle, scale, style, reverse, offset, dither: dith, .. }) = (ramp, f) else { return px };
+    render_ramp_into(f, rect, frame, ramp, quantum, &mut px);
+    px
+}
+
+fn render_ramp_into<const N: usize>(f: &Fill, rect: Rect, frame: Rect, ramp: Option<Ramp<N>>, quantum: Option<f32>, px: &mut [[f32; N]]) {
+    let (Some(ramp), Fill::Gradient { angle, scale, style, reverse, offset, dither: dith, .. }) = (ramp, f) else {
+        px.fill([0.0; N]);
+        return;
+    };
     let w = rect.width() as usize;
     if w == 0 {
-        return px;
+        return;
     }
     // Linear and Reflected end points on whole pixels, as Photoshop (crate::fill_layout).
     let (angle, scale, offset) = &crate::fill_layout::gradient_layout(*style, *angle, *scale, *offset, frame);
@@ -181,7 +196,6 @@ fn render_ramp<const N: usize>(f: &Fill, rect: Rect, frame: Rect, ramp: Option<R
     for (j, out) in px.chunks_mut(w).enumerate() {
         row(rect.y0 + j as i32, out);
     }
-    px
 }
 
 fn frame_dims(frame: Rect) -> (f32, f32) {

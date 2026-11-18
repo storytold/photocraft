@@ -7,15 +7,23 @@
 //! revision, source, selection and preview they describe, and kept until one of those changes;
 //! the panel shows the last one with the cached-data warning until the new one lands. Like
 //! Photoshop's panel it follows the selection (`tone::HistScope::Selection`): a selection change
-//! makes every cached histogram stale, however few pixels it moved.
+//! makes every cached histogram stale, however few pixels it moved. The framework's scope panel
+//! draws the counts and reads the pointer; this module counts, keys and caches them.
 
 use std::sync::Arc;
 
-use egui::{Color32, Rect, Sense, pos2, vec2};
+use craft::imaging::scopes::histogram_statistics;
+use craft::imaging::ui::adjust::{ToneChannel, ToneSpace as UiToneSpace};
+use craft::imaging::ui::histogram::{ChannelColor, LevelRange};
+use craft::imaging::ui::scopes::{
+    ChannelOverlay, HistogramSet, ScopeChannel, ScopeCommand, ScopeFrame, ScopeMenuAction, ScopePanel, ScopeSettings, ScopeSource, ScopeView,
+};
+use craft::ui::menu::PanelRow;
+use craft::ui::runtime::commands::{CommandRef, CommandSet as _, CommandState};
+use craft::ui::runtime::env::Label;
 use photocraft_color::ColorMode;
 use photocraft_doc::adjust::ToneSpace;
 use photocraft_doc::{DocId, Document, LayerContent};
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
@@ -25,23 +33,9 @@ use crate::tone::{self, HistScope, HistSource, Histograms};
 /// Where the panel options are kept between launches (`prefs.dialogs`).
 const OPTIONS_PREF: &str = "histogramPanel";
 
-/// The panel's view (its menu's Compact / Expanded / All Channels View).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum HistView {
-    /// The histogram alone, of the entire image (Photoshop's default view).
-    #[default]
-    Compact,
-    /// The histogram with the channel and source selectors, refresh and statistics.
-    Expanded,
-    /// Expanded, plus one histogram per colour channel (no alpha, spot or mask channels).
-    AllChannels,
-}
-
 /// The Channel menu. Which entries a document offers depends on its colour mode
 /// ([`channel_options`]); one it lacks shows as its composite.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum HistChannel {
     /// RGB, CMYK, Lab's Lightness or Gray.
     #[default]
@@ -60,9 +54,76 @@ pub enum HistChannel {
     Colors,
 }
 
+impl HistChannel {
+    /// Every channel, in the order of [`HistChannel::key`]'s names.
+    const ALL: [HistChannel; 12] = [
+        HistChannel::Composite,
+        HistChannel::Red,
+        HistChannel::Green,
+        HistChannel::Blue,
+        HistChannel::Cyan,
+        HistChannel::Magenta,
+        HistChannel::Yellow,
+        HistChannel::Black,
+        HistChannel::A,
+        HistChannel::B,
+        HistChannel::Luminosity,
+        HistChannel::Colors,
+    ];
+
+    /// The channel's key in `ScopeSettings::channel`, in `ui.inspect` and in the saved options.
+    pub fn key(self) -> &'static str {
+        match self {
+            HistChannel::Composite => "composite",
+            HistChannel::Red => "red",
+            HistChannel::Green => "green",
+            HistChannel::Blue => "blue",
+            HistChannel::Cyan => "cyan",
+            HistChannel::Magenta => "magenta",
+            HistChannel::Yellow => "yellow",
+            HistChannel::Black => "black",
+            HistChannel::A => "a",
+            HistChannel::B => "b",
+            HistChannel::Luminosity => "luminosity",
+            HistChannel::Colors => craft::imaging::ui::scopes::COLORS_CHANNEL,
+        }
+    }
+
+    /// The channel `key` names; an unknown or empty key is the composite ([`resolve_channel`] then applies the mode).
+    pub fn from_key(key: &str) -> Self {
+        Self::ALL.into_iter().find(|c| c.key() == key).unwrap_or_default()
+    }
+
+    /// The channel as the tone editors name it, `None` for the two the editors lack (Luminosity and the Colors overlay).
+    fn tone_channel(self, mode: ColorMode) -> Option<ToneChannel> {
+        Some(match self {
+            HistChannel::Composite if gray(mode) => ToneChannel::Gray,
+            HistChannel::Composite => match tone_space(mode) {
+                ToneSpace::Rgb => ToneChannel::Composite(UiToneSpace::Rgb),
+                ToneSpace::Cmyk => ToneChannel::Composite(UiToneSpace::Cmyk),
+                ToneSpace::Lab => ToneChannel::Lightness,
+            },
+            HistChannel::Red => ToneChannel::Red,
+            HistChannel::Green => ToneChannel::Green,
+            HistChannel::Blue => ToneChannel::Blue,
+            HistChannel::Cyan => ToneChannel::Cyan,
+            HistChannel::Magenta => ToneChannel::Magenta,
+            HistChannel::Yellow => ToneChannel::Yellow,
+            HistChannel::Black => ToneChannel::Black,
+            HistChannel::A => ToneChannel::A,
+            HistChannel::B => ToneChannel::B,
+            HistChannel::Luminosity | HistChannel::Colors => return None,
+        })
+    }
+
+    /// The colour the channel draws in; Luminosity and the composite are neutral.
+    fn ink(self, mode: ColorMode) -> ChannelColor {
+        self.tone_channel(mode).map_or(ChannelColor::Neutral, |channel| channel.color())
+    }
+}
+
 /// What the histogram counts (the Source menu, shown for documents with several layers).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum HistSourceChoice {
     /// The composite of every layer.
     #[default]
@@ -73,36 +134,28 @@ pub enum HistSourceChoice {
     AdjustmentComposite,
 }
 
-/// The panel options (its menu and selectors), kept between launches.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct HistogramPanelState {
-    pub view: HistView,
-    /// Kept when the view changes (Expanded ↔ All Channels); in All Channels View it picks only
-    /// the top histogram.
-    pub channel: HistChannel,
-    /// Show Channels in Color: single channels in Expanded and All Channels View in their colour
-    /// (Compact View always colours them; Colors is always in colour).
-    pub show_channels_in_color: bool,
-    pub show_statistics: bool,
-    pub source: HistSourceChoice,
-}
-
-impl Default for HistogramPanelState {
-    fn default() -> Self {
-        Self {
-            view: HistView::Compact,
-            channel: HistChannel::Composite,
-            show_channels_in_color: false,
-            show_statistics: true,
-            source: HistSourceChoice::EntireImage,
+impl HistSourceChoice {
+    /// The choice's key in `ScopeSettings::source` and in `ui.inspect`.
+    pub fn key(self) -> &'static str {
+        match self {
+            HistSourceChoice::EntireImage => "entireImage",
+            HistSourceChoice::SelectedLayer => "selectedLayer",
+            HistSourceChoice::AdjustmentComposite => "adjustmentComposite",
         }
+    }
+
+    /// The choice `key` names; an unknown or empty key is the entire image.
+    pub fn from_key(key: &str) -> Self {
+        [HistSourceChoice::EntireImage, HistSourceChoice::SelectedLayer, HistSourceChoice::AdjustmentComposite]
+            .into_iter()
+            .find(|c| c.key() == key)
+            .unwrap_or_default()
     }
 }
 
 /// Saves the panel options with the preferences.
 pub fn persist_options(app: &mut PhotocraftApp) {
-    if let Ok(value) = serde_json::to_value(app.ui.histogram_panel) {
+    if let Ok(value) = serde_json::to_value(&app.ui.histogram.settings) {
         app.session.prefs.edit(|p| {
             p.dialogs.insert(OPTIONS_PREF.into(), value);
         });
@@ -112,10 +165,16 @@ pub fn persist_options(app: &mut PhotocraftApp) {
 /// Restores the saved panel options; unreadable ones keep the defaults.
 pub fn restore_options(app: &mut PhotocraftApp) {
     if let Some(v) = app.session.prefs().dialogs.get(OPTIONS_PREF)
-        && let Ok(state) = serde_json::from_value(v.clone())
+        && let Ok(settings) = serde_json::from_value::<ScopeSettings>(v.clone())
     {
-        app.ui.histogram_panel = state;
+        app.ui.histogram.settings = settings;
     }
+}
+
+/// The selected level range as whole levels, in order.
+pub(crate) fn range_levels(range: Option<LevelRange>) -> Option<[u8; 2]> {
+    let level = |v: f32| v.round().clamp(0.0, 255.0) as u8;
+    range.map(|r| [level(r.start), level(r.end)])
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -184,28 +243,6 @@ pub fn channel_label(mode: ColorMode, channel: HistChannel) -> &'static str {
     channel_options(mode).into_iter().find(|(c, _)| *c == channel).map_or("", |(_, l)| l)
 }
 
-/// The id of a channel (`ui.inspect`, the serde name).
-fn channel_id(channel: HistChannel) -> String {
-    serde_json::to_value(channel).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default()
-}
-
-/// The colour a single channel draws in (saturated, as in All Channels View).
-pub fn channel_paint(channel: HistChannel) -> Option<Color32> {
-    use HistChannel::*;
-    Some(match channel {
-        Red => Color32::from_rgb(235, 30, 30),
-        Green => Color32::from_rgb(30, 235, 30),
-        Blue => Color32::from_rgb(40, 40, 240),
-        Cyan => Color32::from_rgb(0, 200, 235),
-        Magenta => Color32::from_rgb(230, 0, 160),
-        Yellow => Color32::from_rgb(240, 220, 0),
-        Black => Color32::from_gray(110),
-        A => Color32::from_rgb(220, 90, 140),
-        B => Color32::from_rgb(200, 180, 60),
-        _ => return None,
-    })
-}
-
 /// The level of `channel` at a straight RGBA 0..1 pixel, as the histogram bins it (the Color
 /// Sampler marks).
 pub fn channel_level(mode: ColorMode, channel: HistChannel, rgba: [f32; 4]) -> u8 {
@@ -239,57 +276,6 @@ pub fn channel_level(mode: ColorMode, channel: HistChannel, rgba: [f32; 4]) -> u
             }
         }
     }
-}
-
-// ---------------------------------------------------------------------------------------------
-// Statistics
-
-/// The Histogram statistics. Mean, Std Dev, Median and Pixels describe the whole
-/// histogram; Level, Count and Percentile the level under the pointer or the dragged range.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Stats {
-    pub mean: f64,
-    pub std_dev: f64,
-    pub median: u8,
-    pub pixels: u64,
-    /// The inspected levels, `lo..=hi` (one level when they are equal), if any.
-    pub level: Option<[u8; 2]>,
-    /// Pixels at the inspected levels.
-    pub count: Option<u64>,
-    /// Percent of the pixels at or below the inspected level; for a range, in it.
-    pub percentile: Option<f64>,
-    /// Percent of the pixels at 0 and at 255: shadow and highlight clipping.
-    pub clipped: [f64; 2],
-}
-
-/// The statistics of `h`, inspecting `levels` (a level or a range, in either order). `pixels` is
-/// the count the Pixels row reports — every pixel the count kept, transparent ones included, so
-/// with a selection it is the selection's size (see [`Histograms::pixel_count`]) — while the
-/// ratios and moments come from the bins, which hold only the visible pixels. None when nothing
-/// was counted.
-pub fn stats(h: &[u32; 256], levels: Option<[u8; 2]>, pixels: u64) -> Option<Stats> {
-    let n: u64 = h.iter().map(|v| u64::from(*v)).sum();
-    if n == 0 && pixels == 0 {
-        return None;
-    }
-    let nf = n.max(1) as f64;
-    let mean = h.iter().enumerate().map(|(i, v)| i as f64 * f64::from(*v)).sum::<f64>() / nf;
-    let var = h.iter().enumerate().map(|(i, v)| (i as f64 - mean).powi(2) * f64::from(*v)).sum::<f64>() / nf;
-    let mut acc = 0u64;
-    let median = h
-        .iter()
-        .position(|v| {
-            acc += u64::from(*v);
-            acc * 2 >= n
-        })
-        .unwrap_or(0) as u8;
-    let level = levels.map(|[a, b]| [a.min(b), a.max(b)]);
-    let sum = |lo: u8, hi: u8| h.get(usize::from(lo)..=usize::from(hi)).map_or(0, |s| s.iter().map(|v| u64::from(*v)).sum::<u64>());
-    let count = level.map(|[lo, hi]| sum(lo, hi));
-    let percentile = level.map(|[lo, hi]| 100.0 * if lo == hi { sum(0, hi) } else { sum(lo, hi) } as f64 / nf);
-    let clipped = [100.0 * f64::from(h[0]) / nf, 100.0 * f64::from(h[255]) / nf];
-    Some(Stats { mean, std_dev: var.sqrt(), median, pixels, level, count, percentile, clipped })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -347,8 +333,8 @@ fn max_cache_level(app: &PhotocraftApp) -> u32 {
 }
 
 /// The source the panel counts: Compact View shows no Source menu and represents the entire image.
-fn source_choice(opts: &HistogramPanelState) -> HistSourceChoice {
-    if opts.view == HistView::Compact { HistSourceChoice::EntireImage } else { opts.source }
+fn source_choice(opts: &ScopeSettings) -> HistSourceChoice {
+    if opts.view == ScopeView::Compact { HistSourceChoice::EntireImage } else { HistSourceChoice::from_key(&opts.source) }
 }
 
 /// The key of the document's histogram the panel wants now, with the space and source it counts.
@@ -356,7 +342,7 @@ fn committed_key(app: &PhotocraftApp) -> Option<(HistKey, ToneSpace, HistSource)
     let st = app.session.active()?;
     let (doc, revision) = (st.doc.id, st.revision);
     let space = tone_space(st.doc.mode);
-    let (_, source) = resolve_source(st, source_choice(&app.ui.histogram_panel));
+    let (_, source) = resolve_source(st, source_choice(&app.ui.histogram.settings));
     let max_level = if app.hist_uncached == Some((doc, revision)) { 1 } else { max_cache_level(app) };
     // The panel counts the selected pixels (HistScope::Selection), so its key carries the
     // selection's identity: a selection change makes every cached histogram stale. The mask is
@@ -564,223 +550,35 @@ fn shown(app: &mut PhotocraftApp) -> Option<Shown> {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Drawing
+// The panel
 
-/// One histogram and its colour, for [`draw_overlaid`].
-type Layer<'a> = (&'a [u32; 256], Color32);
-
-/// The colour of a band covered by `covering`: additive for light channels (red over green is
-/// yellow, all three grey), multiplied for inks (cyan over magenta is blue).
-fn mix(covering: impl Iterator<Item = Color32>, multiply: bool) -> Color32 {
-    if multiply {
-        covering.fold(Color32::WHITE, |a, b| {
-            Color32::from_rgb(
-                (u16::from(a.r()) * u16::from(b.r()) / 255) as u8,
-                (u16::from(a.g()) * u16::from(b.g()) / 255) as u8,
-                (u16::from(a.b()) * u16::from(b.b()) / 255) as u8,
-            )
-        })
-    } else {
-        covering.fold(Color32::BLACK, |a, b| Color32::from_rgb(a.r().saturating_add(b.r()), a.g().saturating_add(b.g()), a.b().saturating_add(b.b())))
-    }
+/// The scope panel's channels for `h`: the mode's channel list without the Colors overlay entry (the set's `colors`
+/// offers it), each in its colour.
+fn scope_channels(h: &Histograms, mode: ColorMode) -> Vec<ScopeChannel<'_>> {
+    let colors = color_channels(mode);
+    channel_options(mode)
+        .into_iter()
+        .filter(|(c, _)| *c != HistChannel::Colors)
+        .map(|(c, label)| ScopeChannel::new(c.key(), tl!(label), c.ink(mode), bins(h, mode, c).as_slice(), colors.contains(&c)))
+        .collect()
 }
 
-/// Draws `layers` overlaid on one shared scale, each outlined like [`tone::draw_histogram`]
-/// (straight lines between the bin centres, down to the baseline at both ends). Where several
-/// cover a band it takes their [`mix`]ed colour. Each span between two centres is split where
-/// outlines cross, so the channel order is constant within every piece and the bands are exact
-/// trapezoids: no steps, and no draw-order-dependent blending.
-fn draw_overlaid(p: &egui::Painter, r: Rect, layers: &[Layer<'_>], multiply: bool) {
-    p.add(overlaid_mesh(r, layers, multiply));
-}
-
-fn overlaid_mesh(r: Rect, layers: &[Layer<'_>], multiply: bool) -> egui::Mesh {
-    let top = layers.iter().map(|(h, _)| tone::histogram_scale_top(h)).fold(1.0f32, f32::max);
-    // Outline points: the left baseline, the 256 bin centres, the right baseline (heights 0..1).
-    let xs: Vec<f32> =
-        std::iter::once(r.left()).chain((0..256).map(|i| r.left() + (i as f32 + 0.5) / 256.0 * r.width())).chain(std::iter::once(r.right())).collect();
-    let height = |h: &[u32; 256], i: usize| if i == 0 || i > 256 { 0.0 } else { (h.get(i - 1).copied().unwrap_or(0) as f32 / top).min(1.0) };
-    let mut mesh = egui::Mesh::default();
-    let y = |v: f32| r.bottom() - v * r.height();
-    for i in 0..xs.len().saturating_sub(1) {
-        let (Some(&x0), Some(&x1)) = (xs.get(i), xs.get(i + 1)) else { continue };
-        let a: Vec<f32> = layers.iter().map(|(h, _)| height(h, i)).collect();
-        let b: Vec<f32> = layers.iter().map(|(h, _)| height(h, i + 1)).collect();
-        // Where any two outlines cross within the span (as a fraction of it).
-        let mut cuts = vec![0.0f32, 1.0];
-        for j in 0..layers.len() {
-            for k in j + 1..layers.len() {
-                let (Some(aj), Some(bj), Some(ak), Some(bk)) = (a.get(j), b.get(j), a.get(k), b.get(k)) else { continue };
-                let d = (bj - aj) - (bk - ak);
-                if d.abs() > f32::EPSILON {
-                    let t = (ak - aj) / d;
-                    if t > 0.0 && t < 1.0 {
-                        cuts.push(t);
-                    }
-                }
-            }
-        }
-        cuts.sort_by(f32::total_cmp);
-        for w in cuts.windows(2) {
-            let (t0, t1) = (w[0], w[1]);
-            if t1 - t0 <= f32::EPSILON {
-                continue;
-            }
-            let at = |t: f32| -> Vec<f32> { a.iter().zip(&b).map(|(a, b)| a + (b - a) * t).collect() };
-            let (left, right, mid) = (at(t0), at(t1), at((t0 + t1) / 2.0));
-            let mut order: Vec<usize> = (0..layers.len()).collect();
-            order.sort_by(|&m, &n| mid.get(m).copied().unwrap_or(0.0).total_cmp(&mid.get(n).copied().unwrap_or(0.0)));
-            let (px0, px1) = (x0 + (x1 - x0) * t0, x0 + (x1 - x0) * t1);
-            // Bottom up: each band is covered by the channels at least that tall.
-            let (mut below_l, mut below_r) = (0.0f32, 0.0f32);
-            for (n, &c) in order.iter().enumerate() {
-                let (Some(&tl), Some(&tr)) = (left.get(c), right.get(c)) else { continue };
-                if tl > below_l || tr > below_r {
-                    let color = mix(order.iter().skip(n).filter_map(|&m| layers.get(m).map(|l| l.1)), multiply);
-                    let v = mesh.vertices.len() as u32;
-                    for q in [pos2(px0, y(below_l)), pos2(px0, y(tl)), pos2(px1, y(tr)), pos2(px1, y(below_r))] {
-                        mesh.colored_vertex(q, color);
-                    }
-                    mesh.add_triangle(v, v + 1, v + 2);
-                    mesh.add_triangle(v, v + 2, v + 3);
-                }
-                (below_l, below_r) = (tl.max(below_l), tr.max(below_r));
-            }
-        }
-    }
-    mesh
-}
-
-/// The colour a single-channel graph draws in: its channel colour when colourised, else the
-/// composite grey.
-fn graph_color(channel: HistChannel, colored: bool, t: &Tokens) -> Color32 {
-    let grey = if t.pro { Color32::from_gray(215) } else { Color32::from_gray(70) };
-    if colored { channel_paint(channel).unwrap_or(grey) } else { grey }
-}
-
-/// Draws `channel` of `h` in `r` (Colors overlays the colour channels).
-fn draw_channel(p: &egui::Painter, r: Rect, h: &Histograms, mode: ColorMode, channel: HistChannel, colored: bool, t: &Tokens) {
-    if channel == HistChannel::Colors {
-        let layers: Vec<Layer<'_>> = color_channels(mode).iter().filter_map(|c| Some((bins(h, mode, *c), channel_paint(*c)?))).collect();
-        draw_overlaid(p, r, &layers, tone_space(mode) == ToneSpace::Cmyk);
-    } else {
-        tone::draw_histogram(p, r, bins(h, mode, channel), graph_color(channel, colored, t));
-    }
-}
-
-/// The histogram graph with its marks and pointer interaction. Returns the levels under the
-/// pointer (hover) for the statistics.
-fn graph(app: &mut PhotocraftApp, ui: &mut egui::Ui, s: &Shown, channel: HistChannel, colored: bool, height: f32) -> Option<u8> {
-    let t = Tokens::get(ui.ctx());
-    let w = ui.available_width();
-    let (r, resp) = ui.allocate_exact_size(vec2(w, height), Sense::click_and_drag());
-    let p = ui.painter_at(r);
-    p.rect_filled(r, 0.0, t.field);
-    let level_at = |x: f32| (((x - r.left()) / r.width().max(1.0)) * 256.0).floor().clamp(0.0, 255.0) as u8;
-    let x_of = |l: u8| r.left() + (f32::from(l) + 0.5) / 256.0 * r.width();
-    // The selected range behind the bars.
-    if let Some([a, b]) = app.ui.histogram_range {
-        let (lo, hi) = (a.min(b), a.max(b));
-        let band = Rect::from_x_y_ranges(r.left() + f32::from(lo) / 256.0 * r.width()..=r.left() + (f32::from(hi) + 1.0) / 256.0 * r.width(), r.y_range());
-        p.rect_filled(band, 0.0, t.accent.gamma_multiply(0.35));
-    }
-    draw_channel(&p, r, &s.hist, s.mode, channel, colored, &t);
-    // The original histogram outlined over the adjusted one while an adjustment previews.
-    if let Some(o) = &s.original {
-        outline(&p, r, bins(o, s.mode, if channel == HistChannel::Colors { HistChannel::Composite } else { channel }), t.text);
-    }
-    // The Color Samplers' levels.
+/// The Color Samplers' ticks on the plot: each sampler's level in `channel` (the composite while Colors shows).
+fn sampler_markers(app: &mut PhotocraftApp, mode: ColorMode, channel: HistChannel) -> Vec<(f32, Label)> {
     let mark_channel = if channel == HistChannel::Colors { HistChannel::Composite } else { channel };
-    for v in crate::panels::sampler_readouts(app).iter() {
-        let rgb = v["rgb"].as_array().map(|a| a.iter().filter_map(Value::as_f64).map(|c| (c / 255.0) as f32).collect::<Vec<_>>()).unwrap_or_default();
-        let (Some(&red), Some(&green), Some(&blue)) = (rgb.first(), rgb.get(1), rgb.get(2)) else { continue };
-        let x = x_of(channel_level(s.mode, mark_channel, [red, green, blue, 1.0]));
-        p.line_segment([pos2(x, r.bottom() - 9.0), pos2(x, r.bottom())], egui::Stroke::new(1.5, t.text));
-        p.text(pos2(x + 2.0, r.bottom() - 9.0), egui::Align2::LEFT_BOTTOM, v["number"].to_string(), egui::FontId::proportional(9.0), t.text);
-    }
-    // The cached-data warning: click it (or double-click the graph) for an Uncached Refresh.
-    if s.stale || s.hist.level > 1 {
-        let icon = Rect::from_min_size(r.right_top() + vec2(-18.0, 2.0), vec2(16.0, 16.0));
-        crate::icons::paint(ui, icon, "triangle-alert", 12.0, t.warning);
-        let warn =
-            ui.interact(icon, ui.scope_id().with("hist-cached-warning"), Sense::click()).on_hover_text(tl!("Click to refresh histogram with uncached data"));
-        if warn.clicked() {
-            uncached_refresh(app);
-        }
-    }
-    if resp.double_clicked() {
-        uncached_refresh(app);
-    }
-    let pointer = resp.interact_pointer_pos().or_else(|| resp.hover_pos());
-    let id = ui.scope_id().with("hist-drag-from");
-    if resp.drag_started()
-        && let Some(pos) = resp.interact_pointer_pos()
-    {
-        ui.data_mut(|d| d.insert_temp(id, level_at(pos.x)));
-    }
-    if resp.dragged()
-        && let (Some(from), Some(pos)) = (ui.data(|d| d.get_temp::<u8>(id)), pointer)
-    {
-        app.ui.histogram_range = Some([from, level_at(pos.x)]);
-    } else if resp.clicked() {
-        app.ui.histogram_range = None;
-    }
-    pointer.filter(|_| resp.hovered() || resp.dragged()).map(|pos| level_at(pos.x))
-}
-
-/// The outline of `h` (the original histogram over an adjusted one).
-fn outline(p: &egui::Painter, r: Rect, h: &[u32; 256], color: Color32) {
-    let top = tone::histogram_scale_top(h);
-    let pts: Vec<_> = h
+    crate::panels::sampler_readouts(app)
         .iter()
-        .enumerate()
-        .map(|(i, v)| pos2(r.left() + (i as f32 + 0.5) / 256.0 * r.width(), r.bottom() - (*v as f32 / top).min(1.0) * r.height()))
-        .collect();
-    p.add(egui::Shape::line(pts, egui::Stroke::new(1.0, color.gamma_multiply(0.8))));
+        .filter_map(|v| {
+            let rgb = v["rgb"].as_array()?.iter().filter_map(Value::as_f64).map(|c| (c / 255.0) as f32).collect::<Vec<_>>();
+            let (&red, &green, &blue) = (rgb.first()?, rgb.get(1)?, rgb.get(2)?);
+            Some((f32::from(channel_level(mode, mark_channel, [red, green, blue, 1.0])), Label::from(v["number"].to_string())))
+        })
+        .collect()
 }
 
-/// The statistics grid: Mean, Std Dev, Median, Pixels | Level, Count, Percentile, Cache Level.
-fn statistics(ui: &mut egui::Ui, h: &Histograms, mode: ColorMode, channel: HistChannel, levels: Option<[u8; 2]>, t: &Tokens) {
-    let ch = if channel == HistChannel::Colors { HistChannel::Composite } else { channel };
-    let histogram = bins(h, mode, ch);
-    let Some(s) = stats(histogram, levels, h.pixel_count) else { return };
-    let no_visible_samples = histogram.iter().all(|&v| v == 0);
-    let level = match s.level {
-        Some([a, b]) if a == b => a.to_string(),
-        Some([a, b]) => format!("{a}..{b}"),
-        None => String::new(),
-    };
-    let rows = [
-        (tl!("Mean:"), if no_visible_samples { "--".into() } else { format!("{:.2}", s.mean) }, tl!("Level:"), level),
-        (
-            tl!("Std Dev:"),
-            if no_visible_samples { "--".into() } else { format!("{:.2}", s.std_dev) },
-            tl!("Count:"),
-            s.count.map(|c| c.to_string()).unwrap_or_default(),
-        ),
-        (
-            tl!("Median:"),
-            if no_visible_samples { "--".into() } else { s.median.to_string() },
-            tl!("Percentile:"),
-            s.percentile.filter(|_| !no_visible_samples).map(|p| format!("{p:.2}")).unwrap_or_default(),
-        ),
-        (tl!("Pixels:"), s.pixels.to_string(), tl!("Cache Level:"), h.level.max(1).to_string()),
-    ];
-    let mono = crate::theme::mono(11.5);
-    egui::Grid::new("hist-stats").num_columns(4).spacing(vec2(6.0, 2.0)).show(ui, |ui| {
-        for (k1, v1, k2, v2) in rows {
-            for (k, v) in [(k1, v1), (k2, v2)] {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(egui::RichText::new(k).color(t.text_dim).size(11.5));
-                });
-                ui.label(egui::RichText::new(v).font(mono.clone()).color(t.text));
-            }
-            ui.end_row();
-        }
-    });
-}
-
-/// Histogram panel (Window › Histogram).
+/// Histogram panel (Window › Histogram). A second pass in the same frame draws the same counts and reports only its
+/// own input: `update` lands a finished count once (the job is gone on the second pass) and the output flags come from
+/// the scope panel's pass.
 pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     if app.session.active().is_none() {
@@ -792,125 +590,125 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ui.label(egui::RichText::new(tl!("Calculating…")).color(t.text_faint));
         return;
     };
-    let opts = app.ui.histogram_panel;
-    let channel = resolve_channel(s.mode, opts.channel);
-    if opts.view == HistView::Compact {
-        // Compact View: the graph alone; a single channel is always in its colour.
-        graph(app, ui, &s, channel, true, 100.0);
-        return;
+    let channel = resolve_channel(s.mode, HistChannel::from_key(&app.ui.histogram.settings.channel));
+    let markers = sampler_markers(app, s.mode, channel);
+    let has_selection = app.session.active().is_some_and(|st| st.doc.selection.is_some());
+
+    let channels = scope_channels(&s.hist, s.mode);
+    let original = s.original.as_ref().map(|h| scope_channels(h, s.mode));
+    let mut set = HistogramSet::new(&channels).original(original.as_deref()).pixels(s.hist.pixel_count).stale(s.stale).cache_level(s.hist.level);
+    if channel_options(s.mode).iter().any(|(c, _)| *c == HistChannel::Colors) {
+        set = set.colors(if tone_space(s.mode) == ToneSpace::Cmyk { ChannelOverlay::Ink } else { ChannelOverlay::Light });
     }
-    let mut changed = false;
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(tl!("Channel:")).color(t.text_dim).size(12.0));
-        let mut ch = channel;
-        let options = channel_options(s.mode);
-        if crate::widgets::dropdown(ui, "histogram-panel-ch", tl!("Channel"), &mut ch, &options, 110.0) {
-            app.ui.histogram_panel.channel = ch;
-            changed = true;
-        }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if crate::icons::button(ui, "rotate-cw", 20.0, false, tl!("Uncached Refresh")).clicked() {
-                uncached_refresh(app);
-            }
-        });
-    });
-    let colored = opts.show_channels_in_color;
-    let hover = graph(app, ui, &s, channel, colored, 100.0);
-    // Source: only for documents with several layers.
+    let mut sources = Vec::new();
     if s.layers > 1 {
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(tl!("Source:")).color(t.text_dim).size(12.0));
-            let mut src = opts.source;
-            let mut options = vec![(HistSourceChoice::EntireImage, "Entire Image"), (HistSourceChoice::SelectedLayer, "Selected Layer")];
-            if s.adjustment {
-                options.push((HistSourceChoice::AdjustmentComposite, "Adjustment Composite"));
-            } else if src == HistSourceChoice::AdjustmentComposite {
-                src = HistSourceChoice::EntireImage;
-            }
-            if crate::widgets::dropdown(ui, "histogram-panel-src", tl!("Source"), &mut src, &options, 150.0) {
-                app.ui.histogram_panel.source = src;
-                changed = true;
-            }
-        });
-    }
-    if opts.show_statistics {
-        ui.add_space(4.0);
-        let levels = app.ui.histogram_range.or_else(|| hover.map(|l| [l, l]));
-        statistics(ui, &s.hist, s.mode, channel, levels, &t);
-    }
-    if opts.view == HistView::AllChannels {
-        for c in color_channels(s.mode) {
-            ui.add_space(4.0);
-            ui.label(egui::RichText::new(tl!(channel_label(s.mode, *c))).color(t.text).size(11.5));
-            let w = ui.available_width();
-            let (r, _) = ui.allocate_exact_size(vec2(w, 90.0), Sense::hover());
-            let p = ui.painter_at(r);
-            p.rect_filled(r, 0.0, t.field);
-            tone::draw_histogram(&p, r, bins(&s.hist, s.mode, *c), graph_color(*c, colored, &t));
+        sources.push(ScopeSource::new(HistSourceChoice::EntireImage.key(), tl!("Entire Image")));
+        sources.push(ScopeSource::new(HistSourceChoice::SelectedLayer.key(), tl!("Selected Layer")));
+        if s.adjustment {
+            sources.push(ScopeSource::new(HistSourceChoice::AdjustmentComposite.key(), tl!("Adjustment Composite")));
         }
     }
-    if changed {
+    let frame = ScopeFrame::histogram(set);
+    let out = ScopePanel::new(&mut app.ui.histogram).frame(&frame).sources(&sources).markers(&markers).has_selection(has_selection).show(ui);
+    if out.settings_changed {
         persist_options(app);
+    }
+    // The next `update` recounts for a changed source or channel from the settings.
+    if out.refresh {
+        uncached_refresh(app);
     }
 }
 
-/// The Histogram items of the panel menu.
-pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    if ui.add_enabled(app.session.active().is_some(), egui::Button::new(tl!("Uncached Refresh"))).clicked() {
-        uncached_refresh(app);
-        ui.close();
+/// The rows of the panel menu: Uncached Refresh, the three views and the two checks.
+pub(crate) fn panel_rows(_app: &PhotocraftApp) -> Vec<PanelRow> {
+    ScopePanel::panel_rows()
+}
+
+/// The state of every scope command: the radio and check marks from the settings; Uncached Refresh needs a document.
+pub(crate) fn command_states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandState)> {
+    let active = app.session.active();
+    let has_selection = active.is_some_and(|st| st.doc.selection.is_some());
+    ScopeCommand::states(&app.ui.histogram, has_selection)
+        .into_iter()
+        .map(|(command, state)| {
+            let state = if command == ScopeCommand::Refresh { state.enabled(active.is_some()) } else { state };
+            (CommandRef::from(command), state)
+        })
+        .collect()
+}
+
+/// Runs a scope command the menu or a key fired: the settings change, then they persist; Uncached Refresh recounts.
+/// Returns whether the command belongs to this panel.
+pub(crate) fn run_fired(app: &mut PhotocraftApp, _ctx: &egui::Context, command: &CommandRef) -> bool {
+    let Some(command) = ScopeCommand::from_ref(command) else { return false };
+    match ScopePanel::run_command(&mut app.ui.histogram, command) {
+        Some(ScopeMenuAction::Refresh) => uncached_refresh(app),
+        Some(ScopeMenuAction::SettingsChanged) => persist_options(app),
+        _ => {}
     }
-    ui.separator();
-    let mut changed = false;
-    for (view, label) in [(HistView::Compact, "Compact View"), (HistView::Expanded, "Expanded View"), (HistView::AllChannels, "All Channels View")] {
-        if ui.radio(app.ui.histogram_panel.view == view, tl!(label)).clicked() {
-            // The channel is one setting for every view, so it is kept.
-            app.ui.histogram_panel.view = view;
-            changed = true;
-        }
+    true
+}
+
+/// The statistics `ui.inspect` reports for `bins`, inspecting `levels`. `pixels` is the count the Pixels row reports:
+/// every pixel the count kept, transparent ones included, so with a selection it is the selection's size, while the
+/// moments and ratios come from the bins, which hold only the visible pixels. `None` when nothing was counted.
+fn statistics_json(bins: &[u32], levels: Option<[u8; 2]>, pixels: u64) -> Option<Value> {
+    let visible = histogram_statistics(bins, levels);
+    if visible.is_none() && pixels == 0 {
+        return None;
     }
-    ui.separator();
-    let mut stats_on = app.ui.histogram_panel.show_statistics;
-    if crate::widgets::checkbox(ui, &mut stats_on, tl!("Show Statistics")).changed() {
-        app.ui.histogram_panel.show_statistics = stats_on;
-        changed = true;
-    }
-    let mut color = app.ui.histogram_panel.show_channels_in_color;
-    if crate::widgets::checkbox(ui, &mut color, tl!("Show Channels in Color")).changed() {
-        app.ui.histogram_panel.show_channels_in_color = color;
-        changed = true;
-    }
-    if changed {
-        persist_options(app);
-        ui.close();
-    }
+    // A selection of only transparent pixels has a count but no visible one: every moment is 0.
+    let sorted = levels.map(|[a, b]| [a.min(b), a.max(b)]);
+    Some(match visible {
+        Some(s) => json!({
+            "mean": s.mean,
+            "stdDev": s.standard_deviation,
+            "median": s.median,
+            "pixels": pixels,
+            "level": s.level,
+            "count": s.count,
+            "percentile": s.percentile,
+            "clipped": s.clipped,
+        }),
+        None => json!({
+            "mean": 0.0,
+            "stdDev": 0.0,
+            "median": 0,
+            "pixels": pixels,
+            "level": sorted,
+            "count": sorted.map(|_| 0),
+            "percentile": sorted.map(|_| 0.0),
+            "clipped": [0.0, 0.0],
+        }),
+    })
 }
 
 /// The panel's state for `ui.inspect` (`histogram`): its options as they apply to the active
 /// document, and the shown histogram's statistics for the selected range.
 pub fn inspect(app: &PhotocraftApp) -> Value {
-    let opts = app.ui.histogram_panel;
+    let opts = &app.ui.histogram.settings;
     let Some(st) = app.session.active() else { return json!({"options": opts}) };
     let mode = st.doc.mode;
-    let channel = resolve_channel(mode, opts.channel);
-    let (source, _) = resolve_source(st, source_choice(&opts));
+    let channel = resolve_channel(mode, HistChannel::from_key(&opts.channel));
+    let (source, _) = resolve_source(st, source_choice(opts));
     let preview = app.doc_hist_preview.as_ref().filter(|e| e.key.doc == st.doc.id);
     let entry = preview.or(app.doc_hist.as_ref()).filter(|e| e.key.doc == st.doc.id);
     let committed = committed_key(app).map(|(k, _, _)| k);
     let ch = if channel == HistChannel::Colors { HistChannel::Composite } else { channel };
+    let range = range_levels(app.ui.histogram.range);
     json!({
         "options": opts,
-        "channel": channel_id(channel),
-        "channels": channel_options(mode).iter().map(|(c, _)| channel_id(*c)).collect::<Vec<_>>(),
-        "source": source,
-        "sourceShown": st.doc.layer_count() > 1 && opts.view != HistView::Compact,
-        "range": app.ui.histogram_range,
+        "channel": channel.key(),
+        "channels": channel_options(mode).iter().map(|(c, _)| c.key()).collect::<Vec<_>>(),
+        "source": source.key(),
+        "sourceShown": st.doc.layer_count() > 1 && opts.view != ScopeView::Compact,
+        "range": range,
         "preview": preview.is_some(),
         "revision": entry.map(|e| e.key.revision),
         "current": entry.zip(committed).is_some_and(|(e, k)| e.key == HistKey { preview: e.key.preview, ..k }),
         "cacheLevel": entry.map(|e| e.hist.level.max(1)),
         "maxCacheLevel": max_cache_level(app),
-        "stats": entry.and_then(|e| stats(bins(&e.hist, mode, ch), app.ui.histogram_range, e.hist.pixel_count)),
+        "stats": entry.and_then(|e| statistics_json(bins(&e.hist, mode, ch), range, e.hist.pixel_count)),
     })
 }
 

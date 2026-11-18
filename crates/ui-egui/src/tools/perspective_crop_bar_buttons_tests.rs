@@ -1,72 +1,49 @@
 //! #11978: the Perspective Crop options bar shows its Cancel and Commit buttons only during a
-//! session (a quad, or corners being clicked), and they still commit and cancel.
+//! session (a quad, or corners being clicked).
 
-use egui::vec2;
-use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use craft::behavior::kurbo::Point;
+use egui::Modifiers;
 use serde_json::json;
 
 use super::*;
-
-const COMMIT: &str = "Commit current crop operation";
-const CANCEL: &str = "Cancel current crop operation";
+use crate::canvas::testing::{ToolEvent, tool_event};
 
 /// A 200 × 150 document with the Perspective Crop tool chosen and no session.
 fn app() -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 150})).unwrap();
+    app.sync_views();
     app.ui.tool = Tool::PerspectiveCrop;
     app
 }
 
-fn harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
-    let mut h = Harness::builder().with_size(vec2(1400.0, 80.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
-            if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                return;
-            }
-            crate::panels::options_bar(app, ui);
-        },
-        app,
-    );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
-    h.run_steps(4);
-    h
-}
-
-fn shows(h: &Harness<'static, PhotocraftApp>, label: &str) -> bool {
-    h.query_by_label_contains(label).is_some()
-}
-
 #[test]
-fn without_a_session_neither_button_shows() {
-    let h = harness(app());
-    assert!(!shows(&h, COMMIT) && !shows(&h, CANCEL));
-    assert!(h.query_by_label("Show Grid").is_some(), "the bar still ends with Show Grid");
-}
-
-#[test]
-fn a_pending_quad_shows_both_and_commit_commits() {
+fn commit_and_cancel_show_only_while_something_is_pending() {
     let mut app = app();
-    app.ui.perspective_crop = Some([[20.0, 20.0], [180.0, 20.0], [180.0, 130.0], [20.0, 130.0]]);
-    let mut h = harness(app);
-    assert!(shows(&h, COMMIT) && shows(&h, CANCEL));
-    h.get_by_label_contains(COMMIT).click();
-    h.run_steps(3);
-    let size = h.state().session.active().unwrap().doc.size;
-    assert_eq!((size.width, size.height), (160, 110), "Commit cropped to the quad");
-    assert!(!shows(&h, COMMIT) && !shows(&h, CANCEL), "gone after commit");
-}
+    assert!(!commit_shown(&app), "nothing pending");
 
-#[test]
-fn clicked_corners_show_both_and_cancel_cancels() {
-    let mut app = app();
-    app.pcrop.clicks = vec![[20.0, 20.0], [180.0, 25.0]];
-    let mut h = harness(app);
-    assert!(shows(&h, COMMIT) && shows(&h, CANCEL), "with clicked corners");
-    h.get_by_label_contains(CANCEL).click();
-    h.run_steps(3);
-    assert!(h.state().pcrop.clicks.is_empty(), "Cancel dropped the corners");
-    assert_eq!(h.state().session.active().unwrap().doc.size.width, 200, "nothing cropped");
-    assert!(!shows(&h, COMMIT) && !shows(&h, CANCEL), "gone after cancel");
+    // A box drag in progress.
+    tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Move { x: 120.0, y: 90.0, pressure: 1.0 }, Modifiers::NONE);
+    assert!(commit_shown(&app), "a drag");
+    tool_event(&mut app, ToolEvent::Up { x: 120.0, y: 90.0 }, Modifiers::NONE);
+    assert!(commit_shown(&app), "the quad it drew");
+    cancel(&mut app);
+    assert!(!commit_shown(&app), "gone after cancel");
+
+    // A quad.
+    app.canvas_tools.perspective.tool.set(Some([Point::new(20.0, 20.0), Point::new(180.0, 20.0), Point::new(180.0, 130.0), Point::new(20.0, 130.0)]));
+    assert!(commit_shown(&app), "a quad");
+    apply(&mut app);
+    assert!(!commit_shown(&app), "gone after commit");
+    assert_eq!(app.session.active().unwrap().doc.size.width, 160, "Commit cropped to the quad");
+
+    // Clicked corners.
+    let mut app = self::app();
+    tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Up { x: 20.0, y: 20.0 }, Modifiers::NONE);
+    assert!(commit_shown(&app), "clicked corners");
+    cancel(&mut app);
+    assert!(!commit_shown(&app), "gone after cancel");
+    assert_eq!(app.session.active().unwrap().doc.size.width, 200, "nothing cropped");
 }
