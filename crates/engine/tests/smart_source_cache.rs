@@ -169,9 +169,9 @@ fn nested_sources_reuse_pixels_through_filter_edits_transform_and_undo_at_every_
         empty_caches();
         let bytes = nested_source(depth, Size::new(16, 16), false);
         let fmt = photocraft_color::PixelFormat::new(photocraft_doc::ColorMode::Rgb, depth, true);
-        let first = smart_cmds::source_image("nested.pcraft", &bytes, fmt).unwrap();
+        let first = smart_cmds::source_image("outer.pcraft", &bytes, fmt).unwrap();
         for _ in 0..4 {
-            let next = smart_cmds::source_image("nested.pcraft", &bytes, fmt).unwrap();
+            let next = smart_cmds::source_image("outer.pcraft", &bytes, fmt).unwrap();
             assert!(std::sync::Arc::ptr_eq(&first.surface, &next.surface));
         }
         let mut session = nested_session(&bytes, depth);
