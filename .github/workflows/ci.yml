@@ -83,6 +83,8 @@ jobs:
   # Pull requests run them only when they change the GPU crate, a workspace crate it builds on, any
   # package manifest, or a file outside the workspace packages other than documentation
   # (scripts/ci-windows-gpu-tests.py, #15247); the Linux gate runs them on every pull request, and main runs them on Windows too.
+  # `windows_skip`: the platform-neutral packages whose Windows tests a pull request skips because nothing it
+  # changes reaches them (same script); empty on main and `full-ci`.
   platforms:
     if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
     timeout-minutes: 10
@@ -91,6 +93,7 @@ jobs:
     outputs:
       windows: ${{ steps.pick.outputs.windows }}
       windows_gpu: ${{ steps.pick.outputs.windows_gpu }}
+      windows_skip: ${{ steps.pick.outputs.windows_skip }}
       web: ${{ steps.pick.outputs.web }}
     steps:
       - name: Harden runner
@@ -111,6 +114,7 @@ jobs:
             {
               echo "windows=true"
               echo "windows_gpu=true"
+              echo "windows_skip="
               echo "web=true"
             } >> "$GITHUB_OUTPUT"
             exit 0
@@ -131,6 +135,8 @@ jobs:
           fi
           gpu=$(python3 scripts/ci-windows-gpu-tests.py "$BASE")
           echo "windows_gpu=$gpu" >> "$GITHUB_OUTPUT"
+          skip=$(python3 scripts/ci-windows-gpu-tests.py --skip-neutral "$BASE")
+          echo "windows_skip=$skip" >> "$GITHUB_OUTPUT"
 
   # The Linux gate. Its rust-cache entry is the one `test (without heif)` restores.
   gate:
@@ -144,7 +150,7 @@ jobs:
         libgtk-3-dev mesa-vulkan-drivers libvulkan1
       # The tests build with the optional craft-fonts input (crates/text/build.rs), so the
       # Japanese font tests that skip without it run. Same commit as release.yml.
-      craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+      craft-fonts-ref: cc9269cd8d8258785dac603fba3122e5d2556795
       # Cargo.toml's dev profile already keeps line tables only.
       dev-debug: ""
       env: |
@@ -152,6 +158,10 @@ jobs:
         PHOTOCRAFT_NO_PRINT=1
         LPDEST=photocraft-no-such-printer
       timeout-minutes: 100
+      # On main, a `cache warm` leg builds the tests and saves the dependency cache as soon as the
+      # build succeeds; the gate legs then only restore, so a failing test cannot keep the entry
+      # from being saved (craft-common-actions#270). The same targets as the gate's test step (TEST_TARGETS in xtask/src/main.rs).
+      warm-command: cargo test --workspace --no-run --locked --features heif --lib --bins --tests
       # fmt, clippy, layers, panel-commands, scorecard, tests, panic_hunt, doctests and the wasm32 check, with
       # `--locked --features heif`, then the missing-translations report (xtask/src/main.rs).
       command: python3 scripts/test-ci-gpu-lavapipe.py && python3 scripts/test-ci-windows-gpu-tests.py && cargo xtask ci && python3 scripts/ci-gpu-lavapipe.py
@@ -170,7 +180,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        part: [unit, integration]
+        # `warm` builds everything the other legs build and saves the dependency cache. Only main
+        # runs it; the other legs only restore.
+        part: ${{ fromJSON(github.ref == 'refs/heads/main' && '["unit","integration","clippy","warm"]' || '["unit","integration","clippy"]') }}
     env:
       # Released sccache expands Cargo's response files and exceeds Windows' rustc spawn limit
       # (#13543). Let Cargo handle long commands until a release includes mozilla/sccache#3026.
@@ -183,6 +195,11 @@ jobs:
       # The Windows compiler command line carries one -L path per built dependency; keep each
       # target path short enough for CreateProcess when the graph is large.
       CARGO_TARGET_DIR: 'D:\t'
+      # rust-lld (shipped with the toolchain) links the test binaries instead of link.exe, and the
+      # test links skip identical-code folding and PDBs. The link arguments in build.rs
+      # (/DELAYLOAD, delayimp.lib) are lld-link options too.
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: rust-lld
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: -Clink-arg=/OPT:NOICF -Clink-arg=/DEBUG:NONE
       # The all-language UI tests shape real Japanese, Chinese, Korean and Devanagari labels
       # with kittest's strict `MissingGlyphPolicy::Panic`. A hosted Windows image has no
       # guaranteed Japanese or Simplified Chinese system font, and egui 0.37 panics on a
@@ -205,7 +222,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: storytold/craft-fonts
-          ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+          ref: cc9269cd8d8258785dac603fba3122e5d2556795
           path: craft-fonts
           persist-credentials: false
 
@@ -236,26 +253,30 @@ jobs:
         shell: bash
 
       # Only main saves caches; PRs restore main's, so the repo's 10 GB cache budget keeps main's.
-      # Both legs share one key (same dependencies); the integration leg saves it, because it also
-      # runs Clippy and so leaves Clippy's dependency metadata in it. A failed run saves nothing:
-      # when Clippy fails, the test build never ran, and an entry saved then would lack its
-      # dependencies. rust-cache never replaces an entry with the same key, so every later run
+      # All legs share one key (same dependencies). Only the `warm` leg saves it, as soon as the
+      # build is done and before any test runs, so a failing test never keeps the entry from being
+      # saved. It also runs Clippy, so the entry holds Clippy's dependency metadata for the `clippy`
+      # leg. A failed warm run saves nothing: an entry saved from a half-finished build would lack
+      # dependencies, and rust-cache never replaces an entry with the same key, so every later run
       # would restore that half-filled entry until Cargo.lock changes.
-      - uses: step-security/rust-cache@8871c8ba063416da7c32246932ea6ae08700453e # v2.9.2
+      # v2.9.1 on purpose: v2.9.2 is an ES-module bundle in which minimatch's `require('path')` fails,
+      # so it assumes "/" as the path separator and, on Windows, its glob never matches a backslash
+      # path. The save step then finds no cache paths ("Path Validation Error") and never saves.
+      # v2.9.1 is the last release with the CommonJS bundle. Move back once a release fixes this.
+      - uses: step-security/rust-cache@851174d9a2fdc03e0896e02844dcc61d81dd7851 # v2.9.1
         with:
           workspaces: . -> ${{ steps.cache-target.outputs.relative }}
-          save-if: ${{ github.ref == 'refs/heads/main' && matrix.part == 'integration' }}
+          save-if: ${{ github.ref == 'refs/heads/main' && matrix.part == 'warm' }}
           cache-on-failure: false
 
+      # Clippy has its own parallel leg: after the test build it ran in the integration leg's
+      # critical path (#15446).
       - name: Clippy
-        if: matrix.part == 'integration'
+        if: matrix.part == 'clippy'
         run: cargo clippy --workspace --all-targets --locked --features heif -- -D warnings
 
-      - name: Dependency layering
-        if: matrix.part == 'integration'
-        run: cargo xtask layers
-
       - uses: step-security/taiki-e-install-action@76747d22a7567cc4438546a84f11bdf18e670ab8 # v2.87.32
+        if: matrix.part != 'clippy' && matrix.part != 'warm'
         with:
           tool: cargo-nextest@0.9.150
 
@@ -264,26 +285,67 @@ jobs:
       # dependency cache. photocraft-gpu's tests run when the `platforms` job says they can be
       # affected (`windows_gpu`); excluding the package also skips building its test binaries.
       - name: Test
+        if: matrix.part != 'clippy'
         env:
           PART: ${{ matrix.part }}
           GPU: ${{ needs.platforms.outputs.windows_gpu }}
+          SKIP_NEUTRAL: ${{ needs.platforms.outputs.windows_skip }}
         run: |
           case "$PART" in
             unit) targets=(--lib --bins) ;;
+            warm) targets=(--lib --bins --test '*') ;;
             *) targets=(--test '*') ;;
           esac
-          skip=()
+          # The two browser apps are wasm targets; their native test builds check nothing the web job
+          # (and the Linux gate's wasm32 check) does not. Excluding them changes no other crate's
+          # features (`cargo tree -e features --workspace` is identical for every other package).
+          skip=(--exclude photocraft-web --exclude photocraft-web-boot)
           # Only an explicit `false` skips them: a missing output runs everything.
           if [ "$GPU" = false ]; then
-            skip=(--exclude photocraft-gpu)
+            skip+=(--exclude photocraft-gpu)
             echo "::notice::photocraft-gpu's tests are skipped on Windows: this pull request changes nothing they are built from (the Linux gate still runs them)."
           fi
-          cargo nextest run --profile ci --workspace "${skip[@]}" --locked --features heif "${targets[@]}"
+          # nextest reuses this build. The separate step writes cargo's --timings report for it.
+          # Pull requests without `full-ci` also skip the packages with no platform-specific code
+          # that nothing in the pull request reaches (scripts/ci-windows-gpu-tests.py); the Linux
+          # gate runs them. Main and `full-ci` run everything.
+          if [ -n "$SKIP_NEUTRAL" ]; then
+            for package in $SKIP_NEUTRAL; do skip+=(--exclude "$package"); done
+            echo "::notice::Tests of platform-neutral packages the pull request does not reach are skipped on Windows (the Linux gate still runs them): $SKIP_NEUTRAL"
+          fi
+          cargo test --no-run --timings --workspace "${skip[@]}" --locked --features heif "${targets[@]}"
+          if [ "$PART" != warm ]; then
+            cargo nextest run --profile ci --workspace "${skip[@]}" --locked --features heif "${targets[@]}"
+          fi
         shell: bash
+
+      # Fills the cache entry's Clippy metadata (the `clippy` leg only restores it). A Clippy
+      # failure is the `clippy` leg's to report, not a reason to skip saving the cache.
+      - name: Clippy dependency metadata
+        if: matrix.part == 'warm'
+        continue-on-error: true
+        run: cargo clippy --workspace --all-targets --locked --features heif -- -D warnings
+
+      # Per-crate compile and link times of this leg's build (open the HTML in a browser).
+      - name: Upload cargo build timings
+        if: always() && matrix.part != 'clippy'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cargo-timings-windows-${{ matrix.part }}
+          # CARGO_TARGET_DIR above; the glob needs forward slashes.
+          path: D:/t/cargo-timings/*.html
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Doctests
         if: matrix.part == 'unit'
-        run: cargo test --workspace --locked --features heif --doc
+        env:
+          SKIP_NEUTRAL: ${{ needs.platforms.outputs.windows_skip }}
+        run: |
+          skip=(--exclude photocraft-web --exclude photocraft-web-boot)
+          for package in $SKIP_NEUTRAL; do skip+=(--exclude "$package"); done
+          cargo test --workspace "${skip[@]}" --locked --features heif --doc
+        shell: bash
 
   # The same codecs without the optional decoder: HEIC must stay a clear "not in this build" error
   # for distributors who leave it out. Runs beside the gate and restores the gate's dependency

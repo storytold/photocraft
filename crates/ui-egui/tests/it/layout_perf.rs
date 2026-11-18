@@ -16,7 +16,7 @@ use photocraft_ui_egui::state::Tool;
 use photocraft_ui_egui::{PhotocraftApp, Services};
 use serde_json::json;
 
-type H = Harness<'static, PhotocraftApp>;
+type H = Harness<'static, Box<PhotocraftApp>>;
 
 /// The app (CPU canvas) with the small layout document open.
 fn app() -> (H, layout_doc::Handles) {

@@ -132,16 +132,16 @@ mod tests {
     use OpacityDigit as D;
     use egui::{Event, Key};
 
-    fn app(tool: Tool) -> PhotocraftApp {
+    fn app(tool: Tool) -> Box<PhotocraftApp> {
         prepared(PhotocraftApp::new(photocraft_engine::Session::new(), Default::default()), tool)
     }
 
     /// The app on `ctx`, a harness's context that has the framework installed.
-    fn app_on(ctx: egui::Context, tool: Tool) -> PhotocraftApp {
+    fn app_on(ctx: egui::Context, tool: Tool) -> Box<PhotocraftApp> {
         prepared(PhotocraftApp::with_context(ctx, photocraft_engine::Session::new(), Default::default()), tool)
     }
 
-    fn prepared(mut app: PhotocraftApp, tool: Tool) -> PhotocraftApp {
+    fn prepared(mut app: Box<PhotocraftApp>, tool: Tool) -> Box<PhotocraftApp> {
         app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
         app.run("layer.new.layer", json!({})).unwrap();
         app.ui.tool = tool;
@@ -314,7 +314,7 @@ mod tests {
             a
         });
         h.run_steps(4);
-        let key = |h: &mut Harness<'_, PhotocraftApp>, k: Key, m: egui::Modifiers| {
+        let key = |h: &mut Harness<'_, Box<PhotocraftApp>>, k: Key, m: egui::Modifiers| {
             h.event(Event::Key { key: k, physical_key: Some(k), pressed: true, repeat: false, modifiers: m });
             h.event(Event::Key { key: k, physical_key: Some(k), pressed: false, repeat: false, modifiers: m });
             h.run_steps(2);
