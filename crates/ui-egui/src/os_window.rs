@@ -1,6 +1,7 @@
-//! Extra OS windows (document windows, Camera Raw, the screen color picker) share the main
-//! window's app id, so docks show the PhotoCraft icon on them and Wayland compositors' window
-//! rules can match them (Hyprland's `class:`, #6697). Without one their app id is empty.
+//! The app id every PhotoCraft OS window carries: the main window (`main.rs`), the runtime's
+//! windows (`InstallSpec::app_id`) and the extra windows built with [`builder`], so docks show
+//! the PhotoCraft icon on them and Wayland compositors' window rules can match them (Hyprland's
+//! `class:`, #6697). Without one the app id is empty.
 
 /// Matches the `.desktop` file and hicolor icon name, so Wayland docks pick up the icon.
 pub const APP_ID: &str = "ai.storyteller.photocraft";

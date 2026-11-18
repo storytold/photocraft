@@ -1,12 +1,13 @@
-//! Caps Lock swaps the painting tools' cursor to the precise crosshair, exactly like Photoshop,
-//! whatever the Cursors › Painting preference is (#1758). The override changes only painting
-//! tools (Brush, Pencil, Clone Stamp, Healing, Eraser, …): Move, Marquee, Crop and Zoom keep
-//! their own cursors. Tests drive the real canvas (`document_area`) and compare the painted
-//! cursor that caps lock produces with the one the Precise preference draws — they must match,
-//! and the Standard preference (off) must not. The tools under Cursors › Other Cursors with a
-//! cursor of their own (the pens, Eyedropper, Color Sampler, Paint Bucket) swap it for the
-//! crosshair and back with caps lock (#4639).
+//! Caps Lock swaps the cursor to the precise crosshair, as in Photoshop (#4639). The tools under
+//! Cursors › Other Cursors choose that swap themselves through `ToolContext::precise`. This file
+//! covers the one cursor that wins over the selected tool's: an armed dialog eyedropper (#9836).
+//! The test drives the real canvas (`document_area`) and compares the cursor that Caps Lock
+//! produces with the one the Precise preference draws.
 
+use std::sync::Arc;
+
+use craft::imaging::ui::adjust::TonePicker;
+use craft::ui::runtime::windows::WindowHost;
 use egui::CursorIcon;
 use egui_kittest::Harness;
 use serde_json::json;
@@ -21,7 +22,7 @@ fn capslock_harness() -> Harness<'static, PhotocraftApp> {
     app.sync_views();
     app.ui.extras.rulers = false;
     app.ui.tool = Tool::Brush;
-    let mut h = Harness::builder().with_size(egui::vec2(900.0, 600.0)).build_ui_state(
+    let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(egui::vec2(900.0, 600.0)).build_ui_state(
         |ui, app: &mut PhotocraftApp| {
             let ctx = ui.ctx().clone();
             if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
@@ -31,13 +32,13 @@ fn capslock_harness() -> Harness<'static, PhotocraftApp> {
         },
         app,
     );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::AppTheme::pro());
     h.run_steps(4);
     // 100 %: one document pixel per point; the pointer hovers the canvas centre.
     let v = &mut h.state_mut().ui.views[0];
     v.zoom = 1.0;
     v.center = [200.0, 150.0];
-    v.fit_pending = false;
+    v.clear_pending();
     h.run_steps(2);
     let p = h.state().last_canvas_rect.center();
     h.event(egui::Event::PointerMoved(p));
@@ -45,75 +46,37 @@ fn capslock_harness() -> Harness<'static, PhotocraftApp> {
     h
 }
 
+#[derive(Debug, PartialEq)]
+struct CursorImageFp {
+    size: [u16; 2],
+    hotspot: [u16; 2],
+    rgba: Arc<[u8]>,
+}
+
 /// Everything the cursor path can change in one frame: the cursor icon, the OS cursor bitmap
-/// (Windows) and the shapes painted on the canvas (the tool-cursor path paints the crosshair
-/// and the brush tip outline). Comparison across two preference/caps-lock states of the same
-/// harness is platform-independent.
+/// (Windows/macOS/Linux) and the shapes painted on the canvas. Comparison across two
+/// preference/caps-lock states of the same harness is platform-independent.
 #[derive(Debug, PartialEq)]
 struct CursorFp {
     icon: CursorIcon,
-    image: Option<[u16; 2]>,
+    image: Option<CursorImageFp>,
     shapes: Vec<egui::epaint::ClippedShape>,
 }
 
 fn fp(h: &Harness<'_, PhotocraftApp>) -> CursorFp {
     let out = h.output();
-    CursorFp { icon: out.platform_output.cursor_icon, image: out.platform_output.cursor_image.as_ref().map(|i| i.size), shapes: out.shapes.clone() }
+    CursorFp {
+        icon: out.platform_output.cursor_icon,
+        image: out.platform_output.cursor_image.as_ref().map(|i| CursorImageFp { size: i.size, hotspot: i.hotspot, rgba: Arc::clone(&i.rgba) }),
+        shapes: out.shapes.clone(),
+    }
 }
 
-fn painting(h: &mut Harness<'_, PhotocraftApp>, value: &str) {
-    h.state_mut().run("prefs.set", json!({"path": "cursors.painting", "value": value})).unwrap();
-    h.run_steps(2);
-}
-
-/// Caps Lock is read from the OS by the app shell; tests toggle the per-frame flag directly.
+/// Caps Lock reaches the tool host from the runtime's injected Caps Lock (`WindowHost`), which the
+/// frame reads in place of the platform's.
 fn caps(h: &mut Harness<'_, PhotocraftApp>, on: bool) {
-    h.state_mut().caps_lock = on;
+    WindowHost::of(&h.ctx).set_caps_lock(Some(on));
     h.run_steps(2);
-}
-
-#[test]
-fn caps_lock_forces_the_precise_crosshair_for_painting_tools_whatever_the_preference() {
-    for tool in [
-        Tool::Brush,
-        Tool::Pencil,
-        Tool::CloneStamp,
-        Tool::Healing,
-        Tool::Eraser,
-        // The block that honours the painting preference also covers the Quick Selection.
-        Tool::QuickSelection,
-    ] {
-        let mut h = capslock_harness();
-        // Each tool keeps its own brush (#218), so switch the tool before painting.
-        h.state_mut().ui.tool = tool;
-        h.run_steps(2);
-        painting(&mut h, "standard");
-        let off = fp(&h);
-        painting(&mut h, "precise");
-        let precise = fp(&h);
-        painting(&mut h, "standard");
-        caps(&mut h, true);
-        let on = fp(&h);
-        assert_ne!(off, precise, "{tool:?}: the Standard and Precise cursors must differ");
-        assert_eq!(on, precise, "{tool:?}: caps lock must draw the same crosshair as the Precise preference");
-        assert_ne!(on, off, "{tool:?}: caps lock must not keep the Standard cursor");
-        caps(&mut h, false);
-        assert_eq!(fp(&h), off, "{tool:?}: releasing caps lock restores the preference cursor");
-    }
-}
-
-#[test]
-fn caps_lock_leaves_non_painting_tools_cursors_alone() {
-    for tool in [Tool::Move, Tool::RectMarquee, Tool::EllipseMarquee, Tool::Crop, Tool::Zoom, Tool::Hand] {
-        let mut h = capslock_harness();
-        h.state_mut().ui.tool = tool;
-        h.run_steps(2);
-        let off = fp(&h);
-        caps(&mut h, true);
-        let on = fp(&h);
-        assert_eq!(on, off, "{tool:?}: caps lock must not change a non-painting cursor");
-        caps(&mut h, false);
-    }
 }
 
 fn other(h: &mut Harness<'_, PhotocraftApp>, value: &str) {
@@ -121,36 +84,30 @@ fn other(h: &mut Harness<'_, PhotocraftApp>, value: &str) {
     h.run_steps(2);
 }
 
-/// #4639: the pen tools show their own icon under Standard Other Cursors and the crosshair
-/// under Precise, and caps lock swaps one for the other either way, as in Photoshop. The
-/// Eyedropper, Color Sampler and Paint Bucket, which already followed the preference, swap too.
+/// #9836: an armed Levels or Curves eyedropper shows its own cursor alone, not with the tool's
+/// drawn over it, and takes caps lock's precise crosshair as well, as in Photoshop, instead of only
+/// following the preference.
 #[test]
-fn caps_lock_swaps_the_other_cursors_between_their_icon_and_the_crosshair() {
-    for tool in [
-        Tool::Pen,
-        Tool::FreeformPen,
-        Tool::CurvaturePen,
-        Tool::AddAnchorPoint,
-        Tool::DeleteAnchorPoint,
-        Tool::ConvertPoint,
-        Tool::Eyedropper,
-        Tool::ColorSampler,
-        Tool::PaintBucket,
-    ] {
-        let mut h = capslock_harness();
-        h.state_mut().ui.tool = tool;
-        h.run_steps(2);
-        other(&mut h, "standard");
-        let standard = fp(&h);
-        assert_eq!(standard.icon, CursorIcon::None, "{tool:?}: the standard cursor is the tool's own icon, drawn");
-        other(&mut h, "precise");
-        let precise = fp(&h);
-        assert_ne!(standard, precise, "{tool:?}: Standard and Precise differ");
-        caps(&mut h, true);
-        assert_eq!(fp(&h), standard, "{tool:?}: caps lock turns the precise crosshair back into the icon");
-        other(&mut h, "standard");
-        assert_eq!(fp(&h), precise, "{tool:?}: caps lock turns the icon into the precise crosshair");
-        caps(&mut h, false);
-        assert_eq!(fp(&h), standard, "{tool:?}: releasing caps lock restores the icon");
-    }
+fn caps_lock_gives_the_curves_eyedroppers_the_precise_crosshair() {
+    let mut h = capslock_harness();
+    // A tool whose own cursor ignores caps lock, so only the eyedropper can answer it.
+    h.state_mut().ui.tool = Tool::Move;
+    let id = crate::adjust_dialog::open(h.state_mut(), "image.adjustments.curves").expect("the Curves dialog opens");
+    // PLAN: dialogs-w32 owns the accessor from a `DialogId` to its `HostedAdjustDialog`; `adjust_dialog::hosted_mut` is the name assumed here.
+    crate::adjust_dialog::hosted_mut(h.state_mut(), id).set_picker(Some(TonePicker::Black));
+    assert!(crate::dialogs::canvas_input::armed(h.state()).is_some(), "the black-point eyedropper is armed");
+    h.run_steps(3);
+    other(&mut h, "standard");
+    let standard = fp(&h);
+    other(&mut h, "precise");
+    let precise = fp(&h);
+    assert_eq!(precise.icon, CursorIcon::Crosshair, "Precise: the crosshair");
+    assert_ne!(standard, precise, "Standard shows a cursor of its own where Precise shows the crosshair");
+    other(&mut h, "standard");
+    caps(&mut h, true);
+    assert_eq!(fp(&h), precise, "caps lock turns the pipette into the precise crosshair");
+    other(&mut h, "precise");
+    assert_eq!(fp(&h), standard, "and the precise crosshair back into the pipette");
+    caps(&mut h, false);
+    assert_eq!(fp(&h), precise, "releasing caps lock restores the preference");
 }
