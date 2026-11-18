@@ -315,7 +315,9 @@ fn encode(ctx: &egui::Context, app: &PhotocraftApp, wanted: &WantedVariant, fram
     if let Some(colors) = encoded.colors {
         variant = variant.colors(colors as u16);
     }
-    if wanted.request.options.format.indexed() {
+    // An animated GIF gives every frame its own colours: one frame's palette would show swatches that edit
+    // nothing of the others, so none is offered.
+    if wanted.request.options.format.indexed() && frames == 1 {
         variant = variant.palette(encoded.palette);
     }
     variant
@@ -364,7 +366,8 @@ pub(super) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if wanted.is_empty() {
         return;
     }
-    let animated = app.session.active().is_some_and(|st| st.doc.timeline.as_ref().is_some_and(|t| t.duration >= 2));
+    // The play row's frame reaches the preview of a video timeline and of a frame animation alike.
+    let animated = app.session.active().is_some_and(|st| st.doc.timeline.as_ref().is_some_and(|t| t.duration >= 2) || animation_frames(&st.doc).is_some());
     let variants: Vec<WebVariant> = wanted.iter().map(|w| encode(ctx, app, w, animated.then_some(frame as usize))).collect();
     if let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedSaveForWeb>(id) {
         for variant in variants {
