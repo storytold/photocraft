@@ -151,7 +151,10 @@ jobs:
         PHOTOCRAFT_FULL_SWEEP=${{ inputs.full_sweep && '1' || '0' }}
         PHOTOCRAFT_NO_PRINT=1
         LPDEST=photocraft-no-such-printer
-      timeout-minutes: 100
+      # Cold builds plus the full suite exceeded 100 minutes while still progressing.
+      # This is completion headroom, not a speedup; per-test watchdogs are unchanged.
+      # Evidence and follow-up optimization: storytold/craft-common-actions#60.
+      timeout-minutes: 150
       # fmt, clippy, layers, panel-commands, scorecard, tests, panic_hunt, doctests and the wasm32 check, with
       # `--locked --features heif`, then the missing-translations report (xtask/src/main.rs).
       command: python3 scripts/test-ci-gpu-lavapipe.py && python3 scripts/test-ci-windows-gpu-tests.py && cargo xtask ci && python3 scripts/ci-gpu-lavapipe.py
@@ -164,7 +167,8 @@ jobs:
   windows:
     needs: platforms
     if: needs.platforms.outputs.windows == 'true'
-    timeout-minutes: 100
+    # Keep the same completion headroom as the Linux gate, including unit doctests.
+    timeout-minutes: 150
     name: test (windows-latest, ${{ matrix.part }})
     runs-on: windows-latest
     strategy:
