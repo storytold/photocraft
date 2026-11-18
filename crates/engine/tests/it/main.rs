@@ -31,6 +31,7 @@ mod atn_v12;
 mod atn_video_frames;
 mod average_smart;
 mod background_and_mask_depth;
+mod background_job_target;
 mod background_layer_consistency;
 mod brush_smoothing;
 mod camera_raw_exposure_clamp;
