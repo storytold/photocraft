@@ -265,12 +265,6 @@ fn system_probe() -> Probe {
     Probe { ldconfig: read_ldconfig(), dirs: search_dirs(std::env::var("LD_LIBRARY_PATH").ok().as_deref()) }
 }
 
-/// Whether the linker cache lists `soname`; `None` when the cache can't be read, which proves
-/// nothing (musl, NixOS, some containers).
-pub fn cached(soname: &str) -> Option<bool> {
-    read_ldconfig().map(|text| ldconfig_has(&text, soname, ldconfig_arch_tag()))
-}
-
 /// Are all the libraries `session` needs found on this system? (For choosing a display server:
 /// libraries the check can't find count as missing.)
 pub fn available(session: DisplaySession) -> bool {
