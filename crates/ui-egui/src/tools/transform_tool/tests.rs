@@ -2451,3 +2451,34 @@ fn a_split_alone_is_kept_when_the_warp_is_applied() {
     let mesh = sm.warp.as_ref().and_then(|w| w.mesh.as_ref()).expect("the split grid is stored");
     assert_eq!((mesh.us.len(), mesh.vs.len()), (3, 3), "its lines come back in Warp mode");
 }
+
+#[test]
+fn undo_back_into_warp_takes_the_held_warp_back_into_its_contents() {
+    let (mut app, ctx, id) = turned_smart_object(0.5);
+    let source = {
+        let st = app.session.active().unwrap();
+        photocraft_engine::warp_cmds::smart_warp_source(&st.doc, st.doc.layer(id).unwrap()).unwrap().0
+    };
+    begin_warp(&mut app, &ctx).unwrap();
+    settle(&mut app);
+    let mesh = warp_mesh(&app);
+    let last = mesh.points.len() - 1;
+    let mut to = mesh.clone();
+    to.points[last] += Vec2::new(5.0, 3.0);
+    pull_mesh(&mut app, 1, to);
+    settle(&mut app);
+    // Scale chosen in Warp mode holds the warp; Undo takes the session back into Warp mode.
+    hold_warp(&mut app);
+    settle(&mut app);
+    assert!(app.transform_preview.as_ref().unwrap().held.is_some());
+    let _ = intercept(&mut app, "edit.undo");
+    assert!(open(&app).session.warp().is_some(), "back in Warp mode");
+    super::begin::reconcile_held(&mut app);
+    let pv = app.transform_preview.as_ref().unwrap();
+    assert!(pv.held.is_none() && pv.placed_warp.is_some(), "the warp is the contents' again");
+    commit(&mut app);
+    land_jobs(&mut app);
+    assert!(app.ui.transform.is_none(), "{}", app.ui.status);
+    let LayerContent::Smart(sm) = &app.session.active().unwrap().doc.layer(id).unwrap().content else { panic!("a smart object") };
+    assert_eq!(sm.warp.as_ref().map(|w| w.bounds), Some(source.bounds), "stored over the contents' own box");
+}

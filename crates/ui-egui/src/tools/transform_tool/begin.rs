@@ -1081,3 +1081,23 @@ fn warped_preview(app: &PhotocraftApp, doc: &Document, id: LayerId, start: [[f64
     let texture = contents_texture(app, doc, layer, &source, session)?;
     Some(super::WarpedPreview { mesh: source.to_mesh(1, 1), bounds: source.bounds, place: place.0, start, texture })
 }
+
+/// Keeps what the preview holds beside the session in step with the session's own undo steps. A warp held under a box
+/// mode ([`hold_warp`]) lives outside the session, so an Undo back into Warp mode brings the session's warp back while
+/// the preview still holds it: the hold is undone (the contents' map and texels come back). A Redo out of Warp mode
+/// again drops the session's warp, as Warp's own toggle does ([`leave_warp`]): the contents' map goes and the box's
+/// texels come back.
+pub(crate) fn reconcile_held(app: &mut PhotocraftApp) {
+    let Some(warping) = app.ui.transform.as_ref().map(|t| t.session.warp().is_some()) else { return };
+    let Some(pv) = app.transform_preview.as_mut() else { return };
+    if warping {
+        if let Some(held) = pv.held.take() {
+            if let Some(texture) = held.texture {
+                pv.other_texels = Some(OtherTexels { texture: std::mem::replace(&mut pv.textures, texture) });
+            }
+            pv.placed_warp = held.placed;
+        }
+    } else if pv.held.is_none() && pv.placed_warp.take().is_some() {
+        swap_mode_texels(pv);
+    }
+}

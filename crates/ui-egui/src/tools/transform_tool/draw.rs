@@ -57,6 +57,7 @@ struct Shown {
 /// transform controls share its id and must not open a second box in the same pass), and the box's snap lines, which
 /// the session's canvas tool hands to the host in this frame's pass ([`super::canvas_tool`]).
 pub fn show_in_canvas(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: egui::Rect, now: f64) -> SessionShown {
+    super::begin::reconcile_held(app);
     let shown = {
         let (Some(t), Some(pv)) = (&app.ui.transform, &app.transform_preview) else { return SessionShown::default() };
         show_session(app, t, pv, ui, rect)
