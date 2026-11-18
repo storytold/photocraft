@@ -395,11 +395,11 @@ fn resolve_printer(requested: Option<&str>, default: Option<&str>, printers: &[c
         let choices = if names.is_empty() { "none".to_string() } else { names.join(", ") };
         return known(r).ok_or_else(|| SpoolError::Failed(format!("no printer called `{r}`; the print server knows: {choices}")));
     }
+    if let Some(default) = default {
+        return known(default).ok_or_else(|| SpoolError::Failed(format!("default printer `{default}` is unavailable; choose a printer explicitly")));
+    }
     if printers.is_empty() {
         return Err(SpoolError::NoRoute("no printer is set up on this computer; add one in the system settings, or print to PDF".into()));
-    }
-    if let Some(d) = default.and_then(known) {
-        return Ok(d);
     }
     match names.as_slice() {
         [only] => Ok((*only).to_string()),
@@ -443,19 +443,30 @@ fn cups_server_name(server: &craft_print::cups::Server) -> String {
     }
 }
 
-// Optional class/default lookup failures have never hidden the primary printer list.
+// Discovery may show a partial list, but automatic submission must not mistake
+// missing class/default metadata for proof that one visible printer is the only choice.
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))]
-fn cups_printers(server: &craft_print::cups::Server) -> std::result::Result<Vec<craft_print::cups::Queue>, craft_print::Error> {
+struct CupsPrinters {
+    queues: Vec<craft_print::cups::Queue>,
+    default: std::result::Result<Option<String>, craft_print::Error>,
+    classes_complete: bool,
+}
+
+// Optional class/default lookup failures do not hide the primary printer list.
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))]
+fn cups_printers(server: &craft_print::cups::Server) -> std::result::Result<CupsPrinters, craft_print::Error> {
     let endpoints = std::slice::from_ref(server);
     // Retain large-fleet discovery within the shared one-MiB response bound.
     // The record ceiling is explicit; no reply is silently truncated.
     let mut printers = craft_print::cups::queues_at_with_limit(endpoints, false, 65_536)?;
-    printers.extend(craft_print::cups::queues_at_with_limit(endpoints, true, 65_536).unwrap_or_default());
-    let default = craft_print::cups::default_at(endpoints).unwrap_or(None);
+    let classes = craft_print::cups::queues_at_with_limit(endpoints, true, 65_536);
+    let classes_complete = classes.is_ok();
+    printers.extend(classes.unwrap_or_default());
+    let default = craft_print::cups::default_at(endpoints);
     for printer in &mut printers {
-        printer.is_default = default.as_deref() == Some(printer.name.as_str());
+        printer.is_default = default.as_ref().ok().and_then(|name| name.as_deref()) == Some(printer.name.as_str());
     }
-    Ok(printers)
+    Ok(CupsPrinters { queues: printers, default, classes_complete })
 }
 
 /// The IPP route: the job to the system's (or the named) CUPS server.
@@ -463,8 +474,17 @@ fn cups_printers(server: &craft_print::cups::Server) -> std::result::Result<Vec<
 fn cups_spool(job: &PrintJob) -> std::result::Result<String, SpoolError> {
     let failed = |e: craft_print::Error| SpoolError::Failed(e.to_string());
     let ep = cups_server(job.server.as_deref())?;
-    let printers = cups_printers(&ep).map_err(failed)?;
-    let default = printers.iter().find(|p| p.is_default).map(|p| p.name.clone());
+    let listing = cups_printers(&ep).map_err(failed)?;
+    let default = if job.printer.is_none() {
+        if !listing.classes_complete {
+            return Err(SpoolError::Failed("cannot verify the printer list; choose a printer explicitly".into()));
+        }
+        listing.default.map_err(failed)?
+    } else {
+        // A known explicit destination does not depend on optional default metadata.
+        None
+    };
+    let printers = listing.queues;
     let printer = resolve_printer(job.printer.as_deref(), default.as_deref(), &printers)?;
     let is_class = printers.iter().any(|p| p.name == printer && p.is_class);
     let user = std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_else(|_| "photocraft".into());
@@ -510,7 +530,7 @@ fn system_printers(s: &mut Session, p: &Value) -> Result<Value> {
                 return Ok(json!({"server": Value::Null, "default": Value::Null, "printers": [], "note": why}));
             }
         };
-        let list = cups_printers(&ep).map_err(other)?;
+        let list = cups_printers(&ep).map_err(other)?.queues;
         let default = list.iter().find(|p| p.is_default).map(|p| p.name.clone());
         let printers: Vec<Value> = list
             .iter()

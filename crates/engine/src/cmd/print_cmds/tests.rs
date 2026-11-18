@@ -1139,8 +1139,9 @@ mod cups {
             Err(SpoolError::Failed(e)) => assert!(e.contains("`Office`") && e.contains("none"), "{e}"),
             _ => panic!("a named printer never falls through"),
         }
-        // A stale default that the server no longer lists falls through to the only printer.
-        assert_eq!(resolve_printer(None, Some("Gone"), &two[..1]).ok(), Some("Office".into()));
+        // A missing configured default must never redirect the document to another printer.
+        assert!(matches!(resolve_printer(None, Some("Gone"), &two[..1]), Err(SpoolError::Failed(_))));
+        assert!(matches!(resolve_printer(None, Some("Gone"), &[]), Err(SpoolError::Failed(_))));
     }
 
     /// What the fake received per request: op, attributes, document.
@@ -1149,6 +1150,15 @@ mod cups {
     /// A fake CUPS on a TCP port: lists `printers` and `classes`, names `default`, accepts jobs
     /// as id 42. Answers for as long as the test process lives.
     fn fake_cups(printers: &'static [&'static str], classes: &'static [&'static str], default: Option<&'static str>) -> (String, mpsc::Receiver<Seen>) {
+        fake_cups_with_failure(printers, classes, default, None)
+    }
+
+    fn fake_cups_with_failure(
+        printers: &'static [&'static str],
+        classes: &'static [&'static str],
+        default: Option<&'static str>,
+        failed_op: Option<u16>,
+    ) -> (String, mpsc::Receiver<Seen>) {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let server = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
         let (tx, rx) = mpsc::channel();
@@ -1188,6 +1198,7 @@ mod cups {
                     r.end()
                 };
                 let reply = match op {
+                    op if Some(op) == failed_op => Request::new(0x0500, request_id).end(),
                     OP_CUPS_GET_PRINTERS => list(printers),
                     OP_CUPS_GET_CLASSES => list(classes),
                     OP_CUPS_GET_DEFAULT => match default {
@@ -1215,6 +1226,27 @@ mod cups {
             }
         });
         (server, rx)
+    }
+
+    #[test]
+    fn uncertain_default_never_submits_to_the_only_visible_printer() {
+        for failed_op in [Some(OP_CUPS_GET_CLASSES), Some(OP_CUPS_GET_DEFAULT), None] {
+            let (server, rx) = fake_cups_with_failure(&["Office"], &[], Some("PrivateClass"), failed_op);
+            let mut job = PrintJob {
+                pdf: b"%PDF-1.4\n".to_vec(),
+                printer: None,
+                copies: 1,
+                title: "Routing test".into(),
+                server: Some(server),
+                paper: (612., 792.),
+                landscape: false,
+            };
+            assert!(cups_spool(&job).is_err(), "uncertain or unavailable default must not redirect: {failed_op:?}");
+            assert!(!rx.try_iter().any(|(op, _, _)| op == OP_PRINT_JOB), "no document may be sent");
+            job.printer = Some("Office".into());
+            assert_eq!(cups_spool(&job).ok().as_deref(), Some("job 42 on Office"));
+            assert!(rx.try_iter().any(|(op, _, _)| op == OP_PRINT_JOB), "explicit known printer remains usable");
+        }
     }
 
     #[test]
