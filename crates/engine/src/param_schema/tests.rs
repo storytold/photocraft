@@ -151,3 +151,18 @@ fn the_registry_schema_is_read_once_and_shared() {
     assert!(std::ptr::eq(a, of(spec).unwrap()));
     assert_eq!(a.param("radius").unwrap().range(), Some((0.1, 1000.0)));
 }
+
+/// `layer.newAdjustmentLayer.*` docs put ` + {path, opacity, …}` after the adjustment object and
+/// before any trailing notes, so composed keys stay documented (#15255).
+#[test]
+fn new_adjustment_layer_docs_keep_composed_options_in_front_of_notes() {
+    let spec = crate::commands::find("layer.newAdjustmentLayer.gradientMap").expect("registered");
+    let schema = parse(spec.params);
+    assert!(schema.has_key("opacity"), "{}", spec.params);
+    assert!(schema.has_key("name"), "{}", spec.params);
+    assert!(schema.has_key("clipToPrevious"), "{}", spec.params);
+    assert!(schema.has_key("stops"), "{}", spec.params);
+    let plus = spec.params.find(" + {").expect("composed object");
+    let notes = spec.params.find("(stops").expect("gradientMap notes");
+    assert!(plus < notes, "composition must precede notes: {}", spec.params);
+}
