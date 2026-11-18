@@ -12,7 +12,7 @@ use crate::{PhotocraftApp, crop_ui};
 const NONE: Modifiers = Modifiers::NONE;
 
 /// A 200 × 100 document with the Crop tool picked and its default frame shown.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let doc = Document::with_background("crop", Size::new(200, 100), ColorMode::Rgb, SampleType::U8, Color::WHITE);
     let mut s = photocraft_engine::Session::new();
     s.add_document(doc, None);

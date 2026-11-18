@@ -1,7 +1,7 @@
 use super::*;
 use crate::canvas::ToolEvent;
 
-fn app_with_layer() -> PhotocraftApp {
+fn app_with_layer() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
     app.sync_views();

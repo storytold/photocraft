@@ -10,7 +10,7 @@ use crate::app::framework::BuildApp as _;
 use crate::canvas::testing;
 use crate::state::Tool;
 
-fn harness() -> Harness<'static, PhotocraftApp> {
+fn harness() -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 150})).unwrap();
     app.sync_views();
@@ -36,21 +36,21 @@ fn harness() -> Harness<'static, PhotocraftApp> {
 }
 
 /// The screen point of the document point `p` in the harness's canvas.
-fn screen(h: &mut Harness<'static, PhotocraftApp>, p: [f32; 2]) -> Pos2 {
+fn screen(h: &mut Harness<'static, Box<PhotocraftApp>>, p: [f32; 2]) -> Pos2 {
     testing::to_screen(h.state_mut(), [f64::from(p[0]), f64::from(p[1])])
 }
 
-fn mods(h: &mut Harness<'static, PhotocraftApp>, m: Modifiers) {
+fn mods(h: &mut Harness<'static, Box<PhotocraftApp>>, m: Modifiers) {
     h.event(egui::Event::ModifiersChanged(m));
     h.run_steps(1);
 }
 
-fn button(h: &mut Harness<'static, PhotocraftApp>, p: Pos2, down: bool, m: Modifiers) {
+fn button(h: &mut Harness<'static, Box<PhotocraftApp>>, p: Pos2, down: bool, m: Modifiers) {
     h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: down, modifiers: m });
     h.run_steps(1);
 }
 
-fn move_to(h: &mut Harness<'static, PhotocraftApp>, from: [f32; 2], to: [f32; 2]) {
+fn move_to(h: &mut Harness<'static, Box<PhotocraftApp>>, from: [f32; 2], to: [f32; 2]) {
     for i in 1..=6 {
         let t = i as f32 / 6.0;
         let q = screen(h, [from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t]);
@@ -61,7 +61,7 @@ fn move_to(h: &mut Harness<'static, PhotocraftApp>, from: [f32; 2], to: [f32; 2]
 
 /// A drag from `pts[0]` through the other points; `alt_from` is the index of the point from
 /// which ⌥/Alt is held (`Some(0)`: before the press).
-fn drag(h: &mut Harness<'static, PhotocraftApp>, pts: &[[f32; 2]], alt_from: Option<usize>) {
+fn drag(h: &mut Harness<'static, Box<PhotocraftApp>>, pts: &[[f32; 2]], alt_from: Option<usize>) {
     let held = |i: usize| if alt_from.is_some_and(|a| i >= a) { Modifiers::ALT } else { Modifiers::NONE };
     let p = screen(h, pts[0]);
     mods(h, held(0));
@@ -79,7 +79,7 @@ fn drag(h: &mut Harness<'static, PhotocraftApp>, pts: &[[f32; 2]], alt_from: Opt
     h.run_steps(1);
 }
 
-pub(super) fn click(h: &mut Harness<'static, PhotocraftApp>, p: [f32; 2]) {
+pub(super) fn click(h: &mut Harness<'static, Box<PhotocraftApp>>, p: [f32; 2]) {
     drag(h, &[p], None);
 }
 
@@ -121,8 +121,8 @@ fn delete_with_the_pen_deletes_the_finished_work_path_not_the_pixels() {
     // Esc keeps the finished Work Path selected; ↩ would deselect it (#12892).
     h.key_press(Key::Escape);
     h.run_steps(2);
-    let work = |h: &Harness<'static, PhotocraftApp>| h.state().session.active().unwrap().doc.work_path.is_some();
-    let red = |h: &Harness<'static, PhotocraftApp>| {
+    let work = |h: &Harness<'static, Box<PhotocraftApp>>| h.state().session.active().unwrap().doc.work_path.is_some();
+    let red = |h: &Harness<'static, Box<PhotocraftApp>>| {
         let st = h.state().session.active().unwrap();
         st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().rgba(60, 60) == [1.0, 0.0, 0.0, 1.0]
     };
@@ -153,11 +153,11 @@ fn delete_with_the_pen_deletes_the_finished_work_path_not_the_pixels() {
 #[test]
 fn space_pan_keeps_the_pen_path_in_progress_visible() {
     let mut h = harness();
-    let space = |h: &mut Harness<'static, PhotocraftApp>, down: bool| {
+    let space = |h: &mut Harness<'static, Box<PhotocraftApp>>, down: bool| {
         h.event(egui::Event::Key { key: Key::Space, physical_key: None, pressed: down, repeat: false, modifiers: Modifiers::NONE });
         h.run_steps(1);
     };
-    let knots = |h: &Harness<'static, PhotocraftApp>| h.state().ui.pen.as_ref().map(|p| p.draft.knots.len());
+    let knots = |h: &Harness<'static, Box<PhotocraftApp>>| h.state().ui.pen.as_ref().map(|p| p.draft.knots.len());
     click(&mut h, [20.0, 20.0]);
     click(&mut h, [100.0, 20.0]);
     assert_eq!(knots(&h), Some(2));

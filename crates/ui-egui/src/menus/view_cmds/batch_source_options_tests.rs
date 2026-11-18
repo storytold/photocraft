@@ -38,7 +38,7 @@ const KEYS: [&str; 5] = ["input", "overrideOpen", "includeSubfolders", "suppress
 const MESSAGE: &str = "When this option is on, source files will be opened from the source folder only by open steps in the action. If there are no open steps, no files will be opened.";
 
 /// An app with `docs` documents and one selected Invert action; `files` answers the host's pickers.
-fn app_with(docs: usize, files: Arc<ScriptedFiles>) -> PhotocraftApp {
+fn app_with(docs: usize, files: Arc<ScriptedFiles>) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { files: Some(files), ..Default::default() });
     for _ in 0..docs {
         app.run("file.new", json!({"width": 4, "height": 4})).unwrap();
@@ -51,19 +51,19 @@ fn app_with(docs: usize, files: Arc<ScriptedFiles>) -> PhotocraftApp {
 
 /// The same app in a harness that draws the hosted dialogs, so the Source controls can be clicked and
 /// read. The window is tall enough to hold the whole Batch form at once.
-fn harness(docs: usize, files: Arc<ScriptedFiles>) -> Harness<'static, PhotocraftApp> {
+fn harness(docs: usize, files: Arc<ScriptedFiles>) -> Harness<'static, Box<PhotocraftApp>> {
     let app = app_with(docs, files);
     let h = Harness::builder()
         .with_size(egui::vec2(1440.0, 1400.0))
         .with_max_steps(64)
         .with_context(app.ctx().clone())
-        .build_ui_state(|ui, app: &mut PhotocraftApp| crate::dialogs::run(app, ui), app);
+        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app);
     PhotocraftApp::setup_context(&h.ctx, Default::default());
     h
 }
 
 /// Opens the Batch form through the menu and runs the frames that show it.
-fn open(h: &mut Harness<'_, PhotocraftApp>) -> DialogId {
+fn open(h: &mut Harness<'_, Box<PhotocraftApp>>) -> DialogId {
     let ctx = h.ctx.clone();
     let reply = crate::menus::invoke(h.state_mut(), &ctx, BATCH, json!({})).expect("the Batch form opens");
     let want = reply["dialog"].as_str().expect("the reply names a dialog").to_owned();
@@ -73,12 +73,12 @@ fn open(h: &mut Harness<'_, PhotocraftApp>) -> DialogId {
 }
 
 /// The open form's value under `key`, in the shape the command gets it.
-fn field(h: &Harness<'_, PhotocraftApp>, id: DialogId, key: &str) -> Option<Value> {
+fn field(h: &Harness<'_, Box<PhotocraftApp>>, id: DialogId, key: &str) -> Option<Value> {
     h.state().framework.dialogs.open_dialogs().into_iter().find(|open| open.id == id).and_then(|open| open.fields)?.get(key).cloned()
 }
 
 /// Sets a form value the way `ui.set` on the control channel does.
-fn set(h: &mut Harness<'_, PhotocraftApp>, id: DialogId, key: &str, value: Value) -> Result<(), String> {
+fn set(h: &mut Harness<'_, Box<PhotocraftApp>>, id: DialogId, key: &str, value: Value) -> Result<(), String> {
     let ctx = h.ctx.clone();
     h.state_mut().framework.dialogs.set_json_field(&ctx, id, key, value).map_err(|error| error.to_string())
 }
@@ -96,7 +96,7 @@ fn override_prompt(app: &PhotocraftApp) -> Option<DialogId> {
 
 /// Clicks a Source check box: the pointer moves onto the box first, and the press and the release
 /// reach it in the frame after that.
-fn click_check(h: &mut Harness<'_, PhotocraftApp>, caption: &str) {
+fn click_check(h: &mut Harness<'_, Box<PhotocraftApp>>, caption: &str) {
     h.get_by_role_and_label(Role::CheckBox, caption).hover();
     h.run_steps(1);
     h.get_by_role_and_label(Role::CheckBox, caption).click();

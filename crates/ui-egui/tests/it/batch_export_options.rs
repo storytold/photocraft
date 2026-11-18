@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-type Harness = egui_kittest::Harness<'static, PhotocraftApp>;
+type Harness = egui_kittest::Harness<'static, Box<PhotocraftApp>>;
 
 /// The open form's values as `ui.inspect` lists the top dialog's fields.
 fn form_fields(h: &mut Harness) -> Value {
