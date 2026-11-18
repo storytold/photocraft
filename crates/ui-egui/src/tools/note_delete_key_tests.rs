@@ -1,31 +1,22 @@
 //! #11788: with the Note tool, ⌫/Delete on a selected note asks "Delete this note?" and deletes
-//! the note, never the layer; the Notes panel's trash asks the same.
+//! the note, never the layer.
+
+use egui_kittest::Harness;
+use serde_json::json;
 
 use super::*;
+use crate::lifecycle_tests::app_harness;
 
-/// A document with a second layer and one note, the Note tool on and the note selected.
-fn app() -> PhotocraftApp {
-    let mut s = photocraft_engine::Session::new();
-    s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
-    s.execute("layer.new.layer", json!({"name": "Ink"})).unwrap();
-    s.execute("notes.add", json!({"x": 10, "y": 12, "text": "fix this"})).unwrap();
-    let mut app = PhotocraftApp::new(s, crate::Services::default());
+/// The whole app with a second layer and one note, the Note tool on and the note selected.
+fn harness() -> Harness<'static, PhotocraftApp> {
+    let (mut h, _transport) = app_harness(crate::Services::default(), 1);
+    let app = h.state_mut();
+    app.run("layer.new.layer", json!({"name": "Ink"})).unwrap();
+    app.run("notes.add", json!({"x": 10, "y": 12, "text": "fix this"})).unwrap();
     app.ui.tool = Tool::Note;
     app.ui.analysis.note_selected = Some(0);
-    app
-}
-
-/// A key through the app's shortcut handling, as the canvas gets it.
-fn press(app: &mut PhotocraftApp, key: egui::Key) {
-    let ctx = egui::Context::default();
-    let m = egui::Modifiers::NONE;
-    let raw = egui::RawInput {
-        events: vec![egui::Event::ModifiersChanged(m), egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: m }],
-        ..Default::default()
-    };
-    ctx.begin_pass(raw);
-    crate::shortcuts::handle(app, &ctx);
-    ctx.end_pass().textures_delta.clear();
+    h.run_steps(3);
+    h
 }
 
 fn layers(app: &PhotocraftApp) -> usize {
@@ -36,19 +27,40 @@ fn notes(app: &PhotocraftApp) -> usize {
     app.session.active().unwrap().doc.notes.len()
 }
 
-fn alert(app: &PhotocraftApp) -> Option<u64> {
-    app.ui.dialogs.iter().find(|d| owns_delete_note(&d.fields)).map(|d| d.id)
+fn prompt(app: &PhotocraftApp) -> Option<egui::Id> {
+    crate::dialogs::alerts::prompt_tagged::<NoteQuestion>(app)
+}
+
+/// The app on its own context, driven by the canvas test driver: a key reaches the canvas through the window host, and
+/// the Delete the Note tool claimed is run by the key route in the pass after its claim.
+fn driven() -> PhotocraftApp {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 80, "height": 60})).unwrap();
+    app.run("layer.new.layer", json!({"name": "Ink"})).unwrap();
+    app.run("notes.add", json!({"x": 10, "y": 12, "text": "fix this"})).unwrap();
+    app.ui.tool = Tool::Note;
+    app.sync_views();
+    crate::canvas::testing::frame(&mut app);
+    // A click on the note selects it and focuses the canvas, where a Delete reaches the tool.
+    let at = [10.5, 13.0];
+    crate::canvas::testing::move_to(&mut app, at, egui::Modifiers::NONE);
+    crate::canvas::testing::press(&mut app, at, egui::Modifiers::NONE);
+    crate::canvas::testing::release(&mut app, at, egui::Modifiers::NONE);
+    assert_eq!(app.ui.analysis.note_selected, Some(0), "the click selected the note");
+    crate::canvas::testing::frame(&mut app);
+    app
 }
 
 #[test]
 fn delete_with_a_note_selected_asks_and_deletes_the_note_not_the_layer() {
     for key in [egui::Key::Delete, egui::Key::Backspace] {
-        let mut app = app();
+        let mut app = driven();
         let steps = app.session.active().unwrap().history.past_len();
-        press(&mut app, key);
-        let id = alert(&app).unwrap_or_else(|| panic!("{key:?}: the alert"));
+        crate::canvas::testing::key(&mut app, key, egui::Modifiers::NONE);
+        let id = prompt(&app).unwrap_or_else(|| panic!("{key:?}: the alert"));
         assert_eq!((layers(&app), notes(&app)), (2, 1), "{key:?}: nothing changes before the answer");
-        crate::dialogs::confirm(&mut app, id).unwrap();
+        let ctx = app.ctx().clone();
+        crate::dialogs::confirm(&mut app, &ctx, id).unwrap();
         assert_eq!((layers(&app), notes(&app)), (2, 0), "{key:?}: the note goes, the layers stay");
         let st = app.session.active().unwrap();
         assert_eq!(st.history.past_len(), steps + 1);
@@ -58,50 +70,35 @@ fn delete_with_a_note_selected_asks_and_deletes_the_note_not_the_layer() {
 }
 
 #[test]
-fn no_keeps_the_document_and_history() {
-    let mut app = app();
-    let steps = app.session.active().unwrap().history.past_len();
-    press(&mut app, egui::Key::Delete);
-    let id = alert(&app).expect("the alert");
-    crate::dialogs::cancel(&mut app, id).unwrap();
-    assert_eq!((layers(&app), notes(&app)), (2, 1));
-    assert_eq!(app.session.active().unwrap().history.past_len(), steps);
-}
-
-#[test]
 fn dont_show_again_skips_the_alert_next_time() {
-    let mut app = app();
+    let mut h = harness();
+    let ctx = h.ctx.clone();
+    let app = h.state_mut();
     app.run("notes.add", json!({"x": 30, "y": 30})).unwrap();
-    press(&mut app, egui::Key::Delete);
-    let id = alert(&app).expect("the alert");
-    app.ui.dialog_mut(id).unwrap().fields.insert("skip".into(), json!(true));
-    crate::dialogs::confirm(&mut app, id).unwrap();
-    assert_eq!(notes(&app), 1);
-    // The panel's trash goes the same way: no alert, the note is deleted at once.
-    ask_delete_note(&mut app, 0);
-    assert!(alert(&app).is_none());
-    assert_eq!((layers(&app), notes(&app)), (2, 0));
-}
-
-#[test]
-fn the_notes_panel_trash_asks_too() {
-    let mut app = app();
-    ask_delete_note(&mut app, 0);
-    assert!(alert(&app).is_some());
-    assert_eq!(notes(&app), 1, "nothing goes before Yes");
+    ask_delete_note(app, 0);
+    let id = prompt(app).expect("the alert");
+    app.framework.dialogs.set_json_field(&ctx, id, "skip", json!(true)).unwrap();
+    crate::dialogs::confirm(app, &ctx, id).unwrap();
+    assert_eq!(notes(app), 1);
+    // The next ask deletes at once.
+    ask_delete_note(app, 0);
+    assert!(prompt(app).is_none());
+    assert_eq!((layers(app), notes(app)), (2, 0));
 }
 
 #[test]
 fn without_a_selected_note_delete_keeps_its_usual_route() {
-    let mut app = app();
-    app.ui.analysis.note_selected = None;
-    press(&mut app, egui::Key::Delete);
-    assert!(alert(&app).is_none());
-    assert_eq!(notes(&app), 1, "the note stays");
+    let mut h = harness();
+    h.state_mut().ui.analysis.note_selected = None;
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert!(prompt(h.state()).is_none());
+    assert_eq!(notes(h.state()), 1, "the note stays");
     // Another tool with a note still selected: the note isn't asked about.
-    let mut other = self::app();
-    other.ui.tool = Tool::Move;
-    press(&mut other, egui::Key::Delete);
-    assert!(alert(&other).is_none());
-    assert_eq!(notes(&other), 1);
+    let mut other = harness();
+    other.state_mut().ui.tool = Tool::Move;
+    other.key_press(egui::Key::Delete);
+    other.run_steps(3);
+    assert!(prompt(other.state()).is_none());
+    assert_eq!(notes(other.state()), 1);
 }

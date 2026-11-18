@@ -8,7 +8,7 @@
 //!
 //! `tools.rotateBrush` turns the tip: Photoshop's ← / → while painting (1°, ⇧ 15°). Arrows mean
 //! other things with other tools, so the shell gives them to it only for the painting tools
-//! (`move_mods::arrow_keys`).
+//! (the tool host's `ToolKey::Nudge` route, `move_mods::arrow_key`).
 
 use serde_json::{Value, json};
 
@@ -49,10 +49,9 @@ pub const UNGROUPED: &str = "My Brushes";
 
 /// Brush preset indices in the Brushes panel's order: groups in order of first appearance (no
 /// group is [`UNGROUPED`]), and in each group its folders where their first preset is, depth first
-/// (as `brushes_tab` draws them). A preset its name can't select (an earlier one has the same name
-/// up to case, and `tools.setBrush` picks that one) is left out afterwards, so stepping never
-/// gets stuck.
-fn panel_order(presets: &[photocraft_paint::BrushPreset]) -> Vec<usize> {
+/// (as the Brushes panel's rows, `brushes::preset_rows`, list them). Every preset is placed; the
+/// panel lists all of them, and [`panel_order`] filters this order for stepping.
+pub fn panel_layout(presets: &[photocraft_paint::BrushPreset]) -> Vec<usize> {
     fn path(p: &photocraft_paint::BrushPreset) -> &[String] {
         p.folder.get(..p.folder.len().min(crate::brush_preset_cmds::MAX_FOLDER_DEPTH)).unwrap_or_default()
     }
@@ -83,8 +82,14 @@ fn panel_order(presets: &[photocraft_paint::BrushPreset]) -> Vec<usize> {
     for (_, items) in &groups {
         flatten(presets, items, 0, &mut out);
     }
-    // Groups and folders are placed by every preset, as the panel places them; only then are the
-    // presets their names can't select left out.
+    out
+}
+
+/// [`panel_layout`] without the presets their name can't select (an earlier one has the same name
+/// up to case, and `tools.setBrush` picks that one), so stepping never gets stuck. Groups and
+/// folders are placed by every preset first, as the panel places them.
+fn panel_order(presets: &[photocraft_paint::BrushPreset]) -> Vec<usize> {
+    let mut out = panel_layout(presets);
     out.retain(|&i| presets.get(i).is_some_and(|p| photocraft_paint::presets::find(presets, &p.name).is_some_and(|q| std::ptr::eq(q, p))));
     out
 }
@@ -251,6 +256,8 @@ mod tests {
         let presets = vec![preset("Foo", "G1", &[], 1.0), preset("foo", "G2", &[], 1.0), preset("Bar", "G3", &[], 1.0), preset("Baz", "G2", &[], 1.0)];
         let names: Vec<&str> = panel_order(&presets).into_iter().map(|i| presets[i].name.as_str()).collect();
         assert_eq!(names, ["Foo", "Baz", "Bar"]);
+        // The panel lists the skipped duplicate; stepping does not.
+        assert_eq!(panel_layout(&presets).len(), panel_order(&presets).len() + 1);
     }
 
     #[test]

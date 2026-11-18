@@ -125,6 +125,20 @@ mod tests {
         (s, [bg, a, group, b, c, d])
     }
 
+    /// The Layers panel's range: `layers` selects exactly the set it sends, the last one active, and
+    /// a `layers` list naming no layer of the document is refused.
+    #[test]
+    fn select_takes_the_panels_set() {
+        let (mut s, [_, a, _, b, _, d]) = session();
+        s.execute("layer.select", json!({"layers": [d.0, b.0, a.0]})).unwrap();
+        let st = s.active().unwrap();
+        assert_eq!(st.selected_layers().len(), 3);
+        assert!([a, b, d].iter().all(|id| st.is_layer_selected(*id)));
+        assert_eq!(st.active_layer, Some(a));
+        assert!(s.execute("layer.select", json!({"layers": [999_999]})).is_err());
+        assert!(s.execute("layer.select", json!({"layers": []})).is_err());
+    }
+
     fn active(s: &Session) -> LayerId {
         s.active().unwrap().active_layer.unwrap()
     }
