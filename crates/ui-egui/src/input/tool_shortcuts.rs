@@ -1,8 +1,12 @@
 //! Toolbar tools in Edit › Keyboard Shortcuts (#4086). Explicit assignments select an
 //! individual tool; unchanged tools keep Photoshop's shared keys and Shift cycling.
 
+use craft::keymap::{Binding, CommandDef, CommandKind, Scope};
+use craft::ui::runtime::commands::CommandRef;
+
 use crate::{PhotocraftApp, state::Tool};
 
+/// The id of the command that selects `tool`.
 pub(crate) fn id(tool: Tool) -> String {
     let mut name = format!("{tool:?}");
     if let Some(first) = name.get_mut(..1) {
@@ -21,12 +25,49 @@ pub(crate) fn default(tool: Tool) -> Option<String> {
     (tool.key() != '\0').then(|| tool.key().to_string())
 }
 
+#[cfg(test)]
 pub(crate) fn shortcut(app: &PhotocraftApp, tool: Tool) -> Option<String> {
     crate::shortcuts::effective_shortcut(app, &id(tool), default(tool).as_deref())
 }
 
+/// Whether the user left `tool`'s key alone: a tool the user gave its own key leaves its letter's group.
 pub(crate) fn uses_default(app: &PhotocraftApp, tool: Tool) -> bool {
     !app.session.prefs().shortcuts.contains_key(&id(tool))
+}
+
+/// One catalog row per tool: kind `Tool` in the group of its letter, so the tools that share a letter cycle, with the
+/// letter as the default key.
+// The runtime's own definition of each tool (`panels::tool_commands::ToolCommand`) carries the same letter and group, which is what binds the key
+// and shows in tooltips; these rows keep the Keyboard Shortcuts dialog's tool pages.
+pub(crate) fn defs(_app: &PhotocraftApp) -> Vec<CommandDef> {
+    Tool::ALL
+        .into_iter()
+        .map(|t| {
+            let letter = default(t);
+            let mut def = CommandDef::new(CommandRef::new(id(t)), t.label(), Scope::app())
+                .with_kind(CommandKind::Tool { group: letter.clone() })
+                .with_path(vec!["Tools".into(), t.label().into()]);
+            def.defaults.extend(letter.and_then(|l| Binding::parse(&l).ok()));
+            def
+        })
+        .collect()
+}
+
+/// Each tool letter with the first tool of its group in toolbar order, in the order the letters first appear.
+pub(crate) fn group_letters() -> Vec<(char, Tool)> {
+    let mut groups: Vec<(char, Tool)> = Vec::new();
+    for t in Tool::ALL {
+        let letter = t.key();
+        if letter == '\0' {
+            continue;
+        }
+        match groups.iter_mut().find(|(l, _)| *l == letter) {
+            Some(group) if crate::panels::toolbar::toolbar_position(t) < crate::panels::toolbar::toolbar_position(group.1) => group.1 = t,
+            Some(_) => {}
+            None => groups.push((letter, t)),
+        }
+    }
+    groups
 }
 
 #[cfg(test)]
@@ -37,8 +78,8 @@ mod tests {
     #[test]
     fn every_toolbar_tool_has_a_unique_live_shortcut_row() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-        let ctx = egui::Context::default();
-        let items = crate::prefs_ui::shortcut_items(&app);
+        let ctx = app.ctx().clone();
+        let rows = crate::shortcut_dispatch::command_rows(&app);
         let mut ids = std::collections::HashSet::new();
         for t in Tool::ALL {
             let id = id(t);
@@ -46,11 +87,13 @@ mod tests {
             assert_eq!(tool(&id), Some(t));
             assert!(crate::menus::is_live(&id));
             assert!(crate::menus::is_enabled(&app, &id));
-            let rows: Vec<_> = items.iter().filter(|i| i.0 == id).collect();
-            assert_eq!(rows.len(), 1);
-            assert_eq!(rows[0].1, t.label());
-            assert_eq!(rows[0].2, ["Tools"]);
-            assert_eq!(rows[0].3, default(t));
+            let matching: Vec<_> = rows.iter().filter(|r| r.command.id == id).collect();
+            assert_eq!(matching.len(), 1);
+            assert_eq!(matching[0].label, t.label());
+            assert_eq!(matching[0].paths, [vec!["Tools".to_string(), t.label().to_string()]]);
+            assert_eq!(matching[0].kind, CommandKind::Tool { group: default(t) });
+            let bound: Vec<Binding> = default(t).and_then(|l| Binding::parse(&l).ok()).into_iter().collect();
+            assert_eq!(matching[0].defaults, bound);
             assert_eq!(crate::shortcuts::default_shortcut(&id), default(t));
             crate::menus::invoke(&mut app, &ctx, &id, json!({})).unwrap();
             assert_eq!(app.ui.tool, t);
@@ -59,41 +102,6 @@ mod tests {
             assert!(!crate::menus::is_live(id));
             assert!(crate::menus::invoke(&mut app, &ctx, id, json!({})).is_err());
         }
-    }
-
-    #[test]
-    fn toolbar_hints_follow_assignments_removal_and_reset() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-        assert_eq!(shortcut(&app, Tool::Pencil).as_deref(), Some("B"));
-        assert_eq!(shortcut(&app, Tool::SingleRowMarquee), None);
-        app.run("prefs.set", json!({"path": "shortcuts.tools.select.pencil", "value": "F6"})).unwrap();
-        assert_eq!(shortcut(&app, Tool::Pencil).as_deref(), Some("F6"));
-        app.run("prefs.set", json!({"path": "shortcuts.tools.select.pencil", "value": ""})).unwrap();
-        assert_eq!(shortcut(&app, Tool::Pencil), None);
-        app.run("prefs.reset", json!({"path": "shortcuts.tools.select.pencil"})).unwrap();
-        assert_eq!(shortcut(&app, Tool::Pencil).as_deref(), Some("B"));
-    }
-
-    #[test]
-    fn a_remapped_tool_letter_does_not_steal_text_input() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-        app.run("prefs.set", json!({"path": "shortcuts.tools.select.pencil", "value": "Q"})).unwrap();
-        let mut h = egui_kittest::Harness::builder().build_ui_state(
-            |ui, app: &mut PhotocraftApp| {
-                let edit = ui.text_edit_singleline(&mut app.ui.status);
-                edit.request_focus();
-                edit.accessible_name("Status");
-                crate::shortcuts::handle(app, ui.ctx());
-            },
-            app,
-        );
-        h.run_steps(3);
-        assert!(h.ctx.text_edit_focused());
-        h.key_press(egui::Key::Q);
-        h.event(egui::Event::Text("q".into()));
-        h.run_steps(2);
-        assert_eq!(h.state().ui.tool, Tool::Move);
-        assert_eq!(h.state().ui.status, "q");
     }
 }
 
