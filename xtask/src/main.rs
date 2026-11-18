@@ -13,6 +13,7 @@ mod perf;
 mod pinned;
 mod scorecard;
 mod stats;
+mod test_binaries;
 mod version;
 
 use std::path::{Path, PathBuf};
@@ -28,6 +29,8 @@ commands:
   egui-fork       fail unless Cargo.lock takes every egui package from the craft framework's egui fork
   panel-commands  fail on a shell click handler that changes the document or session directly instead of
                   dispatching a command id (allowlist: xtask/src/panel_commands.rs)
+  test-binaries   fail on a single-file test binary (crates/*/tests/*.rs): integration tests are modules of tests/it/main.rs
+                  (allowlist: xtask/src/test_binaries.rs)
   wasm            cargo check --target wasm32-unknown-unknown for the wasm-safe crates (one call, plus
                   one per optional web feature)
   test            workspace tests (cargo nextest when installed, else cargo test), then doctests
@@ -68,6 +71,7 @@ fn main() -> ExitCode {
         Some("layers") => cmd_layers(),
         Some("egui-fork") => cmd_egui_fork(),
         Some("panel-commands") => panel_commands::run(&root()),
+        Some("test-binaries") => test_binaries::run(&root()),
         Some("wasm") => cmd_wasm(),
         Some("test") => cmd_test().and_then(|()| cmd_doctest()),
         Some("ci") => cmd_ci(),
@@ -298,6 +302,7 @@ fn cmd_ci() -> Result<(), String> {
         ),
         ("layers", Box::new(cmd_layers)),
         ("panel-commands", Box::new(|| panel_commands::run(&root()))),
+        ("test-binaries", Box::new(|| test_binaries::run(&root()))),
         ("scorecard", Box::new(|| scorecard::run(&root(), &["--check"]))),
         ("test", Box::new(|| cmd_gate_tests(false))),
         ("panic_hunt", Box::new(|| cmd_gate_tests(true))),
