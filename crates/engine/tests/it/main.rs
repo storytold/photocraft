@@ -144,3 +144,18 @@ mod vector_paste_options;
 mod wand_transparent_copy;
 mod working_rgb_profile;
 mod xmp_charref;
+
+use std::sync::{Mutex, MutexGuard, PoisonError};
+
+/// The scratch pool and the spill configuration are process-wide: tests that touch either take turns.
+pub(crate) static SCRATCH: Mutex<()> = Mutex::new(());
+/// The simulated free memory is process-wide: tests that set it take turns.
+pub(crate) static HEADROOM: Mutex<()> = Mutex::new(());
+/// The global caches (adjustment tables, masks, decoded smart-object sources) are process-wide: tests
+/// that assert what Purge All finds in them, or their byte counts, take turns.
+pub(crate) static CACHES: Mutex<()> = Mutex::new(());
+
+/// Takes one of the locks above; a failed test that held it does not fail the next.
+pub(crate) fn lock(lock: &'static Mutex<()>) -> MutexGuard<'static, ()> {
+    lock.lock().unwrap_or_else(PoisonError::into_inner)
+}

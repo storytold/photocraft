@@ -2,7 +2,7 @@
 //! (`photocraft_compose::multichannel::spot_dot_gain`), which the ink preview of Multichannel
 //! documents adds to every channel.
 //!
-//! This test has its own integration-test binary (its own process) for the same reason as
+//! This test needs its own process (nextest runs every test in one) for the same reason as
 //! `text_gamma.rs`: changing the gain changes how every Multichannel document composites, so a
 //! concurrent test could flatten one document under two settings. Keep any other test that
 //! changes the spot dot gain in this file.

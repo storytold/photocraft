@@ -41,3 +41,13 @@ mod tone_targets;
 mod ui_scale_canvas;
 mod variables_data_sets;
 mod workspace_presets;
+
+use std::sync::{Mutex, MutexGuard, PoisonError};
+
+/// The simulated free memory is process-wide: tests that set it take turns.
+pub(crate) static HEADROOM: Mutex<()> = Mutex::new(());
+
+/// Takes one of the locks above; a failed test that held it does not fail the next.
+pub(crate) fn lock(lock: &'static Mutex<()>) -> MutexGuard<'static, ()> {
+    lock.lock().unwrap_or_else(PoisonError::into_inner)
+}

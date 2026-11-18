@@ -1,6 +1,6 @@
 //! A custom Shape Blur kernel is admitted against the working-memory budget before its coverage
-//! buffer is allocated, also when a smart filter re-renders it. Its own binary: the budget is
-//! process-wide.
+//! buffer is allocated, also when a smart filter re-renders it. The budget is
+//! process-wide, so this test needs its own process (nextest runs every test in one).
 
 use photocraft_geom::Rect;
 use photocraft_raster::memory::{self, Policy};

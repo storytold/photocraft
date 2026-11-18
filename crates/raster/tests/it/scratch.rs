@@ -1,11 +1,6 @@
-//! The scratch pool is process-wide, so these tests live in their own binary (nothing else
-//! allocates tiles here) and take a lock to run one at a time.
+//! The scratch pool is process-wide, so these tests take a lock to run one at a time.
 
 use photocraft_raster::scratch::*;
-use std::sync::{Mutex, PoisonError};
-
-static SERIAL: Mutex<()> = Mutex::new(());
-
 /// Lets a miss evict every pooled byte for the test's lifetime, so sizes can be counted.
 struct NoFloor;
 impl NoFloor {
@@ -22,7 +17,7 @@ impl Drop for NoFloor {
 }
 /// Locks the process-wide pool tests against concurrent access.
 fn lock_serial() -> std::sync::MutexGuard<'static, ()> {
-    SERIAL.lock().unwrap_or_else(PoisonError::into_inner)
+    crate::lock(&crate::SCRATCH)
 }
 
 /// Runs a test alone with idle release off, so the idle thread can't empty the pool between a

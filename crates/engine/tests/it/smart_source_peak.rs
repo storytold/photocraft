@@ -2,7 +2,7 @@
 //! tile-aligned blocks, so the peak memory growth stays a small multiple of the source's pixels, not the 32
 //! bytes a pixel the full-size RGBA buffer and its f32 copy took on top of the decoded document.
 //!
-//! The one test here runs in its own process: it reads the process's peak RSS (`VmHWM`, Linux
+//! The one test here needs its own process (nextest runs every test in one): it reads the process's peak RSS (`VmHWM`, Linux
 //! only) and nothing else may allocate meanwhile.
 
 #![cfg(target_os = "linux")]

@@ -1,7 +1,7 @@
 //! Edit › Color Settings › "Blend Text Colors Using Gamma" drives the compositor's
 //! application-wide text gamma (`photocraft_compose::psblend::text_gamma`).
 //!
-//! This test lives in its own integration-test binary (its own process) on purpose: switching
+//! This test needs its own process (nextest runs every test in one): switching
 //! the gamma away from the default changes how every type layer composites, so running it next
 //! to the engine's unit tests let a concurrent test flatten one document under two gammas
 //! (`canvas_geom::tests::turns_at_every_depth_and_mode` compares the composite before an edit
