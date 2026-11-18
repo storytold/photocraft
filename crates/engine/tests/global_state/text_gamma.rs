@@ -13,6 +13,7 @@ use serde_json::json;
 
 #[test]
 fn blend_text_gamma_setting() {
+    let _process = crate::lock(&crate::PROCESS);
     let mut s = Session::new();
     assert!((s.color.settings.blend_text_gamma - 1.45).abs() < 1e-6);
     assert!(s.execute("edit.colorSettings", json!({"blendTextGamma": 3.0})).is_err());

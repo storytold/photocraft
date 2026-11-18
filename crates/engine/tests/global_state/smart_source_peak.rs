@@ -31,6 +31,7 @@ fn png() -> Vec<u8> {
 
 #[test]
 fn decoding_a_smart_object_source_stays_within_16_bytes_a_source_pixel() {
+    let _process = crate::lock(&crate::PROCESS);
     let bytes = png();
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();

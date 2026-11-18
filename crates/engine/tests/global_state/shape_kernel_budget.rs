@@ -8,6 +8,7 @@ use serde_json::json;
 
 #[test]
 fn custom_shape_kernel_is_admitted_before_allocation() {
+    let _process = crate::lock(&crate::PROCESS);
     let knots = json!([[0, 0], [10, 0], [10, 10], [0, 10]]);
     let params = json!({"radius":1000,"shapePath":{"subpaths":[{"closed":true,"knots":knots}]}});
     let mut surface = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8);

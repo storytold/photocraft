@@ -14,7 +14,7 @@ struct Quiet {
 impl Quiet {
     /// Locks the test process and disables idle pool release for this guard's lifetime.
     fn new() -> Self {
-        let _serial = crate::lock(&crate::SCRATCH);
+        let _serial = crate::lock(&crate::PROCESS);
         scratch::set_idle_release(false);
         Quiet { _serial }
     }

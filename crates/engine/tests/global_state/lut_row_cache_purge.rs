@@ -6,7 +6,8 @@ use serde_json::json;
 
 #[test]
 fn purge_all_is_enabled_by_cached_adjustment_tables_and_releases_them() {
-    let _caches = crate::lock(&crate::CACHES);
+    let _caches = crate::lock(&crate::PROCESS);
+    crate::purge_all_caches();
     let mut session = Session::new();
     assert!(!session.is_enabled("edit.purge.all"));
     let rows = lut_rows::cached(7, || vec![[0.5; ROW_LEN]; 3]);

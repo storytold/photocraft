@@ -15,7 +15,7 @@ struct Room(#[allow(dead_code)] MutexGuard<'static, ()>);
 
 impl Room {
     fn new(bytes: Option<u64>) -> Room {
-        let guard = Room(crate::lock(&crate::HEADROOM));
+        let guard = Room(crate::lock(&crate::PROCESS));
         headroom::simulate_available(bytes);
         guard
     }

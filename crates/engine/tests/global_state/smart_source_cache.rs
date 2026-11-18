@@ -20,6 +20,7 @@ fn empty_caches() {
     photocraft_compose::purge_effect_cache();
     photocraft_compose::masks::purge_cache();
     photocraft_compose::shape_split::purge_cache();
+    crate::purge_all_caches();
 }
 
 fn session_with_smart_object(bytes: &[u8]) -> Session {
@@ -35,7 +36,7 @@ fn decode(s: &Session, bytes: &[u8]) {
 
 #[test]
 fn the_cache_counts_real_tile_bytes() {
-    let _turn = crate::lock(&crate::CACHES);
+    let _turn = crate::lock(&crate::PROCESS);
     empty_caches();
     let bytes = png();
     let s = session_with_smart_object(&bytes);
@@ -49,7 +50,7 @@ fn the_cache_counts_real_tile_bytes() {
 
 #[test]
 fn purge_all_reports_and_empties_the_source_cache() {
-    let _turn = crate::lock(&crate::CACHES);
+    let _turn = crate::lock(&crate::PROCESS);
     empty_caches();
     let bytes = png();
     let mut s = session_with_smart_object(&bytes);
@@ -68,7 +69,7 @@ fn purge_all_reports_and_empties_the_source_cache() {
 
 #[test]
 fn closing_a_document_with_a_smart_object_empties_the_source_cache() {
-    let _turn = crate::lock(&crate::CACHES);
+    let _turn = crate::lock(&crate::PROCESS);
     empty_caches();
     let bytes = png();
     let mut s = session_with_smart_object(&bytes);

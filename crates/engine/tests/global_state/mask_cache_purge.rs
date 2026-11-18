@@ -11,7 +11,8 @@ use serde_json::json;
 
 #[test]
 fn purge_all_is_enabled_by_cached_masks_and_releases_them_at_every_depth() {
-    let _caches = crate::lock(&crate::CACHES);
+    let _caches = crate::lock(&crate::PROCESS);
+    crate::purge_all_caches();
     let mut session = Session::new();
     assert!(!session.is_enabled("edit.purge.all"));
     let canvas = Rect::new(0, 0, 32, 32);

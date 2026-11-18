@@ -88,11 +88,8 @@ mod layer_props_several;
 mod layer_range_panel_order;
 mod live_dab_matches_replay;
 mod live_line_transform;
-mod lut_row_cache_purge;
 mod magnetic_lasso_composite;
-mod mask_cache_purge;
 mod mask_lock_all;
-mod memory_gate;
 mod memory_prefs;
 mod merge_transparent_bounds;
 mod missing_layer_error;
@@ -113,11 +110,7 @@ mod rasterize_psd_reopen;
 mod rasterize_selected_layers;
 mod rendering_preferences;
 mod save_keeps_encoding;
-mod scratch_disk;
-mod scratch_pause;
-mod scratch_release;
 mod selection_layer_commands;
-mod shape_kernel_budget;
 mod shortcut_sets;
 mod shortcuts_headless;
 mod smart_clipboard_sources;
@@ -127,12 +120,8 @@ mod smart_filter_stages;
 mod smart_object_tones;
 mod smart_psd;
 mod smart_rerender_fallback;
-mod smart_source_cache;
-mod smart_source_peak;
-mod spot_dot_gain;
 mod style_and_align;
 mod svg_smart_object;
-mod text_gamma;
 mod tone_target_picker;
 mod transform_budget_unclamped;
 mod type_format_targets;
@@ -144,18 +133,3 @@ mod vector_paste_options;
 mod wand_transparent_copy;
 mod working_rgb_profile;
 mod xmp_charref;
-
-use std::sync::{Mutex, MutexGuard, PoisonError};
-
-/// The scratch pool and the spill configuration are process-wide: tests that touch either take turns.
-pub(crate) static SCRATCH: Mutex<()> = Mutex::new(());
-/// The simulated free memory is process-wide: tests that set it take turns.
-pub(crate) static HEADROOM: Mutex<()> = Mutex::new(());
-/// The global caches (adjustment tables, masks, decoded smart-object sources) are process-wide: tests
-/// that assert what Purge All finds in them, or their byte counts, take turns.
-pub(crate) static CACHES: Mutex<()> = Mutex::new(());
-
-/// Takes one of the locks above; a failed test that held it does not fail the next.
-pub(crate) fn lock(lock: &'static Mutex<()>) -> MutexGuard<'static, ()> {
-    lock.lock().unwrap_or_else(PoisonError::into_inner)
-}

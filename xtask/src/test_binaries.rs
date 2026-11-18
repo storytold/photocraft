@@ -1,10 +1,11 @@
 //! `cargo xtask test-binaries`: a crate's integration tests are modules of one binary.
 //!
-//! Every file directly under `crates/<crate>/tests/` is compiled and linked as its own test binary,
-//! which costs one link per file and one process start per binary under nextest. Integration tests
-//! go in `crates/<crate>/tests/it/<name>.rs` with a `mod <name>;` line in `tests/it/main.rs`.
+//! Every file directly under `crates/<crate>/tests/`, and every `tests/<dir>/main.rs` other than
+//! `tests/it/main.rs`, is compiled and linked as its own test binary, which costs one link per
+//! binary and one process start per binary under nextest. Integration tests go in
+//! `crates/<crate>/tests/it/<name>.rs` with a `mod <name>;` line in `tests/it/main.rs`.
 //!
-//! A file that must stay its own binary is listed in [`ALLOWLIST`] with the reason.
+//! A test binary that must stay separate is listed in [`ALLOWLIST`] with the reason.
 
 use std::path::Path;
 
@@ -21,6 +22,10 @@ pub const ALLOWLIST: &[Allowed] = &[
         file: "crates/engine/tests/panic_hunt.rs",
         reason: "installs a process-wide panic hook and counts every panic in the process, so no other test may share it; `cargo xtask` selects it by binary id",
     },
+    Allowed {
+        file: "crates/engine/tests/global_state/main.rs",
+        reason: "tests that assert on process-wide state other engine tests change; they need a process without the rest of the suite",
+    },
     Allowed { file: "crates/tablet/tests/monitor_macos.rs", reason: "`harness = false` binary with its own `main`" },
 ];
 
@@ -35,6 +40,7 @@ pub fn violations(root: &Path) -> Vec<String> {
         let mut files: Vec<_> = std::fs::read_dir(krate.join("tests")).into_iter().flatten().flatten().map(|e| e.path()).collect();
         files.sort();
         for file in files {
+            let file = if file.is_dir() && file.file_name().is_some_and(|n| n != "it") { file.join("main.rs") } else { file };
             if !file.is_file() || file.extension().is_none_or(|e| e != "rs") {
                 continue;
             }
@@ -43,8 +49,8 @@ pub fn violations(root: &Path) -> Vec<String> {
                 seen.push(rel);
             } else {
                 found.push(format!(
-                    "{rel}: a single-file test binary; move it to {}/it/ and add `mod` to its main.rs",
-                    Path::new(&rel).parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()
+                    "{rel}: a separate test binary; make it a module of crates/{}/tests/it/main.rs",
+                    krate.file_name().unwrap_or_default().to_string_lossy()
                 ));
             }
         }
@@ -86,11 +92,18 @@ mod tests {
 
     #[test]
     fn refuses_a_new_single_file_binary_but_not_modules() {
-        let root = tree(&["crates/a/tests/it/main.rs", "crates/a/tests/it/x.rs", "crates/a/tests/new.rs", "crates/a/tests/fixtures/f.rs"]);
+        let root = tree(&[
+            "crates/a/tests/it/main.rs",
+            "crates/a/tests/it/x.rs",
+            "crates/a/tests/new.rs",
+            "crates/a/tests/fixtures/f.rs",
+            "crates/a/tests/other/main.rs",
+        ]);
         let found = violations(&root);
         let _ = std::fs::remove_dir_all(&root);
         let mine: Vec<_> = found.iter().filter(|m| m.starts_with("crates/a/")).collect();
-        assert_eq!(mine.len(), 1, "{found:?}");
+        assert_eq!(mine.len(), 2, "{found:?}");
         assert!(mine[0].starts_with("crates/a/tests/new.rs"));
+        assert!(mine[1].starts_with("crates/a/tests/other/main.rs"));
     }
 }

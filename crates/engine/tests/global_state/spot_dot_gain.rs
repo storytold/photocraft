@@ -20,6 +20,7 @@ fn half_tint(s: &mut Session) {
 
 #[test]
 fn spot_dot_gain_setting() {
+    let _process = crate::lock(&crate::PROCESS);
     let mut s = Session::new();
     assert_eq!(s.color.settings.spot_dot_gain, SPOT_DOT_GAIN, "Photoshop's default Spot working space: Dot Gain 20 %");
     for bad in [json!(-1), json!(50), json!("20%"), json!(true)] {
