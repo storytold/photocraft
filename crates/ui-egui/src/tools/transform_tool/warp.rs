@@ -1,6 +1,6 @@
 use craft::behavior::EditEvents;
 use craft::draw::ui::transform::TransformEdit;
-use craft::imaging::ui::warp::{CylinderValues, WarpMesh};
+use craft::imaging::ui::warp::{CylinderValues, WarpEdit, WarpMesh, WarpSplit};
 
 use super::begin::warps_type;
 use super::{BezierMesh, PhotocraftApp, Warp, WarpStyle, json};
@@ -14,6 +14,229 @@ pub(super) fn set_warp(app: &mut PhotocraftApp, warp: Warp) {
     if let Some(t) = app.ui.transform.as_mut() {
         t.session.apply(TransformEdit::Warp(SessionWarp::new(warp, on_type)), now);
     }
+}
+
+/// How far along a grid line, in screen pixels, a pull of the surface reaches before it moves the line's own
+/// anchors: the reference's Default-grid pull (`BezierMesh::pull_at`).
+const LINE_REACH_PX: f64 = 23.0;
+
+/// How close to a Perspective or Distort placement's horizon the pointer may take a warp point, as a share of the
+/// homogeneous weight at the warp's centre ([`doc_to_contents`]).
+const HORIZON_MARGIN: f64 = 1e-3;
+/// How far from its centre (in the contents' space) a pointer at or past the horizon reaches. The reference's files
+/// hold 6e8 to 1.3e9, but through its capped perspective the picture no longer changes from about 1e7 on, and a
+/// pull moves a point up to about five times as far, well within what a warp under a perspective may store.
+const HORIZON_REACH: f64 = 1e8;
+
+/// Document point `p` in a smart object's contents, through the inverse `back` of its placement `to_doc` (the
+/// contents' warp box `bounds`). Past the placement's horizon there is no such point: the inverse would put it behind
+/// the picture and a drag there tore the warp apart. The reference sends such a pointer towards the vanishing point,
+/// [`HORIZON_REACH`] out along the way the placement recedes, keeping where the inverse puts it across that way; and
+/// near the horizon no farther than that from the centre.
+fn doc_to_contents(to_doc: &photocraft_algo::transform::Homography, back: &photocraft_algo::transform::Homography, bounds: [f64; 4], p: [f64; 2]) -> [f64; 2] {
+    let map = |q: [f64; 2]| {
+        let (x, y) = back.apply(q[0], q[1]);
+        [x, y]
+    };
+    let m = to_doc.0;
+    // Only a Perspective or Distort placement has a horizon; an affine one maps as it is.
+    if m[6] == 0.0 && m[7] == 0.0 {
+        return map(p);
+    }
+    let centre = [(bounds[0] + bounds[2]) / 2.0, (bounds[1] + bounds[3]) / 2.0];
+    let c = {
+        let (x, y) = to_doc.apply(centre[0], centre[1]);
+        [x, y]
+    };
+    let w_at = |q: [f64; 2]| back.0[6] * q[0] + back.0[7] * q[1] + back.0[8];
+    let wc = w_at(c);
+    if !(wc.abs() > 1e-300 && wc.is_finite()) {
+        return map(p);
+    }
+    if w_at(p) / wc < HORIZON_MARGIN {
+        let side = (m[6] * centre[0] + m[7] * centre[1] + m[8]).signum();
+        let (dx, dy) = (m[6] * side, m[7] * side);
+        let n = dx.hypot(dy);
+        if !(n > 0.0 && n.is_finite()) {
+            return centre;
+        }
+        let (ux, uy) = (dx / n, dy / n);
+        let q = map(p);
+        let (vx, vy) = (q[0] - centre[0], q[1] - centre[1]);
+        let along = vx * ux + vy * uy;
+        let (px, py) = if along.is_finite() { (vx - along * ux, vy - along * uy) } else { (0.0, 0.0) };
+        let (px, py) = if px.is_finite() && py.is_finite() { (px, py) } else { (0.0, 0.0) };
+        return [centre[0] + px + ux * HORIZON_REACH, centre[1] + py + uy * HORIZON_REACH];
+    }
+    let far = |q: [f64; 2]| (q[0] - centre[0]).hypot(q[1] - centre[1]) > HORIZON_REACH;
+    let q = map(p);
+    if !far(q) {
+        return q;
+    }
+    let (mut lo, mut hi) = (0.0f64, 1.0f64);
+    for _ in 0..60 {
+        let mid = (lo + hi) / 2.0;
+        if far(map([c[0] + mid * (p[0] - c[0]), c[1] + mid * (p[1] - c[1])])) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    map([c[0] + lo * (p[0] - c[0]), c[1] + lo * (p[1] - c[1])])
+}
+
+/// Where a press lies on the warp grid's surface, as the reference finds it: the mesh parameters of the nearest
+/// surface point (`BezierMesh::param_at`), and only within `unit` of the press (the document size of a screen pixel),
+/// so a press off the surface pulls nothing. Under a smart object's placement `to_doc` the press is taken into the
+/// contents and found on the contents' mesh, as [`grid_rule`] applies the pull there.
+pub(super) fn grid_surface(mesh: &WarpMesh, unit: f64, to_doc: Option<[f64; 9]>) -> impl Fn(craft::behavior::kurbo::Point) -> Option<(f64, f64)> {
+    let doc = bezier_of(mesh);
+    let placed = to_doc.and_then(|m| {
+        let h = photocraft_algo::transform::Homography(m);
+        Some((h.inverse()?, h))
+    });
+    let contents = placed.map(|(back, _)| {
+        doc.map_points(|p| {
+            let (x, y) = back.apply(p[0], p[1]);
+            [x, y]
+        })
+    });
+    move |p: craft::behavior::kurbo::Point| {
+        let (mesh, at, unit) = match (&contents, &placed) {
+            (Some(contents), Some((back, to_doc))) => {
+                let (x, y) = back.apply(p.x, p.y);
+                let scale = to_doc.local_scale(x, y);
+                (contents, [x, y], if scale.is_finite() && scale > 1e-9 { unit / scale } else { unit })
+            }
+            _ => (&doc, [p.x, p.y], unit),
+        };
+        let (s, t) = mesh.param_at(at);
+        let q = mesh.eval(s, t);
+        ((q[0] - at[0]).hypot(q[1] - at[1]) < unit).then_some((s, t))
+    }
+}
+
+/// One edit of the warp grid as [`rule_mesh`] applies it (the grid's own edits can only be read, not made, here).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum RuleEdit {
+    /// Control point `index` dragged by `by` (document units).
+    Point { index: usize, by: [f64; 2] },
+    /// The surface pulled at the mesh parameters `(s, t)` by `by`.
+    Surface { s: f64, t: f64, by: [f64; 2] },
+    /// A split of a one-patch mesh at its parameters `(s, t)`.
+    SplitOnePatch { split: WarpSplit, s: f64, t: f64 },
+}
+
+/// The warp grid's rule, as measured on the reference application ([`rule_mesh`]); the grid's other edits are its
+/// own. `unit` is the document size of a screen pixel. `to_doc` is the map from a smart object's contents to the
+/// document when Warp mode edits its warp there ([`super::OpenPreview::placed_warp`]): the rule then runs in the
+/// contents' own space, where the reference applies it, and its result is carried back.
+pub(super) fn grid_rule(unit: f64, to_doc: Option<[f64; 9]>) -> impl Fn(&WarpMesh, &WarpEdit) -> WarpMesh {
+    let placed = to_doc.and_then(|m| {
+        let h = photocraft_algo::transform::Homography(m);
+        Some((h, h.inverse()?))
+    });
+    move |mesh: &WarpMesh, edit: &WarpEdit| {
+        let ours = match *edit {
+            WarpEdit::Point { index, by, .. } => Some(RuleEdit::Point { index, by: [by.x, by.y] }),
+            WarpEdit::Surface { s, t, by, .. } => Some(RuleEdit::Surface { s, t, by: [by.x, by.y] }),
+            // The grid placed the cut on the thirds it would have made real: the same place on the one patch.
+            WarpEdit::Split { split, column, row, u, v, thirds: true, .. } if mesh.columns() == 1 && mesh.rows() == 1 => {
+                Some(RuleEdit::SplitOnePatch { split, s: (column as f64 + u) / 3.0, t: (row as f64 + v) / 3.0 })
+            }
+            _ => None,
+        };
+        let applied = match (ours, &placed) {
+            (Some(ours @ (RuleEdit::Point { .. } | RuleEdit::Surface { .. })), Some((to_doc, back))) => in_contents(mesh, ours, unit, to_doc, back),
+            // A split where the press lies in the contents: under a projective placement the carried mesh's
+            // parameters at a document point are not the contents' there.
+            (Some(RuleEdit::SplitOnePatch { split, s, t }), Some((_, back))) => {
+                let doc = bezier_of(mesh);
+                let at = doc.eval(s, t);
+                let (x, y) = back.apply(at[0], at[1]);
+                let (s, t) = doc
+                    .map_points(|p| {
+                        let (x, y) = back.apply(p[0], p[1]);
+                        [x, y]
+                    })
+                    .param_at([x, y]);
+                (s.is_finite() && t.is_finite()).then(|| mesh.split(split, 0, 0, s.clamp(0.0, 1.0), t.clamp(0.0, 1.0)))
+            }
+            (Some(ours), _) => rule_mesh(mesh, ours, unit),
+            (None, _) => None,
+        };
+        applied.unwrap_or_else(|| mesh.edited(edit))
+    }
+}
+
+/// [`rule_mesh`] in a smart object's contents: the mesh, the press and the pointer's move taken back through
+/// `back`, the rule applied there (with the reach in contents units at the press) and the mesh carried to the
+/// document through `to_doc`.
+fn in_contents(
+    mesh: &WarpMesh,
+    edit: RuleEdit,
+    unit: f64,
+    to_doc: &photocraft_algo::transform::Homography,
+    back: &photocraft_algo::transform::Homography,
+) -> Option<WarpMesh> {
+    let map = |h: &photocraft_algo::transform::Homography, p: [f64; 2]| {
+        let (x, y) = h.apply(p[0], p[1]);
+        [x, y]
+    };
+    let doc = bezier_of(mesh);
+    let contents = doc.map_points(|p| map(back, p));
+    // The press in the document, and where the pointer is now, both taken into the contents.
+    let (press, by) = match edit {
+        RuleEdit::Point { index, by } => (doc.points.get(index).copied()?, by),
+        RuleEdit::Surface { s, t, by } => (doc.eval(s, t), by),
+        RuleEdit::SplitOnePatch { .. } => return None,
+    };
+    let bounds = contents.control_bounds();
+    let (from, to) = (doc_to_contents(to_doc, back, bounds, press), doc_to_contents(to_doc, back, bounds, [press[0] + by[0], press[1] + by[1]]));
+    let by = [to[0] - from[0], to[1] - from[1]];
+    let scale = to_doc.local_scale(from[0], from[1]);
+    let unit = if scale.is_finite() && scale > 1e-9 { unit / scale } else { unit };
+    let mut moved = contents.clone();
+    match edit {
+        RuleEdit::Point { index, .. } => moved.drag_point(&contents.points, index, by),
+        RuleEdit::Surface { s, t, .. } => moved.pull_at(&contents.points, s, t, from, by, LINE_REACH_PX * unit),
+        RuleEdit::SplitOnePatch { .. } => return None,
+    }
+    let placed = moved.map_points(|p| map(to_doc, p));
+    WarpMesh::new(placed.us, placed.vs, placed.points.iter().map(|p| craft::behavior::kurbo::Point::new(p[0], p[1])).collect())
+}
+
+/// `mesh` after `edit`, as the reference application moves it: a point drag moves an anchor with its handles and
+/// the twist points beside it (`BezierMesh::drag_point`), a pull of the surface moves the points the reference moves
+/// (`BezierMesh::pull_at`, with its thirds and a line reach of [`LINE_REACH_PX`] screen pixels, `unit` each), and a
+/// split of the one-patch Default grid adds only its own lines: the grid's thirds stay drawn handles. `None` when
+/// the result is no mesh.
+pub(super) fn rule_mesh(mesh: &WarpMesh, edit: RuleEdit, unit: f64) -> Option<WarpMesh> {
+    let base = bezier_of(mesh);
+    let mut moved = base.clone();
+    match edit {
+        RuleEdit::Point { index, by } => moved.drag_point(&base.points, index, by),
+        RuleEdit::Surface { s, t, by } => {
+            let press = base.eval(s, t);
+            moved.pull_at(&base.points, s, t, press, by, LINE_REACH_PX * unit);
+        }
+        RuleEdit::SplitOnePatch { split, s, t } => return Some(mesh.split(split, 0, 0, s, t)),
+    }
+    WarpMesh::new(moved.us, moved.vs, moved.points.iter().map(|p| craft::behavior::kurbo::Point::new(p[0], p[1])).collect())
+}
+
+/// A warp built over the warp's own box (a style from the options bar, Reset) as the session holds it: while Warp
+/// mode edits a smart object's warp in its contents ([`super::OpenPreview::placed_warp`]) that box is the contents',
+/// so its points are carried into the document, where the grid and the preview read them, as a custom mesh (the
+/// reference stores its presets as custom meshes too). Otherwise as it is.
+pub(super) fn placed_doc_warp(app: &PhotocraftApp, warp: Warp) -> Warp {
+    let Some((to_doc, _)) = app.transform_preview.as_ref().and_then(|pv| pv.placed_warp) else { return warp };
+    let h = photocraft_algo::transform::Homography(to_doc);
+    let mesh = warp.to_mesh(1, 1).map_points(|p| {
+        let (x, y) = h.apply(p[0], p[1]);
+        [x, y]
+    });
+    Warp::custom(mesh, warp.bounds)
 }
 
 /// The app's mesh of the framework's: the same knots and control points.
