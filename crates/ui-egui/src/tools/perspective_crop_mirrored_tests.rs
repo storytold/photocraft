@@ -20,7 +20,7 @@ const YELLOW: [f32; 4] = [1.0, 1.0, 0.0, 1.0];
 
 /// The measured test document: 800 x 500, red (top left), green (top right), blue (bottom left)
 /// and yellow (bottom right) quadrants with a black square in the middle; the Perspective Crop tool.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 800, "height": 500})).unwrap();
     app.sync_views();

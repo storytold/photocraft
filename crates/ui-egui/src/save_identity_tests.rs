@@ -5,12 +5,12 @@ use photocraft_engine::Session;
 use serde_json::json;
 use std::{cell::RefCell, rc::Rc};
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     app_over(None)
 }
 
 /// The app over the file service `files` (the framework takes it when the app is built).
-fn app_over(files: Option<std::sync::Arc<dyn craft::host::Files>>) -> PhotocraftApp {
+fn app_over(files: Option<std::sync::Arc<dyn craft::host::Files>>) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(
         Session::new(),
         Services {

@@ -49,7 +49,7 @@ impl log::Log for RerunLog {
 }
 
 /// Runs one frame; with `reruns`, prints its passes and why each pass after the first ran.
-fn step(harness: &mut egui_kittest::Harness<'_, PhotocraftApp>, reruns: Option<&str>) {
+fn step(harness: &mut egui_kittest::Harness<'_, Box<PhotocraftApp>>, reruns: Option<&str>) {
     harness.step();
     if let Some(label) = reruns {
         let output = &harness.output().platform_output;

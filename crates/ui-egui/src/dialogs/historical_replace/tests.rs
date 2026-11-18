@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use crate::historical_xcf_fixture as fixture;
 
-fn app(answers: Vec<Option<Picked>>, old_order: HistoricalXcfSampleOrder) -> PhotocraftApp {
+fn app(answers: Vec<Option<Picked>>, old_order: HistoricalXcfSampleOrder) -> Box<PhotocraftApp> {
     let mut session = photocraft_engine::Session::new();
     session.color.settings.ask_on_missing = false;
     session.color.settings.ask_on_mismatch = false;

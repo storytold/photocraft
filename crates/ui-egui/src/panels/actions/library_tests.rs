@@ -11,7 +11,7 @@ use super::files_tests::action_set_bytes;
 use super::library;
 use crate::PhotocraftApp;
 
-fn new_app() -> PhotocraftApp {
+fn new_app() -> Box<PhotocraftApp> {
     PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default())
 }
 

@@ -2,7 +2,7 @@ use super::*;
 use crate::dialogs::historical_sample_order::tests_support::{cancel, confirm, dialogs, profile_id, set_order};
 use crate::historical_xcf_fixture as fixture;
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(
         photocraft_engine::Session::new(),
         crate::Services {

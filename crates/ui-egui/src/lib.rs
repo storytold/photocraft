@@ -79,6 +79,8 @@ pub use craft::window::{
     Prefix,
     policy::{self as window_policy, Backend, Decision, Frame, TitleBarPref},
 };
+#[cfg(target_arch = "wasm32")]
+pub use file_dialog::{FileDialogAnswer, FileDialogFn, FileDialogReply, FileDialogRequest};
 pub use file_open::OsEvent;
 pub use state::{Tool, UiState};
 
