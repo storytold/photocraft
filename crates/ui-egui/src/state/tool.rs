@@ -320,7 +320,8 @@ impl Tool {
     /// The tool `s` names: its variant name, that name without "marquee", or its label, in any case and with spaces,
     /// `_` and `-` ignored. The first tool of [`Tool::ALL`] a spelling names wins.
     pub fn from_name(s: &str) -> Option<Tool> {
-        // The toolbar resolves its whole layout through here every frame: one table instead of formatting every tool's names per lookup.
+        // Panels resolve tool names per row as they draw, and the command gate per tool command: one table instead of
+        // formatting every tool's names per lookup.
         static NAMES: std::sync::OnceLock<std::collections::HashMap<String, Tool>> = std::sync::OnceLock::new();
         let names = NAMES.get_or_init(|| {
             let mut names = std::collections::HashMap::new();
