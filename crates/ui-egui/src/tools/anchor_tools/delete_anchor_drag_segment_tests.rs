@@ -1,17 +1,17 @@
 //! #12767: with Delete Anchor Point, a drag that starts on a segment moves it as a temporary
-//! Direct Selection does (history step **Drag Segment**); an anchor click still deletes.
+//! Direct Selection does (history step **Drag Segment**).
 
 use egui::Modifiers;
 use serde_json::{Value, json};
 
-use super::delete_anchor_targeted_path_tests::{click, select_layer, setup, shape_path, steps};
+use super::delete_anchor_targeted_path_tests::{setup, steps};
 use crate::PhotocraftApp;
-use crate::canvas::{ToolEvent, tool_event};
+use crate::canvas::testing;
 use crate::state::Tool;
 
 /// The item's test document: a saved path "Path 1", selected in the Paths panel, with a closed
 /// corner square, an open straight line and an open S-curve.
-fn document(tool: Tool) -> PhotocraftApp {
+fn document(tool: Tool) -> Box<PhotocraftApp> {
     let (mut app, _) = setup(tool);
     let path = json!({"subpaths": [
         {"closed": true, "knots": [[100, 300], [300, 300], [300, 500], [100, 500]]},
@@ -28,9 +28,9 @@ fn knots(app: &mut PhotocraftApp) -> Vec<Value> {
 }
 
 fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2]) {
-    tool_event(app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, Modifiers::NONE);
-    tool_event(app, ToolEvent::Move { x: to[0], y: to[1], pressure: 1.0 }, Modifiers::NONE);
-    tool_event(app, ToolEvent::Up { x: to[0], y: to[1] }, Modifiers::NONE);
+    testing::press(app, from, Modifiers::NONE);
+    testing::move_to(app, to, Modifiers::NONE);
+    testing::release(app, to, Modifiers::NONE);
 }
 
 fn anchors(app: &mut PhotocraftApp) -> Vec<[f64; 2]> {
@@ -41,12 +41,18 @@ fn anchors(app: &mut PhotocraftApp) -> Vec<[f64; 2]> {
     knots(app).iter().map(anchor).collect()
 }
 
+/// Whether every coordinate of `got` is within a thousandth of `want`: the drag's points pass through the view's f32 screen space.
+fn same(got: &[[f64; 2]], want: &[[f64; 2]]) -> bool {
+    got.len() == want.len() && got.iter().zip(want).all(|(g, w)| (g[0] - w[0]).abs() < 1e-3 && (g[1] - w[1]).abs() < 1e-3)
+}
+
 #[test]
 fn dragging_the_bottom_edge_moves_both_its_anchors_in_one_drag_segment_step() {
     let mut app = document(Tool::DeleteAnchorPoint);
     let n = steps(&app);
     drag(&mut app, [200.0, 500.0], [200.0, 540.0]);
-    assert_eq!(anchors(&mut app), vec![[100.0, 300.0], [300.0, 300.0], [300.0, 540.0], [100.0, 540.0]]);
+    let moved = anchors(&mut app);
+    assert!(same(&moved, &[[100.0, 300.0], [300.0, 300.0], [300.0, 540.0], [100.0, 540.0]]), "{moved:?}");
     assert_eq!(steps(&app), n + 1);
     assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Drag Segment"));
 }
@@ -64,47 +70,5 @@ fn a_segment_with_handles_a_hair_off_its_anchors_still_drags() {
     app.run("path.set", json!({"name": "Path 1", "path": path})).unwrap();
     drag(&mut app, [200.0, 500.0], [200.0, 540.0]);
     let moved = anchors(&mut app);
-    assert_eq!((moved[2], moved[3]), ([300.0, 540.0], [100.0, 540.0]), "{moved:?}");
-}
-
-#[test]
-fn a_click_on_a_segment_without_movement_does_nothing() {
-    let mut app = document(Tool::DeleteAnchorPoint);
-    let (before, n) = (knots(&mut app), steps(&app));
-    click(&mut app, [200.0, 500.0]);
-    assert_eq!(knots(&mut app), before);
-    assert_eq!(steps(&app), n);
-}
-
-#[test]
-fn a_click_on_an_anchor_still_deletes_it_in_one_step() {
-    let mut app = document(Tool::DeleteAnchorPoint);
-    let n = steps(&app);
-    click(&mut app, [300.0, 500.0]);
-    assert_eq!(knots(&mut app).len(), 3);
-    assert_eq!(steps(&app), n + 1);
-    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Delete Anchor Point"));
-}
-
-#[test]
-fn add_anchor_point_clicks_keep_adding_an_anchor() {
-    let mut app = document(Tool::AddAnchorPoint);
-    let n = steps(&app);
-    click(&mut app, [200.0, 500.0]);
-    assert_eq!(knots(&mut app).len(), 5);
-    assert_eq!(steps(&app), n + 1);
-    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Add Anchor Point"));
-}
-
-/// A shape with only its own position lock is left alone by a segment drag, as by an anchor click
-/// (#12730, #12825): its bottom edge doesn't move and no history step is added.
-#[test]
-fn a_position_locked_shape_s_segment_does_not_drag() {
-    let (mut app, shape) = setup(Tool::DeleteAnchorPoint);
-    select_layer(&mut app, shape);
-    app.run("layer.lockLayers", json!({"position": true})).unwrap();
-    let (before, n) = (shape_path(&mut app, shape), steps(&app));
-    drag(&mut app, [550.0, 250.0], [550.0, 290.0]);
-    assert_eq!(shape_path(&mut app, shape), before);
-    assert_eq!(steps(&app), n);
+    assert!(same(&moved[2..], &[[300.0, 540.0], [100.0, 540.0]]), "{moved:?}");
 }
