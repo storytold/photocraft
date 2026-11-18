@@ -76,3 +76,34 @@ fn emission_composite_overflow_keeps_representable_associated_light() {
     let expected = f64::from(light) * f64::from(1.0 - coverage);
     assert!((associated / expected - 1.0).abs() <= 1e-6, "{pixel:?}");
 }
+
+#[test]
+fn reduced_emission_preserves_light_and_zero_coverage() {
+    use crate::reduced::{ReducedStats, render_reduced_with};
+    use photocraft_geom::Rect;
+    for light in [0.5, f32::MAX / 2.0, f32::MIN_POSITIVE] {
+        for sparse in [false, true] {
+            let mut doc = Document::new("Reduced emission", Size::new(128, 64), ColorMode::Rgb, SampleType::F32);
+            let mut emitter = Layer::raster("emission", PixelFormat::RGBA32F);
+            let pixel = [light, 0.0, 0.0, EMISSIVE_ALPHA];
+            if sparse {
+                emitter.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 64, 64), &pixel);
+            } else {
+                *emitter.surface_mut().unwrap() = Surface::with_default(PixelFormat::RGBA32F, &pixel);
+            }
+            doc.layers.push(emitter);
+            let expected = if sparse { light * 0.5 } else { light };
+            let reductions = [
+                crate::render_reduced(&doc, 1, 1),
+                crate::render_reduced_by(&doc, doc.bounds(), 128),
+                crate::render_reduced_damage(&doc, 1, 1, Rect::new(0, 0, 1, 1)),
+                render_reduced_with(&doc, doc.bounds(), 1, 1, None, 3, false, &mut ReducedStats::default()),
+            ];
+            for reduced in reductions {
+                let actual = reduced.get(0, 0);
+                assert_eq!(actual[0], expected, "sparse={sparse}, light={light}: {actual:?}");
+                assert!(is_emissive_alpha(actual[3]), "{actual:?}");
+            }
+        }
+    }
+}
