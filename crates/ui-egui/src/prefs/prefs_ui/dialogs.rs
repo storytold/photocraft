@@ -1,5 +1,33 @@
-use super::shortcuts::shortcut_items;
-use super::{BTreeMap, DialogKind, Map, PhotocraftApp, RichText, SECTIONS, Tokens, Value, json, prefs};
+//! The Edit-menu front end (`invoke`) and the Preferences window as a dialog on the framework's host.
+//!
+//! The window is a [`SettingsDocument`] over the engine's preferences, shown by `PreferencesWindow` once per pass
+//! while its [`PrefsDialog`] is open. Apply and OK leave the keys they changed in the document and the dialog files
+//! them; `take` writes just those through `prefs.set` and `prefs.reset`, so a value changed elsewhere while the
+//! window is open survives. The dialog runs inside the host and has no app: `feed` hands it the app's facts before
+//! each pass, and `take` carries its requests (edits, a colour to pick) out after it.
+
+use std::sync::Arc;
+
+use craft::host::Host;
+use craft::i18n::Lang;
+use craft::ui::contract::Bind;
+use craft::ui::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
+#[cfg(test)]
+use craft::ui::patterns::preferences::PrefValue;
+use craft::ui::patterns::preferences::{Closed, PageInfo, PreferencesModel, PreferencesState, PreferencesWindow, RowKind, SettingsDocument, StandardPage};
+use craft::ui::runtime::memory::SaveKey;
+use craft::ui::runtime::requests::ColorRequest;
+use photocraft_engine::prefs::SECTIONS;
+use serde_json::{Value, json};
+
+use super::custom_rows::PrefsCustom;
+use super::fields::{PrefPages, rules};
+use crate::PhotocraftApp;
+use crate::color_picker_ui::PickWindow;
+
+/// The document the window edits between passes. The custom rows borrow the app, so each pass attaches `PrefsCustom`
+/// for its own duration and takes it off again before the app is used mutably.
+type Doc = SettingsDocument<PrefPages, ()>;
 
 // ------------------------------------------------------------------ menu routing
 
@@ -11,442 +39,301 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
         return None;
     }
     if let Some(section) = id.strip_prefix("edit.preferences.") {
-        return Some(Ok(json!({"dialog": open_preferences(app, section)})));
+        open_preferences(app, section);
+        return Some(Ok(json!({"dialog": "preferences"})));
     }
-    let dialog = |d: Option<u64>| Some(d.map(|d| json!({"dialog": d})).ok_or_else(|| "not available".to_string()));
+    let dialog = |d: Result<DialogId, String>| Some(d.map(|d| json!({"dialog": d.value().to_string()})));
     match id {
-        "edit.keyboardShortcuts" => Some(Ok(json!({"dialog": open_shortcuts(app, 0)}))),
-        "edit.menus" => Some(Ok(json!({"dialog": open_shortcuts(app, 1)}))),
-        "edit.toolbar" => Some(Ok(json!({"dialog": open_shortcuts(app, 2)}))),
+        "edit.keyboardShortcuts" => {
+            super::shortcuts::open(app, 0);
+            Some(Ok(json!({"dialog": "shortcuts"})))
+        }
+        "edit.menus" => {
+            super::shortcuts::open(app, 1);
+            Some(Ok(json!({"dialog": "shortcuts"})))
+        }
+        "edit.toolbar" => {
+            crate::panels::toolbar::open_drawer(app);
+            Some(Ok(json!({})))
+        }
         "edit.colorSettings" => {
-            let d = crate::filter_dialog::open(app, "edit.colorSettings");
-            let cur = serde_json::to_value(&app.session.color.settings).unwrap_or_default();
-            // What Monitor Profile resolves to, so a fallback to sRGB is visible (#569): read the
-            // displays again now, and the dialog refreshes this line as it draws.
+            // What Monitor Profile resolves to, so a fallback to sRGB is visible (#569): read the displays again now. The
+            // dialog draws the line from the note's cell, which `read_now` fills before the dialog's first frame.
             crate::monitor_status::read_now(app);
-            let note = crate::monitor_status::note(app);
-            if let Some(dm) = d.and_then(|d| app.ui.dialog_mut(d)) {
-                for (k, v) in cur.as_object().into_iter().flatten() {
-                    if dm.fields.contains_key(k) {
-                        dm.fields.insert(k.clone(), v.clone());
-                    }
-                }
-                dm.fields.insert("__note".into(), json!(note));
-            }
-            dialog(d)
+            dialog(crate::filter_dialog::open(app, "edit.colorSettings"))
         }
         "edit.fade" | "edit.findAndReplaceText" | "edit.defineBrushPreset" | "edit.defineCustomShape" | "edit.autoAlignLayers" | "edit.autoBlendLayers" => {
             if !app.session.is_enabled(id) {
                 return Some(Err(photocraft_engine::commands::find(id)
                     .map_or("not available".into(), |c| format!("{} is not available right now", c.label.trim_end_matches('…')))));
             }
-            let d = crate::filter_dialog::open(app, id);
-            if let Some(dm) = d.and_then(|d| app.ui.dialog_mut(d)) {
-                // Optional parameters the generic dialog can't express keep their defaults.
-                for k in ["reference", "path"] {
-                    dm.fields.remove(k);
-                }
-            }
-            dialog(d)
+            dialog(crate::filter_dialog::open(app, id))
         }
         // Photoshop's Content-Aware Fill workspace (caf_ui); the engine command with params
         // still runs directly.
-        "edit.contentAwareFill" => Some(crate::caf_ui::open(app).map(|_| json!({"contentAwareFill": app.distort.describe()["contentAwareFill"]}))),
+        "edit.contentAwareFill" => Some(crate::caf_ui::open(app).map(|_| json!({"contentAwareFill": crate::caf_ui::describe(app)}))),
         // Photoshop has no dialog: the menu opens the scale box (with params: the engine).
         crate::cas_transform::COMMAND => Some(crate::cas_transform::begin(app, ctx)),
-        "edit.presets.presetManager" => {
-            Some(Ok(json!({"dialog": open_kind(app, "presets", "Preset Manager", json!({"kind": "brushes", "selected": 0, "newName": ""}))})))
-        }
-        "edit.presets.exportImportPresets" => Some(Ok(
-            json!({"dialog": open_kind(app, "presetsIO", "Export/Import Presets", json!({"action": "export", "brushes": true, "customShapes": true, "tools": true}))}),
-        )),
+        "edit.presets.presetManager" => Some(Ok(json!({"dialog": super::presets::open_manager(app).value().to_string()}))),
+        "edit.presets.exportImportPresets" => Some(Ok(json!({"dialog": super::presets::open_io(app).value().to_string()}))),
         _ => None,
     }
 }
 
-fn open_kind(app: &mut PhotocraftApp, kind: &str, label: &str, fields: Value) -> u64 {
-    let mut f = Map::new();
-    f.insert("__prefsui".into(), json!(kind));
-    f.insert("__label".into(), json!(label));
-    if let Value::Object(m) = fields {
-        f.extend(m);
+// ------------------------------------------------------------------ the window
+
+/// The edits Apply or OK made, as the `values` of `prefs.set` and the paths `prefs.reset` takes.
+type Edits = (Value, Vec<String>);
+
+/// What OK answers with: the edits the window made that no pass has handed on yet.
+pub(crate) struct PrefsAnswer(Vec<Edits>);
+
+/// The open Preferences window, a dialog on the framework's host under the key `preferences`.
+pub(crate) struct PrefsDialog {
+    /// The saved values, the draft and the rows' rules. Taken out while a pass runs, because the custom rows attach to
+    /// it by value.
+    doc: Option<Doc>,
+    /// The page, search text and Apply error the window keeps.
+    state: PreferencesState,
+    /// The engine's preferences revision the document was last based on.
+    saved_rev: u64,
+    /// The language the document's labels are in: the draft's language, which previews before Apply.
+    labels: Lang,
+    /// What the custom rows read from the app, as of the last `feed`.
+    custom: PrefsCustom,
+    /// The colour row whose swatch was pressed, until `take` opens the picker for it.
+    pick: Option<ColorRequest>,
+    /// The edits Apply or OK made, until `take` writes them.
+    edits: Vec<Edits>,
+}
+
+impl PrefsDialog {
+    /// Moves the keys the document's last Apply changed into `edits`.
+    fn file_edits(&mut self) {
+        if let Some(edits) = self.doc.as_mut().and_then(Doc::take_applied_edits) {
+            self.edits.push(PrefPages::edits_to_values(edits));
+        }
     }
-    app.ui.open_dialog(DialogKind::Command, f)
-}
 
-/// Is this a dialog rendered by this module?
-pub fn owns(fields: &Map<String, Value>) -> bool {
-    fields.contains_key("__prefsui")
-}
-
-/// Only Preferences supports applying changes without closing the dialog.
-pub fn is_preferences(fields: &Map<String, Value>) -> bool {
-    fields.get("__prefsui").and_then(Value::as_str) == Some("prefs")
-}
-
-pub(super) fn preference_values(p: &prefs::Preferences) -> Map<String, Value> {
-    let values = p.to_json();
-    SECTIONS.iter().filter_map(|(id, _)| Some((id.to_string(), values.get(id)?.clone()))).collect()
-}
-
-/// Would OK or Apply change the editable sections? Settings managed outside Preferences, and
-/// settings changed elsewhere while the dialog is open, don't count.
-pub fn preferences_changed(app: &PhotocraftApp, fields: &Map<String, Value>) -> bool {
-    is_preferences(fields)
-        && fields.get("values").is_some_and(Value::is_object)
-        && committed_values(app, fields) != Value::Object(preference_values(app.session.prefs()))
-}
-
-/// The values OK or Apply commits: the live preferences with only the settings edited in the
-/// dialog (where the draft differs from the `__base` it opened or last applied with) laid over
-/// them, so a change made elsewhere while it is open, such as a live theme switch, survives an
-/// Apply of an unrelated setting (#11120). A setting edited both here and elsewhere takes the
-/// dialog's value. Without a `__base` the draft is committed as it is.
-fn committed_values(app: &PhotocraftApp, f: &Map<String, Value>) -> Value {
-    let Some(draft) = f.get("values") else { return Value::Null };
-    let Some(base) = f.get("__base") else { return draft.clone() };
-    let mut live = Value::Object(preference_values(app.session.prefs()));
-    super::save::merge_changes(base, draft, &mut live);
-    live
-}
-
-/// Commit the working copy and keep the current section open. Failure leaves the draft intact.
-pub fn apply(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
-    let d = app.ui.dialogs.iter().find(|d| d.id == id).ok_or_else(|| format!("no dialog {id}"))?;
-    if d.kind != DialogKind::Command || !is_preferences(&d.fields) {
-        return Err("Apply is only available for Preferences".into());
+    /// Applies the draft as the Apply button does. `Err` when a colour picker the window opened is still open or the
+    /// draft doesn't fit the settings; the message also shows in the window's footer.
+    fn apply(&mut self) -> Result<(), String> {
+        let Some(doc) = self.doc.take() else { return Err("Preferences is not open".into()) };
+        let mut with_custom = doc.custom(self.custom.clone());
+        let applied = if with_custom.nested_open() { Err(tl!("Close the Color Picker first.").to_string()) } else { with_custom.apply() };
+        self.doc = Some(with_custom.custom(()));
+        self.file_edits();
+        self.state.error = applied.as_ref().err().cloned();
+        applied
     }
-    let fields = d.fields.clone();
-    // As OK does: an open colour picker would leave a previewed colour in the applied values.
-    crate::dialogs::confirm_preflight(app, id)?;
-    let result = confirm(app, &fields)?;
-    let values = Value::Object(preference_values(app.session.prefs()));
-    if let Some(d) = app.ui.dialog_mut(id) {
-        // Use the validated values as the next draft and its base, including any normalisation
-        // by prefs.set and settings changed elsewhere since the dialog opened.
-        d.fields.insert("__base".into(), values.clone());
-        d.fields.insert("values".into(), values);
-    }
-    Ok(result)
-}
 
-/// The size Preferences opens at: room for the widest section and about 30 settings rows. The
-/// dialog's resize grip changes it, and its contents follow (#7420).
-pub const PREFERENCES_SIZE: egui::Vec2 = egui::vec2(1040.0, 800.0);
-
-/// The height of the settings area (section list and fields) when `available` is left below the
-/// search field: everything but the dialog's button row (`item_spacing` + 8 pt + the buttons) and
-/// a little slack, never less than a few rows.
-pub(super) fn settings_height(available: f32, item_spacing: f32, button_height: f32) -> f32 {
-    (available - (item_spacing + 8.0 + button_height + 4.0)).max(160.0)
-}
-
-/// Max dialog width for our dialogs. Preferences fills the width it is given (`available`, its
-/// resizable area).
-pub fn width(fields: &Map<String, Value>, available: f32) -> Option<f32> {
-    match fields.get("__prefsui").and_then(Value::as_str)? {
-        "prefs" => Some(available.max(380.0)),
-        "shortcuts" => Some(720.0),
-        _ => Some(460.0),
+    /// Updates what the window reads of the app before a pass: the custom rows' facts, the saved values (an unedited row
+    /// follows them; `Err` from the rebase keeps the document as it was) and the labels' language.
+    fn feed(&mut self, custom: PrefsCustom, saved: Option<(u64, PrefPages)>, host: &Host) {
+        self.custom = custom;
+        let Some(doc) = self.doc.as_mut() else { return };
+        if let Some((rev, pages)) = saved {
+            let _ = doc.rebase(pages);
+            self.saved_rev = rev;
+        }
+        // The draft's language previews inside the window; the main window keeps the committed one.
+        let wanted = draft_language(doc).map_or_else(|| host.lang(), |code| language_of(host, &code));
+        if wanted != self.labels {
+            doc.relabel(&host.with_lang(wanted));
+            self.labels = wanted;
+        }
     }
 }
 
-/// Open Edit › Preferences on `section`.
-pub fn open_preferences(app: &mut PhotocraftApp, section: &str) -> u64 {
+impl StackDialog for PrefsDialog {
+    type Result = PrefsAnswer;
+
+    fn id(&self) -> DialogId {
+        dialog_id("photocraft.preferences")
+    }
+
+    fn key(&self) -> Option<&str> {
+        Some("preferences")
+    }
+
+    /// A pass applies only its own output: `pick_color`, `closed` and the applied edits are each filed once, so a second
+    /// pass in the same frame, which gets no input, files nothing again.
+    fn show(&mut self, ui: &mut egui::Ui, _stack: &DialogStack) -> Option<DialogResult<PrefsAnswer>> {
+        let doc = self.doc.take()?;
+        let mut with_custom = doc.custom(self.custom.clone());
+        let out = PreferencesWindow::new(Bind::bound(&mut self.state)).remember(SaveKey::new("photocraft.preferences")).show(ui, &mut with_custom);
+        self.doc = Some(with_custom.custom(()));
+        if let Some(request) = out.pick_color {
+            self.pick = Some(request);
+        }
+        self.file_edits();
+        out.closed.map(|closed| match closed {
+            Closed::Ok => DialogResult::Ok(PrefsAnswer(std::mem::take(&mut self.edits))),
+            _ => DialogResult::Cancel,
+        })
+    }
+
+    fn confirm(&mut self, _ctx: &egui::Context) -> Option<PrefsAnswer> {
+        self.apply().ok()?;
+        Some(PrefsAnswer(std::mem::take(&mut self.edits)))
+    }
+
+    fn json_fields(&self) -> Option<Value> {
+        let values = self.doc.as_ref()?.draft().to::<Value>()?;
+        Some(json!({"values": values, "page": self.state.selected}))
+    }
+
+    fn set_json_field(&mut self, _ctx: &egui::Context, field: &str, value: Value) -> Result<(), String> {
+        match field {
+            "values" => self.doc.as_mut().ok_or("Preferences is not open")?.draft_mut().replace(&value).map_err(|e| format!("`values` is not valid: {e}")),
+            "page" => {
+                self.state.selected = value.as_str().ok_or("`page` is not valid: not text")?.to_string();
+                Ok(())
+            }
+            _ => Err(format!("the Preferences window has no field `{field}`")),
+        }
+    }
+}
+
+/// Whether the Preferences window is open.
+pub fn window_open(app: &PhotocraftApp) -> bool {
+    app.framework.dialogs.is_open::<PrefsDialog>()
+}
+
+/// Opens Edit › Preferences on `section` (`general` for an unknown one). With the window open only its page changes.
+pub fn open_preferences(app: &mut PhotocraftApp, section: &str) {
     let section = if SECTIONS.iter().any(|(id, _)| *id == section) { section } else { "general" };
-    let working = preference_values(app.session.prefs());
-    let order = field_order(app.session.prefs(), &working);
-    // `__base` is what the draft started from, so OK and Apply commit only what was edited here.
-    open_kind(app, "prefs", "Preferences", json!({"section": section, "values": working, "__base": working, "__order": order}))
-}
-
-/// Each section's keys in declaration order (JSON objects sort their keys; the serialised text
-/// keeps the struct's order, which groups related settings like Photoshop's dialog).
-fn field_order(p: &prefs::Preferences, sections: &Map<String, Value>) -> Value {
-    let text = serde_json::to_string(p).unwrap_or_default();
-    let mut out = Map::new();
-    for (id, v) in sections {
-        let Some(start) = text.find(&format!("\"{id}\":{{")) else { continue };
-        let body = &text[start..];
-        let end = body.find('}').unwrap_or(body.len());
-        let region = &body[..end];
-        let mut keys: Vec<(usize, String)> =
-            v.as_object().into_iter().flatten().map(|(k, _)| (region.find(&format!("\"{k}\":")).unwrap_or(usize::MAX), k.clone())).collect();
-        keys.sort();
-        out.insert(id.clone(), json!(keys.into_iter().map(|(_, k)| k).collect::<Vec<_>>()));
+    if let Some(open) = app.framework.dialogs.get_mut::<PrefsDialog>() {
+        open.state.selected = section.to_string();
+        return;
     }
-    Value::Object(out)
-}
-
-/// Open Keyboard Shortcuts and Menus on a tab (0 shortcuts, 1 menus, 2 toolbar).
-pub fn open_shortcuts(app: &mut PhotocraftApp, tab: u64) -> u64 {
-    let p = app.session.prefs();
-    let fields = json!({
-        "tab": tab,
-        "filter": "",
-        "overrides": p.shortcuts,
-        "alternates": p.alternate_shortcuts,
-        "sets": p.shortcut_sets,
-        "activeSet": p.shortcut_set,
-        "hidden": p.menus.hidden,
-        "colors": p.menus.colors,
-        "toolbarHidden": p.toolbar.hidden,
-        "selected": "",
-        "capture": false,
-        "message": "",
-    });
-    open_kind(app, "shortcuts", tl!("Keyboard Shortcuts and Menus"), fields)
-}
-
-/// Open the Embedded Profile Mismatch prompt for a file waiting to open (`open_prompt`): its
-/// `message`, the answer selected first (`action`), and `marker`, the field that routes OK and
-/// Cancel back to `open_prompt`.
-/// `names` carries the embedded and working profile names and the Color Settings policy a
-/// remembered choice is saved to (`policyKey`, null for a mode without one).
-pub fn open_mismatch(app: &mut PhotocraftApp, message: &str, action: &str, missing: bool, marker: &str, names: Value) -> u64 {
-    let mut fields = json!({"message": message, "action": action, "missing": missing, "remember": false});
-    if let (Some(f), Value::Object(n)) = (fields.as_object_mut(), names) {
-        f.extend(n);
-    }
-    fields[marker] = json!(true);
-    open_kind(app, "mismatch", tl!("Embedded Profile Mismatch"), fields)
-}
-
-pub(super) fn toolbar_tab(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
-    let mut hidden: Vec<String> = f.get("toolbarHidden").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
-    egui::ScrollArea::vertical().max_height(380.0).id_salt("toolbar-scroll").show(ui, |ui| {
-        egui::Grid::new("toolbar-grid").num_columns(2).spacing([16.0, 4.0]).show(ui, |ui| {
-            for tool in crate::state::Tool::ALL {
-                let name = format!("{tool:?}");
-                let mut on = !hidden.contains(&name);
-                crate::widgets::checkbox(ui, &mut on, tl!(tool.label()));
-                if on {
-                    hidden.retain(|h| *h != name);
-                } else if !hidden.contains(&name) {
-                    hidden.push(name);
-                }
-                let k = tool.key();
-                ui.label(if k == '\0' { String::new() } else { k.to_string() });
-                ui.end_row();
-            }
-        });
-    });
-    if ui.button(tl!("Restore Defaults")).clicked() {
-        hidden.clear();
-    }
-    f.insert("toolbarHidden".into(), json!(hidden));
-}
-
-pub(super) fn presets_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
-    let t = Tokens::get(ui.ctx());
-    let mut kind = f.get("kind").and_then(Value::as_str).unwrap_or("brushes").to_string();
-    ui.horizontal(|ui| {
-        ui.label(RichText::new(tl!("Preset Type")).color(t.text_dim));
-        let opts = [("brushes".to_string(), tl!("Brushes")), ("customShapes".to_string(), tl!("Custom Shapes")), ("patterns".to_string(), tl!("Patterns"))];
-        crate::widgets::dropdown(ui, "preset-kind", tl!("Type"), &mut kind, &opts, 180.0);
-    });
-    let list = app
-        .session
-        .execute("edit.presets.presetManager", json!({"kind": kind}))
-        .ok()
-        .and_then(|v| v.get(&kind).cloned())
-        .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
-        .unwrap_or_default();
-    let mut selected = f.get("selected").and_then(Value::as_u64).unwrap_or(0) as usize;
-    egui::ScrollArea::vertical().max_height(260.0).id_salt("preset-list").show(ui, |ui| {
-        for (i, name) in list.iter().enumerate() {
-            if ui.selectable_label(i == selected, name).clicked() {
-                selected = i;
-                f.insert("newName".into(), json!(name));
-            }
+    let doc = match SettingsDocument::new(PrefPages::of(app.session.prefs())) {
+        Ok(doc) => doc,
+        Err(error) => {
+            app.ui.status = error.to_string();
+            return;
         }
-        if list.is_empty() {
-            ui.label(RichText::new(tl!("No presets of this type.")).color(t.text_faint));
-        }
-    });
-    let mut new_name = f.get("newName").and_then(Value::as_str).unwrap_or("").to_string();
-    ui.horizontal(|ui| {
-        ui.add(egui::TextEdit::singleline(&mut new_name).desired_width(200.0)).accessible_name(tl!("Name"));
-        if ui.add_enabled(selected < list.len() && !new_name.trim().is_empty(), egui::Button::new(tl!("Rename"))).clicked() {
-            let _ = app.run("edit.presets.presetManager", json!({"action": "rename", "kind": kind, "index": selected, "newName": new_name}));
-        }
-        if ui.add_enabled(selected < list.len(), egui::Button::new(tl!("Delete"))).clicked() {
-            let _ = app.run("edit.presets.presetManager", json!({"action": "delete", "kind": kind, "index": selected}));
-        }
-        // Load Photoshop brushes (.abr) into the library.
-        if kind == "brushes" && ui.button(tl!("Load…")).on_hover_text(tl!("Import brushes (.abr)")).clicked() {
-            let _ = app.open_dialog_file();
-        }
-    });
-    f.insert("kind".into(), json!(kind));
-    f.insert("selected".into(), json!(selected));
-    f.insert("newName".into(), json!(new_name));
-}
-
-pub(super) fn presets_io_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
-    let t = Tokens::get(ui.ctx());
-    let mut action = f.get("action").and_then(Value::as_str).unwrap_or("export").to_string();
-    ui.horizontal(|ui| {
-        ui.label(RichText::new(tl!("Action")).color(t.text_dim));
-        crate::widgets::dropdown(
-            ui,
-            "presets-io",
-            tl!("Action"),
-            &mut action,
-            &[("export".to_string(), tl!("Export Presets")), ("import".to_string(), tl!("Import Presets"))],
-            180.0,
-        );
-    });
-    for (k, label) in [("brushes", tl!("Brushes")), ("customShapes", tl!("Custom Shapes")), ("tools", tl!("Tool Presets"))] {
-        let mut on = f.get(k).and_then(Value::as_bool).unwrap_or(true);
-        crate::widgets::checkbox(ui, &mut on, label);
-        f.insert(k.into(), json!(on));
-    }
-    f.insert("action".into(), json!(action));
-}
-
-pub(super) fn mismatch_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
-    let t = Tokens::get(ui.ctx());
-    ui.label(RichText::new(f.get("message").and_then(Value::as_str).unwrap_or("")).color(t.text));
-    ui.add_space(6.0);
-    let mut action = f.get("action").and_then(Value::as_str).unwrap_or("preserve").to_string();
-    let missing = f.get("missing").and_then(Value::as_bool).unwrap_or(false);
-    let name = |k: &str| f.get(k).and_then(Value::as_str).unwrap_or("?").to_string();
-    let opts: Vec<(&str, String)> = if missing {
-        vec![("preserve", tl!("Leave as is (don't color manage)").into()), ("assignWorking", tl!("Assign working space").into())]
-    } else {
-        vec![
-            ("preserve", crate::i18n::fmt(tl!("Use the embedded profile ({profile})"), &[("profile", &name("embedded"))])),
-            ("convert", crate::i18n::fmt(tl!("Convert to the working space ({profile})"), &[("profile", &name("working"))])),
-            ("discard", tl!("Discard the embedded profile (don't color manage)").into()),
-        ]
     };
-    for (v, label) in opts {
-        ui.radio_value(&mut action, v.to_string(), label);
+    let pages: Vec<PageInfo> = StandardPage::ALL.into_iter().map(StandardPage::info).collect();
+    let doc = doc.pages(pages).rules(rules());
+    // Agents reach the desktop app only; the web build shows the settings it had before as rows.
+    #[cfg(not(target_arch = "wasm32"))]
+    let doc = doc.custom_page(super::custom_rows::AGENTS_PAGE);
+    let mut doc = doc;
+    let host = Arc::clone(app.framework.host());
+    doc.relabel(&host);
+    let mut state = PreferencesState::default();
+    state.selected = section.to_string();
+    let custom = PrefsCustom::new(app, false);
+    let saved_rev = app.session.prefs.rev();
+    app.framework.dialogs.open(PrefsDialog { doc: Some(doc), state, saved_rev, labels: host.lang(), custom, pick: None, edits: Vec::new() });
+}
+
+/// The language the draft's `interface.language` names, as the code stored in the draft.
+fn draft_language(doc: &Doc) -> Option<String> {
+    doc.pages().iter().filter(|page| page.id == "interface").flat_map(|page| page.groups.iter()).flat_map(|group| group.rows.iter()).find_map(|row| match &row
+        .kind
+    {
+        RowKind::Choice { value, .. } if row.key == "interface.language" => Some((*value).to_string()),
+        _ => None,
+    })
+}
+
+/// The language `code` stands for, `host`'s own where it names none.
+fn language_of(host: &Host, code: &str) -> Lang {
+    let Some(i18n) = host.i18n_shared() else { return host.lang() };
+    if code == "auto" { i18n.system_lang() } else { i18n.from_code(code).unwrap_or_else(|| host.lang()) }
+}
+
+/// Writes the keys Apply or OK changed through the engine, and returns the `prefs.set` reply. Only these keys go,
+/// so a setting changed elsewhere while the window is open is not overwritten. Keys Reset Section removed go through
+/// `prefs.reset`.
+fn write_edits(app: &mut PhotocraftApp, (values, resets): Edits) -> Result<Value, String> {
+    let mut reply = json!({});
+    if values.as_object().is_some_and(|map| !map.is_empty()) {
+        reply = app.run("prefs.set", json!({"values": values}))?;
     }
-    f.insert("action".into(), json!(action));
-    // Remembering sets the Color Settings policy and stops asking, so it needs a mode with a policy.
-    if !missing && f.get("policyKey").is_some_and(Value::is_string) {
-        ui.add_space(8.0);
-        let mut remember = f.get("remember").and_then(Value::as_bool).unwrap_or(false);
-        crate::widgets::checkbox(ui, &mut remember, tl!("Remember this choice for future images"))
-            .on_hover_text(tl!("Turn the prompt back on with Ask On Mismatch in Edit › Color Settings."));
-        f.insert("remember".into(), json!(remember));
+    for path in resets {
+        app.run("prefs.reset", json!({"path": path}))?;
+    }
+    Ok(reply)
+}
+
+/// Writes every batch of edits; the reply of the last `prefs.set`. The first refusal stops the rest.
+fn write_all(app: &mut PhotocraftApp, batches: Vec<Edits>) -> Result<Value, String> {
+    let mut reply = json!({});
+    for edits in batches {
+        reply = write_edits(app, edits)?;
+    }
+    Ok(reply)
+}
+
+/// Hands the open window what it reads of the app, before the host runs it.
+pub(crate) fn feed(app: &mut PhotocraftApp) {
+    let Some(shown_rev) = app.framework.dialogs.get::<PrefsDialog>().map(|d| d.saved_rev) else { return };
+    let custom = PrefsCustom::new(&*app, crate::color_picker_ui::window_picker_open(app, PickWindow::Preferences));
+    let rev = app.session.prefs.rev();
+    let saved = (rev != shown_rev).then(|| (rev, PrefPages::of(app.session.prefs())));
+    let host = Arc::clone(app.framework.host());
+    if let Some(dialog) = app.framework.dialogs.get_mut::<PrefsDialog>() {
+        dialog.feed(custom, saved, &host);
     }
 }
 
-// ------------------------------------------------------------------ confirm
+/// Carries the window's requests out after a host pass: the answer it ended with, the edits Apply filed, the colour
+/// picker its swatch asked for and the picker's answer. A window that is gone takes its picker with it.
+pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let mut batches = match app.framework.dialogs.take::<PrefsDialog>() {
+        Some(DialogResult::Ok(PrefsAnswer(edits))) => edits,
+        _ => Vec::new(),
+    };
+    let mut picked = None;
+    if let Some(dialog) = app.framework.dialogs.get_mut::<PrefsDialog>() {
+        batches.append(&mut dialog.edits);
+        picked = dialog.pick.take();
+    } else {
+        crate::color_picker_ui::cancel_window_picker(app, ctx, PickWindow::Preferences);
+    }
+    if let Some(request) = picked {
+        crate::color_picker_ui::open_for_window(app, PickWindow::Preferences, request);
+    }
+    if let Some((key, color)) = crate::color_picker_ui::answer_for_window(app, PickWindow::Preferences)
+        && let Some(doc) = app.framework.dialogs.get_mut::<PrefsDialog>().and_then(|d| d.doc.as_mut())
+    {
+        doc.set_color(&key, color);
+    }
+    if let Err(error) = write_all(app, batches)
+        && let Some(dialog) = app.framework.dialogs.get_mut::<PrefsDialog>()
+    {
+        dialog.state.error = Some(error);
+    }
+}
 
-/// OK on one of our dialogs.
-pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
-    match f.get("__prefsui").and_then(Value::as_str).unwrap_or("") {
-        "prefs" => {
-            let values = committed_values(app, f);
-            app.run("prefs.set", json!({"path": "", "value": values}))
+/// Applies the open window's draft as its Apply button does and keeps the window open. `Err` when it is closed, a
+/// colour picker it opened is still open, or the engine refuses a value.
+pub fn apply_window(app: &mut PhotocraftApp) -> Result<Value, String> {
+    // The window judges Apply on what it reads of the app (an open picker among it), as its button does after a feed.
+    feed(app);
+    let Some(dialog) = app.framework.dialogs.get_mut::<PrefsDialog>() else { return Err("Preferences is not open".into()) };
+    let applied = dialog.apply().map(|()| std::mem::take(&mut dialog.edits));
+    let result = applied.and_then(|batches| write_all(app, batches));
+    if let Err(error) = &result
+        && let Some(dialog) = app.framework.dialogs.get_mut::<PrefsDialog>()
+    {
+        dialog.state.error = Some(error.clone());
+    }
+    result
+}
+
+/// Sets a row of the open window's draft as the user editing it would (type and range checks included).
+/// `false` when the window is closed.
+#[cfg(test)]
+pub(crate) fn set_draft(app: &mut PhotocraftApp, key: &str, value: PrefValue) -> bool {
+    match app.framework.dialogs.get_mut::<PrefsDialog>().and_then(|d| d.doc.as_mut()) {
+        Some(doc) => {
+            doc.set(key, value);
+            true
         }
-        "shortcuts" => {
-            let overrides = f.get("overrides").cloned().unwrap_or(json!({}));
-            // Shortcuts moved to another command are taken from their old owner (shell
-            // commands included, which the engine doesn't know).
-            // The map replaces every stored override, so a malformed one is an error, not "none".
-            let mut ov: BTreeMap<String, String> =
-                serde_json::from_value(overrides).map_err(|e| format!("overrides must map command IDs to shortcut strings: {e}"))?;
-            let alternates = f.get("alternates").cloned().unwrap_or(json!({}));
-            let mut alt: BTreeMap<String, Vec<String>> =
-                serde_json::from_value(alternates).map_err(|e| format!("alternates must map command IDs to lists of shortcuts: {e}"))?;
-            let items = shortcut_items(app);
-            // Newly assigned shortcuts are checked first and take theirs from any holder, custom
-            // overrides included; unchanged overrides only take theirs from defaults. A
-            // command's further keys (#3665) take and lose keys the same way.
-            let before = &app.session.prefs().shortcuts;
-            let before_alt = &app.session.prefs().alternate_shortcuts;
-            let mut todo: Vec<(String, String, bool, bool)> =
-                ov.iter().filter(|(_, s)| !s.is_empty()).map(|(k, s)| (k.clone(), s.clone(), before.get(k) != Some(s), false)).collect();
-            for (k, keys) in &alt {
-                let new = before_alt.get(k) != Some(keys);
-                todo.extend(keys.iter().map(|s| (k.clone(), s.clone(), new, true)));
-            }
-            todo.sort_by_key(|(_, _, new, _)| !new);
-            let main_of = |ov: &BTreeMap<String, String>, id: &str, def: Option<&str>| -> Option<String> {
-                match ov.get(id) {
-                    Some(s) if s.is_empty() => None,
-                    Some(s) => Some(s.clone()),
-                    None => def.map(str::to_string),
-                }
-            };
-            for (id, sc, new, is_alt) in todo {
-                let norm = prefs::normalize_shortcut(&sc);
-                let Some(norm) = norm else { continue };
-                // Taken by a newer assignment?
-                if (!is_alt && ov.get(&id).is_some_and(String::is_empty)) || (is_alt && alt.get(&id).is_some_and(|k| !k.contains(&norm))) {
-                    continue;
-                }
-                for (other, _, _, def) in &items {
-                    if *other == id {
-                        continue;
-                    }
-                    let held = match ov.get(other) {
-                        Some(s) if new => Some(s.as_str()),
-                        Some(_) => None,
-                        None => def.as_deref(),
-                    };
-                    if held.and_then(prefs::normalize_shortcut).as_deref() == Some(norm.as_str()) {
-                        ov.insert(other.clone(), String::new());
-                    }
-                    // Its further keys: the edited list when this assignment is new, else only
-                    // the defaults.
-                    if alt.contains_key(other) && !new {
-                        continue;
-                    }
-                    let mut p = prefs::Preferences::default();
-                    if let Some(list) = alt.get(other) {
-                        p.alternate_shortcuts.insert(other.clone(), list.clone());
-                    }
-                    let keys = p.alternates(other, main_of(&ov, other, def.as_deref()).as_deref());
-                    if keys.contains(&norm) {
-                        alt.insert(other.clone(), keys.into_iter().filter(|k| *k != norm).collect());
-                    }
-                }
-            }
-            let hidden = f.get("hidden").cloned().unwrap_or(json!([]));
-            let colors = f.get("colors").cloned().unwrap_or(json!({}));
-            let toolbar = f.get("toolbarHidden").cloned().unwrap_or(json!([]));
-            let sets = f.get("sets").cloned().unwrap_or(json!({}));
-            let active = f.get("activeSet").cloned().unwrap_or(json!(""));
-            app.run(
-                "edit.keyboardShortcuts",
-                json!({"reset": true, "set": ov, "alternates": alt, "allowUnknown": true, "removeConflicts": false, "sets": sets, "activeSet": active}),
-            )?;
-            app.run("prefs.set", json!({"values": {"menus": {"hidden": hidden, "colors": colors}, "toolbar": {"hidden": toolbar}}}))
-        }
-        "presets" => Ok(Value::Null),
-        "presetsIO" => {
-            let kinds: Vec<&str> = ["brushes", "customShapes", "tools"].into_iter().filter(|k| f.get(*k).and_then(Value::as_bool).unwrap_or(true)).collect();
-            if f.get("action").and_then(Value::as_str) == Some("import") {
-                app.pick_file_bytes(move |app, name, bytes| {
-                    let text = String::from_utf8(bytes).map_err(|_| format!("{name} is not a preset file"))?;
-                    app.run("edit.presets.exportImportPresets", json!({"action": "import", "kinds": kinds, "data": text}))
-                })
-            } else {
-                let out = app.run("edit.presets.exportImportPresets", json!({"action": "export", "kinds": kinds}))?;
-                let text = serde_json::to_string_pretty(&out["data"]).map_err(|e| e.to_string())?;
-                app.pick_save("Presets.pcpresets", move |app, path| {
-                    let write = app.services.write.as_mut().ok_or("no writer configured")?;
-                    write(&path, text.as_bytes())?;
-                    let template = "Exported presets to {path}";
-                    app.ui.status = crate::i18n::fmt(tl!(template), &[("path", &path)]);
-                    Ok(json!({"path": path}))
-                })
-            }
-        }
-        // The file it asks about opens with this answer (`open_prompt`).
-        "mismatch" => {
-            let action = f.get("action").and_then(Value::as_str).unwrap_or("preserve");
-            if f.get("remember").and_then(Value::as_bool) == Some(true) {
-                return crate::open_prompt::answer_remembering(app, action);
-            }
-            crate::open_prompt::answer(app, Some(action))
-        }
-        _ => Err("unknown dialog".into()),
+        None => false,
     }
 }

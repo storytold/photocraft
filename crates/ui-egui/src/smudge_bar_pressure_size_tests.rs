@@ -18,7 +18,7 @@ fn bar(tool: Tool) -> Harness<'static, PhotocraftApp> {
     app.ui.tool = tool;
     let mut h = Harness::builder()
         .with_size(vec2(1600.0, 400.0))
-        .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::ProMedium))
+        .with_context(app.ctx().clone())
         .build_ui_state(|ui, app| crate::panels::options_bar(app, ui), app);
     h.run_steps(4);
     h
