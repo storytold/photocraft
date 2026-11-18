@@ -233,7 +233,6 @@ fn light_curve_and_hsl_are_editable_without_rewriting_unchanged_settings() {
 #[test]
 fn new_filters_write_every_verified_control_and_accept_explicit_defaults() {
     let mut params = default_params().unwrap();
-    params["seed"] = json!(0);
     for (param, key) in SCALARS {
         let number = match *key {
             "Ex12" => 0.75,
