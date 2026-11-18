@@ -1,9 +1,10 @@
 //! #1436: a size-changing Arbitrary rotation preview must remain visible on the real GPU canvas.
 //! Synthetic blue pixels are measured outside the dialog, so its controls cannot pass the test.
 
-use egui_kittest::kittest::Queryable;
+use egui::accesskit::Toggled;
+use egui_kittest::kittest::{NodeT, Queryable};
 use photocraft_ui_egui::PhotocraftApp;
-use photocraft_ui_egui::control::{ControlRequest, Outcome, handle};
+use photocraft_ui_egui::control::{ControlRequest, Reply, handle};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
@@ -18,7 +19,7 @@ fn harness() -> Option<Harness> {
             .wgpu_setup(photocraft_ui_egui::gpu_canvas::wgpu_setup())
             .build_eframe(|cc| {
                 PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-                let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+                let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), Default::default());
                 if let Some(rs) = cc.wgpu_render_state.as_ref() {
                     app.set_wgpu(rs.clone());
                 }
@@ -37,7 +38,7 @@ fn harness() -> Option<Harness> {
 fn control(h: &mut Harness, method: &str, params: Value) -> Value {
     let ctx = h.ctx.clone();
     let (req, _rx) = ControlRequest::new(method, params);
-    let Outcome::Done(value) = handle(h.state_mut(), &ctx, &req) else { panic!("{method} did not finish") };
+    let Reply::Done(value) = handle(h.state_mut(), &ctx, &req) else { panic!("{method} did not finish") };
     assert_eq!(value["ok"], true, "{method}: {value}");
     h.run_steps(4);
     value["result"].clone()
@@ -54,20 +55,32 @@ fn setup(h: &mut Harness, width: u32, height: u32, zoom: f32, center: [f32; 2]) 
     assert!(h.state().perf.gpu, "the fixture must use the GPU canvas");
 }
 
-fn open(h: &mut Harness) -> u64 {
-    control(h, "ui.menu.invoke", json!({"id":"image.rotation.arbitrary"}))["dialog"].as_u64().expect("rotation dialog")
+/// Opens the dialog and returns the id the reply gave, in the protocol's own form.
+fn open(h: &mut Harness) -> Value {
+    control(h, "ui.menu.invoke", json!({"id":"image.rotation.arbitrary"}))["dialog"].clone()
 }
 
-fn angle(h: &mut Harness, id: u64, value: f64) {
+fn angle(h: &mut Harness, id: &Value, value: f64) {
     control(h, "ui.dialog.set", json!({"dialog":id,"field":"angle","value":value}));
 }
 
-/// Count blue canvas pixels and their vertical extent, excluding every modal's actual rectangle.
+/// Whether the Preview check box is on.
+fn preview_on(h: &Harness) -> bool {
+    h.get_by_label("Preview").accesskit_node().toggled() == Some(Toggled::True)
+}
+
+/// Count blue canvas pixels and their vertical extent, excluding the open dialog's actual rectangle.
 fn blue(h: &mut Harness, name: &str) -> (usize, u32, u32) {
     h.run_steps(3);
     let rect = h.state().last_canvas_rect.shrink(3.0);
-    let modals: Vec<_> =
-        h.state().ui.dialogs.iter().map(|d| h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", d.id)))).expect("laid-out dialog").expand(4.0)).collect();
+    // The window that draws the dialog's OK button; the canvas itself lives in a non-background layer.
+    let modals: Vec<_> = h
+        .query_by_label("OK")
+        .and_then(|ok| h.ctx.layer_id_at(ok.rect().center()))
+        .and_then(|layer| h.ctx.memory(|m| m.area_rect(layer.id)))
+        .map(|r| r.expand(4.0))
+        .into_iter()
+        .collect();
     let img = h.render().expect("render");
     if let Some(dir) = std::env::var_os("PHOTOCRAFT_ROTATION_EVIDENCE_DIR") {
         std::fs::create_dir_all(&dir).expect("evidence directory");
@@ -106,17 +119,17 @@ fn size_changing_rotation_preview_is_visible_and_preserves_the_panned_center() {
         let id = open(&mut h);
         let source = blue(&mut h, &format!("{width}x{height}-{degrees}-zero")).0;
         assert!(source > 5_000, "the unrotated blue image must be visible outside the dialog");
-        angle(&mut h, id, degrees);
+        angle(&mut h, &id, degrees);
         h.get_by_label("Preview").click();
         h.run_steps(4);
-        assert_eq!(h.state().ui.dialogs[0].fields["__preview"], false);
+        assert!(!preview_on(&h));
         assert!(blue(&mut h, &format!("{width}x{height}-{degrees}-off")).0 > 5_000, "Preview off shows the original image");
         h.get_by_label("Preview").click();
         h.run_steps(4);
-        assert_eq!(h.state().ui.dialogs[0].fields["__preview"], true);
+        assert!(preview_on(&h));
         let (count, top, bottom) = blue(&mut h, &format!("{width}x{height}-{degrees}-on"));
         assert!(count > 5_000, "{width}x{height}, {degrees}°, factor {factor}: rotated blue pixels disappeared ({count} remain)");
-        let rect = photocraft_ui_egui::rulers::content_rect(h.state(), h.state().last_canvas_rect);
+        let rect = photocraft_ui_egui::canvas::active_view(h.state()).expect("a shown view").rect;
         let expected_y = rect.center().y + (height as f32 / 2.0 - center[1]) * zoom;
         let actual_y = (top + bottom) as f32 / 2.0;
         assert!((actual_y - expected_y).abs() < 3.0, "{degrees}°: preview moved the panned image center from {expected_y} to {actual_y}");
@@ -137,15 +150,15 @@ fn preview_toggle_and_cancel_keep_the_document_while_ok_applies_rotation() {
     assert!(blue(&mut h, "control-zero-on").0 > 5_000);
     h.get_by_label("Preview").click();
     h.run_steps(4);
-    assert_eq!(h.state().ui.dialogs[0].fields["__preview"], false);
+    assert!(!preview_on(&h));
     assert!(blue(&mut h, "control-zero-off").0 > 5_000);
     h.get_by_label("Preview").click();
     h.run_steps(4);
-    assert_eq!(h.state().ui.dialogs[0].fields["__preview"], true);
+    assert!(preview_on(&h));
     assert!(blue(&mut h, "control-zero-restored").0 > 5_000);
     h.get_by_label("Preview").click();
     h.run_steps(4);
-    angle(&mut h, id, 45.0);
+    angle(&mut h, &id, 45.0);
     h.get_by_label("Cancel").click();
     h.run_steps(4);
     let st = h.state().session.active().unwrap();
@@ -157,14 +170,17 @@ fn preview_toggle_and_cancel_keep_the_document_while_ok_applies_rotation() {
     let id = open(&mut h);
     h.get_by_label("Preview").click();
     h.run_steps(4);
-    angle(&mut h, id, 45.0);
+    angle(&mut h, &id, 45.0);
     h.get_by_label("OK").click();
     h.run_steps(4);
-    assert!(h.state().ui.dialogs.is_empty());
+    assert!(h.query_by_label("OK").is_none(), "OK closed the dialog");
     let st = h.state().session.active().unwrap();
     assert_eq!((st.doc.size.width, st.doc.size.height), (453, 453));
     assert_eq!(st.history.entries().len(), history.len() + 1);
     assert!(st.revision > revision);
-    assert_eq!(h.state().ui.views[0].center, [226.5, 226.5]);
+    // The view the app keeps is centred on the rotated canvas; the canvas shows it moved by under half a device pixel
+    // so the pixels land on device pixels (`pixel_aligned`), so the kept view is read, not the shown one.
+    let index = h.state().session.active_index().expect("an active document");
+    assert_eq!(h.state().ui.views[index].center[0], 226.5);
     assert!(blue(&mut h, "control-ok").0 > 5_000, "the applied rotation must be visible");
 }
