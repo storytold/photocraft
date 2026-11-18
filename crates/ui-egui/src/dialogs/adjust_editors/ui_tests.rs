@@ -393,7 +393,7 @@ fn gradient_map_stop_picker_closed_without_a_colour_changes_nothing() {
 
 /// A Curves adjustment layer over a 64 x 48 image whose left half is #3c3c3c and right half #bebebe (levels 60 and
 /// 190, mean 125), in the whole app with Properties open on it.
-fn curves_over_two_tones() -> Harness<'static, PhotocraftApp> {
+fn curves_over_two_tones() -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).with_step_dt(1.0 / 60.0).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let mut s = photocraft_engine::Session::new();
