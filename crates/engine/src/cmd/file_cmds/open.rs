@@ -13,7 +13,7 @@ pub(crate) struct BatchOpen {
 /// Replace only the file choice before either authorization gate; malformed params stay invalid.
 pub(crate) fn batch_open_params(s: &Session, id: &str, params: &Value) -> Option<Value> {
     let binding = s.batch_open.as_ref()?;
-    if !matches!(id, "file.openAs" | "file.openExrParts") || !(params.is_object() || params.is_null()) {
+    if !matches!(id, "file.open" | "file.openAs" | "file.openExrParts") || !(params.is_object() || params.is_null()) {
         return None;
     }
     let mut effective = if params.is_null() { super::json!({}) } else { params.clone() };
@@ -51,9 +51,11 @@ pub(crate) fn import_with_options(name: &str, bytes: &[u8], opts: &photocraft_io
 /// Batch's scratch sessions use [`import_at_raw_ppi`]): a developed raw gets Preferences › Raw
 /// Defaults › Resolution, as it does through File › Open.
 pub(crate) fn import_opened(s: &Session, name: &str, bytes: &[u8]) -> Result<Document> {
+    let _authority = crate::jobs::render_authorization_scope(s.authorize);
     import_at_raw_ppi(s.prefs().raw_defaults.resolution, name, bytes)
 }
 
+/// Apply captured raw resolution and prepare native editable caches before returning imported data.
 pub(super) fn import_at_raw_ppi(raw_ppi: f64, name: &str, bytes: &[u8]) -> Result<Document> {
     import_source_at_raw_ppi(raw_ppi, name, bytes).map(|(doc, _)| doc)
 }
@@ -64,6 +66,7 @@ pub(super) fn import_source_at_raw_ppi(raw_ppi: f64, name: &str, bytes: &[u8]) -
     let r = import_result(name, bytes)?;
     let mut doc = r.document;
     raw_resolution(raw_ppi, &r.warnings, &mut doc);
+    crate::import_prepare::prepare_imported_document(&mut doc, &crate::jobs::JobCtx::new())?;
     Ok((doc, r.source_read_only))
 }
 
@@ -144,7 +147,12 @@ pub(super) fn revert(s: &mut Session) -> Result<Value> {
 /// linear) — the working space ACES render pipelines write. Only the io default is
 /// replaced; an embedded or EXIF-declared profile is kept untouched.
 pub(crate) fn tag_exr_colorspace(s: &Session, name: &str, doc: &mut Document) {
-    if !name.to_ascii_lowercase().ends_with(".exr") || !s.prefs.get().file_handling.exr_aces_cg {
+    tag_exr_colorspace_with_policy(s.prefs.get().file_handling.exr_aces_cg, name, doc);
+}
+
+/// Apply a captured EXR preference before worker-side color conversion, preserving declared profiles.
+pub(crate) fn tag_exr_colorspace_with_policy(exr_aces_cg: bool, name: &str, doc: &mut Document) {
+    if !name.to_ascii_lowercase().ends_with(".exr") || !exr_aces_cg {
         return;
     }
     let linear = craft_cms::Builtin::LinearSrgb.profile().to_bytes();
@@ -165,7 +173,8 @@ pub(crate) fn raw_open_resolution(s: &Session) -> f64 {
     s.batch_open.as_ref().map_or_else(|| s.prefs().raw_defaults.resolution, |binding| binding.raw_ppi)
 }
 
-fn raw_resolution(ppi: f64, warnings: &[String], doc: &mut Document) {
+/// Apply captured raw resolution only to developed imports and finite preference values.
+pub(crate) fn raw_resolution(ppi: f64, warnings: &[String], doc: &mut Document) {
     if ppi.is_finite() && warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE)) {
         doc.resolution_dpi = ppi.clamp(1.0, 10_000.0) as f32;
     }
@@ -190,6 +199,20 @@ pub fn open_bytes_as_with_options(
 ) -> Result<Value> {
     let mut opts = crate::jobs::import_options(s.prefs());
     opts.psd_high_memory_approved = approve_high_memory;
+    open_bytes_as_with_import_options(s, name, bytes, as_ext, path, &opts)
+}
+
+/// Decode with an explicit historical sample order without granting high-memory approval.
+pub fn open_bytes_as_with_sample_order(
+    s: &mut Session,
+    name: &str,
+    bytes: &[u8],
+    as_ext: Option<&str>,
+    path: Option<String>,
+    sample_order: Option<photocraft_io::HistoricalXcfSampleOrder>,
+) -> Result<Value> {
+    let mut opts = crate::jobs::import_options(s.prefs());
+    opts.historical_xcf_sample_order = sample_order;
     open_bytes_as_with_import_options(s, name, bytes, as_ext, path, &opts)
 }
 
@@ -238,8 +261,14 @@ pub fn open_bytes_as_with_import_options(
         return Err(EngineError::Other(format!("{name}: a color profile question requires interactive opening or suppressWarnings")));
     }
     // Color Settings policies (preserve / convert / discard the embedded profile).
+    let protected = path.as_ref().filter(|_| r.source_read_only).cloned();
+    let color = s.color.open_policy(&mut doc, s.prefs().file_handling.ignore_exif_profile_tag);
+    s.prepare_imported_document(&mut doc, &crate::jobs::JobCtx::new())?;
     let (i, color, view_warning) =
-        s.admit_import_with_initial_view(r.source_read_only, r.initial_view, |s| s.open_document(doc, path.filter(|_| !r.source_read_only)))?;
+        s.admit_import_with_initial_view(r.source_read_only, r.initial_view, |s| (s.add_document(doc, path.filter(|_| !r.source_read_only)), color))?;
+    if let Some(state) = s.active_mut() {
+        state.protected_import_source = protected;
+    }
     if let Some(warning) = view_warning {
         r.warnings.push(warning);
     }
@@ -248,7 +277,8 @@ pub fn open_bytes_as_with_import_options(
     }
     batch_open_notice(s, name, &r.warnings, &color);
     // Import notes (e.g. how a camera raw was developed, or that only its preview opened).
-    Ok(json!({"document": i, "color": color, "warnings": r.warnings}))
+    let conversion = s.active().map(|st| crate::import_report_cmds::summary(st.doc.metadata.import_conversion.as_ref())).unwrap_or(Value::Null);
+    Ok(json!({"document": i, "color": color, "warnings": r.warnings, "importConversion": conversion}))
 }
 
 /// A saved estimate authorizes only the verified source in the explicit approval flow.

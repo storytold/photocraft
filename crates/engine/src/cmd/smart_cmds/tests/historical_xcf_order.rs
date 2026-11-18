@@ -165,3 +165,21 @@ fn placed_and_filtered_stages_separate_opposite_choices_and_never_guess_none() {
         }
     }
 }
+
+#[test]
+fn cancelled_source_preparation_rejects_warm_explicit_order_without_reinterpretation() {
+    let bytes = fixture::historical_pixel(false);
+    let format = PixelFormat::RGBA16;
+    for order in [Order::LittleEndian, Order::BigEndian] {
+        let image = source_image_with_order("cancelled-order.xcf", &bytes, format, Some(order)).unwrap();
+        assert_pixel(&image.surface.pixel(0, 0), pixel(order));
+        let ctx = JobCtx::new();
+        ctx.cancel();
+        assert!(matches!(
+            super::super::source::source_image_in_with_order("cancelled-order.xcf", &bytes, format, Some(order), &ctx),
+            Err(EngineError::Cancelled)
+        ));
+        let image = source_image_with_order("cancelled-order.xcf", &bytes, format, Some(order)).unwrap();
+        assert_pixel(&image.surface.pixel(0, 0), pixel(order));
+    }
+}
