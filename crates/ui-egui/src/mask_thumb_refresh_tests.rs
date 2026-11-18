@@ -2,13 +2,13 @@
 //! Invert, not only brush strokes. A fresh Reveal All mask has no tiles, so inverting it only
 //! changes the surface's default pixel; the thumbnail cache key must see that.
 
-use egui::vec2;
-use egui_kittest::Harness;
+use craft::layers::ui::thumbs::LayerThumb;
+use craft::ui::primitives::textures::{ThumbRequest, ThumbSource};
 use photocraft_doc::LayerId;
 use photocraft_raster::Surface;
 use serde_json::json;
 
-use crate::mask_thumbs_ui::THUMB_MASK;
+use crate::panels::layers_tree::PhotoThumbs;
 use crate::{PhotocraftApp, surface_fingerprint};
 
 #[test]
@@ -21,29 +21,21 @@ fn fingerprint_sees_the_default_pixel() {
     assert_eq!(surface_fingerprint(&white), surface_fingerprint(&white.clone()));
 }
 
+/// The mask thumbnail's revision follows Invert on a tile-less mask.
 #[test]
 fn inverting_a_tileless_mask_refreshes_its_thumbnail() {
-    let mut s = photocraft_engine::Session::new();
-    s.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
-    let id = s.execute("layer.new.layer", json!({"name": "Masked"})).unwrap()["layer"].as_u64().unwrap();
-    s.execute("layer.layerMask.revealAll", json!({"layer": id})).unwrap();
-    let mut h = Harness::builder().with_size(vec2(1440.0, 1000.0)).with_max_steps(64).build_eframe(move |cc| {
-        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        PhotocraftApp::new(s, crate::Services::default())
-    });
-    let ctx = h.ctx.clone();
-    let (req, _rx) = crate::control::ControlRequest::new("ui.set", json!({"dockTabs": {"layers": 0}}));
-    crate::control::handle(h.state_mut(), &ctx, &req);
-    h.run_steps(8);
-    let key = (LayerId(id), THUMB_MASK);
-    let before = h.state().thumbs.get(&key).map(|(r, _)| *r).expect("mask thumbnail drawn");
-
-    h.state_mut().run("image.adjustments.invert", json!({"target": "mask"})).unwrap();
-    h.run_steps(4);
-    let mask = h.state().session.active().unwrap().doc.layer(LayerId(id)).unwrap().mask.clone().unwrap();
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
+    let id = LayerId(app.run("layer.new.layer", json!({"name": "Masked"})).unwrap()["layer"].as_u64().unwrap());
+    app.run("layer.layerMask.revealAll", json!({"layer": id.0})).unwrap();
+    let revision = |app: &PhotocraftApp| {
+        let doc = &app.session.active().unwrap().doc;
+        PhotoThumbs::new(app, doc).revision(&LayerThumb::mask(id), &ThumbRequest::for_cell(32.0, 1.0))
+    };
+    let before = revision(&app);
+    app.run("image.adjustments.invert", json!({"target": "mask"})).unwrap();
+    let mask = app.session.active().unwrap().doc.layer(id).unwrap().mask.clone().unwrap();
     assert_eq!(mask.surface.tile_count(), 0, "the inverted Reveal All mask is still tile-less");
     assert_eq!(mask.surface.default_pixel(), vec![0.0], "and now hides everything");
-    let after = h.state().thumbs.get(&key).map(|(r, _)| *r).expect("mask thumbnail drawn");
-    assert_ne!(before, after, "the thumbnail was rebuilt after Invert");
-    assert_eq!(after, surface_fingerprint(&mask.surface) ^ 200u64 << 40 ^ 100u64 << 16, "keyed on the inverted mask and the document size");
+    assert_ne!(revision(&app), before, "the thumbnail is rebuilt after Invert");
 }

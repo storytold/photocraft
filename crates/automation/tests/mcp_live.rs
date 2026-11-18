@@ -9,8 +9,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use craft::automation::agents::{self, Connection};
 use photocraft_automation::PhotocraftMcp;
-use photocraft_automation::agent_link::{self, Connection};
 use photocraft_automation::live::LiveConfig;
 use photocraft_engine::prefs::WhenAppClosed;
 use rmcp::model::{CallToolRequestParams, CallToolResult, ClientConfig};
@@ -70,9 +70,9 @@ struct FakeApp {
 fn fake_app(dir: &Path, name: &'static str) -> FakeApp {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
-    let token_file = dir.join(agent_link::TOKEN_FILE);
+    let token_file = dir.join(agents::TOKEN_FILE);
     let token = photocraft_automation::security::replace_token_file(&token_file).unwrap();
-    agent_link::write_connection(dir, &Connection::new(port, token_file)).unwrap();
+    agents::write_connection(dir, &Connection::new(port, token_file, "PhotoCraft test")).unwrap();
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let stopped = stop.clone();
     std::thread::spawn(move || {
@@ -83,7 +83,7 @@ fn fake_app(dir: &Path, name: &'static str) -> FakeApp {
             let token = token.clone();
             std::thread::spawn(move || {
                 let mut out = stream.try_clone().unwrap();
-                // The app's own handshake (challenge or token), as `control_server` runs it.
+                // The app's own handshake (challenge or token), as the app's control server runs it.
                 let mut handshake = photocraft_automation::security::ServerHandshake::new();
                 let mut authenticated = false;
                 for line in BufReader::new(stream).lines() {
@@ -116,7 +116,7 @@ fn fake_app(dir: &Path, name: &'static str) -> FakeApp {
 fn quit(app: FakeApp) {
     app.stop.store(true, Ordering::SeqCst);
     let _ = std::net::TcpStream::connect(("127.0.0.1", app.port));
-    while agent_link::probe(app.port, Duration::from_millis(200)) {
+    while agents::probe(app.port, Duration::from_millis(200)) {
         std::thread::sleep(Duration::from_millis(10));
     }
 }
@@ -145,7 +145,7 @@ async fn a_closed_app_is_a_tool_error_that_says_what_to_do() {
     let gone = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = gone.local_addr().unwrap().port();
     drop(gone);
-    agent_link::write_connection(&dir, &Connection::new(port, dir.join(agent_link::TOKEN_FILE))).unwrap();
+    agents::write_connection(&dir, &Connection::new(port, dir.join(agents::TOKEN_FILE), "PhotoCraft test")).unwrap();
     let r = call(&client, "ui_inspect", json!({})).await;
     assert!(text(&r).contains("isn't running"), "{}", text(&r));
     client.cancel().await.unwrap();
@@ -168,7 +168,7 @@ async fn follows_the_app_across_restarts_on_new_ports_and_tokens() {
     assert_eq!(r.is_error, Some(false), "{}", text(&r));
     assert!(text(&r).contains("second"), "{}", text(&r));
     quit(second);
-    std::fs::remove_file(dir.join(agent_link::CONNECTION_FILE)).unwrap();
+    std::fs::remove_file(dir.join(agents::CONNECTION_FILE)).unwrap();
     let r = call(&client, "ui_inspect", json!({})).await;
     assert_eq!(r.is_error, Some(true));
     client.cancel().await.unwrap();
@@ -286,7 +286,7 @@ async fn headless_uses_the_app_folders_and_stays_headless() {
     quit(app);
     // A folder that doesn't exist is a clear error, not a crash.
     prefs(&dir, json!({"connectAgents": true, "whenAppClosed": "headless", "readRoot": dir.join("missing").to_string_lossy()}));
-    std::fs::remove_file(dir.join(agent_link::CONNECTION_FILE)).unwrap();
+    std::fs::remove_file(dir.join(agents::CONNECTION_FILE)).unwrap();
     let client = connect(PhotocraftMcp::live(live(&dir, None))).await;
     let r = call(&client, "command_list", json!({})).await;
     assert_eq!(r.is_error, Some(true));
