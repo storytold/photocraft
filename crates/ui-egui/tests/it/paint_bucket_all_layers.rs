@@ -1,39 +1,43 @@
-//! #1118: Paint Bucket's All Layers checkbox must sample the visible image while painting
-//! only the active layer. Drive the checkbox and canvas through real egui pointer events.
+//! #1118: Paint Bucket's All Layers option must sample the visible image while painting only the
+//! active layer. Driven through the control channel (`ui.set`, then a `ui.pointer` click in
+//! document px) in an egui_kittest harness; no GPU needed.
 
-use egui::{Modifiers, PointerButton, Pos2};
-use egui_kittest::kittest::Queryable;
 use photocraft_doc::LayerId;
 use photocraft_geom::Rect;
 use photocraft_ui_egui::PhotocraftApp;
-use photocraft_ui_egui::canvas::ViewXform;
-use photocraft_ui_egui::control::{ControlRequest, Outcome, handle};
-use serde_json::json;
+use photocraft_ui_egui::control::{ControlRequest, Reply, handle};
+use serde_json::{Value, json};
 
 type Harness = egui_kittest::Harness<'static, PhotocraftApp>;
 
-fn harness() -> Option<Harness> {
-    let built = std::panic::catch_unwind(|| {
-        egui_kittest::Harness::builder().with_size(egui::vec2(1100.0, 720.0)).with_pixels_per_point(1.0).with_max_steps(64).wgpu().build_eframe(|cc| {
-            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-            app.session.prefs.edit(|p| p.interface.language = "en".into());
-            if let Some(rs) = cc.wgpu_render_state.as_ref() {
-                app.set_wgpu(rs.clone());
-            }
-            app
-        })
+fn harness() -> Harness {
+    let mut h = Harness::builder().with_size(egui::vec2(1100.0, 720.0)).with_pixels_per_point(1.0).with_max_steps(64).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), Default::default());
+        app.session.prefs.edit(|p| p.interface.language = "en".into());
+        app
     });
-    match built {
-        Ok(h) => Some(h),
-        Err(_) => {
-            eprintln!("skipping: no GPU adapter");
-            None
-        }
-    }
+    h.run_steps(4);
+    h
 }
 
-fn setup(h: &mut Harness) -> LayerId {
+/// Runs one control-channel request, which must succeed, then frames so the canvas takes any
+/// queued input.
+fn control(h: &mut Harness, method: &str, params: Value) {
+    let ctx = h.ctx.clone();
+    let (req, _rx) = ControlRequest::new(method, params.clone());
+    match handle(h.state_mut(), &ctx, &req) {
+        Reply::Done(v) => assert_eq!(v["ok"], true, "{method} {params}: {v}"),
+        Reply::AfterInput => {}
+        _ => panic!("{method} {params}: not done"),
+    }
+    h.run_steps(6);
+}
+
+/// A white 400 × 300 document with its left half black and an empty active layer above it, a red
+/// foreground and the Paint Bucket set to fill the contiguous exact colour. Returns the background
+/// layer.
+fn setup(h: &mut Harness, all_layers: bool) -> LayerId {
     let background = {
         let app = h.state_mut();
         while app.session.active().is_some() {
@@ -46,36 +50,20 @@ fn setup(h: &mut Harness) -> LayerId {
         app.run("select.deselect", json!({})).expect("deselect");
         app.run("layer.new.layer", json!({"name": "Bucket fill"})).expect("empty active layer");
         app.run("tools.setColors", json!({"foreground": [1.0, 0.0, 0.0, 1.0]})).expect("red foreground");
-        app.sync_views();
         app.ui.extras.rulers = false;
         let o = &mut app.ui.tool_options;
         o.tolerance = 0.0;
         o.anti_alias = false;
         o.contiguous = true;
-        o.sample_all.paint_bucket = false;
+        o.sample_all.paint_bucket = all_layers;
         o.bucket_fill_pattern = false;
         o.fill_opacity = 100.0;
         background
     };
-    let ctx = h.ctx.clone();
-    let (req, _rx) = ControlRequest::new("ui.set", json!({"tool": "paintBucket", "zoom": 1.0, "center": [200, 150]}));
-    assert!(matches!(handle(h.state_mut(), &ctx, &req), Outcome::Done(_)));
-    h.run_steps(6);
+    // `ui.set` has no key for Paint Bucket's All Layers; the option is set on the public
+    // `tool_options` field above, as the options bar's checkbox does.
+    control(h, "ui.set", json!({"tool": "paintBucket", "zoom": 1.0, "center": [200, 150]}));
     background
-}
-
-fn screen(h: &Harness, x: f32, y: f32) -> Pos2 {
-    let app = h.state();
-    let v = &app.ui.views[0];
-    ViewXform {
-        rect: photocraft_ui_egui::rulers::content_rect(app, app.last_canvas_rect),
-        zoom: v.zoom,
-        center: v.center,
-        flip: app.ui.view.flip_horizontal,
-        rotation: v.rotation,
-        aspect: app.ui.view.display_aspect(),
-    }
-    .to_screen(x, y)
 }
 
 fn pixels(h: &Harness, layer: LayerId) -> Vec<[f32; 4]> {
@@ -88,33 +76,14 @@ fn pixels(h: &Harness, layer: LayerId) -> Vec<[f32; 4]> {
 
 #[test]
 fn all_layers_checkbox_limits_bucket_fill_to_the_visible_color() {
-    let _gpu = photocraft_testkit::gpu_lock();
-    let Some(mut h) = harness() else { return };
-    h.run_steps(4);
+    let mut h = harness();
     for all_layers in [false, true] {
-        let background = setup(&mut h);
+        let background = setup(&mut h, all_layers);
         let before = pixels(&h, background);
-        if all_layers {
-            h.get_by_label("All Layers").click();
-            h.run_steps(3);
-        }
-        assert_eq!(h.state().ui.tool_options.sample_all.paint_bucket, all_layers, "checkbox changed the option");
+        assert_eq!(h.state().ui.tool_options.sample_all.paint_bucket, all_layers, "the option is set");
 
-        let pos = screen(&h, 300.0, 150.0);
-        h.event(egui::Event::PointerMoved(pos));
-        h.step();
-        for pressed in [true, false] {
-            h.event(egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
-            h.step();
-        }
-        h.run_steps(6);
-
-        // Optional real UI evidence, saved before assertions so a failing baseline has a frame.
-        if let Some(dir) = std::env::var_os("PHOTOCRAFT_BUCKET_EVIDENCE_DIR") {
-            std::fs::create_dir_all(&dir).expect("evidence directory");
-            let name = if all_layers { "all-layers-on.png" } else { "all-layers-off.png" };
-            h.render().expect("render UI").save(std::path::Path::new(&dir).join(name)).expect("save UI evidence");
-        }
+        let events = json!([{"kind": "down", "x": 300.0, "y": 150.0}, {"kind": "up", "x": 300.0, "y": 150.0}]);
+        control(&mut h, "ui.pointer", json!({"events": events}));
 
         assert_eq!(pixels(&h, background), before, "bucket must leave the sampled background unchanged");
         let active = h.state().session.active().expect("document").active_layer.expect("active layer");

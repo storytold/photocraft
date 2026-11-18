@@ -1,10 +1,11 @@
+use craft_psd::atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem};
+use craft_psd::descriptor::{Descriptor, Id, UnicodeString, Value as D};
 use photocraft_doc::LayerContent;
+use photocraft_engine::actions_cmds::{ActionList, ActionsFile};
 use photocraft_engine::{Session, atn_cmds};
-use photocraft_psd::atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem};
-use photocraft_psd::descriptor::{Descriptor, Id, UnicodeString, Value as D};
 use serde_json::json;
 
-#[path = "../../../psd/tests/common/csh_fixture.rs"]
+#[path = "../common/csh_fixture.rs"]
 mod csh_fixture;
 
 const SHAPE_ID: &str = "original-fixture-square";
@@ -213,7 +214,7 @@ fn custom_shape_uses_installed_id_despite_name_collision_and_undoes() {
         let mut s = fixture(depth);
         install_square(&mut s);
         let before = saved(&s);
-        s.actions.list = imported.actions.clone();
+        s.actions.list = ActionList::from_file(ActionsFile::new(imported.actions.clone(), Vec::new()));
         assert_eq!(s.execute("actions.play", json!({"action":"Shape"})).unwrap()["ran"], 1);
         assert_eq!(pixels(&s), expected, "{depth}-bit square custom kernel");
         s.execute("edit.undo", json!({})).unwrap();
@@ -253,7 +254,7 @@ fn custom_shape_smart_filter_keeps_geometry_across_save_without_preset_library()
 fn imported_csh_id_resolves_in_an_action_after_reimport_and_preference_reload() {
     let mut s = fixture(16);
     let bytes = csh_fixture::triangle_csh();
-    let id = photocraft_psd::csh::parse(&bytes).unwrap()[0].id.clone();
+    let id = craft_psd::csh::parse(&bytes).unwrap()[0].id.clone();
     let p = json!({"data":photocraft_paint::tile::b64_encode(&bytes)});
     s.execute("shape.presets.importCsh", p.clone()).unwrap();
     s.execute("shape.presets.importCsh", p).unwrap();
@@ -276,7 +277,7 @@ fn imported_csh_id_resolves_in_an_action_after_reimport_and_preference_reload() 
         .with("keyOriginType", D::Integer(9));
     let imported = atn_cmds::import(&encoded(d)).unwrap();
     assert!(imported.unsupported.is_empty());
-    s.actions.list = imported.actions;
+    s.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
     let before = saved(&s);
     assert_eq!(s.execute("actions.play", json!({"action":"Shape"})).unwrap()["ran"], 1);
     assert_eq!(pixels(&s), pixels(&expected));
@@ -285,7 +286,7 @@ fn imported_csh_id_resolves_in_an_action_after_reimport_and_preference_reload() 
     // This original fixture has the same ID but a different path. Keep both presets
     // available by their unique names, while refusing ambiguous action playback.
     let other = csh_fixture::polygon_csh(&[&[(0.25, 0.25), (0.75, 0.25), (0.75, 0.75), (0.25, 0.75)]]);
-    assert_eq!(photocraft_psd::csh::parse(&other).unwrap()[0].id, id);
+    assert_eq!(craft_psd::csh::parse(&other).unwrap()[0].id, id);
     s.execute("shape.presets.importCsh", json!({"data":photocraft_paint::tile::b64_encode(&other)})).unwrap();
     let result = s.execute("actions.play", json!({"action":"Shape"})).unwrap();
     assert_eq!(result["ran"], 0);
@@ -314,7 +315,7 @@ fn missing_or_invalid_custom_shapes_refuse_before_document_or_history_changes() 
         assert_eq!(s.active().unwrap().history.past_len(), history);
     }
     let imported = atn_cmds::import(&encoded(descriptor())).unwrap();
-    s.actions.list = imported.actions;
+    s.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
     // Playback reports a failed step in its successful response; native command errors are not outer errors.
     let result = s.execute("actions.play", json!({"action":"Shape"})).unwrap();
     assert_eq!(result["ran"], 0);
@@ -359,7 +360,7 @@ fn noncanonical_shape_outer_metadata_stays_on_the_preserved_path() {
         d.name = name;
         d.class_id = class_id;
         let imported = atn_cmds::import(&encoded(d.clone())).unwrap();
-        assert_eq!(imported.actions[0].steps[0].0, atn_cmds::PHOTOSHOP_STEP);
+        assert_eq!(imported.actions[0].steps[0].command, atn_cmds::PHOTOSHOP_STEP);
         let (out, _) = atn_cmds::export("Shapes", &[&imported.actions[0]], &[], false).unwrap();
         assert_eq!(atn::parse(&out).unwrap().actions[0].items[0].descriptor, Some(d));
     }
@@ -378,14 +379,14 @@ fn unrepresented_shape_fields_stay_whole_and_native_geometry_refuses_atn_export(
         d.items.retain(|(k, _)| !k.is(key));
         d.items.push((Id::new(key), value));
         let imported = atn_cmds::import(&encoded(d.clone())).unwrap();
-        assert_eq!(imported.actions[0].steps[0].0, atn_cmds::PHOTOSHOP_STEP);
+        assert_eq!(imported.actions[0].steps[0].command, atn_cmds::PHOTOSHOP_STEP);
         let (out, _) = atn_cmds::export("Shapes", &[&imported.actions[0]], &[], false).unwrap();
         assert_eq!(atn::parse(&out).unwrap().actions[0].items[0].descriptor, Some(d));
     }
     let imported = atn_cmds::import(&encoded(descriptor())).unwrap();
     for (key, value) in [("shapePath", json!({"subpaths":[]})), ("shape", json!("star")), ("target", json!("mask")), ("shapeId", json!(""))] {
         let mut a = imported.actions[0].clone();
-        a.steps[0].1[key] = value;
+        a.steps[0].params[key] = value;
         assert!(atn_cmds::export("Shapes", &[&a], &[], false).is_err());
     }
 }

@@ -292,7 +292,9 @@ pub(crate) fn start(
     gpu_attempt_ms: f64,
 ) {
     let all = blocks(doc.bounds());
-    let display_key = display.as_deref().map_or(0, |d| d.texture_key);
+    // What the texture stores, like `texture_key`: a Multichannel document's inks follow the Spot
+    // dot gain, so blocks drawn with another gain aren't this state's.
+    let display_key = display.as_deref().map_or(0, |d| d.texture_key) ^ super::display::ink_preview_key(&doc);
     let gamma = text_gamma(app);
     // Taken again when a running redraw continues: the edit (or Memory Usage) may have changed it.
     let cap = keep_cap(app, doc.id);
@@ -413,12 +415,10 @@ fn collect(r: &mut Redraw, p: Piece) {
     r.collected_bytes = bytes;
 }
 
-/// The active document's redraw in the status bar: "Redrawing" and how much is done.
-pub(crate) fn status(app: &PhotocraftApp, ui: &mut egui::Ui) {
-    let Some(r) = app.session.active().and_then(|st| app.redraws.get(&st.doc.id)) else { return };
-    let t = crate::theme::Tokens::get(ui.ctx());
-    ui.label(egui::RichText::new(format!("{:.0}%", r.fraction() * 100.0)).color(t.text_dim).size(11.5).monospace());
-    ui.label(egui::RichText::new(tl!("Redrawing")).color(t.text_dim).size(12.0));
+/// The active document's redraw as the status bar shows it: "Redrawing" and how much is done.
+pub(crate) fn progress(app: &PhotocraftApp) -> Option<craft::ui::bars::StatusProgress> {
+    let r = app.session.active().and_then(|st| app.redraws.get(&st.doc.id))?;
+    Some(craft::ui::bars::StatusProgress::new(tl!("Redrawing"), Some(r.fraction())))
 }
 
 /// Stop document `doc`'s redraw (its canvas was redrawn some other way, or is gone).

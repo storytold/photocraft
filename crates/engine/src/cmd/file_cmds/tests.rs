@@ -1,4 +1,17 @@
 use super::*;
+use crate::actions_cmds::{ActionList, ActionStep, ActionsFile};
+
+/// An `ActionList` holding `actions` in order.
+fn list_of(actions: Vec<crate::actions_cmds::Action>) -> ActionList {
+    ActionList::from_file(ActionsFile::new(actions, Vec::new()))
+}
+
+/// Appends `actions` to `list`, each through the list's own name check.
+fn push_all(list: &mut ActionList, actions: Vec<crate::actions_cmds::Action>) {
+    for action in actions {
+        list.push(action).unwrap();
+    }
+}
 
 // Named Batch action regression adapted from #7170 by @HirthikBalaji.
 /// Named action lookup retains the original #7170 behavior while rejecting recursive Batch calls.
@@ -9,9 +22,9 @@ fn batch_resolves_action_by_name_and_detects_recursion() {
     let out = join(&dir, "out");
     std::fs::create_dir_all(&out).unwrap();
     let mut s = Session::new();
-    let mut action = crate::actions_cmds::Action::new("Scale", vec![("image.imageSize".into(), json!({"width":16,"height":16}))]);
+    let mut action = crate::actions_cmds::Action::new("Scale", vec![ActionStep::new("image.imageSize", json!({"width":16,"height":16}))]);
     action.set = Some("Ops".into());
-    s.actions.list.push(action);
+    s.actions.list.push(action).unwrap();
     let result = s.execute("file.automate.batch", json!({"action":"Scale","set":"Ops","input":[input.clone()],"output":out})).unwrap();
     assert_eq!(result["files"].as_array().unwrap().len(), 1, "{result}");
     for p in [json!({"action":"Nonexistent"}), json!({"action":"Scale","set":"Wrong set"})] {
@@ -67,15 +80,15 @@ fn batch_structured_names_keep_image_format_and_refuse_unsupported_save_routing(
     // One composition witness: Save Actions -> Load Actions -> named Batch -> actual PNG bytes.
     let mut child = crate::actions_cmds::Action::new("Child", vec![]);
     child.set = Some("S".into());
-    s.actions.list.push(child);
+    s.actions.list.push(child).unwrap();
     let params = json!({"input":dir,"output":output,"action":"Child","set":"S","includeSubfolders":false,"flatOutput":true,
         "overrideSaveAs":false,"stopOnError":true,"includeNonImages":true,"namingComponents":[{"text":"from-atn"}]});
-    let driver = crate::actions_cmds::Action::new("Driver", vec![("file.automate.batch".into(), params)]);
+    let driver = crate::actions_cmds::Action::new("Driver", vec![ActionStep::new("file.automate.batch", params)]);
     let (bytes, skipped) = crate::atn_cmds::export("S", &[&driver], &[], false).unwrap();
     assert!(skipped.is_empty());
     let imported = crate::atn_cmds::import(&bytes).unwrap();
     assert!(imported.unsupported.is_empty());
-    s.actions.list.extend(imported.actions);
+    push_all(&mut s.actions.list, imported.actions);
     s.execute("actions.play", json!({"action":"Driver"})).unwrap();
     assert!(std::fs::read(join(&output, "from-atn")).unwrap().starts_with(b"\x89PNG\r\n\x1a\n"));
 }
@@ -110,18 +123,19 @@ fn batch_recorded_stop_for_errors_retains_earlier_outputs_and_stops_before_later
     assert!(native["errors"].as_array().unwrap().is_empty(), "{native}");
     let mut child = crate::actions_cmds::Action::new("Child", vec![]);
     child.set = Some("S".into());
-    s.actions.list.push(child);
+    s.actions.list.push(child).unwrap();
     let output = join(&dir, "recorded");
     let p = json!({"input":input,"output":output,"action":"Child","set":"S","stopOnError":true,"includeNonImages":true,
         "includeSubfolders":false,"overrideSaveAs":false,"flatOutput":true,
         "namingComponents":[{"component":"name"},{"component":"extension"}]});
     let sentinel = json!({"width":7,"height":9});
-    let driver = crate::actions_cmds::Action::new("Driver", vec![("file.automate.batch".into(), p.clone()), ("file.new".into(), sentinel.clone())]);
+    let driver =
+        crate::actions_cmds::Action::new("Driver", vec![ActionStep::new("file.automate.batch", p.clone()), ActionStep::new("file.new", sentinel.clone())]);
     let (bytes, skipped) = crate::atn_cmds::export("S", &[&driver], &[], false).unwrap();
     assert!(skipped.is_empty());
     let imported = crate::atn_cmds::import(&bytes).unwrap();
-    assert_eq!(imported.actions[0].steps[1].0, "file.new", "the after-Batch sentinel must be replayable");
-    s.actions.list.extend(imported.actions);
+    assert_eq!(imported.actions[0].steps[1].command, "file.new", "the after-Batch sentinel must be replayable");
+    push_all(&mut s.actions.list, imported.actions);
     let result = s.execute("actions.play", json!({"action":"Driver"})).unwrap();
     assert_eq!(result["ran"], 0, "{result}");
     assert_eq!(result["failed"]["id"], "file.automate.batch");
@@ -145,7 +159,7 @@ fn batch_folder_input_controls(s: &mut Session, dir: &str, input: &str, first: &
     png(&output, "ignored.png", 3, 2, "#ffffff");
     let sub = join(input, "sub");
     std::fs::create_dir_all(&sub).unwrap();
-    let raw = join(&sub, "d.cr3");
+    let raw = join(&sub, "d.orf");
     std::fs::copy(first, &raw).unwrap();
     let result = s
         .execute(
@@ -205,16 +219,16 @@ fn batch_save_and_close_preserves_caller_and_failed_sources() {
     let before = caller_state(&s);
     let mut child = crate::actions_cmds::Action::new(
         "Child",
-        vec![("image.adjustments.invert".into(), json!({})), ("file.saveAs".into(), json!({})), ("file.close".into(), json!({}))],
+        vec![ActionStep::new("image.adjustments.invert", json!({})), ActionStep::new("file.saveAs", json!({})), ActionStep::new("file.close", json!({}))],
     );
     child.set = Some("S".into());
-    s.actions.list.push(child);
+    s.actions.list.push(child).unwrap();
     let params = json!({"input":dir,"destination":"saveAndClose","action":"Child","set":"S",
         "includeSubfolders":false,"overrideSaveAs":false,"stopOnError":true,"includeNonImages":true});
-    let driver = crate::actions_cmds::Action::new("Driver", vec![("file.automate.batch".into(), params)]);
+    let driver = crate::actions_cmds::Action::new("Driver", vec![ActionStep::new("file.automate.batch", params)]);
     let (bytes, skipped) = crate::atn_cmds::export("S", &[&driver], &[], false).unwrap();
     assert!(skipped.is_empty());
-    s.actions.list.extend(crate::atn_cmds::import(&bytes).unwrap().actions);
+    push_all(&mut s.actions.list, crate::atn_cmds::import(&bytes).unwrap().actions);
     let result = s.execute("actions.play", json!({"action":"Driver"})).unwrap();
     assert_eq!(result["ran"], 1, "{result}");
     assert!(result.get("failed").is_none(), "{result}");
@@ -324,8 +338,8 @@ fn batch_override_open_follows_called_conditional_and_script_steps() {
     let mut s = session(7, 9, 8);
     let caller = photocraft_format::save_to_bytes(doc(&s), &Default::default()).unwrap();
     let prefs = serde_json::to_value(s.prefs()).unwrap();
-    s.actions.list.push(crate::actions_cmds::Action::new("Open", vec![("file.openAs".into(), json!({"path":recorded,"as":"png"}))]));
-    let actions = serde_json::to_value(&s.actions.list).unwrap();
+    s.actions.list.push(crate::actions_cmds::Action::new("Open", vec![ActionStep::new("file.openAs", json!({"path":recorded,"as":"png"}))])).unwrap();
+    let actions = s.actions.list.to_file().to_json().unwrap();
     let steps = json!([["actions.conditional",{"if":"always","then":"Open"}],
         ["file.scripts.browse",{"steps":[["file.closeAll",{}],["file.openAs",{"path":recorded,"as":"png"}]]}],
         ["image.adjustments.invert",{}]]);
@@ -335,7 +349,7 @@ fn batch_override_open_follows_called_conditional_and_script_steps() {
             .execute(
                 "file.automate.batch",
                 json!({"input":[first,second],"output":output,"steps":steps,
-            "calledActions":s.actions.list,"overrideOpen":enabled}),
+            "calledActions":s.actions.list.actions(),"overrideOpen":enabled}),
             )
             .unwrap();
         assert!(result["errors"].as_array().unwrap().is_empty(), "{result}");
@@ -354,7 +368,7 @@ fn batch_override_open_follows_called_conditional_and_script_steps() {
     let invalid = join(&dir, "invalid-override");
     assert!(s.execute("file.automate.batch", json!({"input":[first],"output":invalid,"steps":[],"overrideOpen":"true"})).is_err());
     assert!(!std::path::Path::new(&invalid).exists());
-    assert_eq!(serde_json::to_value(&s.actions.list).unwrap(), actions);
+    assert_eq!(s.actions.list.to_file().to_json().unwrap(), actions);
     assert_eq!(serde_json::to_value(s.prefs()).unwrap(), prefs);
     assert_eq!(photocraft_format::save_to_bytes(doc(&s), &Default::default()).unwrap(), caller);
     assert!(s.batch_open.is_none());
@@ -382,7 +396,7 @@ fn batch_override_open_authorizes_effective_path_and_carries_failure_budget() {
     let existing = png(&output, "b.png", 3, 2, "#4488aa");
     let intact = std::fs::read(&existing).unwrap();
     let mut s = Session::new();
-    s.actions.list.push(crate::actions_cmds::Action::new("Open", vec![("file.openAs".into(), json!({"path":"/recorded.png","as":"png"}))]));
+    s.actions.list.push(crate::actions_cmds::Action::new("Open", vec![ActionStep::new("file.openAs", json!({"path":"/recorded.png","as":"png"}))])).unwrap();
     s.batch_open = Some(BatchOpen { path: first.clone(), sources: Vec::new(), raw_ppi: 300.0, read_only: false });
     assert!(matches!(s.execute("file.openAs", json!([1])), Err(EngineError::BadParams { .. })));
     assert!(s.documents().is_empty());
@@ -420,7 +434,7 @@ fn batch_override_open_nested_binding_and_save_close_preserve_sources() {
     let inner = join(&dir, "inner");
     let open = json!({"path":"/recorded.png","as":"png"});
     let mut s = Session::new();
-    s.actions.list.push(crate::actions_cmds::Action::new("Open", vec![("file.openAs".into(), open.clone())]));
+    s.actions.list.push(crate::actions_cmds::Action::new("Open", vec![ActionStep::new("file.openAs", open.clone())])).unwrap();
     let steps = json!([["actions.play",{"action":"Open"}],
         ["file.automate.batch",{"input":[second],"output":inner,"overrideOpen":true,"steps":[["file.openAs",open],["image.adjustments.invert",{}]]}],
         ["file.closeAll",{}],["file.openAs",open],["image.adjustments.invert",{}]]);
@@ -481,14 +495,17 @@ fn batch_quiet_profile_open_uses_caller_policy_and_retains_diagnostics() {
     assert_eq!(result["notices"][0]["color"]["action"], "converted");
     assert_eq!(result["notices"][0]["color"]["ask"], false);
     let saved = photocraft_io::import("a.png", &std::fs::read(join(&output, "a.png")).unwrap()).unwrap().document;
-    let profile = photocraft_cms::Profile::parse(saved.icc_profile.as_ref().unwrap()).unwrap();
-    assert!(profile.same_colors(photocraft_cms::Builtin::Srgb.profile()));
+    let profile = craft_cms::Profile::parse(saved.icc_profile.as_ref().unwrap()).unwrap();
+    assert!(profile.same_colors(craft_cms::Builtin::Srgb.profile()));
     // A script calling an action with a failing inner Batch still retains both import reports.
     let inner = join(&dir, "inner");
-    s.actions.list.push(crate::actions_cmds::Action::new(
-        "Quiet inner",
-        vec![("file.automate.batch".into(), json!({"input":[source,bad],"output":inner,"suppressWarnings":true,"stopOnError":true,"steps":[]}))],
-    ));
+    s.actions
+        .list
+        .push(crate::actions_cmds::Action::new(
+            "Quiet inner",
+            vec![ActionStep::new("file.automate.batch", json!({"input":[source,bad],"output":inner,"suppressWarnings":true,"stopOnError":true,"steps":[]}))],
+        ))
+        .unwrap();
     let nested = s
         .execute(
             "file.automate.batch",
@@ -524,14 +541,14 @@ fn named_open_document_batch_keeps_cycle_context_and_live_recorder() {
     for mutual in [false, true] {
         let mut s = Session::new();
         s.execute("file.new", json!({"width":8,"height":8})).unwrap();
-        let nested = |name| ("file.automate.batch".into(), json!({"source":"open","action":name}));
-        s.actions.list = vec![
+        let nested = |name| ActionStep::new("file.automate.batch", json!({"source":"open","action":name}));
+        s.actions.list = list_of(vec![
             crate::actions_cmds::Action::new("Recorder", vec![]),
             crate::actions_cmds::Action::new("Loop A", vec![nested(if mutual { "Loop B" } else { "Loop A" })]),
             crate::actions_cmds::Action::new("Loop B", vec![nested("Loop A")]),
-            crate::actions_cmds::Action::new("Leaf", vec![("actions.play".into(), json!({"action":0}))]),
-        ];
-        let definitions = s.actions.list[1..].to_vec();
+            crate::actions_cmds::Action::new("Leaf", vec![ActionStep::new("actions.play", json!({"action":0}))]),
+        ]);
+        let definitions = s.actions.list.actions()[1..].to_vec();
         s.actions.playback_stack = vec!["Enclosing".into()];
         s.actions.recording = Some((s.journal.len(), 0));
         let take = s.actions.take;
@@ -543,16 +560,16 @@ fn named_open_document_batch_keeps_cycle_context_and_live_recorder() {
         assert_eq!(s.actions.playback_stack, ["Enclosing"]);
         assert_eq!(s.actions.recording.map(|(_, owner)| owner), Some(0));
         assert_eq!(s.actions.take, take);
-        assert_eq!(&s.actions.list[1..], definitions.as_slice());
+        assert_eq!(&s.actions.list.actions()[1..], definitions.as_slice());
         let before = doc(&s).walk().len();
-        let embedded = vec![crate::actions_cmds::Action::new("Embedded", vec![("layer.new.layer".into(), json!({"name":"visited"}))])];
+        let embedded = vec![crate::actions_cmds::Action::new("Embedded", vec![ActionStep::new("layer.new.layer", json!({"name":"visited"}))])];
         let result = batch(&mut s, &json!({"source":"open","action":"Leaf","calledActions":embedded})).unwrap();
         assert_eq!(result["errors"], json!([]), "{result}");
         assert_eq!(doc(&s).walk().len(), before + 1);
         assert_eq!(s.actions.playback_stack, ["Enclosing"]);
         assert_eq!(s.actions.recording.map(|(_, owner)| owner), Some(0));
         assert_eq!(s.actions.take, take);
-        assert_eq!(&s.actions.list[1..], definitions.as_slice());
+        assert_eq!(&s.actions.list.actions()[1..], definitions.as_slice());
     }
 }
 
@@ -574,13 +591,16 @@ fn named_open_document_batch_uses_effective_recorded_parameters() {
         s.execute("file.new", json!({"width":200,"height":100})).unwrap();
         let a = s.execute("layer.new.layer", json!({"name":"A"})).unwrap()["layer"].as_u64().unwrap();
         let b = s.execute("layer.new.layer", json!({"name":"B"})).unwrap()["layer"].as_u64().unwrap();
-        s.actions.list.push(crate::actions_cmds::Action::new(
-            "Recorded",
-            vec![
-                ("layer.setProps".into(), json!({"visible":false,"_actionLayer":{"name":"A","ordinal":0}})),
-                ("type.create".into(), json!({"text":"x","size":12,"xPercent":25.0,"yPercent":40.0})),
-            ],
-        ));
+        s.actions
+            .list
+            .push(crate::actions_cmds::Action::new(
+                "Recorded",
+                vec![
+                    ActionStep::new("layer.setProps", json!({"visible":false,"_actionLayer":{"name":"A","ordinal":0}})),
+                    ActionStep::new("type.create", json!({"text":"x","size":12,"xPercent":25.0,"yPercent":40.0})),
+                ],
+            ))
+            .unwrap();
         if through_batch {
             s.authorize = Some(gate);
             let result = s.execute("file.automate.batch", json!({"source":"open","action":"Recorded"})).unwrap();
@@ -678,8 +698,8 @@ fn background_recorded_batch_keeps_opening_and_destination_policies() {
     let bytes = std::fs::read(saved_path).unwrap();
     assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"), "the structured suffix does not choose the encoder");
     let saved = photocraft_io::import("result.png", &bytes).unwrap().document;
-    let profile = photocraft_cms::Profile::parse(saved.icc_profile.as_ref().unwrap()).unwrap();
-    assert!(profile.same_colors(photocraft_cms::Builtin::Srgb.profile()));
+    let profile = craft_cms::Profile::parse(saved.icc_profile.as_ref().unwrap()).unwrap();
+    assert!(profile.same_colors(craft_cms::Builtin::Srgb.profile()));
     assert_eq!(std::fs::read(source).unwrap(), original);
     assert_eq!(serde_json::to_value(s.prefs()).unwrap(), prefs);
     assert_eq!(s.color.settings, settings);
@@ -696,7 +716,8 @@ fn batch_quiet_raw_applies_prior_settings_and_workflow_without_touching_inputs()
     let bytes = DngSpec::cfa(w, h, mosaic(&scene(w, h), w, [0, 1, 1, 2], 0, 65535)).build();
     std::fs::write(&path, &bytes).unwrap();
     let sidecar = join(&dir, "raw.xmp");
-    let settings = photocraft_algo::camera_raw::CameraRaw { exposure: 1.0, ..Default::default() };
+    let mut settings = photocraft_algo::camera_raw::CameraRaw::default();
+    settings.exposure = 1.0;
     let xmp = photocraft_io::camera_raw_xmp::save(&settings);
     std::fs::write(&sidecar, &xmp).unwrap();
     let mut s = Session::new();
@@ -1446,7 +1467,7 @@ fn camera_raw_opens_as_16_bit_with_notes() {
     assert_eq!(doc(&s).depth, photocraft_color::SampleType::U16);
     // Damaged raw data is an error, not a crash.
     let mut bad = spec.build();
-    bad.truncate(bad.len() / 2);
+    bad.truncate(bad.len() / 5);
     assert!(open_bytes_as(&mut s, "bad.dng", &bad, None, None).is_err());
 }
 
@@ -1684,6 +1705,34 @@ fn save_a_copy_writes_the_targa_bits_asked_for() {
     }
 }
 
+/// A PDF keeps the document's spot channels as `/Separation` plates unless `pdfSpotPlates` is
+/// false; anything but a boolean is refused before anything is written.
+#[test]
+fn save_a_copy_writes_pdf_spot_plates_unless_asked_not_to() {
+    let dir = tmp("pdf-spot-plates");
+    let mut s = session(12, 6, 8);
+    s.execute("select.all", json!({})).unwrap();
+    s.execute("channel.newSpot", json!({"name": "Underbase White", "color": "#ffffff"})).unwrap();
+    let has = |bytes: &[u8], needle: &str| bytes.windows(needle.len()).any(|w| w == needle.as_bytes());
+    for (params, plates) in
+        [(json!({}), true), (json!({"pdfSpotPlates": true}), true), (json!({"pdfSpotPlates": null}), true), (json!({"pdfSpotPlates": false}), false)]
+    {
+        let out = join(&dir, "a.pdf");
+        let mut p = params.clone();
+        p["path"] = json!(out);
+        s.execute("file.saveACopy", p).unwrap();
+        let bytes = std::fs::read(&out).unwrap();
+        assert_eq!(has(&bytes, "/Separation /Underbase#20White /DeviceCMYK"), plates, "{params}");
+        assert_eq!(has(&bytes, "/OP true /op true"), plates, "{params}: overprint rides with the plates");
+    }
+    for bad in [json!(1), json!("true"), json!([true])] {
+        let out = join(&dir, "bad.pdf");
+        let r = s.execute("file.saveACopy", json!({"path": out, "pdfSpotPlates": bad}));
+        assert!(matches!(r, Err(EngineError::BadParams { .. })), "{bad}: {r:?}");
+        assert!(!std::path::Path::new(&out).exists(), "{bad}: nothing written");
+    }
+}
+
 /// `dpxBits` picks a DPX's bits per sample (byte 803 of the header); unset, it follows the
 /// document's depth. Anything but 8, 10, 12 or 16 is refused before anything is written.
 #[test]
@@ -1755,6 +1804,17 @@ fn dds_params_are_none_until_one_is_given() {
     assert_eq!(dds_param(&json!({"ddsCompression": null}), "file.saveAs").unwrap(), None);
     assert_eq!(dds_param(&json!({"ddsMipmaps": true}), "file.saveAs").unwrap(), Some(DdsOptions { compression: DdsCompression::None, mipmaps: true }));
     assert_eq!(dds_param(&json!({"ddsCompression": "bc2"}), "file.saveAs").unwrap(), Some(DdsOptions { compression: DdsCompression::Bc2, mipmaps: false }));
+}
+
+/// The layer export's `format` is an extension, never a path: separators and `..` are refused.
+#[test]
+fn layer_export_format_cannot_carry_path_components() {
+    let dir = tmp("fmt-path");
+    let mut s = session(8, 8, 8);
+    for bad in ["png/../../x", "..\\x", "a/b", ""] {
+        let r = s.execute("file.export.layersToFiles", json!({"dir": dir, "format": bad}));
+        assert!(matches!(r, Err(EngineError::BadParams { .. })), "{bad}: {r:?}");
+    }
 }
 
 /// A `tgaBits` other than 24 or 32 is a bad parameter, reported before anything is written.
@@ -1832,8 +1892,8 @@ fn image_previews_preference_controls_the_psd_thumbnail() {
     let dir = tmp("previews");
     let mut s = session(300, 200, 16);
     let has_thumbnail = |path: &str| {
-        let file = photocraft_psd::PsdFile::from_bytes(&std::fs::read(path).unwrap()).unwrap();
-        file.resources.iter().any(|r| r.id == photocraft_psd::resources::ids::THUMBNAIL)
+        let file = craft_psd::PsdFile::from_bytes(&std::fs::read(path).unwrap()).unwrap();
+        file.resources.iter().any(|r| r.id == craft_psd::resources::ids::THUMBNAIL)
     };
     for (ask, expect) in [(Ask::Always, true), (Ask::Never, false), (Ask::Ask, true)] {
         s.edit_prefs(|p| p.file_handling.image_previews = ask);
@@ -1854,7 +1914,7 @@ fn maximize_compatibility_preference_controls_the_psd_merged_image() {
     let dir = tmp("maximize");
     let mut s = session(300, 200, 16);
     s.execute("layer.new.layer", json!({})).unwrap();
-    let real_merged = |path: &str| photocraft_psd::PsdFile::from_bytes(&std::fs::read(path).unwrap()).unwrap().has_real_merged_data();
+    let real_merged = |path: &str| craft_psd::PsdFile::from_bytes(&std::fs::read(path).unwrap()).unwrap().has_real_merged_data();
     for (ask, expect) in [(Ask::Always, true), (Ask::Never, false), (Ask::Ask, true)] {
         s.edit_prefs(|p| p.file_handling.maximize_psd_compatibility = ask);
         for ext in ["psd", "psb"] {
@@ -1905,7 +1965,7 @@ fn maximize_compatibility_param_overrides_the_preference_for_one_save() {
     let dir = tmp("maximize-param");
     let mut s = session(300, 200, 16);
     s.execute("layer.new.layer", json!({})).unwrap();
-    let real_merged = |path: &str| photocraft_psd::PsdFile::from_bytes(&std::fs::read(path).unwrap()).unwrap().has_real_merged_data();
+    let real_merged = |path: &str| craft_psd::PsdFile::from_bytes(&std::fs::read(path).unwrap()).unwrap().has_real_merged_data();
     for (ask, param, expect) in [
         (Ask::Always, json!(false), false),
         (Ask::Never, json!(true), true),
@@ -1974,6 +2034,21 @@ fn place_embedded_centres_fits_and_embeds() {
         assert!(s.undo() && s.undo());
         assert_eq!(doc(&s).layers.len(), 1);
     }
+}
+
+/// A caller-chosen placement scale cannot ask for an image beyond the render limit.
+#[test]
+fn placing_refuses_a_scale_that_would_exceed_the_pixel_limit() {
+    let dir = tmp("place-huge-scale");
+    let small = png(&dir, "small.png", 200, 100, "#ff0000");
+    let mut s = session(100, 100, 8);
+    for scale in [1e9, 1e300, 1e308, 23170.25] {
+        assert!(matches!(s.execute("file.placeEmbedded", json!({"path": small, "scale": scale})), Err(EngineError::BadParams { .. })), "{scale}");
+    }
+    assert!(s.execute("file.placeEmbedded", json!({"path": small, "scale": 50})).is_ok());
+    // The error names the command that asked.
+    let linked = s.execute("file.placeLinked", json!({"path": small, "scale": 1e9}));
+    assert!(matches!(linked, Err(EngineError::BadParams { ref cmd, .. }) if cmd == "file.placeLinked"), "{linked:?}");
 }
 
 /// Preferences ▸ General ▸ Always Create Smart Objects When Placing: unchecked, an embedded place
@@ -2076,6 +2151,221 @@ fn file_info_round_trips_through_xmp_and_psd() {
     let out = write_file_info(Some(foreign), &json!({"authorTitle": "Artist"}));
     assert!(out.contains("xmp:CreatorTool=\"Other App\""));
     assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
+}
+
+#[test]
+fn file_info_keeps_a_packet_whose_rdf_end_tag_is_spaced_or_prefixed() {
+    // #11116: only the literal `</rdf:RDF>` retained the imported packet, so the valid
+    // spellings below — XML allows whitespace before the `>`, RDF allows any declared
+    // prefix — were replaced by a blank packet and unrelated properties were lost.
+    const NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+    let cases = [
+        format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="{NS}"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></rdf:RDF ></x:xmpmeta>"#
+        ),
+        format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><r:RDF xmlns:r="{NS}"><r:Description r:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></r:RDF></x:xmpmeta>"#
+        ),
+        format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><RDF xmlns="{NS}"><Description about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></RDF></x:xmpmeta>"#
+        ),
+        // Whitespace around the declaration's `=` (REC-xml 3.1 allows it) still binds the prefix.
+        format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><r:RDF xmlns:r = "{NS}"><r:Description r:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></r:RDF></x:xmpmeta>"#
+        ),
+    ];
+    for packet in cases {
+        let out = write_file_info(Some(&packet), &json!({"authorTitle": "Artist"}));
+        assert!(out.contains("xmp:CreatorTool=\"Other App\""), "the unrelated property survives: {out}");
+        assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist", "the edit landed: {out}");
+        // Whatever the packet binds, the inserted description binds every prefix it uses.
+        let desc = out[out.find("<rdf:Description rdf:about=\"\"").unwrap()..].lines().next().unwrap().to_string();
+        for p in ["rdf", "dc", "photoshop", "xmpRights"] {
+            assert!(desc.contains(&format!("xmlns:{p}=\"")) || packet.contains(&format!("xmlns:{p}=\"")), "prefix {p} unbound: {desc}");
+        }
+    }
+    // A `</rdf:RDF>` that only appears inside a comment must not be taken as the packet's end
+    // tag: the edit inserts before the real one, keeping it inside the RDF element (#11116).
+    let commented = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="{NS}"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></rdf:RDF><!-- </rdf:RDF> --></x:xmpmeta>"#
+    );
+    let out = write_file_info(Some(&commented), &json!({"authorTitle": "Artist"}));
+    assert!(out.find("AuthorsPosition").unwrap() < out.find("<!--").unwrap(), "the edit is not inside the comment: {out}");
+    assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
+    // A `</rdf:RDF>` inside a CDATA section neither hides the real end tag (which would replace
+    // the packet) nor tricks the writer into inserting inside the section (#11116).
+    let cdata = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="{NS}"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/><rdf:li><![CDATA[ </rdf:RDF> fake ]]></rdf:li></rdf:RDF></x:xmpmeta>"#
+    );
+    let out = write_file_info(Some(&cdata), &json!({"authorTitle": "Artist"}));
+    assert!(out.contains("xmp:CreatorTool=\"Other App\""), "the CDATA packet keeps its properties: {out}");
+    assert!(out.find("AuthorsPosition").unwrap() < out.rfind("</rdf:RDF>").unwrap(), "the edit is before the real end tag: {out}");
+    assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
+    // A foreign element whose name merely starts like the RDF one (`<rdf:RDFjunk>`) is not the
+    // RDF start tag, and its `</rdf:RDFjunk>` is not the end tag (#11116).
+    let lookalike = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="{NS}"><rdf:RDFjunk xmlns:rdf="http://example.com/other"><r:Thing/></rdf:RDFjunk></rdf:RDF></x:xmpmeta>"#
+    );
+    let out = write_file_info(Some(&lookalike), &json!({"authorTitle": "Artist"}));
+    assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist", "{out}");
+    assert!(out.rfind("<rdf:Description rdf:about=\"\"").unwrap() < out.rfind("</rdf:RDF>").unwrap(), "the edit sits inside the RDF element: {out}");
+    // A packet with no RDF end tag at all (self-closing) still gets the canonical packet.
+    let selfclosed = format!(r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="{NS}"/></x:xmpmeta>"#);
+    let out = write_file_info(Some(&selfclosed), &json!({"authorTitle": "Artist"}));
+    assert!(out.contains("<?xpacket begin="), "the canonical packet: {out}");
+    assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
+}
+
+/// Review follow-ups on the RDF end-tag finder (#11116): an XML Name prefix is not ASCII-only;
+/// character references decode before a namespace URI is compared; an `xmlns` mention inside
+/// character data binds nothing; and only the start tag of the element that is still open
+/// reaches the insertion point.
+#[test]
+fn file_info_reads_declarations_the_way_an_xml_reader_does() {
+    const NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+    // A Unicode prefix (NCName covers XML letters, not just ASCII): the packet is kept.
+    let unicode_prefix = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><ü:RDF xmlns:ü="{NS}"><ü:Description about="" xmlns:rdf="{NS}" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></ü:RDF></x:xmpmeta>"#
+    );
+    let out = write_file_info(Some(&unicode_prefix), &json!({"authorTitle": "Artist"}));
+    assert!(out.contains("xmp:CreatorTool=\"Other App\""), "the Unicode-prefixed packet keeps its properties: {out}");
+    assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
+    // `&#35;` decodes to `#`: the declaration binds the RDF namespace as far as XML is concerned.
+    let encoded = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns&#35;"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></rdf:RDF></x:xmpmeta>"#.to_string();
+    let out = write_file_info(Some(&encoded), &json!({"authorTitle": "Artist"}));
+    assert!(!out.contains("<?xpacket begin="), "the packet is kept, not rebuilt: {out}");
+    assert!(out.contains("xmp:CreatorTool=\"Other App\""), "{out}");
+    assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
+    // An `xmlns` mention in the document's own text — after the real end tag — binds nothing:
+    // a fake `</z:RDF>` written there must not capture the insertion.
+    let textual = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><r:RDF xmlns:r="{NS}"><r:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></r:RDF>note: xmlns:z="{NS}" then </z:RDF> as words</x:xmpmeta>"#
+    );
+    let out = write_file_info(Some(&textual), &json!({"authorTitle": "Artist"}));
+    let edit = out.find("AuthorsPosition").unwrap();
+    assert!(edit < out.find("</r:RDF>").unwrap(), "the edit inserts inside the RDF element: {out}");
+    assert!(out.find("</r:RDF>").unwrap() < out.find("</z:RDF>").unwrap(), "the text mention stays where it was written: {out}");
+    assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
+    // Declarations written inside a processing instruction or a quoted attribute value are text,
+    // and bind nothing: a later `</q:RDF>` must not capture the insertion.
+    let hidden = format!(
+        r#"<?xml-stylesheet xmlns:q="{NS}"?><x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="xmlns:q='{NS}'"><r:RDF xmlns:r="{NS}"><r:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></r:RDF></x:xmpmeta>trailing words</q:RDF>"#
+    );
+    let out = write_file_info(Some(&hidden), &json!({"authorTitle": "Artist"}));
+    assert!(out.contains("xmp:CreatorTool=\"Other App\""), "the packet is kept: {out}");
+    assert!(out.find("AuthorsPosition").unwrap() < out.find("</r:RDF>").unwrap(), "the edit inserts inside the RDF element: {out}");
+    assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
+    // A self-closed `<rdf:RDF>` earlier in the packet does not reach the insertion point in a
+    // later RDF-spelled element: the inserted description re-declares its `rdf` prefix.
+    let re_opened = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="{NS}"/><q:RDF xmlns:q="{NS}"><q:Description about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></q:RDF></x:xmpmeta>"#
+    );
+    let out = write_file_info(Some(&re_opened), &json!({"authorTitle": "Artist"}));
+    assert!(out.contains("xmp:CreatorTool=\"Other App\""), "the second RDF-spelled element is kept: {out}");
+    let desc = out[out.rfind("<rdf:Description rdf:about=\"\"").unwrap()..].lines().next().unwrap().to_string();
+    assert!(desc.contains(&format!("xmlns:rdf=\"{NS}\"")), "the inserted description binds rdf itself: {desc}");
+    assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
+}
+
+/// The `rdf` prefix of the inserted description is resolved in the scope of the element it lands
+/// in, not taken from an earlier `rdf:RDF` that already closed (#11116). Each output is parsed
+/// as namespace-aware XML: a description whose `rdf` prefix is unbound reads as a plain
+/// `Description`, so two `rdf:Description` elements prove the prefix resolved.
+#[test]
+fn file_info_binds_rdf_for_the_description_from_the_open_element_scope() {
+    const NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+    let rdf_descriptions = |out: &str| {
+        let namespaces = [("rdf", NS), ("xmp", "http://ns.adobe.com/xap/1.0/"), ("photoshop", "http://ns.adobe.com/photoshop/1.0/"), ("x", "adobe:ns:meta/")];
+        let canonical = craft_xml::Canonical::new(&namespaces);
+        let doc = craft_xml::Options::canonical(&canonical).parse(out.as_bytes()).expect("the output is well-formed XML");
+        let names: Vec<String> = doc.descendants().filter(|e| e.name.ends_with("Description")).map(|e| e.name.clone()).collect();
+        names
+    };
+    // An ordinary closed `rdf:RDF` sibling comes first; the edit lands in the later `q:RDF`, which
+    // does not bind `rdf` at all.
+    let closed_sibling = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="{NS}"></rdf:RDF><q:RDF xmlns:q="{NS}"><q:Description q:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></q:RDF></x:xmpmeta>"#
+    );
+    let out = write_file_info(Some(&closed_sibling), &json!({"authorTitle": "Artist"}));
+    assert!(out.contains("xmp:CreatorTool=\"Other App\""), "the later RDF element is kept: {out}");
+    assert_eq!(rdf_descriptions(&out), ["rdf:Description", "rdf:Description"], "the inserted description binds rdf: {out}");
+    assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
+    // The element the edit lands in binds `rdf` to a foreign namespace: re-declare it.
+    let foreign_rdf = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><q:RDF xmlns:q="{NS}" xmlns:rdf="urn:other"><q:Description q:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></q:RDF></x:xmpmeta>"#
+    );
+    let out = write_file_info(Some(&foreign_rdf), &json!({"authorTitle": "Artist"}));
+    assert_eq!(rdf_descriptions(&out), ["rdf:Description", "rdf:Description"], "{out}");
+    // The canonical case keeps its single declaration: the element binds `rdf` and the inserted
+    // description does not repeat it.
+    let canonical = format!(r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="{NS}"><rdf:Description rdf:about=""/></rdf:RDF></x:xmpmeta>"#);
+    let out = write_file_info(Some(&canonical), &json!({"authorTitle": "Artist"}));
+    assert_eq!(rdf_descriptions(&out), ["rdf:Description", "rdf:Description"], "{out}");
+    assert_eq!(out.matches(&format!("xmlns:rdf=\"{NS}\"")).count(), 1, "{out}");
+}
+
+/// A prefix that an ancestor binds and an inner element rebinds resolves to the INNER binding
+/// (Namespaces in XML 1.0, section 6): the innermost open scope is searched first (#11116,
+/// review of 952741fe). Both outputs are parsed as namespace-aware XML.
+#[test]
+fn file_info_resolves_a_prefix_in_the_innermost_scope_that_binds_it() {
+    const NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+    let rdf_descriptions = |out: &str| {
+        let namespaces = [("rdf", NS), ("xmp", "http://ns.adobe.com/xap/1.0/"), ("photoshop", "http://ns.adobe.com/photoshop/1.0/"), ("x", "adobe:ns:meta/")];
+        let canonical = craft_xml::Canonical::new(&namespaces);
+        let doc = craft_xml::Options::canonical(&canonical).parse(out.as_bytes()).expect("the output is well-formed XML");
+        let names: Vec<String> = doc.descendants().filter(|e| e.name.ends_with("Description")).map(|e| e.name.clone()).collect();
+        names
+    };
+    // The ancestor binds `rdf` to the RDF namespace, the element the edit lands in rebinds it to a
+    // foreign one: the inserted description must declare `rdf` itself.
+    let shadowed = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/" xmlns:rdf="{NS}"><q:RDF xmlns:q="{NS}" xmlns:rdf="urn:other"><q:Description q:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></q:RDF></x:xmpmeta>"#
+    );
+    let out = write_file_info(Some(&shadowed), &json!({"authorTitle": "Artist"}));
+    assert!(out.contains("xmp:CreatorTool=\"Other App\""), "the packet is kept: {out}");
+    assert_eq!(rdf_descriptions(&out), ["rdf:Description", "rdf:Description"], "the inserted description belongs to the RDF namespace: {out}");
+    assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
+    // The ancestor binds `r` to the RDF namespace; a later element rebinds `r` and holds its own
+    // `</r:RDF>`: that closing tag names a foreign element and is not the RDF end tag.
+    let shadowed_end = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/" xmlns:r="{NS}"><r:RDF><r:Description r:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></r:RDF><w xmlns:r="urn:other"><r:RDF></r:RDF></w></x:xmpmeta>"#
+    );
+    let out = write_file_info(Some(&shadowed_end), &json!({"authorTitle": "Artist"}));
+    let (edit, real, foreign) = (out.find("AuthorsPosition").unwrap(), out.find("</r:RDF>").unwrap(), out.rfind("</r:RDF>").unwrap());
+    assert!(edit < real && real < foreign, "the edit lands in the RDF element, not in the shadowed one: {out}");
+    assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
+}
+
+/// A prefix bound to the RDF namespace in one element and rebound to another namespace in a later
+/// sibling is two different names: only the closing tag that resolves to the RDF namespace in its
+/// own scope is the RDF end tag, so the edit never lands in the foreign element (#11116).
+#[test]
+fn file_info_resolves_the_rdf_end_tag_in_namespace_scope() {
+    const NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+    // The prefix is rebound to a foreign namespace on a later sibling `r:RDF`.
+    let rebound = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><r:RDF xmlns:r="{NS}"><r:Description r:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></r:RDF><r:RDF xmlns:r="urn:other"></r:RDF></x:xmpmeta>"#
+    );
+    let out = write_file_info(Some(&rebound), &json!({"authorTitle": "Artist"}));
+    let (edit, real, foreign) = (out.find("AuthorsPosition").unwrap(), out.find("</r:RDF>").unwrap(), out.rfind("</r:RDF>").unwrap());
+    assert!(edit < real && real < foreign, "the edit sits in the RDF-namespace element, not the foreign one: {out}");
+    assert!(out.contains("xmp:CreatorTool=\"Other App\""), "{out}");
+    // The same through a default namespace: `<RDF>` is foreign where `xmlns` is rebound.
+    let default_rebound = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><RDF xmlns="{NS}"><Description about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></RDF><RDF xmlns="urn:other"></RDF></x:xmpmeta>"#
+    );
+    let out = write_file_info(Some(&default_rebound), &json!({"authorTitle": "Artist"}));
+    let (edit, real) = (out.find("AuthorsPosition").unwrap(), out.find("</RDF>").unwrap());
+    assert!(edit < real, "the edit sits in the RDF-namespace element: {out}");
+    // An inner rebinding does not leak out of its element: the outer `r:RDF` still closes the RDF.
+    let nested = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><r:RDF xmlns:r="{NS}"><r:Description r:about=""><f:g xmlns:f="urn:f" xmlns:r="urn:other"><r:RDF></r:RDF></f:g></r:Description></r:RDF></x:xmpmeta>"#
+    );
+    let out = write_file_info(Some(&nested), &json!({"authorTitle": "Artist"}));
+    let inner = out.find("<r:RDF></r:RDF>").unwrap();
+    assert!(out.find("AuthorsPosition").unwrap() > inner, "the edit is after the foreign element, in the real RDF: {out}");
+    assert!(out.find("AuthorsPosition").unwrap() < out.rfind("</r:RDF>").unwrap(), "{out}");
 }
 
 fn camera_exif() -> Vec<u8> {
@@ -2579,7 +2869,7 @@ fn layers_to_files_reports_skipped_layers_without_changing_files() {
                 {"layer": adjustment, "name": "Levels/α", "reason": "adjustment layer has no pixels of its own"}
             ])
         );
-        assert_eq!(result["files"], json!([join(&dir, "doc_0001_Background.png")]));
+        assert_eq!(result["files"], json!([join(&dir, "doc_0002_Background.png")]));
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
         assert_eq!(s.active().unwrap().doc.layers.len(), before.layers.len());
         assert!(!s.active().unwrap().doc.layer(LayerId(hidden.as_u64().unwrap())).unwrap().visible);
@@ -2634,7 +2924,7 @@ fn layers_to_files_writes_each_visible_layer() {
     let r = s.execute("file.export.layersToFiles", json!({"dir": dir, "prefix": "doc", "format": "png"})).unwrap();
     let files: Vec<String> = r["files"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
     assert_eq!(files.len(), 2, "{files:?}");
-    assert!(files[0].ends_with("doc_0000_Ink_1.png"), "{files:?}");
+    assert!(files[0].ends_with("doc_0001_Ink_1.png"), "{files:?}");
     assert!(files.iter().all(|f| std::path::Path::new(f).is_file()));
     let r = s.execute("file.export.layersToFiles", json!({"dir": dir, "visibleOnly": false, "format": "psd"})).unwrap();
     assert_eq!(r["files"].as_array().unwrap().len(), 3);
@@ -2693,6 +2983,41 @@ fn trimming_an_empty_layer_keeps_a_valid_nonzero_canvas() {
     let bytes = std::fs::read(result["files"][0].as_str().unwrap()).unwrap();
     let back = photocraft_io::import("empty.png", &bytes).unwrap().document;
     assert_eq!((back.size.width, back.size.height), (6, 7));
+}
+
+#[test]
+fn image_processor_scratch_sessions_answer_to_the_authorization_gate() {
+    fn deny_image(id: &str, _: &Value) -> Result<()> {
+        if id.starts_with("image.") { Err(EngineError::Other(format!("automation command `{id}` is disabled"))) } else { Ok(()) }
+    }
+    let dir = tmp("proc-gate");
+    let input = join(&dir, "in");
+    std::fs::create_dir_all(&input).unwrap();
+    png(&input, "a.png", 40, 20, "#ff0000");
+    let mut s = Session::new();
+    s.authorize = Some(deny_image);
+    let out = join(&dir, "out");
+    let r = s.execute("file.scripts.imageProcessor", json!({"input": input, "output": out, "format": "jpg", "width": 20, "height": 20})).unwrap();
+    assert!(r["files"].as_array().unwrap().is_empty(), "{r}");
+    assert_eq!(r["errors"].as_array().unwrap().len(), 1, "{r}");
+}
+
+#[test]
+fn batch_save_points_answer_to_the_authorization_gate() {
+    fn deny_save(id: &str, _: &Value) -> Result<()> {
+        if id == "file.save" { Err(EngineError::Other(format!("automation command `{id}` is disabled"))) } else { Ok(()) }
+    }
+    let dir = tmp("batch-save-gate");
+    let input = join(&dir, "in");
+    std::fs::create_dir_all(&input).unwrap();
+    png(&input, "a.png", 8, 8, "#ff0000");
+    let mut s = Session::new();
+    s.authorize = Some(deny_save);
+    let out = join(&dir, "out");
+    let r = s.execute("file.automate.batch", json!({"steps": [["file.save", {}]], "input": input, "output": out, "format": "png"})).unwrap();
+    assert!(r["files"].as_array().unwrap().is_empty(), "{r}");
+    assert_eq!(r["errors"].as_array().unwrap().len(), 1, "{r}");
+    assert!(!std::path::Path::new(&join(&out, "a.png")).exists());
 }
 
 #[test]
@@ -2758,15 +3083,16 @@ fn named_batch_cycles_stop_before_the_test_ceiling() {
             let params = json!({"action": "A", "source": source, "input": [input], "output": output, "format": "png"});
             let mut child = params.clone();
             child["action"] = json!(if route == "self" || route == "play-parent" { "A" } else { "B" });
-            let first = if route == "play-child" { ("actions.play".into(), json!({"action": "B"})) } else { ("file.automate.batch".into(), child) };
+            let first =
+                if route == "play-child" { ActionStep::new("actions.play", json!({"action": "B"})) } else { ActionStep::new("file.automate.batch", child) };
             let mut s = Session::new();
             if source == "open" {
                 s.execute("file.openAs", json!({"path": input})).unwrap();
             }
-            s.actions.list = vec![
+            s.actions.list = list_of(vec![
                 crate::actions_cmds::Action::new("A", vec![first]),
-                crate::actions_cmds::Action::new("B", vec![("file.automate.batch".into(), params.clone())]),
-            ];
+                crate::actions_cmds::Action::new("B", vec![ActionStep::new("file.automate.batch", params.clone())]),
+            ]);
             s.authorize = Some(bounded);
             CALLS.store(0, Ordering::SeqCst);
             let result =
@@ -2797,7 +3123,7 @@ fn named_batch_limits_nesting_and_keeps_the_callers_state() {
         if source == "open" {
             s.execute("file.openAs", json!({"path": input})).unwrap();
         }
-        s.actions.list.push(Action::new("Invert", vec![("image.adjustments.invert".into(), json!({}))]));
+        s.actions.list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
         s.actions.playing = 16;
         s.actions.playback_stack = (0..16).map(|i| format!("Parent{i}")).collect();
         let before = s.actions.clone();
@@ -2824,7 +3150,7 @@ fn named_batch_limits_nesting_and_keeps_the_callers_state() {
         assert_eq!(s.actions.playing, 0);
         assert!(s.actions.playback_stack.is_empty());
         s.execute("actions.stop", json!({})).unwrap();
-        assert_eq!(s.actions.list[1].steps, vec![("file.automate.batch".into(), params)]);
+        assert_eq!(s.actions.list.actions()[1].steps, vec![ActionStep::new("file.automate.batch", params)]);
     }
 }
 
@@ -2836,7 +3162,7 @@ fn named_batch_charges_the_existing_budget_across_inputs_and_children() {
     let input = png(&dir, "red.png", 8, 8, "#ff0000");
     let output = join(&dir, "out");
     let mut s = Session::new();
-    s.actions.list.push(Action::new("Large", vec![("image.adjustments.invert".into(), json!({})); 100]));
+    s.actions.list.push(Action::new("Large", vec![ActionStep::new("image.adjustments.invert", json!({})); 100])).unwrap();
     let result = s.execute("file.automate.batch", json!({"action": "Large", "input": vec![input.clone(); 1001], "output": output})).unwrap_err();
     assert!(result.to_string().contains("step limit"), "{result}");
     assert!(!std::path::Path::new(&output).exists());
@@ -2844,16 +3170,16 @@ fn named_batch_charges_the_existing_budget_across_inputs_and_children() {
     assert!(s.actions.playback_stack.is_empty());
 
     // A finished playback leaves its count behind; a new named Batch starts fresh.
-    s.actions.list = vec![Action::new("Empty", Vec::new())];
+    s.actions.list = list_of(vec![Action::new("Empty", Vec::new())]);
     s.actions.playback_steps = MAX_PLAYBACK_STEPS;
     let result = s.execute("file.automate.batch", json!({"action": "Empty", "input": [input], "output": join(&dir, "fresh")})).unwrap();
     assert_eq!(result["errors"], json!([]), "{result}");
     assert_eq!(result["files"].as_array().unwrap().len(), 1);
 
-    s.actions.list = vec![
-        Action::new("Outer", vec![("actions.play".into(), json!({"action": "Leaf"}))]),
-        Action::new("Leaf", vec![("select.deselect".into(), json!({})); 2]),
-    ];
+    s.actions.list = list_of(vec![
+        Action::new("Outer", vec![ActionStep::new("actions.play", json!({"action": "Leaf"}))]),
+        Action::new("Leaf", vec![ActionStep::new("select.deselect", json!({})); 2]),
+    ]);
     s.actions.playing = 1;
     s.actions.playback_stack = vec!["Parent".into()];
     s.actions.playback_steps = MAX_PLAYBACK_STEPS - 4;
@@ -2879,8 +3205,10 @@ fn named_batch_allows_nested_work_and_preserves_authorization() {
         let inner = join(&dir, &format!("inner-{denied}"));
         let child = json!({"action": "Leaf", "input": [input], "output": inner, "format": "png"});
         let mut s = Session::new();
-        s.actions.list =
-            vec![Action::new("Outer", vec![("file.automate.batch".into(), child)]), Action::new("Leaf", vec![("image.adjustments.invert".into(), json!({}))])];
+        s.actions.list = list_of(vec![
+            Action::new("Outer", vec![ActionStep::new("file.automate.batch", child)]),
+            Action::new("Leaf", vec![ActionStep::new("image.adjustments.invert", json!({}))]),
+        ]);
         if denied {
             s.authorize = Some(deny_invert);
         }
@@ -2913,8 +3241,8 @@ fn nested_batch_errors_stop_actions_but_direct_scripts_keep_results_and_continue
     assert_eq!(result["files"], json!([]));
     assert_eq!(result["errors"].as_array().unwrap().len(), 1);
     assert_eq!(result["errors"][0].as_object().unwrap().len(), 2, "ordinary errors still contain only file/error");
-    let steps = vec![("file.automate.batch".into(), batch), ("file.new".into(), json!({"width": 2, "height": 2}))];
-    s.actions.list.push(Action::new("Caller", steps.clone()));
+    let steps = vec![ActionStep::new("file.automate.batch", batch), ActionStep::new("file.new", json!({"width": 2, "height": 2}))];
+    s.actions.list.push(Action::new("Caller", steps.clone())).unwrap();
     let result = s.execute("actions.play", json!({"action": "Caller"})).unwrap();
     assert_eq!(result["ran"], 0, "{result}");
     assert!(result["failed"]["error"].as_str().unwrap().contains("no active document"), "{result}");
@@ -2941,11 +3269,11 @@ fn nested_batch_partial_failures_keep_outputs_and_stop_only_action_parents() {
         let mut s = Session::new();
         let output = join(&dir, caller);
         let batch = json!({"input": [input, corrupt], "output": output, "steps": [], "format": "png"});
-        let steps = vec![("file.automate.batch".into(), batch.clone()), ("file.new".into(), json!({"width": 2, "height": 2}))];
+        let steps = vec![ActionStep::new("file.automate.batch", batch.clone()), ActionStep::new("file.new", json!({"width": 2, "height": 2}))];
         let result = match caller {
             "batch" => s.execute("file.automate.batch", batch).unwrap(),
             "action" => {
-                s.actions.list.push(Action::new("Mixed", steps));
+                s.actions.list.push(Action::new("Mixed", steps)).unwrap();
                 let result = s.execute("actions.play", json!({"action": "Mixed"})).unwrap();
                 assert_eq!(result["ran"], 0, "{result}");
                 let error = result["failed"]["error"].as_str().unwrap();
@@ -2982,7 +3310,10 @@ fn successful_nested_batch_allows_later_action_steps() {
     let input = png(&dir, "red.png", 8, 8, "#ff0000");
     let mut s = Session::new();
     let batch = json!({"input": [input], "output": join(&dir, "success"), "steps": [], "format": "png"});
-    s.actions.list.push(Action::new("Success", vec![("file.automate.batch".into(), batch), ("file.new".into(), json!({"width": 2, "height": 2}))]));
+    s.actions
+        .list
+        .push(Action::new("Success", vec![ActionStep::new("file.automate.batch", batch), ActionStep::new("file.new", json!({"width": 2, "height": 2}))]))
+        .unwrap();
     let result = s.execute("actions.play", json!({"action": "Success"})).unwrap();
     assert!(result.get("failed").is_none(), "{result}");
     assert_eq!(result["ran"], 2);
@@ -3074,14 +3405,14 @@ fn cube_export_uses_only_selected_adjustments_in_document_order() {
     let first = s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap()["layer"].as_u64().unwrap();
     let second = s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap()["layer"].as_u64().unwrap();
     let both = s.execute("file.export.colorLookupTables", json!({"size": 3})).unwrap();
-    let all = photocraft_cms::lutfile::parse_cube(both["cube"].as_str().unwrap()).unwrap();
+    let all = craft_cms::lutfile::parse_cube(both["cube"].as_str().unwrap()).unwrap();
     assert_eq!(both["layerCount"], 2);
     assert!(all.data[0] < 0.001, "two Invert adjustments produce identity");
 
     // Selection comes from the Layers panel rather than the active layer alone.
     s.execute("layer.select", json!({"layer": first})).unwrap();
     let selected = s.execute("file.export.colorLookupTables", json!({"size": 3, "scope": "selected"})).unwrap();
-    let one = photocraft_cms::lutfile::parse_cube(selected["cube"].as_str().unwrap()).unwrap();
+    let one = craft_cms::lutfile::parse_cube(selected["cube"].as_str().unwrap()).unwrap();
     assert_eq!(selected["layerCount"], 1);
     assert!(one.data[0] > 0.999, "one invert maps black to white");
     assert_eq!(all.size, one.size);
@@ -3140,7 +3471,7 @@ fn exported_selected_cube_round_trips_through_lookup_importer() {
     assert_eq!(r["size"], 17);
     assert_eq!(r["layerCount"], 1);
     let text = std::fs::read_to_string(&path).unwrap();
-    let parsed = photocraft_cms::lutfile::parse_cube(&text).unwrap();
+    let parsed = craft_cms::lutfile::parse_cube(&text).unwrap();
     assert_eq!(parsed.size, 17);
     assert_eq!(parsed.data.len(), 17 * 17 * 17 * 3);
     assert!(parsed.data[..3].iter().all(|v| *v > 0.999));
@@ -3721,9 +4052,9 @@ fn folder_listing_recognises_gzipped_xcf_by_its_double_extension() {
 }
 
 /// A folder batch picks up every extension that the codecs open: Cineon, DICOM, Amiga IFF, PCX,
-/// XPM, DDS, the Netpbm family, and Photoshop templates. Not the raws whose usual files open only
-/// as the embedded JPEG preview (CR3, compressed ORF and RAF, RW2 other than raw formats 3, 4 and
-/// 5): a batch would process the thumbnail without a word.
+/// XPM, DDS, the Netpbm family, and Photoshop templates. Not raws that this build cannot decode
+/// natively (ORF, RAF, SRF, SR2, and RW2 variants other than raw formats 3, 4 and 5): a batch
+/// should not process an embedded JPEG preview without a word.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn folder_listing_takes_every_format_photocraft_opens() {
@@ -3870,6 +4201,33 @@ fn sanitize_keeps_windows_device_names_off_the_disk() {
     for name in ["console", "normal", "com10", "lpt0", "nullify", "con_", "com⁴", "com¹¹"] {
         assert_eq!(sanitize(name), name);
     }
+}
+
+/// A droplet whose steps run the same droplet stops at the nesting limit with an error for the
+/// input, rather than opening documents until the stack or memory runs out.
+#[test]
+fn a_droplet_that_runs_itself_stops_at_the_nesting_limit() {
+    let dir = tmp("droplet-recursion");
+    let input = png(&dir, "a.png", 4, 4, "#ff0000");
+    let droplet = join(&dir, "self.pcdroplet");
+    let out = join(&dir, "out");
+    let step = json!(["file.automate.runDroplet", {"droplet": droplet, "input": [input], "output": out}]);
+    std::fs::write(&droplet, json!({"photocraftDroplet": 1, "name": "self", "action": {"steps": [step]}, "options": {"format": "png"}}).to_string()).unwrap();
+    let mut s = Session::new();
+    // Each level runs the next in a scratch session; the innermost is refused, so this returns.
+    let r = s.execute("file.automate.runDroplet", json!({"droplet": droplet, "input": [input], "output": out})).unwrap();
+    assert_eq!(s.actions.batch_depth, 0);
+    // The limit reaches the outermost result: the input failed, nothing was saved unprocessed.
+    assert!(r["errors"][0]["error"].as_str().unwrap().contains("nested more than"), "{r}");
+    assert_eq!(r["files"], json!([]), "{r}");
+    assert!(!std::path::Path::new(&out).join("a.png").exists());
+    // At the limit, the droplet is refused before its file is read (this one doesn't exist).
+    s.actions.batch_depth = crate::actions_cmds::MAX_BATCH_DEPTH;
+    let missing = join(&dir, "missing.pcdroplet");
+    let e = s.execute("file.automate.runDroplet", json!({"droplet": missing, "input": [input], "output": out})).unwrap_err();
+    assert!(e.to_string().contains("nested more than"), "{e}");
+    let e = s.execute("file.automate.batch", json!({"steps": [], "input": [input], "output": out})).unwrap_err();
+    assert!(e.to_string().contains("nested more than"), "{e}");
 }
 
 #[test]
@@ -4126,8 +4484,8 @@ fn approve_memory_is_neither_journaled_nor_recorded_in_an_action() {
     assert_eq!((r["approved"].clone(), r["cancelled"].clone()), (json!(false), json!(true)));
     s.execute("actions.stop", json!({})).unwrap();
     assert!(s.journal.iter().all(|(command, _)| command != "file.approveMemory"), "one-shot approval must not become a journal entry: {:?}", s.journal);
-    let action = s.actions.list.first().expect("the recorded action");
-    assert!(action.steps.iter().all(|(command, _)| command != "file.approveMemory"), "one-shot approval must not replay from an action: {:?}", action.steps);
+    let action = s.actions.list.actions().first().expect("the recorded action");
+    assert!(action.steps.iter().all(|step| step.command != "file.approveMemory"), "one-shot approval must not replay from an action: {:?}", action.steps);
 }
 
 #[test]
@@ -4213,7 +4571,10 @@ fn playback_stops_after_a_cancelled_nested_batch() {
     REVIEW_CANCEL.with(|slot| *slot.borrow_mut() = Some(ctx.clone()));
     s.authorize = Some(cancel_at_marker);
     let batch = json!({"input": [input], "output": join(&dir, "out"), "steps": [["layer.renameLayer", {"name": "Cancel here"}]]});
-    s.actions.list.push(crate::actions_cmds::Action::new("Run", vec![("file.automate.batch".into(), batch), ("layer.new.layer".into(), json!({}))]));
+    s.actions
+        .list
+        .push(crate::actions_cmds::Action::new("Run", vec![ActionStep::new("file.automate.batch", batch), ActionStep::new("layer.new.layer", json!({}))]))
+        .unwrap();
     let layers = doc(&s).layers.len();
     let played = s.execute("actions.play", json!({"action": "Run"})).unwrap();
     REVIEW_CANCEL.with(|slot| *slot.borrow_mut() = None);
