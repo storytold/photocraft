@@ -186,7 +186,7 @@ impl CameraRawGpu {
 }
 
 #[cfg(test)]
-mod tests {
+mod gpu_tests {
     use super::*;
     use crate::camera_raw_ui::proxy::ProxyJob;
     use craft::imaging::ui::raw_develop::RawPreviewRequest;
