@@ -1,5 +1,8 @@
 //! The crate's integration tests, linked into one test binary.
 
+#[path = "../support/smart_filter_fixture.rs"]
+mod smart_filter_fixture;
+
 mod agent_tasks;
 mod agent_tasks_extended;
 mod agent_tasks_more;

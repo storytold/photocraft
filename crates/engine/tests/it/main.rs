@@ -1,5 +1,8 @@
 //! The crate's integration tests, linked into one test binary.
 
+#[path = "../common/csh_fixture.rs"]
+mod csh_fixture;
+
 mod actions_duplicate;
 mod actions_panel_menu;
 mod actions_record_again;
