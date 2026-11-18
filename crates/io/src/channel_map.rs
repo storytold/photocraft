@@ -60,7 +60,7 @@ pub(crate) fn display_info(channels: &[&AlphaChannel], transparency: bool) -> Ve
         };
         let rgb = color.to_rgb();
         out.extend_from_slice(
-            &craft_psd_channels::channel_resources::DisplayInfo {
+            &craft_psd::channel_resources::DisplayInfo {
                 space: SPACE_RGB,
                 components: [rgb[0], rgb[1], rgb[2], 0.0].map(|v| (v.clamp(0.0, 1.0) * 65535.0).round() as u16),
                 opacity: (opacity.clamp(0.0, 1.0) * 100.0).round() as u16,
@@ -76,13 +76,13 @@ pub(crate) fn display_info(channels: &[&AlphaChannel], transparency: bool) -> Ve
 /// merged transparency channel's), in the same records [`apply_display_info`] reads. A channel
 /// without a record is not a spot.
 pub(crate) fn spot_flags(data: &[u8], versioned: bool, skip: usize) -> Vec<bool> {
-    craft_psd_channels::channel_resources::display_info(data, versioned).skip(skip).map(|rec| rec.kind == 2).collect()
+    craft_psd::channel_resources::display_info(data, versioned).skip(skip).map(|rec| rec.kind == 2).collect()
 }
 
 /// The colour space of each extra channel's DisplayInfo record, after skipping `skip` records,
 /// in the same records [`apply_display_info`] reads.
 pub(crate) fn display_spaces(data: &[u8], versioned: bool, skip: usize) -> Vec<u16> {
-    craft_psd_channels::channel_resources::display_info(data, versioned).skip(skip).map(|rec| rec.space).collect()
+    craft_psd::channel_resources::display_info(data, versioned).skip(skip).map(|rec| rec.space).collect()
 }
 
 /// The spot colours of an Alternate Spot Colors resource (1067) by channel identifier, those in
@@ -90,9 +90,7 @@ pub(crate) fn display_spaces(data: &[u8], versioned: bool, skip: usize) -> Vec<u
 /// DisplayInfo colour in a space it does not document (psd-tools cmyk-alpha-spot.psd: 0x2331)
 /// and its ink here, in Lab.
 pub(crate) fn alternate_spot_colors(data: &[u8]) -> Vec<(u32, Color)> {
-    craft_psd_channels::channel_resources::alternate_spot_colors(data)
-        .filter_map(|rec| decode_known_color(rec.space, rec.components).map(|c| (rec.id, c)))
-        .collect()
+    craft_psd::channel_resources::alternate_spot_colors(data).filter_map(|rec| decode_known_color(rec.space, rec.components).map(|c| (rec.id, c))).collect()
 }
 
 /// Whether a DisplayInfo resource 1077 marks any channel as a spot (kind 2), in 13-byte records
@@ -107,7 +105,7 @@ pub(crate) fn display_info_marks_spot(data: &[u8]) -> bool {
 /// older 1007 with 14-byte records) to the imported channels in order, after skipping `skip`
 /// records (the merged transparency channel's).
 pub(crate) fn apply_display_info(data: &[u8], versioned: bool, skip: usize, channels: &mut [AlphaChannel]) {
-    for (c, rec) in channels.iter_mut().zip(craft_psd_channels::channel_resources::display_info(data, versioned).skip(skip)) {
+    for (c, rec) in channels.iter_mut().zip(craft_psd::channel_resources::display_info(data, versioned).skip(skip)) {
         let color = decode_color(rec.space, rec.components);
         let opacity = f32::from(rec.opacity.min(100)) / 100.0;
         match rec.kind {

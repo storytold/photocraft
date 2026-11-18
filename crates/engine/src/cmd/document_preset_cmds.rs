@@ -311,6 +311,21 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"deleted":name}))
 }
 
+/// Renames a preset where it stands, so the list keeps its order. Another preset's name is refused ignoring case; a
+/// change of case of the preset's own name is allowed (the rule of `PresetLibrary::rename`).
+fn rename(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "document.presets.rename";
+    let name = req_str(p, "name", CMD)?;
+    let new_name = checked_name(req_str(p, "newName", CMD)?).map_err(|e| bad(CMD, e))?;
+    let index = s.presets.documents.iter().position(|pr| pr.name.eq_ignore_ascii_case(name)).ok_or_else(|| bad(CMD, "No such document preset"))?;
+    if s.presets.documents.iter().enumerate().any(|(i, pr)| i != index && pr.name.eq_ignore_ascii_case(&new_name)) {
+        return Err(bad(CMD, format!("A preset named \"{new_name}\" already exists; choose another name")));
+    }
+    s.presets.documents[index].name.clone_from(&new_name);
+    s.presets_changed();
+    Ok(json!({"renamed":new_name}))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec {
@@ -351,6 +366,16 @@ pub fn specs() -> Vec<CommandSpec> {
             params: r#"{"name":str}"#,
             enabled: always,
             run: delete,
+            journal: true,
+        },
+        CommandSpec {
+            id: "document.presets.rename",
+            label: "Rename Document Preset",
+            menu: &[],
+            shortcut: None,
+            params: r#"{"name":str,"newName":str (trimmed, ASCII case-insensitive unique, 1..255 characters; the preset keeps its place in the list)}"#,
+            enabled: always,
+            run: rename,
             journal: true,
         },
         CommandSpec {
@@ -597,6 +622,25 @@ mod tests {
         next.load_prefs_json(&value.to_string()).unwrap();
         assert_eq!(next.presets.recent_documents.iter().map(|r| r.width).collect::<Vec<_>>(), [25, 24]);
         assert!(next.documents().is_empty(), "recording never creates a document");
+    }
+
+    #[test]
+    fn a_rename_keeps_the_position_refuses_another_presets_name_and_allows_a_change_of_case() {
+        let mut s = Session::new();
+        for name in ["One", "Two", "Three"] {
+            saved(&mut s, name, settings());
+        }
+        let names = |s: &Session| s.presets.documents.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+        s.execute("document.presets.rename", json!({"name":"Two","newName":" Zwei "})).unwrap();
+        assert_eq!(names(&s), ["One", "Zwei", "Three"]);
+        s.execute("document.presets.rename", json!({"name":"Zwei","newName":"ZWEI"})).unwrap();
+        assert_eq!(names(&s), ["One", "ZWEI", "Three"]);
+        let rev = s.prefs.rev();
+        for (name, new_name) in [("ZWEI", "one"), ("ZWEI", " "), ("Missing", "Other")] {
+            assert!(s.execute("document.presets.rename", json!({"name":name,"newName":new_name})).is_err(), "{name} -> {new_name}");
+        }
+        assert_eq!(names(&s), ["One", "ZWEI", "Three"]);
+        assert_eq!(s.prefs.rev(), rev, "a refused rename changes nothing");
     }
 
     #[test]

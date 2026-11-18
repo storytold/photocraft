@@ -7,6 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use photocraft_engine::Session;
+use photocraft_engine::actions_cmds::{Action, ActionColor, ActionStep};
 use serde_json::json;
 
 fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -33,13 +34,13 @@ const CEILING_UNSUPPORTED: usize = 540;
 /// A compound layer-property command deliberately becomes one Photoshop event per property
 /// (#8304). Compare that documented sequence exactly, including its target and every flag;
 /// all other commands and action metadata retain their original equality check.
-fn exported_action(action: &photocraft_engine::actions_cmds::Action) -> photocraft_engine::actions_cmds::Action {
+fn exported_action(action: &Action) -> Action {
     let mut out = action.clone();
     out.steps.clear();
     out.disabled.clear();
     out.dialogs.clear();
-    for (index, (id, params)) in action.steps.iter().enumerate() {
-        let mut steps = vec![(id.clone(), params.clone())];
+    for (index, ActionStep { command: id, params }) in action.steps.iter().enumerate() {
+        let mut steps = vec![ActionStep::new(id.clone(), params.clone())];
         if id == "layer.setProps"
             && let Some(object) = params.as_object()
         {
@@ -53,7 +54,7 @@ fn exported_action(action: &photocraft_engine::actions_cmds::Action) -> photocra
                         if let Some(target) = object.get("layer") {
                             property["layer"] = target.clone();
                         }
-                        (id.clone(), property)
+                        ActionStep::new(id.clone(), property)
                     })
                     .collect();
             }
@@ -74,22 +75,24 @@ fn exported_action(action: &photocraft_engine::actions_cmds::Action) -> photocra
 
 #[test]
 fn compound_roundtrip_expectation_keeps_properties_targets_flags_and_action_metadata() {
-    use photocraft_engine::actions_cmds::Action;
     let mut source = Action::new(
         "Properties",
-        vec![("layer.setProps".into(), json!({"layer": "Before", "name": "After", "opacity": 0.5, "blend": "Normal"})), ("select.inverse".into(), json!({}))],
+        vec![
+            ActionStep::new("layer.setProps", json!({"layer": "Before", "name": "After", "opacity": 0.5, "blend": "Normal"})),
+            ActionStep::new("select.inverse", json!({})),
+        ],
     );
     source.set = Some("Set".into());
-    source.color = "blue".into();
+    source.color = ActionColor::from_name("blue");
     source.disabled.insert(0);
     source.dialogs.insert(0);
     source.dialogs.insert(1);
     let mut expected = source.clone();
     expected.steps = vec![
-        ("layer.setProps".into(), json!({"layer": "Before", "opacity": 0.5})),
-        ("layer.setProps".into(), json!({"layer": "Before", "blend": "Normal"})),
-        ("layer.setProps".into(), json!({"layer": "Before", "name": "After"})),
-        ("select.inverse".into(), json!({})),
+        ActionStep::new("layer.setProps", json!({"layer": "Before", "opacity": 0.5})),
+        ActionStep::new("layer.setProps", json!({"layer": "Before", "blend": "Normal"})),
+        ActionStep::new("layer.setProps", json!({"layer": "Before", "name": "After"})),
+        ActionStep::new("select.inverse", json!({})),
     ];
     expected.disabled = [0, 1, 2].into_iter().collect();
     expected.dialogs = [0, 1, 2, 3].into_iter().collect();
@@ -130,7 +133,7 @@ fn atn_corpus_loads_saves_and_reloads() {
         steps += n_steps;
         unsupported += n_unsupported;
         println!("{name}: {} actions, {n_steps} steps, {n_unsupported} kept Photoshop steps {events:?}", loaded["actions"].as_array().map_or(0, Vec::len));
-        let first: Vec<_> = s.actions.list.iter().map(exported_action).collect();
+        let first: Vec<_> = s.actions.list.actions().iter().map(exported_action).collect();
         let saved = match s.execute("actions.save", json!({"set": loaded["set"]})) {
             Ok(v) => v,
             Err(e) => {
@@ -141,15 +144,15 @@ fn atn_corpus_loads_saves_and_reloads() {
         let bytes = photocraft_engine::paint::tile::b64_decode(saved["data"].as_str().unwrap_or("")).unwrap_or_default();
         let mut t = Session::new();
         match t.execute("actions.load", json!({"data": photocraft_engine::paint::tile::b64_encode(&bytes)})) {
-            Ok(_) if t.actions.list == first => {}
+            Ok(_) if t.actions.list.actions() == first.as_slice() => {}
             Ok(_) => {
                 // Name the first step that differs, so a mapping asymmetry is quick to find.
                 let detail = first
                     .iter()
-                    .zip(&t.actions.list)
+                    .zip(t.actions.list.actions())
                     .flat_map(|(a, b)| a.steps.iter().zip(&b.steps).enumerate().map(move |(i, (x, y))| (a.name.as_str(), i, x, y)))
                     .find(|(_, _, x, y)| x != y)
-                    .map(|(action, i, x, y)| format!("`{action}` step {}: {} {} → {} {}", i + 1, x.0, x.1, y.0, y.1))
+                    .map(|(action, i, x, y)| format!("`{action}` step {}: {} {} → {} {}", i + 1, x.command, x.params, y.command, y.params))
                     .unwrap_or_else(|| "the actions differ in count, flags or names".into());
                 failures.push(format!("{name}: the saved set loads to different actions: {detail}"));
             }
