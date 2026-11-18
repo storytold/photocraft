@@ -128,7 +128,7 @@ jobs:
           else
             echo "web=false" >> "$GITHUB_OUTPUT"
           fi
-          if git diff --name-only "$BASE" HEAD | grep -Eq '^(apps/|crates/(ui-egui|text|gpu|tablet|heif|format)/|Cargo\.lock$|craft-i18n\.rev$|(.*/)?build\.rs$|\.github/workflows/ci\.yml$)'; then
+          if git diff --name-only "$BASE" HEAD | grep -Eq '^(apps/|crates/(ui-egui|text|gpu|tablet|heif|format)/|Cargo\.lock$|craft-i18n\.rev$|(.*/)?build\.rs$|\.cargo/config\.toml$|\.config/nextest\.toml$|xtask/|scripts/ci-test-shard\.sh$|\.github/workflows/ci\.yml$)'; then
             echo "windows=true" >> "$GITHUB_OUTPUT"
           else
             echo "windows=false" >> "$GITHUB_OUTPUT"
@@ -540,7 +540,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           prefix-key: v1-rust
-          key: perf-release
+          shared-key: perf-release
           save-if: false
       - name: Quick performance suite
         run: cargo xtask perf --quick

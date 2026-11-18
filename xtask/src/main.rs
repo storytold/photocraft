@@ -40,7 +40,8 @@ commands:
                   tests (nextest --profile ci), panic_hunt, doctests, wasm and the i18n-report, with --locked
                   --features heif (stops at first failure). The gate splits it over its jobs: `lint` runs the
                   steps that need no test build; `tests` runs the tests and panic_hunt on the partition in
-                  $NEXTEST_PARTITION (`--gpu`: only nextest's gpu test group, each test's output shown;
+                  $NEXTEST_PARTITION (`--gpu`: all of nextest's gpu test group, whatever the partition, each
+                  test's output shown;
                   `--no-gpu`: every other test); `doctest` runs the doctests; `build` only builds what `tests`
                   builds (the cache warm-up). $PHOTOCRAFT_CI_EXCLUDE (packages separated by spaces) leaves
                   packages out of the test build and the doctests
@@ -483,7 +484,7 @@ fn ci_from_args(args: &[&str], exclude: Vec<String>) -> Result<(Vec<(&'static st
             &[Part::Test]
         }
         Some("tests") => {
-            options.partition = std::env::var("NEXTEST_PARTITION").ok().filter(|p| !p.is_empty());
+            options.partition = tests_partition(options.selection, std::env::var("NEXTEST_PARTITION").ok());
             &[Part::Test]
         }
         Some(step) => {
@@ -495,6 +496,12 @@ fn ci_from_args(args: &[&str], exclude: Vec<String>) -> Result<(Vec<(&'static st
         }
     };
     Ok((ci_plan(parts, options.build_only), options))
+}
+
+/// The partition `ci tests` runs. The gate sets $NEXTEST_PARTITION on every shard leg, and the shard
+/// that runs the gpu group must still run all of it.
+fn tests_partition(selection: Selection, env: Option<String>) -> Option<String> {
+    env.filter(|p| !p.is_empty() && selection != Selection::Gpu)
 }
 
 /// The steps of `parts`, in CI_STEPS order. When the tests are only built, the test steps become
@@ -577,6 +584,14 @@ mod ci_tests {
         let here = CiOptions { partition: None, selection: Selection::All, ..options };
         assert!(!nextest_args(&here, true, None).join(" ").contains("--no-tests"));
         assert_eq!(test_build_args(&here.exclude).join(" "), build);
+    }
+
+    #[test]
+    fn the_gpu_shard_runs_the_whole_gpu_group_whatever_the_partition() {
+        let env = || Some("hash:1/4".to_string());
+        assert_eq!(tests_partition(Selection::Gpu, env()), None);
+        assert_eq!(tests_partition(Selection::NoGpu, env()).as_deref(), Some("hash:1/4"));
+        assert_eq!(tests_partition(Selection::All, Some(String::new())), None);
     }
 
     #[test]
