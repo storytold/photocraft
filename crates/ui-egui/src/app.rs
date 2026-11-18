@@ -69,6 +69,7 @@ impl PhotocraftApp {
             remove_pending_target: None,
             remove_trail: None,
             menu_model: None,
+            toolbar_slots: Default::default(),
             move_preview: None,
             move_hover: None,
             move_distance: None,
