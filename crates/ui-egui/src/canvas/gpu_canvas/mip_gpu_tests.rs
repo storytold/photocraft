@@ -125,7 +125,11 @@ fn canvas_textures_the_gpu_refuses_leave_it_working(gpu: &GpuCanvas) {
 
 fn check_mips(gpu: &GpuCanvas) {
     for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
-        for (w, h) in [(1791, 1083), (513, 1), (1, 513)] {
+        // 767 × 431 is a single tile (`DEFAULT_TILE`) with odd sides down the chain (767, 383, 191, 95 and 431,
+        // 215, 107, 53), and its levels 1 and 2 are over `WHOLE_MIP_SIDE` (128), so the patch below redraws two
+        // levels by their damage (`mip_damage`) before the chain is redrawn whole: the paths 1791 × 1083 took, at
+        // a sixth of the pixels. The larger driver case stays in `partial_updates_match_a_full_rebuild_at_every_mip_level`.
+        for (w, h) in [(767, 431), (513, 1), (1, 513)] {
             let mut full = Buffer::filled(Rect::from_xywh(0, 0, w, h), [0.25, 0.5, 0.75, 1.0]);
             // Reusing the key also covers replacing textures after a size or depth change.
             gpu.upload_buffer_full(1, &full, depth);

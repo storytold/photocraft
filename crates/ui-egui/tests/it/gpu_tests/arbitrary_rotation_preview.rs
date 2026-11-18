@@ -108,12 +108,13 @@ fn size_changing_rotation_preview_is_visible_and_preserves_the_panned_center() {
     let _gpu = photocraft_testkit::gpu_lock();
     let Some(mut h) = harness() else { return };
     h.run_steps(4);
-    for (width, height, zoom, center, degrees, factor) in [
-        (400, 240, 1.0, [160.0, 90.0], 45.0, 1),
-        (400, 240, 1.0, [160.0, 90.0], -45.0, 1),
-        (400, 240, 1.0, [160.0, 90.0], 90.0, 1),
-        (3000, 1800, 0.12, [1350.0, 825.0], 45.0, 2),
-    ] {
+    // The canvas places a size-changing preview by its size alone (`canvas/gpu_picture.rs`: `growth` and
+    // `preview_bounds` from `preview_size`): 45° grows both sides, 90° grows one and shrinks the other, and the large
+    // document runs the reduced proxy. -45° gives 45°'s size, so it repeated the same placement; the direction of
+    // the rotation itself is the engine's (its `image.rotation.arbitrary` tests with `"direction": "ccw"`).
+    for (width, height, zoom, center, degrees, factor) in
+        [(400, 240, 1.0, [160.0, 90.0], 45.0, 1), (400, 240, 1.0, [160.0, 90.0], 90.0, 1), (3000, 1800, 0.12, [1350.0, 825.0], 45.0, 2)]
+    {
         setup(&mut h, width, height, zoom, center);
         assert_eq!(photocraft_ui_egui::proxy::factor(&h.state().session.active().unwrap().doc), factor);
         let id = open(&mut h);
