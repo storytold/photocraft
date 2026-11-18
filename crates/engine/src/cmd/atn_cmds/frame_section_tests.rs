@@ -115,7 +115,10 @@ fn recorded_steps_load_and_save_back_unchanged() {
     for (d, params) in cases {
         let (mut s, r) = load(vec![d.clone()]);
         assert_eq!(r["unsupported"], json!([]), "{r}");
-        let (id, p) = &s.actions.list[0].steps[0];
+        let (id, p) = {
+            let step = &s.actions.list.actions()[0].steps[0];
+            (&step.command, &step.params)
+        };
         let mut p = p.clone();
         p.as_object_mut().unwrap().remove(SOURCE);
         assert_eq!((id.as_str(), &p), (FRAME, &params));
@@ -182,7 +185,7 @@ fn native_steps_save_the_measured_keys() {
     ] {
         assert_eq!(exported(&p), Some(d.clone()), "{p}");
         let (s, _) = load(vec![d]);
-        assert_eq!(s.actions.list[0].steps[0], (FRAME.to_string(), back), "{p}");
+        assert_eq!(s.actions.list.actions()[0].steps[0], craft::automation::actions::ActionStep::new(FRAME, back), "{p}");
     }
 }
 
@@ -231,7 +234,7 @@ fn other_forms_keep_the_photoshop_step() {
     for d in forms {
         let (mut s, r) = load(vec![d.clone()]);
         assert_eq!(r["unsupported"].as_array().map(Vec::len), Some(1), "{d:?}");
-        assert_eq!(s.actions.list[0].steps[0].0, PHOTOSHOP_STEP, "{d:?}");
+        assert_eq!(s.actions.list.actions()[0].steps[0].command, PHOTOSHOP_STEP, "{d:?}");
         assert_eq!(saved(&mut s), Some(d.to_bytes()));
     }
 }
@@ -241,7 +244,7 @@ fn other_forms_keep_the_photoshop_step() {
 #[test]
 fn changed_or_damaged_steps_save_their_settings() {
     let (s, _) = load(vec![recorded(by_name("Photo"), "Frame 1")]);
-    let mut p = s.actions.list[0].steps[0].1.clone();
+    let mut p = s.actions.list.actions()[0].steps[0].params.clone();
     assert!(p.get(SOURCE).is_some(), "{p}");
     p["layer"] = json!("Other");
     assert_eq!(exported(&p), Some(canonical(by_name("Other"), Some("Frame 1"))));
