@@ -1,8 +1,9 @@
-//! #11524: what the Eyedropper samples joins the Recently Used Colors, the history the Swatches
-//! panel lists under its library (and the shape Fill and Stroke popovers show). Driven the way a
-//! person drives it — real clicks on the canvas — and read back from the preferences that hold the
-//! list, which is what the panel draws. Like `eyedropper_ring.rs`, these skip when no GPU adapter
-//! is available.
+//! #11524: what the Eyedropper samples joins the Recently Used Colors, the history the shape Fill
+//! and Stroke popovers show. Driven the way a person drives it — real clicks on the canvas — and
+//! read back from the preferences that hold the list, which is what the popovers draw. Like the
+//! other wgpu canvas tests here, this skips when no GPU adapter is available. (A Recently Used
+//! Colors row under the Swatches library is a later change, waiting on a `SwatchesPanel::recent`
+//! hook in craft-libs.)
 
 use egui::{Modifiers, PointerButton, Pos2, vec2};
 use photocraft_ui_egui::PhotocraftApp;
@@ -86,8 +87,8 @@ fn sampling_with_the_eyedropper_fills_the_recent_colors() {
     click(&mut h, centre, Modifiers::ALT);
     assert_eq!(h.state().session.tools.background, [0.0, 1.0, 0.0, 1.0], "the ⌥ sample took the background");
     assert_eq!(recent(&h), ["#00ff00", "#ff0000", "#0000ff"], "and joined the history");
-    // The list is what the Swatches panel and the Fill and Stroke popovers both draw, so a person
-    // and an agent read one history: `recentColors` in the preferences, kept for the next run.
+    // The list is what the Fill and Stroke popovers draw, so a person and an agent read one
+    // history: `recentColors` in the preferences, kept for the next run.
     let saved = serde_json::to_value(h.state().session.prefs()).expect("the preferences serialize");
     assert_eq!(saved["recentColors"], serde_json::json!(recent(&h)), "the same row next launch");
 }

@@ -79,9 +79,14 @@ impl<'a> PcEyedropper<'a> {
         let c = pick.color;
         let shape_fill = self.shape_fill;
         self.scope.with_app(|app| {
-            if app.run("tools.setColors", json!({ key: [c.r, c.g, c.b, 1.0] })).is_ok() && shape_fill {
-                app.ui.tool_options.shape_fill = true;
-                app.ui.tool_options.shape_fill_gradient = None;
+            if app.run("tools.setColors", json!({ key: [c.r, c.g, c.b, 1.0] })).is_ok() {
+                // Photoshop keeps the colours it picked lately: a sample joins the Recently Used
+                // Colors the popovers show, as the pickers do (#11524).
+                crate::paint_picker::remember(app, [c.r, c.g, c.b]);
+                if shape_fill {
+                    app.ui.tool_options.shape_fill = true;
+                    app.ui.tool_options.shape_fill_gradient = None;
+                }
             }
         });
     }
