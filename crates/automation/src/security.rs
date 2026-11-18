@@ -7,17 +7,15 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use hmac::{Hmac, Mac};
-use serde_json::{Value, json};
-use sha2::Sha256;
+pub use craft::automation::security::{
+    AuthStep, CHALLENGE_METHOD, ProofRole, ServerHandshake, generate_nonce, handshake_proof, is_hex256, proof_matches, repeat_auth_reply,
+};
 
 use crate::AutomationError;
 
 /// The request that authenticates a TCP connection: with the token itself (the original form),
 /// or with the client's proof after [`CHALLENGE_METHOD`].
 pub const AUTH_METHOD: &str = "auth";
-/// The first frame of challenge authentication: it carries a client nonce, never the token (NV-6).
-pub const CHALLENGE_METHOD: &str = "auth.challenge";
 /// Maximum encoded JSON request line, including its newline.
 pub const MAX_REQUEST_BYTES: usize = 1 << 20;
 /// Maximum simultaneously serviced TCP connections per listener.
@@ -103,16 +101,6 @@ pub fn generate_token() -> Result<String, AutomationError> {
     random_hex("control token")
 }
 
-/// Generate a fresh 256-bit nonce for challenge authentication ([`CHALLENGE_METHOD`]).
-pub fn generate_nonce() -> Result<String, AutomationError> {
-    random_hex("authentication nonce")
-}
-
-/// Whether `s` has the shape of a token or nonce: exactly 64 hexadecimal characters.
-pub fn is_hex256(s: &str) -> bool {
-    s.len() == TOKEN_HEX_LEN && s.bytes().all(|b| b.is_ascii_hexdigit())
-}
-
 /// Accept only the fixed-width hexadecimal representation emitted by [`generate_token`].
 pub fn validate_token(token: &str) -> Result<(), AutomationError> {
     if !is_hex256(token) {
@@ -131,113 +119,6 @@ pub fn token_matches(expected: &str, supplied: &str) -> bool {
         return false;
     }
     expected.bytes().zip(supplied.bytes()).fold(0u8, |different, (a, b)| different | (a.to_ascii_lowercase() ^ b.to_ascii_lowercase())) == 0
-}
-
-/// Which side of the challenge handshake a proof comes from. Each side's proof is keyed by the
-/// token over both nonces under its own label, so one side's proof never passes for the other's.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProofRole {
-    Server,
-    Client,
-}
-
-/// HMAC-SHA256, keyed by the (lowercased) control token, over the role's label and both nonces,
-/// as 64 lowercase hexadecimal characters. `docs/control-protocol.md` gives the exact message.
-pub fn handshake_proof(token: &str, role: ProofRole, client_nonce: &str, server_nonce: &str) -> Result<String, AutomationError> {
-    let label: &[u8] = match role {
-        ProofRole::Server => b"photocraft-control-v1 server",
-        ProofRole::Client => b"photocraft-control-v1 client",
-    };
-    let mut mac = Hmac::<Sha256>::new_from_slice(token.to_ascii_lowercase().as_bytes())
-        .map_err(|e| AutomationError::Other(format!("cannot key the authentication proof: {e}")))?;
-    for part in [label, b"\n", client_nonce.to_ascii_lowercase().as_bytes(), b"\n", server_nonce.to_ascii_lowercase().as_bytes()] {
-        mac.update(part);
-    }
-    Ok(hex(&mac.finalize().into_bytes()))
-}
-
-/// Whether `supplied` is `role`'s proof for these nonces, compared without an early exit.
-pub fn proof_matches(token: &str, role: ProofRole, client_nonce: &str, server_nonce: &str, supplied: &str) -> bool {
-    handshake_proof(token, role, client_nonce, server_nonce).is_ok_and(|expected| token_matches(&expected, supplied))
-}
-
-/// Where a connection's authentication stands after one frame.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AuthStep {
-    /// Authenticated: dispatch the frames that follow.
-    Authenticated,
-    /// A challenge was answered: the next frame must be `auth` with the client's proof.
-    Challenged,
-    /// Refused: send the reply, then close the connection.
-    Rejected,
-}
-
-/// Server side of connection authentication, one per connection. It accepts either
-///
-/// - challenge authentication (NV-6): `auth.challenge {clientNonce}` is answered with
-///   `{serverNonce, serverProof}`, then `auth {proof}` authenticates. The token never crosses the
-///   wire, and the client learns that the server holds the token before revealing anything
-///   derived from it; or
-/// - the original one-frame `auth {token}`, kept so existing clients and scripts keep working.
-///
-/// No control method is answered before authentication.
-#[derive(Debug, Default)]
-pub struct ServerHandshake {
-    /// The client and server nonces of the challenge this connection was given, until its `auth`.
-    challenge: Option<(String, String)>,
-}
-
-impl ServerHandshake {
-    /// A handshake for a freshly accepted connection: no challenge issued yet.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Answer one frame received before authentication. Never dispatches a control method.
-    pub fn reply(&mut self, line: &str, token: &str) -> (Value, AuthStep) {
-        let refused = |id: Value| (json!({"id": id, "ok": false, "error": "authentication required"}), AuthStep::Rejected);
-        let authenticated = |id: Value| (json!({"id": id, "ok": true, "result": {"authenticated": true}}), AuthStep::Authenticated);
-        let Ok(req) = serde_json::from_str::<Value>(line) else {
-            return refused(Value::Null);
-        };
-        let id = req.get("id").cloned().unwrap_or(Value::Null);
-        let param = |key: &str| req.get("params").and_then(|p| p.get(key)).and_then(Value::as_str);
-        match (req.get("method").and_then(Value::as_str), self.challenge.take()) {
-            (Some(CHALLENGE_METHOD), None) => {
-                let Some(client_nonce) = param("clientNonce").filter(|n| is_hex256(n)).map(str::to_ascii_lowercase) else {
-                    return refused(id);
-                };
-                let Ok(server_nonce) = generate_nonce() else {
-                    return (json!({"id": id, "ok": false, "error": "cannot generate an authentication challenge"}), AuthStep::Rejected);
-                };
-                let Ok(server_proof) = handshake_proof(token, ProofRole::Server, &client_nonce, &server_nonce) else {
-                    return refused(id);
-                };
-                let reply = json!({"id": id, "ok": true, "result": {"serverNonce": server_nonce, "serverProof": server_proof}});
-                self.challenge = Some((client_nonce, server_nonce));
-                (reply, AuthStep::Challenged)
-            }
-            // After a challenge only the proof authenticates; the token is never needed.
-            (Some(AUTH_METHOD), Some((client_nonce, server_nonce))) => match param("proof") {
-                Some(proof) if proof_matches(token, ProofRole::Client, &client_nonce, &server_nonce, proof) => authenticated(id),
-                _ => refused(id),
-            },
-            (Some(AUTH_METHOD), None) if token_matches(token, param("token").unwrap_or("")) => authenticated(id),
-            _ => refused(id),
-        }
-    }
-}
-
-/// Answer a repeat `auth` or `auth.challenge` frame on an already authenticated connection.
-/// Returns `None` for any other frame, which the caller dispatches as usual.
-/// Without this, a second `auth` fell through to the method dispatcher as an unknown method.
-pub fn repeat_auth_reply(line: &str) -> Option<Value> {
-    let req: Value = serde_json::from_str(line).ok()?;
-    if !matches!(req.get("method").and_then(Value::as_str), Some(AUTH_METHOD | CHALLENGE_METHOD)) {
-        return None;
-    }
-    let id = req.get("id").cloned().unwrap_or(Value::Null);
-    Some(json!({"id": id, "ok": false, "error": "already authenticated"}))
 }
 
 fn read_token_file(path: &Path) -> Result<String, AutomationError> {
@@ -280,6 +161,20 @@ fn create_token_file(path: &Path, token: &str) -> Result<(), AutomationError> {
     }
     let mut file = options.open(path).map_err(|e| AutomationError::Io(format!("{}: {e}", path.display())))?;
     writeln!(file, "{token}").map_err(|e| AutomationError::Io(format!("{}: {e}", path.display())))
+}
+
+/// Write a fresh token to `path`, replacing any earlier one (user-only on Unix), and return it.
+/// The desktop app rotates the agent-connection token this way each time it starts listening, so
+/// a token sent to a port another program took over after a crash stops working.
+pub fn replace_token_file(path: &Path) -> Result<String, AutomationError> {
+    let token = generate_token()?;
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(AutomationError::Io(format!("{}: {e}", path.display()))),
+    }
+    create_token_file(path, &token)?;
+    Ok(token)
 }
 
 /// Resolve a server token. With no supplied token or file, a fresh token is returned.
@@ -413,6 +308,7 @@ impl Read for AuthDeadlineStream {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::{Value, json};
 
     /// One frame through a fresh handshake: the reply and whether it authenticated.
     fn authentication_reply(line: &str, token: &str) -> (Value, bool) {
@@ -484,6 +380,24 @@ mod tests {
             assert_eq!(step, AuthStep::Rejected, "{nonce}: {reply}");
             assert!(reply.get("result").is_none());
         }
+    }
+
+    #[test]
+    fn replaced_token_files_hold_a_new_valid_token() {
+        let dir = std::env::temp_dir().join(format!("photocraft-replace-token-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("agent.token");
+        let first = replace_token_file(&path).unwrap();
+        assert_eq!(client_token(None, Some(&path)).unwrap(), first);
+        let second = replace_token_file(&path).unwrap();
+        assert_ne!(first, second);
+        assert_eq!(client_token(None, Some(&path)).unwrap(), second);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
