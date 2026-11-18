@@ -96,6 +96,7 @@ pub use navigator::{NAVIGATOR_SIDE, navigator_gpu_view, navigator_texture, navig
 pub(crate) use raster_source::CompositePrep;
 pub(crate) use raster_source::SourceLogs;
 pub(crate) use sampling::composite_color;
+pub(crate) use sampling::composite_color_alpha;
 #[cfg(test)]
 pub(crate) use strokes::live_retouch_points;
 pub(crate) use strokes::multiple_color_target;

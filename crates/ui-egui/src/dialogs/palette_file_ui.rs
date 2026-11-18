@@ -9,15 +9,23 @@
 //! the answer comes back under a private key and is folded in by [`apply_picks`]. With the
 //! "Set Transparent" switch on ([`armed_row`]) a click marks that entry as the table's transparent
 //! one instead, or clears the mark of the entry that has it; the marked entry is drawn as a
-//! checkerboard with an X.
+//! checkerboard with an X. The "Color Picker" pipette ([`eyedropper_row`]) arms the canvas instead:
+//! a press on the image highlights the entry that pixel uses ([`sample`], [`match_entry`]).
 //!
 //! Load… and Save… exchange `.act` colour tables and palette PNGs; parsing and encoding live in
 //! [`parse_file`] and [`encode_file`], and the footer buttons are answered by
 //! [`crate::color_table_ui::footer_action`].
 
+use craft::behavior::IconId;
 use craft::theme::Srgba;
-use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamKind};
+use craft::ui::buttons::ToggleButton;
+use craft::ui::contract::{Bind, Props as _, Show as _};
+use craft::ui::dialog::DialogId;
+use craft::ui::dialog::StackDialog as _;
+use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog, Param, ParamKind};
+use craft::ui::primitives::IconSpec;
 use craft::ui::runtime::env::Label;
+use craft::ui::runtime::requests::EyedropperRequest;
 use egui::{Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 
 use crate::PhotocraftApp;
@@ -31,6 +39,14 @@ pub const TRANSPARENT: &str = "transparent";
 /// The "Set Transparent" switch: the next grid click marks an entry instead of editing it. Private,
 /// so it is dropped from the command's parameters.
 pub const TRANSPARENT_ARMED: &str = "__paletteTransparentArmed";
+/// The palette pipette ("Color Picker") switch: while it is on, a press on the image highlights the
+/// entry the pixel uses. Private, like the other two.
+pub const EYEDROPPER: &str = "__paletteEyedropper";
+/// The key the canvas eyedropper answers the colour under the press with.
+pub const SAMPLE_KEY: &str = "__paletteSampled";
+/// The entry the pipette last highlighted, drawn with an accent ring. Private as the other two, so
+/// the command never sees it.
+pub const HIGHLIGHT: &str = "__paletteHighlight";
 
 /// The cells of the grid: a colour table's 16×16 slots, drawn whether or not the table fills them.
 const COLS: usize = 16;
@@ -127,6 +143,100 @@ pub fn armed_row() -> Param {
     Param::new(TRANSPARENT_ARMED, Label::from(tl!("Set Transparent")), ParamKind::bool(false)).not_remembered()
 }
 
+/// The palette pipette ("Color Picker"): while it is on, a press on the image highlights the entry
+/// the pixel under it uses ([`sample`]). A row of its own, as the switch above is.
+pub fn eyedropper_row() -> Param {
+    Param::custom(EYEDROPPER, Label::from(tl!("Color Picker")), |ui, fields, cx| {
+        let mut on = fields.bool(EYEDROPPER).unwrap_or(false);
+        let was = on;
+        let shown = ToggleButton::new(tl!("Pick a Palette Colour From the Image"), Bind::bound(&mut on))
+            .icon(IconSpec::svg(IconId::new("pipette")))
+            .icon_only()
+            .escape_disarms()
+            .tooltip(tl!("Pick a Palette Colour From the Image"))
+            .show(ui);
+        if on != was {
+            fields.set(EYEDROPPER, on);
+        }
+        if on {
+            // The next press on the image answers `SAMPLE_KEY` with the colour under it, which the
+            // host hands to `sample` (the dialog's own pipette, not a row's colour).
+            cx.arm_eyedropper(EyedropperRequest::new(SAMPLE_KEY));
+            cx.sampling(true);
+        }
+        shown.response
+    })
+}
+
+/// A press at `at` on the image with the palette pipette armed: highlight the entry the sampled
+/// pixel uses — the one matching its colour (an exact match after rounding, else the nearest by
+/// squared distance, for a dithered edge), or, over a clear pixel, the table's transparent entry (a
+/// clear pixel is that entry's, not a colour's). Returns whether the pipette took the press: `false`
+/// once its switch is off, dropping the request it left behind so the press goes to the tool.
+pub fn sample(app: &mut PhotocraftApp, id: DialogId, at: [f64; 2]) -> bool {
+    let Some((command, on)) = app.framework.dialogs.get_by_id::<HostedParamDialog>(id).and_then(|dialog| {
+        let command = dialog.key()?;
+        owns(command).then(|| (command.to_owned(), dialog.fields().bool(EYEDROPPER).unwrap_or(false)))
+    }) else {
+        return false;
+    };
+    if !on {
+        crate::dialogs::canvas_input::disarm_dropper(app);
+        return false;
+    }
+    let (colors, transparent) = app
+        .framework
+        .dialogs
+        .get_by_id::<HostedParamDialog>(id)
+        .map(|dialog| (visible_table(dialog.fields(), &command), transparent_of(dialog.fields())))
+        .unwrap_or_default();
+    let Some([r, g, b, a]) = crate::canvas::composite_color_alpha(app, at[0], at[1]) else {
+        return true; // Off the image: nothing to highlight, the pipette stays armed.
+    };
+    let entry = if a > 0.0 { match_entry(&colors, [r, g, b]) } else { transparent };
+    if let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedParamDialog>(id)
+        && let Some(entry) = entry
+    {
+        dialog.set_field(HIGHLIGHT, FieldValue::Int(entry as i64));
+    }
+    true
+}
+
+/// Whether `command`'s dialog carries the palette table (the two the grid belongs to).
+fn owns(command: &str) -> bool {
+    command == crate::color_table_ui::COMMAND || command == crate::color_table_ui::INDEXED_COLOR
+}
+
+/// The table the dialog `fields` shows: the same rule as [`shown`], from the fields alone.
+fn visible_table(fields: &DialogFields, command: &str) -> Vec<[u8; 3]> {
+    let (colors, _) = shown(fields, command, colors_field(command));
+    colors
+}
+
+fn transparent_of(fields: &DialogFields) -> Option<usize> {
+    fields.int(TRANSPARENT).and_then(|t| usize::try_from(t).ok())
+}
+
+/// The palette entry matching `target` (0..=1 channels): an exact match after rounding, else the
+/// nearest by squared 8-bit distance (a dithered edge's colour). `None` for an empty table.
+pub fn match_entry(colors: &[[u8; 3]], target: [f32; 3]) -> Option<usize> {
+    if colors.is_empty() {
+        return None;
+    }
+    let t = target.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+    colors.iter().position(|c| *c == t).or_else(|| {
+        colors
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                let d = (0..3).map(|k| (i32::from(c[k]) - i32::from(t[k])).pow(2) as u32).sum::<u32>();
+                (d, i)
+            })
+            .min_by_key(|(d, _)| *d)
+            .map(|(_, i)| i)
+    })
+}
+
 /// The palette grid of `command`'s dialog: 16×16 slots, the table's entries painted and the rest
 /// dashed. The table is the dialog's own field (seeded from the document when the dialog opens).
 pub fn grid_row(command: &'static str, label: Label) -> Param {
@@ -135,7 +245,8 @@ pub fn grid_row(command: &'static str, label: Label) -> Param {
         apply_picks(fields, key);
         let (colors, transparent) = shown(fields, command, key);
         let armed = fields.bool(TRANSPARENT_ARMED).unwrap_or(false);
-        let (response, hit) = grid(ui, &colors, transparent);
+        let highlight = fields.int(HIGHLIGHT).and_then(|i| usize::try_from(i).ok());
+        let (response, hit) = grid(ui, &colors, transparent, highlight);
         if let Some(i) = hit {
             if armed {
                 // Mark the entry the click landed on; clicking the marked entry clears it, as the
@@ -184,9 +295,9 @@ fn srgba([r, g, b]: [u8; 3]) -> Srgba {
 }
 
 /// The 16×16 table drawn as touching cells: each entry's colour, a dashed slot for one the table
-/// does not have yet, a checkerboard and an X over the transparent entry. Returns the cell a click
-/// landed on.
-fn grid(ui: &mut egui::Ui, colors: &[[u8; 3]], transparent: Option<usize>) -> (egui::Response, Option<usize>) {
+/// does not have yet, a checkerboard and an X over the transparent entry, and an accent ring around
+/// the entry the palette pipette last highlighted. Returns the cell a click landed on.
+fn grid(ui: &mut egui::Ui, colors: &[[u8; 3]], transparent: Option<usize>, highlight: Option<usize>) -> (egui::Response, Option<usize>) {
     let t = crate::theme::Tokens::get(ui.ctx());
     let side = CELL * COLS as f32;
     let (rect, response) = ui.allocate_exact_size(vec2(side, side), Sense::click());
@@ -215,6 +326,10 @@ fn grid(ui: &mut egui::Ui, colors: &[[u8; 3]], transparent: Option<usize>) -> (e
                     }
                 }
                 None => dashed(painter, cell, t.field_border),
+            }
+            if highlight == Some(i) {
+                // The entry the palette pipette last matched, ringed (over a colour or a checker).
+                painter.rect_stroke(cell.shrink(0.5), 1.0, Stroke::new(2.0, t.accent), StrokeKind::Inside);
             }
         }
     }
@@ -417,5 +532,18 @@ mod tests {
         assert_eq!(cell_at(rect, pos2(1.0, rect.bottom() + 1.0)), None, "below the table");
         // The last slot is the 256th entry, never a 257th.
         assert_eq!(CELLS, 256);
+    }
+
+    /// The pipette's match: an exact entry after rounding, else the nearest by squared distance (a
+    /// dithered edge's colour), and nothing for an empty table.
+    #[test]
+    fn the_pipette_matches_an_entry_exactly_then_by_distance() {
+        let colors = [[255, 0, 0], [0, 128, 0], [10, 20, 30]];
+        assert_eq!(match_entry(&colors, [1.0, 0.0, 0.0]), Some(0));
+        assert_eq!(match_entry(&colors, [0.0, 128.0 / 255.0, 0.0]), Some(1));
+        assert_eq!(match_entry(&colors, [0.05, 0.1, 0.12]), Some(2), "closest to the dark entry");
+        assert_eq!(match_entry(&colors, [0.9, 0.1, 0.1]), Some(0), "closer to red than to the dark entry");
+        assert_eq!(match_entry(&colors, [5.0, -3.0, 0.0]), Some(0), "out-of-range channels clamp");
+        assert_eq!(match_entry(&[], [0.5, 0.5, 0.5]), None, "an empty table matches nothing");
     }
 }

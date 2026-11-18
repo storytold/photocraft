@@ -1,7 +1,7 @@
 use craft::ui::dialog::DialogId;
 use craft::ui::patterns::form_dialogs::{DialogFields, HostedParamDialog, Param, ParamKind};
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 
 use super::*;
 
@@ -1949,9 +1949,10 @@ fn indexed_color_sends_the_custom_table_only_for_custom() {
 }
 
 /// Both palette dialogs' grid carries a labelled "Set Transparent" row (Indexed Color shows it on
-/// a Custom palette, as its grid does), so the switch is never an unlabelled box inside the grid.
+/// a Custom palette, as its grid does), so the switch is never an unlabelled box inside the grid,
+/// and the palette pipette the table's pixels are sampled with.
 #[test]
-fn the_palette_dialogs_offer_set_transparent() {
+fn the_palette_dialogs_offer_set_transparent_and_the_pipette() {
     for command in ["image.mode.colorTable", "image.mode.indexedColor"] {
         let mut session = photocraft_engine::Session::new();
         session.execute("file.new", json!({"width": 4, "height": 4, "depth": 8, "background": "white"})).unwrap();
@@ -1965,6 +1966,71 @@ fn the_palette_dialogs_offer_set_transparent() {
             harness.run_steps(3);
         }
         harness.get_by_label("Set Transparent");
+        harness.get_by_label("Color Picker");
+    }
+}
+
+/// The palette pipette: armed from its button, a press on the image highlights the entry the pixel
+/// uses — its colour's entry, or the table's transparent entry over a clear pixel.
+#[test]
+fn the_palette_pipette_highlights_the_entry_a_pixel_uses() {
+    let mut session = photocraft_engine::Session::new();
+    session.execute("file.new", json!({"width": 8, "height": 8, "background": "transparent"})).unwrap();
+    session.execute("paint.stroke", json!({"points": [[1, 1]], "size": 4, "color": "#ff0000"})).unwrap();
+    // A two-colour table; the conversion appends the transparent entry (index 2) for the clear area.
+    session.execute("image.mode.indexedColor", json!({"palette": "custom", "paletteColors": ["#ffffff", "#ff0000"], "dither": "none"})).unwrap();
+    let app = PhotocraftApp::new(session, crate::Services::default());
+    let mut harness = harness(app, egui::vec2(900.0, 1100.0));
+    let id = open(harness.state_mut(), "image.mode.colorTable").unwrap();
+    harness.run_steps(3);
+    let highlight = |app: &PhotocraftApp| fields_of(app, id).int(crate::dialogs::palette_file_ui::HIGHLIGHT);
+
+    // Nothing highlighted until the pipette is armed from its own row.
+    assert_eq!(highlight(harness.state()), None);
+    harness.get_by_label("Color Picker").click();
+    harness.run_steps(3);
+    assert_eq!(fields_of(harness.state(), id).bool(crate::dialogs::palette_file_ui::EYEDROPPER), Some(true), "the button arms the pipette");
+    // The painted pixel is the table's red entry …
+    assert!(crate::dialogs::palette_file_ui::sample(harness.state_mut(), id, [1.0, 1.0]));
+    assert_eq!(highlight(harness.state()), Some(1), "the red pixel's entry");
+    // … and a clear pixel is the transparent entry's, not a colour's.
+    assert!(crate::dialogs::palette_file_ui::sample(harness.state_mut(), id, [7.0, 7.0]));
+    assert_eq!(highlight(harness.state()), Some(2), "the transparent entry over a clear pixel");
+    // The canvas routes an armed press through the dialog's own dropper (not a colour answer).
+    crate::dialogs::canvas_input::arm_dropper(harness.state_mut(), id, crate::dialogs::palette_file_ui::SAMPLE_KEY.to_owned());
+    assert!(crate::dialogs::canvas_input::pick_dropper(harness.state_mut(), [1.0, 1.0], craft::keymap::Mods::default()));
+    assert_eq!(highlight(harness.state()), Some(1), "the press reaches the palette pipette");
+    // Off the image changes nothing, and the press is still the pipette's.
+    assert!(crate::dialogs::palette_file_ui::sample(harness.state_mut(), id, [-4.0, 8.0]));
+    assert_eq!(highlight(harness.state()), Some(2));
+    // Turning the switch off drops the request: the press goes to the tool.
+    harness.get_by_label("Color Picker").click();
+    harness.run_steps(3);
+    assert_eq!(fields_of(harness.state(), id).bool(crate::dialogs::palette_file_ui::EYEDROPPER), Some(false));
+    assert!(!crate::dialogs::palette_file_ui::sample(harness.state_mut(), id, [1.0, 1.0]));
+}
+
+/// Transparency and "1st index as transparent" grey out with the two fixed System tables, which have
+/// no free slot for the auto-appended transparent entry, and stay on for every other palette.
+#[test]
+fn transparency_greys_out_with_the_fixed_system_palettes_only() {
+    let mut session = photocraft_engine::Session::new();
+    session.execute("file.new", json!({"width": 4, "height": 4, "depth": 8, "background": "white"})).unwrap();
+    let app = PhotocraftApp::new(session, crate::Services::default());
+    let mut harness = harness(app, egui::vec2(900.0, 1100.0));
+    let id = open(harness.state_mut(), "image.mode.indexedColor").unwrap();
+    harness.run_steps(3);
+    for palette in ["selective", "perceptual", "adaptive", "exact", "web", "uniform", "custom"] {
+        set(harness.state_mut(), id, "palette", json!(palette));
+        harness.run_steps(3);
+        assert!(!harness.get_by_label("Transparency").accesskit_node().is_disabled(), "{palette}: Transparency stays on");
+        assert!(!harness.get_by_label("1st Index as Transparent").accesskit_node().is_disabled(), "{palette}: 1st Index stays on");
+    }
+    for palette in ["systemMac", "systemWindows"] {
+        set(harness.state_mut(), id, "palette", json!(palette));
+        harness.run_steps(3);
+        assert!(harness.get_by_label("Transparency").accesskit_node().is_disabled(), "{palette}: a fixed table carries no transparent entry");
+        assert!(harness.get_by_label("1st Index as Transparent").accesskit_node().is_disabled(), "{palette}");
     }
 }
 

@@ -10,6 +10,14 @@ use crate::state::Tool;
 /// The colour at document point `at` averaged over `size`, from the layers `source` names
 /// (`document.sampleColor`). `None` off the image or over transparency.
 pub fn sample_color(app: &mut PhotocraftApp, at: [f64; 2], size: SampleSize, source: SampleSource) -> Option<[f32; 3]> {
+    let [r, g, b, a] = sample_color_alpha(app, at, size, source)?;
+    (a > 0.0).then_some([r, g, b])
+}
+
+/// The colour and alpha at document point `at` averaged over `size`, from the layers `source` names.
+/// `None` off the image. A clear pixel keeps alpha 0, which [`sample_color`] filters out: the palette
+/// eyedropper reads it, since a clear pixel is its transparent entry's, not a colour's.
+pub fn sample_color_alpha(app: &mut PhotocraftApp, at: [f64; 2], size: SampleSize, source: SampleSource) -> Option<[f32; 4]> {
     let [x, y] = at;
     if !(x.is_finite() && y.is_finite()) {
         return None;
@@ -18,7 +26,7 @@ pub fn sample_color(app: &mut PhotocraftApp, at: [f64; 2], size: SampleSize, sou
     let zoom = f64::from(app.current_zoom());
     let v = app.run("document.sampleColor", json!({"x": x, "y": y, "size": size.pixels(), "sampleLayer": source.id(), "zoom": zoom})).ok()?;
     match serde_json::from_value::<Vec<f32>>(v).ok()?[..] {
-        [r, g, b, a] if a > 0.0 => Some([r, g, b]),
+        [r, g, b, a] => Some([r, g, b, a]),
         _ => None,
     }
 }
@@ -46,6 +54,13 @@ pub fn eyedropper_color(app: &mut PhotocraftApp, at: [f64; 2]) -> Option<[f32; 3
 pub fn composite_color(app: &mut PhotocraftApp, x: f64, y: f64) -> Option<[f32; 3]> {
     let size = app.ui.tool_options.eyedropper.size;
     sample_color(app, [x, y], size, SampleSource::All)
+}
+
+/// The active document's composite colour and alpha at (x, y): [`composite_color`] with the alpha a
+/// clear pixel carries. The palette eyedropper reads it (see [`sample_color_alpha`]).
+pub fn composite_color_alpha(app: &mut PhotocraftApp, x: f64, y: f64) -> Option<[f32; 4]> {
+    let size = app.ui.tool_options.eyedropper.size;
+    sample_color_alpha(app, [x, y], size, SampleSource::All)
 }
 
 /// Only the Eyedropper's Current Layer and Current & Below modes pick the targeted raster mask.

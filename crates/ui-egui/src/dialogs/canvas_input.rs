@@ -169,6 +169,11 @@ pub(crate) fn pick_dropper(app: &mut PhotocraftApp, at: [f64; 2], mods: Mods) ->
     if replace_color {
         return crate::filter_dialog::replace_color_sample(app, id, at, mods);
     }
+    // A palette dialog's pipette highlights a table entry instead of setting a colour, and it needs the pixel's
+    // alpha: over a clear one the entry to highlight is the table's transparent entry.
+    if key == super::palette_file_ui::SAMPLE_KEY {
+        return super::palette_file_ui::sample(app, id, at);
+    }
     let Some(color) = sampled(app, at) else { return true };
     let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedParamDialog>(id) else { return false };
     dialog.answer_eyedropper(key, color);
