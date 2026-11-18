@@ -15,7 +15,7 @@
 //!   by itself for luminance noise, a Gaussian of the chroma for colour noise, then an unsharp
 //!   mask of the luminance, optionally weighted by its smoothed gradient.
 
-use super::CameraRaw;
+use super::{CameraRaw, DevelopInputs};
 
 /// Dehaze measures the haze on a copy at most this many pixels across.
 pub const DEHAZE_SIDE: usize = 768;
@@ -128,11 +128,11 @@ pub struct Texture {
 
 impl Texture {
     /// Texture for `p` on a `w × h` frame; `None` when it is off.
-    pub fn new(p: &CameraRaw, w: usize, h: usize) -> Option<Self> {
+    pub fn new(p: &CameraRaw, inputs: &DevelopInputs, w: usize, h: usize) -> Option<Self> {
         if p.texture == 0.0 {
             return None;
         }
-        let ps = p.pixel_scale.clamp(0.01, 1.0);
+        let ps = inputs.pixel_scale.clamp(0.01, 1.0);
         let sigma = (w.max(h) as f32 * 0.002).max(1.5 * ps);
         Some(Texture { amount: p.texture / 100.0 * 0.9, radii: gauss_radii(sigma) })
     }
@@ -182,9 +182,10 @@ pub struct Sharpen {
 }
 
 impl Detail {
-    /// Detail for `p`; `None` when sharpening and both noise reductions are off.
-    pub fn new(p: &CameraRaw) -> Option<Self> {
-        let ps = p.pixel_scale.clamp(0.01, 1.0);
+    /// Detail for `p` at the job's pixel scale; `None` when sharpening and both noise reductions
+    /// are off.
+    pub fn new(p: &CameraRaw, inputs: &DevelopInputs) -> Option<Self> {
+        let ps = inputs.pixel_scale.clamp(0.01, 1.0);
         // The controls' documented 0..=100 range: raw values drive the filter radii below.
         let [nl, nld, nc, ncd] = [p.noise_luminance, p.noise_luminance_detail, p.noise_color, p.noise_color_detail].map(|v| v.clamp(0.0, 100.0));
         let luminance = (nl > 0.0).then(|| {
@@ -224,27 +225,43 @@ pub(crate) fn gauss_radii(sigma: f32) -> Vec<usize> {
 mod tests {
     use super::*;
 
+    /// `CameraRaw` with the named fields set (the type is `#[non_exhaustive]`, so no struct expression), or a copy of a base with them set.
+    macro_rules! cr {
+        ($($f:ident : $v:expr),* $(,)?) => {{
+            let mut s = CameraRaw::default();
+            $(s.$f = $v;)*
+            s
+        }};
+        ($base:expr => $($f:ident : $v:expr),* $(,)?) => {{
+            let mut s: CameraRaw = $base;
+            $(s.$f = $v;)*
+            s
+        }};
+    }
+
     #[test]
     fn stages_resolve_for_the_dialogs_proxy_and_are_off_at_zero() {
-        let p = CameraRaw { dehaze: 40.0, clarity: -50.0, texture: 50.0, pixel_scale: 0.143, ..Default::default() };
+        let p = cr! { dehaze: 40.0, clarity: -50.0, texture: 50.0};
+        let scale = |pixel_scale| DevelopInputs { pixel_scale, ..Default::default() };
         let d = Dehaze::new(&p, 858, 572).unwrap();
         assert_eq!((d.factor, d.size, d.radius, d.guide_radius, d.top), (2, [429, 286], 7, 14, 122));
         let c = Clarity::new(&p, 858, 572).unwrap();
         assert_eq!((c.radius, c.subsample, c.sub_radius, c.sub_size), (17, 2, 8, [429, 286]));
         assert!((c.amount + 0.4).abs() < 1e-6);
-        assert_eq!(Texture::new(&p, 858, 572).unwrap().radii, [1, 1, 2]);
+        assert_eq!(Texture::new(&p, &scale(0.143), 858, 572).unwrap().radii, [1, 1, 2]);
         // Small frames: the plain guided filter, a blur too narrow to change anything.
         assert_eq!(fast_guided_steps(3), (1, 3));
-        assert!(Texture::new(&CameraRaw { texture: 10.0, pixel_scale: 0.1, ..Default::default() }, 64, 48).unwrap().radii.is_empty());
+        assert!(Texture::new(&cr! { texture: 10.0}, &scale(0.1), 64, 48).unwrap().radii.is_empty());
         let off = CameraRaw::default();
-        assert!(Dehaze::new(&off, 858, 572).is_none() && Clarity::new(&off, 858, 572).is_none() && Texture::new(&off, 858, 572).is_none());
+        assert!(Dehaze::new(&off, 858, 572).is_none() && Clarity::new(&off, 858, 572).is_none() && Texture::new(&off, &scale(1.0), 858, 572).is_none());
     }
 
     #[test]
     fn detail_resolves_each_part_and_is_off_at_zero() {
-        assert!(Detail::new(&CameraRaw::default()).is_none());
-        let p = CameraRaw { noise_luminance: 50.0, noise_color: 50.0, sharpen_amount: 100.0, sharpen_masking: 50.0, sharpen_detail: 0.0, ..Default::default() };
-        let d = Detail::new(&p).unwrap();
+        let full = DevelopInputs::default();
+        assert!(Detail::new(&CameraRaw::default(), &full).is_none());
+        let p = cr! { noise_luminance: 50.0, noise_color: 50.0, sharpen_amount: 100.0, sharpen_masking: 50.0, sharpen_detail: 0.0};
+        let d = Detail::new(&p, &full).unwrap();
         let l = d.luminance.unwrap();
         assert_eq!(l.radius, 3);
         assert!((l.keep - 0.25).abs() < 1e-6 && (l.eps - (0.03f32 * 0.03 + 1e-6)).abs() < 1e-9);
@@ -255,7 +272,7 @@ mod tests {
         assert!((s.amount - 1.2).abs() < 1e-6 && (s.limit - 0.03).abs() < 1e-6 && (s.scale - 0.5).abs() < 1e-6);
         assert_eq!(s.mask.as_ref().map(|(r, _)| r.clone()), Some(gauss_radii(1.0)));
         // On the dialog's proxy the radii are at their floors; out-of-range sliders clamp.
-        let proxy = Detail::new(&CameraRaw { noise_luminance: 1e30, sharpen_amount: 40.0, pixel_scale: 0.143, ..Default::default() }).unwrap();
+        let proxy = Detail::new(&cr! { noise_luminance: 1e30, sharpen_amount: 40.0}, &DevelopInputs { pixel_scale: 0.143, ..full }).unwrap();
         assert_eq!(proxy.luminance.map(|l| l.radius), Some(1));
         assert_eq!(proxy.sharpen.map(|s| (s.radii, s.mask.is_none())), Some((vec![1, 0, 0], true)));
         assert!(proxy.color.is_none());
@@ -263,7 +280,7 @@ mod tests {
 
     #[test]
     fn dehaze_cells_average_blocks_after_white_balance_and_refuse_a_wrong_size() {
-        let d = Dehaze::new(&CameraRaw { dehaze: 10.0, ..Default::default() }, 3, 1).unwrap();
+        let d = Dehaze::new(&cr! { dehaze: 10.0}, 3, 1).unwrap();
         let px = [[0.2, 0.4, 1.5, 1.0], [0.4, 0.0, 0.5, 1.0], [0.9, 0.9, 0.9, 1.0]];
         assert_eq!(d.cells(&px, 3, 1, None), vec![[0.2, 0.4, 1.0], [0.4, 0.0, 0.5], [0.9, 0.9, 0.9]]);
         let brighter = d.cells(&px, 3, 1, Some([2.0, 2.0, 2.0]));

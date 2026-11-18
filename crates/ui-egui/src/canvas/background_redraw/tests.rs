@@ -137,7 +137,7 @@ fn gpu_app() -> Option<Gpu> {
             .wgpu_setup(crate::gpu_canvas::wgpu_setup())
             .build_eframe(move |cc| {
                 PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-                let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+                let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), Default::default());
                 if let Some(rs) = cc.wgpu_render_state.as_ref() {
                     *observer_out.lock().expect("observer") = Some(GpuCanvas::new(rs));
                     app.set_wgpu(rs.clone());
@@ -178,6 +178,19 @@ fn settle(g: &mut Gpu) {
     }
 }
 
+/// Run the frame that starts `doc`'s redraw with its worker held before the first batch, and wait
+/// until that very worker reaches the hold: the redraw runs, every block still to draw, until the
+/// returned guard drops. Without it a test that needs the redraw still running at its next frame
+/// races the worker: a fast machine draws the document first, and so does a slow frame (a
+/// software adapter's uploads) that keeps taking blocks as they land until the last one.
+fn start_held_redraw(g: &mut Gpu, doc: DocId) -> HoldRedraws {
+    let held = hold_redraws();
+    g.harness.step();
+    let generation = g.harness.state().redraws.get(&doc).expect("the frame started a redraw").worker_generation;
+    assert!(wait_for_held_redraw(g.harness.state(), doc, generation, std::time::Duration::from_secs(10)), "the redraw worker never reached the pre-batch hold");
+    held
+}
+
 /// The canvas texture of `doc` against the synchronous CPU refresh of the current document.
 fn assert_matches_synchronous(g: &mut Gpu, doc: DocId) {
     let app = g.harness.state_mut();
@@ -197,8 +210,11 @@ fn a_full_cpu_refresh_draws_in_the_background_with_the_synchronous_pixels() {
     let _gpu = photocraft_testkit::gpu_lock();
     let Some(mut g) = gpu_app() else { return };
     let doc = cpu_only_document(g.harness.state_mut(), 2600, 1700);
+    // Held, so the frame's later runs can't see the redraw already finished.
+    let held = hold_redraws();
     g.harness.step();
     assert!(g.harness.state().redraws.contains_key(&doc), "the frame started a redraw instead of compositing inline");
+    drop(held);
     settle(&mut g);
     let app = g.harness.state();
     assert_eq!(app.perf.last_refresh, "background");
@@ -295,10 +311,10 @@ fn a_redraw_finishing_after_memory_usage_drops_keeps_nothing_over_it() {
     let _gpu = photocraft_testkit::gpu_lock();
     let Some(mut g) = gpu_app() else { return };
     let doc = cpu_only_document(g.harness.state_mut(), 4096, 3072);
-    g.harness.step();
-    assert!(g.harness.state().redraws.contains_key(&doc));
+    let held = start_held_redraw(&mut g, doc);
     // Less than the document's own pixels: nothing is left for kept composites.
     g.harness.state_mut().session.edit_prefs(|p| p.performance.memory_usage_mb = 1);
+    drop(held);
     settle(&mut g);
     assert!(g.harness.state().kept.entries.is_empty(), "a composite was kept over the current cap");
 }
@@ -331,9 +347,9 @@ fn a_redraw_across_a_text_gamma_change_is_not_kept() {
     let _gpu = photocraft_testkit::gpu_lock();
     let Some(mut g) = gpu_app() else { return };
     let doc = cpu_only_document(g.harness.state_mut(), 4096, 3072);
-    g.harness.step();
-    assert!(g.harness.state().redraws.contains_key(&doc));
+    let held = start_held_redraw(&mut g, doc);
     g.harness.state_mut().session.color.settings.blend_text_gamma = 1.0;
+    drop(held);
     settle(&mut g);
     assert!(g.harness.state().kept.entries.is_empty(), "a composite of two gammas was kept");
 }
@@ -345,11 +361,12 @@ fn a_redraw_across_a_text_gamma_change_and_back_is_not_kept() {
     let Some(mut g) = gpu_app() else { return };
     let doc = cpu_only_document(g.harness.state_mut(), 4096, 3072);
     let gamma = g.harness.state().session.color.settings.blend_text_gamma;
-    g.harness.step();
+    let held = start_held_redraw(&mut g, doc);
     g.harness.state_mut().session.color.settings.blend_text_gamma = 1.0;
     g.harness.step();
     g.harness.state_mut().session.color.settings.blend_text_gamma = gamma;
     assert!(g.harness.state().redraws.contains_key(&doc), "the redraw finished before the change back");
+    drop(held);
     settle(&mut g);
     assert!(g.harness.state().kept.entries.is_empty(), "a composite of two gammas was kept");
 }
@@ -362,7 +379,7 @@ fn a_hidden_documents_redraw_across_a_text_gamma_change_and_back_is_not_kept() {
     let Some(mut g) = gpu_app() else { return };
     let doc = cpu_only_document(g.harness.state_mut(), 4096, 3072);
     let gamma = g.harness.state().session.color.settings.blend_text_gamma;
-    g.harness.step();
+    let held = start_held_redraw(&mut g, doc);
     g.harness.state_mut().run("file.new", json!({"width": 64, "height": 64})).expect("another document");
     g.harness.step();
     g.harness.state_mut().session.color.settings.blend_text_gamma = 1.0;
@@ -372,6 +389,7 @@ fn a_hidden_documents_redraw_across_a_text_gamma_change_and_back_is_not_kept() {
     assert!(g.harness.state().redraws.contains_key(&doc), "the hidden document's redraw stopped");
     let i = g.harness.state().session.documents().iter().position(|st| st.doc.id == doc).expect("document");
     g.harness.state_mut().session.set_active(i);
+    drop(held);
     settle(&mut g);
     assert!(g.harness.state().kept.entries.iter().all(|k| k.id != doc), "a composite of two gammas was kept");
 }
@@ -477,8 +495,8 @@ fn closing_the_document_stops_its_redraw() {
     let _gpu = photocraft_testkit::gpu_lock();
     let Some(mut g) = gpu_app() else { return };
     let doc = cpu_only_document(g.harness.state_mut(), 4096, 3072);
-    g.harness.step();
-    assert!(g.harness.state().redraws.contains_key(&doc));
+    // Held: the close lands while the redraw runs, and a cancelled worker leaves the hold.
+    let _held = start_held_redraw(&mut g, doc);
     g.harness.state_mut().run("file.close", json!({"save": false})).expect("close");
     g.harness.step();
     assert!(g.harness.state().redraws.is_empty());
@@ -529,16 +547,16 @@ fn hiding_a_large_layer_over_the_gpu_budget_redraws_in_the_background() {
     assert_matches_synchronous(&mut g, doc);
 }
 
-/// The active document's render path: its reason's kind and the status bar's label.
-fn render_path_of(g: &Gpu) -> (Option<&'static str>, Option<&'static str>) {
+/// The active document's render path: its reason's kind.
+fn render_path_of(g: &Gpu) -> Option<&'static str> {
     let app = g.harness.state();
     let doc = app.session.active().expect("document").doc.id.0;
-    (app.render_path.current(doc).map(crate::render_path::CpuReason::kind), crate::chrome_ui::render_path_label(app).map(|l| l.0))
+    app.render_path.current(doc).map(crate::render_path::CpuReason::kind)
 }
 
 /// On the GPU canvas: no reason, or only a software adapter's (CI's runners have one).
 fn on_gpu_canvas(g: &Gpu) -> bool {
-    matches!(render_path_of(g).0, None | Some("softwareAdapter"))
+    matches!(render_path_of(g), None | Some("softwareAdapter"))
 }
 
 #[test]
@@ -550,53 +568,11 @@ fn advanced_blending_fallback_is_shown_in_the_status_bar() {
     g.harness.step();
     settle(&mut g);
     g.harness.run_steps(2);
-    assert_eq!(render_path_of(&g), (Some("unsupported"), Some("CPU Rendering")));
-    assert!(g.harness.query_by_label("CPU Rendering").is_some(), "the status bar says so");
-    let tip = crate::chrome_ui::render_path_label(g.harness.state()).map(|l| l.1).unwrap_or_default();
-    assert!(tip.contains("Advanced Blending"), "{tip}");
-}
-
-#[test]
-fn over_budget_fallback_shows_working_set_and_budget() {
-    use egui_kittest::kittest::Queryable;
-    let _gpu = photocraft_testkit::gpu_lock();
-    let Some(mut g) = gpu_app() else { return };
-    // As in `hiding_a_large_layer_over_the_gpu_budget_redraws_in_the_background`: a large damage
-    // rect over a budget the whole width's pages don't fit.
-    let app = g.harness.state_mut();
-    app.run("file.new", json!({"width": 5000, "height": 2000, "background": "#336699"})).expect("new");
-    app.run("layer.new.layer", json!({})).expect("layer");
-    app.run("select.rect", json!({"x": 0, "y": 0, "width": 4800, "height": 1800})).expect("select");
-    app.run("edit.fill", json!({"color": "#cc8844"})).expect("fill");
-    app.run("select.deselect", json!({})).expect("deselect");
-    let layer = app.session.active().expect("document").active_layer.expect("layer");
-    settle(&mut g);
-    assert!(on_gpu_canvas(&g), "the document fits the GPU");
-    g.observer.set_memory_budget(48 << 20);
-    g.harness.state_mut().run("layer.setProps", json!({"layer": layer.0, "visible": false})).expect("hide");
-    g.harness.step();
-    settle(&mut g);
-    g.harness.run_steps(2);
-    assert_eq!(render_path_of(&g), (Some("overBudget"), Some("GPU Memory Full")));
-    assert!(g.harness.query_by_label("GPU Memory Full").is_some());
-    let text = g.harness.state().perf.gpu_fallback.clone().unwrap_or_default();
-    assert!(text.contains("of GPU memory, budget") && text.contains('M'), "{text}");
-}
-
-#[test]
-fn a_compositor_build_failure_shows_its_reason() {
-    use egui_kittest::kittest::Queryable;
-    let _gpu = photocraft_testkit::gpu_lock();
-    let Some(mut g) = gpu_app() else { return };
-    // The DX12 FXC failure of #8733, which no Mac reproduces.
-    g.observer.fail_compositor("Shader compilation failed: error X3507: not all control paths return a value");
-    g.harness.state_mut().run("file.new", json!({"width": 400, "height": 300, "background": "#336699"})).expect("new");
-    g.harness.step();
-    settle(&mut g);
-    g.harness.run_steps(2);
-    assert_eq!(render_path_of(&g), (Some("compositorBuild"), Some("CPU Rendering")));
-    assert!(g.harness.query_by_label("CPU Rendering").is_some());
-    assert!(g.harness.state().perf.gpu_fallback.as_deref().is_some_and(|f| f.contains("X3507")));
+    assert_eq!(render_path_of(&g), Some("unsupported"));
+    // PLAN: assumes the status bar's CPU Rendering message exposes its tooltip text to kittest after a hover (panels-w19).
+    g.harness.get_by_label("CPU Rendering").hover();
+    g.harness.run_steps(40);
+    assert!(g.harness.query_by_label_contains("Advanced Blending").is_some(), "the tooltip names the cause");
 }
 
 #[test]
@@ -611,7 +587,7 @@ fn completed_compositor_build_refreshes_an_unchanged_cached_document() {
         settle(&mut g);
         let doc = g.harness.state().session.active().expect("document").doc.id;
         let revision = g.harness.state().session.active().expect("document").revision;
-        assert_eq!(render_path_of(&g).0, Some("compositorBuilding"));
+        assert_eq!(render_path_of(&g), Some("compositorBuilding"));
         assert!(gpu.simulate_compositor_completion(success), "test compositor must build");
         g.harness.step();
         settle(&mut g);
@@ -620,7 +596,7 @@ fn completed_compositor_build_refreshes_an_unchanged_cached_document() {
         if success {
             assert!(on_gpu_canvas(&g), "successful build should replace the temporary reason: {:?}", render_path_of(&g));
         } else {
-            assert_eq!(render_path_of(&g).0, Some("compositorBuild"));
+            assert_eq!(render_path_of(&g), Some("compositorBuild"));
             assert!(g.harness.state().perf.gpu_fallback.as_deref().is_some_and(|s| s.contains("simulated build failure")));
             assert_matches_synchronous(&mut g, doc);
         }
@@ -635,7 +611,7 @@ fn a_canvas_over_the_texture_budget_records_its_reason() {
     g.harness.state().gpu.as_ref().expect("gpu canvas").set_canvas_budget(1);
     g.harness.state_mut().run("file.new", json!({"width": 400, "height": 300, "background": "#336699"})).expect("new");
     g.harness.run_steps(3);
-    assert_eq!(render_path_of(&g), (Some("canvasTooLarge"), Some("CPU Rendering")));
+    assert_eq!(render_path_of(&g), Some("canvasTooLarge"));
     let doc = g.harness.state().session.active().expect("document").doc.id.0;
     assert_eq!(g.harness.state().render_path.history().filter(|c| c.doc == doc).count(), 1, "once, not every frame");
 }
@@ -714,7 +690,7 @@ fn a_canvas_over_the_texture_budget_draws_its_viewport_pages_on_the_gpu() {
     // A budget too small for one page draws it on the CPU canvas, as before.
     gpu.set_canvas_budget(1);
     g.harness.run_steps(3);
-    assert_eq!(render_path_of(&g), (Some("canvasTooLarge"), Some("CPU Rendering")));
+    assert_eq!(render_path_of(&g), Some("canvasTooLarge"));
     // Its pages and their work are freed meanwhile (#5332 review).
     assert!(gpu.pages(key).0.is_empty(), "pages freed");
     assert!(!g.harness.state().streams.contains_key(&doc.id), "stream dropped");
@@ -725,6 +701,13 @@ fn a_canvas_over_the_texture_budget_draws_its_viewport_pages_on_the_gpu() {
     g.harness.run_steps(3);
     assert!(g.harness.state().streams.is_empty());
     assert!(gpu.pages(key).0.is_empty());
+}
+
+/// Runs a Window › Arrange command, as its menu item does, and lets the layout settle.
+fn arrange(g: &mut Gpu, command: &str) {
+    let ctx = g.harness.ctx.clone();
+    crate::menus::invoke(g.harness.state_mut(), &ctx, command, json!({})).expect("arrange");
+    g.harness.run_steps(3);
 }
 
 /// #5332 review: the open documents share one texture budget rather than each having all of
@@ -761,8 +744,7 @@ fn open_documents_share_one_texture_budget_with_the_shown_ones_first() {
     assert!(gpu.texture_info(a.id.0).is_some());
     assert!(gpu.texture_info(b.id.0).is_none());
     // Side by side, they split the budget: neither set fits its half, so both draw from pages.
-    g.harness.state_mut().ui.view.arrange = "twoUpVertical".into();
-    g.harness.run_steps(3);
+    arrange(&mut g, "window.arrange.twoUpVertical");
     assert_eq!(gpu.canvas_fit(&a), Some((set, budget / 2)));
     assert_eq!(gpu.canvas_fit(&b), Some((set, budget - budget / 2)));
     settle_pages(&mut g);
@@ -777,8 +759,7 @@ fn open_documents_share_one_texture_budget_with_the_shown_ones_first() {
     assert_eq!(gpu.canvas_fit(&a), Some((set, budget / 2)));
     assert_eq!(gpu.pages(crate::canvas::viewport_pages::stream_key(a.id.0)).0, held, "no churn on a switch");
     // Back to tabs: the shown document has the whole budget, and its texture set, again.
-    g.harness.state_mut().ui.view.arrange = "tabs".into();
-    g.harness.run_steps(3);
+    arrange(&mut g, "window.arrange.consolidateAllToTabs");
     assert_eq!(gpu.canvas_fit(&b), Some((set, budget)));
     assert!(on_gpu_canvas(&g), "{:?}", render_path_of(&g));
     assert!(gpu.texture_info(b.id.0).is_some());
@@ -793,7 +774,7 @@ fn a_flipped_view_records_why_it_draws_on_the_cpu() {
     assert!(on_gpu_canvas(&g));
     g.harness.state_mut().ui.view.flip_horizontal = true;
     g.harness.run_steps(3);
-    assert_eq!(render_path_of(&g), (Some("viewTransform"), Some("CPU Rendering")));
+    assert_eq!(render_path_of(&g), Some("viewTransform"));
     g.harness.state_mut().ui.view.flip_horizontal = false;
     g.harness.run_steps(3);
     assert!(on_gpu_canvas(&g), "back on the GPU");

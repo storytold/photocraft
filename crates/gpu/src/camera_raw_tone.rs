@@ -1334,10 +1334,14 @@ fn record(encoder: &mut wgpu::CommandEncoder, ops: &[Op], pipes: &TonePipelines,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use photocraft_algo::camera_raw::{CameraRaw, per_pixel};
+    use photocraft_algo::camera_raw::{CameraRaw, DevelopInputs, per_pixel};
 
-    fn reads_luma(p: &CameraRaw) -> bool {
-        let stages = per_pixel(p, 64, 48, false, None).expect("a per-pixel develop");
+    /// Whether Detail's stages for the default settings with `set` applied read the luminance.
+    fn reads_luma(set: impl FnOnce(&mut CameraRaw)) -> bool {
+        // `CameraRaw` is `#[non_exhaustive]`: start from the defaults and assign.
+        let mut p = CameraRaw::default();
+        set(&mut p);
+        let stages = per_pixel(&p, &DevelopInputs::default(), 64, 48, false, None).expect("a per-pixel develop");
         PlanKey::new(&stages).detail.expect("Detail's stages").reads_luma()
     }
 
@@ -1345,9 +1349,13 @@ mod tests {
     /// noise reduction frame left allocated (a full-frame pass nothing reads).
     #[test]
     fn only_luminance_noise_and_sharpening_read_the_luminance() {
-        assert!(!reads_luma(&CameraRaw { noise_color: 50.0, ..Default::default() }));
-        assert!(reads_luma(&CameraRaw { noise_luminance: 50.0, ..Default::default() }));
-        assert!(reads_luma(&CameraRaw { sharpen_amount: 80.0, ..Default::default() }));
-        assert!(reads_luma(&CameraRaw { noise_color: 50.0, sharpen_amount: 80.0, sharpen_masking: 40.0, ..Default::default() }));
+        assert!(!reads_luma(|p| p.noise_color = 50.0));
+        assert!(reads_luma(|p| p.noise_luminance = 50.0));
+        assert!(reads_luma(|p| p.sharpen_amount = 80.0));
+        assert!(reads_luma(|p| {
+            p.noise_color = 50.0;
+            p.sharpen_amount = 80.0;
+            p.sharpen_masking = 40.0;
+        }));
     }
 }
