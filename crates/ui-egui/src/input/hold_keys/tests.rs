@@ -347,10 +347,16 @@ const CTRL_ALT: Modifiers = Modifiers { alt: true, ctrl: true, shift: false, mac
 /// The tools that keep ⌘ for themselves leave the layer alone.
 #[test]
 fn cmd_gives_the_move_tool_only_where_the_tool_does_not_take_cmd() {
-    let moves =
-        [Tool::Brush, Tool::Eraser, Tool::Gradient, Tool::CloneStamp, Tool::Eyedropper, Tool::Move, Tool::RectMarquee, Tool::EllipseMarquee, Tool::Lasso];
+    // The Eraser is left out: it is in the Brush's family (`canvas::tools::family`), which refuses a ⌘ press the same
+    // way for every tool (`PaintTool::takes`); the Elliptical Marquee is the Rectangular one's marquee pass with
+    // another shape (`selection.rs`, `MarqueeKind`).
+    // One app per group, with the tool switched between cases and a fresh layer for each: starting
+    // the whole app dominates the cost of a case.
+    let moves = [Tool::Brush, Tool::Gradient, Tool::CloneStamp, Tool::Eyedropper, Tool::Move, Tool::RectMarquee, Tool::Lasso];
+    let mut h = harness(moves[0]);
     for tool in moves {
-        let mut h = harness(tool);
+        h.state_mut().ui.tool = tool;
+        h.run_steps(1);
         let id = with_layer(&mut h);
         let steps = h.state().session.active().unwrap().history.past_len();
         drag_with(&mut h, Modifiers::COMMAND, 130.0, 130.0, 170.0, 150.0);
@@ -360,26 +366,29 @@ fn cmd_gives_the_move_tool_only_where_the_tool_does_not_take_cmd() {
         assert_eq!(st.history.past_len(), steps + 1, "{tool:?}: one step, nothing painted");
         assert_eq!(h.state().ui.tool, tool, "{tool:?}: the tool is back");
     }
+    // The Crop and Rotate View tools go last, in an app of their own: they leave a pending crop and
+    // a turned view behind.
     let keeps = [
-        Tool::Hand,
-        Tool::RotateView,
-        Tool::Zoom,
-        Tool::Pen,
-        Tool::Rectangle,
-        Tool::Type,
-        Tool::VerticalType,
-        Tool::Crop,
-        Tool::PathSelection,
-        Tool::DirectSelection,
+        vec![Tool::Hand, Tool::Zoom, Tool::Pen, Tool::Rectangle, Tool::Type, Tool::VerticalType, Tool::PathSelection, Tool::DirectSelection],
+        vec![Tool::Crop, Tool::RotateView],
     ];
-    for tool in keeps {
-        let mut h = harness(tool);
-        let id = with_layer(&mut h);
-        drag_with(&mut h, Modifiers::COMMAND, 130.0, 130.0, 170.0, 150.0);
-        assert_eq!(bounds(&h, id), Rect::new(100, 100, 160, 160), "{tool:?}: the layer stays");
-        assert_ne!(h.state().session.active().unwrap().history.undo_label(), Some("Move"), "{tool:?}");
-        assert_eq!(h.state().ui.tool, tool);
+    for group in keeps {
+        let mut h = harness(group[0]);
+        for tool in group {
+            h.state_mut().ui.tool = tool;
+            h.run_steps(1);
+            keeps_the_layer(&mut h, tool);
+        }
     }
+}
+
+/// A ⌘-drag with `tool`, one that keeps ⌘ for itself, leaves a fresh layer where it is.
+fn keeps_the_layer(h: &mut Harness<'static, Box<PhotocraftApp>>, tool: Tool) {
+    let id = with_layer(h);
+    drag_with(h, Modifiers::COMMAND, 130.0, 130.0, 170.0, 150.0);
+    assert_eq!(bounds(h, id), Rect::new(100, 100, 160, 160), "{tool:?}: the layer stays");
+    assert_ne!(h.state().session.active().unwrap().history.undo_label(), Some("Move"), "{tool:?}");
+    assert_eq!(h.state().ui.tool, tool);
 }
 
 /// ⌘⌥-drag duplicates the layer first and moves the copy, as the Move tool's ⌥-drag does. Off
