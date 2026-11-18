@@ -40,6 +40,24 @@ pub(crate) enum Command {
     Serve(ServeArgs),
 }
 
+// Explicit decoding policy shared by every file-reading subcommand.
+#[derive(Args)]
+pub(crate) struct ImportArgs {
+    /// Explicit sample byte order for unmarked high-depth XCF7-11; never inferred
+    #[arg(long, value_name = "little-endian|big-endian", value_parser = historical_xcf_sample_order)]
+    pub(crate) historical_xcf_sample_order: Option<photocraft_io::HistoricalXcfSampleOrder>,
+}
+
+/// Accept only the explicit historical byte-order spellings, avoiding unmarked platform or sample plausibility
+/// guesses.
+fn historical_xcf_sample_order(value: &str) -> Result<photocraft_io::HistoricalXcfSampleOrder, &'static str> {
+    match value {
+        "little-endian" => Ok(photocraft_io::HistoricalXcfSampleOrder::LittleEndian),
+        "big-endian" => Ok(photocraft_io::HistoricalXcfSampleOrder::BigEndian),
+        _ => Err("expected little-endian or big-endian"),
+    }
+}
+
 // How an image is written: shared by `convert`, `run` and `batch`.
 #[derive(Args)]
 pub(crate) struct ExportArgs {
@@ -107,6 +125,8 @@ pub(crate) struct ExportArgs {
 /// --in-place allows it.
 #[derive(Args)]
 pub(crate) struct ConvertArgs {
+    #[command(flatten)]
+    pub(crate) import: ImportArgs,
     /// The file to read
     #[arg(value_name = "IN")]
     pub(crate) input: PathBuf,
@@ -119,9 +139,6 @@ pub(crate) struct ConvertArgs {
     /// Explicitly approve high-memory PSD/PSB imports within the hard memory budget
     #[arg(long)]
     pub(crate) approve_high_memory: bool,
-    /// Explicit sample byte order for ambiguous high-depth XCF 7–11 files; never guessed
-    #[arg(long, value_parser = ["little-endian", "big-endian"])]
-    pub(crate) historical_xcf_sample_order: Option<String>,
     /// PDF import resolution in DPI (default 300)
     #[arg(long, value_name = "DPI", value_parser = pdf_dpi)]
     pub(crate) pdf_dpi: Option<f32>,
@@ -141,6 +158,8 @@ pub(crate) struct ConvertArgs {
 /// Print the document as JSON (size, mode, depth, layer tree)
 #[derive(Args)]
 pub(crate) struct InfoArgs {
+    #[command(flatten)]
+    pub(crate) import: ImportArgs,
     pub(crate) file: PathBuf,
     /// One line of JSON instead of pretty-printed
     #[arg(long)]
@@ -148,9 +167,6 @@ pub(crate) struct InfoArgs {
     /// Explicitly approve high-memory PSD/PSB imports within the hard memory budget
     #[arg(long)]
     pub(crate) approve_high_memory: bool,
-    /// Explicit sample byte order for ambiguous high-depth XCF 7–11 files; never guessed
-    #[arg(long, value_parser = ["little-endian", "big-endian"])]
-    pub(crate) historical_xcf_sample_order: Option<String>,
     /// Also list every text run and paragraph run, anti-aliasing and full layer-effect settings
     #[arg(long)]
     pub(crate) detail: bool,
@@ -165,6 +181,8 @@ pub(crate) struct InfoArgs {
 #[command(group(ArgGroup::new("source").args(["file", "new"]).required(true)))]
 #[command(group(ArgGroup::new("work").args(["cmd", "out"]).required(true).multiple(true)))]
 pub(crate) struct RunArgs {
+    #[command(flatten)]
+    pub(crate) import: ImportArgs,
     /// The document to open
     pub(crate) file: Option<PathBuf>,
     /// Start from a new document with these JSON parameters instead of opening a file
@@ -185,9 +203,6 @@ pub(crate) struct RunArgs {
     /// Explicitly approve high-memory PSD/PSB imports within the hard memory budget
     #[arg(long)]
     pub(crate) approve_high_memory: bool,
-    /// Explicit sample byte order for ambiguous high-depth XCF 7–11 files; never guessed
-    #[arg(long, requires = "file", value_parser = ["little-endian", "big-endian"])]
-    pub(crate) historical_xcf_sample_order: Option<String>,
     #[command(flatten)]
     pub(crate) gpu: GpuArgs,
     #[command(flatten)]
@@ -213,6 +228,8 @@ pub(crate) enum Step {
 /// loaded, so its steps can play other actions of the set.
 #[derive(Args)]
 pub(crate) struct BatchArgs {
+    #[command(flatten)]
+    pub(crate) import: ImportArgs,
     /// The action list: actions.json, a droplet, or a Photoshop Actions file (.atn)
     #[arg(long, value_name = "FILE")]
     pub(crate) actions: PathBuf,
@@ -248,9 +265,6 @@ pub(crate) struct BatchArgs {
     /// Explicitly approve high-memory PSD/PSB imports within the hard memory budget
     #[arg(long)]
     pub(crate) approve_high_memory: bool,
-    /// Explicit sample byte order for ambiguous high-depth XCF 7–11 batch inputs; never guessed
-    #[arg(long, value_parser = ["little-endian", "big-endian"])]
-    pub(crate) historical_xcf_sample_order: Option<String>,
     #[command(flatten)]
     pub(crate) gpu: GpuArgs,
     #[command(flatten)]
@@ -509,6 +523,9 @@ fn steps(m: &ArgMatches) -> Vec<Step> {
 /// stray.psd --help`): clap reports the mistake first.
 pub(crate) fn parse(args: &[OsString]) -> Result<Cli, clap::Error> {
     let mut cmd = Cli::command().mut_subcommands(|sub| sub.mut_args(blank_env_is_unset));
+    // `requires(file)` alone accepts the other member of the required source group.
+    // Explicitly exclude --new: byte order is only a policy for an input file.
+    cmd = cmd.mut_subcommand("run", |sub| sub.mut_arg("historical_xcf_sample_order", |arg| arg.requires("file").conflicts_with("new")));
     // `mcp --headless` reaches no app: a PHOTOCRAFT_CONTROL_PORT exported for another tool is not
     // read, so a value it couldn't use anyway doesn't stop it.
     if args.first().is_some_and(|a| a == "mcp") && args.iter().take_while(|a| *a != "--").any(|a| a == "--headless") {

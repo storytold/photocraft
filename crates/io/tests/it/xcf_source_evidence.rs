@@ -49,6 +49,21 @@ fn near(actual: f64, expected: f64, tolerance: f64) {
     assert!((actual - expected).abs() <= tolerance, "actual {actual}, expected {expected}");
 }
 
+/// Source offsets name the layout top-left, while native point text uses a baseline anchor.
+/// Check the positioned logical origin rather than requiring an unshifted native transform.
+fn text_source_origin(doc: &Document, text: &photocraft_doc::TextLayer, expected: Point) {
+    assert_eq!(&text.transform.m[..4], &[1., 0., 0., 1.], "source has no affine scale or shear");
+    let bounds = photocraft_text::shared()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .layout(text, doc.resolution_dpi)
+        .bounds()
+        .expect("native logical text bounds");
+    let origin = text.transform.apply(Point::new(f64::from(bounds[0]), f64::from(bounds[1])));
+    near(origin.x, expected.x, 0.0001);
+    near(origin.y, expected.y, 0.0001);
+}
+
 #[test]
 #[ignore = "Requires expanded upstream XCF corpus pin (T081)"]
 /// Checks independently saved precision cases against known sample values, placement and native persistence.
@@ -184,7 +199,7 @@ fn saved_named_markup_colors_become_native_editable_runs() {
     let doc = open("text-named-markup-colors");
     let native = doc.layers.iter().find_map(|l| if let LayerContent::Text(t) = &l.content { Some(t) } else { None }).expect("native editable named text");
     assert_eq!(native.text, "Green Gray Gold 42 Steel\nY M P R L C B");
-    assert_eq!(native.transform, Affine::translate(3., 4.));
+    text_source_origin(&doc, native, Point::new(3., 4.));
     assert!(native.cache.is_none());
     let expected: [(&str, [u8; 3], f32); 12] = [
         ("Green ", [0, 128, 0], 1.),
@@ -200,9 +215,12 @@ fn saved_named_markup_colors_become_native_editable_runs() {
         ("C ", [250, 250, 210], 1.),
         ("B", [102, 51, 153], 1.),
     ];
-    // Original authoring literals, converted independently through native CMS.
-    let profile = craft_cms::Profile::parse(doc.icc_profile.as_deref().expect("saved source profile")).unwrap();
-    let transform = craft_cms::Transform::new(craft_cms::Builtin::Srgb.profile(), &profile, craft_cms::Intent::RelativeColorimetric, false).unwrap();
+    // This original RGB/U8 nonlinear source has no assigned profile. Native missing-profile
+    // policy keeps it untagged while its sRGB markup literals still use the native CMS.
+    assert_eq!((doc.mode, doc.depth), (ColorMode::Rgb, SampleType::U8));
+    assert!(doc.icc_profile.is_none(), "an unassigned source must not gain an ICC assignment");
+    let profile = craft_cms::Builtin::Srgb.profile();
+    let transform = craft_cms::Transform::new(profile, profile, craft_cms::Intent::RelativeColorimetric, false).unwrap();
     for (word, rgb, alpha) in expected {
         let at = native.text.find(word).expect("original text span");
         let mut offset = 0;
@@ -533,7 +551,7 @@ fn historical_v19_font_objects_named_cubic_paths_and_precision_are_native_and_pe
         let text =
             doc.layers.iter().find_map(|l| if let LayerContent::Text(t) = &l.content { Some(t) } else { None }).expect("ordinary editable historical text");
         assert_eq!(text.text, "Historical XCF");
-        assert_eq!(text.transform, Affine::IDENTITY);
+        text_source_origin(&doc, text, Point::new(0., 0.));
         // Native requested-font policy prefers the stored full face over its generic alias.
         assert_eq!(text.runs[0].style.font_family, "Cascadia Code Regular");
         assert_eq!(text.runs[0].style.postscript_name.as_deref(), Some("CascadiaCode-Roman"));
@@ -557,12 +575,12 @@ fn historical_v19_font_objects_named_cubic_paths_and_precision_are_native_and_pe
 
 #[test]
 #[ignore = "Requires expanded upstream XCF corpus pin (T081)"]
-/// Verifies stock-writer-resaved bootstrap graph cases retain original pixels inside ordinary native
+/// Verifies application-authored graph cases retain original pixels inside ordinary native
 /// contents.
-fn historical_stock_resaved_bootstrap_graphs_preserve_original_pixels_as_native_contents() {
+fn application_authored_graphs_preserve_original_pixels_as_native_contents() {
     use photocraft_doc::import_conversion::{ConversionDisposition, ImportConversion};
-    // Disclosed documented-wire seeds were loaded, saved to NEW XCF files, deleted,
-    // reopened and merged by unmodified stock2.99.18. They were not GUI authored.
+    // Stock GIMP 3.2.6 public Image/DrawableFilter APIs create these from scratch,
+    // then save, delete and reopen them. No handcrafted XCF seed is used.
     // Stock PNG behavior is source observation, not expected PhotoCraft compositing.
     let expected = (0..6)
         .flat_map(|y| {
@@ -577,8 +595,8 @@ fn historical_stock_resaved_bootstrap_graphs_preserve_original_pixels_as_native_
         })
         .collect::<Vec<_>>();
     for suffix in ["invert-linear", "original-over-inverted"] {
-        let stem = format!("historical-2-99-18-graph-{suffix}");
-        assert_eq!(&fixture(&format!("{stem}.xcf"))[..14], b"gimp xcf v020\0");
+        let stem = format!("graph-{suffix}");
+        assert_eq!(&fixture(&format!("{stem}.xcf"))[..14], b"gimp xcf v022\0");
         let doc = open(&stem);
         assert_eq!((doc.size.width, doc.size.height, doc.mode, doc.depth), (8, 6, ColorMode::Rgb, SampleType::U8));
         let mut stages = Vec::new();
@@ -629,7 +647,7 @@ fn genuine_v0_string_font_and_legacy_property_path_are_editable_native_data() {
         .find_map(|layer| if let LayerContent::Text(text) = &layer.content { Some(text) } else { None })
         .expect("editable historical string-font text");
     assert_eq!(text.text, "Legacy XCF");
-    assert_eq!(text.transform, Affine::IDENTITY);
+    text_source_origin(&doc, text, Point::new(0., 0.));
     assert_eq!(text.runs[0].style.font_family, "Sans-serif");
     near(f64::from(text.size_pt) * f64::from(doc.resolution_dpi) / 72., 12., 0.0001);
     assert!(text.cache.is_none());

@@ -1,6 +1,6 @@
 use craft::ui::contract::Bind;
-use craft::ui::dialog::{DialogId, dialog_id};
-use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamKind, ParamResult};
+use craft::ui::dialog::{DialogId, StackDialog, dialog_id};
+use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog, Param, ParamDialog, ParamKind, ParamResult};
 use craft::ui::runtime::env::Label;
 use serde_json::{Map, Value, json};
 
@@ -39,6 +39,18 @@ fn identity(kind: PromptKind) -> Option<(String, &'static str, u64)> {
 fn front_dialog(app: &PhotocraftApp) -> Option<DialogId> {
     let (key, ..) = identity(*app.prompt_order.front()?)?;
     Some(dialog_id(key.as_str()))
+}
+
+pub(super) fn is_opening(app: &PhotocraftApp, dialog: DialogId) -> bool {
+    matches!(app.prompt_order.front(), Some(PromptKind::Historical(_))) && front_dialog(app) == Some(dialog)
+}
+
+pub(super) fn check_cancel(app: &PhotocraftApp, dialog: DialogId) -> Result<(), String> {
+    if !is_opening(app, dialog) {
+        return Ok(());
+    }
+    let Some(PromptKind::Historical(id)) = app.prompt_order.front().copied() else { return Ok(()) };
+    historical_xcf::validate_cancel(app, id)
 }
 
 pub(super) fn is_open(app: &PhotocraftApp) -> bool {
@@ -93,13 +105,23 @@ fn check(app: &mut PhotocraftApp, result: &ParamResult) -> Result<(), Label> {
     .map_err(Label::from)
 }
 
-fn run(app: &mut PhotocraftApp, _ctx: &egui::Context, result: ParamResult) {
+fn run(app: &mut PhotocraftApp, ctx: &egui::Context, result: ParamResult) {
     let Some((kind, fields)) = fields(&result.key, &result.fields) else { return };
     let outcome = match kind {
         PromptKind::Historical(_) => historical_xcf::answer(app, &fields, true),
         PromptKind::Replacement(_) => historical_replace::answer(app, &fields, true),
         _ => return,
     };
+    // A late refusal can occur after the host accepts OK. Restore the explicit answer
+    // when the encoded source remains held and its dialog is recreated.
+    if outcome.is_err()
+        && matches!(kind, PromptKind::Historical(_))
+        && let Some(id) = front_dialog(app)
+        && let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedParamDialog>(id)
+        && let Some(order) = fields.get(ORDER)
+    {
+        let _ = dialog.set_json_field(ctx, ORDER, order.clone());
+    }
     alerts::report(app, outcome);
 }
 
@@ -112,6 +134,9 @@ fn cancel(app: &mut PhotocraftApp, _ctx: &egui::Context, dialog: DialogId) {
         Some(PromptKind::Replacement(id)) => historical_replace::answer(app, &[(historical_replace::FIELD.into(), json!(id))].into_iter().collect(), false),
         _ => return,
     };
+    if outcome.is_err() {
+        crate::open_prompt::advance(app);
+    }
     alerts::report(app, outcome);
 }
 

@@ -1075,3 +1075,81 @@ fn profile_and_metadata_follow_the_existing_exporter() {
     assert!(kept.windows(b"secret".len()).any(|w| w == b"secret"));
     assert_eq!(doc, before);
 }
+
+/// The hosted dialog owns the exact source and protects all outputs after that tab closes.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn captured_exports_reject_aliases_and_finish_after_the_source_tab_closes() {
+    use std::{cell::Cell, rc::Rc};
+
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("protected.xcf");
+    let alias = directory.path().join("alias.png");
+    let copy = directory.path().join("copy.png");
+    std::fs::write(&source, b"original import source").unwrap();
+    std::fs::hard_link(&source, &alias).unwrap();
+
+    for mode in ["document", "layer", "layers", "quickLayers"] {
+        for protected in [false, true] {
+            let answer = if protected { alias.clone() } else { copy.clone() };
+            let files = Arc::new(craft::host::ScriptedFiles::answering([craft::host::Picked::Paths(vec![answer.clone()])]));
+            let mut app = export_app_over(2, 2, Some(files.clone()));
+            let calls = Rc::new(Cell::new(0));
+            let encoded = calls.clone();
+            let written = calls.clone();
+            app.services.export = Some(Box::new(move |doc, path, _| {
+                assert_eq!((doc.size.width, doc.size.height), (2, 2));
+                if std::path::Path::new(path).is_absolute() {
+                    encoded.set(encoded.get() + 1);
+                }
+                Ok((vec![1], vec![]))
+            }));
+            app.services.write = Some(Box::new(move |_, _| {
+                written.set(written.get() + 1);
+                Ok(())
+            }));
+            let mut ids = Vec::new();
+            for name in ["alias", "second"] {
+                app.run("layer.new.layer", json!({"name":name})).unwrap();
+                app.run("edit.fill", json!({"color":"#ff0000"})).unwrap();
+                ids.push(app.session.active().unwrap().active_layer.unwrap());
+            }
+            let state = app.session.active_mut().unwrap();
+            state.saved_revision = state.revision;
+            state.source_read_only = protected;
+            state.protected_import_source = protected.then(|| source.to_string_lossy().into_owned());
+
+            if mode == "quickLayers" {
+                state.selected_layers = ids;
+                quick_export_selected_layers_png(&mut app).unwrap();
+                app.session.close(0).unwrap();
+                app.poll_file_dialog();
+                assert_eq!(files.requests().len(), 1);
+                assert_eq!(app.ui.status_error, protected, "{mode}: {}", app.ui.status);
+            } else {
+                let dialog = match mode {
+                    "layer" => open_layer(&mut app, ids[0]),
+                    "layers" => open_layers(&mut app, &ids),
+                    _ => open(&mut app),
+                }
+                .unwrap();
+                // Selecting another tab before the first preview cannot retarget the export.
+                app.run("file.new", json!({"width":7,"height":9})).unwrap();
+                let mut h = harness(app);
+                let ctx = h.ctx.clone();
+                let path = if mode == "layers" { directory.path() } else { &answer };
+                h.state_mut().framework.dialogs.set_json_field(&ctx, dialog, "path", json!(path)).unwrap();
+                h.state_mut().session.close(1).unwrap();
+                h.state_mut().session.close(0).unwrap();
+                crate::dialogs::confirm(h.state_mut(), &ctx, dialog).unwrap();
+                h.run_steps(3);
+                assert!(h.state().session.active().is_none());
+                assert_eq!(h.state().ui.status_error, protected, "{mode}: {}", h.state().ui.status);
+            }
+
+            let outputs = if matches!(mode, "layers" | "quickLayers") { 2 } else { 1 };
+            assert_eq!(calls.get(), if protected { 0 } else { 2 * outputs }, "{mode}");
+            assert_eq!(std::fs::read(&source).unwrap(), b"original import source");
+        }
+    }
+}

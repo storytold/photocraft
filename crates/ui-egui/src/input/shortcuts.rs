@@ -297,7 +297,7 @@ pub fn clipboard_keys(ctx: &egui::Context, typing: bool, raw: &mut egui::RawInpu
 /// screen color picker is open.
 pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let fired = std::mem::take(&mut app.framework.fired);
-    if crate::screen_picker::busy(app) {
+    if crate::screen_picker::busy(app) || app.ui.import_report.open {
         return;
     }
     crate::shortcut_dispatch::run_fired(app, ctx, &fired);
@@ -314,7 +314,7 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// save (Save in Background off, #6207) blocks the app until the file is written: only Esc reaches it, to cancel
 /// while it still encodes (see `jobs_ui::tick`).
 pub fn escape_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    if crate::screen_picker::busy(app) || crate::jobs_ui::foreground_save(app).is_some() {
+    if crate::screen_picker::busy(app) || crate::jobs_ui::foreground_save(app).is_some() || app.ui.import_report.open {
         return;
     }
     handle_escape_and_view_keys(app, ctx);

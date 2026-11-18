@@ -1,6 +1,6 @@
 //! Explicit per-import choices, ordered with existing memory and profile prompts.
 use crate::{PhotocraftApp, open_prompt::PromptKind};
-use photocraft_engine::jobs::{JobId, Started};
+use photocraft_engine::jobs::JobId;
 use serde_json::{Value, json};
 
 pub(super) const FIELD: &str = "__historicalXcfOpen";
@@ -27,67 +27,87 @@ pub(crate) fn show(app: &mut PhotocraftApp, id: u64) {
     super::historical_sample_order::show(app, PromptKind::Historical(id), &held.name.clone(), held.version, held.bits);
 }
 
-pub(crate) fn validate(app: &PhotocraftApp, fields: &serde_json::Map<String, Value>) -> Result<(), String> {
+/// Derive the held-only command from the live reservation, validating the typed choice before any mutation.
+fn canonical_params(app: &PhotocraftApp, fields: &serde_json::Map<String, Value>, accept: bool) -> Result<(u64, Value), String> {
     let id = fields.get(FIELD).and_then(Value::as_u64).ok_or("missing historical XCF source identity")?;
     if app.prompt_order.front() != Some(&PromptKind::Historical(id)) || !app.historical_opens.iter().any(|held| held.id == id) {
         return Err("historical XCF dialog is stale or out of order".into());
     }
-    photocraft_engine::file_cmds::historical_xcf_sample_order(&Value::Object(fields.clone()), "file.open")
-        .map_err(|error| error.to_string())?
-        .ok_or("choose Little-endian or Big-endian, or Cancel")?;
+    let params = if accept {
+        let order = photocraft_engine::file_cmds::historical_xcf_sample_order(&Value::Object(fields.clone()), "file.open")
+            .map_err(|error| error.to_string())?
+            .ok_or("choose Little-endian or Big-endian, or Cancel")?;
+        json!({"heldHistoricalXcfOpen":id,"historicalXcfSampleOrder":order.to_string(),"interactive":true})
+    } else {
+        json!({"heldHistoricalXcfOpen":id,"cancel":true})
+    };
+    Ok((id, params))
+}
+
+/// Judge canonical parameters before releasing a modal or changing its reservation.
+/// Dispatch repeats the session gate, so a later denial must also leave the live capability retryable.
+fn authorize(app: &PhotocraftApp, params: &Value) -> Result<(), String> {
+    if app.automation_input || app.session.authorize.is_some() {
+        if let Some(authorize) = &app.services.automation_command {
+            authorize("file.open", params)?;
+        }
+        if let Some(authorize) = app.session.authorize.or(app.services.automation_authorize) {
+            authorize("file.open", params).map_err(|error| error.to_string())?;
+        }
+    }
     Ok(())
 }
 
+pub(super) fn validate_cancel(app: &PhotocraftApp, id: u64) -> Result<(), String> {
+    let (_, params) = canonical_params(app, &[(FIELD.into(), json!(id))].into_iter().collect(), false)?;
+    authorize(app, &params)
+}
+
+pub(crate) fn validate(app: &PhotocraftApp, fields: &serde_json::Map<String, Value>) -> Result<(), String> {
+    let (_, params) = canonical_params(app, fields, true)?;
+    authorize(app, &params)
+}
+
 pub(crate) fn answer(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>, accept: bool) -> Result<Value, String> {
-    let id = fields.get(FIELD).and_then(Value::as_u64).ok_or("missing historical XCF source identity")?;
-    if app.prompt_order.front() != Some(&PromptKind::Historical(id)) {
-        return Err("historical XCF dialog is stale or out of order".into());
-    }
+    let (id, params) = canonical_params(app, fields, accept)?;
+    authorize(app, &params)?;
     if !accept {
-        app.session.cancel_historical_xcf_open(id);
+        let value = if app.session.holds_historical_xcf_open(id) {
+            app.run("file.open", params)?
+        } else {
+            // Another authorized caller already released this capability. After
+            // authorization, dismiss only its stale local question; no source remains to cancel.
+            json!({"cancelled":false,"alreadyReleased":true,"heldHistoricalXcfOpen":id})
+        };
         app.historical_opens.retain(|held| held.id != id);
         app.prompt_order.pop_front();
         crate::open_prompt::advance(app);
         crate::jobs_ui::end_batch(app);
-        return Ok(json!({"cancelled":true}));
+        return Ok(value);
     }
-    validate(app, fields)?;
-    let order = photocraft_engine::file_cmds::historical_xcf_sample_order(&Value::Object(fields.clone()), "file.open")
-        .map_err(|error| error.to_string())?
-        .ok_or("choose Little-endian or Big-endian, or Cancel")?;
     // Reserve A's place until its decoded result arrives; B must not pass A's profile prompt.
     if let Some(front) = app.prompt_order.front_mut() {
         *front = PromptKind::Resuming(id);
     }
-    let started = app.session.resume_historical_xcf_open(id, order, app.background_jobs).map_err(|error| error.to_string());
-    match started {
-        Ok(Started::Job(job)) => {
-            let held = app.historical_opens.iter_mut().find(|held| held.id == id).ok_or("historical source is gone")?;
-            held.job = Some(job);
-            let tab = crate::jobs_ui::OpenTab { job, name: held.name.clone(), path: held.path.clone(), slot: held.slot, order: held.order };
-            crate::jobs_ui::track_open(app, tab);
-            Ok(json!({"job":job.0}))
-        }
-        Ok(Started::Done(value)) => {
-            let held = app.historical_opens.iter().find(|held| held.id == id).ok_or("historical source is gone")?;
-            let (name, path, slot, order) = (held.name.clone(), held.path.clone(), held.slot, held.order);
-            let result = crate::jobs_ui::finish_open_with_held(app, &name, path.as_deref(), &value, slot, order);
-            complete(app, id, result.as_ref().ok().copied().flatten());
-            result.map(|_| value)
-        }
+    let value = match app.run("file.open", params) {
+        Ok(value) => value,
         Err(error) => {
-            if app.session.holds_historical_xcf_open(id) {
-                // Confirm may already have closed the modal. Startup retained the
-                // encoded source, so restore its reservation and recreate the choice.
-                if let Some(front) = app.prompt_order.front_mut() {
-                    *front = PromptKind::Historical(id);
-                }
-                crate::open_prompt::advance(app);
-            } else {
-                complete(app, id, None);
-            }
-            Err(error)
+            complete(app, id, None);
+            return Err(error);
         }
+    };
+    if let Some(job) = value.get("job").and_then(Value::as_u64).map(JobId) {
+        let held = app.historical_opens.iter_mut().find(|held| held.id == id).ok_or("historical source is gone")?;
+        held.job = Some(job);
+        let tab = crate::jobs_ui::OpenTab { job, name: held.name.clone(), path: held.path.clone(), slot: held.slot, order: held.order };
+        crate::jobs_ui::track_open(app, tab);
+        Ok(json!({"job":job.0,"pending":true}))
+    } else {
+        let held = app.historical_opens.iter().find(|held| held.id == id).ok_or("historical source is gone")?;
+        let (name, path, slot, order) = (held.name.clone(), held.path.clone(), held.slot, held.order);
+        let result = crate::jobs_ui::finish_open_with_held(app, &name, path.as_deref(), &value, slot, order);
+        complete(app, id, result.as_ref().ok().copied().flatten());
+        result.map(|_| value)
     }
 }
 
@@ -99,6 +119,18 @@ pub(crate) fn for_job(app: &PhotocraftApp, job: JobId) -> Option<u64> {
 /// The reservation kept `arrive` from admitting later files during inline/background completion.
 pub(crate) fn complete(app: &mut PhotocraftApp, id: u64, decoded: Option<photocraft_doc::DocId>) {
     let Some(position) = app.prompt_order.iter().position(|kind| *kind == PromptKind::Resuming(id)) else { return };
+    if decoded.is_none() && app.session.holds_historical_xcf_open(id) {
+        // Command/profile authorization refused before consuming the encoded source.
+        // Restore only this reservation; retain its modal and all later opens.
+        if let Some(kind) = app.prompt_order.get_mut(position) {
+            *kind = PromptKind::Historical(id);
+        }
+        if let Some(held) = app.historical_opens.iter_mut().find(|held| held.id == id) {
+            held.job = None;
+        }
+        crate::open_prompt::advance(app);
+        return;
+    }
     app.historical_opens.retain(|held| held.id != id);
     let decoded_index = app.prompt_order.iter().take(position).filter(|kind| **kind == PromptKind::Open).count();
     app.prompt_order.remove(position);

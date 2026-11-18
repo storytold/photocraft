@@ -7,8 +7,15 @@ fn batch_wrapped_historical_inputs_exclude_unrelated_archives_in_both_listing_mo
     let actions = folder.path().join("actions.json");
     std::fs::create_dir(&input).unwrap();
     std::fs::write(&actions, "[]").unwrap();
-    let sources = [("gzip.xcf.gz", GZIP), ("bzip.xcf.bz2", BZIP), ("xz.XCF.XZ", XZ), ("alias.xcfgz", GZIP), ("compact.XCFBZ2", BZIP), ("compact-xz.XCFXZ", XZ)];
-    for (name, bytes) in sources {
+    let sources = [
+        ("gzip.xcf.gz", GZIP, "gzip.pcraft"),
+        ("bzip.xcf.bz2", BZIP, "bzip.pcraft"),
+        ("xz.XCF.XZ", XZ, "xz.pcraft"),
+        ("alias.xcfgz", GZIP, "alias.pcraft"),
+        ("compact.XCFBZ2", BZIP, "compact.pcraft"),
+        ("compact-xz.XCFXZ", XZ, "compact-xz.pcraft"),
+    ];
+    for (name, bytes, _) in sources {
         std::fs::write(input.join(name), bytes).unwrap();
         assert!(super::is_input(&input.join(name)), "{name}");
     }
@@ -40,9 +47,8 @@ fn batch_wrapped_historical_inputs_exclude_unrelated_archives_in_both_listing_mo
         assert!(result.stdout.contains("6 succeeded, 0 failed"), "{}", result.stdout);
         assert!(!result.stderr.contains("FAIL"), "{}", result.stderr);
         assert_eq!(std::fs::read_dir(&output).unwrap().count(), 6);
-        for (name, bytes) in sources {
-            let stem = std::path::Path::new(name).file_stem().unwrap().to_string_lossy();
-            let target = output.join(format!("{stem}.pcraft"));
+        for (name, bytes, expected_target) in sources {
+            let target = output.join(expected_target);
             let native = std::fs::read(&target).unwrap();
             let doc = photocraft_format::load_from_bytes(&native).unwrap();
             assert_eq!(doc.layers.len(), 1);
@@ -57,58 +63,79 @@ fn batch_wrapped_historical_inputs_exclude_unrelated_archives_in_both_listing_mo
 }
 
 #[test]
-fn batch_default_format_saves_every_xcf_alias_as_psd() {
+fn batch_xcf_aliases_default_to_native_and_keep_explicit_psd_export() {
     let folder = tempfile::tempdir().unwrap();
     let input = folder.path().join("in");
     let actions = folder.path().join("actions.json");
     std::fs::create_dir(&input).unwrap();
     std::fs::write(&actions, "[]").unwrap();
     let plain = historical_rgb16(7, true);
+    // Independent literal stems: compound XCF transports are one import-only suffix.
     let sources = [
-        ("plain.XCF", plain.as_slice()),
-        ("gzip.xcf.gz", GZIP),
-        ("compact-gzip.XCFGZ", GZIP),
-        ("bzip.xcf.bz2", BZIP),
-        ("compact-bzip.XCFBZ2", BZIP),
-        ("xz.xcf.xz", XZ),
-        ("compact-xz.XCFXZ", XZ),
+        ("plain.XCF", plain.as_slice(), "plain"),
+        ("gzip.xcf.gz", GZIP, "gzip"),
+        ("compact-gzip.XCFGZ", GZIP, "compact-gzip"),
+        ("bzip.xcf.bz2", BZIP, "bzip"),
+        ("compact-bzip.XCFBZ2", BZIP, "compact-bzip"),
+        ("xz.xcf.xz", XZ, "xz"),
+        ("compact-xz.XCFXZ", XZ, "compact-xz"),
     ];
-    for (name, bytes) in sources {
+    for (name, bytes, _) in sources {
         std::fs::write(input.join(name), bytes).unwrap();
     }
-    for named in [false, true] {
-        let output = folder.path().join(format!("out-{named}"));
-        let mut args = vec![
-            "batch",
-            "--actions",
-            actions.to_str().unwrap(),
-            "--in",
-            input.to_str().unwrap(),
-            "--out",
-            output.to_str().unwrap(),
-            "--no-gpu",
-            "--historical-xcf-sample-order",
-            "little-endian",
-        ];
-        if named {
-            args.extend(["--naming", "{name}{ext}"]);
-        }
-        let result = invoke(&args);
-        assert_eq!(result.code, 0, "{args:?}: {}{}", result.stdout, result.stderr);
-        assert!(result.stdout.contains("7 succeeded, 0 failed"), "{}", result.stdout);
-        assert_eq!(std::fs::read_dir(&output).unwrap().count(), sources.len());
-        for (name, original) in sources {
-            let stem = std::path::Path::new(name).file_stem().unwrap().to_string_lossy();
-            let target = output.join(format!("{stem}.psd"));
-            let bytes = std::fs::read(&target).unwrap();
-            assert!(bytes.starts_with(b"8BPS"), "{target:?}");
-            let imported = photocraft_io::import("output.psd", &bytes).unwrap();
-            let pixels = imported.document.layers[0].surface().unwrap().read_region(photocraft_doc::Rect::new(0, 0, 1, 1));
-            assert_eq!(pixels.len(), 4);
-            for (actual, expected) in pixels.iter().zip([0x1234u16, 0x5678, 0x9abc, 0xffff]) {
-                assert!((*actual - f32::from(expected) / 65535.).abs() <= 1. / 65535., "{name}: {pixels:?}");
+    for explicit_format in [None, Some("psd")] {
+        for named in [false, true] {
+            let output = folder.path().join(format!("out-{named}-{}", explicit_format.unwrap_or("native")));
+            let mut args = vec![
+                "batch",
+                "--actions",
+                actions.to_str().unwrap(),
+                "--in",
+                input.to_str().unwrap(),
+                "--out",
+                output.to_str().unwrap(),
+                "--no-gpu",
+                "--historical-xcf-sample-order",
+                "little-endian",
+            ];
+            if named {
+                args.extend(["--naming", "{name}{ext}"]);
             }
-            assert_eq!(std::fs::read(input.join(name)).unwrap(), original, "batch preserves its XCF source");
+            if let Some(format) = explicit_format {
+                args.extend(["--format", format]);
+            }
+            let result = invoke(&args);
+            assert_eq!(result.code, 0, "{args:?}: {}{}", result.stdout, result.stderr);
+            assert!(result.stdout.contains("7 succeeded, 0 failed"), "{}", result.stdout);
+            assert_eq!(std::fs::read_dir(&output).unwrap().count(), sources.len());
+            for (name, original, expected_stem) in sources {
+                let suffix = if explicit_format.is_some() { "psd" } else { "pcraft" };
+                let target = output.join(format!("{expected_stem}.{suffix}"));
+                let bytes = std::fs::read(&target).unwrap();
+                let doc = if explicit_format.is_some() {
+                    assert!(bytes.starts_with(b"8BPS"), "{target:?}");
+                    photocraft_io::import("output.psd", &bytes).unwrap().document
+                } else {
+                    let doc = photocraft_format::load_from_bytes(&bytes).unwrap();
+                    let Some(photocraft_doc::import_conversion::ImportConversion::Report(report)) = doc.metadata.import_conversion.as_deref() else {
+                        panic!("native batch output retains its import conversion report: {target:?}");
+                    };
+                    assert!(
+                        report
+                            .entries
+                            .iter()
+                            .any(|entry| entry.feature_code == "xcf.historical_sample_order" && entry.native_description.contains("little-endian")),
+                        "native output retains explicit order provenance: {target:?}"
+                    );
+                    doc
+                };
+                let pixels = doc.layers[0].surface().unwrap().read_region(photocraft_doc::Rect::new(0, 0, 1, 1));
+                assert_eq!(pixels.len(), 4);
+                for (actual, expected) in pixels.iter().zip([0x1234u16, 0x5678, 0x9abc, 0xffff]) {
+                    assert!((*actual - f32::from(expected) / 65535.).abs() <= 1. / 65535., "{name}: {pixels:?}");
+                }
+                assert_eq!(std::fs::read(input.join(name)).unwrap(), original, "batch preserves its XCF source");
+            }
         }
     }
 }
@@ -237,7 +264,8 @@ fn batch_historical_order_default_refuses_ambiguity_and_invalid_flag_is_usage_er
     let actions = folder.path().join("actions.json");
     std::fs::create_dir(&input).unwrap();
     std::fs::write(&actions, "[]").unwrap();
-    std::fs::write(input.join("ambiguous.xcf"), historical_rgb16(7, true)).unwrap();
+    let original = historical_rgb16(7, true);
+    std::fs::write(input.join("ambiguous.xcf"), &original).unwrap();
     let args =
         ["batch", "--actions", actions.to_str().unwrap(), "--in", input.to_str().unwrap(), "--out", output.to_str().unwrap(), "--format", "pcraft", "--no-gpu"];
     let result = invoke(&args);
@@ -245,11 +273,14 @@ fn batch_historical_order_default_refuses_ambiguity_and_invalid_flag_is_usage_er
     assert!(result.stdout.contains("0 succeeded, 1 failed"), "{}", result.stdout);
     assert!(result.stderr.contains("little-endian") && result.stderr.contains("big-endian"), "{}", result.stderr);
     assert!(!output.join("ambiguous.pcraft").exists());
+    assert_eq!(std::fs::read(input.join("ambiguous.xcf")).unwrap(), original);
     let mut invalid = args.to_vec();
     invalid.extend(["--historical-xcf-sample-order", "native"]);
     let result = invoke(&invalid);
     assert_eq!(result.code, 2);
-    assert!(result.stderr.contains("possible values"), "{}", result.stderr);
+    assert!(result.stderr.contains("expected little-endian or big-endian"), "{}", result.stderr);
+    assert_eq!(std::fs::read(input.join("ambiguous.xcf")).unwrap(), original);
+    assert_eq!(std::fs::read_dir(&output).unwrap().count(), 0, "invalid policy must publish no output");
     let help = invoke(&["batch", "--help"]);
     assert_eq!(help.code, 0);
     assert!(help.stdout.contains("--historical-xcf-sample-order"));

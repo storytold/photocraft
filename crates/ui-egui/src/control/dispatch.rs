@@ -767,6 +767,7 @@ struct PanelSet {
     panels_legacy: Option<Value>,
     mask_target: Option<bool>,
     updates_open: Option<bool>,
+    import_report: Option<bool>,
     vector_mask_target: Option<bool>,
     filter_mask_target: Option<bool>,
     selection_mode: Option<u64>,
@@ -842,6 +843,7 @@ impl PanelSet {
             panels_legacy,
             mask_target: bool_field(p, "maskTarget")?,
             updates_open: bool_field(p, "updatesOpen")?,
+            import_report: bool_field(p, "importReport")?,
             vector_mask_target: bool_field(p, "vectorMaskTarget")?,
             filter_mask_target: filter_mask_target_param(app, p)?,
             selection_mode: uint_field(p, "selectionMode")?,
@@ -885,6 +887,13 @@ impl PanelSet {
         }
         if let Some(open) = self.updates_open {
             app.ui.updates_open = open;
+        }
+        if let Some(show) = self.import_report {
+            if show {
+                crate::import_report::open(app);
+            } else {
+                app.ui.import_report = Default::default();
+            }
         }
         if let Some(m) = self.vector_mask_target {
             app.end_filter_mask_view();
