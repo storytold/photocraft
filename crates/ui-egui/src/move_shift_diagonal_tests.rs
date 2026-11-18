@@ -53,60 +53,35 @@ fn shifted(dx: i32, dy: i32) -> Rect {
     Rect::new(START.x0 + dx, START.y0 + dy, START.x1 + dx, START.y1 + dy)
 }
 
-/// Runs a plain Shift drag and checks the layer moved by `expect`.
-fn shift_drag(by: [f64; 2], expect: [i32; 2]) {
-    let (mut app, id) = app();
-    assert_eq!(bounds(&app, id), START);
-    drag(&mut app, FROM, by, egui::Modifiers::SHIFT);
-    assert_eq!(bounds(&app, id), shifted(expect[0], expect[1]));
-    assert_eq!(app.session.active().unwrap().active_layer, Some(id));
-}
-
-/// Runs an Alt+Shift drag and checks the copy landed at `expect` and is selected.
-fn alt_shift_drag(by: [f64; 2], expect: [i32; 2]) {
-    let (mut app, id) = app();
-    assert_eq!(bounds(&app, id), START);
-    let n0 = app.session.active().unwrap().doc.layers.len();
-    drag(&mut app, FROM, by, egui::Modifiers::SHIFT | egui::Modifiers::ALT);
-    let st = app.session.active().unwrap();
-    assert_eq!(st.doc.layers.len(), n0 + 1, "one copy");
-    let copy = st.active_layer.unwrap();
-    assert_ne!(copy, id, "the copy is selected");
-    assert_eq!(bounds(&app, copy), shifted(expect[0], expect[1]));
-    assert_eq!(bounds(&app, id), START, "the original stays");
-}
-
+/// ⇧ locks a layer drag to the eight directions; with ⌥ as well the copy lands at the same
+/// offset. Each is one "Move" step.
 #[test]
-fn shift_drag_mostly_horizontal_locks_to_the_axis() {
-    // Reference: Shift+drag +100,+30 moves +100,0.
-    shift_drag([100.0, 30.0], [100, 0]);
-}
-
-#[test]
-fn shift_drag_on_the_diagonal_moves_along_it() {
-    // Reference: Shift+drag +80,+80 moves +80,+80 (it was 0,+80 before).
-    shift_drag([80.0, 80.0], [80, 80]);
-}
-
-#[test]
-fn shift_drag_near_the_axis_stays_on_the_axis() {
-    // Same rule as the +100,+30 case: a small offset off the axis does not leave it.
-    shift_drag([100.0, 5.0], [100, 0]);
-}
-
-#[test]
-fn alt_shift_drag_mostly_horizontal_copies_along_the_axis() {
-    // Reference rule for +100,+30, applied to the duplicate and move.
-    alt_shift_drag([100.0, 30.0], [100, 0]);
-}
-
-#[test]
-fn alt_shift_drag_on_the_diagonal_copies_along_it() {
-    // Reference: the copy lands at +80,+80.
-    alt_shift_drag([80.0, 80.0], [80, 80]);
-}
-
-#[test]
-fn alt_shift_drag_near_the_axis_copies_along_the_axis() {
-    alt_shift_drag([100.0, 5.0], [100, 0]);
+fn shift_drag_locks_to_the_eight_directions_and_alt_copies_along_them() {
+    // (drag, offset the layer ends at): mostly horizontal, on the diagonal, near the axis.
+    let rows: [([f64; 2], [i32; 2]); 3] = [([100.0, 30.0], [100, 0]), ([80.0, 80.0], [80, 80]), ([100.0, 5.0], [100, 0])];
+    for (by, expect) in rows {
+        for alt in [false, true] {
+            let (mut app, id) = app();
+            assert_eq!(bounds(&app, id), START);
+            let n0 = app.session.active().unwrap().doc.layers.len();
+            let h0 = app.session.active().unwrap().history.past_len();
+            let mods = if alt { egui::Modifiers::SHIFT | egui::Modifiers::ALT } else { egui::Modifiers::SHIFT };
+            drag(&mut app, FROM, by, mods);
+            let st = app.session.active().unwrap();
+            let what = format!("drag {by:?}, alt {alt}");
+            assert_eq!(st.history.past_len(), h0 + 1, "one step: {what}");
+            assert_eq!(st.history.undo_label(), Some("Move"), "{what}");
+            if alt {
+                assert_eq!(st.doc.layers.len(), n0 + 1, "one copy: {what}");
+                let copy = st.active_layer.unwrap();
+                assert_ne!(copy, id, "the copy is selected: {what}");
+                assert_eq!(bounds(&app, copy), shifted(expect[0], expect[1]), "{what}");
+                assert_eq!(bounds(&app, id), START, "the original stays: {what}");
+            } else {
+                assert_eq!(st.doc.layers.len(), n0, "{what}");
+                assert_eq!(st.active_layer, Some(id), "{what}");
+                assert_eq!(bounds(&app, id), shifted(expect[0], expect[1]), "{what}");
+            }
+        }
+    }
 }

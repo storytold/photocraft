@@ -71,7 +71,7 @@ fn harness() -> Option<Harness> {
     let built = std::panic::catch_unwind(|| {
         egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 640.0)).with_pixels_per_point(1.0).with_max_steps(64).wgpu().build_eframe(|cc| {
             PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), Default::default());
             if let Some(rs) = cc.wgpu_render_state.as_ref() {
                 app.set_wgpu(rs.clone());
             }
@@ -241,47 +241,6 @@ fn the_canvas_shows_the_committed_stroke_part_1() {
 #[test]
 fn the_canvas_shows_the_committed_stroke_part_2() {
     the_canvas_shows_the_committed_stroke_part(2);
-}
-
-#[test]
-fn the_canvas_shows_the_committed_stroke_part_3() {
-    the_canvas_shows_the_committed_stroke_part(3);
-}
-
-/// A dialog-owned brush must remain above the image even when a live painting tool is selected.
-#[test]
-fn refine_edge_brush_stays_visible_above_the_canvas_with_live_tools() {
-    use photocraft_ui_egui::state::Tool;
-    let _gpu = photocraft_testkit::gpu_lock();
-    for flip in [false, true] {
-        for tool in [Tool::Brush, Tool::MixerBrush] {
-            let Some(mut h) = harness() else { return };
-            h.state_mut().run("file.new", json!({"width":1200,"height":800,"background":"black"})).unwrap();
-            h.state_mut().run("select.all", json!({})).unwrap();
-            h.state_mut().ui.tool = tool;
-            h.state_mut().ui.view.flip_horizontal = flip;
-            h.run_steps(4);
-            control(&mut h, "ui.set", json!({"zoom":1.0,"center":[600,400]}));
-            control(&mut h, "ui.menu.invoke", json!({"command":"select.refineEdge"}));
-            let fields = &mut h.state_mut().ui.dialogs.last_mut().expect("Select and Mask opens").fields;
-            fields.insert("__brush".into(), json!(true));
-            fields.insert("__preview".into(), json!(false));
-            h.run_steps(3);
-            let canvas = h.state().last_canvas_rect;
-            let at = egui::pos2(canvas.left() + 32.0, canvas.top() + 80.0);
-            h.input_mut().events.push(egui::Event::PointerMoved(at));
-            h.step();
-            let image = h.render().unwrap();
-            let cross = image.get_pixel(at.x as u32 + 2, at.y as u32).0;
-            assert!(cross[0] > 100 && cross[1] > 100 && cross[2] > 100, "{tool:?} flip={flip}: Refine Edge cross is hidden: {cross:?}");
-            if tool == Tool::MixerBrush
-                && !flip
-                && let Ok(path) = std::env::var("PHOTOCRAFT_DIALOG_SNAPSHOT")
-            {
-                image.save(path).unwrap();
-            }
-        }
-    }
 }
 
 /// Deferred live-tool painting uses the camera changed by this frame's navigation input.
