@@ -1,14 +1,13 @@
-//! JPEG Options' file size: while choosing a quality, the dialog shows how big the JPEG will be
-//! ("152.3K"), and updates it as Quality and Format Options change. The dialog's document is
+//! JPEG Options' file size: while choosing a quality, the hosted dialog shows how big the JPEG
+//! will be, and the answer follows Quality and Format Options. The parked save's document is
 //! encoded in memory with the settings OK would write it with (the same encoder and
 //! [`ExportSettings`] as the save, so the size is the file's, metadata and profile included).
 //!
 //! The encode runs on a worker thread in the native app, so the dialog never waits for it; the web
 //! build has no threads and encodes in the frame, so its limit is lower. One encode runs at a time,
-//! and the last few answers are kept for their settings: a frame that changes nothing encodes
-//! nothing, and going back to settings already worked out shows their size at once. While a new
-//! size is worked out, the last one for the same document stays up marked as pending ("152.3K…").
-//! Documents over [`MAX_PX`] aren't encoded and read "—".
+//! and the last few answers are kept for their settings: a pass that changes nothing encodes
+//! nothing, and going back to settings already worked out answers at once. The dialog shows the
+//! newest answered size while a new one is worked out. Documents over [`MAX_PX`] aren't encoded.
 
 use std::collections::VecDeque;
 
@@ -32,14 +31,6 @@ pub(super) fn estimable(size: photocraft_doc::Size) -> bool {
     size.area() <= MAX_PX
 }
 
-/// A size as the readout shows it: kilobytes with one decimal under a megabyte
-/// ("152.3K"), megabytes above ("1.5M"), in units of 1024.
-pub(super) fn size_label(bytes: u64) -> String {
-    const K: f64 = 1024.0;
-    let kilo = (bytes as f64 / K * 10.0).round() / 10.0;
-    if kilo < K { format!("{kilo:.1}K") } else { format!("{:.1}M", bytes as f64 / (K * K)) }
-}
-
 /// The bytes `doc` takes written as a JPEG with `settings`, as the save writes it; `None` when it
 /// can't be encoded.
 pub(super) fn encoded_size(doc: &Document, settings: &ExportSettings) -> Option<u64> {
@@ -60,32 +51,10 @@ pub(super) struct Key {
 /// encode again.
 const KEPT: usize = 8;
 
-/// What the readout says for one set of settings.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Estimate {
-    /// The size for these settings (`None`: they couldn't be encoded).
-    Known(Option<u64>),
-    /// Still being worked out, with the last size of the same document as it is now, if any.
-    Pending(Option<u64>),
-}
-
-impl Estimate {
-    /// "152.3K" when known, "152.3K…" while the last size stands in, "…" with none yet, and "—"
-    /// when the settings couldn't be encoded.
-    pub(super) fn label(self) -> String {
-        match self {
-            Estimate::Known(Some(bytes)) => size_label(bytes),
-            Estimate::Known(None) => "—".into(),
-            Estimate::Pending(Some(bytes)) => format!("{}…", size_label(bytes)),
-            Estimate::Pending(None) => "…".into(),
-        }
-    }
-}
-
 /// Where a worker leaves its answer: `Some` once done (`Some(None)`: couldn't be encoded).
 type Slot = Arc<Mutex<Option<Option<u64>>>>;
 
-/// The readout between frames (kept in egui's temporary data).
+/// The readout between passes (kept in the parked save).
 #[derive(Default)]
 pub(super) struct Readout {
     /// The last [`KEPT`] sizes worked out and what each is for, newest last.
@@ -95,10 +64,11 @@ pub(super) struct Readout {
 }
 
 impl Readout {
-    /// What to show for `key`. Unless `key`'s size is known or being worked out, starts the job
-    /// `make` returns, which calls `done` when it finishes; a change made while another encode
+    /// The size for `key`: `Some(size)` once worked out (`Some(None)`: it couldn't be encoded),
+    /// `None` while the encode runs. Unless `key`'s size is known or being worked out, starts the
+    /// job `make` returns, which calls `done` when it finishes; a change made while another encode
     /// runs starts once that one is done.
-    pub(super) fn update<J>(&mut self, key: Key, make: impl FnOnce() -> J, done: impl FnOnce() + Send + 'static) -> Estimate
+    pub(super) fn update<J>(&mut self, key: Key, make: impl FnOnce() -> J, done: impl FnOnce() + Send + 'static) -> Option<Option<u64>>
     where
         J: FnOnce() -> Option<u64> + Send + 'static,
     {
@@ -110,11 +80,7 @@ impl Readout {
             // The web build encodes in the frame: its answer is already there.
             self.collect();
         }
-        if let Some(size) = self.size_of(key) {
-            return Estimate::Known(size);
-        }
-        let same_doc = self.known.iter().rev().find(|(k, _)| k.doc == key.doc && k.revision == key.revision);
-        Estimate::Pending(same_doc.and_then(|&(_, size)| size))
+        self.size_of(key)
     }
 
     /// `key`'s size if it has been worked out (`Some(None)`: it couldn't be).
@@ -157,7 +123,6 @@ fn run(job: impl FnOnce() -> Option<u64> + Send + 'static, slot: Slot, done: imp
 }
 
 /// What the readout encodes: the waiting save's document, with the settings its save starts from.
-/// Taken before the dialog is drawn, which borrows the prompt.
 pub(super) struct Source {
     doc: Arc<Document>,
     revision: u64,
@@ -166,11 +131,37 @@ pub(super) struct Source {
 }
 
 impl Source {
-    /// For the JPEG Options prompt waiting, if any.
-    pub(super) fn of(app: &PhotocraftApp) -> Option<Self> {
-        let p = app.jpeg_options.as_ref()?;
-        let st = app.session.documents().iter().find(|st| st.doc.id == p.doc)?;
-        Some(Source { doc: Arc::clone(&st.doc), revision: st.revision, base: app.save_settings(), own_quality: p.own_quality })
+    /// For the parked JPEG save, if any, as its document is now; `None` when the document is
+    /// gone.
+    pub(super) fn of(app: &mut PhotocraftApp) -> Option<Self> {
+        // Out of the app while its settings are read, which activates the document for a moment.
+        let save = app.parked_save.take()?;
+        let source = Self::from_save(app, &save);
+        app.parked_save = Some(save);
+        source
+    }
+
+    fn from_save(app: &mut PhotocraftApp, save: &crate::format_prompts::ParkedSave) -> Option<Self> {
+        let crate::format_prompts::ParkedFormat::Jpeg(parked) = &save.format else { return None };
+        let st = app.session.documents().iter().find(|st| st.doc.id == save.doc)?;
+        let (doc, revision) = (Arc::clone(&st.doc), st.revision);
+        Some(Source { doc, revision, base: save.settings(app), own_quality: parked.own_quality })
+    }
+
+    /// Whether the document is small enough to encode (see [`MAX_PX`]).
+    pub(super) fn estimable(&self) -> bool {
+        estimable(self.doc.size)
+    }
+
+    /// What the size for `quality` (0–12) and `format` is keyed by.
+    pub(super) fn key(&self, quality: u8, format: JpegFormat) -> Key {
+        Key { doc: self.doc.id, revision: self.revision, quality: self.encoder_quality(quality), format }
+    }
+
+    /// The encode of the size for `quality` (0–12) and `format`, to run on a worker.
+    pub(super) fn job(&self, quality: u8, format: JpegFormat) -> impl FnOnce() -> Option<u64> + Send + 'static {
+        let (doc, settings) = (Arc::clone(&self.doc), self.settings(quality, format));
+        move || encoded_size(&doc, &settings)
     }
 
     /// The encoder quality (1–100) OK writes for `quality` (0–12): the opened file's own when left
@@ -184,29 +175,6 @@ impl Source {
     fn settings(&self, quality: u8, format: JpegFormat) -> ExportSettings {
         ExportSettings { jpeg_quality: Some(self.encoder_quality(quality)), jpeg_format: format, ..self.base.clone() }
     }
-
-    /// The readout for `quality` (0–12) and `format` (see [`Estimate::label`]).
-    fn text(&self, ctx: &egui::Context, quality: u8, format: JpegFormat) -> String {
-        if !estimable(self.doc.size) {
-            return "—".into();
-        }
-        let key = Key { doc: self.doc.id, revision: self.revision, quality: self.encoder_quality(quality), format };
-        let state = ctx.data_mut(|d| Arc::clone(d.get_temp_mut_or_default::<Arc<Mutex<Readout>>>(egui::Id::unique("jpeg-options-size"))));
-        let mut readout = state.lock().unwrap_or_else(PoisonError::into_inner);
-        let make = || {
-            let (doc, settings) = (Arc::clone(&self.doc), self.settings(quality, format));
-            move || encoded_size(&doc, &settings)
-        };
-        let repaint = ctx.clone();
-        readout.update(key, make, move || repaint.request_repaint()).label()
-    }
-}
-
-/// Draws the readout for the dialog's current `quality` (0–12) and `format`.
-pub(super) fn show(ui: &mut egui::Ui, source: Option<&Source>, quality: u8, format: JpegFormat) {
-    let text = source.map_or_else(|| "—".into(), |s| s.text(ui.ctx(), quality, format));
-    let weak = ui.visuals().weak_text_color();
-    ui.label(egui::RichText::new(text).color(weak)).on_hover_text(tl!("Estimated file size"));
 }
 
 #[cfg(test)]
