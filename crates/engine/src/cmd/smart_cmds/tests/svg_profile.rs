@@ -52,8 +52,11 @@ fn svg_smart_contents_and_stack_open_many_shapes_as_layers() {
     assert_eq!(stacked.surface.content_bounds(), square);
     let px = stacked.surface.pixel(128, 128);
     assert_eq!(px[3], 1.0, "every frame is opaque");
+    // The mean is a quarter grey in the SVG's 8-bit sRGB (64 of 255), which the 32-bit surface
+    // holds as linear light.
+    let quarter = ((64.0 / 255.0 + 0.055) / 1.055f32).powf(2.4);
     for &c in &px[..3] {
-        assert!((c - 0.25).abs() < 1e-4, "the mean of 100 white and 300 black frames is 0.25, got {c}");
+        assert!((c - quarter).abs() < 1e-4, "the mean of 100 white and 300 black frames is {quarter}, got {c}");
     }
 }
 
