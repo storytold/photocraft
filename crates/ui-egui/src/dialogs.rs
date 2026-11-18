@@ -435,6 +435,7 @@ pub(crate) fn prompts_take(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// The families that take their own results (one `take(app, ctx)` each), in order.
 pub(crate) const TAKERS: &[fn(&mut PhotocraftApp, &egui::Context)] = &[
     alerts::take,
+    plugins_dialog::take,
     discard_ui::take,
     open_prompt::take,
     credits::take,
@@ -741,6 +742,7 @@ mod paths_export_default_tests;
 #[cfg(test)]
 mod paths_export_document_bounds_tests;
 pub(crate) mod pattern_fill_ui;
+pub mod plugins_dialog;
 pub mod preset_group_prompt;
 pub mod rasterize_prompt;
 pub mod screen_picker;

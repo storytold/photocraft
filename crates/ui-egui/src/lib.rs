@@ -159,6 +159,7 @@ pub use dialogs::new_layer_ui;
 pub use dialogs::open_prompt;
 pub use dialogs::palette;
 pub(crate) use dialogs::pattern_fill_ui;
+pub use dialogs::plugins_dialog;
 pub use dialogs::preset_group_prompt;
 pub use dialogs::rasterize_prompt;
 pub use dialogs::screen_picker;

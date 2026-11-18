@@ -48,6 +48,7 @@ mod linux_libs;
 mod logging;
 mod monitor_profile;
 mod photoshop_settings;
+mod plugin_http;
 mod presentation;
 // The print portal needs the session bus (zbus, Linux only); its pure helpers are tested everywhere.
 #[cfg(any(target_os = "linux", test))]
@@ -559,6 +560,10 @@ fn main() -> eframe::Result {
             };
             #[cfg(not(target_os = "linux"))]
             let session = Session::new();
+            // Plug-ins: the user's Plug-ins folder (filters in it join Filter › Plug-ins) and HTTPS
+            // for installing from GitHub and catalogs.
+            let mut session = session;
+            plugin_http::attach(&mut session, services::config_dir().as_deref());
             // Before the first pass: the one install of the craft runtime must see every pass from
             // the first (R71); the app then runs on that context.
             PhotocraftApp::setup_window(&cc.egui_ctx, Default::default(), decision);
