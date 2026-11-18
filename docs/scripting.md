@@ -38,7 +38,7 @@ and its parameters, dialogs, windows, the per-run bounds, and a Worker that send
 wait. The page counts the run's time from the messages' arrival, with the clock stopped while
 the Worker waits, so a hidden tab drawing no frames does not eat a run's time, and terminates the
 Worker at the limit. A crash in the Worker (a failed allocation, a stack overflow, an engine
-panic) ends that run only. The Worker gets a 64 MiB stack, as the script host does. A command's answer to
+panic) ends that run only. The Worker's stack in its memory is 64 MiB, as the script host's; the browser's own call stack still limits how deeply a script nests there, a little less deeply than on the desktop. A command's answer to
 a script holds at most 32 MiB there (the shared memory the Worker reads it from).
 
 On every platform a script reaches only the commands in `script-js/src/commands.rs`, each

@@ -159,7 +159,7 @@ impl WorkerTransport {
                         if let Some(start) = pending.borrow_mut().take()
                             && let Err(e) = worker.post_message(&start)
                         {
-                            inbox.borrow_mut().push(Incoming::Error(format!("the run could not be started: {}", describe(&e))));
+                            inbox.borrow_mut().push(Incoming::Unavailable(format!("the script Worker could not be started: {}", describe(&e))));
                         }
                         return;
                     }
@@ -175,9 +175,13 @@ impl WorkerTransport {
             Closure::<dyn FnMut(Event)>::new(move |event: Event| {
                 // Reported to the user with the run; not again in the console as uncaught.
                 event.prevent_default();
-                let why = event.dyn_ref::<ErrorEvent>().map(ErrorEvent::message).filter(|m| !m.is_empty());
-                let why = why.unwrap_or_else(|| "the script Worker could not be loaded".into());
-                inbox.borrow_mut().push(Incoming::Error(why));
+                // An `ErrorEvent` is an error in the running Worker; a plain `Event`, one that never
+                // loaded.
+                let incoming = match event.dyn_ref::<ErrorEvent>().map(ErrorEvent::message).filter(|m| !m.is_empty()) {
+                    Some(why) => Incoming::Error(why),
+                    None => Incoming::Unavailable("the script Worker could not be loaded".into()),
+                };
+                inbox.borrow_mut().push(incoming);
             })
         };
         worker.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
@@ -213,7 +217,7 @@ impl Transport for WorkerTransport {
             self.starting = None;
         } else if self.starting.is_some_and(|t| t.elapsed() > START_LIMIT) {
             self.starting = None;
-            taken.push(Incoming::Error(format!("the script Worker didn't start within {} s", START_LIMIT.as_secs())));
+            taken.push(Incoming::Unavailable(format!("the script Worker didn't start within {} s", START_LIMIT.as_secs())));
         }
         taken
     }

@@ -35,6 +35,9 @@ pub enum Incoming {
     /// The Worker failed (a trap: a failed allocation, a stack overflow, an engine panic), with
     /// the browser's description.
     Error(String),
+    /// The Worker could not be started or reached (its files failed to load, it never said it
+    /// listens), with why.
+    Unavailable(String),
 }
 
 /// The Worker, as the job sees it.
@@ -245,6 +248,10 @@ impl<T: Transport> WebJob<T> {
             Incoming::Message(text, at) => (text, at),
             Incoming::Error(why) => {
                 self.end(Err(format!("The script stopped unexpectedly: {} (it may have run out of memory or overflowed its stack).", cut(&why, MAX_MESSAGE))));
+                return None;
+            }
+            Incoming::Unavailable(why) => {
+                self.end(Err(format!("The script couldn't run: {}.", cut(&why, MAX_MESSAGE))));
                 return None;
             }
         };
@@ -643,6 +650,20 @@ mod tests {
         assert!(matches!(j.poll(), Some(WebEvent::Dialog(_))));
         assert!(j.reply_dialog(json!("a long answer that does not fit")).is_err());
         assert!(matches!(j.poll(), Some(WebEvent::Finished(Err(m))) if m.contains("could not be sent")));
+    }
+
+    /// A Worker that can't be started says so, not that the script ran out of memory.
+    #[test]
+    fn a_worker_that_cannot_start_says_so() {
+        let fake = Fake::default();
+        let mut j = job(&fake, options());
+        fake.inbox.borrow_mut().push_back(Incoming::Unavailable("the script Worker could not be loaded".into()));
+        let ended = j.poll();
+        assert!(
+            matches!(&ended, Some(WebEvent::Finished(Err(m))) if m.contains("couldn't run: the script Worker could not be loaded") && !m.contains("memory")),
+            "{ended:?}"
+        );
+        assert!(*fake.terminated.borrow());
     }
 
     #[test]
