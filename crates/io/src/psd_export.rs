@@ -749,10 +749,10 @@ impl Ex<'_> {
         let key = if same_source.is_some() && raw.iter().any(|(k, _)| k == b"SoLE") && !raw.iter().any(|(k, _)| k == b"SoLd") { *b"SoLE" } else { *b"SoLd" };
         raw.retain(|(k, _)| k == &key || !matches!(k, b"SoLd" | b"SoLE"));
         upsert(raw, b"PlLd", plld, Some(&key));
-        upsert(raw, &key, sold, None);
+        upsert(raw, &key, sold.clone(), None);
         if !stack.filters.is_empty() {
             let bounds = sm.cache.as_ref().map_or(self.canvas, |c| c.content_bounds().union(&self.canvas));
-            let item = match (sm.stack_mode, self.source_composite(&src.uuid)) {
+            let item = match (sm.stack_mode, self.source_composite(&src.uuid, &sold)) {
                 (None, Some((img, img_bounds))) => {
                     let unfiltered = match &sm.perspective {
                         Some(p) => {
@@ -911,9 +911,16 @@ impl Ex<'_> {
     }
 
     /// The composite of the source `uuid` (an embedded file of this export or of the imported
-    /// document) in the document's pixel format, its top-left at the origin; decoded once.
-    fn source_composite(&mut self, uuid: &str) -> Option<(std::sync::Arc<Surface>, photocraft_geom::Rect)> {
-        if let Some(c) = self.smart.composites.get(uuid) {
+    /// document) in the document's pixel format, its top-left at the origin; decoded once per
+    /// frame. A PDF placed by another application in a frame of its own (the `sold` block being
+    /// written) is cropped to that frame, the space the placement maps from (#15650).
+    fn source_composite(&mut self, uuid: &str, sold: &[u8]) -> Option<(std::sync::Arc<Surface>, photocraft_geom::Rect)> {
+        let frame = crate::smart_map::sold_descriptor(sold).and_then(|d| crate::smart_map::stored_size(&d));
+        let key = match frame {
+            Some((w, h)) => format!("{uuid}\0{w}x{h}"),
+            None => uuid.to_string(),
+        };
+        if let Some(c) = self.smart.composites.get(&key) {
             return c.clone();
         }
         let doc = match self.smart.docs.get(uuid) {
@@ -926,7 +933,10 @@ impl Ex<'_> {
                     };
                     crate::linked::find_linked_file(&meta, uuid)
                 });
-                file.and_then(|f| crate::import(&f.file_name, &f.bytes).ok()).map(|r| r.document)
+                file.and_then(|f| match crate::pdf_import::placement(&f.bytes, sold) {
+                    Some(placed) => crate::pdf_import::import_placed(&f.file_name, &f.bytes, &placed, &photocraft_raster::Interrupt::NONE).ok(),
+                    None => crate::import(&f.file_name, &f.bytes).ok().map(|r| r.document),
+                })
             }
         };
         let c = doc.map(|d| {
@@ -945,7 +955,7 @@ impl Ex<'_> {
             s.prune();
             (std::sync::Arc::new(s), d.bounds())
         });
-        self.smart.composites.insert(uuid.to_string(), c.clone());
+        self.smart.composites.insert(key, c.clone());
         c
     }
 

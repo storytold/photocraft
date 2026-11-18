@@ -364,6 +364,73 @@ pub fn source_image(file_name: &str, bytes: &[u8], fmt: PixelFormat) -> Result<S
     Ok(img)
 }
 
+/// [`source_image`], except that a PDF another application placed in a frame of its own is
+/// drawn cropped to that frame ([`photocraft_io::pdf_placement`], #15650).
+pub(super) fn placed_source_image(file_name: &str, bytes: &[u8], fmt: PixelFormat, sm: &SmartObject) -> Result<SourceImage> {
+    let placed = bytes
+        .starts_with(b"%PDF-")
+        .then(|| sm.psd_raw.as_ref().and_then(|raw| photocraft_io::smart_map::sold_descriptor(raw)))
+        .flatten()
+        .and_then(|d| photocraft_io::smart_map::placed_pdf(&d));
+    let Some(placed) = placed else { return source_image(file_name, bytes, fmt) };
+    let mut h = blake3::Hasher::new();
+    h.update(b"placed-pdf\0");
+    h.update(bytes);
+    h.update(&placed.page.to_le_bytes());
+    for v in [placed.frame.0, placed.frame.1, placed.dpi.unwrap_or(0.0)] {
+        h.update(&v.to_bits().to_le_bytes());
+    }
+    let key = (*h.finalize().as_bytes(), fmt);
+    if let Some(img) = cache_get(&key) {
+        return Ok(img);
+    }
+    match known_placement(&key.0) {
+        Some(Placement::Own) => return source_image(file_name, bytes, fmt),
+        Some(Placement::Failed(why)) => return Err(other(why)),
+        None => {}
+    }
+    if photocraft_io::pdf_default_canvas(bytes) == Some((placed.frame.0.round() as u64, placed.frame.1.round() as u64)) {
+        remember_placement(key.0, Placement::Own);
+        return source_image(file_name, bytes, fmt);
+    }
+    crate::memory_gate::ensure(&format!("render the smart object \u{201c}{file_name}\u{201d}"), crate::memory_gate::smart_render_need(bytes))?;
+    let doc = match photocraft_io::import_placed_pdf(file_name, bytes, &placed, &photocraft_raster::Interrupt::NONE) {
+        Ok(doc) => doc,
+        Err(e) => {
+            let why = format!("can't read smart object contents \"{file_name}\": {e}");
+            remember_placement(key.0, Placement::Failed(why.clone()));
+            return Err(other(why));
+        }
+    };
+    let img = SourceImage { surface: Arc::new(flattened_source(&doc, fmt)?), bounds: doc.bounds() };
+    cache_put(key, img.clone());
+    Ok(img)
+}
+
+/// What [`placed_source_image`] found out about a placed PDF without drawing it in its frame.
+#[derive(Clone)]
+enum Placement {
+    /// The frame is the PDF's own canvas: PhotoCraft placed it, and it opens as usual.
+    Own,
+    /// It couldn't be drawn in its frame, and why. Each try renders the page up to three times.
+    Failed(String),
+}
+
+/// [`Placement`]s by placed-source key, most recent last, so a refresh doesn't reopen the PDF.
+static PLACEMENTS: Mutex<Vec<([u8; 32], Placement)>> = Mutex::new(Vec::new());
+
+fn known_placement(key: &[u8; 32]) -> Option<Placement> {
+    PLACEMENTS.lock().unwrap_or_else(PoisonError::into_inner).iter().find(|(k, _)| k == key).map(|(_, p)| p.clone())
+}
+
+fn remember_placement(key: [u8; 32], placement: Placement) {
+    let mut known = PLACEMENTS.lock().unwrap_or_else(PoisonError::into_inner);
+    if known.len() >= 32 {
+        known.remove(0);
+    }
+    known.push((key, placement));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

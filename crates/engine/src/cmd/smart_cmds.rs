@@ -80,6 +80,16 @@ pub fn decode_source(file_name: &str, bytes: &[u8]) -> Result<Document> {
     crate::file_cmds::import(file_name, bytes).map_err(|e| other(format!("can't read smart object contents \"{file_name}\": {e}")))
 }
 
+/// [`decode_source`] for the smart object `sm`, in the coordinates its placement maps from: a
+/// PDF another application placed in a frame of its own opens cropped to that frame (#15650).
+fn decode_placed_source(file_name: &str, bytes: &[u8], sm: &SmartObject) -> Result<Document> {
+    match sm.psd_raw.as_ref().and_then(|raw| photocraft_io::pdf_placement(bytes, raw)) {
+        Some(placed) => photocraft_io::import_placed_pdf(file_name, bytes, &placed, &photocraft_raster::Interrupt::NONE)
+            .map_err(|e| other(format!("can't read smart object contents \"{file_name}\": {e}"))),
+        None => decode_source(file_name, bytes),
+    }
+}
+
 fn base_name(path: &str) -> String {
     path.rsplit(['/', '\\']).next().unwrap_or(path).to_string()
 }
