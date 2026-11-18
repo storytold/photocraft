@@ -1565,9 +1565,12 @@ mod tests {
         let before = mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap();
         let Backend::Headless(session) = &*mcp.backend else { panic!("headless") };
         let session = session.clone();
-        // A call holds clones of the session until it returns. A waited start holds three while
-        // its blocking closure waits for the lock: `step`'s, `headless_wait`'s target, and
-        // `headless_op`'s, taken last, right before the closure is queued.
+        // A call holds clones of the session until it returns. A waited start holds exactly three
+        // once its blocking closure is queued on `spawn_blocking` (from where it can only wait for
+        // the lock): `step`'s, `headless_wait`'s target, and `headless_op`'s, taken last, right
+        // before the closure is queued. The wait below matches that count exactly, so a call path
+        // that takes one more clone times out here instead of letting the test go on with only
+        // one start queued.
         let idle = Arc::strong_count(&session);
         let held = session.clone();
         let (locked, acquired) = std::sync::mpsc::channel();
@@ -1604,7 +1607,7 @@ mod tests {
             .await;
         }
         // The holder's clone, and three for each start.
-        until("both starts wait for the lock", || Arc::strong_count(&session) >= idle + 1 + 2 * 3).await;
+        until("both starts are queued", || Arc::strong_count(&session) == idle + 1 + 2 * 3).await;
         for id in [2, 3] {
             send(&mut input, json!({"jsonrpc":"2.0", "method":"notifications/cancelled", "params":{"requestId":id}})).await;
         }
