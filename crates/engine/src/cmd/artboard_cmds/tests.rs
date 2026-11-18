@@ -752,7 +752,8 @@ fn a_board_past_the_origin_moves_the_color_samplers_and_symmetry_with_the_docume
     s.execute("layer.new.artboard", json!({"rect": [-200, 0, 100, 80]})).unwrap();
     assert_eq!(samplers(&s), vec![[215.5, 15.5]]);
     assert!(red_at(&s, 215, 15));
-    // A board made from layers (or a group) left of the canvas shifts by their overhang.
+    // A board made from layers (or a group) left of the canvas shifts the document by the whole
+    // canvas width, 100, not by its 30 px overhang (#14565).
     for cmd in ["layer.new.artboardFromLayers", "layer.new.artboardFromGroup"] {
         let mut s = session(8);
         add_square(&mut s, Rect::new(10, 10, 30, 30), [1.0, 0.0, 0.0, 1.0]);
@@ -762,8 +763,8 @@ fn a_board_past_the_origin_moves_the_color_samplers_and_symmetry_with_the_docume
             s.execute("layer.groupLayers", json!({})).unwrap();
         }
         s.execute(cmd, json!({})).unwrap();
-        assert_eq!(samplers(&s), vec![[45.5, 15.5]], "{cmd}");
-        assert!(red_at(&s, 45, 15), "{cmd}");
+        assert_eq!(samplers(&s), vec![[115.5, 15.5]], "{cmd}");
+        assert!(red_at(&s, 115, 15), "{cmd}");
     }
     // The "+" button left of a board at the origin shifts by the board and the gap.
     let mut s = session(8);
