@@ -267,7 +267,7 @@ fn psd_tysh_round_trips_orientation_and_writing_direction() {
     use crate::engine_data::Value as E;
     for o in [Orientation::Vertical, Orientation::Horizontal] {
         let t = TextLayer { orientation: o, ..vertical("縦書きAB", "Inter", 20.0) };
-        let bytes = crate::psd::build_tysh(&t, 72.0, None);
+        let bytes = crate::psd::build_tysh(&t, 72.0, None).unwrap();
         let back = crate::psd::text_layer_from_tysh(&bytes, 72.0).unwrap();
         assert_eq!(back.orientation, o);
         let parsed = crate::psd::parse_tysh(&bytes).unwrap();
@@ -277,9 +277,9 @@ fn psd_tysh_round_trips_orientation_and_writing_direction() {
     }
     // A file without `Ornt` but with a vertical writing direction imports as vertical.
     let t = TextLayer { orientation: Orientation::Vertical, ..vertical("ab", "Inter", 20.0) };
-    let mut parsed = crate::psd::parse_tysh(&crate::psd::build_tysh(&t, 72.0, None)).unwrap();
+    let mut parsed = crate::psd::parse_tysh(&crate::psd::build_tysh(&t, 72.0, None).unwrap()).unwrap();
     parsed.text.items.retain(|(k, _)| !k.is("Ornt"));
-    let back = crate::psd::text_layer_from_tysh(&crate::psd::write_tysh(&parsed), 72.0).unwrap();
+    let back = crate::psd::text_layer_from_tysh(&crate::psd::write_tysh(&parsed).unwrap(), 72.0).unwrap();
     assert_eq!(back.orientation, Orientation::Vertical);
 }
 
@@ -313,6 +313,7 @@ fn nearest_face_is_not_synthetically_emboldened() {
     }
 }
 
+/// Verifies half-em punctuation squeeze adjustments between consecutive Japanese full-width quotation and punctuation marks.
 #[test]
 fn punctuation_squeeze_removes_half_em_between_marks() {
     use crate::layout::{ClusterInfo, squeeze_punctuation};
@@ -323,7 +324,7 @@ fn punctuation_squeeze_removes_half_em_between_marks() {
     let mut x = 0.0;
     for (i, (b, c)) in text.char_indices().enumerate() {
         clusters.push(ClusterInfo { range: b..b + c.len_utf8(), x, advance: 40.0, line: 0, rtl: false });
-        glyphs.push(crate::PlacedGlyph { face: 0, id: i as u32 + 1, x, y: 0.0, style: 0, orient: GlyphOrient::Horizontal });
+        glyphs.push(crate::PlacedGlyph { face: 0, id: i as u32 + 1, x, y: 0.0, style: 0, orient: GlyphOrient::Horizontal, line_center: None });
         x += 40.0;
     }
     let cut = squeeze_punctuation(text, &mut clusters, &mut glyphs);

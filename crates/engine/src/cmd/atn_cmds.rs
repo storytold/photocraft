@@ -3,7 +3,7 @@
 //! (Photoshop's Insert Stop) and `actions.photoshopStep` (a step PhotoCraft has no command for
 //! yet, kept verbatim so Save Actions writes it back unchanged).
 //!
-//! Parsing and writing live in `photocraft-psd` (`atn`); this module maps Photoshop *events*
+//! Parsing and writing live in `craft-psd` (`atn`); this module maps Photoshop *events*
 //! (`gaussianBlur` with `Rds`, `make` of an adjustment layer, `set` of the selection…) onto
 //! PhotoCraft commands and back. An event is keyed by both its four-character code (`GsnB`,
 //! older files) and its string name (`gaussianBlur`, Photoshop 2024 and later), as the two are
@@ -18,8 +18,8 @@
 //! {"offset"}`, the document that many places from the active one in opening order, not dragged
 //! tab order (#7103).
 
-use photocraft_psd::atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem};
-use photocraft_psd::descriptor::{Class, Descriptor, Id, ReferenceItem, UnicodeString, Value as D};
+use craft_psd::atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem};
+use craft_psd::descriptor::{Class, Descriptor, Id, ReferenceItem, UnicodeString, Value as D};
 use serde_json::{Map, Value, json};
 
 use crate::actions_cmds::Action;
@@ -35,6 +35,8 @@ mod files;
 mod menu_item;
 
 mod steps_artboard;
+mod steps_artboard_section;
+mod steps_automate;
 mod steps_batch;
 mod steps_calculations;
 mod steps_channels;
@@ -43,6 +45,7 @@ mod steps_direct_adjustments;
 mod steps_distort;
 mod steps_doc;
 mod steps_droplet;
+mod steps_frame_section;
 mod steps_gallery;
 mod steps_gradient;
 mod steps_image;
@@ -51,6 +54,7 @@ mod steps_layer_style;
 mod steps_lookup;
 mod steps_make;
 mod steps_measurement;
+mod steps_mode_change;
 mod steps_path;
 mod steps_perspective_warp;
 mod steps_type_path;
@@ -66,7 +70,6 @@ mod tables;
 
 #[cfg(test)]
 use adjustments::{levels_from, selective_from};
-pub(crate) use convert::UniqueNames;
 pub use convert::{Imported, Skipped, Unsupported, export, function_key_name, import, import_with_encoding, parse_function_key};
 #[cfg(test)]
 use convert::{MAX_NAME_CHARS, export_item, normalise};
@@ -124,8 +127,20 @@ fn photoshop_step_run(_: &mut Session, p: &Value) -> Result<Value> {
     Err(EngineError::Other(format!("Photoshop step \"{name}\" ({event}) has no PhotoCraft equivalent yet; switch it off in the Actions panel to skip it")))
 }
 
+pub use files::validate_replacement;
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        CommandSpec {
+            id: "actions.replace",
+            label: "Replace Actions…",
+            menu: &[],
+            shortcut: None,
+            params: r#"{"path":".atn file"?,"data":base64?,"confirm":true,"encoding":label?} → {sets,actions,warnings,unsupported}. Replaces the whole library with every set of the ATN archive (a set name or action name the archive repeats gets a numbered name) and the action shortcuts with its function keys. Undo with actions.undoLibrary."#,
+            enabled: crate::actions_edit_cmds::library_change_enabled,
+            run: files::replace,
+            journal: false,
+        },
         CommandSpec {
             id: "actions.load",
             label: "Load Actions…",
@@ -186,6 +201,12 @@ mod tests;
 mod layer_props_tests;
 
 #[cfg(test)]
+mod layer_list_tests;
+
+#[cfg(test)]
+mod automate_tests;
+
+#[cfg(test)]
 mod stylize_tests;
 
 #[cfg(test)]
@@ -198,4 +219,20 @@ mod selection_tests;
 mod render_tests;
 
 #[cfg(test)]
+mod frame_section_tests;
+
+#[cfg(test)]
 mod recorded_tools_tests;
+
+#[cfg(test)]
+mod mode_change_tests;
+
+#[cfg(test)]
+mod artboard_section_tests;
+
+#[cfg(test)]
+mod fade_step_tests;
+
+#[cfg(test)]
+#[path = "atn_cmds/canvas_size_default_anchor_tests.rs"]
+mod canvas_size_default_anchor_tests;
