@@ -539,6 +539,40 @@ fn unedited_bevel_shading_keeps_imported_precision() {
     }
 }
 
+/// Pattern 5 (#14940): a PSD carries Inner Shadow values outside the page's typed ranges -
+/// `parse_shadow` keeps Dstn, blur and lagl exactly as the file has them - and the hosted page's
+/// OK re-sends every field it models. An untouched OK must not rewrite what the file imported
+/// (Size 300 becoming 250 moves pixels); a field the user did edit still meets the page's clamps.
+#[test]
+fn unedited_inner_shadow_keeps_imported_out_of_range_values() {
+    for typed in [None, Some(40_001.0)] {
+        let mut s = session();
+        s.execute("layer.layerStyle.innerShadow", json!({})).unwrap();
+        s.edit("imported out-of-range values", |doc, active| {
+            let Effect::InnerShadow(sh) = &mut doc.layer_mut(active.unwrap()).unwrap().effects.items[0] else { panic!("inner shadow") };
+            sh.distance = 40_000.0;
+            sh.size = 300.0;
+            sh.angle = 200.0;
+            sh.use_global_light = false;
+            Ok(())
+        })
+        .unwrap();
+        let id = s.active().unwrap().active_layer.unwrap();
+        let mut d = LayerStyleDraft::new(drafted(&s));
+        let shadow = d.style.instances(EffectKind::InnerShadow).next().unwrap();
+        if let Some(distance) = typed {
+            d.set_param(shadow, "distance", StyleValue::Number(distance));
+        }
+        apply(&d.style, id, None, |cmd, p| s.execute(cmd, p).map_err(|e| e.to_string())).unwrap();
+        let Effect::InnerShadow(after) = &layer_effects(&s)[0] else { panic!("inner shadow") };
+        // The typed distance is past the page's 30000, so an EDITED field is clamped; an untouched
+        // one keeps the imported value.
+        assert_eq!(f64::from(after.distance), typed.map_or(40_000.0, |d| d.min(30_000.0)), "distance {typed:?}");
+        assert_eq!(f64::from(after.size), 300.0, "an untouched Size 300 keeps what the file imported");
+        assert_eq!(f64::from(after.angle), 200.0, "an untouched Angle 200 keeps what the file imported");
+    }
+}
+
 fn overlay_color(doc: &photocraft_doc::Document, layer: photocraft_doc::LayerId) -> photocraft_color::Color {
     match &doc.layer(layer).unwrap().effects.items[0] {
         Effect::ColorOverlay { color, .. } => *color,

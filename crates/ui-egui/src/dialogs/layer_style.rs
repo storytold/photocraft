@@ -650,6 +650,25 @@ fn effect_entry(fx: Option<&Value>, kind: &str, mut params: Value, initial_light
                     }
                 }
             }
+            if kind == "innerShadow"
+                && let Ok(original) = serde_json::from_value::<Effect>(fx.clone())
+                && let Some(edits) = params.as_object_mut()
+            {
+                let shown = values_of(&original, initial_light_angle.unwrap_or(120.0) as f32);
+                // A file can carry a Distance or Size outside the page's typed ranges (#14940) that
+                // the command clamps. An untouched field must not send it back through the clamp.
+                for key in ["distance", "size"] {
+                    if edits.get(key) == shown.get(key) {
+                        edits.remove(key);
+                    }
+                }
+                // The Angle field shows the shared light while the effect is lit by it, so the
+                // effect's own angle is only what the field showed when the check is off; with it on,
+                // the light angle is written as before.
+                if shown.get("useGlobalLight") == Some(&Value::Bool(false)) && edits.get("angle") == shown.get("angle") {
+                    edits.remove("angle");
+                }
+            }
             if kind == "gradientOverlay"
                 && let Ok(original) = serde_json::from_value::<Effect>(fx.clone())
                 && let Some(edits) = params.as_object_mut()
