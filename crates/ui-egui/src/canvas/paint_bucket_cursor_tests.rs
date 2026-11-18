@@ -18,7 +18,7 @@ use crate::state::Tool;
 const AT: [f32; 2] = [100.0, 150.0];
 
 /// The cursor the tool host was asked for at `AT` with `mods` held.
-fn cursor_with(h: &mut Harness<'static, PhotocraftApp>, mods: Modifiers) -> Option<Cursor> {
+fn cursor_with(h: &mut Harness<'static, Box<PhotocraftApp>>, mods: Modifiers) -> Option<Cursor> {
     hover(h, AT[0], AT[1], mods);
     h.state().canvas_tools.last_response.as_ref().and_then(|r| r.cursor.clone())
 }

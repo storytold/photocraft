@@ -75,7 +75,7 @@ pub(crate) fn new_params(app: &PhotocraftApp, tool: Tool) -> Value {
 mod tests {
     use super::*;
 
-    fn app() -> PhotocraftApp {
+    fn app() -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
         app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
         app.sync_views();

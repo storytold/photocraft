@@ -1,11 +1,11 @@
 use craft::print::ui::HostedPrint;
-use craft::ui::dialog::DialogId;
+use craft::ui::dialog::{DialogId, StackDialog as _};
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedSaveForWeb, Resample, SAVE_PATH_KEY, WebFormat, WebSlices};
 
 use super::*;
 use std::sync::Arc;
 
-pub(super) fn app() -> PhotocraftApp {
+pub(super) fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.printer_source =
         Some(Arc::new(|| vec![craft::print::Printer { name: "Test printer".into(), default: true, two_sided: None, description: String::new() }]));
@@ -57,20 +57,37 @@ fn print_fields(app: &mut PhotocraftApp, id: DialogId) -> &mut DialogFields {
     app.framework.dialogs.get_mut_by_id::<HostedPrint>(id).expect("Print is open").fields_mut()
 }
 
-#[cfg(windows)]
+/// A default printer named `name`, as a printer source lists it.
+fn listed_printer(name: &str) -> craft::print::Printer {
+    craft::print::Printer { name: name.into(), default: true, two_sided: None, description: String::new() }
+}
+
+/// The printer the open Print dialog has chosen.
+fn chosen_printer(app: &PhotocraftApp, id: DialogId) -> Value {
+    app.framework.dialogs.get_by_id::<HostedPrint>(id).and_then(|dialog| dialog.json_fields()).map_or(Value::Null, |f| f["printer"].clone())
+}
+
 #[test]
 fn print_dialog_keeps_saved_settings_when_the_cached_printer_list_is_empty() {
+    check_saved_settings_with_cached_printers(&[]);
+}
+
+#[test]
+fn print_dialog_keeps_saved_settings_when_the_cached_printer_list_is_stale() {
+    check_saved_settings_with_cached_printers(&["Old printer"]);
+}
+
+/// Opens Print while another thread holds the spooler. The printer list kept from before (`cached`) does not name
+/// the remembered printer. The dialog keeps the remembered printer and its driver settings while the list is
+/// pending, and still keeps them once the spooler is free and the fresh list names the printer.
+fn check_saved_settings_with_cached_printers(cached: &'static [&'static str]) {
     use std::sync::atomic::{AtomicBool, Ordering};
     let mut app = app();
     let ctx = app.ctx().clone();
     let available = Arc::new(AtomicBool::new(false));
     let listed = Arc::clone(&available);
     app.session.printer_source = Some(Arc::new(move || {
-        if listed.load(Ordering::SeqCst) {
-            vec![craft::print::Printer { name: "Saved printer".into(), default: true, two_sided: None, description: String::new() }]
-        } else {
-            Vec::new()
-        }
+        if listed.load(Ordering::SeqCst) { vec![listed_printer("Saved printer")] } else { cached.iter().map(|name| listed_printer(name)).collect() }
     }));
     app.session.prefs.edit(|p| {
         p.dialogs.insert(photocraft_engine::print_cmds::REMEMBERED.into(), json!({"printer": "Saved printer", "printerSettings": "0011"}));
@@ -81,24 +98,80 @@ fn print_dialog_keeps_saved_settings_when_the_cached_printer_list_is_empty() {
     let (release, released_rx) = std::sync::mpsc::channel::<()>();
     let holder = std::thread::spawn(move || {
         photocraft_engine::print_cmds::with_spooler(|| {
-            assert!(photocraft_engine::print_cmds::rgb_printers(&lister).unwrap().is_empty());
+            // Both lists the dialog reads while the spooler is busy are kept from this listing.
+            let _ = photocraft_engine::print_cmds::rgb_printers(&lister);
+            let kept = photocraft_engine::print_cmds::printers_without_waiting(&mut lister);
             available.store(true, Ordering::SeqCst);
-            held_tx.send(()).unwrap();
-            let _ = released_rx.recv_timeout(std::time::Duration::from_secs(5));
+            held_tx.send(kept["printers"].as_array().map_or(0, Vec::len)).unwrap();
+            let _ = released_rx.recv();
         });
     });
-    held.recv().unwrap();
+    let kept = held.recv().unwrap();
     let id = open_print(&mut app);
-    let fields = print_fields(&mut app, id);
-    assert_eq!((field(fields, "printer"), field(fields, "printerSettings")), (json!("Saved printer"), json!("0011")));
+    pass(&mut app);
+    take(&mut app, &ctx);
+    pass(&mut app);
+    let pending = (chosen_printer(&app, id), field(print_fields(&mut app, id), "printerSettings"), print_ready(&mut app, id));
     let _ = release.send(());
     holder.join().unwrap();
+    assert_eq!(kept, cached.len(), "the printers kept from before");
+    assert_eq!(pending, (json!("Saved printer"), json!("0011"), false), "while the list is pending, cached {cached:?}");
     photocraft_engine::print_cmds::with_spooler(|| {
         pass(&mut app);
         take(&mut app, &ctx);
-        let fields = print_fields(&mut app, id);
-        assert_eq!((field(fields, "printer"), field(fields, "printerSettings")), (json!("Saved printer"), json!("0011")));
+        pass(&mut app);
     });
+    let fresh = (chosen_printer(&app, id), field(print_fields(&mut app, id), "printerSettings"), print_ready(&mut app, id));
+    assert_eq!(fresh, (json!("Saved printer"), json!("0011"), true), "after the fresh list, cached {cached:?}");
+}
+
+/// A fresh, empty list leaves no printer chosen and Print unavailable, and drops the remembered printer's driver
+/// settings, so a printer listed later does not get them.
+#[test]
+fn an_empty_fresh_printer_list_drops_the_saved_driver_settings() {
+    let mut app = app();
+    let ctx = app.ctx().clone();
+    app.session.printer_source = Some(Arc::new(Vec::new));
+    app.session.prefs.edit(|p| {
+        p.dialogs.insert(photocraft_engine::print_cmds::REMEMBERED.into(), json!({"printer": "Saved printer", "printerSettings": "0011"}));
+    });
+    let id = open_print(&mut app);
+    photocraft_engine::print_cmds::with_spooler(|| {
+        pass(&mut app);
+        take(&mut app, &ctx);
+        pass(&mut app);
+    });
+    let shown = (chosen_printer(&app, id), field(print_fields(&mut app, id), "printerSettings"), print_ready(&mut app, id));
+    assert_eq!(shown, (json!(""), Value::Null, false));
+}
+
+/// Whether the open Print dialog's Print would start a job.
+fn print_ready(app: &mut PhotocraftApp, id: DialogId) -> bool {
+    let ctx = app.ctx().clone();
+    app.framework.dialogs.get_mut_by_id::<HostedPrint>(id).expect("Print is open").confirm(&ctx).is_some()
+}
+
+/// A fresh list without the remembered printer replaces it with the default printer, and the driver settings of
+/// the replaced printer are dropped. Settings remembered without a printer (the default one) stay.
+#[test]
+fn a_fresh_printer_list_without_the_saved_printer_drops_its_driver_settings() {
+    for (remembered, settings) in
+        [(json!({"printer": "Gone printer", "printerSettings": "0011"}), Value::Null), (json!({"printerSettings": "0011"}), json!("0011"))]
+    {
+        let mut app = app();
+        let ctx = app.ctx().clone();
+        app.session.prefs.edit(|p| {
+            p.dialogs.insert(photocraft_engine::print_cmds::REMEMBERED.into(), remembered.clone());
+        });
+        let id = open_print(&mut app);
+        photocraft_engine::print_cmds::with_spooler(|| {
+            pass(&mut app);
+            take(&mut app, &ctx);
+            pass(&mut app);
+        });
+        assert_eq!(chosen_printer(&app, id), json!("Test printer"), "{remembered}");
+        assert_eq!(field(print_fields(&mut app, id), "printerSettings"), settings, "{remembered}");
+    }
 }
 
 #[test]
@@ -369,12 +442,12 @@ fn save_for_web_downloads_images_and_html_through_the_platform_writer() {
 }
 
 /// Presses Save… in the dialog's own UI and hands the app back.
-fn press_save(app: PhotocraftApp) -> PhotocraftApp {
+fn press_save(app: Box<PhotocraftApp>) -> Box<PhotocraftApp> {
     use egui_kittest::kittest::Queryable;
     let mut h = egui_kittest::Harness::builder()
         .with_size(egui::vec2(1600.0, 1100.0))
         .with_context(app.ctx().clone())
-        .build_ui_state(|ui, app: &mut PhotocraftApp| crate::dialogs::run(app, ui), app);
+        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app);
     h.run_steps(5);
     h.get_by_role_and_label(egui::accesskit::Role::Button, "Save…").click();
     h.run_steps(3);

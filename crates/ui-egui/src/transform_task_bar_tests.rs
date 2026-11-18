@@ -14,19 +14,19 @@ use std::cell::Cell;
 use crate::control::{ControlRequest, Reply, handle};
 use crate::state::Tool;
 
-type AppHarness = Harness<'static, PhotocraftApp>;
+type AppHarness = Harness<'static, Box<PhotocraftApp>>;
 
 thread_local! {
     static SECTION_GAP: Cell<f32> = const { Cell::new(0.0) };
     static HANDLE_SIDE: Cell<f32> = const { Cell::new(0.0) };
 }
 
-fn harness() -> Harness<'static, PhotocraftApp> {
+fn harness() -> Harness<'static, Box<PhotocraftApp>> {
     harness_tool(Tool::Move)
 }
 
 /// The same document with a chosen tool selected (e.g. Hand, #2302).
-fn harness_tool(tool: Tool) -> Harness<'static, PhotocraftApp> {
+fn harness_tool(tool: Tool) -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();
@@ -57,7 +57,7 @@ fn harness_tool(tool: Tool) -> Harness<'static, PhotocraftApp> {
     h
 }
 
-fn begin(h: &mut Harness<'static, PhotocraftApp>) {
+fn begin(h: &mut Harness<'static, Box<PhotocraftApp>>) {
     let ctx = h.ctx.clone();
     crate::menus::invoke(h.state_mut(), &ctx, "edit.freeTransform", json!({})).unwrap();
     h.run_steps(2);
