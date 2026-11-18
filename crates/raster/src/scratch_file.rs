@@ -21,7 +21,7 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 #[cfg(windows)]
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
 
 const ALIGN: u64 = 4096;
@@ -48,6 +48,7 @@ pub(crate) struct Allocator {
 
 impl Allocator {
     /// Bytes currently allocated (end of file minus free space).
+    #[cfg(test)]
     pub fn used(&self) -> u64 {
         self.end - self.by_offset.values().sum::<u64>()
     }
@@ -108,6 +109,9 @@ pub(crate) struct ScratchFile {
     #[cfg(not(windows))]
     linked: bool,
     allocator: Mutex<Allocator>,
+    /// What [`ScratchFile::used`] reads. No lock: `free` truncates the file under the allocator lock,
+    /// and a dead folder would block that, so a status read must not wait for it.
+    used: AtomicU64,
 }
 
 impl std::fmt::Debug for ScratchFile {
@@ -118,35 +122,9 @@ impl std::fmt::Debug for ScratchFile {
 
 impl ScratchFile {
     pub fn create(dir: &Path) -> std::io::Result<Self> {
-        std::fs::create_dir_all(dir)?;
-        static COUNTER: AtomicUsize = AtomicUsize::new(0);
-        // A reused process id must not collide with an abandoned file from an older launch.
-        let n = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-            .saturating_add(COUNTER.fetch_add(1, Ordering::Relaxed) as u128);
-        let path = dir.join(format!("photocraft-{}-{n}.scratch", std::process::id()));
-        let mut options = std::fs::OpenOptions::new();
-        options.read(true).write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
+        let (main, path, linked) = open_private(dir)?;
         #[cfg(windows)]
-        {
-            use std::os::windows::fs::OpenOptionsExt;
-            const FILE_FLAG_DELETE_ON_CLOSE: u32 = 0x0400_0000;
-            options.custom_flags(FILE_FLAG_DELETE_ON_CLOSE);
-        }
-        let main = options.open(&path)?;
-        #[cfg(unix)]
-        reap_abandoned(dir, &main);
-        // Unix: the open handle keeps the inode; nothing is left behind at any exit. A
-        // filesystem that refuses the unlink keeps the name until drop or the next reap.
-        #[cfg(not(windows))]
-        let linked = std::fs::remove_file(&path).is_err();
+        let _ = linked;
         Ok(Self {
             main,
             #[cfg(windows)]
@@ -155,6 +133,7 @@ impl ScratchFile {
             #[cfg(not(windows))]
             linked,
             allocator: Mutex::new(Allocator::default()),
+            used: AtomicU64::new(0),
         })
     }
 
@@ -171,6 +150,7 @@ impl ScratchFile {
     pub fn write(&self, data: &[u8]) -> std::io::Result<Extent> {
         let len = u32::try_from(data.len()).map_err(|_| std::io::Error::other("block larger than 4 GiB"))?;
         let mut extent = self.lock().alloc(len);
+        self.used.fetch_add(extent.alloc, Ordering::Relaxed);
         if let Err(e) = write_all_at(&self.main, data, extent.offset) {
             self.free(extent);
             return Err(e);
@@ -190,6 +170,7 @@ impl ScratchFile {
     }
 
     pub fn free(&self, extent: Extent) {
+        self.used.fetch_sub(extent.alloc, Ordering::Relaxed);
         let mut allocator = self.lock();
         allocator.free(extent);
         if allocator.end == 0 {
@@ -201,7 +182,7 @@ impl ScratchFile {
     }
 
     pub fn used(&self) -> u64 {
-        self.lock().used()
+        self.used.load(Ordering::Relaxed)
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Allocator> {
@@ -229,6 +210,45 @@ impl ScratchFile {
             i => extra.get(i - 1).unwrap_or(&self.main),
         }
     }
+}
+
+/// Creates a file only this process can reach in `dir`, gone once its last handle closes: Unix
+/// opens it private (0600) and unlinks it right away, Windows opens it delete-on-close. Files
+/// of dead processes are reaped. Returns the file, its name, and whether the name is still
+/// there (a filesystem refused the unlink: remove it when done).
+pub(crate) fn open_private(dir: &Path) -> std::io::Result<(File, PathBuf, bool)> {
+    std::fs::create_dir_all(dir)?;
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+    // A reused process id must not collide with an abandoned file from an older launch.
+    let n = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+        .saturating_add(COUNTER.fetch_add(1, Ordering::Relaxed) as u128);
+    let path = dir.join(format!("photocraft-{}-{n}.scratch", std::process::id()));
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_DELETE_ON_CLOSE: u32 = 0x0400_0000;
+        options.custom_flags(FILE_FLAG_DELETE_ON_CLOSE);
+    }
+    let file = options.open(&path)?;
+    #[cfg(unix)]
+    reap_abandoned(dir, &file);
+    // Unix: the open handle keeps the inode; nothing is left behind at any exit. A
+    // filesystem that refuses the unlink keeps the name until drop or the next reap.
+    #[cfg(not(windows))]
+    let linked = std::fs::remove_file(&path).is_err();
+    #[cfg(windows)]
+    let linked = false;
+    Ok((file, path, linked))
 }
 
 /// Accept only the names we generate, never other temporary files or directories.
@@ -297,17 +317,17 @@ fn thread_slot() -> usize {
 }
 
 #[cfg(unix)]
-fn write_all_at(file: &File, data: &[u8], offset: u64) -> std::io::Result<()> {
+pub(crate) fn write_all_at(file: &File, data: &[u8], offset: u64) -> std::io::Result<()> {
     std::os::unix::fs::FileExt::write_all_at(file, data, offset)
 }
 
 #[cfg(unix)]
-fn read_exact_at(file: &File, buf: &mut [u8], offset: u64) -> std::io::Result<()> {
+pub(crate) fn read_exact_at(file: &File, buf: &mut [u8], offset: u64) -> std::io::Result<()> {
     std::os::unix::fs::FileExt::read_exact_at(file, buf, offset)
 }
 
 #[cfg(windows)]
-fn write_all_at(file: &File, mut data: &[u8], mut offset: u64) -> std::io::Result<()> {
+pub(crate) fn write_all_at(file: &File, mut data: &[u8], mut offset: u64) -> std::io::Result<()> {
     use std::os::windows::fs::FileExt;
     while !data.is_empty() {
         let n = file.seek_write(data, offset)?;
@@ -321,7 +341,7 @@ fn write_all_at(file: &File, mut data: &[u8], mut offset: u64) -> std::io::Resul
 }
 
 #[cfg(windows)]
-fn read_exact_at(file: &File, mut buf: &mut [u8], mut offset: u64) -> std::io::Result<()> {
+pub(crate) fn read_exact_at(file: &File, mut buf: &mut [u8], mut offset: u64) -> std::io::Result<()> {
     use std::os::windows::fs::FileExt;
     while !buf.is_empty() {
         let n = file.seek_read(buf, offset)?;
@@ -335,12 +355,12 @@ fn read_exact_at(file: &File, mut buf: &mut [u8], mut offset: u64) -> std::io::R
 }
 
 #[cfg(not(any(unix, windows)))]
-fn write_all_at(_file: &File, _data: &[u8], _offset: u64) -> std::io::Result<()> {
+pub(crate) fn write_all_at(_file: &File, _data: &[u8], _offset: u64) -> std::io::Result<()> {
     Err(std::io::ErrorKind::Unsupported.into())
 }
 
 #[cfg(not(any(unix, windows)))]
-fn read_exact_at(_file: &File, _buf: &mut [u8], _offset: u64) -> std::io::Result<()> {
+pub(crate) fn read_exact_at(_file: &File, _buf: &mut [u8], _offset: u64) -> std::io::Result<()> {
     Err(std::io::ErrorKind::Unsupported.into())
 }
 
@@ -468,6 +488,23 @@ mod tests {
         a.free(big);
         assert_eq!(a.alloc(10).offset, 0);
         assert_eq!(a.alloc(10).offset, 4096, "remainder of the split hole is used next");
+    }
+
+    #[test]
+    fn used_follows_writes_and_frees() {
+        let dir = std::env::temp_dir().join(format!("pc-scratch-used-{}", std::process::id()));
+        let scratch = ScratchFile::create(&dir).unwrap();
+        assert_eq!(scratch.used(), 0);
+        let a = scratch.write(b"one").unwrap();
+        assert_eq!(scratch.used(), a.alloc);
+        let b = scratch.write(&[1u8; 9000]).unwrap();
+        assert_eq!(scratch.used(), a.alloc + b.alloc);
+        scratch.free(a);
+        assert_eq!(scratch.used(), b.alloc);
+        scratch.free(b);
+        assert_eq!(scratch.used(), 0);
+        drop(scratch);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
