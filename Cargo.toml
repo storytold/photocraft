@@ -60,7 +60,7 @@ craft-xcf = { git = "https://github.com/storytold/craft-libs", rev = "a6b9d9c986
 craft-pdn = { git = "https://github.com/storytold/craft-libs", rev = "a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9" }
 # The UI framework uses its own shared snapshot. Its SVG sniff and gzip decoder
 # match this revision. Align all shared pins once both changes reach craft-libs main.
-craft-svg = { git = "https://github.com/storytold/craft-libs", rev = "1aff2841c9ee575eb24f82d578f0e69cef452daa", features = ["tree-render", "tree-render-system-fonts"] }
+craft-svg = { git = "https://github.com/storytold/craft-libs", rev = "7b8c1eccea0c695a495ab279c9523e6efcc9b8be", features = ["tree-render", "tree-render-system-fonts"] }
 craft-raw = { git = "https://github.com/storytold/craft-libs", rev = "a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9" }
 craft-tiff = { git = "https://github.com/storytold/craft-libs", rev = "a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9" }
 # Camera-field EXIF reader/writer, shared prerequisite craft-libs#1563.
