@@ -13,13 +13,13 @@ use crate::state::Tool;
 
 /// A 400 x 300 document with one count group (made by a canvas click) and the Count tool; the harness draws the
 /// options bar.
-fn harness() -> Harness<'static, PhotocraftApp> {
+fn harness() -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
     app.ui.tool = Tool::Count;
     app.run("count.add", json!({"x": 50, "y": 50})).unwrap();
     let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1600.0, 700.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        |ui, app: &mut Box<PhotocraftApp>| {
             // The app's font families arrive with `setup_context`, after the first frame.
             if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
@@ -33,35 +33,35 @@ fn harness() -> Harness<'static, PhotocraftApp> {
     h
 }
 
-fn groups(h: &Harness<'static, PhotocraftApp>) -> Vec<String> {
+fn groups(h: &Harness<'static, Box<PhotocraftApp>>) -> Vec<String> {
     h.state().session.active().unwrap().doc.measurement.count_groups.iter().map(|g| g.name.clone()).collect()
 }
 
-fn history(h: &Harness<'static, PhotocraftApp>) -> usize {
+fn history(h: &Harness<'static, Box<PhotocraftApp>>) -> usize {
     h.state().session.active().unwrap().history.past_len()
 }
 
 /// The values of the one open dialog, after a host pass has loaded them.
-fn dialog_fields(h: &mut Harness<'static, PhotocraftApp>) -> Option<Value> {
+fn dialog_fields(h: &mut Harness<'static, Box<PhotocraftApp>>) -> Option<Value> {
     crate::dialogs::testing::show(h.state_mut());
     let shown = h.state().framework.dialogs.open_dialogs();
     assert!(shown.len() <= 1, "at most one dialog is open");
     shown.first().map(|d| d.fields.clone().expect("the dialog lists its values"))
 }
 
-fn dialog_name(h: &mut Harness<'static, PhotocraftApp>) -> Option<String> {
+fn dialog_name(h: &mut Harness<'static, Box<PhotocraftApp>>) -> Option<String> {
     dialog_fields(h).map(|f| f["name"].as_str().expect("a name field").to_owned())
 }
 
 /// Types `name` into the open dialog and answers OK; the error is the refusal text.
-fn type_and_ok(h: &mut Harness<'static, PhotocraftApp>, name: &str) -> Result<(), String> {
+fn type_and_ok(h: &mut Harness<'static, Box<PhotocraftApp>>, name: &str) -> Result<(), String> {
     let id = h.state().framework.dialogs.open_dialogs()[0].id;
     let ctx = h.ctx.clone();
     h.state_mut().framework.dialogs.set_json_field(&ctx, id, "name", json!(name)).unwrap();
     crate::dialogs::testing::confirm(h.state_mut(), id)
 }
 
-fn cancel(h: &mut Harness<'static, PhotocraftApp>) {
+fn cancel(h: &mut Harness<'static, Box<PhotocraftApp>>) {
     let id = h.state().framework.dialogs.open_dialogs()[0].id;
     crate::dialogs::testing::cancel(h.state_mut(), id).unwrap();
 }

@@ -6,7 +6,7 @@ use crate::canvas_tool_menu::SAMPLER_DELETE;
 use crate::{PhotocraftApp, Tool};
 
 /// A 200 x 100 document with the Color Sampler and samplers at (20, 20) and (120, 60).
-fn app() -> (PhotocraftApp, egui::Context) {
+fn app() -> (Box<PhotocraftApp>, egui::Context) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
     app.run("view.colorSamplers.add", json!({"x": 20, "y": 20})).unwrap();

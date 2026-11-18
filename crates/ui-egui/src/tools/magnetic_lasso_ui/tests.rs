@@ -13,7 +13,7 @@ use crate::state::Tool;
 const SQUARE: Rect = Rect::new(50, 40, 130, 110);
 
 /// A black 80×70 square on a white 200×150 document, the Magnetic Lasso, 100 % zoom.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 150})).unwrap();
     app.sync_views();

@@ -11,7 +11,7 @@ use crate::canvas::{ToolEvent, tool_event};
 use crate::state::Tool;
 
 /// A 64×64 document with a painted layer covering (8..24)², hidden and active.
-fn app(tool: Tool) -> (PhotocraftApp, LayerId) {
+fn app(tool: Tool) -> (Box<PhotocraftApp>, LayerId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
     app.sync_views();
