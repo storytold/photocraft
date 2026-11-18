@@ -31,10 +31,11 @@ pub(super) fn to_text(aff: &Affine, x: f64, y: f64) -> (f32, f32) {
 /// the pointer never promises a path click that the press would turn into editing this layer.
 pub(crate) fn hit_layer(app: &mut PhotocraftApp, x: f64, y: f64) -> Option<LayerId> {
     let slop = hit_slop(app);
-    let footprint = crate::canvas::document_display::sampled_doc_rect(app, x, y);
+    let sampling = crate::canvas::document_display::picture_sampling(app);
     hit_candidates(app)?.into_iter().find(|id| {
         // Retained PSD pixels can sit off our layout when fonts are substituted (#123).
-        let shown = app.session.active().is_some_and(|st| photocraft_engine::type_caret_cmds::cached_ink_in_rect(&st.doc, *id, footprint));
+        let shown =
+            app.session.active().is_some_and(|st| sampling.any_region(x, y, |area| photocraft_engine::type_caret_cmds::cached_ink_in_rect(&st.doc, *id, area)));
         if shown {
             return true;
         }

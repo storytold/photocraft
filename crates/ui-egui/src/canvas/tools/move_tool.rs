@@ -305,6 +305,7 @@ impl CanvasTool for MoveRun<'_> {
                     return false;
                 }
                 let ctx = app.ctx().clone();
+                let at = crate::canvas::document_display::painted_doc_point(app, pointer.pos).unwrap_or(at);
                 crate::type_tool::edit_at(app, &ctx, at.x, at.y)
             });
             if edited {

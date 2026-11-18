@@ -456,12 +456,22 @@ fn make_harness_with(builder: egui_kittest::HarnessBuilder<PhotocraftApp>, ppp: 
 /// The real GPU document canvas with the same body as the native canvas tests. Construct on eframe's context,
 /// rather than capturing a large app across the builder/catch stack or drawing unrelated full-window chrome.
 fn gpu_canvas_harness(ppp: f32) -> Option<Harness<'static, PhotocraftApp>> {
-    let built = std::panic::catch_unwind(|| {
+    // Only device creation is an environmental skip; setup/layout panics must fail the test.
+    let render_state = match std::panic::catch_unwind(|| {
+        egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), eframe::egui_wgpu::RendererOptions::PREDICTABLE)
+    }) {
+        Ok(state) => state,
+        Err(_) => {
+            eprintln!("skipping: no GPU adapter");
+            return None;
+        }
+    };
+    Some(
         Harness::builder()
             .with_size(vec2(1440.0, 900.0))
             .with_pixels_per_point(ppp)
             .with_max_steps(64)
-            .wgpu_setup(crate::gpu_canvas::wgpu_setup())
+            .renderer(egui_kittest::wgpu::WgpuTestRenderer::from_render_state(render_state))
             .build_eframe(|cc| {
                 PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
                 let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), crate::Services::default());
@@ -472,15 +482,8 @@ fn gpu_canvas_harness(ppp: f32) -> Option<Harness<'static, PhotocraftApp>> {
                     egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
                 }));
                 app
-            })
-    });
-    match built {
-        Ok(h) => Some(h),
-        Err(_) => {
-            eprintln!("skipping: no GPU adapter");
-            None
-        }
-    }
+            }),
+    )
 }
 
 fn new_app() -> PhotocraftApp {
@@ -752,8 +755,11 @@ fn cpu_type_click_uses_the_shown_texture_not_gpu_mips() {
                 let p = canvas_at(h.state(), f64::from(x) + 0.75, f64::from(y) + 0.75);
                 let shown_view = crate::canvas::testing::view(h.state()).expect("a canvas view");
                 let q = shown_view.to_doc(p);
-                let cpu = crate::canvas::document_display::sampled_doc_rect(h.state(), q.x, q.y);
-                let gpu = crate::gpu_canvas::sampled_doc_rect(q.x, q.y, zoom);
+                let mut cpu = Rect::EMPTY;
+                crate::canvas::document_display::picture_sampling(h.state()).any_region(q.x, q.y, |area| {
+                    cpu = area;
+                    false
+                });
                 let doc = &h.state().session.active().unwrap().doc;
                 let bounds = PixelRect::of_size(PixelSize::new(doc.size.width, doc.size.height));
                 let texture_side = craft::ui::primitives::texture_side(h.state().ctx());
@@ -768,10 +774,9 @@ fn cpu_type_click_uses_the_shown_texture_not_gpu_mips() {
                     1
                 };
                 assert_eq!((cpu.width(), cpu.height()), (expected_side, expected_side), "base/detail texture support");
-                let (ix, iy) = (gpu.y0..gpu.y1)
-                    .flat_map(|y| (gpu.x0..gpu.x1).map(move |x| (x, y)))
-                    .find(|&(x, y)| !cpu.contains(x, y))
-                    .expect("GPU support reaches beyond the actual CPU texture");
+                // Exact sharp GPU support can now equal the CPU support. The consumer contract is that ink just
+                // outside the CPU texture's actual support never intercepts its visible lower glyph.
+                let (ix, iy) = (cpu.x1, q.y.floor() as i32);
                 let mut cache = Surface::new(format);
                 cache.fill_rect(Rect::new(ix, iy, ix + 1, iy + 1), &[1.0, 0.0, 0.0, 1.0]);
                 // Transparent RGB padding brackets the visible lower glyph, outside the upper editable layout.
@@ -787,7 +792,6 @@ fn cpu_type_click_uses_the_shown_texture_not_gpu_mips() {
                 let (tx, ty) = super::layout::to_text(&aff, q.x, q.y);
                 assert!(!photocraft_text::text_point_inside(&l, tx, ty, 6.0 / h.state().point_zoom()));
                 let doc = &h.state().session.active().unwrap().doc;
-                assert!(photocraft_engine::type_caret_cmds::cached_ink_in_rect(doc, upper, gpu));
                 assert!(!photocraft_engine::type_caret_cmds::cached_ink_in_rect(doc, upper, cpu));
                 assert!(lower_cache.rgba(q.x.floor() as i32, q.y.floor() as i32)[3] > 0.9);
                 // A stale report from another canvas must not select the renderer for this one.
@@ -798,6 +802,103 @@ fn cpu_type_click_uses_the_shown_texture_not_gpu_mips() {
                 if format == PixelFormat::RGBA8 {
                     capture_type_pick(&mut h, &format!("cpu-lower-{zoom}-{ppp}x-side-{side}"));
                 }
+            }
+        }
+    }
+}
+
+/// The base is still visible through translucent detail, but fully opaque detail hides its coarse-only ink.
+#[test]
+fn cpu_type_click_respects_detail_occlusion_of_base_ink() {
+    use photocraft_color::PixelFormat;
+    use photocraft_geom::Rect;
+    use photocraft_raster::Surface;
+
+    let snapshots = std::env::var_os("PHOTOCRAFT_TYPE_PICK_SNAPSHOTS").is_some();
+    let _gpu = snapshots.then(photocraft_testkit::gpu_lock);
+    for format in [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F] {
+        for ppp in [1.0, 2.0] {
+            for opaque in [false, true] {
+                let mut app = new_app();
+                let doc = std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc);
+                doc.size.width = 4096;
+                doc.layers.clear();
+                let lower = LayerId(app.run("type.create", json!({"text":"LOWER","size":32,"x":2800,"y":100})).unwrap()["layer"].as_u64().unwrap());
+                let upper = LayerId(app.run("type.create", json!({"text":"UPPER","size":32,"x":3000,"y":100})).unwrap()["layer"].as_u64().unwrap());
+                for (id, x, color) in [(lower, 102, [0.0, 0.0, 1.0, if opaque { 1.0 } else { 0.5 }]), (upper, 101, [1.0, 0.0, 0.0, 1.0])] {
+                    let mut cache = Surface::new(format);
+                    cache.fill_rect(Rect::new(x, 128, x + 1, 129), &color);
+                    let state = app.session.active_mut().unwrap();
+                    let doc = std::sync::Arc::make_mut(&mut state.doc);
+                    let LayerContent::Text(text) = &mut doc.layer_mut(id).unwrap().content else { panic!("text") };
+                    text.cache = Some(cache);
+                    state.revision += 1;
+                }
+                let builder = Harness::builder();
+                let mut h = make_harness_with(if snapshots { builder.wgpu() } else { builder }, ppp, app);
+                h.set_size(vec2(360.0, 240.0));
+                h.input_mut().max_texture_side = Some(1024);
+                set_view(&mut h, 1.5, [150.0, 128.0]);
+                let p = canvas_at(h.state(), 102.5, 128.5);
+                if snapshots {
+                    let image = h.render().unwrap();
+                    let pixel = image.get_pixel((p.x * ppp).floor() as u32, (p.y * ppp).floor() as u32);
+                    assert_eq!(pixel[0] == 0, opaque, "opaque blue detail must hide red base; {format:?}, {ppp}");
+                }
+                click(&mut h, p);
+                assert_eq!(
+                    h.state().ui.text_edit.as_ref().map(|edit| edit.layer),
+                    Some(if opaque { lower.0 } else { upper.0 }),
+                    "only visible source grids may claim the click; {format:?}, {ppp}, opaque {opaque}",
+                );
+                if format == PixelFormat::RGBA8 {
+                    capture_type_pick(&mut h, &format!("cpu-detail-opaque-{opaque}-{ppp}x"));
+                }
+            }
+        }
+    }
+}
+
+/// A zoom request and a press can share a pass: the press still addresses the old painted picture.
+#[test]
+fn type_click_uses_painted_camera_when_zoom_changes_on_press() {
+    use photocraft_color::PixelFormat;
+    use photocraft_geom::Rect;
+    use photocraft_raster::Surface;
+
+    for format in [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F] {
+        for ppp in [1.0, 2.0] {
+            for zoom in [1.0, 1.25] {
+                let mut app = new_app();
+                let lower = LayerId(app.run("type.create", json!({"text":"LOWER","size":32,"x":100,"y":100})).unwrap()["layer"].as_u64().unwrap());
+                let upper = LayerId(app.run("type.create", json!({"text":"UPPER","size":32,"x":100,"y":200})).unwrap()["layer"].as_u64().unwrap());
+                for (id, area, color) in
+                    [(lower, Rect::new(1000, 440, 1200, 460), [0.0, 0.0, 1.0, 1.0]), (upper, Rect::new(1100, 449, 1102, 452), [1.0, 0.0, 0.0, 1.0])]
+                {
+                    let mut cache = Surface::new(format);
+                    cache.fill_rect(area, &color);
+                    let state = app.session.active_mut().unwrap();
+                    let doc = std::sync::Arc::make_mut(&mut state.doc);
+                    let LayerContent::Text(text) = &mut doc.layer_mut(id).unwrap().content else { panic!("text") };
+                    text.cache = Some(cache);
+                    state.revision += 1;
+                }
+                let mut h = harness(ppp, app);
+                set_view(&mut h, 1.0, [1000.0, 450.0]);
+                let p = canvas_at(h.state(), 1100.5, 450.5);
+                h.hover_at(p);
+                h.run_steps(1);
+                let ctx = h.ctx.clone();
+                let (request, _) = crate::control::ControlRequest::new("ui.set", json!({"zoom":zoom,"center":[1000.0,450.0]}));
+                assert!(matches!(crate::control::handle(h.state_mut(), &ctx, &request), crate::control::Reply::Done(_)));
+                // No intervening render: the requested view is newer than the picture this input addresses.
+                press(&mut h, p, true);
+                assert_eq!(
+                    h.state().ui.text_edit.as_ref().map(|edit| edit.layer),
+                    Some(upper.0),
+                    "the screen point must use the painted camera and sampling together; {format:?}, {ppp}, next zoom {zoom}",
+                );
+                press(&mut h, p, false);
             }
         }
     }

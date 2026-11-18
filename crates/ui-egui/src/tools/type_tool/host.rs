@@ -72,7 +72,9 @@ impl TextEditorHost for LayerHost<'_> {
     }
 
     fn hit(&mut self, at: Point) -> (usize, usize) {
-        if craft::ui::runtime::pointer::frame(self.app.ctx()).press.is_some_and(|press| press.button == craft::behavior::PointerButton::Primary) {
+        let mut at = at;
+        if let Some(press) = craft::ui::runtime::pointer::frame(self.app.ctx()).press.filter(|press| press.button == craft::behavior::PointerButton::Primary) {
+            at = crate::canvas::document_display::painted_doc_point(self.app, press.origin).unwrap_or(at);
             self.other_type_press |= super::layout::hit_layer(self.app, at.x, at.y).is_some_and(|id| id != self.layer);
         }
         hit_at(self.app, self.layer, at.x, at.y)
