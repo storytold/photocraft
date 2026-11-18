@@ -2363,3 +2363,24 @@ fn a_smart_objects_held_warp_goes_on_in_its_contents_after_the_box_moves() {
     assert_eq!(sm.warp.as_ref().map(|w| w.bounds), Some(source.bounds), "stored over the contents");
     assert!(sm.perspective.is_some(), "the box's move is the new placement");
 }
+
+#[test]
+fn a_pull_under_a_perspective_starts_from_the_pressed_point_of_the_contents() {
+    // The g-vp-lt200 probe: a perspective placement (contents 302 × 202), the surface pressed at document (301, 226)
+    // and pulled 200 px to the left.
+    let to_doc = photocraft_algo::transform::Homography([0.2053, -1.18418, 270.0, 0.0, -0.28647, 125.0, 0.0, -0.00393, 1.0]);
+    let back = to_doc.inverse().unwrap();
+    let contents = BezierMesh::identity([0.0, 0.0, 302.0, 202.0], 1, 1);
+    let doc = contents.map_points(|p| {
+        let (x, y) = to_doc.apply(p[0], p[1]);
+        [x, y]
+    });
+    let mesh = WarpMesh::new(doc.us.clone(), doc.vs.clone(), doc.points.iter().map(|p| Point::new(p[0], p[1])).collect()).unwrap();
+    let (px, py) = back.apply(301.0, 226.0);
+    let (s, t) = contents.param_at([px, py]);
+    let got = super::warp::in_contents(&mesh, super::warp::RuleEdit::Surface { s, t, by: [-200.0, 0.0] }, 1.0, &to_doc, &back).unwrap();
+    // Point 9 in the contents, as pull_at moves it from the pressed point: the carried mesh's point at (s, t) lies
+    // 36 px below the press under this perspective, and a pull from there moved it to about -478 instead.
+    let (x, y) = back.apply(got.points[9].x, got.points[9].y);
+    assert!((x - -614.39).abs() < 0.5 && (y - 134.67).abs() < 0.01, "{x}, {y}");
+}

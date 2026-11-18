@@ -172,7 +172,7 @@ pub(super) fn grid_rule(unit: f64, to_doc: Option<[f64; 9]>) -> impl Fn(&WarpMes
 /// [`rule_mesh`] in a smart object's contents: the mesh, the press and the pointer's move taken back through
 /// `back`, the rule applied there (with the reach in contents units at the press) and the mesh carried to the
 /// document through `to_doc`.
-fn in_contents(
+pub(super) fn in_contents(
     mesh: &WarpMesh,
     edit: RuleEdit,
     unit: f64,
@@ -185,10 +185,12 @@ fn in_contents(
     };
     let doc = bezier_of(mesh);
     let contents = doc.map_points(|p| map(back, p));
-    // The press in the document, and where the pointer is now, both taken into the contents.
+    // The press in the document, and where the pointer is now, both taken into the contents. A surface press is the
+    // contents' point at its parameters (where [`grid_surface`] found the pointer) taken through the placement itself:
+    // under a perspective the carried mesh's point there lies elsewhere, and a pull from it moved too little.
     let (press, by) = match edit {
         RuleEdit::Point { index, by } => (doc.points.get(index).copied()?, by),
-        RuleEdit::Surface { s, t, by } => (doc.eval(s, t), by),
+        RuleEdit::Surface { s, t, by } => (map(to_doc, contents.eval(s, t)), by),
         RuleEdit::SplitOnePatch { .. } => return None,
     };
     let bounds = contents.control_bounds();
