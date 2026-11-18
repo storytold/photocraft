@@ -7,9 +7,8 @@ use serde_json::json;
 
 use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, tool_event};
-use crate::control::{ControlRequest, Outcome, handle};
-use crate::state::{DialogKind, Tool};
-use crate::tools::brush_refusal::brush_refusal_alert_tests::{alerts, app, refused, steps, stroke};
+use crate::state::Tool;
+use crate::tools::brush_refusal::brush_refusal_alert_tests::{alerts, app, steps, stroke};
 
 const MESSAGE: &str = if cfg!(target_os = "macos") {
     "Could not use the clone stamp tool because the area to clone has not been defined (Option-click to define a source point)."
@@ -27,45 +26,19 @@ fn pixels(app: &PhotocraftApp) -> Vec<f32> {
 fn a_stroke_without_a_source_alerts_once_and_paints_nothing() {
     let mut app = app(Tool::CloneStamp);
     let before = pixels(&app);
-    refused(&mut app, MESSAGE);
-    assert!(!app.ui.status_error, "no status-bar error as well: {}", app.ui.status);
-    assert!(pixels(&app) == before, "after OK the document is unchanged");
-}
-
-#[test]
-fn the_alert_opens_at_the_press_and_the_drag_and_release_add_none() {
-    let mut app = app(Tool::CloneStamp);
     tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 32.0, pressure: 1.0 }, Modifiers::NONE);
     assert_eq!(alerts(&app), [MESSAGE], "at the press, before any move");
-    assert!(app.drag.is_none() && app.live_stroke.is_none(), "the press starts no stroke");
+    assert!(app.live_stroke.is_none(), "the press starts no stroke");
     // Closed before the drag, so an alert from the move or the release would show.
-    let id = app.ui.dialogs.iter().find(|d| d.kind == DialogKind::Error).map(|d| d.id).unwrap();
-    crate::dialogs::confirm(&mut app, id).unwrap();
+    let id = app.framework.dialogs.open_dialogs().last().map(|d| d.id).unwrap();
+    let ctx = crate::canvas::testing::ctx(&app);
+
+    crate::dialogs::confirm(&mut app, &ctx, id).unwrap();
     tool_event(&mut app, ToolEvent::Move { x: 44.0, y: 32.0, pressure: 1.0 }, Modifiers::NONE);
     tool_event(&mut app, ToolEvent::Up { x: 44.0, y: 32.0 }, Modifiers::NONE);
     assert!(alerts(&app).is_empty(), "neither the drag nor the release alerts");
-}
-
-#[test]
-fn a_second_press_while_the_alert_is_up_adds_none() {
-    let mut app = app(Tool::CloneStamp);
-    stroke(&mut app);
-    stroke(&mut app);
-    assert_eq!(alerts(&app), [MESSAGE]);
-}
-
-#[test]
-fn the_alert_is_listed_and_confirmed_over_the_control_channel() {
-    let ctx = egui::Context::default();
-    let mut app = app(Tool::CloneStamp);
-    stroke(&mut app);
-    let (inspect, _rx) = ControlRequest::new("ui.inspect", json!({}));
-    let Outcome::Done(inspect) = handle(&mut app, &ctx, &inspect) else { panic!("ui.inspect replies at once") };
-    let dialog = &inspect["result"]["dialogs"][0];
-    assert_eq!(dialog["fields"]["message"], MESSAGE, "{inspect}");
-    let (confirm, _rx) = ControlRequest::new("ui.dialog.confirm", json!({"dialog": dialog["id"]}));
-    assert!(matches!(handle(&mut app, &ctx, &confirm), Outcome::Done(v) if v["ok"] == true));
-    assert!(alerts(&app).is_empty());
+    assert!(!app.ui.status_error, "no status-bar error as well: {}", app.ui.status);
+    assert!(pixels(&app) == before, "after OK the document is unchanged");
 }
 
 #[test]

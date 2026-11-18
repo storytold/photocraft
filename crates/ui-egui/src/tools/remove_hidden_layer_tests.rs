@@ -7,12 +7,13 @@ use serde_json::json;
 
 use super::brush_refusal_alert_tests::{active, alerts, app, refused, steps, stroke};
 use super::*;
+use crate::canvas::testing::in_gesture;
 use crate::canvas::{ToolEvent, tool_event};
 
 const ERROR: &str = photocraft_engine::hidden_target::HIDDEN;
 
 /// [`app`] with its active layer hidden.
-fn hidden(tool: Tool) -> PhotocraftApp {
+fn hidden(tool: Tool) -> Box<PhotocraftApp> {
     let mut app = app(tool);
     let id = active(&app);
     app.run("layer.setProps", json!({"layer": id, "visible": false})).unwrap();
@@ -34,10 +35,10 @@ fn a_hidden_active_layer_is_quiet() {
         let (journal, before, status) = (app.session.journal.len(), steps(&app), app.ui.status.clone());
         tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 32.0, pressure: 1.0 }, Modifiers::NONE);
         tool_event(&mut app, ToolEvent::Move { x: 44.0, y: 32.0, pressure: 1.0 }, Modifiers::NONE);
-        assert!(app.drag.is_none() && app.trail.is_none() && app.live_stroke.is_none(), "{after_each}: no stroke overlay");
+        assert!(!in_gesture(&app) && app.trail.is_none() && app.live_stroke.is_none(), "{after_each}: no stroke overlay");
         tool_event(&mut app, ToolEvent::Up { x: 44.0, y: 32.0 }, Modifiers::NONE);
         assert!(app.remove_pending.is_empty(), "{after_each}: no stroke collected");
-        assert!(app.ui.dialogs.is_empty(), "{after_each}: no dialog");
+        assert!(alerts(&app).is_empty(), "{after_each}: no dialog");
         assert_eq!((app.ui.status.as_str(), app.ui.status_error), (status.as_str(), false), "{after_each}: no message");
         assert_eq!(app.session.journal.len(), journal, "{after_each}: no job ran");
         assert_eq!(steps(&app), before, "{after_each}: no History state");
@@ -84,7 +85,7 @@ fn unmeasured_cases_keep_the_status_error() {
         let before = steps(&app);
         stroke(&mut app);
         assert_eq!((app.ui.status.as_str(), app.ui.status_error), (ERROR, true), "{case}");
-        assert!(app.ui.dialogs.is_empty(), "{case}: no dialog");
+        assert!(alerts(&app).is_empty(), "{case}: no dialog");
         assert_eq!(steps(&app), before, "{case}");
     }
 }

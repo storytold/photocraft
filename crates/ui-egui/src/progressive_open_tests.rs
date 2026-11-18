@@ -25,7 +25,7 @@ fn dng(with_jpeg: bool) -> Vec<u8> {
     bytes
 }
 
-fn app_with_a_document() -> PhotocraftApp {
+fn app_with_a_document() -> Box<PhotocraftApp> {
     // These opens keep their decode in the store the Camera Raw tests share.
     crate::dialogs::camera_raw_ui::tests::hold_raw_open_turn();
     let mut session = photocraft_engine::Session::new();
