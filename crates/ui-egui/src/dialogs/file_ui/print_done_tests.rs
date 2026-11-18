@@ -26,7 +26,7 @@ fn set_fields(app: &mut PhotocraftApp, id: DialogId, values: Value) {
     }
 }
 
-fn app() -> (PhotocraftApp, DialogId) {
+fn app() -> (Box<PhotocraftApp>, DialogId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     // Print lists this printer and does not ask the spooler; a recorded Done must not ask either.
     app.session.printer_source =
@@ -39,13 +39,13 @@ fn app() -> (PhotocraftApp, DialogId) {
 }
 
 /// One pass of the dialogs, then the app's result takers, as the app's frame runs them.
-fn show(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
+fn show(ui: &mut egui::Ui, app: &mut Box<PhotocraftApp>) {
     crate::dialogs::run(app, ui);
     let ctx = ui.ctx().clone();
     super::take(app, &ctx);
 }
 
-fn harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+fn harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = Harness::builder()
         // The paper menu lists the Japanese paper names; no installed face is guaranteed to draw them.
         .allow_missing_glyphs()
@@ -57,12 +57,12 @@ fn harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
     h
 }
 
-fn shown(h: &Harness<'_, PhotocraftApp>, text: &str) -> bool {
+fn shown(h: &Harness<'_, Box<PhotocraftApp>>, text: &str) -> bool {
     // A form caption and its control both expose the same accessible name.
     h.query_all_by_label(text).next().is_some() || h.query_all_by_value(text).next().is_some()
 }
 
-fn click(h: &mut Harness<'_, PhotocraftApp>, label: &str) {
+fn click(h: &mut Harness<'_, Box<PhotocraftApp>>, label: &str) {
     if let Some(node) = h.query_by_label(label) {
         node.click();
     } else {
@@ -71,17 +71,17 @@ fn click(h: &mut Harness<'_, PhotocraftApp>, label: &str) {
     h.run_steps(3);
 }
 
-fn open(h: &Harness<'_, PhotocraftApp>, id: DialogId) -> bool {
+fn open(h: &Harness<'_, Box<PhotocraftApp>>, id: DialogId) -> bool {
     h.state().framework.dialogs.get_by_id::<HostedPrint>(id).is_some()
 }
 
-fn fields(h: &Harness<'_, PhotocraftApp>, id: DialogId) -> Map<String, Value> {
+fn fields(h: &Harness<'_, Box<PhotocraftApp>>, id: DialogId) -> Map<String, Value> {
     let open = h.state().framework.dialogs.open_dialogs();
     open.into_iter().find(|d| d.id == id).and_then(|d| d.fields).and_then(|v| v.as_object().cloned()).expect("the Print dialog's values")
 }
 
 /// Runs a command on the app's session from the harness (the session needs `&mut`).
-fn run(h: &mut Harness<'_, PhotocraftApp>, id: &str, params: Value) -> Value {
+fn run(h: &mut Harness<'_, Box<PhotocraftApp>>, id: &str, params: Value) -> Value {
     h.state_mut().session.execute(id, params).unwrap_or_else(|e| panic!("{id}: {e}"))
 }
 
@@ -117,6 +117,14 @@ fn done_keeps_the_settings_as_a_step_and_prints_nothing() {
     let (revision, steps) = (app.session.active().unwrap().revision, app.session.active().unwrap().history.past_len());
     let mut h = harness(app);
     assert_eq!(fields(&h, id)["paper"], json!("a4"), "the dialog holds the paper the user chose");
+    // The hosted panel only names its default printer once the lister's fresh list has arrived,
+    // as the file_ui tests step for; Done must carry the choice the user is looking at.
+    for _ in 0..10 {
+        if fields(&h, id)["printer"] != json!("") {
+            break;
+        }
+        h.run_steps(3);
+    }
     click(&mut h, "Done");
     assert!(!open(&h, id), "Done closes the dialog");
     let kept = h.state().session.file_menu.last_print.clone();
