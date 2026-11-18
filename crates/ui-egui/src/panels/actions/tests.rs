@@ -634,6 +634,7 @@ fn selected_layer_name_is_visible_during_recording_and_after_stop() {
     h.get_by_label("Select Layer (Background)");
     assert_eq!(step_label("layer.select", &json!({"layer":26})), "Select Layer (ID 26)");
     assert_eq!(step_label("layer.select", &json!({"layer":"Background"})), "Select Layer (Background)");
+    assert_eq!(step_label("layer.select", &json!({"layer":{"recordedName":"Background"}})), "Select Layer (Background)");
 }
 
 #[test]

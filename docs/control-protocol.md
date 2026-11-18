@@ -770,8 +770,9 @@ between source and target documents. A missing name or occurrence stops playback
 an occurrence is rejected when ambiguous. Names are captured at selection time, so a later
 rename in the action does not change the earlier target. Numeric `layer` IDs remain supported
 for direct commands and older recordings, which the panel labels `Select Layer (ID 26)`.
-String-valued `layer` targets from imported Photoshop actions keep main's topmost-name matching
-and show the same named label; `remove` selection mode is supported for either target form.
+String-valued `layer` targets keep topmost-name matching. Imported Photoshop Select steps use
+`{"layer":{"recordedName":"Background"}}` to look up names from the bottom of the layer stack.
+The panel displays the same named label. Both target forms support `remove` mode.
 Re-record old Select Layer steps: their original names cannot be recovered from an ID alone.
 
 Creating an action scrolls its row into view; newly recorded steps are revealed immediately.

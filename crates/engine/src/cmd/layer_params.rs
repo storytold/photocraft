@@ -1,10 +1,9 @@
 use super::params::bad;
 use super::{BlendMode, Document, EngineError, Layer, LayerId, LayerMask, Result, SampleType, Session, Value};
 
-/// The layer a command's `"layer"` param names: an id, or a name (the topmost layer of that
-/// name, as Photoshop's "select layer by name" action step finds it, so a loaded action replays
-/// in another document; a name that matches no layer exactly matches regardless of case, so
-/// `"background"` finds that name). A recorded `{"name":"Layer"}` uses the same lookup.
+/// A plain name or `{"name":"Layer"}` finds the topmost match; `{"recordedName":"Layer"}`
+/// finds the bottommost match in ATN stack order. Both look for an exact match before
+/// falling back to a case-insensitive match.
 /// `{"background":true}` targets the actual Background, independently of its name. `None`
 /// when the param is absent.
 pub(crate) fn explicit_layer(s: &Session, p: &Value) -> Result<Option<LayerId>> {
@@ -26,6 +25,15 @@ pub(crate) fn explicit_layer(s: &Session, p: &Value) -> Result<Option<LayerId>> 
         Some(Value::String(name)) => named(name),
         Some(Value::Object(selector))
             if selector.len() == 1
+                && let Some(name) = selector.get("recordedName").and_then(Value::as_str) =>
+        {
+            let d = s.active().ok_or(EngineError::NoDocument)?;
+            super::layer_references::named_from_bottom(&d.doc, name)
+                .map(Some)
+                .ok_or_else(|| EngineError::Other(format!("no layer named \"{name}\"; {}", layer_listing(&d.doc))))
+        }
+        Some(Value::Object(selector))
+            if selector.len() == 1
                 && let Some(name) = selector.get("name").and_then(Value::as_str) =>
         {
             named(name)
@@ -39,7 +47,7 @@ pub(crate) fn explicit_layer(s: &Session, p: &Value) -> Result<Option<LayerId>> 
             d.doc.background().map(|l| Some(l.id)).ok_or_else(|| EngineError::Other("the document has no Background layer".into()))
         }
         Some(Value::Null) | None => Ok(None),
-        Some(other) => Err(EngineError::Other(format!("`layer` must be an id, a name, {{\"name\":string}} or {{\"background\":true}}, not {other}"))),
+        Some(other) => Err(EngineError::Other(format!("`layer` must be an id, a name, or a valid layer reference, not {other}"))),
     }
 }
 

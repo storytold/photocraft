@@ -1142,6 +1142,7 @@ fn step_label(id: &str, params: &Value) -> String {
             .get("name")
             .and_then(Value::as_str)
             .or_else(|| params.get("layer").and_then(Value::as_str))
+            .or_else(|| params.pointer("/layer/recordedName").and_then(Value::as_str))
             .map(str::to_owned)
             .or_else(|| params.get("layer").and_then(Value::as_u64).map(|id| format!("ID {id}")));
         target.map_or_else(|| label_of(id), |target| format!("{} ({target})", label_of(id)))

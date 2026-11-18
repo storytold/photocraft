@@ -1,15 +1,15 @@
 //! Recorded indexes count the full stack; navigation ordinals follow visible panel rows.
 
-use super::{Document, EngineError, LayerId, Result, Session, Value};
+use super::{Document, EngineError, Layer, LayerId, Result, Session, Value};
 
 #[derive(Clone, Copy)]
-enum Entry {
-    Layer(LayerId),
+enum Entry<'a> {
+    Layer(&'a Layer),
     GroupEnd(LayerId),
 }
 
 /// Bottom-to-top recording order, independent of collapsed Layers panel rows.
-fn stack(doc: &Document) -> Vec<Entry> {
+fn stack(doc: &Document) -> Vec<Entry<'_>> {
     let mut pending: Vec<_> = doc.layers.iter().rev().map(|layer| (layer, false)).collect();
     let mut out = Vec::new();
     while let Some((layer, visited)) = pending.pop() {
@@ -18,10 +18,28 @@ fn stack(doc: &Document) -> Vec<Entry> {
             pending.push((layer, true));
             pending.extend(children.iter().rev().map(|child| (child, false)));
         } else {
-            out.push(Entry::Layer(layer.id));
+            out.push(Entry::Layer(layer));
         }
     }
     out
+}
+
+/// Photoshop's first name match starts at the bottom, even in a hidden group.
+pub(super) fn named_from_bottom(doc: &Document, name: &str) -> Option<LayerId> {
+    let entries = stack(doc);
+    let layers = || {
+        entries.iter().filter_map(|entry| match entry {
+            Entry::Layer(layer) => Some(*layer),
+            Entry::GroupEnd(_) => None,
+        })
+    };
+    layers()
+        .find(|l| l.name == name)
+        .or_else(|| {
+            let folded = name.to_lowercase();
+            layers().find(|l| l.name.to_lowercase() == folded)
+        })
+        .map(|l| l.id)
 }
 
 fn bad(message: impl Into<String>) -> EngineError {
@@ -29,7 +47,7 @@ fn bad(message: impl Into<String>) -> EngineError {
 }
 
 /// A Background occupies index zero; without it the first stack entry is one.
-fn at_index(doc: &Document, index: u64) -> Result<Entry> {
+fn at_index(doc: &Document, index: u64) -> Result<Entry<'_>> {
     let first = u64::from(doc.background().is_none());
     let entry = index.checked_sub(first).and_then(|n| usize::try_from(n).ok()).and_then(|n| stack(doc).get(n).copied());
     entry.ok_or_else(|| bad(format!("no layer at stack index {index}")))
@@ -42,7 +60,7 @@ pub(crate) fn recorded_layer(s: &Session, selector: &Value) -> Result<Option<Lay
     if let Some(index) = fields.get("index") {
         let index = index.as_u64().ok_or_else(|| bad("layer index must be a non-negative integer"))?;
         return Ok(match at_index(&st.doc, index)? {
-            Entry::Layer(id) => Some(id),
+            Entry::Layer(layer) => Some(layer.id),
             Entry::GroupEnd(_) => None,
         });
     }
@@ -60,9 +78,9 @@ pub(crate) fn recorded_drop(doc: &Document, index: u64) -> Result<(LayerId, &'st
     }
     match at_index(doc, index)? {
         Entry::GroupEnd(id) => Ok((id, "below")),
-        Entry::Layer(id) => {
-            let position = if doc.layer(id).is_some_and(|layer| layer.is_group()) { "into" } else { "below" };
-            Ok((id, position))
+        Entry::Layer(layer) => {
+            let position = if layer.is_group() { "into" } else { "below" };
+            Ok((layer.id, position))
         }
     }
 }

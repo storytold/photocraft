@@ -1015,7 +1015,7 @@ children. Example stack, bottom to top: Background, L1, L2, *group end*, Gchild,
 
 | Form | Meaning | Measured |
 |---|---|---|
-| By name (`name`) | The layer with that name (the first match). | (supported) |
+| By name (`name`) | Select, Hide and Show find the first matching name from the bottom of the stack, including inside hidden groups. | If two layers share a name, changing their stack order can change which one the step reaches. |
 | Target (`Ordn.Trgt`) | The active layer. | (supported) |
 | By index (`indx`) | Position in the stack above. With a Background, the Background is 0 and L1 is 1. Without one, the bottom layer is 1, and 0 fails. The group end is a position but cannot be selected: the step leaves the selection unchanged. A number past the top fails. | with Background: 0 Background, 1 L1, 2 L2, 3 (group end: no change), 4 Gchild, 5 G, 6 L3, 7 fails |
 | By id (`Idnt`) | The layer id of the document the step was recorded in (`LyrI`, never reused in that document). In another document it names an unrelated layer or none. | id 3 = L2 with a Background, L1 without |

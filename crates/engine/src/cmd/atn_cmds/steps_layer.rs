@@ -29,7 +29,8 @@ pub(super) fn select_from(d: &Descriptor) -> Mapped {
     };
     match (ref_class(r).as_deref(), target(r)) {
         (Some("slice"), _) => super::steps_slice::select_from(d),
-        (Some("Lyr"), Target::Name(_) | Target::Index(_) | Target::Ordinal(_)) => {
+        (Some("Lyr"), Target::Name(name)) => with_modifier(Map::from_iter([("layer".into(), json!({"recordedName":name}))])),
+        (Some("Lyr"), Target::Index(_) | Target::Ordinal(_)) => {
             let Some(params) = recorded_layer_target(r) else { return Mapped::Unsupported { harmless: false } };
             with_modifier(params)
         }
@@ -262,7 +263,11 @@ pub(super) fn visibility_from(d: &Descriptor, id: &str) -> Mapped {
             if ref_class(reference).as_deref() != Some("Lyr") || matches!(item, ReferenceItem::Enumerated { type_id, .. } if !type_id.is("Ordn")) {
                 return None;
             }
-            targets.push(layer_target(reference)?.remove("layer"));
+            let layer = match target(reference) {
+                Target::Name(name) => Some(json!({"recordedName":name})),
+                _ => layer_target(reference)?.remove("layer"),
+            };
+            targets.push(layer);
         }
         Some(())
     };

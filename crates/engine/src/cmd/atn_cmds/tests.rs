@@ -542,7 +542,7 @@ fn load_maps_events_keeps_flags_and_plays() {
     );
     assert_eq!(a.steps[0].1, json!({"radius": 2.5}));
     assert_eq!(a.steps[1].1, json!({"inBlack": 10, "inWhite": 240, "gamma": 1.2, "outBlack": 0, "outWhite": 250}));
-    assert_eq!(a.steps[3].1, json!({"layer": "Shadow"}));
+    assert_eq!(a.steps[3].1, json!({"layer": {"recordedName": "Shadow"}}));
     assert_eq!(a.steps[5].1, json!({"message": "Check the result", "allowContinue": true}));
     assert_eq!(a.steps[6].1["event"], "syntheticFill");
     assert_eq!(a.steps[7].1, json!({"action": "Finish"}));
@@ -1067,9 +1067,9 @@ fn every_mapped_command_exports_and_imports_back() {
         ("layer.setProps", json!({"name": "Renamed", "opacity": 0.4, "blend": "Linear Light"})),
         ("layer.setProps", json!({"layer": "Shadow", "visible": false})),
         ("layer.setLabelColor", json!({"color": "red"})),
-        ("layer.showOnly", json!({"layer": "Solo"})),
-        ("layer.select", json!({"layer": "Shadow", "mode": "add"})),
-        ("layer.select", json!({"layer": "Shadow", "mode": "range"})),
+        ("layer.showOnly", json!({"layer": {"recordedName": "Solo"}})),
+        ("layer.select", json!({"layer": {"recordedName": "Shadow"}, "mode": "add"})),
+        ("layer.select", json!({"layer": {"recordedName": "Shadow"}, "mode": "range"})),
         ("layer.select", json!({"layer": {"index": 2}})),
         ("layer.moveTo", json!({"target": {"index": 0}})),
         ("layer.moveTo", json!({"layer": {"index": 2}, "target": {"index": 4}})),
@@ -1081,7 +1081,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("layer.addAboveToSelection", json!({})),
         ("layer.delete", json!({})),
         ("edit.clear", json!({})),
-        ("layer.hideLayers", json!({"layer": "Background", "toggle": false})),
+        ("layer.hideLayers", json!({"layer": {"recordedName": "Background"}, "toggle": false})),
         ("layer.showLayers", json!({})),
         ("layer.translate", json!({"dx": 3, "dy": -4})),
         ("layer.arrange.sendToBack", json!({})),
@@ -1252,8 +1252,8 @@ fn every_mapped_command_exports_and_imports_back() {
         ("channel.target", json!({"channel": "composite"})),
         ("edit.undo", json!({})),
         ("edit.redo", json!({})),
-        ("layer.select", json!({"layer": "YELLOW", "mode": "remove"})),
-        ("layer.select", json!({"layer": "Or paste photocopy texture here", "mode": "range"})),
+        ("layer.select", json!({"layer": {"recordedName": "YELLOW"}, "mode": "remove"})),
+        ("layer.select", json!({"layer": {"recordedName": "Or paste photocopy texture here"}, "mode": "range"})),
         ("layer.translate", json!({"dx": 0.36, "dy": -1.08, "units": "pt"})),
         ("select.loadSelection", json!({"channel": "targeted"})),
         ("layer.newFillLayer.pattern", json!({"pattern": "Debaser-Distressed-Dark", "scale": 50, "angle": 0, "link": true})),
@@ -5126,6 +5126,48 @@ fn mapped_recording(event: &str, descriptor: Descriptor) -> Imported {
 }
 
 #[test]
+fn recorded_select_and_visibility_match_the_bottommost_named_layer() {
+    let target = name_ref("Lyr ", "Repeated");
+    let selection = desc("null").with("null", target.clone()).with("MkVs", D::Boolean(false));
+    let visibility = desc("null").with("null", D::List(vec![target]));
+    let recording =
+        one_action(vec![item("slct", "Select", Some(selection)), item("Hd  ", "Hide", Some(visibility.clone())), item("Shw ", "Show", Some(visibility))]);
+    let imported = import(&atn::write(&recording).unwrap()).unwrap();
+    let (bytes, skipped) = export("Layers", &[&imported.actions[0]], &[], false).unwrap();
+    assert!(skipped.is_empty());
+    let saved = atn::parse(&bytes).unwrap();
+    for (original, reexported) in recording.actions[0].items.iter().zip(&saved.actions[0].items) {
+        assert_eq!(original.descriptor.as_ref().unwrap().get("null"), reexported.descriptor.as_ref().unwrap().get("null"));
+    }
+    let loaded = import(&bytes).unwrap();
+    let [select, hide, show] = loaded.actions[0].steps.as_slice() else { panic!("expected three mapped steps") };
+
+    for group_above in [true, false] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width":4,"height":4,"background":"transparent"})).unwrap();
+        let doc = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc);
+        let root = photocraft_doc::Layer::group("Repeated", vec![]);
+        let nested = photocraft_doc::Layer::group("Repeated", vec![]);
+        let (root_id, nested_id) = (root.id, nested.id);
+        let mut group = photocraft_doc::Layer::group("Parent", vec![nested]);
+        group.visible = false;
+        let (layers, lower, upper) = if group_above { (vec![root, group], root_id, nested_id) } else { (vec![group, root], nested_id, root_id) };
+        doc.layers.extend(layers);
+
+        s.execute("layer.select", json!({"layer":"Repeated"})).unwrap();
+        assert_eq!(s.active().unwrap().active_layer, Some(upper));
+        s.execute(&select.0, select.1.clone()).unwrap();
+        assert_eq!(s.active().unwrap().active_layer, Some(lower));
+        s.execute(&hide.0, hide.1.clone()).unwrap();
+        let doc = &s.active().unwrap().doc;
+        assert!(!doc.layer(lower).unwrap().visible);
+        assert!(doc.layer(upper).unwrap().visible);
+        s.execute(&show.0, show.1.clone()).unwrap();
+        assert!(s.active().unwrap().doc.layer(lower).unwrap().visible);
+    }
+}
+
+#[test]
 fn recorded_visibility_list_exports_the_right_pixels_and_undoes_as_one_step() {
     for combined in [true, false] {
         let references: Vec<_> =
@@ -5236,7 +5278,7 @@ fn mapped_transform_reference_points_round_trip() {
 fn mapped_show_only_round_trip_and_toggle() {
     let d = desc("null").with("null", D::List(vec![name_ref("Lyr ", "Solo")])).with("TglO", D::Boolean(true));
     let loaded = mapped_recording("Shw ", d);
-    assert_eq!(loaded.actions[0].steps, vec![("layer.showOnly".into(), json!({"layer": "Solo"}))]);
+    assert_eq!(loaded.actions[0].steps, vec![("layer.showOnly".into(), json!({"layer": {"recordedName": "Solo"}}))]);
     let (bytes, _) = export("Eyes", &[&loaded.actions[0]], &[], false).unwrap();
     let saved = atn::parse(&bytes).unwrap();
     assert_eq!(get_bool(saved.actions[0].items[0].descriptor.as_ref().unwrap(), "TglO"), Some(true));

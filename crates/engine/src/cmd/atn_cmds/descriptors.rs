@@ -209,6 +209,9 @@ pub(super) fn layer_ref(p: &Value) -> Option<D> {
     match p.get("layer") {
         None | Some(Value::Null) => Some(target_ref("Lyr ")),
         Some(Value::String(n)) => Some(name_ref("Lyr ", n)),
+        Some(Value::Object(selector)) if selector.len() == 1 && selector.contains_key("recordedName") => {
+            Some(name_ref("Lyr ", selector.get("recordedName")?.as_str()?))
+        }
         Some(Value::Number(n)) => match n.as_u64() {
             Some(i) if i <= u32::MAX as u64 => Some(D::Reference(vec![ReferenceItem::Identifier { class: class("Lyr "), id: i as u32 }])),
             _ => None,
