@@ -108,7 +108,13 @@ pub fn start() {
                     services.load_prefs = Some(Box::new(move || initial.take().unwrap_or_else(stored_preferences)));
                     let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), session, services);
                     if !preset_warnings.is_empty() {
-                        photocraft_ui_egui::notices::post(&mut app, i18n::t("Some brush presets could not be loaded"), preset_warnings, true, None);
+                        photocraft_ui_egui::notices::post(
+                            &mut app,
+                            i18n::t("Some brush presets could not be loaded"),
+                            preset_warnings,
+                            photocraft_ui_egui::notices::Tone::Bad,
+                            None,
+                        );
                     }
                     listen_pen(&pen_target, app.stylus.feed.clone());
                     app.set_theme(&cc.egui_ctx, AppTheme::pro());
@@ -356,7 +362,7 @@ async fn fetch_bytes(url: &str, integrity: Option<&str>) -> Result<Vec<u8>, Stri
 /// Wraps the app to read dropped files asynchronously (browsers can't read them synchronously,
 /// so the app's own drop path can't handle them) and feed them through the inboxes.
 struct WebShell {
-    app: PhotocraftApp,
+    app: Box<PhotocraftApp>,
     /// Dropped files to open as documents.
     inbox: Inbox,
     /// Dropped files to place on the active document's canvas.

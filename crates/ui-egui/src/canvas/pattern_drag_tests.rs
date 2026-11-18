@@ -32,7 +32,7 @@ fn off(p: [f64; 2], d: [f64; 2]) -> [f64; 2] {
 }
 
 /// A document with a Pattern Fill dialog open: editing an existing linked fill, or creating one.
-fn pattern_drag_app(depth: u64, create: bool) -> (PhotocraftApp, craft::ui::dialog::DialogId, Option<u64>) {
+fn pattern_drag_app(depth: u64, create: bool) -> (Box<PhotocraftApp>, craft::ui::dialog::DialogId, Option<u64>) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 40, "height": 30, "depth": depth})).unwrap();
     let layer = if create {
