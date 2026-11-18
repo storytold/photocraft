@@ -7,6 +7,15 @@
 //! in a separate, untrusted process.
 //!
 //! On the web a picker gives the script a name, not a path, so nothing is ever granted there.
+//!
+//! The check reads the path. On Windows a name with a `:` (an alternate data stream,
+//! `photo.png:hidden`) is refused, since it is no file the user chose. Then, for a granted path
+//! only (a script learns nothing of any other path), the file system is asked one thing: a target
+//! that is a symbolic link (or, on Windows, another reparse point such as a junction) is refused,
+//! even one the user picked, since writing it would write wherever it points. What remains is a
+//! race: something else on the machine that replaces a granted file with a link between this
+//! check and the write redirects the write. A script can't do that by itself (it has no other
+//! way to touch the file system), so this stays outside what scripts can reach.
 
 use serde_json::Value;
 
@@ -59,6 +68,10 @@ fn parts_on(path: &str, windows: bool) -> Option<Vec<String>> {
     if out.len() <= root || out.iter().any(|p| p == "." || p == "..") {
         return None;
     }
+    // Past the drive, a `:` names a stream of a file (or is no valid name): never a file to write.
+    if windows && out.iter().skip(root).any(|p| p.contains(':')) {
+        return None;
+    }
     Some(out)
 }
 
@@ -71,6 +84,28 @@ fn extended(chosen: &str, name: &str) -> bool {
     }
     let Some(ext) = name.get(chosen.len()..).and_then(|rest| rest.strip_prefix('.')) else { return false };
     same(name.get(..chosen.len()).unwrap_or(""), chosen) && (1..=5).contains(&ext.len()) && ext.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
+/// Whether `path` is a symbolic link or another reparse point (a junction, on Windows) now.
+fn is_link(path: &str) -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::fs::symlink_metadata(path).is_ok_and(|m| {
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::MetadataExt;
+                // FILE_ATTRIBUTE_REPARSE_POINT
+                m.file_type().is_symlink() || m.file_attributes() & 0x400 != 0
+            }
+            #[cfg(not(windows))]
+            m.file_type().is_symlink()
+        })
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = path;
+        false
+    }
 }
 
 fn same(a: &str, b: &str) -> bool {
@@ -121,11 +156,14 @@ impl PathGrants {
             return Ok(());
         }
         let path = params.get("path").and_then(Value::as_str).unwrap_or("");
-        if self.allows(path) {
-            Ok(())
-        } else {
-            Err("a script can only save to a file or folder you chose in this run (File.saveDialog() or Folder.selectDialog())".into())
+        if !self.allows(path) {
+            return Err("a script can only save to a file or folder you chose in this run (File.saveDialog() or Folder.selectDialog())".into());
         }
+        // Only a granted path is looked at on disk: a script learns nothing of any other.
+        if is_link(path) {
+            return Err("a script can't save over a link: it would write wherever the link points".into());
+        }
+        Ok(())
     }
 }
 
@@ -200,6 +238,26 @@ mod tests {
             assert_eq!(win(relative), None, "{relative}");
         }
         assert_eq!(parts_on("C:\\Users\\a.png", false), None, "only Windows has drives");
+        assert_eq!(win("C:\\Exports\\photo.png:hidden"), None, "an alternate data stream is no file");
+        assert_eq!(win("C:\\Exports\\photo.png::$DATA"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_in_a_chosen_folder_is_not_written() {
+        let dir = std::env::temp_dir().join(format!("photocraft-grants-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let outside = dir.join("outside.txt");
+        std::fs::write(&outside, "keep").unwrap();
+        let link = dir.join("export.png");
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        let mut g = PathGrants::default();
+        g.record(ModalKind::SelectFolder, &json!(dir.to_string_lossy()));
+        let save = |p: &std::path::Path| g.check("file.saveACopy", &json!({"path": p.to_string_lossy()}));
+        assert!(save(&dir.join("fresh.png")).is_ok(), "a new file in the chosen folder");
+        assert!(save(&link).unwrap_err().contains("link"), "the link in it");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

@@ -30,6 +30,9 @@ type Native = fn(&JsValue, &[JsValue], &mut Context) -> JsResult<JsValue>;
 pub const MAX_ELEMENTS: usize = 4096;
 /// Items one list may hold.
 pub const MAX_ITEMS: usize = 10_000;
+/// Items all of a run's lists may hold together, closed windows' included (a run's controls are
+/// never freed): a dialog per document with a long font list still fits.
+pub const MAX_TOTAL_ITEMS: usize = 250_000;
 /// How deep controls may be nested in a window. Real dialogs nest a few levels; the bound keeps
 /// every window well inside what the script host's messages can carry (`serde_json` refuses
 /// input nested more than 128 arrays and objects deep, and each level here is two).
@@ -120,6 +123,9 @@ struct Element {
     obj: JsObject,
     /// A list's items, in order.
     items: Vec<JsObject>,
+    /// The array its `items` property holds, kept so an added item is appended, not the whole
+    /// array rebuilt.
+    items_array: Option<JsObject>,
     children: Vec<u32>,
     parent: Option<u32>,
     /// The window this control is in (a window's own id for a window).
@@ -142,6 +148,9 @@ struct Element {
 #[derive(Trace, Finalize, JsData)]
 struct Registry {
     elements: Vec<Element>,
+    /// Items in all lists ([`MAX_TOTAL_ITEMS`]).
+    #[unsafe_ignore_trace]
+    items: usize,
     proto: JsObject,
     item_proto: JsObject,
 }
@@ -233,6 +242,7 @@ fn create(ctx: &mut Context, kind: Kind, parent: Option<u32>, type_name: &str, t
         r.elements.push(Element {
             obj: obj.clone(),
             items: Vec::new(),
+            items_array: None,
             children: Vec::new(),
             parent,
             window,
@@ -319,8 +329,25 @@ fn sync_items(ctx: &mut Context, id: u32) -> JsResult<()> {
         set(item, "index", i as f64, ctx)?;
     }
     let values: Vec<JsValue> = items.into_iter().map(JsValue::from).collect();
-    let values = array(values, ctx);
-    set(&obj, "items", values, ctx)
+    let values = JsArray::from_iter(values, ctx);
+    element_mut(ctx, id, |e| e.items_array = Some(values.clone().into()))?;
+    set(&obj, "items", JsValue::from(values), ctx)
+}
+
+/// Count `n` more items (negative: fewer) against [`MAX_TOTAL_ITEMS`]; `false` when that would
+/// pass it.
+fn count_items(ctx: &Context, n: isize) -> JsResult<bool> {
+    with_registry(ctx, |r| match r.items.checked_add_signed(n).filter(|t| *t <= MAX_TOTAL_ITEMS) {
+        Some(t) => {
+            r.items = t;
+            true
+        }
+        None if n < 0 => {
+            r.items = 0;
+            true
+        }
+        None => false,
+    })
 }
 
 fn add_item(ctx: &mut Context, list: u32, text: &JsValue, separator: bool) -> JsResult<JsValue> {
@@ -340,6 +367,10 @@ fn add_item(ctx: &mut Context, list: u32, text: &JsValue, separator: bool) -> Js
     if count >= MAX_ITEMS {
         return Err(JsNativeError::range().with_message(format!("a list can hold at most {MAX_ITEMS} items")).into());
     }
+    if !count_items(ctx, 1)? {
+        element_mut(ctx, list, |e| e.items.retain(|i| !JsObject::equals(i, &item)))?;
+        return Err(JsNativeError::range().with_message(format!("a script's lists can hold at most {MAX_TOTAL_ITEMS} items in all")).into());
+    }
     let filled = (|| -> JsResult<()> {
         set(&item, "text", string(&text), ctx)?;
         set(&item, "type", string(if separator { "separator" } else { "item" }), ctx)?;
@@ -349,9 +380,20 @@ fn add_item(ctx: &mut Context, list: u32, text: &JsValue, separator: bool) -> Js
     // A setter of the script's that throws leaves no half-made item in the list.
     if let Err(e) = filled {
         element_mut(ctx, list, |e| e.items.retain(|i| !JsObject::equals(i, &item)))?;
+        count_items(ctx, -1)?;
         return Err(e);
     }
-    sync_items(ctx, list)?;
+    // Appended to the list's own array, so adding n items is linear, not quadratic; by
+    // definition, not assignment, so no setter of the script's runs here. Only while that array
+    // still matches the list item for item up to the new one; otherwise (the script replaced
+    // `items`, or a setter of its added or removed items meanwhile) the array is made again.
+    let (obj, len, kept) = element(ctx, list, |e| (e.obj.clone(), e.items.len(), e.items_array.clone()))?;
+    match kept.and_then(|a| JsArray::from_object(a).ok()) {
+        Some(arr) if len == count + 1 && arr.length(ctx)? == count as u64 && arr.create_data_property(count, item.clone(), ctx)? => {
+            set(&obj, "items", JsValue::from(arr), ctx)?;
+        }
+        _ => sync_items(ctx, list)?,
+    }
     Ok(item.into())
 }
 
@@ -470,6 +512,9 @@ fn remove(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsVal
         };
         let Some(at) = at else { return Ok(JsValue::undefined()) };
         let removed = element_mut(ctx, id, |e| (at < e.items.len()).then(|| e.items.remove(at)))?;
+        if removed.is_some() {
+            count_items(ctx, -1)?;
+        }
         if let (Some(removed), Some(obj)) = (removed, this.as_object()) {
             let sel = get(&obj, "selection", ctx)?;
             if sel.as_object().is_some_and(|s| JsObject::equals(&s, &removed)) {
@@ -501,7 +546,8 @@ fn remove(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsVal
 fn remove_all(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let id = this_id(this)?;
     if kind_of(ctx, id)?.list() {
-        element_mut(ctx, id, |e| e.items.clear())?;
+        let n = element_mut(ctx, id, |e| std::mem::take(&mut e.items).len())?;
+        count_items(ctx, -isize::try_from(n).unwrap_or(isize::MAX))?;
         sync_items(ctx, id)?;
         if let Some(obj) = this.as_object() {
             set(&obj, "selection", JsValue::null(), ctx)?;
@@ -1062,7 +1108,7 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
     let proto = init.build();
     let item_proto = ObjectInitializer::new(ctx).function(NativeFunction::from_fn_ptr(item_to_string), js_string!("toString"), 0).build();
     let realm = ctx.realm().clone();
-    realm.host_defined_mut().insert(Registry { elements: Vec::new(), proto: proto.clone(), item_proto });
+    realm.host_defined_mut().insert(Registry { elements: Vec::new(), items: 0, proto: proto.clone(), item_proto });
     let ctor = FunctionObjectBuilder::new(ctx.realm(), NativeFunction::from_fn_ptr(window_ctor)).name(js_string!("Window")).length(4).constructor(true).build();
     // A native constructor gets no `prototype` of its own; without one `instanceof` throws.
     link_prototype(&ctor, &proto, ctx)?;

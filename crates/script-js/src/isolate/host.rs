@@ -15,8 +15,9 @@ use super::protocol::{FromHost, MAX_FROM_HOST, MAX_LINE, MAX_TO_HOST, ToHost, cu
 use crate::host::{Host, HostError};
 use crate::{ModalKind, RunOptions, Runner, Step, Unlimited};
 
-/// Stack of the script thread: the parser and some builtins recurse on nested input.
-pub const STACK: usize = 256 << 20;
+/// Stack of the script thread: the parser and some builtins recurse on nested input. Smaller on
+/// a 32-bit system, whose 2 GiB of address space must also hold the heap.
+pub const STACK: usize = if cfg!(target_pointer_width = "64") { 256 << 20 } else { 64 << 20 };
 
 /// Exit status when the input was not a valid start of a run.
 const BAD_INPUT: i32 = 2;
@@ -93,8 +94,10 @@ fn drive(source: &str, app_name: Option<String>, script_name: Option<String>, in
     }
 }
 
-/// Serve one run on standard input and output; returns the process exit status.
-pub fn serve() -> i32 {
+/// Serve one run on standard input and output; returns the process exit status. `heap` is the
+/// executable's global allocator ([`super::limits::host_allocator`]), which the run's memory limit
+/// caps.
+pub fn serve(heap: &'static super::limits::HostAllocator) -> i32 {
     let (tx, rx) = mpsc::channel();
     let reader = std::thread::Builder::new().name("script-host-input".into()).spawn(move || {
         let mut input = io::stdin().lock();
@@ -121,7 +124,7 @@ pub fn serve() -> i32 {
         let _ = writeln!(io::stderr(), "script host: the first message was not a start");
         return BAD_INPUT;
     };
-    let result = match super::limits::limit_memory(memory_limit) {
+    let result = match super::limits::limit_memory(memory_limit, heap) {
         Err(e) => Err(format!("Couldn't limit the script's memory: {e}")),
         Ok(()) => match std::thread::Builder::new().name("script".into()).stack_size(STACK).spawn(move || drive(&source, app_name, script_name, rx)) {
             Err(e) => Err(format!("Couldn't start the script: {e}")),

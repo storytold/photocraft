@@ -1,4 +1,6 @@
 //! A panic during an attempt fails the run instead of unwinding into the caller.
+// Native only: the tests time runs with `std::time`, which has no clock on wasm32-unknown-unknown.
+#![cfg(not(target_arch = "wasm32"))]
 
 use photocraft_script_js::{Host, HostError, RunOptions, Runner, Step, Unlimited};
 use serde_json::Value;

@@ -18,18 +18,33 @@ use super::protocol::{
     write_frame,
 };
 use super::{SCRIPT_HOST_FLAG, host};
-use crate::tape::{MAX_ENTRIES, MAX_OUTPUT_BYTES};
+use crate::tape::{MAX_ENTRIES, MAX_OUTPUT_BYTES, MAX_WINDOW_BYTES};
 use crate::{Modal, RunOptions};
 
-/// Memory a host may use unless the options say otherwise.
-pub const DEFAULT_MEMORY_LIMIT: u64 = 2 << 30;
+/// Memory a host may use unless the options say otherwise: less on a 32-bit system, whose
+/// address space is 2 GiB.
+pub const DEFAULT_MEMORY_LIMIT: u64 = if cfg!(target_pointer_width = "64") { 2 << 30 } else { 1 << 30 };
 /// The least memory limit: the script thread's stack plus room for the engine.
 pub const MIN_MEMORY_LIMIT: u64 = host::STACK as u64 + (256 << 20);
+// The default is a limit the host can reach, and on a 32-bit system one that fits its 2 GiB of
+// address space with the app's own mappings beside it.
+const _: () = assert!(DEFAULT_MEMORY_LIMIT >= MIN_MEMORY_LIMIT);
+const _: () = assert!(cfg!(target_pointer_width = "64") || DEFAULT_MEMORY_LIMIT <= 3 << 29);
 /// Events buffered between the host and the interface. When the interface falls behind, the
 /// host blocks on its next message.
 const QUEUE: usize = 64;
 /// How often the watchdog looks at the host.
 const TICK: Duration = Duration::from_millis(5);
+/// Longest the app may take to answer one command: as long as it gives all of a run's commands
+/// (`ui-egui`'s run budget), since one slow command (a large save) may take that. The run's clock
+/// stops meanwhile, so without this a command handler that never answers would hold the host
+/// forever.
+pub const COMMAND_REPLY_LIMIT: Duration = Duration::from_secs(30 * 60);
+/// How long at a time a full queue of events stops the run's clock ([`Shared::deliver`]).
+const QUEUE_GRACE: Duration = Duration::from_secs(30);
+/// Longest a dialog may stay open. A person may leave one open for a long time; one the
+/// interface never shows or answers still ends.
+pub const DIALOG_REPLY_LIMIT: Duration = Duration::from_secs(12 * 60 * 60);
 /// How often it reads the host's resident size.
 const METER_EVERY: Duration = Duration::from_millis(20);
 /// Standard error kept for classifying a crash.
@@ -44,12 +59,14 @@ pub struct HelperCommand {
     pub program: PathBuf,
     /// Arguments; [`HelperCommand::new`] passes [`SCRIPT_HOST_FLAG`].
     pub args: Vec<OsString>,
+    /// Environment variables set for the host, beside the app's own.
+    pub envs: Vec<(OsString, OsString)>,
 }
 
 impl HelperCommand {
     /// `program` started with [`SCRIPT_HOST_FLAG`].
     pub fn new(program: impl Into<PathBuf>) -> Self {
-        Self { program: program.into(), args: vec![SCRIPT_HOST_FLAG.into()] }
+        Self { program: program.into(), args: vec![SCRIPT_HOST_FLAG.into()], envs: Vec::new() }
     }
 
     /// This executable, which serves runs itself when started with [`SCRIPT_HOST_FLAG`].
@@ -72,6 +89,9 @@ pub struct IsolateOptions {
     /// History step key shared by the run's commands; unique per run.
     pub coalesce: String,
     pub helper: HelperCommand,
+    /// Longest the app may take to answer one command, and one dialog
+    /// ([`COMMAND_REPLY_LIMIT`], [`DIALOG_REPLY_LIMIT`]).
+    pub reply_limits: (Duration, Duration),
 }
 
 /// What a run needs from the interface next. The same events as the in-process job.
@@ -194,6 +214,10 @@ enum Verdict {
     Lingered,
     /// The script's start message was over [`MAX_TO_HOST`] bytes.
     TooLarge(usize),
+    /// The app did not answer a command (`false`) or a dialog (`true`) in time.
+    NoReply(bool),
+    /// An answer could not be sent to the host.
+    Unsent(String),
 }
 
 /// Time the run spent executing.
@@ -222,6 +246,8 @@ impl Clock {
 
 struct Watch {
     clock: Clock,
+    /// Since when the host has waited for the app's answer, and whether to a dialog.
+    waiting: Option<(Instant, bool)>,
     verdict: Option<Verdict>,
     exit: Option<Exit>,
     peak: u64,
@@ -255,10 +281,14 @@ struct Shared {
     reported: AtomicBool,
     /// Bytes of output lines relayed so far.
     output: std::sync::atomic::AtomicUsize,
+    /// Bytes of window updates relayed so far.
+    windows: std::sync::atomic::AtomicUsize,
     /// Output lines and window updates relayed so far.
     relayed: std::sync::atomic::AtomicUsize,
     time_limit: Duration,
     memory_limit: u64,
+    /// See [`IsolateOptions::reply_limits`].
+    reply_limits: (Duration, Duration),
     containment: Containment,
 }
 
@@ -288,15 +318,50 @@ impl Shared {
         }
     }
 
-    /// Count one relayed output line or window update. Past the host-call bound the host made
-    /// more than a run may (each one is a host call), and is stopped: an empty line costs no
-    /// bytes, so the byte bound alone would not hold the number of lines the interface keeps.
+    /// Count one relayed host call: a command, a dialog, an output line or a window update.
+    /// Past the bound the host made more than a run may, and is stopped: an empty line costs no
+    /// bytes and a dialog no output, so the byte bound alone would not hold them.
     fn relay_one(&self) -> bool {
         if self.relayed.fetch_add(1, Ordering::SeqCst) >= MAX_ENTRIES {
-            self.kill(Verdict::Violation(format!("more than {MAX_ENTRIES} output lines and window updates")));
+            self.kill(Verdict::Violation(format!("more than {MAX_ENTRIES} commands, dialogs, output lines and window updates")));
             return false;
         }
         true
+    }
+
+    /// The host now waits for the app's answer to a command or a `dialog`: the run's clock stops,
+    /// and the wait's own clock starts.
+    fn await_reply(&self, dialog: bool) {
+        let mut w = lock(&self.watch);
+        w.clock.pause();
+        w.waiting = Some((Instant::now(), dialog));
+    }
+
+    /// Hand `event` to the interface. When its queue is full the interface is behind: the host
+    /// soon blocks on its output too, and the wait is the app's, not the script's, up to
+    /// [`QUEUE_GRACE`] at a time. Past that the time counts again: the host may keep computing
+    /// until its output pipe fills, so a stalled interface must not stop the clock for good.
+    fn deliver(&self, events: &SyncSender<Event>, event: Event) -> bool {
+        match events.try_send(event) {
+            Ok(()) => true,
+            Err(mpsc::TrySendError::Disconnected(_)) => false,
+            Err(mpsc::TrySendError::Full(event)) => {
+                let running = lock(&self.watch).waiting.is_none();
+                if running {
+                    lock(&self.watch).clock.pause();
+                }
+                let blocked = Instant::now();
+                let sent = events.send(event).is_ok();
+                if running {
+                    let mut w = lock(&self.watch);
+                    w.clock.spent += blocked.elapsed().saturating_sub(QUEUE_GRACE);
+                    if w.waiting.is_none() {
+                        w.clock.resume();
+                    }
+                }
+                sent
+            }
+        }
     }
 
     /// How a run that the app stopped ended, if it did: a cancel, timeout or memory verdict
@@ -372,6 +437,11 @@ impl Shared {
                     format!("The script is too large to run: {} MiB, over the limit of {} MiB.", n.div_ceil(1 << 20), MAX_TO_HOST >> 20),
                 );
             }
+            Some(Verdict::NoReply(dialog)) => {
+                let (what, limit) = if *dialog { ("dialog", self.reply_limits.1) } else { ("command", self.reply_limits.0) };
+                return Failure::new(FailureKind::Timeout, format!("The script was stopped: its {what} got no answer within {} s.", limit.as_secs()));
+            }
+            Some(Verdict::Unsent(why)) => return Failure::new(FailureKind::Script, format!("The script was stopped: {why}.")),
             Some(Verdict::Lingered) => {
                 return Failure::new(FailureKind::HostViolation, "The script was stopped: the script host kept running after it closed its output.");
             }
@@ -429,7 +499,11 @@ impl IsolatedJob {
     pub fn spawn(source: String, options: IsolateOptions) -> Result<Self, Failure> {
         let unavailable = |e: String| Failure::new(FailureKind::Unavailable, format!("Couldn't start the script host: {e}"));
         let mut cmd = Command::new(&options.helper.program);
-        cmd.args(&options.helper.args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        cmd.args(&options.helper.args)
+            .envs(options.helper.envs.iter().map(|(k, v)| (k, v)))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -454,16 +528,25 @@ impl IsolatedJob {
         };
         let memory_limit = options.memory_limit.max(MIN_MEMORY_LIMIT);
         let shared = Arc::new(Shared {
-            watch: Mutex::new(Watch { clock: Clock { spent: Duration::ZERO, since: Some(Instant::now()) }, verdict: None, exit: None, peak: 0, dead: false }),
+            watch: Mutex::new(Watch {
+                clock: Clock { spent: Duration::ZERO, since: Some(Instant::now()) },
+                waiting: None,
+                verdict: None,
+                exit: None,
+                peak: 0,
+                dead: false,
+            }),
             child: Mutex::new(child),
             stderr: Mutex::default(),
             awaiting: AtomicBool::new(false),
             reading: AtomicBool::new(false),
             reported: AtomicBool::new(false),
             output: std::sync::atomic::AtomicUsize::new(0),
+            windows: std::sync::atomic::AtomicUsize::new(0),
             relayed: std::sync::atomic::AtomicUsize::new(0),
             time_limit: options.time_limit,
             memory_limit,
+            reply_limits: options.reply_limits,
             containment,
         });
         let cancel = Arc::new(AtomicBool::new(false));
@@ -472,6 +555,8 @@ impl IsolatedJob {
         let started = start_threads(&shared, &cancel, input, output, errors, host_rx, events_tx, options.coalesce.clone(), pid);
         if let Err(e) = started {
             shared.kill(Verdict::Cancelled);
+            // No watchdog may be there to reap it: reap it here, so it leaves no zombie.
+            let _ = lock(&shared.child).wait();
             return Err(unavailable(e.to_string()));
         }
         let start = ToHost::Start { source, app_name: options.run.app_name, script_name: options.run.script_name, memory_limit };
@@ -524,11 +609,15 @@ impl IsolatedJob {
     pub fn reply(&mut self, reply: Reply) -> Result<(), String> {
         let msg = match (self.waiting, reply) {
             (Some(Waiting::Execute), Reply::Executed(result)) => {
-                lock(&self.shared.watch).clock.resume();
+                let mut w = lock(&self.shared.watch);
+                w.waiting = None;
+                w.clock.resume();
                 ToHost::Executed { result }
             }
             (Some(Waiting::Dialog), Reply::Dialog(answer)) => {
-                lock(&self.shared.watch).clock.resume();
+                let mut w = lock(&self.shared.watch);
+                w.waiting = None;
+                w.clock.resume();
                 ToHost::Dialog { answer }
             }
             _ => return Err("the script is not waiting for that reply".into()),
@@ -625,8 +714,18 @@ fn watchdog(shared: &Shared, cancel: &AtomicBool, pid: u32, events: &SyncSender<
         }
         if cancel.load(Ordering::SeqCst) {
             shared.kill(Verdict::Cancelled);
-        } else if lock(&shared.watch).clock.elapsed() > shared.time_limit {
-            shared.kill(Verdict::Timeout);
+        } else {
+            let (elapsed, waiting) = {
+                let w = lock(&shared.watch);
+                (w.clock.elapsed(), w.waiting)
+            };
+            if elapsed > shared.time_limit {
+                shared.kill(Verdict::Timeout);
+            } else if let Some((since, dialog)) = waiting
+                && since.elapsed() > if dialog { shared.reply_limits.1 } else { shared.reply_limits.0 }
+            {
+                shared.kill(Verdict::NoReply(dialog));
+            }
         }
         if metered.is_none_or(|t| t.elapsed() >= METER_EVERY) {
             metered = Some(Instant::now());
@@ -716,7 +815,29 @@ fn write_host(mut input: ChildStdin, rx: &Receiver<ToHost>, shared: &Shared) {
             }
             r => r,
         };
-        if written.is_err() {
+        if let Err(e) = written {
+            // A host that is gone is classified by how it ended; one still running waits for an
+            // answer it will never get, so the run ends here with the reason.
+            let what = match msg {
+                ToHost::Start { .. } => "the script",
+                ToHost::Executed { .. } => "a command's result",
+                ToHost::Dialog { .. } => "a dialog's answer",
+            };
+            // A host that just died closes its pipe a moment before it shows as exited: give it
+            // that moment, so it is classified by how it ended rather than by the broken pipe.
+            let start = Instant::now();
+            let exited = loop {
+                if matches!(shared.containment.try_wait(&mut lock(&shared.child)), Ok(Some(_))) || lock(&shared.watch).exit.is_some() {
+                    break true;
+                }
+                if start.elapsed() >= Duration::from_millis(250) {
+                    break false;
+                }
+                std::thread::sleep(TICK);
+            };
+            if !exited {
+                shared.kill(Verdict::Unsent(format!("{what} could not be sent to the script host ({e})")));
+            }
             return;
         }
     }
@@ -780,10 +901,13 @@ fn relay(output: &mut ChildStdout, shared: &Shared, events: &SyncSender<Event>, 
                 if let Value::Object(map) = &mut params {
                     map.insert("coalesce".into(), Value::String(coalesce.to_owned()));
                 }
+                if !shared.relay_one() {
+                    return None;
+                }
                 shared.awaiting.store(true, Ordering::SeqCst);
                 // The time the app takes to answer (a busy frame, a minimized window that draws
-                // no frames) is not the script's.
-                lock(&shared.watch).clock.pause();
+                // no frames) is not the script's; the watchdog bounds it on its own.
+                shared.await_reply(false);
                 Event::Execute { id, params }
             }
             FromHost::Dialog { kind, args } => {
@@ -791,8 +915,11 @@ fn relay(output: &mut ChildStdout, shared: &Shared, events: &SyncSender<Event>, 
                     shared.kill(Verdict::Violation(d));
                     return None;
                 }
+                if !shared.relay_one() {
+                    return None;
+                }
                 shared.awaiting.store(true, Ordering::SeqCst);
-                lock(&shared.watch).clock.pause();
+                shared.await_reply(true);
                 Event::Dialog(Modal { kind: kind.into(), args })
             }
             FromHost::Output { line } => {
@@ -817,18 +944,19 @@ fn relay(output: &mut ChildStdout, shared: &Shared, events: &SyncSender<Event>, 
                     shared.kill(Verdict::Violation(d));
                     return None;
                 }
-                // Counted with the output: the interface keeps the latest controls of each window.
+                // Bounded on their own: the interface handles every update, keeping the latest
+                // controls of each window.
                 let len = window.as_ref().map_or(0, |w| w.to_string().len());
-                let total = shared.output.fetch_add(len, Ordering::SeqCst).saturating_add(len);
-                if total > MAX_OUTPUT_BYTES {
-                    shared.kill(Verdict::Violation(format!("more than {} MiB of output", MAX_OUTPUT_BYTES >> 20)));
+                let total = shared.windows.fetch_add(len, Ordering::SeqCst).saturating_add(len);
+                if total > MAX_WINDOW_BYTES {
+                    shared.kill(Verdict::Violation(format!("more than {} MiB of window updates", MAX_WINDOW_BYTES >> 20)));
                     return None;
                 }
                 Event::Window { id, window }
             }
             FromHost::Finished { .. } => return None,
         };
-        if events.send(event).is_err() {
+        if !shared.deliver(events, event) {
             // The job was dropped.
             shared.kill(Verdict::Cancelled);
             return None;

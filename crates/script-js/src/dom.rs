@@ -168,7 +168,13 @@ fn edit(ctx: &mut Context, doc: DocKey, id: &str, params: Value) -> JsResult<Val
 
 /// `document.inspect` of `key`.
 fn inspect(ctx: &mut Context, key: DocKey) -> JsResult<Value> {
-    crate::natives::inspect_document(key, ctx)
+    crate::natives::inspect_document(key, false, ctx)
+}
+
+/// [`inspect`] with the History panel's rows, which a long history makes large: only the
+/// History members ask for them.
+fn inspect_history(ctx: &mut Context, key: DocKey) -> JsResult<Value> {
+    crate::natives::inspect_document(key, true, ctx)
 }
 
 fn dpi(doc: &Value) -> f64 {
@@ -181,10 +187,26 @@ pub(crate) fn ruler_length(ctx: &mut Context, px: f64, dpi: f64) -> JsResult<JsV
     unit_value::document_length(px, dpi, typ, ctx)
 }
 
-/// A script length (a unit value, or a number in the ruler unit) in pixels.
+/// Farthest a length may reach, in pixels: past any document, and small enough that sums and
+/// differences of lengths stay exact.
+const MAX_PX: f64 = 1e9;
+
+/// A script length (a unit value, or a number in the ruler unit) in pixels: finite, and within
+/// [`MAX_PX`] of zero.
 fn to_px(ctx: &mut Context, v: &JsValue, dpi: f64) -> JsResult<f64> {
     let typ = unit_typ(ctx, RULERS)?;
-    unit_value::to_document_pixels(v, dpi, typ, ctx)
+    let px = unit_value::to_document_pixels(v, dpi, typ, ctx)?;
+    if px.is_finite() && px.abs() <= MAX_PX {
+        Ok(px)
+    } else {
+        Err(JsNativeError::range().with_message(format!("a length must be a finite number within {MAX_PX:e} pixels")).into())
+    }
+}
+
+/// A document side in whole pixels, as `documents.add` takes it.
+fn side(px: f64) -> JsResult<f64> {
+    let px = px.round();
+    if (1.0..=300_000.0).contains(&px) { Ok(px) } else { Err(JsNativeError::range().with_message("a document side is 1 to 300000 pixels").into()) }
 }
 
 fn whole(px: f64) -> i64 {
@@ -227,6 +249,48 @@ struct Objects(HashMap<(u8, u64, u64, u64), JsObject>);
 const LAYER: u8 = 0;
 const HISTORY: u8 = 1;
 const SELECTION: u8 = 2;
+/// A collection, `COLLECTION + which` (the open documents are `COLLECTION + DOCUMENTS`).
+const COLLECTION: u8 = 16;
+const DOCUMENTS: u8 = 15;
+
+/// The array kept for the collection `key`, filled with `items`; `methods` adds its methods the
+/// first time. The same collection read twice is the same object (`doc.layers === doc.layers`),
+/// as in Photoshop, and an array a script holds shows the members as they are at the last read.
+pub(crate) fn live_collection(
+    ctx: &mut Context,
+    key: (u8, u64, u64, u64),
+    items: Vec<JsValue>,
+    methods: impl FnOnce(&JsArray, &mut Context) -> JsResult<()>,
+) -> JsResult<JsValue> {
+    // Refilled by defining its elements, never by assignment: a setter a script put on
+    // `Array.prototype` does not run inside the host call.
+    let refill = |arr: &JsArray, items: &[JsValue], ctx: &mut Context| -> JsResult<bool> {
+        if !arr.set(js_string!("length"), 0, false, ctx)? || arr.length(ctx)? != 0 {
+            return Ok(false);
+        }
+        for (i, v) in items.iter().enumerate() {
+            if !arr.create_data_property(i, v.clone(), ctx)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    };
+    if let Some(arr) = cached(ctx, key).and_then(|o| JsArray::from_object(o).ok())
+        && refill(&arr, &items, ctx)?
+    {
+        return Ok(arr.into());
+    }
+    // New, or the script froze or sealed the one it had: a new array from now on.
+    let arr = JsArray::from_iter(items, ctx);
+    methods(&arr, ctx)?;
+    cache(ctx, key, &arr.clone().into());
+    Ok(arr.into())
+}
+
+/// The cache key of the open documents' collection.
+pub(crate) const fn documents_key() -> (u8, u64, u64, u64) {
+    (COLLECTION + DOCUMENTS, 0, 0, 0)
+}
 
 fn cached(ctx: &Context, key: (u8, u64, u64, u64)) -> Option<JsObject> {
     ctx.realm().host_defined().get::<Objects>().and_then(|c| c.0.get(&key).cloned())
@@ -388,18 +452,20 @@ fn collection(ctx: &mut Context, doc: DocKey, parent: Option<u64>, which: u8) ->
     for (id, _) in members(&d, &c) {
         objs.push(JsValue::from(layer_object(ctx, doc, id)?));
     }
-    let arr = JsArray::from_iter(objs, ctx);
-    let by_name = FunctionObjectBuilder::new(ctx.realm(), NativeFunction::from_copy_closure_with_captures(coll_get_by_name, c.clone()))
-        .name(js_string!("getByName"))
-        .length(1)
-        .build();
-    arr.set(js_string!("getByName"), by_name, true, ctx)?;
-    if which != ALL {
-        let add =
-            FunctionObjectBuilder::new(ctx.realm(), NativeFunction::from_copy_closure_with_captures(coll_add, c)).name(js_string!("add")).length(0).build();
-        arr.set(js_string!("add"), add, true, ctx)?;
-    }
-    Ok(arr.into())
+    let key = (COLLECTION + which, doc.id, doc.serial, c.parent);
+    live_collection(ctx, key, objs, move |arr, ctx| {
+        let by_name = FunctionObjectBuilder::new(ctx.realm(), NativeFunction::from_copy_closure_with_captures(coll_get_by_name, c.clone()))
+            .name(js_string!("getByName"))
+            .length(1)
+            .build();
+        arr.set(js_string!("getByName"), by_name, true, ctx)?;
+        if which != ALL {
+            let add =
+                FunctionObjectBuilder::new(ctx.realm(), NativeFunction::from_copy_closure_with_captures(coll_add, c)).name(js_string!("add")).length(0).build();
+            arr.set(js_string!("add"), add, true, ctx)?;
+        }
+        Ok(())
+    })
 }
 
 fn coll_get_by_name(_: &JsValue, args: &[JsValue], c: &Coll, ctx: &mut Context) -> JsResult<JsValue> {
@@ -542,6 +608,23 @@ fn layer_set_kind(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResu
     edit(ctx, doc, "layer.select", json!({ "layer": id }))?;
     let made = edit(ctx, doc, "type.create", json!({ "x": 0, "y": 0, "text": "" }))?;
     let new = made["layer"].as_u64().ok_or_else(|| error("the text layer was not reported"))?;
+    // Either the text layer replaces the old one, or the document is left with the old one only.
+    if let Err(e) = become_text(ctx, doc, id, new, &n) {
+        let _ = edit(ctx, doc, "layer.delete", json!({ "layer": new }));
+        return Err(e);
+    }
+    if let Some(o) = this.as_object() {
+        if let Some(l) = o.downcast_ref::<LayerRef>() {
+            l.id.set(new);
+        }
+        uncache(ctx, (LAYER, doc.id, doc.serial, id));
+        cache(ctx, (LAYER, doc.id, doc.serial, new), &o);
+    }
+    Ok(JsValue::undefined())
+}
+
+/// Give text layer `new` the settings of layer `id` (described by `n`), then delete `id`.
+fn become_text(ctx: &mut Context, doc: DocKey, id: u64, new: u64, n: &Value) -> JsResult<()> {
     // The layer's own settings carry over; only its kind changes. A name the user or script
     // gave it stays, while a default one ("Layer 3") is left for the type engine to name.
     let mut props = json!({ "layer": new });
@@ -564,14 +647,7 @@ fn layer_set_kind(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResu
         edit(ctx, doc, "layer.renameLayer", json!({ "layer": new, "name": name }))?;
     }
     edit(ctx, doc, "layer.delete", json!({ "layer": id }))?;
-    if let Some(o) = this.as_object() {
-        if let Some(l) = o.downcast_ref::<LayerRef>() {
-            l.id.set(new);
-        }
-        uncache(ctx, (LAYER, doc.id, doc.serial, id));
-        cache(ctx, (LAYER, doc.id, doc.serial, new), &o);
-    }
-    Ok(JsValue::undefined())
+    Ok(())
 }
 
 /// A name the app gives a new layer itself: "Layer" and a number.
@@ -652,11 +728,14 @@ fn layer_duplicate(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsRes
     let (doc, id) = layer_ref(this)?;
     let made = edit(ctx, doc, "layer.duplicate", json!({ "layer": id }))?;
     let new = made["layer"].as_u64().ok_or_else(|| error("the copy was not reported"))?;
-    let copy = layer_object(ctx, doc, new)?;
-    if let Some(rel) = arg(args, 0) {
-        move_layer(ctx, doc, new, rel, args.get(1))?;
+    if let Some(rel) = arg(args, 0)
+        && let Err(e) = move_layer(ctx, doc, new, rel, args.get(1))
+    {
+        // A copy that can't go where it was asked to is not left behind.
+        let _ = edit(ctx, doc, "layer.delete", json!({ "layer": new }));
+        return Err(e);
     }
-    Ok(copy.into())
+    Ok(layer_object(ctx, doc, new)?.into())
 }
 
 fn layer_translate(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
@@ -854,7 +933,7 @@ fn row_of(d: &Value, h: HistoryRef) -> JsResult<(usize, String)> {
 
 fn history_name(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let h = history_ref(this).ok_or_else(|| type_error("not a HistoryState"))?;
-    let d = inspect(ctx, h.doc)?;
+    let d = inspect_history(ctx, h.doc)?;
     let (_, name) = row_of(&d, h)?;
     Ok(JsValue::from(JsString::from(name.as_str())))
 }
@@ -866,7 +945,7 @@ fn history_parent(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<
 
 fn doc_history_states(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let doc = doc_key(this)?;
-    let d = inspect(ctx, doc)?;
+    let d = inspect_history(ctx, doc)?;
     let (rows, _) = rows(&d);
     let mut out = Vec::with_capacity(rows.len());
     for (id, _) in rows {
@@ -877,7 +956,7 @@ fn doc_history_states(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsRes
 
 fn doc_active_history(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let doc = doc_key(this)?;
-    let d = inspect(ctx, doc)?;
+    let d = inspect_history(ctx, doc)?;
     let (rows, current) = rows(&d);
     let (id, _) = rows.get(current).ok_or_else(|| error("the document has no History state"))?;
     Ok(history_object(ctx, doc, *id)?.into())
@@ -890,7 +969,7 @@ fn doc_set_active_history(this: &JsValue, args: &[JsValue], ctx: &mut Context) -
         .and_then(history_ref)
         .filter(|h| h.doc == doc)
         .ok_or_else(|| type_error("activeHistoryState takes one of this document's historyStates"))?;
-    let d = inspect(ctx, doc)?;
+    let d = inspect_history(ctx, doc)?;
     let (row, _) = row_of(&d, h)?;
     edit(ctx, doc, "history.selectState", json!({ "state": row }))?;
     Ok(JsValue::undefined())
@@ -1070,6 +1149,7 @@ fn doc_resize_image(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsRe
     let doc = doc_key(this)?;
     let d = inspect(ctx, doc)?;
     let res = arg(args, 2).map(|v| v.to_number(ctx)).transpose()?;
+    // A NaN is in no range either.
     if res.is_some_and(|r| !(1.0..=30_000.0).contains(&r)) {
         return Err(JsNativeError::range().with_message("a resolution is 1 to 30000 pixels per inch").into());
     }
@@ -1084,7 +1164,7 @@ fn doc_resize_image(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsRe
         (None, Some(h)) => (w0 * h / h0, h),
         (None, None) => (w0, h0),
     };
-    let mut p = json!({ "width": w.round().max(1.0), "height": h.round().max(1.0) });
+    let mut p = json!({ "width": side(w)?, "height": side(h)? });
     if let Some(res) = res {
         p["resolution"] = json!(res);
     }
@@ -1128,7 +1208,7 @@ fn doc_resize_canvas(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsR
         }
         None => "center",
     };
-    edit(ctx, doc, "image.canvasSize", json!({ "width": w.round().max(1.0), "height": h.round().max(1.0), "anchor": anchor }))?;
+    edit(ctx, doc, "image.canvasSize", json!({ "width": side(w)?, "height": side(h)?, "anchor": anchor }))?;
     Ok(JsValue::undefined())
 }
 

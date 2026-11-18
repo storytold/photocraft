@@ -18,6 +18,8 @@ serde_json = { workspace = true }
 photocraft-engine = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# The script host's heap limit, enforced on every allocation on every platform (src/isolate/limits.rs).
+cap = "=0.1.2"
 # Resident size of the script host, polled by the app (src/isolate/limits.rs).
 sysinfo = { version = "=0.40.1", default-features = false, features = ["system"] }
 

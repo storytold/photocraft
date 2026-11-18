@@ -10,7 +10,8 @@
 //! The app enforces the limits; nothing the script does inside the host can lift them:
 //! - **Time:** the app's watchdog kills the host once the run has executed longer than its time
 //!   limit. The clock stops while a dialog is open.
-//! - **Memory:** see [`limits`] for each platform.
+//! - **Memory:** the host's heap is capped on every platform: an allocation past the limit fails
+//!   at once. See [`limits`] for what each platform adds.
 //! - **Requests:** the host is untrusted. Its frames are size-capped, must arrive in order, and
 //!   may only ask for the commands in [`protocol::COMMANDS`] with exactly their parameters;
 //!   anything else stops the run as a [`FailureKind::HostViolation`]. Its commands always carry
@@ -51,8 +52,11 @@ mod supervisor;
 #[cfg(not(target_arch = "wasm32"))]
 pub use host::{STACK, serve};
 #[cfg(not(target_arch = "wasm32"))]
+pub use limits::{HostAllocator, host_allocator};
+#[cfg(not(target_arch = "wasm32"))]
 pub use supervisor::{
-    CANCELLED, Crash, CrashCause, DEFAULT_MEMORY_LIMIT, Event, Failure, FailureKind, HelperCommand, IsolateOptions, IsolatedJob, MIN_MEMORY_LIMIT, Reply,
+    CANCELLED, COMMAND_REPLY_LIMIT, Crash, CrashCause, DEFAULT_MEMORY_LIMIT, DIALOG_REPLY_LIMIT, Event, Failure, FailureKind, HelperCommand, IsolateOptions,
+    IsolatedJob, MIN_MEMORY_LIMIT, Reply,
 };
 
 /// The first argument that makes the executable a script host.

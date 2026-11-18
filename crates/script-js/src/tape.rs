@@ -20,9 +20,13 @@ pub const MAX_BYTES: usize = 64 << 20;
 /// Most clock and `Math.random()` readings one run may record.
 pub const MAX_READINGS: usize = 1 << 22;
 /// Most bytes of output (`$.writeln` lines) one run may send to the app. Lines are kept on the
-/// tape as a hash, so they do not count toward [`MAX_BYTES`]; the app keeps every line, so
-/// their total is bounded here.
-pub const MAX_OUTPUT_BYTES: usize = 256 << 20;
+/// tape as a hash, so they do not count toward [`MAX_BYTES`]; the app shows only its latest
+/// lines, but every line is sent and handled, so their total is bounded here.
+pub const MAX_OUTPUT_BYTES: usize = 32 << 20;
+/// Most bytes of ScriptUI window updates one run may send. Each update carries a whole window,
+/// and a palette that shows progress sends one per step, so these are bounded apart from the
+/// output lines.
+pub const MAX_WINDOW_BYTES: usize = 256 << 20;
 /// Bytes charged per entry for its bookkeeping, on top of its data.
 const ENTRY_BYTES: usize = 64;
 /// Longest divergence message, in characters.
@@ -178,6 +182,8 @@ pub struct Tape {
     bytes: usize,
     /// Bytes of output lines recorded so far.
     output: usize,
+    /// Bytes of window updates recorded so far.
+    windows: usize,
     /// Why the run must stop, once a bound was crossed. Every later call fails with it.
     overflow: Option<String>,
 }
@@ -200,6 +206,7 @@ impl Tape {
             limits: Limits { entries, bytes, readings, output: MAX_OUTPUT_BYTES },
             bytes: 0,
             output: 0,
+            windows: 0,
             overflow: None,
         }
     }
@@ -267,10 +274,18 @@ impl Tape {
                 Err(m)
             }
             None => {
-                if let Recorded::Output { len, .. } | Recorded::Window { len, .. } = &call {
+                if let Recorded::Output { len, .. } = &call {
                     self.output = self.output.saturating_add(*len);
                     if self.output > self.limits.output {
                         let m = format!("The script was stopped: it wrote more than {} MiB of output.", self.limits.output >> 20);
+                        self.overflow = Some(m.clone());
+                        return Err(m);
+                    }
+                }
+                if let Recorded::Window { len, .. } = &call {
+                    self.windows = self.windows.saturating_add(*len);
+                    if self.windows > MAX_WINDOW_BYTES {
+                        let m = format!("The script was stopped: it sent more than {} MiB of window updates.", MAX_WINDOW_BYTES >> 20);
                         self.overflow = Some(m.clone());
                         return Err(m);
                     }

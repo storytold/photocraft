@@ -390,6 +390,64 @@ mod tests {
         assert_eq!(values_in(br#"{"line":"a,b,[c]:{\",\"}"}"#), 3, "one object and its one member");
     }
 
+    /// A small deterministic generator, so a failure names its seed.
+    fn bytes(seed: u64, len: usize) -> Vec<u8> {
+        let mut x = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+        (0..len)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                x.to_le_bytes()[0]
+            })
+            .collect()
+    }
+
+    /// Frames from a host are untrusted: random bytes, and valid frames with their bytes changed,
+    /// end in a message or an error, never a panic or a hang. The fuzz target in `fuzz/` explores
+    /// further; this runs with every test run.
+    #[test]
+    fn random_and_damaged_frames_never_panic() {
+        let alphabet = br#"{}[]":,0123456789.-eE tfnul\ "#;
+        let mut valid = Vec::new();
+        write_frame(
+            &mut valid,
+            &FromHost::Window { id: 3, window: Some(json!({"id": 0, "type": "window", "children": [{"id": 1, "type": "button", "text": "OK"}]})) },
+            MAX_FROM_HOST,
+        )
+        .unwrap();
+        for seed in 0..3000u64 {
+            let mut data = bytes(seed, (seed as usize % 300) + 1);
+            if seed % 3 == 1 {
+                // JSON-like noise, which gets past the first bytes of a parse.
+                data = data.iter().map(|b| alphabet[usize::from(*b) % alphabet.len()]).collect();
+                let mut framed = u32::try_from(data.len()).unwrap().to_le_bytes().to_vec();
+                framed.extend_from_slice(&data);
+                data = framed;
+            } else if seed % 3 == 2 {
+                // A valid frame with a few bytes changed.
+                data = valid.clone();
+                for (i, b) in bytes(seed, 4).into_iter().enumerate() {
+                    let at = (usize::from(b) * 7 + i * 31) % data.len();
+                    data[at] = b;
+                }
+            }
+            let _ = values_in(&data);
+            let mut input = data.as_slice();
+            for _ in 0..64 {
+                match read_frame::<_, FromHost>(&mut input, MAX_FROM_HOST) {
+                    Ok(Some(FromHost::Window { window: Some(w), .. })) => drop(check_window(&w)),
+                    Ok(Some(_)) => {}
+                    Ok(None) | Err(_) => break,
+                }
+            }
+            if let Ok(v) = serde_json::from_slice::<Value>(&data) {
+                let _ = check_window(&v);
+                let _ = check_dialog_args(DialogKind::Window, &v);
+            }
+        }
+    }
+
     #[test]
     fn a_window_dialog_id_must_fit_in_32_bits() {
         let w = json!({"id": 0, "type": "window", "children": []});

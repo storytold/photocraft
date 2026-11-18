@@ -1,5 +1,7 @@
 //! The document model scripts see, run against a real session: layers and sets, type,
 //! History, the selection, sizes in the ruler unit, saving, custom options and preferences.
+// Native only: the tests time runs with `std::time`, which has no clock on wasm32-unknown-unknown.
+#![cfg(not(target_arch = "wasm32"))]
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -408,4 +410,73 @@ fn only_identifier_length_string_ids_are_remembered() {
         "#,
     );
     assert_eq!(lines, ["layerName []"]);
+}
+
+#[test]
+fn lengths_that_are_not_numbers_or_too_far_are_refused() {
+    let s = session(32, 32);
+    let lines = run(
+        &s,
+        r#"
+        var doc = app.activeDocument, l = doc.artLayers.add();
+        function t(f) { try { f(); return 'ok'; } catch (e) { return e instanceof RangeError ? 'range' : e instanceof TypeError ? 'type' : String(e); } }
+        $.writeln([
+            t(function () { l.translate(Infinity, 0); }),
+            t(function () { l.translate(NaN, 0); }),
+            t(function () { doc.selection.select([[0, 0], [1e300, 1e300]]); }),
+            t(function () { doc.resizeImage(NaN); }),
+            t(function () { doc.resizeImage(1e7, 10); }),
+            t(function () { doc.resizeCanvas(10, 1e7); }),
+            t(function () { doc.crop([0, 0, NaN, 10]); }),
+            t(function () { l.translate(2, 3); })
+        ].join(' '));
+        "#,
+    );
+    // A length that is no number is a TypeError, one too far a RangeError.
+    assert_eq!(lines, ["type type range type range range type ok"]);
+}
+
+#[test]
+fn a_duplicate_that_cannot_be_placed_leaves_no_copy() {
+    let s = session(32, 32);
+    let lines = run(
+        &s,
+        r#"
+        var doc = app.activeDocument, l = doc.artLayers.add(); l.name = 'Only';
+        var n = doc.layers.length;
+        try { l.duplicate(doc, 'ElementPlacement.NOWHERE'); } catch (e) { $.writeln('refused'); }
+        $.writeln(doc.layers.length == n);
+        "#,
+    );
+    assert_eq!(lines, ["refused", "true"]);
+}
+
+#[test]
+fn a_replaced_unit_value_global_runs_no_script_code_in_a_host_call() {
+    let s = session(32, 32);
+    let lines = run(
+        &s,
+        r#"
+        var ran = false, doc = app.activeDocument;
+        UnitValue = { get prototype() { ran = true; return {}; } };
+        var w = doc.width;
+        $.writeln(ran, ' ', typeof w.as);
+        "#,
+    );
+    assert_eq!(lines, ["false function"]);
+}
+
+#[test]
+fn a_collection_read_twice_is_the_same_object_and_stays_current() {
+    let s = session(32, 32);
+    let lines = run(
+        &s,
+        r#"
+        var doc = app.activeDocument, layers = doc.layers, n = layers.length;
+        doc.artLayers.add();
+        $.writeln(app.documents === app.documents, ' ', doc.layers === layers, ' ', doc.artLayers === doc.artLayers,
+            ' ', app.documents[0] === app.documents[0], ' ', doc.layers.length === n + 1, ' ', layers.length === n + 1);
+        "#,
+    );
+    assert_eq!(lines, ["true true true true true true"]);
 }

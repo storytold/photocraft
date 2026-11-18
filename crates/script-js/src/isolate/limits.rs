@@ -2,15 +2,18 @@
 //!
 //! | | memory | lifetime |
 //! |---|---|---|
-//! | Linux | `RLIMIT_DATA` set by the host on itself before the script runs, plus resident-size polling by the app | the host exits when its input ends |
-//! | macOS | resident-size polling by the app (the kernel does not enforce `RLIMIT_DATA`) | the host exits when its input ends |
-//! | Windows | resident-size polling by the app only (no job object memory limit, see below) | a job object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, and the host exits when its input ends |
+//! | every platform | the host's heap cap ([`HostAllocator`]): an allocation that would take the heap past the limit fails, and the host ends at once with a failed allocation | |
+//! | Linux | also `RLIMIT_DATA`, set by the host on itself before the script runs | the host exits when its input ends |
+//! | macOS | the heap cap (the kernel enforces neither `RLIMIT_DATA` nor `RLIMIT_AS`) | the host exits when its input ends |
+//! | Windows | the heap cap | a job object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, and the host exits when its input ends |
 //!
-//! On Windows the job object only ends the host with the app; it sets no memory limit.
-//! `win32job` has no safe setter for `JOB_OBJECT_LIMIT_PROCESS_MEMORY` and this workspace forbids
-//! unsafe code, so memory there is resident-size polling alone, which does not count memory the
-//! host committed but has not touched. Follow-up: a small isolated helper crate with the one
-//! unsafe `SetInformationJobObject` call, so the system enforces the limit.
+//! The heap cap counts every allocation the host makes through Rust's allocator, which is where
+//! the engine keeps every script value, at the moment it is made: there is no window in which a
+//! fast allocation gets past it, and memory committed but not yet touched counts too. The script
+//! thread's stack ([`super::STACK`]) is outside the heap and is subtracted from the limit. The
+//! app also polls the host's resident size, as a second line for memory the allocator does not
+//! see. On Windows a job object memory limit would need unsafe code (`win32job` has no setter for
+//! `JOB_OBJECT_LIMIT_PROCESS_MEMORY`), which this workspace forbids; the heap cap does not.
 //!
 //! Stopping a host also stops anything it started, which could otherwise hold its output pipe open
 //! (the script host starts nothing; this is for a host that misbehaves): on Unix the host runs in
@@ -22,32 +25,50 @@
 //! parent-death signal is deliberately not used: on Linux it follows the thread that started the
 //! host, not the app, so a run started from a short-lived thread would be killed with it.
 //!
-//! Everything here is safe code over existing wrappers (`rustix` on Linux, `win32job` on
-//! Windows, `sysinfo` for the resident size).
+//! Everything here is safe code over existing wrappers (`cap` for the heap, `rustix` on Linux,
+//! `win32job` on Windows, `sysinfo` for the resident size).
 
 use std::process::{Child, ExitStatus};
 
-/// Host side: cap the memory this process may map (Linux; elsewhere the app polls).
+/// The allocator an executable that serves [`super::SCRIPT_HOST_FLAG`] installs as its global
+/// allocator ([`host_allocator`]), so [`super::serve`] can cap the host's heap. Uncapped, it
+/// passes every allocation to the system's.
+pub type HostAllocator = cap::Cap<std::alloc::System>;
+
+/// A [`HostAllocator`] with no limit, for `#[global_allocator]`.
+pub const fn host_allocator() -> HostAllocator {
+    cap::Cap::new(std::alloc::System, usize::MAX)
+}
+
+/// Host side: cap the memory this process may use at `bytes`: its heap at `bytes` less the
+/// script thread's stack, and on Linux also the memory it may map.
 ///
 /// # Errors
-/// The system refused the limit.
-pub fn limit_memory(bytes: u64) -> Result<(), String> {
+/// The limit is below what the host already uses, or the system refused it.
+pub fn limit_memory(bytes: u64, heap: &HostAllocator) -> Result<(), String> {
+    let budget = usize::try_from(bytes.saturating_sub(super::STACK as u64)).unwrap_or(usize::MAX);
+    heap.set_limit(budget).map_err(|()| format!("the host already uses more than {} MiB", budget >> 20))?;
+    // A debug build can leave the system limit off, so a test sees the heap cap on its own.
+    if cfg!(debug_assertions) && std::env::var_os("PHOTOCRAFT_TEST_NO_RLIMIT").is_some() {
+        return Ok(());
+    }
     #[cfg(target_os = "linux")]
     {
         use rustix::process::{Resource, Rlimit, setrlimit};
         setrlimit(Resource::Data, Rlimit { current: Some(bytes), maximum: Some(bytes) }).map_err(|e| e.to_string())
     }
     #[cfg(not(target_os = "linux"))]
-    {
-        let _ = bytes;
-        Ok(())
-    }
+    Ok(())
 }
 
 /// App side: what keeps a host from outliving the app beyond its closed input.
 pub struct Containment {
     #[cfg(windows)]
     job: std::sync::Mutex<Option<win32job::Job>>,
+    /// Without `waitid`, whether [`Containment::try_wait`] has reaped the host: until then its
+    /// pid, which is its group's id, is still reserved.
+    #[cfg(target_os = "openbsd")]
+    reaped: std::sync::atomic::AtomicBool,
 }
 
 impl Containment {
@@ -66,6 +87,13 @@ impl Containment {
             Host::Reaped => {}
         }
         let status = child.try_wait()?;
+        // Without `waitid` the host is only known to have exited once it is reaped. What it
+        // started is still in its group then, and a group id is not given to a new process while
+        // the group has members, so the group is stopped right after.
+        #[cfg(target_os = "openbsd")]
+        if status.is_some() && !self.reaped.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            kill_group(child);
+        }
         #[cfg(windows)]
         if status.is_some() {
             self.close_job();
@@ -79,9 +107,10 @@ impl Containment {
         if host_state(child) != Host::Reaped {
             kill_group(child);
         }
-        // Without `waitid`, only a host that is still running is known to be unreaped.
+        // Without `waitid`: a host this has not reaped keeps its pid (as a zombie if it exited),
+        // so its group can still be killed safely; then it is reaped.
         #[cfg(target_os = "openbsd")]
-        if matches!(child.try_wait(), Ok(None)) {
+        if !self.reaped.load(std::sync::atomic::Ordering::SeqCst) {
             kill_group(child);
         }
         #[cfg(windows)]
@@ -111,11 +140,17 @@ enum Host {
 fn host_state(child: &Child) -> Host {
     use rustix::process::{Pid, WaitId, WaitIdOptions, waitid};
     let options = WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT;
-    match waitid(WaitId::Pid(Pid::from_child(child)), options) {
-        Ok(None) => Host::Running,
-        Ok(Some(_)) => Host::Exited,
-        // ECHILD: `std` already reaped it and cached the status.
-        Err(_) => Host::Reaped,
+    loop {
+        return match waitid(WaitId::Pid(Pid::from_child(child)), options) {
+            Ok(None) => Host::Running,
+            Ok(Some(_)) => Host::Exited,
+            Err(rustix::io::Errno::INTR) => continue,
+            // `std` already reaped it and cached the status.
+            Err(rustix::io::Errno::CHILD) => Host::Reaped,
+            // Any other failure says nothing about the host; only ECHILD means its pid is free.
+            // Taken as running: nothing is reaped or killed on its account.
+            Err(_) => Host::Running,
+        };
     }
 }
 
@@ -139,7 +174,12 @@ pub fn contain(child: &Child) -> Containment {
         let job = win32job::Job::create_with_limit_info(&info).ok().filter(|job| job.assign_process(child.as_raw_handle() as isize).is_ok());
         Containment { job: std::sync::Mutex::new(job) }
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "openbsd")]
+    {
+        let _ = child;
+        Containment { reaped: std::sync::atomic::AtomicBool::new(false) }
+    }
+    #[cfg(not(any(windows, target_os = "openbsd")))]
     {
         let _ = child;
         Containment {}

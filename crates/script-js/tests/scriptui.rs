@@ -1,4 +1,6 @@
 //! ScriptUI windows: what the UI is sent, and how its events reach the script.
+// Native only: the tests time runs with `std::time`, which has no clock on wasm32-unknown-unknown.
+#![cfg(not(target_arch = "wasm32"))]
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -568,4 +570,25 @@ fn a_palette_its_failing_on_show_sent_stays_shown_and_is_hidden_on_close() {
     assert_eq!(*ui.lines.borrow(), ["caught no"]);
     let sent: Vec<(u32, bool)> = ui.windows.borrow().iter().map(|(id, w)| (*id, w.is_some())).collect();
     assert_eq!(sent, [(0, true), (0, false)], "sent by update(), so close() hides it");
+}
+
+/// All of a run's lists together hold a bounded number of items, and adding them takes time in
+/// proportion to their number (25 full lists in seconds, not hours).
+#[test]
+fn lists_hold_a_bounded_number_of_items_in_all() {
+    let src = r#"
+        var w = new Window('dialog', 'Lists'), n = 0, why = '';
+        try {
+            for (var l = 0; l < 26; l++) {
+                var list = w.add('listbox');
+                for (var i = 0; i < 10000; i++) { list.add('item', 'x'); n++; }
+            }
+        } catch (e) { why = (e instanceof RangeError) + ' ' + e.message; }
+        $.writeln(n, ' ', why);
+    "#;
+    let started = std::time::Instant::now();
+    let (_, ui) = run(src, vec![], false);
+    let lines = ui.lines.borrow().clone();
+    assert_eq!(lines, ["250000 true a script's lists can hold at most 250000 items in all"]);
+    assert!(started.elapsed() < std::time::Duration::from_secs(60), "{:?}", started.elapsed());
 }

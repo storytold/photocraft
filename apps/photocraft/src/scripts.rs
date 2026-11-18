@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use photocraft_script_js::grants::PathGrants;
-use photocraft_script_js::isolate::{DEFAULT_MEMORY_LIMIT, Event, HelperCommand, IsolateOptions, IsolatedJob, Reply};
+use photocraft_script_js::isolate::{COMMAND_REPLY_LIMIT, DEFAULT_MEMORY_LIMIT, DIALOG_REPLY_LIMIT, Event, HelperCommand, IsolateOptions, IsolatedJob, Reply};
 use photocraft_script_js::{ModalKind, RunOptions};
 use photocraft_ui_egui::{ScriptCommands, ScriptDialog, ScriptEvent, ScriptRun, ScriptStart, StartScriptFn};
 use serde_json::Value;
@@ -28,6 +28,7 @@ pub fn service() -> StartScriptFn {
             memory_limit: DEFAULT_MEMORY_LIMIT,
             coalesce: format!("script:{}:{run}", std::process::id()),
             helper,
+            reply_limits: (COMMAND_REPLY_LIMIT, DIALOG_REPLY_LIMIT),
         };
         let job = IsolatedJob::spawn(start.source, options).map_err(|f| f.message)?;
         Ok(Box::new(HostRun { job, waiting: None, grants: PathGrants::default() }) as Box<dyn ScriptRun>)

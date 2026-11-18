@@ -145,14 +145,14 @@ fn stringify(data: &UnitValueData) -> String {
     if data.typ == "?" { "UnitValue 0.00000".to_owned() } else { format!("{} {}", format_num(data.value), data.typ) }
 }
 
+/// The `UnitValue` prototype as installed. Values made by the host use it, never what the global
+/// `UnitValue` is now: a script may replace that, and reading it would run the script's code in
+/// the middle of a host call.
+#[derive(Trace, Finalize, JsData)]
+struct UnitValueProto(JsObject);
+
 fn object(data: UnitValueData, ctx: &mut Context) -> JsResult<JsObject> {
-    let ctor = ctx.global_object().get(js_string!("UnitValue"), ctx)?;
-    let proto = ctor
-        .as_object()
-        .ok_or_else(|| typ_err("UnitValue is missing"))?
-        .get(js_string!("prototype"), ctx)?
-        .as_object()
-        .ok_or_else(|| typ_err("UnitValue is missing"))?;
+    let proto = ctx.realm().host_defined().get::<UnitValueProto>().map(|p| p.0.clone()).ok_or_else(|| typ_err("UnitValue is missing"))?;
     Ok(ObjectInitializer::with_native_data_and_proto(data, proto, ctx).build())
 }
 
@@ -161,7 +161,8 @@ fn object(data: UnitValueData, ctx: &mut Context) -> JsResult<JsObject> {
 pub(crate) fn document_length(px: f64, dpi: f64, typ: &str, ctx: &mut Context) -> JsResult<JsValue> {
     let base = (1.0 / dpi.max(1e-6), "in".to_owned());
     let typ = if typ == "%" { "px" } else { typ };
-    let value = convert_num(px, "px", typ, &base).unwrap_or(px);
+    // A unit the length can't be given in leaves it in pixels, labelled as pixels.
+    let (value, typ) = convert_num(px, "px", typ, &base).map_or((px, "px"), |v| (v, typ));
     Ok(object(UnitValueData { value, typ: typ.into(), base: Some(base) }, ctx)?.into())
 }
 
@@ -355,6 +356,8 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
     builder.accessor(js_string!("baseUnit"), Some(get_base), Some(set_base), Attribute::ENUMERABLE | Attribute::CONFIGURABLE);
     builder.static_accessor(js_string!("baseUnit"), Some(get_class_base), Some(set_class_base), Attribute::ENUMERABLE | Attribute::CONFIGURABLE);
     let ctor = builder.build();
+    let realm = ctx.realm().clone();
+    realm.host_defined_mut().insert(UnitValueProto(ctor.prototype()));
     ctx.register_global_property(js_string!("UnitValue"), ctor.constructor(), Attribute::WRITABLE | Attribute::CONFIGURABLE)?;
     Ok(())
 }

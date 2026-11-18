@@ -44,7 +44,9 @@ impl Host for SessionHost {
     fn execute(&mut self, id: &str, mut params: Value) -> Result<Value, HostError> {
         let target = crate::commands::take_document(&mut params);
         if let Value::Object(map) = &mut params {
-            map.entry("coalesce").or_insert_with(|| Value::String(self.coalesce.clone()));
+            // The run's key is authoritative: a caller's own key would let its edits join
+            // another history step.
+            map.insert("coalesce".into(), Value::String(self.coalesce.clone()));
         }
         let mut session = self.session.try_borrow_mut().map_err(|_| HostError("the session is busy".into()))?;
         if let Some(serial) = target {
@@ -55,5 +57,21 @@ impl Host for SessionHost {
 
     fn write_line(&mut self, line: &str) {
         self.output.borrow_mut().push(line.to_owned());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_runs_history_key_replaces_one_in_the_params() {
+        let session = Rc::new(std::cell::RefCell::new(Session::default()));
+        session.borrow_mut().execute("file.new", serde_json::json!({"width": 8, "height": 8})).unwrap();
+        let mut host = SessionHost::new(session.clone(), "k");
+        host.execute("layer.new.layer", serde_json::json!({"name": "a"})).unwrap();
+        let before = session.borrow().active().unwrap().history.entries().len();
+        host.execute("layer.new.layer", serde_json::json!({"name": "b", "coalesce": "someone else's"})).unwrap();
+        assert_eq!(session.borrow().active().unwrap().history.entries().len(), before, "both edits are one step");
     }
 }

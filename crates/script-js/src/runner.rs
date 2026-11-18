@@ -36,11 +36,13 @@ pub struct RunOptions {
     pub app_name: Option<String>,
     /// File name shown in script error messages. `None` uses `"script"`.
     pub script_name: Option<String>,
-    /// Run without the per-frame loop iteration limit, for a host whose watchdog stops the run
-    /// at its time limit instead. Boa 0.22 drops an uncatchable error raised inside an `await`
-    /// continuation (`vm/opcode/await/mod.rs` ignores the result of resuming the async
-    /// function), so a loop limit hit after an `await` would end the run silently; the script
-    /// host ([`crate::isolate`]) sets this and relies on its watchdog. The recursion limit stays.
+    /// Run without the engine's loop iteration, recursion and value-stack limits, for a host that bounds the
+    /// run itself: its watchdog stops it at its time limit, its heap cap at its memory limit,
+    /// and a native stack overflow ends its process with a named crash. Boa 0.22 drops an
+    /// uncatchable error raised inside an `await` continuation (`vm/opcode/await/mod.rs`
+    /// ignores the result of resuming the async function), so either limit hit after an `await`
+    /// would end the run silently, as if it had finished. The script host ([`crate::isolate`])
+    /// sets this. In-process runs keep both limits and that gap.
     pub unbounded_loops: bool,
     /// Parse without the bracket-nesting guard ([`crate::scan`]), for a host in a process of its
     /// own: a parser stack overflow there ends that process with a named crash and the app goes
@@ -216,10 +218,12 @@ impl Runner {
         // Last-resort guard: an engine panic fails the run instead of unwinding into the caller.
         // It can't catch a native stack overflow or an aborting allocation; the script host
         // (`crate::isolate`) contains those.
-        let step = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.attempt()))
+        let mut step = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.attempt()))
             .unwrap_or_else(|_| Step::Failed("The script stopped unexpectedly: internal error in the script engine.".into()));
-        if let Ok(mut s) = self.shared.try_borrow_mut() {
-            s.budget.pause();
+        // The budget must stop with the attempt, or time outside the run would count against it.
+        match self.shared.try_borrow_mut() {
+            Ok(mut s) => s.budget.pause(),
+            Err(_) => step = Step::Failed("The script stopped unexpectedly: internal error in the script runner.".into()),
         }
         if !matches!(step, Step::Paused(_)) {
             self.finished = Some(step.clone());
@@ -299,7 +303,11 @@ impl Runner {
         let clock = Rc::new(TapeClock { shared: self.shared.clone(), monotonic: StdClock::new(), fault: fault.clone() });
         let mut ctx = Context::builder().clock(clock).job_executor(jobs.clone()).host_hooks(hooks.clone()).build()?;
         ctx.runtime_limits_mut().set_loop_iteration_limit(if self.unbounded_loops { u64::MAX } else { LOOP_LIMIT });
-        ctx.runtime_limits_mut().set_recursion_limit(RECURSION_LIMIT);
+        ctx.runtime_limits_mut().set_recursion_limit(if self.unbounded_loops { usize::MAX } else { RECURSION_LIMIT });
+        if self.unbounded_loops {
+            // The value stack's limit raises the same silent error; the heap cap bounds it instead.
+            ctx.runtime_limits_mut().set_stack_size_limit(usize::MAX);
+        }
         ctx.insert_data(self.shared.clone());
         natives::install(&mut ctx)?;
         Ok(ctx)
@@ -426,15 +434,16 @@ mod tests {
 
     #[test]
     fn long_output_is_recorded_compactly() {
-        // 200k lines of 1 KB: the tape used to hold every line, about 200 MB.
-        let (r, step) = run_answering("var s = 'x'.repeat(1024); for (var i = 0; i < 200000; i++) $.writeln(s);");
+        // 30k lines of 1 KB, inside the run's output limit: the tape used to hold every line,
+        // about 30 MB.
+        let (r, step) = run_answering("var s = 'x'.repeat(1024); for (var i = 0; i < 30000; i++) $.writeln(s);");
         assert_eq!(step, Step::Done);
-        assert!(tape_size(&r) < 32 << 20, "{} bytes", tape_size(&r));
+        assert!(tape_size(&r) < 4 << 20, "{} bytes", tape_size(&r));
     }
 
     #[test]
-    fn fifty_dialogs_of_a_thousand_calls_stay_small() {
-        let src = "var s = 'y'.repeat(1024); for (var d = 0; d < 50; d++) { for (var i = 0; i < 1000; i++) $.writeln(s); alert(d); }";
+    fn fifty_dialogs_of_five_hundred_calls_stay_small() {
+        let src = "var s = 'y'.repeat(1024); for (var d = 0; d < 50; d++) { for (var i = 0; i < 500; i++) $.writeln(s); alert(d); }";
         let (r, step) = run_answering(src);
         assert_eq!(step, Step::Done);
         assert_eq!(r.attempts(), 51);

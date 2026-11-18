@@ -614,7 +614,8 @@ impl Scanner {
     }
 }
 
-#[cfg(test)]
+// `std::time::Instant` has no clock on wasm32-unknown-unknown.
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::{MAX_NESTING, Refused, TOO_COMPLEX, TOO_DEEP, check_nesting};
 

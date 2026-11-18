@@ -34,6 +34,7 @@ fn options(key: &str) -> IsolateOptions {
         memory_limit: photocraft_script_js::isolate::DEFAULT_MEMORY_LIMIT,
         coalesce: key.into(),
         helper: HelperCommand::new(host_program()),
+        reply_limits: (photocraft_script_js::isolate::COMMAND_REPLY_LIMIT, photocraft_script_js::isolate::DIALOG_REPLY_LIMIT),
     }
 }
 
@@ -160,6 +161,26 @@ fn a_window_too_large_to_send_is_the_scripts_error() {
     assert!(seen.windows.is_empty(), "nothing was sent, and no hide either");
 }
 
+/// A progress palette sends its whole window with every update; those are bounded on their own,
+/// so a long batch is not stopped by the output lines' bound.
+#[test]
+fn a_progress_palette_is_not_held_to_the_output_bound() {
+    let src = r#"
+        var p = new Window("palette"), t = p.add("statictext", undefined, "");
+        var big = p.add("listbox"); for (var i = 0; i < 2000; i++) big.add("item", "row " + i + " xxxxxxxxxxxxxxxx");
+        p.show();
+        for (var n = 0; n < 1000; n++) { t.text = "file " + n; p.update(); }
+        p.close(); $.writeln("done");
+    "#;
+    let mut opts = options("progress");
+    opts.time_limit = SLOW_LIMIT;
+    let mut job = IsolatedJob::spawn(src.into(), opts).unwrap();
+    let seen = drive(&mut job, None, &[], |_, _| {});
+    report("progress palette", &seen);
+    assert!(seen.result.is_ok(), "{:?}", seen.result);
+    assert_eq!(seen.lines, ["done"]);
+}
+
 /// The deepest window a script may build reaches the interface through the script host.
 #[test]
 fn the_deepest_window_a_script_may_build_reaches_the_interface() {
@@ -245,6 +266,27 @@ fn a_gigantic_string_hits_the_memory_limit() {
     report("repeat 2^30", &seen);
     assert_eq!(failure(&seen).kind, FailureKind::MemoryLimit, "{}", failure(&seen));
     assert!(seen.elapsed <= LIMIT + GRACE, "{:?}", seen.elapsed);
+}
+
+/// The heap cap holds by itself, as it must on systems without a memory rlimit: a buffer over
+/// the heap's limit but under the run's (a zeroed one, whose pages the system fills lazily)
+/// is refused by the cap alone; the resident size never passes the limit.
+#[test]
+fn the_heap_cap_refuses_memory_the_host_never_touches() {
+    let mut opts = options("cap");
+    opts.memory_limit = photocraft_script_js::isolate::MIN_MEMORY_LIMIT;
+    opts.time_limit = SLOW_LIMIT;
+    opts.helper.envs.push(("PHOTOCRAFT_TEST_NO_RLIMIT".into(), "1".into()));
+    let heap = photocraft_script_js::isolate::MIN_MEMORY_LIMIT - photocraft_script_js::isolate::STACK as u64;
+    let src = format!("var b = new ArrayBuffer({}); $.writeln('kept ' + b.byteLength);", heap + (64 << 20));
+    let mut job = IsolatedJob::spawn(src, opts).expect("the host starts");
+    let seen = drive(&mut job, None, &[], |_, _| {});
+    report("untouched buffer", &seen);
+    // The engine either throws (its allocation is fallible) or the host ends at the failed
+    // allocation; either way the buffer is never made.
+    let f = failure(&seen);
+    assert!(f.kind == FailureKind::MemoryLimit || f.message.contains("while allocating"), "{f}");
+    assert!(seen.lines.is_empty(), "{:?}", seen.lines);
 }
 
 #[test]
@@ -396,7 +438,7 @@ fn stand_in(name: &str, frames: &[u8], then: &str, settle: Duration) -> Seen {
     let dir = std::env::temp_dir().join(format!("script-host-{name}-{}-{}", std::process::id(), frames.len()));
     std::fs::write(&dir, frames).unwrap();
     let mut opts = options(name);
-    opts.helper = HelperCommand { program: "sh".into(), args: vec!["-c".into(), format!("cat '{}'; {then}", dir.display()).into()] };
+    opts.helper = HelperCommand { program: "sh".into(), args: vec!["-c".into(), format!("cat '{}'; {then}", dir.display()).into()], envs: Vec::new() };
     let mut job = IsolatedJob::spawn("1".into(), opts).unwrap();
     std::thread::sleep(settle);
     let seen = drive(&mut job, None, &[], |_, e| assert!(matches!(e, Event::Finished(_)), "{name}: a request reached the interface: {e:?}"));
@@ -496,15 +538,15 @@ fn a_run_in_the_script_host_is_not_replayed_after_a_dialog() {
     assert_eq!(seen.lines, ["n=1200"]);
 }
 
-/// The app keeps every output line, so a run's total output is bounded: 300 lines of 1 MiB are
-/// stopped with a named error at 256 MiB, well inside the time limit.
+/// Every output line is sent to and handled by the app, so a run's total output is bounded: 300
+/// lines of 1 MiB are stopped with a named error at 32 MiB, well inside the time limit.
 #[test]
 fn a_flood_of_long_output_lines_is_stopped_by_size() {
     let seen = run("var s = 'x'.repeat(1 << 20); for (var i = 0; i < 300; i++) { $.writeln(s); }");
     report("output flood", &seen);
     assert_eq!(failure(&seen).kind, FailureKind::Script);
-    assert_eq!(failure(&seen).message, "The script was stopped: it wrote more than 256 MiB of output.");
-    assert_eq!(seen.lines.len(), 256);
+    assert_eq!(failure(&seen).message, "The script was stopped: it wrote more than 32 MiB of output.");
+    assert_eq!(seen.lines.len(), 32);
 }
 
 /// A stand-in host: `sh -c` running `script`, with `files` written to the temp dir first and
@@ -526,12 +568,12 @@ fn shell_host_within(name: &str, files: &[(&str, Vec<u8>)], script: &str, limit:
     }
     let mut opts = options(name);
     opts.time_limit = limit;
-    opts.helper = HelperCommand { program: "sh".into(), args: vec!["-c".into(), script.into()] };
+    opts.helper = HelperCommand { program: "sh".into(), args: vec!["-c".into(), script.into()], envs: Vec::new() };
     (IsolatedJob::spawn("1".into(), opts).unwrap(), paths)
 }
 
-/// The app keeps every output line, so it holds the total to the run's limit itself: a host that
-/// streams more is stopped, whatever it claims to have counted.
+/// The app handles every output line, so it holds the total to the run's limit itself: a host
+/// that streams more is stopped, whatever it claims to have counted.
 #[cfg(unix)]
 #[test]
 fn a_host_that_streams_too_much_output_is_stopped() {
@@ -541,8 +583,8 @@ fn a_host_that_streams_too_much_output_is_stopped() {
     paths.iter().for_each(|p| drop(std::fs::remove_file(p)));
     report("output flood host", &seen);
     assert_eq!(failure(&seen).kind, FailureKind::HostViolation);
-    assert!(failure(&seen).message.contains("more than 256 MiB of output"), "{}", failure(&seen).message);
-    assert_eq!(seen.lines.len(), 256);
+    assert!(failure(&seen).message.contains("more than 32 MiB of output"), "{}", failure(&seen).message);
+    assert_eq!(seen.lines.len(), 32);
 }
 
 /// Empty lines cost no bytes: the app also holds the number of lines a host may send.
@@ -617,7 +659,8 @@ fn a_host_that_exits_while_a_descendant_holds_the_output_is_reported() {
 /// Whether process `pid` ends within a few seconds.
 #[cfg(unix)]
 fn gone(pid: &str) -> bool {
-    let alive = || std::process::Command::new("kill").args(["-0", pid]).status().is_ok_and(|s| s.success());
+    // `kill` must run: a failure to start it says nothing about the process.
+    let alive = || std::process::Command::new("kill").args(["-0", pid]).stderr(std::process::Stdio::null()).status().expect("kill runs").success();
     let start = Instant::now();
     while alive() && start.elapsed() < Duration::from_secs(3) {
         std::thread::sleep(Duration::from_millis(50));
@@ -825,4 +868,69 @@ fn time_the_app_takes_to_answer_does_not_count_against_the_limit() {
     });
     assert_eq!(seen.result, Ok(()), "1.8 s of answering, 0.8 s limit: {:?}", seen.lines);
     assert_eq!(seen.lines, ["done"]);
+}
+
+/// A command the app never answers, and a dialog nobody answers, end the run once their own limit
+/// passes: the run's clock is stopped meanwhile, so its time limit never would.
+#[test]
+fn an_unanswered_command_or_dialog_ends_the_run() {
+    for (src, dialog) in [("app.documents.length;", false), ("alert('nobody answers');", true)] {
+        let mut opts = options("no reply");
+        opts.reply_limits = (Duration::from_millis(300), Duration::from_millis(300));
+        let mut job = IsolatedJob::spawn(src.into(), opts).unwrap();
+        let start = Instant::now();
+        let result = loop {
+            assert!(start.elapsed() < Duration::from_secs(30), "{src}: the run never ended");
+            match job.poll(Duration::from_millis(20)) {
+                Some(Event::Finished(result)) => break result,
+                // Neither is ever answered.
+                Some(Event::Execute { .. }) => assert!(!dialog, "{src}"),
+                Some(Event::Dialog(_)) => assert!(dialog, "{src}"),
+                _ => {}
+            }
+        };
+        let f = result.expect_err(src);
+        assert_eq!(f.kind, FailureKind::Timeout, "{src}: {f}");
+        assert!(f.message.contains("got no answer"), "{src}: {f}");
+    }
+}
+
+/// When the interface falls behind and the queue of events is full, the host waits for room;
+/// that wait is the app's, not the script's time.
+#[test]
+fn time_the_interface_takes_to_take_output_does_not_count_against_the_limit() {
+    let mut opts = options("slow interface");
+    opts.time_limit = Duration::from_secs(1);
+    let mut job = IsolatedJob::spawn("for (var i = 0; i < 300; i++) $.writeln(i);".into(), opts).unwrap();
+    // The interface is busy elsewhere for twice the run's limit.
+    std::thread::sleep(Duration::from_secs(2));
+    let seen = drive(&mut job, None, &[], |_, _| {});
+    assert!(seen.result.is_ok(), "{:?}", seen.result);
+    assert_eq!(seen.lines.len(), 300);
+}
+
+/// An answer too large to send ends the run with that reason, not as a host that stopped
+/// without a result.
+#[test]
+fn an_answer_too_large_to_send_ends_the_run_with_the_reason() {
+    let mut job = IsolatedJob::spawn("var s = prompt('Name?'); $.writeln(s.length);".into(), options("huge answer")).unwrap();
+    let huge = "x".repeat(photocraft_script_js::isolate::protocol::MAX_TO_HOST + 1);
+    let seen = drive(&mut job, None, &[json!(huge)], |_, _| {});
+    let f = failure(&seen);
+    assert_eq!(f.kind, FailureKind::Script, "{f}");
+    assert!(f.message.contains("a dialog's answer could not be sent"), "{f}");
+}
+
+/// Runaway recursion after an `await` ends the run by name: it must not finish as a success with
+/// the rest of the script silently skipped.
+#[test]
+fn runaway_recursion_after_an_await_does_not_finish_as_a_success() {
+    let src = "function r(n) { return r(n + 1) + 1; } (async function () { await 0; r(0); $.writeln('finished'); })();";
+    let mut opts = options("async recursion");
+    opts.time_limit = SLOW_LIMIT;
+    let mut job = IsolatedJob::spawn(src.into(), opts).unwrap();
+    let seen = drive(&mut job, None, &[], |_, _| {});
+    report("async recursion", &seen);
+    assert!(seen.result.is_err(), "it ended as a success: {:?}", seen.lines);
+    assert!(seen.lines.is_empty(), "{:?}", seen.lines);
 }

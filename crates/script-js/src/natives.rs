@@ -340,13 +340,14 @@ pub(crate) fn resolve(id: DocKey, ctx: &mut Context) -> JsResult<(usize, Value)>
 
 fn this_doc(this: &JsValue, ctx: &mut Context) -> JsResult<Value> {
     let id = doc_id(this).ok_or_else(|| JsNativeError::typ().with_message("not a Document"))?;
-    inspect_document(id, ctx)
+    inspect_document(id, false, ctx)
 }
 
 /// `document.inspect` of document `id`, by its serial: one call, so a tab closed or moved in the
 /// meantime can't make it read another document.
-pub(crate) fn inspect_document(id: DocKey, ctx: &mut Context) -> JsResult<Value> {
-    let d = command(ctx, "document.inspect", json!({ "serial": id.serial })).map_err(|e| host_failure(ctx, e, "the document is no longer open"))?;
+pub(crate) fn inspect_document(id: DocKey, history: bool, ctx: &mut Context) -> JsResult<Value> {
+    let d = command(ctx, "document.inspect", json!({ "serial": id.serial, "history": history }))
+        .map_err(|e| host_failure(ctx, e, "the document is no longer open"))?;
     // The id is checked too, against a host that answers for another document.
     if d.get("id").and_then(Value::as_u64).is_some_and(|i| i != id.id) {
         return Err(error("the document is no longer open"));
@@ -394,13 +395,14 @@ fn app_documents(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
     let s = session_inspect(ctx)?;
     let ids = s["documents"].as_array().map_or(Ok(Vec::new()), |docs| docs.iter().map(entry_id).collect::<JsResult<Vec<_>>>())?;
     let docs: Vec<JsValue> = ids.into_iter().map(|id| document_object(id, ctx).into()).collect();
-    let arr = boa_engine::object::builtins::JsArray::from_iter(docs, ctx);
-    let methods: [(&str, Native, usize); 2] = [("add", crate::dom::documents_add, 6), ("getByName", crate::dom::documents_get_by_name, 1)];
-    for (k, f, len) in methods {
-        let f = FunctionObjectBuilder::new(ctx.realm(), NativeFunction::from_fn_ptr(f)).name(JsString::from(k)).length(len).build();
-        arr.set(JsString::from(k), f, true, ctx)?;
-    }
-    Ok(arr.into())
+    crate::dom::live_collection(ctx, crate::dom::documents_key(), docs, |arr, ctx| {
+        let methods: [(&str, Native, usize); 2] = [("add", crate::dom::documents_add, 6), ("getByName", crate::dom::documents_get_by_name, 1)];
+        for (k, f, len) in methods {
+            let f = FunctionObjectBuilder::new(ctx.realm(), NativeFunction::from_fn_ptr(f)).name(JsString::from(k)).length(len).build();
+            arr.set(JsString::from(k), f, true, ctx)?;
+        }
+        Ok(())
+    })
 }
 
 fn app_active_document(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
@@ -451,16 +453,15 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
     let dollar = ObjectInitializer::new(ctx).function(NativeFunction::from_fn_ptr(writeln), js_string!("writeln"), 1).build();
     ctx.register_global_property(js_string!("$"), dollar, Attribute::all())?;
 
+    // Replays depend on these going through the tape: without them the run can't start.
     let math = ctx.global_object().get(js_string!("Math"), ctx)?;
-    if let Some(math) = math.as_object() {
-        let f = FunctionObjectBuilder::new(ctx.realm(), NativeFunction::from_fn_ptr(random)).name(js_string!("random")).length(0).build();
-        math.set(js_string!("random"), f, true, ctx)?;
-    }
+    let math = math.as_object().ok_or_else(|| error("internal error: Math is missing"))?;
+    let f = FunctionObjectBuilder::new(ctx.realm(), NativeFunction::from_fn_ptr(random)).name(js_string!("random")).length(0).build();
+    math.set(js_string!("random"), f, true, ctx)?;
     let date = ctx.global_object().get(js_string!("Date"), ctx)?;
-    if let Some(date) = date.as_object() {
-        let f = FunctionObjectBuilder::new(ctx.realm(), NativeFunction::from_fn_ptr(date_now)).name(js_string!("now")).length(0).build();
-        date.set(js_string!("now"), f, true, ctx)?;
-    }
+    let date = date.as_object().ok_or_else(|| error("internal error: Date is missing"))?;
+    let f = FunctionObjectBuilder::new(ctx.realm(), NativeFunction::from_fn_ptr(date_now)).name(js_string!("now")).length(0).build();
+    date.set(js_string!("now"), f, true, ctx)?;
     Ok(())
 }
 
@@ -473,8 +474,14 @@ mod tests {
         for id in &allowed {
             assert!(registered.contains(id), "{id} is allowed but no such command is registered");
         }
-        let reachable = registered.iter().filter(|id| allowed.contains(id)).count();
-        assert_eq!(reachable, allowed.len(), "every other registered command is refused");
-        assert!(registered.len() > allowed.len() * 10, "the registry walk saw the real registry");
+        // Every other registered command is refused, whatever its parameters.
+        let mut refused = 0;
+        for id in registered.iter().filter(|id| !allowed.contains(id)) {
+            for params in [serde_json::json!({}), serde_json::json!({"onDocument": 1})] {
+                assert!(crate::commands::check_command(id, &params).is_err(), "{id} is not allowed but passes the check");
+            }
+            refused += 1;
+        }
+        assert!(refused > allowed.len() * 10, "the registry walk saw the real registry: {refused} refused");
     }
 }

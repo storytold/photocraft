@@ -1,4 +1,6 @@
 //! End-to-end runs through the public API.
+// Native only: the tests time runs with `std::time`, which has no clock on wasm32-unknown-unknown.
+#![cfg(not(target_arch = "wasm32"))]
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -99,12 +101,18 @@ fn scripts_cannot_catch_a_pause_or_run_finally() {
 #[test]
 fn clock_and_random_replay_identically() {
     // A replay that saw a different time or number would write a different line and diverge.
-    let src = "var a = Math.random(), d = Date.now(), n = new Date().getTime(); $.writeln(a, d, n); alert(1); $.writeln(a < 1 && a >= 0, d <= n);";
+    // The line before the dialog is written by the first attempt; the one after, by the replay.
+    let src = "var a = Math.random(), d = Date.now(), n = new Date().getTime(); $.writeln(a, ' ', d, ' ', n); alert(1); $.writeln(a, ' ', d, ' ', n); $.writeln(a < 1 && a >= 0, d <= n);";
     let (mut r, _, lines) = probe_run(src, RunOptions::default());
     assert!(matches!(r.step(), Step::Paused(_)));
+    // Time passes at the dialog: a clock read again would differ.
+    std::thread::sleep(std::time::Duration::from_millis(20));
     r.answer(Value::Null).unwrap();
     assert_eq!(r.step(), Step::Done);
-    assert_eq!(lines.borrow()[1], "truetrue");
+    let lines = lines.borrow();
+    assert_eq!(lines.len(), 3, "{lines:?}");
+    assert_eq!(lines[1], lines[0], "the replay saw the first attempt's time and number");
+    assert_eq!(lines[2], "truetrue");
 }
 
 #[test]
@@ -934,7 +942,9 @@ fn a_sparse_array_with_a_huge_length_is_a_script_error() {
         let src = format!("var a = []; a.length = {len}; try {{ alert(a); }} catch (e) {{ $.writeln(e instanceof RangeError, ' ', e.message); }}");
         let started = std::time::Instant::now();
         assert_eq!(lines_of(&src), ["true value is too large to convert to text (more than 1048576 items)"], "{len}");
-        let _ = started; // guaranteed by rejecting on length, not by walking every hole
+        // Refused by its length, not after walking every hole (4 billion of them would take
+        // minutes): fast even in a debug build on a loaded runner.
+        assert!(started.elapsed() < std::time::Duration::from_secs(5), "{len}: {:?}", started.elapsed());
     }
     let src = "var a = [[]]; a[0].length = 2000000; try { alert(a); } catch (e) { $.writeln(e instanceof RangeError); }";
     assert_eq!(lines_of(src), ["true"]);

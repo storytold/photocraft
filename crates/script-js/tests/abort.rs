@@ -1,5 +1,7 @@
 //! A stop (a pause at a dialog, the time limit) unwinds the whole attempt: no `catch` and no
 //! `finally` of the script runs, wherever the stopping native was called from.
+// Native only: the tests time runs with `std::time`, which has no clock on wasm32-unknown-unknown.
+#![cfg(not(target_arch = "wasm32"))]
 
 use std::cell::RefCell;
 use std::rc::Rc;

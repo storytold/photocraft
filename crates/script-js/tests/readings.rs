@@ -1,4 +1,6 @@
 //! Past the bound on clock and `Math.random()` readings, the run stops at the reading itself.
+// Native only: the tests time runs with `std::time`, which has no clock on wasm32-unknown-unknown.
+#![cfg(not(target_arch = "wasm32"))]
 
 use photocraft_script_js::tape::MAX_READINGS;
 use photocraft_script_js::{Host, HostError, RunOptions, Runner, Step, Unlimited};

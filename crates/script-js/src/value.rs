@@ -98,8 +98,30 @@ fn to_js_text(v: &JsValue, ctx: &mut Context) -> JsResult<JsString> {
     Ok(s)
 }
 
+/// `v` as a script value. The engine converts by recursion, so a value nested deeper than
+/// [`MAX_DEPTH`] is refused first (found without recursion).
 pub fn from_json(v: &Value, ctx: &mut Context) -> JsResult<JsValue> {
+    if json_depth_over(v, MAX_DEPTH) {
+        return Err(too_deep());
+    }
     JsValue::from_json(v, ctx)
+}
+
+/// Whether `v` nests arrays and objects more than `max` levels deep.
+fn json_depth_over(v: &Value, max: usize) -> bool {
+    let mut stack = vec![(v, 0usize)];
+    while let Some((v, depth)) = stack.pop() {
+        let children: Box<dyn Iterator<Item = &Value>> = match v {
+            Value::Array(a) => Box::new(a.iter()),
+            Value::Object(o) => Box::new(o.values()),
+            _ => continue,
+        };
+        if depth >= max {
+            return true;
+        }
+        stack.extend(children.map(|c| (c, depth + 1)));
+    }
+    false
 }
 
 fn too_long() -> JsError {
@@ -339,5 +361,35 @@ pub(crate) fn cut(s: &str, max: usize) -> String {
     match s.char_indices().nth(max) {
         Some((at, _)) => format!("{}… (cut)", &s[..at]),
         None => s.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_nested_past_the_limit_is_refused_without_recursion() {
+        let mut ctx = Context::default();
+        let mut deep = Value::Null;
+        for _ in 0..200_000 {
+            deep = Value::Array(vec![deep]);
+        }
+        let err = from_json(&deep, &mut ctx).unwrap_err();
+        assert!(err.to_string().contains("nested too deeply"), "{err}");
+        // serde_json's own drop recursion is not ours to fix: leak the test value.
+        std::mem::forget(deep);
+        let mut ok = json_of_depth(MAX_DEPTH - 1);
+        assert!(from_json(&ok, &mut ctx).is_ok());
+        ok = json_of_depth(MAX_DEPTH + 1);
+        assert!(from_json(&ok, &mut ctx).is_err());
+    }
+
+    fn json_of_depth(n: usize) -> Value {
+        let mut v = Value::Null;
+        for i in 0..n {
+            v = if i % 2 == 0 { Value::Array(vec![v]) } else { serde_json::json!({ "k": v }) };
+        }
+        v
     }
 }
