@@ -11,7 +11,7 @@ use crate::state::Tool;
 
 /// 800 x 600 on white, pixel layer Red active, saved path Path 1 (a closed corner square)
 /// targeted in the Paths panel, the Add Anchor Point tool on.
-pub(super) fn app() -> PhotocraftApp {
+pub(super) fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 800, "height": 600, "background": "white"})).unwrap();
     app.sync_views();

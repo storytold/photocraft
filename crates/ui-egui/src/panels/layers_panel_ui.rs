@@ -307,7 +307,7 @@ mod tests {
     use super::*;
     use photocraft_engine::Session;
 
-    fn app_with_document() -> PhotocraftApp {
+    fn app_with_document() -> Box<PhotocraftApp> {
         let mut session = Session::new();
         session.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
         PhotocraftApp::new(session, crate::Services::default())

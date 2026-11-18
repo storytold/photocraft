@@ -15,7 +15,7 @@ use photocraft_ui_egui::control::{ControlRequest, Reply, handle};
 use photocraft_ui_egui::crop_ui::{frame, pending};
 use serde_json::{Value, json};
 
-type Harness = egui_kittest::Harness<'static, PhotocraftApp>;
+type Harness = egui_kittest::Harness<'static, Box<PhotocraftApp>>;
 
 /// The app in English with a 400 × 300 white document at 100 %, the Crop tool picked in Classic
 /// Mode (the frame moves over a fixed image, so the frame's screen place is easy to predict).
