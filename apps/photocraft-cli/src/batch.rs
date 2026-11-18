@@ -110,7 +110,7 @@ pub(crate) fn batch(a: &BatchArgs, out: &mut dyn Write, err: &mut dyn Write) -> 
     }
     std::fs::create_dir_all(out_dir)?;
     let mut failures = Vec::new();
-    let policy = crate::gpu::GpuPolicy::from_args(&a.gpu).map_err(CliError::Other)?;
+    let policy = crate::gpu::GpuPolicy::from_args(&a.gpu)?;
     let mut renderer = policy.create_renderer();
     for (input, target) in inputs.iter().zip(targets) {
         let input = Path::new(&input.path);

@@ -10,7 +10,7 @@ use crate::dialogs::layer_style::tests::{
 use crate::dialogs::layer_style::{self, preview_document};
 use crate::{PhotocraftApp, color_picker_ui};
 
-fn new_app(depth: u32) -> PhotocraftApp {
+fn new_app(depth: u32) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("prefs.set", json!({"path":"interface.language","value":"en"})).unwrap();
     app.run("file.new", json!({"width":32,"height":24,"depth":depth,"background":"#406080"})).unwrap();
