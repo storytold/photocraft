@@ -39,38 +39,38 @@ fn blend_hover_pattern_tiles_and_multiple_views_reuse_current_pixels() {
     app.run("file.new", json!({"width":1024,"height":768,"background":"#336699"})).unwrap();
     let layer = app.run("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
     app.run("edit.fill", json!({"color":"#cc8844"})).unwrap();
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     let a = DRect::new(724, 200, 1324, 500);
     let b = DRect::new(0, 200, 300, 500);
-    assert!(ensure_gpu(&mut app, &ctx, 0, a));
+    assert!(ensure_gpu(&mut app, &ctx, 0, a, None));
     app.ui.view.pattern_preview = true;
     crate::blend_preview::hover(&mut app, &[photocraft_doc::LayerId(layer)], Some(BlendMode::Multiply));
-    assert!(ensure_gpu(&mut app, &ctx, 0, a));
+    assert!(ensure_gpu(&mut app, &ctx, 0, a, None));
     assert_visible_pixels(&mut app, b);
     let bounds = app.session.active().unwrap().doc.bounds();
     assert_visible_pixels(&mut app, bounds);
     crate::blend_preview::hover(&mut app, &[photocraft_doc::LayerId(layer)], None);
-    assert!(ensure_gpu(&mut app, &ctx, 0, a));
+    assert!(ensure_gpu(&mut app, &ctx, 0, a, None));
     assert_visible_pixels(&mut app, bounds);
 
     app.ui.view.pattern_preview = false;
     for mode in [BlendMode::Multiply, BlendMode::Screen] {
         crate::blend_preview::hover(&mut app, &[photocraft_doc::LayerId(layer)], Some(mode));
-        assert!(ensure_gpu(&mut app, &ctx, 0, a));
-        assert!(ensure_gpu(&mut app, &ctx, 0, b));
+        assert!(ensure_gpu(&mut app, &ctx, 0, a, None));
+        assert!(ensure_gpu(&mut app, &ctx, 0, b, None));
         for visible in [a, b, a, b] {
             app.perf.last_refresh_px = 0;
-            assert!(ensure_gpu(&mut app, &ctx, 0, visible));
+            assert!(ensure_gpu(&mut app, &ctx, 0, visible, None));
             assert_eq!(app.perf.last_refresh_px, 0, "unchanged views must retain coverage together");
             assert_visible_pixels(&mut app, visible.intersect(&bounds));
         }
     }
     // Enabling periodic display during an existing hover must catch up the unseen gap too.
     app.ui.view.pattern_preview = true;
-    assert!(ensure_gpu(&mut app, &ctx, 0, a));
+    assert!(ensure_gpu(&mut app, &ctx, 0, a, None));
     assert_visible_pixels(&mut app, bounds);
     crate::blend_preview::hover(&mut app, &[photocraft_doc::LayerId(layer)], None);
-    assert!(ensure_gpu(&mut app, &ctx, 0, a));
+    assert!(ensure_gpu(&mut app, &ctx, 0, a, None));
     assert_visible_pixels(&mut app, bounds);
 }
 
@@ -85,18 +85,18 @@ fn blend_hover_during_background_redraw_restores_committed_pixels() {
     let layer = app.run("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
     app.run("edit.fill", json!({"color":"#cc8844"})).unwrap();
     app.run("layer.layerStyle.blendingOptions", json!({"knockout":"shallow"})).unwrap();
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     let visible = DRect::new(256, 256, 512, 512);
-    assert!(ensure_gpu(&mut app, &ctx, 0, visible));
+    assert!(ensure_gpu(&mut app, &ctx, 0, visible, None));
     assert!(!app.redraws.is_empty(), "fixture must start a deferred full redraw");
     crate::blend_preview::hover(&mut app, &[photocraft_doc::LayerId(layer)], Some(BlendMode::Multiply));
-    assert!(ensure_gpu(&mut app, &ctx, 0, visible));
+    assert!(ensure_gpu(&mut app, &ctx, 0, visible, None));
     let panned = DRect::new(2048, 1024, 2304, 1280);
-    assert!(ensure_gpu(&mut app, &ctx, 0, panned));
+    assert!(ensure_gpu(&mut app, &ctx, 0, panned, None));
     settle_redraw(&mut app);
     assert_visible_pixels(&mut app, panned);
     crate::blend_preview::hover(&mut app, &[photocraft_doc::LayerId(layer)], None);
-    assert!(ensure_gpu(&mut app, &ctx, 0, panned));
+    assert!(ensure_gpu(&mut app, &ctx, 0, panned, None));
     settle_redraw(&mut app);
     let bounds = app.session.active().unwrap().doc.bounds();
     assert_visible_pixels(&mut app, bounds);
@@ -149,9 +149,9 @@ fn check_blend_viewport(cpu_fallback: bool, multiple_layers: bool) {
         app.run("layer.setProps", json!({"layer": other, "opacity": 0.5})).unwrap();
         layers.push(photocraft_doc::LayerId(other));
     }
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     let visible = DRect::new(256, 256, 512, 512);
-    assert!(ensure_gpu(&mut app, &ctx, 0, visible));
+    assert!(ensure_gpu(&mut app, &ctx, 0, visible, None));
     assert!(app.redraws.is_empty(), "small fixture must finish synchronously");
     if cpu_fallback {
         assert!(!app.perf.last_refresh.starts_with("gpu"), "fixture must exercise CPU composition fallback");
@@ -160,39 +160,39 @@ fn check_blend_viewport(cpu_fallback: bool, multiple_layers: bool) {
     let gpu = app.gpu.clone().unwrap();
     let original = gpu.read_texels(id.0).unwrap();
     crate::blend_preview::hover(&mut app, &layers, Some(BlendMode::Multiply));
-    assert!(ensure_gpu(&mut app, &ctx, 0, visible));
+    assert!(ensure_gpu(&mut app, &ctx, 0, visible, None));
     println!("BLEND_VIEWPORT kind={} pixels={} expected={} adapter={:?}", app.perf.last_refresh, app.perf.last_refresh_px, 256 * 256, app.perf.gpu_info);
     assert_eq!(app.perf.last_refresh_px, 256 * 256, "hover must not recomposite offscreen pixels of a full-canvas layer");
     assert_visible_pixels(&mut app, visible);
     app.perf.last_refresh_px = 0;
-    assert!(ensure_gpu(&mut app, &ctx, 0, visible));
+    assert!(ensure_gpu(&mut app, &ctx, 0, visible, None));
     assert_eq!(app.perf.last_refresh_px, 0, "unchanged view and mode must reuse the texture");
     let zoomed_out = DRect::new(128, 128, 640, 640);
-    assert!(ensure_gpu(&mut app, &ctx, 0, zoomed_out));
+    assert!(ensure_gpu(&mut app, &ctx, 0, zoomed_out, None));
     assert_eq!(app.perf.last_refresh_px, 512 * 512, "zooming out catches up the larger visible area");
     let panned = DRect::new(640, 256, 896, 512);
-    assert!(ensure_gpu(&mut app, &ctx, 0, panned));
+    assert!(ensure_gpu(&mut app, &ctx, 0, panned, None));
     assert_eq!(app.perf.last_refresh_px, 256 * 256, "newly exposed pixels must catch up without a mode change");
     crate::blend_preview::hover(&mut app, &layers, Some(BlendMode::Screen));
-    assert!(ensure_gpu(&mut app, &ctx, 0, panned));
+    assert!(ensure_gpu(&mut app, &ctx, 0, panned, None));
     assert_eq!(app.perf.last_refresh_px, 256 * 256);
-    assert!(ensure_gpu(&mut app, &ctx, 0, visible));
+    assert!(ensure_gpu(&mut app, &ctx, 0, visible, None));
     assert_eq!(app.perf.last_refresh_px, 256 * 256, "returning view must show the current mode");
     assert_visible_pixels(&mut app, visible);
     assert_visible_pixels(&mut app, panned);
     crate::blend_preview::hover(&mut app, &layers, None);
-    assert!(ensure_gpu(&mut app, &ctx, 0, visible));
+    assert!(ensure_gpu(&mut app, &ctx, 0, visible, None));
     assert_eq!(gpu.read_texels(id.0).unwrap(), original, "cancel must restore the whole texture, including previously previewed offscreen pixels");
     crate::blend_preview::hover(&mut app, &layers, Some(BlendMode::Multiply));
-    assert!(ensure_gpu(&mut app, &ctx, 0, visible));
+    assert!(ensure_gpu(&mut app, &ctx, 0, visible, None));
     app.run("layer.setProps", json!({"layer":layer,"blend":"Multiply"})).unwrap();
-    assert!(ensure_gpu(&mut app, &ctx, 0, visible));
+    assert!(ensure_gpu(&mut app, &ctx, 0, visible, None));
     let bounds = app.session.active().unwrap().doc.bounds();
     assert_visible_pixels(&mut app, bounds);
     app.run("file.new", json!({"width":1024,"height":768,"background":"white"})).unwrap();
-    assert!(ensure_gpu(&mut app, &ctx, 1, visible));
+    assert!(ensure_gpu(&mut app, &ctx, 1, visible, None));
     app.session.set_active(0);
     app.sync_views();
-    assert!(ensure_gpu(&mut app, &ctx, 0, visible));
+    assert!(ensure_gpu(&mut app, &ctx, 0, visible, None));
     assert_visible_pixels(&mut app, bounds);
 }

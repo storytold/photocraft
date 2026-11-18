@@ -5,8 +5,8 @@
 //!   is on: the desktop app; tests and the web run inline as before).
 //! - [`tick`] (every frame) applies finished jobs, reports failures, answers control requests
 //!   waiting on a job, finishes background opens and keeps frames coming while anything runs.
-//! - [`status_progress`] draws the status-bar progress with a Cancel button; [`dialog`] the modal
-//!   progress window for jobs that lock the active document (filters, Content-Aware Fill, …),
+//! - [`status_progress`] shows the status-bar progress with a Cancel button; [`dialog`] the blocking
+//!   progress overlay for jobs that lock the active document (filters, Content-Aware Fill, …),
 //!   shown after a short delay so quick jobs don't flash it. Esc cancels.
 //! - Files opening in the background get a document tab at once ([`OpenTab`]); its canvas area
 //!   shows the progress, and closing the tab cancels the open.
@@ -21,17 +21,24 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Sender;
 
-use egui::{Color32, Rect, RichText, Sense, Stroke, vec2};
+use craft::ui::bars::StatusProgress;
+use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, Sizing};
+use craft::ui::dialog::{BlockingOverlay, PromptAnswer, PromptChoice, StandardPrompt};
+use craft::ui::display::{Picture, Progress, Shade, Text};
+use craft::ui::layout::RowAlign;
+use craft::ui::layout_components::Row;
+use craft::ui::primitives::textures::Revision;
+use craft::ui::runtime::overlay::CloseReason;
+use craft::ui::shell::OpeningCard;
+use craft::ui::style::TypeRole;
 use photocraft_doc::DocId;
 use photocraft_engine::jobs::{CancelRefused, JobCtx, JobEvent, JobId, JobInfo, JobOutcome, OPEN_JOB, OpenSource, Started};
 use serde_json::{Value, json};
 
-use crate::theme::Tokens;
-use crate::{ControlResponse, ExportSettings, PhotocraftApp, SaveFileFn, notices};
+use crate::{ExportSettings, PhotocraftApp, SaveFileFn, notices};
 
-/// Delay before the modal progress dialog appears (quick jobs finish without it).
+/// Delay before the blocking progress overlay appears (quick jobs finish without it).
 pub const DIALOG_DELAY_MS: f64 = 250.0;
 
 /// A file opening in the background: shown as a document tab with progress.
@@ -152,7 +159,7 @@ pub struct SaveJob {
     /// The job has ended (cancelled, say) but its worker may still be running: kept until it
     /// returns, so quitting and another save to the same file wait for it.
     pub ended: bool,
-    /// Started with Save in Background off: the app waits for it under the modal progress dialog
+    /// Started with Save in Background off: the app waits for it under the blocking progress overlay
     /// (see [`foreground_save`]).
     pub foreground: bool,
 }
@@ -160,8 +167,6 @@ pub struct SaveJob {
 /// The shell's job bookkeeping.
 #[derive(Default)]
 pub struct JobsUi {
-    /// Control replies waiting for a job to end.
-    pub(crate) waiters: Vec<(JobId, Sender<ControlResponse>)>,
     /// Background opens, in tab order.
     pub opens: Vec<OpenTab>,
     /// Sets of files opened together that still have members opening (see [`OpenOrder`]).
@@ -179,8 +184,6 @@ pub struct JobsUi {
     /// The file being placed in the background, if any. One at a time: files dropped meanwhile
     /// wait in the app's drop queue.
     pub place: Option<PlaceJob>,
-    /// Cached read-only canvas image of the current folder Batch input.
-    batch_preview_texture: Option<(JobId, u64, egui::TextureHandle)>,
 }
 
 /// Run command `id`: in the background when background jobs are on and the command is a job
@@ -248,6 +251,7 @@ fn finish_place(app: &mut PhotocraftApp, ctx: &egui::Context, place: PlaceJob, o
     app.sync_views();
     match outcome {
         JobOutcome::Done(result) => {
+            notices::io_result_warnings(app, &result, &place.name);
             // The tab can change while the file is placed: the box opens only on the document it
             // was placed in, and never over another one. An image placed into a frame has none.
             if app.ui.transform.is_none()
@@ -501,17 +505,15 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if !keep_polling(app, ctx) {
         return;
     }
+    // Once per frame: Escape is taken from the frame's input, so a second pass finds none. While the Batch question is
+    // open Escape is its prompt's (it answers Stop), so it is left in the input.
     if let Some(job) = job_in_view(app)
-        && !ctx.text_edit_focused()
-        && !crate::zoom_field::editing(ctx)
-        && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        && !craft::ui::runtime::focus::focused_rec(ctx).is_some_and(|r| r.stop.text)
+        && !(job.command == "file.automate.batch" && app.session.batch_interrupt_waiting(job.id))
+        && crate::window_keys::take_escape(ctx)
     {
         if job.command == "file.automate.batch" {
-            if app.session.batch_interrupt_waiting(job.id) {
-                app.session.decide_batch_interrupt_job(job.id, false);
-            } else {
-                app.session.request_batch_interrupt_job(job.id);
-            }
+            app.session.request_batch_interrupt_job(job.id);
         } else {
             cancel(app, job.id);
         }
@@ -592,21 +594,18 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
     {
         beep();
     }
-    // Control requests waiting on this job.
-    let reply = match &e.outcome {
-        JobOutcome::Done(v) if cancelled_batch => json!({"ok": false, "error": "cancelled", "result": v}),
-        JobOutcome::Done(v) => json!({"ok": true, "result": v}),
-        JobOutcome::Failed(err) => json!({"ok": false, "error": err}),
-        JobOutcome::Cancelled => json!({"ok": false, "error": "cancelled"}),
-    };
-    app.jobs.waiters.retain(|(job, tx)| {
-        if *job == e.id {
-            let _ = tx.send(reply.clone());
-            false
-        } else {
-            true
-        }
-    });
+    // Control requests waiting on this job; a cancelled batch reports the files it finished.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use craft::automation::control::result_reply;
+        let reply = match &e.outcome {
+            JobOutcome::Done(v) if cancelled_batch => json!({"ok": false, "error": "cancelled", "result": v}),
+            JobOutcome::Done(v) => result_reply(Ok(v.clone())),
+            JobOutcome::Failed(err) => result_reply(Err(err.clone())),
+            JobOutcome::Cancelled => result_reply(Err("cancelled".into())),
+        };
+        app.reply_job(e.id, &reply);
+    }
     // A Free Transform commit's session ends with its job (then reported like any job).
     crate::transform_tool::on_job_event(app, &e);
     if crate::prefs_ui::on_recovery_event(app, &e) {
@@ -662,8 +661,8 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
                 &[("group", group)],
             );
             app.ui.status_error = false;
-            app.ui.panels.brush_settings = true;
-            app.ui.brush_tab = 1;
+            // The import's result is in the Brushes panel.
+            let _ = crate::panels::panel_docking::show_panel(app, "brushes", Some(true));
         }
         JobOutcome::Done(ref result) if matches!(e.command.as_str(), "file.print" | "file.printOneCopy") => {
             app.sync_views();
@@ -766,7 +765,7 @@ pub(crate) fn after_open(
     name: &str,
     path: Option<&str>,
     warnings: &[String],
-    bytes: Option<&[u8]>,
+    bytes: Option<&Arc<Vec<u8>>>,
 ) -> Result<(), String> {
     let index = app.session.documents().iter().position(|st| st.doc.id == document).ok_or("the opened document is missing")?;
     app.session.set_active(index);
@@ -799,45 +798,6 @@ pub(crate) fn after_open(
 
 // ------------------------------------------------------------------------------------- drawing
 
-/// A progress bar: `frac` of `rect` filled with the accent; `None` = indeterminate (a sliding
-/// segment), for jobs that haven't reported progress yet.
-pub fn bar(ui: &egui::Ui, rect: Rect, frac: Option<f32>, t: &Tokens) {
-    let p = ui.painter();
-    let r = rect.height() / 2.0;
-    p.rect_filled(rect, r, t.field);
-    p.rect_stroke(rect, r, Stroke::new(1.0, t.field_border), egui::StrokeKind::Inside);
-    let fill = match frac {
-        Some(f) => Rect::from_min_size(rect.min, vec2((rect.width() * f.clamp(0.0, 1.0)).max(rect.height()), rect.height())),
-        None => {
-            let time = ui.input(|i| i.time) as f32;
-            let w = rect.width() * 0.3;
-            let x = rect.left() + ((time * 0.8).fract() * (rect.width() + w)) - w;
-            Rect::from_min_max(egui::pos2(x.max(rect.left()), rect.top()), egui::pos2((x + w).min(rect.right()), rect.bottom()))
-        }
-    };
-    if fill.width() > 0.0 {
-        p.rect_filled(fill, r, t.accent);
-    }
-}
-
-/// A print job has already reached the spool worker; cancellation belongs to the system queue.
-fn print_status_progress(app: &PhotocraftApp, ui: &mut egui::Ui, j: &JobInfo) {
-    let t = Tokens::get(ui.ctx());
-    let (bar_w, bar_h) = if t.pro { (120.0, 6.0) } else { (140.0, 6.0) };
-    let more = app.session.jobs().len().saturating_sub(1);
-    let (xr, xresp) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
-    if xresp.hovered() {
-        ui.painter().rect_filled(xr, t.radius_sm, t.hover);
-    }
-    crate::icons::paint(ui, xr, "x", 11.0, if xresp.hovered() { t.text } else { t.text_dim });
-    xresp.on_hover_text(tl!("Manage submitted jobs in the system print queue"));
-    ui.label(RichText::new(percent(j)).color(t.text_dim).size(11.5).monospace());
-    let (br, _) = ui.allocate_exact_size(vec2(bar_w, bar_h), Sense::hover());
-    bar(ui, br, shown_fraction(j), &t);
-    let label = if more > 0 { format!("{} (+{more})", tl!(&j.label)) } else { tl!(&j.label).to_owned() };
-    ui.label(RichText::new(label).color(t.text_dim).size(12.0));
-}
-
 /// Progress that has been reported, or `None` (indeterminate) while it's still 0.
 fn shown_fraction(j: &JobInfo) -> Option<f32> {
     (j.progress > 0.0).then_some(j.progress)
@@ -865,40 +825,25 @@ pub fn save_progress(app: &PhotocraftApp, doc: DocId) -> Option<String> {
     app.session.job(save.job).map(|j| saving_percent(&j))
 }
 
-/// The status bar's job readout: "Gaussian Blur ▬▬▬▭▭ 45 %  ×", and for a save "Saving 45% ▬▬▬▭▭  ×"
-/// (the file name on hover). Draws nothing when no job runs.
+/// The status bar's job readout (the bar's trailing group): the job's label, a progress bar, the percentage and a
+/// cancel button, "Saving" for a save. A print's cancel is shown refused: the system print queue owns it. Draws
+/// nothing when no job runs.
 pub fn status_progress(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let Some(j) = job_in_view(app) else { return };
     if j.command == "file.automate.batch" {
         return;
     }
     let saving = app.jobs.saves.iter().any(|s| s.job == j.id);
-    let t = Tokens::get(ui.ctx());
-    let (bar_w, bar_h) = if t.pro { (120.0, 6.0) } else { (140.0, 6.0) };
     let more = app.session.jobs().len().saturating_sub(1);
-    if matches!(j.command.as_str(), "file.print" | "file.printOneCopy") {
-        print_status_progress(app, ui, &j);
-        return;
-    }
-    // Right to left: ×, percentage, bar, label.
-    let (xr, xresp) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
-    if xresp.hovered() {
-        ui.painter().rect_filled(xr, t.radius_sm, t.hover);
-    }
-    crate::icons::paint(ui, xr, "x", 11.0, if xresp.hovered() { t.text } else { t.text_dim });
-    let xresp = xresp.on_hover_text(tl!("Cancel (Esc)"));
-    if !saving {
-        ui.label(RichText::new(percent(&j)).color(t.text_dim).size(11.5).monospace());
-    }
-    let (br, _) = ui.allocate_exact_size(vec2(bar_w, bar_h), Sense::hover());
-    bar(ui, br, shown_fraction(&j), &t);
-    let name = if saving { saving_percent(&j) } else { tl!(&j.label).to_owned() };
+    // A save's percentage is the component's own.
+    let name = if saving { tl!("Saving").to_owned() } else { tl!(&j.label).to_owned() };
     let label = if more > 0 { format!("{name} (+{more})") } else { name };
-    let resp = ui.label(RichText::new(label).color(t.text_dim).size(12.0));
-    if saving {
-        resp.on_hover_text(tl!(&j.label));
+    let mut progress = StatusProgress::new(label, shown_fraction(&j)).cancel(tl!("Cancel (Esc)").to_owned());
+    // A print has already reached the spool worker; cancellation belongs to the system queue.
+    if matches!(j.command.as_str(), "file.print" | "file.printOneCopy") {
+        progress = progress.cancel_refused(tl!("Manage submitted jobs in the system print queue").to_owned());
     }
-    if xresp.clicked() {
+    if progress.show(ui).cancelled {
         cancel(app, j.id);
     }
 }
@@ -912,36 +857,30 @@ pub(crate) fn batch_preview(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> bool 
         .into_iter()
         .filter(|job| job.command == "file.automate.batch")
         .find_map(|job| app.session.batch_preview(job.id).map(|preview| (job.id, preview)));
-    let Some((id, preview)) = current else {
-        app.jobs.batch_preview_texture = None;
-        return false;
-    };
-    if !app.jobs.batch_preview_texture.as_ref().is_some_and(|(cached_id, generation, _)| *cached_id == id && *generation == preview.generation) {
-        let image = photocraft_compose::thumbnail(&preview.document, 1024);
-        let pixels = egui::ColorImage::from_rgba_unmultiplied([image.width as usize, image.height as usize], &image.pixels);
-        let texture = ui.ctx().load_texture(format!("batch-preview-{}-{}", id.0, preview.generation), pixels, egui::TextureOptions::LINEAR);
-        app.jobs.batch_preview_texture = Some((id, preview.generation, texture));
-    }
-    let Some((_, _, texture)) = &app.jobs.batch_preview_texture else { return false };
-    let t = Tokens::get(ui.ctx());
+    let Some((id, preview)) = current else { return false };
     let name = std::path::Path::new(&preview.path).file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_else(|| preview.path.clone());
-    ui.horizontal(|ui| {
-        ui.label(RichText::new(name).color(t.text).font(crate::theme::semibold(12.5)));
-        ui.label(RichText::new(tl!("Batch preview")).color(t.text_faint).size(11.0));
+    Row::new().show(ui, |ui, _| {
+        Text::new(name.clone()).role(TypeRole::BodyStrong).show(ui);
+        Text::new(tl!("Batch preview").to_owned()).shade(Shade::Faint).show(ui);
     });
-    let area = ui.available_rect_before_wrap();
-    ui.allocate_rect(area, Sense::hover());
-    let size = texture.size_vec2();
-    if size.x > 0.0 && size.y > 0.0 {
-        let scale = (area.width() / size.x).min(area.height() / size.y);
-        if !scale.is_finite() {
-            return true;
-        }
-        let scale = scale.clamp(0.0, 1.0);
-        let target = Rect::from_center_size(area.center(), size * scale);
-        ui.painter().rect_filled(target, 0.0, Color32::WHITE);
-        ui.painter().image(texture.id(), target, Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), Color32::WHITE);
-    }
+    // The store keeps the texture under the job and the snapshot's generation, so it decodes once per input. The
+    // thumbnail is flattened onto white, as the canvas shows a transparent document.
+    let image = || {
+        let thumb = photocraft_compose::thumbnail(&preview.document, 1024);
+        let flat: Vec<u8> = thumb
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|px| {
+                let alpha = u32::from(px[3]);
+                let over_white = |c: u8| ((u32::from(c) * alpha + 255 * (255 - alpha) + 127) / 255) as u8;
+                [over_white(px[0]), over_white(px[1]), over_white(px[2]), 255]
+            })
+            .collect();
+        egui::ColorImage::from_rgba_unmultiplied([thumb.width as usize, thumb.height as usize], &flat)
+    };
+    Picture::new(name, id.0, &image).revision(Revision::new(preview.generation)).sizing(Sizing::Fill).show(ui);
     true
 }
 
@@ -950,9 +889,9 @@ pub(crate) fn batch_preview(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> bool 
 /// [`DIALOG_DELAY_MS`]; Esc cancels (see [`tick`]). A save shows it only when it runs in the
 /// foreground (Save in Background off), and then at once, so nothing can be clicked meanwhile; a
 /// background save shows its progress in the tab and the status bar instead.
-pub fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
+pub fn dialog(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if let Some(job) = app.session.jobs().into_iter().find(|job| job.command == "file.automate.batch" && app.session.batch_interrupt_waiting(job.id)) {
-        batch_interrupt_dialog(app, ctx, job.id);
+        ask_batch_interrupt(app, job.id);
         return;
     }
     let j = match foreground_save(app) {
@@ -961,6 +900,7 @@ pub fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
             let Some(j) = app.session.active_job() else { return };
             // A save shows its progress in the tab and the status bar; so does a place, which
             // leaves the view free to zoom and pan while the file is decoded.
+            // PLAN: the screen-mode and status-bar visibility readers panels-w19 gives are not in the tree; the base reads stay.
             let place = place_uses_status_bar(
                 &j.command,
                 !app.ui.view.hides_chrome() && app.ui.panels.status_bar && job_in_view(app).is_some_and(|shown| shown.id == j.id),
@@ -971,63 +911,53 @@ pub fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
             j
         }
     };
-    let t = Tokens::get(ctx);
-    let mut cancel_it = false;
-    // Photoshop doesn't dim the window behind its progress dialog either.
-    let modal = egui::Modal::new(egui::Id::unique("job-progress")).backdrop_color(Color32::from_black_alpha(36)).show(ctx, |ui| {
-        ui.set_width(360.0);
-        ui.label(RichText::new(tl!(&j.label)).font(crate::theme::semibold(15.0)));
-        ui.add_space(4.0);
-        crate::widgets::hairline(ui);
-        ui.add_space(10.0);
-        let msg = if j.message.is_empty() || j.message == j.label { tl!("Working…").to_string() } else { j.message.clone() };
-        ui.label(RichText::new(msg).color(t.text_dim));
-        ui.add_space(8.0);
-        let (br, _) = ui.allocate_exact_size(vec2(ui.available_width(), 8.0), Sense::hover());
-        bar(ui, br, shown_fraction(&j), &t);
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(percent(&j)).color(t.text_faint).size(11.5));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(RichText::new(elapsed(j.elapsed_ms)).color(t.text_faint).size(11.5));
-            });
+    // Shown every pass the job lasts: the open state is this pass's, so a Cancel (or Escape) reads as a close and a
+    // later job opens a fresh card.
+    let mut open = true;
+    let percent_text = percent(&j);
+    let out = BlockingOverlay::new(tl!(&j.label).to_owned()).opened(Bind::bound(&mut open)).card(true).cancel(tl!("Cancel").to_owned()).show(ui, |ui, _| {
+        Text::new(tl!(&j.label).to_owned()).role(TypeRole::BodyStrong).show(ui);
+        let message = if j.message.is_empty() || j.message == j.label { tl!("Working…").to_owned() } else { j.message.clone() };
+        Text::new(message).shade(Shade::Muted).show(ui);
+        let bar = match shown_fraction(&j) {
+            Some(fraction) => Progress::new(fraction),
+            None => Progress::indeterminate(),
+        };
+        bar.label(tl!(&j.label).to_owned()).sizing(Sizing::FillWidth).show(ui);
+        Row::new().align(RowAlign::SpaceBetween).fill_width().show(ui, |ui, _| {
+            Text::new(percent_text.clone()).shade(Shade::Faint).show(ui);
+            Text::new(elapsed(j.elapsed_ms)).shade(Shade::Faint).show(ui);
         });
-        ui.add_space(12.0);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            cancel_it = crate::widgets::secondary_button(ui, tl!("Cancel"), 84.0).clicked();
-            ui.label(RichText::new(tl!("Esc to cancel")).color(t.text_faint).size(11.0));
-        });
+        Text::new(tl!("Esc to cancel").to_owned()).shade(Shade::Faint).show(ui);
     });
-    // A click on the backdrop doesn't cancel the work; Esc is handled in `tick`.
-    let _ = modal;
-    if cancel_it {
+    // A click outside the card does not cancel the work. A second pass in a frame reports no close (the overlay
+    // applies only its own input), and `cancel` is idempotent besides.
+    if matches!(out.closed, Some(CloseReason::Requested | CloseReason::Escape)) {
         cancel(app, j.id);
     }
 }
 
+/// Tag of the Batch question: the job it decides.
+struct BatchJob(JobId);
+
 /// Photoshop's question after Esc interrupts one input. The worker is parked before its save;
-/// Continue advances the same run to the next input, and Stop returns its partial result.
-fn batch_interrupt_dialog(app: &mut PhotocraftApp, ctx: &egui::Context, id: JobId) {
-    let t = Tokens::get(ctx);
-    let mut decision = None;
-    egui::Modal::new(egui::Id::unique("batch-interrupted")).show(ctx, |ui| {
-        ui.set_width(390.0);
-        ui.label(RichText::new(tl!("Batch")).font(crate::theme::semibold(15.0)));
-        ui.add_space(8.0);
-        ui.label(RichText::new(tl!("A command was canceled or stopped during batch processing. Continue with the next file or stop?")).color(t.text_dim));
-        ui.add_space(14.0);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if crate::widgets::primary_button(ui, tl!("Continue"), 96.0).clicked() {
-                decision = Some(true);
-            }
-            if crate::widgets::secondary_button(ui, tl!("Stop"), 84.0).clicked() {
-                decision = Some(false);
-            }
-        });
-    });
-    if let Some(continue_next) = decision {
-        app.session.decide_batch_interrupt_job(id, continue_next);
-    }
+/// Continue advances the same run to the next input, and Stop returns its partial result. Escape answers Stop.
+/// Opened once per question: while it is open, later passes leave it alone.
+fn ask_batch_interrupt(app: &mut PhotocraftApp, id: JobId) {
+    let prompt = StandardPrompt::custom(tl!("A command was canceled or stopped during batch processing. Continue with the next file or stop?").to_owned())
+        .title(tl!("Batch").to_owned())
+        .button(PromptChoice::Proceed, tl!("Continue").to_owned())
+        .button(PromptChoice::Cancel, tl!("Stop").to_owned())
+        .tag(BatchJob(id));
+    let _ = app.framework.dialogs.open_unless_open(prompt);
+}
+
+/// The answer to the Batch question (a `PROMPTS` row): Continue goes on to the next input, anything else stops the
+/// run. `false` for another prompt's answer.
+pub(crate) fn answer(app: &mut PhotocraftApp, _ctx: &egui::Context, answer: &mut PromptAnswer) -> bool {
+    let Some(BatchJob(id)) = answer.take_tag::<BatchJob>() else { return false };
+    app.session.decide_batch_interrupt_job(id, answer.choice == PromptChoice::Proceed);
+    true
 }
 
 fn elapsed(ms: f64) -> String {
@@ -1035,91 +965,21 @@ fn elapsed(ms: f64) -> String {
     if s < 60.0 { format!("{s:.1} s") } else { format!("{}:{:02}", (s / 60.0).floor() as u64, (s % 60.0).floor() as u64) }
 }
 
-/// Where the opening card drew its parts last frame (tests check that everything fits, #2423).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct OpenCardRects {
-    pub card: Rect,
-    pub title: Rect,
-    pub cancel: Rect,
-}
-
-fn open_card_rects_id() -> egui::Id {
-    egui::Id::unique("open-card-rects")
-}
-
-/// The opening card's parts as drawn last frame, if it was shown.
-pub fn open_card_rects(ctx: &egui::Context) -> Option<OpenCardRects> {
-    ctx.data(|d| d.get_temp::<OpenCardRects>(open_card_rects_id()))
-}
-
-/// The card's width and padding, and the height it has when the title and message fit one line.
-const OPEN_CARD_WIDTH: f32 = 340.0;
-const OPEN_CARD_PAD: f32 = 18.0;
-const OPEN_CARD_MIN_HEIGHT: f32 = 132.0;
-
-/// The canvas area of an opening tab: the file name, a bar and Cancel, centred on the
-/// workspace backdrop. The name and the message stay on one line (truncated with "…", the full
-/// text on hover) and the card grows to fit its rows, so nothing lands outside it (#2423).
+/// The canvas area of an opening tab: the file name, the job's message, a progress bar and Cancel, centred in the
+/// area. The card's layout (one line for the name, Cancel inside) is `OpeningCard`'s.
 pub fn open_card(app: &mut PhotocraftApp, ui: &mut egui::Ui, job: JobId) {
-    let Some(tab) = app.jobs.opens.iter().find(|o| o.job == job).cloned() else { return };
+    let Some(tab) = app.jobs.opens.iter().find(|o| o.job == job) else { return };
     let Some(j) = app.session.job(job) else { return };
-    let t = Tokens::get(ui.ctx());
-    let area = ui.available_rect_before_wrap();
-    ui.painter().rect_filled(area, 0.0, t.canvas);
-    // Centre the card at the height its content needed last frame; the background is painted
-    // once the rows are laid out, so a taller content (a long translation) still gets a card.
-    let height_id = egui::Id::unique(("open-card-height", job));
-    let height = ui.ctx().data(|d| d.get_temp::<f32>(height_id)).unwrap_or(OPEN_CARD_MIN_HEIGHT);
-    let card = Rect::from_center_size(area.center(), vec2(OPEN_CARD_WIDTH, height));
-    let fill = ui.painter().add(egui::Shape::Noop);
-    let border = ui.painter().add(egui::Shape::Noop);
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(card.shrink(OPEN_CARD_PAD)));
-    let title = child
-        .add(egui::Label::new(RichText::new(crate::i18n::fmt(tl!("Opening {name}"), &[("name", &tab.name)])).font(crate::theme::semibold(14.0))).truncate())
-        .rect;
-    child.add_space(4.0);
-    let msg = if j.message.is_empty() { tl!("Reading…").to_string() } else { format!("{}…", j.message) };
-    child.add(egui::Label::new(RichText::new(msg).color(t.text_dim).size(12.0)).truncate());
-    child.add_space(10.0);
-    let (br, _) = child.allocate_exact_size(vec2(child.available_width(), 8.0), Sense::hover());
-    bar(&child, br, shown_fraction(&j), &t);
-    child.add_space(10.0);
-    let mut cancel_it = false;
-    let mut cancel_rect = Rect::NOTHING;
-    child.horizontal(|ui| {
-        ui.label(RichText::new(percent(&j)).color(t.text_faint).size(11.5));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let r = crate::widgets::secondary_button(ui, tl!("Cancel"), 76.0);
-            cancel_it = r.clicked();
-            cancel_rect = r.rect;
-        });
-    });
-    let content = child.min_rect();
-    let needed = (content.height() + 2.0 * OPEN_CARD_PAD).max(OPEN_CARD_MIN_HEIGHT);
-    let card = Rect::from_min_size(card.min, vec2(OPEN_CARD_WIDTH, height.max(needed)));
-    ui.painter().set(fill, egui::Shape::rect_filled(card, t.radius_lg, t.card));
-    ui.painter().set(border, egui::Shape::rect_stroke(card, t.radius_lg, Stroke::new(1.0, t.card_border), egui::StrokeKind::Inside));
-    if (needed - height).abs() > 0.5 {
-        ui.ctx().data_mut(|d| d.insert_temp(height_id, needed));
-        ui.ctx().request_repaint();
-    }
-    ui.ctx().data_mut(|d| d.insert_temp(open_card_rects_id(), OpenCardRects { card, title, cancel: cancel_rect }));
-    if cancel_it {
+    let message = if j.message.is_empty() { tl!("Reading…").to_owned() } else { format!("{}…", j.message) };
+    let out = OpeningCard::new(tab.name.clone()).message(message).fraction(shown_fraction(&j)).cancel(tl!("Cancel")).show(ui);
+    if out.cancelled {
         cancel(app, job);
     }
 }
 
-/// Open tabs for the tab strips: (job, title, progress).
-pub fn open_tabs(app: &PhotocraftApp) -> Vec<(JobId, String, f32)> {
-    app.jobs.opens.iter().map(|o| (o.job, o.name.clone(), app.session.job(o.job).map_or(0.0, |j| j.progress))).collect()
-}
-
-/// Draw one opening tab's progress underline inside tab rect `r`.
-pub fn tab_underline(ui: &egui::Ui, r: Rect, frac: f32, t: &Tokens) {
-    let line = Rect::from_min_max(egui::pos2(r.left() + 4.0, r.bottom() - 3.0), egui::pos2(r.right() - 4.0, r.bottom() - 1.0));
-    ui.painter().rect_filled(line, 1.0, t.field_border);
-    let f = Rect::from_min_size(line.min, vec2(line.width() * frac.clamp(0.0, 1.0), line.height()));
-    ui.painter().rect_filled(f, 1.0, t.accent);
+/// Open tabs for the tab strips: (job, title, progress); `None` shows an indeterminate tab until the job reports.
+pub fn open_tabs(app: &PhotocraftApp) -> Vec<(JobId, String, Option<f32>)> {
+    app.jobs.opens.iter().map(|o| (o.job, o.name.clone(), app.session.job(o.job).and_then(|j| shown_fraction(&j)))).collect()
 }
 
 /// Jobs for `ui.inspect`.
@@ -1145,16 +1005,4 @@ mod tests;
 /// Placements keep the canvas accessible when progress and Cancel are visible in the status bar.
 fn place_uses_status_bar(command: &str, status_bar_visible: bool) -> bool {
     status_bar_visible && matches!(command, "file.placeEmbedded" | "file.placeLinked")
-}
-
-#[cfg(test)]
-mod place_progress_tests {
-    #[test]
-    fn placement_modal_depends_on_command_and_visible_progress() {
-        for command in ["file.placeEmbedded", "file.placeLinked"] {
-            assert!(super::place_uses_status_bar(command, true));
-            assert!(!super::place_uses_status_bar(command, false));
-        }
-        assert!(!super::place_uses_status_bar("filter.blur", true));
-    }
 }
