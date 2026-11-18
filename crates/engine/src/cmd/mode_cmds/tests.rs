@@ -1522,3 +1522,69 @@ fn color_table_reports_zero_flattened_when_setting_transparency() {
     assert_eq!(r["flattened"].as_u64(), Some(0));
     assert_eq!(doc(&s).color_table.as_ref().unwrap().transparent, Some(1));
 }
+
+/// An 8×4 doc: columns 0..=3 opaque white, columns 4..=7 clear.
+fn white_and_clear() -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 4, "background": "transparent"})).unwrap();
+    paint(&mut s, |x, _| if x < 4 { [1.0, 1.0, 1.0, 1.0] } else { [0.0; 4] });
+    s
+}
+
+#[test]
+fn transparent_first_keeps_opaque_white() {
+    // "1st index as transparent" with the default forced blackWhite puts the auto-appended
+    // white ahead of the forced white. An opaque white pixel is equidistant from both; it must
+    // take the real entry and stay opaque, not be punched out (review 5941965522).
+    let mut s = white_and_clear();
+    let r = s.execute("image.mode.indexedColor", json!({"dither": "none", "transparentFirst": true})).unwrap();
+    assert_eq!(r["transparentIndex"], json!(0));
+    assert_eq!(doc(&s).color_table.as_ref().unwrap().transparent, Some(0));
+    let surf = doc(&s).layers[0].surface().unwrap();
+    assert_eq!(surf.rgba(1, 1), [1.0, 1.0, 1.0, 1.0], "an opaque white pixel stays opaque");
+    assert_eq!(surf.rgba(6, 1)[3], 0.0, "clear pixels are still transparent");
+    // Every dither: the carrying entry never wins an opaque pixel.
+    for dither in ["diffusion", "pattern", "noise"] {
+        let mut s = white_and_clear();
+        s.execute("image.mode.indexedColor", json!({"dither": dither, "transparentFirst": true})).unwrap();
+        let surf = doc(&s).layers[0].surface().unwrap();
+        assert_eq!(surf.rgba(1, 1)[3], 1.0, "{dither}");
+    }
+}
+
+#[test]
+fn auto_transparent_entry_does_not_clear_near_white() {
+    // The auto-appended white takes clear pixels only: a near-white opaque pixel with no closer
+    // real entry maps to the nearest table colour and stays opaque.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 4, "background": "transparent"})).unwrap();
+    paint(&mut s, |x, _| {
+        if x < 6 {
+            [0.25, 0.25, 0.25, 1.0]
+        } else if x < 7 {
+            [0.95, 0.95, 0.95, 1.0]
+        } else {
+            [0.0; 4]
+        }
+    });
+    s.execute("image.mode.indexedColor", json!({"palette": "custom", "paletteColors": ["#000000", "#404040"], "dither": "none"})).unwrap();
+    assert_eq!(doc(&s).color_table.as_ref().unwrap().transparent, Some(2), "white is appended for the clear column");
+    let surf = doc(&s).layers[0].surface().unwrap();
+    let e = 64.0 / 255.0;
+    assert_eq!(surf.rgba(6, 0), [e, e, e, 1.0], "the near-white pixel takes the nearest real entry");
+    assert_eq!(surf.rgba(7, 0)[3], 0.0, "clear pixels are still transparent");
+}
+
+#[test]
+fn painting_the_transparent_entry_colour_stays_opaque() {
+    // A palette whose transparent entry is index 0 black (common for palette PNG/GIF files): a
+    // stroke in that colour maps to the nearest real entry and stays opaque instead of erasing.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 4, "background": "transparent"})).unwrap();
+    paint(&mut s, |x, _| if x < 4 { [1.0, 0.0, 0.0, 1.0] } else { [0.0; 4] });
+    s.execute("image.mode.indexedColor", json!({"palette": "custom", "paletteColors": ["#000000", "#ff0000"], "dither": "none", "transparent": 0})).unwrap();
+    assert_eq!(doc(&s).color_table.as_ref().unwrap().transparent, Some(0));
+    s.execute("paint.stroke", json!({"points": [[5, 1], [6, 1]], "size": 3, "color": "#000000"})).unwrap();
+    let surf = doc(&s).layers[0].surface().unwrap();
+    assert_eq!(surf.rgba(5, 1), [1.0, 0.0, 0.0, 1.0], "black paints as the nearest real entry, opaque");
+}

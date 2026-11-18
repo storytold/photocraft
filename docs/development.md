@@ -748,6 +748,14 @@ The auto-appended entry goes **last**, as Photoshop appends it. The command's `t
 puts it at index 0 instead and shifts the other entries up one (the table's pixels store RGB, so
 nothing is remapped). It is ignored for System (Mac) and System (Windows), which have no free slot.
 
+That entry carries the clear pixels only: it is skipped by the nearest-colour search, so an opaque
+pixel always maps to another entry and stays opaque, even when the entry's placeholder white is
+exactly its colour (the default Forced Black and White adds a white of its own) and even when it is
+the nearest colour in the table. Painting on an Indexed document follows the same rule: a stroke in
+the transparent entry's colour maps to the nearest other entry and stays opaque. Only an explicit
+`transparent` index (Set Transparent, a loaded `.act` trailer) also makes the opaque pixels nearest
+to that entry transparent.
+
 `cargo run --release -p photocraft-engine --example indexed_color_perf -- image.png` measures
 palette construction, Floyd–Steinberg diffusion, and the complete full-resolution CPU preview
 path (proxy copy, engine command, result composition; excludes GPU upload/presentation).

@@ -40,16 +40,42 @@ impl Nearest {
                 }
             }
         } else if point.iter().all(|v| v.is_finite()) {
-            search(&self.entries, point, &mut best);
+            search(&self.entries, point, &mut best, NO_SKIP);
         }
         // Nonfinite queries against finite tree entries have only NaN/infinite distances;
         // like the original scan, none beats f32::MAX and the fallback remains index zero.
         best.1
     }
+
+    /// Like [`find`](Self::find) but never returns `exclude`, the transparent entry that only
+    /// carries clear pixels. An entry set that is nothing but `exclude` returns it.
+    #[inline]
+    pub(super) fn find_excluding(&self, point: [f32; 3], exclude: usize) -> usize {
+        let mut best = (f32::MAX, NO_SKIP);
+        if !self.tree {
+            for entry in &self.entries {
+                if entry.index != exclude {
+                    let d = distance(entry.point, point);
+                    if d < best.0 {
+                        best = (d, entry.index);
+                    }
+                }
+            }
+        } else if point.iter().all(|v| v.is_finite()) {
+            search(&self.entries, point, &mut best, exclude);
+        }
+        if best.1 == NO_SKIP { exclude } else { best.1 }
+    }
 }
 
+/// No entry is skipped (`find`); every index is below it.
+const NO_SKIP: usize = usize::MAX;
+
 #[inline]
-fn consider(entry: &Entry, point: [f32; 3], best: &mut (f32, usize)) {
+fn consider(entry: &Entry, point: [f32; 3], best: &mut (f32, usize), skip: usize) {
+    if entry.index == skip {
+        return;
+    }
     let d = distance(entry.point, point);
     // Original palette order breaks ties, independent of the tree's traversal order.
     if d < best.0 || (d == best.0 && entry.index < best.1) {
@@ -78,25 +104,25 @@ fn partition(entries: &mut [Entry]) {
     partition(right);
 }
 
-fn search(entries: &[Entry], point: [f32; 3], best: &mut (f32, usize)) {
+fn search(entries: &[Entry], point: [f32; 3], best: &mut (f32, usize), skip: usize) {
     if entries.len() <= 8 {
         for entry in entries {
-            consider(entry, point, best);
+            consider(entry, point, best, skip);
         }
         return;
     }
     let (left, rest) = entries.split_at(entries.len() / 2);
     let Some((pivot, right)) = rest.split_first() else { return };
-    consider(pivot, point, best);
+    consider(pivot, point, best, skip);
     let delta = point[pivot.axis] - pivot.point[pivot.axis];
     let (near, far) = if delta <= 0.0 { (left, right) } else { (right, left) };
     if !near.is_empty() {
-        search(near, point, best);
+        search(near, point, best, skip);
     }
     // The splitting plane is a lower bound, using the same f32 arithmetic as distance().
     // Equality must be searched as well: a lower original index may win a distance tie.
     if !far.is_empty() && delta.powi(2) <= best.0 {
-        search(far, point, best);
+        search(far, point, best, skip);
     }
 }
 
@@ -142,5 +168,50 @@ mod tests {
         points[0] = [f32::NAN; 3];
         let lookup = Nearest::new(points.iter().copied());
         assert_eq!(lookup.find([0.0; 3]), 1);
+    }
+
+    #[test]
+    fn excluding_search_matches_a_linear_oracle_that_skips_the_entry() {
+        fn linear_excluding(points: &[[f32; 3]], query: [f32; 3], exclude: usize) -> usize {
+            let mut best = (f32::MAX, usize::MAX);
+            for (index, point) in points.iter().enumerate() {
+                if index == exclude {
+                    continue;
+                }
+                let d = distance(*point, query);
+                if d < best.0 || (d == best.0 && index < best.1) {
+                    best = (d, index);
+                }
+            }
+            if best.1 == usize::MAX { exclude } else { best.1 }
+        }
+        let mut seed = 987654321u32;
+        let mut random = || {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            (seed >> 8) as f32 / 16777215.0
+        };
+        for count in [1, 2, 3, 8, 16, 17, 64, 65, 128, 256] {
+            // A quarter of the entries are exact duplicates, so ties are common.
+            let points: Vec<[f32; 3]> = (0..count).map(|_| std::array::from_fn(|_| (random() * 4.0).round() * 63.75)).collect();
+            let lookup = Nearest::new(points.iter().copied());
+            for exclude in [0, count / 2, count - 1] {
+                for _ in 0..400 {
+                    let q: [f32; 3] = std::array::from_fn(|_| (random() * 4.0).round() * 63.75);
+                    assert_eq!(lookup.find_excluding(q, exclude), linear_excluding(&points, q, exclude), "count {count}, exclude {exclude}, {q:?}");
+                }
+                for q in [[f32::NAN; 3], [f32::INFINITY; 3], [f32::MAX; 3], [0.0; 3]] {
+                    assert_eq!(lookup.find_excluding(q, exclude), linear_excluding(&points, q, exclude));
+                }
+            }
+        }
+        // A table that is nothing but the transparent entry returns it, and so does any query
+        // whose other entries are all non-finite.
+        assert_eq!(Nearest::new([[9.0; 3]]).find_excluding([0.0; 3], 0), 0);
+        assert_eq!(Nearest::new([[f32::NAN; 3], [9.0; 3]]).find_excluding([0.0; 3], 1), 1);
+        // Two identical whites: skipping the first (transparent) one picks the second.
+        let points = [[255.0, 255.0, 255.0], [255.0, 255.0, 255.0], [0.0; 3]];
+        let lookup = Nearest::new(points.iter().copied());
+        assert_eq!(lookup.find_excluding([255.0; 3], 0), 1);
+        assert_eq!(lookup.find([255.0; 3]), 0, "the plain search still ties toward the lower index");
     }
 }

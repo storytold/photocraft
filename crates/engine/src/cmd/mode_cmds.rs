@@ -500,9 +500,17 @@ fn indexed_color(s: &mut Session, p: &Value) -> Result<Value> {
             None
         };
         let w = doc.size.width as usize;
-        // `transparent: null` (a loaded .act without a trailer, or Clear Transparency) flattens
-        // clear pixels to opaque; the auto path keeps its legacy handling of them.
-        let indices = quantize::quantize(&mut px, w, &pal, dither, amount, transparent, explicit_no_transparent);
+        // An explicit entry (the command's `transparent`, a Set Transparent pick, a loaded .act
+        // trailer) also clears the opaque pixels nearest to it; the auto-appended entry carries
+        // clear pixels only, so an opaque white stays opaque. `transparent: null` (a loaded .act
+        // without a trailer, or Clear Transparency) flattens clear pixels to opaque.
+        let alpha = match (explicit_transparent, transparent, explicit_no_transparent) {
+            (Some(t), _, _) => quantize::AlphaMode::Explicit(t as usize),
+            (None, Some(t), _) => quantize::AlphaMode::Carries(t),
+            (None, None, true) => quantize::AlphaMode::Opaque,
+            (None, None, false) => quantize::AlphaMode::Keep,
+        };
+        let indices = quantize::quantize(&mut px, w, &pal, dither, amount, alpha);
         single_layer(doc, active, ColorMode::Indexed, &px, if transparent.is_some() { "Index" } else { "Background" }, transparent.is_none());
         doc.color_table = Some(ColorTable { colors: pal.clone(), transparent: transparent.map(|t| t as u8) });
         // Each pixel's index is known here: keep it for Color Table (#14342).
@@ -687,10 +695,19 @@ pub(crate) fn paint_color_table(doc: &Document, p: &Value) -> Option<ColorTable>
 pub(crate) fn table_color(table: &ColorTable, c: [f32; 4]) -> [f32; 4] {
     let mut px = [c];
     if !table.colors.is_empty() {
-        quantize::quantize(&mut px, 1, &table.colors, Dither::None, 0.0, table.transparent.map(usize::from), false);
+        quantize::quantize(&mut px, 1, &table.colors, Dither::None, 0.0, paint_alpha(table));
     }
     let [c] = px;
     c
+}
+
+/// Painting maps a colour among the table's real entries: the transparent entry only carries
+/// clear pixels, so a stroke in its colour stays opaque instead of erasing.
+fn paint_alpha(table: &ColorTable) -> quantize::AlphaMode {
+    match table.transparent {
+        Some(t) => quantize::AlphaMode::Carries(usize::from(t)),
+        None => quantize::AlphaMode::Keep,
+    }
 }
 
 /// Map the pixels of `r` that the stroke changed (they differ from `pre`) to their nearest
@@ -720,7 +737,7 @@ pub(crate) fn keep_in_color_table(table: &ColorTable, pre: &Surface, surf: &mut 
             continue;
         }
         let w = px.len();
-        quantize::quantize(&mut px, w, &table.colors, Dither::None, 0.0, table.transparent.map(usize::from), false);
+        quantize::quantize(&mut px, w, &table.colors, Dither::None, 0.0, paint_alpha(table));
         let mut mapped = changed.into_iter().zip(px).peekable();
         for (i, q) in data.chunks_exact_mut(n).enumerate() {
             if let Some((_, c)) = mapped.next_if(|(j, _)| *j == i) {

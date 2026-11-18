@@ -273,7 +273,7 @@ fn quantize_without_transparent_entry_keeps_clear_pixels() {
         [0.2, 0.2, 0.2, 0.0],  // fully transparent → left alone
         [0.3, 0.3, 0.3, 0.25], // semi-transparent → quantized, alpha kept
     ];
-    let idx = quantize(&mut px, 3, &pal, Dither::None, 1.0, None, false);
+    let idx = quantize(&mut px, 3, &pal, Dither::None, 1.0, AlphaMode::Keep);
     assert_eq!(idx, [0, 0, 0]);
     assert_eq!(px[0], [0.0, 0.0, 0.0, 1.0]);
     assert_eq!(px[1], [0.2, 0.2, 0.2, 0.0]);
@@ -282,20 +282,58 @@ fn quantize_without_transparent_entry_keeps_clear_pixels() {
 
 #[test]
 fn quantize_with_transparent_entry_makes_matching_pixels_transparent() {
-    // With an entry: clear pixels take it (stored with its colour, alpha 0), and an opaque
-    // pixel whose nearest entry is it becomes transparent too (indexed mode shows that
-    // index clear).
+    // An explicit entry (Set Transparent, a loaded .act): clear pixels take it (stored with its
+    // colour, alpha 0), and an opaque pixel whose nearest entry is it becomes transparent too
+    // (indexed mode shows that index clear).
     let pal = vec![[0, 0, 0], [255, 255, 255]];
     let mut px = vec![
         [0.4, 0.4, 0.4, 1.0], // opaque → the black entry, stays opaque
         [0.2, 0.2, 0.2, 0.0], // clear → the entry
         [1.0, 1.0, 1.0, 1.0], // opaque white → the entry (index 1) → transparent
     ];
-    let idx = quantize(&mut px, 3, &pal, Dither::None, 1.0, Some(1), false);
+    let idx = quantize(&mut px, 3, &pal, Dither::None, 1.0, AlphaMode::Explicit(1));
     assert_eq!(idx, [0, 1, 1]);
     assert_eq!(px[0], [0.0, 0.0, 0.0, 1.0]);
     assert_eq!(px[1], [1.0, 1.0, 1.0, 0.0]);
     assert_eq!(px[2], [1.0, 1.0, 1.0, 0.0]);
+}
+
+#[test]
+fn carrying_entry_never_takes_an_opaque_pixel() {
+    // The entry Indexed Color appends stores clear pixels only. Its colour is white (a
+    // duplicate of the forced white), so without the exclusion an opaque white pixel would tie
+    // between index 0 and index 1, resolve to the lower index and come out clear.
+    let pal = vec![[255, 255, 255], [255, 255, 255], [0, 0, 0]];
+    let mut px = vec![
+        [1.0, 1.0, 1.0, 1.0], // opaque white → the forced white (index 1), stays opaque
+        [1.0, 1.0, 1.0, 0.0], // clear → the carrying entry (index 0)
+        [0.0, 0.0, 0.0, 1.0], // opaque black → index 2
+    ];
+    let idx = quantize(&mut px, 3, &pal, Dither::None, 1.0, AlphaMode::Carries(0));
+    assert_eq!(idx, [1, 0, 2]);
+    assert_eq!(px[0], [1.0, 1.0, 1.0, 1.0]);
+    assert_eq!(px[1], [1.0, 1.0, 1.0, 0.0]);
+    assert_eq!(px[2], [0.0, 0.0, 0.0, 1.0]);
+}
+
+#[test]
+fn carrying_entry_does_not_clear_near_colours() {
+    // A computed palette with no entry near white, plus the appended white last: a near-white
+    // opaque pixel maps to the nearest real entry instead of the carrying one.
+    let pal = vec![[0, 0, 0], [200, 200, 200], [255, 255, 255]];
+    let mut px = vec![[0.95, 0.95, 0.95, 1.0], [1.0, 1.0, 1.0, 0.0]];
+    let idx = quantize(&mut px, 2, &pal, Dither::None, 1.0, AlphaMode::Carries(2));
+    assert_eq!(idx, [1, 2]);
+    assert_eq!(px[0][3], 1.0);
+    assert_eq!(&px[0][..3], &[200.0 / 255.0; 3]);
+    assert_eq!(px[1][3], 0.0);
+    // Under every dither: the carrying entry never wins an opaque pixel.
+    for dither in [Dither::Diffusion, Dither::Pattern, Dither::Noise] {
+        let mut px = vec![[1.0, 1.0, 1.0, 1.0]; 12];
+        let idx = quantize(&mut px, 4, &pal, dither, 1.0, AlphaMode::Carries(2));
+        assert!(idx.iter().all(|&i| i != 2), "{dither:?}");
+        assert!(px.iter().all(|p| p[3] == 1.0), "{dither:?}");
+    }
 }
 
 #[test]
@@ -307,7 +345,7 @@ fn quantize_opaque_clear_flattens_clear_pixels() {
         [0.2, 0.2, 0.2, 0.0],  // clear → quantized opaque
         [0.3, 0.3, 0.3, 0.25], // semi-transparent → quantized opaque
     ];
-    let idx = quantize(&mut px, 3, &pal, Dither::None, 1.0, None, true);
+    let idx = quantize(&mut px, 3, &pal, Dither::None, 1.0, AlphaMode::Opaque);
     assert_eq!(idx, [0, 0, 0]);
     assert_eq!(px[0], [0.0, 0.0, 0.0, 1.0]);
     assert_eq!(px[1], [0.0, 0.0, 0.0, 1.0]);
@@ -362,7 +400,7 @@ fn indexed_diffusion_24mp_release_comparison() {
                 let indices = quantize_with(&mut linear, 6000, &pal, Dither::Diffusion, 0.75, AlphaMode::Keep, |c| linear_rgb_nearest(&pal, c));
                 before = Some((start.elapsed().as_secs_f64() * 1000.0, indices));
             } else {
-                let indices = quantize(&mut accelerated, 6000, &pal, Dither::Diffusion, 0.75, None, false);
+                let indices = quantize(&mut accelerated, 6000, &pal, Dither::Diffusion, 0.75, AlphaMode::Keep);
                 after = Some((start.elapsed().as_secs_f64() * 1000.0, indices));
             }
         }
@@ -401,11 +439,11 @@ fn all_dithers_match_the_original_linear_palette_search_exactly() {
             for transparent in [None, Some(1)] {
                 let mut actual = source.clone();
                 let mut expected = source.clone();
-                let indices = quantize(&mut actual, 93, &pal, dither, 0.75, transparent, false);
                 let mode = match transparent {
                     None => AlphaMode::Keep,
-                    Some(t) => AlphaMode::Transparent(t),
+                    Some(t) => AlphaMode::Explicit(t),
                 };
+                let indices = quantize(&mut actual, 93, &pal, dither, 0.75, mode);
                 let old_indices = quantize_with(&mut expected, 93, &pal, dither, 0.75, mode, |c| linear_rgb_nearest(&pal, c));
                 assert_eq!(indices, old_indices, "{count} {dither:?} {transparent:?}");
                 assert_eq!(actual, expected, "{count} {dither:?} {transparent:?}");
@@ -425,7 +463,7 @@ fn quantize_maps_to_palette_with_each_dither() {
                 p
             })
             .collect();
-        let idx = quantize(&mut px, 8, &pal, d, 1.0, None, false);
+        let idx = quantize(&mut px, 8, &pal, d, 1.0, AlphaMode::Keep);
         assert!(px.iter().all(|p| p[0] == 0.0 || p[0] == 1.0), "{d:?}");
         assert_eq!(idx.len(), 64);
         // Mean brightness is preserved by dithering (not by plain thresholding).
@@ -435,7 +473,7 @@ fn quantize_maps_to_palette_with_each_dither() {
         }
     }
     let mut px = vec![[1.0, 1.0, 1.0, 0.2]];
-    let idx = quantize(&mut px, 1, &pal, Dither::None, 1.0, Some(1), false);
+    let idx = quantize(&mut px, 1, &pal, Dither::None, 1.0, AlphaMode::Explicit(1));
     assert_eq!((idx[0], px[0][3]), (1, 0.0));
 }
 
