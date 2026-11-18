@@ -866,6 +866,42 @@ fn map_polynomial_follows_the_linearization_table() {
     assert_eq!(s.polynomials.len(), 1);
 }
 
+/// With an OpcodeList1 present, the shared decoder leaves the LinearizationTable to its caller.
+/// PhotoCraft still applies the table. The list holds an identity polynomial, so the decoded
+/// samples are the table's values whichever of the two runs first.
+#[test]
+fn an_opcode_list1_does_not_leave_the_linearization_table_unapplied() {
+    let (w, h) = (16, 8);
+    let data = noise(w * h, 12);
+    let table: Vec<u16> = (0..4096u16).map(|i| i * 2).collect();
+    let mut spec = DngSpec::cfa(w, h, data.clone());
+    spec.bits = 12;
+    spec.white = 8190;
+    spec.linearization = Some(table.clone());
+    spec.raw_extra = vec![(51008, Val::Undefined(testgen::map_polynomial_opcode_list([0, 0, h as u32, w as u32], &[(0, vec![0.0, 1.0])])))];
+    let s = sensor(&spec.build());
+    assert!(s.linearization.is_none());
+    assert_eq!(s.data, data.iter().map(|&value| table[usize::from(value)]).collect::<Vec<_>>());
+}
+
+/// An OpcodeList1 MapPolynomial is applied in development, as an OpcodeList2 one is, also when the
+/// file has a LinearizationTable. The table is the identity and the samples are black or white,
+/// which `1 - x` swaps exactly, so the result does not depend on which of the two runs first; a
+/// polynomial applied twice would give the samples back unchanged.
+#[test]
+fn an_opcode_list1_map_polynomial_reaches_development() {
+    let (w, h) = (16, 8);
+    let data: Vec<u16> = (0..w * h).map(|i| if i % 3 == 0 { 4095 } else { 0 }).collect();
+    let mut spec = DngSpec::cfa(w, h, data.clone());
+    spec.bits = 12;
+    spec.white = 4095;
+    spec.linearization = Some((0..4096u16).collect());
+    spec.raw_extra = vec![(51008, Val::Undefined(testgen::map_polynomial_opcode_list([0, 0, h as u32, w as u32], &[(0, vec![1.0, -1.0])])))];
+    let s = sensor(&spec.build());
+    let want: Vec<f32> = data.iter().map(|&v| if v == 0 { 1.0 } else { 0.0 }).collect();
+    assert_polynomial_development(&s, want);
+}
+
 /// A LinearizationTable maps integer samples: floating-point data ignores one.
 #[test]
 fn floating_point_raw_data_ignores_a_linearization_table() {
