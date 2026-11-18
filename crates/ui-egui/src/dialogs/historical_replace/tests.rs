@@ -121,7 +121,7 @@ fn tick_probe(app: &mut PhotocraftApp) {
 }
 
 fn cancel_choice(app: &mut PhotocraftApp) {
-    let id = dialogs(&app).into_iter().find(|dialog| owns(&dialog.fields)).unwrap().id;
+    let id = dialogs(app).into_iter().find(|dialog| owns(&dialog.fields)).unwrap().id;
     cancel(app, id).unwrap();
 }
 
