@@ -59,16 +59,15 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let mut taken = UniqueNames::new(s.actions.list.iter().map(|a| a.name.clone()));
     let mut names = Vec::with_capacity(imp.actions.len());
-    // The file's name of each action that had to be renamed, and its new name.
-    let mut renamed: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    // Bind a caption to its first row in the file, even if that row kept its name.
+    // Otherwise renaming a later duplicate would redirect calls to that duplicate.
+    let mut first: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let mut steps = 0usize;
     let mut added = Vec::with_capacity(imp.actions.len());
     for mut a in imp.actions {
         let name = taken.claim(&a.name);
-        if name != a.name {
-            renamed.entry(a.name.clone()).or_insert_with(|| name.clone());
-        }
-        a.name = name.clone();
+        let original = std::mem::replace(&mut a.name, name.clone());
+        first.entry(original).or_insert_with(|| name.clone());
         steps = steps.saturating_add(a.steps.len());
         names.push(name);
         added.push(a);
@@ -92,7 +91,7 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
                 _ => &[],
             };
             for key in keys {
-                if let Some(to) = params.get(*key).and_then(Value::as_str).and_then(|n| renamed.get(n)) {
+                if let Some(to) = params.get(*key).and_then(Value::as_str).and_then(|n| first.get(n)) {
                     params[*key] = json!(to);
                 }
             }

@@ -653,6 +653,31 @@ fn load_many_duplicate_names_get_sequential_suffixes() {
 }
 
 #[test]
+fn load_calls_the_first_recorded_action_with_a_duplicate_name() {
+    let resize = |width| Action::new("Resize", vec![("image.canvasSize".into(), json!({"width":width,"height":32}))]);
+    let first = resize(42);
+    let duplicate = resize(53);
+    let play = Action::new("Play", vec![("actions.play".into(), json!({"action":"Resize","set":"File"}))]);
+    let conditional = Action::new("Branch", vec![("actions.conditional".into(), json!({"if":"square","then":"Resize"}))]);
+    let (bytes, _) = export("File", &[&first, &duplicate, &play, &conditional], &[], false).unwrap();
+
+    for conflict in [false, true] {
+        let mut s = Session::new();
+        if conflict {
+            s.actions.list.push(resize(64));
+        }
+        s.execute("actions.load", json!({"data":b64(&bytes)})).unwrap();
+        s.execute("file.new", json!({"width":32,"height":32,"background":"white"})).unwrap();
+        for caller in ["Play", "Branch"] {
+            s.execute("image.canvasSize", json!({"width":32,"height":32})).unwrap();
+            let played = s.execute("actions.play", json!({"action":caller})).unwrap();
+            assert_eq!(played["ran"], 1, "{played}");
+            assert_eq!(s.active().unwrap().doc.size.width, 42, "{caller} must call the first action from the file, even when it is renamed");
+        }
+    }
+}
+
+#[test]
 fn save_round_trips_through_photoshop_events() {
     let mut s = Session::new();
     let bytes = atn::write(&sample()).unwrap();
