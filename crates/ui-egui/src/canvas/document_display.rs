@@ -335,6 +335,8 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, 
         // What the controls report for the host's pass.
         let mut body_shown = tools::BodyShown::default();
         let live = canvas_controls(app, ui, body.rect, host, &space, &mut turned, &mut body_shown);
+        // The Free Transform preview joins the picture slot after the document, which is prepared after the tools.
+        let transform_picture = std::mem::take(&mut body_shown.transform_picture);
         // The body can run more than once in a frame; a report from any of its runs counts.
         if let Some(context) = body_shown.crop.as_mut().and_then(craft::draw::ui::CropShown::take_context) {
             overlay_context = Some(context);
@@ -414,6 +416,8 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, 
             };
             display.show_at(ui, body.rect);
         }
+        // The moving pixels over the document, which hides the layer they come from, and under the controls.
+        space.paint_picture(ctx, transform_picture);
         space.paint_picture(ctx, clipping);
         // The grid is drawn over the picture.
         if app.ui.view.shows(app.ui.view.show.pixel_grid) {
@@ -528,6 +532,7 @@ fn canvas_controls(
     let session = if primary { crate::transform_tool::show_in_canvas(app, ui, rect, now) } else { crate::transform_tool::SessionShown::default() };
     let session_box_shown = session.shown;
     reported.transform_snapped = session.snapped;
+    reported.transform_picture = session.picture;
     crate::cam_transform::show(app, ui, rect);
     super::transform_controls::show(app, ui, rect, session_box_shown);
     crate::move_box::show(app, ui, rect);
