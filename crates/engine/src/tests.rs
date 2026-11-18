@@ -1710,6 +1710,20 @@ fn documents_are_inspected_and_activated_by_their_serial() {
     assert!(s.execute("document.inspect", json!({"serial": 999})).is_err());
 }
 
+/// A reader that needs no History rows (scripts read a document many times) can leave them out.
+#[test]
+fn document_inspect_can_leave_out_the_history() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 2, "height": 2})).unwrap();
+    let full = s.execute("document.inspect", json!({})).unwrap();
+    let lite = s.execute("document.inspect", json!({"history": false})).unwrap();
+    for k in ["history", "historyRedo", "historyIds"] {
+        assert!(full.get(k).is_some() && lite.get(k).is_none(), "{k}");
+    }
+    assert_eq!(lite["name"], full["name"]);
+    assert!(s.execute("document.inspect", json!({"history": "no"})).is_err());
+}
+
 /// #7103: Photoshop's Select Document by offset (previous is -1, next +1) walks opening order
 /// from the active document, wrapping at both ends. Bad params preserve the active document.
 #[test]

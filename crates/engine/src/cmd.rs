@@ -1119,22 +1119,32 @@ fn build() -> Vec<CommandSpec> {
             label: "Inspect Document",
             menu: &[],
             shortcut: None,
-            params: r##"{"document":index?} or {"serial":n} (the document's never-reused serial from session.inspect)"##,
+            params: r##"{"document":index?} or {"serial":n} (the document's never-reused serial from session.inspect); "history":false leaves out the History panel's rows"##,
             enabled: has_doc,
             run: |s, p| {
-                if let Some(serial) = p.get("serial").filter(|v| !v.is_null()) {
-                    let n = serial.as_u64().ok_or_else(|| bad("document.inspect", "`serial` must be a document serial"))?;
-                    let d = s.documents().iter().find(|d| d.serial == n).ok_or_else(|| EngineError::Other(format!("no open document has serial {n}")))?;
-                    return Ok(inspect::document(d));
-                }
-                let d = match p.get("document") {
-                    Some(v) => {
-                        let i = v.as_u64().and_then(|v| usize::try_from(v).ok()).ok_or_else(|| bad("document.inspect", "`document` must be an index"))?;
-                        s.documents().get(i).ok_or_else(|| EngineError::Other(format!("no document at index {i}")))?
-                    }
-                    None => s.active().ok_or(EngineError::NoDocument)?,
+                let history = match p.get("history").filter(|v| !v.is_null()) {
+                    Some(v) => v.as_bool().ok_or_else(|| bad("document.inspect", "`history` must be true or false"))?,
+                    None => true,
                 };
-                Ok(inspect::document(d))
+                let d = if let Some(serial) = p.get("serial").filter(|v| !v.is_null()) {
+                    let n = serial.as_u64().ok_or_else(|| bad("document.inspect", "`serial` must be a document serial"))?;
+                    s.documents().iter().find(|d| d.serial == n).ok_or_else(|| EngineError::Other(format!("no open document has serial {n}")))?
+                } else {
+                    match p.get("document") {
+                        Some(v) => {
+                            let i = v.as_u64().and_then(|v| usize::try_from(v).ok()).ok_or_else(|| bad("document.inspect", "`document` must be an index"))?;
+                            s.documents().get(i).ok_or_else(|| EngineError::Other(format!("no document at index {i}")))?
+                        }
+                        None => s.active().ok_or(EngineError::NoDocument)?,
+                    }
+                };
+                let mut v = inspect::document(d);
+                if !history && let Some(m) = v.as_object_mut() {
+                    for k in ["history", "historyRedo", "historyIds"] {
+                        m.remove(k);
+                    }
+                }
+                Ok(v)
             },
             journal: false,
         },
