@@ -9,7 +9,8 @@
 //! No preset file or application resource was read. The 17 inputs the tests check are listed in
 //! `MEASURED`; the rest of the ramp agrees within one level.
 
-use serde_json::{Value, json};
+use craft::imaging::ui::adjust::{CurvesMode, ToneChannel, ToneChannels, ToneCurves, ToneSpace};
+use craft::imaging::ui::curve::Curve;
 
 /// A preset: its id (also the menu value), label, the composite curve and, for colour presets,
 /// the red, green and blue curves (RGB documents only). Points are 8-bit `[input, output]`.
@@ -114,7 +115,12 @@ pub const PRESETS: &[CurvesPreset] = &[
     },
 ];
 
-const CHANNEL_KEYS: [&str; 3] = ["red", "green", "blue"];
+/// Whether a Curves editor over `channels` offers the Preset menu: the presets are RGB curves, so an
+/// RGB document's channels or a grayscale document's one Gray curve, not CMYK, Lab, an isolated
+/// channel or a colour set.
+pub fn offered(channels: &ToneChannels) -> bool {
+    channels.is_gray() || (!channels.is_isolated() && matches!(channels.as_slice().first(), Some(ToneChannel::Composite(ToneSpace::Rgb))))
+}
 
 /// The presets offered for a document: colour presets need RGB channels.
 pub fn available(gray: bool) -> impl Iterator<Item = &'static CurvesPreset> {
@@ -125,35 +131,36 @@ pub fn find(id: &str) -> Option<&'static CurvesPreset> {
     PRESETS.iter().find(|p| p.id == id)
 }
 
-fn points(curve: &[[f32; 2]]) -> Value {
-    json!(curve.iter().map(|q| [q[0], q[1]]).collect::<Vec<_>>())
+/// The points `preset` gives `channel`: the colour presets' own red, green and blue curves, else the
+/// composite (the RGB composite, a grayscale document's Gray), straight where the preset leaves a
+/// channel alone.
+fn points_for(preset: &CurvesPreset, channel: &ToneChannel) -> &'static [[f32; 2]] {
+    let colour = |i: usize| preset.channels.map_or(IDENTITY, |c| c[i]);
+    match channel {
+        ToneChannel::Red => colour(0),
+        ToneChannel::Green => colour(1),
+        ToneChannel::Blue => colour(2),
+        _ => preset.composite,
+    }
 }
 
-/// Sets the Curves values to `preset`: point curves (the pencil off), the composite and, in colour,
-/// each channel's curve (straight where the preset leaves a channel alone).
-pub fn apply(v: &mut Value, preset: &CurvesPreset, gray: bool) {
-    v["pencil"] = json!(false);
-    v["points"] = points(preset.composite);
-    if !gray {
-        for (i, key) in CHANNEL_KEYS.into_iter().enumerate() {
-            v[key] = points(preset.channels.map_or(IDENTITY, |c| c[i]));
-        }
-    }
+/// The Curves value `preset` sets over `channels`: point curves (the pencil off), one per channel.
+pub fn curves(preset: &CurvesPreset, channels: &ToneChannels) -> ToneCurves {
+    let curves = channels.as_slice().iter().map(|c| Curve::smooth(points_for(preset, c).to_vec())).collect();
+    ToneCurves::new(curves, CurvesMode::Points)
 }
 
 fn same(a: &[[f32; 2]], b: &[[f32; 2]]) -> bool {
     a.len() == b.len() && a.iter().zip(b).all(|(p, q)| (p[0] - q[0]).abs() < 0.01 && (p[1] - q[1]).abs() < 0.01)
 }
 
-/// The preset the Curves values are, or `None` (Custom) once edited away from every preset.
-pub fn matching(v: &Value, gray: bool) -> Option<&'static CurvesPreset> {
-    if v.get("pencil").and_then(Value::as_bool).unwrap_or(false) {
+/// The preset `value` is over `channels`, or `None` (Custom) once edited away from every preset.
+pub fn matching(value: &ToneCurves, channels: &ToneChannels) -> Option<&'static CurvesPreset> {
+    if value.mode != CurvesMode::Points || value.curves.len() != channels.len() {
         return None;
     }
-    let curve = |key: &str| crate::adjust_editors::read_curve(v, key);
-    available(gray).find(|p| {
-        same(&curve("points"), p.composite)
-            && (gray || CHANNEL_KEYS.iter().enumerate().all(|(i, key)| same(&curve(key), p.channels.map_or(IDENTITY, |c| c[i]))))
+    available(channels.is_gray()).find(|p| {
+        channels.as_slice().iter().zip(&value.curves).all(|(c, curve)| matches!(curve, Curve::Points { points, .. } if same(points, points_for(p, c))))
     })
 }
 
@@ -207,28 +214,31 @@ mod tests {
             }
         }
         for p in PRESETS {
-            let gray = p.channels.is_none();
-            for g in [false, true].into_iter().filter(|g| !g || gray) {
-                let mut v = json!({"points": [[0, 0], [100, 140], [255, 255]], "pencil": true});
-                apply(&mut v, p, g);
-                assert_eq!(matching(&v, g).map(|m| m.id), Some(p.id), "{} (gray {g})", p.id);
+            for gray in [false, true].into_iter().filter(|g| !g || p.channels.is_none()) {
+                let channels = ToneChannels::of(ToneSpace::Rgb, gray);
+                assert_eq!(matching(&curves(p, &channels), &channels).map(|m| m.id), Some(p.id), "{} (gray {gray})", p.id);
             }
         }
         assert_eq!(MEASURED.len(), PRESETS.len() - 1 + 4, "every preset but Default, three channels each for the two colour ones");
     }
 
-    /// A hand edit (or a drawn curve) is Custom; a document in Gray is offered no colour preset.
+    /// A hand edit (or a drawn curve) is Custom; a document in Gray is offered no colour preset; CMYK,
+    /// Lab and an isolated channel have no Preset menu.
     #[test]
     fn edits_are_custom_and_gray_documents_get_tone_presets_only() {
-        let mut v = json!({});
-        apply(&mut v, find("strongContrast").unwrap(), false);
-        v["points"][1] = json!([64, 40]);
-        assert!(matching(&v, false).is_none());
-        apply(&mut v, find("darker").unwrap(), false);
-        v["pencil"] = json!(true);
-        assert!(matching(&v, false).is_none(), "a drawn curve is Custom");
+        let rgb = ToneChannels::of(ToneSpace::Rgb, false);
+        let mut v = curves(find("strongContrast").unwrap(), &rgb);
+        v.curves[0] = Curve::smooth(vec![[0.0, 0.0], [64.0, 40.0], [255.0, 255.0]]);
+        assert!(matching(&v, &rgb).is_none());
+        let mut v = curves(find("darker").unwrap(), &rgb);
+        v.mode = CurvesMode::Pencil;
+        assert!(matching(&v, &rgb).is_none(), "a drawn curve is Custom");
         assert!(available(true).all(|p| p.channels.is_none()));
         assert_eq!(available(false).count(), PRESETS.len());
-        assert_eq!(matching(&json!({}), false).map(|p| p.id), Some("default"), "a new Curves layer is Default");
+        let identity = ToneCurves::new(vec![Curve::smooth(IDENTITY.to_vec()); 4], CurvesMode::Points);
+        assert_eq!(matching(&identity, &rgb).map(|p| p.id), Some("default"), "a new Curves layer is Default");
+        assert!(offered(&rgb) && offered(&ToneChannels::of(ToneSpace::Rgb, true)));
+        assert!(!offered(&ToneChannels::of(ToneSpace::Cmyk, false)) && !offered(&ToneChannels::of(ToneSpace::Lab, false)));
+        assert!(!offered(&ToneChannels::isolated(ToneChannel::Red)));
     }
 }

@@ -6,8 +6,8 @@ use super::{AtnEvent, AtnItem, EngineError, Result, Session, Value, bad, json};
 
 /// Find a supported, unambiguous event for a menu step with no settings.
 fn menu_event(id: &str) -> Option<&'static Event> {
-    // Camera Raw's ATN mapping requires a verified settings descriptor (#8714).
-    if id == crate::lens_cmds::RAW || (id != "image.imageSize" && !id.starts_with("filter.")) {
+    // Camera Raw (#8714) and recorded Displace require verified settings descriptors.
+    if matches!(id, crate::lens_cmds::RAW | "filter.distort.displace") || (id != "image.imageSize" && !id.starts_with("filter.")) {
         return None;
     }
     EVENTS.iter().find(|e| {

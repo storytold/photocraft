@@ -1,175 +1,290 @@
-//! Filter › Filter Gallery…: a full-window dialog like Photoshop's: a big preview on the left,
-//! the category folders with thumbnails in the middle, and on the right OK / Cancel, the
-//! selected effect's filter and settings, and the effect-layer stack (new, delete, reorder,
-//! show/hide). The stack is applied bottom to top.
+//! Filter › Filter Gallery…: the framework's Filter Gallery workspace on the app's dialog host.
 //!
-//! The preview shows what OK applies at the preview's zoom, like Photoshop's: the stack runs at
-//! full resolution on the visible part of the layer (plus the filters' reach), and is then
-//! averaged down to the zoom (#2502). On the desktop it renders off the UI thread with a progress
-//! bar, so a 24 MP layer at Fit in View never freezes the window. OK runs
-//! `filter.filterGallery {effects:[...]}`, one history step (a smart filter on smart objects).
-//! Everything is drivable over the control channel with `filter.filterGallery {"ui": {...}}`
-//! while the dialog is open.
+//! The workspace owns the layout, the effect-layer stack, its history and the zoom. This module
+//! gives it what only the app knows: the filter catalog ([`PcCatalog`]), the preview and
+//! thumbnail renderers ([`PcGallerySource`]) and what OK runs ([`take`]). The preview shows what
+//! OK applies at the preview's zoom: the stack runs at full resolution on the visible part of
+//! the layer (plus the filters' reach), and is then averaged down to the zoom (#2502). OK runs
+//! `filter.filterGallery {effects:[...]}`, one history step (`layer.smartFilter.setParams` for a
+//! smart filter on a smart object). Automation drives the open workspace through
+//! `control::dialogs::workspace_ui`.
 
-use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use egui::{Align2, Color32, FontId, Rect as ERect, Sense, Stroke, TextureHandle, pos2, vec2};
+use craft::behavior::PixelSize;
+use craft::imaging::ui::filter_gallery::{
+    EffectLayer, FilterCatalog, FilterCategory, FilterGalleryEvent, FilterGalleryOpen, FilterGallerySession, FilterGallerySource, FilterGalleryWorkspace,
+    GalleryFilter as CatalogFilter, GalleryThumb,
+};
+use craft::imaging::ui::wide_angle::PreviewDone;
+use craft::ui::canvas::{PixelRect, RasterSource};
+use craft::ui::dialog::HostedWorkspace;
+use craft::ui::dialog::{DialogId, DialogResult};
+use craft::ui::patterns::form_dialogs::{Param, ParamKind};
+use craft::ui::primitives::textures::{Revision, ThumbRender, ThumbRequest, ThumbSource};
+use craft::ui::runtime::pending::Job;
+use egui::Color32;
 use photocraft_algo::{FilterParams, GALLERY_CATEGORIES, GalleryFilter};
 use photocraft_doc::{DocId, LayerId};
 use photocraft_geom::Rect;
 use photocraft_raster::{Interrupt, Surface};
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
-use crate::edit_history::{EditHistory, Step};
-use crate::filter_dialog::{Kind, parse_spec};
-use crate::theme::Tokens;
-use crate::widgets;
 
-const MID_W: f32 = 300.0;
-const RIGHT_W: f32 = 290.0;
 const THUMB: [usize; 2] = [80, 56];
+const KEY: &str = "filter.filterGallery";
 
-/// One effect layer of the stack.
-#[derive(Clone, Debug, PartialEq)]
-pub struct EffectLayer {
-    pub filter: GalleryFilter,
-    pub params: Map<String, Value>,
-    pub visible: bool,
+/// A picture a job writes and the workspace reads as a [`RasterSource`]. Clones share one picture.
+#[derive(Clone)]
+pub(crate) struct SharedPicture(Arc<PictureInner>);
+
+struct PictureInner {
+    size: PixelSize,
+    state: Mutex<PictureState>,
+    revision: AtomicU64,
 }
 
-impl EffectLayer {
-    fn new(filter: GalleryFilter) -> Self {
-        EffectLayer { filter, params: default_params(filter), visible: true }
-    }
-    fn to_json(&self) -> Value {
-        json!({"filter": self.filter.key(), "params": self.params, "visible": self.visible})
-    }
+/// The pixels last written: `image` shows the document rectangle starting at `origin`, one texel per `factor` pixels.
+struct PictureState {
+    image: egui::ColorImage,
+    factor: u32,
+    origin: [i32; 2],
 }
 
-/// The filter's defaults in command-param form (choices by name).
-fn default_params(f: GalleryFilter) -> Map<String, Value> {
-    let mut m = Map::new();
-    for p in parse_spec(f.params_doc()) {
-        let v = match p.kind {
-            Kind::Range { default, .. } => json!(default),
-            Kind::Choice { options, default } => {
-                let initial = default.as_deref().or_else(|| options.first().map(String::as_str)).unwrap_or("");
-                json!(initial)
-            }
-            Kind::Bool(b) => json!(b),
-            _ => continue,
-        };
-        m.insert(p.key, v);
-    }
-    m
-}
-
-pub struct GalleryDialog {
-    /// Document this dialog belongs to (#5115).
-    pub document: DocId,
-    pub layer: LayerId,
-    layer_name: String,
-    canvas: Rect,
-    src: Surface,
-    target: Value,
-    /// Apply order: index 0 runs first (shown at the bottom of the list).
-    pub effects: Vec<EffectLayer>,
-    pub selected: usize,
-    open: [bool; 6],
-    foreground: [f32; 4],
-    background: [f32; 4],
-    /// Screen px per document px (0 = fit) and the view centre (document px).
-    pub zoom: f32,
-    /// The zoom Fit in View showed last (1 before the first frame).
-    fit: f32,
-    center: [f32; 2],
-    tex: Option<TextureHandle>,
-    /// The key of the preview in `tex` and the document rect it covers.
-    shown: Option<(u64, Rect)>,
-    /// The preview rendering off the UI thread (desktop), and the latest wanted key with when it
-    /// was first wanted (ms), to cancel a stale render once the settings settle.
-    #[cfg(not(target_arch = "wasm32"))]
-    job: Option<PreviewJob>,
-    latest: Option<(u64, f64)>,
-    /// A key whose render failed: not retried until the settings or view change.
-    failed: Option<u64>,
-    thumb_src: Surface,
-    thumbs: Vec<Option<TextureHandle>>,
-    pub preview_ms: f64,
-    /// Editing smart filter `index` of the layer: OK updates it instead of adding a filter.
-    pub smart_filter: Option<usize>,
-    history: EditHistory<Vec<EffectLayer>>,
-}
-
-impl GalleryDialog {
-    pub fn describe(&self) -> Value {
-        json!({
-            "document": self.document.0,
-            "layer": self.layer.0,
-            "effects": self.effects.iter().map(EffectLayer::to_json).collect::<Vec<_>>(),
-            "selected": self.selected,
-            "zoom": if self.zoom > 0.0 { json!(self.zoom) } else { json!("fit") },
-            "previewMs": self.preview_ms,
-            "rendering": self.rendering().is_some(),
-            "smartFilter": self.smart_filter,
-        })
+impl SharedPicture {
+    /// An empty picture of the document's `size`.
+    pub(crate) fn new(size: PixelSize) -> Self {
+        let state = PictureState { image: egui::ColorImage::new([0, 0], Vec::new()), factor: 1, origin: [0, 0] };
+        SharedPicture(Arc::new(PictureInner { size, state: Mutex::new(state), revision: AtomicU64::new(0) }))
     }
 
-    /// The command params for the current stack.
-    pub fn params(&self) -> Value {
-        let p =
-            json!({"effects": self.effects.iter().map(EffectLayer::to_json).collect::<Vec<_>>(), "foreground": self.foreground, "background": self.background});
-        crate::distort_ui::with_filter_target(p, &self.target)
-    }
-
-    /// The progress (`0.0..=1.0`) of a preview still rendering.
-    fn rendering(&self) -> Option<f32> {
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(j) = &self.job {
-            return Some(j.ctl.fraction());
+    /// Replaces the picture: `image` covers the document pixels from `origin`, `factor` pixels per texel.
+    pub(crate) fn replace(&self, image: egui::ColorImage, factor: u32, origin: [i32; 2]) {
+        if let Ok(mut state) = self.0.state.lock() {
+            *state = PictureState { image, factor: factor.max(1), origin };
         }
+        self.0.revision.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+impl RasterSource for SharedPicture {
+    fn size(&self) -> PixelSize {
+        self.0.size
+    }
+
+    fn revision(&self) -> Revision {
+        Revision::new(self.0.revision.load(Ordering::Acquire))
+    }
+
+    /// A new picture replaces everything, so the display reads it all.
+    fn damage(&self, _since: Revision) -> Option<PixelRect> {
         None
     }
 
-    fn cur(&mut self) -> &mut EffectLayer {
-        let i = self.selected.min(self.effects.len() - 1);
-        &mut self.effects[i]
-    }
-
-    fn set_filter(&mut self, f: GalleryFilter) {
-        let e = self.cur();
-        if e.filter != f {
-            *e = EffectLayer { visible: e.visible, ..EffectLayer::new(f) };
+    fn read(&self, region: PixelRect, factor: u32, out: &mut egui::ColorImage) {
+        let Ok(state) = self.0.state.lock() else { return };
+        let [ow, oh] = out.size;
+        let [iw, ih] = state.image.size;
+        let (sf, factor) = (i64::from(state.factor), i64::from(factor.max(1)));
+        for y in 0..oh {
+            let sy = (i64::from(region.y0) + y as i64 * factor - i64::from(state.origin[1])).div_euclid(sf);
+            for x in 0..ow {
+                let sx = (i64::from(region.x0) + x as i64 * factor - i64::from(state.origin[0])).div_euclid(sf);
+                let inside = sx >= 0 && sy >= 0 && (sx as usize) < iw && (sy as usize) < ih;
+                out.pixels[y * ow + x] = if inside { state.image.pixels[sy as usize * iw + sx as usize] } else { Color32::TRANSPARENT };
+            }
         }
     }
+}
 
-    fn add(&mut self) {
-        // Like Photoshop: the new effect layer starts as a copy of the selected one, above it.
-        let e = self.cur().clone();
-        self.selected = (self.selected + 1).min(self.effects.len());
-        self.effects.insert(self.selected, e);
+/// The hosted Filter Gallery dialog.
+pub(crate) type Hosted = HostedWorkspace<FilterGalleryWorkspace>;
+
+/// The engine's gallery filters as the workspace's catalog.
+pub(crate) struct PcCatalog;
+
+impl FilterCatalog for PcCatalog {
+    fn categories(&self) -> Vec<FilterCategory> {
+        GALLERY_CATEGORIES
+            .iter()
+            .map(|cat| {
+                let keys = GalleryFilter::ALL.iter().filter(|f| f.category() == *cat).map(|f| f.key().to_string()).collect();
+                FilterCategory::new(*cat, tl!(*cat).to_string(), keys)
+            })
+            .collect()
     }
 
-    fn delete(&mut self) {
-        if self.effects.len() > 1 {
-            self.effects.remove(self.selected.min(self.effects.len() - 1));
-            self.selected = self.selected.saturating_sub(1).min(self.effects.len() - 1);
+    fn filter(&self, key: &str) -> Option<CatalogFilter> {
+        let f = GalleryFilter::from_key(key)?;
+        let mut params = Param::parse_list(f.params_doc());
+        // The registry notation leaves colour values as `json`, which the parser drops; the effect's own colour is a
+        // swatch row (the foreground and background are the session's, set by `uses_colors`).
+        if f.params_doc().contains("\"glowColor\":json") {
+            params.push(Param::new("glowColor", tl!("Glow Color").to_string(), ParamKind::color(None)));
         }
+        Some(CatalogFilter::new(f.key(), tl!(f.name()).to_string(), f.category(), params).uses_colors(f.uses_colours()))
+    }
+}
+
+/// The layer under the effects: the pixels the preview and thumbnails render from, and the
+/// picture the render job writes.
+pub(crate) struct PcGallerySource {
+    src: Arc<Surface>,
+    canvas: Rect,
+    target: Value,
+    foreground: [f32; 4],
+    background: [f32; 4],
+    /// The middle of the layer, about 4× the thumbnail size, sampled down to the thumbnail size.
+    thumb_src: Surface,
+    catalog: PcCatalog,
+    preview: SharedPicture,
+}
+
+impl PcGallerySource {
+    fn new(src: Surface, canvas: Rect, target: Value, colours: [[f32; 4]; 2]) -> Self {
+        let cb = src.content_bounds().intersect(&canvas);
+        let cb = if cb.is_empty() { canvas } else { cb };
+        let k = ((cb.width() as usize / (THUMB[0] * 4)).min(cb.height() as usize / (THUMB[1] * 4))).max(1) as u32;
+        let (tw, th) = (THUMB[0] as i32 * k as i32, THUMB[1] as i32 * k as i32);
+        let (cx, cy) = ((cb.x0 + cb.x1) / 2, (cb.y0 + cb.y1) / 2);
+        let thumb_src = sample(&src, Rect::new(cx - tw / 2, cy - th / 2, cx - tw / 2 + tw, cy - th / 2 + th), k);
+        let preview = SharedPicture::new(PixelSize::new(canvas.width().max(1), canvas.height().max(1)));
+        PcGallerySource { src: Arc::new(src), canvas, target, foreground: colours[0], background: colours[1], thumb_src, catalog: PcCatalog, preview }
     }
 
-    pub(crate) fn step(&mut self, step: Step) {
-        if self.history.step(&mut self.effects, step) {
-            self.selected = self.selected.min(self.effects.len().saturating_sub(1));
-        }
+    /// The command params for `effects`: what OK runs and what the preview renders.
+    pub(crate) fn command_params(&self, effects: &[EffectLayer]) -> Value {
+        let mut effects = serde_json::to_value(effects).unwrap_or(Value::Null);
+        map_glow_colors(&mut effects, egui::ecolor::linear_from_gamma);
+        let p = json!({
+            "effects": effects,
+            "foreground": self.foreground,
+            "background": self.background,
+        });
+        crate::distort_ui::with_filter_target(p, &self.target)
+    }
+}
+
+/// Renders `vis` at 1/`k` into `picture` and returns the time it took; the render job's body.
+fn paint_preview(src: &Surface, canvas: Rect, params: &Value, vis: Rect, k: u32, picture: &SharedPicture, ctl: &Interrupt) -> Result<Duration, String> {
+    let t0 = crate::gpu_canvas::now_ms();
+    let out = preview_pixels(src, canvas, params, vis, k, ctl).ok_or_else(|| "the Filter Gallery preview was cancelled".to_string())?;
+    picture.replace(image(&out, reduced(vis.width(), k), reduced(vis.height(), k)), k, [vis.x0, vis.y0]);
+    Ok(Duration::from_secs_f64(((crate::gpu_canvas::now_ms() - t0) / 1000.0).max(0.0)))
+}
+
+/// The factor the preview is averaged down by at `zoom` (screen px per document px): at least one
+/// texture pixel per screen pixel; the display's linear filter does the rest.
+pub(crate) fn preview_factor(zoom: f64) -> u32 {
+    if zoom.is_finite() && zoom > 0.0 { (1.0 / zoom + 1e-3).floor().clamp(1.0, 4096.0) as u32 } else { 1 }
+}
+
+impl FilterGallerySource for PcGallerySource {
+    fn catalog(&self) -> &dyn FilterCatalog {
+        &self.catalog
     }
 
-    fn move_to(&mut self, from: usize, to: usize) {
-        if from < self.effects.len() && to < self.effects.len() && from != to {
-            let e = self.effects.remove(from);
-            self.effects.insert(to, e);
-            self.selected = to;
+    fn preview(&self) -> &dyn RasterSource {
+        &self.preview
+    }
+
+    fn render(&self, effects: &[EffectLayer], visible: PixelRect, zoom: f64) -> Job<PreviewDone, String> {
+        let vis = Rect::new(visible.x0, visible.y0, visible.x1, visible.y1).intersect(&self.canvas);
+        if vis.is_empty() {
+            return Job::new(|_, _| Ok(PreviewDone::new(Duration::ZERO)));
         }
+        let k = preview_factor(zoom);
+        let params = self.command_params(effects);
+        let (src, canvas, picture) = (self.src.clone(), self.canvas, self.preview.clone());
+        Job::new(move |progress, cancel| {
+            let cancelled = || cancel.is_cancelled();
+            let report = |fraction: f32| progress.report(fraction);
+            let ctl = Interrupt::new(&cancelled, &report);
+            paint_preview(&src, canvas, &params, vis, k, &picture, &ctl).map(PreviewDone::new)
+        })
+    }
+
+    fn thumb_source(&self) -> &dyn ThumbSource<GalleryThumb> {
+        self
+    }
+}
+
+impl ThumbSource<GalleryThumb> for PcGallerySource {
+    /// The crop and colours are fixed while the gallery is open, so a filter's thumbnail never changes.
+    fn revision(&self, key: &GalleryThumb, _request: &ThumbRequest) -> Revision {
+        Revision::of(&key.filter)
+    }
+
+    fn render(&self, key: &GalleryThumb, _request: &ThumbRequest) -> ThumbRender {
+        let p = crate::distort_ui::with_filter_target(
+            json!({"effects": [{"filter": key.filter}], "foreground": self.foreground, "background": self.background}),
+            &self.target,
+        );
+        let out = render(&self.thumb_src, &p);
+        let b = self.thumb_src.content_bounds();
+        ThumbRender::Ready(image(&out, b.x1.max(1) as usize, b.y1.max(1) as usize))
+    }
+}
+
+/// What the app keeps of the open Filter Gallery: the dialog's id and what OK needs to run.
+pub(crate) struct GalleryApp {
+    id: DialogId,
+    document: DocId,
+    layer: LayerId,
+    /// Editing smart filter `index` of the layer: OK updates it instead of adding a filter.
+    smart_filter: Option<usize>,
+    source: Arc<PcGallerySource>,
+}
+
+/// The open gallery's fields for automation, with the document, layer and smart filter it edits.
+pub(crate) fn describe(app: &PhotocraftApp) -> Option<Value> {
+    let g = app.gallery.as_ref()?;
+    let mut v: Value = crate::distort_ui::workspace_fields(app, KEY).unwrap_or_else(|| json!({}));
+    if let Some(o) = v.as_object_mut() {
+        o.insert("document".into(), json!(g.document.0));
+        o.insert("layer".into(), json!(g.layer.0));
+        o.insert("smartFilter".into(), json!(g.smart_filter));
+    }
+    Some(v)
+}
+
+/// Acts on what the gallery reported this frame: opens the colour picker for a swatch, hands the
+/// picked colour back, and runs OK's stack. Takes only what is queued now, so a second pass in a
+/// frame finds nothing left to repeat.
+pub(crate) fn take(app: &mut PhotocraftApp, _ctx: &egui::Context) {
+    let Some(id) = app.gallery.as_ref().map(|g| g.id) else { return };
+
+    let events = app.framework.dialogs.get_mut_by_id::<Hosted>(id).map(|h| h.take_events()).unwrap_or_default();
+    for event in events {
+        if let FilterGalleryEvent::PickColor(request) = event {
+            crate::color_picker_ui::open_for_request(app, id, request);
+        }
+    }
+    if let Some((key, color)) = crate::color_picker_ui::answer_for(app, id)
+        && let Some(h) = app.framework.dialogs.get_mut_by_id::<Hosted>(id)
+    {
+        h.workspace_mut().set_color(&key, color);
+    }
+    let Some(result) = app.framework.dialogs.take_by_id::<Hosted>(id) else { return };
+    let Some(g) = app.gallery.take() else { return };
+    let DialogResult::Ok(session) = result else { return };
+    if !session.effects.iter().any(|e| e.visible) {
+        return;
+    }
+    let params = g.source.command_params(&session.effects);
+    let run = if let Some(index) = g.smart_filter {
+        app.run("layer.smartFilter.setParams", json!({"layer": g.layer.0, "index": index, "params": params}))
+    } else {
+        let mut p = params;
+        p["layer"] = json!(g.layer.0);
+        app.run("filter.filterGallery", p)
+    };
+    if let Err(e) = run {
+        app.ui.status = e;
+        app.ui.status_error = true;
     }
 }
 
@@ -195,7 +310,7 @@ fn sample(surf: &Surface, r: Rect, k: u32) -> Surface {
     out
 }
 
-/// Runs a stack on a small surface (the preview and thumbnails).
+/// Runs a stack on a small surface (the thumbnails).
 fn render(src: &Surface, params: &Value) -> Surface {
     let effects = photocraft_engine::gallery_cmds::effects_from_json(params).unwrap_or_default();
     let b = src.content_bounds().union(&Rect::new(0, 0, 1, 1));
@@ -280,7 +395,13 @@ pub(crate) fn reduce(surf: &Surface, r: Rect, k: u32) -> Surface {
     out
 }
 
-fn image(surf: &Surface, w: usize, h: usize) -> egui::ColorImage {
+/// A length of `n` document pixels reduced by `k` (partial blocks count).
+fn reduced(n: u32, k: u32) -> usize {
+    (n as usize).div_ceil(k.max(1) as usize)
+}
+
+/// The top-left `w` × `h` pixels of `surf` as a display image (also the Wide Angle preview's).
+pub(crate) fn image(surf: &Surface, w: usize, h: usize) -> egui::ColorImage {
     let mut px = vec![[0u8; 4]; w * h];
     for y in 0..h {
         surf.read_rgba8_into(Rect::new(0, y as i32, w as i32, y as i32 + 1), &mut px[y * w..(y + 1) * w]);
@@ -289,22 +410,41 @@ fn image(surf: &Surface, w: usize, h: usize) -> egui::ColorImage {
     egui::ColorImage::new([w, h], px.iter().map(|p| Color32::from_rgba_unmultiplied(p[0], p[1], p[2], if alpha { p[3] } else { 255 })).collect())
 }
 
-/// The effect layers of a `filter.filterGallery` params object (unknown filters are skipped).
-fn effects_from(p: &Value) -> Vec<EffectLayer> {
-    p.get("effects")
-        .and_then(Value::as_array)
+/// The effect layers of a `filter.filterGallery` params object: unknown filters are skipped and
+/// every effect starts from its filter's defaults under the recorded values.
+fn effects_from(p: &Value, catalog: &PcCatalog) -> Vec<EffectLayer> {
+    let mut effects = p.get("effects").cloned().unwrap_or(Value::Null);
+    map_glow_colors(&mut effects, egui::ecolor::gamma_from_linear);
+    effects
+        .as_array()
         .into_iter()
         .flatten()
         .filter_map(|e| {
-            let f = GalleryFilter::from_key(e.get("filter")?.as_str()?)?;
-            let mut l = EffectLayer::new(f);
-            if let Some(Value::Object(m)) = e.get("params") {
-                l.params.extend(m.clone());
+            let mut e = e.clone();
+            e.as_object_mut()?.entry("visible").or_insert(Value::Bool(true));
+            let mut layer = serde_json::from_value::<EffectLayer>(e).ok()?;
+            let filter = catalog.filter(&layer.filter)?;
+            let mut fields = filter.defaults();
+            for (k, v) in layer.fields.iter() {
+                fields.set(k, v.clone());
             }
-            l.visible = e.get("visible").and_then(Value::as_bool).unwrap_or(true);
-            Some(l)
+            layer.fields = fields;
+            Some(layer)
         })
         .collect()
+}
+
+/// Applies `convert` to the red, green and blue of every effect's `glowColor`. The command records it as
+/// linear RGB; the dialog's swatch row holds encoded sRGB.
+fn map_glow_colors(effects: &mut Value, convert: fn(f32) -> f32) {
+    let colors = effects.as_array_mut().into_iter().flatten().filter_map(|e| e.get_mut("params")?.get_mut("glowColor")?.as_array_mut());
+    for color in colors {
+        for channel in color.iter_mut().take(3) {
+            if let Some(v) = channel.as_f64() {
+                *channel = json!(f64::from(convert(v as f32)));
+            }
+        }
+    }
 }
 
 /// A recorded `[r, g, b, a]` colour param.
@@ -317,8 +457,8 @@ fn colour_param(p: &Value, key: &str) -> Option<[f32; 4]> {
 /// Opens the dialog on the active layer, starting from the last gallery stack used.
 pub fn open(app: &mut PhotocraftApp) -> Result<(), String> {
     let (layer, src, _) = crate::distort_ui::active_filter_target(app)?;
-    let last = app.session.journal.iter().rev().find(|(id, _)| id == "filter.filterGallery").map(|(_, p)| p.clone());
-    let effects = last.as_ref().map(effects_from).unwrap_or_default();
+    let last = app.session.journal.iter().rev().find(|(id, _)| id == KEY).map(|(_, p)| p.clone());
+    let effects = last.as_ref().map(|p| effects_from(p, &PcCatalog)).unwrap_or_default();
     let (fg, bg) = (app.session.tools.foreground, app.session.tools.background);
     open_on(app, layer, src, effects, [fg, bg], None)
 }
@@ -331,7 +471,7 @@ pub fn open_smart_filter(app: &mut PhotocraftApp, layer: LayerId, index: usize) 
         return Err("the layer is not a smart object".into());
     };
     let filter = sm.smart_filters.get(index).ok_or("no such smart filter")?;
-    if filter.command != "filter.filterGallery" {
+    if filter.command != KEY {
         return Err("the smart filter is not a Filter Gallery filter".into());
     }
     let p = filter.params.clone();
@@ -340,569 +480,34 @@ pub fn open_smart_filter(app: &mut PhotocraftApp, layer: LayerId, index: usize) 
         .ok_or("the smart object's contents are unavailable (missing linked file?)")?;
     let fg = colour_param(&p, "foreground").unwrap_or(app.session.tools.foreground);
     let bg = colour_param(&p, "background").unwrap_or(app.session.tools.background);
-    open_on(app, layer, src, effects_from(&p), [fg, bg], Some(index))
+    open_on(app, layer, src, effects_from(&p, &PcCatalog), [fg, bg], Some(index))
 }
 
 fn open_on(
     app: &mut PhotocraftApp,
     layer: LayerId,
     src: Surface,
-    mut effects: Vec<EffectLayer>,
+    effects: Vec<EffectLayer>,
     colours: [[f32; 4]; 2],
     smart_filter: Option<usize>,
 ) -> Result<(), String> {
     let st = app.session.active().ok_or("no document")?;
     let canvas = st.doc.bounds();
+    let document = st.doc.id;
     let layer_name = st.doc.layer(layer).map(|l| l.name.clone()).unwrap_or_default();
-    if effects.is_empty() {
-        effects.push(EffectLayer::new(GalleryFilter::ColoredPencil));
-    }
-    // Thumbnail source: the middle of the layer, about 4× the thumbnail size.
-    let cb = src.content_bounds().intersect(&canvas);
-    let cb = if cb.is_empty() { canvas } else { cb };
-    let k = ((cb.width() as usize / (THUMB[0] * 4)).min(cb.height() as usize / (THUMB[1] * 4))).max(1) as u32;
-    let (tw, th) = (THUMB[0] as i32 * k as i32, THUMB[1] as i32 * k as i32);
-    let (cx, cy) = ((cb.x0 + cb.x1) / 2, (cb.y0 + cb.y1) / 2);
-    let thumb_src = sample(&src, Rect::new(cx - tw / 2, cy - th / 2, cx - tw / 2 + tw, cy - th / 2 + th), k);
-    let sel = effects.len() - 1;
-    let open_cats = std::array::from_fn(|i| effects[sel].filter.category() == GALLERY_CATEGORIES[i]);
-    let history = EditHistory::new(&effects);
     let target = if smart_filter.is_some() { json!("pixels") } else { crate::distort_ui::colour_set_target(app) };
-    app.distort.gallery = Some(GalleryDialog {
-        document: st.doc.id,
-        layer,
-        layer_name,
-        canvas,
-        src,
-        target,
-        effects,
-        selected: sel,
-        open: open_cats,
-        foreground: colours[0],
-        background: colours[1],
-        zoom: 0.0,
-        fit: 1.0,
-        center: [(canvas.x0 + canvas.x1) as f32 / 2.0, (canvas.y0 + canvas.y1) as f32 / 2.0],
-        tex: None,
-        shown: None,
-        #[cfg(not(target_arch = "wasm32"))]
-        job: None,
-        latest: None,
-        failed: None,
-        thumb_src,
-        thumbs: vec![None; GalleryFilter::ALL.len()],
-        preview_ms: 0.0,
-        smart_filter,
-        history,
-    });
+    let mut session = FilterGallerySession::new(GalleryFilter::ColoredPencil.key(), &PcCatalog);
+    if !effects.is_empty() {
+        session.effects = effects;
+    }
+    let size = PixelSize::new(canvas.width().max(1), canvas.height().max(1));
+    let source = Arc::new(PcGallerySource::new(src, canvas, target, colours));
+    let workspace = FilterGalleryWorkspace::new(FilterGalleryOpen::new(size, layer_name, session));
+
+    let shared: Arc<dyn FilterGallerySource> = source.clone();
+    let id = app.framework.dialogs.open(HostedWorkspace::new(workspace, shared));
+    app.gallery = Some(GalleryApp { id, document, layer, smart_filter, source });
     Ok(())
-}
-
-/// OK: runs `filter.filterGallery` with the stack (one history step).
-pub fn commit(app: &mut PhotocraftApp) -> Result<Value, String> {
-    let Some(d) = app.distort.gallery.take() else { return Err("the Filter Gallery is not open".into()) };
-    if !d.effects.iter().any(|e| e.visible) {
-        return Ok(json!({"committed": false}));
-    }
-    if let Some(index) = d.smart_filter {
-        return app.run("layer.smartFilter.setParams", json!({"layer": d.layer.0, "index": index, "params": d.params()}));
-    }
-    let mut p = d.params();
-    p["layer"] = json!(d.layer.0);
-    app.run("filter.filterGallery", p)
-}
-
-/// Control channel: `filter.filterGallery {"ui": {...}}` while the dialog is open.
-pub fn control(app: &mut PhotocraftApp, ui: &Value) -> Result<Value, String> {
-    let flag = |k: &str| ui.get(k).and_then(Value::as_bool) == Some(true);
-    if flag("commit") {
-        let r = commit(app)?;
-        return Ok(json!({"committed": true, "result": r}));
-    }
-    if flag("cancel") {
-        app.distort.gallery = None;
-        return Ok(json!({"cancelled": true}));
-    }
-    let d = app.distort.gallery.as_mut().ok_or("the Filter Gallery is not open")?;
-    if let Some(i) = ui.get("select").and_then(Value::as_u64) {
-        d.selected = (i as usize).min(d.effects.len() - 1);
-    }
-    if flag("add") {
-        d.add();
-    }
-    if flag("delete") {
-        d.delete();
-    }
-    if let Some(i) = ui.get("toggle").and_then(Value::as_u64)
-        && let Some(e) = d.effects.get_mut(i as usize)
-    {
-        e.visible = !e.visible;
-    }
-    if let Some(m) = ui.get("move") {
-        let g = |k: &str| m.get(k).and_then(Value::as_u64).map(|v| v as usize);
-        if let (Some(a), Some(b)) = (g("from"), g("to")) {
-            d.move_to(a, b);
-        }
-    }
-    if let Some(k) = ui.get("filter").and_then(Value::as_str) {
-        let f = GalleryFilter::from_key(k).ok_or_else(|| format!("unknown gallery filter `{k}`"))?;
-        d.set_filter(f);
-    }
-    if let Some(Value::Object(m)) = ui.get("params") {
-        d.cur().params.extend(m.clone());
-    }
-    d.history.settle(&d.effects, false);
-    match ui.get("zoom") {
-        Some(Value::String(s)) if s == "fit" => d.zoom = 0.0,
-        // The gallery's own preview zoom, not the canvas: its menu stops at 400 %, the − / +
-        // buttons, ⌘+ and an agent go up to 3200 %.
-        Some(v) if v.is_number() => d.zoom = (v.as_f64().unwrap_or(1.0) as f32).clamp(ZOOM_MIN, ZOOM_MAX),
-        _ => {}
-    }
-    Ok(d.describe())
-}
-
-/// A preview rendering on a worker thread: what it shows, its result and its cancellation.
-#[cfg(not(target_arch = "wasm32"))]
-struct PreviewJob {
-    key: u64,
-    vis: Rect,
-    rx: std::sync::mpsc::Receiver<Result<Option<(egui::ColorImage, f64)>, String>>,
-    ctl: photocraft_engine::jobs::JobCtx,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl Drop for PreviewJob {
-    /// A closed dialog or a superseded render stops at its next tile.
-    fn drop(&mut self) {
-        self.ctl.cancel();
-    }
-}
-
-/// The preview's zoom range (1 = 100 %), as Liquify's.
-const ZOOM_MIN: f32 = 0.01;
-const ZOOM_MAX: f32 = 32.0;
-
-/// Zoom In (`dir` > 0) or Zoom Out along the canvas's ladder, as Liquify's preview does (#7210),
-/// from the zoom on screen: Fit in View steps from the zoom it fits at, so zooming in from a
-/// large image's Fit never shrinks it, and zooming out from a Fit below [`ZOOM_MIN`] stays at Fit.
-fn step_zoom(d: &GalleryDialog, dir: i32) -> f32 {
-    let on_screen = if d.zoom > 0.0 { d.zoom } else { d.fit };
-    let next = crate::zoom_levels::step_in_range(on_screen, dir, ZOOM_MIN, ZOOM_MAX);
-    if d.zoom <= 0.0 && dir < 0 && next >= d.fit { 0.0 } else { next }
-}
-
-/// ⌘+ / ⌘− / ⌘0 / ⌘1 (or their overrides) zoom the preview like its − / + buttons, Fit in View
-/// and 100 %, not the canvas behind the dialog.
-pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    let nav = if app.distort.gallery.is_some() { crate::shortcuts::nav_shortcut(app, ctx) } else { None };
-    let (Some(d), Some(id)) = (app.distort.gallery.as_mut(), nav) else { return };
-    d.zoom = match id {
-        "view.zoomIn" => step_zoom(d, 1),
-        "view.zoomOut" => step_zoom(d, -1),
-        "view.fitOnScreen" => 0.0,
-        _ => 1.0,
-    };
-}
-
-/// The preview's zoom (screen px per document px), the visible document rect and the factor the
-/// texture is reduced by. Fit in View also recentres the view.
-fn view(d: &mut GalleryDialog, area: ERect) -> (f32, Rect, u32) {
-    let (cw, ch) = (d.canvas.width().max(1) as f32, d.canvas.height().max(1) as f32);
-    let zoom = if d.zoom > 0.0 { d.zoom } else { ((area.width() - 24.0) / cw).min((area.height() - 24.0) / ch).clamp(0.005, 1.0) };
-    if d.zoom <= 0.0 {
-        d.fit = zoom;
-        d.center = [d.canvas.x0 as f32 + cw / 2.0, d.canvas.y0 as f32 + ch / 2.0];
-    }
-    let (hw, hh) = (area.width() / zoom / 2.0, area.height() / zoom / 2.0);
-    let vis =
-        Rect::new((d.center[0] - hw).floor() as i32, (d.center[1] - hh).floor() as i32, (d.center[0] + hw).ceil() as i32, (d.center[1] + hh).ceil() as i32)
-            .intersect(&d.canvas);
-    // At least one texture pixel per screen pixel; the GPU's linear filter does the rest.
-    let k = (1.0 / zoom + 1e-3).floor().clamp(1.0, 4096.0) as u32;
-    (zoom, vis, k)
-}
-
-/// Keeps the preview texture current with the stack and the view; returns where it is drawn.
-/// With `background` the render runs off the UI thread and the last preview stays up (moving
-/// with the view) until it is done; otherwise it renders inline (web, tests, inline sessions).
-fn update_preview(d: &mut GalleryDialog, ctx: &egui::Context, area: ERect, background: bool) -> Option<ERect> {
-    let (zoom, vis, k) = view(d, area);
-    let params = d.params();
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    params.to_string().hash(&mut h);
-    (vis.x0, vis.y0, vis.x1, vis.y1, k).hash(&mut h);
-    let key = h.finish();
-    let now = crate::gpu_canvas::now_ms();
-    if d.latest.is_none_or(|(k0, _)| k0 != key) {
-        d.latest = Some((key, now));
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    poll_job(d, ctx);
-    let wanted = d.shown.is_none_or(|(k0, _)| k0 != key) && !vis.is_empty() && d.failed != Some(key);
-    #[cfg(not(target_arch = "wasm32"))]
-    if wanted && background {
-        start_job(d, ctx, key, vis, k, &params, now);
-    } else if d.job.as_ref().is_some_and(|j| j.key != key) {
-        // Back to what is already shown: the render for other settings is no longer needed.
-        d.job = None;
-    }
-    if wanted && !background {
-        let t0 = crate::gpu_canvas::now_ms();
-        if let Some(out) = preview_pixels(&d.src, d.canvas, &params, vis, k, &Interrupt::NONE) {
-            let img = image(&out, reduced(vis.width(), k), reduced(vis.height(), k));
-            show_image(d, ctx, img, key, vis, crate::gpu_canvas::now_ms() - t0);
-        }
-    }
-    let (_, r) = d.shown?;
-    let at = |x: i32, y: i32| area.center() + vec2((x as f32 - d.center[0]) * zoom, (y as f32 - d.center[1]) * zoom);
-    Some(ERect::from_min_max(at(r.x0, r.y0), at(r.x1, r.y1)))
-}
-
-/// A length of `n` document pixels reduced by `k` (partial blocks count).
-fn reduced(n: u32, k: u32) -> usize {
-    (n as usize).div_ceil(k.max(1) as usize)
-}
-
-fn show_image(d: &mut GalleryDialog, ctx: &egui::Context, img: egui::ColorImage, key: u64, vis: Rect, ms: f64) {
-    match &mut d.tex {
-        Some(t) => t.set(img, egui::TextureOptions::LINEAR),
-        None => d.tex = Some(ctx.load_texture("gallery-preview", img, egui::TextureOptions::LINEAR)),
-    }
-    d.preview_ms = ms;
-    d.shown = Some((key, vis));
-}
-
-/// Takes a finished render: shown when it completed, dropped when cancelled, remembered when it
-/// failed (so a failing stack isn't retried every frame).
-#[cfg(not(target_arch = "wasm32"))]
-fn poll_job(d: &mut GalleryDialog, ctx: &egui::Context) {
-    let Some(job) = &d.job else { return };
-    let result = match job.rx.try_recv() {
-        Ok(r) => r,
-        Err(std::sync::mpsc::TryRecvError::Empty) => return,
-        Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("the Filter Gallery preview stopped".into()),
-    };
-    let Some(job) = d.job.take() else { return };
-    match result {
-        Ok(Some((img, ms))) => show_image(d, ctx, img, job.key, job.vis, ms),
-        Ok(None) => {}
-        Err(_) => d.failed = Some(job.key),
-    }
-}
-
-/// One render at a time: a running render for older settings finishes (so a slider drag keeps
-/// updating) unless the settings have been unchanged for a moment, then it is cancelled.
-#[cfg(not(target_arch = "wasm32"))]
-fn start_job(d: &mut GalleryDialog, ctx: &egui::Context, key: u64, vis: Rect, k: u32, params: &Value, now: f64) {
-    if let Some(job) = &d.job {
-        let settled = d.latest.is_some_and(|(k0, t)| k0 == key && now - t >= crate::dialogs::filter_preview_worker::SETTLE_MS);
-        if job.key != key && settled {
-            job.ctl.cancel();
-        }
-        ctx.request_repaint_after(std::time::Duration::from_millis(30));
-        return;
-    }
-    let (tx, rx) = std::sync::mpsc::sync_channel(1);
-    let ctl = photocraft_engine::jobs::JobCtx::new();
-    let (work, src, canvas, params, repaint) = (ctl.clone(), d.src.clone(), d.canvas, params.clone(), ctx.clone());
-    let spawned = std::thread::Builder::new().name("gallery-preview".into()).spawn(move || {
-        let run = || {
-            let t0 = crate::gpu_canvas::now_ms();
-            let out = work.stage(0.0, 1.0, "", |ctl| preview_pixels(&src, canvas, &params, vis, k, ctl))?;
-            let img = image(&out, reduced(vis.width(), k), reduced(vis.height(), k));
-            Some((img, crate::gpu_canvas::now_ms() - t0))
-        };
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)).map_err(|_| "the Filter Gallery preview failed".to_string());
-        let _ = tx.send(result);
-        repaint.request_repaint();
-    });
-    match spawned {
-        Ok(_) => {
-            d.job = Some(PreviewJob { key, vis, rx, ctl });
-            ctx.request_repaint_after(std::time::Duration::from_millis(30));
-        }
-        Err(_) => d.failed = Some(key),
-    }
-}
-
-/// Renders up to `budget` missing thumbnails (spread over frames so opening stays instant).
-fn update_thumbs(d: &mut GalleryDialog, ctx: &egui::Context, budget: usize) {
-    let mut done = 0;
-    for (i, f) in GalleryFilter::ALL.iter().enumerate() {
-        if d.thumbs[i].is_some() || !d.open[GALLERY_CATEGORIES.iter().position(|c| *c == f.category()).unwrap_or(0)] {
-            continue;
-        }
-        if done == budget {
-            ctx.request_repaint();
-            return;
-        }
-        let p =
-            crate::distort_ui::with_filter_target(json!({"effects": [{"filter": f.key()}], "foreground": d.foreground, "background": d.background}), &d.target);
-        let out = render(&d.thumb_src, &p);
-        let b = d.thumb_src.content_bounds();
-        let img = image(&out, b.x1.max(1) as usize, b.y1.max(1) as usize);
-        d.thumbs[i] = Some(ctx.load_texture(format!("gallery-thumb-{}", f.key()), img, egui::TextureOptions::LINEAR));
-        done += 1;
-    }
-}
-
-/// Draws the dialog (a full-window layer over the app).
-pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    let t = Tokens::get(ctx);
-    let screen = ctx.content_rect();
-    let mut action: Option<&str> = None;
-    let background = app.background_jobs;
-    egui::Area::new(egui::Id::unique("gallery-dialog")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
-        let Some(d) = app.distort.gallery.as_mut() else { return };
-        d.history.settle(&d.effects, ctx.input(|i| i.pointer.any_down()));
-        let (full, _) = ui.allocate_exact_size(screen.size(), Sense::hover());
-        let painter = ui.painter().clone();
-        painter.rect_filled(full, 0.0, t.chrome);
-        let title = ERect::from_min_size(full.min, vec2(full.width(), 30.0));
-        painter.rect_filled(title, 0.0, t.dock);
-        painter.line_segment([title.left_bottom(), title.right_bottom()], Stroke::new(1.0, t.separator));
-        let pct = if d.zoom > 0.0 { format!("{:.0}%", d.zoom * 100.0) } else { tl!("Fit").into() };
-        let name = d.effects.get(d.selected).map_or("", |e| tl!(e.filter.name()));
-        painter.text(title.center(), Align2::CENTER_CENTER, format!("{name} ({}, {pct})", d.layer_name), FontId::proportional(13.0), t.text);
-        let body = ERect::from_min_max(pos2(full.left(), title.bottom()), full.max);
-        let right = ERect::from_min_size(pos2(body.right() - RIGHT_W, body.top()), vec2(RIGHT_W, body.height()));
-        let mid = ERect::from_min_size(pos2(right.left() - MID_W, body.top()), vec2(MID_W, body.height()));
-        let area = ERect::from_min_max(body.min, pos2(mid.left(), body.bottom() - 30.0));
-        let zoom_bar = ERect::from_min_max(pos2(body.left(), area.bottom()), pos2(mid.left(), body.bottom()));
-
-        // ---- Preview ----
-        painter.rect_filled(area, 0.0, t.canvas);
-        let shown = update_preview(d, ctx, area, background);
-        let clip = painter.with_clip_rect(area);
-        if let (Some(tex), Some(r)) = (&d.tex, shown) {
-            widgets::checker(&clip, r.intersect(area), 8.0);
-            clip.image(tex.id(), r, ERect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-            clip.rect_stroke(r, 0.0, Stroke::new(1.0, t.separator), egui::StrokeKind::Outside);
-        }
-        let resp = ui.interact(area, egui::Id::unique("gallery-preview"), Sense::drag());
-        if resp.dragged() && d.zoom > 0.0 {
-            let dl = resp.drag_delta() / d.zoom;
-            d.center = [d.center[0] - dl.x, d.center[1] - dl.y];
-        }
-        // ---- Zoom bar ----
-        painter.rect_filled(zoom_bar, 0.0, t.dock);
-        let mut zb = ui.new_child(egui::UiBuilder::new().max_rect(zoom_bar.shrink2(vec2(10.0, 3.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
-        if crate::icons::button(&mut zb, "minus", 22.0, false, tl!("Zoom out")).clicked() {
-            d.zoom = step_zoom(d, -1);
-        }
-        if crate::icons::button(&mut zb, "plus", 22.0, false, tl!("Zoom in")).clicked() {
-            d.zoom = step_zoom(d, 1);
-        }
-        let mut z = d.zoom;
-        let mut opts: Vec<(f32, &str)> =
-            vec![(0.0, tl!("Fit in View")), (0.125, "12.5%"), (0.25, "25%"), (0.5, "50%"), (1.0, "100%"), (2.0, "200%"), (4.0, "400%")];
-        // A zoom off the menu (stepped to 300 %, say) shows as itself, not as "—".
-        let off_menu = format!("{:.0}%", z * 100.0);
-        if !opts.iter().any(|(v, _)| *v == z) {
-            let at = opts.iter().position(|(v, _)| *v > z).unwrap_or(opts.len());
-            opts.insert(at, (z, &off_menu));
-        }
-        if widgets::dropdown(&mut zb, "gallery-zoom", tl!("Zoom"), &mut z, &opts, 110.0) {
-            d.zoom = z;
-        }
-        if let Some(p) = d.rendering() {
-            // Like Photoshop's: a progress bar while the preview renders (the last one stays up).
-            let (br, _) = zb.allocate_exact_size(vec2(90.0, 6.0), Sense::hover());
-            crate::jobs_ui::bar(&zb, br, (p > 0.0).then_some(p), &t);
-        } else {
-            zb.label(egui::RichText::new(format!("{} {:.0} ms", tl!("Preview"), d.preview_ms)).color(t.text_faint).size(11.0));
-        }
-
-        // ---- Category folders with thumbnails ----
-        painter.rect_filled(mid, 0.0, t.dock);
-        painter.line_segment([mid.left_top(), mid.left_bottom()], Stroke::new(1.0, t.separator));
-        update_thumbs(d, ctx, 6);
-        let mut mu = ui.new_child(egui::UiBuilder::new().max_rect(mid.shrink2(vec2(8.0, 8.0))));
-        egui::ScrollArea::vertical().id_salt("gallery-tree").show(&mut mu, |ui| {
-            for (ci, cat) in GALLERY_CATEGORIES.iter().enumerate() {
-                let icon = if d.open[ci] { "folder-open" } else { "folder" };
-                let r = ui.horizontal(|ui| {
-                    let (ir, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
-                    crate::icons::paint(ui, ir, icon, 14.0, t.icon);
-                    ui.add(egui::Label::new(egui::RichText::new(tl!(*cat)).color(t.text)).selectable(false).sense(Sense::click()))
-                        .on_hover_cursor(egui::CursorIcon::PointingHand)
-                });
-                if r.inner.clicked() {
-                    d.open[ci] = !d.open[ci];
-                }
-                if !d.open[ci] {
-                    continue;
-                }
-                let members: Vec<(usize, GalleryFilter)> = GalleryFilter::ALL.iter().copied().enumerate().filter(|(_, f)| f.category() == *cat).collect();
-                egui::Grid::new(format!("gallery-cat-{ci}")).spacing([6.0, 6.0]).show(ui, |ui| {
-                    for (n, (i, f)) in members.iter().enumerate() {
-                        let selected = d.effects.get(d.selected).is_some_and(|e| e.filter == *f);
-                        let cell = ui.vertical(|ui| {
-                            let (r, resp) = ui.allocate_exact_size(vec2(THUMB[0] as f32, THUMB[1] as f32), Sense::click());
-                            match &d.thumbs[*i] {
-                                Some(tex) => {
-                                    ui.painter().image(tex.id(), r, ERect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-                                }
-                                None => {
-                                    ui.painter().rect_filled(r, 2.0, t.field);
-                                }
-                            }
-                            let stroke = if selected { Stroke::new(2.0, t.accent) } else { Stroke::new(1.0, t.separator) };
-                            ui.painter().rect_stroke(r, 0.0, stroke, egui::StrokeKind::Outside);
-                            ui.add_sized(
-                                [THUMB[0] as f32, 14.0],
-                                egui::Label::new(egui::RichText::new(tl!(f.name())).size(10.5).color(if selected { t.text } else { t.text_dim })).truncate(),
-                            );
-                            resp
-                        });
-                        if cell.inner.clicked() {
-                            d.set_filter(*f);
-                        }
-                        if n % 3 == 2 {
-                            ui.end_row();
-                        }
-                    }
-                });
-                ui.add_space(4.0);
-            }
-        });
-
-        // ---- Right: buttons, filter settings, effect layers ----
-        painter.rect_filled(right, 0.0, t.dock);
-        painter.line_segment([right.left_top(), right.left_bottom()], Stroke::new(1.0, t.separator));
-        let inner = right.shrink2(vec2(12.0, 10.0));
-        let mut ru = ui.new_child(egui::UiBuilder::new().max_rect(inner));
-        ru.spacing_mut().item_spacing.y = 6.0;
-        ru.horizontal(|ui| {
-            if let Some(role) = widgets::dialog_buttons(
-                ui,
-                &[
-                    widgets::DialogButton::new(widgets::ButtonRole::Default, tl!("OK"), 120.0),
-                    widgets::DialogButton::new(widgets::ButtonRole::Cancel, tl!("Cancel"), 120.0),
-                ],
-            ) {
-                action = Some(if role == widgets::ButtonRole::Default { "ok" } else { "cancel" });
-            }
-        });
-        ru.add_space(4.0);
-        let mut cur = d.effects[d.selected].filter;
-        let names: Vec<(GalleryFilter, &str)> = GalleryFilter::ALL.iter().map(|f| (*f, f.name())).collect();
-        if widgets::dropdown(&mut ru, "gallery-filter", tl!("Filter"), &mut cur, &names, inner.width() - 8.0) {
-            d.set_filter(cur);
-        }
-        widgets::hairline(&mut ru);
-        let list_h = 190.0;
-        let params_h = (inner.height() - 110.0 - list_h).max(80.0);
-        egui::ScrollArea::vertical().id_salt("gallery-params").max_height(params_h).show(&mut ru, |ui| {
-            let sel = d.selected;
-            let e = &mut d.effects[sel];
-            for p in parse_spec(e.filter.params_doc()) {
-                let label = crate::filter_dialog::label(&p.key);
-                match p.kind {
-                    Kind::Range { min, max, default } => {
-                        let mut v = e.params.get(&p.key).and_then(Value::as_f64).unwrap_or(default as f64) as f32;
-                        widgets::slider_row(ui, &label, &mut v, min..=max, "", None);
-                        e.params.insert(p.key, json!(v.round()));
-                    }
-                    Kind::Choice { options, default } => {
-                        let initial = default.as_deref().or_else(|| options.first().map(String::as_str)).unwrap_or("");
-                        let mut c = e.params.get(&p.key).and_then(Value::as_str).unwrap_or(initial).to_string();
-                        let labels: Vec<String> = options.iter().map(|o| crate::filter_dialog::label(o)).collect();
-                        let opts: Vec<(String, &str)> = options.iter().cloned().zip(labels.iter().map(String::as_str)).collect();
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim));
-                            widgets::dropdown(ui, &format!("gallery-{}", p.key), tl!(&label), &mut c, &opts, 140.0);
-                        });
-                        e.params.insert(p.key, json!(c));
-                    }
-                    Kind::Bool(b0) => {
-                        let mut b = e.params.get(&p.key).and_then(Value::as_bool).unwrap_or(b0);
-                        widgets::checkbox(ui, &mut b, &label);
-                        e.params.insert(p.key, json!(b));
-                    }
-                    Kind::Json if p.key == "glowColor" => {
-                        let c = e
-                            .params
-                            .get("glowColor")
-                            .and_then(Value::as_array)
-                            .map(|a| a.iter().filter_map(Value::as_f64).map(|v| v as f32).collect::<Vec<_>>())
-                            .filter(|v| v.len() >= 3);
-                        let neon = photocraft_algo::GalleryEffect::new(GalleryFilter::NeonGlow).color;
-                        let mut rgb = c.map_or([neon[0], neon[1], neon[2]], |v| [v[0], v[1], v[2]]);
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(tl!("Glow Color")).color(t.text_dim));
-                            crate::widgets::color_edit_button_rgb(ui, &mut rgb, &crate::color_picker_ui::title_for(tl!("Glow Color")));
-                        });
-                        e.params.insert("glowColor".into(), json!([rgb[0], rgb[1], rgb[2], 1.0]));
-                    }
-                    _ => {}
-                }
-            }
-            if e.filter.uses_colours() {
-                ui.label(egui::RichText::new(tl!("Uses the foreground and background colors.")).color(t.text_faint).size(11.0));
-            }
-        });
-        // Effect layers (top of the list = applied last).
-        let list_top = inner.bottom() - list_h;
-        let lr = ERect::from_min_max(pos2(inner.left(), list_top), inner.max);
-        let mut lu = ui.new_child(egui::UiBuilder::new().max_rect(lr));
-        widgets::hairline(&mut lu);
-        egui::ScrollArea::vertical().id_salt("gallery-layers").max_height(list_h - 44.0).show(&mut lu, |ui| {
-            let mut toggle = None;
-            for i in (0..d.effects.len()).rev() {
-                let sel = i == d.selected;
-                let (row, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
-                if sel {
-                    ui.painter().rect_filled(row, 2.0, t.accent_soft);
-                }
-                let eye = ERect::from_min_size(row.min + vec2(4.0, 4.0), vec2(16.0, 16.0));
-                crate::icons::paint(ui, eye, if d.effects[i].visible { "eye" } else { "eye-off" }, 14.0, t.icon);
-                ui.painter().text(
-                    row.left_center() + vec2(28.0, 0.0),
-                    Align2::LEFT_CENTER,
-                    tl!(d.effects[i].filter.name()),
-                    FontId::proportional(12.5),
-                    if d.effects[i].visible { t.text } else { t.text_faint },
-                );
-                if resp.clicked() {
-                    if resp.interact_pointer_pos().is_some_and(|p| p.x < eye.right() + 4.0) {
-                        toggle = Some(i);
-                    } else {
-                        d.selected = i;
-                    }
-                }
-            }
-            if let Some(i) = toggle {
-                d.effects[i].visible = !d.effects[i].visible;
-            }
-        });
-        lu.horizontal(|ui| {
-            if crate::icons::button(ui, "chevron-up", 24.0, false, tl!("Move effect layer up")).clicked() {
-                let s = d.selected;
-                d.move_to(s, (s + 1).min(d.effects.len() - 1));
-            }
-            if crate::icons::button(ui, "chevron-down", 24.0, false, tl!("Move effect layer down")).clicked() {
-                let s = d.selected;
-                d.move_to(s, s.saturating_sub(1));
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if crate::icons::button(ui, "trash", 24.0, false, tl!("Delete effect layer")).clicked() {
-                    d.delete();
-                }
-                if crate::icons::button(ui, "file-plus", 24.0, false, tl!("New effect layer")).clicked() {
-                    d.add();
-                }
-            });
-        });
-    });
-    match action {
-        Some("ok") => {
-            let _ = commit(app);
-        }
-        Some("cancel") => app.distort.gallery = None,
-        _ => {}
-    }
 }
 
 #[cfg(test)]

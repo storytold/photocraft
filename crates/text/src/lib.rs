@@ -19,9 +19,11 @@
 
 pub mod area;
 pub mod cjk;
+mod color_glyphs;
 pub mod craft_fonts;
 mod embolden;
-pub mod engine_data;
+// The EngineData syntax of type layers is PSD format code: it lives in craft-psd.
+pub use craft_psd::engine_data;
 pub mod font_class;
 pub mod fonts;
 pub mod glyphs;
@@ -142,6 +144,22 @@ impl TextEngine {
         layer.cache = Some(r.surface);
         r.rect
     }
+
+    /// Registers font bytes (for example a font embedded in an imported PDF) for later layout.
+    /// Returns the family names the font provides, best first.
+    pub fn register_font_data(&mut self, bytes: Vec<u8>) -> Vec<String> {
+        self.fonts.register_font_data(bytes)
+    }
+
+    /// [`Self::register_font_data`] under `family`, which cannot shadow an installed family.
+    pub fn register_font_data_as(&mut self, bytes: Vec<u8>, family: &str) -> Vec<String> {
+        self.fonts.register_font_data_as(bytes, family)
+    }
+
+    /// Whether `family` is available to this engine.
+    pub fn has_family(&mut self, family: &str) -> bool {
+        self.fonts.has_family(family)
+    }
 }
 
 static SHARED: warm::Warm<std::sync::Mutex<TextEngine>> = warm::Warm::new();
@@ -149,7 +167,20 @@ static SHARED: warm::Warm<std::sync::Mutex<TextEngine>> = warm::Warm::new();
 /// Whether [`shared`] scans the installed fonts (native builds, outside tests, unless
 /// `PHOTOCRAFT_NO_SYSTEM_FONTS` is set). Without the scan it is cheap to build.
 fn uses_system_fonts() -> bool {
-    cfg!(not(target_arch = "wasm32")) && !cfg!(test) && std::env::var_os("PHOTOCRAFT_NO_SYSTEM_FONTS").is_none()
+    scans_system_fonts(cfg!(not(target_arch = "wasm32")) && !cfg!(test), |name| std::env::var_os(name).is_some())
+}
+
+/// [`uses_system_fonts`] for a native build outside this crate's own tests (`native`) and the
+/// environment variables that are set (`set`).
+///
+/// `cfg!(test)` only covers this crate's tests: every other crate's test binaries link this crate
+/// as a normal dependency. Test processes run by cargo-nextest (`NEXTEST` set; CI runs every test
+/// that way) skip the scan as well. Each test is its own process there, so the background scan
+/// (on Windows also a `reg.exe` child for the UI locale) would repeat thousands of times beside
+/// the GPU tests, and tests would depend on the fonts the machine has installed (#15377). Tests
+/// that want installed fonts build their own engine with [`TextEngine::with_system_fonts`].
+fn scans_system_fonts(native: bool, set: impl Fn(&str) -> bool) -> bool {
+    native && !set("PHOTOCRAFT_NO_SYSTEM_FONTS") && !set("NEXTEST")
 }
 
 fn new_shared() -> std::sync::Mutex<TextEngine> {
@@ -310,6 +341,8 @@ mod warm {
     }
 }
 
+#[cfg(test)]
+mod color_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
