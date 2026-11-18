@@ -190,6 +190,12 @@ pub struct JobsUi {
 /// (the result is then `{"job": id, "pending": true}` and the edit lands when [`tick`] applies
 /// it), else synchronously like [`photocraft_engine::Session::execute`].
 pub fn run(app: &mut PhotocraftApp, id: &str, params: Value) -> Result<Value, String> {
+    // Only a user-started Batch may park on a failed input and wait for the question: this
+    // frame loop answers it. An agent's `engine.execute` and inline runs keep Stop For Errors
+    // ending at the first failure (#13667).
+    if id == "file.automate.batch" {
+        app.session.set_batch_failure_questions(app.background_jobs && !app.programmatic_playback);
+    }
     // A place is also a job where there are no threads (the web build): the session steps it a
     // slice per frame, and every other command stays synchronous there.
     let place = matches!(id, "file.placeEmbedded" | "file.placeLinked") && place_in_background(app);
@@ -891,7 +897,13 @@ pub(crate) fn batch_preview(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> bool 
 /// background save shows its progress in the tab and the status bar instead.
 pub fn dialog(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if let Some(job) = app.session.jobs().into_iter().find(|job| job.command == "file.automate.batch" && app.session.batch_interrupt_waiting(job.id)) {
-        ask_batch_interrupt(app, job.id);
+        // A worker parked on a failed input under Stop For Errors asks about that failure;
+        // an Esc pause asks the plain question (#13667).
+        if let Some((input, message)) = app.session.batch_failure_question(job.id) {
+            ask_batch_failure(app, job.id, &input, &message);
+        } else {
+            ask_batch_interrupt(app, job.id);
+        }
         return;
     }
     let j = match foreground_save(app) {
@@ -952,9 +964,56 @@ fn ask_batch_interrupt(app: &mut PhotocraftApp, id: JobId) {
     let _ = app.framework.dialogs.open_unless_open(prompt);
 }
 
-/// The answer to the Batch question (a `PROMPTS` row): Continue goes on to the next input, anything else stops the
+/// Tag of the Stop For Errors question: the job it decides.
+struct BatchFailure(JobId);
+
+/// Photoshop's question about a failed input under Stop For Errors: the failing step's error,
+/// with the failing file's name under it. The worker is parked like on Esc; Continue (the
+/// focused answer) goes on with the next file, Stop asks once more before ending the run.
+fn ask_batch_failure(app: &mut PhotocraftApp, id: JobId, input: &str, message: &str) {
+    // The engine reports the full input path; the question names the file like the reference does.
+    let name = input.rsplit(['/', '\\']).next().unwrap_or(input);
+    let prompt = StandardPrompt::custom(message.to_owned())
+        .title(tl!("Batch").to_owned())
+        .paragraph(name.to_owned())
+        .button(PromptChoice::Proceed, tl!("Continue").to_owned())
+        .button(PromptChoice::Cancel, tl!("Stop").to_owned())
+        .tag(BatchFailure(id));
+    let _ = app.framework.dialogs.open_unless_open(prompt);
+}
+
+/// Tag of the question a Stop answer to the failure question asks before ending the run.
+struct BatchStopConfirm(JobId);
+
+/// The second Stop For Errors question: its Stop is the focused answer (Escape answers it
+/// too) and ends the run with its partial result; its Continue goes on with the next file.
+fn ask_batch_stop_confirm(app: &mut PhotocraftApp, id: JobId) {
+    let prompt = StandardPrompt::custom(tl!("A command was canceled or stopped during batch processing. Continue with the next file or stop?").to_owned())
+        .title(tl!("Batch").to_owned())
+        .button(PromptChoice::Alternate, tl!("Continue").to_owned())
+        .button(PromptChoice::Proceed, tl!("Stop").to_owned())
+        .escape(PromptChoice::Proceed)
+        .tag(BatchStopConfirm(id));
+    let _ = app.framework.dialogs.open_unless_open(prompt);
+}
+
+/// The answer to a Batch question (a `PROMPTS` row): Continue goes on to the next input, anything else stops the
 /// run. `false` for another prompt's answer.
 pub(crate) fn answer(app: &mut PhotocraftApp, _ctx: &egui::Context, answer: &mut PromptAnswer) -> bool {
+    if let Some(BatchFailure(id)) = answer.take_tag::<BatchFailure>() {
+        if answer.choice == PromptChoice::Proceed {
+            app.session.decide_batch_interrupt_job(id, true);
+        } else {
+            // Stop asks once more; the worker stays parked until that answer (#13667).
+            ask_batch_stop_confirm(app, id);
+        }
+        return true;
+    }
+    if let Some(BatchStopConfirm(id)) = answer.take_tag::<BatchStopConfirm>() {
+        // There, Stop is the default answer (Proceed) and Continue the Alternate.
+        app.session.decide_batch_interrupt_job(id, answer.choice == PromptChoice::Alternate);
+        return true;
+    }
     let Some(BatchJob(id)) = answer.take_tag::<BatchJob>() else { return false };
     app.session.decide_batch_interrupt_job(id, answer.choice == PromptChoice::Proceed);
     true
