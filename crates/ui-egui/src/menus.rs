@@ -227,7 +227,7 @@ mod window_documents_tests {
     use super::*;
     use serde_json::json;
 
-    fn app(docs: usize) -> PhotocraftApp {
+    fn app(docs: usize) -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         for _ in 0..docs {
             app.run("file.new", json!({"width": 64, "height": 48})).unwrap();

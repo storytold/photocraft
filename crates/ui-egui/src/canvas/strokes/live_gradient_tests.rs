@@ -11,7 +11,7 @@ use crate::{
 };
 
 /// Build matching hard-brush fixtures with and without a frame-relative gradient overlay.
-fn app(overlay: bool) -> PhotocraftApp {
+fn app(overlay: bool) -> Box<PhotocraftApp> {
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width":1024,"height":64,"mode":"rgb","depth":32,"background":"white"})).unwrap();
     s.execute("layer.new.layer", json!({})).unwrap();
@@ -103,7 +103,7 @@ fn actual_shared_live_damage_covers_initial_and_pushed_gradient_relayout() {
     }
 }
 /// Reproduce frame growth from a real Alt-reversed Eraser Retouch with a history-only Background.
-fn history_app(overlay: bool) -> PhotocraftApp {
+fn history_app(overlay: bool) -> Box<PhotocraftApp> {
     let mut app = app(overlay);
     let background = app.session.active().unwrap().doc.layers[0].id;
     // State 0 is file.new: its only layer is the white Background. Keep it as the source while

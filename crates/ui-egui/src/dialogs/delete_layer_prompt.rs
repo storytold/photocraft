@@ -71,12 +71,12 @@ mod tests {
         s
     }
 
-    fn make_app() -> PhotocraftApp {
+    fn make_app() -> Box<PhotocraftApp> {
         PhotocraftApp::new(session("Ink"), crate::Services::default())
     }
 
     /// An app whose preferences live in `files`, as one launch of the program.
-    fn launch(files: &Arc<craft::settings::testing::MemoryFiles>, session: photocraft_engine::Session) -> PhotocraftApp {
+    fn launch(files: &Arc<craft::settings::testing::MemoryFiles>, session: photocraft_engine::Session) -> Box<PhotocraftApp> {
         let scratch = std::env::temp_dir().join("photocraft-delete-layer-prompt");
         let options = craft::settings::OpenOptions::new(craft::settings::Location::Dir(scratch)).files(files.clone());
         PhotocraftApp::new(session, crate::Services { settings: Some(craft::settings::SettingsStore::open_with(options)), ..Default::default() })

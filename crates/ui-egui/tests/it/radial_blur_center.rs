@@ -14,12 +14,12 @@ use serde_json::{Value, json};
 
 const COMMAND: &str = "filter.blur.radialBlur";
 
-fn harness() -> Harness<'static, PhotocraftApp> {
+fn harness() -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
     app.run("paint.stroke", json!({"points": [[8, 8, 1]], "size": 4, "color": "#ff8000"})).unwrap();
     let h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1000.0, 800.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        |ui, app: &mut Box<PhotocraftApp>| {
             let _language = i18n::language_scope(i18n::Lang::EN);
             dialogs::run(app, ui);
         },
@@ -30,7 +30,7 @@ fn harness() -> Harness<'static, PhotocraftApp> {
 }
 
 /// Sends one control request, requires success and returns its `result`.
-fn control(h: &mut Harness<'_, PhotocraftApp>, method: &str, params: Value) -> Value {
+fn control(h: &mut Harness<'_, Box<PhotocraftApp>>, method: &str, params: Value) -> Value {
     let ctx = h.ctx.clone();
     let (request, _rx) = ControlRequest::new(method, params);
     let Reply::Done(reply) = handle(h.state_mut(), &ctx, &request) else { panic!("{method} did not finish") };
@@ -48,7 +48,7 @@ fn find<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
     }
 }
 
-fn revision(h: &Harness<'_, PhotocraftApp>) -> u64 {
+fn revision(h: &Harness<'_, Box<PhotocraftApp>>) -> u64 {
     h.state().session.active().unwrap().revision
 }
 

@@ -121,7 +121,7 @@ pub(crate) fn active_filter_target(app: &PhotocraftApp) -> Result<(LayerId, Surf
 pub(crate) mod component_tests {
     use super::*;
 
-    pub fn app(mode: &str, depth: u32) -> PhotocraftApp {
+    pub fn app(mode: &str, depth: u32) -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
         app.run("file.new", json!({"width":64,"height":48,"mode":mode,"depth":depth})).unwrap();
         app.session
@@ -142,7 +142,7 @@ pub(crate) mod component_tests {
         app
     }
 
-    pub fn without_alpha(mut app: PhotocraftApp) -> PhotocraftApp {
+    pub fn without_alpha(mut app: Box<PhotocraftApp>) -> Box<PhotocraftApp> {
         app.session
             .edit("Alpha-less native raster", |doc, id| {
                 let bounds = doc.bounds();
@@ -279,11 +279,9 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
         #[cfg(not(target_arch = "wasm32"))]
         "edit.contentAwareFill" if ui.is_some() && workspace_open(app, id) => Some(hosted(app, id, ui.unwrap_or(&Value::Null))),
         // `ui` addresses the workspace: closed, that is an error, not a fill with the defaults.
-        #[cfg(not(target_arch = "wasm32"))]
         "edit.contentAwareFill" if ui.is_some() => Some(Err("Content-Aware Fill is not open".into())),
         #[cfg(not(target_arch = "wasm32"))]
         "select.selectAndMask" if ui.is_some() && workspace_open(app, id) => Some(hosted(app, id, ui.unwrap_or(&Value::Null))),
-        #[cfg(not(target_arch = "wasm32"))]
         "select.selectAndMask" if ui.is_some() => Some(Err("Select and Mask is not open".into())),
         "select.selectAndMask" => Some(crate::select_mask_ui::open(app).map(|_| json!({"selectAndMask": crate::select_mask_ui::describe(app)}))),
         "edit.puppetWarp" | "layer.smartObjects.puppetWarp" if empty => {
@@ -301,6 +299,8 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
         "filter.vanishingPoint" if empty => Some(crate::vp_ui::begin(app, ctx).map(|_| json!({"vanishingPoint": crate::vp_ui::describe(app)}))),
         #[cfg(not(target_arch = "wasm32"))]
         "filter.vanishingPoint" if ui.is_some() && workspace_open(app, id) => Some(hosted(app, id, ui.unwrap_or(&Value::Null))),
+        // Workspace controls must not fall through to engine edits when no workspace is open.
+        "filter.filterGallery" | "filter.liquify" | "filter.vanishingPoint" if ui.is_some() => Some(Err(format!("{id} is not open"))),
         _ => None,
     }
 }
@@ -377,6 +377,27 @@ mod tests {
 
     use craft::behavior::kurbo::Point;
     use craft::imaging::ui::warp::pin::{Pin, PinEdit};
+
+    /// A closed workspace request must not open a workspace or escape to an engine edit, on any target.
+    #[test]
+    fn closed_workspace_ui_requests_are_consumed_without_editing() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let ctx = app.ctx().clone();
+        app.session.execute("file.new", json!({"width": 4, "height": 4})).unwrap();
+        app.session.execute("select.rect", json!({"x": 1, "y": 1, "width": 1, "height": 1})).unwrap();
+        let before = app.session.active().unwrap().history.past_len();
+        let document = app.session.active().unwrap().doc.clone();
+        for id in ["edit.contentAwareFill", "select.selectAndMask", "filter.filterGallery", "filter.liquify", "filter.vanishingPoint"] {
+            for ui in [Value::Null, json!({}), json!({"cancel": true}), json!({"sampling": "rectangular"})] {
+                let reply = menu(&mut app, &ctx, id, &json!({"ui": ui}));
+                assert!(matches!(reply, Some(Err(ref error)) if error.contains("not open")), "{id}: {reply:?}");
+                assert_eq!(modal_workspace(&app), None, "{id} must not open a workspace");
+                assert!(Arc::ptr_eq(&document, &app.session.active().unwrap().doc), "{id} must not edit the document");
+            }
+        }
+        assert_eq!(app.session.active().unwrap().history.past_len(), before);
+        assert!(app.caf.is_none());
+    }
 
     fn paint_bar(app: &mut PhotocraftApp) {
         app.session

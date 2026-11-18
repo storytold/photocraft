@@ -1279,7 +1279,7 @@ fn deny_ambient_file(id: &str, _: &serde_json::Value) -> photocraft_engine::Resu
 
 /// An app whose automation gates refuse file commands, with a document open, and the paths
 /// its writer was asked to write.
-fn gated_app_recording_writes() -> (PhotocraftApp, egui::Context, std::rc::Rc<std::cell::RefCell<Vec<String>>>, u64) {
+fn gated_app_recording_writes() -> (Box<PhotocraftApp>, egui::Context, std::rc::Rc<std::cell::RefCell<Vec<String>>>, u64) {
     let written: std::rc::Rc<std::cell::RefCell<Vec<String>>> = std::rc::Rc::default();
     let w = written.clone();
     let services = crate::Services {
@@ -1334,7 +1334,7 @@ fn desktop_file_policy(id: &str, _: &Value) -> photocraft_engine::Result<()> {
 /// An app under the desktop file policy whose dirty document (its own file outside any
 /// automation root) a control request asked to close: the unsaved-changes prompt is up.
 /// Returns the app, its context, the paths written so far and the document's own file.
-fn dirty_close_prompted() -> (PhotocraftApp, egui::Context, std::rc::Rc<std::cell::RefCell<Vec<String>>>, String) {
+fn dirty_close_prompted() -> (Box<PhotocraftApp>, egui::Context, std::rc::Rc<std::cell::RefCell<Vec<String>>>, String) {
     let (mut app, ctx, written, _) = gated_app_recording_writes();
     app.services.automation_authorize = Some(desktop_file_policy);
     app.services.automation_command = Some(Box::new(|id, params| desktop_file_policy(id, params).map_err(|e| e.to_string())));
@@ -1615,7 +1615,7 @@ fn deny_smart_object_paths(id: &str, params: &Value) -> photocraft_engine::Resul
     }
 }
 
-fn smart_control_app() -> (PhotocraftApp, egui::Context, photocraft_doc::LayerId) {
+fn smart_control_app() -> (Box<PhotocraftApp>, egui::Context, photocraft_doc::LayerId) {
     let services = crate::Services {
         automation_authorize: Some(deny_smart_object_paths),
         automation_command: Some(Box::new(|id, params| deny_smart_object_paths(id, params).map_err(|e| e.to_string()))),
