@@ -12,19 +12,19 @@ use photocraft_doc::Fill;
 
 /// A harness around `gradient_ui::editor::show`. With `layer` a Gradient Fill layer is selected
 /// (three colour stops, three opacity stops), else the same gradient is the tool's current one.
-pub(super) fn editor(layer: bool) -> Harness<'static, PhotocraftApp> {
+pub(super) fn editor(layer: bool) -> Harness<'static, Box<PhotocraftApp>> {
     let app = editor_app(layer);
     let ctx = app.ctx().clone();
     let mut h = Harness::builder()
         .with_size(vec2(1000.0, 900.0))
         .with_context(ctx)
-        .build_ui_state(|ui, app: &mut PhotocraftApp| crate::gradient_ui::editor::show(app, ui), app);
+        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::gradient_ui::editor::show(app, ui), app);
     h.run_steps(4);
     h
 }
 
 /// The app of [`editor`]: a document, and the gradient on a Gradient Fill layer (`layer`) or as the tool's.
-fn editor_app(layer: bool) -> PhotocraftApp {
+fn editor_app(layer: bool) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 120})).unwrap();
     let mut params = json!({"stops": [[0, "#ff0000"], [0.5, "#00ff00"], [1, "#0000ff"]], "transparency": [[0, 25], [0.4, 60], [1, 100]]});
@@ -39,7 +39,7 @@ fn editor_app(layer: bool) -> PhotocraftApp {
 }
 
 /// The gradient of the active layer.
-fn layer_fill(h: &Harness<PhotocraftApp>) -> Fill {
+fn layer_fill(h: &Harness<Box<PhotocraftApp>>) -> Fill {
     let st = h.state().session.active().unwrap();
     match &st.doc.layer(st.active_layer.unwrap()).unwrap().content {
         photocraft_doc::LayerContent::Fill(f @ Fill::Gradient { .. }) => f.clone(),
@@ -47,11 +47,11 @@ fn layer_fill(h: &Harness<PhotocraftApp>) -> Fill {
     }
 }
 
-fn history(h: &Harness<PhotocraftApp>) -> usize {
+fn history(h: &Harness<Box<PhotocraftApp>>) -> usize {
     h.state().session.active().unwrap().history.past_len()
 }
 
-fn click(h: &mut Harness<PhotocraftApp>, pos: Pos2) {
+fn click(h: &mut Harness<Box<PhotocraftApp>>, pos: Pos2) {
     h.event(egui::Event::PointerMoved(pos));
     h.run_steps(1);
     h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
@@ -62,7 +62,7 @@ fn click(h: &mut Harness<PhotocraftApp>, pos: Pos2) {
 
 /// The rect of the first marker whose accessible name or value contains `text`: the bar's markers
 /// are named with their location, and their order is the bar's geometry order, not location order.
-fn marker(h: &Harness<PhotocraftApp>, text: &str) -> Rect {
+fn marker(h: &Harness<Box<PhotocraftApp>>, text: &str) -> Rect {
     h.get_all_by_role(Role::GraphicsObject)
         .find(|n| {
             let n = n.accesskit_node();
@@ -73,14 +73,14 @@ fn marker(h: &Harness<PhotocraftApp>, text: &str) -> Rect {
 }
 
 /// Selects the marker at `text` (a location such as "50%") with a click.
-fn select(h: &mut Harness<PhotocraftApp>, text: &str) {
+fn select(h: &mut Harness<Box<PhotocraftApp>>, text: &str) {
     let at = marker(h, text).center();
     click(h, at);
 }
 
 /// Types `value` into the number field named `name` of the selected marker, and commits it with
 /// Enter when `commit`.
-fn type_number(h: &mut Harness<PhotocraftApp>, name: &str, value: &str, commit: bool) {
+fn type_number(h: &mut Harness<Box<PhotocraftApp>>, name: &str, value: &str, commit: bool) {
     h.get_all_by_role(Role::SpinButton)
         .find(|n| n.accesskit_node().label().as_deref() == Some(name))
         .unwrap_or_else(|| panic!("no number field {name:?}"))
@@ -96,7 +96,7 @@ fn type_number(h: &mut Harness<PhotocraftApp>, name: &str, value: &str, commit: 
 }
 
 /// Adds a colour stop: selects a colour marker, then Insert adds one halfway in its row.
-pub(super) fn add_stop(h: &mut Harness<PhotocraftApp>) {
+pub(super) fn add_stop(h: &mut Harness<Box<PhotocraftApp>>) {
     let at = h
         .get_all_by_role(Role::GraphicsObject)
         .find(|n| n.accesskit_node().label().is_some_and(|l| l.to_lowercase().contains("color")))
@@ -111,7 +111,7 @@ pub(super) fn add_stop(h: &mut Harness<PhotocraftApp>) {
 
 /// Presses on the marker at `text`, drags it `dx` points along the bar in two steps, runs
 /// `during` with the button still down, then releases.
-fn drag_marker(h: &mut Harness<PhotocraftApp>, text: &str, dx: f32, during: impl FnOnce(&mut Harness<PhotocraftApp>)) {
+fn drag_marker(h: &mut Harness<Box<PhotocraftApp>>, text: &str, dx: f32, during: impl FnOnce(&mut Harness<Box<PhotocraftApp>>)) {
     let from = marker(h, text).center();
     let to = from + vec2(dx, 0.0);
     h.event(egui::Event::PointerMoved(from));
@@ -160,12 +160,12 @@ fn a_typed_opacity_and_a_stop_drag_are_one_history_step_each() {
 
 /// The Gradient Editor panel, open in the workspace, beside the Color panel (Hue Cube) and the Swatches panel, over the
 /// gradient of [`editor`].
-fn editor_with_panels(layer: bool) -> Harness<'static, PhotocraftApp> {
+fn editor_with_panels(layer: bool) -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = editor_app(layer);
     crate::panel_docking::show_panel(&mut app, EDITOR_PANEL, Some(true)).unwrap();
     let ctx = app.ctx().clone();
     let mut h = Harness::builder().with_size(vec2(1000.0, 900.0)).with_context(ctx).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        |ui, app: &mut Box<PhotocraftApp>| {
             let room = |x: f32, y: f32, w: f32, h: f32| egui::UiBuilder::new().max_rect(Rect::from_min_size(egui::pos2(x, y), vec2(w, h)));
             ui.scope_builder(room(0.0, 0.0, 560.0, 900.0), |ui| crate::gradient_ui::editor::show(app, ui));
             ui.scope_builder(room(580.0, 0.0, 300.0, 200.0), |ui| crate::panels::color::panel(app, ui));
@@ -184,7 +184,7 @@ fn hex3(c: [f32; 3]) -> String {
 }
 
 /// The colour stops of the edited gradient (the layer's, or the tool's), in location order, as 8-bit hex.
-fn stop_hexes(h: &Harness<PhotocraftApp>, layer: bool) -> Vec<String> {
+fn stop_hexes(h: &Harness<Box<PhotocraftApp>>, layer: bool) -> Vec<String> {
     let app = h.state();
     let shown = if layer {
         stops::of_fill(&layer_fill(h))
@@ -194,20 +194,20 @@ fn stop_hexes(h: &Harness<PhotocraftApp>, layer: bool) -> Vec<String> {
     shown.color.iter().map(|s| hex3([s.color.r, s.color.g, s.color.b])).collect()
 }
 
-fn foreground_hex(h: &Harness<PhotocraftApp>) -> String {
+fn foreground_hex(h: &Harness<Box<PhotocraftApp>>) -> String {
     let fg = h.state().session.tools.foreground;
     hex3([fg[0], fg[1], fg[2]])
 }
 
 /// The colour the Color panel shows and edits as the foreground.
-fn panel_hex(h: &Harness<PhotocraftApp>) -> String {
+fn panel_hex(h: &Harness<Box<PhotocraftApp>>) -> String {
     let c = crate::panels::color::edited_foreground(h.state());
     hex3([c[0], c[1], c[2]])
 }
 
 /// A swatch's name and its colour as `swatches.use` sets it: the first of the first group whose colour is none of the
 /// gradient's, nor the foreground.
-fn first_swatch(h: &Harness<PhotocraftApp>) -> (String, String) {
+fn first_swatch(h: &Harness<Box<PhotocraftApp>>) -> (String, String) {
     let app = h.state();
     let conv = photocraft_engine::presets::swatches::SwatchConv::new(&app.session);
     let taken = ["#ff0000".to_owned(), "#00ff00".to_owned(), "#0000ff".to_owned(), foreground_hex(h)];
@@ -220,21 +220,21 @@ fn first_swatch(h: &Harness<PhotocraftApp>) -> (String, String) {
 }
 
 /// Clicks the Swatches panel's cell of swatch `name` (named "name, value").
-fn click_swatch(h: &mut Harness<PhotocraftApp>, name: &str) {
+fn click_swatch(h: &mut Harness<Box<PhotocraftApp>>, name: &str) {
     let prefix = format!("{name}, ");
     let at = h.get_all_by_label_contains(&prefix).next().unwrap_or_else(|| panic!("no swatch cell {name:?}")).rect().center();
     click(h, at);
 }
 
 /// A point of the Color panel's Hue Cube field, at fractions `x`, `y` of its width and height.
-fn field_at(h: &Harness<PhotocraftApp>, x: f32, y: f32) -> Pos2 {
+fn field_at(h: &Harness<Box<PhotocraftApp>>, x: f32, y: f32) -> Pos2 {
     h.get_by_label("Saturation and brightness").rect().lerp_inside(vec2(x, y))
 }
 
 /// Drags in the Color panel's field from `from` to `to` (fractions of the field) in four steps, and returns the middle
 /// colour stop's colour after the press and after each step, before the release.
-fn drag_field(h: &mut Harness<PhotocraftApp>, layer: bool, from: [f32; 2], to: [f32; 2]) -> Vec<String> {
-    let at = |h: &Harness<PhotocraftApp>, t: f32| field_at(h, from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t);
+fn drag_field(h: &mut Harness<Box<PhotocraftApp>>, layer: bool, from: [f32; 2], to: [f32; 2]) -> Vec<String> {
+    let at = |h: &Harness<Box<PhotocraftApp>>, t: f32| field_at(h, from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t);
     let start = at(h, 0.0);
     h.event(egui::Event::PointerMoved(start));
     h.run_steps(1);

@@ -464,7 +464,7 @@ mod tests {
     use serde_json::json;
 
     /// Sets up a test harness with a document, path, and attached type layer for placement tests.
-    fn app(tool: Tool) -> PhotocraftApp {
+    fn app(tool: Tool) -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
         app.sync_views();
