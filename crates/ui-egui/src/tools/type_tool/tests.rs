@@ -298,6 +298,26 @@ fn a_new_type_layer_is_named_layer_n_until_the_first_commit() {
     assert_eq!(name(&app), "Goodbye");
 }
 
+/// The first commit's rename goes through `type.edit` with `name`, and a Lock All that reaches
+/// the layer after typing (a lock command does not commit an open session first) refuses that
+/// rename. This pins that the refusal is not silent: `PhotocraftApp::run`'s shell reports every
+/// failed command in the status bar, so the call site may ignore its error. The lock guard
+/// itself stands - committing the open session before the lock is the design item there, not
+/// renaming across the guard - so the layer keeps its provisional Layer N name.
+#[test]
+fn a_first_commit_rename_refused_by_a_lock_reaches_the_status_bar() {
+    let mut app = app();
+    click(&mut app, 50.0, 100.0, Modifiers::NONE);
+    insert(&mut app, "Hi");
+    let id = LayerId(app.ui.text_edit.as_ref().unwrap().layer);
+    app.run("layer.select", json!({"layer": id.0, "mode": "replace"})).unwrap();
+    app.run("layer.lockLayers", json!({"layer": id.0, "all": true})).unwrap();
+    commit(&mut app);
+    assert_eq!(app.session.active().unwrap().doc.layer(id).unwrap().name, "Layer 1", "the lock guard stands: the rename is refused");
+    assert!(app.ui.status_error, "and the refusal reaches the status bar, not just the ignored call result");
+    assert!(app.ui.status.contains("locked"), "with the engine's own message: {}", app.ui.status);
+}
+
 /// Dragging the text frame's corner in a full app frame resizes the paragraph box in one history
 /// step, and the edit session survives it.
 #[test]
