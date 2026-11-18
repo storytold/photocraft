@@ -24,6 +24,9 @@ use crate::commands::CommandSpec;
 use crate::{DocState, EngineError, Result, Session};
 
 #[cfg(test)]
+#[path = "channel_cmds/calculations_reference_fallbacks_tests.rs"]
+mod calculations_reference_fallbacks_tests;
+#[cfg(test)]
 mod tests;
 
 // ---------------------------------------------------------------------------------------------
