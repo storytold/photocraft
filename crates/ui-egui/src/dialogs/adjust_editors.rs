@@ -194,8 +194,9 @@ pub struct EditorSetup {
     pub stale: bool,
     /// The height the Properties panel shows under the editor: Curves sizes its graph to the panel less this.
     pub fill_reserve: Option<f32>,
-    /// The clipping display the Levels editor reported on the pass before: the dialog's display changes when the editor's
-    /// report does (an Alt-held thumb), so a display set from outside (automation) stays until the editor next reports.
+    /// The clipping display the Levels or Curves editor reported on the pass before: the display changes when the
+    /// editor's report does (an Alt-held thumb or end point), so a display set from outside (automation) stays until
+    /// the editor next reports.
     pub reported_clipping: std::cell::Cell<Option<craft::imaging::ui::adjust::LevelsClip>>,
 }
 
@@ -268,6 +269,9 @@ fn show(kind: &str, setup: &EditorSetup, ui: &mut Ui, value: &mut AdjustValue, c
                 panel = panel.fill_height(reserve);
             }
             let out = panel.show(ui);
+            if setup.reported_clipping.replace(out.clipping) != out.clipping {
+                *cx.clipping = out.clipping;
+            }
             let mut edit = out.edit.map(|curves| AdjustValue::Curves { curves });
             // The panel reports the other mode's icon and leaves the conversion to the engine.
             if let Some(mode) = out.mode {

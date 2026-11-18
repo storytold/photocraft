@@ -246,8 +246,8 @@ fn paint_view(app: &mut PhotocraftApp, ctx: &egui::Context, xf: &CanvasView) -> 
     });
     out.textures_delta.clear();
     let c = app.levels_clipping.as_ref()?;
-    let (end, thr) = c.drawn?;
-    Some(image(&c.stats, &thr, end))
+    let (end, thr, palette) = c.drawn?;
+    Some(image_in(&c.stats, &thr, end, palette))
 }
 
 /// A view at one device pixel per document pixel whose visible document rect (with

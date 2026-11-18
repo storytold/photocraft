@@ -488,3 +488,96 @@ fn properties_curves_graph_fills_the_panel() {
     click(&mut h, at);
     assert_eq!(master_points(&h), vec![[0.0, 0.0], [64.0, 192.0], [255.0, 255.0]]);
 }
+
+/// #14383 in the Properties panel: Alt on the drag of the black input slider shows the clipping display on the canvas,
+/// and the display ends when Alt or the mouse is released.
+#[test]
+fn properties_curves_alt_drag_shows_clipping_until_alt_or_the_mouse_ends() {
+    use craft::imaging::ui::adjust::LevelsClip;
+    let mut h = app_harness("curves", "rgb", 8);
+    let clipping = |h: &Harness<'_, Box<PhotocraftApp>>| h.state().adjust_session.as_ref().and_then(|r| r.clipping);
+    let black = h.get_by_label(BLACK_SLIDER).rect().center();
+    // As a pointer reports it: the button event carries the modifiers held.
+    let button =
+        |pos: Pos2, pressed: bool, modifiers: egui::Modifiers| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers };
+    let hold = |h: &mut Harness<'_, Box<PhotocraftApp>>, modifiers: egui::Modifiers| h.event(egui::Event::ModifiersChanged(modifiers));
+    hold(&mut h, egui::Modifiers::ALT);
+    h.hover_at(black);
+    h.run_steps(1);
+    h.event(button(black, true, egui::Modifiers::ALT));
+    h.run_steps(1);
+    h.hover_at(black + vec2(12.0, 0.0));
+    h.run_steps(3);
+    assert_eq!(clipping(&h), Some(LevelsClip::Shadows), "Alt-drag of the black slider");
+    assert!(h.state().levels_clipping.is_some(), "the canvas draws the display");
+    hold(&mut h, egui::Modifiers::NONE);
+    h.hover_at(black + vec2(14.0, 0.0));
+    h.run_steps(3);
+    assert_eq!(clipping(&h), None, "Alt released");
+    hold(&mut h, egui::Modifiers::ALT);
+    h.hover_at(black + vec2(16.0, 0.0));
+    h.run_steps(3);
+    assert_eq!(clipping(&h), Some(LevelsClip::Shadows), "Alt again during the drag");
+    h.event(button(black + vec2(16.0, 0.0), false, egui::Modifiers::ALT));
+    h.run_steps(3);
+    assert_eq!(clipping(&h), None, "mouse released");
+    hold(&mut h, egui::Modifiers::NONE);
+    h.run_steps(2);
+    assert!(h.state().levels_clipping.is_none(), "the display's cache goes once nothing asks for it");
+}
+
+/// Alt (Option) held on the press of an input slider shows the clipping display at once, before the pointer moves,
+/// and keeps it while the button stays down; the release ends it. An Alt-click on a triangle shows what it clips.
+#[test]
+fn properties_curves_alt_press_on_a_slider_shows_clipping_before_it_moves() {
+    use craft::imaging::ui::adjust::LevelsClip;
+    let mut h = app_harness("curves", "rgb", 8);
+    let clipping = |h: &Harness<'_, Box<PhotocraftApp>>| h.state().adjust_session.as_ref().and_then(|r| r.clipping);
+    let button =
+        |pos: Pos2, pressed: bool, modifiers: egui::Modifiers| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers };
+    for (name, end) in [(BLACK_SLIDER, LevelsClip::Shadows), (WHITE_SLIDER, LevelsClip::Highlights)] {
+        let at = h.get_by_label(name).rect().center();
+        h.event(egui::Event::ModifiersChanged(egui::Modifiers::ALT));
+        h.hover_at(at);
+        h.run_steps(1);
+        h.event(button(at, true, egui::Modifiers::ALT));
+        h.run_steps(3);
+        assert_eq!(clipping(&h), Some(end), "Alt-press of the {name}, the pointer still");
+        assert!(h.state().levels_clipping.is_some(), "the canvas draws the display for the {name}");
+        h.event(button(at, false, egui::Modifiers::ALT));
+        h.run_steps(3);
+        assert_eq!(clipping(&h), None, "the {name} released");
+        h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+        h.run_steps(2);
+    }
+    assert_eq!(master_points(&h), vec![[0.0, 0.0], [255.0, 255.0]], "a press that does not move changes nothing");
+}
+
+/// The Show Clipping check box shows the display on the press of an end without Alt; unchecked, the press shows
+/// nothing.
+#[test]
+fn properties_curves_show_clipping_shows_the_display_without_alt() {
+    use craft::imaging::ui::adjust::LevelsClip;
+    let mut h = app_harness("curves", "rgb", 8);
+    let clipping = |h: &Harness<'_, Box<PhotocraftApp>>| h.state().adjust_session.as_ref().and_then(|r| r.clipping);
+    let press = |h: &mut Harness<'_, Box<PhotocraftApp>>, at: Pos2, pressed: bool| {
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+        h.run_steps(3);
+    };
+    let white = h.get_by_label(WHITE_SLIDER).rect().center();
+    h.hover_at(white);
+    h.run_steps(1);
+    press(&mut h, white, true);
+    assert_eq!(clipping(&h), None, "no Alt, Show Clipping off");
+    press(&mut h, white, false);
+    let check = label_rect(&h, "Show Clipping").expect("the Show Clipping check box shows").center();
+    click(&mut h, check);
+    let white = h.get_by_label(WHITE_SLIDER).rect().center();
+    h.hover_at(white);
+    h.run_steps(1);
+    press(&mut h, white, true);
+    assert_eq!(clipping(&h), Some(LevelsClip::Highlights), "Show Clipping on: the white slider's press");
+    assert!(h.state().levels_clipping.is_some(), "the canvas draws the display");
+    press(&mut h, white, false);
+    assert_eq!(clipping(&h), None, "released");
+}
