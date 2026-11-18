@@ -79,9 +79,9 @@ fn luma(c: egui::Color32) -> f32 {
 /// makes it stronger still.
 #[test]
 fn resting_scrollbar_thumb_stands_out_from_its_track_in_every_theme() {
-    for kind in ThemeKind::ALL {
+    for kind in AppTheme::all() {
         let ctx = egui::Context::default();
-        apply(&ctx, kind);
+        apply(&ctx, &kind);
         for theme in [egui::Theme::Dark, egui::Theme::Light] {
             let style = ctx.style_of(theme);
             let (scroll, v) = (style.spacing.scroll, &style.visuals);
@@ -101,7 +101,7 @@ fn resting_scrollbar_thumb_stands_out_from_its_track_in_every_theme() {
             }
             // Classic keeps the room and width a solid bar has beside the content; its bar floats
             // only so the thumb can fade (a solid style always paints it opaque).
-            if kind == ThemeKind::Classic {
+            if kind.tokens().bevel {
                 let solid = egui::style::ScrollStyle::solid();
                 assert!(scroll.floating, "{theme:?}: Classic's thumb fades");
                 assert_eq!(scroll.allocated_width(), solid.allocated_width(), "{theme:?}: Classic reserves a solid bar's room");
