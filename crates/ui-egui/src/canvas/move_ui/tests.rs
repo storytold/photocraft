@@ -640,7 +640,7 @@ fn move_tool_drag_onto_another_artboard_nests_the_layer_there() {
 }
 
 /// A document with at least [`super::MANY_LAYERS`] layers, `side` px square.
-fn many_layers(side: u32) -> PhotocraftApp {
+fn many_layers(side: u32) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": side, "height": side})).unwrap();
     app.sync_views();
@@ -656,7 +656,7 @@ fn costly(app: &PhotocraftApp, bounds: Option<Rect>) -> bool {
 
 /// A document costly to drag in, the Move tool picked: many layers, and on the active one two
 /// bands, top and bottom, between which the white background shows unless it's hidden.
-fn banded() -> PhotocraftApp {
+fn banded() -> Box<PhotocraftApp> {
     let mut app = many_layers(4096);
     app.session
         .edit("paint", |doc, a| {
