@@ -699,7 +699,7 @@ mod tests {
     fn record_conditional(width: u32, height: u32) -> (Session, usize) {
         let mut s = Session::new();
         s.execute("file.new", json!({"width": width, "height": height})).unwrap();
-        s.actions.list.push(Action::new("Tall", vec![("layer.new.layer".into(), json!({"name": "Tall"}))]));
+        s.actions.list.push(Action::new("Tall", vec![ActionStep::new("layer.new.layer", json!({"name": "Tall"}))])).unwrap();
         let layers = s.active().unwrap().doc.walk().len();
         s.execute("actions.record", json!({"name": "Parent"})).unwrap();
         s.execute("actions.conditional", json!({"if": "portrait", "then": "Tall", "else": null})).unwrap();
@@ -707,14 +707,14 @@ mod tests {
         (s, layers)
     }
 
-    fn parent_steps(s: &Session) -> Vec<(String, Value)> {
-        s.actions.list.iter().find(|a| a.name == "Parent").unwrap().steps.clone()
+    fn parent_steps(s: &Session) -> Vec<ActionStep> {
+        s.actions.list.actions().iter().find(|a| a.name == "Parent").unwrap().steps.clone()
     }
 
     #[test]
     fn recording_a_conditional_keeps_the_step_when_no_branch_runs() {
         let (mut s, layers) = record_conditional(8, 4);
-        let expected = vec![("actions.conditional".to_string(), json!({"if": "portrait", "then": "Tall", "else": null}))];
+        let expected = vec![ActionStep::new("actions.conditional", json!({"if": "portrait", "then": "Tall", "else": null}))];
         assert_eq!(parent_steps(&s), expected);
         assert_eq!(s.active().unwrap().doc.walk().len(), layers, "the false predicate runs no branch");
         s.execute("file.new", json!({"width": 4, "height": 8})).unwrap();
@@ -729,7 +729,7 @@ mod tests {
     #[test]
     fn recording_a_conditional_keeps_the_predicate_when_a_branch_runs() {
         let (s, layers) = record_conditional(4, 8);
-        let expected = vec![("actions.conditional".to_string(), json!({"if": "portrait", "then": "Tall", "else": null}))];
+        let expected = vec![ActionStep::new("actions.conditional", json!({"if": "portrait", "then": "Tall", "else": null}))];
         assert_eq!(parent_steps(&s), expected, "no nested actions.play is recorded");
         assert_eq!(s.active().unwrap().doc.walk().len(), layers + 1, "the true predicate runs Tall");
     }

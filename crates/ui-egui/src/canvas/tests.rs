@@ -34,7 +34,7 @@ fn display_image_matches_egui_unmultiplied_conversion() {
 
 /// #569: displays 1 (sRGB) and 4 (Display P3) side by side, and a document filled with an
 /// sRGB colour.
-fn app_on_two_displays() -> PhotocraftApp {
+fn app_on_two_displays() -> Box<PhotocraftApp> {
     use photocraft_engine::color_cmds::resolve_profile;
     use photocraft_engine::display_color::Display;
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
@@ -165,7 +165,7 @@ fn navigator_damage_updates_match_a_full_thumbnail() {
 }
 
 /// An app with a 64 × 64 white document, a clone source and the Clone Stamp at `size` px.
-fn clone_overlay_app(size: f32) -> PhotocraftApp {
+fn clone_overlay_app(size: f32) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
     app.run("cloneSource.set", json!({"source": [16, 16]})).unwrap();
@@ -870,7 +870,7 @@ fn torn_off_document_is_not_drawn_again_in_the_main_window() {
         assert_eq!(app.session.active_index(), Some(0), "{kind:?}: the floated page remains active");
         assert_eq!(main_canvas_document(&app), Some(1), "{kind:?}: the main canvas picks a docked page instead");
         let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(680.0, 480.0)).with_context(app.ctx().clone()).build_ui_state(
-            |ui, (app, ready): &mut (PhotocraftApp, bool)| {
+            |ui, (app, ready): &mut (Box<PhotocraftApp>, bool)| {
                 if *ready {
                     egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| document_area(app, ui));
                 }
@@ -941,7 +941,7 @@ fn a_new_window_for_document_keeps_its_own_view() {
     let app_ctx = app.ctx().clone();
     crate::menus::invoke(&mut app, &app_ctx, "window.arrange.newWindowForDocument", json!({})).unwrap();
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 700.0)).with_context(app.ctx().clone()).build_ui_state(
-        |ui, (app, ready): &mut (PhotocraftApp, bool)| {
+        |ui, (app, ready): &mut (Box<PhotocraftApp>, bool)| {
             if *ready {
                 egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| document_area(app, ui));
                 extra_windows(app, ui);
@@ -953,7 +953,7 @@ fn a_new_window_for_document_keeps_its_own_view() {
     h.run_steps(4);
     assert!(!h.state().0.ui.document_windows.floating.is_empty(), "the extra window is open");
     let window = first_window(&h.state().0);
-    let window_zoom = |h: &egui_kittest::Harness<'_, (PhotocraftApp, bool)>| h.state().0.ui.window_views[&window].zoom;
+    let window_zoom = |h: &egui_kittest::Harness<'_, (Box<PhotocraftApp>, bool)>| h.state().0.ui.window_views[&window].zoom;
     let before = window_zoom(&h);
     type_zoom(&mut h.state_mut().0.ui.views[0], 300.0);
     h.run_steps(3);
@@ -979,7 +979,7 @@ fn a_tiled_document_follows_navigator_and_status_bar_zoom() {
         let app_ctx = app.ctx().clone();
         crate::menus::invoke(&mut app, &app_ctx, &format!("window.arrange.{layout}"), json!({})).unwrap();
         let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 700.0)).with_context(app.ctx().clone()).build_ui_state(
-            |ui, (app, ready): &mut (PhotocraftApp, bool)| {
+            |ui, (app, ready): &mut (Box<PhotocraftApp>, bool)| {
                 if *ready {
                     egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| document_area(app, ui));
                 }
@@ -1033,7 +1033,7 @@ fn a_floating_document_follows_navigator_and_status_bar_zoom() {
     assert!(crate::panel_docking::is_front(h.state(), "navigator"), "the Navigator shows as a panel");
     assert_eq!(h.state().session.active_index(), Some(0), "the floating document is active");
     // The status bar's zoom field (bottom left) and the Navigator's.
-    let fields = |h: &egui_kittest::Harness<'_, PhotocraftApp>| {
+    let fields = |h: &egui_kittest::Harness<'_, Box<PhotocraftApp>>| {
         // The fields are the nodes named Zoom that show the percentage as their value (a field's group and the Navigator's slider carry the name too).
         let mut f: Vec<egui::Rect> = h
             .query_all_by_label("Zoom")
