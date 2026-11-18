@@ -60,10 +60,16 @@ fn rects(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
     }
     for dialog in app.framework.dialogs.open_dialogs() {
         if let Some(r) = rect(dialog.id) {
-            out.insert(dialog.id.value().to_string(), r);
+            out.insert(dialog_key(app, dialog.id), r);
         }
     }
     Value::Object(out)
+}
+
+/// The key `rects` stores hosted dialog `id` under: the id `dialogs` lists it by, so the unsaved-changes prompt is
+/// [`crate::discard_ui::CONTROL_ID`] there too (#15544), any other dialog its host id.
+pub(super) fn dialog_key(app: &PhotocraftApp, id: egui::Id) -> String {
+    if crate::discard_ui::host_id(app) == Some(id) { crate::discard_ui::CONTROL_ID.to_string() } else { id.value().to_string() }
 }
 
 /// The notices posted since the last pass and the toast cards on screen in every window.
