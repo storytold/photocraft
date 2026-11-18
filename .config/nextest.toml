@@ -11,7 +11,8 @@ nextest-version = "0.9.150"
 #
 # GPU tests: each test is its own process here, so the in-process `gpu_lock()` mutexes no longer
 # serialize them. Too many concurrent wgpu devices time out (`PollError: ... Wait timed out`), so
-# this group caps them at 4. scripts/ci-gpu-lavapipe.py reads this group's filters directly.
+# this group caps them at 4. `cargo xtask ci tests --gpu` reads this group's filters directly: the
+# Linux gate runs the group in a shard of its own on lavapipe (scripts/ci-gpu-lavapipe.py).
 [test-groups]
 gpu = { max-threads = 4 }
 
@@ -26,6 +27,12 @@ test-group = 'gpu'
 fail-fast = false
 slow-timeout = { period = "60s", terminate-after = 10 }
 failure-output = "immediate-final"
+# The gate's shards run the tests from a nextest archive (`cargo xtask ci archive`) and start them
+# with the xtask binary the archive carries, so a shard builds nothing. Only one of the two exists.
+archive.include = [
+    { path = "debug/xtask", relative-to = "target", depth = 0, on-missing = "ignore" },
+    { path = "debug/xtask.exe", relative-to = "target", depth = 0, on-missing = "ignore" },
+]
 
 # Keep phase timings for the remaining expensive Windows GPU regressions visible. This does
 # not relax their timeout, isolate failures differently or remove any test cases.
@@ -48,11 +55,10 @@ threads-required = 2
 
 # Slowest tests start first. nextest starts higher-priority tests first, so a long test no longer
 # begins at the end of the run and extends the job. Every test that took over 60 s on the Windows
-# runner in the cold run of #15474 (unit and integration legs); the list names the test, so a test
-# that gets faster stays harmless and a new slow one is added here. Priority only orders the
-# start; it changes no timeout, group or result.
+# runner in the cold run of #15474 (unit and integration legs); the same tests are the slowest on
+# Linux. The list names the test, so a test that gets faster stays harmless and a new slow one is
+# added here. Priority only orders the start; it changes no timeout, group or result.
 [[profile.ci.overrides]]
-platform = 'cfg(target_os = "windows")'
 # over 200 s
 filter = '''
   (package(photocraft-ui-egui) & test(=input::shortcut_dispatch::tests::every_displayed_shortcut_dispatches_from_where_focus_usually_is)) |
@@ -64,7 +70,6 @@ filter = '''
 priority = 100
 
 [[profile.ci.overrides]]
-platform = 'cfg(target_os = "windows")'
 # 60 to 200 s
 filter = '''
   (package(photocraft-gpu) & test(=camera_raw::clarity_texture_and_dehaze_with_shadows_highlights_and_per_pixel_stages)) |

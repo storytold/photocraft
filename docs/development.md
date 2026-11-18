@@ -45,6 +45,7 @@ cargo run --release -p photocraft -- --control 7878 --control-token-file .privat
 cargo test --workspace                                     # everything
 cargo xtask test                                           # tests (nextest when installed) + doctests
 cargo xtask ci                                             # the CI gate: fmt, clippy, layers, scorecard, tests, panic_hunt, doctests, wasm, i18n report
+cargo xtask ci lint                                        # only the gate's steps that need no test build (its lint leg)
 cargo xtask stats                                          # tests and lines per crate
 cargo xtask parity                                         # Photoshop menu coverage -> docs/parity-checklist.md
 ```
@@ -113,7 +114,7 @@ the opted-in test; an unset variable leaves the ordinary behavior tests availabl
 After review, remove only the two generated PNGs and their owned temporary directory. The same
 Rust test and variable work on Windows with the native shell's environment-variable syntax.
 
-**GPU tests without a GPU.** Linux CI uses the shared `craft-common-actions` gate with Mesa's Vulkan driver installed. After the regular gate, `python3 scripts/ci-gpu-lavapipe.py` reruns the configured `gpu` group with `WGPU_BACKEND=vulkan` and the lavapipe ICD explicitly selected. It requires Vulkan parity evidence and rejects authored skips, except the documented software-adapter timing exceptions. It reads the filter from `.config/nextest.toml`, so no second filter needs maintaining. To run locally on Linux, install `mesa-vulkan-drivers libvulkan1` and run the same script. Windows uses WARP; this check does not certify Windows skip coverage.
+**GPU tests without a GPU.** Linux CI uses the shared `craft-common-actions` gate with Mesa's Vulkan driver installed. The gate builds the tests once into a nextest archive (`cargo xtask ci archive`) and runs them in shards from it (`cargo xtask ci tests`). One shard runs the configured `gpu` group alone, through `python3 scripts/ci-gpu-lavapipe.py`, with `WGPU_BACKEND=vulkan` and the lavapipe ICD explicitly selected; the other shards split the remaining tests. The script requires Vulkan parity evidence in that shard's output and rejects authored skips, except the documented software-adapter timing exceptions. xtask reads the group's filter from `.config/nextest.toml`, so no second filter needs maintaining. To run locally on Linux, install `mesa-vulkan-drivers libvulkan1`, build an archive and run `python3 scripts/ci-gpu-lavapipe.py <extracted>/target/debug/xtask ci tests --from <extracted> --gpu` as the gate's shard command in `.github/workflows/ci.yml` does. Windows uses WARP; this check does not certify Windows skip coverage.
 
 ## Fonts (craft-fonts)
 
