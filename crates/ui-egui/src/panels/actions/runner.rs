@@ -198,7 +198,10 @@ pub(crate) fn open_recorded_editor(app: &mut PhotocraftApp, id: &str, params: &V
         return Ok(dialog);
     }
     let dialog = open_step_editor(app, id, &values)?;
-    if !crate::sizing::is_sizing(id) {
+    // Matrix rows are seeded from the six authoritative coefficients. Older recordings may
+    // also contain ignored scalar fields that must not overwrite that translation.
+    let seeded = crate::sizing::is_sizing(id) || (id == "path.transform" && values.get("matrix").is_some());
+    if !seeded {
         fill_editor(app, dialog, &values);
     }
     Ok(dialog)

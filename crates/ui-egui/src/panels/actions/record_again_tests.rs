@@ -289,3 +289,21 @@ fn filter_and_adjustment_previews_retain_permissions_before_evaluation() {
         assert_eq!(h.state().session.actions.list, original);
     }
 }
+
+#[test]
+fn recorded_matrix_numeric_edit_changes_translation_and_preserves_shear() {
+    let mut h = harness("path.transform", json!({"pathIndex":0,"matrix":[1,0,0.5,1,2,0],"translateX":-20}));
+    h.state_mut().run("path.set", json!({"name":"A","path":{"subpaths":[{"knots":[[4,2],[5,3]]}]}})).unwrap();
+    let dialog = open(&mut h);
+    // Legacy actions can contain shadowed scalar values. The opening rows show the live matrix.
+    assert_eq!(number(&h, dialog, "translateX"), Some(2.0));
+    assert_eq!(set_field(&mut h, dialog, "translateX", json!(8.0))["ok"], true);
+    let (_, authorized) = crate::control::dialogs::hosted_command(h.state(), dialog).unwrap();
+    assert_eq!(authorized["matrix"][4].as_f64(), Some(8.0));
+    confirm(&mut h, dialog).unwrap();
+    let st = h.state().session.active().unwrap();
+    assert_eq!(st.doc.paths[0].path.subpaths[0].knots[0].anchor.x, 13.0);
+    let recorded = &h.state().session.actions.list.action(0).unwrap().steps[0].params;
+    assert_eq!(recorded["matrix"][2].as_f64(), Some(0.5));
+    assert_eq!(recorded["matrix"][4].as_f64(), Some(8.0));
+}

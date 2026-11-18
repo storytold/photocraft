@@ -142,23 +142,64 @@ fn rows_builder(command: &str) -> Option<fn(&PhotocraftApp) -> Vec<Param>> {
     })
 }
 
+// Affine entries are editable directly: skew, reflections and singular matrices cannot
+// all be expressed by the ordinary rotation and scale controls.
+const MATRIX_ROWS: [(&str, &str); 6] =
+    [("__xx", "X from X:"), ("__yx", "Y from X:"), ("__xy", "X from Y:"), ("__yy", "Y from Y:"), ("translateX", "Horizontal:"), ("translateY", "Vertical:")];
+
+fn matrix_rows(matrix: &Value, fields: &mut DialogFields) -> Result<Vec<Param>, String> {
+    let entries = matrix.as_array().filter(|a| a.len() == MATRIX_ROWS.len()).ok_or("Expected six affine matrix entries")?;
+    let mut rows = Vec::new();
+    for ((key, label), entry) in MATRIX_ROWS.iter().copied().zip(entries) {
+        let value = entry.as_f64().filter(|v| v.abs() <= 1_000_000.0).ok_or("Invalid affine matrix entry")?;
+        fields.set(key, value);
+        rows.push(number(key, label, (-1_000_000.0, 1_000_000.0), value, 8));
+    }
+    Ok(rows)
+}
+
+/// Encode the edited coefficients once for preview, authorization, recording and playback.
+/// Keep the original JSON number for untouched entries, including integer-valued coefficients.
+pub(crate) fn encode_recorded_matrix(map: &mut serde_json::Map<String, Value>) {
+    if !map.contains_key("__xx") {
+        return;
+    }
+    if let Some(entries) = map.get("matrix").and_then(Value::as_array) {
+        let mut edited = entries.clone();
+        for ((key, _), entry) in MATRIX_ROWS.iter().zip(&mut edited) {
+            if let Some(value) = map.get(*key).filter(|v| v.as_f64() != entry.as_f64()) {
+                *entry = value.clone();
+            }
+        }
+        map.insert("matrix".into(), Value::Array(edited));
+        map.remove("translateX");
+        map.remove("translateY");
+    }
+}
+
 /// Action editors use these same typed rows, seeded from the recorded command rather than
 /// the current panel selection. Preserve non-row parameters (for example a transform matrix).
 pub(crate) fn open_recorded(app: &mut PhotocraftApp, command: &str, values: &Value) -> Result<craft::ui::dialog::DialogId, String> {
     let build = rows_builder(command).ok_or("Unknown path dialog")?;
-    app.framework.path_dialog_targets.remove(command);
-    if let Some(index) = values.get("pathIndex").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()) {
-        let st = app.session.active().ok_or("No active document")?;
-        let target = Target { path: PathSelection::Saved { index }, source: PathMenuSource::capture(st), layer: st.active_layer };
-        app.framework.path_dialog_targets.insert(command.to_owned(), target);
-    }
     let mut fields = DialogFields::new();
     if let Some(values) = values.as_object() {
         for (key, value) in values {
             fields.set(key.clone(), craft::ui::patterns::form_dialogs::FieldValue::Json(value.clone()));
         }
     }
-    let rows = build(app);
+    let rows = if command == "path.transform"
+        && let Some(matrix) = values.get("matrix")
+    {
+        matrix_rows(matrix, &mut fields)?
+    } else {
+        build(app)
+    };
+    app.framework.path_dialog_targets.remove(command);
+    if let Some(index) = values.get("pathIndex").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()) {
+        let st = app.session.active().ok_or("No active document")?;
+        let target = Target { path: PathSelection::Saved { index }, source: PathMenuSource::capture(st), layer: st.active_layer };
+        app.framework.path_dialog_targets.insert(command.to_owned(), target);
+    }
     let key = command.to_owned();
     let title = title(command);
     Ok(crate::dialogs::params::open_param(app, command, fields, Value::Null, move |fields: &mut DialogFields| {

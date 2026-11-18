@@ -351,6 +351,8 @@ pub(crate) fn hosted_command(app: &PhotocraftApp, id: DialogId) -> Option<(Strin
     }
     let fields = if crate::canvas_tool_menu::pen_dialogs::owns(&key) && !crate::canvas_tool_menu::pen_dialogs::action_editor(app, id) {
         crate::canvas_tool_menu::pen_dialogs::command_params(app, &key, dialog.fields()).ok()?
+    } else if key == "path.transform" {
+        crate::filter_dialog::command_params(&key, dialog.fields())
     } else {
         fields_of(app, id)
     };

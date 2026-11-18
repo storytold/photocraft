@@ -558,3 +558,32 @@ fn alt_drag_duplicates_only_the_selected_same_named_path_and_undo_redo_restore_i
 fn action(name: &str, steps: Vec<(String, Value)>) -> Action {
     Action::new(name, steps.into_iter().map(|(id, params)| craft::automation::actions::ActionStep::new(id, params)).collect())
 }
+
+#[test]
+fn script_reopens_same_id_then_edits_before_selection_sync() {
+    let mut app = app();
+    let temp = tempfile::tempdir().unwrap();
+    let file = temp.path().join("paths.pcraft");
+    app.run("file.saveACopy", json!({"path":file})).unwrap();
+    app.run("file.closeAll", json!({})).unwrap();
+    app.run("file.openAs", json!({"path":file})).unwrap();
+    let id = app.session.active().unwrap().doc.id;
+    let revision = app.session.active().unwrap().revision;
+    select(&mut app, 1);
+    let reply = app
+        .run(
+            "file.scripts.browse",
+            json!({"steps":[
+                ["file.closeAll",{}], ["file.openAs",{"path":file}],
+                ["path.rename",{"pathIndex":1,"to":"Replacement"}]
+            ]}),
+        )
+        .unwrap();
+    assert_eq!(reply["ok"], true, "{reply}");
+    let st = app.session.active().unwrap();
+    assert_eq!(st.doc.id, id);
+    assert!(st.revision > revision);
+    assert_eq!(st.saved_paths_revision(), 0);
+    assert_cleared(&app);
+    assert!(crate::vector_ui::with_active_path(&app, "layer.newFillLayer.solidColor", json!({})).get("path").is_none());
+}
