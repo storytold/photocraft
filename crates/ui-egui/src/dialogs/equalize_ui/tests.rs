@@ -4,7 +4,7 @@ use serde_json::json;
 use super::*;
 
 /// A 40 × 30 layer: the top half at 0.4 gray, the bottom half at 0.5, with the left half selected.
-fn setup() -> PhotocraftApp {
+fn setup() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 40, "height": 30})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();

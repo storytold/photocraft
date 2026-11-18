@@ -16,7 +16,7 @@ enum Outcome {
     Erase,
 }
 
-fn app(mode: &str, erase_preference: bool) -> PhotocraftApp {
+fn app(mode: &str, erase_preference: bool) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     // The erase stroke commits in the click's own pass, so its journal entry is there when the click returns.
     app.background_jobs = false;

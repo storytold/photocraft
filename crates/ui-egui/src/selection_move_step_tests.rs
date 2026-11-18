@@ -10,7 +10,7 @@ use crate::canvas::{ToolEvent, tool_event};
 use crate::state::Tool;
 
 /// A 400 x 300 document with 100,100 to 300,300 selected and `tool` active.
-fn app_with_selection(tool: Tool) -> PhotocraftApp {
+fn app_with_selection(tool: Tool) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 400})).unwrap();
     app.sync_views();
