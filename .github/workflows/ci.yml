@@ -259,7 +259,11 @@ jobs:
       # leg. A failed warm run saves nothing: an entry saved from a half-finished build would lack
       # dependencies, and rust-cache never replaces an entry with the same key, so every later run
       # would restore that half-filled entry until Cargo.lock changes.
-      - uses: step-security/rust-cache@8871c8ba063416da7c32246932ea6ae08700453e # v2.9.2
+      # v2.9.1 on purpose: v2.9.2 is an ES-module bundle in which minimatch's `require('path')` fails,
+      # so it assumes "/" as the path separator and, on Windows, its glob never matches a backslash
+      # path. The save step then finds no cache paths ("Path Validation Error") and never saves.
+      # v2.9.1 is the last release with the CommonJS bundle. Move back once a release fixes this.
+      - uses: step-security/rust-cache@851174d9a2fdc03e0896e02844dcc61d81dd7851 # v2.9.1
         with:
           workspaces: . -> ${{ steps.cache-target.outputs.relative }}
           save-if: ${{ github.ref == 'refs/heads/main' && matrix.part == 'warm' }}
