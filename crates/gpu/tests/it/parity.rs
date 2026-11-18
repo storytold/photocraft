@@ -137,6 +137,63 @@ fn hdr_zero_coverage_emission_does_not_obscure_the_backdrop() {
     }
 }
 
+#[test]
+fn hdr_emission_survives_group_opacity_masks_and_clipping() {
+    let Some(mut g) = gpu() else { return };
+    for clipped in [false, true] {
+        let mut doc = Document::new("Emission groups", Size::new(2, 1), ColorMode::Rgb, SampleType::F32);
+        let bounds = doc.bounds();
+        let mut emitter = Layer::raster("emission", PixelFormat::RGBA32F);
+        emitter.surface_mut().unwrap().fill_rect(bounds, &[0.5, 0.25, 0.125, photocraft_color::EMISSIVE_ALPHA]);
+        if clipped {
+            let mut base = Layer::raster("base", PixelFormat::RGBA32F);
+            base.surface_mut().unwrap().fill_rect(bounds, &[0.2, 0.4, 0.6, 0.5]);
+            emitter.clipped = true;
+            doc.layers = vec![base, emitter];
+        } else {
+            let mut group = Layer::group("group", vec![emitter]);
+            group.opacity = 0.5;
+            group.mask = Some(photocraft_doc::LayerMask {
+                surface: photocraft_raster::Surface::with_default(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false), &[0.5]),
+                ..photocraft_doc::LayerMask::reveal_all()
+            });
+            doc.layers.push(group);
+        }
+        let cpu = photocraft_compose::flatten(&doc);
+        let expected = if clipped { [0.7, 0.65, 0.725, 0.5] } else { [0.125, 0.0625, 0.03125, photocraft_color::EMISSIVE_ALPHA] };
+        for comp in [&mut g.comp, &mut g.paged] {
+            let actual = render_to_vec(comp, &g.device, &g.queue, &doc, bounds).unwrap();
+            for pixel in actual.iter().chain(&cpu.px) {
+                for (got, want) in pixel.iter().zip(expected) {
+                    assert!((*got - want).abs() <= TOL, "clipped={clipped}: {pixel:?} != {expected:?}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn hdr_emission_overflow_retains_associated_light() {
+    let Some(mut g) = gpu() else { return };
+    for alpha in [1e-10, 0.25] {
+        let mut doc = Document::new("Emission overflow", Size::new(1, 1), ColorMode::Rgb, SampleType::F32);
+        let bounds = doc.bounds();
+        let mut emitter = Layer::raster("emission", PixelFormat::RGBA32F);
+        let red = f32::MAX / 2.0;
+        emitter.surface_mut().unwrap().fill_rect(bounds, &[red, 0.0, 0.0, photocraft_color::EMISSIVE_ALPHA]);
+        let mut cover = Layer::raster("coverage", PixelFormat::RGBA32F);
+        cover.surface_mut().unwrap().fill_rect(bounds, &[0.0, 0.0, 0.0, alpha]);
+        doc.layers = vec![emitter, cover];
+        let expected = f64::from(red) * f64::from(1.0 - alpha);
+        for comp in [&mut g.comp, &mut g.paged] {
+            let actual = render_to_vec(comp, &g.device, &g.queue, &doc, bounds).unwrap()[0];
+            assert!(actual[0].is_finite());
+            let light = f64::from(actual[0]) * f64::from(actual[3]);
+            assert!((light / expected - 1.0).abs() < 1e-6, "{actual:?} at {alpha}");
+        }
+    }
+}
+
 /// Phase timings for diagnosing expensive parity checks; nextest shows them only for the
 /// selected slow Windows tests, without changing their timeout or pass criteria.
 fn timed<T>(what: &str, run: impl FnOnce() -> T) -> T {

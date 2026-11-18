@@ -2229,8 +2229,10 @@ fn matte_over_white(img: &Image) -> Result<Image, IoError> {
         let mut out = Vec::with_capacity(vals.len() / layout.channels() * layout.color_channels());
         for px in vals.chunks_exact(layout.channels()) {
             if let Some((&a, color)) = px.split_last() {
+                let emission = photocraft_color::is_emissive_alpha(a);
                 let a = a.clamp(0.0, 1.0);
-                out.extend(color.iter().map(|&c| c * a + white * (1.0 - a)));
+                let weight = if emission { 1.0 } else { a };
+                out.extend(color.iter().map(|&c| c * weight + white * (1.0 - a)));
             }
         }
         out

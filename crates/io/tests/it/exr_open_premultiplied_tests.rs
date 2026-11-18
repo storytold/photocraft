@@ -182,3 +182,25 @@ fn exr_export_preserves_ordinary_low_coverage() {
         }
     }
 }
+
+#[test]
+fn exr_emission_survives_export_to_an_opaque_hdr_format() {
+    let bytes = fixture(ChannelLayout::Rgba, &[0.5, 0.0, 0.0, 0.0], &[0.0, -0.5, 0.0, 0.0]);
+    let mut doc = import("emission.exr", &bytes).unwrap().document;
+    for composite in [false, true] {
+        if composite {
+            doc.layers.insert(0, photocraft_doc::Layer::raster("empty", doc.pixel_format()));
+        }
+        let saved = export(&doc, "hdr", &ExportOptions::default()).unwrap();
+        let raw = codecs::decode(&saved.bytes).unwrap();
+        for (x, expected) in [(4, [1.5, 1.0, 1.0]), (24, [1.0, 0.5, 1.0])] {
+            for (channel, value) in expected.into_iter().enumerate() {
+                assert!(
+                    (raw.get(x, 4, channel) - value).abs() <= 0.02,
+                    "composite={composite}, x={x}, channel={channel}: expected {value}, got {}",
+                    raw.get(x, 4, channel)
+                );
+            }
+        }
+    }
+}

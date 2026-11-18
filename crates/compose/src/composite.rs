@@ -230,12 +230,16 @@ fn apply_blend_if(layer: &Layer, before: &Buffer, out: &mut Buffer, cx: &Ctx) {
     };
     for (i, (p, b)) in out.px.iter_mut().zip(&before.px).enumerate() {
         let this = match &own {
-            Some(o) => Some(o.px[i]).filter(|q| q[3] > 0.0),
+            Some(o) => Some(o.px[i]).filter(|q| q[3] > 0.0 || photocraft_color::is_emissive_alpha(q[3])),
             None => Some(*p),
         };
-        let under = Some(*b).filter(|q| q[3] > 0.0);
+        let under = Some(*b).filter(|q| q[3] > 0.0 || photocraft_color::is_emissive_alpha(q[3]));
         let k = blend_if_weight(layer, cx.mode, this, under);
         if k >= 1.0 {
+            continue;
+        }
+        if let Some(pixel) = psblend::mix_emission(*b, *p, k) {
+            *p = pixel;
             continue;
         }
         let a = b[3] + (p[3] - b[3]) * k;
@@ -380,6 +384,10 @@ pub(crate) fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: 
             for (i, (p, a)) in backdrop.px.iter_mut().zip(&before.px).enumerate() {
                 let k = opacity * mask_k(&mv, i);
                 let b = *p;
+                if let Some(pixel) = psblend::mix_emission(*a, b, k) {
+                    *p = pixel;
+                    continue;
+                }
                 // Coverage mixes premultiplied colour; the stored buffer remains straight alpha.
                 let wa = a[3] * (1.0 - k);
                 let wb = b[3] * k;
@@ -410,6 +418,11 @@ pub(crate) fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: 
             let mut with = before;
             blend_into(&mut with, &clipped_iso, BlendMode::Normal, opacity);
             for ((p, w), wo) in backdrop.px.iter_mut().zip(&with.px).zip(&without.px) {
+                if [p[3], w[3], wo[3]].into_iter().any(photocraft_color::is_emissive_alpha) {
+                    let (a, b, c) = (psblend::associated(*p), psblend::associated(*w), psblend::associated(*wo));
+                    *p = psblend::from_associated(std::array::from_fn(|i| a[i] + b[i] - c[i]));
+                    continue;
+                }
                 // Work premultiplied so transparent areas stay consistent.
                 let pa = p[3];
                 let mut pm = [p[0] * pa, p[1] * pa, p[2] * pa, pa];
@@ -665,7 +678,7 @@ fn composite_atop_any(layer: &Layer, base: &mut Buffer, cx: &Ctx) {
             continue;
         }
         let s = content.px[i];
-        if layer.blend == BlendMode::Dissolve {
+        if layer.blend == BlendMode::Dissolve && !photocraft_color::is_emissive_alpha(s[3]) {
             // Clipping preserves the opaque base's alpha. Dissolve still selects source
             // pixels by spatial coverage instead of continuously mixing the colours (#3052).
             let x = rect.x0 + (i as i32 % rect.width() as i32);

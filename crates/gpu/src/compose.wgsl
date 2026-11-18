@@ -268,8 +268,8 @@ fn blend_rgb(mode: i32, cb: vec3<f32>, cs: vec3<f32>) -> vec3<f32> {
     }
 }
 
-// Float raster pixels with signed-zero coverage carry their associated light.
-const EMISSIVE_ALPHA_BITS: u32 = 0x80000000u;
+// A finite marker outside normal coverage carries zero-coverage associated light.
+const EMISSIVE_ALPHA_BITS: u32 = 0xbf800000u;
 fn emits(a: f32) -> bool { return bitcast<u32>(a) == EMISSIVE_ALPHA_BITS; }
 
 fn mask_pixel(pixel: vec4<f32>, weight: f32) -> vec4<f32> {
@@ -277,16 +277,34 @@ fn mask_pixel(pixel: vec4<f32>, weight: f32) -> vec4<f32> {
     return vec4(pixel.rgb, pixel.a * weight);
 }
 
-fn composite_emission(b: vec4<f32>, s: vec4<f32>, opacity: f32) -> vec4<f32> {
-    if (opacity <= 0.0 || (s.a <= 0.0 && !emits(s.a))) { return b; }
-    let ab = max(b.a, 0.0);
-    let over = max(s.a, 0.0) * opacity;
-    let alpha = over + ab * (1.0 - over);
-    let light = b.rgb * (select(ab, 1.0, emits(b.a)) * (1.0 - over)) + s.rgb * select(over, opacity, emits(s.a));
+fn associated(pixel: vec4<f32>) -> vec4<f32> {
+    let alpha = max(pixel.a, 0.0);
+    return vec4(pixel.rgb * select(alpha, 1.0, emits(pixel.a)), alpha);
+}
+
+fn from_associated(pixel: vec4<f32>) -> vec4<f32> {
+    let light = clamp(pixel.rgb, vec3(-F32_MAX), vec3(F32_MAX));
+    var alpha = clamp(pixel.a, 0.0, 1.0);
     if (alpha <= 0.0) {
-        return vec4(clamp(light, vec3(-F32_MAX), vec3(F32_MAX)), bitcast<f32>(EMISSIVE_ALPHA_BITS));
+        if (all(light == vec3(0.0))) { return vec4(0.0); }
+        return vec4(light, bitcast<f32>(EMISSIVE_ALPHA_BITS));
+    }
+    let peak = max(max(abs(light.r), abs(light.g)), abs(light.b));
+    if (peak > F32_MAX * alpha) {
+        alpha = peak / F32_MAX;
+        if (peak > F32_MAX * alpha) {
+            alpha = bitcast<f32>(bitcast<u32>(alpha) + 1u);
+        }
     }
     return vec4(clamp(light / alpha, vec3(-F32_MAX), vec3(F32_MAX)), alpha);
+}
+
+fn composite_emission(b: vec4<f32>, s: vec4<f32>, opacity: f32) -> vec4<f32> {
+    if (opacity <= 0.0 || (s.a <= 0.0 && !emits(s.a))) { return b; }
+    let a = associated(b);
+    let c = associated(s);
+    let over = c.a * opacity;
+    return from_associated(vec4(a.rgb * (1.0 - over) + c.rgb * opacity, over + a.a * (1.0 - over)));
 }
 
 fn composite(mode: i32, b: vec4<f32>, s: vec4<f32>, opacity: f32) -> vec4<f32> {
@@ -319,6 +337,7 @@ fn text_dec(v: vec3<f32>, g: f32) -> vec3<f32> {
 
 // `psblend::composite_gamma`: coverage mixed in the text blending space (type layers, 1.45).
 fn composite_g(mode: i32, b: vec4<f32>, s: vec4<f32>, opacity: f32, gamma_on: bool) -> vec4<f32> {
+    if (emits(b.a) || emits(s.a)) { return composite_emission(b, s, opacity); }
     if (!gamma_on) { return composite(mode, b, s, opacity); }
     let ab = b.a;
     let as_ = s.a * opacity;
@@ -343,6 +362,7 @@ fn fill_is_special(mode: i32) -> bool {
 // colour (Hard Mix: (cb - f(1 - cs)) / (1 - f)) at `opacity`, Fill staying coverage over
 // transparency. Lab documents mix Normal in CIELAB; type layers mix in the text gamma space.
 fn composite_fill(mode: i32, b: vec4<f32>, s: vec4<f32>, opacity: f32, fill: f32, gamma_on: bool) -> vec4<f32> {
+    if (emits(b.a) || emits(s.a)) { return composite_emission(b, s, opacity * clamp(fill, 0.0, 1.0)); }
     // The same code as fs_layerbatch_normal, so a layer gives the same bits whichever pass
     // draws it (a render resumed from the prefix cache splits runs differently).
     if (mode == M_NORMAL && !gamma_on && (op.flags & F_LAB) == 0u) { return composite_normal_fill(b, s, opacity, fill); }
@@ -985,7 +1005,7 @@ fn fs_atop(in: VOut) -> @location(0) vec4<f32> {
     let base = textureLoad(tex_a, p, 0);
     if (base.a <= 0.0) { return base; }
     let s = textureLoad(tex_b, p, 0);
-    if (op.mode == M_DISSOLVE) {
+    if (op.mode == M_DISSOLVE && !emits(s.a)) {
         return select(base, vec4(s.rgb, base.a), dissolve_noise(doc_px(p)) < s.a * op.opacity);
     }
     let r = composite_g(op.mode, vec4(base.rgb, 1.0), s, op.opacity, (op.flags & F_TEXT_GAMMA) != 0u);
@@ -1046,6 +1066,9 @@ fn fs_lerp(in: VOut) -> @location(0) vec4<f32> {
     if ((op.flags & F_ADD_DIFF) != 0u) {
         // compose: pass-through group + (with clipped − without), premultiplied.
         let c = textureLoad(tex_c, p, 0);
+        if (emits(a.a) || emits(b.a) || emits(c.a)) {
+            return from_associated(associated(a) + associated(b) - associated(c));
+        }
         var pm = vec4(a.rgb * a.a, a.a) + vec4(b.rgb * b.a, b.a) - vec4(c.rgb * c.a, c.a);
         let al = clamp(pm.a, 0.0, 1.0);
         if (al <= 0.0) { return vec4(0.0); }
@@ -1062,11 +1085,13 @@ fn fs_lerp(in: VOut) -> @location(0) vec4<f32> {
         if (k >= 1.0) {
             return b;
         }
+        if (emits(a.a) || emits(b.a)) { return from_associated(associated(a) * (1.0 - k) + associated(b) * k); }
         let alpha = a.a + (b.a - a.a) * k;
         if (alpha <= 0.0) { return vec4(0.0); }
         return vec4(clamp((a.rgb * a.a + (b.rgb * b.a - a.rgb * a.a) * k) / alpha, vec3(0.0), vec3(1.0)), alpha);
     }
     let k = op.opacity * mask_value(doc_px(p));
+    if (emits(a.a) || emits(b.a)) { return from_associated(associated(a) * (1.0 - k) + associated(b) * k); }
     let wa = a.a * (1.0 - k);
     let wb = b.a * k;
     let alpha = wa + wb;

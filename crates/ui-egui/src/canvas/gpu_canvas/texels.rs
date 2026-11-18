@@ -33,9 +33,10 @@ pub(super) fn texels_into(format: wgpu::TextureFormat, px: &[[f32; 4]], out: &mu
     fn rgba8(src: &[[f32; 4]], dst: &mut [u8]) {
         for (o, p) in dst.as_chunks_mut::<4>().0.iter_mut().zip(src) {
             let a = p[3].clamp(0.0, 1.0);
-            o[0] = (p[0].clamp(0.0, 1.0) * a * 255.0 + 0.5) as u8;
-            o[1] = (p[1].clamp(0.0, 1.0) * a * 255.0 + 0.5) as u8;
-            o[2] = (p[2].clamp(0.0, 1.0) * a * 255.0 + 0.5) as u8;
+            let weight = if photocraft_color::is_emissive_alpha(p[3]) { 1.0 } else { a };
+            o[0] = (p[0].clamp(0.0, 1.0) * weight * 255.0 + 0.5) as u8;
+            o[1] = (p[1].clamp(0.0, 1.0) * weight * 255.0 + 0.5) as u8;
+            o[2] = (p[2].clamp(0.0, 1.0) * weight * 255.0 + 0.5) as u8;
             o[3] = (a * 255.0 + 0.5) as u8;
         }
     }

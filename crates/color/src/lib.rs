@@ -10,9 +10,10 @@ pub mod convert;
 
 pub use blend::BlendMode;
 
-/// Signed zero identifies associated light with zero coverage in a float raster or composite.
-/// Ordinary transparent pixels use positive zero and may have hidden straight colour.
-pub const EMISSIVE_ALPHA: f32 = -0.0;
+/// A finite value outside normal coverage identifies associated light with zero coverage.
+/// It survives float32 and half-float GPU storage without relying on the sign of zero.
+/// Ordinary transparent pixels, including negative zero, may have hidden straight colour.
+pub const EMISSIVE_ALPHA: f32 = -1.0;
 
 #[inline]
 pub fn is_emissive_alpha(alpha: f32) -> bool {
