@@ -513,7 +513,9 @@ fn feather_rounding_stroke_frame_changes_use_the_actual_renderer_maps() {
         }
         let mut mask = photocraft_doc::LayerMask::hide_all();
         mask.density = 0.998_039_2;
-        mask.feather = 2.0;
+        // Keep the original sigma-2 rounding witness after small-feather variance was added.
+        mask.feather = (4.0_f32 - 1.0 / 6.0).sqrt();
+        assert_eq!(photocraft_compose::masks::feather_sigma(mask.feather), 2.0);
         mask.surface.fill_rect(Rect::new(0, 0, 1, 1), &[1.0]);
         mask.surface.fill_rect(Rect::new(511, 63, 512, 64), &[1.0]);
         layer.mask = Some(mask);
