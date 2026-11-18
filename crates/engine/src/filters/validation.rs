@@ -7,9 +7,18 @@ use serde_json::Value;
 
 use crate::{EngineError, Result};
 
-/// Params whose documented range is the dialog's (the canvas) while the doc says commands may
-/// pass values outside it: Lens Flare's centre may sit off the canvas.
-const DIALOG_RANGES: &[(&str, &str)] = &[("filter.render.lensFlare", "centerX"), ("filter.render.lensFlare", "centerY")];
+/// Params whose documented range is the dialog's, while commands still accept values outside
+/// it and clamp or place them: Lens Flare's centre may sit off the canvas; Camera Raw
+/// exposure and Selective Color ink sliders clamp ATN or legacy values to the documented range.
+const DIALOG_RANGES: &[(&str, &str)] = &[
+    ("filter.render.lensFlare", "centerX"),
+    ("filter.render.lensFlare", "centerY"),
+    ("filter.cameraRaw", "exposure"),
+    ("image.adjustments.selectiveColor", "cyan"),
+    ("image.adjustments.selectiveColor", "magenta"),
+    ("image.adjustments.selectiveColor", "yellow"),
+    ("image.adjustments.selectiveColor", "black"),
+];
 
 /// The commands whose values are checked against their schema: the pixel filters (the gallery
 /// filters have their own typed catalogue, checked in `gallery_cmds`) and the adjustments.

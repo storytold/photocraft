@@ -347,7 +347,7 @@ fn build() -> Vec<CommandSpec> {
             "Close",
             ["File"],
             Some("Cmd+W"),
-            r##"{"document":index?,"save":"discard|ask"|false="discard"} (false means discard; ask refuses to close a changed document in headless playback)"##,
+            r##"{"document":index?,"save":"discard|ask"|false="discard","force":bool?} (false means discard; ask refuses to close a changed document in headless playback; force is an older recorded Close and is ignored)"##,
             has_doc,
             |s, p| {
                 let i = p.get("document").and_then(Value::as_u64).map(|v| v as usize).or(s.active_index()).ok_or(EngineError::NoDocument)?;
@@ -1258,7 +1258,7 @@ fn build() -> Vec<CommandSpec> {
         (
             "selectiveColor",
             "Selective Color…",
-            r##"{"method":"relative|absolute"="relative","colors":"reds|yellows|greens|cyans|blues|magentas|whites|neutrals|blacks"="reds","cyan":-100..100=0,"magenta":-100..100=0,"yellow":-100..100=0,"black":-100..100=0,"reds":json} (per-range [c,m,y,k] arrays: reds yellows greens cyans blues magentas whites neutrals blacks)"##,
+            r##"{"method":"relative|absolute"?="relative","relative":bool? (false = absolute; method wins when both are set),"colors":"reds|yellows|greens|cyans|blues|magentas|whites|neutrals|blacks"?="reds","cyan":-100..100?=0,"magenta":-100..100?=0,"yellow":-100..100?=0,"black":-100..100?=0,"reds":json?,"yellows":json?,"greens":json?,"cyans":json?,"blues":json?,"magentas":json?,"whites":json?,"neutrals":json?,"blacks":json?} (per-range [c,m,y,k] arrays)"##,
         ),
         (
             "colorLookup",
