@@ -24,6 +24,7 @@ mod interactive_bench_reporting;
 mod layout_perf;
 mod magnetic_lasso_right_click;
 mod paint_bucket_all_layers;
+mod pending_remove_pointer;
 mod radial_blur_center;
 mod save_memory_gate;
 mod system_locale;
