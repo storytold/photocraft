@@ -183,7 +183,11 @@ impl PhotocraftApp {
             // tick finds them taken.
             crate::shortcut_dispatch::record_view_commands(self);
             if self.splash_shortcuts_blocked(ctx, now) {
-                self.framework.fired.clear();
+                for f in std::mem::take(&mut self.framework.fired) {
+                    if f.target.is_none() && f.command.id == "tools.temporary.erase" && f.phase == craft::ui::runtime::commands::FirePhase::Release {
+                        crate::hold_keys::erase_key(self, f.phase);
+                    }
+                }
             } else {
                 shortcuts::handle(self, ctx);
             }

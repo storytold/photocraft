@@ -1287,6 +1287,56 @@ fn splash_shortcuts_unblocked_when_job_fails_with_notice_during_tick() {
     assert_eq!(h.state().ui.tool, crate::Tool::Brush, "shortcuts::handle must execute once splash dismisses on notice");
 }
 
+/// Regression test: holding the erase key (`~`) across the splash appearance boundary and releasing it
+/// on a splash-blocked frame must still clear `held_erase` rather than leaving it stuck after dismissal.
+#[test]
+fn splash_preserves_erase_key_release_across_boundary() {
+    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).with_max_steps(8).with_step_dt(1.0 / 60.0).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 320, "height": 240})).unwrap();
+        let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), s, crate::Services::default());
+        app.ui.tool = crate::Tool::Brush;
+        app
+    });
+    h.run_steps(4);
+
+    let ctx = h.ctx.clone();
+    let start = ctx.input(|i| i.time);
+    let mut splash = crate::splash::SplashState::new();
+    splash.start_time = start;
+    h.state_mut().splash = Some(splash);
+    h.state_mut().system_ready_override = Some(false);
+    assert!(!h.state().splash_shortcuts_blocked(&ctx, start), "shortcuts must be allowed during appear delay");
+
+    // Press and hold `~` before the splash appears.
+    h.event(egui::Event::Key { key: egui::Key::Backtick, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
+    h.run_steps(2);
+    assert!(h.state().held_erase, "held_erase must be true after pressing erase key before splash renders");
+
+    // Advance past SPLASH_APPEAR_DELAY while holding `~`.
+    for _ in 0..16 {
+        if h.state().splash_shortcuts_blocked(&ctx, ctx.input(|i| i.time)) {
+            break;
+        }
+        h.step();
+    }
+    assert!(h.state().splash_shortcuts_blocked(&ctx, ctx.input(|i| i.time)), "splash must block shortcuts after appear delay");
+    assert!(h.state().held_erase, "held_erase must stay true across the splash boundary while held");
+
+    // Release `~` on a splash-blocked frame.
+    h.event(egui::Event::Key { key: egui::Key::Backtick, physical_key: None, pressed: false, repeat: false, modifiers: egui::Modifiers::NONE });
+    h.run_steps(2);
+    assert!(h.state().splash.is_some(), "releasing the erase key must not dismiss the splash");
+    assert!(h.state().splash_shortcuts_blocked(&ctx, ctx.input(|i| i.time)), "splash must remain shortcut-blocked");
+
+    // Dismiss the splash and verify held_erase is false.
+    h.state_mut().system_ready_override = Some(true);
+    h.run_steps(2);
+    assert!(h.state().splash.is_none(), "splash must dismiss once system is ready");
+    assert!(!h.state().held_erase, "held_erase must be false after splash dismissal");
+}
+
 fn identity_app() -> PhotocraftApp {
     let mut session = photocraft_engine::Session::new();
     session.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
