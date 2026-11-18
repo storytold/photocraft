@@ -1,14 +1,22 @@
 //! Plug-in preset selection, editing baseline, and persistent view choices.
 
+use craft::ui::{
+    contract::Bind,
+    dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id},
+    patterns::form_dialogs::FormDialog,
+    runtime::overlay::CloseReason,
+};
 use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
 
-const NEW: &str = "__pluginPresetNew";
+pub(super) enum Action {
+    New(Value),
+    Delete(String),
+}
 
-/// Recognizes the private New Preset dialog marker rather than a plug-in's own preset parameter.
-pub(super) fn owns(fields: &Map<String, Value>) -> bool {
-    fields.contains_key(NEW)
+pub(super) fn saved(app: &PhotocraftApp, id: &str) -> Map<String, Value> {
+    app.session.prefs().dialogs.get(&format!("plugin.presets.{id}")).and_then(Value::as_object).cloned().unwrap_or_default()
 }
 
 /// Reports whether installed manifest presets let the host manage the preset choice.
@@ -40,29 +48,30 @@ fn default_selection(m: &photocraft_plugins::Manifest) -> String {
 /// Unsaved slider drafts are not restored.
 pub(super) fn restore_choices(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
     let Some(plugin) = fields.get("id").and_then(Value::as_str).and_then(photocraft_plugins::registry::get) else { return };
-    let saved = app.session.prefs().dialogs.get(&format!("plugin.choices.{}", plugin.id())).and_then(Value::as_object);
+    let choices = app.session.prefs().dialogs.get(&format!("plugin.choices.{}", plugin.id())).and_then(Value::as_object);
     for key in ["__preview", "skinOnly"] {
         if fields.get(key).is_some_and(Value::is_boolean)
-            && let Some(v) = saved.and_then(|s| s.get(key)).filter(|v| v.is_boolean())
+            && let Some(v) = choices.and_then(|s| s.get(key)).filter(|v| v.is_boolean())
         {
             fields.insert(key.into(), v.clone());
         }
     }
-    let selection = saved.and_then(|s| s.get("__pluginPreset")).and_then(Value::as_str).unwrap_or_default();
-    if !select(app, fields, selection) {
-        select(app, fields, &default_selection(plugin.manifest()));
+    let selection = choices.and_then(|s| s.get("__pluginPreset")).and_then(Value::as_str).unwrap_or_default();
+    let presets = saved(app, plugin.id());
+    if !select(&presets, fields, selection) {
+        select(&presets, fields, &default_selection(plugin.manifest()));
     }
 }
 
 /// Resolves built-in or saved values for editing without replacing independent switches or Skin Smooth samples.
 /// Host-managed presets run in manual mode so subsequent slider edits take effect.
-fn values(app: &PhotocraftApp, fields: &Map<String, Value>, selection: &str) -> Option<Map<String, Value>> {
+fn values(presets: &Map<String, Value>, fields: &Map<String, Value>, selection: &str) -> Option<Map<String, Value>> {
     let plugin = fields.get("id").and_then(Value::as_str).and_then(photocraft_plugins::registry::get)?;
     let m = plugin.manifest();
     let mut input = if let Some(name) = selection.strip_prefix("builtin:") {
         Value::Object(m.preset_values.get(name)?.clone())
     } else {
-        app.session.prefs().dialogs.get(&format!("plugin.presets.{}", plugin.id()))?.get(selection.strip_prefix("saved:")?)?.clone()
+        presets.get(selection.strip_prefix("saved:")?)?.clone()
     };
     if !m.preset_values.is_empty() {
         input.as_object_mut()?.insert("preset".into(), json!("manual"));
@@ -82,14 +91,14 @@ fn values(app: &PhotocraftApp, fields: &Map<String, Value>, selection: &str) -> 
 }
 
 /// Applies an available preset and records its clean Reset baseline; returns false for an unavailable selection.
-fn select(app: &PhotocraftApp, fields: &mut Map<String, Value>, selection: &str) -> bool {
+fn select(presets: &Map<String, Value>, fields: &mut Map<String, Value>, selection: &str) -> bool {
     if selection.is_empty() {
         for key in ["__pluginPreset", "__presetValues", "__presetDirty"] {
             fields.remove(key);
         }
         return false;
     }
-    let Some(values) = values(app, fields, selection) else { return false };
+    let Some(values) = values(presets, fields, selection) else { return false };
     fields.extend(values.clone());
     fields.insert("__presetValues".into(), Value::Object(values));
     fields.insert("__pluginPreset".into(), json!(selection));
@@ -98,9 +107,9 @@ fn select(app: &PhotocraftApp, fields: &mut Map<String, Value>, selection: &str)
 }
 
 /// Restores the currently selected preset, preserving switches and photo samples excluded from its baseline.
-pub(super) fn reset(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
+pub(super) fn reset(presets: &Map<String, Value>, fields: &mut Map<String, Value>) {
     let selection = fields.get("__pluginPreset").and_then(Value::as_str).unwrap_or_default().to_string();
-    select(app, fields, &selection);
+    select(presets, fields, &selection);
 }
 
 /// Marks the selected baseline modified when editable values differ, ignoring a host-managed preset selector.
@@ -116,143 +125,208 @@ fn same_value(a: Option<&Value>, b: Option<&Value>) -> bool {
 }
 
 /// Draws built-in and saved presets with Reset, New and Delete actions; repairs selections removed elsewhere.
-pub(super) fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String, Value>, parent: u64) {
-    let Some(plugin) = fields.get("id").and_then(Value::as_str).and_then(photocraft_plugins::registry::get) else { return };
+pub(super) fn body(presets: &Map<String, Value>, ui: &mut egui::Ui, fields: &mut Map<String, Value>) -> Option<Action> {
+    let plugin = fields.get("id").and_then(Value::as_str).and_then(photocraft_plugins::registry::get)?;
     let m = plugin.manifest();
     let id = plugin.id();
-    let presets = app.session.prefs().dialogs.get(&format!("plugin.presets.{id}")).and_then(Value::as_object).cloned().unwrap_or_default();
     let mut selection = fields.get("__pluginPreset").and_then(Value::as_str).unwrap_or_default().to_string();
     // A preset removed in another open dialog must not leave a stale Reset target.
-    if !selection.is_empty() && values(app, fields, &selection).is_none() {
+    if !selection.is_empty() && values(presets, fields, &selection).is_none() {
         selection = default_selection(m);
-        select(app, fields, &selection);
+        select(presets, fields, &selection);
     }
     let selected_name = if let Some(name) = selection.strip_prefix("builtin:") {
-        crate::filter_dialog::label(name)
+        super::plugin_dialog::label(name)
     } else {
         selection.strip_prefix("saved:").unwrap_or(tl!("Preset")).to_string()
     };
     let dirty = fields.get("__presetDirty").and_then(Value::as_bool) == Some(true);
     let label = if dirty { format!("{selected_name} ({})", tl!("Modified")) } else { selected_name };
-    ui.horizontal(|ui| {
-        ui.label(tl!("Preset"));
-        let width = (ui.available_width() - 170.0).clamp(120.0, 220.0);
-        let before = selection.clone();
-        craft_ui::ComboBox::from_id_salt(("plugin-presets", id))
-            .selected_text(&label)
-            .truncate()
-            .width(width)
-            .height(300.0)
-            .show_ui(ui, |ui| {
-                ui.set_max_width(360.0);
-                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-                if let Some((_, photocraft_plugins::manifest::ParamSpec::Choice { options, .. })) = m.params.iter().find(|(k, _)| k == "preset") {
-                    for name in options.iter().filter(|n| m.preset_values.contains_key(*n)) {
-                        ui.selectable_value(&mut selection, format!("builtin:{name}"), crate::filter_dialog::label(name));
-                    }
+    let action = ui
+        .horizontal(|ui| {
+            ui.label(tl!("Preset"));
+            let width = (ui.available_width() - 170.0).clamp(120.0, 220.0);
+            let before = selection.clone();
+            let combo = ui.allocate_ui(egui::vec2(width, ui.spacing().interact_size.y), |ui| {
+                ui.set_max_width(width);
+                egui::ComboBox::from_id_salt(("plugin-presets", id))
+                    .selected_text(&label)
+                    .width(width)
+                    .truncate()
+                    .height(300.0)
+                    .show_ui(ui, |ui| {
+                        ui.set_max_width(360.0);
+                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                        if let Some((_, photocraft_plugins::manifest::ParamSpec::Choice { options, .. })) = m.params.iter().find(|(k, _)| k == "preset") {
+                            for name in options.iter().filter(|n| m.preset_values.contains_key(*n)) {
+                                ui.selectable_value(&mut selection, format!("builtin:{name}"), super::plugin_dialog::label(name));
+                            }
+                        }
+                        if !m.preset_values.is_empty() && !presets.is_empty() {
+                            ui.separator();
+                        }
+                        for name in presets.keys() {
+                            ui.selectable_value(&mut selection, format!("saved:{name}"), name).on_hover_text(name);
+                        }
+                    })
+                    .response
+            });
+            combo.inner.accessible_name(tl!("Preset")).on_hover_text(&label);
+            if selection != before {
+                select(presets, fields, &selection);
+            }
+            let has_baseline = fields.contains_key("__presetValues");
+            if ui.add_enabled_ui(dirty && has_baseline, |ui| ui.button(tl!("Reset")).accessible_name(tl!("Reset preset"))).inner.clicked() {
+                reset(presets, fields);
+            }
+            if ui.button(tl!("New…")).clicked() {
+                let mut params = crate::filter_dialog::params_of(fields);
+                if super::skin_smooth_ui::owns(fields)
+                    && let Some(params) = params.as_object_mut()
+                {
+                    params.remove("positiveColors");
+                    params.remove("negativeColors");
                 }
-                if !m.preset_values.is_empty() && !presets.is_empty() {
-                    ui.separator();
-                }
-                for name in presets.keys() {
-                    ui.selectable_value(&mut selection, format!("saved:{name}"), name).on_hover_text(name);
-                }
-            })
-            .response
-            .accessible_name(tl!("Preset"))
-            .on_hover_text(&label);
-        if selection != before && !select(app, fields, &selection) {
-            crate::notices::error(app, tl!("This preset is no longer available.").into());
-        }
-        let has_baseline = fields.contains_key("__presetValues");
-        if ui
-            .add_enabled_ui(dirty && has_baseline, |ui| crate::icons::button_with_icon_size(ui, "rotate-cw", 28.0, 18.0, false, "Reset preset"))
-            .inner
-            .clicked()
-        {
-            reset(app, fields);
-        }
-        if ui.button(tl!("New…")).clicked() {
-            let mut params = crate::filter_dialog::params_of(fields);
-            if super::skin_smooth_ui::owns(fields)
-                && let Some(params) = params.as_object_mut()
+                return Some(Action::New(params));
+            }
+            let saved_name = selection.strip_prefix("saved:");
+            if ui.add_enabled(saved_name.is_some(), egui::Button::new(tl!("Delete"))).clicked()
+                && let Some(name) = saved_name
             {
-                params.remove("positiveColors");
-                params.remove("negativeColors");
+                return Some(Action::Delete(name.to_owned()));
             }
-            let f = json!({NEW: true, "__command":"plugin.preset.save", "__label":"New Preset", "__parent":parent,
-                "id":id, "name":"", "params":params});
-            app.ui.open_dialog(crate::state::DialogKind::Command, f.as_object().cloned().unwrap_or_default());
-        }
-        let saved_name = selection.strip_prefix("saved:");
-        if ui.add_enabled(saved_name.is_some(), egui::Button::new(tl!("Delete"))).clicked()
-            && let Some(name) = saved_name
-        {
-            if let Err(error) = app.run("plugin.preset.remove", json!({"id":id,"name":name})) {
-                crate::notices::error(app, error);
-            } else {
-                select(app, fields, &default_selection(m));
-            }
-        }
-    });
+            None
+        })
+        .inner;
     ui.separator();
+    action
 }
 
-/// Rejects invalid or duplicate names, full preset collections, and dialogs whose parent filter no longer exists.
-pub(super) fn validate_new(app: &PhotocraftApp, fields: &Map<String, Value>) -> Result<(), String> {
-    let name = fields.get("name").and_then(Value::as_str).unwrap_or_default().trim();
-    if name.is_empty() || name.chars().count() > 64 || name.chars().any(char::is_control) {
-        return Err(tl!("Enter a preset name (1–64 characters).").into());
-    }
-    let id = fields.get("id").and_then(Value::as_str).ok_or("missing plug-in id")?;
-    let presets = app.session.prefs().dialogs.get(&format!("plugin.presets.{id}")).and_then(Value::as_object);
-    if presets.is_some_and(|p| p.contains_key(name)) {
-        return Err(tl!("A preset with this name already exists.").into());
-    }
-    if presets.is_some_and(|p| p.len() >= 64) {
-        return Err(tl!("At most 64 presets per plug-in.").into());
-    }
-    let parent = fields.get("__parent").and_then(Value::as_u64).ok_or("missing preset dialog")?;
-    if !app.ui.dialogs.iter().any(|d| {
-        d.id == parent && d.fields.get("id").and_then(Value::as_str) == Some(id) && d.fields.get("__command").and_then(Value::as_str) == Some("plugin.run")
-    }) {
-        return Err(tl!("The filter dialog was closed.").into());
-    }
-    Ok(())
+const KEY: &str = "plugin.preset.save";
+
+pub(super) struct PresetName {
+    pub(super) parent: DialogId,
+    id: String,
+    name: String,
+    params: Value,
+    presets: Map<String, Value>,
+    parent_open: bool,
 }
 
-/// Draws the preset name editor, focusing it once and displaying validation feedback without saving.
-pub(super) fn new_body(app: &PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
-    let mut name = fields.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
-    ui.label(tl!("Preset name"));
-    let response = ui.add(egui::TextEdit::singleline(&mut name).char_limit(64).desired_width(280.0)).accessible_name(tl!("Preset name"));
-    if !ui.is_sizing_pass() && !fields.contains_key("__focused") {
-        response.request_focus();
-        fields.insert("__focused".into(), json!(true));
+impl PresetName {
+    fn validate(name: &str, presets: &Map<String, Value>, parent_open: bool) -> Result<(), String> {
+        let name = name.trim();
+        if !parent_open {
+            return Err(tl!("The filter dialog was closed.").into());
+        }
+        if name.is_empty() || name.chars().count() > 64 || name.chars().any(char::is_control) {
+            return Err(tl!("Enter a preset name (1–64 characters).").into());
+        }
+        if presets.contains_key(name) {
+            return Err(tl!("A preset with this name already exists.").into());
+        }
+        if presets.len() >= 64 {
+            return Err(tl!("At most 64 presets per plug-in.").into());
+        }
+        Ok(())
     }
-    fields.insert("name".into(), json!(name));
-    if !fields.get("name").and_then(Value::as_str).unwrap_or_default().trim().is_empty()
-        && let Err(error) = validate_new(app, fields)
-    {
-        ui.add(egui::Label::new(error).wrap());
+
+    fn params_with(&self, name: &str) -> Value {
+        json!({"id": self.id, "name": name.trim(), "params": self.params})
     }
 }
 
-/// Validates and saves the draft, then selects its saved baseline in the still-open parent filter dialog.
-pub(super) fn confirm_new(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<Value, String> {
-    validate_new(app, fields)?;
-    let result = app.run("plugin.preset.save", json!({"id":fields.get("id"), "name":fields.get("name"), "params":fields.get("params")}))?;
-    let parent = fields.get("__parent").and_then(Value::as_u64).ok_or("missing preset dialog")?;
-    let name = fields.get("name").and_then(Value::as_str).unwrap_or_default().trim();
-    let mut f = app.ui.dialogs.iter().find(|d| d.id == parent).map(|d| d.fields.clone()).ok_or("the filter dialog was closed")?;
-    if !select(app, &mut f, &format!("saved:{name}")) {
-        return Err("the saved preset could not be loaded".into());
+impl StackDialog for PresetName {
+    type Result = Value;
+
+    fn id(&self) -> DialogId {
+        dialog_id(KEY)
     }
-    remember_choices(app, &f);
-    if let Some(d) = app.ui.dialog_mut(parent) {
-        d.fields = f;
+
+    fn key(&self) -> Option<&str> {
+        Some(KEY)
     }
-    Ok(result)
+
+    fn show(&mut self, ui: &mut egui::Ui, _stack: &DialogStack) -> Option<DialogResult<Value>> {
+        let out = FormDialog::new(tl!("New Preset").to_string(), Bind::bound(&mut self.name))
+            .ok_label(tl!("Save").to_string())
+            .alt_resets(false)
+            .enter_confirms(false)
+            .show(ui, |ui, form, name| {
+                let escape = !ui.is_sizing_pass() && ui.is_enabled() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+                let enter = !ui.is_sizing_pass() && ui.is_enabled() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+                let row = ui.add(egui::TextEdit::singleline(name).char_limit(64).desired_width(280.0)).accessible_name(tl!("Preset name"));
+                if form.first() && !ui.is_sizing_pass() {
+                    row.request_focus();
+                }
+                let check = Self::validate(name, &self.presets, self.parent_open);
+                if !name.trim().is_empty()
+                    && let Err(error) = &check
+                {
+                    ui.label(error);
+                }
+                if escape {
+                    form.request_close_as(CloseReason::Escape);
+                } else if enter && check.is_ok() {
+                    form.request_close_as(CloseReason::Activated);
+                }
+                check.is_ok()
+            });
+        match (out.accepted, out.closed) {
+            (Some(name), _) => Some(DialogResult::Ok(self.params_with(&name))),
+            (_, Some(_)) => Some(DialogResult::Cancel),
+            _ => None,
+        }
+    }
+
+    fn confirm(&mut self, _ctx: &egui::Context) -> Option<Value> {
+        Self::validate(&self.name, &self.presets, self.parent_open).ok()?;
+        Some(self.params_with(&self.name))
+    }
+
+    fn json_fields(&self) -> Option<Value> {
+        Some(json!({"id": self.id, "name": self.name, "params": self.params}))
+    }
+
+    fn set_json_field(&mut self, _ctx: &egui::Context, field: &str, value: Value) -> Result<(), String> {
+        if field != "name" {
+            return Err(format!("no editable preset field {field}"));
+        }
+        self.name = value.as_str().ok_or("expected a preset name")?.to_owned();
+        Ok(())
+    }
+}
+
+pub(super) fn open_new(app: &mut PhotocraftApp, parent: DialogId, id: String, params: Value) {
+    let presets = saved(app, &id);
+    app.framework.dialogs.open_child(PresetName { parent, id, name: String::new(), params, presets, parent_open: true }, parent);
+}
+
+pub(super) fn check_new(app: &PhotocraftApp, dialog: &PresetName) -> Result<(), String> {
+    let presets = saved(app, &dialog.id);
+    let parent_open =
+        app.framework.dialogs.get_by_id::<super::plugin_dialog::PluginDialog>(dialog.parent).is_some_and(|parent| parent.fields["id"] == dialog.id);
+    PresetName::validate(&dialog.name, &presets, parent_open)
+}
+
+pub(super) fn feed_new(app: &mut PhotocraftApp) {
+    let Some(dialog) = app.framework.dialogs.get::<PresetName>() else { return };
+    let presets = saved(app, &dialog.id);
+    let parent_open = app.framework.dialogs.get_by_id::<super::plugin_dialog::PluginDialog>(dialog.parent).is_some();
+    if let Some(dialog) = app.framework.dialogs.get_mut::<PresetName>() {
+        dialog.presets = presets;
+        dialog.parent_open = parent_open;
+    }
+}
+
+pub(super) fn select_after_write(app: &mut PhotocraftApp, id: &str, name: Option<&str>) {
+    let Some(plugin) = photocraft_plugins::registry::get(id) else { return };
+    let presets = saved(app, id);
+    let Some(d) = app.framework.dialogs.get_mut::<super::plugin_dialog::PluginDialog>().filter(|d| d.fields["id"] == id) else { return };
+    if select(&presets, &mut d.fields, &name.map_or_else(|| default_selection(plugin.manifest()), |name| format!("saved:{name}"))) {
+        let fields = d.fields.clone();
+        remember_choices(app, &fields);
+    }
 }
 
 #[cfg(test)]

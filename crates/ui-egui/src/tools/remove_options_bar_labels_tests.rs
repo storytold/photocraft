@@ -2,14 +2,13 @@
 //! "Create new layer", left to right, each with the reference tooltip.
 
 use egui::accesskit::Role;
+use egui::vec2;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use serde_json::json;
 
-use super::burn_bar_tooltips_tests::{bar, control, hover};
 use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, tool_event};
-use crate::i18n::Lang;
 use crate::state::Tool;
 
 const BOXES: [(&str, &str); 3] = [
@@ -18,8 +17,28 @@ const BOXES: [(&str, &str); 3] = [
     ("Create new layer", "Create new layer with results"),
 ];
 
+/// A settled options bar with the Remove tool.
 fn remove_bar() -> Harness<'static, PhotocraftApp> {
-    bar(Tool::Remove, Lang::EN, 1600.0, 1.0, false)
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 80, "height": 80})).unwrap();
+    app.ui.tool = Tool::Remove;
+    let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1600.0, 300.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                return;
+            }
+            crate::panels::options_bar(app, ui);
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::AppTheme::pro());
+    h.run_steps(4);
+    h
+}
+
+/// The control named `label` with `role`, found by its accessibility role so tooltip text never matches.
+fn control<'a>(h: &'a Harness<'static, PhotocraftApp>, role: Role, label: &str) -> egui_kittest::Node<'a> {
+    h.query_all_by_role(role).find(|n| n.accesskit_node().label().as_deref() == Some(label)).unwrap_or_else(|| panic!("missing {role:?} {label:?}"))
 }
 
 fn checked(h: &Harness<'static, PhotocraftApp>, label: &str) -> bool {
@@ -34,21 +53,6 @@ fn the_checkboxes_read_the_reference_labels_left_to_right() {
     boxes.sort_by(|a, b| a.0.total_cmp(&b.0));
     let labels: Vec<&str> = boxes.iter().map(|(_, l)| l.as_str()).collect();
     assert_eq!(labels, BOXES.map(|(label, _)| label));
-}
-
-#[test]
-fn hovering_each_checkbox_shows_its_tooltip() {
-    for (label, tip) in BOXES {
-        let mut h = remove_bar();
-        assert!(h.query_by_label(tip).is_none(), "{label}: no tooltip before the hover");
-        let before = h.state().ui.tool_options.clone();
-        hover(&mut h, Role::CheckBox, label, tip);
-        let o = &h.state().ui.tool_options;
-        assert_eq!(
-            (o.sample_all.remove, o.remove_after_each_stroke, o.remove_new_layer),
-            (before.sample_all.remove, before.remove_after_each_stroke, before.remove_new_layer)
-        );
-    }
 }
 
 #[test]

@@ -49,7 +49,7 @@ impl Worker {
     }
 
     /// Reports uncancelled work owned by this dialog, excluding a stale job already asked to stop.
-    pub fn busy_for(&self, dialog: u64) -> bool {
+    pub fn busy_for(&self, dialog: craft::ui::dialog::DialogId) -> bool {
         self.running.as_ref().is_some_and(|r| r.key.dialog == dialog && !r.job.cancelled())
     }
 
@@ -114,12 +114,17 @@ impl Worker {
 
 /// Stop and release previews of closed dialogs even when their canvas is no longer being drawn.
 pub(crate) fn discard_closed(app: &mut crate::PhotocraftApp) {
-    let visible = app.ui.dialogs.iter().any(|d| {
-        d.fields.contains_key("__filter")
-            && d.fields.get("__preview").and_then(serde_json::Value::as_bool) == Some(true)
-            && d.fields.get("__smartFilter").is_none_or(|target| crate::smart_filter_dialog::validate_target(app, target).is_ok())
+    use craft::ui::dialog::StackDialog as _;
+    use craft::ui::patterns::form_dialogs::HostedParamDialog;
+    // An open parameter dialog with its Preview box on keeps the preview alive; a smart filter edit also needs
+    // its target, read from the value the open captured.
+    let visible = app.framework.dialogs.stack().ids().any(|id| {
+        let Some(dialog) = app.framework.dialogs.get_by_id::<HostedParamDialog>(id) else { return false };
+        let Some(key) = dialog.key() else { return false };
+        let captured = crate::dialogs::params::captured(app, key);
+        dialog.is_previewing() && (!crate::smart_filter_dialog::is_target(&captured) || crate::smart_filter_dialog::validate_target(app, &captured).is_ok())
     });
-    if !visible {
+    if !visible && super::plugin_dialog::preview(app).is_none() {
         if let Some(r) = &app.filter_preview_worker.running {
             r.job.cancel();
         }
@@ -137,7 +142,8 @@ mod tests {
             doc: photocraft_doc::DocId(1),
             revision,
             sources: Vec::new(),
-            dialog,
+            dialog: craft::ui::dialog::DialogId::unique(dialog),
+            open: 0,
             active: None,
             target: Default::default(),
             command: "image.mode.indexedColor".into(),

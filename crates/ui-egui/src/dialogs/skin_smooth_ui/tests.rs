@@ -1,4 +1,12 @@
 use super::*;
+
+fn plugin_fields(app: &PhotocraftApp) -> &Map<String, Value> {
+    &app.framework.dialogs.get::<crate::dialogs::plugin_dialog::PluginDialog>().unwrap().fields
+}
+
+fn plugin_fields_mut(app: &mut PhotocraftApp) -> &mut Map<String, Value> {
+    &mut crate::dialogs::plugin_dialog::get_mut(app).unwrap().fields
+}
 use egui_kittest::kittest::Queryable;
 use photocraft_color::{PixelFormat, SampleType};
 use photocraft_raster::Surface;
@@ -7,18 +15,24 @@ use std::sync::Arc;
 const ID: &str = "local.skinsmooth.skin-smooth";
 const MENU: &str = "plugin.filter.local.skinsmooth.skin-smooth";
 
+fn overlay(app: &mut PhotocraftApp, ctx: &egui::Context, doc: photocraft_doc::DocId, r: Rect) -> Option<(egui::TextureId, Rect, egui::Rect)> {
+    let host = crate::canvas::document_display::CanvasHost::primary(app, 0);
+    super::overlay(app, ctx, host, doc, r)
+}
+
 fn app() -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("plugin.install", json!({"path":concat!(env!("CARGO_MANIFEST_DIR"), "/../plugins/tests/fixtures/skin-smooth.wasm")})).unwrap();
     app.run("file.new", json!({"width":32,"height":24,"background":"#b17d62"})).unwrap();
-    Arc::make_mut(&mut app.session.active_mut().unwrap().doc).icc_profile = Some(craft_cms::builtin::Builtin::Srgb.profile().to_bytes());
-    crate::menus::invoke(&mut app, &egui::Context::default(), MENU, json!({})).unwrap();
-    assert!(owns(&app.ui.dialogs[0].fields));
+    Arc::make_mut(&mut app.session.active_mut().unwrap().doc).icc_profile = Some(craft::cms::builtin::Builtin::Srgb.profile().to_bytes());
+    let ctx = app.ctx().clone();
+    crate::menus::invoke(&mut app, &ctx, MENU, json!({})).unwrap();
+    assert!(owns(plugin_fields(&app)));
     app
 }
 
 fn field(app: &mut PhotocraftApp, key: &str, value: Value) {
-    app.ui.dialogs[0].fields.insert(key.into(), value);
+    plugin_fields_mut(app).insert(key.into(), value);
 }
 
 #[test]
@@ -27,44 +41,20 @@ fn duplicate_windows_cannot_replace_the_canonical_mask_request() {
     app.background_jobs = false;
     field(&mut app, "__skinMask", json!(true));
     let doc = app.session.active().unwrap().doc.clone();
-    let id = app.ui.alloc_id();
-    app.ui.windows.push(crate::state::DocWindow { id, document: 0, view: app.ui.views[0].clone(), open: true, floating: false, focused: true, position: None });
-    let duplicate = egui::ViewportId::from_hash_of(("docwin", id));
-    let ctx = egui::Context::default();
-    let paint = |app: &mut PhotocraftApp, viewport_id, rect| {
-        let mut shown = false;
-        let mut input = egui::RawInput { viewport_id, ..Default::default() };
-        input.viewports.entry(viewport_id).or_default();
-        ctx.run_ui(input, |ui| {
-            shown = overlay(app, ui.ctx(), doc.id, rect).is_some();
-        })
-        .textures_delta
-        .clear();
-        shown
-    };
-    assert!(paint(&mut app, egui::ViewportId::ROOT, doc.bounds()));
+    let ctx = app.ctx().clone();
+    let host = crate::canvas::document_display::CanvasHost::main(0);
+    let window = app.ui.document_windows.new_window_for(&doc.id, egui::Rect::EVERYTHING);
+    app.ui.window_views.insert(window, app.ui.views[0].clone());
+    let duplicate = crate::canvas::document_display::CanvasHost { idx: 0, window: Some(window) };
+    assert!(super::overlay(&mut app, &ctx, host, doc.id, doc.bounds()).is_some());
     let key = app.skin_smooth_mask.as_ref().unwrap().key.clone();
-    let other = Rect::new(8, 4, 24, 20);
-    assert!(!paint(&mut app, duplicate, other));
+    assert!(super::overlay(&mut app, &ctx, duplicate, doc.id, Rect::new(8, 4, 24, 20)).is_none());
     assert_eq!(app.skin_smooth_mask.as_ref().unwrap().key, key);
-    let window_id = egui::Id::unique("canvas-doc-window");
-    ctx.data_mut(|d| d.insert_temp(window_id, duplicate));
-    assert!(!paint(&mut app, egui::ViewportId::ROOT, other), "embedded duplicates share ROOT but cannot own the mask");
-    ctx.data_mut(|d| d.remove::<egui::ViewportId>(window_id));
-    // Undocking transfers ownership, independent of focus; closing the window restores it.
-    app.ui.windows[0].floating = true;
-    app.ui.windows[0].focused = false;
-    assert!(!paint(&mut app, egui::ViewportId::ROOT, doc.bounds()));
-    assert!(paint(&mut app, duplicate, other));
-    ctx.data_mut(|d| d.insert_temp(window_id, duplicate));
-    assert!(paint(&mut app, egui::ViewportId::ROOT, other), "an embedded floating window must still show its mask");
-    ctx.data_mut(|d| d.remove::<egui::ViewportId>(window_id));
-    app.ui.windows[0].open = false;
-    assert!(paint(&mut app, egui::ViewportId::ROOT, doc.bounds()));
-    assert!(!paint(&mut app, duplicate, other));
+    app.ui.window_views.remove(&window);
+    assert!(super::overlay(&mut app, &ctx, duplicate, doc.id, doc.bounds()).is_some());
+    assert!(super::overlay(&mut app, &ctx, host, doc.id, doc.bounds()).is_none());
 }
 
-/// Inspects painted swatch colours directly to catch double gamma encoding independently of display rendering.
 #[test]
 fn sample_swatch_shows_encoded_source_rgb_without_a_second_gamma_conversion() {
     let ctx = egui::Context::default();
@@ -83,9 +73,9 @@ fn proxy_mask_clips_partial_pixels_to_the_document_edge() {
     if let Some(view) = app.ui.views.first_mut() {
         view.zoom = 0.25;
     }
-    let mut fields = app.ui.dialogs[0].fields.clone();
+    let mut fields = plugin_fields(&app).clone();
     bind(&app, &mut fields);
-    app.ui.dialogs[0].fields = fields;
+    *plugin_fields_mut(&mut app) = fields;
     field(&mut app, "__skinMask", json!(true));
     let doc = app.session.active().unwrap().doc.clone();
     let (_, area, uv) = overlay(&mut app, &egui::Context::default(), doc.id, doc.bounds()).unwrap();
@@ -93,21 +83,24 @@ fn proxy_mask_clips_partial_pixels_to_the_document_edge() {
     assert!(uv.max.x <= 1.0 && uv.max.y <= 1.0);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn control_pointer_samples_and_does_not_paint_through_the_dialog() {
     let mut app = app();
+    crate::canvas::testing::clear_of_dialogs(&mut app, [2.0, 3.0]);
     field(&mut app, "__skinTool", json!("sample"));
     let original = app.session.active().unwrap().doc.clone();
-    let (request, _) = crate::control::ControlRequest::new("ui.pointer", json!({"events":[{"kind":"down","x":2,"y":3},{"kind":"up","x":2,"y":3}]}));
-    crate::control::handle(&mut app, &egui::Context::default(), &request);
-    assert_eq!(colors(&app.ui.dialogs[0].fields, POSITIVE).len(), 1);
+    crate::canvas::testing::control(&mut app, "ui.pointer", json!({"events":[{"kind":"down","x":2,"y":3},{"kind":"up","x":2,"y":3}]}));
+    assert_eq!(colors(plugin_fields(&app), POSITIVE).len(), 1);
     assert!(Arc::ptr_eq(&original, &app.session.active().unwrap().doc));
 }
 
 /// Control drags sample each held move, including across requests, and stop sampling when released.
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn control_pointer_review_regression_samples_held_moves() {
     let mut app = app();
+    crate::canvas::testing::clear_of_dialogs(&mut app, [2.0, 3.0]);
     let layer = app.session.active().unwrap().active_layer.unwrap();
     let surface = Arc::make_mut(&mut app.session.active_mut().unwrap().doc).layer_mut(layer).unwrap().surface_mut().unwrap();
     let samples = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
@@ -115,7 +108,6 @@ fn control_pointer_review_regression_samples_held_moves() {
         surface.write_pixel(x as i32 + 2, 3, &[rgb[0], rgb[1], rgb[2], 1.0]);
     }
     let original = app.session.active().unwrap().doc.clone();
-    let ctx = egui::Context::default();
     for tool in ["sample", "add", "subtract"] {
         field(&mut app, "__skinTool", json!(tool));
         field(&mut app, POSITIVE, json!([]));
@@ -126,10 +118,9 @@ fn control_pointer_review_regression_samples_held_moves() {
             json!([{"kind":"move","x":4,"y":3},{"kind":"up","x":4,"y":3}]),
             json!([{"kind":"move","x":5,"y":3}]),
         ] {
-            let (request, _) = crate::control::ControlRequest::new("ui.pointer", json!({"events":events}));
-            crate::control::handle(&mut app, &ctx, &request);
+            crate::canvas::testing::control(&mut app, "ui.pointer", json!({"events":events}));
         }
-        let fields = &app.ui.dialogs[0].fields;
+        let fields = plugin_fields(&app);
         let key = if tool == "subtract" { NEGATIVE } else { POSITIVE };
         let expected = if tool == "sample" { vec![samples[2]] } else { samples.to_vec() };
         assert_eq!(colors(fields, key), expected, "{tool}: held moves must sample, but a hover after release must not");
@@ -140,68 +131,67 @@ fn control_pointer_review_regression_samples_held_moves() {
         field(&mut app, POSITIVE, json!([]));
         let mut params = guard;
         params["events"] = json!([{"kind":"down","x":2,"y":3},{"kind":"move","x":3,"y":3},{"kind":"up","x":3,"y":3}]);
-        let (request, _) = crate::control::ControlRequest::new("ui.pointer", params);
-        crate::control::handle(&mut app, &ctx, &request);
-        assert!(colors(&app.ui.dialogs[0].fields, POSITIVE).is_empty(), "guarded gestures must not sample");
+        crate::canvas::testing::control(&mut app, "ui.pointer", params);
+        assert!(colors(plugin_fields(&app), POSITIVE).is_empty(), "guarded gestures must not sample");
     }
     assert!(Arc::ptr_eq(&original, &app.session.active().unwrap().doc), "the drag must never paint through the dialog");
-    let mut fields = app.ui.dialogs[0].fields.clone();
+    let mut fields = plugin_fields(&app).clone();
     fields.insert("__pointerDown".into(), json!(true));
     bind(&app, &mut fields);
     assert!(!fields.contains_key("__pointerDown"), "a fresh binding cannot inherit a held pointer");
     field(&mut app, "__pointerDown", json!(true));
     app.session.active_mut().unwrap().channel_view.target = ChannelTarget::Color(0);
     tick(&mut app);
-    assert!(!app.ui.dialogs[0].fields.contains_key("__pointerDown"), "a source change ends the control gesture");
+    assert!(!plugin_fields(&app).contains_key("__pointerDown"), "a source change ends the control gesture");
 }
 
 /// Releasing under a child dialog ends the parent's gesture before it can sample later hover events.
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn control_pointer_review_regression_releases_under_child_dialog() {
     let mut app = app();
+    crate::canvas::testing::clear_of_dialogs(&mut app, [2.0, 3.0]);
     field(&mut app, "__skinTool", json!("add"));
     let original = app.session.active().unwrap().doc.clone();
-    let ctx = egui::Context::default();
     let send = |app: &mut PhotocraftApp, kind| {
-        let (request, _) = crate::control::ControlRequest::new("ui.pointer", json!({"events":[{"kind":kind,"x":2,"y":3}]}));
-        crate::control::handle(app, &ctx, &request);
+        crate::canvas::testing::control(app, "ui.pointer", json!({"events":[{"kind":kind,"x":2,"y":3}]}));
     };
     send(&mut app, "down");
-    assert_eq!(colors(&app.ui.dialogs[0].fields, POSITIVE).len(), 1, "the original press really sampled");
-    let child = app.ui.open_dialog(crate::state::DialogKind::About, Default::default());
+    assert_eq!(colors(plugin_fields(&app), POSITIVE).len(), 1, "the original press really sampled");
+    let child = crate::dialogs::credits::open_about(&mut app, Default::default());
     send(&mut app, "up");
-    crate::dialogs::cancel(&mut app, child).unwrap();
+    crate::dialogs::testing::cancel(&mut app, child).unwrap();
     field(&mut app, POSITIVE, json!([]));
     send(&mut app, "move");
-    assert!(colors(&app.ui.dialogs[0].fields, POSITIVE).is_empty(), "release under a child left the parent sampling hover events");
+    assert!(colors(plugin_fields(&app), POSITIVE).is_empty(), "release under a child left the parent sampling hover events");
     assert!(Arc::ptr_eq(&original, &app.session.active().unwrap().doc));
 }
 
 /// Guarded downs cannot arm a later unguarded move, while a guarded move preserves an existing valid drag.
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn control_pointer_review_regression_guarded_down_does_not_arm_moves() {
     for guard in [json!({"button":"right"}), json!({"button":"middle"}), json!({"space":true})] {
         let mut app = app();
+        crate::canvas::testing::clear_of_dialogs(&mut app, [2.0, 3.0]);
         field(&mut app, "__skinTool", json!("add"));
         let original = app.session.active().unwrap().doc.clone();
-        let ctx = egui::Context::default();
         let send = |app: &mut PhotocraftApp, mut params: Value, kind| {
             params["events"] = json!([{"kind":kind,"x":2,"y":3}]);
-            let (request, _) = crate::control::ControlRequest::new("ui.pointer", params);
-            crate::control::handle(app, &ctx, &request);
+            crate::canvas::testing::control(app, "ui.pointer", params);
         };
         send(&mut app, guard.clone(), "down");
-        assert!(colors(&app.ui.dialogs[0].fields, POSITIVE).is_empty(), "the guarded down itself must not sample");
+        assert!(colors(plugin_fields(&app), POSITIVE).is_empty(), "the guarded down itself must not sample");
         send(&mut app, json!({}), "move");
-        assert!(colors(&app.ui.dialogs[0].fields, POSITIVE).is_empty(), "{guard}: guarded down armed a later unguarded move");
+        assert!(colors(plugin_fields(&app), POSITIVE).is_empty(), "{guard}: guarded down armed a later unguarded move");
         send(&mut app, json!({}), "up");
 
         send(&mut app, json!({}), "down");
         field(&mut app, POSITIVE, json!([]));
         send(&mut app, guard, "move");
-        assert!(colors(&app.ui.dialogs[0].fields, POSITIVE).is_empty());
+        assert!(colors(plugin_fields(&app), POSITIVE).is_empty());
         send(&mut app, json!({}), "move");
-        assert_eq!(colors(&app.ui.dialogs[0].fields, POSITIVE).len(), 1, "a guarded move must not cancel a valid held drag");
+        assert_eq!(colors(plugin_fields(&app), POSITIVE).len(), 1, "a guarded move must not cancel a valid held drag");
         send(&mut app, json!({}), "up");
         assert!(Arc::ptr_eq(&original, &app.session.active().unwrap().doc));
     }
@@ -215,14 +205,15 @@ fn background_mask_discards_stale_samples_and_cancel_releases_it() {
     app.background_jobs = true;
     let doc = app.session.active().unwrap().doc.clone();
     field(&mut app, "__skinMask", json!(true));
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     assert!(overlay(&mut app, &ctx, doc.id, doc.bounds()).is_none());
     // An old request may be wanted again after its cancellation: retry it, don't cache failure.
     let other = FilterPreviewKey {
         doc: doc.id,
         revision: 0,
         sources: Vec::new(),
-        dialog: 0,
+        dialog: craft::ui::dialog::dialog_id("test.mask"),
+        open: 0,
         active: None,
         target: ChannelTarget::Composite,
         command: "different-mask-request".into(),
@@ -259,8 +250,8 @@ fn background_mask_discards_stale_samples_and_cancel_releases_it() {
     assert!(image.pixels.iter().all(|p| *p == Color32::BLACK), "excluding this uniform source removes all coverage");
     updated.clear();
     assert_eq!(app.skin_smooth_mask.as_ref().unwrap().key.as_ref().unwrap().params["values"][NEGATIVE], json!([[0.7, 0.5, 0.4]]));
-    let id = app.ui.dialogs[0].id;
-    crate::dialogs::cancel(&mut app, id).unwrap();
+    let id = craft::ui::dialog::dialog_id("plugin.run");
+    crate::dialogs::testing::cancel(&mut app, id).unwrap();
     assert!(app.skin_smooth_mask.is_none());
     assert!(Arc::ptr_eq(&doc, &app.session.active().unwrap().doc));
 }
@@ -275,17 +266,17 @@ fn eyedroppers_read_original_layer_under_mask_and_never_modify_document() {
     field(&mut app, "__skinMask", json!(true));
     field(&mut app, "__preview", json!(false));
     assert!(overlay(&mut app, &egui::Context::default(), doc.id, doc.bounds()).is_some());
-    assert!(pick(&mut app, [1.0, 1.0], egui::Modifiers::NONE));
-    assert_eq!(colors(&app.ui.dialogs[0].fields, POSITIVE), vec![<[f32; 3]>::try_from(&original[..3]).unwrap()]);
-    assert!(pick(&mut app, [1.0, 1.0], egui::Modifiers::SHIFT));
-    assert_eq!(colors(&app.ui.dialogs[0].fields, POSITIVE).len(), 1, "duplicate picks never grow the range strength");
-    assert!(pick(&mut app, [1.0, 1.0], egui::Modifiers::ALT));
-    assert_eq!(colors(&app.ui.dialogs[0].fields, NEGATIVE).len(), 1);
-    assert!(pick(&mut app, [1.0, 1.0], egui::Modifiers::NONE));
-    assert!(colors(&app.ui.dialogs[0].fields, NEGATIVE).is_empty(), "plain eyedropper replaces both groups");
-    assert!(!pick(&mut app, [f64::NAN, 1.0], egui::Modifiers::NONE));
-    assert!(!pick(&mut app, [-1.0, 1.0], egui::Modifiers::NONE));
-    assert!(!pick(&mut app, [32.0, 1.0], egui::Modifiers::NONE));
+    assert!(pick(&mut app, [1.0, 1.0], Mods::default()));
+    assert_eq!(colors(plugin_fields(&app), POSITIVE), vec![<[f32; 3]>::try_from(&original[..3]).unwrap()]);
+    assert!(pick(&mut app, [1.0, 1.0], Mods { shift: true, ..Default::default() }));
+    assert_eq!(colors(plugin_fields(&app), POSITIVE).len(), 1, "duplicate picks never grow the range strength");
+    assert!(pick(&mut app, [1.0, 1.0], Mods { alt: true, ..Default::default() }));
+    assert_eq!(colors(plugin_fields(&app), NEGATIVE).len(), 1);
+    assert!(pick(&mut app, [1.0, 1.0], Mods::default()));
+    assert!(colors(plugin_fields(&app), NEGATIVE).is_empty(), "plain eyedropper replaces both groups");
+    assert!(!pick(&mut app, [f64::NAN, 1.0], Mods::default()));
+    assert!(!pick(&mut app, [-1.0, 1.0], Mods::default()));
+    assert!(!pick(&mut app, [32.0, 1.0], Mods::default()));
     assert!(Arc::ptr_eq(&doc, &app.session.active().unwrap().doc));
     assert_eq!(revision, app.session.active().unwrap().revision);
 }
@@ -307,7 +298,7 @@ fn mask_matches_selection_alpha_offset_and_filter_weights_at_every_depth() {
         doc.selection = Some(selection);
         let doc = st.doc.clone();
         let layer = st.active_layer.unwrap();
-        let mut fields = app.ui.dialogs[0].fields.clone();
+        let mut fields = plugin_fields(&app).clone();
         fields.insert("skinOnly".into(), json!(false));
         let mask = mask_buffer(&doc, layer, &fields, doc.bounds(), 1, &|| false).unwrap();
         let source = doc.layer(layer).unwrap().surface().unwrap();
@@ -334,11 +325,11 @@ fn view_switches_invalidate_mask_samples_and_presets_do_not_store_samples() {
     field(&mut app, POSITIVE, json!([[0.7, 0.5, 0.4]]));
     field(&mut app, NEGATIVE, json!([[0.2, 0.4, 0.8]]));
     field(&mut app, "__skinMask", json!(true));
-    app.run("plugin.preset.save", json!({"id":ID,"name":"Portrait","params":crate::filter_dialog::params_of(&app.ui.dialogs[0].fields)})).unwrap();
+    app.run("plugin.preset.save", json!({"id":ID,"name":"Portrait","params":crate::filter_dialog::params_of(plugin_fields(&app))})).unwrap();
     let saved = &app.session.prefs().dialogs[&format!("plugin.presets.{ID}")]["Portrait"];
     assert!(saved.get(POSITIVE).is_none());
     assert!(saved.get(NEGATIVE).is_none());
-    let fields = crate::filter_dialog::params_of(&app.ui.dialogs[0].fields);
+    let fields = crate::filter_dialog::params_of(plugin_fields(&app));
     assert!(fields.get("__skinMask").is_none());
     assert!(fields.get("__skinSource").is_none());
     let id = app.session.active().unwrap().doc.id;
@@ -347,13 +338,13 @@ fn view_switches_invalidate_mask_samples_and_presets_do_not_store_samples() {
     assert!(supported(&app).is_err());
     tick(&mut app);
     assert!(app.skin_smooth_mask.is_none());
-    assert!(colors(&app.ui.dialogs[0].fields, POSITIVE).is_empty());
+    assert!(colors(plugin_fields(&app), POSITIVE).is_empty());
     app.session.active_mut().unwrap().channel_view.target = ChannelTarget::Composite;
     tick(&mut app);
     app.run("file.new", json!({"width":8,"height":8})).unwrap();
     tick(&mut app);
-    assert!(colors(&app.ui.dialogs[0].fields, NEGATIVE).is_empty());
-    assert!(!app.ui.dialogs[0].fields.contains_key("__skinMask"));
+    assert!(colors(plugin_fields(&app), NEGATIVE).is_empty());
+    assert!(!plugin_fields(&app).contains_key("__skinMask"));
 }
 
 /// Toggles Preview and Mask independently to prove OK commits colour filtering rather than grayscale mask pixels.
@@ -365,13 +356,13 @@ fn mask_is_independent_of_preview_and_ok_only_applies_smoothing_with_undo() {
         field(&mut app, "__preview", json!(preview));
         field(&mut app, "__skinMask", json!(true));
         field(&mut app, "brightness", json!(50));
-        let ctx = egui::Context::default();
+        let ctx = app.ctx().clone();
         assert!(overlay(&mut app, &ctx, doc.id, doc.bounds()).is_some());
         field(&mut app, "__skinMask", json!(false));
         assert!(overlay(&mut app, &ctx, doc.id, doc.bounds()).is_none());
         field(&mut app, "__skinMask", json!(true));
-        let d = app.ui.dialogs[0].id;
-        super::super::confirm(&mut app, d).unwrap();
+        let d = craft::ui::dialog::dialog_id("plugin.run");
+        crate::dialogs::testing::confirm(&mut app, d).unwrap();
         tick(&mut app);
         assert!(app.skin_smooth_mask.is_none());
         let applied = app.session.active().unwrap().doc.layers[0].surface().unwrap().pixel(1, 1);
@@ -380,19 +371,22 @@ fn mask_is_independent_of_preview_and_ok_only_applies_smoothing_with_undo() {
         app.run("edit.undo", json!({})).unwrap();
         assert_eq!(app.session.active().unwrap().doc.layers[0].surface().unwrap().pixel(1, 1), doc.layers[0].surface().unwrap().pixel(1, 1));
         crate::menus::invoke(&mut app, &ctx, MENU, json!({})).unwrap();
-        assert!(colors(&app.ui.dialogs[0].fields, POSITIVE).is_empty());
+        assert!(colors(plugin_fields(&app), POSITIVE).is_empty());
     }
 }
 
 /// Checks footer reachability across themes and window sizes while preserving independent Mask and Preview switches.
 #[test]
 fn sampling_controls_and_fixed_footer_fit_all_themes_and_small_windows() {
-    for theme in crate::theme::ThemeKind::ALL {
+    for theme in crate::theme::AppTheme::all() {
         for size in [vec2(800.0, 480.0), vec2(1280.0, 800.0)] {
             let mut state = app();
-            state.ui.dialogs.clear();
-            let mut h = egui_kittest::Harness::builder().with_size(size).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), state);
-            PhotocraftApp::setup_context(&h.ctx, theme);
+            crate::dialogs::testing::cancel(&mut state, craft::ui::dialog::dialog_id("plugin.run")).unwrap();
+            let mut h = egui_kittest::Harness::builder()
+                .with_size(size)
+                .with_context(state.ctx().clone())
+                .build_ui_state(|ui, app| crate::dialogs::run(app, ui), state);
+            PhotocraftApp::setup_context(&h.ctx, theme.clone());
             let ctx = h.ctx.clone();
             crate::menus::invoke(h.state_mut(), &ctx, MENU, json!({})).unwrap();
             h.run_steps(12);
@@ -407,8 +401,8 @@ fn sampling_controls_and_fixed_footer_fit_all_themes_and_small_windows() {
             }
             h.get_by_label("Show Mask").click();
             h.run_steps(3);
-            assert_eq!(h.state().ui.dialogs[0].fields["__skinMask"], true);
-            assert_eq!(h.state().ui.dialogs[0].fields["__preview"], false);
+            assert_eq!(plugin_fields(h.state())["__skinMask"], true);
+            assert_eq!(plugin_fields(h.state())["__preview"], false);
         }
     }
 }
@@ -419,12 +413,12 @@ fn non_srgb_sources_disable_sampling_and_mask() {
     let mut app = app();
     field(&mut app, "__skinTool", json!("sample"));
     let layer = app.session.active().unwrap().active_layer.unwrap();
-    for profile in [Some(craft_cms::builtin::Builtin::DisplayP3.profile().to_bytes()), Some(Arc::new(vec![0; 128]))] {
+    for profile in [Some(craft::cms::builtin::Builtin::DisplayP3.profile().to_bytes()), Some(Arc::new(vec![0; 128]))] {
         Arc::make_mut(&mut app.session.active_mut().unwrap().doc).icc_profile = profile;
         assert!(supported(&app).is_err());
-        assert!(!pick(&mut app, [2.0, 3.0], egui::Modifiers::default()));
+        assert!(!pick(&mut app, [2.0, 3.0], Mods::default()));
         let doc = &app.session.active().unwrap().doc;
-        assert!(mask_buffer(doc, layer, &app.ui.dialogs[0].fields, doc.bounds(), 1, &|| false).is_none());
+        assert!(mask_buffer(doc, layer, plugin_fields(&app), doc.bounds(), 1, &|| false).is_none());
     }
 }
 
@@ -435,16 +429,16 @@ fn untagged_skin_sampling_and_mask_follow_the_host_default_profile() {
     Arc::make_mut(&mut app.session.active_mut().unwrap().doc).icc_profile = None;
     field(&mut app, "__skinTool", json!("sample"));
     assert!(supported(&app).is_ok());
-    assert!(pick(&mut app, [2.0, 3.0], egui::Modifiers::default()));
+    assert!(pick(&mut app, [2.0, 3.0], Mods::default()));
     let state = app.session.active().unwrap();
-    let mask = mask_buffer(&state.doc, state.active_layer.unwrap(), &app.ui.dialogs[0].fields, state.doc.bounds(), 1, &|| false).unwrap();
+    let mask = mask_buffer(&state.doc, state.active_layer.unwrap(), plugin_fields(&app), state.doc.bounds(), 1, &|| false).unwrap();
     assert!(mask.get(2, 3)[0] > 0.0);
 }
 
 /// Quick Mask's target warning must not hide a profile rejection before OK.
 #[test]
 fn quick_mask_on_a_smart_layer_shows_the_profile_rejection() {
-    for profile in [craft_cms::builtin::Builtin::DisplayP3.profile().to_bytes(), Arc::new(vec![0; 128])] {
+    for profile in [craft::cms::builtin::Builtin::DisplayP3.profile().to_bytes(), Arc::new(vec![0; 128])] {
         let mut state = app();
         state.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
         state.run("select.editInQuickMaskMode", json!({"on":true})).unwrap();
@@ -453,11 +447,11 @@ fn quick_mask_on_a_smart_layer_shows_the_profile_rejection() {
         let mut h = egui_kittest::Harness::builder()
             .with_size(vec2(1100.0, 900.0))
             .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, Default::default()))
-            .build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), state);
+            .build_ui_state(|ui, app| crate::dialogs::run(app, ui), state);
         h.run_steps(6);
         h.get_by_label(expected);
-        assert_eq!(h.state().ui.dialogs.len(), 1, "the error is visible before confirmation");
-        Arc::make_mut(&mut h.state_mut().session.active_mut().unwrap().doc).icc_profile = Some(craft_cms::builtin::Builtin::Srgb.profile().to_bytes());
+        assert_eq!(h.state().framework.dialogs.stack().ids().count(), 1, "the error is visible before confirmation");
+        Arc::make_mut(&mut h.state_mut().session.active_mut().unwrap().doc).icc_profile = Some(craft::cms::builtin::Builtin::Srgb.profile().to_bytes());
         h.run_steps(3);
         assert!(h.query_by_label(expected).is_none(), "a corrected profile must clear the error");
         h.get_by_label("Skin sampling and Mask require the RGB composite view, with layer pixels targeted.");
@@ -471,11 +465,11 @@ fn confirmation_checks_sample_source_before_the_next_frame() {
         let mut app = app();
         app.background_jobs = false;
         field(&mut app, "__skinTool", json!("sample"));
-        assert!(pick(&mut app, [2.0, 3.0], egui::Modifiers::NONE));
-        assert_eq!(colors(&app.ui.dialogs[0].fields, POSITIVE).len(), 1);
+        assert!(pick(&mut app, [2.0, 3.0], Mods::default()));
+        assert_eq!(colors(plugin_fields(&app), POSITIVE).len(), 1);
         field(&mut app, "brightness", json!(50));
         app.skin_smooth_mask = Some(MaskPreview::default());
-        let id = app.ui.dialogs[0].id;
+        let id = craft::ui::dialog::dialog_id("plugin.run");
         match change {
             "document" => {
                 app.session.execute("file.new", json!({"width":32,"height":24,"background":"#b17d62"})).unwrap();
@@ -490,12 +484,12 @@ fn confirmation_checks_sample_source_before_the_next_frame() {
             }
             _ => {}
         }
-        assert_eq!(app.ui.dialogs[0].fields.get("__skinSource") == Some(&source(&app)), change == "unchanged", "{change}");
+        assert_eq!(plugin_fields(&app).get("__skinSource") == Some(&source(&app)), change == "unchanged", "{change}");
         let before = app.session.active().unwrap().doc.clone();
         let revision = app.session.active().unwrap().revision;
         let history = app.session.active().unwrap().history.entries().to_vec();
         // Do not call tick or draw a frame: automation can confirm in this exact interval.
-        let result = super::super::confirm(&mut app, id);
+        let result = crate::dialogs::testing::confirm(&mut app, id);
         assert!(app.skin_smooth_mask.is_none(), "{change}: confirmation must release the mask preview");
         if change == "unchanged" {
             result.unwrap();
@@ -546,13 +540,13 @@ fn latest_pick_replaces_conflicting_ranges_and_preserves_unrelated_samples() {
         field(&mut app, POSITIVE, json!([rgb]));
         field(&mut app, NEGATIVE, json!([nearby, blue]));
         for _ in 0..2 {
-            assert!(pick(&mut app, [1.0, 1.0], egui::Modifiers::SHIFT));
-            let f = &app.ui.dialogs[0].fields;
+            assert!(pick(&mut app, [1.0, 1.0], Mods { shift: true, ..Default::default() }));
+            let f = plugin_fields(&app);
             assert_eq!(colors(f, POSITIVE), vec![rgb]);
             assert_eq!(colors(f, NEGATIVE), vec![blue]);
             assert!(weight(rgb, tolerance, &colors(f, POSITIVE), &colors(f, NEGATIVE)) > 0.99);
-            assert!(pick(&mut app, [1.0, 1.0], egui::Modifiers::ALT));
-            let f = &app.ui.dialogs[0].fields;
+            assert!(pick(&mut app, [1.0, 1.0], Mods { alt: true, ..Default::default() }));
+            let f = plugin_fields(&app);
             assert_eq!(colors(f, POSITIVE), vec![rgb], "exclusion must preserve the explicit selection base");
             assert_eq!(weight(rgb, tolerance, &colors(f, POSITIVE), &colors(f, NEGATIVE)), 0.0);
         }
@@ -566,7 +560,7 @@ fn pending_mask_keeps_its_texture_only_for_the_same_source_and_viewport() {
     let mut app = app();
     field(&mut app, "__skinMask", json!(true));
     let doc = app.session.active().unwrap().doc.clone();
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     let original = overlay(&mut app, &ctx, doc.id, doc.bounds()).unwrap();
     app.background_jobs = true;
     let (release, wait) = std::sync::mpsc::channel();

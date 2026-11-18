@@ -1,5 +1,10 @@
 //! Skin Smooth's session-only colour samples and independent, read-only canvas mask.
 
+use craft::{
+    behavior::cursor::CursorBadge,
+    keymap::Mods,
+    ui::dialog::{DialogId, StackDialog},
+};
 use egui::{Color32, TextureHandle, vec2};
 use photocraft_algo::skin_smooth_selection::{MAX_SAMPLES, valid_samples, weight};
 use photocraft_color::ColorMode;
@@ -8,7 +13,7 @@ use photocraft_engine::channel_cmds::ChannelTarget;
 use photocraft_geom::Rect;
 use serde_json::{Map, Value, json};
 
-use crate::{PhotocraftApp, filter_dialog::FilterPreviewKey, theme::Tokens, widgets};
+use crate::{PhotocraftApp, filter_dialog::FilterPreviewKey, theme::Tokens};
 
 const POSITIVE: &str = "positiveColors";
 const NEGATIVE: &str = "negativeColors";
@@ -47,7 +52,7 @@ pub(crate) fn bind(app: &PhotocraftApp, f: &mut Map<String, Value>) {
 /// Source changes discard photo-specific samples, even while another tab is active or hidden.
 pub(crate) fn tick(app: &mut PhotocraftApp) {
     let source = source(app);
-    for d in &mut app.ui.dialogs {
+    if let Some(d) = super::plugin_dialog::get_mut(app) {
         if owns(&d.fields) && d.fields.get("__skinSource") != Some(&source) {
             d.fields.insert("__skinSource".into(), source.clone());
             for key in [POSITIVE, NEGATIVE] {
@@ -59,7 +64,7 @@ pub(crate) fn tick(app: &mut PhotocraftApp) {
             d.fields.remove("__skinError");
         }
     }
-    let visible = app.ui.dialogs.last().is_some_and(|d| owns(&d.fields) && d.fields.get("__skinMask") == Some(&json!(true)));
+    let visible = super::plugin_dialog::top(app).is_some_and(|d| owns(&d.fields) && d.fields.get("__skinMask") == Some(&json!(true)));
     if !visible || supported(app).is_err() {
         app.skin_smooth_mask = None;
     }
@@ -67,7 +72,7 @@ pub(crate) fn tick(app: &mut PhotocraftApp) {
 
 /// Returns a sampleable RGB raster layer under the host's sRGB policy.
 /// Rejects channel/mask targets and masked or clipped ancestors whose visible weight is not represented.
-fn supported(app: &PhotocraftApp) -> Result<LayerId, &'static str> {
+pub(super) fn supported(app: &PhotocraftApp) -> Result<LayerId, &'static str> {
     let st = app.session.active().ok_or("Open an RGB image to sample skin colours.")?;
     // Profile rejection also applies to Quick Mask and smart objects; show it before target guidance.
     photocraft_engine::plugin_cmds::skin_smooth_color_supported(&st.doc)?;
@@ -90,8 +95,8 @@ fn supported(app: &PhotocraftApp) -> Result<LayerId, &'static str> {
 }
 
 /// Edits a percent control with a slider and numeric field; double-click restores its default.
-fn row(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, default: f32, min: f32) {
-    let label = crate::filter_dialog::label(key);
+fn row(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, default: f32, min: f32, focus: bool) {
+    let label = super::plugin_dialog::label(key);
     let mut value = f.get(key).and_then(Value::as_f64).unwrap_or(f64::from(default)) as f32;
     ui.push_id(key, |ui| {
         ui.horizontal(|ui| {
@@ -99,12 +104,18 @@ fn row(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, default: f32, m
             ui.add_sized([80.0, 24.0], egui::Label::new(egui::RichText::new(&label).color(t.text_dim)).truncate()).on_hover_text(&label);
             let slider_width = (ui.available_width() - 76.0).max(60.0);
             ui.allocate_ui(vec2(slider_width, 24.0), |ui| {
-                let response = widgets::slider(ui, &mut value, min..=100.0, None).accessible_name(format!("{label} slider"));
+                let response = ui.add(egui::Slider::new(&mut value, min..=100.0).show_value(false)).accessible_name(format!("{label} slider"));
                 if response.double_clicked() {
                     value = default;
                 }
             });
-            widgets::value_field(ui, &mut value, min..=100.0, "", 64.0).accessible_name(&label);
+            let field = ui.add_sized([64.0, 24.0], egui::DragValue::new(&mut value).range(min..=100.0).max_decimals(1)).accessible_name(&label);
+            if focus && !ui.is_sizing_pass() {
+                field.request_focus();
+                let mut edit = egui::TextEdit::load_state(ui.ctx(), field.id).unwrap_or_default();
+                edit.cursor.set_char_range(Some(egui::text::CCursorRange::select_all_str(&value.to_string())));
+                edit.store(ui.ctx(), field.id);
+            }
         });
     });
     f.insert(key.into(), json!((value * 10.0).round() / 10.0));
@@ -158,30 +169,32 @@ fn swatches(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, label: &st
 }
 
 /// Draws smoothing, tone and skin-range controls, disabling sampling when the source cannot be represented.
-pub(crate) fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+pub(super) fn body(supported: Result<(), &str>, mask_error: Option<&str>, ui: &mut egui::Ui, f: &mut Map<String, Value>, first: bool) {
     ui.label(egui::RichText::new(tl!("Smoothing")).strong());
     for (key, default) in [("fine", 45.0), ("medium", 25.0), ("large", 10.0), ("detail", 20.0)] {
-        row(ui, f, key, default, 0.0);
+        row(ui, f, key, default, 0.0, first && key == "fine");
     }
     ui.add_space(8.0);
     ui.label(egui::RichText::new(tl!("Tone")).strong());
     for (key, min) in [("brightness", -100.0), ("warmth", -100.0), ("redness", 0.0)] {
-        row(ui, f, key, 0.0, min);
+        row(ui, f, key, 0.0, min, false);
     }
     ui.add_space(8.0);
     ui.separator();
     ui.label(egui::RichText::new(tl!("Skin range")).strong());
     let mut skin = f.get("skinOnly").and_then(Value::as_bool).unwrap_or(true);
-    widgets::checkbox(ui, &mut skin, tl!("Skin Only"));
+    ui.checkbox(&mut skin, tl!("Skin Only"));
     f.insert("skinOnly".into(), json!(skin));
-    let supported = supported(app);
     ui.add_enabled_ui(skin && supported.is_ok(), |ui| {
         ui.horizontal(|ui| {
             for (tool, badge, label) in
                 [("sample", "", "Sample skin colour"), ("add", "+", "Add skin colour (Shift)"), ("subtract", "−", "Subtract skin colour (Alt)")]
             {
                 let selected = f.get("__skinTool").and_then(Value::as_str) == Some(tool);
-                let response = crate::color_range_ui::eyedropper(ui, badge, selected, tl!(&label));
+                let response = ui
+                    .selectable_label(selected, if badge.is_empty() { tl!("Sample").to_owned() } else { badge.to_owned() })
+                    .accessible_name(tl!(&label))
+                    .on_hover_text(tl!(&label));
                 if response.clicked() {
                     if selected {
                         f.remove("__skinTool");
@@ -197,7 +210,7 @@ pub(crate) fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, V
                 f.remove("__skinError");
             }
         });
-        row(ui, f, "tolerance", 55.0, 0.0);
+        row(ui, f, "tolerance", 55.0, 0.0, false);
         swatches(ui, f, POSITIVE, tl!("Include"), tl!("Automatic skin tones"));
         swatches(ui, f, NEGATIVE, tl!("Exclude"), tl!("None"));
     });
@@ -211,26 +224,24 @@ pub(crate) fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, V
     if let Some(error) = f.get("__skinError").and_then(Value::as_str) {
         ui.add(egui::Label::new(error).wrap());
     }
-    if let Some(error) = app.skin_smooth_mask.as_ref().and_then(|p| p.error.as_deref()) {
+    if let Some(error) = mask_error {
         ui.add(egui::Label::new(error).wrap());
     }
 }
 
 /// Edits read-only mask visibility independently of filter Preview and the pixels committed by OK.
-pub(crate) fn mask_switch(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
-    let mut show = f.get("__skinMask").and_then(Value::as_bool).unwrap_or(false);
-    ui.add_enabled_ui(supported(app).is_ok(), |ui| {
-        widgets::checkbox(ui, &mut show, tl!("Show Mask")).on_hover_text(tl!(
+pub(super) fn mask_switch(supported: bool, ui: &mut egui::Ui, show: &mut bool) {
+    ui.add_enabled_ui(supported, |ui| {
+        ui.checkbox(show, tl!("Show Mask")).on_hover_text(tl!(
             "White: full weight; black: none. Includes the document selection and source alpha. Independent of Preview; OK always applies smoothing."
         ));
     });
-    f.insert("__skinMask".into(), json!(show));
 }
 
 /// Allows sampling only for the current source and top Skin Smooth dialog with Skin Only enabled.
 pub(crate) fn armed(app: &PhotocraftApp) -> bool {
     supported(app).is_ok()
-        && app.ui.dialogs.last().is_some_and(|d| {
+        && super::plugin_dialog::top(app).is_some_and(|d| {
             owns(&d.fields)
                 && d.fields.get("__skinSource") == Some(&source(app))
                 && d.fields.contains_key("__skinTool")
@@ -240,7 +251,7 @@ pub(crate) fn armed(app: &PhotocraftApp) -> bool {
 
 /// Samples original layer pixels at document coordinates, never the composite or displayed mask.
 /// Shift adds, Alt subtracts; the Sample tool replaces both groups. Invalid or transparent picks return false.
-pub(crate) fn pick(app: &mut PhotocraftApp, at: [f64; 2], mods: egui::Modifiers) -> bool {
+pub(crate) fn pick(app: &mut PhotocraftApp, at: [f64; 2], mods: Mods) -> bool {
     if !armed(app) || at.iter().any(|v| !v.is_finite()) {
         return false;
     }
@@ -255,7 +266,7 @@ pub(crate) fn pick(app: &mut PhotocraftApp, at: [f64; 2], mods: egui::Modifiers)
         return false;
     }
     let Some(rgb) = pixel.get(..3).and_then(|p| <[f32; 3]>::try_from(p).ok()).filter(|rgb| valid_samples(&[*rgb])) else { return false };
-    let Some(d) = app.ui.dialogs.last_mut() else { return false };
+    let Some(d) = super::plugin_dialog::get_mut(app) else { return false };
     let f = &mut d.fields;
     let tool = if mods.shift {
         "add"
@@ -287,37 +298,20 @@ pub(crate) fn pick(app: &mut PhotocraftApp, at: [f64; 2], mods: egui::Modifiers)
     true
 }
 
-/// Displays the armed sampler cursor and consumes canvas input, even when a pick is rejected.
-pub(crate) fn canvas_eyedropper(app: &mut PhotocraftApp, ctx: &egui::Context, over: egui::Pos2, press: Option<[f64; 2]>) -> bool {
-    if !armed(app) {
-        return false;
-    }
-    if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise {
-        ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
+/// The canvas tool's cursor follows the sampler button and held modifiers.
+pub(super) fn cursor_badge(app: &PhotocraftApp, mods: Mods) -> Option<CursorBadge> {
+    let tool = super::plugin_dialog::top(app)?.fields.get("__skinTool").and_then(Value::as_str);
+    if mods.shift || tool == Some("add") && !mods.alt {
+        Some(CursorBadge::Add)
+    } else if mods.alt || tool == Some("subtract") {
+        Some(CursorBadge::Subtract)
     } else {
-        crate::icons::cursor(ctx, "pipette", over, vec2(2.0, 22.0) / 24.0, 20.0);
-        ctx.set_cursor_icon(egui::CursorIcon::None);
+        None
     }
-    let mods = ctx.input(|i| i.modifiers);
-    let tool = app.ui.dialogs.last().and_then(|d| d.fields.get("__skinTool")).and_then(Value::as_str).unwrap_or("sample");
-    let badge = if mods.shift || tool == "add" && !mods.alt {
-        "+"
-    } else if mods.alt || tool == "subtract" {
-        "−"
-    } else {
-        ""
-    };
-    if !badge.is_empty() {
-        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("skin-sample-cursor")));
-        let at = over + vec2(14.0, -8.0);
-        // Like Color Range's cursor: readable over both black and white mask pixels.
-        painter.text(at + vec2(1.0, 1.0), egui::Align2::CENTER_CENTER, badge, crate::theme::semibold(13.0), Color32::from_black_alpha(200));
-        painter.text(at, egui::Align2::CENTER_CENTER, badge, crate::theme::semibold(13.0), Color32::WHITE);
-    }
-    if let Some(at) = press {
-        pick(app, at, mods);
-    }
-    true
+}
+
+pub(super) fn mask_error(app: &PhotocraftApp) -> Option<String> {
+    app.skin_smooth_mask.as_ref()?.error.clone()
 }
 
 #[derive(Default)]
@@ -332,7 +326,7 @@ pub(crate) struct MaskPreview {
 
 /// Reports active background mask work belonging to the requested dialog.
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn busy_for(app: &PhotocraftApp, dialog: u64) -> bool {
+pub(crate) fn busy_for(app: &PhotocraftApp, dialog: DialogId) -> bool {
     app.skin_smooth_mask.as_ref().is_some_and(|p| p.worker.busy_for(dialog))
 }
 
@@ -401,23 +395,14 @@ fn publish(preview: &mut MaskPreview, ctx: &egui::Context, key: FilterPreviewKey
 pub(crate) fn overlay(
     app: &mut PhotocraftApp,
     ctx: &egui::Context,
+    host: crate::canvas::document_display::CanvasHost,
     doc_id: photocraft_doc::DocId,
     visible: Rect,
 ) -> Option<(egui::TextureId, Rect, egui::Rect)> {
-    // Duplicate document windows must not supersede the single mask worker's viewport.
-    // The docked document owns it; when undocked, its floating window owns it instead.
-    let active = app.session.active_index()?;
-    let owner = app
-        .ui
-        .windows
-        .iter()
-        .find(|w| w.open && w.floating && w.document == active)
-        .map_or(egui::ViewportId::ROOT, |w| egui::ViewportId::from_hash_of(("docwin", w.id)));
-    let viewport = ctx.data(|d| d.get_temp::<egui::ViewportId>(egui::Id::unique("canvas-doc-window"))).unwrap_or_else(|| ctx.viewport_id());
-    if viewport != owner {
+    if !host.is_primary(app) {
         return None;
     }
-    let d = app.ui.dialogs.last()?;
+    let d = super::plugin_dialog::top(app)?;
     if !owns(&d.fields) || d.fields.get("__skinMask") != Some(&json!(true)) || d.fields.get("__skinSource") != Some(&source(app)) {
         return None;
     }
@@ -428,7 +413,7 @@ pub(crate) fn overlay(
     }
     let doc = st.doc.clone();
     let bounds = doc.bounds();
-    let mut k = crate::proxy::view_factor(doc.size.width.max(doc.size.height).div_ceil(1024).max(1), app.current_zoom());
+    let mut k = crate::proxy::view_factor(doc.size.width.max(doc.size.height).div_ceil(1024).max(1), app.current_zoom(), doc.size.area());
     let visible = visible.intersect(&doc.bounds());
     if visible.is_empty() {
         return None;
@@ -448,7 +433,8 @@ pub(crate) fn overlay(
         doc: doc_id,
         revision: st.revision,
         sources: Vec::new(),
-        dialog: d.id,
+        dialog: d.id(),
+        open: app.framework.dialogs.open_serial(d.id())?,
         active: Some(layer),
         target: ChannelTarget::Composite,
         command: "skin-smooth-mask".into(),
@@ -488,7 +474,7 @@ pub(crate) fn overlay(
         publish(preview, ctx, request.clone(), mask_buffer(&doc, layer, &fields, region, k, &|| false));
     }
     // Keep the last mask while colours change, but never reuse it across sources or viewports.
-    if !preview.key.as_ref().is_some_and(|key| key.same_target(&request)) {
+    if !preview.key.as_ref().is_some_and(|key| crate::canvas::filter_preview::session_of(key) == crate::canvas::filter_preview::session_of(&request)) {
         return None;
     }
     // A partial proxy pixel must stop at the canvas edge, including when rotated or flipped.
