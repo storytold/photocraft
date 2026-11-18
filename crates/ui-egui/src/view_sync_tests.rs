@@ -5,7 +5,7 @@ use serde_json::json;
 
 use crate::PhotocraftApp;
 
-fn app_with_two_documents() -> PhotocraftApp {
+fn app_with_two_documents() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
     app.run("file.new", json!({"width": 32, "height": 32})).unwrap();

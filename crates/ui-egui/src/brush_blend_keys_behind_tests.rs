@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use super::*;
 
 /// A 64 × 64 document with a layer filled 220,30,30, black foreground, the Brush.
-fn app(tool: Tool) -> PhotocraftApp {
+fn app(tool: Tool) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();

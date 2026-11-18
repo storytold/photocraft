@@ -11,7 +11,7 @@ use crate::state::Tool;
 use craft::draw::ui::VectorMode;
 
 /// The measured document: 800 × 600 px with the Freeform Pen in Path mode at `zoom`.
-fn app(zoom: f32) -> PhotocraftApp {
+fn app(zoom: f32) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 800, "height": 600})).unwrap();
     app.sync_views();

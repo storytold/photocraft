@@ -68,7 +68,7 @@ impl Fixture {
                 ("Fire.grd", "Fire", write(&[gradient("Ember", [1.0, 0.0, 0.0]), gradient("Tide", [0.0, 0.0, 1.0])]))
             }
         };
-        let mut app = Box::new(PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default()));
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.open_bytes(name, &bytes).unwrap();
         let original = group(&app, kind, stem);
         match kind {
