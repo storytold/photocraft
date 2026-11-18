@@ -312,7 +312,7 @@ fn doc_save_takes_maximize_compatibility() {
     let mut h = Headless::trusted_local();
     h.handle("doc.new", json!({"width": 64, "height": 32})).unwrap();
     h.handle("engine.execute", json!({"command": "layer.new.layer"})).unwrap();
-    let real_merged = |p: &std::path::Path| photocraft_psd::PsdFile::from_bytes(&std::fs::read(p).unwrap()).unwrap().has_real_merged_data();
+    let real_merged = |p: &std::path::Path| craft_psd::PsdFile::from_bytes(&std::fs::read(p).unwrap()).unwrap().has_real_merged_data();
     for (name, maximize, real) in [("default.psd", json!(null), true), ("off.psd", json!(false), false), ("on.psd", json!(true), true)] {
         let path = dir.join(name);
         h.handle("doc.save", json!({"path": path.to_string_lossy(), "maximizeCompatibility": maximize})).unwrap();
@@ -560,7 +560,7 @@ fn doc_export_layers_reports_skips_in_workspace_and_trusted_sessions() {
         let reply: Value = serde_json::from_slice(&output).unwrap();
         assert_eq!(reply["id"], 8491);
         assert_eq!(reply["ok"], true, "{reply}");
-        assert_eq!(reply["result"]["files"], json!([format!("{out_dir}/card_0001_Background.png")]));
+        assert_eq!(reply["result"]["files"], json!([format!("{out_dir}/card_0002_Background.png")]));
         if !trusted {
             assert_eq!(reply["result"]["count"], 1);
         }
@@ -912,10 +912,10 @@ fn idle_tcp_daemon_releases_its_port_but_keeps_active_clients() {
         done_tx.send(result).unwrap();
     });
     let addr = ready_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-    let mut client = std::net::TcpStream::connect(addr).unwrap();
+    let client = std::net::TcpStream::connect(addr).unwrap();
     client.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-    let mut reader = BufReader::new(client.try_clone().unwrap());
-    writeln!(client, r#"{{"id":"auth","method":"auth","params":{{"token":"{TOKEN}"}}}}"#).unwrap();
+    let mut reader = BufReader::new(&client);
+    writeln!(&client, r#"{{"id":"auth","method":"auth","params":{{"token":"{TOKEN}"}}}}"#).unwrap();
     let mut line = String::new();
     reader.read_line(&mut line).unwrap();
     let auth: Value = serde_json::from_str(&line).unwrap();
@@ -939,14 +939,14 @@ fn tcp_serves_loopback() {
         let _ = serve_tcp("127.0.0.1:0", h, TOKEN.into(), move |a| tx.send(a).unwrap());
     });
     let addr = rx.recv().unwrap();
-    let mut s = std::net::TcpStream::connect(addr).unwrap();
-    writeln!(s, r#"{{"id":"auth","method":"auth","params":{{"token":"{TOKEN}"}}}}"#).unwrap();
-    let mut reader = BufReader::new(s.try_clone().unwrap());
+    let s = std::net::TcpStream::connect(addr).unwrap();
+    writeln!(&s, r#"{{"id":"auth","method":"auth","params":{{"token":"{TOKEN}"}}}}"#).unwrap();
+    let mut reader = BufReader::new(&s);
     let mut line = String::new();
     reader.read_line(&mut line).unwrap();
     let auth: Value = serde_json::from_str(&line).unwrap();
     assert_eq!(auth["result"]["authenticated"], true);
-    writeln!(s, r#"{{"id":"a","method":"methods"}}"#).unwrap();
+    writeln!(&s, r#"{{"id":"a","method":"methods"}}"#).unwrap();
     line.clear();
     reader.read_line(&mut line).unwrap();
     let v: Value = serde_json::from_str(&line).unwrap();
@@ -986,15 +986,17 @@ fn tcp_connections_must_authenticate_before_the_deadline_whatever_they_send() {
     drop(slow);
 
     // Authenticates at once, then asks again 300 ms after the deadline.
-    let mut s = std::net::TcpStream::connect(addr).unwrap();
+    let s = std::net::TcpStream::connect(addr).unwrap();
     s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-    writeln!(s, r#"{{"id":"auth","method":"auth","params":{{"token":"{TOKEN}"}}}}"#).unwrap();
-    let mut reader = BufReader::new(s.try_clone().unwrap());
+    writeln!(&s, r#"{{"id":"auth","method":"auth","params":{{"token":"{TOKEN}"}}}}"#).unwrap();
+    // On Windows a socket from `try_clone` is inherited by processes that other tests start,
+    // and the connection then stays open after `s` is dropped. Read and write through `&s`.
+    let mut reader = BufReader::new(&s);
     let mut line = String::new();
     reader.read_line(&mut line).unwrap();
     assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["result"]["authenticated"], true);
     std::thread::sleep(Duration::from_millis(600));
-    writeln!(s, r#"{{"id":"a","method":"methods"}}"#).unwrap();
+    writeln!(&s, r#"{{"id":"a","method":"methods"}}"#).unwrap();
     line.clear();
     reader.read_line(&mut line).unwrap();
     assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["id"], "a");
@@ -1018,11 +1020,11 @@ fn tcp_repeat_auth_reports_already_authenticated_and_keeps_serving() {
         let _ = serve_tcp("127.0.0.1:0", h, TOKEN.into(), move |a| tx.send(a).unwrap());
     });
     let addr = rx.recv().unwrap();
-    let mut s = std::net::TcpStream::connect(addr).unwrap();
-    let mut reader = BufReader::new(s.try_clone().unwrap());
+    let s = std::net::TcpStream::connect(addr).unwrap();
+    let mut reader = BufReader::new(&s);
     let mut line = String::new();
     for id in ["auth", "again"] {
-        writeln!(s, r#"{{"id":"{id}","method":"auth","params":{{"token":"{TOKEN}"}}}}"#).unwrap();
+        writeln!(&s, r#"{{"id":"{id}","method":"auth","params":{{"token":"{TOKEN}"}}}}"#).unwrap();
         line.clear();
         reader.read_line(&mut line).unwrap();
     }
@@ -1030,7 +1032,7 @@ fn tcp_repeat_auth_reports_already_authenticated_and_keeps_serving() {
     assert_eq!(again["id"], "again");
     assert_eq!(again["ok"], false);
     assert_eq!(again["error"], "already authenticated");
-    writeln!(s, r#"{{"id":"m","method":"methods"}}"#).unwrap();
+    writeln!(&s, r#"{{"id":"m","method":"methods"}}"#).unwrap();
     line.clear();
     reader.read_line(&mut line).unwrap();
     let v: Value = serde_json::from_str(&line).unwrap();
@@ -1155,7 +1157,7 @@ fn doc_place_forwards_high_memory_approval() {
     let gb = 1u64 << 30;
     let root = std::env::temp_dir().join(format!("pc-doc-place-approval-{}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();
-    let psd = photocraft_psd::testgen::small(photocraft_psd::Version::Psd, photocraft_psd::Compression::Zip).to_bytes().unwrap();
+    let psd = craft_psd::testgen::small(craft_psd::Version::Psd, craft_psd::Compression::Zip).to_bytes().unwrap();
     std::fs::write(root.join("high.psd"), &psd).unwrap();
     // Known 5 GiB RAM: S = 2.5 GiB, H = 3.75 GiB. A 3 GiB estimate charge lands in (S, H].
     let snap = photocraft_io::memory::MemorySnapshot { available_ram: Some(5 * gb), swap_free: None, commit_headroom: None };

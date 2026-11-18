@@ -962,6 +962,7 @@ pub fn import_options(prefs: &crate::prefs::Preferences) -> photocraft_io::Impor
     photocraft_io::ImportOptions {
         max_group_depth: prefs.file_handling.rasterize_svg_groups_deeper_than as usize,
         demosaic: prefs.raw_defaults.demosaic.method(),
+        keep_raw: false,
         pdf_dpi: prefs.file_handling.pdf_dpi,
         pdf_pages: match (prefs.file_handling.pdf_first_page, prefs.file_handling.pdf_last_page) {
             (0, 0) => None,
@@ -1260,6 +1261,8 @@ impl Session {
         let name_w = name.to_string();
         let name_a = name.to_string();
         let mut opts = import_options(self.prefs());
+        // An interactive raw open keeps its sensor data for the Camera Raw dialog it may show.
+        opts.keep_raw = confirm_damage && self.prefs().raw_defaults.open_in_camera_raw;
         opts.psd_high_memory_approved = approve_high_memory;
         opts.psd_approved_estimate = approved_estimate;
         let test_memory_scope = photocraft_io::memory::TestMemoryScope::capture();
@@ -1823,6 +1826,7 @@ impl Session {
             && let Some((doc, revision)) = &before
         {
             self.note_command_damage(id, doc, *revision);
+            self.note_pixel_change(doc.id, *revision);
         }
         // Shape Blur by an installed shape's id or name records the geometry it ran with, as the
         // filter's own prepared params carry it: the journal (Last Filter, recorded actions)
@@ -1901,6 +1905,17 @@ impl Session {
         }
         #[cfg(not(any(test, debug_assertions)))]
         let _ = id;
+    }
+
+    /// Counts the step that moved document `doc` past revision `from` in `DocState::pixel_revision` when its damage
+    /// is not empty (`None` is everything). A selection-only or view-only step reports empty damage and keeps it.
+    fn note_pixel_change(&mut self, doc: DocId, from: u64) {
+        if let Some(st) = self.docs.iter_mut().find(|st| st.doc.id == doc)
+            && st.revision > from
+            && st.last_damage != Some(photocraft_geom::Rect::EMPTY)
+        {
+            st.pixel_revision += 1;
+        }
     }
 
     /// Grows the damage a command reported for the pixels it changed by what effects laid out
@@ -2082,6 +2097,7 @@ impl Session {
         // contract as synchronous dispatch without truncating work done while the worker ran.
         let nested_from = self.journal.len();
         let recording = if *journal && crate::actions_cmds::replayable(command) { self.actions.recording.take() } else { None };
+        let applied_from = target.and_then(|i| self.docs.get(i)).map(|st| (st.doc.id, st.revision));
         let r = match apply {
             Some(f) => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self, payload)))
                 .unwrap_or_else(|_| Err(EngineError::Other(format!("`{label}` failed with an internal error (logged); the document is unchanged")))),
@@ -2097,6 +2113,9 @@ impl Session {
         // Restoring the viewed document first would attribute Fade and slice updates
         // to that document instead, when the user switched tabs mid-job.
         if r.is_ok() {
+            if let Some((doc_id, from)) = applied_from {
+                self.note_pixel_change(doc_id, from);
+            }
             // The step is automation's when the job's own request was gated, not the caller
             // polling it now, and only for the recording that owns it: a foreign recording does
             // not get the step.
