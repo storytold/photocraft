@@ -22,7 +22,8 @@ fn assert_composite(doc: &Document, x: i32, black: [f32; 3], white: [f32; 3]) {
 
 #[test]
 fn exr_scanline_alpha_opens_and_round_trips() {
-    let path = std::env::temp_dir().join(format!("photocraft-exr-alpha-{}.exr", std::process::id()));
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("alpha.exr");
     let fixtures = [
         (fixture(ChannelLayout::Rgba, &[0.8, 0.4, 0.2, 1.0], &[0.8, 0.4, 0.2, 0.5]), [([0.8, 0.4, 0.2], [0.8, 0.4, 0.2]), ([0.8, 0.4, 0.2], [1.3, 0.9, 0.7])]),
         (fixture(ChannelLayout::Rgba, &[0.5, 0.5, 0.5, 0.0], &[0.0005, 0.0005, 0.0005, 0.001]), [([0.5; 3], [1.5; 3]), ([0.0005; 3], [0.9995; 3])]),
@@ -36,7 +37,6 @@ fn exr_scanline_alpha_opens_and_round_trips() {
         std::fs::write(&path, &bytes).unwrap();
         let file = import_file("test.exr", &path, &ImportOptions::default(), &Interrupt::NONE).unwrap();
         let memory = import("test.exr", &bytes).unwrap();
-        std::fs::remove_file(&path).unwrap();
         let saved = export(&file.document, "exr", &ExportOptions::default()).unwrap();
         let raw = codecs::decode(&saved.bytes).unwrap();
         let input = codecs::decode(&bytes).unwrap();
@@ -56,12 +56,12 @@ fn exr_scanline_alpha_opens_and_round_trips() {
 
 #[test]
 fn exr_straight_float_overflow_preserves_associated_colour() {
-    let path = std::env::temp_dir().join(format!("photocraft-exr-float-overflow-{}.exr", std::process::id()));
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("overflow.exr");
     let alpha = f32::MIN_POSITIVE;
     let bytes = fixture(ChannelLayout::Rgba, &[8.0, 0.0, 0.0, alpha], &[0.0, -16.0, 0.0, alpha]);
     std::fs::write(&path, &bytes).unwrap();
     let file = import_file("overflow.exr", &path, &ImportOptions::default(), &Interrupt::NONE).unwrap().document;
-    std::fs::remove_file(path).unwrap();
     let memory = import("overflow.exr", &bytes).unwrap().document;
     let saved = export(&file, "exr", &ExportOptions::default()).unwrap();
     let raw = codecs::decode(&saved.bytes).unwrap();
@@ -117,15 +117,15 @@ fn exr_emission_survives_half_float_texture_samples() {
         .convert(ChannelLayout::Rgba, codecs::SampleType::F16)
         .convert(ChannelLayout::Rgba, codecs::SampleType::F32);
     let alpha = half.get(4, 4, 3);
-    assert!(alpha > 0.0);
+    assert!(photocraft_color::is_emissive_alpha(alpha));
     for (channel, expected) in [0.5, 0.25, 0.125].into_iter().enumerate() {
-        assert!((half.get(4, 4, channel) * alpha - expected).abs() <= 1e-6);
+        assert_eq!(half.get(4, 4, channel), expected);
     }
 
     let saved = export(&doc, "exr", &ExportOptions::default()).unwrap();
     let raw = codecs::decode(&saved.bytes).unwrap();
     assert_eq!(raw.get(4, 4, 3), 0.0);
-    assert_eq!(raw.get(24, 4, 3), (1.0f32 / 16_384.0).next_up());
+    assert_eq!(raw.get(24, 4, 3), 1.0f32 / 16_384.0);
 }
 
 #[test]
@@ -149,10 +149,36 @@ fn exr_uint_channels_keep_their_raw_values() {
     let path = std::env::temp_dir().join(format!("photocraft-exr-uint-{}.exr", std::process::id()));
     std::fs::write(&path, &bytes).unwrap();
     let file = import_file("uint.exr", &path, &ImportOptions::default(), &Interrupt::NONE).unwrap();
-    std::fs::remove_file(path).unwrap();
     let memory = import("uint.exr", &bytes).unwrap();
     for doc in [&file.document, &memory.document] {
         let values = doc.layers[0].surface().unwrap().read_region(doc.bounds());
         assert!(values.as_chunks::<2>().0.iter().all(|pixel| *pixel == [800.0, 0.0]));
+    }
+}
+
+#[test]
+fn exr_export_preserves_ordinary_low_coverage() {
+    let low = 1.0f32 / 16_384.0;
+    for layout in [ChannelLayout::Rgba, ChannelLayout::GrayA] {
+        for alpha in [low, low.next_down(), low.next_up(), f32::MIN_POSITIVE, 0.0, 0.5, 1.0] {
+            let samples = if layout == ChannelLayout::Rgba { vec![0.5, 0.25, 0.125, alpha] } else { vec![0.5, alpha] };
+            let image = Image::from_f32(1, 1, layout, &samples).unwrap();
+            let mut doc = photocraft_io::image_to_document("ordinary", &image).unwrap().document;
+            doc.icc_profile = Some(if layout == ChannelLayout::Rgba {
+                craft_cms::Builtin::LinearSrgb.profile().to_bytes()
+            } else {
+                craft_cms::builtin::linear_gray().to_bytes()
+            });
+            let saved = export(&doc, "exr", &ExportOptions::default()).unwrap();
+            let raw = codecs::decode(&saved.bytes).unwrap();
+            let alpha_channel = layout.channels() - 1;
+            let stored_alpha = if raw.layout().has_alpha() { raw.get(0, 0, raw.layout().channels() - 1) } else { 1.0 };
+            assert_eq!(stored_alpha, alpha, "{layout:?} at {alpha}");
+            for (channel, colour) in samples[..alpha_channel].iter().enumerate() {
+                assert_eq!(raw.get(0, 0, channel), colour * alpha, "{layout:?} at {alpha}");
+            }
+            let reopened = import("ordinary.exr", &saved.bytes).unwrap().document;
+            assert_eq!(reopened.layers[0].surface().unwrap().pixel(0, 0)[alpha_channel], alpha, "{layout:?} at {alpha}");
+        }
     }
 }

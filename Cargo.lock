@@ -6559,6 +6559,7 @@ dependencies = [
  "photocraft-vector",
  "proptest",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
  "ttf-parser",
  "zune-core",

@@ -65,6 +65,7 @@ craft-pdf = { workspace = true }
 kurbo = { version = "0.13", optional = true }
 
 [dev-dependencies]
+tempfile = "3"
 lopdf = { version = "0.38", default-features = false }
 miniz_oxide = "0.9"
 crc32fast = "1.5"

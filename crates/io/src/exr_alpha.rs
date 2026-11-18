@@ -4,10 +4,6 @@ use craft_exr::decode::{Limits, PartInfo, SampleType};
 use photocraft_codecs::{Image, SampleType as CodecSample};
 use photocraft_color::{EMISSIVE_ALPHA, is_emissive_alpha};
 
-// Give emission a little coverage so straight-alpha layers can carry it, then restore
-// zero coverage when writing associated colour on export.
-const EMISSION_ALPHA: f32 = 1.0 / 16_384.0;
-
 pub(crate) fn parts(bytes: &[u8]) -> Vec<PartInfo> {
     // This is a header-only query. The actual decoder enforces its own pixel limits.
     std::panic::catch_unwind(|| craft_exr::decode::parts(bytes, &Limits::none())).ok().and_then(Result::ok).unwrap_or_default()
@@ -46,36 +42,26 @@ pub(crate) fn unpremultiply(data: &mut [u8], channels: usize) {
             continue;
         }
         let peak = colours.iter().map(|colour| f32::from_ne_bytes(*colour).abs()).filter(|value| value.is_finite()).fold(0.0, f32::max);
-        let zero_coverage = a == 0.0;
-        let mut coverage = if zero_coverage {
-            if colours.iter().all(|colour| f32::from_ne_bytes(*colour) == 0.0) {
-                continue;
+        if a == 0.0 {
+            // Keep emission associated at zero coverage. A positive alpha cannot be a
+            // marker: ordinary pixels may use every representable coverage value.
+            if colours.iter().any(|colour| f32::from_ne_bytes(*colour) != 0.0) {
+                *alpha = EMISSIVE_ALPHA.to_ne_bytes();
             }
-            EMISSION_ALPHA
-        } else {
-            a
-        };
+            continue;
+        }
+        let mut coverage = a;
         // No straight float32 sample can retain both the original coverage and this colour
         // when the quotient is too large. Raise coverage only as far as needed to keep the
         // associated colour. Round the bound upward so division cannot overflow again.
         let peak = f64::from(peak);
         let max = f64::from(f32::MAX);
-        if zero_coverage && peak > max * f64::from(coverage) {
-            // This emission cannot fit as straight colour at the tiny marker coverage.
-            // Keep the colour associated and mark it with signed zero instead.
-            *alpha = EMISSIVE_ALPHA.to_ne_bytes();
-            continue;
-        }
         if peak > max * f64::from(coverage) {
             let needed = peak / max;
             coverage = needed as f32;
             if f64::from(coverage) * max < peak {
                 coverage = coverage.next_up();
             }
-        }
-        if !zero_coverage && coverage == EMISSION_ALPHA {
-            // Reserve the exact marker for zero-alpha emission.
-            coverage = coverage.next_up();
         }
         *alpha = coverage.to_ne_bytes();
         for colour in colours {
@@ -104,9 +90,6 @@ pub(crate) fn premultiply_image(image: &mut Image) {
         }
         for colour in colours {
             *colour = (f32::from_ne_bytes(*colour) * a).to_ne_bytes();
-        }
-        if a == EMISSION_ALPHA {
-            *alpha = 0.0f32.to_ne_bytes();
         }
     }
 }
