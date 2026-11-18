@@ -5,7 +5,6 @@ use std::sync::{Arc, Weak};
 
 use serde_json::json;
 
-use super::pen::closing;
 use super::{DocId, Document, PenPath, PhotocraftApp, Tool};
 
 /// A Pen or Curvature Pen path finished: closed on its first anchor, ended with ↩/Esc or by
@@ -45,19 +44,13 @@ pub(super) fn current_doc(app: &PhotocraftApp) -> Weak<Document> {
     app.session.active().map(|st| Arc::downgrade(&st.doc)).unwrap_or_default()
 }
 
-/// The path being finished as it was being drawn: without the stand-in that took a close-drag
-/// (`pen_down`), whose handles went to the closed path only.
+/// The path being finished as it was being drawn: open, whatever closed it, and not marked failed.
 pub(super) fn draft_before_finish(pen: &PenPath) -> PenPath {
     let mut draft = pen.clone();
-    if !draft.curvature && closing(&draft) {
-        draft.knots.pop();
-        let n = draft.knots.len();
-        draft.unlinked.retain(|&i| i < n);
+    if let Some(open) = draft.before_close.take() {
+        draft.draft = open;
     }
-    draft.dragging = false;
-    draft.adjusting_last = false;
-    draft.adjusting_in = false;
-    draft.moving = None;
+    draft.draft.closed = false;
     draft.commit_failed = false;
     draft
 }
@@ -95,7 +88,7 @@ fn rebind_owner(app: &PhotocraftApp, draft: &mut PenPath) {
 /// (the Pen that drew it comes back) and after undoing what came next, such as the selection
 /// Make Selection made from it, or later paths. A path carried on from an endpoint (#6593) comes
 /// back still carrying it on: Undo then takes back the anchors added to it, then drops the draft
-/// and leaves the path as it was before (`pen_undo_last_point`). False for a plain Undo.
+/// and leaves the path as it was before (`host::remove_last`). False for a plain Undo.
 pub(crate) fn pen_resume_on_undo(app: &mut PhotocraftApp) -> Result<bool, String> {
     if app.ui.pen.is_some() || box_steps(app, "edit.undo") {
         return Ok(false);
@@ -114,7 +107,7 @@ pub(crate) fn pen_resume_on_undo(app: &mut PhotocraftApp) -> Result<bool, String
     let mut draft = finished.draft.clone();
     rebind_owner(app, &mut draft);
     if !draft.drawn_with(app.ui.tool) {
-        // Otherwise the next frame finishes it again (`finish_pen_if_left`).
+        // Otherwise the next pass ends it again (`tool_changed` cancels the Pen with `PenEnd::Interrupted`).
         crate::tool_memory::select(app, if draft.curvature { Tool::CurvaturePen } else { Tool::Pen });
     }
     app.ui.pen_doc = app.session.active().map(|st| st.doc.id);
@@ -132,11 +125,10 @@ fn resumed_finish(app: &PhotocraftApp) -> Option<usize> {
 /// The draft as Undo gave it back, ignoring what only ties it to a document state. Its target
 /// counts: the same anchors redrawn in Shape mode are a new draft, not the Work Path's.
 fn same_draft(a: &PenPath, b: &PenPath) -> bool {
-    a.knots == b.knots
-        && a.unlinked == b.unlinked
+    a.draft == b.draft
+        && a.kept == b.kept
         && a.curvature == b.curvature
         && a.resumes == b.resumes
-        && a.fixed == b.fixed
         && a.owner.as_ref().map(|o| &o.target) == b.owner.as_ref().map(|o| &o.target)
 }
 
@@ -169,10 +161,7 @@ pub(crate) fn pen_finish_on_redo(app: &mut PhotocraftApp) -> Result<bool, String
         app.ui.pen_doc = pen_doc;
         return redone.map(|_| true);
     }
-    if app.ui.direct_selection.target == Some(crate::direct_select::PathRef::Pen) {
-        app.ui.direct_selection = Default::default();
-    }
-    app.ui.pen_doc = None;
+    super::host::drop_draft(app);
     let doc = current_doc(app);
     if let Some(finished) = app.finished_pens.get_mut(i) {
         finished.doc = doc;
@@ -194,7 +183,7 @@ pub(crate) fn pen_history_step(app: &mut PhotocraftApp, id: &str) -> Option<Resu
     if box_steps(app, id) || app.ui.pen.as_ref().is_some_and(|pen| !pen.owns_undo(app.ui.tool)) {
         return None;
     }
-    if undo && super::pen_undo_last_point(app) {
+    if undo && super::host::remove_last(app) {
         return Some(Ok(()));
     }
     match if undo { pen_resume_on_undo(app) } else { pen_finish_on_redo(app) } {
@@ -216,7 +205,7 @@ pub(crate) fn pen_history_enabled(app: &PhotocraftApp, id: &str) -> Option<bool>
     if box_steps(app, id) || app.ui.pen.as_ref().is_some_and(|pen| !pen.owns_undo(app.ui.tool)) {
         return None;
     }
-    if undo { app.ui.pen.as_ref().is_some_and(|pen| !pen.knots.is_empty()).then_some(true) } else { pen_blocks_redo(app).then_some(false) }
+    if undo { app.ui.pen.as_ref().is_some_and(|pen| !pen.draft.knots.is_empty()).then_some(true) } else { pen_blocks_redo(app).then_some(false) }
 }
 
 /// Do Free Transform's or the Crop tool's own box steps take `id` (Undo/Redo) rather than History
