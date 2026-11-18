@@ -1604,7 +1604,7 @@ fn save_types(suggested: &str) -> Vec<(String, Vec<String>)> {
 #[test]
 fn save_as_offers_only_writable_formats_including_ico() {
     // Layered formats, and PDF, are written by `photocraft-io`, not a codec.
-    let layered = ["psd", "psb", "pcraft", "ora", "pdf"];
+    let layered = ["psd", "psb", "pcraft", "ora", "pdf", "aseprite"];
     for (name, exts) in filters::SAVE_FILTERS {
         for ext in exts.iter().filter(|e| !layered.contains(e)) {
             let format = photocraft_codecs::from_extension(ext).unwrap_or_else(|| panic!("{name}: .{ext} is no known format"));
@@ -1689,4 +1689,12 @@ fn save_types_list_the_document_formats_then_the_rest_by_name() {
     assert_eq!(names[..2], ["Photoshop", "PhotoCraft"]);
     let formats = names.iter().position(|name| *name == "Brushes").expect("the app's own resources");
     assert!(names[2..formats].is_sorted_by_key(key), "{:?}", &names[2..formats]);
+}
+
+#[test]
+fn picker_distinguishes_sprite_documents_from_swatch_exchange() {
+    use super::filters::{OPEN_EXTS, OPEN_FILTERS, SAVE_FILTERS};
+    assert!(OPEN_EXTS.contains(&"aseprite") && OPEN_EXTS.contains(&"ase"));
+    assert!(OPEN_FILTERS.contains(&("Aseprite", &["aseprite"][..])));
+    assert!(SAVE_FILTERS.contains(&("Aseprite", &["aseprite"][..])));
 }

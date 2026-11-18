@@ -334,8 +334,8 @@ impl PhotocraftApp {
         }
     }
 
-    /// Reconciles canvas view state with open documents in the session.
-    pub fn sync_views(&mut self) {
+    /// Resets document-specific selections and playback when the active document changes.
+    pub(crate) fn sync_document_state(&mut self) {
         // The Paths panel selection belongs to the active document. Ordinary edits replace the
         // snapshot and advance its revision; a replaced snapshot without a newer revision is a
         // reopened document, even with the same ID.
@@ -359,6 +359,16 @@ impl PhotocraftApp {
             self.ui.selected_path = None;
         }
         self.path_document = document;
+        let tags = self.session.active().and_then(|d| d.doc.sprite.as_ref()).map_or(&[][..], |s| s.tags.as_slice());
+        if !same_document || tags != self.timeline_tags {
+            self.timeline_tags = tags.to_vec();
+            self.ui.timeline.sprite_tag = None;
+            crate::timeline_ui::stop(self);
+        }
+    }
+
+    pub fn sync_views(&mut self) {
+        self.sync_document_state();
         vector_ui::cancel_stale_pen(self);
         crate::direct_select::cancel_stale(self);
         type_transform::cancel_stale(self);

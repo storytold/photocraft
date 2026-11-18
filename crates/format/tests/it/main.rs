@@ -10,4 +10,5 @@ mod frame_stroke;
 mod layer_labels;
 mod roundtrip;
 mod smart_contents;
+mod sprite;
 mod triangle_live;

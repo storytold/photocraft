@@ -2223,3 +2223,26 @@ fn shift_right_menu_choose_rejects_bad_choices_and_sets_the_tool() {
     shift_right(&mut app, "magicEraser");
     assert!(inspect(&app, &ctx)["brushModeMenu"].is_null());
 }
+
+#[test]
+fn app_open_aseprite_alias_opens_an_editable_document_and_remembers_its_source() {
+    let bytes = include_bytes!("../../../io/tests/fixtures/aseprite/layers.aseprite");
+    let services = crate::Services {
+        import: Some(Box::new(|name, bytes, opts| {
+            photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
+        })),
+        automation_read: Some(Box::new(move |path| {
+            Ok(crate::AutomationReadResult { name: "sprite.ase".into(), bytes: bytes.to_vec(), save_path: Some(path.into()) })
+        })),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    let ctx = app.ctx().clone();
+    let r = call(&mut app, &ctx, "app.open", json!({"path":"sprites/sprite.ase"}));
+    assert_eq!(r["ok"], true, "{r}");
+    let st = app.session.active().unwrap();
+    assert!(!st.source_read_only);
+    assert_eq!(st.path.as_deref(), Some("sprites/sprite.ase"));
+    assert_eq!(st.doc.layers.len(), 2);
+    assert_eq!(app.ui.recent_files.first().map(String::as_str), Some("sprites/sprite.ase"));
+}

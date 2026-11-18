@@ -422,3 +422,78 @@ fn turns_on_empty_and_tiny_documents_never_panic() {
         assert!(s.execute(command(t), json!({})).is_err(), "no document");
     }
 }
+
+/// Pixel maps used to overflow on an off-canvas mask or channel even on a normal sprite.
+#[test]
+fn canvas_turn_refuses_extreme_auxiliary_pixels_without_changing_state() {
+    use photocraft_color::{ColorMode, PixelFormat, SampleType};
+    use photocraft_doc::{AlphaChannel, LayerMask, Size};
+    for t in TURNS {
+        for target in
+            ["raster", "mask", "channel", "quick_mask", "selection", "nested", "fill_cache", "video", "original_video", "text", "shape", "smart", "filter_mask"]
+        {
+            let mut d = Document::new("Extreme coordinates", Size::new(W, H), ColorMode::Rgb, SampleType::U8);
+            let mut surface = Surface::new(PixelFormat::RGBA8);
+            surface.write_pixel(i32::MIN, i32::MIN, &[1.0; 4]);
+            let mut layer = Layer::raster("Layer", PixelFormat::RGBA8);
+            match target {
+                "raster" => layer.content = LayerContent::Raster(surface),
+                "mask" => layer.mask = Some(LayerMask { surface, ..LayerMask::reveal_all() }),
+                "channel" => d.channels.push(AlphaChannel::new("Channel", surface)),
+                "quick_mask" => d.quick_mask = Some(AlphaChannel::new("Quick Mask", surface)),
+                "selection" => d.selection = Some(surface),
+                "nested" => layer = Layer::group("Group", vec![Layer::new("Child", LayerContent::Raster(surface))]),
+                "fill_cache" => layer.fill_cache = Some(photocraft_doc::FillCache { fill: Fill::Solid(photocraft_color::Color::BLACK), surface }),
+                "video" => layer.video = Some(photocraft_doc::VideoData::new(vec![surface], 24.0)),
+                "original_video" => {
+                    let mut video = photocraft_doc::VideoData::new(vec![Surface::new(PixelFormat::RGBA8)], 24.0);
+                    video.original_frames = Some(vec![surface]);
+                    layer.video = Some(video);
+                }
+                "text" => layer.content = LayerContent::Text(TextLayer { cache: Some(surface), ..Default::default() }),
+                "shape" => layer.content = LayerContent::Shape(photocraft_doc::vector::ShapeLayer { cache: Some(surface), ..Default::default() }),
+                "smart" | "filter_mask" => {
+                    let mut smart = photocraft_doc::SmartObject::new(
+                        photocraft_doc::SmartSource::Embedded { file_name: "unused.png".into(), bytes: Arc::new(vec![]) },
+                        Affine::IDENTITY,
+                        None,
+                    );
+                    if target == "smart" {
+                        smart.cache = Some(surface);
+                    } else {
+                        smart.filter_mask = Some(LayerMask { surface, ..LayerMask::reveal_all() });
+                    }
+                    layer.content = LayerContent::Smart(smart);
+                }
+                _ => panic!("unknown pixel storage fixture: {target}"),
+            }
+            d.layers.push(layer);
+            let mut s = Session::new();
+            s.add_document(d, None);
+            let before = s.active().unwrap().doc.clone();
+            let history = s.active().unwrap().history.past_len();
+            let error = s.execute(command(t), json!({})).unwrap_err();
+            assert!(error.to_string().contains("coordinate range"), "{target}, {t:?}: {error}");
+            assert_eq!(s.active().unwrap().doc, before, "{target}, {t:?}");
+            assert_eq!(s.active().unwrap().history.past_len(), history);
+        }
+    }
+}
+
+/// Keep valid off-canvas pixels at the nearest representable positive edge.
+#[test]
+fn canvas_flip_keeps_pixels_whose_half_open_bounds_remain_representable() {
+    use photocraft_color::{ColorMode, PixelFormat, SampleType};
+    use photocraft_doc::Size;
+    let mut d = Document::new("Coordinate boundary", Size::new(W, H), ColorMode::Rgb, SampleType::U8);
+    let x = i32::MIN + W as i32 + 1;
+    let mut surface = Surface::new(PixelFormat::RGBA8);
+    surface.write_pixel(x, 0, &[1.0; 4]);
+    d.layers.push(Layer::new("Pixel", LayerContent::Raster(surface)));
+    let mut s = Session::new();
+    s.add_document(d, None);
+    s.execute(command(Turn::FlipHorizontal), json!({})).unwrap();
+    assert_eq!(doc(&s).layers[0].surface().unwrap().pixel(i32::MAX - 1, 0), [1.0; 4]);
+    s.execute(command(Turn::FlipHorizontal), json!({})).unwrap();
+    assert_eq!(doc(&s).layers[0].surface().unwrap().pixel(x, 0), [1.0; 4]);
+}

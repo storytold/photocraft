@@ -19,6 +19,7 @@ pub mod import_conversion;
 pub mod mode;
 pub mod pattern;
 pub mod slices;
+pub mod sprite;
 pub mod text;
 pub mod text_styles;
 pub mod variables;
@@ -951,6 +952,8 @@ pub struct Document {
     pub variables: Variables,
     /// Window › Timeline (None until a video timeline is created).
     pub timeline: Option<Timeline>,
+    /// Editable cel-based sprites, including exact indexed samples and variable frame timing.
+    pub sprite: Option<sprite::Sprite>,
     /// How the document's lossy file was encoded (its JPEG quality, WebP lossy or lossless,
     /// PNG stereo pairing), so a save writes it back the same way rather than at fixed defaults.
     pub file_encoding: FileEncoding,
@@ -1028,6 +1031,7 @@ impl Document {
             slices: Slices::default(),
             variables: Variables::default(),
             timeline: None,
+            sprite: None,
             file_encoding: FileEncoding::default(),
         }
     }
@@ -1091,6 +1095,16 @@ impl Document {
     /// masks, video frames (including the originals), channels, the quick mask, patterns and
     /// the selection. History snapshots and saves cover exactly these tiles.
     pub fn for_each_surface(&self, mut visit: impl FnMut(&Surface)) {
+        if let Some(sprite) = &self.sprite {
+            for frame in &sprite.frames {
+                for cel in frame.cels.values() {
+                    visit(&cel.pixels);
+                    if let Some(indices) = &cel.indices {
+                        visit(indices);
+                    }
+                }
+            }
+        }
         for (_, _, layer) in self.walk() {
             if let Some(surface) = layer.surface() {
                 visit(surface);

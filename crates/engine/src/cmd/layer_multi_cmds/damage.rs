@@ -251,6 +251,7 @@ fn doc_pixels_equal(a: &Document, b: &Document) -> bool {
         slices: _,
         variables: _,
         timeline: _,
+        sprite: _, // The selected frame is already projected into ordinary layer surfaces.
         file_encoding: _,
     } = a;
     *size == b.size
@@ -399,6 +400,7 @@ pub fn selection_only_change(a: &Document, b: &Document) -> bool {
         slices,
         variables,
         timeline,
+        sprite,
         file_encoding,
     } = a;
     // The ignored fields above are the pixel ones `pixels_equal_with` already compares.
@@ -422,6 +424,7 @@ pub fn selection_only_change(a: &Document, b: &Document) -> bool {
         && *slices == b.slices
         && *variables == b.variables
         && *timeline == b.timeline
+        && *sprite == b.sprite
         && *file_encoding == b.file_encoding
 }
 

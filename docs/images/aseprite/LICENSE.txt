@@ -1,0 +1,4 @@
+These original PhotoCraft UI captures are licensed under MIT OR Apache-2.0,
+at your option. See ../../../LICENSE-MIT and ../../../LICENSE-APACHE.
+App artwork and third-party assets shown retain their existing licenses.
+Copyright 2026 PhotoCraft contributors.

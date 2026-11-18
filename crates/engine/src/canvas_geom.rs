@@ -417,6 +417,58 @@ impl Turn {
     }
 }
 
+/// Reject a turn before any pixels or view state change. Half-open rectangle edges must
+/// remain representable too: a pixel mapped to i32::MAX has no representable far edge.
+pub(crate) fn check_turn_coordinates(doc: &Document, turn: Turn) -> crate::Result<()> {
+    let invalid = || crate::EngineError::Other("turning this canvas would exceed the supported coordinate range".into());
+    if doc.size.width > i32::MAX as u32 || doc.size.height > i32::MAX as u32 {
+        return Err(invalid());
+    }
+    let map = turn.affine(f64::from(doc.size.width), f64::from(doc.size.height));
+    let check = |bounds: Rect| -> crate::Result<()> {
+        if bounds.is_empty() {
+            return Ok(());
+        }
+        let b = map_box(&map, [f64::from(bounds.x0), f64::from(bounds.y0), f64::from(bounds.x1), f64::from(bounds.y1)]);
+        if b.iter().any(|v| *v < f64::from(i32::MIN) || *v > f64::from(i32::MAX)) {
+            return Err(invalid());
+        }
+        Ok(())
+    };
+    let surface = |s: &Surface| check(s.content_bounds());
+    for (_, _, layer) in doc.walk() {
+        for s in layer.mask.iter().map(|m| &m.surface).chain(layer.fill_cache.iter().map(|c| &c.surface)) {
+            surface(s)?;
+        }
+        if let Some(video) = &layer.video {
+            for s in video.frames.iter().chain(video.original_frames.iter().flatten()) {
+                surface(s)?;
+            }
+        }
+        if let Some(s) = layer.surface() {
+            surface(s)?;
+        }
+        if let LayerContent::Smart(sm) = &layer.content
+            && let Some(mask) = &sm.filter_mask
+        {
+            surface(&mask.surface)?;
+        }
+    }
+    for s in doc.channels.iter().chain(doc.quick_mask.iter()).map(|c| &c.surface).chain(doc.selection.iter()) {
+        surface(s)?;
+    }
+    if let Some(sprite) = &doc.sprite {
+        for cel in sprite.frames.iter().flat_map(|frame| frame.cels.values()) {
+            check(cel.rect)?;
+            surface(&cel.pixels)?;
+            if let Some(indices) = &cel.indices {
+                surface(indices)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Every pixel surface a canvas turn moves: content, rendered caches (type, shape, smart object,
 /// fill), stored video frames (current and original), masks (layer, smart filter), alpha
 /// channels, Quick Mask and the selection.
@@ -463,8 +515,22 @@ fn remap_pixels(doc: &mut Document, map: &dyn Fn(i32, i32) -> (i32, i32)) {
 pub(crate) fn turn_canvas(doc: &mut Document, turn: Turn) {
     let (w, h) = (doc.size.width as i32, doc.size.height as i32);
     let map = turn.pixel_map(w, h);
-    remap_pixels(doc, &map);
     let a = turn.affine(f64::from(doc.size.width), f64::from(doc.size.height));
+    // Exact indices are authoritative even when two entries have identical RGBA. Turn both
+    // source planes before capture so it sees the moved indices, not their old positions.
+    if let Some(sprite) = &mut doc.sprite {
+        for frame in &mut sprite.frames {
+            for cel in Arc::make_mut(frame).cels.values_mut() {
+                let indices = cel.indices.as_ref().map(|indices| remap_surface(indices, &map));
+                let cel = Arc::make_mut(cel);
+                cel.indices = indices;
+                cel.pixels = remap_surface(&cel.pixels, &map);
+                let b = map_box(&a, [f64::from(cel.rect.x0), f64::from(cel.rect.y0), f64::from(cel.rect.x1), f64::from(cel.rect.y1)]);
+                cel.rect = Rect::new(b[0].round() as i32, b[1].round() as i32, b[2].round() as i32, b[3].round() as i32);
+            }
+        }
+    }
+    remap_pixels(doc, &map);
     if turn.swaps() {
         doc.size = photocraft_doc::Size::new(doc.size.height, doc.size.width);
     }
