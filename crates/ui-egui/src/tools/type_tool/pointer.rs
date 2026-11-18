@@ -43,6 +43,11 @@ pub(crate) struct TypeState {
 }
 
 impl TypeState {
+    /// The press ended the current edit and must not create or select new text in the same pass.
+    pub(crate) fn ended_edit_on_press(&mut self) {
+        self.began_with_session = true;
+    }
+
     pub(crate) fn take_context(&mut self) -> Option<(egui::Pos2, Mods)> {
         self.context.take()
     }

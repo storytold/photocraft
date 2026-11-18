@@ -453,6 +453,36 @@ fn make_harness_with(builder: egui_kittest::HarnessBuilder<PhotocraftApp>, ppp: 
     h
 }
 
+/// The real GPU document canvas with the same body as the native canvas tests. Construct on eframe's context,
+/// rather than capturing a large app across the builder/catch stack or drawing unrelated full-window chrome.
+fn gpu_canvas_harness(ppp: f32) -> Option<Harness<'static, PhotocraftApp>> {
+    let built = std::panic::catch_unwind(|| {
+        Harness::builder()
+            .with_size(vec2(1440.0, 900.0))
+            .with_pixels_per_point(ppp)
+            .with_max_steps(64)
+            .wgpu_setup(crate::gpu_canvas::wgpu_setup())
+            .build_eframe(|cc| {
+                PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+                let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), crate::Services::default());
+                if let Some(rs) = &cc.wgpu_render_state {
+                    app.set_wgpu(rs.clone());
+                }
+                app.framework.test_body = Some(Box::new(|ui, app| {
+                    egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+                }));
+                app
+            })
+    });
+    match built {
+        Ok(h) => Some(h),
+        Err(_) => {
+            eprintln!("skipping: no GPU adapter");
+            None
+        }
+    }
+}
+
 fn new_app() -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 1600, "height": 900})).unwrap();
@@ -491,6 +521,15 @@ fn click(h: &mut Harness<'static, PhotocraftApp>, p: Pos2) {
     press(h, p, true);
     press(h, p, false);
     h.run_steps(1);
+}
+
+/// Opt-in PNG evidence outside the repository; a CPU canvas can use a wgpu test presenter without a GPU compositor.
+fn capture_type_pick(h: &mut Harness<'static, PhotocraftApp>, name: &str) {
+    if let Some(dir) = std::env::var_os("PHOTOCRAFT_TYPE_PICK_SNAPSHOTS") {
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        h.render().unwrap().save(dir.join(format!("{name}.png"))).unwrap();
+    }
 }
 
 /// Two clicks within egui's double-click delay (use [`fast_harness`]).
@@ -605,13 +644,13 @@ fn type_click_picks_lower_text_outside_rotated_top_ink() {
         let steps = app.session.active().unwrap().history.entries().len();
         let mut h = harness(ppp, app);
         let p = glyph(&mut h, lower, 1, 0.2);
-        let q = xf(h.state()).to_doc(p);
+        let q = crate::canvas::testing::view(h.state()).expect("a canvas view").to_doc(p);
         let (layout, aff, _) = layout(h.state_mut(), upper).unwrap();
-        let (tx, ty) = super::layout::to_text(&aff, q[0], q[1]);
+        let (tx, ty) = super::layout::to_text(&aff, q.x, q.y);
         assert!(!photocraft_text::text_point_inside(&layout, tx, ty, 6.0 / h.state().point_zoom()));
         let cache = text(h.state(), upper).cache.unwrap();
-        assert!(cache.content_bounds().contains(q[0].floor() as i32, q[1].floor() as i32), "regression point lies inside the broad top bounds");
-        assert_eq!(cache.rgba(q[0].floor() as i32, q[1].floor() as i32)[3], 0.0);
+        assert!(cache.content_bounds().contains(q.x.floor() as i32, q.y.floor() as i32), "regression point lies inside the broad top bounds");
+        assert_eq!(cache.rgba(q.x.floor() as i32, q.y.floor() as i32)[3], 0.0);
         click(&mut h, p);
         assert_eq!(h.state().ui.text_edit.as_ref().map(|ed| ed.layer), Some(lower.0));
         assert_eq!(h.state().session.active().unwrap().active_layer, Some(lower));
@@ -661,7 +700,7 @@ fn type_click_between_paragraph_lines_keeps_the_paragraph_target() {
         let cache = text(h.state(), id).cache.unwrap();
         assert_eq!(cache.rgba(doc.x.floor() as i32, doc.y.floor() as i32)[3], 0.0);
         let p = screen(&mut h, id, x, y);
-        assert!(xf(h.state()).rect.contains(p));
+        assert!(canvas_rect(h.state()).contains(p));
         assert!(h.state().ui.text_edit.is_none(), "exercise initial layer picking");
         click(&mut h, p);
         assert_eq!(h.state().session.active().unwrap().active_layer, Some(id));
@@ -675,6 +714,146 @@ fn type_click_between_paragraph_lines_keeps_the_paragraph_target() {
     }
 }
 
+/// The native CPU canvas has no GPU mip footprint: nearby upper ink must not intercept a lower glyph. Exercise
+/// full-resolution linear/nearest sampling, a reduced base texture and its zoomed-in detail, without a GPU adapter.
+#[test]
+fn cpu_type_click_uses_the_shown_texture_not_gpu_mips() {
+    use craft::behavior::PixelSize;
+    use craft::ui::canvas::{DetailPlan, PixelRect};
+    use photocraft_color::PixelFormat;
+    use photocraft_geom::Rect;
+    use photocraft_raster::Surface;
+
+    let snapshots = std::env::var_os("PHOTOCRAFT_TYPE_PICK_SNAPSHOTS").is_some();
+    let _gpu = snapshots.then(photocraft_testkit::gpu_lock);
+    for format in [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F] {
+        for ppp in [1.0, 2.0] {
+            for (side, zoom) in [(4096, 0.25), (4096, 0.5), (4096, 1.0), (4096, 1.5), (1200, 0.25), (1024, 0.25), (1024, 0.375), (1024, 1.5)] {
+                let mut app = new_app();
+                // Egui's font atlas needs at least 1024 texels. Grow the document instead of lowering its device cap.
+                std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).size.width = 3200;
+                let lower = LayerId(
+                    app.run("type.create", json!({"text": "MMMM", "font": "Inter", "size": 96, "color": "#0000e0", "x": 700, "y": 480})).unwrap()["layer"]
+                        .as_u64()
+                        .unwrap(),
+                );
+                let upper = LayerId(app.run("type.create", json!({"text": "UPPER", "size": 32, "x": 100, "y": 100})).unwrap()["layer"].as_u64().unwrap());
+                let builder = Harness::builder();
+                let mut h = make_harness_with(if snapshots { builder.wgpu() } else { builder }, ppp, app);
+                // Keep the physical viewport below the legal cap at both HiDPI scales, so finer detail plans fit.
+                h.set_size(vec2(360.0, 240.0));
+                h.input_mut().max_texture_side = Some(side);
+                set_view(&mut h, zoom, [800.0, 450.0]);
+                assert!(h.state().gpu.is_none(), "the regression needs no GPU");
+                let lower_cache = text(h.state(), lower).cache.unwrap();
+                let b = lower_cache.content_bounds();
+                let (x, y) =
+                    (b.y0..b.y1).flat_map(|y| (b.x0..b.x1).map(move |x| (x, y))).find(|&(x, y)| lower_cache.rgba(x, y)[3] > 0.9).expect("opaque lower glyph");
+                let p = canvas_at(h.state(), f64::from(x) + 0.75, f64::from(y) + 0.75);
+                let shown_view = crate::canvas::testing::view(h.state()).expect("a canvas view");
+                let q = shown_view.to_doc(p);
+                let cpu = crate::canvas::document_display::sampled_doc_rect(h.state(), q.x, q.y);
+                let gpu = crate::gpu_canvas::sampled_doc_rect(q.x, q.y, zoom);
+                let doc = &h.state().session.active().unwrap().doc;
+                let bounds = PixelRect::of_size(PixelSize::new(doc.size.width, doc.size.height));
+                let texture_side = craft::ui::primitives::texture_side(h.state().ctx());
+                assert_eq!(texture_side as usize, side);
+                let detail = DetailPlan::in_view(&shown_view, bounds, texture_side, ppp);
+                let factor = detail.map_or_else(|| craft::ui::primitives::texture_factor(bounds.size(), texture_side), |plan| plan.factor);
+                let expected_side = if factor > 1 {
+                    2 * factor
+                } else if zoom < 1.0 {
+                    2
+                } else {
+                    1
+                };
+                assert_eq!((cpu.width(), cpu.height()), (expected_side, expected_side), "base/detail texture support");
+                let (ix, iy) = (gpu.y0..gpu.y1)
+                    .flat_map(|y| (gpu.x0..gpu.x1).map(move |x| (x, y)))
+                    .find(|&(x, y)| !cpu.contains(x, y))
+                    .expect("GPU support reaches beyond the actual CPU texture");
+                let mut cache = Surface::new(format);
+                cache.fill_rect(Rect::new(ix, iy, ix + 1, iy + 1), &[1.0, 0.0, 0.0, 1.0]);
+                // Transparent RGB padding brackets the visible lower glyph, outside the upper editable layout.
+                cache.write_pixel(x - 32, y - 32, &[1.0, 0.5, 0.25, 0.0]);
+                cache.write_pixel(x + 32, y + 32, &[1.0, 0.5, 0.25, 0.0]);
+                let state = h.state_mut().session.active_mut().unwrap();
+                let doc = std::sync::Arc::make_mut(&mut state.doc);
+                let LayerContent::Text(t) = &mut doc.layer_mut(upper).unwrap().content else { panic!("text") };
+                t.cache = Some(cache);
+                state.revision += 1;
+                h.run_steps(2);
+                let (l, aff, _) = layout(h.state_mut(), upper).unwrap();
+                let (tx, ty) = super::layout::to_text(&aff, q.x, q.y);
+                assert!(!photocraft_text::text_point_inside(&l, tx, ty, 6.0 / h.state().point_zoom()));
+                let doc = &h.state().session.active().unwrap().doc;
+                assert!(photocraft_engine::type_caret_cmds::cached_ink_in_rect(doc, upper, gpu));
+                assert!(!photocraft_engine::type_caret_cmds::cached_ink_in_rect(doc, upper, cpu));
+                assert!(lower_cache.rgba(q.x.floor() as i32, q.y.floor() as i32)[3] > 0.9);
+                // A stale report from another canvas must not select the renderer for this one.
+                h.state_mut().perf.gpu = true;
+                click(&mut h, p);
+                assert_eq!(h.state().ui.text_edit.as_ref().map(|ed| ed.layer), Some(lower.0), "{format:?}, ppp {ppp}, side {side}, zoom {zoom}");
+                assert_eq!(h.state().session.active().unwrap().active_layer, Some(lower));
+                if format == PixelFormat::RGBA8 {
+                    capture_type_pick(&mut h, &format!("cpu-lower-{zoom}-{ppp}x-side-{side}"));
+                }
+            }
+        }
+    }
+}
+
+/// Imported ink inside the edit's caret or move reach commits that edit, while transparent cache padding leaves
+/// the caret alone. These presses go through the native arena's next-pass regions, not a headless hit helper.
+#[test]
+fn imported_cache_presses_preserve_editor_and_move_reach_ownership() {
+    use photocraft_color::PixelFormat;
+    use photocraft_geom::Rect;
+    use photocraft_raster::Surface;
+
+    for in_reach in [false, true] {
+        let mut app = new_app();
+        let lower = LayerId(app.run("type.create", json!({"text": "MMMM", "size": 96, "x": 700, "y": 480})).unwrap()["layer"].as_u64().unwrap());
+        let upper = LayerId(app.run("type.create", json!({"text": "IMPORTED", "size": 32, "x": 100, "y": 100})).unwrap()["layer"].as_u64().unwrap());
+        let (l, aff, _) = layout(&mut app, lower).unwrap();
+        let bounds = l.bounds().unwrap();
+        let line = &l.lines[0];
+        let text_y = f64::from(line.baseline - line.ascent * 0.35);
+        let empty = aff.apply(Point::new(f64::from(l.clusters[0].x + l.clusters[0].advance * 0.2), text_y));
+        let target = if in_reach {
+            aff.apply(Point::new(f64::from(bounds[2]) + 15.0, f64::from(bounds[1] + bounds[3]) / 2.0))
+        } else {
+            aff.apply(Point::new(f64::from(l.clusters[2].x + l.clusters[2].advance * 0.5), text_y))
+        };
+        let mut cache = Surface::new(PixelFormat::RGBA8);
+        cache.write_pixel(empty.x.floor() as i32 - 30, empty.y.floor() as i32 - 30, &[1.0, 0.0, 0.0, 0.0]);
+        cache.write_pixel(target.x.ceil() as i32 + 30, target.y.ceil() as i32 + 30, &[1.0, 0.0, 0.0, 0.0]);
+        cache.fill_rect(
+            Rect::new(target.x.floor() as i32 - 3, target.y.floor() as i32 - 3, target.x.ceil() as i32 + 4, target.y.ceil() as i32 + 4),
+            &[1.0, 0.0, 0.0, 1.0],
+        );
+        let state = app.session.active_mut().unwrap();
+        let doc = std::sync::Arc::make_mut(&mut state.doc);
+        let LayerContent::Text(t) = &mut doc.layer_mut(upper).unwrap().content else { panic!("text") };
+        t.cache = Some(cache);
+        state.revision += 1;
+        app.run("layer.select", json!({"layer": lower.0})).unwrap();
+        begin_edit(&mut app).unwrap();
+        let mut h = harness(1.0, app);
+        set_view(&mut h, 1.0, [850.0, 450.0]);
+        let before = text(h.state(), lower).transform;
+        let empty = canvas_at(h.state(), empty.x, empty.y);
+        click(&mut h, empty);
+        assert_eq!(h.state().ui.text_edit.as_ref().map(|ed| ed.layer), Some(lower.0), "empty imported padding does not commit the caret");
+        let target = canvas_at(h.state(), target.x, target.y);
+        click(&mut h, target);
+        assert!(h.state().ui.text_edit.is_none(), "imported ink commits, rather than taking the edited caret or move reach; reach {in_reach}");
+        assert_affine(text(h.state(), lower).transform, before);
+        click(&mut h, target);
+        assert_eq!(h.state().ui.text_edit.as_ref().map(|ed| ed.layer), Some(upper.0));
+    }
+}
+
 /// Imported glyphs can be visible through minification even when the document pixel under the
 /// pointer is transparent and their substituted-font layout is elsewhere.
 #[test]
@@ -682,53 +861,63 @@ fn gpu_type_click_picks_filtered_imported_ink() {
     let _gpu = photocraft_testkit::gpu_lock();
     for ppp in [1.0, 2.0] {
         for zoom in [0.125, 0.25, 0.375, 0.5, 0.75, 1.5] {
-            let mut app = new_app();
+            let Some(mut h) = gpu_canvas_harness(ppp) else { return };
+            let app = h.state_mut();
+            app.run("file.new", json!({"width": 1600, "height": 900})).unwrap();
+            app.sync_views();
+            app.ui.extras.rulers = false;
+            app.ui.tool = crate::state::Tool::Type;
+            let lower = LayerId(
+                app.run(
+                    "type.create",
+                    json!({"text": "MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM", "font": "Inter", "size": 96, "color": "#0000e0", "box": [600, 250, 850, 500]}),
+                )
+                .unwrap()["layer"]
+                    .as_u64()
+                    .unwrap(),
+            );
+            let lower_cache = text(app, lower).cache.unwrap();
             let id = LayerId(
                 app.run("type.create", json!({"text": "IMPORTED TEXT", "font": "Inter", "size": 64, "color": "#e00000", "x": 100, "y": 100})).unwrap()["layer"]
                     .as_u64()
                     .unwrap(),
             );
-            let mut imported = text(&app, id);
+            let mut imported = text(app, id);
             imported.transform = Affine::translate(803.0, 451.0);
-            let cache = photocraft_text::shared().lock().unwrap().render(&imported, 72.0, photocraft_color::PixelFormat::RGBA8).1.surface;
+            let mut cache = photocraft_text::shared().lock().unwrap().render(&imported, 72.0, photocraft_color::PixelFormat::RGBA8).1.surface;
+            let ink_bounds = cache.content_bounds();
+            cache.write_pixel(ink_bounds.x0 - 100, ink_bounds.y0 - 100, &[1.0, 0.0, 0.0, 0.0]);
+            cache.write_pixel(ink_bounds.x1 + 100, ink_bounds.y1 + 100, &[1.0, 0.0, 0.0, 0.0]);
             let doc = std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc);
             let LayerContent::Text(t) = &mut doc.layer_mut(id).unwrap().content else { panic!("text") };
             t.cache = Some(cache.clone());
             app.session.active_mut().unwrap().revision += 1;
-            let view = &mut app.ui.views[0];
-            (view.zoom, view.center, view.fit_pending) = (zoom, [1000.0, 450.0], false);
-            let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                Harness::builder()
-                    .with_size(vec2(1440.0, 900.0))
-                    .with_pixels_per_point(ppp)
-                    .with_max_steps(64)
-                    .wgpu_setup(crate::gpu_canvas::wgpu_setup())
-                    .build_eframe(move |cc| {
-                        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-                        if let Some(rs) = &cc.wgpu_render_state {
-                            app.set_wgpu(rs.clone());
-                        }
-                        app
-                    })
-            }));
-            let Ok(mut h) = built else {
-                eprintln!("skipping: no GPU adapter");
-                return;
-            };
+            // Fit the entire lower paragraph even at 150%, so its focus reveal cannot move the saved ink point.
+            set_view(&mut h, zoom, [1025.0, 500.0]);
             h.run_steps(8);
             assert!(h.state().perf.gpu, "exercise the actual mipmapped canvas");
             let image = h.render().unwrap();
-            let xf = xf(h.state());
+            let view = crate::canvas::testing::view(h.state()).expect("a canvas view");
             let bounds = cache.content_bounds();
-            let a = xf.to_screen(bounds.x0 as f32, bounds.y0 as f32) * ppp;
-            let b = xf.to_screen(bounds.x1 as f32, bounds.y1 as f32) * ppp;
-            let mut candidate: Option<(u16, Pos2, [f64; 2])> = None;
+            let a = view.to_screen(craft::behavior::kurbo::Point::new(f64::from(bounds.x0), f64::from(bounds.y0))) * ppp;
+            let b = view.to_screen(craft::behavior::kurbo::Point::new(f64::from(bounds.x1), f64::from(bounds.y1))) * ppp;
+            let mut candidate: Option<(u16, Pos2, craft::behavior::kurbo::Point)> = None;
+            let mut padding: Option<Pos2> = None;
             for y in (a.y.floor() as u32).saturating_sub(2)..(b.y.ceil() as u32 + 2).min(image.height()) {
                 for x in (a.x.floor() as u32).saturating_sub(2)..(b.x.ceil() as u32 + 2).min(image.width()) {
                     let [r, g, b, _] = image.get_pixel(x, y).0;
                     let p = egui::pos2((x as f32 + 0.5) / ppp, (y as f32 + 0.5) / ppp);
-                    let q = xf.to_doc(p);
-                    if r > g.saturating_add(8) && r > b.saturating_add(8) && cache.rgba(q[0].floor() as i32, q[1].floor() as i32)[3] == 0.0 {
+                    let q = view.to_doc(p);
+                    let source_x = q.x.floor() as i32;
+                    let source_y = q.y.floor() as i32;
+                    let lower_ink = lower_cache.rgba(source_x, source_y)[3] > 0.25;
+                    if padding.is_none() && bounds.contains(source_x, source_y) && lower_ink && b > r.saturating_add(8) && b > g.saturating_add(8) {
+                        let footprint = crate::gpu_canvas::sampled_doc_rect(q.x, q.y, zoom);
+                        if !photocraft_engine::type_caret_cmds::cached_ink_in_rect(&h.state().session.active().unwrap().doc, id, footprint) {
+                            padding = Some(p);
+                        }
+                    }
+                    if lower_ink && r > g.saturating_add(8) && r > b.saturating_add(8) && cache.rgba(source_x, source_y)[3] == 0.0 {
                         let strength = u16::from(r - g) + u16::from(r - b);
                         if candidate.is_none_or(|c| strength > c.0) {
                             candidate = Some((strength, p, q));
@@ -738,14 +927,51 @@ fn gpu_type_click_picks_filtered_imported_ink() {
             }
             let (_, p, q) = candidate.expect("visible filtered ink over a transparent source pixel");
             let (l, aff, _) = layout(h.state_mut(), id).unwrap();
-            let (tx, ty) = super::layout::to_text(&aff, q[0], q[1]);
+            let (tx, ty) = super::layout::to_text(&aff, q.x, q.y);
             assert!(!photocraft_text::text_point_inside(&l, tx, ty, 6.0 / h.state().point_zoom()));
-            let empty = xf.to_screen(bounds.x0 as f32 - 40.0, bounds.y0 as f32 - 40.0);
-            let empty_doc = xf.to_doc(empty);
-            assert_eq!(super::layout::hit_layer(h.state_mut(), empty_doc[0], empty_doc[1]), None, "empty padding remains click-through");
+            let empty = padding.expect("visible lower ink beneath empty imported cache padding");
+            let empty_doc = view.to_doc(empty);
+            assert!(bounds.contains(empty_doc.x.floor() as i32, empty_doc.y.floor() as i32));
+            click(&mut h, empty);
+            assert_eq!(h.state().ui.text_edit.as_ref().map(|ed| ed.layer), Some(lower.0), "zoom {zoom}, scale {ppp}: empty upper padding clicks through");
+            capture_type_pick(&mut h, &format!("gpu-padding-lower-{zoom}-{ppp}x"));
+            let edited_view = crate::canvas::testing::view(h.state()).expect("the edited canvas view");
+            let edited_doc = edited_view.to_doc(p);
+            let edited_hit = super::layout::hit_layer(h.state_mut(), edited_doc.x, edited_doc.y);
+            assert_eq!(
+                edited_hit,
+                Some(id),
+                "filtered ink remains the upper target after entering lower: zoom {zoom}, ppp {ppp}, pointer {p:?}, original doc {q:?}, edited doc {edited_doc:?}, old camera {:?}/{}, edited camera {:?}/{}",
+                view.center,
+                view.zoom,
+                edited_view.center,
+                edited_view.zoom,
+            );
+            h.hover_at(p);
+            h.run_steps(1);
+            let press_view = crate::canvas::testing::view(h.state()).expect("the hovered canvas view");
+            assert_eq!(
+                (press_view.center, press_view.zoom),
+                (edited_view.center, edited_view.zoom),
+                "focus reveal must not invalidate the filtered-ink candidate before its press",
+            );
+            press(&mut h, p, true);
+            press(&mut h, p, false);
+            h.run_steps(1);
+            let edited_frame = crate::type_transform::source_rect(h.state_mut(), lower);
+            assert!(
+                h.state().ui.text_edit.is_none(),
+                "pressing upper imported ink commits the lower edit, not its caret or move reach: zoom {zoom}, ppp {ppp}, pointer {p:?}, doc {edited_doc:?}, hit {edited_hit:?}, edit {:?}, frame {:?}, transform {}, overflow {}",
+                h.state().ui.text_edit,
+                edited_frame,
+                h.state().ui.type_transform.is_some(),
+                h.state().ui.type_box_overflow,
+            );
             click(&mut h, p);
             assert_eq!(h.state().ui.text_edit.as_ref().map(|ed| ed.layer), Some(id.0), "zoom {zoom}, scale {ppp}: click visible imported ink");
             assert_eq!(h.state().session.active().unwrap().active_layer, Some(id));
+            assert_eq!(text(h.state(), lower).text, "MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM");
+            capture_type_pick(&mut h, &format!("gpu-filtered-upper-{zoom}-{ppp}x"));
         }
     }
 }

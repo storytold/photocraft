@@ -103,6 +103,54 @@ pub fn active_view(app: &PhotocraftApp) -> Option<CanvasView> {
     ToolHost::shown_space(app.ctx(), CanvasHost::primary(app, idx).canvas_id()).map(|space| space.view)
 }
 
+/// Sampling of this canvas's last picture, not the app-wide performance report (which may describe another view).
+#[derive(Clone, Copy)]
+enum PictureSampling {
+    Gpu(f32),
+    Cpu { bounds: PixelRect, factor: u32, detail: Option<craft::ui::canvas::DetailPlan>, scale: f32 },
+}
+
+/// Source pixels contributing to a Type-tool pick in the active canvas. The picture is drawn after the tools, so
+/// the last completed picture is the one the user pressed on, including a GPU fallback and a reduced CPU texture.
+pub(crate) fn sampled_doc_rect(app: &PhotocraftApp, x: f64, y: f64) -> DRect {
+    let sampling = app.session.active_index().and_then(|idx| {
+        let doc = app.session.documents().get(idx)?.doc.id;
+        app.ctx().data(|data| data.get_temp::<PictureSampling>(CanvasHost::primary(app, idx).canvas_id().with(("sampling", doc))))
+    });
+    match sampling {
+        Some(PictureSampling::Gpu(scale)) => crate::gpu_canvas::sampled_doc_rect(x, y, scale),
+        Some(PictureSampling::Cpu { bounds, factor, detail, scale }) => {
+            let (bounds, factor) = detail
+                .filter(|plan| {
+                    x >= f64::from(plan.region.x0) && x < f64::from(plan.region.x1) && y >= f64::from(plan.region.y0) && y < f64::from(plan.region.y1)
+                })
+                .map_or((bounds, factor), |plan| (plan.region, plan.factor));
+            cpu_sampled_rect(x, y, bounds, factor, factor > 1 || scale < 1.0)
+        }
+        // No picture yet (headless tool events): no display filter broadens the document pixel.
+        None => cpu_sampled_rect(x, y, PixelRect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX), 1, false),
+    }
+}
+
+/// RasterDisplay uses linear minification, nearest magnification at full resolution, and always linear reduced
+/// textures. A reduced texel averages its whole factor-sized cell, counted from the texture region's own origin.
+fn cpu_sampled_rect(x: f64, y: f64, bounds: PixelRect, factor: u32, linear: bool) -> DRect {
+    if !x.is_finite() || !y.is_finite() || x < f64::from(bounds.x0) || x >= f64::from(bounds.x1) || y < f64::from(bounds.y0) || y >= f64::from(bounds.y1) {
+        return DRect::EMPTY;
+    }
+    let f = f64::from(factor.max(1));
+    let axis = |v: f64, start: i32, end: i32| {
+        let t = (v - f64::from(start)) / f;
+        let (lo, hi) = if linear { ((t - 0.5).floor(), (t - 0.5).ceil() + 1.0) } else { (t.floor(), t.floor() + 1.0) };
+        let lo = (f64::from(start) + lo * f).clamp(f64::from(start), f64::from(end));
+        let hi = (f64::from(start) + hi * f).clamp(f64::from(start), f64::from(end));
+        (lo as i32, hi as i32)
+    };
+    let (x0, x1) = axis(x, bounds.x0, bounds.x1);
+    let (y0, y1) = axis(y, bounds.y0, bounds.y1);
+    DRect::new(x0, y0, x1, y1)
+}
+
 /// The document point under the screen point `pos` of the active document's main canvas; `None` when `pos` is outside
 /// the canvas.
 pub(crate) fn doc_point_at(app: &PhotocraftApp, pos: Pos2) -> Option<Point> {
@@ -400,11 +448,22 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, 
         let mapping = (bounds != doc.bounds()).then(|| placement(bounds));
         let frame = Frame { checker: checker.as_ref(), edge, mapping, pattern, region };
         if let Some(picture) = &gpu {
+            // The Canvas body also runs to measure: only a painted run may replace the picture a press saw.
+            if !craft::ui::runtime::measure::active(ctx) && !ui.is_sizing_pass() {
+                ctx.data_mut(|data| data.insert_temp(id.with(("sampling", doc.id)), PictureSampling::Gpu((space.view.zoom * f64::from(ppp)) as f32)));
+            }
             frame.apply(RasterDisplay::painted(label.clone(), size, picture.clone().into_paint())).picture().show_at(ui, body.rect);
         } else if let Some(composite) = &composite {
             let started = crate::gpu_canvas::now_ms();
             let out = frame.apply(RasterDisplay::new(label.clone(), composite as &dyn RasterSource)).picture().show_at(ui, body.rect);
             cpu_read = out.read.map(|read| (read, crate::gpu_canvas::now_ms() - started));
+            let bounds = region.map_or(PixelRect::of_size(size), |region| region.union(&PixelRect::of_size(size)));
+            let factor = craft::ui::primitives::texture_factor(bounds.size(), craft::ui::primitives::texture_side(ctx));
+            let scale = (space.view.zoom.min(space.view.zoom_x()) * f64::from(ppp)) as f32;
+            let sampling = PictureSampling::Cpu { bounds, factor, detail: out.detail, scale };
+            if !craft::ui::runtime::measure::active(ctx) && !ui.is_sizing_pass() {
+                ctx.data_mut(|data| data.insert_temp(id.with(("sampling", doc.id)), sampling));
+            }
         }
         if let Some(overlay) = &overlay {
             let display = RasterDisplay::new(Label::Empty, overlay as &dyn RasterSource).id_salt("pc-channel-view").picture();
