@@ -255,3 +255,17 @@ fn stacked_inside_strokes_keep_today_s_pixels() {
     // Past the band the layer's own pixels are untouched.
     assert_px(&asked, 200, 150, ORANGE.map(|v| v * 255.0));
 }
+
+/// Not measured: an inside stroke at 0 % opacity. It keeps today's pixels, where it paints
+/// nothing: the layer's own orange stays in the band with Overprint off and on, in Normal (today's
+/// replace path skips a stroke pixel with no alpha) and in Multiply (it blends at 0 %). It does not
+/// knock the layer out and show the grey under it.
+#[test]
+fn zero_opacity_inside_stroke_keeps_the_layer_s_own_pixels() {
+    for blend in [BlendMode::Normal, BlendMode::Multiply] {
+        let off = flatten(&measured(vec![stroke(10.0, StrokePosition::Inside, blend, 0.0, false, blue_paint())]));
+        let on = flatten(&measured(vec![stroke(10.0, StrokePosition::Inside, blend, 0.0, true, blue_paint())]));
+        assert_band(&off, INSIDE_BAND, ORANGE.map(|v| v * 255.0));
+        assert_eq!(off.px, on.px, "{blend:?} at 0 %: Overprint changed a pixel the issue did not measure");
+    }
+}

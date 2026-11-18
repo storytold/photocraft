@@ -233,11 +233,13 @@ pub(super) fn blends_inside(layer: &Layer) -> bool {
 /// CMYK or Lab document are not measured and keep today's behaviour, where neither compositor
 /// reads the flag. So is a layer with more than one stroke reaching inside it: the issue measured
 /// one stroke, and an upper stroke blending over a lower one's knocked-out band is a rule it did
-/// not measure (`stacked_inside_strokes_keep_today_s_pixels`). The GPU planner calls this too, so
-/// the two agree on which rule applies.
+/// not measure (`stacked_inside_strokes_keep_today_s_pixels`). So is a stroke at 0 % opacity,
+/// which today paints nothing (`zero_opacity_inside_stroke_keeps_the_layer_s_own_pixels`). The
+/// GPU planner calls this too, so the two agree on which rule applies.
 pub fn stroke_overprint_shown(layer: &Layer, st: &photocraft_doc::StrokeFx) -> bool {
     let inside_strokes = layer.effects.items.iter().filter(|e| e.enabled() && matches!(e, Effect::Stroke(s) if stroke_widths(s).0 > 0.0)).count();
     matches!(st.paint, FxPaint::Color(_))
+        && st.common.opacity > 0.0
         && inside_strokes == 1
         && layer.fill_opacity >= 1.0
         && matches!(&layer.content, photocraft_doc::LayerContent::Raster(_))
