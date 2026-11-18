@@ -265,3 +265,63 @@ fn a_nested_opened_files_run_closes_the_tabs_the_outer_run_still_has_to_write() 
     assert!(s.documents().is_empty(), "the inner run closed all three tabs");
     assert_eq!(std::fs::read_dir(&inner).unwrap().count(), 3, "the inner run wrote its three copies");
 }
+
+#[test]
+fn a_later_input_cannot_close_a_document_it_made_dirty_after_the_gate() {
+    let dir = tmp("re-dirtied-after-gate");
+    let first = png(&dir, "a.png", 8, 6, "#ff0000");
+    let second = png(&dir, "b.png", 8, 6, "#0000ff");
+    let output = join(&dir, "results");
+    let before_first = std::fs::read(&first).unwrap();
+    let before_second = std::fs::read(&second).unwrap();
+    let mut s = open_as_documents(&[first.clone(), second.clone()]);
+    let result = s
+        .execute(
+            "file.automate.batch",
+            json!({
+                "source": "open", "output": output, "format": "png",
+                "steps": [["document.activate", { "offset": 1 }], ["image.adjustments.invert", {}]]
+            }),
+        )
+        .unwrap();
+    // The first input's steps work on the other tab, and that tab's own input then works back on the
+    // first one: `a.png` was unchanged when its gate ran, so only a final check before the close
+    // keeps its new edit from being discarded.
+    assert_eq!(result["errors"], json!([]), "{result}");
+    assert_eq!(result["files"], json!([join(&output, "a.png"), join(&output, "b.png")]), "{result}");
+    assert_eq!(open_names(&s), ["a.png", "b.png"], "both re-dirtied documents stay open");
+    for (index, name) in [(0, "a.png"), (1, "b.png")] {
+        assert!(s.documents()[index].is_dirty(), "{name} carries an unsaved change");
+    }
+    assert_eq!(top_left(&join(&dir, "a.png")), [1.0, 0.0, 0.0, 1.0], "a.png keeps its source bytes");
+    assert_eq!(top_left(&join(&dir, "b.png")), [0.0, 0.0, 1.0, 1.0], "b.png keeps its source bytes");
+    assert_eq!(std::fs::read(&first).unwrap(), before_first, "and its bytes exactly");
+    assert_eq!(std::fs::read(&second).unwrap(), before_second, "and its bytes exactly");
+    // Each copy is that document as its own input left it: `a.png`'s copy was written before the
+    // second input inverted that document.
+    assert_eq!(top_left(&join(&output, "a.png")), [1.0, 0.0, 0.0, 1.0], "a.png's copy predates its invert");
+    assert_eq!(top_left(&join(&output, "b.png")), [1.0, 1.0, 0.0, 1.0], "b.png's copy carries its invert");
+}
+
+#[test]
+fn a_recorded_save_step_closes_the_document_as_the_save_left_it() {
+    let dir = tmp("save-step-closes");
+    let source = png(&dir, "a.png", 8, 6, "#ff0000");
+    let output = join(&dir, "results");
+    let before = std::fs::read(&source).unwrap();
+    let mut s = open_as_documents(std::slice::from_ref(&source));
+    let result = s
+        .execute(
+            "file.automate.batch",
+            json!({
+                "source": "open", "output": output, "format": "png",
+                "steps": [["image.adjustments.invert", {}], ["file.save", {}]]
+            }),
+        )
+        .unwrap();
+    assert_eq!(result["errors"], json!([]), "{result}");
+    assert_eq!(result["files"], json!([join(&output, "a.png")]), "{result}");
+    assert!(s.documents().is_empty(), "the recorded Save leaves nothing unsaved, so the document closes");
+    assert_eq!(top_left(&join(&output, "a.png")), [0.0, 1.0, 1.0, 1.0], "the copy carries the edit the save marked");
+    assert_eq!(std::fs::read(&source).unwrap(), before, "and Batch still wrote only the copy: the opened file keeps its bytes");
+}

@@ -1285,6 +1285,14 @@ fn batch_open_documents(
     // Closing waits for the end of the loop: a step that picks a tab by index still sees the tabs
     // it was recorded against, and a step that closed the document itself leaves nothing to close.
     for id in closed {
+        // The saved-state rule is checked again here, not only at the document's own turn: a later
+        // input can reach this document through `document.activate` and leave it changed, and
+        // closing it then would throw that edit away. Skipping the close is not an error entry: the
+        // copy the run promised was written.
+        let still_writes_clean = s.documents().iter().any(|state| state.doc.id.0 == id && state.path.is_some() && !state.is_dirty());
+        if !still_writes_clean {
+            continue;
+        }
         if let Some(position) = s.documents().iter().position(|state| state.doc.id.0 == id) {
             s.close(position);
         }
