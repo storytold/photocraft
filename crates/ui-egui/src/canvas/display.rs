@@ -6,7 +6,7 @@ use photocraft_doc::LayerContent;
 /// fill (`gradient_ui::live_overlay::show`'s answer).
 pub(crate) type LiveProposal<'a> = Option<&'a (photocraft_doc::LayerId, photocraft_doc::Fill)>;
 
-fn color_pixel([r, g, b, a]: [u8; 4], alpha: f32) -> egui::Color32 {
+pub(crate) fn color_pixel([r, g, b, a]: [u8; 4], alpha: f32) -> egui::Color32 {
     if photocraft_color::is_emissive_alpha(alpha) {
         egui::Color32::from_rgba_premultiplied(r, g, b, 0)
     } else {
