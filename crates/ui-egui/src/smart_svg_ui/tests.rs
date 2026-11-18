@@ -30,7 +30,7 @@ impl ExternalSvgSession for NativeTestSession {
     }
 }
 
-fn fixture() -> (PhotocraftApp, Saves, Calls) {
+fn fixture() -> (Box<PhotocraftApp>, Saves, Calls) {
     let saves = Saves::default();
     let calls = Calls::default();
     let (queue, launched) = (saves.clone(), calls.clone());

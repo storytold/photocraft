@@ -9,7 +9,7 @@ use egui_kittest::{
 
 /// What a trial draws: the app (preset library, open curves), the working brush and the active tool.
 struct State {
-    app: PhotocraftApp,
+    app: Box<PhotocraftApp>,
     brush: BrushSettings,
     tool: Tool,
 }

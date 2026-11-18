@@ -13,7 +13,7 @@ use crate::state::Tool;
 
 /// An 800 × 600 document with a red block (x 100..300, y 100..300) on layer "Paint" and Free
 /// Transform open on it.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 800, "height": 600, "background": "white"})).unwrap();
     app.sync_views();
