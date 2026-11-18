@@ -1163,7 +1163,7 @@ pub fn specs() -> Vec<CommandSpec> {
         style_cmd!(
             "innerShadow",
             "Inner Shadow…",
-            r##"{"color":"#rrggbb","opacity":0..100=75,"blend":str,"angle":-360..360 (stored wrapped into -180..180),"distance":0..30000,"choke":0..100,"size":0..250,"contour":name|curve,"antiAlias":bool,"noise":0..100,"add":bool}"##
+            r##"{"color":"#rrggbb","opacity":0..100=75,"blend":str,"angle":-360..360 (clamped, then wrapped into -180..180: 400 -> 0; the shared light angle of layer.layerStyle.globalLight only wraps: 400 -> 40),"distance":0..30000,"choke":0..100,"size":0..250,"contour":name|curve,"antiAlias":bool,"noise":0..100,"add":bool}"##
         ),
         style_cmd!(
             "outerGlow",
