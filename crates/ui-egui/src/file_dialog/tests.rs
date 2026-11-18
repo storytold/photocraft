@@ -54,7 +54,7 @@ fn chose(path: &str) -> Picked {
 fn suggested(request: &PickRequest) -> String {
     let name = request.file_name.clone().unwrap_or_default();
     match &request.directory {
-        Some(dir) => dir.join(name).to_string_lossy().into_owned(),
+        Some(dir) => dir.join(name).to_string_lossy().replace('\\', "/"),
         None => name,
     }
 }

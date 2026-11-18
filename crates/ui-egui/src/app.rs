@@ -113,7 +113,6 @@ impl PhotocraftApp {
             layer_style_child: None,
             color_targets: HashMap::new(),
             color_answers: Vec::new(),
-            color_inks: HashMap::new(),
             screen_pick: Default::default(),
             caf: None,
             liquify: None,

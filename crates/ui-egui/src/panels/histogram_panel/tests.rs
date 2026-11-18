@@ -277,7 +277,7 @@ fn cache_levels_one_still_throttles_recounts_and_an_uncached_refresh_does_not() 
     app.run("prefs.set", json!({"path": "performance.cacheLevels", "value": 1})).unwrap();
     settle(&mut app);
     // The count just landed, so the next edit falls inside the throttle.
-    app.doc_hist.as_mut().unwrap().at = 0.0;
+    app.doc_hist.as_mut().unwrap().at = app.ctx().input(|i| i.time) * 1000.0;
     app.run("edit.fill", json!({"color": "#000000"})).unwrap();
     frame(&mut app);
     assert!(app.hist_job.is_none(), "an edit within 250 ms of the last count waits");

@@ -22,8 +22,8 @@ const MASKS: [Tool; 2] = [Tool::HorizontalTypeMask, Tool::VerticalTypeMask];
 
 /// A committed type layer made with `type_tool` and, active above it, an empty layer, with no
 /// selection and `tool` in hand.
-fn typed(type_tool: Tool, tool: Tool) -> (PhotocraftApp, LayerId) {
-    let mut app = new_app();
+fn typed(type_tool: Tool, tool: Tool) -> (Box<PhotocraftApp>, LayerId) {
+    let mut app = Box::new(new_app());
     app.run("select.deselect", json!({})).unwrap();
     app.ui.tool = type_tool;
     click(&mut app, 100.0, 200.0, Modifiers::NONE);
@@ -36,7 +36,7 @@ fn typed(type_tool: Tool, tool: Tool) -> (PhotocraftApp, LayerId) {
 }
 
 /// [`typed`] horizontal text, and the point on its glyphs between "T" and "X".
-fn txt(tool: Tool) -> (PhotocraftApp, LayerId, (f64, f64)) {
+fn txt(tool: Tool) -> (Box<PhotocraftApp>, LayerId, (f64, f64)) {
     let (mut app, id) = typed(Tool::Type, tool);
     let y = 185.0;
     let x = (100..200)

@@ -1124,7 +1124,7 @@ fn damaged_cases() -> Vec<Case> {
             }),
             check: Box::new(|app, _, stored| {
                 // The file holds the f32 colour widened to f64.
-                assert_eq!(stored["toolColors"]["foreground"], json!([0.2_f32 as f64, 0.4_f32 as f64, 0.6_f32 as f64, 0.8_f32 as f64]));
+                assert_eq!(stored["toolColors"]["selections"]["foreground"]["color"], json!([0.2_f32 as f64, 0.4_f32 as f64, 0.6_f32 as f64, 0.8_f32 as f64]));
                 assert_eq!(app.session.tools.foreground, [0.2, 0.4, 0.6, 0.8]);
             }),
         });

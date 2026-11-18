@@ -62,13 +62,18 @@ pub struct MenuModel {
 impl MenuModel {
     /// The English label of the row that runs `command`.
     pub(super) fn english_label(&self, command: &CommandRef) -> Option<String> {
-        self.english.get(&command.id).cloned()
+        self.english.get(&source_label_key(command)).or_else(|| self.english.get(&command.id)).cloned()
     }
 
     /// The English title of a menu or submenu shown as `title`.
     pub(super) fn english_title(&self, title: &str) -> Option<String> {
         self.english_titles.get(title).cloned()
     }
+}
+
+/// Generated menus reuse one command id for choices with different labels.
+fn source_label_key(command: &CommandRef) -> String {
+    format!("{}:{}", command.id, command.params)
 }
 
 /// The model for the app's current state. It is rebuilt when the hash of its inputs changes; a
@@ -382,10 +387,26 @@ fn build(app: &PhotocraftApp, state: u64) -> MenuModel {
     // The labels of the two menus come from the language the rest of the model uses.
     let i18n = crate::i18n::framework_i18n();
     let words = Words::from_i18n(i18n.clone(), i18n.from_code(lang.code()).unwrap_or_else(|| i18n.system_lang()));
+    let source_words = Words::from_i18n(i18n.clone(), i18n.from_code("en").unwrap_or_else(|| i18n.system_lang()));
+    fn source_labels(node: &Node, english: &mut HashMap<String, String>) {
+        match node {
+            Node::Item(item) => {
+                english.entry(source_label_key(&item.command)).or_insert_with(|| item.label.clone());
+            }
+            Node::Submenu { children, .. } => {
+                for child in children {
+                    source_labels(child, english);
+                }
+            }
+            _ => {}
+        }
+    }
+    source_labels(&crate::prefs_ui::theme_menu(app).submenu(&source_words.set::<ThemeLabels>()), &mut english);
     put_in_window(&mut bar, crate::prefs_ui::theme_menu(app).submenu(&words.set::<ThemeLabels>()));
     // Production shows Language only in the macOS app menu.
     let pref = &app.session.prefs().interface.language;
     let choice = if pref == "auto" { LanguageChoice::Automatic } else { LanguageChoice::Code(pref.clone()) };
+    source_labels(&LanguageMenu::from_i18n(i18n, choice.clone()).submenu(&source_words.set::<LanguageLabels>()), &mut english);
     let language = LanguageMenu::from_i18n(i18n, choice).submenu(&words.set::<LanguageLabels>()).platforms(Platforms::MAC);
     put_in_window(&mut bar, language);
     let label = |s: &'static str| crate::i18n::tr(lang, s).to_string();

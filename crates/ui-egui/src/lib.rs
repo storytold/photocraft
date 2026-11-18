@@ -449,8 +449,6 @@ pub struct PhotocraftApp {
     pub(crate) color_targets: HashMap<craft::ui::dialog::DialogId, color_picker_ui::PickTarget>,
     /// Colours a Color Picker answered with OK, waiting for their owner: (dialog, field, colour).
     pub(crate) color_answers: Vec<(craft::ui::dialog::DialogId, String, craft::theme::Srgba)>,
-    /// Native ink associations for colour rows of hosted dialogs; matched against their RGB before use.
-    pub(crate) color_inks: HashMap<(craft::ui::dialog::DialogId, String), (String, [f32; 4])>,
     /// The screen-colour pick in progress (`screen_picker`).
     pub(crate) screen_pick: craft::color_ui::ui::ScreenPick,
     /// Select and Mask / Content-Aware Fill / Liquify / Gallery / Vanishing Point sessions.

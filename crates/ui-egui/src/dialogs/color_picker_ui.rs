@@ -12,6 +12,7 @@ use craft::cms::convert::CmykConverter;
 use craft::color_ui::ui::{ColorPickerDialog, ColorPickerResult, PickedColor};
 use craft::theme::{ModelValues, Srgba};
 use craft::ui::dialog::{DialogId, DialogResult};
+use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog};
 use craft::ui::runtime::requests::ColorRequest;
 use photocraft_doc::{DocId, LayerId};
 use serde_json::{Value, json};
@@ -236,11 +237,27 @@ fn titled(request: ColorRequest) -> ColorRequest {
     }
 }
 
+/// Ink metadata lives beside its swatch so Reset restores both as one selection.
+pub(crate) fn ink_field(key: &str) -> String {
+    format!("{key}Cmyk")
+}
+
+pub(crate) fn ink_value(color: Srgba, inks: Option<[f32; 4]>) -> FieldValue {
+    FieldValue::Text(inks.map(|inks| json!([rgb_hex(color), inks]).to_string()).unwrap_or_default())
+}
+
+pub(crate) fn request_inks(fields: &DialogFields, key: &str, color: Srgba) -> Option<[f32; 4]> {
+    let (rgb, inks): (String, [f32; 4]) = serde_json::from_str(fields.text(&ink_field(key))?).ok()?;
+    (rgb == rgb_hex(color) && inks.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))).then_some(inks)
+}
+
 /// Opens the colour child of `parent`'s `request`; its OK waits for [`answer_for`].
 pub(crate) fn open_for_request(app: &mut PhotocraftApp, parent: DialogId, request: ColorRequest) -> DialogId {
     let target = PickTarget::Request { parent, key: request.key.clone() };
-    let inks =
-        request.color.and_then(|color| app.color_inks.get(&(parent, request.key.clone())).filter(|(rgb, _)| *rgb == rgb_hex(color)).map(|(_, inks)| *inks));
+    let inks = request.color.and_then(|color| {
+        let dialog = app.framework.dialogs.get_by_id::<HostedParamDialog>(parent)?;
+        request_inks(dialog.fields(), &request.key, color)
+    });
     let mut dialog = ColorPickerDialog::from_request(titled(request));
     if let Some(inks) = inks {
         dialog = dialog.kept(inks_model(inks));
@@ -415,11 +432,8 @@ fn commit(app: &mut PhotocraftApp, _id: DialogId, target: PickTarget, picked: &P
         PickTarget::SolidFill { document, layer } => crate::solid_fill_ui::confirm(app, *document, *layer, picked),
         PickTarget::NewSolidFill { document } => crate::solid_fill_ui::confirm_new(app, *document, picked),
         PickTarget::Request { parent, key } => {
-            let association = (*parent, key.clone());
-            if let Some(inks) = inks_of(picked) {
-                app.color_inks.insert(association, (color.clone(), inks));
-            } else {
-                app.color_inks.remove(&association);
+            if let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedParamDialog>(*parent) {
+                dialog.set_field(ink_field(key), ink_value(picked.color, inks_of(picked)));
             }
             app.color_answers.push((*parent, key.clone(), picked.color));
             Ok(json!({ "color": color }))

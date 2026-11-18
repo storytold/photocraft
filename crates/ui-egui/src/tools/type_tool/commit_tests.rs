@@ -6,8 +6,6 @@
 //! app frame (the canvas editor holds the keys and the input method), and the session calls
 //! with the canvas pass's context.
 
-use crate::app::framework::BuildApp;
-
 use craft::ui::runtime::windows::WindowHost;
 use egui_kittest::Harness;
 use photocraft_doc::{LayerContent, LayerId};
@@ -47,24 +45,39 @@ pub(super) fn key(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
 }
 
 /// Runs the whole app (logic and UI) on the app's own context: a warm-up so the fonts and the
-/// editor's focus are in place, then two frames after each of `events`.
-pub(super) fn frames(app: PhotocraftApp, events: Vec<egui::Event>) -> PhotocraftApp {
+/// editor's focus are in place, then two frames after each of `events`. The app remains boxed:
+/// moving this large state into and out of the harness exhausted the Windows test thread's stack.
+pub(super) fn frames(mut app: Box<PhotocraftApp>, events: Vec<egui::Event>) -> Box<PhotocraftApp> {
+    // Like BuildApp, keep eframe's raw-input and logic hooks around the custom UI body.
+    // The wrapper makes Harness's state pointer-sized without changing those hooks.
+    struct BoxedApp(Box<PhotocraftApp>);
+    impl eframe::App for BoxedApp {
+        fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+            eframe::App::raw_input_hook(&mut *self.0, ctx, input);
+        }
+
+        fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+            eframe::App::logic(&mut *self.0, ctx, frame);
+        }
+
+        fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+            eframe::App::ui(&mut *self.0, ui, frame);
+        }
+    }
+    app.framework.test_body = Some(Box::new(|ui, app| {
+        let mut frame = eframe::Frame::_new_kittest();
+        app.logic_frame(ui.ctx(), &mut frame);
+        app.ui_frame(ui, &mut frame);
+    }));
     let ctx = app.ctx().clone();
-    let mut h = Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_context(ctx).build_app(
-        |ui, app: &mut PhotocraftApp| {
-            let mut frame = eframe::Frame::_new_kittest();
-            app.logic_frame(ui.ctx(), &mut frame);
-            app.ui_frame(ui, &mut frame);
-        },
-        app,
-    );
+    let mut h = Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_context(ctx).build_eframe(move |_| BoxedApp(app));
     // Between passes, as eframe's input hook does: the runtime's output of the pass is taken (the
     // commands it fired run in the next frame's logic) and its input for the next is set.
-    let step = |h: &mut Harness<'_, PhotocraftApp>, n: usize| {
+    let step = |h: &mut Harness<'_, BoxedApp>, n: usize| {
         for _ in 0..n {
             h.step();
             let ctx = h.ctx.clone();
-            h.state_mut().framework_before_input(&ctx);
+            h.state_mut().0.framework_before_input(&ctx);
         }
     };
     step(&mut h, 8);
@@ -72,7 +85,7 @@ pub(super) fn frames(app: PhotocraftApp, events: Vec<egui::Event>) -> Photocraft
         h.event(event);
         step(&mut h, 2);
     }
-    h.into_state()
+    h.into_state().0
 }
 
 /// Queues input with `inject` and runs frames until the window host has delivered it, so it reaches the focused
@@ -127,7 +140,7 @@ fn typing_after_a_document_switch_never_edits_the_other_document() {
     super::host::type_text(&mut app, "Ay");
     assert!(app.session.set_active(0));
     end_if_left(&mut app);
-    let app = frames(app, vec![egui::Event::Text("Z".into())]);
+    let app = frames(Box::new(app), vec![egui::Event::Text("Z".into())]);
     assert_eq!(text_of(&app, 0, id).as_deref(), Some("Bee"), "the other document is untouched");
     assert_eq!(text_of(&app, 1, id).as_deref(), Some("Ay"), "the edited copy keeps its text");
     assert!(app.ui.text_edit.is_none(), "the copy's edit was committed");
