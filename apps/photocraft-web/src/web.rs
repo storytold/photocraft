@@ -7,10 +7,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use photocraft_doc::Document;
+use photocraft_ui_egui::file_dialog::{FileDialogAnswer, FileDialogRequest};
 use photocraft_ui_egui::i18n;
 use photocraft_ui_egui::served_fonts;
 use photocraft_ui_egui::theme::AppTheme;
-use photocraft_ui_egui::{FileDialogAnswer, FileDialogRequest, PhotocraftApp, Services};
+use photocraft_ui_egui::{PhotocraftApp, Services};
 use wasm_bindgen::JsCast as _;
 
 use crate::preset_bridge::{ActionRecovery, SaveWarning};
@@ -108,7 +109,13 @@ pub fn start() {
                     services.load_prefs = Some(Box::new(move || initial.take().unwrap_or_else(stored_preferences)));
                     let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), session, services);
                     if !preset_warnings.is_empty() {
-                        photocraft_ui_egui::notices::post(&mut app, i18n::t("Some brush presets could not be loaded"), preset_warnings, true, None);
+                        photocraft_ui_egui::notices::post(
+                            &mut app,
+                            i18n::t("Some brush presets could not be loaded"),
+                            preset_warnings,
+                            photocraft_ui_egui::notices::Tone::Bad,
+                            None,
+                        );
                     }
                     listen_pen(&pen_target, app.stylus.feed.clone());
                     app.set_theme(&cc.egui_ctx, AppTheme::pro());
@@ -438,7 +445,7 @@ impl WebShell {
                 }
             });
         }
-        served_fonts::install(&mut self.app, ctx, arrived);
+        served_fonts::install(&mut self.app, arrived);
     }
 }
 

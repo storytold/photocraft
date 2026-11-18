@@ -66,8 +66,6 @@ pub(crate) fn served(ctx: &egui::Context) -> Option<Served> {
 /// fallback, e.g. Arabic set in Inter), and show our own layout. A PSD layer still
 /// showing Photoshop's pixels (not edited yet) keeps them, as it does when its font is installed
 /// from the start. Call it every frame: it also retries the layers of a document that was busy.
-// PLAN: dialogs-w59 (`apps/photocraft-web/src/web.rs`) calls this with the `ctx` argument the UI stack used to take;
-// the framework's loader puts a delivered script fallback in the UI stack, so the argument is gone.
 pub fn install(app: &mut PhotocraftApp, delivered: Vec<(String, Vec<u8>)>) {
     let mut layers = std::mem::take(&mut *PENDING.lock().unwrap_or_else(PoisonError::into_inner));
     if !delivered.is_empty() {
