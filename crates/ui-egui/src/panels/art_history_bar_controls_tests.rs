@@ -4,33 +4,51 @@
 //! brush, not the History Brush's or the Brush's, and the bar has no Flow and no Airbrush.
 
 use egui::accesskit::Role;
-use egui::{Modifiers, Rect};
+use egui::{Modifiers, Rect, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use serde_json::json;
 
-use super::eraser_range_alert_tests::bar;
 use crate::PhotocraftApp;
 use crate::state::Tool;
+
+type H = Harness<'static, Box<PhotocraftApp>>;
+
+/// The options bar with `tool` active, and the dialog host its alerts open on.
+fn bar(tool: Tool) -> H {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 80, "height": 80})).unwrap();
+    app.ui.tool = tool;
+    crate::theme::install_fonts(app.ctx());
+    crate::theme::apply(app.ctx(), &crate::theme::AppTheme::pro());
+    let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1800.0, 300.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        move |ui, app: &mut Box<PhotocraftApp>| {
+            crate::panels::options_bar(app, ui);
+            crate::dialogs::run(app, ui);
+        },
+        app,
+    );
+    h.run_steps(4);
+    h
+}
 
 const PRESSURE_OPACITY: &str = "Always use pressure for opacity";
 const PRESSURE_SIZE: &str = "Always use pressure for size";
 
-fn rect(h: &Harness<'static, PhotocraftApp>, label: &str) -> Rect {
+fn rect(h: &H, label: &str) -> Rect {
     h.get_by_label(label).rect()
 }
 
-/// The field captioned `label` ("Opacity", "Tolerance"), by its caption's name.
-fn field<'a>(h: &'a Harness<'static, PhotocraftApp>, label: &str) -> Option<egui_kittest::Node<'a>> {
-    let label = format!("{label}:");
-    h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some(label.as_str()))
+/// The field named `label` ("Opacity", "Tolerance", "Angle"), with or without its caption's colon.
+fn field<'a>(h: &'a H, label: &str) -> Option<egui_kittest::Node<'a>> {
+    h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().is_some_and(|l| l.trim_end_matches(':') == label))
 }
 
-fn angle_field<'a>(h: &'a Harness<'static, PhotocraftApp>) -> Option<egui_kittest::Node<'a>> {
-    h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().description().as_deref() == Some("Set the brush angle"))
+fn angle_field<'a>(h: &'a H) -> Option<egui_kittest::Node<'a>> {
+    field(h, "Angle")
 }
 
-fn type_angle(h: &mut Harness<'static, PhotocraftApp>, text: &str) {
+fn type_angle(h: &mut H, text: &str) {
     angle_field(h).expect("the Angle field").click();
     h.run_steps(1);
     h.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
@@ -46,7 +64,7 @@ fn controls(app: &PhotocraftApp) -> (bool, f32, bool) {
     (b.pressure_opacity, b.angle, b.pressure_size)
 }
 
-fn switch(h: &mut Harness<'static, PhotocraftApp>, tool: Tool) {
+fn switch(h: &mut H, tool: Tool) {
     h.state_mut().ui.tool = tool;
     h.run_steps(3);
 }
@@ -56,11 +74,16 @@ fn pressure_for_opacity_follows_opacity_and_angle_and_pressure_for_size_follow_t
     let h = bar(Tool::ArtHistoryBrush);
     let opacity = field(&h, "Opacity").expect("the Opacity field").rect();
     let pressure_opacity = rect(&h, PRESSURE_OPACITY);
-    let style = h.query_all_by_role(Role::ComboBox).next().expect("the Style dropdown").rect();
+    // The Mode dropdown sits left of Opacity; Style is the first dropdown after it.
+    let style = h
+        .query_all_by_role(Role::ComboBox)
+        .map(|n| n.rect())
+        .filter(|r| r.left() >= opacity.right())
+        .min_by(|a, b| a.left().total_cmp(&b.left()))
+        .expect("the Style dropdown");
     assert!(opacity.right() <= pressure_opacity.left() && pressure_opacity.right() <= style.left(), "Opacity, Pressure for Opacity, Style");
     let angle = angle_field(&h).expect("the Angle field").rect();
-    // The Tolerance field takes its caption's name.
-    let tolerance = rect(&h, "Tolerance");
+    let tolerance = field(&h, "Tolerance").expect("the Tolerance field").rect();
     let pressure_size = rect(&h, PRESSURE_SIZE);
     assert!(tolerance.right() <= angle.left() && angle.right() <= pressure_size.left(), "Tolerance, Angle, Pressure for Size");
 }
@@ -71,7 +94,8 @@ fn the_controls_carry_the_reference_tooltips() {
     let tip = |label: &str| h.get_by_label(label).accesskit_node().description().map(|d| d.to_string());
     assert_eq!(tip(PRESSURE_OPACITY).as_deref(), Some("Always use Pressure for Opacity. When off, Brush Preset controls pressure"));
     assert_eq!(tip(PRESSURE_SIZE).as_deref(), Some("Always use Pressure for Size. When off, Brush Preset controls pressure"));
-    assert!(angle_field(&h).is_some(), "the Angle field says \"Set the brush angle\"");
+    let angle = angle_field(&h).expect("the Angle field");
+    assert_eq!(angle.accesskit_node().description().as_deref(), Some("Set the brush angle"));
 }
 
 #[test]
@@ -85,7 +109,8 @@ fn the_controls_are_off_and_0_by_default_and_after_reset_tool() {
     h.run_steps(2);
     type_angle(&mut h, "45");
     assert_eq!(controls(h.state()), (true, 45.0, true));
-    crate::burn_default_tip_tests::invoke(h.state_mut(), "tool.reset", json!({}));
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "tool.reset", json!({})).unwrap();
     h.run_steps(3);
     assert_eq!(controls(h.state()), (false, 0.0, false));
 }

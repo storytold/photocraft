@@ -14,7 +14,7 @@ const SAVED: &str = "Path 1";
 const SQUARE: [[f64; 2]; 4] = [[100.0, 300.0], [300.0, 300.0], [300.0, 500.0], [100.0, 500.0]];
 
 /// The closed square 100,300–300,500 saved as "Path 1", targeted, with Path Selection.
-fn setup() -> PhotocraftApp {
+fn setup() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 800, "height": 600, "background": "white"})).unwrap();
     let square = json!({"subpaths": [{"closed": true, "knots": SQUARE}]});
@@ -40,6 +40,13 @@ fn anchors(app: &PhotocraftApp) -> Vec<[f64; 2]> {
     saved(app).subpaths[0].knots.iter().map(|k| [k.anchor.x, k.anchor.y]).collect()
 }
 
+/// The anchors are where the pointer put them, to the sub-pixel precision of the screen-to-document mapping.
+fn assert_anchors(app: &PhotocraftApp, expected: &[[f64; 2]], message: &str) {
+    let got = anchors(app);
+    let same = got.len() == expected.len() && got.iter().zip(expected).all(|(a, b)| (a[0] - b[0]).abs() < 1e-3 && (a[1] - b[1]).abs() < 1e-3);
+    assert!(same, "{message}: {got:?} vs {expected:?}");
+}
+
 fn undo_label(app: &PhotocraftApp) -> Option<String> {
     app.session.active()?.history.undo_label().map(str::to_string)
 }
@@ -58,7 +65,7 @@ fn ctrl_drag_on_an_anchor_moves_only_that_anchor_in_one_step() {
     let mut app = setup();
     let before = undo_label(&app);
     drag(&mut app, [100.0, 300.0], [80.0, 280.0], Modifiers::COMMAND);
-    assert_eq!(anchors(&app), vec![[80.0, 280.0], SQUARE[1], SQUARE[2], SQUARE[3]], "only the pressed anchor moved");
+    assert_anchors(&app, &[[80.0, 280.0], SQUARE[1], SQUARE[2], SQUARE[3]], "only the pressed anchor moved");
     assert!(is_anchor_drag_label(undo_label(&app).as_deref()), "one anchor-drag step: {:?}", undo_label(&app));
     app.run("edit.undo", json!({})).unwrap();
     assert_eq!(anchors(&app), SQUARE.to_vec(), "one undo restores the square");
@@ -71,7 +78,7 @@ fn ctrl_drag_on_an_anchor_of_a_selected_component_moves_only_that_anchor() {
     // A plain click selects the whole component first.
     drag(&mut app, [200.0, 300.0], [200.0, 300.0], Modifiers::NONE);
     drag(&mut app, [100.0, 300.0], [80.0, 280.0], Modifiers::COMMAND);
-    assert_eq!(anchors(&app), vec![[80.0, 280.0], SQUARE[1], SQUARE[2], SQUARE[3]]);
+    assert_anchors(&app, &[[80.0, 280.0], SQUARE[1], SQUARE[2], SQUARE[3]], "only the pressed anchor moved");
 }
 
 #[test]

@@ -175,7 +175,6 @@ mod type_indexed_mode_tests;
 pub mod type_mask_cmds;
 pub mod type_spell_cmds;
 pub mod type_styles_cmds;
-pub mod updates_cmds;
 pub(super) mod variables_cmds;
 mod vector_clipboard;
 pub mod vector_cmds;
@@ -263,6 +262,7 @@ impl Registry {
     }
 }
 
+/// The command registry, built on first use and shared for the rest of the process.
 fn registry() -> &'static Registry {
     static REGISTRY: std::sync::OnceLock<Registry> = std::sync::OnceLock::new();
     REGISTRY.get_or_init(|| Registry::new(build()))
@@ -270,6 +270,7 @@ fn registry() -> &'static Registry {
 
 // ---------- the table ----------
 
+/// Every command this module owns, in menu order: the table the registry is built from once.
 #[allow(clippy::too_many_lines)]
 /// Register the core file, edit, layer and document commands.
 fn build() -> Vec<CommandSpec> {
@@ -382,7 +383,7 @@ fn build() -> Vec<CommandSpec> {
             "edit.clear",
             "Clear",
             ["Edit"],
-            Some("Delete"),
+            None,
             r##"{"target":"mask"|{"color":i}|{"colors":[i,…]}?=Channels panel target,"layer":id|name?=active} (a targeted mask, channel or Quick Mask is cleared alone)"##,
             has_pixel_or_channel,
             |s, p| {
@@ -424,9 +425,16 @@ fn build() -> Vec<CommandSpec> {
         ),
         // Select
         cmd!("select.all", "All", ["Select"], Some("Cmd+A"), "{}", has_doc, |s, _| {
+            // With the active layer on an artboard (the board itself or a layer inside it), Select
+            // All selects that board, as Photoshop does; otherwise the whole canvas (#10258).
+            let active = s.active().and_then(|d| d.active_layer);
             s.edit("Select All", |doc, _| {
+                let board = active.and_then(|id| doc.artboard_of(id)).and_then(|id| doc.layer(id)).and_then(|l| l.artboard()).map(|a| a.rect);
+                // A board the canvas no longer reaches (cropped away) selects the canvas, never an
+                // empty selection that would block painting.
+                let area = board.map(|r| r.intersect(&doc.bounds())).filter(|r| !r.is_empty()).unwrap_or_else(|| doc.bounds());
                 let mut m = Surface::new(photocraft_color::PixelFormat::GRAY8);
-                m.fill_rect(doc.bounds(), &[1.0]);
+                m.fill_rect(area, &[1.0]);
                 doc.selection = Some(m);
                 Ok(())
             })?;
@@ -652,7 +660,7 @@ fn build() -> Vec<CommandSpec> {
             "Select Layer",
             [],
             None,
-            r##"{"layer":id|str|{"index":uint}|{"ordinal":"Trgt|Frwr|Bckw|Frnt|Back"} | "name":str,"occurrence":index?,"mode":"replace|toggle|range|add|remove"="replace"} (typed references use the recorded full layer stack; name occurrence: zero-based document walk order; required for duplicate names; toggle = ⌘-click, range = ⇧-click, remove = deselect it, keeping at least one)"##,
+            r##"{"layer":id|str|{"index":uint}|{"ordinal":"Trgt|Frwr|Bckw|Frnt|Back"} | "name":str,"occurrence":index?,"mode":"replace|toggle|range|add|remove"="replace"} | {"layers":[id,…]} (layers: exactly these selected, the last active; typed references use the recorded full layer stack; name occurrence: zero-based document walk order; required for duplicate names; toggle = ⌘-click, range = ⇧-click, remove = deselect it, keeping at least one)"##,
             has_doc,
             crate::layer_multi_cmds::select
         ),
@@ -1401,7 +1409,6 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::layer_multi_cmds::specs());
     v.extend(crate::layer_copy_cmds::specs());
     v.extend(crate::prefs::specs());
-    v.extend(crate::updates_cmds::specs());
     v.extend(crate::edit_menu_cmds::specs());
     v.extend(crate::fill_key_cmds::specs());
     v.extend(crate::sample_cmds::specs());

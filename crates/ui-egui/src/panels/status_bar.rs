@@ -1,72 +1,74 @@
-use super::{PhotocraftApp, RichText, Tokens, label, vec2, widgets};
+use std::cell::RefCell;
+
+use craft::behavior::kurbo::Size;
+use craft::theme::variant::Tone;
+use craft::ui::bars::{Bar, BarKind, StatusMessage, StatusReadout};
+use craft::ui::contract::{Bind, ShowContainer as _};
+use craft::ui::runtime::commands::CommandRef;
+
+use super::{PhotocraftApp, chrome_ui};
 
 // ----------------------------------------------------------------------------- status bar
 
-/// The status bar's height and the height of the controls in it (zoom field, Fit), which leaves
-/// them an even margin above and below inside the bar (#2823).
-pub fn status_bar_heights(t: &Tokens) -> (f32, f32) {
-    if t.pro { (24.0, 18.0) } else { (30.0, 22.0) }
-}
-
+/// The status bar, in the shell's status slot: the zoom readout of the active document and the latest status
+/// message, and at the far end the render-path note, the background redraw and the background jobs' progress with
+/// Cancel (#210).
 pub fn status_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let t = Tokens::get(ui.ctx());
-    egui::Panel::bottom("status_bar")
-        .exact_size(status_bar_heights(&t).0)
-        .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(10, 0)))
-        .show(ui, |ui| {
-            let control_h = status_bar_heights(&t).1;
-            // Read from the right in a right-to-left UI, with the trailing group at the left.
-            crate::direction::horizontal_centered(ui, |ui| {
-                if t.pro {
-                    crate::chrome_ui::status_bar_pro(app, ui);
-                    // Background job progress with Cancel, at the far end (#210).
-                    ui.with_layout(crate::direction::trailing(), |ui| {
-                        crate::jobs_ui::status_progress(app, ui);
-                        crate::background_redraw::status(app, ui);
-                        crate::chrome_ui::render_path_status(app, ui);
-                    });
-                    return;
+    let values = chrome_ui::status_values(app);
+    let item = chrome_ui::status_item(&app.ui.chrome);
+    let document = app.session.active().map(|st| Size::new(st.doc.size.width as f64, st.doc.size.height as f64));
+    // The active document's main canvas as its last pass showed it; a document not yet shown has no readout.
+    let mut view = crate::canvas::active_view(app);
+    let message =
+        (!app.ui.status.is_empty()).then(|| StatusMessage::new(app.ui.status.clone()).tone(if app.ui.status_error { Tone::Warn } else { Tone::Neutral }));
+    let render_path = chrome_ui::render_path_label(app)
+        .map(|(label, tip, command)| StatusMessage::new(label).tone(Tone::Warn).command(CommandRef::new(command)).tooltip(tip));
+    // The passes of a frame each report their own entries; the last pass's are the ones applied below.
+    let mut picked = None;
+    let mut invalid_zoom = None;
+    let mut view_edited = false;
+    // The bar runs the trailing group before the body when it measures, so the app is borrowed by one closure at a
+    // time.
+    let cell = RefCell::new(&mut *app);
+    Bar::new("", BarKind::Status)
+        .trailing(|ui, _| {
+            if let Some(shown) = &render_path {
+                shown.show(ui);
+            }
+            let mut guard = cell.borrow_mut();
+            let app = &mut **guard;
+            if let Some(progress) = crate::background_redraw::progress(app) {
+                progress.show(ui);
+            }
+            crate::jobs_ui::status_progress(app, ui);
+        })
+        .show(ui, |ui, _| {
+            match (document, view.as_mut()) {
+                (Some(size), Some(view)) => {
+                    let out = StatusReadout::new(Bind::bound(view), size, item, &values).show(ui);
+                    picked = out.item.or(picked);
+                    invalid_zoom = out.invalid_zoom.or(invalid_zoom.take());
+                    view_edited |= !out.view.is_empty();
                 }
-                if let (Some(st), Some(i)) = (app.session.active(), app.session.active_index()) {
-                    let (w, h, mode, bits, layers) =
-                        (st.doc.size.width, st.doc.size.height, crate::canvas::mode_label(&st.doc), st.doc.depth.bits(), st.doc.layer_count());
-                    let mut pct = app.ui.views[i].zoom * 100.0;
-                    let field =
-                        widgets::compact_wrapping_value_field(ui, &mut pct, crate::zoom_levels::percent_range(&app.ui.views[i]), "%", vec2(78.0, control_h))
-                            .accessible_name(tl!("Zoom"));
-                    if field.changed() {
-                        let animated = app.session.prefs().general.animated_zoom;
-                        crate::zoom_levels::set_from_field(&mut app.ui.views[i], field.dragged() || field.drag_started(), pct, animated);
-                    }
-                    widgets::vline(ui, 16.0);
-                    label(ui, &crate::i18n::fmt(tl!("{mode} Color · {bits} bit"), &[("mode", mode), ("bits", &bits.to_string())]));
-                    widgets::vline(ui, 16.0);
-                    label(ui, &format!("{w} × {h} px"));
-                    widgets::vline(ui, 16.0);
-                    label(ui, &crate::i18n::trn(crate::i18n::current(), layers as u64, "{n} layer", "{n} layers"));
-                } else {
-                    label(ui, tl!("No document"));
+                (Some(_), None) => {}
+                (None, _) => {
+                    StatusMessage::new(tl!("No document")).show(ui);
                 }
-                if !app.ui.status.is_empty() {
-                    widgets::vline(ui, 16.0);
-                    let is_err = app.ui.status_error || app.ui.status.starts_with("Couldn");
-                    ui.label(RichText::new(&app.ui.status).color(if is_err { t.warning } else { t.text_faint }));
-                }
-                ui.with_layout(crate::direction::trailing(), |ui| {
-                    if app.session.active().is_some()
-                        && !t.pro
-                        && widgets::compact_button(ui, tl!("Fit"), control_h).clicked()
-                        && let Some(i) = app.session.active_index()
-                    {
-                        app.ui.views[i].fit_pending = true;
-                    }
-                    if app.session.has_jobs() {
-                        ui.add_space(6.0);
-                        crate::jobs_ui::status_progress(app, ui);
-                    }
-                    crate::background_redraw::status(app, ui);
-                    crate::chrome_ui::render_path_status(app, ui);
-                });
-            });
+            }
+            // A command run with no document open still reports here (#1567: File › Automate › Batch).
+            if let Some(shown) = &message {
+                shown.show(ui);
+            }
         });
+    if let Some(picked) = picked {
+        chrome_ui::set_status_item(&mut app.ui.chrome, picked);
+    }
+    if view_edited
+        && let Some(new) = &view
+        && let Some(i) = app.session.active_index()
+    {
+        let ppp = app.canvas_ppp();
+        app.ui.views[i].set_from(new, ppp);
+    }
+    chrome_ui::zoom_alert(app, invalid_zoom);
 }
