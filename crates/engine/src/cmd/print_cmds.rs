@@ -1423,7 +1423,7 @@ fn printers(s: &mut Session, _: &Value) -> Result<Value> {
     }
 }
 
-fn printer_page(_: &mut Session, p: &Value) -> Result<Value> {
+fn printer_page(s: &mut Session, p: &Value) -> Result<Value> {
     // Checked before the printer, so a bad value is the error whether or not a printer answers.
     let landscape = match p.get("orientation").filter(|v| !v.is_null()) {
         None => None,
@@ -1433,8 +1433,12 @@ fn printer_page(_: &mut Session, p: &Value) -> Result<Value> {
             _ => return Err(bad("file.print.page", "orientation is \"portrait\" or \"landscape\"")),
         },
     };
-    let printer = printer_name(p)?;
     let mut settings = printer_settings(p)?;
+    // A stand-in supplies printer names, but has no driver for page geometry.
+    if s.printer_source.is_some() {
+        return Err(other("printer page geometry requires a system printer driver"));
+    }
+    let printer = printer_name(p)?;
     if let Some(landscape) = landscape {
         let base = match settings {
             Some(s) => s,

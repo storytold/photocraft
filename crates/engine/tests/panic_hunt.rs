@@ -10,7 +10,7 @@ use std::sync::{Mutex, Once, PoisonError, mpsc};
 use std::time::Duration;
 
 fn fresh() -> Session {
-    // Belt and braces with the EXTERNAL skip below: nothing in this process may reach a printer.
+    // Prevent spooling and give the discovery commands a stand-in for the system printers.
     photocraft_engine::print_cmds::disable_printing();
     let mut s = Session::new();
     // `file.printers` and `file.print.printers` list no printers and do not ask the spooler.
@@ -19,6 +19,20 @@ fn fresh() -> Session {
     s.execute("layer.new.layer", json!({})).unwrap();
     s.execute("select.rect", json!({"x": 1, "y": 1, "width": 6, "height": 5})).unwrap();
     s
+}
+
+#[test]
+fn printer_page_with_a_stand_in_does_not_query_the_driver() {
+    assert_eq!(
+        run_watched(DEADLINE, || {
+            let mut session = fresh();
+            for params in [json!({}), json!({"printer": "Office", "orientation": "landscape"})] {
+                let error = session.execute("file.print.page", params).unwrap_err();
+                assert!(error.to_string().contains("requires a system printer driver"), "{error}");
+            }
+        }),
+        Some(true)
+    );
 }
 
 /// Wall-clock budget for one command on the 24×16 test document. Every command needs well under
