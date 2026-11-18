@@ -10,7 +10,7 @@ use craft::ui::dialog::DialogId;
 
 use crate::menus::invoke as menu;
 
-fn app_with(n: usize) -> (PhotocraftApp, egui::Context) {
+fn app_with(n: usize) -> (Box<PhotocraftApp>, egui::Context) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     for i in 0..n {
         app.run("file.new", json!({"width": 100 + i as u32 * 10, "height": 80})).unwrap();
