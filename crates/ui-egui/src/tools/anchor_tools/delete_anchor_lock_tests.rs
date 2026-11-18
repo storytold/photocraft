@@ -21,7 +21,7 @@ fn position_lock_blocks_deleting_an_anchor_without_a_history_step_or_message() {
 
     assert_eq!(app.ui.status, status);
     assert!(!app.ui.status_error);
-    assert!(app.ui.dialogs.is_empty());
+    assert!(!app.dialog_open());
     assert_eq!(shape_path(&mut app, shape), before);
     assert_eq!(steps(&app), count);
 
