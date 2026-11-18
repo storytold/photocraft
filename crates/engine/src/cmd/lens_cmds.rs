@@ -181,7 +181,7 @@ fn rgba_region(surf: &Surface, area: Rect, len: usize) -> Vec<[f32; 4]> {
 ///
 /// An area above [`MAX_RAW_PIXELS`] is returned unchanged: the command rejects it with an
 /// error first, and this keeps the preview and Smart Filter paths from overflowing.
-pub fn camera_raw_surface(surf: &Surface, area: Rect, p: &CameraRaw) -> Surface {
+pub fn camera_raw_surface(surf: &Surface, area: Rect, p: &CameraRaw, inputs: &camera_raw::DevelopInputs) -> Surface {
     let area = area.intersect(&surf.content_bounds().union(&area));
     if area.is_empty() || p.is_identity() {
         return surf.clone();
@@ -190,7 +190,7 @@ pub fn camera_raw_surface(surf: &Surface, area: Rect, p: &CameraRaw) -> Surface 
     let fmt = surf.format();
     let (w, h) = (area.width() as usize, area.height() as usize);
     let mut px = rgba_region(surf, area, len);
-    camera_raw::develop(&mut px, w, h, p, fmt.sample == SampleType::F32);
+    camera_raw::develop(&mut px, w, h, p, inputs, fmt.sample == SampleType::F32);
     let n = fmt.channels();
     let orig = surf.read_region(area);
     let mut data = vec![0.0f32; w * h * n];
@@ -246,7 +246,7 @@ pub fn apply_to_surface(id: &str, params: &Value, surf: &Surface, canvas: Rect) 
     match id {
         LENS => Some(lens::correct(surf, canvas, &lens_params(id, params, canvas, None).ok()?)),
         WIDE => Some(wideangle::apply(surf, canvas, &wide_params(id, params, None).ok()?, Interp::Bicubic)),
-        RAW => Some(camera_raw_surface(surf, canvas, &raw_params(id, params).ok()?)),
+        RAW => Some(camera_raw_surface(surf, canvas, &raw_params(id, params).ok()?, &camera_raw::DevelopInputs::default())),
         _ => None,
     }
 }
@@ -361,7 +361,8 @@ fn adaptive_wide_angle(s: &mut Session, p: &Value) -> Result<Value> {
         wideangle::WideModel::Fisheye => "fisheye",
         wideangle::WideModel::Perspective => "perspective",
         wideangle::WideModel::FullSpherical => "fullSpherical",
-        wideangle::WideModel::Auto => "auto",
+        // The framework's lens model is `non_exhaustive`: a model it adds later reads as `auto`.
+        _ => "auto",
     };
     if let Some(m) = stored.as_object_mut() {
         m.remove("layer");
@@ -417,8 +418,9 @@ fn camera_raw_cmd(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let t0 = Stopwatch::start();
-    let id =
-        run_filter(s, RAW, "RAW Develop Filter", p, p.clone(), false, &|surf, canvas| camera_raw_surface(surf, canvas.union(&surf.content_bounds()), &cr))?;
+    let id = run_filter(s, RAW, "RAW Develop Filter", p, p.clone(), false, &|surf, canvas| {
+        camera_raw_surface(surf, canvas.union(&surf.content_bounds()), &cr, &camera_raw::DevelopInputs::default())
+    })?;
     Ok(json!({"layer": id.0, "identity": cr.is_identity(), "ms": t0.ms()}))
 }
 
@@ -725,7 +727,7 @@ mod tests {
         let d = s.active().unwrap();
         let surf = d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap();
         let cr = raw_params(RAW, &json!({"exposure": 1})).unwrap();
-        let out = camera_raw_surface(surf, Rect::from_xywh(0, 0, 65536, 65536), &cr);
+        let out = camera_raw_surface(surf, Rect::from_xywh(0, 0, 65536, 65536), &cr, &camera_raw::DevelopInputs::default());
         assert_eq!(out.content_bounds(), surf.content_bounds());
         // A normal document still develops.
         let mut s = session(8);
