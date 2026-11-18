@@ -195,9 +195,16 @@ fn arm_move_transfer(app: &mut PhotocraftApp, ctx: &egui::Context, index: usize)
             if app.move_blocked_doc != app.session.active().map(|st| st.doc.id) {
                 return false;
             }
-            let Some(hit) = app.move_blocked_layer else { return false };
+            let active = app.session.active().and_then(|st| st.active_layer);
+            let Some(hit) = app.move_blocked_layer.or_else(|| active.filter(|_| app.session.active().is_some_and(|st| st.doc.selection.is_some()))) else {
+                return false;
+            };
             app.clear_move_blocked();
-            return begin(app, ctx, vec![hit], grab);
+            let layers = match app.session.active() {
+                Some(st) if st.is_layer_selected(hit) => st.selected_layers(),
+                _ => vec![hit],
+            };
+            return begin(app, ctx, layers, grab);
         }
         let Some(active) = app.session.active().and_then(|st| st.active_layer) else { return false };
         if app.session.active_index() == Some(index) {
@@ -264,12 +271,22 @@ pub fn over_tab(app: &mut PhotocraftApp, ctx: &egui::Context, index: usize) {
 /// A second pass of a frame gets no release event (egui gives a frame's input events to its
 /// first pass), so a release drops once; the first pass also clears the Move-tool transfer.
 pub fn finish(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    // A refused Move press (or the marquee that grabbed a locked layer) ends with its gesture: the
-    // button is up, and this is the window that pressed it. A document window's `finish` leaves the
-    // window that owns the gesture alone.
-    if transfer(app, ctx).is_none() && refused_move_ends(app, ctx) {
+    // The primary button ends the gesture: a secondary release during a drag leaves it held.
+    let (primary_released, primary_down) = ctx.input(|i| (i.pointer.primary_released(), i.pointer.primary_down()));
+    // A refused Move press or a marquee's grabbed layer is cleaned up by the window that owns it,
+    // so another window's pointer state cannot clear the source window's gesture.
+    if (!primary_down || primary_released) && transfer(app, ctx).is_none() && app.move_viewport.is_none_or(|v| v == ctx.viewport_id()) {
+        let show_lock = app.move_blocked && app.move_blocked_moved;
         app.clear_move_blocked();
-        app.layer_box = None;
+        if show_lock {
+            crate::move_lock::prompt(app);
+        }
+        if let Some(b) = app.layer_box.as_ref()
+            && b.grabbed_layer.is_some()
+        {
+            app.layer_box = None;
+            app.move_viewport = None;
+        }
     }
     let Some(t) = transfer(app, ctx) else { return };
     // Only the viewport that armed the transfer completes it: a document window's pointer state
@@ -301,10 +318,6 @@ pub fn finish(app: &mut PhotocraftApp, ctx: &egui::Context) {
 }
 
 /// The refused Move press ended in this window: no button is held, and the window recorded for
-/// the press is this one.
-fn refused_move_ends(app: &PhotocraftApp, ctx: &egui::Context) -> bool {
-    app.move_blocked && app.move_viewport.is_none_or(|viewport| viewport == ctx.viewport_id()) && !ctx.input(|i| i.pointer.primary_down())
-}
 
 /// Run before canvases process release: a tiled destination must take over the
 /// drag before the source can commit it as an ordinary move.

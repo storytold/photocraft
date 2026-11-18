@@ -75,7 +75,9 @@ pub fn extra_windows(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let doc_size = Size::new(f64::from(size.width), f64::from(size.height));
         let focused = app.session.active_index() == Some(doc);
         let mut view = start.clone();
+        let mut window_vid = None;
         let inner = DocumentWindow::new(title).first_placed(rect).overlay(|o| o.size_limits(SizeLimits::at_least(MIN_SIZE))).show(ui, |ui, cx| {
+            window_vid = Some(ui.ctx().viewport_id());
             // A second run of the body in one pass continues from the first run's view; the wrap rule
             // compares with the view the window started the pass with, so both runs file the same ask.
             let (after, canvas) = document_window_canvas(app, ui, id, doc, view.clone(), focused);
@@ -87,9 +89,14 @@ pub fn extra_windows(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 DocumentWindow::wrap_in(cx, canvas, wrapped_canvas(&drawn, doc_size, canvas));
             }
             view = after;
+            crate::layer_transfer::finish(app, ui.ctx());
         });
         let output = inner.output;
         if output.close_requested.is_some() {
+            if window_vid.is_some_and(|vid| app.move_viewport == Some(vid)) {
+                app.layer_box = None;
+                app.clear_move_blocked();
+            }
             closed.push(id);
         }
         if output.focus_gained && app.session.active_index() != Some(doc) {

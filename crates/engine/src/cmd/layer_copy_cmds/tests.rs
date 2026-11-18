@@ -812,10 +812,7 @@ fn cutting_with_a_copy_float_clears_the_source() {
 fn cutting_copy_created_float_lifts_coverage_without_residual_alpha() {
     let (mut s, paint) = two_docs(40, 30, 8);
     s.edit("set half alpha", |doc, _| {
-        doc.layer_mut(paint).unwrap().surface_mut().unwrap().fill_rect(
-            photocraft_geom::Rect::new(4, 6, 14, 16),
-            &[1.0, 0.0, 0.0, 0.5],
-        );
+        doc.layer_mut(paint).unwrap().surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(4, 6, 14, 16), &[1.0, 0.0, 0.0, 0.5]);
         Ok(())
     })
     .unwrap();
@@ -872,12 +869,17 @@ fn cutting_another_layer_while_floating_selection_exists_is_rejected() {
     assert!(s.documents()[0].floating.is_some());
 
     let before = doc(&s, 0).clone();
-    let err = s.execute("layer.copyToDocument", json!({
-        "document": 1,
-        "layers": [paint.0],
-        "selection": true,
-        "cut": true,
-    })).unwrap_err();
+    let err = s
+        .execute(
+            "layer.copyToDocument",
+            json!({
+                "document": 1,
+                "layers": [paint.0],
+                "selection": true,
+                "cut": true,
+            }),
+        )
+        .unwrap_err();
     assert!(err.to_string().contains("floating selection"), "{err}");
     assert_eq!(*doc(&s, 0), before, "source document and selection remain untouched");
     assert!(s.documents()[0].floating.is_some(), "floating selection remains intact");
