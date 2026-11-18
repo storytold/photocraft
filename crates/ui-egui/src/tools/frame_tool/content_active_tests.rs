@@ -1,6 +1,6 @@
 //! The Frame tool activates the image it took as content, without changing the command policy.
 use super::*;
-use crate::canvas::tool_event;
+use crate::canvas::{ToolEvent, tool_event};
 
 fn app_with_red() -> (PhotocraftApp, LayerId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -24,6 +24,7 @@ fn app_with_red() -> (PhotocraftApp, LayerId) {
 
 fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2]) {
     let mods = egui::Modifiers::NONE;
+    crate::canvas::testing::frame(app);
     tool_event(app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1. }, mods);
     tool_event(app, ToolEvent::Move { x: to[0], y: to[1], pressure: 1. }, mods);
     tool_event(app, ToolEvent::Up { x: to[0], y: to[1] }, mods);
@@ -84,19 +85,13 @@ fn escape_commits_the_frame_with_content_active_and_later_release_changes_nothin
     let mods = egui::Modifiers::NONE;
     tool_event(&mut app, ToolEvent::Down { x: 40., y: 40., pressure: 1. }, mods);
     tool_event(&mut app, ToolEvent::Move { x: 160., y: 140., pressure: 1. }, mods);
-    let ctx = egui::Context::default();
-    ctx.begin_pass(egui::RawInput {
-        events: vec![egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: mods }],
-        ..Default::default()
-    });
-    crate::shortcuts::handle(&mut app, &ctx);
-    ctx.end_pass().textures_delta.clear();
+    crate::canvas::testing::key(&mut app, egui::Key::Escape, mods);
     let frame = selected(&app).unwrap().id;
     let st = app.session.active().unwrap();
     assert_eq!(st.active_layer, Some(red));
     assert_eq!(st.doc.layer(frame).unwrap().children().unwrap()[0].id, red);
     assert_eq!(app.ui.frame_tool.target, Target::Content);
-    assert!(app.ui.frame_tool.drag.is_none());
+    assert!(!app.canvas_tools.frame.busy());
     let mut expected = before;
     expected.push("New Frame".into());
     assert_eq!(st.history.entries(), expected);
