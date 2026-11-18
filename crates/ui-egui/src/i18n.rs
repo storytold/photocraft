@@ -23,7 +23,7 @@
 //! 2. Add one row to [`LANGUAGES`].
 //!
 //! That is all: the Preferences dropdown and the system-locale match pick it up from the registry.
-//! A right-to-left language (Arabic, Hebrew, Persian, Urdu, see [`dir_for_code`]) also mirrors the
+//! A right-to-left language (Arabic, Hebrew, Persian, Urdu, see [`Lang::dir`]) also mirrors the
 //! window's chrome ([`crate::direction`]).
 //!
 //! # Looking strings up
@@ -33,11 +33,8 @@
 //! - [`trn`]: plural-aware (`{n}` is filled in). [`fmt`]: fill `{name}` placeholders after [`tr`];
 //!   translators may reorder placeholders freely.
 
-mod casing;
 mod system;
 
-#[cfg(test)]
-pub(crate) use system::with_decimal_separator;
 pub use system::{decimal_separator, system_lang};
 
 use std::cell::Cell;
@@ -59,6 +56,16 @@ static I18N: LazyLock<I18n> = LazyLock::new(|| {
     i18n
 });
 
+/// The same catalogs for the craft framework's components, which take their words from the
+/// framework's own craft-i18n through the `Host`.
+pub(crate) fn framework_i18n() -> &'static std::sync::Arc<craft::i18n::I18n> {
+    static FRAMEWORK: LazyLock<std::sync::Arc<craft::i18n::I18n>> = LazyLock::new(|| {
+        let offered: Vec<&str> = LANGUAGES.iter().map(|l| l.code).collect();
+        std::sync::Arc::new(craft::i18n::I18n::new(CRAFT_I18N, &offered).0)
+    });
+    &FRAMEWORK
+}
+
 /// One UI language PhotoCraft offers, when its catalogs are embedded: what the app needs beyond
 /// them. Its name and translations come from craft-i18n.
 pub struct LangInfo {
@@ -70,21 +77,7 @@ pub struct LangInfo {
 }
 
 /// A script's reading direction.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Dir {
-    Ltr,
-    Rtl,
-}
-
-/// Languages written right to left, by primary subtag: Arabic, Sorani Kurdish, Dhivehi, Persian,
-/// Hebrew, Pashto, Sindhi, Uyghur, Urdu, Yiddish.
-const RTL_LANGUAGES: [&str; 10] = ["ar", "ckb", "dv", "fa", "he", "ps", "sd", "ug", "ur", "yi"];
-
-/// The reading direction of a language code (`ar`, `fa-ir`, `he`; any case).
-pub fn dir_for_code(code: &str) -> Dir {
-    let primary = code.split(['-', '_']).next().unwrap_or("");
-    if RTL_LANGUAGES.iter().any(|l| l.eq_ignore_ascii_case(primary)) { Dir::Rtl } else { Dir::Ltr }
-}
+pub use craft::i18n::Direction as Dir;
 
 /// How many languages [`LANGUAGES`] lists.
 const LANGUAGE_COUNT: usize = 35;
@@ -133,7 +126,7 @@ pub static LANGUAGES: [LangInfo; LANGUAGE_COUNT] = [
     // Hindi; `hi`, `hi-IN` locales resolve here.
     LangInfo { code: "hi", complete_menus: false },
     // Arabic (Modern Standard); `ar-SA`, `ar-EG` and the other regional locales resolve here. The
-    // chrome mirrors right to left (`dir_for_code`), and egui lays each label out right to left.
+    // chrome mirrors right to left (`Lang::dir`), and egui lays each label out right to left.
     LangInfo { code: "ar", complete_menus: true },
     // Swedish; `sv-SE` and `sv-FI` locales resolve here.
     LangInfo { code: "sv", complete_menus: true },
@@ -145,10 +138,10 @@ pub static LANGUAGES: [LangInfo; LANGUAGE_COUNT] = [
     // Norwegian Bokmål; `nb-NO`, and the macrolanguage `no` and Nynorsk `nn` from POSIX locales,
     // resolve here (see `candidates`).
     LangInfo { code: "nb", complete_menus: true },
-    // Hebrew; `he-il` and `he_IL` resolve here. The chrome mirrors right to left (`dir_for_code`),
+    // Hebrew; `he-il` and `he_IL` resolve here. The chrome mirrors right to left (`Lang::dir`),
     // like Arabic. Its `two` plural form repeats `other`, as modern Hebrew software UI does.
     LangInfo { code: "he", complete_menus: true },
-    // Urdu; written right to left like Arabic (`dir_for_code`).
+    // Urdu; written right to left like Arabic (`Lang::dir`).
     LangInfo { code: "ur", complete_menus: true },
     // Romanian; `ro-RO` and `ro-MD` resolve here.
     LangInfo { code: "ro", complete_menus: true },
@@ -246,7 +239,7 @@ impl Lang {
 
     /// The language's reading direction.
     pub fn dir(self) -> Dir {
-        dir_for_code(self.code())
+        craft::i18n::direction(self.code())
     }
 
     /// Whether `translated`, the lookup's text for (`context`, `source`), comes from PhotoCraft's

@@ -25,12 +25,13 @@ usage: cargo xtask <command>
 
 commands:
   layers          enforce the crate dependency layering (docs/architecture.md §3)
+  egui-fork       fail unless Cargo.lock takes every egui package from the craft framework's egui fork
   panel-commands  fail on a shell click handler that changes the document or session directly instead of
                   dispatching a command id (allowlist: xtask/src/panel_commands.rs)
   wasm            cargo check --target wasm32-unknown-unknown for the wasm-safe crates (one call, plus
                   one per optional web feature)
   test            workspace tests (cargo nextest when installed, else cargo test), then doctests
-  ci              the CI gate: fmt --check, clippy -D warnings, layers, panel-commands, scorecard --check, tests
+  ci              the CI gate: fmt --check, egui-fork, clippy -D warnings, layers, panel-commands, scorecard --check, tests
                   (nextest --profile ci), panic_hunt, doctests and wasm, with --locked --features heif
                   (stops at first failure), then the i18n-report
   corpus [--all | --pngsuite | --psd | --psd-tools | --pixls | --atn | --photoshop | --gimp] [--local] [--update-manifest]
@@ -65,6 +66,7 @@ fn main() -> ExitCode {
     let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
     let result = match args.first().map(String::as_str) {
         Some("layers") => cmd_layers(),
+        Some("egui-fork") => cmd_egui_fork(),
         Some("panel-commands") => panel_commands::run(&root()),
         Some("wasm") => cmd_wasm(),
         Some("test") => cmd_test().and_then(|()| cmd_doctest()),
@@ -117,6 +119,16 @@ pub fn metadata() -> Result<serde_json::Value, String> {
         return Err(format!("cargo metadata failed:\n{}", String::from_utf8_lossy(&out.stderr)));
     }
     serde_json::from_slice(&out.stdout).map_err(|e| format!("cargo metadata: bad JSON: {e}"))
+}
+
+/// Two egui revisions in one build give two incompatible `Ui` types, so the workspace's egui
+/// `[patch]` must name the revision the craft framework is built with.
+fn cmd_egui_fork() -> Result<(), String> {
+    let path = root().join("Cargo.lock");
+    let lock = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    craft::egui_fork::check_lockfile(&lock)?;
+    println!("OK: every egui package comes from {} at {}.", craft::egui_fork::GIT, craft::egui_fork::REV);
+    Ok(())
 }
 
 fn cmd_layers() -> Result<(), String> {
@@ -275,6 +287,7 @@ fn cmd_ci() -> Result<(), String> {
                 run(c, "cargo fmt --all -- --check")
             }),
         ),
+        ("egui-fork", Box::new(cmd_egui_fork)),
         (
             "clippy",
             Box::new(|| {

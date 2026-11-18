@@ -1,34 +1,34 @@
 //! Auto-show hidden panels (#4096 rework): the pointer at the canvas edge brings back
 //! panels Tab or Shift+Tab hid, as an overlay over the canvas.
 //!
-//! The old implementation drew the native dock in an `egui::Area`; the new main has no
-//! `right_dock` anymore, so the dock peek is a second `DockArea` that renders only the
-//! dock column (no canvas) inside a foreground `Area` anchored at the canvas rect's end
-//! edge. The canvas itself never moves, so the image does not jump under the pointer.
+//! The dock peek is a second `DockArea` that renders only the dock column (no canvas)
+//! inside a foreground `Area` anchored at the canvas rect's end edge. The canvas itself
+//! never moves, so the image does not jump under the pointer. The hide state comes from
+//! the framework shell: Tab hides everything (the shell is body-only) and Shift+Tab hides
+//! the panels (`panels_hidden`); the frame's body closure records it for the peek, which
+//! draws after the shell pass.
 //!
 //! Trigger and hold, per frame, at the frame's dock branch:
-//! * Trigger: the preference is on, chrome is shown, the pointer is in the 18-point band
-//!   at the canvas edge, no button is down, and the point is not over a drawn scrollbar
-//!   bar or the ruler band — except the outermost 3 points, which always trigger, so the
-//!   edge itself is never dead.
+//! * Trigger: the preference is on, chrome is shown, no reveal is showing the panels, the
+//!   pointer is in the 18-point band at the canvas edge, no button is down, and the point
+//!   is not over a drawn scrollbar bar or the ruler band — except the outermost 3 points,
+//!   which always trigger, so the edge itself is never dead.
 //! * Hold: once active, the peek stays while the pointer is over the strip it drew
 //!   (2-point tolerance), a drag that started in the strip is still down, a popup opened
 //!   from it (the press that opened it went to the strip) is still open, the toolbar's tool
 //!   flyout is open, or keyboard focus is on a widget it drew. A popup another surface
 //!   opened (a canvas context menu) never holds it.
-//! * Qualification: only panels Tab hid (`hidden_by_tab`) or the dock Shift+Tab hid
-//!   (`dock_hidden_by_shift_tab`, a separate hide source) peek back. A panel hidden any
-//!   other way stays hidden.
+//! * Qualification: only panels Tab hid or the dock Shift+Tab hid peek back. A panel
+//!   hidden any other way stays hidden.
 
 use std::collections::HashSet;
 
-use craft_ui::docking::{Layout, Node, Side};
+use craft::behavior::dock::{DockEdge, Layout, Node};
 use egui::{Align2, Id, Order, Pos2, Rect, Vec2};
 
 use crate::PhotocraftApp;
-use crate::canvas::rulers::RULER;
-use crate::canvas::scrollbars::{bar_rects, last_drawn};
-use crate::panel_docking::show_column;
+use crate::panel_docking::{is_shown, show_column};
+use crate::panels::registry::TOOLBAR;
 
 /// What Auto-Show Hidden Panels is bringing back this frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -37,8 +37,37 @@ pub(crate) struct Peek {
     pub dock: bool,
 }
 
-/// The second `DockArea`'s id: distinct from the main layout's, so its hit rects and drag
-/// state never collide with the main layout's.
+/// How the shell hid the panels this frame: Tab hid everything, Shift+Tab hid the panels,
+/// or a reveal is showing them. Recorded by the frame's body closure, read by
+/// [`compute_peek`]; absent (a harness that draws no shell) means nothing is hidden.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct HideState {
+    /// Tab hid everything: the shell is body-only and no reveal is showing the slots.
+    pub tab: bool,
+    /// Shift+Tab hid the panels, keeping the tools.
+    pub shift: bool,
+    /// A reveal (Tab or edge) is showing the slots: the framework already brings them back,
+    /// so the peek stays out of the way.
+    pub revealed: bool,
+}
+
+/// The temp key for the [`HideState`] the shell pass recorded.
+fn hide_state_id() -> Id {
+    Id::unique("panel-peek-hide-state")
+}
+
+/// Records the shell's hide state for this frame's peek.
+pub(crate) fn record_hide_state(ctx: &egui::Context, hide: HideState) {
+    ctx.data_mut(|d| d.insert_temp(hide_state_id(), hide));
+}
+
+/// The shell's hide state for this frame, or none hidden.
+fn hide_state(ctx: &egui::Context) -> HideState {
+    ctx.data(|d| d.get_temp::<HideState>(hide_state_id())).unwrap_or_default()
+}
+
+/// The second `DockArea`'s id: distinct from the main layout's, so its drag state never
+/// collides with the main layout's.
 pub(crate) fn peek_area_id() -> Id {
     Id::unique("photocraft-panel-docking-peek")
 }
@@ -135,12 +164,39 @@ fn clear_focus_set(ctx: &egui::Context, id: Id) {
     });
 }
 
+/// The docked scrollbar's thickness in points: the framework's Docked look
+/// (`tokens.size.handle.sm`, 12 points), the width of the bar at the canvas edge.
+const BAR_THICKNESS: f32 = 12.0;
+
+/// The ruler band's width in points: the framework Rulers strip thickness (the icon size,
+/// 16 points), the band at the canvas's left edge while rulers show.
+const RULER_WIDTH: f32 = 16.0;
+
+/// The toolbar's width in points: the main dock's toolbar column is 60 pts wide, and the
+/// rail fits in it. The peeked toolbar gets the same width so it stays a vertical rail.
+const TOOLBAR_WIDTH: f32 = 60.0;
+
+/// The narrowest a dock column draws, in points: the native dock's minimum, kept for the
+/// peek's width when a column carries no width of its own.
+const DOCK_MIN_WIDTH: f32 = 250.0;
+
+/// How much of the window a dock may leave for the canvas, in points: the native dock's
+/// rule, kept for the peek's width clamp.
+const DOCK_LEAVES: f32 = 400.0;
+
+/// The dock width range for a window `window_width` wide: at least [`DOCK_MIN_WIDTH`],
+/// at most the window less [`DOCK_LEAVES`], and at least 520 points when the window allows.
+fn dock_width_range(window_width: f32) -> std::ops::RangeInclusive<f32> {
+    let max = (window_width - DOCK_LEAVES).max(520.0);
+    DOCK_MIN_WIDTH..=max
+}
+
 /// The end-side dock column of `layout`, if any: a dock node is the root or follows only
 /// same-side children of horizontal splits to its window edge.
 fn end_dock_column(layout: &Layout<String>) -> Option<Node<String>> {
     fn find(node: &Node<String>) -> Option<Node<String>> {
         match node {
-            Node::Dock { side, .. } if *side == Side::End => Some(node.clone()),
+            Node::Dock { side, .. } if *side == DockEdge::End => Some(node.clone()),
             Node::Split { first, second, .. } => find(first).or_else(|| find(second)),
             _ => None,
         }
@@ -149,27 +205,26 @@ fn end_dock_column(layout: &Layout<String>) -> Option<Node<String>> {
 }
 
 /// The peek layout: only the end-side dock column, no canvas, no floating windows, plus
-/// its width in points (the columns' widths, edge inwards). A custom workspace without an
-/// end-side dock falls back to the native dock's column; a layout with no dock column at
-/// all gives nothing to peek.
+/// its width in points (the columns' widths, edge inwards). A layout with no dock column
+/// at all gives nothing to peek. A column without a width of its own counts as the
+/// minimum dock width.
 pub(crate) fn peek_layout(app: &PhotocraftApp) -> Option<(Layout<String>, f32)> {
-    let base = match &app.ui.docking {
-        Some(workspace) => workspace.layout.clone(),
-        None => crate::panel_docking::legacy(app),
-    };
-    let dock = end_dock_column(&base).or_else(|| end_dock_column(&crate::panel_docking::legacy(app)))?;
+    let base = app.ui.docking.layout.clone();
+    let dock = end_dock_column(&base)?;
     let width = match &dock {
-        Node::Dock { columns, .. } => columns.iter().map(|c| if c.iconic { c.iconic_width.unwrap_or(c.width) } else { c.width }).sum(),
+        Node::Dock { columns, .. } => {
+            columns.iter().map(|c| if c.iconic { c.iconic_width.or(c.width).unwrap_or(DOCK_MIN_WIDTH) } else { c.width.unwrap_or(DOCK_MIN_WIDTH) }).sum()
+        }
         _ => return None,
     };
-    Some((Layout { root: Some(dock), floating: Vec::new() }, width))
+    Some((Layout::new(Some(dock), Vec::new()), width))
 }
 
 /// The edge trigger and hold state for this frame. Call after the dock branch drew, so
-/// `last_canvas_rect` and the scrollbar flags are this frame's. A strip recorded last
-/// frame is what keeps an active peek alive: it only exists while the peek drew, so a
-/// stale strip can never reopen a panel on its own.
-pub(crate) fn compute_peek(app: &PhotocraftApp, ctx: &egui::Context, chrome: bool, tabbed_in: bool) -> Peek {
+/// `last_canvas_rect` is this frame's. A strip recorded last frame is what keeps an active
+/// peek alive: it only exists while the peek drew, so a stale strip can never reopen a
+/// panel on its own. The hide state comes from the shell pass ([`record_hide_state`]).
+pub(crate) fn compute_peek(app: &PhotocraftApp, ctx: &egui::Context, chrome: bool) -> Peek {
     let mut peek = Peek::default();
     let clear = |ctx: &egui::Context| {
         clear_panel_strip(ctx, toolbar_strip_id());
@@ -181,7 +236,8 @@ pub(crate) fn compute_peek(app: &PhotocraftApp, ctx: &egui::Context, chrome: boo
             d.remove::<bool>(dock_press_id());
         });
     };
-    if !app.session.prefs().workspace.auto_show_hidden_panels || !chrome || tabbed_in {
+    let hide = hide_state(ctx);
+    if !app.session.prefs().workspace.auto_show_hidden_panels || !chrome || hide.revealed {
         clear(ctx);
         return peek;
     }
@@ -200,21 +256,21 @@ pub(crate) fn compute_peek(app: &PhotocraftApp, ctx: &egui::Context, chrome: boo
     // peeked panel does not dismiss it mid-click.
     let button_down = ctx.input(|i| i.pointer.any_down());
     let press_origin = ctx.input(|i| i.pointer.press_origin());
-    // Only bars actually drawn this frame block the edge: the scrollbar flags come from the
-    // canvas's own draw, never from assuming both bars are shown.
-    let (h_drawn, v_drawn) = last_drawn(ctx);
-    let (_, v_bar) = bar_rects(canvas, h_drawn, v_drawn);
-    let over_vbar = v_bar.is_some_and(|r| r.contains(p));
-    let over_ruler = app.ui.extras.rulers && p.x < canvas.left() + RULER;
+    // The canvas's bars always draw while a document exists (even when it fits), so the
+    // vertical bar is the right-edge strip of the canvas, stopping above the horizontal
+    // bar; the ruler band is the left-edge strip while rulers show.
+    let v_bar = Rect::from_min_max(Pos2::new(canvas.right() - BAR_THICKNESS, canvas.top()), Pos2::new(canvas.right(), canvas.bottom() - BAR_THICKNESS));
+    let over_vbar = v_bar.contains(p);
+    let over_ruler = app.ui.extras.rulers && p.x < canvas.left() + RULER_WIDTH;
     // Only panels Tab hid come back on hover, plus the dock Shift+Tab hid (its own hide
-    // source): a panel hidden any other way stays closed, as in Photoshop.
-    let tab_hidden = app.ui.panels.hidden_by_tab;
-    let toolbar_tab_hidden = tab_hidden.is_some_and(|[toolbar, _, _]| toolbar);
-    let dock_tab_hidden = tab_hidden.is_some_and(|[_, _, dock]| dock);
-    let dock_shift_hidden = app.ui.panels.dock_hidden_by_shift_tab;
-    // egui's memory of the open popup, kept from the frame that drew it: the peek's own
-    // popups draw after this, so this frame's `any_popup_open` would not see them yet.
-    let popup_open = egui::Popup::is_any_open(ctx);
+    // source): a panel hidden any other way stays closed. The toolbar peeks only when it
+    // is in the layout (a closed toolbar is not Tab-hidden); the dock peeks only when a
+    // dock column exists to draw.
+    // A popup the peek opened holds it: an egui popup, or a framework overlay popup
+    // (a Select's listbox, a menu) — the framework's own layers, which egui's Popup
+    // does not see. Without the second half a Select opened from the peek would
+    // close with the peek the moment the pointer left the strip.
+    let popup_open = egui::Popup::is_any_open(ctx) || craft::ui::contract::overlay::any_open(ctx, craft::ui::contract::overlay::OpenFilter::Keys);
     note_press(ctx, toolbar_strip_id(), toolbar_press_id(), popup_open);
     note_press(ctx, dock_strip_id(), dock_press_id(), popup_open);
     let focused = ctx.memory(|m| m.focused());
@@ -228,7 +284,7 @@ pub(crate) fn compute_peek(app: &PhotocraftApp, ctx: &egui::Context, chrome: boo
     };
     const ZONE: f32 = 18.0;
     const EDGE_ALWAYS: f32 = 3.0;
-    if !app.ui.panels.toolbar && toolbar_tab_hidden {
+    if is_shown(app, TOOLBAR) && hide.tab {
         let edge = if rtl { canvas.right() } else { canvas.left() };
         let blocked = if rtl { over_vbar } else { over_ruler };
         let dist = (p.x - edge).abs();
@@ -238,7 +294,7 @@ pub(crate) fn compute_peek(app: &PhotocraftApp, ctx: &egui::Context, chrome: boo
         let flyout = super::toolbar::tool_flyout_open(ctx) && strip(ctx, toolbar_strip_id()).is_some();
         peek.toolbar = trigger || flyout || hold(ctx, toolbar_strip_id(), toolbar_focus_id(), toolbar_press_id());
     }
-    if !app.ui.panels.dock && (dock_tab_hidden || dock_shift_hidden) {
+    if hide.tab || hide.shift {
         let edge = if rtl { canvas.left() } else { canvas.right() };
         let blocked = if rtl { over_ruler } else { over_vbar };
         let dist = (p.x - edge).abs();
@@ -253,8 +309,10 @@ pub(crate) fn compute_peek(app: &PhotocraftApp, ctx: &egui::Context, chrome: boo
         clear_panel_strip(ctx, toolbar_strip_id());
         clear_focus_set(ctx, toolbar_focus_id());
         ctx.data_mut(|d| d.remove::<bool>(toolbar_press_id()));
-        // A flyout the ended peek drew would come back with the next peek.
-        if !app.ui.panels.toolbar {
+        // A flyout the ended peek drew would come back with the next peek: forget it while
+        // the toolbar is still hidden. When the panels are shown again the flyout belongs
+        // to the real toolbar, so it stays.
+        if hide.tab {
             super::toolbar::close_tool_flyout(ctx);
         }
     }
@@ -283,7 +341,16 @@ pub(crate) fn draw_peek(app: &mut PhotocraftApp, ctx: &egui::Context, peek: &Pee
         let (pos, pivot) =
             if rtl { (Pos2::new(canvas.right(), canvas.top()), Align2::RIGHT_TOP) } else { (Pos2::new(canvas.left(), canvas.top()), Align2::LEFT_TOP) };
         let resp = egui::Area::new(Id::unique("toolbar-peek")).order(egui::Order::Foreground).fixed_pos(pos).pivot(pivot).show(ctx, |ui| {
-            super::toolbar(app, ui);
+            // The rail's natural height exceeds the canvas, and the Area grows to
+            // fit it; a scroll area holds the rail to the canvas height instead,
+            // the way the main dock's column does. The rail flows to fill the width
+            // it is given, so it also gets the toolbar's column width to stay a
+            // vertical rail.
+            egui::ScrollArea::vertical().max_height(canvas.height()).show(ui, |ui| {
+                ui.allocate_ui(Vec2::new(TOOLBAR_WIDTH, canvas.height()), |ui| {
+                    super::toolbar(app, ui);
+                });
+            });
         });
         record_panel_strip(ctx, toolbar_strip_id(), resp.response.rect);
     }
@@ -292,7 +359,7 @@ pub(crate) fn draw_peek(app: &mut PhotocraftApp, ctx: &egui::Context, peek: &Pee
             clear_panel_strip(ctx, dock_strip_id());
             return;
         };
-        let range = super::dock::dock_width_range(ctx.content_rect().width());
+        let range = dock_width_range(ctx.content_rect().width());
         let width = col_width.clamp(*range.start(), *range.end()).min(canvas.width());
         if width <= 0.0 {
             clear_panel_strip(ctx, dock_strip_id());

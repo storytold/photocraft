@@ -1,12 +1,14 @@
 //! Frame-level tests for the #4096 rework: the peek through `PhotocraftApp`, with the
 //! canvas drawn first (as `ui_body` does) and the peek hook after it. Presence is read from
 //! the strip the peek recorded — `compute_peek` clears a strip the frame its peek ends,
-//! so a strip is present exactly when the peek drew — and geometry from the peek
-//! `DockArea`'s probe rects.
+//! so a strip is present exactly when the peek drew — and geometry from the dock's probe
+//! rects. The hide state is set directly ([`set_hide`]): the shell owns the Tab and
+//! Shift+Tab toggles, and the peek only reads the state the shell pass recorded.
 
-use egui::{Modifiers, PointerButton, Pos2, Rect, pos2, vec2};
+use craft::behavior::dock::Action;
+use egui::{Modifiers, PointerButton, Pos2, Rect, accesskit::Role, pos2, vec2};
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use serde_json::json;
 
 use super::*;
@@ -14,8 +16,8 @@ use crate::PhotocraftApp;
 use crate::panel_docking::probe;
 
 /// The canvas plus the peek hook, in the order `ui_body` runs them: the canvas sets
-/// `last_canvas_rect` and the scrollbar flags, then the peek computes and draws.
-fn harness(doc_width: f32, doc_height: f32) -> Harness<'static, PhotocraftApp> {
+/// `last_canvas_rect`, then the peek computes and draws.
+fn harness(doc_width: f32, doc_height: f32) -> Harness<'static, Box<PhotocraftApp>> {
     build(doc_width, doc_height, false)
 }
 
@@ -23,16 +25,16 @@ fn harness(doc_width: f32, doc_height: f32) -> Harness<'static, PhotocraftApp> {
 const CANVAS_MENU: Rect = Rect { min: Pos2 { x: 60.0, y: 300.0 }, max: Pos2 { x: 140.0, y: 380.0 } };
 
 /// [`harness`] plus a context menu on the canvas at [`CANVAS_MENU`], drawn with it.
-fn harness_with_canvas_menu(doc_width: f32, doc_height: f32) -> Harness<'static, PhotocraftApp> {
+fn harness_with_canvas_menu(doc_width: f32, doc_height: f32) -> Harness<'static, Box<PhotocraftApp>> {
     build(doc_width, doc_height, true)
 }
 
-fn build(doc_width: f32, doc_height: f32, canvas_menu: bool) -> Harness<'static, PhotocraftApp> {
+fn build(doc_width: f32, doc_height: f32, canvas_menu: bool) -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": doc_width as i64, "height": doc_height as i64})).unwrap();
     app.sync_views();
     let mut h = Harness::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
-        move |ui, app: &mut PhotocraftApp| {
+        move |ui: &mut egui::Ui, app: &mut Box<PhotocraftApp>| {
             let ctx = ui.ctx().clone();
             if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
@@ -45,60 +47,75 @@ fn build(doc_width: f32, doc_height: f32, canvas_menu: bool) -> Harness<'static,
                     });
                 }
             });
-            let peek = compute_peek(app, ui.ctx(), true, false);
+            let peek = compute_peek(app, ui.ctx(), true);
             if peek.toolbar || peek.dock {
                 draw_peek(app, ui.ctx(), &peek);
             }
         },
         app,
     );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::default());
+    PhotocraftApp::setup_context(&h.ctx, Default::default());
     h.run_steps(4);
     h
 }
 
-fn canvas_rect(h: &Harness<'static, PhotocraftApp>) -> Rect {
+fn canvas_rect(h: &Harness<'static, Box<PhotocraftApp>>) -> Rect {
     let rect = h.state().last_canvas_rect;
     assert!(rect.is_positive(), "the canvas drew: {rect:?}");
     rect
 }
 
-fn dock_strip(h: &Harness<'static, PhotocraftApp>) -> Option<Rect> {
+fn dock_strip(h: &Harness<'static, Box<PhotocraftApp>>) -> Option<Rect> {
     h.ctx.data(|d| d.get_temp::<Option<Rect>>(dock_strip_id())).flatten()
 }
 
-fn toolbar_strip(h: &Harness<'static, PhotocraftApp>) -> Option<Rect> {
+fn toolbar_strip(h: &Harness<'static, Box<PhotocraftApp>>) -> Option<Rect> {
     h.ctx.data(|d| d.get_temp::<Option<Rect>>(toolbar_strip_id())).flatten()
 }
 
-fn hover(h: &mut Harness<'static, PhotocraftApp>, pos: Pos2) {
+fn hover(h: &mut Harness<'static, Box<PhotocraftApp>>, pos: Pos2) {
     h.event(egui::Event::PointerMoved(pos));
     h.run_steps(1);
 }
 
-fn press(h: &mut Harness<'static, PhotocraftApp>, pos: Pos2) {
+fn press(h: &mut Harness<'static, Box<PhotocraftApp>>, pos: Pos2) {
     h.event(egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
     h.run_steps(1);
 }
 
-fn release(h: &mut Harness<'static, PhotocraftApp>, pos: Pos2) {
+fn release(h: &mut Harness<'static, Box<PhotocraftApp>>, pos: Pos2) {
     h.event(egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
     h.run_steps(1);
 }
 
-/// Window commands (`window.togglePanels`, `window.toggle.dock`) dispatch through the
-/// menus, not the engine: the dock tests' path, not `app.run`.
-fn run_window(h: &mut Harness<'static, PhotocraftApp>, id: &str) {
-    let ctx = h.ctx.clone();
-    crate::menus::invoke(h.state_mut(), &ctx, id, json!({})).unwrap();
+/// Sets the hide state the shell pass would have recorded: Tab hid everything, Shift+Tab
+/// hid the panels, or nothing is hidden. The peek reads it on the next frame.
+fn set_hide(h: &mut Harness<'static, Box<PhotocraftApp>>, hide: HideState) {
+    record_hide_state(&h.ctx, hide);
+    h.run_steps(1);
+}
+
+/// Tab hid everything.
+fn hide_tab(h: &mut Harness<'static, Box<PhotocraftApp>>) {
+    set_hide(h, HideState { tab: true, shift: false, revealed: false });
+}
+
+/// Shift+Tab hid the panels, keeping the tools.
+fn hide_shift(h: &mut Harness<'static, Box<PhotocraftApp>>) {
+    set_hide(h, HideState { tab: false, shift: true, revealed: false });
+}
+
+/// Nothing is hidden: the panels show.
+fn hide_none(h: &mut Harness<'static, Box<PhotocraftApp>>) {
+    set_hide(h, HideState::default());
 }
 
 /// The dock column rect the peek should draw: the peek layout's column width, clamped to
 /// the dock width range and the canvas, anchored at the canvas rect's end edge.
-fn expected_dock_rect(h: &Harness<'static, PhotocraftApp>, rtl: bool) -> Rect {
+fn expected_dock_rect(h: &Harness<'static, Box<PhotocraftApp>>, rtl: bool) -> Rect {
     let canvas = canvas_rect(h);
     let (_, col_width) = peek_layout(h.state()).expect("a dock column to peek");
-    let range = crate::panels::dock_width_range(h.ctx.content_rect().width());
+    let range = dock_width_range(h.ctx.content_rect().width());
     let width = col_width.clamp(*range.start(), *range.end()).min(canvas.width());
     if rtl {
         Rect::from_min_max(pos2(canvas.left(), canvas.top()), pos2(canvas.left() + width, canvas.bottom()))
@@ -114,8 +131,7 @@ fn assert_close(actual: f32, expected: f32, what: &str) {
 #[test]
 fn edge_trigger_draws_dock_column_at_canvas_edge_without_moving_canvas() {
     let mut h = harness(400.0, 300.0);
-    run_window(&mut h, "window.toggle.dock");
-    h.run_steps(1);
+    hide_shift(&mut h);
     let before = canvas_rect(&h);
     assert!(dock_strip(&h).is_none(), "nothing peeks before the pointer reaches the edge");
 
@@ -129,10 +145,12 @@ fn edge_trigger_draws_dock_column_at_canvas_edge_without_moving_canvas() {
     assert_close(strip.right(), expected.right(), "peek right");
     assert_close(strip.top(), expected.top(), "peek top");
     assert_close(strip.bottom(), expected.bottom(), "peek bottom");
-    let group = probe::peek_group_rect(h.state(), &h.ctx, "layers").expect("the peeked layers group drew");
-    // The column is anchored at the canvas edge; the layers group is its bottom group, so
-    // it shares the column's sides and bottom and starts below the groups above it.
-    assert_close(group.left(), expected.left(), "group left");
+    let group = probe::group_rect(&h, "layers").expect("the peeked layers group drew");
+    // The column is anchored at the canvas edge; the layers group is the bottom group of
+    // the dock's expanded column, so it shares the column's right and bottom and starts
+    // below the groups above it. The dock has a second column beside the canvas (the
+    // iconic column), so the group's left sits inside the dock, past that column.
+    assert!(group.left() > expected.left(), "group left inside the dock: {group:?} in {expected:?}");
     assert_close(group.right(), expected.right(), "group right");
     assert_close(group.bottom(), expected.bottom(), "group bottom");
     assert!(group.top() > expected.top() && group.top() < expected.bottom(), "group stacked inside the column: {group:?} in {expected:?}");
@@ -149,12 +167,11 @@ fn edge_trigger_draws_dock_column_at_canvas_edge_without_moving_canvas() {
 fn scrollbar_and_ruler_rules() {
     // This app's bars always draw while a document exists (even when it fits), so the
     // vertical bar is present at the right edge here; the horizontal bar does not touch it.
+    // The peek computes the bar rect from the canvas itself, so no scrollbar flags are
+    // asserted: the geometry below is the bar rule.
     let mut h = harness(1000.0, 1500.0);
     let canvas = canvas_rect(&h);
-    let (h_drawn, v_drawn) = crate::canvas::scrollbars::last_drawn(&h.ctx);
-    assert!(h_drawn && v_drawn, "both bars draw: h={h_drawn} v={v_drawn}");
-    run_window(&mut h, "window.toggle.dock");
-    h.run_steps(1);
+    hide_shift(&mut h);
 
     // The outermost points always trigger, even over the bar.
     hover(&mut h, pos2(canvas.right() - 2.0, canvas.center().y));
@@ -174,8 +191,7 @@ fn scrollbar_and_ruler_rules() {
     // Rulers on: the left band blocks the toolbar edge the same way.
     h.state_mut().ui.extras.rulers = true;
     h.run_steps(1);
-    run_window(&mut h, "window.togglePanels");
-    h.run_steps(1);
+    hide_tab(&mut h);
     let canvas = canvas_rect(&h);
     hover(&mut h, pos2(canvas.left() + 2.0, canvas.center().y));
     assert!(toolbar_strip(&h).is_some(), "left+2 triggers over the ruler band");
@@ -194,53 +210,54 @@ fn shift_tab_and_tab_hide_sources_peek_and_clear_distinctly() {
     let edge = pos2(canvas.right() - 2.0, canvas.center().y);
 
     // Tab hides: the dock peeks.
-    run_window(&mut h, "window.togglePanels");
-    h.run_steps(1);
+    hide_tab(&mut h);
     hover(&mut h, edge);
     assert!(dock_strip(&h).is_some(), "Tab-hidden dock peeks");
     hover(&mut h, canvas.center());
 
     // Tab shows again, Shift+Tab hides: the dock still peeks (its own hide source).
-    run_window(&mut h, "window.togglePanels");
-    run_window(&mut h, "window.toggle.dock");
-    h.run_steps(1);
-    assert!(h.state().ui.panels.dock_hidden_by_shift_tab, "Shift+Tab records its hide source");
+    hide_none(&mut h);
+    hover(&mut h, edge);
+    assert!(dock_strip(&h).is_none(), "a shown dock does not peek");
+    hide_shift(&mut h);
     hover(&mut h, edge);
     assert!(dock_strip(&h).is_some(), "Shift+Tab-hidden dock peeks");
     hover(&mut h, canvas.center());
 
-    // Shift+Tab shows again: no peek, and the flag cleared.
-    run_window(&mut h, "window.toggle.dock");
-    h.run_steps(1);
-    assert!(!h.state().ui.panels.dock_hidden_by_shift_tab, "showing clears the Shift+Tab flag");
+    // Both hide sources at once: the dock still peeks.
+    set_hide(&mut h, HideState { tab: true, shift: true, revealed: false });
+    hover(&mut h, edge);
+    assert!(dock_strip(&h).is_some(), "Tab- and Shift+Tab-hidden dock peeks");
+    hover(&mut h, canvas.center());
+
+    // Shift+Tab shows again: no peek.
+    hide_none(&mut h);
     hover(&mut h, edge);
     assert!(dock_strip(&h).is_none(), "a shown dock does not peek");
 
-    // A dock hidden with neither source (direct state, as a workspace preset leaves it)
-    // does not peek: only Tab and Shift+Tab hides come back on hover.
-    h.state_mut().ui.panels.dock = false;
-    h.state_mut().ui.panels.hidden_by_tab = None;
-    h.state_mut().ui.panels.dock_hidden_by_shift_tab = false;
-    h.run_steps(1);
+    // A dock closed any other way (its panels closed, no dock column left) does not peek,
+    // even while Tab hides the rest: there is nothing to bring back.
+    close_dock_column(&mut h);
+    assert!(peek_layout(h.state()).is_none(), "the dock column is gone");
+    hide_tab(&mut h);
     hover(&mut h, edge);
-    assert!(dock_strip(&h).is_none(), "a dock hidden by neither Tab nor Shift+Tab does not peek");
+    assert!(dock_strip(&h).is_none(), "a closed dock does not peek");
+}
 
-    // Tab-hide, Shift+Tab (shows the dock), Tab-hide again: the dock peeks, because the
-    // second Tab-hide is the hide source again.
-    h.state_mut().ui.panels.dock = true;
-    run_window(&mut h, "window.togglePanels");
-    run_window(&mut h, "window.toggle.dock");
-    run_window(&mut h, "window.togglePanels");
+/// Closes every panel in the end dock column, so there is no dock column to peek.
+fn close_dock_column(h: &mut Harness<'static, Box<PhotocraftApp>>) {
+    let (layout, _) = peek_layout(h.state()).expect("a dock column to close");
+    let panels: Vec<String> = layout.panels().into_iter().cloned().collect();
+    for panel in panels {
+        let _ = crate::panel_docking::apply(h.state_mut(), vec![Action::close(panel)]);
+    }
     h.run_steps(1);
-    hover(&mut h, edge);
-    assert!(dock_strip(&h).is_some(), "Tab-hide after Shift+Tab peeks");
 }
 
 #[test]
 fn toolbar_peek_strip_anchors_at_canvas_start_edge() {
     let mut h = harness(400.0, 300.0);
-    run_window(&mut h, "window.togglePanels");
-    h.run_steps(1);
+    hide_tab(&mut h);
     let canvas = canvas_rect(&h);
     hover(&mut h, pos2(canvas.left() + 2.0, canvas.center().y));
     let strip = toolbar_strip(&h).expect("the edge hover peeks the toolbar");
@@ -253,8 +270,7 @@ fn toolbar_peek_strip_anchors_at_canvas_start_edge() {
 #[test]
 fn peek_holds_while_pointer_drag_or_strip() {
     let mut h = harness(400.0, 300.0);
-    run_window(&mut h, "window.toggle.dock");
-    h.run_steps(1);
+    hide_shift(&mut h);
     let canvas = canvas_rect(&h);
     let edge = pos2(canvas.right() - 2.0, canvas.center().y);
 
@@ -272,7 +288,17 @@ fn peek_holds_while_pointer_drag_or_strip() {
     assert!(dock_strip(&h).is_some(), "the peek holds over its own strip");
 
     // And while a drag started in the strip is still down, even over the canvas.
-    press(&mut h, strip.center());
+    // Press on a layer row: a row press selects (no popup), so the drag hold is
+    // isolated from the popup hold. The strip centre lands on a Properties
+    // dropdown, which opens a popup that would hold the peek past the release.
+    let layers = probe::group_rect(&h, "layers").expect("the peeked layers group drew");
+    press(&mut h, layers.center());
+    // The press may focus a widget in the peek; the focus hold is a separate rule
+    // (tested below), so surrender it here to isolate the drag hold.
+    if let Some(focused) = h.ctx.memory(|m| m.focused()) {
+        h.ctx.memory_mut(|m| m.surrender_focus(focused));
+    }
+    h.run_steps(1);
     hover(&mut h, canvas.center());
     assert!(dock_strip(&h).is_some(), "a drag started in the peek holds it");
     release(&mut h, canvas.center());
@@ -283,8 +309,7 @@ fn peek_holds_while_pointer_drag_or_strip() {
 fn rtl_peek_anchors_at_canvas_start_edge() {
     let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
     let mut h = harness(400.0, 300.0);
-    run_window(&mut h, "window.toggle.dock");
-    h.run_steps(1);
+    hide_shift(&mut h);
     let canvas = canvas_rect(&h);
     hover(&mut h, pos2(canvas.left() + 2.0, canvas.center().y));
     let strip = dock_strip(&h).expect("the RTL edge hover peeks the dock");
@@ -295,7 +320,7 @@ fn rtl_peek_anchors_at_canvas_start_edge() {
     assert_close(strip.bottom(), expected.bottom(), "RTL peek bottom");
 }
 
-fn secondary_click(h: &mut Harness<'static, PhotocraftApp>, pos: Pos2) {
+fn secondary_click(h: &mut Harness<'static, Box<PhotocraftApp>>, pos: Pos2) {
     h.event(egui::Event::PointerMoved(pos));
     h.event(egui::Event::PointerButton { pos, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
     h.run_steps(1);
@@ -303,16 +328,15 @@ fn secondary_click(h: &mut Harness<'static, PhotocraftApp>, pos: Pos2) {
     h.run_steps(1);
 }
 
-fn click(h: &mut Harness<'static, PhotocraftApp>, pos: Pos2) {
+fn click(h: &mut Harness<'static, Box<PhotocraftApp>>, pos: Pos2) {
     hover(h, pos);
     press(h, pos);
     release(h, pos);
 }
 
 /// The dock peeked from its edge and settled, so its widgets are where they are drawn.
-fn peek_dock(h: &mut Harness<'static, PhotocraftApp>) -> Rect {
-    run_window(h, "window.toggle.dock");
-    h.run_steps(1);
+fn peek_dock(h: &mut Harness<'static, Box<PhotocraftApp>>) -> Rect {
+    hide_shift(h);
     let canvas = canvas_rect(h);
     hover(h, pos2(canvas.right() - 2.0, canvas.center().y));
     h.run_steps(3);
@@ -320,16 +344,22 @@ fn peek_dock(h: &mut Harness<'static, PhotocraftApp>) -> Rect {
 }
 
 /// A text field the peeked dock drew, inside its strip.
-fn text_field_in(h: &Harness<'static, PhotocraftApp>, strip: Rect) -> Rect {
+fn text_field_in(h: &Harness<'static, Box<PhotocraftApp>>, strip: Rect) -> Rect {
     h.query_all_by_role(egui::accesskit::Role::TextInput).map(|n| n.rect()).find(|r| strip.contains(r.center())).expect("a text field in the peeked dock")
 }
 
 /// The dock peeked again from its edge (it is already hidden).
-fn peek_dock_again(h: &mut Harness<'static, PhotocraftApp>) {
+fn peek_dock_again(h: &mut Harness<'static, Box<PhotocraftApp>>) {
     let canvas = canvas_rect(h);
     hover(h, canvas.center());
     hover(h, pos2(canvas.right() - 2.0, canvas.center().y));
     h.run_steps(3);
+}
+
+/// Any popup is open: an egui popup, or a framework overlay popup (a Select's
+/// listbox, a menu) — the peek's popup hold counts both.
+fn any_popup_open(ctx: &egui::Context) -> bool {
+    egui::Popup::is_any_open(ctx) || craft::ui::contract::overlay::any_open(ctx, craft::ui::contract::overlay::OpenFilter::Keys)
 }
 
 #[test]
@@ -337,14 +367,19 @@ fn a_popup_opened_from_the_peek_holds_it_until_it_closes() {
     let mut h = harness(400.0, 300.0);
     let strip = peek_dock(&mut h);
     let canvas = canvas_rect(&h);
-    // The Layers panel's filter kind dropdown, in the peeked dock.
-    let combo = h.get_by_label("Kind").rect();
+    // The Layers panel's filter-type select, in the peeked dock: the framework panel
+    // filters by kind with toggle buttons, so the dropdown is the filter-type select.
+    let combo = h.get_by_label("Filter type").rect();
     assert!(strip.contains(combo.center()), "the dropdown {combo:?} is in the peek {strip:?}");
     click(&mut h, combo.center());
     h.run_steps(1);
-    assert!(egui::Popup::is_any_open(&h.ctx), "the dropdown opened");
-    // The click focused the dropdown too; without that focus only the popup holds the peek.
-    h.ctx.memory_mut(|m| m.stop_text_input());
+    assert!(any_popup_open(&h.ctx), "the dropdown opened");
+    // The click focused the select too; surrender that focus so only the popup holds
+    // the peek.
+    if let Some(focused) = h.ctx.memory(|m| m.focused()) {
+        h.ctx.memory_mut(|m| m.surrender_focus(focused));
+    }
+    h.run_steps(1);
 
     // Away from the strip and the list: the popup the peek opened keeps it.
     let away = pos2(canvas.left() + 40.0, canvas.center().y);
@@ -355,7 +390,7 @@ fn a_popup_opened_from_the_peek_holds_it_until_it_closes() {
     // A press outside closes the popup, and with it the peek.
     click(&mut h, away);
     h.run_steps(2);
-    assert!(!egui::Popup::is_any_open(&h.ctx), "the press outside closed the dropdown");
+    assert!(!any_popup_open(&h.ctx), "the press outside closed the dropdown");
     assert!(dock_strip(&h).is_none(), "the peek ends with its popup");
 }
 
@@ -404,14 +439,13 @@ fn a_widget_focused_in_the_peek_holds_it_until_focus_leaves() {
 #[test]
 fn the_tool_flyout_holds_the_toolbar_peek() {
     let mut h = harness(400.0, 300.0);
-    run_window(&mut h, "window.togglePanels");
-    h.run_steps(1);
+    hide_tab(&mut h);
     let canvas = canvas_rect(&h);
     hover(&mut h, pos2(canvas.left() + 2.0, canvas.center().y));
     h.run_steps(3);
     let strip = toolbar_strip(&h).expect("the edge hover peeks the toolbar");
     // The first tool button with a flyout.
-    let index = crate::panels::TOOL_SECTIONS.iter().flat_map(|section| section.iter()).position(|slot| slot.len() > 1).expect("a slot with a flyout");
+    let index = crate::panels::toolbar::TOOL_SECTIONS.iter().flat_map(|section| section.iter()).position(|slot| slot.len() > 1).expect("a slot with a flyout");
     let bx = if crate::theme::Tokens::get(&h.ctx).pro { 30.0 } else { 36.0 };
     let mut buttons: Vec<Rect> = h.ctx.viewport(|v| {
         v.prev_pass
@@ -428,11 +462,12 @@ fn the_tool_flyout_holds_the_toolbar_peek() {
     h.run_steps(1);
     assert!(crate::panels::toolbar::tool_flyout_open(&h.ctx), "the flyout opened");
 
-    // Over the flyout, beside the strip: the toolbar stays.
-    let key = egui::Id::unique(("tool-slot", index));
-    let menu = h.ctx.memory(|m| m.area_rect(key.with("flyout"))).expect("the flyout drew");
-    assert!(!strip.expand(2.0).contains(menu.center()), "the flyout lies outside the strip");
-    hover(&mut h, menu.center());
+    // Over the flyout, beside the strip: the toolbar stays. The flyout opens on the
+    // canvas side of the toolbar at the button's row, so just past the strip's edge at
+    // that height is inside it.
+    let flyout_point = pos2(strip.right() + 30.0, button.center().y);
+    assert!(!strip.expand(2.0).contains(flyout_point), "the flyout point lies outside the strip");
+    hover(&mut h, flyout_point);
     h.run_steps(1);
     assert!(toolbar_strip(&h).is_some(), "the open flyout holds the toolbar peek");
 
@@ -446,8 +481,7 @@ fn the_tool_flyout_holds_the_toolbar_peek() {
 #[test]
 fn the_toolbar_peek_fits_the_canvas_rect() {
     let mut h = harness(400.0, 300.0);
-    run_window(&mut h, "window.togglePanels");
-    h.run_steps(1);
+    hide_tab(&mut h);
     let canvas = canvas_rect(&h);
     hover(&mut h, pos2(canvas.left() + 2.0, canvas.center().y));
     h.run_steps(3);
@@ -457,21 +491,29 @@ fn the_toolbar_peek_fits_the_canvas_rect() {
     assert!(strip.width() < 120.0, "as wide as the toolbar: {strip:?}");
 }
 
+/// The tab of `panel` in the peeked dock: the tab button carrying the panel's title, in
+/// the tab strip at the top of the panel's group. Tabs are buttons; the framework's tab
+/// role may also read as a tab, so both are tried.
+fn tab_rect(h: &Harness<'static, Box<PhotocraftApp>>, panel: &str) -> Rect {
+    let group = probe::group_rect(h, panel).expect("the peeked panel's group");
+    let title = crate::panels::registry::entry(panel).map(|entry| (entry.label)()).expect("the panel's title");
+    let by_role = |role: Role| {
+        h.query_all_by_role(role)
+            .find(|n| n.accesskit_node().label().is_some_and(|label| label == title) && n.rect().top() >= group.top() && n.rect().top() < group.top() + 40.0)
+            .map(|n| n.rect())
+    };
+    by_role(Role::Button).or_else(|| by_role(Role::Tab)).unwrap_or_else(|| panic!("the peeked {panel} tab"))
+}
+
 #[test]
 fn a_tab_dragged_in_the_peek_does_not_rearrange_the_layout() {
     let mut h = harness(400.0, 300.0);
     peek_dock(&mut h);
-    let before = h.state().ui.docking.clone().map(|w| w.layout);
+    let before = h.state().ui.docking.layout.clone();
     // The column alone cannot say where a drop would land in the full layout, so a tab
     // dragged out of the peek neither floats nor moves.
-    let tab = |h: &Harness<'static, PhotocraftApp>, panel: &str| {
-        craft_ui::docking::DockArea::<String>::hit_rects(&h.ctx, peek_area_id())
-            .into_iter()
-            .find_map(|(hit, rect)| matches!(hit, craft_ui::docking::Hit::Tab(ref p) if p == panel).then_some(rect))
-            .unwrap_or_else(|| panic!("the peeked {panel} tab"))
-    };
     // Layers dragged onto the Color group's tabs, then out over the canvas.
-    let (from, onto) = (tab(&h, "layers").center(), tab(&h, "color").center());
+    let (from, onto) = (tab_rect(&h, "layers").center(), tab_rect(&h, "color").center());
     for target in [onto, pos2(from.x - 300.0, from.y)] {
         press(&mut h, from);
         for k in 1..=10 {
@@ -479,7 +521,7 @@ fn a_tab_dragged_in_the_peek_does_not_rearrange_the_layout() {
         }
         release(&mut h, target);
         h.run_steps(2);
-        assert_eq!(h.state().ui.docking.clone().map(|w| w.layout), before, "the layout is unchanged after a drop at {target:?}");
+        assert_eq!(h.state().ui.docking.layout, before, "the layout is unchanged after a drop at {target:?}");
         peek_dock_again(&mut h);
     }
 }
