@@ -1413,8 +1413,8 @@ impl ToolbarCustomization {
     /// works with or without "Tool". `None` for a name that isn't a tool.
     pub fn tool_name(name: &str) -> Option<String> {
         let canonical = |key: &str| -> String { key.chars().take(1).flat_map(char::to_uppercase).chain(key.chars().skip(1)).collect() };
-        // Stored layouts hold canonical names: find those without allocating (the toolbar
-        // resolves its layout every frame).
+        // Stored layouts hold canonical names: find those without allocating (every layout
+        // resolves each of its names here).
         if let Some(key) = crate::shell_commands::TOOLS.iter().filter_map(|(id, _, _)| id.strip_prefix("tools.select.")).find(|k| k.eq_ignore_ascii_case(name))
         {
             return Some(canonical(key));
