@@ -41,6 +41,18 @@ fn clicking_a_frame_selects_it_when_docked() {
 }
 
 #[test]
+fn window_timeline_is_available_in_the_menu_with_or_without_a_document() {
+    // Without a document the panel can still be opened (it offers to make an animation once there is one), and
+    // the item says whether the panel is showing.
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    assert!(crate::menus::is_enabled(&app, "window.panel.timeline"), "greyed out in Window ▸ Timeline");
+    let shown = crate::view_cmds::checked(&app, "window.panel.timeline");
+    let ctx = egui::Context::default();
+    crate::menus::invoke(&mut app, &ctx, "window.panel.timeline", json!({})).unwrap();
+    assert_ne!(crate::view_cmds::checked(&app, "window.panel.timeline"), shown, "the checkmark follows the panel");
+}
+
+#[test]
 fn the_window_menu_hides_and_shows_the_timeline() {
     let mut h = harness();
     let ctx = h.ctx.clone();
