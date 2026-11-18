@@ -476,39 +476,51 @@ fn hash01(x: usize, y: usize, seed: u32) -> f32 {
 }
 
 /// Maps every pixel to its palette entry (in place) with the chosen dither; returns the index
-/// per pixel. With `transparent`, pixels of alpha < ½ become that entry (stored with its colour
-/// and alpha 0), and an opaque pixel whose nearest entry is it becomes transparent too. Without
-/// one, `opaque_clear` flattens clear pixels to opaque (an explicit "no transparency" request);
-/// otherwise fully transparent pixels are left alone and the rest keep their alpha. `amount`
-/// (0..=1) scales diffusion / pattern / noise strength.
-pub fn quantize(px: &mut [[f32; 4]], w: usize, pal: &[Rgb8], dither: Dither, amount: f32, transparent: Option<usize>, opaque_clear: bool) -> Vec<u8> {
+/// per pixel. `mode` says what happens to the alpha (see [`AlphaMode`]). `amount` (0..=1) scales
+/// diffusion / pattern / noise strength.
+pub fn quantize(px: &mut [[f32; 4]], w: usize, pal: &[Rgb8], dither: Dither, amount: f32, mode: AlphaMode) -> Vec<u8> {
     let lookup = Nearest::new(pal.iter().map(|c| c.map(f32::from)));
-    let mode = match transparent {
-        Some(t) => AlphaMode::Transparent(t),
-        None if opaque_clear => AlphaMode::Opaque,
-        None => AlphaMode::Keep,
+    // An entry that only carries clear pixels is never the nearest entry of an opaque pixel:
+    // its colour is a placeholder (white, often a duplicate of a real entry), so a tie at the
+    // same distance would otherwise clear an opaque pixel that has a real entry of its colour.
+    let nearest = |c: [f32; 3]| match mode {
+        AlphaMode::Carries(t) => lookup.find_excluding(c.map(|v| v * 255.0), t),
+        _ => lookup.find(c.map(|v| v * 255.0)),
     };
-    quantize_with(px, w, pal, dither, amount, mode, |c| lookup.find(c.map(|v| v * 255.0)))
+    quantize_with(px, w, pal, dither, amount, mode, nearest)
 }
 
 /// The alpha handling of a quantized pixel (see [`quantize`]).
-#[derive(Clone, Copy, Debug)]
-enum AlphaMode {
-    /// Pixels of alpha < ½ take entry `t` (stored with its colour, alpha 0); an opaque pixel
-    /// whose nearest entry is `t` becomes transparent too.
-    Transparent(usize),
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AlphaMode {
+    /// Entry `t` carries the pixels of alpha < ½ (stored with its colour and alpha 0) and is
+    /// skipped by the nearest search, so an opaque pixel always maps to another entry and stays
+    /// opaque. This is the entry Indexed Color appends, and how painting on an Indexed document
+    /// maps a colour.
+    Carries(usize),
+    /// An entry `t` the user chose (Set Transparent, a loaded `.act`): pixels of alpha < ½ take
+    /// it, and so does an opaque pixel whose nearest entry is it — that pixel becomes transparent.
+    Explicit(usize),
     /// Every pixel comes out opaque (an explicit "no transparency" request).
     Opaque,
     /// Legacy: fully transparent pixels are left alone, the rest keep their alpha.
     Keep,
 }
 
+/// The transparent entry of `mode`, if it has one.
+fn clear_entry(mode: AlphaMode) -> Option<usize> {
+    match mode {
+        AlphaMode::Carries(t) | AlphaMode::Explicit(t) => Some(t),
+        AlphaMode::Opaque | AlphaMode::Keep => None,
+    }
+}
+
 /// The output alpha of a quantized pixel: transparent at the transparent entry, opaque when an
 /// entry exists (or [`AlphaMode::Opaque`] flattens clear pixels), else the source alpha.
 fn out_alpha(mode: AlphaMode, k: usize, src: f32) -> f32 {
     match mode {
-        AlphaMode::Transparent(t) if t == k => 0.0,
-        AlphaMode::Transparent(_) | AlphaMode::Opaque => 1.0,
+        AlphaMode::Carries(t) | AlphaMode::Explicit(t) if t == k => 0.0,
+        AlphaMode::Carries(_) | AlphaMode::Explicit(_) | AlphaMode::Opaque => 1.0,
         AlphaMode::Keep => src,
     }
 }
@@ -533,7 +545,7 @@ fn quantize_with(
             for (x, (ip, p)) in idxrow.iter_mut().zip(pxrow.iter_mut()).enumerate() {
                 let pv = *p;
                 if pv[3] < 0.5 {
-                    if let AlphaMode::Transparent(t) = mode {
+                    if let Some(t) = clear_entry(mode) {
                         *ip = t as u8;
                         let e = pal.get(t).copied().unwrap_or([0, 0, 0]).map(|v| f32::from(v) / 255.0);
                         *p = [e[0], e[1], e[2], 0.0];
@@ -569,7 +581,7 @@ fn quantize_with(
             let i = y * w + x;
             let p = px[i];
             if p[3] < 0.5 {
-                if let AlphaMode::Transparent(t) = mode {
+                if let Some(t) = clear_entry(mode) {
                     idx[i] = t as u8;
                     let e = pal.get(t).copied().unwrap_or([0, 0, 0]).map(|v| f32::from(v) / 255.0);
                     px[i] = [e[0], e[1], e[2], 0.0];

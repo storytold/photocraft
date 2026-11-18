@@ -754,7 +754,9 @@ fn gif_frame(mut px: Vec<[f32; 4]>, w: usize, delay_cs: u16) -> Result<photocraf
         pal.push(pal.first().copied().unwrap_or([0, 0, 0]));
         pal.len() - 1
     });
-    let indices = quantize::quantize(&mut px, w, &pal, Dither::None, 1.0, t, false);
+    // The appended entry repeats the first colour, so it only carries clear pixels.
+    let alpha = t.map_or(quantize::AlphaMode::Keep, quantize::AlphaMode::Carries);
+    let indices = quantize::quantize(&mut px, w, &pal, Dither::None, 1.0, alpha);
     Ok(photocraft_codecs::web::GifFrame { indices, palette: pal, transparent: t.map(|i| i as u8), delay_cs })
 }
 
