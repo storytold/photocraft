@@ -581,3 +581,22 @@ fn pending_mask_keeps_its_texture_only_for_the_same_source_and_viewport() {
     assert!(overlay(&mut app, &ctx, doc.id, doc.bounds()).is_none(), "do not reuse a mask from another source revision");
     release.send(()).unwrap();
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn control_pointer_pans_without_sampling_when_skin_smooth_is_armed() {
+    for mut params in [json!({"button":"middle"}), json!({"space":true}), json!({"button":"right","space":true})] {
+        let mut app = app();
+        crate::canvas::testing::clear_of_dialogs(&mut app, [2.0, 3.0]);
+        field(&mut app, "__skinTool", json!("add"));
+        let before = crate::canvas::testing::view(&app).unwrap().center;
+        let document = app.session.active().unwrap().doc.clone();
+        params["events"] = json!([{"kind":"down","x":2,"y":3},{"kind":"move","x":26,"y":3}]);
+        let reply = crate::canvas::testing::control(&mut app, "ui.pointer", params.clone());
+        assert_eq!(reply["ok"], true, "{reply}");
+        assert_ne!(crate::canvas::testing::view(&app).unwrap().center, before, "{params}: the held drag must pan before release");
+        crate::canvas::testing::control(&mut app, "ui.pointer", json!({"events":[{"kind":"up","x":26,"y":3}]}));
+        assert!(colors(plugin_fields(&app), POSITIVE).is_empty(), "{params}: panning must not sample");
+        assert!(Arc::ptr_eq(&document, &app.session.active().unwrap().doc));
+    }
+}

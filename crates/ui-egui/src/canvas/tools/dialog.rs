@@ -29,6 +29,12 @@ pub(crate) struct DialogTools {
     phase: Option<PhaseDrag>,
 }
 
+impl DialogTools {
+    pub(crate) fn dragging_skin_sampler(&self) -> bool {
+        self.pick == Some(DialogPick::SkinSmooth)
+    }
+}
+
 /// The pointer's document point: the one mapping from screen points to document units for the canvas tools of
 /// this area.
 // PLAN: assumed `CanvasView::to_doc(Pos2) -> kurbo::Point` as listed in the framework definitions.

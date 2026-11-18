@@ -149,7 +149,11 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
     #[cfg(not(target_arch = "wasm32"))]
     if app.background_jobs {
         app.filter_preview_worker.supersede(&request, crate::gpu_canvas::now_ms());
-        if let Some((finished, computed)) = app.filter_preview_worker.poll() {
+        // Poll consumes the job. Drain a cancelled result without making the request look fresh.
+        let cancelled = app.filter_preview_worker.cancelled();
+        if let Some((finished, computed)) = app.filter_preview_worker.poll()
+            && !cancelled
+        {
             match computed {
                 // The dialog still holds these exact parameters. Publish as before, including an
                 // empty result: that is how a filter which no longer applies clears the canvas.

@@ -772,3 +772,55 @@ fn panned_plugin_preview_matches_full_preview_at_factor_four() {
     }
     assert!(std::sync::Arc::ptr_eq(&original, &app.session.active().unwrap().doc), "previewing never edits the document");
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn returning_to_a_cancelled_regional_preview_retries_without_blanking() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width":64,"height":48,"background":"#204060"})).unwrap();
+    app.run("plugin.install", json!({"path":concat!(env!("CARGO_MANIFEST_DIR"),"/../plugins/tests/fixtures/invert.wasm")})).unwrap();
+    crate::filter_dialog::open_with_spec(
+        &mut app,
+        "plugin.run",
+        "Invert",
+        "{}",
+        json!({"id":"org.photocraft.example.invert","__preview":true}).as_object().unwrap().clone(),
+    );
+    app.background_jobs = true;
+    let ctx = app.ctx().clone();
+    let doc = app.session.active().unwrap().doc.id;
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique(("plugin-preview-region", doc)), photocraft_geom::Rect::new(0, 0, 32, 24)));
+    drive_until(&mut app, &ctx, "the initial preview", |a| a.filter_preview.as_ref().is_some_and(|p| p.result.is_some()));
+    let first = app.filter_preview.as_ref().unwrap().key.clone();
+    assert!(first.params.get("__previewRegion").is_some());
+    let mut moved = first.clone();
+    moved.params["__previewRegion"] = json!([10, 5, 32, 24]);
+
+    for keep_frame in [true, false] {
+        if !keep_frame {
+            app.filter_preview = None;
+        }
+        let before = app.filter_preview.as_ref().and_then(|p| p.result.clone());
+        let (release, wait) = std::sync::mpsc::channel();
+        app.filter_preview_worker
+            .start(first.clone(), ctx.clone(), move |job| {
+                wait.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+                assert!(job.cancelled(), "the newer request cancelled A before it finished");
+                crate::dialogs::filter_preview_worker::Computed { result: None, ms: 0.0 }
+            })
+            .unwrap();
+        app.filter_preview_worker.supersede(&moved, 0.0);
+        app.filter_preview_worker.supersede(&moved, crate::dialogs::filter_preview_worker::SETTLE_MS);
+        release.send(()).unwrap();
+
+        // The UI still wants A when it sees the cancelled completion. The worker must be
+        // drained, but the empty result must neither clear a good frame nor prevent a retry.
+        drive_until(&mut app, &ctx, "the cancelled preview and any retry", |a| !a.filter_preview_worker.busy() && a.filter_preview.is_some());
+        let after = app.filter_preview.as_ref().unwrap();
+        assert_eq!(after.key, first);
+        let frame = after.result.as_ref().expect("a cancelled computation must not leave the canvas without a preview");
+        if let Some(before) = before {
+            assert!(std::sync::Arc::ptr_eq(&before, frame), "the already displayed frame must survive");
+        }
+    }
+}

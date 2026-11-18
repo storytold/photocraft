@@ -1252,12 +1252,16 @@ fn pointer(app: &mut PhotocraftApp, ctx: &egui::Context, p: &Value) -> Reply {
     if space {
         ToolHost::inject(ctx, canvas, ToolInput::hold(Key::Space));
     }
-    // Injected moves carry no button. Keep a pan or secondary request from sampling
-    // through a Skin Smooth press already held by another request.
-    let guarded_sample = (space || button != PointerButton::Primary) && crate::dialogs::skin_smooth_ui::armed(app);
+    // An injected move carries no button. A navigation move sent during an existing sampler drag
+    // would reach the latched sampler; a gesture that began as navigation must get all its moves.
+    let mut guarded_sample =
+        (space || button != PointerButton::Primary) && ToolHost::in_gesture(ctx, canvas) && app.canvas_tools.dialog.dragging_skin_sampler();
     for step in &parsed.events {
         if !guarded_sample || step.kind != PointerKind::Move {
             ToolHost::inject(ctx, canvas, tool_input(&view, step, button, mods));
+        }
+        if step.kind == PointerKind::Up {
+            guarded_sample = false;
         }
     }
     if space {
