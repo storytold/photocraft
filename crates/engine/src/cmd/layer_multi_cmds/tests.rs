@@ -1036,6 +1036,69 @@ fn merging_down_inherits_the_lower_layers_fill_opacity() {
 }
 
 #[test]
+fn merging_down_applies_the_inherited_fill_to_the_baked_ink() {
+    // Observed in Photoshop (fixtures in PR #8750: each layer holds one opaque circle and one
+    // painted at 50% brush opacity). Merge Down bakes the visible pixels — with the lower
+    // layer's Fill already applied — onto the merged layer, and the merged layer inherits that
+    // same Fill, so the lower content is attenuated twice: at Fill 50% the opaque circle lands
+    // on a quarter (0.5 × 0.5) and the half-transparent one on an eighth, while the upper
+    // circles stay at half and a quarter. At Fill 0% the lower ink is already empty when baked
+    // and the rest leaves the composite through the inherited fill — as in the fixtures, where
+    // the lower shape and its glow vanish; at Fill 100% the merge changes nothing visible.
+    let alpha_at = |s: &Session, x: i32, y: i32| {
+        let d = doc(s);
+        photocraft_compose::render(d, d.bounds()).get(x, y)[3]
+    };
+    let alphas = |s: &Session| [alpha_at(s, 30, 30), alpha_at(s, 30, 80), alpha_at(s, 130, 30), alpha_at(s, 130, 80)];
+    let close = |got: &[f32; 4], want: [f32; 4]| got.iter().zip(&want).all(|(g, w)| (g - w).abs() < 0.01);
+    let (all, top_only) = (Rect::new(10, 10, 150, 100), Rect::new(110, 10, 150, 100));
+    // (Fill, alpha of [lower opaque, lower half, upper opaque, upper half] after the merge,
+    //  the ink baked into the merged layer)
+    let cases = [(1.0f32, [1.0, 0.5, 1.0, 0.5], all), (0.5, [0.25, 0.125, 0.5, 0.25], all), (0.0, [0.0; 4], top_only)];
+    for (fill, after, baked) in cases {
+        for depth in [8, 16, 32] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 160, "height": 120, "depth": depth, "background": "transparent"})).unwrap();
+            let lower = rect_layer(&mut s, Rect::new(10, 10, 50, 50));
+            let upper = rect_layer(&mut s, Rect::new(110, 10, 150, 50));
+            let half = |s: &mut Session, id: LayerId, r: Rect| {
+                s.edit("half", |doc, _| {
+                    doc.layer_mut(id).unwrap().surface_mut().unwrap().fill_rect(r, &[0.0, 0.0, 1.0, 0.5]);
+                    Ok(())
+                })
+                .unwrap();
+            };
+            half(&mut s, lower, Rect::new(10, 60, 50, 100));
+            half(&mut s, upper, Rect::new(110, 60, 150, 100));
+            s.edit("fill", |doc, _| {
+                doc.layer_mut(lower).unwrap().fill_opacity = fill;
+                Ok(())
+            })
+            .unwrap();
+            let before = alphas(&s);
+            assert!(
+                close(&before, [fill, fill * 0.5, 1.0, 0.5]),
+                "depth {depth}, fill {fill}: the lower layer's own fill attenuates it once before the merge: {before:?}"
+            );
+            let layers_before = doc(&s).layer_count();
+            s.execute("layer.mergeDown", json!({"layer": upper.0})).unwrap();
+            let merged = doc(&s).layer(lower).unwrap().clone();
+            assert!(doc(&s).layer(upper).is_none(), "depth {depth}, fill {fill}: the upper layer merged down");
+            assert_eq!(doc(&s).layer_count(), layers_before - 1, "depth {depth}, fill {fill}: the merge took one layer");
+            assert_eq!(merged.fill_opacity, fill, "depth {depth}, fill {fill}: the fill inherits onto the merged layer");
+            assert_eq!(layer_bounds(&merged).unwrap(), baked, "depth {depth}, fill {fill}: the merge bakes the visible pixels of both layers");
+            let got = alphas(&s);
+            assert!(close(&got, after), "depth {depth}, fill {fill}: the inherited fill applies to the baked ink again: {got:?}, want {after:?}");
+            s.undo();
+            assert_eq!(doc(&s).layer_count(), layers_before, "depth {depth}, fill {fill}: undo brings both layers back");
+            assert!(doc(&s).layer(upper).is_some(), "depth {depth}, fill {fill}: undo restores the upper layer");
+            assert_eq!(doc(&s).layer(lower).unwrap().fill_opacity, fill, "depth {depth}, fill {fill}: undo restores the fill");
+            assert!(close(&alphas(&s), before), "depth {depth}, fill {fill}: undo restores the composite");
+        }
+    }
+}
+
+#[test]
 fn merging_selected_layers_bakes_the_bottom_layers_style_to_pixels() {
     // Observed in Photoshop (fixtures in PR #8750): ⌘E over a selection merges the selected
     // layers preserving the visible composite — the bottommost layer's style is baked into
