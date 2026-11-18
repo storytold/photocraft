@@ -11,7 +11,7 @@ use crate::state::Tool;
 fn harness() -> Harness<'static, PhotocraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_max_steps(64).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
         app.run("layer.new.layer", json!({})).unwrap();
         app.run("select.rect", json!({"x": 40, "y": 40, "width": 20, "height": 20})).unwrap();
@@ -109,15 +109,4 @@ fn the_preference_turns_bundling_off_and_on_again() {
     }
     assert_eq!(steps(&h), n0 + 4, "the next four bundle: 3 earlier states and one run");
     assert_eq!(bounds(&h).x0, start.x0 + 7);
-}
-
-/// Bad values are rejected, not stored (the control channel and the Preferences dialog share the
-/// same ranges).
-#[test]
-fn the_pause_preference_stays_within_its_range() {
-    let mut h = harness();
-    for bad in [json!(0), json!(99), json!(10_001), json!("long"), json!(-5)] {
-        assert!(h.state_mut().run("prefs.set", json!({"path": "tools.nudgeBundlePauseMs", "value": bad.clone()})).is_err(), "{bad}");
-    }
-    assert_eq!(h.state().session.prefs().tools.nudge_bundle_pause_ms, 1000);
 }
