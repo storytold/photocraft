@@ -177,11 +177,9 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     replan |= !c.known.strokes.is_empty() || c.mask != c.base_px;
                 }
                 FillEvent::FillArea(_) | FillEvent::Reset(_) => replan = true,
-                FillEvent::SettingsChanged(settings) => {
-                    if settings.sample_all_layers != c.sample_all {
-                        c.sample_all = settings.sample_all_layers;
-                        (replan, rebased) = (true, true);
-                    }
+                FillEvent::SettingsChanged(settings) if settings.sample_all_layers != c.sample_all => {
+                    c.sample_all = settings.sample_all_layers;
+                    (replan, rebased) = (true, true);
                 }
                 FillEvent::Apply(command) => applies.push(command),
                 FillEvent::PickColor(request) => picks.push(request),

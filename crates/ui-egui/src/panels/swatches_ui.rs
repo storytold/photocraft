@@ -109,7 +109,8 @@ pub(crate) fn apply_edit(app: &mut PhotocraftApp, edit: SwatchEdit) {
         SwatchEdit::Add { group, name, color, .. } => new_swatch(app, group, name, &color),
         SwatchEdit::NewGroup { name, .. } => new_group(app, name),
         SwatchEdit::Rename { swatch, name, .. } => {
-            if run(app, "swatches.rename", json!({"swatch": swatch, "name": name})).is_some() && app.ui.swatches.selected == Some(SwatchKey::Swatch(swatch)) {
+            let renamed = run(app, "swatches.rename", json!({"swatch": swatch, "name": name})).is_some();
+            if renamed && app.ui.swatches.selected == Some(SwatchKey::Swatch(swatch)) {
                 app.ui.swatches.selected = Some(SwatchKey::Swatch(name));
             }
         }
@@ -117,7 +118,8 @@ pub(crate) fn apply_edit(app: &mut PhotocraftApp, edit: SwatchEdit) {
             run(app, "swatches.renameGroup", json!({"group": group, "name": name}));
         }
         SwatchEdit::Delete { swatch, .. } => {
-            if run(app, "swatches.delete", json!({"swatch": swatch})).is_some() && app.ui.swatches.selected == Some(SwatchKey::Swatch(swatch)) {
+            let deleted = run(app, "swatches.delete", json!({"swatch": swatch})).is_some();
+            if deleted && app.ui.swatches.selected == Some(SwatchKey::Swatch(swatch)) {
                 app.ui.swatches.selected = None;
             }
         }

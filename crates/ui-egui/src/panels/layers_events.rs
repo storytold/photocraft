@@ -100,14 +100,12 @@ fn toggle_actions(doc: &photocraft_doc::Document, toggle: LayerToggle<LayerId>, 
     let Some(on) = value else { return };
     for row in &toggle.rows {
         match (toggle.column, row) {
-            (LayerColumn::Visibility, LayerRowKey::Layer(id)) => {
-                if layer(id).is_some_and(|l| l.visible != on) {
-                    let mut p = json!({"layer": id.0, "visible": on});
-                    if let Some(key) = &coalesce {
-                        p["coalesce"] = json!(key);
-                    }
-                    actions.push(("layer.setProps".into(), p));
+            (LayerColumn::Visibility, LayerRowKey::Layer(id)) if layer(id).is_some_and(|l| l.visible != on) => {
+                let mut p = json!({"layer": id.0, "visible": on});
+                if let Some(key) = &coalesce {
+                    p["coalesce"] = json!(key);
                 }
+                actions.push(("layer.setProps".into(), p));
             }
             (LayerColumn::Visibility, LayerRowKey::Effects(id, index)) => {
                 let mut p = json!({"layer": id.0, "visible": on});

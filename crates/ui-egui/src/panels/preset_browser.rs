@@ -639,7 +639,7 @@ pub(crate) fn act(panel: PresetPanel, event: &PresetEvent<PresetKey>, rows: &[Pr
                     if matches!(key, PresetKey::Group(_)) {
                         moving_folder = moved;
                     }
-                    !moved && !(moving_folder && matches!(key, PresetKey::Item(_)))
+                    !(moved || moving_folder && matches!(key, PresetKey::Item(_)))
                 })
                 .collect();
             match &mv.key {

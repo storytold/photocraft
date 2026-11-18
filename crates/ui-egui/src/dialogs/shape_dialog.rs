@@ -13,7 +13,7 @@ use crate::PhotocraftApp;
 /// Opens the creation dialog of `kind` for a click at `at` (document px). `None` for a kind without
 /// one (Line, Custom Shape) or a click that is not a point.
 pub(crate) fn open(app: &mut PhotocraftApp, kind: ShapeKind, at: Point) -> Option<DialogId> {
-    if !CreateShapeDialog::supports(kind) || !(at.x.is_finite() && at.y.is_finite()) {
+    if !(CreateShapeDialog::supports(kind) && at.x.is_finite() && at.y.is_finite()) {
         return None;
     }
     let ur = &app.session.prefs().units_and_rulers;

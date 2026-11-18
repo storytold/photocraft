@@ -354,11 +354,10 @@ fn apply_event(app: &mut PhotocraftApp, event: ActionsEvent) -> Result<(), Strin
         }
         ActionsEvent::BeginRecording { into, .. } => begin_recording(app, into),
         ActionsEvent::NewAction => begin_recording(app, None),
-        ActionsEvent::StopRecording => {
-            if !playback::stop(app) && app.session.actions.recording.is_some() {
-                app.run("actions.stop", json!({}))?;
-            }
+        ActionsEvent::StopRecording if !playback::stop(app) && app.session.actions.recording.is_some() => {
+            app.run("actions.stop", json!({}))?;
         }
+        ActionsEvent::StopRecording => {}
         ActionsEvent::NewSet => dialogs::new_set_dialog(app).map(drop)?,
         ActionsEvent::InsertStop => dialogs::insert_stop_dialog(app).map(drop)?,
         ActionsEvent::Load => files::load_dialog(app).map(drop)?,

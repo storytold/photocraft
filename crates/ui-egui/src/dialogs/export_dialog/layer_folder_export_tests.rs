@@ -4,10 +4,13 @@
 //! One file keeps the save dialog with the layer's name.
 
 use super::*;
+#[cfg(unix)]
 use craft::host::{Picked, ScriptedFiles};
 use photocraft_doc::{Color, Size};
+#[cfg(unix)]
 use std::{cell::RefCell, rc::Rc};
 
+#[cfg(unix)]
 type Written = Rc<RefCell<Vec<String>>>;
 
 fn named(name: &str) -> Document {
@@ -41,6 +44,7 @@ fn names_keep_spaces_replace_illegal_characters_and_number_duplicates_downwards(
 
 /// A document with filled layers `a/b:c*?`, `Dup` and `Dup` (bottom to top), plus an empty layer. Its file dialogs
 /// stay open until the test answers them.
+#[cfg(unix)]
 fn app() -> (PhotocraftApp, Vec<LayerId>, LayerId, Written, Arc<ScriptedFiles>) {
     let written = Written::default();
     let capture = written.clone();
@@ -71,6 +75,7 @@ fn app() -> (PhotocraftApp, Vec<LayerId>, LayerId, Written, Arc<ScriptedFiles>) 
 
 /// Layer › Export As on `ids` as PNG: Export asks for a destination, which the user answers with `path`. Returns the
 /// destination request.
+#[cfg(unix)]
 fn export_layers_to(app: &mut PhotocraftApp, files: &ScriptedFiles, ids: &[LayerId], path: &std::path::Path) -> craft::host::PickRequest {
     let ctx = app.ctx().clone();
     let id = open_layers(app, ids).unwrap();
