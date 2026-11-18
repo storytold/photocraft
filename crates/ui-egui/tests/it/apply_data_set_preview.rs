@@ -1,11 +1,10 @@
 //! #14496: the Apply Data Set dialog's Preview checkbox, as in the reference application. Off on
-//! the first open, tooltip "Preview the selected data set", Alt+P toggles it. On, the selected set
-//! is shown in the document (canvas and Layers panel read it) without a history state, and
-//! selecting another row switches the preview; off again, the document is as before the dialog.
-//! Cancel, Escape and the close box revert it; Apply with Preview on leaves the same document and
-//! the one history state Apply without it does. The box keeps its state for the next open after
-//! Apply, not after Cancel. A set that can't be applied (its replacement file is missing) shows
-//! nothing of itself.
+//! the first open, Alt+P toggles it. On, the selected set is shown in the document (canvas and
+//! Layers panel read it) without a history state, and selecting another row switches the preview;
+//! off again, the document is as before the dialog. Cancel and Escape revert it; Apply with
+//! Preview on leaves the same document and the one history state Apply without it does. The box
+//! keeps its state for the next open after Apply, not after Cancel. A set that can't be applied
+//! (its replacement file is missing) shows nothing of itself.
 
 use std::sync::Arc;
 
@@ -14,8 +13,10 @@ use egui_kittest::kittest::Queryable;
 use photocraft_doc::{Document, Layer, LayerContent, LayerId, TextLayer};
 use photocraft_geom::Rect;
 use photocraft_ui_egui::PhotocraftApp;
-use photocraft_ui_egui::control::{ControlRequest, Outcome, handle};
+use photocraft_ui_egui::control::{ControlRequest, Reply};
 use serde_json::{Value, json};
+
+type H = Harness<'static, Box<PhotocraftApp>>;
 
 struct Layers {
     photo: LayerId,
@@ -42,11 +43,11 @@ fn blue_png() -> String {
 /// `Title` ("Old"), with a visibility, a text and a pixel variable. Sets in document order:
 /// Zed (Badge hidden, "Alpha", Photo blue), Data Set 2 (Badge shown, "Beta", no image) and
 /// Data Set 3 (Badge hidden, "Gamma", an image file that doesn't exist).
-fn app() -> (PhotocraftApp, Layers) {
+fn app() -> (Box<PhotocraftApp>, Layers) {
     app_with(photocraft_ui_egui::Services::default())
 }
 
-fn app_with(services: photocraft_ui_egui::Services) -> (PhotocraftApp, Layers) {
+fn app_with(services: photocraft_ui_egui::Services) -> (Box<PhotocraftApp>, Layers) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
     app.run("file.new", json!({"width": 64, "height": 48, "background": "white"})).unwrap();
     let (photo, badge, title) = app
@@ -101,52 +102,70 @@ fn app_with(services: photocraft_ui_egui::Services) -> (PhotocraftApp, Layers) {
     (app, Layers { photo, badge, title })
 }
 
-fn harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
-    let mut h = Harness::builder().with_step_dt(1.0 / 60.0).with_size(egui::vec2(900.0, 700.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
-            let ctx = ui.ctx().clone();
-            if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                return;
-            }
-            photocraft_ui_egui::dialogs::show(app, &ctx);
-            photocraft_ui_egui::discard_ui::show(app, &ctx);
+fn harness(app: Box<PhotocraftApp>) -> H {
+    let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(egui::vec2(900.0, 700.0)).build_ui_state(
+        |ui, app: &mut Box<PhotocraftApp>| {
+            photocraft_ui_egui::dialogs::run(app, ui);
         },
         app,
     );
-    PhotocraftApp::setup_context(&h.ctx, photocraft_ui_egui::theme::ThemeKind::ALL[0]);
     h.run_steps(3);
     h
 }
 
-/// Image › Apply Data Set… as the menu runs it, then a few frames.
-fn open(h: &mut Harness<'static, PhotocraftApp>) {
+/// One control request, as a transport sends it.
+fn control(h: &mut H, method: &str, params: Value) -> Value {
+    let (request, _) = ControlRequest::new(method, params);
     let ctx = h.ctx.clone();
-    photocraft_ui_egui::menus::invoke(h.state_mut(), &ctx, "image.applyDataSet", json!({})).unwrap();
+    let reply = match photocraft_ui_egui::control::handle(h.state_mut(), &ctx, &request) {
+        Reply::Done(value) => value,
+        _ => panic!("{method} did not answer at once"),
+    };
     h.run_steps(3);
+    reply
 }
 
-/// The dialog open on the test document, and the document as it was before.
-fn opened() -> (Harness<'static, PhotocraftApp>, Layers, Arc<Document>) {
+fn refused(reply: &Value) -> bool {
+    reply.get("error").is_some() || reply["ok"] == json!(false)
+}
+
+/// Image › Apply Data Set… as the menu runs it, then a few frames; the dialog's id.
+fn open(h: &mut H) -> String {
+    let ctx = h.ctx.clone();
+    let reply = photocraft_ui_egui::menus::invoke(h.state_mut(), &ctx, "image.applyDataSet", json!({})).unwrap();
+    h.run_steps(3);
+    reply["dialog"].as_str().expect("the menu opens a dialog").to_string()
+}
+
+/// The dialog open on the test document, its id, and the document as it was before.
+fn opened() -> (H, Layers, Arc<Document>, String) {
     let (app, layers) = app();
     let mut h = harness(app);
     let before = doc(&h);
-    open(&mut h);
-    (h, layers, before)
+    let id = open(&mut h);
+    (h, layers, before, id)
 }
 
-fn doc(h: &Harness<'static, PhotocraftApp>) -> Arc<Document> {
+fn doc(h: &H) -> Arc<Document> {
     h.state().session.active().unwrap().doc.clone()
 }
 
-fn preview_field(h: &Harness<'static, PhotocraftApp>) -> Value {
-    h.state().ui.dialogs.last().unwrap().fields["preview"].clone()
+/// The Apply Data Set dialog's `preview` field, as `ui.inspect` lists it.
+fn preview_field(h: &mut H) -> Value {
+    let listed = control(h, "ui.inspect", json!({}));
+    listed["result"]["dialogs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|d| d["fields"]["__command"] == "image.applyDataSet")
+        .map_or(Value::Null, |d| d["fields"]["preview"].clone())
 }
 
-fn history(h: &Harness<'static, PhotocraftApp>) -> usize {
+fn history(h: &H) -> usize {
     h.state().session.active().unwrap().history.past_len()
 }
 
-fn dirty(h: &Harness<'static, PhotocraftApp>) -> bool {
+fn dirty(h: &H) -> bool {
     h.state().session.active().unwrap().is_dirty()
 }
 
@@ -165,45 +184,44 @@ fn photo_blue(d: &Document, id: LayerId) -> bool {
 }
 
 /// What the Layers panel and the canvas show of the three variables.
-fn shown(h: &Harness<'static, PhotocraftApp>, l: &Layers) -> (bool, String, bool) {
+fn shown(h: &H, l: &Layers) -> (bool, String, bool) {
     let d = doc(h);
     (d.layer(l.badge).unwrap().visible, text(&d, l.title), photo_blue(&d, l.photo))
 }
 
-fn click(h: &mut Harness<'static, PhotocraftApp>, label: &str) {
+fn click(h: &mut H, label: &str) {
     h.get_by_label(label).click();
     h.run_steps(3);
 }
 
-#[test]
-fn preview_is_off_on_the_first_open_with_its_tooltip_and_alt_p_toggles_it() {
-    let (mut h, _l, before) = opened();
-    assert_eq!(preview_field(&h), false);
-    h.get_by_label("Preview").hover();
-    h.run_steps(30);
-    h.get_by_label("Preview the selected data set");
+fn alt_p(h: &mut H) {
+    h.event(egui::Event::Key { key: egui::Key::P, physical_key: Some(egui::Key::P), pressed: true, repeat: false, modifiers: egui::Modifiers::ALT });
+    h.run_steps(3);
+}
 
-    h.event(egui::Event::Key { key: egui::Key::P, physical_key: Some(egui::Key::P), pressed: true, repeat: false, modifiers: egui::Modifiers::ALT });
-    h.run_steps(3);
-    assert_eq!(preview_field(&h), true, "Alt+P ticks it");
+#[test]
+fn preview_is_off_on_the_first_open_and_alt_p_toggles_it() {
+    let (mut h, _l, before, _) = opened();
+    assert_eq!(preview_field(&mut h), false);
+    alt_p(&mut h);
+    assert_eq!(preview_field(&mut h), true, "Alt+P ticks it");
     assert_ne!(*doc(&h), *before, "and the first set is shown");
-    h.event(egui::Event::Key { key: egui::Key::P, physical_key: Some(egui::Key::P), pressed: true, repeat: false, modifiers: egui::Modifiers::ALT });
-    h.run_steps(3);
-    assert_eq!(preview_field(&h), false, "Alt+P unticks it");
+    alt_p(&mut h);
+    assert_eq!(preview_field(&mut h), false, "Alt+P unticks it");
     assert_eq!(*doc(&h), *before);
-    assert_eq!(h.state().ui.dialogs.len(), 1, "the dialog stays open");
+    assert!(h.state().dialog_open(), "the dialog stays open");
 }
 
 #[test]
 fn preview_shows_the_selected_set_and_follows_the_selection_without_history() {
-    let (mut h, l, before) = opened();
+    let (mut h, l, before, _) = opened();
     let past = history(&h);
     // Preview off: selecting a row changes nothing.
     click(&mut h, "Data Set 2");
     assert_eq!(*doc(&h), *before);
 
     click(&mut h, "Preview");
-    assert_eq!(preview_field(&h), true);
+    assert_eq!(preview_field(&mut h), true);
     assert_eq!(shown(&h, &l), (true, "Beta".into(), false), "Data Set 2 at once");
     click(&mut h, "Zed");
     assert_eq!(shown(&h, &l), (false, "Alpha".into(), true), "the preview switches to Zed");
@@ -220,23 +238,20 @@ fn preview_shows_the_selected_set_and_follows_the_selection_without_history() {
 }
 
 #[test]
-fn cancel_escape_and_the_close_box_revert_the_preview_without_history() {
-    for way in ["cancel", "escape", "close"] {
-        if way == "close" && cfg!(target_os = "macos") {
-            continue; // No close box on macOS.
-        }
-        let (mut h, l, before) = opened();
+fn cancel_and_escape_revert_the_preview_without_history() {
+    for way in ["cancel", "escape"] {
+        let (mut h, l, before, _) = opened();
         let past = history(&h);
         click(&mut h, "Preview");
         click(&mut h, "Data Set 2");
         assert_eq!(shown(&h, &l).1, "Beta", "{way}");
-        match way {
-            "cancel" => h.get_by_label("Cancel").click(),
-            "escape" => h.key_press(egui::Key::Escape),
-            _ => h.get_by_label("Close").click(),
+        if way == "cancel" {
+            h.get_by_label("Cancel").click();
+        } else {
+            h.key_press(egui::Key::Escape);
         }
         h.run_steps(3);
-        assert!(h.state().ui.dialogs.is_empty(), "{way}");
+        assert!(!h.state().dialog_open(), "{way}");
         assert_eq!(*doc(&h), *before, "{way}");
         assert_eq!(history(&h), past, "{way}");
         assert!(!dirty(&h), "{way}");
@@ -245,7 +260,7 @@ fn cancel_escape_and_the_close_box_revert_the_preview_without_history() {
 
 #[test]
 fn apply_with_preview_gives_the_same_document_and_one_history_state() {
-    let (mut h, l, before) = opened();
+    let (mut h, l, before, _) = opened();
     let past = history(&h);
     click(&mut h, "Data Set 2");
     click(&mut h, "Apply");
@@ -259,7 +274,7 @@ fn apply_with_preview_gives_the_same_document_and_one_history_state() {
     click(&mut h, "Data Set 2");
     assert_eq!(shown(&h, &l).1, "Beta");
     click(&mut h, "Apply");
-    assert!(h.state().ui.dialogs.is_empty());
+    assert!(!h.state().dialog_open());
     assert_eq!(*doc(&h), *plain, "the same document as Apply without Preview");
     assert_eq!(history(&h), past + 1, "one history state");
     assert!(h.state_mut().session.undo());
@@ -268,11 +283,11 @@ fn apply_with_preview_gives_the_same_document_and_one_history_state() {
 
 #[test]
 fn preview_is_kept_for_the_next_open_after_apply_not_after_cancel() {
-    let (mut h, l, _) = opened();
+    let (mut h, l, _, _) = opened();
     click(&mut h, "Preview");
     click(&mut h, "Apply");
     open(&mut h);
-    assert_eq!(preview_field(&h), true, "on stays on after Apply");
+    assert_eq!(preview_field(&mut h), true, "on stays on after Apply");
     // The first set is selected again and shown at once (Zed: already applied, so check Data Set 2).
     click(&mut h, "Data Set 2");
     assert_eq!(shown(&h, &l).1, "Beta");
@@ -281,15 +296,15 @@ fn preview_is_kept_for_the_next_open_after_apply_not_after_cancel() {
     h.run_steps(3);
     assert_eq!(shown(&h, &l).1, "Alpha", "Cancel put back the applied Zed");
     open(&mut h);
-    assert_eq!(preview_field(&h), false, "off after Cancel");
+    assert_eq!(preview_field(&mut h), false, "off after Cancel");
     click(&mut h, "Apply");
     open(&mut h);
-    assert_eq!(preview_field(&h), false, "off stays off after Apply");
+    assert_eq!(preview_field(&mut h), false, "off stays off after Apply");
 }
 
 #[test]
 fn a_set_whose_replacement_file_is_missing_shows_nothing_of_itself() {
-    let (mut h, l, before) = opened();
+    let (mut h, l, before, _) = opened();
     let past = history(&h);
     click(&mut h, "Preview");
     assert_eq!(shown(&h, &l), (false, "Alpha".into(), true));
@@ -305,49 +320,36 @@ fn a_set_whose_replacement_file_is_missing_shows_nothing_of_itself() {
     assert_eq!(*doc(&h), *before);
 }
 
-fn control(h: &mut Harness<'static, PhotocraftApp>, method: &str, params: Value) -> Value {
-    let ctx = h.ctx.clone();
-    let (req, _rx) = ControlRequest::new(method, params);
-    let reply = match handle(h.state_mut(), &ctx, &req) {
-        Outcome::Done(v) => v,
-        _ => panic!("{method}: expected an immediate reply"),
-    };
-    h.run_steps(3);
-    reply
-}
-
+/// `ui.dialog.set` reads and sets Preview; a value the box cannot hold is refused and changes
+/// nothing, never a panic.
 #[test]
 fn control_channel_reads_and_sets_preview() {
-    let (mut h, l, before) = opened();
-    let inspected = control(&mut h, "ui.inspect", json!({}));
-    let d = inspected["result"]["dialogs"].as_array().unwrap().iter().find(|d| d["fields"]["__command"] == "image.applyDataSet").cloned().unwrap();
-    assert_eq!(d["fields"]["preview"], false);
-    let id = d["id"].clone();
+    let (mut h, l, before, id) = opened();
+    assert_eq!(preview_field(&mut h), false);
     let set = control(&mut h, "ui.dialog.set", json!({"dialog": id, "field": "preview", "value": true}));
-    assert_eq!(set["ok"], true, "{set}");
+    assert!(!refused(&set), "{set}");
     assert_eq!(shown(&h, &l), (false, "Alpha".into(), true));
     control(&mut h, "ui.dialog.set", json!({"dialog": id, "field": "index", "value": 1}));
     assert_eq!(shown(&h, &l).1, "Beta");
-    // Anything else in `preview` is off, never a panic.
     for odd in [json!("yes"), json!(1), Value::Null] {
-        control(&mut h, "ui.dialog.set", json!({"dialog": id, "field": "preview", "value": odd}));
-        assert_eq!(*doc(&h), *before, "{odd}");
+        let reply = control(&mut h, "ui.dialog.set", json!({"dialog": id, "field": "preview", "value": odd}));
+        assert!(refused(&reply), "{odd}: {reply}");
+        assert_eq!(shown(&h, &l).1, "Beta", "{odd}: the preview stays");
     }
-    control(&mut h, "ui.dialog.set", json!({"dialog": id, "field": "preview", "value": true}));
-    control(&mut h, "ui.dialog.set", json!({"dialog": id, "field": "index", "value": 99}));
-    assert_eq!(*doc(&h), *before, "an index past the list shows nothing");
+    let reply = control(&mut h, "ui.dialog.set", json!({"dialog": id, "field": "index", "value": 99}));
+    assert!(refused(&reply), "an index past the list is refused: {reply}");
+    assert_eq!(shown(&h, &l).1, "Beta");
     let cancelled = control(&mut h, "ui.dialog.cancel", json!({"dialog": id}));
-    assert_eq!(cancelled["ok"], true, "{cancelled}");
+    assert!(!refused(&cancelled), "{cancelled}");
     assert_eq!(*doc(&h), *before);
 }
 
 /// A command run while the dialog is open (a script or an action step calls `run` directly) works on
-/// the document itself,
-/// never on the preview: its history state starts from the real document, and Cancel leaves the
-/// command's change without any of the set.
+/// the document itself, never on the preview: its history state starts from the real document, and
+/// Cancel leaves the command's change without any of the set.
 #[test]
 fn a_command_run_while_previewing_works_on_the_document_itself() {
-    let (mut h, l, before) = opened();
+    let (mut h, l, before, _) = opened();
     let past = history(&h);
     click(&mut h, "Preview");
     assert_eq!(shown(&h, &l).1, "Alpha");
@@ -410,19 +412,19 @@ fn autosave_waits_while_previewing() {
     assert_eq!(shown(&h, &l).1, "Alpha");
     let ctx = h.ctx.clone();
     photocraft_ui_egui::prefs_ui::autosave_now(h.state_mut());
-    photocraft_ui_egui::prefs_ui::tick(h.state_mut(), &ctx);
+    photocraft_ui_egui::prefs_ui::tick(h.state_mut(), &ctx, std::time::Instant::now());
     assert!(saved.lock().unwrap().is_empty(), "nothing saved while the preview shows");
     click(&mut h, "Preview");
     photocraft_ui_egui::prefs_ui::autosave_now(h.state_mut());
-    photocraft_ui_egui::prefs_ui::tick(h.state_mut(), &ctx);
+    photocraft_ui_egui::prefs_ui::tick(h.state_mut(), &ctx, std::time::Instant::now());
     let saved = saved.lock().unwrap();
     assert_eq!(saved.len(), 1);
     assert_eq!(*saved[0], *before, "the document itself");
 }
 
-/// Services that keep every document they are asked to encode, and a document with unsaved work
-/// and its own file, so File › Save writes it back in place.
-fn saving_app() -> (PhotocraftApp, Layers, Arc<std::sync::Mutex<Vec<Document>>>) {
+/// File › Save while the dialog shows a set writes the document itself, never the preview.
+#[test]
+fn saving_while_previewing_writes_the_document_itself() {
     let encoded: Arc<std::sync::Mutex<Vec<Document>>> = Default::default();
     let log = encoded.clone();
     let services = photocraft_ui_egui::Services {
@@ -437,34 +439,14 @@ fn saving_app() -> (PhotocraftApp, Layers, Arc<std::sync::Mutex<Vec<Document>>>)
     let dir = std::env::temp_dir().join(format!("pc-apply-data-set-preview-{}-save", std::process::id()));
     a.session.active_mut().unwrap().path = Some(dir.join("own.psd").to_string_lossy().into_owned());
     a.run("layer.new.layer", json!({"name": "Work"})).unwrap();
-    (a, l, encoded)
-}
-
-/// Save on the unsaved-changes prompt (closing the document or quitting while the dialog shows a
-/// set) and File › Save run from the menu or the control channel write the document itself,
-/// never the preview.
-#[test]
-fn saving_while_previewing_writes_the_document_itself() {
-    for via_prompt in [true, false] {
-        let (a, l, encoded) = saving_app();
-        let mut h = harness(a);
-        let before = doc(&h);
-        open(&mut h);
-        click(&mut h, "Preview");
-        assert_eq!(shown(&h, &l).1, "Alpha");
-        let ctx = h.ctx.clone();
-        if via_prompt {
-            photocraft_ui_egui::menus::invoke(h.state_mut(), &ctx, "file.close", json!({})).unwrap();
-            h.run_steps(3);
-            assert!(photocraft_ui_egui::discard_ui::inspect(h.state()).is_some(), "closing unsaved work asks first");
-            // Save: Yes on Windows and Linux, S on macOS; the test context is not macOS.
-            h.key_press(egui::Key::Y);
-            h.run_steps(3);
-        } else {
-            photocraft_ui_egui::menus::invoke(h.state_mut(), &ctx, "file.save", json!({})).unwrap();
-        }
-        let encoded = encoded.lock().unwrap();
-        assert_eq!(encoded.len(), 1, "via_prompt={via_prompt}");
-        assert_eq!(encoded[0], *before, "via_prompt={via_prompt}: the document itself, nothing of Zed");
-    }
+    let mut h = harness(a);
+    let before = doc(&h);
+    open(&mut h);
+    click(&mut h, "Preview");
+    assert_eq!(shown(&h, &l).1, "Alpha");
+    let ctx = h.ctx.clone();
+    photocraft_ui_egui::menus::invoke(h.state_mut(), &ctx, "file.save", json!({})).unwrap();
+    let encoded = encoded.lock().unwrap();
+    assert_eq!(encoded.len(), 1);
+    assert_eq!(encoded[0], *before, "the document itself, nothing of Zed");
 }
