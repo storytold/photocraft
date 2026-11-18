@@ -10,7 +10,7 @@ use egui_kittest::Harness;
 use super::tests::{open_here, pick};
 
 /// A committed type layer reading "Hello" over the middle of a 32 px canvas, no edit running.
-fn app_with_type() -> (PhotocraftApp, u64) {
+fn app_with_type() -> (Box<PhotocraftApp>, u64) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
     app.ui.tool = Tool::Type;
@@ -95,10 +95,10 @@ fn edit_type_starts_editing_the_right_clicked_layer() {
 }
 
 /// A drawn harness over the committed type, as in the canvas gesture tests.
-fn menu_harness(mut app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+fn menu_harness(mut app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     app.sync_views();
     let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).with_context(app.ctx().clone()).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        |ui, app: &mut Box<PhotocraftApp>| {
             let ctx = ui.ctx().clone();
             if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
@@ -112,7 +112,7 @@ fn menu_harness(mut app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
     h
 }
 
-fn right_click(h: &mut Harness<'static, PhotocraftApp>, p: Pos2) {
+fn right_click(h: &mut Harness<'static, Box<PhotocraftApp>>, p: Pos2) {
     h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
     h.event(egui::Event::PointerMoved(p));
     h.run_steps(1);
@@ -122,7 +122,7 @@ fn right_click(h: &mut Harness<'static, PhotocraftApp>, p: Pos2) {
     h.run_steps(2);
 }
 
-fn listed(h: &Harness<'static, PhotocraftApp>) -> Vec<String> {
+fn listed(h: &Harness<'static, Box<PhotocraftApp>>) -> Vec<String> {
     let menu = h.state().ui.canvas_tool_menu.clone().expect("the menu stays open over the type");
     rows(&menu).iter().flatten().map(|(_, id)| id.to_string()).collect()
 }

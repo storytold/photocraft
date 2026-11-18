@@ -19,14 +19,14 @@ use super::super::layers_tree::{PhotoLayers, PhotoThumbs};
 use super::{MaskKind, vector_thumb_image};
 use crate::PhotocraftApp;
 
-fn app_of(session: photocraft_engine::Session) -> PhotocraftApp {
+fn app_of(session: photocraft_engine::Session) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(session, crate::Services::default());
     app.background_jobs = false;
     app.sync_views();
     app
 }
 
-fn harness(session: photocraft_engine::Session, ppp: f32, dock_width: f32) -> Harness<'static, PhotocraftApp> {
+fn harness(session: photocraft_engine::Session, ppp: f32, dock_width: f32) -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = Harness::builder().with_size(vec2(1440.0, 1000.0)).with_pixels_per_point(ppp).with_max_steps(64).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         PhotocraftApp::with_context(cc.egui_ctx.clone(), session, crate::Services::default())
@@ -38,7 +38,7 @@ fn harness(session: photocraft_engine::Session, ppp: f32, dock_width: f32) -> Ha
     h
 }
 
-fn click_with(h: &mut Harness<'_, PhotocraftApp>, at: Pos2, modifiers: Modifiers) {
+fn click_with(h: &mut Harness<'_, Box<PhotocraftApp>>, at: Pos2, modifiers: Modifiers) {
     h.hover_at(at);
     h.event(egui::Event::ModifiersChanged(modifiers));
     h.run_steps(1);
@@ -54,11 +54,11 @@ fn layer(app: &PhotocraftApp, id: u64) -> photocraft_doc::Layer {
     app.session.active().unwrap().doc.layer(LayerId(id)).unwrap().clone()
 }
 
-fn name(h: &Harness<'_, PhotocraftApp>, id: u64) -> String {
+fn name(h: &Harness<'_, Box<PhotocraftApp>>, id: u64) -> String {
     layer(h.state(), id).name
 }
 
-fn mask_rect(h: &Harness<'_, PhotocraftApp>, id: u64, kind: MaskKind) -> Rect {
+fn mask_rect(h: &Harness<'_, Box<PhotocraftApp>>, id: u64, kind: MaskKind) -> Rect {
     let part = if kind == MaskKind::Pixel { LayerPart::LayerMask } else { LayerPart::VectorMask };
     crate::layers_panel_nodes::thumb(h, &name(h, id), part)
 }
