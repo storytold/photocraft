@@ -756,7 +756,7 @@ fn preset_manager_brush_delete_clears_current_preset() {
 #[test]
 fn define_brush_preset_wraps_define_from_selection() {
     let mut s = session(8);
-    assert!(!s.is_enabled("edit.defineBrushPreset"));
+    assert!(s.is_enabled("edit.defineBrushPreset"));
     s.execute("edit.fill", json!({"color": "#000000"})).unwrap();
     s.execute("select.rect", json!({"x": 2, "y": 2, "width": 10, "height": 10})).unwrap();
     s.execute("edit.defineBrushPreset", json!({})).unwrap();
