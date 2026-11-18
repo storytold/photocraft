@@ -10,7 +10,7 @@ use crate::canvas::{ToolEvent, testing, tool_event};
 use crate::state::Tool;
 use craft::draw::ui::VectorMode;
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
     app.sync_views();
@@ -20,7 +20,7 @@ fn app() -> PhotocraftApp {
 }
 
 /// An app drawing into the saved path "Saved drawing", with a Work Path beside it.
-fn freeform_app() -> PhotocraftApp {
+fn freeform_app() -> Box<PhotocraftApp> {
     let mut app = app();
     for name in ["work", "Saved drawing"] {
         app.run("path.set", json!({"name": name, "path":{"subpaths":[{"knots":[[20,20],[220,20]]}]}})).unwrap();

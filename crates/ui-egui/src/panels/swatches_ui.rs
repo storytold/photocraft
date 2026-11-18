@@ -283,7 +283,7 @@ mod tests {
     use super::*;
     use crate::state::Tool;
 
-    fn app() -> PhotocraftApp {
+    fn app() -> Box<PhotocraftApp> {
         PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default())
     }
 

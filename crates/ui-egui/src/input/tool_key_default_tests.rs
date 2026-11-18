@@ -4,7 +4,7 @@ use crate::shortcut_dispatch::tests::{app_harness, tap};
 use crate::spring_tools::key_of;
 use std::collections::HashSet;
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     PhotocraftApp::new(photocraft_engine::Session::new(), Default::default())
 }
 

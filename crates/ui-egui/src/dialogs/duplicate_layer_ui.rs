@@ -113,7 +113,7 @@ mod tests {
     use super::*;
     use crate::new_layer_ui::testing::{set, top};
 
-    fn make_app() -> PhotocraftApp {
+    fn make_app() -> Box<PhotocraftApp> {
         let mut s = photocraft_engine::Session::new();
         s.execute("file.new", json!({"width":8,"height":8,"name":"Poster"})).unwrap();
         s.execute("layer.new.layer", json!({"name":"Ink"})).unwrap();
