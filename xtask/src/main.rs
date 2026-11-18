@@ -14,6 +14,7 @@ mod perf;
 mod pinned;
 mod scorecard;
 mod stats;
+mod test_binaries;
 mod version;
 
 use std::path::{Path, PathBuf};
@@ -29,6 +30,8 @@ commands:
   egui-fork       fail unless Cargo.lock takes every egui package from the craft framework's egui fork
   panel-commands  fail on a shell click handler that changes the document or session directly instead of
                   dispatching a command id (allowlist: xtask/src/panel_commands.rs)
+  test-binaries   fail on a single-file test binary (crates/*/tests/*.rs): integration tests are modules of tests/it/main.rs
+                  (allowlist: xtask/src/test_binaries.rs)
   wasm            cargo check --target wasm32-unknown-unknown for the wasm-safe crates (one call, plus
                   one per optional web feature)
   test            workspace tests (cargo nextest when installed, else cargo test), then doctests
@@ -75,6 +78,7 @@ fn main() -> ExitCode {
         Some("layers") => cmd_layers(),
         Some("egui-fork") => cmd_egui_fork(),
         Some("panel-commands") => panel_commands::run(&root()),
+        Some("test-binaries") => test_binaries::run(&root()),
         Some("wasm") => cmd_wasm(),
         Some("test") => cmd_test().and_then(|()| cmd_doctest()),
         Some("ci") => ci_from_args(&rest, ci_exclude()).and_then(|(plan, options)| cmd_ci(&plan, &options)),
@@ -287,12 +291,13 @@ struct CiOptions {
 type StepFn = fn(&CiOptions) -> Result<(), String>;
 
 /// The CI gate's steps, in the order `cargo xtask ci` runs them.
-const CI_STEPS: [(&str, Part, StepFn); 11] = [
+const CI_STEPS: [(&str, Part, StepFn); 12] = [
     ("fmt", Part::Lint, step_fmt),
     ("egui-fork", Part::Lint, |_| cmd_egui_fork()),
     ("clippy", Part::Lint, step_clippy),
     ("layers", Part::Lint, |_| cmd_layers()),
     ("panel-commands", Part::Lint, |_| panel_commands::run(&root())),
+    ("test-binaries", Part::Lint, |_| test_binaries::run(&root())),
     ("scorecard", Part::Lint, |_| scorecard::run(&root(), &["--check"])),
     ("test", Part::Test, |o| step_tests(o, false)),
     ("panic_hunt", Part::Test, |o| step_tests(o, true)),

@@ -1,13 +1,9 @@
 //! #10030: the decoded-source cache counts the bytes it holds, and Purge All and closing a
-//! document with smart objects release them. One integration-test process keeps the global
-//! cache isolated from parallel unit tests; the tests here take turns on it.
-use std::sync::Mutex;
-
+//! document with smart objects release them. The global cache is
+//! isolated from parallel unit tests; the tests here take turns on it.
 use photocraft_codecs::{ChannelLayout, EncodeOptions, Format, Image, SampleType};
 use photocraft_engine::{Session, file_cmds, smart_cmds};
 use serde_json::json;
-
-static TURN: Mutex<()> = Mutex::new(());
 
 const SIDE: u32 = 256;
 
@@ -24,6 +20,7 @@ fn empty_caches() {
     photocraft_compose::purge_effect_cache();
     photocraft_compose::masks::purge_cache();
     photocraft_compose::shape_split::purge_cache();
+    crate::purge_all_caches();
 }
 
 fn session_with_smart_object(bytes: &[u8]) -> Session {
@@ -39,7 +36,7 @@ fn decode(s: &Session, bytes: &[u8]) {
 
 #[test]
 fn the_cache_counts_real_tile_bytes() {
-    let _turn = TURN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _turn = crate::lock(&crate::PROCESS);
     empty_caches();
     let bytes = png();
     let s = session_with_smart_object(&bytes);
@@ -53,7 +50,7 @@ fn the_cache_counts_real_tile_bytes() {
 
 #[test]
 fn purge_all_reports_and_empties_the_source_cache() {
-    let _turn = TURN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _turn = crate::lock(&crate::PROCESS);
     empty_caches();
     let bytes = png();
     let mut s = session_with_smart_object(&bytes);
@@ -72,7 +69,7 @@ fn purge_all_reports_and_empties_the_source_cache() {
 
 #[test]
 fn closing_a_document_with_a_smart_object_empties_the_source_cache() {
-    let _turn = TURN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _turn = crate::lock(&crate::PROCESS);
     empty_caches();
     let bytes = png();
     let mut s = session_with_smart_object(&bytes);

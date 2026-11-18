@@ -1,12 +1,9 @@
-//! One integration-test process keeps the process-wide scratch pool isolated from parallel unit
-//! tests (#10479).
+//! The process-wide scratch pool is isolated from parallel unit tests (#10479); these tests take
+//! turns on it.
 use photocraft_engine::Session;
 use photocraft_engine::jobs::Started;
 use photocraft_raster::scratch;
 use serde_json::json;
-use std::sync::{Mutex, PoisonError};
-
-static SERIAL: Mutex<()> = Mutex::new(());
 
 /// Holds the test lock with the pool's idle release off, so a slow runner can't empty the pool
 /// between a command and the check after it; the release comes back on when dropped.
@@ -17,7 +14,7 @@ struct Quiet {
 impl Quiet {
     /// Locks the test process and disables idle pool release for this guard's lifetime.
     fn new() -> Self {
-        let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+        let _serial = crate::lock(&crate::PROCESS);
         scratch::set_idle_release(false);
         Quiet { _serial }
     }
