@@ -1,530 +1,114 @@
-//! Icon rendering. SVGs are embedded (see `icon_data.rs`), recoloured to white, rasterized by the
-//! egui_extras SVG loader at the exact on-screen pixel size (crisp at any DPI), and tinted per use.
-//!
-//! (History: the first shell used Unicode glyphs; half of them rendered as tofu boxes because the
-//! bundled fonts lacked them. Vector icons fix that for good.)
+//! PhotoCraft's icon names. The glyphs come from the framework's catalog and from the app's own set in
+//! `icon_data.rs`, registered once by [`register`]; drawing is the framework's `Icon` / `IconSpec::svg`.
 
+use std::borrow::Cow;
+use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use craft_ui::buttons::{ButtonVisuals, IconButton, IconButtonStyle};
-use craft_ui::icons::{SvgIconSet, SvgStyle};
-use egui::{Color32, Rect, Response, Sense, Vec2};
+use craft::behavior::IconId;
+use craft::ui::contract::CommandSet;
+use craft::ui::primitives::register_app_icons;
 
-use crate::icon_data::ICONS;
+use crate::icon_data::PHOTOCRAFT_ICONS;
+use crate::panels::tool_commands::{ToolCommand, command_of};
 use crate::state::Tool;
-use crate::theme::Tokens;
 
-fn white_icons() -> &'static SvgIconSet {
-    static MAP: OnceLock<SvgIconSet> = OnceLock::new();
-    MAP.get_or_init(|| SvgIconSet::new(ICONS, SvgStyle { current_color: "#ffffff", stroke_width: Some("1.75") }, "bytes://icons/", "square"))
-}
-
-pub fn exists(name: &str) -> bool {
-    white_icons().contains(name)
-}
-
-/// Rasterize an embedded icon from the white icon set at exact pixel dimensions `[width, height]`.
-pub(crate) fn rasterize_svg(name: &str, width: u32, height: u32) -> Option<egui::ColorImage> {
-    if width == 0 || height == 0 {
-        return None;
-    }
-    let egui::ImageSource::Bytes { bytes, .. } = white_icons().source(name) else {
-        return None;
-    };
-    egui_extras::image::load_svg_bytes_with_size(bytes.as_ref(), egui::load::SizeHint::Size { width, height, maintain_aspect_ratio: true }, &Default::default())
-        .ok()
+/// Registers the app's own icon set with the framework. The registry is process-wide and ignores a set
+/// registered twice, so a second window or a test may call it again.
+pub fn register() {
+    register_app_icons(&PHOTOCRAFT_ICONS);
 }
 
 /// Panel footer buttons share one glyph per action and one size, so the Layers footer and the
 /// Swatches, Gradients and Patterns footers read the same, as in Photoshop (#10656).
 pub const FOOTER_SIZE: f32 = 26.0;
-pub const FOOTER_NEW: &str = "square-plus";
+/// The footer's "new" glyph.
+pub const FOOTER_NEW: &str = "square_plus";
+/// The footer's "new group" glyph.
 pub const FOOTER_NEW_GROUP: &str = "folder";
+/// The footer's "delete" glyph.
 pub const FOOTER_DELETE: &str = "trash";
 
-/// An egui image for an icon, tinted.
-pub fn image(name: &str, size: f32, tint: Color32) -> egui::Image<'static> {
-    egui::Image::new(white_icons().source(name)).fit_to_exact_size(Vec2::splat(size)).tint(tint)
-}
-
-/// Rasterize the same styled SVG used by the toolbar for a composed native cursor.
-pub(crate) fn rasterize(name: &str, side: u32) -> Result<egui::ColorImage, String> {
-    if !white_icons().contains(name) {
-        return Err(format!("Cursor icon {name:?} is missing"));
-    }
-    let egui::ImageSource::Bytes { bytes, .. } = white_icons().source(name) else {
-        return Err(format!("Cursor icon {name:?} has no embedded SVG bytes"));
-    };
-    egui_extras::image::load_svg_bytes_with_size(&bytes, egui::load::SizeHint::Width(side), &Default::default())
-        .map_err(|error| format!("Could not rasterize cursor icon {name:?}: {error}"))
-}
-
-/// Paint an icon centred in `rect`.
-pub fn paint(ui: &egui::Ui, rect: Rect, name: &str, size: f32, tint: Color32) {
-    let r = Rect::from_center_size(rect.center(), Vec2::splat(size));
-    image(name, size, tint).paint_at(ui, r);
-}
-
-/// An icon as the pointer, above every window: `name` with its hotspot `hot` (a fraction of the
-/// icon box) on `p`, white with a dark outline so it reads on any image. The caller hides the OS
-/// cursor (`CursorIcon::None`).
-pub fn cursor(ctx: &egui::Context, name: &str, p: egui::Pos2, hot: Vec2, size: f32) {
-    let rect = Rect::from_min_size(p - hot * size, Vec2::splat(size));
-    let area = egui::Area::new(egui::Id::unique("pc-icon-cursor")).order(egui::Order::Tooltip).fixed_pos(rect.min).constrain(false).interactable(false);
-    area.show(ctx, |ui| {
-        let outline = image(name, size, Color32::from_black_alpha(200));
-        for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-1.0, -1.0), (1.0, 1.0), (-1.0, 1.0), (1.0, -1.0)] {
-            outline.paint_at(ui, rect.translate(egui::vec2(dx, dy)));
-        }
-        image(name, size, Color32::WHITE).paint_at(ui, rect);
-    });
-}
-
-/// A solid black arrow as the pointer, above every window, its tip on `p` (the reference
-/// application's arrow, hotspot at its tip): filled black with a thin light outline so it reads on
-/// any image, and the same on every system. The caller hides the OS cursor (`CursorIcon::None`).
-pub fn cursor_arrow(ctx: &egui::Context, p: egui::Pos2) {
-    paint_arrow(ctx, p, Color32::BLACK, Color32::from_white_alpha(235));
-}
-
-/// The same arrow white with a black outline, its tip on `p`: Path Selection's pointer (#13295).
-/// The caller hides the OS cursor (`CursorIcon::None`).
-pub fn cursor_arrow_white(ctx: &egui::Context, p: egui::Pos2) {
-    paint_arrow(ctx, p, Color32::WHITE, Color32::from_black_alpha(235));
-}
-
-fn paint_arrow(ctx: &egui::Context, p: egui::Pos2, fill: Color32, edge: Color32) {
-    // The outline of the arrow in pixels from its tip, and its split into triangles.
-    const OUTLINE: [(f32, f32); 7] = [(0.0, 0.0), (0.0, 16.0), (3.6, 12.6), (6.8, 19.0), (9.6, 17.8), (6.6, 11.6), (11.5, 11.5)];
-    const TRIANGLES: [[u32; 3]; 5] = [[0, 1, 2], [0, 2, 5], [0, 5, 6], [2, 3, 4], [2, 4, 5]];
-    let points: Vec<egui::Pos2> = OUTLINE.iter().map(|&(x, y)| p + egui::vec2(x, y)).collect();
-    // A new id every frame would restart the Area's fade-in each time and leave the arrow pale.
-    let area =
-        egui::Area::new(egui::Id::unique("pc-arrow-cursor")).order(egui::Order::Tooltip).fixed_pos(p).constrain(false).interactable(false).fade_in(false);
-    area.show(ctx, |ui| {
-        let vertices = points.iter().map(|&pos| egui::epaint::Vertex { pos, uv: egui::epaint::WHITE_UV, color: fill }).collect();
-        let body = egui::Mesh { indices: TRIANGLES.iter().flatten().copied().collect(), vertices, ..Default::default() };
-        ui.painter().add(body);
-        ui.painter().add(egui::Shape::closed_line(points, egui::Stroke::new(1.0, edge)));
-    });
-}
-
-/// A small icon beside the OS arrow pointer at `p` (Photoshop's cursor badges: scissors for
-/// cutting the selected pixels). Below-right of the arrow, white with a dark outline. The caller
-/// keeps the arrow (`CursorIcon::Default`).
-pub fn cursor_badge(ctx: &egui::Context, name: &str, p: egui::Pos2) {
-    badge(ctx, name, p + egui::vec2(20.0, 19.0), false);
-}
-
-/// A small icon below right of a crosshair centred on `p` (the Perspective Crop's idle pointer).
-pub fn crosshair_badge(ctx: &egui::Context, name: &str, p: egui::Pos2) {
-    badge(ctx, name, p + egui::vec2(13.0, 13.0), false);
-}
-
-/// Photoshop's duplicate badge: a second, dark arrowhead behind a white one.
-pub fn cursor_copy_badge(ctx: &egui::Context, p: egui::Pos2) {
-    badge(ctx, "mouse-pointer-2", p + egui::vec2(20.0, 19.0), true);
-}
-
-fn badge(ctx: &egui::Context, name: &str, centre: egui::Pos2, doubled: bool) {
-    const SIZE: f32 = 12.0;
-    let rect = Rect::from_center_size(centre, Vec2::splat(SIZE));
-    let area =
-        egui::Area::new(egui::Id::unique(("pc-cursor-badge", name))).order(egui::Order::Tooltip).fixed_pos(rect.min).constrain(false).interactable(false);
-    area.show(ctx, |ui| {
-        let outline = image(name, SIZE, Color32::from_black_alpha(220));
-        let halo = [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-1.0, -1.0), (1.0, 1.0), (-1.0, 1.0), (1.0, -1.0)];
-        if doubled {
-            let behind = rect.translate(egui::vec2(4.0, 4.0));
-            for (dx, dy) in halo {
-                image(name, SIZE, Color32::WHITE).paint_at(ui, behind.translate(egui::vec2(dx, dy)));
-            }
-            image(name, SIZE, Color32::BLACK).paint_at(ui, behind);
-        }
-        for (dx, dy) in halo {
-            outline.paint_at(ui, rect.translate(egui::vec2(dx, dy)));
-        }
-        image(name, SIZE, Color32::WHITE).paint_at(ui, rect);
-    });
-}
-
-pub fn tool_icon(t: Tool) -> &'static str {
-    match t {
-        Tool::Move => "move",
-        Tool::Artboard => "artboard",
-        Tool::RectMarquee => "square-dashed",
-        Tool::EllipseMarquee => "ellipse-dashed",
-        Tool::SingleRowMarquee => "marquee-row",
-        Tool::SingleColumnMarquee => "marquee-column",
-        Tool::Brush => "brush",
-        Tool::Pencil => "pencil",
-        Tool::MixerBrush => "palette",
-        Tool::ColorReplacement => "brush-replace",
-        Tool::Eraser => "eraser",
-        Tool::BackgroundEraser => "eraser-background",
-        Tool::MagicEraser => "eraser-magic",
-        Tool::Eyedropper => "pipette",
-        Tool::ColorSampler => "sampler",
-        Tool::Ruler => "ruler",
-        Tool::Note => "message-square",
-        Tool::Count => "circle-dot",
-        Tool::Lasso => "lasso",
-        Tool::PolygonLasso => "pentagon",
-        Tool::MagneticLasso => "lasso-magnetic",
-        Tool::MagicWand => "wand-sparkles",
-        Tool::Crop => "crop",
-        Tool::PerspectiveCrop => "perspective-crop",
-        Tool::Slice => "slice-knife",
-        Tool::SliceSelect => "slice-select",
-        Tool::Frame => "frame-placeholder",
-        Tool::Gradient => "gradient",
-        Tool::PaintBucket => "paint-bucket",
-        Tool::Type | Tool::VerticalType => "type",
-        Tool::HorizontalTypeMask => "type-mask",
-        Tool::VerticalTypeMask => "type-mask-vertical",
-        Tool::Hand => "hand",
-        Tool::RotateView => "compass",
-        Tool::Zoom => "zoom-in",
-        Tool::SpotHealing | Tool::Healing => "bandage",
-        Tool::Remove => "bandage-sparkle",
-        Tool::Patch => "lasso-select",
-        Tool::ContentAwareMove => "arrow-left-right",
-        Tool::RedEye => "eye",
-        Tool::CloneStamp => "stamp",
-        Tool::PatternStamp => "grid-3x3",
-        Tool::HistoryBrush => "history-brush",
-        Tool::ArtHistoryBrush => "sparkles",
-        Tool::Blur => "droplet",
-        Tool::Sharpen => "triangle",
-        Tool::Smudge => "pointer",
-        Tool::Dodge => "lollipop",
-        Tool::Burn => "flame",
-        Tool::Sponge => "cloud",
-        Tool::QuickSelection => "quick-selection",
-        Tool::ObjectSelection => "square-dashed-mouse-pointer",
-        Tool::Pen => "pen-tool",
-        Tool::FreeformPen => "pen-freeform",
-        Tool::CurvaturePen => "pen-curvature",
-        Tool::AddAnchorPoint => "pen-add-anchor",
-        Tool::DeleteAnchorPoint => "pen-delete-anchor",
-        Tool::ConvertPoint => "convert-point",
-        Tool::PathSelection => "mouse-pointer-2",
-        Tool::DirectSelection => "direct-select",
-        Tool::Rectangle => "rectangle-horizontal",
-        Tool::EllipseShape => "circle",
-        Tool::Triangle => "triangle",
-        Tool::Polygon => "pentagon",
-        Tool::Star => "star",
-        Tool::Line => "slash",
-        Tool::CustomShape => "cloud",
-    }
-}
-
-/// Selected and hover fill shared by square icon buttons. Returns the icon tint.
-pub fn button_chrome(ui: &egui::Ui, rect: Rect, selected: bool, hovered: bool) -> Color32 {
-    let t = Tokens::get(ui.ctx());
-    if selected {
-        ui.painter().rect_filled(rect, t.radius_sm, t.accent_soft);
-        ui.painter().rect_stroke(rect, t.radius_sm, egui::Stroke::new(1.0, t.accent_border), egui::StrokeKind::Inside);
-    } else if hovered {
-        ui.painter().rect_filled(rect, t.radius_sm, t.hover);
-    }
-    if selected {
-        t.accent_text
-    } else if hovered {
-        t.text
-    } else {
-        t.icon
-    }
-}
-
-/// Square icon button: transparent until hovered; `selected` gets the accent treatment.
-pub fn button(ui: &mut egui::Ui, name: &str, box_size: f32, selected: bool, tooltip: &str) -> Response {
-    button_with_icon_size(ui, name, box_size, (box_size * 0.52).round(), selected, tooltip)
-}
-
-/// Square icon button with an explicit glyph size, independent of its hit area.
-pub fn button_with_icon_size(ui: &mut egui::Ui, name: &str, box_size: f32, icon_size: f32, selected: bool, tooltip: &str) -> Response {
-    button_with_icon_size_tip(ui, name, box_size, icon_size, selected, tooltip, true)
-}
-
-/// [`button_with_icon_size`] whose tooltip shows only when `show_tip`; the tooltip text still
-/// names the button (for screen readers and tests) when it is hidden.
-pub fn button_with_icon_size_tip(ui: &mut egui::Ui, name: &str, box_size: f32, icon_size: f32, selected: bool, tooltip: &str, show_tip: bool) -> Response {
-    let t = Tokens::get(ui.ctx());
-    let style = IconButtonStyle {
-        normal: ButtonVisuals { fill: Color32::TRANSPARENT, stroke: egui::Stroke::NONE, icon: t.icon },
-        hovered: ButtonVisuals { fill: t.hover, stroke: egui::Stroke::NONE, icon: t.text },
-        pressed: None,
-        selected: ButtonVisuals { fill: t.accent_soft, stroke: egui::Stroke::new(1.0, t.accent_border), icon: t.accent_text },
-        corner_radius: t.radius_sm.into(),
-        focus_stroke: egui::Stroke::new(1.0, t.accent),
-    };
-    let label = if tooltip.is_empty() { name } else { tl!(tooltip) };
-    let resp = IconButton::new(label, Vec2::splat(box_size), &style).selected(selected).show(ui, |ui, rect, tint| {
-        paint(ui, rect, name, icon_size, tint);
-    });
-    if tooltip.is_empty() || !show_tip { resp } else { resp.on_hover_text(label) }
-}
-
-/// Rail toggle: "on" gets a quiet filled background and full-strength icon (no accent).
-pub fn rail_button(ui: &mut egui::Ui, name: &str, box_size: f32, on: bool, tooltip: &str) -> Response {
-    let t = Tokens::get(ui.ctx());
-    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(box_size), Sense::click());
-    if on {
-        ui.painter().rect_filled(rect, t.radius_sm, t.card);
-        ui.painter().rect_stroke(rect, t.radius_sm, egui::Stroke::new(1.0, t.card_border), egui::StrokeKind::Inside);
-    } else if resp.hovered() {
-        ui.painter().rect_filled(rect, t.radius_sm, t.hover);
-    }
-    let tint = if on || resp.hovered() { t.text } else { t.text_faint };
-    paint(ui, rect, name, (box_size * 0.52).round(), tint);
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), on, tl!(tooltip)));
-    resp.on_hover_text(tl!(tooltip))
+/// The icon of tool `t`: the one its command names (`ToolCommand`'s `icon` attribute), which the tool rail also draws.
+pub fn tool_icon(t: Tool) -> IconId {
+    static ICONS: OnceLock<HashMap<String, Cow<'static, str>>> = OnceLock::new();
+    let icons =
+        ICONS.get_or_init(|| ToolCommand::defs().unwrap_or_default().into_iter().filter_map(|def| def.icon.map(|icon| (def.command.id, icon))).collect());
+    icons.get(command_of(t).id()).map_or_else(|| IconId::new("more"), |name| IconId::from(name.clone()))
 }
 
 #[cfg(test)]
 mod tests {
+    use craft::ui::primitives::has_icon;
+
     use super::*;
+    use crate::icon_data::ICONS;
 
+    /// A missing glyph paints nothing and only logs, so a call site left on a renamed (hyphenated)
+    /// name is caught here: every name PhotoCraft asks for resolves once the app set is registered.
     #[test]
-    fn every_tool_has_an_icon() {
+    fn every_name_photocraft_asks_for_resolves() {
+        register();
+        register();
         for t in Tool::ALL {
-            assert!(exists(tool_icon(t)), "{t:?}");
+            assert!(has_icon(&tool_icon(t)), "{t:?}: {}", tool_icon(t).name());
         }
-        assert_eq!(tool_icon(Tool::Gradient), "gradient");
-        assert_ne!(tool_icon(Tool::Gradient), tool_icon(Tool::PaintBucket));
-    }
-
-    #[test]
-    fn gradient_tool_icon_rasterizes_left_to_right_ramp() {
-        let egui::ImageSource::Bytes { bytes, .. } = white_icons().source(tool_icon(Tool::Gradient)) else {
-            panic!("icon source must be embedded bytes");
-        };
-        let image = egui_extras::image::load_svg_bytes_with_size(
-            bytes.as_ref(),
-            egui::load::SizeHint::Size { width: 24, height: 24, maintain_aspect_ratio: true },
-            &Default::default(),
-        )
-        .unwrap();
-        let left_alpha = image[(6, 12)].a();
-        let mid_alpha = image[(12, 12)].a();
-        let right_alpha = image[(18, 12)].a();
-        assert!(
-            left_alpha > mid_alpha && mid_alpha > right_alpha,
-            "interior ramp should fade from left ({left_alpha}) through middle ({mid_alpha}) to right ({right_alpha})"
-        );
-    }
-
-    /// Rasterize an icon to its ink mask at `size` px.
-    fn ink(name: &str, size: u32) -> Vec<bool> {
-        let egui::ImageSource::Bytes { bytes, .. } = white_icons().source(name) else { panic!("icon must be embedded bytes") };
-        let image = egui_extras::image::load_svg_bytes_with_size(
-            bytes.as_ref(),
-            egui::load::SizeHint::Size { width: size, height: size, maintain_aspect_ratio: true },
-            &Default::default(),
-        )
-        .unwrap();
-        assert_eq!(image.size, [size as usize; 2]);
-        image.pixels.iter().map(|p| p.a() > 16).collect()
-    }
-
-    #[test]
-    fn quick_selection_icon_differs_from_ellipse_marquee() {
-        // #5116: Quick Selection used to reuse the Ellipse Marquee's dashed circle.
-        assert_ne!(tool_icon(Tool::QuickSelection), tool_icon(Tool::EllipseMarquee));
-        for size in [14_u32, 28] {
-            let (quick, ellipse) = (ink(tool_icon(Tool::QuickSelection), size), ink(tool_icon(Tool::EllipseMarquee), size));
-            let shared = quick.iter().zip(&ellipse).filter(|(a, b)| **a && **b).count();
-            let union = quick.iter().zip(&ellipse).filter(|(a, b)| **a || **b).count();
-            assert!(union > 0, "icons must have ink at {size}px");
-            let overlap = shared as f32 / union as f32;
-            assert!(overlap < 0.5, "the two glyphs must read as distinct: {overlap:.2} of their ink overlaps at {size}px");
-            // The dashed selection "C" must actually rasterize down the left edge, where the brush has no ink.
-            let s = size as usize;
-            assert!(quick.iter().enumerate().any(|(i, a)| *a && i % s < s / 5), "the dashed selection edge is missing at {size}px");
+        // The rail draws each command's own icon, so every command's attribute resolves too.
+        for def in ToolCommand::defs().expect("tool commands define") {
+            let name = def.icon.unwrap_or_else(|| panic!("{} names no icon", def.command.id));
+            assert!(has_icon(&IconId::from(name.clone())), "{}: {name}", def.command.id);
+        }
+        for name in [FOOTER_NEW, FOOTER_NEW_GROUP, FOOTER_DELETE, "symmetry_vertical", "symmetry_horizontal", "symmetry_diagonal", "symmetry_dual"] {
+            assert!(has_icon(&IconId::new(name)), "{name}");
+        }
+        for &(name, _) in ICONS {
+            assert!(has_icon(&IconId::new(name)), "{name}");
         }
     }
 
+    /// Every panel's iconic form draws the registry's icon, so each registry name resolves.
     #[test]
-    fn slice_select_icon_is_its_own() {
-        // #7859: Slice Select reused Object Selection's dashed square with a pointer. As in
-        // Photoshop it is the Slice knife with a pointer: unlike Object Selection, and the Slice
-        // tool's knife plus ink of its own (the pointer).
-        assert_ne!(tool_icon(Tool::SliceSelect), tool_icon(Tool::ObjectSelection));
-        assert_ne!(tool_icon(Tool::SliceSelect), tool_icon(Tool::Slice));
-        for size in [14_u32, 28] {
-            let select = ink(tool_icon(Tool::SliceSelect), size);
-            assert!(select.iter().any(|&pixel| pixel), "Slice Select must have ink at {size}px");
-            let object = ink(tool_icon(Tool::ObjectSelection), size);
-            let shared = select.iter().zip(&object).filter(|(a, b)| **a && **b).count();
-            let union = select.iter().zip(&object).filter(|(a, b)| **a || **b).count();
-            assert!(union > 0, "icons must have ink at {size}px");
-            let overlap = shared as f32 / union as f32;
-            assert!(overlap < 0.5, "Slice Select and Object Selection must read as distinct: {overlap:.2} of their ink overlaps at {size}px");
-            let slice = ink(tool_icon(Tool::Slice), size);
-            let own = select.iter().zip(&slice).filter(|(a, b)| **a && !**b).count();
-            let total = select.iter().filter(|a| **a).count();
-            assert!(own as f32 >= 0.3 * total as f32, "the pointer sets Slice Select apart from Slice: {own} of {total} pixels at {size}px");
+    fn every_panel_icon_resolves() {
+        register();
+        for panel in crate::panels::registry::PANELS {
+            assert!(has_icon(&IconId::new(panel.icon)), "panel {}: icon {:?} is not in the catalog", panel.id, panel.icon);
         }
     }
 
-    /// Ink bounding box `(width, height)` of a rasterized mask.
-    fn ink_extent(mask: &[bool], size: u32) -> (usize, usize) {
-        let s = size as usize;
-        let (xs, ys): (Vec<usize>, Vec<usize>) = mask.iter().enumerate().filter(|(_, a)| **a).map(|(i, _)| (i % s, i / s)).unzip();
-        let span = |v: &[usize]| v.iter().max().zip(v.iter().min()).map_or(0, |(hi, lo)| hi - lo + 1);
-        (span(&xs), span(&ys))
-    }
-
-    #[test]
-    fn ellipse_marquee_icon_is_a_wide_ellipse() {
-        // #6875: Photoshop's Elliptical Marquee glyph is a horizontal ellipse, not a circle.
-        assert_ne!(tool_icon(Tool::EllipseMarquee), "circle-dashed");
-        for size in [14_u32, 28] {
-            let (w, h) = ink_extent(&ink(tool_icon(Tool::EllipseMarquee), size), size);
-            assert!(w as f32 >= h as f32 * 1.15, "ellipse marquee ink is {w}x{h} at {size}px: not wider than tall");
+    fn sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("source dir reads").flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                sources(&path, out);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                out.push(path);
+            }
         }
     }
 
+    /// An unknown id paints nothing and only logs, so every id written as a string literal in the sources must resolve.
+    /// Ids built in match arms are not scanned.
     #[test]
-    fn quick_selection_icon_is_a_tall_selection_with_a_brush() {
-        // #6875: Photoshop's Quick Selection glyph is a dashed, upright rounded "C" with a brush.
-        let size = 28_u32;
-        let s = size as usize;
-        let quick = ink(tool_icon(Tool::QuickSelection), size);
-        // The left edge of the selection runs most of the icon's height.
-        let left_rows = (0..s).filter(|y| (0..s / 5).any(|x| quick.get(y * s + x).copied().unwrap_or(false))).count();
-        assert!(left_rows * 5 > s * 2, "left selection edge covers only {left_rows} of {s} rows");
-    }
-
-    #[test]
-    fn shared_catalog_preserves_existing_icons() {
-        // Characterize the pre-extraction loader across every real asset. The UI's tint,
-        // stroke weight and cache keys must survive shared-crate upgrades unchanged.
-        assert!(ICONS.len() >= 60);
-        for (name, original) in ICONS {
-            let expected = String::from_utf8_lossy(original).replace("currentColor", "#ffffff").replace("stroke-width=\"2\"", "stroke-width=\"1.75\"");
-            let egui::ImageSource::Bytes { uri, bytes } = white_icons().source(name) else { panic!("expected SVG bytes") };
-            assert_eq!(uri.as_ref(), format!("bytes://icons/{name}.svg"));
-            assert_eq!(bytes.as_ref(), expected.as_bytes(), "{name}");
-            assert!(!std::str::from_utf8(&bytes).unwrap().contains("currentColor"), "{name}");
-        }
-    }
-
-    /// #10656: a misspelt footer glyph would silently draw the fallback square.
-    #[test]
-    fn footer_glyphs_are_bundled() {
-        for name in [FOOTER_NEW, FOOTER_NEW_GROUP, FOOTER_DELETE] {
-            assert!(exists(name), "{name}");
-        }
-    }
-
-    #[test]
-    fn shared_catalog_preserves_fallback() {
-        let egui::ImageSource::Bytes { uri, bytes } = white_icons().source("missing-icon") else { panic!("expected SVG bytes") };
-        let egui::ImageSource::Bytes { bytes: fallback, .. } = white_icons().source("square") else { panic!("expected SVG bytes") };
-        assert_eq!(uri.as_ref(), "bytes://icons/missing-icon.svg");
-        assert_eq!(bytes.as_ref(), fallback.as_ref());
-        assert!(!exists("missing-icon"));
-    }
-
-    #[test]
-    fn shared_button_preserves_theme_painting_and_pointer_responses() {
-        // The unchanged chrome helper is the pre-extraction paint oracle. Keyboard focus
-        // and accessibility metadata are deliberate additions, covered in craft-ui.
-        fn frame(
-            ctx: &egui::Context,
-            events: Vec<egui::Event>,
-            selected: bool,
-            enabled: bool,
-            legacy: bool,
-        ) -> (egui::Response, Vec<egui::epaint::ClippedShape>) {
-            let mut response = None;
-            let mut output = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
-                response = Some(
-                    ui.add_enabled_ui(enabled, |ui| {
-                        if legacy {
-                            let (rect, response) = ui.allocate_exact_size(Vec2::splat(28.0), Sense::click());
-                            let tint = button_chrome(ui, rect, selected, response.hovered());
-                            paint(ui, rect, "square", (28.0_f32 * 0.52).round(), tint);
-                            response
-                        } else {
-                            button(ui, "square", 28.0, selected, "")
-                        }
-                    })
-                    .inner,
-                );
-            });
-            output.textures_delta.clear();
-            (response.unwrap(), output.shapes)
-        }
-        for theme in crate::theme::ThemeKind::ALL {
-            for selected in [false, true] {
-                for enabled in [false, true] {
-                    let old = egui::Context::default();
-                    let new = egui::Context::default();
-                    for ctx in [&old, &new] {
-                        crate::theme::apply(ctx, theme);
-                        egui_extras::install_image_loaders(ctx);
-                    }
-                    let mut center = egui::Pos2::ZERO;
-                    for step in 0..7 {
-                        let events = match step {
-                            2 => vec![egui::Event::PointerMoved(center)],
-                            3 | 4 => vec![egui::Event::PointerButton {
-                                pos: center,
-                                button: egui::PointerButton::Primary,
-                                pressed: step == 3,
-                                modifiers: egui::Modifiers::NONE,
-                            }],
-                            5 => vec![egui::Event::PointerMoved(egui::pos2(300.0, 200.0))],
-                            _ => vec![],
-                        };
-                        let (a, before) = frame(&old, events.clone(), selected, enabled, true);
-                        let (b, after) = frame(&new, events, selected, enabled, false);
-                        center = a.rect.center();
-                        assert_eq!(a.rect, b.rect);
-                        assert_eq!((a.clicked(), a.hovered(), a.is_pointer_button_down_on()), (b.clicked(), b.hovered(), b.is_pointer_button_down_on()));
-                        assert_eq!(before, after, "{theme:?}, selected={selected}, enabled={enabled}, step={step}");
+    fn every_icon_id_literal_in_the_sources_resolves() {
+        register();
+        let form = concat!("IconId", "::new(\"");
+        let mut files = Vec::new();
+        sources(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut files);
+        let (mut seen, mut unknown) = (0, Vec::new());
+        for file in files.iter().filter(|file| !file.ends_with("icons.rs")) {
+            let text = std::fs::read_to_string(file).expect("source reads");
+            for (number, line) in text.lines().enumerate().filter(|(_, line)| !line.trim_start().starts_with("//")) {
+                for (at, _) in line.match_indices(form) {
+                    let rest = &line[at + form.len()..];
+                    let Some(end) = rest.find('"') else { continue };
+                    seen += 1;
+                    if !has_icon(&IconId::new(String::leak(rest[..end].to_owned()))) {
+                        unknown.push(format!("{}:{}: {:?}", file.display(), number + 1, &rest[..end]));
                     }
                 }
             }
         }
-    }
-
-    #[test]
-    fn symmetry_axes_rasterize_centred_with_matching_line_weight_at_both_dpis() {
-        for size in [14_u32, 28] {
-            let mut coverage = Vec::new();
-            for name in ["symmetry-vertical", "symmetry-horizontal", "symmetry-diagonal", "symmetry-dual"] {
-                assert!(white_icons().contains(name));
-                let egui::ImageSource::Bytes { bytes, .. } = white_icons().source(name) else { panic!("icon source must be embedded bytes") };
-                let image = egui_extras::image::load_svg_bytes_with_size(
-                    bytes.as_ref(),
-                    egui::load::SizeHint::Size { width: size, height: size, maintain_aspect_ratio: true },
-                    &Default::default(),
-                )
-                .unwrap();
-                assert_eq!(image.size, [size as usize; 2]);
-                let ink: Vec<_> = image.pixels.iter().enumerate().filter(|(_, p)| p.a() > 16).collect();
-                assert!(!ink.is_empty(), "{name}");
-                let xs: Vec<_> = ink.iter().map(|(i, _)| i % size as usize).collect();
-                let ys: Vec<_> = ink.iter().map(|(i, _)| i / size as usize).collect();
-                for coords in [&xs, &ys] {
-                    let centre = (*coords.iter().min().unwrap() + *coords.iter().max().unwrap()) as f32 / 2.0;
-                    assert!((centre - (size as f32 - 1.0) / 2.0).abs() <= 0.5, "{name}: off-centre");
-                }
-                assert!(ink.iter().all(|(_, p)| p.r() > 0 && p.r() == p.g() && p.g() == p.b()), "{name}: tinting mask must be white");
-                coverage.push(image.pixels.iter().map(|p| f32::from(p.a()) / 255.0).sum::<f32>());
-            }
-            let vertical = coverage[0];
-            // At 14px a diagonal's antialiasing can differ by nearly two covered pixels.
-            let tolerance = if size == 14 { 0.15 } else { 0.1 };
-            for single in &coverage[1..3] {
-                assert!((single - vertical).abs() / vertical < tolerance, "inconsistent axis stroke weight at {size}px: {coverage:?}");
-            }
-            assert!(coverage[3] > vertical * 1.7 && coverage[3] < vertical * 2.1);
-        }
+        assert!(seen > 20, "the scan found {seen} icon ids: its pattern no longer matches the sources");
+        assert!(unknown.is_empty(), "icon ids that are not in the catalog:\n{}", unknown.join("\n"));
     }
 }
