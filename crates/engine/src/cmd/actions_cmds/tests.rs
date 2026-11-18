@@ -1788,14 +1788,12 @@ fn playback_stops_when_a_nested_batch_cannot_write_its_error_log() {
     // A folder as the log path: the log write fails while every file succeeds.
     let batch = json!({"source": "open", "steps": [], "output": format!("{dir}/out"), "format": "png", "errorLog": dir});
     s.actions.list.push(Action::new("Run", vec![ActionStep::new("file.automate.batch", batch), ActionStep::new("layer.new.layer", json!({}))])).unwrap();
+    let layers = s.active().unwrap().doc.layers.len();
     let played = s.execute("actions.play", json!({"action": "Run"})).unwrap();
     let failed = &played["failed"];
     assert_eq!(failed["step"], 0, "{played}");
     assert!(failed["error"].as_str().unwrap().contains("error log"), "{played}");
     assert!(failed["result"]["errorLogError"].is_string(), "{played}");
-    assert_eq!(played["ran"], 0, "the step after the Batch must not run");
-    // #13673: the Batch closed the document whose file it wrote, so the stop is pinned through the
-    // play result instead of the document's layer list.
-    assert!(s.documents().is_empty(), "{played}");
+    assert_eq!(s.active().unwrap().doc.layers.len(), layers, "the step after the Batch must not run");
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -1156,7 +1156,8 @@ fn recorded_output_guard(p: &Value) -> bool {
 /// Documents are identified before playback; a step that closes or reorders tabs cannot make
 /// the next input silently become a different document.
 /// With a destination folder every document whose copy was written closes when the run ends, as
-/// the reference application does (#13673); a document whose step or write failed keeps its tab.
+/// the reference application does (#13673). A document keeps its tab when its step or its write
+/// failed, when it has unsaved changes, and when it was never saved to a file.
 fn batch_open_documents(
     s: &mut Session,
     steps: &[(String, Value)],
@@ -1272,8 +1273,13 @@ fn batch_open_documents(
                 break;
             }
         } else if planned.is_some() {
-            // The copy is written, so this tab closes with the run (#13673).
-            closed.push(*id);
+            // Only a document with nothing unsaved closes with the run. A document that was never
+            // saved keeps its tab as well: a recorded Save step marks it saved without ever giving
+            // it a file, so `path` is its own condition and not a consequence of `is_dirty`.
+            let written_and_clean = s.documents().iter().find(|state| state.doc.id.0 == *id).is_some_and(|state| state.path.is_some() && !state.is_dirty());
+            if written_and_clean {
+                closed.push(*id);
+            }
         }
     }
     // Closing waits for the end of the loop: a step that picks a tab by index still sees the tabs
