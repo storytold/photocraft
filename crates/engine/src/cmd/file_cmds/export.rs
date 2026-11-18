@@ -42,9 +42,14 @@ pub struct LayerExportReport {
     pub skipped: Vec<SkippedExportLayer>,
 }
 
-/// The same export as [`export_layers_with`], with an explanation for every omitted top-level
-/// layer. Groups export merged, so their children are not separate exports or skips. Encoding
-/// and write failures remain errors, never successful skips. Existing numbering is preserved.
+/// The same export as [`export_layers_with`], with an explanation for every omitted layer.
+/// Groups are walked, as the reference walks them (#13957): a group gets no file, every layer in
+/// it does, named `<prefix>_<group index>s_<index in group>_<name>` (one `<index>s_` per level,
+/// so two groups deep is `<prefix>_0000s_0000s_0000_<name>`). Art layers and groups are counted
+/// separately at each level, top to bottom; a skipped layer keeps its number (#13959). With
+/// `visibleOnly`, the layers of a hidden group are skipped; without it they are exported. A
+/// layer's file keeps it inside its groups. Encoding and write failures remain errors, never
+/// successful skips.
 pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&str, &[u8]) -> Result<()>) -> Result<LayerExportReport> {
     let cmd = "file.export.layersToFiles";
     let format = p.get("format").and_then(Value::as_str).unwrap_or("png").trim_start_matches('.').to_ascii_lowercase();
@@ -62,21 +67,38 @@ pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&
     let prefix = p.get("prefix").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&d.doc.name));
     let doc = d.doc.clone();
     let mut report = LayerExportReport::default();
-    // Every layer takes its panel-order index, even one skipped as hidden or as an adjustment,
-    // so a file keeps the same number whether Visible Layers Only is on or off (#13959).
-    for (index, l) in doc.layers.iter().rev().enumerate() {
-        if !l.visible && visible_only {
-            report.skipped.push(SkippedExportLayer { layer: l.id.0, name: l.name.clone(), reason: "hidden by visibleOnly" });
-            continue;
+    let mut planned = Vec::new();
+    plan_layer_exports(&doc.layers, &mut Vec::new(), "", visible_only, &mut planned, &mut report.skipped)?;
+    // The prefix is optional; only the layer name needs the empty-name fallback.
+    let file_name =
+        |l: &Layer, number: &str| format!("{}_{number}_{}.{format}", if prefix.is_empty() { String::new() } else { sanitize(&prefix) }, sanitize(&l.name));
+    // Every name is known before anything is encoded: one that no file system takes (each group level adds
+    // 6 bytes, so about 41 nested groups pass 255) fails the export before the first file is written.
+    for PlannedLayer { l, number, .. } in &planned {
+        let name = file_name(l, number);
+        if name.len() > MAX_FILE_NAME_BYTES {
+            return Err(EngineError::Other(format!(
+                "Layers to Files: the file name for layer \"{}\" is {} bytes, more than the {MAX_FILE_NAME_BYTES} a file name can hold; shorten the layer or prefix name or nest it in fewer groups",
+                l.name,
+                name.len()
+            )));
         }
-        if matches!(l.content, LayerContent::Adjustment(_)) {
-            report.skipped.push(SkippedExportLayer { layer: l.id.0, name: l.name.clone(), reason: "adjustment layer has no pixels of its own" });
-            continue;
-        }
+    }
+    for PlannedLayer { l, groups, number } in planned {
         let mut one = (*doc).clone();
         let mut only = l.clone();
         only.visible = true;
         only.clipped = false;
+        // The layer stays inside its groups (each shown, holding only the next one in).
+        for group in groups.iter().rev() {
+            let mut g = (*group).clone();
+            g.visible = true;
+            g.clipped = false;
+            if let Some(children) = g.children_mut() {
+                *children = vec![only];
+            }
+            only = g;
+        }
         one.layers = vec![only];
         if trim {
             let mut bounds = Rect::EMPTY;
@@ -96,13 +118,82 @@ pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&
             }
         }
 
-        // The prefix is optional; only the layer name needs the empty-name fallback.
-        let name = format!("{}_{:04}_{}.{format}", if prefix.is_empty() { String::new() } else { sanitize(&prefix) }, index, sanitize(&l.name));
+        let name = file_name(l, &number);
         let (bytes, _warnings) = encode(&one, &name, save)?;
         write(&name, &bytes)?;
         report.files.push(name);
     }
     Ok(report)
+}
+
+/// How deep [`plan_layer_exports`] follows groups before refusing the document.
+const MAX_GROUP_DEPTH: usize = 128;
+
+/// The longest file name, in bytes, that common file systems (ext4, APFS, NTFS) take.
+const MAX_FILE_NAME_BYTES: usize = 255;
+
+/// One layer Layers to Files writes: the layer, its groups (outermost first) and its number
+/// (`0000s_0001` for the second art layer of the first group).
+struct PlannedLayer<'a> {
+    l: &'a Layer,
+    groups: Vec<&'a Layer>,
+    number: String,
+}
+
+/// The layers of `layers` (one level, bottom first as stored) to write, top to bottom, with
+/// their groups walked; skips go to `skipped`. `path` is the group part of the number so far.
+fn plan_layer_exports<'a>(
+    layers: &'a [Layer],
+    groups: &mut Vec<&'a Layer>,
+    path: &str,
+    visible_only: bool,
+    planned: &mut Vec<PlannedLayer<'a>>,
+    skipped: &mut Vec<SkippedExportLayer>,
+) -> Result<()> {
+    if groups.len() > MAX_GROUP_DEPTH {
+        return Err(EngineError::Other(format!("Layers to Files: groups nested more than {MAX_GROUP_DEPTH} deep")));
+    }
+    let (mut art, mut group) = (0usize, 0usize);
+    for l in layers.iter().rev() {
+        if let Some(children) = l.children() {
+            let number = group;
+            group += 1;
+            if !l.visible && visible_only {
+                skip_hidden_group(children, skipped);
+                continue;
+            }
+            groups.push(l);
+            let r = plan_layer_exports(children, groups, &format!("{path}{number:04}s_"), visible_only, planned, skipped);
+            groups.pop();
+            r?;
+            continue;
+        }
+        // Every layer takes its index, even one skipped as hidden or as an adjustment, so a file
+        // keeps the same number whether Visible Layers Only is on or off (#13959).
+        let number = format!("{path}{art:04}");
+        art += 1;
+        if !l.visible && visible_only {
+            skipped.push(SkippedExportLayer { layer: l.id.0, name: l.name.clone(), reason: "hidden by visibleOnly" });
+            continue;
+        }
+        if matches!(l.content, LayerContent::Adjustment(_)) {
+            skipped.push(SkippedExportLayer { layer: l.id.0, name: l.name.clone(), reason: "adjustment layer has no pixels of its own" });
+            continue;
+        }
+        planned.push(PlannedLayer { l, groups: groups.clone(), number });
+    }
+    Ok(())
+}
+
+/// Every layer under a group hidden while Visible Layers Only is on, top to bottom, as skipped.
+fn skip_hidden_group(layers: &[Layer], skipped: &mut Vec<SkippedExportLayer>) {
+    let mut stack: Vec<&Layer> = layers.iter().collect();
+    while let Some(l) = stack.pop() {
+        match l.children() {
+            Some(children) => stack.extend(children.iter()),
+            None => skipped.push(SkippedExportLayer { layer: l.id.0, name: l.name.clone(), reason: "hidden by visibleOnly" }),
+        }
+    }
 }
 
 /// Adjustment layers that can be represented as an RGB-only LUT, in document stack order.
@@ -252,3 +343,7 @@ pub(super) fn push_unique(v: &mut Vec<f64>, x: f64) {
 #[cfg(test)]
 #[path = "layers_to_files_prefix_tests.rs"]
 mod layers_to_files_prefix_tests;
+
+#[cfg(test)]
+#[path = "layers_to_files_groups_tests.rs"]
+mod layers_to_files_groups_tests;
