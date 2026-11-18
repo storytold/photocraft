@@ -14,7 +14,7 @@ const GREEN: [f32; 4] = [30.0 / 255.0, 180.0 / 255.0, 60.0 / 255.0, 1.0];
 
 /// An 800 × 600 document whose pixel layer is red left of x 200 and green from there on, with the
 /// Mixer Brush active.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 800, "height": 600, "background": "white"})).unwrap();
     app.run("layer.new.layer", json!({"name": "Split"})).unwrap();

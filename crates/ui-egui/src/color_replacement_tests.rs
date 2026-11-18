@@ -12,7 +12,7 @@ use crate::state::Tool;
 
 /// An 80×40 document at `depth` bits, red on the left half and blue on the right, foreground
 /// green and background blue, with the Color Replacement tool picked (12 px, hard, no smoothing).
-fn app(depth: u32) -> PhotocraftApp {
+fn app(depth: u32) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 80, "height": 40, "background": "#ff0000", "depth": depth})).unwrap();
     fill(&mut app, [40, 0, 40, 40], "#0000ff");
