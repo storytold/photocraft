@@ -17,12 +17,12 @@ use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 
-fn app_harness() -> Harness<'static, PhotocraftApp> {
+fn app_harness() -> Harness<'static, Box<PhotocraftApp>> {
     app_harness_with(crate::Services::default())
 }
 
 /// [`app_harness`] over the given services (the beep test records the hook's calls).
-fn app_harness_with(services: crate::Services) -> Harness<'static, PhotocraftApp> {
+fn app_harness_with(services: crate::Services) -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).with_max_steps(8).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let mut s = photocraft_engine::Session::new();
@@ -68,13 +68,13 @@ fn slow_job(app: &mut PhotocraftApp, gate: &Arc<AtomicBool>) -> JobId {
 }
 
 /// Step frames for `ms` of wall time; returns (frames, slowest frame in ms).
-fn frames_for(h: &mut Harness<'_, PhotocraftApp>, ms: u64) -> (u64, f64) {
+fn frames_for(h: &mut Harness<'_, Box<PhotocraftApp>>, ms: u64) -> (u64, f64) {
     frames_for_at_least(h, ms, 0)
 }
 
 /// Prove the frame loop advances while a gated worker stays blocked, without assuming a
 /// minimum frame rate on software-rendered CI machines. Also wait for the progress modal.
-fn frames_for_at_least(h: &mut Harness<'_, PhotocraftApp>, ms: u64, min_frames: u64) -> (u64, f64) {
+fn frames_for_at_least(h: &mut Harness<'_, Box<PhotocraftApp>>, ms: u64, min_frames: u64) -> (u64, f64) {
     let t = Instant::now();
     let (mut n, mut worst) = (0, 0.0f64);
     while t.elapsed() < Duration::from_millis(ms) || n < min_frames {
@@ -89,7 +89,7 @@ fn frames_for_at_least(h: &mut Harness<'_, PhotocraftApp>, ms: u64, min_frames: 
 
 /// Step at least `min` frames and until `ready` holds; returns (frames, slowest frame in ms).
 /// The test fails when `ready` still does not hold after 60 s.
-fn frames_until(h: &mut Harness<'_, PhotocraftApp>, min: u64, ready: impl Fn(&Harness<'_, PhotocraftApp>) -> bool) -> (u64, f64) {
+fn frames_until(h: &mut Harness<'_, Box<PhotocraftApp>>, min: u64, ready: impl Fn(&Harness<'_, Box<PhotocraftApp>>) -> bool) -> (u64, f64) {
     let t = Instant::now();
     let (mut n, mut worst) = (0, 0.0f64);
     while n < min || !ready(h) {
@@ -229,7 +229,7 @@ fn wait_for_job(app: &mut PhotocraftApp, job: JobId) -> std::sync::mpsc::Receive
 }
 
 /// The control reply for `job`, once the app's frame loop has applied it.
-fn job_reply(h: &mut Harness<'static, PhotocraftApp>, job: JobId) -> Value {
+fn job_reply(h: &mut Harness<'static, Box<PhotocraftApp>>, job: JobId) -> Value {
     let rx = wait_for_job(h.state_mut(), job);
     let t = Instant::now();
     loop {
@@ -247,13 +247,13 @@ fn job_reply(h: &mut Harness<'static, PhotocraftApp>, job: JobId) -> Value {
 fn menu_and_dialog_requests_wait_for_jobs_unless_asked_not_to() {
     let mut h = app_harness();
     let ctx = h.ctx.clone();
-    let control = |h: &mut Harness<'static, PhotocraftApp>, method: &str, params: Value| {
+    let control = |h: &mut Harness<'static, Box<PhotocraftApp>>, method: &str, params: Value| {
         let (req, _rx) = crate::ControlRequest::new(method, params);
         crate::control::handle(h.state_mut(), &ctx, &req)
     };
     // The job a request started: deferred while waiting, `{job, pending}` at once otherwise.
     // Lets it land and checks the filter's result.
-    let land = |h: &mut Harness<'static, PhotocraftApp>, what: &str, outcome: crate::control::Reply, wait: bool| {
+    let land = |h: &mut Harness<'static, Box<PhotocraftApp>>, what: &str, outcome: crate::control::Reply, wait: bool| {
         let job = match (outcome, wait) {
             (crate::control::Reply::AfterJob(job), true) => JobId(job),
             (crate::control::Reply::Done(v), false) => {
@@ -265,7 +265,7 @@ fn menu_and_dialog_requests_wait_for_jobs_unless_asked_not_to() {
         let reply = job_reply(h, job);
         assert!(reply["result"]["filter"].is_object(), "{what}: {reply}");
     };
-    let steps = |h: &Harness<'static, PhotocraftApp>| h.state().session.active().unwrap().history.past_len();
+    let steps = |h: &Harness<'static, Box<PhotocraftApp>>| h.state().session.active().unwrap().history.past_len();
     for wait in [true, false] {
         let before = steps(&h);
         let outcome = control(&mut h, "ui.menu.invoke", json!({"id": "filter.blur.blurMore", "wait": wait}));
@@ -376,11 +376,11 @@ impl Gates {
 }
 
 /// A notice (or toast card) carrying `text` is up after the harness's passes.
-fn noticed(h: &Harness<'_, PhotocraftApp>, text: &str) -> bool {
+fn noticed(h: &Harness<'_, Box<PhotocraftApp>>, text: &str) -> bool {
     crate::notices::shown(h.state(), &h.ctx).iter().any(|(title, lines, _)| title.contains(text) || lines.iter().any(|l| l.contains(text)))
 }
 
-fn step_until(h: &mut Harness<'_, PhotocraftApp>, done: impl Fn(&PhotocraftApp) -> bool) {
+fn step_until(h: &mut Harness<'_, Box<PhotocraftApp>>, done: impl Fn(&PhotocraftApp) -> bool) {
     let t = Instant::now();
     while !done(h.state()) && t.elapsed() < Duration::from_secs(30) {
         h.step();
@@ -531,7 +531,7 @@ fn a_failed_save_or_one_cancelled_while_encoding_leaves_the_document_unsaved() {
 }
 
 /// Step until the save in `h` has started writing.
-fn until_writing(h: &mut Harness<'_, PhotocraftApp>) {
+fn until_writing(h: &mut Harness<'_, Box<PhotocraftApp>>) {
     let t = Instant::now();
     while h.state().session.jobs().first().is_none_or(|j| j.message != "Writing") && t.elapsed() < Duration::from_secs(30) {
         h.step();
@@ -588,7 +588,7 @@ fn old_file(test: &str) -> String {
     path.to_string_lossy().into_owned()
 }
 
-fn control(h: &mut Harness<'static, PhotocraftApp>, method: &str, params: Value) -> Value {
+fn control(h: &mut Harness<'static, Box<PhotocraftApp>>, method: &str, params: Value) -> Value {
     let (req, _rx) = crate::ControlRequest::new(method, params);
     let ctx = h.ctx.clone();
     let crate::control::Reply::Done(v) = crate::control::handle(h.state_mut(), &ctx, &req) else { panic!("{method} replies at once") };
@@ -659,7 +659,7 @@ fn press_window_close(app: &mut PhotocraftApp) -> bool {
 }
 
 /// A clean document (so the close prompt has nothing to ask) saved as a copy in the background.
-fn save_a_copy(h: &mut Harness<'static, PhotocraftApp>, gates: &Gates, path: &str) {
+fn save_a_copy(h: &mut Harness<'static, Box<PhotocraftApp>>, gates: &Gates, path: &str) {
     h.state_mut().services.save_file = Some(gates.save(None));
     let st = h.state_mut().session.active_mut().unwrap();
     st.saved_revision = st.revision;
@@ -905,7 +905,7 @@ fn layer_count(app: &PhotocraftApp) -> usize {
 }
 
 /// Free Transform the active layer to the right half of the canvas, then ↩.
-fn transform_and_commit(h: &mut Harness<'static, PhotocraftApp>, copy: bool) {
+fn transform_and_commit(h: &mut Harness<'static, Box<PhotocraftApp>>, copy: bool) {
     let ctx = h.ctx.clone();
     let app = h.state_mut();
     if copy { crate::transform_tool::begin_copy(app, &ctx) } else { crate::transform_tool::begin(app, &ctx) }.unwrap();
@@ -972,7 +972,7 @@ fn esc_cancels_a_background_free_transform_commit() {
 }
 
 /// Warp the active layer into an arc, then ↩.
-fn warp_and_commit(h: &mut Harness<'static, PhotocraftApp>) {
+fn warp_and_commit(h: &mut Harness<'static, Box<PhotocraftApp>>) {
     let ctx = h.ctx.clone();
     let app = h.state_mut();
     crate::transform_tool::begin(app, &ctx).unwrap();
@@ -1044,7 +1044,7 @@ fn background_open_warns_about_missing_fonts() {
     assert!(app.ui.notices.last().is_some_and(|n| n.title.contains("poster.psd") && n.lines == want), "{:?}", app.ui.notices);
 }
 
-fn identity_app() -> PhotocraftApp {
+fn identity_app() -> Box<PhotocraftApp> {
     let mut session = photocraft_engine::Session::new();
     session.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
     session.execute("layer.new.layer", json!({})).unwrap();

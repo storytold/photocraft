@@ -15,7 +15,7 @@ const BLUE: [f64; 2] = [560.0, 300.0];
 
 /// An 800 x 600 document with an opaque red block (80,80–320,280) and a blue disc (centre
 /// 560,300, radius 120) on one layer, nothing selected, Object Selection with Object Finder on.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 800, "height": 600})).unwrap();
     app.sync_views();

@@ -14,7 +14,7 @@ use crate::PhotocraftApp;
 const COMMAND: &str = "image.rotation.arbitrary";
 
 /// A 318 px square document, a ruler from 100,100 to `end`, and the opened Arbitrary dialog.
-fn open_ruler(end: [i32; 2]) -> (PhotocraftApp, DialogId) {
+fn open_ruler(end: [i32; 2]) -> (Box<PhotocraftApp>, DialogId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 318, "height": 318})).unwrap();
     app.run("image.analysis.rulerTool", json!({"start": [100, 100], "end": end})).unwrap();
@@ -64,7 +64,7 @@ fn the_ruler_angle_is_rounded_before_the_first_frame() {
     let mut h = Harness::builder()
         .with_context(app.ctx().clone())
         .with_size(egui::vec2(900.0, 700.0))
-        .build_ui_state(|ui, app: &mut PhotocraftApp| crate::dialogs::run(app, ui), app);
+        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app);
     PhotocraftApp::setup_context(&h.ctx, Default::default());
     h.run_steps(3);
     // Move off the pre-fill first, so only the reset can bring 32.12 back.
