@@ -280,7 +280,7 @@ fn transform_task_bar_hides_while_a_shell_dialog_is_open() {
     assert_eq!(bar(&mut h)["visible"], false);
     h.run_steps(2);
     assert!(h.query_by_label("Rotate 90° Clockwise").is_none());
-    control(&mut h, "ui.dialog.cancel", json!({}));
+    control(&mut h, "ui.dialog.cancel", json!({"dialog": "top"}));
     assert!(bar(&mut h)["rect"].is_null(), "the last pass did not draw the bar");
     h.run_steps(4);
     assert_eq!(h.state().ui.transform.as_ref().unwrap().id, session);
