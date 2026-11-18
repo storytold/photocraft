@@ -254,7 +254,7 @@ fn show_warp(t: &FreeTransform, pv: &OpenPreview, w: &SessionWarp, ui: &mut egui
     // No splits on type (#3004).
     let split = pv.split.filter(|_| !w.on_type);
     let mut grid = WarpGrid::new("Warp grid", Bind::given(w.mesh.clone()), t.session.rect())
-        .rule(warp::grid_rule(unit, pv.placed_warp.map(|(m, _)| m)))
+        .rule(warp::grid_rule(unit, pv.placed_warp.map(|(m, _)| m), split))
         .surface(warp::grid_surface(&w.mesh, unit, pv.placed_warp.map(|(m, _)| m)));
     if preset {
         grid = grid.preset();

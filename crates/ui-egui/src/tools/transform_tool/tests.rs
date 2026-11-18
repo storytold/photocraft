@@ -2406,3 +2406,48 @@ fn a_warped_smart_objects_box_keeps_its_warp_for_a_projective_preview() {
     assert_eq!(warped.place, place.0);
     assert!(warped.texture.size()[0] > 0);
 }
+
+#[test]
+fn a_warp_pulled_past_the_horizon_squeezes_the_placement_and_one_inside_does_not() {
+    use super::warp::{HORIZON_SQUEEZE, horizon_squeeze};
+    // A perspective whose weight w = 1 - y / 200 falls to nothing at y = 200, over a box 0..100 × 0..100.
+    let m = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, -1.0 / 200.0, 1.0];
+    let bounds = [0.0, 0.0, 100.0, 100.0];
+    let inside = [[0.0, 0.0], [100.0, 0.0], [100.0, 100.0], [0.0, 100.0]];
+    assert_eq!(horizon_squeeze(m, &inside, bounds), None, "a warp inside its box stays as placed");
+    // A point pulled to y = 199.9, a hair from the horizon.
+    let pulled = [[0.0, 0.0], [100.0, 0.0], [100.0, 199.9], [0.0, 100.0]];
+    let sq = horizon_squeeze(m, &pulled, bounds).expect("the placement gives way");
+    let placed = photocraft_algo::transform::Homography(m).mul(&photocraft_algo::transform::Homography(sq));
+    let w = |p: [f64; 2]| placed.0[6] * p[0] + placed.0[7] * p[1] + placed.0[8];
+    // The nearest point comes back to HORIZON_SQUEEZE of the far side's weight.
+    let (far, near) = (w([0.0, 0.0]), w([100.0, 199.9]));
+    assert!((near / far - HORIZON_SQUEEZE).abs() < 1e-9, "{near} / {far}");
+}
+
+#[test]
+fn a_split_on_a_default_grid_third_keeps_both_lines() {
+    use super::warp::one_patch_split;
+    // On the one patch a third is no line: the armed cross keeps both lines there, as the reference's does.
+    assert_eq!(one_patch_split(WarpSplit::Cross, 1.0 / 3.0 - 0.002, 0.5), Some(WarpSplit::Cross));
+    // Only the patch's own edges drop a line.
+    assert_eq!(one_patch_split(WarpSplit::Cross, 0.005, 0.5), Some(WarpSplit::Horizontal));
+    assert_eq!(one_patch_split(WarpSplit::Vertical, 0.5, 0.005), Some(WarpSplit::Vertical));
+    assert_eq!(one_patch_split(WarpSplit::Horizontal, 0.5, 0.995), None);
+}
+
+#[test]
+fn a_split_alone_is_kept_when_the_warp_is_applied() {
+    let mut app = app_with_square(64, photocraft_geom::Rect::new(16, 16, 48, 40));
+    let ctx = app.ctx().clone();
+    app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    let id = app.session.active().unwrap().active_layer.unwrap();
+    begin_warp(&mut app, &ctx).unwrap();
+    split(&mut app, "edit.transform.splitWarpCrosswise", Some([30.0, 26.0])).unwrap();
+    assert!(!open(&app).session.is_untouched(), "a flat grid with split lines is a change");
+    commit(&mut app);
+    land_jobs(&mut app);
+    let LayerContent::Smart(sm) = &app.session.active().unwrap().doc.layer(id).unwrap().content else { panic!("a smart object") };
+    let mesh = sm.warp.as_ref().and_then(|w| w.mesh.as_ref()).expect("the split grid is stored");
+    assert_eq!((mesh.us.len(), mesh.vs.len()), (3, 3), "its lines come back in Warp mode");
+}

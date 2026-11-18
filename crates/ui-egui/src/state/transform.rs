@@ -67,8 +67,9 @@ impl TransformWarp for SessionWarp {
         self.stored.then(|| Rect::new(self.warp.bounds[0], self.warp.bounds[1], self.warp.bounds[2], self.warp.bounds[3]))
     }
 
+    /// A flat warp that still has split lines is kept, as the reference keeps it (its lines come back in Warp mode).
     fn is_identity(&self) -> bool {
-        !self.on_type && self.warp.is_identity()
+        !self.on_type && self.warp.is_plain_identity()
     }
 }
 

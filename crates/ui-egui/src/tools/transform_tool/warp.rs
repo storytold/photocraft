@@ -116,6 +116,23 @@ pub(super) fn grid_surface(mesh: &WarpMesh, unit: f64, to_doc: Option<[f64; 9]>)
     }
 }
 
+/// How close to a patch's edge, as a share of the patch, a split line may lie before it counts as on the edge (the
+/// warp grid's own rule).
+const SPLIT_EDGE: f64 = 0.01;
+
+/// The lines split tool `tool` inserts in the one-patch Default grid at its parameters `(s, t)`: the tool's lines
+/// that lie off the patch's edges, as the reference cuts it (its thirds are drawn handles, not lines). `None` when
+/// every line lies on an edge.
+pub(super) fn one_patch_split(tool: WarpSplit, s: f64, t: f64) -> Option<WarpSplit> {
+    let free = |c: f64| (SPLIT_EDGE..=1.0 - SPLIT_EDGE).contains(&c);
+    match (tool != WarpSplit::Horizontal && free(s), tool != WarpSplit::Vertical && free(t)) {
+        (true, true) => Some(WarpSplit::Cross),
+        (true, false) => Some(WarpSplit::Vertical),
+        (false, true) => Some(WarpSplit::Horizontal),
+        (false, false) => None,
+    }
+}
+
 /// One edit of the warp grid as [`rule_mesh`] applies it (the grid's own edits can only be read, not made, here).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum RuleEdit {
@@ -131,7 +148,7 @@ pub(super) enum RuleEdit {
 /// own. `unit` is the document size of a screen pixel. `to_doc` is the map from a smart object's contents to the
 /// document when Warp mode edits its warp there ([`super::OpenPreview::placed_warp`]): the rule then runs in the
 /// contents' own space, where the reference applies it, and its result is carried back.
-pub(super) fn grid_rule(unit: f64, to_doc: Option<[f64; 9]>) -> impl Fn(&WarpMesh, &WarpEdit) -> WarpMesh {
+pub(super) fn grid_rule(unit: f64, to_doc: Option<[f64; 9]>, armed: Option<WarpSplit>) -> impl Fn(&WarpMesh, &WarpEdit) -> WarpMesh {
     let placed = to_doc.and_then(|m| {
         let h = photocraft_algo::transform::Homography(m);
         Some((h, h.inverse()?))
@@ -142,7 +159,14 @@ pub(super) fn grid_rule(unit: f64, to_doc: Option<[f64; 9]>) -> impl Fn(&WarpMes
             WarpEdit::Surface { s, t, by, .. } => Some(RuleEdit::Surface { s, t, by: [by.x, by.y] }),
             // The grid placed the cut on the thirds it would have made real: the same place on the one patch.
             WarpEdit::Split { split, column, row, u, v, thirds: true, .. } if mesh.columns() == 1 && mesh.rows() == 1 => {
-                Some(RuleEdit::SplitOnePatch { split, s: (column as f64 + u) / 3.0, t: (row as f64 + v) / 3.0 })
+                let (s, t) = ((column as f64 + u) / 3.0, (row as f64 + v) / 3.0);
+                // The grid chose which lines to insert on the thirds it would have made real, so a cut on a third
+                // dropped that line. On the one patch only its own edges are lines: an armed tool keeps its lines.
+                let split = match armed {
+                    Some(tool) => one_patch_split(tool, s, t).unwrap_or(split),
+                    None => split,
+                };
+                Some(RuleEdit::SplitOnePatch { split, s, t })
             }
             _ => None,
         };
@@ -241,6 +265,55 @@ pub(super) fn placed_doc_warp(app: &PhotocraftApp, warp: Warp) -> Warp {
     Warp::custom(mesh, warp.bounds)
 }
 
+/// How close to a Perspective or Distort placement's horizon a pulled warp may come on the viewer's side before the
+/// placement gives way ([`horizon_squeeze`]): its homogeneous weight there as a share of the weight on the far side
+/// (the reference's files: 0.0099 to 0.0116 over pulls from 240 to 300 px).
+pub(super) const HORIZON_SQUEEZE: f64 = 0.0107;
+
+/// A smart object's warp (`points` over its contents' box `bounds`) pulled towards the viewer past its Perspective or
+/// Distort placement `to_doc`'s horizon: the squeeze the placement takes first so every point stays on the picture's
+/// side, as the reference does, along the way the picture recedes about the far side of the box, until the nearest
+/// point is back at [`HORIZON_SQUEEZE`] of the weight there. `None` when nothing comes that near.
+pub(super) fn horizon_squeeze(m: [f64; 9], points: &[[f64; 2]], bounds: [f64; 4]) -> Option<[f64; 9]> {
+    if m[6] == 0.0 && m[7] == 0.0 {
+        return None;
+    }
+    let c = [(bounds[0] + bounds[2]) / 2.0, (bounds[1] + bounds[3]) / 2.0];
+    let side = (m[6] * c[0] + m[7] * c[1] + m[8]).signum();
+    let (gx, gy) = (m[6] * side, m[7] * side);
+    let n = gx.hypot(gy);
+    if !(n > 0.0 && n.is_finite() && side != 0.0) {
+        return None;
+    }
+    let (ux, uy) = (gx / n, gy / n);
+    let a = m[8] * side;
+    let s_of = |p: &[f64; 2]| p[0] * ux + p[1] * uy;
+    let [x0, y0, x1, y1] = bounds;
+    let box_s = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(|p| s_of(&p));
+    let s_far = box_s.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let box_near = box_s.iter().copied().fold(f64::INFINITY, f64::min);
+    let s_near = points.iter().map(s_of).fold(f64::INFINITY, f64::min);
+    let (w_far, w_near) = (a + n * s_far, a + n * s_near);
+    if !(w_far > 0.0 && w_near.is_finite() && s_far > s_near && s_near < box_near) || w_near >= HORIZON_SQUEEZE * w_far {
+        return None;
+    }
+    let k = (HORIZON_SQUEEZE - 1.0) * w_far / (n * (s_near - s_far));
+    if !(k > 0.0 && k < 1.0) {
+        return None;
+    }
+    Some([
+        1.0 + (k - 1.0) * ux * ux,
+        (k - 1.0) * ux * uy,
+        -(k - 1.0) * s_far * ux,
+        (k - 1.0) * ux * uy,
+        1.0 + (k - 1.0) * uy * uy,
+        -(k - 1.0) * s_far * uy,
+        0.0,
+        0.0,
+        1.0,
+    ])
+}
+
 /// The app's mesh of the framework's: the same knots and control points.
 fn bezier_of(mesh: &WarpMesh) -> BezierMesh {
     BezierMesh { us: mesh.us.clone(), vs: mesh.vs.clone(), points: mesh.points.iter().map(|p| [p.x, p.y]).collect() }
@@ -260,6 +333,30 @@ pub(crate) fn grid_edit(app: &mut PhotocraftApp, events: &EditEvents<WarpMesh>, 
         let Some(mesh) = event.landed() else { continue };
         set_warp(app, Warp::custom(bezier_of(mesh), b));
         applied = true;
+        // A smart object's warp pulled towards the viewer past its placement's horizon: when the drag lands, the
+        // placement gives way as the reference's does ([`horizon_squeeze`]), and the points are carried through it.
+        if matches!(event, craft::behavior::EditEvent::Commit { .. })
+            && let Some((to_doc, _)) = app.transform_preview.as_ref().and_then(|pv| pv.placed_warp)
+            && let Some(back) = photocraft_algo::transform::Homography(to_doc).inverse()
+        {
+            let contents = bezier_of(mesh).map_points(|p| {
+                let (x, y) = back.apply(p[0], p[1]);
+                [x, y]
+            });
+            if let Some(squeeze) = horizon_squeeze(to_doc, &contents.points, b) {
+                let placed = photocraft_algo::transform::Homography(to_doc).mul(&photocraft_algo::transform::Homography(squeeze));
+                if placed.0.iter().all(|v| v.is_finite()) {
+                    let doc = contents.map_points(|p| {
+                        let (x, y) = placed.apply(p[0], p[1]);
+                        [x, y]
+                    });
+                    if let Some(pv) = app.transform_preview.as_mut() {
+                        pv.placed_warp = Some((placed.0, true));
+                    }
+                    set_warp(app, Warp::custom(doc, b));
+                }
+            }
+        }
     }
     if split
         && applied
