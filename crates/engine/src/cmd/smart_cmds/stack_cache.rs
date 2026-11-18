@@ -35,11 +35,11 @@ pub const BUDGET: usize = 768 << 20;
 #[cfg(target_arch = "wasm32")]
 pub const BUDGET: usize = 256 << 20;
 
-/// The first stage: what placing `bytes` (the source contents) through the smart object's
+/// The first stage: what placing the source contents (blake3 `digest`) through the smart object's
 /// transform, warp or perspective gives at pixel format `fmt` on `canvas`.
-pub(super) fn placed_key(bytes: &[u8], fmt: PixelFormat, sm: &SmartObject, canvas: Rect) -> StageKey {
+pub(super) fn placed_key(digest: &[u8; 32], fmt: PixelFormat, sm: &SmartObject, canvas: Rect) -> StageKey {
     let mut h = blake3::Hasher::new();
-    h.update(bytes);
+    h.update(digest);
     for v in sm.transform.m {
         h.update(&v.to_bits().to_le_bytes());
     }
