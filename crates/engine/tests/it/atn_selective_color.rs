@@ -1,5 +1,5 @@
 //! #7672: strict ATN export must preserve both accepted Selective Color parameter forms.
-use photocraft_engine::actions_cmds::Action;
+use photocraft_engine::actions_cmds::{Action, ActionList, ActionStep, ActionsFile};
 use photocraft_engine::{Session, atn_cmds};
 use serde_json::{Value, json};
 
@@ -37,14 +37,14 @@ fn doc_bounds() -> photocraft_doc::Rect {
 }
 
 fn pixels(s: &Session) -> Vec<[f32; 4]> {
-    photocraft_compose::flatten(&s.active().unwrap().doc).px
+    photocraft_compose::flatten(&s.active().unwrap().doc).into_px()
 }
 
 fn check_cases(id: &str, cases: &[Value], require_effect: bool) {
     let mut failures = Vec::new();
     for depth in [8, 16, 32] {
         for params in cases {
-            let action = Action::new("Selective Color", vec![(id.into(), params.clone())]);
+            let action = Action::new("Selective Color", vec![ActionStep::new(id, params.clone())]);
             let mut direct = fixture(depth);
             let before = pixels(&direct);
             direct.execute(id, params.clone()).unwrap();
@@ -54,7 +54,7 @@ fn check_cases(id: &str, cases: &[Value], require_effect: bool) {
             }
 
             let mut native = fixture(depth);
-            native.actions.list.push(action.clone());
+            native.actions.list.push(action.clone()).unwrap();
             native.execute("actions.play", json!({"action": action.name})).unwrap();
             assert_eq!(pixels(&native), expected, "native replay: {id}, depth {depth}, {params}");
 
@@ -65,10 +65,10 @@ fn check_cases(id: &str, cases: &[Value], require_effect: bool) {
             assert!(imported.warnings.is_empty());
             assert_eq!(imported.actions.len(), 1);
             assert_eq!(imported.actions[0].steps.len(), 1);
-            assert_eq!(imported.actions[0].steps[0].0, id);
+            assert_eq!(imported.actions[0].steps[0].command, id);
 
             let mut replay = fixture(depth);
-            replay.actions.list = imported.actions;
+            replay.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
             replay.execute("actions.play", json!({"action": action.name})).unwrap();
             if pixels(&replay) != expected {
                 failures.push(format!("{id}, depth {depth}, {params}"));
@@ -138,7 +138,7 @@ fn malformed_selective_color_params_cannot_be_silently_exported() {
         json!({"reds": [10, "20", 0, 0]}),
     ] {
         for id in COMMANDS {
-            let action = Action::new("Invalid", vec![(id.into(), params.clone())]);
+            let action = Action::new("Invalid", vec![ActionStep::new(id, params.clone())]);
             assert!(atn_cmds::export("Regression", &[&action], &[], false).is_err(), "strict export accepted {id} {params}");
             let (_, skipped) = atn_cmds::export("Regression", &[&action], &[], true).unwrap();
             assert_eq!(skipped.len(), 1, "skipUnsupported must report {id} {params}");
