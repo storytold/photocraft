@@ -146,7 +146,7 @@ pub fn footer_action(app: &mut PhotocraftApp, _ctx: &egui::Context, id: DialogId
 mod tests {
     use super::*;
 
-    fn app() -> PhotocraftApp {
+    fn app() -> Box<PhotocraftApp> {
         PhotocraftApp::new(photocraft_engine::Session::new(), Default::default())
     }
 

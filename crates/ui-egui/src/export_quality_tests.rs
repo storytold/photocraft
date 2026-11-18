@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 const ARTBOARDS: &str = "file.export.artboardsToFiles";
 const EXPORTS: [&str; 3] = [ARTBOARDS, "file.export.layersToFiles", "file.export.layerCompsToFiles"];
 
-fn app() -> (PhotocraftApp, egui::Context) {
+fn app() -> (Box<PhotocraftApp>, egui::Context) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
     // A noisy layer inside the board, so the JPEG quality shows in the file.

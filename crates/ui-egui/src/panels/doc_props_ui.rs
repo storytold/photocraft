@@ -216,7 +216,7 @@ mod tests {
         let mut h = Harness::builder()
             .with_context(app.ctx().clone())
             .with_size(vec2(320.0, 600.0))
-            .build_ui_state(|ui, app: &mut PhotocraftApp| properties(app, ui), app);
+            .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| properties(app, ui), app);
         PhotocraftApp::setup_context(&h.ctx, crate::theme::AppTheme::pro());
         h.run_steps(3);
         let st = h.state().session.active().unwrap();

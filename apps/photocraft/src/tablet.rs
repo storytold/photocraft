@@ -258,7 +258,7 @@ mod tests {
         }
         h.run_steps(2);
         // The document point (x, y) on screen, with the view at 100 % centred on (120, 40).
-        let at = |h: &Harness<'_, PhotocraftApp>, x: f64, y: f64| h.state().last_canvas_rect.center() + egui::vec2((x - 120.0) as f32, (y - 40.0) as f32);
+        let at = |h: &Harness<'_, Box<PhotocraftApp>>, x: f64, y: f64| h.state().last_canvas_rect.center() + egui::vec2((x - 120.0) as f32, (y - 40.0) as f32);
         let n = 20;
         for i in 0..=n {
             let t = i as f32 / n as f32;
