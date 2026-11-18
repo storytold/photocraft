@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use super::PathRef;
 use super::convert_point_history_tests::drag;
 use crate::PhotocraftApp;
-use crate::anchor_tools::delete_anchor_targeted_path_tests::{group_shape, select_layer, select_saved_path, setup, shape_path, steps};
+use crate::direct_select::edits::delete_anchor_targeted_path_tests::{group_shape, select_layer, select_saved_path, setup, shape_path, steps};
 use crate::state::Tool;
 
 const CORNER: [f64; 2] = [450.0, 100.0];
@@ -15,6 +15,12 @@ const PULLED: [f64; 2] = [490.0, 70.0];
 
 fn active(app: &PhotocraftApp) -> Option<u64> {
     app.session.active().unwrap().active_layer.map(|l| l.0)
+}
+
+/// Whether the point `value` (a JSON pair) is within a thousandth of `want`: the pointer reaches the tool through screen
+/// coordinates in single precision.
+fn near(value: &Value, want: [f64; 2]) -> bool {
+    value.as_array().is_some_and(|p| p.len() == 2 && p.iter().zip(want).all(|(got, want)| got.as_f64().is_some_and(|got| (got - want).abs() < 1e-3)))
 }
 
 /// The shape's knot at `CORNER`.
@@ -46,8 +52,8 @@ fn a_drag_from_the_corner_of_the_active_shape_converts_it() {
     let n = steps(&app);
     drag(&mut app, CORNER, PULLED, Modifiers::NONE);
     let knot = corner(&mut app, shape);
-    assert_eq!(knot["out"], json!([490.0, 70.0]));
-    assert_eq!(knot["in"], json!([410.0, 130.0]));
+    assert!(near(&knot["out"], [490.0, 70.0]), "{knot}");
+    assert!(near(&knot["in"], [410.0, 130.0]), "{knot}");
     assert_eq!(steps(&app), n + 1);
     assert_eq!(active(&app), Some(shape));
 }
@@ -80,7 +86,7 @@ fn a_shape_inside_a_group_that_is_not_active_keeps_todays_behaviour() {
     group_shape(&mut app, shape);
     let n = steps(&app);
     drag(&mut app, CORNER, PULLED, Modifiers::NONE);
-    assert_eq!(corner(&mut app, shape)["out"], json!([490.0, 70.0]));
+    assert!(near(&corner(&mut app, shape)["out"], [490.0, 70.0]));
     assert_eq!(steps(&app), n + 1);
 }
 
@@ -97,5 +103,5 @@ fn a_work_path_that_is_not_shown_still_converts_as_today() {
     assert_eq!(steps(&app), n + 1);
     let work = app.session.active().unwrap().doc.work_path.clone().unwrap();
     let knot = &work.subpaths[0].knots[0];
-    assert_eq!((knot.out_ctrl.x, knot.out_ctrl.y), (90.0, 420.0));
+    assert!((knot.out_ctrl.x - 90.0).abs() < 1e-3 && (knot.out_ctrl.y - 420.0).abs() < 1e-3, "{:?}", knot.out_ctrl);
 }

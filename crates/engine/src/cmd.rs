@@ -100,6 +100,8 @@ pub mod frame_cmds;
 pub mod fx_view_cmds;
 pub mod fx_visibility_cmds;
 pub mod gallery_cmds;
+#[cfg(test)]
+mod gradient_alpha_method_tests;
 pub mod gradient_fill_cmds;
 pub mod group_view_cmds;
 pub mod history_cmds;
@@ -125,6 +127,8 @@ pub mod mask_view_cmds;
 pub(super) mod migrate_cmds;
 pub mod mode_cmds;
 pub mod multichannel_cmds;
+#[cfg(test)]
+mod new_document_history_name_tests;
 pub mod notes_cmds;
 #[cfg(test)]
 mod notes_stored_values_tests;
@@ -171,7 +175,6 @@ mod type_indexed_mode_tests;
 pub mod type_mask_cmds;
 pub mod type_spell_cmds;
 pub mod type_styles_cmds;
-pub mod updates_cmds;
 pub(super) mod variables_cmds;
 mod vector_clipboard;
 pub mod vector_cmds;
@@ -276,7 +279,7 @@ fn build() -> Vec<CommandSpec> {
             "New…",
             ["File"],
             Some("Cmd+N"),
-            r##"{"width":1..300000=1920,"height":1..300000=1080 (pixel counts are rounded),"mode":"rgb|gray|grayscale|cmyk|lab"="rgb","depth":8|16|32=8,"background":"white|black|backgroundColor|transparent|#rrggbb"="white","backgroundColor":[r,g,b]? (0..1; defaults to toolbox colour),"resolution":1..30000=72 (ppi),"name":str,"artboard":bool=false (one artboard over the canvas, its background the chosen one, holding an empty Layer 1; no Background layer),"profile":"working"|built-in id|path to an .icc file="working" (the colour profile it is tagged with; it must suit the mode)}"##,
+            r##"{"width":1..300000=1920,"height":1..300000=1080 (pixel counts are rounded),"mode":"bitmap|rgb|gray|grayscale|cmyk|lab"="rgb","depth":8|16|32=8 (bitmap: 1, its only depth),"background":"white|black|backgroundColor|transparent|#rrggbb"="white" (bitmap: not transparent),"backgroundColor":[r,g,b]? (0..1; defaults to toolbox colour),"resolution":1..30000=72 (ppi),"name":str,"artboard":bool=false (one artboard over the canvas, its background the chosen one, holding an empty Layer 1; no Background layer),"profile":"working"|built-in id|path to an .icc file="working" (the colour profile it is tagged with; it must suit the mode)}"##,
             always,
             |s, p| {
                 use crate::document_preset_cmds::{MAX_DIMENSION, MAX_RESOLUTION, background_color, color_mode, sample_type};
@@ -292,7 +295,8 @@ fn build() -> Vec<CommandSpec> {
                 };
                 let (w, h) = (px("width", 1920), px("height", 1080));
                 let mode = color_mode(p.get("mode").and_then(Value::as_str).unwrap_or("rgb")).unwrap_or(ColorMode::Rgb);
-                let depth = sample_type(p.get("depth").and_then(Value::as_u64).unwrap_or(8)).unwrap_or(SampleType::U8);
+                // A 1-bit Bitmap document is stored as 8-bit gray, like a converted Bitmap image.
+                let depth = sample_type(p.get("depth").and_then(Value::as_u64).unwrap_or(8)).filter(|_| mode != ColorMode::Bitmap).unwrap_or(SampleType::U8);
                 let name = p.get("name").and_then(Value::as_str).unwrap_or("Untitled").to_string();
                 let res = p.get("resolution").and_then(Value::as_f64).unwrap_or(72.0).clamp(1.0, MAX_RESOLUTION) as f32;
                 // The background colour; `None` for Transparent.
@@ -331,6 +335,10 @@ fn build() -> Vec<CommandSpec> {
                     doc.icc_profile = Some(prof.to_bytes());
                 }
                 let i = s.add_document(doc, None);
+                // A new document's first History state is "New"; opened files keep "Open" (#14029).
+                if let Some(st) = s.active_mut() {
+                    st.history.set_current_label("New");
+                }
                 Ok(json!({ "document": i }))
             }
         ),
@@ -344,11 +352,10 @@ fn build() -> Vec<CommandSpec> {
             |s, p| {
                 let i = p.get("document").and_then(Value::as_u64).map(|v| v as usize).or(s.active_index()).ok_or(EngineError::NoDocument)?;
                 match p.get("save").filter(|v| !v.is_null()) {
-                    Some(v) if v == "ask" => {
-                        if s.documents().get(i).ok_or(EngineError::NoDocument)?.is_dirty() {
-                            return Err(bad("file.close", "the document has unsaved changes; save it or explicitly discard them"));
-                        }
+                    Some(v) if v == "ask" && s.documents().get(i).ok_or(EngineError::NoDocument)?.is_dirty() => {
+                        return Err(bad("file.close", "the document has unsaved changes; save it or explicitly discard them"));
                     }
+                    Some(v) if v == "ask" => {}
                     // `false` (don't save) is the older spelling of discard.
                     Some(Value::Bool(false)) => {}
                     Some(v) if v != "discard" => return Err(bad("file.close", "`save` must be ask, discard or false")),
@@ -374,7 +381,7 @@ fn build() -> Vec<CommandSpec> {
             "edit.clear",
             "Clear",
             ["Edit"],
-            Some("Delete"),
+            None,
             r##"{"target":"mask"|{"color":i}|{"colors":[i,…]}?=Channels panel target,"layer":id|name?=active} (a targeted mask, channel or Quick Mask is cleared alone)"##,
             has_pixel_or_channel,
             |s, p| {
@@ -644,7 +651,7 @@ fn build() -> Vec<CommandSpec> {
             "Select Layer",
             [],
             None,
-            r##"{"layer":id|str|{"index":uint}|{"ordinal":"Trgt|Frwr|Bckw|Frnt|Back"} | "name":str,"occurrence":index?,"mode":"replace|toggle|range|add|remove"="replace"} (typed references use the recorded full layer stack; name occurrence: zero-based document walk order; required for duplicate names; toggle = ⌘-click, range = ⇧-click, remove = deselect it, keeping at least one)"##,
+            r##"{"layer":id|str|{"index":uint}|{"ordinal":"Trgt|Frwr|Bckw|Frnt|Back"} | "name":str,"occurrence":index?,"mode":"replace|toggle|range|add|remove"="replace"} | {"layers":[id,…]} (layers: exactly these selected, the last active; typed references use the recorded full layer stack; name occurrence: zero-based document walk order; required for duplicate names; toggle = ⌘-click, range = ⇧-click, remove = deselect it, keeping at least one)"##,
             has_doc,
             crate::layer_multi_cmds::select
         ),
@@ -1393,7 +1400,6 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::layer_multi_cmds::specs());
     v.extend(crate::layer_copy_cmds::specs());
     v.extend(crate::prefs::specs());
-    v.extend(crate::updates_cmds::specs());
     v.extend(crate::edit_menu_cmds::specs());
     v.extend(crate::fill_key_cmds::specs());
     v.extend(crate::sample_cmds::specs());

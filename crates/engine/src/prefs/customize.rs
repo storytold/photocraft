@@ -1,11 +1,95 @@
+use std::collections::BTreeMap;
+
+use craft::keymap::import::kys;
+use craft::keymap::import::{PlannedBinding, SkipReason};
+use craft::keymap::{ForeignSet, ImportOptions, NoneDefined, Platform, Scope};
+
 use super::cmds::bad;
 use super::files::{file_target, read_text_file, rename_path, writable, write_files_atomically};
 use super::shortcuts::{BindKind, alternate_keys, bindable, bindable_items, conflicts, default_alternates, is_tool, normalize_shortcut, reserved_shortcut};
 use super::{MenuCustomization, Preferences, Result, Session, Value, json};
+use crate::keymap_defs;
+
+/// The `shortcuts` / `alternateShortcuts` changes a `.kys` import makes to `prefs` (`null` restores
+/// a command's defaults), and the reply's `import` report. A key the system reserves is left out
+/// and reported as `reserved`, not a failed import.
+fn plan_kys(prefs: &Preferences, foreign: &ForeignSet, platform: Platform) -> (serde_json::Map<String, Value>, serde_json::Map<String, Value>, Value) {
+    let keymap = keymap_defs::keymap(prefs, platform);
+    // A row without a key leaves its command alone, as imports always did here.
+    let options = ImportOptions { none_defined: NoneDefined::Keep, ..ImportOptions::default() };
+    let plan = craft::keymap::plan(foreign, &keymap, &options);
+    let mut applied = keymap.clone();
+    let report = plan.apply(&mut applied);
+    let (set_before, alternates_before) = keymap_defs::overrides_to_prefs(keymap.overrides());
+    let (set_after, alternates_after) = keymap_defs::overrides_to_prefs(applied.overrides());
+
+    let is_tool_row = |item: &str| foreign.entries.iter().any(|e| e.is_tool && e.item() == item);
+    let text = |b: &PlannedBinding| normalize_shortcut(&b.binding.text(&Scope::app()));
+    let (mut set, mut tools, mut alternate_keys, mut alternates) = (BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), 0usize);
+    for planned in &plan.commands {
+        let keys: Vec<String> = planned.bindings.iter().filter_map(&text).collect();
+        let Some(main) = keys.first().cloned() else { continue };
+        let id = planned.command.id.clone();
+        if crate::shell_commands::tool_default(&id).is_some() {
+            tools.insert(id, main);
+        } else {
+            alternates += keys.len() - 1;
+            alternate_keys.insert(id.clone(), keys[1..].to_vec());
+            set.insert(id, main);
+        }
+    }
+    let names = |rows: Vec<&str>, tool: bool| rows.into_iter().filter(|item| is_tool_row(item) == tool).map(str::to_owned).collect::<Vec<_>>();
+    let unmatched: Vec<&str> = report.unmatched.iter().map(|u| u.item.as_str()).collect();
+    let unreadable: Vec<&str> = report.unreadable.iter().map(|u| u.item.as_str()).collect();
+    let reserved: Vec<String> =
+        report.skipped.iter().filter(|s| s.reason == SkipReason::Reserved).map(|s| format!("{}: {}", s.command.id, s.shortcut)).collect();
+    let import = json!({
+        "name": foreign.name,
+        "imported": set.len(),
+        "set": set,
+        "unknown": names(unmatched.clone(), false),
+        "unreadable": names(unreadable, false),
+        "alternates": alternates,
+        "alternateKeys": alternate_keys,
+        "toolKeys": foreign.entries.iter().filter(|e| e.is_tool && !e.keys.is_empty()).count(),
+        "tools": tools,
+        "unknownTools": names(unmatched, true),
+        "reserved": reserved,
+    });
+    (changes(&set_before, &set_after), changes(&alternates_before, &alternates_after), import)
+}
+
+/// The platform a call's keys are read and written for: its `platform` (`mac`, `windows` or
+/// `linux`, which the UI sends from its runtime's platform, since the build target reads Linux in
+/// every browser), else the build target's.
+fn platform_of(p: &Value, cmd: &str) -> Result<Platform> {
+    match p.get("platform").and_then(Value::as_str) {
+        None => Ok(Platform::current()),
+        Some("mac") => Ok(Platform::Mac),
+        Some("windows") => Ok(Platform::Windows),
+        Some("linux") => Ok(Platform::Linux),
+        Some(other) => Err(bad(cmd, format!("unknown platform `{other}` (mac|windows|linux)"))),
+    }
+}
+
+/// The entries of `after` that differ from `before`, and `null` for the ones `after` lacks.
+fn changes<V: serde::Serialize + PartialEq>(before: &BTreeMap<String, V>, after: &BTreeMap<String, V>) -> serde_json::Map<String, Value> {
+    let mut out = serde_json::Map::new();
+    for (id, value) in after {
+        if before.get(id) != Some(value) {
+            out.insert(id.clone(), json!(value));
+        }
+    }
+    for id in before.keys().filter(|id| !after.contains_key(*id)) {
+        out.insert(id.clone(), Value::Null);
+    }
+    out
+}
 
 /// Edit › Keyboard Shortcuts (engine part): list, change and reset application shortcuts.
 pub(super) fn keyboard_shortcuts(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "edit.keyboardShortcuts";
+    let platform = platform_of(p, cmd)?;
     // Every change lands at once, after all of it validated: a bad key leaves the set as it was.
     let mut next = s.prefs().clone();
     // A set loads first, so the call's other changes apply on top of it.
@@ -28,8 +112,9 @@ pub(super) fn keyboard_shortcuts(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     // A Photoshop `.kys` set (`importKys`, its XML text) becomes `set` and `alternates` entries,
-    // matched by label (`crate::kys`); a key equal to the command's default restores the
-    // default, and keys given in `set` / `alternates` as well win over the file's.
+    // matched by craft-keymap's `plan` over `keymap_defs::keymap`; a key equal to the command's
+    // default restores the default, and keys given in `set` / `alternates` as well win over the
+    // file's.
     let imported;
     let mut import = None;
     let p = match p.get("importKys") {
@@ -41,56 +126,16 @@ pub(super) fn keyboard_shortcuts(s: &mut Session, p: &Value) -> Result<Value> {
                 Value::Object(o) => {
                     let path =
                         o.get("path").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).ok_or_else(|| bad(cmd, "`importKys.path` is a .kys file"))?;
-                    read = read_text_file(path, crate::kys::MAX_BYTES).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
+                    read = read_text_file(path, kys::MAX_BYTES).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
                     read.as_str()
                 }
                 _ => return Err(bad(cmd, "`importKys` is the text of a .kys file, or {\"path\": …}")),
             };
-            let set = crate::kys::parse(xml).map_err(|e| bad(cmd, e))?;
-            let plan = crate::kys::plan(crate::kys::command_candidates(), &set);
-            let mut merged = serde_json::Map::new();
-            // A key the system reserves is left out (reported as `reserved`), not a failed import.
-            let mut skipped: Vec<String> = Vec::new();
-            for (id, sc) in plan.set.iter().filter(|(id, sc)| {
-                let bad = reserved_shortcut(sc);
-                if bad {
-                    skipped.push(format!("{id}: {sc}"));
-                }
-                !bad
-            }) {
-                let default = crate::command_specs().iter().find(|c| c.id == id).and_then(|c| c.shortcut).and_then(normalize_shortcut);
-                merged.insert(id.clone(), if default.as_deref() == Some(sc.as_str()) { Value::Null } else { json!(sc) });
-            }
-            // Tool keys: a tool's own letter restores it (and its Shift cycling).
-            let tools = crate::shell_commands::TOOLS.iter().map(|t| (t.0, t.1));
-            let (tool_keys, unknown_tools) = crate::kys::plan_tools(tools, &set);
-            for (id, key) in &tool_keys {
-                let own = crate::shell_commands::tool_default(id).flatten().is_some_and(|d| d.eq_ignore_ascii_case(key));
-                merged.insert(id.clone(), if own { Value::Null } else { json!(key) });
-            }
+            let foreign = kys::read(xml).map_err(|e| bad(cmd, e.to_string()))?;
+            let (mut merged, mut alternates, report) = plan_kys(&next, &foreign, platform);
             merged.extend(p.get("set").and_then(Value::as_object).cloned().unwrap_or_default());
-            let mut alternates = serde_json::Map::new();
-            for (id, keys) in &plan.alternate_keys {
-                let keys: &Vec<String> = &keys.iter().filter(|k| !reserved_shortcut(k)).cloned().collect();
-                let main = plan.set.get(id).map(String::as_str);
-                let default = Preferences::default().alternates(id, main);
-                alternates.insert(id.clone(), if *keys == default { Value::Null } else { json!(keys) });
-            }
             alternates.extend(p.get("alternates").and_then(Value::as_object).cloned().unwrap_or_default());
-            import = Some(json!({
-                "name": set.name,
-                "imported": plan.set.len(),
-                "set": plan.set,
-                "unknown": plan.unknown,
-                "unreadable": plan.unreadable,
-                "alternates": plan.alternates,
-                "alternateKeys": plan.alternate_keys,
-                "toolKeys": set.tool_keys,
-                "tools": tool_keys,
-                "unknownTools": unknown_tools,
-                "reserved": skipped,
-                "windows": set.windows,
-            }));
+            import = Some(report);
             let mut with_import = p.clone();
             with_import["set"] = Value::Object(merged);
             with_import["alternates"] = Value::Object(alternates);
@@ -163,9 +208,7 @@ pub(super) fn keyboard_shortcuts(s: &mut Session, p: &Value) -> Result<Value> {
     let html_target = file_target(cmd, p.get("summarize"))?;
     let mut files: Vec<(&str, String, String)> = Vec::new();
     if let Some(target) = kys_target {
-        let entries: Vec<crate::kys::Entry> =
-            crate::shortcut_sets::bound(prefs).into_iter().map(|b| crate::kys::Entry { id: b.id, label: b.label, tool: b.tool, keys: b.keys }).collect();
-        let text = crate::kys::write(set_name, &entries);
+        let text = kys::write(set_name, &crate::keymap_defs::keymap(prefs, platform));
         match target {
             Some(path) => files.push(("kysPath", path, text)),
             None => out["kys"] = json!(text),

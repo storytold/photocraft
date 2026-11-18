@@ -1,137 +1,120 @@
-//! #10894: two Crop defaults as in the reference application. The overlay shows Always by
-//! default, and Reset Tool brings back Always and Rule of Thirds. Fill goes back to its default
-//! entry when another document that was already open becomes active, and keeps Content-Aware
-//! Fill otherwise.
+//! #10894: Crop's Fill goes back to its default entry when another document that was already open
+//! becomes active, and keeps Content-Aware Fill otherwise (tool switches, new documents, a
+//! committed crop, a cancelled crop).
 
-use photocraft_ui_egui::control::{ControlRequest, handle};
-use photocraft_ui_egui::crop_overlay::{CropOverlay, OverlayShow};
-use photocraft_ui_egui::{PhotocraftApp, Tool};
+use craft::draw::ui::crop::CropFill;
+use photocraft_ui_egui::PhotocraftApp;
+use photocraft_ui_egui::control::{ControlRequest, Reply, handle};
+use photocraft_ui_egui::crop_ui;
 use serde_json::{Value, json};
 
-fn app() -> PhotocraftApp {
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-    app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
-    app.sync_views();
-    app
+type Harness = egui_kittest::Harness<'static, PhotocraftApp>;
+
+/// The app with one 64 × 48 document and the Crop tool in Classic Mode, so a drag draws a frame.
+fn harness() -> Harness {
+    let mut h = Harness::builder().with_size(egui::vec2(1100.0, 760.0)).with_max_steps(64).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), Default::default());
+        app.session.prefs.edit(|p| p.interface.language = "en".into());
+        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+        // Snapping would pull the drawn frames' corners to the canvas edges and guides.
+        app.ui.extras.snap = false;
+        app.ui.view.show.smart_guides = false;
+        app.ui.tool_options.crop.shield.classic_mode = true;
+        app
+    });
+    h.run_steps(4);
+    control(&mut h, "ui.set", json!({"tool": "crop"}));
+    h
 }
 
-/// A control request as the control channel sends it, then the frame's sync.
-fn control(app: &mut PhotocraftApp, method: &str, params: Value) -> Value {
-    let ctx = egui::Context::default();
-    let (req, rx) = ControlRequest::new(method, params);
-    handle(app, &ctx, &req);
-    app.sync_views();
-    rx.try_recv().unwrap_or(Value::Null)
+/// A control request as the control channel sends it, which must succeed, then frames so the
+/// canvas takes any queued input.
+fn control(h: &mut Harness, method: &str, params: Value) -> Value {
+    let ctx = h.ctx.clone();
+    let (req, _rx) = ControlRequest::new(method, params.clone());
+    let v = match handle(h.state_mut(), &ctx, &req) {
+        Reply::Done(v) => {
+            assert_eq!(v["ok"], true, "{method} {params}: {v}");
+            v
+        }
+        // Input the canvas takes on its next pass: the frames below deliver it.
+        Reply::AfterInput => Value::Null,
+        _ => panic!("{method} {params}: not done"),
+    };
+    h.run_steps(6);
+    v
 }
 
-/// Pick a document by its Window menu row, as the tab bar does.
-fn activate(app: &mut PhotocraftApp, index: usize) {
-    control(app, "ui.menu.invoke", json!({"id": format!("window.document.{index}")}));
-    assert_eq!(app.session.active_index(), Some(index), "document {index} is active");
+/// Draws a crop frame from `a` to `b` (document px) with pointer events.
+fn draw_frame(h: &mut Harness, a: [f64; 2], b: [f64; 2]) {
+    let events = json!([
+        {"kind": "down", "x": a[0], "y": a[1]},
+        {"kind": "move", "x": b[0], "y": b[1]},
+        {"kind": "up", "x": b[0], "y": b[1]},
+    ]);
+    control(h, "ui.pointer", json!({"events": events}));
 }
 
-fn content_aware(app: &PhotocraftApp) -> bool {
-    app.ui.tool_options.crop_content_aware
+/// Picks a document by its Window menu row, as the tab bar does.
+fn activate(h: &mut Harness, index: usize) {
+    control(h, "ui.menu.invoke", json!({"id": format!("window.document.{index}")}));
+    assert_eq!(h.state().session.active_index(), Some(index), "document {index} is active");
 }
 
-#[test]
-fn the_overlay_shows_always_by_default_and_reset_tool_brings_it_back() {
-    let mut app = app();
-    let o = &app.ui.tool_options;
-    assert_eq!((o.crop_overlay, o.crop_overlay_show), (CropOverlay::Thirds, OverlayShow::Always), "a fresh Crop tool");
-
-    app.ui.tool = Tool::Crop;
-    app.ui.tool_options.crop_overlay = CropOverlay::Diagonal;
-    app.ui.tool_options.crop_overlay_show = OverlayShow::Auto;
-    control(&mut app, "ui.menu.invoke", json!({"id": "tool.reset"}));
-    let o = &app.ui.tool_options;
-    assert_eq!((o.crop_overlay, o.crop_overlay_show), (CropOverlay::Thirds, OverlayShow::Always), "Reset Tool");
-
-    app.ui.tool_options.crop_overlay_show = OverlayShow::Never;
-    control(&mut app, "ui.menu.invoke", json!({"id": "tool.reset"}));
-    assert_eq!(app.ui.tool_options.crop_overlay_show, OverlayShow::Always, "Reset Tool from Never too");
+fn fill(h: &Harness) -> CropFill {
+    h.state().ui.tool_options.crop.fill
 }
 
-#[test]
-fn a_show_mode_already_saved_keeps_its_value() {
-    for (saved, want) in [("auto", OverlayShow::Auto), ("never", OverlayShow::Never), ("always", OverlayShow::Always)] {
-        let o: photocraft_ui_egui::state::ToolOptions = serde_json::from_value(json!({"crop_overlay_show": saved})).unwrap();
-        assert_eq!(o.crop_overlay_show, want, "a saved `{saved}` loads as it was saved");
-    }
-}
-
-#[test]
-fn fill_is_kept_by_tool_switches_and_new_documents() {
-    let mut app = app();
-    app.ui.tool_options.crop_content_aware = true;
-
-    app.ui.tool = Tool::Brush;
-    app.sync_views();
-    app.ui.tool = Tool::Crop;
-    app.sync_views();
-    assert!(content_aware(&app), "switch to another tool and back: kept");
-
-    app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
-    app.sync_views();
-    assert_eq!(app.session.active_index(), Some(1), "the new document is active");
-    assert!(content_aware(&app), "create a new document: kept");
-}
-
-#[test]
-fn fill_is_kept_when_a_crop_is_committed_or_cancelled() {
-    let mut app = app();
-    app.ui.tool = Tool::Crop;
-    app.ui.tool_options.crop_content_aware = true;
-
-    photocraft_ui_egui::crop_ui::ensure_frame(&mut app);
-    app.ui.crop_rect = Some([8.0, 8.0, 40.0, 32.0]);
-    photocraft_ui_egui::canvas::commit_crop(&mut app);
-    app.sync_views();
-    let size = app.session.active().unwrap().doc.size;
-    assert_eq!((size.width, size.height), (32, 24), "the crop was committed");
-    assert!(content_aware(&app), "commit a crop: kept");
-
-    photocraft_ui_egui::crop_ui::ensure_frame(&mut app);
-    app.ui.crop_rect = Some([4.0, 4.0, 20.0, 16.0]);
-    photocraft_ui_egui::crop_ui::cancel(&mut app);
-    app.sync_views();
-    assert_eq!(app.session.active().unwrap().doc.size.width, 32, "the cancelled crop changed nothing");
-    assert!(content_aware(&app), "cancel a crop: kept");
+fn size(h: &Harness) -> (u32, u32) {
+    let s = h.state().session.active().expect("a document").doc.size;
+    (s.width, s.height)
 }
 
 #[test]
 fn fill_goes_back_to_the_default_entry_when_another_open_document_becomes_active() {
-    let mut app = app();
-    app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
-    app.sync_views();
+    let mut h = harness();
+    h.state_mut().ui.tool_options.crop.fill = CropFill::ContentAware;
 
-    // A tab switch to a document that was already open.
-    app.ui.tool_options.crop_content_aware = true;
-    activate(&mut app, 0);
-    assert!(!content_aware(&app), "make another already-open document active: back to the default");
+    control(&mut h, "ui.set", json!({"tool": "brush"}));
+    control(&mut h, "ui.set", json!({"tool": "crop"}));
+    assert_eq!(fill(&h), CropFill::ContentAware, "a tool switch and back keeps it");
 
-    // Switching back to the first one doesn't bring it back.
-    activate(&mut app, 1);
-    assert!(!content_aware(&app), "switch back to the first document: stays at the default");
+    h.state_mut().run("file.new", json!({"width": 32, "height": 32})).unwrap();
+    h.run_steps(6);
+    assert_eq!(h.state().session.active_index(), Some(1), "the new document is active");
+    assert_eq!(fill(&h), CropFill::ContentAware, "a new document keeps it");
 
-    // Closing the active document makes another open one active.
-    app.ui.tool_options.crop_content_aware = true;
-    control(&mut app, "ui.menu.invoke", json!({"id": "file.close"}));
-    assert_eq!(app.session.documents().len(), 1, "one document closed");
-    assert!(!content_aware(&app), "close the active document so another becomes active: back to the default");
-}
+    // A committed crop keeps it.
+    // Each press starts clear of the untouched default frame's handles and edges (their reach is at most a quarter
+    // of the frame's shortest side on screen), so it draws a frame instead of resizing the default one.
+    draw_frame(&mut h, [10.0, 10.0], [26.0, 22.0]);
+    assert!(crop_ui::pending(h.state()), "the drawn frame is pending");
+    control(&mut h, "ui.menu.invoke", json!({"id": "image.crop"}));
+    assert_eq!(size(&h), (16, 12), "the crop was committed");
+    assert_eq!(fill(&h), CropFill::ContentAware, "a committed crop keeps it");
 
-#[test]
-fn fill_is_kept_while_the_same_document_stays_active() {
-    let mut app = app();
-    app.ui.tool_options.crop_content_aware = true;
-    // Repeated syncs of the same document, as every frame does, leave it alone.
-    for _ in 0..3 {
-        app.sync_views();
-    }
-    assert!(content_aware(&app));
-    // An edit replaces the snapshot without changing the document.
-    app.run("layer.new.layer", json!({})).unwrap();
-    app.sync_views();
-    assert!(content_aware(&app), "an edit in the active document keeps it");
+    // A cancelled crop keeps it.
+    draw_frame(&mut h, [5.0, 4.0], [12.0, 9.0]);
+    assert!(crop_ui::pending(h.state()));
+    control(&mut h, "ui.key", json!({"key": "Escape"}));
+    assert!(!crop_ui::pending(h.state()), "Escape cancelled the crop");
+    assert_eq!(size(&h), (16, 12), "the cancelled crop changed nothing");
+    assert_eq!(fill(&h), CropFill::ContentAware, "a cancelled crop keeps it");
+
+    // Another document that was already open becomes active.
+    activate(&mut h, 0);
+    assert_eq!(fill(&h), CropFill::Background, "another open document: back to the default");
+
+    // Switching back does not bring it back.
+    activate(&mut h, 1);
+    assert_eq!(fill(&h), CropFill::Background, "switching back: stays at the default");
+
+    // Closing the active document makes another open one active. The crop above left it modified, so the close
+    // discards its changes instead of asking to save them.
+    h.state_mut().ui.tool_options.crop.fill = CropFill::ContentAware;
+    h.state_mut().run("file.close", json!({"save": "discard"})).unwrap();
+    h.run_steps(6);
+    assert_eq!(h.state().session.documents().len(), 1, "one document closed");
+    assert_eq!(fill(&h), CropFill::Background, "closing the active document: back to the default");
 }
