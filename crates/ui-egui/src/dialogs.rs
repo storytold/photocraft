@@ -112,6 +112,12 @@ pub(crate) mod params {
         crate::actions::menu_item::FAMILY,
         crate::smart_svg_ui::family(),
         ParamFamily { check: Some(crate::workspace_ui::check_param), ..ParamFamily::new(crate::workspace_ui::owns_param, crate::workspace_ui::run_param) },
+        ParamFamily {
+            check: Some(filter_dialog::check),
+            footer: Some(color_table_ui::footer_action),
+            cancel: Some(filter_dialog::cancel),
+            ..ParamFamily::new(|key| key == color_table_ui::INDEXED_COLOR, filter_dialog::run)
+        },
         ParamFamily { check: Some(filter_dialog::check), cancel: Some(filter_dialog::cancel), ..ParamFamily::new(filter_dialog::owns, filter_dialog::run) },
     ];
 
@@ -741,6 +747,7 @@ pub mod new_guide_ui;
 pub mod new_layer_ui;
 pub mod open_prompt;
 pub mod palette;
+pub(crate) mod palette_file_ui;
 #[cfg(test)]
 mod paths_export_default_tests;
 #[cfg(test)]

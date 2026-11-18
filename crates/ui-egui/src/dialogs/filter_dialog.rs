@@ -357,7 +357,7 @@ pub(crate) fn params(app: &mut PhotocraftApp, command: &str, spec: &str) -> Vec<
     if command == crate::bitmap_dialog::COMMAND {
         list = crate::bitmap_dialog::params(app);
     }
-    if command == "image.mode.colorTable" {
+    if command == crate::color_table_ui::COMMAND {
         list.extend(crate::color_table_ui::rows(app));
     }
     // Rotate Canvas: one row of its own, without the Interpolation row (#14462).
@@ -422,6 +422,12 @@ pub(crate) fn fields(app: &PhotocraftApp, command: &str, params: &[Param]) -> Di
     }
     if command == super::rotate_canvas_ui::COMMAND {
         super::rotate_canvas_ui::open_values(&mut fields);
+    }
+    // Palette: Custom… starts from the document's table (an Indexed document), else from the
+    // palette the dialog opens on, so the grid always has a table to edit.
+    if command == rows::INDEXED_COLOR {
+        let colors = crate::dialogs::palette_file_ui::opening_table(app);
+        crate::dialogs::palette_file_ui::set_table(&mut fields, crate::dialogs::palette_file_ui::CUSTOM_FIELD, &colors);
     }
     fields
 }
@@ -567,7 +573,7 @@ fn builder(
         if let Some(canvas) = canvas {
             dialog = dialog.canvas(canvas);
         }
-        if key == "image.mode.colorTable" {
+        if key == crate::color_table_ui::COMMAND || key == rows::INDEXED_COLOR {
             dialog = dialog
                 .extra_buttons(vec![("load".to_owned(), Label::from(tl!("Load…").to_string())), ("save".to_owned(), Label::from(tl!("Save…").to_string()))]);
         }
@@ -708,7 +714,14 @@ pub(crate) fn command_params(command: &str, fields: &DialogFields) -> Value {
     if command == super::rotate_canvas_ui::COMMAND {
         super::rotate_canvas_ui::command_params(&mut map);
     }
-    params_of(&map)
+    let params = params_of(&map);
+    // The palette dialogs' tables: a preset picked after Load… replaces the loaded one, and
+    // Indexed Color's table belongs to Palette: Custom only.
+    match command {
+        crate::color_table_ui::COMMAND => crate::color_table_ui::command_params(fields, params),
+        rows::INDEXED_COLOR => crate::color_table_ui::indexed_color_params(fields, params),
+        _ => params,
+    }
 }
 
 /// The dialog values as the plain JSON map.
@@ -1052,6 +1065,7 @@ fn finish(
     let outcome = crate::actions::run_step_dialog(app, result.id, &cmd, params.clone());
     if let Ok(r) = &outcome {
         report_file_errors(app, command, r);
+        crate::color_table_ui::warn_flattened(app, command, r);
     }
     // A filter that runs as a background job keeps its preview on screen until the job
     // lands (`canvas::committed_filter_preview`) instead of flashing the unfiltered image.

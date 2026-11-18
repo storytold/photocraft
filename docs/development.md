@@ -756,6 +756,16 @@ the transparent entry's colour maps to the nearest other entry and stays opaque.
 `transparent` index (Set Transparent, a loaded `.act` trailer) also makes the opaque pixels nearest
 to that entry transparent.
 
+The dialog (`crates/ui-egui/src/dialogs/palette_file_ui.rs`) shows the table as a 16-cell-wide
+grid shared with Color Table: a click asks the Color Picker for that entry, and the picked colour is
+folded back into the table field (`paletteColors` for a Custom palette, `colors` for Color Table).
+The **Set Transparent** switch makes the next click mark an entry instead; the marked entry is the
+one named in `transparent` (click it again to clear). Palette: Custom… is seeded with the document's
+table on an Indexed document, else with the palette the dialog opens on, so the grid always has
+something to edit, and `colors`/`forced` grey out while it is chosen. **Load…** and **Save…**
+exchange `.act` files and palette PNGs (a 1-pixel-tall colour-type-3 image whose PLTE is the table
+and whose tRNS names the transparent entry).
+
 `cargo run --release -p photocraft-engine --example indexed_color_perf -- image.png` measures
 palette construction, Floyd–Steinberg diffusion, and the complete full-resolution CPU preview
 path (proxy copy, engine command, result composition; excludes GPU upload/presentation).
