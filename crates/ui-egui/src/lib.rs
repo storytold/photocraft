@@ -36,6 +36,9 @@ pub mod file_open;
 pub mod frame_stages;
 pub mod gpu_memo;
 pub mod gpu_status;
+#[cfg(test)]
+#[path = "../../engine/src/historical_xcf_open/fixture.rs"]
+pub(crate) mod historical_xcf_fixture;
 mod history_keys;
 pub mod home_recent_ui;
 pub mod i18n;
@@ -658,6 +661,8 @@ pub struct PhotocraftApp {
     pub(crate) disk_stamps: HashMap<photocraft_doc::DocId, (String, FileStamp)>,
     /// Files read but not opened yet: the first waits on its profile prompt, the rest behind it
     /// (see `open_prompt`).
+    pub(crate) historical_opens: Vec<dialogs::historical_xcf::Historical>,
+    pub(crate) historical_replacements: dialogs::historical_replace::Pending,
     pub(crate) held_opens: std::collections::VecDeque<open_prompt::Held>,
     /// PSD files whose memory preflight requires user approval before pixel decoding (see `open_prompt`).
     pub(crate) held_memory_prompts: std::collections::VecDeque<open_prompt::MemoryPrompt>,

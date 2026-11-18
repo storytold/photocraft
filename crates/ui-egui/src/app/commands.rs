@@ -359,6 +359,7 @@ impl PhotocraftApp {
             self.ui.selected_path = None;
         }
         self.path_document = document;
+        crate::file_open::apply_initial_path(self);
         vector_ui::cancel_stale_pen(self);
         crate::direct_select::cancel_stale(self);
         type_transform::cancel_stale(self);

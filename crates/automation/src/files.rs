@@ -9,11 +9,18 @@ use photocraft_io::{BandRenderer, ExportOptions};
 
 use crate::AutomationError;
 
+/// Validate host open controls before any filesystem read or document admission.
+pub fn import_options_from_params(params: &serde_json::Value) -> Result<photocraft_io::ImportOptions, AutomationError> {
+    Ok(photocraft_engine::file_cmds::import_options_from_params(Default::default(), params, "doc.open")?)
+}
+
 /// Result of opening a file.
 pub struct Opened {
     pub document: Document,
     pub warnings: Vec<String>,
     pub source_read_only: bool,
+    /// One-time native view hints from the import, absent for reopened native bundles.
+    pub initial_view: Option<photocraft_io::NativeInitialView>,
 }
 
 /// Decode a document that was read through a filesystem capability.
@@ -25,10 +32,10 @@ pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<Opened, AutomationError> {
 pub fn open_bytes_with_options(name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> Result<Opened, AutomationError> {
     if Path::new(name).extension().is_some_and(|extension| extension.eq_ignore_ascii_case(photocraft_format::EXTENSION)) {
         let document = photocraft_format::load_from_bytes(bytes)?;
-        return Ok(Opened { warnings: photocraft_io::open_warnings(&document), document, source_read_only: false });
+        return Ok(Opened { warnings: photocraft_io::open_warnings(&document), document, source_read_only: false, initial_view: None });
     }
     let r = photocraft_io::import_with_options(name, bytes, opts)?;
-    Ok(Opened { document: r.document, warnings: r.warnings, source_read_only: r.source_read_only })
+    Ok(Opened { document: r.document, warnings: r.warnings, source_read_only: r.source_read_only, initial_view: r.initial_view })
 }
 
 /// Open a document from disk. Directory bundles and `.pcraft` ZIPs load
@@ -41,7 +48,7 @@ pub fn open(path: &Path) -> Result<Opened, AutomationError> {
 pub fn open_with_options(path: &Path, opts: &photocraft_io::ImportOptions) -> Result<Opened, AutomationError> {
     if path.is_dir() {
         let document = photocraft_format::load_path(path)?;
-        return Ok(Opened { warnings: photocraft_io::open_warnings(&document), document, source_read_only: false });
+        return Ok(Opened { warnings: photocraft_io::open_warnings(&document), document, source_read_only: false, initial_view: None });
     }
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     // A PSD/PSB is parsed from the open file (channel data read as it is decoded), so a CLI
@@ -52,7 +59,7 @@ pub fn open_with_options(path: &Path, opts: &photocraft_io::ImportOptions) -> Re
             photocraft_io::IoError::Read(msg) => AutomationError::Io(msg),
             e => e.into(),
         })?;
-        Ok(Opened { document: r.document, warnings: r.warnings, source_read_only: r.source_read_only })
+        Ok(Opened { document: r.document, warnings: r.warnings, source_read_only: r.source_read_only, initial_view: r.initial_view })
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -254,4 +261,42 @@ pub fn render_png_with_warnings(doc: &Document, max_side: u32, mut renderer: Opt
         .map_err(|e| AutomationError::Other(e.to_string()))?;
     let png = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).map_err(|e| AutomationError::Other(e.to_string()))?;
     Ok((png, warnings))
+}
+
+#[cfg(test)]
+mod historical_order_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn explicit_historical_order_options_are_strict_and_missing_stays_unset() {
+        for params in [json!({}), json!({"historicalXcfSampleOrder":null})] {
+            assert_eq!(import_options_from_params(&params).unwrap().historical_xcf_sample_order, None);
+        }
+        for (name, order) in
+            [("little-endian", photocraft_io::HistoricalXcfSampleOrder::LittleEndian), ("big-endian", photocraft_io::HistoricalXcfSampleOrder::BigEndian)]
+        {
+            let options = import_options_from_params(&json!({"historicalXcfSampleOrder":name,"approveHighMemory":true})).unwrap();
+            assert_eq!(options.historical_xcf_sample_order, Some(order));
+            assert!(options.psd_high_memory_approved);
+        }
+        for invalid in [json!("native"), json!("LE"), json!(1), json!(false)] {
+            assert!(import_options_from_params(&json!({"historicalXcfSampleOrder":invalid})).is_err());
+        }
+    }
+
+    #[test]
+    fn headless_open_uses_default_base_and_shared_strict_approval_controls() {
+        for params in [json!({}), json!({"approveHighMemory":null,"historicalXcfSampleOrder":null})] {
+            assert_eq!(import_options_from_params(&params).unwrap(), photocraft_io::ImportOptions::default());
+        }
+        for approved in [false, true] {
+            let options = import_options_from_params(&json!({"approveHighMemory":approved})).unwrap();
+            assert_eq!(options, photocraft_io::ImportOptions { psd_high_memory_approved: approved, ..Default::default() });
+        }
+        for value in [json!(1), json!("true"), json!([]), json!({})] {
+            let error = import_options_from_params(&json!({"approveHighMemory":value})).unwrap_err();
+            assert!(error.to_string().contains("approveHighMemory"));
+        }
+    }
 }

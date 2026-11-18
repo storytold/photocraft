@@ -17,6 +17,9 @@ pub(super) fn contents_uuid(contents_id: SmartContentsId, bytes: &[u8]) -> Strin
 }
 
 type OwnedSourceHash = (std::sync::Arc<Vec<u8>>, [u8; 32]);
+type SourceKey = (String, Option<photocraft_doc::HistoricalXcfSampleOrder>);
+type ConversionKey = (SmartContentsId, [u8; 32], bool, Option<photocraft_doc::HistoricalXcfSampleOrder>);
+type Composite = Option<(std::sync::Arc<Surface>, photocraft_geom::Rect)>;
 
 #[cfg(test)]
 thread_local! { pub(crate) static EMBED_HASHED_SOURCE_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
@@ -45,7 +48,7 @@ pub(super) struct SmartOut {
     pub(super) add: Vec<crate::linked::LinkedFile>,
     /// Sources converted so far, by contents identity, bytes and whether they were read from a
     /// link (`Err` = can't be embedded).
-    pub(super) converted: std::collections::HashMap<(SmartContentsId, [u8; 32], bool), Result<Source, String>>,
+    pub(super) converted: std::collections::HashMap<ConversionKey, Result<Source, String>>,
     /// Only immutable embedded owners are memoized for this export; pinning prevents address reuse.
     pub(super) embedded_hashes: std::collections::HashMap<usize, OwnedSourceHash>,
     /// Each placed layer has its own id, even when it duplicates an imported layer.
@@ -59,9 +62,9 @@ pub(super) struct SmartOut {
     /// Independent copies of preserved linked items, including unavailable external sources.
     pub(super) linked_copies: std::collections::BTreeMap<(String, SmartContentsId), photocraft_doc::PsdGlobalBlock>,
     /// Embedded documents decoded while converting them, by uuid (for the filter caches).
-    pub(super) docs: std::collections::HashMap<String, Document>,
+    pub(super) docs: std::collections::HashMap<SourceKey, Document>,
     /// Source composites (document pixel format, source space) by uuid; `None` = unreadable.
-    pub(super) composites: std::collections::HashMap<String, Option<(std::sync::Arc<Surface>, photocraft_geom::Rect)>>,
+    pub(super) composites: std::collections::HashMap<SourceKey, Composite>,
     /// Preserved `FEid` items (by placed id).
     pub(super) old_fx: Vec<craft_psd::filter_effects::FilterEffectsItem>,
     /// Placed ids whose preserved `FEid` item stays.
