@@ -4,7 +4,32 @@
 //! doesn't build on an adapter that can run it fails. The shader itself is validated without a
 //! GPU ([`the_shader_validates_without_a_gpu`]), so a WGSL error fails on every runner.
 
-use photocraft_algo::camera_raw::{CameraRaw, Wheel, develop, per_pixel, white_black_points};
+use photocraft_algo::camera_raw::{CameraRaw, DevelopInputs, PerPixel, StoredVignetteStyle, TonePoints, Wheel, spatial};
+
+/// `CameraRaw` with the named fields set (the type is `#[non_exhaustive]`, so no struct expression).
+macro_rules! cr {
+    ($($f:ident : $v:expr),* $(,)?) => {{
+        let mut s = CameraRaw::default();
+        $(s.$f = $v;)*
+        s
+    }};
+}
+
+/// Settings and the job's inputs (scale, grain seed, encoding): one case for [`check`].
+type Case = (CameraRaw, DevelopInputs);
+
+fn case(p: CameraRaw, inputs: DevelopInputs) -> Case {
+    (p, inputs)
+}
+
+fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, inputs: &DevelopInputs, float: bool) {
+    photocraft_algo::camera_raw::develop(px, w, h, p, inputs, float);
+}
+
+/// [`photocraft_algo::camera_raw::per_pixel`] with the default inputs.
+fn per_pixel(p: &CameraRaw, w: usize, h: usize, float: bool, points: Option<TonePoints>) -> Option<PerPixel> {
+    photocraft_algo::camera_raw::per_pixel(p, &DevelopInputs::default(), w, h, float, points)
+}
 use photocraft_gpu::{CameraRawDevelop, DeviceHealth, Fault};
 
 /// Largest difference from the CPU develop, per channel. The pass evaluates the same
@@ -112,14 +137,14 @@ fn image(w: usize, h: usize, depth: Depth) -> Vec<[f32; 4]> {
 }
 
 /// Develops `p` both ways and returns the largest channel difference.
-fn compare(g: &mut Gpu, p: &CameraRaw, depth: Depth) -> f32 {
+fn compare(g: &mut Gpu, (p, inputs): &Case, depth: Depth) -> f32 {
     let (w, h) = (171, 113);
     let float = matches!(depth, Depth::Float);
     let src = image(w, h, depth);
     let mut cpu = src.clone();
-    develop(&mut cpu, w, h, p, float);
-    let points = white_black_points(&src, w, h, p);
-    let stages = per_pixel(p, w, h, float, points).unwrap_or_else(|| panic!("{p:?} has a spatial stage"));
+    develop(&mut cpu, w, h, p, inputs, float);
+    let points = photocraft_algo::camera_raw::white_black_points(&src, w, h, p, inputs);
+    let stages = photocraft_algo::camera_raw::per_pixel(p, inputs, w, h, float, points).unwrap_or_else(|| panic!("{p:?} has a spatial stage"));
     let out = g.dev.develop(&g.device, &g.queue, None, &src, None, [w as u32, h as u32], &stages).unwrap();
     assert_eq!(out.len(), cpu.len());
     let mut worst = (0.0f32, 0usize);
@@ -141,7 +166,7 @@ fn compare(g: &mut Gpu, p: &CameraRaw, depth: Depth) -> f32 {
     d
 }
 
-fn check(name: &str, sets: &[CameraRaw]) {
+fn check(name: &str, sets: &[Case]) {
     let Some(mut g) = gpu() else { return };
     for p in sets {
         for depth in DEPTHS {
@@ -156,21 +181,21 @@ fn exposure() {
     check(
         "exposure",
         &[
-            CameraRaw { exposure: -1.2, ..Default::default() },
-            CameraRaw { exposure: 1.5, ..Default::default() },
-            CameraRaw { exposure: 2.7, encoding_gamma: 1.8, ..Default::default() },
-            CameraRaw { exposure: -3.3, encoding_gamma: 563.0 / 256.0, ..Default::default() },
-            CameraRaw { exposure: 5.0, ..Default::default() },
+            case(cr! { exposure: -1.2 }, DevelopInputs::default()),
+            case(cr! { exposure: 1.5 }, DevelopInputs::default()),
+            case(cr! { exposure: 2.7 }, DevelopInputs { encoding_gamma: 1.8, ..Default::default() }),
+            case(cr! { exposure: -3.3 }, DevelopInputs { encoding_gamma: 563.0 / 256.0, ..Default::default() }),
+            case(cr! { exposure: 5.0 }, DevelopInputs::default()),
         ],
     );
     // Temperature and Tint are per-channel curves the pass does not run: the CPU develops them.
-    assert!(per_pixel(&CameraRaw { temperature: 40.0, ..Default::default() }, 8, 8, false, None).is_none());
-    assert!(per_pixel(&CameraRaw { tint: -25.0, ..Default::default() }, 8, 8, false, None).is_none());
+    assert!(per_pixel(&cr! { temperature: 40.0 }, 8, 8, false, None).is_none());
+    assert!(per_pixel(&cr! { tint: -25.0 }, 8, 8, false, None).is_none());
 }
 
 #[test]
 fn contrast_without_texture_or_clarity() {
-    check("contrast", &[CameraRaw { contrast: 60.0, ..Default::default() }, CameraRaw { contrast: -80.0, exposure: 0.4, ..Default::default() }]);
+    check("contrast", &[case(cr! { contrast: 60.0 }, DevelopInputs::default()), case(cr! { contrast: -80.0, exposure: 0.4 }, DevelopInputs::default())]);
 }
 
 #[test]
@@ -178,12 +203,12 @@ fn whites_and_blacks() {
     check(
         "whites/blacks",
         &[
-            CameraRaw { whites: 70.0, blacks: -45.0, ..Default::default() },
-            CameraRaw { whites: -60.0, blacks: 50.0, exposure: 0.2, ..Default::default() },
-            CameraRaw { whites: 30.0, ..Default::default() },
-            CameraRaw { blacks: -100.0, exposure: -0.5, ..Default::default() },
+            case(cr! { whites: 70.0, blacks: -45.0 }, DevelopInputs::default()),
+            case(cr! { whites: -60.0, blacks: 50.0, exposure: 0.2 }, DevelopInputs::default()),
+            case(cr! { whites: 30.0 }, DevelopInputs::default()),
+            case(cr! { blacks: -100.0, exposure: -0.5 }, DevelopInputs::default()),
             // ProPhoto's power-law encoding.
-            CameraRaw { whites: 50.0, blacks: -30.0, encoding_gamma: 1.8, ..Default::default() },
+            case(cr! { whites: 50.0, blacks: -30.0 }, DevelopInputs { encoding_gamma: 1.8, ..Default::default() }),
         ],
     );
 }
@@ -193,21 +218,15 @@ fn tone_curves() {
     check(
         "tone curves",
         &[
-            CameraRaw {
-                curve_highlights: -60.0,
-                curve_lights: 30.0,
-                curve_darks: 40.0,
-                curve_shadows: -20.0,
-                curve_splits: [20.0, 45.0, 80.0],
-                ..Default::default()
-            },
-            CameraRaw { point_curve: vec![[0.0, 20.0], [64.0, 50.0], [192.0, 220.0], [255.0, 245.0]], ..Default::default() },
-            CameraRaw {
-                point_curve_red: vec![[0.0, 0.0], [128.0, 160.0], [255.0, 255.0]],
-                point_curve_green: vec![[0.0, 10.0], [255.0, 230.0]],
-                point_curve_blue: vec![[0.0, 0.0], [100.0, 70.0], [255.0, 255.0]],
-                ..Default::default()
-            },
+            case(
+                cr! { curve_highlights: -60.0, curve_lights: 30.0, curve_darks: 40.0, curve_shadows: -20.0, curve_splits: [20.0, 45.0, 80.0] },
+                DevelopInputs::default(),
+            ),
+            case(cr! { point_curve: vec![[0.0, 20.0], [64.0, 50.0], [192.0, 220.0], [255.0, 245.0]] }, DevelopInputs::default()),
+            case(
+                cr! { point_curve_red: vec![[0.0, 0.0], [128.0, 160.0], [255.0, 255.0]], point_curve_green: vec![[0.0, 10.0], [255.0, 230.0]], point_curve_blue: vec![[0.0, 0.0], [100.0, 70.0], [255.0, 255.0]] },
+                DevelopInputs::default(),
+            ),
         ],
     );
 }
@@ -217,9 +236,9 @@ fn vibrance_and_saturation() {
     check(
         "presence",
         &[
-            CameraRaw { vibrance: 70.0, ..Default::default() },
-            CameraRaw { saturation: -60.0, ..Default::default() },
-            CameraRaw { vibrance: -40.0, saturation: 50.0, ..Default::default() },
+            case(cr! { vibrance: 70.0 }, DevelopInputs::default()),
+            case(cr! { saturation: -60.0 }, DevelopInputs::default()),
+            case(cr! { vibrance: -40.0, saturation: 50.0 }, DevelopInputs::default()),
         ],
     );
 }
@@ -230,10 +249,10 @@ fn color_mixer() {
     check(
         "color mixer",
         &[
-            CameraRaw { hsl_hue: ramp(0.0), ..Default::default() },
-            CameraRaw { hsl_sat: ramp(50.0), ..Default::default() },
-            CameraRaw { hsl_lum: ramp(120.0), ..Default::default() },
-            CameraRaw { hsl_hue: ramp(10.0), hsl_sat: ramp(80.0), hsl_lum: ramp(150.0), ..Default::default() },
+            case(cr! { hsl_hue: ramp(0.0) }, DevelopInputs::default()),
+            case(cr! { hsl_sat: ramp(50.0) }, DevelopInputs::default()),
+            case(cr! { hsl_lum: ramp(120.0) }, DevelopInputs::default()),
+            case(cr! { hsl_hue: ramp(10.0), hsl_sat: ramp(80.0), hsl_lum: ramp(150.0) }, DevelopInputs::default()),
         ],
     );
 }
@@ -243,15 +262,11 @@ fn color_grading() {
     check(
         "color grading",
         &[
-            CameraRaw { grade_shadows: Wheel { hue: 220.0, sat: 70.0, lum: 20.0 }, ..Default::default() },
-            CameraRaw {
-                grade_midtones: Wheel { hue: 120.0, sat: 30.0, lum: -15.0 },
-                grade_highlights: Wheel { hue: 40.0, sat: 50.0, lum: 10.0 },
-                grade_global: Wheel { hue: 300.0, sat: 15.0, lum: 5.0 },
-                grade_blending: 80.0,
-                grade_balance: -40.0,
-                ..Default::default()
-            },
+            case(cr! { grade_shadows: Wheel { hue: 220.0, sat: 70.0, lum: 20.0 } }, DevelopInputs::default()),
+            case(
+                cr! { grade_midtones: Wheel { hue: 120.0, sat: 30.0, lum: -15.0 }, grade_highlights: Wheel { hue: 40.0, sat: 50.0, lum: 10.0 }, grade_global: Wheel { hue: 300.0, sat: 15.0, lum: 5.0 }, grade_blending: 80.0, grade_balance: -40.0 },
+                DevelopInputs::default(),
+            ),
         ],
     );
 }
@@ -261,17 +276,14 @@ fn vignette() {
     check(
         "vignette",
         &[
-            CameraRaw { vignette_amount: -70.0, ..Default::default() },
-            CameraRaw { vignette_amount: -50.0, vignette_roundness: -60.0, vignette_feather: 20.0, vignette_highlights: 70.0, ..Default::default() },
-            CameraRaw {
-                vignette_amount: 60.0,
-                vignette_roundness: 80.0,
-                vignette_midpoint: 20.0,
-                vignette_style: "colorPriority".into(),
-                ..Default::default()
-            },
-            CameraRaw { vignette_amount: -40.0, vignette_style: "paintOverlay".into(), ..Default::default() },
-            CameraRaw { vignette_amount: 40.0, vignette_style: "paintOverlay".into(), ..Default::default() },
+            case(cr! { vignette_amount: -70.0 }, DevelopInputs::default()),
+            case(cr! { vignette_amount: -50.0, vignette_roundness: -60.0, vignette_feather: 20.0, vignette_highlights: 70.0 }, DevelopInputs::default()),
+            case(
+                cr! { vignette_amount: 60.0, vignette_roundness: 80.0, vignette_midpoint: 20.0, vignette_style: StoredVignetteStyle::ColorPriority },
+                DevelopInputs::default(),
+            ),
+            case(cr! { vignette_amount: -40.0, vignette_style: StoredVignetteStyle::PaintOverlay }, DevelopInputs::default()),
+            case(cr! { vignette_amount: 40.0, vignette_style: StoredVignetteStyle::PaintOverlay }, DevelopInputs::default()),
         ],
     );
 }
@@ -281,10 +293,13 @@ fn grain_in_full_resolution_coordinates() {
     check(
         "grain",
         &[
-            CameraRaw { grain_amount: 60.0, seed: 3, ..Default::default() },
+            case(cr! { grain_amount: 60.0 }, DevelopInputs { seed: 3, ..Default::default() }),
             // A preview proxy: the noise lattice is sampled at full-resolution positions.
-            CameraRaw { grain_amount: 80.0, grain_size: 60.0, grain_roughness: 90.0, seed: u32::MAX, pixel_scale: 0.143, ..Default::default() },
-            CameraRaw { grain_amount: 25.0, grain_size: 0.0, grain_roughness: 0.0, seed: 77, pixel_scale: 0.5, ..Default::default() },
+            case(
+                cr! { grain_amount: 80.0, grain_size: 60.0, grain_roughness: 90.0 },
+                DevelopInputs { seed: u32::MAX, pixel_scale: 0.143, ..Default::default() },
+            ),
+            case(cr! { grain_amount: 25.0, grain_size: 0.0, grain_roughness: 0.0 }, DevelopInputs { seed: 77, pixel_scale: 0.5, ..Default::default() }),
         ],
     );
 }
@@ -296,24 +311,10 @@ fn every_per_pixel_stage_at_once() {
     hsl[5] = -50.0;
     check(
         "all stages",
-        &[CameraRaw {
-            exposure: 0.3,
-            contrast: 25.0,
-            whites: 20.0,
-            blacks: -15.0,
-            vibrance: 30.0,
-            saturation: 10.0,
-            curve_darks: 20.0,
-            point_curve: vec![[0.0, 8.0], [255.0, 250.0]],
-            hsl_hue: hsl,
-            hsl_sat: hsl,
-            hsl_lum: hsl,
-            grade_shadows: Wheel { hue: 210.0, sat: 25.0, lum: 0.0 },
-            vignette_amount: -30.0,
-            grain_amount: 20.0,
-            pixel_scale: 0.2,
-            ..Default::default()
-        }],
+        &[case(
+            cr! { exposure: 0.3, contrast: 25.0, whites: 20.0, blacks: -15.0, vibrance: 30.0, saturation: 10.0, curve_darks: 20.0, point_curve: vec![[0.0, 8.0], [255.0, 250.0]], hsl_hue: hsl, hsl_sat: hsl, hsl_lum: hsl, grade_shadows: Wheel { hue: 210.0, sat: 25.0, lum: 0.0 }, vignette_amount: -30.0, grain_amount: 20.0 },
+            DevelopInputs { pixel_scale: 0.2, ..Default::default() },
+        )],
     );
 }
 
@@ -325,27 +326,27 @@ fn identity_leaves_pixels_alone_and_spatial_settings_have_no_pass() {
     let stages = per_pixel(&p, 64, 32, false, None).unwrap();
     let out = g.dev.develop(&g.device, &g.queue, None, &src, Some(1), [64, 32], &stages).unwrap();
     assert_eq!(out, src, "the CPU develop returns early, unclipped");
-    for spatial in [
-        CameraRaw { dehaze: 10.0, ..Default::default() },
-        CameraRaw { shadows: 10.0, ..Default::default() },
-        CameraRaw { highlights: -10.0, ..Default::default() },
-        CameraRaw { texture: 10.0, ..Default::default() },
-        CameraRaw { clarity: 10.0, ..Default::default() },
-        CameraRaw { sharpen_amount: 10.0, ..Default::default() },
-        CameraRaw { noise_luminance: 10.0, ..Default::default() },
-        CameraRaw { noise_color: 10.0, ..Default::default() },
+    for settings in [
+        cr! { dehaze: 10.0 },
+        cr! { shadows: 10.0 },
+        cr! { highlights: -10.0 },
+        cr! { texture: 10.0 },
+        cr! { clarity: 10.0 },
+        cr! { sharpen_amount: 10.0 },
+        cr! { noise_luminance: 10.0 },
+        cr! { noise_color: 10.0 },
     ] {
-        assert!(spatial.spatial() && per_pixel(&spatial, 64, 32, false, Some([[-8.0, -2.0, 0.0, -3.0]; 2])).is_none(), "{spatial:?}");
+        assert!(spatial(&settings) && per_pixel(&settings, 64, 32, false, Some([[-8.0, -2.0, 0.0, -3.0]; 2])).is_none(), "{settings:?}");
     }
     // Contrast and Whites up need the image's points.
-    assert!(per_pixel(&CameraRaw { whites: 10.0, ..Default::default() }, 64, 32, false, None).is_none());
-    assert!(per_pixel(&CameraRaw { contrast: 10.0, ..Default::default() }, 64, 32, false, None).is_none());
+    assert!(per_pixel(&cr! { whites: 10.0 }, 64, 32, false, None).is_none());
+    assert!(per_pixel(&cr! { contrast: 10.0 }, 64, 32, false, None).is_none());
 }
 
 #[test]
 fn a_cached_source_is_reused_and_a_new_key_uploads() {
     let Some(mut g) = gpu() else { return };
-    let p = CameraRaw { exposure: 0.5, ..Default::default() };
+    let p = cr! { exposure: 0.5 };
     let stages = per_pixel(&p, 64, 32, false, None).unwrap();
     let a = image(64, 32, Depth::Eight);
     let b: Vec<[f32; 4]> = a.iter().map(|q| [q[2], q[0], q[1], 1.0]).collect();
@@ -353,7 +354,7 @@ fn a_cached_source_is_reused_and_a_new_key_uploads() {
     // Same key: the uploaded source stays (callers key by the proxy's identity).
     assert_eq!(g.dev.develop(&g.device, &g.queue, None, &b, Some(7), [64, 32], &stages).unwrap(), first);
     let mut cpu = b.clone();
-    develop(&mut cpu, 64, 32, &p, false);
+    develop(&mut cpu, 64, 32, &p, &DevelopInputs::default(), false);
     let other = g.dev.develop(&g.device, &g.queue, None, &b, Some(8), [64, 32], &stages).unwrap();
     assert!(other.iter().zip(&cpu).all(|(x, y)| (0..3).all(|c| (x[c] - y[c]).abs() <= TOL)));
 }
@@ -361,7 +362,7 @@ fn a_cached_source_is_reused_and_a_new_key_uploads() {
 #[test]
 fn bad_sizes_and_faulted_devices_are_errors() {
     let Some(mut g) = gpu() else { return };
-    let stages = per_pixel(&CameraRaw { exposure: 0.5, ..Default::default() }, 4, 4, false, None).unwrap();
+    let stages = per_pixel(&cr! { exposure: 0.5 }, 4, 4, false, None).unwrap();
     let px = vec![[0.5f32; 4]; 16];
     for size in [[0, 4], [4, 0], [5, 4], [3, 3], [u32::MAX, 1]] {
         assert!(g.dev.develop(&g.device, &g.queue, None, &px, None, size, &stages).is_err(), "{size:?}");

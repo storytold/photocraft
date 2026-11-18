@@ -6,13 +6,14 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use photocraft_codecs::{ChannelLayout, EncodeOptions, Image};
 use photocraft_doc::Document;
 use photocraft_ui_egui::i18n;
 use photocraft_ui_egui::served_fonts;
-use photocraft_ui_egui::theme::ThemeKind;
+use photocraft_ui_egui::theme::AppTheme;
 use photocraft_ui_egui::{FileDialogAnswer, FileDialogRequest, PhotocraftApp, Services};
 use wasm_bindgen::JsCast as _;
+
+use crate::preset_bridge::{ActionRecovery, SaveWarning};
 
 type Inbox = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
 type PlaceInbox = photocraft_ui_egui::PlaceInbox;
@@ -93,21 +94,24 @@ pub fn start() {
                 canvas,
                 options,
                 Box::new(move |cc| {
-                    PhotocraftApp::install_type_reset_hooks(&cc.egui_ctx);
-                    PhotocraftApp::setup_context(&cc.egui_ctx, ThemeKind::Pro);
+                    PhotocraftApp::setup_context(&cc.egui_ctx, AppTheme::pro());
                     let inbox: Inbox = Arc::default();
                     let place_inbox: PlaceInbox = Arc::default();
                     let served: Served = Arc::default();
                     load_font_manifest(served.clone(), cc.egui_ctx.clone());
                     let (session, warnings) = crate::preset_bridge::session(presets.clone());
+                    let actions_revision = session.actions.list.revision();
                     preset_warnings.extend(warnings);
                     let drag = listen_drag(&pen_target);
-                    let mut app = PhotocraftApp::new(session, services(inbox.clone(), place_inbox.clone(), drag_pos_service(pen_target.clone(), drag)));
+                    let mut services = services(inbox.clone(), place_inbox.clone(), drag_pos_service(pen_target.clone(), drag));
+                    let mut initial = Some(load_initial_preferences(&presets, database.is_some() && !session.actions.list.actions().is_empty()));
+                    services.load_prefs = Some(Box::new(move || initial.take().unwrap_or_else(stored_preferences)));
+                    let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), session, services);
                     if !preset_warnings.is_empty() {
                         photocraft_ui_egui::notices::post(&mut app, i18n::t("Some brush presets could not be loaded"), preset_warnings, true, None);
                     }
                     listen_pen(&pen_target, app.stylus.feed.clone());
-                    app.set_theme(&cc.egui_ctx, ThemeKind::Pro);
+                    app.set_theme(&cc.egui_ctx, AppTheme::pro());
                     if let Some(rs) = cc.wgpu_render_state.clone()
                         && !force_cpu
                     {
@@ -116,7 +120,18 @@ pub fn start() {
                     }
                     let unsaved = Arc::new(AtomicBool::new(false));
                     guard_unload(unsaved.clone());
-                    Ok(Box::new(WebShell { app, inbox, place_inbox, unsaved, served, database, presets, ui_language: "" }))
+                    Ok(Box::new(WebShell {
+                        app,
+                        inbox,
+                        place_inbox,
+                        unsaved,
+                        served,
+                        database,
+                        presets,
+                        ui_language: "",
+                        actions_revision,
+                        prefs_revision: None,
+                    }))
                 }),
             )
             .await;
@@ -351,12 +366,26 @@ struct WebShell {
     served: Served,
     database: Option<web_sys::IdbDatabase>,
     presets: crate::preset_bridge::Bridge,
+    actions_revision: u64,
+    prefs_revision: Option<u64>,
     /// The interface language whose served script font was last asked for.
     ui_language: &'static str,
 }
 
 impl WebShell {
     fn save_presets(&mut self, ctx: &egui::Context) {
+        let session = &self.app.session;
+        if self.actions_revision != session.actions.list.revision() {
+            // The engine can reject an oversized definition before calling the backend.
+            // Never stage that edit's keys with the last successfully queued definitions.
+            self.presets.verify_action_definitions(&session.actions);
+            self.actions_revision = session.actions.list.revision();
+        }
+        let prefs_revision = session.prefs.rev();
+        if self.prefs_revision != Some(prefs_revision) {
+            self.presets.stage_action_keys(crate::preset_bridge::ActionKeys::from_preferences(session.prefs()));
+            self.prefs_revision = Some(prefs_revision);
+        }
         if let Some(db) = self.database.clone()
             && let Some(batch) = self.presets.begin()
         {
@@ -365,7 +394,7 @@ impl WebShell {
             wasm_bindgen_futures::spawn_local(async move {
                 let result = crate::indexed_presets::write(&db, &batch).await;
                 if let Err(e) = &result {
-                    log::error!("Could not save browser presets: {e}");
+                    log::error!("Could not save browser presets: {}", e.message());
                 }
                 presets.finish(batch, result);
                 wake.request_repaint();
@@ -418,9 +447,8 @@ impl eframe::App for WebShell {
         // A tap reaches eframe as Pointer Events and Touch Events: keep one press per tap, or the
         // twin press closes the menu the first one opened (#2095).
         photocraft_ui_egui::touch_twins::drop_twins(ctx, raw_input);
-        // The browser build has no TCP control server, so `inject_synthetic` finds an empty
-        // queue, but the clipboard key mapping (`Event::PasteImage`), legacy pinch, pen-hold and
-        // titlebar normalization live in the app hook and must run here too.
+        // The clipboard key mapping (`Event::PasteImage`), legacy pinch, pen-hold and titlebar
+        // normalization live in the app hook and must run here too.
         eframe::App::raw_input_hook(&mut self.app, ctx, raw_input);
     }
 
@@ -466,42 +494,58 @@ impl eframe::App for WebShell {
         self.serve_fonts(ctx);
         self.app.logic_frame(ctx, frame);
         self.save_presets(ctx);
-        self.app.finish_type_reset_logic(ctx);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
-        // Only while a preset change is unsaved. Storage the browser denies from the start (a
+        // Only while a change is unsaved. Storage the browser denies from the start (a
         // sandboxed iframe, blocked site data) loses nothing until the first change, and that
         // change brings the banner with the reason.
         if self.presets.unsaved()
-            && let Some(error) = self.presets.error()
+            && let Some(warning) = self.presets.error()
         {
             egui::Panel::top("browser_preset_storage").show(ui, |ui| {
-                let tokens = photocraft_ui_egui::theme::Tokens::for_kind(self.app.ui.theme);
+                let tokens = self.app.ui.theme.tokens();
                 // Put retry first so floating brush windows cannot cover the control.
                 ui.horizontal_wrapped(|ui| {
                     if self.database.is_some() && ui.button(i18n::t("Retry saving presets")).clicked() {
                         self.presets.retry();
                         ui.ctx().request_repaint();
                     }
-                    ui.colored_label(tokens.warning, i18n::fmt(i18n::t("Brush preset changes are not saved: {error}"), &[("error", &error)]));
+                    match &warning {
+                        SaveWarning::Actions(error, _) => {
+                            ui.colored_label(tokens.warning, i18n::t("Actions"));
+                            ui.colored_label(tokens.warning, error.as_str());
+                        }
+                        SaveWarning::Presets(error) => {
+                            ui.colored_label(tokens.warning, i18n::fmt(i18n::t("Brush preset changes are not saved: {error}"), &[("error", error)]));
+                        }
+                    }
                 });
-                ui.label(if self.database.is_some() {
-                    i18n::t("Keep this tab open to retain your brushes.")
-                } else {
-                    i18n::t("Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.")
-                });
+                match warning {
+                    SaveWarning::Actions(_, Some(ActionRecovery::Reopen)) => {
+                        ui.label(i18n::t("Export a copy of any unsaved Actions before reopening this page. Reopening can discard unsaved changes."));
+                    }
+                    SaveWarning::Actions(_, Some(ActionRecovery::Preserve)) => {
+                        ui.label(i18n::t("Keep this tab open and export a copy of any available Actions."));
+                    }
+                    SaveWarning::Actions(_, None) => {}
+                    SaveWarning::Presets(_) => {
+                        ui.label(if self.database.is_some() {
+                            i18n::t("Keep this tab open to retain your brushes.")
+                        } else {
+                            i18n::t("Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.")
+                        });
+                    }
+                }
             });
         }
         self.app.ui_frame(ui, frame);
         self.save_presets(ui.ctx());
-        self.app.finish_type_reset_pass(ui.ctx());
     }
 }
 
 fn services(inbox: Inbox, place_inbox: PlaceInbox, cursor_pos: photocraft_ui_egui::CursorPosFn) -> Services {
     Services {
-        screen_pick: screen_color_service(),
         import: Some(Box::new(|name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions| {
             photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
         })),
@@ -547,16 +591,10 @@ fn services(inbox: Inbox, place_inbox: PlaceInbox, cursor_pos: photocraft_ui_egu
         write: Some(Box::new(|path: &str, bytes: &[u8]| download(path, bytes))),
         // A download may be cancelled and never reports back: it doesn't save the document.
         write_unconfirmed: true,
-        encode_png: Some(Box::new(|w, h, rgba| {
-            let img = Image::from_u8(w, h, ChannelLayout::Rgba, rgba.to_vec()).map_err(|e| e.to_string())?;
-            photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &EncodeOptions::default()).map_err(|e| e.to_string())
-        })),
         inbox: Some(inbox),
         place_inbox: Some(place_inbox),
         cursor_pos: Some(cursor_pos),
-        // Preferences live in the browser's localStorage.
-        load_prefs: Some(Box::new(|| local_storage()?.get_item(PREFS_KEY).ok().flatten())),
-        save_prefs: Some(Box::new(|text: &str| local_storage().ok_or("no localStorage")?.set_item(PREFS_KEY, text).map_err(|e| format!("{e:?}")))),
+        save_prefs: Some(Box::new(save_local_preferences)),
         load_gpu_memo: None,
         save_gpu_memo: None,
         shader_compiler: None,
@@ -568,6 +606,43 @@ const PREFS_KEY: &str = "photocraft.preferences";
 
 fn local_storage() -> Option<web_sys::Storage> {
     web_sys::window()?.local_storage().ok().flatten()
+}
+
+fn stored_preferences() -> Option<String> {
+    local_storage()?.get_item(PREFS_KEY).ok().flatten()
+}
+
+fn load_initial_preferences(presets: &crate::preset_bridge::Bridge, legacy_definitions_loaded: bool) -> Option<String> {
+    use crate::preset_bridge::ActionKeys;
+    use serde_json::{Value, json};
+
+    let stored = stored_preferences();
+    let mut prefs: Value = stored.as_deref().and_then(|text| serde_json::from_str(text).ok()).filter(Value::is_object).unwrap_or_else(|| json!({}));
+    if let Some(keys) = presets.committed_action_keys().or_else(|| (!legacy_definitions_loaded).then(ActionKeys::default)) {
+        // An authoritative empty map also replaces old rows. When storage could not be read,
+        // the old localStorage rows cannot be matched with a known definition generation.
+        for section in ["shortcuts", "alternateShortcuts"] {
+            if !prefs.get(section).is_some_and(Value::is_object) {
+                prefs[section] = json!({});
+            }
+        }
+        keys.overlay(&mut prefs).ok()?;
+        Some(prefs.to_string())
+    } else {
+        presets.load_action_keys(0, ActionKeys::from_legacy(&prefs));
+        stored
+    }
+}
+
+fn save_local_preferences(text: &str) -> Result<(), String> {
+    let storage = local_storage().ok_or("no localStorage")?;
+    let stored = storage.get_item(PREFS_KEY).map_err(|e| format!("{e:?}"))?;
+    let legacy = stored.as_deref().and_then(|text| serde_json::from_str(text).ok()).unwrap_or(serde_json::Value::Null);
+    let mut ordinary = serde_json::from_str(text).map_err(|e| e.to_string())?;
+    // A crash before the first v2 write still needs the original legacy keys. New Action
+    // bindings, including removals, belong to the same IndexedDB record as their definitions.
+    crate::preset_bridge::replace_action_keys(&mut ordinary, &legacy)?;
+    storage.set_item(PREFS_KEY, &ordinary.to_string()).map_err(|e| format!("{e:?}"))
 }
 
 /// Trigger a browser download of `bytes` named after the last component of `path`.
@@ -609,73 +684,4 @@ fn mime_for(name: &str) -> &'static str {
         Some("kra" | "krz") => "application/x-krita",
         _ => "application/octet-stream",
     }
-}
-
-/// Rust bindings to the browser's user-activated EyeDropper API; unsupported browsers keep
-/// the document picker and its normal canvas zoom. The browser owns its screen magnifier.
-fn screen_color_service() -> Option<photocraft_ui_egui::screen_picker::Service> {
-    use js_sys::{Function, Reflect};
-    use photocraft_ui_egui::screen_picker::{Capture, Pending};
-    use wasm_bindgen::{JsValue, closure::Closure};
-    let window = web_sys::window()?;
-    let constructor = Reflect::get(&window, &JsValue::from_str("EyeDropper")).ok()?.dyn_into::<Function>().ok()?;
-    Some(Box::new(move |ctx| {
-        let (tx, rx) = std::sync::mpsc::channel();
-        let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let started = (|| -> Result<_, String> {
-            let eye = Reflect::construct(&constructor, &js_sys::Array::new()).map_err(|e| format!("Could not start browser eyedropper: {e:?}"))?;
-            let controller = web_sys::AbortController::new().map_err(|e| format!("Could not create eyedropper cancellation: {e:?}"))?;
-            let options = js_sys::Object::new();
-            Reflect::set(&options, &JsValue::from_str("signal"), &controller.signal()).map_err(|e| format!("Could not set eyedropper options: {e:?}"))?;
-            let open = Reflect::get(&eye, &JsValue::from_str("open"))
-                .map_err(|e| format!("Browser eyedropper has no open method: {e:?}"))?
-                .dyn_into::<Function>()
-                .map_err(|_| "Invalid browser eyedropper method")?;
-            let promise = open
-                .call1(&eye, &options)
-                .map_err(|e| format!("Could not open browser eyedropper: {e:?}"))?
-                .dyn_into::<js_sys::Promise>()
-                .map_err(|_| "Browser eyedropper returned no promise")?;
-            let stop = cancelled.clone();
-            let abort = controller.clone();
-            let timer = Closure::<dyn FnMut()>::new(move || {
-                if stop.load(std::sync::atomic::Ordering::Relaxed) {
-                    abort.abort();
-                }
-            });
-            let interval = window.set_interval_with_callback_and_timeout_and_arguments_0(timer.as_ref().unchecked_ref(), 50).map_err(|e| {
-                controller.abort();
-                format!("Could not watch eyedropper cancellation: {e:?}")
-            })?;
-            Ok((promise, timer, interval))
-        })();
-        match started {
-            Err(e) => {
-                let _ = tx.send(Err(e));
-            }
-            Ok((promise, timer, interval)) => {
-                let wake = ctx.clone();
-                let window = window.clone();
-                wasm_bindgen_futures::spawn_local(async move {
-                    let result = match wasm_bindgen_futures::JsFuture::from(promise).await {
-                        Ok(value) => Reflect::get(&value, &JsValue::from_str("sRGBHex"))
-                            .ok()
-                            .and_then(|v| v.as_string())
-                            .and_then(|h| photocraft_ui_egui::color_picker_ui::parse_hex(&h))
-                            .map(|rgb| Capture::Color(Some(rgb)))
-                            .ok_or_else(|| "Browser eyedropper returned an invalid color".into()),
-                        Err(e) if Reflect::get(&e, &JsValue::from_str("name")).ok().and_then(|v| v.as_string()).as_deref() == Some("AbortError") => {
-                            Ok(Capture::Color(None))
-                        }
-                        Err(e) => Err(format!("Browser screen color selection failed: {e:?}")),
-                    };
-                    window.clear_interval_with_handle(interval);
-                    drop(timer);
-                    let _ = tx.send(result);
-                    wake.request_repaint();
-                });
-            }
-        }
-        Pending { receiver: rx, cancelled }
-    }))
 }

@@ -3,8 +3,17 @@
 //! `cargo run --release -p photocraft-gpu --example bench_camera_raw [-- --quick]`
 use std::time::Instant;
 
-use photocraft_algo::camera_raw::{CameraRaw, Wheel, develop, per_pixel, white_black_points};
+use photocraft_algo::camera_raw::{CameraRaw, DevelopInputs, Wheel, develop, per_pixel, white_black_points};
 use photocraft_gpu::CameraRawDevelop;
+
+/// `CameraRaw` with the named fields set (the type is `#[non_exhaustive]`, so no struct expression).
+macro_rules! cr {
+    ($($f:ident : $v:expr),* $(,)?) => {{
+        let mut s = CameraRaw::default();
+        $(s.$f = $v;)*
+        s
+    }};
+}
 
 fn median(mut v: Vec<f64>) -> f64 {
     v.sort_by(f64::total_cmp);
@@ -57,44 +66,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut hsl = [0.0; 8];
     hsl[1] = 30.0;
     hsl[5] = -40.0;
+    let inputs = DevelopInputs { pixel_scale: scale, ..Default::default() };
     let sets = [
-        (
-            "Basic (Exposure, Contrast, Whites, Blacks)",
-            CameraRaw { exposure: 0.4, contrast: 25.0, whites: 30.0, blacks: -20.0, pixel_scale: scale, ..Default::default() },
-        ),
+        ("Basic (Exposure, Contrast, Whites, Blacks)", cr! { exposure: 0.4, contrast: 25.0, whites: 30.0, blacks: -20.0 }),
         (
             "every per-pixel stage",
-            CameraRaw {
-                exposure: 0.4,
-                contrast: 25.0,
-                whites: 30.0,
-                blacks: -20.0,
-                vibrance: 30.0,
-                saturation: 10.0,
-                curve_lights: 20.0,
-                point_curve: vec![[0.0, 8.0], [128.0, 140.0], [255.0, 250.0]],
-                hsl_hue: hsl,
-                hsl_sat: hsl,
-                hsl_lum: hsl,
-                grade_shadows: Wheel { hue: 210.0, sat: 30.0, lum: 0.0 },
-                grade_highlights: Wheel { hue: 40.0, sat: 20.0, lum: 5.0 },
-                vignette_amount: -30.0,
-                grain_amount: 25.0,
-                pixel_scale: scale,
-                ..Default::default()
-            },
+            cr! { exposure: 0.4, contrast: 25.0, whites: 30.0, blacks: -20.0, vibrance: 30.0, saturation: 10.0, curve_lights: 20.0, point_curve: vec![[0.0, 8.0], [128.0, 140.0], [255.0, 250.0]], hsl_hue: hsl, hsl_sat: hsl, hsl_lum: hsl, grade_shadows: Wheel { hue: 210.0, sat: 30.0, lum: 0.0 }, grade_highlights: Wheel { hue: 40.0, sat: 20.0, lum: 5.0 }, vignette_amount: -30.0, grain_amount: 25.0 },
         ),
     ];
     for (name, p) in &sets {
         let cpu = time(runs, || {
             let mut px = src.clone();
-            develop(&mut px, w, h, p, false);
+            develop(&mut px, w, h, p, &inputs, false);
         });
         let points_ms = time(runs, || {
-            std::hint::black_box(white_black_points(&src, w, h, p));
+            std::hint::black_box(white_black_points(&src, w, h, p, &inputs));
         });
-        let points = white_black_points(&src, w, h, p);
-        let stages = per_pixel(p, w, h, false, points).ok_or("not per pixel")?;
+        let points = white_black_points(&src, w, h, p, &inputs);
+        let stages = per_pixel(p, &inputs, w, h, false, points).ok_or("not per pixel")?;
         let size = [w as u32, h as u32];
         let upload = try_time(runs, || pass.develop(&device, &queue, None, &src, None, size, &stages).map(drop))?;
         let cached = try_time(runs, || pass.develop(&device, &queue, None, &src, Some(1), size, &stages).map(drop))?;
@@ -105,14 +94,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  Whites/Blacks points on the CPU      {points_ms:7.2} ms (cached per WB/Exposure/Contrast in the dialog)");
     }
     // Stages the pass doesn't run (per_pixel declines them), timed on the CPU only.
-    let cpu_only = [
-        ("Shadows +50", CameraRaw { shadows: 50.0, pixel_scale: scale, ..Default::default() }),
-        ("Temperature +20, Tint +5", CameraRaw { temperature: 20.0, tint: 5.0, pixel_scale: scale, ..Default::default() }),
-    ];
+    let cpu_only = [("Shadows +50", cr! { shadows: 50.0 }), ("Temperature +20, Tint +5", cr! { temperature: 20.0, tint: 5.0 })];
     for (name, p) in &cpu_only {
         let cpu = time(runs.min(10), || {
             let mut px = src.clone();
-            develop(&mut px, w, h, p, false);
+            develop(&mut px, w, h, p, &inputs, false);
         });
         println!("for reference, {name} (CPU only): {cpu:.2} ms");
     }

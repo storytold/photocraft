@@ -158,6 +158,15 @@ pub fn raw_params(cmd: &str, p: &Value) -> Result<CameraRaw> {
     Ok(cr)
 }
 
+/// What a develop with `p`'s parameters reads besides the settings: the document's transfer curve
+/// (`encodingGamma`, stored with the settings so a Smart Filter keeps it) and the grain's `seed`.
+/// The document's primaries are not stored; the command sets them from the document.
+pub fn raw_inputs(p: &Value) -> camera_raw::DevelopInputs {
+    let encoding_gamma = p.get("encodingGamma").and_then(Value::as_f64).map(|g| g as f32).filter(|g| g.is_finite() && (0.0..=10.0).contains(g)).unwrap_or(0.0);
+    let seed = p.get("seed").and_then(Value::as_u64).and_then(|v| u32::try_from(v).ok()).unwrap_or(0);
+    camera_raw::DevelopInputs { seed, encoding_gamma, ..Default::default() }
+}
+
 // ---------- pixels ----------
 
 /// Largest area Camera Raw develops in one pass. The pipeline holds the whole region as RGBA
@@ -182,17 +191,17 @@ fn rgba_region(surf: &Surface, area: Rect, len: usize) -> Vec<[f32; 4]> {
 /// An area above [`MAX_RAW_PIXELS`] is returned unchanged: the command rejects it with an
 /// error first, and this keeps the preview and Smart Filter paths from overflowing. A stage
 /// that can't get its memory is skipped; [`try_camera_raw_surface`] reports it instead.
-pub fn camera_raw_surface(surf: &Surface, area: Rect, p: &CameraRaw) -> Surface {
-    develop_surface(surf, area, p, false).unwrap_or_else(|_| surf.clone())
+pub fn camera_raw_surface(surf: &Surface, area: Rect, p: &CameraRaw, inputs: &camera_raw::DevelopInputs) -> Surface {
+    develop_surface(surf, area, p, inputs, false).unwrap_or_else(|_| surf.clone())
 }
 
 /// [`camera_raw_surface`], failing when a develop stage can't get the memory it needs, so the
 /// command doesn't commit an incomplete result.
-pub fn try_camera_raw_surface(surf: &Surface, area: Rect, p: &CameraRaw) -> std::result::Result<Surface, String> {
-    develop_surface(surf, area, p, true)
+pub fn try_camera_raw_surface(surf: &Surface, area: Rect, p: &CameraRaw, inputs: &camera_raw::DevelopInputs) -> std::result::Result<Surface, String> {
+    develop_surface(surf, area, p, inputs, true)
 }
 
-fn develop_surface(surf: &Surface, area: Rect, p: &CameraRaw, strict: bool) -> std::result::Result<Surface, String> {
+fn develop_surface(surf: &Surface, area: Rect, p: &CameraRaw, inputs: &camera_raw::DevelopInputs, strict: bool) -> std::result::Result<Surface, String> {
     let area = area.intersect(&surf.content_bounds().union(&area));
     if area.is_empty() || p.is_identity() {
         return Ok(surf.clone());
@@ -203,9 +212,9 @@ fn develop_surface(surf: &Surface, area: Rect, p: &CameraRaw, strict: bool) -> s
     let mut px = rgba_region(surf, area, len);
     let float = fmt.sample == SampleType::F32;
     if strict {
-        camera_raw::try_develop(&mut px, w, h, p, float)?;
+        camera_raw::try_develop(&mut px, w, h, p, inputs, float)?;
     } else {
-        camera_raw::develop(&mut px, w, h, p, float);
+        camera_raw::develop(&mut px, w, h, p, inputs, float);
     }
     let n = fmt.channels();
     let orig = surf.read_region(area);
@@ -262,7 +271,7 @@ pub fn apply_to_surface(id: &str, params: &Value, surf: &Surface, canvas: Rect) 
     match id {
         LENS => Some(lens::correct(surf, canvas, &lens_params(id, params, canvas, None).ok()?)),
         WIDE => Some(wideangle::apply(surf, canvas, &wide_params(id, params, None).ok()?, Interp::Bicubic)),
-        RAW => Some(camera_raw_surface(surf, canvas, &raw_params(id, params).ok()?)),
+        RAW => Some(camera_raw_surface(surf, canvas, &raw_params(id, params).ok()?, &raw_inputs(params))),
         _ => None,
     }
 }
@@ -386,7 +395,8 @@ fn adaptive_wide_angle(s: &mut Session, p: &Value) -> Result<Value> {
         wideangle::WideModel::Fisheye => "fisheye",
         wideangle::WideModel::Perspective => "perspective",
         wideangle::WideModel::FullSpherical => "fullSpherical",
-        wideangle::WideModel::Auto => "auto",
+        // The framework's lens model is `non_exhaustive`: a model it adds later reads as `auto`.
+        _ => "auto",
     };
     if let Some(m) = stored.as_object_mut() {
         m.remove("layer");
@@ -403,7 +413,7 @@ fn adaptive_wide_angle(s: &mut Session, p: &Value) -> Result<Value> {
     }))
 }
 
-/// The transfer curve Camera Raw decodes `doc`'s values with ([`CameraRaw::encoding_gamma`]):
+/// The transfer curve Camera Raw decodes `doc`'s values with ([`DevelopInputs::encoding_gamma`](camera_raw::DevelopInputs::encoding_gamma)):
 /// ProPhoto's gamma 1.8 (raws open in it), Adobe RGB's 563/256, 1 for linear sRGB, else 0 for
 /// the sRGB curve.
 pub fn encoding_gamma(doc: &Document) -> f32 {
@@ -415,7 +425,7 @@ pub fn encoding_gamma(doc: &Document) -> f32 {
         .map_or(0.0, |(_, g)| g)
 }
 
-/// `doc`'s primaries for Camera Raw ([`CameraRaw::document_primaries`]): its linear RGB to
+/// `doc`'s primaries for Camera Raw ([`DevelopInputs::document_primaries`](camera_raw::DevelopInputs::document_primaries)): its linear RGB to
 /// linear ProPhoto RGB, from the colour profile's colorants. `None` when the primaries are the
 /// ones [`encoding_gamma`] implies (sRGB, linear sRGB, ProPhoto, Adobe RGB), or the profile is
 /// not an RGB matrix profile (its pixels then develop as sRGB, as before).
@@ -442,11 +452,12 @@ fn camera_raw_cmd(s: &mut Session, p: &Value) -> Result<Value> {
         m.insert("encodingGamma".into(), json!((f64::from(g) * 1e4).round() / 1e4));
     }
     let p = &p;
-    let mut cr = raw_params(RAW, p)?;
+    let cr = raw_params(RAW, p)?;
     // New settings are strict; stored Smart Filters re-apply through the lenient `raw_params`.
     cr.validate().map_err(|e| bad(RAW, e))?;
+    let mut inputs = raw_inputs(p);
     // The document's primaries, when its profile's aren't the ones the transfer curve implies.
-    cr.document_primaries = s.active().and_then(|d| document_primaries(&d.doc));
+    inputs.document_primaries = s.active().and_then(|d| document_primaries(&d.doc));
     // The pixel path works on the canvas plus the layer's content in one buffer; a legal
     // 65536×65536 canvas is 2^32 pixels, which overflowed the u32 size arithmetic (#962).
     if !cr.is_identity() {
@@ -462,7 +473,7 @@ fn camera_raw_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let t0 = Stopwatch::start();
     let id = run_filter(s, RAW, "RAW Develop Filter", p, p.clone(), false, &|surf, canvas| {
-        try_camera_raw_surface(surf, canvas.union(&surf.content_bounds()), &cr).map_err(|e| bad(RAW, e))
+        try_camera_raw_surface(surf, canvas.union(&surf.content_bounds()), &cr, &inputs).map_err(|e| bad(RAW, e))
     })?;
     Ok(json!({"layer": id.0, "identity": cr.is_identity(), "ms": t0.ms()}))
 }
@@ -482,6 +493,10 @@ fn lens_batch(s: &mut Session, p: &Value) -> Result<Value> {
     let r = crate::file_cmds::process_files(s, &inputs, &output, &format, crate::file_cmds::SaveOpts::from_params(s, p, LENS_BATCH)?, "", &|scratch| {
         if scratch.active().is_some_and(|d| d.doc.layers.len() > 1) {
             scratch.execute("layer.flattenImage", json!({}))?;
+        }
+        // Photoshop's batch hands back a Grayscale 8-bit source as RGB 8-bit, whatever the File Type.
+        if scratch.active().is_some_and(|d| d.doc.mode == ColorMode::Grayscale && d.doc.depth == SampleType::U8) {
+            scratch.execute("image.mode.rgb", json!({}))?;
         }
         scratch.execute(LENS, params.clone())?;
         Ok(())
@@ -536,6 +551,9 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+#[cfg(test)]
+#[path = "lens_batch_gray_tests.rs"]
+mod lens_batch_gray_tests;
 #[cfg(test)]
 mod tests {
 
@@ -723,6 +741,30 @@ mod tests {
         assert!((p[0] - p[2]).abs() < 0.01, "{p:?}");
     }
 
+    /// The stored curve reaches the develop: a ProPhoto document's result, from the command and
+    /// from the Smart Filter replay, is the develop on its curve (1.8), not on sRGB's. The settings
+    /// type doesn't carry `encodingGamma`, so it is read from the parameters ([`raw_inputs`]).
+    #[test]
+    fn camera_raw_develops_on_the_documents_curve() {
+        let mut s = session(16);
+        s.execute("edit.assignProfile", json!({"profile": "prophoto-compat"})).unwrap();
+        let id = s.active().unwrap().active_layer.unwrap();
+        let surf = s.active().unwrap().doc.layer(id).unwrap().surface().unwrap().clone();
+        let canvas = Rect::new(0, 0, 120, 80);
+        let cr = raw_params(RAW, &json!({"whites": -60, "shadows": 40})).unwrap();
+        let on = |encoding_gamma: f32| {
+            let inputs = camera_raw::DevelopInputs { encoding_gamma, ..Default::default() };
+            camera_raw_surface(&surf, canvas, &cr, &inputs).read_region(canvas)
+        };
+        let (prophoto, srgb) = (on(1.8), on(0.0));
+        assert_ne!(prophoto, srgb, "the curve matters for these settings");
+        let replayed = apply_to_surface(RAW, &json!({"whites": -60, "shadows": 40, "encodingGamma": 1.8}), &surf, canvas).unwrap();
+        assert_eq!(replayed.read_region(canvas), prophoto, "Smart Filter replay");
+        s.execute(RAW, json!({"whites": -60, "shadows": 40})).unwrap();
+        let got = s.active().unwrap().doc.layer(id).unwrap().surface().unwrap().read_region(canvas);
+        assert_eq!(got, prophoto, "the command");
+    }
+
     #[test]
     fn camera_raw_decodes_light_with_the_documents_curve() {
         // A raw opens in ProPhoto (gamma 1.8): the filter keeps that with its settings, so Whites,
@@ -816,7 +858,7 @@ mod tests {
         let d = s.active().unwrap();
         let surf = d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap();
         let cr = raw_params(RAW, &json!({"exposure": 1})).unwrap();
-        let out = camera_raw_surface(surf, Rect::from_xywh(0, 0, 65536, 65536), &cr);
+        let out = camera_raw_surface(surf, Rect::from_xywh(0, 0, 65536, 65536), &cr, &camera_raw::DevelopInputs::default());
         assert_eq!(out.content_bounds(), surf.content_bounds());
         // A normal document still develops.
         let mut s = session(8);

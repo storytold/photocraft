@@ -203,7 +203,22 @@ pub(crate) fn adaptive_row(c: f32, tones: Option<Tones>) -> [f32; STEPS] {
 
 #[cfg(test)]
 mod tests {
+    use super::super::CameraRaw;
     use super::*;
+
+    /// `CameraRaw` with the named fields set (the type is `#[non_exhaustive]`, so no struct expression), or a copy of a base with them set.
+    macro_rules! cr {
+        ($($f:ident : $v:expr),* $(,)?) => {{
+            let mut s = CameraRaw::default();
+            $(s.$f = $v;)*
+            s
+        }};
+        ($base:expr => $($f:ident : $v:expr),* $(,)?) => {{
+            let mut s: CameraRaw = $base;
+            $(s.$f = $v;)*
+            s
+        }};
+    }
 
     fn grey(c: f32, level: f32) -> f32 {
         let lin = super::super::exposure::curve(&row(c), super::super::srgb_to_linear(level / 255.0));
@@ -229,7 +244,7 @@ mod tests {
     fn the_ramp_keeps_white_through_develop() {
         let (w, h) = (256usize, 16usize);
         let mut px: Vec<[f32; 4]> = (0..w * h).map(|i| [(i % w) as f32 / 255.0; 3]).map(|[r, g, b]| [r, g, b, 1.0]).collect();
-        super::super::develop(&mut px, w, h, &super::super::CameraRaw { contrast: -100.0, ..Default::default() }, false);
+        super::super::develop(&mut px, w, h, &cr! { contrast: -100.0 }, &super::super::DevelopInputs::default(), false);
         assert!(px[255][..3].iter().all(|v| *v * 255.0 > 254.5), "{:?}", px[255]);
         assert!((px[208][0] * 255.0 - 188.1).abs() < 4.0 && (px[48][0] * 255.0 - 72.4).abs() < 4.0, "{:?} {:?}", px[208], px[48]);
     }

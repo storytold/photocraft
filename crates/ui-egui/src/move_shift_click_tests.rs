@@ -8,7 +8,7 @@ use serde_json::json;
 
 use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, tool_event};
-use crate::state::{DialogKind, Tool};
+use crate::state::Tool;
 
 struct Fixture {
     app: PhotocraftApp,
@@ -66,7 +66,7 @@ impl Fixture {
         }
         tool_event(&mut self.app, ToolEvent::Up { x: to[0], y: to[1] }, mods);
         assert!(self.app.layer_box.is_none(), "release ends the marquee");
-        assert!(self.app.ui.dialogs.iter().all(|d| d.kind != DialogKind::Error), "no move-lock dialog");
+        assert!(self.app.framework.dialogs.open_dialogs().is_empty(), "no move-lock alert on the host stack");
         assert!(!self.app.ui.status_error, "{}", self.app.ui.status);
     }
 

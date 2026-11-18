@@ -31,29 +31,36 @@
 
 #![allow(clippy::needless_range_loop)] // index loops mirror the maths (pixels × channels)
 
-use serde::{Deserialize, Serialize};
+// The settings are the framework's: one model, with its validation and identity rules.
+pub use craft::imaging::raw::{GradeWheel as Wheel, MAX_CURVE_POINTS, RawDevelopSettings as CameraRaw, VignetteStyle as StoredVignetteStyle, validate_curve};
 
-/// Most points a Camera Raw point curve accepts from commands and the control channel.
-pub const MAX_CURVE_POINTS: usize = 16;
+/// What one develop reads besides the settings. PhotoCraft sets these per job (the proxy's scale, the document's
+/// transfer curve and primaries), so they are not part of the settings the workspace edits and the commands store.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DevelopInputs {
+    /// Seeds the grain's noise.
+    pub seed: u32,
+    /// Pixel-size multiplier for previews on downsampled proxies (radii in px scale by it).
+    pub pixel_scale: f32,
+    /// The document's transfer curve: 0 for sRGB's, else the gamma of a power-law space (1.8 for ProPhoto). Whites and
+    /// Blacks act on light.
+    pub encoding_gamma: f32,
+    /// The document's primaries: its linear RGB to linear ProPhoto RGB (D50), from its colour profile; `None` for the
+    /// primaries `encoding_gamma` implies (ProPhoto for 1.8, Adobe RGB for 563/256, else sRGB).
+    pub document_primaries: Option<[[f32; 3]; 3]>,
+}
 
-/// Checks a point curve from untrusted input: empty (linear) or 2..=16 finite points in 0..=255
-/// with inputs increasing by at least one level. Deserialization stays lenient on purpose:
-/// earlier editors saved curves this rejects, and [`curve_lut`] already sorts and de-duplicates
-/// them, so stored Smart Filters keep rendering.
-pub fn validate_curve(points: &[[f32; 2]]) -> Result<(), String> {
-    if points.len() == 1 {
-        return Err("a nonempty curve needs at least two points".into());
+impl Default for DevelopInputs {
+    fn default() -> Self {
+        DevelopInputs { seed: 0, pixel_scale: 1.0, encoding_gamma: 0.0, document_primaries: None }
     }
-    if points.len() > MAX_CURVE_POINTS {
-        return Err(format!("at most {MAX_CURVE_POINTS} curve points"));
+}
+
+impl DevelopInputs {
+    /// The document's encoding: its transfer curve and primaries.
+    pub(crate) fn encoding(&self) -> Encoding {
+        Encoding::with_primaries(self.encoding_gamma, self.document_primaries)
     }
-    if !points.iter().flatten().all(|v| v.is_finite() && (0.0..=255.0).contains(v)) {
-        return Err("curve coordinates must be finite and in 0..=255".into());
-    }
-    if points.windows(2).any(|w| w[1][0] - w[0][0] < 1.0) {
-        return Err("curve inputs must increase by at least one level".into());
-    }
-    Ok(())
 }
 
 use crate::photo_util::{hash01, linear_to_srgb, par_rows, srgb_to_linear};
@@ -73,7 +80,7 @@ mod whites_blacks;
 
 pub use per_pixel::{
     CURVE_LUT, FIX_GRID, Grade, Grain, MIXER_GRID, MIXER_KINDS, PRESENCE_GRID, PRESENCE_KINDS, PerPixel, TONE_STEPS, Vignette, VignetteStyle, WhitesBlacks,
-    per_pixel, white_black_points,
+    per_pixel, spatial, white_black_points,
 };
 pub use whites_blacks::{RowOn, TonePoints, Tones};
 
@@ -199,168 +206,6 @@ impl Encoding {
 
 fn luma_linear(c: [f32; 3]) -> f32 {
     luma(c)
-}
-
-/// One colour grading wheel.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Default)]
-#[serde(default)]
-pub struct Wheel {
-    /// Degrees 0..360.
-    pub hue: f32,
-    /// 0..=100.
-    pub sat: f32,
-    /// −100..=100.
-    pub lum: f32,
-}
-
-impl Wheel {
-    fn neutral(&self) -> bool {
-        self.sat == 0.0 && self.lum == 0.0
-    }
-}
-
-/// Camera Raw settings in Adobe Camera Raw's slider units.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct CameraRaw {
-    // Basic
-    pub temperature: f32,
-    pub tint: f32,
-    pub exposure: f32,
-    pub contrast: f32,
-    pub highlights: f32,
-    pub shadows: f32,
-    pub whites: f32,
-    pub blacks: f32,
-    pub texture: f32,
-    pub clarity: f32,
-    pub dehaze: f32,
-    pub vibrance: f32,
-    pub saturation: f32,
-    // Tone curve
-    pub curve_highlights: f32,
-    pub curve_lights: f32,
-    pub curve_darks: f32,
-    pub curve_shadows: f32,
-    /// Region splits (percent).
-    pub curve_splits: [f32; 3],
-    /// Point curves as `[input, output]` in 0..=255 (empty = linear).
-    pub point_curve: Vec<[f32; 2]>,
-    pub point_curve_red: Vec<[f32; 2]>,
-    pub point_curve_green: Vec<[f32; 2]>,
-    pub point_curve_blue: Vec<[f32; 2]>,
-    // Color mixer: red, orange, yellow, green, aqua, blue, purple, magenta.
-    pub hsl_hue: [f32; 8],
-    pub hsl_sat: [f32; 8],
-    pub hsl_lum: [f32; 8],
-    // Color grading
-    pub grade_shadows: Wheel,
-    pub grade_midtones: Wheel,
-    pub grade_highlights: Wheel,
-    pub grade_global: Wheel,
-    pub grade_blending: f32,
-    pub grade_balance: f32,
-    // Detail
-    pub sharpen_amount: f32,
-    pub sharpen_radius: f32,
-    pub sharpen_detail: f32,
-    pub sharpen_masking: f32,
-    pub noise_luminance: f32,
-    pub noise_luminance_detail: f32,
-    pub noise_color: f32,
-    pub noise_color_detail: f32,
-    // Effects
-    pub grain_amount: f32,
-    pub grain_size: f32,
-    pub grain_roughness: f32,
-    pub vignette_amount: f32,
-    pub vignette_midpoint: f32,
-    pub vignette_roundness: f32,
-    pub vignette_feather: f32,
-    pub vignette_highlights: f32,
-    /// `highlightPriority | colorPriority | paintOverlay`.
-    pub vignette_style: String,
-    pub seed: u32,
-    /// Pixel-size multiplier for previews on downsampled proxies (radii in px scale by it).
-    pub pixel_scale: f32,
-    /// The document's transfer curve: 0 for sRGB's, else the gamma of a power-law space (1.8
-    /// for ProPhoto). Set from the document's profile; Whites and Blacks act on light.
-    pub encoding_gamma: f32,
-    /// The document's primaries: its linear RGB to linear ProPhoto RGB (D50), from its colour
-    /// profile; `None` for the primaries `encoding_gamma` implies (ProPhoto for 1.8, Adobe RGB
-    /// for 563/256, else sRGB). Set at run time by whoever knows the document (the command, the
-    /// dialog), never stored, so saved settings and Smart Filters read as before.
-    #[serde(skip)]
-    pub document_primaries: Option<[[f32; 3]; 3]>,
-    // Calibration (Camera Raw's Calibration panel)
-    /// Shadows › Tint: −100 (green) … 100 (magenta), strongest in the darkest tones.
-    pub shadow_tint: f32,
-    /// Red, Green and Blue Primary › Hue: −100 … 100, the primary turned towards its neighbours.
-    pub calibration_hue: [f32; 3],
-    /// Red, Green and Blue Primary › Saturation: −100 (grey) … 100 (purer).
-    pub calibration_sat: [f32; 3],
-}
-
-impl Default for CameraRaw {
-    fn default() -> Self {
-        CameraRaw {
-            temperature: 0.0,
-            tint: 0.0,
-            exposure: 0.0,
-            contrast: 0.0,
-            highlights: 0.0,
-            shadows: 0.0,
-            whites: 0.0,
-            blacks: 0.0,
-            texture: 0.0,
-            clarity: 0.0,
-            dehaze: 0.0,
-            vibrance: 0.0,
-            saturation: 0.0,
-            curve_highlights: 0.0,
-            curve_lights: 0.0,
-            curve_darks: 0.0,
-            curve_shadows: 0.0,
-            curve_splits: [25.0, 50.0, 75.0],
-            point_curve: Vec::new(),
-            point_curve_red: Vec::new(),
-            point_curve_green: Vec::new(),
-            point_curve_blue: Vec::new(),
-            hsl_hue: [0.0; 8],
-            hsl_sat: [0.0; 8],
-            hsl_lum: [0.0; 8],
-            grade_shadows: Wheel::default(),
-            grade_midtones: Wheel::default(),
-            grade_highlights: Wheel::default(),
-            grade_global: Wheel::default(),
-            grade_blending: 50.0,
-            grade_balance: 0.0,
-            sharpen_amount: 0.0,
-            sharpen_radius: 1.0,
-            sharpen_detail: 25.0,
-            sharpen_masking: 0.0,
-            noise_luminance: 0.0,
-            noise_luminance_detail: 50.0,
-            noise_color: 0.0,
-            noise_color_detail: 50.0,
-            grain_amount: 0.0,
-            grain_size: 25.0,
-            grain_roughness: 50.0,
-            vignette_amount: 0.0,
-            vignette_midpoint: 50.0,
-            vignette_roundness: 0.0,
-            vignette_feather: 50.0,
-            vignette_highlights: 0.0,
-            vignette_style: "highlightPriority".into(),
-            seed: 0,
-            pixel_scale: 1.0,
-            encoding_gamma: 0.0,
-            document_primaries: None,
-            shadow_tint: 0.0,
-            calibration_hue: [0.0; 3],
-            calibration_sat: [0.0; 3],
-        }
-    }
 }
 
 /// Hue band centres of the Color Mixer (degrees).
@@ -665,79 +510,25 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
     [r + m, g + m, b + m]
 }
 
-impl CameraRaw {
-    /// Rejects malformed point curves in new settings (see [`validate_curve`]).
-    pub fn validate(&self) -> Result<(), String> {
-        for (name, curve) in [
-            ("pointCurve", &self.point_curve),
-            ("pointCurveRed", &self.point_curve_red),
-            ("pointCurveGreen", &self.point_curve_green),
-            ("pointCurveBlue", &self.point_curve_blue),
-        ] {
-            validate_curve(curve).map_err(|e| format!("{name}: {e}"))?;
-        }
-        Ok(())
-    }
-    /// [`validate`](Self::validate) for an edit of `stored` settings: a curve left as stored is
-    /// accepted, so editing another control of an older Smart Filter still works.
-    pub fn validate_changes(&self, stored: &CameraRaw) -> Result<(), String> {
-        for (name, curve, kept) in [
-            ("pointCurve", &self.point_curve, &stored.point_curve),
-            ("pointCurveRed", &self.point_curve_red, &stored.point_curve_red),
-            ("pointCurveGreen", &self.point_curve_green, &stored.point_curve_green),
-            ("pointCurveBlue", &self.point_curve_blue, &stored.point_curve_blue),
-        ] {
-            if curve != kept {
-                validate_curve(curve).map_err(|e| format!("{name}: {e}"))?;
-            }
-        }
-        Ok(())
-    }
-    fn wb_neutral(&self) -> bool {
-        self.temperature == 0.0 && self.tint == 0.0 && self.exposure == 0.0
-    }
-    fn tone_neutral(&self) -> bool {
-        self.contrast == 0.0 && self.local_tone_neutral() && self.whites == 0.0 && self.blacks == 0.0
-    }
-    /// Highlights, Shadows, Texture and Clarity (the luminance stage).
-    fn local_tone_neutral(&self) -> bool {
-        [self.highlights, self.shadows, self.texture, self.clarity].iter().all(|v| *v == 0.0)
-    }
-    fn hsl_neutral(&self) -> bool {
-        self.hsl_hue.iter().chain(&self.hsl_sat).chain(&self.hsl_lum).all(|v| *v == 0.0)
-    }
-    fn grade_neutral(&self) -> bool {
-        self.grade_shadows.neutral() && self.grade_midtones.neutral() && self.grade_highlights.neutral() && self.grade_global.neutral()
-    }
-    /// The Calibration panel at rest.
-    fn calibration_neutral(&self) -> bool {
-        self.shadow_tint == 0.0 && self.calibration_hue.iter().chain(&self.calibration_sat).all(|v| *v == 0.0)
-    }
-    fn curves_neutral(&self) -> bool {
-        [self.curve_highlights, self.curve_lights, self.curve_darks, self.curve_shadows].iter().all(|v| *v == 0.0)
-            && [&self.point_curve, &self.point_curve_red, &self.point_curve_green, &self.point_curve_blue].iter().all(|c| is_linear(c))
-    }
-    /// The document's encoding: its transfer curve and primaries.
-    pub(crate) fn encoding(&self) -> Encoding {
-        Encoding::with_primaries(self.encoding_gamma, self.document_primaries)
-    }
-    /// True when every control is neutral (the filter is an identity).
-    pub fn is_identity(&self) -> bool {
-        self.wb_neutral()
-            && self.calibration_neutral()
-            && self.tone_neutral()
-            && self.dehaze == 0.0
-            && self.vibrance == 0.0
-            && self.saturation == 0.0
-            && self.curves_neutral()
-            && self.hsl_neutral()
-            && self.grade_neutral()
-            && self.sharpen_amount == 0.0
-            && self.noise_luminance == 0.0
-            && self.noise_color == 0.0
-            && self.grain_amount == 0.0
-            && self.vignette_amount == 0.0
-    }
+/// The Color Mixer at rest.
+pub(crate) fn hsl_neutral(p: &CameraRaw) -> bool {
+    p.hsl_hue.iter().chain(&p.hsl_sat).chain(&p.hsl_lum).all(|v| *v == 0.0)
+}
+
+/// Color Grading at rest.
+pub(crate) fn grade_neutral(p: &CameraRaw) -> bool {
+    [&p.grade_shadows, &p.grade_midtones, &p.grade_highlights, &p.grade_global].iter().all(|w| w.sat == 0.0 && w.lum == 0.0)
+}
+
+/// The Calibration panel at rest.
+pub(crate) fn calibration_neutral(p: &CameraRaw) -> bool {
+    p.shadow_tint == 0.0 && p.calibration_hue.iter().chain(&p.calibration_sat).all(|v| *v == 0.0)
+}
+
+/// The Tone Curve panel at rest.
+fn curves_neutral(p: &CameraRaw) -> bool {
+    [p.curve_highlights, p.curve_lights, p.curve_darks, p.curve_shadows].iter().all(|v| *v == 0.0)
+        && [&p.point_curve, &p.point_curve_red, &p.point_curve_green, &p.point_curve_blue].iter().all(|c| is_linear(c))
 }
 
 fn is_linear(c: &[[f32; 2]]) -> bool {
@@ -756,36 +547,36 @@ pub fn white_balance_gains(temperature: f32, tint: f32) -> [f32; 3] {
 }
 
 /// Runs the Camera Raw pipeline on straight RGBA pixels (`w × h`, display-encoded RGB).
-/// `float` keeps values above 1 (32-bit documents). Pixels that don't fill `w × h` exactly are
+/// `float` keeps values above 1 (32-bit documents); `inputs` are the job's scale, grain seed and encoding. Pixels that don't fill `w × h` exactly are
 /// left unchanged. A stage that can't get the memory it needs is skipped: for previews; a
 /// result that is kept goes through [`try_develop`], which reports it.
-pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bool) {
+pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, inputs: &DevelopInputs, float: bool) {
     // The error only says a stage was skipped; the pixels are as complete as they can be.
-    let _ = try_develop(px, w, h, p, float);
+    let _ = try_develop(px, w, h, p, inputs, float);
 }
 
 /// [`develop`], failing when a stage (Texture, Clarity) can't get the memory it needs, so an
 /// incomplete result isn't committed as the developed image. The pixels are then partly
 /// developed and should be discarded.
-pub fn try_develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bool) -> Result<(), String> {
+pub fn try_develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, inputs: &DevelopInputs, float: bool) -> Result<(), String> {
     if px.is_empty() || p.is_identity() || px.len() != w.saturating_mul(h) {
         return Ok(());
     }
     let mut skipped: Option<String> = None;
-    let ps = p.pixel_scale.clamp(0.01, 1.0);
+    let ps = inputs.pixel_scale.clamp(0.01, 1.0);
     // 1. White balance (per-channel curves, see `white_balance`), then Exposure.
-    white_balance::apply(px, w, p.temperature, p.tint, p.encoding());
+    white_balance::apply(px, w, p.temperature, p.tint, inputs.encoding());
     if p.exposure != 0.0 {
-        exposure::apply(px, w, &exposure::row(p.exposure), p.encoding());
+        exposure::apply(px, w, &exposure::row(p.exposure), inputs.encoding());
     }
     if p.contrast != 0.0 {
-        let enc = p.encoding();
+        let enc = inputs.encoding();
         let tones = tone_points(px, w, h, enc, |q| q);
         exposure::apply(px, w, &contrast::adaptive_row(p.contrast, Some(tones)), enc);
     }
     // 1b. Calibration: the primaries turned and purer or greyer, and the shadows tinted, in
     // linear light (the camera's primaries are what Camera Raw's panel calibrates).
-    if !p.calibration_neutral() {
+    if !calibration_neutral(p) {
         let primaries = p.calibration_hue.iter().chain(&p.calibration_sat).any(|v| *v != 0.0);
         let tint = p.shadow_tint.clamp(-100.0, 100.0) / 100.0;
         par_rows(px, w, 1, |_, row| {
@@ -805,43 +596,43 @@ pub fn try_develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float
     if p.dehaze > 0.0 {
         dehaze(px, w, h, p.dehaze / 100.0);
     } else if p.dehaze < 0.0 {
-        add_haze(px, w, h, p.dehaze, p.encoding());
+        add_haze(px, w, h, p.dehaze, inputs.encoding());
     }
     // 3. Tone. Highlights and Shadows: a local Laplacian filter (see `local_tone`).
     if p.highlights != 0.0 || p.shadows != 0.0 {
-        local_tone::apply(px, w, h, p.shadows, p.highlights, p.encoding());
+        local_tone::apply(px, w, h, p.shadows, p.highlights, inputs.encoding());
     }
     // Texture and Clarity: fitted multi-scale models of local detail (see `local_detail`).
     // Without memory a stage is skipped and the rest still runs (a preview stays useful); the
     // first failure is returned at the end.
     if p.texture != 0.0
-        && let Err(e) = local_detail::apply(&local_detail::TEXTURE, px, w, h, p.texture, p.encoding())
+        && let Err(e) = local_detail::apply(&local_detail::TEXTURE, px, w, h, p.texture, inputs.encoding())
     {
         skipped.get_or_insert(e);
     }
     if p.clarity != 0.0
-        && let Err(e) = local_detail::apply(&local_detail::CLARITY, px, w, h, p.clarity, p.encoding())
+        && let Err(e) = local_detail::apply(&local_detail::CLARITY, px, w, h, p.clarity, inputs.encoding())
     {
         skipped.get_or_insert(e);
     }
     // 3b. Whites and Blacks: global curves, Whites up adapted to the image's tones.
     if p.whites != 0.0 || p.blacks != 0.0 {
-        let enc = p.encoding();
+        let enc = inputs.encoding();
         let points = (p.whites > 0.0).then(|| tone_points(px, w, h, enc, |q| q));
         let (wr, br) = (whites_blacks::whites_row(p.whites, points), whites_blacks::blacks_row(p.blacks));
         let fix = (p.whites < 0.0).then(|| colour_lut::correction(colour_lut::Slider::Whites, p.whites)).flatten();
         whites_blacks::apply(px, w, wr.as_ref(), br.as_ref(), fix.as_ref(), enc);
     }
     // 4–7: per-pixel colour stages.
-    let need_color = p.vibrance != 0.0 || p.saturation != 0.0 || !p.curves_neutral() || !p.hsl_neutral() || !p.grade_neutral();
+    let need_color = p.vibrance != 0.0 || p.saturation != 0.0 || !curves_neutral(p) || !hsl_neutral(p) || !grade_neutral(p);
     if need_color {
         let par = (!(p.curve_highlights == 0.0 && p.curve_lights == 0.0 && p.curve_darks == 0.0 && p.curve_shadows == 0.0)).then(|| parametric_lut(p, 1024));
         let pts = |c: &Vec<[f32; 2]>| (!is_linear(c)).then(|| curve_lut(c, 1024));
         let (master, cr, cg, cb) = (pts(&p.point_curve), pts(&p.point_curve_red), pts(&p.point_curve_green), pts(&p.point_curve_blue));
         let mixer = color_mixer::mixer(&p.hsl_hue, &p.hsl_sat, &p.hsl_lum);
-        let grade = !p.grade_neutral();
+        let grade = !grade_neutral(p);
         let Grade { tints, lums, blend, balance: bal } = Grade::new(p);
-        let enc = p.encoding();
+        let enc = inputs.encoding();
         // Vibrance and Saturation: measured tables (see `presence`).
         let presence = presence::presence(p.vibrance, p.saturation);
         par_rows(px, w, 1, |_, row| {
@@ -895,7 +686,7 @@ pub fn try_develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float
         vignette(px, w, h, p);
     }
     if p.grain_amount > 0.0 {
-        let Grain { cell, roughness: rough, amount: amt, seed, scale: pscale } = Grain::new(p);
+        let Grain { cell, roughness: rough, amount: amt, seed, scale: pscale } = Grain::new(p, inputs);
         par_rows(px, w, 1, |y, row| {
             for (x, q) in row.iter_mut().enumerate() {
                 // Sample in full-resolution coordinates so previews match the result.
@@ -1222,6 +1013,36 @@ fn vignette(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw) {
 mod tests {
     use super::*;
 
+    /// `CameraRaw` with the named fields set (the type is `#[non_exhaustive]`, so no struct expression), or a copy of a base with them set.
+    macro_rules! cr {
+        ($($f:ident : $v:expr),* $(,)?) => {{
+            let mut s = CameraRaw::default();
+            $(s.$f = $v;)*
+            s
+        }};
+        ($base:expr => $($f:ident : $v:expr),* $(,)?) => {{
+            let mut s: CameraRaw = $base;
+            $(s.$f = $v;)*
+            s
+        }};
+    }
+
+    /// [`super::develop`] with the default inputs (full scale, sRGB encoding, seed 0).
+    fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bool) {
+        super::develop(px, w, h, p, &DevelopInputs::default(), float);
+    }
+
+    /// [`super::per_pixel`] with the default inputs.
+    fn per_pixel(p: &CameraRaw, w: usize, h: usize, float: bool, points: Option<TonePoints>) -> Option<PerPixel> {
+        super::per_pixel(p, &DevelopInputs::default(), w, h, float, points)
+    }
+
+    /// [`super::white_black_points`] with the default inputs.
+    #[allow(dead_code)]
+    fn white_black_points(px: &[[f32; 4]], w: usize, h: usize, p: &CameraRaw) -> Option<TonePoints> {
+        super::white_black_points(px, w, h, p, &DevelopInputs::default())
+    }
+
     /// #9273: Dehaze clears the haze evenly over a sky, right up to a dark building, instead of
     /// leaving a bright halo of uncorrected haze around it. Synthetic scene: a clear sky and a
     /// dark tower, hazed with `I = J·t + A·(1 − t)`.
@@ -1310,7 +1131,7 @@ mod tests {
         let px = vec![[0.5, 0.4, 0.3, 1.0]; 3];
         assert!(tone_points(&px, 2, 2, Encoding::of(0.0), |q| q).iter().all(|v| v.is_finite()));
         let mut short = px.clone();
-        develop(&mut short, 2, 2, &CameraRaw { contrast: 50.0, whites: 40.0, ..Default::default() }, false);
+        develop(&mut short, 2, 2, &cr! { contrast: 50.0, whites: 40.0 }, false);
         assert_eq!(short, px);
     }
 
@@ -1371,9 +1192,9 @@ mod tests {
         legacy.insert(5, [60.0, 200.0]);
         let p: CameraRaw = serde_json::from_value(serde_json::json!({"pointCurve": legacy})).unwrap();
         assert!(p.validate().is_err());
-        let edited = CameraRaw { exposure: 1.0, ..p.clone() };
+        let edited = cr! { p.clone() => exposure: 1.0 };
         assert!(edited.validate_changes(&p).is_ok(), "an unchanged stored curve stays editable");
-        let broken = CameraRaw { point_curve: vec![[10.0, 10.0]], ..p.clone() };
+        let broken = cr! { p.clone() => point_curve: vec![[10.0, 10.0]] };
         assert!(broken.validate_changes(&p).is_err(), "a changed curve is validated");
         let mut px = img(4, 4);
         develop(&mut px, 4, 4, &p, false);
@@ -1406,7 +1227,7 @@ mod tests {
         // Photoshop 2026, Vibrance +100: (0.55, 0.48, 0.44) → (0.592, 0.475, 0.400) and
         // (0.90, 0.15, 0.10) → (0.937, 0, 0).
         let mut px = vec![[0.55, 0.48, 0.44, 1.0], [0.9, 0.15, 0.1, 1.0]];
-        develop(&mut px, 2, 1, &CameraRaw { vibrance: 100.0, ..Default::default() }, false);
+        develop(&mut px, 2, 1, &cr! { vibrance: 100.0 }, false);
         // The strong red sits on the gamut's edge, where the tables interpolate least well.
         let want = [([0.592, 0.475, 0.400], 0.03), ([0.937, 0.0, 0.0], 0.08)];
         for (q, (w, tol)) in px.iter().zip(want) {
@@ -1423,30 +1244,24 @@ mod tests {
             develop(&mut a, w, h, &p, false);
             a
         };
-        let warm = run(CameraRaw { temperature: 50.0, ..Default::default() });
+        let warm = run(cr! { temperature: 50.0 });
         assert!(mean(&warm, 0) > mean(&base, 0) && mean(&warm, 2) < mean(&base, 2));
-        let bright = run(CameraRaw { exposure: 1.0, ..Default::default() });
+        let bright = run(cr! { exposure: 1.0 });
         assert!(mean(&bright, 1) > mean(&base, 1) + 0.1);
-        let shadows = run(CameraRaw { shadows: 100.0, ..Default::default() });
+        let shadows = run(cr! { shadows: 100.0 });
         let dark_px = |a: &[[f32; 4]]| a[0][1];
         assert!(dark_px(&shadows) > dark_px(&base));
-        let hl = run(CameraRaw { highlights: -100.0, ..Default::default() });
+        let hl = run(cr! { highlights: -100.0 });
         assert!(hl[w * h - 1][0] < base[w * h - 1][0]);
-        let con = run(CameraRaw { contrast: 100.0, ..Default::default() });
+        let con = run(cr! { contrast: 100.0 });
         // More contrast: darker darks, brighter brights.
         assert!(con[0][1] < base[0][1] && con[w * h - 1][0] > base[w * h - 1][0]);
-        let desat = run(CameraRaw { saturation: -100.0, ..Default::default() });
+        let desat = run(cr! { saturation: -100.0 });
         assert!(desat.iter().all(|q| (q[0] - q[1]).abs() < 1e-4 && (q[1] - q[2]).abs() < 1e-4));
-        let vib = run(CameraRaw { vibrance: 100.0, ..Default::default() });
+        let vib = run(cr! { vibrance: 100.0 });
         let spread = |q: [f32; 4]| q[0].max(q[1]).max(q[2]) - q[0].min(q[1]).min(q[2]);
         assert!(spread(vib[w * h / 2]) > spread(base[w * h / 2]));
-        for p in [
-            CameraRaw { clarity: 80.0, ..Default::default() },
-            CameraRaw { texture: 80.0, ..Default::default() },
-            CameraRaw { dehaze: 60.0, ..Default::default() },
-            CameraRaw { dehaze: -60.0, ..Default::default() },
-            CameraRaw { whites: 50.0, blacks: -50.0, ..Default::default() },
-        ] {
+        for p in [cr! { clarity: 80.0 }, cr! { texture: 80.0 }, cr! { dehaze: 60.0 }, cr! { dehaze: -60.0 }, cr! { whites: 50.0, blacks: -50.0 }] {
             let out = run(p.clone());
             assert!(out.iter().all(|q| q[..3].iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))), "{p:?}");
             assert_ne!(out, base);
@@ -1464,20 +1279,20 @@ mod tests {
         let mut a = reds.clone();
         let mut hs = [0.0; 8];
         hs[0] = -100.0;
-        develop(&mut a, w, h, &CameraRaw { hsl_sat: hs, ..Default::default() }, false);
+        develop(&mut a, w, h, &cr! { hsl_sat: hs }, false);
         // Photoshop: (0.81, 0.19, 0.19) → (0.59, 0.42, 0.42); Reds alone never grey a red fully.
         assert!(a[0][0] - a[0][1] < 0.25 && a[0][0] - a[0][1] > 0.08 && a[0][0] < 0.65, "reds desaturated: {:?}", a[0]);
         let blues: Vec<[f32; 4]> = vec![[0.2, 0.2, 0.8, 1.0]; w * h];
         let mut b = blues.clone();
-        develop(&mut b, w, h, &CameraRaw { hsl_sat: hs, ..Default::default() }, false);
+        develop(&mut b, w, h, &cr! { hsl_sat: hs }, false);
         assert!((b[0][2] - 0.8).abs() < 2e-3 && (b[0][0] - 0.2).abs() < 2e-3 && (b[0][1] - 0.2).abs() < 2e-3, "blues untouched: {:?}", b[0]);
         // Grading: blue shadows tint dark pixels, leave bright ones nearly alone.
         let mut g: Vec<[f32; 4]> = vec![[0.1, 0.1, 0.1, 1.0], [0.95, 0.95, 0.95, 1.0]];
-        develop(&mut g, 2, 1, &CameraRaw { grade_shadows: Wheel { hue: 220.0, sat: 80.0, lum: 0.0 }, ..Default::default() }, false);
+        develop(&mut g, 2, 1, &cr! { grade_shadows: Wheel { hue: 220.0, sat: 80.0, lum: 0.0 } }, false);
         assert!(g[0][2] > g[0][0] + 0.05 && (g[1][2] - g[1][0]).abs() < 0.02, "{g:?}");
         // Point curve + parametric.
         let mut c = img(w, h);
-        develop(&mut c, w, h, &CameraRaw { point_curve: vec![[0.0, 30.0], [255.0, 255.0]], curve_shadows: 50.0, ..Default::default() }, false);
+        develop(&mut c, w, h, &cr! { point_curve: vec![[0.0, 30.0], [255.0, 255.0]], curve_shadows: 50.0 }, false);
         assert!(c.iter().all(|q| q[1] >= 30.0 / 255.0 - 1e-4));
         // Noise reduction reduces variance; sharpening increases it; grain is deterministic.
         let noisy: Vec<[f32; 4]> = (0..w * h)
@@ -1491,28 +1306,28 @@ mod tests {
             a.iter().map(|q| (q[1] - m).powi(2)).sum::<f32>() / a.len() as f32
         };
         let mut nr = noisy.clone();
-        develop(&mut nr, w, h, &CameraRaw { noise_luminance: 80.0, ..Default::default() }, false);
+        develop(&mut nr, w, h, &cr! { noise_luminance: 80.0 }, false);
         assert!(var(&nr) < var(&noisy) * 0.5);
         // Out-of-range noise settings are held to their 0..=100 range, not turned into huge radii.
         let mut wild = noisy.clone();
-        let hostile =
-            CameraRaw { noise_luminance: 1.0e30, noise_color: 1.0e30, noise_luminance_detail: 1.0e30, noise_color_detail: 1.0e30, ..Default::default() };
+        let hostile = cr! { noise_luminance: 1.0e30, noise_color: 1.0e30, noise_luminance_detail: 1.0e30, noise_color_detail: 1.0e30 };
         develop(&mut wild, w, h, &hostile, false);
         assert!(wild.iter().all(|q| q[0].is_finite()));
         let mut sh = noisy.clone();
-        develop(&mut sh, w, h, &CameraRaw { sharpen_amount: 100.0, ..Default::default() }, false);
+        develop(&mut sh, w, h, &cr! { sharpen_amount: 100.0 }, false);
         assert!(var(&sh) > var(&noisy));
         let mut g1 = img(w, h);
         let mut g2 = img(w, h);
-        let gp = CameraRaw { grain_amount: 50.0, seed: 4, ..Default::default() };
-        develop(&mut g1, w, h, &gp, false);
-        develop(&mut g2, w, h, &gp, false);
+        let gp = cr! { grain_amount: 50.0 };
+        let seeded = DevelopInputs { seed: 4, ..Default::default() };
+        super::develop(&mut g1, w, h, &gp, &seeded, false);
+        super::develop(&mut g2, w, h, &gp, &seeded, false);
         assert_eq!(g1, g2);
         assert_ne!(g1, img(w, h));
         // Post-crop vignette darkens corners, leaves the centre.
         let flat = vec![[0.5f32, 0.5, 0.5, 1.0]; w * h];
         let mut v = flat.clone();
-        develop(&mut v, w, h, &CameraRaw { vignette_amount: -80.0, ..Default::default() }, false);
+        develop(&mut v, w, h, &cr! { vignette_amount: -80.0 }, false);
         assert!(v[0][0] < 0.35 && (v[(h / 2) * w + w / 2][0] - 0.5).abs() < 0.01, "{:?}", v[0]);
     }
 
@@ -1520,15 +1335,12 @@ mod tests {
     fn calibration_keeps_the_develop_off_the_per_pixel_gpu_stages() {
         // The per-pixel stages (the Camera Raw dialog's GPU preview) don't run Calibration, so
         // settings with it must fall back to the CPU develop instead of previewing without it.
-        for p in [
-            CameraRaw { shadow_tint: 40.0, ..Default::default() },
-            CameraRaw { calibration_hue: [0.0, 0.0, 30.0], whites: 20.0, ..Default::default() },
-            CameraRaw { calibration_sat: [-50.0, 0.0, 0.0], exposure: 0.5, ..Default::default() },
-        ] {
-            assert!(!p.spatial());
+        for p in [cr! { shadow_tint: 40.0 }, cr! { calibration_hue: [0.0, 0.0, 30.0], whites: 20.0 }, cr! { calibration_sat: [-50.0, 0.0, 0.0], exposure: 0.5 }]
+        {
+            assert!(!spatial(&p));
             assert!(per_pixel(&p, 2, 2, false, Some([[-8.0, -2.0, 0.0, -3.0]; 2])).is_none(), "{p:?}");
         }
-        assert!(per_pixel(&CameraRaw { exposure: 0.5, ..Default::default() }, 2, 2, false, None).is_some());
+        assert!(per_pixel(&cr! { exposure: 0.5 }, 2, 2, false, None).is_some());
     }
 
     #[test]
@@ -1612,13 +1424,13 @@ mod tests {
             .collect();
         auto_tone(&good, &mut p);
         assert!(p.exposure.abs() < 0.3 && p.blacks.abs() < 10.0 && p.whites.abs() < 10.0, "a full-range image is left nearly alone: {p:?}");
-        assert!(p.saturation == 0.0 && p.hsl_neutral(), "other panels untouched");
+        assert!(p.saturation == 0.0 && hsl_neutral(&p), "other panels untouched");
     }
 
     #[test]
     fn float_documents_keep_overrange() {
         let mut a = vec![[2.0f32, 1.5, 0.5, 1.0]; 16];
-        develop(&mut a, 4, 4, &CameraRaw { exposure: 0.5, ..Default::default() }, true);
+        develop(&mut a, 4, 4, &cr! { exposure: 0.5 }, true);
         // Exposure keeps the excess over white (no clipping) and brightens the rest.
         assert!(a[0][0] > 1.9 && a[0][1] > 1.4 && a[0][2] > 0.5, "{:?}", a[0]);
     }
@@ -1661,7 +1473,7 @@ mod tests {
         let back = p3.back_from_srgb_encoded(s);
         assert!(back.iter().zip([1.0, 0.0, 0.0]).all(|(a, b)| (a - b).abs() < 1e-4), "{back:?}");
         // sRGB documents convert as before, exactly.
-        let srgb = CameraRaw::default().encoding();
+        let srgb = DevelopInputs::default().encoding();
         assert_eq!(srgb.to_srgb_encoded([0.3, 1.2, -0.1]), [0.3, 1.2, -0.1]);
         assert_eq!(srgb.luminance([0.2, 0.5, 0.9]).to_bits(), luma([0.2, 0.5, 0.9]).to_bits());
         // A matrix that can't be inverted falls back to the primaries the curve implies.
@@ -1688,18 +1500,18 @@ mod tests {
             })
             .collect();
         for p in [
-            CameraRaw { contrast: 45.0, ..Default::default() },
-            CameraRaw { whites: -60.0, ..Default::default() },
-            CameraRaw { texture: 70.0, ..Default::default() },
-            CameraRaw { clarity: 40.0, ..Default::default() },
-            CameraRaw { contrast: 45.0, whites: -60.0, texture: 70.0, clarity: 40.0, ..Default::default() },
+            cr! { contrast: 45.0 },
+            cr! { whites: -60.0 },
+            cr! { texture: 70.0 },
+            cr! { clarity: 40.0 },
+            cr! { contrast: 45.0, whites: -60.0, texture: 70.0, clarity: 40.0 },
         ] {
             let mut want = srgb.clone();
             // As 32-bit documents: the final clip to 0 … 1 would cut each document's gamut apart.
             develop(&mut want, w, h, &p, true);
             let to_lin = |q: &[f32; 4]| [0, 1, 2].map(|c| srgb_to_linear(q[c]));
             for (gamma, primaries) in [(1.8, None), (0.0, Some(p3_to_prophoto()))] {
-                let doc = CameraRaw { encoding_gamma: gamma, document_primaries: primaries, ..p.clone() };
+                let doc = DevelopInputs { encoding_gamma: gamma, document_primaries: primaries, ..Default::default() };
                 let enc = doc.encoding();
                 let (to, from) = enc.prophoto().unwrap_or((exposure::IDENTITY, exposure::IDENTITY));
                 // sRGB linear → ProPhoto → the document's linear RGB, and encoded.
@@ -1710,7 +1522,7 @@ mod tests {
                         [enc.encode(d[0]), enc.encode(d[1]), enc.encode(d[2]), 1.0]
                     })
                     .collect();
-                develop(&mut px, w, h, &doc, true);
+                super::develop(&mut px, w, h, &p, &doc, true);
                 let mut worst = 0.0f32;
                 for (q, r) in px.iter().zip(&want) {
                     let back = exposure::mat(&exposure::PROPHOTO_TO_SRGB, exposure::mat(&to, [0, 1, 2].map(|c| enc.decode(q[c]))));

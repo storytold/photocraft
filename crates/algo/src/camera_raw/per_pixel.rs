@@ -3,7 +3,10 @@
 //! same maths. [`develop`](super::develop) builds its own constants with the same functions.
 
 use super::whites_blacks::{RowOn, TonePoints};
-use super::{CameraRaw, Wheel, contrast, curve_lut, exposure, hsv_to_rgb, is_linear, luma, parametric_lut, whites_blacks};
+use super::{
+    CameraRaw, DevelopInputs, StoredVignetteStyle as StoredStyle, Wheel, calibration_neutral, contrast, curve_lut, exposure, grade_neutral, hsv_to_rgb,
+    is_linear, luma, parametric_lut, whites_blacks,
+};
 
 /// Entries of the tone curve tables (parametric and point curves).
 pub const CURVE_LUT: usize = 1024;
@@ -108,9 +111,9 @@ impl Vignette {
         Vignette {
             amount: p.vignette_amount / 100.0,
             highlights: p.vignette_highlights.clamp(0.0, 100.0) / 100.0,
-            style: match p.vignette_style.as_str() {
-                "paintOverlay" => VignetteStyle::PaintOverlay,
-                "colorPriority" => VignetteStyle::ColorPriority,
+            style: match p.vignette_style {
+                StoredStyle::PaintOverlay => VignetteStyle::PaintOverlay,
+                StoredStyle::ColorPriority => VignetteStyle::ColorPriority,
                 _ => VignetteStyle::HighlightPriority,
             },
             centre: [cx, cy],
@@ -135,13 +138,13 @@ pub struct Grain {
 }
 
 impl Grain {
-    pub(crate) fn new(p: &CameraRaw) -> Self {
+    pub(crate) fn new(p: &CameraRaw, inputs: &DevelopInputs) -> Self {
         Grain {
             cell: 1.0 + p.grain_size / 25.0,
             roughness: p.grain_roughness / 100.0,
             amount: p.grain_amount / 100.0 * 0.12,
-            seed: u64::from(p.seed),
-            scale: 1.0 / p.pixel_scale.clamp(0.01, 1.0),
+            seed: u64::from(inputs.seed),
+            scale: 1.0 / inputs.pixel_scale.clamp(0.01, 1.0),
         }
     }
 }
@@ -189,27 +192,25 @@ pub struct PerPixel {
     pub clamp: bool,
 }
 
-impl CameraRaw {
-    /// Whether developing needs a stage that reads neighbouring pixels: Dehaze, Shadows and
-    /// Highlights, Texture, Clarity, sharpening or noise reduction.
-    pub fn spatial(&self) -> bool {
-        self.dehaze != 0.0
-            || [self.highlights, self.shadows, self.texture, self.clarity].iter().any(|v| *v != 0.0)
-            || self.sharpen_amount > 0.0
-            || self.noise_luminance > 0.0
-            || self.noise_color > 0.0
-    }
+/// Whether developing needs a stage that reads neighbouring pixels: Dehaze, Shadows and
+/// Highlights, Texture, Clarity, sharpening or noise reduction.
+pub fn spatial(p: &CameraRaw) -> bool {
+    p.dehaze != 0.0
+        || [p.highlights, p.shadows, p.texture, p.clarity].iter().any(|v| *v != 0.0)
+        || p.sharpen_amount > 0.0
+        || p.noise_luminance > 0.0
+        || p.noise_color > 0.0
 }
 
 /// The image's tones that Contrast and Whites up adapt to ([`TonePoints`]), for `px` (`w × h`,
 /// display-encoded) developed per pixel with `p`: what [`develop`](super::develop) measures
 /// after white balance and Exposure, and after Contrast too. `None` when neither Contrast nor a
 /// raised Whites needs them, or `p` needs a spatial stage.
-pub fn white_black_points(px: &[[f32; 4]], w: usize, h: usize, p: &CameraRaw) -> Option<TonePoints> {
-    if (p.whites <= 0.0 && p.contrast == 0.0) || p.spatial() || px.len() != w.saturating_mul(h) {
+pub fn white_black_points(px: &[[f32; 4]], w: usize, h: usize, p: &CameraRaw, inputs: &DevelopInputs) -> Option<TonePoints> {
+    if (p.whites <= 0.0 && p.contrast == 0.0) || spatial(p) || px.len() != w.saturating_mul(h) {
         return None;
     }
-    let enc = p.encoding();
+    let enc = inputs.encoding();
     let wb = super::white_balance::curves(p.temperature, p.tint);
     let m = exposure::primaries(enc);
     let ex = (p.exposure != 0.0).then(|| exposure::row(p.exposure));
@@ -234,8 +235,8 @@ pub fn white_black_points(px: &[[f32; 4]], w: usize, h: usize, p: &CameraRaw) ->
 /// image's [`white_black_points`]. `None` when `p` needs a spatial stage or Calibration (these
 /// stages don't run it), Temperature or Tint, or Contrast or a raised Whites has no `points`. The points themselves
 /// leave Calibration out, so a caller may cache them across Calibration changes.
-pub fn per_pixel(p: &CameraRaw, w: usize, h: usize, float: bool, points: Option<TonePoints>) -> Option<PerPixel> {
-    if p.spatial() || !p.calibration_neutral() {
+pub fn per_pixel(p: &CameraRaw, inputs: &DevelopInputs, w: usize, h: usize, float: bool, points: Option<TonePoints>) -> Option<PerPixel> {
+    if spatial(p) || !calibration_neutral(p) {
         return None;
     }
     let identity = p.is_identity();
@@ -249,14 +250,14 @@ pub fn per_pixel(p: &CameraRaw, w: usize, h: usize, float: bool, points: Option<
     }
     // Whites down's measured correction reads the colour in sRGB's primaries; these stages look
     // it up in the document's own, so a document in other primaries develops on the CPU.
-    if p.whites < 0.0 && !p.encoding().srgb_primaries() {
+    if p.whites < 0.0 && !inputs.encoding().srgb_primaries() {
         return None;
     }
     let (whites, blacks) = (whites_blacks::whites_row(p.whites, points.map(|t| t[1])), whites_blacks::blacks_row(p.blacks));
     let whites_fix = (p.whites < 0.0).then(|| super::colour_lut::correction(super::colour_lut::Slider::Whites, p.whites)).flatten().map(|c| c.grid().to_vec());
     let whites_blacks = (whites.is_some() || blacks.is_some()).then_some(WhitesBlacks { whites, blacks, whites_fix });
     const ID: [[f32; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
-    let (to_prophoto, from_prophoto) = exposure::primaries(p.encoding()).unwrap_or((ID, ID));
+    let (to_prophoto, from_prophoto) = exposure::primaries(inputs.encoding()).unwrap_or((ID, ID));
     let parametric_on = !(p.curve_highlights == 0.0 && p.curve_lights == 0.0 && p.curve_darks == 0.0 && p.curve_shadows == 0.0);
     let pts = |c: &Vec<[f32; 2]>| (!is_linear(c)).then(|| curve_lut(c, CURVE_LUT));
     Some(PerPixel {
@@ -266,14 +267,14 @@ pub fn per_pixel(p: &CameraRaw, w: usize, h: usize, float: bool, points: Option<
         to_prophoto,
         from_prophoto,
         whites_blacks,
-        encoding: p.encoding().gamma(),
+        encoding: inputs.encoding().gamma(),
         presence: super::presence::presence(p.vibrance, p.saturation).map(|t| t.nodes().to_vec()),
         parametric: parametric_on.then(|| parametric_lut(p, CURVE_LUT)),
         point: [pts(&p.point_curve), pts(&p.point_curve_red), pts(&p.point_curve_green), pts(&p.point_curve_blue)],
         hsl: super::color_mixer::mixer(&p.hsl_hue, &p.hsl_sat, &p.hsl_lum).map(|m| m.nodes().to_vec()),
-        grade: (!p.grade_neutral()).then(|| Grade::new(p)),
+        grade: (!grade_neutral(p)).then(|| Grade::new(p)),
         vignette: (p.vignette_amount != 0.0).then(|| Vignette::new(w, h, p)),
-        grain: (p.grain_amount > 0.0).then(|| Grain::new(p)),
+        grain: (p.grain_amount > 0.0).then(|| Grain::new(p, inputs)),
         clamp: !float && !identity,
     })
 }
