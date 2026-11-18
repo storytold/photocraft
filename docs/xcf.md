@@ -16,15 +16,11 @@ For CLI Convert, Info, Run, and Batch, pass `--historical-xcf-sample-order littl
 `--historical-xcf-sample-order big-endian`. For automated Open such as MCP `doc.open` or desktop
 control `app.open`, set `historicalXcfSampleOrder` to `"little-endian"` or `"big-endian"`.
 
-## Shared reader follow-up
+## Decoder ownership
 
-The enhanced decoder currently lives in PhotoCraft. Other applications using `craft-xcf` keep the
-reader at their pinned revision. The proposed follow-up would move the bounded transport, XCF
-framing and sample decoding into `craft-xcf`, with a format-neutral representation of parsed
-records. The shared API would need cancellation and caller-supplied resource limits, with
-precision, legacy byte order and compressed-input regression tests. PhotoCraft would keep the
-conversion from those records to native layers, text, paths and editing views. The API and the
-migration sequence are open for maintainer review.
+PhotoCraft keeps the enhanced XCF decoder in its own IO crate because it is the only current
+consumer of the XCF reader. We will revisit moving it to `craft-xcf` only if another app needs
+XCF import.
 
 ## What is kept
 
