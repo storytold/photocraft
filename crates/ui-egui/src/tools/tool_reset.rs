@@ -313,7 +313,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
 mod tests {
     use super::*;
 
-    fn app() -> PhotocraftApp {
+    fn app() -> Box<PhotocraftApp> {
         let mut s = photocraft_engine::Session::new();
         s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
         PhotocraftApp::new(s, crate::Services::default())
