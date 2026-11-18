@@ -1,95 +1,84 @@
-//! Paragraph Text Size: Alt+drag with the Type tool sizes the new paragraph box in a modal dialog
-//! instead of committing the drag (#12044). Width and Height open in document pixels with the size
-//! that was dragged, decimals kept (a ~100 px drag prefills 99.5), and the box keeps its top-left
-//! where the drag started. OK runs the same `type.create` a plain drag does, so the placeholder
-//! text lands selected exactly as it does there; Cancel closes the dialog and creates nothing.
+//! Paragraph Text Size: Alt+drag with the Type tool sizes the new paragraph box in a hosted
+//! parameter dialog instead of committing the drag (#12044). Width and Height open in document
+//! pixels with the size that was dragged, decimals kept (a ~100 px drag prefills 99.5), and the box
+//! keeps its top-left where the drag started. OK runs the same `type.create` a plain drag does, so
+//! the placeholder text lands selected exactly as it does there; Cancel closes the dialog and
+//! creates nothing.
 //!
 //! Only what the ticket measured is here. No field rule was measured — no unit menu, no minimum,
 //! no maximum — so the number goes to `type.create` as typed and the engine refuses a box it
 //! cannot make. A drag upwards or to the left of its start keeps today's rule (the box is the
 //! rectangle between the two points), and Cancel beyond closing the dialog is not specified.
 //!
-//! The dialog is an ordinary one in the UI state, so `ui.inspect`, `ui.dialog.confirm` and
-//! `ui.dialog.cancel` drive it, and its two fields live in the dialog's field map.
+//! The dialog is a hosted parameter dialog with a key of its own, so `ui.inspect`, `ui.dialog.set`
+//! and `ui.dialog.confirm` drive it like the other parameter dialogs. The drag's top-left and the
+//! document it was made in are not fields: they are the family's captured value, read by [`run`].
 
-use serde_json::{Map, Value, json};
+use craft::ui::dialog::DialogId;
+use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamResult};
+use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
-use crate::state::DialogKind;
+use crate::dialogs::params;
 
-const MARK: &str = "__paragraphTextSize";
-const COMMAND: &str = "type.create";
-/// The top-left the box was dragged from, in document pixels: OK puts the box there, whatever its
-/// size becomes in the dialog.
-const AT: &str = "__at";
-/// The document the drag was made in (its id): OK creates the text only while it is still the active one.
-const DOCUMENT: &str = "__document";
+/// The dialog family's key. The dialog sizes the box for a `type.create`, but it is not that
+/// command's own form, so it carries a key of its own and never routes the plain parameter form.
+const KEY: &str = "type.paragraphTextSize";
+const WIDTH: &str = "width";
+const HEIGHT: &str = "height";
 
-/// Identify the Paragraph Text Size dialog fields.
-pub fn owns(fields: &Map<String, Value>) -> bool {
-    fields.contains_key(MARK)
+/// Whether `key` is the Paragraph Text Size dialog's.
+pub fn owns(key: &str) -> bool {
+    key == KEY
+}
+
+/// The two rows, Width and Height in document pixels, opening at the size that was dragged. One
+/// decimal shows a dragged half pixel (99.5) as such; no range is measured, so the field keeps the
+/// number typed and `type.create` refuses a box it cannot make.
+fn build(w: f64, h: f64) -> impl for<'b> Fn(&'b mut DialogFields) -> ParamDialog<'b> + Send + 'static {
+    move |_fields: &mut DialogFields| {
+        let rows = vec![Param::number(WIDTH, tl!("Width"), w, 1.0, 1), Param::number(HEIGHT, tl!("Height"), h, 1.0, 1)];
+        ParamDialog::new(KEY, tl!("Paragraph Text Size"), rows)
+    }
 }
 
 /// Open the dialog on the box an Alt+drag drew: top-left `(x, y)`, size `w` × `h`, in document
-/// pixels and exactly as dragged (the fields keep the decimals).
-pub fn open(app: &mut PhotocraftApp, at: [f64; 2], w: f64, h: f64) -> u64 {
-    let mut f = Map::new();
-    f.insert(MARK.into(), json!(true));
-    f.insert("__command".into(), json!(COMMAND));
-    f.insert("__label".into(), json!("Paragraph Text Size"));
-    f.insert(AT.into(), json!([at[0], at[1]]));
-    if let Some(st) = app.session.active() {
-        f.insert(DOCUMENT.into(), json!(st.doc.id.0));
-    }
-    f.insert("width".into(), json!(w));
-    f.insert("height".into(), json!(h));
-    app.ui.open_dialog(DialogKind::Command, f)
-}
-
-/// `f[key]` as a document-pixel length.
-fn px(f: &Map<String, Value>, key: &str) -> Option<f64> {
-    f.get(key).and_then(Value::as_f64).filter(|v| v.is_finite())
-}
-
-/// The two rows, Width and Height, in document pixels.
-pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
-    egui::Grid::new("paragraph-text-size-dialog").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-        for (key, label) in [("width", tl!("Width")), ("height", tl!("Height"))] {
-            ui.label(label);
-            let mut px = px_or(f, key);
-            // One decimal shows a dragged half pixel (99.5) as such; no range is measured, so the
-            // field takes the number and `type.create` refuses a box it cannot make.
-            let field = crate::widgets::value_field_prec(ui, &mut px, -1.0e9..=1.0e9, "px", 110.0, 1).accessible_name(label);
-            if field.changed() {
-                f.insert(key.into(), json!(f64::from(px)));
-            }
-            ui.end_row();
-        }
+/// pixels and exactly as dragged (the fields keep the decimals). The top-left and the document the
+/// drag was made in are captured for [`run`]: OK creates the text only while that document is
+/// still the active one.
+pub fn open(app: &mut PhotocraftApp, at: [f64; 2], w: f64, h: f64) -> DialogId {
+    let captured = json!({
+        "at": [at[0], at[1]],
+        "document": app.session.active().map(|st| json!(st.doc.id)).unwrap_or(Value::Null),
     });
-}
-
-/// The field's current length, as the widget sees it (a length the dialog never held shows 0).
-fn px_or(f: &Map<String, Value>, key: &str) -> f32 {
-    px(f, key).map_or(0.0, |v| v as f32)
+    let fields = DialogFields::from_pairs([(WIDTH, FieldValue::Number(w)), (HEIGHT, FieldValue::Number(h))]);
+    params::open_param_unsaved(app, KEY, fields, captured, build(w, h))
 }
 
 /// OK: create the paragraph text the dialog sized, the same layer a plain drag of the same box
-/// would have made.
-pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
+/// would have made, and hand the keyboard to its editor as the drag's release does.
+pub fn run(app: &mut PhotocraftApp, ctx: &egui::Context, result: ParamResult) {
+    let captured = params::captured(app, &result.key);
     // The box was dragged in one document: never put the text into another one that became active since.
-    if f.get(DOCUMENT).and_then(Value::as_u64) != app.session.active().map(|st| st.doc.id.0) {
-        return Err("the document the box was dragged in is no longer the active one".into());
+    if captured.get("document") != app.session.active().map(|st| json!(st.doc.id)).as_ref() {
+        crate::dialogs::alerts::report_error(app, "the document the box was dragged in is no longer the active one");
+        return;
     }
-    let at = f.get(AT).and_then(Value::as_array);
+    let at = captured.get("at").and_then(Value::as_array);
     let (Some(x), Some(y)) = (at.as_ref().and_then(|a| a.first()).and_then(Value::as_f64), at.as_ref().and_then(|a| a.get(1)).and_then(Value::as_f64)) else {
-        return Err("the Paragraph Text Size dialog has no position".into());
+        crate::dialogs::alerts::report_error(app, "the Paragraph Text Size dialog has no position");
+        return;
     };
-    let (Some(w), Some(h)) = (px(f, "width"), px(f, "height")) else {
-        return Err("the Paragraph Text Size dialog has no size".into());
+    let (Some(w), Some(h)) = (result.fields.number(WIDTH), result.fields.number(HEIGHT)) else {
+        crate::dialogs::alerts::report_error(app, "the Paragraph Text Size dialog has no size");
+        return;
     };
     let mut p = crate::type_tool::create_params(app);
     p["box"] = json!([x, y, w, h]);
-    crate::type_tool::create_layer(app, p, None).map(|layer| json!({"layer": layer}))
+    // A refused create already said why in the status bar, as the gesture's own create does.
+    if crate::type_tool::create_layer(app, p, None).is_ok() {
+        crate::type_tool::focus_editor(ctx);
+    }
 }
 
 #[cfg(test)]

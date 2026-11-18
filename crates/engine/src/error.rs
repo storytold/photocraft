@@ -76,7 +76,7 @@ fn memory_limit_for(is_wasm32: bool, is_32_bit: bool) -> BuildMemoryLimit {
 /// The text after "hard limit": where the limit comes from and, where another build could open
 /// the file, where to get it. Its sentences stand apart so the action isn't lost in the cause.
 fn build_limit_scope(limit: BuildMemoryLimit) -> String {
-    let releases = crate::updates_cmds::RELEASES;
+    let releases = crate::build_info::RELEASES;
     match limit {
         BuildMemoryLimit::Measured => " on this machine".to_owned(),
         BuildMemoryLimit::Desktop32Bit => format!(
@@ -199,7 +199,7 @@ mod tests {
     #[test]
     fn hard_budget_scope_text_per_build() {
         assert_eq!(build_limit_scope(BuildMemoryLimit::Measured), " on this machine");
-        let releases = crate::updates_cmds::RELEASES;
+        let releases = crate::build_info::RELEASES;
         assert_eq!(
             build_limit_scope(BuildMemoryLimit::Desktop32Bit),
             format!(

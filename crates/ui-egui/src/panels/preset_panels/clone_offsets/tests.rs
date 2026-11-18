@@ -1,5 +1,5 @@
 use super::*;
-use crate::canvas::{Drag, ToolEvent, tool_event};
+use crate::canvas::testing::{self, ToolEvent, tool_event};
 use photocraft_engine::Session;
 
 /// Create two distinguishable source colours and an empty layer for real mouse strokes.
@@ -112,7 +112,9 @@ fn clone_offsets_share_transformed_sampling_geometry_during_a_stroke() {
         let mut app = app();
         app.ui.tool_options.clone_aligned = false;
         app.run("cloneSource.set", transform).unwrap();
-        app.drag = Some(Drag::new(Tool::CloneStamp, [40.0, 30.0], vec![[44.0, 32.0, 1.0]], egui::Modifiers::NONE, false));
+        // A stroke pressed at (40, 30), held at (44, 32).
+        testing::press(&mut app, [40.0, 30.0], egui::Modifiers::NONE);
+        testing::move_to(&mut app, [44.0, 32.0], egui::Modifiers::NONE);
         remember_clone_cursor(&mut app, [44.0, 32.0]);
         assert_eq!(clone_offset_readout(&app), Some([-24.0, -14.0]), "offsets describe the transform's origin, not a moving screen-space distance");
         let sample = clone_sample_point(&app, Some([44.0, 32.0])).unwrap();
@@ -120,6 +122,7 @@ fn clone_offsets_share_transformed_sampling_geometry_during_a_stroke() {
             assert!((got - want).abs() < 1e-8);
         }
         assert!(app.session.presets.clone.active().anchor.is_none());
+        testing::release(&mut app, [44.0, 32.0], egui::Modifiers::NONE);
     }
 }
 
@@ -143,17 +146,35 @@ fn clone_offset_cursor_is_transient_and_rejects_nonfinite_positions() {
 #[test]
 fn clone_offset_readout_is_in_document_pixels_at_different_canvas_zooms() {
     let mut app = app();
-    app.last_canvas_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
     for zoom in [1.0, 2.0, 4.0] {
         let view = app.ui.views.first_mut().unwrap();
         view.zoom = zoom;
         view.center = [32.0, 32.0];
-        view.fit_pending = false;
-        view.doc_size = [64, 64];
-        let screen = egui::pos2(400.0 + 8.0 * zoom, 300.0 - 2.0 * zoom);
-        let at = crate::canvas::doc_point_at(&app, screen).unwrap();
-        assert!((at[0] - 40.0).abs() < 1e-6 && (at[1] - 30.0).abs() < 1e-6);
-        remember_clone_cursor(&mut app, at);
+        view.clear_pending();
+        testing::frame(&mut app);
+        let screen = testing::to_screen(&app, [40.0, 30.0]);
+        let at = crate::canvas::document_display::doc_point_at(&app, screen).unwrap();
+        assert!((at.x - 40.0).abs() < 1e-6 && (at.y - 30.0).abs() < 1e-6);
+        remember_clone_cursor(&mut app, [at.x, at.y]);
         assert_eq!(clone_offset_readout(&app), Some([-24.0, -14.0]));
     }
+}
+
+/// The marker follows the engine's slot: its source alone, the press of the running stroke as the
+/// first anchor, then the slot's stored anchor.
+#[test]
+fn clone_marker_follows_the_engine_slot() {
+    let mut app = PhotocraftApp::new(Session::new(), Default::default());
+    app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+    app.sync_views();
+    assert_eq!(clone_sample_point(&app, Some([5.0, 5.0])), None);
+    app.run("cloneSource.set", json!({"source": [10, 10]})).unwrap();
+    assert_eq!(clone_sample_point(&app, Some([30.0, 30.0])), Some([10.0, 10.0]));
+    app.ui.tool = Tool::CloneStamp;
+    testing::frame(&mut app);
+    testing::press(&mut app, [40.0, 40.0], egui::Modifiers::NONE);
+    assert_eq!(clone_sample_point(&app, Some([50.0, 30.0])), Some([20.0, 0.0]));
+    testing::release(&mut app, [40.0, 40.0], egui::Modifiers::NONE);
+    app.session.presets.clone.active_mut().anchor = Some([20.0, 20.0]);
+    assert_eq!(clone_sample_point(&app, Some([30.0, 30.0])), Some([20.0, 20.0]));
 }

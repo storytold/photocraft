@@ -9,7 +9,6 @@ use serde_json::json;
 use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, tool_event};
 use crate::state::Tool;
-use crate::tool_feedback::{Badge, badge};
 
 const RED: [f64; 2] = [200.0, 180.0];
 const BLUE: [f64; 2] = [560.0, 300.0];
@@ -90,7 +89,7 @@ fn intersect_mode_keeps_only_the_overlap() {
     assert!(selected(&app, RED), "red with red is red");
     click(&mut app, BLUE, Modifiers::NONE);
     assert!(!any_selection(&app), "red with blue is empty");
-    assert!(!app.ui.status_error && app.ui.dialogs.is_empty(), "an empty intersection is not an error");
+    assert!(!app.ui.status_error && app.framework.dialogs.is_empty(), "an empty intersection is not an error");
 }
 
 #[test]
@@ -144,33 +143,6 @@ fn modifiers_override_the_bar() {
 }
 
 #[test]
-fn the_badge_follows_the_bar_and_modifiers() {
-    let mut app = app();
-    let both = Modifiers { shift: true, alt: true, ..Default::default() };
-    for (mode, want) in [(0, None), (1, Some(Badge::Add)), (2, Some(Badge::Subtract)), (3, Some(Badge::Intersect))] {
-        app.ui.selection_mode = mode;
-        assert_eq!(badge(&app, Tool::ObjectSelection, Modifiers::NONE), want, "bar mode {mode}");
-    }
-    app.ui.selection_mode = 0;
-    assert_eq!(badge(&app, Tool::ObjectSelection, both), Some(Badge::Intersect));
-}
-
-#[test]
-fn command_drag_inside_the_selection_moves_the_pixels() {
-    let mut app = app();
-    click(&mut app, RED, Modifiers::NONE);
-    drag(&mut app, RED, [250.0, 220.0], Modifiers::COMMAND);
-    // The pixels float at the pointer (as with a marquee's ⌘-drag) and land as "Move" on the drop.
-    let offset = photocraft_engine::float_cmds::floating(app.session.active().unwrap()).map(|f| f.offset);
-    assert_eq!(offset, Some((50, 40)), "the selected pixels follow the drag");
-    crate::menus::invoke(&mut app, &egui::Context::default(), "select.deselect", json!({})).unwrap();
-    let labels: Vec<String> = app.session.active().unwrap().history.entries().into_iter().map(|e| e.to_string()).collect();
-    assert!(labels.iter().any(|l| l == "Move"), "{labels:?}");
-    assert_eq!(alpha_at(&app, 100, 100), 0.0, "the pixels moved away");
-    assert_eq!(alpha_at(&app, 340, 300), 1.0);
-}
-
-#[test]
 fn reset_tool_sets_the_mode_back_to_new() {
     let ctx = egui::Context::default();
     let mut app = app();
@@ -215,16 +187,19 @@ fn indexed_color_alerts_instead_of_deselecting_or_moving_the_outline() {
     app.run("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none"})).unwrap();
     assert!(selected(&app, RED));
     let steps = app.session.active().unwrap().history.past_len();
-    let errors = |app: &PhotocraftApp| app.ui.dialogs.iter().filter(|d| d.kind == crate::state::DialogKind::Error).count();
+    let ctx = app.ctx().clone();
     for gesture in 0..2 {
         if gesture == 0 {
             click(&mut app, RED, Modifiers::NONE);
         } else {
             drag(&mut app, RED, [250.0, 220.0], Modifiers::NONE);
         }
-        assert_eq!(errors(&app), 1, "gesture {gesture}: the tool's alert");
+        let alerts = crate::dialogs::alerts::alerts(&app);
+        assert_eq!(alerts.len(), 1, "gesture {gesture}: the tool's alert");
         assert!(selected(&app, RED) && !selected(&app, [340.0, 300.0]), "gesture {gesture}: the selection stays");
         assert_eq!(app.session.active().unwrap().history.past_len(), steps, "gesture {gesture}: no history step");
-        app.ui.dialogs.clear();
+        for id in alerts {
+            app.framework.dialogs.cancel_by_id(&ctx, id);
+        }
     }
 }

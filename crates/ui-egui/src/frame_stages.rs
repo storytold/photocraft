@@ -333,7 +333,7 @@ mod app_tests {
     #[test]
     fn two_30_ms_passes_of_one_frame_are_one_60_ms_slow_frame() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        let ctx = egui::Context::default();
+        let ctx = app.ctx().clone();
         frame(&mut app, &ctx, 2, 30, false);
         let frames: Vec<_> = app.slow_frames.frames().cloned().collect();
         assert_eq!(frames.len(), 1, "{frames:?}");
@@ -347,7 +347,7 @@ mod app_tests {
     fn the_stroke_trace_gets_one_row_per_frame_not_per_pass() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.stroke_trace.output = crate::stroke_trace::Output::Stderr;
-        let ctx = egui::Context::default();
+        let ctx = app.ctx().clone();
         for _ in 0..3 {
             frame(&mut app, &ctx, 2, 1, true);
         }
@@ -362,7 +362,7 @@ mod app_tests {
     fn a_stroke_live_only_in_a_discarded_pass_still_gets_its_frame_traced() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.stroke_trace.output = crate::stroke_trace::Output::Stderr;
-        let ctx = egui::Context::default();
+        let ctx = app.ctx().clone();
         app.perf.stage.start(crate::gpu_canvas::now_ms(), 1);
         ctx.run_ui(egui::RawInput::default(), |ui| {
             let ctx = ui.ctx().clone();
@@ -390,7 +390,7 @@ mod app_tests {
         let layer = s.active().and_then(|d| d.active_layer).expect("the background").0;
         let mut harness = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_max_steps(4).build_eframe(move |cc| {
             PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-            PhotocraftApp::new(s, crate::Services::default())
+            PhotocraftApp::with_context(cc.egui_ctx.clone(), s, crate::Services::default())
         });
         harness.run_steps(6);
         // Every frame counts as slow, so the test doesn't depend on the machine's speed.
