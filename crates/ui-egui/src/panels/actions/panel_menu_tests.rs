@@ -16,7 +16,7 @@ use crate::PhotocraftApp;
 use crate::control::{ControlRequest, Reply, handle};
 
 /// A real dialog host over one selected action in a set.
-fn harness() -> Harness<'static, PhotocraftApp> {
+fn harness() -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(Session::new(), Default::default());
     app.background_jobs = false;
     app.run("file.new", json!({"width":16,"height":12})).unwrap();
@@ -42,7 +42,7 @@ fn control(app: &mut PhotocraftApp, ctx: &egui::Context, method: &str, params: V
 }
 
 /// Fire the panel menu row of `command` as a click on it would.
-fn fire(h: &mut Harness<'static, PhotocraftApp>, command: ActionsPanelCommands) -> Value {
+fn fire(h: &mut Harness<'static, Box<PhotocraftApp>>, command: ActionsPanelCommands) -> Value {
     let ctx = h.ctx.clone();
     let reply = control(h.state_mut(), &ctx, "ui.menu.invoke", json!({"id": CommandRef::from(command).id}));
     h.run_steps(3);
@@ -55,7 +55,7 @@ fn top_dialog(app: &PhotocraftApp) -> DialogId {
 }
 
 /// Fire the row of `command` and return the dialog it opened.
-fn open(h: &mut Harness<'static, PhotocraftApp>, command: ActionsPanelCommands) -> DialogId {
+fn open(h: &mut Harness<'static, Box<PhotocraftApp>>, command: ActionsPanelCommands) -> DialogId {
     fire(h, command);
     top_dialog(h.state())
 }
@@ -71,13 +71,13 @@ fn dialog_key(app: &PhotocraftApp, id: DialogId) -> Option<String> {
 }
 
 /// Sets one field of dialog `id` as an agent would.
-fn set_field(h: &mut Harness<'static, PhotocraftApp>, id: DialogId, field: &str, value: Value) -> Value {
+fn set_field(h: &mut Harness<'static, Box<PhotocraftApp>>, id: DialogId, field: &str, value: Value) -> Value {
     let ctx = h.ctx.clone();
     control(h.state_mut(), &ctx, "ui.dialog.set", json!({"dialog": id, "field": field, "value": value}))
 }
 
 /// Answers OK on dialog `id`; the error is the reason the dialog refused.
-fn confirm(h: &mut Harness<'static, PhotocraftApp>, id: DialogId) -> Result<(), String> {
+fn confirm(h: &mut Harness<'static, Box<PhotocraftApp>>, id: DialogId) -> Result<(), String> {
     let ctx = h.ctx.clone();
     let reply = control(h.state_mut(), &ctx, "ui.dialog.confirm", json!({"dialog": id}));
     h.run_steps(3);
@@ -85,7 +85,7 @@ fn confirm(h: &mut Harness<'static, PhotocraftApp>, id: DialogId) -> Result<(), 
 }
 
 /// Cancels dialog `id`.
-fn cancel(h: &mut Harness<'static, PhotocraftApp>, id: DialogId) {
+fn cancel(h: &mut Harness<'static, Box<PhotocraftApp>>, id: DialogId) {
     let ctx = h.ctx.clone();
     control(h.state_mut(), &ctx, "ui.dialog.cancel", json!({"dialog": id}));
     h.run_steps(3);

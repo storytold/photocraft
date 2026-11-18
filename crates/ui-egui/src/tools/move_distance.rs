@@ -122,7 +122,7 @@ mod tests {
 
     /// The `snap_ui` test document: a target box at (300..350, 200..260) and the selected mover
     /// at (40..90, 40..80) on a 400×300 canvas.
-    fn app_with_boxes() -> PhotocraftApp {
+    fn app_with_boxes() -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
         app.run("layer.new.layer", json!({"name": "target"})).unwrap();
