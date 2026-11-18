@@ -1,73 +1,112 @@
-//! #14422: Image › Adjustments › Color Lookup opens at its defaults every time.
+//! #14422: Image › Adjustments › Color Lookup opens at its defaults, not at the last LUT.
 //!
-//! A schema dialog normally reopens with what its last OK kept in the preferences
-//! (`filter_dialog::remember` → `filter_dialog::restore_remembered`). The reference application's
-//! Color Lookup does not: after an OK with a built-in look or a LUT file it opens again with no LUT
-//! chosen and Dither at its default. What stays as today is the prefill a recorded or scripted
-//! Action step carries, and every other dialog's own memory.
+//! A hosted parameter dialog remembers its rows: reopening starts from the values of the last OK
+//! (`crate::dialogs::params::open_param` remembers under `memory_scope`). Color Lookup's LUT rows
+//! are exempt: the picker is a `Param::custom` row and its keys (`lut`, `file`, `data`, `fileName`)
+//! are never kept, so an OK with a built-in look or a LUT file leaves the next opening at "no LUT",
+//! as the reference application does. Dither and Interpolation are remembered like any schema
+//! dialog's rows. A recorded or scripted step still opens on its own values
+//! (`panels/actions/runner.rs`, pinned by its own tests).
 
-use serde_json::{Map, Value, json};
+use craft::ui::dialog::DialogId;
+use craft::ui::patterns::form_dialogs::{DialogFields, HostedParamDialog};
+use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
-use crate::dialogs::filter_dialog::{open, remember, reset_fields};
+use crate::dialogs::filter_dialog::open;
 
 const COLOR_LOOKUP: &str = "image.adjustments.colorLookup";
+const GAUSSIAN_BLUR: &str = "filter.blur.gaussianBlur";
 
-/// The fields Color Lookup opens with: no 3D LUT (`lut` = none, no `file`), Dither off (the
-/// schema default; #14419 is the item that changes it) and trilinear interpolation.
-fn assert_defaults(fields: &Map<String, Value>, opened: &str) {
-    assert_eq!(fields["lut"], json!("none"), "{opened}: lut");
-    assert_eq!(fields["file"], json!(""), "{opened}: file");
-    assert_eq!(fields["dither"], json!(false), "{opened}: dither");
-    assert_eq!(fields["interpolation"], json!("trilinear"), "{opened}: interpolation");
+fn new_app() -> PhotocraftApp {
+    PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default())
 }
 
-/// An 8×8 RGB document, so `image.adjustments.colorLookup` has something to adjust.
+/// An 8x8 RGB document, so `image.adjustments.colorLookup` has something to adjust.
 fn app_with_doc() -> PhotocraftApp {
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let mut app = new_app();
     app.run("file.new", json!({"width": 8, "height": 8, "background": "#000000"})).unwrap();
     app
 }
 
-/// Set the dialog's fields and confirm it, as clicking OK does.
-fn ok_with(app: &mut PhotocraftApp, id: u64, changed: Value) {
-    let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
-    fields.extend(changed.as_object().unwrap().clone());
-    app.ui.dialog_mut(id).unwrap().fields = fields;
-    crate::dialogs::confirm(app, id).unwrap();
+fn fields_of(app: &PhotocraftApp, id: DialogId) -> DialogFields {
+    app.framework.dialogs.get_by_id::<HostedParamDialog>(id).expect("open dialog").fields().clone()
 }
 
-/// Play a one-step action whose step shows its dialog, and return that dialog's id.
-fn step_dialog(app: &mut PhotocraftApp, params: Value) -> u64 {
-    use photocraft_engine::actions_cmds::Action;
-    let mut action = Action::new("Color lookup step", vec![(COLOR_LOOKUP.into(), params)]);
-    action.dialogs.insert(0);
-    app.session.actions.list.push(action);
-    let played = crate::panels::actions::play(app, &json!({"action": "Color lookup step"})).unwrap();
-    played["paused"]["dialog"].as_u64().expect("the toggled step opens its dialog")
+fn field_json(app: &PhotocraftApp, id: DialogId, key: &str) -> Value {
+    serde_json::to_value(fields_of(app, id)).expect("fields serialize").get(key).cloned().unwrap_or(Value::Null)
+}
+
+fn set(app: &mut PhotocraftApp, id: DialogId, key: &str, value: Value) {
+    let ctx = app.ctx().clone();
+    app.framework.dialogs.set_json_field(&ctx, id, key, value).unwrap_or_else(|e| panic!("{key}: {e}"));
+}
+
+fn passes(app: &mut PhotocraftApp, n: usize) {
+    let ctx = app.ctx().clone();
+    for _ in 0..n {
+        crate::testing::run_ui(&ctx, Default::default(), |ui| crate::dialogs::run(app, ui));
+    }
+}
+
+fn is_open(app: &PhotocraftApp, id: DialogId) -> bool {
+    app.framework.dialogs.get_by_id::<HostedParamDialog>(id).is_some()
+}
+
+/// OK, then the passes in which the family runs. True when the dialog closed.
+fn ok(app: &mut PhotocraftApp, id: DialogId) -> bool {
+    let ctx = app.ctx().clone();
+    let _ = crate::dialogs::confirm(app, &ctx, id);
+    passes(app, 3);
+    !is_open(app, id)
+}
+
+/// The keys that carry a LUT: each opens at its default (no value, or the spec's empty/`none`
+/// default) - never at the look or file of a past OK (#14422).
+fn assert_no_lut(app: &PhotocraftApp, id: DialogId, opened: &str) {
+    for (key, defaults) in [("lut", vec![json!("none")]), ("file", vec![json!("")]), ("data", vec![json!("")]), ("fileName", vec![json!("")])] {
+        let value = field_json(app, id, key);
+        assert!(value.is_null() || defaults.contains(&value), "{opened}: {key} holds {value}");
+    }
+}
+
+/// The first opening shows no LUT and the schema defaults for the other rows.
+#[test]
+fn color_lookup_opens_with_no_lut_and_its_defaults() {
+    let mut app = app_with_doc();
+    let id = open(&mut app, COLOR_LOOKUP).unwrap();
+    assert_no_lut(&app, id, "the first opening");
+    assert_eq!(field_json(&app, id, "dither"), json!(false), "the first opening: dither");
+    assert_eq!(field_json(&app, id, "interpolation"), json!("trilinear"), "the first opening: interpolation");
+    cancel(&mut app, id);
+}
+
+fn cancel(app: &mut PhotocraftApp, id: DialogId) {
+    let ctx = app.ctx().clone();
+    app.framework.dialogs.cancel_by_id(&ctx, id);
+    passes(app, 2);
 }
 
 /// The measured case: OK with a built-in look, and the next opening shows no LUT again instead of
-/// that look. Dither and Interpolation are not the LUT and keep today's behaviour: they come back
-/// as they were OK'd, and the preferences keep no LUT choice.
+/// that look. Dither and Interpolation are not the LUT and keep the remembering behaviour: they
+/// come back as they were OK'd.
 #[test]
 fn color_lookup_ok_with_a_builtin_look_reopens_with_no_lut() {
     let mut app = app_with_doc();
     let id = open(&mut app, COLOR_LOOKUP).unwrap();
-    assert_defaults(&app.ui.dialog_mut(id).unwrap().fields, "the first opening");
-    ok_with(&mut app, id, json!({"lut": "warm", "dither": true, "interpolation": "tetrahedral"}));
+    set(&mut app, id, "lut", json!("warm"));
+    set(&mut app, id, "dither", json!(true));
+    set(&mut app, id, "interpolation", json!("tetrahedral"));
+    assert!(ok(&mut app, id), "OK with the built-in look warm closes the dialog");
 
     let id = open(&mut app, COLOR_LOOKUP).unwrap();
-    let fields = &app.ui.dialog_mut(id).unwrap().fields;
-    assert_eq!(fields["lut"], json!("none"), "after OK with the built-in look warm: lut");
-    assert_eq!(fields["file"], json!(""), "after OK with the built-in look warm: file");
-    assert_eq!(fields["dither"], json!(true), "Dither keeps its remembered value");
-    assert_eq!(fields["interpolation"], json!("tetrahedral"), "Interpolation keeps its remembered value");
-    let saved = app.session.prefs().dialogs.get(COLOR_LOOKUP).and_then(Value::as_object).cloned().unwrap_or_default();
-    assert!(!saved.contains_key("lut") && !saved.contains_key("file"), "no LUT choice is kept: {saved:?}");
+    assert_no_lut(&app, id, "after OK with the built-in look warm");
+    assert_eq!(field_json(&app, id, "dither"), json!(true), "Dither keeps its remembered value");
+    assert_eq!(field_json(&app, id, "interpolation"), json!("tetrahedral"), "Interpolation keeps its remembered value");
+    assert!(!app.session.prefs().dialogs.contains_key(COLOR_LOOKUP), "the LUT memory no longer lives in the preferences");
 }
 
-/// The other measured opening: a LUT file loaded and OK'd. The next opening shows no file and no
+/// The other measured opening: a LUT file picked and OK'd. The next opening shows no file and no
 /// built-in look.
 #[test]
 fn color_lookup_ok_with_a_lut_file_reopens_at_the_defaults() {
@@ -76,84 +115,41 @@ fn color_lookup_ok_with_a_lut_file_reopens_at_the_defaults() {
     std::fs::write(&path, "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n").unwrap();
     let mut app = app_with_doc();
     let id = open(&mut app, COLOR_LOOKUP).unwrap();
-    ok_with(&mut app, id, json!({"file": path.to_str().unwrap()}));
+    set(&mut app, id, "file", json!(path.to_str().unwrap()));
+    assert!(ok(&mut app, id), "OK with the LUT file closes the dialog");
 
     let id = open(&mut app, COLOR_LOOKUP).unwrap();
-    assert_defaults(&app.ui.dialog_mut(id).unwrap().fields, "after OK with a LUT file");
-    assert!(app.ui.dialog_mut(id).unwrap().fields.get("__folderLut").is_none(), "the LUT folder pick is not kept either");
+    assert_no_lut(&app, id, "after OK with a LUT file");
 }
 
-/// A scripted step with no values of its own and its dialog shown opens at the defaults, even
-/// after a menu OK had chosen a look.
+/// Preferences written before the framework memory exist (#14422 held a saved LUT choice): the
+/// one-time move takes the entry out of `Preferences.dialogs`, and the dialog still opens at its
+/// defaults - a legacy saved look never comes back.
 #[test]
-fn color_lookup_step_dialog_without_recorded_values_opens_at_the_defaults() {
+fn color_lookup_legacy_saved_preferences_never_restore_a_lut() {
     let mut app = app_with_doc();
-    let id = open(&mut app, COLOR_LOOKUP).unwrap();
-    ok_with(&mut app, id, json!({"lut": "cool"}));
-
-    let id = step_dialog(&mut app, json!({}));
-    assert_defaults(&app.ui.dialog_mut(id).unwrap().fields, "the scripted step with no values");
-}
-
-/// The prefill a step carries is not the remembered-dialog mechanism: a recorded look still shows
-/// up in its dialog.
-#[test]
-fn color_lookup_step_dialog_still_prefills_its_recorded_values() {
-    let mut app = app_with_doc();
-    let id = step_dialog(&mut app, json!({"lut": "dayForNight", "dither": true, "interpolation": "tetrahedral"}));
-    let fields = &app.ui.dialog_mut(id).unwrap().fields;
-    assert_eq!(
-        (&fields["lut"], &fields["dither"], &fields["interpolation"]),
-        (&json!("dayForNight"), &json!(true), &json!("tetrahedral")),
-        "the step's own values still prefill"
-    );
-}
-
-/// Alt+Cancel (Reset) returns the changed fields to the defaults, and that OK keeps nothing for
-/// the opening after it.
-#[test]
-fn color_lookup_alt_reset_returns_to_the_defaults() {
-    let mut app = app_with_doc();
-    let id = open(&mut app, COLOR_LOOKUP).unwrap();
-    let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
-    fields.insert("lut".into(), json!("dayForNight"));
-    fields.insert("file".into(), json!("night.cube"));
-    fields.insert("dither".into(), json!(true));
-    fields.insert("interpolation".into(), json!("tetrahedral"));
-    reset_fields(&app, &mut fields);
-    assert_defaults(&fields, "Alt+Cancel (Reset)");
-    assert!(fields.contains_key("__lutFolder"), "the dialog's own chrome stays");
-    app.ui.dialog_mut(id).unwrap().fields = fields;
-    crate::dialogs::confirm(&mut app, id).unwrap();
+    app.session.edit_prefs(|prefs| {
+        prefs.dialogs.insert(COLOR_LOOKUP.into(), json!({"lut": "warm", "file": "old.cube", "dither": true, "interpolation": "tetrahedral"}))
+    });
+    app.framework.move_memories(&mut app.session);
+    assert!(!app.session.prefs().dialogs.contains_key(COLOR_LOOKUP), "the entry was moved out of the preferences");
 
     let id = open(&mut app, COLOR_LOOKUP).unwrap();
-    assert_defaults(&app.ui.dialog_mut(id).unwrap().fields, "the opening after the Reset OK");
+    assert_no_lut(&app, id, "with a legacy saved look in the preferences");
+    // The move routes `image.adjustments.*` entries to the adjustment panel's memory, not the
+    // dialog's scope, so the other rows start at their defaults as well on this first opening.
+    assert_eq!(field_json(&app, id, "dither"), json!(false), "a legacy saved Dither does not reach the dialog");
+    assert_eq!(field_json(&app, id, "interpolation"), json!("trilinear"), "a legacy saved Interpolation does not reach the dialog");
 }
 
-/// Only Color Lookup stopped remembering: another schema dialog still reopens with what its OK
-/// kept.
+/// Only the LUT row stopped being remembered: another schema dialog still reopens with what its OK
+/// kept (#14422 must not reach past Color Lookup).
 #[test]
 fn other_schema_dialogs_still_remember_their_choices() {
     let mut app = app_with_doc();
-    let mut fields = Map::new();
-    fields.insert("__filter".into(), json!(true));
-    fields.insert("radius".into(), json!(11.0));
-    remember(&mut app, "filter.blur.gaussianBlur", &fields);
-    let id = open(&mut app, "filter.blur.gaussianBlur").unwrap();
-    assert_eq!(app.ui.dialog_mut(id).unwrap().fields["radius"], json!(11.0), "the blur dialog still remembers");
-}
-/// Preferences written before this change can hold a saved LUT choice. The restore filter rejects
-/// it while the other saved fields still come back.
-#[test]
-fn color_lookup_legacy_saved_preferences_restore_everything_but_the_lut() {
-    let mut app = app_with_doc();
-    app.session
-        .prefs
-        .edit(|prefs| prefs.dialogs.insert(COLOR_LOOKUP.into(), json!({"lut": "warm", "file": "old.cube", "dither": true, "interpolation": "tetrahedral"})));
-    let id = open(&mut app, COLOR_LOOKUP).unwrap();
-    let fields = &app.ui.dialog_mut(id).unwrap().fields;
-    assert_eq!(fields["lut"], json!("none"), "a legacy saved look is not restored");
-    assert_eq!(fields["file"], json!(""), "a legacy saved LUT file is not restored");
-    assert_eq!(fields["dither"], json!(true), "a legacy saved Dither still is");
-    assert_eq!(fields["interpolation"], json!("tetrahedral"), "a legacy saved Interpolation still is");
+    let id = open(&mut app, GAUSSIAN_BLUR).unwrap();
+    set(&mut app, id, "radius", json!(11.0));
+    assert!(ok(&mut app, id), "OK on Gaussian Blur closes the dialog");
+    let id = open(&mut app, GAUSSIAN_BLUR).unwrap();
+    assert_eq!(field_json(&app, id, "radius"), json!(11.0), "the blur dialog still remembers");
 }

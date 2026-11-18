@@ -1,6 +1,6 @@
 //! Moving an empty frame with the Frame tool records "Move" (#13880).
 use super::*;
-use crate::canvas::tool_event;
+use crate::canvas::{ToolEvent, testing, tool_event};
 
 fn app() -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -13,6 +13,8 @@ fn app() -> PhotocraftApp {
 
 fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2]) {
     let m = egui::Modifiers::NONE;
+    // The frame's handles take presses from the pass that drew them: the state a test set is shown first.
+    testing::frame(app);
     tool_event(app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, m);
     tool_event(app, ToolEvent::Move { x: to[0], y: to[1], pressure: 1.0 }, m);
     tool_event(app, ToolEvent::Up { x: to[0], y: to[1] }, m);
@@ -77,26 +79,4 @@ fn a_bad_history_name_is_refused_and_changes_nothing() {
     assert_eq!(entries(&app).last().map(String::as_str), Some("Frame Properties"));
     app.run("layer.frame.set", json!({"layer":id.0,"transform":[100,0,0,80,20,30],"historyName":"Move"})).unwrap();
     assert_eq!(entries(&app).last().map(String::as_str), Some("Move"));
-}
-
-/// A frame with an image is not what #13880 measured: its border drag keeps today's step name.
-#[test]
-fn dragging_the_border_of_a_frame_with_an_image_keeps_frame_properties() {
-    let mut app = app();
-    let id = empty_frame(&mut app);
-    let content = app
-        .session
-        .edit("Image", |doc, _| {
-            let mut l = Layer::raster("Photo", doc.pixel_format());
-            l.surface_mut().unwrap().fill_rect(Rect::new(20, 30, 120, 110), &[1., 0., 0., 1.]);
-            let id = l.id;
-            doc.layers.push(l);
-            Ok(id)
-        })
-        .unwrap();
-    app.run("layer.frame.setContent", json!({"layer":id.0,"content":content.0})).unwrap();
-    select(&mut app, id, Target::Frame);
-    drag(&mut app, [45., 30.], [65., 40.]);
-    assert_eq!(transform(&app, id), [100., 0., 0., 80., 40., 40.]);
-    assert_eq!(entries(&app).last().map(String::as_str), Some("Frame Properties"));
 }

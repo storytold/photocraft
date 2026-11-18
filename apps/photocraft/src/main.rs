@@ -17,7 +17,7 @@
 //! crashes inside the driver also falls back by itself next time (see `gpu_startup`).
 //!
 //! `--in-window-menus` (or `PHOTOCRAFT_IN_WINDOW_MENUS=1`) keeps the menus inside the window on
-//! macOS instead of the macOS menu bar (`mac_menu`).
+//! macOS instead of the macOS menu bar (`photocraft_ui_egui::native_menu`).
 //!
 //! `--control <port>` (or `PHOTOCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control server.
 //! The first line must authenticate; subsequent request lines get reply lines.
@@ -29,24 +29,15 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-mod agent_link;
 mod app_dirs;
 mod app_icon;
-mod appearance;
 #[cfg(target_os = "macos")]
 mod apple_events;
 mod caps_lock;
-mod caption_style;
-mod control_server;
 mod crash_guard;
 mod cursor;
-mod file_dialog_probe;
 mod gpu_startup;
-#[cfg(target_os = "linux")]
-mod icon_theme;
 mod launch_args;
-#[cfg(target_os = "macos")]
-mod mac_menu;
 #[cfg(target_os = "macos")]
 mod mac_window;
 // Pure logic is tested on every platform; only Linux runs the check.
@@ -57,14 +48,10 @@ mod linux_libs;
 mod logging;
 mod monitor_profile;
 mod photoshop_settings;
-// Save As through the desktop portal, which reports the file type picked (#6121).
-#[cfg(target_os = "linux")]
-mod portal_save;
 mod presentation;
 // The print portal needs the session bus (zbus, Linux only); its pure helpers are tested everywhere.
 #[cfg(any(target_os = "linux", test))]
 mod print_portal;
-mod screen_color;
 mod services;
 // macOS gets one instance from LaunchServices (open-documents Apple events).
 #[cfg(any(not(target_os = "macos"), test))]
@@ -73,44 +60,23 @@ mod startup_report;
 // Tablet support (macOS AppKit monitor, Linux X11/Wayland, Windows barrel button).
 mod tablet;
 mod ui_state;
-mod updates;
 mod window_frame;
 
 use photocraft_engine::Session;
 use photocraft_ui_egui::PhotocraftApp;
+use photocraft_ui_egui::Prefix;
+use photocraft_ui_egui::window_policy::{self, Backend, Frame, TitleBarPref};
 
 use photocraft_ui_egui::os_window::APP_ID;
 
-/// Windows and Linux can use the app's title bar, with its own caption buttons and edge resizing
-/// (`photocraft_ui_egui::titlebar`); the preference below selects the mode. macOS always keeps its
-/// system traffic lights over the integrated title strip.
-const CUSTOM_TITLEBAR: bool = !cfg!(target_os = "macos");
+/// The smallest the main window may be, in points.
+const MIN_WINDOW_SIZE: [f32; 2] = [760.0, 480.0];
 
-/// Whether this start draws its own title bar: Windows and Linux do, unless Preferences ›
-/// Interface › System Title Bar asks for the system's (#1271, #1316). Read from the saved
-/// preferences before the window opens; a missing or unreadable file keeps the default.
-fn custom_titlebar(prefs_file: Option<&std::path::Path>) -> bool {
-    let prefs: photocraft_engine::prefs::Preferences =
-        prefs_file.and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
-    CUSTOM_TITLEBAR && !prefs.interface.system_title_bar
-}
-
-/// Preferences › AI Integrations, read before the window opens the way [`custom_titlebar`] is:
-/// whether agents may drive this launch at all, the port to listen on when no `--control`
-/// was given (0 = only with `--control`) and the automation folders used when no
-/// `--automation-read-root` / `--automation-write-root` was given. A missing or unreadable file
-/// keeps the defaults.
-///
-/// The section is read on its own, and when it doesn't read as a whole each value on its own,
-/// as the app's lenient load reads them (#6611): a wrong-typed value elsewhere in the file, or
-/// in the other field, must not turn Allow Agent Control back on while the dialog shows it off.
-fn integrations(prefs_file: Option<&std::path::Path>) -> photocraft_engine::prefs::Integrations {
-    let file: Option<serde_json::Value> = prefs_file.and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str(&t).ok());
-    file.as_ref()
-        .and_then(|v| v.get("integrations"))
-        .cloned()
-        .map(photocraft_engine::prefs::read_integrations_section)
-        .unwrap_or_else(|| photocraft_engine::prefs::Preferences::default().integrations)
+/// Which title bar Preferences › Interface › System Title Bar asks for (#1271, #1316), from the
+/// preferences read before the window opens (`services::saved_prefs`). The frame decision
+/// (`window_policy::decide_for`) turns it into the frame the platform allows.
+fn title_bar_pref(prefs: &photocraft_engine::prefs::Preferences) -> TitleBarPref {
+    if prefs.interface.system_title_bar { TitleBarPref::System } else { TitleBarPref::Integrated }
 }
 
 /// The automation roots: `--automation-read-root` / `--automation-write-root` (or their
@@ -123,14 +89,13 @@ fn integrations(prefs_file: Option<&std::path::Path>) -> photocraft_engine::pref
 /// and writing shares one capability, as it does when given by flags.
 fn automation_workspace(
     flags: &photocraft_automation::args::AutomationArgs,
-    prefs: &photocraft_engine::prefs::Integrations,
+    prefs: &craft::automation::agents::AgentSettings,
 ) -> Result<(photocraft_automation::workspace::AuthorizedWorkspace, Option<String>), photocraft_automation::AutomationError> {
-    use photocraft_automation::agent_link::folder;
     let mut workspace = flags.workspace()?;
     let mut warnings = Vec::new();
     for read in [true, false] {
         let given = if read { !flags.automation_read_root.is_empty() } else { flags.automation_write_root.is_some() };
-        let Some(root) = folder(if read { &prefs.read_root } else { &prefs.write_root }).filter(|_| !given) else {
+        let Some(root) = (if read { prefs.read_folder() } else { prefs.write_folder() }).filter(|_| !given) else {
             continue;
         };
         let opened = if !root.is_absolute() {
@@ -152,11 +117,11 @@ fn automation_workspace(
 }
 
 /// The control port this launch listens on, and the warning to print when a request was refused.
-/// Only `--control` (or `PHOTOCRAFT_CONTROL_PORT`) opens one at launch: Preferences › AI
-/// Integrations' connection starts and stops while the app runs (`agent_link`). Allow Agent
-/// Control off refuses the flag too, and says so rather than ignoring it silently.
+/// Only `--control` (or `PHOTOCRAFT_CONTROL_PORT`) opens one at launch: the agent link starts and
+/// stops its own while the app runs (`craft::automation::agents::AgentLink`). Allow Agent Control
+/// off refuses the flag too, and says so rather than ignoring it silently.
 fn control_port_for(cli: Option<u16>, prefs: &photocraft_engine::prefs::Integrations) -> (Option<u16>, Option<String>) {
-    if !prefs.allow_agent_control {
+    if !prefs.agents.allow_agent_control {
         let warning = cli.map(|p| {
             format!(
                 "photocraft: Preferences › AI Integrations › Allow Agent Control is off: not listening on port {p}
@@ -173,19 +138,12 @@ fn control_port_for(cli: Option<u16>, prefs: &photocraft_engine::prefs::Integrat
 /// `centered`, Windows cascades each new window from the top-left corner, so it opened at a
 /// different offset every launch (#419). A later launch restores the saved position instead
 /// (`main` turns `centered` off, #4826). Wayland compositors place windows themselves.
-fn native_options(custom_titlebar: bool) -> eframe::NativeOptions {
+fn native_options(frame: &Frame) -> eframe::NativeOptions {
     let viewport = egui::ViewportBuilder::default().with_icon(app_icon::viewport_icon(std::env::current_exe().ok().as_deref()));
+    let viewport =
+        viewport.with_app_id(APP_ID).with_title("PhotoCraft").with_inner_size([1440.0, 900.0]).with_min_inner_size(MIN_WINDOW_SIZE).with_drag_and_drop(true);
     eframe::NativeOptions {
-        viewport: viewport
-            .with_app_id(APP_ID)
-            .with_title("PhotoCraft")
-            .with_inner_size([1440.0, 900.0])
-            .with_min_inner_size(photocraft_ui_egui::MIN_WINDOW_SIZE)
-            .with_drag_and_drop(true)
-            .with_decorations(!custom_titlebar)
-            .with_fullsize_content_view(true)
-            .with_titlebar_shown(false)
-            .with_title_shown(false),
+        viewport: window_policy::apply(viewport, frame),
         centered: true,
         // PhotoCraft owns its fallback fonts (`cjk_fonts`, craft-fonts): eframe's system-font
         // provider would compete with it and make glyph choice machine-dependent (#8512).
@@ -201,8 +159,8 @@ fn native_options(custom_titlebar: bool) -> eframe::NativeOptions {
 /// The window eframe restores from `ui.ron`, corrected before it is created: at least the
 /// minimum size, and never full screen. PhotoCraft always starts in Standard Screen Mode, but
 /// eframe also saves and restores full screen, and a window closed in a full-screen mode is
-/// saved full screen and maximized at once: the overlap `view_cmds::screen_mode_commands` keeps
-/// apart at run time. [OBSERVED 2026-10-12, Windows 11] Restored that way, View › Screen Mode ›
+/// saved full screen and maximized at once: the overlap the window's screen-mode sequence
+/// (`AppShell`'s `ScreenModeFollow`) keeps apart at run time. [OBSERVED 2026-10-12, Windows 11] Restored that way, View › Screen Mode ›
 /// Full Screen did nothing until `F` had cycled through Standard.
 fn restored_window(builder: egui::ViewportBuilder) -> egui::ViewportBuilder {
     at_least_min_size(builder).with_fullscreen(false)
@@ -285,13 +243,13 @@ fn claim_single_instance(
 /// The display server to open the window on: Xwayland for a pen on Wayland, which gives this app
 /// no pen input (#639). Exits with the package to install when its libraries are missing.
 #[cfg(target_os = "linux")]
-fn linux_display_session() -> linux_libs::DisplaySession {
+fn linux_display_session(display_server: photocraft_engine::prefs::LinuxDisplayServer) -> linux_libs::DisplaySession {
     let session = tablet::display_session();
     // Preferences › Performance › Linux display server = X11: Xwayland on a Wayland session too,
     // where native file drops work (winit 0.30 has none on Wayland, #386). Only when Xwayland can
     // run the window ($DISPLAY set, X11 libraries installed); otherwise the session's own.
     let session = if session == linux_libs::DisplaySession::Wayland
-        && gpu_startup::read_display_server(services::prefs_file().as_deref()) == photocraft_engine::prefs::LinuxDisplayServer::X11
+        && display_server == photocraft_engine::prefs::LinuxDisplayServer::X11
         && std::env::var_os("DISPLAY").is_some_and(|d| !d.is_empty())
         && linux_libs::available(linux_libs::DisplaySession::X11)
     {
@@ -326,14 +284,16 @@ struct ControlNotice {
 }
 
 /// The `--control` server's port, token and workspace, when it is on (exits 2 on a bad
-/// configuration). Preferences › AI Integrations' folders stand in for automation roots no flag
-/// names. The server the agents switch starts is `agent_link`'s, not this.
+/// configuration). Preferences › AI Integrations (`prefs`, read before the window opens) decide
+/// whether agents may drive this launch, and its folders stand in for automation roots no flag
+/// names. The server the agents switch starts is the agent link's, not this.
 fn control_setup(
+    prefs: &photocraft_engine::prefs::Integrations,
     cli_port: Option<u16>,
     auth: photocraft_automation::args::ControlArgs,
     automation: &photocraft_automation::args::AutomationArgs,
 ) -> ControlSetup {
-    control_setup_in(services::config_dir(), &integrations(services::prefs_file().as_deref()), cli_port, auth, automation)
+    control_setup_in(services::config_dir(), prefs, cli_port, auth, automation)
 }
 
 /// [`control_setup`] with the settings folder and Preferences › AI Integrations given.
@@ -344,7 +304,6 @@ fn control_setup_in(
     auth: photocraft_automation::args::ControlArgs,
     automation: &photocraft_automation::args::AutomationArgs,
 ) -> ControlSetup {
-    use photocraft_automation::agent_link;
     let (port, warning) = control_port_for(cli_port, prefs);
     if let Some(warning) = &warning {
         eprint!("{warning}");
@@ -352,7 +311,7 @@ fn control_setup_in(
     // A file a crashed (or, on macOS, quit) launch left behind names a port nothing serves. Before
     // binding, so this launch's own listener doesn't keep it.
     if let Some(dir) = &settings {
-        agent_link::remove_stale_connection(dir);
+        craft::automation::agents::remove_stale_connection(dir);
     }
     let Some(port) = port else {
         return ControlSetup { control: None, warning: None };
@@ -379,7 +338,7 @@ fn control_setup_in(
     } else {
         eprintln!("photocraft: using supplied control token");
     }
-    let (workspace, warning) = match automation_workspace(automation, prefs) {
+    let (workspace, warning) = match automation_workspace(automation, &prefs.agents) {
         Ok(workspace) => workspace,
         Err(error) => {
             eprintln!("photocraft: cannot configure automation workspace: {error}");
@@ -448,8 +407,12 @@ fn main() -> eframe::Result {
 
     attach_log_file(logger);
 
+    // The saved preferences the launch needs before the window opens, read once without opening
+    // the settings store (the app opens it later).
+    let saved = services::saved_prefs();
+    let prefs = &saved.prefs;
     // An adapter named in the environment is chosen at startup, which a forwarded launch never reaches.
-    let rendering_mode = gpu_startup::read_rendering_prefs(services::prefs_file().as_deref()).1;
+    let rendering_mode = gpu_startup::rendering_prefs(&prefs.performance).1;
     if gpu_startup::adapter_override_is_process_specific(std::env::var("PHOTOCRAFT_GPU_ADAPTER").ok().as_deref(), rendering_mode, gpu_startup::ADAPTER_CHOICE) {
         launch_options.push(launch_args::PerProcess::GpuAdapterEnv);
     }
@@ -467,12 +430,12 @@ fn main() -> eframe::Result {
     let _ = (new_instance, &launch_options);
 
     // Bind and authenticate the authorized control listener before display/GPU initialization.
-    let ControlSetup { control, warning: control_warning } = control_setup(control_port, auth, &automation);
+    let ControlSetup { control, warning: control_warning } = control_setup(&prefs.integrations, control_port, auth, &automation);
 
     #[cfg(target_os = "linux")]
     let native_session = linux_libs::session_from_env(|name| std::env::var(name).ok());
     #[cfg(target_os = "linux")]
-    let session = linux_display_session();
+    let session = linux_display_session(prefs.performance.linux_display_server);
 
     // Finder / Dock / Open With deliver files as Apple events, not arguments; catch the one that
     // launched us as well as later ones. Lives until the event loop returns.
@@ -501,8 +464,11 @@ fn main() -> eframe::Result {
     let monitor = monitor_profile::detect_async();
     // Brush presets load in the background; the app attaches them when they arrive.
     let presets = services::presets_dir().map(photocraft_engine::preset_store::open_dir_async);
-    let custom_titlebar = custom_titlebar(services::prefs_file().as_deref());
-    let mut options = native_options(custom_titlebar);
+    // Who draws the window frame, decided once: the viewport below and the runtime's root frame both follow it.
+    // `PHOTOCRAFT_TITLEBAR`, `PHOTOCRAFT_CAPTION_STYLE` and `PHOTOCRAFT_CAPTION_LAYOUT` are read by the decision.
+    let decision = window_policy::decide_for(Prefix::new("PHOTOCRAFT"), Backend::from_env(), title_bar_pref(prefs));
+    let integrated_frame = matches!(decision.frame, Frame::Integrated(_));
+    let mut options = native_options(&decision.frame);
     // winit picks Wayland whenever `WAYLAND_DISPLAY` is set; open on X11 when that was chosen.
     #[cfg(target_os = "linux")]
     if session == linux_libs::DisplaySession::X11 {
@@ -520,7 +486,7 @@ fn main() -> eframe::Result {
     // driver moves to a safer one), and lock this start's marker until the first frames render.
     let t_sentinel = std::time::Instant::now();
     let os = gpu_startup::Os::current();
-    let (pref, mode) = gpu_startup::read_rendering_prefs(services::prefs_file().as_deref());
+    let (pref, mode) = gpu_startup::rendering_prefs(&prefs.performance);
     let (previous, sentinel) = match services::config_dir() {
         Some(dir) => gpu_startup::Sentinel::begin(&dir),
         None => (gpu_startup::Previous::Clean, None),
@@ -534,12 +500,11 @@ fn main() -> eframe::Result {
     write_start_marker(&sentinel, &plan);
     let gpu_note: std::sync::Arc<std::sync::Mutex<Option<String>>> = Default::default();
     // The adapter's real texture limits (egui asks for 8192 px), so big documents stay on the GPU.
-    let wanted_adapter =
-        gpu_startup::wanted_adapter(std::env::var("PHOTOCRAFT_GPU_ADAPTER").ok().as_deref(), &gpu_startup::read_gpu_adapter(services::prefs_file().as_deref()));
+    let wanted_adapter = gpu_startup::wanted_adapter(std::env::var("PHOTOCRAFT_GPU_ADAPTER").ok().as_deref(), &gpu_startup::gpu_adapter(&prefs.performance));
     gpu_startup::configure(&mut options.wgpu_options.wgpu_setup, &plan, os, wanted_adapter, sentinel.clone(), gpu_note.clone());
     // Preferences › Performance › Low-Latency Drawing (#1343): without vsync a stroke shows about
     // 50 ms sooner; wgpu picks Immediate, else Mailbox, else Fifo by what the driver offers.
-    if gpu_startup::read_low_latency(services::prefs_file().as_deref()) {
+    if prefs.performance.low_latency_drawing {
         options.wgpu_options.surface.present_mode = eframe::wgpu::PresentMode::AutoNoVsync;
     }
     // Testers' present mode and frame latency overrides (#1343), after the preference.
@@ -569,14 +534,17 @@ fn main() -> eframe::Result {
         Box::new(move |cc| {
             created_in_callback.store(true, std::sync::atomic::Ordering::Relaxed);
             let automation = control.as_ref().map(|(_, _, workspace)| workspace.clone());
-            let mut services = services::native(automation);
+            let wake = {
+                let ctx = cc.egui_ctx.clone();
+                craft::host::Wake::new(move || ctx.request_repaint())
+            };
+            let mut services = services::native(automation, wake);
             services.preset_store = presets;
             #[cfg(target_os = "linux")]
             let display = tablet::DisplayKind::of(cc);
             #[cfg(target_os = "linux")]
             {
                 services.is_wayland = display == Some(tablet::DisplayKind::Wayland);
-                file_dialog_probe::start();
                 if services.is_wayland {
                     let var = |name| std::env::var(name).ok();
                     services.xwayland_command =
@@ -591,11 +559,12 @@ fn main() -> eframe::Result {
             };
             #[cfg(not(target_os = "linux"))]
             let session = Session::new();
-            PhotocraftApp::install_type_reset_hooks(&cc.egui_ctx);
-            let mut app = PhotocraftApp::new(session, services);
+            // Before the first pass: the one install of the craft runtime must see every pass from
+            // the first (R71); the app then runs on that context.
+            PhotocraftApp::setup_window(&cc.egui_ctx, Default::default(), decision);
+            let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), session, services);
+            app.open_suite(&cc.egui_ctx);
             app.min_frame_ms = uncapped.then_some(1000.0 / 240.0);
-            app.integrated_titlebar = cfg!(target_os = "macos");
-            app.custom_titlebar = custom_titlebar;
             // Only the title bar's free gap drags the window, never the menus (mac_window.rs).
             #[cfg(target_os = "macos")]
             mac_window::disable_native_title_drag();
@@ -687,33 +656,31 @@ fn main() -> eframe::Result {
                     log::warn!("couldn't remember GPU backend {}: {e}", b.name());
                 }
             });
-            // Agents in the open window, unless the launch flags (`--control`) manage the
-            // connection. Behind the suite's AI-MCP feature flag, the ArtCraft Launcher's switch
-            // (Settings › AI agents) is the one consent; without it, as before, a Control Port.
-            let flags = craft_flags::load();
-            for problem in &flags.problems {
-                log::warn!("feature flags: {problem}");
-            }
-            app.agent_link.mcp_flag = flags.enabled(&craft_flags::AI_MCP);
-            if app.agent_link.mcp_flag {
-                app.services.launcher_agents = Some(agent_link::launcher_watch(&cc.egui_ctx));
-            }
-            if let Some((listener, token, _)) = control {
-                app.agent_link.launch_flags = true;
-                app.agent_link.port = listener.local_addr().ok().map(|a| a.port());
-                let rx = control_server::start(listener, token, cc.egui_ctx.clone());
-                app = app.with_control(rx);
+            // Agents in the open window. Behind the suite's AI-MCP flag the ArtCraft Launcher's
+            // switch (Settings › AI agents) is the one consent; without it, as before, a Control
+            // Port saved in the preferences. The launch flags (`--control`) manage the connection
+            // for the whole run instead.
+            app.services.agent_switch = Some(craft::automation::agents::AgentSwitch::watch(photocraft_automation::agent_link::LAUNCHER_APP_ID, {
+                let ctx = cc.egui_ctx.clone();
+                craft::host::Wake::new(move || ctx.request_repaint())
+            }));
+            let link = if let Some((listener, token, _)) = control {
+                let host = craft::ui::runtime::windows::WindowHost::of(&cc.egui_ctx);
+                let (requests, server) = craft::automation::server::serve(listener, token, host)?;
+                eprintln!("photocraft: control server listening on {}", server.addr);
+                app = app.with_control(requests);
+                craft::automation::agents::AgentLink::from_launch(server)
             } else {
-                app.services.agent_link = Some(agent_link::service(services::config_dir()));
-            }
+                app.services.agent_automation = Some(Box::new(services::agent_automation));
+                craft::automation::agents::AgentLink::new(services::config_dir(), photocraft_engine::build_info::long_version())
+            };
+            app.services.agent_link = Some(link);
             #[cfg(target_os = "macos")]
             {
                 app.services.os_events = Some(apple_events.connect(&cc.egui_ctx));
-                // Quit through AppKit, not by closing the window (Touch Bar Macs, #1575, #1458).
-                app.services.quit = Some(Box::new(mac_window::terminate_later));
                 // The macOS menu bar, installed now so winit's default menu doesn't stay up.
                 if !in_window_menus {
-                    app.services.native_menu = mac_menu::install(&cc.egui_ctx, &app);
+                    app.services.native_menu = photocraft_ui_egui::native_menu::install(&cc.egui_ctx, &mut app);
                 }
             }
             #[cfg(not(target_os = "macos"))]
@@ -727,22 +694,10 @@ fn main() -> eframe::Result {
             app.services.cursor_pos = cursor::service(cc);
             // The custom title bar's undecorated window must stay borderless, or its caption and
             // border offset the content and the pointer on some Windows systems (#2246).
-            app.services.window_frame = window_frame::service(cc, custom_titlebar);
-            // Linux: the desktop's caption buttons (GNOME's, KDE's) on the sides its layout puts them.
-            if custom_titlebar {
-                app.services.caption_style = caption_style::service();
-            }
+            app.services.window_frame = window_frame::service(cc, integrated_frame);
             // Caps Lock state (X11/Windows/macOS; `None` on native Wayland): the canvas shows the
             // precise crosshair for painting tools while it is toggled on (#1758).
             app.services.caps_lock = caps_lock::service(cc);
-            // Pick through the portal on a Wayland desktop even when the window went through
-            // Xwayland (a pen, or the X11 display-server preference): Xwayland's root window has
-            // no desktop pixels to read (#8977).
-            #[cfg(target_os = "linux")]
-            let portal = screen_color::uses_portal(native_session);
-            #[cfg(not(target_os = "linux"))]
-            let portal = false;
-            app.services.screen_pick = screen_color::service(cc, portal);
             // Tablet pressure/tilt/eraser (winit drops them): the macOS monitor and the X11 reader
             // write into the stylus feed. The monitor goes in here, not before the event loop:
             // AppKit's shared application only exists once winit created it (#759).
@@ -766,23 +721,22 @@ fn main() -> eframe::Result {
             tablet::spawn_x11(&app.stylus.feed, display);
             app.services.right_button_down = tablet::right_button_service();
             app.services.pen_end = tablet::pen_end_service();
-            app.services.pen_screen_px = tablet::pen_screen_service();
             // Paths on the command line (Linux/Windows file associations, `photocraft a.psd`).
             app.open_paths(&files);
             if !unreadable_paths.is_empty() {
                 use photocraft_ui_egui::i18n;
                 let line = i18n::t("{path}: the path is not valid Unicode; rename the file and open it again.");
                 let lines = unreadable_paths.iter().map(|p| i18n::fmt(line, &[("path", p.as_str())])).collect();
-                photocraft_ui_egui::notices::post(&mut app, i18n::t("Could not open"), lines, true, None);
+                photocraft_ui_egui::notices::post(&mut app, i18n::t("Could not open"), lines, craft::theme::variant::Tone::Bad, None);
             }
             // Portable marker found but its data folder isn't writable (#228): say where settings went.
             if let Some(w) = &app_dirs::current().warning {
-                photocraft_ui_egui::notices::post(&mut app, "Portable mode is off", vec![w.clone()], false, None);
+                photocraft_ui_egui::notices::post(&mut app, "Portable mode is off", vec![w.clone()], craft::theme::variant::Tone::Neutral, None);
             }
             // A preference's automation folder that couldn't be opened, or a token file it couldn't
             // write: a Dock launch has no console.
             if let Some(ControlNotice { title, lines }) = control_warning {
-                photocraft_ui_egui::notices::post(&mut app, title, lines, false, None);
+                photocraft_ui_egui::notices::post(&mut app, title, lines, craft::theme::variant::Tone::Neutral, None);
             }
             Ok(Box::new(app))
         }),
@@ -863,107 +817,6 @@ pub(crate) fn no_child_spawns() -> std::sync::RwLockWriteGuard<'static, ()> {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn window_and_panel_geometry_survive_a_restart() {
-        let options = super::native_options(super::CUSTOM_TITLEBAR);
-        assert!(options.persist_window);
-        assert_eq!(options.persistence_path, super::services::config_dir().map(|dir| dir.join("ui.ron")));
-
-        #[derive(Default)]
-        struct Storage(std::collections::BTreeMap<String, String>);
-        impl eframe::Storage for Storage {
-            fn get_string(&self, key: &str) -> Option<String> {
-                self.0.get(key).cloned()
-            }
-            fn set_string(&mut self, key: &str, value: String) {
-                self.0.insert(key.into(), value);
-            }
-            fn remove_string(&mut self, key: &str) {
-                self.0.remove(key);
-            }
-            fn flush(&mut self) {}
-        }
-        let ctx = egui::Context::default();
-        let input = || egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0))), ..Default::default() };
-        let mut output = ctx.run_ui(input(), |ui| {
-            egui::Panel::right("dock").exact_size(410.0).show(ui, |ui| ui.set_min_width(ui.available_width()));
-        });
-        output.textures_delta.clear();
-        let mut storage = Storage::default();
-        ctx.memory(|memory| eframe::set_value(&mut storage, "egui", memory));
-        let restored = egui::Context::default();
-        restored.memory_mut(|memory| *memory = eframe::get_value(&storage, "egui").unwrap());
-        let mut output = restored.run_ui(input(), |ui| {
-            egui::Panel::right("dock").default_size(290.0).show(ui, |ui| ui.set_min_width(ui.available_width()));
-        });
-        output.textures_delta.clear();
-        let panel = egui::containers::panel::PanelState::load(&restored, photocraft_ui_egui::panels::panel_state_id(&restored, "dock")).unwrap();
-        assert_eq!(panel.size().x, 410.0);
-    }
-
-    /// A 0.36 `ui.ron` saved panel widths under `Id::new("dock")`; the first 0.37 launch copies
-    /// them to the parent-scoped key, leaves the old one for a rollback, and a later resize
-    /// survives two more restarts.
-    #[test]
-    fn saved_036_panel_widths_migrate_and_survive_two_restarts() {
-        #[derive(Default)]
-        struct Storage(std::collections::BTreeMap<String, String>);
-        impl eframe::Storage for Storage {
-            fn get_string(&self, key: &str) -> Option<String> {
-                self.0.get(key).cloned()
-            }
-            fn set_string(&mut self, key: &str, value: String) {
-                self.0.insert(key.into(), value);
-            }
-            fn remove_string(&mut self, key: &str) {
-                self.0.remove(key);
-            }
-            fn flush(&mut self) {}
-        }
-        let state = |width: f32| egui::containers::panel::PanelState { outer_rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 600.0)) };
-        let input = || egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0))), ..Default::default() };
-        let draw = |ctx: &egui::Context| {
-            let mut output = ctx.run_ui(input(), |ui| {
-                egui::Panel::right("dock").default_size(290.0).show(ui, |ui| ui.set_min_width(ui.available_width()));
-            });
-            output.textures_delta.clear();
-        };
-        let save = |ctx: &egui::Context| {
-            let mut storage = Storage::default();
-            ctx.memory(|memory| eframe::set_value(&mut storage, "egui", memory));
-            storage
-        };
-        let restore = |storage: &Storage| {
-            let ctx = egui::Context::default();
-            ctx.memory_mut(|memory| *memory = eframe::get_value(storage, "egui").expect("the saved memory"));
-            ctx
-        };
-
-        // The real 0.14/0.15 shape: the panel state under the old key inside the egui memory.
-        let ctx = egui::Context::default();
-        ctx.data_mut(|d| d.insert_persisted(egui::Id::unique("dock"), state(410.0)));
-        let storage = save(&ctx);
-
-        let first = restore(&storage);
-        photocraft_ui_egui::panels::migrate_panel_state(&first);
-        draw(&first);
-        let key = photocraft_ui_egui::panels::panel_state_id(&first, "dock");
-        assert_eq!(egui::containers::panel::PanelState::load(&first, key).map(|p| p.size().x), Some(410.0));
-        assert!(egui::containers::panel::PanelState::load(&first, egui::Id::unique("dock")).is_some(), "the 0.36 key is kept");
-        // Resize in 0.37: the new key wins from now on.
-        first.data_mut(|d| d.insert_persisted(key, state(500.0)));
-        let storage = save(&first);
-
-        for restart in 0..2 {
-            let next = restore(&storage);
-            photocraft_ui_egui::panels::migrate_panel_state(&next);
-            draw(&next);
-            let key = photocraft_ui_egui::panels::panel_state_id(&next, "dock");
-            let width = egui::containers::panel::PanelState::load(&next, key).map(|p| p.size().x).unwrap_or_default();
-            assert!((width - 500.0).abs() < 0.5, "restart {restart}: the old 410 key must not win (got {width})");
-        }
-    }
-
     /// Schema-probe `ui.ron` shapes *reconstructed* from the documented 0.14/0.15/0.37 layouts,
     /// not recorded machine saves: 0.14 and 0.15 both store the flat window entry, which the
     /// first 0.37 launch rewrites; a 0.37 file is left alone. Keeping all three probes makes a
@@ -994,7 +847,7 @@ mod tests {
 
     #[test]
     fn the_window_opens_centred_at_its_default_size() {
-        let o = super::native_options(super::CUSTOM_TITLEBAR);
+        let o = super::native_options(&super::Frame::Native);
         assert!(o.centered, "#419: centred, not cascaded from the top-left corner");
         assert_eq!(o.viewport.inner_size, Some(egui::vec2(1440.0, 900.0)));
         // eframe shrinks the start size to the monitor, so the centred position is on-screen.
@@ -1003,31 +856,31 @@ mod tests {
 
     #[test]
     fn a_window_saved_while_minimized_reopens_at_the_minimum_size() {
-        let hook = super::native_options(super::CUSTOM_TITLEBAR).window_builder.expect("a window builder hook");
+        let hook = super::native_options(&super::Frame::Native).window_builder.expect("a window builder hook");
         // Saved minimized on Windows, then centred on a 1920 × 1080 monitor by eframe.
-        let saved = super::native_options(super::CUSTOM_TITLEBAR).viewport.with_inner_size([160.0, 64.0]).with_position([880.0, 508.0]);
+        let saved = super::native_options(&super::Frame::Native).viewport.with_inner_size([160.0, 64.0]).with_position([880.0, 508.0]);
         let opened = hook(saved);
         assert_eq!(opened.inner_size, Some(egui::vec2(760.0, 480.0)));
         assert_eq!(opened.position, Some(egui::pos2(580.0, 300.0)), "still centred");
         // Too narrow only: only the width grows.
-        let opened = super::at_least_min_size(super::native_options(false).viewport.with_inner_size([500.0, 900.0]));
+        let opened = super::at_least_min_size(super::native_options(&super::Frame::Native).viewport.with_inner_size([500.0, 900.0]));
         assert_eq!(opened.inner_size, Some(egui::vec2(760.0, 900.0)));
         // A window at or above the minimum, or with no size, is left alone.
         for size in [[760.0, 480.0], [1100.0, 760.0]] {
-            let builder = super::native_options(false).viewport.with_inner_size(size).with_position([10.0, 20.0]);
+            let builder = super::native_options(&super::Frame::Native).viewport.with_inner_size(size).with_position([10.0, 20.0]);
             let opened = super::at_least_min_size(builder);
             assert_eq!((opened.inner_size, opened.position), (Some(egui::Vec2::from(size)), Some(egui::pos2(10.0, 20.0))));
         }
-        let mut builder = super::native_options(false).viewport;
+        let mut builder = super::native_options(&super::Frame::Native).viewport;
         builder.inner_size = None;
         assert_eq!(super::at_least_min_size(builder).inner_size, None);
     }
 
     #[test]
     fn a_window_saved_in_full_screen_reopens_maximized_not_full_screen() {
-        let hook = super::native_options(super::CUSTOM_TITLEBAR).window_builder.expect("a window builder hook");
+        let hook = super::native_options(&super::Frame::Native).window_builder.expect("a window builder hook");
         // What eframe restores from a ui.ron saved in a full-screen mode on Windows.
-        let saved = super::native_options(super::CUSTOM_TITLEBAR)
+        let saved = super::native_options(&super::Frame::Native)
             .viewport
             .with_inner_size([2560.0, 1392.0])
             .with_position([0.0, 0.0])
@@ -1039,43 +892,50 @@ mod tests {
         assert_eq!(opened.inner_size, Some(egui::vec2(2560.0, 1392.0)));
     }
 
+    /// The preferences the launch reads from the settings folder `dir` (`services::saved_prefs`).
+    fn launch_prefs(dir: Option<&std::path::Path>) -> photocraft_engine::prefs::Preferences {
+        photocraft_engine::prefs::read_saved(dir).prefs
+    }
+
     #[test]
-    fn the_system_title_bar_preference_keeps_the_window_decorations() {
-        // #1271, #1316: Preferences › Interface › System Title Bar gives the window back its
-        // system decorations on Windows and Linux; macOS always has them.
+    fn the_system_title_bar_preference_is_read_from_the_saved_preferences() {
+        // #1271, #1316: Preferences › Interface › System Title Bar asks for the system's bar; the frame
+        // decision (craft-window) turns the preference into the frame the platform allows.
+        use super::TitleBarPref;
         let dir = std::env::temp_dir().join(format!("pc-titlebar-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let file = dir.join("prefs.json");
-        let default_custom = super::CUSTOM_TITLEBAR;
-        assert_eq!(super::custom_titlebar(None), default_custom, "no preferences file: the platform default");
+        let file = dir.join(photocraft_engine::prefs::LEGACY_PREFS_FILE);
+        let read = || super::title_bar_pref(&launch_prefs(Some(&dir)));
+        assert_eq!(super::title_bar_pref(&launch_prefs(None)), TitleBarPref::default(), "no settings folder: the default");
+        assert_eq!(read(), TitleBarPref::default(), "nothing saved: the default");
         std::fs::write(&file, "not json").unwrap();
-        assert_eq!(super::custom_titlebar(Some(&file)), default_custom, "an unreadable file: the platform default");
+        assert_eq!(read(), TitleBarPref::default(), "an unreadable file: the default");
         std::fs::write(&file, r#"{"interface":{}}"#).unwrap();
-        assert_eq!(super::custom_titlebar(Some(&file)), default_custom, "an older preference file: the platform default");
+        assert_eq!(read(), TitleBarPref::default(), "an older preference file: the default");
         std::fs::write(&file, r#"{"interface":{"systemTitleBar":true}}"#).unwrap();
-        assert!(!super::custom_titlebar(Some(&file)));
-        assert_eq!(super::native_options(false).viewport.decorations, Some(true));
+        assert_eq!(read(), TitleBarPref::System);
         std::fs::write(&file, r#"{"interface":{"systemTitleBar":false}}"#).unwrap();
-        assert_eq!(super::custom_titlebar(Some(&file)), super::CUSTOM_TITLEBAR);
-        if super::CUSTOM_TITLEBAR {
-            assert_eq!(super::native_options(true).viewport.decorations, Some(false));
-        }
+        assert_eq!(read(), TitleBarPref::Integrated);
+
+        // Once the app's settings store has saved config.toml, the launch reads that, not the older file.
+        let (mut store, _) = craft::settings::SettingsStore::open_with(photocraft_engine::prefs::store_options(Some(&dir)));
+        store.update(|saved| saved.prefs.interface.system_title_bar = true);
+        store.flush().unwrap();
+        assert_eq!(read(), TitleBarPref::System, "config.toml wins over preferences.json");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn integrations_preferences_decide_the_control_port() {
-        use photocraft_engine::prefs::Integrations;
-        let off = Integrations { allow_agent_control: false, control_port: 0, ..Default::default() };
-        let on = Integrations { allow_agent_control: true, control_port: 0, ..Default::default() };
-        let preferred = Integrations { allow_agent_control: true, control_port: 7878, ..Default::default() };
+        let (off, on, preferred) = (agent_prefs(false, 0), agent_prefs(true, 0), agent_prefs(true, 7878));
 
         // Nothing asked for, nothing listening.
         assert_eq!(super::control_port_for(None, &on), (None, None));
         // --control wins over the preference.
         assert_eq!(super::control_port_for(Some(9000), &preferred), (Some(9000), None));
-        // The preference alone opens nothing at launch: the agent connection starts it while
-        // the app runs (`agent_link`).
+        // The preference alone opens nothing at launch: the agent link starts it while the app
+        // runs.
         assert_eq!(super::control_port_for(None, &preferred), (None, None));
 
         // Allow Agent Control off refuses both, and says so when --control asked for one
@@ -1084,24 +944,32 @@ mod tests {
         let (port, warning) = super::control_port_for(Some(9000), &off);
         assert_eq!(port, None);
         assert!(warning.is_some_and(|w| w.contains("Allow Agent Control") && w.contains("9000")), "the refusal names the port");
-        let off_with_port = Integrations { allow_agent_control: false, control_port: 7878, ..Default::default() };
-        assert_eq!(super::control_port_for(None, &off_with_port), (None, None), "off beats a preferred port");
+        assert_eq!(super::control_port_for(None, &agent_prefs(false, 7878)), (None, None), "off beats a preferred port");
+    }
+
+    fn agent_prefs(allow: bool, port: u32) -> photocraft_engine::prefs::Integrations {
+        let mut prefs = photocraft_engine::prefs::Integrations::default();
+        prefs.agents.allow_agent_control = allow;
+        prefs.agents.control_port = port;
+        prefs
     }
 
     #[test]
     fn integrations_fall_back_to_the_defaults_without_a_readable_file() {
         let dir = std::env::temp_dir().join(format!("pc-integrations-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let file = dir.join("prefs.json");
+        let file = dir.join(photocraft_engine::prefs::LEGACY_PREFS_FILE);
         let default = photocraft_engine::prefs::Integrations::default();
 
-        assert_eq!(super::integrations(None), default, "no preferences file");
+        assert_eq!(launch_prefs(None).integrations, default, "no settings folder");
+        assert_eq!(launch_prefs(Some(&dir)).integrations, default, "nothing saved");
         std::fs::write(&file, "not json").unwrap();
-        assert_eq!(super::integrations(Some(&file)), default, "an unreadable file");
+        assert_eq!(launch_prefs(Some(&dir)).integrations, default, "an unreadable file");
         std::fs::write(&file, r#"{"integrations":{"allowAgentControl":false,"controlPort":7878}}"#).unwrap();
-        let read = super::integrations(Some(&file));
-        assert!(!read.allow_agent_control);
-        assert_eq!(read.control_port, 7878);
+        let read = launch_prefs(Some(&dir)).integrations;
+        assert!(!read.agents.allow_agent_control);
+        assert_eq!(read.agents.control_port, 7878);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1110,8 +978,9 @@ mod tests {
     #[test]
     fn a_bad_value_elsewhere_keeps_agent_control_off() {
         let dir = std::env::temp_dir().join(format!("pc-integrations-lenient-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let file = dir.join("prefs.json");
+        let file = dir.join(photocraft_engine::prefs::LEGACY_PREFS_FILE);
         // What the Preferences dialog shows for the same file.
         let shown = |text: &str| {
             let mut session = photocraft_engine::Session::new();
@@ -1120,31 +989,30 @@ mod tests {
         };
         let read = |text: &str| {
             std::fs::write(&file, text).unwrap();
-            let read = super::integrations(Some(&file));
+            let read = launch_prefs(Some(&dir)).integrations;
             assert_eq!(read, shown(text), "{text}");
             read
         };
 
         let r = read(r#"{"interface":{"showTooltips":"nope"},"integrations":{"allowAgentControl":false,"controlPort":7878}}"#);
-        assert!(!r.allow_agent_control, "a bad value in another section");
-        assert_eq!(r.control_port, 7878);
+        assert!(!r.agents.allow_agent_control, "a bad value in another section");
+        assert_eq!(r.agents.control_port, 7878);
         let r = read(r#"{"integrations":{"allowAgentControl":false,"controlPort":"x"}}"#);
-        assert!(!r.allow_agent_control, "a bad port");
-        assert_eq!(r.control_port, 0, "the bad port alone takes its default");
+        assert!(!r.agents.allow_agent_control, "a bad port");
+        assert_eq!(r.agents.control_port, 0, "the bad port alone takes its default");
         // A bad Allow Agent Control alone takes its default.
         let r = read(r#"{"integrations":{"allowAgentControl":"no","controlPort":7878}}"#);
         // (A saved port from before the agents switch turns it on, in both reads.)
-        assert_eq!(r, photocraft_engine::prefs::Integrations { allow_agent_control: true, control_port: 7878, connect_agents: true, ..Default::default() });
+        assert_eq!(r, photocraft_engine::prefs::Integrations { connect_agents: true, ..agent_prefs(true, 7878) });
         read(r#"{"integrations":{"allowAgentControl":false,"controlPort":-1}}"#);
         read(r#"{"integrations":{"allowAgentControl":false,"controlPort":4294967296}}"#);
         read(r#"{"integrations":"off"}"#);
-        // serde reads a struct from a list too; the app does.
-        assert!(!read(r#"{"integrations":[false]}"#).allow_agent_control, "a list");
-        assert_eq!(read(r#"{"integrations":[false,7878]}"#).control_port, 7878);
+        // A section that isn't an object keeps the defaults, in both reads.
+        read(r#"{"integrations":[false,7878]}"#);
         // The automation folders: a bad one takes its default alone, too.
         let r = read(r#"{"integrations":{"allowAgentControl":false,"readRoot":5,"writeRoot":"/w"}}"#);
-        assert!(!r.allow_agent_control, "a bad folder");
-        assert_eq!((r.read_root.as_str(), r.write_root.as_str()), ("", "/w"));
+        assert!(!r.agents.allow_agent_control, "a bad folder");
+        assert_eq!((r.agents.read_root.as_str(), r.agents.write_root.as_str()), ("", "/w"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1162,12 +1030,11 @@ mod tests {
         }
     }
 
-    fn roots(read: &std::path::Path, write: &std::path::Path) -> photocraft_engine::prefs::Integrations {
-        photocraft_engine::prefs::Integrations {
-            read_root: read.to_string_lossy().into_owned(),
-            write_root: write.to_string_lossy().into_owned(),
-            ..Default::default()
-        }
+    fn roots(read: &std::path::Path, write: &std::path::Path) -> craft::automation::agents::AgentSettings {
+        let mut prefs = craft::automation::agents::AgentSettings::default();
+        prefs.read_root = read.to_string_lossy().into_owned();
+        prefs.write_root = write.to_string_lossy().into_owned();
+        prefs
     }
 
     /// Preferences › AI Integrations' folders are the automation roots when no flag names one, and
@@ -1200,7 +1067,7 @@ mod tests {
         assert_eq!(ws.read_with_save_path("b.txt").unwrap().1.as_deref(), Some("b.txt"));
 
         // Empty preferences grant nothing, as no flags do.
-        let (ws, warning) = super::automation_workspace(&flags(None, None), &photocraft_engine::prefs::Integrations::default()).unwrap();
+        let (ws, warning) = super::automation_workspace(&flags(None, None), &craft::automation::agents::AgentSettings::default()).unwrap();
         assert_eq!(warning, None);
         assert!(ws.read("a.txt").is_err() && ws.write("c.txt", b"x").is_err());
         let _ = std::fs::remove_dir_all(&dir);
@@ -1228,7 +1095,8 @@ mod tests {
     #[test]
     fn a_relative_preference_folder_is_left_out() {
         let dir = temp_dir("automation-roots-relative");
-        let relative = photocraft_engine::prefs::Integrations { read_root: ".".into(), ..roots(&dir, &dir) };
+        let mut relative = roots(&dir, &dir);
+        relative.read_root = ".".into();
         let (ws, warning) = super::automation_workspace(&flags(None, None), &relative).unwrap();
         let warning = warning.expect("the relative read folder is named");
         assert!(warning.contains("Automation Read Folder") && warning.contains("not an absolute path"), "{warning}");
