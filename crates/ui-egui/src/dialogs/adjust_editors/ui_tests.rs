@@ -97,8 +97,9 @@ fn drag(h: &mut Harness<'_, Box<PhotocraftApp>>, from: Pos2, to: Pos2) {
     h.run_steps(1);
     h.drag_at(from);
     h.run_steps(1);
-    for i in 1..=6 {
-        h.hover_at(from + (to - from) * (i as f32 / 6.0));
+    // Three moves give the gesture several previews before its one commit, which is what the history check needs.
+    for i in 1..=3 {
+        h.hover_at(from + (to - from) * (i as f32 / 3.0));
         h.run_steps(1);
     }
     h.drop_at(to);
@@ -134,24 +135,24 @@ fn sliders(h: &Harness<'_, Box<PhotocraftApp>>) -> Vec<Rect> {
 /// Issue #12: every adjustment kind, on a new document at 8/16/32 bits and in RGB, Grayscale,
 /// CMYK and Lab, opens its Properties editor and takes an edit through real input without
 /// panicking; slider kinds commit exactly one history step per gesture and end the preview with it.
-/// One app per document: Undo takes back each kind's layer and edit before the next kind's layer
-/// is added, so every kind meets the new document with its two tones.
 #[test]
 fn every_adjustment_layer_edits_through_properties() {
     for (mode, depth) in [("rgb", 8), ("rgb", 16), ("rgb", 32), ("gray", 8), ("cmyk", 8), ("lab", 16)] {
+        // One app per document setting, not one per kind: each kind deletes the previous kind's layer and adds its
+        // own over the same two-tone background, so its editor opens on the stack a fresh app had (the Properties
+        // session is per layer, `PropertiesAdjust::new`). Every kind still runs in every mode and depth: the
+        // composite of each adjustment differs per mode and depth, and no other test runs all of them.
         let mut h = app_harness(ALL_KINDS[0], mode, depth);
-        // The document's history before its adjustment layer.
-        let base = history_len(&h) - 1;
         for (i, kind) in ALL_KINDS.into_iter().enumerate() {
             if i > 0 {
-                while history_len(&h) > base {
-                    let steps = history_len(&h);
-                    h.state_mut().run("edit.undo", json!({})).unwrap_or_else(|e| panic!("{kind} {mode}: undo: {e}"));
-                    assert!(history_len(&h) < steps, "{kind} {mode}: undo to the new document");
-                }
+                let (previous, _) = layer(&h);
+                h.state_mut().run("layer.delete", json!({"layer": previous.0})).unwrap();
                 h.state_mut().run(&format!("layer.newAdjustmentLayer.{kind}"), json!({})).unwrap();
-                h.run_steps(8);
+                // The Properties panel shows the new layer's editor on the next frame; the second leaves its widgets
+                // laid out for the queries below.
+                h.run_steps(2);
             }
+            assert_eq!(h.state().session.active().unwrap().doc.layers.len(), 2, "{kind} {mode}: the background and this kind's layer");
             let (_, before) = layer(&h);
             let steps = history_len(&h);
             let slider = sliders(&h).first().copied();
