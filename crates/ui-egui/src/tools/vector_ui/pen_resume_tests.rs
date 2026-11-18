@@ -4,7 +4,7 @@
 use super::*;
 use crate::canvas::testing;
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
     app.sync_views();
@@ -566,7 +566,7 @@ fn undo_gives_back_a_refused_draft_esc_kept_as_the_work_path() {
 }
 
 /// Keep a real refused commit, with an older document edit and a library Undo to route to.
-fn failed_library_draft(tool: Tool, shape: bool) -> PhotocraftApp {
+fn failed_library_draft(tool: Tool, shape: bool) -> Box<PhotocraftApp> {
     let mut app = app();
     app.run("layer.new.layer", json!({})).unwrap();
     app.run("actions.newSet", json!({"name": "Keep"})).unwrap();
@@ -671,7 +671,7 @@ fn failed_shape_drafts_keep_the_work_path_fallback_on_tool_switch() {
 }
 
 /// A valid Freeform release which the document refuses, not an in-progress lasso gesture.
-fn refused_freeform_library_draft() -> PhotocraftApp {
+fn refused_freeform_library_draft() -> Box<PhotocraftApp> {
     let mut app = app();
     app.run("layer.new.layer", json!({})).unwrap();
     app.run("actions.newSet", json!({"name": "Keep"})).unwrap();
