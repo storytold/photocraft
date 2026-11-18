@@ -87,6 +87,11 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
     // The framework host's dialogs in their one stack order (top last).
     let mut dialogs = craft::automation::dialogs::inspect(&app.framework.dialogs);
     crate::layer_style::describe_params(app, &mut dialogs);
+    crate::discard_ui::describe(app, &mut dialogs);
+    // Keyboard Shortcuts and Menus draws beneath the host's dialogs, outside the host (#15544).
+    if let (Some(shortcuts), Some(list)) = (crate::prefs_ui::shortcuts::inspect(app), dialogs.as_array_mut()) {
+        list.insert(0, shortcuts);
+    }
     // Last frame's task bar rect, unless the bar can't show now (hidden by `ui.set` before the
     // next draw).
     let task_bar_rect = app.ui.task_bar_shown.filter(|_| crate::crop_task_bar::eligible(app));
