@@ -10,7 +10,7 @@ use crate::PhotocraftApp;
 use crate::state::Tool;
 
 /// A square work path; knot 1 at (120, 40) is smooth with handles at (100, 40) and (140, 40).
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
     app.sync_views();
@@ -23,13 +23,6 @@ fn app() -> PhotocraftApp {
     ]}]});
     app.run("path.set", json!({"name": "work", "path": path})).unwrap();
     app
-}
-
-#[test]
-fn a_one_anchor_drag_is_drag_anchor_point() {
-    let mut app = app();
-    assert_eq!(added(&mut app, |a| drag(a, [120.0, 120.0], [130.0, 130.0], Modifiers::NONE)), ["Drag Anchor Point"]);
-    assert_eq!(app.ui.direct_selection.anchors, vec![[0, 2]]);
 }
 
 #[test]

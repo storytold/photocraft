@@ -1,17 +1,18 @@
 //! Free Transform (⌘T): bounding box with handles over the canvas, live preview, commit via the
 //! engine's `edit.transform` (one quad for scale/rotate/skew/distort/perspective).
 //!
-//! Gestures follow Photoshop CC: corner and edge drags scale proportionally (⇧ for free: an edge
-//! then stretches its one axis), ⌥ scales about the reference point, ⌘-drag a corner distorts
-//! (⌘⌥⇧: perspective), ⌘-drag an edge skews (⇧ along the edge), drag outside rotates (⇧ snaps to
-//! 15°), drag inside moves (⇧ locks to 8 directions), the reference point can be dragged and
-//! ⌥-click puts it under the pointer. Arrow keys nudge the box (move_mods.rs). ↩ commits, Esc
-//! cancels. Undo and Redo step through the session's own changes (`Steps`), not the document's
-//! history.
+//! The box, its gestures, cursors, snapping and the session's own undo steps are the framework's
+//! `TransformSession` and `TransformOverlay`; this module opens the session, previews the moving
+//! pixels and commits through the engine. ↩ commits, Esc cancels. Undo and Redo step through the
+//! session's own changes, not the document's history.
 
 use std::sync::Arc;
 
-use egui::{Color32, CursorIcon, Pos2, Stroke, pos2, vec2};
+use craft::behavior::geometry::{SnapLine, TransformMode};
+use craft::draw::ui::transform::{Interpolation, TransformPreset, TransformSettings, TransformTool};
+use craft::imaging::ui::transform_preview::{PreviewPixels, PreviewTextures, StyledPreview};
+use craft::imaging::ui::warp::WarpSplit;
+use egui::Color32;
 use photocraft_algo::transform::Homography;
 use photocraft_doc::{DocId, Document, LayerContent, LayerId};
 use photocraft_engine::jobs::{JobEvent, JobId, JobOutcome};
@@ -19,16 +20,12 @@ use photocraft_geom::warp::{BezierMesh, Warp, WarpStyle};
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::canvas::{ToolEvent, ViewXform};
-use crate::state::{MadeLayer, Tool, TransformMode, TransformSession};
+use crate::state::{FreeTransform, MadeLayer, SessionWarp, Tool};
 
 mod begin;
 mod commit;
-mod cylinder;
-mod drag_modes;
 mod draw;
 mod options_bar;
-mod pointer;
 mod preview;
 mod warp;
 
@@ -36,81 +33,22 @@ pub(crate) use begin::begin_content_aware;
 pub(crate) use begin::moving_layers;
 #[cfg(test)]
 pub(crate) use begin::moving_texel;
-pub use begin::{WARP_ONE_LAYER, begin, begin_copy, begin_placed, begin_selection, begin_warp, enter_warp, leave_warp, warps_active_layer, warps_type};
-pub(crate) use commit::{SAVE_FOR_WEB, committing, nudge};
-pub use commit::{cancel, commit, end_if_left, follow_edits, intercept, is_enabled, on_job_event, track_steps};
-use cylinder::CylinderHandle;
-#[cfg(test)]
-use cylinder::{cylinder_cursor, cylinder_default, cylinder_dragged, cylinder_handles, cylinder_hit, cylinder_values};
-#[cfg(test)]
-use drag_modes::{HandleIndicator, handle_indicator, keep_convex, turns};
-pub(crate) use drag_modes::{apply_drag, corner_distorts, legacy_mods};
-#[cfg(test)]
-pub(crate) use drag_modes::{apply_mode_drag, unlinked_mods};
-pub(crate) use draw::draw_handle_cursor;
-#[cfg(test)]
-use draw::scale_values;
-#[cfg(test)]
-pub(crate) use draw::{Readout, live_readout, styled_frame};
-pub(crate) use draw::{carries_selection_of, moves_selection, selection_ants};
-pub use draw::{draw_content, draw_overlay};
-#[cfg(test)]
-use draw::{front_vertices, handle_anchor};
-pub(crate) use options_bar::position_size_fields;
-#[cfg(test)]
-use options_bar::{
-    POSITION_LIMIT_PX, Parts, SCALE_LIMIT_PCT, SIZE_UNIT_KEY, SKEW_LIMIT_DEG, matching_anchor, readout, rotate_about_pivot, scale_about_pivot, scale_limit_pct,
-    set_size_unit, size_pct, size_shown, size_unit, warp_grid_id, warp_style_options,
+pub use begin::{
+    WARP_ONE_LAYER, begin, begin_copy, begin_from_frame, begin_placed, begin_selection, begin_warp, enter_warp, leave_warp, warps_active_layer, warps_type,
 };
-pub use options_bar::{options_bar, reset_warp};
-pub(crate) use pointer::{Gesture, Hit, box_hit, hit, rotate_cursor_dir};
+pub(crate) use commit::{SAVE_FOR_WEB, committing};
+pub use commit::{apply_click, auto_commit, cancel, commit, end_if_left, follow_edits, intercept, is_enabled, on_job_event};
 #[cfg(test)]
-use pointer::{accepts_outside_click, carry_pivot, near_rotate_corner, point_on_quad, rotation_degrees};
-pub use pointer::{cursor, pointer};
+pub(crate) use draw::styled_composite;
+pub use draw::{SessionShown, show_in_canvas};
+pub(crate) use draw::{moves_selection, selection_map};
+pub use options_bar::{options_bar, reset_warp};
+pub(crate) use preview::read_surface;
 pub(crate) use preview::solo_layer;
 use preview::{Above, composite_image, show_only};
 #[cfg(test)]
 use preview::{covering, preview_image};
 pub use warp::{edit_session_warp, split};
-#[cfg(test)]
-use warp::{on_section_edge, single_patch, split_cursor, surface_at, warp_hit, warp_pointer};
-
-/// Which Split button is armed. The guide follows the pointer and the split is added on release.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum SplitTool {
-    Cross,
-    Vertical,
-    Horizontal,
-}
-
-impl SplitTool {
-    fn command(self) -> &'static str {
-        match self {
-            SplitTool::Cross => "edit.transform.splitWarpCrosswise",
-            SplitTool::Vertical => "edit.transform.splitWarpVertically",
-            SplitTool::Horizontal => "edit.transform.splitWarpHorizontally",
-        }
-    }
-
-    fn icon(self) -> &'static str {
-        match self {
-            SplitTool::Cross => "cross",
-            SplitTool::Vertical => "vertical",
-            SplitTool::Horizontal => "horizontal",
-        }
-    }
-}
-
-/// What a Warp-mode press grabbed. `pts0` is the mesh's control grid at the press.
-enum WarpDrag {
-    /// An anchor or handle: it follows the pointer (an anchor takes its handles along).
-    Point { index: usize, start: [f64; 2], pts0: Vec<[f64; 2]> },
-    /// Anywhere else on the grid: the surface under the pointer follows it.
-    Surface { s: f64, t: f64, start: [f64; 2], pts0: Vec<[f64; 2]> },
-    /// A cylinder's handle, or its surface (which turns the wrap); `values0` are its seven values
-    /// at the press (cylinder.rs).
-    Cylinder { handle: CylinderHandle, start: [f64; 2], values0: [f64; 7] },
-}
 
 /// Opens a prepared box once its job has landed (see [`Preparing`]).
 type FinishPrepared = Box<dyn FnOnce(&mut PhotocraftApp, begin::Prepared) -> Result<(), String>>;
@@ -170,28 +108,20 @@ pub(crate) fn damage(
 }
 
 /// Preview state that isn't serialisable: the document without the transformed pixels, and
-/// full-resolution textures of those pixels (transform_tex.rs).
-pub struct TransformPreview {
+/// full-resolution textures of those pixels.
+pub struct OpenPreview {
     pub session: u64,
     pub doc: Arc<Document>,
-    pub texture: crate::transform_tex::PreviewTextures,
+    pub textures: PreviewTextures,
     pub opacity: f32,
     /// The layers stacked over the moving one, drawn over its pixels ([`Above`]).
     above: Option<Above>,
     /// A layer with a style: its pixels composited with the style as the box has them now,
-    /// drawn instead of the bare pixels (transform_fx.rs, #3653).
-    styled: Option<crate::transform_fx::StyledPreview>,
-    gesture: Option<Gesture>,
-    /// Warp-mode drag in progress.
-    warp_drag: Option<WarpDrag>,
-    /// Armed split tool. None while the buttons are off and control points drag as usual.
-    split_tool: Option<SplitTool>,
-    /// Document point the split guide is following (a drag, or the hover while placing).
-    split_pointer: Option<[f64; 2]>,
-    split_placing: bool,
-    /// Option-click places a split without a button armed.
-    split_quick: bool,
-    steps: Steps,
+    /// drawn instead of the bare pixels (#3653).
+    styled: Option<StyledPreview>,
+    /// The armed split tool of the Warp phase, one-shot (#12498). Hover, placing and the quick split are the
+    /// warp grid's.
+    split: Option<WarpSplit>,
     /// The tool the session began with: picking another one applies the transform.
     tool: Tool,
     /// Free Transform Path: the path as it was, drawn through the box instead of pixels.
@@ -205,19 +135,40 @@ pub struct TransformPreview {
     /// Content-Aware Scale's live preview (cas_transform.rs).
     pub(crate) content_aware: Option<crate::cas_transform::Live>,
     /// While a smart object's stored warp is edited (begin.rs `preview_without_smart_warp`):
-    /// the texels and box of the mode the session is not in. Warp mode shows the source without
-    /// the warp over the warp box, Free Transform the layer's render with it over its own box;
-    /// leaving or re-entering Warp mode, and Undo across it, swap them.
+    /// the texels of the mode the session is not in. Warp mode shows the source without the
+    /// warp, Free Transform the layer's render with it; leaving or re-entering Warp mode, and
+    /// Undo across it, swap them.
     other_texels: Option<OtherTexels>,
-    /// A box over several layers (#6501): their composite, which `texture` holds.
+    /// A box over several layers (#6501): their composite, which `textures` holds.
     several: Option<Several>,
+}
+
+impl OpenPreview {
+    /// A preview of `doc` with `textures` as the moving pixels, with nothing else shown or running.
+    fn new(session: u64, doc: Arc<Document>, textures: PreviewTextures, tool: Tool) -> Self {
+        Self {
+            session,
+            doc,
+            textures,
+            opacity: 1.0,
+            above: None,
+            styled: None,
+            split: None,
+            tool,
+            path: None,
+            follow: None,
+            committing: None,
+            content_aware: None,
+            other_texels: None,
+            several: None,
+        }
+    }
 }
 
 /// The moving pixels of a box over several layers ([`begin_several`]): the layers composited on
 /// their own, with their styles, opacity and masks. Composited again when an edit made while the
 /// box is open changes how they look ([`follow_edits`]), since nothing is tinted at draw time.
 struct Several {
-    ctx: egui::Context,
     name: String,
     max_side: usize,
     ids: Vec<LayerId>,
@@ -261,10 +212,10 @@ impl Several {
     }
 
     /// Composite the moving layers over their frame and their styles' reach.
-    fn render(&mut self) -> crate::transform_tex::PreviewTextures {
+    fn render(&mut self) -> PreviewTextures {
         self.rect = self.frame.inflate(style_reach(&self.moving, &self.ids));
         let (image, uv) = composite_image(&self.moving, self.rect, self.max_side);
-        crate::transform_tex::PreviewTextures::new(&self.ctx, self.name.clone(), image, uv)
+        PreviewTextures::new(self.name.clone(), PreviewPixels::new(image, uv))
     }
 }
 
@@ -290,22 +241,17 @@ fn style_reach(doc: &Document, ids: &[LayerId]) -> i32 {
     reach
 }
 
-/// The preview texels of the transform mode the session is not in, and the box they cover
-/// ([`TransformPreview::other_texels`]).
+/// The preview texels of the transform mode the session is not in ([`OpenPreview::other_texels`]).
+/// The box each covers is the session's own: its undo steps bring the box with the warp.
 struct OtherTexels {
-    texture: crate::transform_tex::PreviewTextures,
-    rect: [f64; 4],
-    quad: [[f64; 2]; 4],
+    texture: PreviewTextures,
 }
 
-/// Swaps the session's texels and box with the other mode's (`t` holds the box the texels
-/// cover), when there are any: the stored warp's edit shows the source without the warp, the
-/// box the render with it.
-fn swap_mode_texels(t: &mut TransformSession, pv: &mut TransformPreview) {
+/// Swaps the session's texels with the other mode's, when there are any: the stored warp's edit
+/// shows the source without the warp, the box the render with it.
+fn swap_mode_texels(pv: &mut OpenPreview) {
     if let Some(o) = pv.other_texels.as_mut() {
-        std::mem::swap(&mut pv.texture, &mut o.texture);
-        std::mem::swap(&mut t.rect, &mut o.rect);
-        std::mem::swap(&mut t.quad, &mut o.quad);
+        std::mem::swap(&mut pv.textures, &mut o.texture);
     }
 }
 
@@ -328,101 +274,79 @@ pub const LOCKED: &str = "Could not complete the Free Transform command because 
 /// Why Edit › Transform's modes and Warp refuse while Content-Aware Scale's box is open.
 pub const CAS_ONLY_SCALES: &str = "Content-Aware Scale only scales: commit or cancel it first";
 
-/// Grab radius of the box's handles, in screen points. Generous, so a corner is easy to catch;
-/// just beyond it, outside the box, a drag rotates.
-pub const HANDLE_PX: f64 = 12.0;
-
-/// [`HANDLE_PX`] in document pixels at the current zoom.
-pub fn handle_tolerance(app: &PhotocraftApp) -> f64 {
-    HANDLE_PX / app.point_zoom().max(0.01) as f64
-}
-
-/// End a handle drag whose release a modal sampler consumed, preserving the transform. Its snapping
-/// ends too, so the canvas stops drawing the drag's alignment lines.
-pub(crate) fn release_handle_drag(app: &mut PhotocraftApp) {
-    if let Some(preview) = app.transform_preview.as_mut() {
-        preview.gesture = None;
-    }
-    app.prefs_rt.snap = None;
-    app.prefs_rt.snap_lines.clear();
-}
-
-/// The box as one undo step restores it.
-#[derive(Clone, Debug, PartialEq)]
-struct Step {
-    rect: [f64; 4],
-    quad: [[f64; 2]; 4],
-    pivot: [f64; 2],
-    warp: Option<Warp>,
-}
-
-impl Step {
-    fn of(t: &TransformSession) -> Self {
-        Step { rect: t.rect, quad: t.quad, pivot: t.pivot, warp: t.warp.clone() }
-    }
-
-    fn restore(self, t: &mut TransformSession) {
-        (t.rect, t.quad, t.pivot, t.warp) = (self.rect, self.quad, self.pivot, self.warp);
-    }
-}
-
-/// The session's own history: inside Free Transform, Undo steps back through the
-/// handle drags, nudges and option edits rather than the document's history.
-#[derive(Default)]
-struct Steps {
-    /// The box when it last came to rest (set when the session starts).
-    settled: Option<Step>,
-    undo: Vec<Step>,
-    redo: Vec<Step>,
-    /// When the latest arrow-key nudge came (egui time) and the box it left.
-    nudged: Option<(f64, Step)>,
-    /// The nudge that moved the box since it last came to rest follows another one closely: it
-    /// joins that one's step instead of adding its own (#2259).
-    fold: bool,
-}
-
-impl Steps {
-    /// An arrow-key nudge at `now` moved the box from `before` to `after`. With `pause` (seconds,
-    /// `None`: nudges aren't bundled) it folds into the previous nudge's step when it came within
-    /// that time of it and found the box as that nudge left it, so a drag, an option edit, Undo
-    /// or Redo in between start a step of their own.
-    fn nudged(&mut self, before: &Step, after: Step, now: f64, pause: Option<f64>) {
-        self.fold = pause.is_some_and(|w| self.nudged.as_ref().is_some_and(|(at, left)| left == before && now >= *at && now - at <= w));
-        self.nudged = pause.map(|_| (now, after));
-    }
-
-    /// Record a step if the box changed since it last came to rest.
-    fn settle(&mut self, now: Step) {
-        if self.settled.as_ref() == Some(&now) {
-            return;
-        }
-        if std::mem::take(&mut self.fold) && self.settled.is_some() {
-            self.settled = Some(now);
-            return;
-        }
-        if let Some(prev) = self.settled.replace(now) {
-            self.undo.push(prev);
-            self.redo.clear();
-        }
-    }
-
-    /// Something to undo, counting a change not yet recorded (a nudge this frame).
-    fn can_undo(&self, now: &Step) -> bool {
-        !self.undo.is_empty() || self.settled.as_ref().is_some_and(|p| p != now)
-    }
-}
-
+#[cfg(test)]
 pub(crate) fn corners(r: [f64; 4]) -> [[f64; 2]; 4] {
     [[r[0], r[1]], [r[2], r[1]], [r[2], r[3]], [r[0], r[3]]]
 }
 
-/// The transform choices supported by the options bar, using its remembered choice or the general default.
-pub(crate) fn default_interpolation(app: &PhotocraftApp) -> &'static str {
-    use photocraft_engine::prefs::Interpolation;
-    match app.ui.tool_options.transform_interpolation.unwrap_or(app.session.prefs().general.image_interpolation) {
-        Interpolation::Nearest => "nearest",
-        Interpolation::Bilinear => "bilinear",
-        _ => "bicubic",
+/// The interpolation a new session starts with: the General preference. The bar's own pick is
+/// `TransformSettings::interpolation`, which the session reads first.
+pub(crate) fn default_interpolation(app: &PhotocraftApp) -> Interpolation {
+    use photocraft_engine::prefs::Interpolation as General;
+    match app.session.prefs().general.image_interpolation {
+        General::Nearest => Interpolation::NearestNeighbor,
+        General::Bilinear => Interpolation::Bilinear,
+        _ => Interpolation::Bicubic,
+    }
+}
+
+/// The mode an `edit.transform.*` / `edit.freeTransform` menu id starts.
+pub fn mode_for_command(id: &str) -> TransformMode {
+    match id {
+        "edit.transform.rotate" => TransformMode::Rotate,
+        "edit.transform.skew" => TransformMode::Skew,
+        "edit.transform.distort" => TransformMode::Distort,
+        "edit.transform.perspective" => TransformMode::Perspective,
+        _ => TransformMode::Free,
+    }
+}
+
+/// The Rotate and Flip preset an `edit.transform.*` menu id runs on an open box.
+pub fn preset_for_command(id: &str) -> Option<TransformPreset> {
+    Some(match id {
+        "edit.transform.rotate180" => TransformPreset::Rotate180,
+        "edit.transform.rotate90Cw" => TransformPreset::Rotate90Clockwise,
+        "edit.transform.rotate90Ccw" => TransformPreset::Rotate90CounterClockwise,
+        "edit.transform.flipHorizontal" => TransformPreset::FlipHorizontal,
+        "edit.transform.flipVertical" => TransformPreset::FlipVertical,
+        _ => return None,
+    })
+}
+
+/// The split a Split Warp menu id arms.
+pub fn split_for_command(id: &str) -> Option<WarpSplit> {
+    Some(match id {
+        "edit.transform.splitWarpCrosswise" => WarpSplit::Cross,
+        "edit.transform.splitWarpVertically" => WarpSplit::Vertical,
+        "edit.transform.splitWarpHorizontally" => WarpSplit::Horizontal,
+        _ => return None,
+    })
+}
+
+/// The id salt the session's `TransformOverlay` and the Move tool's transform controls share in the canvas body, so
+/// a drag begun on the controls carries on in the session's box.
+pub(crate) const BOX_ID_SALT: &str = "transform-box";
+
+/// The persisted Free Transform settings: the stored section with Use Legacy Free Transform from the preferences.
+pub(crate) fn settings(app: &PhotocraftApp) -> TransformSettings {
+    // PLAN: `ToolOptions::transform: TransformSettings` is written by tools-w71 (M14); the errors in this set come from it and from hub-w1's `state.rs` re-exports, not from this file.
+    let mut settings = app.ui.tool_options.transform.clone();
+    settings.legacy = app.session.prefs().general.use_legacy_free_transform;
+    settings
+}
+
+/// The canvas tool of an open session (Enter and Escape in the Warp phase), with the box's snap lines of this frame's
+/// body ([`show_in_canvas`]). The canvas pass holds the session while it runs, so the tool borrows it, not the app.
+pub fn canvas_tool(session: &FreeTransform, snapped: Vec<SnapLine>) -> TransformTool<'_, SessionWarp> {
+    TransformTool::new(&session.session, snapped)
+}
+
+/// Applies what the tool's keys asked for: `(apply, discard)` from `TransformTool::take_keys`.
+pub fn tool_keys(app: &mut PhotocraftApp, (apply, discard): (bool, bool)) {
+    if discard {
+        cancel(app);
+    } else if apply {
+        commit(app);
     }
 }
 

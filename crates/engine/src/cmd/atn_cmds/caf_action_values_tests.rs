@@ -1,6 +1,7 @@
 //! Recorded `cafWorkspace` steps: every measured value maps to the command and back, and an
 //! empty step plays with the workspace's remembered settings (#14254).
 use super::*;
+use crate::actions_cmds::{ActionList, ActionStep};
 
 const CMD: &str = "edit.contentAwareFill";
 const MARK: &str = "_atnCafRemembered";
@@ -45,7 +46,7 @@ fn load(d: Descriptor) -> Action {
 
 /// The item Save Actions writes for one step, or `None` when it cannot write it.
 fn exported(p: Value) -> Option<AtnItem> {
-    let a = Action::new("A", vec![(CMD.into(), p)]);
+    let a = Action::new("A", vec![ActionStep::new(CMD, p)]);
     let (bytes, skipped) = export("S", &[&a], &[], false).ok()?;
     assert!(skipped.is_empty());
     atn::parse(&bytes).ok()?.actions.into_iter().next()?.items.into_iter().next()
@@ -80,7 +81,7 @@ fn every_measured_value_imports_to_its_param_and_saves_back_unchanged() {
     }
     for (d, p) in cases {
         let action = load(d.clone());
-        assert_eq!(action.steps, vec![(CMD.to_string(), p.clone())]);
+        assert_eq!(action.steps, vec![ActionStep::new(CMD, p.clone())]);
         assert_eq!(exported(p.clone()), Some(item(d.clone())), "{p}");
         let bytes = export("S", &[&action], &[], false).unwrap().0;
         assert_eq!(atn::parse(&bytes).unwrap().actions[0].items[0], item(d));
@@ -90,13 +91,13 @@ fn every_measured_value_imports_to_its_param_and_saves_back_unchanged() {
 #[test]
 fn an_empty_step_imports_as_remembered_and_saves_back_empty() {
     let action = load(desc("null"));
-    assert_eq!(action.steps, vec![(CMD.to_string(), json!({MARK: true}))]);
+    assert_eq!(action.steps, vec![ActionStep::new(CMD, json!({MARK: true}))]);
     assert_eq!(exported(json!({MARK: true})), Some(item(desc("null"))));
     // A differently named empty descriptor comes back as recorded.
     let mut named = desc("null");
     named.name = UnicodeString::new_nul("Recorded CAF");
     let action = load(named.clone());
-    assert_eq!(action.steps[0].1[MARK], json!(true));
+    assert_eq!(action.steps[0].params[MARK], json!(true));
     let bytes = export("S", &[&action], &[], false).unwrap().0;
     assert_eq!(atn::parse(&bytes).unwrap().actions[0].items[0], item(named));
 }
@@ -124,7 +125,8 @@ fn remember(s: &mut Session, settings: Value) {
 
 /// Play `d` as a one-step action and return the result.
 fn play(s: &mut Session, d: Descriptor) -> Value {
-    s.actions.list = vec![load(d)];
+    s.actions.list = ActionList::new();
+    s.actions.list.push(load(d)).unwrap();
     let result = s.execute("actions.play", json!({"action":0})).unwrap();
     assert!(result.get("failed").is_none(), "{result}");
     assert_eq!(result["ran"], 1);
@@ -209,7 +211,8 @@ fn damaged_remembered_settings_are_skipped_without_a_panic() {
     // A remembered value the command refuses fails the step with an error, not a panic.
     let mut s = session();
     remember(&mut s, json!({"output":"sideways"}));
-    s.actions.list = vec![load(desc("null"))];
+    s.actions.list = ActionList::new();
+    s.actions.list.push(load(desc("null"))).unwrap();
     let before = s.active().unwrap().doc.clone();
     let result = s.execute("actions.play", json!({"action":0})).unwrap();
     assert!(result.get("failed").is_some(), "{result}");
