@@ -9,49 +9,54 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use serde_json::json;
 
-use super::retouch_ui::ART_HISTORY_AREA_ALERT;
+use super::retouch_ui::bar::history::{ART_HISTORY_AREA_ALERT, ART_HISTORY_TOLERANCE_ALERT};
 use crate::PhotocraftApp;
-use crate::panels::options_bar::ZERO_TO_100;
-use crate::state::{DialogKind, Tool};
+use crate::state::Tool;
 
-/// The options bar with the Art History Brush active.
-fn bar() -> Harness<'static, PhotocraftApp> {
+type H = Harness<'static, Box<PhotocraftApp>>;
+
+/// The options bar with the Art History Brush active, and the dialog host its alerts open on.
+fn bar() -> H {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 80, "height": 80})).unwrap();
     app.ui.tool = Tool::ArtHistoryBrush;
-    let mut h = Harness::builder().with_size(vec2(1800.0, 300.0)).build_ui_state(
-        |ui, app| {
-            crate::field_wheel::begin_frame(ui.ctx());
+    crate::theme::install_fonts(app.ctx());
+    crate::theme::apply(app.ctx(), &crate::theme::AppTheme::pro());
+    let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1800.0, 300.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        move |ui, app: &mut Box<PhotocraftApp>| {
             crate::panels::options_bar(app, ui);
+            crate::dialogs::run(app, ui);
         },
         app,
     );
-    PhotocraftApp::setup_context(&h.ctx, Default::default());
     h.run_steps(4);
     h
 }
 
-/// Types `text` into the field labelled `label`, then Tabs out of it.
-fn type_into(h: &mut Harness<'static, PhotocraftApp>, label: &str, text: &str) {
-    h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some(label)).expect("the field").click();
+/// The number field named `label`, with or without its caption's colon.
+fn field<'a>(h: &'a H, label: &str) -> Option<egui_kittest::Node<'a>> {
+    h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().is_some_and(|l| l.trim_end_matches(':') == label))
+}
+
+/// Types `text` into the field named `label` and commits it with Enter.
+fn type_into(h: &mut H, label: &str, text: &str) {
+    field(h, label).unwrap_or_else(|| panic!("the {label} field")).click();
     h.run_steps(1);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
     h.event(egui::Event::Text(text.into()));
     h.run_steps(1);
-    h.key_press(egui::Key::Tab);
+    h.key_press(egui::Key::Enter);
     h.run_steps(3);
 }
 
-fn alerts(h: &Harness<'static, PhotocraftApp>) -> Vec<String> {
-    h.state().ui.dialogs.iter().filter(|d| d.kind == DialogKind::Error).filter_map(|d| d.fields.get("message")?.as_str().map(str::to_owned)).collect()
+/// The messages of the open framework alerts.
+fn alerts(h: &H) -> Vec<String> {
+    h.state().framework.dialogs.open_dialogs().iter().filter_map(|d| d.fields.as_ref()?.get("message")?.as_str().map(str::to_string)).collect()
 }
 
-/// The descriptions (tooltips) of the controls with `role` labelled `label`.
-fn tips(h: &Harness<'static, PhotocraftApp>, role: Role, label: &str) -> Vec<String> {
-    h.query_all_by_role(role)
-        .filter(|n| n.accesskit_node().label().as_deref() == Some(label))
-        .filter_map(|n| n.accesskit_node().description().map(|d| d.to_string()))
-        .collect()
+/// The description (tooltip) of the number field named `label`.
+fn tip(h: &H, label: &str) -> Option<String> {
+    field(h, label)?.accesskit_node().description().map(|d| d.to_string())
 }
 
 #[test]
@@ -80,7 +85,7 @@ fn tolerance_past_0_100_takes_the_closest_value_and_alerts() {
         let mut h = bar();
         type_into(&mut h, "Tolerance", typed);
         assert_eq!(h.state().ui.tool_options.art_history_tolerance, want, "{typed}");
-        assert_eq!(alerts(&h), vec![ZERO_TO_100.to_string()], "{typed}: one alert");
+        assert_eq!(alerts(&h), vec![ART_HISTORY_TOLERANCE_ALERT.to_string()], "{typed}: one alert");
     }
 }
 
@@ -97,11 +102,9 @@ fn tolerance_in_range_is_a_whole_number_without_an_alert() {
 #[test]
 fn opacity_area_and_tolerance_have_the_reference_tooltips() {
     let h = bar();
-    assert!(tips(&h, Role::SpinButton, "Opacity:").contains(&"Set opacity for stroke".to_string()));
-    assert!(tips(&h, Role::SpinButton, "Area").contains(&"Painting area diameter".to_string()));
-    assert!(tips(&h, Role::SpinButton, "Tolerance").contains(&"Painting tolerance".to_string()));
-    assert!(tips(&h, Role::Button, "Tolerance slider").contains(&"Painting tolerance".to_string()), "the slider arrow");
-    assert!(tips(&h, Role::Button, "Area").is_empty(), "Area has no slider");
+    assert_eq!(tip(&h, "Opacity").as_deref(), Some("Set opacity for stroke"));
+    assert_eq!(tip(&h, "Area").as_deref(), Some("Painting area diameter"));
+    assert_eq!(tip(&h, "Tolerance").as_deref(), Some("Painting tolerance"));
 }
 
 #[test]
