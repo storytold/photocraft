@@ -4,7 +4,10 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use super::{CameraRaw, PhotocraftApp, RawOpen, commit_open_raw, finish_redevelop, queue_open_dialog, replace_raw_document};
+use craft::imaging::raw::RawDevelopSettings as CameraRaw;
+
+use super::open::{RawOpen, commit_open_raw, finish_redevelop, queue_open_dialog, replace_raw_document};
+use crate::PhotocraftApp;
 
 fn synthetic_raw() -> Vec<u8> {
     use photocraft_raw::testgen::{DngSpec, mosaic, scene};
@@ -54,6 +57,7 @@ fn identity_app() -> (PhotocraftApp, RawOpen, Control) {
         bytes: Some(bytes),
         developed_with: Default::default(),
         demosaic: Default::default(),
+        decoded: None,
         crop: None,
     };
     let mut app = PhotocraftApp::new(session, crate::Services::default());
@@ -65,7 +69,7 @@ fn identity_app() -> (PhotocraftApp, RawOpen, Control) {
 /// another event changes the tab list. No sleeps, timing races or fake decoder are needed.
 fn completed_redevelop(app: &mut PhotocraftApp, raw: &RawOpen) -> (CameraRaw, Value, photocraft_doc::DocId) {
     app.background_jobs = true;
-    let params = CameraRaw { exposure: 1.0, contrast: 20.0, ..Default::default() };
+    let params = cr!(exposure: 1.0, contrast: 20.0);
     let started = commit_open_raw(app, &params, raw, None).unwrap();
     let job = photocraft_engine::jobs::JobId(started["job"].as_u64().expect("the sensor re-develop runs as a real job"));
     let mut result = app.session.wait_job(job).unwrap();
@@ -149,7 +153,7 @@ fn queue_identity_targets_an_inactive_raw_without_changing_the_active_document()
     let (mut app, raw, control) = identity_app();
     app.session.set_active(0);
     assert_eq!(app.session.active().unwrap().doc.id, control.doc.id);
-    queue_open_dialog(&mut app, raw.document, &raw.name, raw.path.as_deref(), raw.bytes.as_deref().map(Vec::as_slice), &[]).unwrap();
+    queue_open_dialog(&mut app, raw.document, &raw.name, raw.path.as_deref(), raw.bytes.as_ref(), &[]).unwrap();
     let queued = app.raw_shelf.first().map(|h| &h.raw).expect("the explicitly named RAW was queued");
     assert_eq!(queued.document, raw.document);
     assert_eq!((&queued.name, &queued.path, &queued.bytes), (&raw.name, &raw.path, &raw.bytes));
@@ -160,12 +164,12 @@ fn queue_identity_targets_an_inactive_raw_without_changing_the_active_document()
 #[test]
 fn queue_identity_rejects_a_missing_document_without_replacing_the_pending_review() {
     let (mut app, raw, control) = identity_app();
-    queue_open_dialog(&mut app, raw.document, &raw.name, raw.path.as_deref(), raw.bytes.as_deref().map(Vec::as_slice), &[]).unwrap();
+    queue_open_dialog(&mut app, raw.document, &raw.name, raw.path.as_deref(), raw.bytes.as_ref(), &[]).unwrap();
     let pending = app.raw_shelf.first().map(|h| &h.raw).unwrap().clone();
     app.session.set_active(0);
     let missing = photocraft_doc::DocId::fresh();
     assert!(!app.session.documents().iter().any(|state| state.doc.id == missing));
-    assert!(queue_open_dialog(&mut app, missing, "missing.dng", Some("missing.dng"), Some(&[1, 2, 3]), &[]).is_err());
+    assert!(queue_open_dialog(&mut app, missing, "missing.dng", Some("missing.dng"), Some(&std::sync::Arc::new(vec![1, 2, 3])), &[]).is_err());
     let queued = app.raw_shelf.first().map(|h| &h.raw).expect("the existing review is preserved");
     assert_eq!(queued.document, pending.document);
     assert_eq!((&queued.name, &queued.path, &queued.bytes), (&pending.name, &pending.path, &pending.bytes));
