@@ -190,6 +190,7 @@ impl DockPanels<String> for Panels<'_> {
         match panel.as_str() {
             // The canvas shows state that changes without a command: the view, redraw progress, animation and job overlays.
             CANVAS => None,
+            TOOLBAR => Some(super::region_versions::toolbar(self.app)),
             _ => Some(super::region_versions::panel(self.app, panel)),
         }
     }
