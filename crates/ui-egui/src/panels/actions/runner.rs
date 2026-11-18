@@ -1061,9 +1061,19 @@ pub(crate) fn within_paused<R>(app: &mut PhotocraftApp, token: u64, edit: impl F
     let captured = paused.gate;
     let saved = app.session.authorize;
     app.session.authorize = continuation_gate(captured, saved)?;
-    let out = within_paused_history(app, token, edit);
+    // The app's last-resort guard catches a panic in a command: the session's gate must be its
+    // own again whichever way the edit ends, never the playback's wider one.
+    let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| within_paused_history(app, token, edit)));
     app.session.authorize = saved;
-    Ok(out)
+    match out {
+        Ok(out) => Ok(out),
+        Err(panic) => {
+            // The action's history step was entered for the edit and can't be bound again: the
+            // playback ends here, its step closed, before the guard reports the panic.
+            abandoned(app, token);
+            std::panic::resume_unwind(panic)
+        }
+    }
 }
 
 fn within_paused_history<R>(app: &mut PhotocraftApp, token: u64, edit: impl FnOnce(&mut PhotocraftApp) -> R) -> R {

@@ -11,8 +11,6 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use egui::{Id, RichText};
-#[cfg(test)]
-use photocraft_engine::Session;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -98,10 +96,12 @@ pub trait ScriptCommands {
     /// # Errors
     /// The command's error, for the script.
     fn execute(&mut self, id: &str, params: Value) -> Result<Value, String>;
-    /// The session itself, for tests that act as a command folding into the journal would.
-    #[cfg(test)]
-    fn session(&mut self) -> &mut Session;
 }
+
+/// Tests only: a command that replaces the params of the journal's last entry, as typing or a
+/// brush gesture folds into it.
+#[cfg(test)]
+pub(crate) const TEST_FOLD: &str = "test.foldIntoLastEntry";
 
 /// The parameter a script command names its document by: the document's serial. The same
 /// name as `photocraft_script_js::commands::ON_DOCUMENT` (the desktop app checks they match).
@@ -149,9 +149,9 @@ impl RunBudget {
         if document && self.documents >= MAX_RUN_DOCUMENTS {
             return Err(format!("a script can make at most {MAX_RUN_DOCUMENTS} documents"));
         }
-        self.commands += 1;
-        self.layers += layers;
-        self.documents += u32::from(document);
+        self.commands = self.commands.saturating_add(1);
+        self.layers = self.layers.saturating_add(layers);
+        self.documents = self.documents.saturating_add(u32::from(document));
         Ok(())
     }
 }
@@ -192,6 +192,13 @@ impl AppCommands<'_> {
 
 impl ScriptCommands for AppCommands<'_> {
     fn execute(&mut self, id: &str, mut params: Value) -> Result<Value, String> {
+        #[cfg(test)]
+        if id == TEST_FOLD {
+            if let Some(last) = self.app.session.journal.last_mut() {
+                last.1 = params;
+            }
+            return Ok(Value::Null);
+        }
         let target = params.as_object_mut().and_then(|m| m.remove(ON_DOCUMENT)).and_then(|v| v.as_u64());
         let copies = self.copies(id, target, &params);
         self.budget.charge(id, copies)?;
@@ -208,11 +215,6 @@ impl ScriptCommands for AppCommands<'_> {
         self.app.automation_input = was;
         self.budget.app_time += started.elapsed();
         result
-    }
-
-    #[cfg(test)]
-    fn session(&mut self) -> &mut Session {
-        &mut self.app.session
     }
 }
 
@@ -249,6 +251,8 @@ pub(crate) struct Runtime {
     last_id: u64,
     /// Output of recent runs, oldest first.
     pub(crate) log: Vec<String>,
+    /// The run is taken out to pump its commands through the app: it is still running.
+    pumping: bool,
 }
 
 struct Active {
@@ -283,7 +287,7 @@ struct Open {
 impl Runtime {
     /// Whether a script runs.
     pub(crate) fn running(&self) -> bool {
-        self.run.is_some()
+        self.run.is_some() || self.pumping
     }
 
     /// The paused playback the current run resumes.
@@ -483,8 +487,25 @@ pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let pump = |app: &mut PhotocraftApp| {
         let Some(mut active) = app.scripts.run.take() else { return Vec::new() };
         let automation = active.automation;
-        let events = active.run.pump(&mut AppCommands { app: &mut *app, automation, budget: &mut active.budget }, PUMP_BUDGET);
-        app.scripts.run = Some(active);
+        app.scripts.pumping = true;
+        let pumped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            active.run.pump(&mut AppCommands { app: &mut *app, automation, budget: &mut active.budget }, PUMP_BUDGET)
+        }));
+        app.scripts.pumping = false;
+        let events = match pumped {
+            Ok(events) => events,
+            Err(panic) => {
+                // The app's guard reports the panic; the run ends with it, and scripts can still
+                // run afterwards.
+                active.run.cancel();
+                std::panic::resume_unwind(panic);
+            }
+        };
+        // Nothing a command did may start another run meanwhile (`start` refuses while one
+        // pumps); one that did anyway is stopped rather than lost under this one.
+        if let Some(mut other) = app.scripts.run.replace(active) {
+            other.run.cancel();
+        }
         events
     };
     // A playback's script step edits inside the paused action's history step.
@@ -751,7 +772,8 @@ fn stop_window(ctx: &egui::Context, active: &mut Active) {
 /// Draw the dialog the run waits at; `Some` with the answer once the user is done.
 fn dialog(ctx: &egui::Context, open: &mut Open) -> Option<Value> {
     let arg = |i: usize| open.args.get(i).and_then(Value::as_str).unwrap_or_default().to_owned();
-    let esc = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+    // The runtime takes a plain Escape out of egui's input: read it where it is, once.
+    let esc = crate::window_keys::take_escape(ctx);
     let enter = ctx.input(|i| i.key_pressed(egui::Key::Enter));
     match open.kind {
         ScriptDialog::Alert => {
@@ -1129,11 +1151,18 @@ fn manager_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
         ui.separator();
         ui.label(RichText::new(tl!("Output")).strong());
-        egui::ScrollArea::vertical().id_salt("scripts-manager-log").max_height(160.0).stick_to_bottom(true).show(ui, |ui| {
-            for line in &app.scripts.log {
-                ui.monospace(line);
-            }
-        });
+        // Only the lines in view are laid out, however long the log.
+        let row = ui.text_style_height(&egui::TextStyle::Monospace);
+        egui::ScrollArea::vertical().id_salt("scripts-manager-log").max_height(160.0).stick_to_bottom(true).show_rows(
+            ui,
+            row,
+            app.scripts.log.len(),
+            |ui, rows| {
+                for line in app.scripts.log.get(rows).unwrap_or_default() {
+                    ui.add(egui::Label::new(RichText::new(line).monospace()).truncate());
+                }
+            },
+        );
         if !can_run {
             ui.weak(tl!("This build of PhotoCraft can't run scripts."));
         }

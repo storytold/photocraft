@@ -524,8 +524,8 @@ pub struct Services {
     /// the framework's web `Files` exists (FW-264).
     #[cfg(target_arch = "wasm32")]
     pub file_dialog: Option<FileDialogFn>,
-    /// Starts JavaScript runs (`.js`, `.jsx`): a script host process per run on the desktop,
-    /// in this thread on the web. `None` where scripts can't run.
+    /// Starts JavaScript runs (`.js`, `.jsx`): a script host process per run on the desktop.
+    /// `None` where scripts can't run, which is the web build until scripts run in a Worker.
     pub scripts: Option<crate::scripts::StartScriptFn>,
     /// Write bytes to a path (native) or trigger a download (web).
     pub write: Option<WriteFn>,

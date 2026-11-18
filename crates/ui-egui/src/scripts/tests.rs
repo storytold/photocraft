@@ -63,9 +63,7 @@ impl ScriptRun for Fake {
                     }
                 }
                 Some(Act::Fold(params)) => {
-                    if let Some(last) = commands.session().journal.last_mut() {
-                        last.1 = params;
-                    }
+                    commands.execute(TEST_FOLD, params).unwrap();
                 }
                 Some(Act::Emit(e)) => {
                     let ends = matches!(e, ScriptEvent::Finished(_));
@@ -316,14 +314,18 @@ fn an_action_waits_for_its_script_step_and_goes_on_after_it() {
     let failing = vec![Act::Emit(ScriptEvent::Finished(Err("Error: stop here".into())))];
     let mut app = app(vec![ok, failing], &log);
     app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
-    app.session.actions.list.push(photocraft_engine::actions_cmds::Action::new(
-        "Scripted",
-        vec![
-            ActionStep::new("layer.new.layer", json!({"name": "before"})),
-            ActionStep::new("file.scripts.run", json!({"name": "step.jsx", "source": "1"})),
-            ActionStep::new("layer.new.layer", json!({"name": "after"})),
-        ],
-    ));
+    app.session
+        .actions
+        .list
+        .push(photocraft_engine::actions_cmds::Action::new(
+            "Scripted",
+            vec![
+                ActionStep::new("layer.new.layer", json!({"name": "before"})),
+                ActionStep::new("file.scripts.run", json!({"name": "step.jsx", "source": "1"})),
+                ActionStep::new("layer.new.layer", json!({"name": "after"})),
+            ],
+        ))
+        .unwrap();
     let played = crate::actions::play(&mut app, &json!({"action": "Scripted"})).unwrap();
     assert_eq!(played["paused"]["dialog"], PLAYBACK_WAIT, "{played}");
     assert_eq!(layer_names(&app), ["before"]);
@@ -368,7 +370,8 @@ fn a_playback_scripts_commands_run_under_the_gate_it_paused_with() {
     app.session
         .actions
         .list
-        .push(photocraft_engine::actions_cmds::Action::new("Scripted", vec![ActionStep::new("file.scripts.run", json!({"name": "step.jsx", "source": "1"}))]));
+        .push(photocraft_engine::actions_cmds::Action::new("Scripted", vec![ActionStep::new("file.scripts.run", json!({"name": "step.jsx", "source": "1"}))]))
+        .unwrap();
     app.session.authorize = Some(deny_new_layer);
     let played = crate::actions::play(&mut app, &json!({"action": "Scripted"})).unwrap();
     app.session.authorize = None;
@@ -437,7 +440,8 @@ fn stopping_the_playback_ends_its_script() {
     app.session
         .actions
         .list
-        .push(photocraft_engine::actions_cmds::Action::new("Scripted", vec![ActionStep::new("file.scripts.run", json!({"name": "step.jsx", "source": "1"}))]));
+        .push(photocraft_engine::actions_cmds::Action::new("Scripted", vec![ActionStep::new("file.scripts.run", json!({"name": "step.jsx", "source": "1"}))]))
+        .unwrap();
     crate::actions::play(&mut app, &json!({"action": "Scripted"})).unwrap();
     settle(&mut app);
     let token = app.scripts.resume_token().expect("the script runs for the playback");
@@ -575,4 +579,28 @@ fn leaving_the_tags_field_by_clicking_run_keeps_the_tags_and_runs() {
     h.run_steps(6);
     assert_eq!(h.state().session.prefs().scripts.entries[0].tags, ["night"]);
     assert_eq!(log.starts.borrow().len(), 1, "the run started");
+}
+
+/// While a run is taken out to pump its commands through the app it is still running: nothing
+/// reached from one of its commands can start another run in its place.
+#[test]
+fn no_run_starts_while_one_pumps() {
+    let log = Log::default();
+    let mut app = app(vec![vec![]], &log);
+    app.scripts.pumping = true;
+    assert!(app.scripts.running());
+    assert_eq!(resolve_and_start(&mut app, json!({"name": "inner.jsx", "source": "1"}), None, None).unwrap_err(), "a script is already running");
+    assert!(log.starts.borrow().is_empty());
+}
+
+/// A run whose pump panics ends; the next script can still start.
+#[test]
+fn a_run_that_panics_while_pumping_leaves_scripts_usable() {
+    let log = Log::default();
+    let mut app = app(vec![vec![Act::Run("no.such.command", json!({}))], vec![]], &log);
+    start_named(&mut app, "boom.jsx");
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| settle(&mut app)));
+    assert!(!app.scripts.pumping, "the pump is over");
+    finish(&mut app, Ok(()));
+    assert!(start(&mut app, ScriptStart { name: "next.jsx".into(), source: String::new(), app_name: None }, None).is_ok());
 }
