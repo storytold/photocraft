@@ -13,6 +13,7 @@ use serde_json::json;
 
 use super::text_layer;
 use crate::PhotocraftApp;
+use crate::canvas::testing::{ToolEvent, tool_event};
 
 fn new_app() -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -39,18 +40,8 @@ fn selected_layer(app: &mut PhotocraftApp, props: serde_json::Value) -> LayerId 
 
 /// Characters `anchor..caret` of `id` selected in an inline edit.
 fn editing(app: &mut PhotocraftApp, id: LayerId, anchor: usize, caret: usize) {
-    app.ui.text_edit = Some(crate::state::TextEdit {
-        layer: id.0,
-        document: None,
-        caret,
-        anchor,
-        session: "type-defaults-edit".into(),
-        created: false,
-        mask: false,
-        dragging: false,
-        resize: None,
-        preedit: None,
-    });
+    app.ui.text_edit =
+        Some(crate::state::TextEdit { layer: id.0, document: None, caret, anchor, session: "type-defaults-edit".into(), created: false, mask: false });
 }
 
 /// Click empty canvas with the Type tool, ending any edit first; the new layer's first run style.
@@ -58,7 +49,8 @@ fn new_type(app: &mut PhotocraftApp) -> (CharStyle, TextLayer) {
     if app.ui.text_edit.is_some() {
         super::commit(app);
     }
-    super::pointer_up(app, [100.0, 100.0], [100.0, 100.0]);
+    tool_event(app, ToolEvent::Down { x: 100.0, y: 100.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(app, ToolEvent::Up { x: 100.0, y: 100.0 }, Modifiers::NONE);
     let t = text(app, LayerId(app.ui.text_edit.as_ref().unwrap().layer));
     (t.char_runs()[0].style.clone(), t)
 }
@@ -114,8 +106,8 @@ fn character_panel_changes_on_a_selected_type_layer_become_the_defaults() {
     let id = selected_layer(&mut app, json!({}));
     let mut h = controls(app, false);
     number(&mut h, "Font size", "36");
-    number(&mut h, "Tracking (1/1000 em)", "80");
-    number(&mut h, "Leading (set to the font size × auto-leading when Auto)", "44");
+    number(&mut h, "Tracking", "80");
+    number(&mut h, "Leading", "44");
     number(&mut h, "Vertical scale", "110");
     number(&mut h, "Horizontal scale", "90");
     number(&mut h, "Baseline shift", "3");
@@ -133,7 +125,6 @@ fn character_panel_changes_on_a_selected_type_layer_become_the_defaults() {
 #[test]
 fn changes_to_selected_characters_while_editing_become_the_defaults() {
     let mut app = new_app();
-    let ctx = egui::Context::default();
     let id = selected_layer(&mut app, json!({}));
     editing(&mut app, id, 1, 3);
     for props in [
@@ -151,7 +142,7 @@ fn changes_to_selected_characters_while_editing_become_the_defaults() {
         json!({"underline": true}),
         json!({"variations": {"wdth": 90}}),
     ] {
-        super::apply(&mut app, &ctx, props);
+        super::apply(&mut app, props, None);
     }
     super::toggle_opentype(&mut app, "type.openType.fractions", false);
     let runs = text(&app, id).char_runs();
@@ -170,10 +161,9 @@ fn changes_to_selected_characters_while_editing_become_the_defaults() {
 #[test]
 fn paragraph_changes_on_a_type_target_leave_the_paragraph_defaults() {
     let mut app = new_app();
-    let ctx = egui::Context::default();
     let id = selected_layer(&mut app, json!({}));
     let options = app.ui.tool_options.clone();
-    super::apply(&mut app, &ctx, json!({"startIndent": 9, "direction": "rtl", "spaceAfter": 4}));
+    super::apply(&mut app, json!({"startIndent": 9, "direction": "rtl", "spaceAfter": 4}), None);
     assert_eq!(text(&app, id).paragraph_runs()[0].style.start_indent_pt, 9.0);
     assert_eq!(app.ui.tool_options, options);
 }
@@ -190,8 +180,11 @@ fn a_text_color_picked_for_a_type_target_leaves_new_type_on_the_foreground() {
         }
         let (revision, foreground, options) = (app.session.active().unwrap().revision, app.session.tools.foreground, app.ui.tool_options.clone());
         let dialog = super::open_color_picker(&mut app, [0.0; 3]);
-        app.ui.dialogs.last_mut().unwrap().fields.insert("color".into(), json!("#336699"));
-        crate::dialogs::confirm(&mut app, dialog).unwrap();
+        let ctx = app.ctx().clone();
+        for (field, value) in crate::control::dialogs::map_request(&app, dialog, "color", json!("#336699")) {
+            app.framework.dialogs.set_json_field(&ctx, dialog, &field, value).unwrap();
+        }
+        crate::dialogs::confirm(&mut app, &ctx, dialog).unwrap();
         assert!(app.session.active().unwrap().revision > revision, "editing: {edit}");
         assert_eq!(text(&app, id).char_runs()[0].style.color.to_rgba8(), [51, 102, 153, 255], "editing: {edit}");
         assert_eq!(app.session.tools.foreground, foreground, "editing: {edit}");
@@ -207,9 +200,8 @@ fn a_text_color_picked_for_a_type_target_leaves_new_type_on_the_foreground() {
 #[test]
 fn a_color_applied_to_a_type_target_is_not_a_default() {
     let mut app = new_app();
-    let ctx = egui::Context::default();
     let id = selected_layer(&mut app, json!({}));
-    super::apply(&mut app, &ctx, json!({"color": "#336699", "tracking": 40}));
+    super::apply(&mut app, json!({"color": "#336699", "tracking": 40}), None);
     assert_eq!(text(&app, id).char_runs()[0].style.color.to_rgba8(), [51, 102, 153, 255]);
     assert_eq!(app.ui.tool_options.type_style_defaults.get("tracking"), Some(&json!(40)), "other settings are kept");
     assert!(!app.ui.tool_options.type_style_defaults.contains_key("color"));
@@ -258,11 +250,10 @@ fn new_type_takes_the_tools_anti_aliasing_method() {
 #[test]
 fn a_style_chosen_at_a_caret_becomes_the_default() {
     let mut app = new_app();
-    let ctx = egui::Context::default();
     let id = selected_layer(&mut app, json!({}));
     let before = text(&app, id).char_runs();
     editing(&mut app, id, 2, 2);
-    super::apply(&mut app, &ctx, json!({"fontStyle": "Bold"}));
+    super::apply(&mut app, json!({"fontStyle": "Bold"}), None);
     assert!(app.ui.type_insertion_style.is_some(), "the caret keeps it for the next letters");
     assert_eq!(text(&app, id).char_runs(), before, "existing letters are unchanged");
     assert_eq!(app.ui.tool_options.type_style, "Bold");
