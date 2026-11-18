@@ -9,13 +9,13 @@ use photocraft_geom::Point;
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::canvas::{ToolEvent, tool_event};
+use crate::canvas::testing;
 use crate::direct_select::PathRef;
 use crate::state::Tool;
 
 const NAME: &str = "Path 1";
 
-fn app(tool: Tool) -> PhotocraftApp {
+fn app(tool: Tool) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
     app.sync_views();
@@ -46,11 +46,11 @@ fn steps(app: &PhotocraftApp) -> usize {
 }
 
 fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2], mods: Modifiers) {
-    tool_event(app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, mods);
+    testing::press(app, from, mods);
     let mid = [(from[0] + to[0]) / 2.0, (from[1] + to[1]) / 2.0];
-    tool_event(app, ToolEvent::Move { x: mid[0], y: mid[1], pressure: 1.0 }, mods);
-    tool_event(app, ToolEvent::Move { x: to[0], y: to[1], pressure: 1.0 }, mods);
-    tool_event(app, ToolEvent::Up { x: to[0], y: to[1] }, mods);
+    testing::move_to(app, mid, mods);
+    testing::move_to(app, to, mods);
+    testing::release(app, to, mods);
 }
 
 #[test]
@@ -134,12 +134,10 @@ fn free_transform_path_names_the_selected_saved_path() {
 fn add_and_delete_anchor_point_edit_the_selected_saved_path() {
     let mut app = app(Tool::AddAnchorPoint);
     with_saved_path(&mut app);
-    tool_event(&mut app, ToolEvent::Down { x: 80.0, y: 40.0, pressure: 1.0 }, Modifiers::NONE);
-    tool_event(&mut app, ToolEvent::Up { x: 80.0, y: 40.0 }, Modifiers::NONE);
+    testing::click(&mut app, [80.0, 40.0], Modifiers::NONE);
     assert_eq!(anchors(&saved(&app)).len(), 5, "an anchor was added on the top segment");
     app.ui.tool = Tool::DeleteAnchorPoint;
-    tool_event(&mut app, ToolEvent::Down { x: 120.0, y: 120.0, pressure: 1.0 }, Modifiers::NONE);
-    tool_event(&mut app, ToolEvent::Up { x: 120.0, y: 120.0 }, Modifiers::NONE);
+    testing::click(&mut app, [120.0, 120.0], Modifiers::NONE);
     assert!(!anchors(&saved(&app)).contains(&Point::new(120.0, 120.0)), "the corner anchor was deleted");
 }
 
@@ -173,19 +171,11 @@ fn arrows_leave_a_saved_path_the_paths_panel_no_longer_selects() {
     app.run("path.set", json!({"name": "Path 2", "path": square(10.0, 10.0, 20.0)})).unwrap();
     drag(&mut app, [30.0, 30.0], [50.0, 50.0], Modifiers::NONE);
     assert_eq!((app.ui.direct_selection.target, app.ui.direct_selection.anchors.clone()), (Some(PathRef::Saved(0)), vec![[0, 0]]));
-    // One → press through the canvas arrow keys, as egui delivers it.
-    let arrow = |app: &mut PhotocraftApp| {
-        let ctx = egui::Context::default();
-        ctx.input_mut(|i| {
-            i.events.push(egui::Event::Key { key: egui::Key::ArrowRight, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE })
-        });
-        crate::direct_select::arrow_keys(app, &ctx)
-    };
-    assert!(arrow(&mut app), "the selected path's anchor is nudged");
-    assert_eq!(saved(&app).subpaths[0].knots[0].anchor, Point::new(41.0, 40.0));
+    testing::key(&mut app, egui::Key::ArrowRight, Modifiers::NONE);
+    assert_eq!(saved(&app).subpaths[0].knots[0].anchor, Point::new(41.0, 40.0), "the selected path's anchor is nudged");
     app.ui.selected_path = Some("Path 2".into());
     let (one, two) = (saved(&app), app.session.active().unwrap().doc.paths[1].path.clone());
-    assert!(!arrow(&mut app), "no key is used for a path that is not the target");
+    testing::key(&mut app, egui::Key::ArrowRight, Modifiers::NONE);
     assert_eq!(saved(&app), one, "Path 1 stays");
     assert_eq!(app.session.active().unwrap().doc.paths[1].path, two, "Path 2 stays");
     assert_eq!(app.ui.direct_selection.target, None, "the stale anchor selection is dropped");

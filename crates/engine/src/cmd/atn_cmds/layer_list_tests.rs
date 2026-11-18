@@ -1,4 +1,5 @@
 use super::*;
+use crate::actions_cmds::ActionStep;
 use craft_psd::atn::{AtnAction, AtnEvent, AtnFile, AtnItem};
 use craft_psd::descriptor::{Descriptor, ReferenceItem, UnicodeString, Value as D};
 use serde_json::json;
@@ -31,15 +32,15 @@ fn opacities(s: &Session) -> Vec<f64> {
 #[test]
 fn the_layers_list_survives_a_strict_roundtrip() {
     let (mut s, first, second) = two_layers();
-    s.actions.list.push(Action::new("Targets", vec![("layer.setProps".into(), json!({"layers": [first, second], "opacity": 0.5}))]));
-    s.actions.list[0].set = Some("S".into());
+    s.actions.list.push(Action::new("Targets", vec![ActionStep::new("layer.setProps", json!({"layers": [first, second], "opacity": 0.5}))])).unwrap();
+    s.actions.list.assign_set(0, Some("S".into())).unwrap();
 
     s.execute("actions.play", json!({"action": "Targets"})).unwrap();
     assert_eq!(opacities(&s), [0.5, 0.5]);
     s.execute("edit.undo", json!({})).unwrap();
     assert_eq!(opacities(&s), [1.0, 1.0]);
 
-    let action = s.actions.list[0].clone();
+    let action = s.actions.list.actions()[0].clone();
     let (bytes, skipped) = export("S", &[&action], &[], false).unwrap();
     assert_eq!(skipped, []);
     let file = atn::parse(&bytes).unwrap();
@@ -83,7 +84,7 @@ fn a_layer_id_reference_imports_as_the_layer_id() {
     .unwrap();
     let imported = import(&bytes).unwrap();
     assert_eq!(imported.unsupported, []);
-    assert_eq!(imported.actions[0].steps, [("layer.setProps".to_string(), json!({"layer": 7, "opacity": 0.3}))]);
+    assert_eq!(imported.actions[0].steps, [ActionStep::new("layer.setProps", json!({"layer": 7, "opacity": 0.3}))]);
 
     // Re-exporting the imported step keeps the id: the reference is the same `Idnt` again,
     // not the implicit target layer (#7246, review).
@@ -102,20 +103,20 @@ fn a_layer_id_reference_imports_as_the_layer_id() {
 #[test]
 fn a_one_layer_list_exports_one_exact_set() {
     let (_s, first, _) = two_layers();
-    let action = Action::new("Targets", vec![("layer.setProps".into(), json!({"layers": [first], "opacity": 0.5}))]);
+    let action = Action::new("Targets", vec![ActionStep::new("layer.setProps", json!({"layers": [first], "opacity": 0.5}))]);
     let (bytes, skipped) = export("S", &[&action], &[], false).unwrap();
     assert_eq!(skipped, []);
     let file = atn::parse(&bytes).unwrap();
     assert_eq!(file.actions[0].items.len(), 1);
     let steps = import(&bytes).unwrap().actions[0].steps.clone();
-    assert_eq!(steps, [("layer.setProps".to_string(), json!({"layer": first, "opacity": 0.5}))]);
+    assert_eq!(steps, [ActionStep::new("layer.setProps", json!({"layer": first, "opacity": 0.5}))]);
 }
 
 /// A list the format can't carry exactly (`Idnt` holds u32) refuses: strict export fails,
 /// and `skipUnsupported` reports the whole step.
 #[test]
 fn export_refuses_a_layer_id_beyond_the_idnt_range() {
-    let action = Action::new("Targets", vec![("layer.setProps".into(), json!({"layers": [u32::MAX as u64 + 1], "opacity": 0.5}))]);
+    let action = Action::new("Targets", vec![ActionStep::new("layer.setProps", json!({"layers": [u32::MAX as u64 + 1], "opacity": 0.5}))]);
     let e = export("S", &[&action], &[], false).unwrap_err();
     assert!(e.contains("layer.setProps"), "{e}");
     let (_, skipped) = export("S", &[&action], &[], true).unwrap();
@@ -126,7 +127,7 @@ fn export_refuses_a_layer_id_beyond_the_idnt_range() {
 /// that step, and strict export refuses it too.
 #[test]
 fn export_refuses_a_rename_carrying_a_layers_list() {
-    let action = Action::new("Targets", vec![("layer.setProps".into(), json!({"layers": [1, 2], "name": "Both"}))]);
+    let action = Action::new("Targets", vec![ActionStep::new("layer.setProps", json!({"layers": [1, 2], "name": "Both"}))]);
     let e = export("S", &[&action], &[], false).unwrap_err();
     assert!(e.contains("layer.setProps"), "{e}");
 }
@@ -135,7 +136,7 @@ fn export_refuses_a_rename_carrying_a_layers_list() {
 /// one item would aim the step at the active layer instead (#7246, review).
 #[test]
 fn export_refuses_a_non_array_layers_value() {
-    let action = Action::new("Targets", vec![("layer.setProps".into(), json!({"layers": "7,8", "opacity": 0.5}))]);
+    let action = Action::new("Targets", vec![ActionStep::new("layer.setProps", json!({"layers": "7,8", "opacity": 0.5}))]);
     let e = export("S", &[&action], &[], false).unwrap_err();
     assert!(e.contains("layer.setProps"), "{e}");
     let (_, skipped) = export("S", &[&action], &[], true).unwrap();
@@ -150,7 +151,7 @@ fn export_refuses_a_non_array_layers_value() {
 #[test]
 fn a_list_with_properties_exports_exact_targets_in_order() {
     let (s, first, second) = two_layers();
-    let mut action = Action::new("Targets", vec![("layer.setProps".into(), json!({"layers": [first, second], "opacity": 0.5, "blend": "Multiply"}))]);
+    let mut action = Action::new("Targets", vec![ActionStep::new("layer.setProps", json!({"layers": [first, second], "opacity": 0.5, "blend": "Multiply"}))]);
     // The panel's unchecked and dialog columns: the expansion must not lose them.
     action.disabled.insert(0);
     action.dialogs.insert(0);
@@ -177,7 +178,7 @@ fn a_list_with_properties_exports_exact_targets_in_order() {
     }
     assert!(s.active().unwrap().doc.walk()[1].2.blend == photocraft_color::BlendMode::Normal, "export writes no edit into the document");
 
-    let malformed = Action::new("Targets", vec![("layer.setProps".into(), json!({"layers": [first, "nope"], "opacity": 0.5}))]);
+    let malformed = Action::new("Targets", vec![ActionStep::new("layer.setProps", json!({"layers": [first, "nope"], "opacity": 0.5}))]);
     let e = export("S", &[&malformed], &[], false).unwrap_err();
     assert!(e.contains("layer.setProps"), "{e}");
     let (bytes, skipped) = export("S", &[&malformed], &[], true).unwrap();
@@ -191,11 +192,11 @@ fn a_list_with_properties_exports_exact_targets_in_order() {
 #[test]
 fn export_refuses_a_numeric_layer_beyond_the_idnt_range() {
     for bad in [json!(u32::MAX as u64 + 1), json!(-5)] {
-        let action = Action::new("Targets", vec![("layer.setProps".into(), json!({"layer": bad, "opacity": 0.5}))]);
+        let action = Action::new("Targets", vec![ActionStep::new("layer.setProps", json!({"layer": bad, "opacity": 0.5}))]);
         let e = export("S", &[&action], &[], false).unwrap_err();
         assert!(e.contains("layer.setProps"), "{e}");
     }
-    let skipped_action = Action::new("Targets", vec![("layer.setProps".into(), json!({"layer": -5, "opacity": 0.5}))]);
+    let skipped_action = Action::new("Targets", vec![ActionStep::new("layer.setProps", json!({"layer": -5, "opacity": 0.5}))]);
     let (_, skipped) = export("S", &[&skipped_action], &[], true).unwrap();
     assert_eq!(skipped, [Skipped { action: "Targets".into(), step: 0, id: "layer.setProps".into() }]);
 }
