@@ -480,3 +480,44 @@ fn a_collection_read_twice_is_the_same_object_and_stays_current() {
     );
     assert_eq!(lines, ["true true true true true true"]);
 }
+
+/// What nearly every published script starts with: `app.bringToFront()`, `$.os`, and `app`'s
+/// properties named bare (`activeDocument`, `preferences`), as Photoshop resolves them.
+#[test]
+fn the_globals_published_scripts_start_with_are_there() {
+    let s = session(30, 20);
+    let lines = run(
+        &s,
+        r#"
+        app.bringToFront();
+        $.writeln(typeof $.os, ' ', $.os.length > 0);
+        $.writeln(activeDocument == app.activeDocument, ' ', activeDocument.name, ' ', documents.length);
+        var was = preferences.rulerUnits;
+        preferences.rulerUnits = Units.PIXELS;
+        $.writeln(app.preferences.rulerUnits == Units.PIXELS);
+        preferences.rulerUnits = was;
+        $.writeln(app.stringIDToTypeID('bmpDepth') == stringIDToTypeID('bmpDepth'), ' ', app.typeIDToStringID(app.stringIDToTypeID('bmpDepth')));
+        "#,
+    );
+    assert_eq!(lines, ["string true", "true Doc 1", "true", "true bmpDepth"]);
+}
+
+/// `doc.suspendHistory(name, code)` runs `code` in the global scope; the run is one History step
+/// already.
+#[test]
+fn suspend_history_runs_its_code() {
+    let s = session(30, 20);
+    let lines = run(
+        &s,
+        r#"
+        var ran = 0;
+        function main() { ran++; app.activeDocument.artLayers.add().name = 'Inside'; }
+        app.activeDocument.suspendHistory('Step', 'main()');
+        $.writeln(ran, ' ', app.activeDocument.activeLayer.name);
+        try { app.activeDocument.suspendHistory.call({}, 'x', 'main()'); } catch (e) { $.writeln('refused'); }
+        $.writeln(ran);
+        "#,
+    );
+    assert_eq!(lines, ["1 Inside", "refused", "1"]);
+    assert!(layer_names(&s).contains(&"Inside".to_owned()));
+}

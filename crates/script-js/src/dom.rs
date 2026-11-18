@@ -1125,6 +1125,19 @@ fn doc_simple(this: &JsValue, ctx: &mut Context, id: &str) -> JsResult<JsValue> 
     Ok(JsValue::undefined())
 }
 
+/// `doc.suspendHistory(name, code)`: run `code` as one History step. A whole run is one step
+/// already, so this runs `code`, in the global scope as Photoshop does.
+fn doc_suspend_history(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    if crate::natives::doc_id(this).is_none() {
+        return Err(error("suspendHistory: not a Document"));
+    }
+    let code = args.get(1).cloned().unwrap_or_default().to_string(ctx)?;
+    let eval = ctx.global_object().get(js_string!("eval"), ctx)?;
+    let eval = eval.as_callable().ok_or_else(|| error("suspendHistory: eval is missing"))?;
+    eval.call(&JsValue::undefined(), &[code.into()], ctx)?;
+    Ok(JsValue::undefined())
+}
+
 fn doc_flatten(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     doc_simple(this, ctx, "layer.flattenImage")
 }
@@ -1387,6 +1400,7 @@ pub(crate) const DOC_METHODS: &[(&str, Native, usize)] = &[
     ("saveAs", doc_save_as, 3),
     ("save", doc_save, 0),
     ("exportDocument", doc_export, 3),
+    ("suspendHistory", doc_suspend_history, 2),
 ];
 
 // ---------- app ----------

@@ -59,8 +59,18 @@ per-run budget (`ui-egui/src/scripts.rs`).
 
 The tests run scripts against a real session (`tests/dom.rs`, `tests/run.rs`), against hostile
 script hosts that forge or flood messages (`tests/isolate.rs`), and through the app with a fake
-script service (`ui-egui/src/scripts/tests.rs`). No real-world community script has been run
-end to end yet.
+script service (`ui-egui/src/scripts/tests.rs`). Published community scripts run unchanged
+in `tests/community.rs`:
+
+- **Export Layer Coordinates** runs to its end: it asks for a folder, walks the layers into
+  groups, and reports. It also writes a text file, and scripts can't do that yet. The script
+  swallows that error itself, so it reports success with no file written.
+- **Export Layers To Files (Fast)** gets through its setup and stops where it reads its dialog's
+  resource file next to itself. Scripts can't read files yet either.
+
+Running them first turned up five missing pieces, now added: `app.bringToFront()`, `$.os`, `app`'s
+properties named bare (`activeDocument`, `preferences`), `app.stringIDToTypeID` and
+`doc.suspendHistory`.
 
 ## Saves and the file system
 
@@ -91,7 +101,9 @@ request. A script that breaks the engine still only breaks its own host process.
 ## Still to do
 
 - Run the tests on macOS and FreeBSD, and by hand on every platform.
-- Run real-world community scripts end to end and keep them as fixtures.
+- Text file reads and writes for scripts, within the files the user chose in the run. More
+  community scripts as fixtures, especially ones that use `executeAction` and ScriptUI resource
+  strings.
 - Try scripts by hand in a browser. In the browser a run's commands go about one per frame, since
   the page reads the Worker's messages between frames; a shared-memory channel both ways would
   let a frame take several.

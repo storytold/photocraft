@@ -818,12 +818,38 @@ fn read_stderr(mut errors: ChildStderr, shared: &Shared) {
     }
 }
 
+/// A size `msg` is known to exceed once encoded, from its text alone: a script or a text answer
+/// longer than the frame limit. Such a message is refused before it is encoded, which for a few
+/// hundred MiB takes long enough on a loaded machine to run into the run's time limit first.
+fn known_too_large(msg: &ToHost) -> Option<usize> {
+    let text = match msg {
+        ToHost::Start { source, .. } => Some(source.len()),
+        ToHost::Dialog { answer } => answer.as_str().map(str::len),
+        ToHost::Executed { result: Ok(value) } => value.as_str().map(str::len),
+        ToHost::Executed { result: Err(e) } => Some(e.len()),
+    };
+    text.filter(|n| *n > MAX_TO_HOST)
+}
+
 fn write_host(mut input: ChildStdin, rx: &Receiver<ToHost>, shared: &Shared) {
     for msg in rx {
-        let written = match write_frame(&mut input, &msg, MAX_TO_HOST) {
+        let first = match known_too_large(&msg) {
+            Some(n) => Err(FrameError::TooLarge(n)),
+            None => write_frame(&mut input, &msg, MAX_TO_HOST),
+        };
+        let written = match first {
             Err(FrameError::TooLarge(n)) if matches!(msg, ToHost::Start { .. }) => {
                 // Nothing was sent: the host never sees the script, and the run fails by name.
                 shared.kill(Verdict::TooLarge(n));
+                return;
+            }
+            Err(FrameError::TooLarge(n)) if matches!(msg, ToHost::Dialog { .. }) => {
+                // Nothing was sent: the host is still waiting, so the run ends here with the reason.
+                shared.kill(Verdict::Unsent(format!(
+                    "a dialog's answer could not be sent to the script host ({} MiB, over the limit of {} MiB)",
+                    n.div_ceil(1 << 20),
+                    MAX_TO_HOST >> 20
+                )));
                 return;
             }
             Err(FrameError::TooLarge(n)) if matches!(msg, ToHost::Executed { .. }) => {

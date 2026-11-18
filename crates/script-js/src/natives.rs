@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use boa_engine::context::time::{Clock, StdClock};
 use boa_engine::object::builtins::JsFunction;
 use boa_engine::object::{FunctionObjectBuilder, ObjectInitializer};
-use boa_engine::property::Attribute;
+use boa_engine::property::{Attribute, PropertyDescriptor};
 use boa_engine::{Context, Finalize, JsData, JsError, JsNativeError, JsObject, JsResult, JsString, JsValue, NativeFunction, Trace, js_string};
 use serde_json::{Value, json};
 
@@ -423,6 +423,43 @@ fn app_set_active_document(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> 
     Ok(JsValue::undefined())
 }
 
+/// Properties of `app` a script may name as globals, as in Photoshop.
+const APP_GLOBALS: &[&str] = &["activeDocument", "documents", "preferences", "displayDialogs"];
+
+fn app_global_get(_: &JsValue, _: &[JsValue], key: &JsString, ctx: &mut Context) -> JsResult<JsValue> {
+    let app = ctx.global_object().get(js_string!("app"), ctx)?;
+    match app.as_object() {
+        Some(app) => app.get(key.clone(), ctx),
+        None => Ok(JsValue::undefined()),
+    }
+}
+
+fn app_global_set(_: &JsValue, args: &[JsValue], key: &JsString, ctx: &mut Context) -> JsResult<JsValue> {
+    let app = ctx.global_object().get(js_string!("app"), ctx)?;
+    if let Some(app) = app.as_object() {
+        // As an assignment in sloppy code: a read-only property of `app` stays as it is.
+        app.set(key.clone(), args.first().cloned().unwrap_or_default(), false, ctx)?;
+    }
+    Ok(JsValue::undefined())
+}
+
+fn no_op(_: &JsValue, _: &[JsValue], _: &mut Context) -> JsResult<JsValue> {
+    Ok(JsValue::undefined())
+}
+
+/// `$.os`: the system as ExtendScript names it, closely enough for the checks scripts make.
+fn host_os() -> &'static str {
+    if cfg!(windows) {
+        "Windows"
+    } else if cfg!(target_os = "macos") {
+        "Macintosh OS"
+    } else if cfg!(target_arch = "wasm32") {
+        "Web"
+    } else {
+        "Unix"
+    }
+}
+
 /// Install the globals into a fresh context.
 pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
     // Before any script could replace them.
@@ -441,16 +478,30 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
         .accessor(js_string!("documents"), Some(get_documents), None, Attribute::ENUMERABLE)
         .accessor(js_string!("activeDocument"), Some(get_active), Some(set_active), Attribute::ENUMERABLE)
         .function(NativeFunction::from_fn_ptr(crate::scriptui::refresh), js_string!("refresh"), 0)
+        // The window is always in front of a script the user ran from it.
+        .function(NativeFunction::from_fn_ptr(no_op), js_string!("bringToFront"), 0)
         .build();
     crate::dom::install(ctx, &app)?;
     crate::descriptor::install(ctx, &app)?;
     ctx.register_global_property(js_string!("app"), app, Attribute::all())?;
+    // Photoshop scripts name these without `app.` (`activeDocument.name`, `preferences.rulerUnits`).
+    for key in APP_GLOBALS {
+        let key = JsString::from(*key);
+        let get = FunctionObjectBuilder::new(ctx.realm(), NativeFunction::from_copy_closure_with_captures(app_global_get, key.clone())).length(0).build();
+        let set = FunctionObjectBuilder::new(ctx.realm(), NativeFunction::from_copy_closure_with_captures(app_global_set, key.clone())).length(1).build();
+        let desc = PropertyDescriptor::builder().get(get).set(set).enumerable(false).configurable(true).build();
+        ctx.global_object().define_property_or_throw(key, desc, ctx)?;
+    }
 
     unit_value::install(ctx)?;
     crate::scriptui::install(ctx)?;
     crate::files::install(ctx)?;
 
-    let dollar = ObjectInitializer::new(ctx).function(NativeFunction::from_fn_ptr(writeln), js_string!("writeln"), 1).build();
+    let dollar = ObjectInitializer::new(ctx)
+        .function(NativeFunction::from_fn_ptr(writeln), js_string!("writeln"), 1)
+        // What scripts test to pick line endings and paths (`$.os.search(/windows/i)`).
+        .property(js_string!("os"), JsString::from(host_os()), Attribute::READONLY | Attribute::NON_ENUMERABLE | Attribute::PERMANENT)
+        .build();
     ctx.register_global_property(js_string!("$"), dollar, Attribute::all())?;
 
     // Replays depend on these going through the tape: without them the run can't start.

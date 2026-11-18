@@ -105,6 +105,15 @@ Files copied into `corpus/` by hand (tiff, exr, raw) must be MIT, BSD or CC0.
 |---|---|---|---|---|
 | `crates/engine/tests/fixtures/atn/v12-commands.atn` | Independently encoded ATN version-12 parser fixture (Gaussian Blur, Levels, Select All, Make Layer; 404 bytes, sha256 `451958b686da9aab45e65ae902c86333b7149d72021c21904e3aae8e39eb77cb`), copied from the PSD crate's fixtures, which now live in craft-libs' `craft-psd` | PhotoCraft contributors (@yoriswind) | Original synthetic test data | MIT OR Apache-2.0 |
 
+## Community script fixtures
+
+Real-world Photoshop scripts, unchanged, that `crates/script-js/tests/community.rs` runs end to end. Each licence sits next to its script.
+
+| Path | Title | Author | Source | License |
+|---|---|---|---|---|
+| `crates/script-js/tests/community/export_layer_coordinates.jsx` | Export Layer Coordinates (writes each layer's name and position to a text file) | Chris DeLuca | [bronzehedwick/Adobe-Export-Scripts](https://github.com/bronzehedwick/Adobe-Export-Scripts) at `28027a831974f95c482f297f63119ce6430d743a`, `Photoshop/Export Layer Coordinates Photoshop.jsx` | MIT, [`export_layer_coordinates.LICENSE`](crates/script-js/tests/community/export_layer_coordinates.LICENSE) |
+| `crates/script-js/tests/community/export_layers_to_files_fast.jsx`, `export_layers_to_files_fast-progress_bar.json` | Export Layers To Files (Fast) v2.7.1 and its progress-bar resource | The Export Layers To Files (Fast) contributors | [antipalindrome/Photoshop-Export-Layers-to-Files-Fast](https://github.com/antipalindrome/Photoshop-Export-Layers-to-Files-Fast) at `40492edacbf8a7116c4750e9c591569fa20576dd` | MIT, [`export_layers_to_files_fast.LICENSE`](crates/script-js/tests/community/export_layers_to_files_fast.LICENSE) |
+
 ## Embedded-vector editor source
 
 The external SVG watcher, engine/UI handoff and bounded SVG rendering in this change

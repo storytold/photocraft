@@ -419,6 +419,9 @@ pub(crate) fn install(ctx: &mut Context, app: &JsObject) -> JsResult<()> {
         ("typeIDToStringID", id_to_string, 1),
     ] {
         ctx.register_global_builtin_callable(JsString::from(name), len, NativeFunction::from_fn_ptr(f))?;
+        // Photoshop offers them on `app` too (`app.stringIDToTypeID("bmpDepth")`).
+        let method = FunctionObjectBuilder::new(ctx.realm(), NativeFunction::from_fn_ptr(f)).name(JsString::from(name)).length(len).build();
+        app.set(JsString::from(name), method, true, ctx)?;
     }
     for (name, f, len) in [("putCustomOptions", put_custom as Native, 3), ("getCustomOptions", get_custom, 1), ("eraseCustomOptions", erase_custom, 1)] {
         let f = FunctionObjectBuilder::new(ctx.realm(), NativeFunction::from_fn_ptr(f)).name(JsString::from(name)).length(len).build();

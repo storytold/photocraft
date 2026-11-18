@@ -234,7 +234,8 @@ fn a_planted_global_cannot_replace_document_objects() {
                $.writeln(Object.getOwnPropertyNames(globalThis).length - before);";
     let mut r = Runner::new(src, Box::new(host), Box::new(Unlimited), RunOptions::default()).unwrap();
     assert_eq!(r.step(), Step::Done, "{}", out.borrow().join(" | "));
-    assert_eq!(*out.borrow(), ["0", "Two One true", "2"]);
+    // `documents` is already a global (`app.documents` named bare), so only the other plant adds one.
+    assert_eq!(*out.borrow(), ["0", "Two One true", "1"]);
 }
 
 #[test]

@@ -800,7 +800,11 @@ fn a_host_that_lingers_after_closing_its_output_is_stopped_by_the_app() {
 fn a_script_over_the_message_limit_fails_by_name() {
     let limit = photocraft_script_js::isolate::protocol::MAX_TO_HOST;
     let src = format!("//{}", "x".repeat(limit));
-    let seen = run(&src);
+    // Refused before it is encoded: encoding 257 MiB would outlast this limit.
+    let mut opts = options("oversize script");
+    opts.time_limit = Duration::from_millis(50);
+    let mut job = IsolatedJob::spawn(src, opts).unwrap();
+    let seen = drive(&mut job, None, &[], |_, _| {});
     report("oversize script", &seen);
     let f = failure(&seen);
     assert_eq!(f.kind, FailureKind::Script, "{}", f.message);
@@ -935,7 +939,10 @@ fn an_interface_that_stops_taking_output_does_not_hold_the_run_forever() {
 /// without a result.
 #[test]
 fn an_answer_too_large_to_send_ends_the_run_with_the_reason() {
-    let mut job = IsolatedJob::spawn("var s = prompt('Name?'); $.writeln(s.length);".into(), options("huge answer")).unwrap();
+    // Refused before it is encoded: encoding 257 MiB would outlast this limit.
+    let mut opts = options("huge answer");
+    opts.time_limit = Duration::from_millis(200);
+    let mut job = IsolatedJob::spawn("var s = prompt('Name?'); $.writeln(s.length);".into(), opts).unwrap();
     let huge = "x".repeat(photocraft_script_js::isolate::protocol::MAX_TO_HOST + 1);
     let seen = drive(&mut job, None, &[json!(huge)], |_, _| {});
     let f = failure(&seen);
