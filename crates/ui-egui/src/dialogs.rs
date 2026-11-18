@@ -469,6 +469,8 @@ pub(crate) const TAKERS: &[fn(&mut PhotocraftApp, &egui::Context)] = &[
     crate::crop_presets::take,
     crate::variables_ui::take,
     crate::actions::dialogs::take_stops,
+    // Not a finished dialog's result: what the open Batch form's Source check boxes changed this pass.
+    crate::view_cmds::dialogs::batch_source_take,
 ];
 
 /// Runs the answers of every dialog that finished: parameter dialogs, prompts, then each family's own results. It runs
@@ -619,8 +621,14 @@ const ENGINE_READ: &[&str] = &["ui.layersPanelOptions", "file.print", "file.expo
 
 /// The "Don't show again" entries (`{"skip": true}`), by key, as their prompt modules read them. Told apart by key, not
 /// by the shape of the value.
-fn dont_show_again_keys() -> [&'static str; 4] {
-    [delete_layer_prompt::PREF, live_shape_prompt::PREF, crate::analysis::note_alerts::DELETE_NOTE_PREF, crate::retouch_ui::CAM_NO_PIXELS_PREF]
+fn dont_show_again_keys() -> [&'static str; 5] {
+    [
+        delete_layer_prompt::PREF,
+        live_shape_prompt::PREF,
+        crate::analysis::note_alerts::DELETE_NOTE_PREF,
+        crate::retouch_ui::CAM_NO_PIXELS_PREF,
+        crate::view_cmds::dialogs::BATCH_OVERRIDE_PREF,
+    ]
 }
 
 /// Where the remembered value of the preference entry `key` goes: `None` keeps it in `Preferences.dialogs`, else the

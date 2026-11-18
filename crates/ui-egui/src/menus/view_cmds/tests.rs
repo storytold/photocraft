@@ -573,8 +573,11 @@ fn batch_dialogs_include_all_subfolders() {
     for (command, out) in [("file.automate.batch", "batch"), ("file.scripts.imageProcessor", "processed")] {
         let d = open_form(&mut app, &ctx, command);
         let shown = fields(&app, d);
-        assert_eq!(shown["includeSubfolders"], json!(false), "{command}");
-        assert_eq!(label_of(&mut app, command, "includeSubfolders"), "Include All Subfolders", "{command}");
+        // Batch keeps its check box inside the Source options row (#13668), so only Image Processor has a row of its own.
+        if command == "file.scripts.imageProcessor" {
+            assert_eq!(shown["includeSubfolders"], json!(false), "{command}");
+            assert_eq!(label_of(&mut app, command, "includeSubfolders"), "Include All Subfolders", "{command}");
+        }
         if command == "file.automate.batch" {
             assert_eq!(shown["source"], json!("folder"));
             assert_eq!(shown["stopOnError"], json!(false));
