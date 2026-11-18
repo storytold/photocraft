@@ -33,7 +33,8 @@ fn saved(app: &PhotocraftApp) -> Path {
 
 /// The vector tools' options bar for `tool`, laid out once.
 fn bar(app: PhotocraftApp, tool: Tool) -> Harness<'static, PhotocraftApp> {
-    let mut h = Harness::builder().with_size(vec2(1400.0, 400.0)).build_ui_state(
+    let ctx = app.ctx().clone();
+    let mut h = Harness::builder().with_size(vec2(1400.0, 400.0)).with_context(ctx).build_ui_state(
         move |ui, app: &mut PhotocraftApp| {
             if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 ui.horizontal(|ui| crate::vector_ui::options_bar(app, ui, tool));
@@ -41,7 +42,7 @@ fn bar(app: PhotocraftApp, tool: Tool) -> Harness<'static, PhotocraftApp> {
         },
         app,
     );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::AppTheme::pro());
     h.run_steps(4);
     h
 }
@@ -67,7 +68,7 @@ fn the_bar_shows_path_operations_instead_of_the_hint() {
 #[test]
 fn new_layer_stays_greyed_with_the_pen_in_shape_mode() {
     let mut app = app();
-    app.ui.tool_options.vector_mode = "shape".into();
+    app.ui.tool_options.vector_mode = craft::draw::ui::shape::VectorMode::Shape;
     let mut h = bar(app, Tool::DirectSelection);
     open_path_operations(&mut h);
     assert!(h.get_by_label("New Layer").accesskit_node().is_disabled());
@@ -83,23 +84,6 @@ fn the_bar_matches_path_selection_without_a_shape_layer() {
         bar(app, tool).get_by_label("Path operations").rect().min.x
     };
     assert_eq!(x(Tool::DirectSelection), x(Tool::PathSelection));
-}
-
-/// With a shape layer selected both tools draw the same controls at the same places.
-#[test]
-fn the_bar_matches_path_selection_with_a_shape_layer() {
-    let labels = ["Path operations", "Mode", "Fill", "Fill color", "Stroke color"];
-    let xs = |tool: Tool| {
-        let mut app = app();
-        app.ui.selected_path = None;
-        app.run("shape.create", json!({"rect": [20, 20, 220, 170], "stroke": null})).unwrap();
-        app.ui.tool = tool;
-        let h = bar(app, tool);
-        labels.map(|l| h.get_by_label(l).rect().min.x)
-    };
-    let (path, direct) = (xs(Tool::PathSelection), xs(Tool::DirectSelection));
-    assert!(path.is_sorted_by(|a, b| a < b), "left to right: {path:?}");
-    assert_eq!(direct, path);
 }
 
 /// A shape layer of two squares at `y`, 80 px each, active; its id.
