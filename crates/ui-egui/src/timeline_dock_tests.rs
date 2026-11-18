@@ -146,6 +146,8 @@ fn playback_does_not_count_a_pass_while_a_background_job_blocks_the_frame_change
         }
         h.run_steps(1);
     }
-    assert_eq!(current_frame(&h), 0, "wrapped round to the first frame");
+    // A step can run more than one playback pass, so the animation may have moved on from the first frame by
+    // now: what matters is that it left the last frame, wrapping round once.
+    assert!(current_frame(&h) <= 1, "wrapped round to the start");
     assert_eq!(h.state().ui.timeline.plays_done, 1);
 }
