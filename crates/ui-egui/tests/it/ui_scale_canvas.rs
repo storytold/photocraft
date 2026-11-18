@@ -12,7 +12,7 @@ use photocraft_ui_egui::PhotocraftApp;
 use photocraft_ui_egui::control::{ControlRequest, handle};
 use serde_json::{Value, json};
 
-type Harness = egui_kittest::Harness<'static, PhotocraftApp>;
+type Harness = egui_kittest::Harness<'static, Box<PhotocraftApp>>;
 
 /// The app with the GPU canvas (`gpu`), or without it (the CPU fallback path).
 fn harness(gpu: bool) -> Option<Harness> {

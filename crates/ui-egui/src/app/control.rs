@@ -14,7 +14,7 @@ use super::PhotocraftApp;
 
 impl PhotocraftApp {
     /// Attach a control channel (requests arrive from a transport thread: TCP, stdin, tests).
-    pub fn with_control(mut self, rx: Receiver<ControlRequest>) -> Self {
+    pub fn with_control(mut self: Box<Self>, rx: Receiver<ControlRequest>) -> Box<Self> {
         self.control = Some(ControlChannel::new(rx));
         self
     }
