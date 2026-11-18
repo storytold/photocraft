@@ -7,7 +7,7 @@
 //! re-run on re-render while the plug-in is installed). Runs respect the selection and are one
 //! undo step.
 //!
-//! Command plug-ins (the kind every Craft app shares, RFC-0041) come in `.craftplugin` bundles
+//! Command plug-ins (the kind every Craft app shares, RFC-0046) come in `.craftplugin` bundles
 //! from a file, a GitHub repository or a catalog, and `plugin.run` runs one as one undo step that
 //! calls other commands; see [`crate::plugin`]. `plugin.update` and `plugin.catalog.*` manage
 //! bundles.

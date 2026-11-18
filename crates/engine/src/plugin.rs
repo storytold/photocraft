@@ -1,4 +1,4 @@
-//! Plug-ins on the shared runtime, `craft-plugin` (RFC-0041): command plug-ins, which act on the
+//! Plug-ins on the shared runtime, `craft-plugin` (RFC-0046): command plug-ins, which act on the
 //! document only through the same commands as the menus, the CLI, the control channel and MCP,
 //! and the installed plug-ins of both kinds PhotoCraft runs (the user's `Plug-ins` folder, or this
 //! session only), installed from a `.craftplugin` bundle, a GitHub repository or a catalog.

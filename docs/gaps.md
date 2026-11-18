@@ -247,7 +247,7 @@ what an agent can't finish alone.
 - **Missing:** hosting Photoshop .8BF filters (#2647), UXP panels, CEP. PhotoCraft has its own
   sandboxed WebAssembly plug-in ABI v1 (`docs/plugins.md`), but ABI v2 (panels, progress, other
   layers) is missing (AUTO-219-6).
-- **2026-11-17:** command plug-ins, the kind every Craft app shares (craft-plugin, RFC-0041): a
+- **2026-11-17:** command plug-ins, the kind every Craft app shares (craft-plugin, RFC-0046): a
   plug-in runs PhotoCraft commands under a permission check as one undo step, and plug-ins of both
   kinds install from a `.craftplugin` file, a GitHub repository's release or a catalog (SHA-256
   checked, install confirmation) into the per-user Plug-ins folder; Filter › Plug-ins › Manage

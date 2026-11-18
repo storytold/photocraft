@@ -36,7 +36,7 @@ craft-xml = { workspace = true }
 craft-psd = { workspace = true }
 photocraft-format = { workspace = true }
 photocraft-plugins = { workspace = true }
-# Command plug-ins and the shared plug-in store and installation (RFC-0041, `plugin.rs`).
+# Command plug-ins and the shared plug-in store and installation (RFC-0046, `plugin.rs`).
 craft-plugin = { workspace = true }
 base64 = "0.22"
 blake3 = { version = "1.8", default-features = false, features = ["pure"] }

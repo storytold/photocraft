@@ -11,7 +11,7 @@ PhotoCraft runs two kinds:
 - **Command plug-ins** (`"kind": "command"`, shared by every Craft app): act on the document only
   through PhotoCraft's commands, the same ones the menus, the CLI, the control channel and MCP
   run. Host: the shared [`craft-plugin`](https://github.com/storytold/craft-libs/tree/main/crates/plugin)
-  crate ([RFC-0041](https://github.com/storytold/craft-contrib/blob/main/rfcs/0041-shared-plugin-runtime.md)),
+  crate ([RFC-0046](https://github.com/storytold/craft-contrib/blob/main/rfcs/0046-shared-plugin-runtime.md)),
   whose README documents the manifest (`craft-plugin.json`), the bundle and the ABI.
 
 The engine side is `crates/engine/src/plugin.rs` (rules, runs, installing) and the `plugin.*`
