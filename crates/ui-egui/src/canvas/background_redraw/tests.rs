@@ -121,7 +121,7 @@ fn kept_composites_come_back_only_for_the_exact_state_and_stay_bounded() {
 }
 
 struct Gpu {
-    harness: egui_kittest::Harness<'static, PhotocraftApp>,
+    harness: egui_kittest::Harness<'static, Box<PhotocraftApp>>,
     observer: GpuCanvas,
 }
 

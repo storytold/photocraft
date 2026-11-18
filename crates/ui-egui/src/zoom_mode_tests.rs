@@ -34,7 +34,7 @@ fn gpu_zoom_animation_reuses_the_document_composite() {
     });
     // The harness sets egui's animation time to zero, which turns the framework's motion off; the ease needs it on.
     h.ctx.all_styles_mut(|style| style.animation_time = egui::Style::default().animation_time);
-    let shown = |h: &Harness<'static, PhotocraftApp>| shown_camera(&h.ctx, CanvasHost::main(0), &h.state().ui.views[0], 1.0).0;
+    let shown = |h: &Harness<'static, Box<PhotocraftApp>>| shown_camera(&h.ctx, CanvasHost::main(0), &h.state().ui.views[0], 1.0).0;
     h.run_steps(4);
     h.state_mut().run("view.actualPixels", json!({})).unwrap();
     h.step();
@@ -100,7 +100,7 @@ fn platform(m: Modifiers) -> Modifiers {
 }
 
 /// The app with `tool` selected, Zoom Out chosen, no animation and the view at 100 %.
-fn zoom_out_harness(tool: Tool) -> Harness<'static, PhotocraftApp> {
+fn zoom_out_harness(tool: Tool) -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::AppTheme::pro());
         let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), crate::Services::default());
@@ -117,14 +117,14 @@ fn zoom_out_harness(tool: Tool) -> Harness<'static, PhotocraftApp> {
     h
 }
 
-fn key(h: &mut Harness<'static, PhotocraftApp>, key: Key, pressed: bool, m: Modifiers) {
+fn key(h: &mut Harness<'static, Box<PhotocraftApp>>, key: Key, pressed: bool, m: Modifiers) {
     let m = platform(m);
     h.event(Event::ModifiersChanged(m));
     h.event(Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: m });
     h.run_steps(2);
 }
 
-fn click(h: &mut Harness<'static, PhotocraftApp>, p: Pos2, m: Modifiers) {
+fn click(h: &mut Harness<'static, Box<PhotocraftApp>>, p: Pos2, m: Modifiers) {
     let m = platform(m);
     h.event(Event::ModifiersChanged(m));
     h.event(Event::PointerMoved(p));

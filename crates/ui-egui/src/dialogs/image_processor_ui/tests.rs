@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use crate::{PhotocraftApp, Services};
 
 /// The app with one document and the Image Processor open.
-fn open() -> (PhotocraftApp, egui::Context, DialogId) {
+fn open() -> (Box<PhotocraftApp>, egui::Context, DialogId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
     app.run("file.new", json!({"width": 40, "height": 20})).unwrap();
     let ctx = app.ctx().clone();
