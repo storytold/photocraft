@@ -70,7 +70,7 @@ fn set_crop_frame(h: &mut AppHarness) {
     h.state_mut().canvas_tools.crop.tool.crop_to(CropBox::new(DocRect::new(100.0, 100.0, 200.0, 160.0), 0.0));
 }
 
-fn view(app: &PhotocraftApp) -> craft::ui::canvas::CanvasView {
+fn view(app: &PhotocraftApp) -> craft::behavior::CanvasView {
     testing::view(app).expect("the primary canvas has shown its view")
 }
 
