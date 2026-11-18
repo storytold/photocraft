@@ -236,34 +236,24 @@ fn background_active_is_not_a_second_target() {
 }
 
 /// Verifies Background-only fill for ineligible active layers and Delete Cropped Pixels off.
+/// Which active layers are a second target is a pure function of the layer tree, checked for every
+/// unmeasured state (type, hidden, each lock, hidden or locked ancestor) by `crop_fill`'s
+/// `only_a_visible_unlocked_active_raster_adds_a_target`. Through the command, straight and
+/// turned, run one state the layer itself rules out (type), one an ancestor rules out (a locked
+/// group) and Delete Cropped Pixels off, its own branch of `fill_uncovered`.
 #[test]
 fn unmeasured_active_targets_and_delete_off_keep_the_legacy_target() {
     for turned in [false, true] {
         let (x, y) = extension_sample(turned);
-        for case in 0..10 {
+        for (text, locked_group, delete) in [(true, false, true), (false, true, true), (false, false, false)] {
             let (mut s, ids) = scene(turned);
-            let active = match case {
-                0 => ids.text,
-                1 => ids.hidden,
-                _ => ids.quads,
-            };
-            if (2..7).contains(&case) {
-                s.edit("Lock active", |d, _| {
-                    assert!(d.layer_mut(active).unwrap().locks.set(["all", "pixels", "transparency", "position", "artboard"][case - 2], true));
-                    Ok(())
-                })
-                .unwrap();
-            }
-            if case >= 8 {
+            let active = if text { ids.text } else { ids.quads };
+            if locked_group {
                 s.edit("Group active", |d, _| {
                     let i = d.layers.iter().position(|layer| layer.id == active).unwrap();
                     let child = d.layers.remove(i);
                     let mut group = Layer::group("Ancestor", vec![child]);
-                    if case == 8 {
-                        group.visible = false;
-                    } else {
-                        assert!(group.locks.set("pixels", true));
-                    }
+                    assert!(group.locks.set("pixels", true));
                     d.layers.insert(i, group);
                     Ok(())
                 })
@@ -271,9 +261,7 @@ fn unmeasured_active_targets_and_delete_off_keep_the_legacy_target() {
             }
             select(&mut s, active);
             let mut p = frame(turned);
-            if case == 7 {
-                p["deleteCroppedPixels"] = json!(false);
-            }
+            p["deleteCroppedPixels"] = json!(delete);
             let plain = plain_control(&mut s, &p);
             crop(&mut s, p, true);
             pixel(doc(&s), ids.background, x, y, WHITE);

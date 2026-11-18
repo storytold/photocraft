@@ -143,7 +143,7 @@ fn last_used(slots: &[ToolSlot<Tool>], group_tools: &[Tool]) -> LastUsed<Tool> {
 /// The cells of the toolbar's grid: its visible slots and the Edit Toolbar button. The dock column's width in steps goes
 /// up to this many content columns.
 pub(crate) fn cells(app: &PhotocraftApp) -> usize {
-    visible_slots(&tool_commands::slots(&app.session.prefs().toolbar), &[]).len() + 1
+    visible_slots(&app.toolbar_slots.get(&app.session.prefs), &[]).len() + 1
 }
 
 /// The Edit in Quick Mask Mode command, which the rail's footer shows as a rail button.
@@ -190,7 +190,7 @@ fn footer(app: &mut PhotocraftApp, ui: &mut egui::Ui, rail: RailFooter) {
 
 /// The height of the toolbar's rail laid out `width` wide: as many tool columns as `width` holds, with the footer.
 pub(crate) fn measure(app: &mut PhotocraftApp, ui: &egui::Ui, width: f32) -> f32 {
-    let slots = tool_commands::slots(&app.session.prefs().toolbar);
+    let slots = app.toolbar_slots.get(&app.session.prefs);
     let remembered = last_used(&slots, &app.ui.group_tools);
     let current = app.ui.tool;
     let (opens, editing) = (FLYOUTS_OPEN, app.ui.toolbar_drawer);
@@ -205,7 +205,7 @@ pub(crate) fn measure(app: &mut PhotocraftApp, ui: &egui::Ui, width: f32) -> f32
 /// remembered tools are read again at the start of each pass, so a second pass applies only its own input.
 pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
-    let slots = tool_commands::slots(&app.session.prefs().toolbar);
+    let slots = app.toolbar_slots.get(&app.session.prefs);
     let remembered = last_used(&slots, &app.ui.group_tools);
     let current = app.ui.tool;
     let (opens, editing) = (FLYOUTS_OPEN, app.ui.toolbar_drawer);
@@ -226,7 +226,7 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         _ => {}
     }
     if let Some(next) = &out.last_used {
-        for slot in &slots {
+        for slot in slots.iter() {
             if let Some(tool) = next.get(slot.id)
                 && remembered.get(slot.id) != Some(tool)
             {
