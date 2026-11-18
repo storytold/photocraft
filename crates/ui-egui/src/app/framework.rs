@@ -654,12 +654,20 @@ pub(crate) fn close_path_frame(app: &mut PhotocraftApp, input: egui::RawInput) -
 /// event, so the hooks belong to the harness's passes, not to the code that steps it.
 #[cfg(test)]
 pub(crate) trait BuildApp {
-    fn build_app(self, body: impl FnMut(&mut egui::Ui, &mut PhotocraftApp) + 'static, app: PhotocraftApp) -> egui_kittest::Harness<'static, PhotocraftApp>;
+    fn build_app(
+        self,
+        body: impl FnMut(&mut egui::Ui, &mut PhotocraftApp) + 'static,
+        app: Box<PhotocraftApp>,
+    ) -> egui_kittest::Harness<'static, Box<PhotocraftApp>>;
 }
 
 #[cfg(test)]
-impl BuildApp for egui_kittest::HarnessBuilder<PhotocraftApp> {
-    fn build_app(self, body: impl FnMut(&mut egui::Ui, &mut PhotocraftApp) + 'static, mut app: PhotocraftApp) -> egui_kittest::Harness<'static, PhotocraftApp> {
+impl BuildApp for egui_kittest::HarnessBuilder<Box<PhotocraftApp>> {
+    fn build_app(
+        self,
+        body: impl FnMut(&mut egui::Ui, &mut PhotocraftApp) + 'static,
+        mut app: Box<PhotocraftApp>,
+    ) -> egui_kittest::Harness<'static, Box<PhotocraftApp>> {
         app.framework.test_body = Some(Box::new(body));
         let ctx = app.ctx().clone();
         self.with_context(ctx).build_eframe(move |_| app)

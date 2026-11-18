@@ -991,7 +991,7 @@ pub(crate) mod probe {
 
     /// The tab group holding `panel` as the last pass drew it, header and body: the group's node, a tab panel named
     /// after its shown panel.
-    pub(crate) fn group_rect(h: &Harness<'_, PhotocraftApp>, panel: &str) -> Option<Rect> {
+    pub(crate) fn group_rect(h: &Harness<'_, Box<PhotocraftApp>>, panel: &str) -> Option<Rect> {
         let titles: Vec<String> = group_of(h.state(), panel).iter().filter_map(|member| registry::entry(member)).map(|entry| (entry.label)()).collect();
         h.query_all_by_role(Role::TabPanel).find(|n| n.accesskit_node().label().is_some_and(|label| titles.contains(&label))).map(|n| n.rect())
     }
