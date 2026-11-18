@@ -1,23 +1,26 @@
-//! The Paint Bucket cursor (#12539): with Standard Other Cursors it is the bucket with a small
-//! arrow at its top left, the hotspot on the arrow tip, and a click fills the pixel under that tip.
+//! The Paint Bucket cursor (#12539): with Standard Other Cursors it is the arrow with the bucket
+//! below right of it, the hotspot on the arrow tip, and a click fills the pixel under that tip.
 //! Precise Other Cursors and Caps Lock keep the crosshair; ⌥ and ⌘ keep the Eyedropper and Move
-//! cursors. Tests drive the real canvas (`document_area`) and read the OS cursor bitmap it sets.
+//! cursors. Driven through real egui input on the real canvas; the assertions read the cursor the
+//! tool (or its stand-in) asked the tool host for.
 
-use egui::{CursorIcon, Modifiers};
+use craft::behavior::{Cursor, PaintedCursor, PointerGlyph};
+use craft::ui::runtime::windows::WindowHost;
+use egui::{Modifiers, PointerButton};
 use egui_kittest::Harness;
 use serde_json::json;
 
-use super::remove_cursor_tests::{Cursor, cursor, harness, set_pref};
 use crate::PhotocraftApp;
+use crate::guide_cursor_tests::{harness, hover, screen};
 use crate::state::Tool;
 
-/// The cursor with `mods` held over the canvas centre.
-fn cursor_with(h: &mut Harness<'_, PhotocraftApp>, mods: Modifiers) -> Cursor {
-    let p = h.state().last_canvas_rect.center();
-    h.event(egui::Event::ModifiersChanged(mods));
-    h.event(egui::Event::PointerMoved(p));
-    h.run_steps(3);
-    cursor(h)
+/// A point away from the harness's guide at x = 200.
+const AT: [f32; 2] = [100.0, 150.0];
+
+/// The cursor the tool host was asked for at `AT` with `mods` held.
+fn cursor_with(h: &mut Harness<'static, PhotocraftApp>, mods: Modifiers) -> Option<Cursor> {
+    hover(h, AT[0], AT[1], mods);
+    h.state().canvas_tools.last_response.as_ref().and_then(|r| r.cursor.clone())
 }
 
 fn pixel(app: &PhotocraftApp, x: i32, y: i32) -> [u8; 3] {
@@ -27,34 +30,16 @@ fn pixel(app: &PhotocraftApp, x: i32, y: i32) -> [u8; 3] {
 }
 
 #[test]
-#[cfg(not(target_arch = "wasm32"))]
-fn the_standard_cursor_is_the_bucket_with_the_arrow_tip_on_the_hotspot() {
-    let h = harness(Tool::PaintBucket);
-    let (icon, image) = cursor(&h);
-    assert_eq!(icon, CursorIcon::Crosshair, "the OS bitmap keeps its visible fallback");
-    let (size, [x, y], rgba) = image.expect("the Paint Bucket's OS cursor bitmap");
-    assert_eq!([x, y], [1, 1], "the hotspot is the arrow tip at the bitmap's top left");
-    let at = |x: u16, y: u16| {
-        let i = (usize::from(y) * usize::from(size[0]) + usize::from(x)) * 4;
-        [rgba[i], rgba[i + 1], rgba[i + 2], rgba[i + 3]]
-    };
-    // The tip sits on the hotspot texel's centre, so that pixel is antialiased, not solid.
-    assert!(at(x, y)[3] > 128, "the tip itself is drawn: no open crosshair centre under the pointer");
-    let body = at(x + 1, y + 4);
-    assert!(body[3] > 230 && body[0] < 40, "a black arrow runs down from the tip: {body:?}");
-    let bucket = (0..size[1]).flat_map(|row| (0..size[0]).map(move |col| (col, row))).any(|(col, row)| {
-        let p = at(col, row);
-        col > x + 10 && row > y + 10 && p[0] > 200 && p[3] > 200
-    });
-    assert!(bucket, "the white bucket art sits below right of the arrow");
+fn the_standard_cursor_is_the_arrow_with_the_bucket() {
+    let mut h = harness(Tool::PaintBucket);
+    let bucket = Cursor::Painted(PaintedCursor::pointer_tool(PointerGlyph::Arrow, crate::icons::tool_icon(Tool::PaintBucket)));
+    assert_eq!(cursor_with(&mut h, Modifiers::NONE), Some(bucket));
 }
 
 #[test]
-#[cfg(not(target_arch = "wasm32"))]
 fn a_click_fills_the_pixel_under_the_arrow_tip() {
     let mut h = harness(Tool::PaintBucket);
-    let p = h.state().last_canvas_rect.center();
-    let (x, y) = crate::panels::info::hover_pixel(h.state()).expect("the pointer is over the image");
+    let (x, y) = (AT[0] as i32, AT[1] as i32);
     // Black left of and above the pointer's pixel: a fill there stops at the edges, a fill one
     // pixel off to the left or up would turn the black red.
     let app = h.state_mut();
@@ -65,8 +50,10 @@ fn a_click_fills_the_pixel_under_the_arrow_tip() {
     app.run("select.deselect", json!({})).unwrap();
     app.run("tools.setColors", json!({"foreground": "#ff0000"})).unwrap();
     h.run_steps(2);
+    // The pixel's centre, as the pointer sits on the arrow tip.
+    let p = screen(&h, AT[0] + 0.5, AT[1] + 0.5);
     for pressed in [true, false] {
-        h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+        h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
         h.run_steps(2);
     }
     assert_eq!(pixel(h.state(), x, y), [255, 0, 0], "the pixel under the tip is filled");
@@ -77,22 +64,19 @@ fn a_click_fills_the_pixel_under_the_arrow_tip() {
 #[test]
 fn precise_other_cursors_and_caps_lock_keep_the_crosshair() {
     let mut h = harness(Tool::PaintBucket);
-    let standard = cursor(&h);
-    set_pref(&mut h, "cursors.other", json!("precise"));
-    let precise = cursor(&h);
-    assert_eq!(precise.0, CursorIcon::Crosshair, "Precise: the crosshair");
-    assert_ne!(precise, standard, "Precise: not the bucket");
-    set_pref(&mut h, "cursors.other", json!("standard"));
-    h.state_mut().caps_lock = true;
-    h.run_steps(2);
-    assert_eq!(cursor(&h), precise, "Caps Lock: the same crosshair");
+    let crosshair = Some(Cursor::Painted(PaintedCursor::Crosshair));
+    h.state_mut().run("prefs.set", json!({"path": "cursors.other", "value": "precise"})).unwrap();
+    assert_eq!(cursor_with(&mut h, Modifiers::NONE), crosshair, "Precise: the crosshair");
+    h.state_mut().run("prefs.set", json!({"path": "cursors.other", "value": "standard"})).unwrap();
+    WindowHost::of(&h.ctx).set_caps_lock(Some(true));
+    assert_eq!(cursor_with(&mut h, Modifiers::NONE), crosshair, "Caps Lock: the same crosshair");
 }
 
 #[test]
 fn alt_and_command_keep_the_eyedropper_and_move_cursors() {
     let mut bucket = harness(Tool::PaintBucket);
-    let standard = cursor(&bucket);
-    let eyedropper = cursor(&harness(Tool::Eyedropper));
+    let standard = cursor_with(&mut bucket, Modifiers::NONE);
+    let eyedropper = cursor_with(&mut harness(Tool::Eyedropper), Modifiers::NONE);
     let alt = cursor_with(&mut bucket, Modifiers::ALT);
     assert_eq!(alt, eyedropper, "⌥: the Eyedropper cursor");
     assert_ne!(alt, standard);

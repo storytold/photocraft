@@ -201,6 +201,22 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"deleted": name}))
 }
 
+/// Renames in place, so the preset keeps its place in the list. Another preset's name (ignoring case) is
+/// refused; a change of case of the preset's own name is allowed. `save` onto a taken name would overwrite
+/// that preset, and save plus delete would move the preset to the end.
+fn rename(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "file.export.presets.rename";
+    let name = req_str(p, "name", CMD)?;
+    let new_name = checked_name(req_str(p, "newName", CMD)?).map_err(|e| bad(CMD, e))?;
+    let index = s.presets.export_presets.iter().position(|pr| pr.name.eq_ignore_ascii_case(name)).ok_or_else(|| bad(CMD, "No such export preset"))?;
+    if s.presets.export_presets.iter().enumerate().any(|(at, pr)| at != index && pr.name.eq_ignore_ascii_case(&new_name)) {
+        return Err(bad(CMD, "Another export preset has that name"));
+    }
+    s.presets.export_presets[index].name = new_name;
+    s.presets_changed();
+    Ok(json!({"preset": s.presets.export_presets[index]}))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec {
@@ -241,6 +257,16 @@ pub fn specs() -> Vec<CommandSpec> {
             params: r#"{"name":str}"#,
             enabled: always,
             run: delete,
+            journal: false,
+        },
+        CommandSpec {
+            id: "file.export.presets.rename",
+            label: "Rename Export Preset",
+            menu: &[],
+            shortcut: None,
+            params: r#"{"name":str,"newName":str} (the preset keeps its place in the list; another preset's name is refused)"#,
+            enabled: always,
+            run: rename,
             journal: false,
         },
     ]
@@ -298,6 +324,22 @@ mod tests {
         let mut after = Session::new();
         after.load_prefs_json(&raw).unwrap();
         assert!(after.presets.export_presets.is_empty());
+    }
+
+    #[test]
+    fn renaming_keeps_the_position_and_refuses_another_presets_name() {
+        let mut s = Session::new();
+        for name in ["one", "two", "three"] {
+            s.execute("file.export.presets.save", json!({"name": name, "settings": settings("scale")})).unwrap();
+        }
+        let names = |s: &Session| s.presets.export_presets.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+        s.execute("file.export.presets.rename", json!({"name": "two", "newName": "second"})).unwrap();
+        assert_eq!(names(&s), ["one", "second", "three"]);
+        assert!(s.execute("file.export.presets.rename", json!({"name": "second", "newName": "THREE"})).is_err());
+        assert_eq!(names(&s), ["one", "second", "three"], "a refused rename changes nothing");
+        s.execute("file.export.presets.rename", json!({"name": "second", "newName": "Second"})).unwrap();
+        assert_eq!(names(&s), ["one", "Second", "three"], "a change of case of its own name is allowed");
+        assert!(s.execute("file.export.presets.rename", json!({"name": "missing", "newName": "x"})).is_err());
     }
 
     #[test]
