@@ -610,6 +610,14 @@ pub(crate) fn command_params(command: &str, fields: &DialogFields) -> Value {
             map.insert("matte".into(), color);
         }
     }
+    // Lens Blur's Source menu names an alpha channel `channel:N` (by index: two channels may share a name); the command
+    // takes the `channel` source and the channel's index.
+    if command == rows::LENS_BLUR
+        && let Some(index) = map.get("depthMap").and_then(Value::as_str).and_then(rows::channel_of_choice)
+    {
+        map.insert("depthMap".into(), json!("channel"));
+        map.insert("depthChannel".into(), json!(index));
+    }
     if command == "filter.blur.radialBlur"
         && let Some([x, y]) = fields.point("center")
     {
