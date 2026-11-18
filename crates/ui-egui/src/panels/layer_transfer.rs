@@ -240,6 +240,13 @@ pub fn over_tab(app: &mut PhotocraftApp, ctx: &egui::Context, index: usize) {
 /// A second pass of a frame gets no release event (egui gives a frame's input events to its
 /// first pass), so a release drops once; the first pass also clears the Move-tool transfer.
 pub fn finish(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    // A refused Move press (or the marquee that grabbed a locked layer) ends with its gesture: the
+    // button is up, and this is the window that pressed it. A document window's `finish` leaves the
+    // window that owns the gesture alone.
+    if transfer(app, ctx).is_none() && refused_move_ends(app, ctx) {
+        app.clear_move_blocked();
+        app.layer_box = None;
+    }
     let Some(t) = transfer(app, ctx) else { return };
     let (pos, released, down) = ctx.input(|i| (i.pointer.latest_pos(), i.pointer.any_released(), i.pointer.primary_down()));
     let target = pos.and_then(|p| target_at(app, p));
@@ -262,6 +269,12 @@ pub fn finish(app: &mut PhotocraftApp, ctx: &egui::Context) {
         drop(app, ctx, dest, at);
     }
     clear(ctx);
+}
+
+/// The refused Move press ended in this window: no button is held, and the window recorded for
+/// the press is this one.
+fn refused_move_ends(app: &PhotocraftApp, ctx: &egui::Context) -> bool {
+    app.move_blocked && app.move_viewport.is_none_or(|viewport| viewport == ctx.viewport_id()) && !ctx.input(|i| i.pointer.primary_down())
 }
 
 /// Run before canvases process release: a tiled destination must take over the
