@@ -95,14 +95,17 @@ pub(super) fn import_result_for_open(name: &str, bytes: &[u8], opts: &photocraft
 
 // ---------- close / revert / save a copy / open as ----------
 
+/// `file.closeAll`: close every document, freeing each off the calling thread.
 pub(super) fn close_all(s: &mut Session) -> Result<Value> {
     let n = s.documents().len();
     while !s.documents().is_empty() {
-        s.close(s.documents().len() - 1);
+        s.close_and_release(s.documents().len() - 1);
     }
     Ok(json!({"closed": n}))
 }
 
+/// `file.closeOthers`: close every document but the one asked for (the active one by default),
+/// freeing each off the calling thread.
 pub(super) fn close_others(s: &mut Session, p: &Value) -> Result<Value> {
     let keep = p.get("document").and_then(Value::as_u64).map(|v| v as usize).or(s.active_index()).ok_or(EngineError::NoDocument)?;
     if keep >= s.documents().len() {
@@ -111,7 +114,7 @@ pub(super) fn close_others(s: &mut Session, p: &Value) -> Result<Value> {
     let n = s.documents().len() - 1;
     for i in (0..s.documents().len()).rev() {
         if i != keep {
-            s.close(i);
+            s.close_and_release(i);
         }
     }
     s.set_active(0);

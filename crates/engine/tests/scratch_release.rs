@@ -41,8 +41,34 @@ fn closing_a_document_leaves_none_of_its_buffers_in_the_pool() {
         // Dispatch holds the active document across the command; its tiles must not land in
         // the pool after the release.
         s.execute(close, json!({})).unwrap();
+        // The document is freed on its own thread, which releases the pool once it has.
+        let t = std::time::Instant::now();
+        while Session::documents_being_released() > 0 {
+            assert!(t.elapsed() < std::time::Duration::from_secs(30), "{close}: the closed document was not freed");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
         assert_eq!(scratch::retained_bytes(), 0, "{close}");
     }
+}
+
+#[test]
+/// Closing many documents at once (Close All) frees them all and leaves none of their buffers
+/// in the pool.
+fn closing_many_documents_frees_them_all() {
+    let _q = Quiet::new();
+    let mut s = Session::new();
+    for _ in 0..24 {
+        s.execute("file.new", json!({"width": 512, "height": 512})).unwrap();
+        s.execute("edit.fill", json!({"contents": "color", "color": "#808080"})).unwrap();
+    }
+    s.execute("file.closeAll", json!({})).unwrap();
+    assert!(s.documents().is_empty());
+    let t = std::time::Instant::now();
+    while Session::documents_being_released() > 0 {
+        assert!(t.elapsed() < std::time::Duration::from_secs(30), "the closed documents were not freed");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_eq!(scratch::retained_bytes(), 0);
 }
 
 #[test]
