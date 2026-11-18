@@ -303,12 +303,13 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, panels_hidden: bo
 /// peek neither floats nor moves a panel.
 pub(crate) fn show_column(app: &mut PhotocraftApp, ui: &mut egui::Ui, layout: &Layout<String>) {
     let workspace = Workspace::new(layout.clone());
+    let auto_collapse = app.session.prefs().workspace.auto_collapse_icon_panels;
     let config = DockConfig::default().group_order_items(true).native_windows(cfg!(not(target_arch = "wasm32")));
     let output: DockAreaOutput<String> = {
         let mut panels = Panels { app: &mut *app };
         let mut area = DockArea::new("Peek".to_string(), Bind::given(workspace), &mut panels, config);
         area = area.locked();
-        if app.session.prefs().workspace.auto_collapse_icon_panels {
+        if auto_collapse {
             area = area.auto_collapse();
         }
         area.show(ui)
