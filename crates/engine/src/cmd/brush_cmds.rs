@@ -6,7 +6,6 @@
 //! (`{"scattering": {"enabled": true}}`). Strokes are deterministic: the jitter seed is the `seed`
 //! param or a hash of the points, so a journaled command replays to identical pixels.
 
-use photocraft_doc::LayerContent;
 use photocraft_geom::Rect;
 use photocraft_paint::mixer::{MixerSettings, MixerState};
 use photocraft_paint::replace::{Limits, ReplaceMode, ReplaceSettings, Sampling, apply_color_replacement, color_replacement_effect};
@@ -1067,45 +1066,109 @@ fn presets_set_current(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn has_selection_and_pixels(s: &Session) -> std::result::Result<(), String> {
-    let d = s.active().ok_or("no document")?;
-    if d.doc.selection.is_none() {
-        return Err("no selection".into());
-    }
-    let l = d.active_layer.and_then(|id| d.doc.layer(id)).ok_or("no active layer")?;
-    if matches!(l.content, LayerContent::Raster(_)) { Ok(()) } else { Err("active layer is not a pixel layer".into()) }
+    s.active().ok_or("no document")?;
+    Ok(())
 }
 
 /// Largest sampled tip side (like Photoshop's 5000 px limit, kept smaller for preset size).
 pub const MAX_TIP: u32 = 2500;
 
 fn define_from_selection(s: &mut Session, p: &Value) -> Result<Value> {
+    define_from_selection_with_renderer(s, p, |doc, area, sink| photocraft_compose::try_render_bands(doc, area, 0, sink))
+}
+
+fn define_from_selection_with_renderer(
+    s: &mut Session,
+    p: &Value,
+    render: impl FnOnce(
+        &photocraft_doc::Document,
+        photocraft_geom::Rect,
+        &mut dyn FnMut(photocraft_compose::Buffer) -> Result<()>,
+    ) -> std::result::Result<(), photocraft_compose::RenderBandsError<EngineError>>,
+) -> Result<Value> {
     let cmd = "brush.defineFromSelection";
     let name = name_param(p, cmd)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    let sel = d.doc.selection.as_ref().ok_or_else(|| bad(cmd, "no selection"))?;
-    let id = d.active_layer.ok_or(EngineError::Other("no active layer".into()))?;
-    let surf = d.doc.layer(id).and_then(|l| l.surface()).ok_or_else(|| bad(cmd, "not a pixel layer"))?;
-    let area = sel.content_bounds().intersect(&d.doc.bounds());
+    let sel = d.doc.selection.as_ref();
+    let area = sel.map_or_else(|| d.doc.bounds(), |sel| sel.content_bounds().intersect(&d.doc.bounds()));
     if area.is_empty() {
         return Err(bad(cmd, "the selection is empty"));
     }
     // Paint amount = darkness × alpha × selection (black = full paint, like Photoshop).
     let (w, h) = (area.width() as usize, area.height() as usize);
-    // The sampled tip is one f32 buffer over the whole selection; a large selection must fail
+    // The sampled tip is one f32 buffer over the source area; a large area must fail
     // gracefully instead of aborting the process on allocation, so reserve it fallibly. The
     // multiply is checked too: on a 32-bit target (wasm32) it can overflow where the rest of
     // this command is already fallible.
     let len = w.checked_mul(h).ok_or_else(|| crate::allocation::error("defining a brush from the selection", "requested size overflowed"))?;
+    // Sparse canvases can span huge areas. Density and selection remain live while the
+    // compositor holds one RGBA band, not a full-canvas RGBA plane; account for that
+    // actual maximum band before allocating any sampling buffers.
+    let mask_bytes = sel.map_or(0, |sel| (sel.channels() as u64).saturating_mul(4));
+    let band_rows = area.height().min(photocraft_compose::band_rows_for(area.width(), 0) as u32);
+    let band_bytes = u64::from(area.width()).saturating_mul(u64::from(band_rows)).saturating_mul(16);
+    let dense_bytes = (len as u64).saturating_mul(4u64.saturating_add(mask_bytes)).saturating_add(band_bytes);
+    if dense_bytes > crate::allocation::MAX_DENSE_BYTES {
+        return Err(EngineError::Other(format!(
+            "defining a brush from the selection would need {} MB of working memory for a {} x {} px area (limit {} MB); the document was not changed",
+            dense_bytes >> 20,
+            area.width(),
+            area.height(),
+            crate::allocation::MAX_DENSE_BYTES >> 20
+        )));
+    }
     let mut v = crate::allocation::filled(len, 0.0, "defining a brush from the selection")?;
-    let sc = sel.channels();
-    // The selection mask is a second buffer of the same size; it must fail gracefully too
+    let sc = sel.map_or(1, |sel| sel.channels());
+    // A selection mask, when present, is a second buffer of the same size; it must fail gracefully too
     // (review of #5469), so read it through the fallible allocator.
-    let sv = crate::allocation::read_region(sel, area, "defining a brush from the selection")?;
-    for y in 0..h {
-        for x in 0..w {
-            let c = surf.rgba(area.x0 + x as i32, area.y0 + y as i32);
-            let l = photocraft_color::blend::lum([c[0], c[1], c[2]]);
-            v[y * w + x] = ((1.0 - l) * c[3] * sv[(y * w + x) * sc]).clamp(0.0, 1.0);
+    let sv = sel.map(|sel| crate::allocation::read_region(sel, area, "defining a brush from the selection")).transpose()?;
+    // The compositor keeps RGB document encoding; other document models produce
+    // the existing RGB numeric view (including the document-profile CMYK conversion).
+    let source = if d.doc.mode == photocraft_color::ColorMode::Rgb {
+        crate::color_cmds::document_profile(&d.doc)
+    } else {
+        crate::color_cmds::working_profile(photocraft_color::ColorMode::Rgb)
+    };
+    let options = craft_cms::TransformOptions { intent: craft_cms::Intent::RelativeColorimetric, bpc: true, ..Default::default() };
+    let gray =
+        craft_cms::cached(&source, craft_cms::Builtin::SGray.profile(), options).map_err(|e| bad(cmd, format!("cannot convert brush source to gray: {e}")))?;
+    let mut converted = [0.0f32; 16];
+    // Keep the allocation boundary fallible before entering compositor-owned scratch storage.
+    crate::allocation::checkpoint("defining a brush from the selection")?;
+    let rendered = render(&d.doc, area, &mut |band| -> Result<()> {
+        for (row, pixels) in band.px.chunks_exact(w).enumerate() {
+            let y = (band.rect.y0 - area.y0) as usize + row;
+            for (x, c) in pixels.iter().enumerate() {
+                let selected = sv.as_ref().map_or(1.0, |sv| sv[(y * w + x) * sc]);
+                // Known-zero contributions leave the freshly zeroed density alone.
+                if selected == 0.0 {
+                    continue;
+                }
+                if c[3] == 0.0 {
+                    continue;
+                }
+                // A sampled profile curve can clamp infinity to a finite endpoint;
+                // reject contributing invalid source values before the CMS can hide them.
+                if c.iter().any(|channel| !channel.is_finite()) {
+                    return Err(bad(cmd, "brush source contains a non-finite colour channel"));
+                }
+                // Composite over white before the nonlinear gray conversion. The
+                // selection scales the resulting density once; alpha is already in it.
+                let over_white = [c[0], c[1], c[2]].map(|channel| channel * c[3] + (1.0 - c[3]));
+                gray.eval(&over_white, &mut converted).map_err(|e| bad(cmd, format!("cannot convert brush source to gray: {e}")))?;
+                if !converted[0].is_finite() {
+                    return Err(bad(cmd, "brush source converted to a non-finite gray value"));
+                }
+                v[y * w + x] = ((1.0 - converted[0]) * selected).clamp(0.0, 1.0);
+            }
+        }
+        Ok(())
+    });
+    match rendered {
+        Ok(()) => {}
+        Err(photocraft_compose::RenderBandsError::Sink(error)) => return Err(error),
+        Err(photocraft_compose::RenderBandsError::Allocation(error)) => {
+            return Err(crate::allocation::error("defining a brush from the selection", &error.to_string()));
         }
     }
     let (brush, tw, th) = sampled_brush(cmd, &v, w, h)?;
@@ -1489,3 +1552,12 @@ mod mixer_live_tests;
 #[cfg(test)]
 #[path = "color_replacement_history_name_tests.rs"]
 mod color_replacement_history_name_tests;
+
+#[cfg(test)]
+mod define_brush_merged_source_tests;
+
+#[cfg(test)]
+mod define_brush_no_selection_tests;
+
+#[cfg(test)]
+mod define_brush_color_density_tests;

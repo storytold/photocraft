@@ -9,7 +9,7 @@ use std::sync::Arc;
 use craft_cms::Intent;
 use photocraft_algo::transform::Interp;
 use photocraft_color::BlendMode;
-use photocraft_doc::{Document, Group, Layer, LayerContent, LayerId, Metadata, SmartObject, SmartSource};
+use photocraft_doc::{Document, Group, Knockout, Layer, LayerContent, LayerId, Metadata, SmartObject, SmartSource};
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
@@ -202,7 +202,8 @@ fn released(l: &mut Layer, f: impl FnOnce(&mut Layer) -> Result<()>) -> Result<(
 /// Whether the smart layer's own properties fold into its one unpacked layer `c` without
 /// changing the look: nothing on the smart layer acts on `c`'s composite (masks, style, fill
 /// opacity, Blend If, channel exclusions), and `c` blends normally and doesn't look at what's
-/// beneath it (alone in the smart object, it lands on transparency).
+/// beneath it (alone in the smart object, it lands on transparency; a knockout there stops at
+/// the smart object's bottom instead of punching through to the Background, #9753).
 fn foldable(so: &Layer, c: &Layer) -> bool {
     so.mask.is_none()
         && so.vector_mask.is_none()
@@ -214,6 +215,7 @@ fn foldable(so: &Layer, c: &Layer) -> bool {
         && matches!(c.blend, BlendMode::Normal | BlendMode::PassThrough)
         && c.blend_if.is_default()
         && c.excluded_channels == 0
+        && c.advanced.knockout == Knockout::None
 }
 
 /// What replaces smart layer `so`: its one unpacked layer with `so`'s properties folded in, or a

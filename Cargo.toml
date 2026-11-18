@@ -168,6 +168,75 @@ debug = "line-tables-only"
 [profile.test.package.photocraft-ui-egui]
 opt-level = 0
 
+# Test builds compile the craft UI framework (the `craft` facade and the craft-libs crates behind
+# it) below the opt-level 2 of `package."*"` above. The workspace unifies the facade's features, so
+# every crate that uses `craft`, photocraft-text included, waits for the whole framework. At 2 the
+# chain from craft-host to the facade took 38 of the 77 build minutes of the Windows unit leg, and
+# rustc shares no generic instantiations across crates at 2 (it does at 0 and 1).
+# With the whole framework at 0, ten more photocraft-ui-egui tests overflowed their 2 MiB stack on
+# Windows, so the runtime every frame passes through (contract, shell, canvas, panels, widgets,
+# host) builds at 1, as do the crates with per-frame or per-pixel code (theme, behavior, imaging,
+# text, font loading). The panels, tools and services around them build at 0, as in craft-libs.
+# `cargo run` and `cargo build` use the dev profile and are unaffected.
+[profile.test.package.craft]
+opt-level = 1
+[profile.test.package.craft-ui]
+opt-level = 1
+[profile.test.package.craft-ui-contract]
+opt-level = 1
+[profile.test.package.craft-ui-shell]
+opt-level = 1
+[profile.test.package.craft-ui-canvas]
+opt-level = 1
+[profile.test.package.craft-ui-panels]
+opt-level = 1
+[profile.test.package.craft-ui-widgets]
+opt-level = 1
+[profile.test.package.craft-host]
+opt-level = 1
+[profile.test.package.craft-theme]
+opt-level = 1
+[profile.test.package.craft-behavior]
+opt-level = 1
+[profile.test.package.craft-imaging]
+opt-level = 1
+[profile.test.package.craft-text]
+opt-level = 1
+[profile.test.package.craft-font-catalog]
+opt-level = 1
+[profile.test.package.craft-ui-patterns]
+opt-level = 0
+[profile.test.package.craft-draw]
+opt-level = 0
+[profile.test.package.craft-color-ui]
+opt-level = 0
+[profile.test.package.craft-font-manager]
+opt-level = 0
+[profile.test.package.craft-font-store]
+opt-level = 0
+[profile.test.package.craft-menu]
+opt-level = 0
+[profile.test.package.craft-timeline]
+opt-level = 0
+[profile.test.package.craft-layers]
+opt-level = 0
+[profile.test.package.craft-automation]
+opt-level = 0
+[profile.test.package.craft-theme-store]
+opt-level = 0
+[profile.test.package.craft-update]
+opt-level = 0
+[profile.test.package.craft-keymap]
+opt-level = 0
+[profile.test.package.craft-dialogs]
+opt-level = 0
+[profile.test.package.craft-settings]
+opt-level = 0
+[profile.test.package.craft-platform]
+opt-level = 0
+[profile.test.package.craft-window]
+opt-level = 0
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
