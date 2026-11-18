@@ -22,7 +22,7 @@ use crate::presets::gradients::{GradientPreset, transparency_param};
 use crate::{EngineError, Result, Session};
 
 mod source;
-pub use source::source_view;
+pub use source::{rebake, source_view};
 
 pub const CREATE: &str = "gradient.fill.create";
 pub const SET: &str = "gradient.fill.set";
