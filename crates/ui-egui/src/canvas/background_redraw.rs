@@ -585,4 +585,6 @@ fn draw(
 }
 
 #[cfg(test)]
+mod gpu_tests;
+#[cfg(test)]
 mod tests;
