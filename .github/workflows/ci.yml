@@ -283,8 +283,21 @@ jobs:
             skip=(--exclude photocraft-gpu)
             echo "::notice::photocraft-gpu's tests are skipped on Windows: this pull request changes nothing they are built from (the Linux gate still runs them)."
           fi
+          # nextest reuses this build. The separate step writes cargo's --timings report for it.
+          cargo test --no-run --timings --workspace "${skip[@]}" --locked --features heif "${targets[@]}"
           cargo nextest run --profile ci --workspace "${skip[@]}" --locked --features heif "${targets[@]}"
         shell: bash
+
+      # Per-crate compile and link times of this leg's build (open the HTML in a browser).
+      - name: Upload cargo build timings
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cargo-timings-windows-${{ matrix.part }}
+          # CARGO_TARGET_DIR above; the glob needs forward slashes.
+          path: D:/t/cargo-timings/*.html
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Doctests
         if: matrix.part == 'unit'
