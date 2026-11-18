@@ -38,22 +38,25 @@ pub(crate) fn panel(app: &PhotocraftApp, id: &str) -> u64 {
     }
 }
 
-/// The version of the toolbar's rail (#15493): what every region holds (the tool, the colours of its chips, the
-/// commands run), the tools each slot remembers, the stored toolbar layout, the Edit Toolbar drawer, the side its
-/// flyouts open on, the screen mode its footer button shows, and the resolved tokens it was drawn with (they change
-/// with the theme, the UI font size and the UI scale), so a theme change redraws it even without a command.
-pub(crate) fn toolbar(app: &PhotocraftApp, ui: &egui::Ui) -> u64 {
+/// The version of the Toolbar's rail: the toolbar slots (the preferences revision), the remembered group tools, the
+/// Edit Toolbar drawer, the side its flyouts open on, Quick Mask and the screen mode. The active tool and the colours
+/// are in every version.
+pub(crate) fn toolbar(app: &PhotocraftApp) -> u64 {
+    toolbar_with(app, 0)
+}
+
+/// [`toolbar`] for the rail as drawn in `ui` (#15493): also the resolved tokens it was drawn with (they change with the
+/// theme, the UI font size and the UI scale), so a theme change redraws it even without a command.
+pub(crate) fn toolbar_drawn(app: &PhotocraftApp, ui: &egui::Ui) -> u64 {
     toolbar_with(app, std::sync::Arc::as_ptr(&craft::ui::runtime::env::Env::of(ui).tokens) as usize)
 }
 
 /// [`toolbar`] with the tokens it was drawn with named by `tokens`.
 fn toolbar_with(app: &PhotocraftApp, tokens: usize) -> u64 {
-    let layout = &app.session.prefs().toolbar;
-    let mode = format!("{:?}", app.ui.view.screen_mode);
-    version(
-        app,
-        (&app.ui.group_tools, (&layout.hidden, &layout.toolbar, &layout.extras), app.ui.toolbar_drawer, crate::panel_docking::toolbar_opens(app), mode, tokens),
-    )
+    let quick_mask = app.session.active().is_some_and(|st| st.doc.quick_mask.is_some());
+    let opens_start = crate::panel_docking::toolbar_opens(app) == craft::behavior::overlay::Side::Start;
+    let screen_mode = format!("{:?}", app.ui.view.screen_mode);
+    version(app, (app.session.prefs.rev(), &app.ui.group_tools, app.ui.toolbar_drawer, opens_start, quick_mask, screen_mode, tokens))
 }
 
 /// What every region may show, joined with `extra`: the commands run (any of them may change anything), the active

@@ -187,7 +187,12 @@ impl DockPanels<String> for Panels<'_> {
     }
 
     fn content(&self, panel: &String) -> Option<u64> {
-        Some(super::region_versions::panel(self.app, panel))
+        match panel.as_str() {
+            // The canvas shows state that changes without a command: the view, redraw progress, animation and job overlays.
+            CANVAS => None,
+            TOOLBAR => Some(super::region_versions::toolbar(self.app)),
+            _ => Some(super::region_versions::panel(self.app, panel)),
+        }
     }
 
     /// The canvas group is the document area: it draws its own tabs and documents in the group's rect. The toolbar's
@@ -199,7 +204,7 @@ impl DockPanels<String> for Panels<'_> {
                 GroupAt::Show(rect) => {
                     // The rail settles as a panel body does: while nothing it shows changed and no input reaches it,
                     // the frame repaints its last run instead of running every tool button again (#15493).
-                    let version = super::region_versions::toolbar(self.app, ui);
+                    let version = super::region_versions::toolbar_drawn(self.app, ui);
                     let app = &mut *self.app;
                     Lazy::new("toolbar", 0.0).settles(true).content(version).show(ui, |ui| super::toolbar::toolbar(app, ui));
                     rect.height()
