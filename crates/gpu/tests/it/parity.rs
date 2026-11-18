@@ -175,11 +175,10 @@ fn hdr_emission_survives_group_opacity_masks_and_clipping() {
 #[test]
 fn hdr_emission_overflow_retains_associated_light() {
     let Some(mut g) = gpu() else { return };
-    for alpha in [1e-10, 0.25] {
+    for (alpha, red) in [(1e-10, f32::MAX / 2.0), (0.25, f32::MAX / 2.0), (f32::MIN_POSITIVE, 8.0)] {
         let mut doc = Document::new("Emission overflow", Size::new(1, 1), ColorMode::Rgb, SampleType::F32);
         let bounds = doc.bounds();
         let mut emitter = Layer::raster("emission", PixelFormat::RGBA32F);
-        let red = f32::MAX / 2.0;
         emitter.surface_mut().unwrap().fill_rect(bounds, &[red, 0.0, 0.0, photocraft_color::EMISSIVE_ALPHA]);
         let mut cover = Layer::raster("coverage", PixelFormat::RGBA32F);
         cover.surface_mut().unwrap().fill_rect(bounds, &[0.0, 0.0, 0.0, alpha]);

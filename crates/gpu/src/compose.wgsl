@@ -291,7 +291,16 @@ fn from_associated(pixel: vec4<f32>) -> vec4<f32> {
     }
     let peak = max(max(abs(light.r), abs(light.g)), abs(light.b));
     if (peak > F32_MAX * alpha) {
-        alpha = peak / F32_MAX;
+        // Dividing by F32_MAX can be lowered to a flushed subnormal reciprocal.
+        // Scale via exponent bits so the reciprocal remains normal and the compiler
+        // cannot reassociate the scale back into an underflowing constant.
+        let bits = bitcast<u32>(peak);
+        if (bits >= (65u << 23u)) {
+            let scaled = bitcast<f32>(bits - (64u << 23u));
+            alpha = scaled / 18446742974197923840.0;
+        } else {
+            alpha = peak / F32_MAX;
+        }
         if (peak > F32_MAX * alpha) {
             alpha = bitcast<f32>(bitcast<u32>(alpha) + 1u);
         }
