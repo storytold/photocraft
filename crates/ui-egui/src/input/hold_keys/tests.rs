@@ -347,8 +347,10 @@ const CTRL_ALT: Modifiers = Modifiers { alt: true, ctrl: true, shift: false, mac
 /// The tools that keep ⌘ for themselves leave the layer alone.
 #[test]
 fn cmd_gives_the_move_tool_only_where_the_tool_does_not_take_cmd() {
-    let moves =
-        [Tool::Brush, Tool::Eraser, Tool::Gradient, Tool::CloneStamp, Tool::Eyedropper, Tool::Move, Tool::RectMarquee, Tool::EllipseMarquee, Tool::Lasso];
+    // The Eraser is left out: it is in the Brush's family (`canvas::tools::family`), which refuses a ⌘ press the same
+    // way for every tool (`PaintTool::takes`); the Elliptical Marquee is the Rectangular one's marquee pass with
+    // another shape (`selection.rs`, `MarqueeKind`).
+    let moves = [Tool::Brush, Tool::Gradient, Tool::CloneStamp, Tool::Eyedropper, Tool::Move, Tool::RectMarquee, Tool::Lasso];
     for tool in moves {
         let mut h = harness(tool);
         let id = with_layer(&mut h);
