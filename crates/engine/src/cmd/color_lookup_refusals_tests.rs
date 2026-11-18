@@ -6,8 +6,10 @@
 //! 32 bit and a smart object (a smart filter) keep working, and the other adjustments keep today's
 //! checks - Brightness/Contrast still runs on a targeted layer mask, and a step naming an alpha
 //! channel or the Quick Mask in its own params edits that channel instead of the apply-time layer
-//! refusals; the enabled check knows only the active layer and the Channels panel, so a hidden
-//! layer still refuses such a step.
+//! refusals; the enabled check knows only the active layer and the Channels panel, and admission
+//! agrees with it: a hidden layer merely NAMED in the params of such a step does not refuse it
+//! (owner decision #14485, restoring main's path), while a hidden ACTIVE layer still greys the
+//! entry and refuses the step.
 
 use super::*;
 use photocraft_color::ColorMode;
@@ -192,38 +194,60 @@ fn a_hidden_active_layer_greys_the_entry_even_for_an_explicit_channel_target() {
 }
 
 #[test]
-fn a_channel_step_naming_a_hidden_layer_is_refused_at_admission() {
-    // Pinned, not fixed: this is THIS PR's behaviour, and the honest place to record the collision
-    // rather than pick a side. A visible filled "top" layer is active, the Background is hidden, the
-    // step names the alpha channel at index 0 as its target and the Background as its `layer`, and
-    // the Channels panel shows the composite. On upstream/main this path had no visibility rule at
-    // all and the command documented no `layer` param there, so the step reached the channel edit.
-    // Here `is_enabled_with` still says
-    // the step can run (it checks the active layer, "top"), while executing it is refused:
-    // `Session::admit` runs `explicit_layer_enabled`, which swaps the layer named by `"layer"` (the
-    // hidden Background) into `active_layer` and `has_color_lookup_target` then applies #14429's
-    // measured hidden-layer rule - although the step edits a channel and never touches that layer.
-    // Letting the enabled check see
-    // the params is a design question for the owner (a params-aware enabled hook in
-    // `Session::precondition`, outside the files #14429 names), so it is escalated, not decided here.
-    let (mut s, bg, _top) = bg_and_top(true);
+fn a_channel_step_naming_a_hidden_layer_reaches_the_channel_edit() {
+    // Owner decision on #14485 (option A): main's path is restored. A visible filled "top" layer
+    // is active, the Background is hidden, the step names the alpha channel at index 0 as its
+    // target and the Background as its `layer`, and the Channels panel shows the composite. The
+    // step edits the channel and never touches the layer it names, so the hidden Background must
+    // not refuse it: `Session::explicit_layer_enabled` steps aside for a Color Lookup step whose
+    // own params name a channel target, admission agrees with `is_enabled_with` (which only knows
+    // the active layer), and the step runs as it did on main. The named hidden layer and the
+    // visible active layer both stay untouched; the channel is what the edit writes.
+    let (mut s, bg, top) = bg_and_top(true);
     s.execute("layer.hideLayers", json!({"layer": bg})).unwrap();
     s.execute("channel.new", json!({"name": "A", "fill": "white"})).unwrap();
     s.execute("channel.target", json!({"channel": "composite"})).unwrap();
     let step = json!({"lut": "warm", "layer": {"background": true}, "target": {"channel": 0}});
-    assert!(s.is_enabled_with("image.adjustments.colorLookup", &step), "the availability query only knows the active layer");
-    let before = s.active().unwrap().doc.channels[0].surface.sample_channel(16, 12, 0);
-    refused(&mut s, "channel step naming a hidden layer", NOT_AVAILABLE, step);
-    assert_eq!(s.active().unwrap().doc.channels[0].surface.sample_channel(16, 12, 0), before, "the alpha channel was not written");
+    assert!(s.is_enabled_with("image.adjustments.colorLookup", &step), "the availability query says the step can run");
+    let (before_bg, before_top, past) = (pixel(&s, bg), pixel(&s, top), s.active().unwrap().history.past_len());
+    s.execute("image.adjustments.colorLookup", step).expect("a channel step naming a hidden layer runs, as it did on main");
+    assert_eq!(s.active().unwrap().history.past_len(), past + 1, "one history step");
+    assert_eq!(pixel(&s, bg), before_bg, "the hidden layer named in the params stays untouched");
+    assert_eq!(pixel(&s, top), before_top, "the visible active layer stays untouched: the step edits the channel");
+    let st = s.active().unwrap();
+    assert_eq!(st.doc.channels[0].surface.content_bounds(), st.doc.bounds(), "the alpha channel is what the step wrote");
+}
+
+#[test]
+fn a_quick_mask_step_naming_a_hidden_layer_reaches_the_channel_path() {
+    // The Quick Mask half of the owner's decision on #14485: the same shape, with
+    // `"target": "quickMask"` naming the channel target in the params and the hidden Background
+    // as `layer`, is admitted and reaches the channel path, which answers its own text because
+    // no Quick Mask is active - as on main. The hidden-layer refusal is not what answers here,
+    // and the named hidden layer stays untouched.
+    let (mut s, bg, _top) = bg_and_top(true);
+    s.execute("layer.hideLayers", json!({"layer": bg})).unwrap();
+    let step = json!({"lut": "warm", "layer": {"background": true}, "target": "quickMask"});
+    assert!(s.is_enabled_with("image.adjustments.colorLookup", &step), "the availability query says the step can run");
+    let before = pixel(&s, bg);
+    let got = match s.execute("image.adjustments.colorLookup", step) {
+        Ok(v) => panic!("the Quick Mask step reported success without a Quick Mask: {v}"),
+        Err(EngineError::Other(why)) => why,
+        Err(e) => panic!("wrong error kind: {e}"),
+    };
+    assert_eq!(got, "not in Quick Mask mode", "the channel path answers, not the hidden-layer refusal");
+    assert_eq!(pixel(&s, bg), before, "the hidden layer named in the params stays untouched");
 }
 
 #[test]
 fn an_explicit_quick_mask_target_over_a_visible_layer_answers_its_own_message() {
     // The other half of the same rule, with a VISIBLE active layer: `"target": "quickMask"` names
     // the Quick Mask, so Color Lookup's own layer refusals step aside and the channel path answers
-    // with its text. Over a HIDDEN active layer the enabled check answers first (see
-    // a_channel_step_naming_a_hidden_layer_is_refused_before_it_applies and
-    // a_hidden_active_layer_greys_the_entry_even_for_an_explicit_channel_target).
+    // with its text. Over a hidden ACTIVE layer the enabled check answers first (see
+    // a_hidden_active_layer_refuses_an_explicit_quick_mask_target_too and
+    // a_hidden_active_layer_greys_the_entry_even_for_an_explicit_channel_target); a hidden layer
+    // merely NAMED in the params does not stop the step
+    // (a_quick_mask_step_naming_a_hidden_layer_reaches_the_channel_path).
     let mut s = session(ColorMode::Rgb);
     s.execute("layer.new.layer", json!({"name": "empty"})).unwrap();
     let got = match s.execute("image.adjustments.colorLookup", json!({"lut": "warm", "target": "quickMask"})) {

@@ -193,6 +193,16 @@ impl Session {
         if !spec.params.contains("\"layer\":id") {
             return Ok(None);
         }
+        // #14485 owner decision: a Color Lookup step whose own params name an alpha channel or the
+        // Quick Mask never writes the layer its `"layer"` param names, so that layer must not be
+        // admitted as if it were the write target - the swap below would apply Color Lookup's
+        // #14429 hidden-layer rule to a layer the step leaves alone, where main ran the channel
+        // edit. Answer `None` so `admit` falls back to the plain precondition on the real active
+        // layer, exactly what `is_enabled_with` does; the step then reaches
+        // `destructive_adjust`'s channel branch. Raster and mask targets keep the named-layer check.
+        if spec.id == "image.adjustments.colorLookup" && channel_cmds::is_channel_target(params) {
+            return Ok(None);
+        }
         // An ATN group-end index is a valid no-op only for Select. Let that command validate
         // its other parameters and preserve the current selection.
         if spec.id == "layer.select"
