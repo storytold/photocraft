@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use super::*;
 use crate::color_picker_ui::{PickWindow, answer_for, hex, open_for_request, open_for_target, open_for_window, target, testing};
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 16, "height": 12})).unwrap();
     app

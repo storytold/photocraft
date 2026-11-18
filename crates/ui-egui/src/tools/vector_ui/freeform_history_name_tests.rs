@@ -5,7 +5,7 @@ use super::*;
 use crate::canvas::testing; // PLAN: canvas-widgets-w14 makes `canvas::testing` reachable from `tools` (cw.P2b)
 
 /// Creates a 200 by 200 document with Freeform Pen selected in the requested drawing mode.
-fn app(mode: VectorMode) -> PhotocraftApp {
+fn app(mode: VectorMode) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
     app.sync_views();

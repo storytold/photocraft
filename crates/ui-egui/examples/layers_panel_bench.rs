@@ -20,7 +20,7 @@ use photocraft_ui_egui::{PhotocraftApp, Services};
 use serde_json::{Value, json};
 
 /// The app in an offscreen harness.
-type H = egui_kittest::Harness<'static, PhotocraftApp>;
+type H = egui_kittest::Harness<'static, Box<PhotocraftApp>>;
 
 /// The value after `name` on the command line, if any.
 fn arg(args: &[String], name: &str) -> Option<String> {
