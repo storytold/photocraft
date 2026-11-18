@@ -5,6 +5,7 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use photocraft_codecs::ChannelLayout;
 use serde_json::{Map, Value, json};
@@ -12,19 +13,21 @@ use serde_json::{Map, Value, json};
 use super::{effective_source_profile, estimate, export_document, preview_proxy, settings, source_document, source_scoped_settings, write_export};
 #[cfg(not(target_arch = "wasm32"))]
 use super::{estimate_native, exact_estimate};
-use crate::{FileDialogAnswer, FileDialogReply, FileDialogRequest, PhotocraftApp, Services, menus};
+use crate::{PhotocraftApp, Services, menus};
+use craft::host::{Picked, ScriptedFiles};
 
 /// What the test writer was handed: the path and the encoded bytes.
 type Written = Rc<RefCell<Vec<(String, Vec<u8>)>>>;
-/// The file dialogs the app asked for, still waiting for their answer.
-type Open = Rc<RefCell<Vec<(FileDialogRequest, FileDialogReply)>>>;
 
 /// An app with one document that really encodes, whose writer hands the bytes back to the test:
-/// what the layer export paths produce can then be read without touching the disc.
-fn app(width: u32, height: u32) -> (PhotocraftApp, Written, Open) {
-    let (written, open): (Written, Open) = (Rc::default(), Rc::default());
-    let (w, held) = (written.clone(), open.clone());
+/// what the layer export paths produce can then be read without touching the disc. Its file
+/// dialogs stay open until the test answers them.
+fn app(width: u32, height: u32) -> (PhotocraftApp, Written, Arc<ScriptedFiles>) {
+    let written = Written::default();
+    let w = written.clone();
+    let files = Arc::new(ScriptedFiles::held());
     let services = Services {
+        files: Some(files.clone()),
         export: Some(Box::new(|doc, path, s| {
             let out = photocraft_io::export(doc, path, &s.io_options()).map_err(|e| e.to_string())?;
             Ok((out.bytes, out.warnings))
@@ -33,12 +36,11 @@ fn app(width: u32, height: u32) -> (PhotocraftApp, Written, Open) {
             w.borrow_mut().push((path.to_string(), bytes.to_vec()));
             Ok(())
         })),
-        file_dialog: Some(Box::new(move |request, _parent, reply| held.borrow_mut().push((request, reply)))),
         ..Default::default()
     };
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
     app.run("file.new", json!({"width": width, "height": height})).unwrap();
-    (app, written, open)
+    (app, written, files)
 }
 
 /// The active layer, as the commands name it.
@@ -80,10 +82,8 @@ fn export_as(app: &mut PhotocraftApp, written: &Written, f: &Map<String, Value>)
 }
 
 /// The user answers the file dialog that is open.
-fn answer(open: &Open, path: &str) {
-    let path = path.to_string();
-    let (_, reply) = open.borrow_mut().pop().expect("a file dialog is open");
-    std::thread::spawn(move || reply.send(Some(FileDialogAnswer::SaveTo(path)))).join().unwrap();
+fn answer(files: &ScriptedFiles, path: &str) {
+    files.answer(Picked::Paths(vec![path.into()])).expect("a file dialog is open");
 }
 
 /// A decoded PNG: its size, its channels and its samples.
@@ -236,13 +236,12 @@ fn an_unmeasured_layer_kind_keeps_its_clear_pixels() {
 
 #[test]
 fn quick_export_of_a_layer_writes_rgba() {
-    let (mut app, written, open) = app(40, 30);
+    let (mut app, written, files) = app(40, 30);
     painted(&mut app, "Square", "#1e1ec8", None);
     let ctx = egui::Context::default();
     menus::invoke(&mut app, &ctx, "layer.quickExportAsPng", Value::Null).unwrap();
-    app.poll_file_dialog(&ctx, None);
-    answer(&open, "layer.png");
-    app.poll_file_dialog(&ctx, None);
+    answer(&files, "layer.png");
+    app.poll_file_dialog();
     assert_eq!(written.borrow().len(), 1, "one PNG for the layer");
     let (w, h, layout, data) = png(&written.borrow()[0].1);
     assert_eq!((w, h), (40, 30));
@@ -252,15 +251,14 @@ fn quick_export_of_a_layer_writes_rgba() {
 
 #[test]
 fn quick_export_of_several_layers_writes_one_rgba_png_each() {
-    let (mut app, written, open) = app(40, 30);
+    let (mut app, written, files) = app(40, 30);
     painted(&mut app, "Upper", "#ff0000", Some((0, 0, 20, 20)));
     painted(&mut app, "Lower", "#0000ff", Some((10, 10, 20, 20)));
     app.run("select.allLayers", json!({})).unwrap();
     let ctx = egui::Context::default();
     menus::invoke(&mut app, &ctx, "layer.quickExportAsPng", Value::Null).unwrap();
-    app.poll_file_dialog(&ctx, None);
-    answer(&open, "layers.png");
-    app.poll_file_dialog(&ctx, None);
+    answer(&files, "layers.png");
+    app.poll_file_dialog();
     assert_eq!(written.borrow().len(), 2, "one file per selected layer");
     for (path, bytes) in written.borrow().iter() {
         assert_eq!(png(bytes).2, ChannelLayout::Rgba, "{path}");
