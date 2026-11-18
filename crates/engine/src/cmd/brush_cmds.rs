@@ -6,13 +6,12 @@
 //! (`{"scattering": {"enabled": true}}`). Strokes are deterministic: the jitter seed is the `seed`
 //! param or a hash of the points, so a journaled command replays to identical pixels.
 
-use photocraft_doc::LayerContent;
 use photocraft_geom::Rect;
 use photocraft_paint::mixer::{MixerSettings, MixerState};
 use photocraft_paint::replace::{Limits, ReplaceMode, ReplaceSettings, Sampling, apply_color_replacement, color_replacement_effect};
 use photocraft_paint::tile::PREVIEW_SIDE;
 use photocraft_paint::{
-    BrushPreset, BrushSettings, GrayTile, Pattern, PresetCaptures, StoredTile, Stroke, StrokePoint, StrokeRenderer, TipShape, render_stroke,
+    BrushPreset, BrushSettings, GrayTile, Pattern, PresetCaptures, StoredTile, Stroke, StrokePoint, StrokeRenderer, TipShape, render_stroke_clipped,
 };
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
@@ -88,6 +87,12 @@ pub(crate) fn check_coords(pts: &[StrokePoint], cmd: &str) -> Result<()> {
         return Err(bad(cmd, format!("point coordinates must be finite and within ±{MAX_COORD}")));
     }
     Ok(())
+}
+
+/// Where a stroke can change pixels: the canvas plus any pixels the layer already holds past its
+/// edge (a moved layer keeps them, #5067). Dabs that reach neither are not rasterized.
+fn paintable_area(canvas: Rect, surf: &Surface) -> Rect {
+    canvas.union(&surf.tile_bounds())
 }
 
 /// Deep-merge `patch` into `base` (objects merge key by key; anything else replaces).
@@ -291,7 +296,9 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
             }
             let sel = doc.selection.clone();
             let table = crate::mode_cmds::paint_color_table(doc, p);
+            let canvas = doc.bounds();
             let (surf, lock) = crate::channel_cmds::target_surface(doc, id, p)?;
+            let clip = paintable_area(canvas, surf);
             let mut brush = brush;
             erase_locked(&mut brush, lock, bg);
             if auto_erase {
@@ -307,23 +314,23 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
                     .iter()
                     .filter(|p| crate::symmetry_cmds::SymmetryAxis::has_distinct_mirror(&pts, p))
                     .map(|p| {
-                        let mut renderer = StrokeRenderer::new(&brush, Some(surf.format()), zoom);
+                        let mut renderer = StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_clip(clip);
                         renderer.push(p);
                         renderer.finish();
                         renderer
                     })
                     .collect();
                 if copies.is_empty() {
-                    render_stroke(surf, &brush, &pts, sel.as_ref(), lock, zoom)
+                    render_stroke_clipped(surf, &brush, &pts, sel.as_ref(), lock, zoom, Some(clip))
                 } else {
                     let pre = surf.clone();
-                    let mut original = StrokeRenderer::new(&brush, Some(surf.format()), zoom);
+                    let mut original = StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_clip(clip);
                     original.push(&pts);
                     original.finish();
                     original.composite_union_many(&copies, &pre, surf, sel.as_ref(), lock)
                 }
             } else {
-                render_stroke(surf, &brush, &pts, sel.as_ref(), lock, zoom)
+                render_stroke_clipped(surf, &brush, &pts, sel.as_ref(), lock, zoom, Some(clip))
             };
             if let (Some(table), Some(pre)) = (&table, &unpainted) {
                 crate::mode_cmds::keep_in_color_table(table, pre, surf, damage);
@@ -341,12 +348,23 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
 /// Pencil Auto Erase: a stroke that starts on a pixel of the foreground colour paints the
 /// background colour instead (Photoshop). The match is exact (#11966): the foreground as the
 /// layer would store it (its mode and depth) against the pixel, its alpha aside, so one level
-/// off paints the foreground.
+/// off paints the foreground. In a CMYK layer a foreground picked as CMYK is probed as the inks
+/// the stroke paints (#13060), not as its RGB stand-in converted back.
 fn apply_auto_erase(brush: &mut BrushSettings, surf: &Surface, start: Option<&StrokePoint>, fg: [f32; 4], bg: [f32; 4]) {
     let Some(p0) = start else { return };
     let c = surf.rgba(p0.x.floor() as i32, p0.y.floor() as i32);
-    let mut probe = Surface::new(surf.format());
-    probe.write_pixel(0, 0, &photocraft_raster::from_rgba(&surf.format(), [fg[0], fg[1], fg[2], 1.0]));
+    let format = surf.format();
+    let mut px = photocraft_raster::from_rgba(&format, [fg[0], fg[1], fg[2], 1.0]);
+    // The renderer's condition for painting the picked inks (`StrokeRenderer::composite`), keyed
+    // on the foreground being probed.
+    if let (photocraft_color::ColorMode::Cmyk, Some((rgb, inks))) = (format.mode, brush.color_cmyk)
+        && rgb == [fg[0], fg[1], fg[2]]
+        && let Some(channels) = px.get_mut(..4)
+    {
+        channels.copy_from_slice(&inks);
+    }
+    let mut probe = Surface::new(format);
+    probe.write_pixel(0, 0, &px);
     let stored = probe.rgba(0, 0);
     // Far below one 8-bit level: only the float noise of the conversion.
     if c[3] > 0.0 && (0..3).all(|i| (c[i] - stored[i]).abs() < 1e-5) {
@@ -626,16 +644,19 @@ impl LiveStroke {
         let mut doc = (*st.doc).clone();
         let sel = doc.selection.clone();
         let table = crate::mode_cmds::paint_color_table(&doc, p);
+        let canvas = doc.bounds();
         let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, layer, p)?;
+        let clip = paintable_area(canvas, surf);
         let bg = crate::color_cmds::swatch_in_doc(s, s.tools.background);
         erase_locked(&mut brush, lock, bg);
         if pencil && flag(p, "autoErase", false) {
             let fg = table.as_ref().map_or(fg, |t| crate::mode_cmds::table_color(t, fg));
             apply_auto_erase(&mut brush, surf, pts.first(), fg, s.tools.background);
         }
-        let renderer = StrokeRenderer::new(&brush, Some(surf.format()), zoom);
+        let renderer = StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_clip(clip);
         let symmetry = s.active().and_then(|st| st.symmetry.clone());
-        let mirrors: Vec<_> = (0..symmetry.as_ref().map_or(0, |s| s.mirror_count())).map(|_| StrokeRenderer::new(&brush, Some(surf.format()), zoom)).collect();
+        let mirrors: Vec<_> =
+            (0..symmetry.as_ref().map_or(0, |s| s.mirror_count())).map(|_| StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_clip(clip)).collect();
         let mirror_distinct = vec![false; mirrors.len()];
         let pre = surf.clone();
         let mut live = Self {
@@ -740,19 +761,9 @@ impl LiveStroke {
                 }
                 return Ok(dmg);
             }
-            let mut dmg = Rect::EMPTY;
             let old = std::mem::replace(&mut self.tail, Rect::EMPTY);
-            if !old.is_empty() {
-                // Back to the stroke without the previous tail.
-                surf.write_region(old, &self.pre.read_region(old));
-                self.renderer.mark_dirty(old);
-                dmg = old;
-            }
-            dmg = dmg.union(&self.renderer.composite(&self.pre, surf, self.sel.as_ref(), self.lock, false));
-            if let Some(mut tail) = self.renderer.tail_preview() {
-                self.tail = tail.composite(&self.pre, surf, self.sel.as_ref(), self.lock, false);
-                dmg = dmg.union(&self.tail);
-            }
+            let (dmg, tail) = self.renderer.composite_live(old, &self.pre, surf, self.sel.as_ref(), self.lock);
+            self.tail = tail;
             if let Some(colors) = self.colors {
                 crate::color_channels::restrict_region(&self.pre, surf, colors, dmg)?;
             }
@@ -813,6 +824,33 @@ fn mixer_clean(s: &mut Session, _: &Value) -> Result<Value> {
     s.tools.mixer.clean();
     s.tools.mixer.color = Some(s.tools.foreground);
     Ok(serde_json::to_value(&s.tools.mixer).unwrap_or_default())
+}
+
+/// A Mixer Brush toggle command: its id and the setting it flips.
+type MixerToggle = (&'static str, fn(&mut photocraft_paint::mixer::MixerSettings) -> &mut bool);
+
+/// The Mixer Brush's options-bar switches the toggle commands flip (#11959): (command id, field).
+const MIXER_TOGGLES: [MixerToggle; 3] = [
+    ("brush.mixer.autoLoad", |m| &mut m.load_after_stroke),
+    ("brush.mixer.autoClean", |m| &mut m.clean_after_stroke),
+    ("brush.mixer.sampleAllLayers", |m| &mut m.sample_all_layers),
+];
+
+/// `brush.mixer.autoLoad`, `brush.mixer.autoClean` and `brush.mixer.sampleAllLayers`: flip the
+/// Mixer Brush's Load the brush after each stroke, Clean the brush after each stroke or Sample All
+/// Layers (`on` sets it instead), so Keyboard Shortcuts can give them a key. Returns the new value.
+fn mixer_toggle(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
+    let field = MIXER_TOGGLES.iter().find(|(id, _)| *id == cmd).map(|(_, f)| *f).ok_or_else(|| bad(cmd, "unknown Mixer Brush switch"))?;
+    let on = match p.get("on").filter(|v| !v.is_null()) {
+        None => None,
+        Some(v) => Some(v.as_bool().ok_or_else(|| bad(cmd, "`on` must be true or false"))?),
+    };
+    let value = field(&mut s.tools.brush.mixer);
+    *value = on.unwrap_or(!*value);
+    let on = *value;
+    // Saved like any other brush change (the last-brush persistence watches the revision).
+    s.tools.brush_changed();
+    Ok(json!({ "on": on }))
 }
 
 /// `paint.mixerLoad`: ⌥-click with the Mixer Brush loads the reservoir from the canvas colour at
@@ -896,7 +934,7 @@ fn color_replacement(s: &mut Session, p: &Value) -> Result<Value> {
         let sel = doc.selection.clone();
         let lock = doc.effective_locks(id).transparency;
         let surf = paint_surface(doc, id, &json!({}))?;
-        Ok(apply_color_replacement(surf, &stroke, &rs, sel.as_ref(), lock))
+        apply_color_replacement(surf, &stroke, &rs, sel.as_ref(), lock).map_err(|e| bad("paint.colorReplacement", e.to_string()))
     })?;
     Ok(damage_json(s, dmg))
 }
@@ -1028,45 +1066,109 @@ fn presets_set_current(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn has_selection_and_pixels(s: &Session) -> std::result::Result<(), String> {
-    let d = s.active().ok_or("no document")?;
-    if d.doc.selection.is_none() {
-        return Err("no selection".into());
-    }
-    let l = d.active_layer.and_then(|id| d.doc.layer(id)).ok_or("no active layer")?;
-    if matches!(l.content, LayerContent::Raster(_)) { Ok(()) } else { Err("active layer is not a pixel layer".into()) }
+    s.active().ok_or("no document")?;
+    Ok(())
 }
 
 /// Largest sampled tip side (like Photoshop's 5000 px limit, kept smaller for preset size).
 pub const MAX_TIP: u32 = 2500;
 
 fn define_from_selection(s: &mut Session, p: &Value) -> Result<Value> {
+    define_from_selection_with_renderer(s, p, |doc, area, sink| photocraft_compose::try_render_bands(doc, area, 0, sink))
+}
+
+fn define_from_selection_with_renderer(
+    s: &mut Session,
+    p: &Value,
+    render: impl FnOnce(
+        &photocraft_doc::Document,
+        photocraft_geom::Rect,
+        &mut dyn FnMut(photocraft_compose::Buffer) -> Result<()>,
+    ) -> std::result::Result<(), photocraft_compose::RenderBandsError<EngineError>>,
+) -> Result<Value> {
     let cmd = "brush.defineFromSelection";
     let name = name_param(p, cmd)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    let sel = d.doc.selection.as_ref().ok_or_else(|| bad(cmd, "no selection"))?;
-    let id = d.active_layer.ok_or(EngineError::Other("no active layer".into()))?;
-    let surf = d.doc.layer(id).and_then(|l| l.surface()).ok_or_else(|| bad(cmd, "not a pixel layer"))?;
-    let area = sel.content_bounds().intersect(&d.doc.bounds());
+    let sel = d.doc.selection.as_ref();
+    let area = sel.map_or_else(|| d.doc.bounds(), |sel| sel.content_bounds().intersect(&d.doc.bounds()));
     if area.is_empty() {
         return Err(bad(cmd, "the selection is empty"));
     }
     // Paint amount = darkness × alpha × selection (black = full paint, like Photoshop).
     let (w, h) = (area.width() as usize, area.height() as usize);
-    // The sampled tip is one f32 buffer over the whole selection; a large selection must fail
+    // The sampled tip is one f32 buffer over the source area; a large area must fail
     // gracefully instead of aborting the process on allocation, so reserve it fallibly. The
     // multiply is checked too: on a 32-bit target (wasm32) it can overflow where the rest of
     // this command is already fallible.
     let len = w.checked_mul(h).ok_or_else(|| crate::allocation::error("defining a brush from the selection", "requested size overflowed"))?;
+    // Sparse canvases can span huge areas. Density and selection remain live while the
+    // compositor holds one RGBA band, not a full-canvas RGBA plane; account for that
+    // actual maximum band before allocating any sampling buffers.
+    let mask_bytes = sel.map_or(0, |sel| (sel.channels() as u64).saturating_mul(4));
+    let band_rows = area.height().min(photocraft_compose::band_rows_for(area.width(), 0) as u32);
+    let band_bytes = u64::from(area.width()).saturating_mul(u64::from(band_rows)).saturating_mul(16);
+    let dense_bytes = (len as u64).saturating_mul(4u64.saturating_add(mask_bytes)).saturating_add(band_bytes);
+    if dense_bytes > crate::allocation::MAX_DENSE_BYTES {
+        return Err(EngineError::Other(format!(
+            "defining a brush from the selection would need {} MB of working memory for a {} x {} px area (limit {} MB); the document was not changed",
+            dense_bytes >> 20,
+            area.width(),
+            area.height(),
+            crate::allocation::MAX_DENSE_BYTES >> 20
+        )));
+    }
     let mut v = crate::allocation::filled(len, 0.0, "defining a brush from the selection")?;
-    let sc = sel.channels();
-    // The selection mask is a second buffer of the same size; it must fail gracefully too
+    let sc = sel.map_or(1, |sel| sel.channels());
+    // A selection mask, when present, is a second buffer of the same size; it must fail gracefully too
     // (review of #5469), so read it through the fallible allocator.
-    let sv = crate::allocation::read_region(sel, area, "defining a brush from the selection")?;
-    for y in 0..h {
-        for x in 0..w {
-            let c = surf.rgba(area.x0 + x as i32, area.y0 + y as i32);
-            let l = photocraft_color::blend::lum([c[0], c[1], c[2]]);
-            v[y * w + x] = ((1.0 - l) * c[3] * sv[(y * w + x) * sc]).clamp(0.0, 1.0);
+    let sv = sel.map(|sel| crate::allocation::read_region(sel, area, "defining a brush from the selection")).transpose()?;
+    // The compositor keeps RGB document encoding; other document models produce
+    // the existing RGB numeric view (including the document-profile CMYK conversion).
+    let source = if d.doc.mode == photocraft_color::ColorMode::Rgb {
+        crate::color_cmds::document_profile(&d.doc)
+    } else {
+        crate::color_cmds::working_profile(photocraft_color::ColorMode::Rgb)
+    };
+    let options = craft_cms::TransformOptions { intent: craft_cms::Intent::RelativeColorimetric, bpc: true, ..Default::default() };
+    let gray =
+        craft_cms::cached(&source, craft_cms::Builtin::SGray.profile(), options).map_err(|e| bad(cmd, format!("cannot convert brush source to gray: {e}")))?;
+    let mut converted = [0.0f32; 16];
+    // Keep the allocation boundary fallible before entering compositor-owned scratch storage.
+    crate::allocation::checkpoint("defining a brush from the selection")?;
+    let rendered = render(&d.doc, area, &mut |band| -> Result<()> {
+        for (row, pixels) in band.px.chunks_exact(w).enumerate() {
+            let y = (band.rect.y0 - area.y0) as usize + row;
+            for (x, c) in pixels.iter().enumerate() {
+                let selected = sv.as_ref().map_or(1.0, |sv| sv[(y * w + x) * sc]);
+                // Known-zero contributions leave the freshly zeroed density alone.
+                if selected == 0.0 {
+                    continue;
+                }
+                if c[3] == 0.0 {
+                    continue;
+                }
+                // A sampled profile curve can clamp infinity to a finite endpoint;
+                // reject contributing invalid source values before the CMS can hide them.
+                if c.iter().any(|channel| !channel.is_finite()) {
+                    return Err(bad(cmd, "brush source contains a non-finite colour channel"));
+                }
+                // Composite over white before the nonlinear gray conversion. The
+                // selection scales the resulting density once; alpha is already in it.
+                let over_white = [c[0], c[1], c[2]].map(|channel| channel * c[3] + (1.0 - c[3]));
+                gray.eval(&over_white, &mut converted).map_err(|e| bad(cmd, format!("cannot convert brush source to gray: {e}")))?;
+                if !converted[0].is_finite() {
+                    return Err(bad(cmd, "brush source converted to a non-finite gray value"));
+                }
+                v[y * w + x] = ((1.0 - converted[0]) * selected).clamp(0.0, 1.0);
+            }
+        }
+        Ok(())
+    });
+    match rendered {
+        Ok(()) => {}
+        Err(photocraft_compose::RenderBandsError::Sink(error)) => return Err(error),
+        Err(photocraft_compose::RenderBandsError::Allocation(error)) => {
+            return Err(crate::allocation::error("defining a brush from the selection", &error.to_string()));
         }
     }
     let (brush, tw, th) = sampled_brush(cmd, &v, w, h)?;
@@ -1366,6 +1468,30 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("brush.mixer.load", "Load Mixer Brush", r##"{"color":"#rrggbb"|[r,g,b,a?] 0..1?=foreground}"##, always, mixer_load, true),
         spec!("brush.mixer.clean", "Clean Mixer Brush", "{}", always, mixer_clean, true),
         spec!(
+            "brush.mixer.autoLoad",
+            "Mixer Brush Auto-Load",
+            r#"{"on":bool? (none: toggle)} → {"on":bool} (the Mixer Brush's Load the brush after each stroke)"#,
+            always,
+            |s, p| mixer_toggle(s, p, "brush.mixer.autoLoad"),
+            true
+        ),
+        spec!(
+            "brush.mixer.autoClean",
+            "Mixer Brush Auto-Clean",
+            r#"{"on":bool? (none: toggle)} → {"on":bool} (the Mixer Brush's Clean the brush after each stroke)"#,
+            always,
+            |s, p| mixer_toggle(s, p, "brush.mixer.autoClean"),
+            true
+        ),
+        spec!(
+            "brush.mixer.sampleAllLayers",
+            "Mixer Brush Sample All Layers",
+            r#"{"on":bool? (none: toggle)} → {"on":bool} (the Mixer Brush's Sample All Layers)"#,
+            always,
+            |s, p| mixer_toggle(s, p, "brush.mixer.sampleAllLayers"),
+            true
+        ),
+        spec!(
             "paint.mixerLoad",
             "Load Mixer Brush",
             r##"{"x":px,"y":px,"size":"point"|1|3|5|11|31|51|101=1,"sampleAllLayers":bool=brush.mixer.sampleAllLayers} → {"loaded":bool,"color"?:[r,g,b,a]} (loads the Mixer Brush reservoir from the canvas colour there, as ⌥-click does; the foreground colour is unchanged; the next strokes keep that load while the foreground stays as it is)"##,
@@ -1426,3 +1552,12 @@ mod mixer_live_tests;
 #[cfg(test)]
 #[path = "color_replacement_history_name_tests.rs"]
 mod color_replacement_history_name_tests;
+
+#[cfg(test)]
+mod define_brush_merged_source_tests;
+
+#[cfg(test)]
+mod define_brush_no_selection_tests;
+
+#[cfg(test)]
+mod define_brush_color_density_tests;

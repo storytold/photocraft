@@ -1,27 +1,97 @@
 use super::*;
+use crate::control::dialogs::workspace_ui;
+use craft::imaging::ui::liquify::{BackdropMode, BackdropUse, LiquifySettings};
+use craft::ui::runtime::memory::{saved_value, set_saved_value};
 
-#[test]
-fn the_brush_outline_follows_the_pointer_except_while_resizing() {
-    let (hover, anchor) = (pos2(30.0, 40.0), pos2(10.0, 20.0));
-    assert_eq!(brush_circle_at(None, Some(hover)), Some(hover));
-    assert_eq!(brush_circle_at(Some((anchor, 40.0, 50.0)), Some(hover)), Some(anchor));
-    assert_eq!(brush_circle_at(Some((anchor, 40.0, 50.0)), None), Some(anchor));
-    assert_eq!(brush_circle_at(None, None), None);
+const KEY: &str = "filter.liquify";
+
+/// The hosted Liquify workspace's value.
+fn ws(app: &mut PhotocraftApp) -> &mut LiquifyWorkspace {
+    app.framework.dialogs.get_mut::<Hosted>().expect("the Liquify workspace is open").workspace_mut()
 }
 
-#[test]
-fn alt_right_drag_resizes_the_liquify_brush_and_does_not_paint() {
-    assert!(brush_resize_gesture(egui::Modifiers::ALT, true));
-    assert!(brush_resize_gesture(egui::Modifiers::CTRL | egui::Modifiers::ALT, false));
-    assert!(!brush_resize_gesture(egui::Modifiers::ALT, false), "Alt+left stays the tool's opposite");
-    assert!(!brush_resize_gesture(egui::Modifiers::NONE, true));
-    let (size, density) = resized_brush(40.0, 50.0, 25.0, crate::brush_resize::HARDNESS_TRAVEL, 1.0);
-    assert_eq!((size, density), (90.0, 100.0), "native brush movement grows the radius by screen pixels");
-    let (size, density) = resized_brush(40.0, 50.0, -100.0, 0.0, 1.0);
-    assert_eq!((size, density), (1.0, 50.0));
-    // Screen travel changes density identically at different preview zoom levels.
-    assert_eq!(resized_brush(40.0, 50.0, 25.0, 100.0, 2.0).1, 100.0);
-    assert_eq!(resized_brush(40.0, 50.0, 0.0, -100.0, 1.0).1, 0.0);
+/// The app's side of the open Liquify workspace.
+fn la(app: &PhotocraftApp) -> &LiquifyApp {
+    app.liquify.as_ref().expect("the Liquify app state exists")
+}
+
+/// The app's field, proxy and pictures (`take` writes them under the same lock).
+fn eng(app: &PhotocraftApp) -> MutexGuard<'_, Engine> {
+    lock(&la(app).engine)
+}
+
+fn is_open(app: &PhotocraftApp) -> bool {
+    app.framework.dialogs.is_open::<Hosted>()
+}
+
+/// Runs one frame: the workspace's pass reports the events it queued, and the app applies them to its field.
+fn settle(app: &mut PhotocraftApp, _ctx: &egui::Context) {
+    crate::canvas::testing::frame(app);
+}
+
+/// The open workspace's facts (`describe`).
+fn facts(app: &PhotocraftApp) -> Value {
+    describe(app).expect("the Liquify workspace is open")
+}
+
+/// A control request to the Liquify workspace, then the events it produced.
+fn ctl(app: &mut PhotocraftApp, v: Value) -> Result<Value, String> {
+    let ctx = app.ctx().clone();
+    let r = workspace_ui(app, &ctx, KEY, &v);
+    settle(app, &ctx);
+    r
+}
+
+/// Opens the workspace and runs its first frame: the pass reads the remembered settings and asks for the backdrop.
+fn open_ws(app: &mut PhotocraftApp) -> Result<(), String> {
+    let ctx = app.ctx().clone();
+    open(app, &ctx)?;
+    crate::canvas::testing::frame(app);
+    Ok(())
+}
+
+/// The workspace's stroke of `tool` with the default brush at `size`.
+fn stroke_with(tool: StepTool, size: f64, points: &[[f64; 2]]) -> StepStroke {
+    let mut brush = LiquifySettings::default().brush;
+    brush.size = size;
+    StepStroke::new(tool, &brush, points.iter().map(|p| [p[0], p[1], 1.0]).collect())
+}
+
+/// The engine's form of `stroke`, as `filter.liquify` takes it.
+fn engine_of(stroke: &StepStroke) -> LiquifyStroke {
+    engine_stroke(stroke).expect("a painting tool")
+}
+
+/// Records `stroke` in the workspace and lets the app apply it.
+fn perform(app: &mut PhotocraftApp, stroke: StepStroke) {
+    let ctx = app.ctx().clone();
+    ws(app).perform(LiquifyStep::Stroke(stroke));
+    settle(app, &ctx);
+}
+
+fn undo(app: &mut PhotocraftApp) {
+    let ctx = app.ctx().clone();
+    ws(app).undo();
+    settle(app, &ctx);
+}
+
+fn redo(app: &mut PhotocraftApp) {
+    let ctx = app.ctx().clone();
+    ws(app).redo();
+    settle(app, &ctx);
+}
+
+fn strokes(app: &PhotocraftApp) -> u64 {
+    facts(app)["strokes"].as_u64().unwrap()
+}
+
+fn redo_len(app: &PhotocraftApp) -> u64 {
+    facts(app)["redo"].as_u64().unwrap()
+}
+
+/// A three-point stroke through the middle of the test layer, for the tests that need a visible warp.
+fn sweep(app: &mut PhotocraftApp, y: f64) {
+    perform(app, stroke_with(StepTool::ForwardWarp, 50.0, &[[40.0, y], [60.0, y + 2.0], [80.0, y]]));
 }
 
 fn app_with_layer() -> PhotocraftApp {
@@ -51,35 +121,39 @@ fn native_component_liquify_preserves_proxy_detail_and_captured_commit_targets()
             for alpha in [true, false] {
                 let fixture = crate::distort_ui::component_tests::app(mode, depth);
                 let mut app = if alpha { fixture } else { crate::distort_ui::component_tests::without_alpha(fixture) };
-                open(&mut app, &egui::Context::default()).unwrap();
-                let d = app.distort.liquify.as_mut().unwrap();
-                let layer = d.layer;
-                let before = d.source.clone();
-                let bounds = d.canvas;
-                let mut field = LiquifyField::new(bounds, 8.0);
-                field.d.fill([2.0, 0.0]);
-                let mut out = vec![[0; 4]; 64 * 48];
-                assert!(render_components(&before, bounds, &field, 1.0, &d.target, bounds, bounds, &mut out));
-                for y in 0..48 {
-                    for x in 0..64 {
-                        let mut native = before.pixel(x, y);
-                        for k in [0, 2] {
-                            native[k] = before.sample_channel((x + 2).min(63), y, k);
+                open_ws(&mut app).unwrap();
+                let layer = la(&app).layer;
+                let (before, bounds) = {
+                    let e = eng(&app);
+                    (e.source.clone(), e.canvas)
+                };
+                {
+                    let e = eng(&app);
+                    let mut field = LiquifyField::new(bounds, 8.0);
+                    field.d.fill([2.0, 0.0]);
+                    let mut out = vec![[0; 4]; 64 * 48];
+                    assert!(render_components(&before, bounds, &field, 1.0, &e.target, bounds, bounds, &mut out));
+                    for y in 0..48 {
+                        for x in 0..64 {
+                            let mut native = before.pixel(x, y);
+                            for k in [0, 2] {
+                                native[k] = before.sample_channel((x + 2).min(63), y, k);
+                            }
+                            let rgba = photocraft_raster::to_rgba(&before.format(), &native);
+                            let expected = [rgba[0] * rgba[3], rgba[1] * rgba[3], rgba[2] * rgba[3], rgba[3]].map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
+                            assert!(out[(y * 64 + x) as usize].iter().zip(expected).all(|(a, b)| a.abs_diff(b) <= 1), "{mode}@{depth}");
                         }
-                        let rgba = photocraft_raster::to_rgba(&before.format(), &native);
-                        let expected = [rgba[0] * rgba[3], rgba[1] * rgba[3], rgba[2] * rgba[3], rgba[3]].map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
-                        assert!(out[(y * 64 + x) as usize].iter().zip(expected).all(|(a, b)| a.abs_diff(b) <= 1), "{mode}@{depth}");
                     }
                 }
-                d.strokes
-                    .push(LiquifyStroke { points: vec![vec![24.0, 24.0, 1.0], vec![34.0, 24.0, 1.0]], ..LiquifyStroke::new(LiquifyTool::ForwardWarp, 30.0) });
-                d.rebuild();
-                d.render_dirty();
-                let mut detail = vec![[0; 4]; 64 * 48];
-                assert!(render_components(&before, bounds, &d.field, 1.0, &d.target, bounds, bounds, &mut detail));
-                assert_eq!(d.out, detail, "proxy at 100% equals the detail path");
+                perform(&mut app, stroke_with(StepTool::ForwardWarp, 30.0, &[[24.0, 24.0], [34.0, 24.0]]));
+                {
+                    let e = eng(&app);
+                    let mut detail = vec![[0; 4]; 64 * 48];
+                    assert!(render_components(&before, bounds, &e.field, 1.0, &e.target, bounds, bounds, &mut detail));
+                    assert_eq!(e.out, detail, "proxy at 100% equals the detail path");
+                }
                 app.run("channel.target", json!({"channel":{"color":1}})).unwrap();
-                commit(&mut app).unwrap();
+                ctl(&mut app, json!({"commit": true})).unwrap();
                 let after = app.session.active().unwrap().doc.layer(layer).unwrap().surface().unwrap();
                 crate::distort_ui::component_tests::protected(&before, after, bounds);
                 assert_ne!(after.read_region(bounds), before.read_region(bounds));
@@ -89,46 +163,27 @@ fn native_component_liquify_preserves_proxy_detail_and_captured_commit_targets()
 }
 
 #[test]
-fn zoomed_liquify_preview_uses_only_the_visible_full_resolution_crop() {
-    let ctx = egui::Context::default();
+fn a_zoomed_read_covers_only_the_asked_region_and_a_stroke_reports_its_damage() {
     let mut app = app_with_layer();
-    open(&mut app, &ctx).unwrap();
-    let d = app.distort.liquify.as_mut().unwrap();
-    d.zoom = 2.0;
-    d.center = [60.0, 40.0];
-    d.update_view_preview(&ctx, ERect::from_min_size(pos2(0.0, 0.0), vec2(60.0, 40.0)));
-    assert_eq!(d.view_bounds, Some(Rect::new(45, 30, 75, 50)));
-    assert_eq!(d.view_out.len(), 30 * 20, "one preview texel per document pixel");
-    assert!(d.view_tex.is_some());
+    open_ws(&mut app).unwrap();
+    let read = |app: &PhotocraftApp| {
+        let mut image = ColorImage::filled([30, 20], Color32::TRANSPARENT);
+        eng(app).read(pixel_rect(Rect::new(45, 30, 75, 50)), 1, &mut image);
+        image.pixels
+    };
+    let before = read(&app);
+    let revision = eng(&app).revision;
+    assert_eq!(before.len(), 30 * 20, "one texel per document pixel of the region");
 
-    let before = d.view_out.clone();
-    let mut stroke = LiquifyStroke::new(LiquifyTool::ForwardWarp, 24.0);
-    stroke.points = vec![vec![50.0, 40.0, 1.0], vec![58.0, 40.0, 1.0]];
-    let dirty = d.field.stroke_segment(&stroke, [50.0, 40.0, 1.0], [58.0, 40.0, 1.0]);
-    d.mark(dirty, false);
-    d.render_dirty();
-    d.update_view_preview(&ctx, ERect::from_min_size(pos2(0.0, 0.0), vec2(60.0, 40.0)));
-    assert_ne!(d.view_out, before, "a brush update refreshes the visible source-resolution crop");
-    assert!(d.preview_ms.is_finite());
+    perform(&mut app, stroke_with(StepTool::ForwardWarp, 24.0, &[[50.0, 40.0], [58.0, 40.0]]));
+    assert_ne!(read(&app), before, "a brush update changes what the region reads");
+    let damage = eng(&app).damage(revision).expect("the ring still holds the stroke");
+    assert!(damage.x1 - damage.x0 < 120 && damage.y1 - damage.y0 < 80, "the stroke damages part of the picture, not all of it");
 }
 
-/// #7609: Show Backdrop › Use and Mode, as in Photoshop: the settings, how each mode layers the
-/// backdrop and the image, and what each Use shows.
+/// #7609: what each Show Backdrop › Use shows, and that a remembered Use opens on All Layers.
 #[test]
 fn backdrop_use_and_mode() {
-    let mut o = LiquifyOpts::default();
-    assert_eq!((o.backdrop_layer, o.backdrop_mode), (None, BackdropMode::InFront), "All Layers, In Front");
-    o.apply(&json!({"backdropUse": 3, "backdropMode": "behind"})).unwrap();
-    assert_eq!((o.backdrop_layer, o.backdrop_mode), (Some(3), BackdropMode::Behind));
-    assert_eq!((&o.to_json()["backdropUse"], &o.to_json()["backdropMode"]), (&json!(3), &json!("behind")));
-    o.apply(&json!({"backdropUse": "all", "backdropMode": "nope"})).unwrap();
-    assert_eq!((o.backdrop_layer, o.backdrop_mode), (None, BackdropMode::Behind), "a bad mode is ignored");
-    let (w, a) = (Color32::WHITE, |x: f32| Color32::from_white_alpha((x * 255.0).round() as u8));
-    let l = |image, behind, front| Layering { image, behind, front };
-    assert_eq!(backdrop_layering(Some(1), BackdropMode::InFront, 0.25), l(w, None, Some((1, a(0.25)))), "backdrop over the image");
-    assert_eq!(backdrop_layering(Some(1), BackdropMode::Behind, 0.25), l(a(0.25), Some((1, w)), None), "image over the backdrop");
-    assert_eq!(backdrop_layering(Some(1), BackdropMode::Blend, 0.25), l(a(0.75), None, Some((1, a(0.25)))), "faded together");
-    assert_eq!(backdrop_layering::<u8>(None, BackdropMode::Blend, 0.25), l(w, None, None), "no backdrop: the image as is");
     // All Layers is the document with the liquified layer in it; one layer is that layer alone.
     let app = app_with_layer();
     let st = app.session.active().unwrap();
@@ -144,226 +199,107 @@ fn backdrop_use_and_mode() {
     hidden.layer_mut(layer).unwrap().visible = false;
     assert_eq!(at(&backdrop_doc(&hidden, Some(layer.0))), own, "the hidden liquified layer, alone");
     // A remembered Use is a layer of another document: Liquify opens on All Layers.
-    let ctx = egui::Context::default();
     let mut app = app_with_layer();
-    app.session.prefs.edit(|p| p.dialogs.insert(REMEMBERED.into(), json!({"backdropUse": 42, "backdropMode": "blend"})));
-    open(&mut app, &ctx).unwrap();
-    let o = &app.distort.liquify.as_ref().unwrap().opts;
-    assert_eq!((o.backdrop_layer, o.backdrop_mode), (None, BackdropMode::Blend), "the mode is kept, the layer is not");
-    // Over the control channel, a layer of the document is kept and one that isn't is All Layers.
-    let layer = app.session.active().unwrap().active_layer.unwrap().0;
-    control(&mut app, &json!({"backdropUse": layer})).unwrap();
-    assert_eq!(app.distort.liquify.as_ref().unwrap().opts.backdrop_layer, Some(layer));
-    control(&mut app, &json!({"backdropUse": 4242})).unwrap();
-    assert_eq!(app.distort.liquify.as_ref().unwrap().opts.backdrop_layer, None, "no such layer: All Layers");
-    control(&mut app, &json!({"backdropUse": layer})).unwrap();
-    assert!(control(&mut app, &json!({"backdropUse": 4242, "tool": "nope"})).is_err());
-    assert_eq!(app.distort.liquify.as_ref().unwrap().opts.backdrop_layer, None, "also when another setting fails");
+    let ctx = app.ctx().clone();
+    let mut remembered = LiquifySettings::default();
+    remembered.backdrop = BackdropUse::Layer(42);
+    remembered.backdrop_mode = BackdropMode::Blend;
+    set_saved_value(&ctx, &REMEMBERED, Some(remembered));
+    open_ws(&mut app).unwrap();
+    let s = ws(&mut app).settings();
+    assert!(matches!(s.backdrop, BackdropUse::AllLayers), "the layer is not kept");
+    assert!(matches!(s.backdrop_mode, BackdropMode::Blend), "the mode is kept");
 }
 
-/// #418: the brush settings survive Cancel, OK and Esc, and come back the next time Liquify
-/// opens (also after a restart: they live in the preferences).
+/// #418: the brush settings survive Cancel, OK and Esc, and come back the next time Liquify opens.
 #[test]
 fn brush_settings_are_remembered_between_uses() {
-    let ctx = egui::Context::default();
     let mut app = app_with_layer();
-    open(&mut app, &ctx).unwrap();
-    let fresh = app.distort.liquify.as_ref().unwrap().opts.clone();
-    assert_eq!((fresh.density, fresh.tool), (50.0, LiquifyTool::ForwardWarp), "first use: the defaults");
+    let ctx = app.ctx().clone();
+    open_ws(&mut app).unwrap();
+    let fresh = ws(&mut app).settings().clone();
+    assert_eq!((fresh.brush.density, fresh.tool), (50.0, StepTool::ForwardWarp), "first use: the defaults");
     let set = json!({"tool": "twirlCw", "size": 37, "density": 85, "pressure": 60, "rate": 30, "showMesh": true, "meshSize": "large", "showBackdrop": true, "backdropOpacity": 25});
-    control(&mut app, &set).unwrap();
-    control(&mut app, &json!({"cancel": true})).unwrap();
-    assert!(app.distort.liquify.is_none());
-    open(&mut app, &ctx).unwrap();
-    assert_eq!(app.distort.liquify.as_ref().unwrap().opts.to_json(), {
-        let mut o = LiquifyOpts::default();
-        o.apply(&set).unwrap();
-        o.to_json()
-    });
+    ctl(&mut app, set).unwrap();
+    let changed = serde_json::to_value(ws(&mut app).settings()).unwrap();
+    assert_ne!(changed, serde_json::to_value(&fresh).unwrap());
+    ctl(&mut app, json!({"cancel": true})).unwrap();
+    assert!(!is_open(&app));
+    open_ws(&mut app).unwrap();
+    assert_eq!(serde_json::to_value(ws(&mut app).settings()).unwrap(), changed, "Cancel keeps the settings");
     // OK and Esc keep the latest settings too.
-    control(&mut app, &json!({"density": 90})).unwrap();
-    commit(&mut app).unwrap();
-    open(&mut app, &ctx).unwrap();
-    assert_eq!(app.distort.liquify.as_ref().unwrap().opts.density, 90.0);
-    control(&mut app, &json!({"density": 70})).unwrap();
-    cancel(&mut app);
-    assert_eq!(app.session.prefs().dialogs[REMEMBERED]["density"], json!(70.0));
-    // A damaged preference keeps what it can and never fails to open.
-    app.session.prefs.edit(|p| p.dialogs.insert(REMEMBERED.into(), json!({"tool": "nope", "density": "lots", "size": 1e12, "rate": 20})));
-    open(&mut app, &ctx).unwrap();
-    let o = &app.distort.liquify.as_ref().unwrap().opts;
-    assert_eq!((o.tool, o.density, o.size, o.rate), (LiquifyTool::ForwardWarp, 50.0, 15000.0, 20.0));
-    app.session.prefs.edit(|p| p.dialogs.insert(REMEMBERED.into(), json!("not an object")));
-    cancel(&mut app);
-    assert!(open(&mut app, &ctx).is_ok());
+    ctl(&mut app, json!({"density": 90})).unwrap();
+    ctl(&mut app, json!({"commit": true})).unwrap();
+    open_ws(&mut app).unwrap();
+    assert_eq!(ws(&mut app).settings().brush.density, 90.0);
+    ctl(&mut app, json!({"density": 70})).unwrap();
+    ctl(&mut app, json!({"cancel": true})).unwrap();
+    assert_eq!(saved_value::<Option<LiquifySettings>>(&ctx, &REMEMBERED).expect("stored").brush.density, 70.0);
 }
 
-/// The reference application's Liquify has Twirl Clockwise only: no Twirl Counterclockwise
-/// tool on the strip or a shortcut. A script naming it is refused with a clear error (Alt with
-/// Twirl Clockwise twirls counterclockwise); a setting saved by an older version opens on Twirl
-/// Clockwise.
-#[test]
-fn the_tool_strip_has_no_twirl_counterclockwise() {
-    assert!(!LiquifyTool::ALL.contains(&LiquifyTool::TwirlCcw));
-    assert!(LiquifyTool::ALL.contains(&LiquifyTool::TwirlCw));
-    for t in LiquifyTool::ALL {
-        assert_ne!(tl!(t.label()), tl!("Twirl Counterclockwise"), "{t:?}");
-        let svg = crate::icon_data::ICONS.iter().any(|(n, _)| *n == tool_icon(t));
-        assert!(svg, "{t:?}: {}", tool_icon(t));
-    }
-    assert_eq!(shortcut(LiquifyTool::TwirlCw), "C");
-    let ctx = egui::Context::default();
-    let mut app = app_with_layer();
-    open(&mut app, &ctx).unwrap();
-    control(&mut app, &json!({"tool": "pucker"})).unwrap();
-    let err = control(&mut app, &json!({"tool": "twirlCcw"})).unwrap_err();
-    assert!(err.contains("twirlCw") && err.contains("Alt"), "{err}");
-    assert_eq!(app.distort.liquify.as_ref().unwrap().opts.tool, LiquifyTool::Pucker, "the tool stays");
-    // Actions that are not tools are refused too, without the Alt hint that fits twirlCcw only.
-    for action in ["reconstructAll", "freezeAll", "thawAll", "invertFreeze"] {
-        let err = control(&mut app, &json!({ "tool": action })).unwrap_err();
-        assert!(err.contains("not a Liquify tool") && !err.contains("Alt"), "{action}: {err}");
-    }
-    assert_eq!(app.distort.liquify.as_ref().unwrap().opts.tool, LiquifyTool::Pucker, "the tool stays");
-    // A preference saved by an older version that names it opens on Twirl Clockwise.
-    cancel(&mut app);
-    app.session.prefs.edit(|p| p.dialogs.insert(REMEMBERED.into(), json!({"tool": "twirlCcw", "density": 70})));
-    open(&mut app, &ctx).unwrap();
-    let o = &app.distort.liquify.as_ref().unwrap().opts;
-    assert_eq!(o.tool, LiquifyTool::TwirlCw, "the saved twirl keeps its tool");
-    assert_eq!(o.density, 70.0, "the rest of the saved settings still apply");
-}
-
-/// Alt held with Twirl Clockwise twirls the other way: at the same point, the displacement a
-/// dab leaves points the opposite way from one without Alt. Both strokes get the same fixed
-/// times: a held twirl's strength is its elapsed time, so the wall clock made them differ (#12697).
-#[test]
-fn alt_with_twirl_clockwise_twirls_counterclockwise() {
-    let ctx = egui::Context::default();
-    let displacement = |mods: egui::Modifiers| {
-        let mut app = app_with_layer();
-        open(&mut app, &ctx).unwrap();
-        control(&mut app, &json!({"tool": "twirlCw", "size": 40, "rate": 80})).unwrap();
-        pointer_at(&mut app, ToolEvent::Down { x: 60.0, y: 40.0, pressure: 1.0 }, mods, 1000.0);
-        for k in 1..=4 {
-            pointer_at(&mut app, ToolEvent::Move { x: 60.0, y: 40.0, pressure: 1.0 }, mods, 1000.0 + 16.0 * f64::from(k));
-        }
-        pointer_at(&mut app, ToolEvent::Up { x: 60.0, y: 40.0 }, mods, 1064.0);
-        let d = app.distort.liquify.as_ref().unwrap();
-        assert_eq!(d.opts.tool, LiquifyTool::TwirlCw);
-        // Right of the centre: clockwise (y down) moves content down, so it samples from above.
-        d.field.sample(70.0, 40.0)
-    };
-    let (plain, alt) = (displacement(egui::Modifiers::NONE), displacement(egui::Modifiers::ALT));
-    assert!(plain[1] < -0.1, "clockwise samples from above: {plain:?}");
-    assert!(alt[1] > 0.1, "Alt twirls counterclockwise and samples from below: {alt:?}");
-    assert!((plain[1] + alt[1]).abs() < 0.05 * plain[1].abs(), "the same twirl, mirrored: {plain:?} vs {alt:?}");
-}
-
-/// Follow-up to #1494 / #1484: Alt is captured at stroke-down and stays recorded
-/// through undo, redo and deterministic Liquify field reconstruction.
+/// Follow-up to #1494 / #1484: a reversed twirl replays the same after undo and redo.
 #[test]
 fn alt_reversed_twirl_survives_replay_undo_and_redo() {
-    let ctx = egui::Context::default();
     let mut app = app_with_layer();
-    open(&mut app, &ctx).unwrap();
-    control(&mut app, &json!({"tool": "twirlCw", "size": 36, "rate": 80})).unwrap();
+    open_ws(&mut app).unwrap();
+    perform(&mut app, stroke_with(StepTool::TwirlCounterclockwise, 36.0, &[[53.0, 40.0], [58.0, 41.0]]));
+    let first = eng(&app).field.clone();
+    perform(&mut app, stroke_with(StepTool::TwirlClockwise, 36.0, &[[70.0, 40.0], [75.0, 42.0]]));
+    let both = eng(&app).field.clone();
+    assert_ne!(first, both);
+    assert_eq!(strokes(&app), 2);
 
-    // Releasing Alt while dragging must not change the tool recorded at pointer-down.
-    pointer(&mut app, ToolEvent::Down { x: 53.0, y: 40.0, pressure: 1.0 }, egui::Modifiers::ALT);
-    pointer(&mut app, ToolEvent::Move { x: 58.0, y: 41.0, pressure: 1.0 }, egui::Modifiers::NONE);
-    pointer(&mut app, ToolEvent::Up { x: 58.0, y: 41.0 }, egui::Modifiers::NONE);
-    let d = app.distort.liquify.as_ref().unwrap();
-    assert_eq!(d.opts.tool, LiquifyTool::TwirlCw, "Alt must not change the selected tool");
-    assert_eq!(d.strokes.len(), 1);
-    assert_eq!(d.strokes[0].tool, LiquifyTool::TwirlCcw);
-    assert_eq!(LiquifyField::from_strokes(d.canvas, d.cell, &d.strokes), d.field);
+    undo(&mut app);
+    assert_eq!(strokes(&app), 1);
+    assert_eq!(redo_len(&app), 1);
+    assert_eq!(eng(&app).field, first, "undo replays the reversed twirl alone");
 
-    // A following stroke without Alt records the original tool.
-    pointer(&mut app, ToolEvent::Down { x: 70.0, y: 40.0, pressure: 1.0 }, egui::Modifiers::NONE);
-    pointer(&mut app, ToolEvent::Move { x: 75.0, y: 42.0, pressure: 1.0 }, egui::Modifiers::ALT);
-    pointer(&mut app, ToolEvent::Up { x: 75.0, y: 42.0 }, egui::Modifiers::ALT);
-    let d = app.distort.liquify.as_ref().unwrap();
-    assert_eq!(d.strokes.len(), 2);
-    assert_eq!(d.strokes[1].tool, LiquifyTool::TwirlCw);
-    assert_eq!(LiquifyField::from_strokes(d.canvas, d.cell, &d.strokes), d.field);
-
-    control(&mut app, &json!({"undo": true})).unwrap();
-    let d = app.distort.liquify.as_ref().unwrap();
-    assert_eq!(d.strokes.len(), 1);
-    assert_eq!(d.strokes[0].tool, LiquifyTool::TwirlCcw);
-    assert_eq!(d.redo[0].tool, LiquifyTool::TwirlCw);
-    assert_eq!(LiquifyField::from_strokes(d.canvas, d.cell, &d.strokes), d.field);
-
-    control(&mut app, &json!({"redo": true})).unwrap();
-    let d = app.distort.liquify.as_ref().unwrap();
-    assert_eq!(d.strokes.len(), 2);
-    assert!(d.redo.is_empty());
-    assert_eq!(d.strokes[0].tool, LiquifyTool::TwirlCcw);
-    assert_eq!(d.strokes[1].tool, LiquifyTool::TwirlCw);
-    assert_eq!(LiquifyField::from_strokes(d.canvas, d.cell, &d.strokes), d.field);
+    redo(&mut app);
+    assert_eq!(strokes(&app), 2);
+    assert_eq!(redo_len(&app), 0);
+    assert_eq!(eng(&app).field, both, "redo replays both strokes the same");
 }
 
 #[test]
 fn dialog_strokes_match_the_engine_and_commit_once() {
-    let ctx = egui::Context::default();
     let mut app = app_with_layer();
-    open(&mut app, &ctx).unwrap();
-    control(&mut app, &json!({"tool": "forwardWarp", "size": 40})).unwrap();
-    for ev in [
-        ToolEvent::Down { x: 40.0, y: 40.0, pressure: 1.0 },
-        ToolEvent::Move { x: 48.0, y: 41.0, pressure: 1.0 },
-        ToolEvent::Move { x: 56.0, y: 40.0, pressure: 1.0 },
-        ToolEvent::Up { x: 56.0, y: 40.0 },
-    ] {
-        pointer(&mut app, ev, egui::Modifiers::NONE);
-    }
-    control(&mut app, &json!({"tool": "bloat"})).unwrap();
-    for ev in [ToolEvent::Down { x: 80.0, y: 40.0, pressure: 1.0 }, ToolEvent::Move { x: 80.0, y: 40.0, pressure: 1.0 }, ToolEvent::Up { x: 80.0, y: 40.0 }] {
-        pointer(&mut app, ev, egui::Modifiers::NONE);
-    }
-    let d = app.distort.liquify.as_ref().unwrap();
-    assert_eq!(d.strokes.len(), 2);
-    assert_eq!(d.redo.len(), 0);
-    // Replaying the recorded strokes gives exactly the interactive field.
-    let replay = LiquifyField::from_strokes(d.canvas, d.cell, &d.strokes);
-    assert_eq!(replay, d.field);
-    assert!(d.field.max_displacement() > 3.0);
-    // Undo inside the dialog drops the last stroke.
-    control(&mut app, &json!({"undo": true})).unwrap();
-    assert_eq!(app.distort.liquify.as_ref().unwrap().strokes.len(), 1);
-    assert_eq!(app.distort.liquify.as_ref().unwrap().redo.len(), 1);
-    control(&mut app, &json!({"redo": true})).unwrap();
-    assert_eq!(app.distort.liquify.as_ref().unwrap().strokes.len(), 2);
-    assert_eq!(app.distort.liquify.as_ref().unwrap().redo.len(), 0);
-    control(&mut app, &json!({"undo": true})).unwrap();
+    open_ws(&mut app).unwrap();
+    let before_pixels = layer_pixels(&app);
+    let warp = stroke_with(StepTool::ForwardWarp, 40.0, &[[40.0, 40.0], [48.0, 41.0], [56.0, 40.0]]);
+    perform(&mut app, warp.clone());
+    perform(&mut app, stroke_with(StepTool::Bloat, 40.0, &[[80.0, 40.0], [80.0, 40.0]]));
+    assert_eq!(strokes(&app), 2);
+    assert_eq!(redo_len(&app), 0);
+    assert!(eng(&app).field.max_displacement() > 3.0);
+    undo(&mut app);
+    assert_eq!((strokes(&app), redo_len(&app)), (1, 1));
+    redo(&mut app);
+    assert_eq!((strokes(&app), redo_len(&app)), (2, 0));
+    undo(&mut app);
+    let cell = eng(&app).cell;
     let before = app.session.active().unwrap().history.past_len();
-    control(&mut app, &json!({"commit": true})).unwrap();
-    assert!(app.distort.liquify.is_none());
+    ctl(&mut app, json!({"commit": true})).unwrap();
+    assert!(!is_open(&app));
     assert_eq!(app.session.active().unwrap().history.past_len(), before + 1);
+    // The pixels are the command's for the one stroke left.
+    let mut reference = app_with_layer();
+    let layer = reference.session.active().unwrap().active_layer.unwrap();
+    reference.run("filter.liquify", json!({"strokes": [serde_json::to_value(engine_of(&warp)).unwrap()], "meshSize": cell, "layer": layer.0})).unwrap();
+    assert_eq!(layer_pixels(&app), layer_pixels(&reference));
+    assert_ne!(layer_pixels(&app), before_pixels);
 }
 
 #[test]
 fn undo_rerenders_the_proxy_before_the_next_texture_upload() {
-    let ctx = egui::Context::default();
     let mut app = app_with_layer();
-    open(&mut app, &ctx).unwrap();
-    control(&mut app, &json!({"tool": "forwardWarp", "size": 40})).unwrap();
-    for ev in [
-        ToolEvent::Down { x: 35.0, y: 40.0, pressure: 1.0 },
-        ToolEvent::Move { x: 55.0, y: 40.0, pressure: 1.0 },
-        ToolEvent::Up { x: 55.0, y: 40.0 },
-        ToolEvent::Down { x: 70.0, y: 40.0, pressure: 1.0 },
-        ToolEvent::Move { x: 90.0, y: 40.0, pressure: 1.0 },
-        ToolEvent::Up { x: 90.0, y: 40.0 },
-    ] {
-        pointer(&mut app, ev, egui::Modifiers::NONE);
-    }
+    open_ws(&mut app).unwrap();
+    perform(&mut app, stroke_with(StepTool::ForwardWarp, 40.0, &[[35.0, 40.0], [55.0, 40.0]]));
+    perform(&mut app, stroke_with(StepTool::ForwardWarp, 40.0, &[[70.0, 40.0], [90.0, 40.0]]));
 
-    let before = app.distort.liquify.as_ref().unwrap().out.clone();
-    control(&mut app, &json!({"undo": true})).unwrap();
-    let d = app.distort.liquify.as_ref().unwrap();
-    assert_eq!(d.strokes.len(), 1);
+    let before = eng(&app).out.clone();
+    undo(&mut app);
+    assert_eq!(strokes(&app), 1);
+    let d = eng(&app);
     assert_ne!(d.out, before, "undo must update the pixels shown by the existing texture");
 
     let mut expected = vec![[0u8; 4]; d.proxy.w * d.proxy.h];
@@ -371,447 +307,28 @@ fn undo_rerenders_the_proxy_before_the_next_texture_upload() {
     assert_eq!(d.out, expected, "dirty upload source must match the rebuilt field");
 }
 
-#[test]
-fn undo_dirties_the_zoomed_preview() {
-    let ctx = egui::Context::default();
-    let mut app = app_with_layer();
-    open(&mut app, &ctx).unwrap();
-    control(&mut app, &json!({"tool": "forwardWarp", "size": 40})).unwrap();
-    for ev in [ToolEvent::Down { x: 35.0, y: 40.0, pressure: 1.0 }, ToolEvent::Move { x: 55.0, y: 40.0, pressure: 1.0 }, ToolEvent::Up { x: 55.0, y: 40.0 }] {
-        pointer(&mut app, ev, egui::Modifiers::NONE);
-    }
-    {
-        let d = app.distort.liquify.as_mut().unwrap();
-        d.zoom = 2.0;
-        d.view_bounds = Some(Rect::new(0, 0, 20, 20));
-        d.view_dirty = None;
-    }
-    control(&mut app, &json!({"undo": true})).unwrap();
-    let d = app.distort.liquify.as_ref().unwrap();
-    assert_eq!(d.view_dirty, d.view_bounds);
-}
-
-#[test]
-fn liquify_redo_restores_undone_stroke_and_a_new_stroke_clears_redo() {
-    let ctx = egui::Context::default();
-    let mut app = app_with_layer();
-    open(&mut app, &ctx).unwrap();
-    control(&mut app, &json!({"tool": "forwardWarp", "size": 40})).unwrap();
-    let draw = |app: &mut PhotocraftApp, x: f64| {
-        for ev in
-            [ToolEvent::Down { x, y: 40.0, pressure: 1.0 }, ToolEvent::Move { x: x + 14.0, y: 40.0, pressure: 1.0 }, ToolEvent::Up { x: x + 14.0, y: 40.0 }]
-        {
-            pointer(app, ev, egui::Modifiers::NONE);
-        }
-    };
-
-    draw(&mut app, 30.0);
-    draw(&mut app, 70.0);
-    control(&mut app, &json!({"undo": true})).unwrap();
-    let d = app.distort.liquify.as_ref().unwrap();
-    assert_eq!((d.strokes.len(), d.redo.len()), (1, 1));
-
-    control(&mut app, &json!({"redo": true})).unwrap();
-    let d = app.distort.liquify.as_ref().unwrap();
-    assert_eq!((d.strokes.len(), d.redo.len()), (2, 0));
-    assert_eq!(LiquifyField::from_strokes(d.canvas, d.cell, &d.strokes), d.field);
-
-    control(&mut app, &json!({"undo": true})).unwrap();
-    draw(&mut app, 50.0);
-    let d = app.distort.liquify.as_ref().unwrap();
-    assert_eq!((d.strokes.len(), d.redo.len()), (2, 0));
-    control(&mut app, &json!({"redo": true})).unwrap();
-    assert_eq!(app.distort.liquify.as_ref().unwrap().strokes.len(), 2, "redo after a new stroke is a no-op");
-}
-
-/// The Freeze Lasso freezes the dragged polygon (⌥ thaws it) as one recorded stroke, and a
-/// new lasso clears Redo like any other stroke.
+/// A freeze lasso reaches the app's freeze mask, and Alt (amount 0) thaws it; undo replays the first lasso.
 #[test]
 fn freeze_lasso_records_a_stroke_and_clears_redo() {
-    let ctx = egui::Context::default();
     let mut app = app_with_layer();
-    open(&mut app, &ctx).unwrap();
-    control(&mut app, &json!({"tool": "lassoMask"})).unwrap();
-    let lasso = |app: &mut PhotocraftApp, m: egui::Modifiers, r: [f64; 4]| {
-        pointer(app, ToolEvent::Down { x: r[0], y: r[1], pressure: 1.0 }, m);
-        for (x, y) in [(r[2], r[1]), (r[2], r[3]), (r[0], r[3])] {
-            pointer(app, ToolEvent::Move { x, y, pressure: 1.0 }, m);
-        }
-        pointer(app, ToolEvent::Up { x: r[0], y: r[3] }, m);
+    open_ws(&mut app).unwrap();
+    let lasso = |r: [f64; 4], amount: f64| {
+        let mut s = stroke_with(StepTool::FreezeLasso, 30.0, &[[r[0], r[1]], [r[2], r[1]], [r[2], r[3]], [r[0], r[3]], [r[0], r[1]]]);
+        s.amount = Some(amount);
+        s
     };
-    lasso(&mut app, egui::Modifiers::NONE, [20.0, 20.0, 80.0, 60.0]);
-    let d = app.distort.liquify.as_ref().unwrap();
-    assert_eq!(d.strokes.len(), 1);
-    assert_eq!(d.field.freeze_at(50.0, 40.0), 1.0, "frozen inside");
-    assert_eq!(d.field.freeze_at(5.0, 5.0), 0.0, "not outside");
-    lasso(&mut app, egui::Modifiers::ALT, [40.0, 30.0, 60.0, 50.0]);
-    let d = app.distort.liquify.as_ref().unwrap();
-    assert_eq!(d.field.freeze_at(50.0, 40.0), 0.0, "⌥ thaws");
-    assert_eq!(d.field.freeze_at(25.0, 25.0), 1.0);
-    control(&mut app, &json!({"undo": true})).unwrap();
-    assert_eq!(app.distort.liquify.as_ref().unwrap().field.freeze_at(50.0, 40.0), 1.0, "undo replays the first lasso");
-    assert_eq!(app.distort.liquify.as_ref().unwrap().redo.len(), 1);
-    lasso(&mut app, egui::Modifiers::NONE, [0.0, 0.0, 10.0, 10.0]);
-    assert_eq!(app.distort.liquify.as_ref().unwrap().redo.len(), 0, "a new lasso clears redo");
-}
-
-#[test]
-fn alt_reverses_twirl_and_swaps_pucker_and_bloat() {
-    let ctx = egui::Context::default();
-    let mut app = app_with_layer();
-    open(&mut app, &ctx).unwrap();
-    let dab = |app: &mut PhotocraftApp, m: egui::Modifiers| {
-        pointer(app, ToolEvent::Down { x: 50.0, y: 40.0, pressure: 1.0 }, m);
-        pointer(app, ToolEvent::Up { x: 50.0, y: 40.0 }, m);
-        app.distort.liquify.as_ref().unwrap().strokes.last().unwrap().tool
-    };
-    for (tool, plain, alt) in [
-        ("twirlCw", LiquifyTool::TwirlCw, LiquifyTool::TwirlCcw),
-        ("pucker", LiquifyTool::Pucker, LiquifyTool::Bloat),
-        ("bloat", LiquifyTool::Bloat, LiquifyTool::Pucker),
-        ("forwardWarp", LiquifyTool::ForwardWarp, LiquifyTool::ForwardWarp),
-    ] {
-        control(&mut app, &json!({"tool": tool})).unwrap();
-        assert_eq!(dab(&mut app, egui::Modifiers::NONE), plain, "{tool}");
-        assert_eq!(dab(&mut app, egui::Modifiers::ALT), alt, "⌥ {tool}");
-        assert_eq!(app.distort.liquify.as_ref().unwrap().opts.tool, plain, "⌥ leaves the selected tool alone");
-    }
-}
-
-#[test]
-fn liquify_redo_stack_is_bounded() {
-    let ctx = egui::Context::default();
-    let mut app = app_with_layer();
-    open(&mut app, &ctx).unwrap();
-    let d = app.distort.liquify.as_mut().unwrap();
-    d.strokes = (0..=REDO_STACK_LIMIT).map(|_| LiquifyStroke::new(LiquifyTool::ForwardWarp, 1.0)).collect();
-    for _ in 0..=REDO_STACK_LIMIT {
-        d.undo();
-    }
-    assert_eq!(d.redo.len(), REDO_STACK_LIMIT);
-}
-
-/// #7884: Alt+right-dragging the brush size in the Liquify dialog keeps the brush where the
-/// drag started (its outline and the point it would work at) and only changes its size, as the
-/// brush tools' Alt-drag does outside Liquify.
-#[test]
-fn alt_drag_resize_keeps_the_brush_where_it_started() {
-    let ctx = egui::Context::default();
-    PhotocraftApp::setup_context(&ctx, Default::default());
-    let mut app = app_with_layer();
-    open(&mut app, &ctx).unwrap();
-    let screen = ERect::from_min_size(pos2(0.0, 0.0), vec2(1400.0, 900.0));
-    let frame = |app: &mut PhotocraftApp, events: Vec<egui::Event>, mods: egui::Modifiers| {
-        let events = std::iter::once(egui::Event::ModifiersChanged(mods)).chain(events).collect();
-        let raw = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
-        ctx.run_ui(raw, |ui| show(app, ui.ctx())).textures_delta.clear();
-    };
-    let alt = egui::Modifiers::ALT;
-    let none = egui::Modifiers::NONE;
-    frame(&mut app, vec![], none);
-    // A point over the image in the dialog's canvas (120 × 80): the first one on a grid.
-    let p = (1..22)
-        .flat_map(|j| (1..34).map(move |i| pos2(40.0 * i as f32, 40.0 * j as f32)))
-        .find(|&q| {
-            frame(&mut app, vec![egui::Event::PointerMoved(q)], none);
-            let h = app.distort.liquify.as_ref().and_then(|d| d.hover);
-            h.is_some_and(|h| (10.0..60.0).contains(&h[0]) && (20.0..60.0).contains(&h[1]))
-        })
-        .expect("the dialog shows the image");
-    frame(&mut app, vec![egui::Event::PointerMoved(p)], none);
-    let d = app.distort.liquify.as_ref().unwrap();
-    let (start, size0) = (d.hover.expect("the pointer is over the canvas"), d.opts.size);
-    let button = |pressed| egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed, modifiers: alt };
-    frame(&mut app, vec![button(true)], alt);
-    for k in 1..=6 {
-        frame(&mut app, vec![egui::Event::PointerMoved(p + vec2(10.0 * k as f32, 0.0))], alt);
-    }
-    let d = app.distort.liquify.as_ref().unwrap();
-    assert!(d.opts.size > size0, "the drag resized the brush: {} -> {}", size0, d.opts.size);
-    assert_eq!(d.hover, Some(start), "the brush stayed where the drag started");
-    assert!(d.strokes.is_empty(), "and nothing was painted");
-}
-
-#[test]
-fn shortcut_handler_undoes_liquify_even_when_egui_owns_keyboard_focus() {
-    let ctx = egui::Context::default();
-    let mut app = app_with_layer();
-    open(&mut app, &ctx).unwrap();
-    for ev in [ToolEvent::Down { x: 40.0, y: 40.0, pressure: 1.0 }, ToolEvent::Move { x: 52.0, y: 40.0, pressure: 1.0 }, ToolEvent::Up { x: 52.0, y: 40.0 }] {
-        pointer(&mut app, ev, egui::Modifiers::NONE);
-    }
-    assert_eq!(app.distort.liquify.as_ref().unwrap().strokes.len(), 1);
-
-    let raw = egui::RawInput {
-        events: vec![egui::Event::Key { key: egui::Key::Z, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND }],
-        ..Default::default()
-    };
-    let mut out = ctx.run_ui(raw, |ui| {
-        let ctx = ui.ctx();
-        ctx.memory_mut(|m| m.request_focus(egui::Id::unique("liquify-slider-focus")));
-        assert!(ctx.egui_wants_keyboard_input());
-        crate::shortcuts::handle(&mut app, ctx);
-    });
-    out.textures_delta.clear();
-    assert_eq!(app.distort.liquify.as_ref().unwrap().strokes.len(), 0);
-    let raw = egui::RawInput {
-        events: vec![egui::Event::Key {
-            key: egui::Key::Z,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
-        }],
-        ..Default::default()
-    };
-    let _ = ctx.run_ui(raw, |ui| {
-        crate::shortcuts::handle(&mut app, ui.ctx());
-    });
-    assert_eq!(app.distort.liquify.as_ref().unwrap().strokes.len(), 1, "Cmd+Shift+Z redoes the last stroke");
-}
-
-// Regression test for #4134: Cmd+Z and Cmd+Shift+Z were ignored in Liquify while a numeric
-// field's text edit (Size, Pressure, ...) had keyboard focus, so a stroke could not be undone.
-#[test]
-fn liquify_undo_and_redo_work_while_a_numeric_field_is_focused() {
-    let ctx = egui::Context::default();
-    let mut app = app_with_layer();
-    open(&mut app, &ctx).unwrap();
-    for ev in [ToolEvent::Down { x: 40.0, y: 40.0, pressure: 1.0 }, ToolEvent::Move { x: 52.0, y: 40.0, pressure: 1.0 }, ToolEvent::Up { x: 52.0, y: 40.0 }] {
-        pointer(&mut app, ev, egui::Modifiers::NONE);
-    }
-    let strokes = |app: &PhotocraftApp| app.distort.liquify.as_ref().unwrap().strokes.len();
+    perform(&mut app, lasso([20.0, 20.0, 80.0, 60.0], 1.0));
     assert_eq!(strokes(&app), 1);
-
-    // One frame of the real shortcut handler, then a focused single-line text edit (the
-    // numeric fields are text edits), as the app orders them.
-    let mut text = String::from("100");
-    let field = egui::Id::unique("liquify-size-field");
-    let mut frame = |app: &mut PhotocraftApp, events: Vec<egui::Event>| {
-        let raw = egui::RawInput { events, ..Default::default() };
-        let mut out = ctx.run_ui(raw, |ui| {
-            crate::shortcuts::handle(app, ui.ctx());
-            let edit = ui.add(egui::TextEdit::singleline(&mut text).id(field));
-            edit.request_focus();
-        });
-        out.textures_delta.clear();
-    };
-    frame(&mut app, Vec::new());
-    assert!(ctx.text_edit_focused(), "the numeric field is a focused text edit");
-
-    let z = |modifiers| egui::Event::Key { key: egui::Key::Z, physical_key: None, pressed: true, repeat: false, modifiers };
-    frame(&mut app, vec![z(egui::Modifiers::COMMAND)]);
-    assert_eq!(strokes(&app), 0, "Cmd+Z undoes the stroke with the field focused");
-    frame(&mut app, vec![z(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT)]);
-    assert_eq!(strokes(&app), 1, "Cmd+Shift+Z redoes it");
-}
-
-// Regression test for #4134: other Liquify keys must not steal characters from a focused
-// numeric field, and the bracket keys step the brush by at least one pixel.
-#[test]
-fn liquify_tool_keys_leave_a_focused_field_alone_and_brackets_reach_one_pixel() {
-    let ctx = egui::Context::default();
-    let mut app = app_with_layer();
-    open(&mut app, &ctx).unwrap();
-    app.distort.liquify.as_mut().unwrap().opts.size = 2.0;
-    let size = |app: &PhotocraftApp| app.distort.liquify.as_ref().unwrap().opts.size;
-    let press = |app: &mut PhotocraftApp, key: egui::Key| {
-        let ev = egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
-        let mut out = ctx.run_ui(egui::RawInput { events: vec![ev], ..Default::default() }, |ui| crate::shortcuts::handle(app, ui.ctx()));
-        out.textures_delta.clear();
-    };
-    // 2 px * 0.9 used to round back to 2, so `[` never reached 1 px; `]` steps up from 1.
-    press(&mut app, egui::Key::OpenBracket);
-    assert_eq!(size(&app), 1.0, "`[` steps a 2 px brush down to 1 px");
-    press(&mut app, egui::Key::CloseBracket);
-    assert_eq!(size(&app), 2.0, "`]` steps it back up");
-
-    // With a text edit focused, `[` belongs to the field.
-    let mut text = String::new();
-    let field = egui::Id::unique("liquify-size-field");
-    let focused_frame = |app: &mut PhotocraftApp, text: &mut String, events: Vec<egui::Event>| {
-        let mut out = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
-            crate::shortcuts::handle(app, ui.ctx());
-            ui.add(egui::TextEdit::singleline(text).id(field)).request_focus();
-        });
-        out.textures_delta.clear();
-    };
-    focused_frame(&mut app, &mut text, Vec::new());
-    assert!(ctx.text_edit_focused());
-    let bracket = egui::Event::Key { key: egui::Key::OpenBracket, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
-    focused_frame(&mut app, &mut text, vec![bracket]);
-    assert_eq!(size(&app), 2.0, "the focused field keeps its keys");
-}
-
-fn key(key: egui::Key) -> egui::Event {
-    egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND }
-}
-
-/// A frame of the open dialog in a 1000 × 700 window with `events`; returns the preview's
-/// centre (between the tool strip and the options panel, under the title strip).
-fn frame(app: &mut PhotocraftApp, ctx: &egui::Context, events: Vec<egui::Event>) -> Pos2 {
-    let screen = ERect::from_min_size(Pos2::ZERO, vec2(1000.0, 700.0));
-    let raw = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
-    let mut out = ctx.run_ui(raw, |ui| show(app, ui.ctx()));
-    out.textures_delta.clear();
-    pos2((LEFT_W + screen.width() - RIGHT_W) / 2.0, (30.0 + screen.height()) / 2.0)
-}
-
-/// #7210: ⌘+ / ⌘− step Liquify's preview along the zoom ladder, ⌘0 fits it and ⌘1 is the
-/// dialog's 100 %, through the canvas's own shortcuts; the canvas behind keeps its zoom.
-#[test]
-fn zoom_shortcuts_zoom_the_preview_not_the_canvas() {
-    let ctx = egui::Context::default();
-    PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
-    let mut app = app_with_layer();
-    open(&mut app, &ctx).unwrap();
-    frame(&mut app, &ctx, Vec::new());
-    let fitted = app.distort.liquify.as_ref().unwrap().zoom;
-    assert!(fitted > 0.0, "the preview fits on its first frame");
-    let canvas_zoom = app.ui.views.first().map(|v| v.zoom);
-    let mut press = |k: egui::Key| {
-        let raw = egui::RawInput { events: vec![key(k)], ..Default::default() };
-        let _ = ctx.run_ui(raw, |ui| crate::shortcuts::handle(&mut app, ui.ctx()));
-        app.distort.liquify.as_ref().unwrap().zoom
-    };
-    assert_eq!(press(egui::Key::Num1), 1.0);
-    assert_eq!(press(egui::Key::Equals), 2.0, "next step up the ladder");
-    assert_eq!(press(egui::Key::Plus), 3.0, "⌘+ typed as Plus too");
-    assert_eq!(press(egui::Key::Minus), 2.0);
-    assert_eq!(press(egui::Key::Num0), 0.0, "fit on the next frame");
-    frame(&mut app, &ctx, Vec::new());
-    assert_eq!(app.distort.liquify.as_ref().unwrap().zoom, fitted);
-    assert_eq!(app.ui.views.first().map(|v| v.zoom), canvas_zoom, "the canvas behind keeps its zoom");
-}
-
-/// #7210: a trackpad pinch over the preview zooms it about the pointer (macOS sends no wheel
-/// for it), unless Preferences › Enhanced Controls › Zoom with Trackpad Pinch is off; a wheel
-/// notch is one ×1.1 step.
-#[test]
-fn pinch_and_wheel_zoom_the_preview_about_the_pointer() {
-    let ctx = egui::Context::default();
-    PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
-    let mut app = app_with_layer();
-    open(&mut app, &ctx).unwrap();
-    let center = frame(&mut app, &ctx, Vec::new());
-    let at = center + vec2(60.0, -40.0);
-    frame(&mut app, &ctx, vec![egui::Event::PointerMoved(at)]);
-    let screen = ERect::from_min_size(Pos2::ZERO, vec2(1000.0, 700.0));
-    let area = ERect::from_min_max(pos2(LEFT_W, 30.0), pos2(screen.width() - RIGHT_W, screen.height()));
-    let (z0, under) = {
-        let d = app.distort.liquify.as_ref().unwrap();
-        (d.zoom, to_doc(d, area, at))
-    };
-    frame(&mut app, &ctx, vec![egui::Event::PointerMoved(at), egui::Event::Zoom(2.0)]);
-    let d = app.distort.liquify.as_ref().unwrap();
-    assert!((d.zoom - z0 * 2.0).abs() < 1e-4, "{} → {}", z0, d.zoom);
-    let still = to_doc(d, area, at);
-    assert!((still[0] - under[0]).abs() < 1e-3 && (still[1] - under[1]).abs() < 1e-3, "the point under the pointer stays: {under:?} → {still:?}");
-
-    // Animated Zoom off: a notch is one instant step, so one frame shows the whole ×1.1.
-    app.session.prefs.edit(|p| p.general.animated_zoom = false);
-    let notch = ctx.options(|o| o.input_options.line_scroll_speed);
-    let wheel = egui::Event::MouseWheel {
-        source: egui::MouseWheelSource::Unknown,
-        unit: egui::MouseWheelUnit::Line,
-        delta: vec2(0.0, 1.0),
-        modifiers: egui::Modifiers::NONE,
-        phase: egui::TouchPhase::Move,
-    };
-    let z1 = app.distort.liquify.as_ref().unwrap().zoom;
-    frame(&mut app, &ctx, vec![egui::Event::PointerMoved(at), wheel]);
-    let z2 = app.distort.liquify.as_ref().unwrap().zoom;
-    assert!(notch > 0.0 && (z2 / z1 - crate::wheel_nav::NOTCH).abs() < 1e-3, "one notch is ×1.1: {z1} → {z2}");
-
-    app.session.prefs.edit(|p| p.enhanced_controls.zoom_with_trackpad_pinch = false);
-    frame(&mut app, &ctx, vec![egui::Event::PointerMoved(at), egui::Event::Zoom(2.0)]);
-    assert_eq!(app.distort.liquify.as_ref().unwrap().zoom, z2, "a pinch does nothing with the preference off");
-}
-
-/// The proxy rendered from the recorded strokes, i.e. what undo/replay rebuilds.
-fn replayed_out(d: &LiquifyDialog) -> Vec<[u8; 4]> {
-    let field = LiquifyField::from_strokes(d.canvas, d.cell, &d.strokes);
-    let mut out = vec![[0u8; 4]; d.proxy.w * d.proxy.h];
-    d.proxy.render(&field, [0, 0, d.proxy.w, d.proxy.h], &mut out);
-    out
-}
-
-/// #8055: a second pointer-down while a stroke is open must not drop the dabs already applied.
-#[test]
-fn second_down_without_up_keeps_the_open_strokes_dabs_recorded() {
-    let ctx = egui::Context::default();
-    let mut app = app_with_layer();
-    open(&mut app, &ctx).unwrap();
-    control(&mut app, &json!({"tool": "forwardWarp", "size": 30})).unwrap();
-    for ev in [
-        ToolEvent::Down { x: 40.0, y: 40.0, pressure: 1.0 },
-        ToolEvent::Move { x: 46.0, y: 41.0, pressure: 1.0 },
-        ToolEvent::Down { x: 46.0, y: 41.0, pressure: 1.0 },
-        ToolEvent::Move { x: 55.0, y: 42.0, pressure: 1.0 },
-        ToolEvent::Up { x: 55.0, y: 42.0 },
-    ] {
-        pointer(&mut app, ev, egui::Modifiers::NONE);
-    }
-    let d = app.distort.liquify.as_ref().unwrap();
-    assert!(d.out == replayed_out(d), "the live field must match the field rebuilt from the recorded strokes");
-}
-
-/// #8055: short strokes drawn with the mouse (moves inside egui's drag threshold first) are
-/// recorded whole, as one stroke each, so undo removes only the last one.
-#[test]
-fn short_mouse_strokes_are_recorded_whole_and_undo_removes_only_the_last() {
-    let ctx = egui::Context::default();
-    crate::theme::install_fonts(&ctx);
-    let mut app = app_with_layer();
-    open(&mut app, &ctx).unwrap();
-    control(&mut app, &json!({"tool": "forwardWarp", "size": 30})).unwrap();
-    let screen = ERect::from_min_size(pos2(0.0, 0.0), vec2(1280.0, 800.0));
-    let frame = |app: &mut PhotocraftApp, events: Vec<egui::Event>| {
-        let raw = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
-        let mut out = ctx.run_ui(raw, |ui| show(app, ui.ctx()));
-        out.textures_delta.clear();
-    };
-    frame(&mut app, vec![]);
-    frame(&mut app, vec![]);
-    let mut before_last = Vec::new();
-    let strokes = 6;
-    for i in 0..strokes {
-        let start = pos2(560.0 + i as f32 * 25.0, 380.0 + (i % 2) as f32 * 20.0);
-        before_last = app.distort.liquify.as_ref().unwrap().out.clone();
-        frame(&mut app, vec![egui::Event::PointerMoved(start)]);
-        let press = egui::Event::PointerButton { pos: start, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE };
-        frame(&mut app, vec![press]);
-        let mut p = start;
-        for _ in 0..8 {
-            p += vec2(1.5, 1.0);
-            frame(&mut app, vec![egui::Event::PointerMoved(p)]);
-        }
-        let release = egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE };
-        frame(&mut app, vec![release]);
-        frame(&mut app, vec![]);
-        let d = app.distort.liquify.as_ref().unwrap();
-        assert_eq!(d.strokes.len(), i + 1, "one recorded stroke per mouse stroke");
-        assert!(d.out == replayed_out(d), "stroke {i}: the live field must match the recorded strokes");
-    }
-    control(&mut app, &json!({"undo": true})).unwrap();
-    let d = app.distort.liquify.as_ref().unwrap();
-    assert_eq!(d.strokes.len(), strokes - 1);
-    let differ = d.out.iter().zip(&before_last).filter(|(a, b)| a != b).count();
-    assert_eq!(differ, 0, "undo restores the pixels from before the last stroke");
-}
-
-#[test]
-fn menu_opens_the_dialog_and_routes_pointer_events() {
-    let ctx = egui::Context::default();
-    let mut app = app_with_layer();
-    let r = crate::distort_ui::menu(&mut app, &ctx, "filter.liquify", &json!({})).unwrap().unwrap();
-    assert!(r["liquify"]["proxy"].is_array());
-    assert!(crate::distort_ui::pointer(&mut app, ToolEvent::Down { x: 50.0, y: 40.0, pressure: 1.0 }, egui::Modifiers::NONE));
-    crate::distort_ui::pointer(&mut app, ToolEvent::Up { x: 60.0, y: 40.0 }, egui::Modifiers::NONE);
-    assert_eq!(app.distort.liquify.as_ref().unwrap().strokes.len(), 1);
-    control(&mut app, &json!({"cancel": true})).unwrap();
-    assert!(app.distort.liquify.is_none());
-    assert_eq!(app.session.active().unwrap().history.past_len(), 2, "cancel records nothing");
+    assert_eq!(eng(&app).field.freeze_at(50.0, 40.0), 1.0, "frozen inside");
+    assert_eq!(eng(&app).field.freeze_at(5.0, 5.0), 0.0, "not outside");
+    perform(&mut app, lasso([40.0, 30.0, 60.0, 50.0], 0.0));
+    assert_eq!(eng(&app).field.freeze_at(50.0, 40.0), 0.0, "Alt thaws");
+    assert_eq!(eng(&app).field.freeze_at(25.0, 25.0), 1.0);
+    undo(&mut app);
+    assert_eq!(eng(&app).field.freeze_at(50.0, 40.0), 1.0, "undo replays the first lasso");
+    assert_eq!(redo_len(&app), 1);
+    perform(&mut app, lasso([0.0, 0.0, 10.0, 10.0], 1.0));
+    assert_eq!(redo_len(&app), 0, "a new lasso clears redo");
 }
 
 /// A smart object with a Liquify smart filter (one stroke, mesh size 3) and a Gaussian Blur
@@ -834,33 +351,34 @@ fn smart(app: &PhotocraftApp, layer: LayerId) -> photocraft_doc::SmartObject {
 }
 
 fn drag(app: &mut PhotocraftApp, from: f64, to: f64) {
-    for ev in [ToolEvent::Down { x: from, y: 40.0, pressure: 1.0 }, ToolEvent::Move { x: to, y: 40.0, pressure: 1.0 }, ToolEvent::Up { x: to, y: 40.0 }] {
-        pointer(app, ev, egui::Modifiers::NONE);
-    }
+    perform(app, stroke_with(StepTool::ForwardWarp, 40.0, &[[from, 40.0], [to, 40.0]]));
 }
 
 #[test]
 fn smart_filter_double_click_edits_the_recorded_liquify() {
-    let ctx = egui::Context::default();
     let (mut app, layer) = smart_liquify_app();
+    let ctx = app.ctx().clone();
     let steps = app.session.active().unwrap().history.past_len();
     let sm = smart(&app, layer);
-    let recorded: Vec<LiquifyStroke> = serde_json::from_value(sm.smart_filters[0].params["strokes"].clone()).unwrap();
-    assert_eq!(recorded.len(), 1);
+    let recorded = sm.smart_filters[0].params["strokes"].as_array().unwrap().len();
+    assert_eq!(recorded, 1);
 
     crate::smart_ui::open_editor(&mut app, &ctx, layer.0, &sm, 0);
-    assert!(app.ui.dialogs.is_empty(), "no generic parameter form");
-    let d = app.distort.liquify.as_ref().expect("the Liquify workspace opens");
-    assert_eq!((d.smart_filter, d.cell), (Some(0), 3.0));
-    assert_eq!(d.strokes, recorded);
-    assert_eq!(d.field, LiquifyField::from_strokes(d.canvas, 3.0, &recorded));
+    let ids: Vec<_> = app.framework.dialogs.stack().ids().collect();
+    assert_eq!(ids.len(), 1, "the Liquify workspace only, no generic parameter form");
+    assert_eq!(crate::distort_ui::modal_workspace(&app), Some(KEY));
+    assert_eq!((la(&app).smart_filter, eng(&app).cell), (Some(0), 3.0));
+    assert_eq!(strokes(&app), 1, "the recorded stroke is loaded");
+    assert!(eng(&app).field.max_displacement() > 0.0, "and replayed into the field");
     // The preview starts from the pixels below the filter (no liquify, no blur).
     let below = photocraft_engine::smart_cmds::render_below_filter(&app.session.active().unwrap().doc, &sm, 0).unwrap().unwrap();
-    assert_eq!(d.source.read_region(d.canvas), below.read_region(d.canvas));
+    let e = eng(&app);
+    assert_eq!(e.source.read_region(e.canvas), below.read_region(e.canvas));
+    drop(e);
 
     drag(&mut app, 70.0, 84.0);
-    control(&mut app, &json!({"commit": true})).unwrap();
-    assert!(app.distort.liquify.is_none());
+    ctl(&mut app, json!({"commit": true})).unwrap();
+    assert!(!is_open(&app));
     let sm = smart(&app, layer);
     assert_eq!(sm.smart_filters.len(), 2, "edited in place, not added");
     assert_eq!(sm.smart_filters[0].command, photocraft_engine::distort_cmds::LIQUIFY);
@@ -874,21 +392,21 @@ fn smart_filter_double_click_edits_the_recorded_liquify() {
 
 #[test]
 fn smart_filter_cancel_keeps_and_restore_all_clears_the_recorded_strokes() {
-    let ctx = egui::Context::default();
     let (mut app, layer) = smart_liquify_app();
+    let ctx = app.ctx().clone();
     let steps = app.session.active().unwrap().history.past_len();
     let params = smart(&app, layer).smart_filters[0].params.clone();
 
     open_smart_filter(&mut app, &ctx, layer, 0).unwrap();
     drag(&mut app, 70.0, 84.0);
-    control(&mut app, &json!({"cancel": true})).unwrap();
+    ctl(&mut app, json!({"cancel": true})).unwrap();
     assert_eq!(smart(&app, layer).smart_filters[0].params, params, "Cancel leaves the filter as it was");
     assert_eq!(app.session.active().unwrap().history.past_len(), steps);
 
     // OK after Restore All keeps the filter, with no strokes.
     open_smart_filter(&mut app, &ctx, layer, 0).unwrap();
-    control(&mut app, &json!({"restoreAll": true})).unwrap();
-    control(&mut app, &json!({"commit": true})).unwrap();
+    ctl(&mut app, json!({"restoreAll": true})).unwrap();
+    ctl(&mut app, json!({"commit": true})).unwrap();
     let sm = smart(&app, layer);
     assert_eq!(sm.smart_filters.len(), 2);
     assert_eq!(sm.smart_filters[0].params["strokes"], json!([]));
@@ -897,58 +415,62 @@ fn smart_filter_cancel_keeps_and_restore_all_clears_the_recorded_strokes() {
 
 #[test]
 fn open_smart_filter_rejects_other_filters_and_layers() {
-    let ctx = egui::Context::default();
     let (mut app, layer) = smart_liquify_app();
+    let ctx = app.ctx().clone();
     assert!(open_smart_filter(&mut app, &ctx, layer, 1).is_err(), "the Gaussian Blur");
     assert!(open_smart_filter(&mut app, &ctx, layer, 9).is_err(), "no such filter");
     let mut plain = app_with_layer();
     let pixels = plain.session.active().unwrap().active_layer.unwrap();
     assert!(open_smart_filter(&mut plain, &ctx, pixels, 0).is_err(), "not a smart object");
-    assert!(app.distort.liquify.is_none() && plain.distort.liquify.is_none());
+    assert!(app.liquify.is_none() && plain.liquify.is_none());
 }
 
-/// OK on a smart filter that is gone: the workspace closes, the status bar shows the error and
-/// the control channel returns it.
+/// OK on a smart filter that is gone: the engine's reason shows in the status line, the workspace stays open
+/// (the held OK is answered with `Err`) and nothing is recorded.
 #[test]
 fn smart_filter_edit_that_cannot_be_applied_reports_the_error() {
-    let ctx = egui::Context::default();
     let (mut app, layer) = smart_liquify_app();
+    let ctx = app.ctx().clone();
     open_smart_filter(&mut app, &ctx, layer, 0).unwrap();
     drag(&mut app, 70.0, 84.0);
     app.session.execute("layer.smartFilter.clearSmartFilters", json!({"layer": layer.0})).unwrap();
     let steps = app.session.active().unwrap().history.past_len();
-    let r = control(&mut app, &json!({"commit": true}));
-    assert!(app.distort.liquify.is_none());
-    assert!(app.ui.status_error);
-    assert!(app.ui.status.contains("no smart filters"), "{}", app.ui.status);
+    let _ = ctl(&mut app, json!({"commit": true}));
+    assert!(is_open(&app), "a refused OK leaves the workspace open");
+    let status = app.ui.status.clone();
+    assert!(status.contains("no smart filters"), "{status}");
     assert!(smart(&app, layer).smart_filters.is_empty());
     assert_eq!(app.session.active().unwrap().history.past_len(), steps);
-    assert_eq!(r, Err(app.ui.status.clone()));
 }
 
-/// OK after the layer was deleted: the dialog closes, the status bar shows the error and the
-/// control channel returns it.
+/// OK after the layer was deleted: the same, for a plain layer.
 #[test]
 fn liquify_that_cannot_be_applied_reports_the_error() {
-    let ctx = egui::Context::default();
     let mut app = app_with_layer();
     let layer = app.session.active().unwrap().active_layer.unwrap();
-    open(&mut app, &ctx).unwrap();
+    open_ws(&mut app).unwrap();
     drag(&mut app, 40.0, 56.0);
-    assert_eq!(app.distort.liquify.as_ref().unwrap().strokes.len(), 1);
+    assert_eq!(strokes(&app), 1);
     app.session.execute("layer.delete", json!({"layer": layer.0})).unwrap();
     let steps = app.session.active().unwrap().history.past_len();
-    let r = control(&mut app, &json!({"commit": true}));
-    assert!(app.distort.liquify.is_none());
-    assert!(app.ui.status_error);
+    let _ = ctl(&mut app, json!({"commit": true}));
+    assert!(is_open(&app), "a refused OK leaves the workspace open");
     assert!(!app.ui.status.is_empty());
     assert_eq!(app.session.active().unwrap().history.past_len(), steps);
-    assert_eq!(r, Err(app.ui.status.clone()));
+}
+
+/// Opens the workspace `key` with `open`, checks it is the one on the host, and cancels it.
+fn opens_and_cancels(app: &mut PhotocraftApp, key: &str, what: &str, open: impl FnOnce(&mut PhotocraftApp) -> Result<(), String>) {
+    open(app).unwrap_or_else(|e| panic!("{what}: {e}"));
+    assert_eq!(crate::distort_ui::modal_workspace(app), Some(key), "{what}");
+    let ctx = app.ctx().clone();
+    workspace_ui(app, &ctx, key, &json!({"cancel": true})).unwrap_or_else(|e| panic!("{what}: cancel: {e}"));
+    assert_eq!(crate::distort_ui::modal_workspace(app), None, "{what} is cancelled");
 }
 
 /// Liquify, Adaptive Wide Angle and the Filter Gallery open on the layer when no colour set is
-/// targeted, as before colour sets: with its mask, an alpha channel or the Quick Mask targeted.
-/// OK sends the command no `target`, so it routes the targeted surface exactly as it did then.
+/// targeted: with its mask, an alpha channel or the Quick Mask targeted. OK sends the command no
+/// `target`, so it routes the targeted surface as the command without a target does.
 #[test]
 fn workspaces_open_on_the_layer_with_a_mask_channel_or_quick_mask_targeted() {
     let setup = |case: &str| {
@@ -980,21 +502,21 @@ fn workspaces_open_on_the_layer_with_a_mask_channel_or_quick_mask_targeted() {
             st.doc.quick_mask.as_ref().map(|c| c.surface.clone()),
         )
     };
-    let ctx = egui::Context::default();
     for case in ["mask", "alpha", "quickMask"] {
         let mut app = setup(case);
+        let ctx = app.ctx().clone();
         assert!(crate::canvas::paint_target(&app).get("colors").is_none(), "{case}");
-        crate::wide_angle_ui::open(&mut app, &ctx).unwrap_or_else(|e| panic!("{case}: Adaptive Wide Angle: {e}"));
-        crate::gallery_ui::open(&mut app).unwrap_or_else(|e| panic!("{case}: Filter Gallery: {e}"));
-        open(&mut app, &ctx).unwrap_or_else(|e| panic!("{case}: Liquify: {e}"));
-        let d = app.distort.liquify.as_mut().unwrap();
-        let stroke = LiquifyStroke { points: vec![vec![20.0, 24.0, 1.0], vec![36.0, 24.0, 1.0]], ..LiquifyStroke::new(LiquifyTool::ForwardWarp, 30.0) };
-        d.strokes.push(stroke.clone());
-        let cell = d.cell;
-        commit(&mut app).unwrap();
+        opens_and_cancels(&mut app, "filter.adaptiveWideAngle", &format!("{case}: Adaptive Wide Angle"), |app| crate::wide_angle_ui::open(app, &ctx));
+        opens_and_cancels(&mut app, "filter.filterGallery", &format!("{case}: Filter Gallery"), crate::gallery_ui::open);
+        open_ws(&mut app).unwrap_or_else(|e| panic!("{case}: Liquify: {e}"));
+        assert_eq!(crate::distort_ui::modal_workspace(&app), Some(KEY), "{case}: Liquify");
+        let stroke = stroke_with(StepTool::ForwardWarp, 30.0, &[[20.0, 24.0], [36.0, 24.0]]);
+        perform(&mut app, stroke.clone());
+        let cell = eng(&app).cell;
+        ctl(&mut app, json!({"commit": true})).unwrap();
         let mut before = setup(case);
         let layer = before.session.active().unwrap().active_layer.unwrap();
-        before.run("filter.liquify", json!({"strokes": [stroke], "meshSize": cell, "layer": layer.0})).unwrap();
+        before.run("filter.liquify", json!({"strokes": [serde_json::to_value(engine_of(&stroke)).unwrap()], "meshSize": cell, "layer": layer.0})).unwrap();
         assert!(surfaces(&app) == surfaces(&before), "{case}: OK edits what the command without a target edits");
         assert!(surfaces(&app) != surfaces(&setup(case)), "{case}: the stroke changed something");
     }
@@ -1014,131 +536,52 @@ fn workspaces_open_on_a_smart_object_with_its_filter_mask_targeted() {
     app.ui.filter_mask_target = Some(layer.0);
     app.sync_views();
     assert!(app.filter_mask_targeted());
-    let ctx = egui::Context::default();
-    crate::wide_angle_ui::open(&mut app, &ctx).unwrap();
-    crate::gallery_ui::open(&mut app).unwrap();
-    open(&mut app, &ctx).unwrap();
-    let d = app.distort.liquify.as_mut().unwrap();
-    d.strokes.push(LiquifyStroke { points: vec![vec![20.0, 24.0, 1.0], vec![36.0, 24.0, 1.0]], ..LiquifyStroke::new(LiquifyTool::ForwardWarp, 30.0) });
-    commit(&mut app).unwrap();
+    let ctx = app.ctx().clone();
+    opens_and_cancels(&mut app, "filter.adaptiveWideAngle", "Adaptive Wide Angle", |app| crate::wide_angle_ui::open(app, &ctx));
+    opens_and_cancels(&mut app, "filter.filterGallery", "Filter Gallery", crate::gallery_ui::open);
+    open_ws(&mut app).unwrap();
+    perform(&mut app, stroke_with(StepTool::ForwardWarp, 30.0, &[[20.0, 24.0], [36.0, 24.0]]));
+    ctl(&mut app, json!({"commit": true})).unwrap();
     let st = app.session.active().unwrap();
     let Some(photocraft_doc::LayerContent::Smart(sm)) = st.doc.layer(layer).map(|l| &l.content) else { panic!("not a smart object") };
     assert_eq!(sm.smart_filters.iter().map(|f| f.command.as_str()).collect::<Vec<_>>(), ["filter.blur.gaussianBlur", photocraft_engine::distort_cmds::LIQUIFY]);
 }
 
-/// The dialog's field and recorded points after a stroke of `tool` from (40, 40) through
-/// (50, 40) to (60, 40) over 32 ms, its moves handed over one frame at a time (`batched` false)
-/// or both in one frame (`true`).
-fn timed_stroke(tool: &str, pressure: f64, batched: bool) -> (LiquifyField, Vec<Vec<f64>>) {
-    let ctx = egui::Context::default();
-    let mut app = app_with_layer();
-    open(&mut app, &ctx).unwrap();
-    control(&mut app, &json!({"tool": tool, "size": 200, "pressure": pressure})).unwrap();
-    let none = egui::Modifiers::NONE;
-    let (a, b) = (ToolEvent::Move { x: 50.0, y: 40.0, pressure: 1.0 }, ToolEvent::Move { x: 60.0, y: 40.0, pressure: 1.0 });
-    dispatch_frame(&mut app, vec![ToolEvent::Down { x: 40.0, y: 40.0, pressure: 1.0 }], none, 1000.0);
-    if batched {
-        dispatch_frame(&mut app, vec![a, b], none, 1032.0);
-    } else {
-        dispatch_frame(&mut app, vec![a], none, 1016.0);
-        dispatch_frame(&mut app, vec![b], none, 1032.0);
-    }
-    let d = app.distort.liquify.as_ref().unwrap();
-    let points = d.cur.as_ref().unwrap().0.points.clone();
-    (d.field.clone(), points)
-}
-
-/// A frame's moves share its time evenly: two moves batched into one frame paint what the same
-/// moves give delivered one per frame over the same time (FredApps' review of #10690). Reading
-/// the clock per event gave the first move nearly the whole frame and the second only processing
-/// time, so a stationary tool's strength and where it landed depended on the batching.
-#[test]
-fn moves_batched_in_one_frame_share_its_time() {
-    for (tool, pressure) in [("freeze", 10.0), ("twirlCw", 100.0), ("bloat", 50.0), ("forwardWarp", 100.0)] {
-        let (separate, sp) = timed_stroke(tool, pressure, false);
-        let (batched, bp) = timed_stroke(tool, pressure, true);
-        let ms = |p: &[Vec<f64>]| p.iter().map(|q| q.get(3).copied().unwrap_or(0.0)).collect::<Vec<_>>();
-        assert_eq!(ms(&bp), [0.0, 16.0, 16.0], "{tool}: each move gets half the frame");
-        assert_eq!(ms(&sp), ms(&bp), "{tool}");
-        assert!(separate == batched, "{tool}: batching changed the field");
-    }
-}
-
-/// After a stall, a frame's batched moves count for at most `MAX_LIVE_MS` in all, as a single
-/// move after the stall does, instead of each catching up on a share of the whole stall.
-#[test]
-fn a_stalled_frame_counts_for_at_most_the_catch_up_limit() {
-    let ctx = egui::Context::default();
-    let mut app = app_with_layer();
-    open(&mut app, &ctx).unwrap();
-    control(&mut app, &json!({"tool": "twirlCw", "size": 60})).unwrap();
-    let none = egui::Modifiers::NONE;
-    dispatch_frame(&mut app, vec![ToolEvent::Down { x: 40.0, y: 40.0, pressure: 1.0 }], none, 1000.0);
-    let moves = (1..=4).map(|k| ToolEvent::Move { x: 40.0 + f64::from(k), y: 40.0, pressure: 1.0 }).collect();
-    dispatch_frame(&mut app, moves, none, 3000.0);
-    let d = app.distort.liquify.as_ref().unwrap();
-    let total: f64 = d.cur.as_ref().unwrap().0.points.iter().filter_map(|p| p.get(3)).sum();
-    assert_eq!(total, MAX_LIVE_MS);
-}
-
-/// Preview off shows the image unwarped while strokes still change the field, and P turns it back
-/// on, as Photoshop's Liquify Preview checkbox does (#7905). Each opening starts with it on.
+/// Preview off shows the image unwarped while strokes still change the field (#7905). Each opening
+/// starts with it on.
 #[test]
 fn preview_off_shows_the_original_and_p_toggles_it() {
-    let ctx = egui::Context::default();
     let mut app = app_with_layer();
-    open(&mut app, &ctx).unwrap();
-    let render = |d: &LiquifyDialog, field: &LiquifyField| {
-        let mut out = vec![[0u8; 4]; d.proxy.w * d.proxy.h];
-        d.proxy.render(field, [0, 0, d.proxy.w, d.proxy.h], &mut out);
-        out
+    open_ws(&mut app).unwrap();
+    assert!(facts(&app)["preview"] == json!(true), "Liquify opens with Preview on");
+    let mut original = {
+        let d = eng(&app);
+        vec![[0u8; 4]; d.proxy.w * d.proxy.h]
     };
-    let d = app.distort.liquify.as_ref().unwrap();
-    assert!(d.preview && d.describe()["preview"] == json!(true), "Liquify opens with Preview on");
-    let original = render(d, &LiquifyField::new(d.canvas, d.cell));
-    let stroke = |app: &mut PhotocraftApp, y: f64| {
-        for ev in [ToolEvent::Down { x: 35.0, y, pressure: 1.0 }, ToolEvent::Move { x: 60.0, y, pressure: 1.0 }, ToolEvent::Up { x: 60.0, y }] {
-            pointer(app, ev, egui::Modifiers::NONE);
-        }
-    };
-    control(&mut app, &json!({"tool": "forwardWarp", "size": 40})).unwrap();
-    stroke(&mut app, 40.0);
-    let d = app.distort.liquify.as_ref().unwrap();
-    assert_ne!(d.out, original, "the warp shows");
-
-    let r = control(&mut app, &json!({"preview": false})).unwrap();
-    assert_eq!(r["preview"], json!(false));
-    let d = app.distort.liquify.as_ref().unwrap();
-    assert_eq!(d.out, original, "Preview off: the image as it was");
-    // A stroke with Preview off still warps the field, unseen.
-    stroke(&mut app, 30.0);
-    let d = app.distort.liquify.as_ref().unwrap();
-    assert_eq!(d.strokes.len(), 2);
-    assert_eq!(d.out, original, "still unwarped while Preview is off");
     {
-        let d = app.distort.liquify.as_mut().unwrap();
-        d.zoom = 2.0;
-        d.view_bounds = Some(Rect::new(0, 0, 20, 20));
-        d.view_dirty = None;
+        let d = eng(&app);
+        d.proxy.render(&LiquifyField::new(d.canvas, d.cell), [0, 0, d.proxy.w, d.proxy.h], &mut original);
     }
+    warp_stroke(&mut app, 40.0);
+    assert_ne!(eng(&app).out, original, "the warp shows");
 
-    // P turns it back on, with both strokes.
-    let mut input = egui::RawInput::default();
-    input.events.push(egui::Event::Key { key: egui::Key::P, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
-    ctx.begin_pass(input);
-    keys(&mut app, &ctx);
-    ctx.end_pass().textures_delta.clear();
-    let d = app.distort.liquify.as_ref().unwrap();
-    assert!(d.preview);
-    assert_eq!(d.out, render(d, &d.field), "Preview on: the warp of both strokes");
-    assert_eq!(d.view_dirty, d.view_bounds, "the zoomed preview is redrawn too");
+    let r = ctl(&mut app, json!({"preview": false})).unwrap();
+    assert_eq!(r["preview"], json!(false));
+    assert_eq!(eng(&app).out, original, "Preview off: the image as it was");
+    warp_stroke(&mut app, 30.0);
+    assert_eq!(strokes(&app), 2);
+    assert_eq!(eng(&app).out, original, "still unwarped while Preview is off");
+
+    ctl(&mut app, json!({"preview": true})).unwrap();
+    let d = eng(&app);
+    let mut shown = vec![[0u8; 4]; d.proxy.w * d.proxy.h];
+    d.proxy.render(&d.field, [0, 0, d.proxy.w, d.proxy.h], &mut shown);
+    assert_eq!(d.out, shown, "Preview on: the warp of both strokes");
 }
 
 /// A forward-warp stroke across the test layer, at row `y`.
 fn warp_stroke(app: &mut PhotocraftApp, y: f64) {
-    for ev in [ToolEvent::Down { x: 35.0, y, pressure: 1.0 }, ToolEvent::Move { x: 60.0, y, pressure: 1.0 }, ToolEvent::Up { x: 60.0, y }] {
-        pointer(app, ev, egui::Modifiers::NONE);
-    }
+    perform(app, stroke_with(StepTool::ForwardWarp, 40.0, &[[35.0, y], [60.0, y]]));
 }
 
 /// The active layer's pixels over the whole document.
@@ -1151,15 +594,16 @@ fn layer_pixels(app: &PhotocraftApp) -> Vec<f32> {
 /// image (#7905).
 #[test]
 fn a_stroke_with_preview_off_changes_the_field_but_not_the_display() {
-    let ctx = egui::Context::default();
     let mut app = app_with_layer();
-    open(&mut app, &ctx).unwrap();
-    control(&mut app, &json!({"tool": "forwardWarp", "size": 40, "preview": false})).unwrap();
-    let d = app.distort.liquify.as_ref().unwrap();
-    let (field_before, shown_before) = (d.field.clone(), d.out.clone());
-    assert_eq!(d.field.max_displacement(), 0.0);
+    open_ws(&mut app).unwrap();
+    ctl(&mut app, json!({"preview": false})).unwrap();
+    let (field_before, shown_before) = {
+        let e = eng(&app);
+        (e.field.clone(), e.out.clone())
+    };
+    assert_eq!(eng(&app).field.max_displacement(), 0.0);
     warp_stroke(&mut app, 40.0);
-    let d = app.distort.liquify.as_ref().unwrap();
+    let d = eng(&app);
     assert_ne!(d.field, field_before, "the stroke changes the field");
     assert!(d.field.max_displacement() > 3.0);
     assert_eq!(d.out, shown_before, "the display does not change");
@@ -1169,16 +613,15 @@ fn a_stroke_with_preview_off_changes_the_field_but_not_the_display() {
 /// is committed with Preview on.
 #[test]
 fn ok_with_preview_off_applies_the_warp() {
-    let ctx = egui::Context::default();
     let commit_with = |preview: bool| {
         let mut app = app_with_layer();
         let before = layer_pixels(&app);
-        open(&mut app, &ctx).unwrap();
-        control(&mut app, &json!({"tool": "forwardWarp", "size": 40, "preview": preview})).unwrap();
+        open_ws(&mut app).unwrap();
+        ctl(&mut app, json!({"preview": preview})).unwrap();
         warp_stroke(&mut app, 40.0);
         let past = app.session.active().unwrap().history.past_len();
-        control(&mut app, &json!({"commit": true})).unwrap();
-        assert!(app.distort.liquify.is_none());
+        ctl(&mut app, json!({"commit": true})).unwrap();
+        assert!(!is_open(&app));
         assert_eq!(app.session.active().unwrap().history.past_len(), past + 1, "one Liquify step");
         (before, layer_pixels(&app))
     };
@@ -1187,24 +630,123 @@ fn ok_with_preview_off_applies_the_warp() {
     assert_eq!(unpreviewed, commit_with(true).1, "the same warp as with Preview on");
 }
 
-/// The identity field (as large as the image's field) exists only while Preview is off: turning
-/// Preview back on frees it, and closing the dialog drops it.
+/// Counts the proxy pixels outside the selection (document x >= 60) that differ from `original`, and those inside
+/// that do: the preview shows Liquify only inside the selection.
+fn assert_masked_to_left_half(d: &Engine, original: &[[u8; 4]]) {
+    let doc_x = |i: usize| d.proxy.bounds.x0 as f64 + ((i % d.proxy.w) as f64 + 0.5) * d.proxy.scale;
+    let (mut outside, mut inside_changed) = (0, 0);
+    for (i, (a, b)) in d.out.iter().zip(original).enumerate() {
+        if doc_x(i) >= 60.0 {
+            outside += 1;
+            assert_eq!(a, b, "proxy pixel {i} (x {}) is outside the selection", doc_x(i));
+        } else if a != b {
+            inside_changed += 1;
+        }
+    }
+    assert!(outside > 0 && inside_changed > 0, "outside {outside}, changed inside {inside_changed}");
+}
+
+/// The picture's region x 30..90, y 20..60 as the display reads it, one texel per document pixel.
+fn read_view(app: &PhotocraftApp) -> Vec<Color32> {
+    let mut image = ColorImage::filled([60, 40], Color32::TRANSPARENT);
+    eng(app).read(pixel_rect(Rect::new(30, 20, 90, 60)), 1, &mut image);
+    image.pixels
+}
+
+/// The same for what the display reads (`read_view`), against `before` taken before the stroke.
+fn assert_view_masked(after: &[Color32], before: &[Color32]) {
+    let (mut outside, mut inside_changed) = (0, 0);
+    for (i, (a, b)) in after.iter().zip(before).enumerate() {
+        let x = 30 + (i % 60) as i32;
+        if x >= 60 {
+            outside += 1;
+            assert_eq!(a, b, "view pixel at x {x} is outside the selection");
+        } else if a != b {
+            inside_changed += 1;
+        }
+    }
+    assert!(outside > 0 && inside_changed > 0, "view: outside {outside}, changed inside {inside_changed}");
+}
+
+/// A targeted colour channel's preview renders through its own path, and the selection applies
+/// to that path too (#9541): unselected pixels stay as they were.
 #[test]
-fn the_identity_field_exists_only_while_preview_is_off() {
-    let ctx = egui::Context::default();
+fn a_targeted_channels_preview_shows_liquify_only_inside_the_selection() {
     let mut app = app_with_layer();
-    open(&mut app, &ctx).unwrap();
-    let identity = |app: &PhotocraftApp| app.distort.liquify.as_ref().unwrap().identity.is_some();
-    assert!(!identity(&app), "not made while Preview is on");
-    control(&mut app, &json!({"preview": false})).unwrap();
-    assert!(identity(&app));
-    control(&mut app, &json!({"preview": true})).unwrap();
-    assert!(!identity(&app), "freed when Preview is turned back on");
-    control(&mut app, &json!({"preview": false})).unwrap();
-    assert!(identity(&app), "made again when Preview is turned off again");
-    control(&mut app, &json!({"cancel": true})).unwrap();
-    assert!(app.distort.liquify.is_none(), "closing drops the dialog and its identity field");
-    open(&mut app, &ctx).unwrap();
-    let d = app.distort.liquify.as_ref().unwrap();
-    assert!(d.preview && d.identity.is_none(), "a new opening starts with Preview on and no identity field");
+    app.session.execute("select.rect", json!({"x": 0, "y": 0, "width": 60, "height": 80})).unwrap();
+    app.run("channel.target", json!({"channel": {"color": 0}})).unwrap();
+    open_ws(&mut app).unwrap();
+    assert!(eng(&app).native_proxy.is_some());
+    let view_before = read_view(&app);
+    sweep(&mut app, 40.0);
+    {
+        let mut d = eng(&app);
+        d.dirty = Some([0, 0, d.proxy.w, d.proxy.h]);
+        d.render_dirty();
+        let mut original = vec![[0u8; 4]; d.proxy.w * d.proxy.h];
+        d.proxy.render(&LiquifyField::new(d.canvas, d.cell), [0, 0, d.proxy.w, d.proxy.h], &mut original);
+        assert_masked_to_left_half(&d, &original);
+    }
+    assert_view_masked(&read_view(&app), &view_before);
+}
+
+/// #9541: with a selection, the preview shows what OK applies: unselected pixels stay as they were,
+/// in the proxy and in what the display reads.
+#[test]
+fn the_preview_shows_liquify_only_inside_the_selection() {
+    let mut app = app_with_layer();
+    app.session.execute("select.rect", json!({"x": 0, "y": 0, "width": 60, "height": 80})).unwrap();
+    open_ws(&mut app).unwrap();
+    let view_before = read_view(&app);
+    sweep(&mut app, 40.0);
+    {
+        let d = eng(&app);
+        assert!(d.field.max_displacement() > 3.0);
+        let mut original = vec![[0u8; 4]; d.proxy.w * d.proxy.h];
+        d.proxy.render(&LiquifyField::new(d.canvas, d.cell), [0, 0, d.proxy.w, d.proxy.h], &mut original);
+        assert_masked_to_left_half(&d, &original);
+    }
+    assert_view_masked(&read_view(&app), &view_before);
+}
+
+/// On a smart object with a filter mask, Liquify is shown through that mask, as the engine applies
+/// it (`add_smart_filter` keeps the mask), not through a different selection. Where the mask hides
+/// it the placed pixels show, not the filters below the Liquify being edited.
+#[test]
+fn the_preview_on_a_smart_object_follows_its_filter_mask() {
+    let mut app = app_with_layer();
+    let ctx = app.ctx().clone();
+    app.session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    // The first smart filter, run on the right half, makes that half the filter mask.
+    app.session.execute("select.rect", json!({"x": 60, "y": 0, "width": 60, "height": 80})).unwrap();
+    app.session.execute("filter.blur.gaussianBlur", json!({"radius": 0.5})).unwrap();
+    app.session.execute("select.rect", json!({"x": 0, "y": 0, "width": 60, "height": 80})).unwrap();
+    open_ws(&mut app).unwrap();
+    sweep(&mut app, 40.0);
+    // Reopened as a smart filter above the blur, it edits the blurred pixels.
+    ctl(&mut app, json!({"commit": true})).unwrap();
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    open_smart_filter(&mut app, &ctx, layer, 1).unwrap();
+    sweep(&mut app, 30.0);
+    let st = app.session.active().unwrap();
+    let Some(photocraft_doc::LayerContent::Smart(sm)) = st.doc.layer(st.active_layer.unwrap()).map(|l| &l.content) else { panic!("not a smart object") };
+    let placed = photocraft_engine::smart_cmds::render_below_filter(&st.doc, sm, 0).unwrap().unwrap();
+    let d = eng(&app);
+    let placed = ProxyImage::new(&placed, d.canvas, PROXY_SIDE);
+    let mut original = vec![[0u8; 4]; d.proxy.w * d.proxy.h];
+    placed.render(&LiquifyField::new(d.canvas, d.cell), [0, 0, d.proxy.w, d.proxy.h], &mut original);
+    // Inside the mask it edits the blurred pixels: the blur alone must not count as the Liquify.
+    let mut input = vec![[0u8; 4]; d.proxy.w * d.proxy.h];
+    d.proxy.render(&LiquifyField::new(d.canvas, d.cell), [0, 0, d.proxy.w, d.proxy.h], &mut input);
+    let doc_x = |i: usize| d.proxy.bounds.x0 as f64 + ((i % d.proxy.w) as f64 + 0.5) * d.proxy.scale;
+    let (mut masked, mut shown_changed) = (0, 0);
+    for (i, (a, (b, c))) in d.out.iter().zip(original.iter().zip(&input)).enumerate() {
+        if doc_x(i) < 60.0 {
+            masked += 1;
+            assert_eq!(a, b, "proxy pixel {i} (x {}) is outside the filter mask", doc_x(i));
+        } else if a != c {
+            shown_changed += 1;
+        }
+    }
+    assert!(masked > 0 && shown_changed > 0, "masked {masked}, changed inside the mask {shown_changed}");
 }

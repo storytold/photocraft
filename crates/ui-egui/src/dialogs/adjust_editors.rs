@@ -1,58 +1,44 @@
-//! One editor per adjustment kind, shared by the adjustment-layer Properties panel and the modal
-//! Image › Adjustments dialogs (`adjust_dialog`).
+//! One editor per adjustment kind, shared by the adjustment-layer Properties panel and the Image › Adjustments
+//! dialogs (`adjust_dialog`).
 //!
-//! Every editor edits the kind's complete parameter set (`photocraft_engine::adjust_params`) as a
-//! JSON object and reports an [`Edit`]: `changed` while values move (the host previews them live)
-//! and `commit` when a gesture ends (the Properties host then runs one `layer.setAdjustment`; a
-//! dialog commits on OK). Color Lookup keeps its editor in `adjust_ui`.
+//! Every kind edits an [`AdjustValue`] with its framework editor (`craft::imaging::ui::adjust`, Gradient Map in
+//! `craft::draw`). [`editor`] returns the one function a host calls each pass: it shows the editor, writes the edit
+//! into the value, and returns the edit's events (Properties reads the phase and gesture of one drag from them) with
+//! what the editor asks of the app ([`AdjustAsk`]). The engine's params convert to and from the value in [`values`].
+//! Color Lookup keeps its editor in `adjust_ui`.
+//!
+//! The function reads no input and drains no queue: a second pass in one frame shows the value as the first left it and
+//! reports only its own events and asks.
 
-use crate::point_curve as curve_edit;
-use crate::state::CurvesEditorState as CurveUi;
 use std::sync::Arc;
 
-use egui::{Color32, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
-use photocraft_doc::adjust::{HueRange, ToneSpace};
-use photocraft_doc::{Adjustment, LayerId};
-use photocraft_engine::adjust_params::{self, HUE_RANGES, PHOTO_FILTERS};
-use photocraft_engine::presets::Group;
-use photocraft_engine::presets::gradients::GradientPreset;
+use craft::behavior::{EditEvent, EditEvents, Mixed};
+use craft::color_ui::ui::gradient::{ColorStop, GradientStops};
+use craft::draw::ui::gradient::{GradientGroup, GradientItem, GradientMap, GradientMapEditor, GradientMapOutput};
+use craft::imaging::ui::adjust::{
+    AdjustDialogCx, AdjustField, AdjustSliders, AdjustWords, BlackWhite, BlackWhiteEditor, BrightnessContrast, BrightnessContrastEditor, ChannelMixer,
+    ChannelMixerEditor, ColorBalance, ColorBalanceEditor, ColorBalanceTone, CurvesPanel, HueSaturation, HueSaturationEditor, Levels, LevelsPanel, PhotoFilter,
+    PhotoFilterEditor, SelectiveColor, SelectiveColorEditor, ThresholdEditor, ToneChannels, ToneCurves, ToneSpace,
+};
+use craft::imaging::ui::histogram::{ChannelColor, HistogramData};
+use craft::theme::Srgba;
+use craft::ui::contract::Bind;
+use craft::ui::runtime::env::Env;
+use craft::ui::runtime::requests::ColorRequest;
+use egui::Ui;
+use photocraft_doc::LayerId;
+use photocraft_engine::adjust_params::HUE_RANGES;
+use photocraft_engine::presets::gradients::StopColor;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
-use crate::theme::Tokens;
-use crate::tone::{self, HistSource, Histograms};
-use crate::widgets::{self, hue_color};
 
-mod basic;
-mod curves;
-mod gradient_map;
-mod hue_saturation;
-mod levels;
-mod selective_color;
 mod session;
+pub mod values;
 
-pub(crate) use basic::PHOTO_FILTER_MODE;
-#[cfg(test)]
-pub(crate) use basic::row_value;
-#[cfg(test)]
-use basic::track_stops;
-use basic::{black_white, brightness_contrast, channel_mixer, color_balance, photo_filter, sliders, threshold};
-pub use basic::{reset_adjustment_editor, reset_color_balance};
-use curves::curves;
-#[cfg(test)]
-use curves::{CURVE_HANDLE_SIZE, curve_graph};
-pub use curves::{ToneChannel, tone_channels};
-pub(crate) use curves::{curve_side_max, read_curve};
-use gradient_map::gradient_map;
-pub use gradient_map::{gradient_presets, is_gray, swatches};
-use hue_saturation::hue_saturation;
-#[cfg(test)]
-use hue_saturation::{hue_range_handle_at, hue_range_zone, lightness_track, move_hue_range_handle, move_hue_range_zone, saturation_track};
-use levels::levels;
-pub(crate) use levels::levels_drag;
-pub use levels::{auto_levels, gamma_from_pos, gamma_pos};
-use selective_color::selective_color;
-pub use session::{layer_editor, layer_mem, properties_coalesce, properties_reset, session_start};
+pub(crate) use session::PropertiesAdjust;
+pub use session::{layer_editor, layer_reset};
 
 /// Kinds edited here (Color Lookup has its own editor in `adjust_ui`; Invert has none).
 pub const KINDS: [&str; 14] = [
@@ -72,290 +58,429 @@ pub const KINDS: [&str; 14] = [
     "selectiveColor",
 ];
 
+/// Whether `kind` has an editor here.
 pub fn has_editor(kind: &str) -> bool {
     KINDS.contains(&kind)
 }
 
-/// Forget Photo Filter's Filter / Color choice in the editor memory `mem`, so the editor derives it
-/// from the colour again: a choice changed and then cancelled must not outlive the dialog (#9879).
-pub(crate) fn forget_photo_filter_mode(ctx: &egui::Context, mem: egui::Id) {
-    ctx.data_mut(|d| d.remove::<bool>(mem.with(PHOTO_FILTER_MODE)));
+/// The request key of Black & White's tint colour well (the framework editor's).
+const BLACK_WHITE_TINT_KEY: &str = "blackWhite.tint";
+/// The request key of Photo Filter's colour swatch (the framework editor's).
+const PHOTO_FILTER_COLOR_KEY: &str = "photoFilter.color";
+/// The request key prefix of a Gradient Map stop's colour; the stop's index follows. The stop bar's own key names no
+/// stop, so the editor function rewrites it to this.
+const GRADIENT_STOP_KEY: &str = "gradientMap.stop.";
+
+/// The value an adjustment editor edits: one struct variant per kind, tagged with the kind's name, so the dialog's
+/// automation fields replace one top-level key (`kind` and the variant's fields).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum AdjustValue {
+    /// Brightness/Contrast.
+    BrightnessContrast {
+        /// The value.
+        value: BrightnessContrast,
+    },
+    /// Levels: one per channel of the editor's [`ToneChannels`].
+    Levels {
+        /// The levels, by channel.
+        levels: Vec<Levels>,
+    },
+    /// Curves: one per channel of the editor's [`ToneChannels`].
+    Curves {
+        /// The curves, by channel.
+        curves: ToneCurves,
+    },
+    /// Exposure: Exposure, Offset, Gamma Correction.
+    Exposure {
+        /// The three rows.
+        values: Vec<f64>,
+    },
+    /// Vibrance: Vibrance, Saturation.
+    Vibrance {
+        /// The two rows.
+        values: Vec<f64>,
+    },
+    /// Posterize: Levels.
+    Posterize {
+        /// The one row.
+        values: Vec<f64>,
+    },
+    /// Hue/Saturation.
+    HueSaturation {
+        /// The value.
+        value: HueSaturation,
+    },
+    /// Color Balance.
+    ColorBalance {
+        /// The value.
+        value: ColorBalance,
+    },
+    /// Black & White.
+    BlackWhite {
+        /// The value.
+        value: BlackWhite,
+    },
+    /// Photo Filter.
+    PhotoFilter {
+        /// The value.
+        value: PhotoFilter,
+    },
+    /// Channel Mixer.
+    ChannelMixer {
+        /// The value.
+        value: ChannelMixer,
+    },
+    /// Threshold.
+    Threshold {
+        /// The level, 1..=255.
+        level: f64,
+    },
+    /// Gradient Map.
+    GradientMap {
+        /// The value.
+        value: GradientMap,
+    },
+    /// Selective Color.
+    SelectiveColor {
+        /// The value.
+        value: SelectiveColor,
+    },
 }
 
-/// Kinds that draw a histogram behind their controls.
-pub fn needs_histogram(kind: &str) -> bool {
-    matches!(kind, "levels" | "curves" | "threshold")
-}
-
-/// What an editor did this frame.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Edit {
-    /// Values changed (preview them).
-    pub changed: bool,
-    /// A gesture ended or a discrete control changed (commit them).
-    pub commit: bool,
-    /// Open the host's gradient-file dialog without changing adjustment parameters.
-    pub import_gradients: bool,
-}
-
-impl Edit {
-    fn add(&mut self, o: Edit) {
-        self.changed |= o.changed;
-        self.commit |= o.commit;
-        self.import_gradients |= o.import_gradients;
+impl Default for AdjustValue {
+    fn default() -> Self {
+        AdjustValue::BrightnessContrast { value: BrightnessContrast::default() }
     }
-    fn discrete(changed: bool) -> Self {
-        Edit { changed, commit: changed, ..Default::default() }
-    }
-    fn of(r: &egui::Response) -> Self {
-        Edit { changed: r.changed(), commit: r.drag_stopped() || (r.changed() && !r.dragged()), ..Default::default() }
-    }
 }
 
-/// What an editor needs from its host.
-pub struct EditorCx {
-    /// Root of the editor's view state in egui memory (selected channel, point, range…).
-    pub mem: egui::Id,
-    /// Histograms in the adjustment's space ([`needs_histogram`] kinds).
-    pub hist: Option<Arc<Histograms>>,
-    /// Grayscale (or Duotone/Bitmap) document: one Gray channel.
-    pub gray: bool,
-    /// Current foreground and background colours (Gradient Map preset).
+/// What an editor asks of the app in one pass; the host answers it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum AdjustAsk {
+    /// Black & White's Auto: the host finds the weights ([`black_white_auto`]) and writes them with [`answer_auto`].
+    Auto,
+    /// Gradient Map's Import .GRD: the host opens its file dialog; the value is unchanged.
+    ImportGradients,
+    /// A colour well was clicked: the host opens the colour picker with the request and writes the answer with
+    /// [`answer_color`].
+    PickColor(ColorRequest),
+}
+
+/// What one pass of an editor reports.
+#[derive(Debug, Default)]
+pub struct AdjustOut {
+    /// What the editor asks of the app this pass.
+    pub ask: Option<AdjustAsk>,
+    /// The pass's edit events of the value, in order, with their gesture ids and phases.
+    pub edit: EditEvents<AdjustValue>,
+}
+
+/// What the editor function reads, built once when the adjustment opens.
+#[derive(Clone, Debug)]
+pub struct EditorSetup {
+    /// The channels Levels and Curves list ([`values::tone_channels`]).
+    pub channels: ToneChannels,
+    /// The histograms in channel order ([`values::panel_histograms`]); Threshold draws the first.
+    pub histograms: Vec<[u32; 256]>,
+    /// The document has no point pickers (Lab, CMYK): the Levels and Curves picker rows are off.
+    pub pickers_unavailable: bool,
+    /// Gradient Map's presets ([`gradient_presets`]).
+    pub gradients: Vec<GradientGroup>,
+    /// The current foreground and background colours ([`swatches`]), for the host's colour requests.
     pub swatches: [[f32; 3]; 2],
-    /// The session's gradient preset library (Gradient Map's picker; empty for other kinds).
-    pub gradients: Vec<Group<GradientPreset>>,
-    /// Hosted by an Image › Adjustments dialog (false: the Properties panel). Photoshop's dialog
-    /// sliders follow the mouse wheel; the panel's don't.
-    pub dialog: bool,
-    /// Preferences ▸ Interface ▸ Dynamic Color Sliders: colour tracks on the colour sliders
-    /// (off: the plain track).
-    pub dynamic_color_sliders: bool,
-    /// Image › Curves with a single Channels-panel target: that channel only (#5335).
-    pub isolated_curve: Option<photocraft_engine::channel_cmds::IsolatedCurveChannel>,
+    /// The tone Color Balance shows first; `None` keeps the editor's default (Midtones).
+    pub tone: Option<ColorBalanceTone>,
+    /// The Smart Filter the dialog edits is not reachable from the active document: the editor shows no controls.
+    pub stale: bool,
+    /// The clipping display the Levels editor reported on the pass before: the dialog's display changes when the editor's
+    /// report does (an Alt-held thumb), so a display set from outside (automation) stays until the editor next reports.
+    pub reported_clipping: std::cell::Cell<Option<craft::imaging::ui::adjust::LevelsClip>>,
 }
 
-/// The Levels/Curves channel space the values address.
-pub fn space_of(v: &Value) -> ToneSpace {
-    if v.get("cyan").is_some() || v.get("black").is_some() {
-        ToneSpace::Cmyk
-    } else if v.get("a").is_some() {
-        ToneSpace::Lab
-    } else {
-        ToneSpace::Rgb
+impl Default for EditorSetup {
+    fn default() -> Self {
+        Self {
+            channels: ToneChannels::of(ToneSpace::Rgb, false),
+            histograms: Vec::new(),
+            pickers_unavailable: false,
+            gradients: Vec::new(),
+            swatches: [[0.0; 3], [1.0; 3]],
+            tone: None,
+            stale: false,
+            reported_clipping: Default::default(),
+        }
     }
 }
 
-/// The editor for `kind` over its parameter set `v`.
-pub fn editor(ui: &mut egui::Ui, kind: &str, v: &mut Value, cx: &EditorCx) -> Edit {
-    if !v.is_object() {
-        *v = json!({});
+/// The edit events of one editor lifted onto the value.
+fn lifted<T>(events: EditEvents<T>, wrap: impl Fn(T) -> AdjustValue) -> AdjustOut {
+    AdjustOut { ask: None, edit: events.map(wrap) }
+}
+
+/// Shows the editor of `kind` over `value` for one pass.
+fn show(kind: &str, setup: &EditorSetup, ui: &mut Ui, value: &mut AdjustValue, cx: &mut AdjustDialogCx<'_>) -> AdjustOut {
+    let context = cx.context;
+    match (kind, value) {
+        ("brightnessContrast", AdjustValue::BrightnessContrast { value }) => {
+            let out = BrightnessContrastEditor::new("Brightness/Contrast", Bind::bound(value)).context(context).show(ui);
+            lifted(out.events, |value| AdjustValue::BrightnessContrast { value })
+        }
+        ("levels", AdjustValue::Levels { levels }) => {
+            let mut panel = LevelsPanel::new("Levels", Bind::bound(levels), setup.channels.clone())
+                .histograms(&setup.histograms)
+                .pickers(Bind::bound(&mut *cx.picker))
+                .channel(Bind::bound(&mut *cx.channel))
+                .context(context);
+            if let Some(canvas) = cx.canvas {
+                panel = panel.canvas(canvas);
+            }
+            if setup.pickers_unavailable {
+                panel = panel.pickers_unavailable();
+            }
+            let out = panel.show(ui);
+            if setup.reported_clipping.replace(out.clipping) != out.clipping {
+                *cx.clipping = out.clipping;
+            }
+            lifted(out.edit, |levels| AdjustValue::Levels { levels })
+        }
+        ("curves", AdjustValue::Curves { curves }) => {
+            let mut panel = CurvesPanel::new("Curves", Bind::bound(&mut *curves), setup.channels.clone())
+                .histograms(&setup.histograms)
+                .sampler(values::curve_sampler)
+                .pickers(Bind::bound(&mut *cx.picker))
+                .channel(Bind::bound(&mut *cx.channel))
+                .context(context);
+            if let Some(canvas) = cx.canvas {
+                panel = panel.canvas(canvas);
+            }
+            if let Some(point) = cx.select_point {
+                panel = panel.select(point);
+            }
+            if setup.pickers_unavailable {
+                panel = panel.pickers_unavailable();
+            }
+            let out = panel.show(ui);
+            let mut edit = out.edit.map(|curves| AdjustValue::Curves { curves });
+            // The panel reports the other mode's icon and leaves the conversion to the engine.
+            if let Some(mode) = out.mode {
+                let from = AdjustValue::Curves { curves: curves.clone() };
+                let mut converted = curves.clone();
+                values::set_curves_mode(&mut converted, mode);
+                *curves = converted.clone();
+                edit.push(EditEvent::set(Mixed::Same(from), AdjustValue::Curves { curves: converted }, Arc::from("Curves Mode"), None));
+            }
+            AdjustOut { ask: None, edit }
+        }
+        ("exposure", AdjustValue::Exposure { values }) => {
+            let fields = AdjustField::exposure(&Env::of(ui).words::<AdjustWords>());
+            let out = AdjustSliders::new("Exposure", &fields, Bind::bound(values)).context(context).show(ui);
+            lifted(out.events, |values| AdjustValue::Exposure { values })
+        }
+        ("vibrance", AdjustValue::Vibrance { values }) => {
+            let fields = AdjustField::vibrance(&Env::of(ui).words::<AdjustWords>());
+            let out = AdjustSliders::new("Vibrance", &fields, Bind::bound(values)).context(context).show(ui);
+            lifted(out.events, |values| AdjustValue::Vibrance { values })
+        }
+        ("posterize", AdjustValue::Posterize { values }) => {
+            let fields = AdjustField::posterize(&Env::of(ui).words::<AdjustWords>());
+            let out = AdjustSliders::new("Posterize", &fields, Bind::bound(values)).context(context).show(ui);
+            lifted(out.events, |values| AdjustValue::Posterize { values })
+        }
+        ("hueSaturation", AdjustValue::HueSaturation { value }) => {
+            let out = HueSaturationEditor::new("Hue/Saturation", Bind::bound(value)).context(context).show(ui);
+            lifted(out.edit.events, |value| AdjustValue::HueSaturation { value })
+        }
+        ("colorBalance", AdjustValue::ColorBalance { value }) => {
+            let mut editor = ColorBalanceEditor::new("Color Balance", Bind::bound(value)).context(context);
+            if let Some(tone) = setup.tone {
+                editor = editor.tone(tone);
+            }
+            let out = editor.show(ui);
+            lifted(out.edit.events, |value| AdjustValue::ColorBalance { value })
+        }
+        ("blackWhite", AdjustValue::BlackWhite { value }) => {
+            let out = BlackWhiteEditor::new("Black & White", Bind::bound(value)).context(context).show(ui);
+            let ask = if out.auto { Some(AdjustAsk::Auto) } else { out.pick_color.map(AdjustAsk::PickColor) };
+            AdjustOut { ask, edit: out.edit.events.map(|value| AdjustValue::BlackWhite { value }) }
+        }
+        ("photoFilter", AdjustValue::PhotoFilter { value }) => {
+            let out = PhotoFilterEditor::new("Photo Filter", Bind::bound(value)).context(context).show(ui);
+            AdjustOut { ask: out.pick_color.map(AdjustAsk::PickColor), edit: out.edit.events.map(|value| AdjustValue::PhotoFilter { value }) }
+        }
+        ("channelMixer", AdjustValue::ChannelMixer { value }) => {
+            let out = ChannelMixerEditor::new("Channel Mixer", Bind::bound(value)).context(context).show(ui);
+            lifted(out.events, |value| AdjustValue::ChannelMixer { value })
+        }
+        ("threshold", AdjustValue::Threshold { level }) => {
+            let data = setup.histograms.first().map(|counts| HistogramData::tone(&counts[..], ChannelColor::Neutral));
+            let mut editor = ThresholdEditor::new("Threshold", Bind::bound(level)).context(context);
+            if let Some(data) = &data {
+                editor = editor.histogram(data);
+            }
+            let out = editor.show(ui);
+            lifted(out.events, |level| AdjustValue::Threshold { level })
+        }
+        ("gradientMap", AdjustValue::GradientMap { value }) => {
+            let GradientMapOutput { event, color_requested, import, .. } = GradientMapEditor::new("Gradient Map", &*value).presets(&setup.gradients).show(ui);
+            let mut edit = EditEvents::new();
+            if let Some(event) = event {
+                // The editor reports the edit; it does not write the value.
+                event.apply(value);
+                edit.push(event.map(|value| AdjustValue::GradientMap { value }));
+            }
+            let ask = if import {
+                Some(AdjustAsk::ImportGradients)
+            } else {
+                color_requested.map(|stop| {
+                    let mut request = ColorRequest::new(format!("{GRADIENT_STOP_KEY}{}", stop.index), stop.request.color);
+                    if let Some(title) = stop.request.title.clone() {
+                        request = request.title(title);
+                    }
+                    AdjustAsk::PickColor(request)
+                })
+            };
+            AdjustOut { ask, edit }
+        }
+        ("selectiveColor", AdjustValue::SelectiveColor { value }) => {
+            let out = SelectiveColorEditor::new("Selective Color", Bind::bound(value)).context(context).show(ui);
+            lifted(out.edit.events, |value| AdjustValue::SelectiveColor { value })
+        }
+        // A value of another kind than the editor's: nothing to draw.
+        _ => AdjustOut::default(),
     }
-    match kind {
-        "brightnessContrast" => brightness_contrast(ui, v),
-        "levels" => levels(ui, v, cx),
-        "curves" => curves(ui, v, cx),
-        "exposure" => sliders(
-            ui,
-            v,
-            &[
-                ("exposure", tl!("Exposure"), -20.0, 20.0, 0.0, "", Some(2)),
-                ("offset", tl!("Offset"), -0.5, 0.5, 0.0, "", Some(4)),
-                ("gamma", tl!("Gamma Correction"), 0.01, 9.99, 1.0, "", None),
-            ],
-        ),
-        "vibrance" => sliders(ui, v, &[("vibrance", "Vibrance", -100.0, 100.0, 0.0, "%", None), ("saturation", "Saturation", -100.0, 100.0, 0.0, "%", None)]),
-        "hueSaturation" => hue_saturation(ui, v, cx),
-        "colorBalance" => color_balance(ui, v, cx),
-        "blackWhite" => black_white(ui, v, cx),
-        "photoFilter" => photo_filter(ui, v, cx),
-        "channelMixer" => channel_mixer(ui, v, cx),
-        "posterize" => sliders(ui, v, &[("levels", "Levels", 2.0, 255.0, 4.0, "", None)]),
-        "threshold" => threshold(ui, v, cx),
-        "gradientMap" => gradient_map(ui, v, cx),
-        "selectiveColor" => selective_color(ui, v, cx),
-        _ => Edit::default(),
-    }
 }
 
-// ---------------------------------------------------------------------------------------------
-// JSON helpers
-
-fn num(v: &Value, key: &str, default: f32) -> f32 {
-    v.get(key).and_then(Value::as_f64).map_or(default, |x| x as f32)
+/// The editor of `kind` as the function a host calls each pass: it shows the editor over the value and returns the
+/// pass's edit events and asks. `setup` is built once when the adjustment opens.
+pub fn editor(kind: &str, setup: EditorSetup) -> impl Fn(&mut Ui, &mut AdjustValue, &mut AdjustDialogCx<'_>) -> AdjustOut + Send + 'static {
+    let kind = kind.to_owned();
+    move |ui: &mut Ui, value: &mut AdjustValue, cx: &mut AdjustDialogCx<'_>| -> AdjustOut { show(&kind, &setup, ui, value, cx) }
 }
 
-fn flag(v: &Value, key: &str, default: bool) -> bool {
-    v.get(key).and_then(Value::as_bool).unwrap_or(default)
+/// [`editor`] reduced to its asks: the function `HostedAdjustDialog::new` takes.
+pub fn dialog_editor(kind: &str, setup: EditorSetup) -> impl Fn(&mut Ui, &mut AdjustValue, &mut AdjustDialogCx<'_>) -> Option<AdjustAsk> + Send + 'static {
+    let shown = editor(kind, setup);
+    move |ui: &mut Ui, value: &mut AdjustValue, cx: &mut AdjustDialogCx<'_>| -> Option<AdjustAsk> { shown(ui, value, cx).ask }
 }
 
-fn nums<const N: usize>(v: &Value, key: &str, default: [f32; N]) -> [f32; N] {
-    let a = v.get(key).and_then(Value::as_array);
-    std::array::from_fn(|i| a.and_then(|a| a.get(i)).and_then(Value::as_f64).map_or(default[i], |x| x as f32))
-}
-
-fn round(x: f32, step: f32) -> f32 {
-    (x / step).round() * step
-}
-
-fn rgb_of(v: &Value, key: &str, default: [f32; 3]) -> [f32; 3] {
-    match v.get(key) {
-        Some(Value::String(s)) => {
-            let h = s.trim_start_matches('#');
-            let b = |i: usize| h.get(i..i + 2).and_then(|x| u8::from_str_radix(x, 16).ok()).map(|x| f32::from(x) / 255.0);
-            match (b(0), b(2), b(4)) {
-                (Some(r), Some(g), Some(bb)) => [r, g, bb],
-                _ => default,
+/// Writes the colour a picker answered for the request `key` into `value`; `false` when no field of this value has
+/// that key. The key table lives here, beside the editors that issue the requests.
+pub fn answer_color(value: &mut AdjustValue, key: &str, color: Srgba) -> bool {
+    match value {
+        AdjustValue::BlackWhite { value } if key == BLACK_WHITE_TINT_KEY => {
+            value.tint_color = color;
+            true
+        }
+        AdjustValue::PhotoFilter { value } if key == PHOTO_FILTER_COLOR_KEY => {
+            value.color = color;
+            true
+        }
+        AdjustValue::GradientMap { value } => {
+            let stop = key.strip_prefix(GRADIENT_STOP_KEY).and_then(|index| index.parse::<usize>().ok()).and_then(|index| value.stops.color.get_mut(index));
+            match stop {
+                Some(stop) => {
+                    // The map's colours are opaque: the picker's alpha is not the stop's.
+                    stop.color = color.with_alpha(stop.color.a);
+                    true
+                }
+                None => false,
             }
         }
-        Some(Value::Array(a)) => std::array::from_fn(|i| a.get(i).and_then(Value::as_f64).map_or(default[i], |x| x as f32)),
-        _ => default,
+        _ => false,
     }
 }
 
-fn color32(c: [f32; 3]) -> Color32 {
-    let b = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
-    Color32::from_rgb(b(c[0]), b(c[1]), b(c[2]))
-}
-
-/// A colour swatch that opens the Color Picker titled after `name` ("Color Picker (Filter
-/// Color)"); the colour previews while the picker is open and commits once when it closes (OK, or
-/// Cancel back to the opening colour after a preview). Cancel without a preview is no edit.
-fn color_button(ui: &mut egui::Ui, c: &mut [f32; 3], name: &str) -> Edit {
-    let mut srgb = [c[0], c[1], c[2]].map(|x| (x.clamp(0.0, 1.0) * 255.0).round() as u8);
-    let r = crate::widgets::color_edit_button_srgb(ui, &mut srgb, &crate::color_picker_ui::title_for(name));
-    if r.changed() {
-        *c = srgb.map(|x| f32::from(x) / 255.0);
+/// Writes the weights `image.adjustments.blackWhite.auto` returned ([`black_white_auto`]) into a Black & White value;
+/// `false` when `value` is another kind.
+pub fn answer_auto(value: &mut AdjustValue, weights: &Value) -> bool {
+    let AdjustValue::BlackWhite { value } = value else { return false };
+    for (slot, key) in value.weights.iter_mut().zip(HUE_RANGES) {
+        if let Some(weight) = weights.get(key).and_then(Value::as_f64) {
+            *slot = weight;
+        }
     }
-    let previewing = crate::color_picker_ui::widget_picker_open(ui.ctx(), r.id);
-    Edit { changed: r.changed(), commit: r.changed() && !previewing, ..Default::default() }
+    true
 }
 
-fn label(ui: &mut egui::Ui, text: &str) {
-    let t = Tokens::get(ui.ctx());
-    ui.label(RichText::new(tl!(&text)).color(t.text_dim).size(12.0));
+/// Black & White's Auto (#9269): the weights `image.adjustments.blackWhite.auto` finds for `layer` (an adjustment
+/// layer: the image under it; a pixel layer: its pixels; with `filter`, the smart object's pixels below that smart
+/// filter). The caller writes them into its value with [`answer_auto`].
+pub fn black_white_auto(app: &mut PhotocraftApp, layer: Option<LayerId>, filter: Option<u64>) -> Result<Value, String> {
+    let mut params = layer.map_or(json!({}), |id| json!({"layer": id.0}));
+    if let Some(index) = filter {
+        params["filter"] = json!(index);
+    }
+    app.run("image.adjustments.blackWhite.auto", params)
+}
+
+/// Whether a document of this mode edits Levels/Curves through a single Gray channel.
+pub fn is_gray(mode: photocraft_doc::ColorMode) -> bool {
+    matches!(mode, photocraft_doc::ColorMode::Grayscale | photocraft_doc::ColorMode::Duotone | photocraft_doc::ColorMode::Bitmap)
+}
+
+/// The current foreground and background colours.
+pub fn swatches(app: &PhotocraftApp) -> [[f32; 3]; 2] {
+    let c = |x: [f32; 4]| [x[0], x[1], x[2]];
+    [c(app.session.tools.foreground), c(app.session.tools.background)]
+}
+
+/// The session's gradient presets as the Gradient Map picker takes them: colour stops only, the Foreground and
+/// Background stops resolved to the current swatches. Converted once when the dialog opens.
+pub fn gradient_presets(app: &PhotocraftApp) -> Vec<GradientGroup> {
+    let [foreground, background] = swatches(app);
+    let resolved = |color: &StopColor| match color {
+        StopColor::Foreground => foreground,
+        StopColor::Background => background,
+        StopColor::Rgb(rgb) => *rgb,
+    };
+    app.session
+        .presets
+        .gradients
+        .iter()
+        .map(|group| {
+            let items = group
+                .items
+                .iter()
+                .map(|preset| {
+                    let stops = preset.stops.iter().map(|(at, color)| {
+                        let [r, g, b] = resolved(color);
+                        ColorStop::new(*at, Srgba::rgb(r, g, b))
+                    });
+                    GradientItem::new(preset.name.clone(), GradientStops::new(stops.collect()))
+                })
+                .collect();
+            GradientGroup::new(group.name.clone(), items)
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
+    use super::values::{ValueCx, from_params};
     use super::*;
+    use photocraft_doc::ColorMode;
 
+    /// The `kind` tag is the key `set_json_field` replaces and the name `KINDS` lists: every kind's value carries its own.
     #[test]
-    fn saturation_track_follows_the_hue() {
-        // The Saturation slider track recolours with the hue (UI-217-16).
-        assert_eq!(saturation_track(0.0), [Color32::from_gray(128), hue_color(0.0)]);
-        assert_ne!(saturation_track(0.0)[1], saturation_track(120.0)[1]);
-        assert_eq!(saturation_track(720.0)[1], saturation_track(0.0)[1], "hue wraps");
-    }
-
-    #[test]
-    fn lightness_track_is_black_grey_white_whatever_the_hue() {
-        // Photoshop's Lightness track does not take the hue's colour (#6539).
-        assert_eq!(lightness_track(), [Color32::BLACK, Color32::from_gray(128), Color32::WHITE]);
-        let [_, mid, _] = lightness_track();
-        assert!(mid.r() == mid.g() && mid.g() == mid.b(), "the middle stop is neutral grey");
-    }
-
-    /// Preferences ▸ Interface ▸ Dynamic Color Sliders: off, the colour sliders get plain tracks.
-    #[test]
-    fn dynamic_color_sliders_switch_the_tracks_off() {
-        let cx = |dynamic: bool| EditorCx {
-            mem: egui::Id::NULL,
-            hist: None,
-            gray: false,
-            swatches: [[0.0; 3]; 2],
-            gradients: Vec::new(),
-            dialog: false,
-            dynamic_color_sliders: dynamic,
-            isolated_curve: None,
-        };
-        let stops = [Color32::BLACK, Color32::RED];
-        assert_eq!(track_stops(&cx(true), &stops), Some(&stops[..]));
-        assert_eq!(track_stops(&cx(false), &stops), None);
-    }
-
-    /// #9272 review: at the narrowest Properties panel (a 230-point bar) a 30° zone is ~19 points
-    /// wide; a press in its middle grabs the zone, not a handle, while each handle stays grabbable.
-    #[test]
-    fn hue_range_zones_stay_selectable_on_a_narrow_bar() {
-        let w = 230.0;
-        let xs = [75.0f32, 105.0, 135.0, 165.0].map(|d| d / 360.0 * w);
-        for (a, z) in [(0, 1), (1, 2), (2, 3)] {
-            assert_eq!(hue_range_handle_at(xs, (xs[a] + xs[z]) / 2.0, w), None, "the middle of zone {a}..{z} is the zone's");
-        }
-        for (k, x) in xs.iter().enumerate() {
-            assert_eq!(hue_range_handle_at(xs, *x + 1.0, w), Some(k as u8), "handle {k}");
-        }
-        assert_eq!(hue_range_handle_at(xs, xs[0] - 9.0, w), Some(0), "the full reach outside the range");
-        let stacked = [50.0, 50.0, 80.0, 120.0];
-        assert!(hue_range_handle_at(stacked, 51.0, w).is_some(), "coinciding handles stay grabbable");
-        // Reds (315/345…15\45): its fully-on zone crosses the seam, ~9.6 points from each edge.
-        let reds = [315.0f32, 345.0, 15.0, 45.0].map(|d| d / 360.0 * w);
-        for x in [w - 1.0, w - 3.0, 0.5, 2.5] {
-            assert_eq!(hue_range_handle_at(reds, x, w), None, "x {x}: Reds' fully-on zone across the seam");
-        }
-        assert_eq!(hue_range_handle_at(reds, reds[1] + 1.0, w), Some(1));
-        assert_eq!(hue_range_handle_at(reds, reds[2] - 1.0, w), Some(2));
-    }
-
-    /// #9252: Photoshop 2025's zone drags on a colour range (measured on Reds): the fully-on span
-    /// moves all four handles, each fade its own two; a side stops at the other and the range
-    /// never passes a turn.
-    #[test]
-    fn hue_range_zones_move_their_handles() {
-        let reds = [-45.0, -15.0, 15.0, 45.0];
-        assert_eq!(hue_range_zone(reds, 345.0 - 15.0), Some(0));
-        assert_eq!(hue_range_zone(reds, 0.0), Some(1));
-        assert_eq!(hue_range_zone(reds, 30.0), Some(2));
-        assert_eq!(hue_range_zone(reds, 180.0), None);
-        let centre = move_hue_range_zone(reds, 1, 37.0);
-        assert_eq!(centre, [-8.0, 22.0, 52.0, 82.0], "all four, as Photoshop's 315/345…15\\45 → 352/21…52\\81");
-        let left = move_hue_range_zone(centre, 0, -19.0);
-        assert_eq!(left, [-27.0, 3.0, 52.0, 82.0], "the left two only");
-        let right = move_hue_range_zone(left, 2, 19.0);
-        assert_eq!(right, [-27.0, 3.0, 71.0, 101.0], "the right two only");
-        assert_eq!(move_hue_range_zone(reds, 0, 100.0), [-15.0, 15.0, 15.0, 45.0], "the left side stops at the right");
-        assert_eq!(move_hue_range_zone(reds, 2, -100.0), [-45.0, -15.0, -15.0, 15.0], "and the right at the left");
-        let wide = move_hue_range_zone(reds, 2, 500.0);
-        assert!(wide[3] - wide[0] <= 359.0 + 1e-3, "{wide:?}");
-        assert_eq!(move_hue_range_zone(reds, 1, f32::NAN), reds);
-    }
-
-    #[test]
-    fn hue_range_drag_canonicalizes_bounds_before_clamping() {
-        let moved = move_hue_range_handle([0.0, 350.0, 100.0, 200.0], 2, 354.0);
-        assert_eq!(moved, [-360.0, -10.0, -6.0, -1.0]);
-
-        let canonical = move_hue_range_handle([0.0, 30.0, 60.0, 90.0], 2, 65.0);
-        assert_eq!(canonical, [0.0, 30.0, 65.0, 90.0]);
-    }
-
-    #[test]
-    fn curve_endpoint_handles_fit_inside_the_allocated_area() {
-        for side in [120.0, 200.0, 300.0] {
-            let full = Rect::from_min_size(pos2(100.0, 50.0), vec2(side, side + 14.0));
-            let graph = curve_graph(full, side);
-            let to_scr = |q: [f32; 2]| pos2(graph.left() + q[0] / 255.0 * graph.width(), graph.bottom() - q[1] / 255.0 * graph.height());
-            for q in [[0.0, 0.0], [255.0, 255.0]] {
-                let r = Rect::from_center_size(to_scr(q), vec2(CURVE_HANDLE_SIZE, CURVE_HANDLE_SIZE)).expand(1.0);
-                assert!(r.left() >= full.left() && r.right() <= full.right());
-                assert!(r.top() >= full.top() && r.bottom() <= full.bottom());
-            }
+    fn every_kind_converts_to_a_value_tagged_with_its_name() {
+        let cx = ValueCx::new(ColorMode::Rgb, json!({}));
+        for kind in KINDS {
+            let value = from_params(kind, &json!({}), &cx).unwrap_or_else(|e| panic!("{kind}: {e}"));
+            assert_eq!(serde_json::to_value(&value).unwrap()["kind"], kind);
+            assert!(has_editor(kind));
         }
     }
 
+    /// Answers are written by the key the editor asked with, and refused for a value without the field.
     #[test]
-    fn levels_helpers() {
-        for g in [0.3f32, 1.0, 1.8, 4.0] {
-            let x = gamma_pos(20.0, 230.0, g);
-            assert!((gamma_from_pos(20.0, 230.0, x) - g).abs() < 1e-3, "{g}");
-        }
-        // Moving the grey slider left brightens (gamma > 1), as in Photoshop.
-        assert!(gamma_from_pos(0.0, 255.0, 80.0) > 1.0);
-        let mut h = [0u32; 256];
-        h[10] = 1000;
-        h[200] = 1000;
-        assert_eq!(auto_levels(&h), (10.0, 200.0));
-        assert_eq!(auto_levels(&[0; 256]), (253.0, 255.0), "an empty histogram is no panic");
+    fn a_colour_answer_lands_in_the_field_its_key_names() {
+        let mut tint = AdjustValue::BlackWhite { value: BlackWhite::default() };
+        assert!(answer_color(&mut tint, BLACK_WHITE_TINT_KEY, Srgba::rgb(1.0, 0.0, 0.0)));
+        assert!(matches!(&tint, AdjustValue::BlackWhite { value } if value.tint_color == Srgba::rgb(1.0, 0.0, 0.0)));
+        assert!(!answer_color(&mut tint, PHOTO_FILTER_COLOR_KEY, Srgba::BLACK), "another kind's key");
+        let mut map = from_params("gradientMap", &json!({}), &ValueCx::new(ColorMode::Rgb, json!({}))).unwrap();
+        assert!(answer_color(&mut map, &format!("{GRADIENT_STOP_KEY}1"), Srgba::rgb(0.0, 1.0, 0.0)));
+        assert!(!answer_color(&mut map, &format!("{GRADIENT_STOP_KEY}9"), Srgba::BLACK), "no such stop");
     }
 }
 

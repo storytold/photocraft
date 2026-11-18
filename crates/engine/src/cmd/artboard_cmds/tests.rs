@@ -174,8 +174,8 @@ fn export_to_files_and_pdf() {
     let r = s.execute("file.export.artboardsToFiles", json!({"dir": d, "prefix": "site"})).unwrap();
     let files: Vec<String> = r["files"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
     assert_eq!(files.len(), 2);
-    assert!(files[0].ends_with("site_0000_Empty_One.png"), "{files:?}");
-    assert!(files[1].ends_with("site_0001_Red Board.png"), "{files:?}");
+    assert!(files[0].ends_with("/siteEmpty_One.png"), "{files:?}");
+    assert!(files[1].ends_with("/siteRed-Board.png"), "{files:?}");
     let img = photocraft_io::import("x.png", &std::fs::read(&files[1]).unwrap()).unwrap().document;
     assert_eq!((img.size.width, img.size.height), (10, 10));
     let img2 = photocraft_io::import("x.png", &std::fs::read(&files[0]).unwrap()).unwrap().document;
@@ -623,7 +623,7 @@ fn add_imported_type(s: &mut Session, block: Rect) -> LayerId {
     s.edit("type", |doc, active| {
         let mut t = photocraft_doc::TextLayer { text: "Hello!".into(), font_family: "No Such Font".into(), size_pt: 26.0, ..Default::default() };
         t.transform = photocraft_geom::Affine::translate(f64::from(block.x0), f64::from(block.y1));
-        t.psd_raw = Some(std::sync::Arc::new(photocraft_text::psd::build_tysh(&t, 72.0, None)));
+        t.psd_raw = Some(std::sync::Arc::new(photocraft_text::psd::build_tysh(&t, 72.0, None).unwrap()));
         let fmt = doc.pixel_format();
         let mut cache = photocraft_raster::Surface::new(fmt);
         cache.fill_rect(block, &photocraft_raster::from_rgba(&fmt, [0.4, 0.2, 0.6, 1.0]));
@@ -927,6 +927,82 @@ fn from_layers_defaults_are_the_selected_layers_size() {
     assert_eq!(from_layers_defaults(&Session::new()), None);
 }
 
+/// #10258: with the active layer on an artboard (the board, or a layer inside it), Select All
+/// selects that board, as Photoshop does; with no artboard involved, the whole canvas.
+#[test]
+fn select_all_selects_the_active_artboard() {
+    let mut s = session(8);
+    let first = board_with_square(&mut s);
+    let r = s.execute("layer.artboard.addBeside", json!({"layer": first.0, "side": "right"})).unwrap();
+    let second = LayerId(r["layer"].as_u64().unwrap());
+    let selected = |s: &Session, x: i32, y: i32| doc(s).selection.as_ref().map_or(0.0, |m| m.sample_channel(x, y, 0));
+    let inner = doc(&s).layer(first).unwrap().children().and_then(|c| c.first()).map(|l| l.id).unwrap();
+    for (layer, inside, outside) in [(second, (155, 15), (15, 15)), (first, (15, 15), (155, 15)), (inner, (15, 15), (155, 15))] {
+        s.execute("layer.select", json!({"layer": layer.0, "mode": "replace"})).unwrap();
+        s.execute("select.all", json!({})).unwrap();
+        assert_eq!((selected(&s, inside.0, inside.1), selected(&s, outside.0, outside.1)), (1.0, 0.0), "{layer:?}");
+        assert_eq!(selected(&s, 100, 15), 0.0, "{layer:?}: not the gap between the boards");
+    }
+    // A document without artboards selects its whole canvas.
+    let mut plain = session(8);
+    plain.execute("select.all", json!({})).unwrap();
+    let (w, h) = (doc(&plain).size.width as i32, doc(&plain).size.height as i32);
+    assert_eq!((selected(&plain, 0, 0), selected(&plain, w - 1, h - 1)), (1.0, 1.0));
+}
+
+/// A board the canvas cuts off selects only the part inside it; a board cropped away entirely
+/// selects the canvas, never an empty selection that would block painting.
+#[test]
+fn select_all_clips_the_active_artboard_to_the_canvas() {
+    let mut s = session(8);
+    let first = board_with_square(&mut s);
+    let r = s.execute("layer.artboard.addBeside", json!({"layer": first.0, "side": "right"})).unwrap();
+    let second = LayerId(r["layer"].as_u64().unwrap());
+    s.execute("image.canvasSize", json!({"width": 30, "height": 30, "anchor": "topLeft"})).unwrap();
+    assert_eq!((doc(&s).size.width, doc(&s).size.height, board_rect(&s, first.0)), (30, 30, Rect::new(10, 10, 50, 50)));
+    let selected = |s: &Session, x: i32, y: i32| doc(s).selection.as_ref().map_or(0.0, |m| m.sample_channel(x, y, 0));
+    s.execute("layer.select", json!({"layer": first.0, "mode": "replace"})).unwrap();
+    s.execute("select.all", json!({})).unwrap();
+    assert_eq!((selected(&s, 29, 29), selected(&s, 5, 5), selected(&s, 30, 30)), (1.0, 0.0, 0.0), "the board, clipped");
+    s.execute("layer.select", json!({"layer": second.0, "mode": "replace"})).unwrap();
+    s.execute("select.all", json!({})).unwrap();
+    assert_eq!((selected(&s, 0, 0), selected(&s, 29, 29)), (1.0, 1.0), "a board off the canvas selects the canvas");
+}
+
+/// #10258 review: an artboard is a top-level group, so there are no nested boards to choose
+/// between — and a group carrying artboard data *inside* a board (a PSD can hold one; the
+/// commands never make one) changes nothing: `Document::artboard_of` names the top-level board,
+/// which is the one Select All takes.
+#[test]
+fn select_all_takes_the_top_level_board_even_with_a_board_inside_one() {
+    let mut s = session(8);
+    let board = board_with_square(&mut s);
+    let child = doc(&s).layer(board).and_then(|l| l.children()).and_then(|c| c.first()).map(|l| l.id).expect("the board holds the square");
+    s.execute("layer.select", json!({"layer": child.0, "mode": "replace"})).unwrap();
+    let inner = LayerId(s.execute("layer.groupLayers", json!({})).unwrap()["layer"].as_u64().unwrap());
+    // Give that inner group a board's own rect: a smaller one, well inside the outer board.
+    s.edit("nest", |doc, _| {
+        let g = doc.layer_mut(inner).ok_or(EngineError::NoLayer(inner))?;
+        if let photocraft_doc::LayerContent::Group(grp) = &mut g.content {
+            grp.artboard = Some(photocraft_doc::Artboard { rect: Rect::new(14, 14, 22, 22), background: Default::default(), preset: String::new() });
+        }
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(doc(&s).artboard_of(inner), Some(board), "the top-level board, not the nested one");
+    let selected = |s: &Session, x: i32, y: i32| doc(s).selection.as_ref().map_or(0.0, |m| m.sample_channel(x, y, 0));
+    s.execute("layer.select", json!({"layer": inner.0, "mode": "replace"})).unwrap();
+    s.execute("select.all", json!({})).unwrap();
+    // The whole 40x40 board at (10, 10), not the inner 8x8 rect.
+    assert_eq!((selected(&s, 12, 12), selected(&s, 45, 45)), (1.0, 1.0), "the outer board is selected whole");
+    assert_eq!(selected(&s, 5, 5), 0.0, "and nothing outside it");
+    // CodeRabbit on #10306: so does the square inside the nested group.
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("layer.select", json!({"layer": child.0, "mode": "replace"})).unwrap();
+    s.execute("select.all", json!({})).unwrap();
+    assert_eq!((selected(&s, 12, 12), selected(&s, 45, 45), selected(&s, 5, 5)), (1.0, 1.0, 0.0), "the square in the nested group takes the outer board");
+}
+
 /// Board "A" at (10, 10, 50, 50) holding a red square at (10..30)², and an empty board "B" at
 /// (200, 20, 240, 60).
 fn nest_boards(s: &mut Session) -> (LayerId, LayerId, LayerId) {
@@ -1190,4 +1266,82 @@ fn a_layers_array_sets_every_listed_boards_background_in_one_step() {
     assert!(s.execute("layer.artboard.set", json!({"layers": [], "background": "white"})).is_err());
     assert!(s.execute("layer.artboard.set", json!({"layers": [a.0]})).is_err());
     assert_eq!(s.active().unwrap().history.entries().len(), n);
+}
+
+#[test]
+fn new_layers_made_with_an_artboard_selected_go_inside_it() {
+    // Photoshop 26.2: with an artboard itself selected, New Layer, fill layers and adjustment
+    // layers land on top of that board's contents.
+    let mut s = session(8);
+    s.execute("layer.new.artboard", json!({"x": 0, "y": 0, "width": 50, "height": 50, "name": "Board A"})).unwrap();
+    let b = s.execute("layer.new.artboard", json!({"x": 60, "y": 0, "width": 40, "height": 50, "name": "Board B"})).unwrap();
+    let board = LayerId(b["layer"].as_u64().unwrap());
+    for (cmd, p) in new_layer_commands() {
+        s.execute("layer.select", json!({"name": "Board B"})).unwrap();
+        let id = LayerId(s.execute(cmd, p).unwrap()["layer"].as_u64().unwrap());
+        let kids = doc(&s).layer(board).and_then(Layer::children).unwrap();
+        assert_eq!(kids.last().map(|l| l.id), Some(id), "{cmd} lands on top of the selected board's contents");
+    }
+    assert_eq!(doc(&s).layer(board).and_then(Layer::children).map(<[Layer]>::len), Some(5));
+}
+
+/// The five commands `new_layers_made_with_an_artboard_selected_go_inside_it` checks.
+fn new_layer_commands() -> [(&'static str, serde_json::Value); 5] {
+    [
+        ("layer.new.layer", json!({})),
+        ("layer.newFillLayer.solidColor", json!({"color": "#c82828"})),
+        ("layer.newFillLayer.gradient", json!({})),
+        ("gradient.fill.create", json!({"from": [0, 0], "to": [100, 0]})),
+        ("layer.newAdjustmentLayer.invert", json!({})),
+    ]
+}
+
+#[test]
+fn new_layers_made_with_a_layer_in_an_artboard_selected_go_directly_above_it() {
+    // #9311 review: with a layer inside a board selected (not the board), a new layer goes
+    // directly above that layer, inside the board, not on top of the board's contents.
+    let mut s = session(8);
+    s.execute("layer.new.artboard", json!({"x": 0, "y": 0, "width": 50, "height": 50, "name": "Board A"})).unwrap();
+    let b = s.execute("layer.new.artboard", json!({"x": 60, "y": 0, "width": 40, "height": 50, "name": "Board B"})).unwrap();
+    let board = LayerId(b["layer"].as_u64().unwrap());
+    let mut inside = Vec::new();
+    for name in ["low", "high"] {
+        s.execute("layer.select", json!({"name": "Board B"})).unwrap();
+        inside.push(LayerId(s.execute("layer.new.layer", json!({"name": name})).unwrap()["layer"].as_u64().unwrap()));
+    }
+    let (low, high) = (inside[0], inside[1]);
+    let board_path = doc(&s).path_of(board).unwrap();
+    for (cmd, p) in new_layer_commands() {
+        s.execute("layer.select", json!({"name": "low"})).unwrap();
+        let id = LayerId(s.execute(cmd, p).unwrap()["layer"].as_u64().unwrap());
+        let mut above_low = doc(&s).path_of(low).unwrap();
+        *above_low.last_mut().unwrap() += 1;
+        assert_eq!(doc(&s).path_of(id), Some(above_low), "{cmd} lands directly above the selected layer");
+        assert_eq!(doc(&s).path_of(id).map(|p| p[..p.len() - 1].to_vec()), Some(board_path.clone()), "{cmd} stays in the board");
+        let kids = doc(&s).layer(board).and_then(Layer::children).unwrap();
+        assert_eq!(kids.last().map(|l| l.id), Some(high), "{cmd} doesn't go on top of the board's contents");
+    }
+    assert_eq!(doc(&s).layer(board).and_then(Layer::children).map(<[Layer]>::len), Some(7));
+}
+
+#[test]
+fn new_layers_made_with_a_top_level_layer_selected_stay_at_the_top_level() {
+    // #9311 review: with no artboard selected (a top-level layer outside every board), a new
+    // layer goes directly above that layer at the top level, in no board.
+    let mut s = session(8);
+    s.execute("layer.new.artboard", json!({"x": 0, "y": 0, "width": 50, "height": 50, "name": "Board A"})).unwrap();
+    s.execute("layer.new.artboard", json!({"x": 60, "y": 0, "width": 40, "height": 50, "name": "Board B"})).unwrap();
+    let loose = add_square(&mut s, Rect::new(52, 10, 58, 20), [0.0, 0.0, 1.0, 1.0]);
+    let name = doc(&s).layer(loose).unwrap().name.clone();
+    let boards: Vec<usize> = doc(&s).artboards().iter().map(|(b, ..)| doc(&s).layer(*b).and_then(Layer::children).map_or(0, <[Layer]>::len)).collect();
+    for (cmd, p) in new_layer_commands() {
+        s.execute("layer.select", json!({"name": name})).unwrap();
+        let id = LayerId(s.execute(cmd, p).unwrap()["layer"].as_u64().unwrap());
+        let loose_at = doc(&s).path_of(loose).unwrap();
+        assert_eq!(loose_at.len(), 1, "the selected layer is at the top level");
+        assert_eq!(doc(&s).path_of(id), Some(vec![loose_at[0] + 1]), "{cmd} lands directly above the selected layer, at the top level");
+        assert_eq!(doc(&s).artboard_of(id), None, "{cmd} goes in no board");
+    }
+    let after: Vec<usize> = doc(&s).artboards().iter().map(|(b, ..)| doc(&s).layer(*b).and_then(Layer::children).map_or(0, <[Layer]>::len)).collect();
+    assert_eq!(after, boards, "no board gained a layer");
 }
