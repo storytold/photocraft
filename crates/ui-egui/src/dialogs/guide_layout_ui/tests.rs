@@ -350,3 +350,37 @@ fn a_corrupt_saved_layout_keeps_the_defaults() {
     let id = open_dialog(&mut h);
     assert_eq!(fields(&h, id), factory);
 }
+
+/// The target and the Columns, Rows and Margin checkboxes come back after a restart too: an OK on the selected artboards
+/// with Columns and Margin off reopens that way when an artboard is selected again, and falls back to the document when
+/// none is.
+#[test]
+fn the_confirmed_target_and_sections_survive_a_restart() {
+    let board = json!({"rect": [200, 100, 140, 40]});
+    let files = std::sync::Arc::new(craft::settings::testing::MemoryFiles::new());
+    let mut h = framed(launch(&files));
+    h.state_mut().run("layer.new.artboard", board.clone()).unwrap();
+    let id = open_dialog(&mut h);
+    set(&mut h, id, "target", json!("selectedArtboards")).unwrap();
+    set_group(&mut h, id, "columns", |c| c["enabled"] = json!(false));
+    set_group(&mut h, id, "rows", |r| {
+        r["enabled"] = json!(true);
+        r["number"] = json!(2);
+    });
+    set(&mut h, id, "marginEnabled", json!(false)).unwrap();
+    assert!(confirm(&mut h, id));
+    crate::prefs_ui::save_preferences(h.state_mut()).unwrap();
+
+    let mut h = framed(launch(&files));
+    h.state_mut().run("layer.new.artboard", board).unwrap();
+    let id = open_dialog(&mut h);
+    let f = fields(&h, id);
+    assert_eq!(f["target"], "selectedArtboards");
+    assert_eq!((&f["columns"]["enabled"], &f["rows"]["enabled"], &f["rows"]["number"]), (&json!(false), &json!(true), &json!(2)));
+    assert_eq!(f["marginEnabled"], json!(false));
+    cancel(&mut h, id);
+
+    let mut h = framed(launch(&files));
+    let id = open_dialog(&mut h);
+    assert_eq!(fields(&h, id)["target"], "document", "no artboard selected");
+}
