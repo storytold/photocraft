@@ -71,13 +71,49 @@ fn three_pages() -> Vec<u8> {
     pdf(&[(612.0, 792.0, "1 0 0 rg 72 72 468 648 re f"), (595.0, 420.0, "0 1 0 rg 30 30 535 360 re f"), (300.0, 300.0, "0 0 1 rg 20 20 260 260 re f")])
 }
 
-fn dialog(app: &PhotocraftApp) -> Option<&crate::state::Dialog> {
-    app.ui.dialogs.iter().find(|d| owns(&d.fields))
+/// The open PDF dialogs (Import PDF and password), oldest first: (id, key, values).
+fn pdf_dialogs(app: &PhotocraftApp) -> Vec<(DialogId, String, Value)> {
+    app.framework
+        .dialogs
+        .open_dialogs()
+        .into_iter()
+        .filter_map(|d| {
+            let key = d.key?;
+            (owns_import(&key) || owns_password(&key)).then(|| (d.id, key, d.fields.unwrap_or(Value::Null)))
+        })
+        .collect()
 }
 
+/// The one open PDF dialog.
+fn dialog(app: &PhotocraftApp) -> Option<(DialogId, String, Value)> {
+    let mut all = pdf_dialogs(app);
+    assert!(all.len() <= 1, "at most one PDF dialog is open");
+    all.pop()
+}
+
+fn id(app: &PhotocraftApp) -> DialogId {
+    dialog(app).expect("the PDF dialog").0
+}
+
+/// Sets value `key` of dialog `id`, as `ui.dialog.set` does.
+fn set_on(app: &mut PhotocraftApp, id: DialogId, key: &str, v: Value) {
+    let ctx = app.ctx().clone();
+    app.framework.dialogs.set_json_field(&ctx, id, key, v).expect("the dialog takes the value");
+}
+
+/// Sets value `key` of the one PDF dialog.
 fn set(app: &mut PhotocraftApp, key: &str, v: Value) {
-    let id = dialog(app).expect("the Import PDF dialog").id;
-    app.ui.dialog_mut(id).expect("dialog").fields.insert(key.into(), v);
+    let id = id(app);
+    set_on(app, id, key, v);
+}
+
+fn confirm(app: &mut PhotocraftApp, id: DialogId) -> Result<(), String> {
+    crate::dialogs::testing::confirm(app, id)
+}
+
+/// The file the first held PDF holds.
+fn held(app: &PhotocraftApp) -> Arc<Mutex<Held>> {
+    Arc::clone(&app.pdf_import.first().expect("a held PDF").held)
 }
 
 #[test]
@@ -86,8 +122,8 @@ fn opening_a_pdf_shows_the_dialog_with_photoshop_defaults() {
     let warnings = app.open_file("/tmp/pc-test/multi.pdf", &three_pages()).expect("open");
     assert!(warnings.is_empty());
     assert!(app.session.documents().is_empty(), "nothing opens before OK");
-    let d = dialog(&app).expect("the Import PDF dialog");
-    let f = &d.fields;
+    let (_, key, f) = dialog(&app).expect("the Import PDF dialog");
+    assert!(owns_import(&key), "{key}");
     assert_eq!(f.get("name"), Some(&json!("multi.pdf")), "the Name field starts as the file name");
     assert_eq!(f.get("select"), Some(&json!("pages")));
     assert_eq!(f.get("pages"), Some(&json!([1])));
@@ -100,7 +136,8 @@ fn opening_a_pdf_shows_the_dialog_with_photoshop_defaults() {
     assert_eq!(f.get("suppressWarnings"), Some(&json!(false)));
     assert_eq!(f.get("reverseOrder"), Some(&json!(true)));
     assert_eq!(f.get("thumbnailSize"), Some(&json!("small")));
-    let st = app.pdf_import.first().expect("the file is held");
+    let held = held(&app);
+    let st = lock(&held);
     assert_eq!(st.info.as_ref().map(|i| i.pages.len()), Some(3));
     assert_eq!(st.path.as_deref(), Some("/tmp/pc-test/multi.pdf"));
 }
@@ -109,12 +146,11 @@ fn opening_a_pdf_shows_the_dialog_with_photoshop_defaults() {
 fn ok_opens_the_selected_pages_in_reverse_order_as_unsaved_documents() {
     let mut app = app();
     app.open_file("/tmp/pc-test/multi.pdf", &three_pages()).expect("open");
-    let id = dialog(&app).unwrap().id;
+    let id = id(&app);
     set(&mut app, "pages", json!([1, 2, 3]));
     set(&mut app, "resolution", json!(72.0));
     set(&mut app, "crop", json!("mediaBox"));
-    let r = crate::dialogs::confirm(&mut app, id).expect("OK");
-    assert_eq!(r.get("opened"), Some(&json!(3)));
+    confirm(&mut app, id).expect("OK");
     assert!(dialog(&app).is_none() && app.pdf_import.is_empty());
     let names: Vec<&str> = app.session.documents().iter().map(|d| d.doc.name.as_str()).collect();
     assert_eq!(names, ["multi-3.pdf", "multi-2.pdf", "multi-1.pdf"], "last page first, so page 1 ends up on top");
@@ -130,7 +166,7 @@ fn ok_opens_the_selected_pages_in_reverse_order_as_unsaved_documents() {
 fn the_name_field_and_the_page_options_reach_the_documents() {
     let mut app = app();
     app.open_bytes("multi.pdf", &three_pages()).expect("open");
-    let id = dialog(&app).unwrap().id;
+    let id = id(&app);
     set(&mut app, "name", json!("Foo"));
     set(&mut app, "pages", json!([2]));
     set(&mut app, "resolution", json!(72.0));
@@ -138,32 +174,24 @@ fn the_name_field_and_the_page_options_reach_the_documents() {
     set(&mut app, "depth", json!(16));
     set(&mut app, "crop", json!("boundingBox"));
     set(&mut app, "reverseOrder", json!(false));
-    crate::dialogs::confirm(&mut app, id).expect("OK");
+    let fields = app.framework.dialogs.get_by_id::<craft::ui::patterns::form_dialogs::HostedParamDialog>(id).expect("dialog").fields().clone();
+    confirm(&mut app, id).expect("OK");
     let doc = &app.session.active().unwrap().doc;
     assert_eq!(doc.name, "Foo-2.pdf");
     assert_eq!((doc.size.width, doc.size.height), (535, 360), "the bounding box of the green rectangle");
     assert_eq!((doc.mode, doc.depth), (photocraft_color::ColorMode::Grayscale, photocraft_color::SampleType::U16));
-    // The options the fields describe.
-    let o = options(&dialog_fields_after(&app), 2, false, None);
+    // The options the values describe, read from the JSON automation set.
+    let o = options(&fields, 2, false, None);
     assert_eq!((o.page, o.crop, o.resolution, o.anti_alias, o.image), (2, CropTo::BoundingBox, 72.0, true, None));
-}
-
-/// The fields a closed dialog had, rebuilt from defaults plus the test's edits (the dialog is
-/// gone after OK, so this stands in for them).
-fn dialog_fields_after(app: &PhotocraftApp) -> Map<String, Value> {
-    let mut f = Map::new();
-    defaults(&mut f, app);
-    f.insert("resolution".into(), json!(72.0));
-    f.insert("mode".into(), json!("gray"));
-    f
+    assert_eq!((o.mode, o.depth, o.name.as_deref()), (photocraft_color::ColorMode::Grayscale, photocraft_color::SampleType::U16, Some("Foo")));
 }
 
 #[test]
 fn cancel_opens_nothing_and_lets_the_file_go() {
     let mut app = app();
     app.open_bytes("multi.pdf", &three_pages()).expect("open");
-    let id = dialog(&app).unwrap().id;
-    crate::dialogs::cancel(&mut app, id).expect("cancel");
+    let id = id(&app);
+    crate::dialogs::testing::cancel(&mut app, id).expect("cancel");
     assert!(app.session.documents().is_empty());
     assert!(app.pdf_import.is_empty() && dialog(&app).is_none());
 }
@@ -177,13 +205,17 @@ fn two_pdfs_keep_their_own_dialogs_and_files() {
     let open_both = |app: &mut PhotocraftApp| {
         app.open_file("/tmp/pc-test/a.pdf", &a).expect("open a");
         app.open_file("/tmp/pc-test/b.pdf", &b).expect("open b");
-        let ids: Vec<u64> = app.ui.dialogs.iter().filter(|d| owns(&d.fields)).map(|d| d.id).collect();
-        assert_eq!((ids.len(), app.pdf_import.len()), (2, 2), "a dialog and a held file each");
-        assert_eq!(app.pdf_import.iter().map(|st| st.file_name.as_str()).collect::<Vec<_>>(), ["a.pdf", "b.pdf"]);
-        for id in &ids {
-            app.ui.dialog_mut(*id).unwrap().fields.insert("resolution".into(), json!(72.0));
+        let dialogs = pdf_dialogs(app);
+        assert_eq!((dialogs.len(), app.pdf_import.len()), (2, 2), "a dialog and a held file each");
+        let names: Vec<String> = app.pdf_import.iter().map(|p| lock(&p.held).file_name.clone()).collect();
+        assert_eq!(names, ["a.pdf", "b.pdf"]);
+        // The dialogs in the order of the files they hold.
+        let id_of = |n: u64| dialogs.iter().find(|d| number_of(&d.1) == Some(n)).expect("its dialog").0;
+        let (da, db) = (id_of(app.pdf_import[0].number), id_of(app.pdf_import[1].number));
+        for id in [da, db] {
+            set_on(app, id, "resolution", json!(72.0));
         }
-        (ids[0], ids[1])
+        (da, db)
     };
     let opened = |app: &PhotocraftApp| -> Vec<(String, u32, u32, Vec<f32>)> {
         app.session
@@ -195,20 +227,19 @@ fn two_pdfs_keep_their_own_dialogs_and_files() {
     // B's dialog first: B's file, by name and content; A's dialog and file stay.
     let mut app = app();
     let (da, db) = open_both(&mut app);
-    let r = crate::dialogs::confirm(&mut app, db).expect("OK on b");
-    assert_eq!(r.get("opened"), Some(&json!(1)));
+    confirm(&mut app, db).expect("OK on b");
     assert_eq!(opened(&app), [("b".to_string(), 60, 40, vec![0.0, 0.0, 1.0, 1.0])]);
-    assert_eq!(app.pdf_import.iter().map(|st| st.dialog).collect::<Vec<_>>(), [da], "a's file is still held, for a's dialog");
-    assert!(app.ui.dialogs.iter().any(|d| d.id == da));
-    crate::dialogs::confirm(&mut app, da).expect("OK on a");
+    assert_eq!(app.pdf_import.iter().map(|p| lock(&p.held).file_name.clone()).collect::<Vec<_>>(), ["a.pdf"], "a's file is still held");
+    assert_eq!(pdf_dialogs(&app).iter().map(|d| d.0).collect::<Vec<_>>(), [da], "a's dialog is still up");
+    confirm(&mut app, da).expect("OK on a");
     assert_eq!(opened(&app).last().map(|d| (d.0.as_str(), d.1, d.2, d.3.clone())), Some(("a", 100, 80, vec![1.0, 0.0, 0.0, 1.0])));
-    assert!(app.pdf_import.is_empty() && dialog(&app).is_none());
+    assert!(app.pdf_import.is_empty() && pdf_dialogs(&app).is_empty());
     // Cancel on one lets only its file go.
     let mut app = self::app();
     let (da, db) = open_both(&mut app);
-    crate::dialogs::cancel(&mut app, da).expect("cancel a");
-    assert_eq!(app.pdf_import.iter().map(|st| st.dialog).collect::<Vec<_>>(), [db]);
-    crate::dialogs::confirm(&mut app, db).expect("OK on b");
+    crate::dialogs::testing::cancel(&mut app, da).expect("cancel a");
+    assert_eq!(app.pdf_import.iter().map(|p| lock(&p.held).file_name.clone()).collect::<Vec<_>>(), ["b.pdf"]);
+    confirm(&mut app, db).expect("OK on b");
     assert_eq!(opened(&app), [("b".to_string(), 60, 40, vec![0.0, 0.0, 1.0, 1.0])]);
     assert!(app.pdf_import.is_empty());
 }
@@ -217,13 +248,12 @@ fn two_pdfs_keep_their_own_dialogs_and_files() {
 fn ok_with_nothing_selected_keeps_the_dialog_up() {
     let mut app = app();
     app.open_bytes("multi.pdf", &three_pages()).expect("open");
-    let id = dialog(&app).unwrap().id;
+    let id = id(&app);
     set(&mut app, "pages", json!([]));
-    let r = crate::dialogs::confirm(&mut app, id).expect("OK");
-    assert_eq!(r.get("pending"), Some(&json!(true)));
+    let refusal = confirm(&mut app, id).expect_err("OK is refused");
+    assert_eq!(refusal, "Select one or more pages.");
     assert!(app.session.documents().is_empty());
-    let d = dialog(&app).expect("still up");
-    assert!(d.fields.get("__error").is_some());
+    assert_eq!(dialog(&app).map(|d| d.0), Some(id), "still up");
     assert_eq!(app.pdf_import.len(), 1);
 }
 
@@ -264,10 +294,10 @@ fn pair_pdf() -> Vec<u8> {
 fn images_mode_opens_the_embedded_images() {
     let mut app = app();
     app.open_bytes("pair.pdf", &pair_pdf()).expect("open");
-    let id = dialog(&app).unwrap().id;
+    let id = id(&app);
     set(&mut app, "select", json!("images"));
     set(&mut app, "images", json!([1]));
-    crate::dialogs::confirm(&mut app, id).expect("OK");
+    confirm(&mut app, id).expect("OK");
     let doc = &app.session.active().unwrap().doc;
     assert_eq!((doc.name.as_str(), doc.size.width, doc.size.height), ("pair-1", 8, 4));
     assert_eq!(doc.layers[0].name, "Background");
@@ -286,10 +316,10 @@ fn what_import_pdf_opens_from_a_file_stays_untitled() {
         app.background_jobs = background;
         for (select, key) in [("images", "images"), ("pages", "pages")] {
             app.open_path(&path).expect("open");
-            let id = dialog(&app).expect("Import PDF asks every time").id;
+            let id = dialog(&app).expect("Import PDF asks every time").0;
             set(&mut app, "select", json!(select));
             set(&mut app, key, json!([if select == "images" { 1 } else { 2 }]));
-            crate::dialogs::confirm(&mut app, id).expect("OK");
+            confirm(&mut app, id).expect("OK");
             for _ in 0..400 {
                 crate::jobs_ui::tick(&mut app, &ctx);
                 if app.jobs.opens.is_empty() && !app.session.has_jobs() {
@@ -328,23 +358,28 @@ fn size_label_prints_three_significant_digits_like_photoshop() {
     assert_eq!(size_label(7000, 7000, "rgb", 8), "140M");
 }
 
+/// A harness drawing the hosted dialogs over `app`.
+fn dialog_harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+    let h = Harness::builder().with_context(app.ctx().clone()).with_size(egui::vec2(1100.0, 800.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            // The app's font families arrive with `setup_context`, after the first frame.
+            if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                return;
+            }
+            crate::dialogs::run(app, ui);
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::AppTheme::studio());
+    h
+}
+
 #[test]
 fn the_dialog_draws_its_controls() {
     let mut app = app();
     app.open_bytes("multi.pdf", &three_pages()).expect("open");
-    let mut h = Harness::builder().with_size(egui::vec2(1100.0, 800.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
-            let ctx = ui.ctx().clone();
-            if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                return;
-            }
-            crate::dialogs::show(app, &ctx);
-        },
-        app,
-    );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    let mut h = dialog_harness(app);
     h.run_steps(6);
-    // The captions are painted manually, so fields need explicit accessible names.
     for label in ["Name:", "Width:", "Height:", "Resolution:"] {
         assert!(h.query_all_by_label(label).next().is_some(), "missing accessible field: {label}");
     }
@@ -362,11 +397,24 @@ fn the_dialog_draws_its_controls() {
         "1 of 3 page(s) selected",
         "Page 1",
     ] {
-        assert!(h.query_by_label(label).is_some(), "missing {label}");
+        assert!(h.query_all_by_label(label).next().is_some(), "missing {label}");
     }
     // The thumbnails were rendered.
-    let st = h.state().pdf_import.first().expect("held");
-    assert!(st.thumbs.iter().all(|s| s.ready().is_some()), "every page has its thumbnail");
+    let held = held(h.state());
+    assert!(lock(&held).thumbs.iter().all(|s| s.ready().is_some()), "every page has its thumbnail");
+}
+
+/// A click on a thumbnail selects that page, as the values say; ⌘/Ctrl-click adds one.
+#[test]
+fn clicking_thumbnails_selects_pages() {
+    let mut app = app();
+    app.open_bytes("multi.pdf", &three_pages()).expect("open");
+    let mut h = dialog_harness(app);
+    h.run_steps(6);
+    h.get_by_label("Page 3").click();
+    h.run_steps(2);
+    assert_eq!(dialog(h.state()).map(|d| d.2["pages"].clone()), Some(json!([3])));
+    assert!(h.query_all_by_label("1 of 3 page(s) selected").next().is_some());
 }
 
 #[test]
@@ -378,7 +426,8 @@ fn a_failed_thumbnail_is_not_retried_and_does_not_hold_back_the_rest() {
     let bytes = pdf(&[(300.0, 300.0, huge), (300.0, 300.0, huge), (300.0, 300.0, huge), (300.0, 300.0, "0 0 1 rg 20 20 260 260 re f")]);
     let mut app = app();
     app.open_file("/tmp/pc-test/bad-thumbs.pdf", &bytes).expect("open");
-    let mut st = app.pdf_import.pop().expect("held");
+    let held = held(&app);
+    let mut st = lock(&held);
     let ctx = egui::Context::default();
     render_thumbs(&mut st, &ctx, false, "small");
     assert!(st.thumbs[..3].iter().all(|s| matches!(s, Slot::Failed)), "the refused pages are recorded");
@@ -401,40 +450,61 @@ fn encrypted_pdf() -> Vec<u8> {
     plain.replace("/Root 1 0 R >>", &format!("/Root 1 0 R {encrypt} >>")).into_bytes()
 }
 
+/// An encrypted PDF asks for its password first; a wrong one is refused with the reason and the
+/// prompt stays up, and Cancel lets the file go.
 #[test]
-fn the_password_prompt_names_its_field() {
+fn an_encrypted_pdf_asks_for_its_password() {
     let bytes = encrypted_pdf();
     assert!(pdf_import::needs_password(&bytes), "the fixture must ask for a password");
     let mut app = app();
     app.open_bytes("locked.pdf", &bytes).expect("open");
-    assert_eq!(dialog(&app).and_then(|d| d.fields.get("__needsPassword")), Some(&json!(true)));
-    let mut h = Harness::builder().with_size(egui::vec2(700.0, 400.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
-            let ctx = ui.ctx().clone();
-            if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                return;
-            }
-            crate::dialogs::show(app, &ctx);
-        },
-        app,
-    );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    let (id, key, _) = dialog(&app).expect("the password dialog");
+    assert!(owns_password(&key), "{key}");
+    set(&mut app, "password", json!("wrong"));
+    assert_eq!(confirm(&mut app, id), Err("That isn't the PDF's password.".to_string()));
+    assert_eq!(dialog(&app).map(|d| d.0), Some(id), "the prompt stays up");
+    assert!(lock(&held(&app)).info.is_none(), "nothing was read");
+    crate::dialogs::testing::cancel(&mut app, id).expect("cancel");
+    assert!(app.pdf_import.is_empty() && dialog(&app).is_none());
+}
+
+#[test]
+fn the_password_prompt_names_its_field() {
+    let mut app = app();
+    app.open_bytes("locked.pdf", &encrypted_pdf()).expect("open");
+    let mut h = dialog_harness(app);
     h.run_steps(4);
-    assert!(h.query_by_label("The PDF is protected by a password.").is_some(), "the password prompt is shown");
-    // The caption next to it is a separate label, so look for the (masked) field itself.
+    assert!(h.query_all_by_label("The PDF is protected by a password.").next().is_some(), "the password prompt is shown");
     let named: Vec<String> = h.query_all_by_role(egui::accesskit::Role::PasswordInput).filter_map(|n| n.accesskit_node().label()).collect();
-    assert!(named.iter().any(|l| l == "Password:"), "the password field has no accessible name: {named:?}");
+    assert!(named.iter().any(|l| l == "Password"), "the password field has no accessible name: {named:?}");
+}
+
+/// The password is masked as it is typed: the field never shows (or tells assistive technology)
+/// the characters.
+#[test]
+fn the_password_field_is_masked() {
+    let mut app = app();
+    app.open_bytes("locked.pdf", &encrypted_pdf()).expect("open");
+    set(&mut app, "password", json!("hunter2"));
+    let mut h = dialog_harness(app);
+    h.run_steps(4);
+    let fields: Vec<_> =
+        h.query_all_by_role(egui::accesskit::Role::PasswordInput).filter(|n| n.accesskit_node().label().as_deref() == Some("Password")).collect();
+    assert_eq!(fields.len(), 1, "one masked password field");
+    let shown = fields[0].accesskit_node().value().unwrap_or_default();
+    assert!(!shown.contains("hunter2"), "the password shows as {shown:?}");
+    assert!(h.query_all_by_label_contains("hunter2").next().is_none(), "no label shows it either");
 }
 
 /// A `pixelSize` side past `u32` keeps `u32::MAX` (the importer's page cap then scales it down
 /// with its warning); `as u32` wrapped 2^32 + 5 to 5 pixels.
 #[test]
 fn an_oversized_pixel_size_is_not_wrapped() {
-    let mut f = Map::new();
-    f.insert("pixelSize".into(), json!([(1u64 << 32) + 5, 600]));
+    let mut f = DialogFields::new();
+    f.set("pixelSize", FieldValue::Json(json!([(1u64 << 32) + 5, 600])));
     assert_eq!(pixel_size_field(&f), Some((u32::MAX, 600)));
     assert_eq!(options(&f, 1, false, None).pixel_size, Some((u32::MAX, 600)));
-    f.insert("pixelSize".into(), json!([800, "tall"]));
+    f.set("pixelSize", FieldValue::Json(json!([800, "tall"])));
     assert_eq!(pixel_size_field(&f), None);
 }
 
@@ -444,7 +514,8 @@ fn an_oversized_pixel_size_is_not_wrapped() {
 fn a_failed_image_listing_keeps_its_error() {
     let mut app = app();
     app.open_bytes("locked.pdf", &encrypted_pdf()).expect("open");
-    let mut st = app.pdf_import.pop().expect("held");
+    let held = held(&app);
+    let mut st = lock(&held);
     render_thumbs(&mut st, &egui::Context::default(), true, "small");
     assert_eq!(st.images.as_ref().map(Vec::len), Some(0));
     let e = st.images_error.as_deref().expect("the listing error is kept");
@@ -466,9 +537,9 @@ fn background_pages_keep_their_order_and_the_drop_slot() {
     }
     app.background_jobs = true;
     app.open_bytes_placed("multi.pdf", &three_pages(), None, Some(1), None).expect("dialog");
-    let id = dialog(&app).unwrap().id;
+    let id = id(&app);
     set(&mut app, "pages", json!([1, 2, 3]));
-    crate::dialogs::confirm(&mut app, id).expect("OK");
+    confirm(&mut app, id).expect("OK");
     let orders: Vec<_> = app.jobs.opens.iter().map(|o| o.order.map(|x| x.seq)).collect();
     assert_eq!(orders, [Some(0), Some(1), Some(2)], "every page is a member of one set, in the chosen order");
     // The decodes finish out of order: the middle page first, then the last, then the first.
@@ -493,22 +564,6 @@ fn background_pages_keep_their_order_and_the_drop_slot() {
     assert!(app.jobs.batches.is_empty(), "the set is forgotten once every page opened");
 }
 
-/// A harness drawing the dialogs over `app`.
-fn dialog_harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
-    let h = Harness::builder().with_size(egui::vec2(1100.0, 800.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
-            let ctx = ui.ctx().clone();
-            if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                return;
-            }
-            crate::dialogs::show(app, &ctx);
-        },
-        app,
-    );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
-    h
-}
-
 /// Under Crop To, a line says what the chosen box keeps, and follows the choice: Bounding Box cuts
 /// a page's blank margins, which surprised a tester expecting the page's full size (#11414).
 #[test]
@@ -517,12 +572,11 @@ fn crop_to_says_what_the_chosen_box_keeps() {
     app.open_bytes("multi.pdf", &three_pages()).expect("open");
     let mut h = dialog_harness(app);
     h.run_steps(4);
-    assert!(h.query_by_label(CropTo::BoundingBox.description()).is_some(), "the default's hint");
-    let id = dialog(h.state()).expect("dialog").id;
-    h.state_mut().ui.dialog_mut(id).expect("dialog").fields.insert("crop".into(), json!("mediaBox"));
+    assert!(h.query_all_by_label(CropTo::BoundingBox.description()).next().is_some(), "the default's hint");
+    set(h.state_mut(), "crop", json!("mediaBox"));
     h.run_steps(2);
-    assert!(h.query_by_label(CropTo::MediaBox.description()).is_some(), "the hint follows the choice");
-    assert!(h.query_by_label(CropTo::BoundingBox.description()).is_none(), "one hint at a time");
+    assert!(h.query_all_by_label(CropTo::MediaBox.description()).next().is_some(), "the hint follows the choice");
+    assert!(h.query_all_by_label(CropTo::BoundingBox.description()).next().is_none(), "one hint at a time");
     let hints: std::collections::HashSet<&str> = CropTo::ALL.iter().map(|c| c.description()).collect();
     assert_eq!(hints.len(), CropTo::ALL.len(), "every choice has its own hint");
 }
@@ -535,7 +589,7 @@ fn crop_to_hint_and_anti_aliased_line_up_with_the_dropdown() {
     app.open_bytes("multi.pdf", &three_pages()).expect("open");
     let mut h = dialog_harness(app);
     h.run_steps(4);
-    let hint = h.query_by_label(CropTo::BoundingBox.description()).expect("the hint").rect();
+    let hint = h.query_all_by_label(CropTo::BoundingBox.description()).next().expect("the hint").rect();
     let combo = h
         .query_all_by_role(egui::accesskit::Role::ComboBox)
         .map(|n| n.rect())
@@ -548,42 +602,23 @@ fn crop_to_hint_and_anti_aliased_line_up_with_the_dropdown() {
         .find(|n| n.accesskit_node().label().as_deref() == Some("Anti-aliased"))
         .expect("the Anti-aliased box")
         .rect();
-    // The named node is the box's label; the 14 px box and 6 px of spacing come before it
-    // (`widgets::checkbox`).
-    let aa_box = aa.left() - 20.0;
-    assert!((aa_box - combo.left()).abs() < 0.5, "Anti-aliased box at x {aa_box} but the dropdown at x {}", combo.left());
+    assert!((aa.left() - combo.left()).abs() < 0.5, "Anti-aliased box at x {} but the dropdown at x {}", aa.left(), combo.left());
 }
 
-/// The password is masked as it is typed: the field never shows (or tells assistive technology)
-/// the characters.
+/// A ⇧-click range starts only from an item of the list shown: an index from Pages must not
+/// start a range among the Images.
 #[test]
-fn the_password_field_is_masked() {
+fn a_range_does_not_start_from_the_other_list() {
     let mut app = app();
-    app.open_bytes("locked.pdf", &encrypted_pdf()).expect("open");
-    set(&mut app, "password", json!("hunter2"));
+    app.open_bytes("pair.pdf", &pair_pdf()).expect("open");
     let mut h = dialog_harness(app);
     h.run_steps(4);
-    let fields: Vec<_> =
-        h.query_all_by_role(egui::accesskit::Role::PasswordInput).filter(|n| n.accesskit_node().label().as_deref() == Some("Password:")).collect();
-    assert_eq!(fields.len(), 1, "one masked password field");
-    let shown = fields[0].accesskit_node().value().unwrap_or_default();
-    assert!(!shown.contains("hunter2"), "the password shows as {shown:?}");
-    assert!(h.query_all_by_label_contains("hunter2").next().is_none(), "no label shows it either");
-}
-
-/// Switching between Pages and Images forgets the ⇧-click anchor: an index from one list must not
-/// start a range in the other.
-#[test]
-fn switching_lists_forgets_the_range_anchor() {
-    let mut app = app();
-    app.open_bytes("multi.pdf", &three_pages()).expect("open");
-    let mut h = dialog_harness(app);
-    h.run_steps(4);
-    h.state_mut().pdf_import[0].anchor = Some(2);
-    h.get_by_label("Pages").click();
+    h.get_by_label("Page 2").click();
     h.run_steps(2);
-    assert_eq!(h.state().pdf_import[0].anchor, Some(2), "clicking the list already shown keeps it");
+    assert_eq!(lock(&held(h.state())).anchor, Some((false, 1)), "the click anchors a range in Pages");
     h.get_by_label("Images").click();
+    h.run_steps(4);
+    h.get_by_label("Image 1").click_modifiers(egui::Modifiers::SHIFT);
     h.run_steps(2);
-    assert_eq!(h.state().pdf_import[0].anchor, None);
+    assert_eq!(dialog(h.state()).map(|d| d.2["images"].clone()), Some(json!([1])), "only the clicked image");
 }
