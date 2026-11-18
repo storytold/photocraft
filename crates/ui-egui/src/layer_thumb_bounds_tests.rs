@@ -84,7 +84,7 @@ fn exr_emission_thumbnail_preserves_light_and_coverage() {
     let source = PhotoThumbs::new(&app, &state.doc);
     let check = |image: egui::ColorImage| {
         assert_eq!(image.size, [16, 4]);
-        for row in image.pixels.chunks_exact(16) {
+        for row in image.pixels.as_chunks::<16>().0 {
             assert_eq!(row[1], Color32::from_rgba_premultiplied(128, 64, 0, 0));
             assert_eq!(row[5], Color32::TRANSPARENT);
             assert_eq!(row[9], Color32::from_rgba_unmultiplied(128, 0, 0, 128));
