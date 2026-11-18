@@ -514,8 +514,6 @@ fn finish(app: &mut PhotocraftApp, answer: PrintAnswer) {
         PrintFinish::Done | _ => photocraft_engine::print_cmds::remember_print(&mut app.session, &print_params(&fields)),
     }
 }
-    }
-}
 
 /// `file.print`'s params from the dialog's fields: a custom paper goes back to `[w, h]` in points,
 /// a named paper stays a name; the custom size rows themselves are not parameters.

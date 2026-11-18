@@ -166,3 +166,14 @@ fn new_adjustment_layer_docs_keep_composed_options_in_front_of_notes() {
     let notes = spec.params.find("(stops").expect("gradientMap notes");
     assert!(plus < notes, "composition must precede notes: {}", spec.params);
 }
+
+/// `gradient.presets.stop` documents `stops` and `transparency` as real keys, not as prose after
+/// `opacity`, so `action: "set"` is accepted and no range is left as prose (#15255).
+#[test]
+fn gradient_presets_stop_documents_the_set_keys() {
+    let spec = crate::commands::find("gradient.presets.stop").expect("registered");
+    let schema = parse(spec.params);
+    assert!(schema.has_key("stops"), "{}", spec.params);
+    assert!(schema.has_key("transparency"), "{}", spec.params);
+    assert!(schema.has_key("opacity"), "{}", spec.params);
+}
