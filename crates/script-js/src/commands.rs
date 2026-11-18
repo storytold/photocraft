@@ -166,6 +166,7 @@ pub const COMMANDS: &[Spec] = &[
             ("opacity", Number(0.0, 1.0), Optional),
             ("fill", Number(0.0, 1.0), Optional),
             ("blend", Enum(BLENDS), Optional),
+            ("locks", Json, Optional),
         ],
     ),
     ("layer.translate", &[("layer", Id, Required), ("dx", Int(-FAR, FAR), Required), ("dy", Int(-FAR, FAR), Required)]),

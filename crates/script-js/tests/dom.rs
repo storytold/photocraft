@@ -146,6 +146,24 @@ fn text_position_reads_in_place_and_sets_from_where_the_text_is() {
     assert_eq!(lines, ["10,50 Other", "30"]);
 }
 
+/// A layer's locks read and set as the layer's own: Lock All, pixels, position and transparent
+/// pixels (which the pixels lock includes, so it stays off while that is on).
+#[test]
+fn layer_locks_are_read_and_set() {
+    let s = session(20, 20);
+    let lines = run(
+        &s,
+        "var l = app.activeDocument.artLayers.add();
+         $.writeln(l.allLocked, l.pixelsLocked, l.positionLocked, l.transparentPixelsLocked);
+         l.allLocked = true; l.positionLocked = true;
+         $.writeln(l.allLocked, l.pixelsLocked, l.positionLocked, l.transparentPixelsLocked);
+         l.allLocked = false; l.pixelsLocked = true; l.transparentPixelsLocked = true;
+         $.writeln(l.allLocked, l.pixelsLocked, l.positionLocked, l.transparentPixelsLocked);
+         var g = app.activeDocument.layerSets.add(); g.allLocked = true; $.writeln(g.allLocked);",
+    );
+    assert_eq!(lines, ["falsefalsefalsefalse", "truefalsetruefalse", "falsetruetruefalse", "true"]);
+}
+
 #[test]
 fn text_layers_are_made_and_edited() {
     let s = session(200, 100);

@@ -74,7 +74,11 @@ in `tests/community.rs`:
 
 Running them first turned up five missing pieces, now added: `app.bringToFront()`, `$.os`, `app`'s
 properties named bare (`activeDocument`, `preferences`), `app.stringIDToTypeID` and
-`doc.suspendHistory`.
+`doc.suspendHistory`. Trying more published scripts by hand added the layer lock properties
+(`allLocked`, `pixelsLocked`, `positionLocked`, `transparentPixelsLocked`) and a list's `selection`
+as an item (`list.selection = 0` selects the first item; reading it gives the item, with `.text`).
+Most of the others tried stop at the Action Manager (`ActionReference`, `executeActionGet`), which
+scripts don't have yet, or at `doc.save()`.
 
 ## Saves and the file system
 
@@ -116,9 +120,9 @@ request. A script that breaks the engine still only breaks its own host process.
 ## Still to do
 
 - Run the tests on macOS and FreeBSD, and by hand on every platform.
-- Text file reads and writes for scripts, within the files the user chose in the run. More
-  community scripts as fixtures, especially ones that use `executeAction` and ScriptUI resource
-  strings.
+- Text file reads and writes for scripts, within the files the user chose in the run. The Action
+  Manager (`ActionReference`, `executeAction`, `executeActionGet`) for the descriptor-based
+  scripts, then more of them as fixtures, and ScriptUI resource strings.
 - Try scripts by hand in a browser. In the browser a run's commands go about one per frame, since
   the page reads the Worker's messages between frames; a shared-memory channel both ways would
   let a frame take several.

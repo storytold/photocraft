@@ -126,6 +126,8 @@ struct Element {
     /// The array its `items` property holds, kept so an added item is appended, not the whole
     /// array rebuilt.
     items_array: Option<JsObject>,
+    /// A list's selected item (its `selection`).
+    selection: Option<JsObject>,
     children: Vec<u32>,
     parent: Option<u32>,
     /// The window this control is in (a window's own id for a window).
@@ -243,6 +245,7 @@ fn create(ctx: &mut Context, kind: Kind, parent: Option<u32>, type_name: &str, t
             obj: obj.clone(),
             items: Vec::new(),
             items_array: None,
+            selection: None,
             children: Vec::new(),
             parent,
             window,
@@ -295,7 +298,12 @@ fn create(ctx: &mut Context, kind: Kind, parent: Option<u32>, type_name: &str, t
         Kind::Dropdown | Kind::ListBox => {
             let items = array(Vec::new(), ctx);
             set(&obj, "items", items, ctx)?;
-            set(&obj, "selection", JsValue::null(), ctx)?;
+            // An accessor, as in ScriptUI: `list.selection = 0` selects the first item, and
+            // `list.selection` is then that item (`.text`, `.index`), not the number.
+            let get = FunctionObjectBuilder::new(ctx.realm(), NativeFunction::from_fn_ptr(selection_get)).name(js_string!("selection")).build();
+            let put = FunctionObjectBuilder::new(ctx.realm(), NativeFunction::from_fn_ptr(selection_set)).name(js_string!("selection")).length(1).build();
+            let desc = boa_engine::property::PropertyDescriptor::builder().get(get).set(put).enumerable(true).configurable(true);
+            obj.define_property_or_throw(js_string!("selection"), desc, ctx)?;
         }
         Kind::Progress | Kind::Slider => {
             set(&obj, "value", 0, ctx)?;
@@ -740,6 +748,32 @@ fn node(ctx: &mut Context, id: u32, depth: usize, budget: &mut usize, special: (
         m.insert("children".into(), Value::Array(kids));
     }
     Ok(Value::Object(m))
+}
+
+/// `list.selection`: the selected item, or `null`.
+fn selection_get(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let id = this_id(this)?;
+    Ok(element(ctx, id, |e| e.selection.clone())?.map_or(JsValue::null(), JsValue::from))
+}
+
+/// `list.selection = x`: one of its items, an item's index, or `null` (none). Anything else
+/// selects nothing. Each item's `selected` follows.
+fn selection_set(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let id = this_id(this)?;
+    let what = args.first().cloned().unwrap_or_default();
+    // Converted before the items are read: a `valueOf` may change the list.
+    let index = if is_item(&what) { None } else { number_of(&what, ctx)?.filter(|n| *n >= 0.0 && n.fract() == 0.0) };
+    let items = element(ctx, id, |e| e.items.clone())?;
+    let chosen = match what.as_object() {
+        Some(o) if is_item(&what) => items.iter().find(|i| JsObject::equals(i, &o)).cloned(),
+        _ => index.and_then(|n| items.get(n as usize).cloned()),
+    };
+    for item in &items {
+        let on = chosen.as_ref().is_some_and(|c| JsObject::equals(c, item));
+        set(item, "selected", on, ctx)?;
+    }
+    element_mut(ctx, id, |e| e.selection = chosen)?;
+    Ok(JsValue::undefined())
 }
 
 /// A list's selected item index: `selection` may be an item or a number.

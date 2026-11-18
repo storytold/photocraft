@@ -526,6 +526,50 @@ fn layer_set_visible(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsR
     set_props(ctx, this, json!({ "visible": v }))
 }
 
+/// Whether the layer's own lock `key` (`all`, `pixels`, `position`, `transparency`) is on. A
+/// layer reports its locks only when one is set.
+fn lock(this: &JsValue, ctx: &mut Context, key: &str) -> JsResult<JsValue> {
+    let (_, _, n, _, _) = node(ctx, this)?;
+    Ok(JsValue::from(n["locks"][key].as_bool().unwrap_or(false)))
+}
+
+fn set_lock(this: &JsValue, args: &[JsValue], ctx: &mut Context, key: &str) -> JsResult<JsValue> {
+    let v = args.first().is_some_and(JsValue::to_boolean);
+    set_props(ctx, this, json!({ "locks": { key: v } }))
+}
+
+fn lock_all(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    lock(this, ctx, "all")
+}
+
+fn set_lock_all(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    set_lock(this, args, ctx, "all")
+}
+
+fn lock_pixels(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    lock(this, ctx, "pixels")
+}
+
+fn set_lock_pixels(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    set_lock(this, args, ctx, "pixels")
+}
+
+fn lock_position(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    lock(this, ctx, "position")
+}
+
+fn set_lock_position(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    set_lock(this, args, ctx, "position")
+}
+
+fn lock_transparency(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    lock(this, ctx, "transparency")
+}
+
+fn set_lock_transparency(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    set_lock(this, args, ctx, "transparency")
+}
+
 /// A stored 0..1 fraction (single precision) as a percentage without float noise.
 fn as_percent(v: Option<f64>) -> f64 {
     (v.unwrap_or(1.0) * 100.0 * 1e4).round() / 1e4
@@ -1518,6 +1562,10 @@ pub(crate) fn install(ctx: &mut Context, app: &JsObject) -> JsResult<()> {
             ("typename", layer_typename, None),
             ("bounds", layer_bounds, None),
             ("isBackgroundLayer", layer_is_background, None),
+            ("allLocked", lock_all, Some(set_lock_all)),
+            ("pixelsLocked", lock_pixels, Some(set_lock_pixels)),
+            ("positionLocked", lock_position, Some(set_lock_position)),
+            ("transparentPixelsLocked", lock_transparency, Some(set_lock_transparency)),
             ("parent", layer_parent, None),
             ("id", layer_id, None),
             ("layers", layer_layers, None),

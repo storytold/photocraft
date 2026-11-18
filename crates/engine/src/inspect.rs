@@ -194,6 +194,11 @@ fn layer_sel(
         }
         _ => {}
     }
+    // The layer's own locks (only when one is set; a group's locks also hold its layers).
+    if l.locks.any() {
+        let k = l.locks;
+        v["locks"] = json!({"transparency": k.transparency, "pixels": k.pixels, "position": k.position, "artboard": k.artboard, "all": k.all});
+    }
     // Advanced Blending › Channels (only when some channel is left out).
     if l.excluded_channels != 0 {
         v["channels"] = json!((0..4).map(|i| l.excluded_channels & (1 << i) == 0).collect::<Vec<_>>());

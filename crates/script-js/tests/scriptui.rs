@@ -633,3 +633,19 @@ fn a_palette_closed_while_it_is_read_is_not_sent_again() {
         assert_eq!(sent, want, "{name}");
     }
 }
+
+/// A list's `selection` is an item, as in ScriptUI: assigning an index selects that item, and
+/// reading it gives the item (`.text`, `.index`), not the number. A bad index selects nothing.
+#[test]
+fn a_list_selection_set_by_index_reads_back_as_the_item() {
+    let src = "var w = new Window('dialog'), d = w.add('dropdownlist', undefined, ['A', 'B', 'C']);
+               $.writeln(d.selection);
+               d.selection = 1;
+               $.writeln(typeof d.selection, ' ', d.selection.text, ' ', d.selection.index, ' ', d.items[1].selected, ' ', d.items[0].selected);
+               d.selection = d.items[2]; $.writeln(d.selection.text, ' ', d.items[1].selected);
+               d.selection = 9; $.writeln(d.selection);
+               d.selection = 0; d.remove(0); $.writeln(d.selection);";
+    let (step, ui) = run(src, vec![], true);
+    assert_eq!(step, Step::Done);
+    assert_eq!(*ui.lines.borrow(), ["null", "object B 1 true false", "C false", "null", "null"]);
+}
