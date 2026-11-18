@@ -2,7 +2,7 @@ use super::*;
 use egui::Color32;
 use serde_json::json;
 
-fn app_with(width: u32, height: u32, background: &str) -> PhotocraftApp {
+fn app_with(width: u32, height: u32, background: &str) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": width, "height": height, "background": background})).unwrap();
     app
@@ -45,7 +45,7 @@ fn pass(source: &impl RasterSource, since: Revision) -> Pass {
 
 /// Runs each case on a fresh document from `setup`: a pass, the event, a second pass, and the second pass's damage
 /// since the first.
-fn check_damage(setup: fn() -> PhotocraftApp, run: fn(&mut PhotocraftApp, &egui::Context, Revision) -> Pass, cases: &[(&str, Step, Want)]) {
+fn check_damage(setup: fn() -> Box<PhotocraftApp>, run: fn(&mut PhotocraftApp, &egui::Context, Revision) -> Pass, cases: &[(&str, Step, Want)]) {
     for (event, step, want) in cases {
         let mut app = setup();
         let ctx = app.ctx().clone();
@@ -277,7 +277,7 @@ fn a_size_changing_preview_lies_centred_on_the_document() {
     let mut h = egui_kittest::Harness::builder()
         .with_size(egui::vec2(1200.0, 900.0))
         .with_context(ctx.clone())
-        .build_ui_state(|ui, app: &mut PhotocraftApp| crate::dialogs::run(app, ui), app);
+        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app);
     h.run_steps(2);
     h.get_by_label("Preview").click();
     h.run_steps(2);

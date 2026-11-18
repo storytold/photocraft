@@ -13,7 +13,7 @@ use crate::canvas::{ToolEvent, tool_event};
 const ERROR: &str = photocraft_engine::hidden_target::HIDDEN;
 
 /// [`app`] with its active layer hidden.
-fn hidden(tool: Tool) -> PhotocraftApp {
+fn hidden(tool: Tool) -> Box<PhotocraftApp> {
     let mut app = app(tool);
     let id = active(&app);
     app.run("layer.setProps", json!({"layer": id, "visible": false})).unwrap();
