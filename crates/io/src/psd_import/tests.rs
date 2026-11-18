@@ -663,11 +663,9 @@ fn oversized_tysh_fallback_remains_type_and_roundtrips_raw_block() {
         assert_eq!(text.psd_raw.as_deref().unwrap().as_slice(), raw);
         let saved = crate::psd_export::document_to_psd(&doc).unwrap();
         let block = saved.layers().iter().find_map(|layer| layer.block(b"TySh")).unwrap();
-        // Layer blocks include a zero pad inside odd lengths for PSD reader compatibility (#200).
-        // No original byte may change; only that required pad may be appended.
-        if raw.len() % 2 == 1 {
-            raw.push(0);
-        }
+        // A type block is padded to a multiple of 4 inside its length, as Photoshop writes it.
+        // No original byte may change; only that pad may be appended.
+        raw.resize(raw.len().next_multiple_of(4), 0);
         assert_eq!(block.data, raw);
     }
 }

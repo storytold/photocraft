@@ -6,8 +6,9 @@
 //! boundary for half of all pattern names.
 
 use craft_psd::PsdFile;
-use photocraft_color::{ColorMode, PixelFormat, SampleType};
-use photocraft_doc::{Adjustment, Document, Fill, Layer, LayerContent, Pattern};
+use photocraft_color::{Color, ColorMode, PixelFormat, SampleType};
+use photocraft_doc::text::{CharStyle, TextRun};
+use photocraft_doc::{Adjustment, Document, Fill, Layer, LayerContent, Path, Pattern, ShapeLayer, ShapeStroke, Subpath, TextLayer, VectorMask};
 use photocraft_geom::{Rect, Size};
 use photocraft_io::*;
 use photocraft_raster::Surface;
@@ -95,5 +96,144 @@ fn legacy_unaligned_gradient_map_is_repaired_on_resave() {
             let again = import("gradient.psd", &bytes).expect("reopen").document;
             assert_eq!(again.layers.last().map(|l| l.content.clone()), expected, "{mode:?} reverse {reverse}: Gradient Map changed on re-save");
         }
+    }
+}
+
+/// A closed polygon of `corners` corners. A path block holds 26-byte records, so its size is
+/// 2 mod 4 for every other corner count. Whole pixels of a 64-px canvas are exact in the PSD's
+/// 8.24 fixed point.
+fn polygon(corners: usize) -> Path {
+    let points: Vec<(f64, f64)> = (0..corners).map(|i| (8.0 + 6.0 * i as f64, if i % 2 == 0 { 8.0 } else { 40.0 })).collect();
+    Path::new(vec![Subpath::polygon(&points)])
+}
+
+fn shape(path: Path, stroke: Option<ShapeStroke>) -> Layer {
+    let mut sh = ShapeLayer { path, fill: Some(Fill::Solid(Color::rgba(0.0, 0.68, 0.93, 1.0))), stroke, ..ShapeLayer::default() };
+    sh.cache = Some(photocraft_vector::render_shape(&sh, PixelFormat::RGBA8, Rect::new(0, 0, 64, 64)));
+    Layer::new("Shape", LayerContent::Shape(sh))
+}
+
+fn masked(path: Path) -> Layer {
+    let mut s = Surface::new(PixelFormat::RGBA8);
+    s.fill_rect(Rect::new(0, 0, 64, 64), &[0.2, 0.4, 0.9, 1.0]);
+    let mut layer = Layer::new("Masked", LayerContent::Raster(s));
+    layer.vector_mask = Some(VectorMask { path, enabled: true, linked: true, density: 1.0, feather: 0.0 });
+    layer
+}
+
+fn type_layer(doc: &Document, text: &str) -> Layer {
+    let style = CharStyle { font_family: "Inter".into(), size_pt: 12.0, ..Default::default() };
+    let mut t = TextLayer { text: text.into(), runs: vec![TextRun { len: text.len(), style }], ..Default::default() };
+    t.sync_summary();
+    photocraft_text::TextEngine::new().render_layer(&mut t, doc.resolution_dpi, doc.pixel_format());
+    Layer::new(text, LayerContent::Text(t))
+}
+
+/// Shapes with and without a stroke, vector masks and type layers, sized so their path, stroke
+/// and type blocks land on every residue modulo 4 before padding.
+fn vector_and_type_doc() -> Document {
+    let mut d = Document::new("v", Size::new(64, 64), ColorMode::Rgb, SampleType::U8);
+    for corners in 3..=6 {
+        d.layers.push(shape(polygon(corners), None));
+        d.layers.push(masked(polygon(corners)));
+    }
+    for width in [1.0, 5.6] {
+        d.layers.push(shape(polygon(4), Some(ShapeStroke { width, ..ShapeStroke::default() })));
+    }
+    for text in ["A", "Ab", "Abc", "Abcd", "One\nTwo"] {
+        let layer = type_layer(&d, text);
+        d.layers.push(layer);
+    }
+    d
+}
+
+fn unaligned(bytes: &[u8]) -> Vec<String> {
+    let file = PsdFile::from_bytes(bytes).expect("reparse");
+    let mut out = Vec::new();
+    for layer in file.layers() {
+        for b in layer.blocks.iter().filter(|b| b.data.len() % 4 != 0) {
+            out.push(format!("layer {:?} block {} is {} bytes", layer.name(), String::from_utf8_lossy(&b.key), b.data.len()));
+        }
+    }
+    out
+}
+
+/// The type and vector blocks of an exported file are padded to 4 bytes like Photoshop's: a shape
+/// path with an odd number of records (`vmsk`), a stroke (`vstk`) and a type layer's `TySh` came
+/// out 2 bytes short of the boundary.
+#[test]
+fn vector_and_type_blocks_are_four_byte_aligned() {
+    let doc = vector_and_type_doc();
+    for path in ["x.psd", "x.psb"] {
+        let bytes = export(&doc, path, &ExportOptions::default()).expect("export").bytes;
+        assert_eq!(unaligned(&bytes), Vec::<String>::new(), "{path}");
+        let file = PsdFile::from_bytes(&bytes).expect("reparse");
+        let count = |key: &[u8; 4]| file.layers().iter().filter(|l| l.block(key).is_some()).count();
+        assert_eq!((count(b"vmsk"), count(b"vstk"), count(b"TySh")), (10, 2, 5), "{path}: the blocks under test are written");
+        // The padding changes nothing a reader sees.
+        let back = import(path, &bytes).expect("reopen").document;
+        for (a, b) in doc.layers.iter().zip(&back.layers) {
+            match (&a.content, &b.content) {
+                (LayerContent::Shape(x), LayerContent::Shape(y)) => {
+                    assert_eq!((&x.path, &x.stroke, &x.fill), (&y.path, &y.stroke, &y.fill), "{path}: {}", a.name)
+                }
+                (LayerContent::Text(x), LayerContent::Text(y)) => assert_eq!(x.text, y.text, "{path}: {}", a.name),
+                (LayerContent::Raster(_), LayerContent::Raster(_)) => {
+                    assert_eq!(a.vector_mask.as_ref().map(|m| &m.path), b.vector_mask.as_ref().map(|m| &m.path), "{path}: {}", a.name)
+                }
+                _ => panic!("{path}: layer {} changed kind", a.name),
+            }
+        }
+    }
+}
+
+/// A file an earlier release saved holds these blocks 2 bytes short. Saving it again pads them,
+/// and the layers read back the same.
+#[test]
+fn legacy_unaligned_vector_and_type_blocks_are_repaired_on_resave() {
+    let doc = vector_and_type_doc();
+    let mut file = PsdFile::from_bytes(&export(&doc, "x.psd", &ExportOptions::default()).expect("export").bytes).expect("reparse");
+    let mut cut = 0;
+    for layer in file.layers_mut().iter_mut() {
+        for key in [b"vmsk", b"vstk", b"TySh"] {
+            // Only the padding this export added: two zero bytes after a 2-mod-4 payload.
+            if let Some(block) = layer.block_mut(key)
+                && block.data.ends_with(&[0, 0])
+                && cut_is_padding(key, &block.data)
+            {
+                let len = block.data.len() - 2;
+                block.data.truncate(len);
+                cut += 1;
+            }
+        }
+    }
+    assert!(cut >= 3, "the fixture has blocks to cut ({cut})");
+    let legacy = file.to_bytes().expect("legacy file");
+    assert_eq!(unaligned(&legacy).len(), cut, "the legacy file holds the unaligned blocks");
+    let reopened = import("x.psd", &legacy).expect("import").document;
+    let bytes = export(&reopened, "x.psd", &ExportOptions::default()).expect("re-save").bytes;
+    assert_eq!(unaligned(&bytes), Vec::<String>::new());
+    let again = import("x.psd", &bytes).expect("reopen").document;
+    for (a, b) in reopened.layers.iter().zip(&again.layers) {
+        assert_eq!(a.vector_mask.as_ref().map(|m| &m.path), b.vector_mask.as_ref().map(|m| &m.path), "{}", a.name);
+        if let (LayerContent::Shape(x), LayerContent::Shape(y)) = (&a.content, &b.content) {
+            assert_eq!((&x.path, &x.stroke), (&y.path, &y.stroke), "{}", a.name);
+        }
+        if let (LayerContent::Text(x), LayerContent::Text(y)) = (&a.content, &b.content) {
+            assert_eq!(x.text, y.text, "{}", a.name);
+        }
+    }
+}
+
+/// Whether the last two bytes of a `key` block are padding: a path block's records are 26 bytes
+/// after its 8-byte header, and the other two blocks are complete without their tail when
+/// writing them again from what they parse to gives the same bytes.
+fn cut_is_padding(key: &[u8; 4], data: &[u8]) -> bool {
+    let body = &data[..data.len() - 2];
+    match key {
+        b"vmsk" => (data.len() - 8) % 26 == 2,
+        b"vstk" => photocraft_io::vector_map::parse_vstk(body, 72.0)
+            .is_some_and(|v| photocraft_io::vector_map::vstk_bytes(v.stroke.as_ref(), v.fill_enabled, 72.0) == body),
+        _ => photocraft_text::psd::parse_tysh(body).and_then(|t| photocraft_text::psd::write_tysh(&t)).is_some_and(|again| again == body),
     }
 }

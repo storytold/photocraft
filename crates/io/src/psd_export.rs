@@ -38,6 +38,15 @@ use smart::{LINK_KEYS, SmartOut, Source, contents_uuid, effects_unchanged, embed
 /// A raster layer never writes them, nor adjustment blocks.
 const RASTER_STALE_KEYS: [&[u8; 4]; 8] = [b"SoCo", b"GdFl", b"PtFl", b"SoLd", b"PlLd", b"SoLE", b"TySh", b"vscg"];
 
+/// The type and vector blocks of a layer record: type (`TySh`), the vector mask or shape path
+/// (`vmsk`/`vsms`), and a shape's stroke, origination and fill content (`vstk`, `vogk`, `vscg`).
+/// Photoshop pads each to a multiple of 4 bytes inside its length (all 5382 layer blocks of the
+/// 258 Photoshop files in the corpus are), and so does this export. Their own sizes are 2 mod 4
+/// as often as not: a path with an odd number of 26-byte records, a descriptor with a name of
+/// odd length. One Photoshop wrote is already padded and stays as it is; one an earlier
+/// release wrote 2 bytes short is repaired when the file is saved again.
+const PADDED_TO_FOUR: [&[u8; 4]; 6] = [b"TySh", b"vmsk", b"vsms", b"vstk", b"vogk", b"vscg"];
+
 /// The largest file written as PSD: past it, the document is saved as PSB (Large Document Format),
 /// as Photoshop does.
 const PSD_MAX_FILE_SIZE: u64 = 2 * 1024 * 1024 * 1024;
@@ -636,7 +645,16 @@ impl Ex<'_> {
             crate::comps_map::set_cmls(&mut raw, crate::comps_map::write_cmls(comps, last.as_ref(), l, id));
         }
         self.layer_xmp_block(l, &mut raw);
-        regenerated.into_iter().chain(raw).map(|(k, d)| TaggedBlock::new(k, d)).collect()
+        regenerated
+            .into_iter()
+            .chain(raw)
+            .map(|(k, mut d)| {
+                if PADDED_TO_FOUR.contains(&&k) {
+                    d.resize(d.len().next_multiple_of(4), 0);
+                }
+                TaggedBlock::new(k, d)
+            })
+            .collect()
     }
 
     /// Writes the layer's XMP packet into its `shmd` block (created when it has none). Import
