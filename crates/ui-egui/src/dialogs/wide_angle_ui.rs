@@ -313,7 +313,7 @@ mod tests {
     }
 
     /// A 160 × 100 grey layer to open the workspace on.
-    fn grey_layer() -> PhotocraftApp {
+    fn grey_layer() -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
         app.run("file.new", json!({"width": 160, "height": 100})).unwrap();
         app.run("layer.new.layer", json!({})).unwrap();

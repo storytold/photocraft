@@ -8,7 +8,7 @@ use photocraft_ui_egui::control::{ControlRequest, Reply, handle};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
-type Harness = egui_kittest::Harness<'static, PhotocraftApp>;
+type Harness = egui_kittest::Harness<'static, Box<PhotocraftApp>>;
 
 fn harness() -> Option<Harness> {
     let built = std::panic::catch_unwind(|| {

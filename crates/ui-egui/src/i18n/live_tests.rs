@@ -36,7 +36,7 @@ fn file_title(lang: Lang) -> String {
         let mut h = egui_kittest::Harness::builder()
             .with_size(egui::vec2(1200.0, 80.0))
             .with_context(app.ctx().clone())
-            .build_ui_state(|ui, app: &mut PhotocraftApp| crate::menus::menu_bar(app, ui), app);
+            .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::menus::menu_bar(app, ui), app);
         h.run_steps(2);
         h.query_all_by_role(Role::MenuItem).next().and_then(|node| node.accesskit_node().label()).expect("the bar's first title")
     })
@@ -189,11 +189,11 @@ fn korean_glyphs_remain_available_after_repeated_language_switches() {
     });
 }
 
-fn harness() -> egui_kittest::Harness<'static, PhotocraftApp> {
+fn harness() -> egui_kittest::Harness<'static, Box<PhotocraftApp>> {
     harness_with_services(Services::default())
 }
 
-fn harness_with_services(services: Services) -> egui_kittest::Harness<'static, PhotocraftApp> {
+fn harness_with_services(services: Services) -> egui_kittest::Harness<'static, Box<PhotocraftApp>> {
     let mut harness = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).with_max_steps(64).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), services);
@@ -331,7 +331,7 @@ fn preferences_preview_does_not_commit_until_applied_and_survives_reload() {
     });
 }
 
-fn drawn_text(h: &egui_kittest::Harness<'_, PhotocraftApp>) -> Vec<String> {
+fn drawn_text(h: &egui_kittest::Harness<'_, Box<PhotocraftApp>>) -> Vec<String> {
     fn collect(shape: &egui::Shape, text: &mut Vec<String>) {
         match shape {
             egui::Shape::Text(shape) => text.push(shape.galley.job.text.clone()),

@@ -46,7 +46,7 @@ mod planted_link {
 
     /// A document with filled layers `a/b:c*?`, `Dup` and `Dup` (bottom to top), plus an empty layer. Its file dialogs
     /// stay open until the test answers them.
-    fn app() -> (PhotocraftApp, Vec<LayerId>, LayerId, Written, Arc<ScriptedFiles>) {
+    fn app() -> (Box<PhotocraftApp>, Vec<LayerId>, LayerId, Written, Arc<ScriptedFiles>) {
         let written = Written::default();
         let capture = written.clone();
         let files = Arc::new(ScriptedFiles::held());

@@ -22,7 +22,7 @@ const MASKS: [Tool; 2] = [Tool::HorizontalTypeMask, Tool::VerticalTypeMask];
 
 /// A committed type layer made with `type_tool` and, active above it, an empty layer, with no
 /// selection and `tool` in hand.
-fn typed(type_tool: Tool, tool: Tool) -> (PhotocraftApp, LayerId) {
+fn typed(type_tool: Tool, tool: Tool) -> (Box<PhotocraftApp>, LayerId) {
     let mut app = new_app();
     app.run("select.deselect", json!({})).unwrap();
     app.ui.tool = type_tool;
@@ -36,7 +36,7 @@ fn typed(type_tool: Tool, tool: Tool) -> (PhotocraftApp, LayerId) {
 }
 
 /// [`typed`] horizontal text, and the point on its glyphs between "T" and "X".
-fn txt(tool: Tool) -> (PhotocraftApp, LayerId, (f64, f64)) {
+fn txt(tool: Tool) -> (Box<PhotocraftApp>, LayerId, (f64, f64)) {
     let (mut app, id) = typed(Tool::Type, tool);
     let y = 185.0;
     let x = (100..200)
@@ -58,17 +58,8 @@ fn layers(app: &PhotocraftApp) -> usize {
     app.session.active().unwrap().doc.layers.len()
 }
 
-/// The test runs on a thread with an 8 MiB stack: its three apps, each run through two full app
-/// frames, overflow the test thread's 2 MiB in an unoptimized Windows build.
 #[test]
 fn a_type_mask_click_on_text_edits_that_layer_as_the_type_tool_does() {
-    let run = std::thread::Builder::new().stack_size(8 << 20).spawn(type_mask_clicks_edit_like_the_type_tool).expect("a test thread");
-    if let Err(panic) = run.join() {
-        std::panic::resume_unwind(panic);
-    }
-}
-
-fn type_mask_clicks_edit_like_the_type_tool() {
     let escape = key(egui::Key::Escape, Modifiers::NONE);
     let mut states = Vec::new();
     for tool in [Tool::Type, Tool::HorizontalTypeMask, Tool::VerticalTypeMask] {

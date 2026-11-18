@@ -4,7 +4,7 @@ use craft::imaging::ui::scopes::ScopePanelState;
 use egui::{Rect, vec2};
 use serde_json::json;
 
-fn app_with(params: Value) -> PhotocraftApp {
+fn app_with(params: Value) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", params).unwrap();
     app
@@ -260,7 +260,7 @@ fn ui_set_drives_the_panel() {
 
 /// A white Background under a black layer, with the Background selected: the entire image is
 /// black, the selected layer white.
-fn black_over_white_background_selected() -> PhotocraftApp {
+fn black_over_white_background_selected() -> Box<PhotocraftApp> {
     let mut app = app_with(json!({"width": 32, "height": 32}));
     app.run("layer.new.layer", json!({})).unwrap();
     app.run("edit.fill", json!({"color": "#000000"})).unwrap();

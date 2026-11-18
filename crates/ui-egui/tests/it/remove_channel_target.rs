@@ -8,7 +8,7 @@ use photocraft_ui_egui::{PhotocraftApp, Services, control};
 
 const REMOVE: &str = r#"{"points":[[12,10],[16,12]],"size":6}"#;
 
-type Harness = egui_kittest::Harness<'static, PhotocraftApp>;
+type Harness = egui_kittest::Harness<'static, Box<PhotocraftApp>>;
 
 fn run(s: &mut Session, id: &str, p: &str) {
     s.execute(id, p.parse().unwrap()).unwrap();

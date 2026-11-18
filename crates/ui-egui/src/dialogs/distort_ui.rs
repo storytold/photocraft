@@ -121,7 +121,7 @@ pub(crate) fn active_filter_target(app: &PhotocraftApp) -> Result<(LayerId, Surf
 pub(crate) mod component_tests {
     use super::*;
 
-    pub fn app(mode: &str, depth: u32) -> PhotocraftApp {
+    pub fn app(mode: &str, depth: u32) -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
         app.run("file.new", json!({"width":64,"height":48,"mode":mode,"depth":depth})).unwrap();
         app.session
@@ -142,7 +142,7 @@ pub(crate) mod component_tests {
         app
     }
 
-    pub fn without_alpha(mut app: PhotocraftApp) -> PhotocraftApp {
+    pub fn without_alpha(mut app: Box<PhotocraftApp>) -> Box<PhotocraftApp> {
         app.session
             .edit("Alpha-less native raster", |doc, id| {
                 let bounds = doc.bounds();

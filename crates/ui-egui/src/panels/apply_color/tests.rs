@@ -9,7 +9,7 @@ use crate::state::Tool;
 const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
 
 /// Two type layers and two shape layers (black, the default colours), all selected.
-fn app(tool: Tool) -> (PhotocraftApp, Vec<LayerId>, Vec<LayerId>) {
+fn app(tool: Tool) -> (Box<PhotocraftApp>, Vec<LayerId>, Vec<LayerId>) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 300, "height": 200})).unwrap();
     app.sync_views();

@@ -13,12 +13,12 @@ type Written = Rc<RefCell<Vec<String>>>;
 
 /// An app with an untitled document, whose file dialogs stay open until the test answers them
 /// (`answer`), and whose writer records the paths it wrote.
-fn app() -> (PhotocraftApp, Arc<ScriptedFiles>, Written) {
+fn app() -> (Box<PhotocraftApp>, Arc<ScriptedFiles>, Written) {
     app_with(Arc::new(ScriptedFiles::held()))
 }
 
 /// [`app`] over `files`, for a test whose dialogs answer themselves.
-fn app_with(files: Arc<ScriptedFiles>) -> (PhotocraftApp, Arc<ScriptedFiles>, Written) {
+fn app_with(files: Arc<ScriptedFiles>) -> (Box<PhotocraftApp>, Arc<ScriptedFiles>, Written) {
     let written: Written = Default::default();
     let w = written.clone();
     let services = Services {
@@ -89,7 +89,7 @@ fn pdn_save_requests_a_native_copy_without_overwriting_the_source() {
 
 /// A real flat JPEG import, optionally edited to contain another layer. A filename without a
 /// path is the web/download case; desktop opens also retain their source location.
-fn jpeg_app(path: Option<&str>, layered: bool) -> (PhotocraftApp, Arc<ScriptedFiles>, Written) {
+fn jpeg_app(path: Option<&str>, layered: bool) -> (Box<PhotocraftApp>, Arc<ScriptedFiles>, Written) {
     let (mut app, files, written) = app();
     let bytes = photocraft_io::export(&app.session.active().unwrap().doc, "My image.JPEG", &Default::default()).unwrap().bytes;
     let doc = photocraft_io::import("My image.JPEG", &bytes).unwrap().document;
@@ -743,7 +743,7 @@ fn an_answer_of_the_wrong_kind_is_an_error_not_a_crash() {
 }
 
 /// The app with a painted layer converted to a smart object and a duplicate instance of it.
-fn smart_app() -> (PhotocraftApp, Arc<ScriptedFiles>, Written, [u64; 2]) {
+fn smart_app() -> (Box<PhotocraftApp>, Arc<ScriptedFiles>, Written, [u64; 2]) {
     let (mut app, files, written) = app();
     app.run("layer.new.layer", json!({})).unwrap();
     app.session
@@ -1253,7 +1253,7 @@ type Qualities = Rc<RefCell<Vec<Option<u8>>>>;
 
 /// [`jpeg_app`] opened from `path` and edited, whose exporter records the JPEG quality of each
 /// save (#2223).
-fn flat_jpeg_app(path: &str) -> (PhotocraftApp, Arc<ScriptedFiles>, Written, Qualities) {
+fn flat_jpeg_app(path: &str) -> (Box<PhotocraftApp>, Arc<ScriptedFiles>, Written, Qualities) {
     let (mut app, files, written) = jpeg_app(Some(path), false);
     let qualities = Qualities::default();
     let q = qualities.clone();

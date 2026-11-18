@@ -38,7 +38,7 @@ fn suggested(files: &ScriptedFiles) -> Vec<String> {
 }
 
 /// An app with no actions and one empty set New Set made, whose Save dialog the fake cancels.
-pub(super) fn empty_set_app(set: &str) -> (PhotocraftApp, Arc<ScriptedFiles>) {
+pub(super) fn empty_set_app(set: &str) -> (Box<PhotocraftApp>, Arc<ScriptedFiles>) {
     let files = Arc::new(ScriptedFiles::answering([Picked::Cancelled]));
     let mut app = super::runner_tests::disk_app(files.clone());
     app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
@@ -56,7 +56,7 @@ fn save_suggestions(set: &str) -> Vec<String> {
 }
 
 /// Load `files` (name, bytes) in one Load Actions… selection; the app and the status bar text.
-fn bulk_load_status(files: Vec<(String, Vec<u8>)>) -> (PhotocraftApp, String) {
+fn bulk_load_status(files: Vec<(String, Vec<u8>)>) -> (Box<PhotocraftApp>, String) {
     let fake = Arc::new(ScriptedFiles::answering([Picked::Contents(files)]));
     let mut app = super::runner_tests::disk_app(fake);
     files::load_dialog(&mut app).unwrap();

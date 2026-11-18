@@ -738,7 +738,7 @@ fn main() -> eframe::Result {
             if let Some(ControlNotice { title, lines }) = control_warning {
                 photocraft_ui_egui::notices::post(&mut app, title, lines, craft::theme::variant::Tone::Neutral, None);
             }
-            Ok(Box::new(app))
+            Ok(app)
         }),
     );
     // The window is gone: refuse further files and free the lock, so a launch that is waiting (or
