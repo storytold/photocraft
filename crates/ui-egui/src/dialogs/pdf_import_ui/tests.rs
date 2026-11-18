@@ -55,7 +55,7 @@ fn write(objs: Vec<Vec<u8>>) -> Vec<u8> {
     out
 }
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     PhotocraftApp::new(
         Session::new(),
         Services {
@@ -359,9 +359,9 @@ fn size_label_prints_three_significant_digits_like_photoshop() {
 }
 
 /// A harness drawing the hosted dialogs over `app`.
-fn dialog_harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+fn dialog_harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     let h = Harness::builder().with_context(app.ctx().clone()).with_size(egui::vec2(1100.0, 800.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        |ui, app: &mut Box<PhotocraftApp>| {
             // The app's font families arrive with `setup_context`, after the first frame.
             if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
