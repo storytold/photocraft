@@ -25,7 +25,7 @@ const TARGETS: [ChannelTarget; 3] = [ChannelTarget::Alpha(0), ChannelTarget::Lay
 const DIALOG_STATE: [&str; 4] = ["preview", "picker", "channel", "clipping"];
 
 /// Build a native-depth document with distinct colour pixels, a named alpha, a layer mask and optional Quick Mask.
-fn fixture(mode: ColorMode, depth: SampleType, target: ChannelTarget) -> PhotocraftApp {
+fn fixture(mode: ColorMode, depth: SampleType, target: ChannelTarget) -> Box<PhotocraftApp> {
     let mut doc = Document::new("Tone targets", Size::new(32, 32), mode, depth);
     let mut pixels = Surface::new(PixelFormat::new(mode, depth, true));
     pixels.fill_rect(
@@ -68,14 +68,14 @@ fn value(app: &PhotocraftApp, target: ChannelTarget) -> f32 {
 }
 
 /// Render real modal controls with accessibility enabled for input-driven assertions.
-fn harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+fn harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     let h = Harness::builder().with_context(app.ctx().clone()).with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| dialogs::run(app, ui), app);
     PhotocraftApp::setup_context(&h.ctx, Default::default());
     h
 }
 
 /// The whole app, canvas included: the pointer requests of a picker's samples reach the canvas pass only here.
-fn canvas_harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+fn canvas_harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     // The app keeps the context it was made on: the harness runs the frames on it, so the canvas the app reads is the one drawn.
     let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(egui::vec2(1200.0, 900.0)).with_max_steps(64).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
@@ -92,29 +92,29 @@ fn canvas_harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
 }
 
 /// Open a neutral tone dialog on `h` and settle its layout before interacting with controls.
-fn open_in(mut h: Harness<'static, PhotocraftApp>, kind: &str) -> Harness<'static, PhotocraftApp> {
+fn open_in(mut h: Harness<'static, Box<PhotocraftApp>>, kind: &str) -> Harness<'static, Box<PhotocraftApp>> {
     adjust_dialog::open(h.state_mut(), &format!("image.adjustments.{kind}")).unwrap();
     h.run_steps(4);
     h
 }
 
 /// Open a neutral tone dialog and settle its layout before interacting with controls.
-fn open(app: PhotocraftApp, kind: &str) -> Harness<'static, PhotocraftApp> {
+fn open(app: Box<PhotocraftApp>, kind: &str) -> Harness<'static, Box<PhotocraftApp>> {
     open_in(harness(app), kind)
 }
 
 /// [`open`] on the whole app, for the tests that sample the canvas.
-fn open_on_canvas(app: PhotocraftApp, kind: &str) -> Harness<'static, PhotocraftApp> {
+fn open_on_canvas(app: Box<PhotocraftApp>, kind: &str) -> Harness<'static, Box<PhotocraftApp>> {
     open_in(canvas_harness(app), kind)
 }
 
 /// The top dialog of the stack.
-fn top(h: &Harness<'static, PhotocraftApp>) -> DialogId {
+fn top(h: &Harness<'static, Box<PhotocraftApp>>) -> DialogId {
     h.state().top_dialog().expect("a dialog is open")
 }
 
 /// One control request through the public channel, then a few frames; the reply is the request's answer.
-fn control(h: &mut Harness<'static, PhotocraftApp>, method: &str, params: Value) -> Value {
+fn control(h: &mut Harness<'static, Box<PhotocraftApp>>, method: &str, params: Value) -> Value {
     let ctx = h.ctx.clone();
     let (request, _reply) = ControlRequest::new(method, params);
     let reply = match handle(h.state_mut(), &ctx, &request) {
@@ -126,19 +126,19 @@ fn control(h: &mut Harness<'static, PhotocraftApp>, method: &str, params: Value)
 }
 
 /// The fields of the top dialog as `ui.inspect` lists them: the typed value beside `preview`, `picker`, `channel` and `clipping`.
-fn fields(h: &Harness<'static, PhotocraftApp>) -> Value {
+fn fields(h: &Harness<'static, Box<PhotocraftApp>>) -> Value {
     let inspected = photocraft_ui_egui::control::inspect(h.state(), &h.ctx);
     inspected["dialogs"].as_array().and_then(|dialogs| dialogs.last()).map(|dialog| dialog["fields"].clone()).unwrap_or(Value::Null)
 }
 
 /// The engine command parameters of the top modal: its value over the parameters it opened with.
-fn params(h: &Harness<'static, PhotocraftApp>) -> Value {
+fn params(h: &Harness<'static, Box<PhotocraftApp>>) -> Value {
     adjust_dialog::command_params(h.state(), top(h))
 }
 
 /// Sets one field of dialog `id`: the dialog's own state (`preview`, `picker`, `channel`, `clipping`) as `ui.dialog.set` does, and any other
 /// key as an engine command parameter laid over the dialog's current parameters.
-fn set(h: &mut Harness<'static, PhotocraftApp>, id: DialogId, field: &str, value: Value) {
+fn set(h: &mut Harness<'static, Box<PhotocraftApp>>, id: DialogId, field: &str, value: Value) {
     if DIALOG_STATE.contains(&field) {
         let reply = control(h, "ui.dialog.set", json!({"dialog": id, "field": field, "value": value}));
         assert_eq!(reply["ok"], true, "{field}: {reply}");
@@ -151,32 +151,32 @@ fn set(h: &mut Harness<'static, PhotocraftApp>, id: DialogId, field: &str, value
 }
 
 /// OK on dialog `id` through the host.
-fn confirm(h: &mut Harness<'static, PhotocraftApp>, id: DialogId) -> Result<(), String> {
+fn confirm(h: &mut Harness<'static, Box<PhotocraftApp>>, id: DialogId) -> Result<(), String> {
     let reply = control(h, "ui.dialog.confirm", json!({"dialog": id}));
     if reply["ok"] == true { Ok(()) } else { Err(reply["error"].as_str().unwrap_or("not confirmed").to_string()) }
 }
 
 /// Cancel on dialog `id` through the host.
-fn cancel(h: &mut Harness<'static, PhotocraftApp>, id: DialogId) {
+fn cancel(h: &mut Harness<'static, Box<PhotocraftApp>>, id: DialogId) {
     let reply = control(h, "ui.dialog.cancel", json!({"dialog": id}));
     assert_eq!(reply["ok"], true, "the dialog cancels: {reply}");
 }
 
 /// The rectangle of the window that draws the dialog's OK button.
-fn dialog_rect(h: &Harness<'static, PhotocraftApp>) -> Option<egui::Rect> {
+fn dialog_rect(h: &Harness<'static, Box<PhotocraftApp>>) -> Option<egui::Rect> {
     let ok = h.query_by_label("OK")?.rect().center();
     let layer = h.ctx.layer_id_at(ok)?;
     h.ctx.memory(|memory| memory.area_rect(layer.id))
 }
 
 /// Read the visible selected labels of the dialog’s channel dropdowns.
-fn names(h: &Harness<'static, PhotocraftApp>) -> Vec<String> {
+fn names(h: &Harness<'static, Box<PhotocraftApp>>) -> Vec<String> {
     let Some(window) = dialog_rect(h) else { return Vec::new() };
     h.query_all_by_role(egui::accesskit::Role::ComboBox).filter(|n| window.contains_rect(n.rect())).filter_map(|n| n.value()).collect()
 }
 
 /// Type into the actual Levels gamma control and blur it to commit the value.
-fn edit_gamma(h: &mut Harness<'static, PhotocraftApp>, gamma: &str) {
+fn edit_gamma(h: &mut Harness<'static, Box<PhotocraftApp>>, gamma: &str) {
     h.get_by_label("Gamma").click();
     h.run_steps(2);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
@@ -188,7 +188,7 @@ fn edit_gamma(h: &mut Harness<'static, PhotocraftApp>, gamma: &str) {
 }
 
 /// Alt turns Cancel into Reset: hold Alt and press the Reset button, as a user does.
-fn reset(h: &mut Harness<'static, PhotocraftApp>) {
+fn reset(h: &mut Harness<'static, Box<PhotocraftApp>>) {
     h.run_steps(2);
     h.event(egui::Event::ModifiersChanged(egui::Modifiers::ALT));
     h.run_steps(2);
@@ -203,18 +203,18 @@ fn reset(h: &mut Harness<'static, PhotocraftApp>) {
 }
 
 /// Arms the tone picker `picker` (`black`, `gray` or `white`) on the top dialog, as `ui.dialog.set` does.
-fn arm(h: &mut Harness<'static, PhotocraftApp>, picker: &str) {
+fn arm(h: &mut Harness<'static, Box<PhotocraftApp>>, picker: &str) {
     let id = top(h);
     set(h, id, "picker", json!(picker));
 }
 
 /// Whether a tone picker is armed on the top dialog.
-fn picker_armed(h: &Harness<'static, PhotocraftApp>) -> bool {
+fn picker_armed(h: &Harness<'static, Box<PhotocraftApp>>) -> bool {
     !fields(h)["picker"].is_null()
 }
 
 /// A canvas press at document point `(x, y)`, as `ui.pointer` makes it; the armed picker samples there.
-fn sample_at(h: &mut Harness<'static, PhotocraftApp>, x: f64, y: f64) {
+fn sample_at(h: &mut Harness<'static, Box<PhotocraftApp>>, x: f64, y: f64) {
     control(h, "ui.pointer", json!({"events": [{"kind": "down", "x": x, "y": y}, {"kind": "up", "x": x, "y": y}]}));
 }
 
@@ -228,12 +228,12 @@ fn add_action(app: &mut PhotocraftApp, name: &str, command: impl Into<String>, p
 }
 
 /// The parameters the first step of the first action is recorded with.
-fn recorded_params(h: &Harness<'static, PhotocraftApp>) -> Value {
+fn recorded_params(h: &Harness<'static, Box<PhotocraftApp>>) -> Value {
     h.state().session.actions.list.to_file().actions[0].steps[0].params.clone()
 }
 
 /// Plays `action` on `h`, which pauses at its dialog.
-fn play(h: &mut Harness<'static, PhotocraftApp>, action: &str) {
+fn play(h: &mut Harness<'static, Box<PhotocraftApp>>, action: &str) {
     h.state_mut().run("actions.play", json!({"action": action})).unwrap();
     h.run_steps(4);
 }
@@ -241,7 +241,7 @@ fn play(h: &mut Harness<'static, PhotocraftApp>, action: &str) {
 /// Seeds the settings the dialog recalls with ⌥, as an earlier OK leaves them.
 /// The last-used settings live in the saved tier under the dialog kind; seeding them directly lets a test store settings an OK would
 /// never write (malformed, address-bearing).
-fn remember_last(h: &Harness<'static, PhotocraftApp>, command: &str, last: Value) {
+fn remember_last(h: &Harness<'static, Box<PhotocraftApp>>, command: &str, last: Value) {
     set_saved_value(&h.ctx, &adjust_dialog::last_key(kind_of(command)), Some(last));
 }
 
@@ -251,7 +251,7 @@ fn kind_of(command: &str) -> &str {
 }
 
 /// The last-used settings of `command`.
-fn remembered(h: &Harness<'static, PhotocraftApp>, command: &str) -> Value {
+fn remembered(h: &Harness<'static, Box<PhotocraftApp>>, command: &str) -> Value {
     saved_value::<Option<Value>>(&h.ctx, &adjust_dialog::last_key(kind_of(command))).unwrap_or(Value::Null)
 }
 
@@ -448,7 +448,7 @@ fn grayscale_picker_controls_sample_the_plane_and_change_the_visible_curve() {
 
 /// Replay a recorded tone step with its dialog enabled while a different channel is selected; `on_canvas` runs the
 /// whole app, for the tests that sample the canvas.
-fn action_dialog(mode: ColorMode, target: Value, panel: ChannelTarget, kind: &str, on_canvas: bool) -> Harness<'static, PhotocraftApp> {
+fn action_dialog(mode: ColorMode, target: Value, panel: ChannelTarget, kind: &str, on_canvas: bool) -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = fixture(mode, SampleType::U8, panel);
     app.run("actions.record", json!({"name": "Tone step"})).unwrap();
     // Imported/serialized steps can carry document-space defaults alongside their explicit
@@ -690,12 +690,12 @@ fn invalid_scalar_action_gray_alias_cannot_commit() {
 }
 
 /// Play an actual recorded modal step while a different scalar channel is selected.
-fn colour_set_action(mode: ColorMode, depth: SampleType, kind: &str, recorded: Value) -> Harness<'static, PhotocraftApp> {
+fn colour_set_action(mode: ColorMode, depth: SampleType, kind: &str, recorded: Value) -> Harness<'static, Box<PhotocraftApp>> {
     colour_set_action_with_selection(mode, depth, kind, recorded, false)
 }
 
 /// Set up selection before playback: a paused Action owns its captured document/history.
-fn colour_set_action_with_selection(mode: ColorMode, depth: SampleType, kind: &str, recorded: Value, feathered: bool) -> Harness<'static, PhotocraftApp> {
+fn colour_set_action_with_selection(mode: ColorMode, depth: SampleType, kind: &str, recorded: Value, feathered: bool) -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = fixture(mode, depth, ChannelTarget::Alpha(0));
     app.session
         .edit("Colour pattern", |doc, _| {
@@ -879,7 +879,7 @@ fn last_tone_settings_on_grayscale_pixels_drop_hidden_colour_records() {
 }
 
 /// Build a filtered smart object with a selected filter mask, optionally still the implicit reveal-all mask.
-fn filter_mask_fixture(mode: ColorMode, depth: SampleType, stored: bool) -> PhotocraftApp {
+fn filter_mask_fixture(mode: ColorMode, depth: SampleType, stored: bool) -> Box<PhotocraftApp> {
     let mut app = fixture(mode, depth, ChannelTarget::Color(0));
     app.session.active_mut().unwrap().channel_view.target = ChannelTarget::Composite;
     app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
@@ -1091,7 +1091,7 @@ fn review_precise_action_settings_survive_last_used_recall() {
 }
 
 /// Build distinct active and addressed masks, retaining the active layer and panel target.
-fn addressed_mask_app(mode: ColorMode, depth: SampleType, filter: bool) -> (PhotocraftApp, photocraft_doc::LayerId) {
+fn addressed_mask_app(mode: ColorMode, depth: SampleType, filter: bool) -> (Box<PhotocraftApp>, photocraft_doc::LayerId) {
     let mut app = if filter { filter_mask_fixture(mode, depth, true) } else { fixture(mode, depth, ChannelTarget::Alpha(0)) };
     let mut other = app.session.active().unwrap().doc.layers[0].clone();
     other.id = Layer::new("id", other.content.clone()).id;
@@ -1169,7 +1169,7 @@ fn review_mask_action_context_matches_the_addressed_layer() {
 }
 
 /// Copy the source document for independent Action cases without carrying modal/UI history.
-fn fixture_for_addressed_replay(app: &PhotocraftApp) -> PhotocraftApp {
+fn fixture_for_addressed_replay(app: &PhotocraftApp) -> Box<PhotocraftApp> {
     let st = app.session.active().unwrap();
     let mut s = Session::new();
     s.add_document((*st.doc).clone(), None);

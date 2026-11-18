@@ -9,7 +9,7 @@ use crate::canvas::testing;
 use crate::shortcut_dispatch::fire_bridged;
 
 /// An app with `count` new documents, the last one active.
-fn app_docs(count: usize) -> PhotocraftApp {
+fn app_docs(count: usize) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     for _ in 0..count {
         app.run("file.new", json!({"width": 100, "height": 50})).unwrap();
