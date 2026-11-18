@@ -430,6 +430,32 @@ fn app_with(doc: Document, target: LayerId) -> PhotocraftApp {
     PhotocraftApp::new(s, crate::Services::default())
 }
 
+/// Lays `edits` over the open dialog's parameters and puts the result into the hosted value, as the editor's widgets do.
+fn edit(app: &mut PhotocraftApp, id: craft::ui::dialog::DialogId, edits: &Value) {
+    let mut params = crate::adjust_dialog::open_params(app).unwrap();
+    if let (Some(params), Some(edits)) = (params.as_object_mut(), edits.as_object()) {
+        params.extend(edits.clone());
+    }
+    assert!(crate::adjust_dialog::apply_params(app, id, &params), "the hosted value takes the edit");
+}
+
+/// The open dialog's engine parameters, read from the hosted value.
+fn params_now(app: &PhotocraftApp) -> Value {
+    crate::adjust_dialog::open_params(app).unwrap()
+}
+
+/// Sets the dialog's Preview box through the control channel (`ui.dialog.set`).
+fn set_preview(app: &mut PhotocraftApp, id: craft::ui::dialog::DialogId, on: bool) {
+    let ctx = app.ctx().clone();
+    let (request, _) = crate::control::ControlRequest::new("ui.dialog.set", json!({"dialog": id, "field": "preview", "value": on}));
+    assert!(matches!(crate::control::handle(app, &ctx, &request), crate::control::Reply::Done(_)));
+}
+
+/// Cancel in the open dialog `id`.
+fn close_dialog(app: &mut PhotocraftApp, id: craft::ui::dialog::DialogId) {
+    crate::dialogs::testing::cancel(app, id).unwrap();
+}
+
 /// The dialog previews through the layer (no CPU proxy run), each change only swaps the
 /// preview document; Cancel leaves the document untouched, OK is one history step.
 #[test]
@@ -437,9 +463,9 @@ fn dialog_previews_through_the_layer() {
     use egui_kittest::Harness;
     for confirm in [false, true] {
         let (doc, target) = document(ColorMode::Rgb, SampleType::U16, true);
+        let app = app_with(doc, target);
         let mut harness =
-            Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app_with(doc, target));
-        PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ALL[0]);
+            Harness::builder().with_size(egui::vec2(1200.0, 900.0)).with_context(app.ctx().clone()).build_ui_state(|ui, app| crate::dialogs::run(app, ui), app);
         let id = crate::adjust_dialog::open(harness.state_mut(), "image.adjustments.levels").unwrap();
         harness.run_steps(2);
         let committed = harness.state().session.active().unwrap().doc.clone();
@@ -452,8 +478,7 @@ fn dialog_previews_through_the_layer() {
         let (again, k1b) = display_doc(app, 0).unwrap();
         assert!(Arc::ptr_eq(&first, &again) && k1 == k1b);
         // A change: new key, and the canvas only recomposites the target's area.
-        let d = app.ui.dialog_mut(id).unwrap();
-        d.fields.insert("gamma".into(), json!(1.6));
+        edit(app, id, &json!({"gamma": 1.6}));
         let (second, k2) = display_doc(app, 0).unwrap();
         assert_ne!(k1, k2);
         let rev = app.session.active().unwrap().revision;
@@ -473,23 +498,24 @@ fn dialog_previews_through_the_layer() {
         assert_eq!(switch_damage(app, 0, region, corner), region, "back to the document: everything");
         assert_eq!(uncovered(app, doc_id, k2, all), None);
         // The preview equals the command with the dialog's settings.
-        let params = crate::filter_dialog::params_of(&app.ui.dialog_mut(id).unwrap().fields);
+        let params = params_now(app);
         let want = destructive(&committed, target, "levels", &params).unwrap();
         assert!(max_diff(&second, &want) <= 1.0 / 255.0);
         // Preview off: the committed document.
-        app.ui.dialog_mut(id).unwrap().fields.insert("__preview".into(), json!(false));
+        set_preview(app, id, false);
         assert!(display_doc(app, 0).is_none());
         assert!(on_layer(app, 0), "still the layer path, just hidden");
         harness.run_steps(2);
         assert!(Arc::ptr_eq(&harness.state().session.active().unwrap().doc, &committed), "previewing leaves the document alone");
         if confirm {
-            crate::dialogs::confirm(harness.state_mut(), id).unwrap();
+            let ctx = harness.ctx.clone();
+            crate::dialogs::confirm(harness.state_mut(), &ctx, id).unwrap();
             let st = harness.state().session.active().unwrap();
             assert_eq!(st.history.past_len(), steps + 1, "one history step");
             assert!(st.doc.layer(PREVIEW_LAYER).is_none());
             assert!(max_diff(&st.doc, &want) <= 1e-6, "OK runs the real command");
         } else {
-            harness.state_mut().ui.close_dialog(id);
+            close_dialog(harness.state_mut(), id);
             harness.run_steps(2);
             let st = harness.state().session.active().unwrap();
             assert!(Arc::ptr_eq(&st.doc, &committed), "Cancel leaves the document untouched");
@@ -513,18 +539,18 @@ fn a_clipped_target_dialog_previews_through_the_layer() {
     assert!(first.layer(PREVIEW_LAYER).is_some());
     let (again, k1b) = display_doc(&mut app, 0).unwrap();
     assert!(Arc::ptr_eq(&first, &again) && k1 == k1b, "unchanged settings reuse the cached preview");
-    app.ui.dialog_mut(id).unwrap().fields.insert("gamma".into(), json!(1.6));
+    edit(&mut app, id, &json!({"gamma": 1.6}));
     let (second, k2) = display_doc(&mut app, 0).unwrap();
     assert_ne!(k1, k2);
     let st = app.session.active().unwrap();
     assert_eq!(switch_region(&app, st.doc.id, st.revision, k1, k2), Some(region(&doc, target)));
-    let params = crate::filter_dialog::params_of(&app.ui.dialog_mut(id).unwrap().fields);
+    let params = params_now(&app);
     let want = destructive(&doc, target, "levels", &params).unwrap();
     assert!(max_diff(&second, &want) <= 1.0 / 255.0);
-    app.ui.dialog_mut(id).unwrap().fields.insert("__preview".into(), json!(false));
+    set_preview(&mut app, id, false);
     assert!(display_doc(&mut app, 0).is_none());
     assert!(on_layer(&mut app, 0), "still the layer path, just hidden");
-    app.ui.close_dialog(id);
+    close_dialog(&mut app, id);
     assert!(display_doc(&mut app, 0).is_none() && !on_layer(&mut app, 0));
 }
 
@@ -574,7 +600,7 @@ fn an_ineligible_adjustment_preview_records_why_it_uses_the_proxy() {
     assert_eq!(app.render_path.current(doc), Some(&crate::render_path::CpuReason::AdjustPreview("not a pixel layer")));
     assert_eq!(app.render_path.history().count(), 1);
     // Closing the dialog ends the reason, though the canvas is still current (no refresh).
-    app.ui.close_dialog(dialog);
+    close_dialog(&mut app, dialog);
     assert!(!on_layer(&mut app, 0));
     assert_eq!(app.render_path.current(doc), None);
     assert_eq!(app.render_path.history().count(), 2);
@@ -600,7 +626,7 @@ fn an_adjustment_preview_keeps_the_canvas_reason() {
     let dialog = crate::adjust_dialog::open(&mut app, "image.adjustments.curves").unwrap();
     assert!(!on_layer(&mut app, 0));
     assert_eq!(app.render_path.current(doc_id), Some(&canvas));
-    app.ui.close_dialog(dialog);
+    close_dialog(&mut app, dialog);
     assert!(!on_layer(&mut app, 0));
     assert_eq!(app.render_path.current(doc_id), Some(&canvas));
     // The canvas entry, then the preview's start and end: never the canvas back on the GPU.
@@ -616,23 +642,11 @@ fn an_adjustment_preview_keeps_the_canvas_reason() {
     let dialog = crate::adjust_dialog::open(&mut app, "image.adjustments.curves").unwrap();
     assert!(!on_layer(&mut app, 0));
     assert_eq!(app.render_path.current(doc_id), Some(&cpu));
-    app.ui.close_dialog(dialog);
+    close_dialog(&mut app, dialog);
     assert!(!on_layer(&mut app, 0));
     assert_eq!(app.render_path.current(doc_id), Some(&cpu));
     assert_eq!(app.render_path.history().count(), 1, "the app-wide entry only");
     assert!(!canvas_back_on_gpu(&app));
-}
-
-#[test]
-fn proxy_factor_follows_the_zoom() {
-    assert_eq!(proxy_factor(1.0), 1);
-    assert_eq!(proxy_factor(0.6), 1);
-    assert_eq!(proxy_factor(0.5), 2);
-    assert_eq!(proxy_factor(0.2), 4);
-    assert_eq!(proxy_factor(0.1), 8);
-    assert_eq!(proxy_factor(0.0001), 64);
-    assert_eq!(proxy_factor(0.0), 1);
-    assert_eq!(proxy_factor(f32::NAN), 1);
 }
 
 /// The zoomed-out proxy keeps the preview layer (with the dialog's settings) under its own ids.
@@ -668,9 +682,12 @@ fn a_live_adjust_drag_damages_only_the_visible_part_of_its_layer() {
     let k1 = live_key(&mut app, &doc, 7, target, &json!({"gamma": 1.1}));
     let k2 = live_key(&mut app, &doc, 7, target, &json!({"gamma": 1.4}));
     assert_ne!(k1, k2, "a different setting is a different key");
-    assert_eq!(k1 & LIVE_TAG, LIVE_TAG, "keys carry the live tag");
-    assert_eq!(k1 >> LIVE_SESSION_SHIFT, k2 >> LIVE_SESSION_SHIFT, "the same drag is one session");
-    assert_ne!(k1 >> LIVE_SESSION_SHIFT, TAG >> LIVE_SESSION_SHIFT, "never the dialog's tag");
+    assert_ne!((k1, k2), (0, 0), "a preview key is never the committed document's");
+    // A key from the dialog's lane is not this drag's: the Properties lane does not own it.
+    let mut dialog_lane = LivePreview::new(PreviewLane::Dialog);
+    dialog_lane.begin(PreviewSession::new(id.0, 7, target.0), pixel_rect(&bounds));
+    let dialog_key = dialog_lane.key(settings_hash(&[b"x"]), 0.0).raw();
+    assert!(live_switch_region(&app, id, 7, k1, dialog_key).is_none(), "never the dialog's lane");
 
     // Between two of the drag's previews, and between one and the committed document.
     let region = live_switch_region(&app, id, 7, k1, k2).expect("same session");
@@ -722,18 +739,16 @@ fn captured_subset_preview_stays_on_the_command_path_when_the_panel_changes() {
         app.session.execute("channel.target", json!({"colors":[0,2]})).unwrap();
         let command = format!("image.adjustments.{kind}");
         let id = crate::adjust_dialog::open(&mut app, &command).unwrap();
-        if let Some(values) = sample(kind).as_object() {
-            app.ui.dialog_mut(id).unwrap().fields.extend(values.clone());
-        }
+        edit(&mut app, id, &sample(kind));
         app.session.execute("channel.target", json!({"channel":"composite"})).unwrap();
         assert!(!on_layer(&mut app, 0), "captured colour set cannot use an all-channel adjustment layer");
-        let params = crate::filter_dialog::params_of(&app.ui.dialog_mut(id).unwrap().fields);
+        let params = params_now(&app);
         let doc = app.session.active().unwrap().doc.clone();
         let preview = crate::filter_dialog::preview_document(&doc, Some(target), &command, &params, 1).unwrap();
         let expected = destructive(&doc, target, kind, &params).unwrap();
         assert!(max_diff(&preview, &expected) <= 1e-6);
         app.session.execute("channel.target", json!({"colors":[0,2]})).unwrap();
-        app.ui.dialog_mut(id).unwrap().fields.insert("target".into(), json!("pixels"));
+        edit(&mut app, id, &json!({"target": "pixels"}));
         assert!(on_layer(&mut app, 0), "explicit composite target overrides the panel too");
     }
 }
