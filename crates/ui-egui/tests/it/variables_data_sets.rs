@@ -4,11 +4,11 @@ use photocraft_ui_egui::PhotocraftApp;
 use photocraft_ui_egui::control::{ControlRequest, Reply};
 use serde_json::{Value, json};
 
-type H = Harness<'static, PhotocraftApp>;
+type H = Harness<'static, Box<PhotocraftApp>>;
 
-fn harness(app: PhotocraftApp) -> H {
+fn harness(app: Box<PhotocraftApp>) -> H {
     let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(egui::vec2(900.0, 700.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        |ui, app: &mut Box<PhotocraftApp>| {
             photocraft_ui_egui::dialogs::run(app, ui);
         },
         app,

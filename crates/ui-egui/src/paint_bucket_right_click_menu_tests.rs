@@ -12,7 +12,7 @@ use crate::canvas::testing;
 use crate::canvas_tool_menu::{self, MenuKind};
 use crate::state::Tool;
 
-fn bucket() -> PhotocraftApp {
+fn bucket() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 64, "height": 64, "background": "white"})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();

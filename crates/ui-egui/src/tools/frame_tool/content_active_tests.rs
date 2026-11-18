@@ -2,7 +2,7 @@
 use super::*;
 use crate::canvas::{ToolEvent, tool_event};
 
-fn app_with_red() -> (PhotocraftApp, LayerId) {
+fn app_with_red() -> (Box<PhotocraftApp>, LayerId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width":600,"height":400})).unwrap();
     let red = app

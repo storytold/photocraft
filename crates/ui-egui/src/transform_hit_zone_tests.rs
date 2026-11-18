@@ -7,7 +7,7 @@ use egui_kittest::Harness;
 use photocraft_doc::LayerId;
 use serde_json::json;
 
-fn move_controls_fixture() -> (Harness<'static, PhotocraftApp>, [LayerId; 2]) {
+fn move_controls_fixture() -> (Harness<'static, Box<PhotocraftApp>>, [LayerId; 2]) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 300, "background": "transparent"})).unwrap();
     let layers = [[60, 60, 80, 60], [230, 150, 40, 40]].map(|rect| {
@@ -22,7 +22,7 @@ fn move_controls_fixture() -> (Harness<'static, PhotocraftApp>, [LayerId; 2]) {
     app.ui.extras.snap = false;
     let ctx = app.ctx().clone();
     let mut h = Harness::builder().with_context(ctx).with_size(vec2(1000.0, 800.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        |ui, app: &mut Box<PhotocraftApp>| {
             egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
         },
         app,
@@ -33,7 +33,7 @@ fn move_controls_fixture() -> (Harness<'static, PhotocraftApp>, [LayerId; 2]) {
 
 /// Delivers one pointer event at the document point `at`: through `ui.pointer` (`control`), which the frames after
 /// the request carry out, or as window input.
-fn move_pointer(h: &mut Harness<'static, PhotocraftApp>, control: bool, kind: &str, [x, y]: [f64; 2]) {
+fn move_pointer(h: &mut Harness<'static, Box<PhotocraftApp>>, control: bool, kind: &str, [x, y]: [f64; 2]) {
     if control {
         let (request, _receiver) = ControlRequest::new("ui.pointer", json!({"events": [{"kind": kind, "x": x, "y": y}]}));
         let ctx = h.ctx.clone();
@@ -57,7 +57,7 @@ fn move_pointer(h: &mut Harness<'static, PhotocraftApp>, control: bool, kind: &s
 
 /// Whether the screen point of the document point `at` lies in the Move controls' press band: the frame grown by
 /// 18 points.
-fn in_press_band(h: &mut Harness<'static, PhotocraftApp>, at: [f64; 2]) -> bool {
+fn in_press_band(h: &mut Harness<'static, Box<PhotocraftApp>>, at: [f64; 2]) -> bool {
     let frame = frame(h.state()).expect("the first layer has visible transform controls");
     let a = crate::canvas::testing::to_screen(h.state_mut(), [frame.x0, frame.y0]);
     let b = crate::canvas::testing::to_screen(h.state_mut(), [frame.x1, frame.y1]);

@@ -11,7 +11,7 @@ use super::{command_states, panel_rows};
 use crate::PhotocraftApp;
 use crate::new_layer_ui::testing::{fields, top};
 
-fn doc_app() -> PhotocraftApp {
+fn doc_app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 32, "height": 24})).unwrap();
     app.run("layer.new.layer", json!({"name": "Ink"})).unwrap();

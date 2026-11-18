@@ -4,7 +4,7 @@ use craft::imaging::ui::scopes::ScopePanelState;
 use egui::{Rect, vec2};
 use serde_json::json;
 
-fn app_with(params: Value) -> PhotocraftApp {
+fn app_with(params: Value) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", params).unwrap();
     app
@@ -260,7 +260,7 @@ fn ui_set_drives_the_panel() {
 
 /// A white Background under a black layer, with the Background selected: the entire image is
 /// black, the selected layer white.
-fn black_over_white_background_selected() -> PhotocraftApp {
+fn black_over_white_background_selected() -> Box<PhotocraftApp> {
     let mut app = app_with(json!({"width": 32, "height": 32}));
     app.run("layer.new.layer", json!({})).unwrap();
     app.run("edit.fill", json!({"color": "#000000"})).unwrap();
@@ -276,8 +276,10 @@ fn cache_levels_one_still_throttles_recounts_and_an_uncached_refresh_does_not() 
     let mut app = app_with(json!({"width": 64, "height": 48}));
     app.run("prefs.set", json!({"path": "performance.cacheLevels", "value": 1})).unwrap();
     settle(&mut app);
-    // The count just landed, so the next edit falls inside the throttle.
-    app.doc_hist.as_mut().unwrap().at = 0.0;
+    // The count just landed, so the next edit falls inside the throttle. Each pass without an input
+    // time moves the context's clock on by one frame, so "just now" is the context's time, not 0.
+    let now = app.ctx().input(|i| i.time) * 1000.0;
+    app.doc_hist.as_mut().unwrap().at = now;
     app.run("edit.fill", json!({"color": "#000000"})).unwrap();
     frame(&mut app);
     assert!(app.hist_job.is_none(), "an edit within 250 ms of the last count waits");
