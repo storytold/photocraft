@@ -297,6 +297,12 @@ fn box_means(v: &[f32], w: usize, h: usize, radii: &[usize]) -> Vec<f32> {
     out
 }
 
+/// On nearly flat HDR patches, rounding the two moments can give a negative variance that
+/// cancels `eps`. A zero slope uses the signal mean when the guide has no measurable variance.
+fn guided_slope(variance: f32, covariance: f32, eps: f32) -> f32 {
+    if variance <= 0.0 { 0.0 } else { covariance / (variance + eps) }
+}
+
 /// Fast guided filter (K. He, J. Sun, *Fast Guided Filter*, arXiv 2015): the linear
 /// coefficients are computed on a `s×` subsampled copy and upsampled bilinearly, which is
 /// visually equivalent for the large radii used by tone controls at a fraction of the cost.
@@ -325,7 +331,13 @@ fn guided_fast(i: &[f32], p: &[f32], w: usize, h: usize, r: usize, eps: f32) -> 
     let ii: Vec<f32> = si.iter().map(|a| a * a).collect();
     let mip = box_mean(&ip, sw, sh, rs);
     let mii = box_mean(&ii, sw, sh, rs);
-    let a: Vec<f32> = (0..sw * sh).map(|k| (mip[k] - mi[k] * mp[k]) / (mii[k] - mi[k] * mi[k] + eps)).collect();
+    let a: Vec<f32> = (0..sw * sh)
+        .map(|k| {
+            let variance = mii[k] - mi[k] * mi[k];
+            let covariance = mip[k] - mi[k] * mp[k];
+            guided_slope(variance, covariance, eps)
+        })
+        .collect();
     let b: Vec<f32> = (0..sw * sh).map(|k| mp[k] - a[k] * mi[k]).collect();
     let (ma, mb) = (box_mean(&a, sw, sh, rs), box_mean(&b, sw, sh, rs));
     let mut out = vec![0.0f32; w * h];
@@ -364,7 +376,7 @@ fn guided(i: &[f32], p: &[f32], w: usize, h: usize, r: usize, eps: f32) -> Vec<f
             let mir = &mi[y * w..(y + 1) * w];
             for k in 0..ar.len() {
                 let var = ar[k] - mir[k] * mir[k];
-                let av = var / (var + eps);
+                let av = guided_slope(var, var, eps);
                 ar[k] = av;
                 br[k] = mir[k] - av * mir[k];
             }
@@ -392,7 +404,9 @@ fn guided(i: &[f32], p: &[f32], w: usize, h: usize, r: usize, eps: f32) -> Vec<f
     crate::photo_util::par_rows2(&mut mip, &mut ii, w, |y, ar, br| {
         let (mir, mpr, miir) = (&mi[y * w..(y + 1) * w], &mp[y * w..(y + 1) * w], &mii[y * w..(y + 1) * w]);
         for k in 0..ar.len() {
-            let av = (ar[k] - mir[k] * mpr[k]) / (miir[k] - mir[k] * mir[k] + eps);
+            let variance = miir[k] - mir[k] * mir[k];
+            let covariance = ar[k] - mir[k] * mpr[k];
+            let av = guided_slope(variance, covariance, eps);
             ar[k] = av;
             br[k] = mpr[k] - av * mir[k];
         }
@@ -979,27 +993,29 @@ fn rank_filter_2d(v: &[f32], sw: usize, sh: usize, r: usize, start: f32, pick: f
     b
 }
 
+/// Brightest dark-channel cells for the atmospheric-light estimate, with ties in raster order.
+fn atmospheric_light_cells(dark: &[f32], top: usize) -> Vec<usize> {
+    let mut indices: Vec<_> = (0..dark.len()).collect();
+    let cmp = |&a: &usize, &b: &usize| dark[b].total_cmp(&dark[a]).then_with(|| a.cmp(&b));
+    if top > 0 && top < indices.len() {
+        indices.select_nth_unstable_by(top - 1, cmp);
+    }
+    indices.truncate(top);
+    indices.sort_unstable_by(cmp);
+    indices
+}
+
 fn dehaze(px: &mut [[f32; 4]], w: usize, h: usize, d: &Dehaze) {
     // Transmission on a ≤ DEHAZE_SIDE px proxy, upsampled.
     let (k, [sw, sh], r, amount) = (d.factor, d.size, d.radius, d.amount);
     let small = haze_cells(px, w, h, d, |q| q);
     let min_filter = |v: &[f32]| rank_filter_2d(v, sw, sh, r, f32::MAX, f32::min);
     let dark = min_filter(&small.iter().map(|c| c[0].min(c[1]).min(c[2])).collect::<Vec<_>>());
-    // Atmospheric light: mean colour of the brightest 0.1 % of the dark channel (ties in the
-    // order of the cells).
-    let mut idx: Vec<usize> = (0..sw * sh).collect();
-    let top = d.top.min(idx.len());
-    if top > 0 {
-        let cmp = |&a: &usize, &b: &usize| dark[b].total_cmp(&dark[a]).then_with(|| a.cmp(&b));
-        if top < idx.len() {
-            idx.select_nth_unstable_by(top - 1, cmp);
-        }
-        idx[..top].sort_unstable_by(cmp);
-    }
+    let cells = atmospheric_light_cells(&dark, d.top);
     let mut air = [0.0f32; 3];
-    for &i in &idx[..top] {
+    for &i in &cells {
         for c in 0..3 {
-            air[c] += small[i][c] / top as f32;
+            air[c] += small[i][c] / cells.len() as f32;
         }
     }
     let air = air.map(|v| v.max(spatial::DEHAZE_AIR_FLOOR));
@@ -1519,6 +1535,25 @@ mod tests {
         assert!(a[0][0] > 2.0);
     }
 
+    #[test]
+    fn luminance_noise_reduction_preserves_hdr_highlights() {
+        let w = 128;
+        let levels = [0.9, 4.0008, 4.0004];
+        let mut px: Vec<_> = levels.into_iter().flat_map(|v| std::iter::repeat_n([v, v, v, 1.0], w)).collect();
+        let p = cr! { noise_luminance: 1.587_580_8 };
+        develop(&mut px, w, levels.len(), &p, true);
+
+        // The last row's f32 variance rounds to -eps. A direct f64 calculation of the
+        // radius-one guided filter and the default 25% detail blend gives these row values.
+        for (row, expected) in px.chunks_exact(w).zip([0.900_000_9, 4.000_734, 4.000_465]) {
+            for pixel in row {
+                for &channel in &pixel[..3] {
+                    assert!((channel - expected).abs() < 1e-5, "expected {expected}, got {channel}");
+                }
+            }
+        }
+    }
+
     /// A Gaussian narrower than 0.3 px has no box radii, so it returns its input unchanged, and
     /// Texture on a proxy that small changes nothing.
     #[test]
@@ -1609,7 +1644,7 @@ mod tests {
                 float_px[y * dw + x] = [f32::NAN, f32::NAN, f32::NAN, 1.0];
             }
         }
-        develop(&mut float_px, dw, dh, &CameraRaw { dehaze: 60.0, ..Default::default() }, true);
+        develop(&mut float_px, dw, dh, &cr! { dehaze: 60.0 }, true);
         for y in 160..dh {
             for x in 200..dw {
                 assert!(float_px[y * dw + x][..3].iter().all(|v| v.is_finite()), "finite pixel poisoned at ({x}, {y}): {:?}", float_px[y * dw + x]);
@@ -1618,7 +1653,7 @@ mod tests {
     }
 
     #[test]
-    fn self_guided_box_means_and_detail_preserve_reference_output() {
+    fn box_means_and_self_guided_filter_match_reference() {
         let ref_box_mean = |v: &[f32], w: usize, h: usize, r: usize| -> Vec<f32> {
             if r == 0 || w == 0 || h == 0 {
                 return v.to_vec();
@@ -1664,14 +1699,41 @@ mod tests {
         for (&g, &e) in ping_pong.iter().zip(&chained) {
             assert_eq!(g.to_bits(), e.to_bits());
         }
+    }
 
-        // Implicit-chroma detail (`noise_color == 0`) matches a tiny-epsilon colour pass when keep=1,
-        // and Dehaze handles tied brightest dark-channel cells deterministically.
-        let mut flat_ties: Vec<[f32; 4]> = (0..w * h).map(|i| if i < 20 { [0.8, 0.7, 0.9, 1.0] } else { [0.8, 0.7, 0.6, 1.0] }).collect();
-        let mut flat_ties_b = flat_ties.clone();
-        let dh = CameraRaw { dehaze: 40.0, sharpen_amount: 55.0, sharpen_masking: 45.0, noise_luminance: 25.0, ..Default::default() };
-        develop(&mut flat_ties, w, h, &dh, false);
-        develop(&mut flat_ties_b, w, h, &dh, false);
-        assert_eq!(flat_ties, flat_ties_b);
+    #[test]
+    fn detail_without_color_nr_matches_explicit_chroma_planes() {
+        let (w, h) = (9, 7);
+        let mut px = img(w, h);
+        let y: Vec<_> = px.iter().map(|q| luma([q[0], q[1], q[2]])).collect();
+        let (cb, cr): (Vec<_>, Vec<_>) = px.iter().zip(&y).map(|(q, &l)| (q[2] - l, q[0] - l)).unzip();
+
+        // At full luminance NR and zero detail, Y is the radius-four guided mean.
+        // Reconstruct RGB from this Y and the two chroma planes saved from the input.
+        let filtered = guided(&y, &y, w, h, 4, 0.06_f32.powi(2) + 1e-6);
+        let expected: Vec<_> = filtered
+            .iter()
+            .enumerate()
+            .map(|(i, &l)| {
+                let (r, b) = (cr[i] + l, cb[i] + l);
+                [r, (l - 0.2126 * r - 0.0722 * b) / 0.7152, b, px[i][3]]
+            })
+            .collect();
+
+        let p = cr! { noise_luminance: 100.0, noise_luminance_detail: 0.0 };
+        develop(&mut px, w, h, &p, true);
+        assert_eq!(px, expected);
+    }
+
+    #[test]
+    fn dehaze_breaks_atmospheric_light_ties_in_raster_order() {
+        let (w, h) = (96, 70);
+        let d = Dehaze::new(&cr! { dehaze: 40.0 }, w, h).unwrap();
+        let mut dark = vec![0.6; w * h];
+        assert_eq!(atmospheric_light_cells(&dark, d.top), [0, 1, 2, 3, 4, 5]);
+
+        dark[100] = 0.8;
+        dark[200] = 0.9;
+        assert_eq!(atmospheric_light_cells(&dark, d.top), [200, 100, 0, 1, 2, 3]);
     }
 }
