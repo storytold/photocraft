@@ -99,11 +99,11 @@ fn automation_workspace(
             continue;
         };
         let opened = if !root.is_absolute() {
-            Err(format!("`{}` is not an absolute path", root.display()))
+            Err(photocraft_automation::AutomationError::BadRequest(format!("`{}` is not an absolute path", root.display())))
         } else if read {
-            workspace.with_read_root(&root).map_err(|e| e.to_string())
+            workspace.with_read_root(&root)
         } else {
-            workspace.with_write_root(&root).map_err(|e| e.to_string())
+            workspace.with_write_root(&root)
         };
         match opened {
             Ok(w) => workspace = w,
