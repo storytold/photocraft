@@ -23,6 +23,7 @@ pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<Opened, AutomationError> {
 
 /// Decode a document that was read through a filesystem capability with custom import options.
 pub fn open_bytes_with_options(name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> Result<Opened, AutomationError> {
+    let opts = &photocraft_io::ImportOptions { camera_profiles: photocraft_io::CameraProfilePolicy::BundledOnly, ..*opts };
     if Path::new(name).extension().is_some_and(|extension| extension.eq_ignore_ascii_case(photocraft_format::EXTENSION)) {
         let document = photocraft_format::load_from_bytes(bytes)?;
         return Ok(Opened { warnings: photocraft_io::open_warnings(&document), document, source_read_only: false });
@@ -34,7 +35,7 @@ pub fn open_bytes_with_options(name: &str, bytes: &[u8], opts: &photocraft_io::I
 /// Open a document from disk. Directory bundles and `.pcraft` ZIPs load
 /// natively; everything else goes through `photocraft-io` (PSD, PNG, …).
 pub fn open(path: &Path) -> Result<Opened, AutomationError> {
-    open_with_options(path, &photocraft_io::ImportOptions::default())
+    open_with_options(path, &photocraft_io::ImportOptions { camera_profiles: photocraft_io::CameraProfilePolicy::Installed, ..Default::default() })
 }
 
 /// Open a document from disk with custom import options.

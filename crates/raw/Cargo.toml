@@ -16,6 +16,7 @@ corpus = []
 
 [dependencies]
 craft-raw.workspace = true
+craft-tiff.workspace = true
 # Synthetic fixture output used only by the retired format-parser tests.
 image = { workspace = true, features = ["jpeg"], optional = true }
 flate2 = { workspace = true, optional = true }

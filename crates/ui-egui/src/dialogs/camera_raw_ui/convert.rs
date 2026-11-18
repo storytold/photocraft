@@ -182,6 +182,10 @@ fn open_session(
         return Err(tl!("RAW Develop is already open").to_string());
     }
     let st = app.session.active().ok_or("no document")?;
+    let profile_notice = raw
+        .as_ref()
+        .and_then(|_| photocraft_io::raw::profile_info(&st.doc))
+        .and_then(|p| p.get("profile").and_then(|v| v.as_str()).map(|p| format!("{}: {p}", tl!("Profile"))));
     let canvas = st.doc.bounds();
     let name = st.doc.layer(layer).map(|l| l.name.clone()).unwrap_or_default();
     // The engine derives the same value for the command (`lens_cmds::camera_raw_cmd`).
@@ -279,6 +283,11 @@ fn open_session(
         }
         // OK is held: a failed filter command keeps the workspace open with its settings.
         app.framework.dialogs.open(HostedWorkspace::new(RawDevelopWorkspace::new(open), dyn_source).held_ok());
+    }
+    if let Some(notice) = profile_notice
+        && let Some(hosted) = hosted_mut(app)
+    {
+        hosted.workspace_mut().status(Some(notice.into()));
     }
     app.raw = Some(RawSession {
         layer,

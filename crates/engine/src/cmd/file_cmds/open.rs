@@ -123,7 +123,11 @@ pub(super) fn close_others(s: &mut Session, p: &Value) -> Result<Value> {
 pub(super) fn revert(s: &mut Session) -> Result<Value> {
     let path = s.active().and_then(|d| d.path.clone()).ok_or(EngineError::Other("the document has never been saved".into()))?;
     let bytes = read_file(&path)?;
-    let fresh = import_opened(s, &file_name(&path), &bytes)?;
+    let mut opts = crate::jobs::import_options(s.prefs());
+    opts.camera_profiles = profile_policy(s, photocraft_io::CameraProfilePolicy::Installed);
+    let mut fresh = import_result_with(&file_name(&path), &bytes, &opts)?;
+    raw_defaults(s, &fresh.warnings, &mut fresh.document);
+    let fresh = fresh.document;
     s.edit("Revert", |doc, active| {
         let (id, name) = (doc.id, doc.name.clone());
         *doc = fresh;
@@ -188,15 +192,33 @@ pub fn open_bytes_as_with_options(
     path: Option<String>,
     approve_high_memory: bool,
 ) -> Result<Value> {
+    open_bytes_as_with_profile_policy(s, name, bytes, as_ext, path, approve_high_memory, photocraft_io::CameraProfilePolicy::BundledOnly)
+}
+
+fn profile_policy(s: &Session, requested: photocraft_io::CameraProfilePolicy) -> photocraft_io::CameraProfilePolicy {
+    s.camera_profile_policy(requested)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn open_bytes_as_with_profile_policy(
+    s: &mut Session,
+    name: &str,
+    bytes: &[u8],
+    as_ext: Option<&str>,
+    path: Option<String>,
+    approve_high_memory: bool,
+    policy: photocraft_io::CameraProfilePolicy,
+) -> Result<Value> {
     crate::allocation::checkpoint("importing document")?;
     let decode_name = match as_ext {
         Some(ext) => format!("{}.{}", stem(name), ext.trim_start_matches('.')),
         None => name.to_string(),
     };
     let mut opts = crate::jobs::import_options(s.prefs());
+    opts.camera_profiles = profile_policy(s, policy);
     opts.psd_high_memory_approved = approve_high_memory;
     opts.psd_approved_estimate = None;
-    let raw = super::raw_open::prepare(s, &decode_name, &file_name(name), path.as_deref(), bytes)?;
+    let raw = super::raw_open::prepare(s, &decode_name, &file_name(name), path.as_deref(), bytes, opts.camera_profiles)?;
     let (r, raw_settings) = if let Some((imported, settings)) = raw {
         (imported, Some(settings))
     } else {
@@ -271,7 +293,8 @@ pub(super) fn open_as(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(EngineError::BadParams { cmd: "file.openAs".into(), msg: format!("\"as\" names no format PhotoCraft reads: {ext:?}") });
     }
     let bytes = read_file(&path)?;
-    let result = open_bytes_as_with_options(s, &path, &bytes, as_ext, Some(path.clone()), approve_high_memory)?;
+    let result =
+        open_bytes_as_with_profile_policy(s, &path, &bytes, as_ext, Some(path.clone()), approve_high_memory, photocraft_io::CameraProfilePolicy::Installed)?;
     remember_batch_open(s);
     Ok(result)
 }

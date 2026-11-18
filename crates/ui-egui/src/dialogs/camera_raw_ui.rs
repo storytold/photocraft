@@ -53,8 +53,8 @@ mod sidecar;
 pub use filmstrip::HeldRaw;
 pub use menu::menu;
 pub use open::{
-    REDEVELOP_JOB, RawOpen, Redevelop, on_redevelop_event, open, open_smart_filter, opened_without_dialog, queue_open_dialog, wants_open_dialog,
-    without_develop_note,
+    REDEVELOP_JOB, RawOpen, Redevelop, on_redevelop_event, open, open_smart_filter, opened_without_dialog, opened_without_dialog_with_policy,
+    queue_open_dialog, queue_open_dialog_with_policy, wants_open_dialog, without_develop_note,
 };
 use open::{Target, non_defaults};
 use proxy::{ProxyBase, ProxyJob};
@@ -504,7 +504,7 @@ pub(crate) fn describe(app: &PhotocraftApp) -> Value {
             Target::SmartFilter(index) => Some(index),
             Target::NewFilter | Target::OpenRaw => None,
         },
-        "openingRaw": session.raw_open.as_ref().map(|r| json!({"name": r.name, "path": r.path, "demosaic": workspace_demosaic(hosted).unwrap_or(r.demosaic).id()})),
+        "openingRaw": session.raw_open.as_ref().map(|r| json!({"name": r.name, "path": r.path, "profile": app.session.documents().iter().find(|d| d.doc.id == r.document).and_then(|d| photocraft_io::raw::profile_info(&d.doc)), "demosaic": workspace_demosaic(hosted).unwrap_or(r.demosaic).id()})),
         "sourceSize": [source.full_w, source.full_h],
         "previewPending": source.pending(),
         "previewApproximate": !detail.ready && (source.pw != source.full_w || source.ph != source.full_h),

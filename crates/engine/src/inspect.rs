@@ -26,6 +26,7 @@ pub fn session(s: &Session) -> Value {
     })
 }
 
+/// Describe document structure, edit state and recorded RAW profile provenance without loading profiles.
 pub fn document(d: &DocState) -> Value {
     document_with(d, false)
 }
@@ -42,6 +43,7 @@ fn document_with(d: &DocState, detail: bool) -> Value {
     let instances = smart_instances(&doc.layers);
     json!({
         "name": doc.name,
+        "rawProfile": photocraft_io::raw::profile_info(doc),
         "path": &d.path,
         "width": doc.size.width,
         "height": doc.size.height,

@@ -21,6 +21,8 @@ pub(crate) enum Target {
 /// Camera Raw step, then marks the document unmodified. Cancel closes it.
 #[derive(Clone, Debug)]
 pub struct RawOpen {
+    /// Authority from the original file reader; never inferred from XMP or provenance.
+    pub camera_profiles: photocraft_io::CameraProfilePolicy,
     pub document: photocraft_doc::DocId,
     pub name: String,
     pub path: Option<String>,
@@ -62,6 +64,20 @@ pub fn queue_open_dialog(
     bytes: Option<&std::sync::Arc<Vec<u8>>>,
     warnings: &[String],
 ) -> Result<(), String> {
+    queue_open_dialog_with_policy(app, document, name, path, bytes, warnings, photocraft_io::CameraProfilePolicy::BundledOnly)
+}
+
+/// Queues an open while retaining the source's camera-profile authority.
+pub fn queue_open_dialog_with_policy(
+    app: &mut PhotocraftApp,
+    document: photocraft_doc::DocId,
+    name: &str,
+    path: Option<&str>,
+    bytes: Option<&std::sync::Arc<Vec<u8>>>,
+    warnings: &[String],
+    camera_profiles: photocraft_io::CameraProfilePolicy,
+) -> Result<(), String> {
+    let camera_profiles = crate::jobs_ui::narrow_profile_policy(app, camera_profiles);
     if document_index(app, document).is_none() {
         return Err("the imported raw document is missing".into());
     }
@@ -72,6 +88,7 @@ pub fn queue_open_dialog(
         return Ok(());
     }
     let raw = RawOpen {
+        camera_profiles,
         document,
         name: name.to_string(),
         path: path.map(str::to_string),
@@ -99,6 +116,11 @@ pub(super) fn open_raw_with(app: &mut PhotocraftApp, ctx: &egui::Context, mut ra
     let index = document_index(app, raw.document).ok_or("the raw document was closed")?;
     app.session.set_active(index);
     let (layer, surf, _) = crate::distort_ui::active_pixels(app)?;
+    let policy = crate::jobs_ui::narrow_profile_policy(app, raw.camera_profiles);
+    if raw.camera_profiles != policy {
+        raw.decoded = None;
+        raw.camera_profiles = policy;
+    }
     attach_decode(&mut raw);
     if let Some((params, original)) = kept {
         return open_raw_pixels(app, ctx, layer, surf, params, RawStart { raw, original: Some(original), auto_tone: false });
@@ -139,7 +161,8 @@ fn attach_decode(raw: &mut RawOpen) {
         _ => None,
     };
     if let Some(b) = file {
-        raw.decoded = photocraft_io::raw::take_kept_decode(&b).or_else(|| photocraft_io::raw::RawDecode::new(&b).ok().map(std::sync::Arc::new));
+        raw.decoded = photocraft_io::raw::take_kept_decode_with_policy(&b, raw.camera_profiles)
+            .or_else(|| photocraft_io::raw::RawDecode::with_policy(&b, raw.camera_profiles).ok().map(std::sync::Arc::new));
     }
 }
 
@@ -224,6 +247,7 @@ pub(super) fn commit_open_raw(app: &mut PhotocraftApp, params: &CameraRaw, raw: 
     };
     app.session.set_active(index);
     let (name, doc_id, decoded) = (raw.name.clone(), raw.document, raw.decoded.clone());
+    let camera_profiles = crate::jobs_ui::narrow_profile_policy(app, raw.camera_profiles);
     let work = move |ctx: &photocraft_engine::jobs::JobCtx| -> photocraft_engine::Result<(photocraft_io::ImportResult, bool)> {
         ctx.progress(0.0, "Reading");
         let bytes = match source {
@@ -238,8 +262,8 @@ pub(super) fn commit_open_raw(app: &mut PhotocraftApp, params: &CameraRaw, raw: 
         ctx.check()?;
         ctx.progress(0.05, "Developing");
         match &decoded {
-            Some(d) => photocraft_io::raw::import_raw_tuned_from(&name, &bytes, &tuning, d),
-            None => photocraft_io::raw::import_raw_tuned(&name, &bytes, &tuning),
+            Some(d) => photocraft_io::raw::import_raw_tuned_from_with_policy(&name, &bytes, &tuning, d, camera_profiles),
+            None => photocraft_io::raw::import_raw_tuned_with_policy(&name, &bytes, &tuning, camera_profiles),
         }
         .map_err(|e| photocraft_engine::EngineError::Other(e.to_string()))
     };
@@ -386,12 +410,24 @@ fn finish_open_raw(
 /// sidecar's settings develop it as the dialog's Open would, and the Camera Raw Defaults apply.
 /// `warnings` are the import's; only a developed raw qualifies.
 pub fn opened_without_dialog(app: &mut PhotocraftApp, index: usize, name: &str, path: Option<&str>, warnings: &[String]) {
+    opened_without_dialog_with_policy(app, index, name, path, warnings, photocraft_io::CameraProfilePolicy::BundledOnly)
+}
+
+pub fn opened_without_dialog_with_policy(
+    app: &mut PhotocraftApp,
+    index: usize,
+    name: &str,
+    path: Option<&str>,
+    warnings: &[String],
+    camera_profiles: photocraft_io::CameraProfilePolicy,
+) {
     if !warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE)) {
         return;
     }
     let Some(document) = app.session.documents().get(index).map(|st| st.doc.id) else { return };
     let method = photocraft_io::raw::developed_demosaic(warnings).unwrap_or_else(|| app.session.prefs().raw_defaults.demosaic.method());
     let mut raw = RawOpen {
+        camera_profiles: crate::jobs_ui::narrow_profile_policy(app, camera_profiles),
         document,
         name: name.to_string(),
         path: path.map(str::to_string),

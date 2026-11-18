@@ -174,3 +174,11 @@ embedded JPEG previews.
 camera-JPEG colour fit, reports ΔE against the embedded JPEG with the neutral fallback and with the
 fit, and can write 1200-pixel sRGB PNGs of both and of the JPEG; `--synthetic` times it on a
 generated 24 MP file.
+
+## DCP calibration
+
+`CameraProfile::from_dcp` parses a bounded, model-bound DNG camera profile;
+`develop_sensor_profile` applies its calibration, HSV maps, exposure offset, look table
+and tone curve. This crate performs no profile discovery or file I/O. The IO layer selects
+user profiles or the nine bundled CC0 profiles; see [camera profiles](../../docs/camera-profiles.md).
+Unsupported processing tags, mismatched cameras and disallowed input usage return errors.

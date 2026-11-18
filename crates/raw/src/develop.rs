@@ -254,15 +254,20 @@ fn normalize(n: [f64; 3]) -> Option<[f64; 3]> {
 /// The camera-space neutral (max component 1) for `opts.white_balance`, as
 /// [`develop_sensor`] uses it (the same white balance [`crate::fit_look`] balances with).
 pub(crate) fn resolve_neutral(s: &Sensor, opts: &DevelopOptions, sc: &Scale, warnings: &mut Vec<String>) -> Result<[f64; 3]> {
+    resolve_neutral_with_color(s, &s.color, opts, sc, warnings)
+}
+
+/// Resolve a normalized camera neutral using the selected calibration and white-balance options.
+/// Missing as-shot data uses grey-world estimation with a warning; invalid multipliers return an error.
+fn resolve_neutral_with_color(s: &Sensor, color: &crate::ColorInfo, opts: &DevelopOptions, sc: &Scale, warnings: &mut Vec<String>) -> Result<[f64; 3]> {
     // Monochrome data has no colour to balance.
     if s.is_monochrome() {
         return Ok([1.0; 3]);
     }
     // White balance: camera-space neutral, max component 1.
-    let as_shot = s
-        .color
+    let as_shot = color
         .as_shot_neutral
-        .or_else(|| s.color.as_shot_white_xy.and_then(|xy| s.color.xy_to_neutral(xy)))
+        .or_else(|| color.as_shot_white_xy.and_then(|xy| color.xy_to_neutral(xy)))
         .or_else(|| s.camera_wb.map(|m| m.map(|v| 1.0 / v)))
         .and_then(normalize);
     Ok(match opts.white_balance {
@@ -288,6 +293,24 @@ pub fn develop_sensor(s: &Sensor, opts: &DevelopOptions) -> Result<Developed> {
 /// [`develop_sensor`]; `allow_fused` false keeps the full-frame path (what the tests compare the
 /// fused one against).
 fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Developed> {
+    develop_profile(s, opts, allow_fused, None)
+}
+
+/// Develops with a validated model-matched DCP, retaining the fused band pipeline.
+pub fn develop_sensor_profile(s: &Sensor, opts: &DevelopOptions, profile: Option<&crate::CameraProfile>) -> Result<Developed> {
+    develop_profile(s, opts, true, profile)
+}
+
+fn develop_profile(s: &Sensor, opts: &DevelopOptions, allow_fused: bool, profile: Option<&crate::CameraProfile>) -> Result<Developed> {
+    let mut color_info = std::borrow::Cow::Borrowed(&s.color);
+    if let Some(profile) = profile {
+        profile.validate(s)?;
+        if s.is_monochrome() || opts.camera_look.is_some() {
+            return Err(RawError::unsupported("DCP cannot be combined with a monochrome sensor or a supplied camera look"));
+        }
+        color_info.to_mut().calibrations.clone_from(&profile.calibrations);
+    }
+    let black_point = if profile.is_some() { 0.0 } else { s.black_point };
     let c = s.crop;
     let samples = s.width.checked_mul(s.height).and_then(|n| n.checked_mul(s.samples));
     if c.is_empty()
@@ -316,13 +339,16 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
     // The default rendering (no Dehaze, no local tone, no black point) needs no statistic of
     // the whole frame: demosaic and encode band by band, with no full RGB frame (the same
     // condition under which `Haze::new` and `ToneMap::new` return `None`).
-    let fused = allow_fused && opts.tone.is_neutral() && s.black_point <= 0.0;
+    let fused = allow_fused && opts.tone.is_neutral() && black_point <= 0.0;
     let orient_copy = opts.orient && (2..=8).contains(&s.orientation);
     let jobs = working_memory(c.width, c.height, s.cfa.is_some(), bayer, Shape { fused, orient_copy }, opts, par::workers())?;
     let mut warnings = s.warnings.clone();
+    if profile.is_some() {
+        warnings.retain(|w| w != "the DNG has no colour matrix; colours are approximate");
+    }
     let sc = Scale::new(s);
 
-    let neutral = resolve_neutral(s, opts, &sc, &mut warnings)?;
+    let neutral = resolve_neutral_with_color(s, &color_info, opts, &sc, &mut warnings)?;
     let mult = neutral.map(|v| (1.0 / v) as f32);
 
     // Balanced camera → XYZ D50: a look fitted to the camera's JPEG, the file's calibration,
@@ -333,7 +359,7 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
     if opts.camera_look.is_some() && look.is_none() && !mono {
         warnings.push("the supplied camera look is not usable (non-finite or singular); ignored".into());
     }
-    let to_xyz: Mat3 = match (look, s.color.balanced_to_xyz_d50(neutral)) {
+    let to_xyz: Mat3 = match (look, color_info.balanced_to_xyz_d50(neutral)) {
         (Some(l), _) => {
             warnings.push(l.note());
             l.to_xyz
@@ -346,8 +372,9 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
             color::srgb_to_xyz_d50()
         }
     };
-    let gain = 2f64.powf(s.baseline_exposure + opts.exposure.clamp(-10.0, 10.0));
-    let out_m = color::scale(&color::mul(&color::xyz_d50_to_prophoto(), &to_xyz), gain);
+    let gain = 2f64.powf(s.baseline_exposure + profile.map_or(0.0, |p| p.exposure_offset) + opts.exposure.clamp(-10.0, 10.0));
+    let prepared_profile = profile.map(|p| p.prepare(&color_info, neutral, gain as f32));
+    let out_m = color::scale(&color::mul(&color::xyz_d50_to_prophoto(), &to_xyz), if profile.is_some() { 1.0 } else { gain });
     let out_m: [[f32; 3]; 3] = out_m.map(|r| r.map(|v| v as f32));
 
     // Neutral grey through `out_m`: the gain alone (the matrix maps camera white to ProPhoto
@@ -360,10 +387,14 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
     let y_row = color::rgb_to_xyz(color::ROMM, color::D50_XY)[1].map(|v| v as f32);
     let lum = |v: &[f32; 3]| y_row[0] * v[0] + y_row[1] * v[1] + y_row[2] * v[2];
     // Monochrome: the one sample, grey; no colour matrix.
-    let pro = |p: &[f32]| if mono { [grey_gain * p[0]; 3] } else { [0, 1, 2].map(|k| out_m[k][0] * p[0] + out_m[k][1] * p[1] + out_m[k][2] * p[2]) };
-    let lut = match look {
-        Some(l) => GammaLut::with_tone(l.tone.as_ref()),
-        None => GammaLut::with_curve(&s.tone_curve),
+    let pro = |p: &[f32]| {
+        let v = if mono { [grey_gain * p[0]; 3] } else { [0, 1, 2].map(|k| out_m[k][0] * p[0] + out_m[k][1] * p[1] + out_m[k][2] * p[2]) };
+        prepared_profile.as_ref().map_or(v, |profile| profile.render_color(v))
+    };
+    let lut = match (profile, look) {
+        (Some(_), _) => GammaLut::with_curve(&[]),
+        (None, Some(l)) => GammaLut::with_tone(l.tone.as_ref()),
+        (None, None) => GammaLut::with_curve(&s.tone_curve),
     };
     // The default rendering: matrix then encode, in blocks so the encode's clamp and square root
     // run over whole slices.
@@ -372,7 +403,8 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
         for (oc, sc) in dst.chunks_mut(ENCODE_BLOCK).zip(src.chunks(ENCODE_BLOCK)) {
             let n = sc.len();
             for (t, p) in buf[..n].as_chunks_mut::<3>().0.iter_mut().zip(sc.as_chunks::<3>().0) {
-                *t = pro(p);
+                let v = pro(p);
+                *t = prepared_profile.as_ref().map_or(v, |profile| profile.render_tone(v));
             }
             lut.encode_into(&buf[..n], oc);
         }
@@ -533,11 +565,11 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
                 let v = pro(p);
                 haze.as_ref().map_or(v, |z| z.apply(i % w, i / w, v))
             };
-            let mut map = ToneMap::new(w, h, |i| lum(&linear(i, &rgb[i * 3..i * 3 + 3])), opts.tone, s.black_point);
+            let mut map = ToneMap::new(w, h, |i| lum(&linear(i, &rgb[i * 3..i * 3 + 3])), opts.tone, black_point);
             if let (Some(m), Some(_)) = (&mut map, &haze) {
                 // The black point belongs to the default rendering: Dehaze does not move it (taken after
                 // Dehaze it fell to almost 0, and Dehaze darkened less than Photoshop's).
-                m.black = black_level(w, h, |i| lum(&pro(&rgb[i * 3..i * 3 + 3])), s.black_point);
+                m.black = black_level(w, h, |i| lum(&pro(&rgb[i * 3..i * 3 + 3])), black_point);
             }
             let mut out = vec![0u16; w * h * 3];
             let plain = map.is_none() && haze.is_none();
@@ -556,6 +588,7 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
                         // deepest shadows' contrast.
                         v = v.map(|c| m.unblack(c) * g);
                     }
+                    let v = prepared_profile.as_ref().map_or(v, |profile| profile.render_tone(v));
                     for k in 0..3 {
                         o[k] = lut.encode(v[k]);
                     }
@@ -913,6 +946,30 @@ mod tests {
             let fused = with_threads(threads, || develop(s, opts, true).unwrap());
             assert_eq!((full.width, full.height), (fused.width, fused.height), "{what} {threads}");
             assert!(full.rgb == fused.rgb, "{what} {threads} threads: fused output differs");
+        }
+    }
+
+    #[test]
+    fn dcp_fused_development_matches_full_frame() {
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        flate2::read::GzDecoder::new(include_bytes!("../../../assets/camera-profiles/profiles/Canon EOS RP.dcp.gz").as_slice())
+            .read_to_end(&mut bytes)
+            .unwrap();
+        let profile = crate::CameraProfile::from_dcp(&bytes).unwrap();
+        for cfa in [crate::Cfa::bayer("RGGB"), None] {
+            let samples = if cfa.is_some() { 1 } else { 3 };
+            let mut sensor = test_sensor(67, 45, cfa, samples);
+            sensor.model = Some("Canon EOS RP".into());
+            sensor.orientation = 6;
+            sensor.black_point = 0.5; // The DCP owns black rendering; no full-frame black statistic.
+            for demosaic in [Demosaic::Ahd, Demosaic::Bilinear, Demosaic::Mhc] {
+                let opts = DevelopOptions { demosaic, exposure: 0.5, ..Default::default() };
+                let full = develop_profile(&sensor, &opts, false, Some(&profile)).unwrap();
+                let fused = develop_profile(&sensor, &opts, true, Some(&profile)).unwrap();
+                assert_eq!(full.rgb, fused.rgb, "{demosaic:?}, {samples} samples");
+                assert_eq!((full.width, full.height), (fused.width, fused.height));
+            }
         }
     }
 

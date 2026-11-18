@@ -83,6 +83,20 @@ impl PhotocraftApp {
         slot: Option<usize>,
         order: Option<crate::jobs_ui::OpenOrder>,
     ) -> Result<Vec<String>, String> {
+        self.open_bytes_placed_with_policy(name, bytes, path, slot, order, photocraft_io::CameraProfilePolicy::BundledOnly)
+    }
+
+    /// Only a trusted local reader opts byte input into installed profiles.
+    pub(crate) fn open_bytes_placed_with_policy(
+        &mut self,
+        name: &str,
+        bytes: &[u8],
+        path: Option<&str>,
+        slot: Option<usize>,
+        order: Option<crate::jobs_ui::OpenOrder>,
+        camera_profiles: photocraft_io::CameraProfilePolicy,
+    ) -> Result<Vec<String>, String> {
+        let camera_profiles = jobs_ui::narrow_profile_policy(self, camera_profiles);
         if let Some(r) = preset_files_ui::open(self, name, bytes) {
             return r.map(|()| Vec::new());
         }
@@ -90,11 +104,12 @@ impl PhotocraftApp {
         // Decoded on a worker: a tab with progress appears now, the document when it's ready
         // (warnings are shown then).
         if self.background_jobs {
-            jobs_ui::start_open(self, name, path.map(str::to_string), jobs_ui::bytes(bytes), slot, order)?;
+            jobs_ui::start_open_with_policy(self, name, path.map(str::to_string), jobs_ui::bytes(bytes), slot, order, camera_profiles)?;
             return Ok(Vec::new());
         }
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
         let opts = photocraft_io::ImportOptions {
+            camera_profiles,
             keep_raw: self.session.prefs().raw_defaults.open_in_camera_raw,
             ..photocraft_engine::jobs::import_options(self.session.prefs())
         };
@@ -103,7 +118,9 @@ impl PhotocraftApp {
         // TIFF's high-memory decision can raise its prompt instead of becoming a terminal
         // string. Every other format keeps the shell's import service. `detect` gets no name:
         // given one it falls back to the extension, and a `.tif` name alone is no TIFF.
-        let typed_open = photocraft_io::is_psd(bytes) || photocraft_formats::detect("", bytes) == Some(photocraft_formats::Format::Tiff);
+        let typed_open = photocraft_io::raw::is_raw(bytes)
+            || photocraft_io::is_psd(bytes)
+            || photocraft_formats::detect("", bytes) == Some(photocraft_formats::Format::Tiff);
         let (mut doc, warnings, damaged) = if typed_open {
             // Read PSD damage as structured information in the same decode, not by
             // retrying an error or matching the text of a compatibility warning. A TIFF never
@@ -111,7 +128,7 @@ impl PhotocraftApp {
             let (r, damaged) = match photocraft_io::import_for_open(name, bytes, &opts) {
                 Ok(result) => result,
                 Err(photocraft_io::IoError::PsdApprovalRequired { .. }) => {
-                    jobs_ui::start_open(self, name, path.map(str::to_string), jobs_ui::bytes(bytes), slot, order)?;
+                    jobs_ui::start_open_with_policy(self, name, path.map(str::to_string), jobs_ui::bytes(bytes), slot, order, camera_profiles)?;
                     return Ok(Vec::new());
                 }
                 Err(error) => return Err(error.to_string()),
@@ -134,13 +151,14 @@ impl PhotocraftApp {
         open_prompt::arrive(
             self,
             open_prompt::Held {
+                camera_profiles,
                 doc,
                 read_only: photocraft_io::affinity::is_affinity(bytes),
                 damage_pending: damaged,
                 name: name.to_string(),
                 path: path.map(str::to_string),
                 warnings: warnings.clone(),
-                bytes: (wants_raw && path.is_none()).then(|| std::sync::Arc::new(bytes.to_vec())),
+                bytes: wants_raw.then(|| std::sync::Arc::new(bytes.to_vec())),
                 slot,
                 order,
                 question,
@@ -181,7 +199,12 @@ impl PhotocraftApp {
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
         let mut opts = photocraft_engine::jobs::import_options(self.session.prefs());
         opts.psd_high_memory_approved = approved;
-        let (mut doc, warnings) = import(name, bytes, &opts)?;
+        let (mut doc, warnings) = if photocraft_io::raw::is_raw(bytes) {
+            let r = photocraft_io::import_with_options(name, bytes, &opts).map_err(|e| e.to_string())?;
+            (r.document, r.warnings)
+        } else {
+            import(name, bytes, &opts)?
+        };
         photocraft_engine::file_cmds::raw_defaults(&self.session, &warnings, &mut doc);
         // The caller records the path it read from.
         self.session.add_document(doc, None);

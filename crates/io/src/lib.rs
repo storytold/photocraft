@@ -76,8 +76,10 @@ mod psd_export;
 mod psd_gate;
 mod psd_import;
 pub use psd_budget::{DEFAULT_PSD_IMPORT_PIXEL_BYTES, PsdMemoryEstimate, estimate as estimate_psd_memory};
+mod import_options;
 pub mod psd_thumbnail;
 pub mod raw;
+pub use import_options::CameraProfilePolicy;
 pub mod renderer;
 pub use renderer::{BandRenderer, CpuRenderer, RenderBand, RenderError};
 pub mod slices_map;
@@ -580,6 +582,8 @@ pub fn import_with_svg_group_depth_and_interrupt(
 /// The user's settings that shape an import.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ImportOptions {
+    /// Profile sources authorized by the caller, never inferred from file metadata.
+    pub camera_profiles: CameraProfilePolicy,
     /// SVG groups nested deeper than this are rasterised.
     pub max_group_depth: usize,
     /// The demosaic method camera raws are developed with.
@@ -617,6 +621,7 @@ pub struct ImportOptions {
 impl Default for ImportOptions {
     fn default() -> Self {
         ImportOptions {
+            camera_profiles: CameraProfilePolicy::BundledOnly,
             max_group_depth: photocraft_doc::MAX_GROUP_DEPTH,
             demosaic: raw::Demosaic::default(),
             keep_raw: false,
@@ -1034,13 +1039,7 @@ fn import_stages(
         Route::Xcf => xcf::import(name, bytes, ctl),
         Route::GzippedXcf => xcf::import(name, &xcf::gunzip(bytes)?, ctl),
         Route::Pdn => pdn::import(name, bytes, ctl),
-        Route::Raw => {
-            if opts.keep_raw {
-                raw::import_raw_demosaic_keeping(name, bytes, opts.demosaic)
-            } else {
-                raw::import_raw_demosaic(name, bytes, opts.demosaic)
-            }
-        }
+        Route::Raw => raw::import_raw_demosaic_with_policy(name, bytes, opts.demosaic, opts.keep_raw, opts.camera_profiles),
         Route::Svg => svg::import_svg_with_group_depth(name, bytes, opts.max_group_depth),
         Route::Flat => flat::import_flat_with_options(name, bytes, opts, ctl),
     }

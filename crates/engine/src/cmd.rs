@@ -269,6 +269,7 @@ fn registry() -> &'static Registry {
 
 // ---------- the table ----------
 
+/// Build the ordered engine command catalog from built-ins and feature modules.
 #[allow(clippy::too_many_lines)]
 /// Register the core file, edit, layer and document commands.
 fn build() -> Vec<CommandSpec> {
@@ -1409,6 +1410,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::stamp_cmds::specs());
     v.extend(crate::align_cmds::specs());
     v.extend(crate::photo_cmds::specs());
+    v.extend(crate::raw_profile_cmds::specs());
     v.extend(crate::lens_cmds::specs());
     v.extend(crate::vp_cmds::specs());
     v.extend(crate::channel_cmds::specs());

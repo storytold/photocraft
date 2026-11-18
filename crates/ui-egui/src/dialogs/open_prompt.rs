@@ -28,6 +28,7 @@ pub(crate) struct MemoryTag {
 
 /// A file read and decoded, waiting to open.
 pub struct Held {
+    pub camera_profiles: photocraft_io::CameraProfilePolicy,
     pub doc: Document,
     /// The source is read-only (an Affinity file): Save doesn't write back to it.
     pub read_only: bool,
@@ -361,7 +362,8 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
     if held.damage_pending {
         return Err("damaged PSD cannot be opened before confirmation".into());
     }
-    let Held { mut doc, read_only, damage_pending: _, name, path, warnings, bytes, slot, order, question, policy_applied, smart_object } = held;
+    let Held { camera_profiles, mut doc, read_only, damage_pending: _, name, path, warnings, bytes, slot, order, question, policy_applied, smart_object } =
+        held;
     let index = if question.is_some() || policy_applied {
         if let Some(action) = action
             && let Err(e) = app.session.color.resolve_open(&mut doc, action)
@@ -394,7 +396,7 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
         None => index,
     };
     app.session.set_active(index);
-    crate::jobs_ui::after_open(app, document, &name, path.as_deref(), &warnings, bytes.as_ref())?;
+    crate::jobs_ui::after_open_with_policy(app, document, &name, path.as_deref(), &warnings, bytes.as_ref(), camera_profiles)?;
     Ok(json!({"document": index, "action": action}))
 }
 
@@ -488,13 +490,29 @@ pub(crate) fn answer_memory(app: &mut PhotocraftApp, accept: bool) -> Result<Val
         Ok(r) => {
             if accept {
                 if let Some(job) = r.get("job").and_then(Value::as_u64) {
-                    app.jobs.opens.push(crate::jobs_ui::OpenTab { job: photocraft_engine::jobs::JobId(job), name: name.clone(), path, slot, order });
+                    app.jobs.opens.push(crate::jobs_ui::OpenTab {
+                        raw_bytes: None,
+                        camera_profiles: photocraft_io::CameraProfilePolicy::BundledOnly,
+                        job: photocraft_engine::jobs::JobId(job),
+                        name: name.clone(),
+                        path,
+                        slot,
+                        order,
+                    });
                     app.jobs.focus = Some(photocraft_engine::jobs::JobId(job));
                     app.ui.chrome.home = None;
                     app.ui.status = crate::i18n::fmt(tl!("Opening {name}…"), &[("name", &name)]);
                     app.ui.status_error = false;
                 } else if let Some(result) = r.get("result") {
-                    let tab = crate::jobs_ui::OpenTab { job: photocraft_engine::jobs::JobId(0), name: name.clone(), path: path.clone(), slot, order };
+                    let tab = crate::jobs_ui::OpenTab {
+                        raw_bytes: None,
+                        camera_profiles: photocraft_io::CameraProfilePolicy::BundledOnly,
+                        job: photocraft_engine::jobs::JobId(0),
+                        name: name.clone(),
+                        path: path.clone(),
+                        slot,
+                        order,
+                    };
                     if let Err(e) = crate::jobs_ui::finish_open_tab(app, &tab, result) {
                         app.ui.status = e;
                         app.ui.status_error = true;

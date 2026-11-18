@@ -61,7 +61,14 @@ fn auto_sample(surface: &photocraft_raster::Surface) -> Vec<[f32; 4]> {
 }
 
 /// Develop representable prior settings at the sensor stage, retaining only the remaining RGB work.
-pub(super) fn prepare(s: &Session, name: &str, shown: &str, path: Option<&str>, bytes: &[u8]) -> Result<Option<(ImportResult, CameraRaw)>> {
+pub(super) fn prepare(
+    s: &Session,
+    name: &str,
+    shown: &str,
+    path: Option<&str>,
+    bytes: &[u8],
+    camera_profiles: photocraft_io::CameraProfilePolicy,
+) -> Result<Option<(ImportResult, CameraRaw)>> {
     let Some(defaults) = &s.batch_raw_open else { return Ok(None) };
     if !photocraft_io::raw::is_raw(bytes) {
         return Ok(None);
@@ -73,7 +80,7 @@ pub(super) fn prepare(s: &Session, name: &str, shown: &str, path: Option<&str>, 
     let crop = prior.as_ref().and_then(|(_, crop)| *crop);
     let prior = prior.map(|(settings, _)| settings);
     let mut settings = prior.clone().unwrap_or_default();
-    let opts = crate::jobs::import_options(s.prefs());
+    let opts = photocraft_io::ImportOptions { camera_profiles, ..crate::jobs::import_options(s.prefs()) };
     let mut imported = photocraft_io::import_with_options(name, bytes, &opts).map_err(|error| EngineError::Other(format!("{shown}: {error}")))?;
     if imported.preview_only || !imported.warnings.iter().any(|warning| warning.contains(photocraft_io::raw::DEVELOPED_NOTE)) {
         return Err(EngineError::Other(format!("{shown}: complete RAW development is required")));
@@ -97,8 +104,8 @@ pub(super) fn prepare(s: &Session, name: &str, shown: &str, path: Option<&str>, 
     };
     if tuning != (RawTuning { demosaic: opts.demosaic, ..Default::default() }) {
         super::open::raw_defaults(s, &imported.warnings, &mut imported.document);
-        let (mut developed, wb) =
-            photocraft_io::raw::import_raw_tuned(name, bytes, &tuning).map_err(|error| EngineError::Other(format!("{shown}: {error}")))?;
+        let (mut developed, wb) = photocraft_io::raw::import_raw_tuned_with_policy(name, bytes, &tuning, camera_profiles)
+            .map_err(|error| EngineError::Other(format!("{shown}: {error}")))?;
         developed.document.resolution_dpi = imported.document.resolution_dpi;
         imported = developed;
         settings.exposure = 0.0;

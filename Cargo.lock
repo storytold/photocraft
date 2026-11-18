@@ -6321,6 +6321,7 @@ dependencies = [
  "craft",
  "craft-image-codecs",
  "craft-psd",
+ "flate2",
  "getrandom 0.3.4",
  "photocraft-color",
  "photocraft-compose",
@@ -6616,6 +6617,7 @@ version = "0.23.1"
 dependencies = [
  "craft-image-codecs",
  "craft-raw",
+ "craft-tiff",
  "flate2",
  "image",
  "photocraft-raw",

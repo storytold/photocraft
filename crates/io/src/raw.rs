@@ -19,7 +19,29 @@ use photocraft_raw::{CameraLook, DevelopOptions, Limits, PreviewColorSpace, RawE
 pub use photocraft_raw::{EXTENSIONS, Tone, retone};
 
 use crate::flat::image_to_document;
-use crate::{ImportResult, IoError};
+use crate::{CameraProfilePolicy, ImportResult, IoError};
+
+#[path = "raw_profiles.rs"]
+mod profiles;
+
+/// Applied camera-profile provenance, without embedding the profile payload.
+pub fn profile_info(doc: &photocraft_doc::Document) -> Option<serde_json::Value> {
+    profiles::report(doc)
+}
+
+/// Bundled and explicitly installed user DCP inventory; RAW decoding support is separate.
+pub fn available_profiles(refresh: bool) -> Vec<serde_json::Value> {
+    profiles::available(refresh)
+}
+
+/// Skip profile selection for monochrome sensors; otherwise enforce the caller's source policy.
+fn selected_profile(sensor: &Sensor, bytes: &[u8], policy: CameraProfilePolicy) -> Result<Option<profiles::Loaded>, RawError> {
+    if sensor.is_monochrome() {
+        return Ok(None);
+    }
+    let settings = photocraft_raw::camera_settings(bytes);
+    profiles::load_with_policy(sensor, settings.as_ref(), policy).map_err(|e| RawError::Malformed(format!("camera profile could not be applied: {e}")))
+}
 
 /// `true` if `bytes` are a camera raw file `photocraft-raw` recognises.
 pub fn is_raw(bytes: &[u8]) -> bool {
@@ -83,27 +105,49 @@ pub struct RawTuning {
 /// no as-shot white balance: Temperature / Tint were then not applied, and the caller keeps
 /// them as RGB adjustments.
 pub fn import_raw_tuned(name: &str, bytes: &[u8], tuning: &RawTuning) -> Result<(ImportResult, bool), IoError> {
-    import_raw_tuned_inner(name, bytes, tuning, None)
+    import_raw_tuned_with_policy(name, bytes, tuning, CameraProfilePolicy::BundledOnly)
 }
 
 /// [`import_raw_tuned`] from what the open already learned about `bytes` ([`take_kept_decode`],
 /// [`RawDecode::new`]): the same pixels without decoding the file and fitting its look again.
 /// A `decode` of another file is ignored.
 pub fn import_raw_tuned_from(name: &str, bytes: &[u8], tuning: &RawTuning, decode: &RawDecode) -> Result<(ImportResult, bool), IoError> {
-    import_raw_tuned_inner(name, bytes, tuning, Some(decode))
+    import_raw_tuned_from_with_policy(name, bytes, tuning, decode, CameraProfilePolicy::BundledOnly)
 }
 
-fn import_raw_tuned_inner(name: &str, bytes: &[u8], tuning: &RawTuning, decode: Option<&RawDecode>) -> Result<(ImportResult, bool), IoError> {
+/// Develops RAW bytes with authority supplied by their source.
+pub fn import_raw_tuned_with_policy(name: &str, bytes: &[u8], tuning: &RawTuning, policy: CameraProfilePolicy) -> Result<(ImportResult, bool), IoError> {
+    import_raw_tuned_inner(name, bytes, tuning, None, policy)
+}
+
+/// Reuses a decoded sensor only when both its bytes and profile authority match.
+pub fn import_raw_tuned_from_with_policy(
+    name: &str,
+    bytes: &[u8],
+    tuning: &RawTuning,
+    decode: &RawDecode,
+    policy: CameraProfilePolicy,
+) -> Result<(ImportResult, bool), IoError> {
+    import_raw_tuned_inner(name, bytes, tuning, Some(decode), policy)
+}
+
+fn import_raw_tuned_inner(
+    name: &str,
+    bytes: &[u8],
+    tuning: &RawTuning,
+    decode: Option<&RawDecode>,
+    policy: CameraProfilePolicy,
+) -> Result<(ImportResult, bool), IoError> {
     let format = photocraft_raw::identify(bytes).map(|f| f.name()).unwrap_or("camera raw");
     let exposure = f64::from(tuning.exposure);
     if !exposure.is_finite() || !(-10.0..=10.0).contains(&exposure) {
         return Err(IoError::Raw(RawError::Malformed(format!("exposure {} EV is out of range", tuning.exposure))));
     }
     let fresh;
-    let decode = match decode.filter(|d| d.is_of(bytes)) {
+    let decode = match decode.filter(|d| d.is_of(bytes) && d.policy == policy) {
         Some(d) => d,
         None => {
-            fresh = RawDecode::new(bytes)?;
+            fresh = RawDecode::with_policy(bytes, policy)?;
             &fresh
         }
     };
@@ -128,7 +172,7 @@ fn import_raw_tuned_inner(name: &str, bytes: &[u8], tuning: &RawTuning, decode: 
         }
         None => false,
     };
-    let mut dev = photocraft_raw::develop_sensor(sensor, &opts).map_err(IoError::Raw)?;
+    let mut dev = photocraft_raw::develop_sensor_profile(sensor, &opts, decode.profile.as_ref().map(|p| p.profile.as_ref())).map_err(IoError::Raw)?;
     let cropped = match tuning.crop {
         Some(crop) => {
             let o = if opts.orient { dev.info.orientation } else { 1 };
@@ -148,7 +192,7 @@ fn import_raw_tuned_inner(name: &str, bytes: &[u8], tuning: &RawTuning, decode: 
         .map(|(k, v)| format!(", {k} {v:+.0}"))
         .collect::<String>();
     let summary = format!("developed in RAW Develop (exposure {:+.2} EV{tone}, {wb}, {} demosaic{cropped})", tuning.exposure, tuning.demosaic.id());
-    Ok((developed_document(name, bytes, format, dev, &summary)?, wb_applied))
+    Ok((developed_document(name, bytes, format, dev, &summary, decode.profile.as_ref())?, wb_applied))
 }
 
 /// Crops the upright developed frame to `crop` (fractions of it), as Camera Raw crops a raw.
@@ -182,6 +226,8 @@ pub fn tone_curve(bytes: &[u8]) -> Vec<[f32; 2]> {
 /// (the sensor is 2 bytes per pixel: drop it when the dialog closes).
 pub struct RawDecode {
     fingerprint: Fingerprint,
+    policy: CameraProfilePolicy,
+    profile: Option<profiles::Loaded>,
     sensor: Sensor,
     look: Option<CameraLook>,
     tone_curve: Vec<[f32; 2]>,
@@ -197,17 +243,24 @@ impl std::fmt::Debug for RawDecode {
 impl RawDecode {
     /// Decodes `bytes` and fits its look, as a default open does.
     pub fn new(bytes: &[u8]) -> Result<RawDecode, IoError> {
-        let sensor = decode_sensor(bytes, &limits())?;
-        let look = default_look(bytes, &sensor);
-        Ok(RawDecode::from_parts(bytes, sensor, look))
+        Self::with_policy(bytes, CameraProfilePolicy::BundledOnly)
     }
 
-    fn from_parts(bytes: &[u8], sensor: Sensor, look: Option<CameraLook>) -> RawDecode {
-        let tone_curve = match &look {
-            Some(look) => look.tone.as_ref().map(look_knots).unwrap_or_default(),
-            None => sensor.tone_curve.clone(),
+    /// Decodes with explicit authority; a restricted caller must not reuse an installed profile.
+    pub fn with_policy(bytes: &[u8], policy: CameraProfilePolicy) -> Result<RawDecode, IoError> {
+        let sensor = decode_sensor(bytes, &limits())?;
+        let profile = selected_profile(&sensor, bytes, policy).map_err(IoError::Raw)?;
+        let look = if profile.is_none() { default_look(bytes, &sensor) } else { None };
+        Ok(RawDecode::from_parts(bytes, sensor, look, profile, policy))
+    }
+
+    fn from_parts(bytes: &[u8], sensor: Sensor, look: Option<CameraLook>, profile: Option<profiles::Loaded>, policy: CameraProfilePolicy) -> RawDecode {
+        let tone_curve = match (&profile, &look) {
+            (Some(profile), _) => profile.profile.tone_curve.iter().map(|p| p.map(|v| v as f32)).collect(),
+            (None, Some(look)) => look.tone.as_ref().map(look_knots).unwrap_or_default(),
+            (None, None) => sensor.tone_curve.clone(),
         };
-        RawDecode { fingerprint: Fingerprint::of(bytes), sensor, look, tone_curve }
+        RawDecode { fingerprint: Fingerprint::of(bytes), sensor, look, tone_curve, profile, policy }
     }
 
     /// The tone curve a default develop uses, as [`tone_curve`] returns it.
@@ -276,9 +329,14 @@ fn kept() -> std::sync::MutexGuard<'static, Vec<Arc<RawDecode>>> {
 /// Hands over (removes) the decode a default open of exactly `bytes` kept for its dialog, if it
 /// is still there. Whoever takes it owns the sensor data: dropping it frees it.
 pub fn take_kept_decode(bytes: &[u8]) -> Option<Arc<RawDecode>> {
+    take_kept_decode_with_policy(bytes, CameraProfilePolicy::BundledOnly)
+}
+
+/// Takes a cached decode only under the authority that originally selected its profile.
+pub fn take_kept_decode_with_policy(bytes: &[u8], policy: CameraProfilePolicy) -> Option<Arc<RawDecode>> {
     let want = Fingerprint::of(bytes);
     let mut kept = kept();
-    let at = kept.iter().position(|d| d.fingerprint == want)?;
+    let at = kept.iter().position(|d| d.fingerprint == want && d.policy == policy)?;
     Some(kept.remove(at))
 }
 
@@ -320,7 +378,14 @@ fn wb_gains(temperature: f32, tint: f32) -> [f64; 3] {
 }
 
 /// A developed raw as a 16-bit ProPhoto document, with a note saying how it was developed.
-fn developed_document(name: &str, bytes: &[u8], format: &str, dev: photocraft_raw::Developed, summary: &str) -> Result<ImportResult, IoError> {
+fn developed_document(
+    name: &str,
+    bytes: &[u8],
+    format: &str,
+    dev: photocraft_raw::Developed,
+    summary: &str,
+    profile: Option<&profiles::Loaded>,
+) -> Result<ImportResult, IoError> {
     let mut img = Image::from_u16(dev.width, dev.height, ChannelLayout::Rgb, &dev.rgb)?;
     // The raw's own EXIF (camera, lens, exposure, date), for File Info's Camera Data. It carries
     // no orientation: the developed image is already upright.
@@ -334,6 +399,12 @@ fn developed_document(name: &str, bytes: &[u8], format: &str, dev: photocraft_ra
         photocraft_raw::OUTPUT_SPACE
     ));
     r.warnings.extend(dev.warnings);
+    if let Some(profile) = profile {
+        profiles::record(&mut r.document, profile);
+        if let Some(notes) = profile.report.get("limitations").and_then(serde_json::Value::as_array) {
+            r.warnings.extend(notes.iter().filter_map(|v| v.as_str().map(str::to_string)));
+        }
+    }
     Ok(r)
 }
 
@@ -350,7 +421,7 @@ pub fn import_raw_demosaic(name: &str, bytes: &[u8], demosaic: Demosaic) -> Resu
 /// [`import_raw_demosaic`] that also keeps the sensor data and the fitted look for the file's
 /// Camera Raw dialog ([`take_kept_decode`]).
 pub fn import_raw_demosaic_keeping(name: &str, bytes: &[u8], demosaic: Demosaic) -> Result<ImportResult, IoError> {
-    import_raw_with_inner(name, bytes, &DevelopOptions { limits: limits(), demosaic, ..Default::default() }, true)
+    import_raw_demosaic_with_policy(name, bytes, demosaic, true, CameraProfilePolicy::BundledOnly)
 }
 
 /// Smallest preview long edge preferred for the colour fit (a smaller preview decodes faster;
@@ -399,23 +470,27 @@ type Kept = (Sensor, Option<CameraLook>);
 /// Decodes and develops; a file without colour calibration gets a look fitted to its preview.
 /// With `keep`, also hands back the sensor and the look it fitted (the default look, when
 /// `opts` named none) instead of freeing them.
-fn develop_fitted(bytes: &[u8], opts: &DevelopOptions, keep: bool) -> Result<(photocraft_raw::Developed, Option<Kept>), RawError> {
-    let sensor = decode_sensor(bytes, &opts.limits).map_err(|e| match e {
-        IoError::Raw(e) => e,
-        e => RawError::Malformed(e.to_string()),
-    })?;
+fn develop_fitted(
+    bytes: &[u8],
+    opts: &DevelopOptions,
+    keep: bool,
+    policy: CameraProfilePolicy,
+) -> Result<(photocraft_raw::Developed, Option<Kept>, Option<profiles::Loaded>), IoError> {
+    let sensor = decode_sensor(bytes, &opts.limits)?;
     let mut opts = Cow::Borrowed(opts);
     let named_look = opts.camera_look.is_some();
-    if opts.camera_look.is_none()
+    let profile = if named_look { None } else { selected_profile(&sensor, bytes, policy).map_err(|e| IoError::Unsupported(e.to_string()))? };
+    if profile.is_none()
+        && opts.camera_look.is_none()
         && sensor.color.calibrations.is_empty()
         && !sensor.is_monochrome()
         && let Ok(look) = fit_preview_look(bytes, &sensor, &opts)
     {
         opts.to_mut().camera_look = Some(look);
     }
-    let dev = photocraft_raw::develop_sensor(&sensor, &opts)?;
+    let dev = photocraft_raw::develop_sensor_profile(&sensor, &opts, profile.as_ref().map(|p| p.profile.as_ref()))?;
     let kept = (keep && !named_look).then(|| (sensor, opts.into_owned().camera_look));
-    Ok((dev, kept))
+    Ok((dev, kept, profile))
 }
 
 /// The camera's embedded JPEG, upright, for opening in place of sensor data that can't be
@@ -454,24 +529,24 @@ pub fn developed_demosaic(warnings: &[String]) -> Option<Demosaic> {
 /// Develops a raw file with explicit settings. Without `opts.camera_look`, a file without
 /// colour calibration gets one fitted to its embedded JPEG when that clearly helps.
 pub fn import_raw_with(name: &str, bytes: &[u8], opts: &DevelopOptions) -> Result<ImportResult, IoError> {
-    import_raw_with_inner(name, bytes, opts, false)
+    import_raw_with_policy(name, bytes, opts, CameraProfilePolicy::BundledOnly)
 }
 
-fn import_raw_with_inner(name: &str, bytes: &[u8], opts: &DevelopOptions, keep: bool) -> Result<ImportResult, IoError> {
+fn import_raw_with_inner(name: &str, bytes: &[u8], opts: &DevelopOptions, keep: bool, policy: CameraProfilePolicy) -> Result<ImportResult, IoError> {
     let format = photocraft_raw::identify(bytes).map(|f| f.name()).unwrap_or("camera raw");
-    match develop_fitted(bytes, opts, keep) {
-        Ok((dev, kept_parts)) => {
+    match develop_fitted(bytes, opts, keep, policy) {
+        Ok((dev, kept_parts, profile)) => {
             if let Some((sensor, look)) = kept_parts {
                 let mut kept = kept();
                 if kept.len() == KEPT_MAX {
                     kept.remove(0);
                 }
-                kept.push(Arc::new(RawDecode::from_parts(bytes, sensor, look)));
+                kept.push(Arc::new(RawDecode::from_parts(bytes, sensor, look, profile.clone(), policy)));
             }
             let summary = format!("{DEVELOPED_NOTE} ({} demosaic, as-shot white balance)", opts.demosaic.id());
-            developed_document(name, bytes, format, dev, &summary)
+            developed_document(name, bytes, format, dev, &summary, profile.as_ref())
         }
-        Err(RawError::Unsupported(reason)) => {
+        Err(IoError::Raw(RawError::Unsupported(reason))) => {
             let jpeg = photocraft_raw::embedded_jpeg_preview(bytes).map(|jpeg| (jpeg,));
             // A DNG 1.7 converter keeps only its small thumbnail as JPEG and writes the larger
             // previews as JPEG XL, like the raw data (#8125): open the largest of either kind.
@@ -499,18 +574,20 @@ fn import_raw_with_inner(name: &str, bytes: &[u8], opts: &DevelopOptions, keep: 
         // A damaged DNG can still carry a valid JPEG, but opening that thumbnail as if it were
         // the photograph hides a corrupt raw source. Keep preview fallback for other camera
         // formats whose independent preview is the established recovery path.
-        Err(RawError::Malformed(reason)) if format == "DNG" => Err(IoError::Raw(RawError::Malformed(reason))),
-        Err(RawError::Malformed(reason)) => match photocraft_raw::embedded_jpeg_preview(bytes).map(|jpeg| preview_image(bytes, &jpeg, &opts.limits)) {
-            Some(Ok(img)) => {
-                let (w, h) = img.dimensions();
-                let note = format!(
-                    "{format}: the raw sensor data is damaged ({reason}); opened the camera's embedded {w}x{h} JPEG preview instead (8-bit, not the raw sensor data)"
-                );
-                preview_document(name, &img, note)
+        Err(IoError::Raw(RawError::Malformed(reason))) if format == "DNG" => Err(IoError::Raw(RawError::Malformed(reason))),
+        Err(IoError::Raw(RawError::Malformed(reason))) => {
+            match photocraft_raw::embedded_jpeg_preview(bytes).map(|jpeg| preview_image(bytes, &jpeg, &opts.limits)) {
+                Some(Ok(img)) => {
+                    let (w, h) = img.dimensions();
+                    let note = format!(
+                        "{format}: the raw sensor data is damaged ({reason}); opened the camera's embedded {w}x{h} JPEG preview instead (8-bit, not the raw sensor data)"
+                    );
+                    preview_document(name, &img, note)
+                }
+                _ => Err(IoError::Raw(RawError::Malformed(reason))),
             }
-            _ => Err(IoError::Raw(RawError::Malformed(reason))),
-        },
-        Err(e) => Err(IoError::Raw(e)),
+        }
+        Err(e) => Err(e),
     }
 }
 
@@ -530,6 +607,26 @@ fn jxl_preview_image(raw: &[u8], p: photocraft_raw::DecodedPreview) -> Result<Im
         Some(PreviewColorSpace::Srgb) | None => None,
     };
     Ok(img.with_icc(icc).oriented(photocraft_raw::orientation(raw).unwrap_or(1))?)
+}
+
+/// Imports with explicit processing settings and camera-profile authority.
+pub fn import_raw_with_policy(name: &str, bytes: &[u8], opts: &DevelopOptions, policy: CameraProfilePolicy) -> Result<ImportResult, IoError> {
+    import_raw_with_inner(name, bytes, opts, false, policy)
+}
+
+/// Default RAW processing with explicit profile-source authority.
+pub fn import_raw_default_policy(name: &str, bytes: &[u8], policy: CameraProfilePolicy) -> Result<ImportResult, IoError> {
+    import_raw_demosaic_with_policy(name, bytes, Demosaic::default(), false, policy)
+}
+
+/// Preserves caller-selected demosaic, decode retention and profile authority together.
+pub fn import_raw_demosaic_with_policy(name: &str, bytes: &[u8], demosaic: Demosaic, keep: bool, policy: CameraProfilePolicy) -> Result<ImportResult, IoError> {
+    import_raw_with_inner(name, bytes, &DevelopOptions { limits: limits(), demosaic, ..Default::default() }, keep, policy)
+}
+
+/// Reads the selected calibration curve under the caller's profile authority.
+pub fn tone_curve_with_policy(bytes: &[u8], policy: CameraProfilePolicy) -> Vec<[f32; 2]> {
+    RawDecode::with_policy(bytes, policy).map(|d| d.tone_curve).unwrap_or_default()
 }
 
 #[cfg(test)]

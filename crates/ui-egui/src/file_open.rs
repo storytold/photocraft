@@ -221,10 +221,18 @@ impl PhotocraftApp {
         }
         if self.background_jobs {
             // The path and Open Recent are recorded when the background open finishes.
-            crate::jobs_ui::start_open(self, &display_name(path), Some(path.to_string()), crate::jobs_ui::bytes(bytes), slot, order)?;
+            crate::jobs_ui::start_open_with_policy(
+                self,
+                &display_name(path),
+                Some(path.to_string()),
+                crate::jobs_ui::bytes(bytes),
+                slot,
+                order,
+                photocraft_io::CameraProfilePolicy::Installed,
+            )?;
             return Ok(Vec::new());
         }
-        self.open_bytes_placed(&display_name(path), bytes, Some(path), slot, order)
+        self.open_bytes_placed_with_policy(&display_name(path), bytes, Some(path), slot, order, photocraft_io::CameraProfilePolicy::Installed)
     }
 
     /// Record that the active document was just opened from `path`: File › Save writes back to it

@@ -900,3 +900,11 @@ retain custom collapse settings and Timeline visibility.
 ### Select the layer under the pointer
 
 Assign **Select Layer Under Cursor** in Keyboard Shortcuts to choose the topmost visible, pickable layer beneath the canvas pointer. Empty pixels and points outside the document leave the selection unchanged; dialogs, strokes and brush-resize gestures block it. The command follows zoom, pan, view rotation and horizontal flipping. Agents can invoke `ui.menu.invoke {"id":"layer.selectUnderCursor"}` after moving the screen pointer with `ui.move {"x": ..., "y": ...}`. The command has no default shortcut.
+
+### Camera-profile inventory
+
+`raw.profiles` accepts optional `model` (substring) and `refresh` (boolean) parameters. It reports
+bundled and explicitly installed DCP metadata, separately from RAW decoder support. Scoped
+automation rejects this ambient filesystem query. `document.inspect.rawProfile` reports the
+applied calibration provenance without embedding its payload; `ui.inspect.cameraRaw.openingRaw.profile`
+reports the same data for the document under review. Provenance never grants filesystem authority.

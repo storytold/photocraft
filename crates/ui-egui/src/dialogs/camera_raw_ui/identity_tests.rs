@@ -51,6 +51,7 @@ fn identity_app() -> (PhotocraftApp, RawOpen, Control) {
     let imported = photocraft_io::import("synthetic.dng", &bytes).unwrap();
     let (index, _) = session.open_document(imported.document, None);
     let raw = RawOpen {
+        camera_profiles: photocraft_io::CameraProfilePolicy::BundledOnly,
         document: session.documents()[index].doc.id,
         name: "synthetic.dng".into(),
         path: None,

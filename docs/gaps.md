@@ -490,6 +490,16 @@ what an agent can't finish alone.
   grayscale is refused on the web before Place or smart-object rendering.
 - **Estimate:** 30–60 h. **Human:** signing certificates.
 
+
+## DCP calibration integration (2026-11-18)
+
+The camera-profile branch retains native DCP calibration, inventory and provenance with nine
+explicitly CC0 exact-model profiles while integrating the current shared RAW decoder and TIFF
+reader. Byte-only and recursive imports remain bundled-only; installed calibration requires
+explicit trusted-reader authority, including cached previews and re-development. This does not
+add RAW decoders or reproduce factory JPEG looks. Coverage and estimates remain unchanged.
+See [camera profiles](camera-profiles.md) and [coverage](camera-profile-coverage.md).
+
 ## Revision history
 
 | Date | Change | Summary |

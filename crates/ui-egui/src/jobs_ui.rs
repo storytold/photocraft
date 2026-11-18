@@ -44,6 +44,10 @@ pub const DIALOG_DELAY_MS: f64 = 250.0;
 /// A file opening in the background: shown as a document tab with progress.
 #[derive(Clone, Debug)]
 pub struct OpenTab {
+    /// Retained RAW bytes for deferred review, independent of save-path metadata.
+    pub raw_bytes: Option<Arc<Vec<u8>>>,
+    /// Profile authority captured at the original read.
+    pub camera_profiles: photocraft_io::CameraProfilePolicy,
     pub job: JobId,
     /// Display name (the file name).
     pub name: String,
@@ -284,13 +288,35 @@ pub fn start_open(
     slot: Option<usize>,
     order: Option<OpenOrder>,
 ) -> Result<(), String> {
+    let policy = match &source {
+        OpenSource::Path(_) => photocraft_io::CameraProfilePolicy::Installed,
+        OpenSource::Bytes(_) => photocraft_io::CameraProfilePolicy::BundledOnly,
+    };
+    start_open_with_policy(app, name, path, source, slot, order, policy)
+}
+
+/// Keeps source authority separate from the optional save path.
+pub(crate) fn start_open_with_policy(
+    app: &mut PhotocraftApp,
+    name: &str,
+    path: Option<String>,
+    source: OpenSource,
+    slot: Option<usize>,
+    order: Option<OpenOrder>,
+    policy: photocraft_io::CameraProfilePolicy,
+) -> Result<(), String> {
+    let raw_bytes = match &source {
+        OpenSource::Bytes(bytes) if photocraft_io::raw::is_raw(bytes) => Some(bytes.clone()),
+        _ => None,
+    };
+    let camera_profiles = narrow_profile_policy(app, policy);
     let name = &app.open_name(name);
-    match app.session.start_open_for_user_with_background(name, source, app.background_jobs).map_err(|e| e.to_string())? {
+    match app.session.start_open_for_user_with_profile_policy(name, source, app.background_jobs, camera_profiles).map_err(|e| e.to_string())? {
         // Inline (wasm, or background jobs off): finish now, like a background open that ended at
         // once. A preflight keeps the slot and set order in its memory prompt.
-        Started::Done(v) => finish_open(app, name, path.as_deref(), &v, slot, order),
+        Started::Done(v) => finish_open_with_policy(app, name, path.as_deref(), &v, slot, order, camera_profiles, raw_bytes.as_ref()),
         Started::Job(job) => {
-            track_open(app, OpenTab { job, name: name.to_string(), path, slot, order });
+            track_open(app, OpenTab { job, name: name.to_string(), path, slot, order, camera_profiles, raw_bytes });
             Ok(())
         }
     }
@@ -321,7 +347,10 @@ pub(crate) fn start_open_as_smart_object(app: &mut PhotocraftApp, path: &str, or
     match started {
         Started::Done(v) => finish_open(app, &name, None, &v, None, order),
         Started::Job(job) => {
-            track_open(app, OpenTab { job, name, path: None, slot: None, order });
+            track_open(
+                app,
+                OpenTab { raw_bytes: None, camera_profiles: photocraft_io::CameraProfilePolicy::BundledOnly, job, name, path: None, slot: None, order },
+            );
             Ok(())
         }
     }
@@ -375,7 +404,7 @@ pub(crate) fn tab_slot(app: &mut PhotocraftApp, slot: Option<usize>, order: Opti
 /// [`JobsUi::opens`]: the document goes to the tab's slot, or to its place in its set. A memory
 /// preflight keeps both in its prompt.
 pub(crate) fn finish_open_tab(app: &mut PhotocraftApp, tab: &OpenTab, v: &Value) -> Result<(), String> {
-    let r = finish_open(app, &tab.name, tab.path.as_deref(), v, tab.slot, tab.order);
+    let r = finish_open_with_policy(app, &tab.name, tab.path.as_deref(), v, tab.slot, tab.order, tab.camera_profiles, tab.raw_bytes.as_ref());
     end_batch(app);
     r
 }
@@ -696,6 +725,20 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
 /// and set place the file keeps: through a memory prompt, a profile/damage prompt and the final
 /// document, so an inline completion lands where a background tab would.
 fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Value, slot: Option<usize>, order: Option<OpenOrder>) -> Result<(), String> {
+    finish_open_with_policy(app, name, path, v, slot, order, photocraft_io::CameraProfilePolicy::BundledOnly, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_open_with_policy(
+    app: &mut PhotocraftApp,
+    name: &str,
+    path: Option<&str>,
+    v: &Value,
+    slot: Option<usize>,
+    order: Option<OpenOrder>,
+    camera_profiles: photocraft_io::CameraProfilePolicy,
+    raw_bytes: Option<&Arc<Vec<u8>>>,
+) -> Result<(), String> {
     if let Some(preflight_id) = v.get("pendingPreflight").and_then(Value::as_u64) {
         let estimated = v.get("estimated").and_then(Value::as_u64).unwrap_or(0);
         let available = v.get("availableRam").and_then(Value::as_u64);
@@ -718,13 +761,14 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
     let warnings: Vec<String> =
         v.get("warnings").and_then(Value::as_array).map(|a| a.iter().filter_map(|w| w.as_str().map(str::to_string)).collect()).unwrap_or_default();
     let held = |doc, read_only, question, policy_applied| crate::open_prompt::Held {
+        camera_profiles,
         doc,
         read_only,
         damage_pending: v.get("damaged").and_then(Value::as_bool).unwrap_or(false),
         name: name.to_string(),
         path: path.map(str::to_string),
         warnings: warnings.clone(),
-        bytes: None,
+        bytes: raw_bytes.cloned(),
         slot,
         order,
         question,
@@ -753,20 +797,25 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
     if let Some(slot) = tab_slot(app, slot, order) {
         let _ = app.run("document.move", json!({"document": index, "to": slot}));
     }
-    after_open(app, document, name, path, &warnings, None)
+    after_open_with_policy(app, document, name, path, &warnings, raw_bytes, camera_profiles)
 }
 
-/// What every open does for its admitted document: remember where it came from, say
-/// so, show the import warnings (a raw opens in Camera Raw first, developed from `path` or
-/// `bytes`) and fire the "Open Document" script events.
-pub(crate) fn after_open(
+/// Narrows source authority whenever a request enters an automation dispatch scope.
+pub(crate) fn narrow_profile_policy(app: &PhotocraftApp, policy: photocraft_io::CameraProfilePolicy) -> photocraft_io::CameraProfilePolicy {
+    app.session.camera_profile_policy(policy)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn after_open_with_policy(
     app: &mut PhotocraftApp,
     document: DocId,
     name: &str,
     path: Option<&str>,
     warnings: &[String],
     bytes: Option<&Arc<Vec<u8>>>,
+    camera_profiles: photocraft_io::CameraProfilePolicy,
 ) -> Result<(), String> {
+    let camera_profiles = narrow_profile_policy(app, camera_profiles);
     let index = app.session.documents().iter().position(|st| st.doc.id == document).ok_or("the opened document is missing")?;
     app.session.set_active(index);
     if let Some(p) = path {
@@ -781,13 +830,13 @@ pub(crate) fn after_open(
     app.ui.status_error = false;
     // A raw opens in Camera Raw first; the dialog says how it was developed.
     if crate::camera_raw_ui::wants_open_dialog(app, warnings) {
-        crate::camera_raw_ui::queue_open_dialog(app, document, name, path, bytes, warnings)?;
+        crate::camera_raw_ui::queue_open_dialog_with_policy(app, document, name, path, bytes, warnings, camera_profiles)?;
         notices::io_warnings(app, &opened, &crate::camera_raw_ui::without_develop_note(warnings));
     } else {
         notices::io_warnings(app, &opened, warnings);
         // A raw that opened without the dialog is developed by its sidecar / Camera Raw Defaults.
         if let Some(index) = app.session.active_index() {
-            crate::camera_raw_ui::opened_without_dialog(app, index, name, path, warnings);
+            crate::camera_raw_ui::opened_without_dialog_with_policy(app, index, name, path, warnings, camera_profiles);
         }
     }
     // Script events bound to "Open Document".
