@@ -15,6 +15,11 @@ fn view_of(app: &PhotocraftApp, d: usize, rect: Rect) -> craft::behavior::Canvas
     app.ui.views[d].canvas_view(rect, app.canvas_ppp(), app.ui.view.flip_horizontal, app.ui.view.display_aspect())
 }
 
+/// The messages of the alerts open on `app`.
+fn alerts(app: &PhotocraftApp) -> Vec<String> {
+    app.framework.dialogs.open_dialogs().iter().filter_map(|d| d.fields.as_ref()?.get("message")?.as_str().map(str::to_string)).collect()
+}
+
 /// The active document's view of the canvas area.
 fn active_view(app: &PhotocraftApp) -> craft::behavior::CanvasView {
     view_of(app, app.session.active_index().unwrap(), app.last_canvas_rect)
@@ -370,14 +375,14 @@ fn a_move_tool_selection_drag_onto_a_tab_copies_selected_pixels_to_destination()
     h.state_mut().ui.tool = Tool::Move;
     h.run_steps(2);
 
-    let grab = ViewXform::active(h.state()).unwrap().to_screen(6.0, 11.0);
-    let grab_doc = ViewXform::active(h.state()).unwrap().to_doc(grab);
+    let grab = to_screen(&active_view(h.state()), 6.0, 11.0);
+    let grab_doc = to_doc(&active_view(h.state()), grab);
     let over_tab = tab(&h, "dest-doc");
     let drop = h.state().last_canvas_rect.center();
     drag_along(&mut h, &[grab, over_tab, drop], Modifiers::NONE);
 
     // Destination now has the copied 5x10 selection layer placed at the drop point
-    let at = ViewXform::active(h.state()).unwrap().to_doc(drop);
+    let at = to_doc(&active_view(h.state()), drop);
     let (_, r) = copy(&h);
     assert_eq!(r.size(), vec2(5.0, 10.0), "only the 5x10 selected region is copied");
     let want = egui::pos2((6.5 + at[0] - grab_doc[0]) as f32, (11.0 + at[1] - grab_doc[1]) as f32);
@@ -421,7 +426,7 @@ fn a_move_tool_mask_selection_drag_onto_a_tab_copies_the_mask_and_leaves_layer_p
     let before_pixel = layer_pixel(&h);
     let before_selection = selection_present(&h);
 
-    let grab = ViewXform::active(h.state()).unwrap().to_screen(6.0, 11.0);
+    let grab = to_screen(&active_view(h.state()), 6.0, 11.0);
     let over_tab = tab(&h, "dest-doc");
     let drop = h.state().last_canvas_rect.center();
     drag_along(&mut h, &[grab, over_tab, drop], Modifiers::NONE);
@@ -450,7 +455,7 @@ fn a_floating_pixel_selection_transfers_as_pixels_even_when_mask_is_targeted() {
     h.state_mut().ui.tool = Tool::Move;
     h.run_steps(2);
 
-    let grab = ViewXform::active(h.state()).unwrap().to_screen(6.0, 11.0);
+    let grab = to_screen(&active_view(h.state()), 6.0, 11.0);
     let over_tab = tab(&h, "dest-doc");
     let drop = h.state().last_canvas_rect.center();
     drag_along(&mut h, &[grab, over_tab, drop], Modifiers::NONE);
@@ -468,7 +473,8 @@ fn a_floating_pixel_selection_transfers_as_pixels_even_when_mask_is_targeted() {
 /// In Arrange views, dragging a selection into the neighbouring cell transfers it there directly.
 fn a_move_tool_selection_drag_in_arranged_view_transfers_directly_to_neighbour_cell() {
     let (mut h, paint) = harness();
-    h.state_mut().ui.view.arrange = "twoUpVertical".into();
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "window.arrange.twoUpVertical", json!({})).unwrap();
     h.run_steps(4);
 
     let cells = crate::canvas::arranged_cells(h.state(), h.state().last_canvas_rect).unwrap();
@@ -480,22 +486,12 @@ fn a_move_tool_selection_drag_in_arranged_view_transfers_directly_to_neighbour_c
     h.state_mut().ui.tool = Tool::Move;
     h.run_steps(2);
 
-    let view_src = h.state().ui.views[0].clone();
-    let xf_src =
-        crate::canvas::ViewXform { rect: src_cell, zoom: view_src.zoom / h.state().ppp, center: view_src.center, flip: false, rotation: 0.0, aspect: 1.0 };
-    let grab = xf_src.to_screen(6.0, 11.0);
-    let grab_doc = xf_src.to_doc(grab);
-    let view_dest = h.state().ui.views[1].clone();
-    let xf_dest = crate::canvas::ViewXform {
-        rect: crate::rulers::content_rect(h.state(), dest_cell),
-        zoom: view_dest.zoom / h.state().canvas_ppp(),
-        center: view_dest.center,
-        flip: false,
-        rotation: 0.0,
-        aspect: 1.0,
-    };
+    let xf_src = view_of(h.state(), 0, src_cell);
+    let grab = to_screen(&xf_src, 6.0, 11.0);
+    let grab_doc = to_doc(&xf_src, grab);
+    let xf_dest = view_of(h.state(), 1, dest_cell);
     let drop = dest_cell.center();
-    let at = xf_dest.to_doc(drop);
+    let at = to_doc(&xf_dest, drop);
 
     // Drag directly from src canvas to dest canvas (no tab hover!)
     drag_along(&mut h, &[grab, drop], Modifiers::NONE);
@@ -518,7 +514,8 @@ fn a_move_tool_background_layer_drag_in_arranged_view_transfers_directly_to_neig
     h.state_mut().session.execute("layer.delete", json!({"layer": paint.0})).unwrap();
     assert_eq!(h.state().session.documents()[0].doc.layers.len(), 1, "only Background remains in source");
 
-    h.state_mut().ui.view.arrange = "twoUpVertical".into();
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "window.arrange.twoUpVertical", json!({})).unwrap();
     h.state_mut().ui.tool = Tool::Move;
     h.state_mut().ui.tool_options.move_auto_select = true;
     h.run_steps(4);
@@ -527,10 +524,8 @@ fn a_move_tool_background_layer_drag_in_arranged_view_transfers_directly_to_neig
     assert_eq!(cells.len(), 2);
     let (src_cell, dest_cell) = (cells[0].1, cells[1].1);
 
-    let view_src = h.state().ui.views[0].clone();
-    let xf_src =
-        crate::canvas::ViewXform { rect: src_cell, zoom: view_src.zoom / h.state().ppp, center: view_src.center, flip: false, rotation: 0.0, aspect: 1.0 };
-    let grab = xf_src.to_screen(15.0, 15.0);
+    let xf_src = view_of(h.state(), 0, src_cell);
+    let grab = to_screen(&xf_src, 15.0, 15.0);
     let drop = dest_cell.center();
 
     // Drag Background directly from src canvas to dest canvas
@@ -557,15 +552,7 @@ fn same_document_blocked_move_with_multiple_documents_shows_lock_message() {
     // Click on Background: no message
     tool_event(h.state_mut(), ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, Modifiers::NONE);
     tool_event(h.state_mut(), ToolEvent::Up { x: 20.0, y: 20.0 }, Modifiers::NONE);
-    let error_dialogs = |app: &crate::PhotocraftApp| -> Vec<String> {
-        app.ui
-            .dialogs
-            .iter()
-            .filter(|d| d.kind == crate::state::DialogKind::Error)
-            .filter_map(|d| d.fields.get("message")?.as_str().map(String::from))
-            .collect()
-    };
-    assert!(error_dialogs(h.state()).is_empty() && !h.state().move_blocked);
+    assert!(alerts(h.state()).is_empty() && !h.state().move_blocked);
 
     // Drag and return to press point: shows lock prompt promptly on Move
     tool_event(h.state_mut(), ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, Modifiers::NONE);
@@ -573,7 +560,7 @@ fn same_document_blocked_move_with_multiple_documents_shows_lock_message() {
     // Even if pointer returns to start before Up, the prompt is shown
     tool_event(h.state_mut(), ToolEvent::Move { x: 20.0, y: 20.0, pressure: 1.0 }, Modifiers::NONE);
     tool_event(h.state_mut(), ToolEvent::Up { x: 20.0, y: 20.0 }, Modifiers::NONE);
-    assert_eq!(error_dialogs(h.state()), [crate::move_lock::MESSAGE]);
+    assert_eq!(alerts(h.state()), [crate::move_lock::MESSAGE]);
     assert!(!h.state().move_blocked && h.state().move_blocked_start.is_none());
 }
 
@@ -786,7 +773,7 @@ fn a_move_tool_background_layer_drag_with_auto_select_off_transfers_via_tab_with
     h.state_mut().ui.tool_options.move_auto_select = false;
     h.run_steps(2);
 
-    let grab = ViewXform::active(h.state()).unwrap().to_screen(15.0, 15.0);
+    let grab = to_screen(&active_view(h.state()), 15.0, 15.0);
     let over_tab = tab(&h, "dest-doc");
     let drop = h.state().last_canvas_rect.center();
     drag_along(&mut h, &[grab, over_tab, drop], Modifiers::NONE);
@@ -794,7 +781,7 @@ fn a_move_tool_background_layer_drag_with_auto_select_off_transfers_via_tab_with
     assert_eq!(h.state().session.documents()[1].doc.layers.len(), 2);
     let (name, _) = copy(&h);
     assert_eq!(name, "Layer 1");
-    assert!(h.state().ui.dialogs.iter().all(|d| d.kind != crate::state::DialogKind::Error), "no lock dialog during transfer");
+    assert!(alerts(h.state()).is_empty(), "no lock dialog during transfer");
 }
 
 /// #11971 review: with Auto-Select off, dragging Background directly to an arranged neighbour
@@ -803,7 +790,8 @@ fn a_move_tool_background_layer_drag_with_auto_select_off_transfers_via_tab_with
 fn a_move_tool_background_layer_drag_with_auto_select_off_transfers_in_arranged_view() {
     let (mut h, paint) = harness();
     h.state_mut().session.execute("layer.delete", json!({"layer": paint.0})).unwrap();
-    h.state_mut().ui.view.arrange = "twoUpVertical".into();
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "window.arrange.twoUpVertical", json!({})).unwrap();
     h.state_mut().ui.tool = Tool::Move;
     h.state_mut().ui.tool_options.move_auto_select = false;
     h.run_steps(4);
@@ -812,17 +800,15 @@ fn a_move_tool_background_layer_drag_with_auto_select_off_transfers_in_arranged_
     assert_eq!(cells.len(), 2);
     let (src_cell, dest_cell) = (cells[0].1, cells[1].1);
 
-    let view_src = h.state().ui.views[0].clone();
-    let xf_src =
-        crate::canvas::ViewXform { rect: src_cell, zoom: view_src.zoom / h.state().ppp, center: view_src.center, flip: false, rotation: 0.0, aspect: 1.0 };
-    let grab = xf_src.to_screen(15.0, 15.0);
+    let xf_src = view_of(h.state(), 0, src_cell);
+    let grab = to_screen(&xf_src, 15.0, 15.0);
     let drop = dest_cell.center();
     drag_along(&mut h, &[grab, drop], Modifiers::NONE);
 
     assert_eq!(h.state().session.documents()[1].doc.layers.len(), 2);
     let (name, _) = copy(&h);
     assert_eq!(name, "Layer 1");
-    assert!(h.state().ui.dialogs.iter().all(|d| d.kind != crate::state::DialogKind::Error), "no lock dialog during arranged transfer");
+    assert!(alerts(h.state()).is_empty(), "no lock dialog during arranged transfer");
 }
 
 /// #11971 review: with Auto-Select off and a locked active layer (Background), pressing over
@@ -838,7 +824,7 @@ fn a_blocked_move_with_auto_select_off_transfers_the_pressed_layer() {
     h.run_steps(2);
 
     // Press directly over the 10x10 red square on `paint` while Background is active.
-    let grab = ViewXform::active(h.state()).unwrap().to_screen(8.0, 10.0);
+    let grab = to_screen(&active_view(h.state()), 8.0, 10.0);
     let over_tab = tab(&h, "dest-doc");
     let drop = h.state().last_canvas_rect.center();
     drag_along(&mut h, &[grab, over_tab, drop], Modifiers::NONE);
@@ -912,7 +898,7 @@ fn stale_blocked_move_from_extra_window_cleans_up_before_consuming_other_viewpor
     tool_event(h.state_mut(), ToolEvent::Down { x: 8.0, y: 10.0, pressure: 1.0 }, Modifiers::NONE);
     assert!(!h.state().move_blocked);
     assert!(h.state().move_blocked_layer.is_none());
-    assert!(h.state().drag.is_some(), "unlocked drag starts cleanly in main viewport");
+    assert!(h.state().canvas_tools.mover.layer_drag().is_some(), "unlocked drag starts cleanly in main viewport");
     tool_event(h.state_mut(), ToolEvent::Up { x: 8.0, y: 10.0 }, Modifiers::NONE);
 }
 
@@ -936,7 +922,7 @@ fn a_blocked_move_over_empty_space_does_not_transfer_locked_active_layer() {
     h.state_mut().ui.tool_options.move_auto_select = false;
     h.run_steps(2);
 
-    let grab = ViewXform::active(h.state()).unwrap().to_screen(25.0, 25.0);
+    let grab = to_screen(&active_view(h.state()), 25.0, 25.0);
     let over_tab = tab(&h, "dest-doc");
     let drop = h.state().last_canvas_rect.center();
     drag_along(&mut h, &[grab, over_tab, drop], Modifiers::NONE);

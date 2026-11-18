@@ -355,3 +355,16 @@ fn ghost(ctx: &egui::Context, p: egui::Pos2, label: &str) {
 
 #[cfg(test)]
 mod tests;
+
+/// A transfer armed for `layer` without the panel's runtime drag, for the tests that need one
+/// under way.
+#[cfg(test)]
+pub(crate) fn begin_from_panel(app: &PhotocraftApp, ctx: &egui::Context, layer: LayerId) -> bool {
+    begin(app, ctx, vec![layer], [0.0, 0.0])
+}
+
+/// Whether a transfer is under way.
+#[cfg(test)]
+pub(crate) fn is_transfer_armed(ctx: &egui::Context) -> bool {
+    get(ctx).is_some()
+}
