@@ -18,17 +18,18 @@
 //!
 //! Widgets read [`Tokens::get`] instead of hard-coding colours, so every theme applies everywhere.
 
-use egui::{Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle, Visuals};
+use craft::theme::{ColorToken, ThemeDef, ThemeId};
+use craft::ui::fonts::UiFonts;
+use egui::{Color32, CornerRadius, FontData, FontFamily, FontId, Stroke, TextStyle, Visuals};
 use photocraft_engine::prefs::UiFontSize;
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ThemeKind {
+/// PhotoCraft's own palettes: the suite themes it draws itself, each in the mode it has one for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Palette {
     /// Photoshop-style Spectrum dark: flat charcoal panels, tab strips, blue accents (darkest brightness).
     Pro,
     /// Photoshop's default (second) interface brightness: #535353 panels, #282828 canvas (default).
-    #[default]
     ProMedium,
     /// Photoshop's third interface brightness: #B8B8B8 panels (#2661).
     ProLightGray,
@@ -54,117 +55,210 @@ pub enum ThemeKind {
     SoftLight,
 }
 
-impl ThemeKind {
-    pub const ALL: [ThemeKind; 14] = [
-        ThemeKind::Pro,
-        ThemeKind::ProMedium,
-        ThemeKind::ProLightGray,
-        ThemeKind::ProLight,
-        ThemeKind::Studio,
-        ThemeKind::StudioLight,
-        ThemeKind::Classic,
-        ThemeKind::SolarizedDark,
-        ThemeKind::Adwaita,
-        ThemeKind::AdwaitaDark,
-        ThemeKind::BreezeLight,
-        ThemeKind::BreezeDark,
-        ThemeKind::SoftDark,
-        ThemeKind::SoftLight,
+impl Palette {
+    const ALL: [Palette; 14] = [
+        Palette::Pro,
+        Palette::ProMedium,
+        Palette::ProLightGray,
+        Palette::ProLight,
+        Palette::Studio,
+        Palette::StudioLight,
+        Palette::Classic,
+        Palette::SolarizedDark,
+        Palette::Adwaita,
+        Palette::AdwaitaDark,
+        Palette::BreezeLight,
+        Palette::BreezeDark,
+        Palette::SoftDark,
+        Palette::SoftLight,
     ];
-    pub fn label(self) -> &'static str {
+
+    /// The suite theme id and mode the palette draws.
+    fn theme(self) -> (&'static str, bool) {
         match self {
-            ThemeKind::Pro => "Pro (Dark)",
-            ThemeKind::ProMedium => "Pro (Medium Gray)",
-            ThemeKind::ProLightGray => "Pro (Light Gray)",
-            ThemeKind::ProLight => "Pro (Light)",
-            ThemeKind::Studio => "Studio (Dark)",
-            ThemeKind::StudioLight => "Studio (Light)",
-            ThemeKind::Classic => "Classic",
-            ThemeKind::Adwaita => "Adwaita (Light)",
-            ThemeKind::AdwaitaDark => "Adwaita (Dark)",
-            ThemeKind::SolarizedDark => "Solarized Dark",
-            ThemeKind::BreezeLight => "Breeze Light",
-            ThemeKind::BreezeDark => "Breeze Dark",
-            ThemeKind::SoftDark => "Soft Dark",
-            ThemeKind::SoftLight => "Soft Light",
+            Palette::ProMedium => ("craft.artcraft", true),
+            Palette::Pro => ("craft.pro", true),
+            Palette::ProLight => ("craft.pro", false),
+            Palette::ProLightGray => ("craft.pro-light-gray", false),
+            Palette::Studio => ("craft.studio", true),
+            Palette::StudioLight => ("craft.studio", false),
+            Palette::Classic => ("craft.classic", false),
+            Palette::SolarizedDark => ("craft.solarized-dark", true),
+            Palette::Adwaita => ("craft.adwaita", false),
+            Palette::AdwaitaDark => ("craft.adwaita", true),
+            Palette::BreezeLight => ("craft.breeze", false),
+            Palette::BreezeDark => ("craft.breeze", true),
+            Palette::SoftDark => ("craft.soft", true),
+            Palette::SoftLight => ("craft.soft", false),
         }
     }
-    /// The canonical name: `ui.set {theme}` accepts it and the Window › Theme commands are
-    /// `window.theme.<id>`.
-    pub fn id(self) -> &'static str {
+
+    fn label(self) -> &'static str {
         match self {
-            ThemeKind::Pro => "pro",
-            ThemeKind::ProMedium => "proMedium",
-            ThemeKind::ProLightGray => "proLightGray",
-            ThemeKind::ProLight => "proLight",
-            ThemeKind::Studio => "studio",
-            ThemeKind::StudioLight => "studioLight",
-            ThemeKind::Classic => "classic",
-            ThemeKind::Adwaita => "adwaita",
-            ThemeKind::AdwaitaDark => "adwaitaDark",
-            ThemeKind::SolarizedDark => "solarizedDark",
-            ThemeKind::BreezeLight => "breezeLight",
-            ThemeKind::BreezeDark => "breezeDark",
-            ThemeKind::SoftDark => "softDark",
-            ThemeKind::SoftLight => "softLight",
+            Palette::Pro => "Pro (Dark)",
+            Palette::ProMedium => "Pro (Medium Gray)",
+            Palette::ProLightGray => "Pro (Light Gray)",
+            Palette::ProLight => "Pro (Light)",
+            Palette::Studio => "Studio (Dark)",
+            Palette::StudioLight => "Studio (Light)",
+            Palette::Classic => "Classic",
+            Palette::Adwaita => "Adwaita (Light)",
+            Palette::AdwaitaDark => "Adwaita (Dark)",
+            Palette::SolarizedDark => "Solarized Dark",
+            Palette::BreezeLight => "Breeze Light",
+            Palette::BreezeDark => "Breeze Dark",
+            Palette::SoftDark => "Soft Dark",
+            Palette::SoftLight => "Soft Light",
         }
     }
-    /// Photoshop-grammar layout (tab strips, flat panels): the four Pro brightness levels.
-    pub fn is_pro(self) -> bool {
-        matches!(self, ThemeKind::Pro | ThemeKind::ProMedium | ThemeKind::ProLightGray | ThemeKind::ProLight)
+
+    /// The Light Theme row of the Appearance settings, in PhotoCraft's order.
+    const LIGHT_ROW: [Palette; 7] =
+        [Palette::ProLight, Palette::ProLightGray, Palette::StudioLight, Palette::Classic, Palette::Adwaita, Palette::BreezeLight, Palette::SoftLight];
+
+    /// The Dark Theme row, in PhotoCraft's order.
+    const DARK_ROW: [Palette; 7] =
+        [Palette::ProMedium, Palette::Pro, Palette::Studio, Palette::SolarizedDark, Palette::AdwaitaDark, Palette::BreezeDark, Palette::SoftDark];
+
+    /// Photoshop's four interface brightnesses, darkest first.
+    const BRIGHTNESSES: [Palette; 4] = [Palette::Pro, Palette::ProMedium, Palette::ProLightGray, Palette::ProLight];
+
+    /// The palette that draws suite theme `id` in the dark or light mode, if PhotoCraft has one.
+    fn of(id: &ThemeId, dark: bool) -> Option<Palette> {
+        Palette::ALL.into_iter().find(|p| p.theme() == (id.as_str(), dark))
     }
-    /// Whether this theme belongs to the dark appearance family.
-    pub fn is_dark(self) -> bool {
-        matches!(
-            self,
-            ThemeKind::Studio
-                | ThemeKind::Pro
-                | ThemeKind::ProMedium
-                | ThemeKind::SolarizedDark
-                | ThemeKind::AdwaitaDark
-                | ThemeKind::BreezeDark
-                | ThemeKind::SoftDark
-        )
+
+    fn is_dark(self) -> bool {
+        self.theme().1
     }
-    /// Whether this theme belongs to the light appearance family.
-    pub fn is_light(self) -> bool {
-        !self.is_dark()
+}
+
+/// The theme on screen: a suite theme in the mode shown, with the tokens PhotoCraft draws it with.
+/// The themes PhotoCraft has palettes for (see [`AppTheme::all`]) keep them; any other suite theme
+/// (a library theme, `craft.graphite`) takes its tokens from craft-theme's resolved tokens.
+#[derive(Clone, Debug)]
+pub struct AppTheme {
+    id: ThemeId,
+    tokens: Tokens,
+    /// The definition the tokens were resolved from, which the runtime resolves its own from;
+    /// `None` for a theme shown with PhotoCraft's palette.
+    library: Option<Arc<ThemeDef>>,
+}
+
+impl PartialEq for AppTheme {
+    fn eq(&self, other: &Self) -> bool {
+        let same_library = match (&self.library, &other.library) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b) || a == b,
+            (None, None) => true,
+            _ => false,
+        };
+        self.id == other.id && self.tokens == other.tokens && same_library
     }
-    pub fn next(self) -> Self {
-        let i = Self::ALL.iter().position(|k| *k == self).unwrap_or(0);
-        Self::ALL[(i + 1) % Self::ALL.len()]
+}
+
+impl Default for AppTheme {
+    /// The suite default, Pro (Medium Gray).
+    fn default() -> Self {
+        Self::from(Palette::ProMedium)
     }
-    pub fn from_name(s: &str) -> Option<Self> {
-        match s.to_ascii_lowercase().replace([' ', '_', '-', '(', ')'], "").as_str() {
-            "pro" | "prodark" | "photoshop" | "dark" => Some(ThemeKind::Pro),
-            "promedium" | "promediumgray" | "medium" | "mediumgray" => Some(ThemeKind::ProMedium),
-            "prolightgray" | "lightgray" | "mediumlight" => Some(ThemeKind::ProLightGray),
-            "prolight" | "prolightest" | "lightest" | "light" => Some(ThemeKind::ProLight),
-            "studio" | "studiodark" => Some(ThemeKind::Studio),
-            "studiolight" => Some(ThemeKind::StudioLight),
-            "classic" | "win2000" | "retro" => Some(ThemeKind::Classic),
-            "adwaita" | "adwaitalight" | "gnome" | "gnomelight" => Some(ThemeKind::Adwaita),
-            "adwaitadark" | "gnomedark" => Some(ThemeKind::AdwaitaDark),
-            "solarizeddark" | "solarized" => Some(ThemeKind::SolarizedDark),
-            "breezelight" | "breeze" | "kde" | "kdelight" | "plasma" | "plasmalight" => Some(ThemeKind::BreezeLight),
-            "breezedark" | "kdedark" | "plasmadark" => Some(ThemeKind::BreezeDark),
-            "softdark" => Some(ThemeKind::SoftDark),
-            "softlight" => Some(ThemeKind::SoftLight),
-            _ => None,
+}
+
+impl From<Palette> for AppTheme {
+    fn from(palette: Palette) -> Self {
+        let (id, _) = palette.theme();
+        AppTheme { id: ThemeId::parse(id).unwrap_or_else(|_| ThemeId::suite_default()), tokens: Tokens::for_palette(palette), library: None }
+    }
+}
+
+macro_rules! palette_themes {
+    ($($name:ident => $variant:ident),+ $(,)?) => {
+        impl AppTheme {
+            $(pub fn $name() -> Self { Self::from(Palette::$variant) })+
         }
+    };
+}
+
+palette_themes! {
+    pro => Pro, pro_medium => ProMedium, pro_light_gray => ProLightGray, pro_light => ProLight,
+    studio => Studio, studio_light => StudioLight, classic => Classic, solarized_dark => SolarizedDark,
+    adwaita => Adwaita, adwaita_dark => AdwaitaDark, breeze_light => BreezeLight, breeze_dark => BreezeDark,
+    soft_dark => SoftDark, soft_light => SoftLight,
+}
+
+impl AppTheme {
+    /// The themes PhotoCraft has palettes for, in the order of its Appearance settings.
+    pub fn all() -> [AppTheme; 14] {
+        Palette::ALL.map(AppTheme::from)
+    }
+
+    /// The themes the Light Theme row of the Appearance settings offers, in its order.
+    pub fn light_row() -> [AppTheme; 7] {
+        Palette::LIGHT_ROW.map(AppTheme::from)
+    }
+
+    /// The themes the Dark Theme row offers, in its order.
+    pub fn dark_row() -> [AppTheme; 7] {
+        Palette::DARK_ROW.map(AppTheme::from)
+    }
+
+    /// Photoshop's four interface brightnesses, darkest first.
+    pub fn brightnesses() -> [AppTheme; 4] {
+        Palette::BRIGHTNESSES.map(AppTheme::from)
+    }
+
+    /// PhotoCraft's palette for suite theme `id` in the dark or light mode, if it has one.
+    pub fn palette(id: &ThemeId, dark: bool) -> Option<Self> {
+        Palette::of(id, dark).map(Self::from)
+    }
+
+    /// Suite theme `def` shown in the dark or light mode with the tokens craft-theme resolved from it.
+    pub fn resolved(def: Arc<ThemeDef>, dark: bool, resolved: &craft::theme::Resolved) -> Self {
+        AppTheme { id: def.id.clone(), tokens: Tokens::from_resolved(&resolved.tokens, dark), library: Some(def) }
+    }
+
+    /// The name PhotoCraft's Appearance settings give a theme it has a palette for.
+    pub fn palette_label(id: &str, dark: bool) -> Option<&'static str> {
+        Palette::ALL.into_iter().find(|p| p.theme() == (id, dark)).map(Palette::label)
+    }
+
+    pub fn id(&self) -> &ThemeId {
+        &self.id
+    }
+
+    /// The suite definition of a theme PhotoCraft has no palette for.
+    pub fn library(&self) -> Option<&Arc<ThemeDef>> {
+        self.library.as_ref()
+    }
+
+    pub fn tokens(&self) -> Tokens {
+        self.tokens
+    }
+
+    pub fn is_dark(&self) -> bool {
+        self.tokens.dark
+    }
+
+    /// Photoshop-grammar layout (tab strips, flat panels).
+    pub fn is_pro(&self) -> bool {
+        self.tokens.pro
+    }
+
+    /// The Appearance command that shows this theme in its current mode.
+    #[cfg(test)]
+    pub(crate) fn command(&self) -> craft::ui::runtime::commands::CommandRef {
+        craft::menu::ThemeChoice::theme(self.id.clone(), self.is_dark()).command()
     }
 }
 
 /// Colour and shape tokens.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Tokens {
-    pub kind: ThemeKind,
+    /// Dark surfaces: the mode the theme is shown in.
+    pub dark: bool,
     /// Window chrome (title bar, toolbars).
     pub chrome: Color32,
     /// Canvas surround.
     pub canvas: Color32,
-    /// Dot colour of the canvas grid pattern.
-    pub canvas_dot: Color32,
     /// Dock background (behind cards).
     pub dock: Color32,
     /// Cards / panels.
@@ -196,8 +290,6 @@ pub struct Tokens {
     pub bevel: bool,
     /// Pro (Photoshop-grammar) layout: tab strips, flat panels, checkboxes, pill buttons.
     pub pro: bool,
-    /// Toolbar colour chips are large and round, stacked, with the colour buttons below (Studio).
-    pub round_chips: bool,
     /// Panel tab-strip background (Pro).
     pub tab_strip: Color32,
     /// Selected list row (layers, history).
@@ -214,16 +306,59 @@ pub struct Tokens {
 }
 
 impl Tokens {
-    /// Tool outlines need contrast on arbitrary document pixels, independently of UI theme.
-    pub(crate) fn cursor_outline() -> [Color32; 2] {
-        [Color32::from_black_alpha(160), Color32::from_white_alpha(235)]
+    /// The tokens PhotoCraft draws a suite theme with when it has no palette for it: craft-theme's
+    /// resolved colours and radii, in the Studio layout.
+    fn from_resolved(t: &craft::theme::Tokens, dark: bool) -> Self {
+        let c = |token: ColorToken| {
+            let [r, g, b, a] = t.color(token).0;
+            Color32::from_rgba_unmultiplied(r, g, b, a)
+        };
+        let radius = &t.shape.radius;
+        Tokens {
+            dark,
+            chrome: c(ColorToken::SurfaceChrome),
+            canvas: c(ColorToken::SurfaceCanvas),
+            dock: c(ColorToken::SurfaceBackground),
+            card: c(ColorToken::SurfacePanel),
+            card_border: c(ColorToken::LineBorder),
+            field: c(ColorToken::SurfaceSunken),
+            field_border: c(ColorToken::LineControlEdge),
+            hover: c(ColorToken::StateHover),
+            pressed: c(ColorToken::StatePressed),
+            text: c(ColorToken::TextNormal),
+            text_dim: c(ColorToken::TextMuted),
+            text_faint: c(ColorToken::TextFaint),
+            icon: c(ColorToken::TextNormal),
+            accent: c(ColorToken::AccentSolid),
+            accent_soft: c(ColorToken::AccentSoft),
+            accent_border: c(ColorToken::AccentBorder),
+            accent_text: c(ColorToken::AccentText),
+            separator: c(ColorToken::LineDivider),
+            shadow: c(ColorToken::SurfaceShadow),
+            primary_bg: c(ColorToken::AccentStrong),
+            primary_text: c(ColorToken::TextOnStrong),
+            danger: c(ColorToken::StatusBadSolid),
+            warning: c(ColorToken::StatusWarnSolid),
+            radius_sm: radius.sm,
+            radius: radius.control,
+            radius_lg: radius.window,
+            bevel: false,
+            pro: false,
+            tab_strip: c(ColorToken::SurfaceChrome),
+            row_selected: c(ColorToken::StateSelected),
+            histogram_bg: c(ColorToken::DataBackdrop),
+            histogram_level: 225,
+            caption_close: c(ColorToken::CaptionCloseHover),
+            caption_close_text: c(ColorToken::CaptionCloseText),
+            scrim: c(ColorToken::SurfaceScrim),
+        }
     }
 
-    pub fn for_kind(kind: ThemeKind) -> Self {
+    fn for_palette(kind: Palette) -> Self {
         match kind {
             // Sampled from Photoshop 2026's default brightness (raw display values).
-            ThemeKind::ProMedium => Tokens {
-                kind,
+            Palette::ProMedium => Tokens {
+                dark: kind.is_dark(),
                 chrome: Color32::from_rgb(83, 83, 83),
                 dock: Color32::from_rgb(66, 66, 66),
                 card: Color32::from_rgb(83, 83, 83),
@@ -240,14 +375,13 @@ impl Tokens {
                 separator: Color32::from_rgb(62, 62, 62),
                 tab_strip: Color32::from_rgb(74, 74, 74),
                 row_selected: Color32::from_rgb(107, 107, 107),
-                ..Tokens::for_kind(ThemeKind::Pro)
+                ..Tokens::for_palette(Palette::Pro)
             },
             // Photoshop's medium-light brightness: #B8B8B8 panels, dark text, a mid-grey canvas.
-            ThemeKind::ProLightGray => Tokens {
-                kind,
+            Palette::ProLightGray => Tokens {
+                dark: kind.is_dark(),
                 chrome: Color32::from_rgb(184, 184, 184),
                 canvas: Color32::from_rgb(160, 160, 160),
-                canvas_dot: Color32::from_rgb(160, 160, 160),
                 dock: Color32::from_rgb(168, 168, 168),
                 card: Color32::from_rgb(184, 184, 184),
                 card_border: Color32::from_rgb(160, 160, 160),
@@ -265,14 +399,13 @@ impl Tokens {
                 shadow: Color32::from_black_alpha(70),
                 tab_strip: Color32::from_rgb(170, 170, 170),
                 row_selected: Color32::from_rgb(212, 212, 212),
-                ..Tokens::for_kind(ThemeKind::Pro)
+                ..Tokens::for_palette(Palette::Pro)
             },
             // Photoshop's lightest brightness: #F0F0F0 panels, dark text, a light-grey canvas.
-            ThemeKind::ProLight => Tokens {
-                kind,
+            Palette::ProLight => Tokens {
+                dark: kind.is_dark(),
                 chrome: Color32::from_rgb(240, 240, 240),
                 canvas: Color32::from_rgb(214, 214, 214),
-                canvas_dot: Color32::from_rgb(214, 214, 214),
                 dock: Color32::from_rgb(226, 226, 226),
                 card: Color32::from_rgb(240, 240, 240),
                 card_border: Color32::from_rgb(214, 214, 214),
@@ -290,13 +423,12 @@ impl Tokens {
                 shadow: Color32::from_black_alpha(50),
                 tab_strip: Color32::from_rgb(226, 226, 226),
                 row_selected: Color32::from_rgb(204, 204, 204),
-                ..Tokens::for_kind(ThemeKind::Pro)
+                ..Tokens::for_palette(Palette::Pro)
             },
-            ThemeKind::Pro => Tokens {
-                kind,
+            Palette::Pro => Tokens {
+                dark: kind.is_dark(),
                 chrome: Color32::from_rgb(50, 50, 50),
                 canvas: Color32::from_rgb(40, 40, 40),
-                canvas_dot: Color32::from_rgb(40, 40, 40),
                 dock: Color32::from_rgb(30, 30, 30),
                 card: Color32::from_rgb(50, 50, 50),
                 card_border: Color32::from_rgb(30, 30, 30),
@@ -323,7 +455,6 @@ impl Tokens {
                 radius_lg: 6.0,
                 bevel: false,
                 pro: true,
-                round_chips: false,
                 tab_strip: Color32::from_rgb(38, 38, 38),
                 row_selected: Color32::from_rgb(82, 82, 82),
                 histogram_bg: Color32::from_rgb(40, 40, 40),
@@ -332,11 +463,10 @@ impl Tokens {
                 caption_close_text: Color32::WHITE,
                 scrim: Color32::from_black_alpha(110),
             },
-            ThemeKind::Studio => Tokens {
-                kind,
+            Palette::Studio => Tokens {
+                dark: kind.is_dark(),
                 chrome: Color32::from_rgb(20, 20, 21),
                 canvas: Color32::from_rgb(14, 14, 15),
-                canvas_dot: Color32::from_rgb(46, 46, 50),
                 dock: Color32::from_rgb(17, 17, 18),
                 card: Color32::from_rgb(26, 26, 28),
                 card_border: Color32::from_rgb(40, 40, 44),
@@ -365,7 +495,6 @@ impl Tokens {
                 pro: false,
                 // Studio Dark uses the compact overlapping square foreground/background
                 // chips rather than the large stacked circles (#3494).
-                round_chips: false,
                 tab_strip: Color32::TRANSPARENT,
                 row_selected: Color32::TRANSPARENT,
                 histogram_bg: Color32::from_rgb(14, 14, 15),
@@ -374,11 +503,10 @@ impl Tokens {
                 caption_close_text: Color32::WHITE,
                 scrim: Color32::from_black_alpha(110),
             },
-            ThemeKind::StudioLight => Tokens {
-                kind,
+            Palette::StudioLight => Tokens {
+                dark: kind.is_dark(),
                 chrome: Color32::from_rgb(246, 246, 248),
                 canvas: Color32::from_rgb(226, 226, 230),
-                canvas_dot: Color32::from_rgb(200, 200, 206),
                 dock: Color32::from_rgb(240, 240, 243),
                 card: Color32::from_rgb(252, 252, 253),
                 card_border: Color32::from_rgb(222, 222, 228),
@@ -405,7 +533,6 @@ impl Tokens {
                 radius_lg: 12.0,
                 bevel: false,
                 pro: false,
-                round_chips: true,
                 tab_strip: Color32::TRANSPARENT,
                 row_selected: Color32::TRANSPARENT,
                 histogram_bg: Color32::from_gray(40),
@@ -414,11 +541,10 @@ impl Tokens {
                 caption_close_text: Color32::WHITE,
                 scrim: Color32::from_black_alpha(110),
             },
-            ThemeKind::Classic => Tokens {
-                kind,
+            Palette::Classic => Tokens {
+                dark: kind.is_dark(),
                 chrome: Color32::from_rgb(212, 208, 200),
                 canvas: Color32::from_rgb(128, 128, 128),
-                canvas_dot: Color32::from_rgb(128, 128, 128),
                 dock: Color32::from_rgb(212, 208, 200),
                 card: Color32::from_rgb(212, 208, 200),
                 card_border: Color32::from_rgb(128, 128, 128),
@@ -445,7 +571,6 @@ impl Tokens {
                 radius_lg: 0.0,
                 bevel: true,
                 pro: false,
-                round_chips: false,
                 tab_strip: Color32::from_rgb(212, 208, 200),
                 row_selected: Color32::from_rgb(10, 36, 106),
                 histogram_bg: Color32::from_gray(40),
@@ -457,11 +582,10 @@ impl Tokens {
             // libadwaita's named colours (window, sidebar, card, view, accent, destructive) and
             // radii (6 px buttons, 12 px cards), mapped onto the Studio layout. GNOME's close
             // button is a neutral circle, not a red one, so the caption colours stay grey.
-            ThemeKind::Adwaita => Tokens {
-                kind,
+            Palette::Adwaita => Tokens {
+                dark: kind.is_dark(),
                 chrome: Color32::WHITE,
                 canvas: Color32::from_rgb(222, 222, 223),
-                canvas_dot: Color32::from_rgb(222, 222, 223),
                 dock: Color32::from_rgb(235, 235, 237),
                 card: Color32::WHITE,
                 card_border: Color32::from_rgb(218, 218, 221),
@@ -488,7 +612,6 @@ impl Tokens {
                 radius_lg: 12.0,
                 bevel: false,
                 pro: false,
-                round_chips: true,
                 tab_strip: Color32::TRANSPARENT,
                 row_selected: Color32::TRANSPARENT,
                 histogram_bg: Color32::from_gray(40),
@@ -497,11 +620,10 @@ impl Tokens {
                 caption_close_text: Color32::from_rgb(50, 50, 54),
                 scrim: Color32::from_black_alpha(110),
             },
-            ThemeKind::AdwaitaDark => Tokens {
-                kind,
+            Palette::AdwaitaDark => Tokens {
+                dark: kind.is_dark(),
                 chrome: Color32::from_rgb(46, 46, 50),
                 canvas: Color32::from_rgb(29, 29, 32),
-                canvas_dot: Color32::from_rgb(29, 29, 32),
                 dock: Color32::from_rgb(34, 34, 38),
                 card: Color32::from_rgb(54, 54, 58),
                 card_border: Color32::from_rgb(64, 64, 68),
@@ -528,7 +650,6 @@ impl Tokens {
                 radius_lg: 12.0,
                 bevel: false,
                 pro: false,
-                round_chips: true,
                 tab_strip: Color32::TRANSPARENT,
                 row_selected: Color32::TRANSPARENT,
                 histogram_bg: Color32::from_rgb(29, 29, 32),
@@ -543,11 +664,10 @@ impl Tokens {
             // surfaces, so the secondary and faint text, the accent and danger text and the status
             // hues are darker to hold 4.5:1 (checked by the tests), and the primary button is a
             // deeper blue that takes white text.
-            ThemeKind::BreezeLight => Tokens {
-                kind,
+            Palette::BreezeLight => Tokens {
+                dark: kind.is_dark(),
                 chrome: Color32::from_rgb(219, 222, 226),
                 canvas: Color32::from_rgb(219, 222, 226),
-                canvas_dot: Color32::from_rgb(219, 222, 226),
                 dock: Color32::from_rgb(224, 227, 231),
                 card: Color32::from_rgb(236, 238, 241),
                 card_border: Color32::from_rgb(203, 208, 213),
@@ -574,7 +694,6 @@ impl Tokens {
                 radius_lg: 6.0,
                 bevel: false,
                 pro: false,
-                round_chips: true,
                 tab_strip: Color32::TRANSPARENT,
                 row_selected: Color32::TRANSPARENT,
                 histogram_bg: Color32::from_rgb(33, 37, 42),
@@ -593,11 +712,10 @@ impl Tokens {
             // faint text, the accent and danger text and the status hues are lighter than Breeze's,
             // hover and pressed are small steps, and the primary button is a deeper blue that takes
             // white text. Outlines and those steps are our own tints.
-            ThemeKind::BreezeDark => Tokens {
-                kind,
+            Palette::BreezeDark => Tokens {
+                dark: kind.is_dark(),
                 chrome: Color32::from_rgb(38, 42, 48),
                 canvas: Color32::from_rgb(17, 20, 24),
-                canvas_dot: Color32::from_rgb(17, 20, 24),
                 dock: Color32::from_rgb(26, 29, 34),
                 card: Color32::from_rgb(29, 33, 38),
                 card_border: Color32::from_rgb(52, 56, 61),
@@ -624,7 +742,6 @@ impl Tokens {
                 radius_lg: 6.0,
                 bevel: false,
                 pro: false,
-                round_chips: true,
                 tab_strip: Color32::TRANSPARENT,
                 row_selected: Color32::TRANSPARENT,
                 histogram_bg: Color32::from_rgb(17, 20, 24),
@@ -636,11 +753,10 @@ impl Tokens {
             // Soft Dark: our own low-contrast palette on the Studio layout. Muted violet-grey
             // surfaces (never near-black), softened off-white text and a periwinkle accent; the
             // text colours still hold 4.5:1 on every surface (checked by the tests).
-            ThemeKind::SoftDark => Tokens {
-                kind,
+            Palette::SoftDark => Tokens {
+                dark: kind.is_dark(),
                 chrome: Color32::from_rgb(58, 58, 68),
                 canvas: Color32::from_rgb(40, 40, 48),
-                canvas_dot: Color32::from_rgb(40, 40, 48),
                 dock: Color32::from_rgb(47, 47, 56),
                 card: Color32::from_rgb(54, 54, 64),
                 card_border: Color32::from_rgb(70, 70, 82),
@@ -667,7 +783,6 @@ impl Tokens {
                 radius_lg: 14.0,
                 bevel: false,
                 pro: false,
-                round_chips: true,
                 tab_strip: Color32::TRANSPARENT,
                 row_selected: Color32::TRANSPARENT,
                 histogram_bg: Color32::from_rgb(40, 40, 48),
@@ -678,11 +793,10 @@ impl Tokens {
             },
             // Soft Light: pale violet-grey surfaces, softened dark-violet text (not black) and a
             // periwinkle accent, with the same generous radii as Soft Dark.
-            ThemeKind::SoftLight => Tokens {
-                kind,
+            Palette::SoftLight => Tokens {
+                dark: kind.is_dark(),
                 chrome: Color32::from_rgb(232, 230, 236),
                 canvas: Color32::from_rgb(218, 216, 224),
-                canvas_dot: Color32::from_rgb(218, 216, 224),
                 dock: Color32::from_rgb(226, 224, 231),
                 card: Color32::from_rgb(240, 238, 243),
                 card_border: Color32::from_rgb(208, 205, 215),
@@ -709,7 +823,6 @@ impl Tokens {
                 radius_lg: 14.0,
                 bevel: false,
                 pro: false,
-                round_chips: true,
                 tab_strip: Color32::TRANSPARENT,
                 row_selected: Color32::TRANSPARENT,
                 histogram_bg: Color32::from_rgb(44, 42, 56),
@@ -721,11 +834,10 @@ impl Tokens {
             // Ethan Schoonover's Solarized Dark palette: base03 canvas, base02 surfaces, base0
             // body text and the Solarized blue accent. https://ethanschoonover.com/solarized/
             // (MIT; see LICENSE-solarized.txt)
-            ThemeKind::SolarizedDark => Tokens {
-                kind,
+            Palette::SolarizedDark => Tokens {
+                dark: kind.is_dark(),
                 chrome: Color32::from_rgb(7, 54, 66),
                 canvas: Color32::from_rgb(0, 43, 54),
-                canvas_dot: Color32::from_rgb(10, 61, 74),
                 dock: Color32::from_rgb(0, 37, 47),
                 card: Color32::from_rgb(7, 54, 66),
                 card_border: Color32::from_rgb(0, 37, 47),
@@ -752,7 +864,6 @@ impl Tokens {
                 radius_lg: 12.0,
                 bevel: false,
                 pro: false,
-                round_chips: true,
                 tab_strip: Color32::TRANSPARENT,
                 row_selected: Color32::TRANSPARENT,
                 histogram_bg: Color32::from_rgb(0, 43, 54),
@@ -766,7 +877,7 @@ impl Tokens {
 
     /// Tokens for the active theme (stored in egui's context data by [`apply`]).
     pub fn get(ctx: &egui::Context) -> Tokens {
-        ctx.data(|d| d.get_temp::<Tokens>(egui::Id::unique("photocraft-theme"))).unwrap_or_else(|| Tokens::for_kind(ThemeKind::Studio))
+        ctx.data(|d| d.get_temp::<Tokens>(egui::Id::unique("photocraft-theme"))).unwrap_or_else(|| AppTheme::studio().tokens())
     }
 
     /// Thin RGB outlines; the filled bands use the same hues with subdued coverage.
@@ -818,15 +929,6 @@ impl Tokens {
         self.histogram_bg
     }
 
-    /// The background behind selected text in a text field (#3789): a subtle shade rather than
-    /// egui's default blue. The monochrome Pro themes use a grey so a selection doesn't read as a
-    /// second accent; coloured themes keep their own accent. Scoped to text fields by
-    /// [`crate::widgets::text_field`], because `Visuals::selection` also fills selected list rows
-    /// and slider trails, which must keep the theme's.
-    pub fn field_selection(&self) -> Color32 {
-        if self.pro { Color32::from_gray(if self.dark() { 96 } else { 201 }) } else { self.accent_soft }
-    }
-
     /// The 1 px ring round a slider knob, if the theme draws one: the Pro layouts' dark ring, and
     /// in the light themes the dim text colour, so their white knob stands out from a pale panel
     /// (#7927). The dark Studio-layout themes need none; Classic draws a bevelled knob instead.
@@ -841,66 +943,85 @@ impl Tokens {
     }
 
     pub fn dark(&self) -> bool {
-        self.kind.is_dark()
+        self.dark
     }
 }
 
-/// Register Inter (UI) and JetBrains Mono (numbers) plus named weights.
+/// Installs the font stack and the size stack on `ctx`, not the runtime: Inter (UI) and JetBrains
+/// Mono (numbers) with the named weights, the craft-fonts faces and the loader of system fonts,
+/// each face at Interface › UI Font Size. A language change and a served face call it again to
+/// rebuild the stack. The runtime is installed once, when the window or context is created
+/// ([`install_runtime`]).
 pub fn install_fonts(ctx: &egui::Context) {
-    install_fonts_with(ctx, crate::cjk_fonts::Sources::system());
+    let fonts = ui_fonts(ctx, crate::i18n::current().code());
+    install_font_stack(ctx, &fonts);
 }
 
-/// [`install_fonts`] with the CJK and other-script fallback fonts taken from `cjk` (tests swap the sources).
-pub fn install_fonts_with(ctx: &egui::Context, cjk: crate::cjk_fonts::Sources) {
-    // egui's default fonts stay last in the stack, for symbols and emoji Inter lacks.
-    let mut fonts = crate::egui_fonts::definitions();
+/// PhotoCraft's faces as the craft framework's font stack: Inter for the interface with its
+/// `medium` and `semibold` families, JetBrains Mono for numbers. The framework puts egui's default
+/// faces after them, for symbols Inter lacks, and orders the craft-fonts faces this build embeds
+/// (`cjk_fonts::craft_faces`) by `ui_language`. A web build's served faces and their fetcher come
+/// from `served_fonts::serve`.
+fn ui_fonts(ctx: &egui::Context, ui_language: &str) -> UiFonts<'static> {
+    use craft::ui::fonts::{Emoji, Family, FontRef, I18nScripts, SEMIBOLD};
+    let (proportional, monospace, medium, semibold) = (FontRef::proportional(), FontRef::monospace(), FontRef::named("medium"), FontRef::named(SEMIBOLD));
+    let mut faces: Vec<(String, FontData, Vec<FontRef>)> = Vec::new();
     // The bundled fonts are inflated on first use (photocraft_text::fonts). Should one ever fail
-    // to inflate (empty bytes), it is left out and egui's default fonts draw that text.
-    let add = |fonts: &mut FontDefinitions, name: &str, bytes: &'static [u8]| -> Option<String> {
-        if bytes.is_empty() {
-            log::error!("bundled font {name} is unavailable; using the default UI font");
-            return None;
-        }
-        fonts.font_data.insert(name.to_owned(), Arc::new(FontData::from_static(bytes)));
-        Some(name.to_owned())
+    // to inflate (empty bytes), it is left out and the next face draws that text.
+    let mut add = |name: &str, data: Option<FontData>, families: &[FontRef]| match data {
+        Some(data) => faces.push((name.to_owned(), data, families.to_vec())),
+        None => log::error!("bundled font {name} is unavailable; using the default UI font"),
     };
-    let inter = add(&mut fonts, "Inter", photocraft_text::fonts::INTER_REGULAR.as_slice());
-    let medium = add(&mut fonts, "Inter-Medium", photocraft_text::fonts::INTER_MEDIUM.as_slice());
-    let semibold = add(&mut fonts, "Inter-SemiBold", photocraft_text::fonts::INTER_SEMIBOLD.as_slice());
-    let mono = add(&mut fonts, "JetBrainsMono", photocraft_text::fonts::JETBRAINS_MONO_REGULAR.as_slice());
-    if let Some(inter) = inter {
-        fonts.families.entry(FontFamily::Proportional).or_default().insert(0, inter);
+    let bundled = |bytes: &'static [u8]| (!bytes.is_empty()).then(|| FontData::from_static(bytes));
+    // Each family's own face first, then Inter behind the named weights.
+    add("Inter-Medium", bundled(photocraft_text::fonts::INTER_MEDIUM.as_slice()), std::slice::from_ref(&medium));
+    add("Inter-SemiBold", bundled(photocraft_text::fonts::INTER_SEMIBOLD.as_slice()), std::slice::from_ref(&semibold));
+    add("JetBrainsMono", bundled(photocraft_text::fonts::JETBRAINS_MONO_REGULAR.as_slice()), std::slice::from_ref(&monospace));
+    add("Inter", bundled(photocraft_text::fonts::INTER_REGULAR.as_slice()), &[proportional.clone(), medium.clone(), semibold.clone()]);
+    // The monochrome emoji face egui's `default_fonts` would add; the last resort after the system fonts.
+    let mut emoji = Emoji::default();
+    emoji.monochrome = craft::ui::fonts::noto_emoji();
+    let mut fonts = UiFonts::new(&I18nScripts)
+        .family(Family::named("medium").weight(500))
+        .family(Family::named(SEMIBOLD).weight(600))
+        .craft_faces(&crate::cjk_fonts::craft_faces())
+        .ui_language(ui_language)
+        .emoji(emoji);
+    if let Some(locale) = crate::cjk_fonts::os_locale() {
+        fonts = fonts.os_locale(locale);
     }
-    if let Some(mono) = mono {
-        fonts.families.entry(FontFamily::Monospace).or_default().insert(0, mono);
+    if let Some(served) = crate::served_fonts::served(ctx) {
+        fonts = fonts.served_faces(&served.faces).fetcher(served.fetcher);
     }
-    // The optional craft-fonts input carries Japanese, Simplified Chinese, Korean, Arabic, Thai and
-    // other faces. They are not registered into this static stack: `cjk_fonts` installs a
-    // per-character font provider for them, so a broad Simplified Chinese face is not put in the
-    // family stack ahead of the Japanese or Korean face, and a locale without a Traditional Chinese
-    // craft face leaves Han to the system font. (A single linear per-family chain still decides a
-    // glyph once a broad face is discovered; see `cjk_fonts`.)
-    // Served script fallbacks the web build has received (Arabic, Japanese…), after everything else.
-    for (name, data) in crate::served_fonts::ui_faces() {
-        fonts.font_data.insert(name.clone(), data);
-        for family in [FontFamily::Proportional, FontFamily::Monospace] {
-            fonts.families.entry(family).or_default().push(name.clone());
-        }
+    faces.into_iter().fold(fonts, |fonts, (name, data, families)| fonts.app_face(&name, data, &families))
+}
+
+/// Installs the craft runtime on `ctx` with the font stack (see [`install_fonts`]) and the root
+/// window's `frame` decision (`None` where the platform has none, as on the web; the frame is part
+/// of this install, never set afterwards). It runs once, from `PhotocraftApp::setup_window` or
+/// `setup_context`, when the window or headless context is created.
+pub fn install_runtime(ctx: &egui::Context, frame: Option<craft::window::policy::Decision>) {
+    let fonts = ui_fonts(ctx, crate::i18n::current().code());
+    crate::app::framework::install(ctx, &fonts, frame);
+    install_font_stack(ctx, &fonts);
+}
+
+/// Every face of `fonts` at Interface › UI Font Size, egui's default faces the framework adds
+/// included, with the plugin that follows size changes and the loader of system fonts for scripts
+/// nothing else covers. The runtime's install takes no edited stack, so after it this replaces the
+/// stack it just installed.
+fn install_font_stack(ctx: &egui::Context, fonts: &UiFonts<'_>) {
+    let language = crate::i18n::current().code();
+    let mut stack = fonts.stack();
+    for (name, data) in stack.flat_definitions().font_data {
+        let mut data = (*data).clone();
+        size_ui_font(ctx, &name, &mut data);
+        stack.replace(&name, data);
     }
-    // Named weights fall back to the default stack for missing glyphs.
-    let fallback: Vec<String> = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
-    for (fam, primary) in [("medium", medium), ("semibold", semibold)] {
-        let mut stack: Vec<String> = primary.into_iter().collect();
-        stack.extend(fallback.iter().cloned());
-        fonts.families.insert(FontFamily::Name(fam.into()), stack);
-    }
-    let size = ui_font_size(ctx);
-    for (name, data) in &mut fonts.font_data {
-        size_ui_font(ctx, name, Arc::make_mut(data));
-    }
-    ctx.set_fonts(fonts);
+    stack.install(ctx);
     // egui keeps the first plugin of a type, so a re-install (language change) resets the
     // existing one. The new definitions land next pass: the plugin must not rescale before then.
+    let size = ui_font_size(ctx);
     if ctx
         .with_plugin::<UiFontSizePlugin, _>(|plugin| {
             plugin.applied = size;
@@ -910,9 +1031,12 @@ pub fn install_fonts_with(ctx: &egui::Context, cjk: crate::cjk_fonts::Sources) {
     {
         ctx.add_plugin(UiFontSizePlugin { applied: size, defer_after_install: true });
     }
-    // CJK, Thai, Arabic, Indic and other script fallback fonts (craft-fonts' Japanese ones if built in, then
-    // the system's) are registered on demand (cjk_fonts.rs).
-    crate::cjk_fonts::install_with(ctx, cjk);
+    // Installed system fonts for scripts the stack lacks are registered on demand. The loader's faces are
+    // dropped with the stack and take names again, so the sizes recorded for them are forgotten.
+    for (name, ..) in craft::ui::fonts::on_demand_registered(ctx) {
+        ctx.data_mut(|d| d.remove_temp::<f32>(ui_fonts_id().with(name)));
+    }
+    crate::cjk_fonts::on_demand_fonts(language).install(ctx);
 }
 
 /// Has [`install_fonts`]'s stack reached the active fonts? Before that (the first pass, when
@@ -930,11 +1054,6 @@ fn ui_font_size(ctx: &egui::Context) -> UiFontSize {
     ctx.data(|d| d.get_temp::<UiFontSize>(ui_fonts_id())).unwrap_or_default()
 }
 
-/// The Interface > UI Font Size multiplier for the current context (including the default Small).
-pub(crate) fn ui_font_scale(ctx: &egui::Context) -> f32 {
-    font_scale(ui_font_size(ctx))
-}
-
 fn font_scale(size: UiFontSize) -> f32 {
     match size {
         UiFontSize::Tiny => 10.0 / 12.0,
@@ -944,8 +1063,8 @@ fn font_scale(size: UiFontSize) -> f32 {
     }
 }
 
-/// Register the original multiplier before sizing a face, including lazy CJK fallbacks.
-pub(crate) fn size_ui_font(ctx: &egui::Context, name: &str, data: &mut FontData) {
+/// Register the original multiplier before sizing a face of the installed stack.
+fn size_ui_font(ctx: &egui::Context, name: &str, data: &mut FontData) {
     ctx.data_mut(|d| d.insert_temp(ui_fonts_id().with(name), data.tweak.scale));
     data.tweak.scale *= font_scale(ui_font_size(ctx));
 }
@@ -978,7 +1097,11 @@ impl egui::Plugin for UiFontSizePlugin {
     fn output_hook(&mut self, ctx: &egui::Context, _output: &mut egui::FullOutput) {
         let size = ui_font_size(ctx);
         let deferred = std::mem::take(&mut self.defer_after_install);
-        if size == self.applied {
+        // A face registered after the install (a served or on-demand fallback) starts at its own scale and has no
+        // recorded original; the faces of the installed stack all have one. Such a face is sized on the pass that
+        // finds it, and the pass after finds none.
+        let unsized_face = size == self.applied && font_scale(size) != 1.0 && !deferred && ui_fonts_active(ctx) && has_unsized_face(ctx);
+        if size == self.applied && !unsized_face {
             return;
         }
         if deferred || !ui_fonts_active(ctx) {
@@ -991,18 +1114,22 @@ impl egui::Plugin for UiFontSizePlugin {
         let mut fonts = ctx.fonts(|f| f.definitions().clone());
         for (name, data) in &mut fonts.font_data {
             let id = ui_fonts_id().with(name);
-            let original = ctx.data(|d| d.get_temp::<f32>(id)).unwrap_or(data.tweak.scale / font_scale(self.applied));
+            // No record: the face came after the install, at the scale it was made with.
+            let original = ctx.data(|d| d.get_temp::<f32>(id)).unwrap_or(data.tweak.scale);
             ctx.data_mut(|d| d.insert_temp(id, original));
             Arc::make_mut(data).tweak.scale = original * font_scale(size);
         }
+        // The on-demand loader registers its faces into these definitions, so they take the size too.
         ctx.set_fonts(fonts);
-        // The provider must use the scale of the definitions that were active while this pass
-        // laid out text. A face it discovers during the pass is inserted at that old scale; after
-        // `set_fonts` the rescaled definitions take effect and the provider follows them.
-        crate::cjk_fonts::set_craft_font_scale(ctx, font_scale(size));
         self.applied = size;
         ctx.request_repaint();
     }
+}
+
+/// Whether the active definitions hold a face whose original scale was never recorded.
+fn has_unsized_face(ctx: &egui::Context) -> bool {
+    let names: Vec<String> = ctx.fonts(|f| f.definitions().font_data.keys().cloned().collect());
+    names.iter().any(|name| ctx.data(|d| d.get_temp::<f32>(ui_fonts_id().with(name))).is_none())
 }
 
 pub fn medium(size: f32) -> FontId {
@@ -1016,11 +1143,11 @@ pub fn mono(size: f32) -> FontId {
 }
 
 /// Apply a theme to egui's global style and publish its tokens.
-pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
+pub fn apply(ctx: &egui::Context, theme: &AppTheme) {
     // Keep native windows at SystemDefault so macOS continues reporting OS appearance changes,
     // including when an integration or restored egui state pinned its own theme preference.
     ctx.set_theme(egui::ThemePreference::System);
-    let t = Tokens::for_kind(kind);
+    let t = theme.tokens();
     ctx.data_mut(|d| d.insert_temp(egui::Id::unique("photocraft-theme"), t));
     let mut v = if t.dark() { Visuals::dark() } else { Visuals::light() };
     v.panel_fill = t.chrome;
@@ -1139,7 +1266,7 @@ pub mod live {
         }
 
         /// Re-apply overrides if the file changed. Returns true when tokens were updated.
-        pub fn poll(&mut self, ctx: &egui::Context, kind: super::ThemeKind) -> bool {
+        pub fn poll(&mut self, ctx: &egui::Context, theme: &super::AppTheme) -> bool {
             let Some(path) = &self.path else { return false };
             let now = ctx.input(|i| i.time);
             if now - self.last_check < 0.4 {
@@ -1157,7 +1284,7 @@ pub mod live {
             let Ok(text) = std::fs::read_to_string(path) else { return false };
             match serde_json::from_str::<serde_json::Value>(&text) {
                 Ok(v) => {
-                    super::apply(ctx, kind);
+                    super::apply(ctx, theme);
                     let mut t = Tokens::get(ctx);
                     let unknown = apply_overrides(&mut t, &v);
                     ctx.data_mut(|d| d.insert_temp(egui::Id::unique("photocraft-theme"), t));
@@ -1234,11 +1361,6 @@ pub mod live {
             "canvas" => {
                 if let Some(c) = color(value) {
                     t.canvas = c;
-                }
-            }
-            "canvas_dot" => {
-                if let Some(c) = color(value) {
-                    t.canvas_dot = c;
                 }
             }
             "dock" => {
@@ -1378,19 +1500,5 @@ pub mod live {
             _ => return false,
         }
         true
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn overrides_apply_and_report_unknown() {
-            let mut t = Tokens::for_kind(super::super::ThemeKind::Pro);
-            let unknown = apply_overrides(&mut t, &serde_json::json!({"card": "#102030", "radius": 9, "nope": 1}));
-            assert_eq!(t.card, Color32::from_rgb(16, 32, 48));
-            assert_eq!(t.radius, 9.0);
-            assert_eq!(unknown, vec!["nope".to_string()]);
-        }
     }
 }
