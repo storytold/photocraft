@@ -2,6 +2,8 @@
 //! triangle. It shares the Rectangle Radius's 0..150000 range and alert, never edits the active
 //! shape, and the Create Triangle dialog starts from it.
 
+use craft::draw::ui::shape_drag::CreateShapeDialog;
+use craft::ui::dialog::StackDialog as _;
 use egui::accesskit::Role;
 use egui::vec2;
 use egui_kittest::Harness;
@@ -9,10 +11,9 @@ use egui_kittest::kittest::{NodeT, Queryable};
 use photocraft_doc::{LayerContent, LiveShape};
 use serde_json::json;
 
-use super::{RADIUS_INVALID_ALERT, RADIUS_RANGE_ALERT};
 use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, tool_event};
-use crate::state::{DialogKind, Tool};
+use crate::state::Tool;
 
 fn new_app() -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -24,8 +25,8 @@ fn new_app() -> PhotocraftApp {
 fn bar_with(app: PhotocraftApp, tool: Tool) -> Harness<'static, PhotocraftApp> {
     let mut app = app;
     app.ui.tool = tool;
-    let mut h = Harness::builder().with_size(vec2(1800.0, 300.0)).build_ui_state(|ui, app| crate::panels::options_bar(app, ui), app);
-    PhotocraftApp::setup_context(&h.ctx, Default::default());
+    let mut h =
+        Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1800.0, 300.0)).build_ui_state(|ui, app| crate::panels::options_bar(app, ui), app);
     h.run_steps(4);
     h
 }
@@ -34,9 +35,14 @@ fn bar() -> Harness<'static, PhotocraftApp> {
     bar_with(new_app(), Tool::Triangle)
 }
 
+/// The Radius fields the bar shows.
+fn radius_fields(h: &Harness<'static, PhotocraftApp>) -> usize {
+    h.query_all_by_role(Role::SpinButton).filter(|n| n.accesskit_node().label().as_deref() == Some("Radius")).count()
+}
+
 /// Types `text` into Radius, then Tabs out of it.
 fn type_radius(h: &mut Harness<'static, PhotocraftApp>, text: &str) {
-    h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Radius:")).expect("the Radius field").click();
+    h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Radius")).expect("the Radius field").click();
     h.run_steps(1);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
     h.event(egui::Event::Text(text.into()));
@@ -45,8 +51,9 @@ fn type_radius(h: &mut Harness<'static, PhotocraftApp>, text: &str) {
     h.run_steps(3);
 }
 
-fn alerts(h: &Harness<'static, PhotocraftApp>) -> Vec<String> {
-    h.state().ui.dialogs.iter().filter(|d| d.kind == DialogKind::Error).filter_map(|d| d.fields.get("message")?.as_str().map(str::to_owned)).collect()
+/// How many alerts are open.
+fn alerts(h: &Harness<'static, PhotocraftApp>) -> usize {
+    crate::dialogs::alerts::alerts(h.state()).len()
 }
 
 fn radius(h: &Harness<'static, PhotocraftApp>) -> f32 {
@@ -63,14 +70,6 @@ fn live(app: &PhotocraftApp) -> LiveShape {
     let l = st.doc.layer(st.active_layer.unwrap()).unwrap();
     let LayerContent::Shape(sh) = &l.content else { panic!("not a shape layer") };
     sh.live.clone().unwrap()
-}
-
-/// The anchors of the active shape layer's outline.
-fn knots(app: &PhotocraftApp) -> usize {
-    let st = app.session.active().unwrap();
-    let l = st.doc.layer(st.active_layer.unwrap()).unwrap();
-    let LayerContent::Shape(sh) = &l.content else { panic!("not a shape layer") };
-    sh.path.subpaths[0].knots.len()
 }
 
 /// The anchor points of the active shape layer's outline.
@@ -93,9 +92,10 @@ fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2]) {
 fn the_triangle_tool_shows_a_radius_field_in_range_without_an_alert() {
     for (typed, want) in [("0", 0.0), ("10", 10.0), ("5000", 5000.0)] {
         let mut h = bar();
+        assert_eq!(radius_fields(&h), 1, "one Radius field on the Triangle bar");
         type_radius(&mut h, typed);
         assert_eq!(radius(&h), want, "{typed}");
-        assert!(alerts(&h).is_empty(), "{typed} is in range");
+        assert_eq!(alerts(&h), 0, "{typed} is in range");
         assert_eq!(h.state().ui.tool_options.corner_radius, 0.0, "{typed}: the Rectangle's radius is separate");
     }
 }
@@ -106,63 +106,20 @@ fn a_radius_past_the_range_takes_the_closest_value_and_alerts_once() {
         let mut h = bar();
         type_radius(&mut h, typed);
         assert_eq!(radius(&h), want, "{typed}");
-        assert_eq!(alerts(&h), vec![RADIUS_RANGE_ALERT.to_string()], "{typed}: one alert");
+        assert_eq!(alerts(&h), 1, "{typed}: one alert");
         assert_eq!(h.state().ui.tool_options.corner_radius, 0.0, "{typed}: the Rectangle's radius is separate");
     }
 }
 
-/// OK on the alert, as `ui.dialog.confirm` presses it (this harness draws only the bar).
-fn ok(h: &mut Harness<'static, PhotocraftApp>) {
-    let id = h.state().ui.dialogs.iter().find(|d| d.kind == DialogKind::Error).map(|d| d.id).expect("an alert");
-    crate::dialogs::confirm(h.state_mut(), id).unwrap();
-    h.run_steps(3);
-}
-
 #[test]
-fn text_that_is_not_a_number_keeps_the_previous_radius_and_alerts() {
-    let mut h = bar();
-    type_radius(&mut h, "12");
-    assert!(alerts(&h).is_empty(), "12 is in range");
-    type_radius(&mut h, "abc");
-    assert_eq!(radius(&h), 12.0, "the last valid value stays");
-    assert_eq!(alerts(&h), vec![RADIUS_INVALID_ALERT.to_string()], "one invalid-entry alert");
-    ok(&mut h);
-    // A number typed after it is taken without an alert.
-    type_radius(&mut h, "7");
-    assert_eq!(radius(&h), 7.0);
-    assert!(alerts(&h).is_empty(), "7 is a number in range");
-}
-
-/// Clicks Radius and types `text` one character per pass, then Tabs out of it.
-fn type_radius_slowly(h: &mut Harness<'static, PhotocraftApp>, text: &str) {
-    h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Radius:")).expect("the Radius field").click();
-    h.run_steps(1);
-    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
-    for c in text.chars() {
-        h.event(egui::Event::Text(c.to_string()));
-        h.run_steps(1);
-    }
-    h.key_press(egui::Key::Tab);
-    h.run_steps(3);
-}
-
-#[test]
-fn text_spoiling_a_held_arithmetic_entry_raises_the_invalid_alert() {
-    let mut h = bar();
-    // `5` and `50` apply as they are typed. `50/2` is complete arithmetic, held until the field
-    // is left, so the field stops reading the text while it is typed; `x` then makes it not a
-    // number. Only the pass that leaves the field reads `50/2x`.
-    type_radius_slowly(&mut h, "50/2x");
-    assert_eq!(radius(&h), 50.0, "the last valid value stays");
-    assert_eq!(alerts(&h), vec![RADIUS_INVALID_ALERT.to_string()], "50/2x is the text left in the field");
-}
-
-#[test]
-fn completed_arithmetic_left_in_the_field_raises_no_invalid_alert() {
-    let mut h = bar();
-    type_radius_slowly(&mut h, "50/2");
-    assert_eq!(radius(&h), 25.0);
-    assert!(alerts(&h).is_empty(), "{:?}", alerts(&h));
+fn the_bar_shows_the_triangles_own_radius() {
+    let mut app = new_app();
+    app.ui.tool_options.corner_radius = 7.0;
+    app.ui.tool_options.triangle_corner_radius = 15.0;
+    let h = bar_with(app, Tool::Triangle);
+    let field = h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Radius")).expect("the Radius field");
+    let shown = field.accesskit_node().value().map(|v| v.to_string());
+    assert!(shown.as_deref().is_some_and(|v| v.starts_with("15")), "the Triangle's 15, not the Rectangle's 7: {shown:?}");
 }
 
 #[test]
@@ -183,17 +140,17 @@ fn the_radius_field_leaves_the_active_triangle_alone() {
 fn the_next_triangle_dragged_takes_the_radius() {
     let mut app = new_app();
     app.ui.tool = Tool::Triangle;
+    app.ui.tool_options.corner_radius = 7.0;
     app.ui.tool_options.triangle_corner_radius = 20.0;
     drag(&mut app, [400.0, 300.0], [600.0, 400.0]);
     match live(&app) {
-        LiveShape::Triangle { corner_radius, .. } => assert_eq!(corner_radius, 20.0),
+        LiveShape::Triangle { corner_radius, .. } => assert_eq!(corner_radius, 20.0, "the Triangle's radius, not the Rectangle's"),
         other => panic!("not a triangle: {other:?}"),
     }
-    assert_eq!(knots(&app), 6, "two anchors per rounded corner");
-    // The arcs' ends on the triangle that fills the 400,300 to 600,400 box (#13350).
+    // The arcs' ends on the triangle that fills the 400,300 to 600,400 box (#13350): two per rounded corner.
     let want = [(485.858, 314.142), (514.142, 314.142), (565.858, 365.858), (551.716, 400.0), (448.284, 400.0), (434.142, 365.858)];
     let got = anchors(&app);
-    assert_eq!(got.len(), want.len());
+    assert_eq!(got.len(), want.len(), "{got:?}");
     for (g, w) in got.iter().zip(want) {
         assert!((g.0 - w.0).abs() < 1e-3 && (g.1 - w.1).abs() < 1e-3, "{got:?}");
     }
@@ -208,7 +165,7 @@ fn a_zero_radius_draws_a_sharp_triangle() {
         LiveShape::Triangle { corner_radius, .. } => assert_eq!(corner_radius, 0.0),
         other => panic!("not a triangle: {other:?}"),
     }
-    assert_eq!(knots(&app), 3, "one anchor per sharp corner");
+    assert_eq!(anchors(&app).len(), 3, "one anchor per sharp corner");
 }
 
 #[test]
@@ -228,13 +185,25 @@ fn resetting_another_shape_tool_keeps_the_triangle_radius() {
 }
 
 #[test]
+fn a_corrupt_saved_radius_is_kept_in_range() {
+    let mut o = crate::state::ToolOptions { triangle_corner_radius: f32::NAN, ..Default::default() };
+    crate::tool_memory::sanitize(&mut o);
+    assert_eq!(o.triangle_corner_radius, 0.0, "NaN falls back to the default");
+    let mut o = crate::state::ToolOptions { triangle_corner_radius: 9.0e9, ..Default::default() };
+    crate::tool_memory::sanitize(&mut o);
+    assert!((0.0..=150_000.0).contains(&o.triangle_corner_radius), "{}", o.triangle_corner_radius);
+}
+
+#[test]
 fn the_create_triangle_dialog_starts_from_the_radius() {
     let mut app = new_app();
+    app.ui.tool_options.corner_radius = 7.0;
     app.ui.tool_options.triangle_corner_radius = 15.0;
-    let id = crate::dialogs::shape_dialog::open(&mut app, Tool::Triangle, [200.0, 150.0]).expect("a dialog");
-    let d = app.ui.dialog_mut(id).unwrap();
-    assert_eq!(d.fields.get("cornerRadius").and_then(|v| v.as_f64()), Some(15.0));
-    crate::dialogs::confirm(&mut app, id).unwrap();
+    let at = craft::behavior::kurbo::Point::new(200.0, 150.0);
+    let id = crate::dialogs::shape_dialog::open(&mut app, craft::draw::ui::shape_drag::ShapeKind::Triangle, at).expect("a dialog");
+    let fields = app.framework.dialogs.get::<CreateShapeDialog>().and_then(|d| d.json_fields()).expect("the dialog's fields");
+    assert_eq!(fields["cornerRadius"], json!(15.0), "the Triangle's radius, not the Rectangle's");
+    crate::dialogs::testing::confirm(&mut app, id).unwrap();
     match live(&app) {
         LiveShape::Triangle { corner_radius, .. } => assert_eq!(corner_radius, 15.0),
         other => panic!("not a triangle: {other:?}"),

@@ -1,14 +1,17 @@
 //! #9306: a Path Selection drag shows its path following the pointer, where the release will put
 //! it, instead of leaving it in place until the release. The document only changes on release.
 
-use egui::{Modifiers, Pos2};
+use egui::Modifiers;
 use photocraft_doc::vector::Path;
 use photocraft_geom::{Affine, Point};
 use serde_json::json;
 
+use super::overlay::overlay_paths;
 use super::path_ops::{MovedPath, path_selection_preview};
 use crate::PhotocraftApp;
-use crate::canvas::{ToolEvent, ViewXform, tool_event};
+use crate::canvas::testing;
+use crate::canvas::{ToolEvent, tool_event};
+use crate::direct_select::PathRef;
 use crate::state::Tool;
 
 const NAME: &str = "Path 1";
@@ -41,7 +44,7 @@ fn preview(app: &PhotocraftApp) -> Option<(MovedPath, Path)> {
 fn press_and_move(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2]) {
     tool_event(app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, Modifiers::NONE);
     tool_event(app, ToolEvent::Move { x: to[0], y: to[1], pressure: 1.0 }, Modifiers::NONE);
-    assert!(app.drag.is_some());
+    assert!(testing::in_gesture(app));
 }
 
 fn release(app: &mut PhotocraftApp, at: [f64; 2]) {
@@ -52,31 +55,18 @@ fn anchors(p: &Path) -> Vec<Point> {
     p.subpaths.iter().flat_map(|s| s.knots.iter().map(|k| k.anchor)).collect()
 }
 
-/// The centres of the anchor squares the vector overlay draws, document = screen pixels.
-fn drawn_anchors(app: &PhotocraftApp) -> Vec<Pos2> {
-    let xf = ViewXform {
-        rect: egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(200., 200.)),
-        zoom: 1.0,
-        center: [100., 100.],
-        flip: false,
-        rotation: 0.,
-        aspect: 1.,
-    };
-    let doc = app.session.active().unwrap().doc.clone();
-    let ctx = egui::Context::default();
-    let mut out = ctx.run_ui(Default::default(), |ui| super::draw_overlay(app, ui.painter(), &xf, &doc));
-    out.textures_delta.clear();
-    out.shapes
-        .iter()
-        .filter_map(|s| match &s.shape {
-            egui::Shape::Rect(r) if (r.rect.width() - 6.0).abs() < 0.01 => Some(r.rect.center()),
-            _ => None,
-        })
+/// The anchors of the Work Path entry the overlay builds for the active document, as the canvas shows them.
+fn drawn_anchors(app: &PhotocraftApp) -> Vec<(f64, f64)> {
+    let doc = app.session.active().unwrap().doc.id;
+    overlay_paths(app, doc)
+        .into_iter()
+        .filter(|(which, ..)| *which == PathRef::Work)
+        .flat_map(|(_, path, _)| path.subpaths.into_iter().flat_map(|s| s.knots.into_iter().map(|k| (k.anchor.x, k.anchor.y))))
         .collect()
 }
 
-fn near(drawn: &[Pos2], p: Point) -> bool {
-    drawn.iter().any(|q| (f64::from(q.x) - p.x).abs() < 0.01 && (f64::from(q.y) - p.y).abs() < 0.01)
+fn near(drawn: &[(f64, f64)], p: Point) -> bool {
+    drawn.iter().any(|q| (q.0 - p.x).abs() < 0.01 && (q.1 - p.y).abs() < 0.01)
 }
 
 #[test]
