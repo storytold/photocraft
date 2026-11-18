@@ -172,6 +172,24 @@ impl Session {
         if let Some(why) = bitmap_mode_refusal(self, spec.id, params) {
             return Err(why.into());
         }
+        // Layer Style's read-only queries use the same receiver as dispatch, without
+        // temporarily changing the selection. Other style commands keep their own rules.
+        if matches!(
+            spec.id,
+            "layer.layerStyle.blendingOptions"
+                | "layer.layerStyle.bevelEmboss"
+                | "layer.layerStyle.stroke"
+                | "layer.layerStyle.innerShadow"
+                | "layer.layerStyle.innerGlow"
+                | "layer.layerStyle.satin"
+                | "layer.layerStyle.colorOverlay"
+                | "layer.layerStyle.gradientOverlay"
+                | "layer.layerStyle.patternOverlay"
+                | "layer.layerStyle.outerGlow"
+                | "layer.layerStyle.dropShadow"
+        ) {
+            return commands::layer_style_allowed_with(self, params);
+        }
         channel_cmds::mask_target_enabled(self, spec.id, params).unwrap_or_else(|| (spec.enabled)(self))
     }
 

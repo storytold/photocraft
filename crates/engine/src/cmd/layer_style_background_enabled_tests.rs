@@ -46,6 +46,8 @@ fn explicit_targets_use_the_target_layer_instead_of_the_active_layer() {
     for (id, mut params) in style_commands() {
         for target in [json!(bg), json!("Background"), json!({"name": "Background"}), json!({"background": true})] {
             params["layer"] = target;
+            assert!(!s.is_enabled_with(&id, &params), "{id}: {params}");
+            assert!(s.disabled_reason_with(&id, &params).is_some_and(|why| why.contains("Background")), "{id}: {params}");
             assert!(matches!(s.execute(&id, params.clone()), Err(EngineError::Disabled(_, why)) if why.contains("Background")), "{id}: {params}");
             let st = s.active().unwrap();
             assert_eq!(st.active_layer.unwrap().0, paint);
@@ -57,6 +59,8 @@ fn explicit_targets_use_the_target_layer_instead_of_the_active_layer() {
     s.execute("layer.select", json!({"layer": bg})).unwrap();
     for (id, mut params) in style_commands() {
         params["layer"] = json!({"name": "Background"});
+        assert!(s.is_enabled_with(&id, &params), "{id}: {params}");
+        assert_eq!(s.disabled_reason_with(&id, &params), None, "{id}: {params}");
         s.execute(&id, params).unwrap_or_else(|err| panic!("{id}: {err}"));
         assert_eq!(s.active().unwrap().active_layer.unwrap().0, bg);
     }
@@ -72,10 +76,36 @@ fn converting_the_background_enables_every_style_command() {
     assert!(s.active().unwrap().doc.background().is_none());
     for (id, params) in style_commands() {
         assert!(s.is_enabled(&id), "{id} is disabled on Layer 0");
+        assert!(s.is_enabled_with(&id, &params), "{id}: {params}");
+        assert_eq!(s.disabled_reason_with(&id, &params), None, "{id}: {params}");
         s.execute(&id, params).unwrap_or_else(|err| panic!("{id}: {err}"));
     }
     let st = s.active().unwrap();
     let layer = st.doc.layer(st.active_layer.unwrap()).unwrap();
     assert_eq!(layer.opacity, 0.5);
     assert_eq!(layer.effects.items.len(), EFFECTS.len());
+}
+
+#[test]
+fn style_queries_validate_explicit_targets_without_a_selection() {
+    let mut s = white_document();
+    s.execute("layer.new.layer", json!({"name": "Paint"})).unwrap();
+    let target = s.active().unwrap().active_layer.unwrap().0;
+    s.active_mut().unwrap().active_layer = None;
+    let before = Arc::clone(&s.active().unwrap().doc);
+    for (id, mut params) in style_commands() {
+        assert!(!s.is_enabled(&id), "{id}");
+        params["layer"] = json!(target);
+        assert!(s.is_enabled_with(&id, &params), "{id}");
+        assert_eq!(s.disabled_reason_with(&id, &params), None);
+        assert_eq!(s.active().unwrap().active_layer, None);
+        assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
+        for layer in [json!(u64::MAX), json!("missing"), json!(-1), json!({"invalid": true})] {
+            params["layer"] = layer;
+            assert!(!s.is_enabled_with(&id, &params), "{id}: {params}");
+            assert!(s.execute(&id, params.clone()).is_err(), "{id}: {params}");
+            assert_eq!(s.active().unwrap().active_layer, None);
+            assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
+        }
+    }
 }

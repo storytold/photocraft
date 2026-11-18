@@ -190,7 +190,8 @@ pub(crate) use adjust_params::inject_kind;
 use adjust_params::{adjust_mode, destructive_adjust, doc_mode, new_adjustment};
 pub use adjust_params::{adjustment_from_params, adjustment_kind};
 pub(crate) use enabled::{
-    always, check_all_unlocked, check_layer_style_target, check_pixels_unlocked, has_paintable, is_mask_target, layer_style_allowed, paint_surface,
+    always, check_all_unlocked, check_layer_style_target, check_pixels_unlocked, has_paintable, is_mask_target, layer_style_allowed, layer_style_allowed_with,
+    paint_surface,
 };
 use enabled::{can_redo, can_undo, has_doc, has_layer, has_pixel_or_channel, has_selection};
 pub use layer_params::blend_from_str;

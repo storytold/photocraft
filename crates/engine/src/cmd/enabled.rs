@@ -14,8 +14,15 @@ pub(super) fn has_layer(s: &Session) -> std::result::Result<(), String> {
 }
 
 pub(crate) fn layer_style_allowed(s: &Session) -> std::result::Result<(), String> {
+    layer_style_allowed_with(s, &Value::Null)
+}
+
+pub(crate) fn layer_style_allowed_with(s: &Session, params: &Value) -> std::result::Result<(), String> {
     let st = s.active().ok_or("no document open")?;
-    let id = st.active_layer.filter(|&id| st.doc.layer(id).is_some()).ok_or("no active layer")?;
+    let id = super::layer_param(s, params).map_err(|err| err.to_string())?;
+    if st.doc.layer(id).is_none() {
+        return Err(EngineError::NoLayer(id).to_string());
+    }
     check_layer_style_target(&st.doc, id).map_err(|err| err.to_string())
 }
 
