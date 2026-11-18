@@ -943,7 +943,7 @@ fn transform(s: &mut Session, p: &Value) -> Result<Value> {
     let m = h.0;
     let affine =
         (m[6].abs() < 1e-12 && m[7].abs() < 1e-12).then(|| Affine { m: [m[0] / m[8], m[3] / m[8], m[1] / m[8], m[4] / m[8], m[2] / m[8], m[5] / m[8]] });
-    let interp = Interp::parse(p.get("interpolation").and_then(Value::as_str).unwrap_or("bicubic"));
+    let interp = Interp::parse_all(p.get("interpolation").and_then(Value::as_str).unwrap_or("bicubic"));
     let lone = lone.is_some();
     let layers: Vec<u64> = ids.iter().map(|id| id.0).collect();
     let p = p.clone();
@@ -1037,7 +1037,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Free Transform",
         menu: &[],
         shortcut: None,
-        params: r##"{"layer":id?,"layers":[id,…]? (several layers moved by one box, one step; default with neither = the selected layers, as Photoshop's Free Transform with several selected; refused as locked when the Background is among several),"rect":[x0,y0,x1,y1]? (source frame; default = the layers' content ∩ selection),"quad":[[x,y]×4]? (where the frame's corners go, clockwise from top-left),"matrix":[a,b,c,d,e,f]? (affine alternative),"scaleX":%?,"scaleY":%?,"rotate":deg?,"dx":px?,"dy":px?,"reference":"center|topLeft|top|topRight|left|right|bottomLeft|bottom|bottomRight"|[x,y]="center" (relative alternative: scale and rotate about this point, then move),"interpolation":"bicubic|bilinear|nearest|bicubicSharper|bicubicSmoother|bicubicAutomatic"="bicubic" (Photoshop's bicubic variants render as Bicubic),"stepName":"Transform Path"? (History step name; the shape tools' bounding box sends it; default "Free Transform"; any other value is refused),"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target (an unlinked mask, an alpha channel or the Quick Mask transforms alone; a linked mask moves with its layer)}"##,
+        params: r##"{"layer":id?,"layers":[id,…]? (several layers moved by one box, one step; default with neither = the selected layers, as Photoshop's Free Transform with several selected; refused as locked when the Background is among several),"rect":[x0,y0,x1,y1]? (source frame; default = the layers' content ∩ selection),"quad":[[x,y]×4]? (where the frame's corners go, clockwise from top-left),"matrix":[a,b,c,d,e,f]? (affine alternative),"scaleX":%?,"scaleY":%?,"rotate":deg?,"dx":px?,"dy":px?,"reference":"center|topLeft|top|topRight|left|right|bottomLeft|bottom|bottomRight"|[x,y]="center" (relative alternative: scale and rotate about this point, then move),"interpolation":"bicubic|bilinear|nearest|bicubicSharper|bicubicSmoother|bicubicAutomatic"="bicubic" (pixels, masks and channels: Smoother and Sharper use Image Size's filters; Automatic is Sharper along an axis that shrinks and Smoother along one that grows when the box keeps its axes, and Bicubic otherwise; smart objects draw every bicubic alike),"stepName":"Transform Path"? (History step name; the shape tools' bounding box sends it; default "Free Transform"; any other value is refused),"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target (an unlinked mask, an alpha channel or the Quick Mask transforms alone; a linked mask moves with its layer)}"##,
         enabled: has_layer,
         journal: true,
         run: transform,

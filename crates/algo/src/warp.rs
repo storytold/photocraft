@@ -733,7 +733,7 @@ fn triangles(
                         }
                     }
                 }
-                Interp::Bicubic => {
+                Interp::Bicubic | Interp::BicubicSmoother | Interp::BicubicSharper | Interp::BicubicAutomatic => {
                     // Snap to the pixel grid when within float noise, so identity is exact.
                     let snap = |t: f64| if (t - t.round()).abs() < 1e-7 { t.round() } else { t };
                     let (u, v) = (snap(u), snap(v));
