@@ -89,6 +89,20 @@ fn one_history_step_and_one_undo_restores_the_clipping() {
 }
 
 #[test]
+fn one_undo_restores_the_clipping_a_group_released() {
+    // Green goes in without its base, so grouping clears its clipping; the one undo must set it
+    // again, not only put Green back in place.
+    let mut s = session();
+    select(&mut s, &["Green"]);
+    let before = s.active().unwrap().history.past_len();
+    s.execute("layer.new.groupFromLayers", json!({})).unwrap();
+    assert_eq!(stack(&s), "Blue, Group 1{Green}, Red, Background", "Green is released");
+    assert_eq!(s.active().unwrap().history.past_len(), before + 1, "one history step");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(stack(&s), "Blue, Green*, Red, Background");
+}
+
+#[test]
 fn a_clipped_layer_grouped_with_an_unrelated_layer_below_it_is_released() {
     // Background, Low, Red, Green* (clipped to Red), Blue: Low + Green into a group must not leave
     // Green clipped to Low.
