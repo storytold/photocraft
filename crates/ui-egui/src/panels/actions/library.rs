@@ -143,7 +143,7 @@ fn ask(app: &mut PhotocraftApp, held: Held) -> Result<Value, String> {
     let env = Env::of_root(app.ctx());
     let prompt = held.prompt.prompt(&env.words::<ActionsWords>(), &env.words::<CommonWords>());
     match alerts::open_prompt(app, prompt.tag(held)) {
-        Ok(id) => Ok(json!({"dialog": id})),
+        Ok(id) => Ok(json!({"dialog": id.value()})),
         Err(_) => Err(tl!("Answer the open question first.").into()),
     }
 }

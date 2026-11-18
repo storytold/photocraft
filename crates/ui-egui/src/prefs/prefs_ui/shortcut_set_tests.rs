@@ -21,11 +21,11 @@ fn choose(app: &mut PhotocraftApp, name: &str) {
     session.keymap.set_overrides(overrides);
 }
 
-fn open(h: &mut Harness<'_, PhotocraftApp>) {
+fn open(h: &mut Harness<'_, Box<PhotocraftApp>>) {
     crate::prefs_ui::open_shortcuts(h.state_mut(), 0);
 }
 
-fn ok(h: &mut Harness<'_, PhotocraftApp>) {
+fn ok(h: &mut Harness<'_, Box<PhotocraftApp>>) {
     let ctx = h.ctx.clone();
     press_ok(h.state_mut(), &ctx);
     h.run_steps(2);

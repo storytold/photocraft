@@ -394,7 +394,7 @@ fn failed_clipboard_reads_do_not_paste_an_external_or_missing_copy() {
 }
 
 /// An app whose OS clipboard is `os`, counting every read in `reads`.
-fn app_with_os_clipboard(os: &OsClip, reads: &Arc<std::sync::atomic::AtomicUsize>) -> PhotocraftApp {
+fn app_with_os_clipboard(os: &OsClip, reads: &Arc<std::sync::atomic::AtomicUsize>) -> Box<PhotocraftApp> {
     let (b, n) = (os.clone(), reads.clone());
     let get = move || {
         n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -600,7 +600,7 @@ type SvgClip = Arc<Mutex<Result<Option<Vec<u8>>, String>>>;
 
 /// An app whose OS clipboard holds the SVG `svg` and the bitmap `image`, exporting nothing
 /// (so an internal copy stays newer than what the OS clipboard holds).
-fn app_with_svg_and_image(svg: &SvgClip, image: &OsClip) -> PhotocraftApp {
+fn app_with_svg_and_image(svg: &SvgClip, image: &OsClip) -> Box<PhotocraftApp> {
     let (s, i) = (svg.clone(), image.clone());
     let services = Services {
         clipboard_get_svg: Some(Box::new(move || s.lock().unwrap().clone())),
