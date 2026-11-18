@@ -479,16 +479,20 @@ fn shadows_and_highlights_with_per_pixel_stages() {
     check(
         "shadows/highlights + per pixel",
         &[
-            all,
+            all.clone(),
             // Whites and Blacks measured after the filter, both directions.
             cr! { shadows: 60.0, whites: 70.0, blacks: -45.0},
             cr! { highlights: -60.0, whites: -60.0, blacks: 50.0, exposure: -0.4},
             cr! { shadows: 30.0, highlights: -30.0, whites: 40.0, blacks: -30.0, encoding_gamma: 1.8},
         ],
     );
-    // The proxy-size run (a multi-stage Reduce, subsampled pyramid levels) is
-    // `clarity_texture_and_dehaze_with_shadows_highlights_and_per_pixel_stages`, whose 858×572 case runs these
-    // shadows/highlights and per-pixel sliders too (#15652).
+    // At the dialog's proxy width, at one depth: the depth only changes how the input is
+    // quantized (8 and 16 bits both develop with `float = false`), and every depth already ran
+    // above at 171×113. The long side is what matters here (subsampled pyramid levels); the short
+    // one only needs to keep several levels, so the frame is a strip.
+    let Some(mut g) = gpu() else { return };
+    let d = compare_at(&mut g, &all, Depth::Sixteen, (858, 120));
+    eprintln!("shadows/highlights + per pixel 858x120: max |GPU - CPU| = {d:.2e}");
 }
 
 /// Asserts that each of `sets` moves some pixel of the test image by over 2 %, so a comparison
@@ -561,12 +565,12 @@ fn clarity_texture_and_dehaze_with_shadows_highlights_and_per_pixel_stages() {
     ];
     check("clarity/texture/dehaze + shadows/highlights + per pixel", &sets);
     let Some(mut g) = gpu() else { return };
-    // At the dialog's proxy size (Dehaze and Clarity on a copy subsampled twice), and wider (three
+    // At the dialog's proxy width (Dehaze and Clarity on a copy subsampled twice), and wider (three
     // times). One depth per size: the depth only changes how the input is quantized (8 and 16
-    // bits both develop with `float = false`), and every depth already ran above at 171×113.
-    // Only the long side sets the subsampling (Dehaze factor, Clarity radius, Texture sigma), so the
-    // wide case is 1600×240: still factor 3 and a two-stage Reduce, at a quarter of the pixels (#15652).
-    for (size, depth) in [((858, 572), Depth::Eight), ((1600, 240), Depth::Float)] {
+    // bits both develop with `float = false`), and every depth already ran above at 171×113. The
+    // long side sets the subsampling; the short one only needs to keep several pyramid levels, so
+    // the frames are strips.
+    for (size, depth) in [((858, 120), Depth::Eight), ((1600, 120), Depth::Float)] {
         let d = compare_at(&mut g, &all, depth, size);
         eprintln!("everything {size:?} {depth:?}: max |GPU - CPU| = {d:.2e}");
     }
