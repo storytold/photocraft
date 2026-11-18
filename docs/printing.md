@@ -115,8 +115,9 @@ step adds no history entry, since Photoshop's Done changes no document either.
 
 Cancel records and keeps nothing. The settings are held session-wide (and in the remembered dialog
 settings), not per document: Photoshop keeps them as properties of each open document, so another
-open image keeps its own there; here the last Done or Print wins for every document. Only the button sets the dialog's
-`__recordPrintSettings` marker, and a dialog an agent confirms (`ui.dialog.confirm`) still prints.
+open image keeps its own there; here the last Done or Print wins for every document. Done is the
+dialog's own button: a dialog an agent confirms answers as Print, never as Done, so automation still
+prints where a human clicks Done.
 
 ## Results
 
