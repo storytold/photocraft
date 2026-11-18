@@ -24,7 +24,7 @@
 
 use photocraft_color::SampleType;
 use photocraft_geom::Rect;
-use photocraft_raster::Surface;
+use photocraft_raster::{Interrupt, Surface};
 
 /// The bicubic an axis is filtered with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,13 +58,14 @@ impl Filter {
 /// The pixels of `src` inside `bounds`, scaled by `sx` × `sy` (both positive) and moved so that
 /// `bounds`' top-left corner lands at `(x0, y0)`, with `filter` on each axis (the module's rules).
 /// `None` when the source has no alpha, the result would be empty or larger than
-/// [`MAX_SAMPLES`], or the placement isn't finite: the caller draws those another way.
-pub fn scale(src: &Surface, bounds: Rect, place: [f64; 4], filter: Filter) -> Option<Surface> {
-    scale_in_bands(src, bounds, place, filter, BAND_SAMPLES)
+/// [`MAX_SAMPLES`], the placement isn't finite or `ctl` is cancelled: the caller draws those another way (and
+/// reports a cancel).
+pub fn scale(src: &Surface, bounds: Rect, place: [f64; 4], filter: Filter, ctl: &Interrupt) -> Option<Surface> {
+    scale_in_bands(src, bounds, place, filter, BAND_SAMPLES, ctl)
 }
 
 /// [`scale`], writing at most `band_samples` samples of output rows at a time.
-fn scale_in_bands(src: &Surface, bounds: Rect, [sx, sy, x0, y0]: [f64; 4], filter: Filter, band_samples: usize) -> Option<Surface> {
+fn scale_in_bands(src: &Surface, bounds: Rect, [sx, sy, x0, y0]: [f64; 4], filter: Filter, band_samples: usize, ctl: &Interrupt) -> Option<Surface> {
     if ![sx, sy, x0, y0].iter().all(|v| v.is_finite()) || sx <= 0.0 || sy <= 0.0 {
         return None;
     }
@@ -105,6 +106,9 @@ fn scale_in_bands(src: &Surface, bounds: Rect, [sx, sy, x0, y0]: [f64; 4], filte
         // Rows copied: each band reads its own rows.
         for y0 in (0..ny).step_by(band) {
             let y1 = (y0 + band).min(ny);
+            if ctl.cancelled() {
+                return None;
+            }
             let img = rows(y0, y1)?;
             write_band(&mut out, rect, y0, y1, depth, |y, x, px| {
                 if let Some(line) = img.px.get(((y - y0) * img.w + x) * n..).and_then(|p| p.get(..px.len())) {
@@ -116,6 +120,9 @@ fn scale_in_bands(src: &Surface, bounds: Rect, [sx, sy, x0, y0]: [f64; 4], filte
     }
     if (ny as f64) < 0.25 * h as f64 {
         // Rows averaged first (rule 4): the whole source, once; the result is small.
+        if ctl.cancelled() {
+            return None;
+        }
         let img = rows(0, h)?;
         let (mid, a, stretch) = prepared(&img, ny, depth, true, filter);
         let along_y = along_y.read(h, mid.as_ref().map_or(h, |m| m.h));
@@ -123,6 +130,9 @@ fn scale_in_bands(src: &Surface, bounds: Rect, [sx, sy, x0, y0]: [f64; 4], filte
         let taps: Vec<Taps> = (0..ny).map(|o| taps(o, img.h, a, stretch, along_y)).collect();
         for y0 in (0..ny).step_by(band) {
             let y1 = (y0 + band).min(ny);
+            if ctl.cancelled() {
+                return None;
+            }
             write_band(&mut out, rect, y0, y1, depth, |y, x, px| {
                 if let Some(t) = taps.get(y) {
                     blend_rows(&img, t, 0, img.h, x, depth, px);
@@ -140,6 +150,9 @@ fn scale_in_bands(src: &Surface, bounds: Rect, [sx, sy, x0, y0]: [f64; 4], filte
         let reach = taps.get(y0..y1).unwrap_or(&[]);
         let r0 = reach.iter().map(|t| t.start.clamp(0, last)).min().unwrap_or(0) as usize;
         let r1 = reach.iter().map(|t| (t.start + t.q.len() as i64 - 1).clamp(0, last)).max().unwrap_or(0) as usize + 1;
+        if ctl.cancelled() {
+            return None;
+        }
         let img = rows(r0, r1)?;
         write_band(&mut out, rect, y0, y1, depth, |y, x, px| {
             if let Some(t) = taps.get(y) {
@@ -464,18 +477,21 @@ fn blend_rows(img: &Image, t: &Taps, first: usize, total: usize, x: usize, depth
     }
 }
 
+/// The source samples `[a, b)` output sample `o` of `len` averages over `have` (at least one). The products are
+/// taken in 64 bits: on 32-bit targets `(o + 1) * have` overflows `usize` for long axes (100,000 samples to 80,000).
+fn span(o: usize, have: usize, len: usize) -> (usize, usize) {
+    let (o, have64, len) = (o as u64, have as u64, (len as u64).max(1));
+    let a = o * have64 / len;
+    let b = ((o + 1) * have64 / len).max(a + 1).min(have64);
+    (usize::try_from(a).unwrap_or(have), usize::try_from(b).unwrap_or(have))
+}
+
 /// An axis averaged down to `len` samples: each the rounded mean of the samples it covers
 /// (rule 4 of the module).
 fn average(img: &Image, len: usize, depth: Depth, vertical: bool) -> Image {
     let have = if vertical { img.h } else { img.w };
     let n = img.n;
-    let spans: Vec<(usize, usize)> = (0..len)
-        .map(|o| {
-            let a = o * have / len;
-            let b = ((o + 1) * have / len).max(a + 1).min(have);
-            (a, b)
-        })
-        .collect();
+    let spans: Vec<(usize, usize)> = (0..len).map(|o| span(o, have, len)).collect();
     let (ow, oh) = if vertical { (img.w, len) } else { (len, img.h) };
     let mut px = vec![0.0f32; ow * oh * n];
     crate::par::chunks_mut(&mut px, ow * n, true, |y, row| {
@@ -523,7 +539,7 @@ mod tests {
         let src = layer(PixelFormat::RGBA8, 96, 96, 128, 128, [0.2, 0.4, 0.6, 1.0]);
         let k = 1.73;
         let at = 160.0 - 64.0 * k;
-        let out = scale(&src, Rect::new(96, 96, 224, 224), [k, k, at, at], Filter::Smoother).unwrap();
+        let out = scale(&src, Rect::new(96, 96, 224, 224), [k, k, at, at], Filter::Smoother, &Interrupt::NONE).unwrap();
         assert_eq!(out.content_bounds(), Rect::new(49, 49, 271, 271));
     }
 
@@ -537,7 +553,7 @@ mod tests {
         let bounds = Rect::new(96, 96, 224, 224);
         for (k, filter, first) in [(1.73, Filter::Smoother, 238), (2.5, Filter::Smoother, 238), (0.5, Filter::Sharper, 242)] {
             let at = 160.0 - 64.0 * k;
-            let out = scale(&src, bounds, [k, k, at, at], filter).unwrap();
+            let out = scale(&src, bounds, [k, k, at, at], filter, &Interrupt::NONE).unwrap();
             let b = out.content_bounds();
             let mid = (b.y0 + b.y1) / 2;
             assert_eq!(alpha8(&out, b.x0, mid), first, "{k} {filter:?} left");
@@ -555,11 +571,11 @@ mod tests {
         let bounds = Rect::new(0, 0, 64, 64);
         for (k, same) in [(0.6, Filter::Sharper), (1.4, Filter::Smoother)] {
             let place = [k, k, 3.25, 1.5];
-            let auto = scale(&src, bounds, place, Filter::Automatic).unwrap();
-            let other = scale(&src, bounds, place, same).unwrap();
+            let auto = scale(&src, bounds, place, Filter::Automatic, &Interrupt::NONE).unwrap();
+            let other = scale(&src, bounds, place, same, &Interrupt::NONE).unwrap();
             let b = auto.content_bounds();
             assert_eq!(auto.read_region(b), other.read_region(b), "{k}");
-            let third = scale(&src, bounds, place, if same == Filter::Sharper { Filter::Smoother } else { Filter::Sharper }).unwrap();
+            let third = scale(&src, bounds, place, if same == Filter::Sharper { Filter::Smoother } else { Filter::Sharper }, &Interrupt::NONE).unwrap();
             assert_ne!(auto.read_region(b), third.read_region(b), "{k}: the filters differ");
         }
     }
@@ -567,7 +583,7 @@ mod tests {
     #[test]
     fn an_axis_that_keeps_its_size_is_copied() {
         let src = ramp(PixelFormat::RGBA8, 40, 10);
-        let out = scale(&src, Rect::new(0, 0, 40, 10), [1.0, 2.0, 5.0, 0.0], Filter::Smoother).unwrap();
+        let out = scale(&src, Rect::new(0, 0, 40, 10), [1.0, 2.0, 5.0, 0.0], Filter::Smoother, &Interrupt::NONE).unwrap();
         assert_eq!(out.content_bounds(), Rect::new(5, 0, 45, 20));
         for x in 0..40 {
             let (a, b) = (src.pixel(x, 0), out.pixel(x + 5, 10));
@@ -579,10 +595,10 @@ mod tests {
     fn every_depth_draws_the_same_picture() {
         let bounds = Rect::new(0, 0, 48, 48);
         let place = [0.37, 1.7, 2.6, 4.1];
-        let reference = scale(&ramp(PixelFormat::RGBA8, 48, 48), bounds, place, Filter::Automatic).unwrap();
+        let reference = scale(&ramp(PixelFormat::RGBA8, 48, 48), bounds, place, Filter::Automatic, &Interrupt::NONE).unwrap();
         let b = reference.content_bounds();
         for fmt in [PixelFormat::RGBA16, PixelFormat::RGBA32F] {
-            let out = scale(&ramp(fmt, 48, 48), bounds, place, Filter::Automatic).unwrap();
+            let out = scale(&ramp(fmt, 48, 48), bounds, place, Filter::Automatic, &Interrupt::NONE).unwrap();
             assert_eq!(out.content_bounds(), b, "{fmt:?}");
             for y in b.y0..b.y1 {
                 for x in b.x0..b.x1 {
@@ -597,7 +613,7 @@ mod tests {
     fn far_reductions_average_first() {
         // Below ¼ the axis is averaged to four times the target first: a flat layer stays flat.
         let src = layer(PixelFormat::RGBA8, 0, 0, 400, 40, [0.5, 0.25, 0.75, 1.0]);
-        let out = scale(&src, Rect::new(0, 0, 400, 40), [0.05, 1.0, 0.0, 0.0], Filter::Sharper).unwrap();
+        let out = scale(&src, Rect::new(0, 0, 400, 40), [0.05, 1.0, 0.0, 0.0], Filter::Sharper, &Interrupt::NONE).unwrap();
         assert_eq!(out.content_bounds(), Rect::new(0, 0, 20, 40));
         let p = out.pixel(10, 20);
         assert!((p[0] - 0.5).abs() < 0.003 && (p[3] - 1.0).abs() < 1e-6, "{p:?}");
@@ -609,13 +625,34 @@ mod tests {
         let bounds = Rect::new(0, 0, 90, 70);
         // Rows filtered (grown and shrunk), copied, and averaged first.
         for place in [[1.3, 1.9, 2.4, 0.7], [0.8, 0.45, 1.1, 3.3], [1.6, 1.0, 0.5, 4.0], [1.2, 0.1, 0.0, 0.25]] {
-            let whole = scale_in_bands(&src, bounds, place, Filter::Automatic, usize::MAX).unwrap();
+            let whole = scale_in_bands(&src, bounds, place, Filter::Automatic, usize::MAX, &Interrupt::NONE).unwrap();
             let b = whole.content_bounds();
             for band in [1, 600, 2000] {
-                let banded = scale_in_bands(&src, bounds, place, Filter::Automatic, band).unwrap();
+                let banded = scale_in_bands(&src, bounds, place, Filter::Automatic, band, &Interrupt::NONE).unwrap();
                 assert_eq!(banded.content_bounds(), b, "{place:?} {band}");
                 assert_eq!(banded.read_region(b), whole.read_region(b), "{place:?} {band}");
             }
+        }
+    }
+
+    #[test]
+    fn long_axes_average_over_the_right_spans_without_overflow() {
+        // 100,000 samples to 80,000: (o + 1) * have passes 2^32 from o = 42,949 on, which a 32-bit usize can't hold.
+        let (have, len) = (100_000usize, 80_000usize);
+        for o in [0, 1, 42_948, 42_949, 42_950, 79_999] {
+            let want = ((o as u128 * have as u128 / len as u128) as usize, ((o as u128 + 1) * have as u128 / len as u128) as usize);
+            let (a, b) = span(o, have, len);
+            assert_eq!((a, b), (want.0, want.1.max(want.0 + 1).min(have)), "{o}");
+        }
+        assert_eq!(span(3, 2, 8), (0, 1), "every output averages at least one sample");
+    }
+
+    #[test]
+    fn a_cancel_stops_the_scale() {
+        let src = ramp(PixelFormat::RGBA8, 64, 64);
+        let always = || true;
+        for place in [[1.6, 1.3, 0.0, 0.0], [1.0, 1.6, 0.0, 0.0], [0.5, 0.1, 0.0, 0.0]] {
+            assert!(scale(&src, Rect::new(0, 0, 64, 64), place, Filter::Automatic, &Interrupt::cancel_only(&always)).is_none(), "{place:?}");
         }
     }
 
@@ -624,14 +661,14 @@ mod tests {
         let src = layer(PixelFormat::RGBA8, 0, 0, 8, 8, [1.0; 4]);
         let bounds = Rect::new(0, 0, 8, 8);
         for place in [[f64::NAN, 1.0, 0.0, 0.0], [1.0, f64::INFINITY, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [-1.0, 1.0, 0.0, 0.0], [1.0, 1.0, 1e300, 0.0]] {
-            assert!(scale(&src, bounds, place, Filter::Smoother).is_none(), "{place:?}");
+            assert!(scale(&src, bounds, place, Filter::Smoother, &Interrupt::NONE).is_none(), "{place:?}");
         }
         // A box squeezed below a pixel, a result past the sample cap, no alpha, no pixels.
-        assert!(scale(&src, bounds, [0.01, 1.0, 0.2, 0.0], Filter::Smoother).is_none());
-        assert!(scale(&src, bounds, [1e5, 1e5, 0.0, 0.0], Filter::Smoother).is_none());
+        assert!(scale(&src, bounds, [0.01, 1.0, 0.2, 0.0], Filter::Smoother, &Interrupt::NONE).is_none());
+        assert!(scale(&src, bounds, [1e5, 1e5, 0.0, 0.0], Filter::Smoother, &Interrupt::NONE).is_none());
         let mut gray = Surface::new(PixelFormat::GRAY8);
         gray.fill_rect(bounds, &[0.5]);
-        assert!(scale(&gray, bounds, [2.0, 2.0, 0.0, 0.0], Filter::Smoother).is_none());
-        assert!(scale(&src, Rect::EMPTY, [2.0, 2.0, 0.0, 0.0], Filter::Smoother).is_none());
+        assert!(scale(&gray, bounds, [2.0, 2.0, 0.0, 0.0], Filter::Smoother, &Interrupt::NONE).is_none());
+        assert!(scale(&src, Rect::EMPTY, [2.0, 2.0, 0.0, 0.0], Filter::Smoother, &Interrupt::NONE).is_none());
     }
 }

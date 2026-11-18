@@ -408,7 +408,7 @@ fn a_scale_with_a_bicubic_variant_is_drawn_by_image_size_passes() {
         (Interp::BicubicAutomatic, crate::scale_axes::Filter::Automatic),
     ] {
         let out = warp_surface(&src, r, &h, interp).unwrap();
-        let passes = crate::scale_axes::scale(&src, r, [1.6, 0.7, 3.3, -2.1], filter).unwrap();
+        let passes = crate::scale_axes::scale(&src, r, [1.6, 0.7, 3.3, -2.1], filter, &Interrupt::NONE).unwrap();
         let b = passes.content_bounds();
         assert_eq!(out.content_bounds(), b, "{interp:?}");
         assert_eq!(out.read_region(b), passes.read_region(b), "{interp:?}");
@@ -439,5 +439,27 @@ fn a_rotation_draws_automatic_as_bicubic_and_the_others_with_their_kernels() {
                 assert!(worst < 0.25, "{label} {fmt:?} {interp:?}: {worst}");
             }
         }
+    }
+}
+
+#[test]
+fn a_scale_written_with_another_homogeneous_factor_takes_the_same_path() {
+    let src = ramp_surface(PixelFormat::RGBA8, 30, 20);
+    let r = Rect::new(0, 0, 30, 20);
+    let h = Homography([1.5, 0.0, 2.0, 0.0, 1.5, 1.0, 0.0, 0.0, 1.0]);
+    let twice = Homography(h.0.map(|v| 2.0 * v));
+    let (a, b) = (warp_surface(&src, r, &h, Interp::BicubicAutomatic).unwrap(), warp_surface(&src, r, &twice, Interp::BicubicAutomatic).unwrap());
+    assert_eq!(a.content_bounds(), b.content_bounds());
+    assert_eq!(a.read_region(a.content_bounds()), b.read_region(b.content_bounds()));
+}
+
+#[test]
+fn a_cancelled_scale_with_a_bicubic_variant_reports_the_cancel() {
+    let src = ramp_surface(PixelFormat::RGBA8, 40, 30);
+    let r = Rect::new(0, 0, 40, 30);
+    let h = Homography([1.7, 0.0, 0.0, 0.0, 0.6, 0.0, 0.0, 0.0, 1.0]);
+    let always = || true;
+    for interp in [Interp::BicubicSmoother, Interp::BicubicSharper, Interp::BicubicAutomatic] {
+        assert!(warp_surface_with(&src, r, &h, interp, &Interrupt::cancel_only(&always)).unwrap().is_none(), "{interp:?}");
     }
 }

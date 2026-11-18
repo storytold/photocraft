@@ -633,6 +633,15 @@ pub fn split_selected(surf: &Surface, sel: &Surface) -> Result<(Surface, Surface
 /// Moves layer `id` by `affine` (document → document) as `edit.transform` does: its content, linked
 /// masks and Smart Filter mask follow, and type, shapes and smart objects re-render. The document
 /// selection is left alone.
+/// The filter a smart object's fallback cache is re-warped with: smart objects draw every bicubic alike (they render
+/// from their source), so the Bicubic variants fall back to Bicubic.
+fn smart_fallback(interp: Interp) -> Interp {
+    match interp {
+        Interp::BicubicSmoother | Interp::BicubicSharper | Interp::BicubicAutomatic => Interp::Bicubic,
+        other => other,
+    }
+}
+
 pub(crate) fn transform_by(doc: &mut Document, id: LayerId, affine: Affine, interp: Interp) -> Result<()> {
     transform_by_map(doc, id, &crate::smart_cmds::affine_homography(&affine), Some(affine), interp)
 }
@@ -650,7 +659,7 @@ pub(crate) fn transform_by_map(doc: &mut Document, id: LayerId, h: &Homography, 
     if let Some(l) = doc.layer_mut(id) {
         refresh_text(&snapshot, l);
     }
-    crate::smart_cmds::restore_unrendered(doc, taken, |c| warp_surface(c, c.content_bounds(), h, interp))?;
+    crate::smart_cmds::restore_unrendered(doc, taken, |c| warp_surface(c, c.content_bounds(), h, smart_fallback(interp)))?;
     Ok(())
 }
 
@@ -1022,7 +1031,7 @@ fn transform_doc(
                 refresh_text(&snapshot, l);
             }
         }
-        crate::smart_cmds::restore_unrendered(doc, taken, |c| warp_surface(c, c.content_bounds(), h, interp))?;
+        crate::smart_cmds::restore_unrendered(doc, taken, |c| warp_surface(c, c.content_bounds(), h, smart_fallback(interp)))?;
         // The selection outline moves with the pixels.
         if let Some(sel) = &doc.selection {
             doc.selection = Some(warp_gray(sel, h, Interp::Bilinear)?).filter(|s| !s.content_bounds().is_empty());

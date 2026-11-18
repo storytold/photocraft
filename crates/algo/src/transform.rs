@@ -191,9 +191,15 @@ impl Interp {
 /// The scale per axis of an affine `h` that keeps the axes (no rotation or skew, maybe a flip),
 /// or `None` for any other.
 fn axis_scales(h: &Homography) -> Option<(f64, f64)> {
-    let m = &h.0;
+    let m = &normalized(h)?.0;
     let tiny = |v: f64| v.abs() < 1e-9;
     (tiny(m[1]) && tiny(m[3]) && tiny(m[6]) && tiny(m[7]) && (m[8] - 1.0).abs() < 1e-9).then(|| (m[0].abs(), m[4].abs()))
+}
+
+/// `h` scaled so its last entry is 1 (the same map), or `None` when that entry is zero or not finite.
+fn normalized(h: &Homography) -> Option<Homography> {
+    let w = h.0[8];
+    (w.is_finite() && w.abs() > 1e-12).then(|| Homography(h.0.map(|v| v / w)))
 }
 
 /// The Keys kernel (`a`, stretch) one axis samples with after any reduction: Bicubic's own, or
@@ -469,13 +475,13 @@ fn warp(
             Interp::BicubicAutomatic => Some(crate::scale_axes::Filter::Automatic),
             _ => None,
         };
-        let m = &h.0;
-        if let (Some(filter), Some((sx, sy))) = (filter, axis_scales(h))
-            && m[0] > 0.0
-            && m[4] > 0.0
+        if let (Some(filter), Some((sx, sy)), Some(n)) = (filter, axis_scales(h), normalized(h))
+            && n.0[0] > 0.0
+            && n.0[4] > 0.0
         {
+            let m = &n.0;
             let place = [sx, sy, m[0] * f64::from(src_rect.x0) + m[2], m[4] * f64::from(src_rect.y0) + m[5]];
-            if let Some(done) = crate::scale_axes::scale(src, src_rect, place, filter) {
+            if let Some(done) = crate::scale_axes::scale(src, src_rect, place, filter, ctl) {
                 return Ok(done);
             }
         }
