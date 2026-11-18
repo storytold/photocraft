@@ -343,16 +343,19 @@ pub(crate) fn slots(toolbar: &ToolbarCustomization) -> Vec<ToolSlot<Tool>> {
 ///
 /// [`PrefsStore::rev`]: photocraft_engine::prefs::PrefsStore::rev
 #[derive(Default)]
-pub(crate) struct ToolbarSlots(std::cell::RefCell<Option<(u64, std::sync::Arc<[ToolSlot<Tool>]>)>>);
+pub(crate) struct ToolbarSlots(std::cell::RefCell<Option<(u64, RailSlots)>>);
+
+/// The rail's slots, shared by the readers of one preferences revision.
+type RailSlots = std::sync::Arc<[ToolSlot<Tool>]>;
 
 impl ToolbarSlots {
     /// The slots of `prefs`' toolbar layout.
-    pub(crate) fn get(&self, prefs: &photocraft_engine::prefs::PrefsStore) -> std::sync::Arc<[ToolSlot<Tool>]> {
+    pub(crate) fn get(&self, prefs: &photocraft_engine::prefs::PrefsStore) -> RailSlots {
         let mut held = self.0.borrow_mut();
         match &*held {
             Some((rev, slots)) if *rev == prefs.rev() => slots.clone(),
             _ => {
-                let built: std::sync::Arc<[ToolSlot<Tool>]> = slots(&prefs.get().toolbar).into();
+                let built: RailSlots = slots(&prefs.get().toolbar).into();
                 *held = Some((prefs.rev(), built.clone()));
                 built
             }
