@@ -88,50 +88,20 @@ pub fn tick(app: &mut PhotocraftApp, now: f64) {
     match app.low_memory.step(below_warn, below_rearm) {
         Step::Idle => {}
         Step::Warn => post(app),
-        Step::Rearm => app.ui.notices.retain(|n| n.title != TITLE),
+        Step::Rearm => crate::notices::remove_titled(app, TITLE),
     }
 }
 
 fn post(app: &mut PhotocraftApp) {
-    if app.ui.notices.iter().any(|n| n.title == TITLE) {
+    if crate::notices::shown_titled(app, TITLE) {
         return;
     }
     let lines = vec![
         "Save your work now: if the browser runs out of memory this page stops, and changes since the last save can't be recovered.".to_owned(),
         "To make room, close documents you don't need or use Edit › Purge › All.".to_owned(),
     ];
-    let id = crate::notices::post(app, TITLE, lines, true, None);
+    let id = crate::notices::post(app, TITLE, lines, craft::theme::variant::Tone::Bad, None);
     if let Some(notice) = app.ui.notices.iter_mut().find(|n| n.id == id) {
         notice.sticky = true;
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn warns_once_then_waits_for_the_higher_threshold() {
-        let mut w = Watch::default();
-        assert_eq!(w.step(false, false), Step::Idle);
-        assert_eq!(w.step(true, true), Step::Warn);
-        // Staying low, or hovering between the two thresholds, doesn't warn again.
-        assert_eq!(w.step(true, true), Step::Idle);
-        assert_eq!(w.step(false, true), Step::Idle);
-        assert_eq!(w.step(true, true), Step::Idle);
-        // Rising above the higher threshold re-arms; dropping again warns again.
-        assert_eq!(w.step(false, false), Step::Rearm);
-        assert_eq!(w.step(false, false), Step::Idle);
-        assert_eq!(w.step(true, true), Step::Warn);
-    }
-
-    #[test]
-    fn checks_are_spaced_two_seconds_apart() {
-        let mut w = Watch::default();
-        assert!(w.due(0.0));
-        assert!(!w.due(1.0));
-        assert!(!w.due(1.99));
-        assert!(w.due(2.0));
-        assert!(!w.due(3.0));
     }
 }

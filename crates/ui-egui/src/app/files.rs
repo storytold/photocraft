@@ -1,7 +1,11 @@
+use craft::behavior::PixelSize;
+use craft::ui::patterns::form_dialogs::DocumentOptions;
+
 use super::{
-    DocId, ExportSettings, FormatChoices, PhotocraftApp, SAVE_OPTIONS_OPEN, SaveKind, Value, camera_raw_ui, dds_options_ui, file_open, jobs_ui,
-    jpeg_options_ui, json, notices, open_prompt, plain_raster, preset_files_ui, saved_revision_after_write, targa_options_ui, tiff_options_ui,
+    DocId, ExportSettings, FormatChoices, PhotocraftApp, SAVE_OPTIONS_OPEN, SaveKind, Value, file_open, jobs_ui, json, notices, open_prompt, plain_raster,
+    preset_files_ui, saved_revision_after_write,
 };
+use crate::{camera_raw_ui, dds_options_ui, jpeg_options_ui, targa_options_ui, tiff_options_ui};
 
 impl PhotocraftApp {
     /// Record `path` as the most-recently-opened file (File › Open Recent): de-duplicated, newest
@@ -90,12 +94,16 @@ impl PhotocraftApp {
             return Ok(Vec::new());
         }
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
-        let opts = photocraft_engine::jobs::import_options(self.session.prefs());
+        let opts = photocraft_io::ImportOptions {
+            keep_raw: self.session.prefs().raw_defaults.open_in_camera_raw,
+            ..photocraft_engine::jobs::import_options(self.session.prefs())
+        };
         // A PSD and a magic-detected TIFF both go through the typed IO path: only it carries
         // `PsdApprovalRequired` (and, for a PSD, the structured damaged flag), so a layered
         // TIFF's high-memory decision can raise its prompt instead of becoming a terminal
-        // string. Every other format keeps the shell's import service.
-        let typed_open = photocraft_io::is_psd(bytes) || photocraft_codecs::detect(bytes) == Some(photocraft_codecs::Format::Tiff);
+        // string. Every other format keeps the shell's import service. `detect` gets no name:
+        // given one it falls back to the extension, and a `.tif` name alone is no TIFF.
+        let typed_open = photocraft_io::is_psd(bytes) || photocraft_formats::detect("", bytes) == Some(photocraft_formats::Format::Tiff);
         let (mut doc, warnings, damaged) = if typed_open {
             // Read PSD damage as structured information in the same decode, not by
             // retrying an error or matching the text of a compatibility warning. A TIFF never
@@ -231,12 +239,12 @@ impl PhotocraftApp {
         let holds_ora = st.path.as_deref().is_some_and(|p| photocraft_engine::file_cmds::holds_at(&st.doc, p));
         // A JPEG whose lone layer has transparency it can't keep is offered as a PNG, as
         // Photoshop's Save does once pixels are deleted (#2223).
-        let transparent_jpeg = ext.as_deref().and_then(photocraft_codecs::from_extension) == Some(photocraft_codecs::Format::Jpeg)
+        let transparent_jpeg = ext.as_deref().and_then(photocraft_formats::from_extension) == Some(photocraft_formats::Format::Jpeg)
             && plain_raster(&st.doc).is_some_and(|l| !crate::opaque_layer(&st.doc, l));
         let writable = ext.is_some_and(|e| {
             matches!(e.as_str(), photocraft_format::EXTENSION | "psd" | "psb" | "tif" | "tiff")
                 || (e == "ora" && holds_ora)
-                || (flat && photocraft_codecs::from_extension(&e).is_some_and(|f| f.caps().write))
+                || (flat && photocraft_formats::from_extension(&e).is_some_and(|f| f.capabilities().write == photocraft_formats::Availability::Available))
         });
         let suggested = match &st.path {
             Some(p) if transparent_jpeg => std::path::Path::new(p).with_extension("png").to_string_lossy().into_owned(),
@@ -430,14 +438,8 @@ impl PhotocraftApp {
     /// File › Save once answered. Only a step journaled at index `from` or later (by this save)
     /// is re-labeled.
     pub(crate) fn journal_as_plain_save(&mut self, path: &str, from: usize) {
-        let parked = [
-            self.targa_options.as_mut().map(|p| (&p.path, &mut p.record)),
-            self.dds_options.as_mut().map(|p| (&p.path, &mut p.record)),
-            self.jpeg_options.as_mut().map(|p| (&p.path, &mut p.record)),
-            self.tiff_options.as_mut().map(|p| (&p.path, &mut p.record)),
-        ];
-        if let Some((_, record)) = parked.into_iter().flatten().find(|(p, record)| p.as_str() == path && **record == "file.saveAs") {
-            *record = "file.save";
+        if let Some(parked) = self.parked_save.as_mut().filter(|p| p.path.as_str() == path && p.record == "file.saveAs") {
+            parked.record = "file.save";
             return;
         }
         // Only the path goes: a script's format answer stays, so a replay writes the file it is
@@ -493,7 +495,9 @@ impl PhotocraftApp {
                 !photocraft_engine::file_cmds::saves_in_place(p)
                     && plain_raster(&st.doc).is_some()
                     && st.doc.file_encoding.source_images.is_none()
-                    && photocraft_engine::file_cmds::extension(p).is_some_and(|e| photocraft_codecs::from_extension(&e).is_some_and(|f| f.caps().write))
+                    && photocraft_engine::file_cmds::extension(p).is_some_and(|e| {
+                        photocraft_formats::from_extension(&e).is_some_and(|f| f.capabilities().write == photocraft_formats::Availability::Available)
+                    })
             };
             let path = st.path.clone().filter(|p| photocraft_engine::file_cmds::holds_at(&st.doc, p) || flat_own(p)).ok_or(
                 "Save writes back only to the document's own PSD, PSB, .pcraft or OpenRaster file (OpenRaster only when it holds everything), or to its own flat file while the document is a single plain layer and the file held only that image",
@@ -636,7 +640,7 @@ impl PhotocraftApp {
                 crate::i18n::fmt(tl!(template), &[("doc", doc.as_str())])
             })
             .collect();
-        notices::post(self, title, lines, false, None);
+        notices::post(self, title, lines, craft::theme::variant::Tone::Neutral, None);
     }
 
     /// Record a written save of document `doc` as it was at `revision`: its name, path and saved
@@ -731,7 +735,7 @@ impl PhotocraftApp {
             let written = crate::i18n::fmt(tl!("{ok} written to {dir}"), &[("ok", &asset_ok.to_string()), ("dir", &asset_dir)]);
             self.ui.status = format!("{title} ({written}): {}", asset_errors[0]);
             self.ui.status_error = true;
-            notices::post(self, title, asset_errors, true, None);
+            notices::post(self, title, asset_errors, craft::theme::variant::Tone::Bad, None);
         }
         self.sync_views();
     }
@@ -753,7 +757,7 @@ impl PhotocraftApp {
 
     /// TIFF, Targa, DDS or JPEG Options is waiting on an answer before a save is written.
     pub(crate) fn save_options_open(&self) -> bool {
-        self.tiff_options.is_some() || self.targa_options.is_some() || self.dds_options.is_some() || self.jpeg_options.is_some()
+        self.parked_save.is_some()
     }
 
     /// Writes a save that waited on a format prompt (Targa, DDS, JPEG or TIFF Options) once answered:
@@ -838,63 +842,34 @@ impl PhotocraftApp {
         self.saved_automation(doc, revision, &target, &warnings, false);
         Ok(reply(&target, &warnings))
     }
-
-    /// The active document's identity at admission: a queued capture never applies to another
-    /// document. Includes the revision so a saved image is attributable to a known state.
-    pub(crate) fn document_identity(&self) -> Option<crate::screenshot::DocumentId> {
-        self.session.active().map(|st| crate::screenshot::DocumentId {
-            document: st.doc.id.0,
-            revision: st.revision,
-            generation: self.session.active_generation(),
-        })
-    }
 }
 
-/// The New Document dialog's key in the preferences' `dialogs` map.
-const NEW_DOCUMENT: &str = "file.new";
-
-/// New Document fields its OK remembers (#1810): the size, resolution, mode, depth, background and
-/// display units. Not the name, the preset or the clipboard size.
-const NEW_DOCUMENT_REMEMBERED: [&str; 8] = ["width", "height", "resolution", "mode", "depth", "background", "__unit", "__resUnit"];
-
-/// A remembered value the dialog can show (a corrupt preference is ignored).
-fn remembered_new_document_value(key: &str, v: &serde_json::Value) -> bool {
-    match key {
-        "width" | "height" => v.as_u64().is_some_and(|n| (1..=300_000).contains(&n)),
-        "resolution" => v.as_f64().is_some_and(|r| r.is_finite() && r > 0.0 && r <= 30_000.0),
-        "depth" => v.as_u64().is_some_and(|d| matches!(d, 1 | 8 | 16 | 32)),
-        _ => v.as_str().is_some_and(|s| !s.is_empty() && s.len() <= 64),
-    }
-}
-
-/// Remember the New Document fields `f` its OK used, for the next New Document.
-pub(crate) fn remember_new_document(app: &mut PhotocraftApp, f: &serde_json::Map<String, serde_json::Value>) {
-    let kept: serde_json::Map<String, serde_json::Value> =
-        NEW_DOCUMENT_REMEMBERED.iter().filter_map(|k| f.get(*k).filter(|v| remembered_new_document_value(k, v)).map(|v| (k.to_string(), v.clone()))).collect();
-    app.session.prefs.edit(|p| p.dialogs.insert(NEW_DOCUMENT.into(), serde_json::Value::Object(kept)));
-}
+/// The name a new document starts with.
+const UNTITLED: &str = "Untitled-1";
 
 impl PhotocraftApp {
-    /// File › New's fields: the defaults, then the settings of the last document made with the
-    /// dialog (Photoshop starts from them, #1810), then the Clipboard preset (the clipboard image's
-    /// size, selected) when the clipboard holds an image. Opening the dialog is an explicit
-    /// request, so the OS clipboard is read here, as for a paste.
-    pub(crate) fn new_document_fields(&mut self) -> serde_json::Map<String, serde_json::Value> {
-        let mut f = crate::state::UiState::new_document_fields();
-        if let Some(serde_json::Value::Object(saved)) = self.session.prefs().dialogs.get(NEW_DOCUMENT) {
-            for k in NEW_DOCUMENT_REMEMBERED {
-                if let Some(v) = saved.get(k).filter(|v| remembered_new_document_value(k, v)) {
-                    f.insert(k.into(), v.clone());
-                }
-            }
-        }
-        if self.import_os_clipboard().is_err() {
-            return f;
-        }
-        if let Some(c) = self.session.clipboard.as_ref().filter(|c| !c.bounds.is_empty()) {
-            crate::new_doc_ui::set_clipboard(&mut f, c.bounds.width(), c.bounds.height());
-        }
-        f
+    /// File › New's settings: those of the last document made with the dialog (Photoshop starts from
+    /// them, #1810), else PhotoCraft's defaults. The name is always the default one. A stored value
+    /// the dialog cannot show is ignored.
+    #[allow(clippy::field_reassign_with_default)] // `DocumentOptions` is `#[non_exhaustive]`: it cannot be built with a struct expression here.
+    pub(crate) fn new_document_options(&mut self) -> DocumentOptions {
+        let last =
+            craft::ui::runtime::memory::saved_value::<Option<DocumentOptions>>(self.ctx(), &crate::new_doc_ui::LAST_CREATED).filter(DocumentOptions::fits);
+        let mut options = last.unwrap_or_else(|| {
+            let mut defaults = DocumentOptions::default();
+            defaults.size = PixelSize::new(1920, 1080);
+            defaults.pixels_per_inch = 72.0;
+            defaults
+        });
+        options.name = UNTITLED.to_owned();
+        options
+    }
+
+    /// The size of the image on the clipboard, which File › New offers as its Clipboard preset.
+    /// Opening the dialog is an explicit request, so the OS clipboard is read here, as for a paste.
+    pub(crate) fn new_document_clipboard(&mut self) -> Option<PixelSize> {
+        self.import_os_clipboard().ok()?;
+        self.session.clipboard.as_ref().filter(|c| !c.bounds.is_empty()).map(|c| PixelSize::new(c.bounds.width(), c.bounds.height()))
     }
 }
 
@@ -950,7 +925,8 @@ mod tests {
 
         assert_eq!(app.session.active().unwrap().path.as_deref(), Some(path.as_str()), "the document save itself succeeded");
         assert!(assets.join("good.png").is_file(), "the good asset was exported");
-        let notice = app.ui.notices.iter().find(|notice| notice.error).expect("the failed asset is reported as an error notice");
+        let notice =
+            app.ui.notices.iter().find(|notice| notice.tone == craft::theme::variant::Tone::Bad).expect("the failed asset is reported as an error notice");
         assert_eq!(notice.title, format!("Saved {path}: 1 Image Assets output failed"), "the failure names the saved document by its full path");
         assert_eq!(notice.lines.len(), 1, "{:?}", notice.lines);
         assert!(notice.lines[0].starts_with("blocked/fail.png: asset path"), "{:?}", notice.lines[0]);
@@ -967,7 +943,7 @@ mod tests {
         std::fs::remove_file(assets.join("blocked")).unwrap();
         let revision = app.session.active().unwrap().revision;
         app.saved(doc, revision, &path, &[], false);
-        assert!(app.ui.notices.iter().all(|notice| !notice.error), "no notice when every asset went out");
+        assert!(app.ui.notices.iter().all(|notice| notice.tone != craft::theme::variant::Tone::Bad), "no notice when every asset went out");
         assert!(!app.ui.status_error);
         assert!(app.ui.status.contains("image assets: 2 in"), "{}", app.ui.status);
         let _ = std::fs::remove_dir_all(&root);
