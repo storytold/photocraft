@@ -2,49 +2,45 @@
 //! new artboard, click a board to select it, drag it to move it with its contents, and drag the
 //! selected board's edge and corner handles to resize it (⇧ on a corner keeps its proportions).
 //! The "+" buttons beside the selected board's sides add a board of the same size there (⌥: a copy
-//! with its contents). The options bar sets the selected board's size (preset, W/H,
-//! portrait/landscape) and switches on Add New Artboard's placing mode (a click puts a board of the
-//! bar's size at the click). Every change is one engine command (`layer.new.artboard`,
-//! `layer.artboard.set`, `layer.artboard.addBeside`), so each gesture is one undo step; this module
-//! only turns pointer gestures into them.
+//! with its contents). The options bar sets the selected board's size and switches on Add New
+//! Artboard's placing mode (a click puts a board of the bar's size at the click).
+//!
+//! The boards, the handles and the "+" buttons are the framework's [`ArtboardOverlay`] and
+//! [`AddBesideHandles`]; the pasteboard gestures are the framework's [`ArtboardTool`]. Both report
+//! [`ArtboardEvent`]s, which [`apply`] turns into engine commands, so each gesture is one undo step.
 
-use egui::{CursorIcon, Pos2, Rect, Stroke, vec2};
-use photocraft_doc::{Document, Layer, LayerId};
+// PLAN: the `craft::draw::ui::{artboard, add_beside}`, `craft::keymap::CommandRef` and
+// `craft::ui::runtime::commands::CommandState` facade paths are assumed from the other `craft::` paths in this crate.
+
+use craft::behavior::EditEvent;
+use craft::behavior::kurbo::{Rect as DocRect, Size};
+use craft::draw::ui::add_beside::{AddBesideHandles, AddSide};
+use craft::draw::ui::artboard::{ArtboardBackground as Shown, ArtboardCommand, ArtboardEvent, ArtboardItem, ArtboardOverlay, ArtboardRules, ArtboardTool};
+use craft::keymap::CommandRef;
+use craft::theme::Srgba;
+use craft::ui::canvas::ToolHostResponse;
+use craft::ui::contract::Show as _;
+
+use craft::ui::runtime::commands::CommandState;
+use photocraft_doc::{ArtboardBackground, Layer, LayerId};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
-use crate::canvas::{ToolEvent, ViewXform};
-use crate::crop_ui::{Hit, hit};
+use crate::canvas::document_display::CanvasHost;
+use crate::canvas::tools::{FamilyTool, ToolScope};
 use crate::state::Tool;
-use crate::theme::Tokens;
 
-mod add_mode;
 pub(crate) mod bar;
 
-/// How far from an edge (screen points) a press still grabs its handle.
-const HANDLE_PX: f64 = 6.0;
-/// A press that moves less than this (screen points) is a click, not a drawn board.
-const CLICK_PX: f64 = 3.0;
-/// How far the "+" buttons sit outside the selected board's edges (screen points, to their centre).
-const PLUS_OFFSET_PX: f64 = 18.0;
-/// The "+" buttons' radius (screen points).
-const PLUS_RADIUS_PX: f64 = 8.0;
-/// The sides the "+" buttons add a board on, as `layer.artboard.addBeside` names them, with the
-/// direction from the board's centre.
-const SIDES: [(&str, [f64; 2]); 4] = [("top", [0.0, -1.0]), ("right", [1.0, 0.0]), ("bottom", [0.0, 1.0]), ("left", [-1.0, 0.0])];
-
-/// Artboard tool state (serde: readable through the control channel). The fields after `drag` are
-/// the tool's options (#11385), which Reset Tool puts back to [`ArtboardToolUi::default`].
+/// Artboard tool state (serde: readable through the control channel). Every field but `adding` is
+/// an option of the tool, which Reset Tool puts back to [`ArtboardToolUi::default`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ArtboardToolUi {
     /// Add New Artboard's placing mode: a click on empty canvas puts a board there (#11386).
     pub adding: bool,
-    #[serde(skip)]
-    pub drag: Option<ArtboardDrag>,
-    /// The bar's size preset (empty: Custom) and, with no board selected, the size it shows.
-    pub preset: String,
+    /// The size of the next board, with no board selected.
     pub width: u32,
     pub height: u32,
     /// The background of a board the tool draws: `white`, `black`, `transparent` or `custom`.
@@ -60,11 +56,9 @@ pub struct ArtboardToolUi {
 
 impl Default for ArtboardToolUi {
     fn default() -> Self {
-        let (preset, width, height) = bar::DEFAULT_SIZE;
+        let (_, width, height) = bar::DEFAULT_SIZE;
         Self {
             adding: false,
-            drag: None,
-            preset: preset.to_string(),
             width,
             height,
             background: "white".to_string(),
@@ -77,29 +71,18 @@ impl Default for ArtboardToolUi {
     }
 }
 
-/// A gesture in progress. Board rects are `[x0, y0, x1, y1]` in document pixels.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum ArtboardDrag {
-    /// Drawing a new board from `start`.
-    New { start: [f64; 2], cur: [f64; 2] },
-    /// Moving board `id`, whose rect was `rect` at the press.
-    Move { id: LayerId, rect: [i64; 4], start: [f64; 2], cur: [f64; 2] },
-    /// Dragging handle (`hx`, `hy`) of board `id`: −1 the left/top edge, 1 the right/bottom, 0 neither.
-    /// `keep`: ⇧ is down, so a corner keeps the board's proportions.
-    Resize { id: LayerId, rect: [i64; 4], hx: i8, hy: i8, start: [f64; 2], cur: [f64; 2], keep: bool },
-}
-
 fn edges(r: photocraft_geom::Rect) -> [i64; 4] {
     [i64::from(r.x0), i64::from(r.y0), i64::from(r.x1), i64::from(r.y1)]
-}
-
-fn as_f64(r: [i64; 4]) -> [f64; 4] {
-    r.map(|v| v as f64)
 }
 
 /// `[x, y, width, height]` for the engine's `rect` param.
 fn xywh(r: [i64; 4]) -> [i64; 4] {
     [r[0], r[1], r[2].saturating_sub(r[0]), r[3].saturating_sub(r[1])]
+}
+
+/// A framework pixel rect as `[x0, y0, x1, y1]`.
+fn pixel_edges(r: DocRect) -> [i64; 4] {
+    [r.x0.round() as i64, r.y0.round() as i64, r.x1.round() as i64, r.y1.round() as i64]
 }
 
 /// The selected board: the active layer's artboard, with its edges.
@@ -109,100 +92,6 @@ fn active_board(app: &PhotocraftApp) -> Option<(LayerId, [i64; 4])> {
     Some((id, edges(st.doc.layer(id).and_then(Layer::artboard)?.rect)))
 }
 
-/// The topmost board under a document point.
-fn board_at(doc: &Document, p: [f64; 2]) -> Option<(LayerId, [i64; 4])> {
-    let inside = |r: [f64; 4]| p[0] >= r[0] && p[0] < r[2] && p[1] >= r[1] && p[1] < r[3];
-    doc.artboards().iter().rev().map(|b| (b.0, edges(b.2.rect))).find(|b| inside(as_f64(b.1)))
-}
-
-fn tolerance(app: &PhotocraftApp) -> f64 {
-    HANDLE_PX / f64::from(app.point_zoom()).max(0.01)
-}
-
-/// The selected board's handle under a document point.
-fn handle_at(app: &PhotocraftApp, p: [f64; 2]) -> Option<(LayerId, [i64; 4], i8, i8)> {
-    let (id, r) = active_board(app)?;
-    match hit(as_f64(r), p, tolerance(app)) {
-        Hit::Handle(hx, hy) => Some((id, r, hx, hy)),
-        _ => None,
-    }
-}
-
-/// Each side's name and "+" button centre.
-type PlusButtons = [(&'static str, [f64; 2]); 4];
-
-/// The "+" buttons of the selected board: its id and each side's name and button centre (document
-/// pixels).
-fn plus_buttons(app: &PhotocraftApp) -> Option<(LayerId, PlusButtons)> {
-    let (id, r) = active_board(app)?;
-    let r = as_f64(r);
-    let off = PLUS_OFFSET_PX / f64::from(app.point_zoom()).max(0.01);
-    let (cx, cy) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
-    let (hw, hh) = ((r[2] - r[0]) / 2.0 + off, (r[3] - r[1]) / 2.0 + off);
-    Some((id, SIDES.map(|(side, [dx, dy])| (side, [cx + dx * hw, cy + dy * hh]))))
-}
-
-/// The side of the "+" button under a document point.
-fn plus_at(app: &PhotocraftApp, p: [f64; 2]) -> Option<(LayerId, &'static str)> {
-    let (id, buttons) = plus_buttons(app)?;
-    let r = PLUS_RADIUS_PX / f64::from(app.point_zoom()).max(0.01);
-    buttons.iter().find(|(_, c)| (p[0] - c[0]).hypot(p[1] - c[1]) <= r).map(|(side, _)| (id, *side))
-}
-
-/// The board drawn from `a` to `b`, edges on whole pixels.
-fn drawn(a: [f64; 2], b: [f64; 2]) -> [i64; 4] {
-    [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])].map(|v| v.round() as i64)
-}
-
-/// `d` rounded to whole pixels.
-fn offset(start: [f64; 2], cur: [f64; 2]) -> [i64; 2] {
-    [(cur[0] - start[0]).round() as i64, (cur[1] - start[1]).round() as i64]
-}
-
-/// `r` with handle (`hx`, `hy`) dragged by `d`: an edge dragged past the opposite one flips the
-/// board, which never gets narrower than one pixel.
-fn resized(r: [i64; 4], hx: i8, hy: i8, d: [i64; 2]) -> [i64; 4] {
-    let mut e = r;
-    for (h, lo, hi, dv) in [(hx, 0, 2, d[0]), (hy, 1, 3, d[1])] {
-        match h {
-            -1 => e[lo] = e[lo].saturating_add(dv),
-            1 => e[hi] = e[hi].saturating_add(dv),
-            _ => {}
-        }
-        let (a, b) = (e[lo].min(e[hi]), e[lo].max(e[hi]));
-        (e[lo], e[hi]) = (a, b.max(a.saturating_add(1)));
-    }
-    e
-}
-
-/// `r` with corner (`hx`, `hy`) dragged by `d`, keeping its proportions (⇧): the opposite corner
-/// stays, and the board scales by the larger of the two axes' factors.
-fn resized_keep(r: [i64; 4], hx: i8, hy: i8, d: [i64; 2]) -> [i64; 4] {
-    let (w, h) = ((r[2] - r[0]).max(1) as f64, (r[3] - r[1]).max(1) as f64);
-    // The fixed corner, and the dragged one's offset from it.
-    let (ax, ay) = (if hx > 0 { r[0] } else { r[2] }, if hy > 0 { r[1] } else { r[3] });
-    let (cx, cy) = (if hx > 0 { r[2] } else { r[0] }.saturating_add(d[0]), if hy > 0 { r[3] } else { r[1] }.saturating_add(d[1]));
-    let (dw, dh) = (cx.saturating_sub(ax) as f64, cy.saturating_sub(ay) as f64);
-    let k = (dw.abs() / w).max(dh.abs() / h);
-    let (nw, nh) = ((w * k).round().max(1.0) as i64, (h * k).round().max(1.0) as i64);
-    let span = |a: i64, len: i64, toward: f64| if toward < 0.0 { [a.saturating_sub(len), a] } else { [a, a.saturating_add(len)] };
-    let ([x0, x1], [y0, y1]) = (span(ax, nw, dw), span(ay, nh, dh));
-    [x0, y0, x1, y1]
-}
-
-/// The board a gesture would leave, for the preview.
-fn preview(d: &ArtboardDrag) -> [i64; 4] {
-    match *d {
-        ArtboardDrag::New { start, cur } => drawn(start, cur),
-        ArtboardDrag::Move { rect, start, cur, .. } => {
-            let o = offset(start, cur);
-            [rect[0].saturating_add(o[0]), rect[1].saturating_add(o[1]), rect[2].saturating_add(o[0]), rect[3].saturating_add(o[1])]
-        }
-        ArtboardDrag::Resize { rect, hx, hy, start, cur, keep: true, .. } if hx != 0 && hy != 0 => resized_keep(rect, hx, hy, offset(start, cur)),
-        ArtboardDrag::Resize { rect, hx, hy, start, cur, .. } => resized(rect, hx, hy, offset(start, cur)),
-    }
-}
-
 fn report(app: &mut PhotocraftApp, r: Result<Value, String>) {
     if let Err(e) = r {
         app.ui.status = e;
@@ -210,174 +99,220 @@ fn report(app: &mut PhotocraftApp, r: Result<Value, String>) {
     }
 }
 
-/// Moves a gesture's pointer to `p`; ⇧ (held or released mid-drag) decides whether a corner keeps
-/// the board's proportions.
-fn follow(d: &mut ArtboardDrag, p: [f64; 2], mods: egui::Modifiers) {
-    match d {
-        ArtboardDrag::New { cur, .. } | ArtboardDrag::Move { cur, .. } => *cur = p,
-        ArtboardDrag::Resize { cur, keep, .. } => (*cur, *keep) = (p, mods.shift),
+/// The document's boards as the framework sees them in one pass.
+#[derive(Default)]
+pub(crate) struct Boards {
+    /// Every board, in document order.
+    pub(crate) items: Vec<ArtboardItem>,
+    /// The selected board's index (Photoshop's rules select one).
+    pub(crate) selected: Vec<usize>,
+    /// The layer of each item.
+    pub(crate) ids: Vec<LayerId>,
+}
+
+/// The framework's background of a document board.
+fn shown_of(b: ArtboardBackground) -> Shown {
+    match b {
+        ArtboardBackground::Black => Shown::Black,
+        ArtboardBackground::Transparent => Shown::Transparent,
+        ArtboardBackground::Custom(c) => {
+            let [r, g, b, a] = c.to_rgba8();
+            Shown::Custom(Srgba::new(f32::from(r) / 255.0, f32::from(g) / 255.0, f32::from(b) / 255.0, f32::from(a) / 255.0))
+        }
+        _ => Shown::White,
     }
 }
 
-/// Pointer input for the Artboard tool. Returns true when the event was its own.
-pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> bool {
-    // ⌘ is the Move tool (`hold_keys::cmd_moves`): a press with it held is not this tool's,
-    // so it drags a guide or the layer (#6288). A drag already under way keeps its events.
-    if app.ui.tool != Tool::Artboard {
-        add_mode::leave(app);
-        return false;
-    }
-    if app.ui.artboard_tool.drag.is_none() && crate::canvas::event_tool(app, mods) != Tool::Artboard {
-        return false;
-    }
-    let Some(doc) = app.session.active().map(|d| d.doc.clone()) else { return true };
-    match ev {
-        ToolEvent::Down { x, y, .. } => {
-            let p = [x, y];
-            // A "+" button: a board the size of the selected one on that side (⌥: a copy).
-            if let Some((id, side)) = plus_at(app, p) {
-                app.ui.artboard_tool.drag = None;
-                let r = app.run("layer.artboard.addBeside", json!({"layer": id.0, "side": side, "duplicate": mods.alt}));
-                report(app, r);
-                return true;
-            }
-            app.ui.artboard_tool.drag = Some(if let Some((id, rect, hx, hy)) = handle_at(app, p) {
-                ArtboardDrag::Resize { id, rect, hx, hy, start: p, cur: p, keep: mods.shift }
-            } else if let Some((id, rect)) = board_at(&doc, p) {
-                if app.session.active().and_then(|st| st.active_layer) != Some(id) {
-                    let r = app.run("layer.select", json!({"layer": id.0}));
-                    report(app, r);
-                }
-                ArtboardDrag::Move { id, rect, start: p, cur: p }
-            } else {
-                ArtboardDrag::New { start: p, cur: p }
-            });
+/// The boards, rebuilt from the document each pass.
+pub(crate) fn items(app: &PhotocraftApp) -> Boards {
+    let mut out = Boards::default();
+    let Some(st) = app.session.active() else { return out };
+    let active = active_board(app).map(|b| b.0);
+    for b in st.doc.artboards().iter() {
+        let id = b.0;
+        let r = b.2.rect;
+        let name = st.doc.layer(id).map(|l| l.name.clone()).unwrap_or_default();
+        let rect = DocRect::new(f64::from(r.x0), f64::from(r.y0), f64::from(r.x1), f64::from(r.y1));
+        let mut item = ArtboardItem::new(name, rect);
+        item.background = shown_of(b.2.background);
+        if Some(id) == active {
+            out.selected = vec![out.items.len()];
         }
-        ToolEvent::Move { x, y, .. } => {
-            if let Some(d) = &mut app.ui.artboard_tool.drag {
-                follow(d, [x, y], mods);
+        out.items.push(item);
+        out.ids.push(id);
+    }
+    out
+}
+
+/// The size a click places while Add New Artboard's mode is on.
+fn placing_size(app: &PhotocraftApp) -> Option<Size> {
+    app.ui.artboard_tool.adding.then(|| {
+        let [w, h] = bar::bar_size(app);
+        Size::new(w as f64, h as f64)
+    })
+}
+
+fn configure(state: &mut ArtboardTool, boards: &Boards, placing: Option<Size>) {
+    state.items(&boards.items).selected(&boards.selected).rules(ArtboardRules::PHOTOSHOP).placing(placing);
+}
+
+/// The Artboard family's tool for this pass. The borrowed state is a `CanvasTool` through the framework's
+/// `impl CanvasTool for &mut T`.
+pub(crate) fn tool<'a>(scope: &'a ToolScope<'a>, state: &'a mut ArtboardTool, _host: CanvasHost) -> FamilyTool<'a> {
+    let (boards, placing) = scope.with_app(|app| (items(app), placing_size(app)));
+    configure(state, &boards, placing);
+    Box::new(state)
+}
+
+/// Takes the tool's events after the host ran.
+pub(crate) fn drain(app: &mut PhotocraftApp, state: &mut ArtboardTool, _response: &ToolHostResponse) {
+    let events = state.take_events();
+    apply(app, events);
+}
+
+/// The overlay over the boards and the "+" buttons over the selected one, shown in the Canvas body before the tool
+/// runs. Its events are applied here; a "+" answer goes to the tool, which reports it with the tool's own events.
+pub(crate) fn show_overlay(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: egui::Rect) {
+    if app.ui.tool != Tool::Artboard || app.session.active().is_none() {
+        return;
+    }
+    let boards = items(app);
+    let overlay = ArtboardOverlay::new(tl!("Artboards"), &boards.items, &boards.selected).rules(ArtboardRules::PHOTOSHOP).show_at(ui, rect);
+    let added = boards.selected.first().filter(|_| !overlay.dragging).and_then(|&i| boards.items.get(i)).and_then(|item| {
+        let shown = AddBesideHandles::new(tl!("Add artboard"), item.rect.abs()).show_at(ui, rect);
+        shown.added.map(|side| (side, shown.copy))
+    });
+    if let Some((side, copy)) = added {
+        // The tool names the board the button belongs to from its own snapshot, so give it this pass's.
+        let placing = placing_size(app);
+        configure(&mut app.canvas_tools.artboard, &boards, placing);
+        app.canvas_tools.artboard.add_beside(side, copy);
+    }
+    apply(app, overlay.events);
+}
+
+/// The `layer.artboard.addBeside` name of a side.
+fn side_name(side: AddSide) -> &'static str {
+    match side {
+        AddSide::Top => "top",
+        AddSide::Right => "right",
+        AddSide::Bottom => "bottom",
+        AddSide::Left | _ => "left",
+    }
+}
+
+/// The value a finished edit ends with: a commit, or a value that arrived whole. Begin, Update and Cancel change
+/// nothing (the overlay shows the drag).
+fn finished<T: Copy>(event: &EditEvent<T>) -> Option<T> {
+    match event {
+        EditEvent::Commit { after, .. } | EditEvent::Set { after, .. } => Some(*after),
+        _ => None,
+    }
+}
+
+/// Turns the framework's events into engine commands, one undo step each.
+pub(crate) fn apply(app: &mut PhotocraftApp, events: Vec<ArtboardEvent>) {
+    for event in events {
+        let boards = items(app);
+        let id_of = |i: usize| boards.ids.get(i).copied();
+        let result = match event {
+            ArtboardEvent::Draw(edit) => {
+                let Some(rect) = finished(&edit).map(pixel_edges).filter(|r| r[2] > r[0] && r[3] > r[1]) else { continue };
+                let mut params = bar::with_background(app, json!({"rect": xywh(rect)}));
+                params["takeBackground"] = json!(true);
+                app.run("layer.new.artboard", params)
             }
-        }
-        ToolEvent::Up { x, y } => {
-            let Some(mut d) = app.ui.artboard_tool.drag.take() else { return true };
-            follow(&mut d, [x, y], mods);
-            let r = preview(&d);
-            let result = match d {
-                ArtboardDrag::New { start, cur } => {
-                    let screen = (cur[0] - start[0]).hypot(cur[1] - start[1]) * f64::from(app.point_zoom());
-                    if screen < CLICK_PX {
-                        // A click: with Add New Artboard's mode on, it places a board.
-                        if let Some(placed) = add_mode::click(app, start) {
-                            report(app, placed);
-                        }
-                        return true;
-                    }
-                    if r[2] <= r[0] || r[3] <= r[1] {
-                        return true;
-                    }
-                    let mut p = bar::with_background(app, json!({"rect": xywh(r)}));
-                    p["takeBackground"] = json!(true);
-                    app.run("layer.new.artboard", p)
+            ArtboardEvent::Place { rect, .. } => {
+                if app.session.active().is_none() {
+                    continue;
                 }
-                ArtboardDrag::Move { id, rect, .. } if r != rect => app.run("layer.artboard.set", json!({"layer": id.0, "x": r[0], "y": r[1]})),
+                let r = xywh(pixel_edges(rect));
+                let mut params = json!({"rect": r});
+                // With no board selected the size is the tool option's, so the board keeps its preset name (the engine
+                // stores it, and with an explicit `rect` the rect still decides the size).
+                let preset = bar::preset_name(r[2], r[3]);
+                if !preset.is_empty() && active_board(app).is_none() {
+                    params["preset"] = json!(preset);
+                }
+                app.run("layer.new.artboard", bar::with_background(app, params))
+            }
+            ArtboardEvent::Move { indices, event, .. } => {
+                let Some(by) = finished(&event) else { continue };
+                let (dx, dy) = (by.x.round() as i64, by.y.round() as i64);
+                let mut last = Ok(json!({}));
+                for index in indices {
+                    let (Some(id), Some(item)) = (id_of(index), boards.items.get(index)) else { continue };
+                    let at = pixel_edges(item.rect);
+                    if (dx, dy) == (0, 0) {
+                        continue;
+                    }
+                    last = app.run("layer.artboard.set", json!({"layer": id.0, "x": at[0].saturating_add(dx), "y": at[1].saturating_add(dy)}));
+                    if last.is_err() {
+                        break;
+                    }
+                }
+                last
+            }
+            ArtboardEvent::Resize { index, event, .. } => {
+                let (Some(id), Some(rect)) = (id_of(index), finished(&event).map(pixel_edges)) else { continue };
                 // Resizing leaves the contents where they are, as in Photoshop.
-                ArtboardDrag::Resize { id, rect, .. } if r != rect => {
-                    app.run("layer.artboard.set", json!({"layer": id.0, "rect": xywh(r), "moveContents": false}))
+                app.run("layer.artboard.set", json!({"layer": id.0, "rect": xywh(rect), "moveContents": false}))
+            }
+            ArtboardEvent::AddBeside { index, side, copy, .. } => {
+                let Some(id) = id_of(index) else { continue };
+                app.run("layer.artboard.addBeside", json!({"layer": id.0, "side": side_name(side), "duplicate": copy}))
+            }
+            ArtboardEvent::Select { indices, .. } => {
+                let Some(id) = indices.first().copied().and_then(id_of) else { continue };
+                if active_board(app).map(|b| b.0) == Some(id) {
+                    continue;
                 }
-                _ => return true,
-            };
-            report(app, result);
-        }
+                app.run("layer.select", json!({"layer": id.0}))
+            }
+            // PLAN: assumed `ArtboardEvent::Delete { indices, .. }` (the tool's Delete key, S-T5).
+            ArtboardEvent::Delete { indices, .. } => {
+                let Some(id) = indices.first().copied().and_then(id_of) else { continue };
+                app.run("layer.delete", json!({"layer": id.0}))
+            }
+            _ => continue,
+        };
+        report(app, result);
     }
+}
+
+/// The states of the Artboard tool's commands: Add New Artboard is checked while the placing mode is on.
+pub(crate) fn command_states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandState)> {
+    // PLAN: assumed `From<ArtboardCommand> for CommandRef` (the command derive).
+    let state = CommandState::new().enabled(app.session.active().is_some()).checked(app.ui.artboard_tool.adding);
+    vec![(ArtboardCommand::AddNew.into(), state)]
+}
+
+/// Runs a fired Artboard command: Add New Artboard flips the placing mode and adds no board. `ctx` is the shape every
+/// command source takes.
+pub(crate) fn run_fired(app: &mut PhotocraftApp, _ctx: &egui::Context, command: &CommandRef) -> bool {
+    let add_new: CommandRef = ArtboardCommand::AddNew.into();
+    if *command != add_new {
+        return false;
+    }
+    app.ui.artboard_tool.adding = !app.ui.artboard_tool.adding;
     true
 }
 
-/// The resize pointer for handle (`hx`, `hy`) as the view shows it, or none away from the
-/// selected board's handles.
-pub fn cursor(app: &PhotocraftApp, xf: &ViewXform, p: [f64; 2]) -> Option<CursorIcon> {
-    let (hx, hy) = match app.ui.artboard_tool.drag {
-        Some(ArtboardDrag::Resize { hx, hy, .. }) => (hx, hy),
-        Some(_) => return None,
-        None if plus_at(app, p).is_some() => return Some(CursorIcon::PointingHand),
-        None => handle_at(app, p).map(|h| (h.2, h.3))?,
-    };
-    // (hx, hy) is the handle's outward direction: -1, 0 or 1 on each axis.
-    Some(crate::tool_cursor::resize([f64::from(hx), f64::from(hy)], xf))
-}
-
-/// The selected board's handles, its "+" buttons, and the board a gesture in progress would leave.
-pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
-    if app.ui.tool != Tool::Artboard {
-        return;
-    }
-    let t = Tokens::get(painter.ctx());
-    let pt = |x: i64, y: i64| xf.to_screen(x as f32, y as f32);
-    let outline = |r: [i64; 4]| -> Vec<Pos2> { vec![pt(r[0], r[1]), pt(r[2], r[1]), pt(r[2], r[3]), pt(r[0], r[3]), pt(r[0], r[1])] };
-    let drag = app.ui.artboard_tool.drag;
-    if let Some(d) = drag.as_ref() {
-        painter.add(egui::Shape::line(outline(preview(d)), Stroke::new(1.5, t.accent)));
-    }
-    let Some((_, r)) = active_board(app).filter(|_| !matches!(drag, Some(ArtboardDrag::New { .. }))) else { return };
-    if drag.is_none()
-        && let Some((_, buttons)) = plus_buttons(app)
-    {
-        let rad = PLUS_RADIUS_PX as f32;
-        for (_, c) in buttons {
-            let c = xf.to_screen(c[0] as f32, c[1] as f32);
-            painter.circle(c, rad, t.card, Stroke::new(1.0, t.accent));
-            let arm = rad * 0.5;
-            let s = Stroke::new(1.5, t.accent);
-            painter.line_segment([c - vec2(arm, 0.0), c + vec2(arm, 0.0)], s);
-            painter.line_segment([c - vec2(0.0, arm), c + vec2(0.0, arm)], s);
-        }
-    }
-    let r = drag.as_ref().map_or(r, preview);
-    let (mx, my) = (r[0].saturating_add(r[2]) / 2, r[1].saturating_add(r[3]) / 2);
-    for (x, y) in [(r[0], r[1]), (mx, r[1]), (r[2], r[1]), (r[2], my), (r[2], r[3]), (mx, r[3]), (r[0], r[3]), (r[0], my)] {
-        let h = Rect::from_center_size(pt(x, y), vec2(7.0, 7.0));
-        painter.rect_filled(h, 0.0, egui::Color32::WHITE);
-        painter.rect_stroke(h, 0.0, Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
-    }
-}
-
-/// The Artboard tool's options bar: the size preset, W/H, Make Portrait / Make Landscape, the
-/// background, Add New Artboard, the Align panel and the gear menu (the new controls are in `bar`).
+/// The Artboard tool's options bar: the bar's members, then the gear menu. Add New Artboard and the Align menu are
+/// members of the framework bar.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bool {
     if tool != Tool::Artboard {
-        add_mode::leave(app);
         return false;
     }
-    let board = active_board(app);
-    let edit = bar::size_group(app, ui, board);
-    if let Some(p) = edit {
-        let r = app.run("layer.artboard.set", p);
-        report(app, r);
-    }
-    bar::background(app, ui);
-    crate::widgets::vline(ui, 22.0);
-    let has_doc = app.session.active().is_some();
-    // Drawn as the primary button while the placing mode is on.
-    let adding = add_mode::active(app);
-    let button = ui
-        .add_enabled_ui(has_doc, |ui| {
-            if adding {
-                crate::widgets::primary_button(ui, tl!("Add New Artboard"), 0.0)
-            } else {
-                crate::widgets::secondary_button(ui, tl!("Add New Artboard"), 0.0)
-            }
-        })
-        .inner;
-    if button.clicked() {
-        add_mode::toggle(app);
-    }
-    bar::align_and_gear(app, ui);
+    bar::show(app, ui);
+    bar::gear(app, ui);
     true
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::canvas::tool_event;
+    use crate::canvas::{ToolEvent, tool_event};
 
     fn app() -> PhotocraftApp {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -401,18 +336,25 @@ mod tests {
         app.session.active().unwrap().doc.artboards().iter().map(|b| b.2.rect).collect()
     }
 
+    fn steps(app: &PhotocraftApp) -> usize {
+        app.session.active().unwrap().history.past_len()
+    }
+
     /// Drawing on empty canvas makes a board; its right-edge handle resizes it in one undo step;
-    /// dragging it from inside moves it.
+    /// dragging it from inside moves it in one.
     #[test]
     fn artboard_tool_draws_resizes_and_moves_boards() {
         let mut app = app();
+        let s0 = steps(&app);
         drag(&mut app, [20.0, 30.0], [120.0, 110.0]);
         assert_eq!(boards(&app), vec![photocraft_geom::Rect::new(20, 30, 120, 110)]);
+        assert_eq!(steps(&app), s0 + 1);
         let st = app.session.active().unwrap();
         assert_eq!(st.active_layer, Some(st.doc.artboards()[0].0));
         // The right edge's handle.
         drag(&mut app, [120.0, 70.0], [160.0, 75.0]);
         assert_eq!(boards(&app), vec![photocraft_geom::Rect::new(20, 30, 160, 110)]);
+        assert_eq!(steps(&app), s0 + 2);
         app.run("edit.undo", json!({})).unwrap();
         assert_eq!(boards(&app), vec![photocraft_geom::Rect::new(20, 30, 120, 110)]);
         // From inside: the board moves.
@@ -423,70 +365,20 @@ mod tests {
         assert_eq!(boards(&app).len(), 1);
     }
 
-    /// The handles' resize arrows turn with a rotated view: on a view turned 90°, the right edge's
-    /// handle resizes up and down on screen.
+    /// A "+" answer gives `layer.artboard.addBeside` for the side, in one undo step.
     #[test]
-    fn resize_cursors_turn_with_the_view() {
-        use CursorIcon::{ResizeHorizontal as H, ResizeNeSw as NeSw, ResizeNwSe as NwSe, ResizeVertical as V};
-        let mut app = app();
-        drag(&mut app, [20.0, 30.0], [120.0, 110.0]);
-        // The right edge, the top edge, the top-left and the top-right corner.
-        let handles = [[120.0, 70.0], [70.0, 30.0], [20.0, 30.0], [120.0, 30.0]];
-        for (rotation, want) in [(0.0, [H, V, NwSe, NeSw]), (90.0, [V, H, NeSw, NwSe])] {
-            let view_index = app.session.active_index().unwrap();
-            app.ui.views[view_index].rotation = rotation;
-            let xf = ViewXform::active(&app).unwrap();
-            let got = handles.map(|p| cursor(&app, &xf, p));
-            assert_eq!(got, want.map(Some), "view turned {rotation}°");
-        }
-    }
-
-    /// #3033: a click on the selected board's right "+" adds a board of its size a gap to the right;
-    /// ⇧ on a corner keeps the board's proportions.
-    #[test]
-    fn plus_buttons_add_boards_and_shift_keeps_proportions() {
+    fn a_plus_answer_adds_a_board_beside_the_selected_one() {
         let mut app = app();
         drag(&mut app, [20.0, 30.0], [120.0, 80.0]);
-        let (_, buttons) = plus_buttons(&app).unwrap();
-        let right = buttons.iter().find(|b| b.0 == "right").unwrap().1;
-        assert!(right[0] > 120.0 && (right[1] - 55.0).abs() < 1e-9, "{right:?}");
-        drag(&mut app, right, right);
+        let b = items(&app);
+        configure(&mut app.canvas_tools.artboard, &b, None);
+        app.canvas_tools.artboard.add_beside(AddSide::Right, false);
+        let events = app.canvas_tools.artboard.take_events();
+        let s0 = steps(&app);
+        apply(&mut app, events);
         assert_eq!(boards(&app), vec![photocraft_geom::Rect::new(20, 30, 120, 80), photocraft_geom::Rect::new(220, 30, 320, 80)]);
+        assert_eq!(steps(&app), s0 + 1);
         app.run("edit.undo", json!({})).unwrap();
         assert_eq!(boards(&app).len(), 1);
-        // The 100×50 board's bottom-right corner, dragged 40 right and 5 down with ⇧: 140×70.
-        let m = egui::Modifiers::SHIFT;
-        tool_event(&mut app, ToolEvent::Down { x: 120.0, y: 80.0, pressure: 1.0 }, m);
-        tool_event(&mut app, ToolEvent::Move { x: 160.0, y: 85.0, pressure: 1.0 }, m);
-        tool_event(&mut app, ToolEvent::Up { x: 160.0, y: 85.0 }, m);
-        assert_eq!(boards(&app), vec![photocraft_geom::Rect::new(20, 30, 160, 100)]);
-    }
-
-    /// V picks the Move group, ⇧V cycles Move ↔ Artboard as in Photoshop.
-    #[test]
-    fn shift_v_cycles_move_and_artboard() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-        let ctx = egui::Context::default();
-        let press = |app: &mut PhotocraftApp, modifiers| {
-            let key = egui::Key::V;
-            let raw = egui::RawInput {
-                events: vec![
-                    egui::Event::ModifiersChanged(modifiers),
-                    egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers },
-                    egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers },
-                ],
-                ..Default::default()
-            };
-            ctx.begin_pass(raw);
-            crate::shortcuts::handle(app, &ctx);
-            ctx.end_pass().textures_delta.clear();
-        };
-        app.ui.tool = Tool::Brush;
-        press(&mut app, egui::Modifiers::NONE);
-        assert_eq!(app.ui.tool, Tool::Move);
-        press(&mut app, egui::Modifiers::SHIFT);
-        assert_eq!(app.ui.tool, Tool::Artboard);
-        press(&mut app, egui::Modifiers::SHIFT);
-        assert_eq!(app.ui.tool, Tool::Move);
     }
 }
