@@ -31,15 +31,14 @@ fn raster(d: &Document, name: &str, bounds: Rect, color: [f32; 4]) -> Layer {
     layer
 }
 
-/// Keeps the measured straight geometry and fits turned controls under the 1 MiB transform limit
-/// that the preference test can set process-wide.
-fn scene_divisor(turned: bool) -> i32 {
-    if turned { 2 } else { 1 }
-}
+/// The scene is the measured 800 × 500 one at half size: the fills' cost grows with the canvas, and
+/// turned controls must fit under the 1 MiB transform limit that the preference test can set
+/// process-wide.
+const DIVISOR: i32 = 2;
 
 /// The measured scene, with a deliberately different crop extension colour.
-fn scene(turned: bool) -> (Session, Layers) {
-    let divisor = scene_divisor(turned);
+fn scene() -> (Session, Layers) {
+    let divisor = DIVISOR;
     let rect = |x0, y0, x1, y1| Rect::new(x0 / divisor, y0 / divisor, x1 / divisor, y1 / divisor);
     let mut s = Session::new();
     s.execute("file.new", json!({"width":800/divisor,"height":500/divisor,"depth":8,"background":"white"})).unwrap();
@@ -72,14 +71,13 @@ fn select(s: &mut Session, id: LayerId) {
 
 /// Extends the frame to the right by one eighth of the original width.
 fn frame(turned: bool) -> Value {
-    let divisor = scene_divisor(turned);
+    let divisor = DIVISOR;
     json!({"x":0,"y":0,"width":900/divisor,"height":500/divisor,"angle":if turned { 10 } else { 0 },"deleteCroppedPixels":true})
 }
 
 /// Samples the same relative point inside the new strip in both fixture sizes.
-fn extension_sample(turned: bool) -> (i32, i32) {
-    let divisor = scene_divisor(turned);
-    (850 / divisor, 400 / divisor)
+fn extension_sample() -> (i32, i32) {
+    (850 / DIVISOR, 400 / DIVISOR)
 }
 
 fn crop(s: &mut Session, mut p: Value, aware: bool) {
@@ -133,11 +131,11 @@ fn undo_redo(s: &mut Session, before: &Document) {
     assert_eq!(s.active().unwrap().history.undo_label(), Some("Content-aware Crop"));
 }
 
-/// Matches the three measured rows at their original size, bounds and sample points.
+/// Matches the three measured rows: bounds and sample points, at half the measured size.
 #[test]
 fn measured_straight_rows_fill_background_and_only_the_active_raster() {
     for row in 0..3 {
-        let (mut s, ids) = scene(false);
+        let (mut s, ids) = scene();
         let active = if row == 1 { ids.edge } else { ids.quads };
         if row == 2 {
             s.edit("Layer 0", |d, _| {
@@ -155,22 +153,22 @@ fn measured_straight_rows_fill_background_and_only_the_active_raster() {
         let past = s.active().unwrap().history.past_len();
         crop(&mut s, p, true);
         let d = doc(&s);
-        assert_eq!((d.size.width, d.size.height), (900, 500));
+        assert_eq!((d.size.width, d.size.height), (900 / DIVISOR as u32, 500 / DIVISOR as u32));
         let mut untouched = vec![ids.small, ids.hidden, ids.text];
         untouched.push(if row == 1 { ids.quads } else { ids.edge });
         if row == 2 {
             assert!(d.background().is_none());
             untouched.push(ids.background);
         } else {
-            assert_eq!(d.layer(ids.background).unwrap().surface().unwrap().content_bounds(), Rect::new(0, 0, 900, 500));
-            pixel(d, ids.background, 850, 400, WHITE);
+            assert_eq!(d.layer(ids.background).unwrap().surface().unwrap().content_bounds(), Rect::new(0, 0, 900 / DIVISOR, 500 / DIVISOR));
+            pixel(d, ids.background, 850 / DIVISOR, 400 / DIVISOR, WHITE);
         }
-        let bounds = if row == 1 { Rect::new(600, 0, 900, 500) } else { Rect::new(0, 0, 900, 500) };
+        let bounds = if row == 1 { Rect::new(600 / DIVISOR, 0, 900 / DIVISOR, 500 / DIVISOR) } else { Rect::new(0, 0, 900 / DIVISOR, 500 / DIVISOR) };
         assert_eq!(d.layer(active).unwrap().surface().unwrap().content_bounds(), bounds);
-        pixel(d, active, 850, if row == 1 { 400 } else { 125 }, if row == 1 { BLUE } else { GREEN });
+        pixel(d, active, 850 / DIVISOR, if row == 1 { 400 / DIVISOR } else { 125 / DIVISOR }, if row == 1 { BLUE } else { GREEN });
         // The fill adds pixels only where the crop uncovered the canvas: the active layer's own
         // pixels inside the old canvas are the plain crop's.
-        covered_as_plain(d, &plain, active, Rect::new(0, 0, 800, 500));
+        covered_as_plain(d, &plain, active, Rect::new(0, 0, 800 / DIVISOR, 500 / DIVISOR));
         unchanged(d, &plain, &untouched);
         named_one_step(&s, past, "Content-aware Crop");
         undo_redo(&mut s, &before);
@@ -180,9 +178,9 @@ fn measured_straight_rows_fill_background_and_only_the_active_raster() {
 /// Checks own-layer donors and exact non-target parity after rotation.
 #[test]
 fn turned_rows_sample_each_target_and_leave_other_layers_at_plain_crop() {
-    let (x, y) = extension_sample(true);
+    let (x, y) = extension_sample();
     for row in 0..3 {
-        let (mut s, ids) = scene(true);
+        let (mut s, ids) = scene();
         // Uniform donors isolate target selection from the existing turned-fill sampling policy.
         s.edit("Uniform Quads", |d, _| {
             let fmt = d.pixel_format();
@@ -222,8 +220,8 @@ fn turned_rows_sample_each_target_and_leave_other_layers_at_plain_crop() {
 #[test]
 fn background_active_is_not_a_second_target() {
     for turned in [false, true] {
-        let (x, y) = extension_sample(turned);
-        let (mut s, ids) = scene(turned);
+        let (x, y) = extension_sample();
+        let (mut s, ids) = scene();
         select(&mut s, ids.background);
         let p = frame(turned);
         let plain = plain_control(&mut s, &p);
@@ -236,34 +234,24 @@ fn background_active_is_not_a_second_target() {
 }
 
 /// Verifies Background-only fill for ineligible active layers and Delete Cropped Pixels off.
+/// Which active layers are a second target is a pure function of the layer tree, checked for every
+/// unmeasured state (type, hidden, each lock, hidden or locked ancestor) by `crop_fill`'s
+/// `only_a_visible_unlocked_active_raster_adds_a_target`. Through the command, straight and
+/// turned, run one state the layer itself rules out (type), one an ancestor rules out (a locked
+/// group) and Delete Cropped Pixels off, its own branch of `fill_uncovered`.
 #[test]
 fn unmeasured_active_targets_and_delete_off_keep_the_legacy_target() {
     for turned in [false, true] {
-        let (x, y) = extension_sample(turned);
-        for case in 0..10 {
-            let (mut s, ids) = scene(turned);
-            let active = match case {
-                0 => ids.text,
-                1 => ids.hidden,
-                _ => ids.quads,
-            };
-            if (2..7).contains(&case) {
-                s.edit("Lock active", |d, _| {
-                    assert!(d.layer_mut(active).unwrap().locks.set(["all", "pixels", "transparency", "position", "artboard"][case - 2], true));
-                    Ok(())
-                })
-                .unwrap();
-            }
-            if case >= 8 {
+        let (x, y) = extension_sample();
+        for (text, locked_group, delete) in [(true, false, true), (false, true, true), (false, false, false)] {
+            let (mut s, ids) = scene();
+            let active = if text { ids.text } else { ids.quads };
+            if locked_group {
                 s.edit("Group active", |d, _| {
                     let i = d.layers.iter().position(|layer| layer.id == active).unwrap();
                     let child = d.layers.remove(i);
                     let mut group = Layer::group("Ancestor", vec![child]);
-                    if case == 8 {
-                        group.visible = false;
-                    } else {
-                        assert!(group.locks.set("pixels", true));
-                    }
+                    assert!(group.locks.set("pixels", true));
                     d.layers.insert(i, group);
                     Ok(())
                 })
@@ -271,9 +259,7 @@ fn unmeasured_active_targets_and_delete_off_keep_the_legacy_target() {
             }
             select(&mut s, active);
             let mut p = frame(turned);
-            if case == 7 {
-                p["deleteCroppedPixels"] = json!(false);
-            }
+            p["deleteCroppedPixels"] = json!(delete);
             let plain = plain_control(&mut s, &p);
             crop(&mut s, p, true);
             pixel(doc(&s), ids.background, x, y, WHITE);
@@ -285,13 +271,13 @@ fn unmeasured_active_targets_and_delete_off_keep_the_legacy_target() {
 /// Checks the plain history name for interior crops and crops with synthesis disabled.
 #[test]
 fn no_fill_or_content_aware_off_keeps_the_crop_history_name() {
-    for (p, aware, turned) in [
-        (json!({"x":20,"y":20,"width":40,"height":30}), true, false),
-        (json!({"x":20,"y":20,"width":40,"height":30,"angle":10}), true, true),
-        (frame(false), false, false),
-        (frame(true), false, true),
+    for (p, aware) in [
+        (json!({"x":20,"y":20,"width":40,"height":30}), true),
+        (json!({"x":20,"y":20,"width":40,"height":30,"angle":10}), true),
+        (frame(false), false),
+        (frame(true), false),
     ] {
-        let (mut s, ids) = scene(turned);
+        let (mut s, ids) = scene();
         select(&mut s, ids.quads);
         let past = s.active().unwrap().history.past_len();
         crop(&mut s, p, aware);
@@ -344,8 +330,8 @@ fn turned_hidden_overhang_coverage_belongs_to_each_layer() {
 #[test]
 fn donorless_added_target_keeps_the_background_fill() {
     for turned in [false, true] {
-        let (x, y) = extension_sample(turned);
-        let (mut s, ids) = scene(turned);
+        let (x, y) = extension_sample();
+        let (mut s, ids) = scene();
         let empty = s
             .edit("Empty target", |d, active| {
                 let layer = Layer::raster("Empty", d.pixel_format());

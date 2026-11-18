@@ -2,7 +2,7 @@
 //! live in the preferences, so they survive a restart, and are plain family names: a favourite
 //! whose font is uninstalled is kept, though the menu lists installed fonts only, and shows it
 //! again once the font is back (`type.font.favorite` with `"on": false` removes it). (The
-//! recently used fonts are the shell's, `PhotocraftApp::note_recent_font`.)
+//! recently used fonts are the font picker's: `UiState.recent_fonts`, stored through `finish_font_state`.)
 
 use serde_json::{Value, json};
 
