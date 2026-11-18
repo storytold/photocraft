@@ -102,6 +102,7 @@ fn surface(seed: u32, n: i32) -> Surface {
 
 #[test]
 fn a_folder_that_stops_answering_never_freezes_the_app() {
+    let _scratch = crate::lock(&crate::SCRATCH);
     let root = std::env::temp_dir().join(format!("photocraft-scratch-slow-{}", std::process::id()));
     let good = root.join("good");
     let good2 = root.join("good2");

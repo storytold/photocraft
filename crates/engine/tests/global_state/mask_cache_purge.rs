@@ -1,4 +1,4 @@
-//! One integration-test process keeps its global mask cache isolated from parallel unit tests.
+//! The global mask cache is isolated from parallel unit tests; the tests that count it take turns.
 use std::sync::Arc;
 
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
@@ -11,6 +11,8 @@ use serde_json::json;
 
 #[test]
 fn purge_all_is_enabled_by_cached_masks_and_releases_them_at_every_depth() {
+    let _caches = crate::lock(&crate::PROCESS);
+    crate::purge_all_caches();
     let mut session = Session::new();
     assert!(!session.is_enabled("edit.purge.all"));
     let canvas = Rect::new(0, 0, 32, 32);

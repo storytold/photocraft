@@ -135,7 +135,7 @@ fn gpu() -> Option<Gpu> {
             None
         }
     };
-    let comp = timed("pipeline creation", compositor)?;
+    let comp = timed("compositor creation", compositor)?;
     let mut paged = comp.sibling();
     paged.set_texture_limit(PAGED_LIMIT);
     Some(Gpu { device, queue, comp, paged, _lock: lock })
@@ -3067,15 +3067,16 @@ fn rgba16f_fallback_path_renders() {
 
 #[test]
 fn unbuildable_pipelines_are_an_error_not_a_panic() {
-    // The app falls back to the CPU compositor on Err; a panic here would crash it (as FXC once
-    // did on D3D12). A depth format can't be a colour target, so its pipelines fail to build.
+    // The app builds every pipeline up front and falls back to the CPU compositor on Err; a panic
+    // here would crash it (as FXC once did on D3D12). A depth format can't be a colour target, so
+    // its pipelines fail to build.
     let Some((adapter, device, _, _lock)) = any_device() else { return };
-    let e = Compositor::try_new_with_format(&device, wgpu::TextureFormat::Depth32Float).err().expect("depth target must fail");
+    let e = Compositor::try_new_with_format_threads(&device, wgpu::TextureFormat::Depth32Float, 4).err().expect("depth target must fail");
     assert!(e.0.contains("pipelines"), "{e}");
     // The format the app picks builds (effect maps the adapter can't render are left out, not fatal).
     let f = Compositor::preferred_acc_format(&adapter);
     if adapter.get_texture_format_features(f).allowed_usages.contains(wgpu::TextureUsages::RENDER_ATTACHMENT) {
-        assert!(Compositor::try_new_with_format(&device, f).is_ok());
+        assert!(Compositor::try_new_with_format_threads(&device, f, 4).is_ok());
     }
 }
 
