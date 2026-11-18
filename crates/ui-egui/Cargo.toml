@@ -34,7 +34,7 @@ photocraft-codecs = { workspace = true }
 photocraft-formats = { workspace = true }
 # Reading embedded thumbnail resources (1036/1033) for recent files in Home screen.
 craft-psd = { workspace = true }
-egui = { workspace = true }
+egui = { workspace = true, features = ["serde"] }
 egui_extras = { version = "0.37", default-features = false, features = ["svg"] }
 eframe = { workspace = true, features = ["wgpu", "accesskit", "clipboard"] }
 serde = { workspace = true }

@@ -28,6 +28,13 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
         return Some(opened);
     }
     let ui = params.get("ui")?;
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = ui;
+        return Some(Err("RAW Develop control requests are not available in the browser".into()));
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
     app.raw_reply = None;
     let was_closed = app.raw.is_none();
     if was_closed && let Err(e) = open(app, ctx) {
@@ -45,4 +52,5 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
         return Some(Err(e));
     }
     Some(ended.unwrap_or_else(|| Ok(describe(app))))
+    }
 }
