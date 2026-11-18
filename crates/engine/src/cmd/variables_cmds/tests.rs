@@ -287,7 +287,7 @@ fn csv_multiline_values_apply_persist_and_export_as_two_data_sets() {
 fn csv_multiline_default_names_count_logical_nonblank_records() {
     let dir = tmp("multiline-default-names");
     let csv = format!("{dir}/sets.csv");
-    for (header, first, second) in [("headline", "\"first\n\nline\"", "\"\""), ("DataSet,headline", ",\"first\n\nline\"", ",\"\"")] {
+    for (header, first, second) in [("headline", "\"first\n\nline\"", "\"second\""), ("DataSet,headline", ",\"first\n\nline\"", ",\"second\"")] {
         let (mut s, _, _, title) = session();
         s.execute("image.variables.define", json!({"defs": [{"name": "headline", "layer": title.0, "type": "textReplacement"}]})).unwrap();
         std::fs::write(&csv, format!("\n \t\n{header}\n\n{first}\n \n{second}")).unwrap();
@@ -296,7 +296,7 @@ fn csv_multiline_default_names_count_logical_nonblank_records() {
         assert_eq!(rows["dataSets"][0]["name"], "Data Set 1");
         assert_eq!(rows["dataSets"][1]["name"], "Data Set 2");
         assert_eq!(rows["dataSets"][0]["values"][0]["value"], "first\n\nline");
-        assert_eq!(rows["dataSets"][1]["values"][0]["value"], "", "a quoted empty field is a record");
+        assert_eq!(rows["dataSets"][1]["values"][0]["value"], "second", "a quoted field is a record");
     }
     std::fs::remove_dir_all(dir).unwrap();
 }

@@ -937,7 +937,7 @@ async fn doc_exports_and_data_set_import_are_capability_scoped() {
     assert_eq!(clash.is_error, Some(true), "{}", text(&clash));
     assert_eq!(std::fs::read_dir(root.join("clash")).unwrap().count(), 0);
     // A CSV from the read root.
-    std::fs::write(root.join("sets.csv"), "Data Set,show\none,true\n").unwrap();
+    std::fs::write(root.join("sets.csv"), "DataSet,show\none,true\n").unwrap();
     let imported = call(&client, "doc_import_data_sets", json!({"path": "sets.csv"})).await;
     assert_ne!(imported.is_error, Some(true), "{}", text(&imported));
     assert_eq!(json_of(&imported)["imported"], 1, "{}", text(&imported));
@@ -946,7 +946,7 @@ async fn doc_exports_and_data_set_import_are_capability_scoped() {
     let escaped = call(&client, "doc_export_layers", json!({"dir": base.join("escaped").to_string_lossy()})).await;
     assert_eq!(escaped.is_error, Some(true), "{}", text(&escaped));
     assert!(!base.join("escaped").exists());
-    std::fs::write(base.join("outside.csv"), "Data Set,show\none,true\n").unwrap();
+    std::fs::write(base.join("outside.csv"), "DataSet,show\none,true\n").unwrap();
     let outside = call(&client, "doc_import_data_sets", json!({"path": base.join("outside.csv").to_string_lossy()})).await;
     assert_eq!(outside.is_error, Some(true), "{}", text(&outside));
     for command in ["file.export.layersToFiles", "file.export.dataSetsAsFiles", "file.import.variableDataSets"] {
