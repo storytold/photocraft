@@ -144,7 +144,7 @@ impl PlaceSteps {
         let (name, fmt) = (&self.input.name, self.input.fmt);
         crate::memory_gate::ensure(&format!("place \u{201c}{}\u{201d}", file_name(name)), crate::memory_gate::place_need(&self.bytes, fmt.bytes_per_pixel()))?;
         // A path isn't read when the input is made, so whether it is a vector source is decided now.
-        let vector = self.input.frame.is_some() || photocraft_io::is_svg_input(name, &self.bytes);
+        let vector = self.input.frame.is_some() || photocraft_io::svg::is_svg(&self.bytes);
         self.input.doc = self.input.doc.take().filter(|_| vector);
         Ok(())
     }
@@ -249,6 +249,7 @@ impl PlaceSteps {
                 None => SmartSource::Embedded { file_name: file_name(&input.name), bytes: Arc::clone(&self.bytes) },
             };
             let mut so = SmartObject::new(source, placement, px);
+            so.historical_xcf_sample_order = input.opts.historical_xcf_sample_order;
             // A vector source (SVG) or a frame's image renders at its placement scale instead of
             // as a resampled raster.
             if let Some(doc) = &input.doc {
