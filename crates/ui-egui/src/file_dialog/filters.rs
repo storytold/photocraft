@@ -5,14 +5,14 @@ use std::path::Path;
 
 use craft::host::PickRequest;
 
-/// Everything File › Open reads: PhotoCraft, Photoshop, OpenRaster, Krita and Affinity documents, flat images, and
+/// Everything File › Open reads: PhotoCraft, Photoshop, OpenRaster, Krita and Affinity documents, PDFs, flat images, and
 /// Photoshop brushes (.abr), gradients (.grd), layer styles (.asl), swatches (.aco, .act, .ase) and keyboard shortcut sets
 /// (.kys), which go to the preset libraries and Edit › Keyboard Shortcuts.
 pub(super) const OPEN_EXTS: &[&str] = &[
     "pcraft", "pdn", "ora", "xcf", "xcfgz", "gz", "kra", "krz", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "dib", "tga",
     "ico", "qoi", "exr", "hdr", "pbm", "pgm", "ppm", "pnm", "pam", "pfm", "pcx", "dds", "xpm", "fits", "fit", "fts", "dpx", "cin", "dcm", "dicom", "dc3",
     "iff", "lbm", "ilbm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "asl", "svg", "svgz",
-    "aco", "act", "ase", "kys", "af", "afdesign", "afphoto", "afpub",
+    "aco", "act", "ase", "kys", "af", "afdesign", "afphoto", "afpub", "pdf",
 ];
 const SVG_EXTS: &[&str] = &["svg", "svgz"];
 
@@ -41,6 +41,8 @@ pub(super) const OPEN_FILTERS: &[(&str, &[&str])] = &[
     ("OpenRaster", &["ora"]),
     ("Paint.NET", &["pdn"]),
     ("PCX", &["pcx"]),
+    // Dropped PDFs always opened; the picker hid them (#15532).
+    ("PDF", &["pdf"]),
     ("PNG", &["png"]),
     ("Portable Bitmap", &["pbm", "pgm", "ppm", "pnm", "pam", "pfm"]),
     ("QOI", &["qoi"]),
