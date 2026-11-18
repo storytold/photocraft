@@ -334,11 +334,47 @@ pub fn defringe(px: &mut [[f32; 4]], w: usize, h: usize, width: usize) {
         return;
     }
     let mut known: Vec<bool> = (0..px.len()).map(|i| px[i][3] > 0.01 && dist[i] > width as f32).collect();
-    if !known.iter().any(|&source| source) {
-        // A completely translucent cutout (or a requested width covering the whole
-        // cutout) may have no distant source. Keep its most opaque interior pixels.
-        for (i, q) in px.iter().enumerate() {
-            if !seeds[i] && q[3] > 0.01 && q[3] >= max_alpha - 1e-6 {
+    // Keep an interior source in every connected visible component. A distant
+    // component may contain a known pixel while a nearby translucent island
+    // has none; RGB cannot propagate through the intervening zero-alpha gap.
+    // Use the same 8-neighbour connectivity as the propagation pass below.
+    let mut visited_visible = vec![false; px.len()];
+    for start in 0..px.len() {
+        if px[start][3] <= 0.0 || visited_visible[start] {
+            continue;
+        }
+        let mut component = vec![start];
+        visited_visible[start] = true;
+        let mut cursor = 0;
+        while cursor < component.len() {
+            let i = component[cursor];
+            cursor += 1;
+            let (x, y) = (i % w, i / w);
+            for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1)] {
+                let (nx, ny) = (x as i32 + dx, y as i32 + dy);
+                if nx < 0 || ny < 0 || nx >= w as i32 || ny >= h as i32 {
+                    continue;
+                }
+                let j = ny as usize * w + nx as usize;
+                if px[j][3] > 0.0 && !visited_visible[j] {
+                    visited_visible[j] = true;
+                    component.push(j);
+                }
+            }
+        }
+        if component.iter().any(|&i| known[i]) {
+            continue; // This component already has a clean, distant source.
+        }
+        let best_alpha = component
+            .iter()
+            .filter(|&&i| !seeds[i] && px[i][3] > 0.01)
+            .map(|&i| px[i][3])
+            .fold(0.0_f32, f32::max);
+        if best_alpha <= 0.0 {
+            continue; // Nothing eligible to borrow from in this component.
+        }
+        for i in component {
+            if !seeds[i] && px[i][3] > 0.01 && px[i][3] >= best_alpha - 1e-6 {
                 known[i] = true;
             }
         }

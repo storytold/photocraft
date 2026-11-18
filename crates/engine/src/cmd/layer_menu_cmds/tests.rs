@@ -250,6 +250,30 @@ fn defringe_fixes_soft_edge_remote_from_transparent_pixels() {
 }
 
 #[test]
+fn defringe_keeps_a_source_in_each_visible_component() {
+    // The first island is surrounded by nearby seeds, so it has no distant
+    // source at width=1. The red pixels after the transparent gap must not
+    // prevent the local fallback from borrowing the red interior at index 1.
+    let mut px = vec![
+        [0.0, 0.0, 1.0, 0.2],
+        [1.0, 0.0, 0.0, 1.0],
+        [0.0, 0.0, 1.0, 0.6],
+        [0.0; 4],
+        [0.0; 4],
+        [1.0, 0.0, 0.0, 1.0],
+        [1.0, 0.0, 0.0, 1.0],
+        [1.0, 0.0, 0.0, 1.0],
+    ];
+    let before = px.clone();
+    defringe(&mut px, 8, 1, 1);
+    assert_eq!(px[0], [1.0, 0.0, 0.0, 0.2]);
+    assert_eq!(px[1], before[1]);
+    assert_eq!(px[2], [1.0, 0.0, 0.0, 0.6]);
+    assert_eq!(&px[3..], &before[3..]);
+    assert!(px.iter().zip(&before).all(|(after, before)| after[3] == before[3]));
+}
+
+#[test]
 fn defringe_corrects_nonzero_low_alpha_without_touching_zero_alpha() {
     let mut px = vec![[0.0; 4], [0.0, 0.0, 1.0, 0.005], [1.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0]];
     defringe(&mut px, 4, 1, 1);
