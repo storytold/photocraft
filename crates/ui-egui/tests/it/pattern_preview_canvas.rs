@@ -3,17 +3,18 @@
 //! the document while it is off. Skips when no GPU adapter exists (like `color_managed_canvas.rs`).
 
 use photocraft_ui_egui::PhotocraftApp;
-use photocraft_ui_egui::canvas::ViewXform;
 use serde_json::json;
 
 type Harness = egui_kittest::Harness<'static, PhotocraftApp>;
 
+/// Build the application harness for GPU and CPU canvas comparisons.
 fn harness() -> Option<Harness> {
     let built = std::panic::catch_unwind(|| {
         egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 700.0)).with_pixels_per_point(1.0).with_max_steps(64).wgpu().build_eframe(|cc| {
             PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), Default::default());
             if let Some(rs) = cc.wgpu_render_state.as_ref() {
+                eprintln!("pattern preview adapter {:?}", rs.adapter.get_info());
                 app.set_wgpu(rs.clone());
             }
             app
@@ -31,8 +32,8 @@ fn harness() -> Option<Harness> {
 /// The colour on screen at document point `at` (which may lie past the document).
 fn sample(h: &mut Harness, at: [f32; 2]) -> [u8; 3] {
     h.run_steps(6);
-    let xf = ViewXform::active(h.state()).expect("canvas view");
-    let p = xf.to_screen(at[0], at[1]);
+    let xf = photocraft_ui_egui::canvas::active_view(h.state()).expect("canvas view");
+    let p = xf.to_screen(craft::behavior::kurbo::Point::new(f64::from(at[0]), f64::from(at[1])));
     let img = h.render().expect("render");
     let px = img.get_pixel(p.x.round() as u32, p.y.round() as u32);
     [px[0], px[1], px[2]]
@@ -43,7 +44,7 @@ fn toggle(h: &mut Harness) {
     let (request, _) = photocraft_ui_egui::control::ControlRequest::new("ui.menu.invoke", json!({"id": "view.patternPreview"}));
     let ctx = h.ctx.clone();
     let response = photocraft_ui_egui::control::handle(h.state_mut(), &ctx, &request);
-    assert!(matches!(response, photocraft_ui_egui::control::Outcome::Done(_)));
+    assert!(matches!(response, photocraft_ui_egui::control::Reply::Done(_)));
 }
 
 fn near(a: [u8; 3], b: [u8; 3]) -> bool {
@@ -64,8 +65,7 @@ fn pattern_preview_repeats_the_document_on_gpu_and_cpu_canvases() {
     let v = app.ui.views.get_mut(0).expect("view");
     v.zoom = 1.0;
     v.center = [100.0, 50.0];
-    v.fit_pending = false;
-    v.fill_pending = false;
+    v.clear_pending();
     let blue = [0x20, 0x50, 0xd0];
     let red = [0xe0, 0x10, 0x10];
     // Points past the document: right of its right edge (the next copy's red band), below it

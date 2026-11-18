@@ -30,6 +30,7 @@ fn valid_state(state: &MixerState) -> bool {
         && state.reservoir.as_ref().is_none_or(valid_color)
         && state.pickup.as_ref().is_none_or(valid_color)
         && state.color.as_ref().is_none_or(valid_color)
+        && state.sampled_over.as_ref().is_none_or(valid_color)
         && state.spatial.as_ref().is_none_or(|colors| colors.len() == 4096 && colors.iter().all(valid_color))
 }
 
@@ -48,7 +49,7 @@ struct Core {
     params: Value,
     selection: Option<Surface>,
     lock: bool,
-    color_restrict: Option<usize>,
+    color_restrict: Option<crate::color_channels::Restriction>,
     count: usize,
     last: Option<StrokePoint>,
     bounds: Rect,
@@ -105,18 +106,8 @@ impl Core {
             let original = Region::read(&self.pre, r);
             let (target, _) = crate::channel_cmds::target_surface(Arc::make_mut(&mut self.doc), self.layer, &self.params)?;
             mix_back(target, &original, &region, r, 1.0, self.selection.as_ref(), self.lock);
-            if let Some(k) = self.color_restrict {
-                let n = target.channels();
-                let mut values = target.read_region(r);
-                let before = self.pre.read_region(r);
-                for (new, old) in values.chunks_exact_mut(n).zip(before.chunks_exact(n)) {
-                    for (c, (new, old)) in new.iter_mut().zip(old).enumerate() {
-                        if c != k {
-                            *new = *old;
-                        }
-                    }
-                }
-                target.write_region(r, &values);
+            if let Some(restrict) = self.color_restrict {
+                crate::color_channels::restrict_region(&self.pre, target, restrict.colors, r)?;
             }
             damage = damage.union(&r);
         }
@@ -160,6 +151,9 @@ impl LiveMixer {
 
     /// Validate the params and capture the document and paint load, without rendering a dab.
     fn prepare(s: &Session, p: &Value, preview_limits: bool) -> Result<(Self, Vec<StrokePoint>)> {
+        mode_refusal(s)?;
+        let captured = crate::channel_cmds::inject_target(s, CMD, p.clone());
+        let p = &captured;
         has_paintable(s).map_err(EngineError::Other)?;
         if preview_limits && p.get("points").and_then(Value::as_array).is_some_and(|v| v.len() > 65_536) {
             return Err(bad(CMD, "stroke exceeds 65536 recorded input samples"));
@@ -175,6 +169,7 @@ impl LiveMixer {
             sample_all_layers: flag(p, "sampleAllLayers", bm.sample_all_layers) && crate::channel_cmds::target_of(p) == crate::channel_cmds::Target::Pixels,
             clean_after_stroke: flag(p, "cleanAfterStroke", bm.clean_after_stroke),
             load_after_stroke: flag(p, "loadAfterStroke", bm.load_after_stroke),
+            solid_colors_only: bm.solid_colors_only,
         };
         let initial_state = if let Some(value) = p.get("mixerState") {
             if value.get("spatial").and_then(Value::as_array).is_some_and(|v| v.len() != 4096) {
@@ -337,9 +332,26 @@ impl LiveMixer {
     }
 }
 
+/// The reference's alert for a Mixer Brush press in an Indexed Color document (#11958).
+pub const INDEXED_REFUSAL: &str =
+    "Could not use the Mixer Brush tool because it does not work with Indexed Color images (convert image to RGB Color mode to edit).";
+/// The reference's alert for a Mixer Brush press in a Bitmap document (#11958).
+pub const BITMAP_REFUSAL: &str = "Could not use the Mixer Brush tool because it does not work with Bitmap images (convert image to Grayscale mode to edit).";
+
+/// The Mixer Brush refuses Indexed Color and Bitmap documents before anything is painted, with the
+/// reference's alert text; other modes (Duotone and Multichannel were not measured) paint as before.
+fn mode_refusal(s: &Session) -> Result<()> {
+    match s.active().map(|st| st.doc.mode) {
+        Some(photocraft_color::ColorMode::Indexed) => Err(EngineError::Other(INDEXED_REFUSAL.into())),
+        Some(photocraft_color::ColorMode::Bitmap) => Err(EngineError::Other(BITMAP_REFUSAL.into())),
+        _ => Ok(()),
+    }
+}
+
 /// Consume a matching prepared result or replay without the preview tile cap, then commit one history step.
 /// The completed stroke also applies the automatic clean/load settings to the stored paint load.
 pub(super) fn run(s: &mut Session, p: &Value) -> Result<Value> {
+    mode_refusal(s)?;
     let points = parse_points(p, CMD)?;
     let cached =
         s.live_commit.take().filter(|live| live.matches(s, CMD, p, &points) && live.mixer.as_ref().is_some_and(|(before, _)| *before == s.tools.mixer));

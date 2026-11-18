@@ -5,9 +5,7 @@ signed installers for macOS, Windows, Linux and the web, plus a FreeBSD tarball,
 or updates a **draft** GitHub Release named `PhotoCraft v<version>`. Nobody sees a draft until a
 maintainer publishes it.
 
-This is PhotoCraft's implementation of the shared
-[release playbook](release-playbook.md). User-facing names say **PhotoCraft**. Files, binaries
-and ids stay lowercase (`photocraft-<version>-<platform>-<arch>.<ext>`, `ai.storyteller.photocraft`).
+User-facing names say **PhotoCraft**. Files, binaries and ids stay lowercase (`photocraft-<version>-<platform>-<arch>.<ext>`, `ai.storyteller.photocraft`).
 
 ## In-app update checks
 
@@ -65,8 +63,8 @@ in the dialog.
 | Platform | Artifacts | Built on |
 |---|---|---|
 | macOS 11+ (universal: Apple silicon + Intel) | `photocraft-<v>-macos-universal.dmg`, `photocraft-cli-<v>-macos-universal.zip` | `macos-15` |
-| Windows 10+ x64 | `photocraft-<v>-windows-x64.msi`, `photocraft-<v>-windows-x64-portable.zip` | `windows-latest` |
-| Windows 10+ x86 (32-bit) | `photocraft-<v>-windows-x86.msi`, `photocraft-<v>-windows-x86-portable.zip` | `windows-latest` |
+| Windows 10+ x64 | `photocraft-<v>-windows-x64.msi`, `photocraft-<v>-windows-x64-portable.zip`, `photocraft-<v>-windows-x64-symbols.zip` | `windows-latest` |
+| Windows 10+ x86 (32-bit) | `photocraft-<v>-windows-x86.msi`, `photocraft-<v>-windows-x86-portable.zip`, `photocraft-<v>-windows-x86-symbols.zip` | `windows-latest` |
 | Linux x86_64 | `photocraft-<v>-linux-x86_64.{AppImage,AppImage.zsync,deb,rpm,tar.gz,flatpak}` | `ubuntu-22.04` (Flatpak: `ubuntu-24.04`) |
 | Linux aarch64 | `photocraft-<v>-linux-aarch64.{AppImage,AppImage.zsync,deb,rpm,tar.gz,flatpak}` | `ubuntu-22.04-arm` (Flatpak: `ubuntu-24.04-arm`) |
 | Linux riscv64 (glibc 2.39+) | `photocraft-<v>-linux-riscv64.tar.gz` | cross-compiled on `ubuntu-24.04` (ports.ubuntu.com riscv64 libs); CLI smoke-tested under QEMU |
@@ -84,7 +82,7 @@ at the `craft-fonts-ref` commit in `.github/workflows/release.yml` and builds wi
 `docs/development.md` › Fonts) and fail rather than ship without them. The packages carry each font's licence as
 `OFL-<family>.txt` (`copy_font_licences` in `packaging/env.sh`; the portable zip on Windows;
 `Contents/Resources/Licenses` in the macOS app). Bump the pin deliberately, together with the one
-in `ci.yml`. Rules: `../craftrules/standards/fonts.md`; build option: `docs/development.md` › Fonts.
+in `ci.yml`. Build option: `docs/development.md` › Fonts.
 
 ### macOS
 
@@ -105,7 +103,11 @@ in `ci.yml`. Rules: `../craftrules/standards/fonts.md`; build option: `docs/deve
   Its Finder window (background, icon size and positions) comes from
   [`packaging/macos/dmg/`](../packaging/macos/dmg/README.md), and its volume is named `PhotoCraft`
   without the version, which the window's background needs; the DMG file name keeps the version.
-- **CLI:** the universal `photocraft-cli` is signed with the same Developer ID, the hardened
+- **CLI:** `PhotoCraft.app/Contents/MacOS/photocraft-cli` is bundled and signed so generated
+  droplet scripts can run without installing the separate CLI download. The scripts prefer
+  `PHOTOCRAFT_CLI` when set, then the bundled CLI in `/Applications` or `~/Applications`, then
+  `photocraft-cli` on `PATH`. Finder drag-and-drop onto droplets still requires an app wrapper.
+  The universal standalone `photocraft-cli` is signed with the same Developer ID, the hardened
   runtime and a secure timestamp (identifier `ai.storyteller.photocraft-cli`), zipped, and the zip
   is sent to `notarytool`. Only `.app`, `.dmg` and `.pkg` can hold a stapled ticket, not a bare
   Mach-O, so Gatekeeper looks the CLI's ticket up online the first time a downloaded
@@ -187,6 +189,11 @@ goes in `CARGO_TARGET_<TRIPLE>_RUSTFLAGS`, so host build scripts aren't affected
   of `%APPDATA%\Photocraft`. If that folder isn't writable the app warns and uses `%APPDATA%`.
   The MSI has no marker. The logic is in `apps/photocraft/src/app_dirs.rs` and works the same
   on macOS and Linux.
+- **Symbols zip:** `photocraft.pdb` and `photocraft_cli.pdb` from the same release build, plus
+  `packaging/windows/symbols.txt` (how to load them in a profiler). An optional download, so the
+  MSI and portable zip stay their size; it lets anyone profile the released exes with function
+  names (#688). Only that build's PDBs match its exes, so they can't be rebuilt later; the
+  release profile has no line tables, so they carry function names, not source lines.
 - **Signing:** `packaging/windows/sign.ps1` signs both `.exe` files and then the `.msi` with
   `signtool`, using SHA-256 and an RFC 3161 timestamp. It uses whichever material is present:
   1. a `.pfx` file (`WINDOWS_CERTIFICATE`, `WINDOWS_CERTIFICATE_PASSWORD`), timestamped by
@@ -235,10 +242,24 @@ Why these formats:
   `~/.local/share/applications/ai.storyteller.photocraft.desktop` with `Exec` rewritten to
   the AppImage's path (`TryExec` dropped, the binary isn't on the host PATH) and the
   hicolor icons beside it, rewriting only when the content changed, and any failure leaves
-  the launch untouched. `PHOTOCRAFT_NO_DESKTOP_INTEGRATION=1` opts out; to uninstall, `rm
+  the launch untouched. Launcher refresh uses a hidden generated snapshot to preserve
+  user edits, comments and deleted keys while updating untouched packaged metadata and
+  known executable paths. Missing or damaged snapshots use a conservative fallback.
+  External integration removes a duplicate only when a regular launcher exactly matches
+  a valid regular snapshot. Symlinked launchers or snapshots (including dangling links)
+  and special files are left alone during both refresh and deduplication; icons still
+  install. These checks do not synchronize concurrent changes by other processes.
+  This overlaps the deduplication protection proposed in #5168 without depending on it.
+  `PHOTOCRAFT_NO_DESKTOP_INTEGRATION=1` opts out; to uninstall, `rm
   ~/.local/share/applications/ai.storyteller.photocraft.desktop` and `find
   ~/.local/share/icons/hicolor -name 'ai.storyteller.photocraft*' -delete`. The script is
   covered by `packaging/linux/apprun-test.sh` in the packaging-lint workflow.
+  A leading `--cli` launches the bundled `usr/bin/photocraft-cli`, without desktop
+  integration: `./photocraft-<version>-linux-x86_64.AppImage --cli mcp` serves MCP on
+  stdio. A symlink named `photocraft-cli` also selects that binary via the runtime's
+  `ARGV0`. Arguments and process streams pass through unchanged; the entry point
+  uses `exec` so signals and exit status reach the caller directly. CLI routing is
+  covered by `packaging/linux/apprun-cli-test.sh` in the same workflow.
 - **.deb** covers Debian, Ubuntu, Mint, Pop!_OS and elementary. **.rpm** covers Fedora, RHEL
   and its clones, and openSUSE. Both integrate with the menu, MIME and icon caches (the
   `postinst.sh` hook) and uninstall cleanly. Both are built by
@@ -288,6 +309,48 @@ one is missing, prints the package to install and exits with status 1 instead of
 
 Locally (on Linux): install [nfpm](https://nfpm.goreleaser.com/install/), then
 `packaging/linux/package.sh` (or `--formats "deb tar"`).
+
+#### Packaged automation and offline documentation
+
+Both Flatpak manifests install `photocraft-cli`, alongside the GUI. To start the stdio MCP
+server with a project in the sandbox's allowed Documents directory:
+
+```sh
+flatpak run --command=photocraft-cli ai.storyteller.photocraft mcp \
+  --automation-read-root "$HOME/Documents/project" \
+  --automation-write-root "$HOME/Documents/project"
+```
+
+The automation roots restrict PhotoCraft's file access; they do not grant Flatpak access to
+other host directories. For a project elsewhere, also grant that directory with Flatpak's
+`--filesystem=/absolute/project` run option. Stdio MCP needs no network permission.
+
+Linux packages include the original `mcp.md` and `control-protocol.md` for offline use:
+
+| Format | Documentation directory |
+|---|---|
+| `.deb`, `.rpm` | `/usr/share/doc/photocraft/` |
+| Extracted `.tar.gz` | `share/doc/photocraft/` inside the extracted release directory |
+| Flatpak (source or bundle) | `/app/share/doc/photocraft/` inside the sandbox |
+| Extracted AppImage | `squashfs-root/usr/share/doc/photocraft/` |
+
+For example, read the Flatpak's MCP guide without opening the GUI:
+
+```sh
+flatpak run --command=cat ai.storyteller.photocraft /app/share/doc/photocraft/mcp.md
+```
+
+To read an AppImage's guides, run `./PhotoCraft.AppImage --appimage-extract` in a directory
+where you want its `squashfs-root` contents, using the downloaded file's actual name. Then
+open either guide in `squashfs-root/usr/share/doc/photocraft/`. Extraction is an explicit user
+action; launching the app does not extract documentation into the home directory. These two
+Markdown files are included as written; links to other repository documents still need a
+checkout or the online documentation.
+
+`bash packaging/linux/package-docs-test.sh` checks the real Linux staging/tar commands,
+AppDir retention and both Flatpak manifests' install commands with fixture binaries and
+stubbed AppImage tooling. Packaging lint runs it through `extra-checks-script`; it does not
+compile Rust, build a real AppImage, or run a Flatpak sandbox.
 
 ### FreeBSD
 

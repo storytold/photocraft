@@ -13,6 +13,52 @@ fn effects(s: &Session) -> Vec<Effect> {
     d.doc.layer(d.active_layer.unwrap()).unwrap().effects.items.clone()
 }
 
+/// #8639: Stroke Emboss bevels the outline of the layer with its Stroke effect, shading only
+/// the stroke, not the layer; without a stroke it shows nothing, as in Photoshop.
+#[test]
+fn stroke_emboss_shades_the_stroke_band_only() {
+    let render = |stroke: bool, bevel: Option<&str>| {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 120, "height": 90, "background": "#d8d8d8"})).unwrap();
+        s.execute("shape.create", json!({"kind": "rect", "rect": [30, 25, 60, 40], "fill": "#3f6fd8"})).unwrap();
+        if stroke {
+            s.execute("layer.layerStyle.stroke", json!({"size": 10, "position": "outside", "color": "#c0c0c0"})).unwrap();
+        }
+        if let Some(style) = bevel {
+            s.execute("layer.layerStyle.bevelEmboss", json!({"style": style, "size": 6, "depth": 200})).unwrap();
+        }
+        let d = &s.active().unwrap().doc;
+        photocraft_compose::render(d, d.bounds()).into_px()
+    };
+    let at = |px: &[[f32; 4]], x: usize, y: usize| px[y * 120 + x];
+    let (plain, embossed) = (render(true, None), render(true, Some("stroke")));
+    // The stroked outline is bevelled inward, inside the stroke only (the stroke covers rows
+    // 15..25 above the shape and 65..75 below it; flat it is 0.753): its top edge faces the
+    // light, its bottom edge away from it, and the stroke's inner part stays flat.
+    for ((x, y), change) in [((60, 16), 1.0), ((60, 73), -1.0), ((60, 23), 0.0), ((60, 66), 0.0)] {
+        let (e, p) = (at(&embossed, x, y)[0], at(&plain, x, y)[0]);
+        let ok = if change > 0.0 {
+            e > p + 0.1
+        } else if change < 0.0 {
+            e < p - 0.1
+        } else {
+            (e - p).abs() < 1e-3
+        };
+        assert!(ok, "({x}, {y}): {e} vs {p}");
+    }
+    // …while the layer's own pixels and the backdrop stay as they were (an Inner Bevel would
+    // shade the rectangle's edge).
+    for (x, y) in [(32, 30), (60, 45), (87, 62), (5, 5)] {
+        assert_eq!(at(&embossed, x, y), at(&plain, x, y), "({x}, {y})");
+    }
+    assert_ne!(at(&render(true, Some("inner")), 32, 30), at(&plain, 32, 30), "the old fallback shaded the layer");
+    // No stroke, nothing to emboss.
+    let (a, b) = (render(false, Some("stroke")), render(false, None));
+    let worst = a.iter().zip(&b).flat_map(|(p, q)| p.iter().zip(q).map(|(x, y)| (x - y).abs())).fold(0.0f32, f32::max);
+    // Equal but for float rounding: an effect sends the layer through the effects compositor.
+    assert!(worst < 1e-6, "{worst}");
+}
+
 #[test]
 fn bevel_command_sets_technique_contour_and_texture() {
     let mut s = session();
@@ -419,6 +465,56 @@ fn contour_presets_match_photoshop() {
     assert!((at(&lut("Cove - Deep"), 0.0) - 0.26).abs() < 0.02, "Cove - Deep starts above zero");
 }
 
+/// #5177: a Gradient Overlay (and a gradient stroke) takes any number of colour stops and
+/// transparency stops, replacing From/To; bad lists are refused, not silently dropped.
+#[test]
+fn gradient_overlay_takes_explicit_stops() {
+    let mut s = session();
+    let stops = json!([[0.0, "#ff0000"], [0.5, "#00ff00"], [1.0, "#0000ff"]]);
+    s.execute("layer.layerStyle.gradientOverlay", json!({"stops": stops, "opacityStops": [[0, 100], [1, 50]]})).unwrap();
+    let Effect::GradientOverlay { gradient, .. } = &effects(&s)[0] else { panic!() };
+    assert_eq!(gradient.stops.len(), 3);
+    assert_eq!(gradient.stops[1], (0.5, photocraft_color::Color::rgb(0.0, 1.0, 0.0)));
+    assert_eq!(gradient.opacity_stops, vec![(0.0, 1.0), (1.0, 0.5)]);
+    // Editing the same overlay: new stops replace the list (sorted), unsorted input is sorted,
+    // and a geometry-only edit keeps the three stops.
+    s.execute("layer.layerStyle.gradientOverlay", json!({"stops": [[1.0, "#ffffff"], [0.25, [0.0, 0.0, 0.0]]], "opacityStops": []})).unwrap();
+    let Effect::GradientOverlay { gradient, .. } = &effects(&s)[0] else { panic!() };
+    assert_eq!(gradient.stops.iter().map(|s| s.0).collect::<Vec<_>>(), vec![0.25, 1.0]);
+    assert!(gradient.opacity_stops.is_empty(), "[] means opaque");
+    s.execute("layer.layerStyle.gradientOverlay", json!({"stops": stops})).unwrap();
+    // The dialog's path: the snapshot plus a geometry edit keeps the three stops.
+    let fx = serde_json::to_value(&effects(&s)[0]).unwrap();
+    s.execute("layer.layerStyle.replace", json!({"effects": [{"kind": "gradientOverlay", "fx": fx, "params": {"angle": 45}}]})).unwrap();
+    let Effect::GradientOverlay { gradient, .. } = &effects(&s)[0] else { panic!() };
+    assert_eq!((gradient.stops.len(), gradient.angle), (3, 45.0));
+    let e = s.execute("layer.layerStyle.replace", json!({"effects": [{"kind": "gradientOverlay", "params": {"stops": [[0, "#ff0000"]]}}]})).unwrap_err();
+    assert!(matches!(e, EngineError::BadParams { .. }), "{e}");
+    // A gradient stroke takes stops too.
+    s.execute("layer.layerStyle.stroke", json!({"size": 4, "stops": [[0, "#ff0000"], [0.5, "#00ff00"], [1, "#0000ff"]]})).unwrap();
+    assert!(effects(&s).iter().any(|e| matches!(e, Effect::Stroke(st) if matches!(&st.paint, FxPaint::Gradient(g) if g.stops.len() == 3))));
+    // Malformed lists are errors and change nothing.
+    for bad in [
+        json!({"stops": "red"}),
+        json!({"stops": [[0, "#ff0000"]]}),
+        json!({"stops": [[0, "#ff0000"], ["x", "#0000ff"]]}),
+        json!({"stops": [[0, "#ff0000"], [1, 7]]}),
+        json!({"stops": [[0, "#ff0000"], [f64::NAN, "#0000ff"]]}),
+        json!({"stops": vec![json!([0, "#ff0000"]); 257]}),
+        json!({"opacityStops": [[0, 100]]}),
+        json!({"opacityStops": [[0, "x"], [1, 1]]}),
+    ] {
+        let e = s.execute("layer.layerStyle.gradientOverlay", bad.clone()).unwrap_err();
+        assert!(matches!(e, EngineError::BadParams { .. }), "{bad}: {e}");
+    }
+    let Effect::GradientOverlay { gradient, .. } = &effects(&s)[0] else { panic!() };
+    assert_eq!(gradient.stops.len(), 3, "a refused edit keeps the gradient");
+    // Positions outside 0..1 are clamped.
+    s.execute("layer.layerStyle.gradientOverlay", json!({"stops": [[-1, "#000000"], [2, "#ffffff"]]})).unwrap();
+    let Effect::GradientOverlay { gradient, .. } = &effects(&s)[0] else { panic!() };
+    assert_eq!(gradient.stops.iter().map(|s| s.0).collect::<Vec<_>>(), vec![0.0, 1.0]);
+}
+
 #[test]
 fn gradient_overlay_method_matches_photoshop() {
     // Photoshop 27.11, Classic Gradient Overlay #000000 → #ffffff (Smoothness 100 %): 0.037 at
@@ -573,4 +669,19 @@ fn double_stroke_bands_render_and_survive_an_edit() {
     let entries: Vec<Value> = items.iter().map(|fx| json!({"kind": "stroke", "fx": serde_json::to_value(fx).unwrap(), "params": {}})).collect();
     s.execute("layer.layerStyle.replace", json!({"layer": id.0, "effects": entries})).unwrap();
     assert_eq!(px(&mut s, 24, 14), before, "both strokes render identically after the round trip");
+}
+
+#[test]
+fn unchanged_dense_imported_stops_roundtrip_without_edit_limit_regression() {
+    let mut s = session();
+    let gradient = Gradient { stops: (0..300).map(|i| (i as f32 / 299.0, Color::rgb(i as f32 / 777.0, 0.123456, 0.9))).collect(), ..Gradient::default() };
+    let fx = Effect::GradientOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), gradient: gradient.clone(), dither: false, interpolation: None };
+    let stops: Vec<_> = gradient.stops.iter().map(|(t, c)| json!([t, c])).collect();
+    s.execute("layer.layerStyle.replace", json!({"effects":[{"kind":"gradientOverlay","fx":fx,"params":{"stops":stops}}]})).unwrap();
+    let doc = s.active().unwrap();
+    let saved = &doc.doc.layer(doc.active_layer.unwrap()).unwrap().effects.items[0];
+    assert_eq!(saved, &fx);
+    let mut edited = stops;
+    edited[1] = json!([0.01, "#ffffff"]);
+    assert!(s.execute("layer.layerStyle.replace", json!({"effects":[{"kind":"gradientOverlay","fx":fx,"params":{"stops":edited}}]})).is_err());
 }

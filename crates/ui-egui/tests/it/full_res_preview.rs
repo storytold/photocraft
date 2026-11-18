@@ -1,7 +1,7 @@
 //! Preferences › Performance › Low Resolution Previews: on (the default) live previews of a large
 //! document render on a reduced copy, off they render at full resolution.
 //!
-//! A 3000 × 2000 document of 1 px black and white columns: the reduced copy (every 2nd pixel at
+//! A 2502 × 2000 document of 1 px black and white columns: the reduced copy (every 2nd pixel at
 //! this size) is all black, so its preview shows a flat colour where the full-size one shows the
 //! columns at 100 % (and their mipmapped grey zoomed out). Drives the real app offscreen on wgpu;
 //! skips when no GPU adapter exists (like `drag_preview_canvas.rs`).
@@ -15,14 +15,15 @@ use serde_json::{Value, json};
 
 type Harness = egui_kittest::Harness<'static, PhotocraftApp>;
 
-const W: i32 = 3000;
+// Just above the 5 MP proxy threshold; keep the same factor-two reduction.
+const W: i32 = 2502;
 const H: i32 = 2000;
 
 fn harness() -> Option<Harness> {
     let built = std::panic::catch_unwind(|| {
         egui_kittest::Harness::builder().with_size(egui::vec2(1100.0, 760.0)).with_pixels_per_point(1.0).with_max_steps(64).wgpu().build_eframe(|cc| {
             PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), Default::default());
             if let Some(rs) = cc.wgpu_render_state.as_ref() {
                 app.set_wgpu(rs.clone());
             }
@@ -47,9 +48,17 @@ fn control(h: &mut Harness, method: &str, params: Value) {
 
 fn columns_document() -> Document {
     let mut doc = Document::with_background("columns", Size::new(W as u32, H as u32), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+    assert_eq!(photocraft_ui_egui::proxy::factor(&doc), 2, "the fixture must exercise a reduced preview");
     let s = doc.layers[0].surface_mut().expect("background pixels");
-    for x in (0..W).step_by(2) {
-        s.fill_rect(Rect::new(x, 0, x + 1, H), &[0.0, 0.0, 0.0, 1.0]);
+    let row: Vec<f32> = (0..W)
+        .flat_map(|x| {
+            let v = if x % 2 == 0 { 0.0 } else { 1.0 };
+            [v, v, v, 1.0]
+        })
+        .collect();
+    for y in (0..H).step_by(64) {
+        let end = (y + 64).min(H);
+        s.write_region(Rect::new(0, y, W, end), &row.repeat((end - y) as usize));
     }
     doc
 }
@@ -83,12 +92,10 @@ fn low_res(h: &mut Harness, on: bool) {
 /// Luma along a 300 px row near the canvas's top-left corner (clear of centred dialogs).
 fn row(h: &mut Harness) -> Vec<i32> {
     h.run_steps(4);
-    let canvas = {
-        let app = h.state();
-        photocraft_ui_egui::rulers::content_rect(app, app.last_canvas_rect)
-    };
+    // The canvas as its last pass showed it: the rectangle the rendered pixels are sampled in.
+    let canvas = photocraft_ui_egui::canvas::active_view(h.state()).expect("the canvas has been shown").rect;
     // egui_kittest waits 10 s for the GPU. Windows CI renders on WARP, a software rasterizer,
-    // where the first full-resolution composite of this 6 MP document can take longer; the
+    // where the first full-resolution composite of this 5 MP document can take longer; the
     // submitted work still finishes, so wait for it again instead of failing.
     let img = (0..3).find_map(|_| h.render().ok()).expect("render");
     let (x0, y) = (canvas.min.x as u32 + 20, canvas.min.y as u32 + 40);
@@ -160,7 +167,7 @@ fn filter_dialog_previews_at_full_resolution_when_low_res_is_off() {
     assert!(committed > 60.0, "zoomed out the columns average to grey ({committed})");
     control(&mut h, "ui.set", json!({"zoom": 1.0, "center": [W / 2, H / 2]}));
     // Offset 0, 0 leaves the pixels as they are: any change is the preview's resolution.
-    photocraft_ui_egui::filter_dialog::open(h.state_mut(), "filter.other.offset").expect("Offset dialog");
+    let _dialog = photocraft_ui_egui::filter_dialog::open(h.state_mut(), "filter.other.offset").expect("Offset dialog");
     let at_100 = row(&mut h);
     assert!(columns(&at_100) > 0.9, "default at 100 %: the preview is never coarser than the screen ({})", columns(&at_100));
     control(&mut h, "ui.set", json!({"zoom": 0.5, "center": [W / 2, H / 2]}));
@@ -181,7 +188,7 @@ fn adjustment_dialog_zoomed_out_skips_the_reduced_copy_when_low_res_is_off() {
     }
     let committed = mean(&row(&mut h));
     assert!(committed > 60.0, "zoomed out the columns average to grey ({committed})");
-    photocraft_ui_egui::adjust_dialog::open(h.state_mut(), "image.adjustments.levels").expect("Levels dialog");
+    let _dialog = photocraft_ui_egui::adjust_dialog::open(h.state_mut(), "image.adjustments.levels").expect("Levels dialog");
     h.run_steps(4);
     assert!(photocraft_ui_egui::adjust_preview::gpu_proxy(h.state_mut(), 0, 0.5).is_some(), "default: zoomed out on the reduced copy");
     let reduced = mean(&row(&mut h));
@@ -190,4 +197,36 @@ fn adjustment_dialog_zoomed_out_skips_the_reduced_copy_when_low_res_is_off() {
     assert!(photocraft_ui_egui::adjust_preview::gpu_proxy(h.state_mut(), 0, 0.5).is_none(), "off: no reduced copy");
     let full = mean(&row(&mut h));
     assert!((full - committed).abs() < 8.0, "off: the preview matches the committed view ({full} vs {committed})");
+}
+
+/// Check the encoded texture directly, before canvas painting or adjustment previews.
+#[test]
+fn compositor_chunks_keep_their_columns() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let rs = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        egui_kittest::wgpu::create_render_state(egui_kittest::wgpu::default_wgpu_setup(), Default::default())
+    }));
+    let Ok(rs) = rs else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    eprintln!("canvas encode adapter {:?}", rs.adapter.get_info());
+    let gpu = photocraft_ui_egui::gpu_canvas::GpuCanvas::new(&rs);
+    let doc = columns_document();
+    let refresh = gpu.refresh(doc.id.0, &doc, None, None);
+    assert!(gpu.fault().is_none(), "GPU fault after canvas refresh: {:?}", gpu.fault());
+    if refresh.kind == "full" {
+        eprintln!("skipping: GPU compositor unavailable: {:?}", refresh.fallback);
+        return;
+    }
+    assert_eq!(refresh.kind, "gpu-full", "{:?}", refresh.fallback);
+    let (format, size, texels) = gpu.read_texels(doc.id.0).expect("read back the encoded canvas");
+    assert_eq!(format, eframe::wgpu::TextureFormat::Rgba8Unorm);
+    assert_eq!(size, [W as u32, H as u32]);
+    assert_eq!(texels.len(), (W * H) as usize);
+    for (i, pixel) in texels.iter().enumerate() {
+        let x = i % W as usize;
+        let v = (x % 2) as f32;
+        assert_eq!(*pixel, [v, v, v, 1.0], "canvas pixel ({x}, {})", i / W as usize);
+    }
 }

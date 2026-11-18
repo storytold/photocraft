@@ -59,6 +59,7 @@ const F_HDR: u32 = 262144u;     // 32-bit float document: HDR blends and Exposur
 const F_QUANT: u32 = 32768u;    // lerp: A rounded to p0.x steps (adjustment results, integer docs)
 const F_ADD_DIFF: u32 = 16384u;  // lerp: A + (B - C) premultiplied (clips on pass-through groups)
 const F_BLEND_IF: u32 = 524288u; // lerp: B back towards A by the Blend If ranges in p0..p3
+const F_REPLACE: u32 = 2097152u; // effect paint: Normal inside/center stroke replaces A by its coverage
 const F_TEXT_GAMMA: u32 = 8192u; // blend / atop / fx merge: type layer, mix coverage at gamma p4.w
 const F_LAYER_SHAPE: u32 = 1048576u; // fx merge: B is the shape; layer = its colour at fill p0.x inside it × its alpha
 
@@ -73,13 +74,9 @@ const F_LAYER_SHAPE: u32 = 1048576u; // fx merge: B is the shape; layer = its co
 @group(1) @binding(6) var map_tex: texture_2d<f32>;
 @group(1) @binding(7) var pat_tex: texture_2d<f32>;
 
+// The full-chunk triangle's vertex stage lives in `vertex_shader` (kit.rs): one entry point per
+// pipeline build job, so no two threads share a compiled vertex shader.
 struct VOut { @builtin(position) pos: vec4<f32> };
-
-@vertex
-fn vs(@builtin(vertex_index) vi: u32) -> VOut {
-    let uv = vec2(f32((vi << 1u) & 2u), f32(vi & 2u));
-    return VOut(vec4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0));
-}
 
 fn local(pos: vec4<f32>) -> vec2<i32> { return vec2<i32>(floor(pos.xy)); }
 fn doc_px(p: vec2<i32>) -> vec2<i32> { return chunk.origin + p; }
@@ -170,61 +167,61 @@ fn vivid_light_generic(cb: f32, cs: f32) -> f32 {
 // WebGPU compiler rejects it, which left the web app without a GPU compositor.
 const F32_MAX: f32 = 0x1.fffffep+127f;
 
+// FXC (the DX12 compiler between naga's HLSL and the driver) stops following a switch this size
+// once every case returns: "error X3507: 'blend_channel': Not all control paths return a value",
+// and then no compositor pipeline builds — the whole session composites on the CPU. Each case
+// assigns instead; the one return at the end is what FXC's flow analysis can follow.
 fn blend_channel(mode: i32, cb: f32, cs: f32) -> f32 {
     // Linear Dodge / Divide clip at 1 at integer depths, at f32::MAX in 32-bit documents.
     let hi = select(1.0, F32_MAX, (op.flags & F_HDR) != 0u);
+    var r = cs;                                                 // Normal, Dissolve, PassThrough
     switch mode {
-        case 3: { return min(cb, cs); }                         // Darken
-        case 4: { return cb * cs; }                             // Multiply
-        case 5: { return color_burn(cb, cs); }                  // ColorBurn
-        case 6: { return max(cb + cs - 1.0, 0.0); }             // LinearBurn
-        case 8: { return max(cb, cs); }                         // Lighten
-        case 9: { return cb + cs - cb * cs; }                   // Screen
-        case 10: { return color_dodge(cb, cs); }                // ColorDodge
-        case 11: { return min(cb + cs, hi); }                   // LinearDodge
-        case 13: { return hard_light(cs, cb); }                 // Overlay
-        case 14: { return soft_light_ps(cb, cs); }              // SoftLight
-        case 15: { return hard_light(cb, cs); }                 // HardLight
-        case 16: { return vivid_light_ps(cb, cs); }             // VividLight (Photoshop)
-        case 17: { return clamp(cb + 2.0 * cs - 1.0, 0.0, 1.0); } // LinearLight
+        case 3: { r = min(cb, cs); }                            // Darken
+        case 4: { r = cb * cs; }                                // Multiply
+        case 5: { r = color_burn(cb, cs); }                     // ColorBurn
+        case 6: { r = max(cb + cs - 1.0, 0.0); }                // LinearBurn
+        case 8: { r = max(cb, cs); }                            // Lighten
+        case 9: { r = cb + cs - cb * cs; }                      // Screen
+        case 10: { r = color_dodge(cb, cs); }                   // ColorDodge
+        case 11: { r = min(cb + cs, hi); }                      // LinearDodge
+        case 13: { r = hard_light(cs, cb); }                    // Overlay
+        case 14: { r = soft_light_ps(cb, cs); }                 // SoftLight
+        case 15: { r = hard_light(cb, cs); }                    // HardLight
+        case 16: { r = vivid_light_ps(cb, cs); }                // VividLight (Photoshop)
+        case 17: { r = clamp(cb + 2.0 * cs - 1.0, 0.0, 1.0); }  // LinearLight
         case 18: {                                              // PinLight
-            if (cs <= 0.5) { return min(cb, 2.0 * cs); }
-            return max(cb, 2.0 * cs - 1.0);
+            if (cs <= 0.5) { r = min(cb, 2.0 * cs); } else { r = max(cb, 2.0 * cs - 1.0); }
         }
         case 19: {                                              // HardMix (Photoshop)
-            return select(0.0, 1.0, vivid_light_generic(cb, cs) >= 0.5 - 1e-6);
+            r = select(0.0, 1.0, vivid_light_generic(cb, cs) >= 0.5 - 1e-6);
         }
-        case 20: { return abs(cb - cs); }                       // Difference
-        case 21: { return cb + cs - 2.0 * cb * cs; }            // Exclusion
-        case 22: { return max(cb - cs, 0.0); }                  // Subtract
+        case 20: { r = abs(cb - cs); }                          // Difference
+        case 21: { r = cb + cs - 2.0 * cb * cs; }               // Exclusion
+        case 22: { r = max(cb - cs, 0.0); }                     // Subtract
         case 23: {                                              // Divide
-            if (cs <= 0.0) { return select(1.0, 0.0, cb <= 0.0); }
-            return min(cb / cs, hi);
+            if (cs <= 0.0) { r = select(1.0, 0.0, cb <= 0.0); } else { r = min(cb / cs, hi); }
         }
-        case 28: {                                             // Reflect
-            if (cs >= 1.0) { return 1.0; }
-            return min(cb * cb / (1.0 - cs), 1.0);
+        case 28: {                                              // Reflect
+            if (cs >= 1.0) { r = 1.0; } else { r = min(cb * cb / (1.0 - cs), 1.0); }
         }
-        case 29: {                                             // Glow
-            if (cb >= 1.0) { return 1.0; }
-            return min(cs * cs / (1.0 - cb), 1.0);
+        case 29: {                                              // Glow
+            if (cb >= 1.0) { r = 1.0; } else { r = min(cs * cs / (1.0 - cb), 1.0); }
         }
-        case 30: { return 1.0 - abs(1.0 - cb - cs); }            // Negation
-        case 31: {                                             // XOR (8-bit channel operation)
+        case 30: { r = 1.0 - abs(1.0 - cb - cs); }               // Negation
+        case 31: {                                              // XOR (8-bit channel operation)
             let b = u32(floor(clamp(cb, 0.0, 1.0) * 255.0 + 0.5));
             let s = u32(floor(clamp(cs, 0.0, 1.0) * 255.0 + 0.5));
-            return f32(b ^ s) / 255.0;
+            r = f32(b ^ s) / 255.0;
         }
-        case 32: {                                             // Paint.NET Color Burn
-            if (cs <= 0.0) { return 0.0; }
-            return max(1.0 - (1.0 - cb) / cs, 0.0);
+        case 32: {                                              // Paint.NET Color Burn
+            if (cs <= 0.0) { r = 0.0; } else { r = max(1.0 - (1.0 - cb) / cs, 0.0); }
         }
-        case 33: {                                             // Paint.NET Color Dodge
-            if (cs >= 1.0) { return 1.0; }
-            return min(cb / (1.0 - cs), 1.0);
+        case 33: {                                              // Paint.NET Color Dodge
+            if (cs >= 1.0) { r = 1.0; } else { r = min(cb / (1.0 - cs), 1.0); }
         }
-        default: { return cs; }                                 // Normal, Dissolve, PassThrough
+        default: { r = cs; }
     }
+    return r;
 }
 
 fn lum(c: vec3<f32>) -> f32 { return 0.3 * c.r + 0.59 * c.g + 0.11 * c.b; }
@@ -1000,8 +997,21 @@ fn fs_adjmix(in: VOut) -> @location(0) vec4<f32> {
     if (op.mode == M_DISSOLVE) {
         return select(b, vec4(a.rgb, b.a), dissolve_noise(doc_px(p)) < k);
     }
-    let bl = blend_rgb(op.mode, b.rgb, a.rgb);
-    return vec4(b.rgb + (bl - b.rgb) * k, b.a);
+    // Fill below 100% in one of the special eight (compose::blend_back, psblend::blend_rgb_fill):
+    // the result pulled toward the mode's neutral colour; Hard Mix (cb - f(1 - cs)) / (1 - f).
+    let f = clamp(op.fill, 0.0, 1.0);
+    let special = f < 1.0 && fill_is_special(op.mode);
+    var cs = a.rgb;
+    if (special) {
+        var neutral = 0.0;
+        if (op.mode == 5 || op.mode == 6) { neutral = 1.0; }
+        if (op.mode == 16 || op.mode == 17) { neutral = 0.5; }
+        cs = vec3(neutral) + (a.rgb - vec3(neutral)) * f;
+    }
+    var bl = blend_rgb(op.mode, b.rgb, cs);
+    if (special && op.mode == 19) { bl = clamp((b.rgb - f * (vec3(1.0) - a.rgb)) / (1.0 - f), vec3(0.0), vec3(1.0)); }
+    // Keep bounded adjustment results exact at full coverage over HDR backdrops.
+    return vec4(b.rgb * (1.0 - k) + bl * k, b.a);
 }
 
 // Pass-through group coverage mixes premultiplied colour, then returns straight alpha.
@@ -1025,8 +1035,8 @@ fn fs_lerp(in: VOut) -> @location(0) vec4<f32> {
         return vec4(clamp(pm.rgb / al, vec3(0.0), vec3(1.0)), al);
     }
     if ((op.flags & F_BLEND_IF) != 0u) {
-        // compose::apply_blend_if: "This Layer" is C (the layer's own content with its masks),
-        // or B itself for an adjustment layer; "Underlying Layer" is A.
+        // compose::apply_blend_if: "This Layer" is C (the layer's own content with its masks, or an
+        // adjustment's result before Opacity, #9542), B when p4.y is set; "Underlying Layer" is A.
         var this_px = b;
         if (op.p4.y < 0.5) {
             this_px = textureLoad(tex_c, p, 0);
@@ -1080,15 +1090,19 @@ fn blend_if_weight(this_px: vec4<f32>, under: vec4<f32>) -> f32 {
         if (px.a <= 0.0) {
             continue;
         }
-        // The CPU gets 8- and 16-bit levels exactly (k / 255 × 255 = k), but GPU arithmetic can
-        // land a few millionths below, which flips a hard threshold at that level: values that
-        // close to a level are that level. Real 8/16-bit values off a level are ≥ 1/257 away.
-        let raw = clamp(px.rgb, vec3(0.0), vec3(1.0)) * 255.0;
-        let v = select(raw, round(raw), abs(raw - round(raw)) < vec3(1e-4));
+        // compose::blend_if_level: a value on a level's 16-bit step (Photoshop's 0..32768,
+        // round(c × 32768 / 255)) is that level, as Photoshop compares Blend If (#9521); every
+        // 8-bit level is on its own step, a few millionths of GPU drift included.
+        let x = clamp(px.rgb, vec3(0.0), vec3(1.0));
+        let raw = x * 255.0;
+        let level = round(raw);
+        let v = select(raw, level, round(x * 32768.0) == round(level * 32768.0 / 255.0));
         if (op.p4.x > 0.5) {
             k = k * bi_weight(0u, s, v.r) * bi_weight(1u, s, v.r);
         } else {
-            let gray = 0.299 * v.r + 0.587 * v.g + 0.114 * v.b;
+            // compose::blend_if_gray: (30 R + 59 G + 11 B) / 100, rounded half down on whole levels.
+            let sum = 30.0 * v.r + 59.0 * v.g + 11.0 * v.b;
+            let gray = select(sum / 100.0, floor((sum + 49.0) / 100.0), all(v == round(v)));
             k = k * bi_weight(0u, s, gray) * bi_weight(1u, s, v.r) * bi_weight(2u, s, v.g) * bi_weight(3u, s, v.b);
         }
         if (k <= 0.0) {
@@ -1233,7 +1247,7 @@ fn outline_share(cov: f32, l: f32) -> f32 {
 // is the effect shape). Coverage `kind`: 0 the effect map, 1 full; then F_KNOCKOUT m × (1 − a k)
 // (k = `p4.w`),
 // F_GATE inside ? m : 0, F_REL inside ? min(m / a, 1) : 0, F_STROKE_OUT inside ? (vector ? 0 : 1)
-// : m.
+// : m. F_REPLACE: the paint replaces A by the coverage instead of blending over it.
 @fragment
 fn fs_fxpaint(in: VOut) -> @location(0) vec4<f32> {
     let p = local(in.pos);
@@ -1261,6 +1275,16 @@ fn fs_fxpaint(in: VOut) -> @location(0) vec4<f32> {
     let k = m * op.opacity;
     if (k <= 0.0) { return dst; }
     let c = fx_color(d);
+    if ((op.flags & F_REPLACE) != 0u) {
+        // effects.rs: a Normal inside stroke knocks the layer out by its coverage and adds the
+        // stroke (`layer × (1 − coverage) + stroke × opacity × coverage`, premultiplied), also on
+        // Lab documents (no CIELAB mix).
+        let sa = c.a * k;
+        if (sa <= 0.0) { return dst; }
+        let kept = dst.a * (1.0 - clamp(m, 0.0, 1.0));
+        let ao = kept + sa;
+        return vec4((dst.rgb * kept + c.rgb * sa) / ao, min(ao, 1.0));
+    }
     return fx_composite(d, dst, vec4(c.rgb, c.a * k));
 }
 
