@@ -280,7 +280,15 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
     }
     if let Some(ui) = params.get("ui") {
         return Some(if app.wide_angle.is_some() {
-            crate::control::dialogs::workspace_ui(app, ctx, KEY, ui)
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                crate::control::dialogs::workspace_ui(app, ctx, KEY, ui)
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                let _ = ui;
+                Err("workspace control requests are not available in the browser".into())
+            }
         } else {
             Err("Adaptive Wide Angle is not open".into())
         });

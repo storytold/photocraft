@@ -266,7 +266,11 @@ pub fn display_doc(app: &PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u6
 pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
     let empty = params.as_object().is_none_or(|o| o.is_empty());
     let ui = params.get("ui");
+    #[cfg(not(target_arch = "wasm32"))]
     let hosted = |app: &mut PhotocraftApp, key: &str, ui: &Value| crate::control::dialogs::workspace_ui(app, ctx, key, ui);
+    #[cfg(target_arch = "wasm32")]
+    let hosted =
+        |_: &mut PhotocraftApp, _: &str, _: &Value| -> Result<Value, String> { Err("workspace control requests are not available in the browser".into()) };
     match id {
         "filter.filterGallery" if empty => Some(crate::gallery_ui::open(app).map(|_| json!({"gallery": crate::gallery_ui::describe(app)}))),
         "filter.filterGallery" if ui.is_some() && workspace_open(app, id) => Some(hosted(app, id, ui.unwrap_or(&Value::Null))),

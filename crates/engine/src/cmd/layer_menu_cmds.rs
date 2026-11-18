@@ -263,16 +263,124 @@ fn mask_all_objects(s: &mut Session, p: &Value) -> Result<Value> {
 
 // ---------- matting ----------
 
-/// Layer › Matting › Defringe: edge pixels (within `width` of transparency) take the colour of
-/// the nearest pixels further inside, grown outward one pixel at a time. Alpha is unchanged.
+/// Layer › Matting › Defringe: replace colours only within `width` of the outside
+/// alpha edge with colours further inside. The alpha channel is never changed.
 pub fn defringe(px: &mut [[f32; 4]], w: usize, h: usize, width: usize) {
-    let outside: Vec<bool> = px.iter().map(|q| q[3] <= 0.01).collect();
-    if !outside.iter().any(|o| *o) {
+    if w == 0 || h == 0 || w.checked_mul(h) != Some(px.len()) || width == 0 {
         return;
     }
-    let dist = photocraft_algo::selection::edt(&outside, w, h);
-    let mut known: Vec<bool> = (0..px.len()).map(|i| !outside[i] && dist[i] > width as f32).collect();
-    let mut todo: Vec<usize> = (0..px.len()).filter(|&i| !outside[i] && !known[i]).collect();
+
+    // Identify the outside of each separate feathered region rather than using one
+    // global minimum alpha (or treating every partly transparent pixel as an edge).
+    // Regions are 4-connected pixels below the highest alpha in this buffer.
+    let max_alpha = px.iter().map(|q| q[3]).fold(0.0_f32, f32::max);
+    let core: Vec<bool> = px.iter().map(|q| q[3] >= max_alpha - 1e-6).collect();
+    if core.iter().all(|&k| k) {
+        return; // uniformly opaque or translucent: no identifiable clean interior
+    }
+    let to_core = photocraft_algo::selection::edt(&core, w, h);
+    if to_core.len() != px.len() {
+        return;
+    }
+    let mut visited = vec![false; px.len()];
+    let mut seeds = vec![false; px.len()];
+    for start in 0..px.len() {
+        if core[start] || visited[start] {
+            continue;
+        }
+        let mut region = vec![start];
+        visited[start] = true;
+        let mut cursor = 0;
+        while cursor < region.len() {
+            let i = region[cursor];
+            cursor += 1;
+            let (x, y) = (i % w, i / w);
+            for (nx, ny) in [(x.wrapping_sub(1), y), (x + 1, y), (x, y.wrapping_sub(1)), (x, y + 1)] {
+                if nx >= w || ny >= h {
+                    continue;
+                }
+                let j = ny * w + nx;
+                if !core[j] && !visited[j] {
+                    visited[j] = true;
+                    region.push(j);
+                }
+            }
+        }
+        let min_alpha = region.iter().map(|&i| px[i][3]).fold(1.0_f32, f32::min);
+        if min_alpha <= 0.0 {
+            // Every transparent pixel remains a boundary, even across a wide empty
+            // area; preserving that behavior also retains distance-to-zero semantics.
+            for &i in &region {
+                if px[i][3] <= 0.0 {
+                    seeds[i] = true;
+                }
+            }
+        } else {
+            // A flat, wide translucent band has many equal-alpha pixels. Seed
+            // only the ones furthest from its own opaque/high-alpha interior.
+            let outermost = region.iter().filter(|&&i| px[i][3] <= min_alpha + 1e-6).map(|&i| to_core[i]).fold(0.0_f32, f32::max);
+            for &i in &region {
+                if px[i][3] <= min_alpha + 1e-6 && to_core[i] >= outermost - 1e-6 {
+                    seeds[i] = true;
+                }
+            }
+        }
+    }
+    if !seeds.iter().any(|&seed| seed) {
+        return;
+    }
+    let dist = photocraft_algo::selection::edt(&seeds, w, h);
+    if dist.len() != px.len() {
+        return;
+    }
+    let mut known: Vec<bool> = (0..px.len()).map(|i| px[i][3] > 0.01 && dist[i] > width as f32).collect();
+    // Keep an interior source in every connected visible component. A distant
+    // component may contain a known pixel while a nearby translucent island
+    // has none; RGB cannot propagate through the intervening zero-alpha gap.
+    // Use the same 8-neighbour connectivity as the propagation pass below.
+    let mut visited_visible = vec![false; px.len()];
+    for start in 0..px.len() {
+        if px[start][3] <= 0.0 || visited_visible[start] {
+            continue;
+        }
+        let mut component = vec![start];
+        visited_visible[start] = true;
+        let mut cursor = 0;
+        while cursor < component.len() {
+            let i = component[cursor];
+            cursor += 1;
+            let (x, y) = (i % w, i / w);
+            for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1)] {
+                let (nx, ny) = (x as i32 + dx, y as i32 + dy);
+                if nx < 0 || ny < 0 || nx >= w as i32 || ny >= h as i32 {
+                    continue;
+                }
+                let j = ny as usize * w + nx as usize;
+                if px[j][3] > 0.0 && !visited_visible[j] {
+                    visited_visible[j] = true;
+                    component.push(j);
+                }
+            }
+        }
+        if component.iter().any(|&i| known[i]) {
+            continue; // This component already has a clean, distant source.
+        }
+        let best_alpha = component.iter().filter(|&&i| !seeds[i] && px[i][3] > 0.01).map(|&i| px[i][3]).fold(0.0_f32, f32::max);
+        if best_alpha <= 0.0 {
+            continue; // Nothing eligible to borrow from in this component.
+        }
+        for i in component {
+            if !seeds[i] && px[i][3] > 0.01 && px[i][3] >= best_alpha - 1e-6 {
+                known[i] = true;
+            }
+        }
+    }
+    if !known.iter().any(|&source| source) {
+        return; // cannot invent a clean colour
+    }
+    // Include faint but visible pixels, never alter fully transparent RGB, and never
+    // propagate modifications past the specified distance.
+    let mut todo: Vec<usize> = (0..px.len()).filter(|&i| px[i][3] > 0.0 && !known[i] && dist[i] <= width as f32).collect();
     while !todo.is_empty() {
         let mut next = Vec::new();
         let mut updates = Vec::new();
@@ -300,7 +408,7 @@ pub fn defringe(px: &mut [[f32; 4]], w: usize, h: usize, width: usize) {
             }
         }
         if updates.is_empty() {
-            break; // isolated fringe with no core colour nearby
+            break;
         }
         for (i, c) in updates {
             px[i][..3].copy_from_slice(&c);

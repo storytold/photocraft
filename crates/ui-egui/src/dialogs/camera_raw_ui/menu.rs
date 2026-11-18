@@ -28,21 +28,29 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
         return Some(opened);
     }
     let ui = params.get("ui")?;
-    app.raw_reply = None;
-    let was_closed = app.raw.is_none();
-    if was_closed && let Err(e) = open(app, ctx) {
-        return Some(Err(e));
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = ui;
+        return Some(Err("RAW Develop control requests are not available in the browser".into()));
     }
-    let applied = crate::control::dialogs::workspace_ui(app, ctx, ID, ui);
-    // A commit, cancel or done in the request lands now, so its reply is this call's: the confirm or cancel ran the
-    // result pump, which left the reply.
-    let ended = take_with(app, ctx).or_else(|| app.raw_reply.take());
-    if let Err(e) = applied {
-        // A request that opened a closed RAW Develop and was refused leaves it closed again.
-        if was_closed {
-            dismiss(app, ctx);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        app.raw_reply = None;
+        let was_closed = app.raw.is_none();
+        if was_closed && let Err(e) = open(app, ctx) {
+            return Some(Err(e));
         }
-        return Some(Err(e));
+        let applied = crate::control::dialogs::workspace_ui(app, ctx, ID, ui);
+        // A commit, cancel or done in the request lands now, so its reply is this call's: the confirm or cancel ran the
+        // result pump, which left the reply.
+        let ended = take_with(app, ctx).or_else(|| app.raw_reply.take());
+        if let Err(e) = applied {
+            // A request that opened a closed RAW Develop and was refused leaves it closed again.
+            if was_closed {
+                dismiss(app, ctx);
+            }
+            return Some(Err(e));
+        }
+        Some(ended.unwrap_or_else(|| Ok(describe(app))))
     }
-    Some(ended.unwrap_or_else(|| Ok(describe(app))))
 }
