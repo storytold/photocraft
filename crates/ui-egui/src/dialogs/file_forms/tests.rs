@@ -126,13 +126,16 @@ fn create_droplet_ok_stores_the_destination_in_the_droplet() {
     let v = saved_at(&mut app, "default.pcdroplet", &|_, _, _| {});
     assert_eq!(v["options"]["destination"], json!("none"), "the form's default None is stored");
     assert!(v["options"].get("overrideSaveAs").is_none(), "an untouched box stores no tick");
+    assert!(v["options"].get("output").is_none(), "a none droplet stores no output folder (#13711 review)");
     let v = saved_at(&mut app, "close.pcdroplet", &|app, ctx, id| set(app, ctx, id, "destination", json!("saveAndClose")));
     assert_eq!(v["options"]["destination"], json!("saveAndClose"));
+    assert!(v["options"].get("output").is_none(), "a saveAndClose droplet stores no output folder either");
     let v = saved_at(&mut app, "folder.pcdroplet", &|app, ctx, id| {
         set(app, ctx, id, "destination", json!("folder"));
         set(app, ctx, id, "overrideSaveAs", json!(true));
     });
     assert_eq!(v["options"]["destination"], json!("folder"));
+    assert!(v["options"]["output"].is_string(), "the folder run keeps its output path in the droplet");
     assert_eq!(v["options"]["overrideSaveAs"], json!(true), "the tick rides in the droplet");
 }
 

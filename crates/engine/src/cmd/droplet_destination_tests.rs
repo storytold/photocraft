@@ -44,10 +44,16 @@ fn app_session() -> Session {
 #[test]
 fn create_droplet_stores_destination_and_the_override_tick() {
     let dir = tmp("store");
-    let dp = droplet(&dir, json!({"destination": "saveAndClose", "overrideSaveAs": true}));
+    let dp = droplet(&dir, json!({"destination": "saveAndClose", "overrideSaveAs": true, "output": format!("{dir}/out")}));
     let v: Value = serde_json::from_slice(&std::fs::read(&dp).unwrap()).unwrap();
     assert_eq!(v["options"]["destination"], json!("saveAndClose"), "the destination rides in the droplet");
     assert_eq!(v["options"]["overrideSaveAs"], json!(true), "the tick rides in the droplet");
+    assert!(v["options"].get("output").is_none(), "a saveAndClose droplet stores no output folder");
+
+    let none_dp = droplet(&dir, json!({"path": format!("{dir}/NoneDest"), "destination": "none", "output": format!("{dir}/out")}));
+    let v: Value = serde_json::from_slice(&std::fs::read(&none_dp).unwrap()).unwrap();
+    assert_eq!(v["options"]["destination"], json!("none"));
+    assert!(v["options"].get("output").is_none(), "a none droplet stores no output folder");
 
     let plain = droplet(&dir, json!({}));
     let v: Value = serde_json::from_slice(&std::fs::read(&plain).unwrap()).unwrap();
@@ -64,8 +70,10 @@ fn create_droplet_stores_destination_and_the_override_tick() {
 }
 
 /// #13711 Done-when: droplets written before this change (no destination stored, an `output`
-/// folder) still run as Folder. The JSON is the shape main's createDroplet wrote at 0fb40c534a
-/// (the stored-old-droplet case in automate_cmds::tests). Guard test: passes before and after.
+/// folder) still run as Folder. The JSON is the old on-disk shape kept alive by main's own
+/// pre-`calledActions` pin (`old.pcdroplet` inside
+/// droplets_carry_the_actions_their_play_steps_call, crates/engine/src/cmd/automate_cmds/tests.rs,
+/// as it stands at the base c337d6e4e). Guard test: passes before and after.
 #[test]
 fn a_droplet_without_a_destination_key_still_runs_as_folder() {
     let dir = tmp("legacy");
@@ -165,17 +173,24 @@ fn destination_none_skips_the_recorded_save_and_still_writes_nothing() {
     let input = format!("{dir}/a.png");
     input_picture(&input);
     let before = std::fs::read(&input).unwrap();
-    let dp = droplet(&dir, json!({"destination": "none", "steps": [["image.imageRotation.90cw", {}], ["file.saveAs", {}], ["file.saveACopy", {}]]}));
+    let listing = |dir: &str| -> Vec<std::path::PathBuf> {
+        let mut files: Vec<_> = std::fs::read_dir(dir).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).collect();
+        files.sort();
+        files
+    };
+    let dp = droplet(&dir, json!({"destination": "none", "steps": [["image.imageRotation.90cw", {}], ["file.save", {}], ["image.adjustments.invert", {}]]}));
+    let files_before = listing(&dir);
     let mut s = app_session();
     let r = s.execute("file.automate.runDroplet", json!({"droplet": &dp, "input": [&input]})).unwrap();
     assert_eq!(r["errors"], json!([]), "{r}");
     assert_eq!(r["files"], json!([]));
+    // The step recorded after the Save ran too: a run that merely stopped at the save point would
+    // end with the rotation as its last state.
+    assert_eq!(s.active().unwrap().history.undo_label(), Some("Invert"), "the steps after the recorded Save ran");
     assert_eq!(std::fs::read(&input).unwrap(), before, "the recorded Save wrote nothing over the input");
-    let written = std::fs::read_dir(&dir)
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .any(|e| matches!(e.path().extension().and_then(|x| x.to_str()), Some("jpg") | Some("psd") | Some("pcraft")));
-    assert!(!written, "the recorded Save wrote no copy anywhere in the test folder");
+    // No new file of ANY kind appeared in the test folder (a written copy would be one).
+    let fresh: Vec<_> = listing(&dir).into_iter().filter(|p| !files_before.contains(p)).collect();
+    assert!(fresh.is_empty(), "the run created no new file anywhere in the folder, got {fresh:?}");
     assert!(s.active().unwrap().is_dirty(), "the document stays changed");
 }
 
@@ -248,4 +263,102 @@ fn a_stored_override_tick_does_not_change_the_run() {
     let x = photocraft_codecs::decode(&std::fs::read(format!("{dir}/out-with/a.png")).unwrap()).unwrap();
     let y = photocraft_codecs::decode(&std::fs::read(format!("{dir}/out-without/b.png")).unwrap()).unwrap();
     assert_eq!((x.dimensions(), y.dimensions()), ((2, 4), (2, 4)), "both write the folder copy as before");
+}
+
+/// #13711 review HIGH-1: the None run plays steps in the caller's session, so it must raise and
+/// hand back `actions.batch_depth` like Batch raises it for its scratch run. A droplet whose steps
+/// run the same droplet then stops at the nesting limit with the shared error text, and the stop
+/// reaches the outermost answer marked like Batch marks a child's stop - instead of opening one
+/// document per level until the stack or memory runs out. None twin of
+/// `a_droplet_that_runs_itself_stops_at_the_nesting_limit` (file_cmds::tests, the folder path).
+#[test]
+fn a_none_droplet_that_runs_itself_stops_at_the_nesting_limit() {
+    let dir = tmp("none-recursion");
+    let input = format!("{dir}/a.png");
+    input_picture(&input);
+    let before = std::fs::read(&input).unwrap();
+    let dp = format!("{dir}/self.pcdroplet");
+    let step = json!(["file.automate.runDroplet", {"droplet": dp, "input": [input]}]);
+    std::fs::write(&dp, json!({"photocraftDroplet": 1, "name": "self", "action": {"steps": [step]}, "options": {"destination": "none"}}).to_string()).unwrap();
+    let mut s = app_session();
+    let r = s.execute("file.automate.runDroplet", json!({"droplet": &dp, "input": [&input]})).unwrap();
+    assert!(r["errors"][0]["error"].as_str().unwrap().contains("nested more than"), "{r}");
+    assert_eq!(r["errors"][0]["limit"], json!(true), "the stop is marked, as Batch marks its children's stops");
+    assert_eq!(r["files"], json!([]), "{r}");
+    assert_eq!(s.actions.batch_depth, 0, "the None run hands the caller's nesting depth back");
+    assert_eq!(std::fs::read(&input).unwrap(), before, "nothing was written at any level");
+}
+
+/// #13711 review HIGH-2: the None run plays from the actions the droplet captured (its
+/// `calledActions`, #2794), installing them for its steps as the folder path forwards them to
+/// Batch. The app's live list here holds an unrelated action of the same name - it must not play.
+#[test]
+fn a_none_droplet_plays_the_action_it_captured_not_the_live_list() {
+    use crate::actions_cmds::{Action, ActionStep};
+
+    let dir = tmp("captured");
+    let input = format!("{dir}/a.png");
+    input_picture(&input);
+    let mut maker = Session::new();
+    maker.actions.list.push(Action::new("Inner", vec![ActionStep::new("image.imageRotation.90cw", json!({}))])).unwrap();
+    maker.actions.list.push(Action::new("Top", vec![ActionStep::new("actions.play", json!({"action": "Inner"}))])).unwrap();
+    let r = maker.execute("file.automate.createDroplet", json!({"path": format!("{dir}/Top"), "action": "Top", "destination": "none", "shim": false})).unwrap();
+    let dp = r["path"].as_str().unwrap().to_string();
+    let v: Value = serde_json::from_slice(&std::fs::read(&dp).unwrap()).unwrap();
+    assert!(v["calledActions"].as_array().is_some_and(|a| a.iter().any(|ac| ac["name"] == "Inner")), "the droplet captured Inner: {v}");
+
+    let mut s = app_session();
+    s.actions.list.push(Action::new("Inner", vec![ActionStep::new("edit.fill", json!({"color": "#000000"}))])).unwrap();
+    let r = s.execute("file.automate.runDroplet", json!({"droplet": &dp, "input": [&input]})).unwrap();
+    assert_eq!(r["errors"], json!([]), "{r}");
+    let st = s.active().unwrap();
+    assert_eq!((st.doc.size.width, st.doc.size.height), (2, 4), "the captured Inner rotated; the live same-named fill did not play");
+}
+
+/// #13711 review MEDIUM-3: the None run opens each input through the shared open core (as File >
+/// Open and Batch's scratch run do), not a bare import: a developed raw takes Preferences >
+/// Raw Defaults > Resolution. (Chosen cheap honest neighbour: the raw ppi; the profiled-JPEG
+/// colour policy rides in the same call - `open_bytes_as` runs the Color Settings policy through
+/// `Session::open_document` - but its pin would need an ICC fixture, so it is not re-pinned here.)
+#[test]
+fn a_none_droplet_opens_a_raw_at_the_raw_defaults_resolution() {
+    use photocraft_raw::testgen::{DngSpec, mosaic, scene};
+
+    let dir = tmp("raw-ppi");
+    let input = format!("{dir}/IMG.dng");
+    std::fs::write(&input, DngSpec::cfa(24, 16, mosaic(&scene(24, 16), 24, [0, 1, 1, 2], 0, 65535)).build()).unwrap();
+    let dp = droplet(&dir, json!({"path": format!("{dir}/Invert"), "destination": "none", "steps": [["image.adjustments.invert", {}]]}));
+    let mut s = app_session();
+    s.execute("prefs.set", json!({"path": "rawDefaults.resolution", "value": 240})).unwrap();
+    let r = s.execute("file.automate.runDroplet", json!({"droplet": &dp, "input": [&input]})).unwrap();
+    assert_eq!(r["errors"], json!([]), "{r}");
+    assert_eq!(r["files"], json!([]));
+    let st = s.active().unwrap();
+    assert_eq!(st.doc.resolution_dpi, 240.0, "the raw opened at the Raw Defaults ppi, as File > Open does");
+    assert!(st.is_dirty(), "the opened raw stays open and changed");
+}
+
+/// #13711 review MEDIUM-4: a none droplet gets no Unix `.command` shim, even one asked for: the
+/// shim runs `photocraft-cli droplet`, and a headless run of a none droplet is always refused, so
+/// the launcher could only ever fail. A folder droplet still gets the shim as today.
+#[test]
+fn a_none_droplet_gets_no_shim_even_when_one_is_asked_for() {
+    let dir = tmp("shim-none");
+    let r = Session::new()
+        .execute(
+            "file.automate.createDroplet",
+            json!({"path": format!("{dir}/NoShim"), "steps": [["image.adjustments.invert", {}]], "destination": "none", "shim": true}),
+        )
+        .unwrap();
+    assert_eq!(r["shim"], Value::Null, "no launcher for a run that can only be refused: {r}");
+    assert!(!std::path::Path::new(&format!("{dir}/NoShim.command")).exists());
+
+    let r = Session::new()
+        .execute(
+            "file.automate.createDroplet",
+            json!({"path": format!("{dir}/WithShim"), "steps": [["image.adjustments.invert", {}]], "destination": "folder", "output": format!("{dir}/out"), "shim": true}),
+        )
+        .unwrap();
+    assert!(r["shim"].is_string(), "a folder droplet still gets the shim: {r}");
+    assert!(std::path::Path::new(r["shim"].as_str().unwrap()).exists(), "the shim file is written");
 }

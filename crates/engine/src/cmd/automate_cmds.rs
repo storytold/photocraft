@@ -379,13 +379,14 @@ fn create_droplet(s: &mut Session, p: &Value) -> Result<Value> {
     // The Create Droplet Destination (#13711): the form's choice rides with the droplet and
     // `run_droplet` acts on it. A call that names no destination stores no key, so droplets
     // written by earlier builds, and by API calls without the choice, keep running as Folder.
-    match p.get("destination").filter(|v| !v.is_null()) {
-        None => {}
+    let dest_choice = match p.get("destination").filter(|v| !v.is_null()) {
+        None => None,
         Some(Value::String(value)) if matches!(value.as_str(), "none" | "folder" | "saveAndClose") => {
             options.insert("destination".into(), json!(value.as_str()));
+            Some(value.as_str())
         }
         Some(_) => return Err(bad(cmd, "\"destination\" must be \"none\", \"folder\" or \"saveAndClose\"")),
-    }
+    };
     // `overrideSaveAs` is the form's Override Action "Save As" Commands tick, stored as the issue
     // asks. The hosted form answers the untouched box with false, so only a ticked box is stored:
     // an off box must mean exactly today's run, which stored no such key. `run_droplet` does not
@@ -394,6 +395,12 @@ fn create_droplet(s: &mut Session, p: &Value) -> Result<Value> {
         options.insert("overrideSaveAs".into(), json!(true));
     }
     for k in ["output", "format", "quality", "suffix", "overrideOpen"] {
+        // "output" rides only with a folder droplet (#13711 review): neither a none nor a
+        // saveAndClose run ever reads a folder, and a stored destination of none or saveAndClose
+        // only exists in droplets written by this code, so leaving the key out keeps behaviour.
+        if k == "output" && matches!(dest_choice, Some("none" | "saveAndClose")) {
+            continue;
+        }
         if let Some(v) = p.get(k) {
             options.insert(k.into(), v.clone());
         }
@@ -404,7 +411,10 @@ fn create_droplet(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let text = serde_json::to_string_pretty(&droplet).unwrap_or_default();
     write_file(&path, text.as_bytes())?;
-    let shim = p.get("shim").and_then(Value::as_bool).unwrap_or(cfg!(unix));
+    // A none droplet writes no shim (#13711 review): its shim calls `photocraft-cli droplet`, and
+    // a headless run of a none droplet is always refused - a launcher built from it could only
+    // ever print that refusal.
+    let shim = dest_choice != Some("none") && p.get("shim").and_then(Value::as_bool).unwrap_or(cfg!(unix));
     let shim_path = if shim { Some(write_shim(&path)?) } else { None };
     Ok(json!({"path": path, "shim": shim_path, "steps": steps.len()}))
 }
@@ -487,7 +497,7 @@ fn run_droplet(s: &mut Session, p: &Value) -> Result<Value> {
     // Destination None never reaches Batch (#13711): it keeps the opened documents here and writes
     // nothing, and a headless run of it is refused - see `run_droplet_open`.
     if destination == "none" {
-        return run_droplet_open(s, cmd, path, &steps, &inputs);
+        return run_droplet_open(s, cmd, path, &steps, &inputs, v.get("calledActions"));
     }
     let mut bp = json!({"steps": steps, "input": inputs, "format": opts.get("format").cloned().unwrap_or(json!("same"))});
     let output = if destination == "saveAndClose" {
@@ -527,26 +537,47 @@ fn run_droplet(s: &mut Session, p: &Value) -> Result<Value> {
 /// tabs: the desktop and web shells attach a preset store to their session once it loads
 /// (`crate::preset_store`), the headless sessions (`photocraft-cli droplet`, MCP, tests) never do,
 /// and there the run is refused with an error naming the app instead of opening documents nobody
-/// will see.
-fn run_droplet_open(s: &mut Session, cmd: &str, path: &str, steps: &Value, inputs: &[String]) -> Result<Value> {
+/// will see. (The shells attach the store a few frames into startup; a droplet drop or a menu run
+/// is a user action after that, and an early refusal says so rather than guessing.)
+fn run_droplet_open(s: &mut Session, cmd: &str, path: &str, steps: &Value, inputs: &[String], called: Option<&Value>) -> Result<Value> {
     if s.preset_store.is_none() {
         return Err(EngineError::Other(format!(
             "{cmd}: this droplet's Destination is None, which leaves the opened documents in the app: run it in the app, or give the droplet a Folder or Save and Close"
         )));
     }
-    // The steps are the ones Batch's folder run would play (view steps and quick exports go). A
-    // recorded Save marks a destination None has none of: it is skipped, writes nothing, and the
-    // document stays changed - as Batch with no destination does.
+    // The droplet plays from the actions it captured (#2794's rule): install them for this run, as
+    // the folder path forwards `calledActions` to Batch, so a Play Action step cannot fall back to
+    // - or play a wrong same-named action of - the app's live list.
+    let embedded = match called {
+        None | Some(Value::Null) => None,
+        Some(v) => {
+            let actions: Vec<crate::actions_cmds::Action> = serde_json::from_value(v.clone()).map_err(|e| bad(cmd, format!("\"calledActions\": {e}")))?;
+            if actions.len() > 4096 {
+                return Err(bad(cmd, "\"calledActions\" holds more than 4096 actions"));
+            }
+            // In the droplet's order, so its calls by index keep their targets (Batch's own rule).
+            Some(crate::actions_cmds::ActionList::from_file(crate::actions_cmds::ActionsFile::new(actions, Vec::new())))
+        }
+    };
+    let previous_called = std::mem::replace(&mut s.actions.called, embedded);
+    // The folder run nests through Batch's own scratch sessions, each raised `batch_depth`; this
+    // run plays in the caller's session, so it raises the depth itself and hands it back - a
+    // droplet that runs droplets stops at `MAX_BATCH_DEPTH` with the shared error text instead of
+    // opening one document per level until the stack or memory runs out (#13711 review HIGH-1).
+    let previous_depth = s.actions.batch_depth;
+    s.actions.batch_depth = previous_depth.saturating_add(1);
+    // The steps are exactly the ones Batch's folder run keeps (its retained-steps rule, quickExport
+    // included): view steps go, recorded saves are skipped - they mark a destination None has none
+    // of, write nothing, and leave the document changed, as Batch with no destination does.
     let steps: Vec<(String, Value)> =
         parse_steps(steps, cmd)?.into_iter().filter(|(id, _)| crate::file_cmds::batch_keeps_step(id) && id != "file.export.quickExport").collect();
     let mut errors = Vec::new();
     for input in inputs {
         let ran = (|| -> Result<()> {
-            let doc = import(&file_name(input), &read_file(input)?)?;
-            let index = s.add_document(doc, Some(input.clone()));
-            if !s.set_active(index) {
-                return Err(EngineError::Other("the opened document was not kept by this session".into()));
-            }
+            // The shared open core, as File > Open and Batch's scratch run use it: import options,
+            // Raw Defaults resolution, the Color Settings policy and the read-only source mark -
+            // not a bare import (#13711 review MEDIUM-3).
+            crate::file_cmds::open_bytes_as(s, &file_name(input), &read_file(input)?, None, Some(input.clone()))?;
             for (id, params) in &steps {
                 if crate::file_cmds::batch_save_point(id) {
                     continue;
@@ -560,6 +591,12 @@ fn run_droplet_open(s: &mut Session, cmd: &str, path: &str, steps: &Value, input
                 }
                 let params = crate::actions_cmds::playback_params(s, id, params)?;
                 let response = s.execute(id, params)?;
+                // A nested batch, droplet or played action that hit the nesting or shared playback
+                // limit fails this input too, instead of letting it pass as processed - Batch's own
+                // step-loop promotion, mirrored so the stop reaches the outermost answer.
+                if let Some(limit) = crate::actions_cmds::limit_stop(&response) {
+                    return Err(EngineError::BatchLimit(limit));
+                }
                 if let Some(error) = crate::actions_cmds::nested_failure(id, &response) {
                     return Err(EngineError::Other(error));
                 }
@@ -567,9 +604,17 @@ fn run_droplet_open(s: &mut Session, cmd: &str, path: &str, steps: &Value, input
             Ok(())
         })();
         if let Err(error) = ran {
-            errors.push(json!({"file": input, "error": error.to_string()}));
+            let mut entry = json!({"file": input, "error": error.to_string()});
+            // The mark Batch's FileFailure puts on a limit stop, so the next enclosing run (and
+            // its parent through `limit_stop`) promotes it instead of swallowing it.
+            if matches!(error, EngineError::BatchLimit(_)) {
+                entry["limit"] = json!(true);
+            }
+            errors.push(entry);
         }
     }
+    s.actions.batch_depth = previous_depth;
+    s.actions.called = previous_called;
     Ok(json!({"droplet": path, "output": null, "files": [], "errors": errors}))
 }
 
@@ -761,7 +806,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.automate.createDroplet",
             "Create Droplet…",
             &["File", "Automate"],
-            r##"{"path":str (.pcdroplet),"steps":[[id,params]…]?,"action":name|index|[steps]? (used only when steps is absent; named actions exclude disabled steps),"set":str? (with a named action: that set's action of the name),"name":str?,"destination":"none|folder|saveAndClose"? (#13711, stored with the droplet; an omitted destination stores no key and the droplet runs as folder, as before),"output":folder? (stored; the folder run's destination),"format":"same|png|jpg|…"?,"quality":0..12?,"overrideSaveAs":bool? (the form's Override Action "Save As" Commands tick, stored; a run does not act on it yet),"shim":bool=true on Unix (writes <name>.command calling `photocraft-cli droplet`)} → {path, shim} (the actions its Play Action and Conditional steps call are saved in the droplet)"##,
+            r##"{"path":str (.pcdroplet),"steps":[[id,params]…]?,"action":name|index|[steps]? (used only when steps is absent; named actions exclude disabled steps),"set":str? (with a named action: that set's action of the name),"name":str?,"destination":"none|folder|saveAndClose"? (#13711, stored with the droplet; an omitted destination stores no key and the droplet runs as folder, as before),"output":folder? (stored only with a folder destination),"format":"same|png|jpg|…"?,"quality":0..12?,"overrideSaveAs":bool? (the form's Override Action "Save As" Commands tick, stored; a run does not act on it yet),"shim":bool=true on Unix (writes <name>.command calling `photocraft-cli droplet`; a none droplet gets no shim - its headless run is refused)} → {path, shim} (the actions its Play Action and Conditional steps call are saved in the droplet)"##,
             native,
             create_droplet
         ),
