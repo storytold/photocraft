@@ -126,7 +126,7 @@ impl<'a> Image<'a> {
                 )?;
             }
             self.precision_underflow(channel_outcome, &px)?;
-            self.inventory_coverage_effects(channel_outcome, &coverage_effects, ctl)?;
+            self.execute_coverage(channel_outcome, &coverage_effects, &mut surface, Rect::new(0, 0, px.width as i32, px.height as i32), ptr, ctl)?;
             let mut channel = AlphaChannel::new(name, surface);
             let handled = metadata::channel_overlay(&mut channel, &cprops);
             for property in &cprops {
@@ -812,7 +812,7 @@ impl<'a> Image<'a> {
                 self.metadata_limit(mask_outcome, "xcf.coverage_effect", "Mask effect pointers omitted after the shared metadata allowance was exhausted")?;
             }
             self.precision_underflow(mask_outcome, &px)?;
-            self.inventory_coverage_effects(mask_outcome, &coverage_effects, ctl)?;
+            self.execute_coverage(mask_outcome, &coverage_effects, &mut surface, Rect::from_xywh(x, y, px.width, px.height), mptr, ctl)?;
             layer.mask = Some(LayerMask { surface, enabled: apply_mask, linked: true, density: 1.0, feather: 0.0 });
             for property in &mprops {
                 let reason = match property.kind {

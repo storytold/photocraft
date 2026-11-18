@@ -1,29 +1,35 @@
-//! Stored configuration translated once into ordinary native data.
+//! Stored XCF configuration decoded as bounded data, then translated to native filters.
+//!
+//! Source operation names are never executable command identifiers. The import policy
+//! maps an exact supported identity to an ordinary native command and parameters.
 
 use photocraft_doc::SmartFilter;
 
 mod color;
-
 mod config;
-
 mod core_composites;
-
 mod curves_and_quantization;
-
 mod envelope;
-
+mod graph;
+mod graph_composites;
+mod graph_core;
+mod graph_displacement;
+mod graph_math;
+mod graph_objects;
+mod graph_porter;
+mod graph_resources;
+mod graph_schema;
+mod graph_stock;
+mod graph_tone;
+mod residual_coverage;
+mod residual_geometry;
+mod residual_render;
 mod residual_spatial;
-
 mod residual_tone;
-
 mod residual_transform;
-
 mod resources;
-
 mod schema;
-
 mod spatial;
-
 mod tone;
 
 pub(super) use config::parse_config;
@@ -567,13 +573,18 @@ fn map_inner(effect: &StoredEffect<'_>, context: &MappingContext) -> std::result
         }
     }
     tone::map(effect, context)
+        .or_else(|| graph::map(effect, context))
         .or_else(|| curves_and_quantization::map(effect, context))
         .or_else(|| color::map(effect, context))
         .or_else(|| resources::map(effect, context))
         .or_else(|| spatial::map(effect, context))
         .or_else(|| residual_tone::map(effect, context))
+        .or_else(|| residual_geometry::map(effect, context))
+        .or_else(|| residual_spatial::map(effect, context))
         .or_else(|| core_composites::map(effect, context))
         .or_else(|| residual_transform::map(effect, context))
+        .or_else(|| residual_coverage::map(effect, context))
+        .or_else(|| residual_render::map(effect, context))
         .unwrap_or_else(|| Err(format!("Native mapping is unfinished for stored operation {}", effect.operation).into()))
 }
 
@@ -620,6 +631,28 @@ mod schema_tests {
         assert_eq!(schema::fields("gegl:motion-blur"), schema::fields("gegl:motion-blur-linear"));
         assert_eq!(schema::fields("gegl:invert"), schema::fields("gegl:invert-linear"));
         assert!(schema::fields("user-installed:operation").is_none());
+    }
+
+    /// Check compatibility aliases select native mappings without rewriting the original source operation identity.
+    #[test]
+    fn frozen_aliases_map_native_data_without_changing_source_identity() {
+        for (alias, canonical) in [
+            ("gegl:abs", "gegl:absolute"),
+            ("gegl:color-reduction", "gegl:dither"),
+            ("gegl:invert", "gegl:invert-linear"),
+            ("gegl:motion-blur", "gegl:motion-blur-linear"),
+            ("gegl:little-planet", "gegl:stereographic-projection"),
+        ] {
+            let source = StoredEffect::test(alias, Vec::new());
+            let normal = StoredEffect::test(canonical, Vec::new());
+            assert_eq!(source.canonical_operation(), canonical);
+            let mapped = map(&source, &context()).unwrap_or_else(|error| panic!("{alias}: {}", error.message));
+            let expected = map(&normal, &context()).unwrap_or_else(|error| panic!("{canonical}: {}", error.message));
+            assert_eq!(mapped.filters, expected.filters, "{alias}");
+            assert_eq!(mapped.patterns, expected.patterns, "{alias}");
+            assert_eq!(mapped.structure.is_some(), expected.structure.is_some(), "{alias}");
+            assert_eq!(source.operation, alias, "historical source identity must remain intact");
+        }
     }
 }
 
