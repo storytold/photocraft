@@ -455,8 +455,7 @@ pub fn wand_region_by(
     within: Option<&[f32]>,
     distance: ColorDistance,
 ) -> Option<Region> {
-    let how = WandMatch { tolerance, contiguous, anti_alias, bound: WandBound::AtMost, within, distance };
-    wand_region_rule(&WandPixels::rgba(area, img.as_flattened()), seed, &how, MatchRule::Wand)
+    region_by_rule(img, area, seed, tolerance, contiguous, anti_alias, within, distance, MatchRule::Wand)
 }
 
 /// Which pixels count as "similar" to the clicked one.
@@ -465,8 +464,7 @@ enum MatchRule {
     /// The Magic Wand / Magic Eraser rule: colour and alpha each within Tolerance, except that
     /// two fully transparent pixels always match.
     Wand,
-    /// The Paint Bucket rule, see [`wand_region_bucket`]. Only RGBA pictures have it; any other
-    /// picture is compared by the wand rule.
+    /// The Paint Bucket rule, see [`wand_region_bucket`].
     Bucket,
 }
 
@@ -487,8 +485,136 @@ enum MatchRule {
 /// Only that one semi-transparent case was measured; unmeasured cases keep the previous
 /// behaviour. [`wand_region`] and [`wand_region_within`] are unchanged.
 pub(crate) fn wand_region_bucket(img: &[[u8; 4]], area: Rect, seed: (i32, i32), tolerance: f32, contiguous: bool, anti_alias: bool) -> Option<Region> {
-    let how = WandMatch::new(tolerance, contiguous, anti_alias, WandBound::AtMost);
-    wand_region_rule(&WandPixels::rgba(area, img.as_flattened()), seed, &how, MatchRule::Bucket)
+    region_by_rule(img, area, seed, tolerance, contiguous, anti_alias, None, ColorDistance::LargestChannel, MatchRule::Bucket)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn region_by_rule(
+    img: &[[u8; 4]],
+    area: Rect,
+    seed: (i32, i32),
+    tolerance: f32,
+    contiguous: bool,
+    anti_alias: bool,
+    within: Option<&[f32]>,
+    distance: ColorDistance,
+    rule: MatchRule,
+) -> Option<Region> {
+    if !area.contains(seed.0, seed.1) {
+        return None;
+    }
+    let (w, h) = (area.width() as usize, area.height() as usize);
+    if w.checked_mul(h).is_none_or(|n| n > img.len()) {
+        return None;
+    }
+    let within = within.filter(|_| contiguous).filter(|m| m.len() >= w * h);
+    let inside = |i: usize| within.is_none_or(|m| m.get(i).is_some_and(|v| *v >= 0.5));
+    if !inside((seed.1 - area.y0) as usize * w + (seed.0 - area.x0) as usize) {
+        return None;
+    }
+    let target = img[(seed.1 - area.y0) as usize * w + (seed.0 - area.x0) as usize];
+    let tol = (tolerance + 1e-3).floor().max(0.0) as i32;
+    // Copying a selection can leave RGB under zero alpha. Those invisible colours must not
+    // split a transparent region into pieces, as if the copied source were still visible.
+    let similar = |p: [u8; 4]| match rule {
+        MatchRule::Wand => (target[3] == 0 && p[3] == 0) || (distance.rgb(p, target) <= tol && (p[3] as i32 - target[3] as i32).abs() <= tol),
+        MatchRule::Bucket => match target[3] {
+            0 => p[3] == 0,
+            255 => distance.rgb(p, target) <= tol && (p[3] as i32 - 255).abs() <= tol,
+            _ => p[3] != 0 && distance.rgb(p, target) <= tol && (p[..3] == target[..3] || (p[3] as i32 - target[3] as i32).abs() <= tol),
+        },
+    };
+    let mut marks = vec![0u8; w * h];
+    let (mut bx0, mut by0, mut bx1, mut by1) = (usize::MAX, usize::MAX, 0usize, 0usize);
+    if contiguous {
+        // Span fill: fill a run, then scan the rows above and below it for new seeds.
+        let mut stack = vec![((seed.0 - area.x0) as usize, (seed.1 - area.y0) as usize)];
+        while let Some((x, y)) = stack.pop() {
+            let row = y * w;
+            if marks[row + x] != 0 {
+                continue;
+            }
+            let (mut l, mut r) = (x, x);
+            while l > 0 && marks[row + l - 1] == 0 && similar(img[row + l - 1]) && inside(row + l - 1) {
+                l -= 1;
+            }
+            while r + 1 < w && marks[row + r + 1] == 0 && similar(img[row + r + 1]) && inside(row + r + 1) {
+                r += 1;
+            }
+            marks[row + l..=row + r].fill(255);
+            (bx0, bx1, by0, by1) = (bx0.min(l), bx1.max(r), by0.min(y), by1.max(y));
+            for ny in [y.wrapping_sub(1), y + 1] {
+                if ny >= h {
+                    continue;
+                }
+                let nrow = ny * w;
+                let mut in_run = false;
+                for nx in l..=r {
+                    let ok = marks[nrow + nx] == 0 && similar(img[nrow + nx]) && inside(nrow + nx);
+                    if ok && !in_run {
+                        stack.push((nx, ny));
+                    }
+                    in_run = ok;
+                }
+            }
+        }
+    } else {
+        let scan = |y: usize, row: &mut [u8]| -> Option<(usize, usize)> {
+            let mut span: Option<(usize, usize)> = None;
+            for (x, m) in row.iter_mut().enumerate() {
+                if similar(img[y * w + x]) {
+                    *m = 255;
+                    span = Some(span.map_or((x, x), |(a, _)| (a, x)));
+                }
+            }
+            span
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let spans: Vec<Option<(usize, usize)>> = {
+            use rayon::prelude::*;
+            marks.par_chunks_mut(w).enumerate().map(|(y, row)| scan(y, row)).collect()
+        };
+        #[cfg(target_arch = "wasm32")]
+        let spans: Vec<Option<(usize, usize)>> = marks.chunks_mut(w).enumerate().map(|(y, row)| scan(y, row)).collect();
+        for (y, sp) in spans.iter().enumerate() {
+            if let Some((a, b)) = sp {
+                (bx0, bx1, by0, by1) = (bx0.min(*a), bx1.max(*b), by0.min(y), by1.max(y));
+            }
+        }
+    }
+    if bx0 == usize::MAX {
+        return None;
+    }
+    // One pixel of fringe for anti-aliasing, clamped to the area.
+    let pad = anti_alias as usize;
+    let (x0, y0) = (bx0.saturating_sub(pad), by0.saturating_sub(pad));
+    let (x1, y1) = ((bx1 + 1 + pad).min(w), (by1 + 1 + pad).min(h));
+    let bw = x1 - x0;
+    let at = |x: usize, y: usize| marks[y * w + x];
+    let mut mask = vec![0u8; bw * (y1 - y0)];
+    let fill_row = |yy: usize, out: &mut [u8]| {
+        let y = y0 + yy;
+        for (xx, o) in out.iter_mut().enumerate() {
+            let x = x0 + xx;
+            let v = at(x, y);
+            *o = v;
+            // Same rule as `magic_wand`: the region stays fully selected; a pixel just outside
+            // it gets a fringe by how far its colour is past the tolerance.
+            if anti_alias && v == 0 && touches_region(x, y, w, h, |nx, ny| at(nx, ny) != 0) {
+                let p = img[y * w + x];
+                *o = fringe_coverage((distance.rgb(p, target) - tol) as f32, f32::from(p[3].min(target[3])));
+            }
+        }
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        mask.par_chunks_mut(bw).enumerate().for_each(|(yy, row)| fill_row(yy, row));
+    }
+    #[cfg(target_arch = "wasm32")]
+    mask.chunks_mut(bw).enumerate().for_each(|(yy, row)| fill_row(yy, row));
+    let bbox = Rect::new(area.x0 + x0 as i32, area.y0 + y0 as i32, area.x0 + x1 as i32, area.y0 + y1 as i32);
+    Some(Region { bbox, mask })
 }
 
 /// How [`wand_region_on`] matches pixels against the clicked one.
@@ -528,26 +654,28 @@ impl WandMatch<'_> {
 /// Tolerance 5 to x 100-140 and Tolerance 32 to x 100-340 — fall out either way, so the document
 /// channels share this one bound.
 pub fn wand_region_on(px: &WandPixels, seed: (i32, i32), how: &WandMatch) -> Option<Region> {
-    wand_region_rule(px, seed, how, MatchRule::Wand)
-}
-
-/// [`wand_region_on`] under a [`MatchRule`].
-fn wand_region_rule(px: &WandPixels, seed: (i32, i32), how: &WandMatch, rule: MatchRule) -> Option<Region> {
+    // RGBA under the inclusive bound is the RGB Magic Wand: it keeps the very fill the Paint
+    // Bucket and the Magic Eraser share. A generic per-channel fill measured 1.2-1.6x slower on a
+    // full 24 MP contiguous fill (#11882 review), so only the document channels take it.
+    if px.channels == 4 && px.alpha == Some(3) && how.bound == WandBound::AtMost {
+        let (img, _) = px.data.as_chunks::<4>();
+        return region_by_rule(img, px.area, seed, how.tolerance, how.contiguous, how.anti_alias, how.within, how.distance, MatchRule::Wand);
+    }
     if !px.area.contains(seed.0, seed.1) || px.channels == 0 || px.channels > MAX_WAND_CHANNELS {
         return None;
     }
     // One fill per channel count: the comparison runs per pixel over the canvas.
     match px.channels {
-        1 => wand_fill::<1>(px, seed, how, rule),
-        2 => wand_fill::<2>(px, seed, how, rule),
-        3 => wand_fill::<3>(px, seed, how, rule),
-        4 => wand_fill::<4>(px, seed, how, rule),
-        _ => wand_fill::<5>(px, seed, how, rule),
+        1 => wand_fill::<1>(px, seed, how),
+        2 => wand_fill::<2>(px, seed, how),
+        3 => wand_fill::<3>(px, seed, how),
+        4 => wand_fill::<4>(px, seed, how),
+        _ => wand_fill::<5>(px, seed, how),
     }
 }
 
-/// [`wand_region_on`] for `CH` stored channels per pixel.
-fn wand_fill<const CH: usize>(px: &WandPixels, seed: (i32, i32), how: &WandMatch, rule: MatchRule) -> Option<Region> {
+/// [`wand_region_on`] for `CH` stored channels per pixel, under the wand rule.
+fn wand_fill<const CH: usize>(px: &WandPixels, seed: (i32, i32), how: &WandMatch) -> Option<Region> {
     let (contiguous, anti_alias) = (how.contiguous, how.anti_alias);
     let (w, h) = (px.area.width() as usize, px.area.height() as usize);
     if w.checked_mul(h).is_none_or(|n| n > px.data.len() / CH) {
@@ -582,18 +710,8 @@ fn wand_fill<const CH: usize>(px: &WandPixels, seed: (i32, i32), how: &WandMatch
         let o = i * CH;
         let Some(v) = px.data.get(o..o + CH) else { return false };
         let d = colour_diff(i).map_or(i32::MAX, |(d, _)| d);
-        match (rule, alpha) {
-            // The Paint Bucket rule is measured on RGBA pictures only.
-            (MatchRule::Bucket, Some(a)) if rgba => match target[a] {
-                0 => v[a] == 0,
-                255 => d <= tol && (v[a] as i32 - 255).abs() <= tol,
-                _ => v[a] != 0 && d <= tol && (v[..a] == target[..a] || (v[a] as i32 - target[a] as i32).abs() <= tol),
-            },
-            _ => {
-                let alpha_ok = alpha.is_none_or(|a| (v[a] as i32 - target[a] as i32).abs() <= tol);
-                alpha.is_some_and(|a| target[a] == 0 && v[a] == 0) || (alpha_ok && d <= tol)
-            }
-        }
+        let alpha_ok = alpha.is_none_or(|a| (v[a] as i32 - target[a] as i32).abs() <= tol);
+        alpha.is_some_and(|a| target[a] == 0 && v[a] == 0) || (alpha_ok && d <= tol)
     };
     let mut marks = vec![0u8; w * h];
     let (mut bx0, mut by0, mut bx1, mut by1) = (usize::MAX, usize::MAX, 0usize, 0usize);
