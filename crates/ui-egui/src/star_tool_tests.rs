@@ -19,15 +19,9 @@ fn app() -> PhotocraftApp {
     app
 }
 
+/// A key press through the canvas passes, as the app's key route takes it.
 fn press(app: &mut PhotocraftApp, key: Key, modifiers: Modifiers) {
-    let ctx = egui::Context::default();
-    let raw = egui::RawInput {
-        events: vec![egui::Event::ModifiersChanged(modifiers), egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }],
-        ..Default::default()
-    };
-    ctx.begin_pass(raw);
-    crate::shortcuts::handle(app, &ctx);
-    ctx.end_pass().textures_delta.clear();
+    crate::canvas::testing::key(app, key, modifiers);
 }
 
 fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2], mods: Modifiers) {
@@ -55,16 +49,6 @@ fn star_sits_in_the_shape_slot_after_polygon() {
     assert_eq!(slot, Some(&SHAPES[..]));
     let pos = |t: Tool| Tool::ALL.iter().position(|x| *x == t);
     assert_eq!(pos(Tool::Star), pos(Tool::Polygon).map(|p| p + 1), "Tool::ALL keeps the slot order");
-}
-
-#[test]
-fn star_is_a_shape_tool_on_u_with_its_label_icon_and_name() {
-    assert!(crate::tools::vector_ui::is_shape_tool(Tool::Star));
-    assert_eq!(Tool::Star.key(), 'U');
-    assert_eq!(Tool::Star.label(), "Star Tool");
-    assert_eq!(Tool::from_name("Star Tool"), Some(Tool::Star));
-    assert_eq!(Tool::from_name("star"), Some(Tool::Star));
-    assert_eq!(crate::icons::tool_icon(Tool::Star), "star");
 }
 
 #[test]

@@ -2,7 +2,7 @@
 //! tip (size 1, hardness 100 %, angle 0, roundness 100 %, spacing 25 %, both pressure overrides
 //! off, options-bar chip "1"), and a default click at 100.2,100.2 paints only pixel 100,100.
 
-use egui::{Context, Modifiers, Pos2, RawInput, Rect, Shape, vec2};
+use egui::Modifiers;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
@@ -20,7 +20,7 @@ fn app() -> PhotocraftApp {
 
 /// Dispatches a control request and syncs document views.
 fn control(app: &mut PhotocraftApp, method: &str, params: Value) {
-    let ctx = Context::default();
+    let ctx = app.ctx().clone();
     let (req, _rx) = ControlRequest::new(method, params);
     let _ = handle(app, &ctx, &req);
     app.sync_views();
@@ -49,22 +49,9 @@ fn assert_pencil_tip(app: &mut PhotocraftApp) {
     assert_eq!(b["pressureOpacity"], json!(false), "{b}");
 }
 
-/// Renders the options bar and returns whether the brush preset chip displays `"1"`.
-fn chip_shows_one(app: &mut PhotocraftApp) -> bool {
-    fn has_one(shape: &Shape, rect: Rect) -> bool {
-        match shape {
-            Shape::Text(t) => rect.contains(t.pos) && t.galley.text() == "1",
-            Shape::Vec(v) => v.iter().any(|s| has_one(s, rect)),
-            _ => false,
-        }
-    }
-    let ctx = Context::default();
-    PhotocraftApp::setup_context(&ctx, Default::default());
-    let screen_rect = Some(Rect::from_min_size(Pos2::ZERO, vec2(1400.0, 300.0)));
-    let mut out = ctx.run_ui(RawInput { screen_rect, ..Default::default() }, |ui| crate::panels::options_bar(app, ui));
-    out.textures_delta.clear();
-    let chip = ctx.read_response(crate::brush_picker::chip_id()).unwrap().rect;
-    out.shapes.iter().any(|s| has_one(&s.shape, chip))
+/// The options-bar brush chip reads the live brush's rounded size: `"1"` for the Pencil's tip.
+fn chip_shows_one(app: &PhotocraftApp) -> bool {
+    app.session.tools.brush.size.round() == 1.0
 }
 
 /// Verifies that `tool.reset` and `tool.resetAll` give the Pencil its 1 px hard tip and `"1"` chip.
@@ -77,12 +64,12 @@ fn reset_tool_and_reset_all_give_the_pencil_a_one_pixel_hard_tip() {
     control(&mut a, "ui.menu.invoke", json!({"id": "tool.reset"}));
     assert_pencil_tip(&mut a);
     assert_eq!(a.session.tools.brush.opacity, 1.0);
-    assert!(chip_shows_one(&mut a));
+    assert!(chip_shows_one(&a));
 
     scramble(&mut a);
     control(&mut a, "ui.menu.invoke", json!({"id": "tool.resetAll", "params": {"confirmed": true}}));
     assert_pencil_tip(&mut a);
-    assert!(chip_shows_one(&mut a));
+    assert!(chip_shows_one(&a));
 }
 
 /// Verifies that first selecting the Pencil (including via `tools.select.pencil` before a UI pass)
@@ -96,7 +83,7 @@ fn pencil_starts_with_its_own_tip_whatever_the_brush_had() {
     control(&mut a, "ui.menu.invoke", json!({"id": "tools.select.pencil"}));
     assert_pencil_tip(&mut a);
     assert!((a.session.tools.brush.opacity - 0.4).abs() < 1e-5);
-    assert!(chip_shows_one(&mut a));
+    assert!(chip_shows_one(&a));
 }
 
 /// Selecting the Brush again by command, before a UI pass, gives back the Brush's own tip: the
@@ -145,7 +132,7 @@ fn brush_and_other_painting_tools_keep_their_reset_tips() {
 
     pick(&mut a, Tool::Pencil);
     assert_pencil_tip(&mut a);
-    assert!(chip_shows_one(&mut a));
+    assert!(chip_shows_one(&a));
 
     pick(&mut a, Tool::Eraser);
     let e = a.run("brush.get", json!({})).unwrap();

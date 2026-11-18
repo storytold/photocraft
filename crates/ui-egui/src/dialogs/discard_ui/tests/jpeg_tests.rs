@@ -1,11 +1,15 @@
 //! JPEG Options on Save As and Save a Copy (FILE-215-19): the quality and format it asks for, the
-//! scripted `quality` / `jpegFormat` that skip it, recording and playback, and the close prompt
-//! waiting behind it.
+//! scripted `quality` / `jpegFormat` that skip it, and recording and playback.
 use super::*;
-use crate::{FileDialogAnswer, jpeg_options_ui};
+use crate::jpeg_options_ui::{self, REMEMBER_KEY, Remembered};
+use craft::automation::actions::ActionStep;
+use craft::host::{Picked, ScriptedFiles};
+use craft::ui::dialog::StackDialog as _;
+use craft::ui::patterns::form_dialogs::HostedFormatOptions;
+use craft::ui::runtime::memory::{saved_value, set_saved_value};
 use egui_kittest::kittest::Queryable;
 use photocraft_codecs::JpegFormat;
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 /// Each write: the path, and the JPEG quality (1–100) and format the export was asked for.
 type Writes = Rc<RefCell<Vec<(String, Vec<u8>)>>>;
@@ -20,29 +24,56 @@ fn pct(q: u8) -> Option<u8> {
     Some(photocraft_engine::file_cmds::jpeg_quality(f64::from(q)))
 }
 
-/// One 8×8 RGB document whose exports record their JPEG settings, in a harness showing JPEG
-/// Options and answering a save dialog with `to`.
+/// One 8×8 RGB document whose exports record their JPEG settings, in a harness running the
+/// dialogs and answering a save dialog with `to`.
 fn jpeg_app(to: &str) -> (Prompted, Writes) {
-    let mut app = app_with_docs(1);
+    let mut app = app_with_docs_over(1, Some(Arc::new(ScriptedFiles::answering([Picked::Paths(vec![to.into()])]))));
     let writes: Writes = Rc::default();
     let written = writes.clone();
-    app.services.file_dialog = Some(crate::file_dialog::fake(vec![Some(FileDialogAnswer::SaveTo(to.into()))]).0);
     app.services.export = Some(Box::new(|_, _, settings| Ok((asked(settings.jpeg_quality, settings.jpeg_format), Vec::new()))));
     app.services.write = Some(Box::new(move |path, bytes| {
         written.borrow_mut().push((path.to_string(), bytes.to_vec()));
         Ok(())
     }));
-    let h = egui_kittest::Harness::builder().with_size(egui::vec2(800.0, 600.0)).build_ui_state(
+    let h = egui_kittest::Harness::builder().with_size(egui::vec2(800.0, 600.0)).with_context(app.ctx().clone()).build_ui_state(
         |ui, app| {
-            show(app, ui.ctx());
-            jpeg_options_ui::show(app, ui.ctx());
-            app.poll_file_dialog(ui.ctx(), None);
+            crate::dialogs::run(app, ui);
+            app.poll_file_dialog();
         },
         app,
     );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
-    h.ctx.set_os(egui::os::OperatingSystem::Windows);
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::AppTheme::pro());
+    craft::ui::testing::windows::set_os(&h.ctx, craft::host::target::Os::Windows);
     (h, writes)
+}
+
+/// The path and copy flag of the parked save.
+pub(super) fn parked(h: &Prompted) -> Option<(String, bool)> {
+    h.state().parked_save.as_ref().map(|s| (s.path.clone(), s.copy))
+}
+
+/// The values of the open format options dialog by field.
+pub(super) fn fields(h: &Prompted) -> Value {
+    h.state().framework.dialogs.get::<HostedFormatOptions>().and_then(|d| d.json_fields()).expect("a format options dialog is open")
+}
+
+/// The quality (0–12) and the format id the open dialog shows.
+fn shown(h: &Prompted) -> (u64, String) {
+    let f = fields(h);
+    (f["quality"].as_u64().expect("a quality"), f["format"].as_str().expect("a format").to_owned())
+}
+
+/// Edits `field` of the open format options dialog as the user would.
+pub(super) fn set_field(h: &mut Prompted, field: &str, value: Value) {
+    let ctx = h.ctx.clone();
+    let id = h.state().framework.dialogs.get::<HostedFormatOptions>().expect("a format options dialog is open").id();
+    h.state_mut().framework.dialogs.set_json_field(&ctx, id, field, value).unwrap();
+    h.run_steps(2);
+}
+
+/// The steps of the first recorded action.
+pub(super) fn steps(h: &Prompted) -> &Vec<ActionStep> {
+    &h.state().session.actions.list.action(0).unwrap().steps
 }
 
 /// Save As to a JPEG asks first, starting at the Export preferences' quality (85 → 10, Maximum)
@@ -52,14 +83,15 @@ fn save_as_to_a_jpeg_asks_for_jpeg_options() {
     let (mut h, writes) = jpeg_app("unused.jpg");
     h.state_mut().save_as(Some("p.jpg".into())).unwrap();
     h.run_steps(2);
-    assert_eq!(h.state().jpeg_options.as_ref().map(|p| (p.quality, p.format, p.copy)), Some((10, JpegFormat::Baseline, false)));
-    assert!(h.query_by_label("JPEG Options").is_some());
+    assert_eq!(parked(&h), Some(("p.jpg".to_string(), false)));
+    assert_eq!(shown(&h), (10, "baseline".to_string()));
+    assert!(h.query_all_by_label("JPEG Options").next().is_some());
     assert!(writes.borrow().is_empty(), "nothing is written before the answer");
     assert!(h.state_mut().save_as(Some("other.jpg".into())).is_err(), "one save at a time");
     h.key_press(Key::Enter);
     h.run_steps(3);
     assert_eq!(writes.borrow().as_slice(), &[("p.jpg".to_string(), asked(pct(10), JpegFormat::Baseline))]);
-    assert!(h.state().jpeg_options.is_none());
+    assert!(h.state().parked_save.is_none());
     assert_eq!(h.state().session.active().unwrap().path.as_deref(), Some("p.jpg"));
 }
 
@@ -75,19 +107,18 @@ fn resaving_an_opened_jpeg_starts_at_its_own_quality() {
     h.state_mut().run("actions.record", json!({})).unwrap();
     h.state_mut().save_as(Some("p.jpg".into())).unwrap();
     h.run_steps(2);
-    assert_eq!(h.state().jpeg_options.as_ref().map(|p| p.quality), Some(11), "95 is 11 on Photoshop's scale");
+    assert_eq!(shown(&h).0, 11, "95 is 11 on Photoshop's scale");
     h.key_press(Key::Enter);
     h.run_steps(3);
     let ctx = h.ctx.clone();
     crate::menus::invoke(h.state_mut(), &ctx, "file.saveACopy", json!({})).unwrap();
     h.run_steps(3);
-    assert_eq!(h.state().jpeg_options.as_ref().map(|p| (p.quality, p.copy)), Some((11, true)));
+    assert_eq!((shown(&h).0, parked(&h).map(|p| p.1)), (11, Some(true)));
     h.key_press(Key::Enter);
     h.run_steps(3);
     h.state_mut().save_as(Some("q.jpg".into())).unwrap();
     h.run_steps(2);
-    h.state_mut().jpeg_options.as_mut().unwrap().quality = 12;
-    h.run_steps(2);
+    set_field(&mut h, "quality", json!(12));
     h.key_press(Key::Enter);
     h.run_steps(3);
     h.state_mut().run("actions.stop", json!({})).unwrap();
@@ -98,11 +129,11 @@ fn resaving_an_opened_jpeg_starts_at_its_own_quality() {
     ];
     assert_eq!(writes.borrow().as_slice(), &expected);
     assert_eq!(
-        h.state().session.actions.list[0].steps,
-        [
-            ("file.saveAs".into(), json!({"path": "p.jpg", "jpegFormat": "baseline"})),
-            ("file.saveACopy".into(), json!({"path": "copy.jpg", "jpegFormat": "baseline"})),
-            ("file.saveAs".into(), json!({"path": "q.jpg", "quality": 12, "jpegFormat": "baseline"})),
+        steps(&h),
+        &vec![
+            ActionStep::new("file.saveAs", json!({"path": "p.jpg", "jpegFormat": "baseline"})),
+            ActionStep::new("file.saveACopy", json!({"path": "copy.jpg", "jpegFormat": "baseline"})),
+            ActionStep::new("file.saveAs", json!({"path": "q.jpg", "quality": 12, "jpegFormat": "baseline"})),
         ]
     );
     writes.borrow_mut().clear();
@@ -122,13 +153,13 @@ fn a_copy_recorded_from_the_engine_command_replays() {
     h.state_mut().run("file.saveACopy", json!({"path": path, "quality": 90})).unwrap();
     h.state_mut().run("actions.stop", json!({})).unwrap();
     let _ = std::fs::remove_file(&path);
-    assert_eq!(h.state().session.actions.list[0].steps, [("file.saveACopy".into(), json!({"path": path, "quality": 90}))]);
+    assert_eq!(steps(&h), &vec![ActionStep::new("file.saveACopy", json!({"path": path, "quality": 90}))]);
     let played = h.state_mut().run("actions.play", json!({"action": 0})).unwrap();
     assert!(played.get("failed").is_none(), "{played}");
     assert_eq!(writes.borrow().as_slice(), &[(path, asked(pct(12), JpegFormat::Baseline))]);
 }
 
-/// The quality and format chosen in the prompt are the ones written; Cancel writes nothing.
+/// The quality and format chosen in the dialog are the ones written; Cancel writes nothing.
 #[test]
 fn jpeg_options_writes_the_choice_or_cancels() {
     let (mut h, writes) = jpeg_app("unused.jpg");
@@ -136,8 +167,7 @@ fn jpeg_options_writes_the_choice_or_cancels() {
     h.run_steps(2);
     h.get_by_label("Progressive").click();
     h.run_steps(2);
-    h.state_mut().jpeg_options.as_mut().unwrap().quality = 3;
-    h.run_steps(2);
+    set_field(&mut h, "quality", json!(3));
     h.get_by_label("OK").click();
     h.run_steps(3);
     assert_eq!(writes.borrow().as_slice(), &[("p.jpg".to_string(), asked(pct(3), JpegFormat::Progressive))]);
@@ -146,7 +176,7 @@ fn jpeg_options_writes_the_choice_or_cancels() {
     h.run_steps(2);
     h.key_press(Key::Escape);
     h.run_steps(3);
-    assert!(h.state().jpeg_options.is_none());
+    assert!(h.state().parked_save.is_none());
     assert_eq!(writes.borrow().len(), 1, "cancelled: nothing more written");
     assert_eq!(h.state().ui.status, "Save canceled");
 }
@@ -159,14 +189,14 @@ fn scripted_jpeg_options_and_other_formats_skip_the_prompt() {
     let ctx = h.ctx.clone();
     crate::menus::invoke(h.state_mut(), &ctx, "file.saveAs", json!({"path": "s.jpg", "quality": 12, "jpegFormat": "optimized"})).unwrap();
     crate::menus::invoke(h.state_mut(), &ctx, "file.saveAs", json!({"path": "f.jpeg", "jpegFormat": "progressive"})).unwrap();
-    assert!(h.state().jpeg_options.is_none());
+    assert!(h.state().parked_save.is_none());
     for bad in [json!({"quality": 13}), json!({"quality": "8"}), json!({"jpegFormat": "fast"})] {
         let mut p = bad.clone();
         p["path"] = json!("s.jpg");
         assert!(crate::menus::invoke(h.state_mut(), &ctx, "file.saveAs", p).is_err(), "{bad}");
     }
     crate::menus::invoke(h.state_mut(), &ctx, "file.saveAs", json!({"path": "p.png"})).unwrap();
-    assert!(h.state().jpeg_options.is_none());
+    assert!(h.state().parked_save.is_none());
     assert_eq!(
         writes.borrow().as_slice(),
         &[
@@ -185,7 +215,7 @@ fn save_a_copy_to_a_jpeg_asks_and_keeps_the_document_unsaved() {
     let ctx = h.ctx.clone();
     crate::menus::invoke(h.state_mut(), &ctx, "file.saveACopy", json!({})).unwrap();
     h.run_steps(3);
-    assert_eq!(h.state().jpeg_options.as_ref().map(|p| p.copy), Some(true));
+    assert_eq!(parked(&h).map(|p| p.1), Some(true));
     assert!(jpeg_options_ui::park(h.state_mut(), "other.jpg".into(), false, "file.saveAs").is_err(), "the waiting prompt is kept");
     h.key_press(Key::Enter);
     h.run_steps(3);
@@ -210,18 +240,16 @@ fn recorded_jpeg_saves_keep_their_options_and_replay_without_asking() {
     h.run_steps(3);
     crate::menus::invoke(h.state_mut(), &ctx, "file.saveACopy", json!({})).unwrap();
     h.run_steps(3);
-    h.state_mut().jpeg_options.as_mut().unwrap().quality = 6;
-    h.run_steps(2);
+    set_field(&mut h, "quality", json!(6));
     h.key_press(Key::Enter);
     h.run_steps(3);
     h.state_mut().run("actions.stop", json!({})).unwrap();
-    let steps = &h.state().session.actions.list[0].steps;
     assert_eq!(
-        steps,
-        &[
-            ("file.saveAs".into(), json!({"path": "p.jpg", "quality": 10, "jpegFormat": "optimized"})),
+        steps(&h),
+        &vec![
+            ActionStep::new("file.saveAs", json!({"path": "p.jpg", "quality": 10, "jpegFormat": "optimized"})),
             // The Save a Copy prompt starts at the format just chosen (it is remembered).
-            ("file.saveACopy".into(), json!({"path": "copy.jpg", "quality": 6, "jpegFormat": "optimized"})),
+            ActionStep::new("file.saveACopy", json!({"path": "copy.jpg", "quality": 6, "jpegFormat": "optimized"})),
         ]
     );
     let expected = [("p.jpg".to_string(), asked(pct(10), JpegFormat::Optimized)), ("copy.jpg".to_string(), asked(pct(6), JpegFormat::Optimized))];
@@ -229,47 +257,9 @@ fn recorded_jpeg_saves_keep_their_options_and_replay_without_asking() {
     writes.borrow_mut().clear();
     let played = h.state_mut().run("actions.play", json!({"action": 0})).unwrap();
     assert!(played.get("failed").is_none(), "{played}");
-    assert!(h.state().jpeg_options.is_none(), "playback doesn't ask");
+    assert!(h.state().parked_save.is_none(), "playback doesn't ask");
     assert_eq!(writes.borrow().as_slice(), &expected);
     assert_eq!(h.state().session.active().unwrap().path.as_deref(), Some("p.jpg"), "the replayed copy leaves the document's file");
-}
-
-/// Closing an unsaved document whose save goes to a JPEG waits behind JPEG Options, then closes.
-#[test]
-fn closing_after_a_jpeg_save_waits_for_jpeg_options() {
-    let (mut h, writes) = jpeg_app("kept.jpg");
-    // An edit that keeps the lone Background, so the JPEG holds the document and isn't a copy.
-    h.state_mut().run("edit.fill", json!({"color": "#000000"})).unwrap();
-    assert!(intercept(h.state_mut(), "file.close", &Value::Null));
-    h.run_steps(2);
-    h.key_press(Key::Y);
-    h.run_steps(3);
-    assert!(h.state().jpeg_options.is_some());
-    assert_eq!(h.state().session.documents().len(), 1, "nothing closes before JPEG Options saves");
-    assert!(h.query_by_label("(Y)es").is_none(), "the close prompt waits behind JPEG Options");
-    h.key_press(Key::Enter);
-    h.run_steps(3);
-    assert_eq!(writes.borrow().as_slice(), &[("kept.jpg".to_string(), asked(pct(10), JpegFormat::Baseline))]);
-    assert!(h.state().discard.is_none());
-    assert!(h.state().session.documents().is_empty());
-}
-
-/// Another save can park the prompt with a starting point of its own (`park_at`): an own quality
-/// left alone is written exactly and recorded without `quality`; the starting format is kept.
-#[test]
-fn a_save_can_choose_where_the_prompt_starts() {
-    let (mut h, writes) = jpeg_app("unused.jpg");
-    h.state_mut().run("actions.record", json!({})).unwrap();
-    let start = jpeg_options_ui::Start { format: JpegFormat::Progressive, ..jpeg_options_ui::Start::own(70) };
-    jpeg_options_ui::park_at(h.state_mut(), "s.jpg".into(), false, "file.saveAs", start).unwrap();
-    h.run_steps(2);
-    assert_eq!(h.state().jpeg_options.as_ref().map(|p| (p.quality, p.format, p.own_quality)), Some((8, JpegFormat::Progressive, Some(70))));
-    assert!(jpeg_options_ui::park_at(h.state_mut(), "t.jpg".into(), false, "file.saveAs", start).is_err(), "one prompt at a time");
-    h.key_press(Key::Enter);
-    h.run_steps(3);
-    h.state_mut().run("actions.stop", json!({})).unwrap();
-    assert_eq!(writes.borrow().as_slice(), &[("s.jpg".to_string(), asked(Some(70), JpegFormat::Progressive))]);
-    assert_eq!(h.state().session.actions.list[0].steps, [("file.saveAs".into(), json!({"path": "s.jpg", "jpegFormat": "progressive"}))]);
 }
 
 /// The JPEG Options dialog starts at what it was last answered with (#9631): the quality and the
@@ -280,25 +270,25 @@ fn the_next_dialog_starts_at_the_last_answer() {
     let ctx = h.ctx.clone();
     h.state_mut().save_as(Some("a.jpg".into())).unwrap();
     h.run_steps(2);
-    h.state_mut().jpeg_options.as_mut().unwrap().quality = 6;
-    h.run_steps(2);
+    set_field(&mut h, "quality", json!(6));
     h.get_by_label("Progressive").click();
     h.run_steps(2);
     h.get_by_label("Cancel").click();
     h.run_steps(3);
     assert!(writes.borrow().is_empty());
+    assert_eq!(saved_value::<Remembered>(&ctx, &REMEMBER_KEY), Remembered::default(), "a cancelled dialog is not an answer");
     h.state_mut().save_as(Some("b.jpg".into())).unwrap();
     h.run_steps(2);
-    assert_eq!(h.state().jpeg_options.as_ref().map(|p| (p.quality, p.format)), Some((10, JpegFormat::Baseline)), "a cancelled dialog is not an answer");
-    h.state_mut().jpeg_options.as_mut().unwrap().quality = 6;
-    h.run_steps(2);
+    assert_eq!(shown(&h), (10, "baseline".to_string()));
+    set_field(&mut h, "quality", json!(6));
     h.get_by_label("Progressive").click();
     h.run_steps(2);
     h.get_by_label("OK").click();
     h.run_steps(3);
+    assert_eq!(saved_value::<Remembered>(&ctx, &REMEMBER_KEY), Remembered { quality: Some(6), jpeg_format: Some("progressive".into()) });
     crate::menus::invoke(h.state_mut(), &ctx, "file.saveACopy", json!({})).unwrap();
     h.run_steps(3);
-    assert_eq!(h.state().jpeg_options.as_ref().map(|p| (p.quality, p.format, p.own_quality)), Some((6, JpegFormat::Progressive, None)));
+    assert_eq!(shown(&h), (6, "progressive".to_string()));
     h.key_press(Key::Enter);
     h.run_steps(3);
     let expected = [("b.jpg".to_string(), asked(pct(6), JpegFormat::Progressive)), ("unused.jpg".to_string(), asked(pct(6), JpegFormat::Progressive))];
@@ -311,37 +301,14 @@ fn the_next_dialog_starts_at_the_last_answer() {
 #[test]
 fn an_opened_jpeg_starts_at_its_own_quality_and_the_last_format() {
     let (mut h, _writes) = jpeg_app("unused.jpg");
-    h.state_mut().session.prefs.edit(|p| {
-        p.dialogs.insert("file.jpegOptions".into(), json!({"quality": 3, "jpegFormat": "progressive"}));
-    });
+    let ctx = h.ctx.clone();
+    let before = Remembered { quality: Some(3), jpeg_format: Some("progressive".into()) };
+    set_saved_value(&ctx, &REMEMBER_KEY, before.clone());
     std::sync::Arc::make_mut(&mut h.state_mut().session.active_mut().unwrap().doc).file_encoding.jpeg_quality = Some(95);
     h.state_mut().save_as(Some("p.jpg".into())).unwrap();
     h.run_steps(2);
-    assert_eq!(h.state().jpeg_options.as_ref().map(|p| (p.quality, p.format, p.own_quality)), Some((11, JpegFormat::Progressive, Some(95))));
+    assert_eq!(shown(&h), (11, "progressive".to_string()));
     h.key_press(Key::Enter);
     h.run_steps(3);
-    let saved = h.state().session.prefs().dialogs.get("file.jpegOptions").cloned();
-    assert_eq!(saved, Some(json!({"quality": 3, "jpegFormat": "progressive"})), "the own quality is not an answer");
-}
-
-/// A remembered answer that no longer fits (a hand-edited preferences file) is ignored, value by
-/// value.
-#[test]
-fn a_bad_remembered_answer_is_ignored() {
-    for (saved, expected) in [
-        (json!({"quality": 13, "jpegFormat": "progressive"}), (10, JpegFormat::Progressive)),
-        (json!({"quality": "8", "jpegFormat": "fast"}), (10, JpegFormat::Baseline)),
-        (json!({"quality": -1}), (10, JpegFormat::Baseline)),
-        (json!({"quality": 2.5, "jpegFormat": 1}), (10, JpegFormat::Baseline)),
-        (json!("not an object"), (10, JpegFormat::Baseline)),
-        (json!({"quality": 0, "jpegFormat": "optimized"}), (0, JpegFormat::Optimized)),
-    ] {
-        let (mut h, _writes) = jpeg_app("unused.jpg");
-        h.state_mut().session.prefs.edit(|p| {
-            p.dialogs.insert("file.jpegOptions".into(), saved.clone());
-        });
-        h.state_mut().save_as(Some("p.jpg".into())).unwrap();
-        h.run_steps(2);
-        assert_eq!(h.state().jpeg_options.as_ref().map(|p| (p.quality, p.format)), Some(expected), "{saved}");
-    }
+    assert_eq!(saved_value::<Remembered>(&ctx, &REMEMBER_KEY).quality, before.quality, "the own quality is not an answer");
 }

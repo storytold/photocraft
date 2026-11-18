@@ -5,7 +5,7 @@ use serde_json::json;
 
 use crate::PhotocraftApp;
 
-use super::{pro_tab_title, titled_name};
+use super::{tab_title_at, titled_name};
 
 fn app() -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -13,8 +13,9 @@ fn app() -> PhotocraftApp {
     app
 }
 
+/// The tab's title; the tab's modified mark is not part of the text.
 fn title(app: &PhotocraftApp) -> String {
-    pro_tab_title(app, 0)
+    tab_title_at(app, 0, 100.0)
 }
 
 fn status(app: &mut PhotocraftApp, status: &str) {
@@ -26,7 +27,7 @@ fn copyrighted_puts_the_copyright_sign_before_the_name() {
     let mut app = app();
     assert_eq!(title(&app), "oracle @ 100% (RGB/8)");
     status(&mut app, "copyrighted");
-    assert_eq!(title(&app), "\u{a9} oracle @ 100% (RGB/8)*");
+    assert_eq!(title(&app), "\u{a9} oracle @ 100% (RGB/8)");
     assert_eq!(titled_name(&app.session.documents()[0]), "\u{a9} oracle", "the floating window's title has it too");
 }
 
@@ -35,10 +36,10 @@ fn public_domain_and_unknown_show_no_prefix() {
     let mut app = app();
     status(&mut app, "copyrighted");
     status(&mut app, "publicDomain");
-    assert_eq!(title(&app), "oracle @ 100% (RGB/8)*");
+    assert_eq!(title(&app), "oracle @ 100% (RGB/8)");
     status(&mut app, "copyrighted");
     status(&mut app, "unknown");
-    assert_eq!(title(&app), "oracle @ 100% (RGB/8)*");
+    assert_eq!(title(&app), "oracle @ 100% (RGB/8)");
     assert_eq!(titled_name(&app.session.documents()[0]), "oracle");
 }
 

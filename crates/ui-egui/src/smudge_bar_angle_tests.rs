@@ -6,7 +6,9 @@ use egui_kittest::kittest::{NodeT, Queryable};
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::state::{DialogKind, Tool};
+use crate::state::Tool;
+
+const ANGLE_RANGE_MESSAGE: &str = "An integer between -180 ° and 180 ° is required. Closest value inserted.";
 
 fn bar(tool: Tool) -> Harness<'static, PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -14,11 +16,11 @@ fn bar(tool: Tool) -> Harness<'static, PhotocraftApp> {
     app.ui.tool = tool;
     let mut h = Harness::builder()
         .with_size(vec2(1600.0, 400.0))
-        .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::ProMedium))
+        .with_context(app.ctx().clone())
         .build_ui_state(
             |ui, app| {
                 crate::panels::options_bar(app, ui);
-                crate::dialogs::show(app, ui.ctx());
+                crate::dialogs::run(app, ui);
             },
             app,
         );
@@ -27,7 +29,7 @@ fn bar(tool: Tool) -> Harness<'static, PhotocraftApp> {
 }
 
 fn field<'a>(h: &'a Harness<'static, PhotocraftApp>) -> Option<egui_kittest::Node<'a>> {
-    h.query_all_by_role(egui::accesskit::Role::SpinButton).find(|node| node.accesskit_node().description().as_deref() == Some("Set the brush angle"))
+    h.query_all_by_role(egui::accesskit::Role::SpinButton).find(|node| node.accesskit_node().label().as_deref() == Some("Angle"))
 }
 
 fn type_angle(h: &mut Harness<'static, PhotocraftApp>, text: &str) {
@@ -40,8 +42,8 @@ fn type_angle(h: &mut Harness<'static, PhotocraftApp>, text: &str) {
     h.run_steps(3);
 }
 
-fn alerts<'a>(h: &'a Harness<'static, PhotocraftApp>) -> Vec<&'a str> {
-    h.state().ui.dialogs.iter().filter(|d| d.kind == DialogKind::Error).map(|d| d.fields["message"].as_str().unwrap()).collect()
+fn alerts(h: &Harness<'static, PhotocraftApp>) -> Vec<String> {
+    h.state().framework.dialogs.open_dialogs().iter().filter_map(|d| d.fields.as_ref()?.get("message")?.as_str().map(str::to_owned)).collect()
 }
 
 #[test]
@@ -51,7 +53,7 @@ fn angle_starts_at_zero_between_strength_and_sample_all_layers_with_its_tooltip(
     assert_eq!(h.state().session.tools.brush.angle, 0.0);
     assert!(angle.accesskit_node().value().unwrap().starts_with('0'));
     assert_eq!(angle.accesskit_node().description().as_deref(), Some("Set the brush angle"));
-    assert!(h.get_by_label("Strength:").rect().right() <= angle.rect().left());
+    assert!(h.get_by_label("Strength").rect().right() <= angle.rect().left());
     assert!(angle.rect().right() <= h.get_by_label("Sample All Layers").rect().left());
 }
 
@@ -61,8 +63,8 @@ fn typed_out_of_range_angles_clamp_to_each_end_and_show_the_exact_ok_alert() {
     for (typed, expected) in [("200", 180.0), ("-200", -180.0)] {
         type_angle(&mut h, typed);
         assert_eq!(h.state().session.tools.brush.angle, expected);
-        assert_eq!(alerts(&h), [crate::eraser_ui::ANGLE_RANGE_MESSAGE]);
-        assert!(h.query_by_label(crate::eraser_ui::ANGLE_RANGE_MESSAGE).is_some());
+        assert_eq!(alerts(&h), [ANGLE_RANGE_MESSAGE]);
+        assert!(h.query_by_label(ANGLE_RANGE_MESSAGE).is_some());
         h.get_by_label("OK").click();
         h.run_steps(3);
         assert!(alerts(&h).is_empty());
@@ -81,6 +83,11 @@ fn in_range_edits_are_whole_degrees_and_share_the_brush_settings_value() {
     type_angle(&mut h, "-75");
     assert_eq!(h.state().session.tools.brush.angle, -75.0, "the Brush Settings panel reads this same brush");
     assert!(alerts(&h).is_empty());
+    for (typed, expected) in [("180.5", 180.0), ("-180.5", -180.0)] {
+        type_angle(&mut h, typed);
+        assert_eq!(h.state().session.tools.brush.angle, expected);
+        assert!(alerts(&h).is_empty(), "a fraction discarded inside the range is not an out-of-range integer");
+    }
 }
 
 #[test]
@@ -109,7 +116,7 @@ fn the_smudge_change_does_not_add_an_angle_field_to_blur_or_sharpen() {
     for tool in [Tool::Blur, Tool::Sharpen] {
         let h = bar(tool);
         assert!(field(&h).is_none(), "{tool:?}");
-        assert!(h.query_by_label("Strength:").is_some());
+        assert!(h.query_by_label("Strength").is_some());
         assert!(h.query_by_label("Sample All Layers").is_some());
     }
 }
