@@ -26,6 +26,8 @@ const GROUP_STARTS: [&str; 3] = [OTHER, "Europe General Purpose 3", "Japan Color
 const APPLIED: &str = "__presetApplied";
 /// The controls' values at that moment: an edit makes them differ.
 const BASE: &str = "__presetBase";
+/// The setup whose working RGB is the monitor profile.
+const MONITOR_COLOR: &str = "Monitor Color";
 /// What a setup leaves as the controls show it.
 const KEPT: [&str; 2] = ["blendTextGamma", "monitorProfile"];
 
@@ -66,7 +68,12 @@ pub(crate) fn reconcile(app: &mut PhotocraftApp, ctx: &egui::Context) {
         set_hidden(app, KEY, json!(shown));
     }
     let Some(applied) = f.get(APPLIED).and_then(Value::as_str).map(str::to_string) else {
-        // Opening: the controls hold the stored setup's values.
+        // Opening: the controls hold the stored setup's values. A `ui.dialog.set` that picked
+        // another entry before the first pass loads it.
+        if shown != entry_of(Some(&app.session.color.settings.preset)) {
+            load(app, ctx, &f, &shown);
+            return;
+        }
         set_hidden(app, APPLIED, json!(shown));
         set_hidden(app, BASE, Value::Object(tracked(&f)));
         return;
@@ -96,6 +103,9 @@ pub(crate) fn reconcile(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if edited {
         set_hidden(app, KEY, json!(CUSTOM_SETTINGS));
         set_hidden(app, APPLIED, json!(CUSTOM_SETTINGS));
+    } else if shown == MONITOR_COLOR && monitor_rgb_moved(app, &f, &base) {
+        // Monitor Color's working RGB follows the monitor profile the dialog shows.
+        load(app, ctx, &f, &shown);
     } else if grew {
         set_hidden(app, BASE, Value::Object(base));
     }
@@ -119,6 +129,12 @@ fn load(app: &mut PhotocraftApp, ctx: &egui::Context, f: &Map<String, Value>, na
     let base = tracked(&fields_map(dialog.fields()));
     set_hidden(app, APPLIED, json!(name));
     set_hidden(app, BASE, Value::Object(base));
+}
+
+/// The working RGB Monitor Color gave (in `base`) is no longer the one the shown monitor profile gives.
+fn monitor_rgb_moved(app: &PhotocraftApp, f: &Map<String, Value>, base: &Map<String, Value>) -> bool {
+    let monitor = f.get("monitorProfile").and_then(Value::as_str).unwrap_or("auto");
+    base.get("workingRgb").and_then(Value::as_str) != Some(app.session.color.monitor_rgb_for(monitor).as_str())
 }
 
 /// Writes `value` under `key` of the open dialog: the menu's entry as text, the bookkeeping as JSON.

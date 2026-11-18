@@ -195,3 +195,35 @@ fn a_control_set_by_script_shows_custom_before_the_next_draw() {
         assert_eq!(app.session.color.settings.preset, expected, "{key} {value}");
     }
 }
+
+#[test]
+fn a_setup_set_before_the_first_pass_loads_too() {
+    let expected = preset_setup(&ColorSettings::default(), "Europe Prepress 3", "srgb").unwrap();
+    let mut app = app_with(ColorSettings::default());
+    let id = open_dialog(&mut app, 0);
+    dialog_set(&mut app, id, "preset", json!("Europe Prepress 3"));
+    let f = fields(&app, id);
+    assert_eq!((&f["workingRgb"], &f["workingCmyk"]), (&json!(expected.working_rgb), &json!(expected.working_cmyk)), "loaded at once");
+    crate::dialogs::testing::confirm(&mut app, id).unwrap();
+    let c = &app.session.color.settings;
+    assert_eq!(c.preset, "Europe Prepress 3");
+    assert_eq!((&c.working_rgb, &c.working_cmyk), (&expected.working_rgb, &expected.working_cmyk));
+    assert_eq!((c.ask_on_mismatch, c.ask_on_paste, c.ask_on_missing), (true, true, true));
+}
+
+#[test]
+fn monitor_color_follows_a_monitor_profile_change() {
+    let mut app = app_with(ColorSettings { monitor_profile: "srgb".into(), ..ColorSettings::default() });
+    let id = open_dialog(&mut app, 1);
+    dialog_set(&mut app, id, "preset", json!("Monitor Color"));
+    show(&mut app, 2);
+    assert_eq!(fields(&app, id)["workingRgb"], "srgb");
+    dialog_set(&mut app, id, "monitorProfile", json!("display-p3"));
+    let f = fields(&app, id);
+    assert_eq!(f["preset"], "Monitor Color");
+    assert_eq!(f["workingRgb"], "display-p3", "the working RGB follows the monitor profile");
+    show(&mut app, 2);
+    crate::dialogs::testing::confirm(&mut app, id).unwrap();
+    let c = &app.session.color.settings;
+    assert_eq!((c.preset.as_str(), c.working_rgb.as_str(), c.monitor_profile.as_str()), ("Monitor Color", "display-p3", "display-p3"));
+}
