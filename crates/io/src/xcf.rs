@@ -197,6 +197,13 @@ struct PathBinding {
     geometry_complete: bool,
 }
 
+fn allocate_samples(count: usize) -> Result<Vec<f32>> {
+    let mut samples = Vec::new();
+    samples.try_reserve_exact(count).map_err(|error| IoError::OutOfMemory(format!("XCF drawable samples: {error}")))?;
+    samples.resize(count, 0.0);
+    Ok(samples)
+}
+
 /// Pixel data of a drawable: `channels` normalised samples per pixel, row-major.
 struct Pixels {
     width: u32,
@@ -245,6 +252,7 @@ impl<'a> Image<'a> {
             let charge = 4 * std::mem::size_of::<usize>().max(std::mem::size_of::<u64>());
             for count in 0usize..=1024 {
                 ctl.check().map_err(|_| IoError::Cancelled)?;
+                self.effect_decode_work.charge(if scan.wide { 8 } else { 4 })?;
                 let pointer = if scan.wide { (u64::from(scan.u32()?) << 32) | u64::from(scan.u32()?) } else { u64::from(scan.u32()?) };
                 if pointer == 0 {
                     return effects::read_pointers(cursor, &mut self.meta_budget, ctl).map(Some);
@@ -329,7 +337,7 @@ impl<'a> Image<'a> {
             }
             tiles.push(p);
         }
-        let mut data = vec![0.0f32; count];
+        let mut data = allocate_samples(count)?;
         let mut underflow = false;
         let mut coverage_clamped = false;
         let mut palette_fallback = false;
@@ -427,7 +435,7 @@ impl<'a> Image<'a> {
         // Channels are always one plain sample per pixel, even in indexed images.
         self.base_type = 0;
         let px = self.hierarchy(hptr, 1, true, ctl).map_err(|error| match error {
-            IoError::Cancelled => IoError::Cancelled,
+            error @ (IoError::Cancelled | IoError::OutOfMemory(_)) => error,
             error => invalid(format!("channel or mask '{name}': {error}")),
         });
         self.base_type = saved_base_type;
@@ -702,7 +710,9 @@ impl<'a> Image<'a> {
 /// A layer as read, before the tree is built.
 struct Node {
     layer: Layer,
+    source_ordinal: usize,
     path: Vec<u32>,
+    path_omitted: bool,
     group: bool,
     children: Vec<Node>,
     outcome: usize,
@@ -935,7 +945,7 @@ fn read_image_metadata_with_work<'a>(
                     Ok(true)
                 })?;
                 parasites_limited |= scan.limited;
-                if let Some(data) = last.filter(|data| !data.is_empty()) {
+                if let Some(data) = last {
                     selected_icc = Some(data);
                 }
             }
@@ -1729,9 +1739,8 @@ fn import_vectors(document: &mut Document, image: &mut Image<'_>, ctl: &Interrup
     Ok(())
 }
 
-/// Puts `node` where its item path says, under the groups already placed; a path that leads
-/// nowhere (at any depth) puts it at the top level, so later siblings keep their indices.
-fn place(roots: &mut Vec<Node>, node: Node, warnings: &mut Warnings, outcomes: &mut conversion::Outcomes<'_>) -> Result<()> {
+/// Keep recovered nodes outside the source index space until placement ends.
+fn place(roots: &mut Vec<Node>, recovered: &mut Vec<Node>, node: Node, warnings: &mut Warnings, outcomes: &mut conversion::Outcomes<'_>) -> Result<()> {
     let depth = node.path.len().saturating_sub(1);
     let destination = node
         .path
@@ -1749,9 +1758,7 @@ fn place(roots: &mut Vec<Node>, node: Node, warnings: &mut Warnings, outcomes: &
             "Source item path leads to no group".into(),
             "Layer opened at the native top level".into(),
         )?;
-        let mut node = node;
-        node.path = vec![];
-        roots.push(node);
+        recovered.push(node);
     }
     Ok(())
 }

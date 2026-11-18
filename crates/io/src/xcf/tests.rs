@@ -1517,3 +1517,33 @@ fn rejects_a_mask_with_its_own_size_before_reading_its_hierarchy() {
         assert!(error.to_string().contains("layer mask dimensions 3x2 differ from the layer's 2x2"), "{error}");
     }
 }
+
+#[test]
+fn drawable_sample_reservation_refusal_is_typed_without_allocating_huge_memory() {
+    assert!(matches!(allocate_samples(usize::MAX), Err(IoError::OutOfMemory(message)) if message.contains("XCF drawable samples")));
+    assert_eq!(allocate_samples(4).unwrap(), [0.0; 4]);
+}
+
+#[test]
+fn recovered_layer_cannot_displace_the_source_index_of_a_later_group() {
+    let path = |parts: &[u32]| (30, parts.iter().copied().flat_map(u32::to_be_bytes).collect());
+    for bad_path in [vec![0, 99, 0], vec![0; MAX_DEPTH + 1]] {
+        let mut a = TestLayer::rgba("Group A", 1, 1, Vec::new());
+        a.props = vec![(29, Vec::new()), path(&[0])];
+        let mut stray = TestLayer::rgba("Recovered", 1, 1, vec![17, 31, 57, 255]);
+        stray.props.push(path(&bad_path));
+        let mut b = TestLayer::rgba("Group B", 1, 1, Vec::new());
+        b.props = vec![(29, Vec::new()), path(&[1])];
+        let mut child = TestLayer::rgba("Child of B", 1, 1, vec![43, 59, 67, 255]);
+        child.props.push(path(&[1, 0]));
+        let mut image = TestImage::rgb8(1, 1);
+        image.layers.extend([a, stray, b, child]);
+
+        let imported = open(&image.write()).unwrap();
+        assert_eq!(imported.document.layers.iter().map(|layer| layer.name.as_str()).collect::<Vec<_>>(), ["Group B", "Recovered", "Group A"]);
+        let group = imported.document.layers.iter().find(|layer| layer.name == "Group B").unwrap();
+        assert_eq!(group.children().unwrap()[0].name, "Child of B");
+        assert!(imported.document.layers.iter().any(|layer| layer.name == "Recovered"));
+        assert!(imported.warnings.iter().any(|warning| warning.contains("Recovered") && warning.contains("top level")));
+    }
+}

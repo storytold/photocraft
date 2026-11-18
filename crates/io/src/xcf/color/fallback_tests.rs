@@ -173,3 +173,21 @@ fn assigned_icc_fallback_warning_survives_report_saturation_without_discarding_p
     }
     assert_eq!(visible, 1);
 }
+
+#[test]
+fn final_icc_assignment_wins_across_properties_even_if_it_is_empty() {
+    let p3 = Builtin::DisplayP3.profile().to_bytes();
+    let adobe = Builtin::AdobeRgbCompat.profile().to_bytes();
+    let precision = Precision::from_header(26, 150).unwrap();
+    for final_payload in [&[][..], adobe.as_slice()] {
+        let mut source = TestImage::rgb8(1, 1);
+        source.version = 26;
+        source.image_props = vec![(21, parasite(&p3)), (21, parasite(final_payload))];
+        source.layers.push(TestLayer::rgba("Usable pixels", 1, 1, vec![17, 31, 57, 255]));
+        let imported = crate::import("last-icc.xcf", &source.write()).unwrap();
+        let selected = select_profile(ColorMode::Rgb, precision, Some(final_payload.to_vec())).unwrap();
+        assert_eq!(imported.document.icc_profile.as_ref(), Some(&selected.bytes));
+        assert_eq!(imported.warnings.iter().any(|warning| warning.contains("assigned ICC") && warning.contains("implicit")), final_payload.is_empty());
+        assert_eq!(imported.document.layers[0].surface().unwrap().pixel(0, 0), vec![17. / 255., 31. / 255., 57. / 255., 1.]);
+    }
+}

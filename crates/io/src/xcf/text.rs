@@ -1416,6 +1416,8 @@ fn markup_runs_with_attribute_allowance(
         let value = node.text().unwrap_or("");
         charge_style_copy(style_allocation(base), &mut allowance, work.shared.as_deref_mut())?;
         let mut style = base.clone();
+        let mut uppercase = base.caps == Caps::AllCaps;
+        let mut variant = if uppercase { Caps::Normal } else { base.caps };
         // Pango selects size and scale independently. Nested percentages replace
         // the active scale; an absolute size does not discard inherited scale.
         let mut unscaled_size = base.size_pt;
@@ -1439,6 +1441,7 @@ fn markup_runs_with_attribute_allowance(
                     style.italic = font.italic;
                 } else {
                     font_description(requested, &mut style, dpi, true, notes)?;
+                    variant = style.caps;
                 }
             }
             unscaled_size = style.size_pt;
@@ -1505,8 +1508,8 @@ fn markup_runs_with_attribute_allowance(
                         }
                     }
                     "variant" | "font_variant" => match a.value() {
-                        "normal" => style.caps = Caps::Normal,
-                        "small-caps" => style.caps = Caps::SmallCaps,
+                        "normal" => variant = Caps::Normal,
+                        "small-caps" => variant = Caps::SmallCaps,
                         _ => note(notes, format!("Source font variant {} remains inert", diagnostic_value(a.value()))),
                     },
                     "stretch" | "font_stretch" => {
@@ -1555,15 +1558,18 @@ fn markup_runs_with_attribute_allowance(
                         };
                     }
                     "text_transform" => match a.value() {
-                        "none" => style.caps = Caps::Normal,
-                        "uppercase" => style.caps = Caps::AllCaps,
-                        _ => note(notes, format!("Source text transform {} remains inert", diagnostic_value(a.value()))),
+                        "none" => uppercase = false,
+                        "uppercase" => uppercase = true,
+                        _ => {
+                            uppercase = false;
+                            note(notes, format!("Source text transform {} remains inert", diagnostic_value(a.value())));
+                        }
                     },
                     "strikethrough" => style.strikethrough = a.value() == "true",
                     "foreground" | "fgcolor" | "color" => {
                         let color = markup_color(a.value())?;
                         style.color.c = color.c;
-                        if a.value().starts_with('#') && a.value().len() == 9 {
+                        if color.alpha < 1.0 {
                             style.color.alpha = color.alpha;
                         }
                     }
@@ -1610,6 +1616,12 @@ fn markup_runs_with_attribute_allowance(
                 return Err(invalid("native markup tracking exceeds bounds"));
             }
         }
+        // Variant belongs to the font, while text transform is inherited independently.
+        style.caps = match (variant, uppercase) {
+            (Caps::SmallCaps, true) => return Err(crate::IoError::Unsupported("combined small-caps and uppercase markup requires saved pixels".into())),
+            (_, true) => Caps::AllCaps,
+            (variant, false) => variant,
+        };
         if letter_spaced {
             // Pango disables standard/contextual ligatures for a letter-spacing
             // attribute, including zero. Resolve this after every inherited feature

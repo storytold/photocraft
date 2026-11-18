@@ -237,3 +237,22 @@ fn repeated_discarded_configs_leave_the_exact_retained_allowance_for_accepted_da
     document.layers = layers;
     persist(&mut document, image);
 }
+
+#[test]
+fn rejected_optional_lists_spend_shared_scan_work_across_owners() {
+    let mut w = W { out: vec![0; 4], wide: true };
+    let offset = pointer_list(&mut w, &[1, 2]);
+    let budget = 4 * std::mem::size_of::<usize>().max(std::mem::size_of::<u64>());
+    let mut image = image(&w.out, budget);
+    image.effect_decode_work = effects::DecodeWork::with_limit(24);
+    // The first owner reads the second pointer before storage admission refuses
+    // the list. A repeated owner cannot finish even that same rejected scan.
+    for remaining in [8, 0, 0] {
+        let mut cursor = image.c.at(offset);
+        let (pointers, limited) = image.optional_effect_pointers(&mut cursor, &Interrupt::NONE).unwrap();
+        assert!(pointers.is_empty() && limited);
+        assert_eq!(image.meta_budget, budget);
+        assert_eq!(image.effect_decode_work.stats().0, remaining);
+        assert_eq!(cursor.pos, offset);
+    }
+}

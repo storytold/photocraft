@@ -6,6 +6,16 @@ use the same enhanced import in `photocraft-io` (`crates/io/src/xcf.rs`). This a
 `gimp xcf ` signature, so an XCF with another extension still opens as one. Save suggests
 `.pcraft`, which keeps everything PhotoCraft holds; exporting as `.xcf` fails with a message.
 
+## Historical sample byte order
+
+Unmarked XCF versions 7–11 with multi-byte samples require the byte order used when the file was
+saved. Select **Little-endian** or **Big-endian** when the desktop Open or Replace Contents workflow
+asks. The choice applies to that source.
+
+For CLI Convert, Info, Run, and Batch, pass `--historical-xcf-sample-order little-endian` or
+`--historical-xcf-sample-order big-endian`. For automated Open such as MCP `doc.open` or desktop
+control `app.open`, set `historicalXcfSampleOrder` to `"little-endian"` or `"big-endian"`.
+
 ## Shared reader follow-up
 
 The enhanced decoder currently lives in PhotoCraft. Other applications using `craft-xcf` keep the

@@ -44,11 +44,10 @@ fn smart(doc: &Document) -> &SmartObject {
 
 #[test]
 fn embedded_and_linked_historical_sources_keep_order_bytes_and_geometry_through_psd_psb() {
-    let folder = std::env::temp_dir().join(format!("photocraft-psd-xcf-order-{}", std::process::id()));
-    std::fs::create_dir_all(&folder).unwrap();
+    let folder = tempfile::tempdir().unwrap();
     for (order, little) in [(Order::LittleEndian, true), (Order::BigEndian, false)] {
         let bytes = Arc::new(xcf(little));
-        let path = folder.join(format!("{order}.xcf"));
+        let path = folder.path().join(format!("{order}.xcf"));
         std::fs::write(&path, bytes.as_slice()).unwrap();
         for source in [
             SmartSource::Embedded { file_name: "historical.xcf".into(), bytes: bytes.clone() },
@@ -80,7 +79,6 @@ fn embedded_and_linked_historical_sources_keep_order_bytes_and_geometry_through_
             }
         }
     }
-    std::fs::remove_dir_all(folder).unwrap();
 }
 
 #[test]

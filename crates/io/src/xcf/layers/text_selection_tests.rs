@@ -73,3 +73,13 @@ fn invalid_last_native_text_keeps_saved_pixels_instead_of_stale_editable_text() 
     let cancel = || true;
     assert!(matches!(crate::xcf::import("cancelled.xcf", &bytes, &Interrupt::cancel_only(&cancel)), Err(crate::IoError::Cancelled)));
 }
+
+#[test]
+fn incompatible_pango_caps_keep_saved_pixels_and_the_source_markup() {
+    let markup = br#"(markup "<markup><span variant='small-caps'><span text_transform='uppercase'>abc</span></span></markup>") (font-size 12)"#;
+    let bytes = source(vec![property(&[("gimp-text-layer", markup)])]);
+    let imported = crate::import("combined-caps.xcf", &bytes).unwrap();
+    assert_eq!(imported.document.layers[0].surface().unwrap().pixel(0, 0), vec![17. / 255., 31. / 255., 57. / 255., 1.]);
+    assert!(imported.warnings.iter().any(|warning| warning.contains("opens as pixels")));
+    roundtrip(imported, &[markup]);
+}

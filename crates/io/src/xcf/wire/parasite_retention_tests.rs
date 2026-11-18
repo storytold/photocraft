@@ -61,7 +61,7 @@ fn borrowed_image_icc_scan_ignores_a_name_flood_and_preserves_empty_record_seman
     };
     assert_eq!(image(&second), Some(b"final property".to_vec()));
     record(&mut second, "icc-profile", b"");
-    assert_eq!(image(&second), Some(b"first property".to_vec()), "an empty winning ICC only suppresses its own property's earlier duplicate");
+    assert_eq!(image(&second), Some(Vec::new()), "the empty winner replaces all earlier ICC records");
 }
 
 #[test]

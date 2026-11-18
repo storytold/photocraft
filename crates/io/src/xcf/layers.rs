@@ -53,10 +53,11 @@ impl<'a> Image<'a> {
             }
         }
         let mut roots: Vec<Node> = Vec::new();
-        for (i, mut node) in nodes.into_iter().enumerate() {
-            // Default path: the item's position at the top level, as a file without groups has it.
-            if node.path.is_empty() {
-                node.path = vec![i as u32];
+        let mut recovered = Vec::new();
+        for node in nodes {
+            if node.path_omitted {
+                recovered.push(node);
+                continue;
             }
             if node.path.len() > MAX_DEPTH {
                 self.warnings.layer(&node.layer.name, "is nested deeper than the reader allows and was moved to the top level");
@@ -67,9 +68,15 @@ impl<'a> Image<'a> {
                     "Source hierarchy exceeds 64 components".into(),
                     "Layer moved to the native top level; source identity retains the ordinal and bounded path prefix".into(),
                 )?;
-                node.path.truncate(1);
+                recovered.push(node);
+                continue;
             }
-            place(&mut roots, node, &mut self.warnings, &mut self.outcomes)?;
+            place(&mut roots, &mut recovered, node, &mut self.warnings, &mut self.outcomes)?;
+        }
+        // Restore top-level stacking order after the source paths have resolved.
+        if !recovered.is_empty() {
+            roots.extend(recovered);
+            roots.sort_unstable_by_key(|node| node.source_ordinal);
         }
         Ok((finish(roots), linear_compositing))
     }
@@ -559,7 +566,7 @@ impl<'a> Image<'a> {
         let decoded = self.hierarchy_with_alpha(hptr, source_channels, false, !alpha, ctl);
         self.base_type = saved_base_type;
         decoded.map_err(|error| match error {
-            IoError::Cancelled => IoError::Cancelled,
+            error @ (IoError::Cancelled | IoError::OutOfMemory(_)) => error,
             error => invalid(format!("layer '{name}': {error}")),
         })
     }
@@ -848,7 +855,8 @@ impl<'a> Image<'a> {
                 })?;
             }
         }
-        Ok(Some((Node { layer, path, group, children: Vec::new(), outcome }, linear)))
+        let path_omitted = path_limited && path.is_empty();
+        Ok(Some((Node { layer, source_ordinal: ordinal, path, path_omitted, group, children: Vec::new(), outcome }, linear)))
     }
 }
 

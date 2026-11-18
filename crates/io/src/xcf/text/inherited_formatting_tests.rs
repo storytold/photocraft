@@ -86,3 +86,40 @@ fn decoded_letter_spacing_ligature_policy_survives_native_save() {
     let photocraft_doc::LayerContent::Text(restored) = &reopened.layers[0].content else { panic!("editable native text") };
     assert_eq!(restored, &layer);
 }
+
+#[test]
+fn font_variant_and_text_transform_resolve_independently_in_either_attribute_order() {
+    for attributes in ["variant='small-caps' text_transform='none'", "text_transform='none' variant='small-caps'"] {
+        let (_, runs) = parse_markup(&format!("<markup><span {attributes}>abc</span></markup>")).unwrap();
+        assert_eq!(runs[0].style.caps, Caps::SmallCaps);
+    }
+    let (_, runs) = parse_markup(concat!(
+        "<markup><span variant='small-caps'><span text_transform='none'>a</span></span>",
+        "<span text_transform='uppercase'><span variant='normal'>b</span><span text_transform='none'>c</span></span></markup>"
+    ))
+    .unwrap();
+    assert_eq!(runs.iter().map(|run| run.style.caps).collect::<Vec<_>>(), [Caps::SmallCaps, Caps::AllCaps, Caps::Normal]);
+    for source in [
+        "<markup><span variant='small-caps'><span text_transform='uppercase'>abc</span></span></markup>",
+        "<markup><span text_transform='uppercase'><span variant='small-caps'>abc</span></span></markup>",
+        "<markup><span variant='small-caps' text_transform='uppercase'>abc</span></markup>",
+        "<markup><span text_transform='uppercase' variant='small-caps'>abc</span></markup>",
+    ] {
+        assert!(matches!(parse_markup(source), Err(crate::IoError::Unsupported(message)) if message.contains("combined small-caps and uppercase")));
+    }
+}
+
+#[test]
+fn opaque_foregrounds_inherit_alpha_and_explicit_span_alpha_still_wins() {
+    let (_, runs) = parse_markup(concat!(
+        "<markup><span alpha='25%'>",
+        "<span foreground='#ff0000ff'>a</span>",
+        "<span foreground='#ff000080'>b</span>",
+        "<span alpha='50%' foreground='#ff000080'>c</span>",
+        "<span foreground='#ff0000ff' alpha='50%'>d</span>",
+        "</span></markup>",
+    ))
+    .unwrap();
+    assert_eq!(runs.iter().map(|run| run.style.color.alpha).collect::<Vec<_>>(), [0.25, 128. / 255., 0.5, 0.5]);
+    assert!(runs.iter().all(|run| run.style.color.c == Color::rgb(1., 0., 0.).c));
+}
