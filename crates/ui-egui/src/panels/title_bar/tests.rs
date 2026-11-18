@@ -9,7 +9,7 @@ use crate::PhotocraftApp;
 
 /// The whole app in a 1100 × 600 window whose frame the app draws (the Windows decision), with `setup` run on the
 /// app before the first frame.
-fn integrated_app(setup: impl FnOnce(&mut PhotocraftApp) + 'static) -> Harness<'static, PhotocraftApp> {
+fn integrated_app(setup: impl FnOnce(&mut PhotocraftApp) + 'static) -> Harness<'static, Box<PhotocraftApp>> {
     let mut setup = Some(setup);
     let mut h = Harness::builder().with_size(vec2(1100.0, 600.0)).with_max_steps(64).build_eframe(move |cc| {
         let desktop = Desktop::detect(Backend::X11);
@@ -28,7 +28,7 @@ fn integrated_app(setup: impl FnOnce(&mut PhotocraftApp) + 'static) -> Harness<'
 }
 
 /// The viewport commands the root window got over `steps` frames.
-fn commands(h: &mut Harness<'static, PhotocraftApp>, steps: usize) -> Vec<ViewportCommand> {
+fn commands(h: &mut Harness<'static, Box<PhotocraftApp>>, steps: usize) -> Vec<ViewportCommand> {
     let mut all = Vec::new();
     for _ in 0..steps {
         h.step();
@@ -65,7 +65,7 @@ fn the_close_caption_asks_about_unsaved_work_unless_the_device_is_lost() {
 }
 
 /// The whole app with the menu bar set as given.
-fn whole_app(menu_bar: bool) -> Harness<'static, PhotocraftApp> {
+fn whole_app(menu_bar: bool) -> Harness<'static, Box<PhotocraftApp>> {
     integrated_app(move |app| app.ui.panels.menu_bar = menu_bar)
 }
 
