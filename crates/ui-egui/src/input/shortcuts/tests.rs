@@ -150,3 +150,19 @@ fn web_paste_key_and_paste_event_are_one_press() {
     clipboard_keys(&ctx, false, &mut r);
     assert!(!r.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. })), "its release doesn't paste again");
 }
+
+#[test]
+fn engine_and_shell_open_identity_dispatches_one_native_picker() {
+    use craft::host::{Picked, ScriptedFiles};
+    use std::sync::Arc;
+
+    let files = Arc::new(ScriptedFiles::answering([Picked::Cancelled]));
+    let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { files: Some(files.clone()), ..Default::default() });
+    let mut h = app_harness(app);
+    tap(&mut h, Key::O, Modifiers::COMMAND);
+    h.run_steps(3);
+    let requests = files.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].kind, craft::host::PickKind::OpenMany);
+    assert!(h.state().session.documents().is_empty());
+}

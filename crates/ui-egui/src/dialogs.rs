@@ -103,7 +103,11 @@ pub(crate) mod params {
             cancel: Some(filter_dialog::cancel),
             ..ParamFamily::new(|key| key == image_processor_ui::COMMAND, filter_dialog::run)
         },
-        ParamFamily { cancel: Some(filter_dialog::cancel), ..ParamFamily::new(crate::view_cmds::dialogs::is_form, filter_dialog::run) },
+        ParamFamily {
+            cancel: Some(filter_dialog::cancel),
+            footer: Some(crate::view_cmds::dialogs::footer_action),
+            ..ParamFamily::new(crate::view_cmds::dialogs::is_form, filter_dialog::run)
+        },
         super::historical_sample_order::FAMILY,
         crate::prefs_ui::PRESETS_FAMILY,
         ParamFamily { check: Some(crate::crop_presets::check), ..ParamFamily::new(crate::crop_presets::owns, crate::crop_presets::run) },
@@ -534,11 +538,15 @@ pub fn confirm(app: &mut PhotocraftApp, ctx: &egui::Context, id: DialogId) -> Re
         }
     }
     take_results(app, ctx);
+    if historical_sample_order::is_opening(app, id) && app.framework.dialogs.stack().contains(id) && app.ui.status_error {
+        return Err(app.ui.status.clone());
+    }
     Ok(())
 }
 
 /// Cancels dialog `id`, as Cancel or Escape would, and runs what a cancel leaves to do.
 pub fn cancel(app: &mut PhotocraftApp, ctx: &egui::Context, id: DialogId) -> Result<(), String> {
+    historical_sample_order::check_cancel(app, id)?;
     // A prompt answers Escape with its escape button, as an answer its family takes; the host's own cancel is a result
     // that reaches no family (it stands for a replaced prompt).
     let escape = app.framework.dialogs.get_dyn_mut(id).and_then(|dialog| dialog.downcast_mut::<StandardPrompt>()).and_then(|prompt| {

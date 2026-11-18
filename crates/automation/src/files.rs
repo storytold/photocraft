@@ -23,19 +23,23 @@ pub struct Opened {
     pub initial_view: Option<photocraft_io::NativeInitialView>,
 }
 
-/// Decode a document that was read through a filesystem capability.
+/// Decode a document that was read through a filesystem capability. Hosts prepare missing
+/// native caches through their engine session before installation or export; this low-level
+/// decoder must not evaluate stored commands before the host installs its authority.
 pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<Opened, AutomationError> {
     open_bytes_with_options(name, bytes, &photocraft_io::ImportOptions::default())
 }
 
 /// Decode a document that was read through a filesystem capability with custom import options.
 pub fn open_bytes_with_options(name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> Result<Opened, AutomationError> {
-    if Path::new(name).extension().is_some_and(|extension| extension.eq_ignore_ascii_case(photocraft_format::EXTENSION)) {
-        let document = photocraft_format::load_from_bytes(bytes)?;
-        return Ok(Opened { warnings: photocraft_io::open_warnings(&document), document, source_read_only: false, initial_view: None });
-    }
+    // Shared signature dispatch lets real XCF data win over a misleading native suffix.
     let r = photocraft_io::import_with_options(name, bytes, opts)?;
     Ok(Opened { document: r.document, warnings: r.warnings, source_read_only: r.source_read_only, initial_view: r.initial_view })
+}
+
+/// Decode with an explicit order for unmarked historical XCF multi-byte samples.
+pub fn open_bytes_with_sample_order(name: &str, bytes: &[u8], order: Option<photocraft_io::HistoricalXcfSampleOrder>) -> Result<Opened, AutomationError> {
+    open_bytes_with_options(name, bytes, &photocraft_io::ImportOptions { historical_xcf_sample_order: order, ..Default::default() })
 }
 
 /// Open a document from disk. Directory bundles and `.pcraft` ZIPs load
@@ -66,6 +70,11 @@ pub fn open_with_options(path: &Path, opts: &photocraft_io::ImportOptions) -> Re
         let bytes = photocraft_format::read_file(path).map_err(|e| AutomationError::Io(format!("{}: {e}", path.display())))?;
         open_bytes_with_options(&name, &bytes, opts)
     }
+}
+
+/// Open with the caller's explicit historical XCF sample order, without guessing.
+pub fn open_with_sample_order(path: &Path, order: Option<photocraft_io::HistoricalXcfSampleOrder>) -> Result<Opened, AutomationError> {
+    open_with_options(path, &photocraft_io::ImportOptions { historical_xcf_sample_order: order, ..Default::default() })
 }
 
 /// Previews for a `.pcraft` bundle.
@@ -298,5 +307,24 @@ mod historical_order_tests {
             let error = import_options_from_params(&json!({"approveHighMemory":value})).unwrap_err();
             assert!(error.to_string().contains("approveHighMemory"));
         }
+    }
+}
+
+#[cfg(test)]
+mod import_dispatch_tests {
+    use super::*;
+
+    #[test]
+    fn capability_bytes_preserve_xcf_signature_priority_over_native_extension() {
+        let mut bytes = b"gimp xcf v003\0".to_vec();
+        for value in [1u32, 1, 0, 0, 0, 0, 0] {
+            bytes.extend_from_slice(&value.to_be_bytes());
+        }
+        let options = photocraft_io::ImportOptions { psd_high_memory_approved: true, ..Default::default() };
+        let opened = open_bytes_with_options("source.pcraft", &bytes, &options).unwrap();
+        assert!(opened.source_read_only);
+        assert_eq!(opened.document.size.width, 1);
+        assert_eq!(opened.document.size.height, 1);
+        assert!(open_bytes_with_sample_order("source.pcraft", &bytes, None).unwrap().source_read_only);
     }
 }

@@ -82,7 +82,8 @@ fn nothing_left_to_export_writes_nothing_and_says_why() {
     let no_asset = |e: String| assert!(e.contains("No valid asset to export"), "{e}");
     no_asset(open_layers(&mut app, &empties).unwrap_err());
     let f = json!({"format": "png", "scale": 100}).as_object().unwrap().clone();
-    no_asset(export_layers(&mut app, &f, &empties, "/out").unwrap_err());
+    let source = CapturedExport::active(&app).unwrap();
+    no_asset(export_layers(&mut app, &source, &f, &empties, "/out").unwrap_err());
     let st = app.session.active_mut().unwrap();
     st.selected_layers = empties.to_vec();
     st.active_layer = Some(l.gone);

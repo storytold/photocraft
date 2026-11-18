@@ -7,7 +7,9 @@
 
 use craft::theme::variant::Tone;
 use craft::ui::notices::{NoticeCenter, NoticeEnd, PostedNotice};
-use craft::ui::runtime::toast::ToastId;
+use craft::ui::runtime::env::WindowKey;
+use craft::ui::runtime::toast::{self, Toast, ToastAction, ToastEnd, ToastId};
+use photocraft_doc::DocId;
 use serde::{Deserialize, Serialize};
 
 use crate::PhotocraftApp;
@@ -36,6 +38,8 @@ pub struct Notice {
     /// setting: for a warning the user must not miss, such as nearly full memory.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub sticky: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import_report_document: Option<DocId>,
 }
 
 impl Notice {
@@ -49,7 +53,16 @@ impl Notice {
 /// Show a notice (newest last); returns its id.
 pub fn post(app: &mut PhotocraftApp, title: impl Into<String>, lines: Vec<String>, tone: Tone, dismiss_pref: Option<&str>) -> u64 {
     let id = app.ui.alloc_id();
-    app.ui.notices.push(Notice { id, title: title.into(), lines, tone, dismiss_pref: dismiss_pref.map(str::to_owned), args: Vec::new(), sticky: false });
+    app.ui.notices.push(Notice {
+        id,
+        title: title.into(),
+        lines,
+        tone,
+        dismiss_pref: dismiss_pref.map(str::to_owned),
+        args: Vec::new(),
+        sticky: false,
+        import_report_document: None,
+    });
     id
 }
 
@@ -60,6 +73,7 @@ pub fn post(app: &mut PhotocraftApp, title: impl Into<String>, lines: Vec<String
 pub(crate) struct Live {
     posted: Vec<(u64, String, ToastId)>,
     removals: Vec<ToastId>,
+    reports: Vec<(ToastId, DocId)>,
 }
 
 /// Drop notice `id`, whether it still waits in the outbox or is already a toast.
@@ -182,6 +196,17 @@ pub fn file_failures(app: &mut PhotocraftApp, what: &str, failures: &[String]) {
     post(app, title, failures.to_vec(), Tone::Bad, None);
 }
 
+/// Import notices link only to the converted document they describe.
+pub fn import_warnings(app: &mut PhotocraftApp, what: &str, warnings: &[String]) {
+    io_warnings(app, what, warnings);
+    if !warnings.is_empty() && crate::import_report::available(app) {
+        let doc = app.session.active().map(|s| s.doc.id);
+        if let Some(notice) = app.ui.notices.last_mut() {
+            notice.import_report_document = doc;
+        }
+    }
+}
+
 /// Report a failed file operation: the status bar shows it as an error and a notice keeps it on
 /// screen until dismissed.
 pub fn error(app: &mut PhotocraftApp, message: String) {
@@ -221,7 +246,20 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // `NoticeCenter::timeout` takes seconds and cannot switch off; with auto-hide off every notice is posted sticky.
     let center = NoticeCenter::new().timeout(seconds);
     let silenced: Vec<String> = app.session.prefs().dialogs.iter().filter(|(_, value)| value.as_bool() == Some(true)).map(|(key, _)| key.clone()).collect();
+    let window = WindowKey::main();
     for notice in std::mem::take(&mut app.ui.notices) {
+        if let Some(document) = notice.import_report_document {
+            let card = Toast::new("")
+                .title(notice.text(&notice.title))
+                .lines(notice.lines.iter().map(|line| notice.text(line)))
+                .tone(notice.tone)
+                .timeout((auto_hide && !notice.sticky).then_some(seconds))
+                .action(ToastAction::new(tl!("Import Conversion Report")));
+            let id = toast::post(&ctx, &window, card);
+            app.notices_live.posted.push((notice.id, notice.title, id));
+            app.notices_live.reports.push((id, document));
+            continue;
+        }
         let mut posted =
             PostedNotice::new(notice.text(&notice.title)).lines(notice.lines.iter().map(|line| notice.text(line)).collect::<Vec<_>>()).tone(notice.tone);
         if let Some(key) = &notice.dismiss_pref {
@@ -236,6 +274,18 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     for toast in std::mem::take(&mut app.notices_live.removals) {
         center.remove(&ctx, toast);
+    }
+    let visible = toast::cards(&ctx, &window);
+    for (id, document) in std::mem::take(&mut app.notices_live.reports) {
+        match toast::end(&ctx, id) {
+            Some(ToastEnd::Action(0)) if app.active_doc_id() == Ok(document) && crate::import_report::available(app) => {
+                forget(app, id);
+                crate::import_report::open(app);
+            }
+            Some(_) => forget(app, id),
+            None if visible.iter().any(|card| card.id == id) => app.notices_live.reports.push((id, document)),
+            None => forget(app, id),
+        }
     }
     for end in center.show(ui).ends {
         match end {

@@ -1272,6 +1272,129 @@ fn files_dropped_on_the_tabs_open_at_that_slot() {
     assert_eq!(app.session.documents().last().map(|d| d.doc.name.as_str()), Some("last.png"));
 }
 
+/// Hold native Place work and its completed event separately: only successful UI publication may bind the new layer, never the old layer or another tab.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn pending_dropped_place_waits_for_publication_and_preserves_cancel_failure_and_tab_identity() {
+    use photocraft_engine::jobs::Started;
+    use std::sync::Arc;
+    for outcome in 0..5 {
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width":4,"height":3,"background":"white"})).unwrap();
+        let original = session.active().unwrap().doc.clone();
+        let old_layer = session.active().unwrap().active_layer.unwrap();
+        let history = session.active().unwrap().history.past_len();
+        let mut app = PhotocraftApp::new(session, Services::default());
+        let ctx = egui::Context::default();
+        let (release, held) = std::sync::mpsc::channel();
+        let Started::Job(job) = app
+            .session
+            .start_job(
+                "file.placeEmbedded",
+                json!({}),
+                "Place Embedded",
+                true,
+                move |ctx| {
+                    held.recv().map_err(|error| photocraft_engine::EngineError::Other(error.to_string()))?;
+                    ctx.check()?;
+                    if matches!(outcome, 3 | 4) {
+                        return Err(photocraft_engine::EngineError::Other("deliberately refused Place work".into()));
+                    }
+                    Ok(())
+                },
+                |session, ()| {
+                    let layer = session.edit("Place Embedded", |doc, active| {
+                        let mut layer = photocraft_doc::Layer::raster("Published placed layer", doc.pixel_format());
+                        layer.surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(0, 0, 4, 3), &[1., 0., 0., 1.]);
+                        let id = doc.insert_above(*active, layer);
+                        *active = Some(id);
+                        Ok(id)
+                    })?;
+                    Ok(json!({"layer":layer.0}))
+                },
+            )
+            .unwrap()
+        else {
+            panic!("native gated worker")
+        };
+        assert!(crate::jobs_ui::track_place(&mut app, "native-place", &json!({"job": job.0, "pending": true})));
+        app.place_next_dropped(&ctx);
+        assert!(app.ui.transform.is_none(), "a pending Place must not transform the old layer");
+        assert!(Arc::ptr_eq(&original, &app.session.active().unwrap().doc));
+        assert_eq!(app.session.active().unwrap().history.past_len(), history);
+        let other = if matches!(outcome, 1 | 4) {
+            app.session.execute("file.new", json!({"width":2,"height":2,"background":"white"})).unwrap();
+            app.drop_places.push_back((original.id, DropPlace::Bytes("must-not-enter-other-tab.png".into(), png_bytes(1, 1))));
+            Some(app.session.active().unwrap().doc.clone())
+        } else {
+            None
+        };
+        if outcome == 2 {
+            assert!(app.session.cancel_job(job));
+        }
+        release.send(()).unwrap();
+        let result = app.session.wait_job(job);
+        assert_eq!(result.is_ok(), outcome < 2);
+        // Applying the worker is distinct from processing the shell's completion event.
+        assert!(app.ui.transform.is_none());
+        assert!(app.jobs.place.as_ref().is_some_and(|place| place.job == job));
+        crate::jobs_ui::tick(&mut app, &ctx);
+        assert!(app.jobs.place.is_none(), "every terminal outcome releases the pending Place");
+        assert!(app.drop_places.iter().all(|(document, _)| *document == original.id), "queued files retain their original document");
+        if outcome == 0 {
+            let placed = app.session.active().unwrap().active_layer.unwrap();
+            assert_ne!(placed, old_layer);
+            let transform = app.ui.transform.as_ref().unwrap();
+            assert_eq!(transform.layer, placed.0);
+            assert_eq!(transform.made, Some(crate::state::MadeLayer::Place));
+            crate::transform_tool::cancel(&mut app);
+            assert_eq!(*app.session.active().unwrap().doc, *original);
+            assert_eq!(app.session.active().unwrap().history.past_len(), history);
+            assert!(!app.session.active().unwrap().history.can_redo());
+        } else {
+            assert!(app.ui.transform.is_none());
+            if let Some(other) = other {
+                assert_dropped_place_after_tab_switch(&mut app, &ctx, &original, &other, history, outcome == 1);
+            } else {
+                assert!(Arc::ptr_eq(&original, &app.session.active().unwrap().doc));
+                assert_eq!(app.session.active().unwrap().history.past_len(), history);
+            }
+        }
+        app.session.join_cancelled_jobs();
+    }
+}
+
+/// A completion may retain its own successful edit, but cannot focus or place queued files into
+/// another tab; a refused worker must retain both documents and expose its primary error.
+#[cfg(not(target_arch = "wasm32"))]
+fn assert_dropped_place_after_tab_switch(
+    app: &mut PhotocraftApp,
+    ctx: &egui::Context,
+    original: &std::sync::Arc<photocraft_doc::Document>,
+    other: &std::sync::Arc<photocraft_doc::Document>,
+    history: usize,
+    succeeded: bool,
+) {
+    use std::sync::Arc;
+    assert!(Arc::ptr_eq(other, &app.session.active().unwrap().doc), "completion cannot steal another tab");
+    if !succeeded {
+        assert!(app.ui.status_error, "a switched target must not hide the worker failure");
+        assert!(app.ui.status.contains("deliberately refused Place work"));
+    }
+    app.place_next_dropped(ctx);
+    assert!(Arc::ptr_eq(other, &app.session.active().unwrap().doc), "remaining drop files cannot migrate to another tab");
+    let placed = app.session.documents().iter().find(|state| state.doc.id == original.id).unwrap();
+    if succeeded {
+        assert_eq!(placed.doc.layers.len(), original.layers.len() + 1, "the successful placement and its history remain intact");
+        assert_eq!(placed.history.past_len(), history + 1);
+    } else {
+        assert!(Arc::ptr_eq(&placed.doc, original), "failed work leaves its original target intact too");
+        assert_eq!(placed.history.past_len(), history);
+    }
+}
+
+/// A real path drop returns a worker handle before UI polling; it must reserve its queue position without binding a transform to the existing layer.
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn views_and_windows_stay_with_their_documents() {
     let (mut app, _) = app_with(Vec::new());
@@ -1904,4 +2027,24 @@ fn synchronous_svg_place_displays_omitted_image_warning() {
     app.drop_places.push_back((doc, crate::file_open::DropPlace::Bytes("omitted.svg".into(), svg.to_vec())));
     app.place_next_dropped(&egui::Context::default());
     assert!(app.ui.notices.iter().any(|notice| notice.lines.iter().any(|line| line.contains("embedded") && line.contains("omitted"))));
+}
+
+#[test]
+fn automation_import_combines_memory_approval_and_explicit_historical_order() {
+    let captured = Rc::new(RefCell::new(None));
+    let observed = captured.clone();
+    let services = Services {
+        import: Some(Box::new(move |name, _, opts| {
+            *observed.borrow_mut() = Some((opts.psd_high_memory_approved, opts.historical_xcf_sample_order));
+            Ok(crate::test_import_result(Document::new(name, Size::new(2, 2), ColorMode::Rgb, SampleType::U8), Vec::new()))
+        })),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    app.session.edit_prefs(|prefs| prefs.script_events.enabled = true);
+    let order = photocraft_io::HistoricalXcfSampleOrder::BigEndian;
+    app.open_automation_bytes_with_policy("explicit.xcf", b"source", true, Some(order)).unwrap();
+    assert_eq!(*captured.borrow(), Some((true, Some(order))));
+    assert!(app.session.prefs().script_events.enabled);
+    assert_eq!(app.session.documents().len(), 1);
 }

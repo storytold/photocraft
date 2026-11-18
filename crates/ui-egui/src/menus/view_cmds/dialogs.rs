@@ -48,9 +48,17 @@ fn opened(id: DialogId) -> Value {
 fn open_form(app: &mut PhotocraftApp, id: &str, title: &str, params: Vec<Param>, fields: DialogFields, fixed: Value) -> DialogId {
     let title = crate::dialogs::filter_dialog::title_of(title);
     let key = id.to_owned();
+    let report = id == "file.fileInfo" && crate::import_report::available(app);
     crate::dialogs::params::open_param(app, id, fields, fixed, move |fields: &mut DialogFields| {
-        ParamDialog::command(key.clone(), title.clone(), params.clone()).values(Bind::bound(fields))
+        let dialog = ParamDialog::command(key.clone(), title.clone(), params.clone()).values(Bind::bound(fields));
+        if report { dialog.extra_buttons(vec![("importReport".to_owned(), Label::from(tl!("Import Conversion Report")))]) } else { dialog }
     })
+}
+
+pub(crate) fn footer_action(app: &mut PhotocraftApp, _: &egui::Context, _: DialogId, action: &str) {
+    if action == "importReport" && crate::import_report::available(app) {
+        crate::import_report::open(app);
+    }
 }
 
 /// Choice options from `(id, label)` pairs whose labels are `tl!` literals at the call site.
@@ -746,34 +754,42 @@ fn save_a_copy(app: &mut PhotocraftApp) -> Result<Value, String> {
     let doc = app.session.active().ok_or("no document")?.doc.clone();
     let has_file = app.session.active().is_some_and(|d| d.path.is_some());
     let suggested = suggested_copy_name(&doc.name, has_file, app.session.prefs().file_handling.copy_suffix());
+    let protected_source = app.session.active().ok_or("no document")?.protected_import_source.clone();
     // The copy is of the document as it was when asked.
     app.pick_save(&suggested, move |app, path| {
-        // An RGB Targa asks for its bits per pixel first, a DDS texture for its compression, a
-        // JPEG for its JPEG Options and a TIFF for its TIFF Options; the copy is written from the
-        // prompt.
-        let parked = app.with_document(doc.id, |app| {
-            if crate::targa_options_ui::wants_prompt(app, &path) {
-                crate::targa_options_ui::park(app, path.clone(), true, "file.saveACopy")?;
-                return Ok(true);
-            }
-            if crate::dds_options_ui::wants_prompt(&path) {
-                crate::dds_options_ui::park(app, path.clone(), true, "file.saveACopy")?;
-                return Ok(true);
-            }
-            if crate::jpeg_options_ui::wants_prompt(app, &path) {
-                crate::jpeg_options_ui::park(app, path.clone(), true, "file.saveACopy")?;
-                return Ok(true);
-            }
-            if crate::tiff_options_ui::wants_prompt(app, &path) {
-                crate::tiff_options_ui::park(app, path.clone(), true, "file.saveACopy")?;
-                return Ok(true);
-            }
-            Ok(false)
-        })?;
+        // An RGB Targa asks for its bits per pixel first, a DDS texture for its compression, a JPEG for its JPEG Options,
+        // and a TIFF for its TIFF Options; the copy is written from the prompt.
+        let needs_options = (crate::targa_options_ui::is_tga_path(&path) && doc.mode != photocraft_color::ColorMode::Grayscale)
+            || crate::dds_options_ui::wants_prompt(&path)
+            || crate::jpeg_options_ui::is_jpeg_path(&path)
+            || crate::tiff_options_ui::is_tiff_path(&path);
+        let parked = if needs_options {
+            app.with_document(doc.id, |app| {
+                if crate::targa_options_ui::wants_prompt(app, &path) {
+                    crate::targa_options_ui::park(app, path.clone(), true, "file.saveACopy")?;
+                    return Ok(true);
+                }
+                if crate::dds_options_ui::wants_prompt(&path) {
+                    crate::dds_options_ui::park(app, path.clone(), true, "file.saveACopy")?;
+                    return Ok(true);
+                }
+                if crate::jpeg_options_ui::wants_prompt(app, &path) {
+                    crate::jpeg_options_ui::park(app, path.clone(), true, "file.saveACopy")?;
+                    return Ok(true);
+                }
+                if crate::tiff_options_ui::wants_prompt(app, &path) {
+                    crate::tiff_options_ui::park(app, path.clone(), true, "file.saveACopy")?;
+                    return Ok(true);
+                }
+                Ok(false)
+            })?
+        } else {
+            false
+        };
         if parked {
             return Ok(json!({"path": path, "warnings": []}));
         }
-        let r = write_copy(app, &doc, &path, crate::FormatChoices::default())?;
+        let r = write_copy(app, protected_source.as_deref(), &doc, &path, crate::FormatChoices::default())?;
         let step = json!({"path": path});
         photocraft_engine::actions_cmds::note_automation_step(&mut app.session, "file.saveACopy", &step);
         app.session.journal.push(("file.saveACopy".into(), step));
@@ -784,7 +800,16 @@ fn save_a_copy(app: &mut PhotocraftApp) -> Result<Value, String> {
 /// Writes `doc` to `path` as a copy (Save a Copy, and its replayed action step): the document's
 /// path and saved state are untouched. `choices` are the Targa, DDS and JPEG answers, when there
 /// are any.
-pub(crate) fn write_copy(app: &mut PhotocraftApp, doc: &photocraft_doc::Document, path: &str, choices: crate::FormatChoices) -> Result<Value, String> {
+pub(crate) fn write_copy(
+    app: &mut PhotocraftApp,
+    protected_source: Option<&str>,
+    doc: &photocraft_doc::Document,
+    path: &str,
+    choices: crate::FormatChoices,
+) -> Result<Value, String> {
+    if protected_source.is_some_and(|source| photocraft_engine::file_cmds::same_file(source, path)) {
+        return Err("the destination is the import-only source; choose a different native or export path".into());
+    }
     let settings = choices.apply(app.save_settings());
     crate::app::ensure_memory_to_save(doc, path)?;
     let export = app.services.export.as_ref().ok_or("no exporter configured")?;

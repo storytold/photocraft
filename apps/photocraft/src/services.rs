@@ -286,7 +286,7 @@ fn image_from_files(paths: &[PathBuf]) -> Option<(u32, u32, Vec<u8>)> {
     })
 }
 
-/// Largest clipboard image payload read on Wayland (1 GiB, a 16K × 16K RGBA BMP), so no real
+/// Largest clipboard image payload read on Wayland (1 GiB, a 16K Ã— 16K RGBA BMP), so no real
 /// screenshot is turned away, while a broken or hostile source can't make us allocate without end.
 #[cfg(target_os = "linux")]
 const MAX_CLIPBOARD_IMAGE_BYTES: u64 = 4 * 16384 * 16384;
@@ -422,6 +422,10 @@ pub fn automation(workspace: Option<photocraft_automation::AuthorizedWorkspace>)
     let write = workspace.clone().map(|workspace| {
         Box::new(move |path: &str, bytes: &[u8]| workspace.write(path, bytes).map_err(|error| error.to_string())) as photocraft_ui_egui::AutomationWriteFn
     });
+    let same_file = workspace.clone().map(|workspace| {
+        Box::new(move |source: &str, target: &str| workspace.is_import_source(source, target).map_err(|error| error.to_string()))
+            as photocraft_ui_egui::AutomationSameFileFn
+    });
     let open_pcraft = workspace.clone().map(|workspace| {
         Box::new(move |path: &str| {
             let name = Path::new(path).file_name().and_then(|name| name.to_str()).unwrap_or(path).to_string();
@@ -441,7 +445,7 @@ pub fn automation(workspace: Option<photocraft_automation::AuthorizedWorkspace>)
             photocraft_automation::workspace::authorize_desktop_engine_command(id, params).map_err(|error| error.to_string())
         }) as photocraft_ui_egui::AutomationCommandFn
     });
-    photocraft_ui_egui::AutomationServices { read, write, open_pcraft, save, command, authorize }
+    photocraft_ui_egui::AutomationServices { read, write, same_file, open_pcraft, save, command, authorize }
 }
 
 /// What agent requests may read, write and run with the agent settings' folders
@@ -483,6 +487,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>, wa
         same_file: Some(Box::new(|a: &str, b: &str| same_entry(Path::new(a), Path::new(b), same_file))),
         automation_read: automation.read,
         automation_write: automation.write,
+        automation_same_file: automation.same_file,
         automation_open_pcraft: automation.open_pcraft,
         automation_save: automation.save,
         automation_command: automation.command,
@@ -573,13 +578,13 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>, wa
     }
 }
 
-/// Preferences ▸ General ▸ Beep When Done: the platform's default information beep.
+/// Preferences â–¸ General â–¸ Beep When Done: the platform's default information beep.
 fn platform_beep() {
     #[cfg(target_os = "windows")]
     {
         let _ = winsafe::MessageBeep(winsafe::co::MBP::OK);
     }
-    // The user's alert sound, at the alert volume set in System Settings ▸ Sound. The terminal
+    // The user's alert sound, at the alert volume set in System Settings â–¸ Sound. The terminal
     // bell below is silent for an app started from the Finder or the Dock.
     #[cfg(target_os = "macos")]
     objc2_app_kit::NSBeep();

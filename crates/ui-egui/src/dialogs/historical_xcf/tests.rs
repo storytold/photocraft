@@ -88,6 +88,8 @@ fn later_document() -> crate::open_prompt::Held {
         question: None,
         policy_applied: true,
         smart_object: false,
+        color_settings: None,
+        ignore_exif_profile_tag: None,
     }
 }
 
@@ -262,6 +264,21 @@ fn automation_open_forwards_choice_before_read_and_preserves_source_protection()
     }
 }
 
+/// A refused startup retains the exact explicit answer in one existing modal.
+fn assert_retained_historical_modal(
+    app: &PhotocraftApp,
+    dialog_id: craft::ui::dialog::DialogId,
+    source: u64,
+    answered_fields: &serde_json::Map<String, Value>,
+) {
+    let retry = dialogs(app).into_iter().find(|dialog| owns(&dialog.fields)).unwrap();
+    assert_eq!(retry.id, dialog_id, "startup refusal retains the existing modal rather than creating a new question");
+    assert_eq!(&retry.fields, answered_fields, "retain the explicitly selected order and source fields without guessing another choice");
+    assert_eq!(retry.fields[FIELD], source);
+    assert_eq!(retry.fields["historicalXcfSampleOrder"], json!("big-endian"));
+    assert_eq!(dialogs(app).into_iter().filter(|dialog| owns(&dialog.fields)).count(), 1);
+}
+
 #[test]
 fn refused_historical_start_restores_choice_ahead_of_later_open_then_retries_retained_bytes() {
     let mut app = app();
@@ -274,10 +291,12 @@ fn refused_historical_start_restores_choice_ahead_of_later_open_then_retries_ret
     crate::open_prompt::arrive(&mut app, later_document());
     let dialog_id = dialogs(&app).into_iter().find(|dialog| owns(&dialog.fields)).unwrap().id;
     set_order(&mut app, dialog_id, json!("big-endian"));
+    let answered_fields = dialogs(&app).into_iter().find(|dialog| dialog.id == dialog_id).unwrap().fields;
+    let import_options = photocraft_engine::jobs::import_options(app.session.prefs());
     let cancelled = photocraft_engine::jobs::JobCtx::new();
     cancelled.cancel();
     app.session.set_inline_job_ctx(Some(cancelled));
-    confirm(&mut app, dialog_id).unwrap();
+    confirm(&mut app, dialog_id).unwrap_err();
     assert!(app.ui.status_error);
     assert!(app.session.holds_historical_xcf_open(source));
     assert_eq!(app.historical_opens.len(), 1);
@@ -286,11 +305,17 @@ fn refused_historical_start_restores_choice_ahead_of_later_open_then_retries_ret
     assert_eq!(app.held_opens.len(), 1, "the later decoded file cannot pass the retry choice");
     assert_eq!(app.session.documents().len(), 1);
     assert!(std::sync::Arc::ptr_eq(&original, &app.session.active().unwrap().doc));
-    let retry = dialogs(&app).into_iter().find(|dialog| owns(&dialog.fields)).unwrap();
-    assert_eq!(retry.fields[FIELD], source);
-    assert_eq!(retry.fields["historicalXcfSampleOrder"], Value::Null, "a recreated choice requires an explicit answer");
+    assert_retained_historical_modal(&app, dialog_id, source, &answered_fields);
+    assert!(app.historical_opens[0].job.is_none());
+    assert!(app.session.jobs().is_empty());
+    assert_eq!(photocraft_engine::jobs::import_options(app.session.prefs()), import_options);
     app.session.set_inline_job_ctx(None);
-    choose(&mut app, "big-endian");
+    // Releasing the cancelled context does not answer the modal or launch work.
+    assert!(app.session.holds_historical_xcf_open(source));
+    assert_eq!(app.session.documents().len(), 1);
+    assert_eq!(app.prompt_order.iter().copied().collect::<Vec<_>>(), [PromptKind::Historical(source), PromptKind::Open]);
+    assert!(app.session.jobs().is_empty());
+    confirm(&mut app, dialog_id).unwrap();
     assert!(!app.session.holds_historical_xcf_open(source));
     assert!(app.historical_opens.is_empty());
     assert!(app.held_opens.is_empty());
@@ -299,6 +324,13 @@ fn refused_historical_start_restores_choice_ahead_of_later_open_then_retries_ret
     assert_eq!(app.session.active().unwrap().doc.name, "later");
     app.session.set_active(1);
     assert_pixel(&app);
+    assert_eq!(app.session.active().unwrap().protected_import_source.as_deref(), Some("/source/retained.xcf"));
+    assert!(
+        app.session.resume_historical_xcf_open(source, photocraft_io::HistoricalXcfSampleOrder::BigEndian, false).is_err(),
+        "successful admission consumes the exact capability once"
+    );
+    assert_eq!(app.session.documents().len(), 3);
+    assert_eq!(photocraft_engine::jobs::import_options(app.session.prefs()), import_options);
     assert!(std::sync::Arc::ptr_eq(&original, &app.session.documents()[0].doc));
 }
 
@@ -308,4 +340,95 @@ fn owns(fields: &serde_json::Map<String, Value>) -> bool {
 
 fn can_confirm(fields: &serde_json::Map<String, Value>) -> bool {
     matches!(fields.get("historicalXcfSampleOrder").and_then(Value::as_str), Some("little-endian" | "big-endian"))
+}
+
+#[test]
+fn held_only_confirm_and_cancel_denials_preserve_prompt_source_and_reservation_until_retry() {
+    fn deny_open(id: &str, _: &Value) -> photocraft_engine::Result<()> {
+        if id == "file.open" { Err(photocraft_engine::EngineError::Other("held decision denied".into())) } else { Ok(()) }
+    }
+    for accept in [false, true] {
+        let mut app = app();
+        app.run("file.new", json!({"width":2,"height":2})).unwrap();
+        let original = app.session.active().unwrap().doc.clone();
+        app.session.color.settings.ask_on_missing = false;
+        app.session.color.settings.ask_on_mismatch = false;
+        app.open_bytes("denied.xcf", &fixture::historical_pixel(true)).unwrap();
+        let dialog_id = dialogs(&app).into_iter().find(|dialog| owns(&dialog.fields)).unwrap().id;
+        set_order(&mut app, dialog_id, json!("little-endian"));
+        let source = app.historical_opens[0].id;
+        let before = dialog_fields(&app);
+        let order = app.prompt_order.clone();
+        app.session.authorize = Some(deny_open);
+        let result = if accept { confirm(&mut app, dialog_id) } else { cancel(&mut app, dialog_id) };
+        assert!(result.unwrap_err().contains("held decision denied"));
+        assert_eq!(dialog_fields(&app), before);
+        assert_eq!(app.prompt_order, order);
+        assert_eq!(app.historical_opens.len(), 1);
+        assert!(app.session.holds_historical_xcf_open(source));
+        assert_eq!(app.session.documents().len(), 1);
+        assert!(std::sync::Arc::ptr_eq(&original, &app.session.active().unwrap().doc));
+        app.session.authorize = None;
+        if accept {
+            confirm(&mut app, dialog_id).unwrap();
+        } else {
+            cancel(&mut app, dialog_id).unwrap();
+        }
+        assert!(!app.session.holds_historical_xcf_open(source));
+        assert!(!dialogs(&app).into_iter().any(|dialog| dialog.id == dialog_id));
+        assert!(app.historical_opens.is_empty());
+        assert!(app.prompt_order.is_empty());
+        assert_eq!(app.session.documents().len(), if accept { 2 } else { 1 });
+    }
+}
+
+#[test]
+fn authorized_cancel_dismisses_externally_released_source_without_trapping_later_open() {
+    fn deny_open(id: &str, _: &Value) -> photocraft_engine::Result<()> {
+        if id == "file.open" { Err(photocraft_engine::EngineError::Other("stale decision denied".into())) } else { Ok(()) }
+    }
+    fn allow_held_cancel(id: &str, params: &Value) -> photocraft_engine::Result<()> {
+        if id != "file.open"
+            || params.as_object().is_some_and(|fields| {
+                fields.len() == 2 && fields.get("heldHistoricalXcfOpen").and_then(Value::as_u64).is_some() && fields.get("cancel") == Some(&json!(true))
+            })
+        {
+            Ok(())
+        } else {
+            Err(photocraft_engine::EngineError::Other("expected held-only cancellation".into()))
+        }
+    }
+    let mut app = app();
+    app.run("file.new", json!({"width":2,"height":2})).unwrap();
+    let original = app.session.active().unwrap().doc.clone();
+    app.open_bytes("revoked.xcf", &fixture::historical_pixel(true)).unwrap();
+    let dialog = dialogs(&app).into_iter().find(|dialog| owns(&dialog.fields)).unwrap().id;
+    let source = app.historical_opens[0].id;
+    crate::open_prompt::arrive(&mut app, later_document());
+    // The engine/MCP caller releases the capability while its UI question is still visible.
+    app.session.execute("file.open", json!({"heldHistoricalXcfOpen":source,"cancel":true})).unwrap();
+    assert!(!app.session.holds_historical_xcf_open(source));
+    let before = dialog_fields(&app);
+    let order = app.prompt_order.clone();
+    app.session.authorize = Some(deny_open);
+    assert!(cancel(&mut app, dialog).unwrap_err().contains("stale decision denied"));
+    assert_eq!(dialog_fields(&app), before, "even local stale-question cleanup requires authorization");
+    assert_eq!(app.prompt_order, order);
+    assert_eq!(app.historical_opens.len(), 1);
+    assert_eq!(app.held_opens.len(), 1);
+    assert_eq!(app.session.documents().len(), 1);
+    assert!(std::sync::Arc::ptr_eq(&original, &app.session.active().unwrap().doc));
+    app.session.authorize = Some(allow_held_cancel);
+    cancel(&mut app, dialog).unwrap();
+    assert!(!dialogs(&app).into_iter().any(|current| current.id == dialog));
+    assert!(app.historical_opens.is_empty());
+    assert!(app.held_opens.is_empty());
+    assert!(app.prompt_order.is_empty());
+    assert_eq!(app.session.documents().len(), 2);
+    assert!(std::sync::Arc::ptr_eq(&original, &app.session.documents()[0].doc));
+    assert_eq!(app.session.active().unwrap().doc.name, "later");
+}
+
+fn dialog_fields(app: &PhotocraftApp) -> Vec<(craft::ui::dialog::DialogId, serde_json::Map<String, Value>)> {
+    dialogs(app).into_iter().map(|dialog| (dialog.id, dialog.fields)).collect()
 }

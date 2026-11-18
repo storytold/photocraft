@@ -1,3 +1,5 @@
+use crate::import_report;
+
 use super::{
     PhotocraftApp, canvas, discard_ui, gpu_canvas, gpu_status, i18n, jobs_ui, last_brush, monitor_status, native_menu, notices, paint_mouse, panels, prefs_ui,
     screen_picker, shortcuts, smart_svg_ui, tool_memory, transform_tool, type_tool, updates_ui, view_cmds, work_area,
@@ -261,6 +263,7 @@ impl PhotocraftApp {
         screen_picker::show(self, ui);
         smart_svg_ui::poll(self, &ctx);
         // Esc and the view keys read the window's intents last, once every UI above had its chance at Esc.
+        import_report::show(self, &ctx);
         crate::shortcuts::escape_keys(self, &ctx);
         // A device lost while drawing this frame: switch to the CPU canvas before the next one.
         gpu_status::check(self, &ctx);

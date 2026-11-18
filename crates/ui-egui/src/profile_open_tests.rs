@@ -24,6 +24,7 @@ fn adobe_png() -> Vec<u8> {
     photocraft_io::export(&d, "t.png", &Default::default()).unwrap().bytes
 }
 
+/// Create a real importer-backed offscreen shell with selectable workers and deterministic profile-mismatch prompting.
 fn harness(background: bool) -> Harness<'static, PhotocraftApp> {
     let mut h = Harness::builder().with_size(vec2(1400.0, 900.0)).with_max_steps(64).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
@@ -161,6 +162,47 @@ fn a_held_file_still_reports_its_missing_fonts() {
     assert_eq!(app.session.documents().len(), 1);
     assert_eq!(app.ui.notices.len(), 1);
     assert_eq!(app.ui.notices[0].lines, vec![warning]);
+}
+
+#[test]
+/// Exercise preserve/convert answers while retaining durable reports, decoder write policy, source identity and
+/// conversion notices.
+fn held_color_choices_preserve_conversion_reports_and_the_decoders_source_policy() {
+    use photocraft_doc::import_conversion::{ConversionReport, ImportConversion};
+    for read_only in [false, true] {
+        for action in ["preserve", "convert"] {
+            let mut doc = Document::with_background("Converted", Size::new(3, 2), ColorMode::Rgb, SampleType::U16, Color::rgba(0.2, 0.6, 0.9, 1.0));
+            doc.icc_profile = Some(craft::cms::Builtin::AdobeRgbCompat.profile().to_bytes());
+            doc.metadata.import_conversion = Some(std::sync::Arc::new(ImportConversion::Report(ConversionReport {
+                source_format: "xcf".into(),
+                source_version: Some(11),
+                policy_version: 1,
+                ..Default::default()
+            })));
+            let report = doc.metadata.import_conversion.clone();
+            let services = Services {
+                import: Some(Box::new(move |_, _, _| {
+                    let mut imported = crate::test_import_result(doc.clone(), vec!["Conversion detail".into()]);
+                    imported.source_read_only = read_only;
+                    Ok(imported)
+                })),
+                ..Default::default()
+            };
+            let mut app = PhotocraftApp::new(Session::new(), services);
+            app.run("edit.colorSettings", serde_json::json!({"askOnMismatch": true, "policyRgb": "preserve"})).unwrap();
+            let path = if read_only { "source.xcf" } else { "converted.pcraft" };
+            app.open_file(path, b"test service input").unwrap();
+            assert!(app.session.documents().is_empty());
+            crate::open_prompt::answer(&mut app, Some(action)).unwrap();
+            let state = app.session.active().unwrap();
+            assert_eq!(state.doc.metadata.import_conversion, report);
+            assert_eq!(state.source_read_only, read_only);
+            assert_eq!(state.path.as_deref(), (!read_only).then_some(path));
+            assert_eq!(state.protected_import_source.as_deref(), read_only.then_some(path));
+            assert_eq!(app.ui.notices.len(), 1);
+            assert_eq!(app.ui.notices[0].lines, ["Conversion detail"]);
+        }
+    }
 }
 
 #[test]

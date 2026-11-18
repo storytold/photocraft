@@ -192,6 +192,7 @@ pub(crate) struct ExportOpen {
     pub(crate) dialog: DialogId,
     /// The layers Layer › Export As exports; empty for the whole document, several for one file each.
     pub(crate) layers: Vec<LayerId>,
+    captured: CapturedExport,
     /// The size of the source the dialog fits its size to: the document, or the first layer.
     source: PixelSize,
     /// The preview's texture; the dialog's state holds only its id, so it lives as long as the dialog.
@@ -258,6 +259,7 @@ pub fn open(app: &mut PhotocraftApp) -> Result<DialogId, String> {
 /// replace a remembered pixel size the document can't take with the percent, even when the layer
 /// can take it.
 fn open_sized(app: &mut PhotocraftApp, stem: String, title: Option<String>, source: PixelSize, layers: Vec<LayerId>) -> Result<DialogId, String> {
+    let captured = CapturedExport::active(app)?;
     let prefs = app.session.prefs().export.clone();
     let mut options = ExportOptions::default();
     options.quality = u8::try_from(prefs.jpeg_quality.clamp(1, 100)).unwrap_or(85);
@@ -290,6 +292,7 @@ fn open_sized(app: &mut PhotocraftApp, stem: String, title: Option<String>, sour
         #[cfg(test)]
         dialog: id,
         layers,
+        captured,
         source,
         texture: None,
         picking: false,
@@ -380,12 +383,16 @@ pub fn quick_export_selected_layers_png(app: &mut PhotocraftApp) -> Result<Value
     // Capture all sources before showing the dialog: changing selection or document while it
     // is open cannot change which layers get exported.
     let docs = exportable_layers(&st.doc, &layers)?;
+    let protected_source = st.protected_import_source.clone();
     let suggested = format!("{}.png", export_name(&st.doc.name));
     app.pick_export(&suggested, move |app, path| {
         if !path.to_ascii_lowercase().ends_with(".png") {
             return Err("Quick Export as PNG writes .png files".into());
         }
         let paths = batch_paths(&path, &docs);
+        for path in &paths {
+            check_export_destination(protected_source.as_deref(), path)?;
+        }
         let mut exported = Vec::new();
         for (doc, path) in docs.iter().zip(paths) {
             crate::app::ensure_memory_to_save(doc, &path)?;
@@ -464,8 +471,22 @@ fn source_document_from(doc: Arc<Document>, f: &Map<String, Value>) -> Result<Ar
     }
 }
 
-fn source_document(app: &PhotocraftApp, f: &Map<String, Value>) -> Result<Arc<Document>, String> {
-    source_document_from(app.session.active().ok_or("no document")?.doc.clone(), f)
+/// Source and write protection travel with the document across a deferred picker answer.
+struct CapturedExport {
+    document: Arc<Document>,
+    profile: Arc<Profile>,
+    protected_source: Option<String>,
+}
+
+impl CapturedExport {
+    fn active(app: &PhotocraftApp) -> Result<Self, String> {
+        let state = app.session.active().ok_or("no document")?;
+        Ok(Self { document: state.doc.clone(), profile: effective_source_profile(app, &state.doc), protected_source: state.protected_import_source.clone() })
+    }
+
+    fn document(&self, fields: &Map<String, Value>) -> Result<Arc<Document>, String> {
+        source_document_from(self.document.clone(), fields)
+    }
 }
 
 fn effective_source_profile(app: &PhotocraftApp, doc: &Document) -> Arc<Profile> {
@@ -1017,13 +1038,17 @@ fn finish(app: &mut PhotocraftApp, ctx: &egui::Context, open: &ExportOpen, resul
     let mut f = settings_from(&result.options, open.source);
     let rows = result.options.scale_rows();
     let exported = if open.layers.len() > 1 {
-        export_layers(app, &f, &open.layers, &path)?
+        export_layers(app, &open.captured, &f, &open.layers, &path)?
     } else {
         if let Some(layer) = open.layers.first() {
             f.insert("__layer".into(), json!(layer.0));
         }
         // With more than one output the path is the folder the files go into.
-        if result.outputs.len() > 1 { export_sizes(app, &f, &rows, &path)? } else { export_to(app, &scaled_fields(&f, rows[0].size.factor()), &path)? }
+        if result.outputs.len() > 1 {
+            export_sizes(app, &open.captured, &f, &rows, &path)?
+        } else {
+            export_to(app, &open.captured, &scaled_fields(&f, rows[0].size.factor()), &path)?
+        }
     };
     result.remember(ctx);
     Ok(exported)
@@ -1032,10 +1057,9 @@ fn finish(app: &mut PhotocraftApp, ctx: &egui::Context, open: &ExportOpen, resul
 /// Exports the dialog's source (the document, or the layer `__layer`) to `path` with the settings
 /// `f`. A whole-document export is kept by an action being recorded, with its destination and
 /// settings (#7207); a layer's isn't, since its layer is this document's.
-fn export_to(app: &mut PhotocraftApp, f: &Map<String, Value>, path: &str) -> Result<Value, String> {
-    let doc = source_document(app, f)?;
-    let source_profile = effective_source_profile(app, &doc);
-    let r = write_export(app, &doc, f, path, &source_profile)?;
+fn export_to(app: &mut PhotocraftApp, source: &CapturedExport, f: &Map<String, Value>, path: &str) -> Result<Value, String> {
+    let doc = source.document(f)?;
+    let r = write_export(app, source.protected_source.as_deref(), &doc, f, path, &source.profile)?;
     if !f.contains_key("__layer") {
         let mut step = settings_of(f);
         step.insert("path".into(), json!(path));
@@ -1049,10 +1073,11 @@ fn export_to(app: &mut PhotocraftApp, f: &Map<String, Value>, path: &str) -> Res
 /// Asks where to save, then [`export_to`]s: Quick Export as PNG's way of exporting without the dialog.
 /// A layer's name may hold characters a file name can't (#14810): `a/b:c*?` suggests `a_b_c__`.
 fn pick_and_export(app: &mut PhotocraftApp, f: Map<String, Value>) -> Result<Value, String> {
-    let doc = source_document(app, &f)?;
+    let source = CapturedExport::active(app)?;
+    let doc = source.document(&f)?;
     let stem = if f.contains_key("__layer") { layer_export_name(&stem_of(&doc.name)) } else { stem_of(&doc.name) };
     let suggested = format!("{stem}.{}", s_fmt(&f));
-    app.pick_export(&suggested, move |app, path| export_to(app, &f, &path))
+    app.pick_export(&suggested, move |app, path| export_to(app, &source, &f, &path))
 }
 
 /// The dialog settings `f` with the export size multiplied by `factor` (a Scale All row).
@@ -1092,12 +1117,14 @@ fn batch_file_names(stem: &str, ext: &str, rows: &[ScaleRow]) -> Result<Vec<Stri
 /// row's multiple of the export size. Only a folder was chosen, so nothing already there is replaced:
 /// any entry at a target path (a file, or a link the writer would follow) stops the whole batch before
 /// the first write.
-fn export_sizes(app: &mut PhotocraftApp, f: &Map<String, Value>, rows: &[ScaleRow], dir: &str) -> Result<Value, String> {
-    let doc = source_document(app, f)?;
-    let source_profile = effective_source_profile(app, &doc);
+fn export_sizes(app: &mut PhotocraftApp, source: &CapturedExport, f: &Map<String, Value>, rows: &[ScaleRow], dir: &str) -> Result<Value, String> {
+    let doc = source.document(f)?;
     let stem = stem_of(&doc.name);
     let stem = export_name(&if f.contains_key("__layer") { layer_export_name(&stem) } else { stem });
     let names = batch_file_names(&stem, &s_fmt(f), rows)?;
+    for name in &names {
+        check_export_destination(source.protected_source.as_deref(), &std::path::Path::new(dir).join(name).to_string_lossy())?;
+    }
     #[cfg(not(target_arch = "wasm32"))]
     for name in &names {
         let path = std::path::Path::new(dir).join(name);
@@ -1115,7 +1142,7 @@ fn export_sizes(app: &mut PhotocraftApp, f: &Map<String, Value>, rows: &[ScaleRo
     let mut exported = Vec::new();
     for (row, name) in rows.iter().zip(&names) {
         let path = std::path::Path::new(dir).join(name).to_string_lossy().into_owned();
-        exported.push(write_export(app, &doc, &scaled_fields(f, row.size.factor()), &path, &source_profile)?);
+        exported.push(write_export(app, source.protected_source.as_deref(), &doc, &scaled_fields(f, row.size.factor()), &path, &source.profile)?);
     }
     let template = "Exported {n} files";
     app.ui.status = crate::i18n::fmt(tl!(template), &[("n", &exported.len().to_string())]);
@@ -1124,7 +1151,22 @@ fn export_sizes(app: &mut PhotocraftApp, f: &Map<String, Value>, rows: &[ScaleRo
 }
 
 /// Exports `doc` to `path` with the dialog settings `f` (Export As, and its replayed action step).
-fn write_export(app: &mut PhotocraftApp, doc: &Document, f: &Map<String, Value>, path: &str, source_profile: &Profile) -> Result<Value, String> {
+fn check_export_destination(protected_source: Option<&str>, path: &str) -> Result<(), String> {
+    if protected_source.is_some_and(|source| photocraft_engine::file_cmds::same_file(source, path)) {
+        return Err("Export cannot replace the import-only source. Choose another file.".into());
+    }
+    Ok(())
+}
+
+fn write_export(
+    app: &mut PhotocraftApp,
+    protected_source: Option<&str>,
+    doc: &Document,
+    f: &Map<String, Value>,
+    path: &str,
+    source_profile: &Profile,
+) -> Result<Value, String> {
+    check_export_destination(protected_source, path)?;
     let out = export_document(doc, f, None, source_profile)?;
     crate::app::ensure_memory_to_save(&out, path)?;
     let export = app.services.export.as_ref().ok_or("no exporter configured")?;
@@ -1153,9 +1195,8 @@ pub(crate) fn replay(app: &mut PhotocraftApp, params: &Value) -> Result<Value, S
     if let Some((key, v)) = f.iter().find(|(k, v)| !valid_setting(k, v)) {
         return Err(format!("Export As: `{key}` can't be {v}"));
     }
-    let doc = app.session.active().ok_or("no document")?.doc.clone();
-    let source_profile = effective_source_profile(app, &doc);
-    write_export(app, &doc, &f, path, &source_profile)
+    let source = CapturedExport::active(app)?;
+    write_export(app, source.protected_source.as_deref(), &source.document, &f, path, &source.profile)
 }
 
 /// Several layers, each exported with the dialog's settings `f`. Empty, adjustment and off-canvas
@@ -1163,13 +1204,11 @@ pub(crate) fn replay(app: &mut PhotocraftApp, params: &Value) -> Result<Value, S
 /// asked for, and each layer is written there as `<layer name>.<ext>`, replacing a file of that
 /// name (#14808). One file is written at `path`; the web downloads each file, the first under
 /// `path` and the others named as Quick Export names a selection's files.
-fn export_layers(app: &mut PhotocraftApp, f: &Map<String, Value>, ids: &[LayerId], path: &str) -> Result<Value, String> {
-    let st = app.session.active().ok_or("no document")?;
-    let source_profile = effective_source_profile(app, &st.doc);
+fn export_layers(app: &mut PhotocraftApp, source: &CapturedExport, f: &Map<String, Value>, ids: &[LayerId], path: &str) -> Result<Value, String> {
     if ids.is_empty() {
         return Err("no selected layers".into());
     }
-    let docs = exportable_layers(&st.doc, ids)?;
+    let docs = exportable_layers(&source.document, ids)?;
     let settings = settings(f);
     let folder = docs.len() > 1 && !cfg!(target_arch = "wasm32");
     let paths: Vec<String> = if folder {
@@ -1177,13 +1216,16 @@ fn export_layers(app: &mut PhotocraftApp, f: &Map<String, Value>, ids: &[LayerId
     } else {
         batch_paths(path, &docs)
     };
+    for path in &paths {
+        check_export_destination(source.protected_source.as_deref(), path)?;
+    }
     let mut exported = Vec::new();
     for (doc, path) in docs.iter().zip(paths) {
         // Only a folder was chosen, so a link where a file goes is removed rather than written through.
         if folder {
             replace_link(std::path::Path::new(&path))?;
         }
-        exported.push(write_layer_file(app, doc, f, &settings, &source_profile, &path)?);
+        exported.push(write_layer_file(app, doc, f, &settings, &source.profile, &path)?);
     }
     let template = "Exported {n} files";
     app.ui.status = crate::i18n::fmt(tl!(template), &[("n", &exported.len().to_string())]);
