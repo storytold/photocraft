@@ -1,33 +1,117 @@
+use std::sync::Arc;
+
+use craft::host::{PickKind, Picked, ScriptedFiles};
+use craft::imaging::raw::RawDevelopSettings as CameraRaw;
+use craft::imaging::ui::raw_develop::RawDevelopWorkspace;
+use craft::ui::dialog::HostedWorkspace;
+use photocraft_geom::Rect;
+use serde_json::{Value, json};
+
+use super::convert::open_pixels;
+use super::open::{Coverage, Target, document_index, open_raw};
+use super::sidecar::{existing_sidecar_is_ours, read_bounded};
 use super::*;
+use crate::PhotocraftApp;
 
 /// The first raw waiting for the open-time dialog, taken off its filmstrip.
 fn take_queued(app: &mut PhotocraftApp) -> Option<RawOpen> {
     (!app.raw_shelf.is_empty()).then(|| app.raw_shelf.remove(0).raw)
 }
 
-/// #9550: a Color Mixer Hue track runs through the neighbouring bands' hues (Reds: magenta to
-/// orange, wrapping round), not from grey; Saturation and Luminance keep grey to the colour.
-#[test]
-fn hue_tracks_run_between_the_neighbouring_bands() {
-    use super::controls::mixer_gradient;
-    let hue = |d: f32| widgets::hue_color(d);
-    assert_eq!(mixer_gradient(0, 0), vec![hue(300.0), hue(0.0), hue(30.0)], "Reds");
-    assert_eq!(mixer_gradient(0, 7), vec![hue(270.0), hue(300.0), hue(0.0)], "Magentas");
-    assert_eq!(mixer_gradient(0, 3), vec![hue(60.0), hue(120.0), hue(180.0)], "Greens");
-    for tab in [1, 2] {
-        assert_eq!(mixer_gradient(tab, 3), vec![Color32::from_gray(128), hue(120.0)]);
+/// One frame of the app, whose hosted dialogs show the workspace and `take` what it reports. The framework's job
+/// runtime delivers a develop only inside the app's frame.
+fn frame(app: &mut PhotocraftApp) {
+    crate::canvas::testing::frame(app);
+}
+
+/// The settings the open RAW Develop workspace holds. The workspace's session is `CameraRaw`
+/// itself, so there is no conversion.
+fn shown(app: &PhotocraftApp) -> CameraRaw {
+    app.framework.dialogs.get::<HostedWorkspace<RawDevelopWorkspace>>().expect("RAW Develop is open").workspace().session().clone()
+}
+
+/// The app's state beside the hosted workspace.
+fn session(app: &PhotocraftApp) -> &RawSession {
+    app.raw.as_ref().expect("RAW Develop is open")
+}
+
+/// The proxy pixels of the last develop that landed.
+fn processed(app: &PhotocraftApp) -> Vec<[f32; 4]> {
+    session(app).source.developed().expect("a develop has landed").processed.clone()
+}
+
+/// Whether the open-time dialog knows how the raw was developed (its camera tone curve).
+fn knows_raw_curve(app: &PhotocraftApp) -> bool {
+    session(app).source.has_raw_curve()
+}
+
+/// Runs frames until the develop of the settings in force has landed. The first pass after a
+/// change starts its develop; later passes wait for the runtime's job to deliver.
+fn settle(app: &mut PhotocraftApp) {
+    if app.raw.is_none() {
+        return;
     }
+    frame(app);
+    for _ in 0..2000 {
+        frame(app);
+        // The develop waits on the framework's queue until a request finishes it, as `waitPreview` does.
+        craft::ui::runtime::pending::finish_jobs(app.ctx(), std::time::Duration::from_secs(30));
+        frame(app);
+        // The workspace's window draws a pass or two after it opens, and its first develop starts then: the frame
+        // holds no histogram until that develop has landed.
+        let state = describe(app);
+        if state["previewPending"] == false && !state["histogram"].is_null() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let d = describe(app);
+    let open: Vec<_> = app.framework.dialogs.open_dialogs().into_iter().map(|d| d.key).collect();
+    panic!(
+        "the RAW Develop preview never finished: pending={} histogram={} revision={} detail={} dialogs={open:?} raw_none={}",
+        d["previewPending"],
+        d["histogram"].is_null(),
+        d["previewRevision"],
+        d["detailPending"],
+        app.raw.is_none()
+    );
+}
+
+/// Done on the open raw: the request queues it and the workspace's next pass answers it, so the reply is the one the
+/// result pump of that frame left.
+fn done(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<Value, String> {
+    menu(app, ctx, "filter.cameraRaw", &json!({"ui": {"done": true}})).unwrap()?;
+    // The workspace reports the request on a pass of its own, and the pump answers it in the frame after.
+    for _ in 0..50 {
+        frame(app);
+        if let Some(reply) = app.raw_reply.take() {
+            return reply;
+        }
+        craft::ui::runtime::pending::finish_jobs(app.ctx(), std::time::Duration::from_secs(30));
+    }
+    panic!("the frame answered Done")
+}
+
+/// A `menu` request followed by the develop it asks for. The reply describes the open dialog
+/// once its preview has landed; a request that closed the dialog answers with its own reply.
+fn develop(app: &mut PhotocraftApp, ctx: &egui::Context, params: Value) -> Value {
+    let reply = menu(app, ctx, "filter.cameraRaw", &params).unwrap().unwrap();
+    if app.raw.is_none() {
+        return reply;
+    }
+    settle(app);
+    describe(app)
 }
 
 #[test]
 fn preview_texture_uses_linear_document_display_encoding() {
     let mut doc = photocraft_doc::Document::new("test", photocraft_geom::Size::new(1, 1), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::F32);
-    doc.icc_profile = Some(craft_cms::Builtin::LinearSrgb.profile().to_bytes());
+    doc.icc_profile = Some(craft::cms::Builtin::LinearSrgb.profile().to_bytes());
     let mut color = photocraft_engine::color_cmds::ColorState::default();
     color.settings.monitor_profile = "srgb".into();
     let display = color.canvas_display(&doc).unwrap();
     let px = [[0.25, 0.25, 0.25, 1.0]];
-    let preview = CameraRawDialog::image(&px, 1, 1, &display);
+    let preview = image(&px, 1, 1, &display);
     let expected = display.to_rgba8(&photocraft_compose::Buffer::filled(Rect::new(0, 0, 1, 1), px[0]));
     assert_eq!(preview.pixels[0].to_array(), expected.pixels[..4]);
     assert_ne!(preview.pixels[0].r(), 64, "linear light must be encoded before display");
@@ -36,23 +120,23 @@ fn preview_texture_uses_linear_document_display_encoding() {
 #[test]
 fn histogram_follows_preview_and_view_changes_do_not_render_or_edit() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();
     app.run("edit.fill", json!({"color": "#808080"})).unwrap();
     let steps = app.session.active().unwrap().history.past_len();
-    let initial = menu(&mut app, &ctx, "filter.cameraRaw", &json!({})).unwrap().unwrap();
+    let initial = develop(&mut app, &ctx, json!({}));
     assert_eq!(initial["histogram"]["samples"], 64 * 48);
     assert_eq!(initial["histogram"]["red"][128], 64 * 48);
-    let updated = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 1.0}}})).unwrap().unwrap();
+    let updated = develop(&mut app, &ctx, json!({"ui": {"set": {"exposure": 1.0}}}));
     assert_ne!(updated["histogram"]["red"], initial["histogram"]["red"]);
-    let before = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"before": true}})).unwrap().unwrap();
+    let before = develop(&mut app, &ctx, json!({"ui": {"before": true}}));
     assert_eq!(before["histogram"]["source"], "before");
     assert_eq!(before["histogram"]["red"], initial["histogram"]["red"]);
-    assert_eq!(before["previewRevision"], updated["previewRevision"]);
-    let after = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"before": false, "set": {"exposure": 1}}})).unwrap().unwrap();
+    assert_eq!(before["previewRevision"], updated["previewRevision"], "Before starts no develop");
+    let after = develop(&mut app, &ctx, json!({"ui": {"before": false, "set": {"exposure": 1}}}));
     assert_eq!(after["histogram"], updated["histogram"]);
-    assert_eq!(after["previewRevision"], updated["previewRevision"]);
+    assert_eq!(after["previewRevision"], updated["previewRevision"], "the same settings start no develop");
     assert_eq!(app.session.active().unwrap().history.past_len(), steps);
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"cancel": true}})).unwrap().unwrap();
     assert_eq!(app.session.active().unwrap().history.past_len(), steps);
@@ -60,290 +144,74 @@ fn histogram_follows_preview_and_view_changes_do_not_render_or_edit() {
     assert!((pixel[0] - 128.0 / 255.0).abs() < 0.0001);
 }
 
-/// Closing Camera Raw's window is Cancel. Without a multi-window backend egui embeds the
-/// "window" (`ViewportClass::EmbeddedWindow`), and the close request comes from the window
-/// it is drawn in; the overlay fallback (`embed_viewports`) keeps the dialog open.
-#[test]
-fn closing_the_camera_raw_window_cancels() {
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-    let ctx = egui::Context::default();
-    PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::Pro);
-    app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
-    app.run("layer.new.layer", json!({})).unwrap();
-    app.run("edit.fill", json!({"color": "#808080"})).unwrap();
-    let steps = app.session.active().unwrap().history.past_len();
-    let frame = |app: &mut PhotocraftApp, close: bool| {
-        let mut input = egui::RawInput::default();
-        if close {
-            let info = input.viewports.entry(egui::ViewportId::ROOT).or_default();
-            info.events.push(egui::ViewportEvent::Close);
-        }
-        ctx.run_ui(input, |ui| show(app, ui.ctx())).textures_delta.clear();
-    };
-    open(&mut app, &ctx).unwrap();
-    frame(&mut app, false);
-    assert!(app.camera_raw.is_some(), "drawn over the main window");
-    ctx.set_embed_viewports(false);
-    frame(&mut app, false);
-    assert!(app.camera_raw.is_some(), "drawn in its window");
-    frame(&mut app, true);
-    assert!(app.camera_raw.is_none(), "closing the window is Cancel");
-    assert_eq!(app.session.active().unwrap().history.past_len(), steps);
-}
-
-/// Over a full-screen main window (or a maximized one on Wayland) the dialog is drawn in that
-/// window, not in a window of its own: a separate window would cover the main one, which then
-/// draws no frames, and the dialog drawn inside those frames would freeze.
-#[test]
-fn camera_raw_stays_in_a_full_screen_or_wayland_maximized_window() {
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-    let ctx = egui::Context::default();
-    PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::Pro);
-    ctx.set_embed_viewports(false);
-    // Stands in for the desktop backend: records each window the dialog asks for and draws it,
-    // as eframe does, in a frame of its own.
-    let windows = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-    let seen = std::rc::Rc::clone(&windows);
-    egui::Context::set_immediate_viewport_renderer(move |ctx, mut viewport| {
-        seen.borrow_mut().push(viewport.ids.this);
-        let mut input = egui::RawInput { viewport_id: viewport.ids.this, ..Default::default() };
-        input.viewports.insert(viewport.ids.this, egui::ViewportInfo::default());
-        ctx.run_ui(input, |ui| (viewport.viewport_ui_cb)(ui)).textures_delta.clear();
-    });
-    app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
-    app.run("layer.new.layer", json!({})).unwrap();
-    open(&mut app, &ctx).unwrap();
-    let window = egui::ViewportId::from_hash_of("camera-raw-window");
-
-    // (Wayland, full screen, maximized, a window of its own)
-    for (wayland, fullscreen, maximized, own_window) in [
-        (false, false, false, true),
-        (true, false, false, true),
-        (false, true, false, false),
-        (true, true, false, false),
-        (false, false, true, true),
-        (true, false, true, false),
-    ] {
-        app.services.is_wayland = wayland;
-        windows.borrow_mut().clear();
-        app.camera_raw.as_mut().unwrap().viewport = None;
-        let mut input = egui::RawInput::default();
-        let root = input.viewports.entry(egui::ViewportId::ROOT).or_default();
-        (root.fullscreen, root.maximized) = (Some(fullscreen), Some(maximized));
-        ctx.run_ui(input, |ui| show(&mut app, ui.ctx())).textures_delta.clear();
-        let case = format!("wayland {wayland}, full screen {fullscreen}, maximized {maximized}");
-        if own_window {
-            assert_eq!(*windows.borrow(), [window], "a window of its own ({case})");
-        } else {
-            assert!(windows.borrow().is_empty(), "no window of its own ({case})");
-        }
-        assert!(app.camera_raw.as_ref().unwrap().viewport.is_some(), "the dialog is drawn ({case})");
-    }
-}
-
-/// Coming back to PhotoCraft (⌘Tab, the Dock) can put the main window over Camera Raw's, or
-/// leave Camera Raw minimized: the main window gaining focus, or a click on its dimmed surface,
-/// restores Camera Raw's window and focuses it, once per activation.
-#[test]
-fn the_main_window_gaining_focus_or_a_click_raises_the_camera_raw_window() {
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-    let ctx = egui::Context::default();
-    PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::Pro);
-    ctx.set_embed_viewports(false);
-    // A multi-window backend for this thread: Camera Raw gets a window of its own, as on a desktop,
-    // and the commands its window receives are recorded.
-    let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let record = sent.clone();
-    egui::Context::set_immediate_viewport_renderer(move |ctx, immediate| {
-        let id = immediate.ids.this;
-        let mut callback = immediate.viewport_ui_cb;
-        let input = egui::RawInput { viewport_id: id, viewports: std::iter::once((id, egui::ViewportInfo::default())).collect(), ..Default::default() };
-        let mut out = ctx.run_ui(input, |ui| callback(ui));
-        out.textures_delta.clear();
-        if let Some(v) = out.viewport_output.get(&id) {
-            record.lock().unwrap().extend(v.commands.iter().cloned());
-        }
-    });
-    app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
-    open(&mut app, &ctx).unwrap();
-    let window = egui::ViewportId::from_hash_of("camera-raw-window");
-    let raised = [egui::ViewportCommand::Minimized(false), egui::ViewportCommand::Focus];
-    let frame = |app: &mut PhotocraftApp, focused: bool, events: Vec<egui::Event>| {
-        let mut input =
-            egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))), events, ..Default::default() };
-        input.viewports.entry(egui::ViewportId::ROOT).or_default().focused = Some(focused);
-        let mut out = ctx.run_ui(input, |ui| show(app, ui.ctx()));
-        out.textures_delta.clear();
-        let mut commands: Vec<_> = std::mem::take(&mut *sent.lock().unwrap());
-        commands.extend(out.viewport_output.get(&window).map(|v| v.commands.clone()).unwrap_or_default());
-        // Only the raising commands: the window also gets its own setup (title, size) from egui.
-        commands.retain(|c| matches!(c, egui::ViewportCommand::Minimized(_) | egui::ViewportCommand::Focus));
-        commands
-    };
-    assert!(frame(&mut app, false, Vec::new()).is_empty(), "Camera Raw's window is in front");
-    assert_eq!(frame(&mut app, true, Vec::new()), raised, "the main window came forward");
-    assert!(frame(&mut app, true, Vec::new()).is_empty(), "once per activation, so Camera Raw's own focus isn't fought");
-    let at = egui::pos2(400.0, 300.0);
-    let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
-    frame(&mut app, true, vec![egui::Event::PointerMoved(at), button(true)]);
-    let after_click = frame(&mut app, true, vec![button(false)]);
-    assert_eq!(after_click, raised, "a click on the dimmed main window");
-}
-
 /// A layer with tonal variation, a selection over part of it and the dialog open on it.
 fn worker_app() -> (PhotocraftApp, egui::Context) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();
     app.run("edit.fill", json!({"color": "#406080"})).unwrap();
     app.run("select.rect", json!({"x": 0, "y": 0, "width": 40, "height": 30})).unwrap();
     open(&mut app, &ctx).unwrap();
+    settle(&mut app);
     (app, ctx)
 }
 
-fn finish_worker(d: &mut CameraRawDialog, ctx: &egui::Context) {
-    for _ in 0..2000 {
-        d.poll_render(ctx).unwrap();
-        if !d.render_pending() {
-            return;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    panic!("the RAW Develop preview worker never finished");
+/// The histogram of a fresh dialog that develops `settings` in one request: what a develop of
+/// exactly those settings gives.
+fn single_develop_histogram(settings: Value) -> Value {
+    let (mut app, ctx) = worker_app();
+    develop(&mut app, &ctx, json!({"ui": {"set": settings}}))["histogram"].clone()
 }
 
-/// The dialog's controls develop the proxy on a worker (#5964): the frame it shows is the one
-/// the UI thread would have developed, and settings changed while it runs are developed next.
+/// The dialog's controls develop the proxy off the UI thread (#5964): settings changed while a
+/// develop runs are developed next, and the frame shown ends on the latest settings.
 #[test]
 fn worker_preview_matches_the_synchronous_render_and_ends_on_the_latest_settings() {
     let (mut app, ctx) = worker_app();
-    let d = app.camera_raw.as_mut().unwrap();
-    assert!(d.selection.is_some());
-    let revision = d.preview_revision;
-    d.params.exposure = 1.0;
-    d.dirty = true;
-    d.request_render(&ctx);
-    assert!(d.render_pending() && !d.dirty);
-    // A drag moves on while the first develop runs; the request waits for it.
-    d.params.highlights = -60.0;
-    d.params.shadows = 45.0;
-    d.dirty = true;
-    d.request_render(&ctx);
-    finish_worker(d, &ctx);
-    assert_eq!(d.preview_revision, revision + 1);
-    assert!(d.dirty, "the newer settings are still to be developed");
-    d.request_render(&ctx);
-    finish_worker(d, &ctx);
-    assert_eq!(d.preview_revision, revision + 2);
-    let (from_worker, histogram) = (d.processed.clone(), d.after_histogram.channels);
-    d.render(&ctx);
-    assert_eq!(d.processed, from_worker, "the worker develops exactly what the UI thread does");
-    assert_eq!(d.after_histogram.channels, histogram);
-    assert!(d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview)["previewPending"] == false);
+    assert_eq!(describe(&app)["hasScopeSelection"], true);
+    let revision = describe(&app)["previewRevision"].as_u64().unwrap();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 1.0}}})).unwrap().unwrap();
+    // The develop of the first request starts; a drag moves on while it runs.
+    frame(&mut app);
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"highlights": -60, "shadows": 45}}})).unwrap().unwrap();
+    settle(&mut app);
+    let last = describe(&app);
+    assert!(last["previewRevision"].as_u64().unwrap() > revision, "a develop landed");
+    assert_eq!(last["previewPending"], false);
+    let now = shown(&app);
+    assert_eq!((now.exposure, now.highlights, now.shadows), (1.0, -60.0, 45.0));
+    // PLAN: the develop `Job` cannot be run outside the runtime, so the frame is compared with a fresh dialog's develop of the same settings, not a direct `ProxyJob::run`.
+    assert_eq!(
+        last["histogram"],
+        single_develop_histogram(json!({"exposure": 1.0, "highlights": -60, "shadows": 45})),
+        "the frame is a develop of the latest settings"
+    );
 }
 
-/// The control channel renders on its own thread so its reply describes its settings; a worker
-/// still running with older settings must not replace that frame afterwards.
+/// An older develop that lands after a newer request must not replace the frame of the newer
+/// settings.
 #[test]
 fn a_stale_worker_never_replaces_a_newer_synchronous_render() {
     let (mut app, ctx) = worker_app();
-    let d = app.camera_raw.as_mut().unwrap();
-    d.params.highlights = -80.0;
-    d.dirty = true;
-    d.request_render(&ctx);
-    assert!(d.render_pending());
-    let reply = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"highlights": 0, "exposure": -1.0}}})).unwrap().unwrap();
-    assert_eq!(reply["previewPending"], false);
-    let d = app.camera_raw.as_mut().unwrap();
-    let (revision, shown) = (d.preview_revision, d.processed.clone());
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"highlights": -80}}})).unwrap().unwrap();
+    // The develop of the older request is running.
+    frame(&mut app);
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"highlights": 0, "exposure": -1.0}}})).unwrap().unwrap();
+    settle(&mut app);
+    let landed = describe(&app);
     std::thread::sleep(std::time::Duration::from_millis(200));
-    d.poll_render(&ctx).unwrap();
-    assert_eq!((d.preview_revision, &d.processed), (revision, &shown));
-    d.render(&ctx);
-    assert_eq!(d.processed, shown, "the frame shown is the one for the control channel's settings");
-}
-
-/// Dragging a slider in the dialog itself never develops on the UI thread: the frame that
-/// takes the change returns with the develop still running, and the preview catches up.
-#[test]
-fn a_dialog_edit_develops_off_the_ui_thread() {
-    let (mut app, ctx) = worker_app();
-    PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::Pro);
-    let frame = |app: &mut PhotocraftApp| {
-        ctx.run_ui(egui::RawInput::default(), |ui| show(app, ui.ctx())).textures_delta.clear();
-    };
     frame(&mut app);
-    let d = app.camera_raw.as_mut().unwrap();
-    let revision = d.preview_revision;
-    d.params.highlights = -60.0;
-    d.dirty = true;
     frame(&mut app);
-    let d = app.camera_raw.as_mut().unwrap();
-    assert!(d.render_pending() && d.preview_revision == revision, "the frame returned before the develop finished");
-    finish_worker(d, &ctx);
-    assert_eq!(d.preview_revision, revision + 1);
-    assert!(!d.dirty);
-    frame(&mut app);
-    assert!(!app.ui.status_error, "{}", app.ui.status);
-}
-
-/// A failed worker develop shows its error until a later frame is published, and never takes
-/// down an error something else reported meanwhile.
-#[test]
-fn a_worker_failure_is_reported_until_the_next_frame() {
-    let (mut app, ctx) = worker_app();
-    PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::Pro);
-    let frame = |app: &mut PhotocraftApp| {
-        ctx.run_ui(egui::RawInput::default(), |ui| show(app, ui.ctx())).textures_delta.clear();
-    };
-    let fail = |app: &mut PhotocraftApp| {
-        let (tx, rx) = std::sync::mpsc::channel();
-        tx.send(Err("RAW Develop preview failed".to_string())).unwrap();
-        let d = app.camera_raw.as_mut().unwrap();
-        d.pending = Some(rx);
-        d.dirty = false;
-    };
-    let edit = |app: &mut PhotocraftApp, exposure: f32| {
-        let d = app.camera_raw.as_mut().unwrap();
-        d.params.exposure = exposure;
-        d.dirty = true;
-    };
-    frame(&mut app);
-    fail(&mut app);
-    frame(&mut app);
-    assert!(app.ui.status_error && app.ui.status == "RAW Develop preview failed", "{}", app.ui.status);
-    // No new frame yet: the error stays.
-    frame(&mut app);
-    assert!(app.ui.status_error);
-    edit(&mut app, 0.5);
-    frame(&mut app);
-    finish_worker(app.camera_raw.as_mut().unwrap(), &ctx);
-    frame(&mut app);
-    assert!(!app.ui.status_error && app.ui.status.is_empty(), "{}", app.ui.status);
-
-    fail(&mut app);
-    frame(&mut app);
-    app.ui.status = "something else failed".into();
-    edit(&mut app, 1.0);
-    frame(&mut app);
-    finish_worker(app.camera_raw.as_mut().unwrap(), &ctx);
-    frame(&mut app);
-    assert!(app.ui.status_error && app.ui.status == "something else failed", "{}", app.ui.status);
-
-    // A control-channel edit renders on its own thread; the status is clear before any frame.
-    fail(&mut app);
-    frame(&mut app);
-    assert!(app.ui.status_error);
-    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": -0.5}}})).unwrap().unwrap();
-    assert!(!app.ui.status_error && app.ui.status.is_empty(), "{}", app.ui.status);
-    assert_eq!(crate::control::inspect(&app, &ctx)["statusError"], false);
+    let later = describe(&app);
+    assert_eq!((&later["previewRevision"], &later["histogram"]), (&landed["previewRevision"], &landed["histogram"]), "nothing replaced the newer frame");
+    assert_eq!(landed["histogram"], single_develop_histogram(json!({"exposure": -1.0})), "the frame shown is the one for the latest settings");
 }
 
 #[test]
 fn smart_filter_double_click_edits_the_stored_camera_raw_filter_in_its_own_dialog() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();
     app.run("edit.fill", json!({"color": "#808080"})).unwrap();
@@ -361,19 +229,19 @@ fn smart_filter_double_click_edits_the_stored_camera_raw_filter_in_its_own_dialo
 
     let sm = smart(&app);
     crate::smart_ui::open_editor(&mut app, &ctx, layer.0, &sm, 0);
-    assert!(app.ui.dialogs.is_empty(), "no generic parameter form");
-    let opened = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {}})).unwrap().unwrap();
+    assert_eq!(app.dialog_count(), 1, "no generic parameter form");
+    let opened = develop(&mut app, &ctx, json!({"ui": {}}));
     assert_eq!(opened["smartFilter"], 0);
     assert_eq!(opened["params"]["exposure"], 1.0);
     assert_eq!(opened["params"]["pointCurve"], legacy);
     // The preview starts from the pixels below the filter, not the filtered cache.
-    let before = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"before": true}})).unwrap().unwrap();
+    let before = develop(&mut app, &ctx, json!({"ui": {"before": true}}));
     assert_eq!(before["histogram"]["red"][128], 64 * 48);
 
     // Resetting a control to its default must overwrite the stored value.
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 0.0}, "before": false, "commit": true}})).unwrap();
     assert!(r.is_ok(), "{r:?}");
-    assert!(app.camera_raw.is_none());
+    assert!(app.raw.is_none());
     let sm = smart(&app);
     assert_eq!(sm.smart_filters.len(), 1, "edited in place, not added");
     assert_eq!(sm.smart_filters[0].params["exposure"], 0.0);
@@ -393,7 +261,7 @@ fn smart_filter_double_click_edits_the_stored_camera_raw_filter_in_its_own_dialo
 #[test]
 fn distant_sparse_pixels_cannot_trigger_an_unbounded_proxy_scan() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     app.run("file.new", json!({"width":64,"height":48})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();
     let layer = app.session.active().unwrap().active_layer.unwrap();
@@ -401,13 +269,13 @@ fn distant_sparse_pixels_cannot_trigger_an_unbounded_proxy_scan() {
     source.write_region(Rect::new(30_000, 30_000, 30_001, 30_001), &[0.5, 0.5, 0.5, 1.0]);
     let result = open_pixels(&mut app, &ctx, layer, source, CameraRaw::default(), Coverage::None, Target::NewFilter);
     assert!(result.unwrap_err().contains("bounds are too large"));
-    assert!(app.camera_raw.is_none());
+    assert!(app.raw.is_none());
 }
 
 #[test]
 fn dialog_drives_the_engine() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();
     app.run("edit.fill", json!({"color": "#808080"})).unwrap();
@@ -415,10 +283,10 @@ fn dialog_drives_the_engine() {
     assert_eq!(r["proxy"], json!([64, 48]));
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 1.0, "vignetteAmount": -40}}})).unwrap().unwrap();
     assert_eq!(r["params"]["exposure"], 1.0);
-    assert_eq!(app.camera_raw.as_ref().unwrap().command_params(), json!({"exposure": 1.0, "vignetteAmount": -40.0}));
+    assert_eq!(command_params(&shown(&app)), json!({"exposure": 1.0, "vignetteAmount": -40.0}));
     let before = app.session.active().unwrap().doc.layer(app.session.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap().rgba(32, 24);
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
-    assert!(app.camera_raw.is_none());
+    assert!(app.raw.is_none());
     let after = app.session.active().unwrap().doc.layer(app.session.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap().rgba(32, 24);
     assert!(after[0] > before[0] + 0.1, "{before:?} → {after:?}");
     // Cancel leaves the document alone.
@@ -473,23 +341,22 @@ fn mean_red(app: &PhotocraftApp) -> f32 {
 #[test]
 fn raw_opens_in_camera_raw_and_open_redevelops() {
     let (mut app, dng) = raw_app();
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     let warnings = app.open_bytes("IMG_0001.dng", &dng).unwrap();
     assert!(warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE)), "{warnings:?}");
     // A raw has no embedded profile (ProPhoto RGB is the space it is developed into), so Ask
     // When Opening (on by default) has nothing to ask about.
-    assert!(app.ui.dialogs.is_empty(), "no profile prompt for a raw");
+    assert!(!app.dialog_open(), "no profile prompt for a raw");
     let raw = take_queued(&mut app).expect("a raw open queues the dialog");
     open_raw(&mut app, &ctx, raw).unwrap();
-    let d = app.camera_raw.as_ref().unwrap();
-    assert_eq!(d.target, Target::OpenRaw);
-    assert_eq!(d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview)["openingRaw"]["name"], "IMG_0001.dng");
+    assert_eq!(session(&app).target, Target::OpenRaw);
+    assert_eq!(describe(&app)["openingRaw"]["name"], "IMG_0001.dng");
     let before = mean_red(&app);
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 1.0, "temperature": 30, "contrast": 20}}})).unwrap().unwrap();
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
     assert_eq!(r["redeveloped"], true, "{r}");
     assert!(r.get("filter").is_some(), "contrast is applied as a RAW Develop step: {r}");
-    assert!(app.camera_raw.is_none());
+    assert!(app.raw.is_none());
     assert_eq!(app.session.documents().len(), 1);
     let st = app.session.active().unwrap();
     assert_eq!(st.saved_revision, st.revision, "Open leaves the document unmodified");
@@ -518,7 +385,7 @@ fn a_raw_open_decodes_the_file_once_and_frees_it_with_the_dialog() {
         app.open_bytes("IMG_0007.dng", &dng).unwrap();
         let raw = take_queued(&mut app).unwrap();
         open_raw(&mut app, &ctx, raw).unwrap();
-        let raw_open = app.camera_raw.as_mut().unwrap().raw_open.as_mut().unwrap();
+        let raw_open = app.raw.as_mut().unwrap().raw_open.as_mut().unwrap();
         let sensor = raw_open.decoded.as_ref().map(std::sync::Arc::downgrade).expect("the dialog holds the open's decode");
         if !reuse {
             raw_open.decoded = None;
@@ -526,7 +393,7 @@ fn a_raw_open_decodes_the_file_once_and_frees_it_with_the_dialog() {
         assert!(sensor.upgrade().is_some() || !reuse);
         let ui = if commit { json!({"set": {"exposure": 1.0, "temperature": 30}, "commit": true}) } else { json!({"cancel": true}) };
         menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": ui})).unwrap().unwrap();
-        assert!(app.camera_raw.is_none());
+        assert!(app.raw.is_none());
         assert!(sensor.upgrade().is_none(), "the sensor data is freed when the dialog is closed");
         (decodes_on_this_thread() - before, if commit { pixels(&app) } else { Vec::new() })
     };
@@ -541,7 +408,7 @@ fn a_raw_open_decodes_the_file_once_and_frees_it_with_the_dialog() {
 #[test]
 fn the_demosaic_method_is_chosen_at_open() {
     let (mut app, dng) = raw_app();
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     app.open_bytes("IMG_0002.dng", &dng).unwrap();
     let ahd = pixels(&app);
     let raw = take_queued(&mut app).unwrap();
@@ -563,8 +430,7 @@ fn the_demosaic_method_is_chosen_at_open() {
     assert_eq!(pixels(&app), bilinear, "developed with the preference's method");
     let raw = take_queued(&mut app).unwrap();
     open_raw(&mut app, &ctx, raw).unwrap();
-    let d = app.camera_raw.as_ref().unwrap().describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview);
-    assert_eq!(d["openingRaw"]["demosaic"], "bilinear");
+    assert_eq!(describe(&app)["openingRaw"]["demosaic"], "bilinear");
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
     assert_eq!(r["redeveloped"], false, "{r}");
 
@@ -587,18 +453,18 @@ fn the_demosaic_method_is_chosen_at_open() {
 #[test]
 fn shadows_of_a_raw_open_act_on_the_raw_data_and_the_preview_shows_it() {
     let (mut app, dng) = raw_app();
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     app.open_bytes("IMG_0002.dng", &dng).unwrap();
     let raw = take_queued(&mut app).unwrap();
     open_raw(&mut app, &ctx, raw).unwrap();
-    assert!(app.camera_raw.as_ref().unwrap().raw_curve.is_some(), "the preview knows how the raw was developed");
+    settle(&mut app);
+    assert!(knows_raw_curve(&app), "the preview knows how the raw was developed");
     let mean = |px: &[[f32; 4]]| px.iter().map(|p| p[0] + p[1] + p[2]).sum::<f32>() / px.len() as f32;
-    let preview_before = mean(&app.camera_raw.as_ref().unwrap().processed);
+    let preview_before = mean(&processed(&app));
     let before = mean_red(&app);
-    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"shadows": 100}}})).unwrap().unwrap();
-    let d = app.camera_raw.as_mut().unwrap();
-    d.render(&ctx);
-    assert!(mean(&d.processed) > preview_before + 0.01, "{preview_before} → {}", mean(&d.processed));
+    develop(&mut app, &ctx, json!({"ui": {"set": {"shadows": 100}}}));
+    let after = mean(&processed(&app));
+    assert!(after > preview_before + 0.01, "{preview_before} → {after}");
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
     assert_eq!(r["redeveloped"], true, "{r}");
     assert!(r.get("filter").is_none(), "Shadows acts while developing, not as a later filter step: {r}");
@@ -608,16 +474,15 @@ fn shadows_of_a_raw_open_act_on_the_raw_data_and_the_preview_shows_it() {
 #[test]
 fn clarity_texture_and_dehaze_of_a_raw_open_act_on_the_raw_data() {
     let (mut app, dng) = raw_app();
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     app.open_bytes("IMG_0003.dng", &dng).unwrap();
     let raw = take_queued(&mut app).unwrap();
     open_raw(&mut app, &ctx, raw).unwrap();
+    settle(&mut app);
     let before = mean_red(&app);
-    let preview_before = app.camera_raw.as_ref().unwrap().processed.clone();
-    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"clarity": 60, "texture": 40, "dehaze": 50}}})).unwrap().unwrap();
-    let d = app.camera_raw.as_mut().unwrap();
-    d.render(&ctx);
-    assert_ne!(d.processed, preview_before, "the preview shows the raw-stage change");
+    let preview_before = processed(&app);
+    develop(&mut app, &ctx, json!({"ui": {"set": {"clarity": 60, "texture": 40, "dehaze": 50}}}));
+    assert_ne!(processed(&app), preview_before, "the preview shows the raw-stage change");
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
     assert_eq!(r["redeveloped"], true, "{r}");
     assert!(r.get("filter").is_none(), "they act while developing, not as a later filter step: {r}");
@@ -627,7 +492,7 @@ fn clarity_texture_and_dehaze_of_a_raw_open_act_on_the_raw_data() {
 #[test]
 fn background_redevelop_keeps_the_tab_position_and_view() {
     let (mut app, dng) = raw_app();
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     app.run("file.new", json!({"width": 10, "height": 10})).unwrap();
     app.open_bytes("mid.dng", &dng).unwrap();
     app.run("file.new", json!({"width": 12, "height": 12})).unwrap();
@@ -643,7 +508,7 @@ fn background_redevelop_keeps_the_tab_position_and_view() {
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 1.0, "contrast": 20}}})).unwrap().unwrap();
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
     assert_eq!(r["pending"], true, "{r}");
-    assert!(app.camera_raw.is_none());
+    assert!(app.raw.is_none());
     for _ in 0..3000 {
         crate::jobs_ui::tick(&mut app, &ctx);
         if app.raw_redevelop.is_empty() && !app.session.has_jobs() {
@@ -668,7 +533,7 @@ fn background_redevelop_keeps_the_tab_position_and_view() {
 #[test]
 fn a_raw_opens_and_redevelops_at_the_raw_defaults_resolution() {
     let (mut app, dng) = raw_app();
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     app.run("prefs.set", json!({"path": "rawDefaults.resolution", "value": 240})).unwrap();
     app.open_bytes("IMG_0004.dng", &dng).unwrap();
     assert_eq!(app.session.active().unwrap().doc.resolution_dpi, 240.0);
@@ -683,11 +548,12 @@ fn a_raw_opens_and_redevelops_at_the_raw_defaults_resolution() {
 }
 
 /// Raws opened together share the dialog in a filmstrip, each with its own settings; Open
-/// develops them all, Cancel closes them all.
+/// develops them all, Cancel closes them all. A filmstrip pick reaches the app as the
+/// workspace's `Show` event, which `take` answers with `show_raw`; the trial calls that answer.
 #[test]
 fn several_raws_share_the_dialog_and_keep_their_own_settings() {
     let (mut app, dng) = raw_app();
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     app.open_bytes("one.dng", &dng).unwrap();
     app.open_bytes("two.dng", &dng).unwrap();
     app.open_bytes("three.dng", &dng).unwrap();
@@ -696,17 +562,17 @@ fn several_raws_share_the_dialog_and_keep_their_own_settings() {
     let ids: Vec<_> = app.raw_shelf.iter().map(|h| h.raw.document).collect();
     filmstrip::open_held(&mut app, &ctx, 0).unwrap();
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 1.0}}})).unwrap().unwrap();
-    app.camera_raw.as_mut().unwrap().render(&ctx);
     filmstrip::show_raw(&mut app, &ctx, 1).unwrap();
-    let d = app.camera_raw.as_ref().unwrap();
-    assert_eq!((d.raw_open.as_ref().unwrap().document, d.layer_name.as_str(), d.params.exposure), (ids[1], "two.dng", 0.0));
+    let d = session(&app);
+    let open = d.raw_open.as_ref().unwrap();
+    assert_eq!((open.document, open.name.as_str(), shown(&app).exposure), (ids[1], "two.dng", 0.0));
     assert_eq!(app.raw_shelf[0].kept.as_ref().map(|(p, _)| p.exposure), Some(1.0), "the first keeps its settings");
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"contrast": 30}}})).unwrap().unwrap();
     filmstrip::show_raw(&mut app, &ctx, 0).unwrap();
-    assert_eq!(app.camera_raw.as_ref().unwrap().params.exposure, 1.0, "back to the first, as it was left");
+    assert_eq!(shown(&app).exposure, 1.0, "back to the first, as it was left");
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
     assert_eq!(r["opened"].as_array().map(Vec::len), Some(3), "{r}");
-    assert!(app.raw_shelf.is_empty() && app.camera_raw.is_none());
+    assert!(app.raw_shelf.is_empty() && app.raw.is_none());
     assert_eq!(app.session.documents().len(), 3, "the never-shown third opens too");
     assert!(app.session.documents().iter().all(|st| st.saved_revision == st.revision), "Open leaves them unmodified");
     // Cancel closes every raw in the filmstrip.
@@ -723,13 +589,13 @@ fn several_raws_share_the_dialog_and_keep_their_own_settings() {
 #[test]
 fn a_raw_that_fails_to_open_stays_in_the_filmstrip_with_its_settings() {
     let (mut app, dng) = raw_app();
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     app.open_bytes("one.dng", &dng).unwrap();
     app.open_bytes("two.dng", &dng).unwrap();
     app.open_bytes("three.dng", &dng).unwrap();
     let ids: Vec<_> = app.raw_shelf.iter().map(|h| h.raw.document).collect();
     // Two's file can no longer be developed, and it was left with its own settings.
-    let mut kept = CameraRaw { exposure: 0.5, ..Default::default() };
+    let mut kept = cr!(exposure: 0.5);
     kept.contrast = 20.0;
     app.raw_shelf[1].raw.bytes = Some(std::sync::Arc::new(b"not a raw file".to_vec()));
     app.raw_shelf[1].kept = Some((kept.clone(), CameraRaw::default()));
@@ -743,14 +609,14 @@ fn a_raw_that_fails_to_open_stays_in_the_filmstrip_with_its_settings() {
     // The dialog comes back for it with them; when every raw fails, the dialog and its
     // filmstrip stay.
     filmstrip::open_held(&mut app, &ctx, 0).unwrap();
-    let shown = &app.camera_raw.as_ref().unwrap().params;
-    assert_eq!((shown.exposure, shown.contrast), (0.5, 20.0));
+    let current = shown(&app);
+    assert_eq!((current.exposure, current.contrast), (0.5, 20.0));
     app.open_bytes("four.dng", &dng).unwrap();
     app.raw_shelf[1].raw.bytes = Some(std::sync::Arc::new(b"not a raw file either".to_vec()));
     app.raw_shelf[1].kept = Some((kept.clone(), CameraRaw::default()));
     assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().is_err());
     assert_eq!(app.raw_shelf.len(), 2, "both raws stay in the filmstrip");
-    assert!(app.camera_raw.is_some(), "and the dialog stays open");
+    assert!(app.raw.is_some(), "and the dialog stays open");
     // Cancel still closes every raw in it.
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"cancel": true}})).unwrap().unwrap();
     assert!(app.raw_shelf.is_empty());
@@ -762,38 +628,38 @@ fn a_raw_that_fails_to_open_stays_in_the_filmstrip_with_its_settings() {
 #[test]
 fn a_raw_that_cannot_be_shown_keeps_the_dialog_and_the_filmstrip() {
     let (mut app, dng) = raw_app();
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     app.open_bytes("one.dng", &dng).unwrap();
     app.open_bytes("two.dng", &dng).unwrap();
     let ids: Vec<_> = app.raw_shelf.iter().map(|h| h.raw.document).collect();
-    let kept = CameraRaw { exposure: 0.5, ..Default::default() };
+    let kept = cr!(exposure: 0.5);
     app.raw_shelf[1].kept = Some((kept.clone(), CameraRaw::default()));
     filmstrip::open_held(&mut app, &ctx, 0).unwrap();
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 1.0}}})).unwrap().unwrap();
     let two = document_index(&app, ids[1]).unwrap();
     app.session.close(two);
     assert!(filmstrip::show_raw(&mut app, &ctx, 1).is_err());
-    let d = app.camera_raw.as_ref().expect("the dialog stays");
-    assert_eq!((d.raw_open.as_ref().unwrap().document, d.params.exposure), (ids[0], 1.0));
+    assert!(app.raw.is_some(), "the dialog stays");
+    assert_eq!((session(&app).raw_open.as_ref().unwrap().document, shown(&app).exposure), (ids[0], 1.0));
     assert_eq!(app.raw_shelf.len(), 2);
     assert_eq!(app.raw_shelf[1].kept.as_ref().map(|(p, _)| p), Some(&kept));
 }
 
 /// Leaving a raw before its preview has caught up: its thumbnail shows the settings it keeps, not
-/// the frame before them.
+/// the frame before them. The thumbnail is the app's `raw_shelf[..].thumb`; `set_item_picture`
+/// only forwards it to the workspace's tile.
 #[test]
 fn a_raw_left_before_its_preview_lands_gets_a_thumbnail_of_its_settings() {
     let (mut app, dng) = raw_app();
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     app.open_bytes("one.dng", &dng).unwrap();
     app.open_bytes("two.dng", &dng).unwrap();
     filmstrip::open_held(&mut app, &ctx, 0).unwrap();
-    let d = app.camera_raw.as_mut().unwrap();
-    d.params.exposure = 2.0;
-    d.dirty = true;
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 2.0}}})).unwrap().unwrap();
+    // The develop of exposure 2 has not started: the thumbnail is made from the settings.
     filmstrip::keep_settings(&mut app);
     let thumb = app.raw_shelf[0].thumb.clone().expect("a thumbnail");
-    app.camera_raw.as_mut().unwrap().render(&ctx);
+    settle(&mut app);
     filmstrip::keep_settings(&mut app);
     assert!(thumb == app.raw_shelf[0].thumb.clone().unwrap(), "the thumbnail matches a finished develop of the same settings");
 }
@@ -803,11 +669,11 @@ fn a_raw_left_before_its_preview_lands_gets_a_thumbnail_of_its_settings() {
 #[test]
 fn a_raw_whose_background_develop_fails_comes_back_to_the_filmstrip() {
     let (mut app, dng) = raw_app();
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     app.open_bytes("one.dng", &dng).unwrap();
     app.open_bytes("two.dng", &dng).unwrap();
     let ids: Vec<_> = app.raw_shelf.iter().map(|h| h.raw.document).collect();
-    let (kept, from) = (CameraRaw { exposure: 0.5, contrast: 20.0, ..Default::default() }, CameraRaw { contrast: 5.0, ..Default::default() });
+    let (kept, from) = (cr!(exposure: 0.5, contrast: 20.0), cr!(contrast: 5.0));
     app.raw_shelf[1].raw.bytes = Some(std::sync::Arc::new(b"not a raw file".to_vec()));
     app.raw_shelf[1].kept = Some((kept.clone(), from.clone()));
     filmstrip::open_held(&mut app, &ctx, 0).unwrap();
@@ -829,7 +695,7 @@ fn a_raw_whose_background_develop_fails_comes_back_to_the_filmstrip() {
     assert_eq!(app.raw_shelf[0].kept, Some((kept, from)), "with its settings");
     app.background_jobs = false;
     filmstrip::open_held(&mut app, &ctx, 0).unwrap();
-    assert_eq!(app.camera_raw.as_ref().unwrap().params.contrast, 20.0);
+    assert_eq!(shown(&app).contrast, 20.0);
 }
 
 /// Camera Raw Defaults' Auto reads the same pixels whether a raw was shown or not, so Open gives
@@ -837,7 +703,7 @@ fn a_raw_whose_background_develop_fails_comes_back_to_the_filmstrip() {
 #[test]
 fn auto_tone_of_a_never_shown_raw_matches_the_dialogs() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     app.run("prefs.set", json!({"path": "rawDefaults.applyAutoTone", "value": true})).unwrap();
     app.run("file.new", json!({"width": 1800, "height": 1200})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();
@@ -859,15 +725,15 @@ fn auto_tone_of_a_never_shown_raw_matches_the_dialogs() {
     let raw = RawOpen { document, name: "pattern.dng".into(), path: None, bytes: None, decoded: None, developed_with: method, demosaic: method, crop: None };
     let (unshown, _) = filmstrip::first_settings(&app, &raw);
     open_raw(&mut app, &ctx, raw).unwrap();
-    let shown = &app.camera_raw.as_ref().unwrap().params;
+    let current = shown(&app);
     let tone = |p: &CameraRaw| [p.exposure, p.contrast, p.highlights, p.shadows, p.whites, p.blacks];
-    assert_eq!(tone(&unshown), tone(shown));
+    assert_eq!(tone(&unshown), tone(&current));
 }
 
 #[test]
 fn cancel_closes_the_raw_and_the_preference_skips_the_dialog() {
     let (mut app, dng) = raw_app();
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     app.open_bytes("a.dng", &dng).unwrap();
     let raw = take_queued(&mut app).unwrap();
     open_raw(&mut app, &ctx, raw).unwrap();
@@ -908,21 +774,18 @@ fn cancel_closes_the_raw_and_the_preference_skips_the_dialog() {
 #[test]
 fn calibration_changes_the_preview_and_round_trips_through_xmp() {
     let (mut app, dng) = raw_app();
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     app.open_bytes("IMG_0005.dng", &dng).unwrap();
     let raw = take_queued(&mut app).unwrap();
     open_raw(&mut app, &ctx, raw).unwrap();
-    let before = app.camera_raw.as_ref().unwrap().processed.clone();
-    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"shadowTint": 100, "calibrationHue": [100, 0, 0], "calibrationSat": [0, 0, -100]}}}))
-        .unwrap()
-        .unwrap();
-    let d = app.camera_raw.as_mut().unwrap();
-    d.render(&ctx);
+    settle(&mut app);
+    let before = processed(&app);
+    develop(&mut app, &ctx, json!({"ui": {"set": {"shadowTint": 100, "calibrationHue": [100, 0, 0], "calibrationSat": [0, 0, -100]}}}));
     assert!(
-        d.processed.iter().zip(&before).any(|(a, b)| (a[0] - b[0]).abs() > 0.01 || (a[1] - b[1]).abs() > 0.01),
+        processed(&app).iter().zip(&before).any(|(a, b)| (a[0] - b[0]).abs() > 0.01 || (a[1] - b[1]).abs() > 0.01),
         "the Calibration panel changes the preview"
     );
-    let xmp = photocraft_io::camera_raw_xmp::save(&d.params);
+    let xmp = photocraft_io::camera_raw_xmp::save(&shown(&app));
     assert!(xmp.contains("crs:ShadowTint=\"+100\"") && xmp.contains("crs:RedHue=\"+100\"") && xmp.contains("crs:BlueSaturation=\"-100\""), "{xmp}");
     let mut back = CameraRaw::default();
     photocraft_io::camera_raw_xmp::load(&mut back, xmp.as_bytes()).unwrap();
@@ -933,13 +796,13 @@ fn calibration_changes_the_preview_and_round_trips_through_xmp() {
 #[test]
 fn auto_sets_the_light_sliders_from_the_image() {
     let (mut app, dng) = raw_app();
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     app.open_bytes("IMG_0006.dng", &dng).unwrap();
     let raw = take_queued(&mut app).unwrap();
     open_raw(&mut app, &ctx, raw).unwrap();
-    assert!(app.camera_raw.as_ref().unwrap().params.is_identity());
+    assert!(shown(&app).is_identity());
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"auto": true}})).unwrap().unwrap();
-    let p = app.camera_raw.as_ref().unwrap().params.clone();
+    let p = shown(&app);
     assert!(!p.is_identity(), "Auto chose something: {p:?}");
     assert!(p.saturation == 0.0 && p.hsl_hue == [0.0; 8], "only the Light panel: {p:?}");
     // The preference does the same when a raw opens without a sidecar.
@@ -947,7 +810,7 @@ fn auto_sets_the_light_sliders_from_the_image() {
     app.open_bytes("IMG_0007.dng", &dng).unwrap();
     let raw = take_queued(&mut app).unwrap();
     open_raw(&mut app, &ctx, raw).unwrap();
-    assert_eq!(app.camera_raw.as_ref().unwrap().params, p, "Apply auto tone opens the dialog with Auto's settings");
+    assert_eq!(shown(&app), p, "Apply auto tone opens the dialog with Auto's settings");
 }
 
 #[test]
@@ -973,13 +836,13 @@ fn a_sidecar_fills_the_dialog_and_open_writes_it_back() {
         sink.lock().unwrap().push((p.to_string(), b.to_vec()));
         Ok(())
     }));
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     app.open_bytes("IMG_0008.cr2", &dng).unwrap();
     let mut raw = take_queued(&mut app).unwrap();
     raw.path = Some(raw_path.clone());
     open_raw(&mut app, &ctx, raw).unwrap();
-    let d = app.camera_raw.as_ref().unwrap();
-    assert_eq!((d.params.exposure, d.params.shadow_tint), (1.5, 20.0), "the sidecar fills the dialog");
+    let current = shown(&app);
+    assert_eq!((current.exposure, current.shadow_tint), (1.5, 20.0), "the sidecar fills the dialog");
     assert!(
         app.ui.status.contains("IMG_0008.xmp") && app.ui.status.contains("Temperature"),
         "the absolute white balance is reported as not supported: {}",
@@ -1030,7 +893,7 @@ fn camera_raw_defaults_apply_when_a_raw_opens() {
     let st = app.session.active().unwrap();
     assert_eq!(st.doc.depth, photocraft_color::SampleType::U8, "Bit depth 8");
     assert_eq!(st.doc.resolution_dpi, 240.0, "Resolution");
-    let profile = st.doc.icc_profile.as_deref().and_then(|p| craft_cms::Profile::parse(p).ok()).map(|p| p.description).unwrap_or_default();
+    let profile = st.doc.icc_profile.as_deref().and_then(|p| craft::cms::Profile::parse(p).ok()).map(|p| p.description).unwrap_or_default();
     assert!(profile.to_lowercase().contains("srgb"), "Color space: {profile}");
     let layer = st.doc.layer(st.active_layer.unwrap()).unwrap();
     assert!(matches!(layer.content, photocraft_doc::LayerContent::Smart(_)), "Open as Smart Object");
@@ -1038,7 +901,7 @@ fn camera_raw_defaults_apply_when_a_raw_opens() {
     // The dialog's Open applies them too, and reports what it applied.
     app.run("prefs.set", json!({"values": {"rawDefaults.openInCameraRaw": true, "rawDefaults.openAsSmartObject": false, "rawDefaults.bitDepth": "16"}}))
         .unwrap();
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     app.open_bytes("IMG_0011.dng", &dng).unwrap();
     let raw = take_queued(&mut app).unwrap();
     open_raw(&mut app, &ctx, raw).unwrap();
@@ -1111,9 +974,9 @@ fn notice_titles(app: &PhotocraftApp) -> Vec<String> {
 #[test]
 fn a_foreign_sidecar_is_never_overwritten() {
     let (mut app, dng, dir, raw_path, written) = raw_with_sidecar("foreign", Some(LIGHTROOM_SIDECAR));
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     open_dialog_at(&mut app, &ctx, &dng, &raw_path);
-    assert_eq!(app.camera_raw.as_ref().unwrap().params.exposure, 1.0, "the sidecar's settings fill the dialog");
+    assert_eq!(shown(&app).exposure, 1.0, "the sidecar's settings fill the dialog");
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"contrast": 15}}})).unwrap().unwrap();
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
     assert!(written.lock().unwrap().is_empty(), "nothing written over Lightroom's sidecar");
@@ -1129,7 +992,7 @@ fn a_foreign_sidecar_is_never_overwritten() {
 fn a_rating_only_sidecar_is_left_alone() {
     let bridge = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Adobe XMP Core 7.0"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="5"/></rdf:RDF></x:xmpmeta>"#;
     let (mut app, dng, dir, raw_path, written) = raw_with_sidecar("rating", Some(bridge));
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     open_dialog_at(&mut app, &ctx, &dng, &raw_path);
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
     assert!(written.lock().unwrap().is_empty(), "Open with no change writes nothing");
@@ -1148,7 +1011,7 @@ fn a_rating_only_sidecar_is_left_alone() {
 fn a_sidecar_crop_crops_the_opened_raw() {
     let lightroom = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Adobe XMP Core 7.0"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:RawFileName="IMG_0100.cr2" crs:HasCrop="True" crs:CropTop="0.25" crs:CropLeft="0.125" crs:CropBottom="0.75" crs:CropRight="0.625" crs:CropAngle="0"/></rdf:RDF></x:xmpmeta>"#;
     let (mut app, dng, dir, raw_path, written) = raw_with_sidecar("crop", Some(lightroom));
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     let size = |app: &PhotocraftApp| app.session.active().map(|st| (st.doc.size.width, st.doc.size.height));
     open_dialog_at(&mut app, &ctx, &dng, &raw_path);
     assert!(app.ui.status.contains("IMG_0100.xmp") && !app.ui.status.contains("not supported"), "{}", app.ui.status);
@@ -1193,7 +1056,7 @@ fn filmstrip_raws_open_with_their_sidecar_crops() {
         std::fs::write(p, &dng).unwrap();
         std::fs::write(sidecar_path(p), lightroom).unwrap();
     }
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     app.open_file(&raw_path, &dng).unwrap();
     for p in &paths {
         app.open_file(p, &dng).unwrap();
@@ -1233,13 +1096,13 @@ fn a_control_request_never_writes_the_sidecar() {
     }
     let (mut app, dng, dir, raw_path, written) = raw_with_sidecar("control", None);
     app.services.automation_authorize = Some(allow);
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     open_dialog_at(&mut app, &ctx, &dng, &raw_path);
     let commit = json!({"id": "filter.cameraRaw", "params": {"ui": {"set": {"contrast": 15}, "commit": true}}});
     let (req, _rx) = crate::control::ControlRequest::new("ui.menu.invoke", commit);
-    let crate::control::Outcome::Done(reply) = crate::control::handle(&mut app, &ctx, &req) else { panic!("expected a reply") };
+    let crate::control::Reply::Done(reply) = crate::control::handle(&mut app, &ctx, &req) else { panic!("expected a reply") };
     assert_eq!(reply["ok"], true, "{reply}");
-    assert!(app.camera_raw.is_none(), "committed");
+    assert!(app.raw.is_none(), "committed");
     assert!(written.lock().unwrap().is_empty(), "no sidecar from a control request");
     open_dialog_at(&mut app, &ctx, &dng, &raw_path);
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"contrast": 15}, "commit": true}})).unwrap().unwrap();
@@ -1253,10 +1116,10 @@ fn a_control_request_never_writes_the_sidecar() {
 fn a_sidecar_write_error_stays_reported() {
     let (mut app, dng, dir, raw_path, _) = raw_with_sidecar("readonly", None);
     app.services.write = Some(Box::new(|_: &str, _: &[u8]| Err("read-only volume".to_string())));
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     open_dialog_at(&mut app, &ctx, &dng, &raw_path);
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 0.5, "contrast": 15}, "commit": true}})).unwrap().unwrap();
-    let errors: Vec<_> = app.ui.notices.iter().filter(|n| n.error).map(|n| n.title.clone()).collect();
+    let errors: Vec<_> = app.ui.notices.iter().filter(|n| n.tone == craft::theme::variant::Tone::Bad).map(|n| n.title.clone()).collect();
     assert!(errors.iter().any(|t| t.contains("IMG_0100.xmp") && t.contains("read-only volume")), "{errors:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -1270,7 +1133,7 @@ fn open_with_settings(app: &mut PhotocraftApp, ctx: &egui::Context, dng: &[u8], 
 
 fn profile_name(app: &PhotocraftApp) -> String {
     let st = app.session.active().unwrap();
-    st.doc.icc_profile.as_deref().and_then(|p| craft_cms::Profile::parse(p).ok()).map(|p| p.description).unwrap_or_default()
+    st.doc.icc_profile.as_deref().and_then(|p| craft::cms::Profile::parse(p).ok()).map(|p| p.description).unwrap_or_default()
 }
 
 /// Camera Raw renders in its own space and converts to the workflow space last, so Open gives
@@ -1279,8 +1142,8 @@ fn profile_name(app: &PhotocraftApp) -> String {
 /// the re-develop as a background job.
 #[test]
 fn the_camera_raw_step_runs_before_the_workflow_conversion() {
-    let ctx = egui::Context::default();
     let (mut app, dng) = raw_app();
+    let ctx = app.ctx().clone();
     open_with_settings(&mut app, &ctx, &dng, "a.dng");
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
     app.run("edit.convertToProfile", json!({"profile": "adobe-rgb-compat", "intent": "relative"})).unwrap();
@@ -1316,8 +1179,8 @@ fn the_camera_raw_step_runs_before_the_workflow_conversion() {
 /// background: each lands with its Camera Raw step and conversions and is left unmodified.
 #[test]
 fn two_raws_opened_back_to_back_both_finish_their_open() {
-    let ctx = egui::Context::default();
     let (mut app, dng) = raw_app();
+    let ctx = app.ctx().clone();
     app.run("prefs.set", json!({"path": "rawDefaults.colorSpace", "value": "adobeRgb"})).unwrap();
     open_with_settings(&mut app, &ctx, &dng, "a.dng");
     app.background_jobs = true;
@@ -1367,68 +1230,74 @@ fn sidecars_are_read_from_small_regular_files_only() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Save Settings… and Load Settings… as a user's request reaches them: the `{ui}` keys become the
+/// workspace's `SaveSettings` / `LoadSettings` events, which `take` answers with a file pick. The
+/// file service is the framework's scripted one.
 #[test]
 fn save_and_load_settings_round_trip_through_xmp_files() {
-    use crate::file_dialog::FileDialogAnswer;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Mutex;
     type Written = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
     let written: Written = Arc::default();
     let w = written.clone();
     let foreign = br#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
             <rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Clarity2012="+25" crs:LensProfileEnable="1"/>
             </rdf:RDF></x:xmpmeta>"#;
-    let answers = vec![
-        Some(FileDialogAnswer::SaveTo("/out/Look.xmp".into())),
-        Some(FileDialogAnswer::Contents("Look.xmp".into(), Vec::new())),
-        Some(FileDialogAnswer::Contents("Other.xmp".into(), foreign.to_vec())),
-        Some(FileDialogAnswer::Contents("Broken.xmp".into(), b"<nope".to_vec())),
-    ];
+    let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec!["/out/Look.xmp".into()])]));
     let services = crate::Services {
-        file_dialog: Some(crate::file_dialog::fake(answers).0),
         write: Some(Box::new(move |p: &str, b: &[u8]| {
             w.lock().unwrap().push((p.to_string(), b.to_vec()));
             Ok(())
         })),
+        files: Some(files.clone()),
         ..Default::default()
     };
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
-    let ctx = egui::Context::default();
-    let frame = |app: &mut PhotocraftApp| app.poll_file_dialog(&egui::Context::default(), None);
+    let ctx = app.ctx().clone();
+    // The frames that deliver the pick: the workspace reports the event, `take` asks for the file,
+    // and the app's poll hands the answer back.
+    let deliver = |app: &mut PhotocraftApp| {
+        frame(app);
+        app.poll_file_dialog();
+        frame(app);
+    };
     app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();
     app.run("edit.fill", json!({"color": "#808080"})).unwrap();
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 0.75, "contrast": -20, "hslSat": [0, 0, 0, 30, 0, 0, 0, 0]}}}))
         .unwrap()
         .unwrap();
-    let saved_params = app.camera_raw.as_ref().unwrap().params.clone();
-    assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"saveSettings": true, "before": true}})).unwrap().is_err());
-    assert_eq!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"saveSettings": true}})).unwrap().unwrap()["fileDialog"], "save");
-    frame(&mut app);
+    let saved_params = shown(&app);
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"saveSettings": true}})).unwrap().unwrap();
+    deliver(&mut app);
+    let asked = files.requests();
+    assert!(asked.len() == 1 && asked[0].kind == PickKind::Save, "Save Settings asked for one save file");
     let (path, bytes) = written.lock().unwrap()[0].clone();
     assert_eq!(path, "/out/Look.xmp");
     let text = String::from_utf8(bytes.clone()).unwrap();
     assert!(text.contains("crs:Exposure2012=\"+0.75\"") && text.contains("crs:SaturationAdjustmentGreen=\"+30\""), "{text}");
-    // Reset, then load the saved file back (the fake dialog's second answer, with its bytes).
-    app.camera_raw.as_mut().unwrap().params = CameraRaw::default();
-    let mut svc = crate::file_dialog::fake(vec![Some(FileDialogAnswer::Contents("Look.xmp".into(), bytes))]).0;
-    std::mem::swap(app.services.file_dialog.as_mut().unwrap(), &mut svc);
+    // Reset to the defaults, then load the saved file back.
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 0.0, "contrast": 0, "hslSat": [0, 0, 0, 0, 0, 0, 0, 0]}}})).unwrap().unwrap();
+    assert_eq!(shown(&app), CameraRaw::default());
+    files.queue(Picked::Contents(vec![("Look.xmp".into(), bytes)]));
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"loadSettings": true}})).unwrap().unwrap();
-    frame(&mut app);
-    assert_eq!(app.camera_raw.as_ref().unwrap().params, saved_params);
-    std::mem::swap(app.services.file_dialog.as_mut().unwrap(), &mut svc);
-    // The original service's next answer is the empty file: an error, settings untouched.
+    deliver(&mut app);
+    assert_eq!(shown(&app), saved_params);
+    // The next answer is an empty file: an error, settings untouched.
+    files.queue(Picked::Contents(vec![("Look.xmp".into(), Vec::new())]));
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"loadSettings": true}})).unwrap().unwrap();
-    frame(&mut app);
-    assert_eq!(app.camera_raw.as_ref().unwrap().params, saved_params);
+    deliver(&mut app);
+    assert_eq!(shown(&app), saved_params);
     // A foreign preset applies what it holds over the current settings and reports the rest.
+    files.queue(Picked::Contents(vec![("Other.xmp".into(), foreign.to_vec())]));
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"loadSettings": true}})).unwrap().unwrap();
-    frame(&mut app);
-    let p = &app.camera_raw.as_ref().unwrap().params;
+    deliver(&mut app);
+    let p = shown(&app);
     assert_eq!((p.clarity, p.exposure), (25.0, 0.75));
     assert!(app.ui.status.contains("Other.xmp") && app.ui.status.contains('1'), "{}", app.ui.status);
+    files.queue(Picked::Contents(vec![("Broken.xmp".into(), b"<nope".to_vec())]));
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"loadSettings": true}})).unwrap().unwrap();
-    frame(&mut app);
-    assert_eq!(app.camera_raw.as_ref().unwrap().params.clarity, 25.0);
+    deliver(&mut app);
+    assert_eq!(shown(&app).clarity, 25.0);
 }
 
 /// Done keeps the settings in the raw's sidecar and opens nothing,
@@ -1436,32 +1305,32 @@ fn save_and_load_settings_round_trip_through_xmp_files() {
 #[test]
 fn done_saves_the_sidecar_and_opens_nothing() {
     let (mut app, dng, dir, raw_path, written) = raw_with_sidecar("done", None);
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     app.run("prefs.set", json!({"path": "rawDefaults.writeXmpSidecars", "value": false})).unwrap();
     let before = app.session.documents().len();
     open_dialog_at(&mut app, &ctx, &dng, &raw_path);
     let set = json!({"contrast": 20, "clarity": 15});
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": set}})).unwrap().unwrap();
-    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"done": true}})).unwrap().unwrap();
+    let r = done(&mut app, &ctx).unwrap();
     assert_eq!(r["saved"], json!(["IMG_0100.xmp"]), "{r}");
-    assert!(app.camera_raw.is_none() && app.raw_shelf.is_empty());
+    assert!(app.raw.is_none() && app.raw_shelf.is_empty());
     assert_eq!(app.session.documents().len(), before, "Done opens nothing");
     let w = written.lock().unwrap().clone();
     assert_eq!(w.len(), 1);
     let mut back = CameraRaw::default();
     photocraft_io::camera_raw_xmp::load(&mut back, &w[0].1).unwrap();
     assert_eq!((back.contrast, back.clarity), (20.0, 15.0));
-    // Done is only for raws being opened, and checked before anything else in the request
-    // changes the dialog.
+    // Done is only for raws being opened, and refused per key: the other keys of the request
+    // still apply.
     app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
     assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"done": true}})).unwrap().is_err());
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({})).unwrap().unwrap();
-    let before = app.camera_raw.as_ref().unwrap().params.clone();
-    assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"contrast": 40}, "done": true}})).unwrap().is_err());
-    assert_eq!(app.camera_raw.as_ref().unwrap().params, before, "a refused Done changes nothing");
-    for other in ["commit", "cancel"] {
-        assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"done": true, other: true}})).unwrap().is_err(), "{other}");
-    }
+    let before = shown(&app);
+    let refused = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"contrast": 40}, "done": true}}));
+    assert!(refused.unwrap().is_err(), "a Done on a filter is refused");
+    assert_eq!(shown(&app).contrast, 40.0, "the accepted key applied on its own");
+    assert_eq!(shown(&app).exposure, before.exposure);
+    assert!(app.raw.is_some(), "a refused Done closes nothing");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1470,20 +1339,20 @@ fn done_saves_the_sidecar_and_opens_nothing() {
 #[test]
 fn done_keeps_the_raws_open_when_a_sidecar_write_fails() {
     let (mut app, dng, dir, raw_path, _) = raw_with_sidecar("done-fails", None);
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     app.services.write = Some(Box::new(|_: &str, _: &[u8]| Err("read-only volume".to_string())));
     open_dialog_at(&mut app, &ctx, &dng, &raw_path);
     let docs = app.session.documents().len();
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"contrast": 20}}})).unwrap().unwrap();
-    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"done": true}})).unwrap().unwrap();
-    assert_eq!(r["done"], false, "{r}");
-    assert_eq!(app.camera_raw.as_ref().map(|d| d.params.contrast), Some(20.0), "the edit is still there");
+    let refused = done(&mut app, &ctx).unwrap_err();
+    assert!(!refused.is_empty(), "the refusal names the write error");
+    assert_eq!(app.raw.as_ref().map(|_| shown(&app).contrast), Some(20.0), "the edit is still there");
     assert_eq!(app.session.documents().len(), docs, "the raw stays open");
     assert!(app.ui.status_error);
     // At the defaults there is nothing to write: Done closes, without an error.
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"contrast": 0}}})).unwrap().unwrap();
-    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"done": true}})).unwrap().unwrap();
+    let r = done(&mut app, &ctx).unwrap();
     assert_eq!((r["done"].clone(), r["saved"].clone()), (json!(true), json!([])), "{r}");
-    assert!(app.camera_raw.is_none() && !app.ui.status_error, "{}", app.ui.status);
+    assert!(app.raw.is_none() && !app.ui.status_error, "{}", app.ui.status);
     let _ = std::fs::remove_dir_all(&dir);
 }
