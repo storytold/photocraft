@@ -419,11 +419,21 @@ pub(crate) fn fields(app: &PhotocraftApp, command: &str, params: &[Param]) -> Di
     if command == crate::bitmap_dialog::COMMAND {
         crate::bitmap_dialog::defaults(app, &mut fields);
     }
-    // Palette: Custom… starts from the document's table (an Indexed document), else from the
-    // palette the dialog opens on, so the grid always has a table to edit.
+    // The palette dialogs' tables: Color Table reflects the active document's table — never a
+    // remembered preset — and Indexed Color's Palette: Custom… starts from that table, else from
+    // the palette the dialog opens on. Seeding both means the grid always shows the table it edits,
+    // with the document's transparent entry marked on it.
+    if command == crate::color_table_ui::COMMAND
+        && let Some((colors, transparent)) = crate::dialogs::palette_file_ui::document_table(app)
+    {
+        crate::dialogs::palette_file_ui::set_table(&mut fields, crate::dialogs::palette_file_ui::COLORS_FIELD, &colors);
+        crate::dialogs::palette_file_ui::set_transparent(&mut fields, transparent);
+        fields.set("table", FieldValue::Text("custom".into()));
+    }
     if command == rows::INDEXED_COLOR {
         let colors = crate::dialogs::palette_file_ui::opening_table(app);
         crate::dialogs::palette_file_ui::set_table(&mut fields, crate::dialogs::palette_file_ui::CUSTOM_FIELD, &colors);
+        crate::dialogs::palette_file_ui::set_transparent(&mut fields, crate::dialogs::palette_file_ui::document_table(app).and_then(|(_, t)| t));
     }
     fields
 }

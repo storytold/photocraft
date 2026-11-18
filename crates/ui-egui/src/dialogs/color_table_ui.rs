@@ -59,11 +59,10 @@ fn pending(app: &PhotocraftApp, fields: &DialogFields) -> Option<Table> {
     pending_over(fields, doc_table(app))
 }
 
-/// The table row of the filter dialog: the pending table as touching swatches. The document's
-/// table is snapshotted here, as the row cannot read the app.
-pub fn rows(app: &PhotocraftApp) -> Vec<Param> {
-    let document = doc_table(app).map(|(colors, _)| colors);
-    vec![palette_file_ui::grid_row(COMMAND, Label::from(tl!("Colors")), document)]
+/// The table rows of the filter dialog: the "Set Transparent" switch and the table's 16×16 grid
+/// (seeded from the document by `filter_dialog::fields` when the dialog opens).
+pub fn rows(_app: &PhotocraftApp) -> Vec<Param> {
+    vec![palette_file_ui::armed_row(), palette_file_ui::grid_row(COMMAND, Label::from(tl!("Colors")))]
 }
 
 /// The `image.mode.colorTable` params at OK: a preset picked after Load… replaces the loaded
@@ -78,15 +77,14 @@ pub fn command_params(fields: &DialogFields, mut params: Value) -> Value {
     params
 }
 
-/// The `image.mode.indexedColor` params at OK: `paletteColors` only belongs to the Custom palette,
-/// and the grid's private keys never reach the command.
+/// The `image.mode.indexedColor` params at OK: `paletteColors` only belongs to the Custom palette.
+/// (The grid's private keys, `__…`, never reach `command_params` at all.)
 pub fn indexed_color_params(_fields: &DialogFields, mut params: Value) -> Value {
-    if let Some(o) = params.as_object_mut() {
-        o.remove(palette_file_ui::TRANSPARENT_ARMED);
-        if o.get("palette").and_then(Value::as_str) != Some("custom") {
-            o.remove(palette_file_ui::CUSTOM_FIELD);
-            o.remove(palette_file_ui::TRANSPARENT);
-        }
+    if let Some(o) = params.as_object_mut()
+        && o.get("palette").and_then(Value::as_str) != Some("custom")
+    {
+        o.remove(palette_file_ui::CUSTOM_FIELD);
+        o.remove(palette_file_ui::TRANSPARENT);
     }
     params
 }
@@ -222,13 +220,12 @@ mod tests {
         assert_eq!(command_params(&loaded_fields("custom"), kept.clone()), kept);
     }
 
-    /// Indexed Color's OK keeps the Custom table only while Palette is Custom, and never sends the
-    /// grid's private switch.
+    /// Indexed Color's OK keeps the Custom table only while Palette is Custom.
     #[test]
     fn indexed_color_params_keep_the_table_only_for_custom() {
-        let sent = json!({"palette": "selective", "paletteColors": ["#ff0000"], "transparentArmed": true, "transparent": 0});
+        let sent = json!({"palette": "selective", "paletteColors": ["#ff0000"], "transparent": 0});
         assert_eq!(indexed_color_params(&DialogFields::new(), sent), json!({"palette": "selective"}));
-        let custom = json!({"palette": "custom", "paletteColors": ["#ff0000"], "transparentArmed": false, "transparent": 0});
+        let custom = json!({"palette": "custom", "paletteColors": ["#ff0000"], "transparent": 0});
         assert_eq!(indexed_color_params(&DialogFields::new(), custom), json!({"palette": "custom", "paletteColors": ["#ff0000"], "transparent": 0}));
     }
 }

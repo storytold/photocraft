@@ -757,14 +757,19 @@ the transparent entry's colour maps to the nearest other entry and stays opaque.
 to that entry transparent.
 
 The dialog (`crates/ui-egui/src/dialogs/palette_file_ui.rs`) shows the table as a 16-cell-wide
-grid shared with Color Table: a click asks the Color Picker for that entry, and the picked colour is
-folded back into the table field (`paletteColors` for a Custom palette, `colors` for Color Table).
-The **Set Transparent** switch makes the next click mark an entry instead; the marked entry is the
-one named in `transparent` (click it again to clear). Palette: Custom… is seeded with the document's
-table on an Indexed document, else with the palette the dialog opens on, so the grid always has
-something to edit, and `colors`/`forced` grey out while it is chosen. **Load…** and **Save…**
-exchange `.act` files and palette PNGs (a 1-pixel-tall colour-type-3 image whose PLTE is the table
-and whose tRNS names the transparent entry).
+grid shared with Color Table: the 256 slots of a colour table are always drawn, so an entry's
+position is its index, and the ones the table does not have yet are dashed. A click asks the
+Color Picker for that entry, and the picked colour is folded back into the table field
+(`paletteColors` for a Custom palette, `colors` for Color Table); a click on a dashed slot first
+grows the table up to it with opaque black entries, as a new entry's colour, and then opens the
+picker on that black. The **Set Transparent** switch makes the next click mark an entry instead
+(the marked entry is drawn as a checkerboard with an X, and is the one named in `transparent`;
+click it again to clear). Palette: Custom… is seeded with the document's table on an Indexed
+document, else with the palette the dialog opens on, and Color Table is seeded with the document's
+table and its transparent entry every time, so the grid always has the table it shows to edit;
+`colors`/`forced` grey out while a Custom table is chosen. **Load…** and **Save…** exchange `.act`
+files and palette PNGs (a 1-pixel-tall colour-type-3 image whose PLTE is the table and whose tRNS
+names the transparent entry).
 
 `cargo run --release -p photocraft-engine --example indexed_color_perf -- image.png` measures
 palette construction, Floyd–Steinberg diffusion, and the complete full-resolution CPU preview

@@ -2,20 +2,23 @@
 //! and Image › Mode › Color Table.
 //!
 //! The grid is the dialog's table field ([`colors_field`]: `colors` for Color Table,
-//! `paletteColors` for Indexed Color's Custom palette) as 16 cells to a row. A click asks the
-//! host's Color Picker for that entry ([`pick_key`]); the answer is folded back into the table on
-//! the next pass. With the "Set Transparent" switch on, a click marks that entry as the table's
-//! transparent one instead (or clears the mark on the entry that has it).
+//! `paletteColors` for Indexed Color's Custom palette) drawn as the 16×16 slots of a colour table,
+//! so an entry's position is its index whatever the table's length: entries the table does not have
+//! yet are empty (dashed) slots. A click opens the host's Color Picker on that entry's colour
+//! ([`click_entry`]; an empty slot grows the table with opaque black first, as a new entry does);
+//! the answer comes back under a private key and is folded in by [`apply_picks`]. With the
+//! "Set Transparent" switch on ([`armed_row`]) a click marks that entry as the table's transparent
+//! one instead, or clears the mark of the entry that has it; the marked entry is drawn as a
+//! checkerboard with an X.
 //!
-//! Load… and Save… exchange Adobe `.act` colour tables and palette PNGs; parsing and encoding live
-//! in [`parse_file`] and [`encode_file`], and the footer buttons are answered by
+//! Load… and Save… exchange `.act` colour tables and palette PNGs; parsing and encoding live in
+//! [`parse_file`] and [`encode_file`], and the footer buttons are answered by
 //! [`crate::color_table_ui::footer_action`].
 
 use craft::theme::Srgba;
-use craft::ui::choice::{Checkbox, SwatchTable};
-use craft::ui::contract::{Bind, Props as _, Show as _};
-use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param};
+use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamKind};
 use craft::ui::runtime::env::Label;
+use egui::{Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 
 use crate::PhotocraftApp;
 
@@ -27,7 +30,13 @@ pub const CUSTOM_FIELD: &str = "paletteColors";
 pub const TRANSPARENT: &str = "transparent";
 /// The "Set Transparent" switch: the next grid click marks an entry instead of editing it. Private,
 /// so it is dropped from the command's parameters.
-pub const TRANSPARENT_ARMED: &str = "transparentArmed";
+pub const TRANSPARENT_ARMED: &str = "__paletteTransparentArmed";
+
+/// The cells of the grid: a colour table's 16×16 slots, drawn whether or not the table fills them.
+const COLS: usize = 16;
+const CELLS: usize = COLS * COLS;
+/// A cell's side in logical pixels, about a colour table's slot on screen.
+const CELL: f32 = 22.0;
 
 /// The field holding the table for `command`'s dialog.
 pub fn colors_field(command: &str) -> &'static str {
@@ -85,15 +94,20 @@ fn apply_picks(fields: &mut DialogFields, key: &str) {
     set_table(fields, key, &colors);
 }
 
-/// The table the grid shows: the dialog's own field, or for Color Table a chosen preset.
-fn shown(fields: &DialogFields, command: &str, key: &str, document: Option<&[[u8; 3]]>) -> Vec<[u8; 3]> {
+/// The table the grid shows and the transparent entry it marks: the dialog's own field (seeded from
+/// the document, or loaded, or edited), or for Color Table a chosen preset (which has no
+/// transparent entry of its own).
+fn shown(fields: &DialogFields, command: &str, key: &str) -> (Vec<[u8; 3]>, Option<usize>) {
+    let transparent = fields.int(TRANSPARENT).and_then(|t| usize::try_from(t).ok());
     if command == crate::color_table_ui::COMMAND {
         match fields.text("table").unwrap_or("custom") {
-            "custom" => table_rgb(fields, key).or_else(|| document.map(<[_]>::to_vec)).unwrap_or_default(),
-            preset => photocraft_engine::mode_cmds::preset_table(preset).unwrap_or_default(),
+            preset @ ("blackBody" | "grayscale" | "spectrum" | "systemMac" | "systemWindows" | "web") => {
+                (photocraft_engine::mode_cmds::preset_table(preset).unwrap_or_default(), None)
+            }
+            _ => (table_rgb(fields, key).unwrap_or_default(), transparent),
         }
     } else {
-        table_rgb(fields, key).unwrap_or_default()
+        (table_rgb(fields, key).unwrap_or_default(), transparent)
     }
 }
 
@@ -106,44 +120,178 @@ fn materialize(fields: &mut DialogFields, command: &str, key: &str, colors: &[[u
     }
 }
 
-/// The editable palette grid of `command`'s dialog. `document` is the open document's table, which
-/// the row cannot read itself; Color Table shows it while its table is Custom with nothing loaded.
-pub fn grid_row(command: &'static str, label: Label, document: Option<Vec<[u8; 3]>>) -> Param {
+/// The "Set Transparent" switch: while it is on, a click on the grid marks that entry as the
+/// table's transparent one instead of opening its colour. A row of its own, so its label reads
+/// like the dialog's other rows and its state is visible.
+pub fn armed_row() -> Param {
+    Param::new(TRANSPARENT_ARMED, Label::from(tl!("Set Transparent")), ParamKind::bool(false)).not_remembered()
+}
+
+/// The palette grid of `command`'s dialog: 16×16 slots, the table's entries painted and the rest
+/// dashed. The table is the dialog's own field (seeded from the document when the dialog opens).
+pub fn grid_row(command: &'static str, label: Label) -> Param {
     let key = colors_field(command);
-    Param::custom(key, label.clone(), move |ui, fields, cx| {
+    Param::custom(key, label, move |ui, fields, cx| {
         apply_picks(fields, key);
-        let colors = shown(fields, command, key, document.as_deref());
-        let transparent = fields.int(TRANSPARENT).and_then(|t| usize::try_from(t).ok());
+        let (colors, transparent) = shown(fields, command, key);
         let armed = fields.bool(TRANSPARENT_ARMED).unwrap_or(false);
-        let mut switch = armed;
-        Checkbox::new(Bind::bound(&mut switch)).label(tl!("Set Transparent").to_string()).show(ui);
-        if switch != armed {
-            fields.set(TRANSPARENT_ARMED, switch);
-        }
-        let entries: Vec<(Label, Srgba)> = colors
-            .iter()
-            .enumerate()
-            .map(|(i, [r, g, b])| {
-                (Label::from(format!("{i} #{r:02x}{g:02x}{b:02x}")), Srgba::rgb(f32::from(*r) / 255.0, f32::from(*g) / 255.0, f32::from(*b) / 255.0))
-            })
-            .collect();
-        let shown_table = SwatchTable::new(label.clone(), &entries).per_row(16).tips(true).marked(move |i: &usize| Some(*i) == transparent).show_all(ui);
-        if let Some(i) = shown_table.selected {
+        let (response, hit) = grid(ui, &colors, transparent);
+        if let Some(i) = hit {
             if armed {
-                // Mark the entry the click landed on; clicking the marked entry clears it.
+                // Mark the entry the click landed on; clicking the marked entry clears it, as the
+                // switch does.
                 if transparent == Some(i) {
                     fields.remove(TRANSPARENT);
                 } else {
-                    materialize(fields, command, key, &colors);
+                    materialize(fields, command, key, &pad_to(&colors, i));
                     fields.set(TRANSPARENT, FieldValue::Int(i as i64));
                 }
-            } else if let Some((_, color)) = entries.get(i) {
-                materialize(fields, command, key, &colors);
-                cx.pick_color(&pick_key(i), *color);
+            } else if let Some(color) = click_entry(command, fields, &colors, i) {
+                // The Color Picker opens on the entry's colour and files its answer under the
+                // private key `apply_picks` folds back in.
+                cx.pick_color(&pick_key(i), srgba(color));
             }
         }
-        shown_table.response
+        response
     })
+}
+
+/// A click on entry `i` with the "Set Transparent" switch off: the shown table becomes the
+/// dialog's own, an empty slot grows it with opaque black entries up to `i` (as a new slot does),
+/// and the entry's colour — what the Color Picker opens on — is returned. `None` past the table's
+/// 256 slots, which the grid never reports.
+pub fn click_entry(command: &str, fields: &mut DialogFields, colors: &[[u8; 3]], i: usize) -> Option<[u8; 3]> {
+    let grown = pad_to(colors, i);
+    let color = *grown.get(i)?;
+    materialize(fields, command, colors_field(command), &grown);
+    Some(color)
+}
+
+/// `colors` grown so index `i` exists, the added entries opaque black (a new entry's colour, never
+/// a transparent one) and the table never past its 256 slots. A table that already has the index
+/// (or more entries) is left as it is, never shrunk.
+fn pad_to(colors: &[[u8; 3]], i: usize) -> Vec<[u8; 3]> {
+    let mut v = colors.to_vec();
+    let want = i.saturating_add(1).min(CELLS);
+    if want > v.len() {
+        v.resize(want, [0, 0, 0]);
+    }
+    v
+}
+
+fn srgba([r, g, b]: [u8; 3]) -> Srgba {
+    Srgba::rgb(f32::from(r) / 255.0, f32::from(g) / 255.0, f32::from(b) / 255.0)
+}
+
+/// The 16×16 table drawn as touching cells: each entry's colour, a dashed slot for one the table
+/// does not have yet, a checkerboard and an X over the transparent entry. Returns the cell a click
+/// landed on.
+fn grid(ui: &mut egui::Ui, colors: &[[u8; 3]], transparent: Option<usize>) -> (egui::Response, Option<usize>) {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let side = CELL * COLS as f32;
+    let (rect, response) = ui.allocate_exact_size(vec2(side, side), Sense::click());
+    if response.hovered()
+        && let Some(i) = response.hover_pos().and_then(|p| cell_at(rect, p))
+    {
+        let name = colors.get(i).map_or_else(|| format!("{i}"), |[r, g, b]| format!("{i} #{r:02x}{g:02x}{b:02x}"));
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        response.clone().on_hover_text(name);
+    }
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        for i in 0..CELLS {
+            let cell = cell_rect(rect, i).shrink(0.5);
+            match colors.get(i) {
+                Some([r, g, b]) => {
+                    painter.rect_filled(cell, 1.0, Color32::from_rgb(*r, *g, *b));
+                    painter.rect_stroke(cell, 1.0, Stroke::new(0.5, t.field_border), StrokeKind::Inside);
+                    if transparent == Some(i) {
+                        // The entry that carries transparency reads as no colour at all.
+                        checker(painter, cell);
+                        let m = vec2(cell.width() * 0.3, cell.height() * 0.3);
+                        let stroke = Stroke::new(1.5, t.text);
+                        painter.line_segment([cell.center() - m, cell.center() + m], stroke);
+                        painter.line_segment([cell.center() + vec2(m.y, -m.x), cell.center() - vec2(m.y, -m.x)], stroke);
+                    }
+                }
+                None => dashed(painter, cell, t.field_border),
+            }
+        }
+    }
+    let hit = response.clicked().then(|| response.interact_pointer_pos().and_then(|p| cell_at(rect, p))).flatten();
+    (response, hit)
+}
+
+/// The rectangle of cell `i` in a table starting at `rect`.
+fn cell_rect(rect: Rect, i: usize) -> Rect {
+    let (col, row) = (i % COLS, i / COLS);
+    Rect::from_min_size(pos2(rect.left() + col as f32 * CELL, rect.top() + row as f32 * CELL), vec2(CELL, CELL))
+}
+
+/// The cell `p` falls in, if any.
+fn cell_at(rect: Rect, p: egui::Pos2) -> Option<usize> {
+    if !rect.contains(p) {
+        return None;
+    }
+    let col = ((p.x - rect.left()) / CELL).floor().max(0.0) as usize;
+    let row = ((p.y - rect.top()) / CELL).floor().max(0.0) as usize;
+    let i = row * COLS + col;
+    (i < CELLS).then_some(i)
+}
+
+/// A two-tone checkerboard filling `rect`, drawn as quarter-cell squares.
+fn checker(painter: &egui::Painter, rect: Rect) {
+    let step = rect.width() / 2.0;
+    let light = Color32::from_gray(200);
+    let dark = Color32::from_gray(140);
+    for row in 0..2 {
+        for col in 0..2 {
+            let color = if (row + col) % 2 == 0 { light } else { dark };
+            let r = Rect::from_min_size(pos2(rect.left() + col as f32 * step, rect.top() + row as f32 * step), vec2(step, step));
+            painter.rect_filled(r.intersect(rect), 0.0, color);
+        }
+    }
+}
+
+/// A dashed border: an empty slot of the table (egui has no dash stroke).
+fn dashed(painter: &egui::Painter, rect: Rect, color: Color32) {
+    let (dash, gap) = (3.0, 2.0);
+    for (y, x0, x1) in [(rect.top(), rect.left(), rect.right()), (rect.bottom(), rect.left(), rect.right())] {
+        let mut x = x0;
+        while x < x1 {
+            painter.line_segment([pos2(x, y), pos2((x + dash).min(x1), y)], Stroke::new(1.0, color));
+            x += dash + gap;
+        }
+    }
+    for (x, y0, y1) in [(rect.left(), rect.top(), rect.bottom()), (rect.right(), rect.top(), rect.bottom())] {
+        let mut y = y0;
+        while y < y1 {
+            painter.line_segment([pos2(x, y), pos2(x, (y + dash).min(y1))], Stroke::new(1.0, color));
+            y += dash + gap;
+        }
+    }
+}
+
+/// Store `colors`' transparent entry index in the field `key`'s dialog (`None` clears it).
+pub fn set_transparent(fields: &mut DialogFields, transparent: Option<u64>) {
+    match transparent {
+        Some(t) => fields.set(TRANSPARENT, FieldValue::Int(t as i64)),
+        None => {
+            fields.remove(TRANSPARENT);
+        }
+    }
+}
+
+/// The open document's colour table: its entries and its transparent entry index.
+pub fn document_table(app: &PhotocraftApp) -> Option<(Vec<[u8; 3]>, Option<u64>)> {
+    let t = app.session.active()?.doc.color_table.clone()?;
+    Some((t.colors, t.transparent.map(u64::from)))
+}
+
+/// The table Palette: Custom… opens on: the document's own table when it is Indexed, else the
+/// Color Table dialog's default ramp (Black Body), so the grid always has entries to edit.
+pub fn opening_table(app: &PhotocraftApp) -> Vec<[u8; 3]> {
+    document_table(app).map(|(colors, _)| colors).or_else(|| photocraft_engine::mode_cmds::preset_table("blackBody")).unwrap_or_default()
 }
 
 /// An `.act` table or a palette PNG's entries, by the file's extension.
@@ -173,17 +321,6 @@ pub fn encode_file(path: &str, colors: &[[u8; 3]], transparent: Option<u64>) -> 
         }
         _ => photocraft_engine::swatch_cmds::act_bytes(colors, transparent.and_then(|t| u16::try_from(t).ok())),
     }
-}
-
-/// The table of the open document, when it is an Indexed one.
-pub fn document_table(app: &PhotocraftApp) -> Option<Vec<[u8; 3]>> {
-    Some(app.session.active()?.doc.color_table.as_ref()?.colors.clone())
-}
-
-/// The table Palette: Custom… opens on: the document's own table when it is Indexed, else the
-/// Color Table dialog's default ramp (Black Body), so the grid always has entries to edit.
-pub fn opening_table(app: &PhotocraftApp) -> Vec<[u8; 3]> {
-    document_table(app).or_else(|| photocraft_engine::mode_cmds::preset_table("blackBody")).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -216,6 +353,46 @@ mod tests {
         assert_eq!(table_rgb(&f, CUSTOM_FIELD), Some(vec![[1, 2, 3], [255, 0, 0]]));
     }
 
+    /// A click edits the entry's colour — on an empty slot after growing the table with opaque
+    /// black, never a transparent colour — and the Color Picker opens on that colour.
+    #[test]
+    fn a_click_edits_a_colour_and_an_empty_slot_grows_with_black() {
+        let colors = vec![[1, 2, 3], [4, 5, 6], [7, 8, 9]];
+        let mut f = DialogFields::new();
+        set_table(&mut f, CUSTOM_FIELD, &colors);
+        // An entry's own colour is what the picker opens on, and the table is unchanged.
+        assert_eq!(click_entry(crate::color_table_ui::INDEXED_COLOR, &mut f, &colors, 1), Some([4, 5, 6]));
+        assert_eq!(table_rgb(&f, CUSTOM_FIELD), Some(colors.clone()));
+        // An empty slot grows the table with opaque black up to it, and the picker opens on that
+        // black — not on a transparent colour.
+        assert_eq!(click_entry(crate::color_table_ui::INDEXED_COLOR, &mut f, &colors, 5), Some([0, 0, 0]));
+        assert_eq!(table_rgb(&f, CUSTOM_FIELD), Some(vec![[1, 2, 3], [4, 5, 6], [7, 8, 9], [0, 0, 0], [0, 0, 0], [0, 0, 0]]));
+        // Editing Color Table's grid makes a preset table Custom; Indexed Color has no preset.
+        let mut table = DialogFields::new();
+        table.set("table", FieldValue::Text("grayscale".into()));
+        click_entry(crate::color_table_ui::COMMAND, &mut table, &colors, 0);
+        assert_eq!(table.text("table"), Some("custom"));
+        assert_eq!(table_rgb(&table, COLORS_FIELD), Some(colors));
+    }
+
+    /// The grid marks the dialog's own table and its transparent entry, and a preset's table
+    /// instead once one is chosen.
+    #[test]
+    fn the_grid_shows_the_tables_own_transparent_entry() {
+        let mut f = DialogFields::new();
+        set_table(&mut f, COLORS_FIELD, &[[1, 2, 3]]);
+        set_transparent(&mut f, Some(0));
+        assert_eq!(shown(&f, crate::color_table_ui::COMMAND, COLORS_FIELD), (vec![[1, 2, 3]], Some(0)));
+        // A preset has its own 256 entries and no transparent one.
+        f.set("table", FieldValue::Text("grayscale".into()));
+        assert_eq!(shown(&f, crate::color_table_ui::COMMAND, COLORS_FIELD).1, None);
+        assert_eq!(shown(&f, crate::color_table_ui::COMMAND, COLORS_FIELD).0.len(), 256);
+        // Indexed Color's Custom palette is the `paletteColors` field.
+        let mut idx = DialogFields::new();
+        set_table(&mut idx, CUSTOM_FIELD, &[[10, 20, 30], [40, 50, 60]]);
+        assert_eq!(shown(&idx, crate::color_table_ui::INDEXED_COLOR, CUSTOM_FIELD), (vec![[10, 20, 30], [40, 50, 60]], None));
+    }
+
     #[test]
     fn files_round_trip_both_formats() {
         let colors = vec![[255, 0, 0], [0, 255, 0], [0, 0, 255]];
@@ -225,5 +402,20 @@ mod tests {
         assert_eq!(parse_file("Table.png", &png).unwrap(), (colors, Some(2)));
         assert!(parse_file("Table.aco", &act).is_err(), "only .act and palette .png files");
         assert!(parse_file("Table.png", &act).is_err(), "an .act is not a palette PNG");
+    }
+
+    /// The grid is a colour table's 16×16 slots whatever the table's length, so an entry's position
+    /// is its index: cell 0 is the first and cell 255 the last, and a click outside is none.
+    #[test]
+    fn the_grid_maps_every_cell_of_the_16_by_16_table() {
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(CELL * COLS as f32, CELL * COLS as f32));
+        assert_eq!(cell_at(rect, pos2(1.0, 1.0)), Some(0));
+        assert_eq!(cell_at(rect, pos2(CELL * 15.0 + 1.0, 1.0)), Some(15));
+        assert_eq!(cell_at(rect, pos2(1.0, CELL * 15.0 + 1.0)), Some(240));
+        assert_eq!(cell_at(rect, pos2(CELL * 15.0 + 1.0, CELL * 15.0 + 1.0)), Some(255));
+        assert_eq!(cell_at(rect, pos2(-1.0, 1.0)), None, "left of the table");
+        assert_eq!(cell_at(rect, pos2(1.0, rect.bottom() + 1.0)), None, "below the table");
+        // The last slot is the 256th entry, never a 257th.
+        assert_eq!(CELLS, 256);
     }
 }

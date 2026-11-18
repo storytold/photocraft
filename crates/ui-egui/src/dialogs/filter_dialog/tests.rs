@@ -1887,13 +1887,33 @@ fn indexed_color_sends_the_custom_table_only_for_custom() {
     let params = command_params("image.mode.indexedColor", &fields_of(harness.state(), id));
     assert_eq!(params["palette"], json!("custom"));
     assert_eq!(params["paletteColors"].as_array().map(Vec::len), Some(256));
-    assert!(params.get("transparentArmed").is_none(), "the grid's switch is private");
+    assert!(params.get(crate::dialogs::palette_file_ui::TRANSPARENT_ARMED).is_none(), "the grid's switch is private");
     // A built-in palette is what quantizes: the table is not sent with it.
     set(harness.state_mut(), id, "palette", json!("web"));
     harness.run_steps(3);
     let params = command_params("image.mode.indexedColor", &fields_of(harness.state(), id));
     assert!(params.get("paletteColors").is_none());
     assert!(params.get("transparent").is_none());
+}
+
+/// Both palette dialogs' grid carries a labelled "Set Transparent" row (Indexed Color shows it on
+/// a Custom palette, as its grid does), so the switch is never an unlabelled box inside the grid.
+#[test]
+fn the_palette_dialogs_offer_set_transparent() {
+    for command in ["image.mode.colorTable", "image.mode.indexedColor"] {
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width": 4, "height": 4, "depth": 8, "background": "white"})).unwrap();
+        session.execute("image.mode.indexedColor", json!({"palette": "web", "dither": "none"})).unwrap();
+        let app = PhotocraftApp::new(session, crate::Services::default());
+        let mut harness = harness(app, egui::vec2(900.0, 1100.0));
+        let id = open(harness.state_mut(), command).unwrap();
+        harness.run_steps(3);
+        if command == "image.mode.indexedColor" {
+            set(harness.state_mut(), id, "palette", json!("custom"));
+            harness.run_steps(3);
+        }
+        harness.get_by_label("Set Transparent");
+    }
 }
 
 /// Both palette dialogs offer Load… and Save… for the table.
