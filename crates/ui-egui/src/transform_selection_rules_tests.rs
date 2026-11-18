@@ -13,7 +13,7 @@ use crate::transform_tool::LOCKED;
 
 /// A 200 × 200 document on a white Background: "A" with a red block at x 10..50, y 10..30, and
 /// "B" with a blue one at x 100..140, y 100..120. Only B is selected.
-fn app() -> (PhotocraftApp, LayerId, LayerId, LayerId) {
+fn app() -> (Box<PhotocraftApp>, LayerId, LayerId, LayerId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 200, "background": "white"})).unwrap();
     app.sync_views();
