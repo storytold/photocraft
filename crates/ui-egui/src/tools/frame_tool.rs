@@ -144,8 +144,8 @@ fn path_visible(doc: &photocraft_doc::Document, path: &[usize]) -> bool {
 fn visible(app: &PhotocraftApp, id: LayerId) -> bool {
     app.session.active().is_some_and(|st| st.doc.path_of(id).is_some_and(|p| path_visible(&st.doc, &p)))
 }
-fn content_layer(app: &PhotocraftApp, r: [i64; 4]) -> Option<u64> {
-    let st = app.session.active()?;
+fn content_layer(app: &PhotocraftApp, r: [i64; 4]) -> Result<Option<u64>, String> {
+    let Some(st) = app.session.active() else { return Ok(None) };
     st.doc.walk().into_iter().rev().find_map(|(path, _, l)| {
         if !matches!(l.content, LayerContent::Raster(_) | LayerContent::Smart(_)) || st.doc.is_background(l.id) || !path_visible(&st.doc, &path) {
             return None;
@@ -166,8 +166,18 @@ fn content_layer(app: &PhotocraftApp, r: [i64; 4]) -> Option<u64> {
         if width * 3 < i128::from(whole.x1) - i128::from(whole.x0) || height * 3 < i128::from(whole.y1) - i128::from(whole.y0) {
             return None;
         }
-        Some(l.id.0)
-    })
+        // Raster capture converts the complete layer to a Smart Object. Its raw bounds
+        // can survive a mask that leaves nothing to convert; try the next usable layer.
+        // Existing Smart Objects are captured directly, without this conversion.
+        if matches!(l.content, LayerContent::Raster(_)) {
+            match photocraft_engine::smart_cmds::layer_has_smart_content(&st.doc, l) {
+                Ok(true) => {}
+                Ok(false) => return None,
+                Err(e) => return Some(Err(e.to_string())),
+            }
+        }
+        Some(Ok(l.id.0))
+    }).transpose()
 }
 #[cfg(test)]
 mod content_pick_tests;
@@ -543,8 +553,13 @@ fn make_frame(app: &mut PhotocraftApp, b: KRect) {
         return;
     }
     let mut p = shape_params(app, r);
-    if let Some(id) = content_layer(app, r) {
-        p["layer"] = json!(id);
+    match content_layer(app, r) {
+        Ok(Some(id)) => p["layer"] = json!(id),
+        Ok(None) => {}
+        Err(e) => {
+            report(app, Err(e));
+            return;
+        }
     }
     match app.run("layer.new.frame", p) {
         Ok(v) => {
