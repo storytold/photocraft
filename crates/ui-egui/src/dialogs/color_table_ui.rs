@@ -59,10 +59,11 @@ fn pending(app: &PhotocraftApp, fields: &DialogFields) -> Option<Table> {
     pending_over(fields, doc_table(app))
 }
 
-/// The table rows of the filter dialog: the "Set Transparent" switch and the table's 16×16 grid
-/// (seeded from the document by `filter_dialog::fields` when the dialog opens).
+/// The table rows of the filter dialog: the "Set Transparent" switch, the table's 16×16 grid
+/// (seeded from the document by `filter_dialog::fields` when the dialog opens) and the palette
+/// pipette that highlights the entry a pixel uses.
 pub fn rows(_app: &PhotocraftApp) -> Vec<Param> {
-    vec![palette_file_ui::armed_row(), palette_file_ui::grid_row(COMMAND, Label::from(tl!("Colors")))]
+    vec![palette_file_ui::armed_row(), palette_file_ui::grid_row(COMMAND, Label::from(tl!("Colors"))), palette_file_ui::eyedropper_row()]
 }
 
 /// The `image.mode.colorTable` params at OK: a preset picked after Load… replaces the loaded

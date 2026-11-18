@@ -95,6 +95,10 @@ fn tap(params: &mut [Param], key: &str, f: impl FnOnce(Param) -> Param) {
 /// the table's own while one is given.
 const BUILT_IN_PALETTES: [&str; 8] = ["selective", "perceptual", "adaptive", "exact", "systemMac", "systemWindows", "web", "uniform"];
 
+/// The palettes that can carry the auto-appended transparent entry: every one but the two fixed
+/// System tables, which have no free slot (docs/development.md, Indexed Color conversion).
+const TRANSPARENCY_PALETTES: [&str; 7] = ["selective", "perceptual", "adaptive", "exact", "web", "uniform", "custom"];
+
 // --- Indexed Color ---------------------------------------------------------------------------------------------
 
 /// The matte menu's entries: the named mattes, then `custom` for the colour row after it.
@@ -136,24 +140,26 @@ fn indexed_color(app: &PhotocraftApp, params: &mut Vec<Param>) {
     params.insert(at + 1, matte_color);
 
     // Palette: Custom… gives the table itself: the count and the forced colours are the table's
-    // own then, so their rows grey out (as in Photoshop).
+    // own then, so their rows grey out (as in Photoshop). The grid and its pipette belong to it too.
     let armed = crate::dialogs::palette_file_ui::armed_row().visible_when("palette", "custom");
     let grid = crate::dialogs::palette_file_ui::grid_row(INDEXED_COLOR, Label::from(tl!("Colors"))).visible_when("palette", "custom").not_remembered();
+    let pipette = crate::dialogs::palette_file_ui::eyedropper_row().visible_when("palette", "custom");
     match params.iter().position(|p| p.key == "colors") {
         Some(i) => {
             params.insert(i + 1, grid);
             params.insert(i + 1, armed);
+            params.insert(i + 2, pipette);
         }
-        None => params.extend([armed, grid]),
+        None => params.extend([armed, grid, pipette]),
     }
     for key in ["colors", "forced"] {
         tap(params, key, |p| p.enabled_when_in("palette", BUILT_IN_PALETTES));
     }
-    // "1st index as transparent" is the entry the auto transparency appends; a Custom table
-    // chooses its own entry, and the fixed System tables have no free slot.
+    // Transparency and "1st index as transparent" both need a slot for the auto-appended entry: the
+    // fixed System tables have none, so both grey out (docs/development.md, Indexed Color conversion).
+    tap(params, "transparency", |p| p.enabled_when_in("palette", TRANSPARENCY_PALETTES));
     tap(params, "transparentFirst", |p| {
-        Param::new(p.key, Label::from(tl!("1st Index as Transparent")), p.kind)
-            .enabled_when_in("palette", ["selective", "perceptual", "adaptive", "exact", "web", "uniform"])
+        Param::new(p.key, Label::from(tl!("1st Index as Transparent")), p.kind).enabled_when_in("palette", TRANSPARENCY_PALETTES)
     });
 }
 
