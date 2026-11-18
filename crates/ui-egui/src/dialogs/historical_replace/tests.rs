@@ -488,3 +488,69 @@ fn owns(fields: &serde_json::Map<String, Value>) -> bool {
 fn can_confirm(fields: &serde_json::Map<String, Value>) -> bool {
     matches!(fields.get("historicalXcfSampleOrder").and_then(Value::as_str), Some("little-endian" | "big-endian"))
 }
+
+#[test]
+fn wrapped_replacement_probe_preserves_rgb_and_gray_header_modes() {
+    use std::io::Write;
+    fn word(bytes: &[u8], at: usize) -> usize {
+        u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap()) as usize
+    }
+    fn after_properties(bytes: &[u8], mut at: usize) -> usize {
+        loop {
+            let kind = word(bytes, at);
+            let length = word(bytes, at + 4);
+            at += 8;
+            if kind == 0 {
+                return at;
+            }
+            at += length;
+        }
+    }
+    for mode in [ColorMode::Rgb, ColorMode::Grayscale] {
+        let mut original = fixture::historical_pixel(true);
+        if mode == ColorMode::Grayscale {
+            // Adapt the independent fixture's actual layer/hierarchy layout too,
+            // so this is a complete Gray-alpha/U16 source, not merely a patched header.
+            let layer = word(&original, after_properties(&original, 30));
+            let name_length = word(&original, layer + 12);
+            let hierarchy = word(&original, after_properties(&original, layer + 16 + name_length));
+            original[22..26].copy_from_slice(&1u32.to_be_bytes());
+            original[layer + 8..layer + 12].copy_from_slice(&3u32.to_be_bytes());
+            original[hierarchy + 8..hierarchy + 12].copy_from_slice(&4u32.to_be_bytes());
+            original.truncate(original.len() - 8);
+            original.extend([0x1234u16.to_le_bytes(), 0xffffu16.to_le_bytes()].concat());
+        }
+        // Verify the source independently before using it as a deferred-header oracle.
+        let imported = photocraft_io::import_with_options(
+            "mode.xcf",
+            &original,
+            &photocraft_io::ImportOptions { historical_xcf_sample_order: Some(HistoricalXcfSampleOrder::LittleEndian), ..Default::default() },
+        )
+        .unwrap();
+        assert_eq!(imported.document.mode, mode);
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(&original).unwrap();
+        let wrapped = encoder.finish().unwrap();
+        let mut app = app(vec![Some(contents("mode.xcf.gz", wrapped.clone()))], HistoricalXcfSampleOrder::BigEndian);
+        app.session.set_cooperative_jobs(true);
+        let before = app.session.active().unwrap().doc.clone();
+        let revision = app.session.active().unwrap().revision;
+        pick_from_menu(&mut app);
+        let held = &app.historical_replacements.held[0];
+        assert!(held.job.is_some() && held.question.is_none(), "mode comes from the actual deferred probe");
+        tick_probe(&mut app);
+        assert!(!app.ui.status_error, "{}", app.ui.status);
+        let held = &app.historical_replacements.held[0];
+        assert!(held.job.is_none());
+        let question = held.question.unwrap();
+        assert_eq!((question.version, question.bits_per_sample, question.mode), (7, 16, mode));
+        assert_eq!(held.bytes.as_slice(), wrapped);
+        assert!(Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+        assert_eq!(app.session.active().unwrap().revision, revision);
+        let dialog = dialogs(&app).into_iter().find(|dialog| owns(&dialog.fields)).unwrap();
+        assert_eq!(dialog.fields["historicalXcfSampleOrder"], Value::Null);
+        cancel_choice(&mut app);
+        assert!(app.historical_replacements.is_empty());
+        assert!(Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+    }
+}

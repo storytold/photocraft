@@ -13,6 +13,8 @@ fn image(bytes: &[u8], metadata: usize) -> Image<'_> {
         base_type: 0,
         colormap: Vec::new(),
         budget: MAX_PIXEL_BYTES,
+        native_source_budget: MAX_PIXEL_BYTES,
+        native_work: Default::default(),
         meta_budget: metadata,
         effect_decode_work: Default::default(),
         text_decode_work: Default::default(),

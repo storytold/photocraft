@@ -221,6 +221,8 @@ fn repeated_point_layers_exhaust_only_layout_work_and_report_raster_fallback() {
         base_type: 0,
         colormap: Vec::new(),
         budget: MAX_PIXEL_BYTES,
+        native_source_budget: MAX_PIXEL_BYTES,
+        native_work: Default::default(),
         meta_budget: MAX_METADATA_BYTES,
         effect_decode_work: Default::default(),
         parasite_work: Default::default(),
