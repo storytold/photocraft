@@ -1,9 +1,11 @@
 //! Tests for bounded, checked band readback across chunks, pages, and device failure modes.
 
+use std::time::Duration;
+
 use photocraft_color::{BlendMode, Color, ColorMode, SampleType};
 use photocraft_doc::{Document, Effect, Layer, LayerContent};
 use photocraft_geom::{Rect, Size};
-use photocraft_gpu::context::{NativeContext, NativeContextOptions};
+use photocraft_gpu::context::{GpuContextError, NativeContext, NativeContextOptions};
 use photocraft_gpu::readback::{DEFAULT_MAX_STAGING_BYTES, ReadbackError, render_bands, render_to_vec};
 use photocraft_gpu::{Compositor, DeviceHealth};
 use photocraft_raster::Surface;
@@ -19,6 +21,10 @@ fn test_gpu() -> Option<(NativeContext, Compositor, std::sync::MutexGuard<'stati
         Ok(c) => c,
         Err(e) => {
             eprintln!("skipping bounded readback test: {e}");
+            // Under the lock, so the next GPU test does not start beside a request still in the driver.
+            if let GpuContextError::TimedOut { pending, .. } = &e {
+                pending.wait(Duration::from_secs(120));
+            }
             return None;
         }
     };
