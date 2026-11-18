@@ -12,7 +12,7 @@ use serde_json::json;
 const SIZE: egui::Vec2 = egui::vec2(1200.0, 800.0);
 
 /// The whole app in a 1200 x 800 window with a small document open.
-fn harness() -> Harness<'static, PhotocraftApp> {
+fn harness() -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = Harness::builder().with_size(SIZE).with_max_steps(64).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::AppTheme::pro());
         let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), crate::Services::default());
@@ -24,19 +24,19 @@ fn harness() -> Harness<'static, PhotocraftApp> {
 }
 
 /// Moves the toolbar's column beside the column holding `anchor`, after it in the dock's column order or before it.
-fn dock_toolbar_beside(h: &mut Harness<'static, PhotocraftApp>, anchor: &str, after: bool) {
+fn dock_toolbar_beside(h: &mut Harness<'static, Box<PhotocraftApp>>, anchor: &str, after: bool) {
     let action = Action::move_column(TOOLBAR.to_owned(), Target::at(anchor.to_owned(), DockPlacement::column(after)));
     crate::panel_docking::apply(h.state_mut(), vec![action]).expect("the toolbar docks beside the column");
     h.run_steps(6);
 }
 
 /// The rect of the innermost node named `label`.
-fn rect_of(h: &Harness<'static, PhotocraftApp>, label: &str) -> Option<Rect> {
+fn rect_of(h: &Harness<'static, Box<PhotocraftApp>>, label: &str) -> Option<Rect> {
     h.query_all_by_label(label).last().map(|node| node.rect())
 }
 
 /// Right-clicks the middle of `rect`, which opens a tool slot's flyout.
-fn right_click(h: &mut Harness<'static, PhotocraftApp>, rect: Rect) {
+fn right_click(h: &mut Harness<'static, Box<PhotocraftApp>>, rect: Rect) {
     let at: Pos2 = rect.center();
     h.event(egui::Event::PointerMoved(at));
     h.run_steps(1);
@@ -48,7 +48,7 @@ fn right_click(h: &mut Harness<'static, PhotocraftApp>, rect: Rect) {
 }
 
 /// The Lasso slot's flyout rows, opened from the toolbar: the slot's button and the Polygonal Lasso row.
-fn lasso_flyout(h: &mut Harness<'static, PhotocraftApp>) -> (Rect, Rect) {
+fn lasso_flyout(h: &mut Harness<'static, Box<PhotocraftApp>>) -> (Rect, Rect) {
     let button = rect_of(h, "Lasso Tool").expect("the Lasso slot is drawn");
     right_click(h, button);
     let row = rect_of(h, "Polygonal Lasso Tool").expect("the Lasso flyout is open");
