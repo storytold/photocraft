@@ -48,9 +48,9 @@ struct Shown {
 /// Returns whether the session's box was shown in this pass, even if an edit then ended the session (the Move tool's
 /// transform controls share its id and must not open a second box in the same pass), and the box's snap lines, which
 /// the session's canvas tool hands to the host in this frame's pass ([`super::canvas_tool`]).
-pub fn show_in_canvas(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: egui::Rect, now: f64) -> SessionShown {
+pub fn show_in_canvas(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: egui::Rect, now: f64, doc: DocId) -> SessionShown {
     let shown = {
-        let (Some(t), Some(pv)) = (&app.ui.transform, &app.transform_preview) else { return SessionShown::default() };
+        let Some((t, pv)) = session_on(app, doc) else { return SessionShown::default() };
         show_controls(app, t, pv, ui, rect)
     };
     let Shown { edits, snapped, apply, discard, mesh, cylinder, busy } = shown;
@@ -125,8 +125,8 @@ pub struct SessionShown {
 
 /// Appends the moving pixels, then the covering layers, to the canvas's picture after the
 /// document. The grid, guides and controls paint over this slot.
-pub(crate) fn show_preview(app: &PhotocraftApp, ui: &mut egui::Ui, rect: egui::Rect) {
-    let (Some(t), Some(pv)) = (&app.ui.transform, &app.transform_preview) else { return };
+pub(crate) fn show_preview(app: &PhotocraftApp, ui: &mut egui::Ui, rect: egui::Rect, doc: DocId) {
+    let Some((t, pv)) = session_on(app, doc) else { return };
     if crate::frame_tool::frame_transform(t) {
         return;
     }
@@ -161,6 +161,13 @@ pub(crate) fn show_preview(app: &PhotocraftApp, ui: &mut egui::Ui, rect: egui::R
     {
         RasterDisplay::new("", above).mapped(frame, 1).picture().show_at(ui, rect);
     }
+}
+
+/// A tab can switch after the frame's `end_if_left` check, while the old box still exists.
+fn session_on(app: &PhotocraftApp, doc: DocId) -> Option<(&FreeTransform, &OpenPreview)> {
+    let t = app.ui.transform.as_ref()?;
+    let pv = app.transform_preview.as_ref()?;
+    (pv.doc.id == doc && app.session.active().is_some_and(|st| st.doc.id == doc)).then_some((t, pv))
 }
 
 /// What the box draws for the styled layer at `zoom`, as the framework's styled preview builds it: the composite and its

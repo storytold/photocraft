@@ -159,27 +159,54 @@ fn depths() -> [PixelFormat; 3] {
 
 /// Splice bitmap strikes into Inter's space glyph, which has no visible outline.
 fn sbix_space(strikes: &[(u16, u32, [u8; 4])]) -> Vec<u8> {
+    let id = gid(fonts::INTER_REGULAR.as_slice(), ' ');
+    let strikes: Vec<_> = strikes.iter().map(|&(ppem, side, rgba)| (ppem, vec![SbixRecord::png(id, side, rgba)])).collect();
+    sbix_font(&strikes)
+}
+
+struct SbixRecord {
+    id: u16,
+    origin: [i16; 2],
+    kind: [u8; 4],
+    data: Vec<u8>,
+}
+
+impl SbixRecord {
+    fn png(id: u16, side: u32, rgba: [u8; 4]) -> Self {
+        let pixels = Image::from_u8(side, side, ChannelLayout::Rgba, rgba.repeat((side * side) as usize)).unwrap();
+        let data = encode(&pixels, Format::Png, &EncodeOptions::default()).unwrap();
+        Self { id, origin: [0; 2], kind: *b"png ", data }
+    }
+
+    fn dupe(id: u16, target: u16, origin: [i16; 2]) -> Self {
+        Self { id, origin, kind: *b"dupe", data: target.to_be_bytes().to_vec() }
+    }
+}
+
+fn sbix_font(strikes: &[(u16, Vec<SbixRecord>)]) -> Vec<u8> {
     let inter = fonts::INTER_REGULAR.as_slice();
-    let id = gid(inter, ' ');
-    assert_ne!(id, 0);
     let count = FontRef::new(inter).unwrap().maxp().unwrap().num_glyphs();
     let mut sbix = vec![0, 1, 0, 1];
     sbix.extend_from_slice(&(strikes.len() as u32).to_be_bytes());
     sbix.resize(8 + 4 * strikes.len(), 0);
     let start = 4 + 4 * (u32::from(count) + 1);
-    for (i, &(ppem, side, rgba)) in strikes.iter().enumerate() {
-        let pixels = Image::from_u8(side, side, ChannelLayout::Rgba, rgba.repeat((side * side) as usize)).unwrap();
-        let image = encode(&pixels, Format::Png, &EncodeOptions::default()).unwrap();
+    for (i, (ppem, records)) in strikes.iter().enumerate() {
         let strike = sbix.len() as u32;
         sbix[8 + 4 * i..12 + 4 * i].copy_from_slice(&strike.to_be_bytes());
         sbix.extend_from_slice(&ppem.to_be_bytes());
         sbix.extend_from_slice(&72u16.to_be_bytes());
-        for entry in 0..=count {
-            let offset = if entry <= id { start } else { start + 8 + image.len() as u32 };
-            sbix.extend_from_slice(&offset.to_be_bytes());
+        let mut data = Vec::new();
+        for id in 0..=count {
+            sbix.extend_from_slice(&(start + data.len() as u32).to_be_bytes());
+            if let Some(record) = records.iter().find(|record| record.id == id) {
+                for origin in record.origin {
+                    data.extend_from_slice(&origin.to_be_bytes());
+                }
+                data.extend_from_slice(&record.kind);
+                data.extend_from_slice(&record.data);
+            }
         }
-        sbix.extend_from_slice(b"\0\0\0\0png ");
-        sbix.extend_from_slice(&image);
+        sbix.extend_from_slice(&data);
     }
     with_tables(inter, &[(*b"sbix", sbix)])
 }
@@ -207,7 +234,7 @@ fn png_strike_charges_input_bytes_for_each_decode() {
     let mut limits = Limits { bytes: u64::MAX, work: png.len() as u64 + 2 };
     let mut pixels = [0.0; 4];
     let mut paint = || bitmap_glyphs::paint(&glyph, &Xform::IDENTITY, 1.0, &PixelFormat::RGBA8, &mut pixels, (1, 1), &mut limits);
-    assert_eq!(paint(), Some(()), "the first decode fits the budget");
+    assert_eq!(paint(), Some(true), "the first decode fits the budget");
     assert_eq!(paint(), None, "the second decode exceeds the cumulative budget");
     assert_eq!(pixels, [1.0, 0.0, 0.0, 1.0]);
 }
@@ -224,6 +251,105 @@ fn scaled_bitmap_glyph_uses_the_larger_strike_for_paint_and_bounds() {
         assert_eq!(r.surface.content_bounds().width(), side, "strike width at {scale}×");
         assert!(r.surface.read_region(r.rect).as_chunks::<4>().0.iter().any(|p| p[3] > 0.99 && p[channel] > 0.99), "strike colour at {scale}×");
     }
+}
+
+#[test]
+fn sbix_dupe_uses_the_referenced_png_with_its_own_origin() {
+    use crate::bitmap_glyphs;
+    use skrifa::GlyphId;
+
+    let inter = fonts::INTER_REGULAR.as_slice();
+    let (space, a, b) = (gid(inter, ' '), gid(inter, 'A'), gid(inter, 'B'));
+    let font = sbix_font(&[(64, vec![SbixRecord::dupe(space, a, [3, 4]), SbixRecord::dupe(a, b, [15, 16]), SbixRecord::png(b, 8, RED)])]);
+    let g = bitmap_glyphs::get(&FontRef::new(&font).unwrap(), GlyphId::new(u32::from(space)), 64.0).unwrap();
+    assert_eq!([g.inner_bearing_x, g.inner_bearing_y], [3.0, 4.0]);
+    assert!(pixels(&layout_with(" ", font, Color::BLACK), PixelFormat::RGBA8).contains(&[1.0, 0.0, 0.0, 1.0]));
+    let cycle = sbix_font(&[(64, vec![SbixRecord::dupe(space, a, [0, 0]), SbixRecord::dupe(a, space, [0, 0])])]);
+    assert!(bitmap_glyphs::get(&FontRef::new(&cycle).unwrap(), GlyphId::new(u32::from(space)), 64.0).is_none());
+}
+
+#[test]
+fn unusable_nominal_bitmap_does_not_hide_the_output_strike() {
+    let space = gid(fonts::INTER_REGULAR.as_slice(), ' ');
+    let mut oversized = SbixRecord::png(space, 8, RED);
+    // The dimensions alone suffice to reject this record before decoding it.
+    oversized.data[16..20].copy_from_slice(&1025u32.to_be_bytes());
+    let font = sbix_font(&[(64, vec![oversized]), (128, vec![SbixRecord::png(space, 24, BLUE)])]);
+    let r = rasterize(&layout_with(" ", font, Color::BLACK), &Affine::scale(2.0), PixelFormat::RGBA8, AntiAlias::Smooth);
+    assert_eq!(r.surface.content_bounds().width(), 24);
+    assert!(r.surface.read_region(r.rect).as_chunks::<4>().0.contains(&[0.0, 0.0, 1.0, 1.0]));
+}
+
+#[test]
+fn shrinking_a_bitmap_preserves_a_thin_border() {
+    use crate::{bitmap_glyphs, color_glyphs::Limits, raster::Xform};
+    use skrifa::bitmap::{BitmapData, BitmapGlyph, Origin};
+
+    let mut pixels = vec![0; 64 * 64 * 4];
+    for y in 0..64 {
+        for x in 0..64 {
+            if x == 0 || x == 63 || y == 0 || y == 63 {
+                let i = (y * 64 + x) * 4;
+                pixels[i..i + 4].copy_from_slice(&[0, 0, 255, 255]);
+            }
+        }
+    }
+    let glyph = BitmapGlyph {
+        data: BitmapData::Bgra(&pixels),
+        width: 64,
+        height: 64,
+        bearing_x: 0.0,
+        bearing_y: 0.0,
+        inner_bearing_x: 0.0,
+        inner_bearing_y: 0.0,
+        ppem_x: 64.0,
+        ppem_y: 64.0,
+        advance: None,
+        placement_origin: Origin::TopLeft,
+    };
+    let mut out = [0.0; 8 * 8 * 4];
+    let m = Xform([0.125, 0.0, 0.0, 0.125, 0.0, 0.0]);
+    let mut limits = Limits { bytes: 128 * 1024, work: 20_000 };
+    assert_eq!(bitmap_glyphs::paint(&glyph, &m, 1.0, &PixelFormat::RGBA8, &mut out, (8, 8), &mut limits), Some(true));
+    let out = out.as_chunks::<4>().0;
+    assert_eq!(out[3], [0.125, 0.0, 0.0, 0.125]);
+    assert_eq!(out[3 * 8 + 3], [0.0; 4]);
+}
+
+#[test]
+fn undecodable_bitmap_keeps_the_outline_and_its_bounds() {
+    let inter = fonts::INTER_REGULAR.as_slice();
+    let mut record = SbixRecord::png(gid(inter, 'H'), 8, RED);
+    record.data.truncate(33); // Preserve the PNG header, but remove its image data.
+    let color = Color::rgb(0.0, 1.0, 0.0);
+    let layout = layout_with("H", sbix_font(&[(64, vec![record])]), color);
+    let reference = layout_with("H", inter.to_vec(), color);
+    let render = |layout| rasterize(layout, &Affine::IDENTITY, PixelFormat::RGBA8, AntiAlias::Smooth);
+    let expected = render(&reference);
+    let actual = render(&layout);
+    assert!(!expected.surface.content_bounds().is_empty());
+    assert_eq!(actual.surface.content_bounds(), expected.surface.content_bounds());
+    assert_eq!(actual.surface.read_region(expected.rect), expected.surface.read_region(expected.rect));
+}
+
+#[test]
+fn bitmap_budget_exhaustion_keeps_painted_emoji_and_plain_text() {
+    use crate::render::rasterize_with_work;
+
+    let inter = fonts::INTER_REGULAR.as_slice();
+    let record = SbixRecord::png(gid(inter, ' '), 64, RED);
+    let color = Color::rgb(0.0, 1.0, 0.0);
+    let plain = layout_with("  H", inter.to_vec(), color);
+    let bounds = ink_rect(&plain, &Affine::IDENTITY);
+    let work = u64::from(bounds.width()) * u64::from(bounds.height()) + 2 * 64 * 64 + record.data.len() as u64 + 256;
+    let mixed = layout_with("  H", sbix_font(&[(64, vec![record])]), color);
+    let r = rasterize_with_work(&mixed, &Affine::IDENTITY, PixelFormat::RGBA8, AntiAlias::Smooth, None, true, work);
+    let pixels = r.surface.read_region(r.rect);
+    let pixels = pixels.as_chunks::<4>().0;
+    assert!(pixels.contains(&[1.0, 0.0, 0.0, 1.0]), "the bitmap that fit the budget is preserved");
+    assert!(pixels.contains(&[0.0, 1.0, 0.0, 1.0]), "ordinary text is preserved");
+    let full = rasterize(&mixed, &Affine::IDENTITY, PixelFormat::RGBA8, AntiAlias::Smooth);
+    assert_ne!(r.surface.content_bounds(), full.surface.content_bounds(), "the second bitmap did not fit");
 }
 
 #[cfg(target_os = "macos")]

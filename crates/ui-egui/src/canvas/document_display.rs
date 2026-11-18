@@ -409,7 +409,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, 
         // The picture slot appends in show order. Drawing this with the controls would let the
         // document's opaque background cover the moving pixels (the original layer is hidden).
         if primary {
-            crate::transform_tool::show_preview(app, ui, body.rect);
+            crate::transform_tool::show_preview(app, ui, body.rect, doc.id);
         }
         if let Some(overlay) = &overlay {
             let display = RasterDisplay::new(Label::Empty, overlay as &dyn RasterSource).id_salt("pc-channel-view").picture();
@@ -530,7 +530,7 @@ fn canvas_controls(
     // Only the document's own canvas shows and drives the open Free Transform (production's `paint_primary_overlays`):
     // a New Window copy of the document shows no box, and its tool keeps its presses.
     let primary = host.is_primary(app);
-    let session = if primary { crate::transform_tool::show_in_canvas(app, ui, rect, now) } else { crate::transform_tool::SessionShown::default() };
+    let session = if primary { crate::transform_tool::show_in_canvas(app, ui, rect, now, doc) } else { crate::transform_tool::SessionShown::default() };
     let session_box_shown = session.shown;
     reported.transform_snapped = session.snapped;
     crate::cam_transform::show(app, ui, rect);
