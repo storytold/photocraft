@@ -51,13 +51,25 @@ fn sequence(letter: char, steps: usize) -> Vec<Tool> {
         .collect()
 }
 
+/// [`shift_press`] with two frames instead of three: the runtime takes the key in the first and the app picks the
+/// tool it fired in the second (`shortcut_dispatch::pick_tool`); the third only drew the toolbar again.
+fn quick_shift_press(h: &mut Harness<'static, Box<PhotocraftApp>>, key: Key) {
+    h.input_mut().events.extend([
+        egui::Event::ModifiersChanged(Modifiers::SHIFT),
+        egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::SHIFT },
+        egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::SHIFT },
+        egui::Event::ModifiersChanged(Modifiers::NONE),
+    ]);
+    h.run_steps(2);
+}
+
 #[test]
 fn from_every_tool_shift_letter_lands_on_the_next_tool_in_toolbar_order() {
     let mut h = app();
     for (letter, group) in groups() {
         for (i, from) in group.iter().enumerate() {
             h.state_mut().ui.tool = *from;
-            shift_press(&mut h, key_for(letter));
+            quick_shift_press(&mut h, key_for(letter));
             let want = group[(i + 1) % group.len()];
             assert_eq!(h.state().ui.tool, want, "Shift+{letter} from {from:?}");
         }
