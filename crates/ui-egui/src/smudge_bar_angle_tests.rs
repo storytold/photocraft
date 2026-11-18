@@ -14,16 +14,13 @@ fn bar(tool: Tool) -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 80, "height": 80})).unwrap();
     app.ui.tool = tool;
-    let mut h = Harness::builder()
-        .with_size(vec2(1600.0, 400.0))
-        .with_context(app.ctx().clone())
-        .build_ui_state(
-            |ui, app| {
-                crate::panels::options_bar(app, ui);
-                crate::dialogs::run(app, ui);
-            },
-            app,
-        );
+    let mut h = Harness::builder().with_size(vec2(1600.0, 400.0)).with_context(app.ctx().clone()).build_ui_state(
+        |ui, app| {
+            crate::panels::options_bar(app, ui);
+            crate::dialogs::run(app, ui);
+        },
+        app,
+    );
     h.run_steps(4);
     h
 }
