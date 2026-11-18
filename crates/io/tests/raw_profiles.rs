@@ -23,8 +23,7 @@ fn cc0_profile_is_shared_by_default_open_and_raw_tuning_and_survives_save() {
     assert_eq!(info["copyright"], "RawTherapee CC0");
     let (tuned, _) = import_raw_tuned("synthetic.dng", &bytes, &RawTuning::default()).unwrap();
     assert_eq!(profile_info(&tuned.document), Some(info.clone()));
-    let render = |d: &photocraft_doc::Document| photocraft_compose::flatten(d).px;
-    assert_eq!(render(&opened.document), render(&tuned.document));
+    assert_eq!(photocraft_compose::flatten(&opened.document).px, photocraft_compose::flatten(&tuned.document).px);
     let encoded = photocraft_io::export(&opened.document, "profile.pcraft", &Default::default()).unwrap();
     let restored = photocraft_io::import("profile.pcraft", &encoded.bytes).unwrap();
     assert_eq!(profile_info(&restored.document), Some(info));
