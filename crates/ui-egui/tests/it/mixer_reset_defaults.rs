@@ -1,13 +1,13 @@
 //! #11945: Mixer Brush reset defaults belong to the UI tool, not command constructors.
 
-use egui::{Context, RawInput, Shape};
+use egui::{RawInput, Shape};
 use photocraft_color::BlendMode;
 use photocraft_engine::{BrushSettings, Session};
-use photocraft_ui_egui::control::{ControlRequest, Outcome, handle};
+use photocraft_ui_egui::control::{ControlRequest, Reply, handle};
 use photocraft_ui_egui::{PhotocraftApp, Tool};
 use serde_json::{Value, json};
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(Session::new(), Default::default());
     app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
     app.sync_views();
@@ -15,9 +15,9 @@ fn app() -> PhotocraftApp {
 }
 
 fn control(app: &mut PhotocraftApp, params: Value) {
-    let ctx = Context::default();
+    let ctx = app.ctx().clone();
     let (req, _rx) = ControlRequest::new("ui.menu.invoke", params);
-    let Outcome::Done(reply) = handle(app, &ctx, &req) else { panic!("reset must finish synchronously") };
+    let Reply::Done(reply) = handle(app, &ctx, &req) else { panic!("reset must finish synchronously") };
     assert_eq!(reply["ok"], true, "{reply}");
     app.sync_views();
 }
@@ -72,11 +72,24 @@ fn assert_chip(app: &mut PhotocraftApp, label: &str) {
             _ => false,
         }
     }
-    let ctx = Context::default();
+    let ctx = app.ctx().clone();
+    ctx.enable_accesskit();
     PhotocraftApp::setup_context(&ctx, Default::default());
     let screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 300.0)));
-    let mut out = ctx.run_ui(RawInput { screen_rect, ..Default::default() }, |ui| photocraft_ui_egui::panels::options_bar(app, ui));
-    let rect = ctx.read_response(photocraft_ui_egui::brush_picker::chip_id()).expect("brush chip response").rect;
+    let mut input = RawInput { screen_rect, ..Default::default() };
+    // The app's public hook supplies the framework's current FrameInput/Env.
+    <PhotocraftApp as eframe::App>::raw_input_hook(app, &ctx, &mut input);
+    let mut out = ctx.run_ui(input, |ui| photocraft_ui_egui::panels::options_bar(app, ui));
+    // The framework owns the chip's id. Its named ComboBox bounds keep this an
+    // assertion about the painted brush-size label, even beside other controls.
+    let tree = craft::ui::testing::access::tree_of(&mut out);
+    let fields: Vec<_> = tree
+        .keys()
+        .into_iter()
+        .filter(|&key| tree.role_of(key) == Some(craft::ui::contract::Role::COMBO_BOX) && tree.name_of(key) == Some("Brush Preset picker"))
+        .collect();
+    let [field] = fields.as_slice() else { panic!("expected one named brush picker, got {}", fields.len()) };
+    let rect = tree.bounds_of(*field).expect("brush picker bounds");
     assert!(out.shapes.iter().any(|shape| has_text(&shape.shape, rect, label)), "painted chip {label}");
     out.textures_delta.clear();
 }
