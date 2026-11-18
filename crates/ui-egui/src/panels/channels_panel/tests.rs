@@ -4,7 +4,7 @@ use craft::behavior::value::{EditEvent, Mixed};
 use craft::ui::contract::ReorderMove;
 use craft::ui::primitives::textures::{ThumbRender, ThumbRequest, ThumbSource};
 
-fn app_with(mode: &str) -> PhotocraftApp {
+fn app_with(mode: &str) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 32, "height": 24, "mode": mode})).unwrap();
     app
@@ -19,7 +19,7 @@ fn steps(app: &PhotocraftApp) -> usize {
 }
 
 /// The `Masked` layer with a reveal-all mask and one alpha channel, in a 64×48 document.
-fn masked_app() -> PhotocraftApp {
+fn masked_app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
     app.run("layer.new.layer", json!({"name": "Masked"})).unwrap();

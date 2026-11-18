@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use super::*;
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 120, "height": 80, "name": "web"})).unwrap();
     app
@@ -84,7 +84,7 @@ fn create_droplet_uses_the_action_selected_in_the_form() {
 }
 
 /// An app with one saved action, selected in the Actions panel: what Create Droplet asks for.
-fn droplet_app() -> PhotocraftApp {
+fn droplet_app() -> Box<PhotocraftApp> {
     let mut app = app();
     app.session.actions.list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
     app.ui.actions.panel.selected = Some(ActionSelection::Action(0));
@@ -152,15 +152,16 @@ fn create_droplet_greys_choose_and_override_until_folder_is_picked() {
         .with_size(egui::vec2(1000.0, 800.0))
         .with_max_steps(64)
         .with_context(app.ctx().clone())
-        .build_ui_state(|ui, app: &mut PhotocraftApp| crate::dialogs::run(app, ui), app);
+        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app);
     PhotocraftApp::setup_context(&h.ctx, Default::default());
     open_create_droplet(h.state_mut()).unwrap();
     h.run_steps(4);
-    let greyed = |h: &Harness<'_, PhotocraftApp>, label: &str| h.get_by_role_and_label(egui::accesskit::Role::CheckBox, label).accesskit_node().is_disabled();
-    let browses = |h: &Harness<'_, PhotocraftApp>| h.query_all_by_label("Browse…").map(|node| node.accesskit_node().is_disabled()).collect::<Vec<bool>>();
+    let greyed =
+        |h: &Harness<'_, Box<PhotocraftApp>>, label: &str| h.get_by_role_and_label(egui::accesskit::Role::CheckBox, label).accesskit_node().is_disabled();
+    let browses = |h: &Harness<'_, Box<PhotocraftApp>>| h.query_all_by_label("Browse…").map(|node| node.accesskit_node().is_disabled()).collect::<Vec<bool>>();
     assert!(greyed(&h, "Override Action \"Save As\" Commands"), "the box is greyed with Destination None");
     assert_eq!(browses(&h), vec![true], "the Output row's Choose... is greyed with Destination None");
-    let pick = |h: &mut Harness<'_, PhotocraftApp>, caption: &str| {
+    let pick = |h: &mut Harness<'_, Box<PhotocraftApp>>, caption: &str| {
         h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Destination").click();
         h.run_steps(2);
         h.get_by_label(caption).click();

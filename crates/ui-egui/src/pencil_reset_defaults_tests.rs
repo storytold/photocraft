@@ -11,7 +11,7 @@ use crate::control::{ControlRequest, handle};
 use crate::state::Tool;
 
 /// Creates a test app with a 200x200 document.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
     app.sync_views();
