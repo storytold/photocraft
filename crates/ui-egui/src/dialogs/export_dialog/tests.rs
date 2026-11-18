@@ -1133,10 +1133,13 @@ fn captured_exports_reject_aliases_and_finish_after_the_source_tab_closes() {
                     _ => open(&mut app),
                 }
                 .unwrap();
+                // Selecting another tab before the first preview cannot retarget the export.
+                app.run("file.new", json!({"width":7,"height":9})).unwrap();
                 let mut h = harness(app);
                 let ctx = h.ctx.clone();
                 let path = if mode == "layers" { directory.path() } else { &answer };
                 h.state_mut().framework.dialogs.set_json_field(&ctx, dialog, "path", json!(path)).unwrap();
+                h.state_mut().session.close(1).unwrap();
                 h.state_mut().session.close(0).unwrap();
                 crate::dialogs::confirm(h.state_mut(), &ctx, dialog).unwrap();
                 h.run_steps(3);

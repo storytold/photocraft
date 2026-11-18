@@ -474,6 +474,7 @@ fn source_document_from(doc: Arc<Document>, f: &Map<String, Value>) -> Result<Ar
 /// Source and write protection travel with the document across a deferred picker answer.
 struct CapturedExport {
     document: Arc<Document>,
+    revision: u64,
     profile: Arc<Profile>,
     protected_source: Option<String>,
 }
@@ -481,7 +482,12 @@ struct CapturedExport {
 impl CapturedExport {
     fn active(app: &PhotocraftApp) -> Result<Self, String> {
         let state = app.session.active().ok_or("no document")?;
-        Ok(Self { document: state.doc.clone(), profile: effective_source_profile(app, &state.doc), protected_source: state.protected_import_source.clone() })
+        Ok(Self {
+            document: state.doc.clone(),
+            revision: state.revision,
+            profile: effective_source_profile(app, &state.doc),
+            protected_source: state.protected_import_source.clone(),
+        })
     }
 
     fn document(&self, fields: &Map<String, Value>) -> Result<Arc<Document>, String> {
@@ -895,11 +901,12 @@ fn drive(app: &mut PhotocraftApp, ctx: &egui::Context, open: &mut ExportOpen) ->
     // The settings did not change but the working profile did: ask again for the same revision.
     let wanted = wanted.or_else(|| {
         let (revision, options, hash) = open.last.as_ref()?;
-        (working_profile_hash(app) != *hash).then(|| PreviewRequest::new(*revision, options.clone()))
+        (working_profile_hash(app, &open.captured.document) != *hash).then(|| PreviewRequest::new(*revision, options.clone()))
     });
     if let Some(request) = wanted {
-        open.last = Some((request.revision, request.options.clone(), working_profile_hash(app)));
-        open.work = start_preview(app, open, request);
+        open.last = Some((request.revision, request.options.clone(), working_profile_hash(app, &open.captured.document)));
+        open.captured.profile = effective_source_profile(app, &open.captured.document);
+        open.work = Some(start_preview(open, request));
     }
     answer_preview(app, ctx, open);
     true
@@ -914,10 +921,8 @@ fn layer_documents(app: &PhotocraftApp, layers: &[LayerId]) -> Vec<Document> {
     app.session.active().and_then(|st| exportable_layers(&st.doc, layers).ok()).unwrap_or_default()
 }
 
-/// The working profile an untagged active document is previewed under; `None` for a tagged one,
-/// whose own profile decides. Tagged documents skip the profile lookup on every frame.
-fn working_profile_hash(app: &PhotocraftApp) -> Option<String> {
-    let doc = &app.session.active()?.doc;
+/// The working profile an untagged export is previewed under. A tagged document supplies its own profile.
+fn working_profile_hash(app: &PhotocraftApp, doc: &Document) -> Option<String> {
     doc.icc_profile.is_none().then(|| app.session.color.working(doc.mode).content_hash().to_string())
 }
 
@@ -939,20 +944,19 @@ fn store_preset(app: &mut PhotocraftApp, source: PixelSize, event: NamedPresetEv
     }
 }
 
-/// The work for a new preview request: the document and profile it is made from, captured now.
-fn start_preview(app: &PhotocraftApp, open: &ExportOpen, request: PreviewRequest<ExportOptions>) -> Option<PreviewWork> {
-    let st = app.session.active()?;
-    let doc = st.doc.clone();
+/// Preview the same retained snapshot and profile that the export will write.
+fn start_preview(open: &ExportOpen, request: PreviewRequest<ExportOptions>) -> PreviewWork {
+    let doc = open.captured.document.clone();
     let mut settings = settings_from(&request.options, open.source);
     // The preview of several layers shows the first.
     if let Some(layer) = open.layers.first() {
         settings.insert("__layer".into(), json!(layer.0));
     }
-    let profile = effective_source_profile(app, &doc);
+    let profile = open.captured.profile.clone();
     let signature = format!("{}:{}", Value::Object(settings.clone()), profile.content_hash());
     let layer = open.layers.first().map(|layer| layer.0);
-    let key = egui::Id::unique(("export-preview", doc.id.0, st.revision, layer));
-    Some(PreviewWork { revision: request.revision, settings, signature, key, doc, profile, answered: None })
+    let key = egui::Id::unique(("export-preview", doc.id.0, open.captured.revision, layer));
+    PreviewWork { revision: request.revision, settings, signature, key, doc, profile, answered: None }
 }
 
 /// Gives the dialog the preview of the work in progress when it is ready, then the exact size
