@@ -1,6 +1,6 @@
 # Control protocol
 
-The desktop control protocol is newline-delimited JSON over a TCP listener bound to `127.0.0.1`. The first frame on every connection must be `auth` with the configured 256-bit bearer token. After authentication, each request carries `id`, `method`, and optional `params`; each reply includes the matching `id` and either a result or error.
+The desktop control protocol is newline-delimited JSON over a TCP listener bound to `127.0.0.1`. Every connection must first authenticate with the configured 256-bit token: either by challenge (`auth.challenge`, then `auth` with an HMAC proof; the token never crosses the wire and the server proves it holds the token first), or with the original single `auth` frame carrying the token. After authentication, each request carries `id`, `method`, and optional `params`; each reply includes the matching `id` and either a result or error.
 
 ```json
 {"id":"auth","method":"auth","params":{"token":"<64-hex>"}}
@@ -11,7 +11,7 @@ The current method catalog includes engine execution and discovery, application 
 
 Implementation is split across:
 
-- `apps/photocraft/src/control_server.rs`: loopback TCP transport;
+- `craft::automation::server` (craft-libs): loopback TCP transport;
 - `crates/ui-egui/src/control.rs`: live application handlers;
 - `crates/automation/src/bridge.rs`: MCP-to-GUI client.
 

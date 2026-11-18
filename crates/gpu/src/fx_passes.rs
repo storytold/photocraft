@@ -60,6 +60,7 @@ impl Compositor {
                 e.region = region;
                 rebuild = false;
             }
+            photocraft_raster::scratch::give(v);
         }
         if rebuild {
             let shape = Tex::map(device, "pc_fx_shape", region, MAP32);
@@ -108,6 +109,7 @@ impl Compositor {
             fx::paste(&mut e.shape_cpu, region, damage, &v);
             e.shape.write_r32(queue, region, damage, &v);
             staged += v.len() as u64 * 4;
+            photocraft_raster::scratch::give(v);
         }
 
         // Programs, and the distance fields they read (max reach per field).
@@ -156,7 +158,7 @@ impl Compositor {
         }
 
         if let Some(t) = t_trace.filter(|_| !damage.is_empty()) {
-            eprintln!("effect maps of `{}`: shape + distance fields over {damage:?} in {:.2} ms (CPU)", layer.name, t.elapsed().as_secs_f64() * 1000.0);
+            eprintln!("effect maps of {:?}: shape + distance fields over {damage:?} in {:.2} ms (CPU)", layer.name, t.elapsed().as_secs_f64() * 1000.0);
         }
         e.progs.truncate(progs.len());
         while e.progs.len() < progs.len() {
@@ -180,7 +182,12 @@ impl Compositor {
                 };
             }
             stats.fx_programs += 1;
-            self.run_program(device, queue, encoder, key, i, prog, d, stats);
+            if let Err(error) = self.run_program(device, queue, encoder, key, i, prog, d, stats) {
+                // A failed pattern upload leaves these freshly allocated effect maps
+                // incomplete; a later retry must rebuild rather than reuse them.
+                self.fx.remove(&key);
+                return Err(error);
+            }
         }
         Ok(())
     }
@@ -197,10 +204,10 @@ impl Compositor {
         prog: &fx::MapProgram,
         d: Rect,
         stats: &mut Stats,
-    ) {
+    ) -> Result<(), Unsupported> {
         let pattern_views: Vec<Option<wgpu::TextureView>> =
-            prog.stages.iter().map(|s| s.pattern.as_ref().map(|p| self.pattern_view(device, queue, p))).collect();
-        let Some(e) = self.fx.get(&key) else { return };
+            prog.stages.iter().map(|s| s.pattern.as_ref().map(|p| self.pattern_view(device, queue, p)).transpose()).collect::<Result<_, _>>()?;
+        let Some(e) = self.fx.get(&key) else { return Ok(()) };
         let region = e.region;
         let shape = e.shape.view.clone();
         let finals: Vec<Option<wgpu::TextureView>> = e.progs[item].maps.iter().map(|m| m.as_ref().map(|t| t.view.clone())).collect();
@@ -252,6 +259,7 @@ impl Compositor {
             });
         }
         self.kit.run(device, queue, encoder, &draws);
+        Ok(())
     }
 }
 
