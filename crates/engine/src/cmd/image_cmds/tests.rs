@@ -401,6 +401,33 @@ fn canvas_size_anchors_and_extends_background() {
 }
 
 #[test]
+fn canvas_size_shrink_trims_the_background_before_a_white_extension() {
+    for depth in [8, 16, 32] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width":32,"height":32,"depth":depth,"background":"white"})).unwrap();
+        s.edit("Test layers", |doc, _| {
+            let canvas = doc.bounds();
+            doc.background_mut().unwrap().surface_mut().unwrap().fill_rect(canvas, &[0.5, 0.5, 0.5, 1.0]);
+            let mut marker = Layer::raster("Mark", doc.pixel_format());
+            marker.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 32, 3), &[1.0, 0.0, 0.0, 1.0]);
+            doc.layers.push(marker);
+            Ok(())
+        })
+        .unwrap();
+        s.execute("image.canvasSize", json!({"width":16,"height":16})).unwrap();
+        let reduced = doc(&s);
+        assert_eq!(reduced.layers[1].surface().unwrap().content_bounds(), Rect::new(-8, -8, 24, -5), "{depth}-bit: ordinary layer keeps its pixels");
+        s.execute("image.imageSize", json!({"width":15,"resample":"bicubic"})).unwrap();
+        s.execute("image.canvasSize", json!({"height":17,"anchor":"bottom","extensionColor":"white"})).unwrap();
+        let background = doc(&s).background().unwrap().surface().unwrap();
+        for y in 0..2 {
+            assert_eq!(background.rgba(7, y), [1.0; 4], "{depth}-bit: the extension uses the recorded colour");
+        }
+        assert!((0.49..=0.51).contains(&background.rgba(7, 8)[0]), "{depth}-bit: the existing background keeps its colour");
+    }
+}
+
+#[test]
 fn canvas_size_anchor_offsets_and_rejects_unlisted() {
     // 64x48 -> 100x80: dx spans 36 and dy spans 32, so each anchor factor lands on a known
     // offset. All nine documented values must anchor exactly where they do today (#2946).

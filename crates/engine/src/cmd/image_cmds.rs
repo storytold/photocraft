@@ -693,6 +693,28 @@ fn extension_color(s: &Session, p: &Value) -> [f32; 4] {
     }
 }
 
+/// Crop only the Background. Complete tiles keep their storage and edge copies
+/// are bounded to a single tile, including when a PSD has sparse off-canvas data.
+fn clip_background(surf: &mut Surface, keep: Rect) -> Result<()> {
+    let mut clipped = Surface::with_default(surf.format(), &surf.default_pixel());
+    let error = |e: photocraft_raster::AllocationError| crate::allocation::error("Canvas Size", &e.to_string());
+    for (&coord, tile) in surf.tiles() {
+        let bounds = coord.rect();
+        let inside = bounds.intersect(&keep);
+        if inside.is_empty() {
+            continue;
+        }
+        if inside == bounds {
+            clipped.put_tiles([(coord, tile.clone())]);
+        } else {
+            let pixels = surf.try_to_interleaved(inside).map_err(error)?;
+            clipped.try_write_interleaved(inside, &pixels).map_err(error)?;
+        }
+    }
+    *surf = clipped;
+    Ok(())
+}
+
 /// Image → Canvas Size.
 fn canvas_size(s: &mut Session, p: &Value) -> Result<Value> {
     let names = s.default_names();
@@ -747,13 +769,25 @@ fn canvas_size(s: &mut Session, p: &Value) -> Result<Value> {
         {
             crate::extra_cmds::unlock_background(bg, &names.numbered("Layer", 0));
         }
-        // The locked Background layer is extended with the extension colour.
-        if ext[3] > 0.0
-            && let Some(bg) = doc.background_mut()
+        if let Some(bg) = doc.background_mut()
             && let LayerContent::Raster(surf) = &mut bg.content
         {
-            let px = photocraft_raster::from_rgba(&surf.format(), ext);
-            fill_background_extension(surf, canvas, old, &px);
+            // A Canvas Size shrink trims the locked Background along the shrunk
+            // axes. Ordinary layers can show their off-canvas pixels on a later grow.
+            if nw < old.width() || nh < old.height() {
+                let mut keep = surf.tile_bounds();
+                if nw < old.width() {
+                    (keep.x0, keep.x1) = (canvas.x0, canvas.x1);
+                }
+                if nh < old.height() {
+                    (keep.y0, keep.y1) = (canvas.y0, canvas.y1);
+                }
+                clip_background(surf, keep)?;
+            }
+            if ext[3] > 0.0 {
+                let px = photocraft_raster::from_rgba(&surf.format(), ext);
+                fill_background_extension(surf, canvas, old, &px);
+            }
         }
         Ok(())
     })?;
