@@ -180,10 +180,13 @@ fn screen(doc: Document, setup: &[(&str, serde_json::Value)], name: &str) -> Opt
     screens(vec![(doc, setup, name)]).and_then(|mut shown| shown.pop())
 }
 
+/// A document to show, the commands that set it up, and the file name of its screenshot.
+type ScreenCase<'a> = (Document, &'a [(&'a str, serde_json::Value)], &'a str);
+
 /// [`screen`] for several documents in one app, opened and rendered in turn: one harness, so one GPU device and one
 /// compositor build (#15439) instead of one per document (#15652). Each document's setup commands run while it is
 /// the active one; View › 32-bit Preview Options is kept per document.
-fn screens(cases: Vec<(Document, &[(&str, serde_json::Value)], &str)>) -> Option<Vec<Screen>> {
+fn screens(cases: Vec<ScreenCase<'_>>) -> Option<Vec<Screen>> {
     let mut cases = cases.into_iter();
     let (doc, setup, name) = cases.next()?;
     let ok = Arc::new(AtomicBool::new(false));
