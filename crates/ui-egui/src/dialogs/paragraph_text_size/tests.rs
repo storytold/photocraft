@@ -1,9 +1,10 @@
 //! Alt+drag with the Type tool and the Paragraph Text Size dialog it opens (#12044): the dialog is
-//! measured (prefilled with the dragged size, decimals kept, OK creates the box at the drag start,
-//! Cancel creates nothing), and the neighbours of that route are checked to keep today's behaviour:
-//! a plain drag still makes the box directly, Alt+click is still point text, ⌥ is read at the press
-//! so it can come up or go down mid-drag, and a second drag while the dialog is open is swallowed
-//! by that dialog.
+//! measured (prefilled with the dragged size, decimals kept, OK creates the box at the drag start
+//! and adds one History state, Cancel creates nothing and adds none), and the neighbours of that
+//! route are checked to keep today's behaviour: a plain drag still makes the box directly, Alt+click
+//! is still point text, the vertical Type tool keeps its plain drag, ⌥ is read at the press so it can
+//! come up or go down mid-drag, a second drag while the dialog is open is swallowed by that dialog,
+//! and a name the dialog does not show as a field is refused.
 //!
 //! The gestures go through the canvas pass (`canvas::testing`), the way the released Type tool does
 //! on the hosted framework: a press with ⌥ held, a move, a release. The dialog is driven the way a
@@ -42,6 +43,11 @@ fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2], down: Modifiers, 
 
 fn layers(app: &PhotocraftApp) -> usize {
     app.session.active().unwrap().doc.layers.len()
+}
+
+/// The active document's History entries: the ticket's "adds no history state" is measured here.
+fn history_len(app: &PhotocraftApp) -> usize {
+    app.session.active().unwrap().history.entries().len()
 }
 
 /// The open hosted dialogs: id, key and fields. Asserts that the Alt+drag opened one dialog and
@@ -100,9 +106,11 @@ fn confirming_creates_the_paragraph_box_at_the_drag_start() {
     drag(&mut app, [10.0, 10.0], [109.5, 60.0], Modifiers::ALT, Modifiers::ALT);
     let (d, _) = only_dialog(&app);
     set(&mut app, d, [("width", json!(250.0)), ("height", json!(120.0))]);
+    let steps = history_len(&app);
     let ctx = app.ctx().clone();
     crate::dialogs::confirm(&mut app, &ctx, d).unwrap();
     assert!(app.framework.dialogs.open_dialogs().is_empty(), "OK closes the dialog");
+    assert_eq!(history_len(&app), steps + 1, "OK adds one History state, as the drag's create does");
     let ed = app.ui.text_edit.as_ref().expect("OK starts the edit session, as the drag does");
     assert_eq!(box_rect(&app, ed.layer), [10.0, 10.0, 250.0, 120.0], "the dialog's box at the drag's start");
     assert_eq!((ed.anchor, ed.caret), (0, PLACEHOLDER.chars().count()), "placeholder text, all of it selected");
@@ -117,11 +125,13 @@ fn cancelling_creates_nothing() {
     drag(&mut app, [10.0, 10.0], [109.5, 60.0], Modifiers::ALT, Modifiers::ALT);
     let (id, _) = only_dialog(&app);
     let before = layers(&app);
+    let steps = history_len(&app);
     let ctx = app.ctx().clone();
     app.framework.dialogs.cancel_by_id(&ctx, id);
     frame(&mut app);
     assert!(app.framework.dialogs.open_dialogs().is_empty(), "Cancel closes the dialog");
     assert_eq!(layers(&app), before, "Cancel creates nothing");
+    assert_eq!(history_len(&app), steps, "and adds no History state");
     assert!(app.ui.text_edit.is_none());
 }
 
@@ -208,6 +218,18 @@ fn a_second_drag_while_the_dialog_is_open_creates_nothing() {
     assert_eq!(app.framework.dialogs.open_dialogs().len(), 1, "the second drag opens no second dialog");
     assert_eq!(layers(&app), before, "and creates nothing");
     assert!(app.ui.text_edit.is_none(), "and starts no edit session");
+}
+
+/// Guard (pattern 4, scope): the ticket measured the horizontal Type tool alone, so the vertical one
+/// keeps today's gesture - an Alt+drag there still commits the box at once, with no dialog.
+#[test]
+fn an_alt_drag_with_the_vertical_type_tool_still_makes_the_box_directly() {
+    let mut app = app();
+    app.ui.tool = Tool::VerticalType;
+    drag(&mut app, [10.0, 10.0], [110.0, 60.0], Modifiers::ALT, Modifiers::ALT);
+    assert!(app.framework.dialogs.open_dialogs().is_empty(), "the vertical Type tool opens no dialog");
+    let ed = app.ui.text_edit.as_ref().expect("the drag creates the text at once");
+    assert_eq!(box_rect(&app, ed.layer), [10.0, 10.0, 100.0, 50.0], "the plain drag's box");
 }
 
 /// Guard (pattern 9, no guessing from a name): the drag's top-left and the document it was made in
