@@ -109,10 +109,10 @@ impl Stride {
 }
 
 /// Rows of `img` (its lines) averaged down to `n1` samples each (rule 5).
-fn reduce(img: &Image, n1: usize, depth: Depth) -> Image {
+fn reduce(img: &Image, n1: usize, depth: Depth) -> Option<Image> {
     let (w, h, n) = (img.w, img.h, img.n);
     let node: Vec<usize> = (0..w).map(|r| (((r + 1) * n1).saturating_sub(1) / w).min(n1.saturating_sub(1))).collect();
-    let mut px = vec![0.0f32; n1 * h * n];
+    let mut px = crate::smart_scale::zeros(n1.checked_mul(h)?.checked_mul(n)?, 0.0f32)?;
     crate::par::chunks_mut(&mut px, n1 * n, true, |y, row| {
         let mut sums = vec![0.0f64; n1 * n];
         let mut counts = vec![0usize; n1];
@@ -133,14 +133,14 @@ fn reduce(img: &Image, n1: usize, depth: Depth) -> Image {
             }
         }
     });
-    Image { w: n1, h, n, px }
+    Some(Image { w: n1, h, n, px })
 }
 
 /// One pass along the rows of `img`: row `y` produces `count` pixels, the first lying `dist0[y]`
 /// (1/256 px) from that row's origin, the row's `img.w` samples spanning `length` (1/256 px).
 fn pass(img: &Image, dist0: &[i64], count: usize, length: i64, depth: Depth, table: &[[i64; 6]]) -> Option<Image> {
     if let Some(n1) = reduced(img.w, length) {
-        return walk(&reduce(img, n1, depth), dist0, count, &vec![length; img.h], depth, table);
+        return walk(&reduce(img, n1, depth)?, dist0, count, &vec![length; img.h], depth, table);
     }
     walk(img, dist0, count, &vec![length; img.h], depth, table)
 }
@@ -153,7 +153,7 @@ fn reduced(n: usize, length: i64) -> Option<usize> {
 }
 
 /// [`reduce`] for the pass down the columns: the columns of `img` averaged down to `n1` samples each.
-fn reduce_columns(img: &Image, n1: usize, depth: Depth) -> Image {
+fn reduce_columns(img: &Image, n1: usize, depth: Depth) -> Option<Image> {
     let (w, h, n) = (img.w, img.h, img.n);
     // A row's node never falls as the rows go down, so each node averages one run of rows.
     let mut runs = vec![(0usize, 0usize); n1];
@@ -166,7 +166,7 @@ fn reduce_columns(img: &Image, n1: usize, depth: Depth) -> Image {
             run.1 = r + 1;
         }
     }
-    let mut px = vec![0.0f32; n1 * w * n];
+    let mut px = crate::smart_scale::zeros(n1.checked_mul(w)?.checked_mul(n)?, 0.0f32)?;
     crate::par::chunks_mut(&mut px, w * n, true, |j, row| {
         let Some(&(a, b)) = runs.get(j) else { return };
         let mut sums = vec![0.0f64; w * n];
@@ -178,7 +178,7 @@ fn reduce_columns(img: &Image, n1: usize, depth: Depth) -> Image {
             *v = depth.mean(*s, b - a);
         }
     });
-    Image { w, h: n1, n, px }
+    Some(Image { w, h: n1, n, px })
 }
 
 /// One pixel of the walk: the six weights `q` over samples `base..base + 6` of a line whose
@@ -307,7 +307,7 @@ impl Columns<'_> {
 /// `lengths[y]` (1/256 px).
 pub(crate) fn walk(img: &Image, dist0: &[i64], count: usize, lengths: &[i64], depth: Depth, table: &[[i64; 6]]) -> Option<Image> {
     let (n, nc) = (img.w, img.n);
-    let mut px = vec![0.0f32; count.checked_mul(img.h)?.checked_mul(nc)?];
+    let mut px = crate::smart_scale::zeros(count.checked_mul(img.h)?.checked_mul(nc)?, 0.0f32)?;
     crate::par::chunks_mut(&mut px, count * nc, true, |y, row| {
         let (Some(&d0), Some(&length)) = (dist0.get(y), lengths.get(y)) else { return };
         let Some(line) = img.px.get(y * n * nc..(y + 1) * n * nc) else { return };
@@ -317,9 +317,9 @@ pub(crate) fn walk(img: &Image, dist0: &[i64], count: usize, lengths: &[i64], de
     Some(Image { w: count, h: img.h, n: nc, px })
 }
 
-pub(crate) fn transpose(img: &Image) -> Image {
+pub(crate) fn transpose(img: &Image) -> Option<Image> {
     let (w, h, n) = (img.w, img.h, img.n);
-    let mut px = vec![0.0f32; w * h * n];
+    let mut px = crate::smart_scale::zeros(w.checked_mul(h)?.checked_mul(n)?, 0.0f32)?;
     // Output row x is input column x.
     crate::par::chunks_mut(&mut px, h * n, true, |x, row| {
         for (y, out) in row.chunks_exact_mut(n).enumerate() {
@@ -328,13 +328,13 @@ pub(crate) fn transpose(img: &Image) -> Image {
             }
         }
     });
-    Image { w: h, h: w, n, px }
+    Some(Image { w: h, h: w, n, px })
 }
 
 /// A quarter turn clockwise (row `i` of the result is column `i` read bottom to top).
-fn turn(img: &Image) -> Image {
+fn turn(img: &Image) -> Option<Image> {
     let (w, h, n) = (img.w, img.h, img.n);
-    let mut px = vec![0.0f32; w * h * n];
+    let mut px = crate::smart_scale::zeros(w.checked_mul(h)?.checked_mul(n)?, 0.0f32)?;
     crate::par::chunks_mut(&mut px, h * n, true, |i, row| {
         for (j, out) in row.chunks_exact_mut(n).enumerate() {
             let y = h - 1 - j;
@@ -343,7 +343,7 @@ fn turn(img: &Image) -> Image {
             }
         }
     });
-    Image { w: h, h: w, n, px }
+    Some(Image { w: h, h: w, n, px })
 }
 
 /// The pixels of `src` inside `bounds` (its contents' canvas; `src` has alpha) drawn through the
@@ -374,16 +374,16 @@ pub(crate) fn render_with(src: &Surface, bounds: Rect, m: [f64; 6], bleed_conten
         return None;
     }
     let depth = Depth::of(fmt.sample);
-    let mut img = load(src, bounds, depth);
+    let mut img = load(src, bounds, depth)?;
     if bleed_contents {
-        bleed(&mut img);
+        bleed(&mut img)?;
     }
     // Rule 2: quarter turns, and the map from the turned image.
     let ang = b0.atan2(a0).to_degrees();
     let turns = ((ang + 45.0) / 90.0).floor().rem_euclid(4.0) as usize;
     let (mut l, mut t) = ([[a0, c0], [b0, d0]], [e0, f0]);
     for _ in 0..turns {
-        img = turn(&img);
+        img = turn(&img)?;
         // p' = R p + (H_old, 0) with R = [[0, -1], [1, 0]]: the map from the turned image is
         // L R⁻¹ (p' − (H_old, 0)), R⁻¹ = [[0, 1], [-1, 0]].
         let ri = [[0.0, 1.0], [-1.0, 0.0]];
@@ -435,7 +435,7 @@ pub(crate) fn render_with(src: &Surface, bounds: Rect, m: [f64; 6], bleed_conten
     // result's tiles.
     let length = r256(hf * k);
     let inter = match reduced(inter.h, length) {
-        Some(n1) => reduce_columns(&inter, n1, depth),
+        Some(n1) => reduce_columns(&inter, n1, depth)?,
         None => inter,
     };
     let Some(stride) = Stride::new(length, inter.h) else {
@@ -563,8 +563,8 @@ mod tests {
         for (d, depth) in DEPTHS.into_iter().enumerate() {
             let img = noisy(7, 50, 4, depth, 40 + d as u64);
             for n1 in [1, 2, 7, 35, 49, 50] {
-                let want = transpose(&reduce(&transpose(&img), n1, depth));
-                let got = reduce_columns(&img, n1, depth);
+                let want = transpose(&reduce(&transpose(&img).unwrap(), n1, depth).unwrap()).unwrap();
+                let got = reduce_columns(&img, n1, depth).unwrap();
                 assert_eq!((got.w, got.h, got.n), (7, n1, 4));
                 assert!(same(&got.px, &want.px), "to {n1}, depth {d}");
             }
@@ -585,7 +585,7 @@ mod tests {
                 let img = noisy(w, h, nc, depth, (d * 16 + nc) as u64);
                 for length in [41 * 256, 41 * 512 + 77, 41 * 230, 3] {
                     let stride = Stride::new(length, h).expect("a length");
-                    let want = transpose(&walk(&transpose(&img), &dist0, rows, &vec![length; w], depth, &table).expect("walked"));
+                    let want = transpose(&walk(&transpose(&img).unwrap(), &dist0, rows, &vec![length; w], depth, &table).expect("walked")).unwrap();
                     for clear in [false, true] {
                         let columns = Columns { img: &img, starts: dist0.iter().map(|&d| stride.start(d)).collect(), stride, depth, table: &table, clear };
                         let mut got = vec![0.0f32; w * rows * nc];
@@ -629,7 +629,7 @@ mod tests {
     fn strong_shrinks_average_the_covered_samples() {
         // 128 samples to 91 nodes (50 % / 0.7): ((r + 1) 91 − 1) div 128 groups 1 or 2 samples.
         let img = Image { w: 128, h: 1, n: 1, px: (0..128).map(|i| i as f32).collect() };
-        let r = reduce(&img, 91, Depth { levels: Some(255.0) });
+        let r = reduce(&img, 91, Depth { levels: Some(255.0) }).unwrap();
         assert_eq!(r.w, 91);
         // Sample 0 goes to node 0 ((1·91 − 1) div 128 = 0), sample 1 to node 1 (181 div 128).
         assert_eq!(r.at(0, 0, 0), 0.0);

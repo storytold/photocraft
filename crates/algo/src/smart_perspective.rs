@@ -93,7 +93,7 @@ fn projective(img: &Image, h: &[f64; 9], x0: i64, count: usize, depth: Depth, ta
     let alpha = nc - 1;
     let last = n as i64 - 1;
     let nf = n as f64;
-    let mut px = vec![0.0f32; count.checked_mul(img.h)?.checked_mul(nc)?];
+    let mut px = crate::smart_scale::zeros(count.checked_mul(img.h)?.checked_mul(nc)?, 0.0f32)?;
     crate::par::chunks_mut(&mut px, count * nc, true, |j, row| {
         let Some(line) = img.px.get(j * n * nc..(j + 1) * n * nc) else { return };
         let y = j as f64 + 0.5;
@@ -274,7 +274,7 @@ fn draw(img: &Image, h: &[f64; 9], depth: Depth, kernel: Option<(f64, f64)>) -> 
         dist0.push(y0 * 256 - r256(bb / dd));
         lengths.push(r256(hf * aa / dd));
     }
-    let out = transpose(&walk(&transpose(&inter), &dist0, ny, &lengths, depth, &weight_table())?);
+    let out = transpose(&walk(&transpose(&inter)?, &dist0, ny, &lengths, depth, &weight_table())?)?;
     Some((out, x0, y0))
 }
 
@@ -325,16 +325,16 @@ fn render_with(src: &Surface, bounds: Rect, h: [f64; 9], kernel: Option<(f64, f6
     // frame, as the reference does.
     let (out, x0, y0) = if side {
         if bleed_contents {
-            bleed(&mut img);
+            bleed(&mut img)?;
         }
         draw(&img, &h, depth, kernel)?
     } else {
-        let mut t = transpose(&img);
+        let mut t = transpose(&img)?;
         if bleed_contents {
-            bleed(&mut t);
+            bleed(&mut t)?;
         }
         let (out, y0, x0) = draw(&t, &transposed(&h), depth, kernel)?;
-        (transpose(&out), x0, y0)
+        (transpose(&out)?, x0, y0)
     };
     let mut surface = Surface::new(fmt);
     let mut data = out.px;
@@ -488,7 +488,7 @@ fn transposed_surface(s: &Surface, r: Rect) -> Option<(Surface, Rect)> {
     let (w, h) = (r.width() as usize, r.height() as usize);
     w.checked_mul(h)?.checked_mul(nc)?.le(&MAX_SAMPLES).then_some(())?;
     let img = Image { w, h, n: nc, px: s.read_region(r) };
-    let t = transpose(&img);
+    let t = transpose(&img)?;
     let tr = Rect::new(r.y0, r.x0, r.y1, r.x1);
     let mut out = Surface::new(s.format());
     out.write_region_par(tr, &t.px);
@@ -943,7 +943,7 @@ mod tests {
         let dims: Vec<usize> = size.split_whitespace().map(|v| v.parse().expect("size")).collect();
         let bytes = std::fs::read(inp).expect("input");
         let mut img = Image { w: dims[0], h: dims[1], n: 4, px: bytes.iter().map(|&b| f32::from(b)).collect() };
-        bleed(&mut img);
+        bleed(&mut img).unwrap();
         let b: Vec<u8> = img.px.iter().map(|v| v.round().clamp(0.0, 255.0) as u8).collect();
         std::fs::write(out, b).expect("write");
     }

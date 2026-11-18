@@ -140,16 +140,25 @@ pub(crate) fn clear_hidden(data: &mut [f32], fmt: &photocraft_color::PixelFormat
     });
 }
 
+/// `len` copies of `v`, or `None` if they can't be allocated: image-sized buffers are allocated fallibly, so a layer
+/// too large for memory fails the render (and its caller falls back) instead of aborting the app.
+pub(crate) fn zeros<T: Clone>(len: usize, v: T) -> Option<Vec<T>> {
+    let mut out = Vec::new();
+    out.try_reserve_exact(len).ok()?;
+    out.resize(len, v);
+    Some(out)
+}
+
 /// Rows read per task by [`load`].
 const LOAD_ROWS: usize = 32;
 
 /// The pixels of `src` inside `bounds` as an [`Image`]: whole levels at 8 and 16 bits, the stored
 /// values at 32. Bands of rows are read on all cores.
-pub(crate) fn load(src: &Surface, bounds: Rect, depth: Depth) -> Image {
+pub(crate) fn load(src: &Surface, bounds: Rect, depth: Depth) -> Option<Image> {
     /// Rows read at a time.
     const READ_ROWS: usize = 4;
     let (w, h, n) = (bounds.width() as usize, bounds.height() as usize, src.channels());
-    let mut px = vec![0.0f32; w * h * n];
+    let mut px = zeros(w.checked_mul(h)?.checked_mul(n)?, 0.0f32)?;
     crate::par::chunks_mut(&mut px, LOAD_ROWS * w * n, true, |i, part| {
         // A few rows at a time, through one buffer that stays in the cache.
         let mut band = Vec::new();
@@ -164,7 +173,7 @@ pub(crate) fn load(src: &Surface, bounds: Rect, depth: Depth) -> Image {
             }
         }
     });
-    Image { w, h, n, px }
+    Some(Image { w, h, n, px })
 }
 
 /// A surface of `fmt` whose `rect` holds the rows `fill` computes: `fill(y, x, out)` writes the
@@ -236,10 +245,10 @@ pub fn scale_at(src: &Surface, bounds: Rect, width: u32, height: u32, origin: (i
         return None;
     }
     let depth = Depth::of(fmt.sample);
-    let mut img = load(src, bounds, depth);
-    bleed(&mut img);
+    let mut img = load(src, bounds, depth)?;
+    bleed(&mut img)?;
     if nx != w {
-        img = axis(&img, nx, depth, false, along_x);
+        img = axis(&img, nx, depth, false, along_x)?;
     }
     let rect = Rect::new(origin.0, origin.1, origin.0.checked_add(i32::try_from(width).ok()?)?, origin.1.checked_add(i32::try_from(height).ok()?)?);
     if ny == h {
@@ -250,7 +259,7 @@ pub fn scale_at(src: &Surface, bounds: Rect, width: u32, height: u32, origin: (i
         });
     }
     // The rows are filtered as they are written: no image of the full size in between.
-    let (mid, a, stretch) = prepared(&img, ny, depth, true);
+    let (mid, a, stretch) = prepared(&img, ny, depth, true)?;
     let along_y = along_y.read(h, mid.as_ref().map_or(h, |m| m.h));
     let img = mid.unwrap_or(img);
     let taps: Vec<Taps> = (0..ny).map(|o| taps(o, img.h, a, stretch, along_y)).collect();
@@ -263,8 +272,8 @@ pub fn scale_at(src: &Surface, bounds: Rect, width: u32, height: u32, origin: (i
 
 /// One axis resized to `len` samples (`vertical`: the rows), with the Automatic filter for its
 /// scale, through the averaged image below ¼.
-fn axis(img: &Image, len: usize, depth: Depth, vertical: bool, exact: Exact) -> Image {
-    let (mid, a, stretch) = prepared(img, len, depth, vertical);
+fn axis(img: &Image, len: usize, depth: Depth, vertical: bool, exact: Exact) -> Option<Image> {
+    let (mid, a, stretch) = prepared(img, len, depth, vertical)?;
     let have = |i: &Image| if vertical { i.h } else { i.w };
     let exact = exact.read(have(img), mid.as_ref().map_or(have(img), have));
     pass(mid.as_ref().unwrap_or(img), len, a, stretch, depth, vertical, exact)
@@ -287,15 +296,15 @@ impl Exact {
 
 /// What an axis's filtering pass to `len` samples works with: the averaged image it reads (below
 /// ¼; otherwise it reads `img` itself), then the Keys parameter and stretch for its scale.
-fn prepared(img: &Image, len: usize, depth: Depth, vertical: bool) -> (Option<Image>, f64, f64) {
+fn prepared(img: &Image, len: usize, depth: Depth, vertical: bool) -> Option<(Option<Image>, f64, f64)> {
     let have = if vertical { img.h } else { img.w };
     let k = len as f64 / have as f64;
     if k < 0.25 {
         let (a, stretch) = automatic(0.25);
-        (Some(average(img, 4 * len, depth, vertical)), a, stretch)
+        Some((Some(average(img, len.checked_mul(4)?, depth, vertical)?), a, stretch))
     } else {
         let (a, stretch) = automatic(k);
-        (None, a, stretch)
+        Some((None, a, stretch))
     }
 }
 
@@ -354,12 +363,12 @@ fn taps(o: usize, have: usize, a: f64, stretch: f64, exact: Exact) -> Taps {
 
 /// One filtering pass along an axis to `len` samples at the placement `exact` (rule 3 of the
 /// module).
-fn pass(img: &Image, len: usize, a: f64, stretch: f64, depth: Depth, vertical: bool, exact: Exact) -> Image {
+fn pass(img: &Image, len: usize, a: f64, stretch: f64, depth: Depth, vertical: bool, exact: Exact) -> Option<Image> {
     let have = if vertical { img.h } else { img.w };
     let n = img.n;
     let taps: Vec<Taps> = (0..len).map(|o| taps(o, have, a, stretch, exact)).collect();
     let (ow, oh) = if vertical { (img.w, len) } else { (len, img.h) };
-    let mut px = vec![0.0f32; ow * oh * n];
+    let mut px = zeros(ow.checked_mul(oh)?.checked_mul(n)?, 0.0f32)?;
     crate::par::chunks_mut(&mut px, ow * n, true, |y, row| {
         if vertical {
             if let Some(t) = taps.get(y) {
@@ -369,7 +378,7 @@ fn pass(img: &Image, len: usize, a: f64, stretch: f64, depth: Depth, vertical: b
             blend_line(line, n, &taps, depth, row);
         }
     });
-    Image { w: ow, h: oh, n, px }
+    Some(Image { w: ow, h: oh, n, px })
 }
 
 /// One row of a horizontal pass: output pixel `o` of `row` is `taps[o]` over the pixels of `line`
@@ -441,12 +450,12 @@ fn span(o: usize, have: usize, len: usize) -> (usize, usize) {
 
 /// An axis averaged down to `len` samples: each the rounded mean of the samples it covers
 /// (rule 4 of the module).
-fn average(img: &Image, len: usize, depth: Depth, vertical: bool) -> Image {
+fn average(img: &Image, len: usize, depth: Depth, vertical: bool) -> Option<Image> {
     let have = if vertical { img.h } else { img.w };
     let n = img.n;
     let spans: Vec<(usize, usize)> = (0..len).map(|o| span(o, have, len)).collect();
     let (ow, oh) = if vertical { (img.w, len) } else { (len, img.h) };
-    let mut px = vec![0.0f32; ow * oh * n];
+    let mut px = zeros(ow.checked_mul(oh)?.checked_mul(n)?, 0.0f32)?;
     crate::par::chunks_mut(&mut px, ow * n, true, |y, row| {
         for (x, out) in row.chunks_exact_mut(n).enumerate() {
             let (o, line) = if vertical { (y, x) } else { (x, y) };
@@ -457,7 +466,7 @@ fn average(img: &Image, len: usize, depth: Depth, vertical: bool) -> Image {
             }
         }
     });
-    Image { w: ow, h: oh, n, px }
+    Some(Image { w: ow, h: oh, n, px })
 }
 
 /// No seed: a packed seed is `(y << 32) | x`.
@@ -534,21 +543,20 @@ impl Cone {
 /// (per row) the nearest seeds left and right; a pixel takes the best of the eight directions.
 /// Column strips run in parallel: a strip also tracks the column on each side of it, and starts
 /// its row scans from the nearest seeds beyond those.
-pub(crate) fn bleed(img: &mut Image) {
+pub(crate) fn bleed(img: &mut Image) -> Option<()> {
     #[cfg(not(target_arch = "wasm32"))]
     let threads = rayon::current_num_threads().max(1);
     #[cfg(target_arch = "wasm32")]
     let threads = 1;
     let width = img.w.div_ceil((threads * 2).min(img.w).max(1)).max(64);
-    bleed_in_strips(img, width);
+    bleed_in_strips(img, width)
 }
 
 /// [`bleed`] in strips of `width` columns.
-fn bleed_in_strips(img: &mut Image, width: usize) {
+fn bleed_in_strips(img: &mut Image, width: usize) -> Option<()> {
     let (w, h, n) = (img.w, img.h, img.n);
     let alpha = n - 1;
-    let Some(len) = w.checked_mul(h) else { return };
-    let mut visible = vec![false; len];
+    let mut visible = zeros(w.checked_mul(h)?, false)?;
     crate::par::chunks_mut(&mut visible, w.max(1), true, |y, row| {
         let Some(line) = img.px.get(y * w * n..(y + 1) * w * n) else { return };
         for (v, px) in row.iter_mut().zip(line.chunks_exact(n)) {
@@ -556,7 +564,7 @@ fn bleed_in_strips(img: &mut Image, width: usize) {
         }
     });
     if !visible.contains(&false) || !visible.contains(&true) {
-        return;
+        return Some(());
     }
     let width = width.max(1);
     let strips: Vec<(usize, usize)> = (0..w).step_by(width).map(|x0| (x0, (x0 + width).min(w))).collect();
@@ -598,10 +606,11 @@ fn bleed_in_strips(img: &mut Image, width: usize) {
         }
         out
     });
-    let bests: Vec<Vec<u64>> = crate::par::map(strips.len(), true, |k| {
-        let Some(&(x0, x1)) = strips.get(k) else { return Vec::new() };
+    let bests: Vec<Option<Vec<u64>>> = crate::par::map(strips.len(), true, |k| {
+        let Some(&(x0, x1)) = strips.get(k) else { return Some(Vec::new()) };
         strip(&visible, w, h, x0, x1, |y| halos.get(y).and_then(|r| r.get(k)).copied().unwrap_or((NONE, NONE)))
     });
+    let bests: Vec<Vec<u64>> = bests.into_iter().collect::<Option<_>>()?;
     for (&(x0, x1), best) in strips.iter().zip(&bests) {
         let sw = x1 - x0;
         for (j, &s) in best.iter().enumerate() {
@@ -616,6 +625,7 @@ fn bleed_in_strips(img: &mut Image, width: usize) {
             }
         }
     }
+    Some(())
 }
 
 fn pack(x: usize, y: usize) -> u64 {
@@ -625,12 +635,12 @@ fn pack(x: usize, y: usize) -> u64 {
 /// [`bleed`]'s sweeps over the columns `[x0, x1)`: each transparent pixel's best seed (row-major
 /// over the strip, [`NONE`] where it is visible). `halo(y)` is the nearest seed in row `y` right
 /// of column `x1` and left of column `x0 - 1`.
-fn strip(visible: &[bool], w: usize, h: usize, x0: usize, x1: usize, halo: impl Fn(usize) -> (u64, u64)) -> Vec<u64> {
+fn strip(visible: &[bool], w: usize, h: usize, x0: usize, x1: usize, halo: impl Fn(usize) -> (u64, u64)) -> Option<Vec<u64>> {
     // State columns: one beyond the strip on each side, where there is one.
     let (s0, s1) = (x0.saturating_sub(1), (x1 + 1).min(w));
     let sn = s1 - s0;
     let sw = x1 - x0;
-    let mut best = vec![NONE; sw * h];
+    let mut best = zeros(sw.checked_mul(h)?, NONE)?;
     let (mut right, mut left) = (vec![NONE; sn], vec![NONE; sn]);
     let get = |v: &[u64], i: Option<usize>| i.and_then(|i| v.get(i).copied()).unwrap_or(NONE);
     for down in [true, false] {
@@ -703,12 +713,19 @@ fn strip(visible: &[bool], w: usize, h: usize, x0: usize, x1: usize, halo: impl 
             }
         }
     }
-    best
+    Some(best)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_buffer_too_large_for_memory_is_refused_not_aborted() {
+        assert!(zeros(usize::MAX, 0.0f32).is_none());
+        assert!(zeros(usize::MAX / 4, false).is_none());
+        assert_eq!(zeros(3, 1u8), Some(vec![1, 1, 1]));
+    }
 
     #[test]
     fn long_axes_average_over_the_right_spans_without_overflow() {
@@ -780,13 +797,13 @@ mod tests {
         let t = [0.0, 0.0, 0.0, 0.0];
         let (up, down, left, right) = ([10.0, 0.0, 0.0, 255.0], [20.0, 0.0, 0.0, 255.0], [30.0, 0.0, 0.0, 255.0], [40.0, 0.0, 0.0, 255.0]);
         let mut img = image(3, 3, &[t, up, t, left, t, right, t, down, t]);
-        bleed(&mut img);
+        bleed(&mut img).unwrap();
         assert_eq!(img.at(1, 1, 0), 20.0, "below wins");
         let mut img = image(3, 3, &[t, up, t, left, t, right, t, t, t]);
-        bleed(&mut img);
+        bleed(&mut img).unwrap();
         assert_eq!(img.at(1, 1, 0), 10.0, "then above");
         let mut img = image(3, 3, &[t, t, t, left, t, right, t, t, t]);
-        bleed(&mut img);
+        bleed(&mut img).unwrap();
         assert_eq!(img.at(1, 1, 0), 40.0, "then right");
     }
 
@@ -1044,7 +1061,7 @@ mod tests {
             if let Some(unit) = depth.levels {
                 want.iter_mut().for_each(|v| *v = (v.clamp(0.0, 1.0) * unit).round());
             }
-            let got = load(&s, bounds, depth);
+            let got = load(&s, bounds, depth).unwrap();
             assert_eq!((got.w, got.h, got.n), (337, 371, fmt.channels()));
             assert!(got.px == want, "{fmt:?}");
         }
@@ -1102,15 +1119,15 @@ mod tests {
             let src = noisy(fmt, Rect::new(0, 10, 80, 60), 5);
             let depth = Depth::of(fmt.sample);
             for (width, height) in [(90, 61), (135, 61), (90, 20), (33, 150), (211, 97), (7, 5), (1, 1)] {
-                let mut img = load(&src, bounds, depth);
-                bleed(&mut img);
+                let mut img = load(&src, bounds, depth).unwrap();
+                bleed(&mut img).unwrap();
                 if width != img.w {
                     let k = width as f64 / img.w as f64;
-                    img = axis(&img, width, depth, false, Exact { scale: k, phase: 0.0 });
+                    img = axis(&img, width, depth, false, Exact { scale: k, phase: 0.0 }).unwrap();
                 }
                 if height != img.h {
                     let k = height as f64 / img.h as f64;
-                    img = axis(&img, height, depth, true, Exact { scale: k, phase: 0.0 });
+                    img = axis(&img, height, depth, true, Exact { scale: k, phase: 0.0 }).unwrap();
                 }
                 let unit = depth.levels.unwrap_or(1.0);
                 let mut data: Vec<f32> = img.px.iter().map(|v| v / unit).collect();
