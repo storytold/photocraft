@@ -340,30 +340,46 @@ pub(crate) const EXPOSURE_UNAVAILABLE: &str = "The command \"Exposure\" is not c
 /// The reference application's alert for Exposure on an empty pixel layer.
 pub(crate) const EXPOSURE_EMPTY: &str = "Could not complete the Exposure command because the active layer is empty.";
 
-/// Image › Adjustments › Exposure's targets, as the reference application has them (#14632):
-/// [`has_adjustable`]'s, minus a hidden layer and a targeted layer mask, which grey the item.
-/// Unlike Brightness/Contrast, Exposure does not work on a mask. An alpha channel or Quick Mask
-/// target keeps working; a layer inside a hidden group keeps today's behaviour (not measured).
+/// Image › Adjustments › Exposure's id.
+pub(crate) const EXPOSURE_ID: &str = "image.adjustments.exposure";
+
+/// Image › Adjustments › Exposure's targets with no params: the Channels panel's target, as
+/// [`exposure_enabled_with`] checks it, else [`has_adjustable`].
 pub(crate) fn exposure_target_enabled(s: &Session) -> std::result::Result<(), String> {
-    has_adjustable(s)?;
-    if crate::channel_cmds::edits_channel(s) {
-        return Ok(());
-    }
-    let d = s.active().ok_or("no document open")?;
-    let hidden = d.active_layer.and_then(|id| d.doc.layer(id)).is_some_and(|l| !l.visible);
-    if hidden || d.channel_view.target == crate::channel_cmds::ChannelTarget::LayerMask {
-        return Err(EXPOSURE_UNAVAILABLE.into());
-    }
-    Ok(())
+    let p = crate::channel_cmds::inject_target(s, EXPOSURE_ID, Value::Null);
+    exposure_enabled_with(s, &p).unwrap_or_else(|| has_adjustable(s))
 }
 
-/// Why Exposure with `p` must stop before it edits anything (#14632): a mask target named in the
-/// params, or an empty pixel layer. `Ok` for every target Exposure works on.
-pub(crate) fn exposure_refusal(s: &Session, p: &Value) -> Result<()> {
-    if crate::commands::is_mask_target(p) {
-        return Err(EngineError::Disabled("image.adjustments.exposure".into(), EXPOSURE_UNAVAILABLE.into()));
+/// Exposure's precondition for a call with `p`, its target filled in from the Channels panel, as
+/// the reference application has it (#14632): [`has_adjustable`]'s, minus a layer mask (unlike
+/// Brightness/Contrast, Exposure does not work on one) and a hidden pixel layer, the active one or
+/// the one `"layer"` names, which grey the item. An alpha channel or Quick Mask target keeps
+/// [`has_adjustable`] alone, as before. `None` for a smart object's filter mask, which keeps its
+/// own check. A layer inside a hidden group keeps today's behaviour (not measured).
+pub(crate) fn exposure_enabled_with(s: &Session, p: &Value) -> Option<std::result::Result<(), String>> {
+    use crate::channel_cmds::Target;
+    let hidden = || {
+        let Ok(id) = crate::commands::layer_param(s, p) else { return false };
+        s.active().and_then(|d| d.doc.layer(id)).is_some_and(|l| !l.visible)
+    };
+    match crate::channel_cmds::target_of(p) {
+        Target::Mask => Some(Err(EXPOSURE_UNAVAILABLE.into())),
+        Target::FilterMask => None,
+        Target::Alpha(_) | Target::QuickMask => Some(has_adjustable(s)),
+        Target::Pixels => Some(has_adjustable(s).and_then(|()| if hidden() { Err(EXPOSURE_UNAVAILABLE.into()) } else { Ok(()) })),
     }
-    if crate::channel_cmds::is_channel_target(p) || crate::channel_cmds::edits_channel(s) {
+}
+
+/// Why Exposure with `p` (its target filled in) must stop before it edits anything (#14632):
+/// [`exposure_enabled_with`]'s refusals, or an empty pixel layer. `Ok` for every target Exposure
+/// works on.
+pub(crate) fn exposure_refusal(s: &Session, p: &Value) -> Result<()> {
+    if let Some(Err(why)) = exposure_enabled_with(s, p) {
+        return Err(EngineError::Disabled(EXPOSURE_ID.into(), why));
+    }
+    // Only the resolved target counts: an explicit `"target":"pixels"` edits the layer even while
+    // the Channels panel targets an alpha channel or the Quick Mask.
+    if crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels {
         return Ok(());
     }
     let id = crate::commands::layer_param(s, p)?;
