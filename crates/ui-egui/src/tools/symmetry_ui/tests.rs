@@ -2,7 +2,7 @@ use super::*;
 use egui::{Pos2, RawInput, Rect, vec2};
 use photocraft_engine::Session;
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(Session::new(), crate::Services::default());
     app.run("file.new", json!({"width":100,"height":80})).unwrap();
     app.sync_views();
