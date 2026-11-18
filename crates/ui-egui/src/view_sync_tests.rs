@@ -52,6 +52,7 @@ fn switching_documents_closes_the_canvas_view_menu() {
         let mut app = app_with_two_documents();
         app.ui.tool = tool;
         assert!(crate::canvas_tool_menu::open_at(&mut app, tool, Default::default(), egui::pos2(10.0, 10.0), [20.0, 20.0], None));
+        assert!(matches!(app.ui.canvas_tool_menu.as_ref().map(|menu| &menu.kind), Some(crate::canvas_tool_menu::MenuKind::View)));
         app.sync_views();
         assert!(app.ui.canvas_tool_menu.is_some(), "ordinary sync keeps the menu");
         app.run("layer.new.layer", json!({})).unwrap();
@@ -75,6 +76,7 @@ fn closing_a_tab_keeps_the_canvas_menu_only_for_its_own_document() {
         app.ui.tool = crate::Tool::Hand;
         let document = app.session.active().unwrap().doc.id;
         assert!(crate::canvas_tool_menu::open_at(&mut app, crate::Tool::Hand, Default::default(), egui::pos2(10.0, 10.0), [20.0, 20.0], None));
+        assert!(matches!(app.ui.canvas_tool_menu.as_ref().map(|menu| &menu.kind), Some(crate::canvas_tool_menu::MenuKind::View)));
         app.run("file.close", json!({"document": 0})).unwrap();
         assert_eq!(app.session.active_index(), Some(0), "the survivor occupies the first slot");
         assert_eq!(app.session.active().unwrap().doc.id == document, !close_menu_document);
