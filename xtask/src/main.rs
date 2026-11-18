@@ -5,6 +5,7 @@
 
 mod corpus;
 mod corpus_pins;
+mod gate_gpu;
 mod i18n_report;
 mod ico;
 mod layers;
@@ -244,12 +245,19 @@ const GATE_ARGS: [&str; 4] = ["--workspace", "--locked", "--features", "heif"];
 /// The gate's tests. nextest's `ci` profile stops at the first failure and terminates hung tests
 /// (.config/nextest.toml). `panic_hunt` runs only the engine's `#[ignore]`d panic hunt (AGENTS.md
 /// Rule 9) with the same packages, features and targets as the tests, so nothing rebuilds.
+///
+/// With `PHOTOCRAFT_GATE_GPU_GROUP=separate` the tests leave out nextest's `gpu` group: the caller
+/// runs it afterwards (the CI gate does, in `scripts/ci-gpu-lavapipe.py`, see `gate_gpu`). Unset,
+/// as in a local `cargo xtask ci`, the group runs here with the other tests.
 fn cmd_gate_tests(panic_hunt: bool) -> Result<(), String> {
     let mut c = cargo();
     if nextest_available() {
         c.args(["nextest", "run", "--profile", "ci"]).args(GATE_ARGS).args(&TEST_TARGETS[1..]);
         if panic_hunt {
             c.args(["--run-ignored", "only", "-E", "binary_id(photocraft-engine::panic_hunt)"]);
+        } else if std::env::var(gate_gpu::GROUP_VAR).is_ok_and(|v| v == gate_gpu::SEPARATE) {
+            let config = std::fs::read_to_string(root().join(gate_gpu::CONFIG)).map_err(|e| format!("{}: {e}", gate_gpu::CONFIG))?;
+            c.arg("-E").arg(gate_gpu::without_gpu_group(&config)?);
         }
     } else if panic_hunt {
         // `-- --ignored` across the workspace would run every ignored test, not only the hunt. The

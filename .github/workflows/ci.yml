@@ -153,10 +153,15 @@ jobs:
       craft-fonts-ref: cc9269cd8d8258785dac603fba3122e5d2556795
       # Cargo.toml's dev profile already keeps line tables only.
       dev-debug: ""
+      # PHOTOCRAFT_GATE_GPU_GROUP=separate: `cargo xtask ci` leaves nextest's `gpu` group to
+      # scripts/ci-gpu-lavapipe.py, the last step of `command` below, which runs it on lavapipe and
+      # fails on a skipped comparison. Without it the group ran twice on the same adapter (#15445).
+      # The two belong together: xtask's gate_gpu tests fail if the variable stays and the script goes.
       env: |
         PHOTOCRAFT_FULL_SWEEP=${{ inputs.full_sweep && '1' || '0' }}
         PHOTOCRAFT_NO_PRINT=1
         LPDEST=photocraft-no-such-printer
+        PHOTOCRAFT_GATE_GPU_GROUP=separate
       timeout-minutes: 100
       # On main, a `cache warm` leg builds the tests and saves the dependency cache as soon as the
       # build succeeds; the gate legs then only restore, so a failing test cannot keep the entry
