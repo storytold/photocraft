@@ -270,30 +270,62 @@ pub fn defringe(px: &mut [[f32; 4]], w: usize, h: usize, width: usize) {
         return;
     }
 
+    // Identify the outside of each separate feathered region rather than using one
+    // global minimum alpha (or treating every partly transparent pixel as an edge).
+    // Regions are 4-connected pixels below the highest alpha in this buffer.
     let max_alpha = px.iter().map(|q| q[3]).fold(0.0_f32, f32::max);
-    let seeds: Vec<bool> = if px.iter().any(|q| q[3] == 0.0) {
-        // Preserve the established distance-to-transparency behavior when a transparent
-        // boundary exists. Nonzero low-alpha pixels must remain correctable targets.
-        px.iter().map(|q| q[3] == 0.0).collect()
-    } else {
-        // Cropped feathered layers have no zero-alpha pixels. Find their outermost
-        // lowest-alpha edge, not every partial-alpha pixel (which would repaint a
-        // soft band of arbitrary width).
-        let min_alpha = px.iter().map(|q| q[3]).fold(1.0_f32, f32::min);
-        if min_alpha >= 1.0 || max_alpha - min_alpha <= f32::EPSILON {
-            return; // no edge, or no more-opaque interior colour to borrow
+    let core: Vec<bool> = px.iter().map(|q| q[3] >= max_alpha - 1e-6).collect();
+    if core.iter().all(|&k| k) {
+        return; // uniformly opaque or translucent: no identifiable clean interior
+    }
+    let to_core = photocraft_algo::selection::edt(&core, w, h);
+    if to_core.len() != px.len() {
+        return;
+    }
+    let mut visited = vec![false; px.len()];
+    let mut seeds = vec![false; px.len()];
+    for start in 0..px.len() {
+        if core[start] || visited[start] {
+            continue;
         }
-        let core: Vec<bool> = px.iter().map(|q| q[3] >= max_alpha - 1e-6).collect();
-        let to_core = photocraft_algo::selection::edt(&core, w, h);
-        if to_core.len() != px.len() {
-            return;
+        let mut region = vec![start];
+        visited[start] = true;
+        let mut cursor = 0;
+        while cursor < region.len() {
+            let i = region[cursor];
+            cursor += 1;
+            let (x, y) = (i % w, i / w);
+            for (nx, ny) in [(x.wrapping_sub(1), y), (x + 1, y), (x, y.wrapping_sub(1)), (x, y + 1)] {
+                if nx >= w || ny >= h {
+                    continue;
+                }
+                let j = ny * w + nx;
+                if !core[j] && !visited[j] {
+                    visited[j] = true;
+                    region.push(j);
+                }
+            }
         }
-        // For a wide, constant-alpha feather band, only its outermost row seeds
-        // the transform; its inner rows must remain outside the requested width.
-        let outermost = px.iter().enumerate().filter(|(_, q)| q[3] <= min_alpha + 1e-6).map(|(i, _)| to_core[i]).fold(0.0_f32, f32::max);
-        px.iter().enumerate().map(|(i, q)| q[3] <= min_alpha + 1e-6 && to_core[i] >= outermost - 1e-6).collect()
-    };
-
+        let min_alpha = region.iter().map(|&i| px[i][3]).fold(1.0_f32, f32::min);
+        if min_alpha <= 0.0 {
+            // Every transparent pixel remains a boundary, even across a wide empty
+            // area; preserving that behavior also retains distance-to-zero semantics.
+            for &i in &region {
+                if px[i][3] <= 0.0 {
+                    seeds[i] = true;
+                }
+            }
+        } else {
+            // A flat, wide translucent band has many equal-alpha pixels. Seed
+            // only the ones furthest from its own opaque/high-alpha interior.
+            let outermost = region.iter().filter(|&&i| px[i][3] <= min_alpha + 1e-6).map(|&i| to_core[i]).fold(0.0_f32, f32::max);
+            for &i in &region {
+                if px[i][3] <= min_alpha + 1e-6 && to_core[i] >= outermost - 1e-6 {
+                    seeds[i] = true;
+                }
+            }
+        }
+    }
     if !seeds.iter().any(|&seed| seed) {
         return;
     }

@@ -113,6 +113,7 @@ fn matting_commands_fix_dark_fringes() {
 
 #[test]
 fn defringe_command_preserves_soft_alpha_and_history_at_every_depth() {
+    // The command processes a one-pixel transparent halo beyond the layer bounds.
     for depth in DEPTHS {
         for transparent_pixel in [false, true] {
             let mut s = session(depth, "rgb");
@@ -126,7 +127,7 @@ fn defringe_command_preserves_soft_alpha_and_history_at_every_depth() {
                 }
             });
             let before = active(&s).surface().unwrap().clone();
-            s.execute("layer.matting.defringe", json!({"width": 1})).unwrap();
+            s.execute("layer.matting.defringe", json!({"width": 2})).unwrap();
             let after = active(&s).surface().unwrap().clone();
             for y in 0..30 {
                 for x in 0..40 {
@@ -162,9 +163,11 @@ fn defringe_corrects_a_soft_edge_without_any_fully_transparent_pixels() {
     let before = opaque.clone();
     defringe(&mut opaque, 4, 1, 2);
     assert_eq!(opaque, before, "opaque images without fringes are unchanged");
-    // Guard malformed buffer dimensions rather than indexing past the end.
-    defringe(&mut opaque, 400, 1, 2);
-    assert_eq!(opaque, before);
+    // This edge-bearing fixture reached the old implementation's invalid indexing.
+    let mut malformed = vec![[0.0; 4], [0.0, 0.0, 1.0, 0.5], [1.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0]];
+    let before = malformed.clone();
+    defringe(&mut malformed, 400, 1, 2);
+    assert_eq!(malformed, before);
 }
 
 #[test]
@@ -197,6 +200,7 @@ fn defringe_does_not_repaint_a_soft_band_wider_than_width() {
 
 #[test]
 fn defringe_command_uses_most_opaque_interior_when_every_pixel_is_translucent() {
+    // The command processes a one-pixel transparent halo beyond the layer bounds.
     for depth in DEPTHS {
         let mut s = session(depth, "rgb");
         paint(&mut s, |x, _| {
@@ -209,7 +213,7 @@ fn defringe_command_uses_most_opaque_interior_when_every_pixel_is_translucent() 
             }
         });
         let before = active(&s).surface().unwrap().clone();
-        s.execute("layer.matting.defringe", json!({"width": 1})).unwrap();
+        s.execute("layer.matting.defringe", json!({"width": 2})).unwrap();
         let after = active(&s).surface().unwrap();
         assert_eq!(after.rgba(0, 15)[..3], [1.0, 0.0, 0.0], "depth {depth}");
         assert_eq!(after.rgba(1, 15)[..3], [1.0, 0.0, 0.0], "depth {depth}");
@@ -225,6 +229,24 @@ fn defringe_uses_most_opaque_pixel_when_width_covers_the_cutout() {
     defringe(&mut px, 2, 1, 1);
     assert_eq!(px[0], [1.0, 0.0, 0.0, 0.2]);
     assert_eq!(px[1], [1.0, 0.0, 0.0, 0.8]);
+}
+
+#[test]
+fn defringe_fixes_two_feathered_boundaries_with_different_alphas() {
+    // Both boundaries must seed independently; the global minimum is only at the left.
+    let mut px = vec![[0.0, 0.0, 1.0, 0.2], [1.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 0.6]];
+    defringe(&mut px, 5, 1, 1);
+    assert_eq!(px[0], [1.0, 0.0, 0.0, 0.2]);
+    assert_eq!(px[4], [1.0, 0.0, 0.0, 0.6]);
+}
+
+#[test]
+fn defringe_fixes_soft_edge_remote_from_transparent_pixels() {
+    // The zero-alpha pixel must not suppress a separate feathered edge.
+    let mut px = vec![[0.0; 4], [1.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 0.6]];
+    defringe(&mut px, 5, 1, 1);
+    assert_eq!(px[0], [0.0; 4]);
+    assert_eq!(px[4], [1.0, 0.0, 0.0, 0.6]);
 }
 
 #[test]
