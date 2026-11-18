@@ -66,6 +66,24 @@ fn growing_back_after_a_shrink_fills_with_the_extension_colour() {
 }
 
 #[test]
+fn a_centred_shrink_cuts_the_background_after_moving_it() {
+    // A centred anchor moves the layers by -50 before the cut, and +50 when growing back: the
+    // square (300..400) sits at 250..350 on the 300 px canvas, keeps 250..300, and comes back at
+    // 300..350 with black on both new strips (CodeRabbit on #15563).
+    for depth in [8, 16, 32] {
+        let mut s = session(depth);
+        let centred = |s: &mut Session, width: u32, extension: &str| {
+            s.execute("image.canvasSize", json!({"width": width, "height": 300, "anchor": "center", "extensionColor": extension})).unwrap();
+        };
+        centred(&mut s, 300, "background");
+        centred(&mut s, 400, "black");
+        assert!(close(background_at(&s, 325, 250), BLUE), "{depth} bit: {:?}", background_at(&s, 325, 250));
+        assert_eq!(background_at(&s, 375, 250), [0.0, 0.0, 0.0, 1.0], "{depth} bit: the cut part is black");
+        assert_eq!(background_at(&s, 25, 250), [0.0, 0.0, 0.0, 1.0], "{depth} bit: the new left strip is black");
+    }
+}
+
+#[test]
 fn a_shrink_drops_the_backgrounds_pixels_outside_the_canvas() {
     let mut s = session(8);
     canvas(&mut s, 300, "background");
