@@ -1742,7 +1742,7 @@ pub fn flat_holds(doc: &Document, format: Format) -> bool {
         && (doc.icc_profile.is_none() || caps.icc)
         && (meta.exif.is_none() || caps.exif)
         && (meta.xmp.is_none() || caps.xmp)
-        && (format != Format::Jpeg || jpeg_keeps_xmp(doc))
+        && (format != Format::Jpeg || (jpeg_keeps_exif(doc) && jpeg_keeps_xmp(doc)))
         && (meta.text.is_empty() || caps.text)
         && meta.psd_resources.is_empty()
         && meta.psd_global_blocks.is_empty()
@@ -1761,6 +1761,24 @@ pub fn flat_holds(doc: &Document, format: Format) -> bool {
     // cannot tell us whether the name will survive the round trip.
     let opaque = !surface.format().alpha || opaque_surface(surface, doc.bounds());
     (caps.alpha || opaque) && layer.name == if opaque { "Background" } else { "Layer 0" }
+}
+
+/// A JPEG default must keep EXIF after the encoder adjusts it for the saved image.
+fn jpeg_keeps_exif(doc: &Document) -> bool {
+    let Some(exif) = doc.metadata.exif.as_deref() else { return true };
+    // Normalization can edit the TIFF block but does not shrink it. Bound the work
+    // before processing a block that cannot fit in JPEG's 16-bit APP1 length.
+    if exif.len() > usize::from(u16::MAX) {
+        return false;
+    }
+    let ppi = Some((doc.resolution_dpi, doc.resolution_dpi));
+    let normalized = if doc.mode == ColorMode::Cmyk {
+        // CMYK JPEG has no JFIF density marker, so the encoder can add EXIF tags.
+        craft_metadata::edit::export_exif_adding_missing_resolution(exif, ppi)
+    } else {
+        codecs::export_exif(exif, ppi)
+    };
+    codecs::raw_metadata::jpeg_segments(codecs::raw_metadata::JpegMetadata { exif: Some(&normalized), ..Default::default() }).is_ok()
 }
 
 /// JPEG may trim layered XMP properties or omit an oversized packet. A default save
@@ -1852,6 +1870,38 @@ mod default_save_tests {
                 assert!(!flat_holds(&doc, format));
             }
             assert_eq!(reopened(&doc, "light.psd").global_light, doc.global_light);
+        }
+    }
+
+    #[test]
+    fn jpeg_default_keeps_exif_after_normalization() {
+        for (mode, bytes, fits) in [
+            (ColorMode::Rgb, 128, true),
+            (ColorMode::Rgb, 65_527, true),
+            (ColorMode::Rgb, 70_000, false),
+            (ColorMode::Cmyk, 128, true),
+            (ColorMode::Cmyk, 65_527, false),
+        ] {
+            let mut doc = Document::with_background("EXIF", Size::new(3, 2), mode, SampleType::U8, Color::WHITE);
+            doc.resolution_dpi = 300.0;
+            // Little-endian TIFF with one ImageDescription tag and an out-of-line ASCII value.
+            // The 26-byte IFD ends before the description, whose count includes its NUL.
+            let mut exif = b"II*\0\x08\0\0\0\x01\0\x0e\x01\x02\0".to_vec();
+            exif.extend_from_slice(&(bytes - 26_u32).to_le_bytes());
+            exif.extend_from_slice(b"\x1a\0\0\0\0\0\0\0");
+            exif.resize(bytes as usize - 1, b'x');
+            exif.push(0);
+            doc.metadata.exif = Some(Arc::new(exif));
+
+            assert_eq!(flat_holds(&doc, Format::Jpeg), fits, "{mode:?}, {bytes} bytes");
+            let jpeg = reopened(&doc, "exif.jpg");
+            if fits {
+                let exif = jpeg.metadata.exif.as_deref().unwrap();
+                assert!(exif.windows(16).any(|w| w == [b'x'; 16]));
+            } else {
+                assert!(jpeg.metadata.exif.is_none());
+                assert_eq!(reopened(&doc, "exif.psd").metadata.exif, doc.metadata.exif);
+            }
         }
     }
 
