@@ -121,7 +121,7 @@ fn kept_composites_come_back_only_for_the_exact_state_and_stay_bounded() {
 }
 
 struct Gpu {
-    harness: egui_kittest::Harness<'static, PhotocraftApp>,
+    harness: egui_kittest::Harness<'static, Box<PhotocraftApp>>,
     observer: GpuCanvas,
 }
 
@@ -137,7 +137,7 @@ fn gpu_app() -> Option<Gpu> {
             .wgpu_setup(crate::gpu_canvas::wgpu_setup())
             .build_eframe(move |cc| {
                 PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-                let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+                let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), Default::default());
                 if let Some(rs) = cc.wgpu_render_state.as_ref() {
                     *observer_out.lock().expect("observer") = Some(GpuCanvas::new(rs));
                     app.set_wgpu(rs.clone());
@@ -178,6 +178,19 @@ fn settle(g: &mut Gpu) {
     }
 }
 
+/// Run the frame that starts `doc`'s redraw with its worker held before the first batch, and wait
+/// until that very worker reaches the hold: the redraw runs, every block still to draw, until the
+/// returned guard drops. Without it a test that needs the redraw still running at its next frame
+/// races the worker: a fast machine draws the document first, and so does a slow frame (a
+/// software adapter's uploads) that keeps taking blocks as they land until the last one.
+fn start_held_redraw(g: &mut Gpu, doc: DocId) -> HoldRedraws {
+    let held = hold_redraws();
+    g.harness.step();
+    let generation = g.harness.state().redraws.get(&doc).expect("the frame started a redraw").worker_generation;
+    assert!(wait_for_held_redraw(g.harness.state(), doc, generation, std::time::Duration::from_secs(10)), "the redraw worker never reached the pre-batch hold");
+    held
+}
+
 /// The canvas texture of `doc` against the synchronous CPU refresh of the current document.
 fn assert_matches_synchronous(g: &mut Gpu, doc: DocId) {
     let app = g.harness.state_mut();
@@ -197,8 +210,11 @@ fn a_full_cpu_refresh_draws_in_the_background_with_the_synchronous_pixels() {
     let _gpu = photocraft_testkit::gpu_lock();
     let Some(mut g) = gpu_app() else { return };
     let doc = cpu_only_document(g.harness.state_mut(), 2600, 1700);
+    // Held, so the frame's later runs can't see the redraw already finished.
+    let held = hold_redraws();
     g.harness.step();
     assert!(g.harness.state().redraws.contains_key(&doc), "the frame started a redraw instead of compositing inline");
+    drop(held);
     settle(&mut g);
     let app = g.harness.state();
     assert_eq!(app.perf.last_refresh, "background");
@@ -249,8 +265,9 @@ fn an_edit_damaging_most_of_a_large_document_is_drawn_in_the_background_too() {
     let Some(mut g) = gpu_app() else { return };
     let doc = cpu_only_document(g.harness.state_mut(), 2600, 1700);
     settle(&mut g);
-    // Filling part of the Blend If layer can change the composite anywhere: the whole canvas.
-    g.harness.state_mut().run("select.rect", json!({"x": 100, "y": 100, "width": 300, "height": 300})).expect("select");
+    // Filling most of the Blend If layer touches tiles all over it: the whole canvas (a fill of a
+    // small part damages only its own tiles, #9329).
+    g.harness.state_mut().run("select.rect", json!({"x": 100, "y": 100, "width": 2500, "height": 1500})).expect("select");
     g.harness.step();
     g.harness.state_mut().run("edit.fill", json!({"color": "#22ee22"})).expect("fill");
     assert_eq!(g.harness.state().session.active().expect("document").last_damage, Some(Rect::new(0, 0, 2600, 1700)));
@@ -294,10 +311,10 @@ fn a_redraw_finishing_after_memory_usage_drops_keeps_nothing_over_it() {
     let _gpu = photocraft_testkit::gpu_lock();
     let Some(mut g) = gpu_app() else { return };
     let doc = cpu_only_document(g.harness.state_mut(), 4096, 3072);
-    g.harness.step();
-    assert!(g.harness.state().redraws.contains_key(&doc));
+    let held = start_held_redraw(&mut g, doc);
     // Less than the document's own pixels: nothing is left for kept composites.
     g.harness.state_mut().session.edit_prefs(|p| p.performance.memory_usage_mb = 1);
+    drop(held);
     settle(&mut g);
     assert!(g.harness.state().kept.entries.is_empty(), "a composite was kept over the current cap");
 }
@@ -330,9 +347,9 @@ fn a_redraw_across_a_text_gamma_change_is_not_kept() {
     let _gpu = photocraft_testkit::gpu_lock();
     let Some(mut g) = gpu_app() else { return };
     let doc = cpu_only_document(g.harness.state_mut(), 4096, 3072);
-    g.harness.step();
-    assert!(g.harness.state().redraws.contains_key(&doc));
+    let held = start_held_redraw(&mut g, doc);
     g.harness.state_mut().session.color.settings.blend_text_gamma = 1.0;
+    drop(held);
     settle(&mut g);
     assert!(g.harness.state().kept.entries.is_empty(), "a composite of two gammas was kept");
 }
@@ -344,11 +361,12 @@ fn a_redraw_across_a_text_gamma_change_and_back_is_not_kept() {
     let Some(mut g) = gpu_app() else { return };
     let doc = cpu_only_document(g.harness.state_mut(), 4096, 3072);
     let gamma = g.harness.state().session.color.settings.blend_text_gamma;
-    g.harness.step();
+    let held = start_held_redraw(&mut g, doc);
     g.harness.state_mut().session.color.settings.blend_text_gamma = 1.0;
     g.harness.step();
     g.harness.state_mut().session.color.settings.blend_text_gamma = gamma;
     assert!(g.harness.state().redraws.contains_key(&doc), "the redraw finished before the change back");
+    drop(held);
     settle(&mut g);
     assert!(g.harness.state().kept.entries.is_empty(), "a composite of two gammas was kept");
 }
@@ -361,7 +379,7 @@ fn a_hidden_documents_redraw_across_a_text_gamma_change_and_back_is_not_kept() {
     let Some(mut g) = gpu_app() else { return };
     let doc = cpu_only_document(g.harness.state_mut(), 4096, 3072);
     let gamma = g.harness.state().session.color.settings.blend_text_gamma;
-    g.harness.step();
+    let held = start_held_redraw(&mut g, doc);
     g.harness.state_mut().run("file.new", json!({"width": 64, "height": 64})).expect("another document");
     g.harness.step();
     g.harness.state_mut().session.color.settings.blend_text_gamma = 1.0;
@@ -371,6 +389,7 @@ fn a_hidden_documents_redraw_across_a_text_gamma_change_and_back_is_not_kept() {
     assert!(g.harness.state().redraws.contains_key(&doc), "the hidden document's redraw stopped");
     let i = g.harness.state().session.documents().iter().position(|st| st.doc.id == doc).expect("document");
     g.harness.state_mut().session.set_active(i);
+    drop(held);
     settle(&mut g);
     assert!(g.harness.state().kept.entries.iter().all(|k| k.id != doc), "a composite of two gammas was kept");
 }
@@ -476,8 +495,8 @@ fn closing_the_document_stops_its_redraw() {
     let _gpu = photocraft_testkit::gpu_lock();
     let Some(mut g) = gpu_app() else { return };
     let doc = cpu_only_document(g.harness.state_mut(), 4096, 3072);
-    g.harness.step();
-    assert!(g.harness.state().redraws.contains_key(&doc));
+    // Held: the close lands while the redraw runs, and a cancelled worker leaves the hold.
+    let _held = start_held_redraw(&mut g, doc);
     g.harness.state_mut().run("file.close", json!({"save": false})).expect("close");
     g.harness.step();
     assert!(g.harness.state().redraws.is_empty());
@@ -523,6 +542,240 @@ fn hiding_a_large_layer_over_the_gpu_budget_redraws_in_the_background() {
     assert!(g.harness.state().redraws.contains_key(&doc), "not composited inline: {}", g.harness.state().perf.last_refresh);
     settle(&mut g);
     assert_eq!(g.harness.state().perf.last_refresh, "background");
-    assert_eq!(g.harness.state().perf.gpu_fallback.as_deref(), Some(crate::gpu_canvas::OVER_BUDGET));
+    let app = g.harness.state();
+    assert!(matches!(app.render_path.current(doc.0), Some(crate::render_path::CpuReason::OverBudget { .. })), "{:?}", app.perf.gpu_fallback);
     assert_matches_synchronous(&mut g, doc);
+}
+
+/// The active document's render path: its reason's kind.
+fn render_path_of(g: &Gpu) -> Option<&'static str> {
+    let app = g.harness.state();
+    let doc = app.session.active().expect("document").doc.id.0;
+    app.render_path.current(doc).map(crate::render_path::CpuReason::kind)
+}
+
+/// On the GPU canvas: no reason, or only a software adapter's (CI's runners have one).
+fn on_gpu_canvas(g: &Gpu) -> bool {
+    matches!(render_path_of(g), None | Some("softwareAdapter"))
+}
+
+#[test]
+fn advanced_blending_fallback_is_shown_in_the_status_bar() {
+    use egui_kittest::kittest::Queryable;
+    let _gpu = photocraft_testkit::gpu_lock();
+    let Some(mut g) = gpu_app() else { return };
+    cpu_only_document(g.harness.state_mut(), 800, 600);
+    g.harness.step();
+    settle(&mut g);
+    g.harness.run_steps(2);
+    assert_eq!(render_path_of(&g), Some("unsupported"));
+    // PLAN: assumes the status bar's CPU Rendering message exposes its tooltip text to kittest after a hover (panels-w19).
+    g.harness.get_by_label("CPU Rendering").hover();
+    g.harness.run_steps(40);
+    assert!(g.harness.query_by_label_contains("Advanced Blending").is_some(), "the tooltip names the cause");
+}
+
+#[test]
+fn completed_compositor_build_refreshes_an_unchanged_cached_document() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    for success in [true, false] {
+        let Some(mut g) = gpu_app() else { return };
+        let gpu = g.harness.state().gpu.as_ref().expect("GPU canvas").clone();
+        gpu.simulate_compositor_build();
+        g.harness.state_mut().run("file.new", json!({"width": 400, "height": 300, "background": "#336699"})).expect("new");
+        g.harness.step();
+        settle(&mut g);
+        let doc = g.harness.state().session.active().expect("document").doc.id;
+        let revision = g.harness.state().session.active().expect("document").revision;
+        assert_eq!(render_path_of(&g), Some("compositorBuilding"));
+        assert!(gpu.simulate_compositor_completion(success), "test compositor must build");
+        g.harness.step();
+        settle(&mut g);
+        g.harness.run_steps(2);
+        assert_eq!(g.harness.state().session.active().expect("document").revision, revision);
+        if success {
+            assert!(on_gpu_canvas(&g), "successful build should replace the temporary reason: {:?}", render_path_of(&g));
+        } else {
+            assert_eq!(render_path_of(&g), Some("compositorBuild"));
+            assert!(g.harness.state().perf.gpu_fallback.as_deref().is_some_and(|s| s.contains("simulated build failure")));
+            assert_matches_synchronous(&mut g, doc);
+        }
+    }
+}
+
+#[test]
+fn a_canvas_over_the_texture_budget_records_its_reason() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let Some(mut g) = gpu_app() else { return };
+    // The app's canvas, not the observer: each `GpuCanvas::new` shares a new budget.
+    g.harness.state().gpu.as_ref().expect("gpu canvas").set_canvas_budget(1);
+    g.harness.state_mut().run("file.new", json!({"width": 400, "height": 300, "background": "#336699"})).expect("new");
+    g.harness.run_steps(3);
+    assert_eq!(render_path_of(&g), Some("canvasTooLarge"));
+    let doc = g.harness.state().session.active().expect("document").doc.id.0;
+    assert_eq!(g.harness.state().render_path.history().filter(|c| c.doc == doc).count(), 1, "once, not every frame");
+}
+
+/// Frames until the active document's viewport pages are all rendered and uploaded.
+fn settle_pages(g: &mut Gpu) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        g.harness.step();
+        let app = g.harness.state();
+        let id = app.session.active().expect("document").doc.id;
+        if app.streams.get(&id).is_some_and(|s| !s.busy() && s.stats.wanted > 0 && s.stats.ready == s.stats.wanted) {
+            return;
+        }
+        assert!(std::time::Instant::now() < deadline, "the viewport pages didn't finish");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
+/// The screen pixel at the window's centre.
+fn centre_pixel(g: &mut Gpu) -> [u8; 4] {
+    let img = g.harness.render().expect("render");
+    let p = img.get_pixel(img.width() / 2, img.height() / 2);
+    p.0
+}
+
+/// #5332: a document whose texture set doesn't fit the canvas budget stays on the GPU canvas,
+/// drawn from the pages in view instead of the CPU canvas, with the same pixels; an edit
+/// re-renders only the pages, and closing it frees them.
+#[test]
+fn a_canvas_over_the_texture_budget_draws_its_viewport_pages_on_the_gpu() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let Some(mut g) = gpu_app() else { return };
+    g.harness.state_mut().run("file.new", json!({"width": 3000, "height": 2000, "background": "#336699"})).expect("new");
+    g.harness.run_steps(3);
+    assert!(on_gpu_canvas(&g));
+    let whole = centre_pixel(&mut g);
+    let gpu = g.harness.state().gpu.clone().expect("gpu canvas");
+    let doc = g.harness.state().session.active().expect("document").doc.clone();
+    let key = crate::canvas::viewport_pages::stream_key(doc.id.0);
+    // Room for pages (half the budget), not for the document's texture set.
+    let (set, _) = gpu.canvas_fit(&doc).expect("fit");
+    gpu.set_canvas_budget(set - 1);
+    settle_pages(&mut g);
+    assert!(on_gpu_canvas(&g), "{:?}", render_path_of(&g));
+    assert!(gpu.texture_info(doc.id.0).is_none(), "no texture set");
+    let (pages, bytes) = gpu.pages(key);
+    let stats = g.harness.state().streams[&doc.id].stats.clone();
+    assert_eq!(pages.len(), stats.resident);
+    assert!(stats.wanted > 0 && stats.last_error.is_none(), "{stats:?}");
+    assert!(bytes <= (set - 1) / 2, "pages stay within half the budget: {bytes}");
+    let shown = centre_pixel(&mut g);
+    assert!((0..3).all(|i| shown[i].abs_diff(whole[i]) <= 2), "pages {shown:?}, texture set {whole:?}");
+    // An edit re-renders the pages it reaches.
+    let uploads = stats.uploads;
+    g.harness.state_mut().run("edit.fill", json!({"color": "#cc8844"})).expect("fill");
+    settle_pages(&mut g);
+    let stats = g.harness.state().streams[&doc.id].stats.clone();
+    assert!(stats.dirtied > 0 && stats.uploads > uploads, "{stats:?}");
+    let filled = centre_pixel(&mut g);
+    assert!(filled[0] > 0xb0 && filled[2] < 0x60, "the fill is shown: {filled:?}");
+    // A small edit re-renders only the part of each page it reaches, into the page held.
+    let (held, partial) = (gpu.pages(key).0.len(), stats.partial);
+    // (A frame between the steps, as in use: the edit's damage is known one revision at a time.)
+    g.harness.state_mut().run("select.rect", json!({"x": 1400, "y": 900, "width": 200, "height": 200})).expect("select");
+    settle_pages(&mut g);
+    g.harness.state_mut().run("edit.fill", json!({"color": "#22aa22"})).expect("small fill");
+    settle_pages(&mut g);
+    let stats = g.harness.state().streams[&doc.id].stats.clone();
+    assert!(stats.partial > partial, "{stats:?}");
+    assert_eq!(gpu.pages(key).0.len(), held, "no new page textures");
+    // Just its square is shown: 200 px at about 20% zoom, some 40 screen pixels a side.
+    let img = g.harness.render().expect("render");
+    let green = img.pixels().filter(|p| p.0[1] > 0x90 && p.0[0] < 0x50 && p.0[2] < 0x50).count();
+    assert!((1000..2500).contains(&green), "the small fill is shown: {green} pixels");
+    // A budget too small for one page draws it on the CPU canvas, as before.
+    gpu.set_canvas_budget(1);
+    g.harness.run_steps(3);
+    assert_eq!(render_path_of(&g), Some("canvasTooLarge"));
+    // Its pages and their work are freed meanwhile (#5332 review).
+    assert!(gpu.pages(key).0.is_empty(), "pages freed");
+    assert!(!g.harness.state().streams.contains_key(&doc.id), "stream dropped");
+    gpu.set_canvas_budget(set - 1);
+    settle_pages(&mut g);
+    // Closing the document cancels its work and frees its pages.
+    g.harness.state_mut().run("file.close", json!({"save": false})).expect("close");
+    g.harness.run_steps(3);
+    assert!(g.harness.state().streams.is_empty());
+    assert!(gpu.pages(key).0.is_empty());
+}
+
+/// Runs a Window › Arrange command, as its menu item does, and lets the layout settle.
+fn arrange(g: &mut Gpu, command: &str) {
+    let ctx = g.harness.ctx.clone();
+    crate::menus::invoke(g.harness.state_mut(), &ctx, command, json!({})).expect("arrange");
+    g.harness.run_steps(3);
+}
+
+/// #5332 review: the open documents share one texture budget rather than each having all of
+/// it. A document alone on screen keeps the whole budget; one in a background tab gives its
+/// textures up when the shown one needs the room; and documents shown side by side split it,
+/// a document over its share drawing from viewport pages.
+#[test]
+fn open_documents_share_one_texture_budget_with_the_shown_ones_first() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let Some(mut g) = gpu_app() else { return };
+    let gpu = g.harness.state().gpu.clone().expect("gpu canvas");
+    let new = |g: &mut Gpu| {
+        g.harness.state_mut().run("file.new", json!({"width": 3000, "height": 2000, "background": "#336699"})).expect("new");
+        g.harness.run_steps(3);
+        assert!(on_gpu_canvas(g), "{:?}", render_path_of(g));
+        g.harness.state().session.active().expect("document").doc.clone()
+    };
+    let a = new(&mut g);
+    let (set, _) = gpu.canvas_fit(&a).expect("fit");
+    // Room for one texture set and a half: a document alone on screen has all of it.
+    let budget = set + set / 2;
+    gpu.set_canvas_budget(budget);
+    assert_eq!(gpu.canvas_fit(&a), Some((set, budget)), "alone, the whole budget");
+    assert!(gpu.texture_info(a.id.0).is_some());
+    // A second tab: the shown document's texture set takes the room of the background one's.
+    let b = new(&mut g);
+    assert_eq!(gpu.canvas_fit(&b), Some((set, budget)));
+    assert!(gpu.texture_info(b.id.0).is_some());
+    assert!(gpu.texture_info(a.id.0).is_none(), "the background document's textures are freed");
+    // Back to the first tab: it gets its texture set back and the other gives its up.
+    g.harness.state_mut().session.set_active(0);
+    g.harness.run_steps(3);
+    assert!(on_gpu_canvas(&g), "{:?}", render_path_of(&g));
+    assert!(gpu.texture_info(a.id.0).is_some());
+    assert!(gpu.texture_info(b.id.0).is_none());
+    // Side by side, they split the budget: neither set fits its half, so both draw from pages.
+    arrange(&mut g, "window.arrange.twoUpVertical");
+    assert_eq!(gpu.canvas_fit(&a), Some((set, budget / 2)));
+    assert_eq!(gpu.canvas_fit(&b), Some((set, budget - budget / 2)));
+    settle_pages(&mut g);
+    assert!(on_gpu_canvas(&g), "{:?}", render_path_of(&g));
+    let streams = &g.harness.state().streams;
+    assert!(streams.contains_key(&a.id) && streams.contains_key(&b.id), "both on pages");
+    assert!(gpu.texture_info(a.id.0).is_none() && gpu.texture_info(b.id.0).is_none());
+    // Switching between them re-splits nothing: no page set is dropped.
+    let held = gpu.pages(crate::canvas::viewport_pages::stream_key(a.id.0)).0;
+    g.harness.state_mut().session.set_active(1);
+    g.harness.run_steps(3);
+    assert_eq!(gpu.canvas_fit(&a), Some((set, budget / 2)));
+    assert_eq!(gpu.pages(crate::canvas::viewport_pages::stream_key(a.id.0)).0, held, "no churn on a switch");
+    // Back to tabs: the shown document has the whole budget, and its texture set, again.
+    arrange(&mut g, "window.arrange.consolidateAllToTabs");
+    assert_eq!(gpu.canvas_fit(&b), Some((set, budget)));
+    assert!(on_gpu_canvas(&g), "{:?}", render_path_of(&g));
+    assert!(gpu.texture_info(b.id.0).is_some());
+}
+
+#[test]
+fn a_flipped_view_records_why_it_draws_on_the_cpu() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let Some(mut g) = gpu_app() else { return };
+    g.harness.state_mut().run("file.new", json!({"width": 400, "height": 300, "background": "#336699"})).expect("new");
+    g.harness.run_steps(3);
+    assert!(on_gpu_canvas(&g));
+    g.harness.state_mut().ui.view.flip_horizontal = true;
+    g.harness.run_steps(3);
+    assert_eq!(render_path_of(&g), Some("viewTransform"));
+    g.harness.state_mut().ui.view.flip_horizontal = false;
+    g.harness.run_steps(3);
+    assert!(on_gpu_canvas(&g), "back on the GPU");
 }

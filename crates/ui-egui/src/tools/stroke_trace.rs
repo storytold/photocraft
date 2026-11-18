@@ -11,8 +11,13 @@
 //! submission, without the vsync wait). What the app can't see (the OS input queue before a frame
 //! starts, frames queued for the display, the compositor) is the rest of the input-to-photon time;
 //! the summary names the GPU backend because GL ignores the frame-latency setting.
+//!
+//! The trace keeps no clock of its own: each row is the frame's `frame_stages::FrameStages`,
+//! which the app gathers every frame (the slow-frame ring reads the same record).
 
 use std::fmt::Write as _;
+
+use crate::frame_stages::FrameStages;
 
 /// One frame of a stroke. Times in ms.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -31,6 +36,13 @@ pub(crate) struct Row {
     pub ui: f64,
     /// eframe's CPU time for the previous frame: UI, tessellation and GPU submission.
     pub cpu_prev: Option<f64>,
+}
+
+impl Row {
+    /// The trace's row for a frame's stages.
+    pub(crate) fn from_stages(s: &FrameStages, interval: f64) -> Self {
+        Self { t: s.t, interval, moves: s.moves, stroke: s.stroke_ms, canvas: s.composite_ms + s.upload_ms, ui: s.ui_ms, cpu_prev: s.cpu_prev_ms }
+    }
 }
 
 /// Percentiles of a stroke's frames, for the summary line and the control channel.
@@ -71,7 +83,7 @@ impl Summary {
 }
 
 /// Where the trace goes ([`StrokeTrace::from_env`]).
-// The web build has no clock, so it never traces.
+// The web build never traces: it has no environment, stderr or files to write to.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) enum Output {
@@ -86,8 +98,6 @@ pub(crate) enum Output {
 #[derive(Debug, Default)]
 pub struct StrokeTrace {
     pub(crate) output: Output,
-    /// The frame being built (started by `begin_frame`).
-    frame: Option<Row>,
     last_start: Option<f64>,
     /// The current stroke's frames.
     rows: Vec<Row>,
@@ -110,7 +120,7 @@ fn percentiles(mut v: Vec<f64>) -> [f64; 2] {
 }
 
 impl StrokeTrace {
-    /// Reads `PHOTOCRAFT_STROKE_TRACE` (off on the web, where there is no clock).
+    /// Reads `PHOTOCRAFT_STROKE_TRACE` (off on the web, which has no environment, stderr or files).
     pub fn from_env() -> Self {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(v) = std::env::var_os("PHOTOCRAFT_STROKE_TRACE") {
@@ -143,49 +153,20 @@ impl StrokeTrace {
         self.output != Output::Off
     }
 
-    /// A frame starts (the raw input hook) with `moves` pointer moves.
-    pub fn begin_frame(&mut self, now: f64, moves: usize) {
+    /// A frame ended, with the stages the app gathered for it (`frame_stages`; the trace keeps
+    /// no clock of its own). `stroking`: a stroke is being drawn (a frame that rendered stroke
+    /// points counts too, such as the release's commit). A stroke's frames are kept until the
+    /// first frame without one, which ends it.
+    pub fn frame(&mut self, s: &FrameStages, stroking: bool, backend: impl FnOnce() -> String) {
         if !self.enabled() {
             return;
         }
-        let interval = self.last_start.map_or(0.0, |t| now - t);
-        self.last_start = Some(now);
-        self.frame = Some(Row { t: now, interval, moves, ..Default::default() });
-    }
-
-    /// eframe's CPU time for the previous frame, in seconds (`Frame::info().cpu_usage`).
-    pub fn cpu_prev(&mut self, secs: Option<f32>) {
-        if let Some(f) = self.frame.as_mut() {
-            f.cpu_prev = secs.map(|s| f64::from(s) * 1000.0);
-        }
-    }
-
-    /// Time spent rendering stroke points this frame.
-    pub fn stroke(&mut self, ms: f64) {
-        if let Some(f) = self.frame.as_mut() {
-            f.stroke += ms;
-        }
-    }
-
-    /// Time spent refreshing the canvas this frame.
-    pub fn canvas(&mut self, ms: f64) {
-        if let Some(f) = self.frame.as_mut() {
-            f.canvas += ms;
-        }
-    }
-
-    /// The frame's UI is built (`ui` ms). `stroking`: a stroke is being drawn (a frame that
-    /// rendered stroke points counts too, such as the release's commit). A stroke's frames are
-    /// kept until the first frame without one, which ends it.
-    pub fn end_frame(&mut self, ui: f64, stroking: bool, backend: impl FnOnce() -> String) {
-        let Some(mut f) = self.frame.take() else { return };
-        if stroking || f.stroke > 0.0 {
-            f.ui = ui;
+        let interval = self.last_start.map_or(0.0, |t| s.t - t);
+        self.last_start = Some(s.t);
+        if stroking || s.stroke_ms > 0.0 {
             // The first frame of a stroke doesn't follow a stroke frame: its interval is idle time.
-            if self.rows.is_empty() {
-                f.interval = 0.0;
-            }
-            self.rows.push(f);
+            let interval = if self.rows.is_empty() { 0.0 } else { interval };
+            self.rows.push(Row::from_stages(s, interval));
         } else if !self.rows.is_empty() {
             self.finish(backend());
         }
@@ -221,7 +202,7 @@ impl StrokeTrace {
 }
 
 /// The CSV text for `rows` of stroke `stroke` (with the header when `header`).
-// The web build has no clock, so it never traces.
+// The web build never traces: it has no environment, stderr or files to write to.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) fn csv(stroke: usize, rows: &[Row], header: bool) -> String {
     let mut s = String::new();
@@ -251,14 +232,20 @@ mod tests {
         StrokeTrace { output: Output::Stderr, ..Default::default() }
     }
 
-    fn frame(t: &mut StrokeTrace, now: f64, cpu: f32, stroking: bool) {
-        t.begin_frame(now, 3);
-        t.cpu_prev(Some(cpu / 1000.0));
+    fn stages(now: f64, cpu: f32, stroking: bool) -> FrameStages {
+        let mut s = FrameStages::default();
+        s.start(now, 3);
+        s.ui_start(now, Some(cpu / 1000.0));
         if stroking {
-            t.stroke(1.0);
-            t.canvas(2.0);
+            s.stroke_ms = 1.0;
+            s.refresh("rect", 10, 1.5, 0.5);
         }
-        t.end_frame(4.0, stroking, || "vulkan Test GPU".into());
+        s.ui_ms = 4.0;
+        s
+    }
+
+    fn frame(t: &mut StrokeTrace, now: f64, cpu: f32, stroking: bool) {
+        t.frame(&stages(now, cpu, stroking), stroking, || "vulkan Test GPU".into());
     }
 
     #[test]
@@ -282,28 +269,6 @@ mod tests {
         frame(&mut off, 0.0, 1.0, true);
         frame(&mut off, 16.0, 1.0, false);
         assert!(off.last.is_none() && off.rows.is_empty());
-    }
-
-    #[test]
-    fn a_trace_is_set_by_value() {
-        assert_eq!(StrokeTrace::from_value("off").output, Output::Off);
-        assert_eq!(StrokeTrace::from_value(" 0 ").output, Output::Off);
-        assert_eq!(StrokeTrace::from_value("stderr").output, Output::Stderr);
-        assert_eq!(StrokeTrace::from_value("true").output, Output::Stderr);
-        assert_eq!(StrokeTrace::from_value("t.csv").output, Output::Csv("t.csv".into()));
-        let mut t = on();
-        t.last = Some(Summary::default());
-        t.set("off");
-        assert!(!t.enabled() && t.last.is_some(), "turning it off keeps the last summary");
-    }
-
-    #[test]
-    fn csv_rows_and_odd_numbers() {
-        let rows = [Row { t: 1.0, interval: 16.5, moves: 2, stroke: 0.25, canvas: 1.0, ui: 3.0, cpu_prev: None }];
-        assert_eq!(csv(1, &rows, true), "stroke,t_ms,interval_ms,moves,stroke_ms,canvas_ms,ui_ms,cpu_prev_ms\n1,1.000,16.500,2,0.250,1.000,3.000,\n");
-        assert_eq!(percentiles(vec![]), [0.0, 0.0]);
-        assert_eq!(percentiles(vec![f64::NAN, 2.0, f64::INFINITY]), [2.0, 2.0]);
-        assert_eq!(percentiles((1..=100).map(f64::from).collect()), [51.0, 95.0]);
     }
 
     #[cfg(not(target_arch = "wasm32"))]

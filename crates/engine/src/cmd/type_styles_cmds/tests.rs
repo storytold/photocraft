@@ -74,6 +74,15 @@ fn character_style_lifecycle() {
 }
 
 #[test]
+fn creating_a_style_rejects_an_unmatched_named_source_layer() {
+    let (mut s, _) = session("Hello");
+    for id in ["type.characterStyle.new", "type.paragraphStyle.new"] {
+        let error = s.execute(id, json!({"name": "From missing", "layer": "Missing", "fromSelection": true})).unwrap_err();
+        assert!(error.to_string().contains("no layer named"), "{error}");
+    }
+}
+
+#[test]
 fn new_style_from_selection_and_redefine() {
     let (mut s, id) = session("Title");
     s.execute("type.setStyle", json!({"layer": id, "size": 48, "color": "#ff0000"})).unwrap();
@@ -242,4 +251,15 @@ fn preview_options_validates_without_mutating_source() {
     let shown = preview_options(&doc, &p, true).unwrap();
     assert_ne!(shown.text_styles, before);
     assert_eq!(doc.text_styles, before);
+}
+
+#[test]
+fn style_options_take_a_family_with_the_style_picked_under_it() {
+    // The font menu's ">" picks a family in one of its styles: Style Options sends both.
+    let (mut s, _) = session("Hello");
+    let cs = s.execute("type.characterStyle.new", json!({"attrs": {"size": 20}, "fromSelection": false})).unwrap()["id"].as_u64().unwrap();
+    s.execute("type.characterStyle.set", json!({"id": cs, "attrs": {"font": "Arial", "fontStyle": "Bold Italic"}})).unwrap();
+    let attrs = s.execute("type.characterStyle.list", json!({})).unwrap()["styles"][1]["attrs"].clone();
+    assert_eq!(attrs["font_family"], "Arial", "{attrs}");
+    assert_eq!(attrs["font_style"], "Bold Italic", "{attrs}");
 }

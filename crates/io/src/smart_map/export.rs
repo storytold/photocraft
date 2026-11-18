@@ -5,7 +5,10 @@ use super::import::{
     colour_rgbc, enum_param, from_hex, gallery_item, known_by_command, pf_range, pi_range, seed_param,
 };
 use super::placed::enumv;
-use super::*;
+use super::{
+    Class, Descriptor, FilterStack, Id, J, ReferenceItem, SmartFilter, UNSUPPORTED_FILTER, UnicodeString, Value, camera_raw, displace, hue_sat,
+    perspective_warp, puppet,
+};
 
 // ---------- writing ----------
 
@@ -37,7 +40,7 @@ pub(super) fn pi(p: &J, key: &str, default: f64) -> Value {
 
 /// A whole-number setting as a long, clamped to `range` like the engine clamps it; a fraction
 /// has no PSD equivalent (Photoshop stores these as integers).
-fn whole(v: f64, (lo, hi): (i32, i32), what: &str) -> Result<Value, String> {
+pub(super) fn whole(v: f64, (lo, hi): (i32, i32), what: &str) -> Result<Value, String> {
     if v.fract() != 0.0 {
         return Err(format!("{what} ({v}) is not a whole number"));
     }
@@ -111,7 +114,8 @@ fn enum_out(p: &J, key: &str, default: &str, type_id: &str, table: &[(&str, &str
     Ok(enumv(type_id, psd))
 }
 
-/// `key` rounded to a `long` in `lo..=hi`.
+/// `key` rounded to a `long` in `lo..=hi` (clamped, and a non-number is the default, as the
+/// engine reads Extrude, Tiles, Trace Contour, Crystallize and Pointillize).
 fn pi_in(p: &J, key: &str, default: f64, lo: i32, hi: i32) -> Value {
     Value::Integer(pf(p, key, default).round().clamp(f64::from(lo), f64::from(hi)) as i32)
 }
@@ -304,6 +308,12 @@ pub fn item_for_filter(f: &SmartFilter) -> Result<Descriptor, String> {
     }
     if perspective_warp::handles(&f.command) {
         return perspective_warp::export_item(f);
+    }
+    if f.command == puppet::COMMAND && f.params.get(puppet::TEMPLATE_KEY).is_some() {
+        let mut d = puppet::export_item(&f.params)?;
+        set(&mut d, "blendOptions", blend_options(f));
+        set(&mut d, "enab", Value::Boolean(f.visible));
+        return Ok(d);
     }
     if f.command == UNSUPPORTED_FILTER {
         let raw = f.params.get("psd").and_then(J::as_str).and_then(from_hex).ok_or("its filter data is missing")?;

@@ -1,4 +1,4 @@
-use super::*;
+use super::PhotocraftApp;
 
 impl PhotocraftApp {
     /// Zoom of the active document's main view: screen (device) pixels per document pixel, the
@@ -17,5 +17,12 @@ impl PhotocraftApp {
     /// distance, tolerance and texture-level choice on the canvas is measured in.
     pub fn point_zoom(&self) -> f32 {
         self.current_zoom() / self.canvas_ppp()
+    }
+
+    /// How far, in document units, a press still takes a tool's point, handle or edge: the framework's pointer reach
+    /// (`size.hit.target`, screen points) over the view's zoom. The tools read the same reach through
+    /// `ToolContext::reach`.
+    pub fn tool_reach(&self) -> f64 {
+        f64::from(craft::ui::runtime::env::Env::root_hit_reach(self.ctx())) / f64::from(self.point_zoom().max(0.01))
     }
 }

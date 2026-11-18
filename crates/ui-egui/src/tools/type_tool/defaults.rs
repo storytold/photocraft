@@ -1,5 +1,6 @@
 use super::editing::edit_home;
-use super::*;
+use super::insertion_style;
+use super::{LayerId, PhotocraftApp, TextLayer, hex, json, text_layer};
 
 /// Representative for the displayed properties: the edit layer, else a selected type layer.
 pub(crate) fn target(app: &PhotocraftApp) -> Option<(u64, Option<[usize; 2]>)> {
@@ -54,25 +55,6 @@ pub(super) fn shown_scale(app: &PhotocraftApp) -> f32 {
     let m = t.transform.m;
     let k = (m[0] * m[3] - m[1] * m[2]).abs().sqrt() as f32;
     if k.is_finite() && k > 1e-3 { k } else { 1.0 }
-}
-
-/// The display unit for type metrics (Preferences ▸ Units & Rulers ▸ Type): the multiplier from
-/// the model's points to the unit, and its label. Pixels follow the document's resolution.
-pub(crate) fn type_unit(app: &PhotocraftApp) -> (f32, &'static str) {
-    let dpi = app.session.active().map_or(72.0, |d| d.doc.resolution_dpi.max(1.0));
-    match app.session.prefs().units_and_rulers.type_units {
-        photocraft_engine::prefs::TypeUnit::Points => (1.0, "pt"),
-        photocraft_engine::prefs::TypeUnit::Pixels => (dpi / 72.0, "px"),
-        photocraft_engine::prefs::TypeUnit::Millimeters => (25.4 / 72.0, "mm"),
-    }
-}
-
-/// Coalesce key while a field is being scrubbed: every step of one drag shares one history step
-/// (Photoshop's single step per scrub, #124). Unique per press, so two drags are two steps.
-fn drag_key(ctx: &egui::Context) -> Option<String> {
-    let id = ctx.dragged_id()?;
-    let t = ctx.input(|i| i.pointer.press_start_time())?;
-    Some(format!("type-drag-{}-{}", id.value(), t.to_bits()))
 }
 
 /// The styles a new Type-tool layer will receive. Use the same command parameters for the
@@ -202,8 +184,13 @@ pub(super) fn apply_defaults(app: &mut PhotocraftApp, props: &serde_json::Value)
 }
 
 /// Apply only the supplied properties to the text-edit scope or selected type layers; without
-/// a type target, prepare the defaults for the next layer instead.
-pub(super) fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, props: serde_json::Value) {
+/// a type target, prepare the defaults for the next layer instead. `coalesce` is the gesture's history key
+/// (`history_keys::coalesce`); a running type session's key wins.
+pub(super) fn apply(app: &mut PhotocraftApp, props: serde_json::Value, coalesce: Option<String>) {
+    if insertion_style::set_font(app, &props) {
+        return;
+    }
+    app.ui.type_insertion_style = None;
     let Some(mut p) = formatting_params(app) else {
         apply_defaults(app, &props);
         return;
@@ -213,29 +200,15 @@ pub(super) fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, props: serde_j
             p[key] = value.clone();
         }
     }
-    if let Some(key) = app.ui.text_edit.as_ref().map(|ed| ed.session.clone()).or_else(|| drag_key(ctx)) {
+    if let Some(key) = app.ui.text_edit.as_ref().map(|ed| ed.session.clone()).or(coalesce) {
         p["coalesce"] = json!(key);
     }
     let _ = app.run("type.setStyle", p);
 }
 
-/// `props` aimed at the type target: its layer, the selected characters while typing, and the
-/// typing session's undo step. `None` without a type target.
-pub(crate) fn with_target(app: &PhotocraftApp, mut props: serde_json::Value) -> Option<serde_json::Value> {
-    let (layer, range) = target(app)?;
-    props["layer"] = json!(layer);
-    if let Some(r) = range {
-        props["range"] = json!(r);
-    }
-    if let Some(key) = app.ui.text_edit.as_ref().map(|ed| ed.session.clone()) {
-        props["coalesce"] = json!(key);
-    }
-    Some(props)
-}
-
 /// Open the shared Color Picker with a snapshot of the text target. Sampling or cancelling
 /// the dialog never changes the text selection, tool colours, or document history.
-pub fn open_color_picker(app: &mut PhotocraftApp, rgb: [f32; 3]) -> u64 {
+pub fn open_color_picker(app: &mut PhotocraftApp, rgb: [f32; 3]) -> craft::ui::dialog::DialogId {
     if let Some(params) = formatting_params(app) {
         crate::color_picker_ui::open_for_command(app, "Color Picker (Text Color)", rgb, "type.setStyle", params)
     } else {

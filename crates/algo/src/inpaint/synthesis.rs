@@ -1,7 +1,7 @@
 use super::common::{Bounds, Px, Rng};
 use super::solver::{Best, LANES, known_sse, known_sse_any, known_sse_lanes, least_sum};
 use super::sources::{hole_bbox, integral, window_count};
-use super::*;
+use super::{HoleIntegral, membrane_fill, par};
 
 /// Fill the hole from its edge inwards, one ring at a time: each pixel takes the centre of the
 /// source patch that best matches what is already known around it (the first in `sources` of
@@ -261,7 +261,8 @@ pub fn best_offset(w: usize, h: usize, ch: usize, img: &[f32], hole: &[bool], ri
 pub fn synthesize(w: usize, h: usize, ch: usize, img: &[f32], hole: &[bool], block: usize, seed: u64) -> Vec<f32> {
     let mut out = img.to_vec();
     let Some((bx0, by0, bx1, by1)) = hole_bbox(w, h, hole) else { return out };
-    let b = block.max(4) as i32;
+    // A block larger than the image fits no candidate either way: the clamp keeps the i32 math in range.
+    let b = block.clamp(4, w.max(h).max(4)) as i32;
     let ov = (b / 3).max(1);
     let hs = integral(w, h, hole);
     // Candidate block origins: whole block (with overlap) inside the grid and outside the hole.

@@ -52,7 +52,7 @@ fn max_diff(a: &[[f32; 4]], b: &[[f32; 4]]) -> f32 {
 
 /// Every block with inner structure re-parses strictly (`TaggedBlock::check_structure`).
 fn structure_errors(bytes: &[u8]) -> Vec<String> {
-    let f = photocraft_psd::PsdFile::from_bytes(bytes).unwrap();
+    let f = craft_psd::PsdFile::from_bytes(bytes).unwrap();
     let mut errs = Vec::new();
     for b in &f.global_blocks {
         if let Err(e) = b.check_structure() {
@@ -229,9 +229,9 @@ fn camera_raw_psd_fixture() {
         .smart_filters
         .iter()
         .position(|f| {
-            photocraft_io::smart_map::item_for_filter(f).ok().is_some_and(
-                |item| matches!(item.get("Fltr"), Some(photocraft_psd::descriptor::Value::Descriptor(d)) if d.class_id.is("Adobe Camera Raw Filter")),
-            )
+            photocraft_io::smart_map::item_for_filter(f)
+                .ok()
+                .is_some_and(|item| matches!(item.get("Fltr"), Some(craft_psd::descriptor::Value::Descriptor(d)) if d.class_id.is("Adobe Camera Raw Filter")))
         })
         .expect("a Camera Raw filter");
     let original_item = photocraft_io::smart_map::item_for_filter(&sm.smart_filters[index]).unwrap();
@@ -261,11 +261,11 @@ fn camera_raw_psd_fixture() {
     assert_eq!(after.params["exposure"], 0.5);
     let mut expected = original_item;
     let mut fltr = match expected.get("Fltr").unwrap() {
-        photocraft_psd::descriptor::Value::Descriptor(d) => d.clone(),
+        craft_psd::descriptor::Value::Descriptor(d) => d.clone(),
         _ => panic!("Fltr must be a descriptor"),
     };
-    fltr.items.iter_mut().find(|(key, _)| key.is("Ex12")).unwrap().1 = photocraft_psd::descriptor::Value::Double(0.5);
-    expected.items.iter_mut().find(|(key, _)| key.is("Fltr")).unwrap().1 = photocraft_psd::descriptor::Value::Descriptor(fltr);
+    fltr.items.iter_mut().find(|(key, _)| key.is("Ex12")).unwrap().1 = craft_psd::descriptor::Value::Double(0.5);
+    expected.items.iter_mut().find(|(key, _)| key.is("Fltr")).unwrap().1 = craft_psd::descriptor::Value::Descriptor(fltr);
     assert_eq!(photocraft_io::smart_map::item_for_filter(after).unwrap(), expected, "only Exposure changes");
 }
 
@@ -291,8 +291,8 @@ fn smart_filters_survive_psd_in_every_colour_model() {
         assert_eq!(b.smart_filters.len(), 1, "{mode} {depth}");
         assert_eq!(b.smart_filters[0].command, a.smart_filters[0].command);
         // The cache's unfiltered planes decode back to the unfiltered rendering.
-        let f = photocraft_psd::PsdFile::from_bytes(&out.bytes).unwrap();
-        let fx = f.global_blocks.iter().find(|g| &g.key == b"FEid").map(|g| photocraft_psd::filter_effects::FilterEffects::parse(&g.data).unwrap()).unwrap();
+        let f = craft_psd::PsdFile::from_bytes(&out.bytes).unwrap();
+        let fx = f.global_blocks.iter().find(|g| &g.key == b"FEid").map(|g| craft_psd::filter_effects::FilterEffects::parse(&g.data).unwrap()).unwrap();
         let item = &fx.items[0];
         let (w, h) = item.rect.size().unwrap();
         let bits = u16::try_from(item.depth).unwrap();
@@ -396,7 +396,7 @@ fn edited_psd_smart_objects_drop_their_old_file() {
     let parent = s2.documents().iter().position(|d| d.doc.layer(photocraft_doc::LayerId(id)).is_some()).unwrap();
     let doc2 = s2.documents()[parent].doc.clone();
     let second = photocraft_io::export(&doc2, "psd", &Default::default()).unwrap().bytes;
-    let f = photocraft_psd::PsdFile::from_bytes(&second).unwrap();
+    let f = craft_psd::PsdFile::from_bytes(&second).unwrap();
     let uuids: Vec<String> = f.global_blocks.iter().filter(|b| &b.key == b"lnk2").flat_map(|b| photocraft_io::linked::block_uuids(&b.data)).collect();
     let back = photocraft_io::import("b.psd", &second).unwrap().document;
     let (_, sm) = smart(&back);
@@ -409,7 +409,7 @@ fn edited_psd_smart_objects_drop_their_old_file() {
 /// through, and keeps that map through PSD export, `.pcraft` and a PSD re-import.
 #[test]
 fn displace_psd_filter_renders_with_its_embedded_map() {
-    use photocraft_psd::descriptor::{Descriptor, Id, UnicodeString, Value};
+    use craft_psd::descriptor::{Descriptor, Id, UnicodeString, Value};
     for depth in [8, 16, 32] {
         let mut s = session(depth);
         s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
@@ -469,13 +469,81 @@ fn displace_psd_filter_renders_with_its_embedded_map() {
     }
 }
 
+/// #9162: a Photoshop Displace smart filter that names its map file (`DspF`, a `Pth `) without
+/// embedding it was skipped as "not supported" on Replace Contents. Opened from PSD, it now reads
+/// that file and the replaced contents come out displaced.
+#[test]
+fn displace_psd_filter_with_only_a_map_path_renders_after_replace_contents() {
+    use craft_psd::descriptor::{Descriptor, Id, UnicodeString, Value};
+    let dir = std::env::temp_dir().join(format!("pcraft-9162-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let png = |name: &str, size: (u32, u32), c: [f32; 4]| {
+        let d = Document::with_background(
+            "m",
+            photocraft_geom::Size::new(size.0, size.1),
+            photocraft_color::ColorMode::Rgb,
+            photocraft_color::SampleType::U8,
+            photocraft_color::Color::rgba(c[0], c[1], c[2], c[3]),
+        );
+        let path = dir.join(name);
+        std::fs::write(&path, photocraft_io::export(&d, "png", &Default::default()).unwrap().bytes).unwrap();
+        path.to_str().unwrap().to_string()
+    };
+    // Red is the horizontal map (full right), green the vertical one (about neutral), as in the
+    // issue's map.
+    let map = png("map.png", (12, 8), [1.0, 0.5, 0.5, 1.0]);
+    let design = png("design.png", (72, 52), [1.0, 0.0, 0.0, 1.0]);
+    // `DspF` as Photoshop writes a path: `txtu`, sizes (LE), UTF-16LE with a trailing NUL.
+    let units: Vec<u16> = map.encode_utf16().chain([0]).collect();
+    let mut pth = b"txtu".to_vec();
+    pth.extend((12 + 2 * units.len() as u32).to_le_bytes());
+    pth.extend((units.len() as u32).to_le_bytes());
+    pth.extend(units.iter().flat_map(|u| u.to_le_bytes()));
+    let e = |t: &str, v: &str| Value::Enumerated { type_id: Id::new(t), value: Id::new(v) };
+    let fltr = Descriptor::new("Dspl")
+        .with("HrzS", Value::Integer(10))
+        .with("VrtS", Value::Integer(10))
+        .with("DspM", e("DspM", "StrF"))
+        .with("UndA", e("UndA", "RptE"))
+        .with("DspF", Value::Path(pth));
+    let item = Descriptor::new("filterFX")
+        .with("Nm  ", Value::Text(UnicodeString::new_nul("Displace...")))
+        .with("enab", Value::Boolean(true))
+        .with("hasoptions", Value::Boolean(true))
+        .with("Fltr", Value::Descriptor(fltr))
+        .with("filterID", Value::Integer(1148416108));
+    for depth in [8, 16, 32] {
+        let mut s = session(depth);
+        s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let id = photocraft_doc::LayerId(s.active().unwrap().active_layer.unwrap().0);
+        s.edit("displace", |doc, _| {
+            let LayerContent::Smart(sm) = &mut doc.layer_mut(id).unwrap().content else { panic!("smart") };
+            sm.smart_filters.push(photocraft_io::smart_map::filter_from_item(&item));
+            Ok(())
+        })
+        .unwrap();
+        let psd = photocraft_io::export(&s.active().unwrap().doc, "psd", &Default::default()).unwrap().bytes;
+        // The issue's flow: open the PSD, Replace Contents of the smart object.
+        let mut s2 = Session::new();
+        s2.add_document(photocraft_io::import("pc-displace-repro.psd", &psd).unwrap().document, None);
+        let (sid, _) = smart(&s2.active().unwrap().doc);
+        let out = s2.execute("layer.smartObjects.replaceContents", json!({"layer": sid, "path": design})).unwrap();
+        assert_eq!(out["warnings"], json!([]), "depth {depth}");
+        let cache = smart(&s2.active().unwrap().doc).1.cache.unwrap();
+        // 10 % of 128 px at full map contrast: the design (x 8..80) moves 12.8 px left.
+        let alpha = |x: i32| cache.pixel(x, 30)[3];
+        assert!(alpha(2) > 0.99 && alpha(75) < 0.01, "depth {depth}: {} {}", alpha(2), alpha(75));
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// A Perspective Warp smart filter as Photoshop writes it (`perspectiveWarpTransform`: vertices,
 /// warped vertices and quads of vertex indices, document pixels) opens as
 /// `layer.smartObjects.perspectiveWarp` and re-renders warped instead of flat (#6268), and keeps
 /// its planes through PSD export, `.pcraft` and a PSD re-import.
 #[test]
 fn perspective_warp_psd_filter_renders_warped() {
-    use photocraft_psd::descriptor::{Descriptor, UnicodeString, Value};
+    use craft_psd::descriptor::{Descriptor, UnicodeString, Value};
     let pnts = |p: &[[f64; 2]]| {
         let px = |v: f64| Value::UnitFloat { unit: *b"#Pxl", value: v };
         Value::List(p.iter().map(|q| Value::Descriptor(Descriptor::new("Pnt ").with("Hrzn", px(q[0])).with("Vrtc", px(q[1])))).collect())
@@ -555,7 +623,7 @@ fn lifd_v2(f: &photocraft_io::linked::LinkedFile) -> Vec<u8> {
 /// version-2 items.
 fn cs2_layout(doc: &Document) -> Vec<u8> {
     let out = photocraft_io::export(doc, "psd", &Default::default()).unwrap();
-    let mut file = photocraft_psd::PsdFile::from_bytes(&out.bytes).unwrap();
+    let mut file = craft_psd::PsdFile::from_bytes(&out.bytes).unwrap();
     for rec in file.layers_mut() {
         rec.blocks.retain(|b| !matches!(&b.key, b"SoLd" | b"SoLE"));
     }
@@ -649,7 +717,7 @@ fn cs2_plld_only_smart_object_saves_its_new_transform() {
     s.execute("edit.transform", json!({"layer": id, "matrix": [0.75, 0, 0, 0.75, 10, 4]})).unwrap();
     let cs2 = cs2_layout(&s.active().unwrap().doc);
     let plld = |bytes: &[u8]| {
-        let f = photocraft_psd::PsdFile::from_bytes(bytes).unwrap();
+        let f = craft_psd::PsdFile::from_bytes(bytes).unwrap();
         let rec = f.layers().iter().find(|l| l.block(b"PlLd").is_some()).cloned().expect("a placed layer");
         (rec.block(b"PlLd").unwrap().data.clone(), rec.block(b"SoLd").is_some())
     };
@@ -711,7 +779,7 @@ fn a_soft_filter_mask_is_stored_the_way_photoshop_stores_it() {
     let filtered = photocraft_engine::smart_cmds::render(&doc, &unmasked).unwrap().unwrap();
 
     let out = photocraft_io::export(&doc, "psd", &Default::default()).unwrap();
-    let file = photocraft_psd::PsdFile::from_bytes(&out.bytes).unwrap();
+    let file = craft_psd::PsdFile::from_bytes(&out.bytes).unwrap();
     let name = doc.layer(id).unwrap().name.clone();
     let record = (0..file.layers().len()).filter_map(|i| file.layer(i)).find(|l| l.name() == name).unwrap();
     let img = record.rgba8().unwrap();

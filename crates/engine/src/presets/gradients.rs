@@ -401,19 +401,28 @@ pub const STOP: &str = "gradient.presets.stop";
 /// own. `None` when the caller gave `colors` (the legacy evenly spaced form `paint.gradient`
 /// handles itself).
 pub fn tool_stops(s: &Session, p: &Value) -> Result<Option<Stops>> {
+    Ok(tool_preset(s, p)?.map(|g| g.resolve(s.tools.foreground, s.tools.background)))
+}
+
+/// The same gradient as [`tool_stops`] with its colour and opacity stops kept apart, for the
+/// interpolation `method`, which treats the two differently.
+pub fn tool_fill_stops(s: &Session, p: &Value) -> Result<Option<FillStops>> {
+    Ok(tool_preset(s, p)?.map(|g| g.fill_stops(s.tools.foreground, s.tools.background)))
+}
+
+fn tool_preset(s: &Session, p: &Value) -> Result<Option<GradientPreset>> {
     const CMD: &str = "paint.gradient";
     if p.get("colors").and_then(Value::as_array).is_some_and(|a| !a.is_empty()) {
         return Ok(None);
     }
-    let g = if let Some(name) = str_param(p, "gradient") {
+    Ok(Some(if let Some(name) = str_param(p, "gradient") {
         let (gi, ii) = find(&s.presets.gradients, name, None).ok_or_else(|| bad(CMD, format!("no gradient preset \"{name}\"")))?;
         s.presets.gradients[gi].items[ii].clone().with_transparency(p, CMD)?
     } else if p.get("stops").is_some() {
         GradientPreset::from_params("Custom", p, CMD)?
     } else {
         s.presets.gradient.clone().with_transparency(p, CMD)?
-    };
-    Ok(Some(g.resolve(s.tools.foreground, s.tools.background)))
+    }))
 }
 
 /// The preset named by `"preset"` (else the current gradient), or explicit `"stops"`.
@@ -516,7 +525,15 @@ fn stop_color_param(v: &Value, cmd: &str) -> Result<StopColor> {
 /// them. Pure, so the editor previews a drag with exactly what the command commits.
 pub fn apply_preset_stop(g: &GradientPreset, p: &Value, fg: [f32; 4], bg: [f32; 4], cmd: &str) -> Result<GradientPreset> {
     let mut out = g.clone();
-    let action = p.get("action").and_then(Value::as_str).ok_or_else(|| bad(cmd, "missing `action` (add|move|delete|color|opacity)"))?;
+    let action = p.get("action").and_then(Value::as_str).ok_or_else(|| bad(cmd, "missing `action` (add|move|delete|color|set|opacity)"))?;
+    if action == "set" {
+        // The whole gradient at once (an editor commit): the stops and transparency stops replace
+        // the current ones; the preset keeps its name.
+        if p.get("stops").and_then(Value::as_array).is_some_and(|a| a.len() > 1024) {
+            return Err(bad(cmd, "too many colour stops (max 1024)"));
+        }
+        return GradientPreset::from_params(&g.name, p, cmd);
+    }
     if action == "midpoint" {
         return Err(bad(cmd, "preset gradients keep midpoints at the centre (edit a Gradient Fill layer to move them)"));
     }
@@ -641,7 +658,8 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
     let reverse = p.get("reverse").and_then(Value::as_bool).unwrap_or(false);
     let id = s.edit("New Gradient Fill Layer", |doc, active| {
         let fill = Fill::gradient(stops, angle, scale, style, reverse).in_mode(doc.mode);
-        let id = doc.insert_above(*active, Layer::new(doc.next_layer_name("Gradient Fill"), LayerContent::Fill(fill)));
+        let layer = Layer::new(doc.next_layer_name("Gradient Fill"), LayerContent::Fill(fill));
+        let id = crate::layer_place::insert_new(doc, *active, layer, crate::layer_place::Place::Auto);
         *active = Some(id);
         Ok(id)
     })?;
@@ -717,7 +735,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Edit Gradient Stop",
             menu: &[],
             shortcut: None,
-            params: r##"{"action":"add|move|delete|color|opacity","kind":"color|opacity"="color","index":stop number,"location":0..1,"color":"#rrggbb"|"foreground"|"background" (add: default the colour there),"opacity":0..100} → {"current"}. Edits the Gradient tool's current gradient (no layer, midpoints stay centred)."##,
+            params: r##"{"action":"add|move|delete|color|opacity|set","kind":"color|opacity"="color","index":stop number,"location":0..1,"color":"#rrggbb"|"foreground"|"background" (add: default the colour there),"opacity":0..100; set: "stops":[[t 0..1,"#rrggbb"|"foreground"|"background"],…] (2..1024),"transparency":[[t,opacity 0..100],…]? replaces every stop} → {"current"}. Edits the Gradient tool's current gradient (no layer, midpoints stay centred)."##,
             enabled: always,
             run: stop,
             journal: true,
