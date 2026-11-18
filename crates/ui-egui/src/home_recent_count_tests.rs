@@ -6,7 +6,7 @@ use egui_kittest::kittest::Queryable;
 
 use crate::PhotocraftApp;
 
-type H = Harness<'static, (PhotocraftApp, bool)>;
+type H = Harness<'static, (Box<PhotocraftApp>, bool)>;
 
 /// The Home screen with 15 recent files, newest (`file15.psd`) first. The framework start screen
 /// is drawn through `canvas::document_area`, as in the app.
@@ -17,7 +17,7 @@ fn home() -> H {
         app.push_recent(&format!("/tmp/photocraft-12234/file{i:02}.psd"));
     }
     let mut h = Harness::builder().with_size(egui::vec2(900.0, 1400.0)).with_context(app.ctx().clone()).build_ui_state(
-        |ui, (app, ready): &mut (PhotocraftApp, bool)| {
+        |ui, (app, ready): &mut (Box<PhotocraftApp>, bool)| {
             if *ready {
                 egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| crate::canvas::document_area(app, ui));
             }
