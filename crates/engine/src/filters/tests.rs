@@ -432,6 +432,7 @@ fn smart_object_records_smart_filter() {
             LayerContent::Smart(SmartObject {
                 contents_id: photocraft_doc::SmartContentsId::fresh(),
                 source: SmartSource::Linked { path: String::new() },
+                historical_xcf_sample_order: None,
                 transform: photocraft_geom::Affine::IDENTITY,
                 smart_filters: vec![],
                 cache: Some(cache),

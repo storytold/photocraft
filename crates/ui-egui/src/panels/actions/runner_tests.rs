@@ -604,9 +604,7 @@ fn recorded_save_as_and_save_replay_and_write_the_file() {
 /// scripted file service (the test keeps its own `Arc` to queue answers and read the requests).
 pub(super) fn disk_app(files: std::sync::Arc<craft::host::ScriptedFiles>) -> Box<PhotocraftApp> {
     let services = crate::Services {
-        import: Some(Box::new(|name, bytes, opts| {
-            photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
-        })),
+        import: Some(Box::new(|name, bytes, opts| photocraft_io::import_with_options(name, bytes, opts).map_err(|e| e.to_string()))),
         export: Some(Box::new(|doc, path, _| photocraft_io::export(doc, path, &Default::default()).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string()))),
         write: Some(Box::new(|path, bytes| std::fs::write(path, bytes).map_err(|e| e.to_string()))),
         files: Some(files),

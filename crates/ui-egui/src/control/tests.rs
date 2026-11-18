@@ -1224,7 +1224,10 @@ fn automation_open_and_save_use_the_roots_and_reply_with_warnings() {
     let w = written.clone();
     let services = crate::Services {
         import: Some(Box::new(|name: &str, _b: &[u8], _opts: &photocraft_io::ImportOptions| {
-            Ok((Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8), vec!["Adjustment layer flattened".to_string()]))
+            Ok(crate::services::imported((
+                Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8),
+                vec!["Adjustment layer flattened".to_string()],
+            )))
         })),
         export: Some(Box::new(|_d: &Document, _p: &str, _s: &crate::ExportSettings| Ok((b"out".to_vec(), vec!["Layers were flattened".to_string()])))),
         automation_read: Some(Box::new(|path: &str| {
@@ -1447,7 +1450,10 @@ fn app_open_opens_a_directory_pcraft_and_falls_back_for_the_zip_form() {
             }
         })),
         import: Some(Box::new(|name: &str, _b: &[u8], _opts: &photocraft_io::ImportOptions| {
-            Ok((Document::new(name, photocraft_doc::Size::new(4, 4), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8), Vec::new()))
+            Ok(crate::services::imported((
+                Document::new(name, photocraft_doc::Size::new(4, 4), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8),
+                Vec::new(),
+            )))
         })),
         automation_read: Some(Box::new(|path: &str| {
             if path == "zipped.pcraft" {
@@ -2109,7 +2115,7 @@ fn automation_library_open_requires_explicit_save_as_before_implicit_save() {
     let writes = written.clone();
     let services = crate::Services {
         import: Some(Box::new(|name: &str, _: &[u8], _: &photocraft_io::ImportOptions| {
-            Ok((Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8), Vec::new()))
+            Ok(crate::services::imported((Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8), Vec::new())))
         })),
         export: Some(Box::new(|_: &Document, _: &str, _: &crate::ExportSettings| Ok((b"saved".to_vec(), Vec::new())))),
         automation_read: Some(Box::new(|path: &str| {

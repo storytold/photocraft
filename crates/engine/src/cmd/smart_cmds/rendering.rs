@@ -1,23 +1,35 @@
 use super::filters::smart;
 use super::source::{
-    SourceImage, cache_get, cache_key, cache_put, convert_svg_source, source_bytes, source_image, source_surface_from_buffer, svg_source_image_in, vector_scale,
+    SourceImage, cache_get, cache_put, convert_svg_source, source_bytes, source_cache_key, source_image_with_order, source_surface_from_buffer,
+    svg_source_image_in, vector_scale,
 };
 use super::{
     Affine, Arc, BlendMode, Document, EngineError, Homography, JobCtx, Layer, LayerContent, LayerId, PixelFormat, Rect, Result, SmartFilter, SmartObject,
-    SmartSource, Stage, StageKey, Surface, Value, affine_homography, decode_source, other, placement, stack_cache,
+    SmartSource, Stage, StageKey, Surface, Value, affine_homography, decode_source_with_order, other, placement, stack_cache,
 };
 use std::sync::Mutex;
 
 /// Layer › Smart Objects › Stack Mode: the source's layers (or, when it holds a single group, the
-/// group's layers) combined per pixel with `mode`. Cached like [`source_image`], keyed by mode.
+/// group's layers) combined per pixel with `mode`. Cached like [`source_image_with_order`], keyed by mode.
 pub fn stack_image(file_name: &str, bytes: &[u8], fmt: PixelFormat, mode: photocraft_doc::StackMode) -> Result<SourceImage> {
+    stack_image_with_order(file_name, bytes, fmt, mode, None)
+}
+
+/// Stack source layers with the persisted historical sample interpretation as part of the cache key.
+pub fn stack_image_with_order(
+    file_name: &str,
+    bytes: &[u8],
+    fmt: PixelFormat,
+    mode: photocraft_doc::StackMode,
+    order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
+) -> Result<SourceImage> {
     use photocraft_algo::stack::Stat;
-    let mut key = cache_key(bytes, fmt);
+    let mut key = source_cache_key(file_name, bytes, fmt, order);
     key.0 = *blake3::hash(&[&key.0[..], b"stack:", mode.id().as_bytes()].concat()).as_bytes();
     if let Some(img) = cache_get(&key) {
         return Ok(img);
     }
-    let doc = decode_source(file_name, bytes)?;
+    let doc = decode_source_with_order(file_name, bytes, order)?;
     let layers: &[Layer] = match doc.layers.as_slice() {
         [only] if only.is_group() => only.children().unwrap_or_default(),
         all => all,
@@ -180,9 +192,10 @@ pub(super) fn place(name: &str, bytes: &[u8], doc: &Document, sm: &SmartObject) 
 
 fn place_with_svg(name: &str, bytes: &[u8], doc: &Document, sm: &SmartObject, svg: &mut impl FnMut(&[u8], f64) -> Result<SourceImage>) -> Result<Surface> {
     let fmt = doc.pixel_format();
+    let is_svg = photocraft_io::svg::is_svg(bytes);
     // A vector source is rendered at the placement's scale, and the placement is divided by
     // that scale so the rendered pixels land where the source units would.
-    if sm.stack_mode.is_none() && sm.warp.is_none() && photocraft_io::svg::is_svg(bytes) {
+    if sm.stack_mode.is_none() && sm.warp.is_none() && is_svg {
         let k = vector_scale(sm);
         let img = svg(bytes, k)?;
         return Ok(match &sm.perspective {
@@ -201,10 +214,10 @@ fn place_with_svg(name: &str, bytes: &[u8], doc: &Document, sm: &SmartObject, sv
         });
     }
     let img = match sm.stack_mode {
-        Some(mode) if photocraft_io::svg::is_svg(bytes) => convert_svg_source(stack_image(name, bytes, PixelFormat::RGBA32F, mode)?, doc)?,
-        None if photocraft_io::svg::is_svg(bytes) => svg(bytes, 1.0)?,
-        Some(mode) => stack_image(name, bytes, fmt, mode)?,
-        None => source_image(name, bytes, fmt)?,
+        Some(mode) if is_svg => convert_svg_source(stack_image_with_order(name, bytes, PixelFormat::RGBA32F, mode, sm.historical_xcf_sample_order)?, doc)?,
+        None if is_svg => svg(bytes, 1.0)?,
+        Some(mode) => stack_image_with_order(name, bytes, fmt, mode, sm.historical_xcf_sample_order)?,
+        None => source_image_with_order(name, bytes, fmt, sm.historical_xcf_sample_order)?,
     };
     // The placed stage is unclipped: a large enough placement (an image scaled to fill a huge
     // frame) would otherwise fill memory before any allocation could fail.
@@ -311,8 +324,8 @@ pub(crate) fn source_box(doc: &Document, sm: &SmartObject) -> Option<[f64; 4]> {
     let fmt = doc.pixel_format();
     let r = match sm.stack_mode {
         None if photocraft_io::svg::is_svg(&bytes) => photocraft_io::svg::bounded_canvas_bounds(&bytes, 24_000_000).ok()?,
-        Some(mode) => stack_image(&name, &bytes, fmt, mode).ok()?.bounds,
-        None => source_image(&name, &bytes, fmt).ok()?.bounds,
+        Some(mode) => stack_image_with_order(&name, &bytes, fmt, mode, sm.historical_xcf_sample_order).ok()?.bounds,
+        None => source_image_with_order(&name, &bytes, fmt, sm.historical_xcf_sample_order).ok()?.bounds,
     };
     Some([f64::from(r.x0), f64::from(r.y0), f64::from(r.x1), f64::from(r.y1)])
 }
@@ -362,7 +375,7 @@ pub(super) fn render_in(doc: &Document, sm: &SmartObject, ctx: &JobCtx) -> Resul
     let Some((name, bytes)) = source_bytes(&doc.metadata, &sm.source) else { return Ok(None) };
     let bytes = display_source(sm, &bytes);
     let (fmt, canvas) = (doc.pixel_format(), doc.bounds());
-    let mut placed_key = stack_cache::placed_key(&bytes, fmt, sm, canvas);
+    let mut placed_key = stack_cache::placed_key(&name, &bytes, fmt, sm, canvas);
     if photocraft_io::svg::is_svg(&bytes) {
         let mut h = blake3::Hasher::new();
         h.update(&placed_key);

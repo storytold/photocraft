@@ -238,11 +238,14 @@ fn a_work_directory_symlink_cannot_write_into_another_read_root() {
     std::os::unix::fs::symlink(&roots.library, roots.work.join("library-link")).unwrap();
     #[cfg(windows)]
     if let Err(error) = std::os::windows::fs::symlink_dir(&roots.library, roots.work.join("library-link")) {
-        if error.kind() == std::io::ErrorKind::PermissionDenied {
-            eprintln!("symlink regression requires Windows symlink permission: {error}");
-            return;
+        if error.kind() == std::io::ErrorKind::PermissionDenied || error.raw_os_error() == Some(1314) {
+            // A junction exercises the same directory escape without requiring Developer Mode.
+            let output =
+                std::process::Command::new("cmd.exe").args(["/c", "mklink", "/J"]).arg(roots.work.join("library-link")).arg(&roots.library).output().unwrap();
+            assert!(output.status.success(), "create test junction: {}", String::from_utf8_lossy(&output.stderr));
+        } else {
+            panic!("create test symlink: {error}");
         }
-        panic!("create test symlink: {error}");
     }
     let mut headless = roots.headless();
     headless.open(Path::new("same.pcraft")).unwrap();

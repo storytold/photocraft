@@ -16,7 +16,13 @@ fn app_with() -> (Box<PhotocraftApp>, Arc<ScriptedFiles>) {
     let files = Arc::new(ScriptedFiles::held());
     let services = Services {
         import: Some(Box::new(|name: &str, _bytes: &[u8], _opts: &photocraft_io::ImportOptions| {
-            Ok((Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8), Vec::new()))
+            Ok(photocraft_io::ImportResult {
+                document: Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8),
+                warnings: Vec::new(),
+                source_read_only: false,
+                initial_view: None,
+                preview_only: false,
+            })
         })),
         files: Some(files.clone()),
         ..Default::default()
