@@ -10,8 +10,8 @@ use craft::ui::text::InvalidZoom;
 use photocraft_doc::{Document, LayerContent};
 use serde::{Deserialize, Serialize};
 
-use crate::render_path::CpuReason;
 use crate::PhotocraftApp;
+use crate::render_path::CpuReason;
 
 /// Shell-only chrome state (serialised with the UI state, so `ui.inspect` reports it).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

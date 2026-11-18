@@ -9,7 +9,7 @@ use craft::ui::runtime::env::UnitKind;
 use craft::ui::sections::Section;
 use craft::ui::value_drag::SliderScale;
 use photocraft_doc::{Layer, LayerContent};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 
