@@ -97,3 +97,12 @@ fn an_inner_shadow_read_from_a_file_keeps_its_values() {
     s.execute("layer.layerStyle.replace", json!({"effects": [{"kind": "innerShadow", "fx": fx}]})).unwrap();
     assert_eq!(shadow(&s), stored);
 }
+
+#[test]
+fn the_command_advertises_the_new_defaults() {
+    // The params doc callers read (CodeRabbit on #15569).
+    let spec = crate::commands::find("layer.layerStyle.innerShadow").unwrap();
+    for default in ["\"opacity\":0..100=35", "\"distance\":px=3", "\"size\":px=7"] {
+        assert!(spec.params.contains(default), "{default} in {}", spec.params);
+    }
+}
