@@ -188,6 +188,13 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
             made: None,
             content_aware: None,
         });
+        if !frame_only && whole {
+            let start = opened.map_or([[rect[0], rect[1]], [rect[2], rect[1]], [rect[2], rect[3]], [rect[0], rect[3]]], |(q, _)| q);
+            let warped = warped_preview(app, &doc, id, start, session);
+            if let Some(pv) = app.transform_preview.as_mut() {
+                pv.warped = warped;
+            }
+        }
         Ok(())
     };
     // `canceled` is asked between the two images, so a canceled job doesn't make the second.
@@ -1060,4 +1067,17 @@ fn contents_texture(app: &PhotocraftApp, doc: &Document, layer: &photocraft_doc:
     }
     let max_side = app.ctx().input(|i| i.max_texture_side).max(app.gpu.as_ref().map_or(1, |g| g.max_texture_side()));
     Some(PreviewTextures::new(format!("transform-{session}-contents"), super::preview::read_surface(&contents, b, max_side)))
+}
+
+/// The stored warp of smart object `id` for the box's preview under a projective move ([`super::WarpedPreview`]);
+/// `None` for any other layer, an identity warp, or contents that can't be rendered.
+fn warped_preview(app: &PhotocraftApp, doc: &Document, id: LayerId, start: [[f64; 2]; 4], session: u64) -> Option<super::WarpedPreview> {
+    let layer = doc.layer(id)?;
+    let LayerContent::Smart(sm) = &layer.content else { return None };
+    if sm.warp.as_ref().is_none_or(|w| w.is_identity()) {
+        return None;
+    }
+    let (source, place) = photocraft_engine::warp_cmds::smart_warp_source(doc, layer)?;
+    let texture = contents_texture(app, doc, layer, &source, session)?;
+    Some(super::WarpedPreview { mesh: source.to_mesh(1, 1), bounds: source.bounds, place: place.0, start, texture })
 }

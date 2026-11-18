@@ -150,6 +150,25 @@ pub struct OpenPreview {
     pub(crate) placed_warp: Option<([f64; 9], bool)>,
     /// A warp held while the box is in another mode ([`begin::hold_warp`]).
     pub(crate) held: Option<HeldWarp>,
+    /// A smart object's stored warp, for the box's preview once its move is projective ([`WarpedPreview`]).
+    pub(crate) warped: Option<WarpedPreview>,
+}
+
+/// A smart object's stored warp as the render draws it under a Perspective or Distort move of the box: its control
+/// points carried through the move and the placement, over its contents unplaced. The box's preview draws it so once
+/// the move is projective, since the rendered pixels mapped through the move are not what the commit renders; under
+/// an affine move they are, and the preview maps them.
+pub(crate) struct WarpedPreview {
+    /// The stored warp's control points in the contents.
+    pub(crate) mesh: BezierMesh,
+    /// The warp's box in the contents.
+    pub(crate) bounds: [f64; 4],
+    /// The placement, contents to document (row-major 3×3).
+    pub(crate) place: [f64; 9],
+    /// The box when it opened.
+    pub(crate) start: [[f64; 2]; 4],
+    /// The contents unplaced, over `bounds`.
+    pub(crate) texture: PreviewTextures,
 }
 
 /// A warp kept when Edit › Transform's box modes are chosen in Warp mode: the reference keeps the warp, shows it
@@ -223,6 +242,7 @@ impl OpenPreview {
             placed: None,
             placed_warp: None,
             held: None,
+            warped: None,
         }
     }
 }

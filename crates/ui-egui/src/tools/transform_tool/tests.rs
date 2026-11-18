@@ -2384,3 +2384,25 @@ fn a_pull_under_a_perspective_starts_from_the_pressed_point_of_the_contents() {
     let (x, y) = back.apply(got.points[9].x, got.points[9].y);
     assert!((x - -614.39).abs() < 0.5 && (y - 134.67).abs() < 0.01, "{x}, {y}");
 }
+
+#[test]
+fn a_warped_smart_objects_box_keeps_its_warp_for_a_projective_preview() {
+    let mut app = app_with_square(64, photocraft_geom::Rect::new(16, 16, 48, 40));
+    let ctx = app.ctx().clone();
+    app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    begin(&mut app, &ctx).unwrap();
+    assert!(app.transform_preview.as_ref().unwrap().warped.is_none(), "no stored warp, nothing kept");
+    cancel(&mut app);
+    app.run("layer.smartObjects.warp", json!({"style": "arc", "bend": 30, "rect": [16, 16, 48, 40]})).unwrap();
+    begin(&mut app, &ctx).unwrap();
+    let pv = app.transform_preview.as_ref().unwrap();
+    let warped = pv.warped.as_ref().expect("the stored warp is kept for the preview");
+    // Its points are the stored warp's in the contents, its texels the contents unplaced over its box.
+    let id = app.session.active().unwrap().active_layer.unwrap();
+    let st = app.session.active().unwrap();
+    let (source, place) = photocraft_engine::warp_cmds::smart_warp_source(&st.doc, st.doc.layer(id).unwrap()).unwrap();
+    assert_eq!(warped.bounds, source.bounds);
+    assert_eq!(warped.mesh.points, source.to_mesh(1, 1).points);
+    assert_eq!(warped.place, place.0);
+    assert!(warped.texture.size()[0] > 0);
+}
