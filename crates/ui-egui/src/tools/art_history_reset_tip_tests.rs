@@ -1,12 +1,34 @@
 //! #12631: the Art History Brush starts, and comes back after Reset Tool, with the reference
 //! application's tip: a 21 px soft round (hardness 0 %, angle 0°, roundness 100 %) at 25 %
-//! spacing and full opacity, with no smoothing. Other tools' starting tips are unchanged.
+//! spacing and full opacity, with no smoothing. Other tools' starting tips are checked by `reset_tip_tests`.
 
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::burn_default_tip_tests::{app, invoke, pick};
+use crate::control::{ControlRequest, handle};
 use crate::state::Tool;
+
+fn app() -> Box<PhotocraftApp> {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
+    app.sync_views();
+    app
+}
+
+/// Run a menu command as the control channel does, then the frame's sync.
+fn invoke(app: &mut PhotocraftApp, id: &str, params: serde_json::Value) {
+    let ctx = app.ctx().clone();
+    let (req, _rx) = ControlRequest::new("ui.menu.invoke", json!({"id": id, "params": params}));
+    handle(app, &ctx, &req);
+    app.sync_views();
+}
+
+/// Pick `tool`, and swap its brush in as a frame does.
+fn pick(app: &mut PhotocraftApp, tool: Tool) {
+    app.ui.tool = tool;
+    crate::paint_mouse::sync_tool_brush(app);
+    app.sync_views();
+}
 
 /// Size, hardness, spacing, angle, roundness, opacity and smoothing of the live brush, as
 /// `brush.get` reports the tip.
@@ -82,23 +104,10 @@ fn reset_all_tools_gives_it_the_tip_active_or_picked_later() {
     assert_eq!(tip(&mut app), ART_HISTORY_TIP, "picked after the reset");
 }
 
+/// The other tools' starting tips are checked by `reset_tip_tests`; the History Brush's first use
+/// still takes the current tip, as before.
 #[test]
-fn other_tools_keep_their_reset_tips() {
-    for (tool, want) in [
-        (Tool::Brush, [13.0, 0.0, 0.25, 0.0, 1.0, 1.0, 0.1]),
-        (Tool::BackgroundEraser, [13.0, 1.0, 0.25, 0.0, 1.0, 1.0, 0.1]),
-        (Tool::Healing, [19.0, 1.0, 0.25, 0.0, 1.0, 1.0, 0.1]),
-        (Tool::CloneStamp, [21.0, 0.0, 0.25, 0.0, 1.0, 1.0, 0.0]),
-        (Tool::HistoryBrush, [20.0, 1.0, 0.1, 0.0, 1.0, 1.0, 0.1]),
-        (Tool::PatternStamp, [20.0, 1.0, 0.1, 0.0, 1.0, 1.0, 0.1]),
-    ] {
-        let mut a = app();
-        pick(&mut a, tool);
-        scramble(&mut a);
-        invoke(&mut a, "tool.reset", json!({}));
-        assert_eq!(tip(&mut a), want, "{tool:?}");
-    }
-    // The History Brush's first use still takes the current tip, as before.
+fn the_history_brush_first_use_keeps_the_current_tip() {
     let mut a = app();
     pick(&mut a, Tool::Pencil);
     scramble(&mut a);

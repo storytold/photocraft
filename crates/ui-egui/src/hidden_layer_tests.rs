@@ -11,7 +11,7 @@ use crate::canvas::{ToolEvent, tool_event};
 use crate::state::Tool;
 
 /// A 64×64 document with a painted layer covering (8..24)², hidden and active.
-fn app(tool: Tool) -> (PhotocraftApp, LayerId) {
+fn app(tool: Tool) -> (Box<PhotocraftApp>, LayerId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
     app.sync_views();
@@ -34,6 +34,17 @@ fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2]) {
     tool_event(app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, m);
     tool_event(app, ToolEvent::Move { x: to[0], y: to[1], pressure: 1.0 }, m);
     tool_event(app, ToolEvent::Up { x: to[0], y: to[1] }, m);
+}
+
+/// The messages of the alerts open on the dialog host.
+fn alerts(app: &PhotocraftApp) -> Vec<String> {
+    app.framework
+        .dialogs
+        .open_dialogs()
+        .into_iter()
+        .filter(|d| d.key.as_deref() == Some("alert"))
+        .filter_map(|d| d.fields.and_then(|f| f.get("message").and_then(|m| m.as_str().map(str::to_string))))
+        .collect()
 }
 
 fn steps(app: &PhotocraftApp) -> usize {
@@ -70,14 +81,15 @@ fn painting_a_hidden_layer_is_refused_at_the_press() {
         app.ui.tool_options.gradient_classic = true;
         let n = steps(&app);
         tool_event(&mut app, ToolEvent::Down { x: 30.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
-        assert!(app.drag.is_none() && app.live_stroke.is_none(), "{tool:?}: no stroke started");
+        assert!(!crate::canvas::testing::in_gesture(&app) && app.live_stroke.is_none(), "{tool:?}: no stroke started");
         // The Brush (#11898) and the Classic gradient (#12017) say so in an alert, the other tools
         // in the status bar.
-        let alert = app.ui.dialogs.iter().any(|d| d.fields.get("message").and_then(|m| m.as_str()).is_some_and(|m| m.contains("target layer is hidden")));
+        let alerts = alerts(&app);
+        let alert = alerts.iter().any(|m| m.contains("target layer is hidden"));
         if matches!(tool, Tool::Brush | Tool::Gradient) {
-            assert!(alert, "{tool:?}: {:?}", app.ui.dialogs);
+            assert!(alert, "{tool:?}: {alerts:?}");
         } else {
-            assert!(app.ui.status.contains("target layer is hidden") && app.ui.dialogs.is_empty(), "{tool:?}: {}", app.ui.status);
+            assert!(app.ui.status.contains("target layer is hidden") && alerts.is_empty(), "{tool:?}: {}", app.ui.status);
         }
         tool_event(&mut app, ToolEvent::Up { x: 40.0, y: 40.0 }, egui::Modifiers::NONE);
         assert_eq!((bounds(&app, id), steps(&app)), (Rect::new(8, 8, 24, 24), n), "{tool:?}");
