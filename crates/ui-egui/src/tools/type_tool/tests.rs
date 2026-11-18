@@ -5,7 +5,7 @@ use super::*;
 use crate::canvas::{ToolEvent, tool_event};
 use craft::text::ui::editor::TextEditorHost as _;
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 400, "height": 200})).unwrap();
     app.sync_views();
@@ -78,7 +78,7 @@ fn group_of(app: &mut PhotocraftApp, id: LayerId) -> LayerId {
 }
 
 /// Three type variants at one spot, bottom to top: A, B, C.
-fn variants() -> (PhotocraftApp, [LayerId; 3]) {
+fn variants() -> (Box<PhotocraftApp>, [LayerId; 3]) {
     let mut app = app();
     let ids = ["Variant A", "Variant B", "Variant C"].map(|s| stacked_variant(&mut app, s));
     (app, ids)

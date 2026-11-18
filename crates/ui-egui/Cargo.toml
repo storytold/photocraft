@@ -34,7 +34,9 @@ photocraft-codecs = { workspace = true }
 photocraft-formats = { workspace = true }
 # Reading embedded thumbnail resources (1036/1033) for recent files in Home screen.
 craft-psd = { workspace = true }
-egui = { workspace = true }
+# `serde`: the dialog state the control channel and the saved memories read holds `egui::Id`s. Asked for
+# here so this crate builds on its own (`cargo test -p photocraft-ui-egui`) and in the browser build.
+egui = { workspace = true, features = ["serde"] }
 egui_extras = { version = "0.37", default-features = false, features = ["svg"] }
 eframe = { workspace = true, features = ["wgpu", "accesskit", "clipboard"] }
 serde = { workspace = true }
@@ -77,6 +79,8 @@ tempfile = "3"
 # The framework's test helpers, e.g. the thumbnail and fx badge rects of a Layers panel row
 # (`craft::layers::testing`), and the in-memory settings files (`craft::settings::testing`).
 craft = { workspace = true, features = ["screen-testing", "settings-testing"] }
+# The prefs tests write a saved settings file (`toml::to_string`).
+toml = { version = "1.1", default-features = false, features = ["std", "serde", "display"] }
 
 [build-dependencies]
 serde_json = { workspace = true }

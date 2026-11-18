@@ -151,7 +151,7 @@ mod swatch_type_tests {
         let mut h = Harness::builder()
             .with_context(app.ctx().clone())
             .with_size(vec2(300.0, 300.0))
-            .build_ui_state(|ui, app: &mut PhotocraftApp| crate::panels::color::panel(app, ui), app);
+            .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::panels::color::panel(app, ui), app);
         h.run_steps(4);
         assert_eq!(h.state().session.tools.foreground, fg);
         let st = h.state().session.active().unwrap();
