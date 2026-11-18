@@ -646,7 +646,9 @@ fn a_panicking_run_leaves_its_commands_out_of_a_recording() {
     app.run("actions.record", json!({"name": "Rec"})).unwrap();
     start_named(&mut app, "boom.jsx");
     let before = app.session.journal.len();
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| settle(&mut app)));
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| settle(&mut app))).is_err();
+    assert!(panicked, "the run panics on the unknown command");
+    assert!(!app.scripts.running());
     assert_eq!(app.session.journal.len(), before, "{:?}", app.session.journal.iter().map(|e| &e.0).collect::<Vec<_>>());
     assert_eq!(layer_names(&app), ["by the script"], "the command it ran stays done");
 }

@@ -28,8 +28,10 @@ use crate::{Modal, ModalKind};
 /// What a Worker sent, in order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Incoming {
-    /// A message: a [`FromHost`] as JSON text.
-    Message(String),
+    /// A message: a [`FromHost`] as JSON text, and when it arrived. A request stops the run's
+    /// clock from then, not from when the page gets to it (a hidden tab may draw no frames for
+    /// a while).
+    Message(String, Instant),
     /// The Worker failed (a trap: a failed allocation, a stack overflow, an engine panic), with
     /// the browser's description.
     Error(String),
@@ -90,13 +92,19 @@ pub enum WebEvent {
 pub struct WebJob<T: Transport> {
     transport: T,
     options: WebOptions,
-    queue: VecDeque<Incoming>,
+    /// Events checked and counted as they arrived, not yet handed out. Every message is checked
+    /// when it is taken from the Worker, so what is held here is already within the run's
+    /// bounds (calls, output and window bytes) however fast the Worker sends.
+    events: VecDeque<WebEvent>,
     /// Time computed before the current stretch, and since when it computes (`None` while it
     /// waits for an answer).
     spent: Duration,
     since: Option<Instant>,
     /// Since when it waits for an answer, and whether to a dialog.
     waiting: Option<(Instant, bool)>,
+    /// When the last answer was handed to the Worker: a message that arrived before then was
+    /// sent while the Worker should have been waiting.
+    answered: Option<Instant>,
     /// The run's end, not yet handed out.
     ending: Option<Result<(), String>>,
     finished: bool,
@@ -120,10 +128,11 @@ impl<T: Transport> WebJob<T> {
         Ok(Self {
             transport,
             options,
-            queue: VecDeque::new(),
+            events: VecDeque::new(),
             spent: Duration::ZERO,
             since: Some(Instant::now()),
             waiting: None,
+            answered: None,
             ending: None,
             finished: false,
             calls: 0,
@@ -137,16 +146,29 @@ impl<T: Transport> WebJob<T> {
     }
 
     fn pause(&mut self) {
+        self.pause_at(Instant::now());
+    }
+
+    /// Stop the clock as of `at`.
+    fn pause_at(&mut self, at: Instant) {
         if let Some(t) = self.since.take() {
-            self.spent += t.elapsed();
+            self.spent += at.saturating_duration_since(t);
         }
     }
 
-    /// End the run now with `result`: the Worker is stopped and nothing it sent later counts.
+    /// End the run now with `result`: the Worker is stopped, and nothing it sent that was not
+    /// handed out yet counts.
     fn end(&mut self, result: Result<(), String>) {
         if self.ending.is_none() && !self.finished {
+            self.events.clear();
+            self.stop(result);
+        }
+    }
+
+    /// The Worker reported its end: what it sent before still comes first.
+    fn stop(&mut self, result: Result<(), String>) {
+        if self.ending.is_none() && !self.finished {
             self.transport.terminate();
-            self.queue.clear();
             self.waiting = None;
             self.pause();
             self.ending = Some(result);
@@ -172,29 +194,49 @@ impl<T: Transport> WebJob<T> {
         if self.finished {
             return None;
         }
+        // What arrived is taken first: a request that came in time stopped the clock when it
+        // came, however late this poll is.
+        if self.ending.is_none() {
+            for incoming in self.transport.take() {
+                if self.ending.is_some() {
+                    break;
+                }
+                if let Some(event) = self.handle(incoming) {
+                    self.events.push_back(event);
+                }
+            }
+        }
         if self.ending.is_none() {
             self.check_limits();
         }
-        if self.ending.is_none() {
-            let incoming = self.transport.take();
-            self.queue.extend(incoming);
-        }
-        while self.ending.is_none() {
-            let next = self.queue.pop_front()?;
-            if let Some(event) = self.handle(next) {
-                return Some(event);
+        if let Some(event) = self.events.pop_front() {
+            // The page sees the request now: its time to answer starts now.
+            if let (WebEvent::Execute { .. } | WebEvent::Dialog(_), Some((since, _))) = (&event, self.waiting.as_mut()) {
+                *since = Instant::now();
             }
+            return Some(event);
         }
+        self.ending.as_ref()?;
         self.finished = true;
         self.ending.take().map(WebEvent::Finished)
     }
 
+    /// A request taken from the Worker but not handed out to the page yet.
+    fn request_queued(&self) -> bool {
+        self.events.iter().any(|e| matches!(e, WebEvent::Execute { .. } | WebEvent::Dialog(_)))
+    }
+
+    fn over_time(&mut self) {
+        self.end(Err("The script was stopped: it ran longer than its time limit.".into()));
+    }
+
     fn check_limits(&mut self) {
         if self.elapsed() > self.options.time_limit {
-            self.end(Err("The script was stopped: it ran longer than its time limit.".into()));
+            self.over_time();
             return;
         }
-        if let Some((since, dialog)) = self.waiting {
+        // The page's time to answer starts when it is handed the request.
+        if let Some((since, dialog)) = self.waiting.filter(|_| !self.request_queued()) {
             let (what, limit) = if dialog { ("dialog", self.options.reply_limits.1) } else { ("command", self.options.reply_limits.0) };
             if since.elapsed() > limit {
                 self.end(Err(format!("The script was stopped: its {what} got no answer within {} s.", limit.as_secs())));
@@ -203,13 +245,21 @@ impl<T: Transport> WebJob<T> {
     }
 
     fn handle(&mut self, incoming: Incoming) -> Option<WebEvent> {
-        let text = match incoming {
-            Incoming::Message(text) => text,
+        let (text, at) = match incoming {
+            Incoming::Message(text, at) => (text, at),
             Incoming::Error(why) => {
                 self.end(Err(format!("The script stopped unexpectedly: {} (it may have run out of memory or overflowed its stack).", cut(&why, MAX_MESSAGE))));
                 return None;
             }
         };
+        // Whatever came after the time limit passed does not count, its end included: a page that
+        // polls late (a hidden tab) must not let a run past its limit finish as a success.
+        if let Some(t) = self.since
+            && self.spent + at.saturating_duration_since(t) > self.options.time_limit
+        {
+            self.over_time();
+            return None;
+        }
         let msg = match parse_body::<FromHost>(text.as_bytes(), MAX_FROM_HOST) {
             Ok(m) => m,
             Err(e) => {
@@ -217,12 +267,13 @@ impl<T: Transport> WebJob<T> {
                 return None;
             }
         };
-        if let FromHost::Finished { error } = msg {
-            self.end(error.map_or(Ok(()), |m| Err(cut(&m, MAX_MESSAGE).to_owned())));
+        // A Worker waits for each answer; it sends nothing meanwhile, not even its end.
+        if self.waiting.is_some() || self.answered.is_some_and(|t| at < t) {
+            self.violation("a message while it waited for an answer");
             return None;
         }
-        if self.waiting.is_some() {
-            self.violation("a message while it waited for an answer");
+        if let FromHost::Finished { error } = msg {
+            self.stop(error.map_or(Ok(()), |m| Err(cut(&m, MAX_MESSAGE).to_owned())));
             return None;
         }
         if !self.count_call() {
@@ -238,8 +289,8 @@ impl<T: Transport> WebJob<T> {
                 if let Value::Object(map) = &mut params {
                     map.insert("coalesce".into(), Value::String(self.options.coalesce.clone()));
                 }
-                self.pause();
-                self.waiting = Some((Instant::now(), false));
+                self.pause_at(at);
+                self.waiting = Some((at, false));
                 Some(WebEvent::Execute { id, params })
             }
             FromHost::Dialog { kind, args } => {
@@ -247,8 +298,8 @@ impl<T: Transport> WebJob<T> {
                     self.violation(&d);
                     return None;
                 }
-                self.pause();
-                self.waiting = Some((Instant::now(), true));
+                self.pause_at(at);
+                self.waiting = Some((at, true));
                 Some(WebEvent::Dialog(Modal { kind: ModalKind::from(kind), args }))
             }
             FromHost::Output { line } => {
@@ -278,15 +329,21 @@ impl<T: Transport> WebJob<T> {
     }
 
     fn reply(&mut self, dialog: bool, msg: &ToHost) -> Result<(), String> {
+        // An answer after the reply limit is too late: the run ends as if none came.
+        if self.ending.is_none() {
+            self.check_limits();
+        }
         if self.finished || self.ending.is_some() {
             return Err("the script has ended".into());
         }
-        if self.waiting.map(|(_, d)| d) != Some(dialog) {
+        if self.waiting.map(|(_, d)| d) != Some(dialog) || self.request_queued() {
             return Err("the script is not waiting for that reply".into());
         }
         let text = serde_json::to_string(msg).map_err(|e| e.to_string())?;
         self.waiting = None;
-        self.since = Some(Instant::now());
+        let now = Instant::now();
+        self.since = Some(now);
+        self.answered = Some(now);
         if let Err(e) = self.transport.answer(&text) {
             let what = if dialog { "a dialog's answer" } else { "a command's result" };
             self.end(Err(format!("The script was stopped: {what} could not be sent to the script Worker ({e}).")));
@@ -342,7 +399,7 @@ mod tests {
 
     impl Fake {
         fn send(&self, msg: &FromHost) {
-            self.inbox.borrow_mut().push_back(Incoming::Message(serde_json::to_string(msg).unwrap()));
+            self.inbox.borrow_mut().push_back(Incoming::Message(serde_json::to_string(msg).unwrap(), Instant::now()));
         }
     }
 
@@ -413,7 +470,7 @@ mod tests {
         ] {
             let fake = Fake::default();
             let mut j = job(&fake, options());
-            fake.inbox.borrow_mut().push_back(Incoming::Message(bad.clone()));
+            fake.inbox.borrow_mut().push_back(Incoming::Message(bad.clone(), Instant::now()));
             let Some(WebEvent::Finished(Err(m))) = j.poll() else { panic!("{bad}") };
             assert!(m.contains("may not make"), "{m}");
             assert!(*fake.terminated.borrow());
@@ -423,24 +480,136 @@ mod tests {
         let mut j = job(&fake, options());
         fake.send(&FromHost::Execute { id: "session.inspect".into(), params: json!({}) });
         fake.send(&FromHost::Output { line: "early".into() });
-        assert!(matches!(j.poll(), Some(WebEvent::Execute { .. })));
+        // The command was not handed out before the run ended, so it is dropped with it.
         assert!(matches!(j.poll(), Some(WebEvent::Finished(Err(m))) if m.contains("while it waited")));
+    }
+
+    /// What the Worker sends is checked as it arrives, so a flood is stopped at the run's bounds
+    /// rather than held until the page gets to it.
+    #[test]
+    fn a_flood_of_messages_is_stopped_at_the_bounds_as_it_arrives() {
+        let fake = Fake::default();
+        let mut j = job(&fake, options());
+        let line = "x".repeat(1 << 20);
+        for _ in 0..(MAX_OUTPUT_BYTES >> 20) + 8 {
+            fake.send(&FromHost::Output { line: line.clone() });
+        }
+        assert!(matches!(j.poll(), Some(WebEvent::Finished(Err(m))) if m.contains("of output")), "the first poll ends it");
+        assert!(*fake.terminated.borrow());
+        assert!(j.events.is_empty());
+    }
+
+    /// Output sent just before the end still comes before it.
+    #[test]
+    fn output_sent_before_the_end_comes_first() {
+        let fake = Fake::default();
+        let mut j = job(&fake, options());
+        fake.send(&FromHost::Output { line: "last words".into() });
+        fake.send(&FromHost::Finished { error: None });
+        assert_eq!(j.poll(), Some(WebEvent::Output("last words".into())));
+        assert_eq!(j.poll(), Some(WebEvent::Finished(Ok(()))));
+    }
+
+    /// A request that arrived in time is not lost to a page that polls late.
+    #[test]
+    fn a_request_waiting_for_a_late_poll_does_not_count_as_compute_time() {
+        let fake = Fake::default();
+        let mut o = options();
+        o.time_limit = Duration::from_millis(500);
+        let mut j = job(&fake, o);
+        fake.send(&FromHost::Execute { id: "session.inspect".into(), params: json!({}) });
+        // The page draws no frame for a while (a hidden tab).
+        std::thread::sleep(Duration::from_millis(600));
+        assert!(matches!(j.poll(), Some(WebEvent::Execute { .. })));
+        j.reply_executed(Ok(Value::Null)).unwrap();
+        assert_eq!(j.poll(), None, "still within its limit");
+    }
+
+    /// A Worker that ends while a request of its waits for an answer broke the protocol: the
+    /// request is not handed out.
+    #[test]
+    fn an_end_while_a_request_waits_is_refused_with_the_request() {
+        let fake = Fake::default();
+        let mut j = job(&fake, options());
+        fake.send(&FromHost::Execute { id: "session.inspect".into(), params: json!({}) });
+        fake.send(&FromHost::Finished { error: None });
+        assert!(matches!(j.poll(), Some(WebEvent::Finished(Err(m))) if m.contains("while it waited")));
+    }
+
+    /// A message sent while the Worker should have waited is refused even when the page answered
+    /// before it got to that message.
+    #[test]
+    fn a_message_sent_before_the_answer_is_refused_however_late_it_is_read() {
+        let fake = Fake::default();
+        let mut j = job(&fake, options());
+        fake.send(&FromHost::Execute { id: "session.inspect".into(), params: json!({}) });
+        assert!(matches!(j.poll(), Some(WebEvent::Execute { .. })));
+        // Sent before the answer, but taken only by the next poll.
+        fake.send(&FromHost::Finished { error: None });
+        std::thread::sleep(Duration::from_millis(5));
+        j.reply_executed(Ok(Value::Null)).unwrap();
+        assert!(matches!(j.poll(), Some(WebEvent::Finished(Err(m))) if m.contains("while it waited")));
+    }
+
+    /// What arrives after the time limit passed does not count, even when the page polls late.
+    #[test]
+    fn an_end_that_arrives_past_the_time_limit_is_not_a_success() {
+        let fake = Fake::default();
+        let mut o = options();
+        o.time_limit = Duration::from_millis(100);
+        let mut j = job(&fake, o);
+        std::thread::sleep(Duration::from_millis(150));
+        fake.send(&FromHost::Output { line: "late".into() });
+        fake.send(&FromHost::Finished { error: None });
+        assert!(matches!(j.poll(), Some(WebEvent::Finished(Err(m))) if m.contains("time limit")));
+    }
+
+    /// A request not handed out yet can't be answered, and its time to answer starts when the
+    /// page gets it.
+    #[test]
+    fn a_request_is_answered_only_once_the_page_has_it() {
+        let fake = Fake::default();
+        let mut o = options();
+        o.reply_limits = (Duration::from_millis(500), Duration::from_millis(500));
+        let mut j = job(&fake, o);
+        fake.send(&FromHost::Output { line: "first".into() });
+        fake.send(&FromHost::Execute { id: "session.inspect".into(), params: json!({}) });
+        assert_eq!(j.poll(), Some(WebEvent::Output("first".into())));
+        assert!(j.reply_executed(Ok(Value::Null)).is_err(), "the page has not seen the command");
+        std::thread::sleep(Duration::from_millis(600));
+        assert!(matches!(j.poll(), Some(WebEvent::Execute { .. })), "its time to answer had not started");
+        j.reply_executed(Ok(Value::Null)).unwrap();
+    }
+
+    /// An answer that comes after the reply limit is not taken.
+    #[test]
+    fn a_late_answer_ends_the_run() {
+        let fake = Fake::default();
+        let mut o = options();
+        o.reply_limits = (Duration::from_millis(50), Duration::from_millis(50));
+        let mut j = job(&fake, o);
+        fake.send(&FromHost::Execute { id: "session.inspect".into(), params: json!({}) });
+        assert!(matches!(j.poll(), Some(WebEvent::Execute { .. })));
+        std::thread::sleep(Duration::from_millis(80));
+        assert!(j.reply_executed(Ok(Value::Null)).is_err());
+        assert!(fake.answers.borrow().is_empty());
+        assert!(matches!(j.poll(), Some(WebEvent::Finished(Err(m))) if m.contains("got no answer")));
     }
 
     #[test]
     fn the_time_limit_counts_computing_not_waiting_and_ends_the_run() {
         let fake = Fake::default();
         let mut o = options();
-        o.time_limit = Duration::from_millis(100);
+        o.time_limit = Duration::from_millis(500);
         let mut j = job(&fake, o);
         fake.send(&FromHost::Execute { id: "session.inspect".into(), params: json!({}) });
         assert!(matches!(j.poll(), Some(WebEvent::Execute { .. })));
         // The page takes its time answering: not the script's.
-        std::thread::sleep(Duration::from_millis(150));
+        std::thread::sleep(Duration::from_millis(600));
         assert_eq!(j.poll(), None);
         j.reply_executed(Ok(Value::Null)).unwrap();
         assert_eq!(j.poll(), None, "still within its limit");
-        std::thread::sleep(Duration::from_millis(150));
+        std::thread::sleep(Duration::from_millis(600));
         assert!(matches!(j.poll(), Some(WebEvent::Finished(Err(m))) if m.contains("time limit")));
         assert!(*fake.terminated.borrow());
     }
