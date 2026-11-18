@@ -5,7 +5,7 @@
 //! `type.setStyle`. The Type tool calls the same word, line and hit-test helpers.
 
 use photocraft_doc::{Affine, Document, LayerContent, LayerId};
-use photocraft_geom::{Point, Rect, TILE_SIZE};
+use photocraft_geom::{Point, Rect};
 use photocraft_text::TextLayout;
 use serde_json::{Value, json};
 
@@ -106,64 +106,10 @@ pub fn cached_ink_contains(doc: &Document, id: LayerId, x: f64, y: f64) -> bool 
 }
 
 /// Whether cached type ink contributes anywhere in a view's source-pixel sampling footprint.
-/// Reads only alpha in intersecting tiles, without allocating or scanning the cache's bounds.
-/// Sparse, very large footprints visit stored tiles rather than walking an unbounded empty grid.
+/// Reuses the surface's exact per-tile alpha index, including across moved sampling footprints.
 pub fn cached_ink_in_rect(doc: &Document, id: LayerId, area: Rect) -> bool {
-    if area.is_empty() {
-        return false;
-    }
     let Some(LayerContent::Text(t)) = doc.layer(id).map(|l| &l.content) else { return false };
-    let Some(cache) = &t.cache else { return false };
-    if !cache.format().alpha {
-        return true;
-    }
-    let Some(alpha) = cache.channels().checked_sub(1) else { return false };
-    let mut row = [0.0; TILE_SIZE as usize];
-    let mut has_ink = |r: Rect| {
-        let Some(samples) = row.get_mut(..r.width() as usize) else { return false };
-        for y in r.y0..r.y1 {
-            cache.sample_row_strided(y, r.x0, 1, alpha, samples);
-            if samples.iter().any(|a| *a > 0.0) {
-                return true;
-            }
-        }
-        false
-    };
-    let tile_count = area.tile_count();
-    if tile_count <= cache.tile_count() as u64 {
-        for tc in area.tiles() {
-            let r = area.intersect(&tc.rect());
-            if cache.tile(tc).is_some() {
-                if has_ink(r) {
-                    return true;
-                }
-            } else if cache.sample_channel(r.x0, r.y0, alpha) > 0.0 {
-                return true;
-            }
-        }
-    } else {
-        let mut present = 0;
-        for (tc, _) in cache.tiles() {
-            let r = area.intersect(&tc.rect());
-            if !r.is_empty() {
-                present += 1;
-                if has_ink(r) {
-                    return true;
-                }
-            }
-        }
-        // Missing tiles share one default alpha. Find one without scanning the empty grid:
-        // a missing tile must occur within the first `present + 1` queried tiles.
-        if present < tile_count {
-            for tc in area.tiles() {
-                if cache.tile(tc).is_none() {
-                    let r = area.intersect(&tc.rect());
-                    return cache.sample_channel(r.x0, r.y0, alpha) > 0.0;
-                }
-            }
-        }
-    }
-    false
+    t.cache.as_ref().is_some_and(|cache| cache.has_positive_alpha(area))
 }
 
 impl Frame {
@@ -585,6 +531,36 @@ mod tests {
             t.cache = Some(Surface::with_default(format, &[0.0, 0.0, 0.0, 0.5]));
             assert!(cached_ink_in_rect(doc, id, Rect::new(-258, 254, -254, 258)), "{format:?}: default alpha is visible");
             assert!(!cached_ink_in_rect(doc, id, Rect::EMPTY), "{format:?}: empty footprint");
+        }
+    }
+
+    #[test]
+    fn cached_ink_footprints_follow_replaced_cache_without_widening_point_hits() {
+        use photocraft_color::PixelFormat;
+        use photocraft_raster::Surface;
+        use std::sync::Arc;
+
+        for format in [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F] {
+            let mut s = session();
+            let id = LayerId(create(&mut s, json!({"x": 10, "y": 40, "text": "A", "size": 18})));
+            let area = Rect::new(1100, 1100, 1102, 1102);
+            let mut cache = Surface::new(format);
+            cache.fill_rect(Rect::new(1024, 1024, 1280, 1280), &[0.7, 0.4, 0.9, 0.0]);
+            let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+            let LayerContent::Text(t) = &mut doc.layer_mut(id).unwrap().content else { panic!("text") };
+            t.cache = Some(cache);
+            assert!(!cached_ink_in_rect(doc, id, area), "{format:?}: warm transparent imported cache");
+            let mut replacement = Surface::new(format);
+            replacement.write_pixel(1101, 1101, &[0.0, 0.0, 0.0, 0.5]);
+            let LayerContent::Text(t) = &mut doc.layer_mut(id).unwrap().content else { panic!("text") };
+            t.cache = Some(replacement);
+            assert!(cached_ink_in_rect(doc, id, area), "{format:?}: replacement ink away from editable layout");
+            assert!(!cached_ink_contains(doc, id, 1100.5, 1100.5), "point hits cannot inherit the regional footprint");
+            assert!(cached_ink_contains(doc, id, 1101.5, 1101.5));
+            assert!(!cached_ink_in_rect(doc, id, area.translate(2, 0)), "a moved rectangle cannot reuse the previous answer");
+            let LayerContent::Text(t) = &mut doc.layer_mut(id).unwrap().content else { panic!("text") };
+            t.cache.as_mut().unwrap().write_pixel(1101, 1101, &[0.7, 0.4, 0.9, 0.0]);
+            assert!(!cached_ink_in_rect(doc, id, area), "cache writes invalidate warm positive coverage");
         }
     }
 
