@@ -500,6 +500,12 @@ fn the_globals_published_scripts_start_with_are_there() {
         "#,
     );
     assert_eq!(lines, ["string true", "true Doc 1", "true", "true bmpDepth"]);
+    // A script's own variable of one of those names is its own.
+    let lines = run(
+        &s,
+        "var documents = ['a', 'b', 'c']; var preferences = { mine: true }; $.writeln(documents.length, ' ', preferences.mine, ' ', app.documents.length, ' ', app.preferences.mine, ' ', app.preferences.rulerUnits !== undefined);",
+    );
+    assert_eq!(lines, ["3 true 1 undefined true"], "the script's variables are its own and app's stay app's");
 }
 
 /// `doc.suspendHistory(name, code)` runs `code` in the global scope; the run is one History step

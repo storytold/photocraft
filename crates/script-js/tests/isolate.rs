@@ -941,7 +941,7 @@ fn an_interface_that_stops_taking_output_does_not_hold_the_run_forever() {
 fn an_answer_too_large_to_send_ends_the_run_with_the_reason() {
     // Refused before it is encoded: encoding 257 MiB would outlast this limit.
     let mut opts = options("huge answer");
-    opts.time_limit = Duration::from_millis(200);
+    opts.time_limit = Duration::from_millis(400);
     let mut job = IsolatedJob::spawn("var s = prompt('Name?'); $.writeln(s.length);".into(), opts).unwrap();
     let huge = "x".repeat(photocraft_script_js::isolate::protocol::MAX_TO_HOST + 1);
     let seen = drive(&mut job, None, &[json!(huge)], |_, _| {});

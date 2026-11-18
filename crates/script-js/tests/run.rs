@@ -229,12 +229,12 @@ fn a_planted_global_cannot_replace_document_objects() {
                app.documents[0].name; $.writeln(Object.getOwnPropertyNames(globalThis).length - before);
                before = Object.getOwnPropertyNames(globalThis).length;
                var fake = new Proxy({}, { get: function () { return { name: 'fake' }; } });
-               globalThis['\\u200bdocuments'] = fake; globalThis.documents = fake;
+               globalThis['\\u200bdocuments'] = fake; Object.defineProperty(globalThis, 'documents', { value: fake });
                $.writeln(app.activeDocument.name, ' ', app.documents[0].name, ' ', app.documents[0] == app.documents[0]);
                $.writeln(Object.getOwnPropertyNames(globalThis).length - before);";
     let mut r = Runner::new(src, Box::new(host), Box::new(Unlimited), RunOptions::default()).unwrap();
     assert_eq!(r.step(), Step::Done, "{}", out.borrow().join(" | "));
-    // `documents` is already a global (`app.documents` named bare), so only the other plant adds one.
+    // `documents` is a global already (`app.documents` named bare): planted over, it adds no name.
     assert_eq!(*out.borrow(), ["0", "Two One true", "1"]);
 }
 

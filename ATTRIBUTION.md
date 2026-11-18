@@ -112,7 +112,7 @@ Real-world Photoshop scripts, unchanged, that `crates/script-js/tests/community.
 | Path | Title | Author | Source | License |
 |---|---|---|---|---|
 | `crates/script-js/tests/community/export_layer_coordinates.jsx` | Export Layer Coordinates (writes each layer's name and position to a text file) | Chris DeLuca | [bronzehedwick/Adobe-Export-Scripts](https://github.com/bronzehedwick/Adobe-Export-Scripts) at `28027a831974f95c482f297f63119ce6430d743a`, `Photoshop/Export Layer Coordinates Photoshop.jsx` | MIT, [`export_layer_coordinates.LICENSE`](crates/script-js/tests/community/export_layer_coordinates.LICENSE) |
-| `crates/script-js/tests/community/export_layers_to_files_fast.jsx`, `export_layers_to_files_fast-progress_bar.json` | Export Layers To Files (Fast) v2.7.1 and its progress-bar resource | The Export Layers To Files (Fast) contributors | [antipalindrome/Photoshop-Export-Layers-to-Files-Fast](https://github.com/antipalindrome/Photoshop-Export-Layers-to-Files-Fast) at `40492edacbf8a7116c4750e9c591569fa20576dd` | MIT, [`export_layers_to_files_fast.LICENSE`](crates/script-js/tests/community/export_layers_to_files_fast.LICENSE) |
+| `crates/script-js/tests/community/export_layers_to_files_fast.jsx` | Export Layers To Files (Fast) v2.7.1 | The Export Layers To Files (Fast) contributors | [antipalindrome/Photoshop-Export-Layers-to-Files-Fast](https://github.com/antipalindrome/Photoshop-Export-Layers-to-Files-Fast) at `40492edacbf8a7116c4750e9c591569fa20576dd` | MIT, [`export_layers_to_files_fast.LICENSE`](crates/script-js/tests/community/export_layers_to_files_fast.LICENSE) |
 
 ## Embedded-vector editor source
 

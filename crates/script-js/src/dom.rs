@@ -1132,8 +1132,8 @@ fn doc_suspend_history(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> J
         return Err(error("suspendHistory: not a Document"));
     }
     let code = args.get(1).cloned().unwrap_or_default().to_string(ctx)?;
-    let eval = ctx.global_object().get(js_string!("eval"), ctx)?;
-    let eval = eval.as_callable().ok_or_else(|| error("suspendHistory: eval is missing"))?;
+    // The realm's own `eval`, not whatever the script put in its place.
+    let eval = ctx.intrinsics().objects().eval();
     eval.call(&JsValue::undefined(), &[code.into()], ctx)?;
     Ok(JsValue::undefined())
 }

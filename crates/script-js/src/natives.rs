@@ -425,6 +425,8 @@ fn app_set_active_document(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> 
 
 /// Properties of `app` a script may name as globals, as in Photoshop.
 const APP_GLOBALS: &[&str] = &["activeDocument", "documents", "preferences", "displayDialogs"];
+/// Those of them `app` takes a value for.
+const APP_SETTABLE: &[&str] = &["activeDocument", "displayDialogs"];
 
 fn app_global_get(_: &JsValue, _: &[JsValue], key: &JsString, ctx: &mut Context) -> JsResult<JsValue> {
     let app = ctx.global_object().get(js_string!("app"), ctx)?;
@@ -434,12 +436,19 @@ fn app_global_get(_: &JsValue, _: &[JsValue], key: &JsString, ctx: &mut Context)
     }
 }
 
+/// `activeDocument = doc` sets `app`'s; a name `app` can't take (`var documents = []`,
+/// `preferences = {...}`) becomes the script's own variable, as a plain global would.
 fn app_global_set(_: &JsValue, args: &[JsValue], key: &JsString, ctx: &mut Context) -> JsResult<JsValue> {
+    let value = args.first().cloned().unwrap_or_default();
     let app = ctx.global_object().get(js_string!("app"), ctx)?;
-    if let Some(app) = app.as_object() {
-        // As an assignment in sloppy code: a read-only property of `app` stays as it is.
-        app.set(key.clone(), args.first().cloned().unwrap_or_default(), false, ctx)?;
+    if let Some(app) = app.as_object()
+        && APP_SETTABLE.iter().any(|k| key.to_std_string_lossy() == *k)
+    {
+        app.set(key.clone(), value, false, ctx)?;
+        return Ok(JsValue::undefined());
     }
+    let own = PropertyDescriptor::builder().value(value).writable(true).enumerable(true).configurable(true).build();
+    ctx.global_object().define_property_or_throw(key.clone(), own, ctx)?;
     Ok(JsValue::undefined())
 }
 

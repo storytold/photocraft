@@ -99,7 +99,7 @@ fn service(programs: Vec<Vec<Act>>, log: &Log) -> StartScriptFn {
     })
 }
 
-fn app(programs: Vec<Vec<Act>>, log: &Log) -> PhotocraftApp {
+fn app(programs: Vec<Vec<Act>>, log: &Log) -> Box<PhotocraftApp> {
     PhotocraftApp::new(Session::new(), crate::Services { scripts: Some(service(programs, log)), ..Default::default() })
 }
 
@@ -178,7 +178,7 @@ fn window_tree() -> Value {
     ]}})
 }
 
-fn harness(programs: Vec<Vec<Act>>, log: &Log, answers: Vec<Picked>) -> Harness<'static, PhotocraftApp> {
+fn harness(programs: Vec<Vec<Act>>, log: &Log, answers: Vec<Picked>) -> Harness<'static, Box<PhotocraftApp>> {
     let files = Arc::new(ScriptedFiles::answering(answers));
     let scripts = service(programs, log);
     Harness::builder().with_size(vec2(1280.0, 800.0)).with_max_steps(64).build_eframe(move |cc| {
