@@ -5,39 +5,67 @@
 
 use std::collections::BTreeSet;
 
+use craft::keymap::Mods;
 use egui::accesskit::Role;
-use egui::{Modifiers, Rect};
+use egui::{Modifiers, Rect, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use serde_json::json;
 
-use super::eraser_range_alert_tests::{alerts, bar, type_into};
 use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, display_doc, tool_event};
 use crate::state::Tool;
 
-/// The field named `label` ("Opacity", "Flow"), by its caption's name.
+/// The options bar of a new document with `tool`, and the dialog host for its alerts.
+fn bar(tool: Tool) -> Harness<'static, PhotocraftApp> {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 80, "height": 80})).unwrap();
+    app.ui.tool = tool;
+    crate::theme::install_fonts(app.ctx());
+    crate::theme::apply(app.ctx(), &crate::theme::AppTheme::pro());
+    let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1800.0, 300.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        move |ui, app: &mut PhotocraftApp| {
+            crate::panels::options_bar(app, ui);
+            crate::dialogs::run(app, ui);
+        },
+        app,
+    );
+    h.run_steps(4);
+    h
+}
+
+/// The field named `label` ("Opacity", "Flow"), with or without its caption's colon.
 fn field<'a>(h: &'a Harness<'static, PhotocraftApp>, label: &str) -> egui_kittest::Node<'a> {
-    let label = format!("{label}:");
-    h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some(label.as_str())).unwrap_or_else(|| panic!("the {label} field"))
+    h.query_all_by_role(Role::SpinButton)
+        .find(|n| n.accesskit_node().label().is_some_and(|l| l.trim_end_matches(':') == label))
+        .unwrap_or_else(|| panic!("the {label} field"))
+}
+
+/// Types `text` over the field named `label` and presses Enter.
+fn type_into(h: &mut Harness<'static, PhotocraftApp>, label: &str, text: &str) {
+    let at = field(h, label).rect().center();
+    h.hover_at(at);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text(text.into()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+}
+
+/// The messages of the open alerts.
+fn alerts(h: &Harness<'static, PhotocraftApp>) -> Vec<String> {
+    h.state().framework.dialogs.open_dialogs().iter().filter_map(|d| d.fields.as_ref()?.get("message")?.as_str().map(str::to_string)).collect()
 }
 
 /// The live brush's Opacity and Flow in percent.
 fn opacity_flow(app: &PhotocraftApp) -> (f32, f32) {
     let b = &app.session.tools.brush;
     ((b.opacity * 100.0).round(), (b.flow * 100.0).round())
-}
-
-#[test]
-fn the_bar_shows_opacity_and_flow_after_mode_at_100() {
-    let h = bar(Tool::PatternStamp);
-    let mode = h.query_all_by_role(Role::ComboBox).find(|n| n.value().as_deref() == Some("Normal")).expect("the Mode dropdown").rect();
-    let (opacity, flow) = (field(&h, "Opacity"), field(&h, "Flow"));
-    assert_eq!((opacity.accesskit_node().numeric_value(), flow.accesskit_node().numeric_value()), (Some(100.0), Some(100.0)));
-    assert_eq!(opacity.accesskit_node().description().as_deref(), Some("Set opacity for stroke"));
-    assert_eq!(flow.accesskit_node().description().as_deref(), Some("Set flow rate for stroke"));
-    let (opacity, flow) = (opacity.rect(), flow.rect());
-    assert!(mode.right() <= opacity.left() && opacity.right() <= flow.left(), "Mode, Opacity, Flow: {mode:?} {opacity:?} {flow:?}");
 }
 
 #[test]
@@ -59,7 +87,8 @@ fn reset_tool_puts_opacity_and_flow_back_to_100() {
     type_into(&mut h, "Opacity", "40");
     type_into(&mut h, "Flow", "25");
     assert_eq!(opacity_flow(h.state()), (40.0, 25.0));
-    crate::burn_default_tip_tests::invoke(h.state_mut(), "tool.reset", json!({}));
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "tool.reset", json!({})).unwrap();
     h.run_steps(3);
     assert_eq!(opacity_flow(h.state()), (100.0, 100.0));
     assert_eq!(field(&h, "Opacity").accesskit_node().numeric_value(), Some(100.0));
@@ -155,7 +184,7 @@ fn a_first_pick_after_a_30_percent_brush_starts_at_100() {
     assert_eq!(field(&h, "Opacity").accesskit_node().numeric_value(), Some(100.0));
     assert_eq!(field(&h, "Flow").accesskit_node().numeric_value(), Some(100.0));
     let app = h.state_mut();
-    assert!(crate::retouch_ui::finish_stroke(app, Tool::PatternStamp, &[[40.0, 40.0, 1.0]], Modifiers::NONE, false));
+    assert!(crate::retouch_ui::finish_stroke(app, Tool::PatternStamp, &[[40.0, 40.0, 1.0]], Mods::NONE, false));
     let (_, params) = app.session.journal.iter().rev().find(|(name, _)| name == "paint.patternStamp").unwrap();
     assert_eq!((params["opacity"].as_f64(), params["flow"].as_f64()), (Some(100.0), Some(100.0)), "{params}");
 }

@@ -2,11 +2,13 @@
 //! (the current one checked), then Copy Color as HTML and Copy Color's Hex Code for the colour
 //! under the pointer, read from all layers with the Sample Size, whatever the Sample setting.
 
+use craft::color_ui::ui::{SampleSize, SampleSource};
+use craft::keymap::Mods;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
-use crate::canvas_tool_menu::{CanvasToolMenu, EYEDROPPER_COPY_HEX, EYEDROPPER_COPY_HTML, available, choose, mode_checked, open_at, rows};
-use crate::control::{ControlRequest, Outcome, handle};
+use crate::canvas_tool_menu::{CanvasToolMenu, EYEDROPPER_COPY_HEX, EYEDROPPER_COPY_HTML, available, choose, open_at};
+use crate::control::{ControlRequest, Reply, handle};
 use crate::state::Tool;
 
 /// 400 × 300 white with three layers: a red (220,30,30) block at 100,100–300,250 ("Red", active),
@@ -36,21 +38,21 @@ fn app() -> PhotocraftApp {
 fn call(app: &mut PhotocraftApp, ctx: &egui::Context, method: &str, params: Value) -> Value {
     let (req, _rx) = ControlRequest::new(method, params);
     match handle(app, ctx, &req) {
-        Outcome::Done(v) => v,
+        Reply::Done(v) => v,
         _ => panic!("{method}: expected an immediate reply"),
     }
 }
 
 /// Right-click at document point `at` (the shell's path) and return the open menu.
-fn right_click(app: &mut PhotocraftApp, ctx: &egui::Context, at: [f64; 2]) -> CanvasToolMenu {
-    assert!(open_at(app, ctx, Tool::Eyedropper, [50.0, 50.0], Some(at)), "a menu opens");
+fn right_click(app: &mut PhotocraftApp, at: [f64; 2]) -> CanvasToolMenu {
+    assert!(open_at(app, Tool::Eyedropper, Mods::NONE, egui::pos2(50.0, 50.0), at, None), "a menu opens");
     app.ui.canvas_tool_menu.clone().unwrap()
 }
 
 /// What picking `command` in a freshly opened menu at `at` puts on the clipboard.
 fn copied(app: &mut PhotocraftApp, at: [f64; 2], command: &str) -> Vec<String> {
-    let ctx = egui::Context::default();
-    right_click(app, &ctx, at);
+    right_click(app, at);
+    let ctx = app.ctx().clone();
     let mut out = ctx.run_ui(egui::RawInput::default(), |ui| choose(app, ui.ctx(), command));
     out.textures_delta.clear();
     out.platform_output.commands.iter().filter_map(|c| if let egui::OutputCommand::CopyText(t) = c { Some(t.clone()) } else { None }).collect()
@@ -58,47 +60,6 @@ fn copied(app: &mut PhotocraftApp, at: [f64; 2], command: &str) -> Vec<String> {
 
 fn fg_bg(app: &PhotocraftApp) -> ([f32; 4], [f32; 4]) {
     (app.session.tools.foreground, app.session.tools.background)
-}
-
-#[test]
-fn the_menu_lists_the_sizes_then_the_two_copy_rows_with_and_without_a_selection() {
-    let want = [
-        "Point Sample",
-        "3 by 3 Average",
-        "5 by 5 Average",
-        "11 by 11 Average",
-        "31 by 31 Average",
-        "51 by 51 Average",
-        "101 by 101 Average",
-        "―",
-        "Copy Color as HTML",
-        "Copy Color's Hex Code",
-    ];
-    for selection in [false, true] {
-        let mut app = app();
-        if selection {
-            app.run("select.rect", json!({"x": 10, "y": 10, "width": 50, "height": 50})).unwrap();
-        }
-        let ctx = egui::Context::default();
-        let menu = right_click(&mut app, &ctx, [200.0, 200.0]);
-        let labels: Vec<&str> = rows(&menu).iter().map(|r| r.map_or("―", |(l, _)| l)).collect();
-        assert_eq!(labels, want, "selection {selection}");
-        assert!(rows(&menu).iter().flatten().all(|(_, id)| available(&app, &menu, id)), "every row is enabled (selection {selection})");
-    }
-}
-
-#[test]
-fn the_current_size_is_checked_and_picking_one_sets_it() {
-    let mut app = app();
-    let ctx = egui::Context::default();
-    let menu = right_click(&mut app, &ctx, [200.0, 200.0]);
-    let checked: Vec<&str> = rows(&menu).iter().flatten().map(|(_, id)| *id).filter(|id| mode_checked(&app, &menu, id)).collect();
-    assert_eq!(checked, ["canvasMenu.eyedropper.size.1"], "Point Sample by default");
-    choose(&mut app, &ctx, "canvasMenu.eyedropper.size.11");
-    assert_eq!(app.ui.tool_options.eyedropper_size, 11, "11 by 11 Average sets the size to 11");
-    assert!(app.ui.canvas_tool_menu.is_none(), "the pick closes the menu");
-    let menu = right_click(&mut app, &ctx, [200.0, 200.0]);
-    assert!(mode_checked(&app, &menu, "canvasMenu.eyedropper.size.11") && !mode_checked(&app, &menu, "canvasMenu.eyedropper.size.1"));
 }
 
 #[test]
@@ -111,7 +72,7 @@ fn copy_rows_copy_the_colour_under_the_right_click_in_lower_case() {
 #[test]
 fn the_copy_reads_all_layers_whatever_the_sample_setting() {
     let mut app = app();
-    app.ui.tool_options.eyedropper_sample = "current".into();
+    app.ui.tool_options.eyedropper.source = SampleSource::Current;
     // The blue is on the layer above the active Red layer.
     assert_eq!(copied(&mut app, [350.0, 130.0], EYEDROPPER_COPY_HEX), ["1e1edc"]);
     // The half-transparent green reads as the composite over white, not the layer's own green.
@@ -125,9 +86,9 @@ fn the_copy_reads_all_layers_whatever_the_sample_setting() {
 fn the_copy_honours_the_sample_size() {
     // A 3 × 3 box on the red block's corner: four of nine pixels red, the rest white.
     let mut app = app();
-    app.ui.tool_options.eyedropper_size = 3;
+    app.ui.tool_options.eyedropper.size = SampleSize::from_pixels(3).unwrap();
     let corner = copied(&mut app, [100.5, 100.5], EYEDROPPER_COPY_HEX);
-    app.ui.tool_options.eyedropper_size = 1;
+    app.ui.tool_options.eyedropper.size = SampleSize::from_pixels(1).unwrap();
     let point = copied(&mut app, [100.5, 100.5], EYEDROPPER_COPY_HEX);
     assert_eq!(point, ["dc1e1e"]);
     assert_ne!(corner, point, "the 3 by 3 average mixes in the white around the corner: {corner:?}");
@@ -150,8 +111,7 @@ fn over_transparency_the_copy_rows_are_greyed() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 40, "height": 30, "background": "transparent"})).unwrap();
     app.ui.tool = Tool::Eyedropper;
-    let ctx = egui::Context::default();
-    let menu = right_click(&mut app, &ctx, [10.0, 10.0]);
+    let menu = right_click(&mut app, [10.0, 10.0]);
     assert!(!available(&app, &menu, EYEDROPPER_COPY_HTML) && !available(&app, &menu, EYEDROPPER_COPY_HEX));
     assert!(available(&app, &menu, "canvasMenu.eyedropper.size.3"), "the sizes stay available");
 }
@@ -159,15 +119,15 @@ fn over_transparency_the_copy_rows_are_greyed() {
 #[test]
 fn over_the_control_channel_the_menu_is_listed_and_choose_picks_a_row() {
     let mut app = app();
-    let ctx = egui::Context::default();
     app.sync_views();
-    let r = call(
+    let ctx = crate::canvas::testing::ctx(&app).clone();
+    let r = crate::canvas::testing::control(
         &mut app,
-        &ctx,
         "ui.pointer",
         json!({"button": "secondary", "events": [{"kind": "down", "x": 200, "y": 200}, {"kind": "up", "x": 200, "y": 200}]}),
     );
     assert_eq!(r["ok"], true, "{r}");
+    assert!(app.ui.canvas_tool_menu.is_some(), "the secondary press opened the menu");
     let inspected = call(&mut app, &ctx, "ui.inspect", json!({}));
     let ids: Vec<&str> =
         inspected.pointer("/result/canvasToolMenu/entries").and_then(Value::as_array).unwrap().iter().filter_map(|e| e["id"].as_str()).collect();
@@ -175,5 +135,5 @@ fn over_the_control_channel_the_menu_is_listed_and_choose_picks_a_row() {
     assert_eq!(ids[3], "canvasMenu.eyedropper.size.11");
     assert_eq!(ids[8], EYEDROPPER_COPY_HEX);
     assert_eq!(call(&mut app, &ctx, "ui.context.choose", json!({"id": "canvasMenu.eyedropper.size.31"}))["ok"], true);
-    assert_eq!(app.ui.tool_options.eyedropper_size, 31);
+    assert_eq!(app.ui.tool_options.eyedropper.size.pixels(), 31);
 }

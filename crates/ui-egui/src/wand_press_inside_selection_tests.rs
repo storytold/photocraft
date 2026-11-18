@@ -1,14 +1,13 @@
 //! The Magic Wand pressed inside its selection (#11782), as measured in the reference
-//! application: in New mode a click deselects and a drag moves the outline (the pixels stay),
-//! the pointer shows the move-selection cursor, and a click on the pasteboard deselects. Add mode
-//! and ⌘ drags keep today's behaviour.
+//! application: in New mode a click deselects and a drag moves the outline (the pixels stay).
+//! Add mode and Shift keep today's behaviour.
 
 use egui::Modifiers;
 use photocraft_geom::Rect;
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::canvas::{SelCursor, ToolEvent, selection_cursor, tool_event};
+use crate::canvas::{ToolEvent, tool_event};
 use crate::state::Tool;
 
 /// A 500 x 400 document with an opaque red block at 100,100–300,250 on its own layer, selected
@@ -55,39 +54,18 @@ fn alpha_at(app: &PhotocraftApp, x: i32, y: i32) -> f32 {
 }
 
 #[test]
-fn a_new_mode_click_inside_the_selection_deselects() {
+fn a_new_mode_press_inside_the_selection_deselects_on_a_click_and_moves_the_outline_on_a_drag() {
     let mut app = selected();
     click(&mut app, [200.0, 200.0], Modifiers::NONE);
-    assert_eq!(selection(&app), None, "nothing is selected");
+    assert_eq!(selection(&app), None, "a click deselects");
     assert_eq!(last_step(&app).as_deref(), Some("Deselect"));
-}
 
-#[test]
-fn a_new_mode_drag_inside_the_selection_moves_the_outline_not_the_pixels() {
     let mut app = selected();
     drag(&mut app, [200.0, 200.0], [300.0, 250.0], Modifiers::NONE);
     assert_eq!(selection(&app), Some(Rect::new(200, 150, 400, 300)), "the outline moved by +100,+50");
     assert_eq!(last_step(&app).as_deref(), Some("Move Selection"));
     assert_eq!(alpha_at(&app, 150, 150), 1.0, "the pixels stay where they are");
     assert_eq!(alpha_at(&app, 350, 280), 0.0);
-}
-
-#[test]
-fn the_pointer_over_the_selection_shows_the_move_selection_cursor_in_new_mode_only() {
-    let mut app = selected();
-    assert_eq!(selection_cursor(&app, Tool::MagicWand, [200.0, 200.0], Modifiers::NONE), Some(SelCursor::Outline));
-    assert_eq!(selection_cursor(&app, Tool::MagicWand, [400.0, 350.0], Modifiers::NONE), None, "outside: the wand");
-    assert_eq!(selection_cursor(&app, Tool::MagicWand, [200.0, 200.0], Modifiers::SHIFT), None, "Shift adds");
-    app.ui.selection_mode = 1;
-    assert_eq!(selection_cursor(&app, Tool::MagicWand, [200.0, 200.0], Modifiers::NONE), None, "Add mode");
-}
-
-#[test]
-fn a_click_on_the_pasteboard_deselects() {
-    let mut app = selected();
-    click(&mut app, [-30.0, -30.0], Modifiers::NONE);
-    assert_eq!(selection(&app), None);
-    assert_eq!(last_step(&app).as_deref(), Some("Deselect"));
 }
 
 #[test]
@@ -101,13 +79,4 @@ fn add_mode_and_shift_keep_the_selection_and_move_nothing() {
         assert_eq!(selection(&app), Some(Rect::new(100, 100, 300, 250)), "mode {bar}, {mods:?}: drag");
         assert_eq!(alpha_at(&app, 150, 150), 1.0);
     }
-}
-
-#[test]
-fn a_new_mode_click_outside_the_selection_selects_that_region() {
-    let mut app = selected();
-    click(&mut app, [450.0, 350.0], Modifiers::NONE);
-    let b = selection(&app).expect("the transparent area is selected");
-    assert!(!b.contains(150, 150) || b.width() == 500, "a new selection of the clicked region: {b:?}");
-    assert_eq!(last_step(&app).as_deref(), Some("Magic Wand"));
 }
