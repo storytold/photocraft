@@ -39,11 +39,10 @@ fn healing_and_clone_checkboxes_feed_only_their_own_stroke_setting() {
     session.execute("cloneSource.set", json!({"source": [2, 2]})).unwrap();
     let mut app = PhotocraftApp::new(session, Services::default());
     pick_tool(&mut app, Tool::Healing);
-    let mut h = Harness::builder().with_size(egui::vec2(800.0, 100.0)).build_ui_state(
+    let mut h = Harness::builder().with_size(egui::vec2(800.0, 100.0)).with_context(app.ctx().clone()).build_ui_state(
         |ui, app| {
             crate::paint_mouse::sync_tool_brush(app);
-            let tool = app.ui.tool;
-            super::options_bar(app, ui, tool);
+            crate::panels::options_bar(app, ui);
         },
         app,
     );
@@ -80,7 +79,8 @@ fn reset_healing_leaves_clone_alignment_and_other_tool_brushes_alone() {
         app.session.tools.brush.angle = 86.0;
         app.session.tools.brush.pressure_size = true;
 
-        crate::menus::invoke(&mut app, &egui::Context::default(), crate::tool_reset::RESET, json!({})).unwrap();
+        let ctx = app.ctx().clone();
+        crate::menus::invoke(&mut app, &ctx, crate::tool_reset::RESET, json!({})).unwrap();
         assert!(!app.ui.tool_options.healing_aligned);
         assert_eq!(app.ui.tool_options.clone_aligned, clone_aligned);
         assert_eq!(app.session.tools.brush.angle, 0.0);
@@ -184,8 +184,20 @@ fn pending_retouch_stroke_keeps_its_alignment_after_selection_changes() {
             app.ui.tool_options.healing_aligned = false;
             app.ui.tool_options.clone_aligned = true;
             app.session.tools.brush.size = 8.0;
-            let drag = crate::canvas::Drag::new(tool, [24.0, 24.0], vec![[24.0, 24.0, 1.0]], egui::Modifiers::NONE, false);
-            crate::canvas::finish_gesture(&mut app, drag);
+            let drag = crate::canvas::paint_tool::PaintStroke {
+                tool,
+                history_params: None,
+                start: [24.0, 24.0],
+                points: vec![[24.0, 24.0, 1.0]],
+                modifiers: craft::keymap::Mods::NONE,
+                live: craft::keymap::Mods::NONE,
+                released: craft::keymap::Mods::NONE,
+                erase: false,
+                clear: false,
+                constrain: None,
+                line: false,
+            };
+            crate::canvas::strokes::finish(&mut app, drag);
             assert!(!app.ui.status_error, "{}", app.ui.status);
             let (command, params) = app.session.journal.last().unwrap();
             assert_eq!(command, if tool == Tool::Healing { "paint.healingBrush" } else { "paint.cloneStamp" });
