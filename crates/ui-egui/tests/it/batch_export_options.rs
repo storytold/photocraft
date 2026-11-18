@@ -24,9 +24,9 @@ fn harness() -> Harness {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), Default::default());
         app.session.prefs.edit(|p| p.interface.language = "en".into());
-        if let Some(rs) = cc.wgpu_render_state.as_ref() {
-            app.set_wgpu(rs.clone());
-        }
+        // No `set_wgpu`: the Batch dialog is form data and the batch runs as an engine job, so nothing here reads the
+        // GPU canvas, whose first refresh would build every compositor pipeline (#15439, #15652). The harness keeps its
+        // wgpu renderer for `evidence`'s screenshots.
         app.run("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
         app.run("actions.record", json!({"name": "Invert"})).unwrap();
         app.run("image.adjustments.invert", json!({})).unwrap();
