@@ -5,7 +5,7 @@ use photocraft_geom::Rect;
 
 use super::*;
 
-fn app_with_layer() -> PhotocraftApp {
+fn app_with_layer() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.session.execute("file.new", json!({"width": 240, "height": 160, "depth": 16})).unwrap();
     app.session.execute("layer.new.layer", json!({})).unwrap();
@@ -15,12 +15,12 @@ fn app_with_layer() -> PhotocraftApp {
 }
 
 /// The dialog host's pass; it runs the `TAKERS`, which include this module's `take`.
-fn draw(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
+fn draw(ui: &mut egui::Ui, app: &mut Box<PhotocraftApp>) {
     crate::dialogs::run(app, ui);
 }
 
 /// Vanishing Point opened on the active layer of `app`, as the window shows it.
-fn open(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+fn open(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     let app_ctx = app.ctx().clone();
     let mut h = Harness::builder().with_context(app_ctx).with_size(egui::vec2(1200.0, 800.0)).build_ui_state(draw, app);
     let ctx = h.ctx.clone();
@@ -31,7 +31,7 @@ fn open(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
 
 /// Sets workspace fields as `ui.dialog.set` would, then runs the passes that report them and waits for the preview job the
 /// revision schedules (the stamp preview is painted by that job, as `ui.waitPreview` waits for it).
-fn set(h: &mut Harness<'static, PhotocraftApp>, ui: Value) {
+fn set(h: &mut Harness<'static, Box<PhotocraftApp>>, ui: Value) {
     let ctx = h.ctx.clone();
     crate::control::dialogs::workspace_ui(h.state_mut(), &ctx, VP, &ui).unwrap();
     h.run_steps(4);
@@ -39,12 +39,12 @@ fn set(h: &mut Harness<'static, PhotocraftApp>, ui: Value) {
     h.run_steps(2);
 }
 
-fn source(h: &Harness<'static, PhotocraftApp>) -> Arc<PcVanishingSource> {
+fn source(h: &Harness<'static, Box<PhotocraftApp>>) -> Arc<PcVanishingSource> {
     h.state().vanishing.as_ref().expect("Vanishing Point is open").source.clone()
 }
 
 /// The stamp preview's pixel at `(x, y)`.
-fn shown(h: &Harness<'static, PhotocraftApp>, x: i32, y: i32) -> [u8; 4] {
+fn shown(h: &Harness<'static, Box<PhotocraftApp>>, x: i32, y: i32) -> [u8; 4] {
     let source = source(h);
     let picture = source.stamp_preview().expect("a stamp preview");
     let mut out = ColorImage::new([1, 1], vec![Color32::TRANSPARENT]);
@@ -57,7 +57,7 @@ fn close(a: [u8; 4], b: [f32; 4]) -> bool {
 }
 
 /// OK through the automation surface, with the passes that answer it and close the workspace.
-fn ok(h: &mut Harness<'static, PhotocraftApp>) {
+fn ok(h: &mut Harness<'static, Box<PhotocraftApp>>) {
     let ctx = h.ctx.clone();
     crate::control::dialogs::workspace_ui(h.state_mut(), &ctx, VP, &json!({"commit": true})).unwrap();
     h.run_steps(4);

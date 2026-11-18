@@ -11,7 +11,7 @@ use crate::PhotocraftApp;
 
 /// Smart objects "Smart A" (Gaussian Blur and Offset) and "Smart B" (no filters), and a pixel
 /// layer "Pixels" on top: (harness, A, B, pixels).
-fn panel() -> (egui_kittest::Harness<'static, PhotocraftApp>, u64, u64, u64) {
+fn panel() -> (egui_kittest::Harness<'static, Box<PhotocraftApp>>, u64, u64, u64) {
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
     let smart = |s: &mut photocraft_engine::Session, name: &str| {
@@ -36,7 +36,7 @@ fn panel() -> (egui_kittest::Harness<'static, PhotocraftApp>, u64, u64, u64) {
     (h, a, b, c)
 }
 
-fn filters(h: &egui_kittest::Harness<'static, PhotocraftApp>, id: u64) -> Vec<String> {
+fn filters(h: &egui_kittest::Harness<'static, Box<PhotocraftApp>>, id: u64) -> Vec<String> {
     match &h.state().session.active().unwrap().doc.layer(LayerId(id)).unwrap().content {
         LayerContent::Smart(sm) => sm.smart_filters.iter().map(|f| f.command.clone()).collect(),
         _ => Vec::new(),
@@ -44,15 +44,15 @@ fn filters(h: &egui_kittest::Harness<'static, PhotocraftApp>, id: u64) -> Vec<St
 }
 
 /// The centre of the Layers panel row named `label`, or of the footer button.
-fn at(h: &egui_kittest::Harness<'static, PhotocraftApp>, label: &str) -> Pos2 {
+fn at(h: &egui_kittest::Harness<'static, Box<PhotocraftApp>>, label: &str) -> Pos2 {
     if crate::layers_panel_nodes::row_drawn(h, label) { crate::layers_panel_nodes::row(h, label).center() } else { h.get_by_label(label).rect().center() }
 }
 
-fn selected(h: &egui_kittest::Harness<'static, PhotocraftApp>, label: &str) -> bool {
+fn selected(h: &egui_kittest::Harness<'static, Box<PhotocraftApp>>, label: &str) -> bool {
     h.get_by_role_and_label(Role::TreeItem, label).accesskit_node().is_selected() == Some(true)
 }
 
-fn click_at(h: &mut egui_kittest::Harness<'static, PhotocraftApp>, p: Pos2) {
+fn click_at(h: &mut egui_kittest::Harness<'static, Box<PhotocraftApp>>, p: Pos2) {
     h.hover_at(p);
     h.run_steps(1);
     h.drag_at(p);
@@ -67,8 +67,8 @@ fn click_at(h: &mut egui_kittest::Harness<'static, PhotocraftApp>, p: Pos2) {
 /// Delete deletes the active layer as usual.
 #[test]
 fn the_delete_key_and_a_selected_filter() {
-    type Case = (&'static str, &'static str, fn(&mut egui_kittest::Harness<'static, PhotocraftApp>, u64), egui::Key, usize, bool);
-    let none: fn(&mut egui_kittest::Harness<'static, PhotocraftApp>, u64) = |_, _| {};
+    type Case = (&'static str, &'static str, fn(&mut egui_kittest::Harness<'static, Box<PhotocraftApp>>, u64), egui::Key, usize, bool);
+    let none: fn(&mut egui_kittest::Harness<'static, Box<PhotocraftApp>>, u64) = |_, _| {};
     let cases: [Case; 5] = [
         ("Delete removes the selected filter", "Gaussian Blur", none, egui::Key::Delete, 1, false),
         ("Backspace on the Smart Filters row clears them", "Smart Filters", none, egui::Key::Backspace, 0, false),

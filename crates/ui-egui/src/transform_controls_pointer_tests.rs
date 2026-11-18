@@ -22,7 +22,7 @@ pub(crate) fn accepted(app: &mut PhotocraftApp, method: &str, params: Value) {
 }
 
 /// Two selected shapes share the measured controls frame (100,100)..(800,500).
-fn fixture() -> (PhotocraftApp, egui::Context, [LayerId; 2]) {
+fn fixture() -> (Box<PhotocraftApp>, egui::Context, [LayerId; 2]) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 1000, "height": 700, "background": "white"})).unwrap();
     let mut layers = Vec::new();
@@ -424,7 +424,7 @@ fn color_picker_release_ends_an_ordinary_move_drag() {
 
 /// A 400 × 300 document with a target block at (300..350, 200..260) and the moving block at (40..90, 40..80), at
 /// 100 %, with Snap and Smart Guides on.
-fn snap_box() -> PhotocraftApp {
+fn snap_box() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
     app.sync_views();
@@ -457,7 +457,7 @@ fn assert_quad(app: &PhotocraftApp, expected: [[f64; 2]; 4], what: &str) {
 }
 
 /// The app of `snap_box` with guides at x 110 and y 30 and the box of `menu` open.
-fn corner_guides(menu: &str) -> PhotocraftApp {
+fn corner_guides(menu: &str) -> Box<PhotocraftApp> {
     let mut app = snap_box();
     app.run("view.newGuide", json!({"orientation": "vertical", "position": 110})).unwrap();
     app.run("view.newGuide", json!({"orientation": "horizontal", "position": 30})).unwrap();

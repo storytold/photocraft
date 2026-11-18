@@ -25,7 +25,7 @@ fn mods_of(m: Modifiers) -> Mods {
 }
 
 /// A 200 × 100 document, red on the left half and green on the right, the foreground blue and `tool`'s brush at 40 px.
-fn app(tool: Tool) -> PhotocraftApp {
+fn app(tool: Tool) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 200, "height": 100, "background": "white"})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();
