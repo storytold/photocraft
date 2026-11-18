@@ -888,7 +888,15 @@ fn stale_blocked_move_from_extra_window_cleans_up_before_consuming_other_viewpor
     h.state_mut().session.execute("layer.select", json!({"layer": bg.0})).unwrap();
     tool_event(h.state_mut(), ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, Modifiers::NONE);
     assert!(h.state().move_blocked);
+    // The driver injects into the root viewport only, so the refused press is recorded against
+    // the main window; the window a refused press in the extra one records is set here.
+    h.state_mut().move_viewport = Some(extra_vid);
     assert_eq!(h.state().move_viewport, Some(extra_vid));
+
+    // The button comes up in the extra window: the refusal stays with the window that owns the
+    // press, so the main window's next press is the one that has to clear it.
+    tool_event(h.state_mut(), ToolEvent::Up { x: 20.0, y: 20.0 }, Modifiers::NONE);
+    assert!(h.state().move_blocked, "the extra window's refusal is still recorded");
 
     // A fresh Down on an unlocked layer in the main viewport clears stale extra-window state
     // rather than letting later Move/Up events get eaten by the old blocked gesture.
