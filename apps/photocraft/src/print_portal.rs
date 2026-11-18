@@ -1,6 +1,6 @@
 //! Printing through the XDG Print portal (`org.freedesktop.portal.Print`): the system print
 //! dialog, which a sandboxed app can reach without a CUPS socket. The engine prints over IPP
-//! when it can reach a print server (`photocraft-ipp`); this is its fallback when it cannot, and
+//! when it can reach a print server (`craft_print::cups`); this is its fallback when it cannot, and
 //! the only route with `PHOTOCRAFT_PRINT_PORTAL=1` (`0` disables it). `PreparePrint` shows the
 //! dialog seeded with the job's copies and paper; `Print` hands it the PDF. Both answer through a
 //! `Request` object's `Response` signal, which this module waits for on its own thread so the

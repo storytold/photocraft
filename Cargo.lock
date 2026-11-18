@@ -6430,7 +6430,6 @@ dependencies = [
  "photocraft-format",
  "photocraft-geom",
  "photocraft-io",
- "photocraft-ipp",
  "photocraft-ops",
  "photocraft-paint",
  "photocraft-plugins",
@@ -6551,10 +6550,6 @@ dependencies = [
  "zune-core",
  "zune-jpegxl",
 ]
-
-[[package]]
-name = "photocraft-ipp"
-version = "0.23.1"
 
 [[package]]
 name = "photocraft-ops"

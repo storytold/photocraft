@@ -89,6 +89,8 @@ fn write_settings(fields: &mut DialogFields, settings: &Settings) {
 /// missing fields with defaults. The printer list is asked for by the dialog's first pass
 /// (`take`). Returns the dialog's id without submitting a print job.
 pub fn open_print(app: &mut PhotocraftApp) -> DialogId {
+    // A new dialog must never inherit a previous discovery answer.
+    app.printer_discovery = None;
     let last = photocraft_engine::print_cmds::last_print(&app.session);
     let mut fields = DialogFields::new();
     let mut state = State::default();
@@ -290,6 +292,28 @@ fn take_printer_lists(app: &mut PhotocraftApp) -> Vec<Printer> {
 /// list is the cached one (or empty), and the dialog asks again on its next pass, after a short wait, so the real
 /// list arrives once the spooler is free.
 fn refresh_printers(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    if app.session.printer_source.is_none() {
+        if app.printer_discovery.is_some() {
+            return;
+        }
+        match super::PrinterDiscovery::start() {
+            Ok(ticket) => {
+                let (tx, rx) = std::sync::mpsc::channel();
+                if let Some(dialog) = app.framework.dialogs.get_mut::<HostedPrint>()
+                    && dialog.listen(rx)
+                {
+                    app.printer_discovery = Some((tx, ticket));
+                    ctx.request_repaint_after(std::time::Duration::from_millis(100));
+                }
+            }
+            Err(error) => {
+                app.ui.status = error;
+                app.ui.status_error = true;
+            }
+        }
+        return;
+    }
+
     let (list, listed) = match photocraft_engine::print_cmds::try_with_spooler(|| take_printer_lists(app)) {
         Some(list) => (list, true),
         None => (take_printer_lists(app), false),
@@ -301,6 +325,30 @@ fn refresh_printers(app: &mut PhotocraftApp, ctx: &egui::Context) {
         if !listed {
             dialog.request_refresh();
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+    }
+}
+
+// Forward only the current dialog's answer. The shared panel owns pending/selection
+// state and notices a disconnected channel on failure or cancellation.
+fn poll_printers(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let Some((_, ticket)) = &app.printer_discovery else { return };
+    let Some(answer) = ticket.poll() else {
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        return;
+    };
+    let Some((tx, _)) = app.printer_discovery.take() else { return };
+    match answer {
+        Ok((system, native)) => {
+            let list = match native {
+                Ok(list) => default_first(list.into_iter().map(|p| (p.name, p.default)).collect()),
+                Err(_) => printer_list(system.get("printers")),
+            };
+            let _ = tx.send(list);
+        }
+        Err(error) => {
+            app.ui.status = error;
+            app.ui.status_error = true;
         }
     }
 }
@@ -445,12 +493,23 @@ fn build_sheet(ctx: &egui::Context, doc: &photocraft_doc::Document, revision: u6
 /// the last sheet's; the open dialog gets it every pass.
 pub(super) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
     match app.framework.dialogs.take::<HostedPrint>() {
-        Some(DialogResult::Ok(answer)) => return finish(app, answer),
-        Some(DialogResult::Cancel) => return,
+        Some(DialogResult::Ok(answer)) => {
+            app.printer_discovery = None;
+            return finish(app, answer);
+        }
+        Some(DialogResult::Cancel) => {
+            app.printer_discovery = None;
+            return;
+        }
         // `DialogResult` is non-exhaustive; a result this code does not know files nothing.
         Some(_) => return,
         None => {}
     }
+    if app.framework.dialogs.get_mut::<HostedPrint>().is_none() {
+        app.printer_discovery = None;
+        return;
+    }
+    poll_printers(app, ctx);
     let Some(dialog) = app.framework.dialogs.get_mut::<HostedPrint>() else { return };
     let refresh = dialog.take_refresh();
     let moves = dialog.take_moves();
@@ -559,4 +618,53 @@ pub(crate) fn print_status(app: &mut PhotocraftApp, r: &Value) {
         crate::i18n::fmt(tl!(template), &[("path", r["pdf"].as_str().unwrap_or(""))])
     };
     app.ui.status_error = false;
+}
+
+#[cfg(test)]
+mod discovery_tests {
+    use super::*;
+
+    #[test]
+    fn pending_discovery_does_not_block_and_completed_result_reaches_only_its_receiver() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        let (answer, ticket) = super::super::PrinterDiscovery::test_ticket();
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.printer_discovery = Some((tx, ticket));
+        poll_printers(&mut app, &ctx);
+        assert!(app.printer_discovery.is_some());
+        assert!(rx.try_recv().is_err());
+        answer.send(Ok((json!({"printers":[{"name":"Studio_Printer","default":true}]}), Err(craft_print::rgb::PrintError::Unsupported)))).unwrap();
+        poll_printers(&mut app, &ctx);
+        let list = rx.try_recv().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].name, "Studio_Printer");
+        assert!(app.printer_discovery.is_none());
+    }
+
+    #[test]
+    fn reopening_print_drops_the_old_discovery_ticket() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let (answer, ticket) = super::super::PrinterDiscovery::test_ticket();
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.printer_discovery = Some((tx, ticket));
+        open_print(&mut app);
+        assert!(app.printer_discovery.is_none());
+        assert!(answer.send(Err("old dialog".into())).is_err());
+        assert_eq!(rx.try_recv().unwrap_err(), std::sync::mpsc::TryRecvError::Disconnected);
+    }
+
+    #[test]
+    fn discovery_error_disconnects_panel_and_surfaces_failure() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let (answer, ticket) = super::super::PrinterDiscovery::test_ticket();
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.printer_discovery = Some((tx, ticket));
+        answer.send(Err("discovery failed".into())).unwrap();
+        poll_printers(&mut app, &egui::Context::default());
+        assert_eq!(rx.try_recv().unwrap_err(), std::sync::mpsc::TryRecvError::Disconnected);
+        assert!(app.ui.status_error);
+        assert_eq!(app.ui.status, "discovery failed");
+        assert!(app.printer_discovery.is_none());
+    }
 }

@@ -50,6 +50,7 @@ impl PhotocraftApp {
             session,
             ui: UiState::default(),
             services,
+            printer_discovery: None,
             canvases: HashMap::new(),
             raster_logs: HashMap::new(),
             navigator_textures: HashMap::new(),

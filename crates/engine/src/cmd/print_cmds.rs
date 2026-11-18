@@ -9,7 +9,7 @@
 //! explicit output path. Shared spooler transport files are private and automatically removed.
 //!
 //! Where `lp` is not on the path (a Flatpak has none), the job goes to CUPS over IPP in-process
-//! (`photocraft-ipp`, through the sandbox's `--socket=cups`), and when no print server or no
+//! (`craft_print::cups`, through the sandbox's `--socket=cups`), and when no print server or no
 //! printer is reachable, to the app's spooler, the XDG Print portal (`Session::print_spooler`;
 //! `PHOTOCRAFT_PRINT_PORTAL=1` prefers it, `=0` removes it). `"printServer"` names a server for
 //! one job and always takes the IPP route; `file.printers` lists the queues (#2728).
@@ -388,18 +388,18 @@ fn system_spooler() -> Option<&'static str> {
 /// The printer a job goes to: the one asked for when the server knows it, else the default,
 /// else the only one; otherwise an error that names what there is.
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))]
-fn resolve_printer(requested: Option<&str>, default: Option<&str>, printers: &[photocraft_ipp::Printer]) -> std::result::Result<String, SpoolError> {
+fn resolve_printer(requested: Option<&str>, default: Option<&str>, printers: &[craft_print::cups::Queue]) -> std::result::Result<String, SpoolError> {
     let names: Vec<&str> = printers.iter().map(|p| p.name.as_str()).collect();
     let known = |n: &str| names.iter().find(|k| k.eq_ignore_ascii_case(n)).map(|k| (*k).to_string());
     if let Some(r) = requested {
         let choices = if names.is_empty() { "none".to_string() } else { names.join(", ") };
         return known(r).ok_or_else(|| SpoolError::Failed(format!("no printer called `{r}`; the print server knows: {choices}")));
     }
+    if let Some(default) = default {
+        return known(default).ok_or_else(|| SpoolError::Failed(format!("default printer `{default}` is unavailable; choose a printer explicitly")));
+    }
     if printers.is_empty() {
         return Err(SpoolError::NoRoute("no printer is set up on this computer; add one in the system settings, or print to PDF".into()));
-    }
-    if let Some(d) = default.and_then(known) {
-        return Ok(d);
     }
     match names.as_slice() {
         [only] => Ok((*only).to_string()),
@@ -408,33 +408,92 @@ fn resolve_printer(requested: Option<&str>, default: Option<&str>, printers: &[p
 }
 
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))]
-fn cups_server(named: Option<&str>) -> std::result::Result<photocraft_ipp::Endpoint, SpoolError> {
-    match named {
-        Some(server) => {
-            let ep = photocraft_ipp::Endpoint::parse(server);
-            if !ep.reachable() {
-                return Err(SpoolError::Failed(format!("no print server at {ep}")));
-            }
-            Ok(ep)
+const LOCAL_CUPS_CANDIDATES: [&str; 5] = ["/run/cups/cups.sock", "/var/run/cups/cups.sock", "/private/var/run/cupsd", "localhost:631", "127.0.0.1:631"];
+
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))]
+fn cups_server(named: Option<&str>) -> std::result::Result<craft_print::cups::Server, SpoolError> {
+    use craft_print::cups::{Server, reachable};
+    let explicit = named.map(str::to_owned).or_else(|| std::env::var_os("CUPS_SERVER").filter(|v| !v.is_empty()).map(|v| v.to_string_lossy().into_owned()));
+    if let Some(server) = explicit {
+        let ep = Server::parse(&server).map_err(|e| if named.is_some() { SpoolError::Failed(e.to_string()) } else { SpoolError::NoRoute(e.to_string()) })?;
+        if !reachable(&ep) {
+            return Err(if named.is_some() {
+                SpoolError::Failed(format!("no print server at {server}"))
+            } else {
+                SpoolError::NoRoute("no print server: CUPS is not running, or not reachable from this sandbox; print to PDF instead".into())
+            });
         }
-        None => photocraft_ipp::Endpoint::detect()
-            .ok_or_else(|| SpoolError::NoRoute("no print server: CUPS is not running, or not reachable from this sandbox; print to PDF instead".into())),
+        return Ok(ep);
     }
+    // Keep PhotoCraft's local route preference; the shared transport owns connection and wire IO.
+    LOCAL_CUPS_CANDIDATES
+        .into_iter()
+        .filter_map(|candidate| Server::parse(candidate).ok())
+        .find(reachable)
+        .ok_or_else(|| SpoolError::NoRoute("no print server: CUPS is not running, or not reachable from this sandbox; print to PDF instead".into()))
+}
+
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))]
+fn cups_server_name(server: &craft_print::cups::Server) -> String {
+    match server {
+        craft_print::cups::Server::Unix(path) => path.display().to_string(),
+        craft_print::cups::Server::Tcp(address) => address.to_string(),
+        craft_print::cups::Server::Named(host, port) if host.contains(':') => format!("[{host}]:{port}"),
+        craft_print::cups::Server::Named(host, port) => format!("{host}:{port}"),
+    }
+}
+
+// Discovery may show a partial list, but automatic submission must not mistake
+// missing class/default metadata for proof that one visible printer is the only choice.
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))]
+struct CupsPrinters {
+    queues: Vec<craft_print::cups::Queue>,
+    default: std::result::Result<Option<String>, craft_print::Error>,
+    classes_complete: bool,
+}
+
+// Optional class/default lookup failures do not hide the primary printer list.
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))]
+fn cups_printers(server: &craft_print::cups::Server) -> std::result::Result<CupsPrinters, craft_print::Error> {
+    let endpoints = std::slice::from_ref(server);
+    // Retain large-fleet discovery within the shared one-MiB response bound.
+    // The record ceiling is explicit; no reply is silently truncated.
+    let mut printers = craft_print::cups::queues_at_with_limit(endpoints, false, 65_536)?;
+    let classes = craft_print::cups::queues_at_with_limit(endpoints, true, 65_536);
+    let classes_complete = classes.is_ok();
+    printers.extend(classes.unwrap_or_default());
+    let default = craft_print::cups::default_at(endpoints);
+    for printer in &mut printers {
+        printer.is_default = default.as_ref().ok().and_then(|name| name.as_deref()) == Some(printer.name.as_str());
+    }
+    Ok(CupsPrinters { queues: printers, default, classes_complete })
 }
 
 /// The IPP route: the job to the system's (or the named) CUPS server.
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))]
 fn cups_spool(job: &PrintJob) -> std::result::Result<String, SpoolError> {
-    let failed = |e: photocraft_ipp::Error| SpoolError::Failed(e.to_string());
+    let failed = |e: craft_print::Error| SpoolError::Failed(e.to_string());
     let ep = cups_server(job.server.as_deref())?;
-    let printers = photocraft_ipp::printers(&ep).map_err(failed)?;
-    let default = printers.iter().find(|p| p.is_default).map(|p| p.name.clone());
+    let listing = cups_printers(&ep).map_err(failed)?;
+    let default = if job.printer.is_none() {
+        if !listing.classes_complete {
+            return Err(SpoolError::Failed("cannot verify the printer list; choose a printer explicitly".into()));
+        }
+        listing.default.map_err(failed)?
+    } else {
+        // A known explicit destination does not depend on optional default metadata.
+        None
+    };
+    let printers = listing.queues;
     let printer = resolve_printer(job.printer.as_deref(), default.as_deref(), &printers)?;
     let is_class = printers.iter().any(|p| p.name == printer && p.is_class);
     let user = std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_else(|_| "photocraft".into());
-    let id = photocraft_ipp::print_job(
-        &ep,
-        &photocraft_ipp::Job { printer: &printer, is_class, title: &job.title, user: &user, copies: job.copies, document: &job.pdf, format: "application/pdf" },
+    let id = craft_print::cups::submit_as_at(
+        std::slice::from_ref(&ep),
+        &craft_print::cups::Destination { name: printer.clone(), is_class },
+        &job.pdf,
+        &craft_print::Job { printer: Some(printer.clone()), title: job.title.clone(), copies: job.copies, ..Default::default() },
+        &user,
     )
     .map_err(failed)?;
     Ok(format!("job {id} on {printer}"))
@@ -471,7 +530,7 @@ fn system_printers(s: &mut Session, p: &Value) -> Result<Value> {
                 return Ok(json!({"server": Value::Null, "default": Value::Null, "printers": [], "note": why}));
             }
         };
-        let list = photocraft_ipp::printers(&ep).map_err(other)?;
+        let list = cups_printers(&ep).map_err(other)?.queues;
         let default = list.iter().find(|p| p.is_default).map(|p| p.name.clone());
         let printers: Vec<Value> = list
             .iter()
@@ -479,7 +538,7 @@ fn system_printers(s: &mut Session, p: &Value) -> Result<Value> {
                 json!({"name": p.name, "info": p.info, "state": match p.state { 4 => "printing", 5 => "stopped", _ => "idle" }, "acceptingJobs": p.accepting_jobs, "default": p.is_default, "class": p.is_class})
             })
             .collect();
-        Ok(json!({"server": ep.to_string(), "default": default, "printers": printers}))
+        Ok(json!({"server": cups_server_name(&ep), "default": default, "printers": printers}))
     }
     #[cfg(not(all(not(target_arch = "wasm32"), not(target_os = "windows"))))]
     {

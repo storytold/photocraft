@@ -11,6 +11,8 @@ use serde_json::{Value, json};
 use crate::PhotocraftApp;
 
 pub(crate) mod print;
+mod printer_discovery;
+pub(crate) use printer_discovery::PrinterDiscovery;
 mod web;
 #[path = "file_ui/web_preview.rs"]
 mod web_preview;

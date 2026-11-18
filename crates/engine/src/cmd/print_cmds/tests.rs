@@ -1,3 +1,7 @@
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))]
+#[path = "tests/ipp_fixture.rs"]
+mod ipp_fixture;
+
 use super::*;
 use photocraft_doc::{Knot, NamedPath, Path, Subpath};
 
@@ -1099,17 +1103,17 @@ fn lp_takes_the_job_only_when_cups_lists_a_printer_and_picks_the_only_one() {
     assert_eq!(lp_route(&asked, &[]).and_then(|j| j.printer), Some("Lab".into()));
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))]
 mod cups {
-    use super::*;
-    use photocraft_ipp::{
-        Attribute, OP_CUPS_GET_CLASSES, OP_CUPS_GET_DEFAULT, OP_CUPS_GET_PRINTERS, OP_PRINT_JOB, Printer, Request, TAG_JOB_GROUP, TAG_NAME, TAG_PRINTER_GROUP,
+    use super::ipp_fixture::{
+        Attribute, OP_CUPS_GET_CLASSES, OP_CUPS_GET_DEFAULT, OP_CUPS_GET_PRINTERS, OP_PRINT_JOB, Request, TAG_JOB_GROUP, TAG_NAME, TAG_PRINTER_GROUP,
     };
+    use super::*;
     use std::io::{BufRead, BufReader, Read, Write};
     use std::sync::mpsc;
 
-    fn printer(name: &str, is_default: bool) -> Printer {
-        Printer { name: name.into(), info: String::new(), state: 3, accepting_jobs: true, is_default, is_class: false }
+    fn printer(name: &str, is_default: bool) -> craft_print::cups::Queue {
+        craft_print::cups::Queue { name: name.into(), info: String::new(), state: 3, accepting_jobs: true, is_default, is_class: false }
     }
 
     #[test]
@@ -1135,8 +1139,9 @@ mod cups {
             Err(SpoolError::Failed(e)) => assert!(e.contains("`Office`") && e.contains("none"), "{e}"),
             _ => panic!("a named printer never falls through"),
         }
-        // A stale default that the server no longer lists falls through to the only printer.
-        assert_eq!(resolve_printer(None, Some("Gone"), &two[..1]).ok(), Some("Office".into()));
+        // A missing configured default must never redirect the document to another printer.
+        assert!(matches!(resolve_printer(None, Some("Gone"), &two[..1]), Err(SpoolError::Failed(_))));
+        assert!(matches!(resolve_printer(None, Some("Gone"), &[]), Err(SpoolError::Failed(_))));
     }
 
     /// What the fake received per request: op, attributes, document.
@@ -1145,6 +1150,15 @@ mod cups {
     /// A fake CUPS on a TCP port: lists `printers` and `classes`, names `default`, accepts jobs
     /// as id 42. Answers for as long as the test process lives.
     fn fake_cups(printers: &'static [&'static str], classes: &'static [&'static str], default: Option<&'static str>) -> (String, mpsc::Receiver<Seen>) {
+        fake_cups_with_failure(printers, classes, default, None)
+    }
+
+    fn fake_cups_with_failure(
+        printers: &'static [&'static str],
+        classes: &'static [&'static str],
+        default: Option<&'static str>,
+        failed_op: Option<u16>,
+    ) -> (String, mpsc::Receiver<Seen>) {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let server = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
         let (tx, rx) = mpsc::channel();
@@ -1170,12 +1184,13 @@ mod cups {
                 }
                 let mut body = vec![0u8; len];
                 reader.read_exact(&mut body).unwrap();
-                let (op, attrs, doc) = photocraft_ipp::parse_request(&body).unwrap();
+                let (op, attrs, doc) = super::ipp_fixture::parse_request(&body).unwrap();
+                let request_id = u32::from_be_bytes(body[4..8].try_into().unwrap());
                 let list = |names: &[&str]| {
                     if names.is_empty() {
-                        return Request::new(0x0406, 1).end();
+                        return Request::new(0x0406, request_id).end();
                     }
-                    let mut r = Request::new(0, 1);
+                    let mut r = Request::new(0, request_id);
                     for p in names {
                         r.group(TAG_PRINTER_GROUP);
                         r.attr(TAG_NAME, "printer-name", p.as_bytes());
@@ -1183,24 +1198,25 @@ mod cups {
                     r.end()
                 };
                 let reply = match op {
+                    op if Some(op) == failed_op => Request::new(0x0500, request_id).end(),
                     OP_CUPS_GET_PRINTERS => list(printers),
                     OP_CUPS_GET_CLASSES => list(classes),
                     OP_CUPS_GET_DEFAULT => match default {
                         Some(d) => {
-                            let mut r = Request::new(0, 1);
+                            let mut r = Request::new(0, request_id);
                             r.group(TAG_PRINTER_GROUP);
                             r.attr(TAG_NAME, "printer-name", d.as_bytes());
                             r.end()
                         }
-                        None => Request::new(0x0406, 1).end(),
+                        None => Request::new(0x0406, request_id).end(),
                     },
                     OP_PRINT_JOB => {
-                        let mut r = Request::new(0, 1);
+                        let mut r = Request::new(0, request_id);
                         r.group(TAG_JOB_GROUP);
                         r.integer("job-id", 42);
                         r.end()
                     }
-                    _ => Request::new(0x0501, 1).end(),
+                    _ => Request::new(0x0501, request_id).end(),
                 };
                 let _ = tx.send((op, attrs, doc));
                 let mut out = reader.into_inner();
@@ -1210,6 +1226,27 @@ mod cups {
             }
         });
         (server, rx)
+    }
+
+    #[test]
+    fn uncertain_default_never_submits_to_the_only_visible_printer() {
+        for failed_op in [Some(OP_CUPS_GET_CLASSES), Some(OP_CUPS_GET_DEFAULT), None] {
+            let (server, rx) = fake_cups_with_failure(&["Office"], &[], Some("PrivateClass"), failed_op);
+            let mut job = PrintJob {
+                pdf: b"%PDF-1.4\n".to_vec(),
+                printer: None,
+                copies: 1,
+                title: "Routing test".into(),
+                server: Some(server),
+                paper: (612., 792.),
+                landscape: false,
+            };
+            assert!(cups_spool(&job).is_err(), "uncertain or unavailable default must not redirect: {failed_op:?}");
+            assert!(!rx.try_iter().any(|(op, _, _)| op == OP_PRINT_JOB), "no document may be sent");
+            job.printer = Some("Office".into());
+            assert_eq!(cups_spool(&job).ok().as_deref(), Some("job 42 on Office"));
+            assert!(rx.try_iter().any(|(op, _, _)| op == OP_PRINT_JOB), "explicit known printer remains usable");
+        }
     }
 
     #[test]
@@ -1582,4 +1619,12 @@ fn printed_pdf_uses_winansi_for_labels_and_descriptions() {
 #[test]
 fn postscript_comment_text_cannot_end_its_line() {
     assert_eq!(ps_comment_text("a\nshowpage\r%x"), "a showpage %x");
+}
+
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))]
+#[test]
+fn local_cups_routes_keep_ipv4_fallback_after_localhost() {
+    assert_eq!(LOCAL_CUPS_CANDIDATES, ["/run/cups/cups.sock", "/var/run/cups/cups.sock", "/private/var/run/cupsd", "localhost:631", "127.0.0.1:631"]);
+    let endpoint = craft_print::cups::Server::parse(LOCAL_CUPS_CANDIDATES[4]).unwrap();
+    assert_eq!(cups_server_name(&endpoint), "127.0.0.1:631");
 }
