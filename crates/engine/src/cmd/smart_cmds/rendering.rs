@@ -1,7 +1,7 @@
 use super::filters::smart;
 use super::source::{
-    SourceImage, buffer_to_surface, cache_get_authorized, cache_put, convert_svg_source, decode_source_admitted_in_with_order,
-    flattened_source, source_bytes, source_cache_key, source_image_in_with_order, source_image_with_order, source_surface_from_buffer, svg_source_image_in, vector_scale,
+    SourceImage, buffer_to_surface, cache_get_authorized, cache_put, convert_svg_source, decode_source_admitted_in_with_order, flattened_source, source_bytes,
+    source_cache_key, source_image_in_with_order, source_image_with_order, source_surface_from_buffer, svg_source_image_in, vector_scale,
 };
 use super::{
     Affine, Arc, BlendMode, Document, EngineError, Homography, JobCtx, Layer, LayerContent, LayerId, PixelFormat, Rect, Result, SmartFilter, SmartObject,
