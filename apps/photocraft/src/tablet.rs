@@ -354,9 +354,7 @@ mod tests {
                 view.clear_pending();
             }
             h.run_steps(2);
-            let at = |h: &Harness<'_, Box<PhotocraftApp>>, x: f64| {
-                h.state().last_canvas_rect.center() + egui::vec2((x - 60.0) as f32, -20.0)
-            };
+            let at = |h: &Harness<'_, Box<PhotocraftApp>>, x: f64| h.state().last_canvas_rect.center() + egui::vec2((x - 60.0) as f32, -20.0);
             let raw = [53107.0, 50289.0, 17296.0];
             for (index, value) in raw.into_iter().enumerate() {
                 if master_first {
