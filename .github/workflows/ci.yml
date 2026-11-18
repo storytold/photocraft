@@ -277,10 +277,13 @@ jobs:
             unit) targets=(--lib --bins) ;;
             *) targets=(--test '*') ;;
           esac
-          skip=()
+          # The two browser apps are wasm targets; their native test builds check nothing the web job
+          # (and the Linux gate's wasm32 check) does not. Excluding them changes no other crate's
+          # features (`cargo tree -e features --workspace` is identical for every other package).
+          skip=(--exclude photocraft-web --exclude photocraft-web-boot)
           # Only an explicit `false` skips them: a missing output runs everything.
           if [ "$GPU" = false ]; then
-            skip=(--exclude photocraft-gpu)
+            skip+=(--exclude photocraft-gpu)
             echo "::notice::photocraft-gpu's tests are skipped on Windows: this pull request changes nothing they are built from (the Linux gate still runs them)."
           fi
           # nextest reuses this build. The separate step writes cargo's --timings report for it.
@@ -301,7 +304,7 @@ jobs:
 
       - name: Doctests
         if: matrix.part == 'unit'
-        run: cargo test --workspace --locked --features heif --doc
+        run: cargo test --workspace --exclude photocraft-web --exclude photocraft-web-boot --locked --features heif --doc
 
   # The same codecs without the optional decoder: HEIC must stay a clear "not in this build" error
   # for distributors who leave it out. Runs beside the gate and restores the gate's dependency
