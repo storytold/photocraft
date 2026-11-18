@@ -6,7 +6,7 @@ use super::*;
 use crate::new_layer_ui::testing::set;
 
 /// Background, then `A` and `B` (`B` active).
-fn app() -> (PhotocraftApp, LayerId, LayerId) {
+fn app() -> (Box<PhotocraftApp>, LayerId, LayerId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 40, "height": 30})).unwrap();
     let a = LayerId(app.run("layer.new.layer", json!({"name": "A"})).unwrap()["layer"].as_u64().unwrap());

@@ -12,7 +12,7 @@ use super::commit_tests::{edit_active, type_new};
 use crate::PhotocraftApp;
 use crate::state::Tool;
 
-fn new_app(tool: Tool) -> PhotocraftApp {
+fn new_app(tool: Tool) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 200})).unwrap();
     // A selection away from the text, which a Type Mask session must leave as it is.
@@ -22,12 +22,12 @@ fn new_app(tool: Tool) -> PhotocraftApp {
     app
 }
 
-fn press(mut app: PhotocraftApp, k: egui::Key, modifiers: Modifiers) -> PhotocraftApp {
+fn press(mut app: Box<PhotocraftApp>, k: egui::Key, modifiers: Modifiers) -> Box<PhotocraftApp> {
     crate::canvas::testing::key(&mut app, k, modifiers);
     app
 }
 
-fn command_period(app: PhotocraftApp) -> PhotocraftApp {
+fn command_period(app: Box<PhotocraftApp>) -> Box<PhotocraftApp> {
     press(app, egui::Key::Period, Modifiers::COMMAND)
 }
 
