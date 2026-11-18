@@ -252,6 +252,30 @@ fn range_order(layers: &[Layer], include_collapsed: bool, out: &mut Vec<LayerId>
 }
 
 /// `layer.select`: `{"layer": id, "mode": "replace|toggle|range|add|remove"}`.
+/// `layer.select {"layers": [id…]}`: exactly these layers, the last one active (the Layers panel's
+/// Shift-click and Shift+arrow range, which the panel computes from what it shows). The anchor stays
+/// when it is in the set.
+fn select_set(s: &mut Session, list: &Value) -> Result<Value> {
+    let Some(items) = list.as_array().filter(|a| !a.is_empty() && a.len() <= 10_000) else {
+        return Err(bad("layer.select", format!("`layers` is a non-empty list of layer ids, got {list}")));
+    };
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let mut ids = Vec::with_capacity(items.len());
+    for v in items {
+        let id = v.as_u64().map(LayerId).ok_or_else(|| bad("layer.select", format!("`layers` holds layer ids, got {v}")))?;
+        if st.doc.layer(id).is_none() {
+            return Err(EngineError::NoLayer(id));
+        }
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    let active = ids.last().copied();
+    let anchor = st.layer_anchor.filter(|a| ids.contains(a)).or(ids.first().copied());
+    set_selection(s, ids, active, anchor)?;
+    Ok(json!({"selected": selected(s).iter().map(|l| l.0).collect::<Vec<_>>()}))
+}
+
 pub fn select(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(selector @ Value::Object(fields)) = p.get("layer")
         && (fields.contains_key("index") || fields.contains_key("ordinal"))
@@ -266,6 +290,9 @@ pub fn select(s: &mut Session, p: &Value) -> Result<Value> {
         }
         // A group-end index leaves the active layer, anchor and full selection unchanged.
         return Ok(json!({"selected": selected(s).iter().map(|id| id.0).collect::<Vec<_>>()}));
+    }
+    if let Some(list) = p.get("layers") {
+        return select_set(s, list);
     }
     let id = selection_target(s, p)?;
     let mode = p.get("mode").and_then(Value::as_str).unwrap_or("replace");

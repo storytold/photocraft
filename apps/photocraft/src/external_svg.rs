@@ -1159,7 +1159,7 @@ mod native {
         #[test]
         fn missing_editor_errors_name_the_dialog_option() {
             let dialog = include_str!("../../../crates/ui-egui/src/smart_svg_ui.rs");
-            assert!(dialog.contains(&format!("(Editor::Program, \"{OTHER_APPLICATION}\")")), "the dialog label changed");
+            assert!(dialog.contains(&format!("(Editor::Program, \"program\", \"{OTHER_APPLICATION}\")")), "the dialog label changed");
             let source = include_str!("external_svg.rs");
             assert!(!source.contains(concat!("Other ", "editor")), "errors must name the dialog's option");
             #[cfg(target_os = "linux")]

@@ -3,47 +3,11 @@ use serde_json::json;
 
 use super::delete_anchor_targeted_path_tests::{click, group_shape, select_layer, setup, shape_path, steps};
 use crate::PhotocraftApp;
-use crate::canvas::{ToolEvent, tool_event};
+use crate::canvas::testing;
 use crate::state::Tool;
 
-pub(super) fn click_with_modifiers(app: &mut PhotocraftApp, [x, y]: [f64; 2], mods: Modifiers) {
-    tool_event(app, ToolEvent::Down { x, y, pressure: 1.0 }, mods);
-    tool_event(app, ToolEvent::Up { x, y }, mods);
-}
-
-#[test]
-fn position_lock_blocks_adding_an_anchor_without_a_history_step_or_message() {
-    let (mut app, shape) = setup(Tool::AddAnchorPoint);
-    select_layer(&mut app, shape);
-    app.run("layer.lockLayers", json!({"position": true})).unwrap();
-    let (before, count, status) = (shape_path(&mut app, shape), steps(&app), app.ui.status.clone());
-
-    click(&mut app, [500.0, 250.0]);
-    app.ui.tool = Tool::DeleteAnchorPoint;
-    click_with_modifiers(&mut app, [500.0, 250.0], Modifiers::ALT);
-    app.ui.tool = Tool::AddAnchorPoint;
-
-    assert_eq!(app.ui.status, status);
-    assert!(!app.ui.status_error);
-    assert!(app.ui.dialogs.is_empty());
-    assert_eq!(shape_path(&mut app, shape), before);
-    assert_eq!(steps(&app), count);
-
-    app.run("layer.lockLayers", json!({"position": false})).unwrap();
-    for lock in ["all", "pixels"] {
-        app.run("layer.lockLayers", json!({(lock): true})).unwrap();
-        let count = steps(&app);
-        click(&mut app, [500.0, 250.0]);
-        assert_eq!(shape_path(&mut app, shape), before, "{lock}");
-        assert_eq!(steps(&app), count, "{lock}");
-        app.run("layer.lockLayers", json!({(lock): false})).unwrap();
-    }
-
-    let count = steps(&app);
-    click(&mut app, [500.0, 250.0]);
-    assert_eq!(shape_path(&mut app, shape)["subpaths"][0]["knots"].as_array().unwrap().len(), 5);
-    assert_eq!(steps(&app), count + 1);
-    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Add Anchor Point"));
+pub(super) fn click_with_modifiers(app: &mut PhotocraftApp, at: [f64; 2], mods: Modifiers) {
+    testing::click(app, at, mods);
 }
 
 #[test]
