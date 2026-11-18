@@ -25,6 +25,7 @@ fn answered_capacity() -> Option<u64> {
 
 #[test]
 fn scratch_capacity_follows_spilling_the_size_limit_and_pauses() {
+    let _scratch = crate::lock(&crate::SCRATCH);
     let root = std::env::temp_dir().join(format!("photocraft-scratch-capacity-{}", std::process::id()));
     let dir = root.join("scratch");
 

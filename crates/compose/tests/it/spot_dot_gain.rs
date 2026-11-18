@@ -1,6 +1,6 @@
 //! Edit › Color Settings › Spot drives the ink preview of Multichannel documents and the saved
-//! thumbnail. The setting is process-wide (`multichannel::set_spot_dot_gain`), so this test has its
-//! own binary, and it is one test: changing it here can't race other tests that render inks.
+//! thumbnail. The setting is process-wide (`multichannel::set_spot_dot_gain`), so this test needs its
+//! own process (nextest runs every test in one): changing it can't race other tests that render inks.
 
 use photocraft_color::{Color, ColorMode, PixelFormat, SampleType};
 use photocraft_compose::multichannel::{SPOT_DOT_GAIN, dot_gain, set_spot_dot_gain, spot_dot_gain};

@@ -14,8 +14,8 @@ fn finish_args(manifest: &str) -> Vec<&str> {
 #[test]
 fn flatpak_update_permissions() {
     let manifests = [
-        include_str!("../../../packaging/linux/flatpak/ai.storyteller.photocraft.bundle.yml"),
-        include_str!("../../../packaging/linux/flatpak/ai.storyteller.photocraft.yml"),
+        include_str!("../../../../packaging/linux/flatpak/ai.storyteller.photocraft.bundle.yml"),
+        include_str!("../../../../packaging/linux/flatpak/ai.storyteller.photocraft.yml"),
     ];
     let args = manifests.map(finish_args);
     assert_eq!(args[0], args[1], "source and release permissions must agree");

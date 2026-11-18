@@ -44,6 +44,7 @@ fn check(s: &Surface, seed: u32, n: i32) {
 
 #[test]
 fn full_or_missing_scratch_disk_pauses_and_recovers() {
+    let _scratch = crate::lock(&crate::SCRATCH);
     let root = std::env::temp_dir().join(format!("photocraft-scratch-recovery-{}", std::process::id()));
     let dir = root.join("scratch");
     let budget = 8 * TILE_BYTES;

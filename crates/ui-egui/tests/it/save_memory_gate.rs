@@ -1,18 +1,14 @@
 //! A save that won't fit in memory is refused before any encoding starts, with a message that
-//! says how to free memory; the document stays open and unsaved (#10024). Its own test binary:
-//! the memory simulation is process-wide.
+//! says how to free memory; the document stays open and unsaved (#10024). The memory
+//! simulation is process-wide, so the tests take turns.
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::Mutex;
 
 use photocraft_engine::Session;
 use photocraft_raster::headroom;
 use photocraft_ui_egui::{PhotocraftApp, Services};
 use serde_json::json;
-
-/// The simulation is process-wide: the tests take turns.
-static LOCK: Mutex<()> = Mutex::new(());
 
 fn app(writes: Rc<RefCell<u32>>) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(
@@ -40,7 +36,7 @@ fn identity(app: &PhotocraftApp) -> (String, Option<String>, u64, u64) {
 
 #[test]
 fn a_save_that_does_not_fit_fails_and_leaves_the_document_unsaved() {
-    let _turn = LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _turn = crate::lock(&crate::HEADROOM);
     let writes = Rc::new(RefCell::new(0));
     let mut app = app(writes.clone());
     let before = identity(&app);
@@ -67,7 +63,7 @@ fn warnings(app: &PhotocraftApp) -> usize {
 /// higher threshold takes it down and arms the next warning.
 #[test]
 fn the_low_memory_warning_posts_once_and_rearms_with_hysteresis() {
-    let _turn = LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _turn = crate::lock(&crate::HEADROOM);
     use photocraft_ui_egui::memory_warning::{REARM_ABOVE, WARN_BELOW, tick};
     let mut app = app(Rc::new(RefCell::new(0)));
     let mut now = 0.0;
@@ -99,7 +95,7 @@ fn the_low_memory_warning_posts_once_and_rearms_with_hysteresis() {
 
 #[test]
 fn no_warning_without_a_document() {
-    let _turn = LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _turn = crate::lock(&crate::HEADROOM);
     let mut app = PhotocraftApp::new(Session::new(), Services::default());
     headroom::simulate_available(Some(0));
     photocraft_ui_egui::memory_warning::tick(&mut app, 100.0);
