@@ -117,7 +117,7 @@ impl StackDialog for ApplyDataSetDialog {
         let mut toggle = false;
         let shown = FormDialog::new(label(tl!("Apply Data Set")), Bind::bound(selected))
             .ok_label(label(tl!("Apply")))
-            .side_buttons(true)
+            .button_place(craft::ui::dialog::ButtonPlace::Side)
             // Holding Alt keeps Cancel: the dialog has nothing to reset.
             .alt_resets(false)
             .preview(Some(Bind::bound(&mut *preview)))
