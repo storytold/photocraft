@@ -1117,55 +1117,70 @@ fn addressed_mask_app(mode: ColorMode, depth: SampleType, filter: bool) -> (Box<
 
 /// Named/id mask Actions show, sample, preview and edit the addressed layer's own mask without
 /// switching the selected layer. The matrix includes native raster and Smart Filter masks.
-#[test]
-fn review_mask_action_context_matches_the_addressed_layer() {
-    for mode in MODES {
-        for depth in DEPTHS {
-            for kind in ["levels", "curves"] {
-                for filter in [false, true] {
-                    let (app, layer) = addressed_mask_app(mode, depth, filter);
-                    for selector in [json!(layer.0), json!("Receiver"), json!({"name":"Receiver"})] {
-                        let mut app = fixture_for_addressed_replay(&app);
-                        let command = format!("image.adjustments.{kind}");
-                        let target = if filter { "filterMask" } else { "mask" };
-                        let raw = json!({"layer":selector,"target":target});
-                        add_action(&mut app, "Other mask", command.clone(), raw, true);
-                        let original = app.session.active().unwrap().doc.clone();
-                        let active = app.session.active().unwrap().active_layer;
-                        let expected =
-                            photocraft_engine::mask_view_cmds::viewed_mask(original.layer(layer).unwrap(), filter).unwrap().surface.sample_channel(8, 8, 0);
-                        let mut h = canvas_harness(app);
-                        play(&mut h, "Other mask");
-                        assert_eq!(names(&h), [if filter { "Receiver Filter Mask" } else { "Receiver Mask" }]);
-                        let id = top(&h);
-                        arm(&mut h, "white");
-                        sample_at(&mut h, 4.0, 4.0);
-                        let p = params(&h);
-                        let want = photocraft_engine::adjust_params::adjustment_eyedropper(
-                            kind,
-                            &json!({}),
-                            photocraft_engine::adjust_params::CurvesEyedropper::White,
-                            [expected; 3],
-                            ColorMode::Grayscale,
-                        )
-                        .unwrap();
-                        let got = photocraft_engine::adjust_params::from_params(kind, &p, None, ColorMode::Grayscale).unwrap();
-                        assert_eq!(got, want, "{mode:?} {depth:?} {kind} {target}");
-                        let preview = filter_dialog::preview_document(&original, active, &command, &p, 1).unwrap();
-                        confirm(&mut h, id).unwrap();
-                        let doc = &h.state().session.active().unwrap().doc;
-                        assert_eq!(doc.layers, preview.layers);
-                        assert_eq!(doc.layers[0], original.layers[0]);
-                        assert_eq!(doc.channels, original.channels);
-                        assert!(
-                            photocraft_engine::mask_view_cmds::viewed_mask(doc.layer(layer).unwrap(), filter).unwrap().surface.sample_channel(8, 8, 0) > 0.99
-                        );
-                        assert_eq!(h.state().session.active().unwrap().active_layer, active);
-                    }
+fn review_mask_action_context_matches_the_addressed_layer_for(mode: ColorMode) {
+    for depth in DEPTHS {
+        for kind in ["levels", "curves"] {
+            for filter in [false, true] {
+                let (app, layer) = addressed_mask_app(mode, depth, filter);
+                for selector in [json!(layer.0), json!("Receiver"), json!({"name":"Receiver"})] {
+                    let mut app = fixture_for_addressed_replay(&app);
+                    let command = format!("image.adjustments.{kind}");
+                    let target = if filter { "filterMask" } else { "mask" };
+                    let raw = json!({"layer":selector,"target":target});
+                    add_action(&mut app, "Other mask", command.clone(), raw, true);
+                    let original = app.session.active().unwrap().doc.clone();
+                    let active = app.session.active().unwrap().active_layer;
+                    let expected =
+                        photocraft_engine::mask_view_cmds::viewed_mask(original.layer(layer).unwrap(), filter).unwrap().surface.sample_channel(8, 8, 0);
+                    let mut h = canvas_harness(app);
+                    play(&mut h, "Other mask");
+                    assert_eq!(names(&h), [if filter { "Receiver Filter Mask" } else { "Receiver Mask" }]);
+                    let id = top(&h);
+                    arm(&mut h, "white");
+                    sample_at(&mut h, 4.0, 4.0);
+                    let p = params(&h);
+                    let want = photocraft_engine::adjust_params::adjustment_eyedropper(
+                        kind,
+                        &json!({}),
+                        photocraft_engine::adjust_params::CurvesEyedropper::White,
+                        [expected; 3],
+                        ColorMode::Grayscale,
+                    )
+                    .unwrap();
+                    let got = photocraft_engine::adjust_params::from_params(kind, &p, None, ColorMode::Grayscale).unwrap();
+                    assert_eq!(got, want, "{mode:?} {depth:?} {kind} {target}");
+                    let preview = filter_dialog::preview_document(&original, active, &command, &p, 1).unwrap();
+                    confirm(&mut h, id).unwrap();
+                    let doc = &h.state().session.active().unwrap().doc;
+                    assert_eq!(doc.layers, preview.layers);
+                    assert_eq!(doc.layers[0], original.layers[0]);
+                    assert_eq!(doc.channels, original.channels);
+                    assert!(
+                        photocraft_engine::mask_view_cmds::viewed_mask(doc.layer(layer).unwrap(), filter).unwrap().surface.sample_channel(8, 8, 0) > 0.99
+                    );
+                    assert_eq!(h.state().session.active().unwrap().active_layer, active);
                 }
             }
         }
     }
+}
+
+/// The addressed-mask Action matrix for one document colour mode.
+#[test]
+fn review_mask_action_context_matches_the_addressed_layer_rgb() {
+    review_mask_action_context_matches_the_addressed_layer_for(ColorMode::Rgb);
+}
+
+/// The addressed-mask Action matrix for one document colour mode.
+#[test]
+fn review_mask_action_context_matches_the_addressed_layer_cmyk() {
+    review_mask_action_context_matches_the_addressed_layer_for(ColorMode::Cmyk);
+}
+
+/// The addressed-mask Action matrix for one document colour mode.
+#[test]
+fn review_mask_action_context_matches_the_addressed_layer_lab() {
+    review_mask_action_context_matches_the_addressed_layer_for(ColorMode::Lab);
 }
 
 /// Copy the source document for independent Action cases without carrying modal/UI history.
