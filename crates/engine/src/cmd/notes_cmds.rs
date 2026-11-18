@@ -22,14 +22,33 @@ fn has_notes(s: &Session) -> std::result::Result<(), String> {
     if s.active().is_some_and(|d| !d.doc.notes.is_empty()) { Ok(()) } else { Err("the document has no notes".into()) }
 }
 
-/// PDF-style date (`D:YYYYMMDDhhmmssZ`) as Photoshop stores in notes; empty without a clock.
+/// Photoshop's default note colour (#11795): RGB 255, 255, 131 (stored as 16-bit 0x8383 blue).
+pub const DEFAULT_NOTE_COLOR: [f32; 3] = [1.0, 1.0, 131.0 / 255.0];
+
+/// The PDF date (`D:YYYYMMDDHHMMSS+HH'mm'`) Photoshop stores in a note: local time with its
+/// offset from UTC (#11795), through chrono. Empty without a clock (the web build).
 fn pdf_date() -> String {
-    let iso = crate::analysis_cmds::now_iso();
-    if iso.len() < 19 {
-        return String::new();
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let now = chrono::Local::now();
+        pdf_date_at(&now.with_timezone(now.offset()))
     }
-    let digits: String = iso[..19].chars().filter(char::is_ascii_digit).collect();
-    format!("D:{digits}Z")
+    #[cfg(target_arch = "wasm32")]
+    {
+        String::new()
+    }
+}
+
+/// [`pdf_date`] for the moment `at`: its own wall-clock time and UTC offset.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub(crate) fn pdf_date_at<Tz: chrono::TimeZone>(at: &chrono::DateTime<Tz>) -> String
+where
+    Tz::Offset: std::fmt::Display,
+{
+    use chrono::Offset;
+    let off = at.offset().fix().local_minus_utc();
+    let (sign, off) = if off < 0 { ('-', -off) } else { ('+', off) };
+    format!("D:{}{sign}{:02}'{:02}'", at.format("%Y%m%d%H%M%S"), off / 3600, off % 3600 / 60)
 }
 
 pub fn note_json(i: usize, n: &Note) -> Value {
@@ -44,7 +63,8 @@ fn color_of(cmd: &str, p: &Value) -> Result<Option<Color>> {
     if p.get("color").is_none() {
         return Ok(None);
     }
-    let c = crate::commands::color_param(cmd, p, "color", [1.0, 1.0, 0.51, 1.0])?;
+    let [r, g, b] = DEFAULT_NOTE_COLOR;
+    let c = crate::commands::color_param(cmd, p, "color", [r, g, b, 1.0])?;
     Ok(Some(Color::rgb(c[0], c[1], c[2])))
 }
 
@@ -65,10 +85,11 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
         author: p.get("author").and_then(Value::as_str).unwrap_or("").to_string(),
         text: p.get("text").and_then(Value::as_str).unwrap_or("").to_string(),
         position: [x, y],
-        popup: [x + 20.0, y + 20.0, x + 260.0, y + 160.0],
+        // Photoshop's popup: 240 × 140, at the icon's top-left + (8, 10) (#11795).
+        popup: [x + 8.0, y + 10.0, x + 248.0, y + 150.0],
+        color: Color::rgb(DEFAULT_NOTE_COLOR[0], DEFAULT_NOTE_COLOR[1], DEFAULT_NOTE_COLOR[2]),
         open: p.get("open").and_then(Value::as_bool).unwrap_or(true),
         modified: pdf_date(),
-        ..Default::default()
     };
     if let Some(c) = color_of(CMD, p)? {
         n.color = c;
@@ -131,7 +152,8 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
 fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     if p.get("all").and_then(Value::as_bool) == Some(true) {
         let n = s.active().map_or(0, |d| d.doc.notes.len());
-        s.edit("Delete All Notes", |d, _| {
+        // Photoshop's name for the step, with a lower-case "all" (#11791).
+        s.edit("Delete all Notes", |d, _| {
             d.notes.clear();
             Ok(())
         })?;
@@ -168,11 +190,28 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
     import_notes_from(s, &name, &bytes)
 }
 
+/// Photoshop's alert when a source gives no notes: one without any, or one it cannot read as a
+/// notes source (#13915).
+pub const NO_NOTES_IMPORTED: &str = "No notes were imported.";
+
+/// The error for a source the import could not read. A memory refusal says what the user can do
+/// about it and keeps its own (typed) message; anything else (not an image, damaged, truncated)
+/// gave no notes (#13915).
+fn source_error(name: &str, error: photocraft_io::IoError) -> EngineError {
+    use photocraft_io::IoError;
+    match error {
+        IoError::OutOfMemory(_) | IoError::PsdApprovalRequired { .. } | IoError::PsdImportBudget { .. } => crate::error::io_open_error(name, error),
+        _ => EngineError::Other(NO_NOTES_IMPORTED.into()),
+    }
+}
+
 /// File › Import › Notes… from file bytes (what a file picker returns).
 pub fn import_notes_from(s: &mut Session, name: &str, bytes: &[u8]) -> Result<Value> {
-    let src = crate::file_cmds::import(name, bytes)?;
+    // The steps of `file_cmds::import`, with the io error still typed for `source_error`.
+    crate::allocation::checkpoint("importing document")?;
+    let src = photocraft_io::import_for_open(name, bytes, &photocraft_io::ImportOptions::default()).map_err(|e| source_error(name, e))?.0.document;
     if src.notes.is_empty() {
-        return Err(EngineError::Other(format!("{name} has no notes")));
+        return Err(EngineError::Other(NO_NOTES_IMPORTED.into()));
     }
     let d = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
     let (w, h) = (f64::from(d.size.width), f64::from(d.size.height));
@@ -249,6 +288,10 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 #[cfg(test)]
+#[path = "notes_import_message_tests.rs"]
+mod notes_import_message_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -270,7 +313,8 @@ mod tests {
         let d = s.active().unwrap().doc.clone();
         assert_eq!(d.notes[0].text, "fixed");
         assert_eq!(d.notes[0].position, [20.0, 12.0]);
-        assert_eq!(d.notes[0].popup[0], 40.0);
+        // The popup travels with its icon: 20 + 8 (#11795).
+        assert_eq!(d.notes[0].popup[0], 28.0);
         // Unchanged edits don't add history.
         let before = s.active().unwrap().history.past_len();
         assert_eq!(s.execute("notes.set", json!({"index": 0, "text": "fixed"})).unwrap()["changed"], false);

@@ -21,7 +21,10 @@ use photocraft_engine::display_color::CanvasDisplay;
 use photocraft_geom::Rect as DRect;
 
 use super::textures::texture_buffer;
-use super::{ViewXform, canvas_display, damage_since, display_doc, effect_reach, texture_key, visible_doc_rect};
+use craft::behavior::CanvasView;
+
+use super::display::{LiveProposal, display_doc_live};
+use super::{canvas_display, damage_since, effect_reach, texture_key, visible_doc_rect};
 use crate::PhotocraftApp;
 
 /// Document pixels per page side at the page's reduction.
@@ -604,21 +607,23 @@ fn render(
 
 /// Draw document `idx` from viewport pages when its texture set doesn't fit the GPU canvas
 /// budget: true when the view should paint [`stream_key`] with the GPU canvas.
-pub(super) fn show(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, xf: &ViewXform, zoom: f32) -> bool {
+pub(super) fn show(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, view: &CanvasView, zoom: f32, live: LiveProposal<'_>) -> bool {
     let Some(gpu) = app.gpu.clone() else { return false };
     if app.ui.view.pattern_preview || gpu.fault().is_some() {
         return false;
     }
-    let Some((revision, last_damage, id, size)) = app
-        .session
-        .documents()
-        .get(idx)
-        .map(|st| (st.revision, st.last_damage.map(|r| if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) }), st.doc.id, st.doc.size))
-    else {
+    let Some((revision, last_damage, id, size)) = app.session.documents().get(idx).map(|st| {
+        (
+            st.revision,
+            (st.damage_from(), st.last_damage.map(|r| if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) })),
+            st.doc.id,
+            st.doc.size,
+        )
+    }) else {
         return false;
     };
     let size = [size.width, size.height];
-    let (doc, raw_key) = display_doc(app, idx);
+    let (doc, raw_key) = display_doc_live(app, idx, live);
     // A size-changing preview draws as main does; a document that fits keeps its texture set.
     if [doc.size.width, doc.size.height] != size || gpu.fits_canvas(&doc) {
         if let Some(s) = app.streams.remove(&id) {
@@ -643,7 +648,7 @@ pub(super) fn show(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, xf:
         return false;
     }
     let (display, _) = canvas_display(app, &doc, None);
-    let display_key = texture_key(display.as_deref());
+    let display_key = texture_key(display.as_deref(), &doc);
     let now = Identity { revision, preview: raw_key, display: display_key, size };
     let seen = app.streams.get(&id).and_then(|s| s.seen);
     if seen != Some(now) {
@@ -652,7 +657,7 @@ pub(super) fn show(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, xf:
             .and_then(|s| damage_since(app, idx, (s.revision, s.preview ^ display_key), (revision, raw_key), display_key, last_damage));
         app.streams.entry(id).or_default().invalidate(now, damage);
     }
-    let wanted = pages(size, visible_doc_rect(xf), zoom, max_pages);
+    let wanted = pages(size, visible_doc_rect(view), zoom, max_pages);
     if gpu.texture_info(id.0).is_some() {
         // Switching from the texture set: free it, the pages are budgeted against that memory.
         gpu.release_texture_set(id.0);

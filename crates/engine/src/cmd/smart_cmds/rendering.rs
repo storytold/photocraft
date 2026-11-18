@@ -129,7 +129,7 @@ pub fn apply_smart_filters(placed: &Surface, sm: &SmartObject, canvas: Rect) -> 
     // Edge pixels repeat at the canvas ∪ placed-content edge, as for layer filters.
     let extent = canvas.union(&placed.content_bounds());
     for f in sm.smart_filters.iter().filter(|f| f.visible) {
-        cur = apply_smart_filter(f, &cur, filter_bounds(f, placed, canvas), extent, &JobCtx::new())?;
+        cur = apply_smart_filter(f, sm, &cur, filter_bounds(f, placed, canvas), extent, &JobCtx::new())?;
     }
     Ok(match sm.filter_mask.as_ref().filter(|m| m.enabled) {
         Some(m) => photocraft_compose::filter_mask::mix(placed, &cur, m),
@@ -155,8 +155,17 @@ fn renders_in_object(f: &SmartFilter) -> bool {
 /// One visible smart filter over `cur`, blended with its blend mode and opacity. `Err` when the
 /// requesting session's authority denies the filter's params: callers surface the error instead of
 /// rendering (and caching) unfiltered pixels.
-fn apply_smart_filter(f: &SmartFilter, cur: &Surface, canvas: Rect, extent: Rect, ctx: &JobCtx) -> Result<Surface> {
-    let out = match crate::filters::apply_filter_to_surface_in(&f.command, &f.params, cur, canvas, None, extent, ctx)? {
+fn apply_smart_filter(f: &SmartFilter, sm: &SmartObject, cur: &Surface, canvas: Rect, extent: Rect, ctx: &JobCtx) -> Result<Surface> {
+    // Equalize bypasses `apply_filter_to_surface_in` (the gate there), so check the command first.
+    crate::jobs::authorize_render_command(&f.command, &f.params)?;
+    let params = crate::distort_cmds::placed_puppet_params(&f.command, &f.params, sm);
+    let rendered = if f.command == "image.adjustments.equalize" {
+        ctx.check()?;
+        crate::adjust_cmds::adjust_as_filter("equalize", &params, cur, sm.filter_mask.as_ref())?
+    } else {
+        crate::filters::apply_filter_to_surface_in(&f.command, &params, cur, canvas, None, extent, ctx)?
+    };
+    let out = match rendered {
         // Unknown ids (e.g. Photoshop filters we don't implement) leave the pixels alone.
         Some(out) => out,
         None => cur.clone(),
@@ -166,12 +175,16 @@ fn apply_smart_filter(f: &SmartFilter, cur: &Surface, canvas: Rect, extent: Rect
 
 /// The source placed in document pixels, before any smart filter.
 pub(super) fn place(name: &str, bytes: &[u8], doc: &Document, sm: &SmartObject) -> Result<Surface> {
+    place_with_svg(name, bytes, doc, sm, &mut |bytes, scale| svg_source_image_in(bytes, doc, scale))
+}
+
+fn place_with_svg(name: &str, bytes: &[u8], doc: &Document, sm: &SmartObject, svg: &mut impl FnMut(&[u8], f64) -> Result<SourceImage>) -> Result<Surface> {
     let fmt = doc.pixel_format();
     // A vector source is rendered at the placement's scale, and the placement is divided by
     // that scale so the rendered pixels land where the source units would.
     if sm.stack_mode.is_none() && sm.warp.is_none() && photocraft_io::svg::is_svg(bytes) {
         let k = vector_scale(sm);
-        let img = svg_source_image_in(bytes, doc, k)?;
+        let img = svg(bytes, k)?;
         return Ok(match &sm.perspective {
             Some(p) => {
                 let [h0, h1, h2, h3, h4, h5, h6, h7, h8] = *p;
@@ -189,7 +202,7 @@ pub(super) fn place(name: &str, bytes: &[u8], doc: &Document, sm: &SmartObject) 
     }
     let img = match sm.stack_mode {
         Some(mode) if photocraft_io::svg::is_svg(bytes) => convert_svg_source(stack_image(name, bytes, PixelFormat::RGBA32F, mode)?, doc)?,
-        None if photocraft_io::svg::is_svg(bytes) => svg_source_image_in(bytes, doc, 1.0)?,
+        None if photocraft_io::svg::is_svg(bytes) => svg(bytes, 1.0)?,
         Some(mode) => stack_image(name, bytes, fmt, mode)?,
         None => source_image(name, bytes, fmt)?,
     };
@@ -310,6 +323,33 @@ pub fn render(doc: &Document, sm: &SmartObject) -> Result<Option<Surface>> {
     render_in(doc, sm, &JobCtx::new())
 }
 
+/// Command-only rendering that retains usable SVG artwork and reports omitted embedded images.
+/// It deliberately bypasses both source and filter-stage caches: a later warningless render
+/// must not accidentally reuse an incomplete surface. Native previews remain strict.
+pub(crate) fn render_with_warnings(doc: &Document, sm: &SmartObject) -> Result<(Option<Surface>, Vec<String>)> {
+    let Some((name, bytes)) = source_bytes(&doc.metadata, &sm.source) else { return Ok((None, Vec::new())) };
+    if !photocraft_io::svg::is_svg(&bytes) || sm.vector_preview.is_some() || sm.stack_mode.is_some() {
+        return render(doc, sm).map(|surface| (surface, Vec::new()));
+    }
+    if !unapplied_filters(sm).is_empty() {
+        return Err(other("the smart object has unsupported visible filters"));
+    }
+    let mut warnings = Vec::new();
+    let placed = place_with_svg(&name, &bytes, doc, sm, &mut |bytes, scale| {
+        let (buf, omitted) = photocraft_io::svg::rasterize_bounded_with_warnings(bytes, scale as f32, 24_000_000)
+            .map_err(|e| other(format!("can't render the SVG smart object: {e}")))?;
+        warnings.extend(omitted);
+        // Preserve the normal renderer's exact built-in sRGB fast path.
+        let profile = crate::color_cmds::document_profile(doc);
+        if doc.mode == photocraft_color::ColorMode::Rgb && profile.to_bytes().as_ref() == craft_cms::Builtin::Srgb.profile().to_bytes().as_ref() {
+            return Ok(SourceImage { surface: Arc::new(super::source::buffer_to_surface(&buf, doc.pixel_format())), bounds: buf.rect });
+        }
+        let source = SourceImage { surface: Arc::new(super::source::buffer_to_surface(&buf, PixelFormat::RGBA32F)), bounds: buf.rect };
+        convert_svg_source(source, doc)
+    })?;
+    Ok((Some(apply_smart_filters(&placed, sm, doc.bounds())?), warnings))
+}
+
 /// [`render`], reporting progress per smart filter to `ctx` and stopping between filters once it
 /// is cancelled. Gives the same pixels as [`apply_smart_filters`] on the placed source, but
 /// starts from the deepest stage of the stack already rendered (see [`stack_cache`]).
@@ -346,7 +386,7 @@ pub(super) fn render_in(doc: &Document, sm: &SmartObject, ctx: &JobCtx) -> Resul
     let keys: Vec<StageKey> = filters
         .iter()
         .scan(placed_key, |key, f| {
-            *key = stack_cache::filter_key(key, f);
+            *key = stack_cache::filter_key(key, f, sm.filter_mask.as_ref());
             Some(*key)
         })
         .collect();
@@ -367,7 +407,7 @@ pub(super) fn render_in(doc: &Document, sm: &SmartObject, ctx: &JobCtx) -> Resul
             Some(b) => b,
             None => *object_bounds.insert(filter_bounds(f, &placed()?.surface, canvas)),
         };
-        cur = Stage { surface: apply_smart_filter(f, &cur.surface, bounds, cur.extent, ctx)?, extent: cur.extent };
+        cur = Stage { surface: apply_smart_filter(f, sm, &cur.surface, bounds, cur.extent, ctx)?, extent: cur.extent };
         stack_cache::put(*key, &cur);
     }
     ctx.progress(1.0, "");
