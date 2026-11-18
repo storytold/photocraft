@@ -1,19 +1,25 @@
 //! Artboards to Files' Export Options (#13636): a checkbox below File Type, unticked by default,
-//! that shows an Options group with the chosen file type's settings. Each type keeps its own
-//! settings (shell state in [`OPTS`]); the command gets the flat params of the shown type only
-//! while the checkbox is on, so an export without it writes what it wrote before. Both are
-//! remembered after a successful run, never after a failed one.
+//! that shows an Options section with the chosen file type's settings. Each type keeps its own
+//! settings (its own rows, keyed `<type>.<param>`); the command gets the plain params of the shown
+//! type only while the checkbox is ticked, so an export without it writes what it wrote before.
+//! The checkbox and every type's settings are rows of the form, so they are remembered after a
+//! successful run only, as every remembered row is.
 
-use super::{Map, PhotocraftApp, Value, json};
+use super::{Label, Param, ParamKind, Value, opts};
+use craft::ui::patterns::form_dialogs::DialogFields;
+use craft::ui::value_drag::SliderScale;
+use serde_json::Map;
 
 pub(super) const COMMAND: &str = "file.export.artboardsToFiles";
-/// The checkbox (a field, so it shows in `__order`; the command ignores it).
-pub(super) const CHECKBOX: &str = "exportOptions";
-/// Every type's settings, `{type: {param: value}}`: shell state, never a command parameter.
-pub(super) const OPTS: &str = "__exportOpts";
-/// The params the group sends; the form renders none of them itself.
-pub(super) const PARAMS: [&str; 9] =
-    ["iccProfile", "bmpBits", "tgaBits", "pngInterlaced", "transparency", "tiffCompression", "maximizeCompatibility", "preserveArtboard", "quality"];
+/// The checkbox. The command never gets it.
+const CHECKBOX: &str = "exportOptions";
+/// The settings key of the type whose rows show now, `""` while none does: shell state the rows are shown by, kept
+/// by [`derive`] before each pass, OK and automation write (one `visible_when` condition per row).
+const SHOWN_TYPE: &str = "__exportOptionsType";
+/// Whether the Options section shows (the checkbox is ticked and the type has options).
+const SHOWN: &str = "__exportOptionsShown";
+/// The settings keys of the types with options.
+const KINDS: [&str; 6] = ["psd", "bmp", "tga", "jpg", "tiff", "png"];
 
 /// The settings key of a File Type value (`jpg` and `jpeg` share one, as `tif` and `tiff` do).
 fn kind(format: &str) -> Option<&'static str> {
@@ -23,169 +29,76 @@ fn kind(format: &str) -> Option<&'static str> {
         "jpg" | "jpeg" => "jpg",
         "tif" | "tiff" => "tiff",
         "tga" => "tga",
-        "png" => "png",
+        "png" | "png24" => "png",
         _ => return None,
     })
 }
 
-/// The reference application's defaults for each type.
-fn defaults() -> Value {
-    json!({
-        "psd": {"maximizeCompatibility": true, "preserveArtboard": true, "iccProfile": true},
-        "bmp": {"bmpBits": 24, "iccProfile": true},
-        "tga": {"tgaBits": 24, "iccProfile": true},
-        "jpg": {"quality": 8.0, "iccProfile": true},
-        "tiff": {"tiffCompression": "none", "quality": 8.0, "iccProfile": true},
-        "png": {"transparency": true, "pngInterlaced": false, "iccProfile": true},
-    })
+/// Sets the shell keys the option rows are shown by from the checkbox and the File Type.
+pub(super) fn derive(fields: &mut DialogFields) {
+    let shown = if fields.bool(CHECKBOX) == Some(true) { fields.text("format").and_then(kind) } else { None };
+    fields.set(SHOWN_TYPE, shown.unwrap_or(""));
+    fields.set(SHOWN, shown.is_some());
 }
 
-/// Whether `v` is a valid value for `key` (a hand-edited preferences file may hold anything).
-fn valid(key: &str, v: &Value) -> bool {
-    match key {
-        "bmpBits" | "tgaBits" => v.as_u64().is_some_and(|b| [16, 24, 32].contains(&b)),
-        "tiffCompression" => v.as_str().is_some_and(|c| ["none", "lzw", "zip", "jpeg"].contains(&c)),
-        "quality" => v.as_f64().is_some_and(|q| (0.0..=12.0).contains(&q)),
-        _ => v.is_boolean(),
-    }
+/// The rows below File Type: the checkbox, then each type's settings with the reference application's defaults, shown
+/// only for the chosen type while the checkbox is ticked.
+pub(super) fn rows() -> Vec<Param> {
+    let of = |kind: &str, param: &str, label: &'static str, row: ParamKind| Param::new(format!("{kind}.{param}"), label, row).visible_when(SHOWN_TYPE, kind);
+    let icc = |kind: &str| of(kind, "iccProfile", tl!("Include ICC Profile"), ParamKind::bool(true));
+    let quality = |kind: &str| of(kind, "quality", tl!("Quality"), ParamKind::range(0.0, 12.0, 8.0, SliderScale::Linear)).decimals(1);
+    let depth = |kind: &str, param: &str| {
+        of(kind, param, tl!("Depth"), ParamKind::radio(opts(&[("16", tl!("16bit")), ("24", tl!("24bit")), ("32", tl!("32bit"))]), Some("24".to_owned())))
+    };
+    let compression = opts(&[("none", tl!("None")), ("lzw", tl!("LZW")), ("zip", tl!("ZIP")), ("jpeg", tl!("JPEG"))]);
+    vec![
+        Param::new(CHECKBOX, tl!("Export Options"), ParamKind::bool(false)),
+        Param::section(Label::from(tl!("Options"))).visible_when(SHOWN, true),
+        of("psd", "maximizeCompatibility", tl!("Maximize Compatibility"), ParamKind::bool(true)),
+        of("psd", "preserveArtboard", tl!("Preserve Artboard"), ParamKind::bool(true)),
+        icc("psd"),
+        depth("bmp", "bmpBits"),
+        icc("bmp"),
+        // Targa, for when the File Type list offers it (#13635).
+        depth("tga", "tgaBits"),
+        icc("tga"),
+        quality("jpg"),
+        icc("jpg"),
+        of("tiff", "tiffCompression", tl!("Image Compression"), ParamKind::choice(compression, Some("none".to_owned()))),
+        // The TIFF quality applies to JPEG compression only.
+        quality("tiff").enabled_when("tiff.tiffCompression", "jpeg"),
+        icc("tiff"),
+        of("png", "transparency", tl!("Transparency"), ParamKind::bool(true)),
+        of("png", "pngInterlaced", tl!("Interlaced"), ParamKind::bool(false)),
+        icc("png"),
+    ]
 }
 
-/// The open dialog's fields: the checkbox and every type's settings, the defaults overlaid with
-/// what the last successful run remembered.
-pub(super) fn open_fields(app: &PhotocraftApp) -> (Value, Value) {
-    let mut opts = defaults();
-    let saved = app.session.prefs().dialogs.get(COMMAND).cloned().unwrap_or(Value::Null);
-    if let (Some(all), Some(remembered)) = (opts.as_object_mut(), saved.get("options").and_then(Value::as_object)) {
-        for (kind, settings) in all.iter_mut() {
-            let (Some(settings), Some(from)) = (settings.as_object_mut(), remembered.get(kind).and_then(Value::as_object)) else { continue };
-            for (key, v) in settings.iter_mut() {
-                if let Some(r) = from.get(key).filter(|r| valid(key, r)) {
-                    *v = r.clone();
-                }
-            }
+/// The command params of the form's values `map`: the chosen type's settings under their plain names while the
+/// checkbox is ticked, else none; every type's own row keys and the checkbox go. TIFF sends its quality only with JPEG
+/// compression, and the depths are numbers.
+pub(crate) fn nest(map: &mut Map<String, Value>) {
+    let on = map.remove(CHECKBOX).and_then(|v| v.as_bool()) == Some(true);
+    let chosen = map.get("format").and_then(Value::as_str).and_then(kind).filter(|_| on);
+    let own: Vec<String> = map.keys().filter(|k| k.split_once('.').is_some_and(|(kind, _)| KINDS.contains(&kind))).cloned().collect();
+    let mut settings = Map::new();
+    for key in own {
+        let value = map.remove(&key);
+        if let (Some((kind, param)), Some(value)) = (key.split_once('.'), value)
+            && Some(kind) == chosen
+        {
+            settings.insert(param.to_owned(), value);
         }
     }
-    (json!(saved.get(CHECKBOX).and_then(Value::as_bool).unwrap_or(false)), opts)
-}
-
-/// Inserts the group's fields into a new dialog's `fields`.
-pub(super) fn insert_fields(app: &PhotocraftApp, fields: &mut Value) {
-    let (on, opts) = open_fields(app);
-    if let Some(f) = fields.as_object_mut() {
-        f.insert(CHECKBOX.into(), on);
-        f.insert(OPTS.into(), opts);
-        for p in PARAMS {
-            f.insert(p.into(), Value::Null);
-        }
-    }
-    sync_params(fields.as_object_mut());
-}
-
-/// Remembers the checkbox and every type's settings after a successful run of the dialog.
-pub(crate) fn remember(app: &mut PhotocraftApp, command: &str, fields: &Map<String, Value>) {
-    if command != COMMAND || !fields.contains_key(OPTS) {
-        return;
-    }
-    let saved = json!({CHECKBOX: fields.get(CHECKBOX).and_then(Value::as_bool).unwrap_or(false), "options": fields.get(OPTS).cloned().unwrap_or(Value::Null)});
-    app.session.prefs.edit(|prefs| prefs.dialogs.insert(COMMAND.into(), saved));
-}
-
-/// Writes the flat params for the command: the shown type's settings while the checkbox is on,
-/// else none. TIFF sends its quality only with JPEG compression.
-fn sync_params(f: Option<&mut Map<String, Value>>) {
-    let Some(f) = f else { return };
-    for p in PARAMS {
-        f.insert(p.into(), Value::Null);
-    }
-    if f.get(CHECKBOX).and_then(Value::as_bool) != Some(true) {
-        return;
-    }
-    let Some(kind) = f.get("format").and_then(Value::as_str).and_then(kind) else { return };
-    let Some(settings) = f.get(OPTS).and_then(|o| o.get(kind)).and_then(Value::as_object).cloned() else { return };
+    // The quality comes from the options only.
+    map.remove("quality");
     let jpeg_tiff = settings.get("tiffCompression").and_then(Value::as_str) == Some("jpeg");
-    for (key, v) in settings {
-        if kind == "tiff" && key == "quality" && !jpeg_tiff {
-            continue;
-        }
-        f.insert(key, v);
+    for (param, value) in settings {
+        let value = match param.as_str() {
+            "bmpBits" | "tgaBits" => value.as_str().and_then(|bits| bits.parse::<u64>().ok()).map_or(value, Value::from),
+            "quality" if chosen == Some("tiff") && !jpeg_tiff => continue,
+            _ => value,
+        };
+        map.insert(param, value);
     }
-}
-
-fn get_bool(s: &Map<String, Value>, key: &str) -> bool {
-    s.get(key).and_then(Value::as_bool).unwrap_or(false)
-}
-
-fn checkbox(ui: &mut egui::Ui, s: &mut Map<String, Value>, key: &str, label: &str) {
-    let mut on = get_bool(s, key);
-    crate::widgets::checkbox(ui, &mut on, label);
-    s.insert(key.into(), json!(on));
-}
-
-/// The Quality slider and field, 0-12: a typed value past either end is clamped, fractions are
-/// kept, and text that is no number leaves the value as it was.
-fn quality(ui: &mut egui::Ui, s: &mut Map<String, Value>) {
-    let mut q = s.get("quality").and_then(Value::as_f64).unwrap_or(8.0).clamp(0.0, 12.0) as f32;
-    crate::widgets::slider_line(ui, tl!("Quality"), 70.0, &mut q, 0.0..=12.0, "");
-    s.insert("quality".into(), json!(f64::from(q.clamp(0.0, 12.0))));
-}
-
-/// Depth radios for BMP and Targa.
-fn depth(ui: &mut egui::Ui, s: &mut Map<String, Value>, key: &str) {
-    let mut bits = s.get(key).and_then(Value::as_u64).unwrap_or(24);
-    ui.horizontal(|ui| {
-        ui.label(tl!("Depth:"));
-        for (b, label) in [(16, tl!("16bit")), (24, tl!("24bit")), (32, tl!("32bit"))] {
-            ui.radio_value(&mut bits, b, label);
-        }
-    });
-    s.insert(key.into(), json!(bits));
-}
-
-/// The Export Options checkbox and, while it is ticked, the Options group of the chosen type.
-pub(super) fn group(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
-    let mut on = f.get(CHECKBOX).and_then(Value::as_bool).unwrap_or(false);
-    let kind = f.get("format").and_then(Value::as_str).and_then(kind);
-    ui.vertical(|ui| {
-        crate::widgets::checkbox(ui, &mut on, tl!("Export Options"));
-        let Some(kind) = kind.filter(|_| on) else { return };
-        let Some(Value::Object(all)) = f.get_mut(OPTS) else { return };
-        let Some(Value::Object(s)) = all.get_mut(kind) else { return };
-        ui.label(tl!("Options:"));
-        ui.group(|ui| {
-            ui.set_min_width(300.0);
-            match kind {
-                "psd" => {
-                    checkbox(ui, s, "maximizeCompatibility", tl!("Maximize Compatibility"));
-                    checkbox(ui, s, "preserveArtboard", tl!("Preserve Artboard"));
-                }
-                "bmp" => depth(ui, s, "bmpBits"),
-                "tga" => depth(ui, s, "tgaBits"),
-                "jpg" => quality(ui, s),
-                "tiff" => {
-                    let mut c = s.get("tiffCompression").and_then(Value::as_str).unwrap_or("none").to_string();
-                    let opts = [
-                        ("none".to_string(), tl!("None")),
-                        ("lzw".to_string(), tl!("LZW")),
-                        ("zip".to_string(), tl!("ZIP")),
-                        ("jpeg".to_string(), tl!("JPEG")),
-                    ];
-                    ui.horizontal(|ui| {
-                        ui.label(tl!("Image Compression:"));
-                        crate::widgets::dropdown(ui, "artboards-tiff-compression", tl!("Image Compression"), &mut c, &opts, 120.0);
-                    });
-                    let jpeg = c == "jpeg";
-                    s.insert("tiffCompression".into(), json!(c));
-                    ui.add_enabled_ui(jpeg, |ui| quality(ui, s));
-                }
-                "png" => {
-                    checkbox(ui, s, "transparency", tl!("Transparency"));
-                    checkbox(ui, s, "pngInterlaced", tl!("Interlaced"));
-                }
-                _ => {}
-            }
-            checkbox(ui, s, "iccProfile", tl!("Include ICC Profile"));
-        });
-    });
-    f.insert(CHECKBOX.into(), json!(on));
-    sync_params(Some(f));
 }

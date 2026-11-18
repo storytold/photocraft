@@ -115,9 +115,9 @@ impl Compositor {
         sink: &mut dyn FnMut(&mut wgpu::CommandEncoder, ChunkOut<'_>),
         // The previous intermediate submit, when this refresh may submit in between.
         batch: &mut Option<&mut Option<wgpu::SubmissionIndex>>,
-    ) {
+    ) -> Result<(), Unsupported> {
         if chunks.is_empty() {
-            return;
+            return Ok(());
         }
         // Chunks may hold different checkpoints: bind from the lowest one any of them resumes at.
         let first_pass = checkpoint
@@ -126,7 +126,7 @@ impl Compositor {
         let bound = self.bind_cell(device, queue, encoder, doc, plan, paged, cell, fr, first_pass, stats);
         // A page couldn't be created: draw nothing with the pages missing (the caller ends the refresh).
         if self.layer_alloc.is_some() {
-            return;
+            return Ok(());
         }
 
         // Chunk pool.
@@ -233,7 +233,7 @@ impl Compositor {
                     self.recorded = 0;
                     stats.flushes += 1;
                     if self.fault().is_some() {
-                        return;
+                        return Ok(());
                     }
                 }
                 // Also after resuming from a lower checkpoint: the chunk moves up to this one.
@@ -294,8 +294,9 @@ impl Compositor {
                     }
                     _ => (p.kernel, p.dst),
                 };
-                let target = &self.pool[dst as usize].1;
                 let clear = p.kernel == Kernel::Clear;
+                let pipeline = if clear { None } else { Some(self.kit.pipelines.get(device, kernel, self.acc_format)?) };
+                let target = &self.pool[dst as usize].1;
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("pc_compose_pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -312,10 +313,8 @@ impl Compositor {
                     occlusion_query_set: None,
                     multiview_mask: None,
                 });
-                if clear {
-                    continue;
-                }
-                pass.set_pipeline(&self.kit.pipelines[&(kernel, self.acc_format)]);
+                let Some(pipeline) = pipeline else { continue };
+                pass.set_pipeline(pipeline);
                 pass.set_scissor_rect(scissor.x0 as u32, scissor.y0 as u32, scissor.width(), scissor.height());
                 pass.set_bind_group(0, &bg0, &[(ci as u64 * STRIDE) as u32, (op_base + i as u64 * STRIDE) as u32]);
                 pass.set_bind_group(1, bg1[i].as_ref(), &[]);
@@ -330,6 +329,7 @@ impl Compositor {
             let (t, v) = &self.pool[plan.root as usize];
             sink(encoder, ChunkOut { rect: *c, texture: t, view: v });
         }
+        Ok(())
     }
 
     /// Upload changed tiles of `surface` within `region` (its tile area inside one page cell);
