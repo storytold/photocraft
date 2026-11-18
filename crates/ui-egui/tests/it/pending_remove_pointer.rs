@@ -1,5 +1,7 @@
 //! #7366: a background Remove on a Red-only target keeps G/B/alpha intact when a Type click
-//! selects another layer while the job is pending.
+//! selects another layer while the job is pending. The engine regression covers both target
+//! cases; this complementary fixture proves the real control-input route is reachable before
+//! result application, independently of the full app's wall-clock progress-modal policy.
 
 use photocraft_doc::LayerId;
 use photocraft_engine::Session;
@@ -63,13 +65,8 @@ fn pixels(s: &Session, doc: usize, id: LayerId) -> Vec<f32> {
     d.layer(id).unwrap().surface().unwrap().read_region(d.bounds())
 }
 
-#[derive(Clone, Copy)]
-enum Input {
-    None,
-    ControlPointer,
-}
-
-fn probe(input: Input) {
+#[test]
+fn control_pointer_selects_text_before_remove_result_application() {
     let mut a = Session::new();
     run(&mut a, "file.new", r#"{"name":"A","width":32,"height":24,"background":"transparent"}"#);
     run(&mut a, "type.create", r#"{"text":"X","x":2,"y":18,"size":14}"#);
@@ -114,32 +111,27 @@ fn probe(input: Input) {
         v => panic!("must start a background job: {v:?}"),
     };
     assert!(h.state().session.job(job).is_some(), "the result is pending before selection");
-    match input {
-        Input::None => {}
-        Input::ControlPointer => {
-            let ctx = h.ctx.clone();
-            let (req, _rx) = control::ControlRequest::new("ui.pointer", r#"{"tool":"type","events":[{"kind":"down","x":4,"y":14}]}"#.parse().unwrap());
-            match control::handle(h.state_mut(), &ctx, &req) {
-                control::Reply::Done(reply) => assert_eq!(reply["ok"], true, "the pointer request is accepted: {reply}"),
-                _ => panic!("ui.pointer must reply immediately"),
-            }
-            // The control channel queues input for the canvas; wait for delivery rather than
-            // assuming two passes suffice on every host.
-            let host = craft::ui::runtime::windows::WindowHost::of(&ctx);
-            for _ in 0..8 {
-                if host.injected_idle() {
-                    break;
-                }
-                h.run_steps(1);
-            }
-            let state = state_line(h.state(), job);
-            assert!(host.injected_idle(), "the canvas consumed the queued pointer input; {state}");
-            // `injected_idle` is also true when the step was withdrawn (focus change before its
-            // pass) instead of delivered, so delivery is asserted separately.
-            assert!(!host.take_injected_withdrawn(), "the injected press was delivered, not withdrawn; {state}");
-        }
+    let ctx = h.ctx.clone();
+    let (req, _rx) = control::ControlRequest::new("ui.pointer", r#"{"tool":"type","events":[{"kind":"down","x":4,"y":14}]}"#.parse().unwrap());
+    match control::handle(h.state_mut(), &ctx, &req) {
+        control::Reply::Done(reply) => assert_eq!(reply["ok"], true, "the pointer request is accepted: {reply}"),
+        _ => panic!("ui.pointer must reply immediately"),
     }
-    let selected = if matches!(input, Input::None) { target } else { text };
+    // The control channel queues input for the canvas; wait for delivery rather than
+    // assuming two passes suffice on every host.
+    let host = craft::ui::runtime::windows::WindowHost::of(&ctx);
+    for _ in 0..8 {
+        if host.injected_idle() {
+            break;
+        }
+        h.run_steps(1);
+    }
+    let state = state_line(h.state(), job);
+    assert!(host.injected_idle(), "the canvas consumed the queued pointer input; {state}");
+    // `injected_idle` is also true when the step was withdrawn (focus change before its
+    // pass) instead of delivered, so delivery is asserted separately.
+    assert!(!host.take_injected_withdrawn(), "the injected press was delivered, not withdrawn; {state}");
+    let selected = text;
     assert_eq!(h.state().session.active().unwrap().active_layer, Some(selected), "the input selects the text layer; {}", state_line(h.state(), job));
 
     assert!(h.state().session.job(job).is_some(), "selection happened before result application");
@@ -155,14 +147,3 @@ fn probe(input: Input) {
     assert_eq!(wrong, 0, "pixels with G/B/alpha changed outside the Red target");
     assert_eq!(actual, expected);
 }
-
-#[test]
-fn no_input_keeps_red_restriction() {
-    probe(Input::None);
-}
-
-#[test]
-fn control_pointer_click_keeps_red_restriction() {
-    probe(Input::ControlPointer);
-}
-
