@@ -8,7 +8,41 @@ use photocraft_ui_egui::{PhotocraftApp, Services, control};
 
 const REMOVE: &str = r#"{"points":[[12,10],[16,12]],"size":6}"#;
 
-type Harness = egui_kittest::Harness<'static, Box<PhotocraftApp>>;
+// Drive the real control-input hook and canvas while holding job-result application until
+// after selection. The full app's progress modal intentionally blocks canvas input on slow
+// hosts, and its logic tick may collect the result before the click, so it is not this
+// pending-result regression's fixture.
+struct CanvasApp(Box<PhotocraftApp>);
+
+impl std::ops::Deref for CanvasApp {
+    type Target = PhotocraftApp;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for CanvasApp {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl eframe::App for CanvasApp {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+        eframe::App::raw_input_hook(&mut self.0, ctx, input);
+    }
+
+    fn logic(&mut self, _ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.sync_views();
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        egui::CentralPanel::default().show(ui, |ui| photocraft_ui_egui::canvas::document_area(&mut self.0, ui));
+    }
+}
+
+type Harness = egui_kittest::Harness<'static, CanvasApp>;
 
 fn run(s: &mut Session, id: &str, p: &str) {
     s.execute(id, p.parse().unwrap()).unwrap();
@@ -22,27 +56,6 @@ fn state_line(app: &PhotocraftApp, job: photocraft_engine::jobs::JobId) -> Strin
         app.ui.text_edit.is_some(),
         app.session.job(job).is_none()
     )
-}
-
-// Snapshot only existing public read-only inspection fields, before injection and after each
-// existing pass. No extra frame or wait is introduced: preserve the pending-job regression.
-fn delivery_snapshot(h: &Harness, job: photocraft_engine::jobs::JobId, text: LayerId) -> serde_json::Value {
-    let state = control::inspect(h.state(), &h.ctx);
-    let text_bounds = h.state().session.active().and_then(|d| d.doc.layer(text)).and_then(|layer| {
-        let photocraft_doc::LayerContent::Text(t) = &layer.content else { return None };
-        let r = t.cache.as_ref()?.content_bounds();
-        Some([r.x0, r.y0, r.x1, r.y1])
-    });
-    serde_json::json!({
-        "state": state_line(h.state(), job),
-        "textCacheBounds": text_bounds,
-        "views": state.get("views"),
-        "rects": state.get("rects"),
-        "jobs": state.get("jobs"),
-        "textEdit": state.get("textEdit"),
-        "tool": state.get("tool"),
-        "frame": state.get("frame"),
-    })
 }
 
 fn pixels(s: &Session, doc: usize, id: LayerId) -> Vec<f32> {
@@ -92,19 +105,18 @@ fn probe(input: Input) {
     let mut h = Harness::builder().with_size(egui::vec2(1100.0, 720.0)).with_max_steps(64).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         // The app shares the harness's context, which is where the control channel's pointer input arrives.
-        PhotocraftApp::with_context(cc.egui_ctx.clone(), a, Services::default())
+        CanvasApp(PhotocraftApp::with_context(cc.egui_ctx.clone(), a, Services::default()))
     });
     h.run_steps(4);
 
-    let mut delivery_trace = Vec::new();
     let job = match h.state_mut().session.start("paint.remove", REMOVE.parse().unwrap()).unwrap() {
         Started::Job(id) => id,
         v => panic!("must start a background job: {v:?}"),
     };
+    assert!(h.state().session.job(job).is_some(), "the result is pending before selection");
     match input {
         Input::None => {}
         Input::ControlPointer => {
-            delivery_trace.push(delivery_snapshot(&h, job, text));
             let ctx = h.ctx.clone();
             let (req, _rx) = control::ControlRequest::new("ui.pointer", r#"{"tool":"type","events":[{"kind":"down","x":4,"y":14}]}"#.parse().unwrap());
             match control::handle(h.state_mut(), &ctx, &req) {
@@ -119,9 +131,8 @@ fn probe(input: Input) {
                     break;
                 }
                 h.run_steps(1);
-                delivery_trace.push(delivery_snapshot(&h, job, text));
             }
-            let state = format!("{}; delivery trace {delivery_trace:?}", state_line(h.state(), job));
+            let state = state_line(h.state(), job);
             assert!(host.injected_idle(), "the canvas consumed the queued pointer input; {state}");
             // `injected_idle` is also true when the step was withdrawn (focus change before its
             // pass) instead of delivered, so delivery is asserted separately.
@@ -129,13 +140,9 @@ fn probe(input: Input) {
         }
     }
     let selected = if matches!(input, Input::None) { target } else { text };
-    assert_eq!(
-        h.state().session.active().unwrap().active_layer,
-        Some(selected),
-        "the input selects the text layer; {}; delivery trace {delivery_trace:?}",
-        state_line(h.state(), job)
-    );
+    assert_eq!(h.state().session.active().unwrap().active_layer, Some(selected), "the input selects the text layer; {}", state_line(h.state(), job));
 
+    assert!(h.state().session.job(job).is_some(), "selection happened before result application");
     let a = h.state_mut();
     a.session.set_active(1);
     a.session.wait_job(job).unwrap();
@@ -158,3 +165,4 @@ fn no_input_keeps_red_restriction() {
 fn control_pointer_click_keeps_red_restriction() {
     probe(Input::ControlPointer);
 }
+
