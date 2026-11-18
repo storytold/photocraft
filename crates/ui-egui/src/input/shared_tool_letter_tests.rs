@@ -14,7 +14,7 @@ fn assign(app: &mut PhotocraftApp, key: &str, tools: &[Tool]) {
 }
 
 /// An app whose three lassos share Q, which Quick Mask gave up (what OK in the dialog leaves).
-fn lassos_on_q(shift_switch: bool) -> Harness<'static, PhotocraftApp> {
+fn lassos_on_q(shift_switch: bool) -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("prefs.set", json!({"path": "shortcuts.select.editInQuickMaskMode", "value": ""})).unwrap();
     assign(&mut app, "Q", &[Tool::Lasso, Tool::PolygonLasso, Tool::MagneticLasso]);
