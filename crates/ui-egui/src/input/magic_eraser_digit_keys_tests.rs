@@ -19,7 +19,18 @@ fn press(app: &mut PhotocraftApp, digit: u8, shift: bool, now_ms: f64) {
     let commands = if shift {
         [D::SecondZero, D::SecondOne, D::SecondTwo, D::SecondThree, D::SecondFour, D::SecondFive, D::SecondSix, D::SecondSeven, D::SecondEight, D::SecondNine]
     } else {
-        [D::OpacityZero, D::OpacityOne, D::OpacityTwo, D::OpacityThree, D::OpacityFour, D::OpacityFive, D::OpacitySix, D::OpacitySeven, D::OpacityEight, D::OpacityNine]
+        [
+            D::OpacityZero,
+            D::OpacityOne,
+            D::OpacityTwo,
+            D::OpacityThree,
+            D::OpacityFour,
+            D::OpacityFive,
+            D::OpacitySix,
+            D::OpacitySeven,
+            D::OpacityEight,
+            D::OpacityNine,
+        ]
     };
     let mut fired = crate::blend_keys::test_fired(commands[usize::from(digit)].into());
     fired.time = now_ms / 1000.0;
