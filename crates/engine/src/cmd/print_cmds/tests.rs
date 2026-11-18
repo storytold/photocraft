@@ -1653,6 +1653,12 @@ fn recording_print_settings_refuses_hostile_params() {
         json!({"colorHandling": "photocraftManages", "printerProfile": "coated-cmyk", "intent": "vivid"}),
         json!({"scale": 1e308}),
         json!({"center": false, "top": 1e9}),
+        // Guard pins, added after the port: the duplex and grayscale refusals already existed in
+        // the checker but no case pinned them. They pass before and after this branch; they are
+        // here so a later edit cannot quietly widen what a recorded step may carry.
+        json!({"duplex": "both"}),
+        json!({"grayscale": "yes"}),
+        json!({"duplex": 2}),
     ] {
         let e = s.execute("file.printSettings", p.clone()).unwrap_err();
         assert!(matches!(e, EngineError::BadParams { .. }), "{p} gave {e}");
