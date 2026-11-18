@@ -113,7 +113,7 @@ fn app_switches_to_the_cpu_canvas_and_keeps_the_documents() {
     let flag = started.clone();
     app.on_started(move |_| flag.set(true));
     let mut h = egui_kittest::Harness::builder().with_context(app.ctx().clone()).with_size(egui::vec2(1000.0, 700.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        |ui, app: &mut Box<PhotocraftApp>| {
             let ctx = ui.ctx().clone();
             if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
@@ -260,7 +260,7 @@ fn a_lost_window_device_saves_unsaved_work_for_recovery_and_closes() {
     }));
     // Upload and submit the last frame's shapes the way the window's renderer does each frame: on
     // a lost device, egui-wgpu panics here when there is anything to draw (#1215).
-    let upload = |h: &egui_kittest::Harness<'_, PhotocraftApp>| {
+    let upload = |h: &egui_kittest::Harness<'_, Box<PhotocraftApp>>| {
         let rs = render_state.lock().unwrap().clone().expect("the harness renders with wgpu");
         let output = h.output();
         let jobs = h.ctx.tessellate(output.shapes.clone(), output.pixels_per_point);

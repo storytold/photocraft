@@ -12,7 +12,7 @@ rust-version = "1.95"
 [workspace.dependencies]
 # The craft framework through its facade (`craft::ui::…`). The egui `[patch]` below must match
 # `craft::egui_fork::REV` (checked by `cargo xtask ci`).
-craft = { git = "https://github.com/storytold/craft-libs", rev = "a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9" }
+craft = { git = "https://github.com/storytold/craft-libs", rev = "a6b9d9c986f7c4c399632d72d9a4a8c8ea0b86e9", default-features = false }
 # internal
 photocraft-geom = { path = "crates/geom" }
 photocraft-color = { path = "crates/color" }
@@ -243,16 +243,19 @@ codegen-units = 1
 
 # The browser build (apps/photocraft-web, `data-cargo-profile` in its index.html). Hosts cap the
 # size of a single file (Cloudflare Pages/Workers: 25 MiB), and the wasm is downloaded on every
-# visit, so this profile optimizes for size: fat LTO, opt-level "z" for PhotoCraft's own crates,
+# visit, so this profile optimizes for size: opt-level "z" for PhotoCraft's own crates,
 # "s" for dependencies and for the crates that decode files, and 3 for pixel processing (filters
 # and compositing). Dependencies stay at "s": at "z" the whole wasm grows (by 0.4 MB, measured).
 # panic stays the target default (wasm32-unknown-unknown aborts; AGENTS.md's `panic = "unwind"`
 # is for the native app shell). packaging/web/package.sh fails the build above 24 MiB.
+# Thin LTO over 16 codegen units keeps the link step near 8 GB, inside a 16 GB CI runner (one
+# fat-LTO unit needs about 21 GB); after trunk's wasm-opt -Oz the wasm is within 3% of the
+# fat-LTO size (71.6 MB against 69.7 MB, measured).
 [profile.wasm-release]
 inherits = "release"
 opt-level = "z"
-lto = "fat"
-codegen-units = 1
+lto = "thin"
+codegen-units = 16
 strip = "debuginfo"
 
 [profile.wasm-release.package."*"]

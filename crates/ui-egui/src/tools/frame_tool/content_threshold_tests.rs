@@ -2,7 +2,7 @@
 use super::*;
 use crate::canvas::ToolEvent;
 
-fn candidate(bounds: Rect) -> (PhotocraftApp, LayerId) {
+fn candidate(bounds: Rect) -> (Box<PhotocraftApp>, LayerId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width":600,"height":400})).unwrap();
     let layer = app

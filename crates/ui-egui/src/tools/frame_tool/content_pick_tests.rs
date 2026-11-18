@@ -8,7 +8,7 @@ fn raster(name: &str, bounds: Rect, format: photocraft_color::PixelFormat) -> La
     layer
 }
 
-fn scene() -> (PhotocraftApp, LayerId, LayerId, LayerId) {
+fn scene() -> (Box<PhotocraftApp>, LayerId, LayerId, LayerId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width":600,"height":400})).unwrap();
     let ids = app

@@ -13,7 +13,7 @@ const OLD: &str = "This fill layer must be rasterized before proceeding. Its fil
 
 /// A Solid Color fill layer over a white Background, its content (not its mask) targeted, with
 /// the Paint Bucket.
-fn fill_layer_app() -> PhotocraftApp {
+fn fill_layer_app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 120, "height": 80})).unwrap();
     app.run("layer.newFillLayer.solidColor", json!({"color": "#00ff00"})).unwrap();
