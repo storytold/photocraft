@@ -35,10 +35,11 @@ fn the_patch_tool_lasso_is_named_for_the_tool() {
 /// A Patch tool lasso keeps the selection icon in the History panel.
 #[test]
 fn the_patch_tool_step_has_the_selection_icon() {
-    assert_eq!(crate::panels::history_step_icon("Patch Tool"), crate::panels::history_step_icon("Lasso"));
-    assert_eq!(crate::panels::history_step_icon("Patch Tool"), "square-dashed");
+    let selection = craft::behavior::IconId::new("rect_dashed");
+    assert_eq!(crate::panels::history::step_icon("Patch Tool"), crate::panels::history::step_icon("Lasso"));
+    assert_eq!(crate::panels::history::step_icon("Patch Tool"), selection);
     // Applying the patch edits pixels, so it does not take the selection icon from "Selection".
-    assert_ne!(crate::panels::history_step_icon("Patch Selection"), "square-dashed");
+    assert_ne!(crate::panels::history::step_icon("Patch Selection"), selection);
 }
 
 /// The Content-Aware Move tool's lasso is a History step named "Content-Aware Move Tool" (#12184).
@@ -50,8 +51,8 @@ fn the_content_aware_move_tool_lasso_is_named_for_the_tool() {
 /// A Content-Aware Move tool lasso keeps the selection icon in the History panel.
 #[test]
 fn the_content_aware_move_tool_step_has_the_selection_icon() {
-    assert_eq!(crate::panels::history_step_icon("Content-Aware Move Tool"), "square-dashed");
+    assert_eq!(crate::panels::history::step_icon("Content-Aware Move Tool"), craft::behavior::IconId::new("rect_dashed"));
     // The move or extend itself edits pixels, so it takes the same icon as applying a patch.
-    assert_ne!(crate::panels::history_step_icon("Content-Aware Move Selection"), "square-dashed");
-    assert_eq!(crate::panels::history_step_icon("Content-Aware Move Selection"), crate::panels::history_step_icon("Patch Selection"));
+    assert_ne!(crate::panels::history::step_icon("Content-Aware Move Selection"), craft::behavior::IconId::new("rect_dashed"));
+    assert_eq!(crate::panels::history::step_icon("Content-Aware Move Selection"), crate::panels::history::step_icon("Patch Selection"));
 }

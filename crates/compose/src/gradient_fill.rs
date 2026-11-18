@@ -72,15 +72,17 @@ fn sample_color<const N: usize>(stops: &[(f32, [f32; N])], mids: &[f32], t: f32)
     if t <= first.0 {
         return first.1;
     }
-    for (i, w) in stops.windows(2).enumerate() {
-        let (a, b) = (&w[0], &w[1]);
-        if t <= b.0 {
-            let u = if b.0 > a.0 { (t - a.0) / (b.0 - a.0) } else { 0.0 };
-            let k = midpoint_remap(u, mids.get(i).copied().unwrap_or(0.5));
-            return std::array::from_fn(|c| a.1[c] + (b.1[c] - a.1[c]) * k);
-        }
+    // The stops are sorted: the segment is found by bisection, not a scan per pixel (a
+    // document can carry thousands of stops).
+    let j = stops.partition_point(|s| s.0 < t);
+    // A NaN position leaves `j` at 0 (no stop compares below it): the last stop, as a scan gave.
+    if j >= stops.len() || j == 0 {
+        return last.1;
     }
-    last.1
+    let (a, b) = (&stops[j - 1], &stops[j]);
+    let u = if b.0 > a.0 { (t - a.0) / (b.0 - a.0) } else { 0.0 };
+    let k = midpoint_remap(u, mids.get(j - 1).copied().unwrap_or(0.5));
+    std::array::from_fn(|c| a.1[c] + (b.1[c] - a.1[c]) * k)
 }
 
 fn sample_opacity(stops: &[(f32, f32)], t: f32) -> f32 {
@@ -88,13 +90,13 @@ fn sample_opacity(stops: &[(f32, f32)], t: f32) -> f32 {
     if t <= first.0 {
         return first.1;
     }
-    for w in stops.windows(2) {
-        if t <= w[1].0 {
-            let u = if w[1].0 > w[0].0 { (t - w[0].0) / (w[1].0 - w[0].0) } else { 0.0 };
-            return w[0].1 + (w[1].1 - w[0].1) * u;
-        }
+    let j = stops.partition_point(|s| s.0 < t);
+    if j >= stops.len() || j == 0 {
+        return last.1;
     }
-    last.1
+    let (a, b) = (&stops[j - 1], &stops[j]);
+    let u = if b.0 > a.0 { (t - a.0) / (b.0 - a.0) } else { 0.0 };
+    a.1 + (b.1 - a.1) * u
 }
 
 /// Adds one level of the shared dither noise to a colour (as the Gradient tool does).
@@ -128,7 +130,14 @@ pub fn render(f: &Fill, rect: Rect, frame: Rect) -> Vec<[f32; 4]> {
 /// [`render`] with dithered pixels rounded to `quantum` steps (the document depth's levels, see
 /// [`crate::adjustment_quantum`]), as a gradient painted into a layer of that depth stores them.
 pub fn render_quantized(f: &Fill, rect: Rect, frame: Rect, quantum: Option<f32>) -> Vec<[f32; 4]> {
-    render_ramp(f, rect, frame, Ramp::new(f), quantum)
+    let mut px = vec![[0.0f32; 4]; rect.width() as usize * rect.height() as usize];
+    render_quantized_into(f, rect, frame, quantum, &mut px);
+    px
+}
+
+/// Render into caller-owned pixels so compositor paths can use fallible pooled storage.
+pub(crate) fn render_quantized_into(f: &Fill, rect: Rect, frame: Rect, quantum: Option<f32>, px: &mut [[f32; 4]]) {
+    render_ramp_into(f, rect, frame, Ramp::new(f), quantum, px);
 }
 
 /// Native CMYK solid/gradient pixels at document depth; patterns return `None`.
@@ -153,10 +162,18 @@ pub fn render_cmyk_fill(f: &Fill, rect: Rect, frame: Rect, depth: photocraft_col
 
 fn render_ramp<const N: usize>(f: &Fill, rect: Rect, frame: Rect, ramp: Option<Ramp<N>>, quantum: Option<f32>) -> Vec<[f32; N]> {
     let mut px = vec![[0.0f32; N]; rect.width() as usize * rect.height() as usize];
-    let (Some(ramp), Fill::Gradient { angle, scale, style, reverse, offset, dither: dith, .. }) = (ramp, f) else { return px };
+    render_ramp_into(f, rect, frame, ramp, quantum, &mut px);
+    px
+}
+
+fn render_ramp_into<const N: usize>(f: &Fill, rect: Rect, frame: Rect, ramp: Option<Ramp<N>>, quantum: Option<f32>, px: &mut [[f32; N]]) {
+    let (Some(ramp), Fill::Gradient { angle, scale, style, reverse, offset, dither: dith, .. }) = (ramp, f) else {
+        px.fill([0.0; N]);
+        return;
+    };
     let w = rect.width() as usize;
     if w == 0 {
-        return px;
+        return;
     }
     // Linear and Reflected end points on whole pixels, as Photoshop (crate::fill_layout).
     let (angle, scale, offset) = &crate::fill_layout::gradient_layout(*style, *angle, *scale, *offset, frame);
@@ -179,7 +196,6 @@ fn render_ramp<const N: usize>(f: &Fill, rect: Rect, frame: Rect, ramp: Option<R
     for (j, out) in px.chunks_mut(w).enumerate() {
         row(rect.y0 + j as i32, out);
     }
-    px
 }
 
 fn frame_dims(frame: Rect) -> (f32, f32) {
@@ -248,6 +264,38 @@ pub fn from_handles(style: GradientStyle, from: [f32; 2], to: [f32; 2], frame: R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A NaN position (from a non-finite angle in a file) returns the last stop and does not panic.
+    #[test]
+    fn nan_position_gives_the_last_stop() {
+        let stops = [(0.0f32, [1.0f32]), (1.0, [2.0])];
+        assert_eq!(sample_color(&stops, &[], f32::NAN), [2.0]);
+        assert_eq!(sample_opacity(&[(0.0, 0.25), (1.0, 0.75)], f32::NAN), 0.75);
+    }
+
+    /// Bisection over many stops picks the same segment as a scan, including repeated positions.
+    #[test]
+    fn bisected_stop_lookup_matches_a_scan() {
+        let stops: Vec<(f32, [f32; 1])> = (0..1000).map(|i| ((i / 2) as f32 / 500.0, [i as f32])).collect();
+        let scan = |t: f32| {
+            if t <= stops[0].0 {
+                return stops[0].1;
+            }
+            for w in stops.windows(2) {
+                if t <= w[1].0 {
+                    let u = if w[1].0 > w[0].0 { (t - w[0].0) / (w[1].0 - w[0].0) } else { 0.0 };
+                    return [w[0].1[0] + (w[1].1[0] - w[0].1[0]) * u];
+                }
+            }
+            stops[stops.len() - 1].1
+        };
+        for k in 0..=2000 {
+            let t = k as f32 / 2000.0 * 1.1 - 0.05;
+            assert_eq!(sample_color(&stops, &[], t), scan(t), "t = {t}");
+        }
+        let opacity: Vec<(f32, f32)> = stops.iter().map(|(p, c)| (*p, c[0])).collect();
+        assert_eq!(sample_opacity(&opacity, 0.5), sample_color(&stops, &[], 0.5)[0]);
+    }
     use photocraft_doc::Color;
 
     const STYLES: [GradientStyle; 5] = [GradientStyle::Linear, GradientStyle::Radial, GradientStyle::Angle, GradientStyle::Reflected, GradientStyle::Diamond];

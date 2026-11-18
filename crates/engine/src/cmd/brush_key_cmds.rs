@@ -8,7 +8,7 @@
 //!
 //! `tools.rotateBrush` turns the tip: Photoshop's ← / → while painting (1°, ⇧ 15°). Arrows mean
 //! other things with other tools, so the shell gives them to it only for the painting tools
-//! (`move_mods::arrow_keys`).
+//! (the tool host's `ToolKey::Nudge` route, `move_mods::arrow_key`).
 
 use serde_json::{Value, json};
 
@@ -18,11 +18,17 @@ use crate::{EngineError, Result, Session};
 /// Photoshop's largest brush diameter, in pixels.
 pub const MAX_SIZE: f32 = 5000.0;
 
-/// `[` / `]`: 25 % smaller or larger, and at least a pixel either way so small brushes still grow
-/// and shrink (2 / 1.25 rounds back to 2, which kept `[` from reaching 1 px, #3229).
+/// `[` / `]`: the next diameter in the key's direction, following the measured size table
+/// through 1500 px (#12936), then continuing in 100 px steps to the maximum. Intermediate
+/// sizes snap in that direction, and the 1 px endpoint stays reachable (#3229).
 fn size_step(size: f32, up: bool) -> f32 {
-    let next = if up { (size * 1.25).round().max(size + 1.0) } else { (size / 1.25).round().min(size - 1.0) };
-    next.clamp(1.0, MAX_SIZE)
+    let mut steps = [
+        1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0, 125.0, 150.0, 175.0,
+        200.0, 250.0, 300.0,
+    ]
+    .into_iter()
+    .chain((4..=(MAX_SIZE / 100.0) as u32).map(|n| n as f32 * 100.0));
+    if up { steps.find(|&next| next > size).unwrap_or(MAX_SIZE) } else { steps.rfind(|&next| next < size).unwrap_or(1.0) }
 }
 
 /// ⇧[ / ⇧]: to the previous or next quarter (0, 25, 50, 75, 100 %).
@@ -43,10 +49,9 @@ pub const UNGROUPED: &str = "My Brushes";
 
 /// Brush preset indices in the Brushes panel's order: groups in order of first appearance (no
 /// group is [`UNGROUPED`]), and in each group its folders where their first preset is, depth first
-/// (as `brushes_tab` draws them). A preset its name can't select (an earlier one has the same name
-/// up to case, and `tools.setBrush` picks that one) is left out afterwards, so stepping never
-/// gets stuck.
-fn panel_order(presets: &[photocraft_paint::BrushPreset]) -> Vec<usize> {
+/// (as the Brushes panel's rows, `brushes::preset_rows`, list them). Every preset is placed; the
+/// panel lists all of them, and [`panel_order`] filters this order for stepping.
+pub fn panel_layout(presets: &[photocraft_paint::BrushPreset]) -> Vec<usize> {
     fn path(p: &photocraft_paint::BrushPreset) -> &[String] {
         p.folder.get(..p.folder.len().min(crate::brush_preset_cmds::MAX_FOLDER_DEPTH)).unwrap_or_default()
     }
@@ -77,8 +82,14 @@ fn panel_order(presets: &[photocraft_paint::BrushPreset]) -> Vec<usize> {
     for (_, items) in &groups {
         flatten(presets, items, 0, &mut out);
     }
-    // Groups and folders are placed by every preset, as the panel places them; only then are the
-    // presets their names can't select left out.
+    out
+}
+
+/// [`panel_layout`] without the presets their name can't select (an earlier one has the same name
+/// up to case, and `tools.setBrush` picks that one), so stepping never gets stuck. Groups and
+/// folders are placed by every preset first, as the panel places them.
+fn panel_order(presets: &[photocraft_paint::BrushPreset]) -> Vec<usize> {
+    let mut out = panel_layout(presets);
     out.retain(|&i| presets.get(i).is_some_and(|p| photocraft_paint::presets::find(presets, &p.name).is_some_and(|q| std::ptr::eq(q, p))));
     out
 }
@@ -165,6 +176,10 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 #[cfg(test)]
+#[path = "brush_key_cmds/bracket_steps_tests.rs"]
+mod bracket_steps_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -241,6 +256,8 @@ mod tests {
         let presets = vec![preset("Foo", "G1", &[], 1.0), preset("foo", "G2", &[], 1.0), preset("Bar", "G3", &[], 1.0), preset("Baz", "G2", &[], 1.0)];
         let names: Vec<&str> = panel_order(&presets).into_iter().map(|i| presets[i].name.as_str()).collect();
         assert_eq!(names, ["Foo", "Baz", "Bar"]);
+        // The panel lists the skipped duplicate; stepping does not.
+        assert_eq!(panel_layout(&presets).len(), panel_order(&presets).len() + 1);
     }
 
     #[test]
@@ -280,7 +297,7 @@ mod tests {
         let mut s = Session::new();
         s.execute("tools.setBrush", json!({"brush": {"size": 40, "hardness": 0.5}})).unwrap();
         s.execute("tools.increaseBrushSize", json!({})).unwrap();
-        assert_eq!(s.tools.brush.size, 50.0);
+        assert_eq!(s.tools.brush.size, 45.0);
         s.execute("tools.decreaseBrushSize", Value::Null).unwrap();
         assert_eq!(s.tools.brush.size, 40.0);
         // Pixel artists: `[` held down reaches 1 px (#3229).

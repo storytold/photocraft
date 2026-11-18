@@ -140,8 +140,8 @@ fn layer_frame<'a>(layer: &TextLayer, tysh: &[u8], txt2: &'a E, named: bool) -> 
 
 /// Puts `layer` on its path when its `Txt2` frame is type on a path (#7962): Photoshop keeps the
 /// path only there, and EngineData describes the layer as a text box the size of the path's
-/// bounds. The path is read into the `TySh` text space, the type starting where Photoshop starts
-/// it (see `psd_path`). `Ok(true)` when the layer is now path text, `Ok(false)` when its frame is
+/// bounds. The path is read into the `TySh` text space with the type's range on it (see
+/// `psd_path`). `Ok(true)` when the layer is now path text, `Ok(false)` when its frame is
 /// no path (or `Txt2` holds another text for it), `Err` with the reason when the path can't be
 /// read: the layer then stays the box or point text EngineData describes.
 pub fn apply_txt2_path(layer: &mut TextLayer, tysh: &[u8], txt2: &E) -> Result<bool, String> {
@@ -149,8 +149,7 @@ pub fn apply_txt2_path(layer: &mut TextLayer, tysh: &[u8], txt2: &E) -> Result<b
     if crate::psd_path::frame_kind(frame) != crate::psd_path::PATH_FRAME {
         return Ok(false);
     }
-    let path = crate::psd_path::read(frame)?;
-    layer.shape = TextShape::Path { path, start: 0.0, flip: false };
+    layer.shape = crate::psd_path::read_shape(frame)?;
     Ok(true)
 }
 
@@ -391,6 +390,10 @@ fn descriptor_rect(text: &Descriptor, key: &str) -> Option<[f64; 4]> {
 
 pub(super) const MAX_ENGINE_RUNS: usize = 65_536;
 
+/// The longest `FontSet` name kept. PostScript names are at most 63 characters; family names in
+/// the files seen are shorter than this.
+const MAX_FONT_NAME: usize = 1024;
+
 pub(crate) fn arr_f(v: Option<&E>) -> Vec<f64> {
     v.and_then(E::as_array).map(|a| a.iter().take(MAX_ENGINE_RUNS).filter_map(E::as_f64).collect()).unwrap_or_default()
 }
@@ -436,7 +439,9 @@ fn apply_engine_data(layer: &mut TextLayer, e: &E, txt: Option<&str>, k: f32) {
     let fonts: Vec<String> = res
         .and_then(|r| r.get("FontSet"))
         .and_then(E::as_array)
-        .map(|a| a.iter().map(|f| f.get("Name").and_then(E::as_str).unwrap_or("").to_string()).collect())
+        // Every character run naming a font copies its name (family and PostScript name): a name
+        // past any real one's length is dropped, so one huge entry can't be multiplied by the runs.
+        .map(|a| a.iter().map(|f| f.get("Name").and_then(E::as_str).filter(|n| n.len() <= MAX_FONT_NAME).unwrap_or("").to_string()).collect())
         .unwrap_or_default();
     // Style resolution (#3795). A run's own `StyleSheetData` / `Properties` hold only what it
     // overrides; the rest comes from its sheets, as in Photoshop:
@@ -564,7 +569,7 @@ pub(crate) fn char_style(base: &[Option<&E>], d: &E, fonts: &[String], k: f32) -
     let numk = |key: &str, k: f32| num(key).map(|v| v as f32 * k).filter(|v| v.is_finite());
     let flag = |key: &str| g(key).and_then(E::as_bool);
     let mut s = CharStyle::default();
-    if let Some(ps) = g("Font").and_then(E::as_i64).and_then(|i| usize::try_from(i).ok()).and_then(|i| fonts.get(i)) {
+    if let Some(ps) = g("Font").and_then(E::as_i64).and_then(|i| usize::try_from(i).ok()).and_then(|i| fonts.get(i)).filter(|ps| !ps.is_empty()) {
         let r = guess_from_postscript(ps);
         s.font_family = r.family;
         s.weight = r.weight;

@@ -49,6 +49,20 @@ fn estimates_preserve_last_successful_export_settings() {
 
 /// The next launch's dialog seeds from the preferences: `file_menu` is not saved, so a complete
 /// export remembers its settings in `prefs.dialogs` too, as Fill and the filter dialogs do.
+/// Stored slices past the resolve limit are reported by the estimate as well as by the export.
+#[test]
+fn the_estimate_reports_ignored_slices() {
+    let mut s = session(8);
+    s.edit("slices", |doc, _| {
+        let n = photocraft_doc::slices::MAX_RESOLVED_SLICES + 2;
+        doc.slices.list = (0..n).map(|i| photocraft_doc::Slice { id: i as u32 + 1, rect: Rect::new(0, 0, 8, 8), ..Default::default() }).collect();
+        Ok(())
+    })
+    .unwrap();
+    let estimate = s.execute("file.export.saveForWebLegacy", json!({"format": "png24"})).unwrap();
+    assert!(estimate["warnings"].as_array().unwrap().iter().any(|w| w.as_str().is_some_and(|w| w.starts_with("2 stored slices"))), "{estimate}");
+}
+
 #[test]
 fn a_complete_export_remembers_its_settings_in_the_preferences() {
     let dir = tmp("remember_settings");
@@ -1385,15 +1399,34 @@ fn embed_color_profile_tags_an_untagged_document_srgb() {
     let mut s = session(8);
     assert!(s.active().unwrap().doc.icc_profile.is_none(), "a new document is untagged");
     let dir = tmp("assumed-icc");
-    let profile = |path: &str| decode(path).icc.map(|b| photocraft_cms::Profile::parse(&b).unwrap().description);
+    let profile = |path: &str| decode(path).icc.map(|b| craft_cms::Profile::parse(&b).unwrap().description);
     for (format, ext) in [("jpeg", "jpg"), ("png24", "png")] {
         let on = format!("{dir}/on.{ext}");
         s.execute("file.export.saveForWebLegacy", json!({"format": format, "embedIcc": true, "path": on})).unwrap();
-        assert_eq!(profile(&on).as_deref(), Some(photocraft_cms::Builtin::Srgb.description()), "{format}");
+        assert_eq!(profile(&on).as_deref(), Some(craft_cms::Builtin::Srgb.description()), "{format}");
         let off = format!("{dir}/off.{ext}");
         s.execute("file.export.saveForWebLegacy", json!({"format": format, "embedIcc": false, "path": off})).unwrap();
         assert_eq!(profile(&off), None, "{format}");
     }
+}
+
+/// Quick Export as WebP goes through the regular exporter, which embeds a document's XMP and
+/// EXIF whole: the export preferences' metadata choice must still apply to it.
+#[test]
+fn quick_export_webp_keeps_only_the_chosen_metadata() {
+    let dir = tmp("quick_webp_metadata");
+    let mut s = session(8);
+    s.execute("file.fileInfo", json!({"copyright": "© Example", "description": "secret notes"})).unwrap();
+    let has = |b: &[u8], needle: &[u8]| b.windows(needle.len()).any(|w| w == needle);
+    for (choice, lossless) in [("none", true), ("copyright", false)] {
+        s.execute("file.export.exportPreferences", json!({"quickExportFormat": "png", "metadata": choice, "webpLossless": lossless})).unwrap();
+        let path = format!("{dir}/{choice}.webp");
+        s.execute("file.export.quickExport", json!({"path": path})).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        assert!(!has(&bytes, b"secret notes"), "{choice}: the description is not {choice}");
+        assert_eq!(has(&bytes, b"Example"), choice == "copyright", "{choice}");
+    }
+    s.execute("prefs.reset", json!({"path": "export"})).unwrap();
 }
 
 /// #5305: `folder` writes the whole image there under the document's own name, so an action

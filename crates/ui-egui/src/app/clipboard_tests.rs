@@ -173,7 +173,11 @@ fn action_vector_paste_reads_the_current_svg_source() {
     let services = Services { clipboard_get_svg: Some(Box::new(|| Ok(Some(CLIP_SVG.as_bytes().to_vec())))), ..Default::default() };
     let mut app = PhotocraftApp::new(Session::new(), services);
     app.run("file.new", json!({"width": 24, "height": 20})).unwrap();
-    app.session.actions.list.push(photocraft_engine::actions_cmds::Action::new("SVG", vec![("edit.paste".into(), json!({"as": "shape"}))]));
+    app.session
+        .actions
+        .list
+        .push(photocraft_engine::actions_cmds::Action::new("SVG", vec![photocraft_engine::actions_cmds::ActionStep::new("edit.paste", json!({"as": "shape"}))]))
+        .unwrap();
     let result = app.run("actions.play", json!({"action": "SVG"})).unwrap();
     assert!(result.get("failed").is_none(), "{result}");
     let state = app.session.active().unwrap();
@@ -206,7 +210,8 @@ fn failed_clipboard_reads_preserve_editable_contents_until_retry() {
         assert!(signature.is_some());
         let before = app.session.active().unwrap().doc.walk().len();
         busy.store(true, Ordering::SeqCst);
-        let result = crate::menus::invoke(&mut app, &egui::Context::default(), id, serde_json::json!({}));
+        let app_ctx = app.ctx().clone();
+        let result = crate::menus::invoke(&mut app, &app_ctx, id, serde_json::json!({}));
         assert_eq!(result.unwrap_err(), "clipboard is busy", "{id}");
         assert!(app.ui.status_error);
         assert_eq!(app.session.documents().len(), 2);
@@ -214,7 +219,8 @@ fn failed_clipboard_reads_preserve_editable_contents_until_retry() {
         assert_eq!(app.os_clip_sig, signature);
         assert!(app.session.clipboard.as_ref().unwrap().layers.is_some());
         // The New dialog also reads the clipboard; a failed preset probe must preserve it.
-        app.new_document_fields();
+        // PLAN: `new_doc_ui::open` is the hosted New dialog's opener (sheet, panels-w30); the dialog's owner set writes it.
+        crate::new_doc_ui::open(&mut app);
         assert_eq!(app.os_clip_sig, signature);
         assert!(app.session.clipboard.as_ref().unwrap().layers.is_some());
         // An automation error must not leave script events disabled by the dispatch guard.
@@ -254,8 +260,11 @@ fn internal_only_clipboard_remains_usable_when_native_access_fails() {
             app.run("file.new", serde_json::json!({"width": 80, "height": 60})).unwrap();
             assert!(app.os_clip_sig.is_none() && !app.clip_external);
             let bounds = app.session.clipboard.as_ref().unwrap().bounds;
-            assert_eq!(app.new_document_fields()["__preset"], "Clipboard");
-            crate::menus::invoke(&mut app, &egui::Context::default(), id, serde_json::json!({})).unwrap();
+            let dialog = crate::new_doc_ui::open(&mut app);
+            let hosted = app.framework.dialogs.get_by_id::<craft::ui::patterns::form_dialogs::HostedNewDocument>(dialog).unwrap();
+            assert_eq!((hosted.options().size.width, hosted.options().size.height), (bounds.width(), bounds.height()), "the dialog offers the clipboard size");
+            let app_ctx = app.ctx().clone();
+            crate::menus::invoke(&mut app, &app_ctx, id, serde_json::json!({})).unwrap();
             assert!(app.session.clipboard.as_ref().unwrap().layers.is_some());
             assert!(!app.ui.status_error);
             if id == "file.newFromClipboard" {
@@ -371,7 +380,8 @@ fn failed_clipboard_reads_do_not_paste_an_external_or_missing_copy() {
         let before = app.session.active().unwrap().doc.walk().len();
         unavailable.store(true, Ordering::SeqCst);
         for id in ["edit.paste", "edit.pasteSpecial.pasteInPlace", "file.newFromClipboard"] {
-            let result = crate::menus::invoke(&mut app, &egui::Context::default(), id, serde_json::json!({}));
+            let app_ctx = app.ctx().clone();
+            let result = crate::menus::invoke(&mut app, &app_ctx, id, serde_json::json!({}));
             assert_eq!(result.unwrap_err(), "clipboard unavailable", "{id}");
             assert!(app.ui.status_error);
             assert_eq!(app.session.documents().len(), 1);
@@ -409,7 +419,8 @@ fn external_clipboard_enables_and_centres_paste() {
     assert!(crate::menus::is_enabled(&app, "edit.pasteSpecial.pasteInPlace"));
     assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 0, "enablement never reads the clipboard");
     app.ui.views[0].center = [40.0, 20.0];
-    let r = crate::menus::invoke(&mut app, &egui::Context::default(), "edit.paste", serde_json::json!({})).unwrap();
+    let app_ctx = app.ctx().clone();
+    let r = crate::menus::invoke(&mut app, &app_ctx, "edit.paste", serde_json::json!({})).unwrap();
     assert_eq!(r["offset"], serde_json::json!([38, 18]), "external image is centred in the view: {r}");
     assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 1, "one read per explicit paste");
     // Without a clipboard service Paste greys until something is copied in the app.
@@ -429,11 +440,11 @@ fn os_clipboard_image_becomes_a_new_document() {
         Ok(b.lock().unwrap().clone())
     };
     let mut app = PhotocraftApp::new(Session::new(), Services { clipboard_get_image: Some(Box::new(get)), ..Default::default() });
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     // Listed right after File › New…, enabled without reading the clipboard.
-    let items = crate::menus::menu_items(&app);
-    let at = items.iter().position(|i| i.id == "file.new").unwrap();
-    assert_eq!(items[at + 1].id, "file.newFromClipboard");
+    let items = crate::menus::menu_rows(&app);
+    let at = items.iter().position(|i| i.command.id == "file.new").unwrap();
+    assert_eq!(items[at + 1].command.id, "file.newFromClipboard");
     assert!(items[at + 1].enabled && crate::menus::is_enabled(&app, "edit.paste"));
     assert!(!crate::menus::is_enabled(&app, "edit.pasteSpecial.pasteInPlace"), "Paste in Place needs a document");
     assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 0);
@@ -460,7 +471,8 @@ fn pasting_an_empty_or_non_image_os_clipboard_is_a_quiet_no_op() {
     let (os, reads) = (OsClip::default(), Arc::default());
     let mut app = app_with_os_clipboard(&os, &reads);
     let layers = app.session.active().unwrap().doc.layers.len();
-    let r = crate::menus::invoke(&mut app, &egui::Context::default(), "edit.paste", serde_json::json!({})).unwrap();
+    let app_ctx = app.ctx().clone();
+    let r = crate::menus::invoke(&mut app, &app_ctx, "edit.paste", serde_json::json!({})).unwrap();
     assert_eq!(r["pasted"], serde_json::json!(false));
     assert_eq!(app.run("edit.pasteSpecial.pasteInPlace", serde_json::json!({})).unwrap()["pasted"], serde_json::json!(false));
     assert_eq!(app.session.active().unwrap().doc.layers.len(), layers);
@@ -478,7 +490,8 @@ fn idle_frames_never_read_the_os_clipboard() {
             n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(b.lock().unwrap().clone())
         };
-        let mut app = PhotocraftApp::new(Session::new(), Services { clipboard_get_image: Some(Box::new(get)), ..Default::default() });
+        let mut app =
+            PhotocraftApp::with_context(cc.egui_ctx.clone(), Session::new(), Services { clipboard_get_image: Some(Box::new(get)), ..Default::default() });
         app.session.execute("file.new", serde_json::json!({"width": 64, "height": 64})).unwrap();
         app
     });
@@ -504,7 +517,8 @@ fn copy_with_the_mask_targeted_copies_the_mask_not_the_pixels() {
     app.run("edit.fill", serde_json::json!({"color": "#ffffff", "target": "mask"})).unwrap();
     app.run("select.deselect", serde_json::json!({})).unwrap();
     app.ui.mask_target = true;
-    crate::menus::invoke(&mut app, &egui::Context::default(), "edit.copy", serde_json::json!({})).unwrap();
+    let app_ctx = app.ctx().clone();
+    crate::menus::invoke(&mut app, &app_ctx, "edit.copy", serde_json::json!({})).unwrap();
     let clip = app.session.clipboard.clone().expect("the mask was copied");
     let st = app.session.active().unwrap();
     let (w, h) = (st.doc.size.width as i32, st.doc.size.height as i32);
@@ -530,7 +544,8 @@ fn paste_with_the_mask_targeted_goes_into_the_mask() {
     app.ui.views[0].center = [32.0, 32.0];
     *os.lock().unwrap() = Some((4, 4, [128u8, 128, 128, 255].repeat(16)));
     let layers = app.session.active().unwrap().doc.layer_count();
-    crate::menus::invoke(&mut app, &egui::Context::default(), "edit.paste", serde_json::json!({})).unwrap();
+    let app_ctx = app.ctx().clone();
+    crate::menus::invoke(&mut app, &app_ctx, "edit.paste", serde_json::json!({})).unwrap();
     let st = app.session.active().unwrap();
     assert_eq!(st.doc.layer_count(), layers, "no new layer");
     let mask = st.doc.layer(st.active_layer.unwrap()).unwrap().mask.as_ref().unwrap();
