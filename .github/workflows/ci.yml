@@ -83,6 +83,8 @@ jobs:
   # Pull requests run them only when they change the GPU crate, a workspace crate it builds on, any
   # package manifest, or a file outside the workspace packages other than documentation
   # (scripts/ci-windows-gpu-tests.py, #15247); the Linux gate runs them on every pull request, and main runs them on Windows too.
+  # `windows_skip`: the platform-neutral packages whose Windows tests a pull request skips because nothing it
+  # changes reaches them (same script); empty on main and `full-ci`.
   platforms:
     if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
     timeout-minutes: 10
@@ -91,6 +93,7 @@ jobs:
     outputs:
       windows: ${{ steps.pick.outputs.windows }}
       windows_gpu: ${{ steps.pick.outputs.windows_gpu }}
+      windows_skip: ${{ steps.pick.outputs.windows_skip }}
       web: ${{ steps.pick.outputs.web }}
     steps:
       - name: Harden runner
@@ -111,6 +114,7 @@ jobs:
             {
               echo "windows=true"
               echo "windows_gpu=true"
+              echo "windows_skip="
               echo "web=true"
             } >> "$GITHUB_OUTPUT"
             exit 0
@@ -131,6 +135,8 @@ jobs:
           fi
           gpu=$(python3 scripts/ci-windows-gpu-tests.py "$BASE")
           echo "windows_gpu=$gpu" >> "$GITHUB_OUTPUT"
+          skip=$(python3 scripts/ci-windows-gpu-tests.py --skip-neutral "$BASE")
+          echo "windows_skip=$skip" >> "$GITHUB_OUTPUT"
 
   # The Linux gate. Its rust-cache entry is the one `test (without heif)` restores.
   gate:
@@ -279,6 +285,7 @@ jobs:
         env:
           PART: ${{ matrix.part }}
           GPU: ${{ needs.platforms.outputs.windows_gpu }}
+          SKIP_NEUTRAL: ${{ needs.platforms.outputs.windows_skip }}
         run: |
           case "$PART" in
             unit) targets=(--lib --bins) ;;
@@ -295,6 +302,13 @@ jobs:
             echo "::notice::photocraft-gpu's tests are skipped on Windows: this pull request changes nothing they are built from (the Linux gate still runs them)."
           fi
           # nextest reuses this build. The separate step writes cargo's --timings report for it.
+          # Pull requests without `full-ci` also skip the packages with no platform-specific code
+          # that nothing in the pull request reaches (scripts/ci-windows-gpu-tests.py); the Linux
+          # gate runs them. Main and `full-ci` run everything.
+          if [ -n "$SKIP_NEUTRAL" ]; then
+            for package in $SKIP_NEUTRAL; do skip+=(--exclude "$package"); done
+            echo "::notice::Tests of platform-neutral packages the pull request does not reach are skipped on Windows (the Linux gate still runs them): $SKIP_NEUTRAL"
+          fi
           cargo test --no-run --timings --workspace "${skip[@]}" --locked --features heif "${targets[@]}"
           if [ "$PART" != warm ]; then
             cargo nextest run --profile ci --workspace "${skip[@]}" --locked --features heif "${targets[@]}"
@@ -321,7 +335,13 @@ jobs:
 
       - name: Doctests
         if: matrix.part == 'unit'
-        run: cargo test --workspace --exclude photocraft-web --exclude photocraft-web-boot --locked --features heif --doc
+        env:
+          SKIP_NEUTRAL: ${{ needs.platforms.outputs.windows_skip }}
+        run: |
+          skip=(--exclude photocraft-web --exclude photocraft-web-boot)
+          for package in $SKIP_NEUTRAL; do skip+=(--exclude "$package"); done
+          cargo test --workspace "${skip[@]}" --locked --features heif --doc
+        shell: bash
 
   # The same codecs without the optional decoder: HEIC must stay a clear "not in this build" error
   # for distributors who leave it out. Runs beside the gate and restores the gate's dependency
