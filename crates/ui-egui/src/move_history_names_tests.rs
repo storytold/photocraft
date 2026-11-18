@@ -44,13 +44,15 @@ fn drag(app: &mut PhotocraftApp, from: [f64; 2], by: [f64; 2], mods: egui::Modif
 }
 
 fn press(app: &mut PhotocraftApp, key: egui::Key, mods: egui::Modifiers, time: f64) {
-    let ctx = egui::Context::default();
-    ctx.input_mut(|i| {
-        i.time = time;
-        i.modifiers = mods;
-        i.events.push(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: mods });
-    });
-    assert!(crate::move_mods::arrow_keys(app, &ctx));
+    let direction = match key {
+        egui::Key::ArrowLeft => egui::vec2(-1.0, 0.0),
+        egui::Key::ArrowRight => egui::vec2(1.0, 0.0),
+        egui::Key::ArrowUp => egui::vec2(0.0, -1.0),
+        egui::Key::ArrowDown => egui::vec2(0.0, 1.0),
+        other => panic!("not an arrow: {other:?}"),
+    };
+    let mods = craft::keymap::Mods::from_egui(&mods, craft::keymap::Platform::current());
+    assert!(crate::move_mods::arrow_key(app, direction, mods, time, false));
 }
 
 fn history(app: &PhotocraftApp) -> usize {
