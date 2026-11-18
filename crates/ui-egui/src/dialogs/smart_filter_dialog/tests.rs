@@ -47,7 +47,7 @@ fn fields_of(app: &PhotocraftApp, id: DialogId) -> DialogFields {
 }
 
 /// A document with one Smart Object holding Box Blur and Smart Sharpen, wrapped in an app that renders on the calling thread.
-pub(crate) fn app(depth: u32, mode: &str) -> (PhotocraftApp, LayerId) {
+pub(crate) fn app(depth: u32, mode: &str) -> (Box<PhotocraftApp>, LayerId) {
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width": 64, "height": 48, "depth": depth, "mode": mode})).unwrap();
     s.execute("layer.new.layer", json!({"name": "Smart Object"})).unwrap();

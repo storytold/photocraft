@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use std::{cell::RefCell, rc::Rc};
 
 /// Creates a minimal UI application with in-memory import/export services for PSD tests.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(
         Session::new(),
         Services {

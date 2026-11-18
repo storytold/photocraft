@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 const FONTS: [&str; 2] = ["Inter", "JetBrains Mono"];
 
-type H = Harness<'static, PhotocraftApp>;
+type H = Harness<'static, Box<PhotocraftApp>>;
 
 use super::commit_tests::ime;
 
