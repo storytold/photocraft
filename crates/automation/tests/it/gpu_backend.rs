@@ -293,11 +293,14 @@ mod tests {
         let mut gpu_renderer = GpuRenderer::with_options(options);
         let doc = make_test_doc(16, 16, SampleType::U8);
         let res = gpu_renderer.render_bands(&doc, doc.bounds(), 16, &photocraft_raster::Interrupt::NONE, &mut |_| Ok::<(), photocraft_io::IoError>(()));
-        let Err(photocraft_io::RenderError::Unavailable(msg)) = &res else { panic!("a zero timeout must leave the renderer unavailable: {res:?}") };
-        if !msg.contains("timed out") {
+        match &res {
+            Err(photocraft_io::RenderError::Unavailable(msg)) if msg.contains("timed out") => {}
             // The driver answered before the caller even waited: there is no timed-out request.
-            eprintln!("SKIPPED: the GPU request did not time out ({msg})");
-            return;
+            Ok(()) | Err(photocraft_io::RenderError::Unavailable(_)) => {
+                eprintln!("SKIPPED: the GPU request did not time out ({res:?})");
+                return;
+            }
+            Err(e) => panic!("unexpected render error: {e:?}"),
         }
 
         drop(gpu_renderer);

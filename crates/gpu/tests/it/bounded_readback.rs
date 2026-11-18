@@ -21,9 +21,11 @@ fn test_gpu() -> Option<(NativeContext, Compositor, std::sync::MutexGuard<'stati
         Ok(c) => c,
         Err(e) => {
             eprintln!("skipping bounded readback test: {e}");
-            // Under the lock, so the next GPU test does not start beside a request still in the driver.
+            // Under the lock, so the next GPU test does not start beside a request still in the
+            // driver. No limit: a request that never finishes hangs here, and nextest's slow-test
+            // timeout reports it, rather than letting the next GPU test start beside it.
             if let GpuContextError::TimedOut { pending, .. } = &e {
-                pending.wait(Duration::from_secs(120));
+                pending.wait(Duration::MAX);
             }
             return None;
         }
