@@ -448,8 +448,8 @@ impl ActionRunner for ShellRunner<'_> {
             return self.pause(json!({"step": i, "id": id, "dialog": crate::type_panels_ui::SPELLING}));
         }
         // A JavaScript step runs in the app; the playback goes on when the script ends
-        // (`script_step_finished`). Without a script service the engine only resolves it.
-        if id == "file.scripts.run" && crate::scripts::can_run(self.app) {
+        // (`script_step_finished`).
+        if id == "file.scripts.run" {
             let token = self.app.paused_playbacks.pause(action.name.clone(), i + 1, self.app.session.authorize);
             return match crate::scripts::run_step(self.app, &p, token) {
                 Ok(_) => self.pause(json!({"step": i, "id": id, "dialog": crate::scripts::PLAYBACK_WAIT})),

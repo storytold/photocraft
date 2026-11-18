@@ -193,13 +193,20 @@ impl Join {
     }
 
     /// Call a conversion method of `o`. The intrinsic `Array.prototype.toString` is run here:
-    /// it reads `join` once and, when that is the intrinsic join, joins within bounds.
+    /// it reads `join` once and, when that is the intrinsic join, joins within bounds. The
+    /// intrinsic `join` called directly as the method is joined within bounds as well.
     fn call(&mut self, o: &JsObject, f: &JsObject, ctx: &mut Context) -> JsResult<Converted> {
         let Some(i) = ctx.realm().host_defined().get::<Intrinsics>().map(|i| (i.array_to_string.clone(), i.array_join.clone(), i.object_to_string.clone()))
         else {
             return Ok(Converted::Value(f.call(&o.clone().into(), &[], ctx)?));
         };
         let (array_to_string, array_join, object_to_string) = i;
+        // The intrinsic join itself as the conversion method (`{ toString: [].join }`): joined
+        // here too, with its default separator, never by the engine's recursion.
+        if JsObject::equals(f, &array_join) {
+            self.array(o, ctx)?;
+            return Ok(Converted::Appended);
+        }
         if !JsObject::equals(f, &array_to_string) {
             return Ok(Converted::Value(f.call(&o.clone().into(), &[], ctx)?));
         }

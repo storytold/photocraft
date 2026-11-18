@@ -108,9 +108,12 @@ fn is_link(path: &str) -> bool {
     }
 }
 
+/// Names compared exactly. Most Windows and macOS volumes ignore case, but not all (a
+/// case-sensitive APFS volume, a case-sensitive NTFS folder), and there `Exports` and `exports`
+/// are different folders: a path written otherwise than the user's choice is refused, which
+/// costs a script nothing, since it has the path the user chose.
 fn same(a: &str, b: &str) -> bool {
-    // Windows and macOS file systems usually ignore case.
-    if cfg!(any(windows, target_os = "macos")) { a.eq_ignore_ascii_case(b) } else { a == b }
+    a == b
 }
 
 fn same_parts(a: &[String], b: &[String]) -> bool {
@@ -258,6 +261,16 @@ mod tests {
         assert!(save(&dir.join("fresh.png")).is_ok(), "a new file in the chosen folder");
         assert!(save(&link).unwrap_err().contains("link"), "the link in it");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_path_differing_only_in_case_is_another_path() {
+        let mut g = PathGrants::default();
+        g.record(ModalKind::SelectFolder, &json!(abs("/Volumes/Work/Exports")));
+        g.record(ModalKind::SaveFile, &json!(abs("/Volumes/Work/plain")));
+        assert!(g.allows(&abs("/Volumes/Work/Exports/out.png")));
+        assert!(!g.allows(&abs("/Volumes/Work/exports/out.png")), "on a case-sensitive volume that is another folder");
+        assert!(!g.allows(&abs("/Volumes/Work/PLAIN.png")));
     }
 
     #[test]

@@ -350,10 +350,40 @@ fn the_menu_opens_the_manager_and_runs_scripts_by_command() {
     assert_eq!(log.starts.borrow()[0].name, "cmd.js");
     settle(&mut app);
     assert!(!app.scripts.running());
-    // Without a script service the engine only resolves the script.
+    // Without a script service no script runs, and the command says so.
     let mut plain = PhotocraftApp::new(Session::new(), crate::Services::default());
-    let r = crate::menus::invoke(&mut plain, &ctx, "file.scripts.run", json!({"name": "cmd.js", "source": "1"})).unwrap();
-    assert_eq!(r["source"], "1");
+    let r = crate::menus::invoke(&mut plain, &ctx, "file.scripts.run", json!({"name": "cmd.js", "source": "1"}));
+    assert_eq!(r.unwrap_err(), NO_SCRIPTS);
+}
+
+/// An action's script step fails where no script can run, rather than playing on as if it ran.
+#[test]
+fn a_script_step_fails_without_a_script_service() {
+    let mut app = PhotocraftApp::new(Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+    app.session
+        .actions
+        .list
+        .push(photocraft_engine::actions_cmds::Action::new(
+            "Scripted",
+            vec![ActionStep::new("file.scripts.run", json!({"name": "step.jsx", "source": "1"})), ActionStep::new("layer.new.layer", json!({"name": "after"}))],
+        ))
+        .unwrap();
+    let played = crate::actions::play(&mut app, &json!({"action": "Scripted"})).unwrap();
+    assert!(played["failed"]["error"].as_str().is_some_and(|e| e == NO_SCRIPTS), "{played}");
+    assert!(layer_names(&app).is_empty(), "the action stopped at the step: {:?}", layer_names(&app));
+}
+
+/// Editing a text field and clicking OK in the same pass sends the click, with the edit.
+#[test]
+fn a_click_outranks_the_change_of_the_field_it_takes_focus_from() {
+    let mut edits = BTreeMap::new();
+    let mut st = Draw { window: 1, edits: &mut edits, event: None, live: true, multiline_focus: false };
+    st.fire("change", 2);
+    st.fire("click", 3);
+    assert_eq!(st.event, Some(("click", 3)));
+    st.fire("change", 4);
+    assert_eq!(st.event, Some(("click", 3)), "the first click stays");
 }
 
 fn deny_new_layer(id: &str, _: &Value) -> photocraft_engine::Result<()> {
@@ -603,4 +633,20 @@ fn a_run_that_panics_while_pumping_leaves_scripts_usable() {
     assert!(!app.scripts.pumping, "the pump is over");
     finish(&mut app, Ok(()));
     assert!(start(&mut app, ScriptStart { name: "next.jsx".into(), source: String::new(), app_name: None }, None).is_ok());
+}
+
+/// A run that panics after a command while an action records leaves that command out of the
+/// recording, as a run that ends normally does.
+#[test]
+fn a_panicking_run_leaves_its_commands_out_of_a_recording() {
+    let log = Log::default();
+    let program = vec![Act::Run("layer.new.layer", json!({"name": "by the script"})), Act::Run("no.such.command", json!({}))];
+    let mut app = app(vec![program], &log);
+    app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+    app.run("actions.record", json!({"name": "Rec"})).unwrap();
+    start_named(&mut app, "boom.jsx");
+    let before = app.session.journal.len();
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| settle(&mut app)));
+    assert_eq!(app.session.journal.len(), before, "{:?}", app.session.journal.iter().map(|e| &e.0).collect::<Vec<_>>());
+    assert_eq!(layer_names(&app), ["by the script"], "the command it ran stays done");
 }

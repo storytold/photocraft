@@ -592,3 +592,44 @@ fn lists_hold_a_bounded_number_of_items_in_all() {
     assert_eq!(lines, ["250000 true a script's lists can hold at most 250000 items in all"]);
     assert!(started.elapsed() < std::time::Duration::from_secs(60), "{:?}", started.elapsed());
 }
+
+#[test]
+fn bounds_given_to_the_constructor_or_add_size_the_control() {
+    let src = r#"
+        var b = [0, 0, 300, 200];
+        var w = new Window("palette", "Sized", b);
+        b[2] = 900; // the window keeps its own copy
+        w.add("edittext", [10, 10, 130, 40], "x");
+        w.add("panel", {x: 0, y: 0, width: 90, height: 60});
+        w.add("group", {left: 5, top: 5, right: 55, bottom: 25});
+        // A bounds whose getter throws leaves no control behind.
+        try { w.add("button", {get x() { throw new Error("no"); }}, "never"); } catch (e) {}
+        w.show();
+    "#;
+    let (step, ui) = run(src, vec![], true);
+    assert_eq!(step, Step::Done);
+    let windows = ui.windows.borrow();
+    let tree = windows[0].1.as_ref().expect("the palette is sent");
+    assert_eq!((tree["width"].as_f64(), tree["height"].as_f64()), (Some(300.0), Some(200.0)));
+    let edit = find(tree, "edittext").unwrap();
+    assert_eq!((edit["width"].as_f64(), edit["height"].as_f64()), (Some(120.0), Some(30.0)));
+    let panel = find(tree, "panel").unwrap();
+    assert_eq!((panel["width"].as_f64(), panel["height"].as_f64()), (Some(90.0), Some(60.0)));
+    let group = find(tree, "group").unwrap();
+    assert_eq!((group["width"].as_f64(), group["height"].as_f64()), (Some(50.0), Some(20.0)));
+    assert!(find(tree, "button").is_none(), "{tree}");
+}
+
+/// Sending a palette reads its controls, which runs the script's getters; one that closes the
+/// palette meanwhile leaves it closed, not sent again.
+#[test]
+fn a_palette_closed_while_it_is_read_is_not_sent_again() {
+    let getter = r#"Object.defineProperty(t, "text", { get: function () { if (arm) { arm = false; w.close(); } return "x"; } });"#;
+    for (name, tail, want) in [("show", "arm = true; w.show();", vec![None]), ("update", "w.show(); arm = true; w.update();", vec![Some(()), None])] {
+        let src = format!(r#"var arm = false; var w = new Window("palette", "P"); var t = w.add("statictext", undefined, "x"); {getter} {tail}"#);
+        let (step, ui) = run(&src, vec![], true);
+        assert_eq!(step, Step::Done, "{name}: {:?}", ui.lines.borrow());
+        let sent: Vec<Option<()>> = ui.windows.borrow().iter().map(|(_, w)| w.as_ref().map(|_| ())).collect();
+        assert_eq!(sent, want, "{name}");
+    }
+}

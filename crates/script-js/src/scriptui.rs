@@ -411,10 +411,42 @@ fn window_ctor(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsV
     };
     let title = args.get(1).cloned().unwrap_or_default();
     let props = args.get(3).cloned().unwrap_or_default();
+    let bounds = copy_bounds(ctx, args.get(2))?;
     let obj = create(ctx, Kind::Window, None, &style, &title, &props)?;
+    keep_bounds(ctx, &obj, bounds)?;
     let id = this_id(&obj.clone().into())?;
     element_mut(ctx, id, |e| e.palette = palette)?;
     Ok(obj.into())
+}
+
+/// A copy of the `bounds` given to `new Window` or `add`, to keep as the control's `bounds`
+/// ([`keep_bounds`]), which sizes it as one set afterwards would ([`size_hint`]). Read before the
+/// control is made, so a getter that throws leaves no control behind. ScriptUI keeps its own
+/// copy too: changing the script's array afterwards does not resize the control.
+fn copy_bounds(ctx: &mut Context, bounds: Option<&JsValue>) -> JsResult<Option<JsValue>> {
+    let Some(b) = bounds.and_then(JsValue::as_object).filter(|b| !b.is_callable()) else { return Ok(None) };
+    if b.is_array() {
+        let mut values = Vec::with_capacity(4);
+        for i in 0..4u32 {
+            values.push(b.get(i, ctx)?);
+        }
+        return Ok(Some(JsArray::from_iter(values, ctx).into()));
+    }
+    let copy = JsObject::with_object_proto(ctx.intrinsics());
+    for key in ["x", "y", "width", "height", "left", "top", "right", "bottom"] {
+        let v = get(&b, key, ctx)?;
+        if !v.is_undefined() {
+            set(&copy, key, v, ctx)?;
+        }
+    }
+    Ok(Some(copy.into()))
+}
+
+fn keep_bounds(ctx: &mut Context, obj: &JsObject, bounds: Option<JsValue>) -> JsResult<()> {
+    match bounds {
+        Some(b) => set(obj, "bounds", b, ctx),
+        None => Ok(()),
+    }
 }
 
 /// `container.add(type, bounds, text, properties)`, `list.add("item", text)`.
@@ -460,7 +492,9 @@ fn add(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue>
         Kind::Dropdown | Kind::ListBox if third.is_object() && !third.is_callable() => (JsValue::undefined(), arg(3)),
         _ => (third.clone(), arg(3)),
     };
+    let bounds = copy_bounds(ctx, args.get(1))?;
     let obj = create(ctx, kind, Some(id), kind.name(), &text, &props)?;
+    keep_bounds(ctx, &obj, bounds)?;
     let child = this_id(&obj.clone().into())?;
     match kind {
         Kind::Progress => {
@@ -743,7 +777,14 @@ fn size_hint(ctx: &mut Context, obj: &JsObject) -> JsResult<Option<(Option<f64>,
                 _ => (None, None),
             }
         } else {
-            (number_of(&get(&o, "width", ctx)?, ctx)?, number_of(&get(&o, "height", ctx)?, ctx)?)
+            let side = |key: &str, ctx: &mut Context| -> JsResult<Option<f64>> {
+                let v = get(&o, key, ctx)?;
+                number_of(&v, ctx)
+            };
+            let (w, h) = (side("width", ctx)?, side("height", ctx)?);
+            // `{left, top, right, bottom}` is the other way ScriptUI writes bounds.
+            let (l, t, r, bt) = (side("left", ctx)?, side("top", ctx)?, side("right", ctx)?, side("bottom", ctx)?);
+            (w.or_else(|| Some(r? - l?)), h.or_else(|| Some(bt? - t?)))
         };
         let (w, h) = (pick(w), pick(h));
         if w.is_some() || h.is_some() {
@@ -840,8 +881,11 @@ fn show(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
         call_handler(ctx, &obj, "onShow")?;
         if palette && element(ctx, id, |e| e.shown)? {
             let tree = serialize(ctx, id)?;
-            window_update(ctx, id, Some(tree))?;
-            element_mut(ctx, id, |e| e.visibility += 1)?;
+            // Reading the controls runs the script's getters, which may have closed it.
+            if element(ctx, id, |e| e.shown)? {
+                window_update(ctx, id, Some(tree))?;
+                element_mut(ctx, id, |e| e.visibility += 1)?;
+            }
         }
         Ok(())
     };
@@ -913,6 +957,10 @@ fn update(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue>
 fn flush(ctx: &mut Context, window: u32) -> JsResult<()> {
     if element(ctx, window, |e| e.palette && e.shown)? {
         let tree = serialize(ctx, window)?;
+        // Reading the controls runs the script's getters, which may have closed it.
+        if !element(ctx, window, |e| e.shown)? {
+            return Ok(());
+        }
         window_update(ctx, window, Some(tree))?;
         // The app has it now: a failing show() around this must not take that back.
         element_mut(ctx, window, |e| e.visibility += 1)?;

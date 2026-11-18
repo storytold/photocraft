@@ -41,7 +41,7 @@ const TICK: Duration = Duration::from_millis(5);
 /// forever.
 pub const COMMAND_REPLY_LIMIT: Duration = Duration::from_secs(30 * 60);
 /// How long at a time a full queue of events stops the run's clock ([`Shared::deliver`]).
-const QUEUE_GRACE: Duration = Duration::from_secs(30);
+pub const QUEUE_GRACE: Duration = Duration::from_secs(30);
 /// Longest a dialog may stay open. A person may leave one open for a long time; one the
 /// interface never shows or answers still ends.
 pub const DIALOG_REPLY_LIMIT: Duration = Duration::from_secs(12 * 60 * 60);
@@ -50,8 +50,7 @@ const METER_EVERY: Duration = Duration::from_millis(20);
 /// Standard error kept for classifying a crash.
 const STDERR_KEEP: usize = 16 << 10;
 
-/// The message a cancelled run ends with.
-pub const CANCELLED: &str = "The script was cancelled.";
+pub use super::CANCELLED;
 
 /// How to start a script host.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,6 +91,8 @@ pub struct IsolateOptions {
     /// Longest the app may take to answer one command, and one dialog
     /// ([`COMMAND_REPLY_LIMIT`], [`DIALOG_REPLY_LIMIT`]).
     pub reply_limits: (Duration, Duration),
+    /// How long at a time a full queue of events stops the run's clock ([`QUEUE_GRACE`]).
+    pub queue_grace: Duration,
 }
 
 /// What a run needs from the interface next. The same events as the in-process job.
@@ -248,6 +249,9 @@ struct Watch {
     clock: Clock,
     /// Since when the host has waited for the app's answer, and whether to a dialog.
     waiting: Option<(Instant, bool)>,
+    /// Since when the reader has been blocked handing an event to a full queue while the run's
+    /// clock was stopped for it.
+    queued: Option<Instant>,
     verdict: Option<Verdict>,
     exit: Option<Exit>,
     peak: u64,
@@ -289,6 +293,8 @@ struct Shared {
     memory_limit: u64,
     /// See [`IsolateOptions::reply_limits`].
     reply_limits: (Duration, Duration),
+    /// See [`IsolateOptions::queue_grace`].
+    queue_grace: Duration,
     containment: Containment,
 }
 
@@ -346,15 +352,21 @@ impl Shared {
             Ok(()) => true,
             Err(mpsc::TrySendError::Disconnected(_)) => false,
             Err(mpsc::TrySendError::Full(event)) => {
-                let running = lock(&self.watch).waiting.is_none();
-                if running {
-                    lock(&self.watch).clock.pause();
-                }
-                let blocked = Instant::now();
+                let running = {
+                    let mut w = lock(&self.watch);
+                    let running = w.waiting.is_none();
+                    if running {
+                        w.clock.pause();
+                        w.queued = Some(Instant::now());
+                    }
+                    running
+                };
                 let sent = events.send(event).is_ok();
                 if running {
                     let mut w = lock(&self.watch);
-                    w.clock.spent += blocked.elapsed().saturating_sub(QUEUE_GRACE);
+                    if let Some(blocked) = w.queued.take() {
+                        w.clock.spent += blocked.elapsed().saturating_sub(self.queue_grace);
+                    }
                     if w.waiting.is_none() {
                         w.clock.resume();
                     }
@@ -531,6 +543,7 @@ impl IsolatedJob {
             watch: Mutex::new(Watch {
                 clock: Clock { spent: Duration::ZERO, since: Some(Instant::now()) },
                 waiting: None,
+                queued: None,
                 verdict: None,
                 exit: None,
                 peak: 0,
@@ -547,6 +560,7 @@ impl IsolatedJob {
             time_limit: options.time_limit,
             memory_limit,
             reply_limits: options.reply_limits,
+            queue_grace: options.queue_grace,
             containment,
         });
         let cancel = Arc::new(AtomicBool::new(false));
@@ -717,7 +731,10 @@ fn watchdog(shared: &Shared, cancel: &AtomicBool, pid: u32, events: &SyncSender<
         } else {
             let (elapsed, waiting) = {
                 let w = lock(&shared.watch);
-                (w.clock.elapsed(), w.waiting)
+                // A block on a full queue counts past its grace while it lasts, not only once it
+                // ends: an interface that stopped taking events must not hold the run forever.
+                let queued = w.queued.map_or(Duration::ZERO, |t| t.elapsed().saturating_sub(shared.queue_grace));
+                (w.clock.elapsed() + queued, w.waiting)
             };
             if elapsed > shared.time_limit {
                 shared.kill(Verdict::Timeout);

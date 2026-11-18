@@ -16,10 +16,13 @@ boa_gc = "=0.22.0"
 serde = { workspace = true }
 serde_json = { workspace = true }
 photocraft-engine = { workspace = true }
+# The script host's heap limit, enforced on every allocation on every platform, the web's
+# script Worker included (src/isolate/heap.rs).
+cap = "=0.1.2"
+# The clock of a run in a web Worker (src/isolate/web_job.rs); `std::time` on the desktop.
+web-time = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# The script host's heap limit, enforced on every allocation on every platform (src/isolate/limits.rs).
-cap = "=0.1.2"
 # Resident size of the script host, polled by the app (src/isolate/limits.rs).
 sysinfo = { version = "=0.40.1", default-features = false, features = ["system"] }
 
@@ -34,4 +37,3 @@ win32job = "2.1"
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Browser clock and randomness for the engine on the web build.
 boa_engine = { version = "=0.22.0", default-features = false, features = ["annex-b", "js"] }
-web-time = { workspace = true }

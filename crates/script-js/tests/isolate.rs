@@ -35,6 +35,7 @@ fn options(key: &str) -> IsolateOptions {
         coalesce: key.into(),
         helper: HelperCommand::new(host_program()),
         reply_limits: (photocraft_script_js::isolate::COMMAND_REPLY_LIMIT, photocraft_script_js::isolate::DIALOG_REPLY_LIMIT),
+        queue_grace: photocraft_script_js::isolate::QUEUE_GRACE,
     }
 }
 
@@ -907,6 +908,27 @@ fn time_the_interface_takes_to_take_output_does_not_count_against_the_limit() {
     let seen = drive(&mut job, None, &[], |_, _| {});
     assert!(seen.result.is_ok(), "{:?}", seen.result);
     assert_eq!(seen.lines.len(), 300);
+}
+
+/// That wait counts again past its grace even while it lasts: an interface that stops taking
+/// events altogether does not hold the host forever.
+#[cfg(target_os = "linux")]
+#[test]
+fn an_interface_that_stops_taking_output_does_not_hold_the_run_forever() {
+    let mut opts = options("stalled interface");
+    // Long enough that the queue fills well before the limit, so the block is what ends it.
+    opts.time_limit = Duration::from_secs(2);
+    opts.queue_grace = Duration::from_millis(200);
+    let mut job = IsolatedJob::spawn("for (var i = 0; ; i++) $.writeln(i);".into(), opts).unwrap();
+    let host = format!("/proc/{}", job.host_id());
+    // Nobody polls: the queue fills and stays full.
+    let start = Instant::now();
+    while std::path::Path::new(&host).exists() {
+        assert!(start.elapsed() < Duration::from_secs(20), "the host still runs while the interface takes nothing");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let seen = drive(&mut job, None, &[], |_, _| {});
+    assert_eq!(failure(&seen).kind, FailureKind::Timeout, "{:?}", seen.result);
 }
 
 /// An answer too large to send ends the run with that reason, not as a host that stopped

@@ -27,12 +27,12 @@
 //!   run's alone, so no later edit joins it.
 //!
 //! The web build has no processes. Its isolation runs the same [`protocol`] messages over
-//! `postMessage` to a dedicated Worker that holds the engine, behind the same job interface: the
-//! Worker cannot block for an answer, so a command or dialog ends the attempt there and the next
-//! attempt replays with the answer, as dialogs already do; the time limit calls the Worker's
-//! `terminate()`, and the Worker's memory is a WebAssembly memory with a fixed maximum. WebAssembly
-//! builds abort on panic, so the in-process panic guard in [`crate::Runner::step`] does nothing
-//! there: the Worker boundary is what turns an engine panic into a failed run.
+//! `postMessage` to a dedicated Worker that holds the engine; [`web_job`] is the page's side,
+//! checking every request as the desktop supervisor does. The Worker waits for each answer in
+//! shared memory, so a run continues where it was after a command or a dialog; the time limit
+//! calls the Worker's `terminate()`, and the Worker's heap is capped the way the script host's is.
+//! WebAssembly builds abort on panic, so the in-process panic guard in [`crate::Runner::step`]
+//! does nothing there: the Worker boundary is what turns an engine panic into a failed run.
 //!
 //! Until that supervisor exists the web build runs scripts in-process only, and it has no
 //! watchdog: the in-process time budget is checked on host calls, so a pure-compute loop that
@@ -41,23 +41,31 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+// The web build's script Worker serves runs through these too; until it does they are unused there.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+mod heap;
 #[cfg(not(target_arch = "wasm32"))]
 mod host;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod limits;
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+mod link;
 pub mod protocol;
 #[cfg(not(target_arch = "wasm32"))]
 mod supervisor;
+pub mod web_job;
 
+pub use heap::{HostAllocator, host_allocator};
 #[cfg(not(target_arch = "wasm32"))]
 pub use host::{STACK, serve};
 #[cfg(not(target_arch = "wasm32"))]
-pub use limits::{HostAllocator, host_allocator};
-#[cfg(not(target_arch = "wasm32"))]
 pub use supervisor::{
-    CANCELLED, COMMAND_REPLY_LIMIT, Crash, CrashCause, DEFAULT_MEMORY_LIMIT, DIALOG_REPLY_LIMIT, Event, Failure, FailureKind, HelperCommand, IsolateOptions,
-    IsolatedJob, MIN_MEMORY_LIMIT, Reply,
+    COMMAND_REPLY_LIMIT, Crash, CrashCause, DEFAULT_MEMORY_LIMIT, DIALOG_REPLY_LIMIT, Event, Failure, FailureKind, HelperCommand, IsolateOptions, IsolatedJob,
+    MIN_MEMORY_LIMIT, QUEUE_GRACE, Reply,
 };
+
+/// The message a cancelled run ends with.
+pub const CANCELLED: &str = "The script was cancelled.";
 
 /// The first argument that makes the executable a script host.
 pub const SCRIPT_HOST_FLAG: &str = "--script-host";

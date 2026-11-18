@@ -30,15 +30,7 @@
 
 use std::process::{Child, ExitStatus};
 
-/// The allocator an executable that serves [`super::SCRIPT_HOST_FLAG`] installs as its global
-/// allocator ([`host_allocator`]), so [`super::serve`] can cap the host's heap. Uncapped, it
-/// passes every allocation to the system's.
-pub type HostAllocator = cap::Cap<std::alloc::System>;
-
-/// A [`HostAllocator`] with no limit, for `#[global_allocator]`.
-pub const fn host_allocator() -> HostAllocator {
-    cap::Cap::new(std::alloc::System, usize::MAX)
-}
+use super::heap::HostAllocator;
 
 /// Host side: cap the memory this process may use at `bytes`: its heap at `bytes` less the
 /// script thread's stack, and on Linux also the memory it may map.
@@ -46,8 +38,7 @@ pub const fn host_allocator() -> HostAllocator {
 /// # Errors
 /// The limit is below what the host already uses, or the system refused it.
 pub fn limit_memory(bytes: u64, heap: &HostAllocator) -> Result<(), String> {
-    let budget = usize::try_from(bytes.saturating_sub(super::STACK as u64)).unwrap_or(usize::MAX);
-    heap.set_limit(budget).map_err(|()| format!("the host already uses more than {} MiB", budget >> 20))?;
+    super::heap::cap_heap(heap, bytes.saturating_sub(super::STACK as u64))?;
     // A debug build can leave the system limit off, so a test sees the heap cap on its own.
     if cfg!(debug_assertions) && std::env::var_os("PHOTOCRAFT_TEST_NO_RLIMIT").is_some() {
         return Ok(());
@@ -65,9 +56,9 @@ pub fn limit_memory(bytes: u64, heap: &HostAllocator) -> Result<(), String> {
 pub struct Containment {
     #[cfg(windows)]
     job: std::sync::Mutex<Option<win32job::Job>>,
-    /// Without `waitid`, whether [`Containment::try_wait`] has reaped the host: until then its
+    /// Whether [`Containment::try_wait`] has reaped the host: until then its
     /// pid, which is its group's id, is still reserved.
-    #[cfg(target_os = "openbsd")]
+    #[cfg(unix)]
     reaped: std::sync::atomic::AtomicBool,
 }
 
@@ -80,6 +71,12 @@ impl Containment {
     /// # Errors
     /// What `try_wait` returns.
     pub fn try_wait(&self, child: &mut Child) -> std::io::Result<Option<std::process::ExitStatus>> {
+        // Once reaped, the host's pid may be another process's, even another child of this app:
+        // it is not probed or signalled again, and `std` answers from the status it kept.
+        #[cfg(unix)]
+        if self.is_reaped() {
+            return child.try_wait();
+        }
         #[cfg(all(unix, not(target_os = "openbsd")))]
         match host_state(child) {
             Host::Running => return Ok(None),
@@ -87,6 +84,10 @@ impl Containment {
             Host::Reaped => {}
         }
         let status = child.try_wait()?;
+        #[cfg(all(unix, not(target_os = "openbsd")))]
+        if status.is_some() {
+            self.reaped.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
         // Without `waitid` the host is only known to have exited once it is reaped. What it
         // started is still in its group then, and a group id is not given to a new process while
         // the group has members, so the group is stopped right after.
@@ -104,7 +105,7 @@ impl Containment {
     /// Stop the host and everything it started. `child` is the host, locked by the caller.
     pub fn end(&self, child: &mut Child) {
         #[cfg(all(unix, not(target_os = "openbsd")))]
-        if host_state(child) != Host::Reaped {
+        if !self.is_reaped() && host_state(child) != Host::Reaped {
             kill_group(child);
         }
         // Without `waitid`: a host this has not reaped keeps its pid (as a zombie if it exited),
@@ -116,6 +117,11 @@ impl Containment {
         #[cfg(windows)]
         self.close_job();
         let _ = child.kill();
+    }
+
+    #[cfg(unix)]
+    fn is_reaped(&self) -> bool {
+        self.reaped.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     #[cfg(windows)]
@@ -174,12 +180,12 @@ pub fn contain(child: &Child) -> Containment {
         let job = win32job::Job::create_with_limit_info(&info).ok().filter(|job| job.assign_process(child.as_raw_handle() as isize).is_ok());
         Containment { job: std::sync::Mutex::new(job) }
     }
-    #[cfg(target_os = "openbsd")]
+    #[cfg(unix)]
     {
         let _ = child;
         Containment { reaped: std::sync::atomic::AtomicBool::new(false) }
     }
-    #[cfg(not(any(windows, target_os = "openbsd")))]
+    #[cfg(not(any(windows, unix)))]
     {
         let _ = child;
         Containment {}
@@ -231,3 +237,42 @@ pub const STATUS_STACK_OVERFLOW: u32 = 0xC000_00FD;
 pub const STATUS_ACCESS_VIOLATION: u32 = 0xC000_0005;
 /// Windows: a fail-fast exit (how Rust aborts there, e.g. after a failed allocation).
 pub const STATUS_STACK_BUFFER_OVERRUN: u32 = 0xC000_0409;
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    use std::io::BufRead;
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+
+    /// Running, not a zombie waiting for whoever adopted it.
+    fn alive(pid: i32) -> bool {
+        let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else { return false };
+        stat.rsplit_once(')').is_some_and(|(_, rest)| !rest.trim_start().starts_with('Z'))
+    }
+
+    #[test]
+    fn a_reaped_host_is_never_probed_or_its_group_signalled_again() {
+        // The host: exits at once and is reaped.
+        let mut host = Command::new("true").process_group(0).spawn().expect("spawn");
+        let containment = contain(&host);
+        while containment.try_wait(&mut host).expect("wait").is_none() {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        // Its pid may now be another child's: one that exited, leaving its own group behind.
+        let mut other = Command::new("sh").args(["-c", "sleep 30 & echo $!"]).process_group(0).stdout(Stdio::piped()).spawn().expect("spawn");
+        let mut line = String::new();
+        std::io::BufReader::new(other.stdout.take().expect("stdout")).read_line(&mut line).expect("read");
+        let left: i32 = line.trim().parse().expect("pid");
+        while host_state(&other) != Host::Exited {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let _ = containment.try_wait(&mut other);
+        containment.end(&mut other);
+        // A kill takes effect a moment after it is sent.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let survived = alive(left);
+        let _ = rustix::process::kill_process(rustix::process::Pid::from_raw(left).expect("pid"), rustix::process::Signal::KILL);
+        assert!(survived, "the group of a process that only shares the reaped host's pid was killed");
+    }
+}

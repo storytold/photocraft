@@ -713,6 +713,12 @@ fn arrays_reached_through_getters_cycles_holes_and_proxies_stay_within_the_bound
     assert_eq!(lines_of(&src), too_deep);
     // An array-like with the intrinsic conversion is joined the same way.
     assert_eq!(first_dialog_text("alert({ length: 2, 0: 'a', 1: ['b', 'c'], toString: Array.prototype.toString, join: Array.prototype.join });"), "a,b,c");
+    // The intrinsic join as the conversion method itself is held to the same bounds.
+    assert_eq!(first_dialog_text("alert({ length: 2, 0: 'a', 1: ['b', 'c'], toString: Array.prototype.join });"), "a,b,c");
+    let src = format!("{deep} {}", caught("alert({ length: 1, 0: d, toString: Array.prototype.join });"));
+    assert_eq!(lines_of(&src), too_deep);
+    let src = format!("{deep} d.toString = Array.prototype.join; {}", caught("$.writeln(d);"));
+    assert_eq!(lines_of(&src), too_deep);
     // Without a `join`, the intrinsic toString falls back to Object.prototype.toString, per spec.
     assert_eq!(first_dialog_text("alert({ length: 1, 0: 'a', toString: Array.prototype.toString });"), "[object Object]");
     // A replaced Array.prototype.toString or join is the script's own code and runs as such.

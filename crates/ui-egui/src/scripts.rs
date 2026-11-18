@@ -81,7 +81,7 @@ pub trait ScriptRun {
 }
 
 /// Why a run can't start without a script service.
-const NO_SCRIPTS: &str = if cfg!(target_arch = "wasm32") {
+pub(crate) const NO_SCRIPTS: &str = if cfg!(target_arch = "wasm32") {
     "Scripts aren't available in the browser yet: they will run once PhotoCraft can run them in a separate worker"
 } else {
     "this build of PhotoCraft can't run JavaScript scripts"
@@ -383,7 +383,7 @@ pub(crate) fn run_step(app: &mut PhotocraftApp, params: &Value, token: u64) -> R
     resolve_and_start(app, params.clone(), None, Some(token))
 }
 
-/// Whether a playback step can run a script here (otherwise the engine only resolves it).
+/// Whether a script can run here: without a script service a run fails with [`NO_SCRIPTS`].
 pub(crate) fn can_run(app: &PhotocraftApp) -> bool {
     app.services.scripts.is_some()
 }
@@ -395,7 +395,10 @@ pub(crate) fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<
             app.ui.scripts.open = true;
             Some(app.session.execute(id, params.clone()).map_err(|e| e.to_string()))
         }
-        "file.scripts.run" if can_run(app) => Some(match params.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()) {
+        // Without a script service no script can run: say so rather than let the engine only
+        // resolve the script and report success.
+        "file.scripts.run" if !can_run(app) => Some(Err(NO_SCRIPTS.into())),
+        "file.scripts.run" => Some(match params.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()) {
             // A run from the list, as the Scripts Manager runs it.
             Some(i) if params.as_object().is_some_and(|m| m.len() == 1) => run_listed(app, i),
             _ => resolve_and_start(app, params.clone(), None, None),
@@ -484,7 +487,8 @@ pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let recording = app.session.actions.recording.is_some();
     let last = if recording { app.session.journal.last().cloned() } else { None };
     // The run is taken out while it pumps, so its commands can go through the app.
-    let pump = |app: &mut PhotocraftApp| {
+    let kept = last.clone();
+    let pump = move |app: &mut PhotocraftApp| {
         let Some(mut active) = app.scripts.run.take() else { return Vec::new() };
         let automation = active.automation;
         app.scripts.pumping = true;
@@ -496,8 +500,15 @@ pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
             Ok(events) => events,
             Err(panic) => {
                 // The app's guard reports the panic; the run ends with it, and scripts can still
-                // run afterwards.
+                // run afterwards. The commands it ran stay done, but out of an action being
+                // recorded, as when it ends normally.
                 active.run.cancel();
+                if recording && app.session.actions.recording.is_some() {
+                    app.session.journal.truncate(journal);
+                    if let (Some(last), Some(entry)) = (kept, app.session.journal.last_mut()) {
+                        *entry = last;
+                    }
+                }
                 std::panic::resume_unwind(panic);
             }
         };
@@ -897,8 +908,11 @@ struct Draw<'a> {
 }
 
 impl Draw<'_> {
+    /// The pass's event: the first, except that a click outranks a `change` before it (an edit
+    /// field loses focus to the button clicked, in the same pass; the edit travels with the
+    /// click's values).
     fn fire(&mut self, name: &'static str, id: u32) {
-        if self.live && self.event.is_none() {
+        if self.live && (self.event.is_none() || (name == "click" && self.event.is_some_and(|(n, _)| n == "change"))) {
             self.event = Some((name, id));
         }
     }

@@ -140,6 +140,21 @@ pub fn write_frame<W: Write, T: Serialize>(w: &mut W, msg: &T, cap: usize) -> Re
     w.flush().map_err(FrameError::Io)
 }
 
+/// Parse one message's body (a frame without its length, or a Worker's message), with the same
+/// checks [`read_frame`] makes.
+///
+/// # Errors
+/// Over `cap`, too many values, or malformed.
+pub fn parse_body<T: DeserializeOwned>(body: &[u8], cap: usize) -> Result<T, FrameError> {
+    if body.len() > cap {
+        return Err(FrameError::TooLarge(body.len()));
+    }
+    if values_in(body) > MAX_FRAME_VALUES {
+        return Err(FrameError::Malformed(format!("more than {MAX_FRAME_VALUES} values in one message")));
+    }
+    serde_json::from_slice(body).map_err(|e| FrameError::Malformed(e.to_string()))
+}
+
 /// Read one frame. `Ok(None)` when the stream ended cleanly between frames.
 ///
 /// # Errors
