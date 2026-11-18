@@ -155,10 +155,16 @@ fn source_layer(doc: &Document, p: &Value, cmd: &str) -> Result<Option<LayerId>>
 /// 8-bit RGB document that has one over its Background (#14533). `None` keeps the error: Apply
 /// Image has its own rule (#14506), and other documents were not measured.
 fn unknown_layer_reads_top(doc: &Document, cmd: &str) -> Option<LayerId> {
-    if cmd != CALCULATIONS || doc.mode != ColorMode::Rgb || doc.depth != SampleType::U8 {
+    if cmd != CALCULATIONS || !measured_rgb8(doc) || doc.background().is_none() {
         return None;
     }
     doc.layers.last().filter(|l| !doc.is_background(l.id)).map(|l| l.id)
+}
+
+/// The documents the reference application's script fallbacks were measured on (#14533): 8-bit
+/// RGB. Other modes and depths keep today's errors.
+fn measured_rgb8(doc: &Document) -> bool {
+    doc.mode == ColorMode::Rgb && doc.depth == SampleType::U8
 }
 
 /// The command id [`source`] treats specially for script references (#14533).
@@ -310,10 +316,11 @@ pub(super) fn source(s: &Session, p: &Value, cmd: &str, gray: bool) -> Result<Ve
 
 /// Calculations' Channel list shows Gray for a colour source, the composite read as one grey
 /// plane; a script names it `"gray"` (any case), as in the reference application (#14533). Only
-/// when no alpha channel has that name ([`parse_ref`] finds one first).
+/// in an 8-bit RGB source (others were not measured), and only when no alpha channel has that
+/// name ([`parse_ref`] finds one first).
 fn gray_of_colour_source(v: &Value, cmd: &str, doc: &Document) -> Option<ChanRef> {
     let gray = v.as_str().is_some_and(|n| n.eq_ignore_ascii_case("gray"));
-    (gray && cmd == CALCULATIONS && color_count(doc) > 1).then_some(ChanRef::Composite)
+    (gray && cmd == CALCULATIONS && measured_rgb8(doc)).then_some(ChanRef::Composite)
 }
 
 // ---------------------------------------------------------------------------------------------

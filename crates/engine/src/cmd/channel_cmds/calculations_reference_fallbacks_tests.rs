@@ -76,11 +76,15 @@ fn an_unknown_source_1_layer_reads_the_top_layer() {
 
 #[test]
 fn an_unknown_source_2_layer_reads_the_top_layer() {
+    // Source 1 is the Background's Green (100 | 150, never 0), so Multiply shows Source 2.
     let mut s = rgb();
-    let source1 = json!({"layer": "Top", "channel": "blue"});
+    let source1 = json!({"layer": {"background": true}, "channel": "green"});
     let masked = calculate(&mut s, json!({"source1": source1, "source2": {"layer": "Masked", "channel": "red"}, "blending": "multiply"})).unwrap();
     let nope = calculate(&mut s, json!({"source1": source1, "source2": {"layer": "Nope", "channel": "red"}, "blending": "multiply"})).unwrap();
     assert_eq!(nope, masked);
+    // Not the merged image: on the right half Masked's mask shows the Background's red (50).
+    let merged = calculate(&mut s, json!({"source1": source1, "source2": {"layer": "merged", "channel": "red"}, "blending": "multiply"})).unwrap();
+    assert_ne!(nope, merged);
 }
 
 #[test]
@@ -140,4 +144,20 @@ fn documents_that_were_not_measured_keep_the_error() {
     s.execute("file.new", json!({"width": 40, "height": 30, "background": "white"})).unwrap();
     let r = s.execute("image.calculations", json!({"source1": {"layer": "Nope"}, "source2": {}}));
     assert!(r.is_err(), "only a Background");
+    // A transparent document with no Background (CodeRabbit on #15570).
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 40, "height": 30, "background": "transparent"})).unwrap();
+    assert!(s.active().unwrap().doc.background().is_none());
+    let r = s.execute("image.calculations", json!({"source1": {"layer": "Nope"}, "source2": {}}));
+    assert!(r.is_err(), "no Background");
+}
+
+#[test]
+fn gray_stays_unknown_outside_8_bit_rgb() {
+    // Not measured: other colour modes and depths keep the unknown-channel error.
+    for (mode, depth) in [("rgb", 16), ("rgb", 32), ("cmyk", 8), ("lab", 8)] {
+        let mut s = session(mode, depth);
+        let r = s.execute("image.calculations", json!({"source1": {"channel": "gray"}, "source2": {}}));
+        assert!(r.is_err(), "{mode} {depth}");
+    }
 }
