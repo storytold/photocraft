@@ -71,6 +71,8 @@ const SMALL: u32 = 64;
 const LARGE: u32 = 128;
 /// The thumbnail panel's size in points.
 const PANEL: egui::Vec2 = vec2(296.0, 290.0);
+/// The height of a labelled row of fields in points.
+const ROW_H: f32 = 24.0;
 /// The largest side the size fields take, in pixels.
 const MAX_SIDE: f64 = 300_000.0;
 
@@ -679,11 +681,14 @@ fn left_column(ui: &mut egui::Ui, f: &mut DialogFields, st: &mut Held, t: &Token
 fn right_column(ui: &mut egui::Ui, f: &mut DialogFields, st: &mut Held, t: &Tokens, images: bool) {
     let label_w = 76.0;
     let field = |ui: &mut egui::Ui, label: &str, add: &mut dyn FnMut(&mut egui::Ui)| {
-        ui.horizontal(|ui| {
-            let (r, _) = ui.allocate_exact_size(vec2(label_w, 22.0), Sense::hover());
-            ui.painter().text(pos2(r.right() - 4.0, r.center().y), egui::Align2::RIGHT_CENTER, tl!(label), egui::FontId::proportional(12.0), t.text_dim);
-            add(ui);
-        });
+        // Exactly one line high: inside this custom row the framework's fields claim the height
+        // left in the dialog, so a plain horizontal row grew to it and pushed every row after it
+        // out of sight. The row is drawn in a child over a fixed rectangle instead.
+        let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::hover());
+        let mut ui = ui.new_child(egui::UiBuilder::new().max_rect(row).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        let (r, _) = ui.allocate_exact_size(vec2(label_w, 22.0), Sense::hover());
+        ui.painter().text(pos2(r.right() - 4.0, r.center().y), egui::Align2::RIGHT_CENTER, tl!(label), egui::FontId::proportional(12.0), t.text_dim);
+        add(&mut ui);
     };
     ui.add_enabled_ui(!images, |ui| {
         group(ui, t, tl!("Page Options"), |ui| {

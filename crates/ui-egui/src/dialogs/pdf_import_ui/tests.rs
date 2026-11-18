@@ -622,3 +622,23 @@ fn a_range_does_not_start_from_the_other_list() {
     h.run_steps(2);
     assert_eq!(dialog(h.state()).map(|d| d.2["images"].clone()), Some(json!([1])), "only the clicked image");
 }
+
+/// Each labelled row of the right column is one line high, so the whole column fits in the
+/// dialog: the framework's fields fill the height a horizontal row offers, which stretched every
+/// row to the rest of the dialog and pushed Crop To and everything after it out of sight.
+#[test]
+fn the_option_rows_fit_in_the_dialog() {
+    let mut app = app();
+    app.open_bytes("multi.pdf", &three_pages()).expect("open");
+    let mut h = dialog_harness(app);
+    h.run_steps(6);
+    let rect = |role: egui::accesskit::Role, label: &str| {
+        h.query_all_by_role(role).find(|n| n.accesskit_node().label().as_deref() == Some(label)).unwrap_or_else(|| panic!("{label}")).rect()
+    };
+    let dialog = rect(egui::accesskit::Role::Dialog, "Import PDF");
+    let name = rect(egui::accesskit::Role::TextInput, "Name:");
+    let crop = rect(egui::accesskit::Role::ComboBox, "Crop To");
+    assert!(crop.top() - name.bottom() < 16.0, "Crop To at y {} but Name ends at y {}", crop.top(), name.bottom());
+    let last = rect(egui::accesskit::Role::CheckBox, "Open In Reverse Order");
+    assert!(last.bottom() <= dialog.bottom(), "Open In Reverse Order ends at y {} below the dialog's {}", last.bottom(), dialog.bottom());
+}
