@@ -201,14 +201,15 @@ pub(crate) fn recorded_duplicate(s: &Session, mut p: Value) -> Value {
     p
 }
 
-/// [`fit_canvas`] for a command that makes a board (New Artboard, Artboard from Group, Artboard
-/// from Layers), as the reference application grows the canvas for one (#14565): a board past an
+/// [`fit_canvas`] for New Artboard and Artboard from Group, as the reference application grows
+/// the canvas for them (#14565): a board past an
 /// edge grows the canvas on that side by the whole old canvas width or height, and one past the
 /// left or top edge shifts the document by that growth (800 x 600 with a board at -100,-50 gives
 /// 1600 x 1200, everything shifted +800,+600). A board more than one canvas past an edge (not
 /// measured) grows it as far as the board reaches, so the board still fits. Falls back to
-/// [`fit_canvas`] when that growth would pass the largest canvas. Moving or resizing a board keeps
-/// [`fit_canvas`]'s exact growth (the Artboard tool's Auto-size Canvas was not measured).
+/// [`fit_canvas`] when that growth would pass the largest canvas. Artboard from Layers, and moving
+/// or resizing a board, keep [`fit_canvas`]'s exact growth (not measured; the Artboard tool's
+/// Auto-size Canvas included).
 #[must_use = "pass the shift to `follow_shift`, or the Color Samplers and symmetry stay behind (#9302)"]
 pub(crate) fn fit_canvas_for_new_board(doc: &mut Document) -> (i32, i32) {
     let max = i64::from(crate::document_preset_cmds::MAX_DIMENSION);
@@ -466,7 +467,7 @@ fn artboard_from_layers(s: &mut Session, p: &Value) -> Result<Value> {
         set_artboard(&mut g, Artboard { rect, background, preset: String::new() });
         let gid = doc.insert_above(None, g);
         crate::layer_multi_cmds::check_group_depth(doc, "Artboard from Layers")?;
-        let shift = fit_canvas_for_new_board(doc);
+        let shift = fit_canvas(doc);
         *active = Some(gid);
         Ok((gid, rect, shift))
     })?;
