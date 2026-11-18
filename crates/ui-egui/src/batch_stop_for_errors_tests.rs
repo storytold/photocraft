@@ -13,7 +13,7 @@ use serde_json::json;
 
 use crate::PhotocraftApp;
 
-fn app_harness() -> Harness<'static, PhotocraftApp> {
+fn app_harness() -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).with_max_steps(8).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let mut s = photocraft_engine::Session::new();
@@ -27,7 +27,7 @@ fn app_harness() -> Harness<'static, PhotocraftApp> {
 }
 
 /// Step at least `min` frames and until `ready` holds; fail after 60 s.
-fn frames_until(h: &mut Harness<'_, PhotocraftApp>, min: u64, ready: impl Fn(&Harness<'_, PhotocraftApp>) -> bool) {
+fn frames_until(h: &mut Harness<'_, Box<PhotocraftApp>>, min: u64, ready: impl Fn(&Harness<'_, Box<PhotocraftApp>>) -> bool) {
     let t = std::time::Instant::now();
     let mut n = 0;
     while n < min || !ready(h) {
@@ -38,7 +38,7 @@ fn frames_until(h: &mut Harness<'_, PhotocraftApp>, min: u64, ready: impl Fn(&Ha
 }
 
 /// A desktop Batch worker parks on each failed input and reports both answers in its result.
-fn pausing_batch(h: &mut Harness<'_, PhotocraftApp>) -> photocraft_engine::jobs::JobId {
+fn pausing_batch(h: &mut Harness<'_, Box<PhotocraftApp>>) -> photocraft_engine::jobs::JobId {
     h.state_mut().session.set_batch_failure_questions(true);
     let Started::Job(id) = h
         .state_mut()
@@ -65,7 +65,7 @@ fn pausing_batch(h: &mut Harness<'_, PhotocraftApp>) -> photocraft_engine::jobs:
     id
 }
 
-fn question_text(h: &Harness<'_, PhotocraftApp>) -> bool {
+fn question_text(h: &Harness<'_, Box<PhotocraftApp>>) -> bool {
     h.query_all_by_label("The command \"Invert\" is not currently available.").count() >= 1
 }
 
