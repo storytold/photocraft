@@ -6,13 +6,13 @@
 
 use std::sync::Arc;
 
-use photocraft_cms::{Builtin, Profile, curve::Curve};
+use craft::cms::{Builtin, Profile, curve::Curve};
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{Document, Layer, LayerContent, Size};
 use photocraft_engine::display_color::Display;
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
-use photocraft_ui_egui::{PhotocraftApp, canvas::ViewXform, gpu_canvas};
+use photocraft_ui_egui::{PhotocraftApp, gpu_canvas};
 
 // D50-adapted sRGB and Display P3 colourants. ICC stores them as signed 15.16 values.
 const SOURCE_MATRIX: [[f64; 3]; 3] =
@@ -82,7 +82,7 @@ fn profiles() -> (Arc<Vec<u8>>, Arc<Vec<u8>>) {
     (source.with_encoded_bytes().to_bytes(), monitor.with_encoded_bytes().to_bytes())
 }
 
-/// Solve the monitor matrix without using any photocraft-cms transform/math/curve evaluator.
+/// Solve the monitor matrix without using any craft-cms transform/math/curve evaluator.
 fn solve(mut m: [[f64; 3]; 3], mut xyz: [f64; 3]) -> [f64; 3] {
     for column in 0..3 {
         let pivot = (column..3).max_by(|&a, &b| m[a][column].abs().total_cmp(&m[b][column].abs())).unwrap();
@@ -158,7 +158,7 @@ fn gpu_display_shadows_match_independent_icc_reference_at_all_depths() {
         egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 700.0)).with_pixels_per_point(1.0).with_max_steps(64).renderer(renderer).build_eframe(
             move |cc| {
                 PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-                let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+                let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), Default::default());
                 app.set_wgpu(cc.wgpu_render_state.as_ref().expect("render state").clone());
                 app.session.color.set_displays(Ok(vec![Display {
                     id: 1,
@@ -176,7 +176,7 @@ fn gpu_display_shadows_match_independent_icc_reference_at_all_depths() {
         harness.state_mut().sync_views();
         harness.run_steps(6);
         assert!(harness.state().gpu_active(), "the regression must exercise the GPU canvas");
-        let xform = ViewXform::active(harness.state()).expect("canvas mapping");
+        let xform = photocraft_ui_egui::canvas::active_view(harness.state()).expect("canvas mapping");
         let image = harness.render().expect("render GPU canvas");
         // Optional local diagnostic artifact: entirely synthetic, never a user's document.
         if let Some(dir) = std::env::var_os("PHOTOCRAFT_DISPLAY_TEST_OUTPUT") {
@@ -187,7 +187,7 @@ fn gpu_display_shadows_match_independent_icc_reference_at_all_depths() {
         for (i, rgb) in RGB.iter().enumerate() {
             let x = (i % COLS) as f32 * PATCH as f32 + PATCH as f32 / 2.0;
             let y = (i / COLS) as f32 * PATCH as f32 + PATCH as f32 / 2.0;
-            let point = xform.to_screen(x, y);
+            let point = xform.to_screen(craft::behavior::kurbo::Point::new(f64::from(x), f64::from(y)));
             let got = image.get_pixel(point.x.round() as u32, point.y.round() as u32).0;
             let want = reference(*rgb);
             if (0..3).any(|c| got[c].abs_diff(want[c]) > 1) {
@@ -203,7 +203,7 @@ fn gpu_display_shadows_match_independent_icc_reference_at_all_depths() {
 #[test]
 #[ignore = "manual 24 MP GPU timing; run with --release --ignored --nocapture"]
 fn compare_display_paths_24mp() {
-    use photocraft_cms::{Intent, Lut3d, Transform};
+    use craft::cms::{Intent, Lut3d, Transform};
     use photocraft_ui_egui::gpu_canvas::{GpuCanvas, ViewParams};
     use std::time::Instant;
 
@@ -215,14 +215,14 @@ fn compare_display_paths_24mp() {
     let source = Profile::parse(&source).expect("synthetic source");
     let monitor = Profile::parse(&monitor).expect("synthetic monitor");
     let transform = Transform::new(&source, &monitor, Intent::RelativeColorimetric, true).expect("display transform");
-    let lut = Lut3d::from_transform(&transform, 33).to_rgba8();
+    let lut = Lut3d::from_transform(&transform, 33).unwrap().to_rgba8();
     let shaper = transform.gpu_matrix_shaper().expect("matrix/shaper");
 
     let mut prep_lut_ms = Vec::new();
     let mut prep_shaper_ms = Vec::new();
     for _ in 0..5 {
         let start = Instant::now();
-        std::hint::black_box(Lut3d::from_transform(&transform, 33).to_rgba8());
+        std::hint::black_box(Lut3d::from_transform(&transform, 33).unwrap().to_rgba8());
         prep_lut_ms.push(start.elapsed().as_secs_f64() * 1000.0);
         let start = Instant::now();
         std::hint::black_box(transform.gpu_matrix_shaper().expect("matrix/shaper"));
@@ -248,13 +248,10 @@ fn compare_display_paths_24mp() {
         zoom: 1.0,
         center: [SIZE[0] as f32 / 2.0, SIZE[1] as f32 / 2.0],
         rotation: 0.0,
-        shadow: false,
-        pixel_grid: false,
         view_key: 0,
         display: 1,
         output: 1,
         hdr: None,
-        offset: [0.0, 0.0],
     };
     let mut harness =
         egui_kittest::Harness::builder().with_size(egui::vec2(SIZE[0] as f32, SIZE[1] as f32)).with_pixels_per_point(1.0).renderer(renderer).build_ui_state(

@@ -29,7 +29,9 @@ struct Watch {
 
 /// Tools whose ⌥-click does something: the ⌥ Eyedropper, the clone source point and Zoom Out.
 pub(crate) fn alt_click_tool(tool: Tool, mods: egui::Modifiers) -> bool {
-    crate::canvas::alt_samples(tool, mods) || (mods.alt && !mods.ctrl && matches!(tool, Tool::MixerBrush | Tool::CloneStamp | Tool::Healing | Tool::Zoom))
+    // `alt_samples` reads only Alt and Control.
+    let held = craft::keymap::Mods { cmd: false, ctrl: mods.ctrl, alt: mods.alt, shift: mods.shift };
+    crate::canvas::alt_samples(tool, held) || (mods.alt && !mods.ctrl && matches!(tool, Tool::MixerBrush | Tool::CloneStamp | Tool::Healing | Tool::Zoom))
 }
 
 /// The status-bar message for an ⌥-click the desktop took.

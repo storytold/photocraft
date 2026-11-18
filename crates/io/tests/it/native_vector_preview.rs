@@ -2,11 +2,11 @@
 
 use std::sync::Arc;
 
+use craft_psd::PsdFile;
 use photocraft_color::{ColorMode, SampleType};
 use photocraft_doc::{Document, Layer, LayerContent, SmartObject, SmartSource, VectorPreview};
 use photocraft_geom::{Affine, Size};
 use photocraft_io::{ExportOptions, export, import, linked, smart_map, vector_preview};
-use photocraft_psd::PsdFile;
 use photocraft_raster::Surface;
 
 const PDF: &[u8] = b"%PDF-1.7\nopaque native source bytes\n%%EOF\n";
@@ -147,7 +147,7 @@ fn smart_filter_mask_switches_survive_white_and_nonwhite_psd_resaves() {
                         let output = export(&doc, extension, &ExportOptions { tiff_layers: true, ..Default::default() }).unwrap();
                         let (records, globals) = if extension == "tif" {
                             let (_, data) = photocraft_codecs::tiff_photoshop_tags(&output.bytes);
-                            let (isd, warnings) = photocraft_psd::tiff::ImageSourceData::from_bytes(data.unwrap()).unwrap();
+                            let (isd, warnings) = craft_psd::tiff::ImageSourceData::from_bytes(data.unwrap()).unwrap();
                             assert!(warnings.is_empty(), "{warnings:?}");
                             (isd.layer_info.unwrap().layers, isd.global_blocks)
                         } else {
