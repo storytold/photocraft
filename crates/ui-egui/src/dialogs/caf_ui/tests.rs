@@ -282,9 +282,14 @@ fn a_refused_fill_keeps_the_last_remembered_settings() {
     open(&mut app).unwrap();
     ui(&mut app, json!({"output": "current", "colorAdaptation": "none", "apply": true})).unwrap();
     let remembered = saved(&app).expect("the Apply that ran remembers its settings");
-    app.session.execute("layer.setProps", json!({"locks": {"pixels": true}})).unwrap();
+    // The workspace's layer: the fill may have left another layer active.
+    let layer = app.caf.as_ref().unwrap().layer;
+    app.session.execute("layer.setProps", json!({"layer": layer.0, "locks": {"pixels": true}})).unwrap();
+    let before = facts(&app)["previewRevision"].as_u64().unwrap();
     ui(&mut app, json!({"colorAdaptation": "high", "mirror": true})).unwrap();
-    assert!(ui(&mut app, json!({"apply": true})).is_err(), "the engine refuses the locked layer");
+    settle(&mut app, |d| d["previewRevision"].as_u64().unwrap() > before && d["previewError"].is_null());
+    ui(&mut app, json!({"apply": true})).unwrap();
+    assert!(facts(&app)["error"].as_str().is_some_and(|e| e.contains("locked")), "the engine refuses the locked layer: {}", facts(&app));
     assert_eq!(saved(&app), Some(remembered.clone()), "a refused Apply remembers nothing");
     assert!(ui(&mut app, json!({"commit": true})).is_err(), "the engine refuses OK too");
     assert_eq!(saved(&app), Some(remembered), "a refused OK remembers nothing");
