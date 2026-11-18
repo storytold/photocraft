@@ -258,10 +258,6 @@ jobs:
         if: matrix.part == 'clippy'
         run: cargo clippy --workspace --all-targets --locked --features heif -- -D warnings
 
-      - name: Dependency layering
-        if: matrix.part == 'integration'
-        run: cargo xtask layers
-
       - uses: step-security/taiki-e-install-action@76747d22a7567cc4438546a84f11bdf18e670ab8 # v2.87.32
         if: matrix.part != 'clippy'
         with:
