@@ -274,6 +274,22 @@ fn apply_and_ok_keep_the_settings_for_an_empty_recorded_step() {
     assert_eq!(saved(&app).unwrap()["output"], "duplicate", "OK remembers too");
 }
 
+/// A fill the engine refuses leaves the settings of the last fill that ran for an empty recorded step (#14254).
+#[test]
+fn a_refused_fill_keeps_the_last_remembered_settings() {
+    let mut app = app_with_selection();
+    let saved = |app: &PhotocraftApp| app.session.prefs().dialogs.get(photocraft_engine::atn_cmds::CAF_WORKSPACE_PREFS).cloned();
+    open(&mut app).unwrap();
+    ui(&mut app, json!({"output": "current", "colorAdaptation": "none", "apply": true})).unwrap();
+    let remembered = saved(&app).expect("the Apply that ran remembers its settings");
+    app.session.execute("layer.setProps", json!({"locks": {"pixels": true}})).unwrap();
+    ui(&mut app, json!({"colorAdaptation": "high", "mirror": true})).unwrap();
+    assert!(ui(&mut app, json!({"apply": true})).is_err(), "the engine refuses the locked layer");
+    assert_eq!(saved(&app), Some(remembered.clone()), "a refused Apply remembers nothing");
+    assert!(ui(&mut app, json!({"commit": true})).is_err(), "the engine refuses OK too");
+    assert_eq!(saved(&app), Some(remembered), "a refused OK remembers nothing");
+}
+
 /// The engine's sampling area over the plan's rectangle (what the fill samples) and its fill area.
 fn engine_source(app: &PhotocraftApp) -> (Rect, Vec<bool>, Vec<bool>) {
     let c = app.caf.as_ref().unwrap();

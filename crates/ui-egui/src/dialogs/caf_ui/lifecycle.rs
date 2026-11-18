@@ -139,12 +139,15 @@ fn remember(app: &mut PhotocraftApp, command: &FillCommand) {
     app.session.prefs.edit(|p| p.dialogs.insert(photocraft_engine::atn_cmds::CAF_WORKSPACE_PREFS.into(), Value::Object(settings)));
 }
 
-/// Fills with `command` (one history step); the workspace stays as it is. A refusal is reported.
+/// Fills with `command` (one history step); the workspace stays as it is. A refusal is reported and keeps the
+/// settings of the last fill that ran.
 pub(super) fn apply(app: &mut PhotocraftApp, command: &FillCommand) -> Result<(), String> {
     let layer = app.caf.as_ref().ok_or("Content-Aware Fill is not open")?.layer;
-    remember(app, command);
     match app.run(CMD, plan_params(command, layer)) {
-        Ok(_) => Ok(()),
+        Ok(_) => {
+            remember(app, command);
+            Ok(())
+        }
         Err(e) => {
             report(app, &e);
             Err(e)

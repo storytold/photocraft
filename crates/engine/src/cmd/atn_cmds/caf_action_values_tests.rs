@@ -44,12 +44,14 @@ fn load(d: Descriptor) -> Action {
     loaded.actions.into_iter().next().unwrap()
 }
 
-/// The item Save Actions writes for one step, or `None` when it cannot write it.
+/// The item Save Actions writes for one step, or `None` when it refuses the step. A save that succeeds must
+/// write a readable file holding the item.
 fn exported(p: Value) -> Option<AtnItem> {
     let a = Action::new("A", vec![ActionStep::new(CMD, p)]);
     let (bytes, skipped) = export("S", &[&a], &[], false).ok()?;
     assert!(skipped.is_empty());
-    atn::parse(&bytes).ok()?.actions.into_iter().next()?.items.into_iter().next()
+    let saved = atn::parse(&bytes).expect("a successful save writes a readable file");
+    Some(saved.actions.into_iter().next().and_then(|a| a.items.into_iter().next()).expect("the saved file holds the step"))
 }
 
 #[test]
