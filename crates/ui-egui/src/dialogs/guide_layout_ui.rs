@@ -13,6 +13,7 @@ use craft::ui::patterns::form_dialogs::{
     HostedGuideLayoutDialog,
 };
 use craft::ui::runtime::env::UnitKind;
+use craft::ui::runtime::memory::{SaveKey, saved_value, set_saved_value};
 use egui::Color32;
 use photocraft_doc::{Document, Guides};
 use photocraft_engine::prefs::Unit;
@@ -21,6 +22,9 @@ use serde_json::{Map, Value, json};
 use crate::PhotocraftApp;
 
 const COMMAND: &str = "view.newGuideLayout";
+
+/// The saved value OK writes the layout under: the next dialog opens with it, after a restart too (#12978).
+const REMEMBERED: SaveKey = SaveKey::new("photocraft.view.newGuideLayout");
 
 /// The most columns or rows a remembered layout may hold.
 const MAX_COUNT: u64 = 1000;
@@ -212,7 +216,7 @@ pub fn open(app: &mut PhotocraftApp) -> Option<DialogId> {
         .collect();
     let units = guide_units(app);
     let document = GuideRect::new(0.0, 0.0, units.width_px, units.height_px);
-    let mut options = options_of(&app.ui.view.guide_layout, &units);
+    let mut options = options_of(&remembered(app), &units);
     // A remembered Selected Artboards target needs a selected artboard.
     if options.target == GuideTarget::SelectedArtboards && artboards.is_empty() {
         options.target = GuideTarget::Document;
@@ -277,19 +281,26 @@ fn apply(app: &mut PhotocraftApp, doc: photocraft_doc::DocId, result: &GuideLayo
     Ok(())
 }
 
-/// OK applied the layout: the next dialog opens with it, in this session and, through the preferences' remembered
-/// dialog settings, after a restart (#12978). Cancel and a failed OK never reach here. The colour is not part of it:
-/// it is the Guides, Grid & Slices preference, saved on its own.
+/// OK applied the layout: the next dialog opens with it, in this session and, through the framework's saved values,
+/// after a restart (#12978). Cancel and a failed OK never reach here. The colour is not part of it: it is the Guides,
+/// Grid & Slices preference, saved on its own. The saved form has no nulls (TOML has none): a missing size reads as
+/// the layout dividing the space evenly, as a null does.
 fn remember(app: &mut PhotocraftApp, layout: Value) {
-    app.session.prefs.edit(|p| p.dialogs.insert(COMMAND.into(), layout.clone()));
+    set_saved_value(app.ctx(), &REMEMBERED, Some(crate::dialogs::without_nulls(layout.clone())));
     app.ui.view.guide_layout = layout;
 }
 
-/// At launch, bring back the layout the last OK applied before the previous quit. Saved data is never trusted: the
-/// dialog reads it leniently ([`options_of`]), so whatever a hand-edited preferences file got wrong keeps its default.
-pub fn restore(app: &mut PhotocraftApp) {
-    if let Some(saved @ Value::Object(_)) = app.session.prefs().dialogs.get(COMMAND).cloned() {
-        app.ui.view.guide_layout = saved;
+/// The layout the dialog opens with: the one set this session, else the last OK's from an earlier session, else the
+/// factory layout. Saved data is never trusted: [`options_of`] reads it leniently, so whatever a damaged file got wrong
+/// keeps its default.
+fn remembered(app: &PhotocraftApp) -> Value {
+    let session = &app.ui.view.guide_layout;
+    if *session != crate::view_cmds::default_guide_layout() {
+        return session.clone();
+    }
+    match saved_value::<Option<Value>>(app.ctx(), &REMEMBERED) {
+        Some(saved @ Value::Object(_)) => saved,
+        _ => session.clone(),
     }
 }
 

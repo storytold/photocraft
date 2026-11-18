@@ -233,21 +233,39 @@ fn launch(files: &std::sync::Arc<craft::settings::testing::MemoryFiles>) -> Phot
     PhotocraftApp::new(session, crate::Services { settings: Some(craft::settings::SettingsStore::open_with(options)), ..Default::default() })
 }
 
-/// A launch whose saved preferences hold `layout` as the remembered New Guide Layout settings, written through the
-/// settings store as a hand-edited or damaged file would be read.
-fn launch_with_saved(layout: Value) -> PhotocraftApp {
+/// `app` under the app's own frame (its hooks around each pass, as eframe runs them), so what the framework saves
+/// reaches the preferences and the settings file as in the running app.
+fn framed(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+    use crate::app::framework::BuildApp;
+    let mut h = Harness::<'static, PhotocraftApp>::builder()
+        .with_size(egui::vec2(1400.0, 900.0))
+        .build_app(|ui: &mut egui::Ui, app: &mut PhotocraftApp| crate::dialogs::run(app, ui), app);
+    h.run_steps(2);
+    h
+}
+
+/// A launch whose saved values hold `layout` as the remembered New Guide Layout, written through the settings store as
+/// a hand-edited or damaged file would be read.
+fn launch_with_saved(layout: Value) -> Harness<'static, PhotocraftApp> {
     let files = std::sync::Arc::new(craft::settings::testing::MemoryFiles::new());
-    let mut first = launch(&files);
-    first.session.prefs.edit(|p| p.dialogs.insert(COMMAND.into(), layout.clone()));
-    crate::prefs_ui::save_preferences(&mut first).unwrap();
-    launch(&files)
+    let mut first = framed(launch(&files));
+    let ctx = first.ctx.clone();
+    set_saved_value(&ctx, &REMEMBERED, Some(layout));
+    first.run_steps(2);
+    crate::prefs_ui::save_preferences(first.state_mut()).unwrap();
+    framed(launch(&files))
+}
+
+/// The layout the last OK saved, if any.
+fn saved(h: &Harness<'static, PhotocraftApp>) -> Option<Value> {
+    saved_value::<Option<Value>>(h.state().ctx(), &REMEMBERED)
 }
 
 /// The dialog reopens with the layout the last OK applied, after a restart too (#12978).
 #[test]
 fn the_confirmed_layout_survives_a_restart() {
     let files = std::sync::Arc::new(craft::settings::testing::MemoryFiles::new());
-    let mut h = harness(launch(&files));
+    let mut h = framed(launch(&files));
     let id = open_dialog(&mut h);
     set_group(&mut h, id, "columns", |c| {
         c["number"] = json!(3);
@@ -261,10 +279,10 @@ fn the_confirmed_layout_survives_a_restart() {
     set(&mut h, id, "clearExisting", json!(true)).unwrap();
     let before = fields(&h, id);
     assert!(confirm(&mut h, id));
-    // Written to the settings file and read back by the next launch, `null` sizes included.
+    // Written to the settings file and read back by the next launch.
     crate::prefs_ui::save_preferences(h.state_mut()).unwrap();
 
-    let mut h = harness(launch(&files));
+    let mut h = framed(launch(&files));
     let id = open_dialog(&mut h);
     let f = fields(&h, id);
     for key in ["columns", "rows", "margin", "centerColumns", "clearExisting", "target"] {
@@ -281,14 +299,14 @@ fn cancel_and_a_failed_ok_keep_the_saved_layout() {
     let id = open_dialog(&mut h);
     set_group(&mut h, id, "columns", |c| c["number"] = json!(3));
     cancel(&mut h, id);
-    assert!(!h.state().session.prefs().dialogs.contains_key(COMMAND), "Cancel saves nothing");
+    assert_eq!(saved(&h), None, "Cancel saves nothing");
 
     let id = open_dialog(&mut h);
     set_group(&mut h, id, "columns", |c| c["number"] = json!(4));
     assert!(confirm(&mut h, id));
-    let saved = h.state().session.prefs().dialogs.get(COMMAND).cloned().unwrap();
-    assert_eq!(saved["columns"], 4);
-    assert!(saved.get("color").is_none(), "only the layout is saved: {saved}");
+    let kept = saved(&h).unwrap();
+    assert_eq!(kept["columns"], 4);
+    assert!(kept.get("color").is_none(), "only the layout is saved: {kept}");
 
     // Seven gutters of 1000 px cannot fit 1200 px: OK fails and the dialog stays open.
     let id = open_dialog(&mut h);
@@ -298,7 +316,7 @@ fn cancel_and_a_failed_ok_keep_the_saved_layout() {
     });
     assert!(!confirm(&mut h, id));
     cancel(&mut h, id);
-    assert_eq!(h.state().session.prefs().dialogs.get(COMMAND), Some(&saved));
+    assert_eq!(saved(&h), Some(kept));
 }
 
 /// A hand-edited preferences file can't break the dialog: each bad value keeps its default, the good ones still load.
@@ -319,7 +337,7 @@ fn a_corrupt_saved_layout_keeps_the_defaults() {
         "target": "moon",
         "bogus": true,
     });
-    let mut h = harness(launch_with_saved(bad));
+    let mut h = launch_with_saved(bad);
     let id = open_dialog(&mut h);
     let f = fields(&h, id);
     assert_eq!((&f["columns"]["number"], &f["columns"]["gutter"]), (&factory["columns"]["number"], &factory["columns"]["gutter"]));
@@ -328,7 +346,7 @@ fn a_corrupt_saved_layout_keeps_the_defaults() {
     assert_eq!(f["rows"]["gutter"]["value"].as_f64(), Some(6.0), "the good value loads");
     assert!(confirm(&mut h, id), "the dialog still works");
 
-    let mut h = harness(launch_with_saved(json!("junk")));
+    let mut h = launch_with_saved(json!("junk"));
     let id = open_dialog(&mut h);
     assert_eq!(fields(&h, id), factory);
 }

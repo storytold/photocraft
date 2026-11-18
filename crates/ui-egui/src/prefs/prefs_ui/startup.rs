@@ -38,7 +38,6 @@ pub fn load(app: &mut PhotocraftApp) {
     sync_rulers(app);
     crate::tool_memory::restore(app);
     crate::view_cmds::restore(app);
-    crate::guide_layout_ui::restore(app);
     app.sync_recent();
     // The store holds what was loaded; only a change from here on is handed to it.
     app.prefs_rt.saved_rev = app.session.prefs.rev();
