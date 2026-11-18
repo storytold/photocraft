@@ -28,6 +28,32 @@ mod brush_mode_menu;
 pub mod canvas;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod control;
+/// The browser build has no control channel (`control` is desktop only, as craft-automation's
+/// channel is). These stand in for the few helpers the dialogs share with it.
+#[cfg(target_arch = "wasm32")]
+pub(crate) mod control {
+    pub(crate) mod dialogs {
+        use crate::PhotocraftApp;
+        use craft::ui::dialog::DialogId;
+        use serde_json::Value;
+
+        /// A dialog's controls set through the control channel, which the browser build has not.
+        pub(crate) fn workspace_ui(_: &mut PhotocraftApp, _: &egui::Context, key: &str, _: &Value) -> Result<Value, String> {
+            Err(format!("`{key}` takes `ui` requests through the control channel, which the browser build doesn't have"))
+        }
+
+        /// The command a hosted dialog stands for: only automation input asks, and the browser
+        /// build has no automation input.
+        pub(crate) fn hosted_command(_: &PhotocraftApp, _: DialogId) -> Option<(String, Value)> {
+            None
+        }
+
+        /// Whether a confirm answers Save on the unsaved-changes prompt: as above.
+        pub(crate) fn is_save_answer(_: &PhotocraftApp, _: DialogId) -> bool {
+            false
+        }
+    }
+}
 pub mod dialogs;
 pub mod dock;
 pub(crate) mod edit_session;

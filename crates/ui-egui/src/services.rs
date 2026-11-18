@@ -1,6 +1,6 @@
-#[cfg(target_arch = "wasm32")]
-use super::FileDialogFn;
 use super::{Document, OsEvent, Value, dds_options_ui, jobs_ui, jpeg_options_ui, monitor_status, targa_options_ui, tiff_options_ui};
+#[cfg(target_arch = "wasm32")]
+use crate::file_dialog::FileDialogFn;
 
 /// The error a save gets while another save waits on its format prompt.
 pub(crate) const SAVE_OPTIONS_OPEN: &str = "Answer the TIFF, Targa, DDS or JPEG Options before starting another save";
@@ -507,7 +507,9 @@ pub struct Services {
     pub screen_capture: Option<std::sync::Arc<dyn Fn() -> Box<dyn craft::color_ui::ui::CaptureSource> + Send + Sync>>,
     /// The file service the app's host answers file picks with (`HostBuilder::files`); `None` in tests that install none.
     pub files: Option<std::sync::Arc<dyn craft::host::Files>>,
-    /// The main-thread side of the native file panels, pumped by the app.
+    /// The main-thread side of the native file panels, pumped by the app. Native only, as
+    /// `craft::dialogs` is.
+    #[cfg(not(target_arch = "wasm32"))]
     pub file_panels: Option<craft::dialogs::service::FilePanels>,
     /// The opened settings store and what opening it reported. Native only: the web build has no settings
     /// folder (`craft::settings` offers its store off wasm32 only).

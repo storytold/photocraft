@@ -34,7 +34,10 @@ photocraft-codecs = { workspace = true }
 photocraft-formats = { workspace = true }
 # Reading embedded thumbnail resources (1036/1033) for recent files in Home screen.
 craft-psd = { workspace = true }
-egui = { workspace = true }
+# `serde`: the dialog state the control channel and the saved memories read holds `egui::Id`s.
+# Asked for here, not left to another crate's features: the browser build has no other crate that
+# asks for it.
+egui = { workspace = true, features = ["serde"] }
 egui_extras = { version = "0.37", default-features = false, features = ["svg"] }
 eframe = { workspace = true, features = ["wgpu", "accesskit", "clipboard"] }
 serde = { workspace = true }
