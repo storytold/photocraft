@@ -1,5 +1,6 @@
 //! Frame drags pick content under the drag independently of the active layer (#13860).
 use super::*;
+use crate::canvas::ToolEvent;
 
 fn raster(name: &str, bounds: Rect, format: photocraft_color::PixelFormat) -> Layer {
     let mut layer = Layer::raster(name, format);
