@@ -217,7 +217,7 @@ mod tests {
         assert!(close(constrain(Tool::Move, &mut None, o, o, [30.0, 12.0], true, 1.0), [30.0, 12.0]));
     }
 
-    fn app() -> PhotocraftApp {
+    fn app() -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
         app.run("file.new", json!({"width": 120, "height": 120, "background": "transparent"})).unwrap();
         app.run("tools.setBrush", json!({"brush": {"size": 4, "hardness": 1.0}})).unwrap();

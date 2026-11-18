@@ -200,7 +200,7 @@ mod tests {
 
     use super::*;
 
-    fn app_with_text(text: &str) -> PhotocraftApp {
+    fn app_with_text(text: &str) -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 300, "height": 120, "background": "white"})).unwrap();
         app.run("type.create", json!({"x": 10, "y": 60, "text": text})).unwrap();

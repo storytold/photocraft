@@ -97,7 +97,7 @@ fn moving_several_layers_carries_the_selection() {
 
 /// A transparent 200² document: a red square (40..90, 40..80) on its layer, a loose marquee
 /// (20..120, 20..110) round it, cut and floated 10, 5 to the right and down.
-fn floating_square() -> PhotocraftApp {
+fn floating_square() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 200, "height": 200, "background": "transparent"})).unwrap();
     app.session.execute("select.rect", json!({"x": 40, "y": 40, "width": 50, "height": 40})).unwrap();
