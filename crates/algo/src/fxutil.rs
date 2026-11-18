@@ -294,6 +294,119 @@ pub(crate) fn gauss_blur_n(buf: &mut [f32], w: usize, h: usize, n: usize, sigma:
     }
 }
 
+/// [`gauss_blur_n`] that first checks its scratch memory can be had: `None` (the buffer
+/// untouched) when it can't, instead of aborting the app. It needs a copy of the buffer, which
+/// lets the passes run in parallel (rows, then strips of columns) with the same result bit for
+/// bit.
+pub(crate) fn try_gauss_blur_n(buf: &mut [f32], w: usize, h: usize, n: usize, sigma: f32) -> Option<()> {
+    if sigma < 0.3 {
+        return Some(());
+    }
+    // A copy of the buffer, which the column passes write their strips into.
+    let len = w.checked_mul(h)?.checked_mul(n)?;
+    let mut tmp: Vec<f32> = Vec::new();
+    tmp.try_reserve_exact(len).ok()?;
+    if buf.len() < len {
+        gauss_blur_n(buf, w, h, n, sigma);
+        return Some(());
+    }
+    tmp.resize(len, 0.0);
+    let radii = gauss_box_radii(sigma);
+    for r in radii {
+        par_box_rows_n(buf, w, n, r);
+    }
+    let strip = par_strip(w);
+    for r in radii {
+        par_box_cols_n(&mut buf[..len], &mut tmp, w, h, n, r, strip);
+    }
+    Some(())
+}
+
+/// Columns per strip in [`par_box_cols_n`]: about two strips a thread, at least 8 columns.
+fn par_strip(w: usize) -> usize {
+    #[cfg(not(target_arch = "wasm32"))]
+    let workers = rayon::current_num_threads().max(1);
+    #[cfg(target_arch = "wasm32")]
+    let workers: usize = 1;
+    w.div_ceil(workers.saturating_mul(2)).max(8).min(w.max(1))
+}
+
+/// [`box_rows_n`] with the rows spread over threads: each row is the same running sum, so the
+/// result is bit for bit the same.
+fn par_box_rows_n(buf: &mut [f32], w: usize, n: usize, r: usize) {
+    let band = w * n;
+    if r == 0 || band == 0 {
+        return;
+    }
+    let full = buf.len() - buf.len() % band;
+    crate::photo_util::par_rows(&mut buf[..full], w, n, |_, row| {
+        let mut scratch = Vec::with_capacity(band);
+        box_line_n(row, w, n, r, &mut scratch);
+    });
+}
+
+/// [`box_cols_n`] with strips of `strip` columns spread over threads: each strip is blurred
+/// into its own part of `tmp` (as many samples as `buf`, `w × h × n`), then copied back row by
+/// row. Each column is the same running sum (f64, the same taps clamped at the ends, added in
+/// the same order), so the result is bit for bit the same.
+fn par_box_cols_n(buf: &mut [f32], tmp: &mut [f32], w: usize, h: usize, n: usize, r: usize, strip: usize) {
+    if r == 0 || h == 0 || n == 0 || w == 0 || tmp.len() != buf.len() || buf.len() != w * h * n {
+        return;
+    }
+    let strip = strip.clamp(1, w);
+    {
+        let src: &[f32] = buf;
+        // Strip `g` takes `strip × n × h` samples of `tmp` (the last one fewer), row by row.
+        crate::photo_util::par_rows(tmp, strip * h, n, |g, out| {
+            let x0 = g * strip;
+            col_strip(src, w, h, n, r, x0..x0 + strip.min(w.saturating_sub(x0)), out);
+        });
+    }
+    let tmp: &[f32] = tmp;
+    crate::photo_util::par_rows(buf, w, n, |y, row| {
+        let mut x0 = 0;
+        while x0 < w {
+            let runs = strip.min(w - x0) * n;
+            let at = x0 * n * h + y * runs;
+            if let (Some(d), Some(s)) = (row.get_mut(x0 * n..x0 * n + runs), tmp.get(at..at + runs)) {
+                d.copy_from_slice(s);
+            }
+            x0 += strip;
+        }
+    });
+}
+
+/// The columns `cols` of `buf` blurred down (radius `r`) into `out`, row by row (`h`
+/// rows of `cols.len() * n` samples): one running sum per column and channel, walking whole rows.
+fn col_strip(buf: &[f32], w: usize, h: usize, n: usize, r: usize, cols: std::ops::Range<usize>, out: &mut [f32]) {
+    let (x0, sx) = (cols.start, cols.len());
+    let runs = sx * n;
+    if runs == 0 {
+        return;
+    }
+    let row = |y: usize| &buf[(y * w + x0) * n..][..runs];
+    let norm = 1.0 / (2 * r + 1) as f64;
+    let first = r.min(h);
+    let last = h.saturating_sub(r + 1).max(first);
+    // As in `box_cols_n`: the window's first sum, then one tap in and one out per row.
+    let mut acc = vec![0.0f64; runs];
+    for y in -(r as isize)..=r as isize {
+        for (a, v) in acc.iter_mut().zip(row(y.clamp(0, h as isize - 1) as usize)) {
+            *a += *v as f64;
+        }
+    }
+    for (y, o) in out.chunks_exact_mut(runs).enumerate().take(h) {
+        for (o, a) in o.iter_mut().zip(&acc) {
+            *o = (*a * norm) as f32;
+        }
+        let (hi, lo) = if y >= first && y < last { (y + r + 1, y - r) } else { ((y + r + 1).min(h - 1), y.saturating_sub(r)) };
+        let (hi, lo) = (row(hi), row(lo));
+        for k in 0..runs {
+            acc[k] += hi[k] as f64 - lo[k] as f64;
+        }
+    }
+}
+
 /// Jittered feature point of grid cell `(cx, cy)` (cells of `cell` px anchored at `origin`).
 #[inline]
 pub(crate) fn cell_point(cx: i32, cy: i32, cell: f32, seed: u32, origin: (f32, f32)) -> (f32, f32) {
@@ -346,7 +459,35 @@ pub(crate) fn add_sample_premul(src: &Image, x: f32, y: f32, clip: Rect, alpha: 
 
 #[cfg(test)]
 mod tests {
-    use super::{box_cols_n, box_cols_strided, box_line_n, box_rows_n};
+    use super::{box_cols_n, box_cols_strided, box_line_n, box_rows_n, gauss_blur_n, par_box_cols_n, try_gauss_blur_n};
+
+    /// The parallel blur (rows over threads, columns in strips) gives the serial one's result
+    /// bit for bit: sizes narrower than a strip, odd sizes, radii past the image, every channel
+    /// count up to RGBA plus alpha.
+    #[test]
+    fn the_parallel_blur_matches_the_serial_one_bit_for_bit() {
+        for (w, h) in [(1, 1), (3, 2), (7, 5), (9, 31), (37, 11), (130, 17), (257, 64)] {
+            for n in 1..=5 {
+                let src: Vec<f32> = (0..w * h * n).map(|i| ((i * 7919 + 13) % 1009) as f32 / 1008.0 - 0.1).collect();
+                for sigma in [0.6f32, 2.5, 9.0, 140.0] {
+                    let mut serial = src.clone();
+                    gauss_blur_n(&mut serial, w, h, n, sigma);
+                    let mut par = src.clone();
+                    assert!(try_gauss_blur_n(&mut par, w, h, n, sigma).is_some());
+                    let same = serial.iter().zip(&par).all(|(a, b)| a.to_bits() == b.to_bits());
+                    assert!(same, "{w}x{h}x{n} sigma {sigma}");
+                }
+                // Strips of every width, down to one column.
+                for strip in [1, 2, 5, w] {
+                    let (mut serial, mut par) = (src.clone(), src.clone());
+                    box_cols_n(&mut serial, w, h, n, 3);
+                    let mut tmp = vec![0.0; par.len()];
+                    par_box_cols_n(&mut par, &mut tmp, w, h, n, 3, strip);
+                    assert!(serial.iter().zip(&par).all(|(a, b)| a.to_bits() == b.to_bits()), "{w}x{h}x{n} strip {strip}");
+                }
+            }
+        }
+    }
 
     /// The pre-split row pass, kept verbatim as the reference: one clamped accumulator per
     /// channel, stepped with `clamp(x + r + 1) - clamp(x - r)`.

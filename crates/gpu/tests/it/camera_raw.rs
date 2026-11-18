@@ -4,63 +4,33 @@
 //! doesn't build on an adapter that can run it fails. The shader itself is validated without a
 //! GPU ([`the_shader_validates_without_a_gpu`]), so a WGSL error fails on every runner.
 
-use photocraft_algo::camera_raw::{self as raw, CameraRaw, DevelopInputs, StoredVignetteStyle, Wheel};
-use photocraft_gpu::{CameraRawDevelop, DeviceHealth, Fault};
+use photocraft_algo::camera_raw::{CameraRaw, DevelopInputs, PerPixel, StoredVignetteStyle, TonePoints, Wheel, spatial};
 
-/// The settings and the job inputs (scale, grain seed, encoding) of one develop; `CameraRaw` is `#[non_exhaustive]`, so
-/// cases are built by [`cr!`].
-#[derive(Clone, Debug, Default)]
-struct Case {
-    p: CameraRaw,
-    inputs: DevelopInputs,
-}
-
-/// A [`Case`] with the named fields set: `seed`, `pixel_scale` and `encoding_gamma` go to the inputs, the rest to the settings.
-/// A bare field name takes the local of that name.
+/// `CameraRaw` with the named fields set (the type is `#[non_exhaustive]`, so no struct expression).
 macro_rules! cr {
-    (@set $s:ident;) => {};
-    (@set $s:ident; seed: $v:expr $(, $($rest:tt)*)?) => {
-        $s.inputs.seed = $v;
-        cr!(@set $s; $($($rest)*)?);
-    };
-    (@set $s:ident; pixel_scale: $v:expr $(, $($rest:tt)*)?) => {
-        $s.inputs.pixel_scale = $v;
-        cr!(@set $s; $($($rest)*)?);
-    };
-    (@set $s:ident; encoding_gamma: $v:expr $(, $($rest:tt)*)?) => {
-        $s.inputs.encoding_gamma = $v;
-        cr!(@set $s; $($($rest)*)?);
-    };
-    (@set $s:ident; $f:ident : $v:expr $(, $($rest:tt)*)?) => {
-        $s.p.$f = $v;
-        cr!(@set $s; $($($rest)*)?);
-    };
-    (@set $s:ident; $f:ident $(, $($rest:tt)*)?) => {
-        $s.p.$f = $f;
-        cr!(@set $s; $($($rest)*)?);
-    };
-    ($($t:tt)*) => {{
-        let mut s = Case::default();
-        cr!(@set s; $($t)*);
+    ($($f:ident : $v:expr),* $(,)?) => {{
+        let mut s = CameraRaw::default();
+        $(s.$f = $v;)*
         s
     }};
 }
 
-fn develop(px: &mut [[f32; 4]], w: usize, h: usize, c: &Case, float: bool) {
-    raw::develop(px, w, h, &c.p, &c.inputs, float);
+/// Settings and the job's inputs (scale, grain seed, encoding): one case for [`check`].
+type Case = (CameraRaw, DevelopInputs);
+
+fn case(p: CameraRaw, inputs: DevelopInputs) -> Case {
+    (p, inputs)
 }
 
-fn per_pixel(c: &Case, w: usize, h: usize, float: bool, points: Option<(f32, f32)>) -> Option<raw::PerPixel> {
-    raw::per_pixel(&c.p, &c.inputs, w, h, float, points)
+fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, inputs: &DevelopInputs, float: bool) {
+    photocraft_algo::camera_raw::develop(px, w, h, p, inputs, float);
 }
 
-fn white_black_points(px: &[[f32; 4]], w: usize, h: usize, c: &Case) -> Option<(f32, f32)> {
-    raw::white_black_points(px, w, h, &c.p, &c.inputs)
+/// [`photocraft_algo::camera_raw::per_pixel`] with the default inputs.
+fn per_pixel(p: &CameraRaw, w: usize, h: usize, float: bool, points: Option<TonePoints>) -> Option<PerPixel> {
+    photocraft_algo::camera_raw::per_pixel(p, &DevelopInputs::default(), w, h, float, points)
 }
-
-fn spatial(c: &Case) -> bool {
-    raw::spatial(&c.p)
-}
+use photocraft_gpu::{CameraRawDevelop, DeviceHealth, Fault};
 
 /// Largest difference from the CPU develop, per channel. The pass evaluates the same
 /// expressions in f32, so what remains is the GPU's own `pow`, `exp2` and `sin` (a few ulps) and
@@ -80,7 +50,7 @@ fn gpu() -> Option<Gpu> {
     let lock = crate::GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let required = std::env::var_os("WGPU_BACKEND").is_some();
     // `WGPU_BACKEND` picks the backend; `PHOTOCRAFT_TEST_FALLBACK_ADAPTER=1` the software one (WARP).
-    let instance = crate::instance();
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
     let fallback = std::env::var_os("PHOTOCRAFT_TEST_FALLBACK_ADAPTER").is_some();
     let options = wgpu::RequestAdapterOptions { force_fallback_adapter: fallback, ..Default::default() };
     let adapter = match pollster::block_on(instance.request_adapter(&options)) {
@@ -111,19 +81,16 @@ fn gpu() -> Option<Gpu> {
     Some(Gpu { device, queue, dev, _lock: lock })
 }
 
-/// The Camera Raw shaders parse and validate (naga, as wgpu does before any driver sees them),
-/// with no adapter: the GPU tests below skip on runners without one. The filters are compiled
-/// appended to the tone shader, as the pass builds them.
+/// The Camera Raw shader parses and validates (naga, as wgpu does before any driver sees it),
+/// with no adapter: the GPU tests below skip on runners without one.
 #[test]
-fn the_shaders_validate_without_a_gpu() {
-    let tone = format!("{}\n{}", photocraft_gpu::CAMERA_RAW_TONE_SHADER, photocraft_gpu::CAMERA_RAW_FILTERS_SHADER);
-    for src in [photocraft_gpu::CAMERA_RAW_SHADER, tone.as_str()] {
-        let module = wgpu::naga::front::wgsl::parse_str(src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(src)));
-        wgpu::naga::valid::Validator::new(wgpu::naga::valid::ValidationFlags::all(), wgpu::naga::valid::Capabilities::empty())
-            .validate(&module)
-            .unwrap_or_else(|e| panic!("{}", e.emit_to_string(src)));
-        assert!(!module.entry_points.is_empty());
-    }
+fn the_shader_validates_without_a_gpu() {
+    let src = photocraft_gpu::CAMERA_RAW_SHADER;
+    let module = wgpu::naga::front::wgsl::parse_str(src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(src)));
+    wgpu::naga::valid::Validator::new(wgpu::naga::valid::ValidationFlags::all(), wgpu::naga::valid::Capabilities::empty())
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("{}", e.emit_to_string(src)));
+    assert!(!module.entry_points.is_empty());
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -170,21 +137,14 @@ fn image(w: usize, h: usize, depth: Depth) -> Vec<[f32; 4]> {
 }
 
 /// Develops `p` both ways and returns the largest channel difference.
-fn compare(g: &mut Gpu, p: &Case, depth: Depth) -> f32 {
-    compare_at(g, p, depth, (171, 113))
-}
-
-fn compare_at(g: &mut Gpu, p: &Case, depth: Depth, (w, h): (usize, usize)) -> f32 {
-    compare_image(g, p, depth, &image(w, h, depth), (w, h))
-}
-
-fn compare_image(g: &mut Gpu, p: &Case, depth: Depth, src: &[[f32; 4]], (w, h): (usize, usize)) -> f32 {
+fn compare(g: &mut Gpu, (p, inputs): &Case, depth: Depth) -> f32 {
+    let (w, h) = (171, 113);
     let float = matches!(depth, Depth::Float);
-    let src = src.to_vec();
+    let src = image(w, h, depth);
     let mut cpu = src.clone();
-    develop(&mut cpu, w, h, p, float);
-    let points = white_black_points(&src, w, h, p);
-    let stages = per_pixel(p, w, h, float, points).unwrap_or_else(|| panic!("{p:?} has a spatial stage"));
+    develop(&mut cpu, w, h, p, inputs, float);
+    let points = photocraft_algo::camera_raw::white_black_points(&src, w, h, p, inputs);
+    let stages = photocraft_algo::camera_raw::per_pixel(p, inputs, w, h, float, points).unwrap_or_else(|| panic!("{p:?} has a spatial stage"));
     let out = g.dev.develop(&g.device, &g.queue, None, &src, None, [w as u32, h as u32], &stages).unwrap();
     assert_eq!(out.len(), cpu.len());
     let mut worst = (0.0f32, 0usize);
@@ -217,13 +177,25 @@ fn check(name: &str, sets: &[Case]) {
 }
 
 #[test]
-fn white_balance_and_exposure() {
-    check("white balance", &[cr! { temperature: 40.0, tint: -25.0}, cr! { temperature: -70.0, tint: 60.0, exposure: -1.2}, cr! { exposure: 1.5}]);
+fn exposure() {
+    check(
+        "exposure",
+        &[
+            case(cr! { exposure: -1.2 }, DevelopInputs::default()),
+            case(cr! { exposure: 1.5 }, DevelopInputs::default()),
+            case(cr! { exposure: 2.7 }, DevelopInputs { encoding_gamma: 1.8, ..Default::default() }),
+            case(cr! { exposure: -3.3 }, DevelopInputs { encoding_gamma: 563.0 / 256.0, ..Default::default() }),
+            case(cr! { exposure: 5.0 }, DevelopInputs::default()),
+        ],
+    );
+    // Temperature and Tint are per-channel curves the pass does not run: the CPU develops them.
+    assert!(per_pixel(&cr! { temperature: 40.0 }, 8, 8, false, None).is_none());
+    assert!(per_pixel(&cr! { tint: -25.0 }, 8, 8, false, None).is_none());
 }
 
 #[test]
 fn contrast_without_texture_or_clarity() {
-    check("contrast", &[cr! { contrast: 60.0}, cr! { contrast: -80.0, exposure: 0.4}]);
+    check("contrast", &[case(cr! { contrast: 60.0 }, DevelopInputs::default()), case(cr! { contrast: -80.0, exposure: 0.4 }, DevelopInputs::default())]);
 }
 
 #[test]
@@ -231,12 +203,12 @@ fn whites_and_blacks() {
     check(
         "whites/blacks",
         &[
-            cr! { whites: 70.0, blacks: -45.0},
-            cr! { whites: -60.0, blacks: 50.0, temperature: 20.0},
-            cr! { whites: 30.0},
-            cr! { blacks: -100.0, exposure: -0.5},
+            case(cr! { whites: 70.0, blacks: -45.0 }, DevelopInputs::default()),
+            case(cr! { whites: -60.0, blacks: 50.0, exposure: 0.2 }, DevelopInputs::default()),
+            case(cr! { whites: 30.0 }, DevelopInputs::default()),
+            case(cr! { blacks: -100.0, exposure: -0.5 }, DevelopInputs::default()),
             // ProPhoto's power-law encoding.
-            cr! { whites: 50.0, blacks: -30.0, encoding_gamma: 1.8},
+            case(cr! { whites: 50.0, blacks: -30.0 }, DevelopInputs { encoding_gamma: 1.8, ..Default::default() }),
         ],
     );
 }
@@ -246,24 +218,29 @@ fn tone_curves() {
     check(
         "tone curves",
         &[
-            cr! {
-            curve_highlights: -60.0,
-            curve_lights: 30.0,
-            curve_darks: 40.0,
-            curve_shadows: -20.0,
-            curve_splits: [20.0, 45.0, 80.0]},
-            cr! { point_curve: vec![[0.0, 20.0], [64.0, 50.0], [192.0, 220.0], [255.0, 245.0]]},
-            cr! {
-            point_curve_red: vec![[0.0, 0.0], [128.0, 160.0], [255.0, 255.0]],
-            point_curve_green: vec![[0.0, 10.0], [255.0, 230.0]],
-            point_curve_blue: vec![[0.0, 0.0], [100.0, 70.0], [255.0, 255.0]]},
+            case(
+                cr! { curve_highlights: -60.0, curve_lights: 30.0, curve_darks: 40.0, curve_shadows: -20.0, curve_splits: [20.0, 45.0, 80.0] },
+                DevelopInputs::default(),
+            ),
+            case(cr! { point_curve: vec![[0.0, 20.0], [64.0, 50.0], [192.0, 220.0], [255.0, 245.0]] }, DevelopInputs::default()),
+            case(
+                cr! { point_curve_red: vec![[0.0, 0.0], [128.0, 160.0], [255.0, 255.0]], point_curve_green: vec![[0.0, 10.0], [255.0, 230.0]], point_curve_blue: vec![[0.0, 0.0], [100.0, 70.0], [255.0, 255.0]] },
+                DevelopInputs::default(),
+            ),
         ],
     );
 }
 
 #[test]
 fn vibrance_and_saturation() {
-    check("presence", &[cr! { vibrance: 70.0}, cr! { saturation: -60.0}, cr! { vibrance: -40.0, saturation: 50.0}]);
+    check(
+        "presence",
+        &[
+            case(cr! { vibrance: 70.0 }, DevelopInputs::default()),
+            case(cr! { saturation: -60.0 }, DevelopInputs::default()),
+            case(cr! { vibrance: -40.0, saturation: 50.0 }, DevelopInputs::default()),
+        ],
+    );
 }
 
 #[test]
@@ -272,10 +249,10 @@ fn color_mixer() {
     check(
         "color mixer",
         &[
-            cr! { hsl_hue: ramp(0.0)},
-            cr! { hsl_sat: ramp(50.0)},
-            cr! { hsl_lum: ramp(120.0)},
-            cr! { hsl_hue: ramp(10.0), hsl_sat: ramp(80.0), hsl_lum: ramp(150.0)},
+            case(cr! { hsl_hue: ramp(0.0) }, DevelopInputs::default()),
+            case(cr! { hsl_sat: ramp(50.0) }, DevelopInputs::default()),
+            case(cr! { hsl_lum: ramp(120.0) }, DevelopInputs::default()),
+            case(cr! { hsl_hue: ramp(10.0), hsl_sat: ramp(80.0), hsl_lum: ramp(150.0) }, DevelopInputs::default()),
         ],
     );
 }
@@ -285,13 +262,11 @@ fn color_grading() {
     check(
         "color grading",
         &[
-            cr! { grade_shadows: Wheel { hue: 220.0, sat: 70.0, lum: 20.0 }},
-            cr! {
-            grade_midtones: Wheel { hue: 120.0, sat: 30.0, lum: -15.0 },
-            grade_highlights: Wheel { hue: 40.0, sat: 50.0, lum: 10.0 },
-            grade_global: Wheel { hue: 300.0, sat: 15.0, lum: 5.0 },
-            grade_blending: 80.0,
-            grade_balance: -40.0},
+            case(cr! { grade_shadows: Wheel { hue: 220.0, sat: 70.0, lum: 20.0 } }, DevelopInputs::default()),
+            case(
+                cr! { grade_midtones: Wheel { hue: 120.0, sat: 30.0, lum: -15.0 }, grade_highlights: Wheel { hue: 40.0, sat: 50.0, lum: 10.0 }, grade_global: Wheel { hue: 300.0, sat: 15.0, lum: 5.0 }, grade_blending: 80.0, grade_balance: -40.0 },
+                DevelopInputs::default(),
+            ),
         ],
     );
 }
@@ -301,15 +276,14 @@ fn vignette() {
     check(
         "vignette",
         &[
-            cr! { vignette_amount: -70.0},
-            cr! { vignette_amount: -50.0, vignette_roundness: -60.0, vignette_feather: 20.0, vignette_highlights: 70.0},
-            cr! {
-            vignette_amount: 60.0,
-            vignette_roundness: 80.0,
-            vignette_midpoint: 20.0,
-            vignette_style: StoredVignetteStyle::ColorPriority},
-            cr! { vignette_amount: -40.0, vignette_style: StoredVignetteStyle::PaintOverlay},
-            cr! { vignette_amount: 40.0, vignette_style: StoredVignetteStyle::PaintOverlay},
+            case(cr! { vignette_amount: -70.0 }, DevelopInputs::default()),
+            case(cr! { vignette_amount: -50.0, vignette_roundness: -60.0, vignette_feather: 20.0, vignette_highlights: 70.0 }, DevelopInputs::default()),
+            case(
+                cr! { vignette_amount: 60.0, vignette_roundness: 80.0, vignette_midpoint: 20.0, vignette_style: StoredVignetteStyle::ColorPriority },
+                DevelopInputs::default(),
+            ),
+            case(cr! { vignette_amount: -40.0, vignette_style: StoredVignetteStyle::PaintOverlay }, DevelopInputs::default()),
+            case(cr! { vignette_amount: 40.0, vignette_style: StoredVignetteStyle::PaintOverlay }, DevelopInputs::default()),
         ],
     );
 }
@@ -319,10 +293,13 @@ fn grain_in_full_resolution_coordinates() {
     check(
         "grain",
         &[
-            cr! { grain_amount: 60.0, seed: 3},
+            case(cr! { grain_amount: 60.0 }, DevelopInputs { seed: 3, ..Default::default() }),
             // A preview proxy: the noise lattice is sampled at full-resolution positions.
-            cr! { grain_amount: 80.0, grain_size: 60.0, grain_roughness: 90.0, seed: u32::MAX, pixel_scale: 0.143},
-            cr! { grain_amount: 25.0, grain_size: 0.0, grain_roughness: 0.0, seed: 77, pixel_scale: 0.5},
+            case(
+                cr! { grain_amount: 80.0, grain_size: 60.0, grain_roughness: 90.0 },
+                DevelopInputs { seed: u32::MAX, pixel_scale: 0.143, ..Default::default() },
+            ),
+            case(cr! { grain_amount: 25.0, grain_size: 0.0, grain_roughness: 0.0 }, DevelopInputs { seed: 77, pixel_scale: 0.5, ..Default::default() }),
         ],
     );
 }
@@ -334,58 +311,42 @@ fn every_per_pixel_stage_at_once() {
     hsl[5] = -50.0;
     check(
         "all stages",
-        &[cr! {
-        temperature: 25.0,
-        tint: 10.0,
-        exposure: 0.3,
-        contrast: 25.0,
-        whites: 20.0,
-        blacks: -15.0,
-        vibrance: 30.0,
-        saturation: 10.0,
-        curve_darks: 20.0,
-        point_curve: vec![[0.0, 8.0], [255.0, 250.0]],
-        hsl_hue: hsl,
-        hsl_sat: hsl,
-        hsl_lum: hsl,
-        grade_shadows: Wheel { hue: 210.0, sat: 25.0, lum: 0.0 },
-        vignette_amount: -30.0,
-        grain_amount: 20.0,
-        pixel_scale: 0.2}],
+        &[case(
+            cr! { exposure: 0.3, contrast: 25.0, whites: 20.0, blacks: -15.0, vibrance: 30.0, saturation: 10.0, curve_darks: 20.0, point_curve: vec![[0.0, 8.0], [255.0, 250.0]], hsl_hue: hsl, hsl_sat: hsl, hsl_lum: hsl, grade_shadows: Wheel { hue: 210.0, sat: 25.0, lum: 0.0 }, vignette_amount: -30.0, grain_amount: 20.0 },
+            DevelopInputs { pixel_scale: 0.2, ..Default::default() },
+        )],
     );
 }
 
 #[test]
-fn identity_leaves_pixels_alone_and_detail_has_no_pass() {
+fn identity_leaves_pixels_alone_and_spatial_settings_have_no_pass() {
     let Some(mut g) = gpu() else { return };
-    let p = Case::default();
+    let p = CameraRaw::default();
     let src = image(64, 32, Depth::Float);
     let stages = per_pixel(&p, 64, 32, false, None).unwrap();
     let out = g.dev.develop(&g.device, &g.queue, None, &src, Some(1), [64, 32], &stages).unwrap();
     assert_eq!(out, src, "the CPU develop returns early, unclipped");
-    for set in [cr! { sharpen_amount: 10.0}, cr! { noise_luminance: 10.0, clarity: 20.0}, cr! { noise_color: 10.0, dehaze: 20.0}] {
-        assert!(spatial(&set) && per_pixel(&set, 64, 32, false, Some((0.0, 1.0))).is_none(), "{set:?}");
+    for settings in [
+        cr! { dehaze: 10.0 },
+        cr! { shadows: 10.0 },
+        cr! { highlights: -10.0 },
+        cr! { texture: 10.0 },
+        cr! { clarity: 10.0 },
+        cr! { sharpen_amount: 10.0 },
+        cr! { noise_luminance: 10.0 },
+        cr! { noise_color: 10.0 },
+    ] {
+        assert!(spatial(&settings) && per_pixel(&settings, 64, 32, false, Some([[-8.0, -2.0, 0.0, -3.0]; 2])).is_none(), "{settings:?}");
     }
-    // Whites and Blacks need the image's points, unless a spatial stage's passes measure them.
-    assert!(per_pixel(&cr! { whites: 10.0}, 64, 32, false, None).is_none());
-    let toned = per_pixel(&cr! { whites: 10.0, shadows: 20.0}, 64, 32, false, None).unwrap();
-    assert!(toned.local_tone.is_some() && toned.whites_blacks.is_none() && toned.measure_whites_blacks == Some([10.0, 0.0]));
-    for p in [cr! { blacks: -10.0, dehaze: 20.0}, cr! { blacks: -10.0, clarity: 20.0}, cr! { blacks: -10.0, texture: 20.0}] {
-        let s = per_pixel(&p, 64, 32, false, None).unwrap();
-        assert!(s.whites_blacks.is_none() && s.measure_whites_blacks == Some([0.0, -10.0]), "{p:?}");
-    }
-    // Wider than the filter's working copy, the develop filters a reduced copy: the CPU's.
-    assert!(per_pixel(&cr! { shadows: 20.0}, 1601, 32, false, None).is_none());
-    // At 2 pixels on the short side the pass's pyramid has one level: the CPU's too.
-    for (w, h) in [(2, 2), (40, 2), (2, 40)] {
-        assert!(per_pixel(&cr! { highlights: -20.0}, w, h, false, None).is_none(), "{w}×{h}");
-    }
+    // Contrast and Whites up need the image's points.
+    assert!(per_pixel(&cr! { whites: 10.0 }, 64, 32, false, None).is_none());
+    assert!(per_pixel(&cr! { contrast: 10.0 }, 64, 32, false, None).is_none());
 }
 
 #[test]
 fn a_cached_source_is_reused_and_a_new_key_uploads() {
     let Some(mut g) = gpu() else { return };
-    let p = cr! { exposure: 0.5};
+    let p = cr! { exposure: 0.5 };
     let stages = per_pixel(&p, 64, 32, false, None).unwrap();
     let a = image(64, 32, Depth::Eight);
     let b: Vec<[f32; 4]> = a.iter().map(|q| [q[2], q[0], q[1], 1.0]).collect();
@@ -393,7 +354,7 @@ fn a_cached_source_is_reused_and_a_new_key_uploads() {
     // Same key: the uploaded source stays (callers key by the proxy's identity).
     assert_eq!(g.dev.develop(&g.device, &g.queue, None, &b, Some(7), [64, 32], &stages).unwrap(), first);
     let mut cpu = b.clone();
-    develop(&mut cpu, 64, 32, &p, false);
+    develop(&mut cpu, 64, 32, &p, &DevelopInputs::default(), false);
     let other = g.dev.develop(&g.device, &g.queue, None, &b, Some(8), [64, 32], &stages).unwrap();
     assert!(other.iter().zip(&cpu).all(|(x, y)| (0..3).all(|c| (x[c] - y[c]).abs() <= TOL)));
 }
@@ -401,7 +362,7 @@ fn a_cached_source_is_reused_and_a_new_key_uploads() {
 #[test]
 fn bad_sizes_and_faulted_devices_are_errors() {
     let Some(mut g) = gpu() else { return };
-    let stages = per_pixel(&cr! { exposure: 0.5}, 4, 4, false, None).unwrap();
+    let stages = per_pixel(&cr! { exposure: 0.5 }, 4, 4, false, None).unwrap();
     let px = vec![[0.5f32; 4]; 16];
     for size in [[0, 4], [4, 0], [5, 4], [3, 3], [u32::MAX, 1]] {
         assert!(g.dev.develop(&g.device, &g.queue, None, &px, None, size, &stages).is_err(), "{size:?}");
@@ -411,229 +372,4 @@ fn bad_sizes_and_faulted_devices_are_errors() {
     assert!(g.dev.develop(&g.device, &g.queue, Some(&health), &px, None, [4, 4], &stages).is_err());
     // And the pass still works afterwards.
     assert!(g.dev.develop(&g.device, &g.queue, Some(&DeviceHealth::new()), &px, None, [4, 4], &stages).is_ok());
-}
-
-#[test]
-fn shadows_and_highlights() {
-    let sets = [
-        cr! { shadows: 50.0},
-        cr! { shadows: -70.0},
-        cr! { highlights: -50.0},
-        cr! { highlights: 60.0},
-        cr! { shadows: 100.0, highlights: -100.0},
-        cr! { shadows: 35.0, highlights: -45.0, encoding_gamma: 1.8},
-    ];
-    assert_moves(&sets);
-    check("shadows/highlights", &sets);
-}
-
-#[test]
-fn shadows_and_highlights_on_tiny_odd_and_flat_frames() {
-    let Some(mut g) = gpu() else { return };
-    let p = cr! { shadows: 60.0, highlights: -40.0, whites: 20.0};
-    // A frame 2 pixels on a side has a one-level pyramid: `per_pixel` sends it to the CPU, and
-    // the pass still refuses stages built for it elsewhere.
-    for (w, h) in [(2, 2), (40, 2)] {
-        assert!(per_pixel(&p, w, h, false, None).is_none(), "{w}×{h}");
-        let stages = per_pixel(&p, 3, 3, false, None).unwrap();
-        assert!(g.dev.develop(&g.device, &g.queue, None, &image(w, h, Depth::Eight), None, [w as u32, h as u32], &stages).is_err());
-    }
-    for size in [(3, 3), (5, 3), (37, 23), (300, 7)] {
-        for depth in DEPTHS {
-            let d = compare_at(&mut g, &p, depth, size);
-            eprintln!("shadows/highlights {size:?} {depth:?}: max |GPU - CPU| = {d:.2e}");
-        }
-    }
-    // A flat frame has no range to filter.
-    let flat = vec![[0.4, 0.35, 0.3, 1.0]; 64 * 48];
-    for depth in DEPTHS {
-        compare_image(&mut g, &p, depth, &flat, (64, 48));
-    }
-}
-
-#[test]
-fn shadows_and_highlights_with_per_pixel_stages() {
-    let mut hsl = [0.0; 8];
-    hsl[1] = 35.0;
-    hsl[5] = -50.0;
-    let all = cr! {
-    temperature: 25.0,
-    tint: 10.0,
-    exposure: 0.3,
-    contrast: 25.0,
-    shadows: 45.0,
-    highlights: -55.0,
-    whites: 20.0,
-    blacks: -15.0,
-    vibrance: 30.0,
-    saturation: 10.0,
-    curve_darks: 20.0,
-    point_curve: vec![[0.0, 8.0], [255.0, 250.0]],
-    hsl_hue: hsl,
-    hsl_sat: hsl,
-    hsl_lum: hsl,
-    grade_shadows: Wheel { hue: 210.0, sat: 25.0, lum: 0.0 },
-    vignette_amount: -30.0,
-    grain_amount: 20.0,
-    pixel_scale: 0.2};
-    check(
-        "shadows/highlights + per pixel",
-        &[
-            all.clone(),
-            // Whites and Blacks measured after the filter, both directions.
-            cr! { shadows: 60.0, whites: 70.0, blacks: -45.0},
-            cr! { highlights: -60.0, whites: -60.0, blacks: 50.0, exposure: -0.4},
-            cr! { shadows: 30.0, highlights: -30.0, whites: 40.0, blacks: -30.0, encoding_gamma: 1.8},
-        ],
-    );
-    // At the dialog's proxy size, at one depth: the depth only changes how the input is
-    // quantized (8 and 16 bits both develop with `float = false`), and every depth already ran
-    // above at 171×113. The size is what matters here (subsampled pyramid levels).
-    let Some(mut g) = gpu() else { return };
-    let d = compare_at(&mut g, &all, Depth::Sixteen, (858, 572));
-    eprintln!("shadows/highlights + per pixel 858x572: max |GPU - CPU| = {d:.2e}");
-}
-
-/// Asserts that each of `sets` moves some pixel of the test image by over 2 %, so a comparison
-/// with the CPU can't pass trivially.
-fn assert_moves(sets: &[Case]) {
-    for p in sets {
-        let src = image(171, 113, Depth::Sixteen);
-        let mut out = src.clone();
-        develop(&mut out, 171, 113, p, false);
-        let moved = out.iter().zip(&src).flat_map(|(a, b)| (0..3).map(move |c| (a[c] - b[c]).abs())).fold(0.0f32, f32::max);
-        assert!(moved > 0.02, "{p:?} moves pixels by at most {moved}");
-    }
-}
-
-#[test]
-fn clarity_texture_and_dehaze() {
-    let sets = [
-        cr! { clarity: 50.0},
-        cr! { clarity: -80.0},
-        cr! { texture: 50.0},
-        cr! { texture: -70.0, pixel_scale: 0.143},
-        cr! { dehaze: 40.0},
-        cr! { dehaze: 100.0},
-        cr! { dehaze: -60.0},
-        // With Contrast, which then runs after them on the same luminance.
-        cr! { clarity: 40.0, texture: 30.0, contrast: -35.0},
-        cr! { dehaze: 30.0, clarity: 45.0, texture: -40.0, contrast: 20.0},
-        cr! { dehaze: -30.0, clarity: -25.0, texture: 60.0, encoding_gamma: 1.8},
-    ];
-    assert_moves(&sets);
-    check("clarity/texture/dehaze", &sets);
-}
-
-#[test]
-fn clarity_texture_and_dehaze_with_shadows_highlights_and_per_pixel_stages() {
-    let mut hsl = [0.0; 8];
-    hsl[1] = 35.0;
-    hsl[5] = -50.0;
-    let all = cr! {
-    temperature: 25.0,
-    tint: 10.0,
-    exposure: 0.3,
-    contrast: 25.0,
-    dehaze: 35.0,
-    shadows: 45.0,
-    highlights: -55.0,
-    clarity: 40.0,
-    texture: 30.0,
-    whites: 20.0,
-    blacks: -15.0,
-    vibrance: 30.0,
-    saturation: 10.0,
-    curve_darks: 20.0,
-    point_curve: vec![[0.0, 8.0], [255.0, 250.0]],
-    hsl_hue: hsl,
-    hsl_sat: hsl,
-    hsl_lum: hsl,
-    grade_shadows: Wheel { hue: 210.0, sat: 25.0, lum: 0.0 },
-    vignette_amount: -30.0,
-    grain_amount: 20.0,
-    pixel_scale: 0.2};
-    let sets = [
-        all.clone(),
-        cr! { dehaze: 50.0, shadows: 60.0, highlights: -40.0},
-        cr! { clarity: 60.0, texture: 50.0, shadows: 40.0},
-        // Whites and Blacks measured after them, without Shadows and Highlights, both directions.
-        cr! { dehaze: 40.0, whites: 60.0, blacks: -40.0},
-        cr! { clarity: 50.0, whites: -50.0, blacks: 45.0, exposure: -0.3},
-        cr! { texture: -60.0, whites: 30.0, blacks: -60.0},
-    ];
-    check("clarity/texture/dehaze + shadows/highlights + per pixel", &sets);
-    let Some(mut g) = gpu() else { return };
-    // At the dialog's proxy size (Dehaze and Clarity on a copy subsampled twice), and wider (three
-    // times). One depth per size: the depth only changes how the input is quantized (8 and 16
-    // bits both develop with `float = false`), and every depth already ran above at 171×113.
-    for (size, depth) in [((858, 572), Depth::Eight), ((1600, 900), Depth::Float)] {
-        let d = compare_at(&mut g, &all, depth, size);
-        eprintln!("everything {size:?} {depth:?}: max |GPU - CPU| = {d:.2e}");
-    }
-}
-
-#[test]
-fn clarity_texture_and_dehaze_on_tiny_and_odd_frames() {
-    let Some(mut g) = gpu() else { return };
-    let p = cr! { dehaze: 45.0, clarity: 50.0, texture: 60.0, whites: 20.0, blacks: -20.0};
-    // Without Shadows and Highlights even 1 and 2 pixel frames develop on the GPU.
-    for size in [(1, 1), (2, 2), (40, 2), (3, 3), (5, 3), (37, 23), (300, 7)] {
-        for depth in DEPTHS {
-            let d = compare_at(&mut g, &p, depth, size);
-            eprintln!("clarity/texture/dehaze {size:?} {depth:?}: max |GPU - CPU| = {d:.2e}");
-        }
-    }
-    // Texture's blur on a small proxy is too narrow to change anything; the stage still runs.
-    let narrow = cr! { texture: 80.0, contrast: 10.0, pixel_scale: 0.1};
-    assert!(per_pixel(&narrow, 64, 48, true, None).and_then(|s| s.texture).is_some_and(|t| t.radii.is_empty()));
-    for depth in DEPTHS {
-        compare_at(&mut g, &narrow, depth, (64, 48));
-    }
-    // A flat frame: no haze to find, no detail to raise.
-    let flat = vec![[0.4, 0.35, 0.3, 1.0]; 64 * 48];
-    for depth in DEPTHS {
-        compare_image(&mut g, &p, depth, &flat, (64, 48));
-    }
-}
-
-/// #9273: the GPU opens the dark channel like the CPU, so a sky beside a dark tower clears as it
-/// does there. The scene of algo's `dehaze_leaves_no_halo_beside_dark_objects`: a clear sky and a
-/// dark tower hazed with `I = J·t + A·(1 − t)`.
-#[test]
-fn dehaze_opens_the_dark_channel_like_the_cpu() {
-    let Some(mut g) = gpu() else { return };
-    let (w, h) = (600usize, 400usize);
-    let tower = |x: usize, y: usize| (250..350).contains(&x) && y >= 120;
-    let (t, air) = (0.55f32, [0.9f32, 0.9, 0.9]);
-    let src: Vec<[f32; 4]> = (0..w * h)
-        .map(|i| {
-            let (x, y) = (i % w, i / w);
-            let j = if tower(x, y) { [0.06, 0.06, 0.07] } else { [0.35 + 0.1 * y as f32 / h as f32, 0.5, 0.8] };
-            let c: [f32; 3] = std::array::from_fn(|k| j[k] * t + air[k] * (1.0 - t));
-            [c[0], c[1], c[2], 1.0]
-        })
-        .collect();
-    for dehaze in [100.0, 60.0, -40.0] {
-        for depth in DEPTHS {
-            let d = compare_image(&mut g, &cr! { dehaze: dehaze }, depth, &src, (w, h));
-            eprintln!("dehaze {dehaze} on the tower {depth:?}: max |GPU - CPU| = {d:.2e}");
-        }
-    }
-}
-
-#[test]
-fn dehaze_remakes_its_copy_when_the_white_balance_changes() {
-    let Some(mut g) = gpu() else { return };
-    let src = image(858, 572, Depth::Eight);
-    // Same source key throughout: the copy is cached by it and by the white balance.
-    for temperature in [25.0, -40.0, -40.0, 0.0] {
-        let p = cr! { dehaze: 50.0, temperature};
-        let mut cpu = src.clone();
-        develop(&mut cpu, 858, 572, &p, false);
-        let stages = per_pixel(&p, 858, 572, false, None).unwrap();
-        let out = g.dev.develop(&g.device, &g.queue, None, &src, Some(3), [858, 572], &stages).unwrap();
-        let d = out.iter().zip(&cpu).flat_map(|(a, b)| (0..3).map(move |c| (a[c] - b[c]).abs())).fold(0.0f32, f32::max);
-        assert!(d <= TOL, "temperature {temperature}: off by {d}");
-    }
 }
