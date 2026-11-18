@@ -10,6 +10,16 @@ pub mod convert;
 
 pub use blend::BlendMode;
 
+/// A finite value outside normal coverage identifies associated light with zero coverage.
+/// It survives float32 and half-float GPU storage without relying on the sign of zero.
+/// Ordinary transparent pixels, including negative zero, may have hidden straight colour.
+pub const EMISSIVE_ALPHA: f32 = -1.0;
+
+#[inline]
+pub fn is_emissive_alpha(alpha: f32) -> bool {
+    alpha.to_bits() == EMISSIVE_ALPHA.to_bits()
+}
+
 /// Per-pixel gradient dither noise in `[0, 1)` from a position hash (decorrelated, no visible
 /// pattern). Shared by the Gradient tool and Gradient Fill layers (and mirrored in the GPU
 /// compositor), so a live gradient dithers exactly like the painted one.

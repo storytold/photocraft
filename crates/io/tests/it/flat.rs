@@ -219,7 +219,8 @@ fn exr_rgba32() {
     let back = import("x.exr", &r.bytes).expect("import").document;
     assert_eq!((back.size, back.mode, back.depth), (d.size, d.mode, d.depth));
     assert_eq!(back.icc_profile.as_deref(), d.icc_profile.as_deref(), "tagged linear sRGB");
-    pixels_eq(&d, &back, 0.0);
+    // Association and division by alpha can shift a float32 sample by one rounding step.
+    pixels_eq(&d, &back, f32::EPSILON);
     // Untagged (sRGB) → linearised.
     let srgb = single(ColorMode::Rgb, SampleType::F32, true);
     let r = export(&srgb, "exr", &ExportOptions::default()).expect("export");

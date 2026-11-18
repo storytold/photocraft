@@ -58,3 +58,50 @@ fn empty_and_off_canvas_layers_keep_the_canvas_frame() {
     assert_eq!(crate::layer_thumb_frame(&empty, canvas, true), Rect::new(0, 0, 46, 6), "the layer bounds, cut to the canvas");
     assert_eq!(crate::layer_thumb_frame(&empty, canvas, false), canvas);
 }
+
+#[test]
+fn exr_emission_thumbnail_preserves_light_and_coverage() {
+    use craft::ui::primitives::textures::ThumbRender;
+    use egui::Color32;
+    use photocraft_codecs::{ChannelLayout, EncodeOptions, ExrCompression, Format, Image, encode};
+    use photocraft_engine::jobs::{OpenSource, Started};
+
+    // Four equally wide strips: emission, transparency, ordinary alpha, and opaque HDR.
+    let strips = [[0.5, 0.25, 0.0, 0.0], [0.0; 4], [0.25, 0.0, 0.0, 0.5], [2.0, 0.25, 0.0, 1.0]];
+    let pixels: Vec<_> = (0..16 * 4).flat_map(|i| strips[i % 16 / 4]).collect();
+    let input = Image::from_f32(16, 4, ChannelLayout::Rgba, &pixels).unwrap();
+    let bytes = encode(&input, Format::OpenExr, &EncodeOptions { exr_compression: ExrCompression::Zip16, ..Default::default() }).unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("emission-thumbnail.exr");
+    std::fs::write(&path, bytes).unwrap();
+
+    let mut session = photocraft_engine::Session::new();
+    let source = OpenSource::Path(path.to_string_lossy().into_owned());
+    assert!(matches!(session.start_open_for_user_with_background("emission-thumbnail.exr", source, false).unwrap(), Started::Done(_)));
+    let snapshot = session.execute("history.newSnapshot", json!({})).unwrap()["snapshot"].as_u64().unwrap();
+    let app = PhotocraftApp::new(session, crate::Services::default());
+    let state = app.session.active().unwrap();
+    let source = PhotoThumbs::new(&app, &state.doc);
+    let check = |image: egui::ColorImage| {
+        assert_eq!(image.size, [16, 4]);
+        for row in image.pixels.as_chunks::<16>().0 {
+            assert_eq!(row[1], Color32::from_rgba_premultiplied(128, 64, 0, 0));
+            assert_eq!(row[5], Color32::TRANSPARENT);
+            assert_eq!(row[9], Color32::from_rgba_unmultiplied(128, 0, 0, 128));
+            assert_eq!(row[13], Color32::from_rgb(255, 64, 0));
+        }
+    };
+    let request = ThumbRequest::for_cell(16.0, 1.0);
+    for contents in [ThumbContents::EntireDocument, ThumbContents::LayerBounds] {
+        let key = LayerThumb::pixels(state.active_layer.unwrap(), contents);
+        let ThumbRender::Ready(image) = source.render(&key, &request) else {
+            panic!("expected a raster thumbnail");
+        };
+        check(image);
+    }
+    let history = crate::app::thumbs::SnapshotThumbs::new(&app, state.doc.id);
+    let ThumbRender::Ready(image) = history.render(&snapshot, &request) else {
+        panic!("expected a history thumbnail");
+    };
+    check(image);
+}

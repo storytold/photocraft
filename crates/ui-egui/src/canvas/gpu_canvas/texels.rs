@@ -33,16 +33,18 @@ pub(super) fn texels_into(format: wgpu::TextureFormat, px: &[[f32; 4]], out: &mu
     fn rgba8(src: &[[f32; 4]], dst: &mut [u8]) {
         for (o, p) in dst.as_chunks_mut::<4>().0.iter_mut().zip(src) {
             let a = p[3].clamp(0.0, 1.0);
-            o[0] = (p[0].clamp(0.0, 1.0) * a * 255.0 + 0.5) as u8;
-            o[1] = (p[1].clamp(0.0, 1.0) * a * 255.0 + 0.5) as u8;
-            o[2] = (p[2].clamp(0.0, 1.0) * a * 255.0 + 0.5) as u8;
+            let weight = if photocraft_color::is_emissive_alpha(p[3]) { 1.0 } else { a };
+            o[0] = (p[0].clamp(0.0, 1.0) * weight * 255.0 + 0.5) as u8;
+            o[1] = (p[1].clamp(0.0, 1.0) * weight * 255.0 + 0.5) as u8;
+            o[2] = (p[2].clamp(0.0, 1.0) * weight * 255.0 + 0.5) as u8;
             o[3] = (a * 255.0 + 0.5) as u8;
         }
     }
     fn rgba16f(src: &[[f32; 4]], dst: &mut [u8]) {
         for (o, p) in dst.as_chunks_mut::<8>().0.iter_mut().zip(src) {
             let a = if p[3].is_nan() { 0.0 } else { p[3].clamp(0.0, 1.0) };
-            let [r, g, b, a] = [p[0].max(0.0) * a, p[1].max(0.0) * a, p[2].max(0.0) * a, a].map(|v| f32_to_f16(v).to_le_bytes());
+            let weight = if photocraft_color::is_emissive_alpha(p[3]) { 1.0 } else { a };
+            let [r, g, b, a] = [p[0].max(0.0) * weight, p[1].max(0.0) * weight, p[2].max(0.0) * weight, a].map(|v| f32_to_f16(v).to_le_bytes());
             *o = [r[0], r[1], g[0], g[1], b[0], b[1], a[0], a[1]];
         }
     }

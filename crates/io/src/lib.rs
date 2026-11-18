@@ -46,6 +46,7 @@ pub mod comps_map;
 pub mod doc_path;
 pub mod effects_map;
 pub mod export_estimate;
+mod exr_alpha;
 #[cfg(any(unix, windows))]
 mod exr_native;
 pub mod exr_parts;

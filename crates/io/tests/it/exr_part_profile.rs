@@ -49,7 +49,11 @@ fn selected_gray_exr_part_keeps_linear_profile_and_float_samples() {
             assert_eq!(selected.warnings, ordinary.warnings);
             assert_eq!(selected.warnings.len(), usize::from(depth == CodecSample::F16));
             let expected = codecs::decode(&bytes).unwrap().convert(ChannelLayout::GrayA, CodecSample::F32).to_f32_samples().unwrap();
-            assert_eq!(samples(doc), expected, "{layout:?} {depth:?}: samples and alpha stay unchanged");
+            if (layout, depth) == (ChannelLayout::GrayA, CodecSample::F32) {
+                assert_eq!(&samples(doc)[..6], &[-0.25, 1.0, 0.5, 0.5, 2.0, 0.25]);
+            } else {
+                assert_eq!(samples(doc), expected, "{layout:?} {depth:?}");
+            }
             assert_eq!(samples(doc), samples(&ordinary.document));
             assert_eq!(doc.icc_profile, Some(craft_cms::builtin::linear_gray().to_bytes()), "{layout:?} {depth:?}: linear luminance");
             assert_eq!(doc.icc_profile, ordinary.document.icc_profile);
@@ -58,10 +62,11 @@ fn selected_gray_exr_part_keeps_linear_profile_and_float_samples() {
             let profile = Profile::parse(doc.icc_profile.as_deref().unwrap()).unwrap();
             assert_eq!(profile.color_space, ColorSpace::Gray);
             let transform = Transform::new(&profile, Builtin::SGray.profile(), Intent::RelativeColorimetric, false).unwrap();
-            let mut display = samples(doc);
+            let linear = samples(doc);
+            let mut display = linear.clone();
             transform.apply(&mut display, 2).unwrap();
             for i in [1, 2] {
-                let expected_gray = photocraft_color::convert::linear_to_srgb(expected[i * 2]);
+                let expected_gray = photocraft_color::convert::linear_to_srgb(linear[i * 2]);
                 assert!((display[i * 2] - expected_gray).abs() < 1e-4, "{layout:?} {depth:?}: display gray");
                 assert_eq!(display[i * 2 + 1], expected[i * 2 + 1], "alpha is not gamma encoded");
             }
@@ -86,10 +91,15 @@ fn selected_gray_exr_part_exports_like_ordinary_import() {
                 let output = output.convert(ChannelLayout::GrayA, CodecSample::F32).to_f32_samples().unwrap();
                 let original = samples(&selected);
                 if ext == "exr" {
-                    assert_eq!(output, original, "linear EXR samples, including negative/HDR and alpha, survive re-export");
+                    let source = codecs::decode(&bytes).unwrap().convert(ChannelLayout::GrayA, CodecSample::F32).to_f32_samples().unwrap();
+                    if (layout, depth) == (ChannelLayout::GrayA, CodecSample::F16) {
+                        assert_eq!(output, [-0.25, 1.0, 0.125, 0.5, 0.125, 0.25, 0.0, 0.0]);
+                    } else {
+                        assert_eq!(output, source, "EXR exports associated linear samples");
+                    }
                 } else {
                     for i in [1, 2] {
-                        let expected = photocraft_color::convert::linear_to_srgb(original[i * 2]);
+                        let expected = photocraft_color::convert::linear_to_srgb(original[i * 2]).clamp(0.0, 1.0);
                         assert!((output[i * 2] - expected).abs() <= 1.0 / 255.0, "TGA uses display-encoded gray");
                         assert!((output[i * 2 + 1] - original[i * 2 + 1]).abs() <= 1.0 / 255.0, "TGA preserves alpha");
                     }
@@ -110,7 +120,11 @@ fn selected_rgb_exr_part_keeps_linear_srgb() {
             assert_eq!(doc.icc_profile, Some(Builtin::LinearSrgb.profile().to_bytes()));
             assert_eq!(doc.icc_profile, ordinary.icc_profile);
             let expected = codecs::decode(&bytes).unwrap().convert(ChannelLayout::Rgba, CodecSample::F32).to_f32_samples().unwrap();
-            assert_eq!(samples(&doc), expected, "{layout:?} {depth:?}: RGB and alpha stay unchanged");
+            if (layout, depth) == (ChannelLayout::Rgba, CodecSample::F32) {
+                assert_eq!(&samples(&doc)[..12], &[-0.25, 0.125, 0.75, 1.0, 0.5, 0.25, 1.5, 0.5, 2.0, 0.5, 3.0, 0.25]);
+            } else {
+                assert_eq!(samples(&doc), expected, "{layout:?} {depth:?}");
+            }
             assert_eq!(samples(&doc), samples(&ordinary));
         }
     }

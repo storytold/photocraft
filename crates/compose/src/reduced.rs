@@ -4,6 +4,59 @@ use super::render::{band_rows_for, render, render_bands, render_tiled_with};
 use super::{Buffer, Document, Rect, Rgba8Image, pattern, proxy, uniform};
 use photocraft_raster::Interrupt;
 
+// Keep ordinary reductions bit-for-bit compatible, and widen float/HDR sums so a
+// finite average cannot overflow while accumulating its source pixels.
+trait ReductionSum: Copy + Default + Send + Sync + std::ops::AddAssign + std::ops::Mul<Output = Self> {
+    fn sample(value: f32) -> Self;
+    fn normalize(pixel: [Self; 4], count: usize) -> [Self; 4];
+    fn pixels(pixels: Vec<[Self; 4]>) -> Vec<[f32; 4]>;
+}
+
+impl ReductionSum for f32 {
+    fn sample(value: f32) -> Self {
+        value
+    }
+    fn normalize(p: [Self; 4], count: usize) -> [Self; 4] {
+        let n = count as f32;
+        let a = p[3];
+        if a > 0.0 {
+            [p[0] / a, p[1] / a, p[2] / a, a / n]
+        } else if p[..3].iter().any(|&v| v != 0.0) {
+            [p[0] / n, p[1] / n, p[2] / n, photocraft_color::EMISSIVE_ALPHA]
+        } else {
+            [0.0; 4]
+        }
+    }
+    fn pixels(pixels: Vec<[Self; 4]>) -> Vec<[f32; 4]> {
+        pixels
+    }
+}
+
+impl ReductionSum for f64 {
+    fn sample(value: f32) -> Self {
+        f64::from(value)
+    }
+    fn normalize(p: [Self; 4], count: usize) -> [Self; 4] {
+        super::psblend::from_associated(p.map(|v| v / count as f64)).map(f64::from)
+    }
+    fn pixels(pixels: Vec<[Self; 4]>) -> Vec<[f32; 4]> {
+        let convert = |p: [f64; 4]| p.map(|v| v as f32);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use rayon::prelude::*;
+            pixels.into_par_iter().map(convert).collect()
+        }
+        #[cfg(target_arch = "wasm32")]
+        pixels.into_iter().map(convert).collect()
+    }
+}
+
+fn associated_pixel(p: [f32; 4]) -> [f32; 4] {
+    let a = p[3].max(0.0);
+    let weight = if photocraft_color::is_emissive_alpha(p[3]) { 1.0 } else { a };
+    [p[0] * weight, p[1] * weight, p[2] * weight, a]
+}
+
 /// Documents above this many pixels get thumbnails from a proxy (see [`proxy`]) when that is
 /// faithful; smaller ones are reduced from the exact composite.
 pub const PROXY_THUMBNAIL_PIXELS: u64 = 16 << 20;
@@ -149,6 +202,26 @@ pub(crate) fn render_reduced_cells(
     stats: &mut ReducedStats,
     interrupt: Interrupt<'_>,
 ) -> Result<Buffer, String> {
+    let wide = doc.depth == photocraft_color::SampleType::F32
+        || doc.walk().iter().any(|(_, _, layer)| layer.surface().is_some_and(|surface| surface.format().sample == photocraft_color::SampleType::F32));
+    if wide {
+        render_reduced_cells_sum::<f64>(doc, b, cells, damage, band_rows, uniform, stats, interrupt)
+    } else {
+        render_reduced_cells_sum::<f32>(doc, b, cells, damage, band_rows, uniform, stats, interrupt)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_reduced_cells_sum<S: ReductionSum>(
+    doc: &Document,
+    b: Rect,
+    cells: Cells,
+    damage: Option<Rect>,
+    band_rows: i32,
+    uniform: bool,
+    stats: &mut ReducedStats,
+    interrupt: Interrupt<'_>,
+) -> Result<Buffer, String> {
     let (fw, fh) = (b.width() as usize, b.height() as usize);
     let (w, h, k) = match cells {
         Cells::Fit(w, h) => (w.clamp(1, b.width().max(1)) as usize, h.clamp(1, b.height().max(1)) as usize, None),
@@ -204,12 +277,12 @@ pub(crate) fn render_reduced_cells(
     };
     let (cols, rows) = (map(fw, w), map(fh, h));
     let cols = &cols[sx0..sx1];
-    let mut acc = vec![[0.0f32; 4]; ow * oh];
+    let mut acc = vec![[S::default(); 4]; ow * oh];
     // Each output row sums its source rows in a band (in order, top to bottom), each row's pixels
     // left to right: `row(y, out)` adds source row `y` (band-relative) to output row `out`.
-    let sum_band = |acc: &mut [[f32; 4]], by0: usize, by1: usize, row: &(dyn Fn(usize, &mut [[f32; 4]]) + Sync)| {
+    let sum_band = |acc: &mut [[S; 4]], by0: usize, by1: usize, row: &(dyn Fn(usize, &mut [[S; 4]]) + Sync)| {
         let (t0, t1) = (rows[by0] as usize, rows[by1 - 1] as usize + 1);
-        let sum_row = |t: usize, out: &mut [[f32; 4]]| {
+        let sum_row = |t: usize, out: &mut [[S; 4]]| {
             let (a, z) = span(t, fh, h);
             for y in a.max(by0)..z.min(by1) {
                 row(y - by0, out);
@@ -226,11 +299,11 @@ pub(crate) fn render_reduced_cells(
             sum_row(t0 + i, out);
         }
     };
-    let add = |o: &mut [f32; 4], p: &[f32; 4]| {
-        for i in 0..3 {
-            o[i] += p[i] * p[3];
+    let add = |o: &mut [S; 4], p: &[f32; 4]| {
+        let p = associated_pixel(*p);
+        for i in 0..4 {
+            o[i] += S::sample(p[i]);
         }
-        o[3] += p[3];
     };
     if let Some(uniform) = uniform.then(|| uniform::UniformAreas::new(doc)).flatten() {
         stats.uniform = true;
@@ -276,7 +349,7 @@ pub(crate) fn render_reduced_cells(
             let one = |(whole, part): &(Rect, Rect)| -> Part {
                 let render = |r: Rect| render_tiled_with(doc, r, RENDER_TILE, &cx);
                 match uniform.color(*whole, |r| render(r).px.first().copied()) {
-                    Some(p) => Part::Solid([p[0] * p[3], p[1] * p[3], p[2] * p[3], p[3]]),
+                    Some(p) => Part::Solid(associated_pixel(p)),
                     None => Part::Px(render(*part)),
                 }
             };
@@ -291,7 +364,7 @@ pub(crate) fn render_reduced_cells(
             let (by0, by1) = (y.max(sy0 as i64) as usize, y1 as usize);
             let n = tile_cols.len();
             let band_y = y;
-            sum_band(&mut acc, by0, by1, &|row: usize, out: &mut [[f32; 4]]| {
+            sum_band(&mut acc, by0, by1, &|row: usize, out: &mut [[S; 4]]| {
                 let y = (by0 + row) as i64;
                 let j = (y - band_y) as usize / t;
                 let ty = (y - (band_y + (j * t) as i64).max(sy0 as i64)) as usize;
@@ -301,7 +374,7 @@ pub(crate) fn render_reduced_cells(
                             for &(c, k) in runs {
                                 let o = &mut out[c];
                                 for i in 0..4 {
-                                    o[i] += pa[i] * k;
+                                    o[i] += S::sample(pa[i]) * S::sample(k);
                                 }
                             }
                         }
@@ -322,7 +395,7 @@ pub(crate) fn render_reduced_cells(
             stats.composited += band.px.len() as u64;
             let (by0, by1) = ((band.rect.y0 - b.y0) as usize, (band.rect.y1 - b.y0) as usize);
             let sw = sx1 - sx0;
-            sum_band(&mut acc, by0, by1, &|y: usize, out: &mut [[f32; 4]]| {
+            sum_band(&mut acc, by0, by1, &|y: usize, out: &mut [[S; 4]]| {
                 for (p, &c) in band.px[y * sw..(y + 1) * sw].iter().zip(cols) {
                     add(&mut out[c as usize - ox0], p);
                 }
@@ -336,17 +409,11 @@ pub(crate) fn render_reduced_cells(
             (x1 - x0).max(1)
         })
         .collect();
-    let norm_row = |row: usize, out: &mut [[f32; 4]]| {
+    let norm_row = |row: usize, out: &mut [[S; 4]]| {
         let (y0, y1) = span(oy0 + row, fh, h);
         let rh = (y1 - y0).max(1);
         for (p, &cw) in out.iter_mut().zip(&col_w) {
-            let a = p[3];
-            if a > 0.0 {
-                let n = (rh * cw) as f32;
-                *p = [p[0] / a, p[1] / a, p[2] / a, a / n];
-            } else {
-                *p = [0.0; 4];
-            }
+            *p = S::normalize(*p, rh * cw);
         }
     };
     #[cfg(not(target_arch = "wasm32"))]
@@ -359,5 +426,5 @@ pub(crate) fn render_reduced_cells(
         norm_row(row, out);
     }
     interrupt.check().map_err(|e| e.to_string())?;
-    Ok(Buffer { rect: out, px: acc })
+    Ok(Buffer { rect: out, px: S::pixels(acc) })
 }

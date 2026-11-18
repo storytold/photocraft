@@ -233,9 +233,13 @@ pub fn import(name: &str, bytes: &[u8], sel: &Selection) -> Result<ImportResult,
     let mut gray_only = true;
     let mut max = (1u32, 1u32);
     let mut f16_seen = false;
+    let alpha_parts = crate::exr_alpha::parts(bytes);
 
     for part in &chosen_parts {
-        let img = codecs::decode_exr_part(bytes, part.index, &opts)?;
+        let mut img = codecs::decode_exr_part(bytes, part.index, &opts)?;
+        if alpha_parts.get(part.index).is_some_and(|part| crate::exr_alpha::selected_part(part, None)) {
+            crate::exr_alpha::unpremultiply_image(&mut img);
+        }
         if img.sample_type() == SampleType::F16 {
             f16_seen = true;
         }
@@ -247,7 +251,10 @@ pub fn import(name: &str, bytes: &[u8], sel: &Selection) -> Result<ImportResult,
         let mut names = group.channels.clone();
         names.extend(group.alpha.clone());
         let refs: Vec<&str> = names.iter().map(String::as_str).collect();
-        let img = codecs::decode_exr_channels(bytes, group.part, &refs, &opts)?;
+        let mut img = codecs::decode_exr_channels(bytes, group.part, &refs, &opts)?;
+        if alpha_parts.get(group.part).is_some_and(|part| crate::exr_alpha::selected_part(part, Some(&refs))) {
+            crate::exr_alpha::unpremultiply_image(&mut img);
+        }
         if img.sample_type() == SampleType::F16 {
             f16_seen = true;
         }
