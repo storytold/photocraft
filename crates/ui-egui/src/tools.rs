@@ -54,6 +54,8 @@ pub mod vector_ui;
 #[cfg(test)]
 mod art_history_default_style_tests;
 #[cfg(test)]
+mod count_group_defaults_tests;
+#[cfg(test)]
 mod gradient_mode_greyed_tests;
 
 #[cfg(test)]
