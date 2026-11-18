@@ -295,6 +295,43 @@ fn a_refused_fill_keeps_the_last_remembered_settings() {
     assert_eq!(saved(&app), Some(remembered), "a refused OK remembers nothing");
 }
 
+/// A background fill (the desktop app) remembers its settings once its job is applied; a job that fails or is
+/// cancelled leaves the last remembered ones (#14254).
+#[test]
+fn a_background_fill_remembers_its_settings_only_when_its_job_is_applied() {
+    use photocraft_engine::jobs::{JobEvent, JobId, JobOutcome};
+    let mut app = app_with_selection();
+    let saved = |app: &PhotocraftApp| app.session.prefs().dialogs.get(photocraft_engine::atn_cmds::CAF_WORKSPACE_PREFS).cloned();
+    open(&mut app).unwrap();
+    ui(&mut app, json!({"output": "current", "colorAdaptation": "none", "apply": true})).unwrap();
+    let remembered = saved(&app).expect("the Apply that ran remembers its settings");
+    app.background_jobs = true;
+    ui(&mut app, json!({"colorAdaptation": "high", "mirror": true})).unwrap();
+    let id = app.caf.as_ref().unwrap().id;
+    let command = app.framework.dialogs.get_by_id::<Hosted>(id).unwrap().workspace().command();
+    super::lifecycle::apply(&mut app, &command).unwrap();
+    assert_eq!(saved(&app), Some(remembered), "nothing is remembered while the fill runs");
+    assert_eq!(app.jobs.caf_settings.len(), 1, "the fill runs as a background job");
+    let ctx = ctx(&app);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while app.session.has_jobs() {
+        assert!(std::time::Instant::now() < deadline, "the fill job did not end");
+        crate::jobs_ui::tick(&mut app, &ctx);
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let applied = saved(&app).expect("the applied fill remembers its settings");
+    assert_eq!((&applied["colorAdaptation"], &applied["mirror"]), (&json!("high"), &json!(true)));
+    assert!(app.jobs.caf_settings.is_empty());
+    for outcome in [JobOutcome::Failed("refused".into()), JobOutcome::Cancelled] {
+        let job = JobId(u64::MAX);
+        app.jobs.caf_settings.push((job, json!({"output": "duplicate"})));
+        let event = JobEvent { id: job, command: CMD.into(), label: String::new(), document: None, outcome: outcome.clone(), error: None };
+        crate::caf_ui::on_job_event(&mut app, &event);
+        assert_eq!(saved(&app), Some(applied.clone()), "{outcome:?} remembers nothing");
+        assert!(app.jobs.caf_settings.is_empty(), "{outcome:?} ends the wait");
+    }
+}
+
 /// The engine's sampling area over the plan's rectangle (what the fill samples) and its fill area.
 fn engine_source(app: &PhotocraftApp) -> (Rect, Vec<bool>, Vec<bool>) {
     let c = app.caf.as_ref().unwrap();
