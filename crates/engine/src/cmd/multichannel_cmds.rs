@@ -188,9 +188,9 @@ fn remap_view(s: &mut Session, (target, eyes): (ChannelTarget, Vec<bool>), map: 
 
 /// Image › Mode › RGB / CMYK / Lab / Grayscale from a Multichannel document (called by
 /// `color_cmds::convert_mode`). Multichannel has no profile; when the inks are printed (the
-/// appearance branch) they mix in the light of the RGB space the image goes to: `profile` (which
-/// must be an RGB one) for RGB, else the working RGB. A printed RGB result is tagged with that
-/// profile, so its values are read in the space they were mixed in.
+/// appearance branch) for RGB they mix in the light of the RGB space the image goes to: `profile`
+/// (an RGB one with tone curves) or else the working RGB, and the result is tagged with it, so
+/// its values are read in the space they were mixed in. CMYK, Lab and Grayscale mix in sRGB light.
 pub(crate) fn convert_from(s: &mut Session, mode: ColorMode, p: &Value) -> Result<Value> {
     if !matches!(mode, ColorMode::Rgb | ColorMode::Cmyk | ColorMode::Lab | ColorMode::Grayscale) {
         return Err(EngineError::Other(format!("a Multichannel document can't be converted to {mode:?}")));
@@ -202,12 +202,20 @@ pub(crate) fn convert_from(s: &mut Session, mode: ColorMode, p: &Value) -> Resul
             if pr.color_space != craft_cms::ColorSpace::Rgb {
                 return Err(EngineError::Other(format!("profile `{}` is {:?}, not RGB", pr.description, pr.color_space)));
             }
+            if InkLight::of_profile(&pr).is_none() {
+                return Err(EngineError::Other(format!("profile `{}` has no tone curves to mix the inks in (a LUT-based profile)", pr.description)));
+            }
             Some(pr)
         }
         None => None,
     };
     let rgb = asked.unwrap_or_else(|| s.color.working(ColorMode::Rgb));
-    let light = InkLight::of_profile(&rgb).unwrap_or_else(InkLight::srgb);
+    // CMYK, Lab and Grayscale results are built from sRGB values (`from_rgba`), as the canvas
+    // preview of a Multichannel document shows them; only an RGB result mixes in its own light.
+    let light = match mode {
+        ColorMode::Rgb => InkLight::of_profile(&rgb).unwrap_or_else(InkLight::srgb),
+        _ => InkLight::srgb(),
+    };
     // The inks leave; the other channels close up.
     let Some((spots, view)) = s
         .active()
