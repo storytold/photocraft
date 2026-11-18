@@ -116,7 +116,7 @@ fn defringe_command_preserves_soft_alpha_and_history_at_every_depth() {
     for depth in DEPTHS {
         for transparent_pixel in [false, true] {
             let mut s = session(depth, "rgb");
-            paint(&mut s, |x, y| {
+            paint(&mut s, |x, _| {
                 if transparent_pixel && x == 0 {
                     [0.0; 4]
                 } else if x < 2 {
@@ -137,10 +137,12 @@ fn defringe_command_preserves_soft_alpha_and_history_at_every_depth() {
                     }
                 }
             }
+            let sampled_x = if transparent_pixel { 1 } else { 0 };
+            assert_ne!(after.rgba(sampled_x, 15)[..3], before.rgba(sampled_x, 15)[..3], "fixture must change RGB");
             s.execute("edit.undo", json!({})).unwrap();
-            assert_eq!(active(&s).surface().unwrap().rgba(0, 15), before.rgba(0, 15));
+            assert_eq!(active(&s).surface().unwrap().rgba(sampled_x, 15), before.rgba(sampled_x, 15));
             s.execute("edit.redo", json!({})).unwrap();
-            assert_eq!(active(&s).surface().unwrap().rgba(0, 15), after.rgba(0, 15));
+            assert_eq!(active(&s).surface().unwrap().rgba(sampled_x, 15), after.rgba(sampled_x, 15));
         }
     }
 }
@@ -215,6 +217,14 @@ fn defringe_command_uses_most_opaque_interior_when_every_pixel_is_translucent() 
             assert_eq!(after.rgba(x, 15)[3], before.rgba(x, 15)[3], "alpha changed at depth {depth}, x={x}");
         }
     }
+}
+
+#[test]
+fn defringe_uses_most_opaque_pixel_when_width_covers_the_cutout() {
+    let mut px = vec![[0.0, 0.0, 1.0, 0.2], [1.0, 0.0, 0.0, 0.8]];
+    defringe(&mut px, 2, 1, 1);
+    assert_eq!(px[0], [1.0, 0.0, 0.0, 0.2]);
+    assert_eq!(px[1], [1.0, 0.0, 0.0, 0.8]);
 }
 
 #[test]
