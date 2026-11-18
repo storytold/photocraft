@@ -17,7 +17,7 @@ impl CloudBackend for Connected {
     fn submit(&self, _job: Job, _post: Post) {}
 }
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     PhotocraftApp::new(Session::new(), Services::default())
 }
 

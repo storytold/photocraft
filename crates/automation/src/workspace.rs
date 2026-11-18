@@ -642,6 +642,14 @@ pub fn authorize_engine_command(id: &str, params: &Value) -> Result<(), Automati
     if id.starts_with("file.") && !safe_file_command {
         return Err(command_error(id));
     }
+    // Cloud storage is a service this policy has no capability for. The directory handles above
+    // scope what automation may touch on this computer, and nothing scopes what it may put in, or
+    // take out of, somebody's cloud account. Reading a listing discloses their file names, and a
+    // save puts a document on a server. Neither is judged by the read and write roots, so both are
+    // refused here rather than allowed unjudged, as a filesystem command with no capability is.
+    if id.starts_with("cloud.") {
+        return Err(cloud_error(id));
+    }
     // Contents commands re-check the resolved source in the engine before any disk read.
     // Photoshop's embedded linked-layer blocks count as in-memory sources too.
     let in_memory_smart_command = matches!(
@@ -800,6 +808,13 @@ fn looks_like_path(value: &str) -> bool {
 
 fn command_error(id: &str) -> AutomationError {
     AutomationError::BadRequest(format!("automation command `{id}` uses ambient filesystem paths and is disabled; use capability-scoped document methods"))
+}
+
+/// A cloud command refused because this policy grants no cloud authority of any kind.
+fn cloud_error(id: &str) -> AutomationError {
+    AutomationError::BadRequest(format!(
+        "automation command `{id}` reaches cloud storage, which no automation capability grants; use capability-scoped document methods"
+    ))
 }
 
 /// An export owns only files it created through this held directory capability. Refuse

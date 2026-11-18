@@ -78,7 +78,7 @@ impl PhotocraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         self.drain_control(ctx);
         // Answers from the host's cloud worker. Nothing arrives in a build with no service.
-        cloud::pump(self);
+        cloud::pump(self, ctx);
         view_cmds::leave_full_screen_without_document(self);
         // A box drag that ended without a release reaching the Type tool keeps its box, before
         // the commit below can end the edit.

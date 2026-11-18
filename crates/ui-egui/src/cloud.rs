@@ -1,13 +1,23 @@
 //! PhotoCraft's half of Open and Save against cloud storage.
 //!
 //! The contract types here ([`CloudBackend`], [`Job`], [`Post`], [`Event`], [`Fault`],
-//! [`Account`]) are kept in the same shape as `crates/ui/src/cloud/backend.rs` on
-//! wdunn001/craft-libs, which is where storytold/craft-libs#160 is adding the same contract to
-//! `craft-ui` itself. They are not pulled from that crate directly. craft-ui's own `cloud` feature
-//! exists today only on that fork, pinned to an egui release older than the one this workspace
-//! builds against. Once #160 merges, craft-ui carries this contract at the egui release this
-//! workspace uses, and this module is replaced by `pub use craft_ui::cloud::{...}` in one commit
-//! alongside the `craft-ui` and `craft-cloud` pin bump in the workspace `Cargo.toml`.
+//! [`Account`]) are the shapes `crates/ui/src/cloud/backend.rs` states on
+//! `storytold/craft-libs` at `fd7232d7`, the commit that merged storytold/craft-libs#160. Field
+//! for field, including [`Fault::Conflict`] and `Post`'s generation guard. The vocabulary they
+//! pass around is the real thing, taken straight from `craft_cloud` at that revision.
+//!
+//! They are restated here rather than imported for one reason, and it is a pin, not a design
+//! choice. The shared pages and this contract live in craft-libs' `crates/ui`, which this
+//! workspace reaches as the `craft` framework crate. That crate is pinned at `a6b9d9c9`, which is
+//! not an ancestor of `fd7232d7`: the two diverge from `83cb1133`, and `a6b9d9c9` carries no cloud
+//! module at all while `fd7232d7` carries no framework crate. They also pin different
+//! `storytold/egui` revisions, so taking `crates/ui` from one and `crates/craft` from the other
+//! would put two egui revisions in one graph. Until a craft-libs revision carries both, the
+//! contract cannot be imported at a revision this workspace can build.
+//!
+//! When one does, this module becomes `pub use craft_ui::cloud::{...}` and the two page calls in
+//! [`window`] become the shared `open_page` and `save_page`. Nothing else here has to move: those
+//! are `(app, ui)` functions on the merged revision too.
 //!
 //! PhotoCraft holds no provider credential and speaks no provider protocol. A [`CloudBackend`] is
 //! the one thing a host application supplies, and this crate never learns what it reaches.
@@ -37,6 +47,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 
 // Re-exported so a host application, and a test, can name these types without depending on the
@@ -111,12 +122,19 @@ fn extension_for_mime(mime: &str) -> Option<&'static str> {
 /// keeps every layer, mask, effect and smart object, and a save the user did not choose a format
 /// for should lose nothing. A PSD, an OpenRaster file or a flat image is a name away.
 pub struct DocumentKind {
+    /// Extensions this application opens, lower case and without a dot. The same set its desktop
+    /// file picker offers.
     pub extensions: &'static [&'static str],
+    /// Content types it opens, matched against the start of what the provider said. The match is a
+    /// prefix, because a provider commonly appends a profile to a type it is otherwise right about.
     pub mimes: &'static [&'static str],
+    /// What one is called in a sentence a user reads.
+    pub noun: &'static str,
+    /// The extension a typed name without a known one gets.
     pub default_extension: &'static str,
 }
 
-pub const DOCUMENT: DocumentKind = DocumentKind { extensions: OPEN_EXTS, mimes: &MIMES, default_extension: photocraft_format::EXTENSION };
+pub const DOCUMENT: DocumentKind = DocumentKind { extensions: OPEN_EXTS, mimes: &MIMES, noun: "document", default_extension: photocraft_format::EXTENSION };
 
 /// Where a save is going, as the provider described it: the file name, and the content type when
 /// the provider issued one.
@@ -216,17 +234,21 @@ fn cannot_write(why: &str) -> String {
 
 // ---------------------------------------------------------------- the contract
 
-/// Work for a host's worker. Each one answers with one [`Event`].
+/// Work for a host's worker. Each one answers with one or more [`Event`].
+///
+/// The variants this application states are a subset of the contract's. The field shapes are the
+/// contract's own, so the swap described in the module header stays a re-export.
 pub enum Job {
-    /// Who is signed in.
+    /// Who is signed in, and what the provider behind the service can do.
     Account,
     /// One folder's contents. An empty path is the user's root.
     List(String),
-    /// A document's bytes.
-    Read { entry: Entry },
+    /// A document's bytes. `into` names the open document a reload replaces.
+    Read { entry: Entry, into: Option<u64> },
     /// Save under a new name in `folder`.
     Create { uid: u64, folder: String, name: String, bytes: Vec<u8> },
-    /// Save back to an entry this document was already opened from.
+    /// Save back over `entry`, refusing to overwrite a newer version. The entry carries the
+    /// [`Entry::etag`] the write is conditional on.
     Write { uid: u64, entry: Entry, bytes: Vec<u8> },
 }
 
@@ -234,60 +256,119 @@ pub enum Job {
 pub enum Event {
     Account(Result<Account, Fault>),
     Listed { path: String, entries: Result<Vec<Entry>, Fault> },
-    Read { entry: Entry, bytes: Result<Vec<u8>, Fault> },
+    Read { entry: Entry, into: Option<u64>, bytes: Result<Vec<u8>, Fault> },
     Saved { uid: u64, entry: Result<Entry, Fault> },
 }
 
 /// Where a worker's answers go. Handed to [`CloudBackend::submit`] with the job it belongs to.
+///
+/// A worker is free to keep it and answer later, or to answer several times. A send after the
+/// window moved on is not a failure.
 pub struct Post {
     tx: Sender<Event>,
+    /// The session generation as of the moment the job this answers was issued, beside a handle to
+    /// what it is now. Connecting a backend bumps the live value. A reply that arrives after is for
+    /// a session that is gone, and must not land on the one that replaced it.
+    generation: Arc<AtomicU64>,
+    issued: u64,
 }
 
 impl Post {
-    fn new(tx: Sender<Event>) -> Post {
-        Post { tx }
+    fn new(tx: Sender<Event>, generation: Arc<AtomicU64>) -> Post {
+        let issued = generation.load(Ordering::Relaxed);
+        Post { tx, generation, issued }
     }
 
+    /// Another handle to the same place, for a worker that answers more than once. Carries the same
+    /// generation: every answer to one job was issued at the same moment.
+    pub fn dup(&self) -> Post {
+        Post { tx: self.tx.clone(), generation: self.generation.clone(), issued: self.issued }
+    }
+
+    /// Delivers the event, unless the session moved on since the job this answers was issued.
     pub fn send(&self, event: Event) {
+        if self.generation.load(Ordering::Relaxed) != self.issued {
+            return;
+        }
         let _ = self.tx.send(event);
     }
 }
 
 /// Somewhere a [`Job`] can run without blocking a frame.
 ///
-/// `submit` must return immediately. The answer arrives through `post` whenever it is ready, or
+/// `submit` must return immediately. Answers arrive through `post` whenever they are ready, or
 /// never, and the pages survive either.
-pub trait CloudBackend: Send + Sync {
+pub trait CloudBackend {
     fn submit(&self, job: Job, post: Post);
 }
 
 /// What the service said about the signed-in user.
+///
+/// Capabilities are reported by the service and never assumed here.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Account {
     pub display: String,
-    /// What the provider behind the service can do. Carried through from `craft_cloud::Capability`
-    /// so a host's backend can report it. Nothing in this crate reads it yet.
+    /// What the provider behind the service can do, carried through from `craft_cloud::Capability`.
     pub capabilities: Vec<Capability>,
+    /// Until this is true, Open and Save have nowhere to go.
+    pub provider_linked: bool,
 }
 
-/// A call that did not succeed.
+impl Account {
+    pub fn can(&self, capability: Capability) -> bool {
+        self.capabilities.contains(&capability)
+    }
+}
+
+/// A call that did not succeed, in the shapes the pages act on differently.
+///
+/// One case is worth telling apart from every other refusal. A conditional write the server refused
+/// means somebody else's work is in the stored copy. That one must never be retried and must never
+/// be forced, which is why [`Fault::Conflict`] has a shape of its own.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Fault {
+    /// No cloud account is linked yet. This is a state with an obvious next step. It is never drawn
+    /// as an error.
+    NotLinked,
+    /// Somebody else saved while this user was editing. The save was refused and their work is
+    /// intact.
+    Conflict,
+    /// The session expired. The user signs in again.
+    Unauthenticated,
     Unreachable(String),
     Refused(String),
 }
 
 impl Fault {
-    /// One sentence for a person to read.
-    pub fn text(&self) -> String {
+    /// One sentence for a person to read. `noun` is what the application calls one of its
+    /// documents.
+    pub fn text(&self, noun: &str) -> String {
         match self {
-            Fault::Unreachable(detail) => format!("The cloud service could not be reached. {detail}"),
+            Fault::NotLinked => tl!("No cloud account is linked yet.").to_owned(),
+            Fault::Conflict => crate::i18n::fmt(tl!("Somebody else saved this {noun} while you were editing it."), &[("noun", noun)]),
+            Fault::Unauthenticated => tl!("Your cloud session has expired. Sign in again.").to_owned(),
+            Fault::Unreachable(detail) => crate::i18n::fmt(tl!("The cloud service could not be reached. {detail}"), &[("detail", detail)]),
             Fault::Refused(detail) => detail.clone(),
+        }
+    }
+
+    /// A short machine-readable name, for the control channel.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Fault::NotLinked => "not_linked",
+            Fault::Conflict => "conflict",
+            Fault::Unauthenticated => "unauthenticated",
+            Fault::Unreachable(_) => "unreachable",
+            Fault::Refused(_) => "refused",
         }
     }
 }
 
 /// One folder's contents, as last fetched.
+///
+/// A listing that failed leaves [`Folder::error`] set and nothing in flight. That is a settled
+/// state, not a reason to ask again: [`start`] leaves it alone, so the page can draw the refusal
+/// and the user decides whether to retry. Only [`browse`] clears it.
 #[derive(Clone, Default)]
 pub struct Folder {
     pub path: String,
@@ -295,6 +376,14 @@ pub struct Folder {
     pub loading: bool,
     pub loaded: bool,
     pub error: Option<Fault>,
+}
+
+impl Folder {
+    /// Whether a listing of this folder is worth asking for. False while one is in flight, false
+    /// once one answered, and false once one was refused.
+    fn wants_listing(&self) -> bool {
+        !self.loading && !self.loaded && self.error.is_none()
+    }
 }
 
 /// Which cloud page the modal is showing.
@@ -317,16 +406,37 @@ pub struct CloudFiles {
     pub page: Option<Page>,
     /// A transfer in flight, for the page's status line.
     pub busy: Option<String>,
-    /// Where each open document came from, by document id. Present only for a document opened
-    /// from, or already saved to, the cloud. File › Save on one of these writes back here instead
-    /// of asking for a path on this computer.
+    /// Where each open document's cloud copy is, by document id. Present for a document opened
+    /// from the cloud, and for one that was saved to it.
+    ///
+    /// A cloud destination is not by itself a reason for File › Save to go there. A document that
+    /// also has a file of its own on disk keeps that file as what Save writes (see
+    /// [`prefers_cloud`]). Each entry carries the [`Entry::etag`] the next write is conditional on.
     origins: HashMap<u64, Entry>,
+    /// Whether an account check is in flight. The title bar asks on every frame, and without this
+    /// the answer being outstanding would be a reason to ask again.
+    account_asked: bool,
+    /// Bumped whenever a backend is connected, so answers from the previous one are dropped rather
+    /// than landing on the session that replaced it (see [`Post::send`]).
+    generation: Arc<AtomicU64>,
 }
 
 impl Default for CloudFiles {
     fn default() -> CloudFiles {
         let (tx, rx) = std::sync::mpsc::channel();
-        CloudFiles { backend: None, tx, rx, account: None, mine: Folder::default(), save_name: String::new(), page: None, busy: None, origins: HashMap::new() }
+        CloudFiles {
+            backend: None,
+            tx,
+            rx,
+            account: None,
+            mine: Folder::default(),
+            save_name: String::new(),
+            page: None,
+            busy: None,
+            origins: HashMap::new(),
+            account_asked: false,
+            generation: Arc::new(AtomicU64::new(0)),
+        }
     }
 }
 
@@ -339,6 +449,11 @@ impl CloudFiles {
     /// when a service is configured.
     pub fn connect(&mut self, backend: impl CloudBackend + 'static) {
         self.backend = Some(Arc::new(backend));
+        // Anything the previous backend still owes is for a session that is gone.
+        self.generation.fetch_add(1, Ordering::Relaxed);
+        self.account = None;
+        self.account_asked = false;
+        self.mine = Folder::default();
     }
 }
 
@@ -352,20 +467,25 @@ pub fn available(app: &PhotocraftApp) -> bool {
 
 fn submit(app: &PhotocraftApp, job: Job) {
     if let Some(backend) = &app.cloud.backend {
-        backend.submit(job, Post::new(app.cloud.tx.clone()));
+        backend.submit(job, Post::new(app.cloud.tx.clone(), app.cloud.generation.clone()));
     }
 }
 
-/// Ensures the account and the current folder are loaded. Call when a cloud page is about to be
-/// drawn.
+/// Ensures the account and the current folder are on their way. Call when a cloud page, or the
+/// account badge, is about to be drawn.
+///
+/// Every caller runs once a frame, so each request here is guarded by what is already in flight or
+/// already settled. A service that is slow, or down, would otherwise be asked again sixty times a
+/// second for as long as the window is open.
 pub fn start(app: &mut PhotocraftApp) {
     if !available(app) {
         return;
     }
-    if app.cloud.account.is_none() {
+    if app.cloud.account.is_none() && !app.cloud.account_asked {
+        app.cloud.account_asked = true;
         submit(app, Job::Account);
     }
-    if !app.cloud.mine.loaded && !app.cloud.mine.loading {
+    if app.cloud.mine.wants_listing() {
         let path = app.cloud.mine.path.clone();
         browse(app, &path);
     }
@@ -390,14 +510,45 @@ pub fn open_entry(app: &mut PhotocraftApp, entry: Entry) {
         browse(app, &path);
         return;
     }
-    app.cloud.busy = Some(format!("Opening {} from the cloud", entry.name));
-    submit(app, Job::Read { entry });
+    app.cloud.busy = Some(crate::i18n::fmt(tl!("Opening {name} from the cloud"), &[("name", &entry.name)]));
+    submit(app, Job::Read { entry, into: None });
 }
 
-/// Whether the active document already has a cloud destination (opened from, or already saved to,
-/// the cloud), so File › Save can write back there instead of asking for a path on this computer.
+/// Whether the active document has a cloud copy at all, from being opened out of the cloud or from
+/// having been saved to it. This says where a cloud save would go. It does not say that File › Save
+/// should go there (see [`prefers_cloud`]).
 pub fn has_target(app: &PhotocraftApp) -> bool {
     app.session.active().is_some_and(|st| app.cloud.origins.contains_key(&st.doc.id.0))
+}
+
+/// Whether File › Save on the active document should write to the cloud.
+///
+/// Only when the cloud is the document's only home. A document that also has a file of its own on
+/// this computer keeps that file as what Save writes, for ever: the user opened a file, and Save
+/// means that file. Saving a copy of it to the cloud does not change where it lives, and taking
+/// Save over would leave every later edit unwritten on disk while the window reported it saved.
+pub fn prefers_cloud(app: &PhotocraftApp) -> bool {
+    app.session.active().is_some_and(|st| st.path.is_none() && app.cloud.origins.contains_key(&st.doc.id.0))
+}
+
+/// Whether a cloud save that counts as some document's own save is still on the wire.
+///
+/// Only the writes that will mark a document saved are here. A copy is not one of them, and leaves
+/// its document dirty whatever happens. The unsaved-changes prompt reads this the way it reads
+/// [`PhotocraftApp::saving`] for a background save: it waits rather than asking the user again
+/// while the answer they already gave is in flight.
+pub fn saving(app: &PhotocraftApp) -> bool {
+    !app.cloud_sent.is_empty()
+}
+
+/// Forget the cloud copy of `uid`, because the document's own file is somewhere else now.
+///
+/// A local Save As gives the document a file on this computer. From then on that file is what Save
+/// writes, and the cloud copy it came from is a different file that this document is no longer the
+/// editor of.
+pub fn forget_origin(app: &mut PhotocraftApp, uid: u64) {
+    app.cloud.origins.remove(&uid);
+    app.cloud_sent.remove(&uid);
 }
 
 /// The whole of the cloud state, for the control channel and for tests.
@@ -405,13 +556,15 @@ pub fn status(app: &PhotocraftApp) -> Json {
     json!({
         "available": available(app),
         "account": app.cloud.account.as_ref().map(|a| match a {
-            Ok(account) => json!({"display": account.display}),
-            Err(fault) => json!({"error": fault.text()}),
+            Ok(account) => json!({"display": account.display, "providerLinked": account.provider_linked}),
+            Err(fault) => json!({"error": fault.text(DOCUMENT.noun), "code": fault.code()}),
         }),
         "folder": app.cloud.mine.path,
+        "folderError": app.cloud.mine.error.as_ref().map(|fault| json!({"error": fault.text(DOCUMENT.noun), "code": fault.code()})),
         "page": app.cloud.page.map(|p| match p { Page::Open => "open", Page::Save => "save" }),
         "busy": app.cloud.busy,
         "hasTarget": has_target(app),
+        "prefersCloud": prefers_cloud(app),
     })
 }
 
@@ -425,9 +578,14 @@ fn ready_to_save(app: &mut PhotocraftApp) {
 
 /// Encode the active document for `into`, and record the revision that is going out.
 ///
-/// A format that cannot hold the document (a flat file for a layered one) is a copy, as in File ›
-/// Save As: the cloud file is written and the document stays unsaved, so the layers are not
-/// forgotten.
+/// Two cases make the write a copy rather than the document's save. A format that cannot hold the
+/// document (a flat file for a layered one) is a copy, as in File › Save As. A document that lives
+/// in a file on this computer is a copy too: nothing reached that file, so the edits in it are
+/// still unsaved. In both cases the cloud file is written and the document stays dirty, which is
+/// what keeps Quit from discarding work it never wrote anywhere.
+///
+/// Only a document whose sole home is the cloud has its revision recorded here, and only that
+/// revision is ever marked saved when the write lands (see [`mark_saved`]).
 fn encode(app: &mut PhotocraftApp, into: Destination<'_>) -> Result<(String, u64, Vec<u8>), String> {
     let name = export_name(into)?;
     let (uid, revision, bytes, warnings, copy) = {
@@ -435,12 +593,13 @@ fn encode(app: &mut PhotocraftApp, into: Destination<'_>) -> Result<(String, u64
         let settings = app.save_settings();
         let export = app.services.export.as_ref().ok_or("no exporter configured")?;
         let (bytes, warnings) = export(&st.doc, &name, &settings)?;
-        (st.doc.id.0, st.revision, bytes, warnings, app.saves_copy(&name, None)?)
+        let copy = app.saves_copy(&name, None)? || st.path.is_some();
+        (st.doc.id.0, st.revision, bytes, warnings, copy)
     };
     if !copy {
         app.cloud_sent.insert(uid, revision);
     }
-    crate::notices::io_warnings(app, &crate::i18n::fmt(crate::i18n::t("Saved {name}"), &[("name", &name)]), &warnings);
+    crate::notices::io_warnings(app, &crate::i18n::fmt(tl!("Saved {name}"), &[("name", &name)]), &warnings);
     Ok((name, uid, bytes))
 }
 
@@ -510,11 +669,14 @@ fn mark_saved(app: &mut PhotocraftApp, uid: u64) {
 }
 
 /// Drain the backend's answers and apply them. Called once a frame.
-pub fn pump(app: &mut PhotocraftApp) {
+pub fn pump(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let events: Vec<Event> = app.cloud.rx.try_iter().collect();
     for event in events {
         match event {
-            Event::Account(answer) => app.cloud.account = Some(answer),
+            Event::Account(answer) => {
+                app.cloud.account = Some(answer);
+                app.cloud.account_asked = false;
+            }
             Event::Listed { path, entries } => {
                 if path != app.cloud.mine.path {
                     continue;
@@ -525,37 +687,80 @@ pub fn pump(app: &mut PhotocraftApp) {
                         app.cloud.mine.entries = entries;
                         app.cloud.mine.loaded = true;
                     }
+                    // Latched on purpose. `start` leaves a refused listing alone, so this survives
+                    // to be drawn and the user decides whether to ask again.
                     Err(fault) => app.cloud.mine.error = Some(fault),
                 }
             }
-            Event::Read { entry, bytes } => {
+            Event::Read { entry, into, bytes } => {
                 app.cloud.busy = None;
+                // One open document this read replaces, for a reload. Nothing states one yet.
+                let _ = into;
                 match bytes {
                     Ok(bytes) => {
                         app.cloud.page = None;
                         open_bytes(app, &entry, bytes);
                     }
-                    Err(fault) => crate::notices::error(app, format!("could not read \"{}\" from the cloud: {}", entry.name, fault.text())),
+                    Err(fault) => {
+                        let detail = fault.text(DOCUMENT.noun);
+                        crate::notices::error(
+                            app,
+                            crate::i18n::fmt(tl!("{name} could not be read from the cloud. {detail}"), &[("name", &entry.name), ("detail", &detail)]),
+                        );
+                    }
                 }
             }
             Event::Saved { uid, entry } => {
                 app.cloud.busy = None;
                 match entry {
                     Ok(entry) => {
-                        app.cloud.origins.insert(uid, entry.clone());
+                        let name = entry.name.clone();
+                        // The entry the service answered with carries the new etag. Keeping it is
+                        // what makes the next write conditional on this version.
+                        app.cloud.origins.insert(uid, entry);
                         mark_saved(app, uid);
                         app.cloud.page = None;
-                        app.ui.status = format!("Saved \"{}\" to the cloud", entry.name);
+                        app.ui.status = crate::i18n::fmt(tl!("Saved {name} to the cloud"), &[("name", &name)]);
                         app.ui.status_error = false;
+                        // The close prompt may have been waiting on exactly this save. Only a write
+                        // that was the document's own save can release it, which is what
+                        // `mark_saved` above decided by leaving a copy dirty.
+                        crate::discard_ui::saved_document(app, ctx, photocraft_doc::DocId(uid));
                     }
                     Err(fault) => {
+                        // Nothing reached the service, so the revision that was going out is not
+                        // saved anywhere.
                         app.cloud_sent.remove(&uid);
-                        crate::notices::error(app, format!("could not save to the cloud: {}", fault.text()));
+                        if fault == Fault::Conflict {
+                            // Never folded into a generic refusal, and never retried. The stored
+                            // copy holds somebody else's work, and this user's is still here.
+                            conflict(app, uid);
+                        } else {
+                            let detail = fault.text(DOCUMENT.noun);
+                            crate::notices::error(app, crate::i18n::fmt(tl!("The cloud save did not happen. {detail}"), &[("detail", &detail)]));
+                        }
                     }
                 }
             }
         }
     }
+}
+
+/// A conditional write the service refused, reported as its own outcome.
+///
+/// The stored copy moved on while this user was editing. Their edits are intact and still unsaved,
+/// which is the one thing they have to be told. Saving under a new name is the way out, so the
+/// refusal says that and the document stays dirty.
+fn conflict(app: &mut PhotocraftApp, uid: u64) {
+    let name = app.cloud.origins.get(&uid).map(|entry| entry.name.clone()).unwrap_or_default();
+    let detail = Fault::Conflict.text(DOCUMENT.noun);
+    crate::notices::error(
+        app,
+        crate::i18n::fmt(
+            tl!("{detail} Your changes to {name} are still here and still unsaved. Save to the Cloud under another name to keep them."),
+            &[("detail", &detail), ("name", &name)],
+        ),
+    );
 }
 
 // ---------------------------------------------------------------- the pages
@@ -572,7 +777,7 @@ pub fn who(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             ui.label(egui::RichText::new(&account.display).size(12.5));
         }
         Some(Err(fault)) => {
-            ui.label(egui::RichText::new(fault.text()).size(11.0));
+            ui.label(egui::RichText::new(fault.text(DOCUMENT.noun)).size(11.0));
         }
     }
 }
@@ -590,24 +795,29 @@ pub fn title_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 fn folder_list(app: &mut PhotocraftApp, ui: &mut egui::Ui, for_save: bool) -> Option<Entry> {
     start(app);
     let folder = app.cloud.mine.clone();
-    let here = if folder.path.is_empty() { "Cloud storage".to_owned() } else { folder.path.clone() };
+    let here = if folder.path.is_empty() { tl!("Cloud storage").to_owned() } else { folder.path.clone() };
     ui.label(egui::RichText::new(here).size(12.0));
     ui.add_space(6.0);
     let mut chosen = None;
+    let mut retry = false;
     egui::ScrollArea::vertical().max_height(260.0).id_salt(if for_save { "cloud_save_list" } else { "cloud_open_list" }).show(ui, |ui| {
         if folder.loading {
             ui.horizontal(|ui| {
                 ui.add(egui::Spinner::new().size(13.0));
-                ui.label("Loading…");
+                ui.label(tl!("Loading…"));
             });
             return;
         }
+        // A refused listing is latched, so it is still here to be read. Asking again is the user's
+        // decision, which is the only thing that clears it.
         if let Some(fault) = &folder.error {
-            ui.label(fault.text());
+            ui.label(fault.text(DOCUMENT.noun));
+            ui.add_space(6.0);
+            retry = ui.button(tl!("Try again")).clicked();
             return;
         }
         if folder.entries.is_empty() {
-            ui.label("This folder is empty.");
+            ui.label(tl!("This folder is empty."));
         }
         for entry in &folder.entries {
             // A save lists everything, because a folder is browsed into and a file name can be
@@ -620,6 +830,10 @@ fn folder_list(app: &mut PhotocraftApp, ui: &mut egui::Ui, for_save: bool) -> Op
             }
         }
     });
+    if retry {
+        let path = app.cloud.mine.path.clone();
+        browse(app, &path);
+    }
     chosen
 }
 
@@ -644,12 +858,12 @@ pub fn save_page(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> bool {
     }
     ui.add_space(8.0);
     ui.horizontal(|ui| {
-        ui.label("Name:");
+        ui.label(tl!("Name:"));
         ui.text_edit_singleline(&mut app.cloud.save_name);
     });
-    ui.label(egui::RichText::new("A name with no extension is saved as a PhotoCraft document (.pcraft).").size(11.0));
+    ui.label(egui::RichText::new(tl!("A name with no extension is saved as a PhotoCraft document (.pcraft).")).size(11.0));
     ui.add_space(8.0);
-    if ui.button("Save").clicked() {
+    if ui.button(tl!("Save")).clicked() {
         let folder = app.cloud.mine.path.clone();
         let name = app.cloud.save_name.clone();
         match save_as(app, &folder, &name) {
@@ -660,11 +874,23 @@ pub fn save_page(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> bool {
     false
 }
 
+/// Whether a cloud page is on screen. The menu gate reads it, so the menus behave while it is up
+/// exactly as they do for a framework dialog ([`crate::menus::menu_gate`]).
+pub fn page_open(app: &PhotocraftApp) -> bool {
+    app.cloud.page.is_some()
+}
+
 /// The modal holding whichever cloud page is open. Drawn once a frame from the app's `update`.
 ///
-/// A window rather than one of this crate's command dialogs: the page is a live listing that keeps
-/// drawing while jobs land, and it owns its own actions. Nothing is drawn with no page open, which
-/// is always the case in a build with no cloud service.
+/// A real modal, so the page takes the window: a backdrop, Escape to close, and the menu gate told
+/// about it through [`page_open`]. Nothing is drawn with no page open, which is always the case in
+/// a build with no cloud service.
+///
+/// The pages themselves are plain `(app, ui)` functions on purpose. That is the shape
+/// `craft_ui::cloud::{open_page, save_page}` has on the revision that merged
+/// storytold/craft-libs#160, so adopting the shared pages is a swap of these two calls rather than
+/// a rewrite of the surface around them. It is also why they are not a `craft::ui::dialog`
+/// `StackDialog`: that trait's `show` is handed no application, and the shared pages are given one.
 pub fn window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(page) = app.cloud.page else { return };
     if !available(app) {
@@ -672,12 +898,14 @@ pub fn window(app: &mut PhotocraftApp, ctx: &egui::Context) {
         return;
     }
     let title = match page {
-        Page::Open => "Open from the Cloud",
-        Page::Save => "Save to the Cloud",
+        Page::Open => tl!("Open from the Cloud"),
+        Page::Save => tl!("Save to the Cloud"),
     };
-    let mut open = true;
     let mut close = false;
-    egui::Window::new(title).open(&mut open).collapsible(false).resizable(false).min_width(420.0).show(ctx, |ui| {
+    let answer = egui::Modal::new(egui::Id::unique("pc-cloud-page")).show(ctx, |ui| {
+        ui.set_min_width(420.0);
+        ui.heading(title);
+        ui.add_space(6.0);
         if let Some(busy) = app.cloud.busy.clone() {
             ui.horizontal(|ui| {
                 ui.add(egui::Spinner::new().size(13.0));
@@ -689,8 +917,13 @@ pub fn window(app: &mut PhotocraftApp, ctx: &egui::Context) {
             Page::Open => open_page(app, ui),
             Page::Save => close = save_page(app, ui),
         }
+        ui.add_space(8.0);
+        if ui.button(tl!("Cancel")).clicked() {
+            close = true;
+        }
     });
-    if !open || close {
+    // Escape, or a click on the backdrop, is a cancel.
+    if close || answer.should_close() {
         app.cloud.page = None;
     }
 }
@@ -743,8 +976,10 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
 /// Every cloud command answers as soon as the job is stated, never when it is done: the transfer
 /// runs on a worker thread, and `cloud.status` reports what is in flight. `None` for any other id.
 pub(crate) fn menu(app: &mut PhotocraftApp, id: &str, params: &Json) -> Option<Result<Json, String>> {
+    // File › Save goes to the cloud only for a document whose sole home is the cloud. One that also
+    // has a file on this computer is saved to that file by the ordinary path.
     if id == "file.save" {
-        return (params.get("path").is_none() && has_target(app)).then(|| save(app));
+        return (params.get("path").is_none() && prefers_cloud(app)).then(|| save(app));
     }
     if !handles(id) {
         return None;
@@ -798,21 +1033,11 @@ pub(crate) fn menu(app: &mut PhotocraftApp, id: &str, params: &Json) -> Option<R
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+    use std::sync::atomic::AtomicUsize;
 
-    fn app() -> PhotocraftApp {
+    fn app() -> Box<PhotocraftApp> {
         PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default())
-    }
-
-    /// An in-process mock [`CloudBackend`]: answers every job at once, so the pages' listing,
-    /// opening and saving logic is exercised with no cloud service running.
-    struct MockBackend {
-        entries: Vec<Entry>,
-    }
-
-    struct Noop;
-
-    impl CloudBackend for Noop {
-        fn submit(&self, _job: Job, _post: Post) {}
     }
 
     fn mock_entry(name: &str, kind: EntryKind) -> Entry {
@@ -831,16 +1056,107 @@ mod tests {
         }
     }
 
+    /// A backend that accepts every job and answers nothing.
+    struct Noop;
+
+    impl CloudBackend for Noop {
+        fn submit(&self, _job: Job, _post: Post) {}
+    }
+
+    /// An in-process mock backend: answers every job at once, so the pages' listing, opening and
+    /// saving logic is exercised with no cloud service running.
+    struct MockBackend {
+        entries: Vec<Entry>,
+    }
+
     impl CloudBackend for MockBackend {
         fn submit(&self, job: Job, post: Post) {
             match job {
-                Job::Account => post.send(Event::Account(Ok(Account { display: "mock@example.test".into(), capabilities: vec![] }))),
+                Job::Account => post.send(Event::Account(Ok(Account { display: "mock@example.test".into(), capabilities: vec![], provider_linked: true }))),
                 Job::List(path) => post.send(Event::Listed { path, entries: Ok(self.entries.clone()) }),
-                Job::Read { entry } => post.send(Event::Read { entry, bytes: Ok(Vec::new()) }),
+                Job::Read { entry, into } => post.send(Event::Read { entry, into, bytes: Ok(Vec::new()) }),
                 Job::Create { uid, name, .. } => post.send(Event::Saved { uid, entry: Ok(mock_entry(&name, EntryKind::File)) }),
                 Job::Write { uid, entry, .. } => post.send(Event::Saved { uid, entry: Ok(entry) }),
             }
         }
+    }
+
+    /// A backend that refuses everything with `fault`.
+    struct Refusing(Fault);
+
+    impl CloudBackend for Refusing {
+        fn submit(&self, job: Job, post: Post) {
+            match job {
+                Job::Account => post.send(Event::Account(Ok(Account::default()))),
+                Job::List(path) => post.send(Event::Listed { path, entries: Ok(Vec::new()) }),
+                Job::Read { entry, into } => post.send(Event::Read { entry, into, bytes: Err(self.0.clone()) }),
+                Job::Create { uid, .. } | Job::Write { uid, .. } => post.send(Event::Saved { uid, entry: Err(self.0.clone()) }),
+            }
+        }
+    }
+
+    #[derive(Default)]
+    struct Counts {
+        accounts: AtomicUsize,
+        lists: AtomicUsize,
+    }
+
+    /// Accepts every job and answers nothing, counting what it was asked.
+    struct Silent(Arc<Counts>);
+
+    impl CloudBackend for Silent {
+        fn submit(&self, job: Job, _post: Post) {
+            match job {
+                Job::Account => self.0.accounts.fetch_add(1, Ordering::Relaxed),
+                Job::List(_) => self.0.lists.fetch_add(1, Ordering::Relaxed),
+                _ => 0,
+            };
+        }
+    }
+
+    /// Refuses every listing, counting what it was asked.
+    struct Failing(Arc<Counts>);
+
+    impl CloudBackend for Failing {
+        fn submit(&self, job: Job, post: Post) {
+            match job {
+                Job::Account => {
+                    self.0.accounts.fetch_add(1, Ordering::Relaxed);
+                    post.send(Event::Account(Ok(Account::default())));
+                }
+                Job::List(path) => {
+                    self.0.lists.fetch_add(1, Ordering::Relaxed);
+                    post.send(Event::Listed { path, entries: Err(Fault::Unreachable("the host is down".to_owned())) });
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// An app with one small document, an exporter, and a writer that records the paths it got.
+    fn app_with_document() -> (Box<PhotocraftApp>, Arc<Mutex<Vec<String>>>) {
+        let written: Arc<Mutex<Vec<String>>> = Arc::default();
+        let w = written.clone();
+        let mut app = app();
+        app.run("file.new", json!({"width": 8, "height": 8})).expect("a new document");
+        app.sync_views();
+        app.services.export = Some(Box::new(|_: &photocraft_doc::Document, _: &str, _: &crate::ExportSettings| Ok((b"out".to_vec(), Vec::new()))));
+        app.services.write = Some(Box::new(move |p: &str, _: &[u8]| {
+            w.lock().expect("the writer's record").push(p.to_owned());
+            Ok(())
+        }));
+        (app, written)
+    }
+
+    /// Gives the active document a file of its own on this computer, and marks it saved there.
+    fn lives_on_disk(app: &mut PhotocraftApp, path: &str) {
+        let st = app.session.active_mut().expect("a document");
+        st.path = Some(path.to_owned());
+        st.saved_revision = st.revision;
+    }
+
+    fn dirty(app: &PhotocraftApp) -> bool {
+        app.session.documents()[0].is_dirty()
     }
 
     #[test]
@@ -848,7 +1164,7 @@ mod tests {
         for mime in MIMES {
             let extension = extension_for_mime(mime);
             assert!(extension.is_some(), "{mime} has no extension");
-            assert!(extension.is_some_and(|e| OPEN_EXTS.contains(&e)), "{mime} names an extension File › Open does not offer");
+            assert!(extension.is_some_and(|e| OPEN_EXTS.contains(&e)), "{mime} names an extension File  Open does not offer");
         }
         assert!(MIMES.contains(&"image/png"));
         assert!(!MIMES.contains(&"application/octet-stream"), "or every file in somebody's storage would be offered as a document");
@@ -875,7 +1191,6 @@ mod tests {
         assert_eq!(name("Poster.png", None), Ok("Poster.png".to_owned()));
         // The name wins over the type, because the name is what somebody will double-click.
         assert_eq!(name("Poster.psd", Some("image/png")), Ok("Poster.psd".to_owned()));
-        // No extension at all, and a type that says what the thing is.
         assert_eq!(name("exported", Some("image/png")), Ok("exported.png".to_owned()));
         assert_eq!(name("exported", Some("image/jpeg; charset=binary")), Ok("exported.jpg".to_owned()), "a type with a parameter on it");
         assert_eq!(name("exported", Some("image/vnd.adobe.photoshop")), Ok("exported.psd".to_owned()));
@@ -884,19 +1199,13 @@ mod tests {
     #[test]
     fn a_destination_this_app_cannot_write_is_refused_by_name() {
         let refused = |name: &str, mime: Option<&str>| export_name(Destination { name, mime }).err().unwrap_or_default();
-        // Krita files are read and never written.
         let kra = refused("Art.kra", None);
         assert!(kra.contains("cannot write one"), "{kra}");
         assert!(kra.contains(".pcraft") && kra.contains(".psd"), "and it names what is available instead: {kra}");
-        let unknown = refused("Art.wibble", None);
-        assert!(unknown.contains(".wibble"), "{unknown}");
-        // SVG is read, never written.
+        assert!(refused("Art.wibble", None).contains(".wibble"));
         assert!(refused("Art.svg", None).contains("cannot write one"));
-        // A bare name with nothing to go on cannot be guessed at.
         assert!(refused("exported", None).contains("no extension"));
-        let foreign = refused("exported", Some("application/octet-stream"));
-        assert!(foreign.contains("application/octet-stream"), "{foreign}");
-        // A readable type that is not writable is refused too.
+        assert!(refused("exported", Some("application/octet-stream")).contains("application/octet-stream"));
         assert!(refused("exported", Some("image/svg+xml")).contains("image/svg+xml"));
     }
 
@@ -920,17 +1229,36 @@ mod tests {
     }
 
     #[test]
+    fn every_fault_reads_as_a_sentence_and_has_a_code() {
+        let faults = [
+            Fault::NotLinked,
+            Fault::Conflict,
+            Fault::Unauthenticated,
+            Fault::Unreachable("the host is down".to_owned()),
+            Fault::Refused("the server said no".to_owned()),
+        ];
+        let mut codes = std::collections::HashSet::new();
+        for fault in &faults {
+            assert!(!fault.text(DOCUMENT.noun).is_empty(), "{fault:?} says something");
+            assert!(codes.insert(fault.code()), "{fault:?} has a code of its own");
+        }
+        assert!(Fault::Conflict.text("document").contains("document"));
+        assert_eq!(Fault::Conflict.code(), "conflict");
+    }
+
+    #[test]
     fn a_build_with_no_service_offers_nothing_cloud_shaped() {
         let mut app = app();
         assert!(!available(&app));
         assert!(!has_target(&app));
+        assert!(!prefers_cloud(&app));
         assert_eq!(is_enabled(&app, "cloud.open"), Some(false));
-        assert_eq!(is_enabled(&app, "file.save"), None, "File › Save is the ordinary one");
+        assert_eq!(is_enabled(&app, "file.save"), None, "File  Save is the ordinary one");
         for id in IDS.iter().filter(|id| **id != "cloud.status") {
             assert!(menu(&mut app, id, &json!({})).is_some_and(|r| r == Err(UNAVAILABLE.to_owned())), "{id} is refused");
         }
         assert!(menu(&mut app, "cloud.status", &json!({})).is_some_and(|r| r.is_ok()), "the state is always readable");
-        assert!(menu(&mut app, "file.save", &json!({})).is_none(), "File › Save is the ordinary one");
+        assert!(menu(&mut app, "file.save", &json!({})).is_none(), "File  Save is the ordinary one");
         assert!(menu(&mut app, "edit.undo", &json!({})).is_none());
         assert_eq!(save_as(&mut app, "", "Poster").unwrap_err(), UNAVAILABLE);
         assert_eq!(save(&mut app).unwrap_err(), UNAVAILABLE);
@@ -941,59 +1269,215 @@ mod tests {
         let mut app = app();
         app.cloud.connect(Noop);
         assert!(available(&app));
+        assert!(!page_open(&app));
         assert_eq!(is_enabled(&app, "cloud.open"), Some(true));
-        // Nothing to save until a document is open.
-        assert_eq!(is_enabled(&app, "cloud.save"), Some(false));
+        assert_eq!(is_enabled(&app, "cloud.save"), Some(false), "nothing to save until a document is open");
         assert!(menu(&mut app, "cloud.open", &json!({})).is_some_and(|r| r.is_ok()));
-        assert_eq!(app.cloud.page, Some(Page::Open), "the Open page is on screen");
+        assert_eq!(app.cloud.page, Some(Page::Open));
+        assert!(page_open(&app), "the menu gate can see it");
     }
 
     #[test]
     fn the_mock_backend_lists_a_folder_and_names_the_account() {
         let mut app = app();
+        let ctx = app.ctx().clone();
         app.cloud.connect(MockBackend { entries: vec![mock_entry("Poster.psd", EntryKind::File)] });
         start(&mut app);
-        pump(&mut app);
+        pump(&mut app, &ctx);
         assert!(app.cloud.mine.loaded, "the folder is loaded after one pump");
         assert_eq!(app.cloud.mine.entries.len(), 1);
-        assert_eq!(app.cloud.mine.entries[0].name, "Poster.psd");
-        assert!(matches!(&app.cloud.account, Some(Ok(a)) if a.display == "mock@example.test"));
+        assert!(matches!(&app.cloud.account, Some(Ok(a)) if a.display == "mock@example.test" && a.provider_linked));
     }
 
+    /// The title bar calls `start` through `who` on every frame. Five frames with the answer still
+    /// outstanding is one account check, not five.
     #[test]
-    fn save_needs_a_document_that_came_from_the_cloud() {
+    fn the_account_check_is_issued_once_not_once_per_frame() {
+        let counts = Arc::new(Counts::default());
         let mut app = app();
-        app.cloud.connect(MockBackend { entries: vec![] });
-        let refusal = save(&mut app).unwrap_err();
-        assert_eq!(refusal, "no document open");
+        app.cloud.connect(Silent(counts.clone()));
+        for _ in 0..5 {
+            start(&mut app);
+        }
+        assert_eq!(counts.lists.load(Ordering::Relaxed), 1, "the folder listing is asked once");
+        assert_eq!(counts.accounts.load(Ordering::Relaxed), 1, "and so is the account check");
     }
 
+    /// A listing that was refused is a settled state. Asking again every frame would hammer a
+    /// service that is down for as long as the window is open.
     #[test]
-    fn browsing_into_a_folder_lists_it() {
+    fn a_refused_listing_is_not_retried_every_frame() {
+        let counts = Arc::new(Counts::default());
         let mut app = app();
-        app.cloud.connect(MockBackend { entries: vec![mock_entry("Work", EntryKind::Folder)] });
-        browse(&mut app, "Work");
-        pump(&mut app);
-        assert_eq!(app.cloud.mine.path, "Work");
-        assert!(app.cloud.mine.loaded);
+        let ctx = app.ctx().clone();
+        app.cloud.connect(Failing(counts.clone()));
+        for _ in 0..5 {
+            start(&mut app);
+            pump(&mut app, &ctx);
+        }
+        assert_eq!(counts.lists.load(Ordering::Relaxed), 1, "one refused listing, not one request per frame");
     }
 
+    /// The page calls `start` and then reads the folder it is about to draw. A fault cleared by a
+    /// retry in that same pass would never be seen by anybody.
     #[test]
-    fn open_file_refuses_a_name_the_listing_does_not_hold() {
+    fn the_listing_fault_survives_long_enough_to_be_drawn() {
+        let counts = Arc::new(Counts::default());
         let mut app = app();
-        app.cloud.connect(MockBackend { entries: vec![] });
-        let answer = menu(&mut app, "cloud.openFile", &json!({"name": "Missing.psd"}));
-        assert_eq!(answer, Some(Err("no such file in the cloud listing".to_owned())));
-    }
-
-    #[test]
-    fn open_file_refuses_a_listed_file_this_app_does_not_open() {
-        let mut app = app();
-        app.cloud.connect(MockBackend { entries: vec![mock_entry("notes.txt", EntryKind::File)] });
+        let ctx = app.ctx().clone();
+        app.cloud.connect(Failing(counts.clone()));
         start(&mut app);
-        pump(&mut app);
-        let answer = menu(&mut app, "cloud.openFile", &json!({"name": "notes.txt"}));
-        assert!(answer.is_some_and(|r| r.is_err_and(|e| e.contains("cannot open notes.txt"))));
+        pump(&mut app, &ctx);
+        assert!(app.cloud.mine.error.is_some(), "the fault is recorded");
+        start(&mut app);
+        assert!(app.cloud.mine.error.is_some(), "and it is still there for the page to show");
+        // Asking again is the user's decision, and only that clears it.
+        browse(&mut app, "");
+        assert!(app.cloud.mine.error.is_none(), "a retry clears it");
+        assert_eq!(counts.lists.load(Ordering::Relaxed), 2, "and asks exactly once more");
+    }
+
+    /// A cloud destination is not a reason for File  Save to stop writing the document's own file.
+    /// Taking Save over would leave every later edit unwritten on disk while the window reported
+    /// the document saved.
+    #[test]
+    fn save_to_the_cloud_does_not_take_over_the_documents_own_file() {
+        let (mut app, written) = app_with_document();
+        lives_on_disk(&mut app, "/pics/poster.pcraft");
+        let ctx = app.ctx().clone();
+
+        // An ordinary File  Save writes the document's own file.
+        app.run("layer.new.layer", json!({})).expect("a new layer");
+        crate::menus::invoke(&mut app, &ctx, "file.save", json!({})).expect("the baseline save");
+        assert_eq!(&*written.lock().expect("the record"), &["/pics/poster.pcraft".to_owned()], "the baseline save writes to disk");
+
+        // File  Save to the Cloud, answered by the service.
+        app.cloud.connect(MockBackend { entries: vec![] });
+        crate::menus::invoke(&mut app, &ctx, "cloud.saveAs", json!({"folder": "", "name": "poster.pcraft"})).expect("the cloud save");
+        pump(&mut app, &ctx);
+        assert!(has_target(&app), "the document now has a cloud copy");
+        assert!(!prefers_cloud(&app), "but its own file is still what Save means");
+
+        // Edit again and press the Save key.
+        app.run("layer.new.layer", json!({})).expect("another layer");
+        written.lock().expect("the record").clear();
+        crate::menus::invoke(&mut app, &ctx, "file.save", json!({})).expect("the second save");
+        assert_eq!(&*written.lock().expect("the record"), &["/pics/poster.pcraft".to_owned()], "File  Save still writes the document's own file");
+    }
+
+    /// Nothing reached the document's own file, so the edits in it are still unsaved. Quitting must
+    /// ask about them rather than discarding them.
+    #[test]
+    fn a_cloud_save_does_not_mark_a_disk_document_clean() {
+        let (mut app, written) = app_with_document();
+        lives_on_disk(&mut app, "/pics/poster.pcraft");
+        let ctx = app.ctx().clone();
+        app.cloud.connect(MockBackend { entries: vec![] });
+        app.run("layer.new.layer", json!({})).expect("a new layer");
+        assert!(dirty(&app));
+        crate::menus::invoke(&mut app, &ctx, "cloud.saveAs", json!({"folder": "", "name": "poster.pcraft"})).expect("the cloud save");
+        pump(&mut app, &ctx);
+        assert!(written.lock().expect("the record").is_empty(), "nothing reached the document's own file");
+        assert!(dirty(&app), "so the edit to the disk document is still unsaved");
+    }
+
+    /// A document whose only home is the cloud is a different case: the cloud write is its save.
+    #[test]
+    fn a_cloud_only_document_is_saved_back_to_the_cloud() {
+        let (mut app, written) = app_with_document();
+        let ctx = app.ctx().clone();
+        app.cloud.connect(MockBackend { entries: vec![] });
+        app.run("layer.new.layer", json!({})).expect("a new layer");
+        crate::menus::invoke(&mut app, &ctx, "cloud.saveAs", json!({"folder": "", "name": "poster.pcraft"})).expect("the cloud save");
+        assert!(saving(&app), "the bytes are on the wire");
+        pump(&mut app, &ctx);
+        assert!(!saving(&app), "and the answer landed");
+        assert!(prefers_cloud(&app), "the cloud is this document's only home");
+        assert!(!dirty(&app), "so the cloud write is its save");
+        assert!(written.lock().expect("the record").is_empty(), "and no file on this computer was touched");
+
+        // The Save key now goes back to the same entry, through the Write arm.
+        app.run("layer.new.layer", json!({})).expect("another layer");
+        assert!(dirty(&app));
+        crate::menus::invoke(&mut app, &ctx, "file.save", json!({})).expect("the write back");
+        pump(&mut app, &ctx);
+        assert!(!dirty(&app), "writing back to the cloud entry saved it");
+        assert!(written.lock().expect("the record").is_empty(), "still nothing on this computer");
+    }
+
+    /// A refused save leaves the document unsaved, whatever the reason.
+    #[test]
+    fn a_refused_save_leaves_the_document_unsaved() {
+        let (mut app, _written) = app_with_document();
+        let ctx = app.ctx().clone();
+        app.cloud.connect(Refusing(Fault::Unreachable("the host is down".to_owned())));
+        app.run("layer.new.layer", json!({})).expect("a new layer");
+        crate::menus::invoke(&mut app, &ctx, "cloud.saveAs", json!({"folder": "", "name": "poster.pcraft"})).expect("the attempt");
+        pump(&mut app, &ctx);
+        assert!(dirty(&app), "nothing was stored, so nothing is saved");
+        assert!(!saving(&app), "and the attempt is over");
+        assert!(!has_target(&app), "no cloud copy was made");
+        assert!(app.ui.status_error, "the refusal is reported");
+    }
+
+    /// A refused conditional write is the one refusal with a shape of its own. Somebody else's work
+    /// is in the stored copy, and this user's is still here.
+    #[test]
+    fn a_refused_conditional_write_is_reported_as_a_conflict() {
+        let (mut app, _written) = app_with_document();
+        let ctx = app.ctx().clone();
+        app.cloud.connect(Refusing(Fault::Conflict));
+        app.run("layer.new.layer", json!({})).expect("a new layer");
+        crate::menus::invoke(&mut app, &ctx, "cloud.saveAs", json!({"folder": "", "name": "poster.pcraft"})).expect("the attempt");
+        pump(&mut app, &ctx);
+        assert!(dirty(&app), "their work is intact and still unsaved");
+        let said = app.ui.status.clone();
+        assert!(said.contains("Somebody else saved"), "the conflict is named as itself: {said}");
+        assert!(said.contains("still unsaved"), "and it says the edits are still here: {said}");
+        assert!(!said.contains("could not be reached"), "never folded into a generic refusal: {said}");
+    }
+
+    /// The entry the service answered with is kept, so the next write is conditional on the version
+    /// this user actually has.
+    #[test]
+    fn the_answered_entry_is_kept_so_the_next_write_is_conditional() {
+        let (mut app, _written) = app_with_document();
+        let ctx = app.ctx().clone();
+        app.cloud.connect(MockBackend { entries: vec![] });
+        crate::menus::invoke(&mut app, &ctx, "cloud.saveAs", json!({"folder": "", "name": "poster.pcraft"})).expect("the cloud save");
+        pump(&mut app, &ctx);
+        let uid = app.session.active().expect("a document").doc.id.0;
+        let kept = app.cloud.origins.get(&uid).expect("the cloud copy");
+        assert_eq!(kept.etag.as_deref(), Some("1"), "the etag the service answered with is the one kept");
+        assert_eq!(kept.name, "poster.pcraft");
+    }
+
+    /// A read the service refused opens nothing and attaches no cloud copy to anything.
+    #[test]
+    fn a_refused_read_opens_nothing() {
+        let mut app = app();
+        let ctx = app.ctx().clone();
+        app.cloud.connect(Refusing(Fault::Unauthenticated));
+        open_entry(&mut app, mock_entry("Poster.psd", EntryKind::File));
+        assert!(app.cloud.busy.is_some(), "the read is in flight");
+        pump(&mut app, &ctx);
+        assert!(app.cloud.busy.is_none(), "and over");
+        assert!(app.session.documents().is_empty(), "no document was opened");
+        assert!(app.ui.status_error, "the refusal is reported");
+    }
+
+    /// Bytes no decoder accepts are reported, and no cloud copy is attached to a document that was
+    /// never opened.
+    #[test]
+    fn a_read_whose_bytes_do_not_decode_attaches_no_origin() {
+        let mut app = app();
+        let ctx = app.ctx().clone();
+        // The mock answers a read with no bytes at all.
+        app.cloud.connect(MockBackend { entries: vec![] });
+        open_entry(&mut app, mock_entry("Poster.psd", EntryKind::File));
+        pump(&mut app, &ctx);
+        assert!(app.cloud.origins.is_empty(), "nothing opened, so nothing has a cloud copy");
+        assert!(app.session.documents().is_empty());
     }
 
     #[test]
@@ -1004,6 +1488,48 @@ mod tests {
         let report = status(&app);
         assert_eq!(report["available"], json!(true));
         assert_eq!(report["hasTarget"], json!(false));
+        assert_eq!(report["prefersCloud"], json!(false));
         assert_eq!(report["page"], Json::Null);
+        assert_eq!(report["folderError"], Json::Null);
+    }
+
+    /// A refused listing is readable by a script, with the code that says which refusal it was.
+    #[test]
+    fn the_status_report_carries_a_listing_refusal() {
+        let counts = Arc::new(Counts::default());
+        let mut app = app();
+        let ctx = app.ctx().clone();
+        app.cloud.connect(Failing(counts));
+        start(&mut app);
+        pump(&mut app, &ctx);
+        assert_eq!(status(&app)["folderError"]["code"], json!("unreachable"));
+    }
+
+    /// Connecting a backend drops what the previous one still owed, so a late answer cannot land on
+    /// the session that replaced it.
+    #[test]
+    fn a_late_answer_from_a_replaced_backend_is_dropped() {
+        struct Keeper(Arc<Mutex<Option<Post>>>);
+        impl CloudBackend for Keeper {
+            fn submit(&self, job: Job, post: Post) {
+                if matches!(job, Job::Account) {
+                    *self.0.lock().expect("the kept post") = Some(post);
+                }
+            }
+        }
+
+        let mut app = app();
+        let ctx = app.ctx().clone();
+        let kept: Arc<Mutex<Option<Post>>> = Arc::default();
+        app.cloud.connect(Keeper(kept.clone()));
+        start(&mut app);
+        // A second service replaces the first.
+        app.cloud.connect(Noop);
+        // The first one answers at last.
+        if let Some(post) = kept.lock().expect("the kept post").take() {
+            post.send(Event::Account(Ok(Account { display: "gone@example.test".into(), capabilities: vec![], provider_linked: true })));
+        }
+        pump(&mut app, &ctx);
+        assert!(app.cloud.account.is_none(), "the previous session's answer is not this session's account");
     }
 }

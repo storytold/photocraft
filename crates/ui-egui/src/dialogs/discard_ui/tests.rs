@@ -731,3 +731,99 @@ fn window_close_goes_through_when_nothing_is_unsaved_or_it_was_confirmed() {
     assert!(!press_window_close(&mut app));
     assert!(app.discard.is_none());
 }
+
+// ----------------------------------------------------------------- a save that goes to the cloud
+
+/// A cloud backend that answers every job at once, for the two tests below.
+struct CloudMock;
+
+impl crate::cloud::CloudBackend for CloudMock {
+    fn submit(&self, job: crate::cloud::Job, post: crate::cloud::Post) {
+        use crate::cloud::{Account, Entry, EntryKind, Event, Job};
+        let entry = |name: &str| Entry {
+            id: name.to_owned(),
+            room: String::new(),
+            name: name.to_owned(),
+            path: name.to_owned(),
+            kind: EntryKind::File,
+            size: Some(0),
+            modified: None,
+            mime: None,
+            etag: Some("1".to_owned()),
+            writable: true,
+            shared_by: None,
+        };
+        match job {
+            Job::Account => post.send(Event::Account(Ok(Account::default()))),
+            Job::List(path) => post.send(Event::Listed { path, entries: Ok(Vec::new()) }),
+            Job::Read { entry: e, into } => post.send(Event::Read { entry: e, into, bytes: Ok(Vec::new()) }),
+            Job::Create { uid, name, .. } => post.send(Event::Saved { uid, entry: Ok(entry(&name)) }),
+            Job::Write { uid, entry: e, .. } => post.send(Event::Saved { uid, entry: Ok(e) }),
+        }
+    }
+}
+
+/// One document whose only home is the cloud, with an exporter behind it.
+fn app_with_cloud_document() -> Box<PhotocraftApp> {
+    let mut app = app_with_docs(1);
+    let ctx = app.ctx().clone();
+    app.services.export = Some(Box::new(|_: &photocraft_doc::Document, _: &str, _: &crate::ExportSettings| Ok((b"out".to_vec(), Vec::new()))));
+    app.cloud.connect(CloudMock);
+    crate::menus::invoke(&mut app, &ctx, "cloud.saveAs", json!({"folder": "", "name": "poster.pcraft"})).expect("the cloud save");
+    crate::cloud::pump(&mut app, &ctx);
+    assert!(crate::cloud::prefers_cloud(&app), "the cloud is this document's only home");
+    app
+}
+
+/// Answering Save sends the bytes to a service, which has not stored them when the answer returns.
+/// Reporting a save that has not happened is what would let Quit close over unsaved work, so the
+/// answer reports what is true: not saved yet.
+#[test]
+fn answering_save_for_a_cloud_document_does_not_report_a_save_that_has_not_happened() {
+    let mut app = app_with_cloud_document();
+    let ctx = app.ctx().clone();
+    make_dirty(&mut app, 0);
+    let doc = doc_id(&app, 0);
+    assert!(!save(&mut app, &ctx, doc), "the bytes are still on the wire, so this is not saved");
+    assert!(crate::cloud::saving(&app), "and the save is in flight");
+    assert!(app.session.documents()[0].is_dirty(), "the document is not clean until the service says so");
+}
+
+/// The answer lands a frame later. Something has to tell the close prompt, or the question stays up
+/// asking about a document with no unsaved changes left.
+#[test]
+fn a_landed_cloud_save_releases_the_close_prompt() {
+    let mut app = app_with_cloud_document();
+    let ctx = app.ctx().clone();
+    make_dirty(&mut app, 0);
+    let doc = doc_id(&app, 0);
+    crate::menus::invoke(&mut app, &ctx, "file.close", json!({"document": 0})).expect("the close request");
+    assert!(app.discard.is_some(), "the question is up");
+    // The user answers Save.
+    assert!(!save(&mut app, &ctx, doc), "the save has not landed yet, so the question stays");
+    assert!(app.discard.is_some());
+    // The answer arrives.
+    crate::cloud::pump(&mut app, &ctx);
+    assert!(app.discard.is_none(), "the question is answered");
+    // The save landed, so the close the user asked for ran: the document is gone rather than
+    // sitting there clean, which is what makes this the close completing and not just a save.
+    assert!(app.session.documents().is_empty(), "and the close the user asked for went through");
+}
+
+/// While the answer is outstanding the prompt waits, rather than asking again and inviting a second
+/// answer to a question already answered.
+#[test]
+fn the_close_prompt_waits_while_a_cloud_save_is_in_flight() {
+    let mut app = app_with_cloud_document();
+    let ctx = app.ctx().clone();
+    make_dirty(&mut app, 0);
+    let doc = doc_id(&app, 0);
+    crate::menus::invoke(&mut app, &ctx, "file.close", json!({"document": 0})).expect("the close request");
+    assert!(!save(&mut app, &ctx, doc));
+    assert!(crate::cloud::saving(&app));
+    // A frame passes with the answer still outstanding.
+    take(&mut app, &ctx);
+    assert!(app.discard.is_some(), "the question is still the one the user answered");
+    crate::cloud::pump(&mut app, &ctx);
+    assert!(app.discard.is_none(), "and it resolves when the save lands");
+}
