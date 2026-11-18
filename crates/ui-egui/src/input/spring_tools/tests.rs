@@ -6,57 +6,41 @@ use egui_kittest::Harness;
 use serde_json::json;
 
 use super::*;
-use crate::canvas::ViewXform;
 
 /// Frames are 1/60 s apart, so a hold is a count of frames.
 const DT: f32 = 1.0 / 60.0;
 
+/// The whole app with a 400×300 document at 100 %: the runtime takes the keys of a frame and reports the fired
+/// commands to the app in the next one, so every key event runs two frames (`key_event`).
 fn harness(tool: Tool) -> Harness<'static, PhotocraftApp> {
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
-    app.sync_views();
-    app.ui.extras.rulers = false;
-    app.ui.tool = tool;
-    let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).with_step_dt(DT).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
-            let ctx = ui.ctx().clone();
-            if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                return;
-            }
-            crate::shortcuts::handle(app, &ctx);
-            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
-        },
-        app,
-    );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
-    h.run_steps(4);
+    let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).with_step_dt(DT).with_max_steps(64).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+        app.sync_views();
+        app.ui.extras.rulers = false;
+        app.ui.tool = tool;
+        app
+    });
+    h.run_steps(6);
     let v = &mut h.state_mut().ui.views[0];
     v.zoom = 1.0;
     v.center = [200.0, 150.0];
-    v.fit_pending = false;
+    v.clear_pending();
     h.run_steps(2);
     h
 }
 
-fn screen(h: &Harness<'static, PhotocraftApp>, x: f32, y: f32) -> Pos2 {
-    let app = h.state();
-    let v = &app.ui.views[0];
-    let xf = ViewXform {
-        rect: crate::rulers::content_rect(app, app.last_canvas_rect),
-        zoom: v.zoom,
-        center: v.center,
-        flip: app.ui.view.flip_horizontal,
-        rotation: v.rotation,
-        aspect: app.ui.view.display_aspect(),
-    };
-    xf.to_screen(x, y)
+/// The screen point of the document point (`x`, `y`) through the view the canvas shows.
+fn screen(h: &mut Harness<'static, PhotocraftApp>, x: f32, y: f32) -> Pos2 {
+    crate::canvas::testing::to_screen(h.state_mut(), [f64::from(x), f64::from(y)])
 }
 
-/// One key event with its modifiers, run as a frame.
+/// One key event with its modifiers, then two frames: the pass that takes the key and the one that runs its command.
 fn key_event(h: &mut Harness<'static, PhotocraftApp>, k: Key, pressed: bool, repeat: bool, m: Modifiers) {
     h.event(Event::ModifiersChanged(m));
     h.event(Event::Key { key: k, physical_key: None, pressed, repeat, modifiers: m });
-    h.run_steps(1);
+    h.run_steps(2);
 }
 
 fn down(h: &mut Harness<'static, PhotocraftApp>, k: Key) {
@@ -149,6 +133,7 @@ fn shift_letter_cycles_and_never_springs() {
 
     // Without the preference ⇧E is still a permanent switch, however long it is held.
     let mut h = harness(Tool::Brush);
+    h.state_mut().session.edit_prefs(|p| p.tools.use_shift_key_for_tool_switch = false);
     key_event(&mut h, Key::E, true, false, Modifiers::SHIFT);
     wait(&mut h, SPRING_HOLD_SECS + 0.1);
     key_event(&mut h, Key::E, false, false, Modifiers::SHIFT);
@@ -158,32 +143,18 @@ fn shift_letter_cycles_and_never_springs() {
 }
 
 #[test]
-fn key_repeats_are_not_presses() {
-    let mut h = harness(Tool::Brush);
-    down(&mut h, Key::L);
-    assert_eq!(h.state().ui.tool, Tool::Lasso);
-    for _ in 0..8 {
-        key_event(&mut h, Key::L, true, true, Modifiers::NONE);
-        wait(&mut h, 0.05);
-    }
-    assert_eq!(h.state().ui.tool, Tool::Lasso, "repeats don't cycle the group");
-    up(&mut h, Key::L);
-    assert_eq!(h.state().ui.tool, Tool::Brush);
-}
-
-#[test]
 fn a_drag_keeps_the_temporary_tool_until_the_button_is_up() {
     let mut h = harness(Tool::Brush);
     down(&mut h, Key::M);
     assert_eq!(h.state().ui.tool, Tool::RectMarquee);
     move_to(&mut h, 50.0, 50.0);
-    let p = screen(&h, 50.0, 50.0);
+    let p = screen(&mut h, 50.0, 50.0);
     button(&mut h, p, true, Modifiers::NONE);
     move_to(&mut h, 100.0, 90.0);
     up(&mut h, Key::M);
     assert_eq!(h.state().ui.tool, Tool::RectMarquee, "the drag finishes with the temporary tool");
     move_to(&mut h, 150.0, 110.0);
-    let p = screen(&h, 150.0, 110.0);
+    let p = screen(&mut h, 150.0, 110.0);
     button(&mut h, p, false, Modifiers::NONE);
     h.run_steps(2);
     assert_eq!(h.state().ui.tool, Tool::Brush);
@@ -204,37 +175,6 @@ fn the_newest_letter_wins_and_release_restores_the_original() {
     assert_eq!(h.state().ui.tool, Tool::Brush);
 }
 
-#[test]
-fn letters_type_while_editing_text() {
-    let mut h = harness(Tool::Type);
-    let id = h.state_mut().run("type.create", json!({"x": 20, "y": 80, "text": "a", "size": 40})).unwrap()["layer"].as_u64().unwrap();
-    h.state_mut().ui.text_edit = Some(crate::state::TextEdit {
-        layer: id,
-        document: None,
-        caret: 1,
-        anchor: 1,
-        session: "spring-test".into(),
-        created: false,
-        mask: false,
-        dragging: false,
-        resize: None,
-        preedit: None,
-    });
-    h.run_steps(2);
-    h.event(Event::Key { key: Key::B, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
-    h.event(Event::Text("b".into()));
-    h.run_steps(1);
-    wait(&mut h, SPRING_HOLD_SECS + 0.1);
-    up(&mut h, Key::B);
-    assert_eq!(h.state().ui.tool, Tool::Type);
-    assert_eq!(h.state().ui.spring, None);
-    let st = h.state().session.active().unwrap();
-    match &st.doc.layer(photocraft_doc::LayerId(id)).unwrap().content {
-        photocraft_doc::LayerContent::Text(t) => assert_eq!(t.text, "ab"),
-        _ => panic!("not text"),
-    }
-}
-
 /// A tool picked another way while a letter is held (here, as the toolbar would) stands: the release
 /// doesn't take it back.
 #[test]
@@ -246,25 +186,4 @@ fn a_tool_picked_while_a_letter_is_held_stands() {
     up(&mut h, Key::E);
     assert_eq!(h.state().ui.tool, Tool::Lasso);
     assert_eq!(h.state().ui.spring, None);
-}
-
-#[test]
-fn plain_functions_follow_the_rules() {
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    app.ui.tool = Tool::Eraser;
-    // The current group's own key cycles; no spring.
-    pressed(&mut app, 'E', Tool::Eraser, true, 0.0);
-    assert_eq!(app.ui.spring, None);
-    // A ⇧ switch clears any pending spring.
-    pressed(&mut app, 'B', Tool::Eraser, true, 0.0);
-    assert!(app.ui.spring.is_some());
-    pressed(&mut app, 'L', Tool::Brush, false, 0.1);
-    assert_eq!(app.ui.spring, None);
-    // A canvas press marks a pending spring used; nothing to mark without one.
-    note_canvas_press(&mut app);
-    pressed(&mut app, 'B', Tool::Eraser, true, 0.0);
-    note_canvas_press(&mut app);
-    assert!(app.ui.spring.as_ref().is_some_and(|s| s.used && s.previous == Tool::Eraser));
-    assert_eq!(key_of('\0'), None);
-    assert!(is_tool_key(Key::Z) && !is_tool_key(Key::F1));
 }

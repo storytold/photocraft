@@ -52,7 +52,7 @@ fn source_item() -> Descriptor {
 fn all_controls_item() -> Descriptor {
     let mut item = source_item();
     let mut d = get_desc(&item, "Fltr").unwrap().clone();
-    set(&mut d, "WBal", Value::Enumerated { type_id: photocraft_psd::descriptor::Id::new("WBal"), value: photocraft_psd::descriptor::Id::new("Cst ") });
+    set(&mut d, "WBal", Value::Enumerated { type_id: craft_psd::descriptor::Id::new("WBal"), value: craft_psd::descriptor::Id::new("Cst ") });
     set(&mut d, "ShpR", Value::Double(1.2));
     for (key, value) in [
         ("Temp", -26),
@@ -233,7 +233,6 @@ fn light_curve_and_hsl_are_editable_without_rewriting_unchanged_settings() {
 #[test]
 fn new_filters_write_every_verified_control_and_accept_explicit_defaults() {
     let mut params = default_params().unwrap();
-    params["seed"] = json!(0);
     for (param, key) in SCALARS {
         let number = match *key {
             "Ex12" => 0.75,

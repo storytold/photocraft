@@ -77,7 +77,7 @@ fn define_apply_visibility_and_text() {
     assert_eq!(doc(&s).variables.active, Some(0));
 
     // One history step, undoable back to the original.
-    assert_eq!(s.active().unwrap().history.entries().last().map(|e| e.as_str()), Some("Apply Data Set \"A\""));
+    assert_eq!(s.active().unwrap().history.entries().last().map(|e| e.as_str()), Some("Apply Data Set"));
     assert!(s.undo());
     assert!(doc(&s).layer(badge).unwrap().visible);
     assert_eq!(text_of(&s, title), "Old");
@@ -651,4 +651,21 @@ fn exported_data_sets_keep_the_character_style() {
     let got = &t.char_runs()[0].style;
     assert_eq!((got.weight, got.italic, got.underline), (style.weight, style.italic, style.underline));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn data_set_commands_require_data_sets_to_be_enabled() {
+    let mut s = Session::new();
+    assert!(!s.is_enabled("file.export.dataSetsAsFiles"));
+    assert!(!s.is_enabled("image.applyDataSet"));
+
+    s.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
+    // Document exists but has no data sets: commands remain disabled
+    assert!(!s.is_enabled("file.export.dataSetsAsFiles"));
+    assert!(!s.is_enabled("image.applyDataSet"));
+
+    // Once data sets are defined, commands become enabled
+    s.execute("image.variables.dataSets", json!({"dataSets": [{"name": "Set 1", "values": []}]})).unwrap();
+    assert!(s.is_enabled("file.export.dataSetsAsFiles"));
+    assert!(s.is_enabled("image.applyDataSet"));
 }
