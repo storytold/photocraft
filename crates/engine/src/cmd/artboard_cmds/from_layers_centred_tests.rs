@@ -84,10 +84,13 @@ fn a_board_past_the_canvas_still_grows_it() {
     // 1000 wide on the 800 wide canvas: the board starts left of the origin; the canvas grows to
     // show it (how far is #14565's rule) and the whole board stays visible.
     let mut s = session(UNION);
-    s.execute("layer.new.artboardFromLayers", json!({"width": 1000, "height": 350})).unwrap();
+    let r = s.execute("layer.new.artboardFromLayers", json!({"width": 1000, "height": 350})).unwrap();
     let d = &s.active().unwrap().doc;
     let Rect { x0, y0, x1, y1 } = d.artboards()[0].2.rect;
     assert_eq!((x1 - x0, y1 - y0), (1000, 350));
+    // The command answers with the board as stored, after the document's shift (CodeRabbit on
+    // #15571).
+    assert_eq!(r["rect"], json!([x0, y0, 1000, 350]));
     let canvas = d.bounds();
     assert!(canvas.x0 <= x0 && canvas.y0 <= y0 && x1 <= canvas.x1 && y1 <= canvas.y1, "{canvas:?}");
 }

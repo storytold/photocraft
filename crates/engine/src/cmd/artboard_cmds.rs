@@ -444,6 +444,8 @@ fn artboard_from_layers(s: &mut Session, p: &Value) -> Result<Value> {
     })?;
     follow_shift(s, shift);
     crate::layer_multi_cmds::set_selection(s, vec![gid], Some(gid), Some(gid))?;
+    // The board as stored: a board past the origin moved with the document's shift.
+    let rect = s.active().and_then(|d| d.doc.layer(gid)).and_then(Layer::artboard).map_or(rect, |a| a.rect);
     Ok(json!({"layer": gid.0, "rect": [rect.x0, rect.y0, rect.width(), rect.height()]}))
 }
 
