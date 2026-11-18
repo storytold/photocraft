@@ -430,12 +430,12 @@ fn black_white_auto_button_sets_the_weights() {
 }
 
 /// The Curves Preset menu (#9221): the dropdown named Preset, if the editor shows one.
-fn preset_shown(h: &Harness<'_, PhotocraftApp>) -> Option<String> {
+fn preset_shown(h: &Harness<'_, Box<PhotocraftApp>>) -> Option<String> {
     h.query_all_by_role(Role::ComboBox).find(|n| n.accesskit_node().label().as_deref() == Some("Preset")).map(|n| n.value().unwrap_or_default())
 }
 
 /// Opens the Preset menu and picks the entry `label`.
-fn pick_preset(h: &mut Harness<'_, PhotocraftApp>, label: &str) {
+fn pick_preset(h: &mut Harness<'_, Box<PhotocraftApp>>, label: &str) {
     h.query_all_by_role(Role::ComboBox).find(|n| n.accesskit_node().label().as_deref() == Some("Preset")).expect("the Preset menu").click();
     h.run_steps(4);
     h.get_all_by_label(label).rfind(|n| n.accesskit_node().role() != Role::ComboBox).unwrap_or_else(|| panic!("a {label} entry")).click();
@@ -518,7 +518,7 @@ fn grayscale_curves_layer_with_lab_records_follows_a_preset() {
     h.state_mut().run("image.mode.grayscale", json!({})).unwrap();
     h.run_steps(4);
     assert!(matches!(layer(&h).1, Adjustment::Curves { space: ToneSpace::Lab, .. }), "{:?}", layer(&h).1);
-    let gray = |h: &mut Harness<'_, PhotocraftApp>| h.state_mut().run("document.pixel", json!({"x": 10, "y": 10})).unwrap()[0].as_f64().unwrap();
+    let gray = |h: &mut Harness<'_, Box<PhotocraftApp>>| h.state_mut().run("document.pixel", json!({"x": 10, "y": 10})).unwrap()[0].as_f64().unwrap();
     let before = gray(&mut h);
     assert_eq!(preset_shown(&h).as_deref(), Some("Default"), "the Preset menu, at Default");
     pick_preset(&mut h, "Darker");
@@ -537,7 +537,7 @@ fn grayscale_curves_layer_with_lab_records_follows_a_preset() {
 /// shows its one Gray curve; Darker chosen there renders Darker alone, not over the stale Red curve.
 #[test]
 fn grayscale_curves_layer_with_a_red_curve_renders_a_preset_alone() {
-    let gray = |h: &mut Harness<'_, PhotocraftApp>| h.state_mut().run("document.pixel", json!({"x": 70, "y": 10})).unwrap()[0].as_f64().unwrap();
+    let gray = |h: &mut Harness<'_, Box<PhotocraftApp>>| h.state_mut().run("document.pixel", json!({"x": 70, "y": 10})).unwrap()[0].as_f64().unwrap();
     // Darker's gray on this image, from a grayscale document's own Curves layer.
     let mut h = app_harness("curves", "grayscale", 8);
     pick_preset(&mut h, "Darker");
