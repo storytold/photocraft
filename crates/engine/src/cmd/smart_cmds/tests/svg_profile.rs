@@ -38,14 +38,23 @@ fn svg_smart_rerender_checks_embedded_raster_dimensions() {
 /// File › Open does, under the SVG import's own retained-pixel budget.
 #[test]
 fn svg_smart_contents_and_stack_open_many_shapes_as_layers() {
-    let svg = format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"256\" height=\"256\">{}</svg>", "<rect width=\"256\" height=\"256\"/>".repeat(400));
+    // A quarter of the frames are white and the rest black, so the mean (a quarter grey) differs
+    // from the first frame, the median, the minimum and the maximum.
+    let svg = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"256\" height=\"256\">{}{}</svg>",
+        "<rect width=\"256\" height=\"256\" fill=\"#fff\"/>".repeat(100),
+        "<rect width=\"256\" height=\"256\"/>".repeat(300)
+    );
     assert_eq!(decode_source("Clipboard.svg", svg.as_bytes()).unwrap().layers.len(), 400);
     let stacked = stack_image("Clipboard.svg", svg.as_bytes(), PixelFormat::RGBA32F, photocraft_doc::StackMode::Mean).unwrap();
-    // Every frame is the same opaque black square, so their mean is that square.
     let square = Rect::from_xywh(0, 0, 256, 256);
     assert_eq!(stacked.bounds, square);
     assert_eq!(stacked.surface.content_bounds(), square);
-    assert_eq!(stacked.surface.pixel(128, 128), [0.0, 0.0, 0.0, 1.0]);
+    let [r, g, b, a] = stacked.surface.pixel(128, 128);
+    assert_eq!(a, 1.0, "every frame is opaque");
+    for c in [r, g, b] {
+        assert!((c - 0.25).abs() < 1e-4, "the mean of 100 white and 300 black frames is 0.25, got {c}");
+    }
 }
 
 /// Stack Mode renders a float frame per layer: an SVG whose shapes would need more than 1 GiB of
