@@ -8,7 +8,8 @@ use std::path::Path;
 /// Width and height from a PNG's IHDR chunk.
 pub fn png_size(png: &[u8]) -> Result<(u32, u32), String> {
     const SIG: &[u8] = b"\x89PNG\r\n\x1a\n";
-    if png.len() < 24 || &png[..8] != SIG || &png[12..16] != b"IHDR" {
+    // Require the complete first chunk: IHDR has 13 payload bytes followed by its CRC.
+    if png.len() < 33 || &png[..8] != SIG || &png[8..12] != b"\0\0\0\x0d" || &png[12..16] != b"IHDR" {
         return Err("not a PNG file".into());
     }
     let w = u32::from_be_bytes([png[16], png[17], png[18], png[19]]);
@@ -91,6 +92,26 @@ mod tests {
         assert!(pack(&[fake_png(512)]).is_err());
         assert!(pack(&[b"GIF89a".to_vec()]).is_err());
         assert_eq!(png_size(&fake_png(48)).unwrap(), (48, 48));
+    }
+
+    #[test]
+    fn rejects_truncated_ihdr_chunks() {
+        let png = fake_png(48);
+        for len in 0..png.len() {
+            assert!(png_size(&png[..len]).is_err(), "accepted a truncated IHDR at {len} bytes");
+        }
+        assert_eq!(png_size(&png), Ok((48, 48)));
+        assert!(pack(&[png[..24].to_vec()]).is_err());
+    }
+
+    #[test]
+    fn rejects_wrong_ihdr_payload_lengths() {
+        for length in [0u32, 8, 12, 14, u32::MAX] {
+            let mut png = fake_png(48);
+            png[8..12].copy_from_slice(&length.to_be_bytes());
+            assert!(png_size(&png).is_err(), "accepted IHDR payload length {length}");
+            assert!(pack(&[png]).is_err(), "packed IHDR payload length {length}");
+        }
     }
 
     #[test]
