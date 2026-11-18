@@ -5,7 +5,7 @@
 //! layer saved without its pixels. Now such a layer is gathered, split and encoded a band of
 //! rows at a time. RLE rows pack independently (the row-count table is kept and written ahead of
 //! the packed rows) and raw rows join, so those channels are the bytes the whole-layer encoder
-//! writes. ZIP with prediction (32-bit) predicts per row and feeds one zlib stream: the same
+//! writes. ZIP with prediction (16/32-bit) predicts per row and feeds one zlib stream: the same
 //! pixels, but not always the same bytes, as zlib packs input it is given in parts differently.
 //! With a stage each band's parts go to the scratch disk as they are made (see [`Parts`]).
 //!

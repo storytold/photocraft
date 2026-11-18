@@ -715,7 +715,7 @@ fn export_banded(doc: &Document, options: &PsdExportOptions, banded: Option<usiz
 }
 
 /// #5333: a layer saved band by band (here every layer, in bands of a few rows) writes the bytes
-/// of one gathered whole (ZIP with prediction, 32-bit, the same pixels); RGB, CMYK and Lab; PSD, PSB and a PSD
+/// of one gathered whole (ZIP with prediction, 16/32-bit, the same pixels); RGB, CMYK and Lab; PSD, PSB and a PSD
 /// promoted to PSB; in memory and staged on the scratch disk (then also streamed).
 #[test]
 fn banded_layers_write_the_bytes_of_whole_ones() {
@@ -743,7 +743,7 @@ fn banded_layers_write_the_bytes_of_whole_ones() {
                     if staged {
                         assert!(layer.channels.iter().all(|c| c.stored.is_some() && c.data.is_empty()), "{what}: banded channels are staged");
                     }
-                    if depth == SampleType::F32 {
+                    if depth != SampleType::U8 {
                         // One zlib stream fed band by band packs differently from one fed whole
                         // (the encoder sees a different amount of input ahead), so the ZIP
                         // channels are compared decoded, here and as the streamed file reads back.

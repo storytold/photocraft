@@ -362,7 +362,7 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions, ctl: &photocr
         force_psb,
         size_limit_psb: false,
         merged_matte: !save_transparency,
-        merged_compression: Compression::Raw,
+        merged_compression: Some(Compression::Raw),
         maximize_compatibility: true,
         document_path: opts.document_path.clone(),
         read_linked_files: opts.read_linked_files,
