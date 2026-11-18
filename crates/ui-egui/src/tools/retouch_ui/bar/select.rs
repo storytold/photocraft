@@ -28,7 +28,7 @@ pub(super) fn quick_selection(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Opt
     }
     let saved = app.ui.selection_mode;
     app.ui.selection_mode = app.ui.tool_options.quick_selection_mode;
-    crate::panels::options_bar::selection::operation_segments(app, ui, true);
+    crate::panels::options_bar::selection::operation_segments_three(app, ui, true);
     app.ui.tool_options.quick_selection_mode = app.ui.selection_mode.min(2);
     app.ui.selection_mode = saved;
     Divider::vertical().show(ui);

@@ -822,7 +822,6 @@ fn history_source_caption_names_the_source() {
     assert!(matches!(source_caption(&app), SourceCaption::Deleted), "discarded redo state");
 }
 
-
 /// The reference application starts the Quick Selection in New and Reset Tool puts it back to
 /// New, so the tool's mode is New unless the user picks another one.
 #[test]
@@ -835,6 +834,26 @@ fn the_quick_selection_starts_in_new_and_reset_returns_to_it() {
     assert_eq!(app.ui.tool_options.quick_selection_mode, 0, "Reset Tool returns to New mode");
 }
 
+/// Shift always adds and Alt (also Shift+Alt) always subtracts, whatever the Quick Selection's
+/// own mode is (#11837).
+#[test]
+fn the_quick_selection_modifiers_follow_the_mode() {
+    use crate::canvas::tool_feedback::{mode_name, selection_op};
+    const SHIFT: Mods = Mods { shift: true, ..Mods::NONE };
+    const ALT: Mods = Mods { alt: true, ..Mods::NONE };
+    const BOTH: Mods = Mods { shift: true, alt: true, ..Mods::NONE };
+    let m = |bar: u8, mods: Mods| mode_name(selection_op(Tool::QuickSelection, bar, mods, true));
+    assert_eq!(m(1, Mods::NONE), "add");
+    assert_eq!(m(1, ALT), "subtract");
+    assert_eq!(m(1, SHIFT), "add");
+    assert_eq!(m(2, Mods::NONE), "subtract");
+    assert_eq!(m(2, SHIFT), "add", "Shift always adds");
+    assert_eq!(m(2, ALT), "subtract", "Alt always subtracts");
+    assert_eq!(m(2, BOTH), "subtract", "Alt subtracts even with Shift");
+    assert_eq!(m(0, Mods::NONE), "replace");
+    assert_eq!(m(0, ALT), "subtract");
+    assert_eq!(m(0, SHIFT), "add");
+}
 
 /// New flips to Add after its first stroke on an empty selection; with a selection there, a
 /// Shift stroke adds and keeps New, and a plain stroke replaces it and keeps New too.
@@ -889,8 +908,10 @@ fn an_empty_selection_counts_as_none_for_the_new_to_add_transition() {
     assert_eq!(app.ui.tool_options.quick_selection_mode, 1, "the stroke out of the empty selection switches to Add");
 }
 
-/// In New mode a click inside the selection deselects it (one Deselect step) and a drag inside
-/// moves the outline (one Move Selection step); the mode stays New in both cases.
+/// In New mode a press inside the selection acts on it, as the other selection tools do
+/// (#11782): a click deselects it, one Deselect step, and a drag moves the outline by the
+/// pointer's delta, one Move Selection step. The mode stays New in both cases, and no pixels
+/// are painted.
 #[test]
 fn a_click_or_drag_inside_the_selection_in_new_mode_acts_on_the_selection() {
     use crate::canvas::{ToolEvent, tool_event};
@@ -910,7 +931,7 @@ fn a_click_or_drag_inside_the_selection_in_new_mode_acts_on_the_selection() {
     let labels: Vec<String> = app.session.active().unwrap().history.entries().into_iter().skip(steps + 1).map(|e| e.to_string()).collect();
     assert_eq!(labels.first().map(String::as_str), Some("Deselect"), "{labels:?}");
 
-    // A drag inside the selection moves its outline.
+    // A drag inside the selection moves its outline, leaving the pixels where they are.
     app.run("select.rect", json!({"x": 10, "y": 10, "width": 30, "height": 30})).unwrap();
     app.ui.tool_options.quick_selection_mode = 0;
     let steps = app.session.active().unwrap().history.past_len();

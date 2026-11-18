@@ -82,6 +82,10 @@ impl PaintStroke {
 pub(crate) struct PaintState {
     /// The stroke being drawn, from the press to the release.
     pub(crate) stroke: Option<PaintStroke>,
+    /// The Quick Selection's New-mode press inside its selection, from the press to the release:
+    /// a click deselects and a drag moves the outline, as with the other selection tools (#11782,
+    /// #11837). No stroke is drawn.
+    pub(crate) selection: Option<[f64; 2]>,
 }
 
 /// The paint tool for one pass.
@@ -128,6 +132,7 @@ fn doc_point(cx: &ToolContext<'_>, pos: egui::Pos2) -> Option<[f64; 2]> {
 /// Ends the running stroke without a commit.
 fn drop_stroke(app: &mut PhotocraftApp, state: &mut PaintState) {
     state.stroke = None;
+    state.selection = None;
     app.live_stroke = None;
     app.session.clear_live_stroke();
     app.trail = None;
@@ -225,6 +230,19 @@ fn click_tool(app: &mut PhotocraftApp, tool: Tool, at: [f64; 2]) -> bool {
     }
 }
 
+/// Whether this press is the Quick Selection's New-mode press inside its selection, which acts on the
+/// selection (#11837): a click deselects and a drag moves the outline, as the other selection tools do
+/// (#11782). Only New mode, and with no key held: ⇧ adds and ⌥ subtracts.
+fn selection_press(app: &PhotocraftApp, tool: Tool, at: [f64; 2], mods: Mods) -> bool {
+    if tool != Tool::QuickSelection || app.ui.tool_options.quick_selection_mode != 0 || mods.shift || mods.alt || mods.cmd {
+        return false;
+    }
+    app.session
+        .active()
+        .and_then(|st| st.doc.selection.as_ref())
+        .is_some_and(|sel| !sel.content_bounds().is_empty() && sel.sample_channel(at[0].floor() as i32, at[1].floor() as i32, 0) >= 0.5)
+}
+
 fn begin(app: &mut PhotocraftApp, state: &mut PaintState, pointer: &ToolPointer, at: [f64; 2], cx: &mut ToolContext<'_>) -> ToolAction {
     let tool = app.ui.tool;
     let (mods, button) = (pointer.mods, pointer.button);
@@ -259,6 +277,10 @@ fn begin(app: &mut PhotocraftApp, state: &mut PaintState, pointer: &ToolPointer,
     // The Paint Bucket and the Magic Eraser act on the click: no stroke, no drag.
     if button == PointerButton::Primary && click_tool(app, tool, at) {
         return ToolAction::Done;
+    }
+    if button == PointerButton::Primary && selection_press(app, tool, at, mods) {
+        state.selection = Some(at);
+        return ToolAction::Claimed;
     }
     sync_tool_brush(app);
     clear_off_on_background(app, tool);
@@ -358,6 +380,9 @@ impl CanvasTool for PaintTool<'_> {
             }) {
                 return;
             }
+            if state.selection.is_some() {
+                return;
+            }
             let Some(at) = doc_point(cx, pointer.pos) else { return };
             let Some(stroke) = state.stroke.as_mut() else { return };
             let now_ms = pointer.time * 1000.0;
@@ -390,6 +415,21 @@ impl CanvasTool for PaintTool<'_> {
                 }
                 active
             }) {
+                return;
+            }
+            if let Some(start) = state.selection.take() {
+                let (dx, dy) = at.map_or((0.0, 0.0), |end| ((end[0] - start[0]).round(), (end[1] - start[1]).round()));
+                // A click inside the selection deselects it; a drag moves the outline and leaves the pixels
+                // where they are, one step each, as the Magic Wand's press does (#11782).
+                let (id, params) = if dx == 0.0 && dy == 0.0 {
+                    ("select.deselect", json!({}))
+                } else {
+                    ("select.transformSelection", json!({"dx": dx, "dy": dy, "stepName": "Move Selection"}))
+                };
+                if let Err(e) = app.run(id, params) {
+                    app.ui.status = e;
+                    app.ui.status_error = true;
+                }
                 return;
             }
             let Some(mut stroke) = state.stroke.take() else {

@@ -63,6 +63,19 @@ pub(crate) fn operation_segments(app: &mut PhotocraftApp, ui: &mut egui::Ui, ena
     }
 }
 
+/// The New, Add and Subtract segments over `app.ui.selection_mode`: the Quick Selection's own bar, which has
+/// no Intersect, as in Photoshop (#11837). A mode the tool can't have reads as New.
+pub(crate) fn operation_segments_three(app: &mut PhotocraftApp, ui: &mut egui::Ui, enabled: bool) {
+    let words = Env::of(ui).words::<SelectionOpWords>();
+    let [new, add, subtract, _intersect] = selection_operations(&words);
+    let entries = [new, add, subtract];
+    let current = operation_of(app.ui.selection_mode.min(2));
+    let picked = Segmented::new(label("Selection mode"), Bind::given(current), &entries).enabled(enabled).show(ui).value().copied();
+    if let Some(operation) = picked {
+        app.ui.selection_mode = selection_mode_of(operation);
+    }
+}
+
 /// A captioned number cell over `value`; the new value when the user edited it. A body can run more
 /// than once in a pass and only the run that reads the input reports, so an edit is kept once seen.
 fn number(
