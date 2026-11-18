@@ -3,6 +3,7 @@
 //! their own document index on OK.
 use super::destinations;
 use crate::PhotocraftApp;
+use crate::new_layer_ui::testing::{set, top};
 use photocraft_color::ColorMode;
 use serde_json::json;
 
@@ -11,7 +12,7 @@ type Step = (&'static str, serde_json::Value);
 
 /// Poster (RGB, active, with an Ink layer), then one document per `(name, mode, steps)`: a new
 /// 8-bit document of `mode` with the mode commands in `steps` run on it.
-fn app_with(docs: &[(&str, &str, &[Step])]) -> PhotocraftApp {
+fn app_with(docs: &[(&str, &str, &[Step])]) -> Box<PhotocraftApp> {
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width": 8, "height": 8, "name": "Poster"})).unwrap();
     s.execute("layer.new.layer", json!({"name": "Ink"})).unwrap();
@@ -67,11 +68,17 @@ fn bitmap_and_multichannel_documents_are_left_out_too() {
 fn ok_on_the_document_after_an_indexed_one_copies_into_that_document() {
     let mut app = app_with(&[("Palette", "rgb", &[indexed()]), ("Card", "rgb", &[])]);
     assert_eq!(keys(&app), ["0", "2"]);
-    let ctx = egui::Context::default();
-    let dialog = crate::menus::invoke(&mut app, &ctx, "layer.duplicate", json!({})).unwrap()["dialog"].as_u64().unwrap();
+    let ctx = app.ctx().clone();
+    crate::menus::invoke(&mut app, &ctx, "layer.duplicate", json!({})).unwrap();
+    let dialog = top(&app);
     let palette_layers = app.session.documents()[1].doc.layer_count();
-    app.ui.dialog_mut(dialog).unwrap().fields.insert("destination".into(), json!(2));
-    crate::dialogs::confirm(&mut app, dialog).unwrap();
+    assert!(set(&mut app, dialog, "document", json!("1")).is_err(), "the Indexed document is not a choice");
+    set(&mut app, dialog, "document", json!("2")).unwrap();
+    crate::dialogs::confirm(&mut app, &ctx, dialog).unwrap();
+    // The passes after OK deliver the held answer to the family that runs it.
+    for _ in 0..2 {
+        crate::dialogs::testing::show(&mut app);
+    }
     let names: Vec<_> = app.session.documents()[2].doc.walk().into_iter().map(|(_, _, l)| l.name.clone()).collect();
     assert!(names.contains(&"Ink copy".to_string()), "Card receives the copy: {names:?}");
     assert_eq!(app.session.documents()[1].doc.layer_count(), palette_layers, "the Indexed document is untouched");
