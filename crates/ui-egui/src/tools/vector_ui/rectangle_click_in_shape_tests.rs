@@ -5,7 +5,7 @@ use craft::draw::ui::VectorMode;
 use craft::draw::ui::shape_drag::CreateShapeDialog;
 use serde_json::json;
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
     app.run("file.new", json!({"width": 800, "height": 600, "background": "white"})).unwrap();
     app.ui.tool = Tool::Rectangle;

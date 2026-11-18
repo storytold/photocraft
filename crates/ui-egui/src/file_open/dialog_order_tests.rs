@@ -12,7 +12,7 @@ use photocraft_doc::Document;
 use photocraft_geom::Size;
 
 /// An app whose file dialog stays open until the test answers it.
-fn app_with() -> (PhotocraftApp, Arc<ScriptedFiles>) {
+fn app_with() -> (Box<PhotocraftApp>, Arc<ScriptedFiles>) {
     let files = Arc::new(ScriptedFiles::held());
     let services = Services {
         import: Some(Box::new(|name: &str, _bytes: &[u8], _opts: &photocraft_io::ImportOptions| {
