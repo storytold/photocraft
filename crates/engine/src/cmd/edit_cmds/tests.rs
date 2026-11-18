@@ -1926,11 +1926,11 @@ fn paste_onto_a_smaller_artboard_keeps_the_offset_and_the_board_clips_the_rest()
     assert!(!(px(315, 35)[0] > 0.99 && px(315, 35)[1] < 0.01), "clipped past S's edge");
 }
 
-/// A pasted layer that joins a board keeps its own clipping while the board already holds a layer
-/// it can clip to, and drops it on an empty board (#10538 review): a clipped group copied whole
-/// from board A and pasted onto smaller boards S (holding a layer) and E (empty).
+/// A clipped group copied whole from board A without its base pastes released onto smaller boards
+/// S (holding a layer) and E (empty) (#10538 review): Copy releases a clip whose base it leaves
+/// behind (#9736), so the pasted group can't clip to whatever S holds.
 #[test]
-fn a_clipped_paste_joining_a_board_stays_clipped_only_over_a_layer() {
+fn a_clipped_paste_joining_a_board_is_released_without_its_base() {
     let (mut s, red, a, _b) = two_boards();
     s.execute("layer.select", json!({"layer": red.0})).unwrap();
     let g = s.execute("layer.groupLayers", json!({"name": "G"})).unwrap()["layer"].as_u64().map(LayerId).unwrap();
@@ -1958,7 +1958,7 @@ fn a_clipped_paste_joining_a_board_stays_clipped_only_over_a_layer() {
         let id = st.active_layer.unwrap();
         (st.doc.artboard_of(id), st.doc.layer(id).unwrap().clipped)
     };
-    assert_eq!(paste_on(&mut s, sb), (Some(sb), true), "S holds a layer to clip to");
+    assert_eq!(paste_on(&mut s, sb), (Some(sb), false), "released at Copy, though S holds a layer");
     assert_eq!(paste_on(&mut s, eb), (Some(eb), false), "E is empty");
 }
 
