@@ -84,16 +84,17 @@ const GUIDE: egui::CursorIcon = egui::CursorIcon::ResizeHorizontal;
 #[test]
 fn command_over_a_guide_takes_it_where_command_is_the_move_tool() {
     let takes = |tool, latched| (tool, false, latched, true);
+    // One tool per family (`canvas::tools::family`): whether the guides take ⌘ is decided by family
+    // (`rulers::moves_with_command`, `tools::takes_command_stand_in`), and the painting family refuses a ⌘ press the
+    // same way for all its tools (`PaintTool::takes`). Within it, one tool per kind of pointer (`cursor_policy`): the
+    // Brush's tip with its centre mark, the Clone Stamp's and Quick Selection's tips without one, the Paint Bucket's
+    // click-tool pointer. The Eraser, Dodge, Spot Healing Brush and Smudge are more Brush-like tips.
     let rows = [
         takes(Tool::Brush, false),
-        takes(Tool::Eraser, false),
         takes(Tool::Gradient, false),
         takes(Tool::PaintBucket, false),
         takes(Tool::CloneStamp, false),
         takes(Tool::Eyedropper, false),
-        takes(Tool::Dodge, false),
-        takes(Tool::SpotHealing, false),
-        takes(Tool::Smudge, false),
         takes(Tool::QuickSelection, false),
         takes(Tool::RectMarquee, false),
         takes(Tool::Lasso, false),
@@ -102,10 +103,8 @@ fn command_over_a_guide_takes_it_where_command_is_the_move_tool() {
         takes(Tool::Frame, false),
         takes(Tool::Artboard, false),
         takes(Tool::Brush, true),
-        takes(Tool::Eraser, true),
         takes(Tool::RectMarquee, true),
         (Tool::Brush, true, false, false),
-        (Tool::Eraser, true, false, false),
         (Tool::Frame, true, false, false),
         (Tool::Pen, false, false, false),
         (Tool::Hand, false, false, false),
