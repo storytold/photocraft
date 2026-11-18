@@ -346,6 +346,8 @@ pub(super) fn vectorcraft_source_image_in(
         4 + 4 + PixelFormat::new(fmt.mode, SampleType::U8, true).bytes_per_pixel() as u64 + result_bpp
     };
     crate::transform_cmds::check_draw_budget(drawn_bounds, after.max(8), "VectorCraft smart object")?;
+    let drawn_px = u64::from(drawn_bounds.width()).saturating_mul(u64::from(drawn_bounds.height()));
+    crate::memory_gate::ensure(&format!("draw the VectorCraft smart object \u{201c}{file_name}\u{201d}"), drawn_px.saturating_mul(after.max(8)))?;
     #[cfg(test)]
     VECTORCRAFT_DRAWS.with(|n| n.set(n.get() + 1));
     let drawn = photocraft_io::vectorcraft::import_scaled(file_name, bytes, scale as f32, &photocraft_raster::Interrupt::NONE)
