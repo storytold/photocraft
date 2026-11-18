@@ -531,43 +531,16 @@ impl Sentinel {
     }
 }
 
-/// The Linux display-server preference (`performance.linuxDisplayServer`) from the preferences
-/// file, read before the window opens; `Auto` when the file or value is missing or unknown.
-#[cfg(any(target_os = "linux", test))]
-pub fn read_display_server(path: Option<&Path>) -> photocraft_engine::prefs::LinuxDisplayServer {
-    read_performance(path).map(|performance| performance.linux_display_server).unwrap_or_default()
+/// The backend and rendering mode Preferences › Performance asks for, read before the window
+/// opens: an explicit Rendering Mode, else the one older settings imply (`useGpu`, `gpuBackend`).
+pub fn rendering_prefs(performance: &photocraft_engine::prefs::Performance) -> (GpuBackend, RenderingMode) {
+    (performance.gpu_backend, performance.effective_rendering_mode())
 }
 
-/// The preferences file's Performance section, read as the app reads it: a value of the wrong
-/// type keeps its default without resetting the others. `None` without a file or section.
-fn read_performance(path: Option<&Path>) -> Option<photocraft_engine::prefs::Performance> {
-    let v: Value = path.and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
-    v.get("performance").cloned().map(photocraft_engine::prefs::read_section)
-}
-
-/// Preferences › Performance › Graphics Adapter (`performance.gpuAdapter`), read before the window
-/// opens; empty (automatic) when the file or value is missing or not text.
-pub fn read_gpu_adapter(path: Option<&Path>) -> String {
-    read_performance(path).map(|performance| performance.gpu_adapter.chars().take(256).collect()).unwrap_or_default()
-}
-
-/// Preferences › Performance › Low-Latency Drawing (`performance.lowLatencyDrawing`, off unless
-/// turned on), read before the window opens: it picks the surface's present mode.
-pub fn read_low_latency(path: Option<&Path>) -> bool {
-    let v: Value = path.and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
-    let default = photocraft_engine::prefs::Preferences::default().performance.low_latency_drawing;
-    v.get("performance").and_then(|p| p.get("lowLatencyDrawing")).and_then(Value::as_bool).unwrap_or(default)
-}
-
-/// Read the policy leniently at startup, including old settings without renderingMode.
-pub fn read_rendering_prefs(path: Option<&Path>) -> (GpuBackend, RenderingMode) {
-    let v: Value = path.and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
-    let perf = v.get("performance");
-    let backend = perf.and_then(|p| p.get("gpuBackend")).and_then(Value::as_str).and_then(GpuBackend::parse).unwrap_or_default();
-    let use_gpu = perf.and_then(|p| p.get("useGpu")).and_then(Value::as_bool).unwrap_or(true);
-    let explicit = perf.and_then(|p| p.get("renderingMode")).and_then(Value::as_str).and_then(RenderingMode::parse);
-    let mode = explicit.unwrap_or(if !use_gpu || backend == GpuBackend::Cpu { RenderingMode::Cpu } else { RenderingMode::Auto });
-    (backend, mode)
+/// Preferences › Performance › Graphics Adapter, read before the window opens; empty (automatic)
+/// when none is chosen.
+pub fn gpu_adapter(performance: &photocraft_engine::prefs::Performance) -> String {
+    performance.gpu_adapter.chars().take(256).collect()
 }
 
 #[cfg(test)]

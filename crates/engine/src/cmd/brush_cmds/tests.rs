@@ -688,6 +688,24 @@ fn define_brush_from_selection_survives_failure_of_the_second_allocation() {
 }
 
 #[test]
+fn define_brush_from_selection_propagates_compositor_allocation_error_transactionally() {
+    let mut s = session(40, 40);
+    s.execute("select.rect", json!({"x": 5, "y": 5, "width": 20, "height": 20})).unwrap();
+    let doc = s.active().unwrap().doc.clone();
+    let brush_before = s.tools.brush.clone();
+    let presets_before = s.tools.presets.clone();
+    let history_before = s.active().unwrap().history.past_len();
+    let result = define_from_selection_with_renderer(&mut s, &json!({"name": "Blob"}), |_, _, _| {
+        Err(photocraft_compose::RenderBandsError::Allocation(photocraft_raster::AllocationError::NotEnoughMemory { bytes: 64 }))
+    });
+    assert!(result.is_err_and(|e| e.to_string().contains("defining a brush from the selection")));
+    assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
+    assert_eq!(s.tools.brush, brush_before);
+    assert_eq!(s.tools.presets, presets_before);
+    assert_eq!(s.active().unwrap().history.past_len(), history_before);
+}
+
+#[test]
 fn works_on_cmyk_and_16_bit() {
     for (mode, depth) in [("cmyk", 8), ("rgb", 16), ("grayscale", 32)] {
         let mut s = Session::new();
@@ -1225,13 +1243,14 @@ fn strokes_convert_through_the_documents_cmyk_profile() {
     // A synthetic uncoated-like profile: heavier dot gain than the built-in coated CMYK (whose
     // params are the defaults here), so painted ink differs from the default conversion. The
     // compositors and composite exports enter the document's space; the stroke must too (#583).
-    let profile = photocraft_cms::synth::cmyk_profile(&photocraft_cms::synth::CmykParams {
+    let profile = craft_cms::synth::cmyk_profile(&craft_cms::synth::CmykParams {
         description: "Stroke Test Uncoated".into(),
         tvi: [0.26, 0.26, 0.26, 0.3],
         grid_a2b: 5,
         grid_b2a: 9,
         ..Default::default()
     })
+    .unwrap()
     .to_bytes();
     let cmyk_session = |tagged: bool| {
         let mut s = Session::new();

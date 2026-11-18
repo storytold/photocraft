@@ -4,28 +4,29 @@
 //! mask?" OK runs `layer.vectorMask.delete`, Cancel keeps it. A click on the Trash still deletes the
 //! targeted mask at once (#2197).
 //!
-//! The prompt is an ordinary dialog in the UI state: `ui.inspect` shows it, `ui.dialog.confirm`
+//! The prompt is a `StandardPrompt` on the dialog host: `ui.inspect` shows it, `ui.dialog.confirm`
 //! applies (or deletes the vector mask), `ui.dialog.set` with `"choice": "delete"` then
 //! `ui.dialog.confirm` deletes a layer mask, and `ui.dialog.cancel` keeps the mask.
 
+use craft::ui::dialog::{PromptAnswer, PromptChoice, PromptKind, StandardPrompt};
 use photocraft_doc::LayerId;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
+use super::alerts;
 use crate::PhotocraftApp;
 use crate::mask_thumbs_ui::MaskKind;
-use crate::state::DialogKind;
 
+/// Marks the params of a [`drop_action`], which [`intercept`] answers with the prompt.
 const MARK: &str = "__maskTrash";
 const LAYER_MASK_DELETE: &str = "layer.layerMask.delete";
+const LAYER_MASK_APPLY: &str = "layer.layerMask.apply";
 const VECTOR_MASK_DELETE: &str = "layer.vectorMask.delete";
 
-pub fn owns(fields: &Map<String, Value>) -> bool {
-    fields.contains_key(MARK)
-}
-
-/// Is this the vector mask's prompt (OK / Cancel) rather than the layer mask's (Apply / Cancel / Delete)?
-pub fn is_vector(fields: &Map<String, Value>) -> bool {
-    fields.get("kind").and_then(Value::as_str) == Some("vector")
+/// What the prompt asked about: the mask of `layer` in document `doc`, a vector mask when `vector`.
+pub(crate) struct MaskTrash {
+    doc: u64,
+    layer: u64,
+    vector: bool,
 }
 
 /// The action a mask thumbnail dropped on the Trash pushes; [`intercept`] turns it into the prompt.
@@ -47,49 +48,40 @@ pub fn intercept(app: &mut PhotocraftApp, command: &str, params: &Value) -> Opti
     let layer = params.get("layer").and_then(Value::as_u64)?;
     let state = app.session.active()?;
     state.doc.layer(LayerId(layer)).filter(|l| if vector { l.vector_mask.is_some() } else { l.mask.is_some() })?;
-    let fields = if vector {
-        json!({MARK: true, "kind": "vector", "__label": "Delete Vector Mask", "message": "Delete the vector mask?",
-            "document": state.doc.id.0, "layer": layer})
+    let tag = MaskTrash { doc: state.doc.id.0, layer, vector };
+    let prompt = if vector {
+        StandardPrompt::new(PromptKind::TrashVectorMask)
     } else {
         // Apply needs a pixel layer (Layer › Layer Mask › Apply is greyed out otherwise).
-        let can_apply = app.session.is_enabled_with("layer.layerMask.apply", &json!({"layer": layer}));
-        json!({MARK: true, "kind": "pixel", "__label": "Delete Layer Mask", "message": "Apply mask to layer before removing?",
-            "document": state.doc.id.0, "layer": layer, "canApply": can_apply, "choice": if can_apply { "apply" } else { "delete" }})
+        StandardPrompt::trash_mask().can_apply(app.session.is_enabled_with(LAYER_MASK_APPLY, &json!({"layer": layer})))
     };
-    if app.ui.dialogs.iter().any(|d| owns(&d.fields)) {
-        return Some(Ok(json!({"confirmationPending": true})));
-    }
-    let id = app.ui.open_dialog(DialogKind::Command, fields.as_object().cloned().unwrap_or_default());
-    Some(Ok(json!({"dialog": id, "confirmationPending": true})))
+    Some(Ok(match alerts::open_prompt(app, prompt.tag(tag)) {
+        Ok(id) => json!({"dialog": id.value(), "confirmationPending": true}),
+        Err(_) => json!({"confirmationPending": true}),
+    }))
 }
 
-pub fn body(ui: &mut egui::Ui, fields: &Map<String, Value>) {
-    let fallback = if is_vector(fields) { "Delete the vector mask?" } else { "Apply mask to layer before removing?" };
-    ui.label(tl!(fields.get("message").and_then(Value::as_str).unwrap_or(fallback)));
+/// The `PROMPTS` entry: Proceed applies a layer mask (or deletes a vector mask), Alternate deletes a
+/// layer mask, Cancel keeps it. `false` for another family's answer.
+pub(crate) fn answer(app: &mut PhotocraftApp, _ctx: &egui::Context, answer: &mut PromptAnswer) -> bool {
+    let Some(tag) = answer.take_tag::<MaskTrash>() else { return false };
+    let command = match (tag.vector, answer.choice) {
+        (true, PromptChoice::Proceed) => VECTOR_MASK_DELETE,
+        (false, PromptChoice::Proceed) => LAYER_MASK_APPLY,
+        (false, PromptChoice::Alternate) => LAYER_MASK_DELETE,
+        _ => return true,
+    };
+    let result = confirm(app, &tag, command);
+    alerts::report(app, result);
+    true
 }
 
-/// Apply is the default button; it's greyed out where the mask can't be applied.
-pub fn can_apply(fields: &Map<String, Value>) -> bool {
-    fields.get("canApply").and_then(Value::as_bool).unwrap_or(false)
-}
-
-/// Runs the answer: the vector mask is deleted; for a layer mask `choice` "delete" deletes it and
-/// anything else applies it.
-pub fn confirm(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<Value, String> {
+/// Runs `command` on the mask when the document, the layer and its mask are still the ones asked about.
+fn confirm(app: &mut PhotocraftApp, tag: &MaskTrash, command: &str) -> Result<Value, String> {
     let state = app.session.active().ok_or(tl!("The document is closed"))?;
-    let vector = is_vector(fields);
-    let layer = fields.get("layer").and_then(Value::as_u64);
-    let same = fields.get("document").and_then(Value::as_u64) == Some(state.doc.id.0);
-    let has_mask = |l: &photocraft_doc::Layer| if vector { l.vector_mask.is_some() } else { l.mask.is_some() };
-    let Some(layer) = layer.filter(|id| same && state.doc.layer(LayerId(*id)).is_some_and(has_mask)) else {
+    let has_mask = |l: &photocraft_doc::Layer| if tag.vector { l.vector_mask.is_some() } else { l.mask.is_some() };
+    if state.doc.id.0 != tag.doc || !state.doc.layer(LayerId(tag.layer)).is_some_and(has_mask) {
         return Err(tl!("The layer or its mask changed. Drag the mask onto the Trash again.").into());
-    };
-    let command = if vector {
-        VECTOR_MASK_DELETE
-    } else if fields.get("choice").and_then(Value::as_str) == Some("delete") {
-        LAYER_MASK_DELETE
-    } else {
-        "layer.layerMask.apply"
-    };
-    app.run_command(command, json!({"layer": layer}))
+    }
+    app.run_command(command, json!({"layer": tag.layer}))
 }
