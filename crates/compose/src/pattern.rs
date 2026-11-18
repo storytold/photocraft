@@ -207,6 +207,18 @@ fn pattern_rgba_rows_in(p: &Pattern, mode: ColorMode, top: u32, bottom: u32, out
     p.surface.read_rgba_into(Rect::new(0, top as i32, p.width as i32, bottom as i32), out);
     let paints_in = matches!(mode, ColorMode::Grayscale | ColorMode::Bitmap | ColorMode::Duotone | ColorMode::Cmyk);
     if paints_in && p.surface.format().mode != mode {
+        if mode == ColorMode::Grayscale
+            && let Some(t) = rgb_to_doc_gray()
+        {
+            for q in out.iter_mut() {
+                let mut g = [0.0f32; 16];
+                if t.eval(&[q[0], q[1], q[2]], &mut g).is_ok() && g[0].is_finite() {
+                    let g = g[0].clamp(0.0, 1.0);
+                    *q = [g, g, g, q[3]];
+                }
+            }
+            return Some(());
+        }
         let fmt = PixelFormat::new(mode, SampleType::F32, true);
         let mut v = [0.0f32; 5];
         for q in out.iter_mut() {
@@ -215,6 +227,16 @@ fn pattern_rgba_rows_in(p: &Pattern, mode: ColorMode, top: u32, bottom: u32, out
         }
     }
     Some(())
+}
+
+/// The pattern colour (sRGB) to grey transform of a Grayscale document (#14975): through the grey
+/// profile, relative colorimetric with black point compensation, as the swatch colours convert
+/// (`swatch_in_doc` in the engine), not the luma formula. Measured in the reference application,
+/// an RGB pattern's blue, green and red paint grey 69, 221 and 129 of 255. `None` when the
+/// transform cannot be built, which keeps the luma conversion.
+fn rgb_to_doc_gray() -> Option<std::sync::Arc<craft_cms::Transform>> {
+    let opts = craft_cms::TransformOptions { intent: craft_cms::Intent::RelativeColorimetric, bpc: true, ..Default::default() };
+    craft_cms::transform::cached(craft_cms::Builtin::Srgb.profile(), craft_cms::Builtin::SGray.profile(), opts).ok()
 }
 
 /// The pixels of a paintable pattern as they paint in a document of colour mode `mode`, rounded
@@ -468,6 +490,10 @@ pub(crate) fn render_into(tile: &Tile, place: &Placement, rect: Rect, out: &mut 
         }
     }
 }
+
+#[cfg(test)]
+#[path = "pattern_grayscale_tests.rs"]
+mod grayscale_tests;
 
 #[cfg(test)]
 mod tests {

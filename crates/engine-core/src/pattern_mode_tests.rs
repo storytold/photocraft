@@ -93,3 +93,69 @@ fn a_grayscale_round_trip_keeps_the_pattern_colours() {
         }
     }
 }
+
+/// #14975: the issue's 20 x 20 test pattern (red, green, blue and black quadrants), defined from an
+/// RGB document; returns its id.
+fn quadrant_pattern(s: &mut Session) -> String {
+    s.execute("file.new", json!({"width": 20, "height": 20, "mode": "rgb", "depth": 8, "background": "white"})).unwrap();
+    for (x, y, c) in [(0, 0, "#ff0000"), (10, 0, "#00ff00"), (0, 10, "#0000ff"), (10, 10, "#000000")] {
+        s.execute("select.rect", json!({"x": x, "y": y, "width": 10, "height": 10})).unwrap();
+        s.execute("edit.fill", json!({"contents": "color", "color": c})).unwrap();
+    }
+    s.execute("select.deselect", json!({})).unwrap();
+    let r = s.execute("edit.definePattern", json!({"name": "Quadrants"})).unwrap();
+    r["pattern"].as_str().unwrap().to_string()
+}
+
+/// The greys (of 255) the reference application paints for the red, green and blue cells in a
+/// Grayscale document (#14975), where each cell sits on a 20 x 20 canvas-origin tiling.
+const QUADRANT_GREYS: [(&str, (i32, i32), f32); 3] = [("red", (5, 5), 129.0), ("green", (15, 5), 221.0), ("blue", (5, 15), 69.0)];
+
+/// The cells that are off by more than 2 levels, or not neutral.
+fn wrong_greys(s: &mut Session, what: &str) -> Vec<String> {
+    let mut wrong = Vec::new();
+    for (cell, (x, y), want) in QUADRANT_GREYS {
+        let p = pixel(s, x, y);
+        if !neutral(p) || (p[0] * 255.0 - want).abs() > 2.0 {
+            wrong.push(format!("{what} {cell}: {p:?} (grey {:.1}), want {want}", p[0] * 255.0));
+        }
+    }
+    wrong
+}
+
+#[test]
+fn edit_fill_and_the_paint_bucket_paint_a_pattern_through_the_grey_profile() {
+    let mut wrong = Vec::new();
+    for depth in [8, 16] {
+        let mut s = Session::new();
+        let pat = quadrant_pattern(&mut s);
+        // Edit › Fill with the pattern on a new layer.
+        s.execute("file.new", json!({"width": 40, "height": 40, "mode": "gray", "depth": depth, "background": "white"})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.execute("edit.fill", json!({"contents": "pattern", "pattern": pat})).unwrap();
+        wrong.extend(wrong_greys(&mut s, &format!("Edit › Fill {depth}-bit")));
+        // The Paint Bucket in pattern mode on the white Background.
+        s.execute("file.new", json!({"width": 40, "height": 40, "mode": "gray", "depth": depth, "background": "white"})).unwrap();
+        s.execute("paint.bucket", json!({"x": 30, "y": 30, "contents": "pattern", "pattern": pat, "tolerance": 0, "antiAlias": false})).unwrap();
+        wrong.extend(wrong_greys(&mut s, &format!("Paint Bucket {depth}-bit")));
+        // A pattern fill layer paints the same greys.
+        s.execute("file.new", json!({"width": 40, "height": 40, "mode": "gray", "depth": depth, "background": "white"})).unwrap();
+        s.execute("layer.newFillLayer.pattern", json!({"pattern": pat})).unwrap();
+        wrong.extend(wrong_greys(&mut s, &format!("pattern fill layer {depth}-bit")));
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
+#[test]
+fn edit_fill_with_a_pattern_keeps_its_colours_outside_grayscale() {
+    // RGB keeps the pattern's colours exactly; CMYK and Lab keep today's conversion (checked
+    // against a pattern fill layer by `pattern_fills_paint_like_edit_fill_in_every_mode`).
+    let mut s = Session::new();
+    let pat = quadrant_pattern(&mut s);
+    s.execute("file.new", json!({"width": 40, "height": 40, "mode": "rgb", "depth": 8, "background": "white"})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("edit.fill", json!({"contents": "pattern", "pattern": pat})).unwrap();
+    for ((x, y), want) in [((5, 5), [1.0, 0.0, 0.0, 1.0]), ((15, 5), [0.0, 1.0, 0.0, 1.0]), ((5, 15), [0.0, 0.0, 1.0, 1.0])] {
+        assert!(close(pixel(&mut s, x, y), want, 0.004), "RGB at {x},{y}: {:?}", pixel(&mut s, x, y));
+    }
+}

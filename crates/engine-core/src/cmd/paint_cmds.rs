@@ -83,7 +83,9 @@ fn bucket(s: &mut Session, p: &Value) -> Result<Value> {
     let source = p.get("contents").or_else(|| p.get("source")).and_then(Value::as_str).unwrap_or("foreground");
     let pattern = if source == "pattern" {
         let pat = crate::pattern_cmds::resolve_param(s, "paint.bucket", p)?;
-        let tile = photocraft_compose::pattern::Tile::new(&pat)
+        // Grayscale: through the grey profile, as Edit › Fill and a pattern fill layer (#14975).
+        let doc_mode = s.active().map_or(photocraft_color::ColorMode::Rgb, |d| d.doc.mode);
+        let tile = photocraft_compose::pattern::Tile::new_in(&pat, crate::fill_cmds::gray_or_rgb(doc_mode))
             .ok_or_else(|| EngineError::BadParams { cmd: "paint.bucket".into(), msg: "the pattern is empty or too large to paint".into() })?;
         let (scale, angle, _, phase) = crate::pattern_cmds::placement("paint.bucket", p)?;
         Some((tile, scale, angle, phase))
