@@ -3,7 +3,7 @@ use photocraft_codecs::{ChannelLayout, EncodeOptions, Image};
 use photocraft_engine::Session;
 use photocraft_format::list_recovery;
 use photocraft_ui_egui::{PhotocraftApp, prefs_ui};
-use serde_json::json;
+use serde_json::{Value, json};
 
 /// #6607: a PSD/PSB save streams the file model into the temporary file, which then holds
 /// exactly the exported bytes; a serializer error halfway leaves the old file and no
@@ -682,4 +682,116 @@ fn tiff_options_reach_the_written_file() {
     let info = photocraft_codecs::tiff_info(&bytes).unwrap();
     assert_eq!(info.pages.iter().map(|p| (p.width, p.compression)).collect::<Vec<_>>(), [(200, 5), (100, 5), (50, 5)]);
     assert!(!photocraft_codecs::decode(&bytes).unwrap().layout().has_alpha());
+}
+
+/// PSB is a save type of its own: it shows in the list, and the type gives a typed name its
+/// extension. As an extension of the PSD type it was hidden, and KDE's dialog, which adds the
+/// type's first extension, turned `art.psb` into `art.psb.psd`.
+#[test]
+/// Production desktop gates permit only a held historical decision; refusal preserves the live prompt for retry.
+fn historical_decisions_through_real_desktop_control_preserve_authority_and_retry() {
+    use photocraft_ui_egui::control::{ControlRequest, Reply, handle, inspect};
+
+    /// Dispatch the real inline control route rather than calling a dialog helper directly.
+    fn call(app: &mut PhotocraftApp, ctx: &egui::Context, method: &str, params: Value) -> Value {
+        let (request, _receiver) = ControlRequest::new(method, params);
+        match handle(app, ctx, &request) {
+            Reply::Done(response) => response,
+            _ => panic!("inline historical decision must finish synchronously"),
+        }
+    }
+    fn historical_dialog(app: &PhotocraftApp, ctx: &egui::Context) -> Option<Value> {
+        inspect(app, ctx)["dialogs"].as_array()?.iter().find(|dialog| dialog["key"].as_str().is_some_and(|key| key.starts_with("historicalXcfOpen."))).cloned()
+    }
+
+    /// Refuse the held decision while retaining the production gate for every other command.
+    fn deny_open(id: &str, params: &Value) -> photocraft_engine::Result<()> {
+        if id == "file.open" {
+            Err(photocraft_engine::EngineError::Other("test refuses the held decision".into()))
+        } else {
+            photocraft_automation::workspace::authorize_desktop_engine_step(id, params)
+        }
+    }
+
+    /// A held source cannot authorize an ambient working-profile read; its denied continuation
+    /// must preserve the exact dialog, active document and retryable encoded source.
+    fn assert_historical_profile_denial(
+        app: &mut PhotocraftApp,
+        ctx: &egui::Context,
+        dialog: &Value,
+        fields: &Value,
+        original: &Arc<photocraft_doc::Document>,
+        dir: &std::path::Path,
+    ) {
+        // The held-byte exception cannot grant a newly configured ambient ICC path.
+        // Refusal occurs inside continuation preparation, after the queue reserved its position.
+        let working = app.session.color.settings.working_rgb.clone();
+        app.session.color.settings.working_rgb = dir.join("not-authorized.icc").to_str().unwrap().into();
+        let refused_profile = call(app, ctx, "ui.dialog.confirm", json!({"dialog": dialog}));
+        assert_eq!(refused_profile["ok"], false, "{refused_profile}");
+        assert!(refused_profile["error"].as_str().unwrap().contains("edit.profileInfo"), "{refused_profile}");
+        assert_eq!(&historical_dialog(app, ctx).unwrap()["fields"], fields);
+        assert_eq!(app.session.documents().len(), 1);
+        assert!(Arc::ptr_eq(&app.session.active().unwrap().doc, original));
+        app.session.color.settings.working_rgb = working;
+    }
+
+    for cancel in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let dir = directory.path();
+        let workspace = photocraft_automation::AuthorizedWorkspace::new(Some(dir), Some(dir)).unwrap();
+        let mut app = PhotocraftApp::new(Session::new(), native(Some(workspace), craft::host::Wake::none()));
+        app.background_jobs = false;
+        app.session.color.settings.ask_on_missing = false;
+        app.session.execute("file.new", json!({"width": 2, "height": 2})).unwrap();
+        let original = app.session.active().unwrap().doc.clone();
+        // Original specification-built v7 U16 framing, without layers or external fixtures.
+        let mut bytes = b"gimp xcf v007\0".to_vec();
+        for value in [1u32, 1, 0, 250, 0, 0, 0, 0] {
+            bytes.extend_from_slice(&value.to_be_bytes());
+        }
+        app.open_bytes("historical.xcf", &bytes).unwrap();
+        let ctx = egui::Context::default();
+        let dialog = historical_dialog(&app, &ctx).unwrap();
+        let id = &dialog["id"];
+        let held = dialog["key"].as_str().unwrap().split_once('.').unwrap().1.parse::<u64>().unwrap();
+        if !cancel {
+            let unanswered = call(&mut app, &ctx, "ui.dialog.confirm", json!({"dialog": id}));
+            assert_eq!(unanswered["ok"], false, "the control route must not invent a sample order: {unanswered}");
+            assert_eq!(historical_dialog(&app, &ctx).unwrap()["fields"], dialog["fields"]);
+            assert_eq!(call(&mut app, &ctx, "ui.dialog.set", json!({"dialog": id, "field": "historicalXcfSampleOrder", "value": "little-endian"}))["ok"], true);
+        }
+        let fields = historical_dialog(&app, &ctx).unwrap()["fields"].clone();
+        let method = if cancel { "ui.dialog.cancel" } else { "ui.dialog.confirm" };
+        let gate = app.services.automation_authorize;
+        assert!(gate.is_some(), "use the real native automation service configuration");
+        app.services.automation_authorize = Some(deny_open);
+        let refused = call(&mut app, &ctx, method, json!({"dialog": id}));
+        assert_eq!(refused["ok"], false, "{refused}");
+        assert!(refused["error"].as_str().unwrap().contains("test refuses"), "{refused}");
+        assert_eq!(historical_dialog(&app, &ctx).unwrap()["fields"], fields);
+        assert_eq!(app.session.documents().len(), 1);
+        assert!(Arc::ptr_eq(&app.session.active().unwrap().doc, &original));
+        assert!(app.session.authorize.is_none(), "the control handler restores the session hook after refusal");
+        app.services.automation_authorize = gate;
+        if !cancel {
+            assert_historical_profile_denial(&mut app, &ctx, id, &fields, &original, dir);
+        }
+        let answered = call(&mut app, &ctx, method, json!({"dialog": id}));
+        assert_eq!(answered["ok"], true, "the actual desktop gate permits this held-only decision: {answered}");
+        assert!(historical_dialog(&app, &ctx).is_none());
+        assert_eq!(app.session.documents().len(), if cancel { 1 } else { 2 });
+        assert!(app.session.authorize.is_none(), "successful control dispatch also restores the hook");
+        assert!(
+            app.session.execute("file.open", json!({"heldHistoricalXcfOpen": held, "cancel": true})).is_err(),
+            "the accepted decision releases its held source"
+        );
+        let ambient = call(&mut app, &ctx, "engine.execute", json!({"command": "file.open", "params": {"path": dir.join("outside.xcf").to_str().unwrap()}}));
+        assert_eq!(ambient["ok"], false, "held-only capability must not grant ambient file opening: {ambient}");
+        if !cancel {
+            assert!(app.session.active().unwrap().source_read_only);
+            let saved = photocraft_format::save_to_bytes(&app.session.active().unwrap().doc, &Default::default()).unwrap();
+            assert_eq!(photocraft_format::load_from_bytes(&saved).unwrap().size, photocraft_geom::Size::new(1, 1));
+        }
+    }
 }

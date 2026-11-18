@@ -178,16 +178,28 @@ impl Headless {
         self.open_with_options(path, &opts)
     }
 
+    /// Open with explicit historical sample order while preserving the standard import options path.
+    pub fn open_with_sample_order(&mut self, path: &Path, order: Option<photocraft_io::HistoricalXcfSampleOrder>) -> Result<Value, AutomationError> {
+        self.open_with_options(path, &photocraft_io::ImportOptions { historical_xcf_sample_order: order, ..Default::default() })
+    }
+
+    /// Open with strictly validated per-import controls; missing sample order stays unset.
+    pub fn open_with_parameters(&mut self, path: &Path, params: &Value) -> Result<Value, AutomationError> {
+        let opts = files::import_options_from_params(params)?;
+        self.open_with_options(path, &opts)
+    }
+
     /// Open a file with custom import options and make it the active document.
     pub fn open_with_options(&mut self, path: &Path, opts: &photocraft_io::ImportOptions) -> Result<Value, AutomationError> {
+        let opts = file_cmds::fresh_import_options(*opts);
         let requested = path.to_str().ok_or_else(|| AutomationError::BadRequest("automation paths must be valid UTF-8".into()))?;
         let (mut o, save_path) = match &self.filesystem {
             Filesystem::Denied => return Err(AutomationError::BadRequest("automation filesystem access is not granted: read authority is absent".into())),
-            Filesystem::TrustedLocal => (files::open_with_options(path, opts)?, Some(requested.to_string())),
+            Filesystem::TrustedLocal => (files::open_with_options(path, &opts)?, Some(requested.to_string())),
             Filesystem::Workspace(workspace) => {
                 let (bytes, save_path) = workspace.read_with_save_path(requested)?;
                 let name = path.file_name().and_then(|name| name.to_str()).unwrap_or(requested);
-                (files::open_bytes_with_options(name, &bytes, opts)?, save_path)
+                (files::open_bytes_with_options(name, &bytes, &opts)?, save_path)
             }
         };
         // Preferences › Raw Defaults › Resolution, as the app's File › Open applies it.
@@ -199,12 +211,12 @@ impl Headless {
             }
             None => save_path,
         };
-        let index = self.session.add_document(o.document, path.filter(|_| !o.source_read_only));
-        if let Some(st) = self.session.active_mut() {
-            st.source_read_only = o.source_read_only;
-        }
+        // Retain the authorized source identity even without implicit Save authority.
+        let path = if o.source_read_only { Some(requested.to_owned()) } else { path };
+        let (index, color, view_warning) = self.install_imported_document(o.document, path, o.source_read_only, o.initial_view)?;
         let d = &self.session.documents()[index];
         let mut warnings = o.warnings;
+        warnings.extend(view_warning);
         warnings.extend(photocraft_engine::type_extra_cmds::missing_font_warnings(&d.doc));
         Ok(json!({
             "index": index,
@@ -213,7 +225,30 @@ impl Headless {
             "height": d.doc.size.height,
             "layers": d.doc.layer_count(),
             "warnings": warnings,
+            "color": color,
+            "importConversion": photocraft_engine::import_report_cmds::summary(d.doc.metadata.import_conversion.as_ref()),
         }))
+    }
+
+    /// Admit the source and report optional view failures through ordinary import warnings.
+    fn install_imported_document(
+        &mut self,
+        document: photocraft_doc::Document,
+        path: Option<String>,
+        source_read_only: bool,
+        initial_view: Option<photocraft_io::NativeInitialView>,
+    ) -> Result<(usize, Value, Option<String>), AutomationError> {
+        let mut document = document;
+        let color = self.session.color.open_policy(&mut document, self.session.prefs().file_handling.ignore_exif_profile_tag);
+        self.session.prepare_imported_document(&mut document, &photocraft_engine::jobs::JobCtx::new())?;
+        let protected = path.as_ref().filter(|_| source_read_only).cloned();
+        let (index, (), warning) = self.session.admit_import_with_initial_view(source_read_only, initial_view, |session| {
+            (session.add_document(document, path.filter(|_| !source_read_only)), ())
+        })?;
+        if let Some(state) = self.session.active_mut() {
+            state.protected_import_source = protected;
+        }
+        Ok((index, color, warning))
     }
 
     /// Place a file into a document as a Smart Object layer: the capability-scoped counterpart
@@ -373,6 +408,7 @@ impl Headless {
             }
         };
         let target_text = target.to_str().ok_or_else(|| AutomationError::BadRequest("automation paths must be valid UTF-8".into()))?;
+        self.check_import_destination(i, target_text)?;
         let mut warnings = match &self.filesystem {
             Filesystem::Denied => return Err(AutomationError::BadRequest("automation filesystem access is not granted: write authority is absent".into())),
             Filesystem::TrustedLocal => {
@@ -432,9 +468,31 @@ impl Headless {
         Ok(json!({ "path": target.to_string_lossy(), "warnings": warnings }))
     }
 
-    /// Write rendered bytes through the configured write authority.
+    /// Reject replacing this document's import-only source or its filesystem aliases before any output is created.
+    fn check_import_destination(&self, index: usize, target: &str) -> Result<(), AutomationError> {
+        if let Some(source) = self.session.documents().get(index).and_then(|st| st.protected_import_source.as_deref()) {
+            let protected = match &self.filesystem {
+                Filesystem::TrustedLocal => file_cmds::same_file(source, target),
+                Filesystem::Workspace(workspace) => workspace.is_import_source(source, target)?,
+                Filesystem::Denied => return Err(AutomationError::BadRequest("automation filesystem access is not granted: write authority is absent".into())),
+            };
+            if protected {
+                return Err(AutomationError::BadRequest("the destination is the import-only source; choose a different native or export path".into()));
+            }
+        }
+        Ok(())
+    }
+
+    /// Write rendered bytes for the active document through the configured write authority.
     pub fn write_render(&self, path: &Path, bytes: &[u8]) -> Result<(), AutomationError> {
+        self.write_render_for(None, path, bytes)
+    }
+
+    /// Write rendered bytes for the requested document, preserving its imported source even when another tab is active.
+    pub fn write_render_for(&self, index: Option<usize>, path: &Path, bytes: &[u8]) -> Result<(), AutomationError> {
+        let i = self.doc_index(index)?;
         let requested = path.to_str().ok_or_else(|| AutomationError::BadRequest("automation paths must be valid UTF-8".into()))?;
+        self.check_import_destination(i, requested)?;
         match &self.filesystem {
             Filesystem::Denied => Err(AutomationError::BadRequest("automation filesystem access is not granted: write authority is absent".into())),
             Filesystem::TrustedLocal => photocraft_format::atomic_write(path, bytes).map_err(|error| AutomationError::Io(error.to_string())),
@@ -586,7 +644,10 @@ impl Headless {
             authorize_engine_command(id, &params)?;
         }
         // Background jobs that finished since the last request (or batch step) are applied first.
-        self.sync_jobs();
+        // Cancellation discards a pending result before it can publish a document.
+        if id != "jobs.cancel" {
+            self.sync_jobs();
+        }
         Ok(Admitted::Run(params))
     }
 
@@ -677,5 +738,293 @@ mod waited_error_tests {
             headless.job_poll(id),
             JobPoll::Ended(Err(AutomationError::Engine(photocraft_engine::EngineError::PsdHardBudget { required: 9000, limit: 4000, .. })))
         ));
+    }
+}
+
+#[cfg(test)]
+mod import_initial_view_tests {
+    use super::*;
+    use photocraft_color::{ColorMode, SampleType};
+    use photocraft_doc::Document;
+    use photocraft_geom::Size;
+    use photocraft_io::{NativeImportTarget, NativeInitialView};
+    use std::sync::Arc;
+
+    struct Fixture(PathBuf);
+
+    impl Fixture {
+        fn new() -> Self {
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let serial = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let folder = std::env::temp_dir().join(format!("photocraft-initial-view-{}-{serial}", std::process::id()));
+            std::fs::create_dir(&folder).unwrap();
+            Self(folder)
+        }
+
+        fn source(&self) -> PathBuf {
+            self.0.join("saved-view.xcf")
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Independent v3 XCF with a saved sampler at (1, 2): image property 27,
+    /// followed by empty layer/channel tables, with no later native-preparation features.
+    fn xcf_with_saved_view() -> Vec<u8> {
+        let mut bytes = b"gimp xcf v003\0".to_vec();
+        for word in [4u32, 4, 0, 27, 8, 1, 2, 0, 0, 0, 0] {
+            bytes.extend_from_slice(&word.to_be_bytes());
+        }
+        bytes
+    }
+
+    #[test]
+    fn loaders_and_headless_apply_saved_xcf_view_once() {
+        let fixture = Fixture::new();
+        let source = xcf_with_saved_view();
+        std::fs::write(fixture.source(), &source).unwrap();
+        let bytes = files::open_bytes("saved-view.xcf", &source).unwrap();
+        let disk = files::open(&fixture.source()).unwrap();
+        for opened in [&bytes, &disk] {
+            assert!(opened.source_read_only);
+            assert_eq!(opened.initial_view.as_ref().unwrap().samplers, [[1., 2.]]);
+            opened.initial_view.as_ref().unwrap().validate(&opened.document).unwrap();
+        }
+        for scoped in [false, true] {
+            let mut headless = if scoped {
+                Headless::with_workspace(AuthorizedWorkspace::with_read_roots([fixture.0.as_path()], None::<&Path>).unwrap())
+            } else {
+                Headless::trusted_local()
+            };
+            let result = headless.open(&fixture.source()).unwrap();
+            assert_eq!(result["index"], 0);
+            let state = headless.session.active().unwrap();
+            assert_eq!(state.color_samplers, [[1., 2.]]);
+            assert!(state.source_read_only);
+            assert!(state.path.is_none());
+            assert_eq!(state.protected_import_source.as_deref(), fixture.source().to_str());
+            assert!(!state.is_dirty());
+            assert_eq!(state.history.past_len(), 0);
+            assert_eq!(std::fs::read(fixture.source()).unwrap(), source);
+        }
+        // View hints are handed off once, not replayed from the XCF conversion report.
+        let native = photocraft_format::save_to_bytes(&bytes.document, &Default::default()).unwrap();
+        assert!(files::open_bytes("native.pcraft", &native).unwrap().initial_view.is_none());
+        let native_path = fixture.0.join("native.pcraft");
+        std::fs::write(&native_path, native).unwrap();
+        assert!(files::open(&native_path).unwrap().initial_view.is_none());
+        let directory = fixture.0.join("native-directory");
+        photocraft_format::PcraftWriter::new().save_dir(&bytes.document, &directory, &Default::default()).unwrap();
+        assert!(files::open(&directory).unwrap().initial_view.is_none());
+        let mut reopened = Headless::trusted_local();
+        reopened.open(&native_path).unwrap();
+        assert!(reopened.session.active().unwrap().color_samplers.is_empty());
+    }
+
+    #[test]
+    fn invalid_optional_view_keeps_headless_admission_with_warning_and_default_view() {
+        for existing in [0, 3] {
+            let mut headless = Headless::trusted_local();
+            for n in 0..existing {
+                let doc = Document::new(format!("existing {n}"), Size::new(4, 4), ColorMode::Rgb, SampleType::U8);
+                headless.session.add_document(doc, Some(format!("existing-{n}.pcraft")));
+            }
+            if existing != 0 {
+                headless.session.set_active(0);
+                headless.session.active_mut().unwrap().color_samplers = vec![[0., 1.]];
+            }
+            let active = headless.session.active().map(|state| state.doc.id);
+            let before: Vec<_> = headless
+                .session
+                .documents()
+                .iter()
+                .map(|state| {
+                    (
+                        Arc::clone(&state.doc),
+                        state.path.clone(),
+                        state.source_read_only,
+                        state.revision,
+                        state.saved_revision,
+                        state.active_layer,
+                        state.selected_layers.clone(),
+                        state.color_samplers.clone(),
+                        state.history.past_len(),
+                    )
+                })
+                .collect();
+            let mut doc = Document::new("invalid import", Size::new(4, 4), ColorMode::Rgb, SampleType::U8);
+            if let Some(id) = active {
+                doc.id = id; // Admission remaps the collision; rollback must resolve the original identity.
+            }
+            let view = NativeInitialView { target: NativeImportTarget::AlphaChannel(usize::MAX), ..Default::default() };
+            assert!(view.validate(&doc).is_err());
+            let (index, _, warning) = headless.install_imported_document(doc, Some("source.xcf".into()), true, Some(view)).unwrap();
+            assert!(warning.unwrap().contains("target alpha channel is absent"));
+            assert_eq!(headless.session.documents().len(), existing + 1);
+            assert_eq!(headless.session.active_index(), Some(index));
+            let admitted = headless.session.active().unwrap();
+            assert!(admitted.source_read_only);
+            assert!(admitted.path.is_none());
+            assert!(admitted.color_samplers.is_empty());
+            assert_eq!(admitted.channel_view.target, photocraft_engine::channel_cmds::ChannelTarget::Composite);
+            assert_eq!(admitted.history.past_len(), 0);
+            for (state, before) in headless.session.documents().iter().zip(before) {
+                assert!(Arc::ptr_eq(&state.doc, &before.0));
+                assert_eq!(
+                    (
+                        state.path.clone(),
+                        state.source_read_only,
+                        state.revision,
+                        state.saved_revision,
+                        state.active_layer,
+                        state.selected_layers.clone(),
+                        state.color_samplers.clone(),
+                        state.history.past_len()
+                    ),
+                    (before.1, before.2, before.3, before.4, before.5, before.6, before.7, before.8)
+                );
+            }
+            assert!(headless.writers.is_empty());
+        }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32"), target_pointer_width = "64"))]
+mod fresh_source_approval_tests;
+
+#[cfg(test)]
+mod transactional_import_tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use photocraft_io::{NativeImportTarget, NativeInitialView};
+
+    struct SourceFixture(PathBuf, Vec<u8>);
+
+    impl SourceFixture {
+        /// Keep an independent minimal XCF on disk so both admission outcomes can prove the
+        /// import-only source remains byte-identical rather than merely checking session flags.
+        fn new() -> Self {
+            let mut bytes = b"gimp xcf v003\0".to_vec();
+            for value in [1u32, 1, 0, 0, 0, 0, 0] {
+                bytes.extend_from_slice(&value.to_be_bytes());
+            }
+            let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+            let path = std::env::temp_dir().join(format!("photocraft-transactional-open-{}-{stamp}.xcf", std::process::id()));
+            std::fs::write(&path, &bytes).unwrap();
+            Self(path, bytes)
+        }
+
+        /// Decode through the normal importer, then let each test supply its independent view hint.
+        fn decoded(&self) -> files::Opened {
+            files::open(&self.0).unwrap()
+        }
+    }
+
+    impl Drop for SourceFixture {
+        /// Remove only the source created by this test after all unchanged-byte assertions finish.
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    #[test]
+    /// An invalid optional view preserves imported pixels with a warning and leaves all
+    /// earlier documents, their view state, history and source identities unchanged.
+    fn invalid_import_view_keeps_pixels_and_prior_documents_with_a_warning() {
+        let source = SourceFixture::new();
+        for existing in [0, 3] {
+            let mut headless = Headless::trusted_local();
+            for _ in 0..existing {
+                headless.session.execute("file.new", json!({"width": 2, "height": 2})).unwrap();
+            }
+            if existing != 0 {
+                assert!(headless.session.set_active(0));
+                headless.session.active_mut().unwrap().color_samplers = vec![[1.0, 1.0]];
+            }
+            let active = headless.session.active().map(|state| state.doc.id);
+            let before: Vec<_> = headless
+                .session
+                .documents()
+                .iter()
+                .map(|state| {
+                    (
+                        Arc::clone(&state.doc),
+                        state.path.clone(),
+                        state.source_read_only,
+                        state.protected_import_source.clone(),
+                        state.revision,
+                        state.saved_revision,
+                        state.active_layer,
+                        state.selected_layers.clone(),
+                        state.color_samplers.clone(),
+                    )
+                })
+                .collect();
+            let mut opened = source.decoded();
+            assert!(opened.source_read_only);
+            if let Some(id) = active {
+                // Admission must re-key a colliding imported identity, then rollback must still
+                // resolve the original active document rather than the discarded import.
+                opened.document.id = id;
+            }
+            let view = NativeInitialView { target: NativeImportTarget::AlphaChannel(usize::MAX), ..Default::default() };
+            let (index, _, warning) = headless.install_imported_document(opened.document, Some(source.0.to_str().unwrap().into()), true, Some(view)).unwrap();
+            assert!(warning.unwrap().contains("target alpha channel is absent"));
+            assert_eq!(index, existing);
+            assert_eq!(headless.session.documents().len(), existing + 1);
+            assert_eq!(headless.session.active_index(), Some(index));
+            let imported = headless.session.active().unwrap();
+            assert!(imported.source_read_only);
+            assert_eq!(imported.protected_import_source.as_deref(), source.0.to_str());
+            assert!(imported.path.is_none());
+            assert!(imported.color_samplers.is_empty());
+            if let Some(active) = active {
+                assert_ne!(imported.doc.id, active);
+            }
+            for (state, before) in headless.session.documents().iter().take(existing).zip(before) {
+                assert!(Arc::ptr_eq(&state.doc, &before.0));
+                assert_eq!(
+                    (
+                        state.path.clone(),
+                        state.source_read_only,
+                        state.protected_import_source.clone(),
+                        state.revision,
+                        state.saved_revision,
+                        state.active_layer,
+                        state.selected_layers.clone(),
+                        state.color_samplers.clone()
+                    ),
+                    (before.1, before.2, before.3, before.4, before.5, before.6, before.7, before.8)
+                );
+            }
+            assert!(headless.writers.is_empty());
+            assert_eq!(std::fs::read(&source.0).unwrap(), source.1);
+        }
+    }
+
+    #[test]
+    /// A valid view remains applied to the new active document while the XCF path is protected
+    /// and withheld as a native Save target; successful admission never writes the source.
+    fn successful_import_view_keeps_source_protection() {
+        let source = SourceFixture::new();
+        let opened = source.decoded();
+        let mut headless = Headless::trusted_local();
+        let path = source.0.to_str().unwrap().to_owned();
+        let view = NativeInitialView { samplers: vec![[0.0, 0.0]], ..Default::default() };
+        let (index, _, warning) = headless.install_imported_document(opened.document, Some(path.clone()), opened.source_read_only, Some(view)).unwrap();
+        assert!(warning.is_none());
+        assert_eq!(headless.session.active_index(), Some(index));
+        assert_eq!(headless.session.documents().len(), 1);
+        let state = headless.session.active().unwrap();
+        assert!(state.source_read_only);
+        assert_eq!(state.protected_import_source.as_deref(), Some(path.as_str()));
+        assert!(state.path.is_none());
+        assert_eq!(state.color_samplers, vec![[0.0, 0.0]]);
+        assert_eq!(std::fs::read(&source.0).unwrap(), source.1);
     }
 }

@@ -87,8 +87,14 @@ fn maximize_param(params: &Value, cmd: &str) -> Result<Option<bool>, String> {
     photocraft_engine::file_cmds::maximize_compatibility_param(params, cmd).map_err(|e| e.to_string())
 }
 
-/// Decode a file: (document, warnings about anything approximated or dropped).
-pub type ImportFn = Box<dyn Fn(&str, &[u8], &photocraft_io::ImportOptions) -> Result<(Document, Vec<String>), String>>;
+/// Decode a file, preserving its document, warnings, source policy and one-time native view.
+pub type ImportFn = Box<dyn Fn(&str, &[u8], &photocraft_io::ImportOptions) -> Result<photocraft_io::ImportResult, String>>;
+
+/// Construct an ordinary decoded document for synthetic import-service fixtures.
+#[cfg(test)]
+pub(crate) fn imported((document, warnings): (Document, Vec<String>)) -> photocraft_io::ImportResult {
+    photocraft_io::ImportResult { document, warnings, source_read_only: false, preview_only: false, initial_view: None }
+}
 
 /// Encoder settings chosen in Export As (the file format comes from the name's extension).
 #[derive(Clone, Debug, PartialEq)]
@@ -332,6 +338,8 @@ pub type AutomationReadFn = Box<dyn FnMut(&str) -> Result<AutomationReadResult, 
 
 /// Write bytes through the desktop control session's authorized write root.
 pub type AutomationWriteFn = Box<dyn FnMut(&str, &[u8]) -> Result<(), String>>;
+/// Compare source identity only within the automation client's granted filesystem capabilities.
+pub type AutomationSameFileFn = Box<dyn Fn(&str, &str) -> Result<bool, String>>;
 
 /// Load a directory-form `.pcraft` through the authorized read root, returning its display
 /// name (the file name) and the loaded document. `Ok(None)` marks a regular file: the
@@ -350,6 +358,7 @@ pub type AutomationAuthorizeFn = fn(&str, &Value) -> photocraft_engine::Result<(
 pub struct AutomationServices {
     pub read: Option<AutomationReadFn>,
     pub write: Option<AutomationWriteFn>,
+    pub same_file: Option<AutomationSameFileFn>,
     pub open_pcraft: Option<AutomationOpenPcraftFn>,
     pub save: Option<SaveFileFn>,
     pub command: Option<AutomationCommandFn>,
@@ -545,6 +554,7 @@ pub struct Services {
     /// using `file_dialog` and `write` with the user's authority.
     pub automation_read: Option<AutomationReadFn>,
     pub automation_write: Option<AutomationWriteFn>,
+    pub automation_same_file: Option<AutomationSameFileFn>,
     pub automation_open_pcraft: Option<AutomationOpenPcraftFn>,
     pub automation_command: Option<AutomationCommandFn>,
     /// Same policy as [`Self::automation_command`], as a function pointer the engine calls for
@@ -656,9 +666,34 @@ impl Services {
     pub fn set_automation(&mut self, a: AutomationServices) {
         self.automation_read = a.read;
         self.automation_write = a.write;
+        self.automation_same_file = a.same_file;
         self.automation_open_pcraft = a.open_pcraft;
         self.automation_save = a.save;
         self.automation_command = a.command;
         self.automation_authorize = a.authorize;
+    }
+}
+
+#[cfg(test)]
+mod automation_identity_tests {
+    use super::*;
+
+    #[test]
+    fn changing_automation_services_replaces_and_revokes_source_identity_authority() {
+        let mut services = Services::default();
+        services.set_automation(AutomationServices {
+            same_file: Some(Box::new(|source, destination| Ok(source == "old/source.xcf" && destination == "old/alias.xcf"))),
+            ..Default::default()
+        });
+        assert!(services.automation_same_file.as_ref().unwrap()("old/source.xcf", "old/alias.xcf").unwrap());
+        services.set_automation(AutomationServices {
+            same_file: Some(Box::new(|source, destination| Ok(source == "new/source.xcf" && destination == "new/alias.xcf"))),
+            ..Default::default()
+        });
+        let compare = services.automation_same_file.as_ref().unwrap();
+        assert!(!compare("old/source.xcf", "old/alias.xcf").unwrap());
+        assert!(compare("new/source.xcf", "new/alias.xcf").unwrap());
+        services.set_automation(AutomationServices::default());
+        assert!(services.automation_same_file.is_none());
     }
 }

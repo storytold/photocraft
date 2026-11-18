@@ -1000,10 +1000,13 @@ fn tcp_connections_must_authenticate_before_the_deadline_whatever_they_send() {
     line.clear();
     reader.read_line(&mut line).unwrap();
     assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["id"], "a");
+    // Keep both client handles alive until the server observes FIN. Closing a duplicated
+    // socket first can turn this graceful-EOF assertion into a Windows connection reset.
+    s.shutdown(std::net::Shutdown::Write).unwrap();
+    let results = server.join().unwrap();
     drop(reader);
     drop(s);
 
-    let results = server.join().unwrap();
     let (slow_result, slow_time) = &results[0];
     assert!(matches!(slow_result, Err(std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock)), "{slow_result:?}");
     assert!(*slow_time < Duration::from_secs(3), "the trickle did not extend the deadline: {slow_time:?}");
@@ -1089,7 +1092,8 @@ fn approve_high_memory_rejects_invalid_types_and_formats_structured_error() {
     // Non-boolean approveHighMemory is rejected strictly
     let reply = respond(&h, r#"{"method":"doc.open","params":{"path":"test.psd","approveHighMemory":"yes"}}"#);
     assert_eq!(reply["ok"], false);
-    assert!(reply["error"].as_str().unwrap().contains("must be a boolean"));
+    let error = reply["error"].as_str().unwrap();
+    assert!(error.contains("doc.open") && error.contains("approveHighMemory") && error.contains("boolean"), "{error}");
 
     let reply_place = respond(&h, r#"{"method":"doc.place","params":{"path":"test.psd","approveHighMemory":123}}"#);
     assert_eq!(reply_place["ok"], false);
@@ -1185,4 +1189,29 @@ fn doc_place_forwards_high_memory_approval() {
     trial(&mut t, &absolute);
     drop(t);
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn historical_order_doc_open_is_explicit_and_preserves_source_protection() {
+    let path = std::env::temp_dir().join(format!("photocraft-rpc-historical-{}.xcf", std::process::id()));
+    let mut bytes = b"gimp xcf v007\0".to_vec();
+    for value in [1u32, 1, 0, 250, 0, 0, 0, 0] {
+        bytes.extend_from_slice(&value.to_be_bytes());
+    }
+    std::fs::write(&path, bytes).unwrap();
+    let path_text = path.to_str().unwrap();
+    let mut headless = Headless::trusted_local();
+    assert!(headless.handle("doc.open", json!({"path":path_text})).is_err());
+    assert!(headless.session.documents().is_empty());
+    for order in ["little-endian", "big-endian"] {
+        headless.handle("doc.open", json!({"path":path_text,"historicalXcfSampleOrder":order})).unwrap();
+        let state = headless.session.active().unwrap();
+        assert!(state.source_read_only);
+        assert!(state.path.is_none());
+    }
+    let mut denied = Headless::new();
+    let error = denied.handle("doc.open", json!({"path":path_text,"historicalXcfSampleOrder":"native"})).unwrap_err().to_string();
+    assert!(error.contains("historicalXcfSampleOrder"), "validation precedes missing read authority: {error}");
+    assert!(denied.session.documents().is_empty());
+    let _ = std::fs::remove_file(path);
 }

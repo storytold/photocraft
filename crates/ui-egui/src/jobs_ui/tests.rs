@@ -11,6 +11,189 @@ use craft::behavior::{EditEvent, Mixed};
 use craft::draw::ui::transform::TransformEdit;
 use egui::vec2;
 use egui_kittest::Harness;
+
+#[test]
+/// Reject source aliases before either writer runs, then require a separate native Save As to establish writable
+/// identity.
+fn native_and_automation_saves_protect_sources_then_save_as_becomes_writable() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    for automation in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.xcf");
+        let alias = directory.path().join("alias.pcraft");
+        let converted = directory.path().join("converted.pcraft");
+        std::fs::write(&source, b"protected original").unwrap();
+        std::fs::hard_link(&source, &alias).unwrap();
+        let source = source.to_string_lossy().into_owned();
+        let alias = alias.to_string_lossy().into_owned();
+        let converted = converted.to_string_lossy().into_owned();
+        let writes = Rc::new(RefCell::new(Vec::new()));
+        let native_writes = writes.clone();
+        let scoped_writes = writes.clone();
+        let services = crate::Services {
+            export: Some(Box::new(|_, _, _| Ok((b"native bytes".to_vec(), Vec::new())))),
+            write: Some(Box::new(move |path, _| {
+                native_writes.borrow_mut().push(path.to_string());
+                Ok(())
+            })),
+            automation_write: Some(Box::new(move |path, _| {
+                scoped_writes.borrow_mut().push(path.to_string());
+                Ok(())
+            })),
+            same_file: Some(Box::new(|source, target| source == target)),
+            automation_same_file: Some(Box::new(|source, target| Ok(photocraft_engine::file_cmds::same_file(source, target)))),
+            ..Default::default()
+        };
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", serde_json::json!({"width": 2, "height": 2})).unwrap();
+        let state = session.active_mut().unwrap();
+        state.source_read_only = true;
+        state.protected_import_source = Some(source.clone());
+        let mut app = crate::PhotocraftApp::new(session, services);
+        for target in [source.clone(), alias] {
+            let result = if automation { app.save_automation(Some(target)) } else { app.save_as(Some(target)) };
+            assert!(result.is_err(), "source and alias must be refused before any writer");
+        }
+        assert!(writes.borrow().is_empty());
+        if automation {
+            app.save_automation(Some(converted.clone())).unwrap();
+        } else {
+            app.save_as(Some(converted.clone())).unwrap();
+        }
+        let state = app.session.active().unwrap();
+        assert!(!state.source_read_only);
+        assert_eq!(state.path.as_deref(), Some(converted.as_str()));
+        assert_eq!(state.protected_import_source.as_deref(), Some(source.as_str()));
+        assert_eq!(*writes.borrow(), [converted]);
+    }
+}
+
+#[test]
+/// Feed a native archive with a missing Smart cache through the automation service and require prepared data before
+/// installation.
+fn automation_service_import_prepares_native_smart_data_before_installing() {
+    use photocraft_doc::{Document, Layer, LayerContent, SmartObject, SmartSource};
+    let source = Document::with_background(
+        "Contents",
+        photocraft_geom::Size::new(1, 1),
+        photocraft_doc::ColorMode::Rgb,
+        photocraft_doc::SampleType::U8,
+        photocraft_doc::Color::rgb(1.0, 0.0, 0.0),
+    );
+    let mut pending = Document::new("Pending", source.size, source.mode, source.depth);
+    pending.layers.push(Layer::new(
+        "Native smart",
+        LayerContent::Smart(SmartObject::new(
+            SmartSource::Embedded { file_name: "contents.pcraft".into(), bytes: Arc::new(photocraft_engine::smart_cmds::encode_source(&source).unwrap()) },
+            photocraft_geom::Affine::IDENTITY,
+            None,
+        )),
+    ));
+    let bytes = photocraft_format::save_to_bytes(&pending, &Default::default()).unwrap();
+    let services = crate::Services {
+        import: Some(Box::new(|name, bytes, opts| photocraft_io::import_with_options(name, bytes, opts).map_err(|e| e.to_string()))),
+        ..Default::default()
+    };
+    let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    app.open_automation_bytes("pending.pcraft", &bytes).unwrap();
+    assert!(app.session.active().unwrap().doc.layers[0].surface().is_some(), "service route must prepare a missing native cache");
+}
+
+#[test]
+/// Invalid optional automation hints preserve admitted pixels/protection and every previous document.
+fn automation_initial_view_failure_keeps_admitted_content_and_previous_documents() {
+    use photocraft_doc::{ColorMode, Document, SampleType, Size};
+    use photocraft_io::{NativeImportTarget, NativeInitialView};
+    for existing in [false, true] {
+        let mut session = photocraft_engine::Session::new();
+        if existing {
+            session.execute("file.new", json!({"width":2,"height":2,"name":"Existing active"})).unwrap();
+            session.execute("file.new", json!({"width":2,"height":2,"name":"Existing other"})).unwrap();
+            session.active_mut().unwrap().source_read_only = true;
+            session.set_active(0);
+        }
+        let documents: Vec<_> = session.documents().iter().map(|state| (state.doc.clone(), state.source_read_only)).collect();
+        let services = crate::Services {
+            import: Some(Box::new(|_, _, _| {
+                let pending = Document::new("Optional pending view", Size::new(2, 2), ColorMode::Rgb, SampleType::U8);
+                let mut imported = crate::test_import_result(pending, Vec::new());
+                imported.source_read_only = true;
+                imported.initial_view = Some(NativeInitialView { target: NativeImportTarget::AlphaChannel(0), ..Default::default() });
+                Ok(imported)
+            })),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(session, services);
+        let warnings = app.open_automation_bytes("optional-view.xcf", b"test source").unwrap();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("target alpha channel is absent"));
+        assert_eq!(app.session.documents().len(), documents.len() + 1);
+        assert_eq!(
+            app.session.documents().iter().take(documents.len()).map(|state| (state.doc.clone(), state.source_read_only)).collect::<Vec<_>>(),
+            documents
+        );
+        assert!(app.session.active().unwrap().source_read_only);
+        assert_eq!(app.session.active().unwrap().doc.name, "Optional pending view");
+    }
+}
+
+#[test]
+/// Keep invalid importer hints from mutating view state while retaining the new protected document.
+fn automation_service_invalid_initial_view_preserves_the_existing_document() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width":2,"height":2})).unwrap();
+    let before = app.session.active().unwrap().doc.clone();
+    app.services.import = Some(Box::new(|_, _, _| {
+        let document =
+            photocraft_doc::Document::new("Invalid", photocraft_geom::Size::new(1, 1), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+        let mut imported = crate::test_import_result(document, Vec::new());
+        imported.source_read_only = true;
+        imported.initial_view = Some(photocraft_io::NativeInitialView { samplers: vec![[f64::NAN, 0.]], ..Default::default() });
+        Ok(imported)
+    }));
+    let warnings = app.open_automation_bytes("invalid-view.xcf", b"original test importer").unwrap();
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(app.session.documents().len(), 2);
+    assert!(Arc::ptr_eq(&app.session.documents()[0].doc, &before));
+    assert_eq!(app.session.active().unwrap().doc.name, "Invalid");
+    assert!(app.session.active().unwrap().source_read_only);
+    assert!(app.session.active().unwrap().color_samplers.is_empty());
+}
+
+#[test]
+/// Sniff original XCF bytes through both service routes and preserve source protection plus lossless native save
+/// suggestions.
+fn service_routes_preserve_decoder_source_policy_for_xcf_bytes() {
+    // A specification-authored v3 XCF: 1x1 RGB canvas, no layers/channels.
+    let mut bytes = b"gimp xcf v003\0".to_vec();
+    for value in [1u32, 1, 0, 0, 0, 0, 0] {
+        bytes.extend_from_slice(&value.to_be_bytes());
+    }
+    for automation in [false, true] {
+        let files = std::sync::Arc::new(craft::host::ScriptedFiles::answering([craft::host::Picked::Cancelled]));
+        let services = crate::Services {
+            files: Some(files.clone()),
+            import: Some(Box::new(|name, bytes, opts| photocraft_io::import_with_options(name, bytes, opts).map_err(|e| e.to_string()))),
+            ..Default::default()
+        };
+        let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        app.session.color.settings.ask_on_missing = false;
+        if automation {
+            app.open_automation_bytes("source.bin", &bytes).unwrap();
+        } else {
+            app.open_bytes("source.bin", &bytes).unwrap();
+        }
+        assert!(app.session.active().unwrap().source_read_only, "successful decoder flags must survive the service route");
+        assert!(app.session.active().unwrap().path.is_none());
+        app.save_as(None).unwrap();
+        app.poll_file_dialog();
+        let requests = files.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].file_name.as_deref(), Some("source.pcraft"));
+        assert!(app.session.active().unwrap().source_read_only, "cancelling Save As keeps the source policy");
+    }
+}
 use egui_kittest::kittest::{NodeT, Queryable};
 use photocraft_engine::jobs::{JobId, Started};
 use serde_json::{Value, json};
@@ -1044,6 +1227,110 @@ fn background_open_warns_about_missing_fonts() {
     assert!(app.ui.notices.last().is_some_and(|n| n.title.contains("poster.psd") && n.lines == want), "{:?}", app.ui.notices);
 }
 
+#[test]
+/// Require a held profile result to prepare native Smart pixels before it becomes a clean installed document.
+fn color_prompt_prepares_native_contents_before_admitting_the_document() {
+    let mut source = photocraft_engine::Session::new();
+    source.execute("file.new", json!({"width": 1, "height": 1, "background": "white"})).unwrap();
+    source.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    let mut doc = (*source.active().unwrap().doc).clone();
+    if let photocraft_doc::LayerContent::Smart(object) = &mut doc.layers[0].content {
+        object.cache = None;
+    }
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    crate::open_prompt::arrive(
+        &mut app,
+        crate::open_prompt::Held {
+            damage_pending: false,
+            doc,
+            initial_view: None,
+            read_only: true,
+            name: "source.xcf".into(),
+            path: None,
+            warnings: Vec::new(),
+            bytes: None,
+            slot: None,
+            order: None,
+            question: Some(json!({"missing": true, "ask": true})),
+            policy_applied: false,
+            smart_object: false,
+            color_settings: None,
+            ignore_exif_profile_tag: None,
+        },
+    );
+    assert!(app.session.documents().is_empty());
+    crate::open_prompt::answer(&mut app, Some("preserve")).unwrap();
+    let state = app.session.active().unwrap();
+    assert!(state.source_read_only);
+    assert!(!state.is_dirty());
+    assert_eq!(state.doc.layers[0].surface().unwrap().read_region(state.doc.bounds()), vec![1.0, 1.0, 1.0, 1.0]);
+}
+
+#[test]
+/// Preserve mask/channel, sampler and path hints through held and automation opens without replaying them on later
+/// frames.
+fn imported_native_view_survives_color_prompt_and_automation_installation_once() {
+    use photocraft_doc::{AlphaChannel, Layer, LayerMask, NamedPath};
+    use photocraft_io::{NativeImportTarget, NativeInitialView};
+    for automation in [false, true] {
+        let mut doc = photocraft_doc::Document::new(
+            "Native import",
+            photocraft_geom::Size::new(8, 6),
+            photocraft_color::ColorMode::Rgb,
+            photocraft_color::SampleType::U8,
+        );
+        let mut first = Layer::raster("Chosen source layer", doc.pixel_format());
+        first.mask = Some(LayerMask::reveal_all());
+        let selected = first.id;
+        doc.layers = vec![first, Layer::raster("Other layer", doc.pixel_format())];
+        doc.channels.push(AlphaChannel::new("Native alpha", photocraft_raster::Surface::new(photocraft_color::PixelFormat::GRAY8)));
+        doc.paths.push(NamedPath { name: "Native path".into(), ..Default::default() });
+        let view = NativeInitialView {
+            selected_layers: vec![selected],
+            active_layer: Some(selected),
+            target: NativeImportTarget::LayerMask,
+            selected_path: Some(0),
+            samplers: vec![[2.5, 3.5]],
+            visible_alpha_channels: vec![0],
+            show_layer_mask: true,
+        };
+        let services = crate::Services {
+            import: Some(Box::new(move |_, _, _| {
+                Ok(photocraft_io::ImportResult {
+                    document: doc.clone(),
+                    warnings: Vec::new(),
+                    source_read_only: true,
+                    preview_only: false,
+                    initial_view: Some(view.clone()),
+                })
+            })),
+            ..Default::default()
+        };
+        let mut session = photocraft_engine::Session::new();
+        session.color.settings.ask_on_missing = true;
+        let mut app = PhotocraftApp::new(session, services);
+        if automation {
+            app.open_automation_bytes("source.xcf", b"test importer").unwrap();
+        } else {
+            app.open_bytes("source.xcf", b"test importer").unwrap();
+            assert!(app.session.documents().is_empty());
+            crate::open_prompt::answer(&mut app, Some("preserve")).unwrap();
+        }
+        let state = app.session.active().unwrap();
+        assert_eq!(state.active_layer, Some(selected));
+        assert_eq!(state.channel_view.target, photocraft_engine::channel_cmds::ChannelTarget::LayerMask);
+        assert!(state.channel_view.alpha_shown(0));
+        assert!(state.channel_view.layer_mask.is_some());
+        assert_eq!(state.color_samplers, vec![[2.5, 3.5]]);
+        assert_eq!(app.ui.selected_path.as_deref(), Some("Native path"));
+        assert!(state.initial_path_selection.is_none());
+        assert!(!state.is_dirty());
+        app.ui.selected_path = None;
+        crate::file_open::apply_initial_path(&mut app);
+        assert!(app.ui.selected_path.is_none(), "path hint must be consumed once");
+    }
+}
+
 fn identity_app() -> Box<PhotocraftApp> {
     let mut session = photocraft_engine::Session::new();
     session.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
@@ -1172,6 +1459,8 @@ fn open_identity_rejects_closed_missing_and_invalid_identities() {
 }
 
 #[test]
+/// Finish multiple imports in one poll and verify stable document identity when an earlier held result shifts tab
+/// indices.
 fn open_identity_keeps_same_poll_results_in_the_profile_queue() {
     let mut app = identity_app();
     let control = IdentityControl::capture(&app);
@@ -1197,6 +1486,349 @@ fn open_identity_keeps_same_poll_results_in_the_profile_queue() {
     control.assert_untouched(&app);
 }
 
+/// Import-owned view state uses ordinary native layers, masks, paths and channels.
+fn native_view_fixture() -> (photocraft_doc::Document, photocraft_io::NativeInitialView) {
+    use photocraft_color::{ColorMode, PixelFormat, SampleType};
+    use photocraft_doc::{AlphaChannel, Document, Layer, LayerMask};
+    use photocraft_geom::Size;
+    let mut doc = Document::new("native view", Size::new(8, 6), ColorMode::Rgb, SampleType::U8);
+    let mut first = Layer::raster("first", PixelFormat::RGBA8);
+    first.mask = Some(LayerMask::reveal_all());
+    let second = Layer::raster("second", PixelFormat::RGBA8);
+    let selected = vec![first.id, second.id];
+    doc.layers.extend([first, second]);
+    doc.channels.push(AlphaChannel::new("overlay", photocraft_raster::Surface::new(PixelFormat::GRAY8)));
+    doc.paths.extend(["first path", "selected path"].map(|name| photocraft_doc::vector::NamedPath { name: name.into(), ..Default::default() }));
+    let view = photocraft_io::NativeInitialView {
+        active_layer: selected.first().copied(),
+        selected_layers: selected,
+        target: photocraft_io::NativeImportTarget::LayerMask,
+        selected_path: Some(1),
+        visible_alpha_channels: vec![0],
+        show_layer_mask: true,
+        samplers: vec![[1., 2.], [6., 4.]],
+    };
+    view.validate(&doc).unwrap();
+    (doc, view)
+}
+
+fn assert_native_view(app: &PhotocraftApp, view: &photocraft_io::NativeInitialView) {
+    let state = app.session.active().unwrap();
+    assert_eq!(state.selected_layers, view.selected_layers);
+    assert_eq!(state.active_layer, view.active_layer);
+    assert_eq!(state.channel_view.target, photocraft_engine::channel_cmds::ChannelTarget::LayerMask);
+    assert!(state.channel_view.alpha_visible[0]);
+    assert!(state.channel_view.layer_mask.is_some());
+    assert_eq!(state.color_samplers, view.samplers);
+    assert!(state.source_read_only);
+    assert_eq!(state.history.past_len(), 0, "view install is not a document edit");
+    assert_eq!(app.ui.selected_path.as_deref(), Some("selected path"));
+    assert!(state.initial_path_selection.is_none(), "the UI consumes the path hint exactly once");
+}
+
+fn native_view_services(doc: photocraft_doc::Document, view: photocraft_io::NativeInitialView) -> crate::Services {
+    crate::Services {
+        import: Some(Box::new(move |_, _, _| {
+            Ok(photocraft_io::ImportResult {
+                document: doc.clone(),
+                warnings: Vec::new(),
+                source_read_only: true,
+                preview_only: false,
+                initial_view: Some(view.clone()),
+            })
+        })),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn foreground_and_automation_import_install_native_view_and_consume_path_once() {
+    for automation in [false, true] {
+        let (doc, view) = native_view_fixture();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), native_view_services(doc, view.clone()));
+        if automation {
+            app.open_automation_bytes("native.xcf", b"fixture").unwrap();
+        } else {
+            app.open_bytes("native.xcf", b"fixture").unwrap();
+        }
+        assert_native_view(&app, &view);
+        app.ui.selected_path = Some("first path".into());
+        app.sync_views();
+        assert_eq!(app.ui.selected_path.as_deref(), Some("first path"), "ordinary sync must not reapply imported path selection");
+    }
+}
+
+fn held_native_view(doc: photocraft_doc::Document, view: Option<photocraft_io::NativeInitialView>) -> crate::open_prompt::Held {
+    crate::open_prompt::Held {
+        doc,
+        initial_view: view,
+        read_only: true,
+        damage_pending: false,
+        name: "held native.xcf".into(),
+        path: None,
+        warnings: Vec::new(),
+        bytes: None,
+        slot: None,
+        order: None,
+        question: Some(json!({"missing":true,"working":"sRGB"})),
+        policy_applied: false,
+        smart_object: false,
+        color_settings: None,
+        ignore_exif_profile_tag: None,
+    }
+}
+
+#[test]
+fn held_profile_import_installs_view_only_after_admission() {
+    let (doc, view) = native_view_fixture();
+    let mut app = identity_app();
+    let control = IdentityControl::capture(&app);
+    crate::open_prompt::arrive(&mut app, held_native_view(doc, Some(view.clone())));
+    assert_eq!(app.session.documents().len(), 1);
+    control.assert_untouched(&app);
+    assert_eq!(app.held_opens.front().unwrap().initial_view.as_ref(), Some(&view));
+    crate::open_prompt::answer(&mut app, Some("preserve")).unwrap();
+    assert_native_view(&app, &view);
+    control.assert_untouched(&app);
+}
+
+#[test]
+fn completed_background_open_keeps_native_view_when_queued_behind_profile_prompt() {
+    let mut app = identity_app();
+    let control = IdentityControl::capture(&app);
+    let (blocker, _) = native_view_fixture();
+    crate::open_prompt::arrive(&mut app, held_native_view(blocker, None));
+    let (mut doc, view) = native_view_fixture();
+    // A name lookup would choose index zero; only the exact retained import index is correct.
+    doc.paths[0].name = doc.paths[1].name.clone();
+    let index = app.session.add_document(doc, None);
+    app.session.active_mut().unwrap().source_read_only = true;
+    app.session.apply_import_initial_view(Some(view.clone())).unwrap();
+    let document = app.session.active().unwrap().doc.id;
+    // A generic completed job can sync views before this open's UI event is handled.
+    app.sync_views();
+    assert!(app.ui.selected_path.is_none(), "duplicate names cannot represent the exact imported index in the UI");
+    assert!(app.session.active().unwrap().initial_path_selection.is_none());
+    super::finish_open(
+        &mut app,
+        "background.xcf",
+        None,
+        &json!({"document":index,"docId":document.0,"warnings":[],"hasInitialView":true,"initialPathSelection":view.selected_path}),
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(app.session.documents().len(), 1);
+    assert_eq!(app.held_opens.back().unwrap().initial_view.as_ref(), Some(&view));
+    assert!(app.ui.selected_path.is_none(), "the restored older document must not show the imported path");
+    assert!(!app.session.tools.mask_targeted, "a queued mask import must not retarget the older composite document's tools");
+    // Confirm through the real handler: it closes the blocking dialog before advancing the queue.
+    let prompt = crate::dialogs::historical_sample_order::tests_support::profile_id(&app);
+    crate::dialogs::confirm(&mut app, &egui::Context::default(), prompt).unwrap();
+    assert_eq!(app.session.active().unwrap().doc.id, document);
+    let state = app.session.active().unwrap();
+    assert_eq!(state.selected_layers, view.selected_layers);
+    assert_eq!(state.active_layer, view.active_layer);
+    assert_eq!(state.channel_view.target, photocraft_engine::channel_cmds::ChannelTarget::LayerMask);
+    assert_eq!(state.color_samplers, view.samplers);
+    assert!(state.initial_path_selection.is_none());
+    assert!(app.ui.selected_path.is_none(), "ambiguous selection is deliberately omitted after admission too");
+    assert!(
+        app.ui
+            .notices
+            .iter()
+            .flat_map(|notice| &notice.lines)
+            .any(|line| line.contains("Imported path selection was not applied") && line.contains("not unique"))
+    );
+    control.assert_untouched(&app);
+}
+
+#[test]
+fn invalid_optional_native_view_keeps_foreground_automation_and_held_pixels_with_warning() {
+    for kind in 0..3 {
+        let (doc, mut view) = native_view_fixture();
+        view.selected_path = Some(usize::MAX);
+        let mut app = identity_app();
+        let control = IdentityControl::capture(&app);
+        let imported_id = doc.id;
+        let default_layer = doc.top_layer();
+        let paths = doc.paths.clone();
+        app.ui.selected_path = Some("control selection".into());
+        app.services = native_view_services(doc.clone(), view.clone());
+        match kind {
+            0 => {
+                app.open_bytes("invalid.xcf", b"fixture").unwrap();
+            }
+            1 => {
+                app.open_automation_bytes("invalid.xcf", b"fixture").unwrap();
+            }
+            _ => {
+                crate::open_prompt::arrive(&mut app, held_native_view(doc, Some(view)));
+                crate::open_prompt::answer(&mut app, Some("preserve")).unwrap();
+            }
+        }
+        assert_eq!(app.session.documents().len(), 2);
+        let state = app.session.active().unwrap();
+        assert_eq!(state.doc.id, imported_id);
+        assert_eq!(state.doc.paths, paths);
+        assert_eq!(state.active_layer, default_layer);
+        assert_eq!(state.selected_layers, default_layer.into_iter().collect::<Vec<_>>());
+        assert_eq!(state.channel_view.target, photocraft_engine::channel_cmds::ChannelTarget::Composite);
+        assert!(state.channel_view.layer_mask.is_none());
+        assert!(state.color_samplers.is_empty());
+        assert!(state.initial_path_selection.is_none());
+        assert!(state.source_read_only);
+        assert!(!app.session.tools.mask_targeted);
+        assert_eq!(state.history.past_len(), 0);
+        let warnings: Vec<_> =
+            app.ui.notices.iter().flat_map(|notice| &notice.lines).filter(|line| line.contains("Native initial view was not applied")).collect();
+        assert_eq!(warnings.len(), 1, "{:?}", app.ui.notices);
+        assert!(warnings[0].contains("selected path is absent"));
+        assert!(app.ui.notices.iter().all(|notice| notice.tone != craft::theme::variant::Tone::Bad));
+        control.assert_untouched(&app);
+        let notices = app.ui.notices.clone();
+        app.sync_views();
+        assert_eq!(app.ui.notices, notices, "discarded hints cannot be reapplied on ordinary view synchronization");
+    }
+}
+
+#[test]
+fn discarded_background_hint_is_not_reconstructed_when_queued_behind_a_profile_prompt() {
+    let mut app = identity_app();
+    let control = IdentityControl::capture(&app);
+    let (blocker, _) = native_view_fixture();
+    crate::open_prompt::arrive(&mut app, held_native_view(blocker, None));
+    let prompt = crate::dialogs::historical_sample_order::tests_support::profile_id(&app);
+    let (doc, mut view) = native_view_fixture();
+    let imported_id = doc.id;
+    view.selected_path = Some(usize::MAX);
+    let (index, (), warning) = app.session.admit_import_with_initial_view(true, Some(view), |session| (session.add_document(doc, None), ())).unwrap();
+    let warning = warning.unwrap();
+    super::finish_open(
+        &mut app,
+        "discarded-view.xcf",
+        None,
+        &json!({"document":index,"docId":imported_id.0,"warnings":[warning],"hasInitialView":false,"initialPathSelection":null}),
+        None,
+        None,
+    )
+    .unwrap();
+    let pending = app.held_opens.back().unwrap();
+    assert!(pending.initial_view.is_none(), "a discarded hint must not be reconstructed from default DocState selections");
+    assert_eq!(pending.warnings.len(), 1);
+    assert_eq!(app.session.documents().len(), 1);
+    crate::dialogs::confirm(&mut app, &egui::Context::default(), prompt).unwrap();
+    assert_eq!(app.session.documents().len(), 3);
+    let admitted = app.session.active().unwrap();
+    assert_eq!(admitted.doc.id, imported_id);
+    assert!(admitted.source_read_only);
+    assert_eq!(admitted.channel_view.target, photocraft_engine::channel_cmds::ChannelTarget::Composite);
+    assert!(admitted.color_samplers.is_empty());
+    assert!(admitted.initial_path_selection.is_none());
+    assert_eq!(app.ui.notices.iter().flat_map(|notice| &notice.lines).filter(|line| line.contains("Native initial view was not applied")).count(), 1);
+    control.assert_untouched(&app);
+    let notices = app.ui.notices.clone();
+    app.sync_views();
+    assert_eq!(app.ui.notices, notices);
+}
+
+#[test]
+fn queued_ordinary_import_without_hint_keeps_large_layer_tree_admissible() {
+    use photocraft_color::{ColorMode, PixelFormat, SampleType};
+    use photocraft_doc::{Document, Layer};
+    use photocraft_geom::Size;
+    let mut app = identity_app();
+    let control = IdentityControl::capture(&app);
+    let (blocker, _) = native_view_fixture();
+    crate::open_prompt::arrive(&mut app, held_native_view(blocker, None));
+    let mut doc = Document::new("large ordinary PSD", Size::new(8, 6), ColorMode::Rgb, SampleType::U8);
+    doc.layers = (0..8193).map(|i| Layer::raster(format!("layer {i}"), PixelFormat::RGBA8)).collect();
+    // Ordinary imports do not carry NativeInitialView's deliberately tighter layer budget.
+    assert!(photocraft_io::NativeInitialView::default().validate(&doc).is_err());
+    let index = app.session.add_document(doc, None);
+    let id = app.session.active().unwrap().doc.id;
+    super::finish_open(&mut app, "large.psd", None, &json!({"document":index,"docId":id.0,"warnings":[],"hasInitialView":false}), None, None).unwrap();
+    assert!(app.held_opens.back().unwrap().initial_view.is_none());
+    assert_eq!(app.session.documents().len(), 1);
+    // The UI removes the answered dialog, allowing the no-question import behind it to open.
+    let prompt = crate::dialogs::historical_sample_order::tests_support::profile_id(&app);
+    crate::dialogs::confirm(&mut app, &egui::Context::default(), prompt).unwrap();
+    assert_eq!(app.session.active().unwrap().doc.id, id);
+    assert_eq!(app.session.active().unwrap().doc.layers.len(), 8193);
+    assert!(app.held_opens.is_empty(), "the no-hint import must finish normally");
+    control.assert_untouched(&app);
+}
+
+#[test]
+fn unsupported_native_path_names_warn_once_without_selecting_or_renaming_paths() {
+    for kind in ["duplicate", "work", "layer"] {
+        let (mut doc, view) = native_view_fixture();
+        if kind == "duplicate" {
+            doc.paths[1].name = "untrusted name".repeat(40_000);
+            doc.paths[0].name = doc.paths[1].name.clone();
+        } else {
+            doc.paths[1].name = kind.into();
+            // Selecting "work" would otherwise target this unrelated path instead of the saved one.
+            doc.work_path = Some(Default::default());
+        }
+        let paths = doc.paths.clone();
+        let work_path = doc.work_path.clone();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), native_view_services(doc, view));
+        app.open_bytes("unsupported-view.xcf", b"fixture").unwrap();
+        let state = app.session.active().unwrap();
+        assert!(state.initial_path_selection.is_none());
+        assert!(app.ui.selected_path.is_none(), "{kind} must not select a different target");
+        assert_eq!(state.doc.paths, paths);
+        assert_eq!(state.doc.work_path, work_path);
+        assert_eq!(state.history.past_len(), 0);
+        let warnings: Vec<_> =
+            app.ui.notices.iter().flat_map(|notice| &notice.lines).filter(|line| line.contains("Imported path selection was not applied")).collect();
+        assert_eq!(warnings.len(), 1, "{kind}: {:?}", app.ui.notices);
+        assert!(warnings[0].contains(if kind == "duplicate" { "not unique" } else { "reserved" }));
+        assert!(warnings[0].contains("unchanged"));
+        assert!(warnings[0].len() < 256, "source names must not amplify view diagnostics");
+        let before = state.doc.clone();
+        let notices = app.ui.notices.clone();
+        app.sync_views();
+        assert!(Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+        assert_eq!(app.ui.notices, notices, "the consumed hint must not warn again");
+    }
+}
+
+#[test]
+fn completed_placement_notices_survive_tab_changes_and_frame_results_without_changing_silent_success() {
+    for frame in [false, true] {
+        for warnings in [vec!["An embedded image was omitted"], Vec::new()] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.session.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+            let target = app.session.active().unwrap().doc.id;
+            app.session.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+            let active = app.session.active().unwrap().doc.clone();
+            let mut result = json!({"warnings": warnings});
+            if frame {
+                result["frame"] = json!(7);
+            }
+            super::finish_place(
+                &mut app,
+                &egui::Context::default(),
+                super::PlaceJob { job: JobId(42), name: "Artwork.svg".into(), doc: target },
+                photocraft_engine::jobs::JobOutcome::Done(result),
+            );
+            assert!(Arc::ptr_eq(&app.session.active().unwrap().doc, &active));
+            assert!(app.ui.transform.is_none());
+            if warnings.is_empty() {
+                assert!(app.ui.notices.is_empty());
+            } else {
+                assert_eq!(app.ui.notices.len(), 1);
+                assert!(app.ui.notices[0].title.contains("Artwork.svg"));
+                assert_eq!(app.ui.notices[0].lines, warnings);
+                assert_ne!(app.ui.notices[0].tone, craft::theme::variant::Tone::Bad);
+                assert!(app.ui.status.contains("omitted"));
+            }
+        }
+    }
+}
+
 #[test]
 fn asynchronous_place_completion_displays_result_warnings() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -1207,4 +1839,27 @@ fn asynchronous_place_completion_displays_result_warnings() {
     // A frame placement bypasses transform startup but must still display its warnings.
     super::finish_place(&mut app, &egui::Context::default(), place, photocraft_engine::jobs::JobOutcome::Done(json!({"frame":1,"warnings":[warning]})));
     assert!(app.ui.notices.iter().any(|notice| notice.lines.iter().any(|line| line == warning)));
+}
+
+#[test]
+/// A real worker-held profile prompt keeps its advertised working space across later live settings changes.
+fn held_worker_profile_answers_use_captured_working_space() {
+    for (profile, action) in [(None, "assignWorking"), (Some(craft::cms::Builtin::Srgb), "convert")] {
+        let mut app = identity_app();
+        app.session.execute("edit.colorSettings", json!({"workingRgb":"display-p3","askOnMissing":true,"askOnMismatch":true})).unwrap();
+        let result = completed_identity_open(&mut app, "captured.png", identity_png(profile));
+        assert!(result["held"].as_u64().is_some());
+        let advertised = result["color"]["working"].clone();
+        app.session.execute("edit.colorSettings", json!({"workingRgb":"adobe-rgb-compat"})).unwrap();
+        super::finish_open(&mut app, "captured.png", None, &result, None, None).unwrap();
+        let pending = app.held_opens.front().unwrap();
+        assert_eq!(pending.question.as_ref().unwrap()["working"], advertised);
+        assert_eq!(pending.color_settings.as_ref().unwrap().working_rgb, "display-p3");
+        crate::open_prompt::answer(&mut app, Some(action)).unwrap();
+        assert_eq!(
+            app.session.active().unwrap().doc.icc_profile.as_ref().map(|profile| profile.as_slice()),
+            Some(craft::cms::Builtin::DisplayP3.profile().to_bytes().as_slice())
+        );
+        assert_eq!(app.session.color.settings.working_rgb, "adobe-rgb-compat", "answering must not reset live settings");
+    }
 }

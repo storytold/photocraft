@@ -49,16 +49,23 @@ pub use info::{CAMERA_FIELDS, camera_data, copyright_marked, read_file_info, wri
 #[cfg(test)]
 use info::{exposure_text, find_element};
 pub(crate) use open::{BatchOpen, batch_open_notice, batch_open_params, remember_batch_open};
-pub use open::{PLACE_EMBEDDED, open_bytes_as, open_bytes_as_with_options, place_bytes, raw_defaults};
-pub(crate) use open::{PlaceInput, apply_place, import, import_with_options, tag_exr_colorspace};
+pub use open::{
+    PLACE_EMBEDDED, fresh_import_options, historical_xcf_sample_order, import_options_from_params, open_bytes_as, open_bytes_as_with_import_options,
+    open_bytes_as_with_options, open_bytes_as_with_sample_order, place_bytes, raw_defaults,
+};
+pub(crate) use open::{
+    PlaceInput, apply_place, import, import_with_options, raw_open_resolution, raw_resolution, tag_exr_colorspace, tag_exr_colorspace_with_policy,
+};
 use open::{approve_memory, close_all, close_others, open_as, place, revert};
 pub use open_as_smart_object::admit_as_smart_object;
 use open_as_smart_object::open_as_smart_object;
 use paths::is_file;
 pub(crate) use paths::openable_name;
+#[cfg(not(target_arch = "wasm32"))]
+pub use paths::same_open_files;
 pub use paths::{
-    extension, holds, holds_at, is_template, layered_extension, list_images, losses_at, portable_device_name, same_destination, same_file, saves_in_place,
-    template_name, untitled_name,
+    check_import_destination, extension, holds, holds_at, is_template, layered_extension, list_images, losses_at, portable_device_name, same_destination,
+    same_file, saves_in_place, template_name, untitled_name,
 };
 pub(crate) use paths::{file_name, forward_slashes, is_windows_device_name, join, read_file, read_file_limited, sanitize, stem, write_file};
 pub(crate) use place_steps::PlaceSteps;
@@ -133,6 +140,7 @@ impl crate::DocState {
             Arc::make_mut(&mut self.doc).file_encoding.source_images = None;
         }
         self.path = Some(path);
+        self.source_read_only = false;
         self.saved_revision = self.revision;
     }
 }
@@ -266,6 +274,16 @@ pub fn specs() -> Vec<CommandSpec> {
         };
     }
     vec![
+        CommandSpec {
+            id: "file.open",
+            label: "Open…",
+            menu: &["File"],
+            shortcut: Some("Cmd+O"),
+            params: r#"{"path":string?,"historicalXcfSampleOrder":"little-endian"|"big-endian"?,"heldHistoricalXcfOpen":uint?,"cancel":bool=false,"interactive":bool=false,"approveHighMemory":bool=false}"#,
+            enabled: |_| Ok(()),
+            journal: false,
+            run: crate::jobs::open_command,
+        },
         spec!("file.closeAll", "Close All", &["File"], Some("Cmd+Alt+W"), "{}", has_doc, |s, _| close_all(s)),
         spec!(
             "file.closeOthers",
@@ -308,7 +326,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Open As…",
             &["File"],
             Some("Cmd+Alt+Shift+O"),
-            r##"{"path":str,"as":"psd|png|jpg|tiff|…"? (decode as this format),"approveHighMemory":bool=false (explicitly approve high memory usage)}"##,
+            r##"{"path":str,"as":"psd|png|jpg|tiff|…"? (decode as this format),"approveHighMemory":bool=false (explicitly approve high memory usage),"historicalXcfSampleOrder":"little-endian|big-endian"? (required for unmarked multibyte XCF7–11; never inferred)}"##,
             native,
             open_as
         ),
@@ -317,7 +335,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Open as Smart Object…",
             &["File"],
             None,
-            r##"{"path":str,"confirmDamage":bool=false (a damaged PSD waits for an answer, as File > Open's does)} (opens the file as a new untitled document named "<file name without its last extension>-N" with the file's size, resolution, colour mode, bit depth and profile, holding one embedded smart object layer named after the file) → {document, docId, name, layer, warnings, color, smartObject} (or {held, name, warnings, color, damaged, smartObject} while a prompt waits)"##,
+            r##"{"path":str,"confirmDamage":bool=false (a damaged PSD waits for an answer, as File > Open's does),"approveHighMemory":bool=false,"historicalXcfSampleOrder":"little-endian|big-endian"? (required for unmarked multibyte XCF7–11; never inferred)} (opens the file as a new untitled document named "<file name without its last extension>-N" with the file's size, resolution, colour mode, bit depth and profile, holding one embedded smart object layer named after the file) → {document, docId, name, layer, warnings, color, smartObject} (or {held, name, warnings, color, damaged, smartObject} while a prompt waits)"##,
             native,
             open_as_smart_object
         ),
@@ -340,7 +358,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Place Embedded…",
             &["File"],
             None,
-            r##"{"path":str,"scale":%? (default: fit when larger than the canvas),"fit":bool? (default: Preferences > General > Resize Image During Place),"smartObject":bool? (default: Preferences > General > Always Create Smart Objects When Placing),"center":[x,y]?,"approveHighMemory":bool=false (explicitly approve high memory usage),"frame":id|false? (default: selected frame)}"##,
+            r##"{"path":str,"scale":%? (default: fit when larger than the canvas),"fit":bool? (default: Preferences > General > Resize Image During Place),"smartObject":bool? (default: Preferences > General > Always Create Smart Objects When Placing),"center":[x,y]?,"approveHighMemory":bool=false (explicitly approve high memory usage),"historicalXcfSampleOrder":"little-endian|big-endian"? (required for unmarked multibyte XCF7–11; never inferred),"frame":id|false? (default: selected frame)}"##,
             native_doc,
             |s, p| place(s, p, false)
         ),
@@ -349,7 +367,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Place Linked…",
             &["File"],
             None,
-            r##"{"path":str,"scale":%?,"fit":bool? (default: Preferences > General > Resize Image During Place),"center":[x,y]?,"approveHighMemory":bool=false (explicitly approve high memory usage),"frame":id|false? (default: selected frame)}"##,
+            r##"{"path":str,"scale":%?,"fit":bool? (default: Preferences > General > Resize Image During Place),"center":[x,y]?,"approveHighMemory":bool=false (explicitly approve high memory usage),"historicalXcfSampleOrder":"little-endian|big-endian"? (required for unmarked multibyte XCF7–11; never inferred),"frame":id|false? (default: selected frame)}"##,
             native_doc,
             |s, p| place(s, p, true)
         ),
@@ -468,6 +486,10 @@ mod place_job_tests;
 #[cfg(test)]
 #[path = "file_cmds/open_as_smart_object_tests.rs"]
 mod open_as_smart_object_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "file_cmds/historical_place_tests.rs"]
+mod historical_place_tests;
 
 #[cfg(test)]
 #[path = "file_cmds/open_as_error_name_tests.rs"]

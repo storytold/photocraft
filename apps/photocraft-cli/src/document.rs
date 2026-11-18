@@ -38,6 +38,8 @@ fn parse_pdf_pages(s: &str) -> Result<(u32, u32)> {
     Ok((a.min(b), a.max(b)))
 }
 
+/// Prepare imported native contents before direct export, preserving import-only source identity and forwarding
+/// warnings.
 pub(crate) fn convert(a: &ConvertArgs, _out: &mut dyn Write, err: &mut dyn Write) -> Result {
     let (input, output) = (&a.input, &a.output);
     let opts = ExportOptions::from(&a.export);
@@ -47,11 +49,17 @@ pub(crate) fn convert(a: &ConvertArgs, _out: &mut dyn Write, err: &mut dyn Write
         pdf_dpi: a.pdf_dpi.unwrap_or(300.0),
         pdf_pages: a.pdf_pages.as_deref().map(parse_pdf_pages).transpose()?,
         pdf_editable: a.pdf_editable,
+        historical_xcf_sample_order: a.import.historical_xcf_sample_order,
         ..Default::default()
     };
     let mut o = files::open_with_options(input, &import_opts)?;
+    if o.source_read_only && photocraft_engine::file_cmds::same_file(input, output) {
+        return Err(CliError::ImportOnlySource);
+    }
     // Preferences › Raw Defaults › Resolution at its default, as `run` and `info` open a raw.
-    photocraft_engine::file_cmds::raw_defaults(&photocraft_engine::Session::new(), &o.warnings, &mut o.document);
+    let session = photocraft_engine::Session::new();
+    photocraft_engine::file_cmds::raw_defaults(&session, &o.warnings, &mut o.document);
+    session.prepare_imported_document(&mut o.document, &photocraft_engine::jobs::JobCtx::new())?;
     let mut seen_warnings = std::collections::HashSet::<String>::new();
     warn_dedup(err, &o.warnings, &mut seen_warnings);
     warn_dedup(err, &missing_font_warnings(&o.document), &mut seen_warnings);
@@ -71,10 +79,17 @@ pub(crate) fn convert(a: &ConvertArgs, _out: &mut dyn Write, err: &mut dyn Write
     Ok(())
 }
 
+/// Inspect a normally opened document with import warnings while omitting session-only history noise from CLI
+/// output.
 pub(crate) fn info(a: &InfoArgs, out: &mut dyn Write) -> Result {
     let file = &a.file;
     let mut h = Headless::trusted_local();
-    let opened = h.open_with_approval(file, a.approve_high_memory)?;
+    let import_opts = photocraft_io::ImportOptions {
+        psd_high_memory_approved: a.approve_high_memory,
+        historical_xcf_sample_order: a.import.historical_xcf_sample_order,
+        ..Default::default()
+    };
+    let opened = h.open_with_options(file, &import_opts)?;
     let mut doc = match (a.detail, h.session.active()) {
         (true, Some(st)) => photocraft_engine::inspect::document_detail(st),
         _ => h.inspect(None)?,
@@ -109,6 +124,8 @@ fn command_list(a: &RunArgs) -> Result<Vec<(String, Value)>> {
 /// Reported once by `run --gpu` when a step is `file.export.quickExport`.
 const QUICK_EXPORT_CPU_NOTE: &str = "file.export.quickExport runs on the CPU compositor; --gpu applies to --out and the export commands that take a renderer";
 
+/// Open or create a native document, execute requested commands and export under source protection with
+/// deduplicated warnings.
 pub(crate) fn run_cmds(a: &RunArgs, out: &mut dyn Write, err: &mut dyn Write) -> Result {
     let opts = ExportOptions::from(&a.export);
     let mut h = Headless::trusted_local();
@@ -125,7 +142,12 @@ pub(crate) fn run_cmds(a: &RunArgs, out: &mut dyn Write, err: &mut dyn Write) ->
         if let Some(out) = &a.out {
             refuse_overwriting_input(a.in_place, file, out)?;
         }
-        let o = h.open_with_approval(file, a.approve_high_memory)?;
+        let import_opts = photocraft_io::ImportOptions {
+            psd_high_memory_approved: a.approve_high_memory,
+            historical_xcf_sample_order: a.import.historical_xcf_sample_order,
+            ..Default::default()
+        };
+        let o = h.open_with_options(file, &import_opts)?;
         let ws: Vec<String> = serde_json::from_value(o["warnings"].clone()).unwrap_or_default();
         warn_all(err, &ws);
         reported_fonts.extend(ws);
@@ -286,6 +308,41 @@ mod missing_font_warning_tests {
         let Invoke { code, stderr, .. } = invoke(&["convert", &native_str, &png_str]);
         assert_eq!(code, 0, "{stderr}");
         assert!(!stderr.contains("font '"), "{stderr}");
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+}
+
+#[cfg(test)]
+mod historical_order_tests {
+    use crate::test_support::invoke;
+
+    #[test]
+    fn historical_order_flag_reaches_info_run_and_convert_without_guessing() {
+        let folder = std::env::temp_dir().join(format!("photocraft-cli-historical-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let input = folder.join("source.xcf");
+        let mut bytes = b"gimp xcf v007\0".to_vec();
+        for value in [1u32, 1, 0, 250, 0, 0, 0, 0] {
+            bytes.extend_from_slice(&value.to_be_bytes());
+        }
+        std::fs::write(&input, bytes).unwrap();
+        let input = input.to_str().unwrap();
+        assert_ne!(invoke(&["info", input]).code, 0);
+        for order in ["little-endian", "big-endian"] {
+            let output = folder.join(format!("{order}.pcraft"));
+            let output = output.to_str().unwrap();
+            for args in [
+                vec!["info", input, "--historical-xcf-sample-order", order],
+                vec!["run", input, "--historical-xcf-sample-order", order, "--out", output],
+                vec!["convert", input, output, "--historical-xcf-sample-order", order],
+            ] {
+                let result = invoke(&args);
+                assert_eq!(result.code, 0, "{args:?}: {}", result.stderr);
+            }
+        }
+        let invalid = invoke(&["info", input, "--historical-xcf-sample-order", "native"]);
+        assert_eq!(invalid.code, 2);
+        assert!(invalid.stderr.contains("expected little-endian or big-endian"), "{}", invalid.stderr);
         let _ = std::fs::remove_dir_all(&folder);
     }
 }

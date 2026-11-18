@@ -115,7 +115,12 @@ fn str_of<'a>(p: &'a Value, k: &str) -> Option<&'a str> {
 impl Headless {
     /// Dispatch one request. Unknown methods and bad params are errors, never panics.
     pub fn handle(&mut self, method: &str, params: Value) -> Result<Value, AutomationError> {
-        self.sync_jobs();
+        // A cancellation must discard even a completed worker result that has not been
+        // installed yet. Other requests first observe their completed background work.
+        let cancelling = method == "jobs.cancel" || (method == "engine.execute" && params.get("command").and_then(Value::as_str) == Some("jobs.cancel"));
+        if !cancelling {
+            self.sync_jobs();
+        }
         let p = if params.is_null() { json!({}) } else { params };
         match method {
             "engine.execute" => {
@@ -141,12 +146,7 @@ impl Headless {
             "session.list" => Ok(self.session_list()),
             "doc.open" => {
                 let path = str_of(&p, "path").ok_or_else(|| bad("doc.open needs `path`"))?;
-                let approve = match p.get("approveHighMemory") {
-                    None | Some(Value::Null) => false,
-                    Some(Value::Bool(b)) => *b,
-                    Some(_) => return Err(bad("`approveHighMemory` must be a boolean")),
-                };
-                self.open_with_approval(&PathBuf::from(path), approve)
+                self.open_with_parameters(&PathBuf::from(path), &p)
             }
             "doc.place" => {
                 let path = str_of(&p, "path").ok_or_else(|| bad("doc.place needs `path`"))?;
@@ -229,12 +229,13 @@ impl Headless {
                         value.as_u64().and_then(|value| u32::try_from(value).ok()).ok_or_else(|| bad("maxSide must be an unsigned 32-bit integer"))?
                     }
                 };
-                let png = self.render_png(index_of(&p)?, max)?;
+                let index = index_of(&p)?;
+                let png = self.render_png(index, max)?;
                 // A GPU to CPU fallback is reported with this reply, not on the next save.
                 let warnings = self.drain_diagnostics();
                 let mut reply = match str_of(&p, "path") {
                     Some(path) => {
-                        self.write_render(&PathBuf::from(path), &png)?;
+                        self.write_render_for(index, &PathBuf::from(path), &png)?;
                         json!({"path": path, "bytes": png.len()})
                     }
                     None => json!({

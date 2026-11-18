@@ -99,5 +99,5 @@ pub(crate) fn import<R: Read + Seek>(source: R, ctl: &Interrupt<'_>) -> Result<O
         Some(if mode == ColorMode::Rgb { craft_cms::Builtin::LinearSrgb.profile().to_bytes() } else { craft_cms::builtin::linear_gray().to_bytes() });
     let warnings = if info.all_half { vec!["16-bit float samples are stored as 32-bit float".into()] } else { Vec::new() };
     ctl.progress(1.0);
-    Ok(Some(ImportResult { document, warnings, source_read_only: false, preview_only: false }))
+    Ok(Some(ImportResult { document, warnings, source_read_only: false, preview_only: false, initial_view: None }))
 }

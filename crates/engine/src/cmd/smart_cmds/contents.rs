@@ -1,10 +1,10 @@
 use super::filters::{smart, smart_mut};
 use super::placing::detach_psd;
-use super::rendering::{refresh, refresh_or_fail, unapplied_filters};
-use super::source::{authorized_source_bytes, source_bytes};
+use super::rendering::{refresh, refresh_or_fail, refresh_or_fail_in, unapplied_filters};
+use super::source::{authorized_source_bytes, decode_source_in_with_order, source_bytes};
 use super::{
-    Arc, DocId, Document, EngineError, LayerContent, LayerId, Metadata, Result, Session, SmartContentsId, SmartLink, SmartSource, Value, bad, base_name,
-    decode_source, encode_source, json, layer_param, other,
+    Arc, DocId, Document, EngineError, JobCtx, LayerContent, LayerId, Metadata, Result, Session, SmartContentsId, SmartLink, SmartSource, Value, bad,
+    base_name, decode_source_with_order, encode_source, json, layer_param, other,
 };
 
 pub(super) fn path_param<'a>(cmd: &str, p: &'a Value) -> Result<&'a str> {
@@ -17,62 +17,79 @@ fn instances(doc: &Document, contents_id: SmartContentsId) -> Vec<LayerId> {
 }
 
 /// Swaps shared contents, keeping each instance's transform and filters, and re-renders.
+/// Only Relink supplies an override: `None` preserves the interpretation; `Some(None)`
+/// explicitly clears it. Storage conversions must not reinterpret unchanged source bytes.
 pub(super) fn set_source(
     s: &mut Session,
     p: &Value,
     label: &str,
     keep_psd: bool,
+    order_override: Option<Option<photocraft_doc::HistoricalXcfSampleOrder>>,
     make: impl FnOnce(&Metadata, &SmartSource) -> Result<SmartSource>,
 ) -> Result<Value> {
     let id = layer_param(s, p)?;
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
-    let new = make(&doc.metadata, &smart(doc, id)?.source)?;
-    set_shared_source(s, id, label, keep_psd, new)
+    let old = smart(doc, id)?;
+    let order = order_override.unwrap_or(old.historical_xcf_sample_order);
+    let new = make(&doc.metadata, &old.source)?;
+    set_shared_source(s, id, label, keep_psd, new, order)
 }
 
 // Keep the shared-instance transaction out of the per-command source-builder instantiations.
-fn set_shared_source(s: &mut Session, id: LayerId, label: &str, keep_psd: bool, new: SmartSource) -> Result<Value> {
-    let (parent, contents_id, changed, warnings) = s.edit(label, |doc, _| {
-        let contents_id = smart(doc, id)?.contents_id;
-        let changed = instances(doc, contents_id);
-        let mut warnings = std::collections::BTreeSet::new();
-        for &instance in &changed {
-            smart_mut(doc, instance)?.source = new.clone();
-            if !keep_psd {
-                detach_psd(doc.layer_mut(instance).ok_or(EngineError::NoLayer(instance))?);
-            }
-            warnings
-                .extend(unapplied_filters(smart(doc, instance)?).into_iter().map(|n| format!("the {n} smart filter is not supported, so it was not applied")));
-            refresh_or_fail(doc, instance)?;
-        }
-        Ok((doc.id, contents_id, changed, warnings))
-    })?;
-    // An old editor must not overwrite newly replaced/relinked contents on close. Keep its
-    // document open, but the next Edit Contents opens the replacement source.
-    s.smart_links.retain(|l| l.parent != parent || l.contents_id != contents_id);
-    // Every instance changed, not only `layer`: list them, so a caller doesn't repeat the
-    // command once per copy (#4075).
-    Ok(json!({"layer": id.0, "instances": changed.iter().map(|l| l.0).collect::<Vec<_>>(), "warnings": warnings}))
+fn set_shared_source(
+    s: &mut Session,
+    id: LayerId,
+    label: &str,
+    keep_psd: bool,
+    new: SmartSource,
+    historical_xcf_sample_order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
+) -> Result<Value> {
+    set_shared_source_in(s, id, label, keep_psd, new, historical_xcf_sample_order, &JobCtx::new())
 }
 
 pub(super) fn replace_contents(s: &mut Session, p: &Value) -> Result<Value> {
+    let order = crate::file_cmds::historical_xcf_sample_order(p, "layer.smartObjects.replaceContents")?;
     let path = path_param("layer.smartObjects.replaceContents", p)?.to_string();
     let bytes = photocraft_format::read_file(std::path::Path::new(&path)).map_err(|e| other(format!("can't read {path}: {e}")))?;
     let id = layer_param(s, p)?;
-    replace_contents_bytes(s, id, &base_name(&path), bytes)
+    replace_contents_bytes_with_order(s, id, &base_name(&path), bytes, order)
 }
 
 /// Replace Contents with a file the caller already read, for the smart object `p` names (`layer`,
 /// else the active layer): the body of the command minus its ambient path read (#8061).
 pub fn replace_contents_from_bytes(s: &mut Session, p: &Value, file_name: &str, bytes: Vec<u8>) -> Result<Value> {
+    let order = crate::file_cmds::historical_xcf_sample_order(p, "layer.smartObjects.replaceContents")?;
     let id = layer_param(s, p)?;
-    replace_contents_bytes(s, id, file_name, bytes)
+    replace_contents_bytes_with_order(s, id, file_name, bytes, order)
 }
 
 /// Replace Contents from a file's name and bytes: what the desktop and web file pickers hand over.
 pub fn replace_contents_bytes(s: &mut Session, id: LayerId, file_name: &str, bytes: Vec<u8>) -> Result<Value> {
-    decode_source(file_name, &bytes)?; // fail before touching the document
-    set_shared_source(s, id, "Replace Contents", false, SmartSource::Embedded { file_name: file_name.to_string(), bytes: Arc::new(bytes) })
+    replace_contents_bytes_with_order(s, id, file_name, bytes, None)
+}
+
+fn replace_contents_bytes_with_order(
+    s: &mut Session,
+    id: LayerId,
+    file_name: &str,
+    bytes: Vec<u8>,
+    order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
+) -> Result<Value> {
+    let file_name = file_name.to_string();
+    let decode_name = file_name.clone();
+    let bytes = Arc::new(bytes);
+    let decode_bytes = bytes.clone();
+    crate::jobs::run(
+        s,
+        "Replace Contents",
+        true,
+        move |ctx| {
+            decode_source_in_with_order(&decode_name, &decode_bytes, order, ctx)?;
+            ctx.check()?;
+            Ok(ctx.clone())
+        },
+        move |s, ctx| set_shared_source_in(s, id, "Replace Contents", false, SmartSource::Embedded { file_name, bytes }, order, &ctx),
+    )
 }
 
 /// The file name and bytes of smart object `id`'s contents.
@@ -85,6 +102,7 @@ pub fn contents_of(doc: &Document, id: LayerId) -> Result<(String, Arc<Vec<u8>>)
 pub(super) fn export_contents(s: &mut Session, p: &Value) -> Result<Value> {
     let path = path_param("layer.smartObjects.exportContents", p)?;
     let id = layer_param(s, p)?;
+    crate::file_cmds::check_import_destination(s.active().ok_or(EngineError::NoDocument)?, path)?;
     let (name, bytes) = contents_of(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?;
     let ext = |f: &str| {
         let e = std::path::Path::new(f).extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
@@ -98,7 +116,8 @@ pub(super) fn export_contents(s: &mut Session, p: &Value) -> Result<Value> {
         crate::file_cmds::write_file(path, &bytes)?;
         return Ok(json!({"path": path, "fileName": name, "bytes": bytes.len(), "converted": false}));
     }
-    let contents = decode_source(&name, &bytes)?;
+    let order = smart(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?.historical_xcf_sample_order;
+    let contents = decode_source_with_order(&name, &bytes, order)?;
     let r = photocraft_io::export(&contents, path, &photocraft_io::ExportOptions { read_linked_files: s.authorize.is_none(), ..Default::default() })
         .map_err(|e| other(format!("can't export the contents as {}: {e}", base_name(path))))?;
     crate::file_cmds::write_file(path, &r.bytes)?;
@@ -117,10 +136,11 @@ pub(super) fn edit_contents(s: &mut Session, p: &Value) -> Result<Value> {
         s.set_active(index);
         return Ok(json!({"document": index, "parentLayer": id.0}));
     }
-    let source = &smart(&st.doc, id)?.source;
+    let sm = smart(&st.doc, id)?;
+    let source = &sm.source;
     let (name, bytes) = authorized_source_bytes(s, "layer.smartObjects.editContents", &st.doc.metadata, source)?
         .ok_or_else(|| other("the smart object's contents are unavailable"))?;
-    let mut child = decode_source(&name, &bytes)?;
+    let mut child = decode_source_with_order(&name, &bytes, sm.historical_xcf_sample_order)?;
     // Bundles keep their document id; each open copy needs its own.
     child.id = DocId::fresh();
     child.name = name;
@@ -156,6 +176,7 @@ pub fn commit_child(s: &mut Session, index: usize) -> Result<bool> {
             };
             let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
             sm.source = SmartSource::Embedded { file_name: format!("{stem}.pcraft"), bytes: bytes.clone() };
+            sm.historical_xcf_sample_order = None;
             detach_psd(doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?);
             refresh_or_fail(doc, id)?;
         }
@@ -210,4 +231,44 @@ pub(super) fn update_all(s: &mut Session) -> Result<Value> {
         Ok(())
     })?;
     Ok(json!({"updated": updated}))
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "contents/historical_order_tests.rs"]
+mod historical_order_tests;
+/// Keep all shared-instance refreshes and the final publication under the replacing job's cancellation context.
+fn set_shared_source_in(
+    s: &mut Session,
+    id: LayerId,
+    label: &str,
+    keep_psd: bool,
+    new: SmartSource,
+    historical_xcf_sample_order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
+    ctx: &JobCtx,
+) -> Result<Value> {
+    ctx.check()?;
+    let (parent, contents_id, changed, warnings) = s.edit(label, |doc, _| {
+        let contents_id = smart(doc, id)?.contents_id;
+        let changed = instances(doc, contents_id);
+        let mut warnings = std::collections::BTreeSet::new();
+        for &instance in &changed {
+            let object = smart_mut(doc, instance)?;
+            object.source = new.clone();
+            object.historical_xcf_sample_order = historical_xcf_sample_order;
+            if !keep_psd {
+                detach_psd(doc.layer_mut(instance).ok_or(EngineError::NoLayer(instance))?);
+            }
+            warnings
+                .extend(unapplied_filters(smart(doc, instance)?).into_iter().map(|n| format!("the {n} smart filter is not supported, so it was not applied")));
+            refresh_or_fail_in(doc, instance, ctx)?;
+        }
+        ctx.check()?;
+        Ok((doc.id, contents_id, changed, warnings))
+    })?;
+    // An old editor must not overwrite newly replaced/relinked contents on close. Keep its
+    // document open, but the next Edit Contents opens the replacement source.
+    s.smart_links.retain(|l| l.parent != parent || l.contents_id != contents_id);
+    // Every instance changed, not only `layer`: list them, so a caller doesn't repeat the
+    // command once per copy (#4075).
+    Ok(json!({"layer": id.0, "instances": changed.iter().map(|l| l.0).collect::<Vec<_>>(), "warnings": warnings}))
 }

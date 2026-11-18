@@ -11,6 +11,34 @@ use craft::ui::runtime::windows::{WindowAction, WindowHost};
 use photocraft_doc::DocId;
 use photocraft_engine::file_cmds::{is_template, untitled_name};
 
+/// Consume the native import's one-time path selection after installing its view.
+/// The Paths UI addresses saved paths by name, so duplicates and its reserved targets
+/// cannot represent an exact imported index without selecting or editing a different path.
+pub(crate) fn apply_initial_path(app: &mut PhotocraftApp) {
+    let selected = app.session.active_mut().and_then(|st| {
+        let index = st.initial_path_selection.take()?;
+        let path = st.doc.paths.get(index)?;
+        let reason = if matches!(path.name.as_str(), "work" | "layer") {
+            Some("the saved path name is reserved by the Paths UI")
+        } else if st.doc.paths.iter().filter(|other| other.name == path.name).take(2).count() != 1 {
+            Some("the saved path name is not unique")
+        } else {
+            None
+        };
+        Some((st.doc.name.clone(), reason.is_none().then(|| path.name.clone()), reason))
+    });
+    let Some((document, name, reason)) = selected else { return };
+    if let Some(reason) = reason {
+        app.ui.selected_path = None;
+        // Names are source-controlled and can be large; diagnostics need no owned name copy.
+        let warning = format!("Imported path selection was not applied: {reason}. The saved path and its geometry are unchanged.");
+        let opened = crate::i18n::fmt(tl!("Opened {name}"), &[("name", document.as_str())]);
+        notices::io_warnings(app, &opened, &[warning]);
+    } else if let Some(name) = name {
+        app.ui.selected_path = Some(name);
+    }
+}
+
 /// A request from the operating system, delivered by the platform shell through
 /// [`Services::os_events`](crate::Services::os_events).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -230,6 +258,11 @@ impl PhotocraftApp {
     /// Record that the active document was just opened from `path`: File › Save writes back to it
     /// (unless it's a template or derivative preview) and it goes to the top of Open Recent.
     pub(crate) fn opened_from(&mut self, path: &str) {
+        if let Some(st) = self.session.active_mut()
+            && st.source_read_only
+        {
+            st.protected_import_source = Some(path.to_string());
+        }
         if !is_template(path)
             && let Some(st) = self.session.active_mut()
             && !st.source_read_only
@@ -334,12 +367,22 @@ impl PhotocraftApp {
     pub(crate) fn show_if_open(&mut self, path: &str) -> bool {
         let canon = canonical(path);
         let same = |p: &str| same_file(p, path, canon.as_deref());
-        if let Some(i) = self.session.documents().iter().position(|d| d.path.as_deref().is_some_and(same)) {
+        if let Some(i) = self
+            .session
+            .documents()
+            .iter()
+            .position(|d| d.path.as_deref().is_some_and(same) || (d.source_read_only && d.protected_import_source.as_deref().is_some_and(same)))
+        {
             self.session.set_active(i);
             self.jobs.focus = None;
         } else if let Some(o) = self.jobs.opens.iter().find(|o| o.path.as_deref().is_some_and(|p| !is_template(p) && same(p))) {
             // A template still loading opens as another Untitled, as it does once loaded.
             self.jobs.focus = Some(o.job);
+        } else if self.historical_opens.iter().any(|held| held.path.as_deref().is_some_and(|p| !is_template(p) && same(p))) {
+            // Reopening a source awaiting its explicit order focuses the existing choice.
+            crate::open_prompt::advance(self);
+            self.ui.chrome.home = None;
+            return true;
         } else if self.held_memory_prompts.iter().any(|m| m.path.as_deref().is_some_and(|p| !is_template(p) && same(p))) {
             // The file's high-memory prompt is already waiting: show it, don't queue a second
             // prompt and a second open for the same file. A template still opens again as
@@ -469,7 +512,7 @@ impl PhotocraftApp {
     /// answered). True when it took the slot.
     fn open_dropped_file(&mut self, f: &OsFile, name: &str, slot: Option<usize>) -> Result<bool, String> {
         let (docs, opens) = (self.session.documents().len(), self.jobs.opens.len());
-        let held = self.held_opens.len() + self.held_memory_prompts.len();
+        let held = self.held_opens.len() + self.held_memory_prompts.len() + self.historical_opens.len();
         // The slot travels with the open through the inline document, a background tab and a
         // memory/profile prompt, so no separate move here can land on another document.
         if let Some(path) = f.path.as_deref().filter(|p| p.is_absolute()) {
@@ -482,7 +525,9 @@ impl PhotocraftApp {
         if slot.is_none() {
             return Ok(false);
         }
-        let took = self.jobs.opens.len() > opens || self.session.documents().len() > docs || self.held_opens.len() + self.held_memory_prompts.len() > held;
+        let took = self.jobs.opens.len() > opens
+            || self.session.documents().len() > docs
+            || self.held_opens.len() + self.held_memory_prompts.len() + self.historical_opens.len() > held;
         Ok(took)
     }
 
@@ -553,7 +598,11 @@ impl PhotocraftApp {
                     if result.get("frame").and_then(serde_json::Value::as_u64).is_some() {
                         continue;
                     }
-                    if let Err(e) = crate::transform_tool::begin_placed(self, ctx) {
+                    let published = result.get("layer").and_then(serde_json::Value::as_u64).map(photocraft_doc::LayerId);
+                    if self.session.active().is_some_and(|state| {
+                        state.doc.id == active && published.is_some_and(|layer| state.active_layer == Some(layer) && state.doc.layer(layer).is_some())
+                    }) && let Err(e) = crate::transform_tool::begin_placed(self, ctx)
+                    {
                         self.ui.status = e;
                     }
                 }

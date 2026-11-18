@@ -88,12 +88,12 @@ pub(crate) fn openable_name(_path: &str) -> bool {
 }
 
 /// Whether a folder entry is one the batch commands open: an `OPENABLE` extension, an extension
-/// of a format `photocraft-codecs` reads in this build, or GIMP's gzipped `.xcf.gz`, whose last
+/// of a format `photocraft-codecs` reads in this build, or GIMP's wrapped XCF suffixes, whose last
 /// extension alone says nothing.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn openable_name(path: &str) -> bool {
     let lower = file_name(path).to_ascii_lowercase();
-    lower.ends_with(".xcf.gz")
+    photocraft_io::is_xcf_input_name(&lower)
         || lower.rsplit_once('.').is_some_and(|(_, ext)| OPENABLE.contains(&ext) || photocraft_codecs::from_extension(ext).is_some_and(|f| f.caps().read))
 }
 
@@ -105,8 +105,7 @@ pub(crate) fn openable_name(path: &str) -> bool {
 /// process silently.
 #[cfg(not(target_arch = "wasm32"))]
 const OPENABLE: &[&str] = &[
-    "pdn", "ora", "xcf", "xcfgz", "kra", "krz", "psd", "psb", "psdt", "pcraft", "svg", "svgz", "af", "afdesign", "afphoto", "afpub", "dng", "cr2", "nef",
-    "nrw", "arw", "pef",
+    "pdn", "ora", "kra", "krz", "psd", "psb", "psdt", "pcraft", "svg", "svgz", "af", "afdesign", "afphoto", "afpub", "dng", "cr2", "nef", "nrw", "arw", "pef",
 ];
 
 pub(crate) fn file_name(path: &str) -> String {
@@ -302,6 +301,34 @@ pub fn same_destination(a: impl AsRef<std::path::Path>, b: impl AsRef<std::path:
     false
 }
 
+/// Import-only sources stay unchanged even when an alias has a writable native suffix.
+pub fn check_import_destination(state: &crate::DocState, destination: &str) -> Result<()> {
+    if state.protected_import_source.as_deref().is_some_and(|source| same_file(source, destination)) {
+        return Err(EngineError::Other("the destination is the import-only source; choose a different native or export path".into()));
+    }
+    Ok(())
+}
+
+/// Compare caller-opened files without resolving ambient paths or reading their contents.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn same_open_files(a: &std::fs::File, b: &std::fs::File) -> std::io::Result<bool> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let (a, b) = (a.metadata()?, b.metadata()?);
+        Ok(a.dev() == b.dev() && a.ino() == b.ino())
+    }
+    #[cfg(windows)]
+    {
+        Ok(same_file::Handle::from_file(a.try_clone()?)? == same_file::Handle::from_file(b.try_clone()?)?)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (a, b);
+        Ok(false)
+    }
+}
+
 /// A path as command results report it: `/` between components, whatever the platform.
 ///
 /// `join` already builds with `/`, but a directory from the caller or from `std::path::absolute`
@@ -352,4 +379,26 @@ pub(crate) fn is_windows_device_name(component: &str) -> bool {
     matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CLOCK$" | "CONIN$" | "CONOUT$")
         || stem.strip_prefix("COM").is_some_and(port)
         || stem.strip_prefix("LPT").is_some_and(port)
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod xcf_compound_suffix_tests {
+    #[test]
+    fn batch_openable_names_require_xcf_compounds_for_compressed_inputs() {
+        for name in [
+            "/in/pixel.xcf",
+            "/in/pixel.xcfgz",
+            "/in/pixel.xcf.gz",
+            "/in/pixel.xcf.bz2",
+            "/in/pixel.xcf.xz",
+            "/in/PIXEL.XCF.XZ",
+            "/in/PIXEL.XCFBZ2",
+            "/in/pixel.xcfxz",
+        ] {
+            assert!(super::openable_name(name), "{name}");
+        }
+        for name in ["/in/archive.tar.gz", "/in/notes.gz", "/in/notes.bz2", "/in/notes.xz", "/in/pixel.xcf.gz.backup"] {
+            assert!(!super::openable_name(name), "{name}");
+        }
+    }
 }

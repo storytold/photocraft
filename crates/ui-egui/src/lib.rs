@@ -36,11 +36,15 @@ pub mod file_open;
 pub mod frame_stages;
 pub mod gpu_memo;
 pub mod gpu_status;
+#[cfg(test)]
+#[path = "../../engine/src/historical_xcf_open/fixture.rs"]
+pub(crate) mod historical_xcf_fixture;
 mod history_keys;
 pub mod home_recent_ui;
 pub mod i18n;
 mod icon_data;
 pub mod icons;
+pub mod import_report;
 pub mod jobs_ui;
 pub(crate) mod last_brush;
 pub mod levels_clipping;
@@ -79,6 +83,12 @@ pub use craft::window::{
 #[cfg(target_arch = "wasm32")]
 pub use file_dialog::{FileDialogAnswer, FileDialogFn, FileDialogReply, FileDialogRequest};
 pub use file_open::OsEvent;
+
+#[cfg(test)]
+/// Construct a writable native fixture without source-only protection or imported view hints.
+pub(crate) fn test_import_result(document: Document, warnings: Vec<String>) -> photocraft_io::ImportResult {
+    photocraft_io::ImportResult { document, warnings, initial_view: None, source_read_only: false, preview_only: false }
+}
 pub use state::{Tool, UiState};
 
 mod app;
@@ -237,11 +247,11 @@ pub(crate) use services::SAVE_OPTIONS_OPEN;
 #[cfg(test)]
 pub(crate) use services::saved_revision_after_write;
 pub use services::{
-    AdoptAutosaveFn, AppendTextFn, AutomationAuthorizeFn, AutomationCommandFn, AutomationOpenPcraftFn, AutomationReadFn, AutomationServices, AutomationWriteFn,
-    AutosaveFn, AutosaveResultsFn, CapsLockFn, ClipboardGetFn, ClipboardGetSvgFn, ClipboardSetFn, ClipboardUnreadableFn, CursorPosFn, DiscardAutosaveFn,
-    ExportFn, ExportSettings, ExternalSvgEditor, ExternalSvgSession, ExternalVectorSave, ExternalVectorSource, FileStamp, FileStampFn, FormatChoices, ImportFn,
-    Inbox, LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PenEndFn, PhotoshopShortcutsFn, PlaceInbox, RecoverFn, Recoverable, RightButtonDownFn,
-    SameFileFn, SaveFileFn, SaveTextFn, Services, SystemThemeFn, TabletPollFn, WindowFrameFn, WriteFn,
+    AdoptAutosaveFn, AppendTextFn, AutomationAuthorizeFn, AutomationCommandFn, AutomationOpenPcraftFn, AutomationReadFn, AutomationSameFileFn,
+    AutomationServices, AutomationWriteFn, AutosaveFn, AutosaveResultsFn, CapsLockFn, ClipboardGetFn, ClipboardGetSvgFn, ClipboardSetFn, ClipboardUnreadableFn,
+    CursorPosFn, DiscardAutosaveFn, ExportFn, ExportSettings, ExternalSvgEditor, ExternalSvgSession, ExternalVectorSave, ExternalVectorSource, FileStamp,
+    FileStampFn, FormatChoices, ImportFn, Inbox, LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PenEndFn, PhotoshopShortcutsFn, PlaceInbox, RecoverFn,
+    Recoverable, RightButtonDownFn, SameFileFn, SaveFileFn, SaveTextFn, Services, SystemThemeFn, TabletPollFn, WindowFrameFn, WriteFn,
 };
 pub(crate) use services::{opaque_layer, saves_flat_in_place};
 pub use text::cjk_fonts;
@@ -658,6 +668,8 @@ pub struct PhotocraftApp {
     pub(crate) disk_stamps: HashMap<photocraft_doc::DocId, (String, FileStamp)>,
     /// Files read but not opened yet: the first waits on its profile prompt, the rest behind it
     /// (see `open_prompt`).
+    pub(crate) historical_opens: Vec<dialogs::historical_xcf::Historical>,
+    pub(crate) historical_replacements: dialogs::historical_replace::Pending,
     pub(crate) held_opens: std::collections::VecDeque<open_prompt::Held>,
     /// PSD files whose memory preflight requires user approval before pixel decoding (see `open_prompt`).
     pub(crate) held_memory_prompts: std::collections::VecDeque<open_prompt::MemoryPrompt>,

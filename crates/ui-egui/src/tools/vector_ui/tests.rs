@@ -817,6 +817,7 @@ fn new_document_drops_a_one_anchor_draft() {
 }
 
 #[test]
+/// Keep a pending pen path attached to its original document when the active tab changes before commit.
 fn stale_pen_commits_to_its_owner_across_document_changes() {
     use photocraft_doc::{ColorMode, SampleType, Size};
     for tool in [Tool::Pen, Tool::CurvaturePen] {
@@ -832,7 +833,9 @@ fn stale_pen_commits_to_its_owner_across_document_changes() {
             assert!(app.session.set_active(0));
             match action {
                 "open" => {
-                    app.services.import = Some(Box::new(|name, _, _| Ok((Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8), Vec::new()))));
+                    app.services.import = Some(Box::new(|name, _, _| {
+                        Ok(crate::services::imported((Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8), Vec::new())))
+                    }));
                     app.open_file("synthetic.png", &[]).unwrap();
                 }
                 "closeOther" => {
