@@ -37,7 +37,8 @@ fn fresh_start_and_reset_tool_leave_transform_on_drop_on() {
     assert!(app.ui.tool_options.cam_transform_on_drop, "a fresh start leaves Transform On Drop on");
     app.ui.tool = Tool::ContentAwareMove;
     app.ui.tool_options.cam_transform_on_drop = false;
-    crate::menus::invoke(&mut app, &egui::Context::default(), crate::tools::tool_reset::RESET, json!({})).unwrap();
+    let app_ctx = app.ctx().clone();
+    crate::menus::invoke(&mut app, &app_ctx, crate::tools::tool_reset::RESET, json!({})).unwrap();
     assert!(app.ui.tool_options.cam_transform_on_drop, "Reset Tool turns Transform On Drop back on");
 }
 

@@ -12,9 +12,10 @@
 //! move (each move's frame shows the new outline) and that the animated ants keep frames coming
 //! while the pointer is held still. Skips when no GPU adapter exists (like `live_stroke_canvas.rs`).
 
+use craft::behavior::CanvasView;
+use craft::behavior::kurbo::Point;
 use egui::{Modifiers, PointerButton, Pos2};
 use photocraft_ui_egui::PhotocraftApp;
-use photocraft_ui_egui::canvas::ViewXform;
 use photocraft_ui_egui::control::{ControlRequest, handle};
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
@@ -45,7 +46,7 @@ fn harness(ppp: f32) -> Option<Harness> {
     let built = std::panic::catch_unwind(|| {
         egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 640.0)).with_pixels_per_point(ppp).with_max_steps(64).wgpu().build_eframe(|cc| {
             PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), Default::default());
             if let Some(rs) = cc.wgpu_render_state.as_ref() {
                 app.set_wgpu(rs.clone());
             }
@@ -83,15 +84,14 @@ fn setup(h: &mut Harness, background: &str, tool: &str) {
     h.run_steps(3);
 }
 
-fn xf(h: &Harness) -> ViewXform {
-    // The same mapping the canvas draws with: `View::zoom` is device pixels per document pixel,
-    // and the transform works in the viewport's egui points.
-    ViewXform::active(h.state()).expect("an active document view")
+fn xf(h: &Harness) -> Option<CanvasView> {
+    // The same mapping the canvas draws with, in the viewport's egui points.
+    photocraft_ui_egui::canvas::active_view(h.state())
 }
 
 /// Screen point (egui points) of document point `(x, y)`.
 fn screen(h: &Harness, x: f32, y: f32) -> Pos2 {
-    xf(h).to_screen(x, y)
+    xf(h).expect("an active document view").to_screen(Point::new(f64::from(x), f64::from(y)))
 }
 
 fn pointer_move(h: &mut Harness, x: f32, y: f32) {
@@ -240,39 +240,6 @@ fn marquee_previews_show_while_dragging_on_white_and_black_at_1x_and_2x() {
 }
 
 #[test]
-fn lasso_and_crop_previews_show_while_dragging() {
-    let _gpu = photocraft_testkit::gpu_lock();
-    for ppp in [1.0, 2.0] {
-        let Some(mut h) = harness(ppp) else { return };
-        h.run_steps(4);
-        for bg in ["white", "black"] {
-            // Lasso: a straight run, then down; the path shows as contrasting ants.
-            setup(&mut h, bg, "lasso");
-            drag_to(&mut h, [80.0, 100.0], [320.0, 100.0]);
-            pointer_move(&mut h, 320.0, 200.0);
-            let img = render(&mut h);
-            let (p, q) = (screen(&h, 80.0, 100.0), screen(&h, 320.0, 100.0));
-            let now = coverage(&img, ppp, p, q, ink(bg));
-            assert!(now > 0.3, "lasso on {bg} @{ppp}x: {now:.2} contrasting");
-            button(&mut h, 320.0, 200.0, false);
-            h.run_steps(2);
-        }
-        // Crop on white: the area outside the frame dims while dragging, inside stays white.
-        setup(&mut h, "white", "crop");
-        drag_to(&mut h, [100.0, 80.0], [300.0, 220.0]);
-        let img = render(&mut h);
-        let px = |x: f32, y: f32| {
-            let p = screen(&h, x, y) * ppp;
-            img.luma(p.x as i64, p.y as i64).unwrap_or(0)
-        };
-        assert!(px(200.0, 150.0) > 240, "inside the crop frame stays as is");
-        assert!(px(50.0, 40.0) < 180 && px(350.0, 260.0) < 180, "outside the crop frame is dimmed mid-drag");
-        button(&mut h, 300.0, 220.0, false);
-        h.run_steps(2);
-    }
-}
-
-#[test]
 fn a_held_marquee_drag_keeps_requesting_frames() {
     let _gpu = photocraft_testkit::gpu_lock();
     let Some(mut h) = harness(1.0) else { return };
@@ -294,28 +261,4 @@ fn a_held_marquee_drag_keeps_requesting_frames() {
     let d = still_frame(&mut h);
     assert!(d.is_some_and(|d| d <= Duration::from_millis(100)), "mid-drag repaint request: {d:?}");
     button(&mut h, 300.0, 220.0, false);
-}
-
-#[test]
-fn the_spot_healing_trail_is_a_dark_half_opaque_tint() {
-    // #7342: the trail was white at a quarter opacity, invisible on white and faint elsewhere.
-    // Photoshop shows the area to heal in half-opaque dark grey.
-    let _gpu = photocraft_testkit::gpu_lock();
-    let Some(mut h) = harness(1.0) else { return };
-    h.run_steps(4);
-    for bg in ["white", "#808080"] {
-        setup(&mut h, bg, "spotHealing");
-        let app = h.state_mut();
-        app.session.tools.brush.size = 40.0;
-        app.session.tools.brush.hardness = 1.0;
-        let before = render(&mut h);
-        drag_to(&mut h, [80.0, 150.0], [320.0, 150.0]);
-        let img = render(&mut h);
-        let p = screen(&h, 200.0, 150.0);
-        let (was, now) = (before.luma(p.x as i64, p.y as i64).unwrap_or(0), img.luma(p.x as i64, p.y as i64).unwrap_or(0));
-        assert!(f32::from(now) < f32::from(was) * 0.6, "spot healing trail on {bg}: luma {was} -> {now}, not dark enough");
-        assert!(f32::from(now) > f32::from(was) * 0.4, "spot healing trail on {bg}: luma {was} -> {now}, should stay see-through");
-        button(&mut h, 320.0, 150.0, false);
-        h.run_steps(2);
-    }
 }

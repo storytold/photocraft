@@ -56,11 +56,13 @@ mod render;
 pub use composite::{adjustment_quantum, blend_if_active, occludes_below, text_gamma};
 #[cfg(test)]
 use composite::{blend_into_fill, blend_into_g, branchless_floor, composite_layer_plain, composite_pixel_layer, pixel_surface, quantize};
-use composite::{composite_atop, composite_layer, composite_stack_at, dissolve_noise};
+use composite::{composite_stack_at, dissolve_noise};
+use content::empty_in;
+#[cfg(test)]
+use content::render_content;
 #[cfg(test)]
 use content::render_fill;
 pub use content::{RENDER_TILE, channel_weights, fill_frame, layer_shape, render_fill_content, stroke_frame, surface_to_buffer};
-use content::{empty_in, render_content};
 use ctx::{Ctx, prepare_effects};
 #[cfg(test)]
 use ctx::{LayerKeys, PREPARE_DEPTH, effect_layers, prepare_tones};
@@ -77,7 +79,8 @@ pub use fx_cache::{
 #[cfg(test)]
 use fx_cache::{effect_maps, effect_region, fx_region_bytes};
 pub use reduced::{
-    PROXY_THUMBNAIL_PIXELS, render_reduced, render_reduced_damage, render_reduced_rect, thumbnail, thumbnail_buffer, thumbnail_proxy, thumbnail_size,
+    PROXY_THUMBNAIL_PIXELS, render_reduced, render_reduced_by, render_reduced_damage, render_reduced_rect, thumbnail, thumbnail_buffer, thumbnail_proxy,
+    thumbnail_size,
 };
 #[cfg(test)]
 use reduced::{ReducedStats, render_reduced_in_bands, render_reduced_with};
@@ -86,8 +89,8 @@ use render::in_blend_space;
 use render::render_tiled_with;
 pub(crate) use render::visible_layers;
 pub use render::{
-    BAND_PIXELS, MAX_RENDER_PIXELS, band_rows_for, cmyk_space, composite_to_surface, composite_to_surface_with_interrupt, flatten, flatten_to_surface, render,
-    render_bands, render_layer, render_layer_in, render_tiled,
+    BAND_PIXELS, MAX_RENDER_PIXELS, RenderBandsError, band_rows_for, cmyk_space, composite_to_surface, composite_to_surface_with_interrupt, flatten,
+    flatten_to_surface, render, render_bands, render_layer, render_layer_in, render_tiled, try_render_bands,
 };
 
 /// Straight-alpha RGBA float buffer covering a rectangle.
@@ -119,6 +122,26 @@ impl Buffer {
     }
     pub fn filled(rect: Rect, c: [f32; 4]) -> Self {
         Self { rect, px: photocraft_raster::scratch::take(rect.width() as usize * rect.height() as usize, c) }
+    }
+    /// Fallibly allocate a transparent RGBA buffer, preserving `filled`'s scratch-pool slack.
+    pub fn try_transparent(rect: Rect) -> Result<Self, photocraft_raster::AllocationError> {
+        Self::try_filled(rect, [0.0; 4])
+    }
+    /// Fallibly allocate and fill an RGBA buffer.
+    pub fn try_filled(rect: Rect, c: [f32; 4]) -> Result<Self, photocraft_raster::AllocationError> {
+        let width = usize::try_from(rect.width()).map_err(|_| photocraft_raster::AllocationError::SizeOverflow)?;
+        let height = usize::try_from(rect.height()).map_err(|_| photocraft_raster::AllocationError::SizeOverflow)?;
+        let len = width.checked_mul(height).ok_or(photocraft_raster::AllocationError::SizeOverflow)?;
+        let bytes = len.checked_mul(std::mem::size_of::<[f32; 4]>()).ok_or(photocraft_raster::AllocationError::SizeOverflow)?;
+        let px = photocraft_raster::scratch::try_take(len, c).ok_or(photocraft_raster::AllocationError::NotEnoughMemory { bytes })?;
+        Ok(Self { rect, px })
+    }
+    /// Fallibly clone the pixel storage while keeping the same rectangle.
+    pub fn try_clone(&self) -> Result<Self, photocraft_raster::AllocationError> {
+        let bytes = self.px.len().checked_mul(std::mem::size_of::<[f32; 4]>()).ok_or(photocraft_raster::AllocationError::SizeOverflow)?;
+        let mut px = photocraft_raster::scratch::try_take(self.px.len(), [0.0; 4]).ok_or(photocraft_raster::AllocationError::NotEnoughMemory { bytes })?;
+        px.copy_from_slice(&self.px);
+        Ok(Self { rect: self.rect, px })
     }
     /// The pixels, taken out of the buffer (it can't be destructured: it returns them to the
     /// pool on drop).
@@ -161,6 +184,47 @@ impl Buffer {
             p[3] = 1.0;
         }
         out
+    }
+}
+
+/// Selects infallible compatibility behavior or propagating buffer allocation errors in the
+/// shared compositor core.
+pub(crate) trait BufferAlloc {
+    type Error: Send;
+    fn filled(&self, rect: Rect, color: [f32; 4]) -> Result<Buffer, Self::Error>;
+    fn clone(&self, buffer: &Buffer) -> Result<Buffer, Self::Error>;
+    fn scalar_filled(&self, rect: Rect, value: f32) -> Result<Vec<f32>, Self::Error>;
+}
+
+pub(crate) struct InfallibleBufferAlloc;
+impl BufferAlloc for InfallibleBufferAlloc {
+    type Error = std::convert::Infallible;
+    fn filled(&self, rect: Rect, color: [f32; 4]) -> Result<Buffer, Self::Error> {
+        Ok(Buffer::filled(rect, color))
+    }
+    fn clone(&self, buffer: &Buffer) -> Result<Buffer, Self::Error> {
+        Ok(buffer.clone())
+    }
+    fn scalar_filled(&self, rect: Rect, value: f32) -> Result<Vec<f32>, Self::Error> {
+        Ok(photocraft_raster::scratch::take(rect.width() as usize * rect.height() as usize, value))
+    }
+}
+
+pub(crate) struct FallibleBufferAlloc;
+impl BufferAlloc for FallibleBufferAlloc {
+    type Error = photocraft_raster::AllocationError;
+    fn filled(&self, rect: Rect, color: [f32; 4]) -> Result<Buffer, Self::Error> {
+        Buffer::try_filled(rect, color)
+    }
+    fn clone(&self, buffer: &Buffer) -> Result<Buffer, Self::Error> {
+        buffer.try_clone()
+    }
+    fn scalar_filled(&self, rect: Rect, value: f32) -> Result<Vec<f32>, Self::Error> {
+        let width = usize::try_from(rect.width()).map_err(|_| photocraft_raster::AllocationError::SizeOverflow)?;
+        let height = usize::try_from(rect.height()).map_err(|_| photocraft_raster::AllocationError::SizeOverflow)?;
+        let len = width.checked_mul(height).ok_or(photocraft_raster::AllocationError::SizeOverflow)?;
+        let bytes = len.checked_mul(std::mem::size_of::<f32>()).ok_or(photocraft_raster::AllocationError::SizeOverflow)?;
+        photocraft_raster::scratch::try_take(len, value).ok_or(photocraft_raster::AllocationError::NotEnoughMemory { bytes })
     }
 }
 
