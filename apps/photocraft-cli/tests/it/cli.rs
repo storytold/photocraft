@@ -1001,7 +1001,7 @@ fn metadata_none_leaves_out_the_document_xmp() {
     img.meta.dpi = Some((300.0, 300.0));
     img.meta.text = vec![("Comment".into(), "free-form-note".into())];
     // Display P3 rather than sRGB, so no export can pass for keeping it by writing its default.
-    let p3 = photocraft_cms::Builtin::DisplayP3.profile().to_bytes().to_vec();
+    let p3 = craft_cms::Builtin::DisplayP3.profile().to_bytes().to_vec();
     img.icc = Some(p3.clone());
     std::fs::write(&a, photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &Default::default()).unwrap()).unwrap();
     let ancestors = |p: &Path| String::from_utf8_lossy(&std::fs::read(p).unwrap()).contains("DocumentAncestors");
@@ -1410,13 +1410,14 @@ fn a_non_unicode_path_is_taken_and_non_unicode_text_is_a_usage_error() {
 /// PhotoCraft can't play are warned about up front.
 #[test]
 fn batch_plays_a_photoshop_actions_file() {
-    use photocraft_engine::actions_cmds::Action;
+    use photocraft_engine::actions_cmds::{Action, ActionStep};
     let d = tmp("atn");
     let input = d.join("in");
     std::fs::create_dir_all(&input).unwrap();
     write_png(&input.join("a.png"), 8, 4, 3);
-    let invert = Action::new("Negative", vec![("image.adjustments.invert".into(), json!({})), ("select.all".into(), json!({}))]);
-    let odd = Action::new("Odd", vec![(photocraft_engine::atn_cmds::PHOTOSHOP_STEP.into(), json!({"event": "syntheticFill", "name": "Generative Fill"}))]);
+    let invert = Action::new("Negative", vec![ActionStep::new("image.adjustments.invert", json!({})), ActionStep::new("select.all", json!({}))]);
+    let odd =
+        Action::new("Odd", vec![ActionStep::new(photocraft_engine::atn_cmds::PHOTOSHOP_STEP, json!({"event": "syntheticFill", "name": "Generative Fill"}))]);
     let (bytes, skipped) = photocraft_engine::atn_cmds::export("Set", &[&invert, &odd], &[], false).unwrap();
     assert!(skipped.is_empty());
     let atn = d.join("Set.atn");

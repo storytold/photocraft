@@ -43,8 +43,8 @@ server on the same computer needs its address too, e.g. `127.0.0.1:8188`. A comm
 explicit `host` parameter (an agent, the CLI) runs without it.
 
 The dialog shows the prompt, model, edge softness and colour match, and output. Server override,
-negative prompt, steps, guidance, strength, resolution and seed sit in a collapsed **Advanced**
-section.
+negative prompt, steps, guidance, strength, resolution and seed show when **Advanced Options** is
+checked.
 
 ## Settings
 
