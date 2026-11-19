@@ -11,7 +11,7 @@ use crate::state::Tool;
 const MESSAGE: &str = "Could not use the magic wand because the target is a group.";
 
 /// A 64 x 64 document with one painted layer, grouped and targeted as a group.
-fn grouped_app() -> PhotocraftApp {
+fn grouped_app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();
