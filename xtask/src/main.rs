@@ -37,8 +37,9 @@ commands:
   test            workspace tests (cargo nextest when installed, else cargo test), then doctests
   ci [lint | build | tests [--gpu | --no-gpu] | <step>]
                   the CI gate: fmt --check, egui-fork, clippy -D warnings, layers, panel-commands, scorecard --check,
-                  tests (nextest --profile ci), panic_hunt, doctests, wasm and the i18n-report, with --locked
-                  --features heif (stops at first failure). The gate splits it over its jobs: `lint` runs the
+                  tests (nextest --profile ci), panic_hunt, doctests, wasm, the docs/localization.md language
+                  table check and the i18n-report, with --locked --features heif (stops at first failure). The
+                  gate splits it over its jobs: `lint` runs the
                   steps that need no test build; `tests` runs the tests and panic_hunt on the partition in
                   $NEXTEST_PARTITION (`--gpu`: all of nextest's gpu test group, whatever the partition, each
                   test's output shown;
@@ -294,7 +295,7 @@ type StepFn = fn(&CiOptions) -> Result<(), String>;
 type CiPlan = Vec<(&'static str, StepFn)>;
 
 /// The CI gate's steps, in the order `cargo xtask ci` runs them.
-const CI_STEPS: [(&str, Part, StepFn); 12] = [
+const CI_STEPS: [(&str, Part, StepFn); 13] = [
     ("fmt", Part::Lint, step_fmt),
     ("egui-fork", Part::Lint, |_| cmd_egui_fork()),
     ("clippy", Part::Lint, step_clippy),
@@ -306,6 +307,7 @@ const CI_STEPS: [(&str, Part, StepFn); 12] = [
     ("panic_hunt", Part::Test, |o| step_tests(o, true)),
     ("doctest", Part::Doc, step_doctest),
     ("wasm", Part::Lint, |_| cmd_wasm()),
+    ("i18n-docs", Part::Lint, |_| i18n_report::check_language_table(&root())),
     ("i18n", Part::Lint, step_i18n),
 ];
 
