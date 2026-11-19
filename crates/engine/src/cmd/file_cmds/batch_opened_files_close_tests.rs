@@ -8,13 +8,13 @@
 
 use super::*;
 
-fn tmp(name: &str) -> String {
+/// A per-test workspace folder, removed when the test ends - on the normal path and on a panic,
+/// which is why the `TempDir` handle is kept alive by every test that asks for one.
+fn tmp(name: &str) -> (String, tempfile::TempDir) {
     static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let d = std::env::temp_dir().join(format!("photocraft-batch-opened-close-{}-{name}-{id}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d.to_string_lossy().into_owned()
+    let d = tempfile::Builder::new().prefix(&format!("photocraft-batch-opened-close-{}-{name}-{id}", std::process::id())).tempdir().unwrap();
+    (d.path().to_string_lossy().into_owned(), d)
 }
 
 /// Writes a solid-colour PNG of `w` x `h` and returns its path.
@@ -53,7 +53,7 @@ fn top_left(path: &str) -> [f32; 4] {
 
 #[test]
 fn opened_files_with_a_folder_closes_each_unchanged_document_after_its_file_is_written() {
-    let dir = tmp("folder-closes-each");
+    let (dir, _workspace) = tmp("folder-closes-each");
     let first = png(&dir, "a.png", 8, 6, "#ff0000");
     let second = png(&dir, "b.png", 8, 6, "#0000ff");
     let output = join(&dir, "results");
@@ -68,7 +68,7 @@ fn opened_files_with_a_folder_closes_each_unchanged_document_after_its_file_is_w
 
 #[test]
 fn a_dirty_document_is_written_to_the_folder_and_stays_open_with_its_edits() {
-    let dir = tmp("dirty-stays-open");
+    let (dir, _workspace) = tmp("dirty-stays-open");
     let source = png(&dir, "a.png", 8, 6, "#ff0000");
     let output = join(&dir, "results");
     let before = std::fs::read(&source).unwrap();
@@ -89,7 +89,7 @@ fn a_dirty_document_is_written_to_the_folder_and_stays_open_with_its_edits() {
 
 #[test]
 fn a_never_saved_document_is_written_as_its_name_psd_and_stays_open() {
-    let dir = tmp("never-saved-headless");
+    let (dir, _workspace) = tmp("never-saved-headless");
     let output = join(&dir, "results");
     let mut s = Session::new();
     s.execute("file.new", json!({"name": "oracle", "width": 8, "height": 6})).unwrap();
@@ -104,7 +104,7 @@ fn a_never_saved_document_is_written_as_its_name_psd_and_stays_open() {
 
 #[test]
 fn a_run_with_no_steps_leaves_a_document_changed_before_the_run_open() {
-    let dir = tmp("no-steps-dirty-stays");
+    let (dir, _workspace) = tmp("no-steps-dirty-stays");
     let source = png(&dir, "a.png", 8, 6, "#ff0000");
     let output = join(&dir, "results");
     let mut s = open_as_documents(std::slice::from_ref(&source));
@@ -123,7 +123,7 @@ fn a_run_with_no_steps_leaves_a_document_changed_before_the_run_open() {
 
 #[test]
 fn a_document_whose_write_failed_stays_open_and_changed_while_the_written_one_closes() {
-    let dir = tmp("write-failed-stays-open");
+    let (dir, _workspace) = tmp("write-failed-stays-open");
     let first = png(&dir, "a.png", 8, 6, "#ff0000");
     let second = png(&dir, "b.png", 8, 6, "#0000ff");
     let output = join(&dir, "results");
@@ -146,7 +146,7 @@ fn a_document_whose_write_failed_stays_open_and_changed_while_the_written_one_cl
 
 #[test]
 fn a_stop_for_errors_run_keeps_the_unreached_document_open_and_active() {
-    let dir = tmp("stop-on-error-keeps-rest");
+    let (dir, _workspace) = tmp("stop-on-error-keeps-rest");
     let paths: Vec<String> = ["first.png", "second.png", "third.png"].iter().map(|name| png(&dir, name, 8, 6, "#ff0000")).collect();
     let output = join(&dir, "results");
     std::fs::create_dir_all(&output).unwrap();
@@ -168,7 +168,7 @@ fn a_stop_for_errors_run_keeps_the_unreached_document_open_and_active() {
 
 #[test]
 fn a_written_copy_never_rewrites_the_file_the_document_was_opened_from() {
-    let dir = tmp("source-file-untouched");
+    let (dir, _workspace) = tmp("source-file-untouched");
     let source = png(&dir, "a.png", 8, 6, "#ff0000");
     let output = join(&dir, "results");
     let before = std::fs::read(&source).unwrap();
@@ -197,7 +197,7 @@ fn opened_files_without_a_destination_stay_open_and_changed() {
 
 #[test]
 fn a_folder_source_batch_still_leaves_the_sessions_open_documents() {
-    let dir = tmp("folder-source-untouched");
+    let (dir, _workspace) = tmp("folder-source-untouched");
     let input = png(&dir, "in.png", 8, 6, "#ff0000");
     let untouched = png(&dir, "keep.png", 6, 6, "#00ff00");
     let output = join(&dir, "out");
@@ -213,7 +213,7 @@ fn a_folder_source_batch_still_leaves_the_sessions_open_documents() {
 
 #[test]
 fn image_processor_on_opened_files_still_leaves_the_documents_open() {
-    let dir = tmp("image-processor-open");
+    let (dir, _workspace) = tmp("image-processor-open");
     let first = png(&dir, "a.png", 8, 6, "#ff0000");
     let output = join(&dir, "processed");
     let mut s = open_as_documents(std::slice::from_ref(&first));
@@ -225,7 +225,7 @@ fn image_processor_on_opened_files_still_leaves_the_documents_open() {
 
 #[test]
 fn a_step_that_closes_the_document_itself_keeps_todays_outcome() {
-    let dir = tmp("step-closes-document");
+    let (dir, _workspace) = tmp("step-closes-document");
     let first = png(&dir, "a.png", 8, 6, "#ff0000");
     let output = join(&dir, "out");
     let mut s = open_as_documents(&[first]);
@@ -241,7 +241,7 @@ fn a_step_that_closes_the_document_itself_keeps_todays_outcome() {
 
 #[test]
 fn a_nested_opened_files_run_closes_the_tabs_the_outer_run_still_has_to_write() {
-    let dir = tmp("nested-opened-files");
+    let (dir, _workspace) = tmp("nested-opened-files");
     let paths: Vec<String> = ["one.png", "two.png", "three.png"].iter().map(|name| png(&dir, name, 8, 6, "#ff0000")).collect();
     let inner = join(&dir, "inner");
     let outer = join(&dir, "outer");
@@ -270,7 +270,7 @@ fn a_nested_opened_files_run_closes_the_tabs_the_outer_run_still_has_to_write() 
 
 #[test]
 fn a_later_input_cannot_close_a_document_it_made_dirty_after_the_gate() {
-    let dir = tmp("re-dirtied-after-gate");
+    let (dir, _workspace) = tmp("re-dirtied-after-gate");
     let first = png(&dir, "a.png", 8, 6, "#ff0000");
     let second = png(&dir, "b.png", 8, 6, "#0000ff");
     let output = join(&dir, "results");
@@ -307,7 +307,7 @@ fn a_later_input_cannot_close_a_document_it_made_dirty_after_the_gate() {
 
 #[test]
 fn a_recorded_save_step_closes_the_document_as_the_save_left_it() {
-    let dir = tmp("save-step-closes");
+    let (dir, _workspace) = tmp("save-step-closes");
     let source = png(&dir, "a.png", 8, 6, "#ff0000");
     let output = join(&dir, "results");
     let before = std::fs::read(&source).unwrap();
@@ -330,7 +330,7 @@ fn a_recorded_save_step_closes_the_document_as_the_save_left_it() {
 
 #[test]
 fn a_recorded_save_marks_a_document_clean_only_for_the_turn_that_wrote_it() {
-    let dir = tmp("save-marker-not-a-write");
+    let (dir, _workspace) = tmp("save-marker-not-a-write");
     let first = png(&dir, "a.png", 8, 6, "#ff0000");
     let second = png(&dir, "b.png", 8, 6, "#0000ff");
     let output = join(&dir, "results");
@@ -374,7 +374,7 @@ fn a_recorded_save_marks_a_document_clean_only_for_the_turn_that_wrote_it() {
 
 #[test]
 fn a_document_whose_turn_wrote_another_documents_snapshot_stays_open() {
-    let dir = tmp("turn-wrote-another-document");
+    let (dir, _workspace) = tmp("turn-wrote-another-document");
     let first = png(&dir, "a.png", 8, 6, "#ff0000");
     let second = png(&dir, "b.png", 8, 6, "#0000ff");
     let output = join(&dir, "results");
