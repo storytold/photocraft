@@ -8,7 +8,7 @@ use serde_json::json;
 use super::shape_properties;
 use crate::PhotocraftApp;
 
-fn properties_harness(params: serde_json::Value, depth: u32) -> Harness<'static, PhotocraftApp> {
+fn properties_harness(params: serde_json::Value, depth: u32) -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 80, "height": 60, "depth": depth})).unwrap();
     let mut params = params;
@@ -16,7 +16,7 @@ fn properties_harness(params: serde_json::Value, depth: u32) -> Harness<'static,
     params["stroke"] = json!({"width": 5, "color": "#21bb66"});
     app.run("shape.create", params).unwrap();
     let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(640.0, 800.0)).with_step_dt(1.0 / 60.0).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        |ui, app: &mut Box<PhotocraftApp>| {
             let _language = crate::i18n::language_scope(crate::i18n::Lang::EN);
             if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("semibold".into()))) {
                 return;
@@ -32,7 +32,7 @@ fn properties_harness(params: serde_json::Value, depth: u32) -> Harness<'static,
     h
 }
 
-fn selected_shape(h: &Harness<'_, PhotocraftApp>) -> photocraft_doc::ShapeLayer {
+fn selected_shape(h: &Harness<'_, Box<PhotocraftApp>>) -> photocraft_doc::ShapeLayer {
     let st = h.state().session.active().unwrap();
     match &st.doc.layer(st.active_layer.unwrap()).unwrap().content {
         photocraft_doc::LayerContent::Shape(shape) => shape.clone(),
@@ -40,12 +40,12 @@ fn selected_shape(h: &Harness<'_, PhotocraftApp>) -> photocraft_doc::ShapeLayer 
     }
 }
 
-fn steps(h: &Harness<'_, PhotocraftApp>) -> usize {
+fn steps(h: &Harness<'_, Box<PhotocraftApp>>) -> usize {
     h.state().session.active().unwrap().history.past_len()
 }
 
 /// Types `text` into the field named `name` and commits it with Enter.
-fn type_into(h: &mut Harness<'_, PhotocraftApp>, name: &str, text: &str) {
+fn type_into(h: &mut Harness<'_, Box<PhotocraftApp>>, name: &str, text: &str) {
     h.get_by_label(name).click();
     h.run_steps(2);
     h.key_press_modifiers(Modifiers::COMMAND, Key::A);
@@ -55,7 +55,7 @@ fn type_into(h: &mut Harness<'_, PhotocraftApp>, name: &str, text: &str) {
 }
 
 /// Drags the caption `name` by `dx` points: a scrub gesture from press to release.
-fn scrub(h: &mut Harness<'_, PhotocraftApp>, name: &str, dx: f32) {
+fn scrub(h: &mut Harness<'_, Box<PhotocraftApp>>, name: &str, dx: f32) {
     let start: Pos2 = h.get_by_role_and_label(egui::accesskit::Role::Label, name).rect().center();
     h.event(egui::Event::PointerMoved(start));
     h.event(egui::Event::PointerButton { pos: start, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
@@ -97,7 +97,7 @@ fn selected_shape_presets_edit_live_preserve_paint_and_undo_at_all_depths() {
 fn selected_shape_numeric_drags_are_live_and_undo_as_separate_gestures() {
     let mut h = properties_harness(json!({"kind": "rect", "rect": [12, 12, 45, 30]}), 16);
     let before = steps(&h);
-    let width = |h: &Harness<'_, PhotocraftApp>| match selected_shape(h).live {
+    let width = |h: &Harness<'_, Box<PhotocraftApp>>| match selected_shape(h).live {
         Some(photocraft_doc::vector::LiveShape::Rect { rect, .. }) => rect[2],
         other => panic!("expected a rectangle, got {other:?}"),
     };

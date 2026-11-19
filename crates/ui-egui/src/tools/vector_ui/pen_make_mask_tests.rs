@@ -12,12 +12,12 @@ use crate::PhotocraftApp;
 use crate::canvas::testing;
 use crate::state::Tool;
 
-fn harness() -> Harness<'static, PhotocraftApp> {
+fn harness() -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
     app.ui.tool = Tool::Pen;
     let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1400.0, 400.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        |ui, app: &mut Box<PhotocraftApp>| {
             ui.horizontal(|ui| super::options_bar(app, ui, Tool::Pen));
         },
         app,
@@ -27,7 +27,7 @@ fn harness() -> Harness<'static, PhotocraftApp> {
 }
 
 /// Clicks a closed square with the Pen and returns the Work Path it made.
-fn square(h: &mut Harness<'static, PhotocraftApp>) -> Path {
+fn square(h: &mut Harness<'static, Box<PhotocraftApp>>) -> Path {
     let app = h.state_mut();
     for (x, y) in [(20.0, 20.0), (120.0, 20.0), (120.0, 120.0), (20.0, 120.0)] {
         testing::click(app, [x, y], Modifiers::NONE);
@@ -41,7 +41,7 @@ fn steps(app: &PhotocraftApp) -> usize {
     app.session.active().unwrap().history.past_len()
 }
 
-fn disabled(h: &Harness<'static, PhotocraftApp>, label: &str) -> bool {
+fn disabled(h: &Harness<'static, Box<PhotocraftApp>>, label: &str) -> bool {
     h.get_by_label(label).accesskit_node().is_disabled()
 }
 

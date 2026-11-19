@@ -5,7 +5,7 @@
 //! [`show`]; `show` hands them to the window's toast queue, which owns the cards, their timers and
 //! the hover pause. [`Live`] remembers which queued toast belongs to which notice.
 
-use craft::theme::variant::Tone;
+pub use craft::theme::variant::Tone;
 use craft::ui::notices::{NoticeCenter, NoticeEnd, PostedNotice};
 use craft::ui::runtime::toast::ToastId;
 use serde::{Deserialize, Serialize};
