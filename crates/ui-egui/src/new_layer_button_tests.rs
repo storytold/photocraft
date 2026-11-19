@@ -7,7 +7,7 @@ use serde_json::json;
 
 use crate::PhotocraftApp;
 
-fn panel() -> egui_kittest::Harness<'static, PhotocraftApp> {
+fn panel() -> egui_kittest::Harness<'static, Box<PhotocraftApp>> {
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).with_max_steps(64).build_eframe(|cc| {
@@ -18,11 +18,11 @@ fn panel() -> egui_kittest::Harness<'static, PhotocraftApp> {
     h
 }
 
-fn layers(h: &egui_kittest::Harness<'static, PhotocraftApp>) -> usize {
+fn layers(h: &egui_kittest::Harness<'static, Box<PhotocraftApp>>) -> usize {
     h.state().session.active().unwrap().doc.layers.len()
 }
 
-fn dialog_open(h: &egui_kittest::Harness<'static, PhotocraftApp>) -> bool {
+fn dialog_open(h: &egui_kittest::Harness<'static, Box<PhotocraftApp>>) -> bool {
     h.state().framework.dialogs.get::<HostedParamDialog>().is_some_and(|d| d.key().is_some_and(crate::new_layer_ui::owns))
 }
 

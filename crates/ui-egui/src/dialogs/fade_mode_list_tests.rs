@@ -20,7 +20,7 @@ const GROUPS: [&[&str]; 6] = [
     &["Hue", "Saturation", "Color", "Luminosity"],
 ];
 
-fn app(mode: &str, depth: u32) -> PhotocraftApp {
+fn app(mode: &str, depth: u32) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 16, "height": 12, "mode": mode, "depth": depth})).unwrap();
     app

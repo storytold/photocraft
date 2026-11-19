@@ -12,12 +12,12 @@ fn event(kind: &str, x: f64) -> Value {
 }
 
 /// Whether a component of the type named `short` ran in the last pass.
-fn ran(h: &egui_kittest::Harness<'static, crate::PhotocraftApp>, short: &str) -> bool {
+fn ran(h: &egui_kittest::Harness<'static, Box<crate::PhotocraftApp>>, short: &str) -> bool {
     craft::ui::testing::last_pass_runs(&h.ctx).iter().any(|(ty, _)| ty.split('<').next().is_some_and(|name| name.ends_with(short)))
 }
 
 /// A frame's passes, the reasons a pass asked to run again, and whether the status bar's readout ran in it.
-fn frame(h: &egui_kittest::Harness<'static, crate::PhotocraftApp>) -> (usize, Vec<String>, bool) {
+fn frame(h: &egui_kittest::Harness<'static, Box<crate::PhotocraftApp>>) -> (usize, Vec<String>, bool) {
     let output = &h.output().platform_output;
     (output.num_completed_passes, output.request_discard_reasons.iter().map(|cause| cause.reason.to_string()).collect(), ran(h, "StatusReadout"))
 }

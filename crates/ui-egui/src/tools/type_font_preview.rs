@@ -156,7 +156,7 @@ mod tests {
         app.type_font_preview.as_ref().and_then(|p| p.family.as_deref())
     }
 
-    fn app_with_type_layer() -> PhotocraftApp {
+    fn app_with_type_layer() -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
         app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
         app.run("type.create", json!({"text": "Sample", "font": "Inter", "size": 18})).unwrap();

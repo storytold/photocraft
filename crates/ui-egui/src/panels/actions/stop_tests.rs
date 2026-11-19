@@ -19,7 +19,7 @@ pub(super) fn count(app: &PhotocraftApp, name: &str) -> usize {
 
 /// `Stop Test` = Prefix, Stop, Suffix, saved to `.atn` and loaded back, so the step and its dialog
 /// toggle come the way a recorded file brings them.
-pub(super) fn stop_app(allow: bool, with_dialog: bool) -> PhotocraftApp {
+pub(super) fn stop_app(allow: bool, with_dialog: bool) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 8, "height": 6})).unwrap();
     let mut action = Action::new(
@@ -40,7 +40,7 @@ pub(super) fn stop_app(allow: bool, with_dialog: bool) -> PhotocraftApp {
 }
 
 /// Grandparent and Parent each make a prefix layer, call the next one in, then make a suffix.
-fn nested_app(allow: bool) -> PhotocraftApp {
+fn nested_app(allow: bool) -> Box<PhotocraftApp> {
     let mut app = stop_app(allow, true);
     for (name, child) in [("Parent", "Stop Test"), ("Grandparent", "Parent")] {
         app.session
@@ -274,7 +274,7 @@ fn a_filter_dialog_inside_a_called_action_continues_its_callers_after_ok() {
 }
 
 /// `If` makes Before, runs `Stop Test` when `condition` holds (`Other` when not), then makes After.
-fn conditional_app(condition: &str) -> PhotocraftApp {
+fn conditional_app(condition: &str) -> Box<PhotocraftApp> {
     let mut app = stop_app(true, true);
     app.session.actions.list.push(Action::new("Other", vec![ActionStep::new("layer.new.layer", json!({"name": "Other"}))])).unwrap();
     app.session
