@@ -1180,6 +1180,14 @@ impl Surface {
         Arc::new(Tile::filled(&self.format, &enc))
     }
 
+    /// [`Self::solid_tile`] with a fallible allocation: an error instead of an abort when the
+    /// tile's pixels can't be reserved.
+    pub fn try_solid_tile(&self, px: &[f32]) -> Result<Arc<Tile>, AllocationError> {
+        let mut enc = vec![0u8; self.format.bytes_per_pixel()];
+        encode_pixel(&self.format, px, &mut enc);
+        Ok(Arc::new(Tile::try_filled(&self.format, &enc)?))
+    }
+
     /// The default pixel's encoded bytes.
     pub fn default_bytes(&self) -> &[u8] {
         &self.default_pixel

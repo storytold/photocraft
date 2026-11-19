@@ -551,3 +551,23 @@ fn nudging_away_and_back_keeps_the_moved_pixels_selection() {
     assert_eq!(st.doc.selection.as_ref().map(|s| s.content_bounds()), Some(Rect::new(2, 2, 42, 42)), "a click keeps the marquee");
     assert_eq!(st.history.past_len(), steps, "and adds no step");
 }
+
+/// The outline is built per piece tile: a fully opaque tile becomes one shared solid tile, a soft
+/// tile keeps each pixel's alpha, and a tile with nothing in it is left out (as `prune` did).
+#[test]
+fn the_outline_shares_solid_tiles_and_keeps_soft_ones_exact() {
+    use photocraft_geom::{TILE_SIZE, TileCoord};
+    let t = TILE_SIZE;
+    let mut piece = Surface::new(PixelFormat::RGBA8);
+    piece.fill_rect(Rect::new(0, 0, 2 * t, t), &[1.0, 0.0, 0.0, 1.0]);
+    piece.write_pixel(2 * t + 3, 4, &[0.0, 1.0, 0.0, 0.5]);
+    piece.fill_rect(Rect::new(0, t, 1, t + 1), &[0.0, 0.0, 0.0, 0.0]);
+    let o = piece_outline(&piece, photocraft_color::SampleType::U8).unwrap();
+    let (a, b) = (o.tile(TileCoord::new(0, 0)).unwrap(), o.tile(TileCoord::new(1, 0)).unwrap());
+    assert!(Arc::ptr_eq(a, b), "opaque tiles share one solid tile");
+    assert!((o.pixel(5, 5)[0] - 1.0).abs() < 1e-6);
+    assert!((o.pixel(2 * t + 3, 4)[0] - 0.5).abs() < 0.01, "a soft pixel keeps its alpha");
+    assert_eq!(o.pixel(2 * t + 4, 4)[0], 0.0);
+    assert!(o.tile(TileCoord::new(0, 1)).is_none(), "a transparent tile is left out");
+    assert_eq!(o.content_bounds(), Rect::new(0, 0, 2 * t + 4, t));
+}
