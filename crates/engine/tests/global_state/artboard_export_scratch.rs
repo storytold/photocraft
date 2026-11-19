@@ -11,6 +11,8 @@ use std::io::{Read, Seek, SeekFrom, Write};
 
 #[test]
 fn artboard_exports_refuse_unreadable_scratch_tiles() {
+    photocraft_raster::spill::use_test_volume_space();
+    let _scratch = crate::lock(&crate::PROCESS);
     let root = std::env::temp_dir().join(format!("photocraft-artboard-scratch-{}", std::process::id()));
     let scratch = root.join("scratch");
     let out = root.join("out");
