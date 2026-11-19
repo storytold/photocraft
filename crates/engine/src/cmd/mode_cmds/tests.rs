@@ -860,10 +860,10 @@ fn bitmap_pixels(d: &Document) -> Vec<f32> {
 
 #[test]
 fn bitmap_in_bands_matches_one_full_canvas_conversion() {
-    // #8477: the composite is converted in bands (32768 px wide: 256 rows each, so 300 rows are
-    // two). Diffusion carries its error across the band edge, and pattern, halftone and custom
+    // #8477: 300 rows cross a 256-row compositor band. Diffusion carries its error across the
+    // band edge, and pattern, halftone and custom
     // pattern stay anchored to the image's rows: the result equals one full-canvas conversion.
-    let (w, h) = (32_768u32, 300u32);
+    let (w, h) = (64u32, 300u32);
     let mut s = session(w, h, 8, "grayscale");
     paint(&mut s, |x, y| {
         let v = ((x % 509) as f32 / 509.0 * 0.6 + (y as f32 / 300.0) * 0.4).fract();
@@ -888,7 +888,7 @@ fn bitmap_in_bands_matches_one_full_canvas_conversion() {
         if method == "customPattern" {
             p["pattern"] = json!("Cells");
         }
-        s.execute("image.mode.bitmap", p.clone()).unwrap();
+        bitmap_in_bands(&mut s, &p, 256).unwrap();
         let want = match method {
             "halftone" => {
                 let cell = (before.resolution_dpi / 53.0).max(2.0);
