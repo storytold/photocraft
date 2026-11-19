@@ -272,15 +272,7 @@ fn deleting_one_process_channel_keeps_other_planes_and_is_one_edit() {
         assert_eq!(after.channels.iter().take(names.len()).map(|ink| ink.name.as_str()).collect::<Vec<_>>(), names);
         assert!(after.channels[..names.len()].iter().all(|ink| ink.spot.is_some()));
         assert_eq!(&after.channels[names.len()..], &before.channels);
-        let retained = (0..before.mode.color_channels()).filter(|&component| component != 1);
-        for (ink, component) in after.channels.iter().zip(retained) {
-            let samples = ink.surface.read_region(after.bounds());
-            assert_eq!(samples.len(), before_pixels.len() / before.pixel_format().channels());
-            for (&actual, px) in samples.iter().zip(before_pixels.chunks_exact(before.pixel_format().channels())) {
-                let expected = if mode == "cmyk" { px[component] } else { 1.0 - px[component] };
-                assert!((actual - expected).abs() <= tol(depth), "{mode}/{depth}, component {component}: {actual} vs {expected}");
-            }
-        }
+        assert_retained_ink_samples(&before, after, &before_pixels, tol(depth));
         assert_eq!(s.active().unwrap().channel_view.target, ChannelTarget::Alpha(names.len()));
         assert_eq!(s.active().unwrap().channel_view.alpha_visible, [vec![false; names.len()], before_view.alpha_visible].concat());
         let color_hidden = if solo { vec![true; 3] } else { Vec::new() };
@@ -300,6 +292,19 @@ fn deleting_one_process_channel_keeps_other_planes_and_is_one_edit() {
         assert_eq!(pixels(&s), before_pixels);
         assert_eq!(doc(&s).channels, before.channels);
         assert_eq!(s.active().unwrap().history.past_len(), history);
+    }
+}
+
+fn assert_retained_ink_samples(before: &Document, after: &Document, before_pixels: &[f32], tolerance: f32) {
+    let retained = (0..before.mode.color_channels()).filter(|&component| component != 1);
+    let stride = before.pixel_format().channels();
+    for (ink, component) in after.channels.iter().zip(retained) {
+        let samples = ink.surface.read_region(after.bounds());
+        assert_eq!(samples.len(), before_pixels.len() / stride);
+        for (&actual, px) in samples.iter().zip(before_pixels.chunks_exact(stride)) {
+            let expected = if before.mode == ColorMode::Cmyk { px[component] } else { 1.0 - px[component] };
+            assert!((actual - expected).abs() <= tolerance, "{:?}/{:?}, component {component}: {actual} vs {expected}", before.mode, before.depth);
+        }
     }
 }
 
