@@ -11,7 +11,7 @@ The current method catalog includes engine execution and discovery, application 
 
 Implementation is split across:
 
-- `apps/photocraft/src/control_server.rs`: loopback TCP transport;
+- `craft::automation::server` (craft-libs): loopback TCP transport;
 - `crates/ui-egui/src/control.rs`: live application handlers;
 - `crates/automation/src/bridge.rs`: MCP-to-GUI client.
 

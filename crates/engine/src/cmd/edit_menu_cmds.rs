@@ -460,6 +460,10 @@ pub fn custom_shapes(s: &Session) -> &[CustomShape] {
     &s.edit_state.custom_shapes
 }
 
+/// Serialize tests that intentionally purge or seed the global smart caches.
+#[cfg(test)]
+pub(crate) static PURGE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 #[path = "edit_menu_cmds/tests.rs"]
 mod tests;

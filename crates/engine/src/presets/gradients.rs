@@ -525,7 +525,15 @@ fn stop_color_param(v: &Value, cmd: &str) -> Result<StopColor> {
 /// them. Pure, so the editor previews a drag with exactly what the command commits.
 pub fn apply_preset_stop(g: &GradientPreset, p: &Value, fg: [f32; 4], bg: [f32; 4], cmd: &str) -> Result<GradientPreset> {
     let mut out = g.clone();
-    let action = p.get("action").and_then(Value::as_str).ok_or_else(|| bad(cmd, "missing `action` (add|move|delete|color|opacity)"))?;
+    let action = p.get("action").and_then(Value::as_str).ok_or_else(|| bad(cmd, "missing `action` (add|move|delete|color|set|opacity)"))?;
+    if action == "set" {
+        // The whole gradient at once (an editor commit): the stops and transparency stops replace
+        // the current ones; the preset keeps its name.
+        if p.get("stops").and_then(Value::as_array).is_some_and(|a| a.len() > 1024) {
+            return Err(bad(cmd, "too many colour stops (max 1024)"));
+        }
+        return GradientPreset::from_params(&g.name, p, cmd);
+    }
     if action == "midpoint" {
         return Err(bad(cmd, "preset gradients keep midpoints at the centre (edit a Gradient Fill layer to move them)"));
     }
@@ -727,7 +735,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Edit Gradient Stop",
             menu: &[],
             shortcut: None,
-            params: r##"{"action":"add|move|delete|color|opacity","kind":"color|opacity"="color","index":stop number,"location":0..1,"color":"#rrggbb"|"foreground"|"background" (add: default the colour there),"opacity":0..100} → {"current"}. Edits the Gradient tool's current gradient (no layer, midpoints stay centred)."##,
+            params: r##"{"action":"add|move|delete|color|opacity|set","kind":"color|opacity"="color","index":stop number,"location":0..1,"color":"#rrggbb"|"foreground"|"background" (add: default the colour there),"opacity":0..100; set: "stops":[[t 0..1,"#rrggbb"|"foreground"|"background"],…] (2..1024),"transparency":[[t,opacity 0..100],…]? replaces every stop} → {"current"}. Edits the Gradient tool's current gradient (no layer, midpoints stay centred)."##,
             enabled: always,
             run: stop,
             journal: true,
