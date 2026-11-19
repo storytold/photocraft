@@ -63,13 +63,23 @@ pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&
     let doc = d.doc.clone();
     let mut report = LayerExportReport::default();
     // Every layer takes its panel-order index, even one skipped as hidden or as an adjustment,
-    // so a file keeps the same number whether Visible Layers Only is on or off (#13959).
+    // so a file keeps the same number whether Visible Layers Only is on or off (#13959). An
+    // adjustment layer has no pixels of its own: for PNG and JPEG it exports like an empty layer
+    // under its own panel-order index, as measured (#13966); the other formats were not measured
+    // and still skip it, leaving its number unused.
     for (index, l) in doc.layers.iter().rev().enumerate() {
         if !l.visible && visible_only {
             report.skipped.push(SkippedExportLayer { layer: l.id.0, name: l.name.clone(), reason: "hidden by visibleOnly" });
             continue;
         }
-        if matches!(l.content, LayerContent::Adjustment(_)) {
+        // Only an adjustment whose mask hides nothing was measured: the white mask every new one
+        // gets. One whose mask hides something (painted, or made from a selection) or that has a
+        // vector mask was not, so it keeps today's skip in every format.
+        let masked = l.vector_mask.is_some()
+            || l.mask
+                .as_ref()
+                .is_some_and(|m| m.enabled && (m.surface.default_pixel().first().is_some_and(|v| *v < 1.0) || !m.surface.content_bounds().is_empty()));
+        if matches!(l.content, LayerContent::Adjustment(_)) && (masked || !matches!(format.as_str(), "png" | "jpg" | "jpeg")) {
             report.skipped.push(SkippedExportLayer { layer: l.id.0, name: l.name.clone(), reason: "adjustment layer has no pixels of its own" });
             continue;
         }
