@@ -39,11 +39,11 @@
 //! `open_bytes` File › Open uses, and go back out through the same exporter File › Save As uses
 //! (`Services::export`), so a cloud copy is exactly the file a save to disk would have written.
 //!
-//! Real-time shared editing, the presence row and the share-link dialog that the original
-//! CollabCraft integration offered are not part of this contract. Each depended on
-//! `wdunn001/collab-craft` and on `craft_ui::share` / `craft_ui::presence`, and none of those has
-//! a storytold-hosted replacement or an open craft-libs contract today. See the pull request
-//! description for where that stands.
+//! Real-time shared editing and the presence row are not part of this contract. RFC-0020 states
+//! that surface separately from the documents contract here. The contracts crate it calls for is
+//! not open yet. Sharing does belong to the merged contract, through `craft_ui::share`. It
+//! arrives with the pages once the pin above allows them. This module states the Files half
+//! alone. That is what a framework crate pinned without a cloud module can support.
 
 use std::collections::HashMap;
 use std::sync::Arc;
