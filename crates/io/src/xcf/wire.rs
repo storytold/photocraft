@@ -71,6 +71,7 @@ impl<'a> Cursor<'a> {
 }
 
 /// One property record: its type and payload.
+#[derive(Clone, Copy)]
 pub(super) struct Prop<'a> {
     pub(super) offset: usize,
     pub(super) kind: u32,
