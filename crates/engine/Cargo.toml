@@ -15,6 +15,8 @@ corpus = []
 photocraft-geom = { workspace = true }
 photocraft-color = { workspace = true }
 craft-cms = { workspace = true }
+# PCTIP codec from craft-libs#1564; isolated pin until the shared revision is adopted workspace-wide.
+craft-pcraft-tip = { package = "craft-pcraft-format", git = "https://github.com/storytold/craft-libs", rev = "18ffc07519b15f5ef39e752aa0f405261fec8ebb" }
 photocraft-raster = { workspace = true }
 photocraft-doc = { workspace = true }
 photocraft-ops = { workspace = true }
@@ -40,6 +42,11 @@ photocraft-codecs = { workspace = true }
 photocraft-formats = { workspace = true }
 flate2 = { workspace = true }
 craft-print = { workspace = true }
+# The framework through its facade: the actions model (`craft::automation`), the `.kys` model
+# (`craft::keymap`), the palette (`craft::color_ui`), preferences storage and autosave
+# (`craft::settings`, `craft::platform`), and `craft::theme::ThemeId`, the theme ids the
+# appearance preferences hold.
+craft = { workspace = true, features = ["automation", "color-ui", "keymap", "platform", "settings"] }
 
 # Release tags use the same semantic versions as Cargo.
 semver = "1"
