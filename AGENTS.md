@@ -123,6 +123,7 @@ People trust PhotoCraft with their work, and a crash loses it. A malformed file,
 8. **Performance is a feature.** Benchmark heavy operations on a 24–36 MP image in release. Work per tile in parallel (rayon), skip empty tiles, never scan a full surface per frame (cache per revision), and record before/after timings in the dev log.
 
 9. **Never panic on input** (see *Never crash* above). A command's `run` closure and anything it calls must return `Err`, never panic, for *any* params or document state: validate params, check bounds before indexing or dividing, and reject absurd sizes before allocating. The `panic_hunt` integration test fuzzes every command with adversarial params and must stay green.
+10. **Our features use our own names.** Labels, menus, dialogs, messages, tooltips, help, READMEs, release text and every translation never name a feature with another company's product, technology or distinctive feature name. Ordinary descriptive words that several unrelated products use for the same thing (`Layers`, `Crop`) are fine. Parity means the same place and behaviour, not the same name. Follow [standards/naming.md](https://github.com/storytold/craft-contrib/blob/main/standards/naming.md) ([RFC-0029](https://github.com/storytold/craft-contrib/blob/main/rfcs/0029-other-companies-names.md)): take the name from its names list, run its check for any other new or changed name and record it in the pull request and in `docs/feature-names.md`, and when the check does not settle it, do not ship the name. Change labels only: command ids, preference keys and stored values keep their names, and the old label stays as a hidden search alias. File formats and compatibility names stay accurate (`Open PSD`).
 
 ## 4. Picking work
 
@@ -214,3 +215,7 @@ If the field has a PSD equivalent, map it in `crates/io` too, and keep unknown P
 - Workflows in `.github/workflows/` call the shared workflows in [`storytold/craft-common-actions`](https://github.com/storytold/craft-common-actions) at `@main`, with their inputs and secrets. No other jobs: if no shared workflow does what's needed, it doesn't go here.
 - Don't add or change CI in a feature or fix PR. If the existing workflows can't build or test a change, link an existing craft-common-actions issue or PR, or open a new issue, or a PR only for a small fix that is safe for every app and does not increase CI time.
 - Some workflow files here still run their own jobs. Don't add to them. Moving a job into craft-common-actions is its own task, never part of another PR, and the job stays here until a shared workflow runs it.
+
+## Shared-library reuse
+
+Before implementing file formats, codecs, protocols or reusable UI components, check [storytold/craft-libs](https://github.com/storytold/craft-libs) and relevant open PRs; reuse or extend shared APIs instead of duplicating app-local implementations. Keep app-specific policy and adapters local, preserve behavior and format fidelity, security and resource limits, repository layering and regression tests, and document any shared-API gap rather than silently reducing functionality.
