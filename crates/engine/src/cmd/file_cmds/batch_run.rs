@@ -444,16 +444,22 @@ impl BatchPolicy {
 
 /// Photoshop-compatible Batch log encoding, shared by the desktop command and CLI.
 pub fn encode_batch_error_log<'a>(errors: impl IntoIterator<Item = (&'a str, &'a str)>) -> Vec<u8> {
-    let mut body = String::from("Batch Start\r\n\r\n");
+    let mut body = String::from("Start Batch\r\n\r\n");
     for (input, reason) in errors {
+        let input = native_separators(input);
         body.push_str(&format!("File: \"{input}\"\r\nError: {reason}\r\n\r\n"));
     }
-    body.push_str("Batch End\r\n");
-    let mut bytes = vec![0xff, 0xfe];
+    body.push_str("End Batch\r\n");
+    let mut bytes = vec![0xfe, 0xff];
     for word in body.encode_utf16() {
-        bytes.extend_from_slice(&word.to_le_bytes());
+        bytes.extend_from_slice(&word.to_be_bytes());
     }
     bytes
+}
+
+/// Paths in the log use the platform's separators: backslashes on Windows, also for a folder given with `/`.
+fn native_separators(path: &str) -> String {
+    if cfg!(windows) { path.replace('/', "\\") } else { path.to_string() }
 }
 
 fn write_error_log(path: &str, errors: &[Value]) -> Result<()> {
@@ -492,9 +498,16 @@ fn validate_error_log(policy: &BatchPolicy, inputs: impl IntoIterator<Item = Str
 /// identities once for the whole plan, so aliases and large folder batches stay safe and linear.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn validate_flat_outputs(outputs: &[(String, String)]) -> Result<()> {
+    validate_written_outputs(outputs, &|_| true)
+}
+
+/// [`validate_flat_outputs`] for the outputs at the indices `written` accepts: every input stays a
+/// source, but an input that fails before it is opened writes nothing to its name.
+#[cfg(not(target_arch = "wasm32"))]
+fn validate_written_outputs(outputs: &[(String, String)], written: &dyn Fn(usize) -> bool) -> Result<()> {
     let sources: std::collections::HashMap<_, _> =
         outputs.iter().enumerate().filter_map(|(index, (input, _))| std::fs::canonicalize(input).ok().map(|identity| (identity, index))).collect();
-    for (index, (_, output)) in outputs.iter().enumerate() {
+    for (index, (_, output)) in outputs.iter().enumerate().filter(|(index, _)| written(*index)) {
         let identity = super::paths::destination_identity(std::path::Path::new(output))
             .ok_or_else(|| EngineError::BadParams { cmd: "file.automate.batch".into(), msg: format!("output path cannot be resolved safely: {output}") })?;
         if sources.get(&identity).is_some_and(|&source_index| source_index != index) {
@@ -920,7 +933,16 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         return result;
     }
     let check_duplicates = recorded_output_guard(p);
-    let names = if save_and_close { None } else { batch_naming::plan(&inputs, &output, &format, p)? };
+    // A folder input the opener will refuse fails before its action starts, so it takes no serial.
+    let counts = |input: &BatchInput| {
+        #[cfg(not(target_arch = "wasm32"))]
+        if check_folder_format && !super::paths::openable_name(&input.path) {
+            return false;
+        }
+        let _ = (input, check_folder_format);
+        true
+    };
+    let names = if save_and_close { None } else { batch_naming::plan_counting(&inputs, &output, &format, p, &counts)? };
     let mut save = SaveOpts::from_params(s, p, cmd)?;
     if save_and_close {
         save.tiff_layers = save_close_tiff_layers;
@@ -948,8 +970,10 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         }
     };
     #[cfg(not(target_arch = "wasm32"))]
-    validate_flat_outputs(&outputs)?;
-    validate_error_log(&policy, outputs.iter().map(|(path, _)| path.clone()), outputs.iter().map(|(_, path)| path.clone()))?;
+    validate_written_outputs(&outputs, &|index| inputs.get(index).is_none_or(counts))?;
+    // Every input is protected; a refused input's name is never written, so the log may take it.
+    let written = outputs.iter().zip(&inputs).filter(|(_, input)| counts(input)).map(|((_, path), _)| path.clone());
+    validate_error_log(&policy, outputs.iter().map(|(path, _)| path.clone()), written)?;
     let was_playing = nested;
     #[cfg(test)]
     let history_observer = s.batch_history_observer;
