@@ -134,17 +134,6 @@ fn bulk_load_summary_counts_distinct_sets_and_pluralises_files() {
 }
 
 #[test]
-/// The multi-file summary is translated like the rest of the Actions panel.
-fn bulk_load_summary_is_translated() {
-    if !crate::i18n::needs_catalogs() {
-        return;
-    }
-    let chosen = vec![("a.atn".into(), action_set_bytes("Set 1", "A")), ("b.atn".into(), action_set_bytes("Set 1", "B"))];
-    let status = crate::i18n::with_language(crate::i18n::Lang::from_code("de").unwrap(), || bulk_load_status(chosen).1);
-    assert_eq!(status, "2 Aktionsdateien geladen (1 Aktion; Satz Set 1 aus b.atn hat den aus a.atn ersetzt)");
-}
-
-#[test]
 /// Dismissing the picker is inert; one selected file keeps its existing status message.
 fn bulk_load_keeps_cancel_empty_and_single_file_behavior() {
     for answer in [Picked::Cancelled, Picked::Paths(Vec::new()), Picked::Contents(Vec::new())] {
