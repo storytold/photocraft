@@ -12,6 +12,7 @@ use craft::imaging::ui::transform_preview::{PreviewDisplay, PreviewMap, Transfor
 use craft::imaging::ui::warp::{CylinderValues, CylinderWarp, WarpEdit, WarpGrid, WarpMesh};
 use craft::ui::canvas::RasterDisplay;
 use craft::ui::contract::{Bind, Show as _};
+use craft::ui::primitives::PaintSlot;
 use photocraft_doc::DocId;
 use photocraft_geom::warp::WarpStyle;
 
@@ -38,11 +39,16 @@ struct Shown {
     cylinder: Option<EditEvents<CylinderValues>>,
     /// A warp control has the pointer button down on it.
     busy: bool,
+    /// The preview's shapes, for the canvas's picture slot after the document ([`SessionShown::picture`]).
+    picture: Vec<egui::Shape>,
 }
 
 /// Shows the open Free Transform in the canvas body at `rect`, and applies what its controls
 /// report: the preview (moving pixels, covering layers, path outline), then the box or warp
-/// controls. The canvas calls it after the document display and before the tool overlays.
+/// controls. The canvas calls it with its controls, before it prepares the document's picture, so
+/// the preview's moving pixels come back in [`SessionShown::picture`] for the canvas to add to its
+/// picture slot after the document: added here, the document (which hides the moving layer) would
+/// paint over them (#15546).
 ///
 /// Every control reads the frame's input once for its own pass, so a second pass of a frame
 /// reports no edit again and this applies only what the pass it ran in reported.
@@ -51,11 +57,12 @@ struct Shown {
 /// transform controls share its id and must not open a second box in the same pass), and the box's snap lines, which
 /// the session's canvas tool hands to the host in this frame's pass ([`super::canvas_tool`]).
 pub fn show_in_canvas(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: egui::Rect, now: f64) -> SessionShown {
+    super::begin::reconcile_held(app);
     let shown = {
         let (Some(t), Some(pv)) = (&app.ui.transform, &app.transform_preview) else { return SessionShown::default() };
         show_session(app, t, pv, ui, rect)
     };
-    let Shown { edits, snapped, apply, discard, mesh, cylinder, busy } = shown;
+    let Shown { edits, snapped, apply, discard, mesh, cylinder, busy, picture } = shown;
     let mut need_warp = false;
     if let Some(t) = app.ui.transform.as_mut() {
         for edit in edits.iter().cloned() {
@@ -85,13 +92,12 @@ pub fn show_in_canvas(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: egui::Re
     if let Some(t) = app.ui.transform.as_mut() {
         t.session.settle(now, busy);
     }
-    SessionShown { shown: true, snapped }
+    SessionShown { shown: true, snapped, picture }
 }
 
 /// The pass's shows, in paint order.
 fn show_session(app: &PhotocraftApp, t: &FreeTransform, pv: &OpenPreview, ui: &mut egui::Ui, rect: egui::Rect) -> Shown {
-    show_preview(app, t, pv, ui, rect);
-    let mut out = Shown::default();
+    let mut out = Shown { picture: show_preview(app, t, pv, ui, rect), ..Shown::default() };
     if pv.committing.is_some() {
         // The moving pixels stay without the box until the commit job lands.
         return out;
@@ -105,7 +111,11 @@ fn show_session(app: &PhotocraftApp, t: &FreeTransform, pv: &OpenPreview, ui: &m
             .show_at(ui, rect);
     }
     match t.session.warp() {
-        Some(w) => show_warp(t, pv, w, ui, rect, &mut out),
+        Some(w) => {
+            // A screen pixel in document units, for the pull's reach along a line.
+            let unit = crate::canvas::active_view(app).map_or(1.0, |v| 1.0 / v.zoom.max(1e-6));
+            show_warp(t, pv, w, ui, rect, unit, &mut out)
+        }
         None => {
             let settings = super::settings(app);
             let shown = TransformOverlay::new("Free Transform", &t.session, &settings).id_salt(super::BOX_ID_SALT).show_at(ui, rect);
@@ -125,21 +135,54 @@ pub struct SessionShown {
     pub shown: bool,
     /// The snap lines of the box's drag.
     pub snapped: Vec<SnapLine>,
+    /// The preview's shapes (the moving pixels, then the layers above them), which the canvas adds to its picture
+    /// slot after the document's picture.
+    pub picture: Vec<egui::Shape>,
 }
 
 /// The moving pixels as the session maps them (warped, skewed or styled), then the layers above
 /// them, both in the canvas's picture, under the grid, guides and controls. Nothing is shown for the Frame tool's transform.
-fn show_preview(app: &PhotocraftApp, t: &FreeTransform, pv: &OpenPreview, ui: &mut egui::Ui, rect: egui::Rect) {
+fn show_preview(app: &PhotocraftApp, t: &FreeTransform, pv: &OpenPreview, ui: &mut egui::Ui, rect: egui::Rect) -> Vec<egui::Shape> {
     if crate::frame_tool::frame_transform(t) {
-        return;
+        return Vec::new();
     }
+    // Painted in place after this mark, then taken out for the picture slot.
+    let mark = PaintSlot::reserve(ui.painter());
     let display = preview_display(app, ui.ctx());
     let boxed = t.session.phase() == TransformPhase::Box;
     // The layers that get the styled preview stay PhotoCraft's: a visible layer with a style.
     let source = LayerStyleSource::new(app).filter(|_| boxed && pv.styled.is_some());
-    let (map, textures) = match t.session.warp() {
-        Some(w) => (PreviewMap::mesh(&w.mesh, t.session.rect()), &pv.textures),
-        None => {
+    // A warp held under a box mode moves with the box ([`super::HeldWarp`]).
+    let held = pv.held.as_ref().filter(|_| t.session.warp().is_none()).map(|h| {
+        let w = h.carried(t.quad_array());
+        let source = craft::behavior::kurbo::Rect::new(w.bounds[0], w.bounds[1], w.bounds[2], w.bounds[3]);
+        (SessionWarp::new(w, false).mesh, source, h.texture.as_ref())
+    });
+    // A smart object's stored warp under a projective move of the box: drawn from its carried points, as the render
+    // draws it ([`super::WarpedPreview`]).
+    let warped = pv.warped.as_ref().filter(|_| t.session.warp().is_none() && held.is_none() && source.is_none()).and_then(|wp| {
+        let h = photocraft_algo::transform::Homography::quad_to_quad(wp.start, t.quad_array())?;
+        let projective = (h.0[6].abs() + h.0[7].abs()) > 1e-12 * h.0[8].abs().max(1e-300);
+        if !projective {
+            return None;
+        }
+        let total = h.mul(&photocraft_algo::transform::Homography(wp.place));
+        let mesh = wp.mesh.map_points(|p| {
+            let (x, y) = total.apply(p[0], p[1]);
+            [x, y]
+        });
+        let b = wp.bounds;
+        Some((
+            SessionWarp::new(photocraft_geom::warp::Warp::custom(mesh, b), false).mesh,
+            craft::behavior::kurbo::Rect::new(b[0], b[1], b[2], b[3]),
+            &wp.texture,
+        ))
+    });
+    let (map, textures) = match (t.session.warp(), &held) {
+        (Some(w), _) => (PreviewMap::mesh(&w.mesh, t.session.rect()), &pv.textures),
+        (None, Some((mesh, source, texture))) => (PreviewMap::mesh(mesh, *source), texture.unwrap_or(&pv.textures)),
+        (None, None) if let Some((mesh, frame, texture)) = &warped => (PreviewMap::mesh(mesh, *frame), *texture),
+        (None, None) => {
             let live = pv.content_aware.as_ref().filter(|_| source.is_none()).and_then(|live| live.shown(t)).map(|(textures, _)| textures);
             (PreviewMap::quad(texture_quad(t, pv)), live.unwrap_or(&pv.textures))
         }
@@ -150,8 +193,7 @@ fn show_preview(app: &PhotocraftApp, t: &FreeTransform, pv: &OpenPreview, ui: &m
         .opacity(pv.opacity)
         .nearest(t.session.interpolation() == Interpolation::NearestNeighbor)
         .clip(canvas)
-        .dragging(t.session.dragging())
-        .picture();
+        .dragging(t.session.dragging());
     if let Some(display) = display.as_ref() {
         preview = preview.display(display);
     }
@@ -162,8 +204,9 @@ fn show_preview(app: &PhotocraftApp, t: &FreeTransform, pv: &OpenPreview, ui: &m
     if let Some(above) = &pv.above
         && let Some(frame) = above.frame()
     {
-        RasterDisplay::new("", above).mapped(frame, 1).picture().show_at(ui, rect);
+        RasterDisplay::new("", above).mapped(frame, 1).show_at(ui, rect);
     }
+    mark.take_after(ui.ctx())
 }
 
 /// What the box draws for the styled layer at `zoom`, as the framework's styled preview builds it: the composite and its
@@ -197,7 +240,7 @@ pub(crate) fn styled_composite(app: &PhotocraftApp, zoom: f32) -> Option<(egui::
 }
 
 /// The warp grid, or the cylinder editor for a cylinder, with its events for the caller to apply.
-fn show_warp(t: &FreeTransform, pv: &OpenPreview, w: &SessionWarp, ui: &mut egui::Ui, rect: egui::Rect, out: &mut Shown) {
+fn show_warp(t: &FreeTransform, pv: &OpenPreview, w: &SessionWarp, ui: &mut egui::Ui, rect: egui::Rect, unit: f64, out: &mut Shown) {
     if w.warp.style == WarpStyle::Cylinder {
         if let Some(values) = warp::cylinder_values(&w.warp) {
             let shown = CylinderWarp::new("Warp cylinder", Bind::given(values), &w.mesh).show_at(ui, rect);
@@ -211,7 +254,9 @@ fn show_warp(t: &FreeTransform, pv: &OpenPreview, w: &SessionWarp, ui: &mut egui
     let preset = one_patch && !matches!(w.warp.style, WarpStyle::None | WarpStyle::Custom);
     // No splits on type (#3004).
     let split = pv.split.filter(|_| !w.on_type);
-    let mut grid = WarpGrid::new("Warp grid", Bind::given(w.mesh.clone()), t.session.rect());
+    let mut grid = WarpGrid::new("Warp grid", Bind::given(w.mesh.clone()), t.session.rect())
+        .rule(warp::grid_rule(unit, pv.placed_warp.map(|(m, _)| m), split))
+        .surface(warp::grid_surface(&w.mesh, unit, pv.placed_warp.map(|(m, _)| m)));
     if preset {
         grid = grid.preset();
     }
@@ -237,6 +282,16 @@ fn gesture_open<T>(events: &EditEvents<T>) -> bool {
 /// transform takes the texture's rect.
 pub(super) fn texture_quad(t: &FreeTransform, pv: &OpenPreview) -> [Point; 4] {
     let quad = t.session.quad();
+    // A box that opened on a smart object's placement moves its pixels (over `rect`) from there.
+    if let Some(placed) = &pv.placed
+        && let Some(h) = photocraft_algo::transform::Homography::quad_to_quad(placed.start, quad.map(|p| [p.x, p.y]))
+    {
+        let r = placed.rect;
+        return [[r[0], r[1]], [r[2], r[1]], [r[2], r[3]], [r[0], r[3]]].map(|p| {
+            let (x, y) = h.apply(p[0], p[1]);
+            Point::new(x, y)
+        });
+    }
     let Some(sv) = pv.several.as_ref().filter(|sv| sv.rect != sv.frame) else { return quad };
     let Some(h) = t.session.homography() else { return quad };
     let r = sv.rect;

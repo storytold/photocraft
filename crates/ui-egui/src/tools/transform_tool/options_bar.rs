@@ -158,14 +158,16 @@ fn warp_edit(app: &mut PhotocraftApp, edit: WarpFieldsEdit) {
         WarpFieldsEdit::Style(key) => {
             let Some(style) = WarpStyle::parse(&key) else { return };
             let on_type = warps_type(app);
-            match style {
+            // A style other than Custom is built over the warp's box, which is the contents' under a placement.
+            let built = |warp: Warp| if style == WarpStyle::Custom { warp } else { super::warp::placed_doc_warp(app, warp) };
+            built(match style {
                 WarpStyle::Custom => Warp::custom(w.to_mesh(1, 1), b),
                 WarpStyle::None if on_type => Warp::none(b),
                 WarpStyle::None => Warp::custom(BezierMesh::identity(b, 1, 1), b),
                 // A box too thin for a cylinder keeps its shape.
                 WarpStyle::Cylinder => cylinder_default(b).unwrap_or_else(|| Warp::custom(w.to_mesh(1, 1), b)),
                 s => Warp { style: s, bend: if preset { w.bend } else { 50.0 }, ..Warp::none(b) },
-            }
+            })
         }
         // The orientation and the fields act on a preset style only.
         _ if !preset => return,
@@ -191,7 +193,8 @@ fn warp_edit(app: &mut PhotocraftApp, edit: WarpFieldsEdit) {
 /// None style). One undo step through the session, and no Split tool armed.
 pub fn reset_warp(app: &mut PhotocraftApp) {
     let Some((b, on_type)) = app.ui.transform.as_ref().and_then(|t| t.session.warp()).map(|w| (w.warp.bounds, w.on_type)) else { return };
-    set_warp(app, if on_type { Warp::none(b) } else { Warp::custom(BezierMesh::identity(b, 1, 1), b) });
+    let reset = if on_type { Warp::none(b) } else { super::warp::placed_doc_warp(app, Warp::custom(BezierMesh::identity(b, 1, 1), b)) };
+    set_warp(app, reset);
     if let Some(pv) = app.transform_preview.as_mut() {
         pv.split = None;
     }

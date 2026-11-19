@@ -65,15 +65,135 @@ pub fn warp_bounds(doc: &Document, layer: &Layer) -> Rect {
 /// mesh, a custom warp, like every other stored warp.
 pub fn smart_warp_doc_space(layer: &Layer) -> Option<Warp> {
     let LayerContent::Smart(sm) = &layer.content else { return None };
-    let w = sm.warp.as_ref()?;
+    sm.warp.as_ref().map(|w| placed_warp(sm, w))
+}
+
+/// What Warp mode edits on a smart object: its warp in source space (its stored warp, else no
+/// warp over its contents) and its placement (source → document). Warp mode shows the mesh through
+/// the placement and stores it as it is, so a Distort or Perspective stays exact (#8927).
+pub fn smart_warp_source(doc: &Document, layer: &Layer) -> Option<(Warp, Homography)> {
+    let LayerContent::Smart(sm) = &layer.content else { return None };
+    let w = match &sm.warp {
+        Some(w) => w.clone(),
+        None => {
+            let b = crate::smart_cmds::source_box(doc, sm)?;
+            Warp::custom(BezierMesh::identity(b, 1, 1), b)
+        }
+    };
+    Some((w, crate::smart_cmds::placement(sm)))
+}
+
+/// A smart object's contents with no placement and no warp, so a preview can map them through
+/// the source-space mesh of [`smart_warp_source`] and then the placement without placing them
+/// twice, with the scale they are rendered at: 1 (source pixels), or for a vector source the
+/// placement's scale (up to 16), so a small SVG placed large previews sharp; at most 16 MP either
+/// way, so a large photo is previewed smaller rather than rendered whole. `None` when the source
+/// can't be rendered.
+pub fn smart_unplaced_contents(doc: &Document, layer: &Layer) -> Option<(Surface, f64)> {
+    let LayerContent::Smart(sm) = &layer.content else { return None };
+    let vector = crate::smart_cmds::source_bytes(&doc.metadata, &sm.source).is_some_and(|(_, b)| photocraft_io::svg::is_svg(&b));
+    let b = crate::smart_cmds::source_box(doc, sm)?;
+    let area = ((b[2] - b[0]) * (b[3] - b[1])).max(1.0);
+    let fit = (16_000_000.0 / area).sqrt();
+    let k = if vector {
+        let t = crate::smart_cmds::placement(sm);
+        let s = t.local_scale((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0);
+        if s.is_finite() { s.clamp(1.0, 16.0) } else { 1.0 }
+    } else {
+        1.0
+    };
+    let k = k.min(fit);
+    if !(k.is_finite() && k > 0.0) {
+        return None;
+    }
+    let mut bare = sm.clone();
+    bare.transform = photocraft_geom::Affine { m: [k, 0.0, 0.0, k, 0.0, 0.0] };
+    bare.perspective = None;
+    bare.warp = None;
+    // Smart filters run on the placed result (and the filter mask is in document space): at
+    // source scale they would show differently from what the commit renders, so the preview
+    // shows the contents without them.
+    bare.filters_enabled = false;
+    bare.filter_mask = None;
+    crate::smart_cmds::render(doc, &bare).ok().flatten().map(|s| (s, k))
+}
+
+/// Where Free Transform's box opens on a smart object: its contents' corners as the placement
+/// puts them, rotated, skewed or distorted, as Photoshop keeps them (#3649). A warped smart object
+/// is framed by its warp's control points instead (the box the reference stores as its corners),
+/// so the box takes in what the warp bends out. `None` for other layers, or when the source can't
+/// be read.
+pub fn smart_box(doc: &Document, layer: &Layer) -> Option<[[f64; 2]; 4]> {
+    let LayerContent::Smart(sm) = &layer.content else { return None };
+    let source = crate::smart_cmds::source_box(doc, sm)?;
+    let b = match sm.warp.as_ref().filter(|w| !w.is_identity()) {
+        Some(w) => {
+            let pts = w.to_mesh(1, 1).points;
+            let b = pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+            if b.iter().all(|v| v.is_finite()) && b[2] > b[0] && b[3] > b[1] { b } else { source }
+        }
+        None => source,
+    };
+    let t = crate::smart_cmds::placement(sm);
+    let corners = [[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]].map(|p| hom_apply(&t, p));
+    corners.iter().flatten().all(|v| v.is_finite()).then_some(corners)
+}
+
+/// The size of a smart object's contents in their own pixels (what its placement scales from).
+pub fn smart_contents_size(doc: &Document, layer: &Layer) -> Option<[f64; 2]> {
+    let LayerContent::Smart(sm) = &layer.content else { return None };
+    let b = crate::smart_cmds::source_box(doc, sm)?;
+    let s = [b[2] - b[0], b[3] - b[1]];
+    (s[0] > 0.0 && s[1] > 0.0 && s.iter().all(|v| v.is_finite())).then_some(s)
+}
+
+/// Whether a smart object's placement only scales (positively) and moves: its warp is then exactly
+/// the same in document space, where Warp mode edits it (with the cylinder editor's handles,
+/// #4112); a rotated, skewed, flipped or distorted one is edited in its contents' space (#8927).
+pub fn smart_placement_axis_aligned(layer: &Layer) -> bool {
+    let LayerContent::Smart(sm) = &layer.content else { return false };
+    let m = crate::smart_cmds::placement(sm).0;
+    m[8] != 0.0 && m[1] == 0.0 && m[3] == 0.0 && m[6] == 0.0 && m[7] == 0.0 && m[0] / m[8] > 0.0 && m[4] / m[8] > 0.0
+}
+
+/// A document-space warp of a smart object put back in its contents' space, by `inv` (the inverse
+/// of its placement): the box it then covers, and the warp (`None` for no warp). A preset keeps
+/// its style over that box, a cylinder stays a cylinder where it can.
+fn warp_in_source(inv: &Homography, w: &Warp) -> ([f64; 4], Option<Warp>) {
+    let corners = [[w.bounds[0], w.bounds[1]], [w.bounds[2], w.bounds[1]], [w.bounds[2], w.bounds[3]], [w.bounds[0], w.bounds[3]]].map(|p| hom_apply(inv, p));
+    let sb = corners.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+    let warp = match w.style {
+        WarpStyle::None => None,
+        WarpStyle::Custom => Some(Warp::custom(w.to_mesh(1, 1).map_points(|p| hom_apply(inv, p)), sb)),
+        WarpStyle::Cylinder => cylinder_in_source(w, inv, sb),
+        _ => Some(Warp { bounds: sb, mesh: None, ..w.clone() }),
+    };
+    (sb, warp)
+}
+
+/// A smart object's warp edited in document space (Warp mode on an upright placement,
+/// [`smart_warp_doc_space`]) in its contents' space, with the placement it shows through:
+/// what [`smart_warp_source`] gives for a stored warp. `None` for another layer, a degenerate
+/// placement or no warp.
+pub fn smart_warp_to_source(layer: &Layer, w: &Warp) -> Option<(Warp, Homography)> {
+    let LayerContent::Smart(sm) = &layer.content else { return None };
+    let t = crate::smart_cmds::placement(sm);
+    let (_, warp) = warp_in_source(&t.inverse()?, w);
+    Some((warp?, t))
+}
+
+/// `w`, in the smart object's source space, mapped through its placement.
+fn placed_warp(sm: &photocraft_doc::SmartObject, w: &Warp) -> Warp {
     let t = crate::smart_cmds::placement(sm);
     let corners = [[w.bounds[0], w.bounds[1]], [w.bounds[2], w.bounds[1]], [w.bounds[2], w.bounds[3]], [w.bounds[0], w.bounds[3]]].map(|p| hom_apply(&t, p));
     let b = corners.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+    // A cylinder under a placement that only scales and moves stays a cylinder, so Warp mode
+    // shows its own handles; under any other placement it is its mesh, a custom warp.
     if let Some(c) = cylinder_through(w, &t, b) {
-        return Some(c);
+        return c;
     }
     let mesh = w.to_mesh(1, 1).map_points(|p| hom_apply(&t, p));
-    Some(Warp::custom(mesh, b))
+    Warp::custom(mesh, b)
 }
 
 /// Parses the warp params: a full `"warp"` object, or `"style"` (+ `"bend"`, `"hDistort"`,
@@ -233,23 +353,16 @@ fn warp_layer(
         LayerContent::Smart(sm) => {
             // Store in source space: undo the placement (affine, or Distort / Perspective) around the warp.
             let inv = crate::smart_cmds::placement(sm).inverse().ok_or_else(|| EngineError::Other("the smart object's transform is degenerate".into()))?;
-            let corners =
-                [[w.bounds[0], w.bounds[1]], [w.bounds[2], w.bounds[1]], [w.bounds[2], w.bounds[3]], [w.bounds[0], w.bounds[3]]].map(|p| hom_apply(&inv, p));
-            let sb = corners.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+            let (sb, plain) = warp_in_source(&inv, w);
             let src_warp = match w.style {
-                WarpStyle::None => None,
                 WarpStyle::Custom => {
                     let mesh = w.to_mesh(1, 1).map_points(|p| hom_apply(&inv, p));
                     // A `mesh` parameter's knots span the contents, not the warp box's image (#4113).
-                    match frames.and_then(|f| f.get(&l.id)).and_then(|&c| content_frame_warp(&mesh, c, sb)) {
-                        Some(cw) => Some(cw),
-                        None => Some(Warp::custom(mesh, sb)),
-                    }
+                    frames.and_then(|f| f.get(&l.id)).and_then(|&c| content_frame_warp(&mesh, c, sb)).or(plain)
                 }
-                WarpStyle::Cylinder => cylinder_in_source(w, &inv, sb),
-                _ => Some(Warp { bounds: sb, mesh: None, ..w.clone() }),
+                _ => plain,
             };
-            sm.warp = src_warp.filter(|w| !w.is_identity());
+            sm.warp = src_warp.filter(|w| !w.is_plain_identity());
             // Fallback appearance for sources that can't be re-rendered.
             if let Some(c) = &mut sm.cache {
                 *c = warp_mesh_surface_with(c, rect, &map, Fold::IN_PLACE, interp, ctl).ok_or(EngineError::Cancelled)?;
@@ -385,6 +498,10 @@ fn content_frame_warp(mesh: &BezierMesh, c: [f64; 4], b: [f64; 4]) -> Option<War
 
 /// Largest warp frame side: far above any real layer, far below what would exhaust memory.
 const MAX_WARP_SIDE: u32 = 100_000;
+/// The farthest a smart object's warp may reach in its own space under a Perspective or Distort
+/// placement whose horizon it stays clear of: its points near the vanishing point. Within `i32`,
+/// which the reach's pixel box is held in.
+const MAX_PROJECTIVE_REACH: f64 = 2e9;
 
 fn target(s: &Session, cmd: &str, p: &Value) -> Result<(LayerId, Rect)> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
@@ -450,6 +567,9 @@ fn warp_type_layer(s: &mut Session, cmd: &str, id: LayerId, w: &Warp) -> Result<
 }
 
 fn apply(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
+    if p.get("contents").and_then(Value::as_bool) == Some(true) {
+        return contents_warp(s, p, cmd);
+    }
     let (id, rect) = target(s, cmd, p)?;
     let w = warp_from_params(cmd, p, rect_f(rect))?;
     if matches!(s.active().and_then(|d| d.doc.layer(id)).map(|l| &l.content), Some(LayerContent::Text(_))) {
@@ -473,6 +593,230 @@ fn apply(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
         move |doc, _, ctx| ctx.stage(0.0, 1.0, "Warping", |ctl| warp_doc(doc, id, &w, rect, interp, content_knots, ctl)),
         move |()| json!({"layer": id.0, "changed": true, "rect": [rect.x0, rect.y0, rect.x1, rect.y1]}),
     )
+}
+
+/// `"contents": true`: a smart object's warp given in its source space (as [`smart_warp_source`]
+/// returns it), stored as it is, with `"placement"` (source → document, row-major 3×3) when the box
+/// moved it too, in one step. Warp mode on a smart object commits this way, so what it showed
+/// through the placement is what is stored (#8927).
+fn contents_warp(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let id = crate::commands::explicit_layer(s, p)?.or(st.active_layer).ok_or_else(|| bad(cmd, "no active layer"))?;
+    let layer = st.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+    let LayerContent::Smart(sm) = &layer.content else { return Err(bad(cmd, "`contents` warps a smart object")) };
+    if p.get("warp").is_none() {
+        return Err(bad(cmd, "`contents` needs `warp`"));
+    }
+    let w = warp_from_params(cmd, p, [0.0, 0.0, 1.0, 1.0])?;
+    if !w.bounds.iter().all(|v| v.is_finite()) || w.bounds[2] <= w.bounds[0] || w.bounds[3] <= w.bounds[1] {
+        return Err(bad(cmd, "the warp needs a box"));
+    }
+    let placement = match p.get("placement") {
+        None | Some(Value::Null) => None,
+        Some(v) => {
+            // Nine numbers exactly: an entry that isn't one fails the whole matrix.
+            let m: Option<Vec<f64>> = v.as_array().and_then(|a| a.iter().map(Value::as_f64).collect());
+            let h = m.and_then(|m| <[f64; 9]>::try_from(m.as_slice()).ok()).filter(|m| m.iter().all(|v| v.is_finite())).map(Homography);
+            Some(h.filter(|h| h.inverse().is_some()).ok_or_else(|| bad(cmd, "`placement` must be an invertible 3×3 matrix (9 numbers)"))?)
+        }
+    };
+    let bounds = w.bounds;
+    let new_warp = Some(w).filter(|w| !w.is_plain_identity());
+    let old = crate::smart_cmds::placement(sm);
+    if new_warp == sm.warp && placement.is_none_or(|h| h.0 == old.0) {
+        return Ok(json!({"layer": id.0, "changed": false}));
+    }
+    // As any warp or transform: a locked layer stays, and a placement that would make an absurd
+    // layer is refused before anything is allocated.
+    let locks = layer.locks.union(crate::transform_cmds::group_locks(&st.doc, id));
+    if locks.position || locks.all {
+        return Err(EngineError::Other(format!("layer \"{}\" is locked", layer.name)));
+    }
+    // The warped contents reach as far as the mesh does (its control points hold it), which can
+    // be far outside the warp's box: that reach, placed, is what is priced.
+    let reach = new_warp.as_ref().map_or(Vec::new(), |w| w.to_mesh(1, 1).points);
+    let corners = [[bounds[0], bounds[1]], [bounds[2], bounds[3]]];
+    let b =
+        corners.iter().chain(&reach).fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+    // Under a Perspective or Distort placement the reach may run far towards the vanishing point
+    // (the reference application stores 1e9 px there), and the placed size, priced below, is what
+    // counts: its box must stay on the picture's side of the horizon.
+    let place = placement.unwrap_or(old);
+    let w_at = |x: f64, y: f64| place.0[6] * x + place.0[7] * y + place.0[8];
+    let corners_w = [w_at(b[0], b[1]), w_at(b[2], b[1]), w_at(b[2], b[3]), w_at(b[0], b[3])];
+    let projective = place.0[6] != 0.0 || place.0[7] != 0.0;
+    let on_picture_side = corners_w.iter().all(|w| w.is_finite() && *w * corners_w[0].signum() > 0.0);
+    let side = if projective && on_picture_side { MAX_PROJECTIVE_REACH } else { f64::from(MAX_WARP_SIDE) };
+    if !b.iter().all(|v| v.is_finite()) || b[2] - b[0] > side || b[3] - b[1] > side || b.iter().any(|v| v.abs() > side) {
+        return Err(bad(cmd, format!("the warp reaches too far (max {side} px per side)")));
+    }
+    let src = Rect::new(b[0].floor() as i32, b[1].floor() as i32, b[2].ceil() as i32, b[3].ceil() as i32);
+    crate::transform_cmds::check_budget(src, &placement.unwrap_or(old), "Warp", st.doc.pixel_format())?;
+    let moved = contents_move(old, sm.warp.clone(), placement.unwrap_or(old), new_warp.clone())?;
+    // What moves with the contents is priced too: a filter mask, a linked mask or the selection
+    // can reach far past the smart object.
+    let mut follows: Vec<(&Surface, &str)> = Vec::new();
+    if let Some(m) = &sm.filter_mask {
+        follows.push((&m.surface, "filter mask"));
+    }
+    if let Some(m) = layer.mask.as_ref().filter(|m| m.linked) {
+        follows.push((&m.surface, "layer mask"));
+    }
+    if let Some(sel) = &st.doc.selection {
+        follows.push((sel, "selection"));
+    }
+    for (surface, what) in follows {
+        crate::transform_cmds::check_mapped_budget(surface.content_bounds(), &moved, what, surface.format())?;
+    }
+    // A background job when started with `Session::start` (as Free Transform's commit is): the
+    // smart object's render from its source can be long, with progress and Cancel.
+    crate::jobs::edit_job(
+        s,
+        "Warp",
+        move |doc, _, ctx| warp_contents_in(doc, id, new_warp.clone(), placement, &moved, ctx),
+        move |()| json!({"layer": id.0, "changed": true}),
+    )
+}
+
+/// The job of a smart object's contents warp: the new warp and placement, the masks and the
+/// selection moved with them, and the contents rendered again (or, without a source, moved).
+fn warp_contents_in(
+    doc: &mut Document,
+    id: LayerId,
+    new_warp: Option<Warp>,
+    placement: Option<Homography>,
+    moved: &(dyn Fn(f64, f64) -> (f64, f64) + Sync),
+    ctx: &crate::jobs::JobCtx,
+) -> Result<()> {
+    ctx.progress(0.0, "Warping");
+    let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+    let LayerContent::Smart(sm) = &mut l.content else { return Err(EngineError::Other("not a smart object".into())) };
+    sm.warp = new_warp;
+    if let Some(h) = placement {
+        crate::smart_cmds::set_placement(sm, h);
+    }
+    // What showed the contents in the document follows them exactly: the filter mask,
+    // the linked masks and the selection outline.
+    if let Some(m) = &mut sm.filter_mask {
+        m.surface = warp_mesh_gray_with(&m.surface, moved, Fold::IN_PLACE, Interp::Bilinear);
+    }
+    move_linked_masks(l, moved);
+    ctx.check()?;
+    if let Some(sel) = doc.selection.as_ref() {
+        doc.selection = Some(warp_mesh_gray_with(sel, moved, Fold::IN_PLACE, Interp::Bilinear)).filter(|s| !s.content_bounds().is_empty());
+    }
+    ctx.check()?;
+    // Rendered again from the source, through the warp and the placement; without the
+    // source, the appearance it had is moved as the contents moved.
+    if !crate::smart_cmds::refresh_in(doc, id, ctx)?
+        && let Some(LayerContent::Smart(sm)) = doc.layer_mut(id).map(|l| &mut l.content)
+        && let Some(c) = &mut sm.cache
+    {
+        // Cancel stops this warp too: `None` is a cancelled one, and the job's check
+        // turns it into the cancelled result.
+        match ctx.stage(0.5, 1.0, "Warping", |stop| warp_mesh_surface_with(c, c.content_bounds(), moved, Fold::IN_PLACE, Interp::Bicubic, stop)) {
+            Some(w) => *c = w,
+            None => ctx.check()?,
+        }
+    }
+    Ok(())
+}
+
+/// Where a change of a smart object's placement and warp moves a document point that showed its
+/// contents: back through the old placement and warp onto the contents, then out through the new
+/// ones. Its linked masks follow the contents this way ([`move_linked_masks`]). A point outside
+/// a warp keeps its offset from the warp's nearest edge point, so what lies around the contents
+/// moves with that edge instead of collapsing onto it.
+pub fn contents_move(old: Homography, old_warp: Option<Warp>, new: Homography, new_warp: Option<Warp>) -> Result<impl Fn(f64, f64) -> (f64, f64) + Sync> {
+    let old_inv = old.inverse().ok_or_else(|| EngineError::Other("the smart object's transform is degenerate".into()))?;
+    // Through a Perspective or Distort placement a warp shows from its control points carried into
+    // the document (`photocraft_algo::warp::place_source_projective`): those points use the
+    // carried surface, so masks and outlines follow the pixels as drawn.
+    let carry = |h: &Homography, w: &Warp| (h.0[6] != 0.0 || h.0[7] != 0.0).then(|| photocraft_algo::warp::warp_in_document(w, h)).flatten();
+    let old_live = old_warp.filter(|w| !w.is_identity());
+    let old_carried = old_live.as_ref().and_then(|w| carry(&old, w));
+    let old_mesh = match &old_carried {
+        Some(c) => Some((photocraft_geom::warp::MeshInverse::new(c.to_mesh(1, 1)), c.bounds)),
+        None => old_live.map(|w| (photocraft_geom::warp::MeshInverse::new(w.to_mesh(1, 1)), w.bounds)),
+    };
+    let old_in_doc = old_carried.is_some();
+    let new_carried = new_warp.as_ref().filter(|w| !w.is_identity()).and_then(|w| carry(&new, w));
+    Ok(move |x: f64, y: f64| -> (f64, f64) {
+        let q = if old_in_doc { [x, y] } else { hom_apply(&old_inv, [x, y]) };
+        // Back onto the contents: a point outside the old warp goes to the warp's nearest edge
+        // point, and keeps its offset from it as the warp left it (`rest`: in the warp's output
+        // space, or in the document for a carried warp), so the new warp moves it with that edge
+        // and only then adds the offset.
+        let (q, rest) = match &old_mesh {
+            Some((m, b)) => {
+                let (s, t) = m.param_at(q);
+                let on = m.mesh().eval(s, t);
+                ([b[0] + s * (b[2] - b[0]), b[1] + t * (b[3] - b[1])], [q[0] - on[0], q[1] - on[1]])
+            }
+            None => (q, [0.0, 0.0]),
+        };
+        match (&new_warp, &new_carried) {
+            (Some(w), Some(c)) => {
+                let b = w.bounds;
+                let on = [q[0].max(b[0]).min(b[2]), q[1].max(b[1]).min(b[3])];
+                let (x, y) = c.map(on[0], on[1]);
+                // The offset outside the box, as the placement shows it there.
+                let (u, v) = w.map(on[0], on[1]);
+                let (ax, ay) = new.apply(u, v);
+                let (bx, by) = new.apply(u + q[0] - on[0], v + q[1] - on[1]);
+                let (rx, ry) = if old_in_doc {
+                    (rest[0], rest[1])
+                } else {
+                    let (cx, cy) = new.apply(u + q[0] - on[0] + rest[0], v + q[1] - on[1] + rest[1]);
+                    (cx - bx, cy - by)
+                };
+                (x + bx - ax + rx, y + by - ay + ry)
+            }
+            (Some(w), None) => {
+                let b = w.bounds;
+                // max/min, not clamp: a stored warp's box can be reversed or NaN.
+                let on = [q[0].max(b[0]).min(b[2]), q[1].max(b[1]).min(b[3])];
+                let (x, y) = w.map(on[0], on[1]);
+                let q = [x + q[0] - on[0], y + q[1] - on[1]];
+                if old_in_doc {
+                    let (dx, dy) = new.apply(q[0], q[1]);
+                    (dx + rest[0], dy + rest[1])
+                } else {
+                    new.apply(q[0] + rest[0], q[1] + rest[1])
+                }
+            }
+            (None, _) => {
+                if old_in_doc {
+                    let (dx, dy) = new.apply(q[0], q[1]);
+                    (dx + rest[0], dy + rest[1])
+                } else {
+                    new.apply(q[0] + rest[0], q[1] + rest[1])
+                }
+            }
+        }
+    })
+}
+
+/// Moves `l`'s linked layer mask and vector mask by `moved` (document → document), as its
+/// contents moved.
+pub(crate) fn move_linked_masks(l: &mut Layer, moved: &(dyn Fn(f64, f64) -> (f64, f64) + Sync)) {
+    if let Some(m) = l.mask.as_mut()
+        && m.linked
+    {
+        m.surface = warp_mesh_gray_with(&m.surface, moved, Fold::IN_PLACE, Interp::Bilinear);
+    }
+    if let Some(vm) = l.vector_mask.as_mut()
+        && vm.linked
+    {
+        vm.path = photocraft_vector::map::map_path(
+            &vm.path,
+            |p| {
+                let (x, y) = moved(p.x, p.y);
+                photocraft_geom::Point::new(x, y)
+            },
+            0.1,
+        );
+    }
 }
 
 /// The edit of [`apply`]: the layer and the selection outline.
@@ -508,26 +852,11 @@ pub enum Split {
     Remove,
 }
 
-/// The default warp draws rule-of-thirds guides on its single patch. Make those real sections
-/// before a split, so the cut divides the grid on screen instead of replacing it. A one-way split
-/// keeps only the thirds across its line and drops the ones it replaces (#12495).
-fn commit_default_sections(mesh: &mut BezierMesh, how: Split) {
-    if !matches!(how, Split::Vertical) {
-        let _ = mesh.split_u(1.0 / 3.0);
-        let _ = mesh.split_u(2.0 / 3.0);
-    }
-    if !matches!(how, Split::Horizontal) {
-        let _ = mesh.split_v(1.0 / 3.0);
-        let _ = mesh.split_v(2.0 / 3.0);
-    }
-}
-
 /// Applies a split (or removes the split nearest `at`) on `w`'s mesh (presets become custom).
 pub fn split_warp(w: &Warp, at: Option<[f64; 2]>, how: Split) -> Option<Warp> {
+    // The Default grid's thirds are its handles, drawn as guides, not sections: as in the reference
+    // application, a split adds only its own line (a vertical split of the Default grid is 2 x 1).
     let mut mesh = w.to_mesh(1, 1);
-    if !matches!(how, Split::Remove) && w.style == WarpStyle::Custom && mesh.us.len() == 2 && mesh.vs.len() == 2 {
-        commit_default_sections(&mut mesh, how);
-    }
     let (s, t) = match at {
         Some(p) => mesh.param_at(p),
         None => (0.5, 0.5),
@@ -560,40 +889,7 @@ pub fn split_warp(w: &Warp, at: Option<[f64; 2]>, how: Split) -> Option<Warp> {
             }
         }
     };
-    if ok && matches!(how, Split::Remove) {
-        restore_default_grid(&mut mesh);
-    }
     ok.then(|| Warp::custom(mesh, w.bounds))
-}
-
-/// After a split is removed: when what is left is the Default grid's thirds that a one-way split
-/// made real (`commit_default_sections`) and nothing else, merge them back into the Default grid's
-/// one patch, which draws them as guides again (#12912). Only when that loses nothing: splitting
-/// the merged patch at the thirds must give back the same points, so thirds whose anchors or
-/// handles were moved, or any other grid, stay as they are. The mesh doesn't record where its
-/// sections came from, so a straight 3 x 1 (or 1 x 3) grid at exactly the thirds made another way
-/// merges too; nothing is lost, as the Default grid draws the same lines as guides.
-fn restore_default_grid(mesh: &mut BezierMesh) {
-    const THIRDS: [f64; 4] = [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0];
-    let is = |k: &[f64], want: &[f64]| k.len() == want.len() && k.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-9);
-    let columns = is(&mesh.us, &THIRDS) && is(&mesh.vs, &[0.0, 1.0]);
-    let rows = is(&mesh.vs, &THIRDS) && is(&mesh.us, &[0.0, 1.0]);
-    if !(columns || rows) {
-        return;
-    }
-    let mut merged = mesh.clone();
-    let removed = if columns { merged.remove_split_u(2) && merged.remove_split_u(1) } else { merged.remove_split_v(2) && merged.remove_split_v(1) };
-    if !removed {
-        return;
-    }
-    let mut again = merged.clone();
-    let split = if columns { again.split_u(1.0 / 3.0) && again.split_u(2.0 / 3.0) } else { again.split_v(1.0 / 3.0) && again.split_v(2.0 / 3.0) };
-    let same = split
-        && again.points.len() == mesh.points.len()
-        && again.points.iter().zip(&mesh.points).all(|(a, b)| (a[0] - b[0]).abs() < 1e-6 && (a[1] - b[1]).abs() < 1e-6);
-    if same {
-        *mesh = merged;
-    }
 }
 
 fn param_rect(p: &Value) -> [f64; 4] {
@@ -711,8 +1007,8 @@ fn grid(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 pub fn specs() -> Vec<CommandSpec> {
-    const P: &str = r##"{"layer":id?,"rect":[x0,y0,x1,y1]? (warp box; default = layer content ∩ selection),"style":"custom|none|arc|arcLower|arcUpper|arch|bulge|shellLower|shellUpper|flag|wave|fish|rise|fisheye|inflate|squeeze|twist|cylinder","bend":%=50,"hDistort":%,"vDistort":%,"vertical":bool,"values":[left,bottom,right,top,topDepth,bottomDepth,wrap]? (cylinder: silhouettes and edges in document px, the ellipses' depths in half-axis units, wrap 0..1; horizontal only),"mesh":{"us":[0,…,1],"vs":[0,…,1],"points":[[x,y]…]} ((3c+1)×(3r+1) control points, row-major, document px; on a smart object `us`/`vs` span the source contents, so points equal to the placement are an identity warp even when it is skewed),"grid":[cols,rows]?,"warp":{full warp object}?,"interpolation":"bicubic|bilinear|nearest"} — on a type layer a style (or none) sets its Warp Text and the type stays editable"##;
-    const S: &str = r##"{"warp":{…}? (the warp being edited; returned split),"rect":[x0,y0,x1,y1]?,"at":[x,y]? (document point; default = middle of the patch)} — without `warp`, edits the active smart object's warp. A 1×1 custom mesh is divided at the thirds first (the guides drawn on the default grid), so splitWarpCrosswise on an identity custom warp returns a 4×4 mesh (knots at 0, 1/3, 1/2, 2/3 and 1), not a 2×2. A preset is fitted as one patch and split without that step."##;
+    const P: &str = r##"{"layer":id?,"rect":[x0,y0,x1,y1]? (warp box; default = layer content ∩ selection),"style":"custom|none|arc|arcLower|arcUpper|arch|bulge|shellLower|shellUpper|flag|wave|fish|rise|fisheye|inflate|squeeze|twist|cylinder","bend":%=50,"hDistort":%,"vDistort":%,"vertical":bool,"values":[left,bottom,right,top,topDepth,bottomDepth,wrap]? (cylinder: silhouettes and edges in document px, the ellipses' depths in half-axis units, wrap 0..1; horizontal only),"mesh":{"us":[0,…,1],"vs":[0,…,1],"points":[[x,y]…]} ((3c+1)×(3r+1) control points, row-major, document px; on a smart object `us`/`vs` span the source contents, so points equal to the placement are an identity warp even when it is skewed),"grid":[cols,rows]?,"warp":{full warp object}?,"interpolation":"bicubic|bilinear|nearest","contents":bool? (smart object: `warp` is in its contents' own space, as Warp mode edits it, and is stored as it is),"placement":[9 numbers]? (with contents: the new placement, contents → document, row-major 3×3; the box's move in the same step)} — on a type layer a style (or none) sets its Warp Text and the type stays editable"##;
+    const S: &str = r##"{"warp":{…}? (the warp being edited; returned split),"rect":[x0,y0,x1,y1]?,"at":[x,y]? (document point; default = middle of the patch)} — without `warp`, edits the active smart object's warp. A split adds only its own line: splitWarpCrosswise on an identity custom warp returns a 2×2 mesh (the Default grid's thirds are its handles, not sections). A preset is fitted as one patch first."##;
     const G: &str = r##"{"warp":{…}? (the warp being edited; returned with the new mesh),"rect":[x0,y0,x1,y1]?,"size":n|"default"|"3"|"4"|"5" (square patches, 1..=64; 1 and "default" are the single-patch grid)} — without `warp`/`style`/`mesh`, edits the active smart object's warp. The surface is kept and the new lines are real splits at i/n."##;
     vec![
         CommandSpec {

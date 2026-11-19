@@ -34,7 +34,8 @@ pub(crate) use begin::moving_layers;
 #[cfg(test)]
 pub(crate) use begin::moving_texel;
 pub use begin::{
-    WARP_ONE_LAYER, begin, begin_copy, begin_from_frame, begin_placed, begin_selection, begin_warp, enter_warp, leave_warp, warps_active_layer, warps_type,
+    WARP_ONE_LAYER, begin, begin_copy, begin_from_frame, begin_placed, begin_selection, begin_warp, enter_warp, hold_warp, leave_warp, warps_active_layer,
+    warps_type,
 };
 pub(crate) use commit::{SAVE_FOR_WEB, committing};
 pub use commit::{apply_click, auto_commit, cancel, commit, end_if_left, follow_edits, intercept, is_enabled, on_job_event};
@@ -141,6 +142,83 @@ pub struct OpenPreview {
     other_texels: Option<OtherTexels>,
     /// A box over several layers (#6501): their composite, which `textures` holds.
     several: Option<Several>,
+    /// A rotated, skewed or distorted smart object's box opened on its placement (#3649):
+    /// `textures` holds its pixels as they are over `rect`, which move with the box from `start`.
+    pub(crate) placed: Option<Placed>,
+    /// Warp mode on such a box ([`begin::enter_placed_warp`]): the map from the smart object's contents to the
+    /// document the warp's control points were carried through (row-major 3×3), and whether the box had moved first.
+    pub(crate) placed_warp: Option<([f64; 9], bool)>,
+    /// A warp held while the box is in another mode ([`begin::hold_warp`]).
+    pub(crate) held: Option<HeldWarp>,
+    /// A smart object's stored warp, for the box's preview once its move is projective ([`WarpedPreview`]).
+    pub(crate) warped: Option<WarpedPreview>,
+}
+
+/// A smart object's stored warp as the render draws it under a Perspective or Distort move of the box: its control
+/// points carried through the move and the placement, over its contents unplaced. The box's preview draws it so once
+/// the move is projective, since the rendered pixels mapped through the move are not what the commit renders; under
+/// an affine move they are, and the preview maps them.
+pub(crate) struct WarpedPreview {
+    /// The stored warp's control points in the contents.
+    pub(crate) mesh: BezierMesh,
+    /// The warp's box in the contents.
+    pub(crate) bounds: [f64; 4],
+    /// The placement, contents to document (row-major 3×3).
+    pub(crate) place: [f64; 9],
+    /// The box when it opened.
+    pub(crate) start: [[f64; 2]; 4],
+    /// The contents unplaced, over `bounds`.
+    pub(crate) texture: PreviewTextures,
+}
+
+/// A warp kept when Edit › Transform's box modes are chosen in Warp mode: the reference keeps the warp, shows it
+/// moving with the box, carries on with it in Warp mode again and applies both together.
+pub(crate) struct HeldWarp {
+    /// The warp as Warp mode left it: its control points in the document, over its bounds.
+    pub(crate) warp: Warp,
+    /// The box when the warp was held; the warp moves with the box from there.
+    pub(crate) start: [[f64; 2]; 4],
+    /// For a box that opened on a smart object's placement, the map from its contents to the document the points
+    /// were carried through, and whether the box had moved ([`OpenPreview::placed_warp`]).
+    pub(crate) placed: Option<([f64; 9], bool)>,
+    /// The texels the warp maps when they aren't the box's (a smart object's source or contents).
+    pub(crate) texture: Option<PreviewTextures>,
+}
+
+impl HeldWarp {
+    /// The warp moved with the box from where it was held to `quad`: its control points carried through the box's
+    /// move (exact for an affine move, the reference's own rule for a projective one).
+    pub(crate) fn carried(&self, quad: [[f64; 2]; 4]) -> Warp {
+        match Homography::quad_to_quad(self.start, quad).filter(|_| quad != self.start) {
+            Some(h) => Warp::custom(
+                self.warp.to_mesh(1, 1).map_points(|p| {
+                    let (x, y) = h.apply(p[0], p[1]);
+                    [x, y]
+                }),
+                self.warp.bounds,
+            ),
+            None => self.warp.clone(),
+        }
+    }
+
+    /// The contents-to-document map once the box moved from where the warp was held to `quad`, and whether the
+    /// placement changed at all.
+    pub(crate) fn placed_at(&self, quad: [[f64; 2]; 4]) -> Option<([f64; 9], bool)> {
+        let (to_doc, moved) = self.placed?;
+        match Homography::quad_to_quad(self.start, quad).filter(|_| quad != self.start) {
+            Some(h) => Some((h.mul(&Homography(to_doc)).0, true)),
+            None => Some((to_doc, moved)),
+        }
+    }
+}
+
+/// Where a box that opened on a smart object's placement started, and the pixels it moves.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Placed {
+    /// The placement's corners, where the box opened.
+    pub(crate) start: [[f64; 2]; 4],
+    /// The document area the preview's texels cover.
+    pub(crate) rect: [f64; 4],
 }
 
 impl OpenPreview {
@@ -161,6 +239,10 @@ impl OpenPreview {
             content_aware: None,
             other_texels: None,
             several: None,
+            placed: None,
+            placed_warp: None,
+            held: None,
+            warped: None,
         }
     }
 }

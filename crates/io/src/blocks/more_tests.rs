@@ -361,6 +361,23 @@ fn sold_placed(quad: [f64; 8], warp: Descriptor) -> Vec<u8> {
     data
 }
 
+/// A quad whose one slanted side is less than a pixel off its axis is a parallelogram once that
+/// side is put on the axis: the affine placement then has the straightened side, not the slant.
+#[test]
+fn a_quad_straightened_into_a_parallelogram_is_placed_straight() {
+    let none = Descriptor::new("warp").with("warpStyle", Value::Enumerated { type_id: Id::new("warpStyle"), value: Id::new("warpNone") });
+    let quad = [10.0, 20.0, 410.0, 20.0, 410.0, 420.0, 10.4, 420.0];
+    let data = sold_placed(quad, none);
+    assert!(parse_smart_perspective(b"SoLd", &data).is_none(), "straightened, it is affine");
+    let (_, a) = parse_smart(b"SoLd", &data);
+    let [m0, m1, m2, m3, m4, m5] = a.m;
+    let map = |x: f64, y: f64| (m0 * x + m2 * y + m4, m1 * x + m3 * y + m5);
+    for (x, y, want) in [(0.0, 0.0, (10.2, 20.0)), (0.0, 1000.0, (10.2, 420.0)), (1000.0, 1000.0, (410.0, 420.0))] {
+        let got = map(x, y);
+        assert!((got.0 - want.0).abs() < 1e-9 && (got.1 - want.1).abs() < 1e-9, "{x},{y} → {got:?}, not {want:?}");
+    }
+}
+
 /// A `warpCylinder` descriptor as #4112 describes it: horizontal, no perspective, seven
 /// `warpValues` in the space of `bounds`.
 fn cylinder_desc(values: Value) -> Descriptor {
@@ -493,4 +510,24 @@ fn effects_switch() {
 #[test]
 fn tysh_garbage_is_none() {
     assert!(parse_tysh(&[0; 10]).is_none());
+}
+
+/// A placed side less than a pixel off an axis is drawn on the axis, at the mean of its ends (the
+/// left and bottom sides here); a side further off keeps its slant.
+#[test]
+fn a_placed_side_a_hair_off_an_axis_is_put_on_it() {
+    let none = || Descriptor::new("warp").with("warpStyle", Value::Enumerated { type_id: Id::new("warpStyle"), value: Id::new("warpNone") });
+    let corners = |quad: [f64; 8]| {
+        let h = photocraft_algo::transform::Homography(parse_smart_perspective(b"SoLd", &sold_placed(quad, none())).expect("projective"));
+        [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0), (0.0, 1000.0)].map(|(x, y)| h.apply(x, y))
+    };
+    let got = corners([10.0, 20.0, 410.0, 60.0, 400.0, 480.3, 10.4, 480.9]);
+    for ((px, py), (qx, qy)) in got.into_iter().zip([(10.2, 20.0), (410.0, 60.0), (400.0, 480.6), (10.2, 480.6)]) {
+        assert!((px - qx).abs() < 1e-6 && (py - qy).abs() < 1e-6, "{px},{py}, not {qx},{qy}");
+    }
+    // A pixel or more off: as stored.
+    let got = corners([10.0, 20.0, 410.0, 60.0, 400.0, 480.0, 11.5, 482.0]);
+    for ((px, py), (qx, qy)) in got.into_iter().zip([(10.0, 20.0), (410.0, 60.0), (400.0, 480.0), (11.5, 482.0)]) {
+        assert!((px - qx).abs() < 1e-6 && (py - qy).abs() < 1e-6, "{px},{py}, not {qx},{qy}");
+    }
 }

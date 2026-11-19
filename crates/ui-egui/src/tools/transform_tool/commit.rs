@@ -44,9 +44,44 @@ pub fn commit(app: &mut PhotocraftApp) {
         crate::cas_transform::commit(app, &t, options);
         return;
     }
+    // A warp held under a box mode: it is applied as the box has moved it, moved or not.
+    if let Some(held) = preview.as_mut().and_then(|pv| pv.held.take())
+        && result.as_ref().is_none_or(|r| r.warp.is_none())
+        && !t.selection
+        && t.path.is_none()
+    {
+        let quad = result.as_ref().map_or_else(|| t.quad_array(), |r| r.state.quad.map(|p| [p.x, p.y]));
+        let interpolation = result.as_ref().map_or_else(|| t.session.interpolation(), |r| r.interpolation).id();
+        let warp = held.carried(quad);
+        let r = match held.placed_at(quad) {
+            Some((to_doc, moved)) => match photocraft_algo::transform::Homography(to_doc).inverse() {
+                Some(back) => {
+                    let mesh = warp.to_mesh(1, 1).map_points(|p| {
+                        let (x, y) = back.apply(p[0], p[1]);
+                        [x, y]
+                    });
+                    let mut p = json!({"layer": t.layer, "warp": photocraft_geom::warp::Warp::custom(mesh, warp.bounds), "contents": true, "interpolation": interpolation});
+                    if moved {
+                        p["placement"] = json!(to_doc);
+                    }
+                    app.run("edit.transform.warp", p)
+                }
+                None => Err("the box is degenerate".to_string()),
+            },
+            None => app.run("edit.transform.warp", json!({"layer": t.layer, "rect": warp.bounds, "warp": warp, "interpolation": interpolation})),
+        };
+        let made = t.made;
+        land(app, r, t, preview, document, made);
+        return;
+    }
     let Some(result) = result else { return };
     let rect = [result.rect.x0, result.rect.y0, result.rect.x1, result.rect.y1];
     let quad = result.state.quad.map(|p| [p.x, p.y]);
+    // A box that opened on a smart object's placement (#3649) and is still there changes nothing: no step.
+    let start = preview.as_ref().and_then(|pv| pv.placed).map(|placed| placed.start);
+    if result.warp.is_none() && start == Some(quad) {
+        return;
+    }
     let interpolation = result.interpolation.id();
     let warp = result.warp.map(|w| w.warp);
     if t.selection {
@@ -79,11 +114,31 @@ pub fn commit(app: &mut PhotocraftApp) {
         return;
     }
     let made = t.made;
-    let r = if let Some(w) = &warp {
+    let placed_warp = preview.as_ref().and_then(|pv| pv.placed_warp);
+    let r = if let Some(w) = &warp
+        && let Some((to_doc, moved)) = placed_warp
+        && let Some(back) = photocraft_algo::transform::Homography(to_doc).inverse()
+    {
+        // Warp mode on a box that opened on a smart object's placement: the control points go back into the
+        // contents' own space and are stored there, with the box's move as the new placement (#8927).
+        let mesh = w.to_mesh(1, 1).map_points(|p| {
+            let (x, y) = back.apply(p[0], p[1]);
+            [x, y]
+        });
+        let mut p = json!({"layer": t.layer, "warp": photocraft_geom::warp::Warp::custom(mesh, w.bounds), "contents": true, "interpolation": interpolation});
+        if moved {
+            p["placement"] = json!(to_doc);
+        }
+        app.run("edit.transform.warp", p)
+    } else if let Some(w) = &warp {
         // The warp's bounds are the frame it was built over (a stored smart warp's, or Warp Text's).
         app.run("edit.transform.warp", json!({"layer": t.layer, "rect": w.bounds, "warp": w, "interpolation": interpolation}))
     } else {
         let mut p = json!({"rect": rect, "quad": quad, "interpolation": interpolation});
+        if let Some(start) = start {
+            // The box opened on a smart object's placement: transform from there (#3649).
+            p["from"] = json!(start);
+        }
         if t.layers.is_empty() {
             p["layer"] = json!(t.layer);
         } else {
@@ -94,6 +149,19 @@ pub fn commit(app: &mut PhotocraftApp) {
         }
         app.run("edit.transform", p)
     };
+    land(app, r, t, preview, document, made);
+}
+
+/// After the commit's engine call `r`: a background job keeps the session open until it lands, a change finishes
+/// the step, an error keeps the box open with it.
+fn land(
+    app: &mut PhotocraftApp,
+    r: Result<serde_json::Value, String>,
+    t: FreeTransform,
+    mut preview: Option<OpenPreview>,
+    document: Option<DocId>,
+    made: Option<MadeLayer>,
+) {
     // A large layer's warp runs in the background: the session stays until the job ends.
     if let Ok(v) = &r
         && let Some(job) = v.get("pending").and_then(serde_json::Value::as_bool).filter(|p| *p).and(v.get("job")).and_then(serde_json::Value::as_u64)
