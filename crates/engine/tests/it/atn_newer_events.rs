@@ -468,7 +468,7 @@ fn artboard_fixture() -> Session {
     }
     let group = Layer::group("Group", vec![child]);
     let id = group.id;
-    doc.layers = vec![group];
+    doc.layers = vec![group].into();
     s.restore_layer_selection(Some(id), &[id], Some(id)).unwrap();
     s
 }
