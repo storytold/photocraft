@@ -21,6 +21,8 @@ craft-plist = { workspace = true }
 craft = { workspace = true, default-features = false, features = ["font-catalog", "font-manager"] }
 parley = { version = "0.11", default-features = false, features = ["std"] }
 skrifa = "0.47"
+# Decodes the embedded PNG strikes of colour emoji fonts.
+photocraft-codecs = { workspace = true }
 flate2 = { workspace = true }
 # Subresource Integrity values for served fonts.
 base64 = "0.23"

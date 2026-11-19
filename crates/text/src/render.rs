@@ -8,6 +8,7 @@ use skrifa::instance::{LocationRef, NormalizedCoord, Size};
 use skrifa::outline::DrawSettings;
 use skrifa::{GlyphId, MetadataProvider};
 
+use crate::bitmap_glyphs;
 use crate::color_glyphs::{Ink, Limits, NoPaint, OutlineBounds, Painter, Shape};
 use crate::layout::{DecorationRect, GlyphOrient, PlacedGlyph, TextLayout};
 use crate::raster::{Bounds, Coverage, LineSink, Pen, Xform, rect_to};
@@ -29,8 +30,8 @@ pub fn faux_bold_radius(size_px: f32) -> f32 {
 
 /// Largest raster we produce (pixels), as a guard against absurd sizes.
 const MAX_PIXELS: u64 = 256 * 1024 * 1024;
-/// Cumulative coverage-pixel work budget across the colour passes of one render.
-const MAX_PASS_PIXELS: u64 = MAX_PIXELS * 4;
+/// Cumulative work budget across the colour passes, in pixels and encoded PNG bytes.
+const MAX_PASS_WORK: u64 = MAX_PIXELS * 4;
 /// Peak working bytes one rasterization may keep live. [`MAX_PIXELS`] does not bound them: the
 /// accumulator and the output surface are both `stride` deep, so a CMYK render reserves several
 /// times what a plain grey one does for the same pixels.
@@ -135,7 +136,7 @@ fn is_bold(layout: &TextLayout, g: &PlacedGlyph) -> bool {
     layout.styles.get(g.style as usize).is_some_and(|s| s.faux_bold) || face_bold
 }
 
-/// Whether a path boundary hides any glyph with a drawable outline.
+/// Whether a path boundary hides any drawable glyph.
 /// Uses the same glyph centers and placement rules as rasterization.
 pub fn path_overflows(layout: &TextLayout, shape: &photocraft_doc::text::TextShape) -> bool {
     let left = layout.line_bounds().map_or(0.0, |bounds| f64::from(bounds[0]));
@@ -151,8 +152,9 @@ fn glyph_is_placed(layout: &TextLayout, g: &PlacedGlyph, warp: Option<&Warp>) ->
         return false;
     };
     let coords: Vec<NormalizedCoord> = face.coords.iter().map(|&c| NormalizedCoord::from_bits(c)).collect();
-    // A colour glyph paints its layers, so it counts even when its base glyph has no outline.
-    if font.outline_glyphs().get(GlyphId::new(g.id)).is_none() && color_glyph(&font, GlyphId::new(g.id), &coords).is_none() {
+    // A colour glyph can paint layers or a bitmap even without a base outline.
+    let id = GlyphId::new(g.id);
+    if font.outline_glyphs().get(id).is_none() && color_glyph(&font, id, &coords).is_none() && bitmap_glyphs::get(&font, id, face.size_px).is_none() {
         return false;
     }
     if let Some(w) = warp
@@ -214,12 +216,15 @@ pub(crate) fn visible_color_passes(layout: &TextLayout, warp: Option<&Warp>) -> 
 /// Draws the glyphs and decorations of `layout` in `only` (or all of them when it is `None`) into `sink`, through `transform` (text space → sink space), bending
 /// the outlines with `warp` first (in text space). Faux bold glyphs are drawn from their outline
 /// thickened by [`faux_bold_radius`] ([`crate::embolden`]).
-fn draw(layout: &TextLayout, transform: &Xform, sink: &mut impl LineSink, only: Option<&Pass>, warp: Option<&Warp>) {
-    let glyphs: Box<dyn Iterator<Item = &PlacedGlyph>> = match only {
-        Some(p) => Box::new(p.glyphs.iter().filter_map(|&i| layout.glyphs.get(i))),
-        None => Box::new(layout.glyphs.iter()),
+fn draw(layout: &TextLayout, transform: &Xform, sink: &mut impl LineSink, only: Option<&Pass>, warp: Option<&Warp>, painted_bitmaps: &[usize]) {
+    let glyphs: Box<dyn Iterator<Item = (usize, &PlacedGlyph)>> = match only {
+        Some(p) => Box::new(p.glyphs.iter().filter_map(|&i| Some((i, layout.glyphs.get(i)?)))),
+        None => Box::new(layout.glyphs.iter().enumerate()),
     };
-    for g in glyphs {
+    for (i, g) in glyphs {
+        if painted_bitmaps.binary_search(&i).is_ok() {
+            continue;
+        }
         let st = &layout.styles[g.style as usize];
         let face = &layout.faces[g.face as usize];
         let Ok(font) = skrifa::FontRef::from_index(face.font.data.as_ref(), face.font.index) else {
@@ -242,10 +247,20 @@ fn draw(layout: &TextLayout, transform: &Xform, sink: &mut impl LineSink, only: 
             }
             continue;
         }
-        let Some(outline) = font.outline_glyphs().get(GlyphId::new(g.id)) else {
+        let Some((glyph, bend)) = place(layout, g, &font, face.size_px, &coords, warp) else {
             continue;
         };
-        let Some((glyph, bend)) = place(layout, g, &font, face.size_px, &coords, warp) else {
+        // Reserve both possible extents without decoding untrusted images in
+        // the bounds pass. The plain pass suppresses only bitmaps that painted.
+        if only.is_none()
+            && st.color.alpha > 0.0
+            && !font.bitmap_strikes().is_empty()
+            && let Some((bitmap, m)) = bitmap_glyphs::place_for_output(&font, GlyphId::new(g.id), face.size_px, (glyph, bend), transform)
+            && let Some([x0, y0, x1, y1]) = bitmap_glyphs::bounds(&bitmap, &m)
+        {
+            rect_to(sink, &Xform::IDENTITY, x0, y0, x1, y1);
+        }
+        let Some(outline) = font.outline_glyphs().get(GlyphId::new(g.id)) else {
             continue;
         };
         let settings = || DrawSettings::unhinted(Size::new(face.size_px), LocationRef::new(&coords));
@@ -464,6 +479,53 @@ fn paint_color_glyphs(
     Some(())
 }
 
+fn paint_bitmap_glyphs(
+    layout: &TextLayout,
+    xf: &Xform,
+    warp: Option<&Warp>,
+    format: &PixelFormat,
+    acc: &mut [f32],
+    size: (usize, usize),
+    limits: &mut Limits,
+) -> Vec<usize> {
+    let strikes: Vec<_> = layout
+        .faces
+        .iter()
+        .map(|face| {
+            let font = skrifa::FontRef::from_index(face.font.data.as_ref(), face.font.index).ok()?;
+            (!font.bitmap_strikes().is_empty()).then_some(font)
+        })
+        .collect();
+    let mut painted = Vec::new();
+    if strikes.iter().all(Option::is_none) {
+        return painted;
+    }
+    for (i, g) in layout.glyphs.iter().enumerate() {
+        let Some(Some(font)) = strikes.get(g.face as usize) else { continue };
+        let (Some(st), Some(face)) = (layout.styles.get(g.style as usize), layout.faces.get(g.face as usize)) else { continue };
+        let opacity = st.color.alpha.clamp(0.0, 1.0);
+        if !st.color.alpha.is_finite() || opacity <= 0.0 {
+            continue;
+        }
+        let id = GlyphId::new(g.id);
+        let coords: Vec<_> = face.coords.iter().map(|&c| NormalizedCoord::from_bits(c)).collect();
+        if color_glyph(font, id, &coords).is_some() {
+            continue;
+        }
+        let Some(placed) = place(layout, g, font, face.size_px, &coords, warp) else { continue };
+        let Some((bitmap, m)) = bitmap_glyphs::place_for_output(font, id, face.size_px, placed, xf) else { continue };
+        if painted.try_reserve(1).is_err() {
+            break;
+        }
+        match bitmap_glyphs::paint(&bitmap, &m, opacity, format, acc, size, limits) {
+            Some(true) => painted.push(i),
+            Some(false) => {}
+            None => break,
+        }
+    }
+    painted
+}
+
 /// One glyph into `pen`: its thickened `bold` outline when there is one, else the font's own.
 fn draw_glyph(
     outline: &skrifa::outline::OutlineGlyph,
@@ -559,18 +621,18 @@ fn rect_from_bounds([x0, y0, x1, y1]: [f64; 4]) -> Rect {
     Rect::new(x0 as i32, y0 as i32, x1 as i32, y1 as i32)
 }
 
-/// Text-space bounds of the drawn glyph outlines and decorations, unrounded (`[x0, y0, x1, y1]`),
+/// Text-space bounds of the drawn glyphs and decorations, unrounded (`[x0, y0, x1, y1]`),
 /// or `None` when nothing is drawn.
 pub fn ink_bounds(layout: &TextLayout) -> Option<[f64; 4]> {
     let mut b = Bounds::default();
-    draw(layout, &Xform::IDENTITY, &mut b, None, None);
+    draw(layout, &Xform::IDENTITY, &mut b, None, None, &[]);
     b.rect
 }
 
 /// [`ink_rect`] of warped text.
 pub fn ink_rect_warped(layout: &TextLayout, transform: &Affine, warp: Option<&Warp>) -> Rect {
     let mut b = Bounds::default();
-    draw(layout, &Xform(transform.m), &mut b, None, warp);
+    draw(layout, &Xform(transform.m), &mut b, None, warp, &[]);
     b.rect.map(rect_from_bounds).unwrap_or(Rect::EMPTY)
 }
 
@@ -594,6 +656,18 @@ pub(crate) fn rasterize_passes(
     antialias: AntiAlias,
     warp: Option<&Warp>,
     per_colour: bool,
+) -> Rendered {
+    rasterize_with_work(layout, transform, format, antialias, warp, per_colour, MAX_PASS_WORK)
+}
+
+pub(crate) fn rasterize_with_work(
+    layout: &TextLayout,
+    transform: &Affine,
+    format: PixelFormat,
+    antialias: AntiAlias,
+    warp: Option<&Warp>,
+    per_colour: bool,
+    work: u64,
 ) -> Rendered {
     let format = PixelFormat { alpha: true, ..format };
     let rect = ink_rect_warped(layout, transform, warp);
@@ -623,35 +697,44 @@ pub(crate) fn rasterize_passes(
     };
     let xf = Xform([1.0, 0.0, 0.0, 1.0, -rect.x0 as f64, -rect.y0 as f64]).mul(&Xform(transform.m));
     let whole = Rect::new(0, 0, w as i32, h as i32);
-    let mut pass_pixels = 0u64;
+    let deep = (w as u64).saturating_mul(h as u64).saturating_mul(stride as u64).saturating_mul(size_of::<f32>() as u64 + format.sample.bytes() as u64);
+    let mut limits = Limits { bytes: MAX_RASTER_BYTES.saturating_sub(deep), work };
+    let mut windows = Vec::new();
+    if windows.try_reserve_exact(colors.len()).is_err() {
+        return nothing(format);
+    }
     for (c, _, pass) in &colors {
         // Rasterise each colour only over its own glyphs (faux bold's thickened outlines included):
         // a full-size pass per colour made text with many coloured runs cost colours x area
         // (#8602). Outside its ink a colour's coverage is zero, so the result is the same.
         let sub = if per_colour {
             let mut b = Bounds::default();
-            draw(layout, &xf, &mut b, Some(pass), warp);
+            draw(layout, &xf, &mut b, Some(pass), warp, &[]);
             b.rect.map(rect_from_bounds).unwrap_or(Rect::EMPTY).intersect(&whole)
         } else {
             whole
         };
+        let cost = u64::from(sub.width()) * u64::from(sub.height());
+        let Some(remaining) = limits.work.checked_sub(cost) else {
+            return nothing(format);
+        };
+        limits.work = remaining;
+        windows.push((c, pass, sub));
+    }
+    // Plain glyphs and decorations are already paid for. Bitmaps may use only
+    // what remains, and are painted first so decorations still cover them.
+    let before_bitmaps = limits.work;
+    let painted_bitmaps = paint_bitmap_glyphs(layout, &xf, warp, &format, &mut acc, (w, h), &mut limits);
+    for (c, pass, sub) in windows {
         if sub.is_empty() {
             continue;
         }
         let (sw, sh) = (sub.width() as usize, sub.height() as usize);
-        // One pass per colour: faux bold draws thickened outlines in it (`draw`).
-        let Some(cost) = (sw as u64).checked_mul(sh as u64) else {
-            return nothing(format);
-        };
-        let Some(total) = pass_pixels.checked_add(cost).filter(|&t| t <= MAX_PASS_PIXELS) else {
-            return nothing(format);
-        };
-        pass_pixels = total;
         let xf = Xform([1.0, 0.0, 0.0, 1.0, -sub.x0 as f64, -sub.y0 as f64]).mul(&xf);
         let Some(mut cov) = Coverage::try_new(sw, sh) else {
             return nothing(format);
         };
-        draw(layout, &xf, &mut cov, Some(pass), warp);
+        draw(layout, &xf, &mut cov, Some(pass), warp, &painted_bitmaps);
         let Some(cov) = cov.finish() else {
             return nothing(format);
         };
@@ -659,11 +742,9 @@ pub(crate) fn rasterize_passes(
         let a = c.alpha.clamp(0.0, 1.0);
         composite(&mut acc, w, sub, &cov, stride, &comps, a, antialias);
     }
-    // Colour glyphs get what the plain passes left of both budgets: the bytes beside the
-    // accumulator and the output surface ([`fits_raster_budget`]), and the pixel work.
-    let deep = (w as u64).saturating_mul(h as u64).saturating_mul(stride as u64).saturating_mul(size_of::<f32>() as u64 + format.sample.bytes() as u64);
-    let limits = Limits { bytes: MAX_RASTER_BYTES.saturating_sub(deep), work: MAX_PASS_PIXELS.saturating_sub(pass_pixels) };
-    if paint_color_glyphs(layout, &xf, warp, &format, antialias, &mut acc, (w, h), limits).is_none() {
+    // A bitmap can also use work that COLR painting otherwise would have
+    // had. Keep completed ink rather than blanking the entire layer in that case.
+    if paint_color_glyphs(layout, &xf, warp, &format, antialias, &mut acc, (w, h), limits).is_none() && limits.work == before_bitmaps {
         return nothing(format);
     }
     // Unpremultiply.
@@ -848,7 +929,7 @@ mod tests {
                     let shape = TextShape::Path { path: path.clone(), start: 20.0, end, flip };
                     let warp = Warp::on_path(&shape).unwrap();
                     let mut bounds = Bounds::default();
-                    draw(&layout, &Xform::IDENTITY, &mut bounds, None, Some(&warp));
+                    draw(&layout, &Xform::IDENTITY, &mut bounds, None, Some(&warp), &[]);
                     match (bounds.rect, expected) {
                         (None, None) => {}
                         (Some(r), Some((a, b))) => {

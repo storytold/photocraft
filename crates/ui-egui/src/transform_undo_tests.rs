@@ -2,7 +2,8 @@
 //! drag one step) and never reach the document under the open box; and the
 //! handles have a generous grab radius, so a press just off a corner scales instead of rotating.
 
-use egui::{Key, Modifiers, PointerButton, Pos2, vec2};
+use craft::imaging::ui::transform_preview::PreviewTextures;
+use egui::{Key, Modifiers, PointerButton, Pos2, Shape, TextureId, vec2};
 use egui_kittest::Harness;
 use serde_json::json;
 
@@ -19,7 +20,7 @@ fn harness() -> Harness<'static, Box<PhotocraftApp>> {
 /// The same document with a chosen tool selected (e.g. Hand, #2302).
 fn harness_tool(tool: Tool) -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+    app.run("file.new", json!({"width": 400, "height": 300, "background": "white"})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();
     app.run("select.rect", json!({"x": 100, "y": 100, "width": 100, "height": 60})).unwrap();
     app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
@@ -244,7 +245,7 @@ fn transform_preview_stays_visible_while_panning() {
         .as_ref()
         .unwrap()
         .textures
-        .pick(&h.ctx, craft::imaging::ui::transform_preview::PreviewTextures::choose(1.0, 1.0, false), None)
+        .pick(&h.ctx, PreviewTextures::choose(1.0, 1.0, false), None)
         .expect("the preview uploads its texels")
         .0;
     // The preview paints in the canvas's picture slot, a list shape holding the document and the preview.
@@ -272,6 +273,108 @@ fn transform_preview_stays_visible_while_panning() {
 
     assert_ne!(h.state().ui.views[0].center, center0, "the held Hand panned the view");
     assert!(has_preview(&h), "the transformed layer stays visible during the pan");
+}
+
+/// Texture meshes, in paint order, whose triangles and clip both cover the screen point.
+fn pictures_at(h: &Harness<'_, PhotocraftApp>, point: Pos2) -> Vec<TextureId> {
+    fn triangle_contains([a, b, c]: [Pos2; 3], point: Pos2) -> bool {
+        let side = |a: Pos2, b: Pos2, p: Pos2| {
+            let (edge, rel) = (b - a, p - a);
+            edge.x * rel.y - edge.y * rel.x
+        };
+        let winding = side(a, b, c);
+        winding != 0.0 && [(a, b), (b, c), (c, a)].iter().all(|&(a, b)| side(a, b, point) * winding >= 0.0)
+    }
+
+    fn visit(shape: &Shape, point: Pos2, textures: &mut Vec<TextureId>) {
+        match shape {
+            Shape::Vec(shapes) => shapes.iter().for_each(|shape| visit(shape, point, textures)),
+            Shape::Mesh(mesh)
+                if mesh.texture_id != TextureId::default()
+                    && mesh.indices.as_chunks::<3>().0.iter().any(|tri| triangle_contains(tri.map(|i| mesh.vertices[i as usize].pos), point)) =>
+            {
+                textures.push(mesh.texture_id);
+            }
+            _ => {}
+        }
+    }
+
+    let mut textures = Vec::new();
+    for shape in &h.output().shapes {
+        if shape.clip_rect.contains(point) {
+            visit(&shape.shape, point, &mut textures);
+        }
+    }
+    textures
+}
+
+#[test]
+fn transform_preview_does_not_paint_on_the_tab_it_switches_to() {
+    use egui_kittest::kittest::Queryable;
+
+    let mut h = harness();
+    h.state_mut().run("file.new", json!({"width": 400, "height": 300, "name": "Other image"})).unwrap();
+    assert!(h.state_mut().session.set_active(0));
+    h.run_steps(2);
+    let view = &mut h.state_mut().ui.views[1];
+    view.zoom = 1.0;
+    view.center = [200.0, 150.0];
+    view.clear_pending();
+    begin(&mut h);
+    let point = screen(&mut h, [150.0, 130.0]);
+    let preview = h.state().transform_preview.as_ref().unwrap();
+    let (texture, _) = preview.textures.pick(&h.ctx, PreviewTextures::choose(1.0, 1.0, false), None).unwrap();
+    assert!(pictures_at(&h, point).contains(&texture), "the owner shows the preview");
+
+    let tab = h.get_by(|n| n.role() == egui::accesskit::Role::Tab && n.label().is_some_and(|label| label.starts_with("Other image"))).rect().center();
+    h.event(egui::Event::PointerMoved(tab));
+    h.step();
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: tab, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+        h.step();
+        if h.state().session.active_index() == Some(1) {
+            // Tabs switch in the canvas pass, before the next frame ends the old transform.
+            assert!(h.state().ui.transform.is_some(), "the old session still exists in the switching frame");
+            let point = screen(&mut h, [150.0, 130.0]);
+            assert!(!pictures_at(&h, point).contains(&texture), "the other document must not show the preview");
+            return;
+        }
+    }
+    panic!("the tab did not switch");
+}
+
+#[test]
+fn scaled_text_preview_paints_over_the_document() {
+    let mut h = harness();
+    h.state_mut().run("type.create", json!({"x": 110, "y": 145, "text": "Hello 🐺 World", "size": 24})).unwrap();
+    let view = &mut h.state_mut().ui.views[0];
+    view.zoom = 4.825;
+    view.center = [155.0, 133.0];
+    view.clear_pending();
+    h.run_steps(2);
+    // Identify the composite before opening the transform: the document is the 400 × 300
+    // texture at this point, and its raster display updates that texture in place.
+    let point = screen(&mut h, [155.0, 133.0]);
+    let manager = h.ctx.tex_manager();
+    let document = pictures_at(&h, point)
+        .into_iter()
+        .find(|&id| manager.read().meta(id).is_some_and(|meta| meta.size == [400, 300]))
+        .expect("the document's raster texture is visible before the transform");
+    begin(&mut h);
+    let t = h.state_mut().ui.transform.as_mut().unwrap();
+    t.edit_box(|b| *b = b.scaled_about_pivot(1.8582, 1.8582));
+    h.run_steps(2);
+
+    let [a, _, c, _] = quad(&h);
+    let center = screen(&mut h, [(a[0] + c[0]) * 0.5, (a[1] + c[1]) * 0.5]);
+    let preview = h.state().transform_preview.as_ref().unwrap();
+    let texels = preview.textures.level_image(0).unwrap().0;
+    assert!(texels.pixels.iter().any(|p| p.a() != 0), "the text preview contains ink");
+    let (texture, _) = preview.textures.pick(&h.ctx, PreviewTextures::choose(4.825, 1.8582, false), None).unwrap();
+    let pictures = pictures_at(&h, center);
+    assert_ne!(document, texture);
+    assert!(pictures.contains(&document), "the document covers the same point as the preview: {pictures:?}");
+    assert_eq!(pictures.last(), Some(&texture), "the text preview must paint over the document: {pictures:?}");
 }
 
 /// A transform started by dragging a Move-tool control: that first drag is undoable too.

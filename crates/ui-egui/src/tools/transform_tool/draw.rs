@@ -1,6 +1,5 @@
-//! The Free Transform canvas body: the moving pixels through the session's map, the layers over
-//! them, the transformed path outline, and the box or warp controls on top. Show order is paint
-//! order, so [`show_in_canvas`] shows the preview first and the controls last.
+//! The Free Transform canvas body: the moving pixels and covering layers in the picture slot,
+//! with the transformed path outline and the box or warp controls above it.
 
 use craft::behavior::EditEvents;
 use craft::behavior::geometry::SnapLine;
@@ -40,9 +39,8 @@ struct Shown {
     busy: bool,
 }
 
-/// Shows the open Free Transform in the canvas body at `rect`, and applies what its controls
-/// report: the preview (moving pixels, covering layers, path outline), then the box or warp
-/// controls. The canvas calls it after the document display and before the tool overlays.
+/// Shows the open Free Transform controls and applies what they report. The canvas calls this
+/// before tool input; it paints the document and then [`show_preview`] with the resulting state.
 ///
 /// Every control reads the frame's input once for its own pass, so a second pass of a frame
 /// reports no edit again and this applies only what the pass it ran in reported.
@@ -50,10 +48,10 @@ struct Shown {
 /// Returns whether the session's box was shown in this pass, even if an edit then ended the session (the Move tool's
 /// transform controls share its id and must not open a second box in the same pass), and the box's snap lines, which
 /// the session's canvas tool hands to the host in this frame's pass ([`super::canvas_tool`]).
-pub fn show_in_canvas(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: egui::Rect, now: f64) -> SessionShown {
+pub fn show_in_canvas(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: egui::Rect, now: f64, doc: DocId) -> SessionShown {
     let shown = {
-        let (Some(t), Some(pv)) = (&app.ui.transform, &app.transform_preview) else { return SessionShown::default() };
-        show_session(app, t, pv, ui, rect)
+        let Some((t, pv)) = session_on(app, doc) else { return SessionShown::default() };
+        show_controls(app, t, pv, ui, rect)
     };
     let Shown { edits, snapped, apply, discard, mesh, cylinder, busy } = shown;
     let mut need_warp = false;
@@ -88,9 +86,7 @@ pub fn show_in_canvas(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: egui::Re
     SessionShown { shown: true, snapped }
 }
 
-/// The pass's shows, in paint order.
-fn show_session(app: &PhotocraftApp, t: &FreeTransform, pv: &OpenPreview, ui: &mut egui::Ui, rect: egui::Rect) -> Shown {
-    show_preview(app, t, pv, ui, rect);
+fn show_controls(app: &PhotocraftApp, t: &FreeTransform, pv: &OpenPreview, ui: &mut egui::Ui, rect: egui::Rect) -> Shown {
     let mut out = Shown::default();
     if pv.committing.is_some() {
         // The moving pixels stay without the box until the commit job lands.
@@ -127,9 +123,10 @@ pub struct SessionShown {
     pub snapped: Vec<SnapLine>,
 }
 
-/// The moving pixels as the session maps them (warped, skewed or styled), then the layers above
-/// them, both in the canvas's picture, under the grid, guides and controls. Nothing is shown for the Frame tool's transform.
-fn show_preview(app: &PhotocraftApp, t: &FreeTransform, pv: &OpenPreview, ui: &mut egui::Ui, rect: egui::Rect) {
+/// Appends the moving pixels, then the covering layers, to the canvas's picture after the
+/// document. The grid, guides and controls paint over this slot.
+pub(crate) fn show_preview(app: &PhotocraftApp, ui: &mut egui::Ui, rect: egui::Rect, doc: DocId) {
+    let Some((t, pv)) = session_on(app, doc) else { return };
     if crate::frame_tool::frame_transform(t) {
         return;
     }
@@ -164,6 +161,13 @@ fn show_preview(app: &PhotocraftApp, t: &FreeTransform, pv: &OpenPreview, ui: &m
     {
         RasterDisplay::new("", above).mapped(frame, 1).picture().show_at(ui, rect);
     }
+}
+
+/// A tab can switch after the frame's `end_if_left` check, while the old box still exists.
+fn session_on(app: &PhotocraftApp, doc: DocId) -> Option<(&FreeTransform, &OpenPreview)> {
+    let t = app.ui.transform.as_ref()?;
+    let pv = app.transform_preview.as_ref()?;
+    (pv.doc.id == doc && app.session.active().is_some_and(|st| st.doc.id == doc)).then_some((t, pv))
 }
 
 /// What the box draws for the styled layer at `zoom`, as the framework's styled preview builds it: the composite and its
