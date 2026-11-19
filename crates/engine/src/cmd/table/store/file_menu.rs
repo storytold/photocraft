@@ -1,8 +1,9 @@
-use super::{Color, ColorMode, CommandSpec, Document, EngineError, Layer, SampleType, Size, Value, always, bad, has_doc, json, parse_hex};
+use crate::cmd::{Color, ColorMode, CommandSpec, Document, EngineError, Layer, SampleType, Size, Value, always, json, parse_hex};
 
-/// File menu commands: New and Close.
-pub(super) fn specs() -> Vec<CommandSpec> {
+/// File menu: New (new documents take their presets from the document preset store).
+pub(crate) fn specs() -> Vec<CommandSpec> {
     vec![
+        // File
         cmd!(
             "file.new",
             "New…",
@@ -69,29 +70,6 @@ pub(super) fn specs() -> Vec<CommandSpec> {
                     st.history.set_current_label("New");
                 }
                 Ok(json!({ "document": i }))
-            }
-        ),
-        cmd!(
-            "file.close",
-            "Close",
-            ["File"],
-            Some("Cmd+W"),
-            r##"{"document":index?,"save":"discard|ask"|false="discard"} (false means discard; ask refuses to close a changed document in headless playback)"##,
-            has_doc,
-            |s, p| {
-                let i = p.get("document").and_then(Value::as_u64).map(|v| v as usize).or(s.active_index()).ok_or(EngineError::NoDocument)?;
-                match p.get("save").filter(|v| !v.is_null()) {
-                    Some(v) if v == "ask" && s.documents().get(i).ok_or(EngineError::NoDocument)?.is_dirty() => {
-                        return Err(bad("file.close", "the document has unsaved changes; save it or explicitly discard them"));
-                    }
-                    Some(v) if v == "ask" => {}
-                    // `false` (don't save) is the older spelling of discard.
-                    Some(Value::Bool(false)) => {}
-                    Some(v) if v != "discard" => return Err(bad("file.close", "`save` must be ask, discard or false")),
-                    _ => {}
-                }
-                s.close(i).ok_or(EngineError::NoDocument)?;
-                Ok(Value::Null)
             }
         ),
     ]

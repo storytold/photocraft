@@ -1,8 +1,9 @@
-use super::{CommandSpec, Rect, Surface, TILE_SIZE, Value, bad, has_doc, has_selection, int_i32, selection_cmds};
+use crate::cmd::{CommandSpec, Rect, Surface, TILE_SIZE, Value, bad, has_doc, has_selection, int_i32, selection_cmds};
 
-/// Select menu commands: All, Deselect, Inverse and rectangular selections.
-pub(super) fn specs() -> Vec<CommandSpec> {
+/// Select menu: All, Deselect, Inverse and rectangular selections.
+pub(crate) fn specs() -> Vec<CommandSpec> {
     vec![
+        // Select
         cmd!("select.all", "All", ["Select"], Some("Cmd+A"), "{}", has_doc, |s, _| {
             // With the active layer on an artboard (the board itself or a layer inside it), Select
             // All selects that board, as Photoshop does; otherwise the whole canvas (#10258).

@@ -1,15 +1,18 @@
-use super::{
-    Adjustment, BlendMode, Color, ColorMode, CommandSpec, EngineError, Fill, Layer, LayerContent, LayerId, LayerMask, Result, Session, Value, adjustment_kind,
-    arrange, bad, parse_blend, cmyk_param, color_param, has_doc, has_layer, has_selection, json, layer_copy, layer_panel_option, layer_param,
-    mask_new_layer, merge_group, move_mask, pixels, set_clipped, set_mask, set_mask_and_deselect,
+use crate::cmd::{
+    Adjustment, Color, ColorMode, CommandSpec, EngineError, Fill, Layer, LayerContent, LayerId, LayerMask, Result, Session, Value, adjustment_kind, arrange,
+    bad, cmyk_param, color_param, has_doc, has_layer, has_selection, json, layer_copy, layer_panel_option, layer_param, mask_new_layer, merge_group, move_mask,
+    parse_blend, pixels, set_clipped, set_mask, set_mask_and_deselect,
 };
+use photocraft_color::BlendMode;
 
-/// Layer menu commands, in registry order.
-pub(super) fn specs() -> Vec<CommandSpec> {
-    [creation(), duplication(), deletion_and_selection(), order_and_clipping(), masks(), merging(), fill_layers(), adjustments(), placement()]
-        .into_iter()
-        .flatten()
-        .collect()
+/// Layer menu, first run: new layers and groups to the solid color fill layer.
+pub(crate) fn specs_before_gradient() -> Vec<CommandSpec> {
+    [creation(), duplication(), deletion_and_selection(), order_and_clipping(), masks(), merging(), solid_color_fill()].into_iter().flatten().collect()
+}
+
+/// Layer menu, last run: adjustment layers, move and translate.
+pub(crate) fn specs_after_gradient() -> Vec<CommandSpec> {
+    [adjustments(), placement()].into_iter().flatten().collect()
 }
 
 /// New layers and groups, and grouping the selected layers.
@@ -301,83 +304,38 @@ fn merging() -> Vec<CommandSpec> {
     ]
 }
 
-/// Solid color and gradient fill layers.
-fn fill_layers() -> Vec<CommandSpec> {
-    vec![
-        cmd!(
-            "layer.newFillLayer.solidColor",
-            "Solid Color…",
-            ["Layer", "New Fill Layer"],
-            None,
-            r##"{"color":"#rrggbb"=foreground,"cmyk":[c,m,y,k]? (inks 0..1 the colour was picked as: a CMYK document's fill holds exactly these; default the foreground's CMYK pick),"path":"work"|saved path name|{…path}? (the active path: becomes the vector mask, making a shape; else the selection is the layer mask)}"##,
-            has_doc,
-            |s, p| {
-                let c = color_param("layer.newFillLayer.solidColor", p, "color", s.tools.foreground)?;
-                // The inks the colour was picked as, so CMYK 50/50/50/100 stays 50/50/50/100 instead
-                // of what its sRGB stand-in converts back to through the document profile (#8568).
-                let inks = match cmyk_param("layer.newFillLayer.solidColor", p, "cmyk")? {
-                    Some(k) => Some(k),
-                    None => s.tools.picked_cmyk([c[0], c[1], c[2]]),
+/// Solid color fill layer.
+fn solid_color_fill() -> Vec<CommandSpec> {
+    vec![cmd!(
+        "layer.newFillLayer.solidColor",
+        "Solid Color…",
+        ["Layer", "New Fill Layer"],
+        None,
+        r##"{"color":"#rrggbb"=foreground,"cmyk":[c,m,y,k]? (inks 0..1 the colour was picked as: a CMYK document's fill holds exactly these; default the foreground's CMYK pick),"path":"work"|saved path name|{…path}? (the active path: becomes the vector mask, making a shape; else the selection is the layer mask)}"##,
+        has_doc,
+        |s, p| {
+            let c = color_param("layer.newFillLayer.solidColor", p, "color", s.tools.foreground)?;
+            // The inks the colour was picked as, so CMYK 50/50/50/100 stays 50/50/50/100 instead
+            // of what its sRGB stand-in converts back to through the document profile (#8568).
+            let inks = match cmyk_param("layer.newFillLayer.solidColor", p, "cmyk")? {
+                Some(k) => Some(k),
+                None => s.tools.picked_cmyk([c[0], c[1], c[2]]),
+            };
+            let default_mask = layer_panel_option(s, "useDefaultMasksOnFillLayers", true);
+            let id = s.edit("New Color Fill Layer", |doc, active| {
+                let fill = match inks {
+                    Some(k) if doc.mode == ColorMode::Cmyk => Fill::Solid(Color { mode: ColorMode::Cmyk, c: k, alpha: c[3] }),
+                    _ => Fill::Solid(Color::rgba(c[0], c[1], c[2], c[3])).in_mode(doc.mode),
                 };
-                let default_mask = layer_panel_option(s, "useDefaultMasksOnFillLayers", true);
-                let id = s.edit("New Color Fill Layer", |doc, active| {
-                    let fill = match inks {
-                        Some(k) if doc.mode == ColorMode::Cmyk => Fill::Solid(Color { mode: ColorMode::Cmyk, c: k, alpha: c[3] }),
-                        _ => Fill::Solid(Color::rgba(c[0], c[1], c[2], c[3])).in_mode(doc.mode),
-                    };
-                    let mut l = Layer::new(doc.next_layer_name("Color Fill"), LayerContent::Fill(fill));
-                    mask_new_layer(doc, &mut l, p, "layer.newFillLayer.solidColor", default_mask)?;
-                    let id = crate::layer_place::insert_new(doc, *active, l, crate::layer_place::Place::Auto);
-                    *active = Some(id);
-                    Ok(id)
-                })?;
-                Ok(json!({ "layer": id.0 }))
-            }
-        ),
-        cmd!(
-            "layer.newFillLayer.gradient",
-            "Gradient…",
-            ["Layer", "New Fill Layer"],
-            None,
-            r##"{"from":"#rrggbb","to":"#rrggbb","angle":deg=90,"style":"linear|radial|angle|reflected|diamond","reverse":bool,"path":"work"|saved path name|{…path}? (the active path: becomes the vector mask; else the selection is the layer mask),"stops"?,"transparency"?,"midpoints"?,"scale"?,"offset"?,"dither"?,"align"? (as gradient.fill.set; stops replace from/to)}"##,
-            has_doc,
-            |s, p| {
-                let a = color_param("layer.newFillLayer.gradient", p, "from", s.tools.foreground)?;
-                let b = color_param("layer.newFillLayer.gradient", p, "to", s.tools.background)?;
-                let angle = crate::gradient_fill_cmds::angle_param("layer.newFillLayer.gradient", p, 90.0)?;
-                let style = crate::layer_style::gradient_style(p.get("style").and_then(Value::as_str).unwrap_or("linear"));
-                let reverse = p.get("reverse").and_then(Value::as_bool).unwrap_or(false);
-                let default_mask = layer_panel_option(s, "useDefaultMasksOnFillLayers", true);
-                // The rest of a recorded Gradient Fill (a loaded action's Make): applied as
-                // `gradient.fill.set` would, in the same step.
-                let rest: serde_json::Map<String, Value> = ["stops", "transparency", "midpoints", "scale", "offset", "dither", "align"]
-                    .iter()
-                    .filter_map(|k| p.get(*k).map(|v| ((*k).to_string(), v.clone())))
-                    .collect();
-                let (fg, bg) = (s.tools.foreground, s.tools.background);
-                let id = s.edit("New Gradient Fill Layer", |doc, active| {
-                    let mut fill = Fill::gradient(
-                        vec![(0.0, Color::rgba(a[0], a[1], a[2], a[3])), (1.0, Color::rgba(b[0], b[1], b[2], b[3]))],
-                        angle,
-                        1.0,
-                        style,
-                        reverse,
-                    );
-                    if !rest.is_empty() {
-                        let l = Layer::new(String::new(), LayerContent::Fill(fill.clone()));
-                        fill = crate::gradient_fill_cmds::apply_set(&l, &fill, doc.bounds(), &Value::Object(rest.clone()), fg, bg)?;
-                    }
-                    let fill = fill.in_mode(doc.mode);
-                    let mut l = Layer::new(doc.next_layer_name("Gradient Fill"), LayerContent::Fill(fill));
-                    mask_new_layer(doc, &mut l, p, "layer.newFillLayer.gradient", default_mask)?;
-                    let id = crate::layer_place::insert_new(doc, *active, l, crate::layer_place::Place::Auto);
-                    *active = Some(id);
-                    Ok(id)
-                })?;
-                Ok(json!({ "layer": id.0 }))
-            }
-        ),
-    ]
+                let mut l = Layer::new(doc.next_layer_name("Color Fill"), LayerContent::Fill(fill));
+                mask_new_layer(doc, &mut l, p, "layer.newFillLayer.solidColor", default_mask)?;
+                let id = crate::layer_place::insert_new(doc, *active, l, crate::layer_place::Place::Auto);
+                *active = Some(id);
+                Ok(id)
+            })?;
+            Ok(json!({ "layer": id.0 }))
+        }
+    )]
 }
 
 /// Editing an adjustment layer's properties.

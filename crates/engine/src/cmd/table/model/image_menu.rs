@@ -1,7 +1,23 @@
-use super::{CommandSpec, Value, desaturate_adjustment, destructive_adjust, has_doc, turn};
+use crate::cmd::{CommandSpec, Result, Session, Value, has_doc};
 
-/// Image menu commands: canvas rotations and flips, and Desaturate.
-pub(super) fn specs() -> Vec<CommandSpec> {
+/// Image › Image Rotation by a right angle or a flip (pixels, vectors, guides, … all move).
+fn turn(s: &mut Session, label: &str, t: crate::canvas_geom::Turn) -> Result<Value> {
+    if let Some(d) = s.active() {
+        let a = t.affine(f64::from(d.doc.size.width), f64::from(d.doc.size.height));
+        // Sampler points are pixel indices, not pixel edges: map the pixel's centre, so the point
+        // lands on the same pixel `Turn::pixel_map` moves the pixels to (`w - 1 - x`).
+        let half = photocraft_geom::Affine::translate(0.5, 0.5);
+        s.set_canvas_map(a, half.then(&a).then(&photocraft_geom::Affine::translate(-0.5, -0.5)));
+    }
+    s.edit(label, |doc, _| {
+        crate::canvas_geom::keeping_count_points(doc, |doc| crate::canvas_geom::turn_canvas(doc, t));
+        Ok(())
+    })?;
+    Ok(Value::Null)
+}
+
+/// Image menu: canvas rotations and flips.
+pub(crate) fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!("image.imageRotation.flipCanvasHorizontal", "Flip Canvas Horizontal", ["Image", "Image Rotation"], None, "{}", has_doc, |s, _| {
             turn(s, "Flip Canvas Horizontal", crate::canvas_geom::Turn::FlipHorizontal)
@@ -18,19 +34,5 @@ pub(super) fn specs() -> Vec<CommandSpec> {
         cmd!("image.imageRotation.90ccw", "90° Counter Clockwise", ["Image", "Image Rotation"], None, "{}", has_doc, |s, _| {
             turn(s, "Rotate Canvas", crate::canvas_geom::Turn::Ccw90)
         }),
-        cmd!(
-            "image.adjustments.desaturate",
-            "Desaturate",
-            ["Image", "Adjustments"],
-            Some("Cmd+Shift+U"),
-            r##"{"target":"pixels"|"mask"|{"color":i}|{"colors":[i,…]}?=Channels panel target,"layer":id|name?=active}"##,
-            crate::adjust_cmds::has_adjustable,
-            |s, p| {
-                if crate::adjust_cmds::adjust_as_smart_filter(s, "desaturate", "Desaturate", p)? {
-                    return Ok(Value::Null);
-                }
-                destructive_adjust(s, "Desaturate", desaturate_adjustment(), p)
-            }
-        ),
     ]
 }

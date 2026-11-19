@@ -1,7 +1,7 @@
-use super::{CommandSpec, EngineError, Rect, Value, always, bad, command_specs, has_doc, inspect, int, json, list_entry};
+use crate::cmd::{CommandSpec, EngineError, Rect, Value, always, bad, command_specs, has_doc, inspect, int, json, list_entry};
 
 /// Commands that report session and document state or switch documents.
-pub(super) fn specs() -> Vec<CommandSpec> {
+pub(crate) fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec {
             id: "session.inspect",
