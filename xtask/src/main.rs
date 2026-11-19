@@ -142,6 +142,12 @@ pub fn metadata() -> Result<serde_json::Value, String> {
     serde_json::from_slice(&out.stdout).map_err(|e| format!("cargo metadata: bad JSON: {e}"))
 }
 
+/// The workspace's cargo target directory.
+pub fn target_dir() -> Result<PathBuf, String> {
+    let m = metadata()?;
+    m.get("target_directory").and_then(serde_json::Value::as_str).map(PathBuf::from).ok_or_else(|| "cargo metadata: no target_directory".into())
+}
+
 /// Two egui revisions in one build give two incompatible `Ui` types, so the workspace's egui
 /// `[patch]` must name the revision the craft framework is built with.
 fn cmd_egui_fork() -> Result<(), String> {
@@ -403,18 +409,10 @@ fn read_gpu_filter() -> Result<String, String> {
 
 /// The nextest command line of a test step. `panic_hunt` runs only the engine's `#[ignore]`d panic
 /// hunt (AGENTS.md Rule 9), with the same build arguments as the tests, so nothing rebuilds. `gpu` is
-/// the group's filter, read only when the selection needs it. nextest's `ci` profile terminates
-/// hung tests and repeats every failure at the end of the log (.config/nextest.toml).
-/// What `ci tests --shard` runs, from the plan the shard's archive carries.
-struct ShardRun {
-    /// The shard's part of the split binaries.
-    filter: Option<String>,
-    /// The plan gave the shard no tests.
-    empty: bool,
-}
-
-/// `shard`: the shard's part of the plan (`ci tests --shard`).
-fn nextest_args(o: &CiOptions, panic_hunt: bool, gpu: Option<&str>, shard: Option<&ShardRun>) -> Vec<String> {
+/// the group's filter, read only when the selection needs it. `shard` is the filterset of the shard's
+/// part of the split binaries (`ci tests --shard`). nextest's `ci` profile terminates hung tests and
+/// repeats every failure at the end of the log (.config/nextest.toml).
+fn nextest_args(o: &CiOptions, panic_hunt: bool, gpu: Option<&str>, shard: Option<&str>) -> Vec<String> {
     let mut args: Vec<String> = ["nextest", "run", "--profile", "ci"].map(String::from).to_vec();
     let mut filters = Vec::new();
     if panic_hunt {
@@ -440,9 +438,10 @@ fn nextest_args(o: &CiOptions, panic_hunt: bool, gpu: Option<&str>, shard: Optio
     if let Some(partition) = &o.partition {
         args.extend(["--partition".to_string(), partition.clone()]);
     }
-    // A partition, a shard or a selection may hold no panic hunt; the shard that does runs it. A
-    // shard the plan gave nothing runs nothing.
-    if (panic_hunt && (o.partition.is_some() || o.shard.is_some() || o.selection != Selection::All)) || shard.is_some_and(|s| s.empty) {
+    // A partition or a selection may hold no panic hunt; the shard that does runs it. A shard of the
+    // build job's plan may hold no runnable test at all; the build job checked that every test runs
+    // on exactly one shard.
+    if (panic_hunt && (o.partition.is_some() || o.selection != Selection::All)) || o.shard.is_some() {
         args.extend(["--no-tests", "warn"].map(String::from));
     }
     match (o.selection, gpu) {
@@ -453,7 +452,7 @@ fn nextest_args(o: &CiOptions, panic_hunt: bool, gpu: Option<&str>, shard: Optio
         (Selection::NoGpu, Some(gpu)) => filters.push(format!("not ({gpu})")),
         _ => {}
     }
-    if let Some(filter) = shard.and_then(|s| s.filter.as_ref()) {
+    if let Some(filter) = shard {
         filters.push(format!("({filter})"));
     }
     if !filters.is_empty() {
@@ -481,10 +480,10 @@ fn step_tests(o: &CiOptions, panic_hunt: bool) -> Result<(), String> {
     } else {
         let gpu = if o.selection == Selection::All { None } else { Some(read_gpu_filter()?) };
         let shard = match (&o.from, o.shard) {
-            (Some(from), Some(k)) => read_shard_filter(from, k)?,
+            (Some(from), Some(k)) => read_shard_filter(from, k, o.selection)?,
             _ => None,
         };
-        c.args(nextest_args(o, panic_hunt, gpu.as_deref(), shard.as_ref()));
+        c.args(nextest_args(o, panic_hunt, gpu.as_deref(), shard.as_deref()));
     }
     let what = shown(&c);
     run(c, &what)
@@ -496,6 +495,13 @@ fn build_tests(o: &CiOptions) -> Result<(), String> {
     let mut c = cargo();
     match &o.archive {
         Some(Archive::File(file)) => {
+            // A shard plan left in the target directory by a per-shard build would go into this
+            // archive (.config/nextest.toml) and mislead its shards.
+            let plan = target_dir()?.join(shards::PLAN_FILE);
+            match std::fs::remove_file(&plan) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(format!("{}: {e}", plan.display())),
+                _ => {}
+            }
             c.args(["nextest", "archive", "--profile", "ci"]).args(test_build_args(&o.exclude)).arg("--archive-file").arg(file);
         }
         Some(Archive::Shards { dir, name, shards, gpu_shard }) => return build_shard_archives(o, dir, name, *shards, *gpu_shard),
@@ -563,18 +569,26 @@ fn build_shard_archives(o: &CiOptions, dir: &Path, name: &str, shards: usize, gp
     Ok(())
 }
 
-/// Shard `k`'s part of the plan its archive carries, extracted to `from`.
-fn read_shard_filter(from: &Path, k: usize) -> Result<Option<ShardRun>, String> {
-    let path = from.join("target").join(shards::PLAN_FILE);
-    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let plan: shards::Plan = serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
-    let shard = plan.shards.get(k.wrapping_sub(1)).ok_or_else(|| format!("{}: no shard {k}", path.display()))?;
+/// Shard `k`'s filterset from the plan its archive carries, extracted to `from`, once the plan is
+/// checked against the archive and the selection.
+fn read_shard_filter(from: &Path, k: usize, selection: Selection) -> Result<Option<String>, String> {
+    let read = |path: PathBuf| -> Result<String, String> { std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display())) };
+    let plan_path = from.join("target").join(shards::PLAN_FILE);
+    let plan: shards::Plan = serde_json::from_str(&read(plan_path.clone())?).map_err(|e| format!("{}: {e}", plan_path.display()))?;
+    let metadata_path = from.join("target").join("nextest").join("binaries-metadata.json");
+    let metadata: serde_json::Value = serde_json::from_str(&read(metadata_path.clone())?).map_err(|e| format!("{}: {e}", metadata_path.display()))?;
+    let gpu = match selection {
+        Selection::All => None,
+        Selection::Gpu => Some(true),
+        Selection::NoGpu => Some(false),
+    };
+    let shard = shards::shard_to_run(&plan, k, gpu, &shards::archived_binaries(&metadata)?)?;
     eprintln!(
         "shard {k}: {} test binaries{}",
         shard.binaries.len(),
         if shard.parts.is_empty() { String::new() } else { format!(", part of {}", shard.parts.keys().cloned().collect::<Vec<_>>().join(", ")) }
     );
-    Ok(Some(ShardRun { filter: shard.filter(), empty: shard.binaries.is_empty() }))
+    Ok(shard.filter())
 }
 
 /// nextest does not run doctests.
@@ -777,14 +791,11 @@ mod ci_tests {
     fn a_shard_archive_runs_its_part_and_no_partition() {
         let (_, options) = ci_from_args(&["tests", "--from", "x", "--shard", "2", "--no-gpu"], Vec::new()).unwrap();
         assert_eq!((options.shard, options.partition.as_deref()), (Some(2), None));
-        let run = ShardRun { filter: Some("not (binary_id(=ui))".into()), empty: false };
-        let args = nextest_args(&options, true, Some("package(g)"), Some(&run)).join(" ");
+        let args = nextest_args(&options, true, Some("package(g)"), Some("not (binary_id(=ui))")).join(" ");
         assert!(args.contains("--no-tests warn") && !args.contains("--partition"), "{args}");
         assert!(args.ends_with("-E binary_id(photocraft-engine::panic_hunt) & not (package(g)) & (not (binary_id(=ui)))"), "{args}");
-        let tests = nextest_args(&options, false, None, Some(&run)).join(" ");
-        assert!(!tests.contains("--no-tests"), "{tests}");
-        let empty = nextest_args(&options, false, None, Some(&ShardRun { filter: None, empty: true })).join(" ");
-        assert!(empty.contains("--no-tests warn"), "{empty}");
+        // A shard may hold no runnable test; the build job's plan check guarantees the coverage.
+        assert!(nextest_args(&options, false, None, None).join(" ").contains("--no-tests warn"));
         assert!(ci_from_args(&["tests", "--shard", "2"], Vec::new()).is_err(), "--shard without --from");
         assert!(ci_from_args(&["tests", "--from", "x", "--shard", "0"], Vec::new()).is_err());
         assert!(ci_from_args(&["lint", "--gpu-shard"], Vec::new()).is_err());

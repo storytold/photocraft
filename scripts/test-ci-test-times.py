@@ -43,6 +43,17 @@ class TestTimes(unittest.TestCase):
         self.assertEqual(body, ['bin\tlinux\tfresh\t1\t2.00', 'bin\twindows\tw\t1\t9.00'])
         self.assertIn('run 123', new)
 
+    def test_only_runs_that_test_every_package_refresh_the_times(self):
+        self.assertIsNone(times.refusal({'event': 'push', 'headBranch': 'main'}))
+        self.assertIsNone(times.refusal({'event': 'schedule', 'headBranch': 'main'}))
+        self.assertIn('pull_request', times.refusal({'event': 'pull_request', 'headBranch': 'ci-x'}))
+        self.assertIsNotNone(times.refusal({'event': 'push', 'headBranch': 'ci-x'}))
+
+    def test_names_the_binaries_a_refresh_drops(self):
+        old = 'bin\twindows\tgpu::it\t1\t9.00\nbin\twindows\tui\t1\t9.00\nbin\tlinux\tgpu::it\t1\t1.00\n'
+        self.assertEqual(times.vanished(old, {'windows': ['bin\twindows\tui\t1\t2.00']}), {'windows': ['gpu::it']})
+        self.assertEqual(times.vanished(old, {'linux': ['bin\tlinux\tgpu::it\t1\t2.00']}), {})
+
 
 if __name__ == '__main__':
     unittest.main()

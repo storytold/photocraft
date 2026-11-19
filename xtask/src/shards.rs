@@ -364,6 +364,45 @@ pub fn plan(binaries: &[Binary], times: &Times, shards: usize, gpu_shard: bool) 
     Ok(plan)
 }
 
+/// The binaries in a nextest archive's `target/nextest/binaries-metadata.json`.
+pub fn archived_binaries(json: &serde_json::Value) -> Result<BTreeSet<String>, String> {
+    let binaries = json.get("rust-binaries").and_then(serde_json::Value::as_object).ok_or("binaries-metadata.json: no rust-binaries")?;
+    binaries
+        .values()
+        .map(|b| {
+            b.get("binary-id")
+                .and_then(serde_json::Value::as_str)
+                .map(String::from)
+                .ok_or_else(|| "binaries-metadata.json: a binary without binary-id".to_string())
+        })
+        .collect()
+}
+
+/// Shard `k` (1-based) of `plan`, checked against how the shard runs and what its archive holds:
+/// `gpu` is `Some(true)` for `--gpu`, `Some(false)` for `--no-gpu` and `None` for every test, and
+/// `archived` the binaries of the archive. A plan from another build or another mode would lose or
+/// repeat tests without an error.
+pub fn shard_to_run<'a>(plan: &'a Plan, k: usize, gpu: Option<bool>, archived: &BTreeSet<String>) -> Result<&'a Shard, String> {
+    let shard = plan.shards.get(k.wrapping_sub(1)).ok_or_else(|| format!("the shard plan has no shard {k}"))?;
+    let expected = match (plan.gpu_shard, k) {
+        (false, _) => None,
+        (true, 1) => Some(true),
+        (true, _) => Some(false),
+    };
+    if gpu != expected {
+        let mode = |g: Option<bool>| match g {
+            Some(true) => "the gpu group",
+            Some(false) => "the tests outside the gpu group",
+            None => "every test",
+        };
+        return Err(format!("shard {k} runs {}, but the shard plan has it run {}", mode(gpu), mode(expected)));
+    }
+    if &shard.binaries != archived {
+        return Err(format!("shard {k}'s archive does not hold the binaries its plan names: the plan is from another build"));
+    }
+    Ok(shard)
+}
+
 /// Every test runs on exactly one shard: each binary with tests outside the gpu group on one shard
 /// or, split, every such test in exactly one part across the shards that hold it, and with a GPU
 /// shard, that shard holds exactly the binaries with GPU tests. Without a GPU shard every test
@@ -509,6 +548,21 @@ bin\twindows\tui\t6\t600
         assert_eq!(shard.filter().unwrap(), "not (binary_id(=ui)) | (binary_id(=ui) & (test(/^a::b::/) | test(=top)))");
         assert_eq!(shard.archive_filter(), "binary_id(=e) | binary_id(=ui)");
         assert_eq!(Shard::default().filter(), None);
+    }
+
+    #[test]
+    fn a_shard_runs_only_the_plan_its_archive_and_mode_match() {
+        let times = Times::parse(TIMES, "linux").unwrap();
+        let plan = plan(&build(), &times, 3, true).unwrap();
+        let held = |k: usize| plan.shards[k - 1].binaries.clone();
+        assert!(shard_to_run(&plan, 1, Some(true), &held(1)).is_ok());
+        assert!(shard_to_run(&plan, 2, Some(false), &held(2)).is_ok());
+        assert!(shard_to_run(&plan, 1, Some(false), &held(1)).is_err(), "the GPU shard run as a CPU shard");
+        assert!(shard_to_run(&plan, 2, None, &held(2)).is_err(), "a GPU-shard plan run without --gpu-shard");
+        assert!(shard_to_run(&plan, 2, Some(false), &held(3)).is_err(), "another shard's archive");
+        assert!(shard_to_run(&plan, 4, Some(false), &held(2)).is_err());
+        let json: serde_json::Value = serde_json::from_str(r#"{"rust-binaries": {"a": {"binary-id": "a"}, "b::it": {"binary-id": "b::it"}}}"#).unwrap();
+        assert_eq!(archived_binaries(&json).unwrap(), BTreeSet::from(["a".to_string(), "b::it".to_string()]));
     }
 
     #[test]
