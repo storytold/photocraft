@@ -328,6 +328,12 @@ pub(crate) fn params(app: &mut PhotocraftApp, command: &str, spec: &str) -> Vec<
             if document_derived(command, &p.key) {
                 p = p.not_remembered();
             }
+            // #14465: the row opens from Preferences › General › Image Interpolation on every
+            // opening, so a pick there applies to that opening only; the row stays out of the
+            // remembered values, as the rows above do.
+            if command == "image.rotation.arbitrary" && p.key == "interpolation" {
+                p = p.not_remembered();
+            }
             // Global Light's Altitude takes whole degrees, as its Angle does (#14980).
             if command == "layer.layerStyle.globalLight" && p.key == "altitude" {
                 p = p.decimals(0);
