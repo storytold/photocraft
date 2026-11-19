@@ -28,7 +28,7 @@ fn doc(mode: ColorMode) -> Document {
     let fmt = PixelFormat::new(mode, SampleType::F32, true);
     let bg = paper(mode);
     let mut d = Document::new("t.pdf", Size { width: 4, height: 2 }, mode, SampleType::F32);
-    d.layers = vec![Layer::new("Paper", LayerContent::Raster(solid(fmt, 0, 0, 4, 2, &bg)))];
+    d.layers = vec![Layer::new("Paper", LayerContent::Raster(solid(fmt, 0, 0, 4, 2, &bg)))].into();
     d
 }
 
@@ -187,7 +187,7 @@ fn the_page_measures_at_the_document_resolution() {
     let mut d = doc(ColorMode::Rgb);
     d.size = Size { width: 300, height: 150 };
     let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::F32, true);
-    d.layers = vec![Layer::new("Paper", LayerContent::Raster(solid(fmt, 0, 0, 300, 150, &[1.0, 1.0, 1.0, 1.0])))];
+    d.layers = vec![Layer::new("Paper", LayerContent::Raster(solid(fmt, 0, 0, 300, 150, &[1.0, 1.0, 1.0, 1.0])))].into();
     d.resolution_dpi = 300.0;
     let out = export(&d, true, &Interrupt::NONE).unwrap();
     assert!(has(&out.bytes, "/MediaBox [0 0 72.00 36.00]"), "300 px at 300 dpi is one inch");
@@ -442,15 +442,24 @@ fn the_plate_description_joins_the_rdf_element_however_the_packet_spells_it() {
     d.channels.push(spot("Varnish", photocraft_color::Color::rgb(0.9, 0.9, 0.6), &[1.0; 8]));
     // The packet must parse as namespaced XML with the plates a description inside its RDF element.
     let plates_in_rdf = |xmp: &str| {
-        let tree = roxmltree::Document::parse(xmp.trim_start_matches('\u{feff}')).unwrap_or_else(|e| panic!("{e}: {xmp}"));
-        let plates = tree
-            .descendants()
-            .find(|n| n.tag_name().namespace() == Some(crate::pdf::SPOT_PLATES_NS) && n.tag_name().name() == "plates")
-            .unwrap_or_else(|| panic!("no pcsp:plates: {xmp}"));
-        let description = plates.parent_element().unwrap();
-        assert_eq!((description.tag_name().namespace(), description.tag_name().name()), (Some(RDF), "Description"), "{xmp}");
-        let rdf = description.parent_element().unwrap();
-        assert_eq!((rdf.tag_name().namespace(), rdf.tag_name().name()), (Some(RDF), "RDF"), "{xmp}");
+        let canon = craft_xml::Canonical::new(&[("rdf", RDF), ("pcsp", crate::pdf::SPOT_PLATES_NS)]);
+        let tree = craft_xml::Options::canonical(&canon).parse(xmp.trim_start_matches('\u{feff}').as_bytes()).unwrap_or_else(|e| panic!("{e}: {xmp}"));
+        fn child_els(el: &craft_xml::El) -> impl Iterator<Item = &craft_xml::El> {
+            el.children.iter().filter_map(|n| match n {
+                craft_xml::Node::El(e) => Some(e),
+                _ => None,
+            })
+        }
+        let mut stack = vec![&tree];
+        let mut found = false;
+        while let Some(el) = stack.pop() {
+            if el.name == "rdf:RDF" && child_els(el).any(|d| d.name == "rdf:Description" && child_els(d).any(|p| p.name == "pcsp:plates")) {
+                found = true;
+                break;
+            }
+            stack.extend(child_els(el));
+        }
+        assert!(found, "no rdf:RDF/rdf:Description/pcsp:plates: {xmp}");
         assert_eq!(xmp.matches("<?xpacket begin").count(), 1, "one packet, not two: {xmp}");
     };
     let head = "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n";
@@ -486,7 +495,7 @@ fn unicode_text_over_a_photo_extracts_through_a_pdf_reader() {
     d.size = Size { width: 128, height: 48 };
     let fmt = d.pixel_format();
     // Synthetic photo-like backdrop; no personal image or third-party asset.
-    d.layers = vec![Layer::new("Photo", LayerContent::Raster(solid(fmt, 0, 0, 128, 48, &[0.2, 0.4, 0.6, 1.0])))];
+    d.layers = vec![Layer::new("Photo", LayerContent::Raster(solid(fmt, 0, 0, 128, 48, &[0.2, 0.4, 0.6, 1.0])))].into();
     let text = "café Ω 😀";
     d.layers.push(Layer::new(
         "Text",
@@ -590,7 +599,7 @@ fn a_text_layer_refused_at_emission_keeps_the_upper_vectors_and_stays_raster() {
     let mut d = doc(ColorMode::Rgb);
     d.size = Size { width: 128, height: 48 };
     let fmt = d.pixel_format();
-    d.layers = vec![Layer::new("Paper", LayerContent::Raster(solid(fmt, 0, 0, 128, 48, &[1.0, 1.0, 1.0, 1.0])))];
+    d.layers = vec![Layer::new("Paper", LayerContent::Raster(solid(fmt, 0, 0, 128, 48, &[1.0, 1.0, 1.0, 1.0])))].into();
     // A box too short for its paragraph: the layout hides the overflow, so `prepare` accepts
     // the layer (its checks only see placed clusters) while emission refuses it, because the
     // hidden, unpainted source text would otherwise show up in the selection plane.

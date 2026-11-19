@@ -58,9 +58,11 @@ fn green_doc() -> Session {
     s
 }
 
-/// The same checker on a horizontal grey ramp, constant across each 10 px column.
+/// The same checker on a horizontal grey ramp, constant across each 10 px column. Cropped to what
+/// the tests read (the landings end at x 620, y 440): a fill samples the whole canvas, so its
+/// cost grows with it.
 fn ramp_doc() -> Session {
-    let mut s = session(800, 600);
+    let mut s = session(640, 460);
     paint(&mut s, |x, y| {
         if let Some(v) = checker(x, y) {
             [v, v, v]
@@ -115,8 +117,10 @@ fn the_core_fit_shifts_brightness_and_leaves_a_hue_alone() {
 #[test]
 fn color_ten_on_green_leaves_the_middle_and_blends_the_edge() {
     // Selection 120,120 40×40 dragged (140,140) → (600,420). Row y 420 is the middle of the landing.
+    // Color 0 is only read at the landing, which Extend makes as Move does (`run_move` step 1),
+    // without Move's second fill of the old place.
     let mut kept = green_doc();
-    select_and_move(&mut kept, [120, 120, 40, 40], [460, 280], 0, "move");
+    select_and_move(&mut kept, [120, 120, 40, 40], [460, 280], 0, "extend");
     let mut fitted = green_doc();
     select_and_move(&mut fitted, [120, 120, 40, 40], [460, 280], 10, "move");
 
@@ -144,9 +148,12 @@ fn color_ten_on_green_leaves_the_middle_and_blends_the_edge() {
 
 #[test]
 fn a_brightness_change_shifts_the_middle_only_past_color_five() {
+    // Every check reads the landing, which Move and Extend make with the same code (`run_move`
+    // step 1); Extend skips Move's fill of the old place, which nothing here reads. The drop
+    // straight down below stays a Move.
     let row = |color: u64| {
         let mut s = ramp_doc();
-        select_and_move(&mut s, [120, 120, 40, 40], [460, 280], color, "move");
+        select_and_move(&mut s, [120, 120, 40, 40], [460, 280], color, "extend");
         (levels(&s, 590, 420), levels(&s, 600, 420))
     };
     let (light, dark) = row(0);
@@ -171,21 +178,23 @@ fn a_brightness_change_shifts_the_middle_only_past_color_five() {
 
 #[test]
 fn a_flat_patch_matches_the_new_surroundings_at_color_ten() {
-    let middle = |color: u64, mode: &str| {
+    let moved_with = |color: u64, mode: &str| {
         let mut s = flat_doc();
         select_and_move(&mut s, [150, 250, 100, 100], [400, 0], color, mode);
-        levels(&s, 600, 300)
+        s
     };
-    for mode in ["move", "extend"] {
-        assert_eq!(middle(0, mode), [204, 204, 204], "{mode} color 0 keeps 204");
-        assert_eq!(middle(3, mode), [204, 204, 204], "{mode} color 3 leaves the middle");
-        assert_eq!(middle(10, mode), [51, 51, 51], "{mode} color 10 becomes 51");
+    // Move and Extend land the content with the same code (`run_move` step 1); Move only adds
+    // the fill of the old place, away from the landing. So Colors 0 and 3 run once (Extend, one
+    // fill instead of two), and Color 10 runs in both modes, whose landings are compared pixel
+    // by pixel below.
+    assert_eq!(levels(&moved_with(0, "extend"), 600, 300), [204, 204, 204], "color 0 keeps 204");
+    assert_eq!(levels(&moved_with(3, "extend"), 600, 300), [204, 204, 204], "color 3 leaves the middle");
+    let moved = moved_with(10, "move");
+    let extended = moved_with(10, "extend");
+    for (mode, s) in [("move", &moved), ("extend", &extended)] {
+        assert_eq!(levels(s, 600, 300), [51, 51, 51], "{mode} color 10 becomes 51");
     }
     // The landing itself agrees; the old place is the part Move refills and Extend keeps.
-    let mut moved = flat_doc();
-    select_and_move(&mut moved, [150, 250, 100, 100], [400, 0], 10, "move");
-    let mut extended = flat_doc();
-    select_and_move(&mut extended, [150, 250, 100, 100], [400, 0], 10, "extend");
     for y in [256, 300, 340] {
         for x in [556, 600, 640] {
             assert_eq!(levels(&moved, x, y), levels(&extended, x, y), "move and extend agree at {x},{y}");

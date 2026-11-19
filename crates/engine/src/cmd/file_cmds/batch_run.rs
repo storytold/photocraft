@@ -429,16 +429,22 @@ impl BatchPolicy {
 
 /// Photoshop-compatible Batch log encoding, shared by the desktop command and CLI.
 pub fn encode_batch_error_log<'a>(errors: impl IntoIterator<Item = (&'a str, &'a str)>) -> Vec<u8> {
-    let mut body = String::from("Batch Start\r\n\r\n");
+    let mut body = String::from("Start Batch\r\n\r\n");
     for (input, reason) in errors {
+        let input = native_separators(input);
         body.push_str(&format!("File: \"{input}\"\r\nError: {reason}\r\n\r\n"));
     }
-    body.push_str("Batch End\r\n");
-    let mut bytes = vec![0xff, 0xfe];
+    body.push_str("End Batch\r\n");
+    let mut bytes = vec![0xfe, 0xff];
     for word in body.encode_utf16() {
-        bytes.extend_from_slice(&word.to_le_bytes());
+        bytes.extend_from_slice(&word.to_be_bytes());
     }
     bytes
+}
+
+/// Paths in the log use the platform's separators: backslashes on Windows, also for a folder given with `/`.
+fn native_separators(path: &str) -> String {
+    if cfg!(windows) { path.replace('/', "\\") } else { path.to_string() }
 }
 
 fn write_error_log(path: &str, errors: &[Value]) -> Result<()> {
@@ -477,9 +483,16 @@ fn validate_error_log(policy: &BatchPolicy, inputs: impl IntoIterator<Item = Str
 /// identities once for the whole plan, so aliases and large folder batches stay safe and linear.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn validate_flat_outputs(outputs: &[(String, String)]) -> Result<()> {
+    validate_written_outputs(outputs, &|_| true)
+}
+
+/// [`validate_flat_outputs`] for the outputs at the indices `written` accepts: every input stays a
+/// source, but an input that fails before it is opened writes nothing to its name.
+#[cfg(not(target_arch = "wasm32"))]
+fn validate_written_outputs(outputs: &[(String, String)], written: &dyn Fn(usize) -> bool) -> Result<()> {
     let sources: std::collections::HashMap<_, _> =
         outputs.iter().enumerate().filter_map(|(index, (input, _))| std::fs::canonicalize(input).ok().map(|identity| (identity, index))).collect();
-    for (index, (_, output)) in outputs.iter().enumerate() {
+    for (index, (_, output)) in outputs.iter().enumerate().filter(|(index, _)| written(*index)) {
         let identity = super::paths::destination_identity(std::path::Path::new(output))
             .ok_or_else(|| EngineError::BadParams { cmd: "file.automate.batch".into(), msg: format!("output path cannot be resolved safely: {output}") })?;
         if sources.get(&identity).is_some_and(|&source_index| source_index != index) {
@@ -757,16 +770,18 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // Steps that call another action play it from the caller's actions; the playback stack comes
     // along so an action that batches itself is caught as a recursive call.
-    let list = match p.get("calledActions") {
-        None | Some(Value::Null) => s.actions.list.clone(),
-        // A droplet brings the actions it calls (#2794) and runs with those alone.
+    let called = match p.get("calledActions") {
+        None | Some(Value::Null) => s.actions.called.clone(),
+        // A droplet brings the actions it calls (#2794) and plays from those alone.
         Some(v) => {
-            let list: Vec<crate::actions_cmds::Action> =
+            let actions: Vec<crate::actions_cmds::Action> =
                 serde_json::from_value(v.clone()).map_err(|e| EngineError::BadParams { cmd: cmd.into(), msg: format!("\"calledActions\": {e}") })?;
-            if list.len() > 4096 {
+            if actions.len() > 4096 {
                 return Err(EngineError::BadParams { cmd: cmd.into(), msg: "\"calledActions\" holds more than 4096 actions".into() });
             }
-            list
+            // In the droplet's order, so its calls by index keep their targets: a captured set can
+            // hold two actions of one name, which `push` would refuse and `from_file` renames.
+            Some(crate::actions_cmds::ActionList::from_file(crate::actions_cmds::ActionsFile::new(actions, Vec::new())))
         }
     };
     let mut called_name = None;
@@ -776,10 +791,10 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         parse_steps(act)?
     } else {
         // The caller selects the source; calledActions supplies only its internal namespace.
-        let index = batch_action(&s.actions.list, p)?;
-        let (action, _) = crate::actions_cmds::playback_plan(s, &json!({"action": index}))?;
+        let index = batch_action(s.actions.playable().actions(), p)?;
+        let (_, action, _) = crate::actions_cmds::playback_plan(s, &json!({"action": index}))?;
         called_name = Some(action.name.clone());
-        action.enabled_steps().map(|(_, (id, params))| (id.clone(), params.clone())).collect()
+        action.enabled_steps().map(|(_, step)| (step.command.clone(), step.params.clone())).collect()
     };
     let action_name = s
         .action_history
@@ -851,7 +866,8 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     let mut playback_stack = s.actions.playback_stack.clone();
     playback_stack.extend(called_name);
     let actions = crate::actions_cmds::ActionState {
-        list,
+        list: s.actions.list.clone(),
+        called,
         playing: if named { s.actions.playing.saturating_add(1) } else { s.actions.playing },
         playback_stack,
         playback_steps,
@@ -871,14 +887,15 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         } else {
             None
         };
-        // Swap only execution context, retaining the recorder, revision and script counters.
+        // Swap only the execution context (the playback counters and the actions playback calls);
+        // the user's list, the recorder and the script counters stay.
         let previous_playing = std::mem::replace(&mut s.actions.playing, actions.playing);
         let previous_stack = std::mem::replace(&mut s.actions.playback_stack, actions.playback_stack);
         let previous_steps = std::mem::replace(&mut s.actions.playback_steps, actions.playback_steps);
         // The nesting depth and shared budget of the levels above travel with the run too.
         let previous_shared = std::mem::replace(&mut s.actions.budget_shared, actions.budget_shared);
         let previous_depth = std::mem::replace(&mut s.actions.batch_depth, actions.batch_depth);
-        let previous_list = p.get("calledActions").is_some_and(|value| !value.is_null()).then(|| std::mem::replace(&mut s.actions.list, actions.list));
+        let previous_called = std::mem::replace(&mut s.actions.called, actions.called);
         let owns_history = s.action_history.is_none() && s.prefs().actions.create_single_history_state;
         if owns_history {
             crate::actions_cmds::begin_document_history(s, &action_name);
@@ -891,9 +908,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         s.actions.playback_stack = previous_stack;
         s.actions.budget_shared = previous_shared;
         s.actions.batch_depth = previous_depth;
-        if let Some(previous) = previous_list {
-            s.actions.list = previous;
-        }
+        s.actions.called = previous_called;
         if previous_playing == 0 && !previous_shared {
             s.actions.playback_steps = previous_steps;
         }
@@ -903,7 +918,16 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         return result;
     }
     let check_duplicates = recorded_output_guard(p);
-    let names = if save_and_close { None } else { batch_naming::plan(&inputs, &output, &format, p)? };
+    // A folder input the opener will refuse fails before its action starts, so it takes no serial.
+    let counts = |input: &BatchInput| {
+        #[cfg(not(target_arch = "wasm32"))]
+        if check_folder_format && !super::paths::openable_name(&input.path) {
+            return false;
+        }
+        let _ = (input, check_folder_format);
+        true
+    };
+    let names = if save_and_close { None } else { batch_naming::plan_counting(&inputs, &output, &format, p, &counts)? };
     let mut save = SaveOpts::from_params(s, p, cmd)?;
     if save_and_close {
         save.tiff_layers = save_close_tiff_layers;
@@ -931,8 +955,10 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         }
     };
     #[cfg(not(target_arch = "wasm32"))]
-    validate_flat_outputs(&outputs)?;
-    validate_error_log(&policy, outputs.iter().map(|(path, _)| path.clone()), outputs.iter().map(|(_, path)| path.clone()))?;
+    validate_written_outputs(&outputs, &|index| inputs.get(index).is_none_or(counts))?;
+    // Every input is protected; a refused input's name is never written, so the log may take it.
+    let written = outputs.iter().zip(&inputs).filter(|(_, input)| counts(input)).map(|((_, path), _)| path.clone());
+    validate_error_log(&policy, outputs.iter().map(|(path, _)| path.clone()), written)?;
     let was_playing = nested;
     #[cfg(test)]
     let history_observer = s.batch_history_observer;
@@ -1345,7 +1371,7 @@ fn preserve_exr(bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod action_history_tests {
     use super::*;
-    use crate::actions_cmds::Action;
+    use crate::actions_cmds::{Action, ActionStep};
     use std::cell::RefCell;
 
     #[derive(Debug)]
@@ -1403,14 +1429,14 @@ mod action_history_tests {
             let mut s = Session::new();
             s.batch_history_observer = Some(observe);
             s.execute("actions.setHistory", json!({"singleState":single})).unwrap();
-            let mut steps = vec![("layer.renameLayer".into(), json!({"name":"Prefix"}))];
+            let mut steps = vec![ActionStep::new("layer.renameLayer", json!({"name":"Prefix"}))];
             if stopped {
-                steps.push(("actions.stopMessage".into(), json!({"message":"Stop here"})));
+                steps.push(ActionStep::new("actions.stopMessage", json!({"message":"Stop here"})));
             }
-            steps.push(("layer.renameLayer".into(), json!({"name":"Final"})));
+            steps.push(ActionStep::new("layer.renameLayer", json!({"name":"Final"})));
             let action_steps = if nested {
-                s.actions.list.push(Action::new("Child", steps));
-                vec![("actions.play".to_string(), json!({"action":"Child"}))]
+                s.actions.list.push(Action::new("Child", steps)).unwrap();
+                vec![ActionStep::new("actions.play", json!({"action":"Child"}))]
             } else {
                 steps
             };
@@ -1420,8 +1446,8 @@ mod action_history_tests {
                 s.execute("file.automate.createDroplet", json!({"path":path,"name":"Named","steps":action_steps,"output":output,"shim":false})).unwrap();
                 s.execute("file.automate.runDroplet", json!({"droplet":path,"input":paths})).unwrap()
             } else if named {
-                let index = s.actions.list.len();
-                s.actions.list.push(Action::new("Named", action_steps));
+                let index = s.actions.list.actions().len();
+                s.actions.list.push(Action::new("Named", action_steps)).unwrap();
                 s.execute("file.automate.batch", json!({"action":index,"input":paths,"output":output})).unwrap()
             } else {
                 s.execute("file.automate.batch", json!({"action":"Named","steps":action_steps,"input":paths,"output":output})).unwrap()
@@ -1460,22 +1486,25 @@ mod action_history_tests {
             }
             s.execute("actions.setHistory", json!({"singleState":single})).unwrap();
             let before: Vec<_> = s.documents().iter().map(|st| (st.doc.clone(), st.history.past_len())).collect();
-            let steps = vec![("layer.renameLayer".into(), json!({"name":"Prefix"})), ("layer.renameLayer".into(), json!({"name":"Final"}))];
+            let steps = vec![ActionStep::new("layer.renameLayer", json!({"name":"Prefix"})), ActionStep::new("layer.renameLayer", json!({"name":"Final"}))];
             let params = if named {
-                s.actions.list.push(Action::new("Opened batch", steps));
+                s.actions.list.push(Action::new("Opened batch", steps)).unwrap();
                 json!({"source":"open","action":0})
             } else {
                 json!({"source":"open","action":"Opened batch","steps":steps})
             };
             if parent {
-                s.actions.list.push(Action::new(
-                    "Parent",
-                    vec![
-                        ("layer.renameLayer".into(), json!({"name":"Before batch"})),
-                        ("file.automate.batch".into(), params),
-                        ("layer.renameLayer".into(), json!({"name":"After batch"})),
-                    ],
-                ));
+                s.actions
+                    .list
+                    .push(Action::new(
+                        "Parent",
+                        vec![
+                            ActionStep::new("layer.renameLayer", json!({"name":"Before batch"})),
+                            ActionStep::new("file.automate.batch", params),
+                            ActionStep::new("layer.renameLayer", json!({"name":"After batch"})),
+                        ],
+                    ))
+                    .unwrap();
                 let result = s.execute("actions.play", json!({"action":"Parent"})).unwrap();
                 assert!(result.get("failed").is_none(), "{result}");
             } else {
@@ -1512,8 +1541,8 @@ mod action_history_tests {
             let mut s = Session::new();
             s.execute("file.new", json!({"width":4,"height":4})).unwrap();
             s.execute("actions.setHistory", json!({"singleState":true})).unwrap();
-            s.actions.list.push(Action::new("Original", vec![]));
-            let library = serde_json::to_value(&s.actions.list).unwrap();
+            s.actions.list.push(Action::new("Original", vec![])).unwrap();
+            let library = serde_json::to_value(s.actions.list.actions()).unwrap();
             let before = s.active().unwrap().doc.clone();
             if parent {
                 crate::actions_cmds::begin_document_history(&mut s, "Parent");
@@ -1528,7 +1557,7 @@ mod action_history_tests {
                 )
                 .unwrap();
             assert_eq!(result["errors"].as_array().unwrap().len(), 1, "{result}");
-            assert_eq!(serde_json::to_value(&s.actions.list).unwrap(), library);
+            assert_eq!(serde_json::to_value(s.actions.list.actions()).unwrap(), library);
             if parent {
                 assert_eq!(s.action_history.as_ref().unwrap().name, "Parent");
                 s.execute("layer.renameLayer", json!({"name":"Parent tail"})).unwrap();
