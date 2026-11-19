@@ -479,7 +479,7 @@ impl Ctx<'_> {
         // Advanced Blending channel restrictions (`brst`: the u32 ids of channels left out);
         // also kept in `psd_blocks`, where export rewrites it from the field.
         if let Some(b) = rec.block(b"brst") {
-            l.excluded_channels = crate::blocks::parse_brst(&b.data);
+            l.excluded_channels = craft_psd::tagged::channel_restrictions(&b.data);
         }
         // Advanced Blending (`knko`, `infx`, `clbl`, `tsly`, `lmgm`, `vmgm`); the blocks stay in
         // `psd_blocks`, where export rewrites them from the field in place.
@@ -904,19 +904,12 @@ fn be_to_ne_plane(plane: &[u8], s: SampleType, n: usize) -> craft_psd::Result<Ve
 }
 
 pub(crate) fn unicode_names(data: &[u8]) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut at = 0;
-    while at + 4 <= data.len() {
-        let n = u32::from_be_bytes([data[at], data[at + 1], data[at + 2], data[at + 3]]) as usize;
-        at += 4;
-        // Checked: `n * 2` overflows a 32-bit `usize` for a hostile length.
-        let Some(end) = n.checked_mul(2).and_then(|len| at.checked_add(len)) else { break };
-        let Some(b) = data.get(at..end) else { break };
-        let units: Vec<u16> = b.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes([c[0], c[1]])).collect();
-        out.push(String::from_utf16_lossy(&units).trim_end_matches('\0').to_string());
-        at = end;
-    }
-    out
+    craft_psd::unicode_names::records(data)
+        .map(|b| {
+            let units: Vec<u16> = b.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes(*c)).collect();
+            String::from_utf16_lossy(&units).trim_end_matches('\0').to_string()
+        })
+        .collect()
 }
 
 /// Plane `i` of a decoded merged image whose planes are `plane` bytes each, or `None` when it is
@@ -1458,7 +1451,7 @@ fn import_layered(import: DecodedImport<'_>, doc: &mut Document, cx: &mut Ctx<'_
     let cc = fmt.mode.color_channels();
     let tree = file.layer_tree_max_depth(photocraft_doc::MAX_GROUP_DEPTH);
     let space = photocraft_compose::cmyk_space(doc);
-    doc.layers = photocraft_color::convert::with_cmyk_space(space.as_ref(), || cx.build(&tree, 0));
+    doc.layers = photocraft_color::convert::with_cmyk_space(space.as_ref(), || cx.build(&tree, 0)).into();
     mark_background(file, &mut doc.layers);
     if let Some(Ok(craft_psd::resources::ResourceData::LayerGroupInfo(groups))) =
         file.resources.iter().find(|r| r.id == ids::LAYER_GROUP_INFO).and_then(craft_psd::resources::ImageResource::parsed)

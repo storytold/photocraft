@@ -24,6 +24,11 @@ impl Session {
         &self.docs
     }
 
+    /// Changes whenever a document is opened or closed.
+    pub fn documents_generation(&self) -> u64 {
+        self.documents_generation
+    }
+
     pub fn active_index(&self) -> Option<usize> {
         self.active
     }
@@ -162,11 +167,13 @@ impl Session {
     }
 
     /// Add a document (from File → New, an import, etc.) and make it active.
-    /// Preserve its identity unless another open document already owns it.
+    /// Preserve its identity unless an open document or a picked clone source reserves it.
     /// Identity-dependent callers must read the admitted document at the returned index.
     pub fn add_document(&mut self, mut doc: Document, path: Option<String>) -> usize {
+        // A saved copy can reuse a closed source's persisted ID. Give the new tab another ID so
+        // a closed clone source stays invalid until the user explicitly picks a new source.
         // Persisted IDs can overlap the allocator, so check every replacement too.
-        while self.docs.iter().any(|st| st.doc.id == doc.id) {
+        while self.docs.iter().any(|st| st.doc.id == doc.id) || self.presets.clone.slots.iter().any(|slot| slot.document == Some(doc.id)) {
             doc.id = photocraft_doc::DocId::fresh();
         }
         self.open_document_order.push(doc.id);
@@ -180,6 +187,7 @@ impl Session {
             st.snapshots.clear();
         }
         self.docs.push(st);
+        self.documents_generation = self.documents_generation.wrapping_add(1);
         let i = self.docs.len() - 1;
         self.active = Some(i);
         self.note_active_change();
@@ -220,6 +228,7 @@ impl Session {
             self.link_scan = None;
         }
         let d = self.docs.remove(index);
+        self.documents_generation = self.documents_generation.wrapping_add(1);
         self.open_document_order.retain(|&id| id != d.doc.id);
         self.active = if self.docs.is_empty() {
             None
@@ -241,4 +250,27 @@ pub(super) fn fix_active(st: &mut DocState) {
     }
     fix_selection(st);
     channel_cmds::fix_view(st);
+}
+
+#[cfg(test)]
+mod document_generation_tests {
+    use super::Session;
+    use photocraft_color::SampleType;
+    use photocraft_doc::{ColorMode, Document};
+    use photocraft_geom::Size;
+
+    #[test]
+    fn document_generation_tracks_open_and_close_but_not_selection() {
+        let mut session = Session::new();
+        let before = session.documents_generation();
+        session.add_document(Document::new("test", Size::new(2, 2), ColorMode::Rgb, SampleType::U8), None);
+        let opened = session.documents_generation();
+        assert_eq!(opened, before.wrapping_add(1));
+        session.set_active(0);
+        assert_eq!(session.documents_generation(), opened);
+        session.close(0);
+        assert_eq!(session.documents_generation(), opened.wrapping_add(1));
+        session.close(0);
+        assert_eq!(session.documents_generation(), opened.wrapping_add(1));
+    }
 }

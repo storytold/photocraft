@@ -78,7 +78,7 @@ fn retag_text(dpi: f32, t: &mut TextLayer) {
     }
     let mut eng = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
     let layout = eng.layout(t, dpi);
-    t.psd_raw = Some(Arc::new(photocraft_text::psd::build_tysh(t, dpi, layout.bounds())));
+    t.psd_raw = photocraft_text::psd::build_tysh(t, dpi, layout.bounds()).map(Arc::new);
 }
 
 /// Sets the document resolution keeping every type layer's size in pixels, as Photoshop does (its
@@ -303,6 +303,18 @@ pub(crate) fn transform_doc_marks(doc: &mut Document, a: &Affine) {
         g.vertical.clear();
         g.colors.clear();
     }
+}
+
+/// Runs `f` (Image Size, Canvas Size, Image Rotation) and puts the count points back where they
+/// were: they keep their document coordinates, also where they end up off the canvas, as in the
+/// reference application (#11762). Other marks follow the map as `f` applies it.
+pub(crate) fn keeping_count_points<R>(doc: &mut Document, f: impl FnOnce(&mut Document) -> R) -> R {
+    let saved: Vec<Vec<[f64; 2]>> = doc.measurement.count_groups.iter().map(|g| g.points.clone()).collect();
+    let r = f(doc);
+    for (g, points) in doc.measurement.count_groups.iter_mut().zip(saved) {
+        g.points = points;
+    }
+    r
 }
 
 /// Applies `a` to all non-pixel geometry of the document (layers and document marks).
