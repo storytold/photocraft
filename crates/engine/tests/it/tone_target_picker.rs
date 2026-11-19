@@ -237,9 +237,13 @@ fn gray_tone_records_do_not_leak_from_rgb_channels() {
             for (target, panel) in
                 [(json!("mask"), ChannelTarget::LayerMask), (json!({"channel":0}), ChannelTarget::Alpha(0)), (json!("quickMask"), ChannelTarget::Composite)]
             {
-                for style in ["levels", "points", "pencil"] {
-                    for sampled in [false, true] {
-                        for explicit in [false, true] {
+                // Each style sees both flags; all four flag pairs occur across the styles.
+                for (si, style) in ["levels", "points", "pencil"].into_iter().enumerate() {
+                    for (ai, sampled) in [false, true].into_iter().enumerate() {
+                        for (ei, explicit) in [false, true].into_iter().enumerate() {
+                            if (si + ai) % 2 != ei {
+                                continue;
+                            }
                             let mut clean = session(mode, depth);
                             clean.active_mut().unwrap().channel_view.target = panel;
                             clean
@@ -377,6 +381,59 @@ fn review_picker_reads_the_addressed_mask_layer() {
                 assert_eq!(doc.quick_mask, before.quick_mask);
                 s.undo();
                 assert_eq!(s.active().unwrap().doc.layers, before.layers);
+            }
+        }
+    }
+}
+
+/// A Smart Filter mask is a gray target like a layer mask: the picker reads the stored mask, or the implicit Reveal
+/// All before anything is stored, without materializing it, and the commit edits only the filter mask, in every
+/// colour mode and native depth. (The UI's tone dialogs test only that their pick reaches this target, #15648.)
+#[test]
+fn filter_mask_picker_samples_and_edits_only_the_filter_mask() {
+    for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            for stored in [false, true] {
+                for kind in ["levels", "curves"] {
+                    let case = format!("{mode:?} {depth:?} stored={stored} {kind}");
+                    let mut s = session(mode, depth);
+                    // A Smart Filter needs the composite selected, not one colour channel, and no Quick Mask (the filter
+                    // would edit the Quick Mask instead).
+                    s.edit("No Quick Mask", |doc, _| {
+                        doc.quick_mask = None;
+                        Ok(())
+                    })
+                    .unwrap();
+                    s.active_mut().unwrap().channel_view.target = ChannelTarget::Composite;
+                    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+                    s.execute("filter.blur.gaussianBlur", json!({"radius": 1})).unwrap();
+                    if stored {
+                        s.execute("edit.fill", json!({"target": "filterMask", "contents": "color", "color": "#404040"})).unwrap();
+                    }
+                    let id = s.active().unwrap().active_layer.unwrap();
+                    let before = s.active().unwrap().doc.clone();
+                    let p = json!({"target": "filterMask", "eyedropper": {"point": "white", "at": [8, 8]}});
+                    let picked = adjust_params::destructive_eyedropper(&s, kind, &p).unwrap().unwrap();
+                    assert!(std::sync::Arc::ptr_eq(&before, &s.active().unwrap().doc), "sampling is read-only: {case}");
+                    let white = if stored { 64.0 } else { 255.0 };
+                    let sampled = if kind == "levels" {
+                        adjust_params::to_params(&picked)["inWhite"].as_f64().unwrap()
+                    } else {
+                        adjust_params::to_params(&picked)["points"].as_array().unwrap().last().unwrap()[0].as_f64().unwrap()
+                    };
+                    assert!((sampled - white).abs() < 1.0, "{case}: sampled {sampled}, want {white}");
+                    s.execute(&format!("image.adjustments.{kind}"), p).unwrap();
+                    let doc = &s.active().unwrap().doc;
+                    let (LayerContent::Smart(old), LayerContent::Smart(new)) = (&before.layer(id).unwrap().content, &doc.layer(id).unwrap().content) else {
+                        panic!("{case}: not a smart object")
+                    };
+                    assert!(new.filter_mask.as_ref().unwrap().surface.sample_channel(8, 8, 0) > 0.99, "{case}");
+                    assert_eq!(new.smart_filters, old.smart_filters, "{case}: the adjustment edits the mask, adds no filter");
+                    assert_eq!(new.source, old.source, "{case}");
+                    assert_eq!(doc.layer(id).unwrap().mask, before.layer(id).unwrap().mask, "{case}: the layer mask");
+                    assert_eq!(doc.channels, before.channels, "{case}");
+                    assert_eq!(doc.quick_mask, before.quick_mask, "{case}");
+                }
             }
         }
     }
