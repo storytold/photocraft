@@ -29,10 +29,14 @@ but a command answer may take at most 30 minutes (what the app gives all of a ru
 and an open dialog at most 12 hours before the run ends. Commands, dialogs, output lines and
 window updates together are capped in number per run; output lines at 32 MiB, window updates at
 256 MiB. Waiting for a busy interface to take the run's output does not count against its time,
-up to 30 seconds at a time. Flatten, the merges, the stamps, Copy Merged and Save a Copy refuse a
-composite past the budget a command's working buffers may take (8 GiB, what Image Size
-resamples within; a 300000 px square document is far past it) with that reason, rather than
-try to hold more than the app's memory.
+up to 30 seconds at a time. Commands that render the whole canvas refuse one too large to hold, with
+that reason, rather than try to hold more than the app's memory: Flatten, the stamps, Copy
+Merged, Background From Layer, Match Color's source and printing past the budget a command's
+working buffers may take (what Image Size resamples within: 8 GiB, 2 GiB on 32-bit systems
+and in the browser); the merges past that budget or when a band they render in (the merged
+area's width) would pass 2^30 pixels; Save a Copy, Indexed
+Color, Trim and Duplicate Merged past 2^30 pixels (a 300000 px square document is far past
+both).
 
 **In the browser.** Each run gets its own Worker. The Worker posts its requests to the page and
 waits for each answer in shared memory (`Atomics.wait`), so a run continues where it was after a

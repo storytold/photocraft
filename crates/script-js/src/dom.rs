@@ -730,7 +730,8 @@ fn layer_remove(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<Js
 fn layer_duplicate(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let (doc, id) = layer_ref(this)?;
     // Made where it goes in one command (`moveTo` with `copy`), so a copy that can't go there,
-    // or a run stopped meanwhile, leaves no copy behind; the destination is read first.
+    // or a run stopped meanwhile, leaves no copy behind; the destination is read first. A group
+    // copied into itself is the exception (see below).
     let made = match arg(args, 0) {
         Some(rel) => {
             let (target, position) = destination(ctx, doc, rel, args.get(1))?;
@@ -743,7 +744,12 @@ fn layer_duplicate(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsRes
             if inside_itself {
                 let made = edit(ctx, doc, "layer.duplicate", json!({ "layer": id }))?;
                 let new = made["layer"].as_u64().ok_or_else(|| error("the copy was not reported"))?;
-                edit(ctx, doc, "layer.moveTo", json!({ "layer": new, "target": target, "position": position }))?;
+                if let Err(e) = edit(ctx, doc, "layer.moveTo", json!({ "layer": new, "target": target, "position": position })) {
+                    // A copy that can't go in is not left behind, as far as the run can still
+                    // ask for that (a stopped run can't: then the copy stays above the group).
+                    let _ = edit(ctx, doc, "layer.delete", json!({ "layer": new }));
+                    return Err(e);
+                }
                 made
             } else {
                 edit(ctx, doc, "layer.moveTo", json!({ "layer": id, "target": target, "position": position, "copy": true }))?

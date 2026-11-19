@@ -1,8 +1,9 @@
 //! Commands that render the whole canvas, or merge layers into an area that large, refuse a
-//! composite past the budget a command's working buffers may take (what Image Size resamples
-//! within) instead of building one of hundreds of gigabytes (the allocation aborted the app, or
-//! a save ran for hours). The document is left as it was, and a merge of small layers on the
-//! same canvas still works.
+//! composite too large to hold (past the budget a command's working buffers may take, what
+//! Image Size resamples within, or past the compositor's per-render limit for Save a Copy and
+//! Indexed Color) instead of building one of hundreds of gigabytes (the allocation aborted the
+//! app, or a save ran for hours). The document is left as it was, and a merge of small layers
+//! on the same canvas still works.
 
 use photocraft_doc::LayerId;
 use photocraft_engine::Session;
@@ -10,7 +11,7 @@ use serde_json::{Value, json};
 
 /// The refusal names the composite's size.
 const FLATTEN: &str = "of working memory for a 300000 x 300000 px area";
-const MERGE: &str = "Merging the layers would need";
+const MERGE: &str = "Merging the layers would";
 
 /// The largest canvas `file.new` allows, with one small shape on a layer of its own (active).
 fn huge(background: &str) -> (Session, LayerId) {
@@ -93,12 +94,12 @@ fn small_layers_on_the_largest_canvas_still_merge() {
 }
 
 #[test]
-fn save_a_copy_refuses_a_canvas_past_the_budget_in_every_format() {
+fn save_a_copy_refuses_a_canvas_past_the_flatten_limit_in_every_format() {
     let dir = tempfile::tempdir().unwrap();
     for ext in ["png", "jpg", "tif", "psb", "pcraft"] {
         let path = dir.path().join(format!("copy.{ext}"));
         let started = std::time::Instant::now();
-        refused(&mut huge("white").0, "file.saveACopy", json!({"path": path.to_string_lossy()}), FLATTEN);
+        refused(&mut huge("white").0, "file.saveACopy", json!({"path": path.to_string_lossy()}), "300000×300000 canvas is too large to flatten");
         assert!(!path.exists(), "{ext}: nothing written");
         // Refused up front, not after reading the canvas.
         assert!(started.elapsed() < std::time::Duration::from_secs(30), "{ext}: {:?}", started.elapsed());
@@ -122,4 +123,29 @@ fn indexed_color_match_color_and_print_refuse_the_largest_canvas() {
     let out = out.path().join("print.pdf");
     refused(&mut s, "file.print", json!({"output": out.to_string_lossy(), "scaleToFit": true}), "printing would need");
     assert!(!out.exists());
+}
+
+/// Two layers far apart on a small canvas: merging them would render an area past the
+/// compositor's per-render limit, though within the memory budget. It renders in bands the
+/// area's full width, and a band past that limit renders as nothing, so the merge would lose
+/// pixels: it is refused, and the layers stay as they were.
+#[test]
+fn a_merge_of_layers_far_apart_is_refused_rather_than_rendered_empty() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 300, "resolution": 72, "background": "transparent"})).unwrap();
+    let mut ids = Vec::new();
+    for (x, dx) in [(0, -2_300_000), (40, 2_300_000)] {
+        let id = LayerId(s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap());
+        s.execute("select.rect", json!({"x": x, "y": 0, "width": 10, "height": 300})).unwrap();
+        s.execute("edit.fill", json!({"color": "#e07020"})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        s.execute("layer.translate", json!({"layer": id.0, "dx": dx, "dy": 0})).unwrap();
+        let doc = &s.active().unwrap().doc;
+        assert!(!photocraft_engine::transform_cmds::transform_bounds(doc, doc.layer(id).unwrap()).is_empty(), "the layer holds its pixels out there");
+        ids.push(id);
+    }
+    select(&mut s, &ids);
+    refused(&mut s, "layer.mergeLayers", json!({}), "in bands past the limit of 1073741824 pixels");
+    s.execute("layer.select", json!({"layer": ids[1].0})).unwrap();
+    refused(&mut s, "layer.mergeDown", json!({"layer": ids[1].0}), "in bands past the limit of 1073741824 pixels");
 }

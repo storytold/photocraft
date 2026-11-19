@@ -9,7 +9,8 @@ use photocraft_raster::{Surface, to_rgba};
 /// tiled surface. Large merges used to hold both a full-canvas RGBA buffer and a second converted
 /// float buffer at once; banded rendering keeps only one compositor band plus the destination.
 /// Refused when the composite would be past the budget a command's dense buffers may take
-/// ([`crate::allocation::MAX_DENSE_BYTES`]): a composite that large can't be held.
+/// ([`crate::allocation::MAX_DENSE_BYTES`]), or its bands past the compositor's per-render
+/// limit: a composite that large can't be held, or would render as nothing.
 pub fn composite_layers(solo: &Document, format: photocraft_color::PixelFormat, background: Option<[f32; 3]>) -> crate::Result<Surface> {
     let canvas = solo.bounds();
     let area = solo
@@ -32,8 +33,19 @@ pub fn composite_layers(solo: &Document, format: photocraft_color::PixelFormat, 
 }
 
 /// The refusal of a merge whose composite (`area` in `format`) would be past the budget a
-/// command's dense buffers may take.
+/// command's dense buffers may take, or whose bands would be past the compositor's per-render
+/// limit: it renders in bands the area's full width, and such a band renders as nothing (only
+/// an area millions of pixels wide, layers far apart, comes near that).
 fn check_render_area(area: Rect, format: photocraft_color::PixelFormat) -> crate::Result<()> {
+    let rows = area.height().min(u32::try_from(photocraft_compose::band_rows_for(area.width(), 0)).unwrap_or(u32::MAX));
+    if u64::from(area.width()) * u64::from(rows) > photocraft_compose::MAX_RENDER_PIXELS {
+        return Err(crate::EngineError::Other(format!(
+            "Merging the layers would render a {} x {} px area in bands past the limit of {} pixels; the document was not changed",
+            area.width(),
+            area.height(),
+            photocraft_compose::MAX_RENDER_PIXELS
+        )));
+    }
     crate::allocation::check_dense(area, format.bytes_per_pixel() as u64, "Merging the layers")
 }
 
