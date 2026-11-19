@@ -314,7 +314,8 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
     let patterns: Vec<_> = sdoc.patterns.iter().filter(|pat| !ddoc.patterns.iter().any(|d| d.id == pat.id)).cloned().collect();
     let styles = std::mem::take(&mut copies.text_styles);
     s.set_active(dest);
-    let label = if ids.len() == 1 { "Duplicate Layer" } else { "Duplicate Layers" };
+    // One layer or several, the step is "Duplicate Layer" (#14611).
+    let label = "Duplicate Layer";
     let edited = s.edit(label, |doc, active| {
         doc.patterns.extend(patterns);
         land_text_styles(doc, styles);
