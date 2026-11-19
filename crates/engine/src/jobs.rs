@@ -706,7 +706,7 @@ fn import_path(
     expected: Option<&SourceFingerprint>,
     ctl: &photocraft_raster::Interrupt,
     opened: &mut Option<photocraft_io::FileIdentity>,
-) -> std::result::Result<(photocraft_io::ImportResult, bool), photocraft_io::IoError> {
+) -> std::result::Result<photocraft_io::DecodedOpen, photocraft_io::IoError> {
     let expected = match expected {
         None => None,
         Some(SourceFingerprint::Path { identity, .. }) => Some(identity),
@@ -714,7 +714,7 @@ fn import_path(
     };
     // Bounded reads, and a clear error for a file larger than memory (#375); a PSD/PSB is
     // streamed from the open file instead of being read whole.
-    photocraft_io::import_file_for_open_verified(name, std::path::Path::new(path), expected, opts, ctl, opened)
+    photocraft_io::decode_file_for_open_verified(name, std::path::Path::new(path), expected, opts, ctl, opened)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -725,7 +725,7 @@ fn import_path(
     _: Option<&SourceFingerprint>,
     _: &photocraft_raster::Interrupt,
     _: &mut Option<photocraft_io::FileIdentity>,
-) -> std::result::Result<(photocraft_io::ImportResult, bool), photocraft_io::IoError> {
+) -> std::result::Result<photocraft_io::DecodedOpen, photocraft_io::IoError> {
     Err(photocraft_io::IoError::Read(format!("cannot open paths on the web: {path}")))
 }
 
@@ -1267,7 +1267,7 @@ impl Session {
         opts.psd_approved_estimate = approved_estimate;
         let test_memory_scope = photocraft_io::memory::TestMemoryScope::capture();
         enum WorkResult {
-            Decoded(Box<(photocraft_io::ImportResult, bool)>),
+            Decoded(Box<photocraft_io::DecodedOpen>),
             PreflightNeeded { required: u64, soft_limit: u64, hard_limit: u64, available_ram: Option<u64>, source: OpenSource, fingerprint: SourceFingerprint },
         }
         self.start_job_with_spawn(
@@ -1295,11 +1295,11 @@ impl Session {
                     return Err(EngineError::SourceChanged { name: name_w.clone() });
                 }
 
-                let outcome = match source {
+                let mut outcome = match source {
                     OpenSource::Bytes(bytes) => {
                         ctx.check()?;
                         ctx.progress(0.02, "Decoding");
-                        let res = ctx.stage(0.02, 0.95, "Decoding", |ctl| photocraft_io::import_for_open_with(&name_w, &bytes, &opts, ctl));
+                        let res = ctx.stage(0.02, 0.95, "Decoding", |ctl| photocraft_io::decode_for_open(&name_w, &bytes, None, &opts, ctl));
                         match res {
                             Ok(imported) => WorkResult::Decoded(Box::new(imported)),
                             Err(photocraft_io::IoError::PsdApprovalRequired { required, soft_limit, hard_limit, available_ram }) if confirm_damage => {
@@ -1337,19 +1337,18 @@ impl Session {
                     }
                 };
 
-                match &outcome {
-                    WorkResult::PreflightNeeded { .. } => Ok(outcome),
-                    WorkResult::Decoded(imported) => {
-                        ctx.progress(0.95, "Preparing layers");
-                        warm_layer_bounds(&imported.0.document, || ctx.check())?;
-                        if crate::type_extra_cmds::has_type_layers(&imported.0.document) {
-                            ctx.progress(0.97, "Loading fonts");
-                            let _ = photocraft_text::shared();
-                            ctx.check()?;
-                        }
-                        Ok(outcome)
+                if let WorkResult::Decoded(decoded) = &mut outcome {
+                    ctx.progress(0.95, "Preparing layers");
+                    crate::file_cmds::recover_decoded_native_caches(decoded, ctx)?;
+                    let doc = &decoded.imported.document;
+                    warm_layer_bounds(doc, || ctx.check())?;
+                    if crate::type_extra_cmds::has_type_layers(doc) {
+                        ctx.progress(0.97, "Loading fonts");
+                        let _ = photocraft_text::shared();
+                        ctx.check()?;
                     }
                 }
+                Ok(outcome)
             },
             move |s, outcome| match outcome {
                 WorkResult::PreflightNeeded { required, soft_limit, hard_limit, available_ram, source, fingerprint } => {
@@ -1381,7 +1380,7 @@ impl Session {
                     }))
                 }
                 WorkResult::Decoded(imported) => {
-                    let (mut r, damaged) = *imported;
+                    let photocraft_io::DecodedOpen { imported: mut r, damaged, .. } = *imported;
                     crate::file_cmds::tag_exr_colorspace(s, &name_a, &mut r.document);
                     crate::file_cmds::raw_defaults(s, &r.warnings, &mut r.document);
                     let raw = r.warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE));

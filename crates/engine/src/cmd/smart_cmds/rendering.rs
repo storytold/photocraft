@@ -6,6 +6,10 @@ use super::{
     Affine, Arc, BlendMode, Document, EngineError, Homography, JobCtx, Layer, LayerContent, LayerId, PixelFormat, Rect, Result, SmartFilter, SmartObject,
     SmartSource, Stage, StageKey, Surface, Value, affine_homography, other, placement, stack_cache,
 };
+use photocraft_algo::transform::warp_output_bounds;
+use photocraft_color::{ColorMode, SampleType};
+use photocraft_geom::Size;
+use photocraft_raster::{Interrupt, tile_storage_bytes};
 use std::collections::VecDeque;
 use std::sync::{Mutex, Weak};
 
@@ -222,6 +226,60 @@ fn place_with_svg(
         Some(mode) => stack_image_classified(name, bytes, fmt, mode, Some(is_svg))?,
         None => super::source::source_image_classified(name, bytes, fmt, is_svg)?,
     };
+    place_image(&img, fmt, sm)
+}
+
+/// Reuse the ordinary raster placement for a bounded PNG source with matching document color.
+pub(crate) fn recover_raster_placement(doc: &Document, sm: &SmartObject, name: &str, bytes: &[u8], remaining: u64, ctx: &JobCtx) -> Result<Option<Surface>> {
+    if !matches!(doc.mode, ColorMode::Rgb | ColorMode::Grayscale) || !matches!(doc.depth, SampleType::U8 | SampleType::U16) {
+        return Ok(None);
+    }
+    let Ok((width, height)) = photocraft_codecs::probe_allocation_size(bytes) else { return Ok(None) };
+    let size = Size::new(width, height);
+    if size.area() > photocraft_compose::MAX_RENDER_PIXELS {
+        return Ok(None);
+    }
+    let bounds = Rect::from_size(size);
+    let fmt = doc.pixel_format();
+    let transform = placement(sm);
+    let Some(placed) = warp_output_bounds(bounds, &transform) else { return Ok(None) };
+    crate::transform_cmds::check_budget(bounds, &transform, "smart object", fmt)?;
+
+    // Before seeing its mode and depth, the decoded source can have four 16-bit samples per pixel.
+    // Count whole tiles as well as the decoder and compositor's working space for narrow images.
+    let decoded_format = PixelFormat::new(ColorMode::Rgb, SampleType::U16, true);
+    let needed = size
+        .area()
+        .saturating_mul(crate::memory_gate::SMART_RENDER_BYTES_PER_PX)
+        .saturating_add(tile_storage_bytes(bounds, &decoded_format))
+        .saturating_add(tile_storage_bytes(bounds, &fmt))
+        .saturating_add(tile_storage_bytes(placed, &fmt))
+        .saturating_add(bytes.len() as u64);
+    if needed > remaining {
+        return Ok(None);
+    }
+    crate::memory_gate::ensure("restore an embedded Smart Object cache", needed)?;
+
+    ctx.check()?;
+    crate::allocation::checkpoint("decoding an embedded Smart Object PNG")?;
+    let cancel = || ctx.cancelled();
+    let ctl = Interrupt::new(&cancel, &|_| {});
+    let opts = photocraft_io::ImportOptions { flat_max_pixel_bytes: needed, ..Default::default() };
+    let src = photocraft_io::import_with_options_and_interrupt(name, bytes, &opts, &ctl).map_err(|e| crate::error::io_open_error(name, e))?.document;
+    ctx.check()?;
+    if src.size != size
+        || src.mode != doc.mode
+        || src.depth != doc.depth
+        || crate::color_cmds::document_profile(&src).content_hash() != crate::color_cmds::document_profile(doc).content_hash()
+    {
+        return Ok(None);
+    }
+    let img = SourceImage { surface: Arc::new(super::source::flattened_source(&src, fmt)?), bounds };
+    ctx.check()?;
+    place_image(&img, fmt, sm).map(Some)
+}
+
+fn place_image(img: &SourceImage, fmt: PixelFormat, sm: &SmartObject) -> Result<Surface> {
     // The placed stage is unclipped: a large enough placement (an image scaled to fill a huge
     // frame) would otherwise fill memory before any allocation could fail.
     let h = placement(sm);

@@ -1382,7 +1382,10 @@ fn open_pcraft_directory(app: &mut PhotocraftApp, path: &str) -> Option<Reply> {
     }
     let open = app.services.automation_open_pcraft.as_mut()?;
     match open(path) {
-        Ok(Some((name, doc))) => {
+        Ok(Some((name, mut doc))) => {
+            if let Err(error) = photocraft_engine::file_cmds::recover_native_embedded_caches(&mut doc, &photocraft_engine::jobs::JobCtx::new()) {
+                return Some(err(error.to_string()));
+            }
             let warnings = photocraft_io::open_warnings(&doc);
             app.session.add_document(doc, None);
             // Recent files, but no save-back target: the capability writer
