@@ -190,13 +190,15 @@ impl Session {
             && params.get("layer").and_then(Value::as_u64).is_some_and(|l| self.active().is_some_and(|st| st.doc.layer(LayerId(l)).is_some()))
     }
 
-    /// The precondition of a command whose params document `"layer":id` (it acts on that layer),
-    /// when `params` name an existing layer of the active document: checked on that layer rather
-    /// than on the active one, which stays active (#466). A script, action or agent can then
-    /// Replace Contents, Rasterize or Merge Down a layer without selecting it first. `None` for
-    /// other commands, or without such a layer.
+    /// The precondition of a command that acts on a `"layer"` param, when `params` name an
+    /// existing layer of the active document: checked on that layer rather than on the active
+    /// one, which stays active (#466). A script, action or agent can then Replace Contents,
+    /// Rasterize or Merge Down a layer without selecting it first. `None` for other commands, or
+    /// without such a layer.
     pub(crate) fn explicit_layer_enabled(&mut self, spec: &commands::CommandSpec, params: &Value) -> Result<Option<std::result::Result<(), String>>> {
-        if !spec.params.contains("\"layer\":id") {
+        // Gradient Map edits the layer a `"layer"` param names, though its params doc does not
+        // list one, and its availability depends on that layer's pixels and visibility (#14696).
+        if !spec.params.contains("\"layer\":id") && spec.id != "image.adjustments.gradientMap" {
             return Ok(None);
         }
         // An ATN group-end index is a valid no-op only for Select. Let that command validate

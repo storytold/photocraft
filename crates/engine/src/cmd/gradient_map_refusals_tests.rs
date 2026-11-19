@@ -22,6 +22,11 @@ fn active_rgba(s: &Session, x: i32, y: i32) -> [f32; 4] {
     d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap().rgba(x, y)
 }
 
+fn layer_rgba(s: &Session, id: u64, x: i32, y: i32) -> [f32; 4] {
+    let d = s.active().unwrap();
+    d.doc.layer(photocraft_doc::LayerId(id)).unwrap().surface().unwrap().rgba(x, y)
+}
+
 #[test]
 fn gradient_map_disabled_and_refused_in_32bit_documents() {
     for mode in ["rgb", "gray"] {
@@ -68,6 +73,58 @@ fn gradient_map_disabled_and_refused_on_hidden_pixel_layer() {
     assert!(err.to_string().contains("hidden"), "hidden pixel layer error: {err}");
     assert_eq!(s.active().unwrap().history.past_len(), steps, "hidden pixel layer must not add history");
     assert_eq!(active_rgba(&s, 8, 8), before, "hidden pixel layer must not change pixels");
+}
+
+#[test]
+fn gradient_map_refusal_follows_the_addressed_layer() {
+    // A `"layer"` param names the layer the edit reaches: a hidden one is refused while the
+    // active layer is visible, and a visible one is edited while the active layer is hidden.
+    let mut s = new_doc(8, "rgb");
+    let bg = s.active().unwrap().active_layer.unwrap().0;
+    let hidden = s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("paint.stroke", json!({"points": [[2, 2], [14, 14]], "color": "#808080", "size": 6})).unwrap();
+    s.execute("layer.setProps", json!({"layer": hidden, "visible": false})).unwrap();
+    s.execute("layer.select", json!({"layer": bg})).unwrap();
+    let steps = s.active().unwrap().history.past_len();
+    let before = layer_rgba(&s, hidden, 8, 8);
+
+    let mut params = gradient_params();
+    params["layer"] = json!(hidden);
+    let err = s.execute("image.adjustments.gradientMap", params).unwrap_err();
+    assert!(err.to_string().contains("hidden"), "hidden addressed layer error: {err}");
+    assert_eq!(s.active().unwrap().history.past_len(), steps, "a hidden addressed layer must not add history");
+    assert_eq!(layer_rgba(&s, hidden, 8, 8), before, "a hidden addressed layer must not change pixels");
+
+    let mut s = new_doc(8, "rgb");
+    let bg = s.active().unwrap().active_layer.unwrap().0;
+    let shown = s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("paint.stroke", json!({"points": [[2, 2], [14, 14]], "color": "#808080", "size": 6})).unwrap();
+    s.execute("layer.setProps", json!({"layer": bg, "visible": false})).unwrap();
+    s.execute("layer.select", json!({"layer": bg})).unwrap();
+    let steps = s.active().unwrap().history.past_len();
+    let before = layer_rgba(&s, shown, 8, 8);
+    assert!(!s.is_enabled("image.adjustments.gradientMap"), "the hidden active layer greys Gradient Map out");
+
+    let mut params = gradient_params();
+    params["layer"] = json!(shown);
+    s.execute("image.adjustments.gradientMap", params).unwrap();
+    assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "the visible addressed layer is edited");
+    assert_ne!(layer_rgba(&s, shown, 8, 8), before, "the visible addressed layer changes");
+}
+
+#[test]
+fn gradient_map_disabled_and_refused_on_filter_mask_in_32bit_documents() {
+    let mut s = new_doc(32, "rgb");
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    s.execute("filter.blur.gaussianBlur", json!({"radius": 2})).unwrap();
+    let steps = s.active().unwrap().history.past_len();
+    let mut params = gradient_params();
+    params["target"] = json!("filterMask");
+
+    assert!(!s.is_enabled_with("image.adjustments.gradientMap", &params), "a 32-bit filter mask must grey out Gradient Map");
+    let err = s.execute("image.adjustments.gradientMap", params).unwrap_err();
+    assert!(err.to_string().contains("32-bit"), "32-bit filter mask error: {err}");
+    assert_eq!(s.active().unwrap().history.past_len(), steps, "a 32-bit filter mask must not add history");
 }
 
 #[test]

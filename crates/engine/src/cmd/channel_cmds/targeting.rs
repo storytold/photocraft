@@ -138,9 +138,13 @@ pub(crate) fn mask_target_enabled(s: &Session, id: &str, p: &Value) -> Option<st
     match target_of(p) {
         // The commands that paint, fill, filter or adjust the filter mask need a smart object with
         // smart filters, not a pixel layer. Paste keeps its own check (something to paste).
-        Target::FilterMask if follows_filter_mask(id) && !PASTE_IDS.contains(&id) => {
-            Some(addressed_layer(s, p).and_then(crate::smart_cmds::filter_mask_paintable))
-        }
+        Target::FilterMask if follows_filter_mask(id) && !PASTE_IDS.contains(&id) => Some(addressed_layer(s, p).and_then(|l| {
+            crate::smart_cmds::filter_mask_paintable(l)?;
+            if id == "image.adjustments.gradientMap" {
+                crate::adjust_cmds::gradient_map_depth_allowed(s)?;
+            }
+            Ok(())
+        })),
         Target::Mask if edits_mask(id) => Some(addressed_layer(s, p).and_then(|l| {
             if l.mask.is_none() {
                 return Err("the target layer has no layer mask".into());
