@@ -21,6 +21,7 @@ pub fn is_live(id: &str) -> bool {
     photocraft_engine::commands::find(id).is_some()
         || UI_IDS.get_or_init(|| UI_COMMANDS.iter().map(|c| c.0).collect()).contains(id)
         || id.starts_with(super::DOCUMENT_ITEM)
+        || id.starts_with("file.openProviderRecent.")
         || id == "view.proofSetup.custom"
         || crate::tool_shortcuts::tool(id).is_some()
         || panel_alias(id).is_some()
@@ -236,28 +237,7 @@ pub fn base_rows(app: &PhotocraftApp) -> Vec<Row> {
     if let Some(item) = find(&mut rows, "layer.smartObjects.revealInFinder") {
         item.label = reveal_label().into();
     }
-    // File › Open Recent: a dynamic submenu of recently opened files, after Open as Smart Object… (#14053).
-    if let Some(after) = rows.iter().position(|i| i.command.id == "file.openAsSmartObject").or_else(|| rows.iter().position(|i| i.command.id == "file.openAs"))
-    {
-        let rp = ["File", "Open Recent"];
-        let mut recent: Vec<Row> = app
-            .ui
-            .recent_files
-            .iter()
-            .enumerate()
-            .map(|(i, p)| {
-                let label = std::path::Path::new(p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.clone());
-                Row::new(&rp, format!("file.openRecent.{i}").as_str(), label)
-            })
-            .collect();
-        if !recent.is_empty() {
-            recent.push(Row::separator(&rp));
-        }
-        recent.push(Row::new(&rp, "file.clearRecent", "Clear Recent File List").enabled(!app.ui.recent_files.is_empty()));
-        for (k, it) in recent.into_iter().enumerate() {
-            rows.insert(after + 1 + k, it);
-        }
-    }
+    insert_recent_rows(app, &mut rows);
     // Window › Workspace: saved workspaces follow the presets, checked while current.
     let set = &app.workspaces.set;
     if !set.saved.is_empty()
@@ -319,6 +299,55 @@ pub fn base_rows(app: &PhotocraftApp) -> Vec<Row> {
     rows
 }
 
+fn insert_recent_rows(app: &PhotocraftApp, rows: &mut Vec<Row>) {
+    // Keep Open Recent directly after Open as Smart Object (#14053). A connected host supplies
+    // its own namespace beside the device's local list, never mixed into local filesystem paths.
+    let Some(after) =
+        rows.iter().position(|row| row.command.id == "file.openAsSmartObject").or_else(|| rows.iter().position(|row| row.command.id == "file.openAs"))
+    else {
+        return;
+    };
+    let provider = app.services.file_provider.as_ref();
+    let hosted = provider.is_some_and(|provider| provider.connected());
+    let mut local = vec!["File", "Open Recent"];
+    if hosted {
+        local.push("Local Recent Files");
+    }
+    let mut recent: Vec<Row> = if hosted && cfg!(target_arch = "wasm32") {
+        vec![Row::new(&local, "file.localRecentHint", "Use Open to choose a file from this device").enabled(false)]
+    } else {
+        local_recent_rows(app, &local)
+    };
+    if let Some(provider) = provider.filter(|provider| provider.enabled()) {
+        let label = provider.provider_label().filter(|label| label != "Local Recent Files").unwrap_or_else(|| "File Provider".into());
+        let path = ["File", "Open Recent", label.as_str()];
+        let resources = provider.resources();
+        if resources.is_empty() {
+            recent.push(Row::new(&path, "file.providerRecentEmpty", "No recent files from this provider").enabled(false));
+        }
+        recent.extend(resources.into_iter().map(|resource| Row::new(&path, format!("file.openProviderRecent.{}", resource.id).as_str(), resource.name)));
+    }
+    rows.splice(after + 1..after + 1, recent);
+}
+
+fn local_recent_rows(app: &PhotocraftApp, path: &[&str]) -> Vec<Row> {
+    let mut recent: Vec<Row> = app
+        .ui
+        .recent_files
+        .iter()
+        .enumerate()
+        .map(|(index, file)| {
+            let label = std::path::Path::new(file).file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_else(|| file.clone());
+            Row::new(path, format!("file.openRecent.{index}").as_str(), label)
+        })
+        .collect();
+    if !recent.is_empty() {
+        recent.push(Row::separator(path));
+    }
+    recent.push(Row::new(path, "file.clearRecent", "Clear Recent File List").enabled(!app.ui.recent_files.is_empty()));
+    recent
+}
+
 /// [`base_rows`] with Edit › Menus applied: hidden rows dropped and the chosen colours set.
 pub fn menu_rows(app: &PhotocraftApp) -> Vec<Row> {
     let mut rows = base_rows(app);
@@ -352,7 +381,12 @@ fn translate_titles(bar: &mut MenuBar, lang: crate::i18n::Lang, english: &mut Ha
     fn level(nodes: &mut [Node], lang: crate::i18n::Lang, english: &mut HashMap<String, String>) {
         for node in nodes {
             if let Node::Submenu { label, children, .. } = node {
-                let shown = crate::i18n::tr(lang, label).to_string();
+                // A provider's chosen title is data too, even when it matches an English UI key.
+                let provider = children.iter().any(|child| {
+                    matches!(child, Node::Item(item)
+                    if item.command.id.starts_with("file.openProviderRecent.") || item.command.id == "file.providerRecentEmpty")
+                });
+                let shown = if provider { label.clone() } else { crate::i18n::tr(lang, label).to_string() };
                 english.insert(shown.clone(), std::mem::replace(label, shown));
                 level(children, lang, english);
             }
@@ -367,6 +401,39 @@ fn translate_titles(bar: &mut MenuBar, lang: crate::i18n::Lang, english: &mut Ha
     }
 }
 
+/// `from_items` reserves the label `---` for separators, while a real filename may be `---`.
+/// Protect only rows with a command, then restore their exact labels on the shared tree before
+/// either layout, renderer or search reads it. Rows returned to other callers stay unchanged.
+fn menu_tree(rows: &[Row]) -> MenuBar {
+    if !rows.iter().any(|row| !row.command.id.is_empty() && row.label == "---") {
+        return from_items(&TOP_MENUS, rows);
+    }
+    let mut protected = rows.to_vec();
+    for row in &mut protected {
+        if !row.command.id.is_empty() && row.label == "---" {
+            row.label.clear();
+        }
+    }
+    let mut bar = from_items(&TOP_MENUS, &protected);
+    fn restore(nodes: &mut [Node], rows: &[Row]) {
+        for node in nodes {
+            match node {
+                Node::Item(item) if item.label.is_empty() => {
+                    if let Some(row) = rows.iter().find(|row| row.command == item.command) {
+                        item.label.clone_from(&row.label);
+                    }
+                }
+                Node::Submenu { children, .. } => restore(children, rows),
+                _ => {}
+            }
+        }
+    }
+    for menu in &mut bar.menus {
+        restore(&mut menu.children, rows);
+    }
+    bar
+}
+
 /// Window › Workspace's neighbour: the Appearance and Language submenus go after it. The layouts
 /// move them to the Mac app menu by their roles.
 fn put_in_window(bar: &mut MenuBar, node: Node) {
@@ -375,12 +442,23 @@ fn put_in_window(bar: &mut MenuBar, node: Node) {
     menu.children.insert(at, node);
 }
 
+/// Record each shared submenu's English title against the localized one.
+fn shared_english_titles(shown: &Node, original: &Node, titles: &mut HashMap<String, String>) {
+    let (Node::Submenu { label, children, .. }, Node::Submenu { label: english, children: originals, .. }) = (shown, original) else {
+        return;
+    };
+    titles.insert(label.clone(), english.clone());
+    for (shown, original) in children.iter().zip(originals) {
+        shared_english_titles(shown, original, titles);
+    }
+}
+
 fn build(app: &PhotocraftApp, state: u64) -> MenuModel {
     let lang = crate::i18n::current();
     let mut rows = menu_rows(app);
     let mut english = HashMap::new();
     for row in &mut rows {
-        if row.label == "---" {
+        if row.command.id.is_empty() && row.label == "---" {
             continue;
         }
         english.insert(command_key(&row.command), row.label.clone());
@@ -389,7 +467,7 @@ fn build(app: &PhotocraftApp, state: u64) -> MenuModel {
             row.tooltip = Some(crate::i18n::tr(lang, &tip).to_string());
         }
     }
-    let mut bar = from_items(&TOP_MENUS, &rows);
+    let mut bar = menu_tree(&rows);
     bar.tag_item(&CommandRef::new("help.about"), ItemRole::About);
     bar.tag_item(&CommandRef::new("file.exit"), ItemRole::Quit);
     for (title, role) in [("File", MenuRole::File), ("Edit", MenuRole::Edit), ("View", MenuRole::View), ("Window", MenuRole::Window), ("Help", MenuRole::Help)]
@@ -400,13 +478,21 @@ fn build(app: &PhotocraftApp, state: u64) -> MenuModel {
     // The labels of the two menus come from the language the rest of the model uses.
     let i18n = crate::i18n::framework_i18n();
     let words = Words::from_i18n(i18n.clone(), i18n.from_code(lang.code()).unwrap_or_else(|| i18n.system_lang()));
+    let mut shared_titles = HashMap::new();
     let themes = crate::prefs_ui::theme_menu(app);
-    collect_english(&themes.submenu(&Words::english().set::<ThemeLabels>()), &mut english);
-    put_in_window(&mut bar, themes.submenu(&words.set::<ThemeLabels>()));
+    let appearance = themes.submenu(&words.set::<ThemeLabels>());
+    let english_appearance = themes.submenu(&Words::english().set::<ThemeLabels>());
+    collect_english(&english_appearance, &mut english);
+    shared_english_titles(&appearance, &english_appearance, &mut shared_titles);
+    put_in_window(&mut bar, appearance);
     // Production shows Language only in the macOS app menu.
     let pref = &app.session.prefs().interface.language;
     let choice = if pref == "auto" { LanguageChoice::Automatic } else { LanguageChoice::Code(pref.clone()) };
-    let language = LanguageMenu::from_i18n(i18n, choice).submenu(&words.set::<LanguageLabels>()).platforms(Platforms::MAC);
+    let languages = LanguageMenu::from_i18n(i18n, choice);
+    let language = languages.submenu(&words.set::<LanguageLabels>()).platforms(Platforms::MAC);
+    let english_language = languages.submenu(&Words::english().set::<LanguageLabels>());
+    collect_english(&english_language, &mut english);
+    shared_english_titles(&language, &english_language, &mut shared_titles);
     put_in_window(&mut bar, language);
     let label = |s: &'static str| crate::i18n::tr(lang, s).to_string();
     let keys = |chord: &Chord| craft::ui::runtime::commands::holder(app.ctx(), chord);
@@ -414,5 +500,6 @@ fn build(app: &PhotocraftApp, state: u64) -> MenuModel {
     let mut bar = layout(&bar, Target::current(), &options).bar;
     let mut english_titles = HashMap::new();
     translate_titles(&mut bar, lang, &mut english_titles);
+    english_titles.extend(shared_titles);
     MenuModel { state, english, english_titles, rows, bar }
 }

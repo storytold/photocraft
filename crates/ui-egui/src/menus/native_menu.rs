@@ -96,6 +96,14 @@ pub(crate) fn state_hash(app: &PhotocraftApp, input: Option<u64>) -> u64 {
     }
     let ui = &app.ui;
     (&ui.recent_files, &app.workspaces.set.current, app.ui.palette.open, ui.transform.is_some(), ui.text_edit.is_some(), app.dialog_count()).hash(&mut h);
+    // The host can replace Recents without input or an engine command, so both bars need these
+    // inputs even while the editor is idle. Session changes must invalidate the previous rows too.
+    if let Some(provider) = app.services.file_provider.as_ref() {
+        (provider.connected(), provider.enabled(), provider.connection_id(), provider.provider_label()).hash(&mut h);
+        for resource in provider.resources() {
+            (resource.id, resource.name, resource.updated_at).hash(&mut h);
+        }
+    }
     // Cut and Copy are enabled while the typed text has a selection.
     ui.text_edit.as_ref().map(|e| e.anchor != e.caret).hash(&mut h);
     // The Window bars' ticks; the Contextual Task Bar's Hide bar and `ui.set` change them without a menu click (#15489).
