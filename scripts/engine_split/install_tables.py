@@ -10,7 +10,9 @@ it to `TABLES`:
     python3 scripts/engine_split/install_tables.py --base <merge-base> --head <branch>
 
 Run it in a checkout of the new main (or of the branch rebased onto it, with its `cmd.rs` hunks
-for the old list dropped). Per table, compared between BASE and HEAD:
+for the old list dropped). `--head` is the branch commit from before the rebase (`<branch>@{1}` or
+`ORIG_HEAD` right after it): the rebased branch has no old list left to read, and its added tables
+would be lost. Per table, compared between BASE and HEAD:
   added    the entry goes after its predecessor's entry in TABLES (the nearest earlier table of
            HEAD's list that TABLES has; after the last table fragment when there is none);
   removed  the entry is deleted.
@@ -21,6 +23,7 @@ import argparse, re, subprocess, sys
 
 CMD = "crates/engine/src/cmd.rs"
 INSTALL = "crates/engine/src/install.rs"
+LIB = "crates/engine/src/lib.rs"
 EXTEND_RE = re.compile(r"^\s*v\.extend\(((?:crate::)?(?:cmd::)?)([a-z0-9_:]+?)::([a-z0-9_]+)\(\)\);", re.M)
 ENTRY_RE = re.compile(r'^\s*\("([^"]+)",\s*([A-Za-z0-9_:]+)\),', re.M)
 
@@ -63,8 +66,12 @@ def main():
     ap.add_argument("--head", required=True, help="the branch")
     a = ap.parse_args()
     if git_show(a.head, INSTALL) is not None:
-        print(f"{a.head} already lists its tables in {INSTALL}: nothing to do")
-        return 0
+        print(
+            f"warning: {a.head} is already on the install.rs layout; if you rebased, pass the "
+            "pre-rebase commit as --head (a rebased branch has lost its added tables)",
+            file=sys.stderr,
+        )
+        return 2
     base = dict(tables(a.base))
     head = tables(a.head)
     head_names = {n for n, _ in head}
@@ -91,6 +98,13 @@ def main():
             pred = "the last table fragment"
         rows.insert(at, f'    ("{name}", {path}),')
         report.append(f"added    {name} ({path}) after {pred}")
+        module = path.split("::")[-2]
+        lib = git_show(a.head, LIB) or ""
+        if not re.search(rf"^pub (?:use cmd::{module}|mod {module})\b", lib, re.M):
+            report.append(
+                f"WARNING  module `{module}` of {name} is private in {LIB}; task 3 moves install.rs "
+                "to the top crate and needs it public"
+            )
     for name in base:
         if name not in head_names and name in names():
             rows = [r for r, n in zip(rows, names()) if n != name]
@@ -98,6 +112,11 @@ def main():
     text = text[:start] + "\n".join([header] + rows) + text[end:]
     open(INSTALL, "w").write(text)
     print("\n".join(report) or "nothing to do")
+    if any(r.startswith("added") for r in report):
+        print(
+            "next: run the test `install::order_tests` with PHOTOCRAFT_WRITE_COMMAND_IDS=1 to regenerate "
+            "install/command_ids.txt, and review its diff"
+        )
     return 1 if any(r.startswith("UNPLACED") for r in report) else 0
 
 

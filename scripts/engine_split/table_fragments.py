@@ -9,7 +9,8 @@ edits in `cmd.rs`. This script applies them to the fragments:
     python3 scripts/engine_split/table_fragments.py --base <merge-base> --head <branch>
 
 Run it in a checkout of the new main (or of the branch rebased onto it, with its `cmd.rs` hunks
-for the old table dropped). Per command id, compared between BASE and HEAD:
+for the old table dropped). `--head` is the branch commit from before the rebase (`<branch>@{1}` or
+`ORIG_HEAD` right after it). Per command id, compared between BASE and HEAD:
   changed  the entry in its fragment is replaced by HEAD's text (if the fragment still has
            BASE's text; otherwise it is reported as a CONFLICT and left alone);
   added    the entry goes after its predecessor's entry, in the predecessor's fragment, and its id
