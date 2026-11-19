@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use craft_cms::{Builtin, Intent, Profile, Transform};
 use photocraft_codecs::{self as codecs, ChannelLayout, Format, Image, SampleType};
 pub use photocraft_raw::Demosaic;
-use photocraft_raw::{CameraLook, DevelopOptions, Limits, PreviewColorSpace, RawError, Reference, Sensor, WhiteBalance};
+use photocraft_raw::{CameraLook, DevelopOptions, Limits, PreviewColorSpace, RawError, RawFormat, Reference, Sensor, WhiteBalance};
 pub use photocraft_raw::{EXTENSIONS, Tone, retone};
 
 use crate::flat::image_to_document;
@@ -94,7 +94,7 @@ pub fn import_raw_tuned_from(name: &str, bytes: &[u8], tuning: &RawTuning, decod
 }
 
 fn import_raw_tuned_inner(name: &str, bytes: &[u8], tuning: &RawTuning, decode: Option<&RawDecode>) -> Result<(ImportResult, bool), IoError> {
-    let format = photocraft_raw::identify(bytes).map(|f| f.name()).unwrap_or("camera raw");
+    let format = photocraft_raw::identify(bytes);
     let exposure = f64::from(tuning.exposure);
     if !exposure.is_finite() || !(-10.0..=10.0).contains(&exposure) {
         return Err(IoError::Raw(RawError::Malformed(format!("exposure {} EV is out of range", tuning.exposure))));
@@ -320,7 +320,7 @@ fn wb_gains(temperature: f32, tint: f32) -> [f64; 3] {
 }
 
 /// A developed raw as a 16-bit ProPhoto document, with a note saying how it was developed.
-fn developed_document(name: &str, bytes: &[u8], format: &str, dev: photocraft_raw::Developed, summary: &str) -> Result<ImportResult, IoError> {
+fn developed_document(name: &str, bytes: &[u8], format: Option<RawFormat>, dev: photocraft_raw::Developed, summary: &str) -> Result<ImportResult, IoError> {
     let mut img = Image::from_u16(dev.width, dev.height, ChannelLayout::Rgb, &dev.rgb)?;
     // The raw's own EXIF (camera, lens, exposure, date), for File Info's Camera Data. It carries
     // no orientation: the developed image is already upright.
@@ -329,12 +329,51 @@ fn developed_document(name: &str, bytes: &[u8], format: &str, dev: photocraft_ra
     r.document.icc_profile = Some(Arc::new(craft_cms::Builtin::ProPhotoCompat.profile().to_bytes().to_vec()));
     let camera = camera_name(dev.info.make.as_deref(), dev.info.model.as_deref());
     r.warnings.push(format!(
-        "{format}{} {summary} into 16-bit {}",
+        "{}{} {summary} into 16-bit {}",
+        format.map_or("camera raw", RawFormat::name),
         if camera.is_empty() { String::new() } else { format!(" from {camera}") },
         photocraft_raw::OUTPUT_SPACE
     ));
     r.warnings.extend(dev.warnings);
+    keep_dng_metadata(format, bytes, &mut r);
     Ok(r)
+}
+
+/// Keep the descriptive packets beside Exif. Read the two IFD0 values by
+/// reference so opening a DNG never copies or decodes the entire raw as metadata.
+fn keep_dng_metadata(format: Option<RawFormat>, bytes: &[u8], result: &mut ImportResult) {
+    if format != Some(RawFormat::Dng) {
+        return;
+    }
+    let Ok((tiff, first)) = craft_tiff::classic::Tiff::new(bytes) else { return };
+    let Ok((ifd, _)) = tiff.read_ifd(first, 0) else { return };
+    // Match the shared extended XMP reader's budget for retained metadata packets.
+    const MAX_PACKET_BYTES: usize = 16 * 1024 * 1024;
+    const PSD_IPTC_RESOURCE: u16 = 1028;
+    let mut packet = |tag, name| {
+        let entry = ifd.get(tag)?;
+        let Ok(data) = tiff.value_bytes(entry) else {
+            result.warnings.push(format!("DNG {name} metadata could not be read"));
+            return None;
+        };
+        if data.len() > MAX_PACKET_BYTES {
+            result.warnings.push(format!("DNG {name} metadata exceeds the 16 MiB packet limit"));
+            return None;
+        }
+        (!data.is_empty()).then_some(data)
+    };
+    let xmp = packet(craft_tiff::tags::XMP, "XMP");
+    if let Some(iptc) = packet(craft_tiff::tags::IPTC_NAA, "IPTC") {
+        // The tag holds an opaque IIM byte stream, including in files with a LONG entry.
+        result.document.metadata.psd_resources.push((PSD_IPTC_RESOURCE, String::new(), Arc::new(iptc.to_vec())));
+    }
+    if let Some(xmp) = xmp {
+        match std::str::from_utf8(xmp).map(|x| x.trim_end_matches('\0')) {
+            Ok(xmp) if !xmp.is_empty() => result.document.metadata.xmp = Some(Arc::from(xmp)),
+            Ok(_) => {}
+            Err(_) => result.warnings.push("DNG XMP metadata is not UTF-8".into()),
+        }
+    }
 }
 
 /// Develops a raw file with the default settings.
@@ -458,7 +497,8 @@ pub fn import_raw_with(name: &str, bytes: &[u8], opts: &DevelopOptions) -> Resul
 }
 
 fn import_raw_with_inner(name: &str, bytes: &[u8], opts: &DevelopOptions, keep: bool) -> Result<ImportResult, IoError> {
-    let format = photocraft_raw::identify(bytes).map(|f| f.name()).unwrap_or("camera raw");
+    let raw_format = photocraft_raw::identify(bytes);
+    let format = raw_format.map_or("camera raw", RawFormat::name);
     match develop_fitted(bytes, opts, keep) {
         Ok((dev, kept_parts)) => {
             if let Some((sensor, look)) = kept_parts {
@@ -469,7 +509,7 @@ fn import_raw_with_inner(name: &str, bytes: &[u8], opts: &DevelopOptions, keep: 
                 kept.push(Arc::new(RawDecode::from_parts(bytes, sensor, look)));
             }
             let summary = format!("{DEVELOPED_NOTE} ({} demosaic, as-shot white balance)", opts.demosaic.id());
-            developed_document(name, bytes, format, dev, &summary)
+            developed_document(name, bytes, raw_format, dev, &summary)
         }
         Err(RawError::Unsupported(reason)) => {
             let jpeg = photocraft_raw::embedded_jpeg_preview(bytes).map(|jpeg| (jpeg,));
@@ -494,12 +534,14 @@ fn import_raw_with_inner(name: &str, bytes: &[u8], opts: &DevelopOptions, keep: 
             let note = format!(
                 "{format}: {reason} is not supported yet; opened the camera's embedded {w}x{h} {kind} preview instead ({depth}, not the raw sensor data)"
             );
-            preview_document(name, &img, note)
+            let mut result = preview_document(name, &img, note)?;
+            keep_dng_metadata(raw_format, bytes, &mut result);
+            Ok(result)
         }
         // A damaged DNG can still carry a valid JPEG, but opening that thumbnail as if it were
         // the photograph hides a corrupt raw source. Keep preview fallback for other camera
         // formats whose independent preview is the established recovery path.
-        Err(RawError::Malformed(reason)) if format == "DNG" => Err(IoError::Raw(RawError::Malformed(reason))),
+        Err(RawError::Malformed(reason)) if raw_format == Some(RawFormat::Dng) => Err(IoError::Raw(RawError::Malformed(reason))),
         Err(RawError::Malformed(reason)) => match photocraft_raw::embedded_jpeg_preview(bytes).map(|jpeg| preview_image(bytes, &jpeg, &opts.limits)) {
             Some(Ok(img)) => {
                 let (w, h) = img.dimensions();

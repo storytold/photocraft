@@ -686,3 +686,58 @@ fn a_kept_decode_gives_the_same_pixels_and_decodes_once() {
     assert_eq!(pixels(&got), pixels(&import_raw_tuned("a.nef", &nef, &RawTuning::default()).unwrap().0));
     assert_eq!((got.document.size.width, got.document.size.height), (w as u32, h as u32));
 }
+
+const DNG_KEYWORD_XMP: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:subject><rdf:Bag><rdf:li>citrus blossom</rdf:li></rdf:Bag></dc:subject></rdf:Description></rdf:RDF></x:xmpmeta>"#;
+const DNG_KEYWORD_IIM: &[u8; 12] = b"\x1c\x02\x19\x00\x07orchard";
+
+fn save_dng_with_keywords(big_endian: bool, tuned: bool, tag: u16, value: Val) -> photocraft_doc::Metadata {
+    let (w, h) = (40, 24);
+    let mut spec = DngSpec::cfa(w, h, mosaic(&scene(w, h), w, [0, 1, 1, 2], 0, 65535));
+    spec.big_endian = big_endian;
+    spec.ifd0_extra.push((tag, value));
+    use craft_tiff::tags;
+    let input = spec.build_with_gps_ifd(vec![
+        (tags::GPS_VERSION_ID, Val::Byte(vec![2, 3, 0, 0])),
+        (tags::GPS_LATITUDE_REF, Val::Ascii("N".into())),
+        (tags::GPS_LATITUDE, Val::Rational(vec![(12, 1), (30, 1), (0, 1)])),
+        (tags::GPS_LONGITUDE_REF, Val::Ascii("W".into())),
+        (tags::GPS_LONGITUDE, Val::Rational(vec![(34, 1), (15, 1), (0, 1)])),
+    ]);
+    let raw = if tuned {
+        let tuning = photocraft_io::raw::RawTuning { exposure: 1.0, ..Default::default() };
+        photocraft_io::raw::import_raw_tuned("keywords.dng", &input, &tuning).unwrap().0
+    } else {
+        import("keywords.dng", &input).unwrap()
+    };
+    let encoded = photocraft_io::export(&raw.document, "keywords.psd", &Default::default()).unwrap();
+    let saved = import("keywords.psd", &encoded.bytes).unwrap().document.metadata;
+    let exif = saved.exif.as_deref().expect("EXIF remains in the PSD");
+    assert_eq!(photocraft_algo::exif::read(exif).make.as_deref(), Some("Photocraft"));
+    let tiff = craft_tiff::Tiff::parse(exif).unwrap();
+    let gps = tiff.ifds[0].gps.as_ref().expect("the GPS directory survives the PSD save");
+    assert_eq!(gps.string(tags::GPS_LATITUDE_REF).as_deref(), Some("N"));
+    assert_eq!(gps.f64s(tags::GPS_LATITUDE), Some(vec![12.0, 30.0, 0.0]));
+    assert_eq!(gps.string(tags::GPS_LONGITUDE_REF).as_deref(), Some("W"));
+    assert_eq!(gps.f64s(tags::GPS_LONGITUDE), Some(vec![34.0, 15.0, 0.0]));
+    saved
+}
+
+#[test]
+fn dng_xmp_keywords_survive_develop_and_psd_save() {
+    for (big_endian, tuned) in [(false, false), (true, false), (false, true)] {
+        let saved = save_dng_with_keywords(big_endian, tuned, craft_tiff::tags::XMP, Val::Byte(DNG_KEYWORD_XMP.as_bytes().to_vec()));
+        assert!(saved.xmp.as_deref().is_some_and(|packet| packet.contains("<rdf:li>citrus blossom</rdf:li>")), "{:?}", saved.xmp);
+    }
+}
+
+#[test]
+fn dng_iptc_keywords_survive_develop_and_psd_save() {
+    let words = DNG_KEYWORD_IIM.as_chunks::<4>().0;
+    let little = words.iter().copied().map(u32::from_le_bytes).collect();
+    let big = words.iter().copied().map(u32::from_be_bytes).collect();
+    for (big_endian, field) in [(false, Val::Undefined(DNG_KEYWORD_IIM.to_vec())), (false, Val::Long(little)), (true, Val::Long(big))] {
+        let saved = save_dng_with_keywords(big_endian, true, craft_tiff::tags::IPTC_NAA, field);
+        let iim = saved.psd_resources.iter().find(|(id, _, _)| *id == 1028).map(|(_, _, bytes)| bytes.as_slice());
+        assert_eq!(iim, Some(DNG_KEYWORD_IIM.as_slice()), "IPTC resource in the reopened PSD");
+    }
+}

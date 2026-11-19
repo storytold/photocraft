@@ -181,6 +181,11 @@ impl DngSpec {
     }
 
     pub fn build(&self) -> Vec<u8> {
+        self.build_with_gps_ifd(Vec::new())
+    }
+
+    /// Adds a GPS directory to IFD0 of the generated DNG.
+    pub fn build_with_gps_ifd(&self, gps: Vec<(u16, Val)>) -> Vec<u8> {
         let mut t = TiffBuilder { big_endian: self.big_endian, ..Default::default() };
         let mut raw = self.raw_base_tags();
         self.push_storage_tags(&mut t, &mut raw);
@@ -198,6 +203,10 @@ impl DngSpec {
         let mut ifd0 = self.ifd0_base_tags(thumb, raw_ifd);
         self.push_color_tags(&mut ifd0);
         ifd0.extend(self.ifd0_extra.iter().cloned());
+        if !gps.is_empty() {
+            let gps_ifd = t.ifd(gps);
+            ifd0.push((34853, Val::Ifds(vec![gps_ifd]))); // GPSInfoIFDPointer
+        }
         let i0 = t.ifd(ifd0);
         t.chain = vec![i0];
         t.build()

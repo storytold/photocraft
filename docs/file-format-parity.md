@@ -65,7 +65,7 @@ supports many more, including CR3).
 
 | Camera format | PhotoCraft | Evidence |
 |---|---|---|
-| DNG (incl. LJPEG, lossy JPEG and JPEG XL tiles) | yes | 2026-10-13: lossy DNG (DNG 1.4 compression 34892: 8-bit baseline JPEG tiles or strips, CFA and LinearRaw, partial edge tiles) decodes to the stored samples, which go through LinearizationTable / BlackLevel / WhiteLevel (default 255) like every other depth; `crates/raw/tests/it/dng.rs` `lossy_jpeg_*` (FILE-215-11, lossy DNG part; no lossy file in the raw corpus yet) |
+| DNG (incl. LJPEG, lossy JPEG and JPEG XL tiles) | yes | 2026-10-13: lossy DNG (DNG 1.4 compression 34892: 8-bit baseline JPEG tiles or strips, CFA and LinearRaw, partial edge tiles) decodes to the stored samples, which go through LinearizationTable / BlackLevel / WhiteLevel (default 255) like every other depth; `crates/raw/tests/it/dng.rs` `lossy_jpeg_*` (FILE-215-11, lossy DNG part; no lossy file in the raw corpus yet). Developing a DNG and saving it as PSD retains embedded XMP and IPTC-IIM keywords alongside EXIF (#15781). |
 | Canon CR2 | yes | |
 | Canon CR3 | detected, unsupported | `crates/raw/src/lib.rs:219` |
 | Nikon NEF/NRW (lossless, lossy) | yes, including "lossy after split" (2026-10-31: the 11 CC0 raw.pixls.us split files, D3400 / D5 / D5000 / D5200 / D5500 / D5600 / D7000 / 1 J5 / Z 6_2) | #50; D5100 and D90 image areas measured (14-bit NEFs); D4 profile levels follow the sample depth (12 and 14 bit); [validation](nikon-nef-development.md) |
