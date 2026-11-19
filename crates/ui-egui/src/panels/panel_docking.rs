@@ -319,10 +319,10 @@ pub(crate) fn show_column(app: &mut PhotocraftApp, ui: &mut egui::Ui, layout: &L
         app.ui.status = format!("{}: {}", tl!("Invalid panel layout"), error.error);
     }
     let kept: Vec<Action<String>> = actions.into_iter().chain(requested).filter(keeps_arrangement).collect();
-    if !kept.is_empty() {
-        if let Err(error) = apply(app, kept) {
-            app.ui.status = error;
-        }
+    if !kept.is_empty()
+        && let Err(error) = apply(app, kept)
+    {
+        app.ui.status = error;
     }
 }
 
