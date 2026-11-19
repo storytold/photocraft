@@ -389,7 +389,7 @@ mod indexed_commit_tests {
 
     /// A new transparent document in `mode`: `rgb` keeps today's behaviour, `indexed` and `bitmap`
     /// are the two the issue is about.
-    fn app(mode: &str) -> PhotocraftApp {
+    fn app(mode: &str) -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 400, "height": 200, "background": "transparent"})).unwrap();
         match mode {

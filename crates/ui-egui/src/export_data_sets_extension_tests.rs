@@ -6,7 +6,7 @@ use craft::ui::patterns::form_dialogs::HostedParamDialog;
 use egui_kittest::Harness;
 use serde_json::{Value, json};
 
-fn field(h: &Harness<'_, PhotocraftApp>, dialog: DialogId, key: &str) -> Option<Value> {
+fn field(h: &Harness<'_, Box<PhotocraftApp>>, dialog: DialogId, key: &str) -> Option<Value> {
     let form = h.state().framework.dialogs.get_by_id::<HostedParamDialog>(dialog)?;
     serde_json::to_value(form.fields()).ok()?.get(key).cloned()
 }
@@ -19,7 +19,7 @@ fn the_dialog_has_a_file_extension_defaulting_to_psd_and_no_format() {
         .with_size(egui::vec2(1440.0, 900.0))
         .with_max_steps(64)
         .with_context(app.ctx().clone())
-        .build_ui_state(|ui, app: &mut PhotocraftApp| crate::dialogs::run(app, ui), app);
+        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app);
     PhotocraftApp::setup_context(&h.ctx, Default::default());
     h.state_mut().run("file.new", json!({"width": 64, "height": 64})).unwrap();
     h.state_mut().run("image.variables.dataSets", json!({"dataSets": [{"name": "Set 1", "values": []}]})).unwrap();

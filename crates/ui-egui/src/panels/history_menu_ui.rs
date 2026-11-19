@@ -81,7 +81,7 @@ pub(crate) fn run_fired(app: &mut PhotocraftApp, _ctx: &egui::Context, command: 
 mod tests {
     use super::*;
 
-    fn app() -> PhotocraftApp {
+    fn app() -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
         app.run("layer.new.layer", json!({})).unwrap();

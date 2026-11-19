@@ -28,7 +28,7 @@ impl GpuPolicy {
     /// - Explicit `--no-gpu` disables GPU.
     /// - Neither flag: `PHOTOCRAFT_GPU` env var (1 = enabled, 0 or empty/unset = disabled).
     ///   Any other nonempty value is rejected.
-    pub(crate) fn from_args(args: &GpuArgs) -> Result<Self, String> {
+    pub(crate) fn from_args(args: &GpuArgs) -> crate::Result<Self> {
         if args.gpu {
             return Ok(Self { enabled: true });
         }
@@ -36,18 +36,16 @@ impl GpuPolicy {
             return Ok(Self { enabled: false });
         }
         match std::env::var_os("PHOTOCRAFT_GPU") {
-            Some(val) => {
-                let val = val.to_string_lossy();
-                let trimmed = val.trim();
-                if trimmed.is_empty() || trimmed == "0" {
-                    Ok(Self { enabled: false })
-                } else if trimmed == "1" {
-                    Ok(Self { enabled: true })
-                } else {
-                    Err(format!("invalid value '{trimmed}' for 'PHOTOCRAFT_GPU': expected '1' or '0'"))
-                }
-            }
+            Some(val) => Self::from_environment(&val.to_string_lossy()),
             None => Ok(Self { enabled: false }),
+        }
+    }
+
+    fn from_environment(value: &str) -> crate::Result<Self> {
+        match value.trim() {
+            "" | "0" => Ok(Self { enabled: false }),
+            "1" => Ok(Self { enabled: true }),
+            other => Err(crate::CliError::GpuEnvironment(other.to_owned())),
         }
     }
 
@@ -108,5 +106,23 @@ impl BandRenderer for DisabledGpuRenderer {
             self.emitted = true;
             vec!["GPU acceleration requested but this build was compiled without GPU support (compile with --features gpu); falling back to CPU".into()]
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn environment_policy_keeps_whitespace_and_boolean_semantics() {
+        for value in ["", " ", "0", " 0 "] {
+            assert_eq!(GpuPolicy::from_environment(value).unwrap(), GpuPolicy { enabled: false });
+        }
+        for value in ["1", " 1 "] {
+            assert_eq!(GpuPolicy::from_environment(value).unwrap(), GpuPolicy { enabled: true });
+        }
+        let error = GpuPolicy::from_environment(" invalid ").unwrap_err();
+        assert!(matches!(error, crate::CliError::GpuEnvironment(ref value) if value == "invalid"));
+        assert_eq!(error.to_string(), "invalid value 'invalid' for 'PHOTOCRAFT_GPU': expected '1' or '0'");
     }
 }
