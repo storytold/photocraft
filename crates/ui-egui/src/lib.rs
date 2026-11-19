@@ -803,6 +803,8 @@ mod navigator_gpu_tests;
 
 #[cfg(test)]
 mod color_swatch_tests;
+#[cfg(test)]
+mod dialog_title_ellipsis_tests;
 
 #[cfg(test)]
 mod profile_open_tests;
@@ -991,6 +993,8 @@ mod polygon_lasso_tests;
 #[cfg(test)]
 mod window_frame_tests;
 
+#[cfg(test)]
+mod artboards_overlap_dialog_tests;
 #[cfg(test)]
 mod browse_field_tests;
 #[cfg(test)]
