@@ -241,7 +241,11 @@ jobs:
   test-without-heif:
     if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
     timeout-minutes: 60
-    name: test (without heif)
+    name: ${{ matrix.variant == 'hakari' && 'test (without heif, Hakari trial)' || 'test (without heif)' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: ${{ fromJSON(github.head_ref == 'ci/15703-no-heif-trial' && '["control","hakari"]' || '["control"]') }}
     # The gate's runner: its cache entry is keyed on the OS.
     runs-on: ubuntu-24.04
     env:
@@ -288,8 +292,44 @@ jobs:
         with:
           tool: cargo-nextest@0.9.150
 
+      - name: Install Hakari for the trial
+        if: matrix.variant == 'hakari'
+        uses: step-security/taiki-e-install-action@76747d22a7567cc4438546a84f11bdf18e670ab8 # v2.87.32
+        with:
+          tool: cargo-hakari@0.9.39
+
+      # Both variants have already restored the same gate cache. Only the trial
+      # modifies the manifests and lockfile in its disposable checkout.
+      - name: Prepare the trial feature graph
+        if: matrix.variant == 'hakari'
+        run: |
+          cargo hakari init crates/workspace-hack --yes
+          cp .config/no-heif-trial.toml .config/hakari.toml
+          cargo hakari generate
+          cargo hakari manage-deps --yes
+          cargo hakari generate --diff
+          cargo hakari manage-deps --dry-run
+
+      - name: Check the decoder selection
+        run: |
+          cargo tree --locked -p photocraft-io --prefix none --format '{p}' > "$RUNNER_TEMP/no-heif-tree"
+          if grep -q '^craft-heif v' "$RUNNER_TEMP/no-heif-tree"; then
+            echo 'The no-HEIF build selected the HEIF decoder' >&2
+            exit 1
+          fi
+          cargo tree --locked -p photocraft-io --features heif --prefix none --format '{p}' > "$RUNNER_TEMP/heif-tree"
+          grep -q '^craft-heif v' "$RUNNER_TEMP/heif-tree"
+
       - name: Test without heif
-        run: cargo nextest run -p photocraft-io --locked --profile ci
+        env:
+          CARGO_TERM_COLOR: never
+        shell: bash
+        run: |
+          set -o pipefail
+          started=$SECONDS
+          cargo nextest run -p photocraft-io --locked --profile ci 2>&1 | tee "$RUNNER_TEMP/no-heif-test.log"
+          echo "Test command elapsed seconds: $((SECONDS - started))" >> "$GITHUB_STEP_SUMMARY"
+          awk '/^[[:space:]]*Compiling / {n++} END {print "Compiling lines: " n+0}' "$RUNNER_TEMP/no-heif-test.log" >> "$GITHUB_STEP_SUMMARY"
 
   corpus:
     if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'

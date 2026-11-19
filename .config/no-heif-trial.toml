@@ -1,0 +1,8 @@
+hakari-package = "workspace-hack"
+dep-format-version = "4"
+resolver = "2"
+platforms = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc", "x86_64-apple-darwin", "aarch64-apple-darwin", "wasm32-unknown-unknown"]
+
+# Leave the codec selection to photocraft-io and its callers.
+[final-excludes]
+third-party = [{ name = "craft-image-codecs", git = "https://github.com/storytold/craft-libs", rev = "18ffc07519b15f5ef39e752aa0f405261fec8ebb" }, { name = "craft-file-formats", git = "https://github.com/storytold/craft-libs", rev = "18ffc07519b15f5ef39e752aa0f405261fec8ebb" }]
