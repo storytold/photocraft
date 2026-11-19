@@ -120,8 +120,6 @@ fn real_app_keys_set_magic_eraser_opacity_without_other_changes() {
     });
     h.run_steps(4);
     let before = (h.state().ui.tool_options.clone(), h.state().session.tools.brush.clone(), layer(h.state()));
-    let mut expected_options = before.0.clone();
-    expected_options.magic_eraser_opacity = 50.0;
     let key = |h: &mut Harness<'_, Box<PhotocraftApp>>, modifiers| {
         h.event(Event::ModifiersChanged(modifiers));
         h.event(Event::Key { key: Key::Num5, physical_key: Some(Key::Num5), pressed: true, repeat: false, modifiers });
@@ -129,6 +127,9 @@ fn real_app_keys_set_magic_eraser_opacity_without_other_changes() {
         h.run_steps(2);
     };
     for modifiers in [Modifiers::NONE, Modifiers::SHIFT, Modifiers::ALT] {
+        h.state_mut().ui.tool_options.magic_eraser_opacity = 17.0;
+        let mut expected_options = before.0.clone();
+        expected_options.magic_eraser_opacity = if modifiers.alt { 17.0 } else { 50.0 };
         key(&mut h, modifiers);
         assert_eq!(h.state().ui.tool_options, expected_options);
         assert_eq!(h.state().session.tools.brush, before.1);
