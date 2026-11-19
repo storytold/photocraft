@@ -281,9 +281,10 @@ mod tests {
                 let mut holes = Surface::with_default(mask.format(), &[0.63]);
                 holes.fill_rect(Rect::from_xywh(2, 8, 7, 5), &[0.0]);
                 let colors = ColorChannels::from_indices([0, mode.color_channels() - 1], mode.color_channels()).unwrap();
-                // Every mode/sample, mode/selection and sample/selection pair remains.
+                // Every mode/sample, mode/selection and sample/selection pair remains. RGB/U16
+                // also needs no selection: the sparse mask alone is below the table threshold.
                 for (ti, selection) in [None, Some(&mask), Some(&holes)].into_iter().enumerate() {
-                    if ti != (mi + si) % 3 {
+                    if ti != (mi + si) % 3 && !(mode == ColorMode::Rgb && sample == SampleType::U16 && selection.is_none()) {
                         continue;
                     }
                     for adjustment in &adjustments {
