@@ -45,6 +45,7 @@ fn load_thumbnail_catching_panic(load: impl FnOnce() -> Option<ColorImage>) -> O
 struct DiskStamp {
     seen: Option<(Option<std::time::SystemTime>, u64)>,
     checked: std::time::Instant,
+    requested_frame: u64,
 }
 
 /// What the revision of one path is built from.
@@ -60,6 +61,9 @@ struct Stamp {
     disk: Option<DiskStamp>,
     #[cfg(not(target_arch = "wasm32"))]
     disk_pending: bool,
+    /// A focus gain can only be satisfied by a check requested in or after that frame.
+    #[cfg(not(target_arch = "wasm32"))]
+    disk_focus_frame: Option<u64>,
 }
 
 impl Stamp {
@@ -151,14 +155,20 @@ impl ThumbnailCache {
         }
 
         let stamp = self.stamps.entry(path.to_owned()).or_default();
-        let due = focus_gained || stamp.disk.as_ref().is_none_or(|info| info.checked.elapsed() >= RECHECK_INTERVAL);
+        if focus_gained {
+            stamp.disk_focus_frame = Some(ctx.cumulative_frame_nr());
+        }
+        let due = stamp.disk.as_ref().is_none_or(|info| {
+            stamp.disk_focus_frame.is_some_and(|focus_frame| info.requested_frame < focus_frame) || info.checked.elapsed() >= RECHECK_INTERVAL
+        });
         if due && !stamp.disk_pending {
             stamp.disk_pending = true;
             let generation = stamp.generation;
+            let requested_frame = ctx.cumulative_frame_nr();
             let path = path.to_owned();
             checks.submit(path.clone(), Priority::VISIBLE, move |_| {
                 let seen = std::fs::metadata(path).ok().map(|meta| (meta.modified().ok(), meta.len()));
-                (generation, DiskStamp { seen, checked: std::time::Instant::now() })
+                (generation, DiskStamp { seen, checked: std::time::Instant::now(), requested_frame })
             });
         }
         stamp.disk_revision()
@@ -651,6 +661,53 @@ mod tests {
         assert!(lock(&app.thumbnail_cache).stamps[path].disk.is_none(), "invalidating a path drops the pending result");
         run_disk_check(&app);
         assert_ne!(revision_of(&app, path), invalidated, "Home sees the valid result on the next pass");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn recent_thumbnail_rechecks_after_a_pending_stat_overlaps_window_focus() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("recent.png");
+        std::fs::write(&file, flat_png([255, 0, 0, 255])).unwrap();
+        let path = file.to_str().unwrap();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.push_recent(path);
+        manual_disk_checks(&app);
+        revision_of(&app, path);
+        run_disk_check(&app);
+        let before = revision_of(&app, path);
+        expire_disk_stamp(&app, path);
+
+        let ctx = app.ctx().clone();
+        crate::testing::run_ui(&ctx, egui::RawInput::default(), |_| {
+            assert_eq!(revision_of(&app, path), before);
+            // The manual queue holds this already-sampled result until the test lets it finish.
+            let meta = std::fs::metadata(&file).unwrap();
+            let info =
+                DiskStamp { seen: Some((meta.modified().ok(), meta.len())), checked: std::time::Instant::now(), requested_frame: ctx.cumulative_frame_nr() };
+            let cache = lock(&app.thumbnail_cache);
+            let generation = cache.stamps[path].generation;
+            cache.disk_checks.as_ref().unwrap().submit(path.to_owned(), Priority::VISIBLE, move |_| (generation, info));
+        });
+        std::fs::remove_file(&file).unwrap();
+
+        let input = egui::RawInput { events: vec![egui::Event::WindowFocused(true)], ..Default::default() };
+        crate::testing::run_ui(&ctx, input, |_| {
+            assert_eq!(revision_of(&app, path), before, "the previous picture stays while the stat is pending");
+            assert_eq!(revision_of(&app, path), before, "another request during the same focus frame keeps the picture");
+            assert_eq!(lock(&app.thumbnail_cache).disk_checks.as_ref().unwrap().counts().queued, 1);
+        });
+
+        run_disk_check(&app);
+        crate::testing::run_ui(&ctx, egui::RawInput::default(), |_| {
+            assert_eq!(revision_of(&app, path), before, "the old sample still describes the old picture");
+        });
+        assert_eq!(lock(&app.thumbnail_cache).disk_checks.as_ref().unwrap().counts().queued, 1, "the focus request survives publication of an earlier stat");
+        run_disk_check(&app);
+        let missing = revision_of(&app, path);
+        assert_ne!(missing, before, "the post-focus stat sees the removal");
+        assert_eq!(revision_of(&app, path), missing);
+        assert_eq!(lock(&app.thumbnail_cache).disk_checks.as_ref().unwrap().counts().queued, 0, "the focus request ran once");
     }
 
     #[cfg(not(target_arch = "wasm32"))]
