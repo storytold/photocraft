@@ -4,7 +4,7 @@ use crate::cmd::smart_cmds::source::{flattened_source, source_surface_from_buffe
 /// A source document of `mode`/`depth` with a textured, partly transparent block on a layer.
 fn source(mode: ColorMode, depth: SampleType) -> Document {
     let mut doc = Document::new("source", Size::new(W as u32, H as u32), mode, depth);
-    doc.layers = vec![Layer::new("block", LayerContent::Raster(block(&doc.pixel_format(), Rect::new(4, 3, 50, 40))))];
+    doc.layers = vec![Layer::new("block", LayerContent::Raster(block(&doc.pixel_format(), Rect::new(4, 3, 50, 40))))].into();
     doc
 }
 
@@ -127,7 +127,7 @@ fn effects_across_block_edges_match() {
         let mut mask = LayerMask::reveal_all();
         mask.surface.fill_rect(Rect::new(0, 240, width as i32, 270), &[0.3]);
         base.mask = Some(mask);
-        doc.layers = vec![base];
+        doc.layers = vec![base].into();
         same(&format!("blocks {width} {depth:?}"), &doc, fmt);
     }
 }

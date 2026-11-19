@@ -789,7 +789,7 @@ fn merge_visible(s: &mut Session) -> Result<Value> {
                 out.push(l);
             }
         }
-        doc.layers = out;
+        doc.layers = out.into();
         *active = Some(mid);
         Ok(())
     })?;

@@ -1262,7 +1262,7 @@ fn artboard_preview_app(background: photocraft_doc::ArtboardBackground) -> (Box<
         ab.background = background;
         g.artboard = Some(ab);
     }
-    doc.layers = vec![board];
+    doc.layers = vec![board].into();
     (app, board_id, red_id)
 }
 
