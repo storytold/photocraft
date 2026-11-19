@@ -290,7 +290,29 @@ impl PhotocraftApp {
         extensions: &[&str],
         then: impl FnOnce(&mut Self, String, Vec<u8>) -> Result<Value, String> + 'static,
     ) -> Result<Value, String> {
+        self.pick_file_bytes_in(None, extensions, then)
+    }
+
+    /// [`Self::pick_file_bytes`] with a picker the command names (File › Place Embedded's "Place
+    /// Embedded", #14110) instead of the system's default title, where the platform shows one.
+    pub(crate) fn pick_file_bytes_titled(
+        &mut self,
+        title: String,
+        then: impl FnOnce(&mut Self, String, Vec<u8>) -> Result<Value, String> + 'static,
+    ) -> Result<Value, String> {
+        self.pick_file_bytes_in(Some(title), &[], then)
+    }
+
+    fn pick_file_bytes_in(
+        &mut self,
+        title: Option<String>,
+        extensions: &[&str],
+        then: impl FnOnce(&mut Self, String, Vec<u8>) -> Result<Value, String> + 'static,
+    ) -> Result<Value, String> {
         let mut request = open_filters(PickRequest::open("file"), extensions);
+        if let Some(title) = title {
+            request = request.title(title);
+        }
         if let Some(dir) = last_used_dir(&self.ui.recent_files) {
             request = request.directory(dir);
         }
@@ -507,3 +529,7 @@ fn read_picked(picked: Picked) -> Result<(String, Vec<u8>), String> {
 #[cfg(test)]
 #[path = "file_dialog/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "file_dialog/place_title_tests.rs"]
+mod place_title_tests;
