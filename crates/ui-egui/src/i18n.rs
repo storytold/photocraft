@@ -371,10 +371,12 @@ pub fn current() -> Lang {
     CURRENT.get()
 }
 
+type LangEntries<K, V> = std::collections::HashMap<(&'static str, usize, K), V>;
+
 /// Values built for a language and a caller-provided key. Catalog identity keeps test and
 /// preview catalogs separate even when they use the same language code.
 pub(crate) struct LangCache<K, V> {
-    entries: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<(&'static str, usize, K), V>>>,
+    entries: std::sync::OnceLock<std::sync::Mutex<LangEntries<K, V>>>,
 }
 
 impl<K: Eq + std::hash::Hash, V: Clone> LangCache<K, V> {

@@ -248,7 +248,8 @@ pub(crate) fn entry(id: &str) -> Option<&'static PanelEntry> {
 /// The id of the panel `name` names: its id or its label, in any case. The canvas is not a registered panel.
 pub(crate) fn normalize(name: &str) -> Option<&'static str> {
     let name = name.trim();
-    static LABELS: crate::i18n::LangCache<(), std::sync::Arc<Vec<(&'static str, String)>>> = crate::i18n::LangCache::new();
+    type PanelLabels = std::sync::Arc<Vec<(&'static str, String)>>;
+    static LABELS: crate::i18n::LangCache<(), PanelLabels> = crate::i18n::LangCache::new();
     let labels = LABELS.get_or_build((), || std::sync::Arc::new(PANELS.iter().map(|panel| (panel.id, (panel.label)())).collect()));
     labels.iter().find(|(id, label)| id.eq_ignore_ascii_case(name) || label.eq_ignore_ascii_case(name)).map(|(id, _)| *id)
 }
