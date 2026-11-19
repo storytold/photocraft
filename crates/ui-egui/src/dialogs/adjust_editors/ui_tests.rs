@@ -442,3 +442,211 @@ fn black_white_auto_button_sets_the_weights() {
     assert_ne!(after, before, "the red and blue are told apart");
     assert_eq!(history_len(&h), steps + 1);
 }
+
+/// The screen x of input `level` (0..=255) on the Curves graph, from its end points' nodes.
+fn curve_x(h: &Harness<'_, Box<PhotocraftApp>>, points: &[[f32; 2]], level: f32) -> f32 {
+    let n = points.len();
+    let first = h.get_by_label(&format!("Point 1 of {n}")).rect().center();
+    let last = h.get_by_label(&format!("Point {n} of {n}")).rect().center();
+    let (a, b) = (points[0][0], points[n - 1][0]);
+    first.x + (level - a) / (b - a) * (last.x - first.x)
+}
+
+/// The master curve of the Curves layer, in levels.
+fn master_points(h: &Harness<'_, Box<PhotocraftApp>>) -> Vec<[f32; 2]> {
+    match layer(h).1 {
+        Adjustment::Curves { master, .. } => master.iter().map(|p| [(p.input * 255.0).round(), (p.output * 255.0).round()]).collect(),
+        other => panic!("{other:?}"),
+    }
+}
+
+const BLACK_SLIDER: &str = "Input levels, Black input";
+const WHITE_SLIDER: &str = "Input levels, White input";
+
+/// #14384 in the Properties panel: the black and white input sliders under a Curves layer's graph move the end points'
+/// inputs and keep their outputs, an end point keeps 4 levels from its neighbour, and each drag is one history step.
+#[test]
+fn properties_curves_input_sliders_move_the_end_points() {
+    let mut h = app_harness("curves", "rgb", 8);
+    assert_eq!(master_points(&h), vec![[0.0, 0.0], [255.0, 255.0]]);
+    let steps = history_len(&h);
+    let black = h.get_by_label(BLACK_SLIDER).rect().center();
+    let to = curve_x(&h, &[[0.0, 0.0], [255.0, 255.0]], 40.0);
+    drag(&mut h, black, Pos2::new(to, black.y));
+    assert_eq!(master_points(&h), vec![[40.0, 0.0], [255.0, 255.0]], "the black end's input moves, its output stays");
+    assert_eq!(history_len(&h), steps + 1, "one history step");
+    // The panel's scroll bar takes presses along its right edge, over the right half of the white thumb.
+    let white = h.get_by_label(WHITE_SLIDER).rect();
+    let from = Pos2::new(white.left() + 1.0, white.center().y);
+    let to = curve_x(&h, &[[40.0, 0.0], [255.0, 255.0]], 0.0);
+    drag(&mut h, from, Pos2::new(to, from.y));
+    assert_eq!(master_points(&h), vec![[40.0, 0.0], [44.0, 255.0]], "the white end stops 4 levels past the black one");
+    assert_eq!(history_len(&h), steps + 2);
+}
+
+/// #10110: in the Properties panel the Curves graph takes the panel's width and the height left above the controls
+/// under it, so it isn't square, and the controls under it stay in view. Its points still map levels on each axis.
+#[test]
+fn properties_curves_graph_fills_the_panel() {
+    let mut h = app_harness("curves", "rgb", 8);
+    let black = h.get_by_label("Point 1 of 2").rect().center();
+    let white = h.get_by_label("Point 2 of 2").rect().center();
+    let (wide, tall) = (white.x - black.x, black.y - white.y);
+    assert!((wide - tall).abs() > 20.0, "not a square: {wide} × {tall}");
+    let reset = h.get_by_label("Reset to defaults").rect();
+    assert!(reset.bottom() <= h.ctx.content_rect().bottom(), "the controls under the editor stay in view: {reset:?}");
+    let input = h.get_by_label(BLACK_SLIDER).rect().center();
+    assert!((input.x - black.x).abs() < 0.5, "the black slider sits under the black end point");
+    // A click at the levels (64, 192) of this graph adds a point there.
+    let at = Pos2::new(black.x + wide * 64.0 / 255.0, black.y - tall * 192.0 / 255.0);
+    click(&mut h, at);
+    assert_eq!(master_points(&h), vec![[0.0, 0.0], [64.0, 192.0], [255.0, 255.0]]);
+}
+
+/// #14383 in the Properties panel: Alt on the drag of the black input slider shows the clipping display on the canvas,
+/// and the display ends when Alt or the mouse is released.
+#[test]
+fn properties_curves_alt_drag_shows_clipping_until_alt_or_the_mouse_ends() {
+    use craft::imaging::ui::adjust::LevelsClip;
+    let mut h = app_harness("curves", "rgb", 8);
+    let clipping = |h: &Harness<'_, Box<PhotocraftApp>>| h.state().adjust_session.as_ref().and_then(|r| r.clipping);
+    let black = h.get_by_label(BLACK_SLIDER).rect().center();
+    // As a pointer reports it: the button event carries the modifiers held.
+    let button =
+        |pos: Pos2, pressed: bool, modifiers: egui::Modifiers| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers };
+    let hold = |h: &mut Harness<'_, Box<PhotocraftApp>>, modifiers: egui::Modifiers| h.event(egui::Event::ModifiersChanged(modifiers));
+    hold(&mut h, egui::Modifiers::ALT);
+    h.hover_at(black);
+    h.run_steps(1);
+    h.event(button(black, true, egui::Modifiers::ALT));
+    h.run_steps(1);
+    h.hover_at(black + vec2(12.0, 0.0));
+    h.run_steps(3);
+    assert_eq!(clipping(&h), Some(LevelsClip::Shadows), "Alt-drag of the black slider");
+    assert!(h.state().levels_clipping.is_some(), "the canvas draws the display");
+    hold(&mut h, egui::Modifiers::NONE);
+    h.hover_at(black + vec2(14.0, 0.0));
+    h.run_steps(3);
+    assert_eq!(clipping(&h), None, "Alt released");
+    hold(&mut h, egui::Modifiers::ALT);
+    h.hover_at(black + vec2(16.0, 0.0));
+    h.run_steps(3);
+    assert_eq!(clipping(&h), Some(LevelsClip::Shadows), "Alt again during the drag");
+    h.event(button(black + vec2(16.0, 0.0), false, egui::Modifiers::ALT));
+    h.run_steps(3);
+    assert_eq!(clipping(&h), None, "mouse released");
+    hold(&mut h, egui::Modifiers::NONE);
+    h.run_steps(2);
+    assert!(h.state().levels_clipping.is_none(), "the display's cache goes once nothing asks for it");
+}
+
+/// Alt (Option) held on the press of an input slider shows the clipping display at once, before the pointer moves,
+/// and keeps it while the button stays down; the release ends it. An Alt-click on a triangle shows what it clips.
+#[test]
+fn properties_curves_alt_press_on_a_slider_shows_clipping_before_it_moves() {
+    use craft::imaging::ui::adjust::LevelsClip;
+    let mut h = app_harness("curves", "rgb", 8);
+    let clipping = |h: &Harness<'_, Box<PhotocraftApp>>| h.state().adjust_session.as_ref().and_then(|r| r.clipping);
+    let button =
+        |pos: Pos2, pressed: bool, modifiers: egui::Modifiers| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers };
+    for (name, end) in [(BLACK_SLIDER, LevelsClip::Shadows), (WHITE_SLIDER, LevelsClip::Highlights)] {
+        let at = h.get_by_label(name).rect().center();
+        h.event(egui::Event::ModifiersChanged(egui::Modifiers::ALT));
+        h.hover_at(at);
+        h.run_steps(1);
+        h.event(button(at, true, egui::Modifiers::ALT));
+        h.run_steps(3);
+        assert_eq!(clipping(&h), Some(end), "Alt-press of the {name}, the pointer still");
+        assert!(h.state().levels_clipping.is_some(), "the canvas draws the display for the {name}");
+        h.event(button(at, false, egui::Modifiers::ALT));
+        h.run_steps(3);
+        assert_eq!(clipping(&h), None, "the {name} released");
+        h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+        h.run_steps(2);
+    }
+    assert_eq!(master_points(&h), vec![[0.0, 0.0], [255.0, 255.0]], "a press that does not move changes nothing");
+}
+
+/// The Show Clipping check box shows the display on the press of an end without Alt; unchecked, the press shows
+/// nothing.
+#[test]
+fn properties_curves_show_clipping_shows_the_display_without_alt() {
+    use craft::imaging::ui::adjust::LevelsClip;
+    let mut h = app_harness("curves", "rgb", 8);
+    let clipping = |h: &Harness<'_, Box<PhotocraftApp>>| h.state().adjust_session.as_ref().and_then(|r| r.clipping);
+    let press = |h: &mut Harness<'_, Box<PhotocraftApp>>, at: Pos2, pressed: bool| {
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+        h.run_steps(3);
+    };
+    let white = h.get_by_label(WHITE_SLIDER).rect().center();
+    h.hover_at(white);
+    h.run_steps(1);
+    press(&mut h, white, true);
+    assert_eq!(clipping(&h), None, "no Alt, Show Clipping off");
+    press(&mut h, white, false);
+    let check = label_rect(&h, "Show Clipping").expect("the Show Clipping check box shows").center();
+    click(&mut h, check);
+    let white = h.get_by_label(WHITE_SLIDER).rect().center();
+    h.hover_at(white);
+    h.run_steps(1);
+    press(&mut h, white, true);
+    assert_eq!(clipping(&h), Some(LevelsClip::Highlights), "Show Clipping on: the white slider's press");
+    assert!(h.state().levels_clipping.is_some(), "the canvas draws the display");
+    press(&mut h, white, false);
+    assert_eq!(clipping(&h), None, "released");
+}
+
+/// Photoshop's Alt+2 to Alt+5 pick the Channel select's entry of a Levels or Curves layer in Properties: the
+/// composite, Red, Green and Blue; Alt+6, past an RGB document's list, changes nothing. The key matches by its position,
+/// so the character Option types with it on a Mac (£ for Option+3) doesn't matter; they work with the panel docked and
+/// floating. While the Input field has the keys, Alt+3 stays with its text. The select shows each key.
+#[test]
+fn properties_alt_digits_pick_the_channel() {
+    use egui::{Key, Modifiers};
+    for kind in ["curves", "levels"] {
+        let mut h = app_harness(kind, "rgb", 8);
+        let channel = |h: &Harness<'_, Box<PhotocraftApp>>| h.state().adjust_session.as_ref().map(|r| r.channel);
+        let alt_digit = |h: &mut Harness<'_, Box<PhotocraftApp>>, key: Key, typed: &str| {
+            h.event(egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers: Modifiers::ALT });
+            h.event(egui::Event::Text(typed.into()));
+            h.event(egui::Event::Key { key, physical_key: Some(key), pressed: false, repeat: false, modifiers: Modifiers::ALT });
+            h.run_steps(3);
+        };
+        assert_eq!(channel(&h), Some(0), "{kind}: the composite to begin with");
+        let version = |h: &Harness<'_, Box<PhotocraftApp>>| crate::panels::region_versions::panel(h.state(), "properties");
+        for (key, typed, want) in [(Key::Num3, "£", 1), (Key::Num4, "¢", 2), (Key::Num5, "∞", 3), (Key::Num6, "§", 3), (Key::Num2, "™", 0)] {
+            let before = (channel(&h), version(&h));
+            alt_digit(&mut h, key, typed);
+            assert_eq!(channel(&h), Some(want), "{kind}: Alt+{key:?}");
+            // An idle panel replays its last run until its content version changes.
+            assert_eq!(version(&h) != before.1, channel(&h) != before.0, "{kind}: Alt+{key:?} renews the panel's content version");
+        }
+        let ctx = h.ctx.clone();
+        let shown: Vec<String> = super::channel_keys::commands()
+            .iter()
+            .take(4)
+            .map(|command| craft::ui::runtime::commands::chord(&ctx, command).map(|chord| chord.display(craft::host::target::Os::Linux)).unwrap_or_default())
+            .collect();
+        assert_eq!(shown, ["Alt+2", "Alt+3", "Alt+4", "Alt+5"], "{kind}: the keys the select shows");
+        // Properties floating in a window of its own takes the keys too.
+        crate::panel_docking::apply(
+            h.state_mut(),
+            vec![Action::float("properties".to_owned(), Rect::from_min_size(Pos2::new(400.0, 200.0), vec2(320.0, 560.0)))],
+        )
+        .unwrap();
+        h.run_steps(4);
+        alt_digit(&mut h, Key::Num4, "¢");
+        assert_eq!(channel(&h), Some(2), "{kind}: Alt+4 with Properties floating");
+    }
+    // A text field with the keys keeps Alt+3: the Curves Input field.
+    let mut h = app_harness("curves", "rgb", 8);
+    let white = h.get_by_label(WHITE_SLIDER).rect().center();
+    click(&mut h, white);
+    let input = h.get_by_label("Input").rect().center();
+    click(&mut h, input);
+    h.run_steps(2);
+    h.event(egui::Event::Key { key: Key::Num3, physical_key: Some(Key::Num3), pressed: true, repeat: false, modifiers: Modifiers::ALT });
+    h.event(egui::Event::Text("£".into()));
+    h.run_steps(3);
+    assert_eq!(h.state().adjust_session.as_ref().map(|r| r.channel), Some(0), "typing in Input: the channel stays");
+}

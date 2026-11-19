@@ -554,6 +554,7 @@ fn build_setup(app: &mut PhotocraftApp, kind: &str, target: &ToneTarget, mode: C
         swatches: adjust_editors::swatches(app),
         tone: None,
         stale: false,
+        fill_reserve: None,
         reported_clipping: Default::default(),
     }
 }

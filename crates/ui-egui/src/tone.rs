@@ -149,7 +149,7 @@ fn isolate(layers: &mut [Layer], id: LayerId) -> bool {
 
 /// Hides every layer composited above `id` (later siblings, and the later siblings of each group
 /// holding it). Returns whether `id` is in `layers`.
-fn hide_above(layers: &mut [Layer], id: LayerId) -> bool {
+pub(crate) fn hide_above(layers: &mut [Layer], id: LayerId) -> bool {
     let mut found = false;
     for l in layers.iter_mut() {
         if found {

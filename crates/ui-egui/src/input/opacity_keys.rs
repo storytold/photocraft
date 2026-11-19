@@ -5,7 +5,8 @@
 //! Opacity; with tools that have no opacity of their own (Move, the selection tools, Type…) the
 //! active layer's Opacity (⇧: Fill); with the Background Eraser its Tolerance (#11907). Tools whose
 //! number is a strength or exposure are left alone.
-//! The `tools.smoothing.N` commands (⌥+digit) set the Smoothing of the tools that show it (Brush, Pencil, Eraser; #11892).
+//! The `tools.smoothing.N` commands (⌥+digit) set the Smoothing of the tools that show it (Brush, Pencil, Eraser; #11892);
+//! while Properties shows a Levels or Curves layer, ⌥2 to ⌥6 pick its channel instead (`adjust_editors::channel_keys`).
 //!
 //! The keys arrive as fired commands: the framework's `OpacityDigit` set (pair timing in `DigitKeys`) and the app
 //! catalog's `tools.smoothing.N`. Each fired command is applied once by the pass that received it, so a second pass in
@@ -67,7 +68,14 @@ fn has_smoothing(tool: Tool) -> bool {
 /// keys' own times (`Fired::time`). Returns whether the command was taken.
 pub(crate) fn fired(app: &mut PhotocraftApp, f: &Fired) -> bool {
     if let Some(d) = smoothing_digit(&f.command) {
-        if f.phase != FirePhase::Press || !has_smoothing(app.ui.tool) {
+        if f.phase != FirePhase::Press {
+            return false;
+        }
+        // Alt+2 to Alt+6 pick the channel of a Levels or Curves layer the Properties panel shows (`channel_keys`).
+        if crate::adjust_editors::channel_keys::pick(app, d) {
+            return true;
+        }
+        if !has_smoothing(app.ui.tool) {
             return false;
         }
         // A Smoothing key ends a two-digit Opacity value: 4, ⌥3, 5 is 50%, not 45%.

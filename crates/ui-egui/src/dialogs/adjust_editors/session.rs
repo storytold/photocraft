@@ -30,8 +30,14 @@ pub(crate) struct PropertiesAdjust {
     pub session: AdjustSession<AdjustValue>,
     /// The shown entry of the Channel select (an index into `values::tone_channels`).
     pub channel: usize,
-    /// The Levels clipping display.
+    /// The Levels and Curves clipping display.
     pub clipping: Option<LevelsClip>,
+    /// The pass the panel last drew the editor in: the clipping display shows only while it does.
+    /// Counted in the panel's own window (`shown_in`): egui counts passes per viewport, and a
+    /// floating Properties panel is a window of its own whose count is far behind the main one's.
+    pub shown: u64,
+    /// The viewport (OS window) the panel last drew the editor in.
+    pub shown_in: egui::ViewportId,
     /// A tone for Color Balance to show, given once: the Reset to defaults shows Midtones again.
     pub tone: Option<ColorBalanceTone>,
     /// The Color Picker a colour well opened, while it is open.
@@ -51,9 +57,22 @@ pub(crate) struct ColorPick {
 }
 
 impl PropertiesAdjust {
-    fn new(layer: LayerId) -> Self {
-        Self { layer, session: AdjustSession::new(), channel: 0, clipping: None, tone: None, pick: None }
+    pub(crate) fn new(layer: LayerId) -> Self {
+        Self { layer, session: AdjustSession::new(), channel: 0, clipping: None, shown: 0, shown_in: egui::ViewportId::ROOT, tone: None, pick: None }
     }
+
+    /// Whether the panel drew the editor in its window's current pass or the one before. A window
+    /// that has closed counts no passes, which reads as not drawn.
+    pub(crate) fn drawn_recently(&self, ctx: &egui::Context) -> bool {
+        let now = ctx.cumulative_pass_nr_for(self.shown_in);
+        now >= self.shown && now - self.shown <= 1
+    }
+}
+
+/// Where the Properties panel keeps the height of its controls under an adjustment's editor, measured in the pass
+/// before (`EditorSetup::fill_reserve`).
+pub(crate) fn controls_below_id() -> egui::Id {
+    egui::Id::unique("photocraft.properties.adjustment-controls-below")
 }
 
 /// Kinds whose Properties edits follow Photoshop's history and Reset (measured for Color Balance,
@@ -198,15 +217,25 @@ pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj
         gradients: if kind == "gradientMap" { gradient_presets(app) } else { Vec::new() },
         swatches: swatches(app),
         tone: record.tone.take(),
+        // The setup is built every pass: the display the editor reported last is the record's.
+        reported_clipping: std::cell::Cell::new(record.clipping),
+        fill_reserve: Some(ui.ctx().data(|d| d.get_temp::<f32>(controls_below_id())).unwrap_or(0.0)),
         ..Default::default()
     };
+    record.shown = ui.ctx().cumulative_pass_nr();
+    record.shown_in = ui.ctx().viewport_id();
     let armed = crate::layer_picker::armed(app).filter(|(layer, _)| *layer == id).map(|(_, picker)| picker);
     let mut picker: Option<TonePicker> = armed;
+    let clipping_before = record.clipping;
     let out = {
         let run = editor(kind, setup);
         let mut cx = AdjustDialogCx::new(AdjustContext::properties(dynamic).gray(gray), &mut picker, &mut record.channel, &mut record.clipping);
         run(ui, &mut value, &mut cx)
     };
+    // The display is painted on the main window's canvas: a floating panel's report repaints it.
+    if record.clipping != clipping_before {
+        ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+    }
     if picker != armed {
         crate::layer_picker::arm(app, id, picker);
     }
