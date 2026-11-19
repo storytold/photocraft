@@ -83,6 +83,8 @@ fn pixel_replacement_harness() -> (tempfile::TempDir, H, String) {
         let png = photocraft_io::export(&source.active().unwrap().doc, "png", &photocraft_io::ExportOptions::default()).unwrap().bytes;
         std::fs::write(dir.path().join(name), png).unwrap();
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    photocraft_raster::spill::use_test_volume_space();
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), photocraft_ui_egui::Services::default());
     app.run("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
     let layer = app.session.active().unwrap().active_layer.unwrap();
@@ -103,6 +105,8 @@ fn save_draft_and_open_apply_menu(h: &mut H, id: &str) -> String {
 #[test]
 fn apply_menu_ok_requires_a_row_but_not_variable_definitions() {
     for (rows, expected) in [(json!([]), None), (json!([{"name": "Empty", "values": []}]), Some(0))] {
+        #[cfg(not(target_arch = "wasm32"))]
+        photocraft_raster::spill::use_test_volume_space();
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), photocraft_ui_egui::Services::default());
         app.run("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
         app.run("image.variables.dataSets", json!({"dataSets": rows})).unwrap();

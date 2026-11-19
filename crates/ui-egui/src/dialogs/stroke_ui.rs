@@ -43,7 +43,7 @@ pub fn open(app: &mut PhotocraftApp) -> DialogId {
     }
     let [r, g, b, _] = app.session.tools.foreground;
     let rows = rows([r, g, b]);
-    let title = Label::from(tl!("Stroke…"));
+    let title = Label::from(tl!("Stroke"));
     open_param(app, COMMAND, DialogFields::new(), held, move |fields| {
         ParamDialog::new(COMMAND, title.clone(), Cow::Owned(rows.clone())).values(Bind::bound(fields)).remember(SaveKey::named(REMEMBER))
     })
