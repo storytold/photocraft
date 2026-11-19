@@ -335,6 +335,37 @@ pub(crate) fn has_adjustable(s: &Session) -> std::result::Result<(), String> {
     }
 }
 
+/// Image › Adjustments › Exposure: [`has_adjustable`], refused in the CMYK, Lab, Indexed Color and
+/// Multichannel documents measured in #14630 (`Session::precondition` refuses Bitmap for every
+/// adjustment but Invert). Duotone was not measured and keeps today's behaviour. An alpha channel or
+/// Quick Mask targeted in the Channels panel passes here (`edits_channel`), and one named in the
+/// params is let through those four modes by `Session::precondition` (a gray plane in any mode); a
+/// targeted layer mask never reaches this check (`channel_cmds::mask_target_enabled` answers for it).
+pub(crate) fn exposure_enabled(s: &Session) -> std::result::Result<(), String> {
+    if crate::channel_cmds::edits_channel(s) {
+        return Ok(());
+    }
+    exposure_mode_refusal(s)?;
+    has_adjustable(s)
+}
+
+/// The document-mode refusal of Exposure, independent of what the Channels panel targets.
+pub(crate) fn exposure_mode_refusal(s: &Session) -> std::result::Result<(), String> {
+    use photocraft_color::ColorMode;
+    let d = s.active().ok_or("no document open")?;
+    let mode = match d.doc.mode {
+        ColorMode::Cmyk => Some("CMYK Color"),
+        ColorMode::Lab => Some("Lab Color"),
+        ColorMode::Indexed => Some("Indexed Color"),
+        ColorMode::Multichannel => Some("Multichannel"),
+        _ => None,
+    };
+    if let Some(m) = mode {
+        return Err(format!("Exposure needs an RGB or Grayscale document (this one is {m})"));
+    }
+    Ok(())
+}
+
 /// The smart object an adjustment's pixels would go to: the layer the params resolve to (the
 /// active one by default), when the command edits its pixels and that layer is a smart object.
 /// `None` for a mask or channel target, or a layer that is not a smart object.
