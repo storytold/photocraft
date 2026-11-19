@@ -174,3 +174,46 @@ fn the_image_size_readout_counts_the_flat_image() {
     assert_eq!(bpp(json!({"width": 4, "height": 4}), &["image.mode.indexedColor"]), 1.0);
     assert_eq!(bpp(json!({"width": 4, "height": 4}), &["image.mode.grayscale", "image.mode.bitmap"]), 1.0 / 8.0);
 }
+
+/// #15483: Image Size on a 1600 x 1000 px document, opened as the menu opens it and drawn in the whole app, shows its
+/// Width and Height with their values and the Pixels unit; editing the Width with Constrain on moves the Height.
+#[test]
+fn image_size_draws_width_and_height_with_values_and_unit() {
+    use egui::vec2;
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::{NodeT, Queryable};
+
+    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).with_max_steps(8).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 1600, "height": 1000, "resolution": 72})).unwrap();
+        PhotocraftApp::with_context(cc.egui_ctx.clone(), s, crate::Services::default())
+    });
+    h.run_steps(4);
+    open(h.state_mut(), "image.imageSize").expect("a document is open");
+    h.run_steps(6);
+
+    let value_of = |h: &Harness<'_, Box<PhotocraftApp>>, label: &str| -> Vec<String> {
+        h.query_all_by_label(label).filter_map(|n| n.accesskit_node().value().map(|v| v.to_string())).collect()
+    };
+    for (label, want) in [("Width", "1600"), ("Height", "1000"), ("Resolution", "72")] {
+        let shown = value_of(&h, label);
+        assert!(shown.iter().any(|v| v == want), "{label} shows {want}: {shown:?}");
+    }
+    for unit in ["Width unit", "Height unit"] {
+        let shown = value_of(&h, unit);
+        assert!(shown.iter().any(|v| v == "Pixels"), "the {unit} select shows Pixels: {shown:?}");
+    }
+
+    let width = h.query_all_by_label("Width").find(|n| n.accesskit_node().value().is_some()).expect("the Width field");
+    width.click();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(2);
+    h.get_all_by_label("Width").find(|n| n.accesskit_node().value().is_some()).expect("the Width field").type_text("800");
+    h.run_steps(2);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(4);
+    assert!(value_of(&h, "Width").iter().any(|v| v == "800"), "Width: {:?}", value_of(&h, "Width"));
+    assert!(value_of(&h, "Height").iter().any(|v| v == "500"), "Height follows: {:?}", value_of(&h, "Height"));
+}
