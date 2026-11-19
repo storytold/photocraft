@@ -408,6 +408,28 @@ mod damage_log_tests {
     use photocraft_geom::{Rect, Size};
 
     #[test]
+    fn damage_keeps_the_effect_reach_that_existed_at_the_edit() {
+        let mut doc = Document::new("test", Size::new(40, 40), ColorMode::Rgb, SampleType::U8);
+        let mut layer = photocraft_doc::Layer::raster("empty", photocraft_color::PixelFormat::RGBA8);
+        layer.effects.items.push(photocraft_doc::Effect::default_drop_shadow());
+        doc.layers = vec![layer];
+        let mut st = DocState::new(doc, None);
+        let before = st.revision;
+        let ink = Rect::new(10, 10, 12, 12);
+        st.bump_revision(false);
+        st.last_damage = Some(ink);
+        st.record_damage();
+        let with_effect = st.damage_since(before).unwrap();
+        assert!(with_effect.width() > ink.width());
+        // An empty layer shows no pixels, so removing its effect is pixel-neutral.
+        std::sync::Arc::make_mut(&mut st.doc).layers[0].effects.items.clear();
+        st.bump_revision(false);
+        st.last_damage = Some(Rect::EMPTY);
+        st.record_damage();
+        assert_eq!(st.damage_since(before), Some(with_effect));
+    }
+
+    #[test]
     fn deeply_nested_effect_growth_falls_back_to_full_damage() {
         let mut doc = Document::new("test", Size::new(20, 20), ColorMode::Rgb, SampleType::U8);
         let mut group = photocraft_doc::Layer::group("leaf", Vec::new());

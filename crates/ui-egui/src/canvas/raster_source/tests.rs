@@ -135,6 +135,31 @@ fn neutral_revisions_preserve_a_prior_bounded_pixel_change() {
 }
 
 #[test]
+fn history_damage_includes_effect_reach_only_once() {
+    let mut app = app_with(1024, 1024, "transparent");
+    app.session
+        .edit("add effect", |doc, _| {
+            doc.layers.last_mut().unwrap().effects.items.push(photocraft_doc::Effect::default_drop_shadow());
+            Ok(())
+        })
+        .unwrap();
+    assert!(photocraft_compose::effects::margin(app.session.active().unwrap().doc.layers.last().unwrap()) > 0);
+    app.run("select.rect", json!({"x": 300, "y": 300, "width": 3, "height": 2})).unwrap();
+    let ctx = app.ctx().clone();
+    let before = CompositePrep::new(&mut app, &ctx, 0, None, None).unwrap().source(&app).revision();
+    let doc_revision = app.session.active().unwrap().revision;
+    app.run("edit.fill", json!({"color": "#cc2200"})).unwrap();
+    let damage = app.session.active().unwrap().damage_since(doc_revision).unwrap();
+    assert!(!damage.is_empty());
+    assert!(damage.x0 > 0 && damage.y0 > 0 && damage.x1 < 1024 && damage.y1 < 1024);
+    let id = app.session.active().unwrap().active_layer.unwrap();
+    app.session.select_layer(id).unwrap();
+    app.session.select_layer(id).unwrap();
+    let actual = CompositePrep::new(&mut app, &ctx, 0, None, None).unwrap().source(&app).damage(before).unwrap();
+    assert_eq!(actual, PixelRect::new(damage.x0, damage.y0, damage.x1, damage.y1));
+}
+
+#[test]
 fn display_converts_no_more_than_the_recorded_damage() {
     use craft::behavior::{CanvasView, kurbo::Point};
     use craft::ui::canvas::{Canvas, RasterDisplay};
