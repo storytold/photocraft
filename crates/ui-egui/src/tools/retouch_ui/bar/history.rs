@@ -28,7 +28,7 @@ pub(crate) fn source_caption(app: &PhotocraftApp) -> SourceCaption {
     use photocraft_engine::history_source_cmds::{HistorySource, source};
     let Some(st) = app.session.active() else { return SourceCaption::Deleted };
     let named = || match source(st)? {
-        HistorySource::Snapshot(id) => st.snapshots.iter().find(|s| s.id == id).map(|s| SourceCaption::Named(s.name.clone())),
+        HistorySource::Snapshot(id) => st.snapshots().iter().find(|s| s.id == id).map(|s| SourceCaption::Named(s.name.clone())),
         HistorySource::State(idx) => {
             let entries = st.history.entries();
             let name = if idx < entries.len() { entries.get(idx).cloned() } else { st.history.redo_labels().nth(idx - entries.len()).map(str::to_string) }?;
