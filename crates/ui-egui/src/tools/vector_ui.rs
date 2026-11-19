@@ -180,6 +180,9 @@ mod pen_draw_tests;
 mod pen_path_ops_tests;
 
 #[cfg(test)]
+mod pen_indexed_shape_tests;
+
+#[cfg(test)]
 mod pen_rubber_band_tests;
 
 #[cfg(test)]
