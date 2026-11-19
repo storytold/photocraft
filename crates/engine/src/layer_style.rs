@@ -150,8 +150,9 @@ pub fn effect_defaults(kind: &str) -> Value {
         "dropShadow" => {
             json!({"blend": "Multiply", "color": "#000000", "opacity": 75, "angle": 120, "useGlobalLight": true, "distance": 5, "spread": 0, "size": 5, "contour": "Linear", "antiAlias": false, "noise": 0, "knocksOut": true})
         }
+        // The reference application's factory Inner Shadow: 35 %, Distance 3, Size 7 (#14931).
         "innerShadow" => {
-            json!({"blend": "Multiply", "color": "#000000", "opacity": 75, "angle": 120, "useGlobalLight": true, "distance": 5, "choke": 0, "size": 5, "contour": "Linear", "antiAlias": false, "noise": 0})
+            json!({"blend": "Multiply", "color": "#000000", "opacity": 35, "angle": 120, "useGlobalLight": true, "distance": 3, "choke": 0, "size": 7, "contour": "Linear", "antiAlias": false, "noise": 0})
         }
         "outerGlow" => {
             json!({"blend": "Screen", "opacity": 75, "color": "#ffffbe", "technique": "softer", "spread": 0, "size": 5, "range": 50, "contour": "Linear", "antiAlias": false, "noise": 0})
@@ -553,14 +554,16 @@ pub fn contour_to_shc_all(list: &[&Contour]) -> Result<Vec<u8>> {
 
 /// An effect of `kind` with its factory settings (before params are applied).
 fn fresh_effect(kind: &str) -> Option<Effect> {
+    // The Inner Shadow starts at the reference application's 35 %, Distance 3, Size 7 (#14931);
+    // the Drop Shadow at today's values until its own item (#14878).
     let shadow = |inner: bool| Shadow {
-        common: FxCommon::new(BlendMode::Multiply, 0.75),
+        common: FxCommon::new(BlendMode::Multiply, if inner { 0.35 } else { 0.75 }),
         color: Color::BLACK,
         angle: 120.0,
         use_global_light: true,
-        distance: 5.0,
+        distance: if inner { 3.0 } else { 5.0 },
         spread: 0.0,
-        size: 5.0,
+        size: if inner { 7.0 } else { 5.0 },
         contour: Contour::Linear,
         anti_alias: false,
         noise: 0.0,
@@ -1147,7 +1150,7 @@ pub fn specs() -> Vec<CommandSpec> {
         style_cmd!(
             "innerShadow",
             "Inner Shadow…",
-            r##"{"color":"#rrggbb","opacity":0..100=75,"blend":str,"angle":deg,"distance":px,"choke":0..100,"size":px,"contour":name|curve,"antiAlias":bool,"noise":0..100,"add":bool}"##
+            r##"{"color":"#rrggbb","opacity":0..100=35,"blend":str,"angle":deg,"distance":px=3,"choke":0..100,"size":px=7,"contour":name|curve,"antiAlias":bool,"noise":0..100,"add":bool}"##
         ),
         style_cmd!(
             "outerGlow",
@@ -1279,3 +1282,7 @@ fn exact_stops(p: &Value) -> Option<Vec<(f32, Color)>> {
         })
         .collect()
 }
+
+#[cfg(test)]
+#[path = "layer_style/inner_shadow_defaults_tests.rs"]
+mod inner_shadow_defaults_tests;
