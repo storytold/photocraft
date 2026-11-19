@@ -371,6 +371,43 @@ fn auto_blend_budget_counts_layers_and_channels() {
 }
 
 #[test]
+fn auto_blend_budget_counts_the_score_and_winner_planes_in_both_stack_modes() {
+    assert_eq!(blend_bytes_per_pixel(12, 4, false), 12 * (4 + 4) * 4);
+    assert_eq!(blend_bytes_per_pixel(32, 4, true), 32 * (4 + 4) * 4);
+}
+
+#[test]
+fn auto_blend_stack_rejects_a_budget_below_its_weight_peak() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8, "background": "transparent"})).unwrap();
+    let mut layers = Vec::new();
+    for index in 0..12 {
+        let name = format!("Focus layer {index}");
+        s.execute("layer.new.layer", json!({"name": name})).unwrap();
+        let id = s.active().unwrap().active_layer.unwrap();
+        s.edit(name.as_str(), |doc, _| {
+            doc.layer_mut(id).unwrap().surface_mut().unwrap().fill_rect(Rect::new(0, 0, 8, 8), &[0.2, 0.4, 0.5, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+        layers.push(id);
+    }
+    select(&mut s, &layers);
+
+    let before = s.active().unwrap().doc.clone();
+    let steps = s.active().unwrap().history.past_len();
+    let peak = 8 * 8 * 12 * (4 + 4) * 4;
+    let rejected = s.execute("edit.autoBlendLayers", json!({"method": "stack", "seamlessTones": false, "memoryBudget": peak - 1})).unwrap_err().to_string();
+    assert!(rejected.contains("memoryBudget") && rejected.contains("8 x 8"), "{rejected}");
+    assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &before));
+    assert_eq!(s.active().unwrap().history.past_len(), steps);
+
+    let result = s.execute("edit.autoBlendLayers", json!({"method": "stack", "seamlessTones": false, "memoryBudget": peak})).unwrap();
+    assert!(result["blended"].is_null());
+    assert_eq!(s.active().unwrap().history.past_len(), steps + 1);
+}
+
+#[test]
 fn auto_blend_budget_for_three_full_resolution_photos() {
     let pixels = 6_192 * 4_128;
     let two = pixels * blend_bytes_per_pixel(2, 4, true);
