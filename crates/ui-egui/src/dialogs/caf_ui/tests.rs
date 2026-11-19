@@ -457,6 +457,27 @@ fn custom_sampling_with_nothing_painted_hints_instead_of_failing() {
     assert!(d["previewHint"].is_null() && d["previewError"].is_null(), "the fill previews: {d}");
 }
 
+/// The texts the last frame painted.
+fn painted(app: &PhotocraftApp) -> Vec<String> {
+    app.canvas_tools.frames.as_ref().map(|f| f.texts().iter().map(|t| t.text.clone()).collect()).unwrap_or_default()
+}
+
+/// Custom with nothing painted is not a failed preview in the workspace either: the framework draws no red "Preview
+/// failed" notice over the image, which shows unfilled (#10621, FredApps on #10624).
+#[test]
+fn custom_with_nothing_painted_shows_no_failed_preview_in_the_workspace() {
+    let mut app = app_with_selection();
+    open(&mut app).unwrap();
+    settle(&mut app, |d| d["previewReady"] == json!(true));
+    let before = runs(&app);
+    ui(&mut app, json!({"sampling": "custom"})).unwrap();
+    settle_after(&mut app, before, hint);
+    pass(&mut app);
+    let texts = painted(&app);
+    assert!(texts.iter().any(|t| t.contains("Sampling")), "the workspace is on screen: {texts:?}");
+    assert!(!texts.iter().any(|t| t.contains("Preview failed")), "no failed-preview notice: {texts:?}");
+}
+
 /// Erasing everything the Sampling Brush added in Custom leaves the area as empty as before anything was painted: the
 /// same hint, the image unfilled, and Apply and OK say so too, without running the fill and without an error in the
 /// status bar or the app's panel error (#10621).

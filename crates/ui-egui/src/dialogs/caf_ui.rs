@@ -233,10 +233,9 @@ impl FillSource for PcFillSource {
         let command = FillCommand::new(&request.session, &request.settings);
         let params = plan_params(&command, layer);
         // Custom with nothing to sample is how Photoshop starts it, not a failure: the image shows unfilled and the
-        // Preview says to paint with the Sampling Brush (#10621). With no added stroke the plan isn't run at all.
+        // facts carry the Sampling Brush hint (#10621). With no added stroke the plan isn't run at all.
         let custom = command.sampling == SamplingMode::Custom;
         let unpainted = custom_without_added_strokes(&command);
-        let hint = tl!(CUSTOM_HINT).to_string();
         let (picture, shown_error, runs, unfilled) =
             (Arc::clone(&self.preview), Arc::clone(&self.preview_error), Arc::clone(&self.preview_runs), Arc::clone(&self.unfilled));
         Job::new(move |progress, cancel| {
@@ -252,10 +251,13 @@ impl FillSource for PcFillSource {
             }
             let mut shown = shown_error.lock().unwrap_or_else(PoisonError::into_inner);
             match filled {
+                // A finished preview, not a failed one: `preview()` gives no picture while `unfilled` is set, so the
+                // pane shows the image unfilled, and the framework draws no "Preview failed" notice over it.
+                // `previewHint` still tells scripts what to do (FredApps on #10624).
                 Err(e) if custom && e == NOTHING_TO_SAMPLE => {
                     unfilled.store(true, Ordering::Relaxed);
                     *shown = None;
-                    Err(hint)
+                    Ok(PreviewDone::new(started.elapsed()))
                 }
                 Ok((rect, image, factor)) => {
                     picture.replace_at([rect.x0, rect.y0], image, factor);
