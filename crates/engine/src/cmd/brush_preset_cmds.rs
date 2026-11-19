@@ -115,20 +115,16 @@ fn rename(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Rename preset `i` (shared by Brush Settings and Edit › Presets › Preset Manager): refuses a
 /// name another preset has (case-insensitively), makes the preset the user's and keeps the
-/// current preset pointing at it.
+/// current preset and the other tools' (`ToolState::tool_presets`) pointing at it.
 pub(crate) fn rename_at(s: &mut Session, i: usize, new: &str, cmd: &str) -> Result<()> {
     if index_of(&s.tools.presets, new).is_some_and(|j| j != i) {
         return Err(bad(cmd, format!("a brush preset named `{new}` already exists")));
     }
     let pr = s.tools.presets.get_mut(i).ok_or_else(|| bad(cmd, "no such preset"))?;
     if pr.name != new {
-        let was_current = s.tools.current_preset.as_ref().is_some_and(|c| c.eq_ignore_ascii_case(&pr.name));
-        pr.name = new.to_string();
+        let old = std::mem::replace(&mut pr.name, new.to_string());
         pr.builtin = false;
-        if was_current {
-            s.tools.current_preset = Some(new.to_string());
-            s.tools.brush_changed();
-        }
+        s.tools.rename_preset_refs(&old, new);
         s.brush_presets_changed();
     }
     Ok(())
@@ -440,10 +436,7 @@ fn delete_group(s: &mut Session, p: &Value) -> Result<Value> {
     let (g, f) = target_folder(s, p, cmd)?;
     let before = s.tools.presets.len();
     s.tools.presets.retain(|x| !in_folder(x, &g, &f));
-    if s.tools.current_preset.as_ref().is_some_and(|c| !s.tools.presets.iter().any(|x| x.name.eq_ignore_ascii_case(c))) {
-        s.tools.current_preset = None;
-        s.tools.brush_changed();
-    }
+    s.tools.forget_missing_presets();
     s.brush_presets_changed();
     Ok(json!({ "deleted": before - s.tools.presets.len(), "count": s.tools.presets.len() }))
 }

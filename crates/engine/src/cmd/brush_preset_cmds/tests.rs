@@ -324,3 +324,22 @@ fn bad_moves_into_folders_fail_without_changes() {
     });
     assert!(s.execute("brush.presets.moveGroup", json!({"group": "", "into": {"group": "Set"}})).is_err());
 }
+
+/// The presets other tools' brushes were picked from (#9014) follow the library like the current
+/// one: a rename (Brushes panel or Preset Manager) renames them, a delete (one preset, a group, or
+/// the Preset Manager) drops them, so a tool never comes back marking an old name or a later
+/// preset that reuses a deleted one's name.
+#[test]
+fn other_tools_presets_follow_renames_and_deletes() {
+    let mut s = with_groups();
+    let refs = |s: &Session| s.tools.tool_presets.iter().map(|(t, n)| format!("{t}:{n}")).collect::<Vec<_>>();
+    s.tools.tool_presets = [("Eraser", "A1"), ("Pencil", "A2"), ("Smudge", "B1"), ("Blur", "B2")].map(|(t, n)| (t.into(), n.into())).to_vec();
+    s.execute("brush.presets.rename", json!({"name": "a1", "newName": "Eraser tip"})).unwrap();
+    s.execute("edit.presets.presetManager", json!({"action": "rename", "kind": "brushes", "name": "A2", "newName": "Pencil tip"})).unwrap();
+    assert_eq!(refs(&s), ["Eraser:Eraser tip", "Pencil:Pencil tip", "Smudge:B1", "Blur:B2"]);
+    s.execute("brush.presets.delete", json!({"name": "Eraser tip"})).unwrap();
+    s.execute("edit.presets.presetManager", json!({"action": "delete", "kind": "brushes", "name": "Pencil tip"})).unwrap();
+    assert_eq!(refs(&s), ["Smudge:B1", "Blur:B2"]);
+    s.execute("brush.presets.deleteGroup", json!({"group": "Beta"})).unwrap();
+    assert!(refs(&s).is_empty());
+}

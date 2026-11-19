@@ -114,8 +114,8 @@ pub(super) fn preset_manager(s: &mut Session, p: &Value) -> Result<Value> {
         }
         "delete" => match kind.as_str() {
             "brushes" => {
-                let gone = s.tools.presets.remove(i);
-                crate::brush_cmds::forget_deleted_preset(s, &gone.name);
+                s.tools.presets.remove(i);
+                crate::brush_cmds::forget_deleted_preset(s);
             }
             "patterns" => drop(s.patterns.items.remove(i)),
             _ => drop(s.edit_state.custom_shapes.remove(i)),
