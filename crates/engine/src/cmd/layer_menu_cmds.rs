@@ -716,7 +716,7 @@ fn blend_range(v: &Value) -> Option<BlendRange> {
 }
 
 fn global_light(s: &mut Session, p: &Value) -> Result<Value> {
-    let cur = s.active().ok_or(EngineError::NoDocument)?.doc.global_light;
+    let cur = s.active().map_or_else(|| s.prefs().global_light, |st| st.doc.global_light);
     // Read as f64 and reject what f32 can't hold: 1e39 would become inf, and rem_euclid NaN.
     let f32_param = |key: &str, default: f32| match p.get(key).and_then(Value::as_f64) {
         None => Ok(default),
@@ -729,11 +729,18 @@ fn global_light(s: &mut Session, p: &Value) -> Result<Value> {
     if angle == -180.0 && raw_angle > 0.0 {
         angle = 180.0;
     }
-    s.edit("Global Light", |doc, _| {
-        doc.global_light.angle = angle;
-        doc.global_light.altitude = altitude;
-        Ok(())
-    })?;
+    if s.active().is_some() {
+        s.edit("Global Light", |doc, _| {
+            doc.global_light.angle = angle;
+            doc.global_light.altitude = altitude;
+            Ok(())
+        })?;
+    } else {
+        s.prefs.edit(|prefs| {
+            prefs.global_light.angle = angle;
+            prefs.global_light.altitude = altitude;
+        });
+    }
     Ok(json!({"angle": angle, "altitude": altitude}))
 }
 
@@ -1084,7 +1091,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Global Light…",
             ["Layer", "Layer Style"],
             r##"{"angle":-360..360=120,"altitude":0..90=30}"##,
-            has_doc,
+            crate::cmd::enabled::always,
             global_light
         ),
         spec!("layer.layerStyle.createLayer", "Create Layer", ["Layer", "Layer Style"], r##"{"layer":id?}"##, has_effects, create_layer),
@@ -1124,5 +1131,7 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+#[cfg(test)]
+mod global_light_new_document_default_tests;
 #[cfg(test)]
 mod tests;
