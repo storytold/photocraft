@@ -243,6 +243,10 @@ impl PhotocraftApp {
                 } else {
                     // Shift+Tab hides the panels and keeps the tools: the toolbar is a panel of the dock.
                     let panels_hidden = cx.shell().is_some_and(|shell| shell.panels_hidden());
+                    if panels_hidden {
+                        // Hidden panels draw nothing: the Timeline's keys must not work where its panel was.
+                        crate::timeline_ui::clear_panel_rect(app);
+                    }
                     crate::panel_docking::show(app, ui, panels_hidden);
                 }
                 notices::show(app, ui);

@@ -34,6 +34,7 @@ pub mod color_hud;
 pub mod color_panel_ui;
 pub mod comps_ui;
 pub mod doc_props_ui;
+pub mod frame_strip_ui;
 pub mod histogram_panel;
 pub(crate) mod history;
 pub mod history_menu_ui;

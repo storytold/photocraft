@@ -30,10 +30,13 @@ fn ico(entries: u16) -> Vec<u8> {
     out
 }
 
-/// An animated GIF records how many frames it holds; a single frame records nothing.
+/// An animated GIF opens with all its frames as layers, so it leaves no image unopened to record.
 #[test]
-fn an_animation_records_its_frame_count() {
-    assert_eq!(import("a.gif", &gif(2)).unwrap().document.file_encoding.source_images, Some(2));
+fn an_animated_gif_opens_whole_and_records_no_unopened_images() {
+    // An animated GIF opens with every frame as a layer, so no image of the file is left unopened.
+    let animated = import("a.gif", &gif(2)).unwrap().document;
+    assert_eq!(animated.layers.len(), 2);
+    assert_eq!(animated.file_encoding.source_images, None);
     assert_eq!(import("a.gif", &gif(1)).unwrap().document.file_encoding.source_images, None);
 }
 

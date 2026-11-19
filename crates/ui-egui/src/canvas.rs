@@ -41,6 +41,7 @@ pub mod guide_select;
 pub mod layer_pick_ui;
 pub mod move_ui;
 mod navigator;
+pub(crate) mod onion_skin;
 pub mod outline;
 pub mod paint_mouse;
 mod paint_thread;
