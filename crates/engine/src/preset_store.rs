@@ -822,6 +822,29 @@ pub fn open_dir_async(root: std::path::PathBuf) -> std::sync::mpsc::Receiver<Ope
     rx
 }
 
+trait PresetList {
+    fn view(&self) -> &[BrushPreset];
+    fn view_mut(&mut self) -> &mut [BrushPreset];
+}
+
+impl PresetList for [BrushPreset] {
+    fn view(&self) -> &[BrushPreset] {
+        self
+    }
+    fn view_mut(&mut self) -> &mut [BrushPreset] {
+        self
+    }
+}
+
+impl PresetList for std::sync::Arc<Vec<BrushPreset>> {
+    fn view(&self) -> &[BrushPreset] {
+        self.as_slice()
+    }
+    fn view_mut(&mut self) -> &mut [BrushPreset] {
+        std::sync::Arc::make_mut(self).as_mut_slice()
+    }
+}
+
 impl PresetStore {
     /// `actions.json` exists but could not be read: it is left as it is and never written.
     pub fn actions_load_failed(&self) -> bool {
@@ -880,9 +903,17 @@ impl PresetStore {
     /// removed ones and their unreferenced tips, update the index. The bitmaps of every group
     /// written become stored tiles (#1843): the files hold them, so the presets keep previews only.
     pub fn sync(&mut self, presets: &mut [BrushPreset]) {
+        self.sync_inner(presets);
+    }
+
+    fn sync_shared(&mut self, presets: &mut std::sync::Arc<Vec<BrushPreset>>) {
+        self.sync_inner(presets);
+    }
+
+    fn sync_inner<P: PresetList + ?Sized>(&mut self, presets: &mut P) {
         // User presets by group, in first-appearance order.
         let mut order: Vec<(String, Vec<usize>)> = Vec::new();
-        for (i, p) in presets.iter().enumerate().filter(|(_, p)| !p.builtin) {
+        for (i, p) in presets.view().iter().enumerate().filter(|(_, p)| !p.builtin) {
             match order.iter_mut().find(|(g, _)| *g == p.group) {
                 Some((_, v)) => v.push(i),
                 None => order.push((p.group.clone(), vec![i])),
@@ -895,7 +926,7 @@ impl PresetStore {
             let unchanged = self
                 .groups
                 .get(&file)
-                .is_some_and(|s| !s.stale && s.presets.len() == idx.len() && s.presets.iter().zip(idx).all(|(a, &i)| presets.get(i) == Some(a)));
+                .is_some_and(|s| !s.stale && s.presets.len() == idx.len() && s.presets.view().iter().zip(idx).all(|(a, &i)| presets.view().get(i) == Some(a)));
             if unchanged {
                 continue;
             }
@@ -906,7 +937,7 @@ impl PresetStore {
                 ));
                 continue;
             }
-            let mut items: Vec<&mut BrushPreset> = presets.iter_mut().filter(|p| !p.builtin && p.group == *group).collect();
+            let mut items: Vec<&mut BrushPreset> = presets.view_mut().iter_mut().filter(|p| !p.builtin && p.group == *group).collect();
             if let Err(e) = self.write_group(&file, group, &mut items) {
                 self.warnings.push(format!("Couldn't save brush presets `{}`: {e}", if group.is_empty() { "(ungrouped)" } else { group }));
             }
@@ -929,14 +960,16 @@ impl PresetStore {
             }
         }
         // Index: group order and deleted built-ins.
-        let hidden: Vec<String> = builtin_names().iter().filter(|n| !presets.iter().any(|p| p.name.eq_ignore_ascii_case(n))).map(|n| n.to_string()).collect();
+        let hidden: Vec<String> =
+            builtin_names().iter().filter(|n| !presets.view().iter().any(|p| p.name.eq_ignore_ascii_case(n))).map(|n| n.to_string()).collect();
         let groups: Vec<String> = files.into_iter().filter(|f| self.groups.contains_key(f)).collect();
         // The full order is only saved once it differs from the default (built-ins, then the rest).
-        let order: Vec<String> = presets.iter().map(|p| p.name.clone()).collect();
-        let default_order: Vec<String> = presets.iter().filter(|p| p.builtin).chain(presets.iter().filter(|p| !p.builtin)).map(|p| p.name.clone()).collect();
+        let order: Vec<String> = presets.view().iter().map(|p| p.name.clone()).collect();
+        let default_order: Vec<String> =
+            presets.view().iter().filter(|p| p.builtin).chain(presets.view().iter().filter(|p| !p.builtin)).map(|p| p.name.clone()).collect();
         let builtins_in_order = {
             let names = builtin_names();
-            let mut it = presets.iter().filter(|p| p.builtin).map(|p| names.iter().position(|n| *n == p.name));
+            let mut it = presets.view().iter().filter(|p| p.builtin).map(|p| names.iter().position(|n| *n == p.name));
             let first = it.next().flatten();
             it.try_fold(first, |prev, cur| match (prev, cur) {
                 (Some(a), Some(b)) if b > a => Some(Some(b)),
@@ -1103,7 +1136,7 @@ impl PresetStore {
 
 fn builtin_names() -> &'static [String] {
     static NAMES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
-    NAMES.get_or_init(|| photocraft_paint::presets::builtin().into_iter().map(|p| p.name).collect())
+    NAMES.get_or_init(|| photocraft_paint::presets::builtin_shared().iter().map(|p| p.name.clone()).collect())
 }
 
 impl Session {
@@ -1141,19 +1174,30 @@ impl Session {
                 }
             }
         }
-        let lib = &mut self.tools.presets;
-        lib.retain(|p| !(p.builtin && hidden_builtins.iter().any(|h| h.eq_ignore_ascii_case(&p.name))));
-        for p in presets {
-            match lib.iter_mut().find(|x| x.name.eq_ignore_ascii_case(&p.name)) {
-                Some(x) if x.builtin => *x = p,
-                Some(_) => {}
-                None => lib.push(p),
+        let order_changes = if order.is_empty() {
+            false
+        } else {
+            let pos: HashMap<String, usize> = order.iter().enumerate().map(|(i, name)| (name.to_lowercase(), i)).collect();
+            !self.tools.presets.iter().map(|p| pos.get(&p.name.to_lowercase()).copied().unwrap_or(usize::MAX)).is_sorted()
+        };
+        let changes_presets = order_changes
+            || self.tools.presets.iter().any(|p| p.builtin && hidden_builtins.iter().any(|h| h.eq_ignore_ascii_case(&p.name)))
+            || presets.iter().any(|p| self.tools.presets.iter().find(|x| x.name.eq_ignore_ascii_case(&p.name)).is_none_or(|x| x.builtin && x != p));
+        if changes_presets {
+            let lib = std::sync::Arc::make_mut(&mut self.tools.presets);
+            lib.retain(|p| !(p.builtin && hidden_builtins.iter().any(|h| h.eq_ignore_ascii_case(&p.name))));
+            for p in presets {
+                match lib.iter_mut().find(|x| x.name.eq_ignore_ascii_case(&p.name)) {
+                    Some(x) if x.builtin => *x = p,
+                    Some(_) => {}
+                    None => lib.push(p),
+                }
             }
-        }
-        // The saved panel order (stable: presets it doesn't name keep their order, at the end).
-        if !order.is_empty() {
-            let pos: HashMap<String, usize> = order.iter().enumerate().map(|(i, n)| (n.to_lowercase(), i)).collect();
-            lib.sort_by_key(|p| pos.get(&p.name.to_lowercase()).copied().unwrap_or(usize::MAX));
+            // The saved panel order (stable: presets it doesn't name keep their order, at the end).
+            if !order.is_empty() {
+                let pos: HashMap<String, usize> = order.iter().enumerate().map(|(i, n)| (n.to_lowercase(), i)).collect();
+                lib.sort_by_key(|p| pos.get(&p.name.to_lowercase()).copied().unwrap_or(usize::MAX));
+            }
         }
         self.preset_store = Some(store);
         // Clear All, Reset or Replace before the store loaded made the session's list the whole
@@ -1204,7 +1248,7 @@ impl Session {
         let rev = self.tools.presets_rev;
         if let Some(st) = self.preset_store.as_mut() {
             if st.synced_rev != Some(rev) {
-                st.sync(&mut self.tools.presets);
+                st.sync_shared(&mut self.tools.presets);
                 st.synced_rev = Some(rev);
                 if link_stored_tips(st, &mut self.tools.brush) {
                     // An embedded tip became a store reference: what the last-brush
