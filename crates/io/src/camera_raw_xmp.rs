@@ -20,6 +20,7 @@
 //! Filter has none). Without `HasCrop`, or with `HasCrop="False"`, the crop keys are stale and
 //! mean nothing. A straightened crop (`CropAngle` other than 0) isn't applied.
 
+use craft::imaging::raw::VignetteStyle;
 pub use craft_crs::{CROP_KEYS, CRS_NS, Crop, MAX_XMP_BYTES};
 use craft_crs::{CropState, Settings, Value, number, points, signed, toolkit};
 use photocraft_algo::camera_raw::{CameraRaw, validate_curve};
@@ -122,7 +123,7 @@ const CURVES: &[(&str, Curve)] = &[
     ("ToneCurvePV2012Blue", |p| &mut p.point_curve_blue),
 ];
 
-const STYLES: &[(&str, &str)] = &[("1", "highlightPriority"), ("2", "colorPriority"), ("3", "paintOverlay")];
+const STYLES: &[(&str, VignetteStyle)] = &[("1", VignetteStyle::HighlightPriority), ("2", VignetteStyle::ColorPriority), ("3", VignetteStyle::PaintOverlay)];
 
 /// Bookkeeping fields Camera Raw writes that carry no setting.
 const METADATA: &[&str] = &[
@@ -208,7 +209,7 @@ fn apply_text(params: &mut CameraRaw, report: &mut LoadReport, name: &str, value
     } else if name == "PostCropVignetteStyle" {
         match STYLES.iter().find(|(n, _)| *n == value.trim()) {
             Some((_, style)) => {
-                params.vignette_style = (*style).into();
+                params.vignette_style = *style;
                 report.applied += 1;
             }
             None => report.ignored.push(name.to_string()),
@@ -315,6 +316,20 @@ pub fn save_with_crop(params: &CameraRaw, crop: Option<Crop>) -> String {
 mod tests {
     use super::*;
 
+    /// `CameraRaw` with the named fields set (the type is `#[non_exhaustive]`, so no struct expression), or a copy of a base with them set.
+    macro_rules! cr {
+        ($($f:ident : $v:expr),* $(,)?) => {{
+            let mut s = CameraRaw::default();
+            $(s.$f = $v;)*
+            s
+        }};
+        ($base:expr => $($f:ident : $v:expr),* $(,)?) => {{
+            let mut s: CameraRaw = $base;
+            $(s.$f = $v;)*
+            s
+        }};
+    }
+
     /// A hand-written settings file laid out as Photoshop 26's Camera Raw Filter saves one (the
     /// field set and order follow Camera Raw 18; the values are synthetic), plus element-form
     /// settings, which XMP allows and some writers use.
@@ -382,17 +397,15 @@ mod tests {
 
     #[test]
     fn save_then_load_round_trips() {
-        let mut p = CameraRaw {
-            temperature: -12.0,
-            exposure: 1.25,
-            contrast: 30.0,
-            sharpen_radius: 1.4,
-            vignette_amount: -40.0,
-            vignette_style: "paintOverlay".into(),
-            curve_splits: [20.0, 45.0, 80.0],
-            point_curve: vec![[0.0, 10.0], [128.0, 150.0], [255.0, 240.0]],
-            ..CameraRaw::default()
-        };
+        let mut p = cr! {
+        temperature: -12.0,
+        exposure: 1.25,
+        contrast: 30.0,
+        sharpen_radius: 1.4,
+        vignette_amount: -40.0,
+        vignette_style: VignetteStyle::PaintOverlay,
+        curve_splits: [20.0, 45.0, 80.0],
+        point_curve: vec![[0.0, 10.0], [128.0, 150.0], [255.0, 240.0]]};
         p.hsl_lum[5] = -33.0;
         p.grade_shadows.hue = 210.0;
         p.grade_shadows.sat = 40.0;
@@ -408,7 +421,7 @@ mod tests {
 
     #[test]
     fn load_applies_only_the_settings_in_the_file() {
-        let mut p = CameraRaw { contrast: 40.0, ..CameraRaw::default() };
+        let mut p = cr! { contrast: 40.0};
         let xmp = br#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
             <rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"><crs:Exposure2012>-9</crs:Exposure2012>
             <crs:Clarity2012>abc</crs:Clarity2012></rdf:Description></rdf:RDF></x:xmpmeta>"#;
@@ -419,7 +432,7 @@ mod tests {
 
     #[test]
     fn malformed_input_is_an_error_and_leaves_settings_alone() {
-        let before = CameraRaw { exposure: 0.5, ..CameraRaw::default() };
+        let before = cr! { exposure: 0.5};
         for bad in [
             &b""[..],
             b"\xff\xfe\x00garbage",
@@ -443,7 +456,7 @@ mod tests {
 
     #[test]
     fn is_photocraft_xmp_reads_the_toolkit_marker() {
-        let own = save(&CameraRaw { contrast: 15.0, ..CameraRaw::default() });
+        let own = save(&cr! { contrast: 15.0});
         assert!(is_photocraft_xmp(own.as_bytes()));
         let wrapped = format!("\u{feff}<?xpacket begin=\"\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n{own}<?xpacket end=\"w\"?>");
         assert!(is_photocraft_xmp(wrapped.as_bytes()), "an xpacket wrapper and a byte order mark");
@@ -557,7 +570,7 @@ mod tests {
 
     #[test]
     fn save_with_crop_round_trips() {
-        let p = CameraRaw { contrast: 20.0, ..CameraRaw::default() };
+        let p = cr! { contrast: 20.0};
         let crop = Crop { top: 0.125, left: 0.25, bottom: 0.875, right: 0.5 };
         let text = save_with_crop(&p, Some(crop));
         assert!(is_photocraft_xmp(text.as_bytes()));
