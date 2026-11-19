@@ -3,6 +3,8 @@
 //! builds a context per test exhausted the desktop's bus and took the session down.
 #![cfg(target_os = "linux")]
 
+use std::time::{Duration, Instant};
+
 use craft::ui::runtime::env::SystemReader;
 use photocraft_ui_egui::PhotocraftApp;
 
@@ -16,12 +18,25 @@ fn watcher_threads() -> usize {
         .count()
 }
 
+/// [`watcher_threads`] once there are at least `n`, or after `within` if there never are: a
+/// spawned thread names itself once it runs, which can be after `spawn` returns.
+fn watcher_threads_reaching(n: usize, within: Duration) -> usize {
+    let deadline = Instant::now() + within;
+    loop {
+        let count = watcher_threads();
+        if count >= n || Instant::now() >= deadline {
+            return count;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 #[test]
 fn headless_contexts_start_no_appearance_watcher() {
     // A watcher started directly must be counted, or a renamed worker would pass this test.
     let control = SystemReader::start(|| {});
     assert!(control.watching(), "the platform starts a watcher on Linux");
-    let before = watcher_threads();
+    let before = watcher_threads_reaching(1, Duration::from_secs(5));
     assert!(before >= 1, "the control watcher's thread is counted");
     for _ in 0..3 {
         let ctx = egui::Context::default();
