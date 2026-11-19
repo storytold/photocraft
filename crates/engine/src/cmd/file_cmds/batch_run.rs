@@ -684,9 +684,6 @@ pub(crate) fn check_batch_depth(s: &Session, cmd: &str) -> Result<()> {
 
 pub(crate) fn batch_action(list: &[crate::actions_cmds::Action], p: &Value) -> Result<usize> {
     const CMD: &str = "file.automate.batch";
-    if p.get("actionId").is_some() {
-        return crate::actions_cmds::resolve_play_target(list, p, CMD);
-    }
     if let Some(set) = p.get("set").filter(|v| !v.is_null()) {
         let set = set.as_str().ok_or_else(|| EngineError::BadParams { cmd: CMD.into(), msg: "set must be a string".into() })?;
         let name =
@@ -760,37 +757,38 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // Steps that call another action play it from the caller's actions; the playback stack comes
     // along so an action that batches itself is caught as a recursive call.
-    let embedded = p.get("calledActions").filter(|value| !value.is_null());
-    let list = match embedded {
-        None => s.actions.list.clone(),
-        // A droplet brings the actions it calls (#2794) and runs with those alone.
+    let called = match p.get("calledActions") {
+        None | Some(Value::Null) => s.actions.called.clone(),
+        // A droplet brings the actions it calls (#2794) and plays from those alone.
         Some(v) => {
-            let list: Vec<crate::actions_cmds::Action> =
+            let actions: Vec<crate::actions_cmds::Action> =
                 serde_json::from_value(v.clone()).map_err(|e| EngineError::BadParams { cmd: cmd.into(), msg: format!("\"calledActions\": {e}") })?;
-            if list.len() > 4096 {
+            if actions.len() > 4096 {
                 return Err(EngineError::BadParams { cmd: cmd.into(), msg: "\"calledActions\" holds more than 4096 actions".into() });
             }
-            list
+            // In the droplet's order, so its calls by index keep their targets: a captured set can
+            // hold two actions of one name, which `push` would refuse and `from_file` renames.
+            Some(crate::actions_cmds::ActionList::from_file(crate::actions_cmds::ActionsFile::new(actions, Vec::new())))
         }
     };
-    let mut called_target = None;
+    let mut called_name = None;
     let mut steps = if let Some(st) = p.get("steps") {
         parse_steps(st)?
     } else if let Some(act) = p.get("action").filter(|v| v.is_array()) {
         parse_steps(act)?
     } else {
         // The caller selects the source; calledActions supplies only its internal namespace.
-        let index = batch_action(&s.actions.list, p)?;
-        let (row, action, _) = crate::actions_cmds::playback_plan_at(s, &json!({"action": index}))?;
-        called_target = Some(crate::actions_cmds::PlaybackTarget::at(s, row, &action));
-        action.enabled_steps().map(|(_, (id, params))| (id.clone(), params.clone())).collect()
+        let index = batch_action(s.actions.playable().actions(), p)?;
+        let (_, action, _) = crate::actions_cmds::playback_plan(s, &json!({"action": index}))?;
+        called_name = Some(action.name.clone());
+        action.enabled_steps().map(|(_, step)| (step.command.clone(), step.params.clone())).collect()
     };
     let action_name = s
         .action_history
         .as_ref()
         .map(|group| group.name.clone())
-        .or_else(|| s.actions.playback_stack.first().map(|target| target.name.clone()))
-        .or_else(|| called_target.as_ref().map(|target| target.name.clone()))
+        .or_else(|| s.actions.playback_stack.first().cloned())
+        .or_else(|| called_name.clone())
         .or_else(|| p.get("action").and_then(Value::as_str).map(str::to_string))
         .or_else(|| p.get("action").and_then(|action| action.get("name")).and_then(Value::as_str).map(str::to_string))
         .unwrap_or_else(|| "Batch".into());
@@ -838,7 +836,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     // hands the count on, so nested batches cannot multiply past the limit. A top-level named
     // action starts fresh; standalone explicit steps retain their existing behavior. A batch nested
     // in another batch (a droplet a droplet runs) is charged the same way, so the levels share one budget.
-    let named = called_target.is_some();
+    let named = called_name.is_some();
     let nested = s.actions.playing > 0 || s.actions.batch_depth > 0;
     let mut playback_steps = 0;
     if nested || named {
@@ -853,12 +851,12 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let mut playback_stack = s.actions.playback_stack.clone();
-    playback_stack.extend(called_target);
+    playback_stack.extend(called_name);
     let actions = crate::actions_cmds::ActionState {
-        list,
+        list: s.actions.list.clone(),
+        called,
         playing: if named { s.actions.playing.saturating_add(1) } else { s.actions.playing },
         playback_stack,
-        playback_namespace: s.actions.playback_namespace + usize::from(embedded.is_some()),
         playback_steps,
         script_depth: s.actions.script_depth,
         script_steps: s.actions.script_steps,
@@ -870,21 +868,21 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         let save = SaveOpts::from_params(s, p, cmd)?;
         // A caller's recording index belongs to its original library, not an embedded namespace.
         // As in ordinary named playback, suspend it while executing and restore the Batch owner.
-        let previous_recording = if named || embedded.is_some() {
+        let previous_recording = if named {
             crate::actions_cmds::flush_recording(s)?;
             s.actions.recording.take()
         } else {
             None
         };
-        // Swap only execution context, retaining the recorder, revision and script counters.
+        // Swap only the execution context (the playback counters and the actions playback calls);
+        // the user's list, the recorder and the script counters stay.
         let previous_playing = std::mem::replace(&mut s.actions.playing, actions.playing);
         let previous_stack = std::mem::replace(&mut s.actions.playback_stack, actions.playback_stack);
         let previous_steps = std::mem::replace(&mut s.actions.playback_steps, actions.playback_steps);
-        let previous_namespace = std::mem::replace(&mut s.actions.playback_namespace, actions.playback_namespace);
         // The nesting depth and shared budget of the levels above travel with the run too.
         let previous_shared = std::mem::replace(&mut s.actions.budget_shared, actions.budget_shared);
         let previous_depth = std::mem::replace(&mut s.actions.batch_depth, actions.batch_depth);
-        let previous_list = embedded.is_some().then(|| std::mem::replace(&mut s.actions.list, actions.list));
+        let previous_called = std::mem::replace(&mut s.actions.called, actions.called);
         let owns_history = s.action_history.is_none() && s.prefs().actions.create_single_history_state;
         if owns_history {
             crate::actions_cmds::begin_document_history(s, &action_name);
@@ -895,16 +893,13 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         }
         s.actions.playing = previous_playing;
         s.actions.playback_stack = previous_stack;
-        s.actions.playback_namespace = previous_namespace;
         s.actions.budget_shared = previous_shared;
         s.actions.batch_depth = previous_depth;
-        if let Some(previous) = previous_list {
-            s.actions.list = previous;
-        }
+        s.actions.called = previous_called;
         if previous_playing == 0 && !previous_shared {
             s.actions.playback_steps = previous_steps;
         }
-        if named || embedded.is_some() {
+        if named {
             s.actions.recording = previous_recording;
         }
         return result;
@@ -1352,7 +1347,7 @@ fn preserve_exr(bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod action_history_tests {
     use super::*;
-    use crate::actions_cmds::Action;
+    use crate::actions_cmds::{Action, ActionStep};
     use std::cell::RefCell;
 
     #[derive(Debug)]
@@ -1410,14 +1405,14 @@ mod action_history_tests {
             let mut s = Session::new();
             s.batch_history_observer = Some(observe);
             s.execute("actions.setHistory", json!({"singleState":single})).unwrap();
-            let mut steps = vec![("layer.renameLayer".into(), json!({"name":"Prefix"}))];
+            let mut steps = vec![ActionStep::new("layer.renameLayer", json!({"name":"Prefix"}))];
             if stopped {
-                steps.push(("actions.stopMessage".into(), json!({"message":"Stop here"})));
+                steps.push(ActionStep::new("actions.stopMessage", json!({"message":"Stop here"})));
             }
-            steps.push(("layer.renameLayer".into(), json!({"name":"Final"})));
+            steps.push(ActionStep::new("layer.renameLayer", json!({"name":"Final"})));
             let action_steps = if nested {
-                s.actions.list.push(Action::new("Child", steps));
-                vec![("actions.play".to_string(), json!({"action":"Child"}))]
+                s.actions.list.push(Action::new("Child", steps)).unwrap();
+                vec![ActionStep::new("actions.play", json!({"action":"Child"}))]
             } else {
                 steps
             };
@@ -1427,8 +1422,8 @@ mod action_history_tests {
                 s.execute("file.automate.createDroplet", json!({"path":path,"name":"Named","steps":action_steps,"output":output,"shim":false})).unwrap();
                 s.execute("file.automate.runDroplet", json!({"droplet":path,"input":paths})).unwrap()
             } else if named {
-                let index = s.actions.list.len();
-                s.actions.list.push(Action::new("Named", action_steps));
+                let index = s.actions.list.actions().len();
+                s.actions.list.push(Action::new("Named", action_steps)).unwrap();
                 s.execute("file.automate.batch", json!({"action":index,"input":paths,"output":output})).unwrap()
             } else {
                 s.execute("file.automate.batch", json!({"action":"Named","steps":action_steps,"input":paths,"output":output})).unwrap()
@@ -1467,22 +1462,25 @@ mod action_history_tests {
             }
             s.execute("actions.setHistory", json!({"singleState":single})).unwrap();
             let before: Vec<_> = s.documents().iter().map(|st| (st.doc.clone(), st.history.past_len())).collect();
-            let steps = vec![("layer.renameLayer".into(), json!({"name":"Prefix"})), ("layer.renameLayer".into(), json!({"name":"Final"}))];
+            let steps = vec![ActionStep::new("layer.renameLayer", json!({"name":"Prefix"})), ActionStep::new("layer.renameLayer", json!({"name":"Final"}))];
             let params = if named {
-                s.actions.list.push(Action::new("Opened batch", steps));
+                s.actions.list.push(Action::new("Opened batch", steps)).unwrap();
                 json!({"source":"open","action":0})
             } else {
                 json!({"source":"open","action":"Opened batch","steps":steps})
             };
             if parent {
-                s.actions.list.push(Action::new(
-                    "Parent",
-                    vec![
-                        ("layer.renameLayer".into(), json!({"name":"Before batch"})),
-                        ("file.automate.batch".into(), params),
-                        ("layer.renameLayer".into(), json!({"name":"After batch"})),
-                    ],
-                ));
+                s.actions
+                    .list
+                    .push(Action::new(
+                        "Parent",
+                        vec![
+                            ActionStep::new("layer.renameLayer", json!({"name":"Before batch"})),
+                            ActionStep::new("file.automate.batch", params),
+                            ActionStep::new("layer.renameLayer", json!({"name":"After batch"})),
+                        ],
+                    ))
+                    .unwrap();
                 let result = s.execute("actions.play", json!({"action":"Parent"})).unwrap();
                 assert!(result.get("failed").is_none(), "{result}");
             } else {
@@ -1519,8 +1517,8 @@ mod action_history_tests {
             let mut s = Session::new();
             s.execute("file.new", json!({"width":4,"height":4})).unwrap();
             s.execute("actions.setHistory", json!({"singleState":true})).unwrap();
-            s.actions.list.push(Action::new("Original", vec![]));
-            let library = serde_json::to_value(&s.actions.list).unwrap();
+            s.actions.list.push(Action::new("Original", vec![])).unwrap();
+            let library = serde_json::to_value(s.actions.list.actions()).unwrap();
             let before = s.active().unwrap().doc.clone();
             if parent {
                 crate::actions_cmds::begin_document_history(&mut s, "Parent");
@@ -1535,7 +1533,7 @@ mod action_history_tests {
                 )
                 .unwrap();
             assert_eq!(result["errors"].as_array().unwrap().len(), 1, "{result}");
-            assert_eq!(serde_json::to_value(&s.actions.list).unwrap(), library);
+            assert_eq!(serde_json::to_value(s.actions.list.actions()).unwrap(), library);
             if parent {
                 assert_eq!(s.action_history.as_ref().unwrap().name, "Parent");
                 s.execute("layer.renameLayer", json!({"name":"Parent tail"})).unwrap();
