@@ -1,13 +1,14 @@
 //! What the chrome reads from a document at the cost of a walk or a parse, computed once per document revision:
-//! the status bar's sizes and profile, the File Info copyright mark of the titles, and the pasteboard's uncovered
-//! work (once per revision of the document the canvas shows).
+//! the status bar's sizes and profile, the File Info copyright mark of the titles, the empty frames the canvas marks,
+//! whether linked files need watching, and the pasteboard's uncovered work (once per revision of the document the
+//! canvas shows).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use craft::behavior::kurbo::Rect as DocRect;
 use craft::ui::bars::StatusValues;
-use photocraft_doc::DocId;
+use photocraft_doc::{DocId, LayerId};
 use photocraft_engine::{DocState, Session};
 
 use crate::i18n::Lang;
@@ -30,6 +31,8 @@ struct Entry {
     /// The status values about the document, in the language they were written in.
     status: Option<(Lang, StatusValues)>,
     copyrighted: Option<bool>,
+    empty_frames: Option<Arc<[LayerId]>>,
+    has_links: Option<bool>,
     /// The uncovered rects and the display revision of the document they were measured on.
     uncovered: Option<(u64, Arc<[DocRect]>)>,
 }
@@ -62,6 +65,28 @@ impl DocQueries {
     /// Whether File Info marks `st` Copyrighted, read from its XMP on the first read after a change.
     pub(crate) fn copyrighted(&self, session: &Session, st: &DocState) -> bool {
         self.with(session, st, |entry| *entry.copyrighted.get_or_insert_with(|| photocraft_engine::file_cmds::copyright_marked(st.doc.metadata.xmp.as_deref())))
+    }
+
+    /// The visible frames of `st` with nothing placed in them, which the canvas marks with a placeholder.
+    pub(crate) fn empty_frames(&self, session: &Session, st: &DocState) -> Arc<[LayerId]> {
+        self.with(session, st, |entry| {
+            entry
+                .empty_frames
+                .get_or_insert_with(|| {
+                    let doc = &st.doc;
+                    doc.walk()
+                        .into_iter()
+                        .filter(|(path, _, l)| l.frame.is_some() && l.children().is_some_and(<[_]>::is_empty) && doc.shown_at(path))
+                        .map(|(_, _, l)| l.id)
+                        .collect()
+                })
+                .clone()
+        })
+    }
+
+    /// Whether `st` has linked smart objects, whose files the link watcher scans.
+    pub(crate) fn has_linked_files(&self, session: &Session, st: &DocState) -> bool {
+        self.with(session, st, |entry| *entry.has_links.get_or_insert_with(|| !photocraft_engine::link_watch::linked_files(&st.doc).is_empty()))
     }
 
     /// Where the shown layers draw outside the artboards of `st`, for the document the canvas shows at display

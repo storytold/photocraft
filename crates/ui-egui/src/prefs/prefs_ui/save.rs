@@ -178,7 +178,7 @@ fn link_updates(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let focused = ctx.input(|i| i.focused);
     let was_focused: bool = ctx.data(|d| d.get_temp(focus_key)).unwrap_or(focused);
     ctx.data_mut(|d| d.insert_temp(focus_key, focused));
-    let has_links = app.session.active().is_some_and(|d| !photocraft_engine::link_watch::linked_files(&d.doc).is_empty());
+    let has_links = app.session.active().is_some_and(|d| app.doc_queries.has_linked_files(&app.session, d));
     if !has_links {
         return;
     }
