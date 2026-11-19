@@ -44,15 +44,25 @@ impl Tracker {
     /// Gradient Stroke lookups share the compositor's existing full-region map cache.
     pub(in crate::cmd) fn new(doc: &Document, layer: Option<LayerId>) -> Option<Self> {
         let path = doc.path_of(layer?)?;
-        let mut layers = Vec::new();
+        // Unstyled paths need no compositor geometry or retained watcher allocation.
         let mut relevant = false;
+        for depth in 1..=path.len() {
+            let layer = doc.layer_at(&path[..depth])?;
+            if !layer.visible {
+                break;
+            }
+            relevant |= gradients(layer).next().is_some();
+        }
+        if !relevant {
+            return None;
+        }
+        let mut layers = Vec::new();
         for depth in 1..=path.len() {
             let path = &path[..depth];
             let layer = doc.layer_at(path)?;
             if !layer.visible {
                 break;
             }
-            relevant |= gradients(layer).next().is_some();
             let frame = photocraft_compose::effects_frame(layer, doc.bounds());
             let layout = photocraft_compose::gradient_stroke_layout(doc, layer);
             let mappings = mappings(layer, frame, layout.as_ref());
@@ -66,7 +76,7 @@ impl Tracker {
             });
         }
         let shapes = layers.iter().any(|layer| layer.layout.is_some());
-        relevant.then_some(Self { layers, shapes })
+        Some(Self { layers, shapes })
     }
 
     /// Called once after a push batch. Map construction, including masks and child Fill/effects,
