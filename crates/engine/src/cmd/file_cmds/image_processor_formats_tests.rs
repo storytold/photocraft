@@ -196,3 +196,33 @@ fn png_and_webp_write_alongside_the_original_formats() {
         assert!(!output.path().join("unused").exists());
     }
 }
+
+#[test]
+fn png_and_webp_keep_transparency_through_profile_conversion() {
+    let output = tempfile::tempdir().unwrap();
+    let mut s = Session::new();
+    s.execute("file.new", json!({"name": "Alpha", "width": 40, "height": 20, "background": "transparent"})).unwrap();
+    s.execute("edit.assignProfile", json!({"profile": "display-p3"})).unwrap();
+    s.execute("paint.pencil", json!({"points": [[6, 6]], "size": 3, "color": "#ff0000"})).unwrap();
+    let before = s.active().unwrap().doc.clone();
+    let result = s
+        .execute(
+            COMMAND,
+            json!({
+                "source": "open", "output": output.path(),
+                "png": {"convertToSrgb": true}, "webp": {"convertToSrgb": true, "quality": 12}
+            }),
+        )
+        .unwrap();
+    assert_eq!(result["errors"], json!([]), "{result}");
+    let paths = paths(&result).unwrap();
+    assert_eq!(paths.len(), 2);
+    for path in paths {
+        let doc = reopen(&path).unwrap();
+        let pixels = doc.layers[0].surface().unwrap();
+        assert_eq!(pixels.rgba(0, 0)[3], 0.0, "{path:?}");
+        assert_eq!(pixels.rgba(6, 6)[3], 1.0, "{path:?}");
+        assert_eq!(crate::color_cmds::document_profile(&doc).description, craft_cms::Builtin::Srgb.profile().description);
+    }
+    assert!(Arc::ptr_eq(&s.active().unwrap().doc, &before));
+}
