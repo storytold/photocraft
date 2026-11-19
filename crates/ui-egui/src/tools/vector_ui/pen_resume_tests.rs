@@ -735,3 +735,38 @@ fn freeform_selection_does_not_claim_a_failed_pen_or_curvature_draft() {
         }
     }
 }
+
+/// A refused Pen draft is kept (#15488): under another tool, Delete is that tool's (the active layer goes); back under
+/// the Pen that drew it, Delete takes back one anchor at a time, as while drawing, and only the last anchor drops the
+/// draft.
+#[test]
+fn a_kept_pen_draft_takes_delete_only_under_its_own_tool() {
+    for tool in [Tool::Pen, Tool::CurvaturePen] {
+        let mut app = app();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.ui.tool = tool;
+        app.ui.tool_options.vector_mode = craft::draw::ui::shape::VectorMode::Path;
+        three_anchors(&mut app);
+        app.session.authorize = Some(|id, _| if id == "path.set" { Err(photocraft_engine::EngineError::Other("refused path fixture".into())) } else { Ok(()) });
+        assert!(!pen_commit(&mut app, false), "the fixture must actually refuse the commit");
+        app.session.authorize = None;
+        assert_eq!(app.ui.pen.as_ref().unwrap().draft.knots.len(), 3);
+        let layers = app.session.active().unwrap().doc.layers.len();
+        let kept = app.ui.pen.as_ref().unwrap().draft.clone();
+
+        switch_tool(&mut app, Tool::AddAnchorPoint);
+        press(&mut app, egui::Key::Delete, egui::Modifiers::NONE);
+        assert_eq!(app.session.active().unwrap().doc.layers.len(), layers - 1, "{tool:?}: Delete is the other tool's: the layer goes");
+        assert_eq!(app.ui.pen.as_ref().map(|p| &p.draft), Some(&kept), "{tool:?}: the kept draft is untouched");
+
+        switch_tool(&mut app, tool);
+        for left in [2, 1] {
+            press(&mut app, egui::Key::Delete, egui::Modifiers::NONE);
+            assert_eq!(app.ui.pen.as_ref().map(|p| p.draft.knots.len()), Some(left), "{tool:?}: Delete takes back one anchor ({})", app.ui.status);
+        }
+        assert_eq!(app.session.active().unwrap().doc.layers.len(), layers - 1, "{tool:?}: no other layer went");
+        press(&mut app, egui::Key::Delete, egui::Modifiers::NONE);
+        assert!(app.ui.pen.is_none(), "{tool:?}: the last anchor drops the draft");
+        assert_eq!(app.session.active().unwrap().doc.layers.len(), layers - 1, "{tool:?}: the last Delete is the drawing tool's too");
+    }
+}
