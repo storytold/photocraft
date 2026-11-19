@@ -529,7 +529,7 @@ fn bayer4(p: vec2<i32>) -> f32 {
 }
 
 fn gradient_dither(p: vec2<i32>) -> f32 {
-    var h = bitcast<u32>(p.x) * 0x8da6b343u ^ bitcast<u32>(p.y) * 0xd8163841u ^ 0x9e3779b9u;
+    var h = (bitcast<u32>(p.x) * 0x8da6b343u) ^ (bitcast<u32>(p.y) * 0xd8163841u) ^ 0x9e3779b9u;
     h = h ^ (h >> 15u);
     h = h * 0x2c1b3c6du;
     h = h ^ (h >> 12u);
