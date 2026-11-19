@@ -93,7 +93,7 @@ fn text_anchor(app: &mut PhotocraftApp, xf: &ViewXform) -> Option<Rect> {
 /// Called from the canvas overlay pass for the active document's tile.
 pub fn draw(app: &mut PhotocraftApp, ui: &mut egui::Ui, xf: &ViewXform) {
     if !wanted(app) {
-        return;
+        return; 
     }
     let Some(anchor) = text_anchor(app, xf) else { return };
     let ctx = ui.ctx().clone();
