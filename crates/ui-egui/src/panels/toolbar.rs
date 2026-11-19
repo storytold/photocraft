@@ -345,7 +345,7 @@ fn chip_action(app: &mut PhotocraftApp, chip: &str) {
 mod tests {
     use super::*;
 
-    fn chips(tool: Tool) -> PhotocraftApp {
+    fn chips(tool: Tool) -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.ui.tool = tool;
         app.session.tools.foreground = [1.0, 0.0, 0.0, 1.0];
