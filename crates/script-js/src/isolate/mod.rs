@@ -2,28 +2,30 @@
 //!
 //! The engine has no interrupt hook and no heap limit, and some inputs overflow the native stack
 //! or exhaust memory before any in-process check can run. A run therefore executes in a script
-//! host: the same executable started with [`SCRIPT_HOST_FLAG`], which calls [`serve`] before
-//! anything else. The app side, [`IsolatedJob`], has the same shape as the in-process job
+//! host: the same executable started with [`SCRIPT_HOST_FLAG`], which calls `serve` before
+//! anything else. The app side, `IsolatedJob`, has the same shape as the in-process job
 //! (`spawn`, `poll`, `reply`, `cancel`, `is_finished`, with the same events and replies), so an
-//! interface switches by changing the type it holds.
+//! interface switches by changing the type it holds. (`serve`, `IsolatedJob`, `limits`, `Event`
+//! and `FailureKind` are desktop-only, so they are named here without links: the web build has
+//! none of them.)
 //!
 //! The app enforces the limits; nothing the script does inside the host can lift them:
 //! - **Time:** the app's watchdog kills the host once the run has executed longer than its time
 //!   limit. The clock stops while a dialog is open.
 //! - **Memory:** the host's heap is capped on every platform: an allocation past the limit fails
-//!   at once. See [`limits`] for what each platform adds.
+//!   at once. See `limits` for what each platform adds.
 //! - **Requests:** the host is untrusted. Its frames are size-capped, must arrive in order, and
 //!   may only ask for the commands in [`protocol::COMMANDS`] with exactly their parameters;
-//!   anything else stops the run as a [`FailureKind::HostViolation`]. Its commands always carry
+//!   anything else stops the run as a `FailureKind::HostViolation`. Its commands always carry
 //!   the run's own history key.
 //! - **Lifetime:** one host per run, kept across the replays that follow dialogs. A host that
-//!   ends without a result is classified from what the app knows ([`FailureKind`]): stopped for
+//!   ends without a result is classified from what the app knows (`FailureKind`): stopped for
 //!   time, for memory (stopped by the app, a failed allocation, or a peak near the limit), or
 //!   crashed with its exit status, stack overflows and access violations named as such. A request
 //!   still queued once the host's output has ended, it sent its result, it exited or the app
 //!   stopped it is dropped. A request the interface already took while the host was running is
 //!   one the run validly made, and the interface may still carry it out; nothing of the run
-//!   arrives after [`Event::Finished`]. The run's history step needs no closing: its key is the
+//!   arrives after `Event::Finished`. The run's history step needs no closing: its key is the
 //!   run's alone, so no later edit joins it.
 //!
 //! The web build has no processes. Its isolation runs the same [`protocol`] messages over
@@ -71,7 +73,7 @@ pub const CANCELLED: &str = "The script was cancelled.";
 pub const SCRIPT_HOST_FLAG: &str = "--script-host";
 
 /// Whether this process was started as a script host. Check it first thing in `main`, before
-/// any window, logging or single-instance handling, and then exit with [`serve`]'s status.
+/// any window, logging or single-instance handling, and then exit with `serve`'s status.
 pub fn script_host_requested() -> bool {
     std::env::args_os().nth(1).is_some_and(|a| a == SCRIPT_HOST_FLAG)
 }

@@ -29,7 +29,10 @@ but a command answer may take at most 30 minutes (what the app gives all of a ru
 and an open dialog at most 12 hours before the run ends. Commands, dialogs, output lines and
 window updates together are capped in number per run; output lines at 32 MiB, window updates at
 256 MiB. Waiting for a busy interface to take the run's output does not count against its time,
-up to 30 seconds at a time.
+up to 30 seconds at a time. A command that would render the whole canvas, or merge layers into
+an area that large, past the compositor's limit of 2^30 pixels (flatten, merge, stamp, Save a
+Copy of a 300000 px square document) is refused with that reason rather than run, instead of
+trying to hold a composite larger than the app's memory.
 
 **In the browser.** Each run gets its own Worker. The Worker posts its requests to the page and
 waits for each answer in shared memory (`Atomics.wait`), so a run continues where it was after a

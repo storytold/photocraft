@@ -15,8 +15,13 @@ use serde_json::Value;
 use crate::ModalKind;
 use crate::value::MAX_TEXT_UNITS;
 
-/// Largest frame the app accepts from a host. Dialog arguments are bounded before conversion
-/// (16 Mi UTF-16 units of string data), so a legitimate dialog fits.
+/// Largest frame the app accepts from a host, in encoded bytes. This is a different bound from
+/// the one on a dialog's arguments, which counts their strings' UTF-16 units before conversion
+/// (at most 16 Mi): encoded, a unit takes one byte or, escaped, up to six, so arguments within
+/// that bound may still make a frame past this one. Such a dialog never reaches the app, and
+/// nothing waits for an answer: the run's record of its host calls counts a dialog's encoded
+/// arguments against the same 64 MiB ([`crate::tape::MAX_BYTES`]) and stops the run first, and
+/// the host checks a frame's encoded size before it sends any.
 pub const MAX_FROM_HOST: usize = 64 << 20;
 /// Largest frame a host accepts from the app (the source, or a command result).
 pub const MAX_TO_HOST: usize = 256 << 20;

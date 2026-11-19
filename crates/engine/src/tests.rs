@@ -1725,6 +1725,11 @@ fn document_inspect_can_leave_out_the_history() {
     }
     assert_eq!(lite["name"], full["name"]);
     assert!(s.execute("document.inspect", json!({"history": "no"})).is_err());
+    // Nor the layer tree, for a reader of the document's own values.
+    let own = s.execute("document.inspect", json!({"history": false, "layers": false})).unwrap();
+    assert!(full.get("layers").is_some() && lite.get("layers").is_some() && own.get("layers").is_none());
+    assert_eq!((&own["name"], &own["width"], &own["resolution"]), (&full["name"], &full["width"], &full["resolution"]));
+    assert!(s.execute("document.inspect", json!({"layers": 0})).is_err());
 }
 
 /// #7103: Photoshop's Select Document by offset (previous is -1, next +1) walks opening order
@@ -2137,4 +2142,25 @@ fn type_create_can_turn_an_empty_pixel_layer_into_text_in_place() {
     assert!(s.active().unwrap().doc.is_background(background));
     assert!(s.execute("type.create", json!({"x": 0, "y": 0, "text": "", "layer": background.0})).is_err());
     assert_eq!(count(&s), layers);
+}
+
+/// A layer the app named "Layer 3" takes its text's name when it becomes a text layer; one the
+/// user named "Layer 99" keeps that name, and a `name` given to `type.create` wins over both.
+#[test]
+fn type_create_in_place_keeps_a_users_name_that_reads_like_the_apps() {
+    let mut s = session_with_doc();
+    let new = |s: &mut Session| photocraft_doc::LayerId(s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap());
+    let name = |s: &Session, id: photocraft_doc::LayerId| s.active().unwrap().doc.layer(id).unwrap().name.clone();
+    let generated = new(&mut s);
+    assert!(name(&s, generated).starts_with("Layer "));
+    s.execute("type.create", json!({"x": 0, "y": 0, "text": "Caption", "layer": generated.0})).unwrap();
+    assert_eq!(name(&s, generated), "Caption");
+    let renamed = new(&mut s);
+    s.execute("layer.setProps", json!({"layer": renamed.0, "name": "Layer 99"})).unwrap();
+    s.execute("type.create", json!({"x": 0, "y": 0, "text": "Caption", "layer": renamed.0})).unwrap();
+    assert_eq!(name(&s, renamed), "Layer 99");
+    let given = new(&mut s);
+    s.execute("layer.setProps", json!({"layer": given.0, "name": "Layer 98"})).unwrap();
+    s.execute("type.create", json!({"x": 0, "y": 0, "text": "Caption", "layer": given.0, "name": "Title"})).unwrap();
+    assert_eq!(name(&s, given), "Title");
 }

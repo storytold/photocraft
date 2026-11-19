@@ -561,7 +561,7 @@ fn build() -> Vec<CommandSpec> {
                 let opts = crate::group_options::GroupOptions::parse(CMD, p)?;
                 let below = crate::group_options::below(CMD, p)?;
                 let into = crate::new_layer::group_param(CMD, p)?;
-                if into.is_some() && below {
+                if into.is_some() && crate::new_layer::given_position(p) {
                     return Err(EngineError::BadParams { cmd: CMD.into(), msg: "give `group` or `position`, not both".into() });
                 }
                 let place = match (into, below) {
@@ -888,7 +888,7 @@ fn build() -> Vec<CommandSpec> {
                 below.push(idx - 1);
                 let lower = doc.layer_at(&below).ok_or(EngineError::NoLayer(id))?.clone();
                 let upper = doc.layer(id).ok_or(EngineError::NoLayer(id))?.clone();
-                let merged = pixels::merge_down(doc, &lower, &upper);
+                let merged = pixels::merge_down(doc, &lower, &upper)?;
                 doc.remove(id);
                 *doc.layer_at_mut(&below).ok_or(EngineError::NoLayer(lower.id))? = merged;
                 *active = Some(lower.id);
@@ -905,6 +905,7 @@ fn build() -> Vec<CommandSpec> {
         }),
         cmd!("layer.flattenImage", "Flatten Image", ["Layer"], None, "{}", has_doc, |s, _| {
             s.edit("Flatten Image", |doc, active| {
+                file_cmds::check_flattenable(doc, "layer.flattenImage")?;
                 let fmt = doc.pixel_format();
                 let mut bg = Layer::raster("Background", fmt);
                 bg.locks.transparency = true;
@@ -1133,13 +1134,14 @@ fn build() -> Vec<CommandSpec> {
             label: "Inspect Document",
             menu: &[],
             shortcut: None,
-            params: r##"{"document":index?} or {"serial":n} (the document's never-reused serial from session.inspect); "history":false leaves out the History panel's rows"##,
+            params: r##"{"document":index?} or {"serial":n} (the document's never-reused serial from session.inspect); "history":false leaves out the History panel's rows, "layers":false the layer tree (neither is built)"##,
             enabled: has_doc,
             run: |s, p| {
-                let history = match p.get("history").filter(|v| !v.is_null()) {
-                    Some(v) => v.as_bool().ok_or_else(|| bad("document.inspect", "`history` must be true or false"))?,
-                    None => true,
+                let flag = |k: &str| match p.get(k).filter(|v| !v.is_null()) {
+                    Some(v) => v.as_bool().ok_or_else(|| bad("document.inspect", format!("`{k}` must be true or false"))),
+                    None => Ok(true),
                 };
+                let (history, layers) = (flag("history")?, flag("layers")?);
                 let d = if let Some(serial) = p.get("serial").filter(|v| !v.is_null()) {
                     if p.get("document").is_some_and(|v| !v.is_null()) {
                         return Err(bad("document.inspect", "give `document` or `serial`, not both"));
@@ -1155,13 +1157,7 @@ fn build() -> Vec<CommandSpec> {
                         None => s.active().ok_or(EngineError::NoDocument)?,
                     }
                 };
-                let mut v = inspect::document(d);
-                if !history && let Some(m) = v.as_object_mut() {
-                    for k in ["history", "historyRedo", "historyIds"] {
-                        m.remove(k);
-                    }
-                }
-                Ok(v)
+                Ok(inspect::document_parts(d, inspect::Parts { history, layers }))
             },
             journal: false,
         },

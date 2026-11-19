@@ -633,11 +633,23 @@ fn fill_background_extension(surf: &mut Surface, canvas: Rect, old: Rect, px: &[
     let pa = px.get(a).copied().unwrap_or(1.0);
     // Without an alpha channel hidden pixels can't be told from empty ones: fill the strips.
     let has_alpha = surf.format().alpha;
+    let tiles = surf.tile_bounds();
     for strip in strips.into_iter().filter(|r| !r.is_empty()) {
         if !has_alpha || !surf.has_tiles_in(strip) {
             surf.fill_rect(strip, px);
             continue;
         }
+        // Only where the Background has tiles are its own pixels read: the rest of the strip is
+        // empty, which over `px` is `px`, so it is filled. A strip of a very large new canvas is
+        // never read whole (300000 px square would be hundreds of gigabytes).
+        let blend = strip.intersect(&tiles);
+        for rest in rect_minus(strip, blend) {
+            surf.fill_rect(rest, px);
+        }
+        if blend.is_empty() {
+            continue;
+        }
+        let strip = blend;
         // The Background's own pixels over `px` (source-over).
         let mut d = surf.read_region(strip);
         for p in d.chunks_exact_mut(n) {
@@ -652,6 +664,17 @@ fn fill_background_extension(surf: &mut Surface, canvas: Rect, old: Rect, px: &[
         }
         surf.write_region(strip, &d);
     }
+}
+
+/// `r` without `cut` (which lies inside it, or is empty), as up to four rects.
+fn rect_minus(r: Rect, cut: Rect) -> Vec<Rect> {
+    if cut.is_empty() {
+        return vec![r];
+    }
+    [Rect::new(r.x0, r.y0, r.x1, cut.y0), Rect::new(r.x0, cut.y1, r.x1, r.y1), Rect::new(r.x0, cut.y0, cut.x0, cut.y1), Rect::new(cut.x1, cut.y0, r.x1, cut.y1)]
+        .into_iter()
+        .filter(|p| !p.is_empty())
+        .collect()
 }
 
 /// The nine documented canvas-size anchors, in the order the command lists them, each mapped to

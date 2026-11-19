@@ -240,6 +240,24 @@ fn enter_on_a_focused_button_of_a_confirm_answers_that_button() {
     assert_eq!(*log.answers.borrow(), [json!(false)]);
 }
 
+/// Enter on a prompt's focused Cancel button cancels it (`null`); Enter in the text is OK.
+#[test]
+fn enter_on_a_prompts_focused_cancel_button_cancels() {
+    for (focus, want) in [(Some("Cancel"), Value::Null), (None, json!("typed"))] {
+        let log = Log::default();
+        let mut h = harness(vec![vec![dialog(ScriptDialog::Prompt, json!(["Name?", "typed"]))]], &log, vec![]);
+        start_named(h.state_mut(), "ask.jsx");
+        h.run_steps(4);
+        if let Some(label) = focus {
+            h.get_by_label(label).focus();
+            h.run_steps(2);
+        }
+        h.key_press(egui::Key::Enter);
+        h.run_steps(4);
+        assert_eq!(*log.answers.borrow(), [want], "focused: {focus:?}");
+    }
+}
+
 #[test]
 fn pickers_answer_the_chosen_path_or_null() {
     let log = Log::default();
@@ -583,14 +601,14 @@ fn a_refused_switch_to_the_target_document_keeps_its_reason() {
 #[test]
 fn a_runs_work_in_the_app_is_bounded() {
     let mut budget = RunBudget { layers: MAX_RUN_LAYERS - 1, documents: MAX_RUN_DOCUMENTS, ..RunBudget::default() };
-    assert_eq!(budget.charge("layer.new.layer", 0), Ok(()));
-    assert!(budget.charge("layer.duplicate", 1).unwrap_err().contains("layers"));
-    assert!(budget.charge("file.new", 0).unwrap_err().contains("documents"));
-    assert_eq!(budget.charge("layer.setProps", 0), Ok(()), "other commands still run");
+    assert_eq!(budget.charge("layer.new.layer", &Value::Null, 0), Ok(()));
+    assert!(budget.charge("layer.duplicate", &Value::Null, 1).unwrap_err().contains("layers"));
+    assert!(budget.charge("file.new", &Value::Null, 0).unwrap_err().contains("documents"));
+    assert_eq!(budget.charge("layer.setProps", &Value::Null, 0), Ok(()), "other commands still run");
     budget.app_time = MAX_RUN_APP_TIME;
-    assert!(budget.charge("layer.setProps", 0).is_err());
+    assert!(budget.charge("layer.setProps", &Value::Null, 0).is_err());
     let mut budget = RunBudget { commands: MAX_RUN_COMMANDS, ..RunBudget::default() };
-    assert!(budget.charge("session.inspect", 0).is_err());
+    assert!(budget.charge("session.inspect", &Value::Null, 0).is_err());
 }
 
 /// Duplicating a group or a document copies everything in it, and the run pays for each copy.
@@ -610,6 +628,12 @@ fn duplicating_a_group_counts_every_layer_it_copies() {
     assert_eq!(commands.copies("layer.duplicate", Some(serial), &json!({"layer": group})), 3);
     let err = commands.execute("layer.duplicate", json!({"layer": group, ON_DOCUMENT: serial})).unwrap_err();
     assert!(err.contains("layers"), "{err}");
+    // So does a move that copies the group; one that only moves it makes nothing.
+    assert_eq!(commands.copies("layer.moveTo", Some(serial), &json!({"layer": group, "copy": true})), 3);
+    let copy = json!({"layer": group, "target": group, "position": "above", "copy": true, ON_DOCUMENT: serial});
+    let err = commands.execute("layer.moveTo", copy).unwrap_err();
+    assert!(err.contains("layers"), "{err}");
+    assert_eq!(commands.budget.charge("layer.moveTo", &json!({"layer": group}), 3), Ok(()));
     // A duplicated document copies every layer: background, the group and its two layers.
     assert_eq!(commands.copies("image.duplicate", Some(serial), &json!({"mergedOnly": false})), 4);
     assert_eq!(commands.copies("image.duplicate", Some(serial), &json!({"mergedOnly": true})), 1);
@@ -636,6 +660,9 @@ fn duplicates_are_charged_the_layers_they_make() {
     let before = layers(commands.app);
     commands.execute("layer.duplicate", json!({"layer": group, ON_DOCUMENT: serial})).unwrap();
     assert_eq!(layers(commands.app) - before, commands.budget.layers, "a group and the two layers in it");
+    let (before, charged) = (layers(commands.app), commands.budget.layers);
+    commands.execute("layer.moveTo", json!({"layer": group, "target": group, "position": "below", "copy": true, ON_DOCUMENT: serial})).unwrap();
+    assert_eq!(layers(commands.app) - before, commands.budget.layers - charged, "a copying move: the same three");
     for merged in [false, true] {
         let charged = commands.budget.layers;
         commands.execute("image.duplicate", json!({"name": "copy", "mergedOnly": merged, ON_DOCUMENT: serial})).unwrap();
@@ -648,7 +675,7 @@ fn duplicates_are_charged_the_layers_they_make() {
 #[test]
 fn opening_files_counts_against_the_documents_a_run_may_make() {
     let mut budget = RunBudget { documents: MAX_RUN_DOCUMENTS, ..RunBudget::default() };
-    assert!(budget.charge("file.open", 0).unwrap_err().contains("documents"));
+    assert!(budget.charge("file.open", &Value::Null, 0).unwrap_err().contains("documents"));
 }
 
 /// Typing tags and then clicking Run is one click that does both: the tags are kept, and the

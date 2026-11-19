@@ -106,7 +106,7 @@ type Spec = (&'static str, &'static [(&'static str, Param, Need)]);
 /// The commands, with every parameter each may take.
 pub const COMMANDS: &[Spec] = &[
     ("session.inspect", &[]),
-    ("document.inspect", &[("document", Index, Optional), ("serial", Index, Optional), ("history", Bool, Optional)]),
+    ("document.inspect", &[("document", Index, Optional), ("serial", Index, Optional), ("history", Bool, Optional), ("layers", Bool, Optional)]),
     ("document.activate", &[("document", Index, Optional), ("serial", Index, Optional)]),
     (
         "file.new",
@@ -170,7 +170,7 @@ pub const COMMANDS: &[Spec] = &[
         ],
     ),
     ("layer.translate", &[("layer", Id, Required), ("dx", Int(-FAR, FAR), Required), ("dy", Int(-FAR, FAR), Required)]),
-    ("layer.moveTo", &[("layer", Id, Required), ("target", Id, Required), ("position", Enum(&["above", "below", "into"]), Required)]),
+    ("layer.moveTo", &[("layer", Id, Required), ("target", Id, Required), ("position", Enum(&["above", "below", "into"]), Required), ("copy", Bool, Optional)]),
     ("layer.mergeDown", &[("layer", Id, Required)]),
     ("type.info", &[("layer", Id, Required)]),
     (

@@ -5,7 +5,9 @@
 //! command from [`crate::commands`]. Commands act on the active document, so a change to another
 //! document makes it active first. Layers are identified by their layer id, which stays the same
 //! while the layer exists, so a `Layer` object keeps meaning the same layer when others are added
-//! or moved; one object is kept per layer for identity comparisons.
+//! or moved. One object is kept per layer, document and collection for identity comparisons
+//! (`a === b`), up to [`MAX_OBJECTS`] of them in a run: past that, reading one that was not kept
+//! gives a new, equal object each time (`a.id == b.id` still holds), so memory stays bounded.
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -255,7 +257,8 @@ const DOCUMENTS: u8 = 15;
 
 /// The array kept for the collection `key`, filled with `items`; `methods` adds its methods the
 /// first time. The same collection read twice is the same object (`doc.layers === doc.layers`),
-/// as in Photoshop, and an array a script holds shows the members as they are at the last read.
+/// as in Photoshop, while the run keeps fewer than [`MAX_OBJECTS`] objects, and an array a
+/// script holds shows the members as they are at the last read.
 pub(crate) fn live_collection(
     ctx: &mut Context,
     key: (u8, u64, u64, u64),
@@ -458,11 +461,11 @@ fn collection(ctx: &mut Context, doc: DocKey, parent: Option<u64>, which: u8) ->
             .name(js_string!("getByName"))
             .length(1)
             .build();
-        arr.set(js_string!("getByName"), by_name, true, ctx)?;
+        arr.create_data_property_or_throw(js_string!("getByName"), by_name, ctx)?;
         if which != ALL {
             let add =
                 FunctionObjectBuilder::new(ctx.realm(), NativeFunction::from_copy_closure_with_captures(coll_add, c)).name(js_string!("add")).length(0).build();
-            arr.set(js_string!("add"), add, true, ctx)?;
+            arr.create_data_property_or_throw(js_string!("add"), add, ctx)?;
         }
         Ok(())
     })
@@ -726,15 +729,16 @@ fn layer_remove(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<Js
 
 fn layer_duplicate(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let (doc, id) = layer_ref(this)?;
-    let made = edit(ctx, doc, "layer.duplicate", json!({ "layer": id }))?;
+    // Made where it goes in one command (`moveTo` with `copy`), so a copy that can't go there,
+    // or a run stopped meanwhile, leaves no copy behind.
+    let made = match arg(args, 0) {
+        Some(rel) => {
+            let (target, position) = destination(ctx, doc, rel, args.get(1))?;
+            edit(ctx, doc, "layer.moveTo", json!({ "layer": id, "target": target, "position": position, "copy": true }))?
+        }
+        None => edit(ctx, doc, "layer.duplicate", json!({ "layer": id }))?,
+    };
     let new = made["layer"].as_u64().ok_or_else(|| error("the copy was not reported"))?;
-    if let Some(rel) = arg(args, 0)
-        && let Err(e) = move_layer(ctx, doc, new, rel, args.get(1))
-    {
-        // A copy that can't go where it was asked to is not left behind.
-        let _ = edit(ctx, doc, "layer.delete", json!({ "layer": new }));
-        return Err(e);
-    }
     Ok(layer_object(ctx, doc, new)?.into())
 }
 
@@ -756,6 +760,16 @@ fn layer_translate(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsRes
 
 /// Move layer `id` relative to `rel` (a layer, or the document) by `placement`.
 fn move_layer(ctx: &mut Context, doc: DocKey, id: u64, rel: &JsValue, placement: Option<&JsValue>) -> JsResult<()> {
+    let (target, position) = destination(ctx, doc, rel, placement)?;
+    if target == id {
+        return Ok(());
+    }
+    edit(ctx, doc, "layer.moveTo", json!({ "layer": id, "target": target, "position": position }))?;
+    Ok(())
+}
+
+/// Where `move(rel, placement)` puts a layer: the layer it goes beside or into, and how.
+fn destination(ctx: &mut Context, doc: DocKey, rel: &JsValue, placement: Option<&JsValue>) -> JsResult<(u64, &'static str)> {
     let place = match placement.filter(|p| !p.is_undefined()) {
         Some(p) => text(p, ctx)?,
         None => "ElementPlacement.PLACEBEFORE".to_owned(),
@@ -793,11 +807,7 @@ fn move_layer(ctx: &mut Context, doc: DocKey, id: u64, rel: &JsValue, placement:
     } else {
         return Err(type_error("move() takes a layer or its document"));
     };
-    if target == id {
-        return Ok(());
-    }
-    edit(ctx, doc, "layer.moveTo", json!({ "layer": id, "target": target, "position": position }))?;
-    Ok(())
+    Ok((target, position))
 }
 
 fn layer_move(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
@@ -1174,9 +1184,12 @@ fn doc_resize_image(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsRe
     }
     // Sizes in physical units mean pixels at the resolution the image will have.
     let r = res.unwrap_or_else(|| dpi(&d));
-    let (w0, h0) = (d["width"].as_f64().unwrap_or(1.0), d["height"].as_f64().unwrap_or(1.0));
     let w = arg(args, 0).map(|v| to_px(ctx, v, r)).transpose()?;
     let h = arg(args, 1).map(|v| to_px(ctx, v, r)).transpose()?;
+    // The proportions kept are the document's once the sizes are converted: their `valueOf`
+    // may itself have resized it.
+    let d = if w.is_some() && h.is_some() { d } else { inspect(ctx, doc)? };
+    let (w0, h0) = (d["width"].as_f64().unwrap_or(1.0), d["height"].as_f64().unwrap_or(1.0));
     let (w, h) = match (w, h) {
         (Some(w), Some(h)) => (w, h),
         (Some(w), None) => (w, h0 * w / w0),
@@ -1212,14 +1225,12 @@ fn doc_resize_canvas(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsR
     let doc = doc_key(this)?;
     let d = inspect(ctx, doc)?;
     let r = dpi(&d);
-    let w = match arg(args, 0) {
-        Some(v) => to_px(ctx, v, r)?,
-        None => d["width"].as_f64().unwrap_or(1.0),
-    };
-    let h = match arg(args, 1) {
-        Some(v) => to_px(ctx, v, r)?,
-        None => d["height"].as_f64().unwrap_or(1.0),
-    };
+    let w = arg(args, 0).map(|v| to_px(ctx, v, r)).transpose()?;
+    let h = arg(args, 1).map(|v| to_px(ctx, v, r)).transpose()?;
+    // A side left out stays as it is once the other is converted (its `valueOf` may resize).
+    let d = if w.is_some() && h.is_some() { d } else { inspect(ctx, doc)? };
+    let w = w.unwrap_or_else(|| d["width"].as_f64().unwrap_or(1.0));
+    let h = h.unwrap_or_else(|| d["height"].as_f64().unwrap_or(1.0));
     let anchor = match arg(args, 2) {
         Some(a) => {
             let a = text(a, ctx)?;

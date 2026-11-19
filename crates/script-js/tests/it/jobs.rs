@@ -31,7 +31,24 @@ fn queuing_too_many_promise_reactions_is_a_named_error() {
     }
 }
 
+/// Records the lines a run writes.
+struct Lines(std::rc::Rc<std::cell::RefCell<Vec<String>>>);
+
+impl Host for Lines {
+    fn execute(&mut self, _: &str, _: Value) -> Result<Value, HostError> {
+        Ok(json!({"active": null, "documents": []}))
+    }
+
+    fn write_line(&mut self, line: &str) {
+        self.0.borrow_mut().push(line.to_owned());
+    }
+}
+
 #[test]
 fn many_reactions_within_the_limit_still_run() {
-    assert_eq!(step("var n = 0; for (var i = 0; i < 50000; i++) Promise.resolve().then(function () { n++; });"), Step::Done);
+    let lines = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let src = "var n = 0; for (var i = 0; i < 50000; i++) Promise.resolve().then(function () { if (++n == 50000) $.writeln(n); });";
+    let step = Runner::new(src, Box::new(Lines(lines.clone())), Box::new(Unlimited), RunOptions::default()).unwrap().step();
+    assert_eq!(step, Step::Done);
+    assert_eq!(*lines.borrow(), ["50000"], "every reaction ran");
 }

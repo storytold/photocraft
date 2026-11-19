@@ -126,7 +126,7 @@ const MAX_RUN_APP_TIME: Duration = Duration::from_secs(30 * 60);
 impl RunBudget {
     /// Charge command `id`, which makes `copies` layers when it duplicates them (a group with
     /// everything in it, or a whole document), or say why the run may not run it.
-    fn charge(&mut self, id: &str, copies: u32) -> Result<(), String> {
+    fn charge(&mut self, id: &str, params: &Value, copies: u32) -> Result<(), String> {
         if self.commands >= MAX_RUN_COMMANDS {
             return Err(format!("a script can run at most {MAX_RUN_COMMANDS} commands"));
         }
@@ -136,6 +136,8 @@ impl RunBudget {
         let layers = match id {
             "layer.new.layer" | "layer.new.group" | "type.create" => 1,
             "layer.duplicate" => copies.max(1),
+            // A move with `copy` duplicates the layer where it goes.
+            "layer.moveTo" if copying(params) => copies.max(1),
             "image.duplicate" => copies,
             _ => 0,
         };
@@ -153,6 +155,11 @@ impl RunBudget {
     }
 }
 
+/// Whether `layer.moveTo` params copy the layer rather than move it.
+fn copying(params: &Value) -> bool {
+    params.get("copy").and_then(Value::as_bool) == Some(true)
+}
+
 /// [`ScriptCommands`] through the app, as the run's own starter: a run started by automation
 /// keeps automation's gate for every command it runs.
 struct AppCommands<'a> {
@@ -166,8 +173,8 @@ struct AppCommands<'a> {
 
 impl AppCommands<'_> {
     /// The layers command `id` copies in the document with serial `target` (or the active one):
-    /// `layer.duplicate`'s layer and all it holds, every layer for `image.duplicate` (one when
-    /// merged).
+    /// `layer.duplicate`'s layer and all it holds (and a copying `layer.moveTo`'s), every layer
+    /// for `image.duplicate` (one when merged).
     fn copies(&self, id: &str, target: Option<u64>, params: &Value) -> u32 {
         fn count(l: &photocraft_doc::Layer) -> u32 {
             1u32.saturating_add(l.children().map_or(0, |ch| ch.iter().map(count).fold(0, u32::saturating_add)))
@@ -178,7 +185,7 @@ impl AppCommands<'_> {
             None => session.active(),
         };
         match id {
-            "layer.duplicate" => {
+            "layer.duplicate" | "layer.moveTo" => {
                 let layer = params["layer"].as_u64().map(photocraft_doc::LayerId);
                 doc.zip(layer).and_then(|(d, id)| d.doc.layer(id)).map_or(1, count)
             }
@@ -204,7 +211,7 @@ impl ScriptCommands for AppCommands<'_> {
         }
         let target = params.as_object_mut().and_then(|m| m.remove(ON_DOCUMENT)).and_then(|v| v.as_u64());
         let copies = self.copies(id, target, &params);
-        self.budget.charge(id, copies)?;
+        self.budget.charge(id, &params, copies)?;
         let started = web_time::Instant::now();
         let was = std::mem::replace(&mut self.app.automation_input, self.automation);
         let result = (|| {
@@ -859,7 +866,8 @@ fn dialog(ctx: &egui::Context, open: &mut Open) -> Option<Value> {
             });
             if esc {
                 chosen = Some(Value::Null);
-            } else if enter {
+            } else if enter && chosen.is_none() {
+                // Enter on a focused button clicks it (Cancel stays Cancel); elsewhere it is OK.
                 chosen = Some(Value::String(open.text.clone()));
             }
             chosen

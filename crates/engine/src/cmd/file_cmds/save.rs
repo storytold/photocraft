@@ -1,5 +1,5 @@
 use super::paths::{same_file, write_file};
-use super::{Document, EngineError, Layer, LayerContent, Result, Session, Value, f64_param, flattened_checked, json, str_param};
+use super::{Document, EngineError, Layer, LayerContent, Result, Session, Value, check_flattenable, f64_param, flattened_checked, json, str_param};
 
 /// Whether saving `doc` as a TIFF writes Photoshop layer data (anything beyond a lone
 /// Background layer). The UI asks before such a save when the "ask before saving layered TIFF"
@@ -307,6 +307,11 @@ pub(super) fn save_a_copy(s: &mut Session, p: &Value) -> Result<Value> {
             msg: "`path` is the document's own file, so the copy would replace it: choose another path, or pass \"overwrite\": true".into(),
         });
     }
+    // Every format renders the whole canvas (a flat file is that render; a layered one stores it
+    // as its composite or reads every pixel to see whether it is opaque), and past the
+    // compositor's limit that takes hours and more memory than the file holds: refused up front,
+    // as a flattened copy already was.
+    check_flattenable(&d.doc, "file.saveACopy")?;
     let mut doc = (*d.doc).clone();
     if p.get("layers").and_then(Value::as_bool) == Some(false) {
         // "Layers" unchecked in Save a Copy: write the flattened image.

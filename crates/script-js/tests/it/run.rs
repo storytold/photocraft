@@ -4,12 +4,13 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
+use crate::ManualClock;
 use photocraft_engine::Session;
 use photocraft_script_js::session_host::SessionHost;
-use photocraft_script_js::{Budget, Host, HostError, ModalKind, Now, RunOptions, Runner, Step, Unlimited, WallClock};
+use photocraft_script_js::{Budget, Host, HostError, ModalKind, RunOptions, Runner, Step, Unlimited, WallClock};
 use serde_json::{Value, json};
 
 type Log = Rc<RefCell<Vec<String>>>;
@@ -102,7 +103,7 @@ fn scripts_cannot_catch_a_pause_or_run_finally() {
 fn clock_and_random_replay_identically() {
     // A replay that saw a different time or number would write a different line and diverge.
     // The line before the dialog is written by the first attempt; the one after, by the replay.
-    let src = "var a = Math.random(), d = Date.now(), n = new Date().getTime(); $.writeln(a, ' ', d, ' ', n); alert(1); $.writeln(a, ' ', d, ' ', n); $.writeln(a < 1 && a >= 0, d <= n);";
+    let src = "var a = Math.random(), d = Date.now(), n = new Date().getTime(); $.writeln(a, ' ', d, ' ', n); alert(1); $.writeln(a, ' ', d, ' ', n); $.writeln(a < 1 && a >= 0);";
     let (mut r, _, lines) = probe_run(src, RunOptions::default());
     assert!(matches!(r.step(), Step::Paused(_)));
     // Time passes at the dialog: a clock read again would differ.
@@ -112,7 +113,9 @@ fn clock_and_random_replay_identically() {
     let lines = lines.borrow();
     assert_eq!(lines.len(), 3, "{lines:?}");
     assert_eq!(lines[1], lines[0], "the replay saw the first attempt's time and number");
-    assert_eq!(lines[2], "truetrue");
+    // Calendar time is not monotonic, so `d <= n` is not asserted: only that the replay saw the
+    // same values.
+    assert_eq!(lines[2], "true");
 }
 
 #[test]
@@ -282,22 +285,6 @@ fn edits_of_one_run_share_one_history_step() {
     h.execute("layer.setProps", json!({"layer": id, "opacity": 0.5})).unwrap();
     h.execute("layer.translate", json!({"dx": 1, "dy": 0})).unwrap();
     assert_eq!(history_len(&mut s.borrow_mut()), before + 1);
-}
-
-/// A clock tests move by hand.
-#[derive(Default)]
-struct ManualClock(Mutex<Duration>);
-
-impl ManualClock {
-    fn advance(&self, by: Duration) {
-        *self.0.lock().unwrap() += by;
-    }
-}
-
-impl Now for ManualClock {
-    fn now(&self) -> Duration {
-        *self.0.lock().unwrap()
-    }
 }
 
 #[test]
@@ -773,8 +760,9 @@ fn conversion_methods_run_once_in_the_engines_order() {
     assert_eq!(lines_of("try { $.writeln({ toString: null, valueOf: null }); } catch (e) { $.writeln(e instanceof TypeError); }"), ["true"]);
 }
 
-/// A host that shows dialogs itself and takes `wait` to answer.
+/// A host that shows dialogs itself and takes `wait` to answer: `clock` moves on by it.
 struct SlowDialogs {
+    clock: Arc<ManualClock>,
     wait: Duration,
     lines: Log,
 }
@@ -789,7 +777,7 @@ impl Host for SlowDialogs {
     }
 
     fn modal(&mut self, _: ModalKind, _: &Value) -> Option<Result<Value, HostError>> {
-        std::thread::sleep(self.wait);
+        self.clock.advance(self.wait);
         Some(Ok(Value::Null))
     }
 }
@@ -825,10 +813,12 @@ fn a_slow_last_output_line_is_charged() {
 
 #[test]
 fn time_at_a_dialog_a_host_answers_itself_is_not_charged() {
-    let lines = Log::default();
-    let host = SlowDialogs { wait: Duration::from_millis(400), lines: lines.clone() };
-    let mut r =
-        Runner::new("alert('a'); $.writeln('after');", Box::new(host), Box::new(WallClock::new(Duration::from_millis(200))), RunOptions::default()).unwrap();
+    let (clock, lines) = (Arc::new(ManualClock::default()), Log::default());
+    let host = SlowDialogs { clock: clock.clone(), wait: Duration::from_millis(400), lines: lines.clone() };
+    // The clock moves only at the dialog, so the run is charged nothing else: a charged dialog
+    // wait alone would be past the limit.
+    let budget = WallClock::with_clock(Duration::from_millis(200), clock);
+    let mut r = Runner::new("alert('a'); $.writeln('after');", Box::new(host), Box::new(budget), RunOptions::default()).unwrap();
     assert_eq!(r.step(), Step::Done);
     assert_eq!(*lines.borrow(), ["after"]);
 }

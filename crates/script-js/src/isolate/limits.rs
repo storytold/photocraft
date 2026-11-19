@@ -259,6 +259,18 @@ mod tests {
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
 
+    /// Wait until `done` holds, polling, for at most 10 s: `false` if it never did.
+    fn within(mut done: impl FnMut() -> bool) -> bool {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !done() {
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        true
+    }
+
     /// Running, not a zombie waiting for whoever adopted it.
     fn alive(pid: i32) -> bool {
         let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else { return false };
@@ -281,23 +293,32 @@ mod tests {
         // The host: exits at once and is reaped.
         let mut host = Command::new("true").process_group(0).spawn().expect("spawn");
         let containment = contain(&host);
-        while containment.try_wait(&mut host).expect("wait").is_none() {
-            std::thread::sleep(std::time::Duration::from_millis(5));
+        let reaped = within(|| containment.try_wait(&mut host).expect("wait").is_some());
+        if !reaped {
+            let _ = host.kill();
+            let _ = host.wait();
         }
+        assert!(reaped, "the host was never seen to exit");
         // Its pid may now be another child's: one that exited, leaving its own group behind.
         let mut other = Command::new("sh").args(["-c", "sleep 30 & echo $!"]).process_group(0).stdout(Stdio::piped()).spawn().expect("spawn");
         let mut line = String::new();
         std::io::BufReader::new(other.stdout.take().expect("stdout")).read_line(&mut line).expect("read");
         let left: i32 = line.trim().parse().expect("pid");
-        while host_state(&other) != Host::Exited {
-            std::thread::sleep(std::time::Duration::from_millis(5));
+        let kill_left = || {
+            let _ = rustix::process::kill_process(rustix::process::Pid::from_raw(left).expect("pid"), rustix::process::Signal::KILL);
+        };
+        if !within(|| host_state(&other) == Host::Exited) {
+            let _ = other.kill();
+            let _ = other.wait();
+            kill_left();
+            panic!("the second host was never seen to exit");
         }
         let _ = containment.try_wait(&mut other);
         containment.end(&mut other);
         // A kill takes effect a moment after it is sent.
         std::thread::sleep(std::time::Duration::from_millis(300));
         let survived = alive(left);
-        let _ = rustix::process::kill_process(rustix::process::Pid::from_raw(left).expect("pid"), rustix::process::Signal::KILL);
+        kill_left();
         assert!(survived, "the group of a process that only shares the reaped host's pid was killed");
     }
 }

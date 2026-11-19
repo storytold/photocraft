@@ -250,7 +250,7 @@ impl Watch {
     /// The answer on its way to the host is out: its time is charged past what is left of
     /// `delivery_free`, and the clock goes on unless the host waits again.
     fn delivered(&mut self) {
-        if let Some(t) = self.delivering.take() {
+        if let Some((_, t)) = self.delivering.take() {
             let took = t.elapsed();
             let free = took.min(self.delivery_free);
             self.delivery_free -= free;
@@ -261,9 +261,17 @@ impl Watch {
         }
     }
 
+    /// [`Self::delivered`] for the writer, once answer number `n` is out: a later answer still on
+    /// its way (the host had answer `n` already and asked again) is not completed by it.
+    fn wrote(&mut self, n: u64) {
+        if self.delivering.is_some_and(|(at, _)| at == n) {
+            self.delivered();
+        }
+    }
+
     /// The delivery time so far that counts against the run.
     fn delivery_charge(&self) -> Duration {
-        self.delivering.map_or(Duration::ZERO, |t| t.elapsed().saturating_sub(self.delivery_free))
+        self.delivering.map_or(Duration::ZERO, |(_, t)| t.elapsed().saturating_sub(self.delivery_free))
     }
 }
 
@@ -276,8 +284,11 @@ struct Watch {
     queued: Option<Instant>,
     /// Since when the app's answer has been on its way to the host: the run's clock stays stopped
     /// until it is written (a large answer takes time to encode and send), as long as
-    /// `delivery_free` lasts.
-    delivering: Option<Instant>,
+    /// `delivery_free` lasts. With the answer's number, counted from 1 in the order answers are
+    /// sent, so the writer completes only the delivery of the answer it wrote.
+    delivering: Option<(u64, Instant)>,
+    /// Answers handed to the writer so far.
+    answers: u64,
     /// Delivery time left that the run is not charged for: one grace for the whole run, so a
     /// host that stops reading its answers can't stretch the clock answer after answer.
     delivery_free: Duration,
@@ -587,6 +598,7 @@ impl IsolatedJob {
                 waiting: None,
                 queued: None,
                 delivering: None,
+                answers: 0,
                 delivery_free: options.queue_grace,
                 verdict: None,
                 exit: None,
@@ -671,13 +683,15 @@ impl IsolatedJob {
             (Some(Waiting::Execute), Reply::Executed(result)) => {
                 let mut w = lock(&self.shared.watch);
                 w.waiting = None;
-                w.delivering = Some(Instant::now());
+                w.answers += 1;
+                w.delivering = Some((w.answers, Instant::now()));
                 ToHost::Executed { result }
             }
             (Some(Waiting::Dialog), Reply::Dialog(answer)) => {
                 let mut w = lock(&self.shared.watch);
                 w.waiting = None;
-                w.delivering = Some(Instant::now());
+                w.answers += 1;
+                w.delivering = Some((w.answers, Instant::now()));
                 ToHost::Dialog { answer }
             }
             _ => return Err("the script is not waiting for that reply".into()),
@@ -735,16 +749,19 @@ fn start_threads(
     pid: u32,
 ) -> io::Result<()> {
     let s = shared.clone();
-    let c = cancel.clone();
-    let e = events.clone();
-    std::thread::Builder::new().name("script-watchdog".into()).spawn(move || watchdog(&s, &c, pid, &e))?;
-    let s = shared.clone();
     std::thread::Builder::new().name("script-stderr".into()).spawn(move || read_stderr(errors, &s))?;
     let s = shared.clone();
     std::thread::Builder::new().name("script-to-host".into()).spawn(move || write_host(input, &host_rx, &s))?;
     let s = shared.clone();
     let c = cancel.clone();
-    std::thread::Builder::new().name("script-from-host".into()).spawn(move || read_host(output, &s, &c, &events, &coalesce))?;
+    let e = events.clone();
+    std::thread::Builder::new().name("script-from-host".into()).spawn(move || read_host(output, &s, &c, &e, &coalesce))?;
+    // Started last: once it runs it reaps the host and waits for the reader to report, so it
+    // must not run when a thread before it could not start (the caller reaps the host then, and
+    // no reader would ever report).
+    let s = shared.clone();
+    let c = cancel.clone();
+    std::thread::Builder::new().name("script-watchdog".into()).spawn(move || watchdog(&s, &c, pid, &events))?;
     Ok(())
 }
 
@@ -903,6 +920,8 @@ fn too_big(e: &FrameError) -> String {
 }
 
 fn write_host(mut input: ChildStdin, rx: &Receiver<ToHost>, shared: &Shared) {
+    // Answers are written in the order `reply` numbered them.
+    let mut answers = 0u64;
     for msg in rx {
         let first = match known_too_large(&msg) {
             Some(n) => Err(FrameError::TooLarge(n)),
@@ -927,7 +946,8 @@ fn write_host(mut input: ChildStdin, rx: &Receiver<ToHost>, shared: &Shared) {
         };
         if matches!(msg, ToHost::Executed { .. } | ToHost::Dialog { .. }) {
             // Out (or failed): the run's clock goes on, unless the host already asked again.
-            lock(&shared.watch).delivered();
+            answers += 1;
+            lock(&shared.watch).wrote(answers);
         }
         if let Err(e) = written {
             // A host that is gone is classified by how it ended; one still running waits for an
@@ -1075,5 +1095,50 @@ fn relay(output: &mut ChildStdout, shared: &Shared, events: &SyncSender<Event>, 
             shared.kill(Verdict::Cancelled);
             return None;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn watch() -> Watch {
+        Watch {
+            clock: Clock { spent: Duration::ZERO, since: None },
+            waiting: None,
+            queued: None,
+            delivering: None,
+            answers: 0,
+            delivery_free: Duration::ZERO,
+            verdict: None,
+            exit: None,
+            peak: 0,
+            dead: false,
+        }
+    }
+
+    /// The writer's report that answer 1 is out does not complete answer 2, which the app gave
+    /// after the host, having had answer 1 already, asked again: answer 2's delivery time
+    /// still stops the clock, and counts, until answer 2 itself is out.
+    #[test]
+    fn the_writer_completes_only_the_delivery_of_the_answer_it_wrote() {
+        let mut w = watch();
+        w.answers += 1;
+        w.delivering = Some((w.answers, Instant::now()));
+        // The host asks again: it had answer 1.
+        w.delivered();
+        w.clock.pause();
+        w.waiting = Some((Instant::now(), false));
+        // The app answers again.
+        w.waiting = None;
+        w.answers += 1;
+        w.delivering = Some((w.answers, Instant::now()));
+        // The writer reports answer 1 written only now.
+        w.wrote(1);
+        assert!(matches!(w.delivering, Some((2, _))), "answer 2 is still on its way");
+        assert!(w.clock.since.is_none(), "and the clock still stopped for it");
+        w.wrote(2);
+        assert!(w.delivering.is_none());
+        assert!(w.clock.since.is_some(), "the clock goes on once it is out");
     }
 }

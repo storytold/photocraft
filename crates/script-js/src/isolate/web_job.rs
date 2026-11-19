@@ -56,6 +56,11 @@ pub trait Transport {
     /// # Errors
     /// The answer could not be handed over (larger than the shared memory holds).
     fn answer(&mut self, answer: &str) -> Result<(), String>;
+    /// The most bytes [`Self::answer`] takes. A command's result past it reaches the script as
+    /// the command's error, as one past the protocol's own limit does.
+    fn answer_limit(&self) -> usize {
+        MAX_TO_HOST
+    }
     /// Stop the Worker now.
     fn terminate(&mut self);
 }
@@ -387,8 +392,9 @@ impl<T: Transport> WebJob<T> {
         let mut text = serde_json::to_string(msg).map_err(|e| e.to_string())?;
         // The Worker's limits, checked here as the desktop app checks the script host's: an
         // answer it would refuse can't be told from a broken link there.
-        let too_big = if text.len() > MAX_TO_HOST {
-            Some(format!("{} MiB, over the limit of {} MiB", text.len().div_ceil(1 << 20), MAX_TO_HOST >> 20))
+        let limit = MAX_TO_HOST.min(self.transport.answer_limit());
+        let too_big = if text.len() > limit {
+            Some(format!("{} MiB, over the limit of {} MiB", text.len().div_ceil(1 << 20), limit >> 20))
         } else if values_in(text.as_bytes()) > MAX_FRAME_VALUES {
             Some(format!("more than {MAX_FRAME_VALUES} values"))
         } else {
@@ -458,6 +464,8 @@ mod tests {
         answers: Rc<RefCell<Vec<Value>>>,
         terminated: Rc<RefCell<bool>>,
         room: Option<usize>,
+        /// Whether the job is told `room` ([`Transport::answer_limit`]).
+        limit_known: bool,
     }
 
     impl Fake {
@@ -481,6 +489,9 @@ mod tests {
             self.answers.borrow_mut().push(serde_json::from_str(answer).unwrap());
             Ok(())
         }
+        fn answer_limit(&self) -> usize {
+            if self.limit_known { self.room.unwrap_or(MAX_TO_HOST) } else { MAX_TO_HOST }
+        }
         fn terminate(&mut self) {
             *self.terminated.borrow_mut() = true;
         }
@@ -499,6 +510,18 @@ mod tests {
 
     fn job(fake: &Fake, options: WebOptions) -> WebJob<Fake> {
         WebJob::spawn(fake.clone(), "1".into(), options).unwrap()
+    }
+
+    /// Poll until the run ends, at most a bounded number of times: the messages that end it may
+    /// be checked over several polls (each has a time budget, so a slow machine can split them),
+    /// and what an earlier poll checked is handed out first.
+    fn until_end(j: &mut WebJob<Fake>) -> Result<(), String> {
+        for _ in 0..1000 {
+            if let Some(WebEvent::Finished(r)) = j.poll() {
+                return r;
+            }
+        }
+        panic!("the run did not end")
     }
 
     #[test]
@@ -534,7 +557,7 @@ mod tests {
             let fake = Fake::default();
             let mut j = job(&fake, options());
             fake.inbox.borrow_mut().push_back(Incoming::Message(bad.clone(), Instant::now()));
-            let Some(WebEvent::Finished(Err(m))) = j.poll() else { panic!("{bad}") };
+            let Err(m) = until_end(&mut j) else { panic!("{bad}") };
             assert!(m.contains("may not make"), "{m}");
             assert!(*fake.terminated.borrow());
         }
@@ -543,8 +566,7 @@ mod tests {
         let mut j = job(&fake, options());
         fake.send(&FromHost::Execute { id: "session.inspect".into(), params: json!({}) });
         fake.send(&FromHost::Output { line: "early".into() });
-        // The command was not handed out before the run ended, so it is dropped with it.
-        assert!(matches!(j.poll(), Some(WebEvent::Finished(Err(m))) if m.contains("while it waited")));
+        assert!(matches!(until_end(&mut j), Err(m) if m.contains("while it waited")));
     }
 
     /// A flood is stopped at the run's bounds: polls hand out no more than the bound allows and
@@ -558,14 +580,20 @@ mod tests {
             fake.send(&FromHost::Output { line: line.clone() });
         }
         let mut handed = 0usize;
-        let end = loop {
+        let mut end = None;
+        // Bounded: every poll checks at least one of the messages sent.
+        for _ in 0..(MAX_OUTPUT_BYTES >> 20) * 4 + 64 {
             match j.poll() {
                 Some(WebEvent::Output(l)) => handed += l.len(),
-                Some(WebEvent::Finished(r)) => break r,
+                Some(WebEvent::Finished(r)) => {
+                    end = Some(r);
+                    break;
+                }
                 Some(other) => panic!("unexpected {other:?}"),
                 None => {}
             }
-        };
+        }
+        let end = end.expect("the run ended");
         assert!(matches!(&end, Err(m) if m.contains("of output")), "{end:?}");
         assert!(handed <= MAX_OUTPUT_BYTES, "{handed}");
         assert!(*fake.terminated.borrow());
@@ -598,15 +626,14 @@ mod tests {
         assert_eq!(j.poll(), None, "still within its limit");
     }
 
-    /// A Worker that ends while a request of its waits for an answer broke the protocol: the
-    /// request is not handed out.
+    /// A Worker that ends while a request of its waits for an answer broke the protocol.
     #[test]
     fn an_end_while_a_request_waits_is_refused_with_the_request() {
         let fake = Fake::default();
         let mut j = job(&fake, options());
         fake.send(&FromHost::Execute { id: "session.inspect".into(), params: json!({}) });
         fake.send(&FromHost::Finished { error: None });
-        assert!(matches!(j.poll(), Some(WebEvent::Finished(Err(m))) if m.contains("while it waited")));
+        assert!(matches!(until_end(&mut j), Err(m) if m.contains("while it waited")));
     }
 
     /// A message the Worker sent while it should have waited, already at the page when the page
@@ -634,7 +661,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(150));
         fake.send(&FromHost::Output { line: "late".into() });
         fake.send(&FromHost::Finished { error: None });
-        assert!(matches!(j.poll(), Some(WebEvent::Finished(Err(m))) if m.contains("time limit")));
+        assert!(matches!(until_end(&mut j), Err(m) if m.contains("time limit")));
     }
 
     /// A request not handed out yet can't be answered, and its time to answer starts when the
@@ -785,6 +812,26 @@ mod tests {
         assert!(matches!(j.poll(), Some(WebEvent::Dialog(_))));
         assert!(j.reply_dialog(json!("a long answer that does not fit")).is_err());
         assert!(matches!(j.poll(), Some(WebEvent::Finished(Err(m))) if m.contains("could not be sent")));
+    }
+
+    /// A command's result past what the transport takes (the Worker's mailbox) reaches the
+    /// script as the command's error, and the run goes on; one that fits is sent as it is.
+    #[test]
+    fn a_result_past_the_mailbox_is_the_commands_error() {
+        let fake = Fake { room: Some(400), limit_known: true, ..Fake::default() };
+        let mut j = job(&fake, options());
+        for (result, sent) in [(json!("x".repeat(1000)), false), (json!("fits"), true)] {
+            fake.send(&FromHost::Execute { id: "session.inspect".into(), params: json!({}) });
+            assert!(matches!(j.poll(), Some(WebEvent::Execute { .. })));
+            j.reply_executed(Ok(result.clone())).unwrap();
+            let answer = fake.answers.borrow().last().cloned().unwrap();
+            if sent {
+                assert_eq!(answer, json!({"type": "executed", "result": {"Ok": result}}));
+            } else {
+                assert!(answer["result"]["Err"].as_str().is_some_and(|m| m.contains("too large for a script")), "{answer}");
+            }
+            assert!(!j.is_finished());
+        }
     }
 
     /// A Worker that can't be started says so, not that the script ran out of memory.

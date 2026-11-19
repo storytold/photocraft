@@ -118,6 +118,31 @@ pub fn moves_mask_alone(l: &Layer) -> bool {
 
 /// `layer.translate`: the explicit layer, or every selected layer, plus their linked layers.
 /// With `"target":"mask"` a layer whose mask is unlinked moves that mask alone.
+/// How far from the canvas origin a layer's pixels may be moved: half the 32-bit range, so sums
+/// of coordinates (a tile's origin plus an offset, bounds plus a delta) can't overflow.
+pub(crate) const MAX_REACH: i64 = 1 << 30;
+
+/// Refuse a move that would take `l`'s stored pixels (its tiles, a group's children's) past
+/// [`MAX_REACH`].
+fn check_reach(l: &Layer, dx: i32, dy: i32) -> Result<()> {
+    fn tiles(l: &Layer) -> photocraft_geom::Rect {
+        match &l.content {
+            LayerContent::Group(g) => g.children.iter().map(tiles).fold(photocraft_geom::Rect::EMPTY, |a, b| a.union(&b)),
+            _ => l.surface().map(|s| s.tile_bounds()).unwrap_or(photocraft_geom::Rect::EMPTY),
+        }
+    }
+    let b = tiles(l);
+    if b.is_empty() {
+        return Ok(());
+    }
+    let (dx, dy) = (i64::from(dx), i64::from(dy));
+    let out = |v: i32, d: i64| (i64::from(v) + d).abs() > MAX_REACH;
+    if out(b.x0, dx) || out(b.x1, dx) || out(b.y0, dy) || out(b.y1, dy) {
+        return Err(bad("layer.translate", format!("the move would take \"{}\" more than {MAX_REACH} px from the canvas", l.name)));
+    }
+    Ok(())
+}
+
 pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
     let (dx, dy) = match p.get("units").and_then(Value::as_str) {
         None | Some("px") => (int_i32("layer.translate", p, "dx")?.unwrap_or(0), int_i32("layer.translate", p, "dy")?.unwrap_or(0)),
@@ -171,6 +196,13 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
         let mut ids = move_targets(doc, &rest);
         if ids.is_empty() && alone.is_empty() {
             return Err(EngineError::NoLayer(roots[0]));
+        }
+        if tile.is_none() {
+            for &id in &ids {
+                if let Some(l) = doc.layer(id) {
+                    check_reach(l, dx, dy)?;
+                }
+            }
         }
         let moves: Vec<_> = ids.iter().map(|&id| (id, dx, dy)).collect();
         move_layers_wrapped(doc, &before, &moves, tile)?;

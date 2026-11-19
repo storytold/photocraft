@@ -131,6 +131,7 @@ mod unicode_colors;
 mod unsupported_smart_filters;
 mod vector_paste_options;
 mod wand_transparent_copy;
+mod whole_canvas_limits;
 mod working_rgb_profile;
 mod xmp_charref;
 

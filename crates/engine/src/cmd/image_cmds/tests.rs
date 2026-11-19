@@ -385,6 +385,24 @@ fn nearest_neighbor_reduction_keeps_source_values() {
     }
 }
 
+/// The largest canvas extends the Background without reading the whole new area: only where
+/// the Background has tiles is it blended, the rest is filled (a 300000 px square read whole
+/// was hundreds of gigabytes, and the allocation aborted the app).
+#[test]
+fn the_largest_canvas_extends_the_background_without_reading_it_whole() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 100, "height": 100, "resolution": 72})).unwrap();
+    s.execute("image.canvasSize", json!({"width": 300000, "height": 300000, "anchor": "center", "extensionColor": "#00ff00"})).unwrap();
+    let d = doc(&s);
+    assert_eq!(d.size, Size::new(300000, 300000));
+    let bg = d.layers[0].surface().unwrap();
+    assert_eq!(bg.pixel(0, 0), vec![0.0, 1.0, 0.0, 1.0]);
+    assert_eq!(bg.pixel(299_999, 299_999), vec![0.0, 1.0, 0.0, 1.0]);
+    // The old canvas, and the part of its tiles outside it, as before.
+    assert_eq!(bg.pixel(150_000, 150_000), vec![1.0, 1.0, 1.0, 1.0]);
+    assert_eq!(bg.pixel(149_950 + 101, 150_000), vec![0.0, 1.0, 0.0, 1.0]);
+}
+
 #[test]
 fn canvas_size_anchors_and_extends_background() {
     let mut s = session();

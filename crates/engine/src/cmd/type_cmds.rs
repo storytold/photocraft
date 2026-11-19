@@ -1030,6 +1030,8 @@ pub fn specs() -> Vec<CommandSpec> {
                     Some(v) => Some(v.as_u64().map(LayerId).ok_or_else(|| bad("type.create", "`layer` must be a layer id"))?),
                     None => None,
                 };
+                // A name the user gave the layer, even one that reads like "Layer 3", stays.
+                let typed = into.and_then(|id| typed_name(s, id));
                 // The reference application names new vertical text after its tool (#12058).
                 let label = if t.orientation == Orientation::Vertical { "New Vertical Type Layer" } else { NEW_TYPE_LAYER_LABEL };
                 let id = s.edit(label, |doc, active| {
@@ -1055,7 +1057,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     }
                     layer.content = LayerContent::Text(t);
                     // A name the app gave it ("Layer 3") goes; one the user gave it stays.
-                    if given.is_some() || is_default_layer_name(&layer.name) {
+                    if given.is_some() || (is_default_layer_name(&layer.name) && typed.as_deref() != Some(layer.name.as_str())) {
                         layer.name = name;
                     }
                     *active = Some(into);

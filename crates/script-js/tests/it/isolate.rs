@@ -178,6 +178,24 @@ fn a_window_too_large_to_send_is_the_scripts_error() {
     assert!(seen.windows.is_empty(), "nothing was sent, and no hide either");
 }
 
+/// A dialog whose text passes the per-string bound but not, encoded, the frame's (control
+/// characters take six bytes each in JSON) never reaches the app, and nothing waits for an
+/// answer: the run is stopped by name.
+#[test]
+fn a_dialog_too_large_to_send_stops_the_run_before_any_wait() {
+    let src = r#"
+        try { alert(new Array(12 * 1024 * 1024 + 1).join("\u0001")); $.writeln("shown"); } catch (e) { $.writeln("caught"); }
+    "#;
+    let mut opts = options("bigdialog");
+    opts.time_limit = SLOW_LIMIT;
+    let mut job = IsolatedJob::spawn(src.into(), opts).unwrap();
+    let seen = drive(&mut job, None, &[], |_, _| {});
+    report("big dialog", &seen);
+    assert!(matches!(&seen.result, Err(f) if f.message.contains("recorded host calls took more than 64 MiB")), "{:?}", seen.result);
+    assert!(seen.lines.is_empty(), "{:?}", seen.lines);
+    assert!(seen.dialogs.is_empty(), "no dialog reached the app");
+}
+
 /// A progress palette sends its whole window with every update; those are bounded on their own,
 /// so a long batch is not stopped by the output lines' bound.
 #[test]
@@ -192,10 +210,19 @@ fn a_progress_palette_is_not_held_to_the_output_bound() {
     let mut opts = options("progress");
     opts.time_limit = SLOW_LIMIT;
     let mut job = IsolatedJob::spawn(src.into(), opts).unwrap();
-    let seen = drive(&mut job, None, &[], |_, _| {});
+    let mut sent = 0usize;
+    let seen = drive(&mut job, None, &[], |_, e| {
+        if let Event::Window { window: Some(w), .. } = e {
+            sent += serde_json::to_vec(w).map_or(0, |b| b.len());
+        }
+    });
     report("progress palette", &seen);
     assert!(seen.result.is_ok(), "{:?}", seen.result);
     assert_eq!(seen.lines, ["done"]);
+    // Every update reached the interface (shown, 1000 updates, hidden), and together they are
+    // past what output lines may take: they are held to their own bound, not that one.
+    assert_eq!(seen.windows.len(), 1002, "{:?}", seen.windows.len());
+    assert!(sent > photocraft_script_js::tape::MAX_OUTPUT_BYTES, "{sent}");
 }
 
 /// The deepest window a script may build reaches the interface through the script host.
@@ -448,14 +475,26 @@ fn a_missing_host_executable_is_reported() {
     assert_eq!(f.kind, FailureKind::Unavailable);
 }
 
-/// A stand-in host that writes `frames`, then runs the shell commands `then`; the interface
-/// starts polling after `settle`. Only the run's end may reach the interface.
+/// `sh -c script`, with `paths` as the script's positional parameters (`"$1"`, `"$2"`, …):
+/// passed as arguments, never put into the script's text, so no path can change what it runs.
 #[cfg(unix)]
-fn stand_in(name: &str, frames: &[u8], then: &str, settle: Duration) -> Seen {
+fn sh(script: &str, paths: &[&std::path::Path]) -> HelperCommand {
+    let mut args: Vec<std::ffi::OsString> = vec!["-c".into(), script.into(), "stand-in".into()];
+    args.extend(paths.iter().map(|p| p.as_os_str().to_owned()));
+    HelperCommand { program: "sh".into(), args, envs: Vec::new() }
+}
+
+/// A stand-in host that writes `frames`, then runs the shell commands `then` (which see `more`
+/// as `"$2"`, `"$3"`, …); the interface starts polling after `settle`. Only the run's end may
+/// reach the interface.
+#[cfg(unix)]
+fn stand_in(name: &str, frames: &[u8], then: &str, more: &[&std::path::Path], settle: Duration) -> Seen {
     let dir = std::env::temp_dir().join(format!("script-host-{name}-{}-{}", std::process::id(), frames.len()));
     std::fs::write(&dir, frames).unwrap();
     let mut opts = options(name);
-    opts.helper = HelperCommand { program: "sh".into(), args: vec!["-c".into(), format!("cat '{}'; {then}", dir.display()).into()], envs: Vec::new() };
+    let mut paths = vec![dir.as_path()];
+    paths.extend_from_slice(more);
+    opts.helper = sh(&format!("cat \"$1\"; {then}"), &paths);
     let mut job = IsolatedJob::spawn("1".into(), opts).unwrap();
     std::thread::sleep(settle);
     let seen = drive(&mut job, None, &[], |_, e| assert!(matches!(e, Event::Finished(_)), "{name}: a request reached the interface: {e:?}"));
@@ -466,7 +505,7 @@ fn stand_in(name: &str, frames: &[u8], then: &str, settle: Duration) -> Seen {
 /// A stand-in host that writes `frames` and then waits: the app must refuse what it sends.
 #[cfg(unix)]
 fn rogue(frames: &[u8]) -> Seen {
-    stand_in("rogue", frames, "sleep 30", Duration::ZERO)
+    stand_in("rogue", frames, "sleep 30", &[], Duration::ZERO)
 }
 
 #[cfg(unix)]
@@ -500,25 +539,28 @@ fn an_untrusted_host_cannot_reach_other_commands_or_oversize_the_app() {
     }
 }
 
-/// Set for `late_marker_writer` when the late-stderr test runs it as a host's grandchild.
+/// Set for `late_marker_writer` when the late-stderr test runs it as a host's grandchild: the
+/// file the writer creates once it runs. `LATE_MARKER_HOST` is the host's pid.
 #[cfg(unix)]
 const LATE_MARKER: &str = "PHOTOCRAFT_TEST_LATE_MARKER";
+#[cfg(unix)]
+const LATE_MARKER_HOST: &str = "PHOTOCRAFT_TEST_LATE_MARKER_HOST";
 
 /// Not a test of its own (it does nothing in a normal run): run by
 /// `a_memory_marker_read_after_the_host_exited_still_counts` as a grandchild of a stand-in host,
-/// it starts a writer in a new process group that writes the memory marker to the host's
-/// standard error after the host is gone.
+/// it starts a writer in a new process group that says it is ready, waits until the host is
+/// gone and only then writes the memory marker to the host's standard error.
 #[cfg(unix)]
 #[test]
 // The writer must outlive this process (it is the point); init reaps it.
 #[allow(clippy::zombie_processes)]
 fn late_marker_writer() {
     use std::os::unix::process::CommandExt;
-    if std::env::var_os(LATE_MARKER).is_none() {
-        return;
-    }
+    let (Some(ready), Some(host)) = (std::env::var_os(LATE_MARKER), std::env::var_os(LATE_MARKER_HOST)) else { return };
+    // Bounded waits (10 s): a host that never goes leaves no writer behind for long.
+    let script = r#"touch "$1"; i=0; while kill -0 "$2" 2>/dev/null && [ $i -lt 1000 ]; do sleep 0.01; i=$((i+1)); done; echo 'memory allocation of 5 bytes failed' >&2"#;
     std::process::Command::new("sh")
-        .args(["-c", "sleep 0.5; echo 'memory allocation of 5 bytes failed' >&2"])
+        .args([std::ffi::OsStr::new("-c"), std::ffi::OsStr::new(script), std::ffi::OsStr::new("writer"), &ready, &host])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .process_group(0)
@@ -537,11 +579,17 @@ fn a_memory_marker_read_after_the_host_exited_still_counts() {
     // only standard error stays open, as a host's last write can still be in the pipe. It runs
     // in a process group of its own (started by this test binary, `late_marker_writer`, as
     // nothing but `sh` is on every Unix runner), so stopping the host's group on exit leaves it
-    // to deliver the marker late, as a pipe being drained would. The host waits a moment so the
-    // writer has started before it aborts.
+    // to deliver the marker late, as a pipe being drained would. The host aborts once the writer
+    // says it runs, and the writer writes once the host is gone: ordered, not timed.
     let exe = std::env::current_exe().unwrap();
-    let script = format!("{LATE_MARKER}=1 '{}' --exact {} --quiet >/dev/null & sleep 0.5; kill -ABRT $$", exe.display(), test_name("late_marker_writer"));
-    let seen = stand_in("late-stderr", &[], &script, Duration::ZERO);
+    let ready = std::env::temp_dir().join(format!("script-host-late-marker-ready-{}", std::process::id()));
+    drop(std::fs::remove_file(&ready));
+    let script = format!(
+        "{LATE_MARKER}=\"$3\" {LATE_MARKER_HOST}=$$ \"$2\" --exact {} --quiet >/dev/null & i=0; while [ ! -e \"$3\" ] && [ $i -lt 1000 ]; do sleep 0.01; i=$((i+1)); done; kill -ABRT $$",
+        test_name("late_marker_writer")
+    );
+    let seen = stand_in("late-stderr", &[], &script, &[&exe, &ready], Duration::ZERO);
+    drop(std::fs::remove_file(&ready));
     report("late stderr", &seen);
     assert_eq!(failure(&seen).kind, FailureKind::MemoryLimit);
 }
@@ -574,7 +622,7 @@ fn a_flood_of_long_output_lines_is_stopped_by_size() {
 }
 
 /// A stand-in host: `sh -c` running `script`, with `files` written to the temp dir first and
-/// `{name}` in the script replaced by their paths.
+/// `{name}` in the script standing for its path (a quoted positional parameter).
 #[cfg(unix)]
 fn shell_host(name: &str, files: &[(&str, Vec<u8>)], script: &str) -> (IsolatedJob, Vec<std::path::PathBuf>) {
     shell_host_within(name, files, script, LIMIT)
@@ -584,15 +632,15 @@ fn shell_host(name: &str, files: &[(&str, Vec<u8>)], script: &str) -> (IsolatedJ
 fn shell_host_within(name: &str, files: &[(&str, Vec<u8>)], script: &str, limit: Duration) -> (IsolatedJob, Vec<std::path::PathBuf>) {
     let mut script = script.to_owned();
     let mut paths = Vec::new();
-    for (key, bytes) in files {
+    for (i, (key, bytes)) in files.iter().enumerate() {
         let path = std::env::temp_dir().join(format!("script-host-{name}-{key}-{}", std::process::id()));
         std::fs::write(&path, bytes).unwrap();
-        script = script.replace(&format!("{{{key}}}"), &format!("'{}'", path.display()));
+        script = script.replace(&format!("{{{key}}}"), &format!("\"${}\"", i + 1));
         paths.push(path);
     }
     let mut opts = options(name);
     opts.time_limit = limit;
-    opts.helper = HelperCommand { program: "sh".into(), args: vec!["-c".into(), script.into()], envs: Vec::new() };
+    opts.helper = sh(&script, &paths.iter().map(std::path::PathBuf::as_path).collect::<Vec<_>>());
     (IsolatedJob::spawn("1".into(), opts).unwrap(), paths)
 }
 
@@ -627,7 +675,8 @@ fn a_host_that_streams_too_many_empty_lines_is_stopped() {
     assert_eq!(seen.lines.len(), photocraft_script_js::tape::MAX_ENTRIES);
 }
 
-/// A cancel outranks a result the host had already queued: the run reports it was cancelled.
+/// A cancel outranks a result the host had already queued, unread behind a busy interface: the
+/// run reports it was cancelled.
 #[cfg(unix)]
 #[test]
 fn a_cancel_outranks_a_queued_result() {
@@ -637,7 +686,9 @@ fn a_cancel_outranks_a_queued_result() {
     }
     frames.extend(frame(&json!({"type": "finished", "error": null})));
     let (mut job, paths) = shell_host("queued", &[("frames", frames)], "cat {frames}; sleep 30");
-    // The event queue fills while nobody polls; the result waits behind it.
+    // Nothing is polled before the cancel, and the interface's queue holds far fewer than the
+    // 200 lines before the result, so the result can't have been read yet however this is
+    // scheduled; the wait only lets the queue fill, so the result waits behind it.
     std::thread::sleep(Duration::from_millis(300));
     job.cancel();
     let seen = drive(&mut job, None, &[], |_, _| {});
@@ -646,22 +697,69 @@ fn a_cancel_outranks_a_queued_result() {
     assert_eq!(failure(&seen).kind, FailureKind::Cancelled);
 }
 
+/// A result the app has read stands: a cancel after it (the result waits for the interface to
+/// poll) does not turn a finished run into a cancelled one.
+#[cfg(unix)]
+#[test]
+fn a_cancel_after_the_result_was_read_leaves_the_result() {
+    let finished = frame(&json!({"type": "finished", "error": null}));
+    let (mut job, paths) = shell_host("read-result", &[("frames", finished)], "cat {frames}; sleep 30");
+    // Evidence the result was read: the app stops the host as soon as it has it.
+    let host = job.host_id().to_string();
+    assert!(gone(&host), "the host was not stopped after its result");
+    job.cancel();
+    let seen = drive(&mut job, None, &[], |_, _| {});
+    paths.iter().for_each(|p| drop(std::fs::remove_file(p)));
+    report("result read, then cancelled", &seen);
+    assert_eq!(seen.result, Ok(()));
+}
+
 /// Something the host started keeps its output open. Cancelling still ends the run at once,
 /// and stops that process too.
 #[cfg(unix)]
 #[test]
 fn a_cancel_is_reported_while_a_descendant_holds_the_output() {
-    let pid_file = std::env::temp_dir().join(format!("script-host-descendant-pid-{}", std::process::id()));
-    let (mut job, _) = shell_host("descendant", &[], &format!("sleep 30 & echo $! > '{}'; wait", pid_file.display()));
-    std::thread::sleep(Duration::from_millis(300));
+    let (mut job, paths) = shell_host("descendant", &[("pid", Vec::new())], "sleep 30 & echo $! > {pid}; wait");
+    // Cancelled once the descendant is there to be stopped, not after a guess at how long that takes.
+    let pid = live_descendant(&paths[0]);
     job.cancel();
     let seen = drive(&mut job, None, &[], |_, _| {});
+    drop(std::fs::remove_file(&paths[0]));
     report("descendant, cancelled", &seen);
     assert_eq!(failure(&seen).kind, FailureKind::Cancelled);
     assert!(seen.elapsed < Duration::from_secs(10), "{:?}", seen.elapsed);
-    let pid = std::fs::read_to_string(&pid_file).unwrap();
-    drop(std::fs::remove_file(&pid_file));
-    assert!(gone(pid.trim()), "the host's descendant {} outlived the run", pid.trim());
+    assert!(gone(&pid), "the host's descendant {pid} outlived the run");
+}
+
+/// So does the watchdog's stop at the time limit: the run ends as timed out, and what the host
+/// started is stopped with it.
+#[cfg(unix)]
+#[test]
+fn a_timeout_stops_a_descendant_that_holds_the_output() {
+    let (mut job, paths) = shell_host_within("descendant-timeout", &[("pid", Vec::new())], "sleep 30 & echo $! > {pid}; wait", Duration::from_secs(2));
+    let pid = live_descendant(&paths[0]);
+    let seen = drive(&mut job, None, &[], |_, _| {});
+    drop(std::fs::remove_file(&paths[0]));
+    report("descendant, timed out", &seen);
+    assert_eq!(failure(&seen).kind, FailureKind::Timeout);
+    assert!(seen.elapsed < Duration::from_secs(12), "{:?}", seen.elapsed);
+    assert!(gone(&pid), "the host's descendant {pid} outlived the run");
+}
+
+/// The pid a stand-in host wrote to `file` once that process is running, waiting at most 10 s.
+#[cfg(unix)]
+fn live_descendant(file: &std::path::Path) -> String {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let pid = std::fs::read_to_string(file).unwrap_or_default().trim().to_owned();
+        let running =
+            !pid.is_empty() && std::process::Command::new("kill").args(["-0", &pid]).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success());
+        if running {
+            return pid;
+        }
+        assert!(Instant::now() < deadline, "no live descendant appeared in {}", file.display());
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 /// The host exits without a result while something it started keeps its output open: the run
@@ -669,8 +767,8 @@ fn a_cancel_is_reported_while_a_descendant_holds_the_output() {
 #[cfg(unix)]
 #[test]
 fn a_host_that_exits_while_a_descendant_holds_the_output_is_reported() {
-    let pid_file = std::env::temp_dir().join(format!("script-host-orphan-pid-{}", std::process::id()));
-    let (mut job, _) = shell_host("orphan", &[], &format!("(sleep 30 & echo $! > '{}'); sleep 0.2; exit 3", pid_file.display()));
+    let (mut job, paths) = shell_host("orphan", &[("pid", Vec::new())], "(sleep 30 & echo $! > {pid}); sleep 0.2; exit 3");
+    let pid_file = paths[0].clone();
     let seen = drive(&mut job, None, &[], |_, _| {});
     report("orphan", &seen);
     assert!(matches!(failure(&seen).kind, FailureKind::Crashed(Crash { code: Some(3), .. })), "{:?}", failure(&seen));
@@ -804,7 +902,7 @@ fn a_request_still_queued_when_the_host_is_done_is_dropped() {
         // It reported its result without waiting for the answer.
         ("finished", [command.clone(), finished].concat(), "sleep 30"),
     ] {
-        let seen = stand_in("done-host", &frames, then, Duration::from_millis(300));
+        let seen = stand_in("done-host", &frames, then, &[], Duration::from_millis(300));
         report(name, &seen);
         if name == "finished" {
             assert_eq!(seen.result, Ok(()), "{name}");
@@ -817,7 +915,7 @@ fn a_request_still_queued_when_the_host_is_done_is_dropped() {
 #[cfg(unix)]
 #[test]
 fn a_host_that_lingers_after_closing_its_output_is_stopped_by_the_app() {
-    let seen = stand_in("lingering", &[], "exec 1>&-; exec sleep 30", Duration::ZERO);
+    let seen = stand_in("lingering", &[], "exec 1>&-; exec sleep 30", &[], Duration::ZERO);
     report("lingering", &seen);
     let f = failure(&seen);
     assert_eq!(f.kind, FailureKind::HostViolation, "{}", f.message);

@@ -28,8 +28,11 @@ struct Ui {
     /// Window messages (counted from 0) that fail.
     refuse_at: Rc<RefCell<Vec<usize>>>,
     window_calls: Rc<std::cell::Cell<usize>>,
-    /// How long each window update takes.
+    /// How long each window update takes, on `clock` when there is one (else really).
     window_delay: Rc<std::cell::Cell<std::time::Duration>>,
+    clock: Option<std::sync::Arc<crate::ManualClock>>,
+    /// Window updates that took their time.
+    delayed: Rc<std::cell::Cell<usize>>,
 }
 
 impl Ui {
@@ -59,7 +62,13 @@ impl Host for Ui {
     fn window(&mut self, id: u32, window: Option<&Value>) -> Result<(), HostError> {
         let call = self.window_calls.get();
         self.window_calls.set(call + 1);
-        std::thread::sleep(self.window_delay.get());
+        if !self.window_delay.get().is_zero() {
+            match &self.clock {
+                Some(c) => c.advance(self.window_delay.get()),
+                None => std::thread::sleep(self.window_delay.get()),
+            }
+            self.delayed.set(self.delayed.get() + 1);
+        }
         if self.refuse_at.borrow().contains(&call) {
             return Err(HostError("the window could not be shown: too large".into()));
         }
@@ -512,11 +521,14 @@ fn a_palette_that_fails_to_update_stays_shown_and_is_hidden_on_close() {
 
 #[test]
 fn the_time_a_window_update_takes_counts_against_the_time_limit() {
-    let ui = Ui { live: true, ..Ui::default() };
+    // The clock moves only in the window update, so nothing else can spend the limit first.
+    let clock = std::sync::Arc::new(crate::ManualClock::default());
+    let ui = Ui { live: true, clock: Some(clock.clone()), ..Ui::default() };
     ui.window_delay.set(std::time::Duration::from_millis(150));
-    let budget = photocraft_script_js::WallClock::new(std::time::Duration::from_millis(50));
+    let budget = photocraft_script_js::WallClock::with_clock(std::time::Duration::from_millis(50), clock);
     let mut r = Runner::new("var w = new Window('palette'); w.show();", Box::new(ui.clone()), Box::new(budget), RunOptions::default()).unwrap();
     let Step::Failed(m) = r.step() else { panic!("the run went past its time limit") };
+    assert_eq!(ui.delayed.get(), 1, "the update ran, and it is what spent the time");
     assert!(m.contains("time limit"), "{m}");
 }
 
@@ -587,10 +599,39 @@ fn lists_hold_a_bounded_number_of_items_in_all() {
         $.writeln(n, ' ', why);
     "#;
     let started = std::time::Instant::now();
-    let (_, ui) = run(src, vec![], false);
+    let (step, ui) = run(src, vec![], false);
+    // The script catches the limit and finishes.
+    assert_eq!(step, Step::Done);
     let lines = ui.lines.borrow().clone();
     assert_eq!(lines, ["250000 true a script's lists can hold at most 250000 items in all"]);
     assert!(started.elapsed() < std::time::Duration::from_secs(60), "{:?}", started.elapsed());
+}
+
+/// An item whose `text` setter removes it and then throws gives its count back once, not twice:
+/// the lists' bound still holds exactly afterwards.
+#[test]
+fn an_item_removed_by_its_own_failing_setter_is_counted_once() {
+    let src = r#"
+        var w = new Window('dialog', 'Lists'), first = w.add('listbox'), n = 0, why = '';
+        first.add('item', 'kept');
+        var victim = first;
+        Object.defineProperty(Object.prototype, 'text', {
+            configurable: true,
+            set: function (v) { victim.remove(this); throw new Error('no'); }
+        });
+        try { first.add('item', 'gone'); } catch (e) {}
+        delete Object.prototype.text;
+        try {
+            for (var l = 0; l < 26; l++) {
+                var list = w.add('listbox');
+                for (var i = 0; i < 10000; i++) { list.add('item', 'x'); n++; }
+            }
+        } catch (e) { why = e.message; }
+        $.writeln(first.items.length, ' ', n, ' ', why);
+    "#;
+    let (step, ui) = run(src, vec![], false);
+    assert_eq!(step, Step::Done);
+    assert_eq!(*ui.lines.borrow(), ["1 249999 a script's lists can hold at most 250000 items in all"]);
 }
 
 #[test]
@@ -648,4 +689,105 @@ fn a_list_selection_set_by_index_reads_back_as_the_item() {
     let (step, ui) = run(src, vec![], true);
     assert_eq!(step, Step::Done);
     assert_eq!(*ui.lines.borrow(), ["null", "object B 1 true false", "C false", "null", "null"]);
+}
+
+/// A button handler that throws ends `show()` with its error, and the dialog is hidden first:
+/// a script that catches the error and goes on does not leave it on screen holding the app.
+#[test]
+fn a_handler_error_hides_the_dialog_before_show_throws() {
+    let src = r#"
+        var w = new Window("dialog");
+        var b = w.add("button", undefined, "Go");
+        b.onClick = function () { throw new Error("bad click"); };
+        try { w.show(); } catch (e) { $.writeln("caught ", e.message); }
+        $.writeln("after");
+    "#;
+    for live in [true, false] {
+        let (step, ui) = run(src, vec![json!({"event": "click", "id": 1})], live);
+        assert_eq!(step, Step::Done);
+        assert_eq!(*ui.lines.borrow(), ["caught bad click", "after"]);
+        assert_eq!(ui.windows.borrow().last(), Some(&(0, None)), "hidden: {:?}", ui.windows.borrow());
+    }
+}
+
+/// `show()` of a dialog from its own `onShow` is refused: it would reset the `closed` and
+/// `result` the outer `show()` waits on, and the outer one would return the inner's result
+/// without the user closing it.
+#[test]
+fn a_dialog_shown_again_from_its_own_handler_is_refused() {
+    let src = r#"
+        var w = new Window("dialog"), inner = "";
+        var b = w.add("button", undefined, "Done");
+        b.onClick = function () { w.close(5); };
+        w.onShow = function () { try { w.show(); } catch (e) { inner = e.message; } };
+        var r = w.show();
+        $.writeln(inner, " ", r);
+        // Shown again once closed: fine.
+        w.onShow = null;
+        $.writeln(w.show());
+    "#;
+    let out = both(src, vec![json!({"event": "click", "id": 1}), json!({"event": "click", "id": 1})]);
+    assert_eq!(out, ["the dialog is already showing 5", "5"]);
+}
+
+/// Another dialog shown from a handler still works, nested.
+#[test]
+fn a_second_dialog_shown_from_a_handler_still_works() {
+    let src = r#"
+        var a = new Window("dialog"), b = new Window("dialog");
+        var go = a.add("button", undefined, "Open");
+        b.add("button", undefined, "Close").onClick = function () { b.close(3); };
+        go.onClick = function () { $.writeln("inner ", b.show()); a.close(4); };
+        $.writeln("outer ", a.show());
+    "#;
+    let out = both(src, vec![json!({"event": "click", "id": 2}), json!({"event": "click", "id": 3})]);
+    assert_eq!(out, ["inner 3", "outer 4"]);
+}
+
+/// A getter that closes the dialog while its controls are read ends `show()` there, without
+/// asking the app to wait on a dialog that is already closed.
+#[test]
+fn a_dialog_closed_while_its_controls_are_read_is_not_waited_on() {
+    let src = r#"
+        var w = new Window("dialog");
+        var t = w.add("statictext", undefined, "x");
+        var reads = 0;
+        Object.defineProperty(t, "text", { get: function () { if (++reads == 1) w.close(9); return "x"; }, configurable: true });
+        $.writeln(w.show());
+    "#;
+    let out = both(src, vec![]);
+    assert_eq!(out, ["9"]);
+}
+
+/// A choice that an item's `selected` setter takes out of the list is not left as the list's
+/// selection.
+#[test]
+fn a_selection_removed_by_an_items_setter_is_not_kept() {
+    let src = r#"
+        var w = new Window("dialog"), list = w.add("listbox", undefined, ["a", "b"]);
+        var a = list.items[0], b = list.items[1];
+        Object.defineProperty(a, "selected", { set: function (v) { if (list.items.length == 2) list.remove(b); }, configurable: true });
+        list.selection = b;
+        $.writeln(list.items.length, " ", list.selection);
+    "#;
+    assert_eq!(both(src, vec![]), ["1 null"]);
+}
+
+/// A list whose items can't all be added is not left in the dialog: the error comes before it
+/// is attached (too many) or the half-made list is taken out again (an item that throws), and
+/// its items are given back.
+#[test]
+fn a_list_that_fails_to_initialize_is_not_left_in_the_dialog() {
+    let src = r#"
+        var w = new Window("dialog"), why = [];
+        try { w.add("listbox", undefined, new Array(10001)); } catch (e) { why.push(e.message); }
+        var bad = ["x", { toString: function () { throw new Error("no text"); } }];
+        try { w.add("dropdownlist", undefined, bad); } catch (e) { why.push(e.message); }
+        $.writeln(w.children.length, " ", why.join(" | "));
+        // The items it held are counted no longer: 250000 more still fit.
+        var n = 0;
+        try { for (var l = 0; l < 25; l++) { var k = w.add("listbox"); for (var i = 0; i < 10000; i++) { k.add("item", "y"); n++; } } } catch (e) { why.push(e.message); }
+        $.writeln(n);
+    "#;
+    assert_eq!(both(src, vec![]), ["0 a list can hold at most 10000 items | no text", "250000"]);
 }

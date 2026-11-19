@@ -109,10 +109,15 @@ pub(crate) fn parse(p: &Value) -> Result<NewLayer> {
         Some(v) => Some(v.as_str().ok_or_else(|| bad("`name` must be a string"))?.to_string()),
     };
     let group = group_param(CMD, p)?;
-    if group.is_some() && below {
+    if group.is_some() && given_position(p) {
         return Err(bad("give `group` or `position`, not both"));
     }
     Ok(NewLayer { clip, mode, opacity, label, neutral, below, name, group })
+}
+
+/// Whether `p` names a `position` (`"above"` too): New Layer and New Group take it or `group`.
+pub(crate) fn given_position(p: &Value) -> bool {
+    p.get("position").is_some_and(|v| !v.is_null())
 }
 
 /// The `group` param of New Layer and New Group: the id of the group the new layer goes inside,
@@ -231,9 +236,15 @@ mod tests {
         s.execute("layer.new.group", json!({"name": "Sub", "group": g})).unwrap();
         assert_eq!(children(&s), ["A", "In", "Sub"]);
         assert_eq!(steps(&s), before + 2);
-        // Not a group, no such layer, or with `position`: refused, nothing made.
+        // Not a group, no such layer, or with any `position`: refused, nothing made.
         let shown = s.active().unwrap().doc.clone();
-        for p in [json!({"group": top}), json!({"group": 999_999}), json!({"group": g, "position": "below"}), json!({"group": "x"})] {
+        for p in [
+            json!({"group": top}),
+            json!({"group": 999_999}),
+            json!({"group": g, "position": "below"}),
+            json!({"group": g, "position": "above"}),
+            json!({"group": "x"}),
+        ] {
             assert!(s.execute("layer.new.layer", p.clone()).is_err(), "{p}");
             assert!(s.execute("layer.new.group", p.clone()).is_err(), "{p}");
         }

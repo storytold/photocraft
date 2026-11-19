@@ -18,3 +18,53 @@ use boa_engine::error::{EngineError, RuntimeLimitError};
 pub fn uncatchable() -> JsError {
     EngineError::RuntimeLimit(RuntimeLimitError::LoopIteration).into()
 }
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+
+    use boa_engine::{Context, JsResult, JsValue, NativeFunction, Source, js_string};
+
+    use super::uncatchable;
+
+    thread_local! {
+        /// The handlers entered, recorded by the VM itself: no host and no stop checkpoint in
+        /// between that could hide one.
+        static ENTERED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    }
+
+    fn stop(_: &JsValue, _: &[JsValue], _: &mut Context) -> JsResult<JsValue> {
+        Err(uncatchable())
+    }
+
+    fn mark(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+        let what = args.first().cloned().unwrap_or_default().to_string(ctx)?.to_std_string_escaped();
+        ENTERED.with(|e| e.borrow_mut().push(what));
+        Ok(JsValue::undefined())
+    }
+
+    /// The engine itself enters no `catch` or `finally` on the way out of an uncatchable error,
+    /// in plain code, a getter or a builtin's callback.
+    #[test]
+    fn the_vm_enters_no_handler_on_an_uncatchable_error() {
+        let guarded = "try { stop(); } catch (e) { mark('catch'); } finally { mark('finally'); }";
+        for src in [
+            guarded.to_owned(),
+            format!("var o = {{ get v() {{ {guarded} return 1; }} }}; try {{ o.v; }} catch (e) {{ mark('outer'); }}"),
+            format!("try {{ [1].map(function () {{ {guarded} }}); }} catch (e) {{ mark('outer'); }} finally {{ mark('outer finally'); }}"),
+        ] {
+            ENTERED.with(|e| e.borrow_mut().clear());
+            let mut ctx = Context::default();
+            ctx.register_global_callable(js_string!("stop"), 0, NativeFunction::from_fn_ptr(stop)).unwrap();
+            ctx.register_global_callable(js_string!("mark"), 1, NativeFunction::from_fn_ptr(mark)).unwrap();
+            assert!(ctx.eval(Source::from_bytes(src.as_str())).is_err(), "{src}");
+            ENTERED.with(|e| assert!(e.borrow().is_empty(), "{src}: entered {:?}", e.borrow()));
+        }
+        // A catchable error enters both, so the marks do record handlers.
+        let mut ctx = Context::default();
+        ctx.register_global_callable(js_string!("mark"), 1, NativeFunction::from_fn_ptr(mark)).unwrap();
+        ENTERED.with(|e| e.borrow_mut().clear());
+        ctx.eval(Source::from_bytes("try { throw 1; } catch (e) { mark('catch'); } finally { mark('finally'); }")).unwrap();
+        ENTERED.with(|e| assert_eq!(*e.borrow(), ["catch", "finally"]));
+    }
+}

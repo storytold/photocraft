@@ -142,6 +142,9 @@ struct Element {
     visibility: u64,
     /// Windows: closed while its `show()` waits; `result` is what `show()` returns.
     closed: bool,
+    /// Dialogs: inside their `show()`, so a handler's own `show()` of the same dialog can't
+    /// reset the `closed` and `result` the outer one waits on.
+    showing: bool,
     result: JsValue,
 }
 
@@ -254,6 +257,7 @@ fn create(ctx: &mut Context, kind: Kind, parent: Option<u32>, type_name: &str, t
             shown: false,
             visibility: 0,
             closed: false,
+            showing: false,
             result: JsValue::undefined(),
         });
     })?;
@@ -387,8 +391,15 @@ fn add_item(ctx: &mut Context, list: u32, text: &JsValue, separator: bool) -> Js
     })();
     // A setter of the script's that throws leaves no half-made item in the list.
     if let Err(e) = filled {
-        element_mut(ctx, list, |e| e.items.retain(|i| !JsObject::equals(i, &item)))?;
-        count_items(ctx, -1)?;
+        let removed = element_mut(ctx, list, |e| {
+            let before = e.items.len();
+            e.items.retain(|i| !JsObject::equals(i, &item));
+            e.items.len() != before
+        })?;
+        // A setter that removed the item itself (`remove`) has given back its count already.
+        if removed {
+            count_items(ctx, -1)?;
+        }
         return Err(e);
     }
     // Appended to the list's own array, so adding n items is linear, not quadratic; by
@@ -501,35 +512,98 @@ fn add(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue>
         _ => (third.clone(), arg(3)),
     };
     let bounds = copy_bounds(ctx, args.get(1))?;
-    let obj = create(ctx, kind, Some(id), kind.name(), &text, &props)?;
-    keep_bounds(ctx, &obj, bounds)?;
+    // A list's items are counted before the list is made, so one past the limit adds nothing.
+    let items = match kind {
+        Kind::Dropdown | Kind::ListBox => third.as_object().filter(|_| !third.is_callable()),
+        _ => None,
+    };
+    let len = match &items {
+        Some(list) => list.get(js_string!("length"), ctx)?.to_length(ctx)?,
+        None => 0,
+    };
+    if len > MAX_ITEMS as u64 {
+        return Err(JsNativeError::range().with_message(format!("a list can hold at most {MAX_ITEMS} items")).into());
+    }
+    let next = with_registry(ctx, |r| r.elements.len())?;
+    let made = (|| -> JsResult<JsObject> {
+        let obj = create(ctx, kind, Some(id), kind.name(), &text, &props)?;
+        keep_bounds(ctx, &obj, bounds)?;
+        init_control(ctx, &obj, kind, &third, items.as_ref(), len, args)?;
+        Ok(obj)
+    })();
+    match made {
+        Ok(obj) => Ok(obj.into()),
+        Err(e) => {
+            // A setter or conversion of the script's that throws leaves the parent as it was:
+            // the half-made control is taken out again, and its items given back.
+            if let Ok(child) = u32::try_from(next)
+                && with_registry(ctx, |r| r.elements.len() > next)?
+            {
+                detach(ctx, id, child)?;
+            }
+            Err(e)
+        }
+    }
+}
+
+/// Take control `child` out of `parent`, giving back the items it and its controls hold.
+fn detach(ctx: &mut Context, parent: u32, child: u32) -> JsResult<()> {
+    let held = element_mut(ctx, parent, |e| {
+        let before = e.children.len();
+        e.children.retain(|c| *c != child);
+        e.children.len() != before
+    })?;
+    if held {
+        sync_children(ctx, parent)?;
+    }
+    let mut stack = vec![child];
+    let mut seen = 0usize;
+    while let Some(at) = stack.pop() {
+        seen += 1;
+        if seen > MAX_ELEMENTS {
+            break;
+        }
+        let (items, children) = element_mut(ctx, at, |e| {
+            if at == child {
+                e.parent = None;
+            }
+            (std::mem::take(&mut e.items).len(), e.children.clone())
+        })?;
+        if items > 0 {
+            count_items(ctx, -(items as isize))?;
+        }
+        stack.extend(children);
+    }
+    Ok(())
+}
+
+/// The rest of `add(type, bounds, …)` once control `obj` is made: a progress bar's or slider's
+/// values, a list's items.
+fn init_control(ctx: &mut Context, obj: &JsObject, kind: Kind, third: &JsValue, items: Option<&JsObject>, len: u64, args: &[JsValue]) -> JsResult<()> {
+    let arg = |i: usize| args.get(i).cloned().unwrap_or_default();
     let child = this_id(&obj.clone().into())?;
     match kind {
         Kind::Progress => {
-            if let Some(v) = number_of(&third, ctx)? {
-                set(&obj, "value", v, ctx)?;
+            if let Some(v) = number_of(third, ctx)? {
+                set(obj, "value", v, ctx)?;
             }
             if let Some(max) = number_of(&arg(3), ctx)? {
-                set(&obj, "maxvalue", max, ctx)?;
+                set(obj, "maxvalue", max, ctx)?;
             }
         }
         Kind::Slider => {
-            if let Some(v) = number_of(&third, ctx)? {
-                set(&obj, "value", v, ctx)?;
+            if let Some(v) = number_of(third, ctx)? {
+                set(obj, "value", v, ctx)?;
             }
             if let Some(min) = number_of(&arg(3), ctx)? {
-                set(&obj, "minvalue", min, ctx)?;
+                set(obj, "minvalue", min, ctx)?;
             }
             if let Some(max) = number_of(&arg(4), ctx)? {
-                set(&obj, "maxvalue", max, ctx)?;
+                set(obj, "maxvalue", max, ctx)?;
             }
         }
         Kind::Dropdown | Kind::ListBox => {
-            if let Some(list) = third.as_object().filter(|_| !third.is_callable()) {
-                let len = list.get(js_string!("length"), ctx)?.to_length(ctx)?;
-                if len > MAX_ITEMS as u64 {
-                    return Err(JsNativeError::range().with_message(format!("a list can hold at most {MAX_ITEMS} items")).into());
-                }
+            if let Some(list) = items {
                 for i in 0..len {
                     let v = list.get(i, ctx)?;
                     add_item(ctx, child, &v, false)?;
@@ -538,7 +612,7 @@ fn add(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue>
         }
         _ => {}
     }
-    Ok(obj.into())
+    Ok(())
 }
 
 /// `container.remove(control or index)`, `list.remove(item or index)`.
@@ -772,7 +846,8 @@ fn selection_set(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResul
         let on = chosen.as_ref().is_some_and(|c| JsObject::equals(c, item));
         set(item, "selected", on, ctx)?;
     }
-    element_mut(ctx, id, |e| e.selection = chosen)?;
+    // Unless an item's `selected` setter took the choice out of the list meanwhile.
+    element_mut(ctx, id, |e| e.selection = chosen.filter(|c| e.items.iter().any(|i| JsObject::equals(i, c))))?;
     Ok(JsValue::undefined())
 }
 
@@ -902,12 +977,27 @@ fn show(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     if kind_of(ctx, id)? != Kind::Window {
         return Err(error("show() is a method of windows"));
     }
-    let (palette, was_shown, visibility) = element_mut(ctx, id, |e| {
+    let (palette, showing) = element(ctx, id, |e| (e.palette, e.showing))?;
+    if showing {
+        return Err(error("the dialog is already showing"));
+    }
+    let (was_shown, visibility) = element_mut(ctx, id, |e| {
         let was = std::mem::replace(&mut e.shown, true);
         e.closed = false;
         e.result = JsValue::undefined();
-        (e.palette, was, e.visibility)
+        e.showing = !palette;
+        (was, e.visibility)
     })?;
+    let shown = show_and_wait(ctx, id, palette, was_shown, visibility);
+    if !palette {
+        element_mut(ctx, id, |e| e.showing = false)?;
+    }
+    shown
+}
+
+/// [`show`] of window `id` once it is marked shown: the `onShow` handler, then a palette's
+/// update, or a dialog's loop until it is closed.
+fn show_and_wait(ctx: &mut Context, id: u32, palette: bool, was_shown: bool, visibility: u64) -> JsResult<JsValue> {
     let obj = element(ctx, id, |e| e.obj.clone())?;
     // A window the app never got is not shown, so a later close() or app.refresh() sends
     // nothing for it; one already on screen stays shown, with the controls it had.
@@ -935,13 +1025,24 @@ fn show(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     if palette {
         return Ok(JsValue::undefined());
     }
-    while !element(ctx, id, |e| e.closed)? {
-        let tree = serialize(ctx, id)?;
-        let answer = modal_value(ctx, ModalKind::Window, json!({ "id": id, "window": tree }))?;
-        dispatch(ctx, id, &answer)?;
-    }
+    let waited = (|| -> JsResult<()> {
+        while !element(ctx, id, |e| e.closed)? {
+            let tree = serialize(ctx, id)?;
+            // Reading the controls runs the script's getters, which may have closed it.
+            if element(ctx, id, |e| e.closed)? {
+                break;
+            }
+            let answer = modal_value(ctx, ModalKind::Window, json!({ "id": id, "window": tree }))?;
+            dispatch(ctx, id, &answer)?;
+        }
+        Ok(())
+    })();
+    // Hidden however the loop ended: a handler's error that the script catches must not leave
+    // the dialog on screen, holding the app's input, for the rest of the run.
     element_mut(ctx, id, |e| e.shown = false)?;
-    window_update(ctx, id, None)?;
+    let hidden = window_update(ctx, id, None);
+    waited?;
+    hidden?;
     let result = element(ctx, id, |e| e.result.clone())?;
     Ok(if result.is_undefined() { JsValue::from(RESULT_OK) } else { result })
 }

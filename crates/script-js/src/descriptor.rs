@@ -287,8 +287,11 @@ fn construct(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue>
 /// `charIDToTypeID("Nm  ")`: the four characters as a big-endian number.
 fn char_to_id(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let s = text(args.first(), ctx)?;
-    let bytes: Vec<u8> = s.chars().map(|c| u8::try_from(u32::from(c)).unwrap_or(b'?')).collect();
-    let [a, b, c, d] = bytes.as_slice() else { return Err(error("a char ID is four characters")) };
+    // Printable ASCII only, so `typeIDToCharID` gives every accepted ID back as it was given.
+    let [a, b, c, d] = s.as_bytes() else { return Err(error("a char ID is four characters")) };
+    if ![a, b, c, d].iter().all(|c| (0x20..0x7f).contains(*c)) {
+        return Err(error("a char ID is four printable ASCII characters"));
+    }
     Ok(JsValue::from(u32::from_be_bytes([*a, *b, *c, *d])))
 }
 
@@ -370,20 +373,25 @@ fn restore_names(names: &Value, ctx: &Context) -> Result<(), String> {
     let host = ctx.realm().host_defined();
     let (Some(names), Some(r)) = (names.as_object(), host.get::<Registry>()) else { return Ok(()) };
     let mut strings = r.strings.borrow_mut();
+    // Checked whole before any is kept: a refused set leaves the run's names as they were.
+    let mut fresh: std::collections::BTreeMap<u32, &str> = std::collections::BTreeMap::new();
     for (id, name) in names.iter().take(MAX_KEYS * 3) {
         let (Ok(id), Some(name)) = (id.parse::<u32>(), name.as_str()) else { continue };
         if name.len() > MAX_ID_TEXT || string_id(name) != id {
             continue;
         }
-        match strings.get(&id) {
+        match strings.get(&id).map(String::as_str).or_else(|| fresh.get(&id).copied()) {
             Some(known) if known == name => {}
-            Some(other) => return Err(format!("the saved name \"{}\" has the same ID as \"{other}\", which this run already uses", cut_id(name))),
-            None if strings.len() >= MAX_NAMES => return Err(format!("a run can name at most {MAX_NAMES} IDs")),
+            Some(other) => return Err(format!("the saved name \"{}\" has the same ID as \"{}\", which this run already uses", cut_id(name), cut_id(other))),
             None => {
-                strings.insert(id, name.to_owned());
+                fresh.insert(id, name);
             }
         }
     }
+    if strings.len().saturating_add(fresh.len()) > MAX_NAMES {
+        return Err(format!("a run can name at most {MAX_NAMES} IDs"));
+    }
+    strings.extend(fresh.into_iter().map(|(id, name)| (id, name.to_owned())));
     Ok(())
 }
 

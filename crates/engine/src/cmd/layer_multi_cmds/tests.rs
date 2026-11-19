@@ -2202,3 +2202,23 @@ fn translate_wrap_still_moves_a_frame() {
     assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "a framed layer still records a whole-canvas move");
     assert_eq!(tx(&s), before + 8.0, "the frame kept the raw delta");
 }
+
+/// A move that would take a layer's pixels past half the 32-bit range is refused, so no
+/// coordinate sum can overflow later (a second move by 2^30 used to panic in the bounds code).
+#[test]
+fn a_move_past_the_coordinate_reach_is_refused() {
+    let mut s = session(8);
+    let id = rect_layer(&mut s, Rect::new(10, 10, 20, 20));
+    let far = 1 << 30;
+    // Up to the reach is fine; past it, refused, and the layer stays where it was.
+    s.execute("layer.translate", json!({"layer": id.0, "dx": far - 300, "dy": 0})).unwrap();
+    let at = bounds(&s, id);
+    let steps = s.active().unwrap().history.past_len();
+    let err = s.execute("layer.translate", json!({"layer": id.0, "dx": far, "dy": far})).unwrap_err();
+    assert!(err.to_string().contains("from the canvas"), "{err}");
+    assert_eq!(bounds(&s, id), at);
+    assert_eq!(s.active().unwrap().history.past_len(), steps);
+    // Back is fine.
+    s.execute("layer.translate", json!({"layer": id.0, "dx": -(far - 300), "dy": 0})).unwrap();
+    assert_eq!(bounds(&s, id), Rect::new(10, 10, 20, 20));
+}

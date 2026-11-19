@@ -104,16 +104,24 @@ fn export_layer_coordinates_runs_to_its_report() {
 const EXPORT_FAST: &str = include_str!("community/export_layers_to_files_fast.jsx");
 
 /// Export Layers To Files (Fast) gets through its setup (`app.stringIDToTypeID`,
-/// `doc.suspendHistory`, `$.os`) to where it reads its dialog's resource file next to itself.
-/// Reading files is not offered to scripts yet, so it stops there with its own message.
+/// `doc.suspendHistory`, `$.os`) to its `loadResource`, which checks that its dialog's resource
+/// file exists next to the script before it opens it. The fixture comes without that file, so
+/// the script stops at that check with its own alert: it never reaches `File.open` or reads the
+/// resource.
 #[test]
-fn export_layers_to_files_fast_runs_to_its_resource_file() {
+fn export_layers_to_files_fast_reaches_its_resource_file_check() {
     let s = layered();
     let r = run(&s, "Export Layers To Files (Fast).jsx", EXPORT_FAST, |_, _| Value::Null);
     assert_eq!(r.end, Ok(()), "{r:?}");
     assert_eq!(r.dialogs.len(), 1, "{r:?}");
     let (kind, args) = &r.dialogs[0];
     assert_eq!(*kind, ModalKind::Alert);
-    let message = args[0].as_str().unwrap_or_default();
-    assert!(message.starts_with("Resource file") && message.contains("progress_bar.json"), "it got past its setup: {message}");
+    assert_eq!(
+        args[0].as_str(),
+        Some(
+            "Resource file 'Export%20Layers%20To%20Files%20(Fast)-progress_bar.json' for the export dialog is missing! Please, download the rest of the files that come with this script."
+        ),
+        "it got past its setup to the check"
+    );
+    assert_eq!(args[1].as_str(), Some("Error"));
 }

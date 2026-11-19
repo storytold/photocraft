@@ -35,7 +35,7 @@ const EMPTY: i32 = 0;
 /// The page left an answer for the Worker.
 const FULL: i32 = 1;
 /// What the Worker sends once it is listening, before the run starts, followed by a space and
-/// when it sent it (`Date.now()`, which the page and the Worker read from one clock). Messages
+/// when it sent it ([`shared_clock_ms`], which the page and the Worker read alike). Messages
 /// that arrive before then would be lost.
 const READY: &str = "ready";
 
@@ -44,16 +44,31 @@ const READY: &str = "ready";
 /// until its time limit.
 const START_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// When a Worker was started: by the page's clock, and by `Date.now()`, the clock the Worker
-/// stamps its `READY` with. `overdue`: a [`WorkerTransport::take`] has seen the limit pass.
+/// When a Worker was started: by the page's clock, and by [`shared_clock_ms`], the clock the
+/// Worker stamps its `READY` with. `overdue`: a [`WorkerTransport::take`] has seen the limit pass.
 #[derive(Clone, Copy)]
 struct Started {
     at: web_time::Instant,
-    epoch_ms: f64,
+    clock_ms: f64,
     overdue: bool,
 }
 
-/// When a `READY` message says the Worker sent it, in `Date.now()` milliseconds.
+/// Milliseconds on a clock the page and its Workers share: `performance.timeOrigin +
+/// performance.now()`. Each context's `now()` is monotonic from its own `timeOrigin`, so unlike
+/// `Date.now()` a change of the system's calendar time does not move it. `Date.now()` only where a
+/// browser has no `performance`.
+fn shared_clock_ms() -> f64 {
+    let read = || -> Option<f64> {
+        let performance = Reflect::get(&js_sys::global(), &JsValue::from_str("performance")).ok()?;
+        let origin = Reflect::get(&performance, &JsValue::from_str("timeOrigin")).ok()?.as_f64()?;
+        let now: js_sys::Function = Reflect::get(&performance, &JsValue::from_str("now")).ok()?.dyn_into().ok()?;
+        let now = now.call0(&performance).ok()?.as_f64()?;
+        Some(origin + now).filter(|ms| ms.is_finite())
+    };
+    read().unwrap_or_else(js_sys::Date::now)
+}
+
+/// When a `READY` message says the Worker sent it, in [`shared_clock_ms`] milliseconds.
 fn ready_sent_at(text: &str) -> Option<f64> {
     text.strip_prefix(READY)?.strip_prefix(' ')?.parse::<f64>().ok().filter(|ms| ms.is_finite())
 }
@@ -119,7 +134,7 @@ pub fn serve_worker(heap: &'static HostAllocator) {
     scope.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
     // The Worker's lifetime; it ends when the page terminates the Worker.
     on_message.forget();
-    let _ = scope.post_message(&JsValue::from_str(&format!("{READY} {}", js_sys::Date::now())));
+    let _ = scope.post_message(&JsValue::from_str(&format!("{READY} {}", shared_clock_ms())));
 }
 
 fn run(scope: &DedicatedWorkerGlobalScope, heap: &'static HostAllocator, data: &JsValue) -> Result<(), String> {
@@ -182,7 +197,7 @@ impl WorkerTransport {
                     // Too late by when the Worker sent it, not by when the page got to the
                     // message (a busy page handles messages late): left pending, so `take`
                     // reports the start limit.
-                    if starting.get().is_some_and(|s| sent - s.epoch_ms > START_LIMIT.as_secs_f64() * 1000.0) {
+                    if starting.get().is_some_and(|s| sent - s.clock_ms > START_LIMIT.as_secs_f64() * 1000.0) {
                         return;
                     }
                     if let Some(start) = pending.borrow_mut().take()
@@ -235,7 +250,7 @@ impl Transport for WorkerTransport {
         Reflect::set(&msg, &JsValue::from_str("mailbox"), &self.mailbox).map_err(|e| describe(&e))?;
         // Sent when the Worker says it listens (see `READY`).
         *self.pending.borrow_mut() = Some(msg);
-        self.starting.set(Some(Started { at: web_time::Instant::now(), epoch_ms: js_sys::Date::now(), overdue: false }));
+        self.starting.set(Some(Started { at: web_time::Instant::now(), clock_ms: shared_clock_ms(), overdue: false }));
         Ok(())
     }
 
@@ -270,6 +285,10 @@ impl Transport for WorkerTransport {
         Atomics::store(&self.state, 0, FULL).map_err(|e| describe(&e))?;
         Atomics::notify(&self.state, 0).map_err(|e| describe(&e))?;
         Ok(())
+    }
+
+    fn answer_limit(&self) -> usize {
+        MAILBOX_BYTES as usize
     }
 
     fn terminate(&mut self) {

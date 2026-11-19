@@ -533,6 +533,110 @@ fn custom_options_whose_saved_name_collides_with_this_runs_are_refused() {
     assert!(lines[0].starts_with("refused: getCustomOptions: the saved name \"costarring\""), "{lines:?}");
 }
 
+/// A collection's methods are its own properties, defined rather than assigned: an accessor a
+/// script put on `Array.prototype` neither runs nor stands in for them.
+#[test]
+fn collection_methods_are_own_properties_whatever_array_prototype_holds() {
+    let s = session(8, 8);
+    let lines = run(
+        &s,
+        r#"
+        var hits = 0;
+        ['add', 'getByName'].forEach(function (k) {
+            Object.defineProperty(Array.prototype, k, { get: function () { return null; }, set: function () { hits++; }, configurable: true });
+        });
+        var docs = app.documents, layers = app.activeDocument.artLayers, all = app.activeDocument.layers;
+        $.writeln(hits, ' ', docs.hasOwnProperty('add'), docs.hasOwnProperty('getByName'), layers.hasOwnProperty('add'), all.hasOwnProperty('getByName'));
+        $.writeln(docs.getByName('Doc').name, ' ', typeof layers.add);
+        "#,
+    );
+    assert_eq!(lines, ["0 truetruetruetrue", "Doc function"]);
+}
+
+/// Records the commands a run asks of its session.
+struct Logged(SessionHost, Rc<RefCell<Vec<(String, Value)>>>);
+
+impl photocraft_script_js::Host for Logged {
+    fn execute(&mut self, id: &str, params: Value) -> Result<Value, photocraft_script_js::HostError> {
+        self.1.borrow_mut().push((id.to_owned(), params.clone()));
+        self.0.execute(id, params)
+    }
+
+    fn write_line(&mut self, line: &str) {
+        self.0.write_line(line);
+    }
+}
+
+/// A document's own values (name, size, resolution) are read without its layers or History,
+/// which a script reading them in a loop would otherwise have built for every read.
+#[test]
+fn a_documents_own_values_are_read_without_its_layers_or_history() {
+    let s = session(30, 20);
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let host = Logged(SessionHost::new(s.clone(), "values"), log.clone());
+    let out = host.0.output();
+    let src = "var d = app.activeDocument; $.writeln(d.name, ' ', d.width, ' ', d.height, ' ', d.resolution);";
+    let mut r = Runner::new(src, Box::new(host), Box::new(Unlimited), RunOptions::default()).unwrap();
+    assert_eq!(r.step(), Step::Done);
+    assert_eq!(*out.borrow(), ["Doc 30 px 20 px 72"]);
+    let reads: Vec<Value> = log.borrow().iter().filter(|(id, _)| id == "document.inspect").map(|(_, p)| p.clone()).collect();
+    assert_eq!(reads.len(), 4, "{reads:?}");
+    for p in reads {
+        assert_eq!((p["layers"].as_bool(), p["history"].as_bool()), (Some(false), Some(false)), "{p}");
+    }
+}
+
+/// A size's `valueOf` that resizes the document runs before the side left out is read: that
+/// side keeps the document's size, or its proportions, as they are once the size is converted.
+#[test]
+fn a_side_left_out_is_read_after_the_other_is_converted() {
+    let s = session(100, 50);
+    let lines = run(
+        &s,
+        "var d = app.activeDocument;
+         d.resizeCanvas({ valueOf: function () { d.resizeCanvas(100, 80, AnchorPosition.TOPLEFT); return 120; } }, undefined, AnchorPosition.TOPLEFT);
+         $.writeln(d.width, 'x', d.height);
+         d.resizeImage({ valueOf: function () { d.resizeCanvas(200, 50, AnchorPosition.TOPLEFT); return 100; } });
+         $.writeln(d.width, 'x', d.height);",
+    );
+    assert_eq!(lines, ["120 pxx80 px", "100 pxx25 px"]);
+}
+
+/// Saved key names are checked all together before any is kept: a set refused at the run's
+/// count of names leaves none of them taking a place.
+#[test]
+fn custom_options_refused_at_the_count_of_names_keep_none_of_theirs() {
+    let s = session(8, 8);
+    run(
+        &s,
+        "var d = new ActionDescriptor(); d.putString(stringIDToTypeID('first'), 'x'); d.putString(stringIDToTypeID('second'), 'y'); app.putCustomOptions('two', d, true);",
+    );
+    let lines = run(
+        &s,
+        "for (var i = 0; i < 65535; i++) stringIDToTypeID('n' + i);
+         try { app.getCustomOptions('two'); $.writeln('read'); } catch (e) { $.writeln('refused'); }
+         try { stringIDToTypeID('fresh'); $.writeln('named'); } catch (e) { $.writeln(e.message); }",
+    );
+    assert_eq!(lines, ["refused", "named"]);
+}
+
+/// A char ID is four printable ASCII characters: anything else is refused rather than read as
+/// `?`, so every ID it gives converts back to the characters it was given.
+#[test]
+fn char_ids_are_four_printable_ascii_characters() {
+    let s = session(8, 8);
+    let lines = run(
+        &s,
+        r#"
+        var out = [typeIDToCharID(charIDToTypeID('Nm  '))];
+        var bad = ['\u00e9abc', '\u0001abc', 'abc', 'abcde', '\u20acabc'];
+        for (var i = 0; i < bad.length; i++) { try { charIDToTypeID(bad[i]); out.push('made'); } catch (e) { out.push('refused'); } }
+        $.writeln(out.join(','));
+        "#,
+    );
+    assert_eq!(lines, ["Nm  ,refused,refused,refused,refused,refused"]);
+}
+
 #[test]
 fn lengths_that_are_not_numbers_or_too_far_are_refused() {
     let s = session(32, 32);
@@ -570,6 +674,42 @@ fn a_duplicate_that_cannot_be_placed_leaves_no_copy() {
         "#,
     );
     assert_eq!(lines, ["refused", "true"]);
+}
+
+/// A run stopped while a duplicate's placement is read leaves no copy: the placement is read
+/// before anything is copied, and the copy is made where it goes in one command.
+#[test]
+fn a_run_stopped_while_a_duplicate_is_placed_leaves_no_copy() {
+    let s = session(32, 32);
+    run(&s, "var l = app.activeDocument.artLayers.add(); l.name = 'Only';");
+    let before = layer_names(&s);
+    let host = SessionHost::new(s.clone(), "stop");
+    let src = "var doc = app.activeDocument; doc.layers[0].duplicate(doc, { toString: function () { for (;;) { doc.name; } } });";
+    let budget = photocraft_script_js::WallClock::new(std::time::Duration::from_millis(200));
+    let mut r = Runner::new(src, Box::new(host), Box::new(budget), RunOptions::default()).unwrap();
+    let Step::Failed(m) = r.step() else { panic!("the run was stopped") };
+    assert!(m.contains("time limit"), "{m}");
+    assert_eq!(layer_names(&s), before);
+}
+
+/// A duplicate placed beside another layer, or inside a group, lands there.
+#[test]
+fn a_duplicate_lands_where_it_is_placed() {
+    let s = session(32, 32);
+    let lines = run(
+        &s,
+        r#"
+        var doc = app.activeDocument, a = doc.artLayers.add(); a.name = 'A';
+        var g = doc.layerSets.add(); g.name = 'G';
+        var below = a.duplicate(doc.layers[doc.layers.length - 1], ElementPlacement.PLACEBEFORE);
+        var inside = a.duplicate(g, ElementPlacement.INSIDE);
+        var names = []; for (var i = 0; i < doc.layers.length; i++) names.push(doc.layers[i].name);
+        $.writeln(names.join(','), ' ', g.layers.length, ' ', g.layers[0].name, ' ', inside.parent == g, ' ', below.name);
+        try { a.duplicate(a, ElementPlacement.INSIDE); } catch (e) { $.writeln('refused'); }
+        $.writeln(doc.layers.length);
+        "#,
+    );
+    assert_eq!(lines, ["G,A,A copy,Background 1 A copy 2 true A copy", "refused", "4"]);
 }
 
 #[test]

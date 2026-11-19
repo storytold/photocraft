@@ -343,16 +343,21 @@ pub(crate) fn resolve(id: DocKey, ctx: &mut Context) -> JsResult<(usize, Value)>
         .ok_or_else(|| error("the document is no longer open"))
 }
 
+/// The document's own values (name, size, resolution): neither its layers nor its History are
+/// read, whatever their size.
 fn this_doc(this: &JsValue, ctx: &mut Context) -> JsResult<Value> {
     let id = doc_id(this).ok_or_else(|| JsNativeError::typ().with_message("not a Document"))?;
-    inspect_document(id, false, ctx)
+    query_document(id, json!({ "serial": id.serial, "history": false, "layers": false }), ctx)
 }
 
 /// `document.inspect` of document `id`, by its serial: one call, so a tab closed or moved in the
 /// meantime can't make it read another document.
 pub(crate) fn inspect_document(id: DocKey, history: bool, ctx: &mut Context) -> JsResult<Value> {
-    let d = command(ctx, "document.inspect", json!({ "serial": id.serial, "history": history }))
-        .map_err(|e| host_failure(ctx, e, "the document is no longer open"))?;
+    query_document(id, json!({ "serial": id.serial, "history": history }), ctx)
+}
+
+fn query_document(id: DocKey, params: Value, ctx: &mut Context) -> JsResult<Value> {
+    let d = command(ctx, "document.inspect", params).map_err(|e| host_failure(ctx, e, "the document is no longer open"))?;
     // The id is checked too, against a host that answers for another document.
     if d.get("id").and_then(Value::as_u64).is_some_and(|i| i != id.id) {
         return Err(error("the document is no longer open"));
@@ -404,7 +409,7 @@ fn app_documents(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
         let methods: [(&str, Native, usize); 2] = [("add", crate::dom::documents_add, 6), ("getByName", crate::dom::documents_get_by_name, 1)];
         for (k, f, len) in methods {
             let f = FunctionObjectBuilder::new(ctx.realm(), NativeFunction::from_fn_ptr(f)).name(JsString::from(k)).length(len).build();
-            arr.set(JsString::from(k), f, true, ctx)?;
+            arr.create_data_property_or_throw(JsString::from(k), f, ctx)?;
         }
         Ok(())
     })
