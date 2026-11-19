@@ -469,6 +469,123 @@ fn kit(name: &str, group: &str, folder: &[&str]) -> paint::BrushPreset {
     }
 }
 
+#[test]
+fn panel_brush_folder_disclosure_survives_restart() {
+    check_brush_folder_restart(false);
+}
+
+#[test]
+fn picker_brush_folder_disclosure_survives_restart() {
+    check_brush_folder_restart(true);
+}
+
+/// The two brush browsers use the same group controls, with independent view state.
+fn check_brush_folder_restart(picker: bool) {
+    use craft::draw::ui::brush_presets::{BrushCardPart, BrushCardParts};
+    use craft::settings::testing::MemoryFiles;
+    use craft::settings::{Location, OpenOptions, SettingsStore};
+    use egui::accesskit::{Action, ActionRequest, Role};
+    use photocraft_engine::preset_store::{MemBackend, Opened, open};
+    use std::sync::Arc;
+
+    let files = Arc::new(MemoryFiles::new());
+    let start = |pending: Option<std::sync::mpsc::Receiver<Opened>>| {
+        let waiting = pending.is_some();
+        let options = OpenOptions::new(Location::Dir("/memory/brush-folders".into())).files(files.clone());
+        let services = crate::Services { settings: Some(SettingsStore::open_with(options)), preset_store: pending, ..Default::default() };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        let mut builtin = kit("Quill", "Other", &["Inks"]);
+        builtin.builtin = true;
+        app.session.tools.presets = if waiting { vec![builtin] } else { vec![kit("Pen", "Kit", &["Inks"]), builtin] };
+        app.ui.brushes_panel.view = PresetView::Grid;
+        app.ui.tool = crate::state::Tool::Brush;
+        if picker {
+            app.ui.brush_picker_state.parts = BrushCardParts::ALL.set(BrushCardPart::Name, false).set(BrushCardPart::Stroke, false);
+            crate::brush_picker::open(&mut app, [60.0, 80.0]);
+        }
+        let builder = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(900.0, 750.0));
+        let mut h = builder.build_app(
+            move |ui, app| {
+                if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                if picker {
+                    crate::brush_picker::show_at(ui, app);
+                } else {
+                    super::brushes::panel(app, ui);
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::AppTheme::pro());
+        h.run_steps(4);
+        h
+    };
+    let set_open = |h: &mut Harness<'_, Box<PhotocraftApp>>, action| {
+        let (target_node, target_tree) = h
+            .query_all_by_role(Role::Heading)
+            .find(|node| node.accesskit_node().label().is_some_and(|name| name.starts_with("Inks")))
+            .expect("the Inks disclosure heading")
+            .accesskit_node()
+            .locate();
+        h.event(egui::Event::AccessKitActionRequest(ActionRequest { target_node, target_tree, action, data: None }));
+        h.run_steps(4);
+    };
+    let expect_closed = |app: &PhotocraftApp, closed, phase| {
+        let panel = &app.ui.brushes_panel.toggled;
+        let popup = &app.ui.brush_picker_state.browser.toggled;
+        let (tested, other) = if picker { (popup, panel) } else { (panel, popup) };
+        let expected = BrushKey::Folder { group: "Kit".into(), folder: vec!["Inks".into()] };
+        assert!(other.is_empty(), "the two UI locations must have independent states");
+        assert_eq!(tested.len(), usize::from(closed), "{phase}, picker={picker}, closed={closed}");
+        assert_eq!(tested.contains(&expected), closed, "the identically named folder in Other must stay open");
+    };
+
+    let mut h = start(None);
+    expect_closed(h.state(), false, "fresh settings");
+    set_open(&mut h, Action::Collapse);
+    expect_closed(h.state(), true, "after the disclosure click");
+    crate::prefs_ui::save_preferences(h.state_mut()).unwrap();
+    drop(h);
+
+    let mut h = start(None);
+    expect_closed(h.state(), true, "after restarting with a closed folder");
+    set_open(&mut h, Action::Expand);
+    expect_closed(h.state(), false, "after expanding again");
+    crate::prefs_ui::save_preferences(h.state_mut()).unwrap();
+    drop(h);
+
+    let mut h = start(None);
+    expect_closed(h.state(), false, "after restarting with a reopened folder");
+    set_open(&mut h, Action::Collapse);
+    crate::prefs_ui::save_preferences(h.state_mut()).unwrap();
+    drop(h);
+
+    // Native preset loading is asynchronous. Before Kit arrives, closing the Inks in Other
+    // must remember that disclosure without forgetting the saved Inks in Kit.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut h = start(Some(rx));
+    set_open(&mut h, Action::Collapse);
+    let store = MemBackend::default();
+    let mut disk = photocraft_engine::Session::new();
+    disk.attach_preset_store(open(Box::new(store.clone())));
+    disk.tools.presets.push(kit("Pen", "Kit", &["Inks"]));
+    disk.brush_presets_changed();
+    disk.sync_preset_store();
+    tx.send(open(Box::new(store))).unwrap();
+    h.run_steps(4);
+    let app = h.state();
+    assert!(app.services.preset_store.is_none(), "the saved library was attached");
+    let panel = &app.ui.brushes_panel.toggled;
+    let popup = &app.ui.brush_picker_state.browser.toggled;
+    let (tested, other) = if picker { (popup, panel) } else { (panel, popup) };
+    assert!(other.is_empty());
+    assert_eq!(tested.len(), 2);
+    for group in ["Kit", "Other"] {
+        assert!(tested.contains(&BrushKey::Folder { group: group.into(), folder: vec!["Inks".into()] }), "picker={picker}, {group} must stay closed");
+    }
+}
+
 /// The rows `preset_rows` gives for `app`, drawn in a frame (the rows read the frame's environment).
 fn rows_of(app: Box<PhotocraftApp>, view: PresetView) -> Vec<PresetRow<BrushKey>> {
     let mut h = Harness::builder().with_size(vec2(200.0, 200.0)).with_context(app.ctx().clone()).build_ui_state(

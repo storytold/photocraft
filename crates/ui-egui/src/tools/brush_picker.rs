@@ -5,6 +5,8 @@
 //! it at a point ([`show_at`], opened by [`open`]), and the options bar, where the closed field opens it
 //! ([`show_field`]). Every brush edit is a journaled `tools.setBrush` command, one per gesture.
 
+use std::collections::HashSet;
+
 use craft::behavior::EditEvents;
 use craft::draw::ui::brush_presets::{
     BrushCardPart, BrushCardParts, BrushPick, BrushPickerSettings, BrushPickerState, BrushPickerValues, BrushPresetPicker, BrushPresetPickerOutput, GearSection,
@@ -19,7 +21,7 @@ use photocraft_engine::paint::{MAX_BRUSH_SIZE, TipShape};
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
-use crate::brush_panel::brushes::{BrushKey, preset_rows, run_picks, tip_paint};
+use crate::brush_panel::brushes::{BrushKey, preset_rows, run_picks, tip_paint, updated_folders};
 use crate::brush_panel::commit_keyed;
 use crate::state::Tool;
 
@@ -30,6 +32,7 @@ pub(crate) struct PickerInput {
     current: Option<BrushKey>,
     values: BrushPickerValues,
     brush: BrushSettings,
+    folders_before: HashSet<BrushKey>,
 }
 
 impl PickerInput {
@@ -46,7 +49,13 @@ impl PickerInput {
         let round = brush.tip == TipShape::Round;
         let values = BrushPickerValues::new(f64::from(brush.size), round.then_some(f64::from(brush.hardness)))
             .with_tip(TipAngle::new(f64::from(brush.angle), f64::from(brush.roundness)));
-        Self { rows: preset_rows(app, env, app.ui.brush_picker_state.parts), current, values, brush }
+        Self {
+            rows: preset_rows(app, env, app.ui.brush_picker_state.parts),
+            current,
+            values,
+            brush,
+            folders_before: app.ui.brush_picker_state.browser.toggled.clone(),
+        }
     }
 
     /// The framework picker over this input and the app's view `state`.
@@ -104,6 +113,12 @@ pub(crate) fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, input: PickerI
         save(app, settings);
     }
     let keys: Vec<BrushKey> = input.rows.iter().map(|r| r.key.clone()).collect();
+    // The framework updates the bound picker state but handles disclosure events internally.
+    if let Some(folders) =
+        updated_folders(&input.folders_before, &app.ui.brush_picker_state.browser.toggled, &app.session.prefs().brush_picker_collapsed, &keys)
+    {
+        app.session.prefs.edit(|p| p.brush_picker_collapsed = folders);
+    }
     for pick in out.picks {
         match pick {
             BrushPick::OpenSettings => open_settings(app, ctx),
