@@ -21,10 +21,12 @@ fn same_dir(a: &Path, b: &Path) -> bool {
 
 pub(crate) fn is_input(p: &Path) -> bool {
     let known = |e: &str| {
-        matches!(e, "pcraft" | "psd" | "psb" | "pdn" | "ora" | "kra" | "krz" | "af" | "afdesign" | "afphoto" | "afpub")
+        matches!(e, "pcraft" | "psd" | "psb" | "pdn" | "ora" | "kra" | "krz" | "af" | "afdesign" | "afphoto" | "afpub" | "xcf" | "xcfgz")
             || photocraft_codecs::from_extension(e).is_some_and(|f| photocraft_codecs::caps(f).read)
     };
-    p.is_file() && p.extension().is_some_and(|e| known(&e.to_string_lossy().to_ascii_lowercase()))
+    // Only GIMP's compound suffix is an image; an arbitrary .gz is not a batch input.
+    let gzipped_xcf = p.file_name().is_some_and(|name| name.to_string_lossy().to_ascii_lowercase().ends_with(".xcf.gz"));
+    p.is_file() && (gzipped_xcf || p.extension().is_some_and(|e| known(&e.to_string_lossy().to_ascii_lowercase())))
 }
 
 /// Drops the Save and view steps the desktop records from `action` (Batch saves each result
@@ -294,6 +296,32 @@ mod tests {
     use photocraft_io::{BandRenderer, IoError, RenderBand, RenderError};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn batch_inputs_recognize_gimp_xcf_names_but_not_arbitrary_gzip() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["plain.xcf", "upper.XCF", "alias.xcfgz", "upper-alias.XCFGZ", "compressed.xcf.gz", "upper-compressed.XCF.GZ", "ordinary.PNG"] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, b"").unwrap();
+            assert!(is_input(&path), "{name} should be selected");
+        }
+        for name in ["notes.txt.gz", "archive.tar.gz", "backup.xcf.gz.tmp", "notes.txt"] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, b"").unwrap();
+            assert!(!is_input(&path), "{name} should be skipped");
+        }
+        let directory = dir.path().join("folder.xcf.gz");
+        std::fs::create_dir(&directory).unwrap();
+        assert!(!is_input(&directory), "a directory is not an input image");
+        assert!(!is_input(&dir.path().join("missing.xcf.gz")), "a missing file is not an input image");
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let path = dir.path().join(std::ffi::OsString::from_vec(b"non-utf8-\xff.XCF.GZ".to_vec()));
+            std::fs::write(&path, b"").unwrap();
+            assert!(is_input(&path), "a non-UTF8 filename can still have the compound suffix");
+        }
+    }
 
     struct RecordingRenderer {
         calls: Arc<AtomicUsize>,
