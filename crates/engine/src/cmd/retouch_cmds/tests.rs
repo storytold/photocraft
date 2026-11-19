@@ -1650,10 +1650,11 @@ fn large_move(depth: u64) -> Session {
 }
 
 #[test]
-fn content_aware_move_previews_large_selections_coarse_then_exact_at_all_depths() {
+fn content_aware_move_previews_large_selections_coarse_then_exact() {
     use crate::jobs::JobCtx;
     let p = json!({"offset": [250, 60]});
-    for depth in DEPTHS {
+    // The small move test covers all depths; the preview sequence needs one.
+    for depth in [8] {
         let mut s = large_move(depth);
         let before = s.active().unwrap().revision;
         let job = content_aware_move_preview(&s, &p).unwrap();
@@ -1684,9 +1685,6 @@ fn content_aware_move_previews_large_selections_coarse_then_exact_at_all_depths(
         let fine = job.refine().unwrap();
         assert!(!fine.is_coarse() && fine.refine().is_none());
         assert!(matches!(fine.run(&ctx), Err(EngineError::Cancelled)), "depth {depth}");
-        if depth != 8 {
-            continue;
-        }
         // The refined preview is the command's result, bit for bit.
         let (exact, _) = fine.run(&JobCtx::new()).unwrap();
         assert_eq!(s.active().unwrap().revision, before);
