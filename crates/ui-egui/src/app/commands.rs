@@ -46,6 +46,17 @@ impl PhotocraftApp {
         self.run_depth += 1;
         let r = self.run_command_at_depth(id, params);
         self.run_depth -= 1;
+        // A mask gradient painted for this command, by a command the engine then refused for a
+        // reason no shared precheck could see (a history state that is gone, a read that fails),
+        // goes back to waiting and takes its history step with it: the refusal is reported and the
+        // line is still there, rather than a step nobody asked for standing in the document
+        // (CodeRabbit on #10722).
+        if let Some(q) = crate::gradient_ui::mask::take_committed(self)
+            && r.is_err()
+            && self.run_depth == 0
+        {
+            crate::gradient_ui::mask::undo_commit(self, q);
+        }
         r
     }
 
@@ -66,7 +77,8 @@ impl PhotocraftApp {
         // as Photoshop applies it first (#10703) — after the automation gate, so a command that
         // is refused there changes nothing at all (#10703 review).
         if self.run_depth == 1 {
-            crate::gradient_ui::mask::before_command(self, id, &params)?;
+            let painted = crate::gradient_ui::mask::before_command(self, id, &params)?;
+            crate::gradient_ui::mask::remember_committed(self, painted);
         }
         // A new layer while Free Transform is open applies the transform first, as Photoshop does
         // (#5667): History reads the transform (or Place Embedded), then New Layer. Only for a

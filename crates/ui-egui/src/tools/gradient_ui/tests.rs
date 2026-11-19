@@ -678,6 +678,35 @@ fn a_nested_paint_refused_by_policy_keeps_the_gradient_for_the_next_try() {
     assert!(mask_at(&app.session.active().unwrap().doc, layer, 150) < 0.05, "and it is in the mask");
 }
 
+/// CodeRabbit on #10722, with its own example: the shared precheck cannot cover a refusal a command
+/// only discovers while running. `edit.fill` with `contents: "history"` resolves its source then,
+/// so a history state that does not exist passes the precheck and is rejected afterwards — with the
+/// gradient already painted. The paint is taken back with its history step, and the line goes back
+/// to waiting, so a refusal the precheck could not foresee costs neither.
+#[test]
+fn a_command_refused_after_the_gradient_was_painted_takes_the_paint_back() {
+    let (mut app, layer) = app_on_mask();
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    let before = app.session.active().unwrap().revision;
+    let steps = app.session.active().unwrap().history.entries().len();
+    let redo = app.session.active().unwrap().history.can_redo();
+
+    let err = app.run("edit.fill", json!({"contents": "history", "state": 999_999})).expect_err("the history state does not exist, so the fill is refused");
+    assert!(!err.is_empty(), "with a reason: {err}");
+
+    assert_eq!(mask::pending(&app), Some(([20.0, 60.0], [120.0, 60.0])), "the gradient is waiting again");
+    assert_eq!(mask_at(&app.session.active().unwrap().doc, layer, 150), 1.0, "the mask is as it was");
+    assert_eq!(app.session.active().unwrap().history.entries().len(), steps, "no step was left behind");
+    assert_eq!(app.session.active().unwrap().history.can_redo(), redo, "and nothing to redo that nobody asked for");
+
+    // The line is stamped with the revision it now describes, so the next command paints it rather
+    // than dropping it as stale: the rollback moved the counter on while putting the pixels back.
+    assert_ne!(app.session.active().unwrap().revision, before, "the rollback moved the revision");
+    app.run("select.all", json!({})).expect("the gradient is still good to paint");
+    assert_eq!(mask::pending(&app), None, "it went down");
+    assert!(mask_at(&app.session.active().unwrap().doc, layer, 150) < 0.05, "and it is in the mask");
+}
+
 /// CodeRabbit on #10722: after an undo the pending gradient describes a document that is gone.
 /// `tick` drops such a gradient, but it runs once a frame, so a command arriving before it — the
 /// next step of a played action, a script — would paint the stale line first. The gradient here is

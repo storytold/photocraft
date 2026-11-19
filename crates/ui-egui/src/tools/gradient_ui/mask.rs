@@ -48,6 +48,10 @@ pub(crate) struct MaskGradient {
     /// At most one per document: a gradient drawn in another document waits there, it is not
     /// replaced.
     pending: Vec<Pending>,
+    /// The gradient [`before_command`] painted for the command now running, while that command can
+    /// still be refused and the paint taken back ([`undo_commit`]). Reached from outside this
+    /// module through [`remember_committed`] and [`take_committed`].
+    committed_for: Option<Pending>,
     drag: Option<Drag>,
     /// Cached preview document by key.
     preview: Option<(u64, Arc<Document>)>,
@@ -259,11 +263,17 @@ const STEPPING: [&str; 2] = ["edit.undo", "edit.redo"];
 /// changes nothing: the gradient stays pending. A gradient that can't be painted refuses the
 /// command, with its reason, rather than let it run over a gradient that was lost, and so does
 /// one the document has moved out from under.
-pub(crate) fn before_command(app: &mut PhotocraftApp, id: &str, params: &Value) -> Result<(), String> {
+///
+/// Returns the gradient it painted, if it painted one, so that the caller can take the step back
+/// with [`undo_commit`] when the command it painted for then fails anyway. The precheck here
+/// cannot be made complete: a command can be refused for a reason only its own run discovers (a
+/// history state that is gone, a read that fails), and no shared precondition knows those
+/// (CodeRabbit on #10722).
+pub(crate) fn before_command(app: &mut PhotocraftApp, id: &str, params: &Value) -> Result<Option<Pending>, String> {
     let edits = COMMITTING.iter().any(|p| id.starts_with(p)) || REPLAYING.contains(&id);
-    let Some(q) = pending_in_active(app) else { return Ok(()) };
+    let Some(q) = pending_in_active(app) else { return Ok(None) };
     if STEPPING.contains(&id) || !edits {
-        return Ok(());
+        return Ok(None);
     }
     // An edit made under the gradient (an undo, a history step chosen) leaves it describing a
     // document that no longer exists. `tick` drops such a gradient, but it runs once a frame and a
@@ -305,7 +315,36 @@ pub(crate) fn before_command(app: &mut PhotocraftApp, id: &str, params: &Value) 
     //
     // `tick`'s commit still drops a failed gradient, because one kept there would be retried — and
     // its failure reported — on every frame (CodeRabbit on #10722).
-    commit(app).inspect_err(|_| restore(app, q))
+    commit(app).inspect_err(|_| restore(app, q)).map(|()| Some(q))
+}
+
+/// Takes back the gradient [`before_command`] painted, because the command it was painted for was
+/// refused after all. The step goes with nothing left to redo (`Session::rollback`, which the
+/// engine already uses for a compound command whose later part fails), and the line goes back to
+/// waiting, so a refusal the precheck could not foresee costs neither a stray history step nor the
+/// gradient (CodeRabbit on #10722).
+/// Holds what [`before_command`] painted until the command it painted for has run.
+pub(crate) fn remember_committed(app: &mut PhotocraftApp, painted: Option<Pending>) {
+    app.gradient.mask.committed_for = painted;
+}
+
+/// Takes that gradient back out, leaving nothing behind whether the command passed or failed.
+pub(crate) fn take_committed(app: &mut PhotocraftApp) -> Option<Pending> {
+    app.gradient.mask.committed_for.take()
+}
+
+pub(crate) fn undo_commit(app: &mut PhotocraftApp, mut q: Pending) {
+    if app.session.rollback() {
+        // The rollback puts the document the paint replaced back, but it moves the revision counter
+        // on rather than back. So the line is stamped with the revision it now describes: left as
+        // it was, the staleness guard above would drop it on the next command, for a change whose
+        // whole effect was to put the pixels back the way the line found them.
+        if let Some((_, _, revision)) = target(app) {
+            q.revision = revision;
+        }
+        restore(app, q);
+        app.gradient.mask.preview = None;
+    }
 }
 
 /// Once a frame: paints the pending gradient when the tool, the target or the layer changed, and
