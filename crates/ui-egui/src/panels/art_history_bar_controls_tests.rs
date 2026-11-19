@@ -141,3 +141,17 @@ fn the_bar_has_no_flow_and_no_airbrush() {
     assert!(field(&h, "Flow").is_none(), "no Flow field");
     assert!(h.query_by_label("Enable airbrush-style build-up effects").is_none(), "no Airbrush toggle");
 }
+
+#[test]
+fn a_first_use_starts_off_and_at_0_whatever_the_outgoing_brush_has() {
+    let mut h = bar(Tool::Brush);
+    {
+        let b = &mut h.state_mut().session.tools.brush;
+        (b.pressure_opacity, b.angle, b.pressure_size) = (true, 45.0, true);
+    }
+    switch(&mut h, Tool::ArtHistoryBrush);
+    assert_eq!(controls(h.state()), (false, 0.0, false), "the first Art History Brush starts at its defaults");
+    assert!(angle_field(&h).and_then(|n| n.accesskit_node().numeric_value()) == Some(0.0), "the field shows 0°");
+    switch(&mut h, Tool::Brush);
+    assert_eq!(controls(h.state()), (true, 45.0, true), "the Brush keeps its own settings");
+}

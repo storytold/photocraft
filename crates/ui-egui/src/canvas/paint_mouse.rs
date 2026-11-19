@@ -68,7 +68,14 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
             };
             // The Remove tool starts at its measured 19 px; the rest is the current brush (#12548).
             let size = if tool == Tool::Remove { REMOVE_TOOL_SIZE } else { current.size };
-            BrushSettings { smoothing: first_smoothing(), mode: photocraft_color::BlendMode::Normal, opacity, flow, size, ..current }
+            let brush = BrushSettings { smoothing: first_smoothing(), mode: photocraft_color::BlendMode::Normal, opacity, flow, size, ..current };
+            // The Art History Brush's Angle and pressure toggles are its own bar controls, off and
+            // at 0° until it changes them (#12629), whatever the outgoing brush has.
+            if tool == Tool::ArtHistoryBrush {
+                BrushSettings { angle: fresh.angle, pressure_opacity: fresh.pressure_opacity, pressure_size: fresh.pressure_size, ..brush }
+            } else {
+                brush
+            }
         }
     };
     // The picked preset was the outgoing tool's brush: forget it, so Update Brush can't overwrite
