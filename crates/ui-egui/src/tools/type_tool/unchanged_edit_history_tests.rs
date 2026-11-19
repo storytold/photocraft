@@ -14,7 +14,7 @@ use crate::PhotocraftApp;
 use crate::state::Tool;
 
 /// A 400x200 document with one committed type layer: that layer active and the Type tool picked.
-fn app() -> (PhotocraftApp, LayerId) {
+fn app() -> (Box<PhotocraftApp>, LayerId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 200})).unwrap();
     app.sync_views();
