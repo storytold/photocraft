@@ -9,7 +9,7 @@ use photocraft_doc::{
 };
 use serde_json::{Value, json};
 
-use crate::commands::{CommandSpec, blend_from_str};
+use crate::commands::{CommandSpec, parse_blend};
 use crate::presets::{always, bad};
 use crate::{EngineError, Result, Session};
 
@@ -714,7 +714,7 @@ fn overlay_common(c: &mut FxCommon, p: &Value) {
     if let Some(x) = b_of(p, "enabled") {
         c.enabled = x;
     }
-    if let Some(x) = p.get("blend").and_then(Value::as_str).and_then(blend_from_str) {
+    if let Some(x) = p.get("blend").and_then(Value::as_str).and_then(parse_blend) {
         c.blend = x;
     }
     if let Some(x) = f_of(p, "opacity") {
@@ -722,23 +722,39 @@ fn overlay_common(c: &mut FxCommon, p: &Value) {
     }
 }
 
+/// The Inner Shadow page's typed ranges (#14940): Distance 0..30000 px, Size 0..250 px and an
+/// Angle of -360..360. `layer.layerStyle.innerShadow` follows them, as the epic's measured
+/// clamping table says; the Drop Shadow page's own ranges are #14893.
+const INNER_DISTANCE_RANGE: (f32, f32) = (0.0, 30_000.0);
+const INNER_SIZE_RANGE: (f32, f32) = (0.0, 250.0);
+const INNER_ANGLE_RANGE: (f32, f32) = (-360.0, 360.0);
+
+/// The angle Photoshop stores for an Inner Shadow typed past half a turn: 200 becomes -160 and
+/// -200 becomes 160 (#14940). An angle already inside -180..180 is kept exactly, so in-range
+/// params, imported PSD values and the shared light angle stay as they were (a plain
+/// `rem_euclid` would move a stored 180 to -180).
+fn inner_shadow_angle(a: f32) -> f32 {
+    let a = a.clamp(INNER_ANGLE_RANGE.0, INNER_ANGLE_RANGE.1);
+    if (-180.0..=180.0).contains(&a) { a } else { (a + 180.0).rem_euclid(360.0) - 180.0 }
+}
+
 fn overlay_shadow(s: &mut Shadow, p: &Value, inner: bool) {
     overlay_common(&mut s.common, p);
     overlay_color(p, "color", &mut s.color);
     if let Some(x) = f_of(p, "angle") {
-        s.angle = x;
+        s.angle = if inner { inner_shadow_angle(x) } else { x };
     }
     if let Some(x) = b_of(p, "useGlobalLight") {
         s.use_global_light = x;
     }
     if let Some(x) = f_of(p, "distance") {
-        s.distance = x;
+        s.distance = if inner { x.clamp(INNER_DISTANCE_RANGE.0, INNER_DISTANCE_RANGE.1) } else { x };
     }
     if let Some(x) = f_of(p, if inner { "choke" } else { "spread" }) {
         s.spread = (x / 100.0).clamp(0.0, 1.0);
     }
     if let Some(x) = f_of(p, "size") {
-        s.size = x;
+        s.size = if inner { x.clamp(INNER_SIZE_RANGE.0, INNER_SIZE_RANGE.1) } else { x };
     }
     overlay_contour(p, "contour", &mut s.contour);
     overlay_bool(p, "antiAlias", &mut s.anti_alias);
@@ -883,10 +899,10 @@ fn overlay_bevel(bv: &mut Bevel, p: &Value) {
     }
     overlay_contour(p, "glossContour", &mut bv.gloss_contour);
     overlay_bool(p, "glossAntiAlias", &mut bv.gloss_anti_alias);
-    if let Some(blend) = p.get("highlightBlend").and_then(Value::as_str).and_then(blend_from_str) {
+    if let Some(blend) = p.get("highlightBlend").and_then(Value::as_str).and_then(parse_blend) {
         bv.highlight.blend = blend;
     }
-    if let Some(blend) = p.get("shadowBlend").and_then(Value::as_str).and_then(blend_from_str) {
+    if let Some(blend) = p.get("shadowBlend").and_then(Value::as_str).and_then(parse_blend) {
         bv.shadow.blend = blend;
     }
     overlay_color(p, "highlightColor", &mut bv.highlight_color);
@@ -1147,7 +1163,7 @@ pub fn specs() -> Vec<CommandSpec> {
         style_cmd!(
             "innerShadow",
             "Inner Shadow…",
-            r##"{"color":"#rrggbb","opacity":0..100=75,"blend":str,"angle":deg,"distance":px,"choke":0..100,"size":px,"contour":name|curve,"antiAlias":bool,"noise":0..100,"add":bool}"##
+            r##"{"color":"#rrggbb","opacity":0..100=75,"blend":str,"angle":-360..360 (clamped, then wrapped into -180..180: 400 -> 0; the shared light angle of layer.layerStyle.globalLight only wraps: 400 -> 40),"distance":0..30000,"choke":0..100,"size":0..250,"contour":name|curve,"antiAlias":bool,"noise":0..100,"add":bool}"##
         ),
         style_cmd!(
             "outerGlow",
@@ -1265,6 +1281,8 @@ fn delete_effect(s: &mut Session, p: &Value, effect: &Value) -> Result<Value> {
     Ok(Value::Null)
 }
 
+#[cfg(test)]
+mod inner_shadow_ranges_tests;
 #[cfg(test)]
 mod tests;
 
