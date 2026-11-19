@@ -580,10 +580,17 @@ pub(crate) type StatesKey = [u64; 4];
 /// The states each keyed [`CommandSource`] last computed, by its place in [`COMMAND_SOURCES`], with their key.
 #[derive(Default)]
 pub(crate) struct HeldStates {
-    kept: Vec<Option<(StatesKey, Vec<(CommandRef, CommandState)>)>>,
+    kept: Vec<Option<KeptStates>>,
     /// How many times each source computed its states, for the count trials.
     #[cfg(test)]
     pub(crate) runs: Vec<usize>,
+}
+
+/// One keyed source's states and the key they were computed at.
+#[derive(Clone)]
+struct KeptStates {
+    key: StatesKey,
+    states: Vec<(CommandRef, CommandState)>,
 }
 
 /// The tool commands: the current tool's row is checked.
@@ -606,7 +613,7 @@ fn command_states(app: &PhotocraftApp, held: &mut HeldStates) -> Vec<(CommandRef
     for (at, source) in COMMAND_SOURCES.iter().enumerate() {
         let key = source.key.map(|key| key(app));
         match (&held.kept[at], key) {
-            (Some((was, kept)), Some(key)) if *was == key => states.extend_from_slice(kept),
+            (Some(kept), Some(key)) if kept.key == key => states.extend_from_slice(&kept.states),
             _ => {
                 #[cfg(test)]
                 {
@@ -614,7 +621,7 @@ fn command_states(app: &PhotocraftApp, held: &mut HeldStates) -> Vec<(CommandRef
                 }
                 let computed = (source.states)(app);
                 states.extend_from_slice(&computed);
-                held.kept[at] = key.map(|key| (key, computed));
+                held.kept[at] = key.map(|key| KeptStates { key, states: computed });
             }
         }
     }
