@@ -82,35 +82,6 @@ fn redrawn_since(app: &mut PhotocraftApp, ctx: &egui::Context, seen: Revision) -
     prep.source(app).damage(seen).map(|r| i64::from(r.width()) * i64::from(r.height()))
 }
 
-#[test]
-fn gpu_display_luts_are_per_display() {
-    let _gpu = photocraft_testkit::gpu_lock();
-    let Ok(rs) = std::panic::catch_unwind(|| egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())) else {
-        eprintln!("skipping: no GPU adapter");
-        return;
-    };
-    let mut app = app_on_two_displays();
-    app.set_wgpu(rs);
-    let doc = app.session.documents()[0].doc.clone();
-    let key = doc.id.0;
-    // sRGB on the sRGB display needs no LUT; on the P3 display it does.
-    assert_eq!(sync_display_lut(&mut app, &doc, key, Some(1)), 0);
-    assert_eq!(sync_display_lut(&mut app, &doc, key, Some(4)), 3);
-    let gpu = app.gpu.clone().unwrap();
-    let (s1, s4) = (gpu.display_lut_signature(key, 1).unwrap(), gpu.display_lut_signature(key, 4).unwrap());
-    assert_ne!(s1.0, s4.0);
-    assert!(gpu.has_display_lut(key, 4) && !gpu.has_display_lut(key, 1));
-    // Drawing one window leaves the other's LUT alone.
-    for _ in 0..3 {
-        assert_eq!(sync_display_lut(&mut app, &doc, key, Some(1)), 0);
-        assert_eq!(sync_display_lut(&mut app, &doc, key, Some(4)), 3);
-    }
-    assert_eq!((gpu.display_lut_signature(key, 1), gpu.display_lut_signature(key, 4)), (Some(s1), Some(s4)));
-    assert!(gpu.has_display_lut(key, 4));
-    // The shared texture's key is the same for both displays.
-    assert_eq!(texture_key(canvas_display(&app, &doc, Some(1)).0.as_deref(), &doc), texture_key(canvas_display(&app, &doc, Some(4)).0.as_deref(), &doc));
-}
-
 /// The GPU canvas texture of a Multichannel document is filled by the CPU compositor, so its
 /// key carries the ink preview (Color Settings › Spot) like the CPU canvas key does.
 #[test]
@@ -1057,8 +1028,9 @@ fn a_floating_document_follows_navigator_and_status_bar_zoom() {
         h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
         h.event(egui::Event::Text(typed.into()));
         h.key_press(egui::Key::Enter);
-        h.run_steps(2);
-        h.run_steps(58);
+        // The harness steps 1/4 s a frame, so 10 frames after Enter are 2.5 s: well past the 150 ms zoom ease, with
+        // frames after it in which the window could write its view back (60 frames, 15 s, before #15652).
+        h.run_steps(10);
         assert!(h.state().ui.window_views.is_empty(), "the window keeps no copy of the view");
         assert!(
             (h.state().ui.views[0].zoom - want).abs() < 1e-3,
@@ -1097,4 +1069,37 @@ fn free_transform_redraws_only_the_moving_layer_when_the_box_opens_and_closes() 
     let committed = damage_since(&app, 0, (rev, key ^ dk), (rev + 1, 0), dk, (rev, Some(moved))).expect("committing too");
     assert!(committed.contains(20, 20) && committed.contains(139, 49), "{committed:?}");
     assert!(damage_since(&app, 0, (rev, key ^ dk), (rev + 2, 0), dk, (rev + 1, Some(moved))).is_none(), "a later revision isn't ours");
+}
+
+mod gpu_tests {
+    use super::*;
+
+    #[test]
+    fn gpu_display_luts_are_per_display() {
+        let _gpu = photocraft_testkit::gpu_lock();
+        let Ok(rs) = std::panic::catch_unwind(|| egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())) else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        let mut app = app_on_two_displays();
+        app.set_wgpu(rs);
+        let doc = app.session.documents()[0].doc.clone();
+        let key = doc.id.0;
+        // sRGB on the sRGB display needs no LUT; on the P3 display it does.
+        assert_eq!(sync_display_lut(&mut app, &doc, key, Some(1)), 0);
+        assert_eq!(sync_display_lut(&mut app, &doc, key, Some(4)), 3);
+        let gpu = app.gpu.clone().unwrap();
+        let (s1, s4) = (gpu.display_lut_signature(key, 1).unwrap(), gpu.display_lut_signature(key, 4).unwrap());
+        assert_ne!(s1.0, s4.0);
+        assert!(gpu.has_display_lut(key, 4) && !gpu.has_display_lut(key, 1));
+        // Drawing one window leaves the other's LUT alone.
+        for _ in 0..3 {
+            assert_eq!(sync_display_lut(&mut app, &doc, key, Some(1)), 0);
+            assert_eq!(sync_display_lut(&mut app, &doc, key, Some(4)), 3);
+        }
+        assert_eq!((gpu.display_lut_signature(key, 1), gpu.display_lut_signature(key, 4)), (Some(s1), Some(s4)));
+        assert!(gpu.has_display_lut(key, 4));
+        // The shared texture's key is the same for both displays.
+        assert_eq!(texture_key(canvas_display(&app, &doc, Some(1)).0.as_deref(), &doc), texture_key(canvas_display(&app, &doc, Some(4)).0.as_deref(), &doc));
+    }
 }

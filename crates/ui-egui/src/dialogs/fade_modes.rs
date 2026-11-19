@@ -7,7 +7,6 @@ use craft::ui::runtime::env::Label;
 use photocraft_color::{BlendMode, ColorMode, SampleType};
 
 use crate::PhotocraftApp;
-use crate::panels::layers_tree::blend_key;
 
 pub(crate) const COMMAND: &str = "edit.fade";
 
@@ -28,7 +27,7 @@ pub(crate) fn greyed(mode: ColorMode, depth: SampleType) -> &'static [BlendMode]
 /// The Mode row of the Fade dialog, labelled `label`: the blend list with the active document's greyed modes disabled.
 pub(crate) fn param(app: &PhotocraftApp, label: Label) -> Param {
     let greyed = app.session.active().map_or(&[][..], |st| greyed(st.doc.mode, st.doc.depth));
-    super::blend_options::blend_param("mode", label, false, BlendMode::Normal).disabled_options(greyed.iter().map(|m| blend_key(*m)))
+    super::blend_options::blend_param("mode", label, false, BlendMode::Normal).disabled_options(greyed.iter().map(|m| (*m).key().to_string()))
 }
 
 #[cfg(test)]
