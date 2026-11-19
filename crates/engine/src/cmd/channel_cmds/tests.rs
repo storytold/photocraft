@@ -1259,7 +1259,7 @@ fn split_refuses_an_image_with_more_than_one_layer() {
     assert_eq!(s.execute("channel.split", json!({})).unwrap()["documents"].as_array().unwrap().len(), 3);
     // A lone group is a layer the split would lose.
     let mut s = session();
-    std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).layers = vec![Layer::group("Group 1", vec![])];
+    std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).layers = vec![Layer::group("Group 1", vec![])].into();
     assert!(!s.is_enabled("channel.split"));
     assert!(s.execute("channel.split", json!({})).is_err());
     assert_eq!(s.documents().len(), 1);
