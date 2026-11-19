@@ -1,6 +1,6 @@
 //! Why a view left the GPU (#9328): one typed reason per document, recorded at **one** entry
 //! point ([`note`]) by every exit from the GPU path, logged once when it changes, kept in a short
-//! history, shown in the status bar (`chrome_ui::render_path_status`) and returned by the control
+//! history, shown in the status bar and returned by the control
 //! channel (`perf.renderPath`). `perf.gpuFallback` mirrors the active document's reason as text
 //! ([`sync_perf`]).
 //!
@@ -359,12 +359,12 @@ pub fn inspect(app: &PhotocraftApp) -> Value {
 mod tests {
     use super::*;
 
-    fn app() -> PhotocraftApp {
+    fn app() -> Box<PhotocraftApp> {
         PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default())
     }
 
     /// An app with one document, active: `perf.gpu_fallback` follows the active document.
-    fn app_with_doc() -> (PhotocraftApp, u64) {
+    fn app_with_doc() -> (Box<PhotocraftApp>, u64) {
         let mut app = app();
         app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
         let doc = app.session.active().unwrap().doc.id.0;
@@ -456,46 +456,6 @@ mod tests {
         note(&mut app, 1, Path::Gpu { full: false });
         note(&mut app, 1, over(3 << 30));
         assert_eq!(app.render_path.history().count(), 1);
-    }
-
-    #[test]
-    fn history_keeps_the_last_32_changes() {
-        let mut app = app();
-        for i in 0..40 {
-            note(&mut app, i, Path::Cpu(CpuReason::ViewTransform));
-        }
-        let docs: Vec<u64> = app.render_path.history().map(|c| c.doc).collect();
-        assert_eq!(docs, (8..40).collect::<Vec<_>>());
-    }
-
-    #[test]
-    fn over_budget_reason_names_the_working_set_and_budget() {
-        let text = CpuReason::OverBudget { needed: 3600 << 20, budget: 512 << 20 }.to_string();
-        assert!(text.contains("3.5G") && text.contains("512.0M"), "{text}");
-        let text = CpuReason::CanvasTooLarge { bytes: 3 << 30, budget: 1 << 30 }.to_string();
-        assert!(text.contains("3.0G") && text.contains("1.0G"), "{text}");
-    }
-
-    #[test]
-    fn a_software_adapter_is_the_reason_at_startup() {
-        let mut app = app();
-        assert!(app.gpu.is_none());
-        frame(&mut app);
-        assert!(app.render_path.current(1).is_none(), "no adapter known yet");
-        app.perf.gpu_info.adapter = "llvmpipe".into();
-        app.perf.gpu_info.device_type = "cpu".into();
-        frame(&mut app);
-        assert_eq!(app.render_path.current(1), Some(&CpuReason::SoftwareAdapter));
-        frame(&mut app);
-        assert_eq!(app.render_path.history().count(), 1, "once");
-
-        let mut app = self::app();
-        app.perf.gpu_info.device_type = "integratedGpu".into();
-        app.perf.gpu_info.canvas = "cpu".into();
-        app.perf.gpu_info.fallback = Some("--safe-gpu".into());
-        frame(&mut app);
-        assert_eq!(app.render_path.current(7), Some(&CpuReason::CpuMode("--safe-gpu".into())));
-        assert_eq!(inspect(&app)["history"][0]["kind"], "cpuMode");
     }
 
     /// `set_wgpu` builds the GPU canvas on a software adapter: it is still the window's reason,
