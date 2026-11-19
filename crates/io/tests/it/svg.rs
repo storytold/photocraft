@@ -403,6 +403,12 @@ fn deeply_nested_embedded_svg_is_dropped_not_a_stack_overflow() {
             // drawing still renders (its rect is black).
             let r = open(&embed(&base64_data_url("image/svg+xml", nested(svg::MAX_XML_DEPTH - 2).as_bytes())));
             assert!(close(px(&r.document, 4, 4), [0.0, 0.0, 0.0, 1.0]), "{:?}", px(&r.document, 4, 4));
+            // One more child level fits in isolation, but exceeds the shared
+            // allowance once the outer drawing's ancestor is included.
+            let beyond = nested(svg::MAX_XML_DEPTH - 1);
+            let r = open(&embed(&base64_data_url("image/svg+xml", beyond.as_bytes())));
+            assert!(close(px(&r.document, 4, 4), [0.0; 4]), "over-limit child must remain transparent: {:?}", px(&r.document, 4, 4));
+            assert!(r.warnings.iter().any(|warning| warning.contains("omitted")), "over-limit child must be disclosed: {:?}", r.warnings);
         })
         .unwrap()
         .join()
@@ -813,4 +819,15 @@ fn image_hrefs_to_local_files_are_never_read() {
         open(&format!("<svg {NS} width=\"20\" height=\"20\"><image width=\"20\" height=\"20\" href=\"{}\"/></svg>", png_data_url())).document.layers[0].content,
         LayerContent::Raster(_)
     ));
+}
+
+#[test]
+fn warning_bearing_raster_preserves_readable_artwork_without_relaxing_strict_api() {
+    let bytes = br##"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><image width="4" height="4" href="data:image/bmp,BM"/><rect x="4" width="4" height="8" fill="#ff0000"/></svg>"##;
+    let (pixels, warnings) = svg::rasterize_bounded_with_warnings(bytes, 1.0, 24_000_000).unwrap();
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("embedded image was omitted"));
+    assert_eq!(pixels.px[4 * 8 + 6], [1.0, 0.0, 0.0, 1.0]);
+    assert!(svg::rasterize_bounded(bytes, 1.0, 24_000_000).is_err());
+    assert!(svg::rasterize(bytes, 1.0).is_err());
 }

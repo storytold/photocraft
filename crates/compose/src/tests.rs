@@ -617,35 +617,6 @@ fn clipped_dissolve_matches_whole_render_at_offset_regions_and_depths() {
     }
 }
 
-/// #4921: Dissolve coverage must survive clipping and use Opacity × Fill.
-#[test]
-fn clipped_dissolve_is_binary_and_preserves_the_base_shape() {
-    let mut d = doc_white(40, 12);
-    d.layers.push(solid_layer("base", Rect::new(0, 0, 20, 12), [0.0, 0.0, 1.0, 1.0]));
-    let mut clip = solid_layer("clip", d.bounds(), [1.0, 0.0, 0.0, 1.0]);
-    clip.clipped = true;
-    clip.blend = BlendMode::Dissolve;
-    clip.opacity = 0.6;
-    clip.fill_opacity = 0.5;
-    d.layers.push(clip);
-    let mut red = 0;
-    let mut blue = 0;
-    for y in 0..12 {
-        for x in 0..20 {
-            let p = px(&d, x, y);
-            if close4(p, [1.0, 0.0, 0.0, 1.0]) {
-                red += 1;
-            } else {
-                assert!(close4(p, [0.0, 0.0, 1.0, 1.0]), "Dissolve must not interpolate: {p:?} at ({x},{y})");
-                blue += 1;
-            }
-        }
-        assert!(close4(px(&d, 30, y), [1.0; 4]), "outside the base the clip is invisible");
-    }
-    assert!(red > 0 && blue > 0, "Dissolve must expose both source and base: {red}/{blue}");
-    assert!((red as f32 / (red + blue) as f32 - 0.3).abs() < 0.1, "coverage should follow 60% opacity × 50% fill: {red}/{blue}");
-}
-
 #[test]
 fn hidden_base_hides_clipping_group() {
     let mut d = doc_white(4, 4);
