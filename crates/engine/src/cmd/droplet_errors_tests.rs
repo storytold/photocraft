@@ -153,8 +153,10 @@ fn log_errors_to_file_runs_every_file() {
     let text = decode_be(&std::fs::read(&log).unwrap());
     assert!(text.starts_with("Start Droplet\r\n\r\n"), "{text:?}");
     assert!(text.ends_with("\r\nEnd Droplet\r\n"), "{text:?}");
-    let first = format!("File: \"{}\"", a.replace('/', "\\"));
-    let second = format!("File: \"{}\"", b.replace('/', "\\"));
+    // The `File:` lines use the platform's separators, as #13665 measured for Batch.
+    let native = |path: &str| -> String { if cfg!(windows) { path.replace('/', "\\") } else { path.to_string() } };
+    let first = format!("File: \"{}\"", native(&a));
+    let second = format!("File: \"{}\"", native(&b));
     assert!(text.contains(&first) && text.contains(&second), "{text:?}");
 }
 
