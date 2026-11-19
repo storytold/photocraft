@@ -212,3 +212,10 @@ fn other_tools_and_strokes_in_progress_are_untouched() {
     assert!(a.session.journal.iter().any(|(id, _)| id == "paint.stroke"));
     assert_eq!(a.session.tools.brush.size, 40.0);
 }
+
+/// #14058: the resize preview is tinted in solid red, as in Photoshop, not a translucent pale red.
+#[test]
+fn the_resize_preview_tint_is_opaque_red() {
+    let a = app(Tool::Brush);
+    assert_eq!(options(&a).tint, Some(DataColor::new(egui::Color32::RED)));
+}

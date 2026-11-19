@@ -26,9 +26,6 @@ const HARDNESS_TRAVEL: f32 = 385.0;
 /// Screen points of vertical drag that take the opacity from 0 % to 100 % when "Vary Round Brush
 /// Hardness on HUD" is off.
 const OPACITY_TRAVEL: f32 = 200.0;
-/// The overlay alpha of the preview tint.
-const TINT_ALPHA: u8 = 110;
-
 /// The brush resize drag of the painting tools, kept in `PhotocraftApp::brush_resize`. The painting tool takes it
 /// out of the app for each call, so its methods get the app as an argument.
 #[derive(Default)]
@@ -56,10 +53,11 @@ fn options(app: &PhotocraftApp) -> BrushResizeOptions {
     } else {
         options.level(BrushLevel::Opacity).travel(OPACITY_TRAVEL)
     };
-    // Preferences ▸ Cursors ▸ Brush Preview colour; red, as in Photoshop, when it is unreadable.
+    // Preferences ▸ Cursors ▸ Brush Preview colour; red, as in Photoshop, when it is unreadable. Opaque, as in
+    // Photoshop: a hard tip previews solid, and only the falloff fades a soft one (#14058).
     let [r, g, b] =
         crate::color_picker_ui::parse_hex(&app.session.prefs().cursors.brush_preview_color).map_or([255, 0, 0], |c| c.map(|v| (v * 255.0).round() as u8));
-    options.tint(DataColor::new(egui::Color32::from_rgba_unmultiplied(r, g, b, TINT_ALPHA)))
+    options.tint(DataColor::new(egui::Color32::from_rgb(r, g, b)))
 }
 
 impl PaintResize {
