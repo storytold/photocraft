@@ -50,6 +50,7 @@ fn every_compositor_pipeline_builds() {
                 continue;
             };
             let info = adapter.get_info();
+            eprintln!("compositor pipeline check: backend {:?}, adapter {}, driver {}, compiler {compiler:?}", info.backend, info.name, info.driver);
             let format = Compositor::preferred_acc_format(&adapter);
             // Draws build only the pipelines they use; this builds every one.
             let threads = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);

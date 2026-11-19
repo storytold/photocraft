@@ -85,7 +85,7 @@ pub const GIMP: PinnedCorpus = PinnedCorpus {
         extras: &[("README.md", "README.md"), ("LICENSE-MIT", "LICENSE-MIT"), ("LICENSE-APACHE", "LICENSE-APACHE")],
     }],
     manifest: "xtask/gimp-corpus.sha256",
-    exts: &["xcf", "png"],
+    exts: &["xcf", "png", "gz", "bz2", "xz"],
     subset: false,
     sources_md: |c| {
         format!(

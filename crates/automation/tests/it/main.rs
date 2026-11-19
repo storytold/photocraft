@@ -25,6 +25,7 @@ mod save_snapshot;
 mod scratch_save;
 mod smart_filter_authorization;
 mod smart_filter_stack_cache;
+mod xcf_native_workflows;
 
 // Shared by smart_filter_authorization and smart_filter_stack_cache.
 #[path = "../support/smart_filter_fixture.rs"]

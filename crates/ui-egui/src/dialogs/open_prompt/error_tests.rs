@@ -25,6 +25,8 @@ fn held(doc: Document, name: &str, question: Option<Value>) -> Held {
         question,
         policy_applied: true,
         smart_object: false,
+        color_settings: None,
+        ignore_exif_profile_tag: None,
     }
 }
 

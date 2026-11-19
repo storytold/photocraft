@@ -545,6 +545,8 @@ impl eframe::App for WebShell {
     }
 }
 
+/// Connect the Rust web shell to browser file contents, downloads and native import/export services without
+/// filesystem-path assumptions.
 fn services(inbox: Inbox, place_inbox: PlaceInbox, cursor_pos: photocraft_ui_egui::CursorPosFn) -> Services {
     Services {
         import: Some(Box::new(|name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions| {
