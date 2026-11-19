@@ -86,6 +86,41 @@ fn a_droplet_without_stored_naming_keeps_each_input_name() {
     assert!(std::path::Path::new(&format!("{dir}/out/b.jpg")).exists(), "b.jpg keeps its name");
 }
 
+/// Independent-review MF1: the Create Droplet form removes `namingComponents` when every row is
+/// None but always sends the Starting Serial #, whose range includes 0. A droplet with a stored
+/// 0 and no stored rows keeps each input's name instead of dying in Batch's serial validation,
+/// which runs before Batch settles for keeping names (batch_naming.rs plan()).
+#[test]
+fn all_none_rows_with_a_stored_zero_serial_keep_each_input_name() {
+    let dir = tmp("all-none-serial-0");
+    let dp = droplet(&dir, &json!({"startingSerial": 0}));
+    let v: Value = serde_json::from_slice(&std::fs::read(&dp).unwrap()).unwrap();
+    assert!(v["options"].get("namingComponents").is_none(), "all-None rows store no naming: {v}");
+    let r = run_on_inputs(&dp, &dir);
+    assert_eq!(r["errors"], json!([]), "{r}");
+    assert!(std::path::Path::new(&format!("{dir}/out/a.png")).exists(), "a.png keeps its name");
+    assert!(std::path::Path::new(&format!("{dir}/out/b.jpg")).exists(), "b.jpg keeps its name");
+}
+
+/// An old or hand-written droplet can store the option keys as null; a null key counts as not
+/// stored, so the run keeps each input's name instead of forwarding nulls that Batch rejects.
+#[test]
+fn null_valued_option_keys_behave_like_absent_ones() {
+    let dir = tmp("null-keys");
+    let dp = format!("{dir}/Null.pcdroplet");
+    let droplet_json = json!({
+        "photocraftDroplet": 1,
+        "name": "Null",
+        "action": {"name": "Null", "steps": [["image.imageRotation.90cw", {}]]},
+        "options": {"output": format!("{dir}/out"), "format": "same", "namingComponents": null, "startingSerial": null, "compatibility": null},
+    });
+    std::fs::write(&dp, serde_json::to_vec(&droplet_json).unwrap()).unwrap();
+    let r = run_on_inputs(&dp, &dir);
+    assert_eq!(r["errors"], json!([]), "{r}");
+    assert!(std::path::Path::new(&format!("{dir}/out/a.png")).exists(), "a.png keeps its name");
+    assert!(std::path::Path::new(&format!("{dir}/out/b.jpg")).exists(), "b.jpg keeps its name");
+}
+
 /// The engine keeps Batch's own starting-serial validation: a stored 0 is refused by the batch
 /// the droplet runs (the 0..9999 dialog range is #13662's engine question, not clamped here).
 #[test]
@@ -127,7 +162,8 @@ fn a_stored_serial_above_the_dialog_range_is_not_clamped_by_the_engine() {
 }
 
 /// A droplet that stored only compatibility flags and no naming rows keeps each input's name, as
-/// it does today: Batch refuses a `compatibility` without `namingComponents`.
+/// it does today: `runDroplet` forwards the flags only along with stored naming rows, and Batch
+/// would refuse a `compatibility` without them. Guard test: passes before and after the gating.
 #[test]
 fn a_droplet_with_only_compatibility_flags_still_keeps_each_input_name() {
     let dir = tmp("compat-only");
