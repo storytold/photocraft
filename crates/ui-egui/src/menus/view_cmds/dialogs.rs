@@ -488,11 +488,11 @@ fn batch_form(app: &PhotocraftApp, dir: &str) -> Option<(Vec<Param>, DialogField
         Param::new("includeSubfolders", tl!("Include All Subfolders"), ParamKind::bool(false)),
         // Destination (#13659), worded as the reference application words its three choices, opening
         // on None. The values stay the command's own words (`none`, `saveAndClose`, `folder`). Only a
-        // folder run names where its results go and how they are called, so the rows below it that a
-        // folder run owns are greyed until Folder is picked.
+        // folder run names where its results go and how they are called, and only a folder run has an
+        // Override Save As to override, so the rows below it that a folder run owns are greyed until
+        // Folder is picked.
         choice("destination", tl!("Destination"), opts(&[("none", tl!("None")), ("saveAndClose", tl!("Save and Close")), ("folder", tl!("Folder"))]), "none"),
-        Param::new("overrideSaveAs", tl!("Override Action \"Save As\" Commands"), ParamKind::bool(false))
-            .enabled_when_in("destination", ["folder", "saveAndClose"]),
+        Param::new("overrideSaveAs", tl!("Override Action \"Save As\" Commands"), ParamKind::bool(false)).enabled_when_in("destination", ["folder"]),
         folder("output", tl!("Output Folder"), format!("{dir}/batch")).enabled_when("destination", "folder"),
         choice(
             "format",

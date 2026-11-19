@@ -603,12 +603,17 @@ pub(crate) fn command_params(command: &str, fields: &DialogFields) -> Value {
     }
     if command == "file.automate.batch" {
         // Destination decides what the command is asked for (#13659): None opens each source and Save
-        // and Close writes each source, so neither takes an output folder. The row keeps its typed
-        // path on screen for the next Folder choice, but the run must not see it. The Override box
-        // rides along only when it is ticked, since the command's recorded-Batch rules refuse an
-        // Override that does not match the action's own Save steps and the box starts off.
+        // and Close writes each source, so neither takes an output folder or a File Type - Save and
+        // Close writes every source in its own format and refuses any other, and None plays without
+        // ever encoding a result. The rows keep their typed values on screen for the next Folder
+        // choice, but the run must not see them. The Override box rides along only for a Folder run
+        // with the box ticked: None writes nothing an Override could route, Save and Close does not
+        // represent it, and the command's recorded-Batch rules refuse an Override that does not
+        // match the action's own Save steps.
         if matches!(fields.text("destination"), Some("none") | Some("saveAndClose")) {
             map.remove("output");
+            map.remove("format");
+            map.remove("overrideSaveAs");
         }
         if fields.bool("overrideSaveAs") == Some(false) {
             map.remove("overrideSaveAs");

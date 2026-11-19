@@ -764,7 +764,7 @@ fn batch_dialog_greys_the_folder_fields_until_folder_is_picked() {
         .with_size(egui::vec2(1000.0, 800.0))
         .with_max_steps(64)
         .with_context(app.ctx().clone())
-        .build_ui_state(|ui, app: &mut PhotocraftApp| crate::dialogs::run(app, ui), app);
+        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app);
     PhotocraftApp::setup_context(&h.ctx, Default::default());
     let ctx = h.ctx.clone();
     menu(h.state_mut(), &ctx, "file.automate.batch", json!({})).unwrap();
@@ -775,7 +775,8 @@ fn batch_dialog_greys_the_folder_fields_until_folder_is_picked() {
         (egui::accesskit::Role::CheckBox, "Override Action \"Save As\" Commands"),
         (egui::accesskit::Role::ComboBox, "File Type"),
     ];
-    let greyed = |h: &Harness<'_, PhotocraftApp>, role: egui::accesskit::Role, label: &str| h.get_by_role_and_label(role, label).accesskit_node().is_disabled();
+    let greyed =
+        |h: &Harness<'_, Box<PhotocraftApp>>, role: egui::accesskit::Role, label: &str| h.get_by_role_and_label(role, label).accesskit_node().is_disabled();
     for (role, label) in rows {
         assert!(greyed(&h, role, label), "{label} is greyed with Destination None");
     }
@@ -814,7 +815,7 @@ fn ticking_override_save_as_shows_the_reference_note_with_ok() {
         .with_size(egui::vec2(1000.0, 800.0))
         .with_max_steps(64)
         .with_context(app.ctx().clone())
-        .build_ui_state(|ui, app: &mut PhotocraftApp| crate::dialogs::run(app, ui), app);
+        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app);
     PhotocraftApp::setup_context(&h.ctx, Default::default());
     let ctx = h.ctx.clone();
     let reply = menu(h.state_mut(), &ctx, "file.automate.batch", json!({})).unwrap();
@@ -842,6 +843,100 @@ fn ticking_override_save_as_shows_the_reference_note_with_ok() {
     assert!(h.state().framework.dialogs.get::<StandardPrompt>().is_none(), "OK closed the note (buttons {buttons:?})");
     assert!(h.state().framework.dialogs.get_by_id::<HostedParamDialog>(id).is_some(), "the Batch dialog stayed open");
     assert_eq!(fields(h.state(), id)["overrideSaveAs"], json!(true), "the box stayed ticked");
+}
+
+/// #13659 review: Save and Close writes each source in its own format and does not represent the
+/// Override box. A File Type and an Override tick left on screen by an earlier folder run must
+/// not reach the command, which refuses either beside Save and Close.
+#[test]
+fn batch_dialog_save_and_close_ignores_the_stale_file_type_and_override_tick() {
+    let (mut app, ctx) = app_with(1);
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("in");
+    std::fs::create_dir_all(&input).unwrap();
+    let source = input.join("a.png");
+    app.run("file.saveACopy", json!({"path": source.to_string_lossy()})).unwrap();
+    let bytes_before = std::fs::read(&source).unwrap();
+    app.session.actions.list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
+    let id = open_form(&mut app, &ctx, "file.automate.batch");
+    set(&mut app, &ctx, id, "input", json!(input.to_string_lossy()));
+    // Type the folder-run values while Folder is picked, then move back to Save and Close: the
+    // greyed rows keep them on screen, the run must not see them.
+    set(&mut app, &ctx, id, "destination", json!("folder"));
+    set(&mut app, &ctx, id, "format", json!("jpg"));
+    set(&mut app, &ctx, id, "overrideSaveAs", json!(true));
+    set(&mut app, &ctx, id, "destination", json!("saveAndClose"));
+    assert_eq!(fields(&app, id)["format"], json!("jpg"), "the File Type row keeps its value on screen");
+    let notices = app.ui.notices.len();
+    confirm(&mut app, &ctx, id).unwrap();
+    assert!(!app.ui.status_error, "the stale folder values do not reach the command: {}", app.ui.status);
+    assert_eq!(app.ui.notices.len(), notices, "no failure notice: {:?}", app.ui.notices.get(notices..));
+    assert_ne!(std::fs::read(&source).unwrap(), bytes_before, "the source was rewritten in place");
+    assert_eq!(names_in(&input), ["a.png"], "still in its own format, nothing else written");
+    assert_eq!(app.session.documents().len(), 1, "Save and Close leaves no tab open");
+}
+
+/// #13659 review: the Override box is greyed for Destination None, but a tick left by a folder
+/// run stays in the form. The command refuses an Override whose action has no Save step, so the
+/// retained tick must not reach a None run.
+#[test]
+fn batch_dialog_none_ignores_a_retained_override_tick() {
+    let (mut app, ctx) = app_with(1);
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("in");
+    std::fs::create_dir_all(&input).unwrap();
+    let source = input.join("a.png");
+    app.run("file.saveACopy", json!({"path": source.to_string_lossy()})).unwrap();
+    let bytes_before = std::fs::read(&source).unwrap();
+    // An Invert-only action: the very action the command's rule refuses an Override with.
+    app.session.actions.list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
+    let id = open_form(&mut app, &ctx, "file.automate.batch");
+    set(&mut app, &ctx, id, "input", json!(input.to_string_lossy()));
+    set(&mut app, &ctx, id, "destination", json!("folder"));
+    set(&mut app, &ctx, id, "overrideSaveAs", json!(true));
+    set(&mut app, &ctx, id, "destination", json!("none"));
+    assert_eq!(fields(&app, id)["overrideSaveAs"], json!(true), "the tick stays in the form while the row is greyed");
+    let notices = app.ui.notices.len();
+    confirm(&mut app, &ctx, id).unwrap();
+    assert!(!app.ui.status_error, "the greyed tick does not reach the command: {}", app.ui.status);
+    assert_eq!(app.ui.notices.len(), notices, "no failure notice: {:?}", app.ui.notices.get(notices..));
+    assert_eq!(app.session.documents().len(), 2, "the folder's file opened as a tab");
+    assert!(app.session.documents().iter().skip(1).all(|st| st.is_dirty()), "and reads as edited");
+    assert_eq!(std::fs::read(&source).unwrap(), bytes_before, "None still writes nothing");
+}
+
+/// #13659 review: Override Action "Save As" Commands is live for Folder only - Save and Close
+/// does not represent it, and the command refuses a tick beside that destination.
+#[test]
+fn batch_dialog_greys_override_save_as_for_save_and_close() {
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::{NodeT, Queryable};
+
+    let (mut app, _) = app_with(0);
+    app.session.actions.list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1000.0, 800.0))
+        .with_max_steps(64)
+        .with_context(app.ctx().clone())
+        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app);
+    PhotocraftApp::setup_context(&h.ctx, Default::default());
+    let ctx = h.ctx.clone();
+    menu(h.state_mut(), &ctx, "file.automate.batch", json!({})).unwrap();
+    h.run_steps(4);
+    let greyed = |h: &Harness<'_, Box<PhotocraftApp>>| {
+        h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Override Action \"Save As\" Commands").accesskit_node().is_disabled()
+    };
+    assert!(greyed(&h), "greyed with the default None");
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Destination").click();
+    h.run_steps(2);
+    h.get_by_label("Save and Close").click();
+    h.run_steps(2);
+    assert!(greyed(&h), "greyed with Save and Close, which the command refuses an Override beside");
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Destination").click();
+    h.run_steps(2);
+    h.get_by_label("Folder").click();
+    h.run_steps(2);
+    assert!(!greyed(&h), "live again with Folder");
 }
 
 /// Float in Window takes the document and the screen position a dragged-off tab was dropped at
