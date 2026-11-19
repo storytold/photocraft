@@ -136,7 +136,7 @@ fn compose(doc: &Document, work: &Layer, plan: &StylePlan, content: &StyledConte
         let y0 = shown.y0.saturating_add((i * BAND_ROWS) as i32);
         let band = Rect::new(shown.x0, y0, shown.x1, y0.saturating_add((px.len() / width.max(1)) as i32));
         let mut over = Buffer::transparent(band);
-        effects::composite_with_effects(work, &crop(&content, band), &mut over, &maps, bounds, &doc.patterns);
+        effects::composite_with_effects(work, &crop(&content, band), &mut over, &maps, bounds, &doc.patterns, doc.mode);
         // Copied, not moved out, so `over` hands its band back to the scratch pool on drop.
         for (o, p) in px.iter_mut().zip(over.px.iter().copied()) {
             *o = p;
@@ -350,7 +350,7 @@ mod tests {
         let anchor = (f64::from(bounds.x0), f64::from(bounds.y0));
         let maps = effects::build_maps(&work, shape, content_rect, &doc.global_light, &TextureCtx { rect: content_rect, patterns: &doc.patterns, anchor });
         let mut whole = Buffer::transparent(shown);
-        effects::composite_with_effects(&work, &crop(&content, shown), &mut whole, &maps, bounds, &doc.patterns);
+        effects::composite_with_effects(&work, &crop(&content, shown), &mut whole, &maps, bounds, &doc.patterns, doc.mode);
         assert!(banded.pixels == image(&whole).pixels, "banded and whole composites differ");
         assert!(banded.pixels.iter().any(|p| is(*p, RED)) && banded.pixels.iter().any(|p| is(*p, GREEN)) && banded.pixels.iter().any(|p| is(*p, FILL)));
     }

@@ -269,3 +269,48 @@ fn zero_opacity_inside_stroke_keeps_the_layer_s_own_pixels() {
         assert_eq!(off.px, on.px, "{blend:?} at 0 %: Overprint changed a pixel the issue did not measure");
     }
 }
+
+/// Not measured (found in the review of #15249): a layer whose own blend mode is not Normal. The
+/// issue's table measured the default Normal layer. With Blend Interior Effects as Group on, the
+/// knocked-out band of an Overprint-off stroke would lose the layer's Multiply at the band where
+/// today's path keeps it multiplied, and ticking the flag would change pixels on a configuration
+/// the issue did not measure. The flag stays ignored there, and today's pixels are kept, with and
+/// without Blend Interior Effects as Group. The levels are the ones `upstream/main` 856f865cf
+/// produced.
+#[test]
+fn inside_stroke_on_a_non_normal_layer_blend_keeps_today_s_pixels() {
+    for (blend_interior, want) in [(false, [64.0, 64.0, 191.5]), (true, [64.0, 64.0, 128.0])] {
+        let build = |overprint: bool| {
+            let mut d = measured(vec![stroke(10.0, StrokePosition::Inside, BlendMode::Normal, 0.5, overprint, blue_paint())]);
+            let layer = &mut d.layers[1];
+            layer.blend = BlendMode::Multiply;
+            layer.advanced.blend_interior = blend_interior;
+            d
+        };
+        let (off, on) = (flatten(&build(false)), flatten(&build(true)));
+        assert_band(&off, INSIDE_BAND, want);
+        assert_eq!(off.px, on.px, "Multiply layer, blend_interior {blend_interior}: Overprint changed a pixel the issue did not measure");
+    }
+}
+
+/// Not measured (found in the review of #15249): a layer whose own blend mode is not Normal. The
+/// gate checked the layer's own surface mode, not the document's, so such a layer took the
+/// knockout even though the issue's CMYK rows measured a layer of CMYK pixels. The flag stays
+/// ignored. The levels are the ones `upstream/main` 856f865cf produced.
+#[test]
+fn rgb_layer_in_a_cmyk_document_keeps_today_s_pixels() {
+    for (blend, opacity, want) in [(BlendMode::Multiply, 1.0, [0.0, 0.0, 0.0]), (BlendMode::Normal, 0.5, [63.8, 64.3, 191.9])] {
+        let build = |overprint: bool| {
+            let mut d = Document::with_background("overprint", Size::new(64, 48), ColorMode::Cmyk, SampleType::U8, Color::rgb(GREY, GREY, GREY));
+            let mut pixels = photocraft_raster::Surface::new(PixelFormat::RGBA8);
+            pixels.fill_rect(Rect::new(16, 12, 48, 36), &[ORANGE[0], ORANGE[1], ORANGE[2], 1.0]);
+            let mut layer = Layer::new("Shape", LayerContent::Raster(pixels));
+            layer.effects.items = vec![stroke(10.0, StrokePosition::Inside, blend, opacity, overprint, blue_paint())];
+            d.layers.push(layer);
+            d
+        };
+        let (off, on) = (flatten(&build(false)), flatten(&build(true)));
+        assert_px(&off, 18, 14, want);
+        assert_eq!(off.px, on.px, "an RGB layer in a CMYK document, {blend:?}: Overprint changed a pixel the issue did not measure");
+    }
+}

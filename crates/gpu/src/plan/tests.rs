@@ -560,6 +560,40 @@ fn inside_stroke_overprint_composites_on_the_cpu() {
     let mut d = doc(BlendMode::Multiply, false, &blue);
     d.layers[1].fill_opacity = 0.5;
     assert!(!stroke_replaces(&d), "a Fill below 100 % is unmeasured: the plan keeps today's blend");
+    // Not measured (#15249 review): a layer whose own blend mode is not Normal. The flag stays
+    // ignored there, so the plan keeps today's flags for every combination instead of refusing.
+    for overprint in [false, true] {
+        let mut d = doc(BlendMode::Normal, overprint, &blue);
+        d.layers[1].blend = BlendMode::Multiply;
+        assert!(stroke_replaces(&d), "a Multiply layer, Normal stroke, Overprint {overprint}: today's plan keeps the replace");
+        let mut d = doc(BlendMode::Multiply, overprint, &blue);
+        d.layers[1].blend = BlendMode::Multiply;
+        assert!(!stroke_replaces(&d), "a Multiply layer, Multiply stroke, Overprint {overprint}: today's plan blends over the layer");
+    }
+    // The exact configuration the review named: a Multiply layer with Blend Interior Effects as
+    // Group never reaches the stroke rule at all - the pre-existing Advanced Blending guard
+    // (`check_advanced`) sends the whole layer to the CPU, so the two compositors cannot split.
+    let mut d = doc(BlendMode::Normal, false, &blue);
+    d.layers[1].blend = BlendMode::Multiply;
+    d.layers[1].advanced.blend_interior = true;
+    let e = plan(&d).unwrap_err();
+    assert!(e.0.contains("Advanced Blending") && !e.0.contains("Overprint"), "Blend Interior as Group: {e}");
+    // Not measured: an RGB raster layer in a CMYK document. Whatever else the planner decides
+    // there, it must not refuse the layer because of the Overprint flag: the document is RGB-gated.
+    let mut cmyk = Document::with_background("cmyk overprint", Size::new(64, 48), ColorMode::Cmyk, SampleType::U8, Color::WHITE);
+    let mut l = Layer::raster("Shape", photocraft_color::PixelFormat::RGBA8);
+    l.surface_mut().unwrap().fill_rect(Rect::new(16, 12, 48, 36), &[1.0, 0.5, 0.0, 1.0]);
+    l.effects.items.push(Effect::Stroke(StrokeFx {
+        common: FxCommon::new(BlendMode::Normal, 1.0),
+        size: 10.0,
+        position: StrokePosition::Inside,
+        paint: blue.clone(),
+        overprint: true,
+    }));
+    cmyk.layers.push(l);
+    if let Err(e) = plan(&cmyk) {
+        assert!(!e.0.contains("Overprint"), "an RGB layer in a CMYK document must not be refused by the Overprint rule: {e}");
+    }
 }
 
 #[test]

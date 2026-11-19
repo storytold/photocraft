@@ -1112,7 +1112,7 @@ impl<'a> Planner<'a> {
                 // the flag has an effect composites on the CPU, as the Stroke Emboss guard above
                 // does, and both paths agree. What stays here paints exactly as before the flag
                 // was read (Overprint off with a Normal mode, and the unmeasured configurations).
-                if photocraft_compose::effects::stroke_overprint_shown(layer, st) && (st.overprint || st.common.blend != BlendMode::Normal) {
+                if photocraft_compose::effects::stroke_overprint_shown(layer, st, self.cx.mode) && (st.overprint || st.common.blend != BlendMode::Normal) {
                     let why = if st.overprint { "Overprint on" } else { "Overprint off in a blend mode" };
                     return Err(Unsupported(format!("inside stroke {why} on `{}` (composited on the CPU)", layer.name)));
                 }
