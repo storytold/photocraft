@@ -13,12 +13,12 @@ use crate::PhotocraftApp;
 use crate::state::Tool;
 
 /// The Magic Wand's options bar, with a document open, after a few settled frames.
-fn wand_bar() -> Harness<'static, PhotocraftApp> {
+fn wand_bar() -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
     app.ui.tool = Tool::MagicWand;
     let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1000.0, 60.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        |ui, app: &mut Box<PhotocraftApp>| {
             if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
             }
@@ -32,14 +32,14 @@ fn wand_bar() -> Harness<'static, PhotocraftApp> {
 }
 
 /// The number the Tolerance field shows, as a person reads it off the screen.
-fn shown_tolerance(h: &Harness<'_, PhotocraftApp>) -> f32 {
+fn shown_tolerance(h: &Harness<'_, Box<PhotocraftApp>>) -> f32 {
     let node = h.get_by_role(Role::SpinButton);
     node.accesskit_node().value().unwrap_or_default().parse().unwrap_or(f32::NAN)
 }
 
 /// Types `text` over the field's number and presses Enter, as a person would, and returns the option the edit left
 /// behind.
-fn type_tolerance(h: &mut Harness<'_, PhotocraftApp>, text: &str) -> f32 {
+fn type_tolerance(h: &mut Harness<'_, Box<PhotocraftApp>>, text: &str) -> f32 {
     h.get_by_role(Role::SpinButton).click();
     h.run();
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
