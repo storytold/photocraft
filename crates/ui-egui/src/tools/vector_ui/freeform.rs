@@ -116,8 +116,8 @@ impl FreeformPenTool {
                 return None;
             }
             let anchor = sub.knots.last()?.anchor;
-            let selected =
-                work_selected && (selection.segment.is_some_and(|[index, _]| index == subpath) || selection.anchors.iter().any(|[index, _]| *index == subpath));
+            let last = sub.knots.len() - 1;
+            let selected = work_selected && (selection.anchors.contains(&[subpath, last]) || selection.segment == Some([subpath, last - 1]));
             Some(WorkPathEnd { subpath, point: Point::new(anchor.x, anchor.y), selected })
         }));
     }

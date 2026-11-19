@@ -100,3 +100,27 @@ fn a_single_anchor_is_not_a_measured_continuation_endpoint() {
     assert_eq!(work_path(&app).subpaths.len(), 2);
     assert_eq!(work_path(&app).subpaths[0], before.subpaths[0]);
 }
+
+#[test]
+fn selecting_an_earlier_anchor_or_segment_leaves_the_end_unselected() {
+    let mut app = with_open_work_path();
+    app.run("path.set", json!({"name":"work","path":{"subpaths":[{"closed":false,"knots":[[100,400],[300,400],[500,400]]}]}})).unwrap();
+    assert!(!work_path(&app).subpaths[0].closed);
+    let before = work_path(&app).clone();
+    let history = app.session.active().unwrap().history.past_len();
+    for point in [[100.0, 400.0], [200.0, 400.0]] {
+        testing::click(&mut app, point, Modifiers::COMMAND);
+        assert_eq!(app.ui.direct_selection.target, Some(PathRef::Work));
+        assert!(!shows_continue(&mut app, [500.0, 400.0]));
+        drag(&mut app, [500.0, 400.0], [700.0, 300.0]);
+        assert_eq!(work_path(&app), &before);
+        assert_eq!(app.session.active().unwrap().history.past_len(), history);
+    }
+    testing::click(&mut app, [400.0, 400.0], Modifiers::COMMAND);
+    assert_eq!(app.ui.direct_selection.segment, Some([0, 1]));
+    assert!(shows_continue(&mut app, [500.0, 400.0]));
+    drag(&mut app, [500.0, 400.0], [700.0, 300.0]);
+    assert_eq!(work_path(&app).subpaths.len(), 1);
+    assert_eq!(work_path(&app).subpaths[0].knots.len(), 4);
+    assert_eq!(app.session.active().unwrap().history.past_len(), history + 1);
+}
