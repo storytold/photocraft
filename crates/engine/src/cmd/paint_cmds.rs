@@ -3,7 +3,7 @@
 use photocraft_algo::paint::{FillMode, GradientShape, bucket_fill_inks, bucket_fill_region_inks, paint_gradient};
 use serde_json::{Value, json};
 
-use crate::commands::{CommandSpec, blend_from_str};
+use crate::commands::{CommandSpec, parse_blend};
 use crate::presets::gradients;
 use crate::{EngineError, Result, Session};
 
@@ -47,7 +47,7 @@ fn fill_mode(p: &Value) -> Result<FillMode> {
     match p.get("mode") {
         None | Some(Value::Null) => Ok(FillMode::Blend(photocraft_color::BlendMode::Normal)),
         Some(Value::String(m)) if m.eq_ignore_ascii_case("clear") => Ok(FillMode::Clear),
-        Some(Value::String(m)) => blend_from_str(m)
+        Some(Value::String(m)) => parse_blend(m)
             .filter(|m| *m != photocraft_color::BlendMode::PassThrough)
             .map(FillMode::Blend)
             .ok_or_else(|| bad(format!("unknown blend mode `{m}`"))),
@@ -186,7 +186,7 @@ fn gradient(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let reverse = b(p, "reverse", false);
     let opacity = opacity(p, "paint.gradient")?;
-    let blend = p.get("mode").and_then(Value::as_str).and_then(blend_from_str).unwrap_or(photocraft_color::BlendMode::Normal);
+    let blend = p.get("mode").and_then(Value::as_str).and_then(parse_blend).unwrap_or(photocraft_color::BlendMode::Normal);
     let dither = b(p, "dither", true); // Photoshop dithers gradients by default (reduces banding).
     let layer = if p.get("layer").is_some() { Some(crate::commands::layer_param(s, p)?) } else { s.active().and_then(|st| st.active_layer) };
     s.edit("Gradient", |doc, _| {
