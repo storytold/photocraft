@@ -315,6 +315,156 @@ fn a_none_droplet_plays_the_action_it_captured_not_the_live_list() {
     assert_eq!((st.doc.size.width, st.doc.size.height), (2, 4), "the captured Inner rotated; the live same-named fill did not play");
 }
 
+/// #13711 review minor (automate_cmds.rs:573): a stored droplet whose steps do not parse is
+/// refused BEFORE the run touches the caller's action state. The None run installs the droplet's
+/// captured actions (`actions.called`) and raises `actions.batch_depth` for its own steps; a step
+/// list that fails to parse must hand both back, or the next action the app plays resolves in the
+/// droplet's private namespace and its first nested Batch starts one level too deep.
+#[test]
+fn a_none_droplet_with_unparsable_steps_leaves_the_caller_s_action_state_untouched() {
+    use crate::actions_cmds::{Action, ActionStep};
+
+    let dir = tmp("none-unparsable-steps");
+    let input = format!("{dir}/a.png");
+    input_picture(&input);
+    let dp = format!("{dir}/Broken.pcdroplet");
+    // `[[]]` is the shape `parse_steps` refuses: an array step with no id at all. The droplet also
+    // carries a captured action, which is what the run would install before parsing.
+    std::fs::write(
+        &dp,
+        json!({"photocraftDroplet": 1, "name": "Broken", "action": {"steps": [[]]}, "options": {"destination": "none"}, "calledActions": [{"name": "Captured", "steps": []}]}).to_string(),
+    )
+    .unwrap();
+    let mut s = app_session();
+    s.actions.list.push(Action::new("Live", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
+    let e = s.execute("file.automate.runDroplet", json!({"droplet": &dp, "input": [&input]})).unwrap_err();
+    assert!(e.to_string().contains("step"), "the parse error names the steps: {e}");
+    assert_eq!(s.documents().len(), 0, "a refused run opens nothing");
+    assert!(s.actions.called.is_none(), "the refused run installs no captured action list");
+    assert_eq!(s.actions.batch_depth, 0, "and leaves the caller's nesting depth alone");
+    // The live list is still the one playback finds, and a nested run starts at depth 1.
+    s.execute("file.new", json!({"width": 2, "height": 1, "background": "#ff0000"})).unwrap();
+    let r = s.execute("actions.play", json!({"action": "Live"})).unwrap();
+    assert!(r.get("failed").is_none(), "the caller's own action still plays: {r}");
+    assert_eq!(s.actions.playable().actions().len(), 1, "playback still resolves in the caller's list");
+    let st = s.active().unwrap();
+    assert_eq!((st.doc.size.width, st.doc.size.height), (2, 1), "the caller's action ran on its own document");
+}
+
+/// #13711 review (automate_cmds.rs:593), the finding's own input. Guard test, passes before and
+/// after: a captured action's recorded `file.save` step cannot write during a None run, because the
+/// engine has no `file.save` to run - Save is the desktop shell's command
+/// (crates/engine/src/shell_commands.rs:29, replayed by the shell's runner), and engine playback
+/// refuses it. The input becomes an error entry, the source keeps its bytes, no file appears.
+#[test]
+fn a_none_droplet_refuses_a_nested_recorded_save_and_writes_no_file() {
+    use crate::actions_cmds::{Action, ActionStep};
+
+    let dir = tmp("none-nested-shell-save");
+    let input = format!("{dir}/a.png");
+    input_picture(&input);
+    let before = std::fs::read(&input).unwrap();
+    let files_in = |dir: &str| -> Vec<std::path::PathBuf> {
+        let mut v: Vec<_> = std::fs::read_dir(dir).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).collect();
+        v.sort();
+        v
+    };
+    let mut maker = Session::new();
+    maker
+        .actions
+        .list
+        .push(Action::new("Inner", vec![ActionStep::new("image.imageRotation.90cw", json!({})), ActionStep::new("file.save", json!({}))]))
+        .unwrap();
+    maker.actions.list.push(Action::new("Top", vec![ActionStep::new("actions.play", json!({"action": "Inner"}))])).unwrap();
+    let dp = maker
+        .execute("file.automate.createDroplet", json!({"path": format!("{dir}/Top"), "action": "Top", "destination": "none", "shim": false}))
+        .unwrap()["path"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let listing = files_in(&dir);
+
+    let mut s = app_session();
+    let r = s.execute("file.automate.runDroplet", json!({"droplet": &dp, "input": [&input]})).unwrap();
+    let error = r["errors"][0]["error"].as_str().unwrap_or_default();
+    assert!(error.contains("`file.save`") && error.contains("unknown command"), "the nested Save step is refused as the shell's command: {r}");
+    assert_eq!(std::fs::read(&input).unwrap(), before, "the source keeps its bytes");
+    assert_eq!(files_in(&dir), listing, "and no file appears anywhere in the folder");
+}
+
+/// Guard test, passes before and after: a nested engine-level save step keeps its own behaviour in
+/// a None run, exactly as it does in Batch's runs today. `file.saveACopy` names its own path, so it
+/// writes that copy in all three runs - the droplet None run, Batch's folder run, and Batch's
+/// Opened-Files run with no output folder (the closest existing "writes nothing" neighbour). None
+/// of the three overwrites the source. Suppressing the nested step instead would be a new contract
+/// for the whole family, not a fix to one path (the same question sits open on #13659 / PR #15440).
+#[test]
+fn a_none_droplet_treats_a_nested_engine_save_exactly_as_batch_does() {
+    use crate::actions_cmds::{Action, ActionStep};
+
+    let inner = |dir: &str| {
+        Action::new(
+            "Inner",
+            vec![ActionStep::new("image.imageRotation.90cw", json!({})), ActionStep::new("file.saveACopy", json!({"path": format!("{dir}/copy.png")}))],
+        )
+    };
+
+    // 1. The droplet's None run.
+    let dir = tmp("nested-copy-droplet");
+    let input = format!("{dir}/a.png");
+    input_picture(&input);
+    let before = std::fs::read(&input).unwrap();
+    let mut maker = Session::new();
+    maker.actions.list.push(inner(&dir)).unwrap();
+    maker.actions.list.push(Action::new("Top", vec![ActionStep::new("actions.play", json!({"action": "Inner"}))])).unwrap();
+    let dp = maker
+        .execute("file.automate.createDroplet", json!({"path": format!("{dir}/Top"), "action": "Top", "destination": "none", "shim": false}))
+        .unwrap()["path"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let mut s = app_session();
+    let r = s.execute("file.automate.runDroplet", json!({"droplet": &dp, "input": [&input]})).unwrap();
+    assert_eq!(r["errors"], json!([]), "{r}");
+    let droplet_copy = std::path::Path::new(&format!("{dir}/copy.png")).exists();
+
+    // 2. Batch with an output folder, and 3. Batch over open documents with no output folder.
+    let dir2 = tmp("nested-copy-batch");
+    std::fs::create_dir_all(format!("{dir2}/in")).unwrap();
+    let input2 = format!("{dir2}/in/a.png");
+    input_picture(&input2);
+    let mut b = Session::new();
+    b.actions.list.push(inner(&dir2)).unwrap();
+    let folder = b
+        .execute(
+            "file.automate.batch",
+            json!({"steps": [["actions.play", {"action": "Inner"}]], "input": [&input2], "output": format!("{dir2}/out"), "format": "png"}),
+        )
+        .unwrap();
+    assert_eq!(folder["errors"], json!([]), "{folder}");
+    let batch_copy = std::path::Path::new(&format!("{dir2}/copy.png")).exists();
+
+    let dir3 = tmp("nested-copy-batch-open");
+    let input3 = format!("{dir3}/a.png");
+    input_picture(&input3);
+    let before3 = std::fs::read(&input3).unwrap();
+    let mut o = Session::new();
+    crate::file_cmds::open_bytes_as(&mut o, "a.png", &std::fs::read(&input3).unwrap(), None, Some(input3.clone())).unwrap();
+    o.actions.list.push(inner(&dir3)).unwrap();
+    let open = o.execute("file.automate.batch", json!({"source": "open", "steps": [["actions.play", {"action": "Inner"}]]})).unwrap();
+    assert_eq!(open["errors"], json!([]), "{open}");
+    assert_eq!(open["files"], json!([]), "the run itself writes nothing: {open}");
+    let open_copy = std::path::Path::new(&format!("{dir3}/copy.png")).exists();
+
+    assert_eq!(
+        (droplet_copy, batch_copy, open_copy),
+        (true, true, true),
+        "a nested engine-level save writes its own copy in all three runs, so the None droplet adds no new write rule"
+    );
+    assert_eq!(std::fs::read(&input).unwrap(), before, "the droplet None run leaves the source alone");
+    assert_eq!(std::fs::read(&input3).unwrap(), before3, "and so does the no-output Batch run");
+}
+
 /// #13711 review MEDIUM-3: the None run opens each input through the shared open core (as File >
 /// Open and Batch's scratch run do), not a bare import: a developed raw takes Preferences >
 /// Raw Defaults > Resolution. (Chosen cheap honest neighbour: the raw ppi; the profiled-JPEG

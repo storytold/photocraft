@@ -545,6 +545,14 @@ fn run_droplet_open(s: &mut Session, cmd: &str, path: &str, steps: &Value, input
             "{cmd}: this droplet's Destination is None, which leaves the opened documents in the app: run it in the app, or give the droplet a Folder or Save and Close"
         )));
     }
+    // The steps are parsed and filtered first, before any of the caller's state changes: a stored
+    // droplet whose steps do not parse is refused here, and the run has installed nothing and
+    // raised nothing yet (#13711 review, automate_cmds.rs:573). The steps are exactly the ones
+    // Batch's folder run keeps (its retained-steps rule, quickExport included): view steps go,
+    // recorded saves are skipped - they mark a destination None has none of, write nothing, and
+    // leave the document changed, as Batch with no destination does.
+    let steps: Vec<(String, Value)> =
+        parse_steps(steps, cmd)?.into_iter().filter(|(id, _)| crate::file_cmds::batch_keeps_step(id) && id != "file.export.quickExport").collect();
     // The droplet plays from the actions it captured (#2794's rule): install them for this run, as
     // the folder path forwards `calledActions` to Batch, so a Play Action step cannot fall back to
     // - or play a wrong same-named action of - the app's live list.
@@ -566,11 +574,6 @@ fn run_droplet_open(s: &mut Session, cmd: &str, path: &str, steps: &Value, input
     // opening one document per level until the stack or memory runs out (#13711 review HIGH-1).
     let previous_depth = s.actions.batch_depth;
     s.actions.batch_depth = previous_depth.saturating_add(1);
-    // The steps are exactly the ones Batch's folder run keeps (its retained-steps rule, quickExport
-    // included): view steps go, recorded saves are skipped - they mark a destination None has none
-    // of, write nothing, and leave the document changed, as Batch with no destination does.
-    let steps: Vec<(String, Value)> =
-        parse_steps(steps, cmd)?.into_iter().filter(|(id, _)| crate::file_cmds::batch_keeps_step(id) && id != "file.export.quickExport").collect();
     let mut errors = Vec::new();
     for input in inputs {
         let ran = (|| -> Result<()> {
