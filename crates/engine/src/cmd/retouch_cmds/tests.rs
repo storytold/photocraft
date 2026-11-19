@@ -2302,7 +2302,9 @@ fn live_dab_strokes_commit_their_pixels_and_they_are_the_commands() {
 fn live_dab_batches_match_the_accumulating_renderer() {
     use photocraft_paint::{GrayTile, StrokeRenderer, TipShape};
 
-    for depth in DEPTHS {
+    // 8 bits (integers, and the measured Smudge mode only 8-bit RGB gets in `dab.rs`) and 32 bits (floats): 16 bits
+    // differs from 8 only in the raster's shared encode, which the live and the reference renderer both use (#15652).
+    for depth in [8, 32] {
         let mut s = session(200, 90, depth, "rgb");
         s.execute("layer.new.layer", json!({})).unwrap();
         paint_layer(&mut s, |x, y| {
