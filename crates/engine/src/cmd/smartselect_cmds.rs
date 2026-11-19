@@ -86,6 +86,14 @@ fn plain_group(l: &Layer) -> bool {
     l.frame.is_none() && matches!(&l.content, LayerContent::Group(g) if g.artboard.is_none())
 }
 
+/// Whether `select.object` with `"point"` answers the whole-canvas area for this target
+/// (#12863): a plain group active with Sample All Layers off. The Object Finder hover runs on
+/// the same predicate, so its highlight never names an object the click will not commit
+/// (#15472 review).
+pub fn plain_group_active(doc: &Document, layer: Option<LayerId>, all_layers: bool) -> bool {
+    !all_layers && layer.and_then(|id| doc.layer(id)).is_some_and(plain_group)
+}
+
 /// Runs `f` with Quick Selection's sampler: [`with_sampler`]'s, except that with a group active
 /// and Sample All Layers off it reads a flat area, so a click selects only the brush disc instead
 /// of the composite's shapes, as the reference application does (#12933). Artboards and frames,
@@ -282,6 +290,20 @@ pub fn empty_sampled_area(doc: &Document, layer: Option<LayerId>, all_layers: bo
     Some(if surf.content_bounds().is_empty() { "the active layer is empty" } else { "the active layer has no pixels in that area" })
 }
 
+/// Where `select.object` with `"point"` answers #5246's clear message instead of #12863's
+/// area answer or silence: a completely empty sampled layer, a point outside the canvas, or a
+/// spot with no pixels on a Smart Object or type target - those layers' clicks keep their
+/// pre-#12863 answer (#15472 review). The Object Finder hover hints on exactly these points,
+/// so hover and click agree in every state (#15472 review).
+pub fn point_reports_sampled_pixels_error(doc: &Document, layer: Option<LayerId>, all_layers: bool, area: Rect) -> bool {
+    let Some(target) = sampled_target(doc, layer, all_layers) else { return false };
+    let Some(l) = doc.layer(target) else { return false };
+    if matches!(l.content, LayerContent::Smart(_) | LayerContent::Text(_)) {
+        return empty_sampled_area(doc, layer, all_layers, area).is_some();
+    }
+    l.surface().is_some_and(|surf| surf.content_bounds().is_empty() || !doc.bounds().contains(area.x0, area.y0))
+}
+
 /// Hard Edge off: [`soften_edge`]'s horizontal taps in 256ths, for the pixels two and one to the
 /// left, the pixel itself and the pixel to the right.
 const SOFT_EDGE_ACROSS: [f64; 4] = [30.0 / 256.0, 6.0 / 256.0, 118.0 / 256.0, 102.0 / 256.0];
@@ -375,10 +397,17 @@ const MODEL_AREA_COVERAGE: u8 = 254;
 
 /// The whole canvas at [`MODEL_AREA_COVERAGE`], with `cut`'s at-least-half-opaque pixels at 0
 /// (the canvas minus the sampled layer's own pixels). `cut` is read in row bands, so a large
-/// layer is never held whole; a canvas whose coverage would not fit in memory answers `None`.
+/// layer is never held whole; the mask is reserved fallibly, and a canvas whose coverage would
+/// not fit in memory answers `None` (the plain nothing-found, like an out-of-memory canvas on
+/// the size check). A cut answer reports [`trimmed`]'s bounds - whole empty mask rows and
+/// columns at the edges go, as they do for found objects - so the reported bounds are the
+/// selection's extent (#15472 review); the uncut canvas keeps the whole canvas.
 fn area_region(canvas: Rect, cut: Option<&photocraft_raster::Surface>) -> Option<Region> {
     let (cw, ch) = (canvas.width() as usize, canvas.height() as usize);
-    let mut mask = vec![MODEL_AREA_COVERAGE; cw.checked_mul(ch)?];
+    let len = cw.checked_mul(ch)?;
+    let mut mask = Vec::new();
+    mask.try_reserve_exact(len).ok()?;
+    mask.resize(len, MODEL_AREA_COVERAGE);
     if let Some(surf) = cut {
         const BAND: i32 = 64;
         let part = surf.content_bounds().intersect(&canvas);
@@ -396,7 +425,7 @@ fn area_region(canvas: Rect, cut: Option<&photocraft_raster::Surface>) -> Option
             }
         }
     }
-    Some(Region { bbox: canvas, mask })
+    Some(if cut.is_some() { trimmed(Region { bbox: canvas, mask }, cw) } else { Region { bbox: canvas, mask } })
 }
 
 /// Opaque 8-connected areas in the `w` x `h` scan, counting up to `stop + 1` and stopping.
@@ -462,12 +491,16 @@ fn surface_is_flat(surf: &photocraft_raster::Surface, area: Rect) -> bool {
 }
 
 /// The click answers the reference application measures for flat targets (#12863): with a
-/// uniform sampled layer, or with a plain group active and Sample All Layers off, the whole
-/// canvas; on an empty spot of a sampled layer holding exactly one opaque object, the canvas
-/// with that layer's pixels cut out. A click on the opaque part of its layer, a layer with
-/// several objects (measured on Shapes: nothing found), and every other target (composite,
-/// adjustment, Smart Object, type) answer `None` and keep the plain nothing-found. Uniformity
-/// is probed on the raw pixels ([`surface_is_flat`]); the object areas are scanned at the
+/// sampled layer uniform over the whole canvas, or with a plain group active and Sample All
+/// Layers off, the whole canvas; on an empty spot of a sampled layer holding exactly one
+/// opaque object, the canvas with that layer's pixels cut out. A click on the opaque part of
+/// its layer, a layer with several objects (measured on Shapes: nothing found), and every
+/// other target (composite, adjustment, Smart Object, type) answer `None` and keep the plain
+/// nothing-found - Smart Object and type are filtered by content kind, because
+/// [`Layer::surface`] hands their rendered cache here and those clicks keep their answer from
+/// before #12863 (#15472 review). Uniformity is probed on the raw pixels over the canvas
+/// ([`surface_is_flat`]): a solid area floating on transparency is one object to cut out, not
+/// a uniform layer; the object areas are scanned at the
 /// Object Finder's working resolution, where a coarse step can merge areas that sit within one
 /// step of each other, which only ever answers "several" for detail finer than the scan.
 /// `target` is [`sampled_target`]'s sampled layer.
@@ -480,12 +513,12 @@ fn flat_area_answer(doc: &Document, target: Option<LayerId>, group: bool, x: f32
     if group {
         return area_region(canvas, None);
     }
-    let surf = target.and_then(|id| doc.layer(id)).and_then(Layer::surface)?;
+    let surf = target.and_then(|id| doc.layer(id)).filter(|l| !matches!(l.content, LayerContent::Smart(_) | LayerContent::Text(_))).and_then(Layer::surface)?;
     let content = surf.content_bounds().intersect(&canvas);
     if content.is_empty() {
         return None;
     }
-    if surface_is_flat(surf, content) {
+    if surface_is_flat(surf, canvas) {
         return area_region(canvas, None);
     }
     let step = photocraft_algo::segment::scale_for(content, grabcut::OBJECT_AT_WORK_PX);
@@ -516,14 +549,16 @@ fn object_at_point(s: &mut Session, p: &Value, (x, y): (f32, f32)) -> Result<Val
     let canvas = d.doc.bounds();
     let (px, py) = (x.floor() as i32, y.floor() as i32);
     let target = sampled_target(&d.doc, d.active_layer, all_layers);
-    // #5246's clear answer stands for a completely empty sampled layer and for a point outside
-    // the canvas - the cases its comment names. Inside the canvas, a layer with pixels
-    // elsewhere is answered like the reference application instead (#12863), not by the error.
-    let layer_empty = target.and_then(|id| d.doc.layer(id)).and_then(Layer::surface).is_some_and(|surf| surf.content_bounds().is_empty());
-    if target.is_some() && (layer_empty || !canvas.contains(px, py)) {
-        check_sampled_pixels(&d.doc, d.active_layer, all_layers, Rect::from_xywh(px, py, 1, 1))?;
+    // #5246's clear answer stands for the cases its comment names - a completely empty sampled
+    // layer and a point outside the canvas - and, as before #12863, for a Smart Object or type
+    // target with no pixels under the point (#15472 review). Inside the canvas, a pixel layer
+    // with pixels elsewhere is answered like the reference application instead (#12863), not
+    // by the error.
+    let here = Rect::from_xywh(px, py, 1, 1);
+    if point_reports_sampled_pixels_error(&d.doc, d.active_layer, all_layers, here) {
+        check_sampled_pixels(&d.doc, d.active_layer, all_layers, here)?;
     }
-    let group = !all_layers && d.active_layer.and_then(|id| d.doc.layer(id)).is_some_and(plain_group);
+    let group = plain_group_active(&d.doc, d.active_layer, all_layers);
     let doc = std::sync::Arc::clone(&d.doc);
     let active = d.active_layer;
     let found = if group {

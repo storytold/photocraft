@@ -335,3 +335,91 @@ fn a_hide_all_layer_mask_does_not_gate_the_area_answer() {
     assert_eq!(r["changed"], true, "the raw surface decides, mask ignored, as the object lookup does");
     assert_eq!(select_counts(&s), (0, 480_000, 480_000));
 }
+
+/// #15472 review round 2 (smartselect_cmds.rs:489): flatness is judged over the whole canvas,
+/// not over the layer's content box. A solid rectangle on a transparent layer is one opaque
+/// object: a click well outside it answers the canvas with the rectangle cut out (the green
+/// disc's rule), not the uncut whole canvas at 254.
+#[test]
+fn a_solid_rectangle_on_a_transparent_layer_is_cut_from_the_area_answer() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": W, "height": H, "depth": 8})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "Card"})).unwrap();
+    paint_new_layer(&mut s, |x, y| {
+        if (100..300).contains(&x) && (100..250).contains(&y) {
+            return [220.0 / 255.0, 30.0 / 255.0, 30.0 / 255.0, 1.0];
+        }
+        [0.0, 0.0, 0.0, 0.0]
+    });
+    let r = s.execute("select.object", json!({"point": [650, 420]})).unwrap();
+    assert_eq!(r["changed"], true, "one opaque object, a click on the layer's transparency");
+    assert_eq!(bounds(&s), [0, 0, 800, 600]);
+    assert_eq!(cov8(&s, 200, 150), 0, "the rectangle stays unselected, not 254");
+    assert_eq!(cov8(&s, 650, 420), 254, "the clicked spot is partly selected");
+    assert_eq!(select_counts(&s), (0, 480_000 - 200 * 150, 480_000 - 200 * 150), "the canvas minus the rectangle, all at 254");
+}
+
+/// #15472 review round 2 (smartselect_cmds.rs:399): the area answer's bounds follow the cut
+/// selection. A full-height stripe along the canvas edge zeroes whole mask columns, so the
+/// answer trims to the selected pixels' extent - trimmed()'s rule for found objects. An
+/// interior cut (the disc test above) still keeps the whole canvas.
+#[test]
+fn a_full_height_cut_trims_the_area_answer_bounds_to_the_selected_pixels() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": W, "height": H, "depth": 8})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "Stripe"})).unwrap();
+    paint_new_layer(&mut s, |x, _y| {
+        if x < 100 {
+            return [220.0 / 255.0, 30.0 / 255.0, 30.0 / 255.0, 1.0];
+        }
+        [0.0, 0.0, 0.0, 0.0]
+    });
+    let r = s.execute("select.object", json!({"point": [400, 300]})).unwrap();
+    assert_eq!(r["changed"], true, "one opaque object, a click on its transparency");
+    assert_eq!(bounds(&s), [100, 0, 800, 600], "the selection reaches x 100, not the cut-away edge");
+    assert_eq!(r["bounds"], json!([100, 0, 700, 600]), "the reported bounds match the selection");
+    assert_eq!(select_counts(&s), (0, 480_000 - 100 * 600, 480_000 - 100 * 600), "the canvas minus the stripe, all at 254");
+}
+
+/// #15472 review round 2 (smartselect_cmds.rs:483): a Smart Object's click keeps its answer
+/// from before #12863. Layer::surface hands the area path the rendered cache, and the cache is
+/// flat over its own crop - so without a filter a click on the document's empty canvas beside
+/// a smart object answers the whole canvas. The pre-#12863 answer there is #5246's error.
+#[test]
+fn a_smart_object_target_takes_no_area_answer_and_keeps_its_no_pixels_error() {
+    let mut s = flat_background_document("#ffffff");
+    s.execute("layer.new.layer", json!({"name": "Card"})).unwrap();
+    paint_new_layer(&mut s, |x, y| {
+        if (100..300).contains(&x) && (100..250).contains(&y) {
+            return [220.0 / 255.0, 30.0 / 255.0, 30.0 / 255.0, 1.0];
+        }
+        [0.0, 0.0, 0.0, 0.0]
+    });
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    let d = s.active().unwrap();
+    assert!(d.doc.layer(d.active_layer.unwrap()).unwrap().surface().is_some(), "the converted smart object carries its rendered cache");
+    let e = s.execute("select.object", json!({"point": [650, 420]})).unwrap_err().to_string();
+    assert!(e.contains("no pixels in that area") && e.contains("sampleAllLayers"), "{e}");
+    assert!(s.active().unwrap().doc.selection.is_none(), "and selects nothing");
+}
+
+/// #15472 review round 2 (smartselect_cmds.rs:483): same for a type layer whose rendered cache
+/// is flat - its click keeps #5246's clear error, never an area answer.
+#[test]
+fn a_type_target_takes_no_area_answer_and_keeps_its_no_pixels_error() {
+    let mut s = flat_background_document("#ffffff");
+    s.edit("type", |doc, active| {
+        let mut t = photocraft_doc::TextLayer { text: "Hi".into(), ..Default::default() };
+        let fmt = doc.pixel_format();
+        let mut cache = photocraft_raster::Surface::new(fmt);
+        cache.fill_rect(Rect::new(400, 300, 460, 340), &photocraft_raster::from_rgba(&fmt, [0.4, 0.2, 0.6, 1.0]));
+        t.cache = Some(cache);
+        let id = doc.insert_above(None, Layer::new("Type", LayerContent::Text(t)));
+        *active = Some(id);
+        Ok(id)
+    })
+    .unwrap();
+    let e = s.execute("select.object", json!({"point": [100, 100]})).unwrap_err().to_string();
+    assert!(e.contains("no pixels in that area") && e.contains("sampleAllLayers"), "{e}");
+    assert!(s.active().unwrap().doc.selection.is_none(), "and selects nothing");
+}
