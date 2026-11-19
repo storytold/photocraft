@@ -651,16 +651,20 @@ mod tests {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.perf.gpu_info.adapter = "Test GPU".into();
         app.perf.gpu_info.driver = "Driver 1\nbuild 2".into();
-        crate::i18n::with_language(crate::i18n::Lang::from_code("cs").unwrap(), || {
-            let line = adapter_report_line(&app);
-            assert!(!line.contains('\n') && !line.contains('\r'), "{line}");
-            assert!(line.starts_with("adapter report: PhotoCraft "), "{line}");
-            for part in ["Graphics adapter: Test GPU", "Driver: Driver 1 build 2", "System memory: ", "Memory Usage: "] {
-                assert!(line.contains(part), "{part}: {line}");
-            }
-            // The adapter part of the report, not the render path or the slow frames.
-            assert!(!line.contains("Render path"), "{line}");
-        });
+        // English in every build; Czech too when the craft-i18n catalogs are embedded (`from_code` is None without them).
+        let czech = crate::i18n::Lang::from_code("cs");
+        for lang in std::iter::once(crate::i18n::Lang::EN).chain(czech) {
+            crate::i18n::with_language(lang, || {
+                let line = adapter_report_line(&app);
+                assert!(!line.contains('\n') && !line.contains('\r'), "{line}");
+                assert!(line.starts_with("adapter report: PhotoCraft "), "{line}");
+                for part in ["Graphics adapter: Test GPU", "Driver: Driver 1 build 2", "System memory: ", "Memory Usage: "] {
+                    assert!(line.contains(part), "{part}: {line}");
+                }
+                // The adapter part of the report, not the render path or the slow frames.
+                assert!(!line.contains("Render path"), "{line}");
+            });
+        }
     }
 
     #[test]
