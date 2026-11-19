@@ -3,9 +3,9 @@ use super::{
     screen_picker, shortcuts, smart_svg_ui, tool_memory, transform_tool, type_tool, updates_ui, view_cmds, work_area,
 };
 use craft::ui::contract::Bind;
-use craft::ui::runtime::env::WindowKey;
+use craft::ui::runtime::env::{Env, WindowKey};
 use craft::ui::runtime::windows::WindowHost;
-use craft::ui::shell::{AppShell, slots};
+use craft::ui::shell::{AppShell, ShellWords, Slot, SlotSize, slots};
 
 impl PhotocraftApp {
     /// Close this frame's stage record (`frame_stages`): keep it if it was slow, and hand it to
@@ -224,6 +224,9 @@ impl PhotocraftApp {
         let panels_on = &self.ui.panels;
         let (menu_bar, options_bar, status_bar) = (panels_on.menu_bar, panels_on.options_bar, panels_on.status_bar);
         let window_title = panels::title_bar::window_title(self);
+        let options_size = if self.session.prefs().workspace.narrow_options_bar() { SlotSize::OptionsBarNarrow } else { SlotSize::OptionsBar };
+        let options_slot =
+            Slot::new(slots::OPTIONS).visible(options_bar && !home).reveal().size(options_size).label(Env::of(ui).words::<ShellWords>().options.clone());
         let versions = (panels::region_versions::options_bar(self), panels::region_versions::status_bar(self));
         // The shell binds a copy of the mode, since `show` takes the app too; the copy goes back
         // to the view after the pass.
@@ -233,7 +236,7 @@ impl PhotocraftApp {
             .window_title(window_title)
             .screen_mode(Bind::bound(&mut mode))
             .title_bar_if(menu_bar, |ui, _cx, app| panels::title_bar(app, ui))
-            .options_bar(options_bar && !home, |ui, _cx, app| panels::options_bar(app, ui))
+            .top(options_slot, |ui, _cx, app| panels::options_bar(app, ui))
             .content(slots::OPTIONS, versions.0)
             .status(status_bar && !home, |ui, _cx, app| panels::status_bar(app, ui))
             .content(slots::STATUS, versions.1)
@@ -274,5 +277,44 @@ impl PhotocraftApp {
         view_cmds::persist(self, &ctx);
         self.automation_input = false;
         native_menu::sync(self, &ctx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PhotocraftApp;
+    use crate::theme::AppTheme;
+    use egui::accesskit::Role;
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+    use serde_json::json;
+
+    fn options_height(harness: &Harness<'_, Box<PhotocraftApp>>) -> f32 {
+        // The shell's region contains the tool controls' own Options group.
+        harness.query_all_by_role_and_label(Role::Group, "Options").next().expect("the shell options region").rect().height()
+    }
+
+    #[test]
+    fn the_narrow_options_bar_preference_shortens_the_bar() {
+        for theme in [AppTheme::studio(), AppTheme::pro()] {
+            let theme_id = theme.id().as_str().to_owned();
+            let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |cc| {
+                PhotocraftApp::setup_context(&cc.egui_ctx, theme.clone());
+                let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), Default::default());
+                app.set_theme(&cc.egui_ctx, theme);
+                app.run("file.new", json!({"width": 200, "height": 160, "background": "white"})).unwrap();
+                app
+            });
+            h.run_steps(5);
+            assert_eq!(h.state().ui.theme.id().as_str(), theme_id);
+            let normal = options_height(&h);
+            h.state_mut().run("prefs.set", json!({"path": "workspace.enableNarrowOptionsBar", "value": true})).unwrap();
+            h.run_steps(5);
+            let narrow = options_height(&h);
+            assert!(narrow < normal, "{theme_id}: narrow {narrow} must be shorter than normal {normal}");
+            h.state_mut().run("prefs.set", json!({"path": "workspace.enableNarrowOptionsBar", "value": false})).unwrap();
+            h.run_steps(5);
+            assert_eq!(options_height(&h), normal, "{theme_id}");
+        }
     }
 }
