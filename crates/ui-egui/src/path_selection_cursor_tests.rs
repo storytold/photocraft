@@ -20,7 +20,7 @@ const CROSSHAIR: Option<Cursor> = Some(Cursor::Painted(PaintedCursor::Crosshair)
 
 /// Path Selection over a work path with one square component, 60–160 on both axes (away from the
 /// harness's guide at x = 200).
-fn square() -> Harness<'static, PhotocraftApp> {
+fn square() -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = harness(Tool::PathSelection);
     h.state_mut()
         .run("path.set", json!({"name": "work", "path": {"subpaths": [{"closed": true, "knots": [[60, 60], [160, 60], [160, 160], [60, 160]]}]}}))
@@ -30,18 +30,18 @@ fn square() -> Harness<'static, PhotocraftApp> {
 }
 
 /// The cursor the selected tool asked for in the last pass.
-fn tool_cursor(h: &Harness<'static, PhotocraftApp>) -> Option<Cursor> {
+fn tool_cursor(h: &Harness<'static, Box<PhotocraftApp>>) -> Option<Cursor> {
     h.state().canvas_tools.last_response.as_ref().and_then(|r| r.cursor.clone())
 }
 
 /// The tool's cursor at doc point (`x`, `y`) with `m` held.
-fn pointer(h: &mut Harness<'static, PhotocraftApp>, x: f32, y: f32, m: Modifiers) -> Option<Cursor> {
+fn pointer(h: &mut Harness<'static, Box<PhotocraftApp>>, x: f32, y: f32, m: Modifiers) -> Option<Cursor> {
     hover(h, x, y, m);
     tool_cursor(h)
 }
 
 /// Two shape layers, 40,40–140,120 and 230,180–350,260, the second one active.
-fn two_shapes(h: &mut Harness<'static, PhotocraftApp>) {
+fn two_shapes(h: &mut Harness<'static, Box<PhotocraftApp>>) {
     let app = h.state_mut();
     app.run("shape.create", json!({"kind": "rect", "rect": [40, 40, 100, 80], "fill": "#e02020"})).unwrap();
     app.run("shape.create", json!({"kind": "rect", "rect": [230, 180, 120, 80], "fill": "#2050e0"})).unwrap();

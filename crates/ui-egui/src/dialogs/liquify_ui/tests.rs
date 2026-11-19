@@ -94,7 +94,7 @@ fn sweep(app: &mut PhotocraftApp, y: f64) {
     perform(app, stroke_with(StepTool::ForwardWarp, 50.0, &[[40.0, y], [60.0, y + 2.0], [80.0, y]]));
 }
 
-fn app_with_layer() -> PhotocraftApp {
+fn app_with_layer() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.session.execute("file.new", json!({"width": 120, "height": 80, "depth": 8})).unwrap();
     app.session.execute("layer.new.layer", json!({})).unwrap();
@@ -333,7 +333,7 @@ fn freeze_lasso_records_a_stroke_and_clears_redo() {
 
 /// A smart object with a Liquify smart filter (one stroke, mesh size 3) and a Gaussian Blur
 /// above it.
-fn smart_liquify_app() -> (PhotocraftApp, LayerId) {
+fn smart_liquify_app() -> (Box<PhotocraftApp>, LayerId) {
     let mut app = app_with_layer();
     app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
     let stroke = json!({"tool": "forwardWarp", "size": 40, "points": [[40.0, 40.0, 1.0], [48.0, 41.0, 1.0], [56.0, 40.0, 1.0]]});

@@ -231,7 +231,7 @@ mod tests {
     use super::*;
 
     /// A 200 × 160 document: a red disc (centre 100, 80, radius 45) on blue.
-    pub(crate) fn disc_app() -> PhotocraftApp {
+    pub(crate) fn disc_app() -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.session.execute("file.new", json!({"width": 200, "height": 160})).unwrap();
         app.session

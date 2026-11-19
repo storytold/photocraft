@@ -308,6 +308,9 @@ fn edit_draft(app: &mut PhotocraftApp, edit: EditEvent<EditSubpath>) -> bool {
 fn set_draft(app: &mut PhotocraftApp, value: EditSubpath) {
     let n = value.knots.len();
     let selection_on_draft = app.ui.direct_selection.target == Some(PathRef::Pen);
+    // A refused draft whose document changed since takes no press, only Delete and Backspace: it stays refused, or
+    // `cancel_stale_pen` would drop all of it on the next pass instead of the one anchor (#15488).
+    let stale = app.ui.pen.as_ref().and_then(|p| p.owner.as_ref()).is_some_and(|o| !o.valid(app));
     let Some(pen) = ensure_draft(app) else { return };
     if pen.draft == value {
         return;
@@ -325,7 +328,7 @@ fn set_draft(app: &mut PhotocraftApp, value: EditSubpath) {
         }
     }
     pen.draft = value;
-    pen.commit_failed = false;
+    pen.commit_failed &= stale;
     if selection_on_draft {
         let ds = &mut app.ui.direct_selection;
         if grew {

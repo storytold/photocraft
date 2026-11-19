@@ -12,7 +12,7 @@ use super::history::{self, apply, can_delete, rows};
 use super::*;
 
 /// New (the opening state of File › New), then New Layer, Fill, New Layer, Fill.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
     for (cmd, p) in
@@ -24,7 +24,7 @@ fn app() -> PhotocraftApp {
 }
 
 /// New, New Layer, Fill red, a snapshot, Fill blue.
-fn with_snapshot() -> PhotocraftApp {
+fn with_snapshot() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 200, "height": 150})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();

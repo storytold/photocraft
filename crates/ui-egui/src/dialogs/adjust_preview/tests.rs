@@ -423,7 +423,7 @@ fn preview_changes_nothing_outside_its_region() {
     }
 }
 
-fn app_with(doc: Document, target: LayerId) -> PhotocraftApp {
+fn app_with(doc: Document, target: LayerId) -> Box<PhotocraftApp> {
     let mut s = photocraft_engine::Session::new();
     s.add_document(doc, None);
     s.select_layer(target).unwrap();

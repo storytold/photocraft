@@ -24,7 +24,7 @@ const CASES: [([f64; 2], [[f64; 2]; 2]); 5] = [
 const START: [f64; 2] = [400.0, 300.0];
 
 /// A new 800 × 600 document with the Line tool picked.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 800, "height": 600})).unwrap();
     app.sync_views();

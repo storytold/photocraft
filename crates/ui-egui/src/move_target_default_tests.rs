@@ -11,7 +11,7 @@ use serde_json::json;
 use crate::PhotocraftApp;
 use crate::state::{Tool, ToolOptions};
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
     app.sync_views();
@@ -48,7 +48,7 @@ fn a_saved_choice_is_kept_and_only_a_missing_key_gets_layer() {
 fn the_target_dropdown_lists_group_then_layer() {
     let app = app();
     let mut h = Harness::builder().with_size(vec2(1600.0, 400.0)).with_context(app.ctx().clone()).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        |ui, app: &mut Box<PhotocraftApp>| {
             if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
             }
