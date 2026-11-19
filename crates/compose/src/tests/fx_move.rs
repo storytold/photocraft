@@ -281,6 +281,28 @@ fn an_anchored_texture_reuses_maps_only_when_its_anchor_moved_too() {
 }
 
 #[test]
+fn a_redefined_texture_pattern_is_not_reused_after_a_move() {
+    let _g = held();
+    let mut d = moving_doc(SampleType::U8, Rect::new(30, 30, 70, 60), vec![bevel(BevelTechnique::Smooth, Some(texture(true)))]);
+    let i = d.layers.len() - 1;
+    d.layers[i].effects.reference = Some((30.0, 30.0));
+    let id = top_id(&d);
+    let _ = flatten(&d);
+    let before = fx_builds(id);
+    // The pattern's pixels replaced under the same id and name (flat black, no stripes), and the
+    // layer moved with its reference point: the move key, anchor and shape all still match.
+    let mut sf = photocraft_raster::Surface::new(PixelFormat::RGBA8);
+    sf.fill_rect(Rect::new(0, 0, 5, 5), &[0.0, 0.0, 0.0, 1.0]);
+    let mut flat = photocraft_doc::pattern::Pattern::new("stripes", sf, 5, 5);
+    flat.id = "stripes".into();
+    d.patterns[0] = flat;
+    moved(&mut d.layers[i], 10, 7);
+    let warm = flatten(&d);
+    assert_eq!(fx_builds(id) - before, 1, "maps built from the old pattern are not reused");
+    assert!(warm.px == cold(&d, d.bounds()).px, "renders like a cold build with the new pattern");
+}
+
+#[test]
 fn a_clipped_entry_is_never_reused_after_a_move() {
     let _g = held();
     // Transparency Shapes Layer off: the region is the canvas and a part's render clips it.

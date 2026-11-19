@@ -72,6 +72,11 @@ impl<'a> PreparedPatterns<'a> {
         self
     }
 
+    /// The colour mode the patterns are painted into.
+    pub(crate) fn mode(&self) -> ColorMode {
+        self.mode
+    }
+
     pub(crate) fn source(&self) -> &'a [Pattern] {
         self.patterns
     }

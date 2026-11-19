@@ -6,6 +6,26 @@ use super::{BufferAlloc, InfallibleBufferAlloc, Layer, LayerContent, Rect, Surfa
 // ---------------------------------------------------------------------------------------------
 // Layer-effect map cache
 
+/// Identity of a surface's pixels: its format, default pixel and copy-on-write tile pointers,
+/// each tile passed to `pin` (see [`layer_identity`]).
+fn surface_fp(s: &Surface, pin: &mut dyn FnMut(&std::sync::Arc<photocraft_raster::Tile>)) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.format().hash(&mut h);
+    // Missing tiles read the default pixel, so tile identity alone is not pixel identity.
+    for sample in s.default_pixel() {
+        sample.to_bits().hash(&mut h);
+    }
+    let tiles = s.tiles().fold(s.tile_count() as u64, |acc, (c, t)| {
+        pin(t);
+        let mut x = (std::sync::Arc::as_ptr(t) as usize as u64) ^ ((c.tx as u64) << 40) ^ ((c.ty as u32 as u64) << 8);
+        x = x.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        acc.wrapping_add(x ^ (x >> 29))
+    });
+    tiles.hash(&mut h);
+    h.finish()
+}
+
 /// Order-independent identity of a layer's pixels, masks, effects, Advanced Blending and Blend If
 /// and (for groups) children.
 /// Pixels are identified by their copy-on-write tile pointers. `pin` sees every tile hashed: a
@@ -13,22 +33,6 @@ use super::{BufferAlloc, InfallibleBufferAlloc, Layer, LayerContent, Rect, Surfa
 /// other tile can reuse it and match the key) without keeping its pixels alive (#4530).
 pub(crate) fn layer_identity(layer: &Layer, h: &mut std::collections::hash_map::DefaultHasher, pin: &mut dyn FnMut(&std::sync::Arc<photocraft_raster::Tile>)) {
     use std::hash::{Hash, Hasher};
-    fn surface_fp(s: &Surface, pin: &mut dyn FnMut(&std::sync::Arc<photocraft_raster::Tile>)) -> u64 {
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        s.format().hash(&mut h);
-        // Missing tiles read the default pixel, so tile identity alone is not pixel identity.
-        for sample in s.default_pixel() {
-            sample.to_bits().hash(&mut h);
-        }
-        let tiles = s.tiles().fold(s.tile_count() as u64, |acc, (c, t)| {
-            pin(t);
-            let mut x = (std::sync::Arc::as_ptr(t) as usize as u64) ^ ((c.tx as u64) << 40) ^ ((c.ty as u32 as u64) << 8);
-            x = x.wrapping_mul(0x9e37_79b9_7f4a_7c15);
-            acc.wrapping_add(x ^ (x >> 29))
-        });
-        tiles.hash(&mut h);
-        h.finish()
-    }
     layer.id.0.hash(h);
     // What the maps depend on: `fill_opacity` shades them; layer `opacity` is applied when the
     // maps are composited and `visible` only skips the lookup entirely, so neither belongs in
@@ -98,6 +102,9 @@ struct FxCache {
     /// Position-free index ([`move_key`]) → the exact key of the latest entry with it. Lookups
     /// go through `map`, so an evicted entry is simply a miss.
     moves: std::collections::HashMap<u64, u64>,
+    /// Exact key → the move key it was indexed under, so dropping an entry finds its index record
+    /// directly (only removed while it still points to that entry).
+    move_of: std::collections::HashMap<u64, u64>,
     order: std::collections::VecDeque<u64>,
     bytes: usize,
     /// Each cached arrays allocation ([`effects::FxMaps::arrays_id`]) → how many cached entries
@@ -139,6 +146,7 @@ pub fn purge_effect_cache() -> usize {
     let freed = c.bytes;
     c.map.clear();
     c.moves.clear();
+    c.move_of.clear();
     c.order.clear();
     c.arrays.clear();
     c.bytes = 0;
@@ -168,6 +176,7 @@ fn fx_cache() -> &'static std::sync::Mutex<FxCache> {
         std::sync::Mutex::new(FxCache {
             map: Default::default(),
             moves: Default::default(),
+            move_of: Default::default(),
             order: Default::default(),
             bytes: 0,
             arrays: Default::default(),
@@ -281,7 +290,7 @@ fn build_fx_slot_maps(layer: &Layer, region: Rect, shape: Vec<f32>, generation: 
     let maps = effects::build_maps_prepared(layer, shape, region, &cx.light, &tex, cx.patterns);
     #[cfg(test)]
     count_build(layer.id.0);
-    fill_slot(layer, std::sync::Arc::new(maps), tex.anchor, generation, key, slot)
+    fill_slot(layer, std::sync::Arc::new(maps), tex.anchor, generation, key, cx, slot)
 }
 
 /// Fills `slot` with `maps` and returns the maps the slot holds: a concurrent fill that finished
@@ -294,14 +303,18 @@ fn fill_slot(
     anchor: (f64, f64),
     generation: u64,
     key: u64,
+    cx: &Ctx,
     slot: &FxSlot,
 ) -> std::sync::Arc<effects::FxMaps> {
     let mut pin = Vec::new();
     let mut readable = true;
-    layer_identity(layer, &mut std::collections::hash_map::DefaultHasher::new(), &mut |t| {
+    let mut keep = |t: &std::sync::Arc<photocraft_raster::Tile>| {
         readable &= t.scratch_health().is_ok();
         pin.push(std::sync::Arc::downgrade(t));
-    });
+    };
+    layer_identity(layer, &mut std::collections::hash_map::DefaultHasher::new(), &mut keep);
+    // The textures' tiles too: [`move_key`] identifies them by address.
+    texture_identity(layer, cx, &mut std::collections::hash_map::DefaultHasher::new(), &mut keep);
     if !readable || photocraft_raster::spill::check_since(generation).is_err() {
         // Built from a scratch placeholder: use it for this frame, never cache it.
         return maps;
@@ -376,12 +389,33 @@ fn move_key(layer: &Layer, region: Rect, clipped: bool, cx: &Ctx) -> Option<u64>
     // The effects without their reference point: where a linked texture anchors is checked
     // against the move itself (`anchor_follows`).
     format!("{:?}", layer.effects.items).hash(&mut h);
+    // The settings name a texture's pattern, not its pixels: a pattern redefined under the same
+    // id and name must not lend its old maps to the moved layer.
+    texture_identity(layer, cx, &mut h, &mut |_| {});
     layer.effects.enabled.hash(&mut h);
     layer.advanced.hash(&mut h);
     layer.blend_if.hash(&mut h);
     (cx.light.angle.to_bits(), cx.light.altitude.to_bits()).hash(&mut h);
     (region.width(), region.height()).hash(&mut h);
     Some(h.finish())
+}
+
+/// Identity of what the enabled bevels' textures resolve to: each pattern's size and pixels (its
+/// tile addresses, passed to `pin` as in [`layer_identity`]) and the colour mode they are painted
+/// in. The cached entry pins those tiles, so a redefined pattern can't take their addresses.
+fn texture_identity(layer: &Layer, cx: &Ctx, h: &mut std::collections::hash_map::DefaultHasher, pin: &mut dyn FnMut(&std::sync::Arc<photocraft_raster::Tile>)) {
+    use std::hash::Hash;
+    let mut any = false;
+    for t in bevel_textures(layer) {
+        any = true;
+        match photocraft_doc::pattern::find(cx.patterns.source(), &t.id, &t.name) {
+            Some(p) => (1u8, p.width, p.height, p.is_paintable(), surface_fp(&p.surface, pin)).hash(h),
+            None => 0u8.hash(h),
+        }
+    }
+    if any {
+        (cx.mode, cx.patterns.mode()).hash(h);
+    }
 }
 
 /// The enabled bevels' textures: the only map input that reads the texture anchor.
@@ -488,7 +522,16 @@ fn remove_entry(c: &mut FxCache, key: u64) {
             *b = b.saturating_sub(freed);
         }
     }
-    c.moves.retain(|_, k| *k != key);
+    unindex_move(c, key);
+}
+
+/// Drops the move-index record of the entry under `key`, unless a newer entry has taken it.
+fn unindex_move(c: &mut FxCache, key: u64) {
+    if let Some(mk) = c.move_of.remove(&key)
+        && c.moves.get(&mk) == Some(&key)
+    {
+        c.moves.remove(&mk);
+    }
 }
 
 /// The layer's effect maps from the global cache, built on a miss.
@@ -526,7 +569,7 @@ fn cached_effect_maps_with<A: BufferAlloc>(
                 let shape = match mk {
                     Some(mk) => match moved_maps(layer, region, mk, cx, alloc)? {
                         // The arrays are shared with the entry moved from and counted once for both.
-                        Ok((maps, anchor)) => return Ok(fill_slot(layer, maps, anchor, generation, key, &slot)),
+                        Ok((maps, anchor)) => return Ok(fill_slot(layer, maps, anchor, generation, key, cx, &slot)),
                         Err(shape) => shape,
                     },
                     None => None,
@@ -549,6 +592,7 @@ fn cached_effect_maps_with<A: BufferAlloc>(
                         let mut c = fx_cache().lock().unwrap_or_else(|e| e.into_inner());
                         if c.map.get(&key).is_some_and(|s| std::sync::Arc::ptr_eq(s, &slot)) {
                             c.moves.insert(mk, key);
+                            c.move_of.insert(key, mk);
                         }
                     }
                     maps
@@ -563,7 +607,7 @@ fn cached_effect_maps_with<A: BufferAlloc>(
                         if c.map.get(&key).is_some_and(|current| std::sync::Arc::ptr_eq(current, &slot)) {
                             c.map.remove(&key);
                             c.order.retain(|candidate| *candidate != key);
-                            c.moves.retain(|_, k| *k != key);
+                            unindex_move(&mut c, key);
                         }
                         return Err(error);
                     }
