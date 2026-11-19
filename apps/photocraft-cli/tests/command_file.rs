@@ -3,18 +3,15 @@ use photocraft_automation::security::{AuthStep, ServerHandshake};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::PathBuf;
 use std::process::{Command, Output};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 const CONTROL_TOKEN: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-static NEXT: AtomicUsize = AtomicUsize::new(0);
-struct Fixture(PathBuf);
+struct Fixture(tempfile::TempDir);
 impl Fixture {
     fn new(script: &str) -> Self {
-        let path = std::env::temp_dir().join(format!("pc-command-file-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
-        std::fs::create_dir_all(&path).unwrap();
+        let dir = tempfile::Builder::new().prefix("pc-command-file-").tempdir().unwrap();
+        let path = dir.path();
         std::fs::write(path.join("script.jsonl"), script).unwrap();
         let mut options = std::fs::OpenOptions::new();
         options.write(true).create_new(true);
@@ -24,7 +21,7 @@ impl Fixture {
             options.mode(0o600);
         }
         options.open(path.join("token")).unwrap().write_all(CONTROL_TOKEN.as_bytes()).unwrap();
-        Self(path)
+        Self(dir)
     }
     fn command(&self, port: u16, token_flag: &str) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_photocraft-cli"));
@@ -32,17 +29,12 @@ impl Fixture {
             .env_remove("PHOTOCRAFT_CONTROL_TOKEN")
             .env_remove("PHOTOCRAFT_CONTROL_TOKEN_FILE")
             .args(["run", "--control", &port.to_string(), token_flag])
-            .arg(self.0.join("token"))
-            .arg(self.0.join("script.jsonl"));
+            .arg(self.0.path().join("token"))
+            .arg(self.0.path().join("script.jsonl"));
         command
     }
     fn run(&self, port: u16) -> Output {
         self.command(port, "--control-token-file").output().unwrap()
-    }
-}
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
     }
 }
 fn read(reader: &mut BufReader<TcpStream>) -> Value {
