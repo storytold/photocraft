@@ -14,7 +14,7 @@ use crate::theme::AppTheme;
 use super::tabs::tab_title_at;
 
 /// A real app window with `docs` documents named "ch1-pNN.png".
-fn harness(docs: usize) -> Harness<'static, PhotocraftApp> {
+fn harness(docs: usize) -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).with_max_steps(64).build_eframe(move |cc| {
         let theme = AppTheme::pro();
         PhotocraftApp::setup_context(&cc.egui_ctx, theme.clone());
@@ -31,7 +31,7 @@ fn harness(docs: usize) -> Harness<'static, PhotocraftApp> {
 }
 
 /// How many tabs of the strip carry `name`. A tab's accessible name is its name, then its detail and modified mark.
-fn tabs_named(h: &Harness<'_, PhotocraftApp>, name: &str) -> usize {
+fn tabs_named(h: &Harness<'_, Box<PhotocraftApp>>, name: &str) -> usize {
     h.query_all_by_role(Role::Tab).filter(|n| n.accesskit_node().label().is_some_and(|label| label.contains(name))).count()
 }
 
@@ -39,7 +39,7 @@ fn tabs_named(h: &Harness<'_, PhotocraftApp>, name: &str) -> usize {
 // `ui-shell/src/shell/reveal.rs:95-99`) and the app harness does not hand the shell output to a trial; the panels'
 // visibility is read from the tree, by the Layers panel the default workspace docks.
 /// Whether the docked panels are drawn.
-fn panels_shown(h: &Harness<'_, PhotocraftApp>) -> bool {
+fn panels_shown(h: &Harness<'_, Box<PhotocraftApp>>) -> bool {
     h.query_all_by_label("Layers").next().is_some()
 }
 
@@ -79,9 +79,9 @@ fn ctrl() -> egui::Modifiers {
 #[test]
 fn ctrl_tab_cycles_through_the_document_tabs() {
     let mut h = harness(3);
-    let active = |h: &Harness<'_, PhotocraftApp>| h.state().session.active_index();
+    let active = |h: &Harness<'_, Box<PhotocraftApp>>| h.state().session.active_index();
     assert_eq!(active(&h), Some(2), "the last new document is active");
-    let press = |h: &mut Harness<'_, PhotocraftApp>, shift: bool| {
+    let press = |h: &mut Harness<'_, Box<PhotocraftApp>>, shift: bool| {
         h.key_press_modifiers(if shift { ctrl() | egui::Modifiers::SHIFT } else { ctrl() }, egui::Key::Tab);
         h.run_steps(2);
     };
@@ -120,7 +120,7 @@ fn ctrl_tab_records_a_relative_document_switch() {
 fn quick_mask_mode_names_the_quick_mask_in_the_tab() {
     let mut h = harness(1);
     h.state_mut().run("layer.new.layer", json!({})).unwrap();
-    let title = |h: &Harness<'_, PhotocraftApp>| tab_title_at(h.state(), 0, 100.0);
+    let title = |h: &Harness<'_, Box<PhotocraftApp>>| tab_title_at(h.state(), 0, 100.0);
 
     let detail = title(&h);
     assert!(detail.starts_with("ch1-p01.png @ 100%"), "{detail}");
