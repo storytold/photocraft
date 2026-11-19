@@ -479,7 +479,7 @@ impl Ctx<'_> {
         // Advanced Blending channel restrictions (`brst`: the u32 ids of channels left out);
         // also kept in `psd_blocks`, where export rewrites it from the field.
         if let Some(b) = rec.block(b"brst") {
-            l.excluded_channels = crate::blocks::parse_brst(&b.data);
+            l.excluded_channels = craft_psd::tagged::channel_restrictions(&b.data);
         }
         // Advanced Blending (`knko`, `infx`, `clbl`, `tsly`, `lmgm`, `vmgm`); the blocks stay in
         // `psd_blocks`, where export rewrites them from the field in place.

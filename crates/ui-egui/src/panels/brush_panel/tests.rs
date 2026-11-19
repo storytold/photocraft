@@ -487,14 +487,14 @@ fn preset_rows_nest_presets_in_panel_order() {
     let max = photocraft_engine::brush_preset_cmds::MAX_FOLDER_DEPTH;
     let deep: Vec<&str> = vec!["d"; max + 5];
     let mut app = app();
-    app.session.tools.presets = vec![
+    app.session.tools.presets = std::sync::Arc::new(vec![
         kit("Top", "Kit", &[]),
         kit("Pen", "Kit", &["Inks"]),
         kit("Chalk", "Kit", &["Dry"]),
         kit("Nib", "Kit", &["Inks", "Fine"]),
         kit("Quill", "Kit", &["Inks"]),
         kit("Deep", "Kit", &deep),
-    ];
+    ]);
     let out: Vec<String> = rows_of(app, PresetView::List)
         .iter()
         .map(|r| match r.count {
@@ -509,7 +509,7 @@ fn preset_rows_nest_presets_in_panel_order() {
 
 fn fixture() -> Box<PhotocraftApp> {
     let mut app = app();
-    app.session.tools.presets = vec![
+    app.session.tools.presets = std::sync::Arc::new(vec![
         kit("A1", "Alpha", &[]),
         kit("A2", "Alpha", &[]),
         kit("A3", "Alpha", &[]),
@@ -518,7 +518,7 @@ fn fixture() -> Box<PhotocraftApp> {
         kit("Kit Pen", "Kit", &["Inks"]),
         kit("Kit Nib", "Kit", &["Inks", "Fine"]),
         kit("Kit Chalk", "Kit", &["Dry"]),
-    ];
+    ]);
     app
 }
 
