@@ -152,12 +152,12 @@ fn playback_does_not_count_a_pass_while_a_background_job_blocks_the_frame_change
     assert_eq!(h.state().ui.timeline.plays_done, 1);
 }
 
-fn anim(h: &Harness<'static, PhotocraftApp>) -> photocraft_doc::FrameAnimation {
+fn anim(h: &Harness<'static, Box<PhotocraftApp>>) -> photocraft_doc::FrameAnimation {
     h.state().session.active().unwrap().doc.frame_animation.clone().unwrap()
 }
 
 /// Puts the pointer over the panel, as the timeline's keys need.
-fn hover_panel(h: &mut Harness<'static, PhotocraftApp>) -> egui::Rect {
+fn hover_panel(h: &mut Harness<'static, Box<PhotocraftApp>>) -> egui::Rect {
     let r = h.state().ui.timeline.panel_rect.expect("the panel was drawn");
     h.event(egui::Event::PointerMoved(r.center()));
     h.run_steps(2);
@@ -321,7 +321,7 @@ fn delete_over_the_timeline_keeps_the_last_frame_and_changes_nothing_else() {
     // Pixels on the active layer, which Edit › Clear (also bound to Delete) would wipe.
     h.state_mut().run("edit.fill", json!({"color": "#336699"})).unwrap();
     h.run_steps(2);
-    let steps = |h: &Harness<'static, PhotocraftApp>| h.state().session.active().unwrap().history.past_len();
+    let steps = |h: &Harness<'static, Box<PhotocraftApp>>| h.state().session.active().unwrap().history.past_len();
     let before = steps(&h);
     h.key_press(egui::Key::Delete);
     h.run_steps(2);
@@ -330,7 +330,7 @@ fn delete_over_the_timeline_keeps_the_last_frame_and_changes_nothing_else() {
 }
 
 /// The delay menu's "Other…" field, which starts at the frame's 0.2 seconds.
-fn other_field<'a>(h: &'a Harness<'static, PhotocraftApp>) -> egui_kittest::Node<'a> {
+fn other_field<'a>(h: &'a Harness<'static, Box<PhotocraftApp>>) -> egui_kittest::Node<'a> {
     h.query_all_by_role(egui::accesskit::Role::TextInput).find(|n| n.value().as_deref() == Some("0.2")).expect("the Other… field")
 }
 
@@ -351,7 +351,7 @@ fn clicking_the_other_field_keeps_the_delay_menu_open_for_typing() {
 }
 
 /// Clicks frame `i` of the strip with `modifiers` held.
-fn click_frame(h: &mut Harness<'static, PhotocraftApp>, r: egui::Rect, i: usize, modifiers: egui::Modifiers) {
+fn click_frame(h: &mut Harness<'static, Box<PhotocraftApp>>, r: egui::Rect, i: usize, modifiers: egui::Modifiers) {
     let pos = egui::pos2(r.left() + 42.0 + i as f32 * 90.0, r.top() + 62.0);
     h.event_modifiers(egui::Event::PointerMoved(pos), modifiers);
     h.run_steps(1);
@@ -362,11 +362,11 @@ fn click_frame(h: &mut Harness<'static, PhotocraftApp>, r: egui::Rect, i: usize,
     h.run_steps(2);
 }
 
-fn selected(h: &Harness<'static, PhotocraftApp>) -> Vec<usize> {
+fn selected(h: &Harness<'static, Box<PhotocraftApp>>) -> Vec<usize> {
     crate::timeline_ui::selection(h.state()).into_iter().collect()
 }
 
-fn five_frames() -> Harness<'static, PhotocraftApp> {
+fn five_frames() -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = harness();
     for (i, s) in [1.0, 2.0, 3.0].iter().enumerate() {
         h.state_mut().run("animation.setDelay", json!({"seconds": s, "frames": [i]})).unwrap();
@@ -404,7 +404,7 @@ fn commands_cover_every_selected_frame() {
     assert_eq!(h.state().ui.timeline.clipboard.len(), 2);
     h.event(egui::Event::Paste(String::new()));
     h.run_steps(3);
-    let delays = |h: &Harness<'static, PhotocraftApp>| anim(h).frames.iter().map(|f| f.delay_ms).collect::<Vec<_>>();
+    let delays = |h: &Harness<'static, Box<PhotocraftApp>>| anim(h).frames.iter().map(|f| f.delay_ms).collect::<Vec<_>>();
     assert_eq!(delays(&h), [1000, 2000, 3000, 2000, 3000, 2000, 3000]);
     assert_eq!(selected(&h), [3, 4], "the pasted frames are selected");
     // Delete the selection.
@@ -525,7 +525,7 @@ fn onion_skin_ghosts_the_neighbouring_frames_only_while_on() {
     let mut h = harness();
     h.state_mut().run("animation.selectFrame", json!({"frame": 1})).unwrap();
     h.run_steps(3);
-    let ghosts = |h: &Harness<'static, PhotocraftApp>| crate::onion_skin::ghosts(h.state(), &h.ctx, h.state().session.active().unwrap().doc.id).len();
+    let ghosts = |h: &Harness<'static, Box<PhotocraftApp>>| crate::onion_skin::ghosts(h.state(), &h.ctx, h.state().session.active().unwrap().doc.id).len();
     assert_eq!(ghosts(&h), 0, "off by default");
     h.state_mut().ui.timeline.onion = crate::onion_skin::OnionSkin { enabled: true, before: 1, after: 1, opacity: 50 };
     assert_eq!(ghosts(&h), 0, "hidden while its menu is not shown");
