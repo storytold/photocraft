@@ -10,7 +10,7 @@
 //! The `craft` facade features PhotoCraft enables for this: `text`, `text-font-picker`,
 //! `font-manager`, `menu`, `timeline` and `print`, plus `dialogs` on native targets.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use craft::host::target::{Backend, ShellInfo};
@@ -603,27 +603,53 @@ struct PrefSections(Mutex<Tables>);
 #[derive(Default)]
 struct Tables {
     tables: BTreeMap<String, toml::Table>,
-    /// A component wrote since the last sync.
-    written: bool,
-    /// The preferences' sections as last synced, to notice a change from elsewhere (a reset,
-    /// the control channel).
-    seen: BTreeMap<String, Value>,
+    /// The sections a component wrote since the last sync.
+    written: BTreeSet<String>,
+    /// Each section's preference revision as last synced, to notice a change from elsewhere (a
+    /// reset, the control channel) without comparing the sections.
+    seen: BTreeMap<String, u64>,
+    /// How many sections a sync has read from the preferences.
+    #[cfg(test)]
+    loaded: usize,
 }
 
 impl PrefSections {
-    /// Writes the components' changes into the preferences, or takes a change made there.
+    /// Writes the sections the components wrote into the preferences, and takes the sections whose
+    /// preference revision moved.
     fn sync(&self, session: &mut Session) {
         let mut t = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        if std::mem::take(&mut t.written) {
-            let json: BTreeMap<String, Value> = t.tables.iter().filter_map(|(key, table)| Some((key.clone(), serde_json::to_value(table).ok()?))).collect();
-            if session.prefs().sections != json {
-                session.edit_prefs(|p| p.sections = json.clone());
+        let written = std::mem::take(&mut t.written);
+        if !written.is_empty() {
+            let changed: Vec<(String, Value)> = written
+                .iter()
+                .filter_map(|key| Some((key.clone(), serde_json::to_value(t.tables.get(key)?).ok()?)))
+                .filter(|(key, value)| session.prefs().sections.get(key) != Some(value))
+                .collect();
+            if !changed.is_empty() {
+                session.edit_prefs(|p| p.sections.extend(changed));
             }
-            t.seen = json;
-        } else if session.prefs().sections != t.seen {
-            let seen = session.prefs().sections.clone();
-            t.tables = seen.iter().filter_map(|(key, value)| Some((key.clone(), serde_json::from_value(value.clone()).ok()?))).collect();
-            t.seen = seen;
+            for key in written {
+                let rev = session.section_rev(&key);
+                t.seen.insert(key, rev);
+            }
+        }
+        let sections = &session.prefs().sections;
+        let moved: Vec<&String> = sections.keys().filter(|key| t.seen.get(*key) != Some(&session.section_rev(key))).collect();
+        let gone: Vec<String> = t.seen.keys().filter(|key| !sections.contains_key(*key)).cloned().collect();
+        for key in moved {
+            match serde_json::from_value(sections[key].clone()) {
+                Ok(table) => t.tables.insert(key.clone(), table),
+                Err(_) => t.tables.remove(key),
+            };
+            t.seen.insert(key.clone(), session.section_rev(key));
+            #[cfg(test)]
+            {
+                t.loaded += 1;
+            }
+        }
+        for key in gone {
+            t.tables.remove(&key);
+            t.seen.remove(&key);
         }
     }
 }
@@ -636,7 +662,7 @@ impl SectionStore for PrefSections {
     fn write(&self, key: &str, table: toml::Table) {
         let mut t = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         t.tables.insert(key.to_owned(), table);
-        t.written = true;
+        t.written.insert(key.to_owned());
     }
 }
 
@@ -689,6 +715,51 @@ pub(crate) fn keys_pass(app: &mut PhotocraftApp, ctx: &egui::Context, input: egu
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    fn table(n: i64) -> toml::Table {
+        let mut t = toml::Table::new();
+        t.insert("n".into(), toml::Value::Integer(n));
+        t
+    }
+
+    /// A sync reads and writes only the sections that changed, one revision per section.
+    #[test]
+    fn section_sync_touches_only_changed_sections() {
+        let store = PrefSections::default();
+        let mut session = Session::new();
+        store.write("one", table(1));
+        store.write("two", table(2));
+        store.sync(&mut session);
+        assert_eq!(session.prefs().sections.len(), 2);
+        let (one, two) = (session.section_rev("one"), session.section_rev("two"));
+        let loaded = store.0.lock().unwrap().loaded;
+
+        store.sync(&mut session);
+        assert_eq!((session.section_rev("one"), session.section_rev("two")), (one, two));
+        assert_eq!(store.0.lock().unwrap().loaded, loaded, "an idle sync reads nothing");
+
+        store.write("two", table(3));
+        store.sync(&mut session);
+        assert_eq!(session.section_rev("one"), one, "a section nobody wrote keeps its revision");
+        assert_eq!(session.section_rev("two"), two.wrapping_add(1));
+        assert_eq!(store.0.lock().unwrap().loaded, loaded, "a component's own write is not read back");
+
+        session.edit_prefs(|p| {
+            p.sections.insert("one".into(), serde_json::json!({ "n": 9 }));
+        });
+        store.sync(&mut session);
+        assert_eq!(store.0.lock().unwrap().loaded, loaded + 1, "only the changed section is read");
+        assert_eq!(store.read("one"), Some(table(9)));
+        assert_eq!(store.read("two"), Some(table(3)));
+
+        session.edit_prefs(|p| {
+            p.sections.remove("one");
+        });
+        store.sync(&mut session);
+        assert_eq!(store.read("one"), None);
+    }
+
     /// Every theme PhotoCraft has a palette for names a framework built-in.
     #[test]
     fn every_palette_theme_is_a_builtin() {

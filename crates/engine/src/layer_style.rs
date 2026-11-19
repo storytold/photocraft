@@ -9,7 +9,7 @@ use photocraft_doc::{
 };
 use serde_json::{Value, json};
 
-use crate::commands::{CommandSpec, blend_from_str};
+use crate::commands::{CommandSpec, parse_blend};
 use crate::presets::{always, bad};
 use crate::{EngineError, Result, Session};
 
@@ -714,7 +714,7 @@ fn overlay_common(c: &mut FxCommon, p: &Value) {
     if let Some(x) = b_of(p, "enabled") {
         c.enabled = x;
     }
-    if let Some(x) = p.get("blend").and_then(Value::as_str).and_then(blend_from_str) {
+    if let Some(x) = p.get("blend").and_then(Value::as_str).and_then(parse_blend) {
         c.blend = x;
     }
     if let Some(x) = f_of(p, "opacity") {
@@ -883,10 +883,10 @@ fn overlay_bevel(bv: &mut Bevel, p: &Value) {
     }
     overlay_contour(p, "glossContour", &mut bv.gloss_contour);
     overlay_bool(p, "glossAntiAlias", &mut bv.gloss_anti_alias);
-    if let Some(blend) = p.get("highlightBlend").and_then(Value::as_str).and_then(blend_from_str) {
+    if let Some(blend) = p.get("highlightBlend").and_then(Value::as_str).and_then(parse_blend) {
         bv.highlight.blend = blend;
     }
-    if let Some(blend) = p.get("shadowBlend").and_then(Value::as_str).and_then(blend_from_str) {
+    if let Some(blend) = p.get("shadowBlend").and_then(Value::as_str).and_then(parse_blend) {
         bv.shadow.blend = blend;
     }
     overlay_color(p, "highlightColor", &mut bv.highlight_color);
