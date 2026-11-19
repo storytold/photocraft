@@ -438,7 +438,10 @@ exec "$cli" droplet {quoted_abs} "$@"
 fn write_shim(droplet: &str) -> Result<String> {
     let abs = std::fs::canonicalize(droplet).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| droplet.to_string());
     let ext = if abs.ends_with(".json") { ".json" } else { ".pcdroplet" };
-    let base = abs.trim_end_matches(".pcdroplet").trim_end_matches(".json");
+    // Strip only the matched extension, once: `Rotate.json.pcdroplet` must become
+    // `Rotate.json.cmd`, because the launcher recovers the droplet as `%~dp0%~n0` + ext
+    // (trimming both suffixes would self-locate a `Rotate.pcdroplet` that does not exist).
+    let base = abs.strip_suffix(ext).unwrap_or(abs.as_str());
     let shim = format!("{base}.cmd");
     let body = format!(
         "@echo off\r\nrem PhotoCraft droplet: drop files and folders on this file to run the stored action on them.\r\nif defined PHOTOCRAFT_CLI (set \"PC_CLI=%PHOTOCRAFT_CLI%\") else (set \"PC_CLI=photocraft-cli\")\r\n\"%PC_CLI%\" droplet \"%~dp0%~n0{ext}\" %*\r\n"

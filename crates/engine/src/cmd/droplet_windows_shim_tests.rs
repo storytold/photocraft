@@ -174,3 +174,29 @@ fn windows_launcher_runs_the_cli_on_every_dropped_path() {
     assert_eq!(lines[3], inputs[1]);
     assert_eq!(lines[4], inputs[2], "a dropped folder reaches the run as a folder path");
 }
+
+#[cfg(windows)]
+#[test]
+fn windows_launcher_self_location_survives_a_double_extension_name() {
+    // Only the extension the launcher matched is stripped, once: `Rotate.json.pcdroplet`
+    // gets `Rotate.json.cmd`, so `%~dp0%~n0.pcdroplet` names the droplet that exists.
+    // Stripping both suffixes (trim_end_matches chains) lands on `Rotate.pcdroplet`, which
+    // does not exist; the same for `Plain.json.json` -> `Plain.cmd` -> `Plain.json`.
+    let dir = tmp("double-extension");
+    let r = create(&dir, format!("{dir}/Rotate.json.pcdroplet"), None);
+    let droplet = r["path"].as_str().unwrap().to_string();
+    let shim = r["shim"].as_str().unwrap_or_else(|| panic!("the Windows answer names the launcher: {r}"));
+    assert!(shim.ends_with("Rotate.json.cmd"), "{shim}");
+    let text = std::fs::read_to_string(shim).unwrap();
+    assert!(text.contains("%~dp0%~n0.pcdroplet"), "the droplet's real name keeps its inner .json: {text}");
+    let self_located = format!("{}.pcdroplet", shim.strip_suffix(".cmd").unwrap());
+    assert_eq!(std::fs::canonicalize(&self_located).unwrap(), std::fs::canonicalize(&droplet).unwrap(), "the launcher self-locates the droplet on disk");
+    let r = create(&dir, format!("{dir}/Plain.json.json"), None);
+    let droplet = r["path"].as_str().unwrap().to_string();
+    let shim = r["shim"].as_str().unwrap();
+    assert!(shim.ends_with("Plain.json.cmd"), "{shim}");
+    let text = std::fs::read_to_string(shim).unwrap();
+    assert!(text.contains("%~dp0%~n0.json"), "{text}");
+    let self_located = format!("{}.json", shim.strip_suffix(".cmd").unwrap());
+    assert_eq!(std::fs::canonicalize(&self_located).unwrap(), std::fs::canonicalize(&droplet).unwrap(), "the launcher self-locates the droplet on disk");
+}
