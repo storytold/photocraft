@@ -184,7 +184,7 @@ impl AuthorizedWorkspace {
         if exists && root.dir.metadata(&relative).is_ok_and(|m| !m.is_file()) {
             return Err(AutomationError::BadRequest(format!("automation write refused: `{path}` already exists and is not a regular file")));
         }
-        if exists && !written_kind(&leaf) && !holds_image(&root.dir, &relative) {
+        if exists && !written_kind(&leaf) && (opened_kind(&leaf) || !holds_image(&root.dir, &relative)) {
             return Err(AutomationError::BadRequest(format!(
                 "automation write refused: `{path}` already exists and is not an image or document file PhotoCraft writes; save to a new name"
             )));
@@ -258,6 +258,14 @@ fn written_kind(name: &str) -> bool {
     ["psd", "psb", "ora", "pdf", photocraft_format::EXTENSION].contains(&ext.as_str()) || exported_codec(&ext)
 }
 
+/// Whether `name`'s extension names an image format PhotoCraft opens: a codec's or a camera raw's.
+/// A file with such a name that is not a [`written_kind`] is refused whatever its bytes: a camera
+/// raw (`.dng`, `.nef`) starts like a TIFF and a JPEG-LS file like a JPEG, and neither is written.
+fn opened_kind(name: &str) -> bool {
+    let Some((_, ext)) = name.rsplit_once('.') else { return false };
+    matches!(photocraft_formats::from_extension(ext), Some(photocraft_formats::Format::Raw)) || photocraft_codecs::from_extension(ext).is_some()
+}
+
 /// Whether export writes files with extension `ext` through an image codec. Export looks the
 /// extension up in `photocraft_formats` and takes that format's raster codec, so a codec the
 /// registry has no entry for (JPEG-LS) is not written even when the codec can encode it.
@@ -288,22 +296,27 @@ fn holds_image(dir: &Dir, relative: &Path) -> bool {
 
 /// The format of a file that starts with a JPEG start-of-image marker: JPEG or JPEG-LS, by the
 /// first frame marker after the start of the file. Marker segments ahead of it are skipped by
-/// their length without being read. `None` when the frame marker is missing, a scan, the end of
-/// the image or a broken marker comes first, a marker has more than [`MAX_JPEG_FILL`] fill bytes,
-/// or more than [`MAX_JPEG_SEGMENTS`] markers come before it.
+/// their length without being read, and stray bytes between segments are skipped as JPEG
+/// decoders skip them. `None` when the frame marker is missing, a scan, the end of the image or
+/// a broken marker comes first, a marker has more than [`MAX_JPEG_PADDING`] stray and fill bytes
+/// ahead of it, or more than [`MAX_JPEG_SEGMENTS`] markers come before it.
 fn jpeg_frame_format(file: &mut BufReader<impl Read + Seek>) -> Option<photocraft_codecs::Format> {
     file.seek(SeekFrom::Start(2)).ok()?;
     let mut byte = [0u8; 1];
     for _ in 0..=MAX_JPEG_SEGMENTS {
+        let mut padding = 0;
         file.read_exact(&mut byte).ok()?;
-        if byte[0] != 0xFF {
-            return None;
+        while byte[0] != 0xFF {
+            padding += 1;
+            if padding > MAX_JPEG_PADDING {
+                return None;
+            }
+            file.read_exact(&mut byte).ok()?;
         }
         file.read_exact(&mut byte).ok()?;
-        let mut fill = 0;
         while byte[0] == 0xFF {
-            fill += 1;
-            if fill > MAX_JPEG_FILL {
+            padding += 1;
+            if padding > MAX_JPEG_PADDING {
                 return None;
             }
             file.read_exact(&mut byte).ok()?;
@@ -328,8 +341,9 @@ fn jpeg_frame_format(file: &mut BufReader<impl Read + Seek>) -> Option<photocraf
 /// size cover 256 MiB of metadata.
 const MAX_JPEG_SEGMENTS: usize = 4096;
 
-/// How many `0xFF` fill bytes [`jpeg_frame_format`] accepts ahead of one marker.
-const MAX_JPEG_FILL: usize = 64;
+/// How many stray bytes and `0xFF` fill bytes together [`jpeg_frame_format`] accepts ahead of one
+/// marker.
+const MAX_JPEG_PADDING: usize = 64;
 
 fn read_to_observed_length(reader: &mut impl Read, observed_length: u64) -> Result<Vec<u8>, AutomationError> {
     // Do not reserve from a potentially stale or attacker-controlled metadata length. Read in

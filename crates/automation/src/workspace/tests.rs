@@ -155,7 +155,8 @@ fn write_stream_seeks_back_and_keeps_the_original_on_failure() {
 /// #14355: files PhotoCraft can read but never writes (notes, data, rich text, read-only image
 /// formats such as XPM or DICOM) are not "a kind PhotoCraft writes", by name or by their bytes (#9439).
 /// JPEG-LS has an encoder in the codecs but no export entry, so it is read-only too, also when
-/// metadata segments put its frame header past the first bytes, or past the first 128 KiB.
+/// metadata segments put its frame header past the first bytes, or about 192 KiB in. A camera
+/// raw starts like a TIFF and is refused by its name.
 #[test]
 fn write_refuses_to_replace_files_photocraft_reads_but_does_not_write() {
     let (inside, _, workspace) = roots("read-only-kinds");
@@ -169,12 +170,15 @@ fn write_refuses_to_replace_files_photocraft_reads_but_does_not_write() {
         bytes.extend_from_slice(b"\xFF\xF7 keep");
         bytes
     };
-    let (some_metadata, more_than_is_read) = (jpeg_ls_after_metadata(1, 1000), jpeg_ls_after_metadata(3, u16::MAX));
-    let files: [(&str, &[u8]); 11] = [
+    let (some_metadata, large_metadata) = (jpeg_ls_after_metadata(1, 1000), jpeg_ls_after_metadata(3, u16::MAX));
+    let files: [(&str, &[u8]); 14] = [
         ("scan.jls", b"keep"),
         ("LOG", b"\xFF\xD8\xFF\xF7 keep"),
         ("SCAN", &some_metadata),
-        ("SCAN2", &more_than_is_read),
+        ("SCAN2", &large_metadata),
+        ("IMG_0001.dng", b"II*\x00\x08\x00\x00\x00 keep"),
+        ("IMG_0002.NEF", b"MM\x00*\x00\x00\x00\x08 keep"),
+        ("photo.jls", b"\xFF\xD8\xFF\xE0\x00\x02\xFF\xC0 keep"),
         ("notes.md", b"# keep"),
         ("data.csv", b"a,b\n1,2\n"),
         ("letter.rtf", b"{\\rtf1 keep}"),
@@ -212,7 +216,8 @@ fn write_refuses_to_replace_a_broken_jpeg_without_an_extension() {
 }
 
 /// A JPEG saved under a name without an extension is judged by its bytes and can be saved over,
-/// also when a large embedded profile puts its frame header past the first 128 KiB.
+/// also when about 192 KiB of embedded profile comes ahead of its frame header, and when stray
+/// bytes sit between its segments.
 #[test]
 fn write_replaces_a_jpeg_without_an_extension() {
     let (inside, _, workspace) = roots("jpeg-by-bytes");
@@ -224,7 +229,12 @@ fn write_replaces_a_jpeg_without_an_extension() {
         large_profile.resize(large_profile.len() + usize::from(u16::MAX) - 2, 0);
     }
     large_profile.extend_from_slice(&jpeg[2..]);
-    for (name, bytes) in [("PHOTO", &jpeg), ("PROFILED", &large_profile)] {
+    // Two stray bytes after the first segment that follows the start-of-image marker.
+    let first_segment_end = 4 + usize::from(u16::from_be_bytes([jpeg[4], jpeg[5]]));
+    let mut stray = jpeg[..first_segment_end].to_vec();
+    stray.extend_from_slice(b"\x00\x00");
+    stray.extend_from_slice(&jpeg[first_segment_end..]);
+    for (name, bytes) in [("PHOTO", &jpeg), ("PROFILED", &large_profile), ("STRAY", &stray)] {
         std::fs::write(inside.join(name), bytes).unwrap();
         workspace.write(name, b"\x89PNG\r\n\x1a\n").unwrap();
         assert_eq!(std::fs::read(inside.join(name)).unwrap(), b"\x89PNG\r\n\x1a\n", "{name}");
@@ -232,23 +242,29 @@ fn write_replaces_a_jpeg_without_an_extension() {
 }
 
 /// The frame marker of an extensionless JPEG is found after up to 4,096 markers, with up to 64
-/// fill bytes ahead of each; one more of either and the file is not judged a JPEG.
+/// stray and fill bytes together ahead of each; one more and the file is not judged a JPEG.
 #[test]
 fn write_judges_a_jpeg_without_an_extension_up_to_the_marker_limits() {
     let (inside, _, workspace) = roots("jpeg-limits");
-    let with = |segments: usize, fill: usize| {
+    let with = |segments: usize, stray: usize, fill: usize| {
         let mut bytes = b"\xFF\xD8".to_vec();
         for _ in 0..segments {
             bytes.extend_from_slice(b"\xFF\xE1\x00\x02");
         }
+        bytes.resize(bytes.len() + stray, 0);
         bytes.push(0xFF);
         bytes.resize(bytes.len() + fill, 0xFF);
         bytes.extend_from_slice(b"\xC0 keep");
         bytes
     };
-    for (name, bytes, replaced) in
-        [("SEGMENTS", with(4096, 0), true), ("SEGMENTS2", with(4097, 0), false), ("FILL", with(0, 64), true), ("FILL2", with(0, 65), false)]
-    {
+    for (name, bytes, replaced) in [
+        ("SEGMENTS", with(4096, 0, 0), true),
+        ("SEGMENTS2", with(4097, 0, 0), false),
+        ("FILL", with(0, 0, 64), true),
+        ("FILL2", with(0, 0, 65), false),
+        ("STRAY", with(1, 32, 32), true),
+        ("STRAY2", with(1, 33, 32), false),
+    ] {
         std::fs::write(inside.join(name), &bytes).unwrap();
         assert_eq!(workspace.write(name, b"\x89PNG\r\n\x1a\n").is_ok(), replaced, "{name}");
         assert_eq!(std::fs::read(inside.join(name)).unwrap() != bytes, replaced, "{name}");
