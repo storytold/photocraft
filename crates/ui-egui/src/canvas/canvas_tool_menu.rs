@@ -857,14 +857,16 @@ fn add_anchor_row_label(app: &PhotocraftApp, menu: &CanvasToolMenu, label: &'sta
     if !menu.has_path {
         return if command == "path.transform" { "Free Transform" } else { label };
     }
-    let ds = &app.ui.direct_selection;
-    if ds.anchors.is_empty() || !crate::direct_select::still_valid(app, ds) {
+    // The other rows keep their label: return before looking at the selection, once per row.
+    if !matches!(command, "path.fill" | "path.stroke" | "path.transform") {
         return label;
     }
-    let mut subpaths: Vec<usize> = ds.anchors.iter().map(|[s, _]| *s).collect();
-    subpaths.sort_unstable();
-    subpaths.dedup();
-    let several = subpaths.len() > 1;
+    let ds = &app.ui.direct_selection;
+    let Some([first, _]) = ds.anchors.first() else { return label };
+    if !crate::direct_select::still_valid(app, ds) {
+        return label;
+    }
+    let several = ds.anchors.iter().any(|[s, _]| s != first);
     match command {
         "path.fill" if several => "Fill Subpaths…",
         "path.fill" => "Fill Subpath…",
