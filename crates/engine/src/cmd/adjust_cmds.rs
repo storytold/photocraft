@@ -335,6 +335,34 @@ pub(crate) fn has_adjustable(s: &Session) -> std::result::Result<(), String> {
     }
 }
 
+/// Gradient Map is unavailable in 32-bit documents (#14696).
+pub(crate) fn gradient_map_depth_allowed(s: &Session) -> std::result::Result<(), String> {
+    let d = s.active().ok_or("no document open")?;
+    if d.doc.depth == photocraft_color::SampleType::F32 {
+        return Err("Gradient Map is not available in 32-bit documents".into());
+    }
+    Ok(())
+}
+
+/// Image › Adjustments › Gradient Map targets: like [`has_adjustable`], except 32-bit
+/// documents, Indexed Color documents and hidden pixel layers are unavailable (#14696).
+/// Targeted alpha channels / Quick Mask and layers inside hidden groups keep today's behaviour.
+pub(crate) fn has_gradient_map_target(s: &Session) -> std::result::Result<(), String> {
+    if crate::channel_cmds::edits_channel(s) {
+        return Ok(());
+    }
+    gradient_map_depth_allowed(s)?;
+    let d = s.active().ok_or("no document open")?;
+    if d.doc.mode == photocraft_color::ColorMode::Indexed {
+        return Err("Gradient Map is not available in Indexed Color mode".into());
+    }
+    let l = d.active_layer.and_then(|id| d.doc.layer(id)).ok_or("no active layer")?;
+    if matches!(l.content, LayerContent::Raster(_)) && !l.visible {
+        return Err("Gradient Map is not available on a hidden layer".into());
+    }
+    has_adjustable(s)
+}
+
 /// The smart object an adjustment's pixels would go to: the layer the params resolve to (the
 /// active one by default), when the command edits its pixels and that layer is a smart object.
 /// `None` for a mask or channel target, or a layer that is not a smart object.
@@ -353,7 +381,22 @@ pub(crate) fn smart_pixel_target(s: &Session, p: &Value) -> Result<Option<photoc
 /// the filter mask); `Ok(false)` when the command should edit pixels instead (a mask or channel
 /// target, or the active layer is not a smart object).
 pub(crate) fn adjust_as_smart_filter(s: &mut Session, kind: &str, label: &str, p: &Value) -> Result<bool> {
-    let Some(id) = smart_pixel_target(s, p)? else { return Ok(false) };
+    let Some(id) = smart_pixel_target(s, p)? else {
+        if kind == "gradientMap"
+            && !crate::commands::is_mask_target(p)
+            && !crate::channel_cmds::is_channel_target(p)
+            && crate::color_channels::target(s, p)?.is_none()
+            && let Some(d) = s.active()
+            && let Ok(id) = crate::commands::layer_param(s, p)
+            && let Some(surf) = d.doc.layer(id).and_then(Layer::surface)
+            && surf.content_bounds().is_empty()
+            && surf.format().alpha
+            && surf.default_pixel().last().is_some_and(|a| *a <= 0.0)
+        {
+            return Err(EngineError::Other("Could not complete the Gradient Map command because the active layer is empty.".into()));
+        }
+        return Ok(false);
+    };
     // A pixel or full lock refuses the smart filter, as for `filter.*` on a smart object.
     crate::commands::check_pixels_unlocked(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?;
     // The recorded params are the command's own, minus the engine's private `__kind` key.

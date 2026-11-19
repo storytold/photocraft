@@ -103,6 +103,8 @@ pub mod gallery_cmds;
 #[cfg(test)]
 mod gradient_alpha_method_tests;
 pub mod gradient_fill_cmds;
+#[cfg(test)]
+mod gradient_map_refusals_tests;
 pub mod group_view_cmds;
 pub mod history_cmds;
 pub mod history_menu_cmds;
@@ -1310,7 +1312,7 @@ fn build() -> Vec<CommandSpec> {
                 _ => None,
             },
             params,
-            enabled: crate::adjust_cmds::has_adjustable,
+            enabled: if kind == "gradientMap" { crate::adjust_cmds::has_gradient_map_target } else { crate::adjust_cmds::has_adjustable },
             run: |s, p| {
                 let kind = p.get("__kind").and_then(Value::as_str).unwrap_or("invert").to_string();
                 if matches!(kind.as_str(), "levels" | "curves") {
