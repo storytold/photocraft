@@ -167,3 +167,16 @@ fn placements_of_different_pages_of_one_pdf_render_their_own_page() {
     assert_eq!(colour(smart(doc, id).unwrap()), RED.to_vec());
     assert_eq!(colour(&second), vec![0.0, 0.0, 1.0, 1.0], "page 2's blue artwork, not page 1's from the cache");
 }
+
+#[test]
+fn warp_grid_and_splits_keep_the_saved_pixels_of_a_frame_matching_neither_box() {
+    let (mut s, id) = placed((100.0, 100.0));
+    s.active_mut().unwrap().active_layer = Some(id);
+    for (cmd, params) in
+        [("edit.transform.warpGrid", json!({"size": 3})), ("edit.transform.splitWarpCrosswise", json!({})), ("edit.transform.removeWarpSplit", json!({}))]
+    {
+        s.execute(cmd, params).unwrap_or_else(|e| panic!("{cmd}: {e}"));
+        assert_eq!(cache(&s, id).content_bounds(), Rect::new(20, 30, 120, 80), "{cmd} keeps the saved pixels");
+        assert!(smart(&s.active().unwrap().doc, id).unwrap().warp.is_some(), "{cmd} stores the warp");
+    }
+}

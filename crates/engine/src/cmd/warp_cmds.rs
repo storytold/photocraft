@@ -639,9 +639,19 @@ fn split(s: &mut Session, p: &Value, cmd: &str, how: Split) -> Result<Value> {
         if let Some(Layer { content: LayerContent::Smart(sm), .. }) = doc.layer_mut(id) {
             sm.warp = Some(out.clone());
         }
-        crate::smart_cmds::refresh(doc, id).map(|_| ())
+        refresh_keeping_saved(doc, id)
     })?;
     Ok(json!({"layer": id.0, "warp": out}))
+}
+
+/// Re-renders smart object `id` after its warp's mesh changed without changing its surface (a
+/// split or a new grid). A source that can't be drawn keeps the pixels it was saved with, as a
+/// transform does.
+fn refresh_keeping_saved(doc: &mut Document, id: LayerId) -> Result<()> {
+    match crate::smart_cmds::refresh(doc, id) {
+        Err(_) if matches!(doc.layer(id).map(|l| &l.content), Some(LayerContent::Smart(sm)) if sm.cache.is_some()) => Ok(()),
+        r => r.map(|_| ()),
+    }
 }
 
 /// Square preset size. `"default"` is 1. Numbers outside 1..=64 are rejected, not clamped.
@@ -705,7 +715,7 @@ fn grid(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(Layer { content: LayerContent::Smart(sm), .. }) = doc.layer_mut(id) {
             sm.warp = Some(out.clone());
         }
-        crate::smart_cmds::refresh(doc, id).map(|_| ())
+        refresh_keeping_saved(doc, id)
     })?;
     Ok(json!({"layer": id.0, "warp": out}))
 }
