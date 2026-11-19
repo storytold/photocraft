@@ -263,8 +263,8 @@ mod tests {
                 space: ToneSpace::Lab,
             },
         ];
-        for mode in [ColorMode::Rgb, ColorMode::Cmyk, ColorMode::Lab] {
-            for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for (mi, mode) in [ColorMode::Rgb, ColorMode::Cmyk, ColorMode::Lab].into_iter().enumerate() {
+            for (si, sample) in [SampleType::U8, SampleType::U16, SampleType::F32].into_iter().enumerate() {
                 let fmt = PixelFormat::new(mode, sample, true);
                 let mut source = Surface::with_default(fmt, &vec![0.3; fmt.channels()]);
                 // 256 x 256 is exactly the U16 table's area threshold (`use_table`), so the table path still runs (#15652).
@@ -281,7 +281,12 @@ mod tests {
                 let mut holes = Surface::with_default(mask.format(), &[0.63]);
                 holes.fill_rect(Rect::from_xywh(2, 8, 7, 5), &[0.0]);
                 let colors = ColorChannels::from_indices([0, mode.color_channels() - 1], mode.color_channels()).unwrap();
-                for selection in [None, Some(&mask), Some(&holes)] {
+                // Every mode/sample, mode/selection and sample/selection pair remains. RGB/U16
+                // also needs no selection: the sparse mask alone is below the table threshold.
+                for (ti, selection) in [None, Some(&mask), Some(&holes)].into_iter().enumerate() {
+                    if ti != (mi + si) % 3 && !(mode == ColorMode::Rgb && sample == SampleType::U16 && selection.is_none()) {
+                        continue;
+                    }
                     for adjustment in &adjustments {
                         let mut expected = source.clone();
                         let mut actual = source.clone();

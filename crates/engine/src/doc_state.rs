@@ -183,7 +183,7 @@ pub struct ToolState {
     pub background: [f32; 4],
     pub brush: photocraft_paint::BrushSettings,
     /// Brush presets (built-ins plus user presets; see `brush.presets.*`).
-    pub presets: Vec<photocraft_paint::BrushPreset>,
+    pub presets: Arc<Vec<photocraft_paint::BrushPreset>>,
     /// Bumped whenever `presets` changes ([`Session::brush_presets_changed`]); the preset store
     /// syncs when it moves.
     pub presets_rev: u64,
@@ -284,7 +284,7 @@ impl Default for ToolState {
                 smoothing: photocraft_paint::brush::Smoothing { amount: 0.1, ..Default::default() },
                 ..Default::default()
             },
-            presets: photocraft_paint::presets::builtin(),
+            presets: photocraft_paint::presets::builtin_shared(),
             presets_rev: 0,
             mixer: Default::default(),
             brush_gesture: None,
@@ -322,9 +322,71 @@ pub struct CopiedStyle {
 pub const PRECHECKED: &[&str] = &["layer.new.layer", "layer.new.group", "layer.new.groupFromLayers", "layer.new.layerFromBackground"];
 
 /// The selected layers of `doc` whose active layer is `active` and whose selection set is `selected`, in bottom-to-top
-/// order ([`DocState::selected_layers`]), for a reader that holds the document without its editing state.
+/// order ([`DocState::selected_layers`]), taken from the document's layer index rather than a walk, for a reader that holds the document without its editing state.
 pub fn selected_in(doc: &Document, active: Option<LayerId>, selected: &[LayerId]) -> Vec<LayerId> {
     let Some(active) = active else { return Vec::new() };
     let set: &[LayerId] = if selected.contains(&active) { selected } else { std::slice::from_ref(&active) };
-    doc.walk().into_iter().map(|(_, _, l)| l.id).filter(|id| set.contains(id)).collect()
+    // Paths from the document's layer index order layers as the walk does (depth-first, bottom-to-top).
+    let index = doc.layers.index();
+    let mut ids: Vec<LayerId> = set.iter().copied().filter(|id| index.path(*id).is_some()).collect();
+    ids.sort_unstable_by(|a, b| index.path(*a).cmp(&index.path(*b)));
+    ids.dedup();
+    ids
+}
+
+#[cfg(test)]
+mod selected_tests {
+    use super::selected_in;
+    use photocraft_doc::{ColorMode, Document, Layer, LayerId, PixelFormat, SampleType, Size};
+
+    fn raster(name: &str) -> Layer {
+        Layer::raster(name, PixelFormat::RGBA8)
+    }
+
+    /// The answer before the layer index: filter the depth-first walk by the selection set.
+    fn by_walk(doc: &Document, active: Option<LayerId>, selected: &[LayerId]) -> Vec<LayerId> {
+        let Some(active) = active else { return Vec::new() };
+        let set: &[LayerId] = if selected.contains(&active) { selected } else { std::slice::from_ref(&active) };
+        doc.walk().into_iter().map(|(_, _, l)| l.id).filter(|id| set.contains(id)).collect()
+    }
+
+    /// `a`, group `g` (`b`, group `h` (`c`), `d`), `e`: nested groups mixed with root layers.
+    fn mixed() -> (Document, Vec<LayerId>) {
+        let mut doc = Document::new("t", Size::new(4, 4), ColorMode::Rgb, SampleType::U8);
+        let (a, b, c, d, e) = (raster("a"), raster("b"), raster("c"), raster("d"), raster("e"));
+        let h = Layer::group("h", vec![c.clone()]);
+        let g = Layer::group("g", vec![b.clone(), h.clone(), d.clone()]);
+        let ids = [&a, &g, &b, &h, &c, &d, &e].map(|l| l.id).to_vec();
+        doc.layers = vec![a, g, e].into();
+        (doc, ids)
+    }
+
+    #[test]
+    fn selection_order_matches_the_walk_through_edits() {
+        let (mut doc, ids) = mixed();
+        let stale = LayerId::fresh();
+        let sets: Vec<Vec<LayerId>> =
+            vec![vec![ids[6], ids[4], ids[0]], vec![ids[5], ids[2], ids[1], ids[3]], vec![ids[4], ids[4], ids[0], stale], vec![ids[0]], vec![]];
+        let check = |doc: &Document| {
+            let first = doc.layers.index().serial();
+            for set in &sets {
+                for active in [None, Some(ids[0]), Some(ids[4]), Some(ids[6]), Some(stale)] {
+                    assert_eq!(selected_in(doc, active, set), by_walk(doc, active, set));
+                }
+            }
+            assert_eq!(doc.layers.index().serial(), first, "no rebuild while the document is unchanged");
+        };
+        check(&doc);
+        // Reorder: move `e` to the bottom, then a layer inside a group.
+        doc.shift(ids[6], -2);
+        check(&doc);
+        doc.shift(ids[5], -1);
+        check(&doc);
+        // Add and delete.
+        doc.insert_above(Some(ids[4]), raster("new"));
+        check(&doc);
+        doc.remove(ids[3]);
+        check(&doc);
+        assert_eq!(selected_in(&doc, Some(ids[0]), &[ids[0], ids[3], ids[4]]), vec![ids[0]], "deleted layers are skipped");
+    }
 }
