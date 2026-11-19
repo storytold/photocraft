@@ -54,7 +54,7 @@ where
     let result = match &cli.command {
         Command::Convert(a) => convert(a, out, err),
         Command::Info(a) => info(a, out),
-        Command::Run(a) if a.control.is_some() => command_file::run(a, out).map_err(CliError::Other),
+        Command::Run(a) if a.control.is_some() => command_file::run(a, out),
         Command::Run(a) => run_cmds(a, out, err),
         Command::Batch(a) => batch(a, out, err),
         Command::Droplet(a) => droplet(a, out, err),

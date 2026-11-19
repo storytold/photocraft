@@ -8,7 +8,7 @@ use photocraft_automation::{AutomationError, BridgeClient, security};
 use serde_json::{Value, json};
 
 use crate::{
-    Result,
+    CliError, Result,
     args::RunArgs,
     output::{JsonStyle, print_json},
 };
@@ -26,36 +26,36 @@ struct Step {
     save_as: Option<String>,
 }
 
-fn at(line: usize, cause: impl std::fmt::Display) -> String {
-    format!("script line {line}: {cause}")
+fn at(line: usize, cause: impl std::fmt::Display) -> CliError {
+    CliError::Other(format!("script line {line}: {cause}"))
 }
 
 fn valid_name(name: &str) -> bool {
     !name.is_empty() && name.len() <= 64 && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 
-fn reference(text: &str) -> Result<Option<(&str, &str)>, String> {
+fn reference(text: &str) -> Result<Option<(&str, &str)>> {
     if !text.starts_with('$') || text.starts_with("$$") {
         return Ok(None);
     }
-    let tail = text.strip_prefix('$').ok_or("invalid capture reference")?;
+    let tail = text.strip_prefix('$').ok_or_else(|| CliError::Other("invalid capture reference".into()))?;
     let (name, pointer) = tail.find('/').map_or((tail, ""), |i| tail.split_at(i));
     if !valid_name(name) {
-        return Err("capture references need $name or $name/JSON-pointer; use $$ for a literal dollar".into());
+        return Err(CliError::Other("capture references need $name or $name/JSON-pointer; use $$ for a literal dollar".into()));
     }
     let mut chars = pointer.chars();
     while let Some(c) = chars.next() {
         if c == '~' && !matches!(chars.next(), Some('0' | '1')) {
-            return Err("JSON pointer escapes must be ~0 or ~1".into());
+            return Err(CliError::Other("JSON pointer escapes must be ~0 or ~1".into()));
         }
     }
     Ok(Some((name, pointer)))
 }
 
 /// Captures are JSON data, not templates: check their depth without interpreting dollar strings.
-fn check_capture_depth(value: &Value, depth: usize) -> Result<(), String> {
+fn check_capture_depth(value: &Value, depth: usize) -> Result<()> {
     if depth > MAX_DEPTH {
-        return Err(format!("params exceed nesting limit {MAX_DEPTH}"));
+        return Err(CliError::Other(format!("params exceed nesting limit {MAX_DEPTH}")));
     }
     match value {
         Value::Array(values) => {
@@ -74,20 +74,20 @@ fn check_capture_depth(value: &Value, depth: usize) -> Result<(), String> {
 }
 
 /// Walk both during preflight and execution, preserving the referenced JSON type.
-fn template(value: &Value, captures: &HashMap<String, Value>, resolve: bool, depth: usize, budget: &mut usize) -> Result<Value, String> {
+fn template(value: &Value, captures: &HashMap<String, Value>, resolve: bool, depth: usize, budget: &mut usize) -> Result<Value> {
     if depth > MAX_DEPTH {
-        return Err(format!("params exceed nesting limit {MAX_DEPTH}"));
+        return Err(CliError::Other(format!("params exceed nesting limit {MAX_DEPTH}")));
     }
     let result = match value {
         Value::String(text) => {
             if let Some((name, pointer)) = reference(text)? {
-                let captured = captures.get(name).ok_or_else(|| format!("undefined or forward capture ${name}"))?;
+                let captured = captures.get(name).ok_or_else(|| CliError::Other(format!("undefined or forward capture ${name}")))?;
                 if resolve {
-                    let found = captured.pointer(pointer).ok_or_else(|| format!("JSON pointer does not exist in capture ${name}"))?;
+                    let found = captured.pointer(pointer).ok_or_else(|| CliError::Other(format!("JSON pointer does not exist in capture ${name}")))?;
                     check_capture_depth(found, depth)?;
                     // Account before cloning, including repeatedly substituted large captures.
-                    let size = serde_json::to_vec(found).map_err(|_| "cannot encode capture")?.len();
-                    *budget = budget.checked_sub(size).ok_or("resolved params exceed 8 MiB budget")?;
+                    let size = serde_json::to_vec(found).map_err(|_| CliError::Other("cannot encode capture".into()))?.len();
+                    *budget = budget.checked_sub(size).ok_or_else(|| CliError::Other("resolved params exceed 8 MiB budget".into()))?;
                     found.clone()
                 } else {
                     value.clone()
@@ -100,21 +100,21 @@ fn template(value: &Value, captures: &HashMap<String, Value>, resolve: bool, dep
         }
         Value::Array(values) => Value::Array(values.iter().map(|v| template(v, captures, resolve, depth + 1, budget)).collect::<Result<_, _>>()?),
         Value::Object(values) => {
-            Value::Object(values.iter().map(|(k, v)| Ok((k.clone(), template(v, captures, resolve, depth + 1, budget)?))).collect::<Result<_, String>>()?)
+            Value::Object(values.iter().map(|(k, v)| Ok((k.clone(), template(v, captures, resolve, depth + 1, budget)?))).collect::<Result<_>>()?)
         }
         _ => value.clone(),
     };
     Ok(result)
 }
 
-fn load(path: &Path) -> Result<Vec<Step>, String> {
-    let file = File::open(path).map_err(|e| format!("cannot open command file: {e}"))?;
+fn load(path: &Path) -> Result<Vec<Step>> {
+    let file = File::open(path).map_err(|e| CliError::Other(format!("cannot open command file: {e}")))?;
     let mut bytes = Vec::new();
-    file.take((MAX_BYTES + 1) as u64).read_to_end(&mut bytes).map_err(|e| format!("cannot read command file: {e}"))?;
+    file.take((MAX_BYTES + 1) as u64).read_to_end(&mut bytes).map_err(|e| CliError::Other(format!("cannot read command file: {e}")))?;
     if bytes.len() > MAX_BYTES {
-        return Err("command file exceeds 8 MiB budget".into());
+        return Err(CliError::Other("command file exceeds 8 MiB budget".into()));
     }
-    let text = std::str::from_utf8(&bytes).map_err(|_| "command file must be UTF-8")?;
+    let text = std::str::from_utf8(&bytes).map_err(|_| CliError::Other("command file must be UTF-8".into()))?;
     let mut steps = Vec::new();
     let mut captures = HashMap::new();
     for (index, line) in text.lines().enumerate() {
@@ -155,26 +155,28 @@ fn load(path: &Path) -> Result<Vec<Step>, String> {
         steps.push(Step { line: number, command: command.to_owned(), params, save_as });
     }
     if steps.is_empty() {
-        return Err("command file is empty".into());
+        return Err(CliError::Other("command file is empty".into()));
     }
     Ok(steps)
 }
 
-pub(super) fn run(args: &RunArgs, out: &mut dyn Write) -> Result<(), String> {
+pub(super) fn run(args: &RunArgs, out: &mut dyn Write) -> Result {
     // This synchronous entrypoint borrows a writer; reject async hosts before creating or
     // dropping a nested runtime, either of which could panic in that context.
     if tokio::runtime::Handle::try_current().is_ok() {
-        return Err("remote command files cannot run inside a Tokio runtime; call the synchronous CLI from a dedicated thread without a Tokio runtime".into());
+        return Err(CliError::Other(
+            "remote command files cannot run inside a Tokio runtime; call the synchronous CLI from a dedicated thread without a Tokio runtime".into(),
+        ));
     }
-    let port = args.control.filter(|port| *port != 0).ok_or("--control must be a port from 1 to 65535")?;
-    let path = args.file.as_deref().ok_or("remote run needs exactly one <script.jsonl>")?;
+    let port = args.control.filter(|port| *port != 0).ok_or_else(|| CliError::Other("--control must be a port from 1 to 65535".into()))?;
+    let path = args.file.as_deref().ok_or_else(|| CliError::Other("remote run needs exactly one <script.jsonl>".into()))?;
     let steps = load(path)?;
     let supplied = std::env::var("PHOTOCRAFT_CONTROL_TOKEN").ok().filter(|value| !value.trim().is_empty());
     let token_file =
         args.control_token_file.clone().or_else(|| std::env::var_os("PHOTOCRAFT_CONTROL_TOKEN_FILE").filter(|value| !value.is_empty()).map(PathBuf::from));
-    let token = security::client_token(supplied.as_deref(), token_file.as_deref()).map_err(|e| e.to_string())?;
-    let client = BridgeClient::new(format!("127.0.0.1:{port}"), token).map_err(|e| e.to_string())?;
-    let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+    let token = security::client_token(supplied.as_deref(), token_file.as_deref())?;
+    let client = BridgeClient::new(format!("127.0.0.1:{port}"), token)?;
+    let runtime = tokio::runtime::Runtime::new()?;
     runtime.block_on(async {
         let mut captures = HashMap::new();
         let mut remaining = MAX_BYTES;
@@ -198,7 +200,7 @@ pub(super) fn run(args: &RunArgs, out: &mut dyn Write) -> Result<(), String> {
                 remaining = remaining.checked_sub(size).ok_or_else(|| at(step.line, "captured results exceed 8 MiB budget"))?;
                 captures.insert(name, result.clone());
             }
-            print_json(out, &json!({"command": step.command, "result": result}), JsonStyle::Compact).map_err(|e| e.to_string())?;
+            print_json(out, &json!({"command": step.command, "result": result}), JsonStyle::Compact)?;
         }
         Ok(())
     })
