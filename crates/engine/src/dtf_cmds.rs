@@ -14,7 +14,7 @@ use photocraft_color::Color;
 use photocraft_doc::AlphaChannel;
 use serde_json::{Value, json};
 
-use crate::actions_cmds::Action;
+use crate::actions_cmds::{Action, ActionStep};
 use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
@@ -234,26 +234,24 @@ fn remember(s: &mut Session, params: Value) {
     s.edit_prefs(|prefs| {
         prefs.dialogs.insert(CMD.into(), params.clone());
     });
-    let idx = s.actions.list.iter().position(|a| a.name == ACTION_NAME && a.steps.len() == 1 && a.steps.first().is_some_and(|(id, _)| id == CMD));
-    if let Some(idx) = idx
-        && let Some(step) = s.actions.list.get_mut(idx).and_then(|a| a.steps.first_mut())
-    {
-        step.1 = params;
-        s.actions.touch();
+    let idx =
+        s.actions.list.actions().iter().position(|a| a.name == ACTION_NAME && a.steps.len() == 1 && a.steps.first().is_some_and(|step| step.command == CMD));
+    if let Some(idx) = idx {
+        let _ = s.actions.list.replace_step(idx, 0, ActionStep::new(CMD, params));
     }
 }
 
 /// The Actions panel edited the DTF step: the next dialog should open on those values.
 pub fn note_edited_step(s: &mut Session, idx: usize) {
-    let Some(action) = s.actions.list.get(idx) else { return };
+    let Some(action) = s.actions.list.action(idx) else { return };
     if action.name != ACTION_NAME || action.steps.len() != 1 {
         return;
     }
-    let Some((id, params)) = action.steps.first() else { return };
-    if id != CMD {
+    let Some(step) = action.steps.first() else { return };
+    if step.command != CMD {
         return;
     }
-    let params = params.clone();
+    let params = step.params.clone();
     s.edit_prefs(|prefs| {
         prefs.dialogs.insert(CMD.into(), params);
     });
@@ -265,7 +263,7 @@ fn params_for_preset(s: &Session) -> Value {
 
 /// The one-step action, with the default values, filed in the DTF action set.
 pub fn builtin_action() -> Action {
-    let mut action = Action::new(ACTION_NAME, vec![(CMD.into(), default_params())]);
+    let mut action = Action::new(ACTION_NAME, vec![ActionStep::new(CMD, default_params())]);
     action.set = Some(SET_NAME.into());
     action
 }
@@ -277,54 +275,59 @@ fn legacy_params(action: &Action) -> Option<Value> {
         return None;
     }
     let (load, contract, spot) = (&action.steps[0], &action.steps[1], &action.steps[2]);
-    if load.0 != "select.loadSelection" || contract.0 != "select.modify.contract" || spot.0 != "channel.newSpot" {
+    if load.command != "select.loadSelection" || contract.command != "select.modify.contract" || spot.command != "channel.newSpot" {
         return None;
     }
-    if load.1.get("channel").and_then(Value::as_str) != Some("transparency") {
+    if load.params.get("channel").and_then(Value::as_str) != Some("transparency") {
         return None;
     }
     let mut params = default_params();
     let obj = params.as_object_mut()?;
-    if let Some(radius) = contract.1.get("radius") {
+    if let Some(radius) = contract.params.get("radius") {
         obj.insert("contract".into(), radius.clone());
     }
-    if let Some(at) = contract.1.get("applyAtCanvasBounds") {
+    if let Some(at) = contract.params.get("applyAtCanvasBounds") {
         obj.insert("applyAtCanvasBounds".into(), at.clone());
     }
     for key in ["name", "color", "solidity"] {
-        if let Some(v) = spot.1.get(key) {
+        if let Some(v) = spot.params.get(key) {
             obj.insert(key.into(), v.clone());
         }
     }
     Some(params)
 }
 
+/// Replaces the three-command recording at `idx` with one `image.dtf` step in the DTF set.
+fn fold_legacy(s: &mut Session, idx: usize, params: Value) {
+    let _ = s.actions.list.replace_step(idx, 0, ActionStep::new(CMD, params));
+    while s.actions.list.step_count(idx) > 1 {
+        let last = s.actions.list.step_count(idx).saturating_sub(1);
+        let _ = s.actions.list.delete_step(idx, last);
+    }
+    if s.actions.list.set_of(idx).is_none() {
+        let _ = s.actions.list.assign_set(idx, Some(SET_NAME.into()));
+    }
+}
+
 /// Install the built-in DTF action when the user asks. A list that already has an action
 /// named DTF is left as the user kept it, except the old three-command recording, which
 /// becomes the one `image.dtf` step. Startup does not call this.
 pub fn ensure_preset(s: &mut Session) {
-    if let Some(idx) = s.actions.list.iter().position(|a| a.name == ACTION_NAME) {
-        if let Some(params) = legacy_params(&s.actions.list[idx])
-            && let Some(action) = s.actions.list.get_mut(idx)
-        {
-            action.steps = vec![(CMD.into(), params)];
-            if action.set.is_none() {
-                action.set = Some(SET_NAME.into());
-            }
-            s.actions.touch();
+    if let Some(idx) = s.actions.list.actions().iter().position(|a| a.name == ACTION_NAME) {
+        if let Some(params) = s.actions.list.action(idx).and_then(legacy_params) {
+            fold_legacy(s, idx, params);
         }
         return;
     }
     let params = params_for_preset(s);
-    let mut action = Action::new(ACTION_NAME, vec![(CMD.into(), params)]);
+    let mut action = Action::new(ACTION_NAME, vec![ActionStep::new(CMD, params)]);
     action.set = Some(SET_NAME.into());
-    s.actions.list.push(action);
-    s.actions.touch();
+    let _ = s.actions.list.push(action);
 }
 
 fn install_action(s: &mut Session, _p: &Value) -> Result<Value> {
-    let had = s.actions.list.iter().any(|a| a.name == ACTION_NAME);
-    let legacy = s.actions.list.iter().any(|a| a.name == ACTION_NAME && legacy_params(a).is_some());
+    let had = s.actions.list.actions().iter().any(|a| a.name == ACTION_NAME);
+    let legacy = s.actions.list.actions().iter().any(|a| a.name == ACTION_NAME && legacy_params(a).is_some());
     ensure_preset(s);
     Ok(json!({"installed": !had || legacy, "name": ACTION_NAME, "set": SET_NAME}))
 }
@@ -368,6 +371,10 @@ mod tests {
             Ok(())
         })
         .unwrap();
+    }
+
+    fn first(s: &Session) -> &Action {
+        &s.actions.list.actions()[0]
     }
 
     fn channel_at(s: &Session, x: i32, y: i32) -> f32 {
@@ -481,9 +488,9 @@ mod tests {
         let mut via_action = Session::new();
         prep(&mut via_action);
         ensure_preset(&mut via_action);
-        assert_eq!(via_action.actions.list[0].set.as_deref(), Some(SET_NAME));
-        assert_eq!(via_action.actions.list[0].steps.len(), 1);
-        assert_eq!(via_action.actions.list[0].steps[0].0, CMD);
+        assert_eq!(first(&via_action).set.as_deref(), Some(SET_NAME));
+        assert_eq!(first(&via_action).steps.len(), 1);
+        assert_eq!(first(&via_action).steps[0].command, CMD);
         via_action.execute("actions.play", json!({"action": ACTION_NAME})).unwrap();
         let a = &via_cmd.active().unwrap().doc.channels[0];
         let b = &via_action.active().unwrap().doc.channels[0];
@@ -574,8 +581,8 @@ mod tests {
         let fields = dialog_fields(Some(saved));
         assert_eq!(fields["name"], "Varnish");
         assert_eq!(fields["source"], "composite");
-        assert_eq!(s.actions.list[0].steps[0].1["name"], "Varnish");
-        assert_eq!(s.actions.list[0].steps[0].1["contract"], json!(0.0));
+        assert_eq!(first(&s).steps[0].params["name"], "Varnish");
+        assert_eq!(first(&s).steps[0].params["contract"], json!(0.0));
 
         s.execute("file.new", json!({"width": 6, "height": 6, "background": "transparent"})).unwrap();
         paint_rect(&mut s, Rect::new(0, 0, 6, 6));
@@ -587,52 +594,67 @@ mod tests {
         assert_eq!(channel_at(&s, 0, 0), 1.0);
 
         // The Actions panel stores a new step, then tells the dialog to follow it.
-        s.actions.list[0].steps[0].1 = json!({"contract": 2, "name": "Gloss", "source": "layer", "solidity": 60, "color": "#ff0000", "applyAtCanvasBounds": false});
+        s.actions
+            .list
+            .replace_step(
+                0,
+                0,
+                ActionStep::new(
+                    CMD,
+                    json!({"contract": 2, "name": "Gloss", "source": "layer", "solidity": 60, "color": "#ff0000", "applyAtCanvasBounds": false}),
+                ),
+            )
+            .unwrap();
         note_edited_step(&mut s, 0);
         assert_eq!(s.prefs().dialogs.get(CMD).unwrap()["name"], "Gloss");
-        assert_eq!(s.actions.list[0].steps[0].1["contract"], json!(2));
+        assert_eq!(first(&s).steps[0].params["contract"], json!(2));
     }
 
     #[test]
     fn a_saved_three_step_preset_becomes_one_dtf_step_in_the_set() {
         let mut s = Session::new();
-        s.actions.list.push(Action::new(
-            ACTION_NAME,
-            vec![
-                ("select.loadSelection".into(), json!({"channel": "transparency"})),
-                ("select.modify.contract".into(), json!({"radius": 2, "applyAtCanvasBounds": true})),
-                ("channel.newSpot".into(), json!({"name": "White", "color": "#ffffff", "solidity": 80, "fromSelection": true})),
-            ],
-        ));
+        s.actions
+            .list
+            .push(Action::new(
+                ACTION_NAME,
+                vec![
+                    ActionStep::new("select.loadSelection", json!({"channel": "transparency"})),
+                    ActionStep::new("select.modify.contract", json!({"radius": 2, "applyAtCanvasBounds": true})),
+                    ActionStep::new("channel.newSpot", json!({"name": "White", "color": "#ffffff", "solidity": 80, "fromSelection": true})),
+                ],
+            ))
+            .unwrap();
         ensure_preset(&mut s);
-        assert_eq!(s.actions.list.len(), 1);
-        assert_eq!(s.actions.list[0].set.as_deref(), Some(SET_NAME));
-        assert_eq!(s.actions.list[0].steps.len(), 1);
-        assert_eq!(s.actions.list[0].steps[0].0, CMD);
-        assert_eq!(s.actions.list[0].steps[0].1["name"], "White");
-        assert_eq!(s.actions.list[0].steps[0].1["contract"], json!(2));
-        assert_eq!(s.actions.list[0].steps[0].1["applyAtCanvasBounds"], json!(true));
+        assert_eq!(s.actions.list.actions().len(), 1);
+        assert_eq!(first(&s).set.as_deref(), Some(SET_NAME));
+        assert_eq!(first(&s).steps.len(), 1);
+        assert_eq!(first(&s).steps[0].command, CMD);
+        assert_eq!(first(&s).steps[0].params["name"], "White");
+        assert_eq!(first(&s).steps[0].params["contract"], json!(2));
+        assert_eq!(first(&s).steps[0].params["applyAtCanvasBounds"], json!(true));
         // A customized action that is no longer those three commands is left in place.
-        s.actions.list[0].steps.push(("layer.new.layer".into(), json!({})));
-        s.actions.list[0].set = None;
+        s.actions.list.insert_step(0, 1, ActionStep::new("layer.new.layer", json!({}))).unwrap();
+        s.actions.list.assign_set(0, None).unwrap();
         ensure_preset(&mut s);
-        assert_eq!(s.actions.list[0].steps.len(), 2);
-        assert!(s.actions.list[0].set.is_none());
+        assert_eq!(first(&s).steps.len(), 2);
+        assert!(first(&s).set.is_none());
     }
 
     #[test]
     fn the_dtf_action_is_installed_only_when_asked() {
         let mut s = Session::new();
-        assert!(s.actions.list.iter().all(|a| a.name != ACTION_NAME), "startup does not install the action");
+        assert!(s.actions.list.actions().iter().all(|a| a.name != ACTION_NAME), "startup does not install the action");
         let added = s.execute("image.installDtfAction", json!({})).unwrap();
         assert_eq!(added["installed"], json!(true));
-        assert_eq!(s.actions.list.len(), 1);
-        assert_eq!(s.actions.list[0].set.as_deref(), Some(SET_NAME));
+        assert_eq!(s.actions.list.actions().len(), 1);
+        assert_eq!(first(&s).set.as_deref(), Some(SET_NAME));
         let again = s.execute("image.installDtfAction", json!({})).unwrap();
         assert_eq!(again["installed"], json!(false), "a second install leaves the existing action");
-        assert_eq!(s.actions.list.len(), 1);
-        s.actions.list[0].steps[0].1["contract"] = json!(4);
+        assert_eq!(s.actions.list.actions().len(), 1);
+        let mut params = first(&s).steps[0].params.clone();
+        params["contract"] = json!(4);
+        s.actions.list.replace_step(0, 0, ActionStep::new(CMD, params)).unwrap();
         s.execute("image.installDtfAction", json!({})).unwrap();
-        assert_eq!(s.actions.list[0].steps[0].1["contract"], json!(4), "a customized action is not replaced");
+        assert_eq!(first(&s).steps[0].params["contract"], json!(4), "a customized action is not replaced");
     }
 }

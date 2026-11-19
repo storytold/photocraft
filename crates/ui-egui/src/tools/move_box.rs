@@ -6,8 +6,11 @@
 
 use serde_json::json;
 
+use craft::behavior::kurbo::{Point, Rect};
+use craft::ui::canvas_controls::Marquee;
+use craft::ui::contract::Show as _;
+
 use crate::PhotocraftApp;
-use crate::canvas::{ToolEvent, ViewXform};
 
 /// The marquee being dragged, in document pixels.
 #[derive(Clone, Copy, Debug)]
@@ -25,12 +28,9 @@ pub(crate) struct LayerBox {
 /// Start the marquee at `p` after an empty or locked-only hit. With `move_auto_select`, the
 /// real Move tool skips effective Position as well as All locks. Set `clear_on_empty` for its
 /// locked-only press so an empty replacement marquee clears the selection.
-/// Temporary Move keeps ordinary lock filtering. Marquees clear the press's snapping and ⇧/⌥ state.
+/// Temporary Move keeps ordinary lock filtering.
 pub(crate) fn begin(app: &mut PhotocraftApp, p: [f64; 2], add: bool, move_auto_select: bool, clear_on_empty: bool) {
     app.layer_box = Some(LayerBox { start: p, end: p, add, move_auto_select, clear_on_empty });
-    app.prefs_rt.snap = None;
-    app.prefs_rt.snap_lines.clear();
-    app.move_mods = Default::default();
 }
 
 /// No visible layer has pixels at document point `p` (locked ones included).
@@ -38,60 +38,58 @@ pub(crate) fn empty_at(app: &mut PhotocraftApp, p: [f64; 2]) -> bool {
     app.run("layer.pickAt", json!({"x": p[0], "y": p[1], "list": true})).is_ok_and(|v| v["layers"].as_array().is_some_and(Vec::is_empty))
 }
 
-/// The pointer moves or is released while a marquee is dragged (unsnapped, unconstrained): true
-/// when the event was the marquee's.
-pub(crate) fn pointer(app: &mut PhotocraftApp, ev: ToolEvent) -> bool {
+/// The pointer moved to document point `p` while a marquee is dragged (unsnapped, unconstrained):
+/// true when a marquee is running.
+pub(crate) fn drag_to(app: &mut PhotocraftApp, p: [f64; 2]) -> bool {
     let Some(b) = app.layer_box.as_mut() else { return false };
-    match ev {
-        // A press never continues a marquee (one left over from a lost release).
-        ToolEvent::Down { .. } => {
-            app.layer_box = None;
-            false
-        }
-        ToolEvent::Move { x, y, .. } => {
-            b.end = [x, y];
-            true
-        }
-        ToolEvent::Up { x, y } => {
-            let b = LayerBox { end: [x, y], ..*b };
-            app.layer_box = None;
-            let (w, h) = (b.end[0] - b.start[0], b.end[1] - b.start[1]);
-            if w == 0.0 && h == 0.0 && !b.add {
-                // A click on the pasteboard clears the layer target; a drag from there still
-                // uses the marquee, and a click on transparent pixels inside the canvas does not.
-                if let Some(st) = app.session.active() {
-                    let rect = st.doc.bounds();
-                    let outside = b.start[0] < f64::from(rect.x0)
-                        || b.start[1] < f64::from(rect.y0)
-                        || b.start[0] >= f64::from(rect.x1)
-                        || b.start[1] >= f64::from(rect.y1);
-                    if outside {
-                        let _ = app.run("select.deselectLayers", json!({}));
-                    }
-                }
-            }
-            if w == 0.0 || h == 0.0 {
-                return true;
-            }
-            let target = app.ui.tool_options.move_target.clone();
-            let mode = if b.add { "add" } else { "replace" };
-            let p = json!({
-                "x": b.start[0], "y": b.start[1], "width": w, "height": h, "target": target, "mode": mode,
-                "moveAutoSelect": b.move_auto_select, "clearOnEmpty": b.clear_on_empty,
-            });
-            if let Err(e) = app.run("layer.selectInRect", p) {
-                app.ui.status = e;
-                app.ui.status_error = true;
-            }
-            true
-        }
-    }
+    b.end = p;
+    true
 }
 
-/// The marquee as marching ants.
-pub(crate) fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
+/// The button came up at document point `p`: selects the layers the box touches. True when a
+/// marquee was running.
+pub(crate) fn release(app: &mut PhotocraftApp, p: [f64; 2]) -> bool {
+    let Some(b) = app.layer_box.take() else { return false };
+    let b = LayerBox { end: p, ..b };
+    let (w, h) = (b.end[0] - b.start[0], b.end[1] - b.start[1]);
+    if w == 0.0 && h == 0.0 && !b.add {
+        // A click on the pasteboard clears the layer target; a drag from there still
+        // uses the marquee, and a click on transparent pixels inside the canvas does not.
+        if let Some(st) = app.session.active() {
+            let rect = st.doc.bounds();
+            let outside =
+                b.start[0] < f64::from(rect.x0) || b.start[1] < f64::from(rect.y0) || b.start[0] >= f64::from(rect.x1) || b.start[1] >= f64::from(rect.y1);
+            if outside {
+                let _ = app.run("select.deselectLayers", json!({}));
+            }
+        }
+    }
+    if w == 0.0 || h == 0.0 {
+        return true;
+    }
+    let target = app.ui.tool_options.move_target.clone();
+    let mode = if b.add { "add" } else { "replace" };
+    let p = json!({
+        "x": b.start[0], "y": b.start[1], "width": w, "height": h, "target": target, "mode": mode,
+        "moveAutoSelect": b.move_auto_select, "clearOnEmpty": b.clear_on_empty,
+    });
+    if let Err(e) = app.run("layer.selectInRect", p) {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
+    true
+}
+
+/// The drag ends without selecting anything.
+pub(crate) fn cancel(app: &mut PhotocraftApp) {
+    app.layer_box = None;
+}
+
+/// The marquee being dragged, over the canvas `canvas`.
+pub(crate) fn show(app: &PhotocraftApp, ui: &mut egui::Ui, canvas: egui::Rect) {
     let Some(b) = app.layer_box else { return };
-    crate::tool_feedback::draw_ants(painter, &crate::canvas::doc_box_corners(xf, b.start, b.end), true);
+    let rect = Rect::from_points(Point::new(b.start[0], b.start[1]), Point::new(b.end[0], b.end[1]));
+    Marquee::rect(tl!("Layer marquee"), rect).show_at(ui, canvas);
 }
 
 #[cfg(test)]
@@ -202,7 +200,7 @@ mod tests {
         app.ui.tool = Tool::Move;
         app.ui.tool_options.move_auto_select = true;
         drag(&mut app, [8.0, 8.0], [50.0, 20.0], egui::Modifiers::NONE);
-        assert!(app.ui.dialogs.iter().all(|d| d.kind != crate::state::DialogKind::Error), "no lock dialog");
+        assert!(!app.dialog_open(), "no lock dialog");
         assert!(app.layer_box.is_none());
         assert_eq!(app.session.active().unwrap().selected_layers(), vec![paint]);
     }
