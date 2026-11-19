@@ -262,9 +262,10 @@ fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, dept
                 let mut o = gradient(stops, t);
                 if *dither {
                     let (px, py) = (x0 + (i % w) as i32, y0 + (i / w) as i32);
-                    let d = if depth == Some(SampleType::U16) {
-                        bayer4(px, py) / 255.0
-                    } else {
+                    // The slope-scaled noise is the 8-bit fix for banding (#14700): 16- and 32-bit
+                    // documents keep the ordered dither they had, and so does an unrounded buffer
+                    // (`None`), which has no levels to band.
+                    let d = if depth == Some(SampleType::U8) {
                         let (a, _b) = gradient_dither(px, py);
                         let eps = 1.0 / 255.0;
                         let c_lo = gradient(stops, (t - eps).max(0.0));
@@ -283,6 +284,8 @@ fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, dept
                             2.95 + 3.05 * (slope - 2.30).min(1.75)
                         } / 255.0;
                         a * amp
+                    } else {
+                        bayer4(px, py) / 255.0
                     };
                     o = o.map(|v| (v + d).clamp(0.0, 1.0));
                 }

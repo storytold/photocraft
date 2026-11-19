@@ -25,6 +25,30 @@ fn stops_closer_than_one_lut_step_stay_on_the_cpu() {
     assert!(check_gradient_stops(&[(0.0_f32, ()), (1.0, ())]).is_ok());
 }
 
+/// A peak narrower than one LUT entry is refused, so the dither's slope is never read off the
+/// LUT for a gradient the LUT cannot resolve: that document is composited on the CPU.
+#[test]
+fn narrow_peak_gradient_map_dither_stays_on_the_cpu() {
+    let stops = vec![(0.0, [0.5; 3]), (0.4999, [0.5; 3]), (0.5, [0.9; 3]), (0.5001, [0.5; 3]), (1.0, [0.5; 3])];
+    let adj = Adjustment::GradientMap { stops, reverse: false, dither: true, source: None };
+    let mut doc = Document::new("peak", Size::new(8, 8), ColorMode::Rgb, SampleType::U8);
+    doc.layers.push(Layer::new("gm", LayerContent::Adjustment(adj)));
+    let Err(e) = plan(&doc) else { panic!("a sub-entry peak must not be planned on the GPU") };
+    assert!(e.0.contains("coincident gradient stops"), "{}", e.0);
+}
+
+#[test]
+fn gradient_map_dither_mode_follows_the_cpu() {
+    // compose::adjust: slope-scaled noise (1.0) for 8-bit documents only; 16- and 32-bit keep
+    // the ordered dither (2.0).
+    let adj = Adjustment::GradientMap { stops: vec![(0.0, [0.0; 3]), (1.0, [1.0; 3])], reverse: false, dither: true, source: None };
+    for (depth, want) in [(SampleType::U8, 1.0), (SampleType::U16, 2.0), (SampleType::F32, 2.0)] {
+        let (kind, p, _) = adjustment_program(&adj, Transfer::Srgb, depth, ColorMode::Rgb);
+        assert_eq!(kind, 13);
+        assert_eq!(p[0][1], want, "{depth:?}");
+    }
+}
+
 #[test]
 fn lab_channel_adjustments_defer_to_the_cpu_in_lab_documents() {
     let lab_rules = [
