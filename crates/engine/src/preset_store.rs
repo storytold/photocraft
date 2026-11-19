@@ -1103,7 +1103,7 @@ impl PresetStore {
 
 fn builtin_names() -> &'static [String] {
     static NAMES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
-    NAMES.get_or_init(|| photocraft_paint::presets::builtin().into_iter().map(|p| p.name).collect())
+    NAMES.get_or_init(|| photocraft_paint::presets::builtin_shared().iter().map(|p| p.name.clone()).collect())
 }
 
 impl Session {
@@ -1141,7 +1141,7 @@ impl Session {
                 }
             }
         }
-        let lib = &mut self.tools.presets;
+        let lib = std::sync::Arc::make_mut(&mut self.tools.presets);
         lib.retain(|p| !(p.builtin && hidden_builtins.iter().any(|h| h.eq_ignore_ascii_case(&p.name))));
         for p in presets {
             match lib.iter_mut().find(|x| x.name.eq_ignore_ascii_case(&p.name)) {
@@ -1204,7 +1204,7 @@ impl Session {
         let rev = self.tools.presets_rev;
         if let Some(st) = self.preset_store.as_mut() {
             if st.synced_rev != Some(rev) {
-                st.sync(&mut self.tools.presets);
+                st.sync(std::sync::Arc::make_mut(&mut self.tools.presets));
                 st.synced_rev = Some(rev);
                 if link_stored_tips(st, &mut self.tools.brush) {
                     // An embedded tip became a store reference: what the last-brush

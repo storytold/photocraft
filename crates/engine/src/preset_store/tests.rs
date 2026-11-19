@@ -119,7 +119,7 @@ fn group_with_sampled_8_and_16_bit_tips_round_trips() {
     let b = sampled("Sixteen", "Inks", tip16(50, 70, 2));
     let mut c = sampled("Shared tip", "Other", tip8(64, 48, 1));
     c.brush.size = 9.0;
-    s.tools.presets.extend([a, b, c]);
+    std::sync::Arc::make_mut(&mut s.tools.presets).extend([a, b, c]);
     s.brush_presets_changed();
     s.sync_preset_store();
     let files = dir.files();
@@ -243,7 +243,7 @@ fn startup_with_many_groups_loads_them_all() {
     let (mut s, _) = session(&dir);
     for g in 0..25 {
         for i in 0..4 {
-            s.tools.presets.push(sampled(&format!("P{g}-{i}"), &format!("Group {g}"), tip8(16 + i, 16, g)));
+            std::sync::Arc::make_mut(&mut s.tools.presets).push(sampled(&format!("P{g}-{i}"), &format!("Group {g}"), tip8(16 + i, 16, g)));
         }
     }
     s.brush_presets_changed();
@@ -267,7 +267,7 @@ fn reordering_presets_and_groups_persists() {
     let (mut s, _) = session(&dir);
     for (n, g) in [("Ink 1", "Inks"), ("Ink 2", "Inks"), ("Wash", "Washes")] {
         s.execute("brush.presets.save", json!({"name": n})).unwrap();
-        s.tools.presets.iter_mut().find(|p| p.name == n).unwrap().group = g.into();
+        std::sync::Arc::make_mut(&mut s.tools.presets).iter_mut().find(|p| p.name == n).unwrap().group = g.into();
     }
     s.brush_presets_changed();
     s.sync_preset_store();
@@ -299,8 +299,8 @@ fn reordering_presets_and_groups_persists() {
 fn corrupt_and_oversized_files_are_skipped_with_a_warning() {
     let dir = TempDir::new("corrupt");
     let (mut s, _) = session(&dir);
-    s.tools.presets.push(sampled("Good", "Fine", tip8(8, 8, 1)));
-    s.tools.presets.push(sampled("Lost", "Broken tip", tip16(9, 9, 2)));
+    std::sync::Arc::make_mut(&mut s.tools.presets).push(sampled("Good", "Fine", tip8(8, 8, 1)));
+    std::sync::Arc::make_mut(&mut s.tools.presets).push(sampled("Lost", "Broken tip", tip16(9, 9, 2)));
     s.brush_presets_changed();
     s.sync_preset_store();
     let be = DirBackend::new(&dir.0);
@@ -370,7 +370,7 @@ fn bench_load_500_sampled_presets() {
         // A mix of 8-bit (most .abr tips) and 16-bit tips, 64..319 px.
         let side = 64 + (i * 37) % 256;
         let t = if i % 4 == 0 { tip16(side, side, i) } else { tip8(side, side, i) };
-        s.tools.presets.push(sampled(&format!("Brush {i}"), &format!("Set {}", i / 50), t));
+        std::sync::Arc::make_mut(&mut s.tools.presets).push(sampled(&format!("Brush {i}"), &format!("Set {}", i / 50), t));
     }
     s.brush_presets_changed();
     let t0 = std::time::Instant::now();
@@ -411,7 +411,7 @@ fn library(n: u32, side: u32) -> (Session, MemBackend) {
     let mut s = Session::new();
     s.attach_preset_store(open(Box::new(mem.clone())));
     for i in 0..n {
-        s.tools.presets.push(sampled(&format!("Big {i}"), "Big Set", tip8(side, side, i)));
+        std::sync::Arc::make_mut(&mut s.tools.presets).push(sampled(&format!("Big {i}"), "Big Set", tip8(side, side, i)));
     }
     s.brush_presets_changed();
     s.sync_preset_store();
@@ -519,7 +519,7 @@ fn missing_corrupt_or_unknown_tips_fail_when_used_without_panicking() {
     let k0 = key(&t, "Big 0");
     mem.remove(&tip_file(&k0)).unwrap();
     t.execute("tools.setBrush", json!({"preset": "Hard Round"})).unwrap();
-    let broken = t.tools.presets.iter_mut().find(|p| p.name == "Big 0").unwrap();
+    let broken = std::sync::Arc::make_mut(&mut t.tools.presets).iter_mut().find(|p| p.name == "Big 0").unwrap();
     broken.captures.color = true;
     broken.brush.color = [1.0, 0.0, 0.0, 1.0];
     t.tools.foreground = [0.0, 0.0, 1.0, 1.0];

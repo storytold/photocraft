@@ -448,6 +448,12 @@ pub fn builtin() -> Vec<BrushPreset> {
     v
 }
 
+/// The built-in set shared by new sessions until one is edited.
+pub fn builtin_shared() -> std::sync::Arc<Vec<BrushPreset>> {
+    static BUILTIN: std::sync::OnceLock<std::sync::Arc<Vec<BrushPreset>>> = std::sync::OnceLock::new();
+    BUILTIN.get_or_init(|| std::sync::Arc::new(builtin())).clone()
+}
+
 /// Find a preset by name (case-insensitive).
 pub fn find<'a>(presets: &'a [BrushPreset], name: &str) -> Option<&'a BrushPreset> {
     presets.iter().find(|p| p.name.eq_ignore_ascii_case(name))

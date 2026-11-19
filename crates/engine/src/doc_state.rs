@@ -183,7 +183,7 @@ pub struct ToolState {
     pub background: [f32; 4],
     pub brush: photocraft_paint::BrushSettings,
     /// Brush presets (built-ins plus user presets; see `brush.presets.*`).
-    pub presets: Vec<photocraft_paint::BrushPreset>,
+    pub presets: Arc<Vec<photocraft_paint::BrushPreset>>,
     /// Bumped whenever `presets` changes ([`Session::brush_presets_changed`]); the preset store
     /// syncs when it moves.
     pub presets_rev: u64,
@@ -284,7 +284,7 @@ impl Default for ToolState {
                 smoothing: photocraft_paint::brush::Smoothing { amount: 0.1, ..Default::default() },
                 ..Default::default()
             },
-            presets: photocraft_paint::presets::builtin(),
+            presets: photocraft_paint::presets::builtin_shared(),
             presets_rev: 0,
             mixer: Default::default(),
             brush_gesture: None,
