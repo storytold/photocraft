@@ -116,6 +116,8 @@ mod native {
 }
 
 pub(crate) fn configure(prefs: &Preferences) {
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    photocraft_raster::spill::use_test_volume_space();
     let budget = photocraft_raster::memory::configure(photocraft_raster::memory::Policy {
         percent: prefs.performance.memory_usage_percent,
         // The web build's cap applies here too (effective_memory_usage_mb).
