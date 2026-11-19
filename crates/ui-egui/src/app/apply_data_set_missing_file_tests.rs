@@ -7,11 +7,12 @@ use serde_json::json;
 const MISSING: &str = "Could not apply data set because the replacement file was not found.";
 
 /// An app with a raster layer bound to a `photo` pixel variable and one data set `Two` whose
-/// image is `missing.png` in a folder that has no such file.
-fn app(name: &str) -> (Box<PhotocraftApp>, std::path::PathBuf) {
-    let dir = std::env::temp_dir().join(format!("pc-ui-vars-{}-{name}", std::process::id()));
-    let _ = std::fs::create_dir_all(&dir);
-    let png = dir.join("missing.png");
+/// image is `missing.png` in a new, empty folder. The folder lives as long as the returned guard,
+/// and is removed also when an assertion fails.
+fn app() -> (Box<PhotocraftApp>, tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let png = dir.path().join("missing.png");
+    assert!(!png.exists());
     let mut app = PhotocraftApp::new(Session::new(), Services::default());
     app.session.execute("file.new", json!({"width": 16, "height": 16, "background": "white"})).unwrap();
     let id = app.session.execute("layer.new.layer", json!({})).unwrap()["layer"].clone();
@@ -23,7 +24,7 @@ fn app(name: &str) -> (Box<PhotocraftApp>, std::path::PathBuf) {
         )
         .unwrap();
     app.sync_views();
-    (app, png)
+    (app, dir, png)
 }
 
 /// The messages of the open framework alerts.
@@ -33,7 +34,7 @@ fn alerts(app: &PhotocraftApp) -> Vec<String> {
 
 #[test]
 fn ok_in_the_apply_dialog_closes_it_and_shows_the_alert() {
-    let (mut app, png) = app("ok");
+    let (mut app, _dir, png) = app();
     crate::menus::invoke(&mut app, &egui::Context::default(), "image.applyDataSet", json!({})).unwrap();
     let dialog = app.top_dialog().expect("the Apply Data Set dialog is open");
     // The hosted dialog reports the refusal through the status bar and the alert, not as OK's result.
@@ -41,14 +42,12 @@ fn ok_in_the_apply_dialog_closes_it_and_shows_the_alert() {
     assert!(app.framework.dialogs.get_dyn(dialog).is_none(), "the Apply Data Set dialog closed");
     assert_eq!(alerts(&app), [MISSING]);
     assert!(app.ui.status.contains(&*png.to_string_lossy()), "the status names the file: {}", app.ui.status);
-    let _ = std::fs::remove_dir_all(png.parent().unwrap());
 }
 
 #[test]
 fn the_command_shows_the_alert_without_the_file_name() {
-    let (mut app, png) = app("cmd");
+    let (mut app, _dir, png) = app();
     let e = app.run("image.applyDataSet", json!({"name": "Two"})).unwrap_err();
     assert!(e.starts_with(MISSING) && e.contains(&*png.to_string_lossy()), "{e}");
     assert_eq!(alerts(&app), [MISSING]);
-    let _ = std::fs::remove_dir_all(png.parent().unwrap());
 }
