@@ -1361,4 +1361,10 @@ fn generations_follow_mutations_and_remain_shared_by_unmodified_clones() {
     let mapped = original.generation();
     original.prune();
     assert_ne!(original.generation(), mapped);
+    let before_tile = original.generation();
+    let old_copy = original.clone();
+    original.tile_mut(TileCoord { tx: 0, ty: 0 }).bytes_mut()[0] ^= 0xff;
+    assert_ne!(original.generation(), before_tile);
+    assert_eq!(old_copy.generation(), before_tile);
+    assert_ne!(original.read_region(region), old_copy.read_region(region));
 }
