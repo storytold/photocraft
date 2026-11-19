@@ -1,6 +1,5 @@
-use super::controls::remember_edit;
 use super::open::RawOpen;
-use super::{CameraRaw, PhotocraftApp, Value, json};
+use super::{CameraRaw, PhotocraftApp, Value, hosted_mut, json, settings};
 
 /// The sidecar beside a raw file: `IMG_0001.xmp` for `IMG_0001.CR2`, as Camera Raw names it.
 pub fn sidecar_path(path: &str) -> String {
@@ -82,7 +81,7 @@ pub(super) fn store_sidecar(app: &mut PhotocraftApp, raw: &RawOpen, params: &Cam
     match existing_sidecar_is_ours(&sidecar) {
         Some(false) => {
             let kept = crate::i18n::fmt(tl!("Kept {name}: written by another application"), &[("name", &name)]);
-            crate::notices::post(app, kept, Vec::new(), false, None);
+            crate::notices::post(app, kept, Vec::new(), craft::theme::variant::Tone::Neutral, None);
             return Stored::Skipped;
         }
         None if params.is_identity() => return Stored::Defaults,
@@ -124,8 +123,8 @@ fn existing_sidecar_is_ours(_: &str) -> Option<bool> {
 
 /// Save Settings…: the dialog's settings as a Camera Raw `.xmp` settings file.
 pub(super) fn save_settings(app: &mut PhotocraftApp) -> Result<Value, String> {
-    let d = app.camera_raw.as_ref().ok_or(tl!("RAW Develop isn't open"))?;
-    let bytes = photocraft_io::camera_raw_xmp::save(&d.params).into_bytes();
+    let current = settings(app).ok_or(tl!("RAW Develop isn't open"))?;
+    let bytes = photocraft_io::camera_raw_xmp::save(current).into_bytes();
     app.pick_save("RAW Develop Settings.xmp", move |app, path| {
         let write = app.services.write.as_mut().ok_or("no writer configured")?;
         write(&path, &bytes)?;
@@ -136,26 +135,22 @@ pub(super) fn save_settings(app: &mut PhotocraftApp) -> Result<Value, String> {
 /// Load Settings…: applies a Camera Raw `.xmp` settings file's supported settings over the
 /// dialog's; the status bar names how many were not supported.
 pub(super) fn load_settings(app: &mut PhotocraftApp) -> Result<Value, String> {
-    app.camera_raw.as_ref().ok_or(tl!("RAW Develop isn't open"))?;
+    settings(app).ok_or(tl!("RAW Develop isn't open"))?;
     app.pick_file_bytes_filtered(&["xmp"], |app, name, bytes| {
         let file = crate::file_open::display_name(&name);
-        let d = app.camera_raw.as_mut().ok_or(tl!("RAW Develop isn't open"))?;
-        let mut next = d.params.clone();
+        let original = app.raw.as_ref().ok_or(tl!("RAW Develop isn't open"))?.original.clone();
+        let ctx = app.ctx().clone();
+        let workspace = hosted_mut(app).ok_or(tl!("RAW Develop isn't open"))?.workspace_mut();
+        let mut next = workspace.session().clone();
         let mut report = photocraft_io::camera_raw_xmp::load(&mut next, &bytes).map_err(|e| format!("{file}: {e}"))?;
         // A crop only applies as a raw file opens; the filter has none, so it is not supported.
         if report.crop.take().is_some() {
             report.applied = report.applied.saturating_sub(1);
             report.ignored.extend(photocraft_io::camera_raw_xmp::CROP_KEYS.iter().take(4).map(|k| k.to_string()));
         }
-        next.validate_changes(&d.original).map_err(|e| format!("{file}: {e}"))?;
-        if d.params.point_curve != next.point_curve {
-            d.curve_state = Default::default();
-        }
-        if d.params != next {
-            remember_edit(d);
-            d.dirty = true;
-            d.params = next;
-        }
+        next.validate_changes(&original).map_err(|e| format!("{file}: {e}"))?;
+        // One history step; nothing changes when the file holds the settings already.
+        workspace.load(&ctx, next);
         app.ui.status_error = false;
         app.ui.status = if report.ignored.is_empty() {
             crate::i18n::fmt(tl!("Loaded RAW Develop settings from {file}"), &[("file", &file)])
