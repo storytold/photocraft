@@ -304,9 +304,9 @@ pub(super) fn load_files_into_stack(s: &mut Session, p: &Value) -> Result<Value>
         // "Create Smart Object after Loading Layers": the layers go inside one smart object, ready
         // for Layer › Smart Objects › Stack Mode. Like Photoshop, they sit at the top level of the
         // contents, with no wrapper group.
-        let layers = std::mem::take(&mut stack.layers);
+        let layers = std::mem::take(&mut *stack.layers);
         let smart = crate::smart_cmds::layers_to_smart(&stack, &smart_name, layers)?;
-        stack.layers = vec![smart];
+        stack.layers = vec![smart].into();
     }
     let i = s.add_document(stack, None);
     if align {
@@ -314,10 +314,10 @@ pub(super) fn load_files_into_stack(s: &mut Session, p: &Value) -> Result<Value>
         s.execute("edit.autoAlignLayers", json!({"projection": "auto"}))?;
         if smart {
             s.edit("Convert to Smart Object", |doc, active| {
-                let layers = std::mem::take(&mut doc.layers);
+                let layers = std::mem::take(&mut *doc.layers);
                 let smart = crate::smart_cmds::layers_to_smart(doc, &smart_name, layers)?;
                 *active = Some(smart.id);
-                doc.layers = vec![smart];
+                doc.layers = vec![smart].into();
                 Ok(())
             })?;
             if let Some(st) = s.active_mut() {
