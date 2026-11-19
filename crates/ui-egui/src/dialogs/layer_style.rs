@@ -33,6 +33,8 @@ use serde_json::{Map, Value, json};
 
 use crate::{PhotocraftApp, color_picker_ui};
 
+#[cfg(test)]
+mod bevel_reset_angle_tests;
 pub(crate) mod color_picker;
 mod contour;
 mod gradient_field;
@@ -650,6 +652,25 @@ fn effect_entry(fx: Option<&Value>, kind: &str, mut params: Value, initial_light
                     }
                 }
             }
+            if kind == "innerShadow"
+                && let Ok(original) = serde_json::from_value::<Effect>(fx.clone())
+                && let Some(edits) = params.as_object_mut()
+            {
+                let shown = values_of(&original, initial_light_angle.unwrap_or(120.0) as f32);
+                // A file can carry a Distance or Size outside the page's typed ranges (#14940) that
+                // the command clamps. An untouched field must not send it back through the clamp.
+                for key in ["distance", "size"] {
+                    if edits.get(key) == shown.get(key) {
+                        edits.remove(key);
+                    }
+                }
+                // The Angle field shows the shared light while the effect is lit by it, so the
+                // effect's own angle is only what the field showed when the check is off; with it on,
+                // the light angle is written as before.
+                if shown.get("useGlobalLight") == Some(&Value::Bool(false)) && edits.get("angle") == shown.get("angle") {
+                    edits.remove("angle");
+                }
+            }
             if kind == "gradientOverlay"
                 && let Ok(original) = serde_json::from_value::<Effect>(fx.clone())
                 && let Some(edits) = params.as_object_mut()
@@ -866,13 +887,26 @@ fn save_new_style(app: &mut PhotocraftApp, dialog: DialogId, layer: LayerId) {
 }
 
 /// Writes the user's default (or the factory defaults before the first Make Default) into the instance.
+/// An effect lit by the shared light takes the dialog's light angle, not the default's own `angle`
+/// (120 for the factory): the same seeding [`fresh_params`] and the draft's `add_instance` apply to a
+/// new instance, so Reset to Default leaves a globally lit effect at the shared angle (#14843).
 fn reset_to_default(app: &mut PhotocraftApp, dialog: DialogId, instance: EffectId) {
-    let Some(kind) = app.framework.dialogs.get_by_id::<HostedLayerStyle>(dialog).and_then(|d| d.draft().style.effect(instance)).map(|e| e.kind) else {
+    let Some((kind, light)) = app
+        .framework
+        .dialogs
+        .get_by_id::<HostedLayerStyle>(dialog)
+        .and_then(|d| d.draft().style.effect(instance).map(|e| (e.kind, f64::from(d.draft().style.global_light))))
+    else {
         return;
     };
     let Ok(v) = app.run("layer.layerStyle.defaultFor", json!({"kind": kind.key()})) else { return };
     let mut values = v["params"].clone();
     drop_from_to(&mut values);
+    if values.get("useGlobalLight").and_then(Value::as_bool) == Some(true)
+        && let Some(o) = values.as_object_mut()
+    {
+        o.insert("angle".into(), json!(light));
+    }
     let params = style_params(kind, &values, None);
     if let Some(d) = app.framework.dialogs.get_mut_by_id::<HostedLayerStyle>(dialog) {
         for (key, value) in params.0 {
