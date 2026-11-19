@@ -993,8 +993,11 @@ fn point_at(app: &PhotocraftApp, target: PathRef, hit: BezierHit) -> Option<(Str
 /// The Pen's menu takes the `target`/`hit` the right-click reported as its point entry only in
 /// the measured configuration (#12915): the Pen in Path mode with no path being drawn, and the
 /// part on a CLOSED subpath. Its overlay reports the hit exactly as the anchor tools' does (the
-/// Auto Add/Delete mode the Pen runs by default). The Shape-mode right-click and an open path's
-/// parts are not measured and keep today's plain list, and so does every other case.
+/// Auto Add/Delete mode the Pen runs by default). The Shape-mode and Pixels-mode right-click and
+/// an open path's parts are not measured and keep today's plain list, and so does every other case.
+/// The gate reads no modifiers: `capture` never receives the click's, and with ⌥ held the overlay
+/// is Convert, which senses the closed path's anchors and straight segments as well, so the row
+/// appears there too - observed and pinned, not measured.
 fn pen_point_allowed(app: &PhotocraftApp, target: PathRef, hit: &BezierHit) -> bool {
     if app.ui.pen.is_some() || app.ui.tool_options.vector_mode != craft::draw::ui::VectorMode::Path {
         return false;

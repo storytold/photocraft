@@ -1,11 +1,12 @@
 //! #12915: with the Pen (Path mode) a right-click on a part of the active CLOSED path heads the
 //! path menu with one entry above the separator and the usual Pen list: Add Anchor Point on a
 //! segment, Delete Anchor Point on an anchor; choosing it runs the engine command, one history
-//! step. On empty canvas, on an open subpath, while a path is being drawn, and in Shape mode the
-//! menu keeps today's list with no top entry. The shared path document and menu assertions come
-//! from `delete_anchor_menu_tests` (#12771).
+//! step. On empty canvas, on an open subpath, while a path is being drawn, and in Shape or Pixels
+//! mode the menu keeps today's list with no top entry; with ⌥ held the row stays, as the menu does
+//! not read the click's modifiers (pinned below). The shared path document and menu assertions
+//! come from `delete_anchor_menu_tests` (#12771).
 
-use egui_kittest::kittest::Queryable as _;
+use egui_kittest::kittest::{NodeT, Queryable as _};
 use serde_json::json;
 
 use super::delete_anchor_menu_tests::{assert_top_entry, saved, setup, steps};
@@ -141,15 +142,45 @@ fn pen_right_click_in_shape_mode_keeps_todays_list() {
     assert_no_top_entry(&h, Tool::Pen);
 }
 
+/// Pixels mode is not measured either and keeps today's list (the gate names Path, so every other
+/// mode is out). The Pen's options bar shows Pixels disabled, so no click can select it and the
+/// option is set directly, as the shape tool's Pixels tests do.
+#[test]
+fn pen_right_click_in_pixels_mode_keeps_todays_list() {
+    let mut app = setup(Tool::Pen);
+    app.ui.tool_options.vector_mode = craft::draw::ui::VectorMode::Pixels;
+    let mut h = harness(app);
+    let p = screen_of(h.state(), [200.0, 300.0]);
+    right_click(&mut h, p, Modifiers::NONE);
+    assert_no_top_entry(&h, Tool::Pen);
+}
+
+/// ⌥ is held for the Convert overlay (craft-libs `pen::mode::resolve`), which senses the closed
+/// square's anchors and straight segments too, and the framework reports that secondary click's
+/// hit whatever the modifiers are: the menu's gate reads the mode and the subpath, not the click's
+/// modifiers, so the row appears. Observed, and pinned as it is today; choosing it with ⌥ down is
+/// not measured.
+#[test]
+fn pen_right_click_with_option_held_still_gets_the_anchor_row() {
+    let mut h = harness(pen_setup());
+    let p = screen_of(h.state(), [200.0, 300.0]);
+    right_click(&mut h, p, Modifiers::ALT);
+    assert_top_entry(&h, Tool::Pen, "Add Anchor Point");
+}
+
 /// The entry is about the path as it was when the menu opened: a control-channel edit meanwhile
-/// shifts the knots, so choosing the stale entry deletes nothing and adds no step.
+/// shifts the knots, so choosing the stale entry deletes nothing and adds no step. It is drawn
+/// disabled for the Pen as well, not only rejected on click (#12771 pattern).
 #[test]
 fn a_pen_point_entry_expires_once_the_path_is_edited() {
     let mut h = pen_right_clicked([300.0, 300.0]);
     assert_top_entry(&h, Tool::Pen, "Delete Anchor Point");
+    assert!(!h.get_by_label("Delete Anchor Point").accesskit_node().is_disabled(), "enabled while the path is as it was");
     h.state_mut().run("path.addAnchor", json!({"name": "Path 1", "subpath": 0, "knot": 0, "t": 0.5})).unwrap();
     let after_add = saved(h.state());
     assert_eq!(after_add.subpaths[0].knots.len(), 5, "the anchor went in");
+    h.run();
+    assert!(h.get_by_label("Delete Anchor Point").accesskit_node().is_disabled(), "disabled once the path is edited");
     let n = steps(h.state());
     let ctx = h.ctx.clone();
     super::choose(h.state_mut(), &ctx, "path.deleteAnchor");
