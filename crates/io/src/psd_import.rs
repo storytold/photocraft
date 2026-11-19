@@ -479,7 +479,7 @@ impl Ctx<'_> {
         // Advanced Blending channel restrictions (`brst`: the u32 ids of channels left out);
         // also kept in `psd_blocks`, where export rewrites it from the field.
         if let Some(b) = rec.block(b"brst") {
-            l.excluded_channels = crate::blocks::parse_brst(&b.data);
+            l.excluded_channels = craft_psd::tagged::channel_restrictions(&b.data);
         }
         // Advanced Blending (`knko`, `infx`, `clbl`, `tsly`, `lmgm`, `vmgm`); the blocks stay in
         // `psd_blocks`, where export rewrites them from the field in place.
@@ -1451,7 +1451,7 @@ fn import_layered(import: DecodedImport<'_>, doc: &mut Document, cx: &mut Ctx<'_
     let cc = fmt.mode.color_channels();
     let tree = file.layer_tree_max_depth(photocraft_doc::MAX_GROUP_DEPTH);
     let space = photocraft_compose::cmyk_space(doc);
-    doc.layers = photocraft_color::convert::with_cmyk_space(space.as_ref(), || cx.build(&tree, 0));
+    doc.layers = photocraft_color::convert::with_cmyk_space(space.as_ref(), || cx.build(&tree, 0)).into();
     mark_background(file, &mut doc.layers);
     if let Some(Ok(craft_psd::resources::ResourceData::LayerGroupInfo(groups))) =
         file.resources.iter().find(|r| r.id == ids::LAYER_GROUP_INFO).and_then(craft_psd::resources::ImageResource::parsed)

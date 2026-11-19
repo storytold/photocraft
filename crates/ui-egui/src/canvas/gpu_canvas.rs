@@ -1107,10 +1107,10 @@ impl GpuCanvas {
 }
 
 #[cfg(test)]
-mod mip_tests;
+mod mip_gpu_tests;
 
 #[cfg(test)]
-mod sharp_tests;
+mod sharp_gpu_tests;
 
 #[cfg(test)]
 mod tests;

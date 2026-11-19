@@ -2,11 +2,11 @@ use super::*;
 
 /// A 160 × 100 document: warm on the left (x < 80), cool on the right, with the top-left
 /// 20 × 20 selected.
-fn app_with_selection() -> PhotocraftApp {
+fn app_with_selection() -> Box<PhotocraftApp> {
     app_sized(160, 100)
 }
 
-fn app_sized(w: i32, h: i32) -> PhotocraftApp {
+fn app_sized(w: i32, h: i32) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.session.execute("file.new", json!({"width": w, "height": h, "depth": 8})).unwrap();
     app.session
@@ -132,7 +132,7 @@ fn edits_scale_to_the_reduced_copy() {
 }
 
 /// Queues one pointer event and runs frames, so the tool host delivers it to the workspace's canvas.
-fn pointer(h: &mut egui_kittest::Harness<'_, PhotocraftApp>, event: Value) {
+fn pointer(h: &mut egui_kittest::Harness<'_, Box<PhotocraftApp>>, event: Value) {
     call(h.state_mut(), "ui.pointer", json!({"events": [event]}));
     h.run_steps(3);
 }
@@ -279,7 +279,7 @@ fn call(app: &mut PhotocraftApp, method: &str, params: Value) -> Value {
 }
 
 /// A second document with its own selection, the first one active again.
-fn two_documents() -> PhotocraftApp {
+fn two_documents() -> Box<PhotocraftApp> {
     let mut app = app_with_selection();
     app.session.execute("file.new", json!({"width": 160, "height": 100, "depth": 8})).unwrap();
     app.session.execute("select.rect", json!({"x": 100, "y": 50, "width": 30, "height": 30})).unwrap();

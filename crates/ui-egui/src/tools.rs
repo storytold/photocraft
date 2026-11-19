@@ -52,6 +52,9 @@ pub(super) mod type_transform;
 pub mod vector_ui;
 
 #[cfg(test)]
+mod art_history_fields_tests;
+
+#[cfg(test)]
 mod art_history_default_style_tests;
 #[cfg(test)]
 mod gradient_mode_greyed_tests;
@@ -70,3 +73,6 @@ mod object_selection_mode_tests;
 mod path_selection_ctrl_direct_tests;
 #[cfg(test)]
 mod path_selection_shape_over_saved_path_tests;
+
+#[cfg(test)]
+mod art_history_reset_tip_tests;

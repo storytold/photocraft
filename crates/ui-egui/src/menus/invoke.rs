@@ -523,9 +523,7 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         "select.findLayers" => crate::layer_filter_ui::find::invoke(app, params),
         // Photoshop's "Select and Mask…" is the engine's select.refineEdge.
         // Select › Color Range… from the menu: the dialog (with params: the engine directly).
-        "select.colorRange" if params.as_object().is_none_or(|o| o.is_empty()) => {
-            Ok(json!({"dialog": crate::color_range_ui::open(app).map(|dialog| dialog.value().to_string())}))
-        }
+        "select.colorRange" if params.as_object().is_none_or(|o| o.is_empty()) => crate::color_range_ui::open(app).map(dialog_reply),
         // Layer › New Fill Layer › Pattern… from the menu: the Pattern Fill dialog (with params:
         // the engine directly).
         photocraft_engine::pattern_fill_cmds::CREATE if params.as_object().is_none_or(|o| o.is_empty()) => {
@@ -608,7 +606,7 @@ fn open_path(app: &mut PhotocraftApp, path: &str) -> Result<Value, String> {
 
 fn invoke_export_command(app: &mut PhotocraftApp, id: &str, params: &Value) -> Result<Option<Result<Value, String>>, String> {
     let result = match id {
-        "file.export.exportAs" => Some(Ok(json!({"dialog": crate::export_dialog::open(app)?}))),
+        "file.export.exportAs" => Some(Ok(json!({"dialog": crate::export_dialog::open(app)?.value()}))),
         "file.export.quickExportAsPng" => Some(crate::export_dialog::quick_export_png(app)),
         "file.export.renderVideo" if params.get("dir").is_none() => {
             #[cfg(target_arch = "wasm32")]
@@ -631,9 +629,9 @@ fn invoke_export_command(app: &mut PhotocraftApp, id: &str, params: &Value) -> R
                 // Several layers (artboards, say) selected: one file each (#3629).
                 let layers = app.session.active().map(|document| document.selected_layers()).unwrap_or_default();
                 if layers.len() > 1 {
-                    Some(Ok(json!({"dialog": crate::export_dialog::open_layers(app, &layers)?})))
+                    Some(Ok(json!({"dialog": crate::export_dialog::open_layers(app, &layers)?.value()})))
                 } else {
-                    Some(Ok(json!({"dialog": crate::export_dialog::open_layer(app, selected)?})))
+                    Some(Ok(json!({"dialog": crate::export_dialog::open_layer(app, selected)?.value()})))
                 }
             } else {
                 Some(crate::export_dialog::quick_export_selected_layers_png(app))
