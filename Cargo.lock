@@ -6678,6 +6678,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "photocraft-oil-round-proof"
+version = "0.23.1"
+dependencies = [
+ "photocraft-algo",
+ "rayon",
+]
+
+[[package]]
 name = "photocraft-ops"
 version = "0.23.1"
 dependencies = [
