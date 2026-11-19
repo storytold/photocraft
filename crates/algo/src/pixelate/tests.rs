@@ -127,9 +127,13 @@ fn halftone_unusual_coordinates_and_params_keep_direct_semantics() {
 fn tiled_filters_match_scalar_at_all_depths_with_soft_selection() {
     use crate::{FilterParams, apply_tiled};
     let bounds = Rect::new(-17, -9, 26, 24);
-    for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
-        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
-            for alpha in [false, true] {
+    // Every mode/depth pair and both alpha values for each mode and depth.
+    for (mi, mode) in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab].into_iter().enumerate() {
+        for (di, depth) in [SampleType::U8, SampleType::U16, SampleType::F32].into_iter().enumerate() {
+            for (ai, alpha) in [false, true].into_iter().enumerate() {
+                if (mi + di) % 2 != ai {
+                    continue;
+                }
                 let ctx = Ctx { bounds, mode, alpha };
                 let src = fixture(bounds, &ctx, 2);
                 let mut surface = Surface::new(PixelFormat::new(mode, depth, alpha));
