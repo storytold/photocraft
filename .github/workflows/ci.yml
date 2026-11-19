@@ -157,12 +157,18 @@ jobs:
   # test-seconds over 3 shards are ~8.5-10.5 min each.
   # The build keeps the compiled workspace crates between runs (`cache-workspace-crates`), so a
   # pull request rebuilds only the crates its changes reach. Each main run's build job saves a
-  # rolling entry of its own, which `test (without heif)` restores too; `gate-cache-prune` keeps
-  # the newest one.
+  # rolling entry of its own, which `test (without heif)` restores too; the gate's `prune cache`
+  # job (`prune-cache`) deletes the older ones right after the build, since the 10 GB cache budget
+  # does not hold two. The lint legs keep no cache (`lint-cache: false`): a cold lint leg costs
+  # minutes, and their entries (~1 GB per OS) would not fit the budget.
   gate:
     if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
     # Tracks @main so suite-wide CI fixes reach every app without a PR in each repository.
     uses: aiongg/craft-common-actions/.github/workflows/gate.yml@ci-build-once-test
+    # The gate's `prune cache` job deletes cache entries: the only job that needs `actions: write`.
+    permissions:
+      contents: read
+      actions: write
     with:
       # egui/winit/rfd.
       packages: >-
@@ -183,6 +189,8 @@ jobs:
         CARGO_PROFILE_TEST_STRIP=symbols
       timeout-minutes: 100
       cache-workspace-crates: true
+      prune-cache: true
+      lint-cache: false
       cold-build: ${{ github.event_name == 'schedule' }}
       # fmt, egui-fork, clippy, layers, panel-commands, scorecard, the wasm32 check and the
       # missing-translations report (`cargo xtask ci lint`, xtask/src/main.rs), and the CI scripts'
@@ -210,6 +218,7 @@ jobs:
     uses: aiongg/craft-common-actions/.github/workflows/gate.yml@ci-build-once-test
     with:
       os: '["windows-latest"]'
+      lint-cache: false
       # The all-language UI tests shape real Japanese, Chinese, Korean and Devanagari labels with
       # kittest's strict `MissingGlyphPolicy::Panic`, and a hosted Windows image has no guaranteed
       # Japanese or Simplified Chinese system font. Same pinned central fonts as Linux and release.
@@ -240,44 +249,6 @@ jobs:
       after-archive-command: cargo xtask ci doctest
       test-shards: 6
       shard-command: bash scripts/ci-test-shard.sh
-
-  # The Linux gate's build job saves a rolling cache entry of its own on every main and nightly run
-  # (`cache-workspace-crates`), about 3.8 GB, and every run restores only the newest. This deletes
-  # the older ones at once instead of leaving them to the 10 GB budget's eviction, which would
-  # evict other entries too.
-  gate-cache-prune:
-    needs: gate
-    if: ${{ !cancelled() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
-    timeout-minutes: 5
-    runs-on: ubuntu-24.04
-    permissions:
-      actions: write
-    steps:
-      - name: Harden runner
-        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
-        with:
-          egress-policy: audit
-      - name: Delete all but the newest rolling entry of each job and runner
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          # `<version>-rust-<profile>-<job>-crates-<os>-<arch>-<run>-<attempt>-...`, newest first.
-          gh cache list --repo "$REPO" --ref refs/heads/main --limit 100 --sort created_at --order desc --json id,key \
-            --jq '.[] | "\(.id) \(.key)"' > "$RUNNER_TEMP/caches"
-          declare -A kept
-          while read -r id key; do
-            [[ "$key" =~ ^.+-rust-[0-9a-f]{64}-(.+-crates-[A-Za-z_]+-[a-z0-9]+)-[0-9]+-[0-9]+- ]] || continue
-            entry=${BASH_REMATCH[1]}
-            if [ -n "${kept[$entry]:-}" ]; then
-              echo "delete $key"
-              gh cache delete "$id" --repo "$REPO"
-            else
-              kept[$entry]=1
-              echo "keep $key"
-            fi
-          done < "$RUNNER_TEMP/caches"
 
   # The same codecs without the optional decoder: HEIC must stay a clear "not in this build" error
   # for distributors who leave it out. Runs beside the gate and restores the gate's newest rolling
