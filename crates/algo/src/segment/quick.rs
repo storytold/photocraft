@@ -45,6 +45,9 @@ pub struct Tuning {
     pub sigma: f32,
     pub k: f32,
     /// The footprint grows by `grow + grow_frac * radius` working pixels (Photoshop's settled click).
+    /// The growth prices how far a click reaches into an object - an object is worth taking when it
+    /// costs less than cutting the ring around this grown footprint - and it is not part of what a
+    /// plain click selects: see the trim in [`select_working_using`] and #12922.
     pub grow: f32,
     pub grow_frac: f32,
     /// Larger working windows are cut coarse to fine: at half size first, then again only in a
@@ -144,7 +147,7 @@ pub(super) fn quick_select_batched<const OPTIMIZED: bool>(
             return Attempt::Cancelled;
         }
         let inner = [window.x0 > canvas.x0, window.y0 > canvas.y0, window.x1 < canvas.x1, window.y1 < canvas.y1];
-        let Some(low) = select_working_using::<OPTIMIZED>(&img, &seeds, rw, t, &cancel) else { return Attempt::Cancelled };
+        let Some(low) = select_working_using::<OPTIMIZED>(&img, &seeds, rw, points.len() == 1, t, &cancel) else { return Attempt::Cancelled };
         let touches = |side: usize| match side {
             0 => (0..lh).any(|y| low[y * lw]),
             1 => (0..lw).any(|x| low[x]),
@@ -227,12 +230,20 @@ pub(super) fn margins_to_try(margin: i32, bbox: Rect, canvas: Rect, count: usize
 }
 
 /// The model at working resolution: `seeds` (the brush footprint, `radius` working pixels) are
-/// selected; returns the selection.
+/// selected; returns the selection. `click` is true for a single click, which drops the footprint
+/// growth again when the cut reached nothing beyond it (see [`select_working_using`]).
 pub fn select_working(img: &RgbImage, seeds: &[bool], radius: f32, t: &Tuning) -> Vec<bool> {
-    select_working_using::<true>(img, seeds, radius, t, &|| false).unwrap_or_default()
+    select_working_using::<true>(img, seeds, radius, false, t, &|| false).unwrap_or_default()
 }
 
-fn select_working_using<const OPTIMIZED: bool>(img: &RgbImage, seeds: &[bool], radius: f32, t: &Tuning, cancel: &dyn Fn() -> bool) -> Option<Vec<bool>> {
+fn select_working_using<const OPTIMIZED: bool>(
+    img: &RgbImage,
+    seeds: &[bool],
+    radius: f32,
+    click: bool,
+    t: &Tuning,
+    cancel: &dyn Fn() -> bool,
+) -> Option<Vec<bool>> {
     let (w, h) = (img.w, img.h);
     let d = crate::selection::edt(seeds, w, h);
     let grow = (t.grow + t.grow_frac * radius).max(0.0);
@@ -243,7 +254,19 @@ fn select_working_using<const OPTIMIZED: bool>(img: &RgbImage, seeds: &[bool], r
     if cancel() {
         return None;
     }
-    cut_levels::<OPTIMIZED>(img, &fixed, &cost_fg, &weight, 1.0, t.direct_px.max(1024), cancel)
+    let mut lab = cut_levels::<OPTIMIZED>(img, &fixed, &cost_fg, &weight, 1.0, t.direct_px.max(1024), cancel)?;
+    // A click that never reached anything beyond its own grown footprint keeps the brush footprint.
+    // `grow` is what prices "is this object worth taking" (the cut either pays the ring around the
+    // grown footprint or takes the object), it is not part of what a plain click selects: with the
+    // growth left in, one click on a uniform area selected a disc 5 px wider than a 5 px brush,
+    // 8 px wider than a 30 px one and 18 px wider than a 100 px one, where Photoshop's is 2, 3 and
+    // 3 px wider (#12922). Only single clicks: drags were not measured and keep today's result.
+    if click && lab.iter().zip(d.iter()).all(|(v, &dist)| !*v || dist <= grow) {
+        for (l, s) in lab.iter_mut().zip(seeds) {
+            *l = *s;
+        }
+    }
+    Some(lab)
 }
 
 /// Band half-width (pixels) re-cut at each finer level.
