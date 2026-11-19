@@ -564,6 +564,8 @@ fn menu_pick(app: &mut PhotocraftApp, ctx: &egui::Context, row: &Option<LayerRow
         actions.push(("select.loadSelection".into(), layers_tree::select_pixels(id)));
     } else if let Some(operation) = command.strip_prefix(layers_tree::LOAD_MASK) {
         actions.push(("select.loadSelection".into(), json!({"channel": "mask", "layer": id.0, "operation": operation})));
+    } else if command == "layer.vectorMask.enabled" {
+        actions.push((command.to_string(), json!({"layer": id.0})));
     } else if command == layers_tree::MASK_REFINE {
         actions.push(("ui.maskTarget".into(), json!(true)));
         actions.push(("select.selectAndMask".into(), Value::Null));

@@ -570,6 +570,70 @@ fn menu_pick_values_run_their_rules() {
     assert!(app.session.active().unwrap().doc.selection.is_some());
 }
 
+/// #15753: the row menu follows and toggles the clicked layer's vector mask.
+#[test]
+fn vector_mask_toggle_in_layer_row_menu() {
+    let (s, masked, other) = session();
+    let mut app = app_of(s);
+    let target = MenuTarget::new(Some(LayerRowKey::Layer(LayerId(masked))));
+    let other_row = MenuTarget::new(Some(LayerRowKey::Layer(LayerId(other))));
+    let mut multi = target.clone();
+    multi.on_selection = true;
+    let id = "layer.vectorMask.enabled";
+    let rows = |app: &PhotocraftApp, target: &MenuTarget<LayerId>| {
+        let st = app.session.active().unwrap();
+        let tree = PhotoLayers::new(app, st, &app.ui.layer_filter, false, None);
+        layers_tree::row_menu(&tree, target)
+    };
+    let toggle = |app: &PhotocraftApp| {
+        let entries = rows(app, &target);
+        let entry = entries.iter().find(|r| r.value().is_some_and(|v| v == id)).expect("vector mask toggle in the layer row menu");
+        assert!(entry.is_enabled());
+        entry.label().as_str().to_owned()
+    };
+    for target in [&other_row, &multi] {
+        assert!(!rows(&app, target).iter().any(|r| r.value().is_some_and(|v| v == id)));
+    }
+
+    for (label, enabled) in [("Disable Vector Mask", false), ("Enable Vector Mask", true)] {
+        assert_eq!(toggle(&app), label);
+        // The menu can still be open when the active layer changes.
+        app.run("layer.select", json!({"layer": other})).unwrap();
+        send(&mut app, vec![LayersEvent::menu(target.clone(), id)]);
+        assert_eq!(active(&app), Some(LayerId(other)));
+        let changed = layer(&app, masked);
+        assert_eq!(changed.vector_mask.unwrap().enabled, enabled);
+        assert!(changed.mask.unwrap().enabled, "the pixel mask is independent");
+    }
+    assert_eq!(toggle(&app), "Disable Vector Mask");
+}
+
+/// #15753: Layer > Vector Mask shows the next action and toggles the active layer.
+#[test]
+fn vector_mask_toggle_in_top_menu() {
+    let (s, masked, _) = session();
+    let mut app = app_of(s);
+    let ctx = app.ctx().clone();
+    let id = "layer.vectorMask.enabled";
+    let fresh = app.run("layer.new.layer", json!({"name": "From path"})).unwrap()["layer"].as_u64().unwrap();
+    let label = |app: &PhotocraftApp| {
+        let rows = crate::menus::menu_rows(app);
+        let row = rows.iter().find(|r| r.command.id == id).expect("Layer > Vector Mask toggle");
+        assert_eq!(row.path, ["Layer", "Vector Mask"]);
+        row.label.clone()
+    };
+    assert_eq!(label(&app), "Enable Vector Mask");
+    app.run("path.set", json!({"path": {"subpaths": [{"knots": [[20, 10], [120, 10], [120, 90], [20, 90]]}]}})).unwrap();
+    crate::menus::invoke(&mut app, &ctx, "layer.vectorMask.currentPath", json!({})).unwrap();
+    for (expected, enabled) in [("Disable Vector Mask", false), ("Enable Vector Mask", true)] {
+        assert_eq!(label(&app), expected);
+        crate::menus::invoke(&mut app, &ctx, id, json!({})).unwrap();
+        assert_eq!(layer(&app, fresh).vector_mask.unwrap().enabled, enabled);
+        assert!(layer(&app, masked).vector_mask.unwrap().enabled);
+    }
+    assert_eq!(label(&app), "Disable Vector Mask");
+}
+
 // ------------------------------------------------------------------------------------ activation
 
 /// An activation opens the right editor: a filter row's Blending Options part its blending dialog, the
