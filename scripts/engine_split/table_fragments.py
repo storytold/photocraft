@@ -3,7 +3,7 @@
 
 Before the table was split, `crates/engine/src/cmd.rs` held every core command in one `vec![...]`
 inside `fn build()`. The entries now live in `crates/engine/src/cmd/table/<owner>/<menu>.rs`, and
-`cmd/command_ids.txt` pins the registry order. A branch that edited the old table carries its
+`install/command_ids.txt` pins the registry order. A branch that edited the old table carries its
 edits in `cmd.rs`. This script applies them to the fragments:
 
     python3 scripts/engine_split/table_fragments.py --base <merge-base> --head <branch>
@@ -17,7 +17,8 @@ for the old table dropped). Per command id, compared between BASE and HEAD:
   removed  the entry and its id are deleted (if the fragment still has BASE's text).
 The adjustment table and its loop (`ADJ`, between the `vec![...]` and the `v.extend(...)` list) are
 three-way merged into table/image/adjustments.rs. Any other change inside `build()` (the module
-table list, the test-only command) is reported as UNHANDLED: edit `SPECS` in cmd.rs by hand.
+table list, the test-only command) is reported as UNHANDLED: `install_tables.py` moves module
+tables into `TABLES` in install.rs; edit anything else there by hand.
 Entries are compared without comments and whitespace, so rustfmt does not matter. Names a new
 entry uses from cmd.rs are added to its fragment's `use crate::cmd::{..}` list. Run
 `cargo fmt --all` afterwards. Running the script twice gives the same result. CONFLICT, UNHANDLED,
@@ -28,7 +29,7 @@ import argparse, os, re, subprocess, sys, tempfile
 
 CMD = "crates/engine/src/cmd.rs"
 TABLE = "crates/engine/src/cmd/table"
-IDS = "crates/engine/src/cmd/command_ids.txt"
+IDS = "crates/engine/src/install/command_ids.txt"
 ID_RE = re.compile(r'"([a-zA-Z]+\.[A-Za-z0-9.]+)"')
 
 
@@ -319,7 +320,7 @@ def main():
             open(ADJ_FILE, "w").write(cur[:i] + merged.rstrip("\n") + cur[j:])
             report.append(f"changed  ADJ table in {ADJ_FILE}")
     if norm(h_tail) != norm(b_tail):
-        report.append("UNHANDLED the branch edits the end of build() (module table list or test-only command): edit SPECS in cmd.rs by hand")
+        report.append("UNHANDLED the branch edits the end of build() (module table list or test-only command): run install_tables.py, or edit TABLES in install.rs by hand")
     fr.save()
     open(IDS, "w").write("\n".join(ids) + "\n")
     print("\n".join(report) or "nothing to do")

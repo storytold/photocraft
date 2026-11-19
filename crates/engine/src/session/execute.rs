@@ -67,7 +67,7 @@ impl Session {
     /// Complete for the commands in [`PRECHECKED`]: there it accepts what `execute` accepts, but
     /// for the group nesting limit (a test holds the two together). For others it checks only what they share.
     pub fn precheck(&mut self, id: &str, params: &Value) -> Result<()> {
-        let spec = crate::commands::find(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
+        let spec = crate::registry::spec(id)?;
         if !(params.is_object() || params.is_null()) {
             return Err(EngineError::BadParams { cmd: id.to_string(), msg: "params must be a JSON object".into() });
         }
@@ -135,7 +135,10 @@ impl Session {
 
     /// [`Self::disabled_reason`] for a call with `params`.
     pub fn disabled_reason_with(&self, id: &str, params: &Value) -> Option<String> {
-        let Some(spec) = commands::find(id) else { return Some(EngineError::UnknownCommand(id.into()).to_string()) };
+        let spec = match crate::registry::spec(id) {
+            Ok(spec) => spec,
+            Err(e) => return Some(e.to_string()),
+        };
         self.spec_disabled_reason(spec, id, params)
     }
 

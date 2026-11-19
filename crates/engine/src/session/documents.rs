@@ -17,6 +17,9 @@ pub fn move_item<T>(v: &mut Vec<T>, i: usize, to: usize) -> Option<usize> {
 
 impl Session {
     pub fn new() -> Self {
+        // Commands run through the process-wide registry; the first session installs it, and a
+        // conflicting install reports itself at the first command.
+        let _ = crate::install::install();
         Self::default()
     }
 
