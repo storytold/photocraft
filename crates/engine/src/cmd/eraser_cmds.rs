@@ -313,7 +313,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Magic Eraser",
             menu: &[],
             shortcut: None,
-            params: r##"{"x":px,"y":px,"tolerance":0..255=32,"antiAlias":bool=true,"contiguous":bool=true,"sampleAllLayers":bool=false,"opacity":1..100=100} (one undo step; a click off the canvas erases nothing and records no step; refused with the tool's alert and nothing changes: an Indexed Color document answers "Could not use the magic eraser because it does not work with Indexed Color images (convert image to RGB Color mode to edit).", a Bitmap document "Could not use the magic eraser because it does not work with Bitmap images (convert image to Grayscale mode to edit)."; Duotone and Multichannel erase as before)"##,
+            params: r##"{"x":px,"y":px,"tolerance":0..255=32,"antiAlias":bool=true,"contiguous":bool=true,"sampleAllLayers":bool=false,"opacity":1..100=100,"layer":id|name? (the layer to erase; default active)} (one undo step; a click off the canvas erases nothing and records no step; refused with the tool's alert and nothing changes: an Indexed Color document answers "Could not use the magic eraser because it does not work with Indexed Color images (convert image to RGB Color mode to edit).", a Bitmap document "Could not use the magic eraser because it does not work with Bitmap images (convert image to Grayscale mode to edit)."; Duotone and Multichannel erase as before)"##,
             enabled: has_pixel_layer,
             run: magic_eraser,
             journal: true,

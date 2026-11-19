@@ -843,7 +843,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.new.artboardFromGroup",
             "Artboard from Group",
             &["Layer", "New"],
-            r##"{"layer":id? (a top-level group; default active),"background":…?,"color":[r,g,b]|"#rrggbb"?,"preset":str? (tag only; does not resize),"guideIDs":[int]? (ignored recording metadata),"changeBackground":int? (1 or absent applies background/color; other integers give white; legacy true = 1)} → {layer, rect}"##,
+            r##"{"layer":id? (a top-level group; default active),"background":…?,"color":[r,g,b]|"#rrggbb"?,"preset":str? (tag only; does not resize),"guideIDs":[int]? (ignored recording metadata),"changeBackground":int? (1 or absent applies background/color; other integers give white; legacy true = 1),"recordedColor"? (ATN round-trip of the recorded color),"backgroundTypeOmitted":bool? (ATN: the descriptor omitted the background type)} → {layer, rect}"##,
             has_plain_group,
             artboard_from_group
         ),
