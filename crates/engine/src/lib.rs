@@ -45,7 +45,7 @@ pub mod select_mask_edits;
 pub mod shell_commands;
 pub mod shortcut_sets;
 pub mod snap;
-pub use variables_cmds::{export_data_sets_with, import_data_sets_text};
+pub use variables_cmds::{DATA_SET_LAYER_LOCKED, export_data_sets_with, import_data_sets_text};
 pub use video_cmds::render_video_with;
 
 use std::sync::Arc;
@@ -201,6 +201,7 @@ pub(crate) fn active_layer_of(s: &Session) -> std::result::Result<&photocraft_do
 #[derive(Default)]
 pub struct Session {
     docs: Vec<DocState>,
+    documents_generation: u64,
     /// Override Open belongs only to one Batch scratch session, never to caller preferences.
     pub(crate) batch_open: Option<file_cmds::BatchOpen>,
     /// Import diagnostics retained by a Batch scratch that suppresses only profile prompts.

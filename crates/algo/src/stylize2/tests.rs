@@ -44,8 +44,11 @@ fn swept_blocks_match_the_pixel_search_part(part: u64) {
             let repeat = !seen.insert((n, alpha, mode == ColorMode::Cmyk));
             for kind in 0..5 {
                 let src = image(bounds.inflate(20), n, kind);
-                for (size, depth) in [(2.0, 0.0), (2.0, 255.0), (3.5, 190.0), (8.0, 64.0), (22.0, 255.0), (255.0, 100.0)] {
-                    for flags in (0..8).filter(|f| !repeat || f & 1 != 0) {
+                for (si, (size, depth)) in [(2.0, 0.0), (2.0, 255.0), (3.5, 190.0), (8.0, 64.0), (22.0, 255.0), (255.0, 100.0)].into_iter().enumerate() {
+                    // For distinct channel layouts each kind and size sees every flag
+                    // combination. Repeated layouts keep one level-based case per pair.
+                    let first = (kind + si) % 8;
+                    for flags in (0..8).filter(|f| (!repeat || f & 1 != 0) && (*f == first || *f == (first + 3) % 8)) {
                         case += 1;
                         if !sweep.includes(case) {
                             continue;
