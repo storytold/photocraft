@@ -26,33 +26,40 @@ pub(crate) struct VariationName<'a> {
     pub(crate) axes: Vec<FontVariation>,
 }
 
+fn parse_axis_field(field: &str) -> Option<FontVariation> {
+    if !field.as_bytes().first().is_some_and(|b| b.is_ascii_digit() || matches!(b, b'-' | b'.')) {
+        return None;
+    }
+    let i = field.find(|c: char| c.is_ascii_alphabetic())?;
+    let (number, tag) = field.split_at(i);
+    if tag.len() > 4 || !tag.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return None;
+    }
+    let fixed = (number.parse::<f64>().ok()? * 65536.0).round();
+    if !(f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(&fixed) {
+        return None;
+    }
+    let value = (fixed / 65536.0) as f32;
+    Some(FontVariation { axis: format!("{tag:<4}"), value })
+}
+
 impl<'a> VariationName<'a> {
     pub(crate) fn parse(ps: &'a str) -> Option<Self> {
         if ps.len() > MAX_NAME {
             return None;
         }
-        let at = ps.match_indices('_').find(|(i, _)| ps.as_bytes().get(i + 1).is_some_and(|b| b.is_ascii_digit() || matches!(b, b'-' | b'.')))?.0;
+        let (at, axes) = ps.match_indices('_').find_map(|(at, _)| {
+            let axes: Option<Vec<FontVariation>> = ps.get(at + 1..)?.split('_').map(parse_axis_field).collect();
+            axes.map(|axes| (at, axes))
+        })?;
         let prefix = ps.get(..at)?;
         if prefix.is_empty() || !prefix.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
             return None;
         }
-        let mut axes = Vec::new();
-        for field in ps.get(at + 1..)?.split('_') {
-            let i = field.find(|c: char| c.is_ascii_alphabetic())?;
-            let (number, tag) = field.split_at(i);
-            if tag.len() > 4 || !tag.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        for (i, v) in axes.iter().enumerate() {
+            if axes[..i].iter().any(|prev| prev.axis == v.axis) {
                 return None;
             }
-            let fixed = (number.parse::<f64>().ok()? * 65536.0).round();
-            if !(f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(&fixed) {
-                return None;
-            }
-            let value = (fixed / 65536.0) as f32;
-            let axis = format!("{tag:<4}");
-            if axes.iter().any(|v: &FontVariation| v.axis == axis) {
-                return None;
-            }
-            axes.push(FontVariation { axis, value });
         }
         Some(Self { prefix, axes })
     }
@@ -155,5 +162,28 @@ mod tests {
         for bad in ["Font_Name", "Font_500wght_600wght", "Font_500wght_", "Font_5abcde", "Font_Infwght"] {
             assert!(VariationName::parse(bad).is_none(), "{bad}");
         }
+    }
+
+    #[test]
+    fn numeric_underscore_variation_prefix_round_trips_back_to_face() {
+        let face = FaceInfo {
+            family: "Var 2".into(),
+            style: "Regular".into(),
+            postscript_name: Some("Var_2-Regular".into()),
+            weight: 400.0,
+            italic: false,
+            axes: vec![("wght".into(), 100.0, 400.0, 900.0), ("wdth".into(), 75.0, 100.0, 100.0)],
+            variation_prefix: Some("Var_2".into()),
+            font_axes: Vec::new(),
+            instances: Vec::new(),
+        };
+        let ps = face.variation_postscript([("wght", 650.0), ("wdth", 82.5)]).unwrap();
+        assert_eq!(ps, "Var_2_650wght_82.5wdth");
+        let parsed = VariationName::parse(&ps).unwrap();
+        assert_eq!(parsed.prefix, "Var_2");
+        assert!(parsed.matches(&face));
+        let inst = parsed.instance(&face, 0, &ps);
+        assert_eq!(inst.weight, 650.0);
+        assert_eq!(inst.axes, vec![("wght".into(), 650.0), ("wdth".into(), 82.5)]);
     }
 }

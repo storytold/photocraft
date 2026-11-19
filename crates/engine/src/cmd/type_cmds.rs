@@ -189,6 +189,11 @@ fn sync_instance_variations(s: &mut CharStyle, faces: &[photocraft_text::FaceInf
     }
 }
 
+/// Whether `face` can serve `s.weight`. A face with a `wght` axis is checked through its axis coordinates.
+fn face_weight_matches(face: &photocraft_text::FaceInfo, s: &CharStyle) -> bool {
+    face.axes.iter().any(|(tag, ..)| tag == "wght") || face.weight.round() as u16 == s.weight
+}
+
 /// Resolve a family/style request against installed faces. Axis edits stay on their owning
 /// variable face, even when a static sibling has exactly the same CSS weight and slant.
 fn installed_postscript_for(fonts: &mut photocraft_text::FontDb, s: &CharStyle, owner: Option<usize>) -> Option<(String, String)> {
@@ -206,6 +211,9 @@ fn installed_postscript_for(fonts: &mut photocraft_text::FontDb, s: &CharStyle, 
             continue;
         }
         let Some(face) = faces.get(inst.face_index) else { continue };
+        if !face_weight_matches(face, s) {
+            continue;
+        }
         let matches = face.axes.iter().all(|(tag, min, default, max)| {
             let coord = inst.axes.iter().find(|(t, _)| t == tag).map_or(*default, |(_, v)| *v);
             axis_matches(effective_axis_coord(s, tag, *min, *default, *max), coord)
@@ -215,7 +223,7 @@ fn installed_postscript_for(fonts: &mut photocraft_text::FontDb, s: &CharStyle, 
         }
     }
     for (i, face) in faces.iter().enumerate() {
-        if face.axes.is_empty() || owner.map_or(face.italic != s.italic, |index| i != index) {
+        if face.axes.is_empty() || !face_weight_matches(face, s) || owner.map_or(face.italic != s.italic, |index| i != index) {
             continue;
         }
         let coords = || face.axes.iter().map(|(tag, min, default, max)| (tag.as_str(), effective_axis_coord(s, tag, *min, *default, *max), *default));
@@ -554,7 +562,7 @@ fn apply_variations(s: &mut CharStyle, edits: &serde_json::Map<String, Value>) {
                 .iter()
                 .enumerate()
                 .filter(|(_, f)| f.axes.iter().any(|(tag, ..)| edits.contains_key(tag)))
-                .min_by_key(|(_, f)| f.italic != s.italic)
+                .min_by_key(|(_, f)| (f.italic != s.italic, !face_weight_matches(f, s)))
                 .map(|(i, _)| i)
         });
     if let Some(inst) = instance
