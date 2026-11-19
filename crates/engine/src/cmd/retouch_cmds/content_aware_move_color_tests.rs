@@ -43,9 +43,9 @@ fn checker(x: i32, y: i32) -> Option<u8> {
     }
 }
 
-/// 640×460. Grey to the left of x=400, green to the right, with an 80×80 checker at (100, 100).
+/// 800×600. Left half grey, right half green, with the 80×80 checker at (100, 100).
 fn green_doc() -> Session {
-    let mut s = session(640, 460);
+    let mut s = session(800, 600);
     paint(&mut s, |x, y| {
         if let Some(v) = checker(x, y) {
             [v, v, v]
