@@ -202,9 +202,9 @@ fn shift_lock(app: &PhotocraftApp, r: PathRef, knot: KnotRef, p: Point) -> Point
 }
 
 /// Runs the command a finished edit stands for. `dragged` is whether a pointer gesture made it:
-/// an arrow-key nudge (`Set`) keeps the command's own step name. `shift` is ⇧ held at the
-/// gesture's end: the Convert Point tool's drags take its handle lock (#12739), every other
-/// edit is committed as it came.
+/// an arrow-key nudge (`Set`) keeps the command's own step name, and no ⇧ handle lock. `shift` is
+/// ⇧ held at the gesture's end: the Convert Point tool's drags take its handle lock (#12739),
+/// every other edit is committed as it came.
 fn change_path(app: &mut PhotocraftApp, change: &PathEdit, refs: &[PathRef], tool: Tool, mods: Mods, dragged: bool, shift: bool) {
     let Some(r) = known(change.path(), refs) else { return };
     if r == PathRef::Pen {
@@ -216,6 +216,10 @@ fn change_path(app: &mut PhotocraftApp, change: &PathEdit, refs: &[PathRef], too
     // the ⇧ handle lock: only the tool's own gestures take it, the ⌥/⌘-modifier versions of
     // those gestures were not measured and stay as they are (#12739).
     let convert_tool = tool == Tool::ConvertPoint && !mods.cmd;
+    // The lock is a rule of the pointer gesture, so it needs `dragged`: an arrow-key nudge of a
+    // handle reaches here as a `Set` with ⇧ held, and ⇧ there only picks the larger step
+    // (craft-libs `NUDGE_FAR`). Locking that would cancel the nudge and still record a step.
+    let lock = convert_tool && shift && dragged;
     match change {
         PathEdit::MoveAnchors { anchors, by, .. } if moved(by.x, by.y) => {
             let mut params = json!({"anchors": ids(anchors), "move": [by.x, by.y]});
@@ -238,7 +242,7 @@ fn change_path(app: &mut PhotocraftApp, change: &PathEdit, refs: &[PathRef], too
             command(app, r, "path.moveAnchors", json!({"anchors": ids(anchors), "move": [by.x, by.y], "curvature": true}));
         }
         PathEdit::MoveHandle { knot, side, to, alone, .. } => {
-            let to = if convert_tool && shift { shift_lock(app, r, *knot, *to) } else { *to };
+            let to = if lock { shift_lock(app, r, *knot, *to) } else { *to };
             let mut params = json!({"subpath": knot.subpath, "knot": knot.knot, "handle": side_name(*side), "to": [to.x, to.y], "independent": alone});
             if convert_tool && *alone {
                 params["stepName"] = json!("Corner Drag");
@@ -251,7 +255,7 @@ fn change_path(app: &mut PhotocraftApp, change: &PathEdit, refs: &[PathRef], too
         PathEdit::Convert { knot, out, .. } => {
             let mut params = json!({"subpath": knot.subpath, "knot": knot.knot});
             if let Some(out) = out {
-                let out = if convert_tool && shift { shift_lock(app, r, *knot, *out) } else { *out };
+                let out = if lock { shift_lock(app, r, *knot, *out) } else { *out };
                 params["out"] = json!([out.x, out.y]);
             }
             if convert_tool {

@@ -3,7 +3,9 @@
 //! document below: (+60,+25) gives (+60,0) and (−78,+140) gives (−78,+78)). ⇧ decides at the
 //! gesture's release: pressed during the drag it constrains from then on, released during it the
 //! drag ends as today. Without ⇧, with other tools, and for the vertical band whose component
-//! choice was not measured, the behaviour stays today's.
+//! choice was not measured, the behaviour stays today's. The lock is a rule of the pointer
+//! gesture only: an arrow-key nudge of a focused handle arrives as a `Set` with nothing dragged,
+//! and ⇧ there stays the larger step (`NUDGE_FAR`).
 
 use egui::Modifiers;
 use photocraft_geom::Point;
@@ -157,6 +159,44 @@ fn direct_selection_shift_anchor_drag_keeps_todays_lock() {
     let mut app = app(Tool::DirectSelection);
     drag(&mut app, [300.0, 500.0], [360.0, 525.0], Modifiers::SHIFT);
     assert!(close(knot(&app, 0, 2).anchor, p(360.0, 500.0)), "the anchor drag keeps its own 45° rule");
+}
+
+/// The #12736 fixture: a 200×200 document, a square whose knot 1 at (120,40) is smooth with its
+/// handles at (100,40) and (140,40). Its out-handle sits 20 px right of the anchor, inside the ⇧
+/// lock's axis band, so a lock applied to a 10 px move lands the handle back where it started.
+fn square_app(tool: Tool) -> Box<PhotocraftApp> {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
+    let path = json!({"subpaths": [{"closed": true, "knots": [
+        [40, 40],
+        {"anchor": [120, 40], "in": [100, 40], "out": [140, 40], "smooth": true},
+        [120, 120],
+        [40, 120],
+    ]}]});
+    app.run("path.set", json!({"name": "work", "path": path})).unwrap();
+    app.sync_views();
+    app.ui.tool = tool;
+    app
+}
+
+#[test]
+fn a_shift_arrow_nudge_of_a_convert_point_handle_keeps_todays_axis_move() {
+    // An arrow-key nudge is no gesture: it arrives as a `Set` with nothing dragged, and ⇧ there is
+    // only the larger 10 px step (craft-libs NUDGE_FAR). The ⇧ handle lock of #12739 belongs to
+    // pointer drags, so this nudge keeps today's axis move: the out-handle (140,40) goes to
+    // (140,50) and the smooth mirror follows.
+    let mut app = square_app(Tool::ConvertPoint);
+    testing::click(&mut app, [120.0, 40.0], Modifiers::COMMAND);
+    assert_eq!(app.ui.direct_selection.anchors, vec![[0, 1]], "⌘-click shows the handles");
+    testing::click(&mut app, [140.0, 40.0], Modifiers::NONE);
+    let n = steps(&app);
+    testing::key(&mut app, egui::Key::ArrowDown, Modifiers::SHIFT);
+    let k = knot(&app, 0, 1);
+    assert!(close(k.out_ctrl, p(140.0, 50.0)), "⇧⬇ nudges the handle 10 px, in {} step(s): {k:?}", steps(&app) - n);
+    // The nudge is not independent (`independent: mods.alt`), so the engine keeps the point smooth:
+    // the in-handle keeps its own 20 px length on the ray opposite the moved out one.
+    assert!(close(k.in_ctrl, p(102.11146, 31.05573)), "the smooth mirror follows: {k:?}");
+    assert_eq!(steps(&app), n + 1, "one history step for the nudge");
 }
 
 #[test]
