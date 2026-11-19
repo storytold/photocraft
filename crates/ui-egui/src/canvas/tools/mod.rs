@@ -675,6 +675,15 @@ fn with_rig<R>(
     result
 }
 
+fn creating_selection(tools: &CanvasTools, tool: Tool, mods: Mods) -> bool {
+    match tool {
+        Tool::ObjectSelection => tools.retouch.press().is_some_and(|press| press.tool == tool),
+        Tool::QuickSelection => tools.paint.stroke.as_ref().is_some_and(|stroke| stroke.tool == tool),
+        _ if family(tool) == Family::Selection => tools.selection.creating(tool, mods),
+        _ => false,
+    }
+}
+
 /// Runs the tool host for the canvas `host` on the canvas's tool input `out`, in the canvas's body after its controls
 /// (`shown` is what they reported) and before its picture, and applies what it reports: the view a tool or the
 /// autoscroll moved (in the response's `view`), the Scroll All Windows follow, and each family's drain, which feeds
@@ -701,7 +710,16 @@ pub(crate) fn run(app: &mut PhotocraftApp, ui: &egui::Ui, host: CanvasHost, out:
     let smart = super::snap_ui::smart_guide_color(app);
     let mut response = with_rig(app, &ctx, host, &mut tools, primary, shown, |selected, tool_host| tool_host.smart_guide_color(smart).run(ui, out, selected));
     // The autoscroll moves the view the pass ended with; the caller copies the response's view into its own.
-    if let (Some(scroll), Some(space)) = (response.scroll, out.space.as_ref()) {
+    if let (Some(mut scroll), Some(space)) = (response.scroll, out.space.as_ref()) {
+        // #13024: Shift accelerates the edge scroll while drawing a new selection.
+        if out.press.mods.shift
+            && response.gesture == Some(GesturePhase::Update)
+            && tools.gesture_pick == GesturePick::Selected
+            && out.press.phase.start().is_some_and(|press| press.button == PointerButton::Primary)
+            && creating_selection(&tools, tool, out.press.mods)
+        {
+            scroll *= 2.0;
+        }
         let size = app.session.documents().get(host.idx).map(|state| Size::new(f64::from(state.doc.size.width), f64::from(state.doc.size.height)));
         if let Some(size) = size {
             let mut view = response.view.unwrap_or(space.view);

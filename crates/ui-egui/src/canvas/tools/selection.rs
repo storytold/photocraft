@@ -80,6 +80,17 @@ impl SelectionTools {
         }
     }
 
+    /// Whether the selected tool is drawing a new marquee or lasso outline.
+    pub(super) fn creating(&self, tool: Tool, mods: Mods) -> bool {
+        match which(tool) {
+            Which::Marquee => matches!(self.marquee.phase(), SelectPhase::Marquee { .. }),
+            Which::Lasso => matches!(self.lasso.phase(), SelectPhase::Outline { .. }),
+            Which::Magnetic => matches!(self.magnetic.phase(), SelectPhase::Outline { .. }),
+            Which::Polygon => mods.alt && matches!(self.polygon.phase(), SelectPhase::Outline { .. }),
+            Which::Wand => false,
+        }
+    }
+
     /// The whole-pixel offset of the selection drag in progress, from the tool that runs it.
     pub(crate) fn drag_offset(&self) -> Option<(i32, i32)> {
         [self.marquee.phase(), self.lasso.phase(), self.polygon.phase(), self.magnetic.phase(), self.wand.drag.phase()].into_iter().find_map(drag_delta)
