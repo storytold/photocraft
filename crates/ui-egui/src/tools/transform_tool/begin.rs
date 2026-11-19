@@ -32,6 +32,20 @@ fn open_session(app: &PhotocraftApp, rect: [f64; 4], allow: BoxAllow, warp_ok: b
         .nudge_pause(crate::nudge_bundle::pause(app))
 }
 
+fn open_single(app: &mut PhotocraftApp, session: u64, layer: LayerId, rect: [f64; 4], allow: BoxAllow, frame_only: bool) {
+    app.ui.transform = Some(FreeTransform {
+        session: open_session(app, rect, allow, !frame_only),
+        id: session,
+        layer: layer.0,
+        layers: Vec::new(),
+        selection: false,
+        target: frame_only.then(|| json!({"frame": layer.0})),
+        path: None,
+        made: None,
+        content_aware: None,
+    });
+}
+
 /// The Frame tool's entry: [`begin`] with the session marked to commit when the press that opened it is released.
 pub fn begin_from_frame(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
     begin(app, ctx)?;
@@ -83,13 +97,28 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
         return Err("Adjustment layers have nothing to transform".into());
     }
     // With a selection the box is the selection's (#5297).
-    let b = photocraft_engine::transform_cmds::transform_frame(&doc, layer);
-    if b.is_empty() {
-        return Err("Could not transform: the layer is empty".into());
-    }
+    let painted = photocraft_engine::transform_cmds::transform_frame(&doc, layer);
+    let b =
+        if painted.is_empty() { crate::type_transform::paragraph_frame_without_ink(layer).ok_or("Could not transform: the layer is empty")? } else { painted };
     crate::type_tool::commit(app);
     let rect = [b.x0 as f64, b.y0 as f64, b.x1 as f64, b.y1 as f64];
     let session = app.ui.alloc_id();
+    let allow = type_allow(matches!(layer.content, LayerContent::Text(_)));
+    if painted.is_empty() {
+        let Some(revision) = app.session.active().filter(|st| Arc::ptr_eq(&st.doc, &doc) && st.active_layer == Some(id)).map(|st| st.revision) else {
+            return Err("Free Transform: the document changed while it was preparing".into());
+        };
+        // The paragraph frame moves without lifting pixels from the canvas.
+        app.transform_area = Some(super::OpenArea { doc: doc.id, key: super::preview_key(session), revision, area: photocraft_geom::Rect::EMPTY });
+        let image = egui::ColorImage::new([1, 1], vec![Color32::TRANSPARENT]);
+        let textures = PreviewTextures::new(format!("transform-{session}"), PreviewPixels::new(image, [1.0, 1.0]));
+        app.transform_preview = Some(OpenPreview {
+            follow: Some(Follow { revision, hidden: Vec::new(), selected: selected_now(app) }),
+            ..OpenPreview::new(session, doc, textures, app.ui.tool)
+        });
+        open_single(app, session, id, rect, allow, frame_only);
+        return Ok(());
+    }
     // Preview document: the moving pixels removed (layer hidden, or the selection lifted out).
     let mut pd = (*doc).clone();
     let mut lifted = None;
@@ -129,12 +158,11 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
     let styled = lifted.is_none() && photocraft_compose::effects::has_effects(layer);
     let opacity = layer.opacity * layer.fill_opacity;
     let whole = lifted.is_none();
-    let allow = type_allow(matches!(layer.content, LayerContent::Text(_)));
     // Reading the moving pixels and compositing the layers over them is the heavy part: hundreds
     // of megapixels on a large canvas. Done on the UI thread, the window stopped answering for
     // long enough that a Wayland compositor dropped it, so a large layer prepares as a job
     // (with the jobs window's progress) and the box opens when it lands (`on_prepared`).
-    let big = plan_pixels(&plan).saturating_add(b.size().area()) >= PREPARE_IN_BACKGROUND_PX;
+    let big = plan_pixels(&plan).saturating_add(painted.size().area()) >= PREPARE_IN_BACKGROUND_PX;
     let source = doc.clone();
     let doc_id = doc.id;
     let selected = selected_now(app);
@@ -160,17 +188,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
             follow: Some(Follow { revision, hidden: if whole && !frame_only { vec![id] } else { Vec::new() }, selected: selected_now(app) }),
             ..OpenPreview::new(session, shown, textures, app.ui.tool)
         });
-        app.ui.transform = Some(FreeTransform {
-            session: open_session(app, rect, allow, !frame_only),
-            id: session,
-            layer: id.0,
-            layers: Vec::new(),
-            selection: false,
-            target: frame_only.then(|| json!({"frame": id.0})),
-            path: None,
-            made: None,
-            content_aware: None,
-        });
+        open_single(app, session, id, rect, allow, frame_only);
         Ok(())
     };
     // `canceled` is asked between the two images, so a canceled job doesn't make the second.
@@ -179,7 +197,8 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
         if canceled() {
             return None;
         }
-        Some(Prepared { above, image: preview_image(&source, id, lifted.as_ref(), b, max_side, styled), plan })
+        let image = preview_image(&source, id, lifted.as_ref(), painted, max_side, styled);
+        Some(Prepared { above, image, plan })
     };
     if !(big && app.background_jobs) {
         let prepared = prepare(&|| false).ok_or("Free Transform: nothing was prepared")?;

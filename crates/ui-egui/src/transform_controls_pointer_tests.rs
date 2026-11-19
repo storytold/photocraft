@@ -118,6 +118,58 @@ fn bounds_under_preview(app: &PhotocraftApp, old: [Rect; 2], preview: [[f64; 2];
     })
 }
 
+#[test]
+fn move_controls_can_transform_an_overset_paragraph() {
+    let (mut app, ctx, _) = fixture();
+    let created = app.run("type.create", json!({"box": [150, 175, 125, 38], "text": "Sample", "size": 18})).unwrap();
+    let id = LayerId(created["layer"].as_u64().unwrap());
+    let ink = bounds(&app, id);
+    assert!(!ink.is_empty(), "the sample starts with visible text");
+    accepted(&mut app, "ui.menu.invoke", json!({"id": "edit.freeTransform"}));
+    let r = app.ui.transform.as_ref().unwrap().session.rect();
+    assert_eq!([r.x0, r.y0, r.x1, r.y1], [ink.x0, ink.y0, ink.x1, ink.y1].map(f64::from));
+    crate::transform_tool::cancel(&mut app);
+
+    app.run("type.setStyle", json!({"size": 72})).unwrap();
+    assert!(bounds(&app, id).is_empty(), "all of the text is overset");
+    app.run("shape.create", json!({"kind": "rect", "rect": [125, 145, 180, 120], "fill": "#7bc139"})).unwrap();
+    app.run("layer.select", json!({"layer": id.0})).unwrap();
+    let before = app.run("type.info", json!({"layer": id.0})).unwrap();
+    let steps = app.session.active().unwrap().history.past_len();
+
+    pointer(&mut app, &ctx, "down", [275.0, 213.0]);
+    pointer(&mut app, &ctx, "move", [295.0, 219.0]);
+    let transform = app.ui.transform.as_ref().expect("a Move handle opens Free Transform on the paragraph box");
+    let r = transform.session.rect();
+    assert_eq!([r.x0, r.y0, r.x1, r.y1], [150.0, 175.0, 275.0, 213.0]);
+    let preview = app.transform_preview.as_ref().unwrap();
+    let doc = &app.session.active().unwrap().doc;
+    assert!(std::sync::Arc::ptr_eq(&preview.doc, doc), "the opaque layer above remains in the live document");
+    pointer(&mut app, &ctx, "move", [315.0, 225.0]);
+    pointer(&mut app, &ctx, "up", [315.0, 225.0]);
+    enter(&mut app);
+
+    assert_one_transform(&app, steps);
+    let after = app.run("type.info", json!({"layer": id.0})).unwrap();
+    assert_ne!(after["transform"], before["transform"]);
+    assert_eq!(after["text"], "Sample");
+    assert_eq!(after["shape"], before["shape"]);
+    assert!(bounds(&app, id).is_empty(), "transforming does not make overset text paint");
+    assert!(app.session.undo());
+    let restored = app.run("type.info", json!({"layer": id.0})).unwrap();
+    assert_eq!(restored["transform"], before["transform"]);
+}
+
+#[test]
+fn empty_layers_still_have_no_free_transform_box() {
+    let (mut app, ctx, _) = fixture();
+    for (command, params) in [("layer.new.layer", json!({})), ("type.create", json!({"box": [150, 175, 125, 38], "text": " ", "size": 72}))] {
+        app.run(command, params).unwrap();
+        assert!(crate::menus::invoke(&mut app, &ctx, "edit.freeTransform", json!({})).is_err());
+        assert!(app.ui.transform.is_none());
+    }
+}
+
 /// Where a press lands decides the gesture: a corner, the rotation band at 100 %, the visible corner at 200 %, a handle
 /// off the canvas and the interior.
 #[test]
