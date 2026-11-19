@@ -120,7 +120,7 @@ pub(crate) fn rename_at(s: &mut Session, i: usize, new: &str, cmd: &str) -> Resu
     if index_of(&s.tools.presets, new).is_some_and(|j| j != i) {
         return Err(bad(cmd, format!("a brush preset named `{new}` already exists")));
     }
-    let pr = s.tools.presets.get_mut(i).ok_or_else(|| bad(cmd, "no such preset"))?;
+    let pr = std::sync::Arc::make_mut(&mut s.tools.presets).get_mut(i).ok_or_else(|| bad(cmd, "no such preset"))?;
     if pr.name != new {
         let was_current = s.tools.current_preset.as_ref().is_some_and(|c| c.eq_ignore_ascii_case(&pr.name));
         pr.name = new.to_string();

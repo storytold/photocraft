@@ -1204,7 +1204,7 @@ impl Session {
         let rev = self.tools.presets_rev;
         if let Some(st) = self.preset_store.as_mut() {
             if st.synced_rev != Some(rev) {
-                st.sync(std::sync::Arc::make_mut(&mut self.tools.presets));
+                st.sync(std::sync::Arc::make_mut(&mut self.tools.presets).as_mut_slice());
                 st.synced_rev = Some(rev);
                 if link_stored_tips(st, &mut self.tools.brush) {
                     // An embedded tip became a store reference: what the last-brush
