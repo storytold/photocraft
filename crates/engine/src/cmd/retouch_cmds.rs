@@ -16,7 +16,9 @@ use photocraft_algo::retouch::{ToneRange, dodge_burn, local_blur, local_sharpen,
 use photocraft_color::{BlendMode, PixelFormat, SampleType};
 use photocraft_doc::{Document, LayerContent, LayerId};
 use photocraft_geom::Rect;
-use photocraft_paint::retouch::{Footprint, Region, Smudge, alpha_index, apply_coverage, apply_dab_stroke};
+use photocraft_paint::retouch::{
+    Footprint, Region, Smudge, StrokeTooLarge, UNCLIPPED, alpha_index, apply_coverage, apply_dab_stroke_clipped, fits_dab_stroke_budget, footprint_within,
+};
 use photocraft_paint::{BrushSettings, Stroke, StrokePoint};
 use photocraft_raster::{Surface, from_rgba_into, to_rgba};
 use rayon::prelude::*;
