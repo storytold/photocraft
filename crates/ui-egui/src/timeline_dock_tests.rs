@@ -6,7 +6,7 @@ use serde_json::json;
 use crate::PhotocraftApp;
 
 /// An app with a three-layer document that has a frame animation (one frame per layer).
-fn harness() -> Harness<'static, PhotocraftApp> {
+fn harness() -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let mut s = photocraft_engine::Session::new();
@@ -66,7 +66,7 @@ fn the_window_menu_hides_and_shows_the_timeline() {
     assert_eq!(h.query_all_by_label_contains("0.2 sec.").count(), 3, "it comes back with its strip");
 }
 
-fn current_frame(h: &Harness<'static, PhotocraftApp>) -> usize {
+fn current_frame(h: &Harness<'static, Box<PhotocraftApp>>) -> usize {
     h.state().session.active().unwrap().doc.frame_animation.as_ref().unwrap().current
 }
 
