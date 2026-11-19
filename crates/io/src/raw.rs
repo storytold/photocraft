@@ -486,15 +486,17 @@ pub fn render_smart_object_recipe(
     let tile = photocraft_geom::TILE_SIZE as u64;
     let tiles = width.div_ceil(tile).saturating_mul(height.div_ceil(tile));
     // Give the sensor, develop buffers and flattened output one bounded allowance each.
-    // The output phase includes the full RGBA f32 composite and tile-rounded U16 output.
+    // Allow for an RGBA f32 composite and tile-rounded U16 output even when flattening uses bands.
     let phase_budget = pixels.saturating_mul(16).saturating_add(photocraft_raster::stored_tiles_bytes(tiles, &fmt)).saturating_add(16 << 20);
     let required = phase_budget.saturating_mul(3);
     if !(1..=photocraft_compose::MAX_RENDER_PIXELS).contains(&pixels) || required > budget || photocraft_raster::headroom::ensure(required).is_err() {
         return Ok(None);
     }
-    let mut opts = DevelopOptions { demosaic, ..Default::default() };
-    opts.limits.max_alloc = opts.limits.max_alloc.min(phase_budget);
-    opts.limits.max_pixels = opts.limits.max_pixels.min(pixels);
+    let mut limits = Limits::default();
+    limits.max_alloc = limits.max_alloc.min(phase_budget);
+    limits.max_pixels = limits.max_pixels.min(pixels);
+    // Version 1 keeps the original default rendition even if future RAW defaults change.
+    let opts = DevelopOptions { demosaic, white_balance: WhiteBalance::AsShot, exposure: 0.0, orient: true, tone: Tone::NEUTRAL, limits, camera_look: None };
 
     ctl.check().map_err(|_| IoError::Cancelled)?;
     let decoded = import_raw_with(file_name, bytes, &opts)?;
@@ -513,21 +515,34 @@ pub fn smart_object_cache_omissions(
     doc: &photocraft_doc::Document,
     ctl: &photocraft_raster::Interrupt<'_>,
 ) -> Result<std::collections::HashSet<photocraft_doc::LayerId>, IoError> {
-    use photocraft_doc::LayerContent;
+    use photocraft_doc::{LayerContent, SmartSource};
+    use photocraft_formats::Format as FileFormat;
 
-    let budget = crate::memory::resolve_budget(crate::memory::MemorySnapshot::current(), None).soft_limit;
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    let layers = doc.walk();
     let mut omit = std::collections::HashSet::new();
-    for (_, _, layer) in doc.walk() {
+    // Existing missing sources get the full recovery allowance. In particular, PNG placement
+    // has its own decoder path whose peak the RAW verifier cannot establish.
+    if layers.iter().any(|(_, _, layer)| {
+        let LayerContent::Smart(smart) = &layer.content else { return false };
+        let SmartSource::Embedded { bytes, .. } = &smart.source else { return false };
+        smart.cache.is_none() && (smart.raw_render_recipe.is_some() || photocraft_formats::detect("", bytes) == Some(FileFormat::Png))
+    }) {
+        return Ok(omit);
+    }
+    let mut budget = crate::memory::NativeCacheBudget::current();
+    for (_, _, layer) in layers {
         ctl.check().map_err(|_| IoError::Cancelled)?;
         let LayerContent::Smart(smart) = &layer.content else { continue };
         let Some(saved) = &smart.cache else { continue };
         let generation = photocraft_raster::spill::read_error_generation();
-        match render_smart_object_recipe(doc, smart, budget, ctl) {
+        let rebuilt = match render_smart_object_recipe(doc, smart, budget.remaining(), ctl) {
             Err(IoError::Cancelled) => return Err(IoError::Cancelled),
-            Ok(Some(rebuilt)) if saved == &rebuilt && generation == photocraft_raster::spill::read_error_generation() => {
-                omit.insert(layer.id);
-            }
-            _ => {}
+            Ok(Some(rebuilt)) => rebuilt,
+            _ => continue,
+        };
+        if saved == &rebuilt && photocraft_raster::spill::check_since(generation).is_ok() && budget.retain(&rebuilt) {
+            omit.insert(layer.id);
         }
     }
     Ok(omit)

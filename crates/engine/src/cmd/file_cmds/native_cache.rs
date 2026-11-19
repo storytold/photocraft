@@ -2,7 +2,7 @@
 
 use photocraft_doc::{Document, LayerContent, SmartObject, SmartSource};
 use photocraft_formats::Format;
-use photocraft_io::memory::{MemorySnapshot, resolve_budget};
+use photocraft_io::memory::NativeCacheBudget;
 
 use crate::Result;
 use crate::jobs::JobCtx;
@@ -43,9 +43,7 @@ pub fn recover_native_embedded_caches(doc: &mut Document, ctx: &JobCtx) -> Resul
     if candidates.is_empty() {
         return Ok(false);
     }
-    // Optional recovery uses the automatic import allowance. Previously recovered tiles
-    // are still live when the next source is decoded and placed.
-    let mut remaining = resolve_budget(MemorySnapshot::current(), Some(crate::allocation::MAX_DENSE_BYTES)).soft_limit;
+    let mut budget = NativeCacheBudget::current();
     let cancel = || ctx.cancelled();
     let ctl = photocraft_raster::Interrupt::new(&cancel, &|_| {});
     let mut recovered = false;
@@ -54,8 +52,8 @@ pub fn recover_native_embedded_caches(doc: &mut Document, ctx: &JobCtx) -> Resul
         let Some(LayerContent::Smart(smart)) = doc.layer_at(&path).map(|layer| &layer.content) else { continue };
         let scratch_generation = photocraft_raster::spill::read_error_generation();
         let surface = match embedded_png(smart) {
-            Some((name, bytes)) => crate::smart_cmds::recover_raster_placement(doc, smart, name, bytes, remaining, ctx).ok().flatten(),
-            None => photocraft_io::raw::render_smart_object_recipe(doc, smart, remaining, &ctl).ok().flatten(),
+            Some((name, bytes)) => crate::smart_cmds::recover_raster_placement(doc, smart, name, bytes, budget.remaining(), ctx).ok().flatten(),
+            None => photocraft_io::raw::render_smart_object_recipe(doc, smart, budget.remaining(), &ctl).ok().flatten(),
         };
         ctx.check()?;
         let Some(surface) = surface else { continue };
@@ -63,12 +61,12 @@ pub fn recover_native_embedded_caches(doc: &mut Document, ctx: &JobCtx) -> Resul
         if photocraft_raster::spill::check_since(scratch_generation).is_err() {
             continue;
         }
-        let bytes = photocraft_raster::stored_tiles_bytes(surface.tile_count() as u64, &surface.format());
-        let Some(next) = remaining.checked_sub(bytes) else { break };
         if let Some(LayerContent::Smart(smart)) = doc.layer_at_mut(&path).map(|layer| &mut layer.content) {
+            if !budget.retain(&surface) {
+                break;
+            }
             smart.cache = Some(surface);
             recovered = true;
-            remaining = next;
         }
     }
     Ok(recovered)

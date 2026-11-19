@@ -1,7 +1,11 @@
-use photocraft_doc::LayerContent;
+use photocraft_doc::{Affine, Document, Layer, LayerContent, SmartObject, SmartSource};
 use photocraft_engine::{Session, prefs::RawDemosaic};
+use photocraft_format::SaveOptions;
+use photocraft_io::memory::{LOW_MEMORY_RESERVE, MemorySnapshot, with_mock_memory};
+use photocraft_raster::{Interrupt, Surface, stored_tiles_bytes};
 use photocraft_raw::{DevelopOptions, testgen::DngSpec};
 use serde_json::json;
+use std::sync::Arc;
 
 #[test]
 fn smart_raw_pixels_match_the_explicit_open_recipe() {
@@ -111,4 +115,65 @@ fn assert_engine_save_honors_override(session: &mut Session, path: &std::path::P
     let written = photocraft_format::load_path(path).unwrap();
     let LayerContent::Smart(smart) = &written.layers[0].content else { panic!("expected smart object") };
     assert!(smart.cache.is_none(), "Save a Copy must pass the explicit omission option to the encoder");
+}
+
+fn doc_with_pcraft_raw_cache() -> Document {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("recovery-budget.dng");
+    let samples = (0..64 * 64).map(|i| 4096 + ((i * 113) % 4000) as u16).collect();
+    std::fs::write(&path, DngSpec::cfa(64, 64, samples).build()).unwrap();
+    let mut session = Session::new();
+    session.execute("file.openAsSmartObject", json!({ "path": path })).unwrap();
+    session.active().unwrap().doc.as_ref().clone()
+}
+
+fn raw_cache(layer: &Layer) -> Option<&Surface> {
+    let LayerContent::Smart(smart) = &layer.content else { panic!("expected a Smart Object") };
+    smart.cache.as_ref()
+}
+
+#[test]
+fn pcraft_save_budget_accounts_for_each_omitted_layer_in_native_open_order() {
+    let mut doc = doc_with_pcraft_raw_cache();
+    let cache = raw_cache(&doc.layers[0]).unwrap().clone();
+    let content = doc.layers[0].content.clone();
+    doc.layers.push(Layer::new("Second RAW", content));
+    let retained_bytes = stored_tiles_bytes(cache.tile_count() as u64, &cache.format());
+    let raw_peak = 3 * (64 * 64 * 16 + retained_bytes + (16 << 20));
+    let memory = MemorySnapshot { available_ram: Some(LOW_MEMORY_RESERVE + raw_peak + retained_bytes / 2), ..Default::default() };
+    let selection = with_mock_memory(memory, || photocraft_io::raw::smart_object_cache_omissions(&doc, &Interrupt::NONE)).unwrap();
+    assert_eq!(selection, [doc.layers[0].id].into_iter().collect(), "reopening must leave room for the first layer's rebuilt tiles");
+
+    let options = SaveOptions { omit_smart_object_caches: selection, ..Default::default() };
+    let bundle = photocraft_format::save_to_bytes(&doc, &options).unwrap();
+    let mut loaded = photocraft_format::load_from_bytes(&bundle).unwrap();
+    assert!(raw_cache(&loaded.layers[0]).is_none());
+    assert_eq!(raw_cache(&loaded.layers[1]), Some(&cache));
+    let ctx = photocraft_engine::jobs::JobCtx::new();
+    assert!(with_mock_memory(memory, || photocraft_engine::file_cmds::recover_native_embedded_caches(&mut loaded, &ctx)).unwrap());
+    assert_eq!(raw_cache(&loaded.layers[0]), Some(&cache));
+    assert_eq!(raw_cache(&loaded.layers[1]), Some(&cache));
+    assert!(photocraft_io::open_warnings(&loaded).is_empty());
+}
+
+#[test]
+fn pcraft_save_keeps_raw_pixels_when_the_file_already_needs_recovery() {
+    use photocraft_codecs::{ChannelLayout, Format, Image};
+
+    let mut doc = doc_with_pcraft_raw_cache();
+    let image = Image::from_u8(2, 2, ChannelLayout::Rgba, [20, 30, 40, 255].repeat(4)).unwrap();
+    let bytes = photocraft_codecs::encode(&image, Format::Png, &Default::default()).unwrap();
+    let source = SmartSource::Embedded { file_name: "existing.png".into(), bytes: Arc::new(bytes) };
+    let art = LayerContent::Smart(SmartObject::new(source, Affine::IDENTITY, None));
+    doc.layers.insert(0, Layer::new("Existing missing PNG", art));
+    let selection = photocraft_io::raw::smart_object_cache_omissions(&doc, &Interrupt::NONE).unwrap();
+    assert!(selection.is_empty(), "an already missing embedded PNG may need the recovery room");
+
+    doc.layers.remove(0);
+    let raw = doc.layers[0].content.clone();
+    doc.layers.push(Layer::new("Existing missing RAW", raw));
+    let LayerContent::Smart(missing) = &mut doc.layers[1].content else { panic!("expected a Smart Object") };
+    missing.cache = None;
+    let selection = photocraft_io::raw::smart_object_cache_omissions(&doc, &Interrupt::NONE).unwrap();
+    assert!(selection.is_empty(), "the same policy applies to a previously missing RAW cache");
 }
