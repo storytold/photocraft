@@ -2,11 +2,11 @@
 //! See docs/guide-edit-interactions.md for the pinned runner and scenario command.
 use std::io::{self, BufRead, Write};
 
-use photocraft_ui_egui::{PhotocraftApp, Services, canvas, control, dialogs, guide_select, new_guide_ui};
+use photocraft_ui_egui::{PhotocraftApp, Services, canvas, dialogs, guide_select, new_guide_ui};
 use serde_json::{Value, json};
 
 struct Driver {
-    app: PhotocraftApp,
+    app: Box<PhotocraftApp>,
     ctx: egui::Context,
     time: f64,
 }
@@ -19,8 +19,7 @@ impl Driver {
         app.run("prefs.set", json!({"path":"unitsAndRulers.rulers","value":"pixels"}))?;
         app.run("view.newGuide", json!({"orientation":"vertical","position":10}))?;
         app.run("view.newGuide", json!({"orientation":"vertical","position":20}))?;
-        let ctx = egui::Context::default();
-        PhotocraftApp::setup_context(&ctx, Default::default());
+        let ctx = app.ctx().clone();
         let mut driver = Self { app, ctx, time: 0.0 };
         driver.frames(false);
         Ok(driver)
@@ -46,9 +45,8 @@ impl Driver {
                 });
             }
             let mut output = self.ctx.run_ui(input, |ui| {
-                let ctx = ui.ctx().clone();
                 egui::CentralPanel::default().show(ui, |ui| canvas::document_area(&mut self.app, ui));
-                dialogs::show(&mut self.app, &ctx);
+                dialogs::run(&mut self.app, ui);
             });
             // Semantic checks do not upload textures; screenshot checks use the snapshot example.
             output.textures_delta.clear();
@@ -56,8 +54,8 @@ impl Driver {
     }
 
     /// Locate the current guide dialog, returning an error after it has closed.
-    fn dialog(&self) -> Result<u64, String> {
-        self.app.ui.dialogs.iter().find(|d| d.fields.contains_key("__edit")).map(|d| d.id).ok_or("no guide dialog".into())
+    fn dialog(&self) -> Result<craft::ui::dialog::DialogId, String> {
+        new_guide_ui::dialog_id(&self.app).ok_or("no guide dialog".into())
     }
 
     /// Dispatch one scenario event through the shipped UI or engine paths.
@@ -68,20 +66,20 @@ impl Driver {
                 new_guide_ui::open_edit(&mut self.app)?;
             }
             Some("set") => {
-                let params = json!({"dialog":self.dialog()?,"field":event.get("field"),"value":event.get("value")});
-                let (req, _rx) = control::ControlRequest::new("ui.dialog.set", params);
-                match control::handle(&mut self.app, &self.ctx, &req) {
-                    control::Outcome::Done(v) if v.get("ok") == Some(&json!(true)) => {}
-                    _ => return Err("ui.dialog.set failed".into()),
-                }
+                let id = self.dialog()?;
+                let field = event.get("field").and_then(Value::as_str).ok_or("set needs a field")?;
+                let value = event.get("value").cloned().unwrap_or(Value::Null);
+                new_guide_ui::set_field(&mut self.app, id, field, value)?;
             }
             Some("confirm") => {
                 let id = self.dialog()?;
-                dialogs::confirm(&mut self.app, id)?;
+
+                dialogs::confirm(&mut self.app, &self.ctx, id)?;
             }
             Some("cancel") => {
                 let id = self.dialog()?;
-                dialogs::cancel(&mut self.app, id)?;
+
+                dialogs::cancel(&mut self.app, &self.ctx, id)?;
             }
             Some("escape") => self.frames(true),
             Some("command") => {
@@ -103,7 +101,7 @@ impl Driver {
     fn state(&self, result: Result<(), String>) -> Value {
         let active = self.app.session.active();
         let preview = active.and_then(|st| new_guide_ui::edit_preview(&self.app, &st.doc));
-        let dialog = self.app.ui.dialogs.iter().find(|d| d.fields.contains_key("__edit"));
+        let editing = new_guide_ui::dialog_id(&self.app).is_some();
         json!({
             "rejected": result.is_err(), "error": result.err(),
             "vertical": active.map(|st| &st.doc.guides.vertical),
@@ -112,8 +110,8 @@ impl Driver {
             "preview": preview,
             "history": active.map(|st| st.history.past_len()),
             "redo": active.is_some_and(|st| st.history.can_redo()),
-            "editing": dialog.is_some(),
-            "invalid": dialog.is_some_and(|d| d.fields.contains_key("__error")),
+            "editing": editing,
+            "invalid": editing && new_guide_ui::edit_error(&self.app).is_some(),
             "editCommands": self.app.session.journal.iter().filter(|(id, _)| id == "view.editGuide").count(),
         })
     }

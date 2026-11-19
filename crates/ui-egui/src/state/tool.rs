@@ -230,13 +230,6 @@ impl Tool {
             Tool::CustomShape => "Custom Shape Tool",
         }
     }
-    /// The second line of the toolbar tooltip, for the tools whose description was measured.
-    pub fn description(self) -> Option<&'static str> {
-        match self {
-            Tool::AdjustmentBrush => Some("Create local adjustment layers."),
-            _ => None,
-        }
-    }
     pub fn is_type(self) -> bool {
         matches!(self, Self::Type | Self::VerticalType | Self::HorizontalTypeMask | Self::VerticalTypeMask)
     }
@@ -331,11 +324,22 @@ impl Tool {
             _ => "•",
         }
     }
+    /// The tool `s` names: its variant name, that name without "marquee", or its label, in any case and with spaces,
+    /// `_` and `-` ignored. The first tool of [`Tool::ALL`] a spelling names wins.
     pub fn from_name(s: &str) -> Option<Tool> {
-        let n = s.to_ascii_lowercase().replace([' ', '_', '-'], "");
-        Tool::ALL.into_iter().find(|t| {
-            let a = format!("{t:?}").to_ascii_lowercase();
-            n == a || n == a.replace("marquee", "") || n == t.label().to_ascii_lowercase().replace(' ', "")
-        })
+        // Panels resolve tool names per row as they draw, and the command gate per tool command: one table instead of
+        // formatting every tool's names per lookup.
+        static NAMES: std::sync::OnceLock<std::collections::HashMap<String, Tool>> = std::sync::OnceLock::new();
+        let names = NAMES.get_or_init(|| {
+            let mut names = std::collections::HashMap::new();
+            for t in Tool::ALL {
+                let a = format!("{t:?}").to_ascii_lowercase();
+                for spelling in [a.replace("marquee", ""), t.label().to_ascii_lowercase().replace(' ', ""), a] {
+                    names.entry(spelling).or_insert(t);
+                }
+            }
+            names
+        });
+        names.get(&s.to_ascii_lowercase().replace([' ', '_', '-'], "")).copied()
     }
 }

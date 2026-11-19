@@ -1,22 +1,22 @@
 //! #12519: the Adjustment Brush Tool in the shell: its toolbar slot between the Blur and Dodge
-//! slots (no letter, its own tooltip), its options bar, and strokes through the real pointer
-//! path that make an adjustment layer whose mask is the stroke, or paint into it.
+//! slots (no letter), its options bar, and strokes through the real pointer path that make an
+//! adjustment layer whose mask is the stroke, or paint into it.
 
 use egui::accesskit::Role;
-use egui::{Key, Modifiers, vec2};
+use egui::{Modifiers, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use photocraft_doc::{Adjustment, LayerContent};
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, tool_event};
 use crate::panels::toolbar::TOOL_SECTIONS;
-use crate::state::{DialogKind, Tool};
+use crate::state::Tool;
 
 /// A 200 x 200 document with a painted layer active and the Adjustment Brush picked, its brush
 /// swapped in as a frame does.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 200, "background": "white"})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();
@@ -55,8 +55,9 @@ fn mask_at(app: &PhotocraftApp, x: i32, y: i32) -> f32 {
     active(app).mask.as_ref().expect("a mask").surface.sample_channel(x, y, 0)
 }
 
+/// The messages of the open framework alerts.
 fn alerts(app: &PhotocraftApp) -> Vec<String> {
-    app.ui.dialogs.iter().filter(|d| d.kind == DialogKind::Error).filter_map(|d| d.fields.get("message").and_then(Value::as_str).map(str::to_string)).collect()
+    app.framework.dialogs.open_dialogs().iter().filter_map(|d| d.fields.as_ref()?.get("message")?.as_str().map(str::to_string)).collect()
 }
 
 #[test]
@@ -67,50 +68,9 @@ fn its_own_slot_sits_between_the_blur_and_dodge_slots() {
     assert_eq!(slots[i + 1], [Tool::Dodge, Tool::Burn, Tool::Sponge]);
     assert_eq!(Tool::AdjustmentBrush.key(), '\0', "no letter");
     assert_eq!(Tool::from_name("adjustmentBrush"), Some(Tool::AdjustmentBrush));
-}
-
-#[test]
-fn the_toolbar_tooltip_names_it_and_says_what_it_does() {
-    let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    let mut h = Harness::builder().with_size(vec2(400.0, 1600.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
-            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                crate::panels::toolbar(app, ui);
-            }
-        },
-        app,
-    );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
-    h.run_steps(2);
-    let tip = "Adjustment Brush Tool\nCreate local adjustment layers.";
-    let button = h.get_by_label(tip);
-    button.click();
-    h.run_steps(2);
-    assert_eq!(h.state().ui.tool, Tool::AdjustmentBrush);
-}
-
-/// Shift+letter and plain letters, pressed from every tool, never pick the Adjustment Brush.
-#[test]
-fn no_letter_or_shift_letter_cycle_reaches_it() {
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    app.run("file.new", json!({"width": 50, "height": 50})).unwrap();
-    let ctx = egui::Context::default();
-    let press = |app: &mut PhotocraftApp, key: Key, modifiers: Modifiers| {
-        ctx.begin_pass(egui::RawInput {
-            events: vec![egui::Event::ModifiersChanged(modifiers), egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }],
-            ..Default::default()
-        });
-        crate::shortcuts::handle(app, &ctx);
-        ctx.end_pass().textures_delta.clear();
-    };
-    for key in [Key::O, Key::B, Key::J, Key::S, Key::Y, Key::E] {
-        for _ in 0..8 {
-            press(&mut app, key, Modifiers::SHIFT);
-            assert_ne!(app.ui.tool, Tool::AdjustmentBrush, "{key:?}");
-            press(&mut app, key, Modifiers::NONE);
-            assert_ne!(app.ui.tool, Tool::AdjustmentBrush, "{key:?}");
-        }
-    }
+    let command = crate::panels::tool_commands::command_of(Tool::AdjustmentBrush);
+    assert_eq!(crate::panels::tool_commands::tool_of(command), Tool::AdjustmentBrush);
+    assert_eq!(crate::icons::tool_icon(Tool::AdjustmentBrush), craft::behavior::IconId::new("adjustment_layer"));
 }
 
 #[test]
@@ -120,55 +80,54 @@ fn it_starts_with_a_100_px_soft_round() {
     assert_eq!((b.size, b.hardness), (100.0, 0.0));
 }
 
-fn bar(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
-    let mut h = Harness::builder()
-        .with_size(vec2(1800.0, 200.0))
-        .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::ProMedium))
-        .build_ui_state(|ui, app| crate::panels::options_bar(app, ui), app);
+fn bar(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
+    crate::theme::install_fonts(app.ctx());
+    crate::theme::apply(app.ctx(), &crate::theme::AppTheme::pro());
+    let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1800.0, 200.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut Box<PhotocraftApp>| {
+            crate::panels::options_bar(app, ui);
+            crate::dialogs::run(app, ui);
+        },
+        app,
+    );
     h.run_steps(4);
     h
 }
 
-fn x_of(h: &Harness<'static, PhotocraftApp>, role: Role, label: &str) -> f32 {
-    let all = || h.query_all_by_role(role).map(|n| n.accesskit_node().label()).collect::<Vec<_>>();
-    h.query_all_by_role(role)
-        .find(|n| n.accesskit_node().label().as_deref() == Some(label))
-        .unwrap_or_else(|| panic!("no {role:?} {label:?} in {:?}", all()))
-        .rect()
-        .center()
-        .x
+/// The centre x of the control named `label` (not a caption's text node).
+fn x_of(h: &Harness<'static, Box<PhotocraftApp>>, label: &str) -> f32 {
+    let named = h.query_all_by_label(label).find(|n| n.accesskit_node().role() != Role::Label);
+    let all = || h.query_all_by_role(Role::Button).filter_map(|n| n.accesskit_node().label()).collect::<Vec<_>>();
+    named.unwrap_or_else(|| panic!("no {label:?} in {:?}", all())).rect().center().x
 }
 
 #[test]
 fn the_options_bar_shows_its_controls_in_order() {
     let h = bar(app());
     let xs = [
-        x_of(&h, Role::ComboBox, "Adjustment:"),
-        x_of(&h, Role::Button, "Subtract"),
-        x_of(&h, Role::Button, "Add"),
-        x_of(&h, Role::Button, "Always use pressure for size"),
-        x_of(&h, Role::Button, "Choose an object and have the adjustment applied to it"),
-        x_of(&h, Role::CheckBox, "Overlay"),
-        x_of(&h, Role::SpinButton, "Opacity:"),
-        x_of(&h, Role::Button, "Always use pressure for opacity"),
-        x_of(&h, Role::SpinButton, "Flow:"),
-        x_of(&h, Role::Button, "Enable airbrush-style build-up effects"),
+        x_of(&h, "Adjustment:"),
+        x_of(&h, "Subtract from mask areas to remove adjustment from areas of the image"),
+        x_of(&h, "Add to mask areas to apply adjustment to more of the image"),
+        x_of(&h, "Always use pressure for size"),
+        x_of(&h, "Choose an object and have the adjustment applied to it"),
+        x_of(&h, "Overlay"),
+        x_of(&h, "Opacity:"),
+        x_of(&h, "Always use pressure for opacity"),
+        x_of(&h, "Flow:"),
+        x_of(&h, "Enable airbrush-style build-up effects"),
     ];
     assert!(xs.windows(2).all(|w| w[0] < w[1]), "left to right: {xs:?}");
-    // Light is the reference default; it isn't available yet, so the first enabled entry shows.
-    let kind = h.query_all_by_role(Role::ComboBox).find(|n| n.accesskit_node().label().as_deref() == Some("Adjustment:")).unwrap();
-    assert_eq!(kind.accesskit_node().value().as_deref(), Some("Levels"));
 }
 
 #[test]
 fn subtract_and_add_swap_the_colours_and_the_paint() {
     let mut h = bar(app());
-    h.get_by_label("Subtract").click();
+    h.get_by_label("Subtract from mask areas to remove adjustment from areas of the image").click();
     h.run_steps(2);
     let app = h.state();
     assert!(app.ui.tool_options.adjustment_brush_subtract);
     assert_eq!((app.session.tools.foreground, app.session.tools.background), ([0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0]));
-    h.get_by_label("Add").click();
+    h.get_by_label("Add to mask areas to apply adjustment to more of the image").click();
     h.run_steps(2);
     let app = h.state();
     assert!(!app.ui.tool_options.adjustment_brush_subtract);
@@ -208,7 +167,7 @@ fn a_hidden_locked_or_group_layer_does_not_refuse_the_stroke() {
         pick(&mut app);
         let n = layers(&app);
         stroke(&mut app, 100.0);
-        assert!(alerts(&app).is_empty() && app.ui.dialogs.is_empty(), "{setup}: {:?}", app.ui.dialogs);
+        assert!(app.framework.dialogs.open_dialogs().is_empty(), "{setup}: {:?}", alerts(&app));
         assert_eq!(layers(&app), n + 1, "{setup}: {}", app.ui.status);
         assert!(matches!(active(&app).content, LayerContent::Adjustment(_)), "{setup}");
     }

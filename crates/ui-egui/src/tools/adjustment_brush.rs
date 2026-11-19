@@ -3,11 +3,17 @@
 //! the stroke, or paints into the mask of the active adjustment layer of that kind. The stroke
 //! shows as the painting tools' trail while it is drawn and is applied on release.
 
+use craft::behavior::IconId;
+use craft::ui::buttons::{IconButton, ToggleButton};
+use craft::ui::choice::{Checkbox, Segmented};
+use craft::ui::contract::{Bind, Entry, Props as _, Show as _};
+use craft::ui::display::Divider;
+use craft::ui::pickers::Select;
 use photocraft_engine::adjustment_brush_cmds::{self as ab, ENTRIES, INDEXED_ALERT};
 use serde_json::json;
 
+use super::option_cells;
 use crate::PhotocraftApp;
-use crate::panels::options_bar::{opt_label, percent_field, pressure_button, whole_percent_field};
 use crate::state::Tool;
 
 /// The kind a stroke paints: the dropdown's entry, or the first offered one when the document's
@@ -44,11 +50,18 @@ pub fn set_subtract(app: &mut PhotocraftApp, subtract: bool) {
     }
 }
 
+/// The reference application's alert for a press in an Indexed Color document, in the UI language.
+fn indexed_alert() -> &'static str {
+    tl!(
+        "Could not complete your request because the tool does not work with Indexed Color images. Please convert the image to RGB or another supported mode before using."
+    )
+}
+
 /// A press in an Indexed Color document: the reference application's alert, and no stroke.
 pub fn press_refused(app: &mut PhotocraftApp) -> bool {
     let indexed = app.session.active().is_some_and(|st| st.doc.mode == photocraft_doc::ColorMode::Indexed);
     if indexed {
-        crate::brush_refusal::prompt(app, tl!(INDEXED_ALERT));
+        let _ = crate::dialogs::alerts::alert(app, indexed_alert());
     }
     indexed
 }
@@ -73,7 +86,9 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], l
             app.ui.vector_mask_target = false;
             app.ui.tool_options.adjustment_brush_followed = app.session.active().and_then(|st| st.active_layer).map(|l| l.0);
         }
-        Err(e) if e.contains(INDEXED_ALERT) => crate::brush_refusal::prompt(app, tl!(INDEXED_ALERT)),
+        Err(e) if e.contains(INDEXED_ALERT) => {
+            let _ = crate::dialogs::alerts::alert(app, indexed_alert());
+        }
         Err(e) => {
             app.ui.status = e;
             app.ui.status_error = true;
@@ -82,76 +97,110 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], l
     true
 }
 
-/// Does a separator line go above `kind` in the dropdown?
-fn starts_group(kind: &str) -> bool {
-    let i = ENTRIES.iter().position(|e| e.kind == kind);
-    i.and_then(|i| i.checked_sub(1)).and_then(|i| ENTRIES.get(i)).is_some_and(|e| e.separator_after)
+/// The Adjustment dropdown's rows: the entries in their groups, those the document can't take greyed.
+fn kind_entries(mode: photocraft_doc::ColorMode, depth: photocraft_doc::SampleType) -> Vec<Entry<&'static str>> {
+    let mut rows = Vec::new();
+    for e in ENTRIES.iter() {
+        rows.push(Entry::new(e.kind, tl!(e.label).to_owned()).enabled(ab::enabled_in(e.kind, mode, depth)));
+        if e.separator_after {
+            rows.push(Entry::separator());
+        }
+    }
+    rows
 }
 
 /// The options bar, left to right as in the reference application: (the tool preset picker) ·
 /// Adjustment · Subtract / Add · Brush Preset · Pressure for Size · Choose an object · Overlay ·
 /// Opacity · Pressure for Opacity · Flow · Airbrush. Returns false for another tool.
-pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bool {
+pub fn options_bar(ui: &mut egui::Ui, app: &mut PhotocraftApp, tool: Tool) -> bool {
     if tool != Tool::AdjustmentBrush {
         return false;
     }
     follow_active_layer(app);
     let (mode, depth) = app.session.active().map_or((photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8), |st| (st.doc.mode, st.doc.depth));
-    opt_label(ui, tl!("Adjustment:"));
-    let options: Vec<(&'static str, &str)> = ENTRIES.iter().map(|e| (e.kind, e.label)).collect();
-    let mut current = kind(app);
-    let chosen = crate::widgets::dropdown_wheel_grouped_enabled(
-        ui,
-        "adjustment-brush-kind",
-        tl!("Adjustment"),
-        &mut current,
-        &options,
-        150.0,
-        |k| starts_group(k),
-        |k| ab::enabled_in(k, mode, depth),
-    )
-    .0;
-    // Choosing an entry is no history state; the keys may land on a greyed one, which keeps the choice.
-    if let Some(&k) = chosen.last()
-        && ab::enabled_in(k, mode, depth)
-    {
+    let entries = kind_entries(mode, depth);
+    // Choosing an entry is no history state; a greyed entry can't be picked.
+    let picked = Select::new(tl!("Adjustment:").to_owned(), Bind::given(kind(app)), &entries).show(ui).events.committed().copied();
+    if let Some(k) = picked.filter(|k| ab::enabled_in(k, mode, depth)) {
         app.ui.tool_options.adjustment_brush_kind = k.into();
     }
+    let modes = [
+        Entry::new(true, tl!("Subtract from mask areas to remove adjustment from areas of the image").to_owned()).icon(IconId::new("minus")),
+        Entry::new(false, tl!("Add to mask areas to apply adjustment to more of the image").to_owned()).icon(IconId::new("plus")),
+    ];
     let subtract = app.ui.tool_options.adjustment_brush_subtract;
-    let sub = crate::icons::button(ui, "minus", 24.0, subtract, tl!("Subtract from mask areas to remove adjustment from areas of the image"));
-    let add = crate::icons::button(ui, "plus", 24.0, !subtract, tl!("Add to mask areas to apply adjustment to more of the image"));
-    if crate::brush_picker::named(sub, "Subtract").clicked() && !subtract {
-        set_subtract(app, true);
-    } else if crate::brush_picker::named(add, "Add").clicked() && subtract {
-        set_subtract(app, false);
+    if let Some(next) = Segmented::new(tl!("Mask mode").to_owned(), Bind::given(subtract), &modes).show(ui).value().copied()
+        && next != subtract
+    {
+        set_subtract(app, next);
     }
-    crate::widgets::vline(ui, 22.0);
-    crate::panels::brush_preset_chip(ui, &app.session.tools.brush, &mut app.ui);
-    crate::brush_picker::settings_toggle(app, ui);
+    Divider::vertical().show(ui);
+    crate::brush_picker::show_field(ui, app, true);
+    crate::brush_picker::settings_toggle(ui, app);
+
     let before = app.session.tools.brush.clone();
-    let mut b = before.clone();
-    if pressure_button(ui, b.pressure_size, tl!("Always use pressure for size"), false).clicked() {
-        b.pressure_size = !b.pressure_size;
+    let mut brush = before.clone();
+    let mut key = None;
+    let pressure =
+        ToggleButton::new(tl!("Always use pressure for size").to_owned(), Bind::given(brush.pressure_size)).icon(IconId::new("target")).icon_only().show(ui);
+    if let Some(on) = pressure.value().copied() {
+        brush.pressure_size = on;
+        key = pressure.events.iter().find_map(|e| crate::history_keys::coalesce("brush", e));
     }
-    crate::widgets::vline(ui, 22.0);
+    Divider::vertical().show(ui);
     // Present but inert: what it does was not measured.
-    ui.add_enabled_ui(false, |ui| {
-        crate::icons::button(ui, "square-dashed-mouse-pointer", 24.0, false, tl!("Choose an object and have the adjustment applied to it"));
-    });
+    let choose = tl!("Choose an object and have the adjustment applied to it");
+    IconButton::new(IconId::new("square-dashed-mouse-pointer")).label(choose).tooltip(choose).enabled(false).show(ui);
     // Its tint over the painted mask is its own item (#12520).
-    crate::widgets::checkbox(ui, &mut app.ui.tool_options.adjustment_brush_overlay, tl!("Overlay"));
-    crate::widgets::vline(ui, 22.0);
-    whole_percent_field(ui, tl!("Opacity"), &mut b.opacity, 1.0..=100.0, 62.0);
-    if pressure_button(ui, b.pressure_opacity, tl!("Always use pressure for opacity"), false).clicked() {
-        b.pressure_opacity = !b.pressure_opacity;
+    Checkbox::new(Bind::bound(&mut app.ui.tool_options.adjustment_brush_overlay)).label(tl!("Overlay").to_owned()).show(ui);
+    Divider::vertical().show(ui);
+
+    let mut alerts = Vec::new();
+    let mut opacity = (brush.opacity * 100.0).round();
+    let out = option_cells::number(tl!("Opacity:"), &mut opacity, 1.0..=100.0).whole().unit("%").show(ui);
+    key = out.events.iter().find_map(|e| crate::history_keys::coalesce("brush", e)).or(key);
+    brush.opacity = opacity / 100.0;
+    alerts.extend(out.out_of_range);
+    let pressure = ToggleButton::new(tl!("Always use pressure for opacity").to_owned(), Bind::given(brush.pressure_opacity))
+        .icon(IconId::new("target"))
+        .icon_only()
+        .show(ui);
+    if let Some(on) = pressure.value().copied() {
+        brush.pressure_opacity = on;
+        key = pressure.events.iter().find_map(|e| crate::history_keys::coalesce("brush", e)).or(key);
     }
-    percent_field(ui, tl!("Flow"), &mut b.flow, 1.0..=100.0, 62.0);
-    let airbrush = crate::icons::button(ui, "sparkles", 24.0, b.build_up, tl!("Enable airbrush-style build-up effects"));
-    if crate::brush_picker::named(airbrush, "Enable airbrush-style build-up effects").clicked() {
-        b.build_up = !b.build_up;
+    let mut flow = brush.flow * 100.0;
+    let out = option_cells::number(tl!("Flow:"), &mut flow, 1.0..=100.0).unit("%").show(ui);
+    key = out.events.iter().find_map(|e| crate::history_keys::coalesce("brush", e)).or(key);
+    brush.flow = flow / 100.0;
+    alerts.extend(out.out_of_range);
+    let airbrush = ToggleButton::new(tl!("Enable airbrush-style build-up effects").to_owned(), Bind::given(brush.build_up))
+        .icon(IconId::new("sparkles"))
+        .icon_only()
+        .show(ui);
+    if let Some(on) = airbrush.value().copied() {
+        brush.build_up = on;
+        key = airbrush.events.iter().find_map(|e| crate::history_keys::coalesce("brush", e)).or(key);
     }
-    crate::brush_panel::commit_gesture(app, ui.ctx(), &before, &b);
+    // A field shown without an edit keeps the brush's exact value (no rounding by showing the bar).
+    if out_unchanged(&before, &brush) {
+        return true;
+    }
+    crate::brush_panel::commit_keyed(app, &before, &brush, key);
+    for alert in &alerts {
+        option_cells::range_alert(app, ui, alert);
+    }
     true
+}
+
+/// Whether showing the bar left the brush as it was, up to the rounding of the percent fields.
+fn out_unchanged(before: &photocraft_engine::BrushSettings, after: &photocraft_engine::BrushSettings) -> bool {
+    let near = |a: f32, b: f32| (a - b).abs() < 0.005;
+    near(before.opacity, after.opacity)
+        && near(before.flow, after.flow)
+        && before.pressure_size == after.pressure_size
+        && before.pressure_opacity == after.pressure_opacity
+        && before.build_up == after.build_up
 }
 
 #[cfg(test)]

@@ -88,7 +88,7 @@ pub fn enabled_in(kind: &str, mode: ColorMode, depth: SampleType) -> bool {
 
 /// The kind the dropdown shows when `kind` is greyed in this document: `kind` itself when it is
 /// offered, else the first offered entry.
-pub fn offered_kind<'a>(kind: &'a str, mode: ColorMode, depth: SampleType) -> &'a str {
+pub fn offered_kind(kind: &str, mode: ColorMode, depth: SampleType) -> &str {
     if enabled_in(kind, mode, depth) {
         return kind;
     }
