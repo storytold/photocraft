@@ -11,6 +11,7 @@ use craft::keymap::import::kys;
 use craft::keymap::{Builtins, CommandRef, ImportOptions, Keymap, NoneDefined, Overrides, Profiles, Scopes, reserved};
 use craft::menu::Row;
 use craft::menu::shortcuts::{Area, ConflictMode, DialogState, DialogTab, Format, Options, Outcome, ShortcutWords, ShortcutsDialog, kys_error_text};
+use craft::ui::buttons::Button;
 use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, Entry, Props as _, Show as _};
 use craft::ui::pickers::Select;
@@ -43,7 +44,7 @@ pub(crate) struct ShortcutsSession {
     pub(crate) menus: MenusDraft,
     /// The Toolbar tab edits the visibility overrides, independent of the group layout.
     toolbar_hidden: Vec<String>,
-    /// Used to tell whether OK applies a toolbar edit. Other commands can still update preferences.
+    /// The opening overrides, used to apply only the user's edits on OK.
     toolbar_hidden_at_open: Vec<String>,
     /// The text of a set to review on the next pass, taken by that pass alone: a second pass of
     /// the same frame finds nothing to review.
@@ -183,8 +184,8 @@ fn pass(app: &mut PhotocraftApp, ui: &mut egui::Ui, press_ok: bool) {
     drop(tabs);
     match output.outcome {
         Some(Outcome::Ok) => {
-            let changed_toolbar = (toolbar_hidden_names(toolbar_hidden) != toolbar_hidden_names(toolbar_hidden_at_open)).then_some(toolbar_hidden.as_slice());
-            if let Err(e) = save_keys(app, keymap, profiles).and_then(|_| save_customizations(app, menus, changed_toolbar)) {
+            let hidden = merge_toolbar_visibility(toolbar_hidden_at_open, toolbar_hidden, &app.session.prefs().toolbar.hidden);
+            if let Err(e) = save_keys(app, keymap, profiles).and_then(|_| save_customizations(app, menus, hidden.as_deref())) {
                 app.ui.status = crate::i18n::fmt(tl!("The keyboard shortcuts were not saved: {error}"), &[("error", &e)]);
                 app.ui.status_error = true;
             }
@@ -286,13 +287,44 @@ fn save_customizations(app: &mut PhotocraftApp, menus: &MenusDraft, toolbar_hidd
 /// The visibility overrides ignore order and recognise older tool spellings. Keep unknown names
 /// in the comparison so Restore Defaults can clear them too.
 fn toolbar_hidden_names(hidden: &[String]) -> BTreeSet<String> {
-    hidden.iter().map(|name| ToolbarCustomization::tool_name(name).unwrap_or_else(|| name.clone())).collect()
+    hidden.iter().map(|name| toolbar_hidden_name(name)).collect()
+}
+
+fn toolbar_hidden_name(name: &str) -> String {
+    ToolbarCustomization::tool_name(name).unwrap_or_else(|| name.to_owned())
+}
+
+/// Applies the draft's net edits to the current preferences. Commands can update the same
+/// preferences while the dialog is open, so retain entries the user did not change.
+fn merge_toolbar_visibility(opened: &[String], draft: &[String], current: &[String]) -> Option<Vec<String>> {
+    let opened = toolbar_hidden_names(opened);
+    let edited = toolbar_hidden_names(draft);
+    if opened == edited {
+        return None;
+    }
+
+    let mut current_names = BTreeSet::new();
+    let mut merged = Vec::new();
+    for entry in current {
+        let name = toolbar_hidden_name(entry);
+        if !opened.contains(&name) || edited.contains(&name) {
+            current_names.insert(name);
+            merged.push(entry.clone());
+        }
+    }
+    for entry in draft {
+        let name = toolbar_hidden_name(entry);
+        if !opened.contains(&name) && current_names.insert(name) {
+            merged.push(entry.clone());
+        }
+    }
+    (merged.as_slice() != current).then_some(merged)
 }
 
 /// The Toolbar tab changes each tool's visibility override, leaving custom groups and extras in place.
 fn toolbar_tab<'a>(hidden: &'a mut Vec<String>, tools: &'a [(Tool, Option<String>)]) -> DialogTab<'a> {
     DialogTab::new("toolbar", tl!("Toolbar"), move |ui| {
-        let mut changed = ui.button(tl!("Restore Defaults")).clicked() && !hidden.is_empty();
+        let mut changed = Button::new(tl!("Restore Defaults")).show(ui).clicked() && !hidden.is_empty();
         if changed {
             hidden.clear();
         }

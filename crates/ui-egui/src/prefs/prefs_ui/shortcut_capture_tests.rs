@@ -298,3 +298,35 @@ fn unchanged_shortcuts_toolbar_draft_preserves_newer_toolbar_settings() {
         assert_eq!(h.state().session.prefs().toolbar.hidden, ["Move"], "reverted={reverted}");
     }
 }
+
+#[test]
+fn shortcuts_toolbar_applies_visibility_edits_to_current_settings() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable as _;
+
+    let mut h = harness();
+    let set_hidden = |app: &mut PhotocraftApp, hidden: &[&str]| {
+        app.run("prefs.set", json!({"path": "toolbar.hidden", "value": hidden})).unwrap();
+    };
+    set_hidden(h.state_mut(), &["Artboard Tool", "Future Tool"]);
+    open_toolbar(&mut h);
+
+    // A different settings writer adds overrides and uses a canonical spelling for Artboard.
+    set_hidden(h.state_mut(), &["Patch Tool", "Artboard", "Future Tool", "Unknown Added Tool"]);
+    h.get_by_role_and_label(Role::CheckBox, "Artboard Tool").click();
+    h.get_by_role_and_label(Role::CheckBox, "Move Tool").click();
+    h.run_steps(3);
+    h.get_by_label("OK").click();
+    h.run_steps(5);
+    assert!(!crate::prefs_ui::shortcuts_open(h.state()));
+    assert_eq!(h.state().session.prefs().toolbar.hidden, ["Patch Tool", "Future Tool", "Unknown Added Tool", "Move"]);
+
+    open_toolbar(&mut h);
+    set_hidden(h.state_mut(), &["Patch Tool", "Brush Tool", "Future Tool", "Unknown Added Tool", "Move", "Another Future Tool"]);
+    h.get_by_label("Restore Defaults").click();
+    h.run_steps(3);
+    h.get_by_label("OK").click();
+    h.run_steps(5);
+    assert!(!crate::prefs_ui::shortcuts_open(h.state()));
+    assert_eq!(h.state().session.prefs().toolbar.hidden, ["Brush Tool", "Another Future Tool"]);
+}
