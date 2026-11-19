@@ -24,7 +24,7 @@ const CTRL: Modifiers = Modifiers { ctrl: true, command: true, shift: false, alt
 /// A 400 × 300 document with a red layer covering (100,100)..(160,160), the Ruler from 60,60 to
 /// 340,240, and the Ruler tool active. Snapping, smart guides and the Move tool's Auto-Select are
 /// off so the drag offsets are exact.
-fn ruler_app() -> PhotocraftApp {
+fn ruler_app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 400, "height": 300})).unwrap();
     app.sync_views();
