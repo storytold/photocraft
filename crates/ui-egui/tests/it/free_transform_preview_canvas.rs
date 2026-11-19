@@ -14,7 +14,7 @@ use photocraft_ui_egui::PhotocraftApp;
 use photocraft_ui_egui::control::{ControlRequest, handle};
 use serde_json::{Value, json};
 
-type Harness = egui_kittest::Harness<'static, PhotocraftApp>;
+type Harness = egui_kittest::Harness<'static, Box<PhotocraftApp>>;
 
 /// The red square on the layer, in document pixels: x 100..200, y 100..200 of a 400 × 300 document.
 fn square() -> Rect {
