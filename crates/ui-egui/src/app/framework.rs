@@ -83,8 +83,6 @@ pub struct Framework {
     host: Arc<Host>,
     /// The UI language `host` speaks.
     lang: &'static str,
-    /// `host` in the language the Preferences window previews, while that differs from `lang`.
-    preview_host: Option<(craft::i18n::Lang, Arc<Host>)>,
     pub dialogs: DialogHost,
     /// The per-open state each open parameter dialog's family needs when its answer comes back, by dialog key.
     pub captured: std::collections::BTreeMap<String, serde_json::Value>,
@@ -270,7 +268,6 @@ impl Framework {
             host: Arc::new(build_host(&sections, lang, files.as_ref())),
             sections,
             lang,
-            preview_host: None,
             dialogs: DialogHost::new(),
             captured: Default::default(),
             overrides: Arc::new(Overrides::new()),
@@ -322,25 +319,6 @@ impl Framework {
             self.lang = lang;
             self.host = Arc::new(build_host(&self.sections, lang, self.files.as_ref()));
         }
-        // The Preferences window previews its draft language on its own labels, and the framework's
-        // words — the window's OK, Cancel and Apply among them — read the frame's host: the frame takes
-        // a host in that language while the preview differs from the committed one, and the committed
-        // host again once the draft is applied or dropped.
-        let preview = self.dialogs.get_mut::<crate::prefs_ui::PrefsDialog>().and_then(|prefs| prefs.preview());
-        let host = match preview {
-            Some(labels) if labels != self.host.lang() => match self.preview_host.as_ref().filter(|(lang, _)| *lang == labels) {
-                Some((_, host)) => Arc::clone(host),
-                None => {
-                    let host = Arc::new(self.host.with_lang(labels));
-                    self.preview_host = Some((labels, Arc::clone(&host)));
-                    host
-                }
-            },
-            _ => {
-                self.preview_host = None;
-                Arc::clone(&self.host)
-            }
-        };
         let rtl = i18n::framework_i18n().from_code(lang).is_some_and(|l| i18n::framework_i18n().rtl(l));
         let root = match theme.library() {
             Some(def) => base_root().library_theme(Arc::clone(def)),
@@ -364,7 +342,7 @@ impl Framework {
             commands = commands.catalog(catalog.clone());
         }
         let commands = commands.overrides(Arc::clone(&self.overrides)).gate(gate);
-        FrameInput::new(root).host(host).commands(commands).latched(latched)
+        FrameInput::new(root).host(Arc::clone(&self.host)).commands(commands).latched(latched)
     }
 
     /// Opens the suite folder this machine shares with the other Craft apps, in place of the
