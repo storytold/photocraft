@@ -241,8 +241,9 @@ fn layer_box_blurs_match_direct_convolution_at_any_radius() {
     ];
     let params = [
         FilterParams::GaussianBlur { radius: 4.5 },
+        // 9.3 already reaches past the layer's height with three boxes (edges repeated); a larger radius takes the same
+        // running sums and only made the direct-convolution oracle slow (#15652).
         FilterParams::GaussianBlur { radius: 9.3 },
-        FilterParams::GaussianBlur { radius: 40.0 },
         FilterParams::BoxBlur { radius: 5.0 },
         FilterParams::BoxBlur { radius: 70.0 },
     ];
