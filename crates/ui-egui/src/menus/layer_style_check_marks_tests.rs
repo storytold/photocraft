@@ -7,6 +7,10 @@ use photocraft_doc::LayerId;
 use serde_json::json;
 
 use super::*;
+// `checked` lives in `menus::state` on main; the rows come from `items::menu_rows`, which replaced
+// the old `menu_items` list (its rows name the command through `command.id` and their state
+// through `kind`).
+use super::state::checked;
 
 /// The ten effect entries of Layer › Layer Style, in menu order (`menu_catalog.rs`).
 const EFFECTS: [&str; 10] = [
@@ -35,7 +39,7 @@ const OTHERS: [&str; 8] = [
 ];
 
 /// A 64 × 64 document with a layer "Paint" above the background, "Paint" active.
-fn doc_with_layer() -> (PhotocraftApp, LayerId) {
+fn doc_with_layer() -> (Box<PhotocraftApp>, LayerId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 64, "height": 64, "background": "white"})).unwrap();
     app.sync_views();
@@ -55,12 +59,12 @@ fn marked(app: &PhotocraftApp) -> Vec<&'static str> {
 
 /// The same ten marks as the Layer menu itself builds them, which is what `ui.menu.list` reports.
 fn menu_marks(app: &PhotocraftApp) -> Vec<(&'static str, Option<bool>)> {
-    let items = menu_items(app);
+    let rows = menu_rows(app);
     EFFECTS
         .iter()
         .map(|id| {
-            let row = items.iter().find(|i| i.path == ["Layer", "Layer Style"] && i.id == *id);
-            (*id, row.unwrap_or_else(|| panic!("{id} is in Layer › Layer Style")).checked)
+            let found = rows.iter().find(|i| i.path == ["Layer", "Layer Style"] && i.command.id == *id);
+            (*id, found.unwrap_or_else(|| panic!("{id} is in Layer › Layer Style")).kind.checked())
         })
         .collect()
 }
