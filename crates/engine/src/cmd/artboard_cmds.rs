@@ -415,6 +415,12 @@ fn artboard_from_layers(s: &mut Session, p: &Value) -> Result<Value> {
         if ids.is_empty() || ids.iter().any(|id| doc.artboard_of(*id).is_some()) {
             return Err(EngineError::Other("select layers that are not in an artboard".into()));
         }
+        // The board takes the stack slot of the topmost selected top-level layer, as the
+        // reference application does (#14572): every selected top-level layer sits at or below
+        // that slot, so once they are removed the slot moves down by their count. Selected
+        // layers only inside groups keep going to the top (not measured).
+        let root: Vec<usize> = ids.iter().filter_map(|id| doc.layers.iter().position(|l| l.id == *id)).collect();
+        let slot = root.iter().max().map(|top| (top + 1).saturating_sub(root.len()));
         let mut children = Vec::with_capacity(ids.len());
         for id in &ids {
             children.push(doc.remove(*id).ok_or(EngineError::NoLayer(*id))?);
@@ -423,7 +429,13 @@ fn artboard_from_layers(s: &mut Session, p: &Value) -> Result<Value> {
         let rect = board_rect(cmd, [x, y, size[0].unwrap_or(w), size[1].unwrap_or(h)])?;
         let mut g = Layer::group(name.unwrap_or_else(|| next_artboard_name(doc)), children);
         set_artboard(&mut g, Artboard { rect, background, preset: String::new() });
-        let gid = doc.insert_above(None, g);
+        let gid = g.id;
+        match slot {
+            Some(i) => doc.layers.insert(i.min(doc.layers.len()), g),
+            None => {
+                doc.insert_above(None, g);
+            }
+        }
         crate::layer_multi_cmds::check_group_depth(doc, "Artboard from Layers")?;
         let shift = fit_canvas(doc);
         *active = Some(gid);
@@ -904,6 +916,9 @@ mod file_names_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/first_board_background_tests.rs"]
 mod first_board_background_tests;
+#[cfg(test)]
+#[path = "artboard_cmds/from_layers_stack_tests.rs"]
+mod from_layers_stack_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/pdf_page_order_tests.rs"]
 mod pdf_page_order_tests;
