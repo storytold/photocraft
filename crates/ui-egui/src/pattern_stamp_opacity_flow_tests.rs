@@ -17,14 +17,14 @@ use crate::canvas::{ToolEvent, display_doc, tool_event};
 use crate::state::Tool;
 
 /// The options bar of a new document with `tool`, and the dialog host for its alerts.
-fn bar(tool: Tool) -> Harness<'static, PhotocraftApp> {
+fn bar(tool: Tool) -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 80, "height": 80})).unwrap();
     app.ui.tool = tool;
     crate::theme::install_fonts(app.ctx());
     crate::theme::apply(app.ctx(), &crate::theme::AppTheme::pro());
     let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1800.0, 300.0)).with_step_dt(1.0 / 60.0).build_ui_state(
-        move |ui, app: &mut PhotocraftApp| {
+        move |ui, app: &mut Box<PhotocraftApp>| {
             crate::panels::options_bar(app, ui);
             crate::dialogs::run(app, ui);
         },
@@ -35,14 +35,14 @@ fn bar(tool: Tool) -> Harness<'static, PhotocraftApp> {
 }
 
 /// The field named `label` ("Opacity", "Flow"), with or without its caption's colon.
-fn field<'a>(h: &'a Harness<'static, PhotocraftApp>, label: &str) -> egui_kittest::Node<'a> {
+fn field<'a>(h: &'a Harness<'static, Box<PhotocraftApp>>, label: &str) -> egui_kittest::Node<'a> {
     h.query_all_by_role(Role::SpinButton)
         .find(|n| n.accesskit_node().label().is_some_and(|l| l.trim_end_matches(':') == label))
         .unwrap_or_else(|| panic!("the {label} field"))
 }
 
 /// Types `text` over the field named `label` and presses Enter.
-fn type_into(h: &mut Harness<'static, PhotocraftApp>, label: &str, text: &str) {
+fn type_into(h: &mut Harness<'static, Box<PhotocraftApp>>, label: &str, text: &str) {
     let at = field(h, label).rect().center();
     h.hover_at(at);
     h.run_steps(1);
@@ -58,7 +58,7 @@ fn type_into(h: &mut Harness<'static, PhotocraftApp>, label: &str, text: &str) {
 }
 
 /// The messages of the open alerts.
-fn alerts(h: &Harness<'static, PhotocraftApp>) -> Vec<String> {
+fn alerts(h: &Harness<'static, Box<PhotocraftApp>>) -> Vec<String> {
     h.state().framework.dialogs.open_dialogs().iter().filter_map(|d| d.fields.as_ref()?.get("message")?.as_str().map(str::to_string)).collect()
 }
 
@@ -98,7 +98,7 @@ fn reset_tool_puts_opacity_and_flow_back_to_100() {
 /// The issue's test document: 800 × 600 RGB 8 bit, white with its right half green (40,160,60),
 /// a 20 × 20 pattern of 10 px quadrants (red, green / blue, white) and the Pattern Stamp with a
 /// 40 px hard tip, Aligned on, at `opacity` and `flow` (fractions).
-fn document(opacity: f32, flow: f32) -> PhotocraftApp {
+fn document(opacity: f32, flow: f32) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 20, "height": 20})).unwrap();
     for (x, y, color) in [(0, 0, "#ff0000"), (10, 0, "#00ff00"), (0, 10, "#0000ff"), (10, 10, "#ffffff")] {

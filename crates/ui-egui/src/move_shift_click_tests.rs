@@ -11,7 +11,7 @@ use crate::canvas::{ToolEvent, tool_event};
 use crate::state::Tool;
 
 struct Fixture {
-    app: PhotocraftApp,
+    app: Box<PhotocraftApp>,
     background: LayerId,
     layers: [LayerId; 3],
 }
