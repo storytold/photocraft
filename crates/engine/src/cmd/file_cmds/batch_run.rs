@@ -916,8 +916,9 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
             crate::actions_cmds::begin_document_history(s, &action_name);
         }
         // Destination None takes the folder's files as tabs first, so the action plays on a
-        // document the user keeps (#13659).
-        let open_inputs: &[BatchInput] = if open_each_source && source == "folder" { &inputs } else { &[] };
+        // document the user keeps (#13659). `Some` names the folder's files as the inputs even
+        // when the folder holds none; `None` is the Source: Opened Files run.
+        let open_inputs: Option<&[BatchInput]> = if open_each_source && source == "folder" { Some(&inputs) } else { None };
         let result = batch_live_run(s, &steps, p, &policy, save, LiveRun { output: &output, format: &format, errors: Vec::new() }, open_inputs);
         if owns_history {
             crate::actions_cmds::finish_document_history(s);
@@ -1244,8 +1245,9 @@ struct LiveRun<'a> {
 
 /// The live run of Source: Opened Files, and of Destination None over a folder source (#13659).
 /// With `open_inputs` each file is opened as a tab of this session first, and a file that will not
-/// open is that input's error instead of a stop. If nothing opened at all, the answer carries those
-/// per-file errors, as a folder run whose every file failed does.
+/// open is that input's error instead of a stop. A folder that holds no eligible image plays
+/// nothing - it is not a run over the tabs already open. If nothing opened at all, the answer
+/// carries those per-file errors, as a folder run whose every file failed does.
 fn batch_live_run(
     s: &mut Session,
     steps: &[(String, Value)],
@@ -1253,11 +1255,22 @@ fn batch_live_run(
     policy: &BatchPolicy,
     save: SaveOpts,
     run: LiveRun<'_>,
-    open_inputs: &[BatchInput],
+    open_inputs: Option<&[BatchInput]>,
 ) -> Result<Value> {
+    // The error log must not replace any input, so it is checked against the whole folder list
+    // here, before opening: an input that fails to open never reaches the guard that reads the
+    // opened files, and an all-failed run would otherwise write its log over that file (#13659).
+    if let Some(inputs) = open_inputs {
+        validate_error_log(policy, inputs.iter().map(|input| input.path.clone()), std::iter::empty())?;
+    }
     let mut open_errors = Vec::new();
-    let originals = if open_inputs.is_empty() { live_document_targets(s) } else { open_batch_source_files(s, open_inputs, &mut open_errors) };
-    if originals.is_empty() && !open_errors.is_empty() {
+    let originals = match open_inputs {
+        Some(inputs) => open_batch_source_files(s, inputs, &mut open_errors),
+        None => live_document_targets(s),
+    };
+    if originals.is_empty() && open_inputs.is_some() {
+        // Nothing to play: no tab is added, no already-open tab is touched, and the answer is the
+        // empty one - carrying the per-file errors when every input failed to open.
         let log_failure = error_log_failure(policy.error_log.as_deref(), &open_errors);
         let mut value = batch_outcome(Vec::new(), open_errors, None, policy.error_log.as_deref().filter(|_| log_failure.is_none()));
         if let Some(error) = log_failure {

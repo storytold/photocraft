@@ -265,6 +265,52 @@ fn batch_destination_none_lists_an_unreadable_input_in_its_error_log() {
     assert!(!text.contains(&format!("File: \"{good}\"")), "the file that opened is not an error: {text}");
 }
 
+/// A folder source with no eligible image is an empty run, not a Source: Opened Files run: the
+/// action must not play on the tabs the user already had open (#13659 review).
+#[test]
+fn batch_destination_none_on_an_empty_folder_runs_nothing_on_the_open_tabs() {
+    let dir = destination_dir("empty-folder");
+    let empty = join(&dir, "empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    let a = source_png(&dir, "a.png", "#ff0000");
+    let bytes = std::fs::read(&a).unwrap();
+    let mut s = Session::new();
+    open_bytes_as(&mut s, "a.png", &bytes, None, Some(a.clone())).unwrap();
+    let result = s.execute("file.automate.batch", json!({"input": empty, "destination": "none", "steps": [["image.adjustments.invert", {}]]})).unwrap();
+    assert_eq!(result["errors"], json!([]), "{result}");
+    assert_eq!(result["documents"], json!(0), "an empty folder has no input to play: {result}");
+    assert_eq!(s.documents().len(), 1, "the run added no tabs");
+    assert_eq!(top_left_pixel(&s.active().unwrap().doc), [1.0, 0.0, 0.0, 1.0], "the already-open tab was not played");
+    assert!(!s.active().unwrap().is_dirty(), "and not marked changed");
+    assert_eq!(std::fs::read(&a).unwrap(), bytes, "and nothing was written");
+}
+
+/// The error log must not replace any input, including one that fails to open and so never
+/// reaches the guard over the opened files (#13659 review): the run is refused before a tab opens.
+#[test]
+fn batch_destination_none_refuses_an_error_log_that_names_one_of_the_inputs() {
+    let dir = destination_dir("error-log-input");
+    let corrupt = join(&dir, "corrupt.png");
+    std::fs::write(&corrupt, b"not a PNG").unwrap();
+    let good = source_png(&dir, "good.png", "#ff0000");
+    let mut s = Session::new();
+    // The log names the input that will not open: writing it would replace that file.
+    let error = s
+        .execute("file.automate.batch", json!({"input": [corrupt.clone(), good.clone()], "destination": "none", "errorLog": corrupt.clone(), "steps": []}))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("errorLog"), "{error}");
+    assert_eq!(s.documents().len(), 0, "the refused run opens no tab at all: {error}");
+    assert_eq!(std::fs::read(&corrupt).unwrap(), b"not a PNG", "the log did not replace the input");
+    // And the same guard now runs before opening, for a log naming an input that would open.
+    let error = s
+        .execute("file.automate.batch", json!({"input": [corrupt.clone(), good.clone()], "destination": "none", "errorLog": good.clone(), "steps": []}))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("errorLog"), "{error}");
+    assert_eq!(s.documents().len(), 0, "the second refused run opens no tab either: {error}");
+}
+
 /// The dialog can now ask for Source: Opened Files beside Save and Close. The issue measured no
 /// such combination, and the command keeps its existing rule: Save and Close needs a folder source.
 #[test]
