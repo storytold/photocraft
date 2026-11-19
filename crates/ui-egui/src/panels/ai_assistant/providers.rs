@@ -55,15 +55,16 @@ pub struct ActiveRun {
     pub rx: Receiver<StreamEvent>,
     cancelled: Arc<AtomicBool>,
     child: Arc<Mutex<Option<Child>>>,
+    kill_tree: bool,
 }
 
 impl ActiveRun {
-    /// Request cancellation and kill the child process if still alive.
+    /// Request cancellation and kill the child process (and process tree for Windows batch shims) if still alive.
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::SeqCst);
         let mut guard = self.child.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(child) = guard.as_mut() {
-            let _ = child.kill();
+            terminate_child(child, self.kill_tree);
         }
     }
 }
@@ -94,12 +95,13 @@ pub fn spawn(req: RunRequest) -> ActiveRun {
     let (tx, rx) = mpsc::channel();
     let cancelled = Arc::new(AtomicBool::new(false));
     let child_slot: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
+    let kill_tree = uses_windows_batch_shim(&req.cli_bin);
 
     let worker_cancelled = Arc::clone(&cancelled);
     let worker_child = Arc::clone(&child_slot);
     let _ = std::thread::Builder::new().name("ai-assistant".into()).spawn(move || {
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_worker(req, &tx, &worker_cancelled, &worker_child);
+            run_worker(req, &tx, &worker_cancelled, &worker_child, kill_tree);
         }));
         if outcome.is_err() {
             let _ = tx.send(StreamEvent::Error("AI worker exited unexpectedly.".to_owned()));
@@ -107,10 +109,10 @@ pub fn spawn(req: RunRequest) -> ActiveRun {
         }
     });
 
-    ActiveRun { rx, cancelled, child: child_slot }
+    ActiveRun { rx, cancelled, child: child_slot, kill_tree }
 }
 
-fn run_worker(req: RunRequest, tx: &Sender<StreamEvent>, cancelled: &AtomicBool, child_slot: &Mutex<Option<Child>>) {
+fn run_worker(req: RunRequest, tx: &Sender<StreamEvent>, cancelled: &AtomicBool, child_slot: &Mutex<Option<Child>>, kill_tree: bool) {
     let temp_dir = make_temp_run_dir();
     let cmd_res = build_command(&req, temp_dir.as_deref());
     let (mut cmd, stdin_prompt) = match cmd_res {
@@ -134,18 +136,13 @@ fn run_worker(req: RunRequest, tx: &Sender<StreamEvent>, cancelled: &AtomicBool,
         }
     };
 
-    if let Some(prompt_text) = stdin_prompt
-        && let Some(mut stdin) = child.stdin.take()
-    {
-        let _ = stdin.write_all(prompt_text.as_bytes());
-    }
-
+    let stdin_pipe = child.stdin.take();
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
     {
         let mut guard = child_slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if cancelled.load(Ordering::SeqCst) {
-            let _ = child.kill();
+            terminate_child(&mut child, kill_tree);
         }
         *guard = Some(child);
     }
@@ -158,6 +155,15 @@ fn run_worker(req: RunRequest, tx: &Sender<StreamEvent>, cancelled: &AtomicBool,
             buf
         })
     });
+
+    // Write piped prompt on a dedicated thread after publishing `child` and starting readers so
+    // large prompts cannot deadlock the pipe buffer and cancellation closes the pipe cleanly.
+    let stdin_handle = match (stdin_prompt, stdin_pipe) {
+        (Some(prompt_text), Some(mut stdin)) => Some(std::thread::spawn(move || {
+            let _ = stdin.write_all(prompt_text.as_bytes());
+        })),
+        _ => None,
+    };
 
     let mut emitted_text = false;
     if let Some(out_pipe) = stdout {
@@ -175,7 +181,10 @@ fn run_worker(req: RunRequest, tx: &Sender<StreamEvent>, cancelled: &AtomicBool,
         }
     }
 
-    let exit_status = wait_child_cancellable(child_slot, cancelled);
+    let exit_status = wait_child_cancellable(child_slot, cancelled, kill_tree);
+    if let Some(h) = stdin_handle {
+        let _ = h.join();
+    }
     let stderr_text = stderr_handle.and_then(|h| h.join().ok()).unwrap_or_default();
 
     if !cancelled.load(Ordering::SeqCst)
@@ -201,14 +210,28 @@ fn send_wake(tx: &Sender<StreamEvent>, ctx: &egui::Context, ev: StreamEvent) {
     ctx.request_repaint();
 }
 
+/// Terminate `child`, and on Windows when `kill_tree` is set (`.cmd`/`.bat` shims),
+/// terminate the entire process tree via `taskkill /T /F` so descendant Node/MCP processes
+/// do not keep inherited stdout/stderr pipe handles open.
+fn terminate_child(child: &mut Child, kill_tree: bool) {
+    #[cfg(windows)]
+    if kill_tree {
+        let pid = child.id().to_string();
+        let _ = Command::new("taskkill").args(["/PID", &pid, "/T", "/F"]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status();
+    }
+    #[cfg(not(windows))]
+    let _ = kill_tree;
+    let _ = child.kill();
+}
+
 /// Poll `child_slot` with short mutex acquisitions so `ActiveRun::cancel` and `Drop` can acquire
 /// the lock promptly and kill the subprocess without deadlocking on a blocking `wait()`.
-fn wait_child_cancellable(child_slot: &Mutex<Option<Child>>, cancelled: &AtomicBool) -> Option<ExitStatus> {
+fn wait_child_cancellable(child_slot: &Mutex<Option<Child>>, cancelled: &AtomicBool, kill_tree: bool) -> Option<ExitStatus> {
     loop {
         let mut guard = child_slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let child = guard.as_mut()?;
         if cancelled.load(Ordering::SeqCst) {
-            let _ = child.kill();
+            terminate_child(child, kill_tree);
         }
         match child.try_wait() {
             Ok(Some(status)) => {
