@@ -431,8 +431,13 @@ fn editing_the_options_bar_amount_reenables_smoothing() {
 
 #[test]
 fn every_section_draws_without_issuing_commands() {
-    for (panel, view) in [("brushSettings", None), ("brushes", Some(PresetView::List)), ("brushes", Some(PresetView::Grid))] {
-        for section in 0..SECTIONS.len() {
+    // Brush Settings draws the selected section's controls, but only up to `CHECKBOX_ONLY_START`: a later section is
+    // reset to 0 before drawing (`brush_settings.rs`, tested by `checkbox_only_rows_cannot_restore_an_empty_properties_pane`).
+    // The Brushes panel does not read the section at all, so one run per view covers it (#15652).
+    for (panel, view, sections) in
+        [("brushSettings", None, 0..CHECKBOX_ONLY_START), ("brushes", Some(PresetView::List), 0..1), ("brushes", Some(PresetView::Grid), 0..1)]
+    {
+        for section in sections {
             let mut h = harness(panel, section);
             if let Some(view) = view {
                 h.state_mut().ui.brushes_panel.view = view;
