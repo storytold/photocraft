@@ -418,7 +418,8 @@ impl LayerTree for PhotoLayers<'_> {
                 crate::i18n::fmt(tl!("Add a mask  (from the selection; {key} inverts)"), &[("key", &crate::shortcuts::pretty("Alt"))])
             }
         });
-        static MENUS: crate::i18n::LangCache<(), (Vec<Entry<String>>, Vec<Entry<String>>)> = crate::i18n::LangCache::new();
+        type FooterMenus = (Vec<Entry<String>>, Vec<Entry<String>>);
+        static MENUS: crate::i18n::LangCache<(), FooterMenus> = crate::i18n::LangCache::new();
         let (adjustments, styles) = MENUS.get_or_build((), || {
             let mut adjustments: Vec<Entry<String>> = photocraft_engine::command_specs()
                 .iter()
