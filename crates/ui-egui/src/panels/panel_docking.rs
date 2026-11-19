@@ -6,9 +6,8 @@
 //! The lock is `app.workspaces.set.locked`.
 
 use craft::behavior::dock::{Action, DockEdge, DockPlacement, Layout, Node, PanelPlace, PanelState, Permissions, SplitSize, Target};
-use craft::behavior::overlay::Side;
 use craft::behavior::{DockSide, EditEvent, EditEvents, IconId};
-use craft::ui::contract::{Bind, BodyCx, SizeLimits};
+use craft::ui::contract::{Bind, BodyCx, Lazy, SizeLimits};
 use craft::ui::docking::{
     DockCommands, DockConfig, DockEvent, DockPanels, DockScene, DockSizes, DockTo, DragUnit, FloatSpace, GroupAt, HidePanels, PanelSpec, actions, move_actions,
     request_actions,
@@ -54,16 +53,6 @@ pub(crate) fn is_front(app: &PhotocraftApp, id: &str) -> bool {
     let panel = id.to_owned();
     let layout = &app.ui.docking.layout;
     layout.panel_state(&panel) == PanelState::Front || (layout.opens_in_flyout(&panel) && app.ui.flyout.as_ref() == Some(&panel))
-}
-
-/// The side of the Toolbar its flyouts and drawer open on: the side of the canvas. A toolbar in the end dock opens
-/// towards the start, any other toward the end.
-pub(crate) fn toolbar_opens(app: &PhotocraftApp) -> Side {
-    let layout = &app.ui.docking.layout;
-    match layout.place(&TOOLBAR.to_owned()) {
-        Some(PanelPlace::Dock { path, .. }) if layout.dock_path(DockEdge::End).is_some_and(|end| end == path) => Side::Start,
-        _ => Side::End,
-    }
 }
 
 /// Shows or hides panel `id` (an id or a label). `Some(true)` opens a hidden panel at its place, and brings a shown
@@ -202,7 +191,11 @@ impl DockPanels<String> for Panels<'_> {
             return Some(match at {
                 GroupAt::Measure(width) => super::toolbar::measure(self.app, ui, width),
                 GroupAt::Show(rect) => {
-                    super::toolbar::toolbar(self.app, ui);
+                    // The rail settles as a panel body does: while nothing it shows changed and no input reaches it,
+                    // the frame repaints its last run instead of running every tool button again (#15493).
+                    let version = super::region_versions::toolbar_drawn(self.app, ui);
+                    let app = &mut *self.app;
+                    Lazy::new("toolbar", 0.0).settles(true).content(version).show(ui, |ui| super::toolbar::toolbar(app, ui));
                     rect.height()
                 }
             });

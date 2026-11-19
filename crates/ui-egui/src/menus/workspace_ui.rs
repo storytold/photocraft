@@ -10,7 +10,7 @@ use craft::keymap::{CommandRef, Mods};
 use craft::ui::contract::{Bind, CommandSet as _};
 use craft::ui::dialog::DialogResult;
 use craft::ui::docking::{WorkspaceAsk, WorkspaceCommands, run_workspace, workspace_states};
-use craft::ui::patterns::dock::{HostedDeleteWorkspace, HostedNewWorkspace, NewWorkspace, WorkspaceSwitcher};
+use craft::ui::patterns::dock::{HostedDeleteWorkspace, HostedNewWorkspace, NewWorkspace};
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamKind, ParamLayout, ParamResult};
 use craft::ui::runtime::commands::CommandState;
 use craft::ui::value_drag::SliderScale;
@@ -312,17 +312,6 @@ pub fn take(app: &mut PhotocraftApp, _ctx: &egui::Context) {
         if let DialogResult::Ok(id) = result {
             let _ = delete_id(app, &id);
         }
-    }
-}
-
-/// The workspace switcher of the title bar.
-pub fn switcher(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let out = WorkspaceSwitcher::new(&app.workspaces.set).show(ui);
-    if let Some(id) = out.switched
-        && let Err(message) = select(app, &id)
-    {
-        app.ui.status = message;
-        app.ui.status_error = true;
     }
 }
 
