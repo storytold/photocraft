@@ -114,8 +114,10 @@ async fn read_retries_on_a_dropped_connection_and_edits_do_not() {
     assert!(error.contains("inspect state before retrying"), "{error}");
     assert!(!error.contains("retried"), "{error}");
 
+    // Each connection task reports after it sees the socket close, which can trail the client's
+    // error. The channel closes once both tasks and the accept loop are done.
     let mut all = Vec::new();
-    while let Ok(served) = seen_rx.try_recv() {
+    while let Some(served) = seen_rx.recv().await {
         all.extend(served);
     }
     assert_eq!(all.len(), 2, "one request per connection, no edit resend: {all:?}");
@@ -136,8 +138,18 @@ async fn an_idle_connection_is_replaced_before_the_next_call() {
     bridge.call_read("document.inspect", json!({})).await.expect("second call reconnects after idling");
 
     assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 2, "the idle connection was replaced, not reused");
-    let first = seen_rx.try_recv().expect("the replaced connection closed, reporting what it served");
-    assert_eq!(first.len(), 1, "each connection served only the request that followed its auth: {first:?}");
+    // A connection task reports after it reads the close, which can come after the call returns.
+    // Dropping the bridge closes every socket it holds, so the channel closes once both
+    // connections have reported.
+    drop(bridge);
+    let mut reports = Vec::new();
+    while let Some(served) = seen_rx.recv().await {
+        reports.push(served);
+    }
+    assert_eq!(reports.len(), 2, "both connections closed and reported: {reports:?}");
+    for served in &reports {
+        assert_eq!(served.len(), 1, "each connection served only the request that followed its auth: {reports:?}");
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
