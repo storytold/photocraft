@@ -4,7 +4,7 @@
 //! The session holds everything the dialog edits: the draft keymap, the shortcut sets, the Menus
 //! draft and the text of a set waiting to be reviewed. Cancel drops it and the runtime never saw
 //! a change; OK writes the preferences once ([`save_keys`], then the menus), and the runtime's
-//! keymap follows the new preferences revision (`shortcut_dispatch::overrides`).
+//! keymap follows the new shortcut preferences (`shortcut_dispatch::overrides`).
 //!
 //! The Toolbar tab is not here: Edit › Toolbar opens the toolbar drawer.
 
@@ -79,7 +79,12 @@ pub(crate) fn profiles_of(prefs: &Preferences) -> Profiles {
 /// runtime's keymap is built for, and the preferences' bindings as overrides.
 pub(crate) fn draft_keymap(app: &PhotocraftApp) -> Keymap {
     let platform = windows::os_of(app.ctx());
-    Keymap::new(crate::shortcut_dispatch::command_rows(app).into_iter().chain(crate::shortcut_dispatch::bridged_rows()).collect(), Scopes::new(), platform)
+    // The runtime catalog's held rows while they are current; built here before the first frame holds them.
+    let rows = match app.framework.catalog_rows_at(app.session.actions.list.revision()) {
+        Some(rows) => rows.to_vec(),
+        None => crate::shortcut_dispatch::command_rows(app),
+    };
+    Keymap::new(rows.into_iter().chain(crate::shortcut_dispatch::bridged_rows()).collect(), Scopes::new(), platform)
         .with_reserved(reserved::system(platform))
         .with_overrides(keymap_defs::prefs_overrides(app.session.prefs()))
 }

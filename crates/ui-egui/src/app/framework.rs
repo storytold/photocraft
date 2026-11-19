@@ -89,14 +89,25 @@ pub struct Framework {
     /// The runtime's keymap overrides. The runtime rebuilds its keymap when the `Arc` changes, so
     /// it is replaced only when the bindings it carries change.
     overrides: Arc<Overrides>,
-    /// The preferences revision `overrides` and `catalog` were last built at.
-    overrides_rev: Option<u64>,
-    /// The app's command catalog as of `overrides_rev`.
+    /// What `overrides` was built from: the preferences' catalog revision and the actions list's revision.
+    overrides_key: Option<(u64, u64)>,
+    /// Advances each time `overrides` is replaced.
+    overrides_generation: u64,
+    /// The app's command catalog, built from `catalog_rows`.
     catalog: Option<AppCatalog>,
-    /// The rows `catalog` was built from, and its generation: the runtime rebuilds its keymap when the generation
-    /// changes, so it advances only when the rows differ.
+    /// The rows `catalog` was built from ([`command_rows`](crate::shortcut_dispatch::command_rows)), the actions
+    /// list's revision they were built at (their one input that changes at run time), and the catalog's generation:
+    /// the runtime rebuilds its keymap when the generation changes, so it advances only when the rows are rebuilt.
     catalog_rows: Vec<craft::keymap::CommandDef>,
+    catalog_rows_rev: Option<u64>,
     catalog_generation: u64,
+    /// How many times the rows and the overrides were built, for the count trials.
+    #[cfg(test)]
+    pub(crate) catalog_builds: usize,
+    #[cfg(test)]
+    pub(crate) overrides_builds: usize,
+    /// The states the keyed command sources last computed ([`command_states`]).
+    pub(crate) held_states: HeldStates,
     /// The file services the host gives components (pickers, reads and writes); `None` keeps the
     /// host's own default.
     files: Option<Arc<dyn Files>>,
@@ -271,10 +282,17 @@ impl Framework {
             dialogs: DialogHost::new(),
             captured: Default::default(),
             overrides: Arc::new(Overrides::new()),
-            overrides_rev: None,
+            overrides_key: None,
+            overrides_generation: 0,
             catalog: None,
             catalog_rows: Vec::new(),
+            catalog_rows_rev: None,
             catalog_generation: 0,
+            #[cfg(test)]
+            catalog_builds: 0,
+            #[cfg(test)]
+            overrides_builds: 0,
+            held_states: HeldStates::default(),
             files,
             fired: Vec::new(),
             refused: false,
@@ -476,26 +494,47 @@ impl Framework {
             .unwrap_or_else(|| id.as_str().to_owned())
     }
 
-    /// What the runtime's keymap was last built from: the preferences revision of the overrides and the catalog's
-    /// generation. They change at the start of the frame whose keymap follows them, so a surface that shows the
-    /// keymap's chords (the menu model) hashes them to rebuild in that frame.
-    pub(crate) fn keymap_inputs(&self) -> (Option<u64>, u64) {
-        (self.overrides_rev, self.catalog_generation)
+    /// What the runtime's keymap was last built from: the generations of the overrides and of the catalog. They
+    /// change at the start of the frame whose keymap follows them, so a surface that shows the keymap's chords (the
+    /// menu model) hashes them to rebuild in that frame.
+    pub(crate) fn keymap_inputs(&self) -> (u64, u64) {
+        (self.overrides_generation, self.catalog_generation)
     }
 
-    /// Rebuilds the catalog and the runtime's keymap overrides at preferences revision `rev`. The
-    /// pane moves are unbound in the overrides, because PhotoCraft's own table binds F6 and
-    /// Shift+F6 (Window › Color, Select › Modify › Feather) until those are a framework
-    /// `CommandSet`. The held `Arc` is replaced only when the bindings differ, so the runtime
-    /// rebuilds its keymap only on a change.
-    fn set_overrides(&mut self, rev: u64, catalog: Option<AppCatalog>, mut overrides: Overrides) {
-        self.overrides_rev = Some(rev);
-        self.catalog = catalog;
+    /// The catalog's rows when they were built at actions list revision `actions_rev`, else `None`.
+    pub(crate) fn catalog_rows_at(&self, actions_rev: u64) -> Option<&[craft::keymap::CommandDef]> {
+        (self.catalog_rows_rev == Some(actions_rev)).then_some(self.catalog_rows.as_slice())
+    }
+
+    /// Takes `rows`, built at actions list revision `actions_rev`, as the catalog's rows: a new catalog generation.
+    fn set_catalog(&mut self, actions_rev: u64, rows: Vec<craft::keymap::CommandDef>) {
+        self.catalog_generation += 1;
+        self.catalog = crate::shortcut_dispatch::catalog(rows.clone(), self.catalog_generation);
+        self.catalog_rows = rows;
+        self.catalog_rows_rev = Some(actions_rev);
+        #[cfg(test)]
+        {
+            self.catalog_builds += 1;
+        }
+    }
+
+    /// Takes the runtime's keymap overrides built from `key` ([`Self::overrides_key`]). The pane
+    /// moves are unbound in the overrides, because PhotoCraft's own table binds F6 and Shift+F6
+    /// (Window › Color, Select › Modify › Feather) until those are a framework `CommandSet`. The
+    /// held `Arc` is replaced only when the bindings differ, so the runtime rebuilds its keymap
+    /// only on a change.
+    fn set_overrides(&mut self, key: (u64, u64), mut overrides: Overrides) {
+        self.overrides_key = Some(key);
         for command in [NavCommand::NextPane, NavCommand::PreviousPane] {
             overrides.insert(CommandRef::from(command).key(), Vec::new());
         }
         if *self.overrides != overrides {
             self.overrides = Arc::new(overrides);
+            self.overrides_generation += 1;
+        }
+        #[cfg(test)]
+        {
+            self.overrides_builds += 1;
         }
     }
 }
@@ -505,6 +544,10 @@ impl Framework {
 pub(crate) struct CommandSource {
     /// The states of the source's commands for the coming frame.
     states: fn(&PhotocraftApp) -> Vec<(CommandRef, CommandState)>,
+    /// What `states` reads, for a source whose every input is a plain value or a revision that moves exactly when
+    /// the data changes: the states are computed again only when the key changes. `None`: computed every frame,
+    /// because what the source reads has no such revision yet.
+    key: Option<fn(&PhotocraftApp) -> StatesKey>,
     /// Runs `command` when it is this source's; whether it was.
     run: fn(&mut PhotocraftApp, &egui::Context, &CommandRef) -> bool,
 }
@@ -512,22 +555,68 @@ pub(crate) struct CommandSource {
 /// Every command source, in the order [`run_command`] tries them. The theme has no entry: it has
 /// no command state, and its picks run through `menus::invoke`.
 pub(crate) const COMMAND_SOURCES: &[CommandSource] = &[
-    CommandSource { states: crate::panels::registry::states, run: crate::panels::registry::run_fired },
-    CommandSource { states: tool_states, run: run_tool },
-    CommandSource { states: crate::workspace_ui::states, run: crate::workspace_ui::run_fired },
-    CommandSource { states: crate::slice_ui::command_states, run: crate::slice_ui::run_fired },
-    CommandSource { states: crate::align_bar::command_states, run: crate::align_bar::run_fired },
-    CommandSource { states: crate::artboard_tool::command_states, run: crate::artboard_tool::run_fired },
+    CommandSource { states: crate::panels::registry::states, key: None, run: crate::panels::registry::run_fired },
+    CommandSource { states: tool_states, key: Some(tool_states_key), run: run_tool },
+    CommandSource { states: crate::workspace_ui::states, key: None, run: crate::workspace_ui::run_fired },
+    CommandSource { states: crate::slice_ui::command_states, key: Some(crate::slice_ui::command_states_key), run: crate::slice_ui::run_fired },
+    CommandSource { states: crate::align_bar::command_states, key: None, run: crate::align_bar::run_fired },
+    CommandSource { states: crate::artboard_tool::command_states, key: Some(crate::artboard_tool::command_states_key), run: crate::artboard_tool::run_fired },
     // Space+F: the pasteboard colour keys of the held Hand.
-    CommandSource { states: |_| Vec::new(), run: crate::canvas_tool_menu::run_canvas_color },
+    CommandSource { states: |_| Vec::new(), key: Some(|_| StatesKey::default()), run: crate::canvas_tool_menu::run_canvas_color },
     // The options bar's engine-command buttons: their commands run through `shortcuts::handle`.
-    CommandSource { states: crate::panels::options_bar::selection::command_states, run: |_, _, _| false },
+    CommandSource { states: crate::panels::options_bar::selection::command_states, key: None, run: |_, _, _| false },
 ];
+
+/// The key of a [`CommandSource`]'s states: the plain values and exact revisions they are computed from, so equal
+/// keys mean equal states.
+pub(crate) type StatesKey = [u64; 4];
+
+/// The states each keyed [`CommandSource`] last computed, by its place in [`COMMAND_SOURCES`], with their key.
+#[derive(Default)]
+pub(crate) struct HeldStates {
+    kept: Vec<Option<(StatesKey, Vec<(CommandRef, CommandState)>)>>,
+    /// How many times each source computed its states, for the count trials.
+    #[cfg(test)]
+    pub(crate) runs: Vec<usize>,
+}
 
 /// The tool commands: the current tool's row is checked.
 fn tool_states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandState)> {
     Tool::ALL.iter().map(|&tool| (CommandRef::from(crate::panels::tool_commands::command_of(tool)), CommandState::new().checked(app.ui.tool == tool))).collect()
 }
+
+/// What [`tool_states`] reads: the tool.
+fn tool_states_key(app: &PhotocraftApp) -> StatesKey {
+    [app.ui.tool as u64, 0, 0, 0]
+}
+
+/// The states of every command source for the coming frame. A keyed source runs only when its key changed since it
+/// last ran.
+fn command_states(app: &PhotocraftApp, held: &mut HeldStates) -> Vec<(CommandRef, CommandState)> {
+    held.kept.resize(COMMAND_SOURCES.len(), None);
+    #[cfg(test)]
+    held.runs.resize(COMMAND_SOURCES.len(), 0);
+    let mut states = Vec::new();
+    for (at, source) in COMMAND_SOURCES.iter().enumerate() {
+        let key = source.key.map(|key| key(app));
+        match (&held.kept[at], key) {
+            (Some((was, kept)), Some(key)) if *was == key => states.extend_from_slice(kept),
+            _ => {
+                #[cfg(test)]
+                {
+                    held.runs[at] += 1;
+                }
+                let computed = (source.states)(app);
+                states.extend_from_slice(&computed);
+                held.kept[at] = key.map(|key| (key, computed));
+            }
+        }
+    }
+    states
+}
+
+#[cfg(test)]
+mod catalog_tests;
 
 /// Selects the tool a tool command names.
 fn run_tool(app: &mut PhotocraftApp, _ctx: &egui::Context, command: &CommandRef) -> bool {
@@ -549,23 +638,24 @@ impl PhotocraftApp {
     /// runs them), the commands the canvas ran (`record_view_commands`, in `logic`) and whether a
     /// component refused its input.
     pub(crate) fn framework_before_input(&mut self, ctx: &egui::Context) {
-        // The catalog and the bindings come from walking the whole command table: only after a
-        // preferences change.
-        let rev = self.session.prefs.rev();
-        if self.framework.overrides_rev != Some(rev) {
+        // The catalog's rows change only with the actions list; the bindings also with the shortcut
+        // preferences.
+        let actions_rev = self.session.actions.list.revision();
+        if self.framework.catalog_rows_rev != Some(actions_rev) {
             let rows = crate::shortcut_dispatch::command_rows(self);
-            if !crate::shortcut_dispatch::same_rows(&self.framework.catalog_rows, &rows) {
-                self.framework.catalog_generation += 1;
-                self.framework.catalog_rows = rows.clone();
-            }
-            let catalog = crate::shortcut_dispatch::catalog(rows, self.framework.catalog_generation);
-            let overrides = crate::shortcut_dispatch::overrides(self);
-            self.framework.set_overrides(rev, catalog, overrides);
+            self.framework.set_catalog(actions_rev, rows);
+        }
+        let overrides_key = (self.session.prefs.catalog_rev(), actions_rev);
+        if self.framework.overrides_key != Some(overrides_key) {
+            let overrides = crate::shortcut_dispatch::overrides(self, &self.framework.catalog_rows);
+            self.framework.set_overrides(overrides_key, overrides);
         }
         if self.framework.sync_theme(&mut self.session) {
             crate::prefs_ui::show_selected_theme(self, ctx);
         }
-        let states: Vec<(CommandRef, CommandState)> = COMMAND_SOURCES.iter().flat_map(|source| (source.states)(self)).collect();
+        let mut held = std::mem::take(&mut self.framework.held_states);
+        let states = command_states(self, &mut held);
+        self.framework.held_states = held;
         let gate = crate::menus::command_gate(self);
         let latched = self.ui.shell.latched;
         embed::before_input(ctx, |output: FrameOutput| {
