@@ -121,7 +121,9 @@ fn is_ui_crate(name: &str) -> bool {
 
 fn is_craft_ui_feature(feature: &str) -> bool {
     // The facade has no default UI features. These enable its UI, egui integration, or UI-only modules.
-    feature.starts_with("ui-") || matches!(feature, "ui" | "screen-testing" | "keymap-egui" | "layers" | "menu" | "dialogs")
+    feature.starts_with("ui-")
+        || feature.starts_with("cloud-ui-")
+        || matches!(feature, "ui" | "cloud-ui" | "theme-editor" | "screen-testing" | "keymap-egui" | "layers" | "menu" | "dialogs")
 }
 
 fn craft_ui_enabled(package: &Value, dependency: &Value, name: &str) -> bool {
@@ -426,19 +428,24 @@ mod tests {
     #[test]
     fn craft_ui_guard_uses_features_for_git_and_path_dependencies() {
         for path in [None, Some("/x/craft-libs/crates/craft")] {
-            for (features, forwarded, expected) in [
-                (&["imaging", "color-ui", "font-manager"][..], None, false),
-                (&["ui"][..], None, true),
-                (&["screen-testing"][..], None, true),
-                (&["layers"][..], None, true),
-                (&["imaging"][..], Some("facade?/ui-testing"), true),
+            for (features, rename, forwarded, expected) in [
+                (&["imaging", "color-ui", "font-manager"][..], None, None, false),
+                (&["ui"][..], None, None, true),
+                (&["screen-testing"][..], None, None, true),
+                (&["layers"][..], None, None, true),
+                (&["cloud-ui"][..], None, None, true),
+                (&["cloud-ui-cloud"][..], None, None, true),
+                (&["cloud-ui-share"][..], None, None, true),
+                (&["theme-editor"][..], None, None, true),
+                (&["imaging"][..], None, Some("craft/cloud-ui"), true),
+                (&["imaging"][..], Some("facade"), Some("facade?/ui-testing"), true),
             ] {
                 let meta = serde_json::json!({
                     "packages": [{
                         "name": "photocraft-engine",
                         "features": { "extra": forwarded.as_slice() },
                         "dependencies": [{
-                            "name": "craft", "rename": "facade", "path": path, "features": features
+                            "name": "craft", "rename": rename, "path": path, "features": features
                         }]
                     }]
                 });
