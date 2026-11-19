@@ -161,8 +161,22 @@ fn caret_font_choices_style_only_subsequent_typing_including_ime() {
                 h.run();
                 let before = saved(&h, id);
                 let steps = h.state().session.active().unwrap().history.entries().len();
-                let font = FONTS[1 - original];
-                choose(&mut h, font, accept);
+                let requested = FONTS[1 - original];
+                choose(&mut h, requested, accept);
+                // ArrowDown steps to the row below the typed match, which depends on the installed fonts
+                // ("JetBrains Mono NL" where it is installed), so the pending font is the row it accepted.
+                let font = h
+                    .state()
+                    .ui
+                    .type_insertion_style
+                    .as_ref()
+                    .map(|s| s.style.font_family.clone())
+                    .unwrap_or_else(|| panic!("a pending font at the caret: {label:?}"));
+                let font = font.as_str();
+                assert!(font.starts_with(requested) && font != FONTS[original], "the accepted row matches the typed name: {font} {label:?}");
+                if accept != "arrow-enter" {
+                    assert_eq!(font, requested, "{label:?}");
+                }
                 assert_eq!(saved(&h, id), before, "a font choice at a caret never restyles existing characters: {label:?}");
                 assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps, "{label:?}");
                 crate::type_font_preview::set(h.state_mut(), font.into());
