@@ -177,9 +177,20 @@ impl Screen {
 /// Renders the app with `doc` open after `setup` commands (saving the PNG as `name` in the temp
 /// dir), or None when the GPU can't be used.
 fn screen(doc: Document, setup: &[(&str, serde_json::Value)], name: &str) -> Option<Screen> {
+    screens(vec![(doc, setup, name)]).and_then(|mut shown| shown.pop())
+}
+
+/// A document to show, the commands that set it up, and the file name of its screenshot.
+type ScreenCase<'a> = (Document, &'a [(&'a str, serde_json::Value)], &'a str);
+
+/// [`screen`] for several documents in one app, opened and rendered in turn: one harness, so one GPU device and one
+/// compositor build (#15439) instead of one per document (#15652). Each document's setup commands run while it is
+/// the active one; View › 32-bit Preview Options is kept per document.
+fn screens(cases: Vec<ScreenCase<'_>>) -> Option<Vec<Screen>> {
+    let mut cases = cases.into_iter();
+    let (doc, setup, name) = cases.next()?;
     let ok = Arc::new(AtomicBool::new(false));
     let ok2 = ok.clone();
-    let setup: Vec<(String, serde_json::Value)> = setup.iter().map(|(a, b)| (a.to_string(), b.clone())).collect();
     let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
         egui_kittest::Harness::builder()
             .with_size(egui::vec2(1000.0, 700.0))
@@ -205,17 +216,27 @@ fn screen(doc: Document, setup: &[(&str, serde_json::Value)], name: &str) -> Opt
         eprintln!("skipping: adapter can't render/filter Rgba16Float");
         return None;
     }
-    // Outside the catch_unwind: a failing setup command fails the test instead of reading as
-    // "no GPU adapter" (#760).
-    for (id, p) in setup {
-        harness.state_mut().run(&id, p).unwrap_or_else(|e| panic!("setup command {id}: {e}"));
+    let mut shown = Vec::new();
+    let mut case = Some((setup, name));
+    while let Some((setup, name)) = case.take() {
+        // Outside the catch_unwind: a failing setup command fails the test instead of reading as
+        // "no GPU adapter" (#760).
+        for (id, p) in setup {
+            harness.state_mut().run(id, p.clone()).unwrap_or_else(|e| panic!("setup command {id}: {e}"));
+        }
+        harness.run_steps(6);
+        let img = harness.render().expect("render");
+        let out = std::env::temp_dir().join(name);
+        let _ = img.save(&out);
+        eprintln!("screen: {}", out.display());
+        shown.push(Screen { w: img.width(), h: img.height(), px: img.into_raw() });
+        if let Some((doc, setup, name)) = cases.next() {
+            harness.state_mut().session.open_document(doc, None);
+            harness.state_mut().sync_views();
+            case = Some((setup, name));
+        }
     }
-    harness.run_steps(6);
-    let img = harness.render().expect("render");
-    let out = std::env::temp_dir().join(name);
-    let _ = img.save(&out);
-    eprintln!("screen: {}", out.display());
-    Some(Screen { w: img.width(), h: img.height(), px: img.into_raw() })
+    Some(shown)
 }
 
 /// Distinct gray levels along a screen row inside `x0..x1`, and the largest step between
@@ -242,20 +263,20 @@ fn thirty_two_bit_preview_exposes_values_above_one() {
     // A dark 32-bit ramp brightened +4 stops by View › 32-bit Preview Options: with an 8-bit
     // canvas texture its 0..1/16 range has 16 codes (banding); the float texture keeps it smooth.
     let doc = gradient(SampleType::F32, 2048, 1024, 0.0, 1.0 / 16.0);
-    let Some(img) = screen(doc, &[("view.thirtyTwoBitPreviewOptions", json!({"exposure": 4.0, "gamma": 1.0}))], "photocraft-canvas-16f-hdr-ramp.png") else {
-        return;
-    };
-    let (n, _) = screen_levels(&img, img.h / 2, 150, 600);
-    assert!(n > 40, "{n} levels: banded");
     // Values above 1.0 are brought into range by a negative exposure instead of clipped: 2.0
     // at −3 stops shows as sRGB(lin(2.0) / 8) rather than sRGB(lin(1.0) / 8).
     let mut flat = Document::new("hdr", Size::new(512, 512), ColorMode::Rgb, SampleType::F32);
     let mut s = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::F32, true));
     s.fill_rect(Rect::new(0, 0, 512, 512), &[2.0, 2.0, 2.0, 1.0]);
     flat.layers.push(Layer::new("bright", LayerContent::Raster(s)));
-    let Some(img) = screen(flat, &[("view.thirtyTwoBitPreviewOptions", json!({"exposure": -3.0, "gamma": 1.0}))], "photocraft-canvas-16f-hdr-flat.png") else {
+    let brighten = [("view.thirtyTwoBitPreviewOptions", json!({"exposure": 4.0, "gamma": 1.0}))];
+    let darken = [("view.thirtyTwoBitPreviewOptions", json!({"exposure": -3.0, "gamma": 1.0}))];
+    let Some(shown) = screens(vec![(doc, &brighten, "photocraft-canvas-16f-hdr-ramp.png"), (flat, &darken, "photocraft-canvas-16f-hdr-flat.png")]) else {
         return;
     };
+    let [ramp, img] = &shown[..] else { panic!("two screens, got {}", shown.len()) };
+    let (n, _) = screen_levels(ramp, ramp.h / 2, 150, 600);
+    assert!(n > 40, "{n} levels: banded");
     let got = img.green(img.w * 2 / 5, img.h / 2) as f32;
     let dec = |v: f32| if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
     let enc = |v: f32| if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
