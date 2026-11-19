@@ -35,9 +35,7 @@ pub use pattern_stamp::{
 };
 mod periodic;
 mod remove;
-pub use content_aware_move::{
-    ContentAwarePreview, preview as content_aware_move_preview, preview_with_pixel_budget as content_aware_move_preview_with_pixel_budget,
-};
+pub use content_aware_move::{ContentAwarePreview, preview as content_aware_move_preview};
 pub use patch::preview as patch_preview;
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {

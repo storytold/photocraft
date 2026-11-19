@@ -700,7 +700,7 @@ pub fn preview(s: &Session, p: &Value) -> Result<ContentAwarePreview> {
 }
 
 /// Prepare a preview with a bound on the number of pixels solved at full resolution.
-pub fn preview_with_pixel_budget(s: &Session, p: &Value, max_pixels: u64) -> Result<ContentAwarePreview> {
+pub(crate) fn preview_with_pixel_budget(s: &Session, p: &Value, max_pixels: u64) -> Result<ContentAwarePreview> {
     let captured = crate::channel_cmds::inject_target(s, CMD, p.clone());
     let p = &captured;
     let plan = plan(s, p, PREVIEW_MARGIN)?;
