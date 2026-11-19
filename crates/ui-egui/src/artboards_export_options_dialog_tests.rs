@@ -204,3 +204,26 @@ fn options_are_remembered_after_a_successful_run_only() {
     set(&mut h, dialog, "format", json!("png"));
     assert!(ticked(&h, "Interlaced"));
 }
+
+/// Opens the editor of a recorded step with `recorded`, as Record Again and a playback with the step's dialog on do.
+fn reopen(h: &mut H, recorded: Value) -> DialogId {
+    let dialog = crate::panels::actions::open_recorded_editor(h.state_mut(), ARTBOARDS, &recorded).unwrap();
+    h.run_steps(4);
+    dialog
+}
+
+/// The editor of a recorded step has the command's own plain params, the Export Options among them: OK without
+/// changes sends what was recorded, the JPEG quality too.
+#[test]
+fn a_reopened_recording_keeps_its_export_options() {
+    let (_t, dir) = tmp();
+    let mut h = harness();
+    let dialog = reopen(&mut h, json!({"dir": dir, "prefix": "out", "format": "jpg", "quality": 3, "iccProfile": false}));
+    let p = sent(&h, dialog);
+    assert_eq!(p["quality"].as_f64(), Some(3.0), "{p}");
+    assert_eq!(p["iccProfile"], false, "{p}");
+    let mut h = harness();
+    let dialog = reopen(&mut h, json!({"dir": dir, "format": "tiff", "tiffCompression": "lzw", "pngInterlaced": false}));
+    let p = sent(&h, dialog);
+    assert_eq!((&p["tiffCompression"], &p["pngInterlaced"]), (&json!("lzw"), &json!(false)), "{p}");
+}

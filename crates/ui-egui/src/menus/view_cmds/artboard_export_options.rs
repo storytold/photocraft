@@ -76,9 +76,11 @@ pub(super) fn rows() -> Vec<Param> {
 
 /// The command params of the form's values `map`: the chosen type's settings under their plain names while the
 /// checkbox is ticked, else none; every type's own row keys and the checkbox go. TIFF sends its quality only with JPEG
-/// compression, and the depths are numbers.
+/// compression, and the depths are numbers. Values without the checkbox come from the editor of a recorded step,
+/// whose rows are the command's own plain params: they go to the command as they are.
 pub(crate) fn nest(map: &mut Map<String, Value>) {
-    let on = map.remove(CHECKBOX).and_then(|v| v.as_bool()) == Some(true);
+    let Some(on) = map.remove(CHECKBOX) else { return };
+    let on = on.as_bool() == Some(true);
     let chosen = map.get("format").and_then(Value::as_str).and_then(kind).filter(|_| on);
     let own: Vec<String> = map.keys().filter(|k| k.split_once('.').is_some_and(|(kind, _)| KINDS.contains(&kind))).cloned().collect();
     let mut settings = Map::new();
