@@ -604,7 +604,7 @@ mod tests {
     use crate::state::Tool;
 
     /// A 64×64 document with a 16×16 selection, shown by a first pass.
-    fn app() -> PhotocraftApp {
+    fn app() -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.session.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
         app.sync_views();

@@ -11,7 +11,7 @@ use crate::canvas::{ToolEvent, tool_event};
 use crate::state::Tool;
 
 /// A 200 x 100 white document with nothing selected and the Content-Aware Move tool.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 200, "height": 100, "background": "white"})).unwrap();
     app.ui.tool = Tool::ContentAwareMove;
