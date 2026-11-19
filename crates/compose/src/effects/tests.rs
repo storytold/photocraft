@@ -199,6 +199,64 @@ fn smooth_inner_bevel_lights_the_top_edge_inside_only() {
     assert!(at(&maps[0], 20, 15) < 0.05);
 }
 
+/// A gloss contour from Photoshop's 0–255 contour editor points.
+fn gloss_of(points: &[(f32, f32)]) -> Contour {
+    Contour::Custom {
+        name: "gloss".into(),
+        points: points.iter().map(|&(i, o)| photocraft_doc::adjust::CurvePoint { input: i / 255.0, output: o / 255.0 }).collect(),
+        corners: vec![],
+    }
+}
+
+/// Smooth inner bevel highlight and shadow maps of `shape` with `gloss`, light from `angle` at
+/// `altitude`.
+fn gloss_maps(shape: &Map, gloss: Contour, angle: f32, altitude: f32, size: f32, depth: f32) -> Vec<Map> {
+    let mut b = bevel_of(BevelStyle::InnerBevel, BevelTechnique::Smooth);
+    (b.angle, b.altitude, b.size, b.depth, b.gloss_contour) = (angle, altitude, size, depth, gloss);
+    bevel_maps(shape, &b, &GlobalLight::default(), &no_tex(), &PreparedPatterns::new(&[], PREPARED_PATTERN_BYTES)).0
+}
+
+/// The gloss contour maps the shading, and the flat face's own unmapped shading `sin(altitude)`
+/// stays the neutral. Photoshop's own composite of a purchased style pack's type (Rolling Slope -
+/// Descending at altitude 69, 16 px smooth inner bevel at 358 %): the face stays at its colour, with white
+/// glints only where the shading is within ~0.015 of zero (measured per pixel against this
+/// bevel's shading). With the mapped `lut(sin 69°)` = 0.16 as the neutral, every slope pixel
+/// whose mapped shading came out above it took the full highlight, and the type rendered white.
+#[test]
+fn high_altitude_descending_gloss_only_glints_where_the_light_misses() {
+    let n = 80;
+    let mut shape = Map::new(n, n, 0.0);
+    for y in 10..70 {
+        for x in 20..60 {
+            shape.v[y * n + x] = 1.0;
+        }
+    }
+    let rolling = gloss_of(&[(2.0, 255.0), (53.0, 100.0), (97.0, 107.0), (179.0, 153.0), (252.0, 0.0)]);
+    // Light from the left: the bar's right slope faces away from it.
+    let maps = gloss_maps(&shape, rolling, 180.0, 69.0, 16.0, 3.58);
+    let row: Vec<f32> = (20..60).map(|x| maps[0].v[40 * n + x]).collect();
+    let lit = row.iter().filter(|v| **v > 0.05).count();
+    assert!(lit <= 8, "only a few glint pixels, not the whole face: {row:?}");
+    assert!(row[..20].iter().all(|v| *v < 0.05), "no highlight on the slope facing the light: {row:?}");
+    assert!(row[20..].iter().any(|v| *v > 0.9), "a full glint where the slope faces away: {row:?}");
+}
+
+/// Photoshop 27.11 oracles (corpus `bevel-inner-gloss-ramp-peak` / `-double-ring-aa`: 12 px
+/// smooth inner bevel at altitude 30, Screen white and Multiply black at 75 % over (90, 120,
+/// 170)): a contour that maps the flat shading 0.5 above or below 0.5 lights or darkens the flat
+/// face too. Ramp-peak (0,0)(128,255)(255,0) paints the face (214, 221, 234), the full
+/// highlight; double-ring (…, (128, 40), …) paints it (44, 58, 83), a 0.69 shadow.
+#[test]
+fn a_gloss_contour_lights_or_darkens_the_flat_face_around_the_unmapped_neutral() {
+    let shape = square(40, 5, 35);
+    let face = |m: &Map| m.v[20 * 40 + 20];
+    let peak = gloss_maps(&shape, gloss_of(&[(0.0, 0.0), (128.0, 255.0), (255.0, 0.0)]), 120.0, 30.0, 5.0, 1.0);
+    assert!(face(&peak[0]) > 0.99 && face(&peak[1]) == 0.0, "ramp-peak: full highlight, {} / {}", face(&peak[0]), face(&peak[1]));
+    let ring = gloss_maps(&shape, gloss_of(&[(0.0, 0.0), (64.0, 255.0), (128.0, 40.0), (192.0, 255.0), (255.0, 0.0)]), 120.0, 30.0, 5.0, 1.0);
+    // (0.5 − 40/255) / 0.5: 90 × (1 − 0.75 × 0.686) = 43.7.
+    assert!(face(&ring[0]) == 0.0 && (face(&ring[1]) - 0.686).abs() < 0.02, "double-ring: shadow {}", face(&ring[1]));
+}
+
 /// Photoshop 27.11, measured across a straight edge (size 10, depth 100 %, light from the top
 /// at 30°): a chisel facet has the slope `depth × size / (2 (size + 1))`, flat right up to the
 /// edge pixel for Inner Hard; Inner Soft's edge pixel is half as steep again; Outer Hard

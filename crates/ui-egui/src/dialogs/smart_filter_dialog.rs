@@ -13,7 +13,6 @@ use serde_json::{Value, json};
 use crate::PhotocraftApp;
 use crate::dialogs::blend_options::{blend_mode, blend_param};
 use crate::dialogs::params::{captured, open_param};
-use crate::panels::layers_tree::blend_key;
 
 /// The command of the Blending Options dialog, which is also its dialog key.
 pub const COMMAND: &str = "layer.smartFilter.blendingOptions";
@@ -72,11 +71,11 @@ pub fn open(app: &mut PhotocraftApp, layer: LayerId, index: usize) -> Result<Dia
     let params = vec![
         blend_param("blend", tl!("Mode"), false, filter.blend),
         Param::read_only_text("blendNote", "", tl!("Dissolve is approximated: it blends without Photoshop's dither."))
-            .visible_when("blend", blend_key(BlendMode::Dissolve)),
+            .visible_when("blend", BlendMode::Dissolve.key().to_string()),
         Param::new("opacity", tl!("Opacity"), ParamKind::range(0.0, 100.0, 100.0, SliderScale::Linear)),
     ];
     let mut fields = DialogFields::new();
-    fields.set("blend", blend_key(filter.blend));
+    fields.set("blend", filter.blend.key().to_string());
     fields.set("opacity", f64::from(filter.opacity) * 100.0);
     app.filter_preview = None;
     Ok(open_param(app, COMMAND, fields, target, move |f| ParamDialog::new(COMMAND, title.clone(), params.clone()).values(Bind::bound(f)).previews(true)))

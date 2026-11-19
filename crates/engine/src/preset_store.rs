@@ -879,7 +879,7 @@ impl PresetStore {
     /// Bring the files in line with `presets` (built-ins skipped): write changed groups, delete
     /// removed ones and their unreferenced tips, update the index. The bitmaps of every group
     /// written become stored tiles (#1843): the files hold them, so the presets keep previews only.
-    pub fn sync(&mut self, presets: &mut [BrushPreset]) {
+    pub fn sync(&mut self, presets: &mut std::sync::Arc<Vec<BrushPreset>>) {
         // User presets by group, in first-appearance order.
         let mut order: Vec<(String, Vec<usize>)> = Vec::new();
         for (i, p) in presets.iter().enumerate().filter(|(_, p)| !p.builtin) {
@@ -906,7 +906,7 @@ impl PresetStore {
                 ));
                 continue;
             }
-            let mut items: Vec<&mut BrushPreset> = presets.iter_mut().filter(|p| !p.builtin && p.group == *group).collect();
+            let mut items: Vec<&mut BrushPreset> = std::sync::Arc::make_mut(presets).iter_mut().filter(|p| !p.builtin && p.group == *group).collect();
             if let Err(e) = self.write_group(&file, group, &mut items) {
                 self.warnings.push(format!("Couldn't save brush presets `{}`: {e}", if group.is_empty() { "(ungrouped)" } else { group }));
             }
@@ -1103,7 +1103,7 @@ impl PresetStore {
 
 fn builtin_names() -> &'static [String] {
     static NAMES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
-    NAMES.get_or_init(|| photocraft_paint::presets::builtin().into_iter().map(|p| p.name).collect())
+    NAMES.get_or_init(|| photocraft_paint::presets::builtin_shared().iter().map(|p| p.name.clone()).collect())
 }
 
 impl Session {
@@ -1141,19 +1141,26 @@ impl Session {
                 }
             }
         }
-        let lib = &mut self.tools.presets;
-        lib.retain(|p| !(p.builtin && hidden_builtins.iter().any(|h| h.eq_ignore_ascii_case(&p.name))));
+        // The list stays shared (`make_mut` is taken at the first write) when the store changes nothing.
+        let hide = |p: &BrushPreset| p.builtin && hidden_builtins.iter().any(|h| h.eq_ignore_ascii_case(&p.name));
+        if self.tools.presets.iter().any(hide) {
+            std::sync::Arc::make_mut(&mut self.tools.presets).retain(|p| !hide(p));
+        }
         for p in presets {
-            match lib.iter_mut().find(|x| x.name.eq_ignore_ascii_case(&p.name)) {
-                Some(x) if x.builtin => *x = p,
+            let found = self.tools.presets.iter().position(|x| x.name.eq_ignore_ascii_case(&p.name));
+            match found {
+                Some(i) if self.tools.presets[i].builtin && self.tools.presets[i] != p => std::sync::Arc::make_mut(&mut self.tools.presets)[i] = p,
                 Some(_) => {}
-                None => lib.push(p),
+                None => std::sync::Arc::make_mut(&mut self.tools.presets).push(p),
             }
         }
         // The saved panel order (stable: presets it doesn't name keep their order, at the end).
         if !order.is_empty() {
             let pos: HashMap<String, usize> = order.iter().enumerate().map(|(i, n)| (n.to_lowercase(), i)).collect();
-            lib.sort_by_key(|p| pos.get(&p.name.to_lowercase()).copied().unwrap_or(usize::MAX));
+            let key = |p: &BrushPreset| pos.get(&p.name.to_lowercase()).copied().unwrap_or(usize::MAX);
+            if !self.tools.presets.iter().map(key).is_sorted() {
+                std::sync::Arc::make_mut(&mut self.tools.presets).sort_by_key(key);
+            }
         }
         self.preset_store = Some(store);
         // Clear All, Reset or Replace before the store loaded made the session's list the whole

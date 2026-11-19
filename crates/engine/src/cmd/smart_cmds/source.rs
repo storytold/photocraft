@@ -285,7 +285,7 @@ fn convert_source(src: &Document, fmt: PixelFormat, raster: impl FnOnce(PixelFor
     }
     let mut doc = Document::new(src.name.clone(), src.size, src.mode, src.depth);
     doc.icc_profile = src.icc_profile.clone();
-    doc.layers = vec![Layer::new("source", LayerContent::Raster(raster(src.pixel_format())))];
+    doc.layers = vec![Layer::new("source", LayerContent::Raster(raster(src.pixel_format())))].into();
     if gray {
         let gray_profile = crate::color_cmds::working_profile(ColorMode::Grayscale);
         crate::color_cmds::convert_document(&mut doc, &gray_profile, craft_cms::Intent::RelativeColorimetric, true)?;

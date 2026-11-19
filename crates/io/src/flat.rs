@@ -2639,7 +2639,7 @@ mod streamed_png_tests {
         let mut top = layer(&doc, &[(Rect::new(40, 100, 260, 650), &[0.2, 0.7, 0.3, 0.5])]);
         top.opacity = 0.7;
         top.blend = BlendMode::Multiply;
-        doc.layers = vec![bottom, top];
+        doc.layers = vec![bottom, top].into();
         assert!(opaque_bottom(&doc));
         for xmp in [XmpEmbed::All, XmpEmbed::None] {
             let r = same_as_whole(&doc, 256, &ExportOptions { xmp, ..Default::default() });
@@ -2652,14 +2652,14 @@ mod streamed_png_tests {
         // Transparent RGBA, opaque CMYK (written as sRGB through its profile), 16-bit gray and
         // float RGB out of range (written with 16 bits, clipped, with the warning).
         let mut rgba = Document::new("rgba", Size::new(130, 333), ColorMode::Rgb, SampleType::U8);
-        rgba.layers = vec![layer(&rgba, &[(Rect::new(10, 20, 120, 300), &[0.3, 0.6, 0.9, 0.4])])];
+        rgba.layers = vec![layer(&rgba, &[(Rect::new(10, 20, 120, 300), &[0.3, 0.6, 0.9, 0.4])])].into();
         let mut cmyk = Document::new("cmyk", Size::new(97, 211), ColorMode::Cmyk, SampleType::U8);
         cmyk.icc_profile = Some(craft_cms::Builtin::CoatedCmyk.profile().to_bytes());
-        cmyk.layers = vec![layer(&cmyk, &[(cmyk.bounds(), &[0.3, 0.6, 0.1, 0.2, 1.0]), (Rect::new(0, 50, 97, 99), &[0.0, 0.9, 0.9, 0.0, 1.0])])];
+        cmyk.layers = vec![layer(&cmyk, &[(cmyk.bounds(), &[0.3, 0.6, 0.1, 0.2, 1.0]), (Rect::new(0, 50, 97, 99), &[0.0, 0.9, 0.9, 0.0, 1.0])])].into();
         let mut gray = Document::new("gray", Size::new(64, 190), ColorMode::Grayscale, SampleType::U16);
-        gray.layers = vec![layer(&gray, &[(gray.bounds(), &[0.25, 1.0]), (Rect::new(0, 0, 64, 77), &[0.6123, 1.0])])];
+        gray.layers = vec![layer(&gray, &[(gray.bounds(), &[0.25, 1.0]), (Rect::new(0, 0, 64, 77), &[0.6123, 1.0])])].into();
         let mut hdr = Document::new("hdr", Size::new(50, 120), ColorMode::Rgb, SampleType::F32);
-        hdr.layers = vec![layer(&hdr, &[(hdr.bounds(), &[1.5, 0.25, -0.1, 1.0])])];
+        hdr.layers = vec![layer(&hdr, &[(hdr.bounds(), &[1.5, 0.25, -0.1, 1.0])])].into();
         for doc in [&rgba, &cmyk, &gray, &hdr] {
             assert!(single_layer(doc).is_some(), "{}", doc.name);
             same_as_whole(doc, 37, &ExportOptions::default());
@@ -2681,7 +2681,7 @@ mod streamed_png_tests {
             density: 1.0,
             feather: 0.0,
         });
-        doc.layers = vec![bottom, layer(&doc, &[(Rect::new(0, 0, 40, 40), &[1.0, 0.0, 0.0, 1.0])])];
+        doc.layers = vec![bottom, layer(&doc, &[(Rect::new(0, 0, 40, 40), &[1.0, 0.0, 0.0, 1.0])])].into();
         assert!(!opaque_bottom(&doc));
         let whole = decoded(&export_flat(&doc, Format::Png, &ExportOptions::default()).unwrap().bytes);
         let streamed = decoded(&export_png_streamed(&doc, &ExportOptions::default(), &Interrupt::NONE, 256).unwrap().bytes);
@@ -2699,7 +2699,7 @@ mod streamed_png_tests {
         let mut hole = layer(&doc, &[(Rect::new(8, 800, 56, 960), &[1.0, 1.0, 1.0, 1.0])]);
         hole.fill_opacity = 0.0;
         hole.advanced.knockout = photocraft_doc::Knockout::Deep;
-        doc.layers = vec![bottom, hole];
+        doc.layers = vec![bottom, hole].into();
         assert!(opaque_bottom(&doc));
         assert!(stream_png(&doc, &ExportOptions::default(), &Interrupt::NONE, false, 256, &mut 0.0).unwrap().is_none());
         let r = same_as_whole(&doc, 256, &ExportOptions::default());
@@ -2717,7 +2717,7 @@ mod streamed_png_tests {
     #[test]
     fn interlacing_is_turned_off_with_a_warning() {
         let mut doc = Document::new("interlaced", Size::new(40, 30), ColorMode::Rgb, SampleType::U8);
-        doc.layers = vec![layer(&doc, &[(doc.bounds(), &[0.5, 0.5, 0.5, 1.0])])];
+        doc.layers = vec![layer(&doc, &[(doc.bounds(), &[0.5, 0.5, 0.5, 1.0])])].into();
         let mut opts = ExportOptions::default();
         opts.encode.png_interlaced = true;
         let r = export_png_streamed(&doc, &opts, &Interrupt::NONE, 7).unwrap();
@@ -2729,7 +2729,7 @@ mod streamed_png_tests {
     #[test]
     fn a_cancelled_stream_stops_with_cancelled() {
         let mut doc = Document::new("cancel", Size::new(40, 30), ColorMode::Rgb, SampleType::U8);
-        doc.layers = vec![layer(&doc, &[(doc.bounds(), &[0.5, 0.5, 0.5, 1.0])])];
+        doc.layers = vec![layer(&doc, &[(doc.bounds(), &[0.5, 0.5, 0.5, 1.0])])].into();
         let yes = || true;
         let r = export_png_streamed(&doc, &ExportOptions::default(), &Interrupt::cancel_only(&yes), 7);
         assert!(matches!(r, Err(IoError::Cancelled)), "{:?}", r.map(|_| ()));
