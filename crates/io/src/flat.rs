@@ -2696,9 +2696,9 @@ mod streamed_png_tests {
     fn a_layer_export_streams_the_same_pixels_as_it_buffers() {
         let opts = ExportOptions { layer_alpha: true, ..Default::default() };
         let mut opaque = Document::new("opaque layer", Size::new(60, 40), ColorMode::Rgb, SampleType::U8);
-        opaque.layers = vec![layer(&opaque, &[(opaque.bounds(), &[0.1, 0.6, 0.9, 1.0])])];
+        opaque.layers = vec![layer(&opaque, &[(opaque.bounds(), &[0.1, 0.6, 0.9, 1.0])])].into();
         let mut cleared = Document::new("group layer", Size::new(60, 40), ColorMode::Rgb, SampleType::U8);
-        cleared.layers = vec![layer(&cleared, &[(Rect::new(0, 0, 20, 40), &[1.0, 1.0, 0.0, 1.0]), (Rect::new(20, 0, 60, 40), &[1.0, 1.0, 1.0, 0.0])])];
+        cleared.layers = vec![layer(&cleared, &[(Rect::new(0, 0, 20, 40), &[1.0, 1.0, 0.0, 1.0]), (Rect::new(20, 0, 60, 40), &[1.0, 1.0, 1.0, 0.0])])].into();
         for doc in [&opaque, &cleared] {
             for rows in [1, 7, 40] {
                 let r = same_as_whole(doc, rows, &opts);

@@ -22,7 +22,7 @@ type Written = Rc<RefCell<Vec<(String, Vec<u8>)>>>;
 /// An app with one document that really encodes, whose writer hands the bytes back to the test:
 /// what the layer export paths produce can then be read without touching the disc. Its file
 /// dialogs stay open until the test answers them.
-fn app(width: u32, height: u32) -> (PhotocraftApp, Written, Arc<ScriptedFiles>) {
+fn app(width: u32, height: u32) -> (Box<PhotocraftApp>, Written, Arc<ScriptedFiles>) {
     let written = Written::default();
     let w = written.clone();
     let files = Arc::new(ScriptedFiles::held());
@@ -411,7 +411,7 @@ fn a_group_with_many_child_rectangles_still_whites_its_empty_area() {
     }
     let group = photocraft_doc::Layer::group("Many", kids);
     let id = group.id;
-    doc.layers = vec![group];
+    doc.layers = vec![group].into();
     let alone = photocraft_engine::layer_menu_cmds::layer_document(&doc, id).unwrap();
     let opts = photocraft_io::ExportOptions { layer_alpha: true, ..Default::default() };
     let out = photocraft_io::export_flat(&alone, photocraft_codecs::Format::Png, &opts).unwrap();
@@ -438,7 +438,7 @@ fn group_document(
     });
     let group = photocraft_doc::Layer::group("Pair", leaves.into());
     let id = group.id;
-    doc.layers = vec![group];
+    doc.layers = vec![group].into();
     (doc, id)
 }
 
@@ -482,7 +482,7 @@ fn opaque_layer_in(app: &mut PhotocraftApp, mode: photocraft_doc::ColorMode, pai
     s.fill_rect(photocraft_doc::Rect::new(0, 0, 30, 20), paint);
     let layer = photocraft_doc::Layer::new("Opaque", photocraft_doc::LayerContent::Raster(s));
     let id = layer.id;
-    doc.layers = vec![layer];
+    doc.layers = vec![layer].into();
     app.session.add_document(doc, None);
     id
 }
@@ -510,7 +510,7 @@ fn an_opaque_layer_of_an_unmeasured_source_mode_keeps_todays_file_under_srgb() {
 
 /// The app for the estimate tests: a real encoder, plus a log of the settings `estimate` was
 /// handed, so what the "~ N KB" label encodes is observable without touching the disc.
-fn estimate_app() -> (PhotocraftApp, Rc<RefCell<Vec<crate::services::ExportSettings>>>) {
+fn estimate_app() -> (Box<PhotocraftApp>, Rc<RefCell<Vec<crate::services::ExportSettings>>>) {
     let asked: Rc<RefCell<Vec<crate::services::ExportSettings>>> = Rc::default();
     let log = asked.clone();
     let services = Services {
