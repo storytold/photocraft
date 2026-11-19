@@ -488,6 +488,8 @@ fn played_layer_names(s: &Session) -> Vec<String> {
 /// "Playing on another document" (#10769): a step that names a layer the playing document does
 /// not have stops the playback there and names the layer in its error; it must not act on another
 /// layer, and the steps after it must not run. The panel's Continue / Stop ask builds on this stop.
+/// A name the playing document does not have covers both cases: one it never had, and one deleted
+/// from the document the recording was made on.
 #[test]
 fn a_step_naming_a_missing_layer_stops_instead_of_acting_on_the_wrong_layer() {
     let mut s = Session::new();
