@@ -99,7 +99,11 @@ fn a_successful_run_is_remembered_a_failed_one_is_not() {
     assert!(ticked(&h), "remembered after a successful run");
     tick(&mut h);
     assert!(!ticked(&h));
-    let _ = confirm(&mut h, d);
+    assert!(!h.state().ui.status_error, "the first run succeeded: {}", h.state().ui.status);
+    let r = confirm(&mut h, d);
+    // The run fails, so it must not be what the next open remembers.
+    assert!(r.is_err() || h.state().ui.status_error, "the blocked run fails: {r:?}, status {}", h.state().ui.status);
+    assert!(!std::path::Path::new(&bad).exists(), "the blocked run writes nothing");
     if h.state().framework.dialogs.get_dyn(d).is_some() {
         let ctx = h.ctx.clone();
         crate::dialogs::cancel(h.state_mut(), &ctx, d).unwrap();
