@@ -270,6 +270,10 @@ impl Default for Pattern {
 pub struct Texture {
     pub enabled: bool,
     pub pattern: Pattern,
+    /// The id of the library pattern `pattern` was made from; `None` once `pattern` is anything else. The pattern
+    /// picker shows it as selected.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pattern_id: Option<String>,
     pub invert: bool,
     /// Pattern scale (1 = 100 %).
     pub scale: f32,
@@ -306,6 +310,7 @@ impl Default for Texture {
         Self {
             enabled: false,
             pattern: Pattern::default(),
+            pattern_id: None,
             invert: false,
             scale: 1.0,
             brightness: 0.0,
