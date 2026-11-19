@@ -169,32 +169,41 @@ debug = "line-tables-only"
 [profile.test.package.photocraft-ui-egui]
 opt-level = 0
 
+# Test builds compile the engine without optimization. Every test job compiles it, and at 0 its
+# test build is about 20% shorter on both Linux and Windows, while its tests run 7-8% longer
+# (measured against crates the setting doesn't touch). Its pixel-heavy neighbours (algo) stay at
+# the dev profile's 1.
+[profile.test.package.photocraft-engine]
+opt-level = 0
+
 # Test builds compile the craft UI framework (the `craft` facade and the craft-libs crates behind
 # it) below the opt-level 2 of `package."*"` above. The workspace unifies the facade's features, so
 # every crate that uses `craft`, photocraft-text included, waits for the whole framework. At 2 the
 # chain from craft-host to the facade took 38 of the 77 build minutes of the Windows unit leg, and
 # rustc shares no generic instantiations across crates at 2 (it does at 0 and 1).
-# The framework's frames are small enough for this: a nesting level of the pass costs 21-26 KB of
-# stack at opt-level 0, and the app's own state is boxed, so the deepest tests stay well inside
-# their 2 MiB stack on Windows. Only the crates with per-frame or per-pixel code (theme,
-# behavior, imaging, text, font loading) build at 1. `cargo run` and `cargo build` use the dev
-# profile and are unaffected.
+# The runtime every frame passes through (contract, shell, canvas, panels, widgets, host) builds at
+# 1, as do the crates with per-frame or per-pixel code (theme, behavior, imaging, text, font
+# loading). At 0 the whole-app UI tests ran about 60% longer on Linux and 30% longer on Windows,
+# measured against crates the setting doesn't touch, while the framework comes from the CI cache
+# and compiles only when the craft-libs pin moves (7 of 290 main merges in the week to 19 Nov).
+# The panels, tools and services around the runtime build at 0, as in craft-libs. `cargo run` and
+# `cargo build` use the dev profile and are unaffected.
 [profile.test.package.craft]
-opt-level = 0
+opt-level = 1
 [profile.test.package.craft-ui]
-opt-level = 0
+opt-level = 1
 [profile.test.package.craft-ui-contract]
-opt-level = 0
+opt-level = 1
 [profile.test.package.craft-ui-shell]
-opt-level = 0
+opt-level = 1
 [profile.test.package.craft-ui-canvas]
-opt-level = 0
+opt-level = 1
 [profile.test.package.craft-ui-panels]
-opt-level = 0
+opt-level = 1
 [profile.test.package.craft-ui-widgets]
-opt-level = 0
+opt-level = 1
 [profile.test.package.craft-host]
-opt-level = 0
+opt-level = 1
 [profile.test.package.craft-theme]
 opt-level = 1
 [profile.test.package.craft-behavior]
