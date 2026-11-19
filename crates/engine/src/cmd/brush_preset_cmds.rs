@@ -233,7 +233,7 @@ fn move_folder(s: &mut Session, p: &Value, g: String, f: Vec<String>, cmd: &str)
         None | Some(Value::Null) => None,
         Some(v) => Some(v.as_u64().ok_or_else(|| bad(cmd, "`index` must be a non-negative integer"))?),
     };
-    let lib = std::mem::take(std::sync::Arc::make_mut(&mut s.tools.presets));
+    let lib = std::sync::Arc::unwrap_or_clone(std::mem::take(&mut s.tools.presets));
     // Where the block sits among the other presets (its place when nothing else is in the parent).
     let start = lib.iter().position(|x| in_folder(x, &g, &f)).unwrap_or(0);
     let (block, mut rest): (Vec<BrushPreset>, Vec<BrushPreset>) = lib.into_iter().partition(|x| in_folder(x, &g, &f));
@@ -332,7 +332,7 @@ fn move_into(s: &mut Session, p: &Value, g: String, f: Vec<String>, dest: Dest, 
     if deepest > MAX_FOLDER_DEPTH {
         return Err(bad(cmd, format!("folders can be nested at most {MAX_FOLDER_DEPTH} deep")));
     }
-    let lib = std::mem::take(std::sync::Arc::make_mut(&mut s.tools.presets));
+    let lib = std::sync::Arc::unwrap_or_clone(std::mem::take(&mut s.tools.presets));
     let (mut block, mut rest): (Vec<BrushPreset>, Vec<BrushPreset>) = lib.into_iter().partition(|x| in_folder(x, &g, &f));
     for x in &mut block {
         let tail = rest_of(x);
@@ -382,7 +382,7 @@ fn move_group(s: &mut Session, p: &Value) -> Result<Value> {
         None | Some(Value::Null) => None,
         Some(v) => Some(v.as_u64().ok_or_else(|| bad(cmd, "`index` must be a non-negative integer"))?),
     };
-    let lib = std::mem::take(std::sync::Arc::make_mut(&mut s.tools.presets));
+    let lib = std::sync::Arc::unwrap_or_clone(std::mem::take(&mut s.tools.presets));
     let (block, mut rest): (Vec<BrushPreset>, Vec<BrushPreset>) = lib.into_iter().partition(|x| x.group == g);
     let order = group_order(&rest);
     let first = |name: &str, rest: &[BrushPreset]| rest.iter().position(|x| x.group == name).unwrap_or(rest.len());
