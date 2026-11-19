@@ -123,6 +123,9 @@ fn set_vars(s: &mut Session, f: impl FnOnce(&mut Variables)) -> Result<()> {
     f(&mut doc.variables);
     st.doc = Arc::new(doc);
     st.revision += 1;
+    st.record_unknown_damage();
+    st.last_damage = Some(photocraft_geom::Rect::EMPTY);
+    st.record_damage();
     Ok(())
 }
 

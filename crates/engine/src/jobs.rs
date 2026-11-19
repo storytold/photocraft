@@ -1895,6 +1895,7 @@ impl Session {
         if st.revision - from > 1 {
             st.last_damage = crate::layer_multi_cmds::step_damage(before, &st.doc);
             st.damage_span = Some((from, st.revision));
+            st.record_damage();
         }
         #[cfg(any(test, debug_assertions))]
         if st.last_damage.is_none()
@@ -1928,6 +1929,7 @@ impl Session {
         let extra = photocraft_compose::relayout_damage(before, &st.doc);
         if !extra.is_empty() {
             st.last_damage = Some(d.union(&extra));
+            st.record_damage();
         }
     }
 

@@ -78,12 +78,31 @@ fn composite_damage_since_the_shown_revision_follows_each_event() {
         app.run("select.rect", json!({"x": 2, "y": 1, "width": 3, "height": 2})).unwrap();
         app
     };
-    let cases: [(&str, Step, Want); 3] = [
+    let cases: [(&str, Step, Want); 5] = [
         ("nothing changed", |_| {}, Want::Nothing),
+        (
+            "two pixel-neutral layer selections",
+            |app| {
+                let id = app.session.active().unwrap().active_layer.unwrap();
+                app.session.select_layer(id).unwrap();
+                app.session.select_layer(id).unwrap();
+            },
+            Want::Nothing,
+        ),
         (
             "a fill inside the selection",
             |app| {
                 app.run("edit.fill", json!({"color": "#cc2200"})).unwrap();
+            },
+            Want::Covers(PixelRect::new(2, 1, 5, 3)),
+        ),
+        (
+            "a fill followed by pixel-neutral selections",
+            |app| {
+                app.run("edit.fill", json!({"color": "#cc2200"})).unwrap();
+                let id = app.session.active().unwrap().active_layer.unwrap();
+                app.session.select_layer(id).unwrap();
+                app.session.select_layer(id).unwrap();
             },
             Want::Covers(PixelRect::new(2, 1, 5, 3)),
         ),
@@ -96,6 +115,23 @@ fn composite_damage_since_the_shown_revision_follows_each_event() {
         ),
     ];
     check_damage(setup, |app, ctx, since| pass(&CompositePrep::new(app, ctx, 0, None, None).unwrap().source(app), since), &cases);
+}
+
+#[test]
+fn neutral_revisions_preserve_a_prior_bounded_pixel_change() {
+    let mut app = app_with(16, 8, "#336699");
+    app.run("select.rect", json!({"x": 2, "y": 1, "width": 3, "height": 2})).unwrap();
+    let ctx = app.ctx().clone();
+    let before = CompositePrep::new(&mut app, &ctx, 0, None, None).unwrap().source(&app).revision();
+    app.run("edit.fill", json!({"color": "#cc2200"})).unwrap();
+    let expected = app.session.active().unwrap().last_damage.unwrap();
+    let id = app.session.active().unwrap().active_layer.unwrap();
+    app.session.select_layer(id).unwrap();
+    app.session.select_layer(id).unwrap();
+    let damage = CompositePrep::new(&mut app, &ctx, 0, None, None).unwrap().source(&app).damage(before).unwrap();
+    let expected = PixelRect::new(expected.x0, expected.y0, expected.x1, expected.y1);
+    assert_eq!(damage.intersect(&expected), damage);
+    assert_eq!(damage.intersect(&PixelRect::new(2, 1, 5, 3)), PixelRect::new(2, 1, 5, 3));
 }
 
 #[test]

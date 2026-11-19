@@ -138,6 +138,15 @@ pub(crate) fn damage_since(
     if seen.1 == now.1 ^ display_key && in_span {
         return last_damage;
     }
+    // A canvas can miss several revisions between passes. Use their accumulated engine damage
+    // only when the preview and display key stayed the same; an unknown span forces a full read.
+    if seen.1 == now.1 ^ display_key
+        && seen.0 < now.0
+        && let Some(st) = app.session.documents().get(idx)
+        && let Some(r) = st.damage_since(seen.0)
+    {
+        return Some(if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) });
+    }
     // Opening, canceling or committing a Free Transform box: the moving layer and the layers
     // drawn over the box, not the whole document (a gigapixel canvas took over a second).
     if let Some(st) = app.session.documents().get(idx)

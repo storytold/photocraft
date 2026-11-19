@@ -67,10 +67,12 @@ pub fn set_selection(s: &mut Session, ids: Vec<LayerId>, active: Option<LayerId>
     // Selecting layers is not an edit: keep a clean document clean.
     let clean = st.saved_revision == st.revision;
     st.revision += 1;
+    st.record_unknown_damage();
     if clean {
         st.saved_revision = st.revision;
     }
     st.last_damage = Some(Rect::EMPTY);
+    st.record_damage();
     s.note_layer_change(before);
     Ok(())
 }

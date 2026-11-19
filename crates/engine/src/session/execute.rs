@@ -349,6 +349,7 @@ impl Session {
         }
         st.bump_revision(keep_clean);
         st.last_damage = damage;
+        st.record_damage();
         self.samplers_removed += samplers_removed;
         #[cfg(any(test, debug_assertions))]
         {
@@ -385,6 +386,7 @@ impl Session {
         let Some(st) = self.active_mut() else { return };
         let rect = layer_multi_cmds::grow_hint(&st.doc, rect);
         st.last_damage = Some(st.last_damage.map_or(rect, |d| d.intersect(&rect)));
+        st.record_damage();
     }
 }
 

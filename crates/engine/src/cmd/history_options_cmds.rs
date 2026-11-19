@@ -162,11 +162,13 @@ pub(crate) fn delete_state(s: &mut Session, i: usize, current: usize) -> Result<
         // that keeps a clean document clean.
         let clean = st.saved_revision == st.revision;
         st.revision += 1;
+        st.record_unknown_damage();
         st.view_revision += 1;
         if clean {
             st.saved_revision = st.revision;
         }
         st.last_damage = Some(photocraft_geom::Rect::EMPTY);
+        st.record_damage();
         return Ok(());
     }
     // The step that made the current state: the layers whose visibility it changed get it back.
@@ -183,7 +185,9 @@ pub(crate) fn delete_state(s: &mut Session, i: usize, current: usize) -> Result<
     st.doc = d;
     crate::restore_target(st, layers);
     st.revision += 1;
+    st.record_unknown_damage();
     st.last_damage = damage;
+    st.record_damage();
     Ok(())
 }
 

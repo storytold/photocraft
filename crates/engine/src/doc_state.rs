@@ -31,6 +31,8 @@ pub struct DocState {
     /// whose whole span `last_damage` covers. Written only by `Session::dispatch`; any later
     /// revision makes it stale, so [`DocState::damage_from`] falls back to one revision.
     pub(crate) damage_span: Option<(u64, u64)>,
+    /// Bounded revision spans; unknown damage remains unknown when spans are combined.
+    damage_log: std::collections::VecDeque<(u64, u64, Option<photocraft_geom::Rect>)>,
     /// Coalescing key of the latest history step (see [`Session::execute`]'s `coalesce` param).
     pub coalesce: Option<String>,
     /// Channels panel: targeted channel and eye toggles (view state, not history).
@@ -118,6 +120,7 @@ impl DocState {
             view_revision: 0,
             last_damage: None,
             damage_span: None,
+            damage_log: Default::default(),
             coalesce: None,
             channel_view,
             isolated_layers: Vec::new(),
@@ -153,6 +156,61 @@ impl DocState {
     pub(crate) fn keeps_clean(&self, before: &Document) -> bool {
         self.saved_revision == self.revision && layer_multi_cmds::selection_only_change(before, &self.doc)
     }
+    /// Damage since `revision`, or `None` when a revision is missing or has unknown damage.
+    pub fn damage_since(&self, revision: u64) -> Option<photocraft_geom::Rect> {
+        if revision == self.revision {
+            return Some(photocraft_geom::Rect::EMPTY);
+        }
+        let mut at = revision;
+        let mut total = photocraft_geom::Rect::EMPTY;
+        for &(from, to, damage) in &self.damage_log {
+            if to <= at {
+                continue;
+            }
+            if from > at || to > self.revision {
+                return None;
+            }
+            let damage = damage?;
+            total = if total.is_empty() {
+                damage
+            } else if damage.is_empty() {
+                total
+            } else {
+                total.union(&damage)
+            };
+            at = to;
+            if at == self.revision {
+                return Some(total);
+            }
+        }
+        None
+    }
+
+    fn record_damage_span(&mut self, from: u64, to: u64, damage: Option<photocraft_geom::Rect>) {
+        while self.damage_log.back().is_some_and(|(_, end, _)| *end > from) {
+            self.damage_log.pop_back();
+        }
+        const MAX_SPANS: usize = 64;
+        if self.damage_log.len() == MAX_SPANS {
+            self.damage_log.pop_front();
+        }
+        self.damage_log.push_back((from, to, damage));
+    }
+
+    /// Record the current revision conservatively until its damage has been determined.
+    pub(crate) fn record_unknown_damage(&mut self) {
+        self.last_damage = None;
+        self.record_damage_span(self.revision.saturating_sub(1), self.revision, None);
+    }
+
+    /// Record the latest revision or command span after its damage has been determined.
+    pub(crate) fn record_damage(&mut self) {
+        // Keep the effect reach at the time of the edit: later pixel-neutral revisions can
+        // change which effects are visible without changing this already-painted damage.
+        let damage = self.last_damage.map(|r| layer_multi_cmds::grow_hint(&self.doc, r));
+        self.record_damage_span(self.damage_from(), self.revision, damage);
+    }
+
     /// The revision [`DocState::last_damage`] is measured from: the revision before the command
     /// that made it, or the previous revision. A canvas that showed any revision from this one
     /// up to (not including) `revision` needs only `last_damage` redrawn.
@@ -166,6 +224,7 @@ impl DocState {
     /// revision with it.
     pub(crate) fn bump_revision(&mut self, keep_clean: bool) {
         self.revision += 1;
+        self.record_unknown_damage();
         if keep_clean {
             self.saved_revision = self.revision;
         }
@@ -327,4 +386,47 @@ pub fn selected_in(doc: &Document, active: Option<LayerId>, selected: &[LayerId]
     let Some(active) = active else { return Vec::new() };
     let set: &[LayerId] = if selected.contains(&active) { selected } else { std::slice::from_ref(&active) };
     doc.walk().into_iter().map(|(_, _, l)| l.id).filter(|id| set.contains(id)).collect()
+}
+
+#[cfg(test)]
+mod damage_log_tests {
+    use super::DocState;
+    use photocraft_color::{ColorMode, SampleType};
+    use photocraft_doc::Document;
+    use photocraft_geom::{Rect, Size};
+
+    #[test]
+    fn damage_spans_union_and_unknown_or_evicted_spans_force_a_full_redraw() {
+        let mut st = DocState::new(Document::new("test", Size::new(20, 20), ColorMode::Rgb, SampleType::U8), None);
+        let start = st.revision;
+        let first = Rect::new(1, 2, 4, 5);
+        let second = Rect::new(8, 9, 11, 12);
+        st.bump_revision(false);
+        assert_eq!(st.damage_since(start), None);
+        st.last_damage = Some(first);
+        st.record_damage();
+        st.bump_revision(false);
+        st.last_damage = Some(Rect::EMPTY);
+        st.record_damage();
+        st.bump_revision(false);
+        st.last_damage = Some(second);
+        st.record_damage();
+        let combined = st.damage_since(start).unwrap();
+        assert_eq!(combined.intersect(&first), first);
+        assert_eq!(combined.intersect(&second), second);
+        st.bump_revision(false);
+        assert_eq!(st.damage_since(start), None);
+        for _ in 0..65 {
+            st.bump_revision(false);
+            st.last_damage = Some(Rect::EMPTY);
+            st.record_damage();
+        }
+        assert_eq!(st.damage_since(start), None);
+        let current = st.revision;
+        st.revision += 1; // A caller bypassed the recording API.
+        st.bump_revision(false);
+        st.last_damage = Some(Rect::EMPTY);
+        st.record_damage();
+        assert_eq!(st.damage_since(current), None);
+    }
 }

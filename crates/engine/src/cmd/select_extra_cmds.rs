@@ -80,6 +80,9 @@ fn isolate_layers(s: &mut Session, p: &Value) -> Result<Value> {
     let on = p.get("on").and_then(Value::as_bool).unwrap_or(st.isolated_layers.is_empty());
     st.isolated_layers = if on { st.selected_layers() } else { Vec::new() };
     st.revision += 1;
+    st.record_unknown_damage();
+    st.last_damage = Some(photocraft_geom::Rect::EMPTY);
+    st.record_damage();
     Ok(json!({ "isolated": !st.isolated_layers.is_empty(), "layers": st.isolated_layers.iter().map(|l| l.0).collect::<Vec<_>>() }))
 }
 

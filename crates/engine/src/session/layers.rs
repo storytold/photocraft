@@ -17,10 +17,12 @@ impl Session {
         // Selecting a layer is not an edit: keep a clean document clean.
         let clean = st.saved_revision == st.revision;
         st.revision += 1;
+        st.record_unknown_damage();
         if clean {
             st.saved_revision = st.revision;
         }
         st.last_damage = Some(photocraft_geom::Rect::EMPTY);
+        st.record_damage();
         self.note_layer_change(before);
         Ok(())
     }
@@ -44,10 +46,12 @@ impl Session {
         channel_cmds::fix_view(st);
         let clean = st.saved_revision == st.revision;
         st.revision += 1;
+        st.record_unknown_damage();
         if clean {
             st.saved_revision = st.revision;
         }
         st.last_damage = Some(photocraft_geom::Rect::EMPTY);
+        st.record_damage();
         self.note_layer_change(before);
         Ok(())
     }
@@ -101,11 +105,13 @@ impl Session {
             let clean = st.saved_revision == st.revision;
             let before = std::mem::replace(&mut st.doc, doc);
             st.revision += 1;
+            st.record_unknown_damage();
             if clean {
                 st.saved_revision = st.revision;
             }
             // Only the refreshed layers' caches changed: their changed tiles.
             st.last_damage = layer_multi_cmds::step_damage(&before, &st.doc);
+            st.record_damage();
         }
         busy
     }
