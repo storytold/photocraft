@@ -78,7 +78,7 @@ fn hdr_adjustments_preserve_range_and_cpu_parity() {
         let mut d = Document::new("HDR adjustments", Size::new(3, 1), ColorMode::Rgb, SampleType::F32);
         let mut layer = Layer::raster("pixels", PixelFormat::RGBA32F);
         layer.surface_mut().unwrap().write_region(Rect::new(0, 0, 3, 1), &[4.0, 2.0, 0.5, 1.0, -0.1, 3.0, 0.25, 0.75, 0.0, 0.0, 0.0, 1.0]);
-        d.layers = vec![layer, Layer::new("adjustment", LayerContent::Adjustment(adj.clone()))];
+        d.layers = vec![layer, Layer::new("adjustment", LayerContent::Adjustment(adj.clone()))].into();
         let cpu = photocraft_compose::flatten(&d);
         assert!(cpu.px[0][0] > 1.0, "HDR reference unexpectedly clipped: {adj:?}");
         check(&mut g, &d, &format!("HDR {adj:?}"));
@@ -1011,7 +1011,7 @@ fn hard_stop_fill_fallback_respects_caches_and_visibility() {
         assert_gradient_fallback(&d);
         let mut clipped = Layer::new("clipped", LayerContent::Fill(fill));
         clipped.clipped = true;
-        d.layers = vec![Layer::new("base", LayerContent::Fill(Fill::Solid(Color::WHITE))), clipped];
+        d.layers = vec![Layer::new("base", LayerContent::Fill(Fill::Solid(Color::WHITE))), clipped].into();
         assert_gradient_fallback(&d);
         d.layers.push(Layer::new("cover", LayerContent::Fill(Fill::Solid(Color::WHITE))));
         assert!(photocraft_gpu::plan(&d).is_ok(), "occluded gradients are not sampled");
@@ -3040,7 +3040,7 @@ fn lab_documents_mix_in_lab() {
     a.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 2, 1), &photocraft_raster::from_rgba(&fmt, [0.0, 0.0, 1.0, 1.0]));
     let mut b = Layer::raster("b", fmt);
     b.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 2, 1), &photocraft_raster::from_rgba(&fmt, [1.0, 1.0, 0.0, 0.5]));
-    d.layers = vec![a, b];
+    d.layers = vec![a, b].into();
     let p = photocraft_compose::flatten(&d).px[0];
     assert!((p[0] - 0.5).abs() > 0.05 || (p[2] - 0.5).abs() > 0.05, "{p:?}");
 }
@@ -3545,7 +3545,7 @@ fn integration_adjustment_fill_opacity_masks_and_hdr_match_cpu() {
                             &[coverage],
                         );
                         layer.mask = Some(mask);
-                        d.layers = vec![base, layer];
+                        d.layers = vec![base, layer].into();
                         check(&mut g, &d, &format!("combined {mode:?} fill={fill} opacity={opacity} mask={coverage} clipped={clipped}"));
                     }
                 }
@@ -3565,7 +3565,7 @@ fn integration_adjustment_fill_opacity_masks_and_hdr_match_cpu() {
         dither: false,
         source: None,
     };
-    d.layers = vec![base, Layer::new("lookup", LayerContent::Adjustment(look))];
+    d.layers = vec![base, Layer::new("lookup", LayerContent::Adjustment(look))].into();
     check(&mut g, &d, "HDR full coverage with bounded result");
 }
 
