@@ -34,6 +34,7 @@ mod heif_unsupported;
 mod krita_corpus;
 mod lab16;
 mod large_files;
+mod large_png_export;
 mod large_psb;
 mod layer_labels;
 mod layer_xmp;
