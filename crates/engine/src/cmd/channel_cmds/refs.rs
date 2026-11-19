@@ -1,6 +1,7 @@
 use super::planes::{color_count, edit_mode, luminosity, read_plane, tone};
 use super::view::{color_names, composite_name};
-use super::{BlendMode, Document, EngineError, LayerContent, LayerId, Result, Session, Value, blend_channel, from_rgba, sel, to_rgba};
+use super::{BlendMode, ColorMode, Document, EngineError, LayerContent, LayerId, Result, Session, Value, blend_channel, from_rgba, sel, to_rgba};
+use photocraft_color::SampleType;
 
 // ---------------------------------------------------------------------------------------------
 // Channel references
@@ -129,7 +130,9 @@ pub(super) fn native_pixels(doc: &Document, layer: Option<LayerId>) -> Result<(V
 /// `"layer"` param of a source: a layer id, a layer name (the topmost of that name, as a loaded
 /// Photoshop action refers to it), `{"name":"merged"}` for a literal name, `{"background":true}`,
 /// or `"merged"` (default).
-/// An unknown name or a missing requested Background is an error.
+/// An unknown name or a missing requested Background is an error, except for Calculations in an
+/// 8-bit RGB document with layers over its Background, which reads the top layer instead, as the
+/// reference application does (#14533; the other modes and depths were not measured).
 fn source_layer(doc: &Document, p: &Value, cmd: &str) -> Result<Option<LayerId>> {
     let name = match p.get("layer") {
         Some(Value::Number(n)) => return Ok(n.as_u64().map(LayerId)),
@@ -144,13 +147,28 @@ fn source_layer(doc: &Document, p: &Value, cmd: &str) -> Result<Option<LayerId>>
         Some(Value::String(name)) if !name.is_empty() && name != "merged" => name,
         _ => return Ok(None),
     };
-    doc.walk()
-        .into_iter()
-        .rev()
-        .find(|(_, _, l)| l.name == name)
-        .map(|(_, _, l)| Some(l.id))
-        .ok_or_else(|| bad(cmd, format!("no source layer named \"{name}\"")))
+    let named = doc.walk().into_iter().rev().find(|(_, _, l)| l.name == name).map(|(_, _, l)| l.id);
+    named.or_else(|| unknown_layer_reads_top(doc, cmd)).map(Some).ok_or_else(|| bad(cmd, format!("no source layer named \"{name}\"")))
 }
+
+/// The layer Calculations reads for a source layer name that does not exist: the top layer of an
+/// 8-bit RGB document that has one over its Background (#14533). `None` keeps the error: Apply
+/// Image has its own rule (#14506), and other documents were not measured.
+fn unknown_layer_reads_top(doc: &Document, cmd: &str) -> Option<LayerId> {
+    if cmd != CALCULATIONS || !measured_rgb8(doc) || doc.background().is_none() {
+        return None;
+    }
+    doc.layers.last().filter(|l| !doc.is_background(l.id)).map(|l| l.id)
+}
+
+/// The documents the reference application's script fallbacks were measured on (#14533): 8-bit
+/// RGB. Other modes and depths keep today's errors.
+fn measured_rgb8(doc: &Document) -> bool {
+    doc.mode == ColorMode::Rgb && doc.depth == SampleType::U8
+}
+
+/// The command id [`source`] treats specially for script references (#14533).
+const CALCULATIONS: &str = "image.calculations";
 
 /// Planes of channel `r` from document `doc` (`layer` = None: merged). A composite gives one
 /// plane per colour channel; everything else gives one plane.
@@ -268,7 +286,9 @@ pub(super) fn source(s: &Session, p: &Value, cmd: &str, gray: bool) -> Result<Ve
             _ => return Err(bad(cmd, "the source must target one colour or alpha channel")),
         }
     } else {
-        p.get("channel").map_or(Some(ChanRef::Composite), |v| parse_ref(v, &st.doc)).ok_or_else(|| bad(cmd, "unknown `channel`"))?
+        p.get("channel")
+            .map_or(Some(ChanRef::Composite), |v| parse_ref(v, &st.doc).or_else(|| gray_of_colour_source(v, cmd, &st.doc)))
+            .ok_or_else(|| bad(cmd, "unknown `channel`"))?
     };
     let layer = source_layer(&st.doc, p, cmd)?;
     let mut planes = if r == ChanRef::Transparency && p.get("layer").is_some_and(|v| v == "merged") {
@@ -292,6 +312,15 @@ pub(super) fn source(s: &Session, p: &Value, cmd: &str, gray: bool) -> Result<Ve
         }
     }
     Ok(planes)
+}
+
+/// Calculations' Channel list shows Gray for a colour source, the composite read as one grey
+/// plane; a script names it `"gray"` (any case), as in the reference application (#14533). Only
+/// in an 8-bit RGB source (others were not measured), and only when no alpha channel has that
+/// name ([`parse_ref`] finds one first).
+fn gray_of_colour_source(v: &Value, cmd: &str, doc: &Document) -> Option<ChanRef> {
+    let gray = v.as_str().is_some_and(|n| n.eq_ignore_ascii_case("gray"));
+    (gray && cmd == CALCULATIONS && measured_rgb8(doc)).then_some(ChanRef::Composite)
 }
 
 // ---------------------------------------------------------------------------------------------
