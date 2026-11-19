@@ -98,6 +98,10 @@ pub(crate) fn state_hash(app: &PhotocraftApp, input: Option<u64>) -> u64 {
     (&ui.recent_files, &app.workspaces.set.current, app.ui.palette.open, ui.transform.is_some(), ui.text_edit.is_some(), app.dialog_count()).hash(&mut h);
     // Cut and Copy are enabled while the typed text has a selection.
     ui.text_edit.as_ref().map(|e| e.anchor != e.caret).hash(&mut h);
+    // The Window bars' ticks; the Contextual Task Bar's Hide bar and `ui.set` change them without a menu click (#15489).
+    // Not the task bar's place, which moves every frame of a drag.
+    let p = &ui.panels;
+    (p.options_bar, p.status_bar, p.menu_bar, p.context_task_bar).hash(&mut h);
     (app.discard.is_some(), crate::distort_ui::modal_workspace(app)).hash(&mut h);
     crate::prefs_ui::recording(app).hash(&mut h);
     // The rows show the keymap's chords; the keymap follows these from the frame they change.

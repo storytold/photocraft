@@ -275,7 +275,9 @@ mod gpu_tests {
     #[test]
     fn per_pixel_settings_develop_on_the_gpu_like_the_cpu_and_the_rest_stays_on_the_cpu() {
         let _gpu = photocraft_testkit::gpu_lock();
-        for depth in [8, 16, 32] {
+        // 8 and 32 bits: the dialog hands the develop only `float` (32-bit or not, `camera_raw_ui/convert.rs`), so 16
+        // bits takes 8 bits' path; every depth's develop is the gpu crate's `tests/it/camera_raw.rs` (#15652).
+        for depth in [8, 32] {
             let Some(mut app) = gpu_app(depth) else { return };
             force_pass(&app);
             open_raw(&mut app);
