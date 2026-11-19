@@ -591,9 +591,10 @@ pub(crate) fn command_params(command: &str, fields: &DialogFields) -> Value {
             }
         }
     }
-    // The Batch and Create Droplet forms list the actions outside any set under an empty set id
-    // (#13672); that action is found by its own name, so the command gets no `set` for it.
-    if matches!(command, "file.automate.batch" | "file.automate.createDroplet") && map.get("set").and_then(Value::as_str).is_some_and(str::is_empty) {
+    // The Batch and Create Droplet forms choose their action by its index in the action list
+    // (#13672, owner decision (a)): the Set row only filters the Action dropdown, so the command
+    // gets the one parameter `action` and no `set`.
+    if matches!(command, "file.automate.batch" | "file.automate.createDroplet") {
         map.remove("set");
     }
     // The exports to files take the JPEG quality only for a JPEG (a quality would make a WebP lossy).
@@ -885,11 +886,11 @@ pub(crate) fn run_command(app: &mut PhotocraftApp, ctx: &egui::Context, command:
     let dialog = result.id;
     if crate::actions::record_again::owns_dialog(app, dialog) {
         let params = command_params(&result.key, &result.fields);
-        return crate::actions::record_again::confirm(app, dialog, &result.key, crate::actions::playback_params(app, &result.key, params));
+        return crate::actions::record_again::confirm(app, dialog, &result.key, crate::actions::playback_params(app, &result.key, &result.fields, params));
     }
     // PLAN: `token_of`, `abandoned`, `resume`, `run_step_dialog` and `authorize_panel_preview` are assumed re-exported at `crate::actions` (panels-w32).
     let token = crate::actions::token_of(app, dialog);
-    let params = crate::actions::playback_params(app, command, command_params(command, &result.fields));
+    let params = crate::actions::playback_params(app, command, &result.fields, command_params(command, &result.fields));
     let captured = crate::dialogs::params::captured(app, command);
     if let Err(error) = crate::actions::authorize_panel_preview(app, dialog, command, &params) {
         app.filter_preview = None;
