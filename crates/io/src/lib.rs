@@ -275,9 +275,9 @@ pub(crate) fn unequal_resolution_warning(x: f64, y: f64) -> Option<String> {
         .then(|| format!("the vertical resolution ({y:.2} ppi) differs from the horizontal ({x:.2} ppi); the document keeps {x:.2} ppi for both"))
 }
 
-/// Warnings about a loaded document's layers that render without their stored effect, for
-/// sources that carry no import warnings of their own (a crafted `.pcraft`): a Color Lookup
-/// whose table can't be applied silently renders as the identity instead (#1763).
+/// Warnings about a loaded native document's missing layer data. A Color Lookup without a
+/// usable table renders as the identity (#1763), and a Smart Object without a saved cache has
+/// no pixels to composite (#15799).
 pub fn open_warnings(doc: &Document) -> Vec<String> {
     let mut out = Vec::new();
     // Iterative, so no document's nesting can make this recurse.
@@ -295,6 +295,8 @@ pub fn open_warnings(doc: &Document) -> Vec<String> {
                     out.push(format!("layer \"{}\": its Color Lookup has no usable table for a {size}³ lookup; the layer renders without the lookup", l.name))
                 }
             }
+        } else if matches!(&l.content, LayerContent::Smart(smart) if smart.cache.is_none()) {
+            out.push(format!("layer \"{}\": its Smart Object has no saved render cache and opens without rendered pixels", l.name));
         }
         if let Some(children) = l.children() {
             stack.extend(children.iter().rev());
