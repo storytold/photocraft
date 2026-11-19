@@ -506,6 +506,9 @@ mod tests;
 mod convert_point_history_tests;
 
 #[cfg(test)]
+mod convert_point_shift_tests;
+
+#[cfg(test)]
 mod convert_point_targeted_path_tests;
 
 #[cfg(test)]
