@@ -434,10 +434,16 @@ mod tests {
         let mut checked = 0;
         for sel in selections {
             for copied in [false, true] {
+                // `is_enabled` only reads the app, so one app per world answers for every command; each command then
+                // runs on a world of its own. A copied style is read by Paste Layer Style alone (the engine's
+                // `style_clipboard`), so the other commands run without it only (#15652).
+                let app = crate::PhotocraftApp::new(world(sel, copied), crate::Services::default());
                 for (cmd, must_change) in commands {
-                    let app = crate::PhotocraftApp::new(world(sel, copied), crate::Services::default());
+                    if copied && cmd != "layer.layerStyle.pasteLayerStyle" {
+                        continue;
+                    }
                     let enabled = crate::menus::is_enabled(&app, cmd);
-                    let mut s = app.session;
+                    let mut s = world(sel, copied);
                     let before = fingerprint(&s);
                     let r = s.execute(cmd, json!({}));
                     let changed = fingerprint(&s) != before;
@@ -457,7 +463,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(checked, selections.len() * 2 * commands.len());
+        assert_eq!(checked, selections.len() * (commands.len() + 1));
     }
 
     /// #13293: on a lone Background, Group from Layers… and Load Selection… are greyed, as in the
