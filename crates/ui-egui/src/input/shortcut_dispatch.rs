@@ -146,9 +146,17 @@ pub(crate) const RUNTIME_COMMANDS: &[(&str, Bridged)] = &[
     ("view.screenMode.cycleBack", Bridged::ScreenMode(ScreenModeCommands::CycleBack)),
 ];
 
+/// The framework command of every row of [`RUNTIME_COMMANDS`], built once. `Bridged::command` allocates the
+/// command's id, and the menu bar asks [`bridge_of`] for each of its items on every frame (the command gate's
+/// [`screen_mode_row`]): building every row's command there cost about a tenth of the UI pass (#15493).
+fn bridged_commands() -> &'static [(CommandRef, &'static str, Bridged)] {
+    static TABLE: std::sync::OnceLock<Vec<(CommandRef, &'static str, Bridged)>> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| RUNTIME_COMMANDS.iter().map(|(id, bridged)| (bridged.command(), *id, *bridged)).collect())
+}
+
 /// The PhotoCraft id and bridge row of a framework command, if a row bridges it.
 fn bridge_of(command: &CommandRef) -> Option<(&'static str, Bridged)> {
-    RUNTIME_COMMANDS.iter().find(|(_, bridged)| bridged.command() == *command).map(|(id, bridged)| (*id, *bridged))
+    bridged_commands().iter().find(|(bridged, _, _)| bridged == command).map(|(_, id, bridged)| (*id, *bridged))
 }
 
 /// Whether the runtime defines command `id` (a row of [`RUNTIME_COMMANDS`]).
@@ -177,7 +185,8 @@ pub(crate) fn is_screen_mode(id: &str) -> bool {
 /// The PhotoCraft row of a screen-mode command of the shell: the command gate judges the framework command as the
 /// menus judge that row.
 pub(crate) fn screen_mode_row(command: &CommandRef) -> Option<&'static str> {
-    bridge_of(command).filter(|(_, bridged)| matches!(bridged, Bridged::ScreenMode(_))).map(|(id, _)| id)
+    // The command gate asks this for every command a pass resolves: only the screen-mode rows build their command.
+    RUNTIME_COMMANDS.iter().find(|(_, bridged)| matches!(bridged, Bridged::ScreenMode(_)) && bridged.command() == *command).map(|(id, _)| *id)
 }
 
 /// The id of the command that steps a tool group to its next tool: the group is named by its key.
