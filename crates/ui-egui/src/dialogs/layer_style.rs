@@ -17,6 +17,7 @@ use craft::imaging::layer_style::{
     StyleParams, StyleValue,
 };
 use craft::imaging::ui::layer_style::{ContourEditorDialog, HostedLayerStyle, LayerStyleAsk};
+use craft::settings::Remembered;
 use craft::theme::Srgba;
 use craft::ui::contract::Entry;
 use craft::ui::dialog::{DialogId, DialogResult};
@@ -38,6 +39,8 @@ mod contour;
 mod gradient_field;
 #[cfg(test)]
 mod gradient_method_tests;
+#[cfg(test)]
+mod pattern_overlay_last_values_tests;
 
 /// The Styles preset gallery page id.
 pub const STYLES_PAGE: &str = "styles";
@@ -68,6 +71,10 @@ fn defaults(kind: &str) -> Value {
     let mut p = photocraft_engine::layer_style::effect_defaults(kind);
     if kind == "gradientOverlay" {
         drop_from_to(&mut p);
+    }
+    if kind == EffectKind::PatternOverlay.key() {
+        p["phaseX"] = json!(0.0);
+        p["phaseY"] = json!(0.0);
     }
     p
 }
@@ -461,6 +468,23 @@ fn blending_json(b: &Blending, layer: LayerId) -> Value {
 
 // ------------------------------------------------------------------ opening
 
+fn last_pattern_overlay() -> Remembered<Value> {
+    Remembered::new("photocraft.layerStyle.patternOverlay")
+}
+
+/// Resolves a stored id or name against this document and the library. A missing preset falls
+/// back to the first library pattern while keeping the other remembered controls.
+fn restore_pattern(session: &Session, mut params: Value) -> Value {
+    if let Some(key) = params["pattern"].as_str().filter(|key| !key.is_empty()) {
+        params["pattern"] = json!(
+            photocraft_engine::pattern_cmds::resolve_id(session, key)
+                .or_else(|| session.patterns.items.first().map(|pattern| pattern.id.clone()))
+                .unwrap_or_default()
+        );
+    }
+    params
+}
+
 /// Opens the Layer Style dialog on the active layer; `select` is a `KINDS` key, `STYLES_PAGE` or
 /// `BLENDING`. `None` when there is no active layer, or when a Free Transform box refuses to apply.
 pub fn open(app: &mut PhotocraftApp, select: Option<&str>) -> Option<DialogId> {
@@ -477,7 +501,11 @@ pub fn open(app: &mut PhotocraftApp, select: Option<&str>) -> Option<DialogId> {
     let layer_id = st.active_layer?;
     let layer = st.doc.layer(layer_id)?.clone();
     let (light, mode, doc) = (st.doc.global_light.angle, st.doc.mode, st.doc.id);
-    let user: Map<String, Value> = app.session.presets.layer_defaults.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let mut user: Map<String, Value> = app.session.presets.layer_defaults.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let pattern = EffectKind::PatternOverlay.key();
+    if let Some(params) = last_pattern_overlay().recall(app.framework.host()).or_else(|| user.remove(pattern)) {
+        user.insert(pattern.into(), restore_pattern(&app.session, params));
+    }
     let keys = blend_keys();
     let specs = specs(&keys, &user, light);
     let mut draft = LayerStyleDraft::new(draft_of(&layer, light, mode));
@@ -822,13 +850,26 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
     contour::answered(app, id);
 }
 
+fn pattern_overlay_values(layer: &Layer) -> impl Iterator<Item = Value> + '_ {
+    layer.effects.items.iter().filter(|fx| fx.enabled() && matches!(fx, Effect::PatternOverlay { .. })).map(|fx| values_of(fx, 0.0))
+}
+
 /// OK: replaces the layer's effects with the style's, as one history step.
 fn finish(app: &mut PhotocraftApp, doc: photocraft_doc::DocId, layer: LayerId, style: &LayerStyle) {
-    let Some(light) = app.session.active().filter(|s| s.doc.id == doc).map(|s| f64::from(s.doc.global_light.angle)) else {
+    let Some(active) = app.session.active().filter(|s| s.doc.id == doc) else {
         return fail(app, "Layer Style target document changed".into());
     };
+    let light = f64::from(active.doc.global_light.angle);
+    let before: Vec<_> = active.doc.layer(layer).into_iter().flat_map(pattern_overlay_values).collect();
     if let Err(error) = apply(style, layer, Some(light), |id, p| app.run(id, p)) {
-        fail(app, error);
+        return fail(app, error);
+    }
+
+    // Reuse applied values (including the resolved id and clamped values) only when OK added
+    // or edited the overlay. An unrelated Layer Style edit leaves this memory alone.
+    let mut applied = app.session.active().and_then(|s| s.doc.layer(layer)).into_iter().flat_map(pattern_overlay_values);
+    if let Some(params) = applied.find(|params| !before.contains(params)) {
+        last_pattern_overlay().store(app.framework.host(), &params);
     }
 }
 
@@ -873,6 +914,9 @@ fn reset_to_default(app: &mut PhotocraftApp, dialog: DialogId, instance: EffectI
     let Ok(v) = app.run("layer.layerStyle.defaultFor", json!({"kind": kind.key()})) else { return };
     let mut values = v["params"].clone();
     drop_from_to(&mut values);
+    if kind == EffectKind::PatternOverlay {
+        values = restore_pattern(&app.session, with_defaults(kind.key(), &values));
+    }
     let params = style_params(kind, &values, None);
     if let Some(d) = app.framework.dialogs.get_mut_by_id::<HostedLayerStyle>(dialog) {
         for (key, value) in params.0 {
