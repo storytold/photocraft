@@ -15,6 +15,8 @@
 //!    the layers it left are released (`B, C1*, C2*` + Bring Forward on B → `C1, B*, C2`).
 //! 4. A clipped layer left with nothing below it to clip to is released.
 
+use std::collections::HashMap;
+
 use photocraft_doc::{Document, Layer, LayerId};
 
 /// The sibling list holding the layer at `path`, and the layer's index in it.
@@ -84,6 +86,25 @@ impl Before {
         let mut left: Vec<LayerId> = moving.iter().flat_map(|&id| clipped_to(doc, id)).filter(|id| !moving.contains(id)).collect();
         left.dedup();
         Self { moving: moving.to_vec(), clipped, groups, left }
+    }
+
+    /// Map clip groups whose base travels with the copies to their new ids. The originals
+    /// stay at the source, so there are no layers left behind to release.
+    pub(crate) fn for_copies(doc: &Document, sources: &[LayerId], copies: &[Layer]) -> Self {
+        if copies.len() < 2 || !copies.iter().any(|layer| layer.clipped) {
+            return Self::default();
+        }
+        let ids: HashMap<_, _> = sources.iter().copied().zip(copies.iter().map(|layer| layer.id)).collect();
+        let mut before = Self { moving: copies.iter().map(|layer| layer.id).collect(), ..Self::default() };
+        for (&source, copy) in sources.iter().zip(copies) {
+            let group = group_of(doc, source);
+            let Some(&base) = group.first().and_then(|id| ids.get(id)) else { continue };
+            if copy.id != base {
+                before.clipped.push(copy.id);
+            }
+            before.groups.push((copy.id, group.into_iter().filter_map(|id| ids.get(&id).copied()).collect()));
+        }
+        before
     }
 
     fn group(&self, id: LayerId) -> &[LayerId] {

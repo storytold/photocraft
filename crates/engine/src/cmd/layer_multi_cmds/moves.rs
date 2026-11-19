@@ -780,7 +780,7 @@ fn board_offsets(doc: &Document, ids: &[LayerId], from: &[Origin]) -> Result<Vec
 fn apply_move(doc: &mut Document, moved_ids: &[LayerId], target: LayerId, pos: &str, copy: bool, add_copy: bool) -> Result<Vec<LayerId>> {
     const CMD: &str = "layer.moveTo";
     let background = crate::background_cmds::background_id(doc);
-    let before = if copy { Default::default() } else { crate::clip_group::Before::read(doc, moved_ids) };
+    let before_move = (!copy).then(|| crate::clip_group::Before::read(doc, moved_ids));
     // Read before the layers are lifted out: afterwards the source board, and any lock the layer
     // had from the groups around it, are out of reach. A copy is a new layer, so only its own
     // locks (which it keeps) can pin it.
@@ -795,6 +795,7 @@ fn apply_move(doc: &mut Document, moved_ids: &[LayerId], target: LayerId, pos: &
     for &id in moved_ids {
         moved.push(if copy { crate::commands::layer_copy(doc, id, add_copy)? } else { doc.remove(id).ok_or(EngineError::NoLayer(id))? });
     }
+    let before = before_move.unwrap_or_else(|| crate::clip_group::Before::for_copies(doc, moved_ids, &moved));
     let copies: Vec<LayerId> = if copy { moved.iter().map(|l| l.id).collect() } else { Vec::new() };
     // Look up the destination AFTER removing every source: its indices may have shifted.
     let path = doc.path_of(target).ok_or(EngineError::NoLayer(target))?;
