@@ -58,7 +58,8 @@ craft-ora = { git = "https://github.com/storytold/craft-libs", rev = "18ffc07519
 craft-kra = { git = "https://github.com/storytold/craft-libs", rev = "18ffc07519b15f5ef39e752aa0f405261fec8ebb" }
 craft-xcf = { git = "https://github.com/storytold/craft-libs", rev = "18ffc07519b15f5ef39e752aa0f405261fec8ebb" }
 craft-pdn = { git = "https://github.com/storytold/craft-libs", rev = "18ffc07519b15f5ef39e752aa0f405261fec8ebb" }
-craft-svg = { git = "https://github.com/storytold/craft-libs", rev = "18ffc07519b15f5ef39e752aa0f405261fec8ebb", features = ["tree-render", "tree-render-system-fonts"] }
+# Keep the shared embedded-image validation API until the framework revision includes it.
+craft-svg = { git = "https://github.com/storytold/craft-libs", rev = "7b8c1eccea0c695a495ab279c9523e6efcc9b8be", features = ["tree-render", "tree-render-system-fonts"] }
 craft-raw = { git = "https://github.com/storytold/craft-libs", rev = "18ffc07519b15f5ef39e752aa0f405261fec8ebb" }
 craft-tiff = { git = "https://github.com/storytold/craft-libs", rev = "18ffc07519b15f5ef39e752aa0f405261fec8ebb" }
 # Camera-field EXIF reader/writer, shared prerequisite craft-libs#1563.
