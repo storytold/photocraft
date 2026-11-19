@@ -17,7 +17,14 @@
 //! own admitted document when none was (a `.pcraft` keeps the name its manifest persisted, so
 //! a name-less open runs under the "document" file-name hint but claims the document, never
 //! the hint) — reported back as `doc` and by `info()`, so a save asked after it can't take an
-//! older document. One open is in
+//! older document. The name-less claim is anchored to the import itself
+//! (`protocol::OwnAdmission`): the documents its own call admitted — synchronously, on the
+//! path with no dialog — or its own Embedded Profile Mismatch's answer frame admitted, and
+//! never any document that merely lands during the wait: another open completing while this
+//! one waits is not this one's answer, and an anchor that cannot be made — the import queued
+//! behind another file's prompt, or held behind a damage or high-memory confirmation, whose
+//! Cancel admits the *next* file — leaves the open to wait out its deadline and reject, its
+//! document staying in the session, nobody's answer. One open is in
 //! flight at a time, and its window is taken as the open's first step — before a byte of the
 //! data is read: a second while the first is unsettled (its
 //! bytes being read, its import running, or waiting for its document behind a
@@ -106,9 +113,9 @@ struct PendingBytes {
 /// queue with `protocol::OPEN_BUSY`.
 struct PendingOpen {
     /// The name the open asked for; `None` when it asked for none, and the claim is then the
-    /// import's own admitted document — the first document new since the import started,
-    /// under whatever name the session gave it — never a name
-    /// ([`protocol::landed_doc`]).
+    /// import's own admitted document — anchored to the admissions of the import itself
+    /// (`own` below), under whatever name the session gave it — never a name
+    /// ([`protocol::own_step`]).
     asked: Option<String>,
     /// The file-name hint the import runs under: the asked name, or "document" when none was
     /// asked. A hint for the formats that take a name from their file — never a rename: a
@@ -122,10 +129,14 @@ struct PendingOpen {
     /// deadline can end it (the read has no timer of its own).
     source: Option<Rc<RefCell<PendingBytes>>>,
     /// The document ids in the session when this import started: only a document new since
-    /// then can answer this request — a named one by its exact name, a name-less one by
-    /// being the import's admitted document ([`protocol::landed_doc`]) — never an older one
-    /// that happens to carry the same name.
+    /// then can answer this request — a named one by its exact name ([`protocol::landed_doc`]),
+    /// a name-less one by being the import's own admitted document (`own`) — never an older
+    /// one that happens to carry the same name.
     before: Vec<u64>,
+    /// The name-less claim's anchor ([`protocol::OwnAdmission`]): what this import — and only
+    /// this import — admitted. Built when the import runs; unused while `asked` is `Some`
+    /// (a named open's association is its name).
+    own: protocol::OwnAdmission,
     /// The import warnings, once it ran.
     warnings: Vec<String>,
     /// The import error, when it failed.
@@ -160,6 +171,7 @@ impl PendingOpen {
             bytes,
             source: None,
             before: Vec::new(),
+            own: protocol::OwnAdmission::default(),
             warnings: Vec::new(),
             failed: None,
             ran: false,
@@ -293,6 +305,30 @@ pub fn process(app: &mut PhotocraftApp) {
     }
 }
 
+/// The app's open prompts up now — a decoded file held behind its damaged-file
+/// confirmation, Embedded Profile Mismatch, or high-memory estimate — as the pass reads
+/// the app's dialogs: by dialog id (stable while the prompt is up), with whether the
+/// prompt is the profile question, the one whose Cancel drops the whole open queue
+/// instead of moving it on to the next file ([`protocol::OpenPrompt`]). The marker fields
+/// are the automation contract `ui.dialog`'s confirm and cancel route on;
+/// `open_prompt::MEMORY_FIELD` is public, and the other two travel beside it.
+fn open_prompts(app: &PhotocraftApp) -> Vec<protocol::OpenPrompt> {
+    /// The Embedded Profile Mismatch's marker (`open_prompt`'s private `FIELD`).
+    const HELD_OPEN: &str = "__heldOpen";
+    /// The damaged-file confirmation's (`open_prompt`'s private `DAMAGE_FIELD`).
+    const DAMAGED_OPEN: &str = "__psdDamagedOpen";
+    let memory = photocraft_ui_egui::open_prompt::MEMORY_FIELD;
+    app.ui
+        .dialogs
+        .iter()
+        .filter(|d| d.fields.contains_key(HELD_OPEN) || d.fields.contains_key(DAMAGED_OPEN) || d.fields.contains_key(memory))
+        .map(|d| protocol::OpenPrompt {
+            dialog: d.id,
+            profile: d.fields.contains_key(HELD_OPEN) && !d.fields.contains_key(DAMAGED_OPEN) && !d.fields.contains_key(memory),
+        })
+        .collect()
+}
+
 /// Runs the one open asked of this frame and settles it once its document has appeared. One
 /// open at a time: a second while the first is unsettled was refused at the queue
 /// (`protocol::OPEN_BUSY`), so this holds a single entry. What happens to it is
@@ -315,8 +351,10 @@ pub fn process(app: &mut PhotocraftApp) {
 ///    the one cancel that API refuses — the damaged-file confirmation, whose answer is
 ///    crate-private — leaves the entry holding the window as an observer until the app is
 ///    done with the file;
-/// 5. a document new since its import started — the claim ([`protocol::landed_doc`]): named
-///    exactly as asked when a name was, or the import's own admitted document when none was;
+/// 5. the claim: a document new since its import started, named exactly as asked when a
+///    name was ([`protocol::landed_doc`]), or — when none was — the import's own admitted
+///    document ([`protocol::own_step`]), anchored to the admissions of the import itself
+///    and never to whatever else lands during the wait;
 /// 6. the app was seen holding its file behind an open prompt and now holds nothing — a prompt
 ///    gone *and* no job of the name still opening — with no document of the name arrived: the
 ///    file was disposed of in the app (its dialog cancelled), and the wait ends at once rather
@@ -364,6 +402,14 @@ fn settle_opens(app: &mut PhotocraftApp) {
         }
         p.ran = true;
         p.before = app.session.documents().iter().map(|st| st.doc.id.0).collect();
+        // Whether the app already had an open decision pending when this import starts:
+        // another file's prompt up, anything waiting in its open queue, or an open job.
+        // This import's file then queues behind all that, and nothing the pass can observe
+        // says which later admissions were its — so its name-less claim is anchored to what
+        // its own call admits, and to nothing that lands after (below, and
+        // `protocol::OwnAdmission`).
+        let queued_behind =
+            photocraft_ui_egui::open_prompt::has_open_dialog(app) || photocraft_ui_egui::open_prompt::waiting(app) || !app.jobs.opens.is_empty();
         match app.open_bytes(&p.name, &p.bytes) {
             Ok(warnings) => {
                 p.bytes = Vec::new();
@@ -374,6 +420,17 @@ fn settle_opens(app: &mut PhotocraftApp) {
                 p.failed = Some(e);
             }
         }
+        // The name-less claim's anchor: the documents this call itself admitted — the diff
+        // across it, race-free (the frame is single-threaded; on the path with no question
+        // to answer, the document is in the session before the call returns) — and the
+        // import's own open prompt, latched only when the app held nothing else, which puts
+        // this file at the front of the open queue: the prompt that appeared with the call
+        // is then its own (nothing queued behind it can prompt while it waits). The
+        // admitted ids, never the decoded file's own — the session may reassign one of
+        // those on admission.
+        let admitted = app.session.documents().iter().map(|st| st.doc.id.0).filter(|id| !p.before.contains(id)).collect();
+        let prompt = if queued_behind { None } else { open_prompts(app).first().copied() };
+        p.own = protocol::OwnAdmission { admitted, prompt, foreign: Vec::new() };
     }
     let docs: Vec<(u64, String)> = app.session.documents().iter().map(|st| (st.doc.id.0, st.doc.name.clone())).collect();
     // Whether the app is holding files behind open prompts (damage, profile or high-memory —
@@ -390,10 +447,23 @@ fn settle_opens(app: &mut PhotocraftApp) {
         // gone). The observation's release condition, and the other half of the
         // cancelled-in-the-app read.
         let app_holds = prompt_up || app.jobs.opens.iter().any(|t| t.name == p.name);
+        // The claim, per the open's own association: a named open's exact name
+        // ([`protocol::landed_doc`] — the name is the claim), or a name-less open's own
+        // admitted document ([`protocol::own_step`]) — anchored to the import itself, so a
+        // document another open lands during this one's wait is recorded foreign and never
+        // settles this promise.
+        let landed = match p.asked.as_deref() {
+            Some(name) => protocol::landed_doc(&p.before, name, &docs),
+            None => protocol::own_step(
+                &mut p.own,
+                &p.before,
+                &protocol::OwnPass { docs: docs.clone(), active: app.session.active().map(|st| st.doc.id.0), prompts: open_prompts(app) },
+            ),
+        };
         let step = protocol::open_step(&protocol::OpenPass {
             failed: p.failed.clone(),
             reading: p.source.is_some(),
-            landed: protocol::landed_doc(&p.before, p.asked.as_deref(), &docs),
+            landed,
             app_holds,
             held: p.held,
             timed_out: now >= p.deadline,

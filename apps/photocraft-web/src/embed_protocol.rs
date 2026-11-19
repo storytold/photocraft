@@ -175,20 +175,135 @@ pub fn expects_document(name: &str) -> bool {
     !PRESET_EXTS.contains(&extension(name).as_str())
 }
 
-/// The document an open settles on: the first document new since the import started
-/// (`before`). A named open (`asked`) takes only a document of that very name, *exactly* —
-/// there is no fallback to any other new document, so a document of a different name is never
-/// a named open's (two opens cannot answer with each other's, whatever timing lands them in
-/// one pass), and one whose document never comes — its dialog cancelled, or a `.psdt` the app
-/// opens as "Untitled-N" — waits out its deadline and rejects. An open that asked for no name
-/// (`asked` `None`) takes its import's own admitted document under whatever name the session
-/// gave it: a `.pcraft` keeps the name its manifest persisted (#3312), so the "document" a
-/// name-less import runs under is a file-name hint, never a name the open could claim — the
-/// claim is the new `DocId`, the open answers with the document's own name, and the imported
-/// document is never renamed to the hint. `None` while nothing of the sort has appeared:
-/// the import is still running, or is held behind a dialog in the app.
-pub fn landed_doc(before: &[u64], asked: Option<&str>, docs: &[(u64, String)]) -> Option<(u64, String)> {
-    docs.iter().find(|(id, n)| !before.contains(id) && asked.is_none_or(|a| n == a)).map(|(id, n)| (*id, n.clone()))
+/// The document a **named** open settles on: the first document new since the import started
+/// (`before`) of exactly the asked-for name — there is no fallback to any other new document,
+/// so a document of a different name is never a named open's (two opens cannot answer with
+/// each other's, whatever timing lands them in one pass), and one whose document never comes —
+/// its dialog cancelled, or a `.psdt` the app opens as "Untitled-N" — waits out its deadline
+/// and rejects. The name *is* this open's request-specific association. An open that asked for
+/// no name has none, so it claims through [`own_step`] instead — its import's own admitted
+/// document, never "any document newly added during the wait" (the R4 race this split closes:
+/// the name-less arm here used to take the first new document, whoever's it was).
+///
+/// `None` while nothing of the sort has appeared: the import is still running, or is held
+/// behind a dialog in the app.
+pub fn landed_doc(before: &[u64], asked: &str, docs: &[(u64, String)]) -> Option<(u64, String)> {
+    docs.iter().find(|(id, n)| !before.contains(id) && n == asked).map(|(id, n)| (*id, n.clone()))
+}
+
+// ---------- the name-less open's claim (R4: anchor it to the import's own admissions) ----------
+
+/// An open prompt holding a decoded file back, as the pass reads the app's dialogs: the
+/// prompt dialog's id (stable while it is up), and whether it is the Embedded Profile
+/// Mismatch — the one prompt whose Cancel drops every queued file, admitting nothing
+/// (`open_prompt::answer(app, None)`), instead of moving the open queue on to the next
+/// file, as the damaged-file and high-memory confirmations' Cancels do. That difference
+/// is what makes the profile prompt the only one an outside observer can attribute an
+/// answer frame's admissions to: its answer admits the prompting file's document first
+/// and its Cancel admits nothing at all, so whatever appears in its answer frame
+/// appeared for that file.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OpenPrompt {
+    /// The prompt dialog's id, stable for the prompt's lifetime.
+    pub dialog: u64,
+    /// The Embedded Profile Mismatch — not the damage or high-memory confirmation.
+    pub profile: bool,
+}
+
+/// The request-specific association a name-less open settles by: which documents *this*
+/// import — and only this import — admitted. R4: the claim used to be "the first document
+/// new since the import began", which is no association at all — another open completing
+/// during the wait (its file ahead in the app's open queue, its prompt answered while this
+/// import's own document never came) handed that open's document to this one's promise.
+/// The claim is now anchored to admissions the import itself caused, and nothing else is
+/// ever taken. An anchor that cannot be made (the notes on [`OwnAdmission::prompt`]) leaves
+/// the open to wait out its deadline and reject, its document — if one lands — staying in
+/// the session, nobody's answer, exactly as a cancelled open's does.
+#[derive(Debug, Default, PartialEq)]
+pub struct OwnAdmission {
+    /// The documents the import call itself admitted, synchronously — the diff across
+    /// `open_bytes`: on the path with no question to answer, the document enters the
+    /// session before the call returns, and the frame is single-threaded, so no other
+    /// open can interleave with it. Admitted `DocId`s, never the decoded file's own: the
+    /// session reassigns a persisted id that another document already owns on admission,
+    /// which is why the held file's id is not a usable anchor.
+    pub admitted: Vec<u64>,
+    /// The import's own open prompt, latched only when the app held no other open
+    /// decision when the import ran — no prompt up, nothing in its open queue, no open
+    /// job — which puts this import's file at the *front* of that queue: the prompt that
+    /// appeared with the import is then its file's own (nothing queued behind it can
+    /// prompt while it waits). Only a `profile` prompt is claimable ([`own_step`]); a
+    /// damage or high-memory confirmation never is — its Cancel advances the queue and
+    /// admits the *next* file, which no outside observation can tell from this import's
+    /// own admission.
+    pub prompt: Option<OpenPrompt>,
+    /// Documents that appeared while no attribution above could have admitted them —
+    /// another open completing during the wait. Recorded so they can never be claimed
+    /// later, whatever later passes see.
+    pub foreign: Vec<u64>,
+}
+
+/// What one pass reads of the app's session and open prompts, for [`own_step`].
+#[derive(Debug, Default, PartialEq)]
+pub struct OwnPass {
+    /// The documents in the session now: (id, name).
+    pub docs: Vec<(u64, String)>,
+    /// The active document: an answer admits the prompting file's document first and
+    /// whatever it drains behind it after, leaving the last of those active — so a claim
+    /// frame's non-active new document is the prompting file's own.
+    pub active: Option<u64>,
+    /// The open prompts up now, by dialog id.
+    pub prompts: Vec<OpenPrompt>,
+}
+
+/// One pass of a name-less open's wait: the document this import — and only this import —
+/// may settle on, when one appeared that nothing else can have admitted.
+///
+/// * the import call's own admission ([`OwnAdmission::admitted`]), once it is in the
+///   session — the no-question path, wherever that document sits and whatever landed
+///   around it;
+/// * the frame the import's own **profile** prompt was answered (its dialog is gone): a
+///   Cancel would have admitted nothing (it drops the whole queue), so the documents new
+///   in that frame are the prompting file's own admission — the first the answer
+///   admitted — and whatever the same answer drained behind it, so the claim prefers the
+///   frame's non-active new document (the drain's last file is the active one).
+///
+/// Everything else that appears — another open completing during the wait, the R4 race —
+/// is recorded in [`OwnAdmission::foreign`] and never claimed: `None`, and the open keeps
+/// waiting: to settle with its own document in a later pass, or to reject at its
+/// deadline.
+pub fn own_step(own: &mut OwnAdmission, before: &[u64], p: &OwnPass) -> Option<(u64, String)> {
+    // The import call's own synchronous admission, present now: the claim, whatever else
+    // appeared around it.
+    if let Some((id, name)) = p.docs.iter().find(|(id, _)| own.admitted.contains(id)) {
+        return Some((*id, name.clone()));
+    }
+    // This pass's admissions: new since the import began, owned by no earlier pass.
+    let fresh: Vec<(u64, String)> = p.docs.iter().filter(|(id, _)| !before.contains(id) && !own.foreign.contains(id)).cloned().collect();
+    // The import's own profile prompt, answered this pass: its dialog is gone, and only
+    // the profile prompt's answer frame is attributable — its Cancel admits nothing, so
+    // a document appearing in this frame appeared for the answer, and the prompting
+    // file's own is the first it admitted (the drain behind it leaves its last active).
+    if let Some(prompt) = own.prompt
+        && prompt.profile
+        && !p.prompts.iter().any(|up| up.dialog == prompt.dialog)
+    {
+        own.prompt = None;
+        if let Some(own_doc) = fresh.iter().find(|(id, _)| p.active != Some(*id)) {
+            return Some(own_doc.clone());
+        }
+        return fresh.first().cloned();
+    }
+    // A prompt that is gone but was never claimable (damage, high memory) is dropped
+    // with it: whatever its frame admitted is not attributable, and lands below.
+    if let Some(prompt) = own.prompt
+        && !p.prompts.iter().any(|up| up.dialog == prompt.dialog)
+    {
+        own.prompt = None;
+    }
+    // Nothing of this import's can have admitted what appeared: another open's.
+    own.foreign.extend(fresh.iter().map(|(id, _)| *id));
+    None
 }
 
 // ---------- the bridge's window policy ----------
@@ -262,8 +377,10 @@ pub struct OpenPass {
     /// The bytes are still being read: nothing of the open has run, and no document can be its
     /// answer yet.
     pub reading: bool,
-    /// The asked-for document, when it has landed: new since the import started, of the exact
-    /// name ([`landed_doc`]).
+    /// The claimed document, when one has landed: a named open's — new since the import
+    /// started, of the exact asked-for name ([`landed_doc`]) — or a name-less open's own
+    /// admitted document ([`own_step`]), anchored to the import itself and never to
+    /// whatever else lands during the wait.
     pub landed: Option<(u64, String)>,
     /// The app still holds anything of the file: an open prompt on screen, a file queued
     /// behind one, or an opening job of its name. The observation's release condition, and
@@ -329,7 +446,9 @@ pub enum OpenStep {
 ///    already landed, settle [`OPEN_TIMEOUT`] and release (the document stays, untouched);
 ///    without it, [`OpenStep::TimeoutPending`] — the import must be terminated or observed
 ///    before the window opens;
-/// 5. the asked-for document landed: the claim, settle with it;
+/// 5. the claim: a named open's asked-for document (new and exactly named,
+///    [`landed_doc`]) or a name-less open's own admitted document ([`own_step`]) — never
+///    another open's; settle with it;
 /// 6. the app was seen holding the file and holds nothing now: it was disposed of (its dialog
 ///    cancelled) — settle [`OPEN_TIMEOUT`] at once rather than at the deadline;
 /// 7. otherwise wait.
@@ -567,19 +686,19 @@ mod tests {
     #[test]
     fn an_open_lands_only_as_a_document_of_its_exact_name() {
         let docs = [(1, "Old.psd".to_string()), (2, "Poster.psd".to_string()), (3, "later.psd".to_string())];
-        assert_eq!(landed_doc(&[1], Some("Poster.psd"), &docs), Some((2, "Poster.psd".to_string())), "the new one with the asked-for name");
-        assert_eq!(landed_doc(&[1], Some("no such name"), &docs), None, "no fallback: a document of another name is never this open's");
-        assert_eq!(landed_doc(&[1, 2, 3], Some("Poster.psd"), &docs), None, "nothing new yet");
-        assert_eq!(landed_doc(&[], Some("Poster.psd"), &[]), None, "no documents at all");
+        assert_eq!(landed_doc(&[1], "Poster.psd", &docs), Some((2, "Poster.psd".to_string())), "the new one with the asked-for name");
+        assert_eq!(landed_doc(&[1], "no such name", &docs), None, "no fallback: a document of another name is never this open's");
+        assert_eq!(landed_doc(&[1, 2, 3], "Poster.psd", &docs), None, "nothing new yet");
+        assert_eq!(landed_doc(&[], "Poster.psd", &[]), None, "no documents at all");
         let named_late = [(1, "Old.psd".to_string()), (4, "other.psd".to_string()), (2, "Poster.psd".to_string())];
         assert_eq!(
-            landed_doc(&[1], Some("Poster.psd"), &named_late),
+            landed_doc(&[1], "Poster.psd", &named_late),
             Some((2, "Poster.psd".to_string())),
             "the named one wins over an earlier new one it doesn't name"
         );
         // The document of that name that was already there doesn't answer: only what is new
         // since this import started can.
-        assert_eq!(landed_doc(&[1], Some("Poster.psd"), &[(1, "Poster.psd".to_string())]), None, "the old same-named document isn't this open's");
+        assert_eq!(landed_doc(&[1], "Poster.psd", &[(1, "Poster.psd".to_string())]), None, "the old same-named document isn't this open's");
     }
 
     #[test]
@@ -588,13 +707,9 @@ mod tests {
         // refused OPEN_BUSY), so B's `before` holds everything A saw plus A's document — and
         // the duplicate the app opens under the same name for B answers B, never A's again.
         let first = [(1, "Old.psd".to_string()), (2, "a.psd".to_string())];
-        assert_eq!(landed_doc(&[1], Some("a.psd"), &first), Some((2, "a.psd".to_string())));
+        assert_eq!(landed_doc(&[1], "a.psd", &first), Some((2, "a.psd".to_string())));
         let second = [(1, "Old.psd".to_string()), (2, "a.psd".to_string()), (4, "a.psd".to_string())];
-        assert_eq!(
-            landed_doc(&[1, 2], Some("a.psd"), &second),
-            Some((4, "a.psd".to_string())),
-            "the new duplicate, not the first open's document a second time"
-        );
+        assert_eq!(landed_doc(&[1, 2], "a.psd", &second), Some((4, "a.psd".to_string())), "the new duplicate, not the first open's document a second time");
     }
 
     #[test]
@@ -604,8 +719,13 @@ mod tests {
         // appears — nothing lands it as A's; A rejects (at its deadline, or at once through
         // the prompt read) and "b.psd" stays in the session, nobody's answer. A `.psdt`,
         // which the app opens as "Untitled-N", is the same shape: never claimed.
-        assert_eq!(landed_doc(&[], Some("a.psd"), &[(9, "b.psd".to_string())]), None);
-        assert_eq!(landed_doc(&[1], Some("card.psdt"), &[(1, "Old.psd".to_string()), (2, "Untitled-1".to_string())]), None);
+        assert_eq!(landed_doc(&[], "a.psd", &[(9, "b.psd".to_string())]), None);
+        assert_eq!(landed_doc(&[1], "card.psdt", &[(1, "Old.psd".to_string()), (2, "Untitled-1".to_string())]), None);
+    }
+
+    /// An [`OwnPass`] over literal documents, the active document's id, and the prompts up.
+    fn own_pass(docs: &[(u64, &str)], active: Option<u64>, prompts: &[OpenPrompt]) -> OwnPass {
+        OwnPass { docs: docs.iter().map(|(id, n)| (*id, (*n).into())).collect(), active, prompts: prompts.to_vec() }
     }
 
     #[test]
@@ -614,21 +734,149 @@ mod tests {
         // but a `.pcraft` lands under the name its manifest persisted — an exact-"document"
         // claim could never see it, and the open rejected at its 30 s deadline with its
         // document sitting open in the session. The name-less claim is the import's own
-        // admitted document: the first `DocId` new since the import started, under whatever
-        // name the session gave it — answered back under that name, never renamed to the
-        // hint.
-        let docs = [(1, "Old.psd".to_string()), (2, "Poster.pcraft".to_string())];
-        assert_eq!(landed_doc(&[1], None, &docs), Some((2, "Poster.pcraft".to_string())), "the admitted document, under its own name");
-        assert_eq!(landed_doc(&[1, 2], None, &docs), None, "nothing new since the import: still waiting");
-        assert_eq!(landed_doc(&[], None, &[]), None, "no documents at all");
+        // admitted document — anchored to the admissions of the import itself
+        // ([`own_step`]), under whatever name the session gave it — answered back under
+        // that name, never renamed to the hint.
+        let mut own = OwnAdmission { admitted: vec![2], ..Default::default() };
         assert_eq!(
-            landed_doc(&[], None, &[(5, "Untitled-1".to_string())]),
+            own_step(&mut own, &[1], &own_pass(&[(1, "Old.psd"), (2, "Poster.pcraft")], Some(2), &[])),
+            Some((2, "Poster.pcraft".to_string())),
+            "the admitted document, under its own name"
+        );
+        assert_eq!(
+            own_step(&mut OwnAdmission::default(), &[1, 2], &own_pass(&[(1, "Old.psd"), (2, "Poster.pcraft")], Some(2), &[])),
+            None,
+            "nothing new since the import, nothing admitted by it: still waiting"
+        );
+        assert_eq!(own_step(&mut OwnAdmission::default(), &[], &OwnPass::default()), None, "no documents at all");
+        let mut own = OwnAdmission { admitted: vec![5], ..Default::default() };
+        assert_eq!(
+            own_step(&mut own, &[], &own_pass(&[(5, "Untitled-1")], Some(5), &[])),
             Some((5, "Untitled-1".to_string())),
             "a template the app renames is a name-less open's too: it asked for no name"
         );
+        // The claim is the *admitted id*, not an order among the new: the import's
+        // document (2) answers even when another open's (9) sits ahead of it in the
+        // session — the old claim, "the first document new since the import began", took
+        // (9, "theirs.psd") here. That was R4's mis-settlement; this is the lock.
+        let mut own = OwnAdmission { admitted: vec![2], ..Default::default() };
+        assert_eq!(
+            own_step(&mut own, &[1], &own_pass(&[(1, "Old.psd"), (9, "theirs.psd"), (2, "Poster.pcraft")], Some(9), &[])),
+            Some((2, "Poster.pcraft".to_string())),
+            "its own admission, wherever it sits and whatever landed around it"
+        );
         // A named open still demands its exact name — and the name-less hint is not a name
         // anyone asked for, so it claims nothing by itself.
-        assert_eq!(landed_doc(&[1], Some("document"), &docs), None, "the persisted name is not the hint the import ran under");
+        assert_eq!(
+            landed_doc(&[1], "document", &[(1, "Old.psd".to_string()), (2, "Poster.pcraft".to_string())]),
+            None,
+            "the persisted name is not the hint the import ran under"
+        );
+    }
+
+    /// R4, the finding's own timeline: the import runs while another open is still being
+    /// decided — its prompt up, its file ahead in the app's open queue — so this import's
+    /// file queues behind it, its call admits nothing, and its place in the queue is not
+    /// observable (no prompt of its own can be told from another's). The other open then
+    /// completes during the wait: its document lands. The old name-less claim — "the first
+    /// document new since the import began" — settled this open's promise with it; the
+    /// anchored claim never does, and the open rejects at its deadline with the document
+    /// staying in the session, untouched, nobody's answer.
+    #[test]
+    fn an_unnamed_open_behind_another_open_never_settles_with_its_document() {
+        let before = [1];
+        // The import ran queued behind another file's open prompt: nothing admitted, and
+        // its own prompt is not identifiable, so there is no anchor but waiting.
+        let mut own = OwnAdmission::default();
+        // The other open completes: (9, "theirs.psd") lands while this one waits — the old
+        // claim returned Some((9, "theirs.psd")) here, the mis-settlement R4 closes.
+        assert_eq!(
+            own_step(&mut own, &before, &own_pass(&[(1, "Old.psd"), (9, "theirs.psd")], Some(9), &[])),
+            None,
+            "another open's document is never this open's answer, whatever lands first"
+        );
+        // Even this import's own file landing later (drained behind the other's answer,
+        // a frame no observation can attribute) claims nothing: not foreign, not admitted,
+        // not answerable — and at the deadline the open rejects, the documents staying.
+        assert_eq!(
+            own_step(&mut own, &before, &own_pass(&[(1, "Old.psd"), (9, "theirs.psd"), (5, "mine.pcraft")], Some(5), &[])),
+            None,
+            "an admission no anchor owns is left in the session, never taken"
+        );
+        assert_eq!(
+            open_step(&OpenPass { timed_out: true, ..Default::default() }),
+            OpenStep::TimeoutPending,
+            "no fallback claim at the deadline: the promise rejects OPEN_TIMEOUT and the import is stopped — the documents stay untouched"
+        );
+    }
+
+    /// R4's race on the prompt path, frame by frame over the claim state machine: the
+    /// import's own Embedded Profile Mismatch is up (its file at the front of the app's
+    /// open queue — the only state in which a prompt of its own can be latched), and the
+    /// wait sees documents land around it. Only the frame that answers *its* prompt can
+    /// settle it, and only with that frame's first non-active admission — the prompting
+    /// file's own; everything else is recorded foreign and never claimed, whatever pass
+    /// it appeared in.
+    #[test]
+    fn an_unnamed_open_settles_with_its_own_prompt_answer_not_the_first_to_land() {
+        let before = [1];
+        let mine = OpenPrompt { dialog: 7, profile: true };
+        let mut own = OwnAdmission { prompt: Some(mine), ..Default::default() };
+        // Mid-wait: a document appears from outside the open queue (a path the pass
+        // cannot attribute), the import's own prompt still up. The old claim took it.
+        assert_eq!(
+            own_step(&mut own, &before, &own_pass(&[(1, "Old.psd"), (9, "theirs.psd")], Some(9), &[mine])),
+            None,
+            "a document that lands while this import waits is foreign, never its answer"
+        );
+        // The prompt is answered: the frame admits the import's own document (5) first
+        // and drains a file that had queued behind it (6) after — the drain's last file
+        // is the active one, so the claim takes the frame's non-active new document.
+        assert_eq!(
+            own_step(&mut own, &before, &own_pass(&[(1, "Old.psd"), (9, "theirs.psd"), (5, "Poster.pcraft"), (6, "queued.psd")], Some(6), &[])),
+            Some((5, "Poster.pcraft".to_string())),
+            "the prompting file's own admission, not the drain's and not the stranger's"
+        );
+        // Settled through the state machine, the claim is what the promise resolves with.
+        assert_eq!(
+            open_step(&OpenPass { landed: Some((5, "Poster.pcraft".into())), ..Default::default() }),
+            OpenStep::SettleOk(Some((5, "Poster.pcraft".into())))
+        );
+        // The cancelled shape of the same prompt: its Cancel drops the whole open queue,
+        // admitting nothing — no claim, and the wait ends through the disposal read, not
+        // with whoever's document appears next.
+        let mut own = OwnAdmission { prompt: Some(mine), ..Default::default() };
+        assert_eq!(own_step(&mut own, &before, &own_pass(&[(1, "Old.psd")], Some(1), &[])), None, "a cancelled prompt admits nothing");
+        assert_eq!(
+            own_step(&mut own, &before, &own_pass(&[(1, "Old.psd"), (8, "whoever.psd")], Some(8), &[])),
+            None,
+            "and whatever lands after the cancel is foreign to it"
+        );
+        assert_eq!(
+            open_step(&OpenPass { held: true, app_holds: false, ..Default::default() }),
+            OpenStep::SettleErr(OPEN_TIMEOUT.into()),
+            "the wait ends at once through the prompt read, claiming nothing"
+        );
+    }
+
+    /// A damage or high-memory confirmation is never a claimable anchor: its Cancel
+    /// discards only its own file and advances the open queue, admitting the *next* file
+    /// — a frame no outside observation can tell from this import's own admission. A
+    /// name-less open behind one never claims by observation; it waits out its deadline,
+    /// its document (if one lands) staying in the session, nobody's answer — the same
+    /// shape as a named `.psdt` open.
+    #[test]
+    fn a_nameless_open_behind_a_damage_or_memory_prompt_never_claims_by_observation() {
+        let mut own = OwnAdmission { prompt: Some(OpenPrompt { dialog: 3, profile: false }), ..Default::default() };
+        // The confirmation is answered — Continue or Approve — and a document lands with
+        // it: this import's own, or the next file's after a Decline. Not attributable.
+        assert_eq!(
+            own_step(&mut own, &[1], &own_pass(&[(1, "Old.psd"), (4, "either.psd")], Some(4), &[])),
+            None,
+            "the confirmation's answer frame cannot be attributed from outside"
+        );
+        // The prompt is gone and can never claim; a later landing is foreign too.
+        assert_eq!(own_step(&mut own, &[1], &own_pass(&[(1, "Old.psd"), (4, "either.psd"), (5, "later.psd")], Some(5), &[])), None);
     }
 
     /// R3-4's walkthrough, end to end on the pure policy: a default save (no format asked)
@@ -650,11 +898,17 @@ mod tests {
         let saved = export(&doc, &name, &ExportOptions::default()).expect("the default .pcraft save");
         let reopened = photocraft_format::load_from_bytes(&saved.bytes).expect("the save loads back");
         assert_eq!(reopened.name, "Poster.pcraft", "the document the app admits for the reopened save");
-        // The session held one document (id 1) when the reopen's import started; the admitted
-        // one (id 7) answers under its own name.
+        // The session held one document (id 1) when the reopen's import started; the
+        // admitted one (id 7) answers under its own name — the id the import's own call
+        // admitted ([`own_step`]), not a name matched and not whatever else landed.
         let session = [(7, reopened.name.clone())];
-        assert_eq!(landed_doc(&[1], None, &session), Some((7, "Poster.pcraft".to_string())), "the name-less reopen settles, by id");
-        assert_eq!(landed_doc(&[1], Some("document"), &session), None, "the exact-hint claim the old policy made could only time out on it");
+        let mut own = OwnAdmission { admitted: vec![7], ..Default::default() };
+        assert_eq!(
+            own_step(&mut own, &[1], &own_pass(&[(1, "Old.psd"), (7, "Poster.pcraft")], Some(7), &[])),
+            Some((7, "Poster.pcraft".to_string())),
+            "the name-less reopen settles, by id"
+        );
+        assert_eq!(landed_doc(&[1], "document", &session), None, "the exact-hint claim the old policy made could only time out on it");
     }
 
     #[test]
@@ -764,7 +1018,7 @@ mod tests {
         // counter-example, same name, different contents).
         let before = [1, 4];
         let docs = [(1, "Old.psd".to_string()), (4, "a.psd".to_string()), (5, "a.psd".to_string())];
-        assert_eq!(landed_doc(&before, Some("a.psd"), &docs), Some((5, "a.psd".to_string())), "B's own new document, never A's late one");
+        assert_eq!(landed_doc(&before, "a.psd", &docs), Some((5, "a.psd".to_string())), "B's own new document, never A's late one");
     }
 
     #[test]
