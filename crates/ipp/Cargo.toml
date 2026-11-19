@@ -7,7 +7,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-craft-ipp = { git = "https://github.com/storytold/craft-libs", rev = "8a9bbf71ab8f5b5ad2fa7d8d96731e65ebec8157" }
+craft-ipp = { git = "https://github.com/storytold/craft-libs", rev = "919c15c3a51b9e2a9f943d5ca9e37928e12b98d4" }
 
 [lints]
 workspace = true
