@@ -62,12 +62,18 @@ fn harness(docs: usize, files: Arc<ScriptedFiles>) -> Harness<'static, Box<Photo
     h
 }
 
-/// Opens the Batch form through the menu and runs the frames that show it.
-fn open(h: &mut Harness<'_, Box<PhotocraftApp>>) -> DialogId {
+/// Opens the Batch form through the menu and finds its id, without drawing a frame: a control client's
+/// open and its first writes land in one turn, before the form has shown.
+fn open_undrawn(h: &mut Harness<'_, Box<PhotocraftApp>>) -> DialogId {
     let ctx = h.ctx.clone();
     let reply = crate::menus::invoke(h.state_mut(), &ctx, BATCH, json!({})).expect("the Batch form opens");
     let want = reply["dialog"].as_str().expect("the reply names a dialog").to_owned();
-    let id = h.state().framework.dialogs.open_dialogs().into_iter().find(|open| open.id.value().to_string() == want).expect("the form is open").id;
+    h.state().framework.dialogs.open_dialogs().into_iter().find(|open| open.id.value().to_string() == want).expect("the form is open").id
+}
+
+/// Opens the Batch form through the menu and runs the frames that show it.
+fn open(h: &mut Harness<'_, Box<PhotocraftApp>>) -> DialogId {
+    let id = open_undrawn(h);
     h.run_steps(4);
     id
 }
@@ -297,6 +303,12 @@ fn the_override_open_tick_is_the_command_s_override_open() {
         set(&mut h, id, "overrideOpen", json!(tick)).unwrap();
         h.run_steps(2);
         let ctx = h.ctx.clone();
+        // A ticked box answers with its message, and the message is a child of the form: an OK aimed at
+        // the form waits for that answer, so the run settles the message first.
+        if let Some(message) = override_prompt(h.state()) {
+            crate::dialogs::confirm(h.state_mut(), &ctx, message).unwrap();
+            h.run_steps(2);
+        }
         crate::dialogs::confirm(h.state_mut(), &ctx, id).unwrap();
         h.run_steps(4);
         let written = std::fs::read_dir(dir.join(if tick { "out-on" } else { "out-off" })).map(|entries| entries.count()).unwrap_or_default();
@@ -352,4 +364,94 @@ fn a_pick_filed_for_a_form_that_closed_is_forgotten() {
     let next = open(&mut h);
     assert!(field(&h, next, "input").is_none(), "its late answer does not reach the next form");
     assert!(h.query_by_label(&format!("{}{MAIN_SEPARATOR}", dir.to_string_lossy())).is_none(), "and no path label appears");
+}
+
+/// The Choose… row stays drawn under another Source only to take the Source options' keys out; it takes
+/// no value of its own there, so a write between the switch and OK cannot put `input` back.
+#[test]
+fn the_folder_row_takes_no_write_while_another_source_is_chosen() {
+    let mut h = harness(1, Arc::new(ScriptedFiles::new()));
+    let id = open(&mut h);
+    set(&mut h, id, "input", json!("/tmp/batch/in")).unwrap();
+    set(&mut h, id, "source", json!("open")).unwrap();
+    // No frame runs between the switch and this write, so the row's own sweep has had no turn: the
+    // write itself is what has to be refused.
+    let late = set(&mut h, id, "input", json!("/tmp/batch/other"));
+    assert!(late.is_err(), "the Choose… row takes no input while Opened Files is chosen: {late:?}");
+    assert!(field(&h, id, "input").is_none(), "and `input` stays out of the form for OK to read");
+}
+
+/// A pick Choose… filed is forgotten when Source moves away from Folder, not only when the form closes:
+/// its late answer must not walk into the folder the form was given after the way back.
+#[test]
+fn a_pending_pick_is_forgotten_when_the_source_leaves_folder() {
+    let temp = std::env::temp_dir();
+    let old = temp.join(format!("photocraft-batch-left-folder-{}-old", std::process::id()));
+    let fresh = temp.join(format!("photocraft-batch-left-folder-{}-fresh", std::process::id()));
+    let files = Arc::new(ScriptedFiles::held());
+    let mut h = harness(1, files.clone());
+    let id = open(&mut h);
+    h.get_by_label(CHOOSE).click();
+    h.run_steps(2);
+    assert_eq!(files.open(), 1, "Choose… leaves one pick with the host");
+    set(&mut h, id, "source", json!("open")).unwrap();
+    h.run_steps(2);
+    assert_eq!(files.open(), 0, "the pick of a Source that left Folder is forgotten");
+    set(&mut h, id, "source", json!("folder")).unwrap();
+    h.run_steps(2);
+    set(&mut h, id, "input", json!(fresh.to_string_lossy())).unwrap();
+    h.run_steps(2);
+    assert!(files.answer(Picked::Paths(vec![old])).is_none(), "the forgotten pick has no answer left to carry");
+    h.run_steps(3);
+    assert_eq!(field(&h, id, "input"), Some(json!(fresh.to_string_lossy())), "the folder the form holds stays its own");
+}
+
+/// The tick a control client writes in the same turn that opened the form is still a tick: the message
+/// answers the change from what the form opened with, not the first value the pass happens to read.
+#[test]
+fn a_tick_written_before_the_form_drew_shows_the_message() {
+    let mut h = harness(1, Arc::new(ScriptedFiles::new()));
+    let ctx = h.ctx.clone();
+    let id = open_undrawn(&mut h);
+    set(&mut h, id, "overrideOpen", json!(true)).unwrap();
+    // What a `ui.dialog.set` does after its write, before the form has ever drawn.
+    crate::dialogs::take_results(h.state_mut(), &ctx);
+    assert!(override_prompt(h.state()).is_some(), "the first write that ticks Override shows the message");
+    assert_eq!(field(&h, id, "overrideOpen"), Some(json!(true)), "and the tick stands");
+}
+
+/// A closed form's observation is not carried into the next open: the reopened form starts from what it
+/// opened with, so its first tick shows the message even though the last form left the same box ticked.
+#[test]
+fn a_reopened_form_starts_a_new_observation() {
+    let mut h = harness(1, Arc::new(ScriptedFiles::new()));
+    let ctx = h.ctx.clone();
+    let first = open(&mut h);
+    click_check(&mut h, OVERRIDE);
+    let shown = override_prompt(h.state()).expect("ticking the box shows the message");
+    crate::dialogs::confirm(h.state_mut(), &ctx, shown).unwrap();
+    h.run_steps(2);
+    assert!(h.state_mut().framework.dialogs.cancel_by_id(&ctx, first), "the form closes with the box ticked");
+    h.run_steps(3);
+    let again = open_undrawn(&mut h);
+    set(&mut h, again, "overrideOpen", json!(true)).unwrap();
+    crate::dialogs::take_results(h.state_mut(), &ctx);
+    assert!(override_prompt(h.state()).is_some(), "the reopened form's first tick shows the message again");
+}
+
+/// The message belongs to the form that ticked its box: an explicit OK by id waits for the message's
+/// answer, and a Cancel of the form takes the message with it.
+#[test]
+fn the_override_message_is_a_child_of_the_form_that_ticked_it() {
+    let mut h = harness(1, Arc::new(ScriptedFiles::new()));
+    let id = open(&mut h);
+    click_check(&mut h, OVERRIDE);
+    h.run_steps(2);
+    assert!(override_prompt(h.state()).is_some(), "the tick opens the message");
+    let ctx = h.ctx.clone();
+    assert!(!h.state_mut().framework.dialogs.confirm_by_id(&ctx, id), "the form waits for its message's answer");
+    assert!(override_prompt(h.state()).is_some(), "and the message is still there to answer");
+    assert!(h.state_mut().framework.dialogs.cancel_by_id(&ctx, id), "Cancel closes the form");
+    h.run_steps(2);
+    assert!(override_prompt(h.state()).is_none(), "and takes its message with it");
 }

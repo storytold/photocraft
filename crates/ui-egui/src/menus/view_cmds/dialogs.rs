@@ -610,6 +610,11 @@ fn batch_folder_row(app: &PhotocraftApp) -> Param {
     // No label column: the reference application puts these controls under the Source dropdown with
     // their own wording beside them.
     .full_width()
+    // The row is drawn under every Source, only to take the Source options' keys out, so it cannot hide
+    // itself the way the check-box rows do. It takes input while Folder is chosen and nowhere else: a
+    // `ui.set` between the Source switch and OK would otherwise put `input` back with no draw to clear
+    // it, and the form sends a folder it does not show.
+    .enabled_when("source", "folder")
 }
 
 /// One Batch Source check box: its own row and its own key, so a box nobody ticked is no value at all,
@@ -629,11 +634,17 @@ fn batch_check_row(key: &'static str, caption: &'static str) -> Param {
     .visible_when("source", "folder")
 }
 
-/// A Choose… pick whose form has closed is forgotten, the way the application's own Browse route
-/// forgets a pick of a dialog that closed: the host does not hold a ticket nobody will read, and an
-/// answer that arrives later cannot walk into the next Batch form's folder row.
-fn forget_closed_pick(app: &PhotocraftApp, ctx: &egui::Context) {
-    if app.framework.dialogs.open_dialogs().into_iter().any(|dialog| dialog.key.as_deref() == Some("file.automate.batch")) {
+/// A Choose… pick nobody will read is forgotten, the way the application's own Browse route forgets a
+/// pick of a dialog that closed: the host does not hold a ticket nobody will read, and an answer that
+/// arrives later cannot walk into a folder row. It goes with the form that filed it and with the Source
+/// that shows the row: under another Source the row draws only to clear the keys, so an answer kept
+/// waiting there would overwrite the folder the form was given on the way back.
+fn forget_pick_without_its_row(app: &PhotocraftApp, ctx: &egui::Context) {
+    let row_shown = app.framework.dialogs.open_dialogs().into_iter().any(|dialog| {
+        dialog.key.as_deref() == Some("file.automate.batch")
+            && dialog.fields.as_ref().and_then(|fields| fields.get("source")).and_then(Value::as_str) == Some("folder")
+    });
+    if row_shown {
         return;
     }
     let slot = batch_pick_slot();
@@ -643,47 +654,75 @@ fn forget_closed_pick(app: &PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
-/// What each open Batch form had for `overrideOpen` when the pass last looked: the message answers a
-/// tick, not a value the form opened with.
+/// What each open Batch form had for `overrideOpen`, kept under the open it belongs to: the message
+/// answers a tick, not a value the form opened with. A command form keeps its dialog id across its
+/// opens, so the open's own number is part of the key.
 #[derive(Clone, Default)]
-struct OverrideSeen(Vec<(DialogId, bool)>);
+struct OverrideSeen(Vec<(DialogId, u64, bool)>);
+
+/// Where the Batch Override observations wait between passes.
+fn override_seen_slot() -> egui::Id {
+    egui::Id::unique("pc-batch-override-seen")
+}
+
+/// The `overrideOpen` of a Batch form, as the host reports its fields.
+fn override_ticked(fields: Option<&Value>) -> bool {
+    fields.and_then(|fields| fields.get("overrideOpen")).and_then(Value::as_bool).unwrap_or(false)
+}
+
+/// Notes what a Batch form opens with. The control channel can write the Override box in the turn that
+/// opened the form, before it has drawn once, and the message answers that tick: so the observation
+/// starts at the open, from the values the form was given, and not at the first pass that reads it.
+pub(crate) fn note_batch_open(app: &PhotocraftApp, id: DialogId) {
+    let opened = app.framework.dialogs.open_dialogs().into_iter().find(|dialog| dialog.id == id);
+    let (Some(fields), Some(open)) = (opened.and_then(|dialog| dialog.fields), app.framework.dialogs.open_serial(id)) else { return };
+    app.ctx().data_mut(|data| {
+        let seen = data.get_temp_mut_or_default::<OverrideSeen>(override_seen_slot());
+        seen.0.retain(|(seen_id, seen_open, _)| *seen_id != id || *seen_open != open);
+        seen.0.push((id, open, override_ticked(Some(&fields))));
+    });
+}
 
 /// The Batch form's pass (a `dialogs::TAKERS` row): ticking Override Action "Open" Commands shows the
-/// reference application's message with OK and Don't show again; unticking it shows nothing.
+/// reference application's message with OK and Don't show again; unticking it shows nothing. The
+/// message is a child of the form whose box was ticked, so an OK aimed at that form waits for the
+/// message and a Cancel of the form takes the message with it.
 pub(crate) fn batch_source_take(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    forget_closed_pick(app, ctx);
-    let open: Vec<(DialogId, bool)> = app
+    forget_pick_without_its_row(app, ctx);
+    let open: Vec<(DialogId, u64, bool)> = app
         .framework
         .dialogs
         .open_dialogs()
         .into_iter()
         .filter(|dialog| dialog.key.as_deref() == Some("file.automate.batch"))
-        .map(|dialog| (dialog.id, dialog.fields.as_ref().and_then(|fields| fields.get("overrideOpen")).and_then(Value::as_bool).unwrap_or(false)))
+        .filter_map(|dialog| Some((dialog.id, app.framework.dialogs.open_serial(dialog.id)?, override_ticked(dialog.fields.as_ref()))))
         .collect();
-    if open.is_empty() {
-        return;
-    }
     let fired = ctx.data_mut(|data| {
-        let seen = data.get_temp_mut_or_default::<OverrideSeen>(egui::Id::unique("pc-batch-override-seen"));
-        seen.0.retain(|(id, _)| open.iter().any(|(open_id, _)| open_id == id));
-        let mut fired = false;
-        for (id, ticked) in open {
-            match seen.0.iter_mut().find(|(seen_id, _)| *seen_id == id) {
-                Some((_, seen_on)) if *seen_on != ticked => {
+        let seen = data.get_temp_mut_or_default::<OverrideSeen>(override_seen_slot());
+        // An open that has gone takes its observation with it, also when no Batch form is left: the id
+        // comes back at the next open, and that open starts from its own opening value.
+        seen.0.retain(|(id, open_at, _)| open.iter().any(|(open_id, open_at_of, _)| *open_id == *id && *open_at_of == *open_at));
+        let mut fired: Option<DialogId> = None;
+        for (id, open_at, ticked) in open {
+            match seen.0.iter_mut().find(|(seen_id, seen_open, _)| *seen_id == id && *seen_open == open_at) {
+                Some((_, _, seen_on)) if *seen_on != ticked => {
                     *seen_on = ticked;
-                    fired |= ticked;
+                    if ticked && fired.is_none() {
+                        fired = Some(id);
+                    }
                 }
                 Some(_) => {}
-                None => seen.0.push((id, ticked)),
+                // A form whose open was not noted when it opened: what it holds now stands as its start.
+                None => seen.0.push((id, open_at, ticked)),
             }
         }
         fired
     });
-    if fired {
+    if let Some(form) = fired {
         let message = tl!(
             "When this option is on, source files will be opened from the source folder only by open steps in the action. If there are no open steps, no files will be opened."
         );
-        let _ = crate::dialogs::alerts::alert_once(app, message, BATCH_OVERRIDE_PREF);
+        let _ = crate::dialogs::alerts::alert_once_in(app, message, BATCH_OVERRIDE_PREF, form);
     }
 }
 
@@ -949,7 +988,13 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
         "file.automate.batch" if crate::actions::selected_action(app).is_none() => Some(Err("record an action in the Actions panel first".into())),
         _ if is_form(id) => {
             let (rows, fields) = params_for(app, id)?;
-            Some(Ok(opened(open_form(app, id, label, rows, fields, Value::Null))))
+            let dialog = open_form(app, id, label, rows, fields, Value::Null);
+            // The Batch message answers a tick made after the form opened, and a control client writes
+            // that tick before the form has drawn: what the form opens with is noted at the open.
+            if id == "file.automate.batch" {
+                note_batch_open(app, dialog);
+            }
+            Some(Ok(opened(dialog)))
         }
         _ => None,
     }
