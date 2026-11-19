@@ -227,6 +227,72 @@ mod web_playback_tests {
         }
     }
 
+    /// A document of three layers, one of them shown by each of the three frames of a frame animation.
+    fn frame_animation_app() -> Box<PhotocraftApp> {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 16, "height": 12})).unwrap();
+        app.run("layer.new.layer", json!({"name": "A"})).unwrap();
+        app.run("layer.new.layer", json!({"name": "B"})).unwrap();
+        app.run("animation.makeFramesFromLayers", json!({"delayMs": 100})).unwrap();
+        app
+    }
+
+    #[test]
+    fn a_frame_animation_save_for_web_is_animated_and_previews_each_frame() {
+        let mut app = frame_animation_app();
+        let doc = app.session.active().unwrap().doc.clone();
+        assert_eq!(super::web::animation_frames(&doc), Some(3));
+        // The preview of frame 1 shows the layers of that frame, not the ones of the selected frame.
+        let second = web_frame_document(&doc, Some(1)).unwrap();
+        let shown = |d: &photocraft_doc::Document| d.layers.iter().map(|l| l.visible).collect::<Vec<_>>();
+        assert_eq!(
+            shown(&second),
+            shown(&{
+                let mut d = (*doc).clone();
+                d.select_animation_frame(1);
+                d
+            })
+        );
+        assert_ne!(shown(&second), shown(&doc), "frame 1 differs from the frame shown now");
+        // The dialog opens with the animation (its play row) and an animated GIF gets no one colour table.
+        assert!(open_web(&mut app).is_some());
+        let mut p = json!({"format": "gif", "colorTable": [[1, 2, 3]], "colorTableEdits": {"0": "#ffffff"}});
+        web_preview::prepare_table(&app, &mut p).unwrap();
+        assert!(p.get("colorTable").is_none() && p.get("colorTableEdits").is_none(), "each frame has its own colours: {p}");
+    }
+
+    /// A document whose three frames each show one layer, filled white (the Background), red and green.
+    fn colored_frame_animation_app() -> Box<PhotocraftApp> {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 32, "height": 24})).unwrap();
+        app.run("layer.new.layer", json!({"name": "A"})).unwrap();
+        app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        app.run("layer.new.layer", json!({"name": "B"})).unwrap();
+        app.run("edit.fill", json!({"color": "#00ff00"})).unwrap();
+        app.run("animation.makeFramesFromLayers", json!({"delayMs": 100})).unwrap();
+        app.run("animation.selectFrame", json!({"frame": 0})).unwrap();
+        app
+    }
+
+    /// The play row of Save for Web reaches a frame animation: each frame it shows is that frame's picture, and the
+    /// document's own selected frame stays where it was.
+    #[test]
+    fn a_frame_animation_plays_in_save_for_web() {
+        let mut app = colored_frame_animation_app();
+        let id = open_web(&mut app).expect("an open document");
+        set_option(&mut app, id, "format", json!(WebFormat::Gif));
+        set_option(&mut app, id, "view", json!(WebView::Optimized));
+        pass(&mut app);
+        let ctx = app.ctx().clone();
+        take(&mut app, &ctx);
+        let colors = [[255, 255, 255, 255], [255, 0, 0, 255], [0, 255, 0, 255]];
+        for frame in [1, 2, 0] {
+            set_frame(&mut app, id, frame);
+            assert_eq!(&encoded(&app, 0).preview[..4], &colors[frame], "the dialog shows frame {frame}");
+        }
+        assert_eq!(app.session.active().unwrap().doc.frame_animation.as_ref().unwrap().current, 0);
+    }
+
     #[test]
     fn a_still_document_opens_without_an_animation() {
         let mut app = app();

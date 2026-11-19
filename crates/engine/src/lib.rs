@@ -64,12 +64,14 @@ mod doc_state;
 mod error;
 mod session;
 
+pub use animation_cmds::MAX_TWEEN;
 pub use cmd as commands;
 pub use cmd::actions_cmds;
 pub use cmd::actions_edit_cmds;
 pub use cmd::adjust_cmds;
 pub use cmd::align_cmds;
 pub use cmd::analysis_cmds;
+use cmd::animation_cmds;
 pub use cmd::artboard_cmds;
 pub use cmd::atn_cmds;
 pub use cmd::automate_cmds;

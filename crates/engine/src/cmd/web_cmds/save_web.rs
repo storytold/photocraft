@@ -1,5 +1,5 @@
 use super::assets::{asset_output_path, asset_path_components};
-use super::optimizer::{optimize, web_document, web_exif, web_warnings, web_xmp};
+use super::optimizer::{animated_gif, animates, optimize, web_document, web_exif, web_warnings, web_xmp};
 use super::settings::{WebSettings, rgb_hex};
 use super::{EngineError, Rect, ResolvedSlice, Result, Session, SliceKind, Value, bad, join, json, other, portable_device_name, slices, stem, write_file};
 
@@ -266,8 +266,14 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     // Estimate only (the dialog's annotations): the whole image, or each chosen slice.
     if single.is_none() && dir.is_none() && folder.is_none() {
         let o = optimize(&buf.px, bw, wdoc.bounds(), &st, icc, exif, xmp.as_deref(), dpi, false)?;
+        let mut bytes = o.bytes.len();
+        if animates(&wdoc, &st) {
+            // The dialog asks on every change: the shown frame's size times the frames stands in for the file.
+            let frames = wdoc.frame_animation.as_ref().map_or(1, |a| a.frames.len());
+            bytes = bytes.saturating_mul(frames);
+        }
         return Ok(
-            json!({"format": o.ext, "bytes": o.bytes.len(), "width": o.width, "height": o.height, "colors": o.colors, "colorTable": o.color_table.iter().map(|c| rgb_hex(*c)).collect::<Vec<_>>(), "transparentIndex": o.transparent_index, "warnings": warnings}),
+            json!({"format": o.ext, "bytes": bytes, "width": o.width, "height": o.height, "colors": o.colors, "colorTable": o.color_table.iter().map(|c| rgb_hex(*c)).collect::<Vec<_>>(), "transparentIndex": o.transparent_index, "warnings": warnings}),
         );
     }
     if let Some(folder) = folder {
@@ -281,7 +287,13 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
         return Ok(json!({"files": [path], "bytes": o.bytes.len(), "width": o.width, "height": o.height, "colors": o.colors, "warnings": warnings}));
     }
     if let Some(path) = single.filter(|_| dir.is_none() && (all.len() == 1 || p.get("slices").is_none())) {
-        let o = optimize(&buf.px, bw, wdoc.bounds(), &st, icc, exif, xmp.as_deref(), dpi, false)?;
+        let o = if animates(&wdoc, &st) {
+            let (o, extra) = animated_gif(&wdoc, wdoc.bounds(), &st)?;
+            warnings.extend(extra);
+            o
+        } else {
+            optimize(&buf.px, bw, wdoc.bounds(), &st, icc, exif, xmp.as_deref(), dpi, false)?
+        };
         write(path, &o.bytes)?;
         remember_web_settings(s, cmd, &last_web);
         s.file_menu.last_web = Some(last_web);
@@ -339,7 +351,13 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
             cells.push((piece, bg, text));
             continue;
         }
-        let o = optimize(&buf.px, bw, piece, &st, icc, exif, xmp.as_deref(), dpi, false)?;
+        let o = if animates(&wdoc, &st) {
+            let (o, extra) = animated_gif(&wdoc, piece, &st)?;
+            warnings.extend(extra);
+            o
+        } else {
+            optimize(&buf.px, bw, piece, &st, icc, exif, xmp.as_deref(), dpi, false)?
+        };
         let name = unique(&slice_file(&r.name), o.ext);
         let rel = if images.is_empty() { name.clone() } else { format!("{images}/{name}") };
         let out = join(&dir, &rel);

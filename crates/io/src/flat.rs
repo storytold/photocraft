@@ -111,6 +111,13 @@ fn import_flat_impl_with_options(
         ctl.check().map_err(|_| IoError::Cancelled)?;
         return Ok(r);
     }
+    // An animated GIF opens with every frame as its own layer, to edit by hand.
+    if format == Some(Format::Gif)
+        && let Some(r) = import_gif_layers(name, bytes)?
+    {
+        ctl.check().map_err(|_| IoError::Cancelled)?;
+        return Ok(r);
+    }
     // A PNG whose rows come in final order is decoded straight into the tiles.
     let streamed = match stream_min {
         Some(min) if format == Some(Format::Png) => import_png_streamed(name, bytes, opts, ctl, min)?,
@@ -328,6 +335,100 @@ fn cicp_profile(img: &Image) -> Option<Arc<Vec<u8>>> {
     // Unspecified primaries on an HDR image: BT.2100's, which PQ and HLG are defined with.
     let primaries = if c.primaries == 2 && c.is_hdr() { 9 } else { c.primaries };
     craft_cms::builtin::cicp_rgb(primaries, c.transfer, linear).map(|p| p.to_bytes())
+}
+
+/// Most frames an animated GIF opens with, one layer each.
+pub const MAX_GIF_LAYER_FRAMES: usize = 1000;
+
+/// Most bytes an animated GIF may take while it opens as layers: per frame, its decoded RGBA and the
+/// layer made from it (both the size of the canvas). A big canvas opens with fewer frames than
+/// [`MAX_GIF_LAYER_FRAMES`], and says so.
+pub const MAX_GIF_LAYER_BYTES: u64 = 1 << 30;
+
+/// How many frames of a GIF whose header says it is `bytes` long fit [`MAX_GIF_LAYER_BYTES`]: at most
+/// [`MAX_GIF_LAYER_FRAMES`]. Fewer than two is not an animation that fits: such a GIF opens as a flat image.
+fn gif_layer_frames(bytes: &[u8]) -> usize {
+    let dim = |at: usize| bytes.get(at..at + 2).and_then(|b| <[u8; 2]>::try_from(b).ok()).map_or(0, |b| u64::from(u16::from_le_bytes(b)));
+    let per_frame = (dim(6) * dim(8) * 8).max(1);
+    usize::try_from(MAX_GIF_LAYER_BYTES / per_frame).unwrap_or(usize::MAX).min(MAX_GIF_LAYER_FRAMES)
+}
+
+/// An animated GIF as one document with a raster layer per frame ("Frame 1" at the bottom), each
+/// a full picture of the canvas, and a frame animation that shows one layer per frame with the
+/// GIF's delays. `None` for a still GIF, which opens as any flat image does.
+fn import_gif_layers(name: &str, bytes: &[u8]) -> Result<Option<ImportResult>, IoError> {
+    use craft_gif::frames::{FrameLimits, Stop, read_frames};
+    // Only the first frames are decoded: each is a full-canvas picture, and every frame hides all the
+    // other layers, so the animation grows with the square of the frame count.
+    let keep = gif_layer_frames(bytes);
+    if keep < 2 {
+        // Two layers of this canvas would pass the budget: the flat first frame, with its warning, instead.
+        return Ok(None);
+    }
+    let mut limits = FrameLimits::default();
+    limits.max_frames = keep;
+    // A single-frame GIF is a still, and a file that does not decode as an animation falls through to the
+    // flat decoder, which reports its own error.
+    let Ok(animation) = read_frames(bytes, &limits) else { return Ok(None) };
+    if animation.frames.len() < 2 {
+        return Ok(None);
+    }
+    let icc = craft_gif::frames::icc_profile(bytes);
+    let mut result: Option<ImportResult> = None;
+    let mut delays = Vec::with_capacity(animation.frames.len());
+    for (i, f) in animation.frames.into_iter().enumerate() {
+        let img = Image::from_u8(animation.width, animation.height, ChannelLayout::Rgba, f.rgba)?.with_icc(icc.clone());
+        let mut r = image_to_document(name, &img)?;
+        let Some(mut layer) = r.document.layers.pop() else { continue };
+        layer.name = format!("Frame {}", i + 1);
+        layer.locks = photocraft_doc::Locks::default();
+        delays.push(f.delay_ms);
+        match result.as_mut() {
+            Some(first) => first.document.layers.push(layer),
+            None => {
+                r.document.layers.push(layer);
+                result = Some(r);
+            }
+        }
+    }
+    if let Some(r) = result.as_mut() {
+        match &animation.stop {
+            Stop::End => {}
+            Stop::FrameLimit | Stop::ByteLimit => r.warnings.push(format!("only the first {} frames of the GIF were opened", delays.len())),
+            Stop::Damaged(why) => r.warnings.push(format!("the GIF is damaged after frame {}; the frames before it were opened ({why})", delays.len())),
+        }
+        let doc = &mut r.document;
+        let ids: Vec<_> = doc.layers.iter().map(|l| l.id).collect();
+        let mut animation = photocraft_doc::FrameAnimation {
+            frames: delays
+                .iter()
+                .enumerate()
+                .map(|(shown, &delay_ms)| {
+                    let mut hidden: Vec<_> = ids.iter().enumerate().filter(|(i, _)| *i != shown).map(|(_, id)| *id).collect();
+                    hidden.sort();
+                    std::sync::Arc::new(photocraft_doc::AnimFrame { delay_ms, hidden, ..Default::default() })
+                })
+                .collect(),
+            current: 0,
+            loops: gif_loop_count(bytes),
+            defaults: Default::default(),
+        };
+        animation.fill_opacities(&doc.layers);
+        animation.apply(0, &mut doc.layers);
+        doc.frame_animation = Some(animation);
+    }
+    Ok(result)
+}
+
+/// How many times a GIF plays, from its NETSCAPE2.0 (or ANIMEXTS1.0) application extension: none means
+/// once, a repeat count of 0 means forever, and a count of N means N + 1 plays.
+fn gif_loop_count(bytes: &[u8]) -> photocraft_doc::LoopCount {
+    use photocraft_doc::LoopCount;
+    match craft_gif::scan(bytes, 1).and_then(|info| info.loop_count) {
+        None => LoopCount::Once,
+        Some(0) => LoopCount::Forever,
+        Some(repeats) => LoopCount::from_plays(u32::from(repeats) + 1),
+    }
 }
 
 /// A frame import: the frames handed to the caller's callback and the decoder's warnings that
@@ -1719,6 +1820,32 @@ fn composite_share(format: Format) -> f32 {
     }
 }
 
+/// The composite as `format` stores it, with the fidelity warnings so far: transparency matted where the
+/// format has none, CMYK and tagged RGB or gray converted to sRGB (sGray) where it can't carry the profile.
+/// Everything of an export but the codec, so an animated GIF's frames get the same colours as a still one.
+pub(crate) fn flat_image(doc: &Document, format: Format, opts: &ExportOptions, ctl: &Interrupt) -> Result<(Image, Vec<String>), IoError> {
+    let mut warnings = Vec::new();
+    let cmyk_target = format.caps().layouts.iter().any(|layout| layout.is_cmyk());
+    let lab_target = format.caps().layouts.iter().any(|layout| layout.is_lab());
+    let mut img = document_to_image_for_with_renderer(doc, &mut warnings, cmyk_target, lab_target, ctl, None)?;
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    strip_xmp(&mut img.meta, opts);
+    let img = prepare_flat(img, format, &mut warnings)?;
+    Ok((img, warnings))
+}
+
+/// A Duotone document as the RGB one its inks print as: an adjustment layer on top applies them. `None`
+/// for a document that is not Duotone, or has no inks.
+pub(crate) fn duotone_as_rgb(doc: &Document) -> Option<Document> {
+    let d = doc.duotone.as_ref().filter(|_| doc.mode == ColorMode::Duotone)?;
+    let mut shown = doc.clone();
+    shown.layers.push(photocraft_doc::Layer::new("Duotone", photocraft_doc::LayerContent::Adjustment(d.display_adjustment())));
+    shown.mode = ColorMode::Rgb;
+    shown.icc_profile = None;
+    shown.duotone = None;
+    Some(shown)
+}
+
 /// Flattens and encodes as `format`.
 pub fn export_flat(doc: &Document, format: Format, opts: &ExportOptions) -> Result<ExportResult, IoError> {
     export_flat_with_renderer(doc, format, opts, &photocraft_raster::Interrupt::NONE, None)
@@ -2374,11 +2501,7 @@ fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions) ->
         }
         ColorMode::Duotone => {
             let Some(d) = doc.duotone.as_ref() else { return Ok(None) };
-            let mut shown = doc.clone();
-            shown.layers.push(photocraft_doc::Layer::new("Duotone", photocraft_doc::LayerContent::Adjustment(d.display_adjustment())));
-            shown.mode = ColorMode::Rgb;
-            shown.icc_profile = None;
-            shown.duotone = None;
+            let shown = duotone_as_rgb(doc).ok_or_else(|| IoError::Unsupported("the Duotone document has no inks".into()))?;
             let mut r = export_flat(&shown, format, opts)?;
             r.warnings.retain(|w| !w.contains("flattened"));
             r.warnings.push(format!("Duotone ({} inks) written as RGB", d.inks.len()));
@@ -3199,5 +3322,22 @@ mod bilevel_tiff_tests {
         assert_eq!(second.document.mode, ColorMode::Bitmap);
         let first = import_tiff_page("pages.tif", &bytes, Some(0)).unwrap();
         assert_eq!(first.document.mode, ColorMode::Grayscale);
+    }
+}
+
+#[cfg(test)]
+mod gif_budget_tests {
+    use super::*;
+
+    #[test]
+    fn a_big_canvas_opens_with_fewer_gif_frames_and_a_small_one_with_the_cap() {
+        let header = |w: u16, h: u16| [b"GIF89a".as_slice(), &w.to_le_bytes(), &h.to_le_bytes()].concat();
+        assert_eq!(gif_layer_frames(&header(100, 100)), MAX_GIF_LAYER_FRAMES);
+        // 5000 × 5000 takes 200 MB a frame (decoded and as a layer): five fit a GiB.
+        assert_eq!(gif_layer_frames(&header(5000, 5000)), 5);
+        // A canvas two frames of which pass the budget has no animation to open as layers: it opens flat.
+        assert_eq!(gif_layer_frames(&header(16384, 16384)), 0);
+        assert_eq!(gif_layer_frames(&header(65535, 65535)), 0);
+        assert_eq!(gif_layer_frames(b"GIF"), MAX_GIF_LAYER_FRAMES);
     }
 }

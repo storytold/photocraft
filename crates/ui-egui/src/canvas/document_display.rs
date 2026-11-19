@@ -382,6 +382,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, 
             .then(|| CompositePrep::new(app, ctx, idx, output, None))
             .flatten();
         let overlay = OverlayPrep::new(app, ctx, idx, output, live.as_ref());
+        let ghosts = crate::onion_skin::ghosts(app, ctx, doc.id);
         // The canvas edge isn't outlined while the pixels past it show (Photoshop's crop preview), nor while the Crop
         // tool hides everything outside its box (Show Cropped Area off).
         let edge = border == PageBorder::Line && !crate::crop_ui::shows_beyond_canvas(app) && !crate::crop_ui::hides_canvas_edge(app);
@@ -408,6 +409,15 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, 
         }
         if let Some(overlay) = &overlay {
             let display = RasterDisplay::new(Label::Empty, overlay as &dyn RasterSource).id_salt("pc-channel-view").picture();
+            let display = match mapping {
+                Some(frame) => display.mapped(frame, 1),
+                None => display,
+            };
+            display.show_at(ui, body.rect);
+        }
+        // Onion skin: the neighbouring animation frames, faint, over the document (onion_skin.rs).
+        for (n, ghost) in ghosts.iter().enumerate() {
+            let display = RasterDisplay::new(Label::Empty, ghost as &dyn RasterSource).id_salt(format!("pc-onion-{n}")).picture();
             let display = match mapping {
                 Some(frame) => display.mapped(frame, 1),
                 None => display,
