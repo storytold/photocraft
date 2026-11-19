@@ -352,6 +352,7 @@ pub(crate) fn params(app: &mut PhotocraftApp, command: &str, spec: &str) -> Vec<
         list.extend(crate::color_table_ui::rows(app));
     }
     rows::custom_rows(app, command, &mut list);
+    crate::prefs_ui::generative_fill::dialog_rows(app, command, &mut list);
     if command == "edit.colorSettings" {
         // The monitor line under the rows: the cell holds the text each frame refreshes, which the build closure cannot read from the app.
         let note = crate::monitor_status::note_cell(app);
@@ -416,6 +417,7 @@ fn command_defaults(app: &PhotocraftApp, command: &str, params: &[Param]) -> Map
     if command == "view.proofSetup" {
         proof_setup_defaults(app, &mut map);
     }
+    crate::prefs_ui::generative_fill::dialog_defaults(app, command, &mut map);
     if command == "edit.colorSettings"
         && let Ok(Value::Object(current)) = serde_json::to_value(&app.session.color.settings)
     {

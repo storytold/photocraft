@@ -91,6 +91,7 @@ impl CustomSettings<PrefPages> for PrefsCustom {
             "tools.pressureCurve" => pressure_curve_row(ui, draft),
             "tools.tabletInput" => tablet_input_row(ui, draft),
             APPEARANCE_MODE => self.appearance_row(ui, draft),
+            super::generative_fill::PREF_MODEL => super::generative_fill::model_pref_row(ui, draft),
             _ => {}
         }
     }

@@ -52,6 +52,7 @@ mod appearance;
 mod custom_rows;
 mod dialogs;
 mod fields;
+pub(crate) mod generative_fill;
 mod presets;
 mod save;
 pub(crate) mod shortcuts;

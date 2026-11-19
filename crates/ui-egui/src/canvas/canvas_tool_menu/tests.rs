@@ -585,6 +585,29 @@ fn type_edit_menu_lists_spelling_suggestions_for_the_word_under_the_pointer() {
     assert!(app.session.prefs().user_dictionary.iter().any(|w| w == "Zqx"));
 }
 
+/// Generative Fill and Remove are listed but greyed until a server is set up, and live once a
+/// host is saved.
+#[test]
+fn generative_rows_are_greyed_until_a_server_is_configured() {
+    let mut app = app();
+    app.ui.tool = Tool::RectMarquee;
+    app.run("select.rect", json!({"x": 1, "y": 1, "width": 8, "height": 8})).unwrap();
+    assert!(open_here(&mut app, Tool::RectMarquee, [10.0, 10.0]));
+    let menu = app.ui.canvas_tool_menu.clone().unwrap();
+    let env_set = std::env::var(photocraft_engine::generative_fill_cmds::HOST_ENV).is_ok_and(|v| !v.trim().is_empty());
+    if !env_set {
+        for id in ["edit.generativeFill", "edit.generativeRemove"] {
+            assert!(rows(&menu).iter().flatten().any(|(_, c)| *c == id), "{id} stays listed");
+            assert!(!entry_enabled(&app, &menu, id), "{id} is greyed without a server");
+        }
+        assert!(entry_enabled(&app, &menu, "edit.fill"), "other rows are untouched");
+    }
+    app.run("prefs.set", json!({"values": {"integrations.generativeFillHost": "192.168.1.20:8188"}})).unwrap();
+    for id in ["edit.generativeFill", "edit.generativeRemove"] {
+        assert!(entry_enabled(&app, &menu, id), "{id} is live once a host is saved");
+    }
+}
+
 #[test]
 fn disabled_selection_rows_do_nothing() {
     let mut app = app();

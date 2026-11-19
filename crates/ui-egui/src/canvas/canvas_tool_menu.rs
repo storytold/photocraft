@@ -597,6 +597,12 @@ pub const HAND_MENU: &[Row] = &[
     Some(("Print Size", "view.printSize")),
 ];
 
+/// Generative Fill and Remove are listed, greyed, until a server is set up in Preferences ›
+/// Integrations.
+fn needs_genfill_setup(app: &PhotocraftApp, command: &str) -> bool {
+    crate::prefs_ui::generative_fill::COMMANDS.contains(&command) && !photocraft_engine::generative_fill_cmds::is_configured(&app.session)
+}
+
 /// A selection menu: the rows every selection menu shares, with `$fills` (the rows between
 /// Transform Selection and Last Filter) in its own order.
 macro_rules! selection_menu {
@@ -625,13 +631,15 @@ macro_rules! selection_menu {
     };
 }
 
-/// Photoshop's selection-tool context menu with an active selection, in its order. Its Generative
-/// Fill row has no PhotoCraft command and is left out. Rows stay visible and grey out exactly like
-/// their menu-bar twins.
+/// Photoshop's selection-tool context menu with an active selection, in its order. Generative
+/// Fill runs a self-hosted inpainting model (`generative_fill_cmds`). Rows stay visible and grey
+/// out exactly like their menu-bar twins.
 pub const SELECTION_MENU: &[Row] = selection_menu![
     Some(("Distort", "edit.transform.distort")),
     Some(("Perspective", "edit.transform.perspective")),
     None,
+    Some(("Generative Fill…", "edit.generativeFill")),
+    Some(("Generative Remove", "edit.generativeRemove")),
     Some(("Delete and Fill Selection", "edit.deleteAndFillSelection")),
     Some(("Fill…", "edit.fill")),
     Some(("Stroke…", "edit.stroke")),
@@ -1264,6 +1272,9 @@ fn choose_pasteboard(app: &mut PhotocraftApp, menu: &CanvasToolMenu, command: &s
 }
 
 pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> bool {
+    if needs_genfill_setup(app, command) {
+        return false;
+    }
     match &menu.kind {
         MenuKind::Crop { .. } => return crop_enabled(app, menu, command),
         MenuKind::Guide => {
@@ -1714,6 +1725,14 @@ pub fn entries(app: &PhotocraftApp, menu: &CanvasToolMenu) -> Vec<Entry<String>>
             "Rasterize Vector Mask" => tl!("Rasterize Vector Mask"),
             key => tl!(key),
         };
+        if needs_genfill_setup(app, command) {
+            let label = format!("{text} {}", tl!("(not configured)"));
+            out.push(
+                Entry::new(command.to_string(), label)
+                    .disabled_reason(tl!("Set up a ComfyUI or AUTOMATIC1111 server in Preferences › Integrations first.").to_string()),
+            );
+            continue;
+        }
         out.push(Entry::new(command.to_string(), text.to_string()).enabled(entry_enabled(app, menu, command)).checked(mode_checked(app, menu, command)));
     }
     out
