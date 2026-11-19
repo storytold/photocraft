@@ -234,11 +234,12 @@ pub fn commit_with(app: &mut PhotocraftApp, _mods: egui::Modifiers) {
     commit_ending(app, true);
 }
 
-/// The commit a Layers panel row click makes before it selects `layer` (#5584): a click on another
-/// layer's row is a layer switch (#6483), so an unchanged session records nothing (#12050); a click
-/// on the edited layer's own row ends the edit like any other commit.
-pub(crate) fn commit_before_selecting(app: &mut PhotocraftApp, layer: Option<u64>) {
-    let switches = app.ui.text_edit.as_ref().is_some_and(|ed| layer.is_some_and(|l| l != ed.layer));
+/// The commit a Layers panel row click makes before it selects `selected` (#5584): a click on
+/// another layer's row is a layer switch (#6483), so an unchanged session records nothing (#12050);
+/// a click on the edited layer's own row ends the edit like any other commit. A multi-row selection
+/// names all its rows, so it is a switch too unless the edited layer is one of them.
+pub(crate) fn commit_before_selecting(app: &mut PhotocraftApp, selected: &[u64]) {
+    let switches = app.ui.text_edit.as_ref().is_some_and(|ed| !selected.is_empty() && !selected.contains(&ed.layer));
     commit_ending(app, !switches);
 }
 

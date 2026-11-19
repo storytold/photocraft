@@ -7,6 +7,8 @@
 //! The Cancel button discards the session and adds no state. An edit that did change something
 //! still gives one state, not two.
 
+use craft::behavior::SelectionChange;
+use craft::layers::ui::panel::{LayerSelect, LayersEvent};
 use photocraft_doc::{LayerContent, LayerId};
 use serde_json::json;
 
@@ -55,6 +57,14 @@ fn click_into(app: &mut PhotocraftApp, id: LayerId) {
     let ed = app.ui.text_edit.as_ref().expect("the edit session is open");
     assert_eq!(ed.layer, id.0, "the session edits the layer");
     assert!(!ed.created, "it is an existing layer");
+}
+
+/// The Layers panel selecting several rows at once (its Shift-click range): one pass of panel
+/// events, which sends `layer.select` with a `layers` list rather than a single `layer`.
+fn select_rows(app: &mut PhotocraftApp, ids: &[LayerId]) {
+    let ctx = app.ctx().clone();
+    let event = LayersEvent::Select(LayerSelect::new(SelectionChange::Set(ids.to_vec()), None));
+    crate::panels::layers_events::apply_layers_events(app, &ctx, vec![event]);
 }
 
 /// What ending the session with `how` left behind: exactly one state, named like any other edit
@@ -238,7 +248,7 @@ fn an_unchanged_edit_ended_by_a_layers_panel_click_on_another_layer_records_noth
     click_into(&mut app, id);
     let before = history(&app);
     // The panel's order: commit first, then select.
-    crate::type_tool::commit_before_selecting(&mut app, Some(other.0));
+    crate::type_tool::commit_before_selecting(&mut app, &[other.0]);
     app.run("layer.select", json!({"layer": other.0})).unwrap();
     assert!(app.ui.text_edit.is_none(), "the row click ends the session");
     assert_eq!(history(&app), before, "a layer switch adds no state");
@@ -252,8 +262,41 @@ fn a_layers_panel_click_on_the_edited_layers_row_records_one_state() {
     let (mut app, id) = app();
     click_into(&mut app, id);
     let before = history(&app);
-    crate::type_tool::commit_before_selecting(&mut app, Some(id.0));
+    crate::type_tool::commit_before_selecting(&mut app, &[id.0]);
     ended(&app, id, &before, "click on the edited layer's row");
+}
+
+/// A Shift-click range selects several rows at once, so the panel sends `layer.select` with a
+/// `layers` list instead of a single `layer`. While layer A is being edited, a range of other
+/// rows excludes A and leaves A inactive, so it is a layer switch (#6483) and an unchanged
+/// session records nothing - as the single-row click on another layer's row does.
+#[test]
+fn an_unchanged_edit_ended_by_a_multi_layer_selection_that_excludes_the_edited_layer_records_nothing() {
+    let (mut app, id) = app();
+    let b = LayerId(app.run("layer.new.layer", json!({"name": "B"})).unwrap()["layer"].as_u64().unwrap());
+    let c = LayerId(app.run("layer.new.layer", json!({"name": "C"})).unwrap()["layer"].as_u64().unwrap());
+    app.run("layer.select", json!({"layer": id.0})).unwrap();
+    click_into(&mut app, id);
+    let before = history(&app);
+    select_rows(&mut app, &[b, c]);
+    assert!(app.ui.text_edit.is_none(), "the multi-layer selection ends the session");
+    assert_eq!(app.session.active().unwrap().active_layer, Some(c), "and the last row of the range becomes active");
+    assert_eq!(history(&app), before, "a selection that excludes the edited layer is a switch: no state");
+    assert_eq!(text_of(&app, id), "Hello");
+}
+
+/// The neighbour of that case: a range that names the edited layer among its rows keeps the row
+/// click a commit (#5584), so it records the state. Guard test, it pins the boundary.
+#[test]
+fn a_multi_layer_selection_that_includes_the_edited_layer_records_one_state() {
+    let (mut app, id) = app();
+    let b = LayerId(app.run("layer.new.layer", json!({"name": "B"})).unwrap()["layer"].as_u64().unwrap());
+    app.run("layer.select", json!({"layer": id.0})).unwrap();
+    click_into(&mut app, id);
+    let before = history(&app);
+    select_rows(&mut app, &[b, id]);
+    assert_eq!(app.session.active().unwrap().active_layer, Some(id), "the edited layer stays active in the range");
+    ended(&app, id, &before, "multi-layer selection that includes the edited layer");
 }
 
 /// Another document becoming active ends the edit in its own document (#6483), which is made
