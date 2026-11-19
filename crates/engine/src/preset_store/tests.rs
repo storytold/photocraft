@@ -310,6 +310,22 @@ fn reordering_presets_and_groups_persists() {
 }
 
 #[test]
+fn reordering_only_built_in_presets_persists() {
+    let names = |s: &Session| s.tools.presets.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+    let dir = TempDir::new("reorder-builtin");
+    let (mut s, _) = session(&dir);
+    let group = s.tools.presets[0].group.clone();
+    let last = s.tools.presets.iter().rfind(|p| p.builtin && p.group == group).unwrap().name.clone();
+    let first = s.tools.presets[0].name.clone();
+    assert_ne!(last, first);
+    s.execute("brush.presets.move", json!({"name": last, "before": first})).unwrap();
+    assert_eq!(s.tools.presets[0].name, last);
+    let (t, w) = session(&dir);
+    assert!(w.is_empty(), "{w:?}");
+    assert_eq!(names(&t), names(&s), "the new built-in order survives a restart");
+}
+
+#[test]
 fn corrupt_and_oversized_files_are_skipped_with_a_warning() {
     let dir = TempDir::new("corrupt");
     let (mut s, _) = session(&dir);
