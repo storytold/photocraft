@@ -713,6 +713,11 @@ impl Surface {
     /// Mutable access to a tile, allocating it (filled with the default pixel) or un-sharing it.
     pub fn tile_mut(&mut self, c: TileCoord) -> &mut Tile {
         self.note_mutation();
+        self.tile_for_write(c)
+    }
+
+    // Region writers already advanced the generation before entering their tile loop.
+    fn tile_for_write(&mut self, c: TileCoord) -> &mut Tile {
         let fmt = self.format;
         let dp = &self.default_pixel;
         let arc = self.tiles.entry(c).or_insert_with(|| Arc::new(Tile::filled(&fmt, dp)));
@@ -723,6 +728,10 @@ impl Surface {
     /// the surface, and a shared tile is copied only after its replacement has been allocated.
     pub fn try_tile_mut(&mut self, c: TileCoord) -> Result<&mut Tile, AllocationError> {
         self.note_mutation();
+        self.try_tile_for_write(c)
+    }
+
+    fn try_tile_for_write(&mut self, c: TileCoord) -> Result<&mut Tile, AllocationError> {
         if let Some(tile) = self.tiles.get(&c) {
             drop(tile.try_bytes().map_err(AllocationError::ScratchRead)?);
         }
@@ -759,7 +768,7 @@ impl Surface {
         }
         for tc in r.tiles() {
             let tr = tc.rect().intersect(&r);
-            let t = self.try_tile_mut(tc)?;
+            let t = self.try_tile_for_write(tc)?;
             let mut target = t.bytes_mut();
             let span = tr.width() as usize * n;
             for y in tr.y0..tr.y1 {
@@ -933,7 +942,6 @@ impl Surface {
     }
 
     pub fn write_pixel(&mut self, x: i32, y: i32, px: &[f32]) {
-        self.note_mutation();
         let (c, base) = self.locate(x, y);
         let n = self.channels();
         let sample = self.format.sample;
@@ -1137,7 +1145,7 @@ impl Surface {
         assert_eq!(data.len(), w * r.height() as usize * n, "region data length mismatch");
         let sample = self.format.sample;
         for tc in r.tiles() {
-            write_tile(self.tile_mut(tc), tc, r, data, w, n, sample);
+            write_tile(self.tile_for_write(tc), tc, r, data, w, n, sample);
         }
     }
 
@@ -1240,7 +1248,7 @@ impl Surface {
                 self.tiles.insert(tc, t.clone());
                 continue;
             }
-            let mut t = self.tile_mut(tc).bytes_mut();
+            let mut t = self.tile_for_write(tc).bytes_mut();
             for y in tr.y0..tr.y1 {
                 let ly = (y - tc.ty * TILE_SIZE) as usize;
                 let lx0 = (tr.x0 - tc.tx * TILE_SIZE) as usize;
@@ -1268,7 +1276,7 @@ impl Surface {
         assert_eq!(bytes.len(), w * r.height() as usize * bpp, "interleaved length mismatch");
         for tc in r.tiles() {
             let tr = tc.rect().intersect(&r);
-            let mut t = self.tile_mut(tc).bytes_mut();
+            let mut t = self.tile_for_write(tc).bytes_mut();
             let span = tr.width() as usize * bpp;
             for y in tr.y0..tr.y1 {
                 let src = (((y - r.y0) as usize) * w + (tr.x0 - r.x0) as usize) * bpp;
