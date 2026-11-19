@@ -3977,3 +3977,15 @@ fn vertical_path_decoration_clipping_and_warp() {
     assert!(!rect.is_empty(), "clipped vertical decoration must draw");
     assert!(rect.y0 >= 19 && rect.y1 <= 61, "decoration bounds should be within clipped range: {rect:?}");
 }
+
+#[test]
+fn sparse_text_rows_match_full_accumulator_conversion() {
+    let mut e = TextEngine::new();
+    let t = TextLayer { text: "Sparse\n\n\n\nink".into(), transform: Affine::translate(10.0, 40.0), ..Default::default() };
+    let layout = e.layout(&t, 72.0);
+    let sparse = crate::render::rasterize_passes_with_rows(&layout, &t.transform, PixelFormat::RGBA8, t.antialias, None, true, true);
+    let full = crate::render::rasterize_passes_with_rows(&layout, &t.transform, PixelFormat::RGBA8, t.antialias, None, true, false);
+    assert_eq!(sparse.rect, full.rect);
+    assert!(!sparse.rect.is_empty());
+    assert_eq!(sparse.surface.read_region(sparse.rect), full.surface.read_region(full.rect));
+}
