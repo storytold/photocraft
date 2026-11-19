@@ -853,6 +853,25 @@ fn object_at_on_the_background_or_off_canvas_finds_nothing() {
     assert!(grabcut::object_at(&s, canvas, 400.0, 10.0, 0).is_none());
 }
 
+#[test]
+fn object_at_samples_a_transparent_seed_before_the_coarse_pass() {
+    struct TransparentSeed;
+
+    impl Sampler for TransparentSeed {
+        fn rgba(&self, rect: Rect) -> Vec<[f32; 4]> {
+            assert_eq!(rect, Rect::from_xywh(242, 217, 1, 1));
+            vec![[0.0; 4]]
+        }
+
+        fn rgba_scaled(&self, _: Rect, _: usize) -> Vec<[f32; 4]> {
+            panic!("a transparent seed must skip the working-resolution pass");
+        }
+    }
+
+    let canvas = Rect::new(0, 0, 800, 600);
+    assert!(grabcut::object_at(&TransparentSeed, canvas, 242.7, 217.3, grabcut::OBJECT_AT_WORK_PX).is_none());
+}
+
 /// #6576: a 24 px object in a 4000×3000 document is found (a 1000×800 one still is).
 #[test]
 fn object_at_finds_small_object_in_large_canvas() {

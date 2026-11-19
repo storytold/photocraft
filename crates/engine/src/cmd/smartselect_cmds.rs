@@ -214,7 +214,9 @@ impl ObjectFinderCache {
             return None;
         }
         let (px, py) = (x.floor() as i32, y.floor() as i32);
-        self.regions.iter().find(|r| r.at(px, py) >= 0.5).cloned()
+        let region = self.regions.iter().find(|r| r.at(px, py) >= 0.5)?;
+        let can_seed = with_doc_sampler(doc, target, false, |sampler, doc| grabcut::can_seed_object(sampler, doc.bounds(), px, py));
+        can_seed.then(|| region.clone())
     }
 
     /// Remembers `region`, found in `doc` sampling `target`. A different document or pixels
