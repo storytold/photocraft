@@ -108,6 +108,7 @@ fn choosing_another_source_still_works_with_a_single_destination() {
 #[test]
 fn a_targeted_alpha_can_share_a_name_with_another_saved_channel() {
     let (mut app, ctx) = app_with(1);
+    app.run("edit.fill", json!({"color": "#000000"})).unwrap();
     app.run("channel.new", json!({"name": "Saved", "fill": "black"})).unwrap();
     app.run("channel.new", json!({"name": "Saved", "fill": "white"})).unwrap();
     let dialog = open_form(&mut app, &ctx, APPLY);

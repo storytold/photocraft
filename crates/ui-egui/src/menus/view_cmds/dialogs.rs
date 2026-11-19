@@ -561,8 +561,6 @@ fn channel_form(app: &PhotocraftApp, id: &str) -> Option<(Vec<Param>, DialogFiel
             ]
         }
         "image.applyImage" => {
-            let mut masks = vec!["none".to_string()];
-            masks.extend(load.iter().cloned());
             // Source layer: Merged, then the pixel layers top to bottom (the engine takes
             // the topmost layer of a name), shown by their own names.
             let mut layers = vec!["merged".to_string()];
@@ -579,6 +577,9 @@ fn channel_form(app: &PhotocraftApp, id: &str) -> Option<(Vec<Param>, DialogFiel
                 _ => None,
             };
             let mut sources = channels(&load);
+            let mut masks = Vec::with_capacity(sources.len() + 1);
+            masks.push(("none".into(), Label::from(tl!("None"))));
+            masks.extend(sources.iter().cloned());
             for (index, (key, label)) in sources.iter_mut().skip(alpha_offset).take(d.channels.len()).enumerate() {
                 if key.starts_with(APPLY_IMAGE_ALPHA_PREFIX)
                     || (target == Some(alpha_offset + index) && (key.is_empty() || channel_cmds::parse_ref(&json!(key), d) != Some(ChanRef::Alpha(index))))
@@ -601,7 +602,7 @@ fn channel_form(app: &PhotocraftApp, id: &str) -> Option<(Vec<Param>, DialogFiel
                 Param::new("scale", tl!("Scale"), ParamKind::number(Some(0.001), Some(2.0), 1.0, 0.1, 3)),
                 Param::new("offset", tl!("Offset"), ParamKind::int(Some(-255), Some(255), 0)),
                 Param::new("preserveTransparency", tl!("Preserve Transparency"), ParamKind::bool(false)),
-                choice("maskChannel", tl!("Mask Channel"), channels(&masks), "none"),
+                choice("maskChannel", tl!("Mask Channel"), masks, "none"),
             ]
         }
         _ => vec![
