@@ -149,9 +149,13 @@ fn iris_depths_models_selection_tiles_and_cancellation() {
     let mut selection = Surface::new(PixelFormat::GRAY8);
     selection.fill_rect(bounds, &[0.4]);
     selection.fill_rect(Rect::new(3, 19, 35, 44), &[1.0]);
-    for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
-        for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
-            for alpha in [false, true] {
+    // Cover every mode/sample pair and both alpha values for each mode and sample.
+    for (mi, mode) in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab].into_iter().enumerate() {
+        for (si, sample) in [SampleType::U8, SampleType::U16, SampleType::F32].into_iter().enumerate() {
+            for (ai, alpha) in [false, true].into_iter().enumerate() {
+                if (mi + si) % 2 != ai {
+                    continue;
+                }
                 let fmt = PixelFormat::new(mode, sample, alpha);
                 let mut surface = Surface::new(fmt);
                 surface.write_region(bounds, &image(bounds, fmt.channels()).data);

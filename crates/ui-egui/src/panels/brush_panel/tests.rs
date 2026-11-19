@@ -431,8 +431,13 @@ fn editing_the_options_bar_amount_reenables_smoothing() {
 
 #[test]
 fn every_section_draws_without_issuing_commands() {
-    for (panel, view) in [("brushSettings", None), ("brushes", Some(PresetView::List)), ("brushes", Some(PresetView::Grid))] {
-        for section in 0..SECTIONS.len() {
+    // Brush Settings draws the selected section's controls, but only up to `CHECKBOX_ONLY_START`: a later section is
+    // reset to 0 before drawing (`brush_settings.rs`, tested by `checkbox_only_rows_cannot_restore_an_empty_properties_pane`).
+    // The Brushes panel does not read the section at all, so one run per view covers it (#15652).
+    for (panel, view, sections) in
+        [("brushSettings", None, 0..CHECKBOX_ONLY_START), ("brushes", Some(PresetView::List), 0..1), ("brushes", Some(PresetView::Grid), 0..1)]
+    {
+        for section in sections {
             let mut h = harness(panel, section);
             if let Some(view) = view {
                 h.state_mut().ui.brushes_panel.view = view;
@@ -482,14 +487,14 @@ fn preset_rows_nest_presets_in_panel_order() {
     let max = photocraft_engine::brush_preset_cmds::MAX_FOLDER_DEPTH;
     let deep: Vec<&str> = vec!["d"; max + 5];
     let mut app = app();
-    app.session.tools.presets = vec![
+    app.session.tools.presets = std::sync::Arc::new(vec![
         kit("Top", "Kit", &[]),
         kit("Pen", "Kit", &["Inks"]),
         kit("Chalk", "Kit", &["Dry"]),
         kit("Nib", "Kit", &["Inks", "Fine"]),
         kit("Quill", "Kit", &["Inks"]),
         kit("Deep", "Kit", &deep),
-    ];
+    ]);
     let out: Vec<String> = rows_of(app, PresetView::List)
         .iter()
         .map(|r| match r.count {
@@ -504,7 +509,7 @@ fn preset_rows_nest_presets_in_panel_order() {
 
 fn fixture() -> Box<PhotocraftApp> {
     let mut app = app();
-    app.session.tools.presets = vec![
+    app.session.tools.presets = std::sync::Arc::new(vec![
         kit("A1", "Alpha", &[]),
         kit("A2", "Alpha", &[]),
         kit("A3", "Alpha", &[]),
@@ -513,7 +518,7 @@ fn fixture() -> Box<PhotocraftApp> {
         kit("Kit Pen", "Kit", &["Inks"]),
         kit("Kit Nib", "Kit", &["Inks", "Fine"]),
         kit("Kit Chalk", "Kit", &["Dry"]),
-    ];
+    ]);
     app
 }
 

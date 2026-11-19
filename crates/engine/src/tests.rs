@@ -2063,3 +2063,16 @@ fn the_active_layer_marker_advances_for_a_new_document_and_not_for_a_same_layer_
     s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
     assert!(s.active_layer_changes() > before, "a new active document advances the marker");
 }
+
+#[test]
+fn sessions_share_builtin_brushes_until_edited() {
+    let mut first = Session::new();
+    let second = Session::new();
+    assert!(std::sync::Arc::ptr_eq(&first.tools.presets, &second.tools.presets));
+    let count = second.tools.presets.len();
+    first.execute("brush.presets.save", serde_json::json!({"name": "Session-only test brush"})).unwrap();
+    assert_eq!(second.tools.presets.len(), count);
+    assert!(second.tools.presets.iter().all(|preset| preset.name != "Session-only test brush"));
+    assert!(first.tools.presets.iter().any(|preset| preset.name == "Session-only test brush"));
+    assert!(!std::sync::Arc::ptr_eq(&first.tools.presets, &second.tools.presets));
+}
