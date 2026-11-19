@@ -3,7 +3,7 @@ use crate::canvas::{ToolEvent, tool_event};
 use craft::behavior::CursorBadge;
 use craft::keymap::Mods;
 
-pub(super) fn app() -> PhotocraftApp {
+pub(super) fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 100, "height": 60})).unwrap();
     app.run("tools.setBrush", json!({"brush": {"size": 16, "hardness": 1.0}})).unwrap();

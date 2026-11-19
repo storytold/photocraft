@@ -12,7 +12,7 @@ const CONVERT: &str = "Convert to sRGB";
 const EMBED: &str = "Embed Color Profile";
 type Writes = Rc<RefCell<Vec<Vec<u8>>>>;
 
-fn harness(gpu: bool) -> (Harness<'static, PhotocraftApp>, Writes) {
+fn harness(gpu: bool) -> (Harness<'static, Box<PhotocraftApp>>, Writes) {
     let writes = Writes::default();
     let captured = writes.clone();
     let files = std::sync::Arc::new(craft::host::ScriptedFiles::answering([
@@ -43,22 +43,22 @@ fn harness(gpu: bool) -> (Harness<'static, PhotocraftApp>, Writes) {
     (builder.build_eframe(move |_cc| app), writes)
 }
 
-fn checkbox(h: &Harness<'_, PhotocraftApp>, label: &str) -> Toggled {
+fn checkbox(h: &Harness<'_, Box<PhotocraftApp>>, label: &str) -> Toggled {
     h.get_by_role_and_label(Role::CheckBox, label).accesskit_node().toggled().unwrap()
 }
 
-fn click(h: &mut Harness<'_, PhotocraftApp>, role: Role, label: &str) {
+fn click(h: &mut Harness<'_, Box<PhotocraftApp>>, role: Role, label: &str) {
     h.get_by_role_and_label(role, label).click();
     h.run_steps(6);
 }
 
-fn open_dialog(h: &mut Harness<'_, PhotocraftApp>) {
+fn open_dialog(h: &mut Harness<'_, Box<PhotocraftApp>>) {
     let ctx = h.ctx.clone();
     crate::menus::invoke(h.state_mut(), &ctx, COMMAND, json!({})).unwrap();
     h.run_steps(6);
 }
 
-fn snapshot(h: &mut Harness<'_, PhotocraftApp>, dir: Option<&Path>, file: &str) {
+fn snapshot(h: &mut Harness<'_, Box<PhotocraftApp>>, dir: Option<&Path>, file: &str) {
     if let Some(dir) = dir {
         h.render().unwrap().save(dir.join(file)).unwrap();
     }
@@ -123,11 +123,15 @@ fn existing_document_profile_preset_and_recorded_export_keep_source_colors() {
     verify_png(&writes.borrow()[0], [30, 30, 200], 0, true);
 }
 
-#[test]
-fn export_as_color_space_gpu_snapshots() {
-    let Some(dir) = std::env::var_os("PHOTOCRAFT_SRGB_SNAPSHOTS") else { return };
-    let dir = std::path::PathBuf::from(dir);
-    let _gpu = photocraft_testkit::gpu_lock();
-    std::fs::create_dir_all(&dir).unwrap();
-    export_both_ways(Some(&dir));
+mod gpu_tests {
+    use super::*;
+
+    #[test]
+    fn export_as_color_space_gpu_snapshots() {
+        let Some(dir) = std::env::var_os("PHOTOCRAFT_SRGB_SNAPSHOTS") else { return };
+        let dir = std::path::PathBuf::from(dir);
+        let _gpu = photocraft_testkit::gpu_lock();
+        std::fs::create_dir_all(&dir).unwrap();
+        export_both_ways(Some(&dir));
+    }
 }

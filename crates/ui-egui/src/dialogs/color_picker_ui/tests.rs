@@ -13,11 +13,11 @@ fn dialog_color(app: &PhotocraftApp, id: DialogId) -> String {
 }
 
 /// A harness running the app's dialog pass on the app's own context, so a key or a click reaches the hosted picker.
-fn harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+fn harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     Harness::builder()
         .with_context(app.ctx().clone())
         .with_size(vec2(760.0, 480.0))
-        .build_ui_state(|ui, app: &mut PhotocraftApp| crate::dialogs::run(app, ui), app)
+        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app)
 }
 
 /// The one place a picker's result reaches the app is `take` → `commit`: OK and Enter set only the colour the picker

@@ -123,7 +123,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
 mod tests {
     use super::*;
 
-    fn app() -> (PhotocraftApp, egui::Context) {
+    fn app() -> (Box<PhotocraftApp>, egui::Context) {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 100, "height": 50})).unwrap();
         app.sync_views();

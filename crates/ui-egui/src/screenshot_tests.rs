@@ -49,7 +49,7 @@ fn actual_callback(output: &egui::FullOutput) -> Option<egui::ScreenshotCallback
 type ScreenshotWrites = std::rc::Rc<std::cell::RefCell<Vec<(String, Vec<u8>)>>>;
 
 struct ActualCallbackFixture {
-    app: crate::PhotocraftApp,
+    app: Box<crate::PhotocraftApp>,
     ctx: Context,
     writes: ScreenshotWrites,
     reply: std::sync::mpsc::Receiver<serde_json::Value>,
