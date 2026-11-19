@@ -94,7 +94,7 @@ fn clipping_path_resource_2999_unchanged_flatness_only_and_new_export() {
     let mut custom_file = fresh_file.clone();
     let custom_payload = b"\x07Outline\x00\x01\x00\x00\x00\x00\x00\x01".to_vec();
     custom_file.resources.iter_mut().find(|r| r.id == 2999).unwrap().data = custom_payload.clone();
-    let mut imported = import("x.psd", &custom_file.to_bytes()).unwrap().document;
+    let mut imported = import("x.psd", &custom_file.to_bytes().unwrap()).unwrap().document;
     let reexported = export(&imported, "x.psd", &ExportOptions::default()).unwrap().bytes;
     let reexported_2999 = craft_psd::PsdFile::from_bytes(&reexported).unwrap().resources.into_iter().find(|r| r.id == 2999).unwrap();
     assert_eq!(reexported_2999.data, custom_payload);
