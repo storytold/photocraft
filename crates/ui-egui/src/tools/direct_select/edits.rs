@@ -350,6 +350,9 @@ mod add_anchor_lock_tests;
 #[path = "../anchor_tools/add_anchor_targeted_path_tests.rs"]
 mod add_anchor_targeted_path_tests;
 #[cfg(test)]
+#[path = "../anchor_tools/add_anchor_tolerance_tests.rs"]
+mod add_anchor_tolerance_tests;
+#[cfg(test)]
 #[path = "../anchor_tools/delete_anchor_alt_tests.rs"]
 mod delete_anchor_alt_tests;
 #[cfg(test)]
