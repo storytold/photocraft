@@ -99,11 +99,11 @@ fn automation_workspace(
             continue;
         };
         let opened = if !root.is_absolute() {
-            Err(format!("`{}` is not an absolute path", root.display()))
+            Err(photocraft_automation::AutomationError::BadRequest(format!("`{}` is not an absolute path", root.display())))
         } else if read {
-            workspace.with_read_root(&root).map_err(|e| e.to_string())
+            workspace.with_read_root(&root)
         } else {
-            workspace.with_write_root(&root).map_err(|e| e.to_string())
+            workspace.with_write_root(&root)
         };
         match opened {
             Ok(w) => workspace = w,
@@ -738,7 +738,7 @@ fn main() -> eframe::Result {
             if let Some(ControlNotice { title, lines }) = control_warning {
                 photocraft_ui_egui::notices::post(&mut app, title, lines, craft::theme::variant::Tone::Neutral, None);
             }
-            Ok(Box::new(app))
+            Ok(app)
         }),
     );
     // The window is gone: refuse further files and free the lock, so a launch that is waiting (or

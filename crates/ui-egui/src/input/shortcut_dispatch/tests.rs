@@ -43,14 +43,14 @@ fn services() -> crate::Services {
 
 /// The whole app around `app`, run until it has settled. The runtime takes a frame's keys and the app runs the
 /// commands they fired in the next frame, so a key needs two frames ([`press`], [`tap`]).
-pub(crate) fn app_harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+pub(crate) fn app_harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     let ctx = app.ctx().clone();
     let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_context(ctx).with_max_steps(64).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| app);
     h.run_steps(8);
     h
 }
 
-fn harness() -> Harness<'static, PhotocraftApp> {
+fn harness() -> Harness<'static, Box<PhotocraftApp>> {
     app_harness(PhotocraftApp::new(realistic(), services()))
 }
 
@@ -70,7 +70,7 @@ fn platform(m: Modifiers) -> Modifiers {
 }
 
 /// A press and release of `key` with `mods` held, then the frames that take it and run its command.
-pub(crate) fn tap(h: &mut Harness<'_, PhotocraftApp>, key: Key, mods: Modifiers) {
+pub(crate) fn tap(h: &mut Harness<'_, Box<PhotocraftApp>>, key: Key, mods: Modifiers) {
     let m = platform(mods);
     h.event(egui::Event::ModifiersChanged(m));
     h.event(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: m });
@@ -79,12 +79,25 @@ pub(crate) fn tap(h: &mut Harness<'_, PhotocraftApp>, key: Key, mods: Modifiers)
     h.run_steps(3);
 }
 
-fn press(h: &mut Harness<'_, PhotocraftApp>, sc: &str) {
+fn press(h: &mut Harness<'_, Box<PhotocraftApp>>, sc: &str) {
     let sc = parse(sc).unwrap_or_else(|| panic!("unparsable shortcut {sc}"));
     tap(h, sc.logical_key, sc.modifiers);
 }
 
-fn click(h: &mut Harness<'_, PhotocraftApp>, at: Pos2) {
+/// Queue one press/release in one input frame, then let the runtime collect and the app dispatch it.
+fn press_in_one_frame(h: &mut Harness<'_, Box<PhotocraftApp>>, sc: &str) {
+    let sc = parse(sc).unwrap_or_else(|| panic!("unparsable shortcut {sc}"));
+    let m = platform(sc.modifiers);
+    h.input_mut().events.extend([
+        egui::Event::ModifiersChanged(m),
+        egui::Event::Key { key: sc.logical_key, physical_key: None, pressed: true, repeat: false, modifiers: m },
+        egui::Event::Key { key: sc.logical_key, physical_key: None, pressed: false, repeat: false, modifiers: m },
+        egui::Event::ModifiersChanged(Modifiers::NONE),
+    ]);
+    h.run_steps(2);
+}
+
+fn click(h: &mut Harness<'_, Box<PhotocraftApp>>, at: Pos2) {
     h.hover_at(at);
     h.run_steps(1);
     h.event(egui::Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
@@ -93,22 +106,22 @@ fn click(h: &mut Harness<'_, PhotocraftApp>, at: Pos2) {
     h.run_steps(3);
 }
 
-fn active_name(h: &Harness<'_, PhotocraftApp>) -> String {
+fn active_name(h: &Harness<'_, Box<PhotocraftApp>>) -> String {
     let st = h.state().session.active().unwrap();
     st.active_layer.and_then(|id| st.doc.layer(id)).map(|l| l.name.clone()).unwrap_or_default()
 }
 
 /// Adds the action `name` with `steps` to the action list.
-fn add_action(h: &mut Harness<'_, PhotocraftApp>, name: &str, steps: &[(&str, serde_json::Value)]) {
+fn add_action(h: &mut Harness<'_, Box<PhotocraftApp>>, name: &str, steps: &[(&str, serde_json::Value)]) {
     let steps = steps.iter().map(|(command, params)| photocraft_engine::actions_cmds::ActionStep::new(*command, params.clone())).collect();
     h.state_mut().session.actions.list.push(photocraft_engine::actions_cmds::Action::new(name, steps)).unwrap();
 }
 
-fn logged(h: &Harness<'_, PhotocraftApp>) -> Vec<String> {
+fn logged(h: &Harness<'_, Box<PhotocraftApp>>) -> Vec<String> {
     take_log(&h.ctx).into_iter().map(|(id, _)| id).collect()
 }
 
-fn names(h: &Harness<'_, PhotocraftApp>) -> Vec<String> {
+fn names(h: &Harness<'_, Box<PhotocraftApp>>) -> Vec<String> {
     h.state().session.active().unwrap().doc.walk().into_iter().map(|(_, _, l)| l.name.clone()).collect()
 }
 
@@ -126,7 +139,7 @@ enum Place {
     FocusedWidget,
 }
 
-fn put_focus(h: &mut Harness<'_, PhotocraftApp>, place: Place) {
+fn put_focus(h: &mut Harness<'_, Box<PhotocraftApp>>, place: Place) {
     match place {
         Place::Canvas => {
             let c = h.state().last_canvas_rect.center();
@@ -211,7 +224,7 @@ fn every_displayed_shortcut_dispatches_from_where_focus_usually_is() {
             // A press the focused component holds (the Layers rows' stacking and visibility keys)
             // is the component's and reaches no app command.
             let held = focus_holds(&h.ctx, chord);
-            press(&mut h, &sc);
+            press_in_one_frame(&mut h, &sc);
             let log = take_log(&h.ctx);
             if typing && !chord.has_command() && !chord.is_function_key() {
                 // A focused text field keeps its typing / editing keys: nothing may fire.
@@ -232,7 +245,7 @@ fn every_displayed_shortcut_dispatches_from_where_focus_usually_is() {
         if !typing {
             for t in Tool::ALL.into_iter().filter(|t| t.key() != '\0') {
                 h.state_mut().ui.tool = if t.key() == 'H' { Tool::Move } else { Tool::Hand };
-                press(&mut h, &t.key().to_string());
+                press_in_one_frame(&mut h, &t.key().to_string());
                 if h.state().ui.tool.key() != t.key() {
                     failures.push(format!("{place:?}: tool key {} left {:?}", t.key(), h.state().ui.tool));
                 }
@@ -325,7 +338,7 @@ fn keys_run_their_commands() {
     let mut h = harness();
     put_focus(&mut h, Place::Canvas);
     let paint = h.state().session.active().unwrap().active_layer.unwrap();
-    let clipped = |h: &Harness<'_, PhotocraftApp>| h.state().session.active().unwrap().doc.layer(paint).unwrap().clipped;
+    let clipped = |h: &Harness<'_, Box<PhotocraftApp>>| h.state().session.active().unwrap().doc.layer(paint).unwrap().clipped;
     press(&mut h, "Cmd+Alt+G");
     assert_eq!(logged(&h), ["layer.createClippingMask"]);
     assert!(clipped(&h));
@@ -344,7 +357,7 @@ fn keys_run_their_commands() {
         s.execute("layer.select", json!({"layer": id.0, "mode": "add"})).unwrap();
     }
     h.run_steps(2);
-    let is_clipped = |h: &Harness<'_, PhotocraftApp>, id: photocraft_doc::LayerId| h.state().session.active().unwrap().doc.layer(id).unwrap().clipped;
+    let is_clipped = |h: &Harness<'_, Box<PhotocraftApp>>, id: photocraft_doc::LayerId| h.state().session.active().unwrap().doc.layer(id).unwrap().clipped;
     press(&mut h, "Cmd+Alt+G");
     assert_eq!(logged(&h), ["layer.createClippingMask"], "the top layer isn't clipped yet");
     assert!(is_clipped(&h, paint) && is_clipped(&h, top) && !is_clipped(&h, base));
@@ -388,10 +401,10 @@ fn delete_key_targets() {
         let (x, y) = ((sel.x0 + sel.x1) / 2, (sel.y0 + sel.y1) / 2);
         h.state_mut().ui.mask_target = true;
         h.run_steps(2);
-        let layer_pixels = |h: &Harness<'_, PhotocraftApp>| {
+        let layer_pixels = |h: &Harness<'_, Box<PhotocraftApp>>| {
             h.state().session.active().unwrap().doc.layer(layer).and_then(|l| l.surface().cloned()).map(|s| s.read_region(sel))
         };
-        let mask_at = |h: &Harness<'_, PhotocraftApp>| {
+        let mask_at = |h: &Harness<'_, Box<PhotocraftApp>>| {
             h.state().session.active().unwrap().doc.layer(layer).and_then(|l| l.mask.as_ref()).map(|m| m.surface.sample_channel(x, y, 0))
         };
         let before = layer_pixels(&h);
@@ -424,7 +437,7 @@ fn delete_key_targets_a_smart_objects_filter_mask() {
     h.state_mut().select_filter_mask_target(Some(layer.0));
     assert!(h.state().filter_mask_targeted());
     h.run_steps(2);
-    let smart = |h: &Harness<'_, PhotocraftApp>| match h.state().session.active().unwrap().doc.layer(layer).map(|l| &l.content) {
+    let smart = |h: &Harness<'_, Box<PhotocraftApp>>| match h.state().session.active().unwrap().doc.layer(layer).map(|l| &l.content) {
         Some(photocraft_doc::LayerContent::Smart(sm)) => Some(sm.clone()),
         _ => None,
     };
@@ -618,7 +631,7 @@ fn type_size_keys_follow_the_typed_selection() {
     let st = h.state().session.active().unwrap();
     let id = st.doc.walk().into_iter().find(|(_, _, l)| matches!(l.content, LayerContent::Text(_))).unwrap().2.id.0;
     h.state_mut().session.execute("layer.select", json!({"layer": id})).unwrap();
-    let sizes = |h: &Harness<'_, PhotocraftApp>| match &h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(id)).unwrap().content {
+    let sizes = |h: &Harness<'_, Box<PhotocraftApp>>| match &h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(id)).unwrap().content {
         LayerContent::Text(t) => t.char_runs().iter().map(|r| (r.len, r.style.size_pt)).collect::<Vec<_>>(),
         _ => Vec::new(),
     };
@@ -638,7 +651,7 @@ fn type_size_keys_follow_the_typed_selection() {
     assert_eq!(sizes(&h), [(2, base), (3, base + 2.0)], "only the selected \"He\" shrinks");
 }
 
-fn zoom(h: &Harness<'static, PhotocraftApp>) -> f32 {
+fn zoom(h: &Harness<'static, Box<PhotocraftApp>>) -> f32 {
     h.state().current_zoom()
 }
 
@@ -706,4 +719,19 @@ fn a_second_pass_in_one_frame_runs_no_command_twice() {
     crate::app::framework::keys_pass(&mut app, &ctx, press, |_| {});
     crate::app::framework::keys_pass(&mut app, &ctx, egui::RawInput::default(), |_| {});
     assert_eq!(count(&app), n + 1, "one press, one duplicate");
+}
+
+/// `bridge_of` answers from the table built once (#15493) exactly as a scan that builds every row's command does:
+/// for every row's framework command, and none for a command no row bridges.
+#[test]
+fn bridge_of_finds_the_row_a_fresh_scan_finds() {
+    use super::{CommandRef, RUNTIME_COMMANDS, bridge_of};
+    let scan = |command: &CommandRef| RUNTIME_COMMANDS.iter().find(|(_, bridged)| bridged.command() == *command).map(|(id, bridged)| (*id, *bridged));
+    for (_, bridged) in RUNTIME_COMMANDS {
+        let command = bridged.command();
+        assert_eq!(bridge_of(&command), scan(&command), "{command:?}");
+        assert!(bridge_of(&command).is_some(), "{command:?} is bridged");
+    }
+    let unknown = CommandRef::new("photocraft.noSuchCommand");
+    assert_eq!(bridge_of(&unknown), None);
 }

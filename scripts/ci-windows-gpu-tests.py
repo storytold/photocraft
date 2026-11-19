@@ -1,4 +1,5 @@
-"""Whether a pull request's Windows legs run photocraft-gpu's tests (.github/workflows/ci.yml).
+"""What a pull request's Windows legs skip (.github/workflows/ci.yml): photocraft-gpu's tests, and the
+tests of packages with no platform-specific code.
 
 The Windows runners have no GPU: wgpu renders on WARP, the Direct3D 12 software rasterizer, where
 photocraft-gpu's parity tests take about half of the integration leg's test time (#15247). The Linux
@@ -14,7 +15,15 @@ legs skip them unless the pull request changes something they are built from:
   the shared build inputs (workspace manifest, lockfile, Cargo and nextest config, this workflow,
   this script) and any input added later.
 
-Usage: ci-windows-gpu-tests.py BASE  prints `true` (run them) or `false` (skip them).
+The same rule picks the platform-neutral packages (NEUTRAL) to skip: one is skipped when neither it nor
+any workspace package it depends on has a changed file, and nothing shared changed (any manifest, or
+a file outside the packages that is not documentation). They have no `cfg(windows)`, `cfg(unix)` or
+`cfg(target_os ...)` in their sources, so Windows adds no coverage over the Linux gate for them.
+
+Usage:
+  ci-windows-gpu-tests.py BASE               prints `true` (run photocraft-gpu's tests) or `false`.
+  ci-windows-gpu-tests.py --skip-neutral BASE  prints the neutral packages to skip, space-separated
+                                               (nothing when none).
 """
 
 import json
@@ -28,6 +37,38 @@ GPU = 'photocraft-gpu'
 UNRELATED_PREFIXES = ('docs/', 'log/', 'contributors/', 'scorecard/')
 UNRELATED_SUFFIXES = ('.md',)
 
+# Workspace packages whose sources and tests have no platform-specific code (checked with
+# `grep -rE 'cfg\(.*(windows|unix|target_os|target_family)'` over each package; the only `cfg` in their
+# manifests is `not(target_arch = "wasm32")`). Add a package only after the same check.
+NEUTRAL = (
+    'photocraft-algo',
+    'photocraft-color',
+    'photocraft-compose',
+    'photocraft-doc',
+    'photocraft-geom',
+    'photocraft-ops',
+    'photocraft-paint',
+    'photocraft-raw',
+    'photocraft-vector',
+)
+
+
+def workspace_deps(packages):
+    """Each workspace package's workspace dependencies (every kind, from `cargo metadata`)."""
+    names = {p['name'] for p in packages}
+    return {p['name']: {d['name'] for d in p['dependencies'] if d['name'] in names} for p in packages}
+
+
+def inputs_of(name, deps):
+    """`name` and every workspace package it depends on, directly or not."""
+    seen, todo = {name}, [name]
+    while todo:
+        for d in deps[todo.pop()]:
+            if d not in seen:
+                seen.add(d)
+                todo.append(d)
+    return seen
+
 
 def gpu_inputs(packages):
     """The workspace packages photocraft-gpu is built from (itself included).
@@ -35,17 +76,9 @@ def gpu_inputs(packages):
     `packages` is `cargo metadata`'s `packages` list. Raises ValueError when photocraft-gpu is not in
     the workspace, so a rename cannot silently turn the selection off.
     """
-    names = {p['name'] for p in packages}
-    if GPU not in names:
+    if GPU not in {p['name'] for p in packages}:
         raise ValueError(f'{GPU} is not a workspace package')
-    deps = {p['name']: {d['name'] for d in p['dependencies'] if d['name'] in names} for p in packages}
-    seen, todo = {GPU}, [GPU]
-    while todo:
-        for d in deps[todo.pop()]:
-            if d not in seen:
-                seen.add(d)
-                todo.append(d)
-    return seen
+    return inputs_of(GPU, workspace_deps(packages))
 
 
 def package_dirs(packages, root):
@@ -60,24 +93,41 @@ def package_dirs(packages, root):
     return out
 
 
-def needs_gpu_tests(changed, packages, root):
-    """Whether the changed files (paths relative to the workspace root) can affect the GPU tests."""
-    inputs = gpu_inputs(packages)
+def changed_packages(changed, packages, root):
+    """The workspace packages that own a changed file (paths relative to the workspace root), or None
+    when a change can affect every package: any package manifest, or a file outside the packages that
+    is not documentation (module docstring)."""
     # Longest directory first, so a nested package wins over the one around it.
     dirs = sorted(((d, n) for n, d in package_dirs(packages, root).items() if d), key=lambda x: -len(x[0]))
+    owners = set()
     for path in changed:
-        # Feature unification: any member manifest can change the GPU build (module docstring).
+        # Feature unification: any member manifest can change the build of every other package.
         if path == 'Cargo.toml' or path.endswith('/Cargo.toml'):
-            return True
+            return None
         owner = next((n for d, n in dirs if path.startswith(d + '/')), None)
         if owner is not None:
-            if owner in inputs:
-                return True
+            owners.add(owner)
             continue
         if path.startswith(UNRELATED_PREFIXES) or path.endswith(UNRELATED_SUFFIXES):
             continue
-        return True
-    return False
+        return None
+    return owners
+
+
+def needs_gpu_tests(changed, packages, root):
+    """Whether the changed files (paths relative to the workspace root) can affect the GPU tests."""
+    inputs = gpu_inputs(packages)
+    owners = changed_packages(changed, packages, root)
+    return owners is None or bool(owners & inputs)
+
+
+def neutral_to_skip(changed, packages, root):
+    """The NEUTRAL packages whose tests the Windows legs skip for these changed files, sorted."""
+    owners = changed_packages(changed, packages, root)
+    if owners is None:
+        return []
+    deps = workspace_deps(packages)
+    return sorted(n for n in NEUTRAL if n in deps and not (inputs_of(n, deps) & owners))
 
 
 def changed_files(base, cwd=None):
@@ -89,13 +139,19 @@ def changed_files(base, cwd=None):
 
 
 def main(argv):
-    if len(argv) != 2:
+    args = argv[1:]
+    skip_neutral = args[:1] == ['--skip-neutral']
+    if skip_neutral:
+        args = args[1:]
+    if len(args) != 1:
         print(__doc__, file=sys.stderr)
         return 2
-    base = argv[1]
-    changed = changed_files(base)
+    changed = changed_files(args[0])
     meta = json.loads(subprocess.run(['cargo', 'metadata', '--no-deps', '--format-version', '1'], check=True, capture_output=True, text=True).stdout)
-    print('true' if needs_gpu_tests(changed, meta['packages'], meta['workspace_root']) else 'false')
+    if skip_neutral:
+        print(' '.join(neutral_to_skip(changed, meta['packages'], meta['workspace_root'])))
+    else:
+        print('true' if needs_gpu_tests(changed, meta['packages'], meta['workspace_root']) else 'false')
     return 0
 
 

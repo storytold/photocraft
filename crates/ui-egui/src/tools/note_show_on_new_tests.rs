@@ -7,7 +7,7 @@ use crate::state::Tool;
 use serde_json::json;
 
 /// Open a document with the Note tool active and no notes yet.
-fn note_tool() -> (PhotocraftApp, egui::Context) {
+fn note_tool() -> (Box<PhotocraftApp>, egui::Context) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 120})).unwrap();
     app.ui.tool = Tool::Note;

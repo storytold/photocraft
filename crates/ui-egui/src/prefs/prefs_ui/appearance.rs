@@ -1,12 +1,7 @@
 use super::{AppearanceMode, Color32, PhotocraftApp, json, prefs};
 use crate::theme::AppTheme;
-use craft::keymap::CommandRef;
-use craft::menu::{ThemeChoice, ThemeLabels, ThemeMenu, ThemeRow};
+use craft::menu::{ThemeChoice, ThemeMenu, ThemeRow};
 use craft::theme::{Mode, ThemeId};
-use craft::ui::buttons::IconButton;
-use craft::ui::contract::{Props as _, Show as _, ShowContainer as _};
-use craft::ui::menu::Menu;
-use craft::ui::primitives::IconSpec;
 use craft::ui::runtime::env::system_appearance;
 
 /// The GPU canvas's gamut warning colours from Preferences › Transparency & Gamut.
@@ -96,26 +91,6 @@ pub fn theme_menu(app: &PhotocraftApp) -> ThemeMenu {
     };
     let favorites: Vec<ThemeId> = interface.favorite_themes.iter().filter_map(|f| ThemeId::parse(f).ok()).collect();
     ThemeMenu::new(rows, current).favorites(&favorites)
-}
-
-/// The title bar's appearance button: the icon of the mode, a click that cycles Auto → Light → Dark, and a context
-/// menu with the settings row and the favourite themes.
-pub(crate) fn appearance_button(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let (icon, name) = match app.session.prefs().interface.appearance_mode {
-        AppearanceMode::Auto => ("monitor", tl!("Auto")),
-        AppearanceMode::Dark => ("moon", tl!("Dark")),
-        AppearanceMode::Light => ("sun", tl!("Light")),
-    };
-    // PLAN: assumed `IconButton::label`, `.tooltip(..)` and the output's `clicked()` / `response()`.
-    let out = IconButton::new(IconSpec::svg(craft::behavior::IconId::new(icon)))
-        .label(tl!("Appearance"))
-        .tooltip(crate::i18n::fmt(tl!("Appearance Mode: {mode}"), &[("mode", name)]))
-        .show(ui);
-    if out.clicked() {
-        cycle_appearance(app, ui.ctx());
-    }
-    let nodes = theme_menu(app).favorite_items(&ThemeLabels::default(), CommandRef::new("edit.preferences.interface"));
-    Menu::context(tl!("Appearance"), &out.response).show(ui, |ui, _| craft::menu::context::rows(ui, &nodes));
 }
 
 /// The OS's light or dark mode, `None` where it gives no answer.
