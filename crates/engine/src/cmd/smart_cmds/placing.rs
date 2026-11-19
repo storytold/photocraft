@@ -95,7 +95,13 @@ pub(super) fn reset_transform(s: &mut Session, p: &Value) -> Result<Value> {
         sy += py;
     }
     let (dx, dy) = (sx / 4.0 - cx, sy / 4.0 - cy);
-    let to = Affine { m: [1.0, 0.0, 0.0, 1.0, dx, dy] };
+    // A placement that is already 100 % and square has nothing for the reset to take back, so its
+    // stored translation is the answer. Re-deriving it from the corners' average is not exact: four
+    // rounded corner sums over four differ from the translation that produced them in the last bit,
+    // so a second Reset Transform would nudge an already-reset object by a float ulp. Keep the map
+    // that is already there (a Warp still goes: it is not part of the placement).
+    let square = sm.perspective.is_none() && sm.transform.m[..4] == [1.0, 0.0, 0.0, 1.0];
+    let to = if square { sm.transform } else { Affine { m: [1.0, 0.0, 0.0, 1.0, dx, dy] } };
     let new = affine_homography(&to);
     // Everything the accumulated transform moved the pixels by, so the linked masks and the Smart
     // Filter mask follow the placement back as they do under Free Transform.

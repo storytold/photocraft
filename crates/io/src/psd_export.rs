@@ -216,7 +216,11 @@ impl Ex<'_> {
         } else {
             s.clone()
         };
-        let r = s.content_bounds();
+        // A layer record stores every pixel that differs from the default, clear or not: its rect
+        // answers "what is stored", not "what is visible". Photoshop keeps the white an encoder
+        // left under a transparent pixel inside a canvas-sized rect, so trimming the rect to the
+        // artwork would drop stored colour on save (#9824).
+        let r = s.stored_bounds();
         if r.is_empty() {
             return (PsdRect::default(), self.empty_channels(), warnings);
         }
@@ -257,7 +261,9 @@ impl Ex<'_> {
     fn mask(&self, m: &LayerMask, vector: Option<(f32, f32)>) -> (MaskData, Option<ChannelData>) {
         let s = if m.surface.format() != self.mask_fmt { m.surface.convert(self.mask_fmt) } else { m.surface.clone() };
         let default = s.default_pixel().first().copied().unwrap_or(0.0);
-        let r = s.content_bounds();
+        // As with a layer record: the mask channel stores every pixel that differs from the
+        // mask's default, not only the visible extent (#9824).
+        let r = s.stored_bounds();
         let (w, h) = (r.width() as usize, r.height() as usize);
         let plane = if r.is_empty() { Vec::new() } else { deinterleave(&s.to_interleaved(r), 1, self.mask_fmt.sample, &[false]).remove(0) };
         let mut flags = 0u8;
