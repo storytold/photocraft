@@ -7048,6 +7048,78 @@ fn adjustment_layer_name_must_round_trip() {
     }
 }
 
+/// #11504: the Paste descriptor has no placement, so `edit.paste` with a `center` would reload as
+/// a paste at the original position. Strict export refuses it and a skipping one lists it; a paste
+/// without placement still exports and reloads unchanged.
+#[test]
+fn paste_with_center_refuses_strict_export() {
+    let one = |id: &str, p: Value| Action::new("Probe", vec![ActionStep::new(id, p)]);
+    for p in [
+        json!({"center": [3, 2]}),
+        json!({"center": [3.5, 2.5], "clampToCanvas": false}),
+        json!({"clampToCanvas": false}),
+        json!({"layer": 1}),
+        json!({"layers": [1]}),
+        json!({"document": "Doc"}),
+        json!({"path": "Path"}),
+        json!({"target": "mask"}),
+        // A present null counts too, as the native `as` paste rejects it.
+        json!({"center": null}),
+        json!({"layer": null}),
+        json!({"target": null}),
+    ] {
+        let err = export("Audit", &[&one("edit.paste", p.clone())], &[], false).unwrap_err();
+        assert!(err.contains("`edit.paste`"), "{p}: {err}");
+        let (_, skipped) = export("Audit", &[&one("edit.paste", p.clone())], &[], true).unwrap();
+        assert_eq!(skipped, vec![Skipped { action: "Probe".into(), step: 0, id: "edit.paste".into() }], "{p}");
+    }
+    for (id, p) in [("edit.paste", json!({})), ("edit.pasteSpecial.pasteInPlace", json!({})), ("edit.paste", json!({"as": "path"}))] {
+        let (bytes, skipped) = export("Audit", &[&one(id, p.clone())], &[], false).unwrap();
+        assert!(skipped.is_empty(), "{id} {p}");
+        let steps = import(&bytes).unwrap().actions[0].steps.clone();
+        assert_eq!(steps, vec![ActionStep::new(id, p.clone())], "{id} {p}");
+    }
+}
+
+/// #11504: Paste in Place refuses the same unwritable placement keys as Paste, `target: pixels` is
+/// the one allowed target, and the `as` form keeps refusing what it always refused.
+#[test]
+fn paste_in_place_and_as_forms_keep_their_strict_export_rules() {
+    let one = |id: &str, p: Value| Action::new("Probe", vec![ActionStep::new(id, p)]);
+    let refused = [
+        ("edit.pasteSpecial.pasteInPlace", json!({"center": [3, 2]})),
+        ("edit.pasteSpecial.pasteInPlace", json!({"layer": 1})),
+        ("edit.pasteSpecial.pasteInPlace", json!({"target": "mask"})),
+        ("edit.pasteSpecial.pasteInPlace", json!({"center": null})),
+        // The `as` form: a present `inPlace` (even false), a placement key, an unknown mode.
+        ("edit.paste", json!({"as": "path", "inPlace": true})),
+        ("edit.paste", json!({"as": "path", "inPlace": false})),
+        ("edit.paste", json!({"as": "shape", "inPlace": true})),
+        ("edit.paste", json!({"as": "path", "center": [3, 2]})),
+        ("edit.paste", json!({"as": "shape", "layer": 1})),
+        ("edit.paste", json!({"as": "path", "target": "mask"})),
+        ("edit.paste", json!({"as": "bogus"})),
+        ("edit.pasteSpecial.pasteInPlace", json!({"as": "path"})),
+        ("edit.pasteSpecial.pasteInPlace", json!({"as": "shape"})),
+        ("edit.pasteSpecial.pasteInPlace", json!({"as": "pixels"})),
+    ];
+    for (id, p) in refused {
+        let err = export("Audit", &[&one(id, p.clone())], &[], false).unwrap_err();
+        assert!(err.contains(&format!("`{id}`")), "{id} {p}: {err}");
+        let (_, skipped) = export("Audit", &[&one(id, p.clone())], &[], true).unwrap();
+        assert_eq!(skipped, vec![Skipped { action: "Probe".into(), step: 0, id: id.into() }], "{id} {p}");
+    }
+    // `target: pixels` is the one target the descriptor can express; it reloads as the plain step.
+    for id in ["edit.paste", "edit.pasteSpecial.pasteInPlace"] {
+        let (bytes, skipped) = export("Audit", &[&one(id, json!({"target": "pixels"}))], &[], false).unwrap();
+        assert!(skipped.is_empty(), "{id}");
+        let steps = import(&bytes).unwrap().actions[0].steps.clone();
+        assert_eq!(steps, vec![ActionStep::new(id, json!({}))], "{id}");
+    }
+    let (bytes, _) = export("Audit", &[&one("edit.paste", json!({"as": "shape"}))], &[], false).unwrap();
+    assert_eq!(import(&bytes).unwrap().actions[0].steps, vec![ActionStep::new("edit.paste", json!({"as": "shape"}))]);
+}
+
 // Calls between the actions of a set keep reaching them through Save Actions… and Replace
 // Actions…: the saved file names the set it is written as in each call to one of its actions.
 #[test]
