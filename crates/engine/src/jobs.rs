@@ -1721,6 +1721,29 @@ impl Session {
         // authorization, validation, floating-selection and admission failures.
         let live_commit = self.live_commit.take();
         self.sync_scratch_state();
+        // A refused Exact conversion must also undo its automatic floating-selection drop.
+        let checkpoint = if id == "image.mode.indexedColor" && params.get("palette").and_then(Value::as_str) == Some("exact") {
+            self.active.and_then(|index| {
+                self.docs
+                    .get(index)
+                    .filter(|state| crate::float_cmds::floating(state).is_some())
+                    .map(|state| (index, state.clone(), self.action_history.clone()))
+            })
+        } else {
+            None
+        };
+        let result = self.dispatch_with_commit(id, params, background, live_commit);
+        if result.is_err()
+            && let Some((index, state, action_history)) = checkpoint
+            && self.docs.get(index).is_some_and(|current| current.doc.id == state.doc.id)
+        {
+            self.docs[index] = state;
+            self.action_history = action_history;
+        }
+        result
+    }
+
+    fn dispatch_with_commit(&mut self, id: &str, params: Value, background: bool, live_commit: Option<crate::brush_cmds::LiveCommit>) -> Result<Started> {
         let spec = crate::commands::find(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
         // Params are named fields: anything but an object (or null, meaning none) is a caller
         // mistake, not "use every default".
