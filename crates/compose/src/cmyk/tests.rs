@@ -1704,7 +1704,8 @@ fn normal_onto_nothing_is_exact() {
     };
     let mut d = doc(4, 6);
     d.layers =
-        vec![build(&LayerSpec::Group { children: vec![shape, inv], pass_through: false, blend: BlendMode::Normal, opacity: 1.0, fill: 1.0, mask: None })];
+        vec![build(&LayerSpec::Group { children: vec![shape, inv], pass_through: false, blend: BlendMode::Normal, opacity: 1.0, fill: 1.0, mask: None })]
+            .into();
     assert_matches_reference(&d);
     assert_eq!(render1(&d, 0, 0)[..4], [0.0; 4]);
 }
