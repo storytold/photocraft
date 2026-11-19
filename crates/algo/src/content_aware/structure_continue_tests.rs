@@ -348,3 +348,125 @@ fn auto_fill_whose_area_differs_from_rectangular_keeps_todays_patch_radius() {
     let moved = out.iter().zip(&today).filter(|(a, b)| a != b).count();
     assert_eq!(moved, 0, "{moved} channel values differ from today's radius-3 fill");
 }
+
+/// A small buffer that carries the measured option set and the Rectangular area, so the patch
+/// radius is the only thing under test: vertical stripes (period 4) in two far-apart colours, with
+/// the hole the 1 px border of the buffer. An off-centre 2 x 2 hole leaves no 7 x 7 donor either on
+/// a buffer this small (every 7 x 7 window takes a hole pixel), so it proves nothing here.
+fn small_stripes(n: usize) -> (Vec<f32>, Vec<bool>) {
+    let (a, b) = ([10.0 / 255.0, 200.0 / 255.0, 20.0 / 255.0], [200.0 / 255.0, 30.0 / 255.0, 180.0 / 255.0]);
+    let img: Vec<f32> = (0..n * n).flat_map(|i| if (i % n) % 4 < 2 { a } else { b }).collect();
+    let hole: Vec<bool> = (0..n * n).map(|i| (i % n).min(i / n) < 1 || (i % n).max(i / n) > n - 2).collect();
+    (img, hole)
+}
+
+/// The completion of the same roles with a given patch radius: `None` when that radius leaves no
+/// donor to copy from, which is what sends the fill to the membrane.
+fn completion(n: usize, img: &[f32], hole: &[bool], params: &CompleteParams) -> Option<Vec<f32>> {
+    let roles: Vec<Px> = hole.iter().map(|h| if *h { Px::Hole } else { Px::Source }).collect();
+    complete_masked(n, n, 3, img, &roles, params, &Interrupt::NONE).unwrap()
+}
+
+/// The smallest side that still holds a fully interior 11 x 11 donor window.
+const PATCH_SIDE: usize = MEASURED_STRUCTURE_PATCH_RADIUS * 2 + 1;
+
+/// Review round 2, real: on a buffer narrower than the 11 x 11 patch there is no window centre for
+/// radius 5 at all, so the measured fill found no donor and answered with the smooth membrane where
+/// today's radius 3 still copies pieces (#14191 measures 600 x 400 and keeps every other case on
+/// today's behaviour, and its "no regression" bullet covers this). Measured at b2764ca1c: on the
+/// 9 x 9 buffer the radius-3 completion fills the border hole with 96 channel values differing from
+/// the membrane; the radius-5 completion has no donor, so the fill returned the membrane in all 243
+/// channel values of that buffer. The fill now gets today's radius-3 answer there again.
+#[test]
+fn measured_fill_on_a_small_image_keeps_todays_patch_radius() {
+    for n in [PATCH_SIDE - 2, PATCH_SIDE - 1] {
+        let (img, hole) = small_stripes(n);
+        let opts = FillOptions::default();
+        let source: Vec<bool> = hole.iter().map(|h| !h).collect();
+        assert!(structure_measured(&opts) && rectangular_area(&hole, &source), "n {n}: the measured configuration");
+        let params = CompleteParams { seed: opts.seed, adapt: opts.color_adaptation, ..Default::default() };
+        assert_eq!(params.patch_radius, 3, "n {n}: today's radius");
+        let today = completion(n, &img, &hole, &params).unwrap_or_else(|| panic!("n {n}: today's radius-3 fill has no donor either"));
+        let out = fill(n, n, 3, &img, &hole, &source, &opts);
+        let moved = out.iter().zip(&today).filter(|(a, b)| a != b).count();
+        let membrane = membrane_fill_with(n, n, 3, &img, &hole, &Interrupt::NONE).unwrap();
+        let like_membrane = out.iter().zip(&membrane).filter(|(a, b)| *a == *b).count();
+        assert_eq!(
+            moved,
+            0,
+            "n {n}: {moved} of {} channel values differ from today's radius-3 fill; {like_membrane} of them equal the membrane fill",
+            img.len()
+        );
+    }
+}
+
+/// The other side of that border: when an 11 x 11 donor window does exist, the measured fill uses
+/// it, also on a small buffer (18 x 18 with a 1 px border hole: 178 channel values differ from
+/// today's radius-3 completion there). Guard test, passes before and after the change.
+#[test]
+fn measured_fill_uses_the_11x11_patch_when_a_window_fits() {
+    let n = 18;
+    let (img, hole) = small_stripes(n);
+    let opts = FillOptions::default();
+    let source: Vec<bool> = hole.iter().map(|h| !h).collect();
+    let wide = CompleteParams { patch_radius: MEASURED_STRUCTURE_PATCH_RADIUS, seed: opts.seed, adapt: opts.color_adaptation, ..Default::default() };
+    let with_patch = completion(n, &img, &hole, &wide).expect("n 18: an 11 x 11 donor window must exist beside a 1 px border hole");
+    let today = completion(n, &img, &hole, &CompleteParams { seed: opts.seed, adapt: opts.color_adaptation, ..Default::default() })
+        .expect("n 18: today's fill has donors");
+    let out = fill(n, n, 3, &img, &hole, &source, &opts);
+    let from_patch = out.iter().zip(&with_patch).filter(|(a, b)| a != b).count();
+    let from_today = out.iter().zip(&today).filter(|(a, b)| a != b).count();
+    assert_eq!(from_patch, 0, "the measured fill is not the 11 x 11 completion ({from_patch} channel values differ)");
+    assert_ne!(from_today, 0, "the 11 x 11 completion is the same as today's ({from_today} differ): the patch was never used");
+}
+
+/// The membrane fallback stays where it already is today: a buffer with no room even for the
+/// default 7 x 7 patch has no donor at either radius, so the new radius never reaches it.
+/// Guard test, passes before and after the change.
+#[test]
+fn measured_fill_without_room_for_todays_patch_still_falls_back_to_the_membrane() {
+    for n in 4..7 {
+        let (img, hole) = small_stripes(n);
+        let opts = FillOptions { color_adaptation: Adapt::NONE, ..FillOptions::default() };
+        let source: Vec<bool> = hole.iter().map(|h| !h).collect();
+        let params = CompleteParams { seed: opts.seed, adapt: opts.color_adaptation, ..Default::default() };
+        assert!(completion(n, &img, &hole, &params).is_none(), "n {n}: no donor at today's radius either");
+        let out = fill(n, n, 3, &img, &hole, &source, &opts);
+        let membrane = membrane_fill_with(n, n, 3, &img, &hole, &Interrupt::NONE).unwrap();
+        let moved = out.iter().zip(&membrane).filter(|(a, b)| a != b).count();
+        assert_eq!(moved, 0, "n {n}: {moved} channel values differ from the membrane fill");
+    }
+}
+
+/// The same buffer as [`small_stripes`] with an 8 x 8 hole in the middle instead of the border: at
+/// 18 x 18 there are 11 x 11 windows (their centres are x and y 5 to 12), but the hole covers every
+/// one of them, while a 7 x 7 window still fits in the 8-wide strips left and right of it.
+fn stripes_hole_blocking_the_wide_windows(n: usize) -> (Vec<f32>, Vec<bool>) {
+    let (a, b) = ([10.0 / 255.0, 200.0 / 255.0, 20.0 / 255.0], [200.0 / 255.0, 30.0 / 255.0, 180.0 / 255.0]);
+    let img: Vec<f32> = (0..n * n).flat_map(|i| if (i % n) % 4 < 2 { a } else { b }).collect();
+    let hole: Vec<bool> =
+        (0..n * n).map(|i| matches!(i % n, x if x >= n / 2 - 1 && x <= n / 2 + 6) && matches!(i / n, y if y >= n / 2 - 1 && y <= n / 2 + 6)).collect();
+    (img, hole)
+}
+
+/// The other way radius 5 can leave no donor: a buffer with room for 11 x 11 windows, and a hole
+/// that uses up all of them. #14191 measured a hole four patches across in a 400 x 400 window, so a
+/// fill that completes today with the default radius has to complete the same way here, before the
+/// membrane fallback.
+#[test]
+fn measured_fill_falls_back_to_todays_radius_when_the_hole_leaves_no_room_for_the_patch() {
+    let n = 18;
+    let (img, hole) = stripes_hole_blocking_the_wide_windows(n);
+    let opts = FillOptions::default();
+    let source: Vec<bool> = hole.iter().map(|h| !h).collect();
+    assert!(structure_measured(&opts) && rectangular_area(&hole, &source), "the measured configuration");
+    assert_eq!(hole.iter().filter(|h| **h).count(), 64, "an 8 x 8 hole");
+    let wide = CompleteParams { patch_radius: MEASURED_STRUCTURE_PATCH_RADIUS, seed: opts.seed, adapt: opts.color_adaptation, ..Default::default() };
+    assert!(completion(n, &img, &hole, &wide).is_none(), "radius 5 must leave no donor here, that is the case under test");
+    let params = CompleteParams { seed: opts.seed, adapt: opts.color_adaptation, ..Default::default() };
+    assert_eq!(params.patch_radius, 3, "today's radius");
+    let today = completion(n, &img, &hole, &params).expect("today's radius-3 fill has donors");
+    let out = fill(n, n, 3, &img, &hole, &source, &opts);
+    let moved = out.iter().zip(&today).filter(|(a, b)| a != b).count();
+    assert_eq!(moved, 0, "{moved} of {} channel values differ from today's radius-3 fill", img.len());
+}
