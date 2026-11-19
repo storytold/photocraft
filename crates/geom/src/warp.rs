@@ -679,9 +679,9 @@ pub struct BezierMesh {
 }
 
 /// The share of a split grid's line reach within which a press beside an inner anchor still pulls the line (see
-/// `BezierMesh::beside_inner_anchor`): measured between 0 (a press on the line pulls it) and about 0.4 (one 21.5 px off
-/// moves the anchor).
-const ON_LINE_SHARE: f64 = 0.3;
+/// `BezierMesh::beside_inner_anchor`): measured between 0.91 (a press 20.9 px off pulls it) and 0.93 (one 21.5 px off
+/// moves the anchor), at a 23 px reach.
+const ON_LINE_SHARE: f64 = 0.92;
 
 impl BezierMesh {
     /// The identity mesh over `bounds` with `cols × rows` patches (Photoshop's default is 1 × 1,
@@ -1008,7 +1008,8 @@ impl BezierMesh {
     /// line, not the border): its nearest point on the line in the third of its segment next to that anchor, and more
     /// than [`ON_LINE_SHARE`] of `reach` from the line. There the reference application moves the anchor with its
     /// handles, as a press off the lines does, rather than pulling the line. Measured on split grids: a press 21.5 px
-    /// from a split line pulls the line mid-segment and moves the crossing beside it; one on the line pulls the line.
+    /// from a split line pulls the line mid-segment and moves the crossing beside it; one 20.9 px off, or nearer, pulls
+    /// the line.
     fn beside_inner_anchor(&self, (column, k, v): (bool, usize, f64), press: [f64; 2], reach: f64) -> bool {
         let knots = if column { &self.vs } else { &self.us };
         let (m, a) = Self::locate(knots, v);
@@ -1022,8 +1023,9 @@ impl BezierMesh {
         (on_line[0] - press[0]).hypot(on_line[1] - press[1]) > reach * ON_LINE_SHARE
     }
 
-    /// The anchor line (column `true` or row `false`, and its knot index) nearest `press`, if it
-    /// is within `reach`, with the parameter along it of its point nearest the press.
+    /// The anchor line (column `true` or row `false`, and its knot index) a press pulls: of those
+    /// within `reach` of `press`, the one nearest in the grid's coordinates `(s, t)`; with the
+    /// parameter along it of its point nearest the press.
     /// `self` still holds the grid the drag began with (see [`Self::pull_at`]).
     fn nearest_anchor_line(&self, press: [f64; 2], s: f64, t: f64, reach: f64) -> Option<(bool, usize, f64)> {
         let mut best: Option<(f64, (bool, usize, f64))> = None;
@@ -1041,8 +1043,12 @@ impl BezierMesh {
                         (v, dist) = (w, e);
                     }
                 }
-                if dist <= reach && best.is_none_or(|b| dist < b.0) {
-                    best = Some((dist, (column, k, v)));
+                // Of the lines within reach, the one nearest in the grid's own coordinates: a press 11.4 px beside a
+                // vertical line and 8.6 px below a horizontal one pulls the vertical line on a grid 1.5 times wider
+                // than it is tall.
+                let across = (knot - if column { s } else { t }).abs();
+                if dist <= reach && best.is_none_or(|b| across < b.0) {
+                    best = Some((across, (column, k, v)));
                 }
             }
         }

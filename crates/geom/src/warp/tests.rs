@@ -752,3 +752,26 @@ fn a_press_on_a_split_line_beside_the_crossing_pulls_the_line() {
     let handle = 5 * nx + 3;
     assert!((m.points[handle][1] - base.points[handle][1]).abs() > 1e-6, "the line's lower handle moves");
 }
+
+/// The reference application's cross-split grid (its Default grid split at 0.3949 across and 0.3913 down over
+/// (150, 125)–(452, 327)), pressed just outside a point's reach of the crossing and dragged 25 px up (the saved
+/// meshes). A press 11.4 px right of the vertical line and 11.6 px below the horizontal one pulls the vertical line:
+/// the crossing goes 12 px right and 26.4 px up. A press 8.6 px below the horizontal line, as far right, still pulls
+/// the vertical line, nearer in the grid's coordinates: the crossing goes 12.5 right and 27.4 up.
+#[test]
+fn a_press_just_outside_a_crossing_pulls_the_line_nearest_in_the_grid() {
+    let mut base = BezierMesh::identity([150.0, 125.0, 452.0, 327.0], 1, 1);
+    let (u, v) = (0.394_948_672_493_403_6, 0.391_270_915_354_330_7);
+    assert!(base.split_u(u) && base.split_v(v));
+    let crossing = [150.0 + 302.0 * u, 125.0 + 202.0 * v];
+    let nx = base.nx();
+    for (below, want) in [(11.59, [12.0, -26.41]), (8.59, [12.45, -27.42])] {
+        let press = [crossing[0] + 11.36, crossing[1] + below];
+        let (s, t) = base.param_at(press);
+        let mut m = base.clone();
+        m.pull_at(&base.points, s, t, press, [0.0, -25.0], 23.0);
+        let (p, q) = (m.points[3 * nx + 3], base.points[3 * nx + 3]);
+        let moved = [p[0] - q[0], p[1] - q[1]];
+        assert!((moved[0] - want[0]).hypot(moved[1] - want[1]) < 1.5, "{below} below: the crossing moved {moved:?}, not {want:?}");
+    }
+}
