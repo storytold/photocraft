@@ -2313,7 +2313,7 @@ fn the_unsaved_changes_prompt_is_listed_as_discard_and_answered_by_that_id() {
     // Its rect is keyed by that id too, as `rects` keys every hosted dialog by its `dialogs` id; others keep theirs.
     let host = crate::discard_ui::host_id(&app).expect("the prompt is open");
     assert_eq!(super::inspect::dialog_key(&app, host), "discard");
-    let other = egui::Id::new("another dialog");
+    let other = egui::Id::unique("another dialog");
     assert_eq!(super::inspect::dialog_key(&app, other), other.value().to_string());
     let cancelled = call(&mut app, &ctx, "ui.dialog.cancel", json!({"dialog": "discard"}));
     assert_eq!(cancelled["ok"], true, "{cancelled}");
