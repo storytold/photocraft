@@ -698,7 +698,7 @@ impl Loader<'_> {
             mode: m.mode,
             depth: m.depth,
             icc_profile: self.opt_blob(&m.icc_profile)?,
-            layers,
+            layers: layers.into(),
             channels,
             guides: m.guides.clone(),
             ruler_origin: m.ruler_origin,

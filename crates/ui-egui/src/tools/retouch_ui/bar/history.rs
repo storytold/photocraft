@@ -53,7 +53,7 @@ pub(super) fn history_brush(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Optio
     None
 }
 
-/// Art History Brush: Style, Area, Tolerance.
+/// Art History Brush: Style, Area, Tolerance. Its alerts carry the reference's words, so it opens them itself.
 pub(super) fn art_history(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeAlert> {
     let styles: Vec<Entry<String>> = [
         ("tightShort", tl!("Tight Short")),
@@ -72,12 +72,25 @@ pub(super) fn art_history(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<
     Field::new(tl!("Style")).side(SideLabel::new().scrub(true)).sizing(Sizing::Content).show(ui, |ui, _| {
         Select::new(tl!("Style"), Bind::bound(&mut o.art_history_style), &styles).show(ui);
     });
-    let area = number(tl!("Area"), &mut o.art_history_area, 0.0..=100.0).show(ui).out_of_range;
-    let tolerance = number(tl!("Tolerance"), &mut o.art_history_tolerance, 0.0..=100.0).show(ui).out_of_range;
+    // Area: whole pixels 0..500, no slider; Tolerance: whole percents 0..100 with a slider. A value
+    // typed past either range becomes the closest one with the reference's own alert (#12630).
+    let area = number(tl!("Area"), &mut o.art_history_area, 0.0..=500.0).whole().unit("px").tooltip(tl!("Painting area diameter")).show(ui).out_of_range;
+    let tolerance = number(tl!("Tolerance"), &mut o.art_history_tolerance, 0.0..=100.0)
+        .whole()
+        .unit("%")
+        .popup_slider()
+        .tooltip(tl!("Painting tolerance"))
+        .show(ui)
+        .out_of_range;
+    // Angle and Pressure for Size follow Tolerance (#12629); an Angle typed past its range gets
+    // the bar's own alert.
     let angle = art_history_angle_pressure(ui, app);
-    Divider::vertical().show(ui);
-    hint(ui, tl!("Stylized dabs from a history state"));
-    area.or(tolerance).or(angle)
+    if area.is_some() {
+        let _ = crate::dialogs::alerts::alert(app, tl!(ART_HISTORY_AREA_ALERT));
+    } else if tolerance.is_some() {
+        let _ = crate::dialogs::alerts::alert(app, tl!(ART_HISTORY_TOLERANCE_ALERT));
+    }
+    angle
 }
 
 /// The Art History Brush's Angle and Pressure for Size, after Tolerance (#12629). They edit the
@@ -107,6 +120,12 @@ fn art_history_angle_pressure(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Opt
     crate::brush_panel::commit_keyed(app, &before, &brush, key);
     angle_out.out_of_range
 }
+
+/// The reference's alert for an Art History Brush Area typed past 0..500 px (#12630).
+pub(crate) const ART_HISTORY_AREA_ALERT: &str = "An integer between 0 pixel and 500 Pixels is required. Closest value inserted.";
+
+/// The reference's alert for an Art History Brush Tolerance typed past 0..100 (#12630).
+pub(crate) const ART_HISTORY_TOLERANCE_ALERT: &str = "An integer between 0 and 100 is required. Closest value inserted.";
 
 /// Pattern Stamp: Aligned, Impressionist, Pattern, Scale, Angle.
 pub(super) fn pattern_stamp(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeAlert> {
