@@ -448,7 +448,7 @@ fn with_blend_mode(mut b: BrushSettings, p: &Value) -> BrushSettings {
     } else if p.get("mode").and_then(Value::as_str).is_some_and(|m| m.eq_ignore_ascii_case("behind")) {
         b.mode = photocraft_color::BlendMode::Normal;
         b.behind = true;
-    } else if let Some(m) = p.get("mode").and_then(Value::as_str).and_then(crate::commands::blend_from_str) {
+    } else if let Some(m) = p.get("mode").and_then(Value::as_str).and_then(crate::commands::parse_blend) {
         b.mode = m;
         b.behind = false;
     }
