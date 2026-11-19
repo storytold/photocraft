@@ -241,7 +241,7 @@ jobs:
   test-without-heif:
     if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
     timeout-minutes: 60
-    name: ${{ matrix.variant == 'hakari' && 'test (without heif, Hakari trial)' || 'test (without heif)' }}
+    name: ${{ matrix.variant == 'hakari' && 'test (without heif, scoped Hakari trial)' || 'test (without heif)' }}
     strategy:
       fail-fast: false
       matrix:
@@ -303,12 +303,20 @@ jobs:
       - name: Prepare the trial feature graph
         if: matrix.variant == 'hakari'
         run: |
+          set -o pipefail
+          cargo tree --locked -p photocraft-io --prefix none --format '{p}' |
+            sed 's/ (\*)$//' | LC_ALL=C sort -u > "$RUNNER_TEMP/io-packages-before"
           cargo hakari init crates/workspace-hack --yes
           cp .config/no-heif-trial.toml .config/hakari.toml
+          cargo hakari generate
+          python3 scripts/scope_no_heif_trial.py
           cargo hakari generate
           cargo hakari manage-deps --yes
           cargo hakari generate --diff
           cargo hakari manage-deps --dry-run
+          cargo tree --locked -p photocraft-io --prefix none --format '{p}' |
+            sed -e '/^workspace-hack v/d' -e 's/ (\*)$//' | LC_ALL=C sort -u > "$RUNNER_TEMP/io-packages-after"
+          diff -u "$RUNNER_TEMP/io-packages-before" "$RUNNER_TEMP/io-packages-after"
 
       - name: Check the decoder selection
         run: |
