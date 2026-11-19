@@ -9,8 +9,8 @@
 
 use std::path::{Path, PathBuf};
 
-use photocraft_psd::PsdFile;
-use photocraft_psd::descriptor::Value as D;
+use craft_psd::PsdFile;
+use craft_psd::descriptor::Value as D;
 use photocraft_text::engine_data::Value as E;
 
 fn corpus(rel: &str) -> PsdFile {
@@ -42,7 +42,7 @@ fn engine_data_antialias_matches_photoshop() {
         let raw = first_tysh(&corpus(&format!("text/antialias-{name}.psd")));
         let mut layer = photocraft_text::psd::text_layer_from_tysh(&raw, 72.0).unwrap();
         layer.psd_raw = None;
-        let ours = photocraft_text::psd::build_tysh(&layer, 72.0, None);
+        let ours = photocraft_text::psd::build_tysh(&layer, 72.0, None).unwrap();
         assert_eq!(engine_antialias(&ours), engine_antialias(&raw), "{name}");
     }
 }
@@ -55,7 +55,7 @@ fn tysh_trailing_bounds_match_photoshop() {
         let mut layer = photocraft_text::psd::text_layer_from_tysh(&raw, 72.0).unwrap();
         assert_eq!(layer.warp.is_some(), warped, "{file}");
         layer.psd_raw = None;
-        let ours = photocraft_text::psd::parse_tysh(&photocraft_text::psd::build_tysh(&layer, 72.0, Some(rect(&theirs, "bounds")))).unwrap();
+        let ours = photocraft_text::psd::parse_tysh(&photocraft_text::psd::build_tysh(&layer, 72.0, Some(rect(&theirs, "bounds"))).unwrap()).unwrap();
         assert_eq!(ours.bounds, theirs.bounds, "{file}");
         if warped {
             assert_eq!(theirs.bounds, rect(&theirs, "bounds"), "{file}");
@@ -69,6 +69,6 @@ fn tysh_trailing_bounds_match_photoshop() {
 fn version_info_matches_photoshop() {
     for file in ["text/antialias-smooth.psd", "text/warp-arc-50.psd"] {
         let theirs = corpus(file);
-        assert_eq!(photocraft_psd::resources::version_info_resource(true).data, theirs.resource(1057).unwrap().data, "{file}");
+        assert_eq!(craft_psd::resources::version_info_resource(true).data, theirs.resource(1057).unwrap().data, "{file}");
     }
 }

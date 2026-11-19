@@ -650,8 +650,6 @@ edit.preferences.integrations
 edit.keyboardShortcuts
 edit.menus
 edit.toolbar
-help.checkForUpdates
-updates.status
 edit.fade
 edit.purge.undo
 edit.purge.clipboard

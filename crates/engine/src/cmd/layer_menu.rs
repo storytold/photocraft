@@ -1,6 +1,6 @@
 use super::{
     Adjustment, BlendMode, Color, ColorMode, CommandSpec, EngineError, Fill, Layer, LayerContent, LayerId, LayerMask, Result, Session, Value, adjustment_kind,
-    arrange, bad, blend_from_str, cmyk_param, color_param, has_doc, has_layer, has_selection, json, layer_copy, layer_panel_option, layer_param,
+    arrange, bad, parse_blend, cmyk_param, color_param, has_doc, has_layer, has_selection, json, layer_copy, layer_panel_option, layer_param,
     mask_new_layer, merge_group, move_mask, pixels, set_clipped, set_mask, set_mask_and_deselect,
 };
 
@@ -148,7 +148,7 @@ fn deletion_and_selection() -> Vec<CommandSpec> {
             "Select Layer",
             [],
             None,
-            r##"{"layer":id|str|{"index":uint}|{"ordinal":"Trgt|Frwr|Bckw|Frnt|Back"} | "name":str,"occurrence":index?,"mode":"replace|toggle|range|add|remove"="replace"} (typed references use the recorded full layer stack; name occurrence: zero-based document walk order; required for duplicate names; toggle = ⌘-click, range = ⇧-click, remove = deselect it, keeping at least one)"##,
+            r##"{"layer":id|str|{"index":uint}|{"ordinal":"Trgt|Frwr|Bckw|Frnt|Back"} | "name":str,"occurrence":index?,"mode":"replace|toggle|range|add|remove"="replace"} | {"layers":[id,…]} (layers: exactly these selected, the last active; typed references use the recorded full layer stack; name occurrence: zero-based document walk order; required for duplicate names; toggle = ⌘-click, range = ⇧-click, remove = deselect it, keeping at least one)"##,
             has_doc,
             crate::layer_multi_cmds::select
         ),
@@ -293,7 +293,7 @@ fn merging() -> Vec<CommandSpec> {
                 bg.locks.position = true;
                 *crate::pixels_mut(&mut bg)? = photocraft_compose::flatten_to_surface(doc, fmt, Some([1.0, 1.0, 1.0]));
                 *active = Some(bg.id);
-                doc.layers = vec![bg];
+                doc.layers = vec![bg].into();
                 Ok(())
             })?;
             Ok(Value::Null)
@@ -454,7 +454,7 @@ fn set_props(s: &mut Session, p: &Value) -> Result<Value> {
         // The Background has no opacity, fill or blend mode: like Photoshop, setting
         // one that changes its look turns it into a normal layer ("Layer 0") first.
         let num = |k: &str| p.get(k).and_then(Value::as_f64).is_some_and(|v| v < 1.0);
-        let blends = p.get("blend").and_then(Value::as_str).and_then(blend_from_str).is_some_and(|b| b != photocraft_color::BlendMode::Normal);
+        let blends = p.get("blend").and_then(Value::as_str).and_then(parse_blend).is_some_and(|b| b != photocraft_color::BlendMode::Normal);
         for &id in &ids {
             if num("opacity") || num("fill") || blends {
                 crate::extra_cmds::background_to_layer(doc, id);
@@ -558,7 +558,7 @@ fn apply_clip_and_locks(l: &mut Layer, p: &Value) -> Result<()> {
 
 /// Parses a blend mode for the layer, refusing Pass Through on anything but a group.
 fn blend_prop(l: &Layer, v: &str) -> Result<BlendMode> {
-    let b = blend_from_str(v).ok_or_else(|| bad("layer.setProps", format!("unknown blend mode `{v}`")))?;
+    let b = parse_blend(v).ok_or_else(|| bad("layer.setProps", format!("unknown blend mode `{v}`")))?;
     // Pass Through is a group's mode only, as in Photoshop.
     if b == BlendMode::PassThrough && !l.is_group() {
         return Err(bad("layer.setProps", format!("Pass Through applies to groups only; layer {} isn't one", l.id.0)));

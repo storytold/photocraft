@@ -23,7 +23,7 @@
 
 use std::sync::Arc;
 
-use photocraft_cms::{Builtin, ColorSpace, Profile, Transform, TransformOptions};
+use craft_cms::{Builtin, ColorSpace, Profile, Transform, TransformOptions};
 use photocraft_color::convert::CmykSpace;
 use photocraft_color::{Color, ColorMode};
 use photocraft_doc::{AlphaChannel, Document};
@@ -124,7 +124,7 @@ impl InkSpace {
                 .as_ref()
                 .and_then(|b| Profile::parse(b).ok())
                 .filter(|p| p.color_space == ColorSpace::Rgb && !p.same_colors(Builtin::Srgb.profile()))
-                .and_then(|own| photocraft_cms::transform::cached(Builtin::Srgb.profile(), &own, TransformOptions::default()).ok())
+                .and_then(|own| craft_cms::transform::cached(Builtin::Srgb.profile(), &own, TransformOptions::default()).ok())
         } else {
             None
         };
@@ -150,7 +150,8 @@ impl InkSpace {
         }
         let mut rgb = photocraft_color::convert::with_cmyk_space(self.cmyk.as_ref(), || color.to_rgb());
         if let Some(t) = &self.to_own {
-            t.apply(&mut rgb, 3);
+            // An RGB → RGB transform over one RGB pixel; were it refused, the colour stays sRGB.
+            let _ = t.apply(&mut rgb, 3);
         }
         rgb.map(|v| if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) })
     }
@@ -190,9 +191,14 @@ pub fn inks(doc: &Document, rect: Rect) -> Buffer {
     buf
 }
 
-/// The starting backdrop of a document render: the inks for Multichannel, else transparent.
-pub(crate) fn backdrop(doc: &Document, rect: Rect) -> Buffer {
-    if doc.mode == ColorMode::Multichannel { inks(doc, rect) } else { Buffer::transparent(rect) }
+pub(crate) fn backdrop_with<A: crate::BufferAlloc>(doc: &Document, rect: Rect, alloc: &A) -> Result<Buffer, A::Error> {
+    if doc.mode == ColorMode::Multichannel {
+        let mut buf = alloc.filled(rect, [1.0; 4])?;
+        overprint(&mut buf, doc, |_| true);
+        Ok(buf)
+    } else {
+        alloc.filled(rect, [0.0; 4])
+    }
 }
 
 /// [`crate::thumbnail_buffer`] of an RGB or CMYK document with its spot channels printed over it

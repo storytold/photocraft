@@ -1,4 +1,4 @@
-use super::{Adjustment, CommandSpec, destructive_adjust, has_doc, has_pixel_layer, turn};
+use super::{CommandSpec, Value, desaturate_adjustment, destructive_adjust, has_doc, turn};
 
 /// Image menu commands: canvas rotations and flips, and Desaturate.
 pub(super) fn specs() -> Vec<CommandSpec> {
@@ -24,20 +24,12 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             ["Image", "Adjustments"],
             Some("Cmd+Shift+U"),
             r##"{"target":"pixels"|"mask"|{"color":i}|{"colors":[i,…]}?=Channels panel target,"layer":id|name?=active}"##,
-            has_pixel_layer,
+            crate::adjust_cmds::has_adjustable,
             |s, p| {
-                destructive_adjust(
-                    s,
-                    "Desaturate",
-                    Adjustment::HueSaturation {
-                        hue: 0.0,
-                        saturation: -100.0,
-                        lightness: 0.0,
-                        colorize: false,
-                        ranges: photocraft_doc::adjust::HueRange::defaults(),
-                    },
-                    p,
-                )
+                if crate::adjust_cmds::adjust_as_smart_filter(s, "desaturate", "Desaturate", p)? {
+                    return Ok(Value::Null);
+                }
+                destructive_adjust(s, "Desaturate", desaturate_adjustment(), p)
             }
         ),
     ]
