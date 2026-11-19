@@ -180,10 +180,14 @@ fn caret_font_choices_style_only_subsequent_typing_including_ime() {
                 let mut expected = families(&before);
                 expected.splice(caret..caret, std::iter::repeat_n(font.to_string(), 3));
                 assert_eq!(families(&saved(&h, id)), expected, "{label:?}");
+                let mut expected_text: Vec<char> = text.chars().collect();
+                expected_text.splice(caret..caret, "éXZ".chars());
                 let typed = saved(&h, id);
+                assert_eq!(typed["text"], expected_text.into_iter().collect::<String>(), "the IME and typed text land at the caret: {label:?}");
+                assert!(h.state().ui.type_insertion_style.is_some(), "the pending font is still set before the commit: {label:?}");
                 checkmark(&mut h);
                 assert_eq!(saved(&h, id), typed, "{label:?}");
-                assert!(h.state().ui.type_insertion_style.is_none(), "{label:?}");
+                assert!(h.state().ui.type_insertion_style.is_none(), "the commit clears the pending font: {label:?}");
             }
         }
     }
