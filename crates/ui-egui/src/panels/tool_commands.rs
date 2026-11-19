@@ -338,6 +338,31 @@ pub(crate) fn slots(toolbar: &ToolbarCustomization) -> Vec<ToolSlot<Tool>> {
     slots
 }
 
+/// The rail's [`slots`] for the stored layout, built once per preferences revision ([`PrefsStore::rev`]): the toolbar, its
+/// measure and the dock's grid read them several times a frame, and the layout changes only with the preferences.
+///
+/// [`PrefsStore::rev`]: photocraft_engine::prefs::PrefsStore::rev
+#[derive(Default)]
+pub(crate) struct ToolbarSlots(std::cell::RefCell<Option<(u64, RailSlots)>>);
+
+/// The rail's slots, shared by the readers of one preferences revision.
+type RailSlots = std::sync::Arc<[ToolSlot<Tool>]>;
+
+impl ToolbarSlots {
+    /// The slots of `prefs`' toolbar layout.
+    pub(crate) fn get(&self, prefs: &photocraft_engine::prefs::PrefsStore) -> RailSlots {
+        let mut held = self.0.borrow_mut();
+        match &*held {
+            Some((rev, slots)) if *rev == prefs.rev() => slots.clone(),
+            _ => {
+                let built: RailSlots = slots(&prefs.get().toolbar).into();
+                *held = Some((prefs.rev(), built.clone()));
+                built
+            }
+        }
+    }
+}
+
 /// `slots` as the group layout `edit.toolbar {"toolbar": ..}` stores: one list of `Tool` names per slot.
 pub(crate) fn saved_groups(slots: &[ToolSlot<Tool>]) -> serde_json::Value {
     slots.iter().map(|slot| slot.tools.iter().map(|tool| format!("{:?}", tool.id)).collect::<Vec<String>>()).collect()
