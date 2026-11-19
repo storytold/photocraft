@@ -153,6 +153,25 @@ fn lost_reply_stops_without_resending_mutation() {
 }
 
 #[test]
+fn command_refusal_stops_before_next_command() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = std::thread::spawn(move || {
+        let mut reader = auth(&listener);
+        let first = read(&mut reader);
+        assert_eq!(first["params"]["command"], "first");
+        writeln!(reader.get_mut(), "{}", json!({"id":first["id"],"ok":false,"error":"synthetic command refusal"})).unwrap();
+        let mut line = String::new();
+        assert_eq!(reader.read_line(&mut line).unwrap(), 0, "CLI sent another request after the refusal");
+    });
+    let output = Fixture::new("{\"command\":\"first\"}\n{\"command\":\"second\"}").run(port);
+    server.join().unwrap();
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("line 1: server rejected command"), "{error}");
+}
+
+#[test]
 fn auth_refusal_does_not_send_commands_or_echo_remote_secrets() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
