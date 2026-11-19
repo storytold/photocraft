@@ -139,6 +139,14 @@ enum BatchInterrupt {
     Closed,
 }
 
+/// The question a parked Batch worker waits on the desktop to answer (#13667): the plain Esc
+/// pause, or a Stop For Errors failure with the failing file and the step's error.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BatchQuestion {
+    Esc,
+    Failure { input: String, message: String },
+}
+
 /// Cancelled before it committed.
 const CANCEL_REQUESTED: u8 = 1;
 /// The worker has sent its result; a Batch no longer accepts a cancel.
@@ -303,6 +311,21 @@ impl JobCtx {
     /// The Stop For Errors question this parked worker shows, if it is parked on one.
     pub fn batch_failure_question(&self) -> Option<(String, String)> {
         self.shared.batch_failure.lock().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+
+    /// What a parked Batch worker is asking, in one locked look: `None` when the worker is not
+    /// parked, the failing file and its error for a Stop For Errors failure, the plain Esc
+    /// question otherwise. Reading the pause and the payload separately could disagree when a
+    /// `jobs.cancel` wakes the worker in between (#13667).
+    pub fn batch_question(&self) -> Option<BatchQuestion> {
+        let phase = self.shared.batch.lock().unwrap_or_else(PoisonError::into_inner);
+        if *phase != BatchInterrupt::Waiting {
+            return None;
+        }
+        match self.shared.batch_failure.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
+            Some((input, message)) => Some(BatchQuestion::Failure { input: input.clone(), message: message.clone() }),
+            None => Some(BatchQuestion::Esc),
+        }
     }
 
     /// Move an accepted Esc request to the question at a worker checkpoint.
@@ -815,10 +838,10 @@ pub fn run<T: Send + 'static>(
     }
     let mut job = new_job(s, label, lock_document, authorization, document.clone(), apply)?;
     // A desktop that watches its jobs can answer this worker's Stop For Errors question;
-    // an inline or scripted run never parks (#13667). The flag is re-evaluated per
-    // file.automate.batch spawn; reset after the threaded spawn if a second spawn site
-    // ever appears.
-    if s.jobs.batch_failure_questions {
+    // an inline or scripted run never parks (#13667). The opt-in belongs to the dispatch
+    // that armed it: the spawn consumes it, so a later [`Session::start`] (a control-channel
+    // wait, a test) never inherits a question channel its caller cannot answer.
+    if std::mem::take(&mut s.jobs.batch_failure_questions) {
         job.ctx.enable_batch_questions();
     }
     let (tx, rx) = std::sync::mpsc::channel::<Result<Payload>>();
@@ -1679,10 +1702,12 @@ impl Session {
         self.jobs.running.iter().find(|job| job.id == id && job.command == "file.automate.batch").is_some_and(|job| job.ctx.batch_waiting_for_decision())
     }
 
-    /// The question a Batch parked on a Stop For Errors failure shows: the failing file and
-    /// its error. `None` while a parked Batch waits for the plain Esc decision (#13667).
-    pub fn batch_failure_question(&self, id: JobId) -> Option<(String, String)> {
-        self.jobs.running.iter().find(|job| job.id == id && job.command == "file.automate.batch").and_then(|job| job.ctx.batch_failure_question())
+    /// The question this session's parked Batch waits on: its pause and its payload in one
+    /// locked look, so a `jobs.cancel` waking the worker in between cannot make the desktop
+    /// word the next pass of its dialog from a stale pair of reads (#13667). `None` when no
+    /// such job is parked.
+    pub fn batch_question(&self, id: JobId) -> Option<BatchQuestion> {
+        self.jobs.running.iter().find(|job| job.id == id && job.command == "file.automate.batch").and_then(|job| job.ctx.batch_question())
     }
 
     /// Continue with the next input or stop a Batch paused by the desktop Esc key.
