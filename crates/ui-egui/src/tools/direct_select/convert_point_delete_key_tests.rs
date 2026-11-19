@@ -6,12 +6,12 @@ use photocraft_doc::vector::Path;
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::canvas::{ToolEvent, tool_event};
+use crate::canvas::testing;
 use crate::state::Tool;
 
 /// 800 x 600 on white, pixel layer Red active, saved path Path 1 (a closed corner square)
 /// targeted in the Paths panel, the Convert Point tool on.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 800, "height": 600, "background": "white"})).unwrap();
     app.sync_views();
@@ -32,21 +32,13 @@ fn layer_names(app: &PhotocraftApp) -> Vec<String> {
 }
 
 fn ctrl_click(app: &mut PhotocraftApp, at: [f64; 2]) {
-    tool_event(app, ToolEvent::Down { x: at[0], y: at[1], pressure: 1.0 }, Modifiers::COMMAND);
-    tool_event(app, ToolEvent::Up { x: at[0], y: at[1] }, Modifiers::COMMAND);
+    testing::click(app, at, Modifiers::COMMAND);
 }
 
-/// A key through the app's shortcut handling, as the canvas gets it.
+/// A key through the app's frame, as the canvas gets it: the overlay's session keys first, then
+/// the app's key route.
 fn press(app: &mut PhotocraftApp, key: egui::Key) {
-    let ctx = egui::Context::default();
-    let m = Modifiers::NONE;
-    let raw = egui::RawInput {
-        events: vec![egui::Event::ModifiersChanged(m), egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: m }],
-        ..Default::default()
-    };
-    ctx.begin_pass(raw);
-    crate::shortcuts::handle(app, &ctx);
-    ctx.end_pass().textures_delta.clear();
+    testing::key(app, key, Modifiers::NONE);
 }
 
 fn anchors(path: &Path) -> Vec<[f64; 2]> {

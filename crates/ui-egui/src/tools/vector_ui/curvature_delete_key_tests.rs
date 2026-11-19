@@ -6,18 +6,18 @@ use photocraft_doc::vector::Path;
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::canvas::{ToolEvent, tool_event};
+use crate::canvas::testing;
 use crate::state::Tool;
 
 /// 800 x 600 on white, pixel layer Red active, and a Work Path drawn with the Curvature Pen
 /// through (100,300), (250,150), (400,300), ended with Esc.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 800, "height": 600, "background": "white"})).unwrap();
     app.sync_views();
     app.run("layer.new.layer", json!({"name": "Red"})).unwrap();
     app.ui.tool = Tool::CurvaturePen;
-    app.ui.tool_options.vector_mode = "path".into();
+    app.ui.tool_options.vector_mode = craft::draw::ui::VectorMode::Path;
     for p in [[100.0, 300.0], [250.0, 150.0], [400.0, 300.0]] {
         click(&mut app, p);
     }
@@ -36,21 +36,13 @@ fn layer_names(app: &PhotocraftApp) -> Vec<String> {
 }
 
 fn click(app: &mut PhotocraftApp, at: [f64; 2]) {
-    tool_event(app, ToolEvent::Down { x: at[0], y: at[1], pressure: 1.0 }, Modifiers::NONE);
-    tool_event(app, ToolEvent::Up { x: at[0], y: at[1] }, Modifiers::NONE);
+    testing::click(app, at, Modifiers::NONE);
 }
 
-/// A key through the app's shortcut handling, as the canvas gets it.
+/// A key through the app's frame, as the canvas gets it: the overlay's session keys first, then
+/// the app's key route.
 fn press(app: &mut PhotocraftApp, key: egui::Key) {
-    let ctx = egui::Context::default();
-    let m = Modifiers::NONE;
-    let raw = egui::RawInput {
-        events: vec![egui::Event::ModifiersChanged(m), egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: m }],
-        ..Default::default()
-    };
-    ctx.begin_pass(raw);
-    crate::shortcuts::handle(app, &ctx);
-    ctx.end_pass().textures_delta.clear();
+    testing::key(app, key, Modifiers::NONE);
 }
 
 fn anchors(path: &Path) -> Vec<[f64; 2]> {
