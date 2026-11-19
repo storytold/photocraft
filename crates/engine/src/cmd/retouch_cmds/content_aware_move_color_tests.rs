@@ -58,9 +58,11 @@ fn green_doc() -> Session {
     s
 }
 
-/// The same checker on a horizontal grey ramp, constant across each 10 px column.
+/// The same checker on a horizontal grey ramp, constant across each 10 px column. Cropped to what
+/// the tests read (the landings end at x 620, y 440): a fill samples the whole canvas, so its
+/// cost grows with it.
 fn ramp_doc() -> Session {
-    let mut s = session(800, 600);
+    let mut s = session(640, 460);
     paint(&mut s, |x, y| {
         if let Some(v) = checker(x, y) {
             [v, v, v]
