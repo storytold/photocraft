@@ -262,7 +262,13 @@ fn map_event(app: &mut PhotocraftApp, ctx: &egui::Context, event: LayersEvent<La
                     }
                 }
                 LayerDrop::Mask(mv) if mv.part == LayerPart::LayerMask => {
-                    actions.push(("layer.layerMask.moveTo".into(), json!({"layer": mv.layer.0, "to": mv.to.0, "copy": mv.copy})));
+                    if doc.layer(mv.to).is_some_and(|layer| layer.mask.is_some()) {
+                        if mv.copy {
+                            crate::dialogs::mask_replace_prompt::ask(app, mv.layer, mv.to);
+                        }
+                    } else {
+                        actions.push(("layer.layerMask.moveTo".into(), json!({"layer": mv.layer.0, "to": mv.to.0, "copy": mv.copy})));
+                    }
                 }
                 _ => {}
             }
