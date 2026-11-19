@@ -163,7 +163,7 @@ jobs:
   gate:
     if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
     # Tracks @main so suite-wide CI fixes reach every app without a PR in each repository.
-    uses: aiongg/craft-common-actions/.github/workflows/gate.yml@ci-build-once-test
+    uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
     with:
       # egui/winit/rfd.
       packages: >-
@@ -209,7 +209,7 @@ jobs:
     needs: platforms
     if: needs.platforms.outputs.windows == 'true'
     # Tracks @main so suite-wide CI fixes reach every app without a PR in each repository.
-    uses: aiongg/craft-common-actions/.github/workflows/gate.yml@ci-build-once-test
+    uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
     with:
       os: '["windows-latest"]'
       lint-cache: false
@@ -327,7 +327,7 @@ jobs:
       # The gate's own key (the shared action computes it), restore only. The toolchain action
       # exports CARGO_HOME, which the gate's legs do not have; align-environment leaves it out of
       # the cache paths.
-      - uses: aiongg/craft-common-actions/actions/rust-cache@ci-build-once-test
+      - uses: storytold/craft-common-actions/actions/rust-cache@main
         with:
           cache-version: v2
           job: gate

@@ -17,7 +17,7 @@ concurrency:
 jobs:
   sonarcloud:
     # Track shared CI improvements on main.
-    uses: aiongg/craft-common-actions/.github/workflows/sonarcloud.yml@ci-build-once-test
+    uses: storytold/craft-common-actions/.github/workflows/sonarcloud.yml@main
     with:
       timeout-minutes: 120
       fonts-ref: cc9269cd8d8258785dac603fba3122e5d2556795
