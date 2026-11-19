@@ -53,6 +53,20 @@ fn user(s: &Session) -> Vec<BrushPreset> {
 }
 
 #[test]
+fn empty_stores_preserve_shared_builtin_presets() {
+    let first_dir = TempDir::new("shared-first");
+    let second_dir = TempDir::new("shared-second");
+    let (mut first, warnings) = session(&first_dir);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let (second, warnings) = session(&second_dir);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(std::sync::Arc::ptr_eq(&first.tools.presets, &second.tools.presets));
+    first.execute("brush.presets.save", json!({"name": "Only first"})).unwrap();
+    assert!(second.tools.presets.iter().all(|p| p.name != "Only first"));
+    assert!(!std::sync::Arc::ptr_eq(&first.tools.presets, &second.tools.presets));
+}
+
+#[test]
 fn sessions_have_no_store_by_default() {
     let mut s = Session::new();
     assert!(s.preset_store.is_none(), "headless sessions must stay hermetic");
