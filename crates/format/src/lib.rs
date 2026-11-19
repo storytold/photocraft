@@ -109,7 +109,8 @@ pub struct SaveOptions {
     /// The ICC profile of `full_composite`'s pixels, embedded in its PNG.
     pub full_composite_icc: Option<Vec<u8>>,
     /// Omit the saved render cache for these Smart Object layers. Callers must first verify
-    /// that the cache can be reconstructed from the saved source. Empty by default.
+    /// that the cache can be reconstructed from the saved source. IDs shared by multiple layers
+    /// are ignored. Empty by default.
     pub omit_smart_object_caches: HashSet<LayerId>,
 }
 

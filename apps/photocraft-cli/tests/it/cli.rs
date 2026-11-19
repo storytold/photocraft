@@ -1371,6 +1371,39 @@ fn pcraft_output_has_no_full_composite_unless_asked() {
     std::fs::remove_dir_all(d).unwrap();
 }
 
+#[test]
+fn pcraft_render_cache_opt_out_in_convert_run_and_batch() {
+    use photocraft_raw::testgen::{DngSpec, mosaic, scene};
+
+    let dir = tmp("pcraft-render-cache-opt-out");
+    let input_dir = dir.join("input");
+    std::fs::create_dir(&input_dir).unwrap();
+    let raw = dir.join("source.dng");
+    let (width, height) = (40, 24);
+    let samples = mosaic(&scene(width, height), width, [0, 1, 1, 2], 0, 65535);
+    std::fs::write(&raw, DngSpec::cfa(width, height, samples).build()).unwrap();
+    let mut session = photocraft_engine::Session::new();
+    session.execute("file.openAsSmartObject", json!({"path": raw})).unwrap();
+    let doc = &session.active().unwrap().doc;
+    let src = input_dir.join("source.pcraft");
+    std::fs::write(&src, photocraft_format::save_to_bytes(doc, &Default::default()).unwrap()).unwrap();
+
+    for (case, args, kept) in [("default", &[][..], true), ("omit", &["--no-pcraft-render-caches"][..], false)] {
+        let convert = dir.join(format!("convert-{case}.pcraft"));
+        let run = dir.join(format!("run-{case}.pcraft"));
+        let batch_dir = format!("batch-{case}");
+        ok(bin().arg("convert").arg(&src).arg(&convert).args(args));
+        ok(bin().arg("run").arg(&src).arg("--out").arg(&run).args(args));
+        let batch = batch_with(&dir, &input_dir, &batch_dir, r#"["select.all"]"#, &[&["--format", "pcraft"][..], args].concat());
+        assert!(batch.status.success(), "{batch_dir}: {}", String::from_utf8_lossy(&batch.stderr));
+        for path in [convert, run, dir.join(batch_dir).join("source.pcraft")] {
+            let saved = photocraft_format::load_path(&path).unwrap();
+            assert_eq!(saved.layers[0].surface().is_some(), kept, "{}", path.display());
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// Issue #1108: a non-Unicode argument (a Latin-1 file name on Linux) used to panic in
 /// `std::env::args()` before anything was printed. clap reads the arguments as they are: a path
 /// takes one, and text (`--filter`) refuses it with a usage error.

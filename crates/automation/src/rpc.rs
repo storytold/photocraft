@@ -178,6 +178,9 @@ impl Headless {
                         .unwrap_or(false),
                     ..Default::default()
                 };
+                if let Some(keep) = photocraft_engine::file_cmds::pcraft_render_caches_param(&p, "doc.save").map_err(|e| bad(e.to_string()))? {
+                    opts.pcraft_render_caches = keep;
+                }
                 opts.encode.dpx_bits = photocraft_engine::file_cmds::dpx_bits_param(&p, "doc.save").map_err(|e| bad(e.to_string()))?;
                 opts.encode.dds = photocraft_engine::file_cmds::dds_param(&p, "doc.save").map_err(|e| bad(e.to_string()))?.unwrap_or_default();
                 if let Some(c) = photocraft_engine::file_cmds::tiff_compression_param(&p, "doc.save").map_err(|e| bad(e.to_string()))? {

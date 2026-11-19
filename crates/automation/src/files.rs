@@ -89,6 +89,9 @@ fn native_options(doc: &Document, opts: &ExportOptions) -> Result<SaveOptions, A
         out.full_composite = photocraft_io::pcraft_full_composite(doc);
         out.full_composite_icc = out.full_composite.as_ref().map(|_| photocraft_io::pcraft_full_composite_icc(doc));
     }
+    if !opts.pcraft_render_caches {
+        out.omit_smart_object_caches = photocraft_io::raw::smart_object_cache_omissions(doc, &photocraft_raster::Interrupt::NONE)?;
+    }
     photocraft_raster::spill::check_since(generation).map_err(AutomationError::Io)?;
     doc.scratch_health().map_err(AutomationError::Io)?;
     Ok(out)

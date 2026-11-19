@@ -229,6 +229,10 @@ pub struct SaveParams {
     /// The save may omit it; check the manifest's `full_composite` member. Off by default.
     #[serde(default, rename = "pcraftFullComposite")]
     pub pcraft_full_composite: Option<bool>,
+    /// .pcraft: false omits RAW Smart Object render caches that the saved document can rebuild
+    /// exactly. By default headless saves keep caches, and bridge saves use the app's preference.
+    #[serde(default, rename = "pcraftRenderCaches")]
+    pub pcraft_render_caches: Option<bool>,
     /// PSD/PSB: write the real merged image (Photoshop's Maximize Compatibility). false writes
     /// Photoshop's white placeholder instead: a smaller file and a faster save, but readers that
     /// show only the merged image see white. Bitmap, Indexed Color and Duotone documents still
@@ -947,7 +951,7 @@ impl PhotocraftMcp {
     }
 
     #[tool(description = "Save the document. `.pcraft` is the lossless native format (incremental); other extensions \
-        (psd, png, jpg, tif, webp, exr, …) export. Without `path` only a PSD, PSB or .pcraft document is written back to its own file. `pcraftFullComposite` requests `composite/full.png`, which may be omitted; check the manifest's `full_composite` member. Returns warnings about anything the format cannot hold.")]
+        (psd, png, jpg, tif, webp, exr, …) export. Without `path` only a PSD, PSB or .pcraft document is written back to its own file. `pcraftFullComposite` requests `composite/full.png`, which may be omitted; check the manifest's `full_composite` member. `pcraftRenderCaches: false` omits RAW Smart Object render caches only when they can be rebuilt exactly. Returns warnings about anything the format cannot hold.")]
     async fn doc_save(&self, Parameters(p): Parameters<SaveParams>) -> Result<CallToolResult, McpError> {
         self.save_impl(p).await
     }
@@ -1274,7 +1278,7 @@ impl PhotocraftMcp {
             // The bridge forwards to the running app's `app.save`, which takes only an optional
             // path (without one it writes back to the document's own layered file, as headless
             // does), the Targa bits, the DDS options, the TIFF compression, transparency and
-            // pyramid, and Maximize Compatibility, so the other options are headless-only. Saying
+            // pyramid, Maximize Compatibility and the .pcraft render cache setting. The other options are headless-only. Saying
             // so beats saving with defaults while the caller believes their quality or format was
             // applied.
             let unsupported: Vec<&str> = [
@@ -1318,6 +1322,9 @@ impl PhotocraftMcp {
             if let Some(maximize) = p.maximize_compatibility {
                 params["maximizeCompatibility"] = json!(maximize);
             }
+            if let Some(keep) = p.pcraft_render_caches {
+                params["pcraftRenderCaches"] = json!(keep);
+            }
             return to_result(b.call("app.save", params).await);
         }
         let Some(r) = self
@@ -1330,6 +1337,9 @@ impl PhotocraftMcp {
                     pcraft_full_composite: p.pcraft_full_composite.unwrap_or(false),
                     ..Default::default()
                 };
+                if let Some(keep) = p.pcraft_render_caches {
+                    opts.pcraft_render_caches = keep;
+                }
                 opts.encode.dpx_bits = dpx_bits;
                 if let Some(c) = tiff_compression {
                     opts.encode.tiff_compression = c;

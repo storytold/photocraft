@@ -1456,3 +1456,32 @@ fn file_encoding_source_images_roundtrips_and_defaults_when_absent() {
         assert_eq!(old.file_encoding, photocraft_doc::FileEncoding { jpeg_quality: Some(80), ..Default::default() });
     }
 }
+
+#[test]
+fn duplicate_layer_ids_keep_every_selected_smart_cache() {
+    use std::sync::Arc;
+
+    use photocraft_doc::{SmartObject, SmartSource};
+    use photocraft_geom::{Affine, Size};
+    use photocraft_raster::Surface;
+
+    let mut doc = Document::new("Older Smart Objects", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+    let cached = |name, color: &[f32]| {
+        let source = SmartSource::Embedded { file_name: "source.png".into(), bytes: Arc::new(vec![1, 2, 3]) };
+        let mut cache = Surface::new(doc.pixel_format());
+        cache.write_pixel(0, 0, color);
+        Layer::new(name, LayerContent::Smart(SmartObject::new(source, Affine::IDENTITY, Some(cache))))
+    };
+    let first = cached("First", &[1.0, 0.0, 0.0, 1.0]);
+    let mut second = cached("Second", &[0.0, 1.0, 0.0, 1.0]);
+    let duplicate = first.id;
+    second.id = duplicate;
+    assert_ne!(first.surface(), second.surface());
+    doc.layers.extend([first, Layer::group("Nested", vec![second])]);
+
+    let loaded = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
+    assert_eq!(loaded, doc, "ordinary saving and loading preserve duplicate IDs and both caches");
+    let omit = SaveOptions { omit_smart_object_caches: [duplicate].into(), ..Default::default() };
+    let saved = load_from_bytes(&save_to_bytes(&loaded, &omit).unwrap()).unwrap();
+    assert_eq!(saved, doc, "an ambiguous ID cannot stand for an individually verified layer");
+}

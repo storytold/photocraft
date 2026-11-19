@@ -519,6 +519,7 @@ pub struct VectorPreview {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RawRenderRecipe {
     /// Recipe version. Version 1 uses default development settings except for the recorded demosaic method.
+    /// Preserve that reconstruction when introducing a later version.
     pub version: u8,
     /// Lowercase identifier of the demosaic method used to render the source.
     pub demosaic: String,

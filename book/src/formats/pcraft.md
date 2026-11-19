@@ -20,6 +20,14 @@ A save writes `composite/full.png` only when it is asked to: *Save Full-Size Com
 
 The manifest is versioned and describes the document tree. Tiles and blobs are content-addressed. Loaders verify ZIP entry bounds and CRCs; document content also uses stored hashes to detect mismatched or corrupted tile/blob content. Unsupported newer format versions fail explicitly.
 
+## Smart Object render caches
+
+**Store Render Caches in .pcraft Files** (Preferences › File Handling) is on by default. Turning it off lets PhotoCraft omit a Smart Object's pixels when it can reconstruct the same surface from the saved source. This applies to embedded camera RAW opened as a Smart Object with its original placement, color profile and depth. The save compares the recorded recipe's output with the cache before omitting it. The embedded source, layer edits and previews are included in the bundle.
+
+Use `"pcraftRenderCaches": false` for `file.saveACopy`, `app.save`, `doc.save` and MCP `doc_save`, or `--no-pcraft-render-caches` with `photocraft-cli convert`, `run` and `batch`. A compact RAW bundle needs a version of PhotoCraft that reads recorded RAW recipes.
+
+On open, a missing cache can be rebuilt from a compatible embedded PNG or a recorded RAW recipe. PhotoCraft reports a warning naming each layer that still needs a cache.
+
 ## Implemented load limits
 
 Default `LoadOptions` apply these maximums:

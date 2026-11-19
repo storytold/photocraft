@@ -35,6 +35,7 @@ fn smart_raw_pixels_match_the_explicit_open_recipe() {
         assert_saved_recipe(doc, method, &bytes);
         assert_compact_cache_policy(doc);
         cached.push(rebuilt);
+        assert_engine_save_honors_override(&mut app, &directory.path().join(format!("{}.pcraft", method.method().id())));
     }
     assert_ne!(cached[0], cached[1], "the settings are observable");
     assert_ne!(cached[0], cached[2], "the settings are observable");
@@ -67,6 +68,8 @@ fn assert_compact_cache_policy(doc: &photocraft_doc::Document) {
     assert_eq!(compact_smart.raw_render_recipe, regular_smart.raw_render_recipe);
     assert!(smaller.bytes.len() < regular.bytes.len());
     assert_eq!(photocraft_format::read_full_composite(&smaller.bytes).unwrap(), photocraft_format::read_full_composite(&regular.bytes).unwrap());
+    assert_native_reopens(&smaller.bytes, regular_smart.cache.as_ref().unwrap());
+    assert_unusable_recipe_warns(smaller_doc);
 
     let mut changed = doc.clone();
     let LayerContent::Smart(smart) = &mut changed.layers[0].content else { panic!("expected smart object") };
@@ -76,4 +79,36 @@ fn assert_compact_cache_policy(doc: &photocraft_doc::Document) {
     let changed_back = photocraft_format::load_from_bytes(&rebuilt.bytes).unwrap();
     let LayerContent::Smart(saved) = &changed_back.layers[0].content else { panic!("expected smart object") };
     assert_eq!(saved.cache, changed_cache, "a cache with different rendered pixels cannot be discarded");
+}
+
+fn assert_native_reopens(bundle: &[u8], expected: &photocraft_raster::Surface) {
+    let mut reopened = Session::new();
+    reopened.edit_prefs(|prefs| prefs.raw_defaults.demosaic = RawDemosaic::Bilinear);
+    let result = photocraft_engine::file_cmds::open_bytes_as(&mut reopened, "ordinary.pcraft", bundle, None, None).unwrap();
+    let doc = &reopened.active().unwrap().doc;
+    let LayerContent::Smart(smart) = &doc.layers[0].content else { panic!("expected smart object") };
+    assert_eq!(smart.cache.as_ref(), Some(expected), "native open reconstructs the exact recorded pixels using the saved demosaic");
+    assert_eq!(result["warnings"], json!([]));
+}
+
+fn assert_unusable_recipe_warns(mut doc: photocraft_doc::Document) {
+    let LayerContent::Smart(smart) = &doc.layers[0].content else { panic!("expected smart object") };
+    let mut stale = smart.raw_render_recipe.clone().unwrap();
+    stale.source_hash[0] ^= 1;
+    for recipe in [None, Some(stale)] {
+        let LayerContent::Smart(smart) = &mut doc.layers[0].content else { panic!("expected smart object") };
+        smart.raw_render_recipe = recipe;
+        let bundle = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
+        let mut reopened = Session::new();
+        let result = photocraft_engine::file_cmds::open_bytes_as(&mut reopened, "legacy.pcraft", &bundle, None, None).unwrap();
+        assert_eq!(result["warnings"].as_array().unwrap().len(), 1);
+        assert!(result["warnings"][0].as_str().unwrap().contains("pattern"));
+    }
+}
+
+fn assert_engine_save_honors_override(session: &mut Session, path: &std::path::Path) {
+    session.execute("file.saveACopy", json!({"path": path, "pcraftRenderCaches": false})).unwrap();
+    let written = photocraft_format::load_path(path).unwrap();
+    let LayerContent::Smart(smart) = &written.layers[0].content else { panic!("expected smart object") };
+    assert!(smart.cache.is_none(), "Save a Copy must pass the explicit omission option to the encoder");
 }

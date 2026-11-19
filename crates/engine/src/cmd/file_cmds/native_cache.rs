@@ -8,7 +8,7 @@ use crate::Result;
 use crate::jobs::JobCtx;
 
 /// An affine or perspective placement is bounded by its mapped corners. Mesh warp can extend beyond them.
-fn eligible_source(smart: &SmartObject) -> Option<(&str, &[u8])> {
+fn embedded_png(smart: &SmartObject) -> Option<(&str, &[u8])> {
     let SmartSource::Embedded { file_name, bytes } = &smart.source else { return None };
     (smart.cache.is_none()
         && smart.stack_mode.is_none()
@@ -27,16 +27,18 @@ pub fn recover_decoded_native_caches(decoded: &mut photocraft_io::DecodedOpen, c
     Ok(())
 }
 
-/// Recover missing self-contained PNG Smart Object caches on a freshly decoded native document.
+/// Recover missing Smart Object caches on a freshly decoded native document.
 /// Callers pass the document before it is admitted to a session and recompute its import warnings
-/// when caches were restored. External sources and visible Smart Filters need separate authority
-/// and fidelity checks. The reader can still open their editable data and report missing pixels.
+/// when caches were restored. Recovery uses self-contained PNGs and recorded RAW recipes.
 pub fn recover_native_embedded_caches(doc: &mut Document, ctx: &JobCtx) -> Result<bool> {
     ctx.check()?;
     let candidates: Vec<_> = doc
         .walk()
         .into_iter()
-        .filter_map(|(path, _, layer)| matches!(&layer.content, LayerContent::Smart(smart) if eligible_source(smart).is_some()).then_some(path))
+        .filter_map(|(path, _, layer)| {
+            let LayerContent::Smart(smart) = &layer.content else { return None };
+            (smart.cache.is_none() && (smart.raw_render_recipe.is_some() || embedded_png(smart).is_some())).then_some(path)
+        })
         .collect();
     if candidates.is_empty() {
         return Ok(false);
@@ -44,15 +46,19 @@ pub fn recover_native_embedded_caches(doc: &mut Document, ctx: &JobCtx) -> Resul
     // Optional recovery uses the automatic import allowance. Previously recovered tiles
     // are still live when the next source is decoded and placed.
     let mut remaining = resolve_budget(MemorySnapshot::current(), Some(crate::allocation::MAX_DENSE_BYTES)).soft_limit;
+    let cancel = || ctx.cancelled();
+    let ctl = photocraft_raster::Interrupt::new(&cancel, &|_| {});
     let mut recovered = false;
     for path in candidates {
         ctx.check()?;
         let Some(LayerContent::Smart(smart)) = doc.layer_at(&path).map(|layer| &layer.content) else { continue };
-        let Some((name, bytes)) = eligible_source(smart) else { continue };
         let scratch_generation = photocraft_raster::spill::read_error_generation();
-        let render = crate::smart_cmds::recover_raster_placement(doc, smart, name, bytes, remaining, ctx);
+        let surface = match embedded_png(smart) {
+            Some((name, bytes)) => crate::smart_cmds::recover_raster_placement(doc, smart, name, bytes, remaining, ctx).ok().flatten(),
+            None => photocraft_io::raw::render_smart_object_recipe(doc, smart, remaining, &ctl).ok().flatten(),
+        };
         ctx.check()?;
-        let Ok(Some(surface)) = render else { continue };
+        let Some(surface) = surface else { continue };
         // Infallible tile reads can substitute pixels on scratch failure. Do not retain them.
         if photocraft_raster::spill::check_since(scratch_generation).is_err() {
             continue;

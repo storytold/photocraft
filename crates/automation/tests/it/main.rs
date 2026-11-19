@@ -17,6 +17,7 @@ mod mcp_wire;
 mod missing_font_warnings;
 mod native_cache_recovery;
 mod native_full_composite;
+mod native_render_caches;
 mod native_save_name;
 mod openraster;
 mod raw_defaults;

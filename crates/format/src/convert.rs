@@ -246,6 +246,18 @@ fn channel_m(c: &AlphaChannel, sink: &mut dyn Sink) -> ChannelM {
 /// Build native document manifest data, sending durable conversion provenance through the same bounded content sink as
 /// other stored data.
 pub(crate) fn doc_m(d: &Document, omit_smart_object_caches: &HashSet<LayerId>, sink: &mut dyn Sink) -> Result<DocM> {
+    // Native loading preserves legacy layer IDs. An ambiguous ID cannot identify a verified cache.
+    let unambiguous = (!omit_smart_object_caches.is_empty()).then(|| {
+        let mut selected = omit_smart_object_caches.clone();
+        let mut seen = HashSet::new();
+        for (_, _, layer) in d.walk() {
+            if selected.contains(&layer.id) && !seen.insert(layer.id) {
+                selected.remove(&layer.id);
+            }
+        }
+        selected
+    });
+    let omit_smart_object_caches = unambiguous.as_ref().unwrap_or(omit_smart_object_caches);
     let import_conversion = d.metadata.import_conversion.as_deref().map(|report| crate::import_conversion::to_manifest(report, sink)).transpose()?;
     Ok(DocM {
         id: d.id.0,

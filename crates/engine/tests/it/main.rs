@@ -100,6 +100,7 @@ mod paste_style_options;
 mod path_blur_speed_clamp;
 mod path_transform_target;
 mod pcraft_embedded_cache;
+mod pcraft_raw_cache;
 mod pdn;
 mod pen_path_append;
 mod photoshop_oracles;
