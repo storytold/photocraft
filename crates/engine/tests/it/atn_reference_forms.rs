@@ -1,6 +1,10 @@
-use photocraft_engine::{Session, actions_cmds::Action, atn_cmds};
-use photocraft_psd::atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem};
-use photocraft_psd::descriptor::{Class, Descriptor, Id, ReferenceItem, UnicodeString, Value as D};
+use craft_psd::atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem};
+use craft_psd::descriptor::{Class, Descriptor, Id, ReferenceItem, UnicodeString, Value as D};
+use photocraft_engine::{
+    Session,
+    actions_cmds::{Action, ActionList, ActionStep, ActionsFile},
+    atn_cmds,
+};
 use serde_json::{Value, json};
 
 fn class(name: &str) -> Class {
@@ -13,7 +17,7 @@ fn ordinal(name: &str) -> ReferenceItem {
 
 fn load(s: &mut Session, reference: ReferenceItem) {
     let descriptor = Descriptor::new("null").with("null", D::Reference(vec![reference]));
-    s.actions.list = vec![imported(AtnEvent::Code(*b"slct"), descriptor)];
+    s.actions.list = ActionList::from_file(ActionsFile::new(vec![imported(AtnEvent::Code(*b"slct"), descriptor)], Vec::new()));
 }
 
 fn bytes(event: AtnEvent, descriptor: Descriptor) -> Vec<u8> {
@@ -49,7 +53,7 @@ fn roundtrip(action: &Action, reference: &ReferenceItem, target: Option<&Referen
 }
 
 fn replay(s: &mut Session, action: &Action) {
-    s.actions.list = vec![action.clone()];
+    s.actions.list = ActionList::from_file(ActionsFile::new(vec![action.clone()], Vec::new()));
     let result = s.execute("actions.play", json!({"action":"Select"})).unwrap();
     assert_eq!(result["ran"], 1, "{result}");
     assert!(result.get("failed").is_none(), "{result}");
@@ -140,7 +144,7 @@ fn indexes_and_ordinals_use_the_recorded_stack_with_or_without_background() {
         for invalid in [first + 7, u32::MAX].into_iter().chain((!background).then_some(0)) {
             let action = select(index("Lyr ", invalid));
             let before = selection(&s);
-            assert!(s.execute(&action.steps[0].0, action.steps[0].1.clone()).is_err());
+            assert!(s.execute(&action.steps[0].command, action.steps[0].params.clone()).is_err());
             assert_eq!(selection(&s), before);
         }
     }
@@ -183,7 +187,7 @@ fn indexed_moves_follow_the_measured_boundary_table() {
         let before = selection(&s);
         if target == 0 {
             let doc = s.active().unwrap().doc.clone();
-            assert!(s.execute(&action.steps[0].0, action.steps[0].1.clone()).is_err());
+            assert!(s.execute(&action.steps[0].command, action.steps[0].params.clone()).is_err());
             assert_eq!(s.active().unwrap().doc, doc);
             assert_eq!(selection(&s), before);
             continue;
@@ -219,7 +223,7 @@ fn indexed_moves_follow_the_measured_boundary_table() {
         let action = moved(index("Lyr ", 2), index("Lyr ", invalid));
         let doc = s.active().unwrap().doc.clone();
         let state = selection(&s);
-        assert!(s.execute(&action.steps[0].0, action.steps[0].1.clone()).is_err());
+        assert!(s.execute(&action.steps[0].command, action.steps[0].params.clone()).is_err());
         assert_eq!(s.active().unwrap().doc, doc);
         assert_eq!(selection(&s), state);
     }
@@ -271,7 +275,7 @@ fn nested_empty_group_boundaries_reparent_at_the_correct_level() {
         assert_eq!(doc.layer(inner).unwrap().children().unwrap().len(), usize::from(target == 3));
         let action = moved(index("Lyr ", 5), index("Lyr ", 4));
         let before = doc.clone();
-        assert!(s.execute(&action.steps[0].0, action.steps[0].1.clone()).is_err());
+        assert!(s.execute(&action.steps[0].command, action.steps[0].params.clone()).is_err());
         assert_eq!(s.active().unwrap().doc, before);
     }
 }
@@ -301,7 +305,7 @@ fn document_indexes_survive_tab_moves_close_and_reopen_with_old_ids() {
     for invalid in [0, u32::MAX, 4] {
         let before = s.active_index();
         let action = select(index("Dcmn", invalid));
-        assert!(s.execute(&action.steps[0].0, action.steps[0].1.clone()).is_err());
+        assert!(s.execute(&action.steps[0].command, action.steps[0].params.clone()).is_err());
         assert_eq!(s.active_index(), before);
     }
 }
@@ -372,7 +376,7 @@ fn invalid_comp_indexes_and_unsupported_references_preserve_state() {
     assert_eq!(s.active().unwrap().doc, before);
     assert!(s.execute("layerComp.apply", json!({"comp":{"id":u32::MAX}})).is_err());
     assert_eq!(s.active().unwrap().doc, before);
-    let negative = Action::new("Select", vec![("layerComp.apply".into(), json!({"comp":{"index":-1}}))]);
+    let negative = Action::new("Select", vec![ActionStep::new("layerComp.apply", json!({"comp":{"index":-1}}))]);
     let (saved, _) = atn_cmds::export("References", &[&negative], &[], false).unwrap();
     assert_eq!(
         atn::parse(&saved).unwrap().actions[0].items[0].descriptor.as_ref().unwrap().get("null"),
@@ -389,7 +393,7 @@ fn invalid_comp_indexes_and_unsupported_references_preserve_state() {
         let data = bytes(event, d.clone());
         let result = atn_cmds::import(&data).unwrap();
         assert_eq!(result.unsupported.len(), 1);
-        assert_eq!(result.actions[0].steps[0].0, atn_cmds::PHOTOSHOP_STEP);
+        assert_eq!(result.actions[0].steps[0].command, atn_cmds::PHOTOSHOP_STEP);
         let (saved, _) = atn_cmds::export("References", &[&result.actions[0]], &[], false).unwrap();
         assert_eq!(atn::parse(&saved).unwrap().actions[0].items[0].descriptor, Some(d));
     }
@@ -423,7 +427,7 @@ fn unrepresentable_comp_indexes_are_rejected_before_recording() {
     }
     s.execute("actions.stop", json!({})).unwrap();
     assert!(accepted.is_empty(), "unrepresentable indexes were accepted: {accepted:?}");
-    assert!(s.actions.list.last().unwrap().steps.is_empty());
+    assert!(s.actions.list.actions().last().unwrap().steps.is_empty());
 }
 
 /// Valid extreme indexes survive recording and export as ATN Index references.
@@ -435,7 +439,7 @@ fn accepted_comp_boundary_indexes_record_and_export() {
         s.execute("layerComp.apply", json!({"comp":{"index":valid}})).unwrap();
     }
     s.execute("actions.stop", json!({})).unwrap();
-    let action = s.actions.list.last().unwrap();
+    let action = s.actions.list.actions().last().unwrap();
     assert_eq!(action.steps.len(), 2);
     let (saved, skipped) = atn_cmds::export("References", &[action], &[], false).unwrap();
     assert!(skipped.is_empty());
@@ -484,7 +488,7 @@ fn group_end_index_never_targets_the_selection() {
     let offset = Descriptor::new("Ofst").with("Hrzn", D::UnitFloat { unit: *b"#Pxl", value: 1.0 }).with("Vrtc", D::UnitFloat { unit: *b"#Pxl", value: 0.0 });
     let action =
         imported(AtnEvent::Code(*b"move"), Descriptor::new("null").with("null", D::Reference(vec![index("Lyr ", 3)])).with("T   ", D::Descriptor(offset)));
-    s.actions.list = vec![action];
+    s.actions.list = ActionList::from_file(ActionsFile::new(vec![action], Vec::new()));
     let result = s.execute("actions.play", json!({"action":"Select"})).unwrap();
     assert!(result.get("failed").is_some(), "{result}");
     assert_eq!(s.active().unwrap().history.past_len(), past);

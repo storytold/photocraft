@@ -1,4 +1,5 @@
 //! Remote command-file behavior, including preflight and uncertain mutation outcomes.
+use photocraft_automation::security::{AuthStep, ServerHandshake};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
@@ -7,6 +8,7 @@ use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+const CONTROL_TOKEN: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 struct Fixture(PathBuf);
 impl Fixture {
@@ -21,7 +23,7 @@ impl Fixture {
             use std::os::unix::fs::OpenOptionsExt;
             options.mode(0o600);
         }
-        options.open(path.join("token")).unwrap().write_all("a".repeat(64).as_bytes()).unwrap();
+        options.open(path.join("token")).unwrap().write_all(CONTROL_TOKEN.as_bytes()).unwrap();
         Self(path)
     }
     fn command(&self, port: u16, token_flag: &str) -> Command {
@@ -68,13 +70,22 @@ fn accept(listener: &TcpListener) -> TcpStream {
     }
 }
 
-fn auth(listener: &TcpListener) -> BufReader<TcpStream> {
+fn auth_challenge(listener: &TcpListener) -> (BufReader<TcpStream>, ServerHandshake) {
     let stream = accept(listener);
     stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     let mut reader = BufReader::new(stream);
-    let request = read(&mut reader);
-    assert_eq!(request["method"], "auth");
-    reply(&mut reader, &request, json!({}));
+    let mut handshake = ServerHandshake::new();
+    let (response, step) = handshake.reply(&read(&mut reader).to_string(), CONTROL_TOKEN);
+    assert_eq!(step, AuthStep::Challenged);
+    writeln!(reader.get_mut(), "{response}").unwrap();
+    (reader, handshake)
+}
+
+fn auth(listener: &TcpListener) -> BufReader<TcpStream> {
+    let (mut reader, mut handshake) = auth_challenge(listener);
+    let (response, step) = handshake.reply(&read(&mut reader).to_string(), CONTROL_TOKEN);
+    assert_eq!(step, AuthStep::Authenticated);
+    writeln!(reader.get_mut(), "{response}").unwrap();
     reader
 }
 
@@ -176,9 +187,9 @@ fn auth_refusal_does_not_send_commands_or_echo_remote_secrets() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let server = std::thread::spawn(move || {
-        let stream = accept(&listener);
-        let mut reader = BufReader::new(stream);
+        let (mut reader, mut handshake) = auth_challenge(&listener);
         let request = read(&mut reader);
+        assert_eq!(handshake.reply(&request.to_string(), CONTROL_TOKEN).1, AuthStep::Authenticated);
         writeln!(reader.get_mut(), "{}", json!({"id":request["id"],"ok":false,"error":"synthetic-sensitive-message"})).unwrap();
         let mut line = String::new();
         assert_eq!(reader.read_line(&mut line).unwrap(), 0);

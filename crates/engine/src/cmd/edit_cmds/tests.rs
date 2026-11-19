@@ -864,6 +864,93 @@ fn paste_several_layers_into_another_document() {
     }
 }
 
+/// #9736: a clipped layer copied without its base pastes released, as Photoshop's Copy/Paste does,
+/// so it can't clip to an unrelated layer it lands on. Copied with its base, it stays clipped to it.
+#[test]
+fn a_clipped_layer_copied_without_its_base_pastes_released() {
+    let mut s = session();
+    let base = s.active().unwrap().active_layer.unwrap();
+    let mid = LayerId(s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap());
+    s.execute("type.create", json!({"text": "H", "size": 30, "x": 20, "y": 60})).unwrap();
+    let text = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.setProps", json!({"layer": text.0, "clipped": true})).unwrap();
+    s.execute("file.new", json!({"width": 100, "height": 100})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let pasted = |s: &mut Session, ids: &[LayerId]| {
+        s.set_active(0);
+        s.execute("layer.select", json!({"layer": ids[0].0})).unwrap();
+        for id in &ids[1..] {
+            s.execute("layer.select", json!({"layer": id.0, "mode": "toggle"})).unwrap();
+        }
+        s.execute("edit.copy", json!({})).unwrap();
+        s.set_active(1);
+        s.execute("edit.paste", json!({})).unwrap();
+        let st = s.active().unwrap();
+        let top = &st.doc.layers[st.doc.layers.len() - ids.len()..];
+        let clipped: Vec<bool> = top.iter().map(|l| l.clipped).collect();
+        assert!(s.undo());
+        clipped
+    };
+    assert_eq!(pasted(&mut s, &[text]), [false], "alone: released, not clipped to the destination layer");
+    assert_eq!(pasted(&mut s, &[mid, text]), [false, true], "with its base: still clipped to it");
+    assert_eq!(pasted(&mut s, &[base, text]), [false, false], "its base left behind: not clipped to another copied layer");
+    s.set_active(0);
+    assert!(s.active().unwrap().doc.layer(text).unwrap().clipped, "the source is untouched");
+}
+
+/// #9736: a clipped layer's base is the nearest unclipped layer below it, not the next one, and a
+/// clipped group is released like a layer.
+#[test]
+fn a_clipped_layer_keeps_its_clip_with_its_base_however_far_below() {
+    let mut s = session();
+    let base = s.active().unwrap().active_layer.unwrap();
+    let add = |s: &mut Session| {
+        let id = LayerId(s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap());
+        s.edit("paint", |doc, _| {
+            doc.layer_mut(id).unwrap().surface_mut().unwrap().fill_rect(Rect::new(20, 20, 40, 40), &[0.0, 0.0, 1.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+        s.execute("layer.setProps", json!({"layer": id.0, "clipped": true})).unwrap();
+        id
+    };
+    let (c1, c2, inner) = (add(&mut s), add(&mut s), add(&mut s));
+    s.execute("layer.groupLayers", json!({})).unwrap();
+    let group = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.setProps", json!({"layer": group.0, "clipped": true})).unwrap();
+    assert_eq!(crate::clip_group::base_of(&s.active().unwrap().doc, group), Some(base));
+    let inner_clipped = s.active().unwrap().doc.layer(inner).unwrap().clipped;
+    s.execute("file.new", json!({"width": 100, "height": 100})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let pasted = |s: &mut Session, ids: &[LayerId]| {
+        s.set_active(0);
+        s.execute("layer.select", json!({"layer": ids[0].0})).unwrap();
+        for id in &ids[1..] {
+            s.execute("layer.select", json!({"layer": id.0, "mode": "toggle"})).unwrap();
+        }
+        s.execute("edit.copy", json!({})).unwrap();
+        s.set_active(1);
+        s.execute("edit.paste", json!({})).unwrap();
+        let st = s.active().unwrap();
+        let top = &st.doc.layers[st.doc.layers.len() - ids.len()..];
+        let clipped: Vec<bool> = top.iter().map(|l| l.clipped).collect();
+        let inner_clipped = top.iter().find_map(|l| match &l.content {
+            LayerContent::Group(g) => g.children.first().map(|c| c.clipped),
+            _ => None,
+        });
+        assert!(s.undo());
+        (clipped, inner_clipped)
+    };
+    assert_eq!(pasted(&mut s, &[base, c2]).0, [false, true], "c1 between them left behind: c2 still clips to the base");
+    assert_eq!(pasted(&mut s, &[c1, c2]).0, [false, false], "two clipped layers without their base");
+    assert_eq!(pasted(&mut s, &[group]), (vec![false], Some(inner_clipped)), "the group is released, its contents untouched");
+    assert_eq!(pasted(&mut s, &[base, group]).0, [false, true], "the group with its base");
+    s.set_active(0);
+    let doc = &s.active().unwrap().doc;
+    assert!([c1, c2, group].iter().all(|id| doc.layer(*id).unwrap().clipped), "the source is untouched");
+    assert_eq!(doc.layer(inner).unwrap().clipped, inner_clipped);
+}
+
 /// #2478: the Background in a multi-layer copy pastes as an ordinary, unlocked layer.
 #[test]
 fn copying_the_background_with_another_layer_pastes_an_ordinary_layer() {
@@ -1292,6 +1379,56 @@ fn guide_positions_take_photoshop_units() {
     assert_eq!(s.active().unwrap().doc.guides.horizontal[0], 50.0);
 }
 
+/// #10440: the position takes arithmetic as Photoshop's New Guide field does. Measured in
+/// Photoshop 2025 on a 600 × 400, 72 ppi document: "100% / 3" → 200, "100% - 50px" → 550,
+/// "300 / 2" → 150 (pixels), "1in + 10" → 792 (the bare 10 is in the first operand's unit).
+#[test]
+fn guide_positions_take_arithmetic() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 600, "height": 400, "resolution": 72})).unwrap();
+    for (text, px) in [
+        ("100% / 3", 200.0),
+        ("100% - 50px", 550.0),
+        ("300 / 2", 150.0),
+        ("1in + 10", 792.0),
+        ("2 * 50 px", 100.0),
+        ("10 + 2 * 3", 16.0),
+        ("-50px + 100", 50.0),
+    ] {
+        assert!((new_guide(&mut s, "vertical", json!(text)) - px).abs() < 1e-6, "{text}");
+    }
+    // Horizontal guides take percent of the height.
+    assert!((new_guide(&mut s, "horizontal", json!("50% + 10px")) - 210.0).abs() < 1e-6);
+    for bad in ["100% /", "1in * 2in", "10 / 0", "10 / 2px", "5 ^ 2", "+", "50% 3"] {
+        let err = s.execute("view.newGuide", json!({"orientation": "vertical", "position": bad})).unwrap_err();
+        assert!(err.to_string().contains("not a length"), "{bad}: {err}");
+    }
+}
+
+/// The Unicode minus (U+2212, what some keyboards and pasted text give) is a minus, as in the
+/// numeric fields' own evaluator.
+#[test]
+fn guide_position_arithmetic_takes_the_unicode_minus() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 600, "height": 400, "resolution": 72})).unwrap();
+    for (text, px) in [("100% − 50px", 550.0), ("−50px + 100", 50.0), ("1in − −10", 792.0), ("−100", -100.0)] {
+        assert!((new_guide(&mut s, "vertical", json!(text)) - px).abs() < 1e-6, "{text}");
+    }
+}
+
+/// Text longer than the numeric fields' 1024-byte cap is refused before it is tokenised.
+#[test]
+fn guide_position_arithmetic_is_capped_at_1024_bytes() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 600, "height": 400, "resolution": 72})).unwrap();
+    let fits = format!("{}100", "0 + ".repeat(255));
+    assert_eq!(fits.len(), 1023);
+    assert_eq!(new_guide(&mut s, "vertical", json!(fits)), 100.0);
+    let long = format!("{}100", "0 + ".repeat(256));
+    let err = s.execute("view.newGuide", json!({"orientation": "vertical", "position": long})).unwrap_err();
+    assert!(err.to_string().contains("not a length"), "{err}");
+}
+
 #[test]
 fn new_guides_keep_their_own_colour_through_moves_deletes_and_undo() {
     let mut s = Session::new();
@@ -1379,6 +1516,26 @@ fn editing_a_guide_changes_what_is_given_in_one_undoable_step() {
     let g = guides(&s);
     assert_eq!((g.vertical.clone(), g.horizontal.is_empty()), (vec![10.0, 200.0, 30.0], true));
     assert_eq!(g.color(true, 200.0), Some([0xff, 0x00, 0xff]));
+}
+
+/// #10440: Edit Selected Guides reads its position as New Guide does, arithmetic included; % is of
+/// the new orientation's extent.
+#[test]
+fn editing_a_guide_takes_arithmetic_in_its_position() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 400, "height": 200, "resolution": 100})).unwrap();
+    s.execute("view.newGuide", json!({"orientation": "vertical", "position": 10})).unwrap();
+    s.execute("view.newGuide", json!({"orientation": "vertical", "position": 20})).unwrap();
+    s.execute("view.editGuide", json!({"orientation": "vertical", "index": 0, "position": "100% / 4"})).unwrap();
+    s.execute("view.editGuide", json!({"orientation": "vertical", "index": 1, "position": "1in + 1"})).unwrap();
+    assert_eq!(s.active().unwrap().doc.guides.vertical, vec![100.0, 200.0]);
+    s.execute("view.editGuide", json!({"orientation": "vertical", "index": 0, "newOrientation": "horizontal", "position": "50% − 10px"})).unwrap();
+    let g = &s.active().unwrap().doc.guides;
+    assert_eq!((g.vertical.clone(), g.horizontal.clone()), (vec![200.0], vec![90.0]));
+    let before = g.clone();
+    let err = s.execute("view.editGuide", json!({"orientation": "vertical", "index": 0, "position": "1in * 2in"})).unwrap_err();
+    assert!(err.to_string().contains("not a length"), "{err}");
+    assert_eq!(s.active().unwrap().doc.guides, before);
 }
 
 #[test]
@@ -1769,9 +1926,10 @@ fn paste_onto_a_smaller_artboard_keeps_the_offset_and_the_board_clips_the_rest()
     assert!(!(px(315, 35)[0] > 0.99 && px(315, 35)[1] < 0.01), "clipped past S's edge");
 }
 
-/// A pasted layer that joins a board keeps its own clipping while the board already holds a layer
-/// it can clip to, and drops it on an empty board (#10538 review): a clipped group copied whole
-/// from board A and pasted onto smaller boards S (holding a layer) and E (empty).
+/// A clipped group copied without its base is released, including when it joins a board that
+/// already holds a layer (#9736, #9833): Copy drops the clip so the paste does not attach to
+/// whatever it lands on. #10538 used to keep the clip when the destination board already had a
+/// layer; that no longer applies once the base is left behind.
 #[test]
 fn a_clipped_paste_joining_a_board_stays_clipped_only_over_a_layer() {
     let (mut s, red, a, _b) = two_boards();
@@ -1801,7 +1959,7 @@ fn a_clipped_paste_joining_a_board_stays_clipped_only_over_a_layer() {
         let id = st.active_layer.unwrap();
         (st.doc.artboard_of(id), st.doc.layer(id).unwrap().clipped)
     };
-    assert_eq!(paste_on(&mut s, sb), (Some(sb), true), "S holds a layer to clip to");
+    assert_eq!(paste_on(&mut s, sb), (Some(sb), false), "released even though S holds a layer");
     assert_eq!(paste_on(&mut s, eb), (Some(eb), false), "E is empty");
 }
 

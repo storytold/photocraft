@@ -1,9 +1,9 @@
 use super::shortcuts::normalize_shortcut;
 use super::{
-    AppearanceMode, Ask, CanvasBorder, CanvasColor, CheckerColors, CheckerSize, ColorPicker, DarkTheme, ExportLocation, ExportMetadata, FontPreview,
-    GpuBackend, Interpolation, LightTheme, LineStyle, LinuxDisplayServer, LogDestination, LogDetail, OtherCursor, PaintingCursor, PlaybackPerformance,
-    PointSize, PressureCurve, QuickExportFormat, RawColorSpace, RawDemosaic, RawDepth, RawSharpen, RenderingMode, RightClickPaint, TextEngine, Theme, TypeUnit,
-    UiFontSize, UiScale, Unit, Value,
+    AppearanceMode, Ask, CanvasBorder, CanvasColor, CheckerColors, CheckerSize, ColorPicker, ExportLocation, ExportMetadata, FontPreview, GpuBackend,
+    Interpolation, LineStyle, LinuxDisplayServer, LogDestination, LogDetail, OtherCursor, PaintingCursor, PlaybackPerformance, PointSize, PressureCurve,
+    QuickExportFormat, RawColorSpace, RawDemosaic, RawDepth, RawSharpen, RenderingMode, RightClickPaint, TabletInput, TextEngine, TypeUnit, UiFontSize,
+    UiScale, Unit, Value, WhenAppClosed,
 };
 
 /// Preferences dialog sections in Photoshop's order: (id, title).
@@ -21,10 +21,10 @@ pub const SECTIONS: [(&str, &str); 18] = [
     ("transparencyAndGamut", "Transparency & Gamut"),
     ("unitsAndRulers", "Units & Rulers"),
     ("guidesGridAndSlices", "Guides, Grid & Slices"),
-    ("plugIns", "Plug-ins"),
+    ("plugIns", "Plugins"),
     ("type", "Type"),
     ("enhancedControls", "Enhanced Controls"),
-    ("rawDefaults", "Camera Raw Defaults"),
+    ("rawDefaults", "RAW Defaults"),
     ("integrations", "Integrations"),
 ];
 
@@ -40,8 +40,6 @@ pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
     "workspace.autoShowHiddenPanels",
     "workspace.enableFloatingDocumentWindowDocking",
     "performance.legacyCompositing",
-    "unitsAndRulers.columnWidth",
-    "unitsAndRulers.gutter",
     "plugIns.showExtensionPanels",
     "plugIns.allowScriptsToConnect",
     "type.textEngine",
@@ -71,10 +69,7 @@ pub fn choices(path: &str) -> Option<&'static [&'static str]> {
     Some(match path {
         "general.colorPicker" => ColorPicker::NAMES,
         "general.imageInterpolation" => Interpolation::NAMES,
-        "interface.theme" => Theme::NAMES,
         "interface.appearanceMode" => AppearanceMode::NAMES,
-        "interface.darkTheme" => DarkTheme::NAMES,
-        "interface.lightTheme" => LightTheme::NAMES,
         "interface.canvasColor" => CanvasColor::NAMES,
         "interface.canvasBorder" => CanvasBorder::NAMES,
         "interface.uiScale" => UiScale::NAMES,
@@ -88,6 +83,7 @@ pub fn choices(path: &str) -> Option<&'static [&'static str]> {
         "cursors.painting" => PaintingCursor::NAMES,
         "cursors.other" => OtherCursor::NAMES,
         "tools.rightClickWithPaintingTools" => RightClickPaint::NAMES,
+        "tools.tabletInput" => TabletInput::NAMES,
         "transparencyAndGamut.gridSize" => CheckerSize::NAMES,
         "transparencyAndGamut.gridColors" => CheckerColors::NAMES,
         "unitsAndRulers.rulers" | "guidesGridAndSlices.gridUnit" => Unit::NAMES,
@@ -103,6 +99,7 @@ pub fn choices(path: &str) -> Option<&'static [&'static str]> {
         "performance.gpuBackend" => GpuBackend::NAMES,
         "performance.linuxDisplayServer" => LinuxDisplayServer::NAMES,
         "performance.renderingMode" => RenderingMode::NAMES,
+        "integrations.whenAppClosed" => WhenAppClosed::NAMES,
         "actions.performance" => PlaybackPerformance::NAMES,
         _ => return None,
     })
@@ -111,7 +108,6 @@ pub fn choices(path: &str) -> Option<&'static [&'static str]> {
 /// Valid range of a numeric preference.
 pub fn range(path: &str) -> Option<(f64, f64)> {
     Some(match path {
-        "fileHandling.autosaveMinutes" => (1.0, 240.0),
         "actions.pauseSeconds" => (1.0, 60.0),
         "fileHandling.recentFileCount" => (0.0, 100.0),
         "tools.nudgeBundlePauseMs" => (100.0, 10_000.0),
@@ -219,18 +215,21 @@ pub(super) fn set_path(root: &mut Value, path: &str, value: Value) -> std::resul
 
 /// Validate one value for `path` before it is stored (choices, ranges, colours).
 pub(super) fn check_value(path: &str, v: &Value) -> std::result::Result<(), String> {
+    if matches!(path, "interface.darkTheme" | "interface.lightTheme") && v.as_str().and_then(super::theme_ids::parse).is_none() {
+        return Err(format!("`{path}` must be a theme id"));
+    }
     if path == "interface.favoriteThemes" {
         let items = v.as_array().ok_or("`interface.favoriteThemes` must be a list of theme ids")?;
-        if items.len() > Theme::NAMES.len() {
+        if items.len() > super::theme_ids::MAX_FAVORITES {
             return Err("`interface.favoriteThemes` contains too many themes".into());
         }
         let mut seen = Vec::with_capacity(items.len());
         for item in items {
-            let theme = item.as_str().and_then(Theme::parse).ok_or_else(|| format!("unknown favorite theme `{item}`"))?;
-            if seen.contains(&theme) {
-                return Err(format!("duplicate favorite theme `{}`", theme.name()));
+            let (id, _) = item.as_str().and_then(super::theme_ids::parse).ok_or_else(|| format!("unknown favorite theme `{item}`"))?;
+            if seen.contains(&id) {
+                return Err(format!("duplicate favorite theme `{}`", id.as_str()));
             }
-            seen.push(theme);
+            seen.push(id);
         }
     }
     if matches!(path, "performance.renderingMode" | "performance.memoryUsagePercent") && v.is_null() {
@@ -246,6 +245,13 @@ pub(super) fn check_value(path: &str, v: &Value) -> std::result::Result<(), Stri
         let ok = v.as_str().is_some_and(|s| !s.is_empty() && s.len() <= 16 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
         if !ok {
             return Err("`interface.language` must be `auto` or a language code such as `en` or `ja`".into());
+        }
+    }
+    if path == "fileHandling.autosaveMinutes" {
+        let choices = craft::platform::autosave::INTERVAL_CHOICES_MINUTES;
+        if !v.as_u64().is_some_and(|m| choices.iter().any(|c| u64::from(*c) == m)) {
+            let list = choices.map(|c| c.to_string()).join("|");
+            return Err(format!("`{path}` must be one of {list} (got {v})"));
         }
     }
     if let Some((lo, hi)) = range(path) {
