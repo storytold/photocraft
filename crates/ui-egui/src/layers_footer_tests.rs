@@ -315,7 +315,7 @@ fn footer_buttons_run_photocraft_commands() {
                 let work = doc(h).work_path.clone().unwrap();
                 assert_eq!(layer(h, "B").unwrap().vector_mask.map(|v| v.path), Some(work), "the selected path, not Reveal All");
                 assert!(h.state().ui.vector_mask_target && !h.state().ui.mask_target, "the new vector mask is targeted");
-                assert_eq!(h.state().ui.selected_path.as_deref(), Some("layer"), "the mask's path becomes the active path");
+                assert_eq!(h.state().ui.selected_path.as_ref().and_then(|p| p.name()), Some("layer"), "the mask's path becomes the active path");
             },
         },
     ];

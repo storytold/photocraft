@@ -167,7 +167,9 @@ fn pause_menu_item(app: &mut PhotocraftApp, action: &str, from: usize, id: &str,
 /// Route playback and Record Again to the same settings editor used by the command. A sizing
 /// command opens on `values`; the other editors take theirs from [`open_recorded_editor`].
 fn open_step_editor(app: &mut PhotocraftApp, command: &str, values: &Value) -> Result<DialogId, String> {
-    if crate::sizing::is_sizing(command) {
+    if crate::canvas_tool_menu::pen_dialogs::owns(command) {
+        crate::canvas_tool_menu::pen_dialogs::open_recorded(app, command, values)
+    } else if crate::sizing::is_sizing(command) {
         crate::sizing::open_with(app, command, values).ok_or_else(|| tl!("No document.").into())
     } else if crate::filter_dialog::has_dialog(command)
         || crate::adjust_dialog::has_dialog(command)
@@ -196,7 +198,10 @@ pub(crate) fn open_recorded_editor(app: &mut PhotocraftApp, id: &str, params: &V
         return Ok(dialog);
     }
     let dialog = open_step_editor(app, id, &values)?;
-    if !crate::sizing::is_sizing(id) {
+    // Matrix rows are seeded from the six authoritative coefficients. Older recordings may
+    // also contain ignored scalar fields that must not overwrite that translation.
+    let seeded = crate::sizing::is_sizing(id) || (id == "path.transform" && values.get("matrix").is_some());
+    if !seeded {
         fill_editor(app, dialog, &values);
     }
     Ok(dialog)
@@ -414,6 +419,7 @@ impl ActionRunner for ShellRunner<'_> {
         if show_dialog
             && interactive
             && (crate::filter_dialog::has_dialog(id)
+                || crate::canvas_tool_menu::pen_dialogs::owns(id)
                 || crate::adjust_dialog::has_dialog(id)
                 || (id == crate::equalize_ui::COMMAND && crate::equalize_ui::asks(self.app)))
         {
@@ -869,6 +875,9 @@ fn document_target(params: &Value) -> bool {
 
 /// Before a preview or confirmation evaluates settings, check the actual editor and its permissions.
 pub(crate) fn authorize_panel_preview(app: &PhotocraftApp, dialog: DialogId, command: &str, params: &Value) -> Result<(), String> {
+    if crate::canvas_tool_menu::pen_dialogs::owns(command) {
+        crate::canvas_tool_menu::pen_dialogs::check_source(app, command)?;
+    }
     record_again::authorize_preview(app, dialog, command, params)?;
     if let Some(paused) = app.paused_playbacks.paused.values().find(|p| p.menu_editor.as_ref().is_some_and(|(id, _)| *id == dialog)) {
         check_menu_editor(app, paused, command, params)?;

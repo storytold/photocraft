@@ -21,7 +21,7 @@ pub(crate) fn active_text(app: &PhotocraftApp) -> Option<&TextLayer> {
     if !matches!(app.ui.tool, Tool::PathSelection | Tool::DirectSelection)
         || app.ui.transform.is_some()
         || app.ui.vector_mask_target
-        || app.ui.selected_path.as_deref().is_some_and(|name| name != "layer")
+        || app.ui.selected_path.as_ref().is_some_and(|target| target.name() != Some("layer"))
     {
         return None;
     }
@@ -508,7 +508,7 @@ mod tests {
     #[test]
     fn attaching_type_selects_its_path_and_preserves_the_source() {
         let mut app = app(Tool::PathSelection);
-        assert_eq!(app.ui.selected_path.as_deref(), Some("layer"));
+        assert_eq!(app.ui.selected_path.as_ref().and_then(|p| p.name()), Some("layer"));
         assert!(active_text(&app).is_some());
         let source = app.session.active().unwrap().doc.work_path.clone();
         app.ui.selected_path = Some("work".into());
@@ -516,7 +516,7 @@ mod tests {
         assert!(active_text(&app).is_none());
         app.run("type.attachToPath", json!({"start":20})).unwrap();
         assert_eq!(app.session.active().unwrap().channel_view.target, photocraft_engine::channel_cmds::ChannelTarget::Composite);
-        assert_eq!(app.ui.selected_path.as_deref(), Some("layer"));
+        assert_eq!(app.ui.selected_path.as_ref().and_then(|p| p.name()), Some("layer"));
         assert!(active_text(&app).is_some());
         let id = layer(&app);
         place(&mut app, id, range(30.0, 110.0));

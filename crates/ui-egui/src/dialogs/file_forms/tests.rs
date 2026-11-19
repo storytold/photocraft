@@ -78,3 +78,21 @@ fn create_droplet_uses_the_action_selected_in_the_form() {
     assert!(app.framework.dialogs.cancel_by_id(&ctx, id));
     assert!(!cancelled.exists());
 }
+
+#[test]
+fn paths_export_defaults_preserve_unique_indices_and_refuse_ambiguous_names() {
+    use crate::state::PathSelection;
+    for name in ["Second", "Same", "work", "layer", "all", "documentBounds"] {
+        let mut app = app();
+        for key in ["Same", "B", "work"] {
+            app.run("path.set", json!({"name":key,"path":{"subpaths":[{"knots":[[1,1],[10,10]]}]}})).unwrap();
+        }
+        std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).paths[1].name = name.into();
+        app.sync_views();
+        app.ui.selected_path = Some(PathSelection::Saved { index: 1 });
+        open_paths_to_file(&mut app);
+        crate::dialogs::testing::show(&mut app);
+        let dialog = app.framework.dialogs.get::<HostedParamDialog>().unwrap();
+        assert_eq!(dialog.fields().text("paths"), Some(if name == "Second" { "Second" } else { "all" }), "{name}");
+    }
+}

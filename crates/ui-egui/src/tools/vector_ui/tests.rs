@@ -148,7 +148,7 @@ fn paths_context_menu_uses_the_clicked_row_and_dispatches_commands() {
     app.run("path.set", json!({"name": "Second", "path": path})).unwrap();
     let (id, params) = command_params(&app, PathsCommands::MakeSelection, &PathRef::Saved(0)).expect("Make Selection applies to a saved path");
     assert_eq!(id, "path.toSelection");
-    assert_eq!(params["name"], "First");
+    assert_eq!(params["pathIndex"], 0);
     app.run(id, params).unwrap();
     assert!(app.session.active().unwrap().doc.selection.is_some());
     assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("path.toSelection"));
@@ -213,7 +213,7 @@ fn double_clicking_a_path_name_renames_it_in_place() {
     apply(&mut app, PathsEvent::rename(PathRef::Work, "Circle"));
     assert_eq!(names(&app), ["Outline", "Circle"]);
     assert!(app.session.active().unwrap().doc.work_path.is_none());
-    assert_eq!(app.ui.selected_path.as_deref(), Some("Circle"));
+    assert_eq!(app.ui.selected_path, Some(crate::state::PathSelection::Saved { index: 1 }));
 }
 
 #[test]
@@ -366,14 +366,14 @@ fn making_a_selection_from_the_pen_path_deselects_and_hides_it() {
     assert!(overlay(&app).is_empty());
     app.ui.pen = Some(PenPath::corners(&[[10.0, 10.0], [40.0, 10.0]], capture_pen_owner(&app)));
     pen_commit(&mut app, false);
-    assert_eq!(app.ui.selected_path.as_deref(), Some("work"));
+    assert_eq!(app.ui.selected_path.as_ref().and_then(|p| p.name()), Some("work"));
     assert_eq!(app.session.active().unwrap().doc.work_path.as_ref().unwrap().subpaths.len(), 1, "replaced, not combined");
     assert!(work_anchors(&app).is_some());
     // A shape layer's path stays the active path: layer targeting is unchanged.
     app.ui.tool_options.vector_mode = VectorMode::Shape;
     app.ui.pen = Some(PenPath::corners(&[[20.0, 20.0], [120.0, 20.0], [120.0, 80.0]], capture_pen_owner(&app)));
     path_to_selection(&mut app, json!({})).unwrap();
-    assert_eq!(app.ui.selected_path.as_deref(), Some("layer"));
+    assert_eq!(app.ui.selected_path.as_ref().and_then(|p| p.name()), Some("layer"));
     assert!(active_shape_path(&app).is_some());
 }
 
@@ -433,7 +433,7 @@ fn path_mode_shape_drags_add_to_the_work_path() {
     assert!(work.subpaths[0].closed);
     let b = work.control_bounds().unwrap();
     assert!((b.0 - 20.0).abs() < 0.5 && (b.1 - 20.0).abs() < 0.5 && (b.2 - 70.0).abs() < 0.5 && (b.3 - 50.0).abs() < 0.5, "{b:?}");
-    assert_eq!(app.ui.selected_path.as_deref(), Some("work"));
+    assert_eq!(app.ui.selected_path.as_ref().and_then(|p| p.name()), Some("work"));
     shape_drag(&mut app, Tool::Rectangle, [100.0, 100.0], [140.0, 130.0]);
     let doc = &app.session.active().unwrap().doc;
     assert_eq!(doc.work_path.as_ref().unwrap().subpaths.len(), 2, "a second drag adds a subpath");
@@ -789,7 +789,7 @@ fn failed_stale_pen_commit_preserves_the_draft_until_retry() {
         assert!(pen_commit(&mut app, false), "the user explicitly retries the valid captured target");
         assert!(app.ui.pen.is_none());
         assert_eq!(app.session.active_index(), Some(1));
-        assert_eq!(app.ui.selected_path.as_deref(), Some("foreign named path"));
+        assert_eq!(app.ui.selected_path.as_ref().and_then(|p| p.name()), Some("foreign named path"));
         let saved = app.session.documents()[0].doc.work_path.clone().unwrap();
         assert_eq!(saved.subpaths.len(), original.subpaths.len() + 1);
         assert_eq!(saved.subpaths[0], original.subpaths[0]);
@@ -883,7 +883,7 @@ fn a_new_pen_path_joins_the_selected_path() {
     };
     let work = |app: &PhotocraftApp| app.session.active().unwrap().doc.work_path.clone().unwrap();
     draw(&mut app, 20.0);
-    assert_eq!(app.ui.selected_path.as_deref(), Some("work"));
+    assert_eq!(app.ui.selected_path.as_ref().and_then(|p| p.name()), Some("work"));
     draw(&mut app, 120.0);
     let wp = work(&app);
     assert_eq!(wp.subpaths.len(), 2, "the first path stays");
@@ -901,14 +901,14 @@ fn a_new_pen_path_joins_the_selected_path() {
     let saved = app.session.active().unwrap().doc.paths.iter().find(|p| p.name == "Saved").unwrap().path.clone();
     assert_eq!(saved.subpaths.len(), 2);
     assert_eq!(work(&app).subpaths.len(), 2, "the Work Path is left alone");
-    assert_eq!(app.ui.selected_path.as_deref(), Some("Saved"));
+    assert_eq!(app.ui.selected_path, Some(crate::state::PathSelection::Saved { index: 0 }));
     // No path selected: a new Work Path replaces the old one.
     app.ui.selected_path = None;
     draw(&mut app, 320.0);
     let wp = work(&app);
     assert_eq!(wp.subpaths.len(), 1);
     assert_eq!(wp.subpaths[0].knots[0].anchor.x, 320.0);
-    assert_eq!(app.ui.selected_path.as_deref(), Some("work"));
+    assert_eq!(app.ui.selected_path.as_ref().and_then(|p| p.name()), Some("work"));
 }
 
 #[test]
@@ -952,7 +952,7 @@ fn new_fill_layer_takes_the_selected_path_as_its_vector_mask() {
     // Drawing a work path with the Pen selects it.
     app.ui.tool = Tool::Pen;
     clicks(&mut app, &[[20.0, 20.0], [120.0, 20.0], [120.0, 120.0], [20.5, 20.5]]);
-    assert_eq!(app.ui.selected_path.as_deref(), Some("work"));
+    assert_eq!(app.ui.selected_path.as_ref().and_then(|p| p.name()), Some("work"));
     let wp = app.session.active().unwrap().doc.work_path.clone().unwrap();
     app.run("select.rect", json!({"x": 150, "y": 150, "width": 20, "height": 20})).unwrap();
     for id in ["layer.newFillLayer.solidColor", "layer.newFillLayer.gradient", "layer.newAdjustmentLayer.invert"] {
@@ -962,7 +962,7 @@ fn new_fill_layer_takes_the_selected_path_as_its_vector_mask() {
         assert_eq!(l.vector_mask.as_ref().map(|v| &v.path), Some(&wp), "{id}: the work path is the vector mask");
         assert!(l.mask.is_none(), "{id}: the path wins over the selection");
         // The new layer's vector mask is now the active path, not the work path.
-        assert_eq!(app.ui.selected_path.as_deref(), Some("layer"), "{id}");
+        assert_eq!(app.ui.selected_path.as_ref().and_then(|p| p.name()), Some("layer"), "{id}");
     }
     // So the next fill layer isn't masked by the work path again.
     let r = app.run("layer.newFillLayer.solidColor", json!({}));
@@ -978,7 +978,7 @@ fn new_fill_layer_takes_the_selected_path_as_its_vector_mask() {
     assert_eq!(layer(&app, r).vector_mask.map(|v| v.path), Some(saved));
     // Deselected (or a stale name): the selection is the layer mask, no vector mask.
     for sel in [None, Some("Gone".to_string())] {
-        app.ui.selected_path = sel;
+        app.ui.selected_path = sel.map(Into::into);
         // The selection goes into the new layer's mask, so each fill layer needs its own (#8801).
         app.run("select.rect", json!({"x": 150, "y": 150, "width": 20, "height": 20})).unwrap();
         let r = app.run("layer.newFillLayer.solidColor", json!({}));
@@ -988,7 +988,7 @@ fn new_fill_layer_takes_the_selected_path_as_its_vector_mask() {
     // Make Work Path selects the new work path.
     app.run("select.rect", json!({"x": 150, "y": 150, "width": 20, "height": 20})).unwrap();
     app.run("select.toWorkPath", json!({"tolerance": 2.0})).unwrap();
-    assert_eq!(app.ui.selected_path.as_deref(), Some("work"));
+    assert_eq!(app.ui.selected_path.as_ref().and_then(|p| p.name()), Some("work"));
 }
 
 /// #1520: changing one corner through the Properties command must keep the other three

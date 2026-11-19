@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 mod color_panel;
 mod panel_state;
+mod path_selection;
 mod text_edit;
 mod tool;
 mod tool_options;
@@ -26,6 +27,7 @@ use crate::panels::brush_panel::brushes::BrushKey;
 
 pub use color_panel::ColorPanelState;
 pub use panel_state::{CurvesEditorState, PointCurveDrag, PointCurveState};
+pub use path_selection::{PathMenuSource, PathSelection};
 pub use text_edit::{TextEdit, TypeInsertionStyle, TypeTransform};
 pub use tool::Tool;
 pub use tool_options::{SampleAllLayers, ToolOptions};
@@ -293,7 +295,7 @@ pub struct UiState {
     pub type_path_geometry_cache: crate::type_path_placement::GeometryCache,
     /// Selected row in the Paths panel ("work" or a saved path name).
     #[serde(default)]
-    pub selected_path: Option<String>,
+    pub selected_path: Option<PathSelection>,
     /// The document and Work Path deselected by making a selection from it with the Pen or Path
     /// Selection tool (#6079): the canvas hides that path until a path is selected again or the
     /// Work Path changes.

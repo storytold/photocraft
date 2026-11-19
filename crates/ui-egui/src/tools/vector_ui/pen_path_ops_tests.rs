@@ -131,7 +131,7 @@ fn assert_kept_as_work_path(app: &PhotocraftApp, id: LayerId, body: &Path, steps
     assert_eq!(w.subpaths[0].knots.len(), 4);
     assert!(w.subpaths[0].closed);
     assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1);
-    assert_eq!(app.ui.selected_path.as_deref(), Some("work"));
+    assert_eq!(app.ui.selected_path.as_ref().and_then(|p| p.name()), Some("work"));
     assert!(app.ui.status.contains(tl!("The path was kept as the Work Path")), "{}", app.ui.status);
 }
 
@@ -426,7 +426,7 @@ fn make_shape_while_drawing_uses_the_path_drawing_began_with() {
     assert_eq!(shape.subpaths.len(), box_path.subpaths.len() + 1, "Box and the drawing");
     assert_eq!(shape.subpaths[0], box_path.subpaths[0]);
     assert_eq!(app.session.active().unwrap().doc.paths, doc_paths, "the saved paths stay as they were");
-    assert_eq!(app.ui.selected_path.as_deref(), Some("Other"), "the Paths panel selection stays");
+    assert_eq!(app.ui.selected_path.as_ref().and_then(|p| p.name()), Some("Other"), "the Paths panel selection stays");
 }
 
 /// With no Work Path and no saved path selected, Make Shape has nothing to make a shape from: the
@@ -437,7 +437,7 @@ fn make_shape_doesnt_copy_a_shape_layers_own_path() {
     app.ui.tool_options.vector_mode = VectorMode::Shape;
     square(&mut app, 20.0, 20.0, 50.0);
     app.ui.tool_options.vector_mode = VectorMode::Path;
-    assert_eq!(super::active_path_name(&app).as_deref(), Some("layer"));
+    assert_eq!(super::active_path_name(&app).as_ref().and_then(|p| p.name()), Some("layer"));
     let count = layers(&app);
     let steps = app.session.active().unwrap().history.past_len();
     assert!(super::make_shape(&mut app).is_err());

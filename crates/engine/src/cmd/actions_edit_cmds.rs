@@ -413,7 +413,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Insert Path",
             menu: &[],
             shortcut: None,
-            params: r##"{"action":name|index,"name":"work"|"layer"|saved path name,"at":index?} → {action,step,id,steps}. Snapshot exactly the selected path as a path.set work-path step, preserving cubic handles and path options. No fallback from a missing Work Path to a layer path. The measured Work Path ATN descriptor supports absolute coordinates, cubic handles, even-odd subpaths and Add/Subtract/XOR. Paths outside that measured form still play natively and are reported as unsupported by ATN export."##,
+            params: r##"{"action":name|index,"name":"work"|"layer"|saved path name | "pathIndex":uint (0-based saved path),"at":index?} → {action,step,id,steps}. Snapshot exactly the selected path as a path.set work-path step, preserving cubic handles and path options. No fallback from a missing Work Path to a layer path. The measured Work Path ATN descriptor supports absolute coordinates, cubic handles, even-odd subpaths and Add/Subtract/XOR. Paths outside that measured form still play natively and are reported as unsupported by ATN export."##,
             enabled: always,
             run: insert_path::run,
             journal: false,

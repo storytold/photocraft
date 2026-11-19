@@ -1,6 +1,6 @@
 use super::params::{layer_id, parse_path, path_json};
-use super::paths::{is_work, resolve_path};
 use super::shape::with_shape;
+use super::target::PathTarget;
 use super::{EngineError, LayerContent, LayerId, Path, Result, Session, Value, VectorMask, bad, json, vector};
 
 // ---------------------------------------------------------------------------
@@ -24,16 +24,19 @@ pub(super) fn vector_mask_info(s: &Session, id: LayerId) -> Result<Value> {
 
 pub(super) fn vector_mask_add(s: &mut Session, p: &Value, from_path: bool) -> Result<Value> {
     const CMD: &str = "layer.vectorMask.add";
+    let target = PathTarget::source(s, p, CMD)?;
+    if target.index().is_some() && p.get("path").is_some() {
+        return Err(bad(CMD, "give `pathIndex` or inline `path`, not both"));
+    }
     let id = layer_id(s, p)?;
     let mut path = match p.get("path") {
         Some(v) => parse_path(v).map_err(|e| bad(CMD, e))?,
-        None if from_path || p.get("name").is_some() => {
-            let name = p.get("name").and_then(Value::as_str);
+        None if from_path || p.get("name").is_some() || target.index().is_some() => {
             // Never fall back to the layer's own path here.
-            if is_work(name) {
+            if target.is_work() {
                 s.active().and_then(|d| d.doc.work_path.clone()).ok_or_else(|| EngineError::Other("no work path".into()))?
             } else {
-                resolve_path(s, name)?
+                target.resolve(s)?
             }
         }
         None => Path::default(),

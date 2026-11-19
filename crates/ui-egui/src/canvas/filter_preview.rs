@@ -81,7 +81,9 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
         // Previews edit what the command will: a targeted layer mask included (#780).
         let target = crate::dialogs::params::captured(app, &key);
         crate::filter_dialog::validate_match_color_destination(app, &key, &target, &fields).ok()?;
-        let (cmd, params) = if crate::smart_filter_dialog::owns(&key) {
+        let (cmd, params) = if crate::canvas_tool_menu::pen_dialogs::owns(&key) && !crate::canvas_tool_menu::pen_dialogs::action_editor(app, id) {
+            (key.clone(), crate::canvas_tool_menu::pen_dialogs::command_params(app, &key, &dialog_fields).ok()?)
+        } else if crate::smart_filter_dialog::owns(&key) {
             crate::smart_filter_dialog::blend_command(app, &target, &dialog_fields).ok()?
         } else if crate::smart_filter_dialog::is_target(&target) {
             crate::smart_filter_dialog::params_command(app, &target, &key, crate::filter_dialog::params_of(&fields)).ok()?

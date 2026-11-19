@@ -264,7 +264,7 @@ fn make_mask(app: &mut PhotocraftApp) -> Result<(), String> {
     }
     let name =
         active_path_name(app).ok_or_else(|| tl!("No path to make a mask from: draw one with the Pen tool or select one in the Paths panel.").to_string())?;
-    app.run("layer.vectorMask.fromPath", json!({"name": name})).map(|_| ())
+    app.run("layer.vectorMask.fromPath", name.params()).map(|_| ())
 }
 
 /// Whether the Shape tools are in Path mode: a drag adds its outline to the work path.

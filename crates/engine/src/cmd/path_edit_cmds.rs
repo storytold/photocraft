@@ -5,8 +5,9 @@
 //! whole drag as one command (one history step).
 //!
 //! Every command targets a path like `path.transform`: `"name":"work"` (default), a saved path's
-//! name, or `"layer"` with `"layer":id?` for a shape layer's path (re-rendered; it stops being a
-//! live shape), a layer's vector mask, or type on a path's Type Path (`"typePath":true` when the
+//! name, `"pathIndex":i` (0-based saved path, instead of name/layer/typePath), or `"layer"` with
+//! `"layer":id?` for a shape layer's path (re-rendered; it stops being a live shape), a layer's
+//! vector mask, or type on a path's Type Path (`"typePath":true` when the
 //! type layer also has a vector mask). Knots are addressed by `subpath` and `knot` index, as
 //! listed by `path.info`, and the result is `{name, path}` in the compact JSON form.
 
@@ -16,7 +17,7 @@ use photocraft_vector::edit::{self, Handle};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
-use crate::vector_cmds::{bad, has_doc, layer_id, nums, path_json, path_mut, pt, with_shape};
+use crate::vector_cmds::{PathTarget, bad, has_doc, layer_id, nums, path_json, pt, with_shape};
 use crate::{Result, Session};
 
 /// Coordinates and offsets beyond this are mistakes (the same bound as `path.transform`).
@@ -64,16 +65,16 @@ fn step_names_error(named: &[&str]) -> String {
 
 /// Applies `f` to the targeted path in one undoable step labelled `label`.
 fn edit_path(s: &mut Session, cmd: &str, p: &Value, label: &str, f: impl FnOnce(&mut Path) -> std::result::Result<(), String>) -> Result<Value> {
+    let target = PathTarget::parse(s, p, cmd)?;
     // A malformed target is an error, never a silent edit of the Work Path or the active layer.
-    let name = match p.get("name") {
-        Some(v) => v.as_str().ok_or_else(|| bad(cmd, "`name` must be a path name, \"work\" or \"layer\""))?,
-        None => "work",
+    if p.get("name").is_some_and(|v| !v.is_string()) {
+        return Err(bad(cmd, "`name` must be a path name, \"work\" or \"layer\""));
     }
-    .to_owned();
-    if name == "layer" && p.get("layer").is_some_and(|v| !v.is_u64()) {
+    let name = target.name(s)?;
+    if target.is_layer() && p.get("layer").is_some_and(|v| !v.is_u64()) {
         return Err(bad(cmd, "`layer` must be a layer id"));
     }
-    let layer = if name == "layer" { Some(layer_id(s, p)?) } else { None };
+    let layer = if target.is_layer() { Some(layer_id(s, p)?) } else { None };
     // Type on a path: its own path, the text laid along it again (#9114). A vector mask on the
     // layer stays what `"layer"` edits, as with `path.info`, unless `"typePath": true`.
     let type_path = p.get("typePath").and_then(Value::as_bool).unwrap_or(false);
@@ -100,12 +101,12 @@ fn edit_path(s: &mut Session, cmd: &str, p: &Value, label: &str, f: impl FnOnce(
             Ok(path_json(&sh.path))
         })?,
         None => s.edit(label, |doc, _| {
-            let path = path_mut(doc, &name, layer)?;
+            let path = target.path_mut(doc, layer)?;
             f(path).map_err(|e| bad(cmd, e))?;
             Ok(path_json(path))
         })?,
     };
-    Ok(json!({ "name": name, "path": path }))
+    Ok(target.with_index(json!({ "name": name, "path": path })))
 }
 
 fn move_anchors(s: &mut Session, p: &Value) -> Result<Value> {
@@ -208,7 +209,8 @@ fn delete_anchor(s: &mut Session, p: &Value) -> Result<Value> {
     let k = knot(CMD, p)?;
     // A saved path may lose its last anchor and stay listed, empty; the Work Path, a shape's path,
     // a vector mask and a Type Path keep refusing it.
-    let saved = p.get("name").and_then(Value::as_str).is_some_and(|n| n != "layer" && !crate::vector_cmds::is_work(Some(n)));
+    let target = PathTarget::parse(s, p, CMD)?;
+    let saved = !target.is_layer() && !target.is_work();
     let segments = p.get("segments").and_then(Value::as_bool).unwrap_or(false);
     let mut removed = false;
     let mut r = edit_path(s, CMD, p, "Delete Anchor Point", |path| {
@@ -310,13 +312,13 @@ fn set_operation(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 pub fn specs() -> Vec<CommandSpec> {
-    const TARGET: &str = r#""name":str|"work"|"layer"="work","layer":id? (with "layer": a shape layer's path, a vector mask, or else type on a path's Type Path),"typePath":bool=false (with "layer": the Type Path even when the type layer has a vector mask)"#;
+    const TARGET: &str = r#""pathIndex":uint? (0-based saved path instead of name/layer/typePath),"name":str|"work"|"layer"="work","layer":id? (with "layer": a shape layer's path, a vector mask, or else type on a path's Type Path),"typePath":bool=false (with "layer": the Type Path even when the type layer has a vector mask)"#;
     let spec = |id: &'static str, label: &'static str, params: String, run: fn(&mut Session, &Value) -> Result<Value>| CommandSpec {
         id,
         label,
         menu: &[],
         shortcut: None,
-        params: crate::vector_cmds::leak(format!("{{{TARGET},{params}}} → {{name,path}}")),
+        params: crate::vector_cmds::leak(format!("{{{TARGET},{params}}} → {{name,path,pathIndex?}}")),
         enabled: has_doc,
         run,
         journal: true,

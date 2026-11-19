@@ -218,6 +218,8 @@ impl PhotocraftApp {
                 }
             }
             Err(e) => {
+                // A nested command may already have deleted a row before the outer command failed.
+                self.reconcile_path_selection(crate::PathDocument::capture(&self.session).as_ref());
                 self.ui.status = e.clone();
                 self.ui.status_error = true;
             }
@@ -334,30 +336,43 @@ impl PhotocraftApp {
         }
     }
 
+    /// Check selection ownership independently of advancing the canvas or committing a tool draft.
+    pub(crate) fn reconcile_path_selection(&mut self, document: Option<&crate::PathDocument>) {
+        let same_document = match (self.path_document.as_ref(), document) {
+            (Some(old), Some(now)) => {
+                // A script can close, reopen the same persisted ID and edit it between UI frames.
+                now.activation == old.activation && now.id == old.id && (now.revision > old.revision || old.source.ptr_eq(&now.source))
+            }
+            (None, None) => true,
+            _ => false,
+        };
+        // The engine observes every list mutation and history restoration. Comparing only the
+        // final path count misses delete+append actions; weak snapshots may die during coalescing.
+        let saved_list_changed = matches!(self.ui.selected_path, Some(state::PathSelection::Saved { .. }))
+            && matches!((self.path_document.as_ref(), document), (Some(old), Some(now)) if old.saved_paths_revision != now.saved_paths_revision);
+        let stale_index =
+            self.ui.selected_path.as_ref().is_some_and(|sel| {
+                matches!(sel, state::PathSelection::Saved { .. }) && self.session.active().is_none_or(|st| sel.saved_index(&st.doc).is_none())
+            });
+        if !same_document || saved_list_changed || stale_index {
+            self.ui.selected_path = None;
+        }
+    }
+
     /// Reconciles canvas view state with open documents in the session.
     pub fn sync_views(&mut self) {
-        // The Paths panel selection belongs to the active document. Ordinary edits replace the
-        // snapshot and advance its revision; a replaced snapshot without a newer revision is a
-        // reopened document, even with the same ID.
-        let document = self.session.active().map(|st| (st.doc.id, st.revision, std::sync::Arc::downgrade(&st.doc)));
+        let document = crate::PathDocument::capture(&self.session);
         // Crop's Fill goes back to its default entry when another document that was already open
         // becomes active (a tab switch, or closing the active one), as in the reference
         // application. A new or opened document isn't in `view_docs` yet, so it keeps the setting,
         // as do tool switches, commits and cancels, which leave the active document alone (#10894).
-        if let (Some((id, ..)), Some((old_id, ..))) = (&document, &self.path_document)
-            && id != old_id
-            && self.view_docs.contains(id)
+        if let (Some(now), Some(old)) = (&document, &self.path_document)
+            && now.id != old.id
+            && self.view_docs.contains(&now.id)
         {
             self.ui.tool_options.crop.fill = craft::draw::ui::crop::CropFill::Background;
         }
-        let same_document = match (&self.path_document, &document) {
-            (Some((old_id, old_revision, old_source)), Some((id, revision, source))) => old_id == id && (revision > old_revision || old_source.ptr_eq(source)),
-            (None, None) => true,
-            _ => false,
-        };
-        if !same_document {
-            self.ui.selected_path = None;
-        }
+        self.reconcile_path_selection(document.as_ref());
         self.path_document = document;
         vector_ui::cancel_stale_pen(self);
         crate::direct_select::cancel_stale(self);

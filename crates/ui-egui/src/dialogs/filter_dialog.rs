@@ -591,6 +591,9 @@ pub(crate) fn command_params(command: &str, fields: &DialogFields) -> Value {
             }
         }
     }
+    if command == "path.transform" {
+        crate::canvas_tool_menu::pen_dialogs::encode_recorded_matrix(&mut map);
+    }
     // The exports to files take the JPEG quality only for a JPEG (a quality would make a WebP lossy).
     if matches!(command, "file.export.artboardsToFiles" | "file.export.layersToFiles" | "file.export.layerCompsToFiles")
         && map.get("format").and_then(Value::as_str) != Some("jpg")

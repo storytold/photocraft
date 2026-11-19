@@ -59,7 +59,7 @@ fn selected_work_and_saved_paths_append_pen_and_curvature_components_once() {
             let anchors: Vec<_> = after.subpaths[1].knots.iter().map(|k| [k.anchor.x, k.anchor.y]).collect();
             assert_eq!(anchors, [[30.0, 60.0], [130.0, 60.0]]);
             assert_eq!(path(&app, if name == "work" { "Saved drawing" } else { "work" }), other);
-            assert_eq!(app.ui.selected_path.as_deref(), Some(name));
+            assert_eq!(app.ui.selected_path, Some(if name == "work" { "work".into() } else { crate::state::PathSelection::Saved { index: 0 } }));
             assert_eq!(steps(&app), n + 1);
             app.run("edit.undo", json!({})).unwrap();
             assert_eq!(path(&app, name), original);
@@ -107,10 +107,10 @@ fn captured_path_and_shape_mode_do_not_follow_later_ui_selection() {
             let st = app.session.active().unwrap();
             assert!(matches!(st.doc.layer(st.active_layer.unwrap()).unwrap().content, LayerContent::Shape(_)));
             assert_eq!(path(&app, "Saved drawing"), saved);
-            assert_eq!(app.ui.selected_path.as_deref(), Some("layer"));
+            assert_eq!(app.ui.selected_path.as_ref().and_then(|p| p.name()), Some("layer"));
         } else {
             assert_eq!(path(&app, "Saved drawing").subpaths.len(), 2);
-            assert_eq!(app.ui.selected_path.as_deref(), Some("Saved drawing"));
+            assert_eq!(app.ui.selected_path, Some(crate::state::PathSelection::Saved { index: 0 }));
         }
         assert_eq!(steps(&app), n + 1);
     }
@@ -273,24 +273,24 @@ fn reopened_same_id_and_revision_do_not_reuse_the_saved_path_selection() {
 }
 
 #[test]
-fn ordinary_path_edits_undo_and_redo_preserve_the_explicit_saved_path_selection() {
+fn ordinary_path_edits_preserve_selection_but_history_clears_saved_indices() {
     let mut app = app(Tool::Pen);
     seed(&mut app, "Saved drawing", 20.0);
-    app.ui.selected_path = Some("Saved drawing".into());
+    app.ui.selected_path = Some(crate::state::PathSelection::Saved { index: 0 });
     let original = path(&app, "Saved drawing");
     let revision = app.session.active().unwrap().revision;
     seed(&mut app, "Saved drawing", 90.0);
     assert!(app.session.active().unwrap().revision > revision);
-    assert_eq!(app.ui.selected_path.as_deref(), Some("Saved drawing"));
+    assert_eq!(app.ui.selected_path, Some(crate::state::PathSelection::Saved { index: 0 }));
     let changed = path(&app, "Saved drawing");
     app.run("edit.undo", json!({})).unwrap();
     assert_eq!(path(&app, "Saved drawing"), original);
-    assert_eq!(app.ui.selected_path.as_deref(), Some("Saved drawing"));
+    assert!(app.ui.selected_path.is_none());
     app.run("edit.redo", json!({})).unwrap();
     assert_eq!(path(&app, "Saved drawing"), changed);
-    assert_eq!(app.ui.selected_path.as_deref(), Some("Saved drawing"));
+    assert!(app.ui.selected_path.is_none());
     app.sync_views();
-    assert_eq!(app.ui.selected_path.as_deref(), Some("Saved drawing"));
+    assert!(app.ui.selected_path.is_none());
 }
 
 #[test]
@@ -355,7 +355,7 @@ fn selected_saved_paths_move_and_free_transform_without_changing_work_or_shape()
         app.ui.selected_path = Some("Saved drawing".into());
         let (original, work, n) = (path(&app, "Saved drawing"), path(&app, "work"), steps(&app));
         let (params, selected) = vector_ui::free_transform_path(&app).unwrap();
-        assert_eq!(params, json!({"name":"Saved drawing"}));
+        assert_eq!(params, json!({"pathIndex":0}));
         assert_eq!(selected, original);
         vector_ui::path_selection_finish(&mut app, [0.0, 0.0], [10.4, -4.6]);
         let moved = path(&app, "Saved drawing");
@@ -461,7 +461,7 @@ fn tab_switch_commits_only_the_valid_original_captured_saved_path() {
     assert!(vector_ui::cancel_stale_pen(&mut app));
     assert!(app.ui.pen.is_none());
     app.sync_views();
-    assert_eq!(app.ui.selected_path.as_deref(), Some("Destination"));
+    assert_eq!(app.ui.selected_path.as_ref().and_then(|p| p.name()), Some("Destination"));
     assert!(std::sync::Arc::ptr_eq(&current, &app.session.active().unwrap().doc));
     let old = app.session.documents().iter().find(|s| s.doc.id == source).unwrap();
     assert_eq!(old.doc.paths.iter().find(|p| p.name == "Saved drawing").unwrap().path.subpaths.len(), 2);
@@ -473,7 +473,7 @@ fn deleting_the_captured_target_cancels_without_recreating_it() {
     seed(&mut app, "Saved drawing", 20.0);
     app.ui.selected_path = Some("Saved drawing".into());
     draft(&mut app);
-    app.session.execute("path.delete", json!({"name":"Saved drawing"})).unwrap();
+    app.session.execute("path.delete", json!({"pathIndex":0})).unwrap();
     let current = app.session.active().unwrap().doc.clone();
     let n = steps(&app);
     vector_ui::cancel_stale_pen(&mut app);
@@ -482,4 +482,30 @@ fn deleting_the_captured_target_cancels_without_recreating_it() {
     assert!(std::sync::Arc::ptr_eq(&current, &app.session.active().unwrap().doc));
     assert_eq!(steps(&app), n);
     assert!(app.session.active().unwrap().doc.paths.is_empty());
+}
+
+#[test]
+fn draining_a_switched_pen_draft_never_masks_a_fill_with_the_destinations_row() {
+    for sync_first in [false, true] {
+        let mut app = app(Tool::Pen);
+        seed(&mut app, "Source", 20.0);
+        app.run("file.new", json!({"width":200,"height":200})).unwrap();
+        seed(&mut app, "Destination", 100.0);
+        app.session.set_active(0);
+        app.sync_views();
+        app.ui.selected_path = Some(crate::state::PathSelection::Saved { index: 0 });
+        draft(&mut app);
+        app.session.set_active(1);
+        if sync_first {
+            app.sync_views();
+        }
+        vector_ui::host::drain(&mut app, &mut Default::default(), &Default::default());
+        app.sync_views();
+        assert!(app.ui.pen.is_none());
+        assert_eq!(app.session.documents()[0].doc.paths[0].path.subpaths.len(), 2);
+        assert!(app.ui.selected_path.is_none());
+        app.run("layer.newFillLayer.solidColor", json!({"color":"#808080"})).unwrap();
+        let dest = app.session.active().unwrap();
+        assert!(dest.doc.layer(dest.active_layer.unwrap()).unwrap().vector_mask.is_none());
+    }
 }

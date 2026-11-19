@@ -406,6 +406,23 @@ pub(crate) fn overrides(app: &PhotocraftApp) -> Overrides {
         keys.retain(|key| !held_by_action(&taken, key));
         overrides.insert(bridged.command().key(), keys);
     }
+    // The framework's list otherwise owns modified Enter as row activation. Bind the Paths
+    // panel's command in its own scope so loading the selected row still works with focus there.
+    let id = "path.toSelection";
+    let main = crate::shortcuts::effective_shortcut(app, id, crate::shortcuts::default_shortcut(id).as_deref());
+    let mut keys: Vec<String> = main.iter().cloned().collect();
+    keys.extend(prefs.alternates(id, main.as_deref()));
+    keys.retain(|key| !held_by_action(&taken, key));
+    if app.ui.selected_path.is_some() {
+        overrides.insert(CommandRef::from(craft::draw::ui::paths::PathsCommands::MakeSelection).key(), keys);
+    }
+    // A focused path row owns Delete/Backspace; outside this scope the canvas keeps its
+    // anchor/component deletion behavior and the layer/pixel Clear command.
+    let delete = CommandRef::from(craft::draw::ui::paths::PathsCommands::DeletePath).key();
+    if app.ui.selected_path.is_some() && overrides.get(&delete).is_none() {
+        let keys = ["Delete", "Backspace"].into_iter().filter(|key| !held_by_action(&taken, key)).map(str::to_owned).collect();
+        overrides.insert(delete, keys);
+    }
     // A key an action holds is the action's alone (it is checked before every command's key, as in Photoshop): the
     // command that has it by default keeps its other keys.
     if !taken.is_empty() {

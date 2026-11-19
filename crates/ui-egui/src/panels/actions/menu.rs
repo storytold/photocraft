@@ -7,12 +7,25 @@ use photocraft_engine::actions_edit_cmds;
 
 use crate::PhotocraftApp;
 
+/// Resolve legacy names only when unique and preserve saved-row identity through dispatch.
+pub(super) fn selected_path_params(app: &PhotocraftApp) -> Option<serde_json::Value> {
+    let target = app.ui.selected_path.as_ref()?;
+    let st = app.session.active()?;
+    if let Some(index) = target.saved_index(&st.doc) {
+        return Some(serde_json::json!({"pathIndex": index}));
+    }
+    match target.name()? {
+        "work" if st.doc.work_path.is_some() => Some(target.params()),
+        "layer" if actions_edit_cmds::selected_recording_path(&app.session, "layer").is_ok() => Some(target.params()),
+        _ => None,
+    }
+}
+
 /// What the app knows that the menu's states depend on.
 fn facts(app: &PhotocraftApp) -> ActionsMenuFacts {
-    let path_selected = app.ui.selected_path.as_deref().is_some_and(|name| actions_edit_cmds::selected_recording_path(&app.session, name).is_ok());
     ActionsMenuFacts::new()
         .recording(app.session.actions.recording.is_some())
-        .path_selected(path_selected)
+        .path_selected(selected_path_params(app).is_some())
         .waiting(super::playback::pending(app))
         .tool_recording(app.session.actions.record_tools)
 }

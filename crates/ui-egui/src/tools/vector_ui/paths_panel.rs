@@ -5,6 +5,7 @@ use craft::draw::ui::paths::{PathKind, PathRow as FwRow, PathsCommands, PathsEve
 use super::shapes::hex;
 use super::{Document, LayerContent, Path, PhotocraftApp, Value, json};
 use crate::direct_select::PathRef;
+use crate::state::{PathMenuSource, PathSelection};
 use crate::theme::Tokens;
 
 // ---------------------------------------------------------------------------------------------
@@ -13,7 +14,7 @@ use crate::theme::Tokens;
 /// What a Paths panel row is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PathRow {
-    Saved,
+    Saved(usize),
     Work,
     /// The selected layer's shape path or vector mask (temporary, italic).
     Layer,
@@ -32,8 +33,12 @@ pub struct PathEntry {
 /// The Paths panel's rows, top to bottom: saved paths, the work path, then the selected layer's
 /// shape path ("<Layer> Shape Path") or vector mask ("<Layer> Vector Mask"), like Photoshop.
 pub fn path_rows(doc: &Document, active: Option<photocraft_doc::LayerId>) -> Vec<PathEntry> {
-    let mut rows: Vec<_> =
-        doc.paths.iter().map(|p| PathEntry { name: p.name.clone(), path: p.path.clone(), kind: PathRow::Saved, vector_mask: false }).collect();
+    let mut rows: Vec<_> = doc
+        .paths
+        .iter()
+        .enumerate()
+        .map(|(i, p)| PathEntry { name: p.name.clone(), path: p.path.clone(), kind: PathRow::Saved(i), vector_mask: false })
+        .collect();
     if let Some(wp) = &doc.work_path {
         rows.push(PathEntry { name: "Work Path".into(), path: wp.clone(), kind: PathRow::Work, vector_mask: false });
     }
@@ -65,15 +70,11 @@ fn free_path_name(doc: &Document) -> String {
 /// The rows with their keys: the one place a row's `PathRef` is assigned. A saved path is keyed by its
 /// position in `doc.paths`, which is also its position among the rows.
 fn keyed_rows(doc: &Document, active: Option<photocraft_doc::LayerId>) -> Vec<(PathRef, PathEntry)> {
-    let mut saved = 0;
     path_rows(doc, active)
         .into_iter()
         .map(|entry| {
             let key = match entry.kind {
-                PathRow::Saved => {
-                    saved += 1;
-                    PathRef::Saved(saved - 1)
-                }
+                PathRow::Saved(i) => PathRef::Saved(i),
                 PathRow::Work => PathRef::Work,
                 PathRow::Layer => PathRef::Layer(active.map_or(0, |id| id.0)),
             };
@@ -90,7 +91,7 @@ fn is_vector_mask(entry: &PathEntry) -> bool {
 /// The framework kind of a row.
 fn kind_of(entry: &PathEntry) -> PathKind {
     match entry.kind {
-        PathRow::Saved => PathKind::Saved,
+        PathRow::Saved(_) => PathKind::Saved,
         PathRow::Work => PathKind::Work,
         PathRow::Layer if is_vector_mask(entry) => PathKind::VectorMask,
         PathRow::Layer => PathKind::ShapePath,
@@ -114,22 +115,21 @@ fn outline(path: &Path) -> kurbo::BezPath {
     out
 }
 
-/// The engine's name of a row: "work", "layer" or the saved path's name.
-fn name_of(doc: &Document, key: &PathRef) -> Option<String> {
+/// Saved rows retain their index all the way to command dispatch.
+fn name_of(doc: &Document, key: &PathRef) -> Option<PathSelection> {
     match key {
-        PathRef::Saved(i) => doc.paths.get(*i).map(|p| p.name.clone()),
+        PathRef::Saved(i) => doc.paths.get(*i).map(|_| PathSelection::Saved { index: *i }),
         PathRef::Work => Some("work".into()),
         PathRef::Layer(_) | PathRef::TypePath(_) => Some("layer".into()),
         PathRef::Pen => None,
     }
 }
 
-/// The row an engine name stands for.
-fn key_of_name(doc: &Document, name: &str, active: Option<photocraft_doc::LayerId>) -> Option<PathRef> {
-    match name {
-        "work" => Some(PathRef::Work),
-        "layer" => active.map(|id| PathRef::Layer(id.0)),
-        _ => doc.paths.iter().position(|p| p.name == name).map(PathRef::Saved),
+fn key_of_name(doc: &Document, name: &PathSelection, active: Option<photocraft_doc::LayerId>) -> Option<PathRef> {
+    match name.name() {
+        Some("work") => Some(PathRef::Work),
+        Some("layer") => active.map(|id| PathRef::Layer(id.0)),
+        _ => name.saved_index(doc).map(PathRef::Saved),
     }
 }
 
@@ -159,7 +159,7 @@ fn delete_command(app: &PhotocraftApp, key: &PathRef, shape_deletes_layer: bool)
     } else if entry.kind == PathRow::Layer && shape_deletes_layer {
         Some(("layer.delete", json!({"layer": layer})))
     } else {
-        Some(("path.delete", json!({"name": name_of(&st.doc, key)?})))
+        Some(("path.delete", name_of(&st.doc, key)?.params()))
     }
 }
 
@@ -169,9 +169,9 @@ pub(crate) fn command_params(app: &PhotocraftApp, command: PathsCommands, path: 
     let st = app.session.active()?;
     let name = name_of(&st.doc, path)?;
     match command {
-        PathsCommands::MakeSelection => Some(("path.toSelection", json!({"name": name}))),
-        PathsCommands::FillPath => Some(("path.fill", json!({"name": name}))),
-        PathsCommands::StrokePath => Some(("path.stroke", json!({"name": name}))),
+        PathsCommands::MakeSelection => Some(("path.toSelection", name.params())),
+        PathsCommands::FillPath => Some(("path.fill", name.params())),
+        PathsCommands::StrokePath => Some(("path.stroke", name.params())),
         PathsCommands::SavePath => (*path == PathRef::Work).then(|| ("path.rename", json!({"name": "work", "to": free_path_name(&st.doc)}))),
         PathsCommands::DuplicatePath => {
             let entry = keyed_rows(&st.doc, st.active_layer).into_iter().find(|(k, _)| k == path).map(|(_, e)| e)?;
@@ -215,50 +215,73 @@ pub(crate) fn apply(app: &mut PhotocraftApp, event: PathsEvent<PathRef>) {
                 SelectionOperation::Intersect => "intersect",
                 _ => "replace",
             };
-            run(app, "path.toSelection", json!({"name": name, "mode": mode}));
+            run(app, "path.toSelection", name.with_params(json!({"mode": mode})));
         }
         PathsEvent::Rename { key, text, .. } => {
             let Some(name) = name_of(&doc, &key) else { return };
             // The renamed (or just saved) path stays the panel's target.
-            if run(app, "path.rename", json!({"name": name, "to": text})).is_some() {
-                app.ui.selected_path = Some(text);
+            if let Some(result) = run(app, "path.rename", name.with_params(json!({"to": text}))) {
+                let index = result
+                    .get("pathIndex")
+                    .and_then(Value::as_u64)
+                    .and_then(|i| usize::try_from(i).ok())
+                    // Saving Work Path appends one saved row; its engine reply remains name-only.
+                    .or_else(|| (key == PathRef::Work).then_some(doc.paths.len()));
+                app.ui.selected_path =
+                    index.filter(|i| app.session.active().is_some_and(|st| st.doc.paths.get(*i).is_some())).map(|index| PathSelection::Saved { index });
             }
         }
         PathsEvent::Command { command, key, .. } => {
-            let target = key.or_else(|| app.ui.selected_path.as_deref().and_then(|n| key_of_name(&doc, n, active)));
+            let target = key.or_else(|| app.ui.selected_path.as_ref().and_then(|n| key_of_name(&doc, n, active)));
             let Some(target) = target else { return };
             if command == PathsCommands::StrokePath {
                 // Stroke Path… asks for the tool first, as in Photoshop (#2978).
                 if let Some(name) = name_of(&doc, &target) {
                     crate::canvas_tool_menu::pen_dialogs::open(app, "path.stroke", &name);
                 }
-            } else if let Some((cmd, params)) = command_params(app, command, &target) {
-                run(app, cmd, params);
+            } else if let Some((cmd, params)) = command_params(app, command, &target)
+                && run(app, cmd, params).is_some()
+                && command == PathsCommands::SavePath
+                && target == PathRef::Work
+            {
+                app.ui.selected_path = Some(PathSelection::Saved { index: doc.paths.len() });
             }
         }
         PathsEvent::Footer { button, rows, mods, .. } => {
-            let selected =
-                rows.first().cloned().or_else(|| app.ui.selected_path.as_deref().and_then(|n| key_of_name(&doc, n, active))).unwrap_or(PathRef::Work);
-            let name = name_of(&doc, &selected).unwrap_or_else(|| "work".into());
+            // A missing selection may use Work Path; an invalid saved selection must never
+            // turn a consuming action into an operation on a different path.
+            if rows.is_empty()
+                && app.ui.selected_path.as_ref().is_some_and(|n| key_of_name(&doc, n, active).is_none())
+                && !matches!(button, PathsFooterButton::New | PathsFooterButton::WorkPath)
+            {
+                return;
+            }
+            let selected = rows.first().cloned().or_else(|| app.ui.selected_path.as_ref().and_then(|n| key_of_name(&doc, n, active))).unwrap_or(PathRef::Work);
+            // Creation does not need an existing path. All consuming actions must reject a stale row.
+            let name = match name_of(&doc, &selected) {
+                Some(name) => name,
+                None if matches!(button, PathsFooterButton::New | PathsFooterButton::WorkPath) => "work".into(),
+                None => return,
+            };
             match button {
                 PathsFooterButton::Fill => {
-                    run(app, "path.fill", json!({"name": name, "color": hex(app.session.tools.foreground)}));
+                    run(app, "path.fill", name.with_params(json!({"color": hex(app.session.tools.foreground)})));
                 }
                 PathsFooterButton::Stroke if mods.alt => {
                     // Alt-click opens the Stroke Path dialog, as in Photoshop (#2978).
                     crate::canvas_tool_menu::pen_dialogs::open(app, "path.stroke", &name);
                 }
                 PathsFooterButton::Stroke => {
-                    run(app, "path.stroke", json!({"name": name, "tool": "brush"}));
+                    run(app, "path.stroke", name.with_params(json!({"tool": "brush"})));
                 }
                 PathsFooterButton::Load => {
-                    run(app, "path.toSelection", json!({"name": name}));
+                    run(app, "path.toSelection", name.params());
                 }
                 PathsFooterButton::WorkPath => {
                     run(app, "select.toWorkPath", json!({"tolerance": 2.0}));
                 }
                 PathsFooterButton::VectorMask => {
-                    run(app, "layer.vectorMask.fromPath", json!({"name": name}));
+                    run(app, "layer.vectorMask.fromPath", name.params());
                 }
                 PathsFooterButton::New => {
                     run(app, "path.set", json!({"name": free_path_name(&doc), "path": {"subpaths": []}}));
@@ -274,7 +297,7 @@ pub(crate) fn apply(app: &mut PhotocraftApp, event: PathsEvent<PathRef>) {
             PathsFooterButton::Delete => delete_rows(app, &rows),
             PathsFooterButton::Load => {
                 if let Some(name) = rows.first().and_then(|k| name_of(&doc, k)) {
-                    run(app, "path.toSelection", json!({"name": name}));
+                    run(app, "path.toSelection", name.params());
                 }
             }
             PathsFooterButton::New => {
@@ -289,10 +312,17 @@ pub(crate) fn apply(app: &mut PhotocraftApp, event: PathsEvent<PathRef>) {
     }
 }
 
-/// Deletes `rows`. Every row becomes a command by name (or layer id) before the first runs: a saved path's key is its
-/// position, which the first deletion shifts.
+/// Deletes the selected rows without letting earlier deletions shift a later target.
 fn delete_rows(app: &mut PhotocraftApp, rows: &[PathRef]) {
-    let commands: Vec<_> = rows.iter().filter_map(|k| delete_command(app, k, false)).collect();
+    // Descending saved indices keep every later deletion on its original row. Deduplicate
+    // repeated targets so the next occupant of a deleted slot cannot be deleted as well.
+    let mut targets = rows.to_vec();
+    targets.sort_by_key(|k| match k {
+        PathRef::Saved(i) => (0, usize::MAX - i),
+        _ => (1, 0),
+    });
+    let mut seen = std::collections::HashSet::new();
+    let commands: Vec<_> = targets.iter().filter(|k| seen.insert(**k)).filter_map(|k| delete_command(app, k, false)).collect();
     for (cmd, params) in commands {
         run(app, cmd, params);
     }
@@ -304,24 +334,38 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ui.label(egui::RichText::new(tl!("No document")).color(t.text_faint));
         return;
     };
+    let source = PathMenuSource::capture(st);
+    if app.framework.paths_source.as_ref() != Some(&source) {
+        app.framework.paths_epoch = app.framework.paths_epoch.saturating_add(1);
+    }
+    app.framework.paths_source = Some(source.clone());
+    let epoch = app.framework.paths_epoch;
+    let layer = st.active_layer;
     let doc = st.doc.clone();
     let can_fill = st.active_layer.and_then(|id| doc.layer(id)).is_some_and(|l| l.surface().is_some());
-    let selected = app.ui.selected_path.clone();
+    let selected = app.ui.selected_path.as_ref().and_then(|target| key_of_name(&doc, target, st.active_layer));
     let rows: Vec<FwRow<PathRef>> = keyed_rows(&doc, st.active_layer)
         .into_iter()
         .map(|(key, entry)| {
             let kind = kind_of(&entry);
-            let engine_name = name_of(&doc, &key);
             let name = if entry.kind == PathRow::Work { tl!("Work Path").to_string() } else { entry.name.clone() };
             let mut row = FwRow::new(key, kind, name, outline(&entry.path));
-            row.selected = selected.is_some() && selected == engine_name;
+            row.selected = selected == Some(key);
             row
         })
         .collect();
     let size = kurbo::Size::new(doc.size.width.max(1) as f64, doc.size.height.max(1) as f64);
 
-    let events = PathsPanel::new(&rows, size).can_fill(can_fill).work_name(free_path_name(&doc)).show(ui).events;
+    // Framework rename fields, drags and popups belong to this exact document state.
+    // A new source gets a new UI scope, so retained row indices cannot retarget a new path.
+    let events = ui.push_id((epoch, layer), |ui| PathsPanel::new(&rows, size).can_fill(can_fill).work_name(free_path_name(&doc)).show(ui).events).inner;
     for event in events {
+        if app.session.active().map(PathMenuSource::capture).as_ref() != Some(&source) {
+            break;
+        }
         apply(app, event);
     }
 }
+
+#[cfg(test)]
+mod index_tests;

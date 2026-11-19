@@ -319,7 +319,7 @@ fn thumb_clicks_pick_commands_and_targets() {
             |a, _| vec![select(&[a], Some(LayerPart::VectorMask))],
             |app, _, _| {
                 assert!(app.ui.vector_mask_target && !app.ui.mask_target);
-                assert_eq!(app.ui.selected_path.as_deref(), Some("layer"), "the Paths panel selects its path");
+                assert_eq!(app.ui.selected_path.as_ref().and_then(|p| p.name()), Some("layer"), "the Paths panel selects its path");
             },
         ),
         (

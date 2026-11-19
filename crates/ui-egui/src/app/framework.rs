@@ -86,11 +86,23 @@ pub struct Framework {
     pub dialogs: DialogHost,
     /// The per-open state each open parameter dialog's family needs when its answer comes back, by dialog key.
     pub captured: std::collections::BTreeMap<String, serde_json::Value>,
+    /// Keep the last rendered sources alive weakly between frames: a reopened document cannot
+    /// reuse their allocation address and accidentally recover an old panel's popup or rename state.
+    pub(crate) paths_source: Option<crate::state::PathMenuSource>,
+    pub(crate) symmetry_source: Option<crate::state::PathMenuSource>,
+    /// UI scopes never revisit an older snapshot's cached rename or popup state, even if a
+    /// document allocation address is reused after several switches.
+    pub(crate) paths_epoch: u64,
+    pub(crate) symmetry_epoch: u64,
+    /// Runtime-only path dialog owners. A saved index is valid only in its captured document snapshot.
+    pub(crate) path_dialog_targets: std::collections::BTreeMap<String, crate::canvas_tool_menu::pen_dialogs::Target>,
     /// The runtime's keymap overrides. The runtime rebuilds its keymap when the `Arc` changes, so
     /// it is replaced only when the bindings it carries change.
     overrides: Arc<Overrides>,
     /// The preferences revision `overrides` and `catalog` were last built at.
     overrides_rev: Option<u64>,
+    /// A selected path row owns its scoped keys; without one canvas fallbacks remain available.
+    overrides_path_selected: bool,
     /// The app's command catalog as of `overrides_rev`.
     catalog: Option<AppCatalog>,
     /// The rows `catalog` was built from, and its generation: the runtime rebuilds its keymap when the generation
@@ -270,8 +282,14 @@ impl Framework {
             lang,
             dialogs: DialogHost::new(),
             captured: Default::default(),
+            path_dialog_targets: Default::default(),
+            paths_source: None,
+            symmetry_source: None,
+            paths_epoch: 0,
+            symmetry_epoch: 0,
             overrides: Arc::new(Overrides::new()),
             overrides_rev: None,
+            overrides_path_selected: false,
             catalog: None,
             catalog_rows: Vec::new(),
             catalog_generation: 0,
@@ -476,11 +494,11 @@ impl Framework {
             .unwrap_or_else(|| id.as_str().to_owned())
     }
 
-    /// What the runtime's keymap was last built from: the preferences revision of the overrides and the catalog's
-    /// generation. They change at the start of the frame whose keymap follows them, so a surface that shows the
+    /// What the runtime's keymap was last built from: the preferences revision, catalog generation and path-row scope.
+    /// They change at the start of the frame whose keymap follows them, so a surface that shows the
     /// keymap's chords (the menu model) hashes them to rebuild in that frame.
-    pub(crate) fn keymap_inputs(&self) -> (Option<u64>, u64) {
-        (self.overrides_rev, self.catalog_generation)
+    pub(crate) fn keymap_inputs(&self) -> (Option<u64>, u64, bool) {
+        (self.overrides_rev, self.catalog_generation, self.overrides_path_selected)
     }
 
     /// Rebuilds the catalog and the runtime's keymap overrides at preferences revision `rev`. The
@@ -549,18 +567,24 @@ impl PhotocraftApp {
     /// runs them), the commands the canvas ran (`record_view_commands`, in `logic`) and whether a
     /// component refused its input.
     pub(crate) fn framework_before_input(&mut self, ctx: &egui::Context) {
-        // The catalog and the bindings come from walking the whole command table: only after a
-        // preferences change.
+        // Only preferences rebuild the full catalog. Path selection changes just refresh the
+        // scoped bindings, so choosing a row does not walk and compare every command definition.
         let rev = self.session.prefs.rev();
-        if self.framework.overrides_rev != Some(rev) {
-            let rows = crate::shortcut_dispatch::command_rows(self);
-            if !crate::shortcut_dispatch::same_rows(&self.framework.catalog_rows, &rows) {
-                self.framework.catalog_generation += 1;
-                self.framework.catalog_rows = rows.clone();
-            }
-            let catalog = crate::shortcut_dispatch::catalog(rows, self.framework.catalog_generation);
+        let path_selected = self.ui.selected_path.is_some();
+        if self.framework.overrides_rev != Some(rev) || self.framework.overrides_path_selected != path_selected {
+            let catalog = if self.framework.overrides_rev != Some(rev) {
+                let rows = crate::shortcut_dispatch::command_rows(self);
+                if !crate::shortcut_dispatch::same_rows(&self.framework.catalog_rows, &rows) {
+                    self.framework.catalog_generation += 1;
+                    self.framework.catalog_rows = rows.clone();
+                }
+                crate::shortcut_dispatch::catalog(rows, self.framework.catalog_generation)
+            } else {
+                self.framework.catalog.clone()
+            };
             let overrides = crate::shortcut_dispatch::overrides(self);
             self.framework.set_overrides(rev, catalog, overrides);
+            self.framework.overrides_path_selected = path_selected;
         }
         if self.framework.sync_theme(&mut self.session) {
             crate::prefs_ui::show_selected_theme(self, ctx);

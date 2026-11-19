@@ -20,6 +20,8 @@ pub struct DocState {
     /// Increments on every change; UIs re-render when it moves.
     pub revision: u64,
     pub saved_revision: u64,
+    /// Runtime invalidation token for saved-path positions; never restored from history.
+    saved_paths_revision: u64,
     /// Native save cache shared with this document's workers, released with the editing state.
     pub pcraft_cache: photocraft_io::PcraftExportCache,
     /// How much of `revision` came from view-only changes (channel eyes, targeting): pixel caches can ignore those.
@@ -114,6 +116,7 @@ impl DocState {
             source_read_only: false,
             revision: 1,
             saved_revision: 1,
+            saved_paths_revision: 0,
             pcraft_cache: Default::default(),
             view_revision: 0,
             last_damage: None,
@@ -170,6 +173,16 @@ impl DocState {
             self.saved_revision = self.revision;
         }
     }
+    /// Changes whenever saved-path positions may refer to different paths. UIs must discard
+    /// cached indices when it changes, even if a compound command ends with the same path count.
+    pub fn saved_paths_revision(&self) -> u64 {
+        self.saved_paths_revision
+    }
+
+    pub(crate) fn invalidate_saved_path_indices(&mut self) {
+        self.saved_paths_revision = self.saved_paths_revision.wrapping_add(1);
+    }
+
     /// The targeted layers, as history stores them with each state.
     pub(crate) fn layer_target(&self) -> LayerTarget {
         LayerTarget { active: self.active_layer, selected: self.selected_layers.clone() }

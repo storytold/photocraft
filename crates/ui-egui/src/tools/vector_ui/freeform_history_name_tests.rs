@@ -222,7 +222,7 @@ fn control_pointer_strokes_commit_only_on_release_with_the_freeform_label() {
         }
         if mode == VectorMode::Path {
             // A further stroke starting at the selected open path's endpoint has the same name.
-            assert_eq!(app.ui.selected_path.as_deref(), Some("work"));
+            assert_eq!(app.ui.selected_path.as_ref().and_then(|p| p.name()), Some("work"));
             let n = steps(&app);
             call(&mut app, json!({"events": [{"kind": "down", "x": 110, "y": 100}, {"kind": "move", "x": 150, "y": 150}]}));
             assert_eq!(steps(&app), n);

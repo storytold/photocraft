@@ -1,25 +1,33 @@
-use super::overlay::selected_saved_path_index;
-use super::paths_panel::{PathEntry, PathRow, path_rows};
+use super::paths_panel::{PathRow, path_rows};
 use super::pen::pen_commit;
+use super::selected_saved_path_index;
 use super::{Affine, Document, LayerContent, Path, PhotocraftApp, Tool, Value, json};
 use crate::direct_select::PathRef;
+use crate::state::PathSelection;
 use craft::behavior::kurbo::Point as EditPoint;
 use craft::draw::ui::pen::{EditPath, EditSubpath, Knot as EditKnot};
 
 /// The path that path commands act on without a name: the one selected in the Paths panel, else
 /// the work path while it is shown (not after Make Selection hid it, #6079), else the selected
 /// layer's shape path or vector mask; `None` when there's none.
-pub fn active_path_name(app: &PhotocraftApp) -> Option<String> {
+pub fn active_path_name(app: &PhotocraftApp) -> Option<PathSelection> {
     let st = app.session.active()?;
     let rows = path_rows(&st.doc, st.active_layer);
-    let key = |r: &PathEntry| match r.kind {
-        PathRow::Work => "work".to_string(),
-        PathRow::Layer => "layer".to_string(),
-        PathRow::Saved => r.name.clone(),
-    };
-    let selected = app.ui.selected_path.as_deref().filter(|s| rows.iter().any(|r| key(r) == *s)).map(str::to_string);
-    let work = rows.iter().find(|r| r.kind == PathRow::Work).filter(|_| work_path_shown(app)).map(key);
-    selected.or(work).or_else(|| rows.iter().find(|r| r.kind == PathRow::Layer).map(key))
+    if let Some(sel) = &app.ui.selected_path {
+        if let Some(index) = sel.saved_index(&st.doc) {
+            return Some(PathSelection::Saved { index });
+        }
+        if sel.name() == Some("work") && st.doc.work_path.is_some() {
+            return Some(sel.clone());
+        }
+        if sel.name() == Some("layer") && rows.iter().any(|r| r.kind == PathRow::Layer) {
+            return Some(sel.clone());
+        }
+    }
+    if st.doc.work_path.is_some() && work_path_shown(app) {
+        return Some("work".into());
+    }
+    rows.iter().any(|r| r.kind == PathRow::Layer).then(|| "layer".into())
 }
 
 /// The commands that create a fill or adjustment layer and take a `"path"` as its vector mask.
@@ -28,15 +36,13 @@ pub fn takes_path_mask(id: &str) -> bool {
 }
 
 /// The work or saved path explicitly selected in the Paths panel (not a layer's own path).
-pub fn selected_document_path(app: &PhotocraftApp) -> Option<String> {
+pub fn selected_document_path(app: &PhotocraftApp) -> Option<PathSelection> {
     let st = app.session.active()?;
-    let sel = app.ui.selected_path.as_deref()?;
-    let listed = path_rows(&st.doc, st.active_layer).iter().any(|r| match r.kind {
-        PathRow::Work => sel == "work",
-        PathRow::Saved => r.name == sel,
-        PathRow::Layer => false,
-    });
-    listed.then(|| sel.to_string())
+    let sel = app.ui.selected_path.as_ref()?;
+    if let Some(index) = sel.saved_index(&st.doc) {
+        return Some(PathSelection::Saved { index });
+    }
+    (sel.name() == Some("work") && st.doc.work_path.is_some()).then(|| sel.clone())
 }
 
 /// New fill and adjustment layers take the path selected in the Paths panel as their vector mask,
@@ -48,6 +54,8 @@ pub fn with_active_path(app: &PhotocraftApp, id: &str, params: Value) -> Value {
         return params;
     }
     let Some(sel) = selected_document_path(app) else { return params };
+    let Some(path) = app.session.active().and_then(|st| sel.path(&st.doc)) else { return params };
+    let sel = sel.name().map(|name| json!(name)).unwrap_or_else(|| photocraft_engine::vector_cmds::path_json(path));
     match params {
         Value::Object(mut m) => {
             m.insert("path".into(), json!(sel));
@@ -69,9 +77,8 @@ pub fn path_to_selection(app: &mut PhotocraftApp, params: Value) -> Result<Value
     }
     let name = active_path_name(app)
         .ok_or_else(|| tl!("No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.").to_string())?;
-    let mut p = params.as_object().cloned().unwrap_or_default();
-    p.insert("name".into(), json!(name));
-    let r = app.run("path.toSelection", Value::Object(p))?;
+    let p = params.as_object().cloned().unwrap_or_default();
+    let r = app.run("path.toSelection", name.with_params(Value::Object(p)))?;
     deselect_loaded_path(app, &name);
     Ok(r)
 }
@@ -92,8 +99,8 @@ pub fn make_shape(app: &mut PhotocraftApp) -> Result<Value, String> {
     }
     let name =
         shape_source_path(app).ok_or_else(|| tl!("No path to make a shape from: draw one with the Pen tool or select one in the Paths panel.").to_string())?;
-    let r = app.run("path.toShape", json!({"name": name, "fill": super::shapes::fill_param(app), "stroke": super::shapes::stroke_param(app)}))?;
-    if name == "work" && app.ui.selected_path.as_deref() == Some("work") {
+    let r = app.run("path.toShape", name.with_params(json!({"fill": super::shapes::fill_param(app), "stroke": super::shapes::stroke_param(app)})))?;
+    if name == "work" && app.ui.selected_path.as_ref().and_then(|p| p.name()) == Some("work") {
         app.ui.selected_path = None;
     }
     Ok(r)
@@ -101,8 +108,8 @@ pub fn make_shape(app: &mut PhotocraftApp) -> Result<Value, String> {
 
 /// The path Make Shape makes a shape from without a draft: [`active_path_name`] when it is the
 /// Work Path or a saved path, never a layer's own path (that would duplicate the shape or mask).
-pub fn shape_source_path(app: &PhotocraftApp) -> Option<String> {
-    active_path_name(app).filter(|n| n != "layer")
+pub fn shape_source_path(app: &PhotocraftApp) -> Option<PathSelection> {
+    active_path_name(app).filter(|n| n.name() != Some("layer"))
 }
 
 /// After the Pen or Path Selection tool made a selection from the path `name` (⌘↩, the canvas
@@ -110,8 +117,9 @@ pub fn shape_source_path(app: &PhotocraftApp) -> Option<String> {
 /// path itself stays (#6079). The Work Path is hidden too when a saved path was loaded, so no
 /// path is the target path afterwards. A shape layer's path or vector mask (`"layer"`) stays the active
 /// path, so layer targeting is unchanged.
-pub(crate) fn deselect_loaded_path(app: &mut PhotocraftApp, name: &str) {
-    if name == "layer" {
+pub(crate) fn deselect_loaded_path(app: &mut PhotocraftApp, name: impl Into<PathSelection>) {
+    let name = name.into();
+    if name.name() == Some("layer") {
         return;
     }
     app.ui.selected_path = None;
@@ -139,7 +147,7 @@ pub(crate) fn work_path_shown(app: &PhotocraftApp) -> bool {
 /// selection belongs to the active document only.
 pub(crate) fn work_path_shown_in(app: &PhotocraftApp, doc: &Document) -> bool {
     let active = app.session.active().is_some_and(|st| st.doc.id == doc.id);
-    if active && app.ui.selected_path.as_deref() == Some("work") {
+    if active && app.ui.selected_path.as_ref().and_then(|p| p.name()) == Some("work") {
         return true;
     }
     let Some((id, hidden)) = &app.ui.hidden_work_path else { return true };
@@ -151,13 +159,10 @@ pub(crate) fn work_path_shown_in(app: &PhotocraftApp, doc: &Document) -> bool {
 
 /// The work or saved path explicitly selected in the Paths panel, by name, and its geometry. Only
 /// such a selection overrides the active layer's path.
-pub(super) fn selected_document_geometry(app: &PhotocraftApp) -> Option<(String, &Path)> {
-    let st = app.session.active()?;
-    match app.ui.selected_path.as_deref()? {
-        "work" => st.doc.work_path.as_ref().map(|p| ("work".into(), p)),
-        "layer" => None,
-        name => st.doc.paths.iter().find(|p| p.name == name).map(|p| (p.name.clone(), &p.path)),
-    }
+pub(super) fn selected_document_geometry(app: &PhotocraftApp) -> Option<(PathSelection, &Path)> {
+    let sel = selected_document_path(app)?;
+    let path = sel.path(&app.session.active()?.doc)?;
+    Some((sel, path))
 }
 
 /// The targeted vector mask of the active layer, if the Layers panel targets it.
@@ -241,10 +246,9 @@ pub(crate) fn delete_key_edits_path(app: &PhotocraftApp) -> Option<(&'static str
         return Some(("path.deleteSegment", params));
     }
     (!holds || (ds.anchors.is_empty() && ds.segment.is_none())).then_some(())?;
-    let st = app.session.active()?;
     match target_path(app)?.0 {
         PathRef::Work => Some(("path.delete", json!({"name": "work"}))),
-        PathRef::Saved(i) => Some(("path.delete", json!({"name": st.doc.paths.get(i)?.name}))),
+        PathRef::Saved(i) => Some(("path.delete", json!({"pathIndex": i}))),
         // As the Paths panel's trash does with a vector mask's row.
         PathRef::Layer(id) if targeted_vector_mask_id(app) == Some(id) => Some(("layer.vectorMask.delete", json!({"layer": id}))),
         _ => None,

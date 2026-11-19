@@ -4,6 +4,7 @@
 //! The menu is state in `UiState::canvas_tool_menu`; [`run`] shows it on the framework's menu layer
 //! every pass.
 
+use crate::state::{PathMenuSource, PathSelection};
 use craft::behavior::IconId;
 use craft::draw::ui::crop::{CROP_RATIOS, CROP_SIZES, CropBarWords, CropPresetChoice, CropRatio, CropSettings, CropSizeFields};
 use craft::keymap::Mods;
@@ -83,7 +84,10 @@ pub struct CanvasToolMenu {
     #[serde(default)]
     pub has_path: bool,
     #[serde(default)]
-    pub path_name: Option<String>,
+    pub path_name: Option<PathSelection>,
+    /// Runtime source of a saved index; deserialized menus cannot reuse a stale slot.
+    #[serde(skip)]
+    pub path_source: Option<PathMenuSource>,
     /// The selected tool when Space holds the Hand over it (`tool` is then the Hand): the menu
     /// closes when that tool changes (#11271).
     #[serde(default)]
@@ -1056,8 +1060,24 @@ pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
     }
 }
 
+fn path_menu_source(app: &PhotocraftApp) -> Option<PathMenuSource> {
+    app.session.active().map(PathMenuSource::capture)
+}
+
+fn path_menu_current(app: &PhotocraftApp, menu: &CanvasToolMenu) -> bool {
+    !matches!(menu.kind, MenuKind::Tool)
+        || !(path_menu(menu.tool) || shape_tool_menu(menu.tool))
+        || !(menu.has_path || menu.path_name.is_some() || menu.point.is_some())
+        // A pending draft may be cancelled by reconciliation. Its menu must then refuse,
+        // rather than applying the draft's action to the surviving Work Path.
+        || (menu.path_source.is_some() && menu.path_source == path_menu_source(app))
+}
+
 /// Is `command` one of the open menu's rows, and enabled?
 pub fn available(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> bool {
+    if !path_menu_current(app, menu) {
+        return false;
+    }
     (is_point(menu, command) && point_current(app, menu))
         || ((rows(menu).iter().flatten().any(|(_, id)| *id == command) || is_spelling(menu, command) || is_crop(app, menu, command))
             && entry_enabled(app, menu, command))
@@ -1332,17 +1352,26 @@ pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) 
     });
     let shape = shape_layer.is_some();
     let can_mask = layer.is_some_and(|l| !matches!(l.content, LayerContent::Shape(_))) && !locked;
-    let saved = menu.path_name.as_deref().is_some_and(|n| n != "work" && n != "layer");
+    let saved = menu.path_name.as_ref().is_some_and(|n| n.name() != Some("work") && n.name() != Some("layer"));
     let has_path = menu.has_path;
     let pending = pen_pending(app);
-    let pending_layer = pending && (app.ui.tool_options.vector_mode == craft::draw::ui::VectorMode::Shape || app.ui.vector_mask_target);
+    let pending_layer = pending && crate::vector_ui::pen_draft_targets_layer(app);
     match command {
         "layer.vectorMask.fromPath" => has_path && can_mask && !pending_layer,
-        "path.delete" => has_path && !pending_layer && (pending || menu.path_name.as_deref() != Some("layer")),
+        "path.delete" => has_path && !pending_layer && (pending || menu.path_name.as_ref().and_then(|p| p.name()) != Some("layer")),
         "edit.defineCustomShape" | "path.toSelection" | "path.transform" | "paint.symmetryFromPath" => has_path,
         "view.newGuidesFromShape" => shape && !pending,
         "path.fill" | "path.stroke" => has_path && can_paint && !pending_layer,
-        "path.clippingPath.set" => saved && !pending,
+        "path.clippingPath.set" => {
+            saved
+                && !pending
+                && menu
+                    .path_name
+                    .as_ref()
+                    .and_then(|p| p.saved_index(&st.doc))
+                    .and_then(|i| st.doc.paths.get(i))
+                    .is_some_and(|path| st.doc.paths.iter().filter(|p| p.name == path.name).take(2).count() == 1)
+        }
         "layer.combineShapes.unite"
         | "layer.combineShapes.subtractFrontShape"
         | "layer.combineShapes.intersectShapeAreas"
@@ -1389,6 +1418,7 @@ pub fn open(app: &mut PhotocraftApp, tool: Tool, kind: MenuKind, at: Pos2, doc: 
         has_selection: false,
         has_path: false,
         path_name: None,
+        path_source: None,
         under: None,
         sampler: None,
         sampler_at: None,
@@ -1486,6 +1516,7 @@ pub fn open(app: &mut PhotocraftApp, tool: Tool, kind: MenuKind, at: Pos2, doc: 
 fn capture(app: &mut PhotocraftApp, menu: &mut CanvasToolMenu, doc: [f64; 2], point: Option<(PathRef, BezierHit)>) {
     menu.has_selection = app.session.active().is_some_and(|s| s.doc.selection.is_some());
     menu.path_name = crate::vector_ui::active_path_name(app);
+    menu.path_source = path_menu_source(app);
     menu.has_path = menu.path_name.is_some() || pen_pending(app);
     if point_menu(menu.tool) && menu.has_path {
         menu.point = point.and_then(|(target, hit)| point_at(app, target, hit));
@@ -1613,6 +1644,21 @@ fn choose_type(app: &mut PhotocraftApp, ctx: &Context, command: &str) -> Result<
     Ok(())
 }
 
+/// Commit a draft to its captured owner, never to the current mode's default path.
+fn commit_pending_pen_target(app: &mut PhotocraftApp) -> Result<Option<PathSelection>, String> {
+    if !app.ui.pen.as_ref().is_some_and(|p| p.draft.knots.len() >= 2) {
+        return Ok(None);
+    }
+    // Reconciliation may cancel stale drafts; this action must refuse rather than target another path.
+    if !crate::vector_ui::pen_draft_is_current(app) {
+        return Err("Pen draft target is stale; no path was changed".into());
+    }
+    if !crate::vector_ui::pen_commit(app, false) {
+        return Err(app.ui.status.clone());
+    }
+    crate::vector_ui::active_path_name(app).map(Some).ok_or_else(|| "No path is available for this action".into())
+}
+
 fn choose_pen(app: &mut PhotocraftApp, ctx: &Context, menu: &CanvasToolMenu, command: &str) -> Result<(), String> {
     if command == "select.isolateLayers" {
         crate::menus::invoke(app, ctx, command, json!({}))?;
@@ -1622,19 +1668,13 @@ fn choose_pen(app: &mut PhotocraftApp, ctx: &Context, menu: &CanvasToolMenu, com
         app.run(command, json!({}))?;
         return Ok(());
     }
-    let pending = pen_pending(app);
-    let pending_layer = pending && (app.ui.tool_options.vector_mode == craft::draw::ui::VectorMode::Shape || app.ui.vector_mask_target);
-    if pending && !crate::vector_ui::pen_commit(app, false) {
-        return Err(app.ui.status.clone());
-    }
-    let name = if pending { Some(if pending_layer { "layer" } else { "work" }.to_string()) } else { menu.path_name.clone() }
-        .ok_or_else(|| "No path is available for this action".to_string())?;
+    let name = commit_pending_pen_target(app)?.or_else(|| menu.path_name.clone()).ok_or_else(|| "No path is available for this action".to_string())?;
     match command {
         "edit.defineCustomShape" | "path.toSelection" | "path.fill" | "path.stroke" | "path.clippingPath.set" | "path.transform" => {
             pen_dialogs::open(app, command, &name);
         }
         _ => {
-            app.run(command, json!({"name": name}))?;
+            app.run(command, name.params())?;
         }
     }
     Ok(())
@@ -1646,7 +1686,8 @@ fn choose_pen(app: &mut PhotocraftApp, ctx: &Context, menu: &CanvasToolMenu, com
 /// text shape, which a Convert or its Undo changes while the menu is open (#12043 review).
 pub fn close_stale(app: &mut PhotocraftApp) {
     let Some(menu) = app.ui.canvas_tool_menu.as_ref() else { return };
-    let stale = app.ui.tool != menu.under.unwrap_or(menu.tool)
+    let stale = (menu.point.is_none() && !path_menu_current(app, menu))
+        || app.ui.tool != menu.under.unwrap_or(menu.tool)
         || match &menu.kind {
             MenuKind::TypeEdit { .. } => app.ui.text_edit.is_none(),
             MenuKind::TypeLayer { .. } => app.ui.text_edit.is_some(),
@@ -1714,7 +1755,7 @@ pub fn entries(app: &PhotocraftApp, menu: &CanvasToolMenu) -> Vec<Entry<String>>
             "Rasterize Vector Mask" => tl!("Rasterize Vector Mask"),
             key => tl!(key),
         };
-        out.push(Entry::new(command.to_string(), text.to_string()).enabled(entry_enabled(app, menu, command)).checked(mode_checked(app, menu, command)));
+        out.push(Entry::new(command.to_string(), text.to_string()).enabled(available(app, menu, command)).checked(mode_checked(app, menu, command)));
     }
     out
 }

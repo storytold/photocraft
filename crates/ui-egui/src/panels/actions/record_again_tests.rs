@@ -84,6 +84,39 @@ fn sizing() -> Harness<'static, Box<PhotocraftApp>> {
     harness("image.imageSize", json!({"width":4,"height":3,"resample":"nearest"}))
 }
 
+#[test]
+fn indexed_path_record_again_keeps_the_recorded_target() {
+    for params in [json!({"pathIndex":1,"translateX":2.0}), json!({"pathIndex":1,"matrix":[1,0,0,1,2,0]})] {
+        let mut h = harness("path.transform", params);
+        for (name, x) in [("First", 1), ("Second", 4)] {
+            h.state_mut().run("path.set", json!({"name":name,"path":{"subpaths":[{"knots":[[x,1],[x+1,2]]}]}})).unwrap();
+        }
+        for p in &mut std::sync::Arc::make_mut(&mut h.state_mut().session.active_mut().unwrap().doc).paths {
+            p.name = "Same".into();
+        }
+        h.state_mut().sync_views();
+        h.state_mut().ui.selected_path = Some(crate::state::PathSelection::Saved { index: 0 });
+        let before = h.state().session.active().unwrap().doc.paths.clone();
+        let dialog = open(&mut h);
+        assert_eq!(number(&h, dialog, "pathIndex"), Some(1.0));
+        let authorized = crate::control::dialogs::hosted_command(h.state(), dialog).unwrap();
+        assert_eq!(authorized.1["pathIndex"].as_f64(), Some(1.0));
+        confirm(&mut h, dialog).unwrap();
+        assert_eq!(h.state().session.active().unwrap().doc.paths[0], before[0]);
+        assert_eq!(
+            h.state().session.active().unwrap().doc.paths[1].path.subpaths[0].knots[0].anchor.x,
+            6.0,
+            "params={:?}; status={}",
+            authorized.1,
+            h.state().ui.status
+        );
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        assert_eq!(h.state().session.active().unwrap().doc.paths, before);
+        h.state_mut().run("edit.redo", json!({})).unwrap();
+        assert_eq!(h.state().session.active().unwrap().doc.paths[1].path.subpaths[0].knots[0].anchor.x, 6.0);
+    }
+}
+
 /// Cancel preserves the step and document; OK runs only that step and stores its new settings.
 #[test]
 fn seeded_editor_cancels_or_updates_only_the_original_step() {
@@ -254,5 +287,62 @@ fn filter_and_adjustment_previews_retain_permissions_before_evaluation() {
         let answer = confirm(&mut h, dialog);
         assert!(answer.is_err(), "OK with the changed settings is refused: {command}");
         assert_eq!(h.state().session.actions.list, original);
+    }
+}
+
+#[test]
+fn recorded_matrix_numeric_edit_changes_translation_and_preserves_shear() {
+    let mut h = harness("path.transform", json!({"pathIndex":0,"matrix":[1,0,0.5,1,2,0],"translateX":-20}));
+    h.state_mut().run("path.set", json!({"name":"A","path":{"subpaths":[{"knots":[[4,2],[5,3]]}]}})).unwrap();
+    let dialog = open(&mut h);
+    // Legacy actions can contain shadowed scalar values. The opening rows show the live matrix.
+    assert_eq!(number(&h, dialog, "translateX"), Some(2.0));
+    assert_eq!(set_field(&mut h, dialog, "translateX", json!(8.0))["ok"], true);
+    let (_, authorized) = crate::control::dialogs::hosted_command(h.state(), dialog).unwrap();
+    assert_eq!(authorized["matrix"][4].as_f64(), Some(8.0));
+    confirm(&mut h, dialog).unwrap();
+    let st = h.state().session.active().unwrap();
+    assert_eq!(st.doc.paths[0].path.subpaths[0].knots[0].anchor.x, 13.0);
+    let recorded = &h.state().session.actions.list.action(0).unwrap().steps[0].params;
+    assert_eq!(recorded["matrix"][2].as_f64(), Some(0.5));
+    assert_eq!(recorded["matrix"][4].as_f64(), Some(8.0));
+}
+
+#[test]
+fn recorded_distortions_hide_scalar_controls_and_replay_the_original_geometry() {
+    let mesh = photocraft_geom::warp::BezierMesh::identity([10.0, 10.0, 30.0, 20.0], 1, 1).map_points(|[x, y]| [x + 1.0, y]);
+    for params in [
+        json!({"pathIndex":0,"quad":[[12,8],[40,5],[45,30],[5,25]]}),
+        json!({"pathIndex":0,"warp":{"style":"arc","bend":50,"bounds":[10,10,30,20]},"translateX":80}),
+        json!({"pathIndex":0,"style":"arc","bend":50}),
+        json!({"pathIndex":0,"mesh":mesh}),
+    ] {
+        let mut h = harness("path.transform", params.clone());
+        h.state_mut().run("path.set", json!({"name":"A","path":{"subpaths":[{"closed":true,"knots":[[10,10],[30,10],[30,20],[10,20]]}]}})).unwrap();
+        let before = h.state().session.active().unwrap().doc.paths.clone();
+        let dialog = open(&mut h);
+        for field in ["translateX", "translateY", "scaleX", "scaleY", "angle"] {
+            assert_eq!(set_field(&mut h, dialog, field, json!(80))["ok"], false, "{field} accepted an ineffective edit");
+        }
+        assert_eq!(crate::control::dialogs::hosted_command(h.state(), dialog).unwrap().1, params);
+        confirm(&mut h, dialog).unwrap();
+        let recorded = h.state().session.actions.list.action(0).unwrap().steps[0].clone();
+        assert_eq!(recorded.params, params);
+        let after = h.state().session.active().unwrap().doc.paths.clone();
+        assert_ne!(before, after);
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        assert_eq!(h.state().session.active().unwrap().doc.paths, before);
+
+        let mut playback = Action::new("Replay", vec![recorded]);
+        playback.dialogs.insert(0);
+        h.state_mut().session.actions.list.push(playback).unwrap();
+        let reply = h.state_mut().run("actions.play", json!({"action":"Replay"})).unwrap();
+        assert!(reply.get("paused").is_some(), "{reply}");
+        h.run_steps(3);
+        let paused = h.state().framework.dialogs.stack().top().unwrap();
+        assert_eq!(crate::control::dialogs::hosted_command(h.state(), paused).unwrap().1, params);
+        confirm(&mut h, paused).unwrap();
+        assert_eq!(h.state().session.active().unwrap().doc.paths, after);
+        assert_eq!(h.state().session.actions.playing, 0);
     }
 }

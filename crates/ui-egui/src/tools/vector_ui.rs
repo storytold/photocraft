@@ -128,7 +128,7 @@ pub struct Resumed {
     /// The document the path belongs to.
     pub doc: u64,
     /// A document path's name ("work" or a saved path's), or "layer" for `layer`'s.
-    pub path: String,
+    pub path: crate::state::PathSelection,
     /// The shape layer (Shape mode) or targeted vector mask whose path it is.
     pub layer: Option<u64>,
     /// The subpath's index in the path.
@@ -258,7 +258,7 @@ enum PenTarget {
     VectorMask(u64),
     /// The work path or a saved path; `append` adds the draft as a subpath (#4721).
     Path {
-        name: String,
+        name: crate::state::PathSelection,
         append: bool,
     },
 }
@@ -291,6 +291,16 @@ pub(crate) fn capture_pen_owner(app: &PhotocraftApp) -> Option<PenOwner> {
     })
 }
 
+/// Explicit menu actions must not continue on another path when reconciliation cancels a draft.
+pub(crate) fn pen_draft_is_current(app: &PhotocraftApp) -> bool {
+    app.ui.pen.as_ref().and_then(|pen| pen.owner.as_ref()).is_some_and(|owner| owner.valid(app))
+}
+
+/// Menu restrictions follow the captured draft target even after tool options change.
+pub(crate) fn pen_draft_targets_layer(app: &PhotocraftApp) -> bool {
+    app.ui.pen.as_ref().and_then(|pen| pen.owner.as_ref()).is_some_and(|owner| matches!(owner.target, PenTarget::Shape { .. } | PenTarget::VectorMask(_)))
+}
+
 impl PenOwner {
     fn valid(&self, app: &PhotocraftApp) -> bool {
         app.session.active().is_some_and(|st| st.doc.id == self.document && st.revision == self.revision && self.source.ptr_eq(&Arc::downgrade(&st.doc)))
@@ -305,7 +315,7 @@ pub(crate) struct VectorOwner {
     document: Weak<Document>,
     revision: u64,
     layer: Option<photocraft_doc::LayerId>,
-    selected_path: Option<String>,
+    selected_path: Option<crate::state::PathSelection>,
     vector_mask: bool,
     mode: VectorMode,
     tool: Tool,
@@ -373,6 +383,18 @@ pub(crate) fn cancel_stale_pen(app: &mut PhotocraftApp) -> bool {
             .position(|st| st.doc.id == owner.document && st.revision == owner.revision && owner.source.ptr_eq(&Arc::downgrade(&st.doc)));
         if let Some(index) = index {
             let active = app.session.active_index();
+            // Drain may run before sync_views observes a tab switch. Validate the selection
+            // before saving it and before the temporary switch changes the activation again.
+            // A legacy name unique to the destination can already have been explicitly selected.
+            let destination_only_name = app.ui.selected_path.as_ref().is_some_and(|selection| {
+                selection.name().is_some_and(|name| {
+                    app.session.active().is_some_and(|st| selection.saved_index(&st.doc).is_some())
+                        && app.path_document.as_ref().and_then(|old| old.source.upgrade()).is_some_and(|doc| doc.paths.iter().all(|path| path.name != name))
+                })
+            });
+            if !destination_only_name {
+                app.reconcile_path_selection(crate::PathDocument::capture(&app.session).as_ref());
+            }
             let saved_ui = app.ui.clone();
             let draft = app.ui.pen.take();
             app.session.set_active(index);
@@ -387,7 +409,7 @@ pub(crate) fn cancel_stale_pen(app: &mut PhotocraftApp) -> bool {
             // The temporary source commit ran sync_views on that document. Rebind its runtime
             // tracker before restoring the destination UI, so the next frame cannot clear
             // an unrelated saved-path selection in the destination tab.
-            app.path_document = app.session.active().map(|st| (st.doc.id, st.revision, Arc::downgrade(&st.doc)));
+            app.path_document = crate::PathDocument::capture(&app.session);
             app.ui = saved_ui;
             app.ui.pen = if result.is_ok() { None } else { failed };
             if result.is_ok() && app.ui.direct_selection.target == Some(crate::direct_select::PathRef::Pen) {

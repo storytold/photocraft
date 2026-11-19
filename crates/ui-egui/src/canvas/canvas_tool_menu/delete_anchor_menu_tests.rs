@@ -143,6 +143,59 @@ fn an_expired_point_entry_is_drawn_disabled() {
     assert!(h.get_by_label("Delete Anchor Point").accesskit_node().is_disabled(), "disabled once the path is edited");
 }
 
+/// Retained point menus must disable their ordinary rows too, not merely reject the pick.
+#[test]
+fn expired_point_menus_disable_ordinary_rows_after_edits_undo_and_redo() {
+    for tool in [Tool::DeleteAnchorPoint, Tool::ConvertPoint] {
+        let mut h = right_clicked(tool, [300.0, 300.0]);
+        for (command, params) in
+            [("path.addAnchor", json!({"pathIndex": 0, "subpath": 0, "knot": 0, "t": 0.5})), ("edit.undo", json!({})), ("edit.redo", json!({}))]
+        {
+            assert!(!h.get_by_label("Make Selection…").accesskit_node().is_disabled());
+            h.state_mut().run(command, params).unwrap();
+            let doc = h.state().session.active().unwrap().doc.clone();
+            let n = steps(h.state());
+            h.run();
+            assert!(h.state().ui.canvas_tool_menu.is_some(), "the expired point menu stays visible");
+            for label in ["Delete Anchor Point", "Delete Path", "Define Custom Shape…", "Make Selection…", "Fill Path…", "Stroke Path…"] {
+                assert!(h.get_by_label(label).accesskit_node().is_disabled(), "{tool:?}: {label} must be disabled after {command}");
+            }
+            let ctx = h.ctx.clone();
+            super::choose(h.state_mut(), &ctx, "path.toSelection");
+            assert!(h.state().framework.dialogs.is_empty(), "a direct stale pick cannot open a dialog");
+            assert_eq!(h.state().session.active().unwrap().doc.as_ref(), doc.as_ref());
+            assert_eq!(steps(h.state()), n);
+            h.run_steps(2);
+            let p = screen_of(h.state(), [300.0, 300.0]);
+            right_click(&mut h, p, Modifiers::NONE);
+        }
+        // A newly opened menu uses the current source and its ordinary actions still work.
+        assert!(!h.get_by_label("Make Selection…").accesskit_node().is_disabled());
+        h.get_by_label("Make Selection…").click();
+        h.run_steps(2);
+        assert!(
+            h.state()
+                .framework
+                .dialogs
+                .get::<craft::ui::patterns::form_dialogs::HostedParamDialog>()
+                .is_some_and(|d| craft::ui::dialog::StackDialog::key(d) == Some("path.toSelection"))
+        );
+    }
+}
+
+#[test]
+#[ignore = "offscreen visual evidence; requires a wgpu adapter"]
+fn expired_point_menu_visual() {
+    let output = std::env::var_os("PHOTOCRAFT_PEN_VISUAL_DIR").map(std::path::PathBuf::from).unwrap_or_else(|| "log/path-menu-visual".into());
+    std::fs::create_dir_all(&output).unwrap();
+    let mut h = right_clicked(Tool::DeleteAnchorPoint, [300.0, 300.0]);
+    h.render().unwrap().save(output.join("point-menu-current.png")).unwrap();
+    h.state_mut().run("path.addAnchor", json!({"pathIndex": 0, "subpath": 0, "knot": 0, "t": 0.5})).unwrap();
+    h.run();
+    h.render().unwrap().save(output.join("point-menu-expired.png")).unwrap();
+    assert!(h.get_by_label("Make Selection…").accesskit_node().is_disabled());
+}
+
 /// A shape with only its own position lock is ignored by the anchor tools' click (#12730, #12825),
 /// so the menu offers no point entry on its corner either: the rest of the menu is as before.
 #[test]

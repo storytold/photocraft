@@ -153,7 +153,7 @@ fn clicking_the_vector_mask_targets_it_for_the_path_tools() {
     let ctx = app.ctx().clone();
     click_row(&mut app, &ctx, masked, Some(LayerPart::VectorMask));
     assert!(app.ui.vector_mask_target && !app.ui.mask_target);
-    assert_eq!(app.ui.selected_path.as_deref(), Some("layer"), "the Paths panel selects its path");
+    assert_eq!(app.ui.selected_path.as_ref().and_then(|p| p.name()), Some("layer"), "the Paths panel selects its path");
     assert_eq!(crate::canvas::paint_target(&app), json!("pixels"));
     // Path Selection moves the vector mask.
     crate::vector_ui::path_selection_finish(&mut app, [30.0, 30.0], [35.0, 32.0]);

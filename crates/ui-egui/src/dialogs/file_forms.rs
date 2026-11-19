@@ -162,7 +162,24 @@ pub(crate) fn paths_to_file_rows(app: &PhotocraftApp) -> Vec<Param> {
     let fallback = if selectable.len() > 1 { "all" } else { "documentBounds" };
     // Opens on the Paths panel's selected row (#13777). A shape layer's path ("layer") is not an entry
     // yet, and a row the document no longer has falls back to All Paths (Document Bounds without paths).
-    let selected = app.ui.selected_path.as_deref().filter(|s| *s != "layer" && selectable.iter().any(|n| n == s)).unwrap_or(fallback).to_string();
+    let selected = app
+        .ui
+        .selected_path
+        .as_ref()
+        .and_then(|target| {
+            if target.name() == Some("work") {
+                return Some("work");
+            }
+            let doc = &app.session.active()?.doc;
+            let index = target.saved_index(doc)?;
+            let name = &doc.paths.get(index)?.name;
+            // The exporter takes names. Ambiguous or reserved names must not select a different path.
+            (!matches!(name.as_str(), "all" | "work" | "layer" | "documentBounds") && doc.paths.iter().filter(|p| p.name == *name).count() == 1)
+                .then_some(name.as_str())
+        })
+        .filter(|s| selectable.iter().any(|n| n == s))
+        .unwrap_or(fallback)
+        .to_string();
     // The choice is not remembered between openings (#13777).
     vec![
         Param::new("path", tl!("Path"), ParamKind::text(format!("{dir}/{stem}.ai"))),

@@ -190,6 +190,8 @@ fn select_snapshot(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(())
     })?;
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
+    // Snapshot restoration can replace saved paths without changing their count.
+    st.invalidate_saved_path_indices();
     if st.active_layer == snap.layers.active {
         st.selected_layers.clone_from(&snap.layers.selected);
         crate::fix_selection(st);

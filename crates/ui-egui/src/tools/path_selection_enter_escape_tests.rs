@@ -74,7 +74,7 @@ fn escape_deselects_the_components_and_keeps_the_path_targeted() {
     let (before, n) = (path_1(&app), steps(&app));
     press(&mut app, Key::Escape, Modifiers::NONE);
     nothing_selected(&app);
-    assert_eq!(app.ui.selected_path.as_deref(), Some("Path 1"));
+    assert_eq!(app.ui.selected_path.as_ref().and_then(|p| p.name()), Some("Path 1"));
     assert!(active_paths(&app).iter().any(|(r, _)| *r == PathRef::Saved(0)), "its outline stays");
     assert_eq!(path_1(&app), before);
     assert_eq!(steps(&app), n, "Esc adds no History step");
@@ -112,7 +112,7 @@ fn shift_or_alt_with_enter_or_escape_keeps_the_components_and_the_path() {
             let mut app = app();
             press(&mut app, key, modifiers);
             assert!(crate::path_components::selected(&app).is_some(), "{key:?} {modifiers:?}");
-            assert_eq!(app.ui.selected_path.as_deref(), Some("Path 1"), "{key:?} {modifiers:?}");
+            assert_eq!(app.ui.selected_path.as_ref().and_then(|p| p.name()), Some("Path 1"), "{key:?} {modifiers:?}");
         }
     }
 }
@@ -123,7 +123,7 @@ fn enter_and_escape_with_no_component_selected_keep_the_path_targeted() {
         let mut app = app();
         crate::path_components::deselect_components(&mut app);
         press(&mut app, key, Modifiers::NONE);
-        assert_eq!(app.ui.selected_path.as_deref(), Some("Path 1"), "{key:?}");
+        assert_eq!(app.ui.selected_path.as_ref().and_then(|p| p.name()), Some("Path 1"), "{key:?}");
     }
 }
 

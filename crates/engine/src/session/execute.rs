@@ -291,6 +291,11 @@ impl Session {
             st.active_layer = previous_active_layer;
             return Err(EngineError::Other(error));
         }
+        // Track each edit, before coalescing or action grouping can discard intermediate
+        // snapshots. Saved paths are appended/removed here; edits to a row keep its position.
+        if before.paths.len() != doc.paths.len() {
+            st.invalidate_saved_path_indices();
+        }
         st.doc = Arc::new(doc);
         st.active_layer = active;
         fix_selection(st);

@@ -66,5 +66,5 @@ fn a_drag_on_a_component_of_the_saved_path_still_moves_it() {
     drag(&mut app, [150.0, 350.0], [180.0, 370.0]);
     assert_eq!(saved(&app).control_bounds(), Some((130.0, 320.0, 230.0, 420.0)), "the saved path moved");
     assert_eq!(shape_bounds(&app, shape), shape_before, "the shape stays");
-    assert_eq!(app.ui.selected_path.as_deref(), Some(SAVED));
+    assert_eq!(app.ui.selected_path.as_ref().and_then(|p| p.name()), Some(SAVED));
 }

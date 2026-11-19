@@ -94,6 +94,7 @@ pub(crate) mod params {
         ParamFamily { listing: Some(stack_dialog::listing), ..ParamFamily::new(stack_dialog::owns, stack_dialog::run) },
         ParamFamily {
             check: Some(crate::canvas_tool_menu::pen_dialogs::check),
+            cancel: Some(filter_dialog::cancel),
             ..ParamFamily::new(crate::canvas_tool_menu::pen_dialogs::owns, crate::canvas_tool_menu::pen_dialogs::run)
         },
         ParamFamily::new(crate::analysis::dialogs::owns, crate::analysis::dialogs::run),
@@ -208,6 +209,11 @@ pub(crate) mod params {
             canvas_input::disarm_dropper(app);
             drop_picks(app, ctx, id);
             app.framework.captured.remove(&key);
+            // A resumed action can already have opened its next step under the same dialog id.
+            // Its freshly captured path source belongs to that new opening.
+            if app.framework.dialogs.get_by_id::<HostedParamDialog>(id).is_none() {
+                app.framework.path_dialog_targets.remove(&key);
+            }
         }
         answer_held(app);
         answer_requests(app, ctx);
@@ -586,6 +592,11 @@ pub(crate) fn cancel_for_closed(app: &mut PhotocraftApp, ctx: &egui::Context, cl
 /// Slice options and Divide, the adjustment editor for `image.adjustments.*`, the schema dialog for filters, otherwise a
 /// bare command form. The error is an opener's refusal text.
 pub fn open_command_dialog(app: &mut PhotocraftApp, command: &str, label: &str) -> Result<DialogId, String> {
+    if crate::canvas_tool_menu::pen_dialogs::owns(command) {
+        let target = if command == "select.toWorkPath" { "work".into() } else { crate::vector_ui::active_path_name(app).ok_or("No path selected")? };
+        crate::canvas_tool_menu::pen_dialogs::open(app, command, target);
+        return Ok(craft::ui::dialog::dialog_id(command));
+    }
     if command == "view.newGuideLayout" {
         return guide_layout_ui::open(app).ok_or_else(|| "no document".to_string());
     }

@@ -137,11 +137,18 @@ fn valid(app: &PhotocraftApp, t: &Transform) -> bool {
 /// The painting symmetry button and its menu, shown in the options bar of the painting tools.
 pub fn menu(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
     let words = Env::of(ui).words::<SymmetryWords>();
-    let current = match app.session.active().and_then(|s| s.symmetry.as_ref()) {
+    let current = match app.session.active().and_then(|st| st.symmetry.as_ref().map(|symmetry| (st, symmetry))) {
         None => SymmetryChoice::Off,
-        Some(s) => match (s.preset(), s.path_source()) {
+        Some((st, symmetry)) => match (symmetry.preset(), symmetry.path_source()) {
             (Some(p), _) => SymmetryChoice::Mode(mode_to_framework(p.mode)),
-            (None, Some(key)) => SymmetryChoice::Path(key.to_owned()),
+            (None, Some(key)) => {
+                let key = match symmetry.saved_path_source() {
+                    Some((index, epoch)) if epoch == st.saved_paths_revision() && st.doc.paths.get(index).is_some() => format!("saved:{index}"),
+                    Some(_) => String::new(), // Keep the sampled axis, but no stale row checkmark.
+                    None => key.to_owned(),
+                };
+                SymmetryChoice::Path(key)
+            }
             (None, None) => SymmetryChoice::Off,
         },
     };
@@ -152,18 +159,30 @@ pub fn menu(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
             crate::vector_ui::path_rows(&st.doc, st.active_layer)
                 .into_iter()
                 .map(|row| match row.kind {
-                    crate::vector_ui::PathRow::Saved => SymmetryPathRow::new(row.name.clone(), row.name),
+                    crate::vector_ui::PathRow::Saved(index) => SymmetryPathRow::new(format!("saved:{index}"), row.name),
                     crate::vector_ui::PathRow::Work => SymmetryPathRow::new("work", words.work_path.as_str().to_owned()),
                     crate::vector_ui::PathRow::Layer => SymmetryPathRow::new("layer", row.name),
                 })
                 .collect()
         })
         .unwrap_or_default();
-    let out = SymmetryMenu::new(words.group.clone(), &current)
-        .paths(&rows)
-        .can_transform(can_transform(app))
-        .can_set(crate::menus::is_enabled(app, "paint.setSymmetry"))
-        .show(ui);
+    let source = app.session.active().map(crate::state::PathMenuSource::capture);
+    if source.is_some() {
+        if app.framework.symmetry_source != source {
+            app.framework.symmetry_epoch = app.framework.symmetry_epoch.saturating_add(1);
+        }
+        app.framework.symmetry_source = source.clone();
+    }
+    let epoch = app.framework.symmetry_epoch;
+    let out = ui
+        .push_id(epoch, |ui| {
+            SymmetryMenu::new(words.group.clone(), &current)
+                .paths(&rows)
+                .can_transform(can_transform(app))
+                .can_set(crate::menus::is_enabled(app, "paint.setSymmetry"))
+                .show(ui)
+        })
+        .inner;
     if let Some(command) = out.command {
         pick(app, ui.ctx(), command);
     }
@@ -177,7 +196,17 @@ fn pick(app: &mut PhotocraftApp, ctx: &egui::Context, command: SymmetryCommand) 
             Some(mode) => app.run("paint.setSymmetry", json!({"mode": mode.id()})),
             None => return,
         },
-        SymmetryCommand::FromPath(key) => app.run("paint.symmetryFromPath", json!({"name": key})),
+        SymmetryCommand::FromPath(key) => {
+            let params = match key.strip_prefix("saved:") {
+                Some(index) => match index.parse::<usize>() {
+                    Ok(index) => json!({"pathIndex": index}),
+                    Err(_) => return,
+                },
+                None if matches!(key.as_str(), "work" | "layer") => json!({"name": key}),
+                None => return,
+            };
+            app.run("paint.symmetryFromPath", params)
+        }
         SymmetryCommand::Transform => crate::menus::invoke(app, ctx, "ui.symmetryTransform", json!({})),
         _ => return,
     };

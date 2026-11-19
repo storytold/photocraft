@@ -449,3 +449,69 @@ fn structural_selection_validation_is_cached_per_revision() {
     assert!(super::selected(&app).is_some());
     assert_eq!(computations(&app), 2, "only the next revision needs a new signature");
 }
+
+#[test]
+fn saved_path_invalidation_precedes_cached_geometry_validation() {
+    let mut app = app();
+    square(&mut app, 20.0, 20.0, 120.0);
+    app.ui.tool_options.pen_path_op = "combine".into();
+    square(&mut app, 60.0, 60.0, 40.0);
+    let geometry = photocraft_engine::vector_cmds::path_json(&shape(&app).1.path);
+    for name in ["Saved A", "Saved B"] {
+        app.run("path.set", json!({"name":name,"path":geometry})).unwrap();
+    }
+    app.ui.tool = Tool::PathSelection;
+    app.ui.selected_path = Some(crate::state::PathSelection::Saved { index: 1 });
+    super::press(&mut app, [80.0, 80.0], false);
+    // Warm the structural fallback after a harmless revision change.
+    app.run("path.rename", json!({"pathIndex":1,"to":"Renamed B"})).unwrap();
+    assert!(super::selected(&app).is_some());
+    let checks = app.ui.direct_selection.owner.as_ref().unwrap().selection_computations();
+    assert!(checks > 0);
+    app.session.edit_prefs(|p| p.actions.create_single_history_state = true);
+    app.session
+        .actions
+        .list
+        .push(photocraft_engine::actions_cmds::Action::new(
+            "Replace saved row",
+            vec![
+                craft::automation::actions::ActionStep::new("path.delete", json!({"pathIndex":0})),
+                craft::automation::actions::ActionStep::new("path.set", json!({"name":"Saved C","path":geometry})),
+            ],
+        ))
+        .unwrap();
+    let reply = app.session.execute("actions.play", json!({"action":"Replace saved row"})).unwrap();
+    assert!(reply.get("failed").is_none(), "{reply}");
+    assert_eq!(app.session.active().unwrap().doc.paths.len(), 2);
+    // No sync_views: consumers must refuse the old target even before the next frame clears it.
+    assert!(super::selected(&app).is_none());
+    assert_eq!(app.ui.direct_selection.owner.as_ref().unwrap().selection_computations(), checks, "reject before computing a signature");
+    app.sync_views();
+    assert!(app.ui.direct_selection.target.is_none());
+}
+
+#[test]
+fn saved_list_edits_and_their_history_keep_work_and_layer_components() {
+    for work in [false, true] {
+        let mut app = app();
+        square(&mut app, 20.0, 20.0, 120.0);
+        app.ui.tool_options.pen_path_op = "combine".into();
+        square(&mut app, 60.0, 60.0, 40.0);
+        let (layer, sh) = shape(&app);
+        let geometry = photocraft_engine::vector_cmds::path_json(&sh.path);
+        if work {
+            app.run("path.set", json!({"name":"work","path":geometry})).unwrap();
+            app.ui.selected_path = Some("work".into());
+        }
+        app.ui.tool = Tool::PathSelection;
+        super::press(&mut app, [80.0, 80.0], false);
+        let target = if work { PathRef::Work } else { PathRef::Layer(layer.0) };
+        assert_eq!(super::selected(&app).map(|(r, _, heads)| (r, heads)), Some((target, vec![1])));
+        app.run("path.set", json!({"name":"Unrelated saved path","path":geometry})).unwrap();
+        assert_eq!(super::selected(&app).map(|(r, _, heads)| (r, heads)), Some((target, vec![1])));
+        for command in ["edit.undo", "edit.redo"] {
+            app.run(command, json!({})).unwrap();
+            assert_eq!(super::selected(&app).map(|(r, _, heads)| (r, heads)), Some((target, vec![1])), "{command}, work={work}");
+        }
+    }
+}

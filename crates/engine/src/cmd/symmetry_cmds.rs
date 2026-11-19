@@ -18,6 +18,8 @@ const SAMPLES_PER_CURVE: usize = 12;
 pub struct SymmetryAxis {
     pub source: String,
     pub segments: Vec<[[f64; 2]; 2]>,
+    // Positional source identity expires on list edits/history; the sampled axis remains usable.
+    saved_source: Option<(usize, u64)>,
 }
 
 /// Per-document painting tool state, never stored in the document's paths or pixels.
@@ -37,6 +39,13 @@ impl PaintingSymmetry {
     pub fn path_source(&self) -> Option<&str> {
         match self {
             Self::Path(p) => Some(&p.source),
+            Self::Preset(_) => None,
+        }
+    }
+    /// Saved row and its list generation, for UI checkmarks without matching display names.
+    pub fn saved_path_source(&self) -> Option<(usize, u64)> {
+        match self {
+            Self::Path(axis) => axis.saved_source,
             Self::Preset(_) => None,
         }
     }
@@ -69,7 +78,7 @@ impl PaintingSymmetry {
         match self {
             Self::Path(axis) => {
                 let segments = axis.segments.iter().map(|&[p, q]| Some([map(p)?, map(q)?])).collect::<Option<_>>()?;
-                Some(Self::Path(SymmetryAxis { source: axis.source.clone(), segments }))
+                Some(Self::Path(SymmetryAxis { source: axis.source.clone(), segments, saved_source: axis.saved_source }))
             }
             Self::Preset(p) => {
                 // The first axis' direction through the map's linear part gives the new angle; a
@@ -150,7 +159,7 @@ impl SymmetryAxis {
         if segments.is_empty() {
             return Err(EngineError::Other("symmetry path needs at least one nonzero segment".into()));
         }
-        Ok(Self { source, segments })
+        Ok(Self { source, segments, saved_source: None })
     }
 
     pub fn reflect(&self, point: StrokePoint) -> StrokePoint {
@@ -208,10 +217,18 @@ fn active_path(s: &Session, name: &str) -> Result<Path> {
 }
 
 fn enable(s: &mut Session, p: &Value) -> Result<Value> {
-    let name = p.get("name").and_then(Value::as_str).unwrap_or("work");
-    let axis = SymmetryAxis::from_path(name.to_owned(), &active_path(s, name)?)?;
+    let (name, path, index) = if p.get("pathIndex").is_some() {
+        let target = crate::vector_cmds::PathTarget::parse(s, p, "paint.symmetryFromPath")?;
+        (target.name(s)?, target.resolve(s)?, target.index())
+    } else {
+        let name = p.get("name").and_then(Value::as_str).unwrap_or("work");
+        let index = if matches!(name, "work" | "layer") { None } else { s.active().and_then(|st| st.doc.paths.iter().position(|path| path.name == name)) };
+        (name.to_owned(), active_path(s, name)?, index)
+    };
+    let mut axis = SymmetryAxis::from_path(name.clone(), &path)?;
     let count = axis.segments.len();
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
+    axis.saved_source = index.map(|index| (index, st.saved_paths_revision()));
     st.symmetry = Some(PaintingSymmetry::Path(axis));
     Ok(json!({"enabled": true, "source": name, "segments": count}))
 }
@@ -239,7 +256,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Make Symmetry Path",
             menu: &[],
             shortcut: None,
-            params: r##"{"name":"work"|"layer"|savedPathName="work"} — mirror Brush, Pencil and Eraser strokes across the path"##,
+            params: r##"{"name":"work"|"layer"|savedPathName="work" | "pathIndex":uint (0-based saved path)} — mirror Brush, Pencil and Eraser strokes across the path"##,
             enabled: |s| s.active().map(|_| ()).ok_or_else(|| "no document open".into()),
             run: enable,
             journal: true,

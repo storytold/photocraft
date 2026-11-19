@@ -113,7 +113,7 @@ fn selecting_a_saved_path_keeps_the_hidden_work_path_hidden() {
     panel(&mut h, 2);
     let saved = h.get_by_role_and_label(egui::accesskit::Role::ListItem, "Saved").rect();
     click(&mut h, egui::pos2(saved.left() + 70.0, saved.center().y), Modifiers::NONE);
-    assert_eq!(h.state().ui.selected_path.as_deref(), Some("Saved"));
+    assert_eq!(h.state().ui.selected_path, Some(crate::state::PathSelection::Saved { index: 0 }));
     assert!(!crate::vector_ui::work_path_shown(h.state()), "a saved path doesn't show the Work Path");
     // So Delete with the Pen doesn't delete the invisible work path either.
     press(&mut h, Key::Delete, Modifiers::NONE);
@@ -121,7 +121,7 @@ fn selecting_a_saved_path_keeps_the_hidden_work_path_hidden() {
     // Selecting the Work Path shows it; now Delete deletes it.
     let work = h.get_by_role_and_label(egui::accesskit::Role::ListItem, "Work Path").rect();
     click(&mut h, egui::pos2(work.left() + 70.0, work.center().y), Modifiers::NONE);
-    assert_eq!(h.state().ui.selected_path.as_deref(), Some("work"));
+    assert_eq!(h.state().ui.selected_path.as_ref().and_then(|p| p.name()), Some("work"));
     assert!(crate::vector_ui::work_path_shown(h.state()), "selecting the Work Path shows it");
     press(&mut h, Key::Delete, Modifiers::NONE);
     assert!(h.state().session.active().unwrap().doc.work_path.is_none(), "{}", h.state().ui.status);
@@ -142,12 +142,12 @@ fn reselecting_the_hidden_work_path_ends_the_hide() {
     panel(&mut h, 2);
     let work = h.get_by_role_and_label(egui::accesskit::Role::ListItem, "Work Path").rect();
     click(&mut h, egui::pos2(work.left() + 70.0, work.center().y), Modifiers::NONE);
-    assert_eq!(h.state().ui.selected_path.as_deref(), Some("work"));
+    assert_eq!(h.state().ui.selected_path.as_ref().and_then(|p| p.name()), Some("work"));
     // Clicking the panel's empty area deselects it.
     click(&mut h, egui::pos2(work.left() + 70.0, work.bottom() + 40.0), Modifiers::NONE);
     assert_eq!(h.state().ui.selected_path, None);
     assert!(crate::vector_ui::work_path_shown(h.state()), "the unchanged Work Path didn't go back into hiding");
-    assert_eq!(crate::vector_ui::active_path_name(h.state()).as_deref(), Some("work"));
+    assert_eq!(crate::vector_ui::active_path_name(h.state()).as_ref().and_then(|p| p.name()), Some("work"));
     // So Delete with the Pen deletes it, like any unselected Work Path.
     press(&mut h, Key::Delete, Modifiers::NONE);
     assert!(h.state().session.active().unwrap().doc.work_path.is_none(), "{}", h.state().ui.status);
@@ -252,7 +252,7 @@ fn thumbnail_selection_ctrl_click_paths_targets_thumbnail_and_clicked_path() {
     h.state_mut().ui.selected_path = Some("Saved".into());
     load(&mut h, PathRef::Work, SelectionOperation::New);
     assert_eq!(selection(&h), Some([10, 10, 50, 40]), "{}", h.state().ui.status);
-    assert_eq!(h.state().ui.selected_path.as_deref(), Some("Saved"), "loading a thumbnail does not change the selected path");
+    assert_eq!(h.state().ui.selected_path, Some("Saved".into()), "loading a thumbnail does not change the legacy selection");
     h.state_mut().run("edit.undo", json!({})).unwrap();
     assert!(selection(&h).is_none());
     h.state_mut().run("edit.redo", json!({})).unwrap();
@@ -288,7 +288,7 @@ fn thumbnail_selection_ctrl_click_layer_path_preserves_panel_target() {
     h.state_mut().ui.selected_path = Some("work".into());
     load(&mut h, PathRef::Layer(shape), SelectionOperation::New);
     assert_eq!(selection(&h), Some([40, 20, 60, 40]));
-    assert_eq!(h.state().ui.selected_path.as_deref(), Some("work"));
+    assert_eq!(h.state().ui.selected_path.as_ref().and_then(|p| p.name()), Some("work"));
     assert!(!h.state().ui.mask_target && !h.state().ui.vector_mask_target);
 }
 

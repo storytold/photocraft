@@ -677,7 +677,8 @@ fn pen_options_bar_makes_a_selection_from_the_path() {
     app.ui.selected_path = Some("Cutout".into());
     pen_clicks(&mut app, &[(4.0, 24.0), (12.0, 24.0), (12.0, 30.0)]);
     pen_dialogs::make_selection(&mut app).unwrap();
-    assert_eq!(hosted(&mut app).fields().text("name"), Some("Cutout"));
+    assert_eq!(hosted(&mut app).fields().number("pathIndex"), Some(0.0));
+    assert!(hosted(&mut app).fields().get("name").is_none());
 }
 
 /// A document with the Pen tool picked and a Work Path. Every route to the Stroke Path dialog ends in

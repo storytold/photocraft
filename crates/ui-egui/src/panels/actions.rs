@@ -407,7 +407,10 @@ fn apply_event(app: &mut PhotocraftApp, event: ActionsEvent) -> Result<(), Strin
         }
         ActionsEvent::InsertPath => {
             let (action, at) = insert_target(app)?;
-            app.run("actions.insertPath", json!({"action": action, "at": at, "name": app.ui.selected_path}))?;
+            let mut params = menu::selected_path_params(app).ok_or("No valid path selected")?;
+            params["action"] = json!(action);
+            params["at"] = json!(at);
+            app.run("actions.insertPath", params)?;
         }
         ActionsEvent::PlaybackOptions => playback::open_dialog(app).map(drop)?,
         ActionsEvent::ToolRecording(on) => {

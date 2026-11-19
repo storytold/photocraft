@@ -45,7 +45,15 @@ pub(super) fn can_define_shape(s: &Session) -> std::result::Result<(), String> {
 
 pub(super) fn define_custom_shape(s: &mut Session, p: &Value) -> Result<Value> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    let path = current_path(&st.doc, st.active_layer, p.get("path").and_then(Value::as_str)).ok_or_else(|| bad("edit.defineCustomShape", "no such path"))?;
+    let path = if let Some(path) = p.get("path").filter(|v| v.is_object()) {
+        crate::vector_cmds::parse_path(path).map_err(|e| bad("edit.defineCustomShape", e))?
+    } else {
+        current_path(&st.doc, st.active_layer, p.get("path").and_then(Value::as_str)).ok_or_else(|| bad("edit.defineCustomShape", "no such path"))?
+    };
+    // Inline geometry must meet the same non-empty requirement as named paths before replacing a preset.
+    if path.subpaths.is_empty() {
+        return Err(bad("edit.defineCustomShape", "no path geometry"));
+    }
     let name = p
         .get("name")
         .and_then(Value::as_str)

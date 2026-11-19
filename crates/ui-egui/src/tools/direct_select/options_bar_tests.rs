@@ -148,7 +148,7 @@ fn merge_shape_components_acts_on_the_path_with_selected_anchors() {
     tool_event(&mut app, ToolEvent::Down { x: 40.0, y: 180.0, pressure: 1.0 }, mods);
     tool_event(&mut app, ToolEvent::Up { x: 40.0, y: 180.0 }, mods);
     assert_eq!(app.ui.direct_selection.target, Some(crate::direct_select::PathRef::Layer(id)), "the shape's anchor is selected");
-    assert_eq!(app.ui.selected_path.as_deref(), Some(SAVED), "the saved path stays targeted");
+    assert_eq!(app.ui.selected_path.as_ref().and_then(|p| p.name()), Some(SAVED), "the saved path stays targeted");
     let (before, shape) = (saved(&app), shape_path(&app, id));
     let mut h = bar(app, Tool::DirectSelection);
     open_path_operations(&mut h);

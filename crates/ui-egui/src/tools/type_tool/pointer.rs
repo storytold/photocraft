@@ -105,7 +105,7 @@ pub(crate) fn path_target(app: &PhotocraftApp, x: f64, y: f64) -> Option<PathCli
     }
     let shape_path = crate::vector_ui::active_shape_path(app);
     let work = app.session.active().and_then(|s| s.doc.work_path.clone());
-    let work_shown = app.ui.selected_path.as_deref() == Some("work");
+    let work_shown = app.ui.selected_path.as_ref().and_then(|p| p.name()) == Some("work");
     // The canvas hover runs this every frame and `hit` samples every segment, so a path with more
     // anchors than this is not a click target (the click and the pointer agree: plain point
     // text). 4096 anchors is far beyond hand-drawn paths and shapes yet keeps a frame cheap, and

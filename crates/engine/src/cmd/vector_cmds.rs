@@ -13,6 +13,14 @@
 //! anchor. The serde form of `photocraft_doc::Path` is accepted too. Colours are `"#rrggbb"`,
 //! `"#rrggbbaa"` or `[r,g,b,a]` (0..1); opacities are percentages (0..100).
 //!
+//! `pathIndex` addresses only saved paths in the current `path.list` order. It is mutually
+//! exclusive with `name`; invalid or out-of-range indices fail without falling back to Work Path.
+//! Relist after inserting, deleting or reordering paths. Recorded actions retain this positional
+//! meaning on replay, including in another document; an index is not a persistent identity.
+//! Only fill, stroke and vector-mask creation allow `layer` alongside an index (the destination).
+//! Clipping paths still reference names: clear an ambiguous designation before indexed rename/delete.
+//! No document/file-format identity is added by this selector.
+//!
 //! Every edit re-renders the shape layer's cache with `photocraft-vector` in one undoable step.
 //! PSD blocks stay byte-identical while they still decode to the model (see `photocraft-io`).
 
@@ -67,22 +75,24 @@ macro_rules! spec {
 mod params;
 mod paths;
 mod shape;
+mod target;
 mod vector_mask;
 
 pub(crate) use params::{layer_id, nums, op_from, pt};
 pub use params::{parse_path, parse_stroke, path_json};
 pub use paths::STROKE_PATH_TOOLS;
+pub(crate) use paths::is_work;
 use paths::{
     clipping_path_clear, clipping_path_set, path_delete, path_fill, path_rename, path_set, path_stroke, path_to_selection, path_to_selection_with_mode,
-    path_transform, paths_list, resolve_path, select_to_work_path,
+    path_transform, paths_list, select_to_work_path,
 };
-pub(crate) use paths::{is_work, path_mut};
 pub(crate) use shape::{bake_path, map_path, map_shape, shift_shape, translate_vectors_wrapped, with_shape};
 use shape::{
     can_paste_shape_fill, can_paste_shape_stroke, combine_shapes, copy_shape_fill, copy_shape_stroke, has_shape_fill, has_shape_stroke, merge_components,
     paste_shape_fill, paste_shape_stroke, path_to_shape, selection_to_shape, shape_create, shape_edit, shape_info, shape_rasterize,
 };
 pub use shape::{preview_shape_stroke, refresh_shape, shape_path, transform_shape, translate_vectors};
+pub(crate) use target::PathTarget;
 use vector_mask::{toggle_vector_mask, vector_mask_add, vector_mask_delete, vector_mask_edit, vector_mask_info, vector_mask_rasterize, with};
 
 pub(crate) fn leak(s: String) -> &'static str {
@@ -132,7 +142,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "List Paths",
             menu: &[],
             shortcut: None,
-            params: r##"{} → {paths:[{name,knots,subpaths}],workPath,clippingPath,layerPath (active layer's shape path / vector mask),typePath (active type layer's Type Path, if it is on a path)}"##,
+            params: r##"{} → {paths:[{pathIndex,name,knots,subpaths}],workPath,clippingPath,layerPath (active layer's shape path / vector mask),typePath (active type layer's Type Path, if it is on a path)}"##,
             enabled: has_doc,
             run: |s, _| paths_list(s),
             journal: false,
@@ -142,13 +152,9 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Path Info",
             menu: &[],
             shortcut: None,
-            params: r##"{"name":str|"work"|"layer"="work"} → {name,path}"##,
+            params: r##"{"name":str|"work"|"layer"="work","pathIndex":uint? (0-based saved path instead of name)} → {name,path,pathIndex?}"##,
             enabled: has_doc,
-            run: |s, p| {
-                let name = p.get("name").and_then(Value::as_str);
-                let path = resolve_path(s, name)?;
-                Ok(json!({ "name": name.unwrap_or("work"), "path": path_json(&path) }))
-            },
+            run: |s, p| PathTarget::parse(s, p, "path.info")?.info(s),
             journal: false,
         },
         spec!(
@@ -156,17 +162,17 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set Path",
             [],
             leak(format!(
-                r##"{{"name":str|"work"="work","path":{{…}},"op":"combine|subtract|intersect|exclude"? (append to the existing path with this op instead of replacing)}}. {PATH_FORM}"##
+                r##"{{"name":str|"work"="work","pathIndex":uint? (0-based saved path instead of name),"path":{{…}},"op":"combine|subtract|intersect|exclude"? (append to the existing path with this op instead of replacing)}}. {PATH_FORM}"##
             )),
             has_doc,
             path_set
         ),
-        spec!("path.delete", "Delete Path", [], r##"{"name":str|"work"="work"}"##, has_doc, path_delete),
+        spec!("path.delete", "Delete Path", [], r##"{"name":str|"work"="work","pathIndex":uint? (0-based saved path instead of name)}"##, has_doc, path_delete),
         spec!(
             "path.transform",
             "Free Transform Path",
             [],
-            r##"{"name":str|"work"|"layer"="work","layer":id? (with layer target),"vectorMask":bool=false (with the layer target: its vector mask's path, not a shape layer's path),"matrix":[a,b,c,d,e,f] | "quad":[[x,y]×4] (Distort/Perspective: where the frame's corners go, clockwise from top-left) | "style"|"mesh"|"warp":… (Warp, as edit.transform.warp) | "translateX":px?,"translateY":px?,"scaleX":factor?,"scaleY":factor?,"angle":degrees?,"rect":[x0,y0,x1,y1]? (the quad's or warp's frame; default = path control bounds)} (numeric transforms pivot on path bounds center)"##,
+            r##"{"name":str|"work"|"layer"="work","pathIndex":uint? (0-based saved path instead of name),"layer":id? (with layer target),"vectorMask":bool=false (with the layer target: its vector mask's path, not a shape layer's path),"matrix":[a,b,c,d,e,f] | "quad":[[x,y]×4] (Distort/Perspective: where the frame's corners go, clockwise from top-left) | "style"|"mesh"|"warp":… (Warp, as edit.transform.warp) | "translateX":px?,"translateY":px?,"scaleX":factor?,"scaleY":factor?,"angle":degrees?,"rect":[x0,y0,x1,y1]? (the quad's or warp's frame; default = path control bounds)} (numeric transforms pivot on path bounds center)"##,
             has_doc,
             path_transform
         ),
@@ -174,7 +180,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "path.clippingPath.set",
             "Clipping Path",
             [],
-            r##"{"name":savedPathName,"flatness":0..100=0} (PSD export clipping path)"##,
+            r##"{"name":savedPathName,"flatness":0..100=0} (PSD export clipping path; name only, no pathIndex)"##,
             has_doc,
             clipping_path_set
         ),
@@ -197,14 +203,21 @@ pub fn specs() -> Vec<CommandSpec> {
             can_paste_shape_stroke,
             paste_shape_stroke
         ),
-        spec!("path.rename", "Rename Path", [], r##"{"name":str|"work"="work","to":str} (renaming the work path saves it)"##, has_doc, path_rename),
+        spec!(
+            "path.rename",
+            "Rename Path",
+            [],
+            r##"{"name":str|"work"="work","pathIndex":uint? (0-based saved path instead of name),"to":str} (renaming the work path saves it)"##,
+            has_doc,
+            path_rename
+        ),
         // ⌘↩ / Ctrl+Enter, as in Photoshop (the UI loads the path selected in the Paths panel, #306).
         CommandSpec {
             id: "path.toSelection",
             label: "Make Selection from Path",
             menu: &[],
             shortcut: Some("Cmd+Enter"),
-            params: r##"{"name":str|"work"|"layer"="work","feather":px=0,"antiAlias":bool=true,"mode":"replace|add|subtract|intersect"="replace"}"##,
+            params: r##"{"name":str|"work"|"layer"="work","pathIndex":uint? (0-based saved path instead of name),"feather":px=0,"antiAlias":bool=true,"mode":"replace|add|subtract|intersect"="replace"}"##,
             enabled: has_doc,
             run: path_to_selection,
             journal: true,
@@ -215,7 +228,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Add Path to Selection",
             menu: &[],
             shortcut: Some("Cmd+Shift+Enter"),
-            params: r##"{"name":str|"work"|"layer"="work","feather":px=0,"antiAlias":bool=true} (path.toSelection with mode "add")"##,
+            params: r##"{"name":str|"work"|"layer"="work","pathIndex":uint? (0-based saved path instead of name),"feather":px=0,"antiAlias":bool=true} (path.toSelection with mode "add")"##,
             enabled: has_doc,
             run: |s, p| path_to_selection_with_mode(s, p, "add"),
             journal: true,
@@ -225,7 +238,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Subtract Path from Selection",
             menu: &[],
             shortcut: Some("Cmd+Alt+Enter"),
-            params: r##"{"name":str|"work"|"layer"="work","feather":px=0,"antiAlias":bool=true} (path.toSelection with mode "subtract")"##,
+            params: r##"{"name":str|"work"|"layer"="work","pathIndex":uint? (0-based saved path instead of name),"feather":px=0,"antiAlias":bool=true} (path.toSelection with mode "subtract")"##,
             enabled: has_doc,
             run: |s, p| path_to_selection_with_mode(s, p, "subtract"),
             journal: true,
@@ -236,7 +249,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Intersect Path with Selection",
             menu: &[],
             shortcut: Some("Cmd+Alt+Shift+Enter"),
-            params: r##"{"name":str|"work"|"layer"="work","feather":px=0,"antiAlias":bool=true} (path.toSelection with mode "intersect")"##,
+            params: r##"{"name":str|"work"|"layer"="work","pathIndex":uint? (0-based saved path instead of name),"feather":px=0,"antiAlias":bool=true} (path.toSelection with mode "intersect")"##,
             enabled: has_doc,
             run: |s, p| path_to_selection_with_mode(s, p, "intersect"),
             journal: true,
@@ -246,7 +259,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Make Shape from Path",
             [],
             leak(format!(
-                r##"{{"name":str|"work"|"layer"="work" (the Work Path becomes the shape's path; a saved path stays) | "path":{{subpaths}} (inline; not with name),"consumeWorkPath":bool=false (with path: it was drawn into the Work Path, which goes),{fill}=foreground,{stroke}=none,"layerName":str?}} → shape.info"##
+                r##"{{"name":str|"work"|"layer"="work" | "pathIndex":uint (0-based saved path) | "path":{{subpaths}} (inline; choose one source; the Work Path becomes the shape's path, a saved path stays),"consumeWorkPath":bool=false (with inline path only: it was drawn into the Work Path, which goes),{fill}=foreground,{stroke}=none,"layerName":str?}} → shape.info"##
             )),
             has_doc,
             path_to_shape
@@ -256,7 +269,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "path.fill",
             "Fill Path",
             [],
-            r##"{"name":str|"work"|"layer"="work","layer":id? (pixel layer, default active),"color":"#rrggbb"=foreground,"opacity":0..100=100,"mode":"normal|multiply|…"="normal","feather":px=0,"antiAlias":bool=true}"##,
+            r##"{"name":str|"work"|"layer"="work","pathIndex":uint? (0-based saved path instead of name),"layer":id? (pixel layer, default active),"color":"#rrggbb"=foreground,"opacity":0..100=100,"mode":"normal|multiply|…"="normal","feather":px=0,"antiAlias":bool=true}"##,
             has_layer,
             path_fill
         ),
@@ -264,7 +277,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "path.stroke",
             "Stroke Path",
             [],
-            r##"{"name":str|"work"|"layer"="work","layer":id? (pixel layer),"tool":"brush|pencil|eraser|backgroundEraser|cloneStamp|patternStamp|healingBrush|spotHealingBrush|historyBrush|blur|sharpen|smudge|dodge|burn|sponge|colorReplacement|mixerBrush"="brush","simulatePressure":bool=false (taper both ends when the brush follows pen pressure),"size":0.5..5000 px?,"hardness":0..1?,"opacity":0..100?,"color":"#rrggbb"=foreground} (current brush settings otherwise; tools past the Eraser run their paint.* command along the path and take its params)"##,
+            r##"{"name":str|"work"|"layer"="work","pathIndex":uint? (0-based saved path instead of name),"layer":id? (pixel layer),"tool":"brush|pencil|eraser|backgroundEraser|cloneStamp|patternStamp|healingBrush|spotHealingBrush|historyBrush|blur|sharpen|smudge|dodge|burn|sponge|colorReplacement|mixerBrush"="brush","simulatePressure":bool=false (taper both ends when the brush follows pen pressure),"size":0.5..5000 px?,"hardness":0..1?,"opacity":0..100?,"color":"#rrggbb"=foreground} (current brush settings otherwise; tools past the Eraser run their paint.* command along the path and take its params)"##,
             has_layer,
             path_stroke
         ),
@@ -272,7 +285,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.vectorMask.add",
             "Add Vector Mask",
             ["Layer", "Vector Mask"],
-            r##"{"layer":id?,"path":{…}? | "name":str|"work"? (copy a document path),"hide":bool=false (Hide All = inverted)} → vector mask info. Without a path the mask reveals all."##,
+            r##"{"layer":id?,"path":{…}? | "name":str|"work"? | "pathIndex":uint? (copy a document path by name or 0-based saved index),"hide":bool=false (Hide All = inverted)} → vector mask info. Without a path the mask reveals all."##,
             has_layer,
             |s, p| vector_mask_add(s, p, false)
         ),
@@ -280,7 +293,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.vectorMask.fromPath",
             "Vector Mask from Current Path",
             ["Layer", "Vector Mask"],
-            r##"{"layer":id?,"name":str|"work"="work"}"##,
+            r##"{"layer":id?,"name":str|"work"="work","pathIndex":uint? (0-based saved path instead of name)}"##,
             has_layer,
             |s, p| vector_mask_add(s, p, true)
         ),
@@ -314,9 +327,14 @@ pub fn specs() -> Vec<CommandSpec> {
             &with(p, "hide", json!(true)),
             false
         )),
-        spec!("layer.vectorMask.currentPath", "Vector Mask: Current Path", [], r##"{"layer":id?,"name":str|"work"="work"}"##, has_layer, |s, p| {
-            vector_mask_add(s, p, true)
-        }),
+        spec!(
+            "layer.vectorMask.currentPath",
+            "Vector Mask: Current Path",
+            [],
+            r##"{"layer":id?,"name":str|"work"="work","pathIndex":uint? (0-based saved path instead of name)}"##,
+            has_layer,
+            |s, p| { vector_mask_add(s, p, true) }
+        ),
         spec!("layer.vectorMask.enabled", "Enable Vector Mask", [], r##"{"layer":id?,"enabled":bool? (default: toggle)}"##, has_layer, |s, p| {
             toggle_vector_mask(s, p, "enabled")
         }),

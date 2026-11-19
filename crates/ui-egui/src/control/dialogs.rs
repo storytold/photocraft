@@ -345,8 +345,18 @@ fn command_of(app: &PhotocraftApp, id: DialogId, choice: &str) -> Option<(String
 /// engine command or a shell one such as `file.save`). Automation is judged for it when the dialog is confirmed.
 pub(crate) fn hosted_command(app: &PhotocraftApp, id: DialogId) -> Option<(String, Value)> {
     let key = key_of(app, id)?;
-    (host(app).get_by_id::<craft::ui::patterns::form_dialogs::HostedParamDialog>(id).is_some() && crate::menus::is_live(&key))
-        .then(|| (key, fields_of(app, id)))
+    let dialog = host(app).get_by_id::<craft::ui::patterns::form_dialogs::HostedParamDialog>(id)?;
+    if !crate::menus::is_live(&key) {
+        return None;
+    }
+    let fields = if crate::canvas_tool_menu::pen_dialogs::owns(&key) && !crate::canvas_tool_menu::pen_dialogs::action_editor(app, id) {
+        crate::canvas_tool_menu::pen_dialogs::command_params(app, &key, dialog.fields()).ok()?
+    } else if key == "path.transform" {
+        crate::filter_dialog::command_params(&key, dialog.fields())
+    } else {
+        fields_of(app, id)
+    };
+    Some((key, fields))
 }
 
 // ---- ui.dialog.* ----

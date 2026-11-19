@@ -302,6 +302,27 @@ pub use tools::vector_ui;
 /// The Info panel's cached sample: pixel x, y, document revision, Eyedropper Sample Size and the view zoom's bits.
 type InfoSampleKey = (i32, i32, u64, u32, u32);
 
+struct PathDocument {
+    id: DocId,
+    activation: u64,
+    revision: u64,
+    source: std::sync::Weak<Document>,
+    saved_paths_revision: u64,
+}
+
+impl PathDocument {
+    fn capture(session: &Session) -> Option<Self> {
+        let st = session.active()?;
+        Some(Self {
+            id: st.doc.id,
+            activation: session.active_generation(),
+            revision: st.revision,
+            source: std::sync::Arc::downgrade(&st.doc),
+            saved_paths_revision: st.saved_paths_revision(),
+        })
+    }
+}
+
 pub struct PhotocraftApp {
     pub session: Session,
     pub ui: UiState,
@@ -424,7 +445,7 @@ pub struct PhotocraftApp {
     view_docs: Vec<DocId>,
     /// The document `ui.selected_path` belongs to, as of the last [`Self::sync_views`]: a Paths
     /// panel selection never carries over to a same-named path in another tab.
-    path_document: Option<(DocId, u64, std::sync::Weak<Document>)>,
+    path_document: Option<PathDocument>,
     pub fps: f32,
     pub(crate) last_frame_time: f64,
     /// Content bounds cached per (key, revision): scanning a 36 MP layer every frame cost ~77 ms.
@@ -1032,3 +1053,9 @@ mod red_eye_context_menu_tests;
 
 #[cfg(test)]
 mod clone_stamp_indexed_bar_tests;
+
+#[cfg(test)]
+mod path_regression_tests;
+
+#[cfg(test)]
+mod duplicate_paths_ui_tests;

@@ -65,7 +65,7 @@ fn enter_deselects_the_work_path_and_the_next_path_replaces_it() {
 fn escape_keeps_the_work_path_selected_and_the_next_path_joins_it() {
     let mut h = harness(Tool::Pen);
     draw_path(&mut h, [[20.0, 20.0], [120.0, 20.0]], Key::Escape);
-    assert_eq!(h.state().ui.selected_path.as_deref(), Some("work"));
+    assert_eq!(h.state().ui.selected_path.as_ref().and_then(|p| p.name()), Some("work"));
     assert!(work_path_shown(h.state()));
     assert!(overlaid(&h) > 0, "the outline stays");
     assert_eq!(make_buttons_enabled(&h), [true, true]);
@@ -85,7 +85,7 @@ fn enter_keeps_a_selected_saved_path_selected() {
     let doc = &h.state().session.active().unwrap().doc;
     assert_eq!(doc.paths.iter().find(|p| p.name == "Saved").map(|p| p.path.subpaths.len()), Some(2), "the path joined the saved path");
     assert!(doc.work_path.is_none());
-    assert_eq!(h.state().ui.selected_path.as_deref(), Some("Saved"), "which stays selected");
+    assert_eq!(h.state().ui.selected_path, Some(crate::state::PathSelection::Saved { index: 0 }), "which stays selected");
     assert_eq!(make_buttons_enabled(&h), [true, true]);
 }
 
@@ -104,7 +104,7 @@ fn enter_into_a_vector_mask_keeps_the_work_path_selected() {
     let doc = &h.state().session.active().unwrap().doc;
     assert_eq!(doc.layer(id).unwrap().vector_mask.as_ref().map(|m| m.path.subpaths.len()), Some(2), "the path went into the mask");
     assert_eq!(work_anchors(&h), [[[20.0, 20.0], [120.0, 20.0]]], "not into the Work Path");
-    assert_eq!(h.state().ui.selected_path.as_deref(), Some("work"), "which stays selected");
+    assert_eq!(h.state().ui.selected_path.as_ref().and_then(|p| p.name()), Some("work"), "which stays selected");
     assert!(work_path_shown(h.state()));
 }
 
@@ -114,7 +114,7 @@ fn enter_with_the_curvature_pen_keeps_the_work_path_selected() {
     draw_path(&mut h, [[20.0, 20.0], [120.0, 20.0]], Key::Enter);
     assert!(h.state().ui.pen.is_none(), "drawing ended");
     assert_eq!(work_anchors(&h).len(), 1);
-    assert_eq!(h.state().ui.selected_path.as_deref(), Some("work"), "not measured: today's behaviour");
+    assert_eq!(h.state().ui.selected_path.as_ref().and_then(|p| p.name()), Some("work"), "not measured: today's behaviour");
     assert!(work_path_shown(h.state()));
 }
 
