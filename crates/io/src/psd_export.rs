@@ -609,7 +609,7 @@ impl Ex<'_> {
             None => raw.retain(|(k, _)| k != b"fxrp"),
         }
         // Advanced Blending channel restrictions: written from the field (in place).
-        match crate::blocks::brst_data(l.excluded_channels) {
+        match craft_psd::tagged::channel_restrictions_data(l.excluded_channels) {
             Some(data) => match raw.iter_mut().find(|(k, _)| k == b"brst") {
                 Some(e) => e.1 = data,
                 None => raw.push((*b"brst", data)),
