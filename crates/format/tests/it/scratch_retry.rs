@@ -8,6 +8,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 
 #[test]
 fn retry_after_failed_hashing_never_reuses_placeholder_hashes() {
+    photocraft_raster::spill::use_test_volume_space();
     let dir = std::env::temp_dir().join(format!("photocraft-format-scratch-retry-{}", std::process::id()));
     spill::configure(Some(&dir), 1).unwrap();
     let mut doc = Document::new("Retry", Size::new(512, 256), ColorMode::Rgb, SampleType::U8);
