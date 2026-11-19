@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::channel_cmds::Target;
-use crate::commands::{CommandSpec, blend_from_str, int, layer_param};
+use crate::commands::{CommandSpec, int, layer_param, parse_blend};
 use crate::{EngineError, Result, Session};
 
 // ------------------------------------------------------------------ state
@@ -314,9 +314,9 @@ fn export_import(s: &mut Session, p: &Value) -> Result<Value> {
                     // absurd tree).
                     b.folder.retain(|f| !f.trim().is_empty());
                     b.folder.truncate(crate::brush_preset_cmds::MAX_FOLDER_DEPTH);
-                    match s.tools.presets.iter_mut().find(|x| x.name == b.name) {
+                    match std::sync::Arc::make_mut(&mut s.tools.presets).iter_mut().find(|x| x.name == b.name) {
                         Some(x) => *x = b,
-                        None => s.tools.presets.push(b),
+                        None => std::sync::Arc::make_mut(&mut s.tools.presets).push(b),
                     }
                     nb += 1;
                 }
@@ -459,6 +459,10 @@ pub fn specs() -> Vec<CommandSpec> {
 pub fn custom_shapes(s: &Session) -> &[CustomShape] {
     &s.edit_state.custom_shapes
 }
+
+/// Serialize tests that intentionally purge or seed the global smart caches.
+#[cfg(test)]
+pub(crate) static PURGE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 #[path = "edit_menu_cmds/tests.rs"]
