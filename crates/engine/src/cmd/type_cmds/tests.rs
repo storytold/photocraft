@@ -451,6 +451,22 @@ fn custom_name_survives_text_edits() {
 }
 
 #[test]
+fn paragraph_box_edit_damage_stays_within_old_and_new_ink() {
+    let mut s = session();
+    let id =
+        s.execute("type.create", json!({"x": 10, "y": 20, "text": "A paragraph with several words", "size": 20, "box": [10, 20, 120, 70]})).unwrap()["layer"]
+            .as_u64()
+            .unwrap();
+    let before = text_layer(&s, id).cache.unwrap().content_bounds();
+    s.execute("type.edit", json!({"layer": id, "box": [10, 20, 65, 70]})).unwrap();
+    let after = text_layer(&s, id).cache.unwrap().content_bounds();
+    let ink = before.union(&after);
+    let damage = s.active().unwrap().last_damage.unwrap();
+    assert!(!damage.is_empty());
+    assert_eq!(damage.intersect(&ink), damage);
+}
+
+#[test]
 fn edit_with_name_is_one_undo_step_for_text_name_and_bounds() {
     let mut s = session();
     let id = s.execute("type.create", json!({"x": 10, "y": 50, "text": "Before", "size": 20, "name": "Original"})).unwrap()["layer"].as_u64().unwrap();
