@@ -344,7 +344,7 @@ mod tests {
         roots.push(Layer::group("Outer", vec![group]));
         session
             .edit("Mask fixtures", |doc, _| {
-                doc.layers = roots;
+                doc.layers = roots.into();
                 Ok(())
             })
             .unwrap();

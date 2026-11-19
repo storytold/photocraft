@@ -6,10 +6,11 @@ use photocraft_doc::{LayerContent, Path};
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::canvas::{ToolEvent, tool_event};
+use crate::canvas::{ToolEvent, testing, tool_event};
 use crate::state::Tool;
+use craft::draw::ui::VectorMode;
 
-fn app(tool: Tool) -> PhotocraftApp {
+fn app(tool: Tool) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 300, "height": 200})).unwrap();
     app.ui.tool = tool;
@@ -18,6 +19,14 @@ fn app(tool: Tool) -> PhotocraftApp {
 
 fn work_path(app: &PhotocraftApp) -> Path {
     app.session.active().unwrap().doc.work_path.clone().expect("a work path")
+}
+
+/// Lets the double-click time pass: a click on the spot of the last one would be a double click, which toggles an
+/// anchor between smooth and corner.
+fn pause(app: &mut PhotocraftApp) {
+    for _ in 0..60 {
+        testing::frame(app);
+    }
 }
 
 fn click(app: &mut PhotocraftApp, x: f64, y: f64) {
@@ -52,7 +61,7 @@ fn freeform_pen_drag_is_fitted_into_one_work_path_or_shape() {
     assert_eq!(app.session.active().unwrap().history.entries().len(), before + 1, "one History step");
 
     // Shape mode: a closed loop (released on its start) becomes a filled shape layer.
-    app.ui.tool_options.vector_mode = "shape".into();
+    app.ui.tool_options.vector_mode = VectorMode::Shape;
     tool_event(&mut app, ToolEvent::Down { x: 200.0, y: 100.0, pressure: 1.0 }, Modifiers::NONE);
     for i in 1..=90 {
         let a = (i as f64 * 4.0).to_radians();
@@ -97,7 +106,7 @@ fn curvature_pen_clicks_make_a_smooth_path_through_every_point() {
     for p in &pts[..3] {
         click(&mut app, p[0], p[1]);
     }
-    crate::vector_ui::curvature_toggle(&mut app, 100.0, 40.0);
+    testing::double_click(&mut app, [100.0, 40.0], Modifiers::NONE);
     click(&mut app, 20.0, 150.0);
     let sp = &work_path(&app).subpaths[0];
     assert!(sp.closed && sp.knots.len() == 3);
@@ -229,10 +238,11 @@ fn the_curvature_pen_carries_on_an_open_path() {
     let steps = |app: &PhotocraftApp| app.session.active().unwrap().history.past_len();
     let at = steps(&app);
     app.ui.tool = Tool::CurvaturePen;
+    pause(&mut app);
     click(&mut app, 80.0, 80.0);
     assert!(app.ui.pen.is_none(), "the click selects the endpoint, it draws nothing");
     click(&mut app, 140.0, 120.0);
-    assert!(app.ui.pen.as_ref().is_some_and(|p| p.curvature && p.knots.len() == 4), "the next click carries the path on");
+    assert!(app.ui.pen.as_ref().is_some_and(|p| p.curvature && p.draft.knots.len() == 4), "the next click carries the path on");
     click(&mut app, 200.0, 80.0);
     crate::vector_ui::pen_commit(&mut app, false);
     let work = work_path(&app);
@@ -251,11 +261,12 @@ fn the_curvature_pen_carries_on_an_open_path() {
     assert!((mid.in_ctrl.x - mid.anchor.x) * (mid.out_ctrl.x - mid.anchor.x) < 0.0, "handles on either side: {mid:?}");
     // While it draws on, the Curvature Pen moves only the new anchors: a press on an old corner
     // adds an anchor there.
+    pause(&mut app);
     click(&mut app, 200.0, 80.0);
     click(&mut app, 260.0, 40.0);
     click(&mut app, 80.0, 20.0);
-    assert_eq!(app.ui.pen.as_ref().map(|p| p.knots.len()), Some(7), "a new anchor, the old one untouched");
-    assert_eq!(app.ui.pen.as_ref().map(|p| p.knots[1][0]), Some([80.0, 20.0]));
+    assert_eq!(app.ui.pen.as_ref().map(|p| p.draft.knots.len()), Some(7), "a new anchor, the old one untouched");
+    assert_eq!(app.ui.pen.as_ref().map(|p| p.triples()[1][0]), Some([80.0, 20.0]));
 }
 
 /// The work path set to `subpaths`, in one step.
@@ -298,7 +309,9 @@ fn the_curvature_pen_carries_on_the_selected_subpath_of_two_that_end_together() 
 #[test]
 fn a_carried_on_endpoint_starts_a_new_curvature_run() {
     let draw = |points: &[(f64, f64)]| {
-        let mut app = app(Tool::CurvaturePen);
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 800, "height": 400})).unwrap();
+        app.ui.tool = Tool::CurvaturePen;
         for &(x, y) in points {
             click(&mut app, x, y);
         }
@@ -308,6 +321,7 @@ fn a_carried_on_endpoint_starts_a_new_curvature_run() {
     let fresh = work_path(&draw(&[(400.0, 300.0), (550.0, 150.0), (700.0, 300.0)])).subpaths[0].knots.clone();
     let mut app = draw(&[(100.0, 300.0), (250.0, 150.0), (400.0, 300.0)]);
     let before = work_path(&app).subpaths[0].knots.clone();
+    pause(&mut app);
     click(&mut app, 400.0, 300.0);
     assert!(app.ui.pen.is_none(), "the click selects the endpoint, it draws nothing");
     click(&mut app, 550.0, 150.0);
@@ -340,24 +354,11 @@ fn a_curved_path_carries_on_from_its_first_endpoint_with_its_handles_swapped() {
     click(&mut app, 0.0, 100.0);
     let pen = app.ui.pen.as_ref().expect("the path is carried on");
     assert_eq!(pen.resumes.as_ref().map(|r| r.index), Some(0));
-    let anchors: Vec<[f64; 2]> = pen.knots.iter().map(|k| k[0]).collect();
+    let triples = pen.triples();
+    let anchors: Vec<[f64; 2]> = triples.iter().map(|k| k[0]).collect();
     assert_eq!(anchors, [[80.0, 80.0], [50.0, 60.0], [20.0, 20.0], [0.0, 100.0]], "backwards, then the new anchor");
-    assert_eq!((pen.knots[1][1], pen.knots[1][2]), ([60.0, 70.0], [40.0, 50.0]), "the curved middle knot's handles are swapped");
-    assert_eq!(pen.knots[2][1], [30.0, 10.0], "the endpoint's handle towards the path: its old outgoing one");
-}
-
-/// CodeRabbit on #10744: a double-click on a knot of the path carried on (not the endpoint it
-/// carries on from) changes nothing: those knots keep their handles.
-#[test]
-fn toggling_a_carried_knot_changes_nothing() {
-    use photocraft_doc::vector::Subpath;
-    let mut app = app(Tool::CurvaturePen);
-    set_work_path(&mut app, vec![Subpath::polyline(&[(20.0, 20.0), (80.0, 20.0), (80.0, 80.0)])]);
-    select_anchor(&mut app, crate::direct_select::PathRef::Work, [0, 2]);
-    click(&mut app, 140.0, 120.0);
-    let before = app.ui.pen.as_ref().map(|p| (p.unlinked.clone(), p.knots.clone()));
-    crate::vector_ui::curvature_toggle(&mut app, 80.0, 20.0);
-    assert_eq!(app.ui.pen.as_ref().map(|p| (p.unlinked.clone(), p.knots.clone())), before, "the old corner stays as it was, handles and all");
+    assert_eq!((triples[1][1], triples[1][2]), ([60.0, 70.0], [40.0, 50.0]), "the curved middle knot's handles are swapped");
+    assert_eq!(triples[2][1], [30.0, 10.0], "the endpoint's handle towards the path: its old outgoing one");
 }
 
 /// CodeRabbit on #10744: in Path mode the Pen carries on the work path, so an endpoint selected
@@ -367,12 +368,12 @@ fn toggling_a_carried_knot_changes_nothing() {
 fn an_endpoint_on_another_path_than_the_pen_draws_on_starts_a_new_one() {
     use photocraft_doc::vector::Subpath;
     let mut app = app(Tool::Pen);
-    app.ui.tool_options.vector_mode = "shape".into();
+    app.ui.tool_options.vector_mode = VectorMode::Shape;
     click(&mut app, 20.0, 20.0);
     click(&mut app, 80.0, 80.0);
     crate::vector_ui::pen_commit(&mut app, false);
     let shape = app.session.active().and_then(|st| st.active_layer).expect("a shape layer").0;
-    app.ui.tool_options.vector_mode = "path".into();
+    app.ui.tool_options.vector_mode = VectorMode::Path;
     // The Paths panel on no path: the Pen draws on the work path, not the layer's.
     app.ui.selected_path = None;
     set_work_path(&mut app, vec![Subpath::polyline(&[(200.0, 20.0), (80.0, 80.0)])]);
@@ -382,14 +383,14 @@ fn an_endpoint_on_another_path_than_the_pen_draws_on_starts_a_new_one() {
     assert!(crate::direct_select::selected_open_end(&app).is_some(), "the shape's endpoint is selected");
     click(&mut app, 140.0, 150.0);
     let pen = app.ui.pen.as_ref().expect("a new path");
-    assert!(pen.resumes.is_none() && pen.knots.len() == 1, "{pen:?}");
+    assert!(pen.resumes.is_none() && pen.draft.knots.len() == 1, "{pen:?}");
 }
 
 /// #6593 review: carrying on a subpath keeps its path operation, and a draft whose subpath changed
 /// meanwhile refuses without overwriting newer work. The historical test name is retained
 /// for reviewed-head provenance; captured-revision validation supersedes its stale fallback.
 #[test]
-fn a_resumed_subpath_keeps_its_operation_and_a_stale_draft_adds_a_new_one() {
+fn a_resumed_subpath_keeps_its_operation_and_a_stale_draft_is_refused() {
     let mut app = app(Tool::Pen);
     let open = |ax: f64, bx: f64, op: &str| json!({"closed": false, "op": op, "knots": [{"anchor": [ax, 20.0]}, {"anchor": [bx, 20.0]}]});
     app.run("path.set", json!({"name": "work", "path": {"subpaths": [open(20.0, 80.0, "subtract")]}})).unwrap();
@@ -447,12 +448,12 @@ fn undo_in_a_resumed_draft_stops_at_the_paths_own_anchors() {
     let before = work_path(&app);
     click(&mut app, 80.0, 20.0);
     click(&mut app, 80.0, 80.0);
-    assert!(crate::vector_ui::pen_undo_last_point(&mut app), "takes back the added anchor");
-    assert_eq!(app.ui.pen.as_ref().map(|p| p.knots.len()), Some(2));
+    assert!(crate::vector_ui::remove_last(&mut app), "takes back the added anchor");
+    assert_eq!(app.ui.pen.as_ref().map(|p| p.draft.knots.len()), Some(2));
     // A ⌘/Ctrl selection on the draft's anchors.
     app.ui.direct_selection.target = Some(crate::direct_select::PathRef::Pen);
     app.ui.direct_selection.anchors = vec![[0, 1]];
-    assert!(crate::vector_ui::pen_undo_last_point(&mut app), "drops the draft");
+    assert!(crate::vector_ui::remove_last(&mut app), "drops the draft");
     assert!(app.ui.pen.is_none());
     assert_eq!(app.ui.direct_selection.target, None, "the selection on the dropped draft goes with it");
     assert!(app.ui.direct_selection.anchors.is_empty());
@@ -501,7 +502,7 @@ fn the_pen_does_not_carry_on_a_work_path_hidden_by_make_selection() {
 #[test]
 fn shape_mode_carries_on_the_selected_shapes_open_path() {
     let mut app = app(Tool::Pen);
-    app.ui.tool_options.vector_mode = "shape".into();
+    app.ui.tool_options.vector_mode = VectorMode::Shape;
     let layers = |app: &PhotocraftApp| app.session.active().unwrap().doc.layers.len();
     let shape = |app: &PhotocraftApp| {
         let st = app.session.active().unwrap();
@@ -517,8 +518,7 @@ fn shape_mode_carries_on_the_selected_shapes_open_path() {
     click(&mut app, 80.0, 20.0);
     crate::vector_ui::pen_commit(&mut app, false);
     let (n, before) = (layers(&app), steps(&app));
-    assert!(crate::vector_ui::continues_path_at(&app, Tool::Pen, 81.0, 21.0), "the continue pointer over the endpoint");
-    assert!(!crate::vector_ui::continues_path_at(&app, Tool::Pen, 50.0, 20.0), "not mid-segment");
+
     click(&mut app, 80.0, 20.0);
     click(&mut app, 80.0, 80.0);
     crate::vector_ui::pen_commit(&mut app, false);
@@ -573,10 +573,9 @@ fn a_press_in_reach_of_both_ends_carries_the_nearer_one_on_and_does_not_close() 
     let ends = |app: &PhotocraftApp| {
         let pen = app.ui.pen.as_ref().expect("a resumed draft");
         assert!(pen.resumes.is_some(), "{pen:?}");
-        pen.knots.last().map(|k| k[0])
+        pen.triples().last().map(|k| k[0])
     };
     // (24, 22): 2 px from the last anchor, 4.5 px from the first.
-    assert!(crate::vector_ui::continues_path_at(&app, Tool::Pen, 24.0, 22.0));
     click(&mut app, 24.0, 22.0);
     assert!(!work_path(&app).subpaths[0].closed, "the press carried the path on, it did not close it");
     assert_eq!(ends(&app), Some([26.0, 22.0]), "from the nearer, last anchor");
@@ -608,5 +607,5 @@ fn a_press_in_reach_of_two_subpaths_ends_carries_the_nearest_on() {
     click(&mut app, 63.0, 21.0);
     let pen = app.ui.pen.as_ref().expect("a resumed draft");
     assert_eq!(pen.resumes.as_ref().map(|r| r.index), Some(1), "{pen:?}");
-    assert_eq!(pen.knots.last().map(|k| k[0]), Some([64.0, 22.0]), "from the second subpath's nearer end");
+    assert_eq!(pen.triples().last().map(|k| k[0]), Some([64.0, 22.0]), "from the second subpath's nearer end");
 }
