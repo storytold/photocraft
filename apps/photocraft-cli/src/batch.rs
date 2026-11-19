@@ -72,7 +72,8 @@ pub(crate) fn batch(a: &BatchArgs, out: &mut dyn Write, err: &mut dyn Write) -> 
         for entry in entries {
             let path = entry.map_err(|source| CliError::ReadDir { path: in_dir.to_path_buf(), source })?.path();
             if is_input(&path) {
-                images.push(photocraft_engine::file_cmds::BatchInput { path: path.to_string_lossy().into_owned(), rel_dir: String::new() });
+                let input = path.to_str().ok_or_else(|| CliError::BatchOption(format!("batch input path must be valid UTF-8: {path:?}")))?;
+                images.push(photocraft_engine::file_cmds::BatchInput { path: input.to_owned(), rel_dir: String::new() });
             }
         }
         // The tree listing already holds the engine's order (each folder's files, then its
@@ -321,6 +322,33 @@ mod tests {
             std::fs::write(&path, b"").unwrap();
             assert!(is_input(&path), "a non-UTF8 filename can still have the compound suffix");
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn flat_batch_rejects_non_utf8_input_before_writing_output() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("in");
+        std::fs::create_dir(&input).unwrap();
+        let original = input.join(std::ffi::OsString::from_vec(b"photo-\xff.xcf".to_vec()));
+        let alias = input.join("photo-\u{fffd}.xcf");
+        std::fs::write(&original, b"original file").unwrap();
+        std::fs::write(&alias, b"replacement-character file").unwrap();
+        let actions = dir.path().join("actions.json");
+        std::fs::write(&actions, "[]").unwrap();
+        let output = dir.path().join("out");
+        let crate::test_support::Invoke { code, stdout, stderr } =
+            crate::test_support::invoke(&["batch", "--actions", actions.to_str().unwrap(), "--in", input.to_str().unwrap(), "--out", output.to_str().unwrap()]);
+
+        assert_eq!(code, 1, "{stdout}{stderr}");
+        assert!(stderr.contains("batch input path must be valid UTF-8"), "{stderr}");
+        assert!(stderr.contains(&format!("{original:?}")), "the diagnostic must distinguish the invalid bytes from the valid alias: {stderr}");
+        assert!(stdout.is_empty(), "discovery must fail before processing any input: {stdout}");
+        assert!(!output.exists(), "discovery must fail before creating the output directory");
+        assert_eq!(std::fs::read(&original).unwrap(), b"original file");
+        assert_eq!(std::fs::read(&alias).unwrap(), b"replacement-character file");
     }
 
     struct RecordingRenderer {
