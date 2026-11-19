@@ -1,8 +1,8 @@
 name: CI
 
-# Quality gates for every push to main and every pull request. The Linux gate runs through the
-# suite's shared gate workflow in craft-common-actions (`cargo xtask ci`); the Windows legs, the
-# test variant and the corpus, web and fuzz jobs are PhotoCraft's own.
+# Quality gates for every push to main and every pull request. The Linux and Windows tests run
+# through the suite's shared gate workflow in craft-common-actions (`cargo xtask ci`, split over the
+# gate's jobs); the test variant and the corpus, web and fuzz jobs are PhotoCraft's own.
 on:
   push:
     branches: [main]
@@ -83,6 +83,8 @@ jobs:
   # Pull requests run them only when they change the GPU crate, a workspace crate it builds on, any
   # package manifest, or a file outside the workspace packages other than documentation
   # (scripts/ci-windows-gpu-tests.py, #15247); the Linux gate runs them on every pull request, and main runs them on Windows too.
+  # `windows_skip`: the platform-neutral packages whose Windows tests a pull request skips because nothing it
+  # changes reaches them (same script); empty on main and `full-ci`.
   platforms:
     if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
     timeout-minutes: 10
@@ -91,6 +93,7 @@ jobs:
     outputs:
       windows: ${{ steps.pick.outputs.windows }}
       windows_gpu: ${{ steps.pick.outputs.windows_gpu }}
+      windows_skip: ${{ steps.pick.outputs.windows_skip }}
       web: ${{ steps.pick.outputs.web }}
     steps:
       - name: Harden runner
@@ -111,6 +114,7 @@ jobs:
             {
               echo "windows=true"
               echo "windows_gpu=true"
+              echo "windows_skip="
               echo "web=true"
             } >> "$GITHUB_OUTPUT"
             exit 0
@@ -124,15 +128,30 @@ jobs:
           else
             echo "web=false" >> "$GITHUB_OUTPUT"
           fi
-          if git diff --name-only "$BASE" HEAD | grep -Eq '^(apps/|crates/(ui-egui|text|gpu|tablet|heif|format)/|Cargo\.lock$|craft-i18n\.rev$|(.*/)?build\.rs$|\.github/workflows/ci\.yml$)'; then
+          if git diff --name-only "$BASE" HEAD | grep -Eq '^(apps/|crates/(ui-egui|text|gpu|tablet|heif|format)/|Cargo\.lock$|craft-i18n\.rev$|(.*/)?build\.rs$|\.cargo/config\.toml$|\.config/nextest\.toml$|xtask/|scripts/ci-test-shard\.sh$|\.github/workflows/ci\.yml$)'; then
             echo "windows=true" >> "$GITHUB_OUTPUT"
           else
             echo "windows=false" >> "$GITHUB_OUTPUT"
           fi
           gpu=$(python3 scripts/ci-windows-gpu-tests.py "$BASE")
           echo "windows_gpu=$gpu" >> "$GITHUB_OUTPUT"
+          if [ "$gpu" = false ]; then
+            echo "::notice::photocraft-gpu's tests are skipped on Windows: this pull request changes nothing they are built from (the Linux gate still runs them)."
+          fi
+          skip=$(python3 scripts/ci-windows-gpu-tests.py --skip-neutral "$BASE")
+          echo "windows_skip=$skip" >> "$GITHUB_OUTPUT"
+          if [ -n "$skip" ]; then
+            echo "::notice::Tests of platform-neutral packages the pull request does not reach are skipped on Windows (the Linux gate still runs them): $skip"
+          fi
 
-  # The Linux gate. Its rust-cache entry is the one `test (without heif)` restores.
+  # The Linux gate (craft-common-actions gate.yml). Its `lint` leg runs the checks that need no test
+  # build; four test shards each build the tests from the restored cache and run their share
+  # (scripts/ci-test-shard.sh). Shard 1 runs nextest's `gpu` group alone, on lavapipe, and fails on
+  # a skipped GPU comparison (scripts/ci-gpu-lavapipe.py); shards 2-4 split the other tests, and
+  # shard 2 runs the doctests. The `gpu` group is ~2400 test-seconds on 4 slots (~12 min with its
+  # slowest test, ~8 once the five slow UI tests are fixed); the other ~5900 test-seconds over 3
+  # shards are ~8 min each, so a fifth shard would not shorten the gate. Its rust-cache entry is
+  # the one `test (without heif)` restores.
   gate:
     if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
     # Tracks @main so suite-wide CI fixes reach every app without a PR in each repository.
@@ -144,146 +163,76 @@ jobs:
         libgtk-3-dev mesa-vulkan-drivers libvulkan1
       # The tests build with the optional craft-fonts input (crates/text/build.rs), so the
       # Japanese font tests that skip without it run. Same commit as release.yml.
-      craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
-      # Cargo.toml's dev profile already keeps line tables only.
-      dev-debug: ""
+      craft-fonts-ref: cc9269cd8d8258785dac603fba3122e5d2556795
+      # CI test binaries carry no debuginfo and no symbols (CARGO_PROFILE_TEST_STRIP below): a
+      # test build drops from ~19 to ~6.5 GB. A panic still names its file and line; only
+      # backtrace frames lose names and lines. Local builds keep Cargo.toml's line tables.
+      dev-debug: "0"
+      cache-version: v2
       env: |
         PHOTOCRAFT_FULL_SWEEP=${{ inputs.full_sweep && '1' || '0' }}
         PHOTOCRAFT_NO_PRINT=1
         LPDEST=photocraft-no-such-printer
+        CARGO_PROFILE_TEST_STRIP=symbols
       timeout-minutes: 100
-      # fmt, clippy, layers, panel-commands, scorecard, tests, panic_hunt, doctests and the wasm32 check, with
-      # `--locked --features heif`, then the missing-translations report (xtask/src/main.rs).
-      command: python3 scripts/test-ci-gpu-lavapipe.py && python3 scripts/test-ci-windows-gpu-tests.py && cargo xtask ci && python3 scripts/ci-gpu-lavapipe.py
+      # On main, a `cache warm` leg builds xtask and the tests, as each shard does, and saves the
+      # dependency cache as soon as the build succeeds; the shards then only restore, so a failing
+      # test cannot keep the entry from being saved (craft-common-actions#270). The lint leg keeps
+      # its own entry.
+      warm-command: cargo xtask ci build
+      # fmt, egui-fork, clippy, layers, panel-commands, scorecard, the wasm32 check and the
+      # missing-translations report (`cargo xtask ci lint`, xtask/src/main.rs), and the CI scripts'
+      # own tests.
+      lint-command: python3 scripts/test-ci-gpu-lavapipe.py && python3 scripts/test-ci-windows-gpu-tests.py && cargo xtask ci lint
+      test-shards: 4
+      # The tests and panic_hunt with `--locked --features heif` (TEST_TARGETS in xtask/src/main.rs).
+      shard-command: bash scripts/ci-test-shard.sh --gpu-shard
 
-  # Windows tests run as two legs in parallel: the unit tests and the integration tests. As one job
-  # they took ~28 min on the Windows runner; the legs take ~13 and ~15. Splitting the integration
-  # tests over a third runner (nextest --partition) saved ~2 min of wall time but cost ~7
-  # runner-minutes and one more Windows slot per PR. Moving these legs into the shared gate is
-  # tracked by storytold/craft-common-actions#212.
+  # The Windows tests and Clippy on the same gate, when `platforms` says the run needs them: a
+  # `lint` leg runs Clippy, and six shards each build the tests and run their hash partition;
+  # shard 1 also runs the doctests. Windows runs the tests ~1.75x slower than Linux: ~55 min on
+  # one runner, ~9 min per shard. A seventh shard would not shorten the slowest one while its
+  # slowest test alone takes ~9.6 min (the shortcut-dispatch UI test). The browser apps are wasm
+  # targets, so their native tests are left out;
+  # pull requests also leave out photocraft-gpu and the platform-neutral packages nothing they change
+  # reaches (`windows_gpu`, `windows_skip`). The `cache warm` leg (main only) builds what main's
+  # build job builds.
   windows:
     needs: platforms
     if: needs.platforms.outputs.windows == 'true'
-    timeout-minutes: 100
-    name: test (windows-latest, ${{ matrix.part }})
-    runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        part: [unit, integration]
-    env:
-      # Released sccache expands Cargo's response files and exceeds Windows' rustc spawn limit
-      # (#13543). Let Cargo handle long commands until a release includes mozilla/sccache#3026.
-      # The dependency rust-cache below stays enabled; only compiler caching is disabled.
-      RUSTC_WRAPPER: ""
+    # Tracks @main so suite-wide CI fixes reach every app without a PR in each repository.
+    uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
+    with:
+      os: '["windows-latest"]'
+      # The all-language UI tests shape real Japanese, Chinese, Korean and Devanagari labels with
+      # kittest's strict `MissingGlyphPolicy::Panic`, and a hosted Windows image has no guaranteed
+      # Japanese or Simplified Chinese system font. Same pinned central fonts as Linux and release.
+      craft-fonts-ref: cc9269cd8d8258785dac603fba3122e5d2556795
+      # No wasm32 check on Windows: the Linux lint leg runs it.
+      targets: ""
       # No debuginfo on Windows: writing PDBs for ~200 test binaries cost 2.2 of ~21 build minutes.
       # A panic still names its file and line; only backtrace frames lose theirs (Linux keeps
       # line-tables-only, so a backtrace with lines is one OS away).
-      CARGO_PROFILE_DEV_DEBUG: "0"
-      # The Windows compiler command line carries one -L path per built dependency; keep each
-      # target path short enough for CreateProcess when the graph is large.
-      CARGO_TARGET_DIR: 'D:\t'
-      # The all-language UI tests shape real Japanese, Chinese, Korean and Devanagari labels
-      # with kittest's strict `MissingGlyphPolicy::Panic`. A hosted Windows image has no
-      # guaranteed Japanese or Simplified Chinese system font, and egui 0.37 panics on a
-      # missing glyph; the app's lazy system fallback runs after layout, too late for the
-      # first headless frame. Use the same pinned central fonts as Linux and release, so every
-      # language is drawn by a real embedded face rather than skipping. Same commit as the gate
-      # above and release.yml.
-      CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
-      CRAFT_FONTS_REQUIRED: "1"
-    steps:
-      - name: Harden runner
-        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
-        with:
-          egress-policy: audit
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Check out craft-fonts
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: storytold/craft-fonts
-          ref: b076417b5880bd4154bd22f00695b1d28c6bea83
-          path: craft-fonts
-          persist-credentials: false
-
-      # The translations at the commit in craft-i18n.rev, as the gate and release.yml embed them
-      # (sets CRAFT_I18N_DIR and CRAFT_I18N_REQUIRED=1).
-      - name: Check out craft-i18n
-        uses: storytold/craft-common-actions/actions/checkout-craft-i18n@main
-
-      - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
-        with:
-          toolchain: stable
-          components: clippy
-
-      # rust-cache only looks at `<workspace>/<target>` (it joins the two), so the short
-      # CARGO_TARGET_DIR above must be passed as a path relative to the checkout. Without it the
-      # cache found nothing to restore or save and every run built all dependencies from scratch.
-      - name: Target directory for the dependency cache
-        id: cache-target
-        # An empty path would make rust-cache treat the checkout itself as the target directory,
-        # which its cleanup then prunes, so stop rather than write one.
-        run: |
-          relative=$(realpath -m --relative-to="$(cygpath -u "$GITHUB_WORKSPACE")" "$(cygpath -u "$CARGO_TARGET_DIR")")
-          if [ -z "$relative" ] || [ "$relative" = . ]; then
-            echo "::error::no target directory for rust-cache from CARGO_TARGET_DIR='$CARGO_TARGET_DIR'"
-            exit 1
-          fi
-          echo "relative=$relative" >> "$GITHUB_OUTPUT"
-        shell: bash
-
-      # Only main saves caches; PRs restore main's, so the repo's 10 GB cache budget keeps main's.
-      # Both legs share one key (same dependencies); the integration leg saves it, because it also
-      # runs Clippy and so leaves Clippy's dependency metadata in it. A failed run saves nothing:
-      # when Clippy fails, the test build never ran, and an entry saved then would lack its
-      # dependencies. rust-cache never replaces an entry with the same key, so every later run
-      # would restore that half-filled entry until Cargo.lock changes.
-      - uses: step-security/rust-cache@8871c8ba063416da7c32246932ea6ae08700453e # v2.9.2
-        with:
-          workspaces: . -> ${{ steps.cache-target.outputs.relative }}
-          save-if: ${{ github.ref == 'refs/heads/main' && matrix.part == 'integration' }}
-          cache-on-failure: false
-
-      - name: Clippy
-        if: matrix.part == 'integration'
-        run: cargo clippy --workspace --all-targets --locked --features heif -- -D warnings
-
-      - name: Dependency layering
-        if: matrix.part == 'integration'
-        run: cargo xtask layers
-
-      - uses: step-security/taiki-e-install-action@76747d22a7567cc4438546a84f11bdf18e670ab8 # v2.87.32
-        with:
-          tool: cargo-nextest@0.9.150
-
-      # The unit leg runs `--lib --bins` and the integration leg `--test '*'` (every
-      # integration-test target); the feature selection stays the same, so both legs share the
-      # dependency cache. photocraft-gpu's tests run when the `platforms` job says they can be
-      # affected (`windows_gpu`); excluding the package also skips building its test binaries.
-      - name: Test
-        env:
-          PART: ${{ matrix.part }}
-          GPU: ${{ needs.platforms.outputs.windows_gpu }}
-        run: |
-          case "$PART" in
-            unit) targets=(--lib --bins) ;;
-            *) targets=(--test '*') ;;
-          esac
-          skip=()
-          # Only an explicit `false` skips them: a missing output runs everything.
-          if [ "$GPU" = false ]; then
-            skip=(--exclude photocraft-gpu)
-            echo "::notice::photocraft-gpu's tests are skipped on Windows: this pull request changes nothing they are built from (the Linux gate still runs them)."
-          fi
-          cargo nextest run --profile ci --workspace "${skip[@]}" --locked --features heif "${targets[@]}"
-        shell: bash
-
-      - name: Doctests
-        if: matrix.part == 'unit'
-        run: cargo test --workspace --locked --features heif --doc
+      dev-debug: "0"
+      cache-version: v2
+      # CARGO_TARGET_DIR: the Windows compiler command line carries one -L path per built
+      # dependency; a short target path keeps it within CreateProcess's limit. rust-lld (shipped
+      # with the toolchain) links the test binaries instead of link.exe, and the test links skip
+      # identical-code folding and PDBs; the link arguments in build.rs (/DELAYLOAD, delayimp.lib)
+      # are lld-link options too.
+      env: |
+        PHOTOCRAFT_FULL_SWEEP=${{ inputs.full_sweep && '1' || '0' }}
+        PHOTOCRAFT_NO_PRINT=1
+        LPDEST=photocraft-no-such-printer
+        CARGO_TARGET_DIR=D:\t
+        CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=rust-lld
+        CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS=-Clink-arg=/OPT:NOICF -Clink-arg=/DEBUG:NONE
+        PHOTOCRAFT_CI_EXCLUDE=photocraft-web photocraft-web-boot ${{ needs.platforms.outputs.windows_gpu == 'false' && 'photocraft-gpu' || '' }} ${{ needs.platforms.outputs.windows_skip }}
+      timeout-minutes: 100
+      warm-command: cargo xtask ci build
+      lint-command: cargo xtask ci clippy
+      test-shards: 6
+      shard-command: bash scripts/ci-test-shard.sh
 
   # The same codecs without the optional decoder: HEIC must stay a clear "not in this build" error
   # for distributors who leave it out. Runs beside the gate and restores the gate's dependency
@@ -299,6 +248,8 @@ jobs:
       # The gate sets these; rust-cache hashes CARGO_* and RUST* variables into its key.
       CARGO_INCREMENTAL: 0
       CARGO_NET_RETRY: 10
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_STRIP: symbols
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
@@ -324,12 +275,14 @@ jobs:
         with:
           toolchain: stable
 
-      # gate.yml keys its cache `<cache-version>-rust-<hash of Cargo.toml>-gate`.
-      - uses: step-security/rust-cache@8871c8ba063416da7c32246932ea6ae08700453e # v2.9.2
+      # The gate's own key (the shared action computes it), restore only. The toolchain action
+      # exports CARGO_HOME, which the gate's legs do not have; align-environment leaves it out of
+      # the key.
+      - uses: storytold/craft-common-actions/actions/rust-cache@main
         with:
-          prefix-key: v1-rust
-          shared-key: ${{ hashFiles('Cargo.toml') }}-gate
-          save-if: false
+          cache-version: v2
+          job: gate
+          align-environment: "true"
 
       - uses: step-security/taiki-e-install-action@76747d22a7567cc4438546a84f11bdf18e670ab8 # v2.87.32
         with:
@@ -365,8 +318,9 @@ jobs:
       - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
         with:
           toolchain: stable
-      - uses: step-security/rust-cache@8871c8ba063416da7c32246932ea6ae08700453e # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
+          prefix-key: v1-rust
           key: corpus
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
@@ -408,8 +362,9 @@ jobs:
         with:
           toolchain: stable
           targets: wasm32-unknown-unknown
-      - uses: step-security/rust-cache@8871c8ba063416da7c32246932ea6ae08700453e # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
+          prefix-key: v1-rust
           key: ci-web
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
@@ -482,10 +437,8 @@ jobs:
           persist-credentials: false
       - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
         with:
-          toolchain: stable
-      - uses: step-security/rust-cache@8871c8ba063416da7c32246932ea6ae08700453e # v2.9.2
-        with:
-          workspaces: crates/${{ matrix.target.crate }}/fuzz
+          toolchain: nightly
+      - run: rustc -Vv
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
       - name: Fuzz
@@ -523,9 +476,6 @@ jobs:
       - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
         with:
           toolchain: stable
-      - uses: step-security/rust-cache@8871c8ba063416da7c32246932ea6ae08700453e # v2.9.2
-        with:
-          key: color-range-perf
       - name: Compare exact outputs and release timings on 24 MP
         run: |
           set -o pipefail
@@ -559,9 +509,6 @@ jobs:
       - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
         with:
           toolchain: stable
-      - uses: step-security/rust-cache@8871c8ba063416da7c32246932ea6ae08700453e # v2.9.2
-        with:
-          key: selection-morphology-perf
       - name: Compare exact outputs and release timings on 36 MP
         run: |
           set -o pipefail
@@ -594,9 +541,12 @@ jobs:
       - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
         with:
           toolchain: stable
-      - uses: step-security/rust-cache@8871c8ba063416da7c32246932ea6ae08700453e # v2.9.2
+      # perf-nightly.yml's entry (same key and runner); only that job saves it.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          key: perf-release
+          prefix-key: v1-rust
+          shared-key: perf-release
+          save-if: false
       - name: Quick performance suite
         run: cargo xtask perf --quick
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -624,9 +574,6 @@ jobs:
       - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
         with:
           toolchain: stable
-      - uses: step-security/rust-cache@8871c8ba063416da7c32246932ea6ae08700453e # v2.9.2
-        with:
-          key: selection-combining-perf
       - name: Compare exact outputs and release timings on 36 MP
         run: |
           set -o pipefail
@@ -660,12 +607,6 @@ jobs:
       - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
         with:
           toolchain: stable
-      - uses: step-security/rust-cache@8871c8ba063416da7c32246932ea6ae08700453e # v2.9.2
-        with:
-          workspaces: |
-            before -> target
-            after -> target
-          key: brush-tip-release
       - name: Build the same benchmark against both versions
         run: |
           cp after/crates/paint/examples/big_dab_bench.rs before/crates/paint/examples/big_dab_bench.rs

@@ -13,7 +13,7 @@ use crate::PhotocraftApp;
 const COMMAND: &str = "file.export.pathsToIllustrator";
 
 /// A document with a Work Path and two saved paths, "Curve A" and "Curve B".
-fn app_with_paths() -> PhotocraftApp {
+fn app_with_paths() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 150})).unwrap();
     let path = |x: f64| json!({"subpaths": [{"closed": true, "knots": [[x, 10.0], [x + 40.0, 10.0], [x + 40.0, 50.0]]}]});

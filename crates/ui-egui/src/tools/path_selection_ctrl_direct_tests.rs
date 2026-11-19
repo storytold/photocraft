@@ -14,7 +14,7 @@ const SAVED: &str = "Path 1";
 const SQUARE: [[f64; 2]; 4] = [[100.0, 300.0], [300.0, 300.0], [300.0, 500.0], [100.0, 500.0]];
 
 /// The closed square 100,300–300,500 saved as "Path 1", targeted, with Path Selection.
-fn setup() -> PhotocraftApp {
+fn setup() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 800, "height": 600, "background": "white"})).unwrap();
     let square = json!({"subpaths": [{"closed": true, "knots": SQUARE}]});

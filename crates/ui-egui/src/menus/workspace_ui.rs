@@ -10,7 +10,7 @@ use craft::keymap::{CommandRef, Mods};
 use craft::ui::contract::{Bind, CommandSet as _};
 use craft::ui::dialog::DialogResult;
 use craft::ui::docking::{WorkspaceAsk, WorkspaceCommands, run_workspace, workspace_states};
-use craft::ui::patterns::dock::{HostedDeleteWorkspace, HostedNewWorkspace, NewWorkspace, WorkspaceSwitcher};
+use craft::ui::patterns::dock::{HostedDeleteWorkspace, HostedNewWorkspace, NewWorkspace};
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamKind, ParamLayout, ParamResult};
 use craft::ui::runtime::commands::CommandState;
 use craft::ui::value_drag::SliderScale;
@@ -315,17 +315,6 @@ pub fn take(app: &mut PhotocraftApp, _ctx: &egui::Context) {
     }
 }
 
-/// The workspace switcher of the title bar.
-pub fn switcher(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let out = WorkspaceSwitcher::new(&app.workspaces.set).show(ui);
-    if let Some(id) = out.switched
-        && let Err(message) = select(app, &id)
-    {
-        app.ui.status = message;
-        app.ui.status_error = true;
-    }
-}
-
 /// The state of each workspace command, for the command source.
 pub fn states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandState)> {
     workspace_states(&app.workspaces.set).into_iter().map(|(command, state)| (CommandRef::from(command), state)).collect()
@@ -522,7 +511,7 @@ fn extras_options() -> [(&'static str, &'static str); 13] {
 mod tests {
     use super::*;
 
-    fn app() -> (PhotocraftApp, egui::Context) {
+    fn app() -> (Box<PhotocraftApp>, egui::Context) {
         let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         let ctx = app.ctx().clone();
         (app, ctx)

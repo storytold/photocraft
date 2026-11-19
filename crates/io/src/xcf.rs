@@ -297,7 +297,7 @@ pub(crate) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
     }
 
     let mut document = Document::new(name, Size::new(image.width, image.height), mode, depth);
-    document.layers = layers;
+    document.layers = layers.into();
     document.channels = channels;
     document.selection = selection;
     if let Some((x, y)) = image.resolution.filter(|(x, _)| *x > 0.0 && *x < 1.0e6) {

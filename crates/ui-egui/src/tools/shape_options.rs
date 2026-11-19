@@ -177,6 +177,20 @@ fn paint_dialog_target<C>(which: ShapePaint, fg: C, bg: C) -> Option<(crate::sha
     }
 }
 
+/// Stores the bar's Radius `r` for `kind` and returns the edit for the selected shape, if any. The Triangle
+/// tool's Radius is the next triangle's own (#13355) and never edits the active shape; the Rectangle's sets the
+/// selected rectangle's four radii when the bar targets one (`rect_target`).
+fn corner_radius_change(o: &mut crate::state::ToolOptions, kind: ShapeKind, rect_target: bool, r: f64) -> Option<Value> {
+    let r = r as f32;
+    if kind == ShapeKind::Triangle {
+        o.triangle_corner_radius = r;
+        return None;
+    }
+    o.corner_radius = r;
+    let rf = f64::from(r);
+    rect_target.then(|| json!({"radii": [rf, rf, rf, rf]}))
+}
+
 pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, paint: bool) {
     // Path mode edits only the next outline: an active shape layer is not the target.
     let target = if paint { selected_shape(&app.session) } else { None };
@@ -292,16 +306,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
                 app.ui.tool_options.stroke_width = enabled_stroke_width(app.ui.tool_options.stroke_width);
                 edit = Some(json!({"stroke": p}));
             }
-            // The Triangle tool's Radius is the next triangle's own (#13355): it never edits the active shape.
-            ShapeChange::CornerRadius(r) if kind == ShapeKind::Triangle => app.ui.tool_options.triangle_corner_radius = *r as f32,
-            ShapeChange::CornerRadius(r) => {
-                let r = *r as f32;
-                app.ui.tool_options.corner_radius = r;
-                if rect_target {
-                    let rf = f64::from(r);
-                    edit = Some(json!({"radii": [rf, rf, rf, rf]}));
-                }
-            }
+            ShapeChange::CornerRadius(r) => edit = corner_radius_change(&mut app.ui.tool_options, kind, rect_target, *r),
             ShapeChange::Radii(r) => {
                 app.ui.tool_options.corner_radius = r[0] as f32;
                 if rect_target {

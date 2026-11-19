@@ -14,7 +14,7 @@ const STROKE: [(f64, f64); 4] = [(12.0, 20.0), (30.0, 24.0), (48.0, 18.0), (66.0
 
 /// An 80×40 document at `depth` bits: a white Background with a black block on its left half,
 /// with `tool` picked (14 px, soft, no smoothing).
-fn app(depth: u32, tool: Tool) -> PhotocraftApp {
+fn app(depth: u32, tool: Tool) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 80, "height": 40, "depth": depth})).unwrap();
     app.run("select.rect", json!({"x": 0, "y": 0, "width": 40, "height": 40})).unwrap();
