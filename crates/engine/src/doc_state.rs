@@ -207,7 +207,19 @@ impl DocState {
     pub(crate) fn record_damage(&mut self) {
         // Keep the effect reach at the time of the edit: later pixel-neutral revisions can
         // change which effects are visible without changing this already-painted damage.
-        let damage = self.last_damage.map(|r| layer_multi_cmds::grow_hint(&self.doc, r));
+        // The existing growth walk is recursive, so refuse a bounded answer on hostile depth.
+        fn bounded(layers: &[photocraft_doc::Layer], depth: usize) -> bool {
+            depth < 256 && layers.iter().all(|layer| layer.children().is_none_or(|children| bounded(children, depth + 1)))
+        }
+        let damage = self.last_damage.and_then(|r| {
+            if r.is_empty() {
+                Some(r)
+            } else if bounded(&self.doc.layers, 0) {
+                Some(layer_multi_cmds::grow_hint(&self.doc, r))
+            } else {
+                None
+            }
+        });
         self.record_damage_span(self.damage_from(), self.revision, damage);
     }
 
@@ -394,6 +406,22 @@ mod damage_log_tests {
     use photocraft_color::{ColorMode, SampleType};
     use photocraft_doc::Document;
     use photocraft_geom::{Rect, Size};
+
+    #[test]
+    fn deeply_nested_effect_growth_falls_back_to_full_damage() {
+        let mut doc = Document::new("test", Size::new(20, 20), ColorMode::Rgb, SampleType::U8);
+        let mut group = photocraft_doc::Layer::group("leaf", Vec::new());
+        for _ in 0..256 {
+            group = photocraft_doc::Layer::group("group", vec![group]);
+        }
+        doc.layers = vec![group];
+        let mut st = DocState::new(doc, None);
+        let before = st.revision;
+        st.bump_revision(false);
+        st.last_damage = Some(Rect::new(1, 1, 2, 2));
+        st.record_damage();
+        assert_eq!(st.damage_since(before), None);
+    }
 
     #[test]
     fn damage_spans_union_and_unknown_or_evicted_spans_force_a_full_redraw() {
