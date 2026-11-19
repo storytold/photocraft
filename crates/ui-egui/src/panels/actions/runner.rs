@@ -322,16 +322,28 @@ fn failure(step: usize, id: &str, error: &str, result: Option<Value>) -> Value {
 /// document does not have: the Continue / Stop the reference application shows when an action
 /// plays on a document without the recorded names (#10769, docs/atn.md › Playing on another
 /// document). It reports a Select of a missing layer as the command being unavailable, and steps
-/// that name a layer as the layer object being unavailable. `None` keeps today's plain failure:
-/// steps naming no layer (target steps, numeric ids kept for ambiguous names, a rename's new
-/// name), names the document does have (the step failed for another reason) and step indexes the
+/// that name a layer as the layer object being unavailable. The ask also fires when the layer was
+/// deleted from the original document: the test is against the playing document as it stands, not
+/// against names it never had. `None` keeps today's plain failure: steps naming no layer (target
+/// steps, numeric ids kept for ambiguous names, a rename's new name), names the playing document
+/// can resolve, exact or by case as the engine does (the step failed for another reason), failures
+/// reported for a step other than the one named in them (a player refusal), and step indexes the
 /// action does not have.
 pub(super) fn missing_layer_prompt(app: &PhotocraftApp, action: &Action, failed: &Value) -> Option<(String, usize)> {
     let index = failed.get("step").and_then(Value::as_u64).and_then(|n| usize::try_from(n).ok())?;
     let step = action.steps.get(index)?;
+    // Only a failure reported for this step itself: the player's refusals come back at the step
+    // Play starts at, under the Play label (`actions.play`), and must not be read as an ask.
+    if failed.get("id").and_then(Value::as_str) != Some(step.command.as_str()) {
+        return None;
+    }
     let name = named_step_layer(&step.command, &step.params)?;
     let doc = &app.session.active()?.doc;
-    if doc.walk().into_iter().any(|(_, _, layer)| layer.name == name) {
+    // As the engine resolves a `layer` name (`explicit_layer`): exact, else the same name whatever
+    // its case. A step naming "background" finds a "Background" layer, so its failure is unrelated
+    // to a missing layer and keeps the plain report.
+    let resolved = |want: &str| doc.walk().into_iter().any(|(_, _, layer)| layer.name == want);
+    if resolved(name) || doc.walk().into_iter().any(|(_, _, layer)| layer.name.to_lowercase() == name.to_lowercase()) {
         return None;
     }
     let message = if step.command == "layer.select" {
@@ -601,6 +613,10 @@ fn play_steps(
         if let Some(f) = report.failed {
             failed = Some(failure(f.step, &f.command, &f.message, detail));
         } else if let Some(refusal) = &report.refused {
+            // A refusal is the whole call's, not one step's: it is reported at the step Play
+            // starts at, under the Play label. `playback_plan` pre-refuses a recursion or a 17th
+            // level at the calling step (which fails as the call's own step, with that label), so
+            // the player's refusal is what a resumed or rebased playback reports.
             failed = Some(failure(from, "actions.play", &refusal_text(refusal), None));
         } else if report.waiting {
             if let (Some(at), Some(wait)) = (report.paused_at, wait) {

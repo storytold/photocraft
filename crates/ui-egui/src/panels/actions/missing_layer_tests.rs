@@ -72,6 +72,11 @@ fn stop_on_the_message_ends_the_playback_with_nothing_undone() {
     assert_eq!(count(&app, "Prefix"), 1, "Stop undoes nothing");
     assert_eq!(count(&app, "Suffix"), 0);
     assert_idle(&app);
+    // The edits so far stay one history state behind the message, as Continue's do: Stop undoes
+    // nothing itself, and one undo takes the whole play back (as a Stop message's does).
+    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Action: On B"), "{}", app.ui.status);
+    assert!(app.session.undo(), "one undo takes back the whole play");
+    assert_eq!(count(&app, "Prefix"), 0);
 }
 
 /// A Play over a set of actions: Continue finishes the failed action, then the set goes on.
@@ -119,17 +124,24 @@ fn a_called_actions_missing_layer_step_asks_and_continues_into_its_caller() {
     assert_idle(&app);
 }
 
-/// Agent Play stays headless: no message opens; the failed step is reported as it is today.
+/// Agent Play stays headless: no message opens; the failed step is reported as it is today. Both
+/// non-interactive flags are tested, not just claimed: `automation_input` for synthetic input, and
+/// `programmatic_playback`, which the control channel's `engine.execute` sets around its call.
 #[test]
 fn automation_playback_keeps_the_headless_failure() {
-    let mut app = missing_name_app();
-    named_select_action(&mut app);
-    app.automation_input = true;
-    let v = play(&mut app, &json!({"action": "On B"})).unwrap();
-    assert_eq!(v["failed"]["step"], 1, "{v}");
-    assert_eq!(prompts_open(&app), 0, "the agent gets the failure, not the message");
-    assert_eq!(count(&app, "Suffix"), 0);
-    assert_idle(&app);
+    for automated in ["automation_input", "programmatic_playback"] {
+        let mut app = missing_name_app();
+        named_select_action(&mut app);
+        match automated {
+            "automation_input" => app.automation_input = true,
+            _ => app.programmatic_playback = true,
+        }
+        let v = play(&mut app, &json!({"action": "On B"})).unwrap();
+        assert_eq!(v["failed"]["step"], 1, "{automated}: {v}");
+        assert_eq!(prompts_open(&app), 0, "{automated}: the agent gets the failure, not the message");
+        assert_eq!(count(&app, "Suffix"), 0, "{automated}");
+        assert_idle(&app);
+    }
 }
 
 /// The messages, as measured: the reference reports a Select of a missing layer as the command
@@ -184,4 +196,68 @@ fn a_failure_that_names_no_layer_keeps_the_plain_report() {
     assert_eq!(prompts_open(&app), 0, "the numeric id of an ambiguous name keeps today's failure report");
     assert!(app.ui.status_error, "the status bar still shows the failure: {}", app.ui.status);
     assert_idle(&app);
+}
+
+/// The presence test mirrors how the engine resolves a layer param: exact name, else the same name
+/// whatever its case (engine `explicit_layer`). A step naming "background" over a document whose
+/// layer is "Background" does find that layer, so a failure there is unrelated to a missing layer
+/// and keeps today's plain failure: no message, no skip on Continue.
+#[test]
+fn a_name_the_document_has_in_another_case_is_not_missing() {
+    let mut app = missing_name_app();
+    let action = Action::new("Pass Through", vec![ActionStep::new("layer.setProps", json!({"layer": "background", "blend": "Pass Through"}))]);
+    let failed = json!({"step": 0, "id": "layer.setProps", "error": "Pass Through applies to groups only; layer 0 isn't one"});
+    assert_eq!(
+        runner::missing_layer_prompt(&app, &action, &failed),
+        None,
+        "the engine finds Background for `background`, so the ask would skip a step that can never pass"
+    );
+    app.session.actions.list.push(action).unwrap();
+    let v = play(&mut app, &json!({"action": "Pass Through"})).unwrap();
+    report_play(&mut app, &v);
+    assert_eq!(v["failed"]["step"], 0, "{v}");
+    assert_eq!(prompts_open(&app), 0, "the setProps failure takes today's plain-failure path");
+    assert!(v["failed"]["error"].as_str().is_some_and(|error| error.contains("Pass Through")), "{v}");
+    assert!(app.ui.status_error, "the status bar shows the failure: {}", app.ui.status);
+    assert_idle(&app);
+}
+
+/// The other direction: the step records the exact-case name of a differently cased document.
+#[test]
+fn an_exact_case_name_on_a_lowercase_layer_is_not_missing() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 8, "height": 6})).unwrap();
+    app.run("layer.new.layer", json!({"name": "ink"})).unwrap();
+    let action = Action::new("Hide Ink", vec![ActionStep::new("layer.setProps", json!({"visible": false, "layer": "Ink"}))]);
+    let failed = json!({"step": 0, "id": "layer.setProps", "error": "x"});
+    assert_eq!(runner::missing_layer_prompt(&app, &action, &failed), None, "the engine finds `ink` for `Ink` by case");
+}
+
+/// A player refusal is reported at the step Play starts at, under the Play label — not under the
+/// refused step's own command. When that starting step is one that names a layer, the report must
+/// not be read as a missing layer: the ask only follows a failure whose id is the step's command,
+/// so a refusal keeps its plain failure report and Continue is never offered on it. (The engine's
+/// `playback_plan` pre-refuses a recursion or a 17th level at the calling step, so this report
+/// shape is pinned at the ask rather than reproduced through a playback.)
+#[test]
+fn a_refusal_report_at_a_layer_naming_start_step_is_not_the_ask() {
+    let mut app = missing_name_app();
+    app.session
+        .actions
+        .list
+        .push(Action::new(
+            "Starts on B",
+            vec![ActionStep::new("layer.select", json!({"name": "B"})), ActionStep::new("layer.new.layer", json!({"name": "Suffix"}))],
+        ))
+        .unwrap();
+    let action = app.session.actions.list.action(0).unwrap().clone();
+    let refused = json!({"step": 0, "id": "actions.play", "error": "action nesting exceeds 16 levels"});
+    assert_eq!(
+        runner::missing_layer_prompt(&app, &action, &refused),
+        None,
+        "a refusal must not be reported as a missing layer, and Continue must not skip from it"
+    );
+    // The step's own failure, same index, does ask: only the id changed.
+    let own = json!({"step": 0, "id": "layer.select", "error": "no layer named \"B\""});
+    assert_eq!(runner::missing_layer_prompt(&app, &action, &own).as_ref().map(|(m, _)| m.as_str()), Some("The command 'Select' is not currently available"));
 }
