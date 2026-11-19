@@ -4,10 +4,11 @@
 //! disagreed. The reset now seeds the dialog's shared light angle into a globally lit effect, the
 //! way a new instance starts from it (`fresh_params`, and the draft's own `add_instance`).
 use craft::imaging::layer_style::{EffectId, EffectKind, LayerStyle, StyleParams, StyleValue};
+use egui_kittest::kittest::Queryable;
 use serde_json::json;
 
 use super::reset_to_default;
-use super::tests::{app_with_layer, defaults, draft, edit, first_of, ok};
+use super::tests::{app_with_layer, defaults, draft, edit, first_of, harness, ok};
 use super::{DialogId, open};
 use crate::PhotocraftApp;
 
@@ -100,4 +101,40 @@ fn reset_to_default_keeps_a_saved_defaults_own_angle_when_global_light_is_off() 
     assert_eq!(style.effect(bevel).and_then(|e| e.params.bool("useGlobalLight")), Some(false), "the saved default's switch is off");
     assert_eq!(num(style, bevel, "angle"), Some(77.0), "the saved default's own angle, not the shared light");
     assert_eq!(num(style, bevel, "size"), Some(12.0), "the other fields are the saved default's too");
+}
+
+/// Owner decision round (#14887, Photoshop behaviour as the reference): the Make-Default direction
+/// of the same rule. Use Global Light on, Angle 45 typed: the Bevel page's Make Default button
+/// sends its SHOWN values, and a globally lit Angle row shows the shared light angle, so the
+/// stored default carries the typed 45 and `useGlobalLight` on, never the factory 120. Retyping
+/// the shared light to 30 and resetting then takes the live angle, not the stored literal: the
+/// stored default carries the shared-angle rule the way Reset to Default seeds it.
+#[test]
+fn make_default_keeps_the_typed_shared_angle() {
+    let mut app = app_with_layer(32);
+    app.run("layer.layerStyle.bevelEmboss", json!({})).unwrap();
+    let id = open(&mut app, Some(EffectKind::BevelEmboss.key())).unwrap();
+    let bevel = first_of(&app, id, EffectKind::BevelEmboss);
+    // What the Angle row does when 45 is typed, plus a Size to store as the new default.
+    edit(&mut app, id, |d| {
+        d.set_param(bevel, "angle", StyleValue::Number(45.0));
+        d.set_param(bevel, "size", StyleValue::Number(9.0));
+    });
+    let mut h = harness(app);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Make Default").click();
+    h.run_steps(3);
+    let stored = h.state_mut().run("layer.layerStyle.defaultFor", json!({"kind": "bevelEmboss"})).unwrap();
+    assert_eq!(stored["params"]["angle"].as_f64(), Some(45.0), "Make Default stored the shown shared angle, not the factory 120");
+    assert_eq!(stored["params"]["useGlobalLight"].as_bool(), Some(true), "the stored default carries the shared light rule");
+    assert_eq!(stored["params"]["size"].as_f64(), Some(9.0), "the other shown fields are stored too");
+    // Retype the shared light to 30, then Reset to Default: the live shared angle wins over the
+    // stored literal 45, and the other fields fall back to the stored Make-Default values.
+    edit(h.state_mut(), id, |d| d.set_param(bevel, "angle", StyleValue::Number(30.0)));
+    reset_to_default(h.state_mut(), id, bevel);
+    let style = &draft(h.state(), id).style;
+    assert_eq!(num(style, bevel, "angle"), Some(30.0), "the reset takes the live shared light, not the stored 45");
+    assert_eq!(num(style, bevel, "size"), Some(9.0), "Size falls back to the stored default, not the factory one");
+    assert_eq!(style.global_light, 30.0, "the reset does not move the shared light");
+    ok(h.state_mut(), id);
+    assert_eq!(h.state().session.active().unwrap().doc.global_light.angle, 30.0, "OK sets the document's Global Light to 30");
 }
