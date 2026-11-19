@@ -304,7 +304,7 @@ jobs:
         if: matrix.variant == 'hakari'
         run: |
           set -o pipefail
-          cargo tree --locked -p photocraft-io --prefix none --format '{p}' |
+          cargo tree --color never --locked -p photocraft-io --prefix none --format '{p}' |
             sed 's/ (\*)$//' | LC_ALL=C sort -u > "$RUNNER_TEMP/io-packages-before"
           cargo hakari init crates/workspace-hack --yes
           cp .config/no-heif-trial.toml .config/hakari.toml
@@ -314,18 +314,18 @@ jobs:
           cargo hakari manage-deps --yes
           cargo hakari generate --diff
           cargo hakari manage-deps --dry-run
-          cargo tree --locked -p photocraft-io --prefix none --format '{p}' |
+          cargo tree --color never --locked -p photocraft-io --prefix none --format '{p}' |
             sed -e '/^workspace-hack v/d' -e 's/ (\*)$//' | LC_ALL=C sort -u > "$RUNNER_TEMP/io-packages-after"
           diff -u "$RUNNER_TEMP/io-packages-before" "$RUNNER_TEMP/io-packages-after"
 
       - name: Check the decoder selection
         run: |
-          cargo tree --locked -p photocraft-io --prefix none --format '{p}' > "$RUNNER_TEMP/no-heif-tree"
+          cargo tree --color never --locked -p photocraft-io --prefix none --format '{p}' > "$RUNNER_TEMP/no-heif-tree"
           if grep -q '^craft-heif v' "$RUNNER_TEMP/no-heif-tree"; then
             echo 'The no-HEIF build selected the HEIF decoder' >&2
             exit 1
           fi
-          cargo tree --locked -p photocraft-io --features heif --prefix none --format '{p}' > "$RUNNER_TEMP/heif-tree"
+          cargo tree --color never --locked -p photocraft-io --features heif --prefix none --format '{p}' > "$RUNNER_TEMP/heif-tree"
           grep -q '^craft-heif v' "$RUNNER_TEMP/heif-tree"
 
       - name: Test without heif
