@@ -1,136 +1,98 @@
 //! The Move tool's Align and Distribute controls (Photoshop shows them whenever the Move tool is
-//! active; they enable once enough layers are selected). Every button dispatches an existing
-//! `layer.align.*` / `layer.distribute.*` command.
-//!
-//! The bar reads, after Show Transform Controls: Align left, horizontal centres, right and
-//! Distribute vertically; Align top, vertical centres, bottom and Distribute horizontally; the
-//! "..." button (a compact icon panel); the gear (the Move tool's three hover and group toggles,
-//! #11381).
+//! active; they enable once enough layers are selected). The framework's `AlignBar` lays out the
+//! buttons and the More menu; each fired `AlignAction` runs the matching `layer.align.*` /
+//! `layer.distribute.*` command through the app's command sources ([`run_fired`]). The gear after
+//! the bar holds the Move tool's three hover and group toggles (#11381).
 
+use craft::behavior::IconId;
+use craft::ui::bars::{AlignAction, AlignBar};
+use craft::ui::buttons::IconButton;
+use craft::ui::contract::{Entry, Props as _, Show as _, Trigger};
+use craft::ui::menu::Menu;
+use craft::ui::runtime::access::PopupKind;
+use craft::ui::runtime::commands::{CommandRef, CommandSet as _, CommandState};
 use serde_json::json;
 
-use crate::theme::Tokens;
-use crate::{PhotocraftApp, icons};
+use crate::PhotocraftApp;
 
-/// (command id, icon, label). The labels are the Layer menu's, already translated.
-pub(crate) const ALIGN: [(&str, &str, &str); 6] = [
-    ("layer.align.leftEdges", "align-edge-left", "Left Edges"),
-    ("layer.align.horizontalCenters", "align-edge-hcenter", "Horizontal Centers"),
-    ("layer.align.rightEdges", "align-edge-right", "Right Edges"),
-    ("layer.align.topEdges", "align-edge-top", "Top Edges"),
-    ("layer.align.verticalCenters", "align-edge-vcenter", "Vertical Centers"),
-    ("layer.align.bottomEdges", "align-edge-bottom", "Bottom Edges"),
-];
-
-/// The panel's Distribute group: top, vertical centres, bottom, left, horizontal centres, right.
-const DISTRIBUTE: [(&str, &str, &str); 6] = [
-    ("layer.distribute.topEdges", "distribute-top", "Top Edges"),
-    ("layer.distribute.verticalCenters", "distribute-vcenter", "Vertical Centers"),
-    ("layer.distribute.bottomEdges", "distribute-bottom", "Bottom Edges"),
-    ("layer.distribute.leftEdges", "distribute-left", "Left Edges"),
-    ("layer.distribute.horizontalCenters", "distribute-hcenter", "Horizontal Centers"),
-    ("layer.distribute.rightEdges", "distribute-right", "Right Edges"),
-];
-
-/// One bar button: (command id, icon, tooltip).
-type BarButton = (&'static str, &'static str, &'static str);
-
-/// The two button groups of the bar, in order. The tooltips are the reference application's.
-fn bar_groups() -> [[BarButton; 4]; 2] {
-    [
-        [
-            ("layer.align.leftEdges", "align-edge-left", tl!("Align left edges")),
-            ("layer.align.horizontalCenters", "align-edge-hcenter", tl!("Align horizontal centers")),
-            ("layer.align.rightEdges", "align-edge-right", tl!("Align right edges")),
-            ("layer.distribute.vertically", "distribute-vertical", tl!("Distribute vertically")),
-        ],
-        [
-            ("layer.align.topEdges", "align-edge-top", tl!("Align top edges")),
-            ("layer.align.verticalCenters", "align-edge-vcenter", tl!("Align vertical centers")),
-            ("layer.align.bottomEdges", "align-edge-bottom", tl!("Align bottom edges")),
-            ("layer.distribute.horizontally", "distribute-horizontal", tl!("Distribute horizontally")),
-        ],
-    ]
+/// Every align and distribute action, once.
+fn all() -> impl Iterator<Item = AlignAction> {
+    AlignAction::ALIGN.into_iter().chain(AlignAction::DISTRIBUTE)
 }
 
-/// Whether the "..." panel is open: a click on the button toggles it and nothing else closes it
-/// (Escape included), as in the reference application.
-pub(crate) fn panel_open_id() -> egui::Id {
-    egui::Id::unique("move-align-panel-open")
-}
-
-pub(crate) fn panel_is_open(ctx: &egui::Context) -> bool {
-    ctx.data(|d| d.get_temp::<bool>(panel_open_id())).unwrap_or(false)
-}
-
-/// The two groups of four icons, then the "..." button and its panel. Each icon uses 20 pt
-/// artwork inside a 28 pt hit target for high-DPI legibility without changing enabled-state or
-/// command dispatch (#8849).
-pub fn options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    ui.spacing_mut().item_spacing.x = 0.0;
-    for group in bar_groups() {
-        for (cmd, icon, tip) in group {
-            let on = app.session.is_enabled(cmd);
-            if ui.add_enabled_ui(on, |ui| icons::button_with_icon_size(ui, icon, 28.0, 20.0, false, tip)).inner.clicked() {
-                let _ = app.run(cmd, json!({}));
-            }
-        }
-        ui.add_space(6.0);
+/// The engine command an action runs.
+pub(crate) fn command_id(action: AlignAction) -> Option<&'static str> {
+    match action {
+        AlignAction::AlignLeftEdges => Some("layer.align.leftEdges"),
+        AlignAction::AlignHorizontalCenters => Some("layer.align.horizontalCenters"),
+        AlignAction::AlignRightEdges => Some("layer.align.rightEdges"),
+        AlignAction::AlignTopEdges => Some("layer.align.topEdges"),
+        AlignAction::AlignVerticalCenters => Some("layer.align.verticalCenters"),
+        AlignAction::AlignBottomEdges => Some("layer.align.bottomEdges"),
+        AlignAction::DistributeTopEdges => Some("layer.distribute.topEdges"),
+        AlignAction::DistributeVerticalCenters => Some("layer.distribute.verticalCenters"),
+        AlignAction::DistributeBottomEdges => Some("layer.distribute.bottomEdges"),
+        AlignAction::DistributeLeftEdges => Some("layer.distribute.leftEdges"),
+        AlignAction::DistributeHorizontalCenters => Some("layer.distribute.horizontalCenters"),
+        AlignAction::DistributeRightEdges => Some("layer.distribute.rightEdges"),
+        AlignAction::DistributeHorizontally => Some("layer.distribute.horizontally"),
+        AlignAction::DistributeVertically => Some("layer.distribute.vertically"),
+        // `AlignAction` is `#[non_exhaustive]`; `all()` yields only the actions listed above, and a later one has no engine command here.
+        _ => None,
     }
-    let more = icons::button_with_icon_size(ui, "ellipsis", 28.0, 20.0, false, tl!("Align and distribute"));
-    let ctx = ui.ctx().clone();
-    let open = panel_is_open(&ctx);
-    if more.clicked() {
-        ctx.data_mut(|d| d.insert_temp(panel_open_id(), !open));
-    }
-    if panel_is_open(&ctx) {
-        panel(app, &ctx, more.rect);
-    }
-    ui.add_space(6.0);
 }
 
-/// The compact icon panel under the "..." button: Align (6) and Distribute (6). The Distribute
-/// Spacing group (#10715) and the Align To dropdown (#10358) go below these as further `group`
-/// rows.
-fn panel(app: &mut PhotocraftApp, ctx: &egui::Context, anchor: egui::Rect) {
-    let t = Tokens::get(ctx);
-    egui::Area::new(egui::Id::unique("move-align-panel")).order(egui::Order::Foreground).fixed_pos(anchor.left_bottom() + egui::vec2(0.0, 2.0)).show(
-        ctx,
-        |ui| {
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(0.0, 2.0);
-                let mut group = |ui: &mut egui::Ui, title: &str, kind: &str, items: &[(&str, &str, &str)]| {
-                    ui.label(egui::RichText::new(title).small().color(t.text_dim));
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 0.0;
-                        for (cmd, icon, label) in items {
-                            let tip = format!("{kind}: {}", tl!(label));
-                            let on = app.session.is_enabled(cmd);
-                            if ui.add_enabled_ui(on, |ui| icons::button_with_icon_size(ui, icon, 28.0, 20.0, false, &tip)).inner.clicked() {
-                                let _ = app.run(cmd, json!({}));
-                            }
-                        }
-                    });
-                };
-                group(ui, tl!("Align"), tl!("Align"), &ALIGN);
-                ui.add_space(4.0);
-                group(ui, tl!("Distribute"), tl!("Distribute"), &DISTRIBUTE);
-            });
-        },
-    );
+/// The enabled state of every action: the session's, as the Layer menu reads it.
+pub(crate) fn command_states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandState)> {
+    all().map(|action| (CommandRef::new(action.id()), CommandState::new().enabled(command_id(action).is_some_and(|id| app.session.is_enabled(id))))).collect()
 }
 
-/// The gear after the "..." button: a menu of the Move tool's three check items, all on by
-/// default and saved with the tool options.
-pub fn gear(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let gear = icons::button_with_icon_size(ui, "settings", 28.0, 20.0, false, tl!("Options"));
-    egui::Popup::menu(&gear).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
-        ui.set_min_width(200.0);
-        let o = &mut app.ui.tool_options;
-        ui.checkbox(&mut o.move_show_hover_bounds, tl!("Show layer bounds on hover"));
-        ui.checkbox(&mut o.move_expand_group_on_click, tl!("Expand layer group on click"));
-        ui.checkbox(&mut o.move_show_layers_hover_bounds, tl!("Show hover bounds from Layers"));
-    });
+/// Runs a fired `AlignAction`. False when `command` is not one of them. The context is the
+/// command-source shape's; these commands need none.
+pub(crate) fn run_fired(app: &mut PhotocraftApp, _ctx: &egui::Context, command: &CommandRef) -> bool {
+    let Some(action) = AlignAction::from_ref(command) else { return false };
+    let Some(id) = command_id(action) else { return false };
+    if let Err(e) = app.run(id, json!({})) {
+        app.ui.status = e;
+    }
+    true
+}
+
+/// The bar, then the gear.
+pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    AlignBar::new().show(ui);
+    gear(app, ui);
+}
+
+/// A row of the gear menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum GearOption {
+    HoverBounds,
+    ExpandGroup,
+    LayersHoverBounds,
+}
+
+/// The gear after the bar: a menu of the Move tool's three check items, all on by default and
+/// saved with the tool options.
+fn gear(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let label = tl!("Options").to_string();
+    let button = IconButton::new(IconId::new("settings")).label(label.clone()).popup(PopupKind::Menu).show(ui);
+    let o = &app.ui.tool_options;
+    let entries = [
+        Entry::new(GearOption::HoverBounds, tl!("Show layer bounds on hover").to_string()).checked(o.move_show_hover_bounds),
+        Entry::new(GearOption::ExpandGroup, tl!("Expand layer group on click").to_string()).checked(o.move_expand_group_on_click),
+        Entry::new(GearOption::LayersHoverBounds, tl!("Show hover bounds from Layers").to_string()).checked(o.move_show_layers_hover_bounds),
+    ];
+    let o = match Menu::new(label).opened_by(&button, Trigger::Press).pick(ui, &entries).picked {
+        Some(picked) => picked,
+        None => return,
+    };
+    let options = &mut app.ui.tool_options;
+    match o {
+        GearOption::HoverBounds => options.move_show_hover_bounds = !options.move_show_hover_bounds,
+        GearOption::ExpandGroup => options.move_expand_group_on_click = !options.move_expand_group_on_click,
+        GearOption::LayersHoverBounds => options.move_show_layers_hover_bounds = !options.move_show_layers_hover_bounds,
+    }
 }
 
 #[cfg(test)]
@@ -138,14 +100,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_button_is_a_live_command_with_an_icon() {
+    fn every_align_action_runs_a_live_command() {
         let specs = photocraft_engine::command_specs();
-        let bar: Vec<BarButton> = bar_groups().into_iter().flatten().collect();
-        let panel = ALIGN.iter().chain(DISTRIBUTE.iter());
-        for (cmd, icon) in bar.iter().map(|b| (b.0, b.1)).chain(panel.map(|b| (b.0, b.1))) {
-            assert!(specs.iter().any(|c| c.id == cmd), "{cmd} is not a command");
-            assert!(icons::exists(icon), "{icon} is not embedded");
+        let mut count = 0;
+        for action in all() {
+            let id = command_id(action).expect("an engine command");
+            assert!(specs.iter().any(|c| c.id == id), "{id} is not a command");
+            count += 1;
         }
-        assert!(icons::exists("settings"));
+        assert_eq!(count, 14);
     }
 }

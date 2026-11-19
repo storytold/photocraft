@@ -13,10 +13,14 @@ fn connection(host: &Host) -> String {
     host.snapshot()["connectionId"].as_str().unwrap_or("").into()
 }
 
-fn app() -> (PhotocraftApp, Host, DocId) {
+fn app() -> (Box<PhotocraftApp>, Host, DocId) {
+    app_with_size(2, 2)
+}
+
+fn app_with_size(width: u32, height: u32) -> (Box<PhotocraftApp>, Host, DocId) {
     let host = host();
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { file_provider: Some(host.clone()), ..Default::default() });
-    app.run("file.new", json!({"width":2,"height":2,"name":"Drawing"})).unwrap();
+    app.run("file.new", json!({"width":width,"height":height,"name":"Drawing"})).unwrap();
     let state = app.session.active_mut().unwrap();
     state.revision = 7;
     state.saved_revision = 2;
@@ -35,7 +39,7 @@ fn begin(host: &Host, doc: DocId, copy: bool) -> String {
 }
 
 fn tick_once(app: &mut PhotocraftApp) {
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     tick(app, &ctx);
     crate::discard_ui::finish_provider_save(app, &ctx);
 }
@@ -217,7 +221,7 @@ fn a_device_download_cannot_close_a_document_edited_after_its_capture() {
             assert_eq!(app.session.active().unwrap().doc.id, doc);
             assert_eq!(app.session.active().unwrap().saved_revision, 2);
             assert!(app.session.active().unwrap().is_dirty());
-            assert!(crate::discard_ui::inspect(&app).is_some());
+            assert!(crate::discard_ui::pending_command(&app).is_some());
             assert!(!host.pending_for(doc), "the download completed, but did not include the later edit");
         } else {
             assert!(app.session.documents().is_empty(), "the unchanged capture retains the browser's existing download-and-close behaviour");
@@ -247,7 +251,7 @@ fn a_deferred_close_cannot_use_the_download_exception_after_its_resource_is_over
     let first = app.session.documents().iter().find(|state| state.doc.id == first).unwrap();
     assert!(first.is_dirty(), "the other tab replaced this tab's only durable checkpoint");
     assert!(!host.bound(first.doc.id));
-    assert!(crate::discard_ui::inspect(&app).is_some());
+    assert!(crate::discard_ui::pending_command(&app).is_some());
 }
 
 #[test]
@@ -316,7 +320,7 @@ fn assert_overwritten_alias_acknowledgement(destination: &str, status: &str, res
     if !stale {
         assert_eq!(host.state().bindings.get(&first).map(String::as_str), Some("new-resource"));
     }
-    assert_eq!(crate::discard_ui::inspect(&app).is_some(), stale, "an older reply cannot release the close prompt");
+    assert_eq!(crate::discard_ui::pending_command(&app).is_some(), stale, "an older reply cannot release the close prompt");
     let writer_state = documents.iter().find(|state| state.doc.id == writer).unwrap();
     assert!(writer_state.is_dirty(), "the later physical-copy upload can have replaced the same resource too");
     assert_eq!(writer_state.revision, 8);
@@ -435,7 +439,7 @@ fn a_provider_upload_cannot_close_a_dirty_document_as_an_unconfirmed_download() 
     assert_eq!(app.session.active().unwrap().doc.id, doc);
     assert_eq!(app.session.active().unwrap().saved_revision, 2);
     assert!(app.session.active().unwrap().is_dirty());
-    assert!(crate::discard_ui::inspect(&app).is_some());
+    assert!(crate::discard_ui::pending_command(&app).is_some());
 }
 
 #[test]
@@ -582,9 +586,9 @@ fn provider_open_accepts_idle_pointer_motion_and_leave_in_a_real_input_frame() {
         vec![egui::Event::MouseMoved(egui::vec2(4.0, 2.0))],
         vec![egui::Event::PointerMoved(egui::pos2(20.0, 20.0)), egui::Event::PointerGone],
     ] {
-        let ctx = egui::Context::default();
-        PhotocraftApp::setup_context(&ctx, Default::default());
         let (mut app, host, original) = app();
+        let ctx = app.ctx().clone();
+        PhotocraftApp::setup_context(&ctx, Default::default());
         let source = app.session.active().unwrap().doc.clone();
         let (request, imports) = request_deferred_open(&mut app, &host);
         host.open(request.clone(), "loaded.png".into(), vec![1]).unwrap();
@@ -613,9 +617,9 @@ fn provider_open_accepts_idle_pointer_motion_and_leave_in_a_real_input_frame() {
 
 #[test]
 fn provider_open_still_rejects_pointer_motion_while_a_button_is_held() {
-    let ctx = egui::Context::default();
-    PhotocraftApp::setup_context(&ctx, Default::default());
     let (mut app, host, doc) = app();
+    let ctx = app.ctx().clone();
+    PhotocraftApp::setup_context(&ctx, Default::default());
     let source = app.session.active().unwrap().doc.clone();
     let (request, imports) = request_deferred_open(&mut app, &host);
     let down =
@@ -638,29 +642,33 @@ fn provider_open_still_rejects_pointer_motion_while_a_button_is_held() {
 fn deferred_provider_open_does_not_retarget_a_live_filter_dialog() {
     for confirm in [false, true] {
         let (mut app, host, doc) = app();
+        let ctx = app.ctx().clone();
         app.run("layer.new.layer", json!({})).unwrap();
         let (request, imports) = request_deferred_open(&mut app, &host);
-        let dialog = crate::dialogs::open_command_dialog(&mut app, "filter.blur.gaussianBlur", "Gaussian Blur");
-        app.ui.dialog_mut(dialog).unwrap().fields.insert("radius".into(), json!(2.0));
-        let dialogs = app.ui.dialogs.clone();
+        let dialog = crate::dialogs::open_command_dialog(&mut app, "filter.blur.gaussianBlur", "Gaussian Blur").unwrap();
+        app.framework.dialogs.set_json_field(&ctx, dialog, "radius", json!(2.0)).unwrap();
+        let dialogs: Vec<_> = app.framework.dialogs.stack().ids().collect();
+        let fields = app.framework.dialogs.open_dialogs().into_iter().find(|open| open.id == dialog).unwrap().fields;
+        assert_eq!(fields.as_ref().unwrap()["radius"], 2.0);
         let source = app.session.active().unwrap().doc.clone();
         let checkpoint = app.session.active().unwrap().saved_revision;
         host.open(request.clone(), "loaded.png".into(), vec![1]).unwrap();
         tick_once(&mut app);
         assert_eq!(imports.load(Ordering::Relaxed), 0, "reject before decoding or admitting the incoming file");
-        assert_eq!(app.ui.dialogs, dialogs, "the existing dialog and its edited fields remain intact");
+        assert_eq!(app.framework.dialogs.stack().ids().collect::<Vec<_>>(), dialogs, "the existing dialog keeps its identity and stack order");
+        assert_eq!(app.framework.dialogs.open_dialogs().into_iter().find(|open| open.id == dialog).unwrap().fields, fields, "all edited fields remain intact");
         assert!(Arc::ptr_eq(&app.session.active().unwrap().doc, &source));
         assert_eq!(app.session.active().unwrap().saved_revision, checkpoint);
         assert_deferred_open_rejected(&app, &host, doc, &request);
         if confirm {
-            crate::dialogs::confirm(&mut app, dialog).unwrap();
+            crate::dialogs::confirm(&mut app, &ctx, dialog).unwrap();
         } else {
-            crate::dialogs::cancel(&mut app, dialog).unwrap();
+            crate::dialogs::cancel(&mut app, &ctx, dialog).unwrap();
             assert!(Arc::ptr_eq(&app.session.active().unwrap().doc, &source), "cancelling must not edit the original document");
         }
         assert_eq!(app.session.documents().len(), 1);
         assert_eq!(app.session.active().unwrap().doc.id, doc, "the original dialog still targets its own document");
-        assert!(app.ui.dialogs.is_empty());
+        assert!(!app.dialog_open());
     }
 }
 
@@ -668,9 +676,9 @@ fn deferred_provider_open_does_not_retarget_a_live_filter_dialog() {
 fn deferred_provider_open_preserves_waiting_remove_strokes_until_explicit_cancel() {
     use crate::canvas::{ToolEvent, tool_event};
 
-    let ctx = egui::Context::default();
-    PhotocraftApp::setup_context(&ctx, Default::default());
     let (mut app, host, doc) = app();
+    let ctx = app.ctx().clone();
+    PhotocraftApp::setup_context(&ctx, Default::default());
     app.run("layer.new.layer", json!({"name":"Remove source"})).unwrap();
     let (request, imports) = request_deferred_open(&mut app, &host);
     let source = app.session.active().unwrap().doc.clone();
@@ -682,8 +690,8 @@ fn deferred_provider_open_preserves_waiting_remove_strokes_until_explicit_cancel
     tool_event(&mut app, ToolEvent::Down { x: 0.0, y: 0.0, pressure: 1.0 }, modifiers);
     tool_event(&mut app, ToolEvent::Move { x: 1.0, y: 1.0, pressure: 1.0 }, modifiers);
     tool_event(&mut app, ToolEvent::Up { x: 1.0, y: 1.0 }, modifiers);
-    assert!(app.drag.is_none() && app.live_stroke.is_none(), "the stroke has ended, rather than remaining a held gesture");
-    assert!(app.ui.dialogs.is_empty());
+    assert!(!crate::canvas::testing::in_gesture(&app) && app.live_stroke.is_none(), "the stroke has ended, rather than remaining a held gesture");
+    assert!(!app.dialog_open());
     assert_eq!(app.remove_pending.len(), 1);
     assert!(app.remove_trail.is_some());
     let waiting = app.remove_pending.clone();
@@ -739,17 +747,21 @@ fn assert_provider_open_after_remove_cancel(app: &mut PhotocraftApp, host: &Host
 
 #[test]
 fn deferred_provider_open_preserves_a_live_gradient_until_its_user_commits_it() {
-    let (mut app, host, doc) = app();
+    let (mut app, host, doc) = app_with_size(200, 120);
     app.run("layer.new.layer", json!({})).unwrap();
     let (request, imports) = request_deferred_open(&mut app, &host);
     app.ui.tool = crate::state::Tool::Gradient;
     app.ui.tool_options.gradient_classic = false;
-    assert!(crate::gradient_ui::pointer(&mut app, crate::canvas::ToolEvent::Down { x: 0.0, y: 0.0, pressure: 1.0 }, egui::Modifiers::NONE));
-    assert!(crate::gradient_ui::pointer(&mut app, crate::canvas::ToolEvent::Move { x: 10.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE));
+    // A retained gradient draft with no held pointer must still prevent a provider retarget.
+    // The draft now lives in the canvas tool family, rather than the retired pointer adapter.
+    app.canvas_tools.gradient.from = Some([20.0, 20.0]);
+    app.canvas_tools.gradient.to = [100.0, 80.0];
     assert!(crate::gradient_ui::editing(&app));
     let source = app.session.active().unwrap().doc.clone();
     let revision = app.session.active().unwrap().revision;
-    assert!(app.ui.dialogs.is_empty(), "this uncommitted tool preview has no modal dialog");
+    assert!(!app.dialog_open(), "this uncommitted tool preview has no modal dialog");
+    assert!(!crate::canvas::testing::in_gesture(&app));
+    assert!(!app.ctx().input(|input| input.pointer.any_down()));
     host.open(request.clone(), "loaded.png".into(), vec![1]).unwrap();
     tick_once(&mut app);
     assert_eq!(imports.load(Ordering::Relaxed), 0);
@@ -757,7 +769,10 @@ fn deferred_provider_open_preserves_a_live_gradient_until_its_user_commits_it() 
     assert!(Arc::ptr_eq(&app.session.active().unwrap().doc, &source));
     assert_eq!(app.session.active().unwrap().revision, revision);
     assert_deferred_open_rejected(&app, &host, doc, &request);
-    assert!(crate::gradient_ui::pointer(&mut app, crate::canvas::ToolEvent::Up { x: 10.0, y: 10.0 }, egui::Modifiers::NONE));
+    // Only a later user gesture may commit the draft, through the actual shared canvas host.
+    crate::canvas::testing::press(&mut app, [20.0, 20.0], egui::Modifiers::NONE);
+    crate::canvas::testing::move_to(&mut app, [100.0, 80.0], egui::Modifiers::NONE);
+    crate::canvas::testing::release(&mut app, [100.0, 80.0], egui::Modifiers::NONE);
     assert!(!crate::gradient_ui::editing(&app));
     assert_eq!(app.session.active().unwrap().doc.id, doc);
     assert_ne!(app.session.active().unwrap().revision, revision, "only the user's later commit changes the document");
@@ -765,37 +780,44 @@ fn deferred_provider_open_preserves_a_live_gradient_until_its_user_commits_it() 
 
 #[test]
 fn deferred_provider_open_does_not_preempt_type_input_from_the_same_frame() {
-    let ctx = egui::Context::default();
-    PhotocraftApp::setup_context(&ctx, Default::default());
-    let (mut app, host, doc) = app();
-    let layer = app.run("type.create", json!({"text":"Before", "size":12})).unwrap()["layer"].as_u64().unwrap();
-    crate::type_tool::edit_active(&mut app).unwrap();
+    let (mut app, host, doc) = app_with_size(400, 200);
+    let ctx = app.ctx().clone();
+    let layer = app.run("type.create", json!({"text":"Before", "size":12, "x":20, "y":80})).unwrap()["layer"].as_u64().unwrap();
+    crate::type_tool::edit_active(&mut app, &ctx).unwrap();
     let edit = app.ui.text_edit.as_mut().unwrap();
     edit.anchor = edit.caret;
+    crate::canvas::testing::frame(&mut app);
+    crate::canvas::testing::frame(&mut app);
     let (request, imports) = request_deferred_open(&mut app, &host);
+    let before = app.session.active().unwrap().revision;
+    let checkpoint = app.session.active().unwrap().saved_revision;
     host.open(request.clone(), "loaded.png".into(), vec![1]).unwrap();
-    let raw = egui::RawInput { focused: true, events: vec![egui::Event::Text(" after".into())], ..Default::default() };
-    let mut output = ctx.run_ui(raw, |ui| {
-        tick(&mut app, ui.ctx());
-        assert_eq!(app.session.active().unwrap().doc.id, doc);
-        assert_deferred_open_rejected(&app, &host, doc, &request);
-        assert!(crate::type_tool::handle_keys(&mut app, ui.ctx()));
-        app.finish_type_reset_pass(ui.ctx());
+    let mut observed_logic = false;
+    crate::file_provider_tests::provider_editor_frame(&mut app, vec![egui::Event::Text(" after".into())], |app| {
+        if !observed_logic {
+            assert_eq!(app.session.active().unwrap().doc.id, doc);
+            assert_eq!(app.session.active().unwrap().revision, before, "provider logic precedes the same frame's text edit");
+            assert_deferred_open_rejected(app, &host, doc, &request);
+            observed_logic = true;
+        }
     });
-    output.textures_delta.clear(); // This input/protocol fixture does not paint.
+    assert!(observed_logic);
     assert_eq!(imports.load(Ordering::Relaxed), 0);
     let state = app.session.active().unwrap();
     let photocraft_doc::LayerContent::Text(text) = &state.doc.layer(photocraft_doc::LayerId(layer)).unwrap().content else { panic!("text layer") };
     assert_eq!(text.text, "Before after");
+    assert_ne!(state.revision, before);
+    assert_eq!(state.saved_revision, checkpoint);
+    assert!(state.is_dirty());
     assert_eq!(app.session.documents().len(), 1);
     assert!(!host.busy());
 }
 
 #[test]
 fn deferred_provider_open_keeps_a_focused_text_field_draft_without_new_input() {
-    let ctx = egui::Context::default();
-    PhotocraftApp::setup_context(&ctx, Default::default());
     let (mut app, host, doc) = app();
+    let ctx = app.ctx().clone();
+    PhotocraftApp::setup_context(&ctx, Default::default());
     let (request, imports) = request_deferred_open(&mut app, &host);
     let field = egui::Id::unique("provider-open-text-draft");
     let mut draft = "1e-".to_string();

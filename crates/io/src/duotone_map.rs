@@ -25,7 +25,7 @@ use craft_psd::aco::AcoColor;
 use photocraft_doc::adjust::CurvePoint;
 use photocraft_doc::{Duotone, DuotoneInk};
 
-use craft_psd_duotone::duotone as wire;
+use craft_psd::duotone as wire;
 #[cfg(test)]
 const BLOCK_LEN: usize = wire::BLOCK_LEN;
 const CURVE_AT: [u16; 13] = [0, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100];

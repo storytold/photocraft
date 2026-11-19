@@ -6,14 +6,21 @@ use std::rc::Rc;
 use serde_json::{Value, json};
 
 use crate::file_providers::{self, Host};
-use crate::{FileDialogAnswer, FileDialogRequest, PhotocraftApp, Services, menus};
+use crate::{PhotocraftApp, Services, menus};
+use craft::host::{Picked, ScriptedFiles};
+use craft::ui::dialog::StackDialog;
+use craft::ui::patterns::form_dialogs::HostedFormatOptions;
 
 type Written = Rc<RefCell<Vec<(String, Vec<u8>)>>>;
 
 #[cfg(all(not(target_arch = "wasm32"), target_pointer_width = "64"))]
 use crate::psd_open_tests::recovery_psd;
 
-fn app(connected: bool) -> (PhotocraftApp, Host, Written) {
+fn app(connected: bool) -> (Box<PhotocraftApp>, Host, Written) {
+    app_with_size(connected, 2, 2)
+}
+
+fn app_with_size(connected: bool, width: u32, height: u32) -> (Box<PhotocraftApp>, Host, Written) {
     let provider = Host::default();
     provider.set_session("test-provider-instance-0001".into()).unwrap();
     if connected {
@@ -21,25 +28,22 @@ fn app(connected: bool) -> (PhotocraftApp, Host, Written) {
     }
     let written: Written = Default::default();
     let writes = written.clone();
-    let dialog_provider = provider.clone();
     let services = Services {
         file_provider: Some(provider.clone()),
-        automation_command: Some(Box::new(|id, _| if id == "file.save" { Ok(()) } else { Err(format!("unexpected automation command: {id}")) })),
+        automation_command: Some(Box::new(|id, _| {
+            if matches!(id, "file.save" | "file.close" | "file.closeAll") { Ok(()) } else { Err(format!("unexpected automation command: {id}")) }
+        })),
         export: Some(Box::new(|_, _, _| Ok((vec![10, 20, 30], Vec::new())))),
         write: Some(Box::new(move |name, bytes| {
             writes.borrow_mut().push((name.into(), bytes.to_vec()));
             Ok(())
         })),
-        file_dialog: Some(Box::new(move |request, _, reply| match request {
-            FileDialogRequest::Save { suggested } if dialog_provider.wants_dialog() => dialog_provider.dialog(suggested, reply),
-            FileDialogRequest::Save { suggested } => reply.send(Some(FileDialogAnswer::SaveTo(suggested))),
-            _ => reply.send(None),
-        })),
+        files: Some(std::sync::Arc::new(ScriptedFiles::answering([Picked::Paths(vec!["Drawing.psd".into()])]))),
         write_unconfirmed: true,
         ..Default::default()
     };
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
-    app.run("file.new", json!({"width": 2, "height": 2, "name": "Drawing"})).unwrap();
+    app.run("file.new", json!({"width": width, "height": height, "name": "Drawing"})).unwrap();
     let document = app.session.active_mut().unwrap();
     document.revision = 7;
     document.saved_revision = 2;
@@ -50,11 +54,11 @@ fn event(provider: &Host, kind: &str) -> Value {
     provider.take_events().into_iter().find(|event| event.metadata["type"] == kind).unwrap().metadata
 }
 
-fn resolve_save(app: &mut PhotocraftApp, provider: &Host, ctx: &egui::Context) -> String {
-    app.poll_file_dialog(ctx, None);
+fn resolve_save(app: &mut PhotocraftApp, provider: &Host, _ctx: &egui::Context) -> String {
+    app.poll_file_dialog();
     let dialog = event(provider, "saveDialog");
     provider.resolve_dialog(dialog["requestId"].as_str().unwrap(), "provider", "drawing.psd").unwrap();
-    app.poll_file_dialog(ctx, None);
+    app.poll_file_dialog();
     event(provider, "save")["requestId"].as_str().unwrap().into()
 }
 
@@ -63,26 +67,45 @@ fn start_save(app: &mut PhotocraftApp, provider: &Host, ctx: &egui::Context, com
     resolve_save(app, provider, ctx)
 }
 
+/// One real canvas-editor input frame, with provider delivery in logic before the canvas takes
+/// its input and the save continuation after it. Reuse the canvas driver's context and clock.
+pub(crate) fn provider_editor_frame(app: &mut PhotocraftApp, events: Vec<egui::Event>, mut before_canvas: impl FnMut(&PhotocraftApp)) {
+    let ctx = app.ctx().clone();
+    let mut frames = app.canvas_tools.frames.take().expect("warm up the canvas editor before sending input");
+    app.framework_before_input(&ctx);
+    frames.frame_without_input(events, |ui| {
+        file_providers::tick(app, ui.ctx());
+        before_canvas(app);
+        crate::shortcut_dispatch::record_view_commands(app);
+        crate::shortcuts::handle(app, &ui.ctx().clone());
+        egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+        crate::dialogs::run(app, ui);
+        crate::shortcuts::escape_keys(app, &ui.ctx().clone());
+        crate::discard_ui::finish_provider_save(app, ui.ctx());
+    });
+    app.canvas_tools.frames = Some(frames);
+}
+
 #[test]
 fn no_registered_provider_keeps_the_local_writer_and_menu() {
-    let ctx = egui::Context::default();
     let (mut app, provider, written) = app(false);
+    let ctx = app.ctx().clone();
     menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
-    app.poll_file_dialog(&ctx, None);
+    app.poll_file_dialog();
     assert_eq!(written.borrow().len(), 1);
     assert_eq!(app.session.active().unwrap().saved_revision, 2, "a browser download has no durable acknowledgement");
     assert!(!app.saving());
     assert!(provider.take_events().is_empty());
-    assert!(!menus::menu_items(&app).iter().any(|item| item.id.starts_with("file.openProviderRecent.")));
+    assert!(!menus::base_rows(&app).iter().any(|item| item.command.id.starts_with("file.openProviderRecent.")));
 }
 
 #[test]
 fn disabled_provider_keeps_new_saves_local() {
-    let ctx = egui::Context::default();
     let (mut app, provider, written) = app(true);
+    let ctx = app.ctx().clone();
     provider.set_enabled(false).unwrap();
     menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
-    app.poll_file_dialog(&ctx, None);
+    app.poll_file_dialog();
     assert_eq!(written.borrow().len(), 1);
     assert!(provider.take_events().is_empty());
     assert_eq!(app.session.active().unwrap().saved_revision, 2);
@@ -90,14 +113,14 @@ fn disabled_provider_keeps_new_saves_local() {
 
 #[test]
 fn denied_control_save_keeps_the_close_prompt_without_a_provider_request() {
-    let ctx = egui::Context::default();
     let (mut app, provider, written) = app(true);
+    let ctx = app.ctx().clone();
     app.services.automation_command = Some(Box::new(|_, _| Err("automation Save denied".into())));
 
     menus::invoke(&mut app, &ctx, "file.close", json!({})).unwrap();
     assert_eq!(crate::discard_ui::answer_control(&mut app, &ctx, "save").unwrap_err(), "automation Save denied");
-    app.poll_file_dialog(&ctx, None);
-    assert!(crate::discard_ui::inspect(&app).is_some());
+    app.poll_file_dialog();
+    assert!(crate::discard_ui::pending_command(&app).is_some());
     assert!(app.session.active().unwrap().is_dirty());
     assert!(!provider.wants_dialog());
     assert!(provider.take_events().is_empty());
@@ -159,12 +182,16 @@ fn assert_queued_save_ack_preserves_other_document(
 
 #[test]
 fn a_rejected_queued_save_cannot_retarget_the_first_provider_dialog() {
-    let ctx = egui::Context::default();
     let (mut app, provider, written) = app(true);
+    let ctx = app.ctx().clone();
     let first = app.session.active().unwrap().doc.id;
     menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+    let initial = provider.take_events();
+    assert_eq!(initial.len(), 1, "the native picker starts its provider request immediately");
+    let dialog = initial[0].metadata.clone();
+    assert_eq!(dialog["type"], "saveDialog");
 
-    // Both Save As requests arrive before the first poll shows the queued chooser.
+    // The second request arrives before polling the first chooser's answer.
     app.run("file.new", json!({"width": 2, "height": 2, "name": "Other"})).unwrap();
     let second = app.session.active().unwrap().doc.id;
     assert_ne!(first, second);
@@ -176,14 +203,14 @@ fn a_rejected_queued_save_cannot_retarget_the_first_provider_dialog() {
     assert!(provider.take_events().is_empty());
     assert!(written.borrow().is_empty());
 
-    app.poll_file_dialog(&ctx, None);
-    let dialog = event(&provider, "saveDialog");
+    app.poll_file_dialog();
+    assert!(provider.take_events().is_empty(), "polling cannot start a replacement chooser");
     assert_eq!(dialog["documentId"], first.0.to_string(), "the queued chooser must keep the first document's owner");
     assert_eq!(dialog["intent"], "saveAs");
     assert!(provider.pending_for(first));
     assert!(!provider.pending_for(second));
     provider.resolve_dialog(dialog["requestId"].as_str().unwrap(), "provider", "first.psd").unwrap();
-    app.poll_file_dialog(&ctx, None);
+    app.poll_file_dialog();
     let events = provider.take_events();
     assert_eq!(events.len(), 1);
     let capture = events.into_iter().next().unwrap();
@@ -196,8 +223,8 @@ fn a_rejected_queued_save_cannot_retarget_the_first_provider_dialog() {
 
 #[test]
 fn provider_ack_owns_its_revision_without_becoming_a_local_path() {
-    let ctx = egui::Context::default();
     let (mut app, provider, written) = app(true);
+    let ctx = app.ctx().clone();
     app.push_recent("/device/drawing.psd");
     let document = app.session.active().unwrap().doc.id;
     let request = start_save(&mut app, &provider, &ctx, "file.saveAs");
@@ -222,10 +249,10 @@ fn provider_ack_owns_its_revision_without_becoming_a_local_path() {
 
 #[test]
 fn save_a_copy_does_not_use_the_provider_or_mark_the_editable_saved() {
-    let ctx = egui::Context::default();
     let (mut app, provider, written) = app(true);
+    let ctx = app.ctx().clone();
     menus::invoke(&mut app, &ctx, "file.saveACopy", json!({})).unwrap();
-    app.poll_file_dialog(&ctx, None);
+    app.poll_file_dialog();
     assert_eq!(written.borrow().len(), 1);
     assert!(provider.take_events().is_empty());
     assert_eq!(app.session.active().unwrap().saved_revision, 2);
@@ -234,17 +261,17 @@ fn save_a_copy_does_not_use_the_provider_or_mark_the_editable_saved() {
 
 fn assert_retry_chooser_preserves_intent(app: &mut PhotocraftApp, provider: &Host, ctx: &egui::Context, command: &str, document_id: &str) {
     menus::invoke(app, ctx, command, json!({})).unwrap();
-    app.poll_file_dialog(ctx, None);
+    app.poll_file_dialog();
     let retry = event(provider, "saveDialog");
     assert_eq!(retry["documentId"].as_str(), Some(document_id));
     assert_eq!(retry["intent"], if command == "file.save" { "save" } else { "saveAs" });
     provider.resolve_dialog(retry["requestId"].as_str().unwrap(), "cancel", "").unwrap();
-    app.poll_file_dialog(ctx, None);
+    app.poll_file_dialog();
 }
 
 fn assert_refused_pending_save_keeps_local_copy(pending_command: &str, refused_command: &str) {
-    let ctx = egui::Context::default();
     let (mut app, provider, written) = app(true);
+    let ctx = app.ctx().clone();
     let request = start_save(&mut app, &provider, &ctx, pending_command);
     let state = app.session.active().unwrap();
     let document = state.doc.id;
@@ -289,7 +316,7 @@ fn assert_refused_pending_save_keeps_local_copy(pending_command: &str, refused_c
     assert_eq!((state.doc.id, state.revision, state.saved_revision, state.is_dirty(), state.path.clone(), state.doc.name.clone()), before);
     // The normal copy entry point clears idle intents itself; preserve its actual local route.
     menus::invoke(&mut app, &ctx, "file.saveACopy", json!({})).unwrap();
-    app.poll_file_dialog(&ctx, None);
+    app.poll_file_dialog();
     assert_eq!(written.borrow().len(), 1);
     assert_eq!(written.borrow()[0].1, [10, 20, 30]);
     assert!(provider.take_events().is_empty());
@@ -316,8 +343,8 @@ fn refused_pending_saves_leave_no_new_intent_and_keep_local_copies_local() {
 #[test]
 fn save_before_close_waits_for_ack_and_for_any_newer_edits() {
     for edit_after_capture in [false, true] {
-        let ctx = egui::Context::default();
         let (mut app, provider, _) = app(true);
+        let ctx = app.ctx().clone();
         menus::invoke(&mut app, &ctx, "file.close", json!({})).unwrap();
         crate::discard_ui::answer_control(&mut app, &ctx, "save").unwrap();
         let request = resolve_save(&mut app, &provider, &ctx);
@@ -336,7 +363,7 @@ fn save_before_close_waits_for_ack_and_for_any_newer_edits() {
         if edit_after_capture {
             assert_eq!(app.session.documents().len(), 1);
             assert!(app.session.active().unwrap().is_dirty());
-            assert!(crate::discard_ui::inspect(&app).is_some());
+            assert!(crate::discard_ui::pending_command(&app).is_some());
         } else {
             assert!(app.session.documents().is_empty());
         }
@@ -345,13 +372,15 @@ fn save_before_close_waits_for_ack_and_for_any_newer_edits() {
 
 #[test]
 fn provider_ack_waits_for_raw_type_input_from_the_same_frame_before_closing() {
-    let ctx = egui::Context::default();
-    PhotocraftApp::setup_context(&ctx, Default::default());
-    let (mut app, provider, _) = app(true);
-    let text = app.run("type.create", json!({"text":"Before", "size":12})).unwrap()["layer"].as_u64().unwrap();
-    crate::type_tool::edit_active(&mut app).unwrap();
+    let (mut app, provider, _) = app_with_size(true, 400, 200);
+    let ctx = app.ctx().clone();
+    let text = app.run("type.create", json!({"text":"Before", "size":12, "x":20, "y":80})).unwrap()["layer"].as_u64().unwrap();
+    crate::type_tool::edit_active(&mut app, &ctx).unwrap();
     let edit = app.ui.text_edit.as_mut().unwrap();
     edit.anchor = edit.caret;
+    // The real canvas editor must have shown and taken focus before the ACK/input frame.
+    crate::canvas::testing::frame(&mut app);
+    crate::canvas::testing::frame(&mut app);
     let doc = app.session.active().unwrap().doc.id;
     menus::invoke(&mut app, &ctx, "file.close", json!({})).unwrap();
     crate::discard_ui::answer_control(&mut app, &ctx, "save").unwrap();
@@ -359,31 +388,31 @@ fn provider_ack_waits_for_raw_type_input_from_the_same_frame_before_closing() {
     let captured = app.session.active().unwrap().revision;
     provider.result(request, "saved".into(), "resource-one".into()).unwrap();
 
-    let raw = egui::RawInput { focused: true, events: vec![egui::Event::Text(" after".into())], ..Default::default() };
-    let mut output = ctx.run_ui(raw, |ui| {
-        // eframe runs logic before UI with this same raw input. This is the real Type
-        // input handler: its engine edit must not be preempted by the save continuation.
-        file_providers::tick(&mut app, ui.ctx());
-        assert_eq!(app.session.active().unwrap().doc.id, doc);
-        assert!(app.has_unsaved_work(), "the parked close remains guarded until UI settles");
-        assert!(crate::type_tool::handle_keys(&mut app, ui.ctx()));
-        crate::discard_ui::finish_provider_save(&mut app, ui.ctx());
-        app.finish_type_reset_pass(ui.ctx());
+    let mut observed_logic = false;
+    provider_editor_frame(&mut app, vec![egui::Event::Text(" after".into())], |app| {
+        if !observed_logic {
+            // Logic applies the ACK before this same frame's shared canvas editor types.
+            assert_eq!(app.session.active().unwrap().doc.id, doc);
+            assert_eq!(app.session.active().unwrap().revision, captured);
+            assert_eq!(app.session.active().unwrap().saved_revision, captured);
+            assert!(app.has_unsaved_work(), "the parked close remains guarded until UI settles");
+            observed_logic = true;
+        }
     });
-    output.textures_delta.clear(); // This input/protocol fixture does not paint.
+    assert!(observed_logic);
     let state = app.session.active().unwrap();
     let photocraft_doc::LayerContent::Text(layer) = &state.doc.layer(photocraft_doc::LayerId(text)).unwrap().content else { panic!("text layer") };
     assert_eq!(layer.text, "Before after");
     assert_eq!(state.saved_revision, captured);
     assert_ne!(state.revision, captured);
     assert!(state.is_dirty());
-    assert!(crate::discard_ui::inspect(&app).is_some());
+    assert!(crate::discard_ui::pending_command(&app).is_some());
 }
 
 #[test]
 fn provider_ack_with_only_pointer_input_closes_after_a_settled_ui_pass() {
-    let ctx = egui::Context::default();
     let (mut app, provider, _) = app(true);
+    let ctx = app.ctx().clone();
     menus::invoke(&mut app, &ctx, "file.close", json!({})).unwrap();
     crate::discard_ui::answer_control(&mut app, &ctx, "save").unwrap();
     let request = resolve_save(&mut app, &provider, &ctx);
@@ -404,8 +433,8 @@ fn provider_ack_with_only_pointer_input_closes_after_a_settled_ui_pass() {
 
 #[test]
 fn provider_ack_does_not_discard_an_uncommitted_preview_or_its_later_commit() {
-    let ctx = egui::Context::default();
     let (mut app, provider, _) = app(true);
+    let ctx = app.ctx().clone();
     let layer = app.run("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
     menus::invoke(&mut app, &ctx, "file.close", json!({})).unwrap();
     crate::discard_ui::answer_control(&mut app, &ctx, "save").unwrap();
@@ -421,14 +450,14 @@ fn provider_ack_does_not_discard_an_uncommitted_preview_or_its_later_commit() {
     app.run("layer.new.layer", json!({"name":"Committed after capture"})).unwrap();
     crate::discard_ui::finish_provider_save(&mut app, &ctx);
     assert!(app.session.active().unwrap().is_dirty());
-    assert!(crate::discard_ui::inspect(&app).is_some());
+    assert!(crate::discard_ui::pending_command(&app).is_some());
 }
 
 #[test]
 fn provider_ack_waits_for_live_gradient_edit_without_pointer_or_dialog() {
     for commit in [false, true] {
-        let ctx = egui::Context::default();
-        let (mut app, provider, _) = app(true);
+        let (mut app, provider, _) = app_with_size(true, 200, 120);
+        let ctx = app.ctx().clone();
         app.run("layer.new.layer", json!({})).unwrap();
         menus::invoke(&mut app, &ctx, "file.close", json!({})).unwrap();
         crate::discard_ui::answer_control(&mut app, &ctx, "save").unwrap();
@@ -436,26 +465,33 @@ fn provider_ack_waits_for_live_gradient_edit_without_pointer_or_dialog() {
         let captured = app.session.active().unwrap().revision;
         app.ui.tool = crate::state::Tool::Gradient;
         app.ui.tool_options.gradient_classic = false;
-        assert!(crate::gradient_ui::pointer(&mut app, crate::canvas::ToolEvent::Down { x: 0.0, y: 0.0, pressure: 1.0 }, egui::Modifiers::NONE,));
-        assert!(crate::gradient_ui::pointer(&mut app, crate::canvas::ToolEvent::Move { x: 10.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE,));
+        // Retain a draft in its current owner without a held physical pointer: a latent
+        // preview alone must guard the ACK, independently of the canvas's capture state.
+        app.canvas_tools.gradient.from = Some([20.0, 20.0]);
+        app.canvas_tools.gradient.to = [100.0, 80.0];
         assert!(crate::gradient_ui::editing(&app));
         assert_eq!(app.session.active().unwrap().revision, captured, "the live gradient is only a preview");
         assert!(!ctx.input(|input| input.pointer.any_down()));
-        assert!(app.ui.dialogs.is_empty());
+        assert!(!crate::canvas::testing::in_gesture(&app));
+        assert!(!app.dialog_open());
         provider.result(request, "saved".into(), "resource-one".into()).unwrap();
         file_providers::tick(&mut app, &ctx);
         crate::discard_ui::finish_provider_save(&mut app, &ctx);
         assert_eq!(app.session.documents().len(), 1, "the ACK must wait for the uncommitted gradient");
         assert!(app.has_unsaved_work());
         if commit {
-            assert!(crate::gradient_ui::pointer(&mut app, crate::canvas::ToolEvent::Up { x: 10.0, y: 10.0 }, egui::Modifiers::NONE));
+            crate::canvas::testing::press(&mut app, [20.0, 20.0], egui::Modifiers::NONE);
+            crate::canvas::testing::move_to(&mut app, [100.0, 80.0], egui::Modifiers::NONE);
+            crate::canvas::testing::release(&mut app, [100.0, 80.0], egui::Modifiers::NONE);
             assert!(!crate::gradient_ui::editing(&app));
             assert_ne!(app.session.active().unwrap().revision, captured);
             crate::discard_ui::finish_provider_save(&mut app, &ctx);
             assert!(app.session.active().unwrap().is_dirty());
-            assert!(crate::discard_ui::inspect(&app).is_some());
+            assert!(crate::discard_ui::pending_command(&app).is_some());
         } else {
+            app.canvas_tools.gradient = Default::default();
             app.gradient = Default::default();
+            assert!(!crate::gradient_ui::editing(&app));
             crate::discard_ui::finish_provider_save(&mut app, &ctx);
             assert!(app.session.documents().is_empty(), "cancelling the preview leaves the acknowledged capture unchanged");
             assert!(!app.has_unsaved_work());
@@ -465,8 +501,8 @@ fn provider_ack_waits_for_live_gradient_edit_without_pointer_or_dialog() {
 
 #[test]
 fn a_deferred_provider_close_cannot_cross_an_account_connection() {
-    let ctx = egui::Context::default();
     let (mut app, provider, _) = app(true);
+    let ctx = app.ctx().clone();
     menus::invoke(&mut app, &ctx, "file.close", json!({})).unwrap();
     crate::discard_ui::answer_control(&mut app, &ctx, "save").unwrap();
     let request = resolve_save(&mut app, &provider, &ctx);
@@ -477,14 +513,14 @@ fn a_deferred_provider_close_cannot_cross_an_account_connection() {
     provider.connect("test-storage".into(), "Example Storage".into(), "account-b".into()).unwrap();
     crate::discard_ui::finish_provider_save(&mut app, &ctx);
     assert_eq!(app.session.documents().len(), 1);
-    assert!(crate::discard_ui::inspect(&app).is_some());
+    assert!(crate::discard_ui::pending_command(&app).is_some());
 }
 
 #[test]
 fn provider_save_is_not_recorded_as_a_local_action_or_relabels_an_earlier_local_save() {
     for command in ["file.save", "file.saveAs"] {
-        let ctx = egui::Context::default();
         let (mut app, provider, written) = app(true);
+        let ctx = app.ctx().clone();
         let previous = ("file.saveAs".into(), json!({"path":"drawing.psd"}));
         app.session.journal.push(previous.clone());
         let before = app.session.journal.clone();
@@ -500,31 +536,27 @@ fn provider_save_is_not_recorded_as_a_local_action_or_relabels_an_earlier_local_
 #[test]
 fn provider_saves_with_format_options_are_not_recorded_as_local_actions() {
     for extension in ["tga", "dds", "jpg", "tif"] {
-        let ctx = egui::Context::default();
         let (mut app, provider, written) = app(true);
+        let ctx = app.ctx().clone();
         if extension == "tif" {
             app.session.edit_prefs(|prefs| prefs.file_handling.ask_before_saving_layered_tiff = true);
             app.run("layer.new.layer", json!({"name":"Second layer"})).unwrap();
         }
         let before = app.session.journal.clone();
         menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
-        app.poll_file_dialog(&ctx, None);
+        app.poll_file_dialog();
         let dialog = event(&provider, "saveDialog");
         let name = format!("drawing.{extension}");
         provider.resolve_dialog(dialog["requestId"].as_str().unwrap(), "provider", &name).unwrap();
-        app.poll_file_dialog(&ctx, None);
+        app.poll_file_dialog();
         assert!(app.save_options_open(), "{extension} needs its format answer before serialization");
         let mut h = egui_kittest::Harness::builder()
+            .with_context(app.ctx().clone())
             .with_size(egui::vec2(800.0, 600.0))
-            .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::ALL[0]))
+            .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, Default::default()))
             .build_ui_state(
                 move |ui, app| {
-                    match extension {
-                        "tga" => crate::targa_options_ui::show(app, ui.ctx()),
-                        "dds" => crate::dds_options_ui::show(app, ui.ctx()),
-                        "jpg" => crate::jpeg_options_ui::show(app, ui.ctx()),
-                        _ => crate::tiff_options_ui::show(app, ui.ctx()),
-                    }
+                    crate::dialogs::run(app, ui);
                     file_providers::capture(app);
                 },
                 app,
@@ -541,8 +573,8 @@ fn provider_saves_with_format_options_are_not_recorded_as_local_actions() {
 
 #[test]
 fn a_pending_provider_read_does_not_block_an_unrelated_discard_answer() {
-    let ctx = egui::Context::default();
     let (mut app, provider, _) = app(true);
+    let ctx = app.ctx().clone();
     provider
         .set_resources(
             provider.snapshot()["connectionId"].as_str().unwrap(),
@@ -551,7 +583,7 @@ fn a_pending_provider_read_does_not_block_an_unrelated_discard_answer() {
         .unwrap();
     let read = provider.request_open("one").unwrap();
     menus::invoke(&mut app, &ctx, "file.close", json!({})).unwrap();
-    assert!(crate::discard_ui::inspect(&app).is_some());
+    assert!(crate::discard_ui::pending_command(&app).is_some());
     assert!(provider.busy());
     assert!(!app.saving());
     crate::discard_ui::answer_control(&mut app, &ctx, "dontSave").unwrap();
@@ -567,8 +599,8 @@ fn a_pending_provider_read_does_not_block_an_unrelated_discard_answer() {
 #[cfg(all(not(target_arch = "wasm32"), target_pointer_width = "64"))]
 #[test]
 fn provider_memory_approval_refusal_cannot_launch_an_unowned_open_job() {
-    let ctx = egui::Context::default();
     let (mut app, provider, written) = app(true);
+    let ctx = app.ctx().clone();
     app.services.import = Some(Box::new(|name, bytes, opts| {
         photocraft_io::import_with_options(name, bytes, opts).map(|result| (result.document, result.warnings)).map_err(|error| error.to_string())
     }));
@@ -611,42 +643,43 @@ fn provider_memory_approval_refusal_cannot_launch_an_unowned_open_job() {
 
 #[test]
 fn pending_save_as_arms_leave_guard_even_when_the_old_revision_is_clean() {
-    let ctx = egui::Context::default();
     let (mut app, provider, _) = app(true);
+    let ctx = app.ctx().clone();
     app.session.active_mut().unwrap().saved_revision = 7;
     assert!(!app.has_unsaved_work());
     menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
-    app.poll_file_dialog(&ctx, None);
+    app.poll_file_dialog();
     let dialog = event(&provider, "saveDialog");
     assert!(app.has_unsaved_work());
     menus::invoke(&mut app, &ctx, "file.close", json!({})).unwrap();
     assert_eq!(app.session.documents().len(), 1, "a clean Save As still owns an external side effect");
     assert!(crate::discard_ui::answer_control(&mut app, &ctx, "dontSave").is_err());
     provider.resolve_dialog(dialog["requestId"].as_str().unwrap(), "cancel", "").unwrap();
-    app.poll_file_dialog(&ctx, None);
+    app.poll_file_dialog();
     assert!(!app.has_unsaved_work());
 }
 
 #[test]
 fn cancelling_format_options_releases_the_destination_and_reopens_the_chooser() {
-    let ctx = egui::Context::default();
     let (mut app, provider, written) = app(true);
+    let ctx = app.ctx().clone();
     menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
-    app.poll_file_dialog(&ctx, None);
+    app.poll_file_dialog();
     let dialog = event(&provider, "saveDialog");
     provider.resolve_dialog(dialog["requestId"].as_str().unwrap(), "provider", "drawing.tga").unwrap();
-    app.poll_file_dialog(&ctx, None);
+    app.poll_file_dialog();
     file_providers::capture(&mut app);
-    assert!(app.targa_options.is_some());
+    assert!(matches!(app.parked_save.as_ref().map(|save| &save.format), Some(crate::format_prompts::ParkedFormat::Targa)));
     assert!(app.saving(), "the destination remains reserved while format options are open");
     assert!(menus::invoke(&mut app, &ctx, "file.saveACopy", json!({})).is_err());
     assert!(provider.take_events().is_empty(), "Save a Copy cannot reuse the pending save's intent");
     let mut h = egui_kittest::Harness::builder()
+        .with_context(app.ctx().clone())
         .with_size(egui::vec2(800.0, 600.0))
-        .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::ALL[0]))
+        .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, Default::default()))
         .build_ui_state(
             |ui, app| {
-                crate::targa_options_ui::show(app, ui.ctx());
+                crate::dialogs::run(app, ui);
                 file_providers::capture(app);
             },
             app,
@@ -654,13 +687,13 @@ fn cancelling_format_options_releases_the_destination_and_reopens_the_chooser() 
     h.run_steps(2);
     h.key_press(egui::Key::Escape);
     h.run_steps(3);
-    assert!(h.state().targa_options.is_none());
+    assert!(h.state().parked_save.is_none());
     assert!(!h.state().saving());
     assert!(written.borrow().is_empty());
     assert_eq!(h.state().session.active().unwrap().saved_revision, 2);
     let ctx = h.ctx.clone();
     menus::invoke(h.state_mut(), &ctx, "file.save", json!({})).unwrap();
-    h.state_mut().poll_file_dialog(&ctx, None);
+    h.state_mut().poll_file_dialog();
     let next = event(&provider, "saveDialog");
     assert_ne!(next["requestId"], dialog["requestId"]);
     assert_eq!(next["intent"], "save");
@@ -668,25 +701,25 @@ fn cancelling_format_options_releases_the_destination_and_reopens_the_chooser() 
 
 #[test]
 fn a_bound_native_project_keeps_its_format_and_resource_on_the_next_save() {
-    let ctx = egui::Context::default();
     let (mut app, provider, written) = app(true);
+    let ctx = app.ctx().clone();
     menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
-    app.poll_file_dialog(&ctx, None);
+    app.poll_file_dialog();
     let dialog = event(&provider, "saveDialog");
     provider.resolve_dialog(dialog["requestId"].as_str().unwrap(), "provider", "drawing.pcraft").unwrap();
-    app.poll_file_dialog(&ctx, None);
+    app.poll_file_dialog();
     let save = event(&provider, "save");
     provider.result(save["requestId"].as_str().unwrap().into(), "saved".into(), "resource-native".into()).unwrap();
     file_providers::tick(&mut app, &ctx);
     assert!(app.session.active().unwrap().path.is_none());
     app.session.active_mut().unwrap().revision = 8;
     menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
-    app.poll_file_dialog(&ctx, None);
+    app.poll_file_dialog();
     let next = event(&provider, "saveDialog");
     assert_eq!(next["filename"], "drawing.pcraft");
     assert_eq!(next["intent"], "save");
     provider.resolve_dialog(next["requestId"].as_str().unwrap(), "provider", "drawing.pcraft").unwrap();
-    app.poll_file_dialog(&ctx, None);
+    app.poll_file_dialog();
     let next_save = event(&provider, "save");
     assert_eq!(next_save["filename"], "drawing.pcraft");
     assert_eq!(next_save["resourceId"], "resource-native");
@@ -698,17 +731,17 @@ fn a_bound_native_project_keeps_its_format_and_resource_on_the_next_save() {
 
 #[test]
 fn provider_bound_jpeg_with_transparency_is_offered_as_png() {
-    let ctx = egui::Context::default();
     let (mut app, provider, written) = app(true);
+    let ctx = app.ctx().clone();
     app.run("file.new", json!({"width": 4, "height": 4, "background": "white"})).unwrap();
     app.run("layer.new.layerFromBackground", json!({})).unwrap();
 
     menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
-    app.poll_file_dialog(&ctx, None);
+    app.poll_file_dialog();
     let dialog = event(&provider, "saveDialog");
     provider.resolve_dialog(dialog["requestId"].as_str().unwrap(), "provider", "drawing.jpg").unwrap();
-    app.poll_file_dialog(&ctx, None);
-    crate::jpeg_options_ui::confirm(&mut app, &ctx);
+    app.poll_file_dialog();
+    crate::format_prompts::confirm(&mut app, &ctx);
     let save = event(&provider, "save");
     provider.result(save["requestId"].as_str().unwrap().into(), "saved".into(), "resource-jpeg".into()).unwrap();
     file_providers::tick(&mut app, &ctx);
@@ -717,7 +750,7 @@ fn provider_bound_jpeg_with_transparency_is_offered_as_png() {
     app.run("edit.clear", json!({})).unwrap();
     app.run("select.deselect", json!({})).unwrap();
     menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
-    app.poll_file_dialog(&ctx, None);
+    app.poll_file_dialog();
     assert_eq!(event(&provider, "saveDialog")["filename"], "drawing.png");
     assert!(written.borrow().is_empty());
     assert!(app.session.active().unwrap().path.is_none());
@@ -726,8 +759,8 @@ fn provider_bound_jpeg_with_transparency_is_offered_as_png() {
 // Original synthetic PhotoCraft raster/native-resource fixture, MIT OR Apache-2.0.
 #[test]
 fn provider_delivery_failure_preserves_native_resources_drafts_and_a_fresh_save_retry() {
-    let ctx = egui::Context::default();
     let (mut app, provider, written) = app(true);
+    let ctx = app.ctx().clone();
     app.services.export = Some(Box::new(|doc, name, settings| {
         photocraft_io::export(doc, name, &settings.io_options()).map(|result| (result.bytes, result.warnings)).map_err(|error| error.to_string())
     }));
@@ -747,10 +780,10 @@ fn provider_delivery_failure_preserves_native_resources_drafts_and_a_fresh_save_
     let captured = app.session.active().unwrap().doc.clone();
     let journal = app.session.journal.clone();
     menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
-    app.poll_file_dialog(&ctx, None);
+    app.poll_file_dialog();
     let dialog = event(&provider, "saveDialog");
     provider.resolve_dialog(dialog["requestId"].as_str().unwrap(), "provider", "delivery.pcraft").unwrap();
-    app.poll_file_dialog(&ctx, None);
+    app.poll_file_dialog();
     let mut request = String::new();
     let mut payload = Vec::new();
     provider.publish_events_with(
@@ -784,10 +817,10 @@ fn provider_delivery_failure_preserves_native_resources_drafts_and_a_fresh_save_
 
     app.live_adjust = None; // Explicit fixture cancellation, never a recovery side effect.
     menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
-    app.poll_file_dialog(&ctx, None);
+    app.poll_file_dialog();
     let dialog = event(&provider, "saveDialog");
     provider.resolve_dialog(dialog["requestId"].as_str().unwrap(), "provider", "delivery.pcraft").unwrap();
-    app.poll_file_dialog(&ctx, None);
+    app.poll_file_dialog();
     let mut retry = String::new();
     provider.publish_events_with(
         |metadata, bytes| {
@@ -813,11 +846,11 @@ fn provider_delivery_failure_preserves_native_resources_drafts_and_a_fresh_save_
 
 #[test]
 fn failed_provider_chooser_delivery_releases_the_actual_dialog_without_a_local_write() {
-    let ctx = egui::Context::default();
     let (mut app, provider, written) = app(true);
+    let ctx = app.ctx().clone();
     let source = app.session.active().unwrap().doc.clone();
     menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
-    app.poll_file_dialog(&ctx, None);
+    app.poll_file_dialog();
     let mut request = String::new();
     assert!(provider.publish_events_with(
         |metadata, _| {
@@ -827,7 +860,7 @@ fn failed_provider_chooser_delivery_releases_the_actual_dialog_without_a_local_w
         },
         |_| {}
     ));
-    app.poll_file_dialog(&ctx, None);
+    app.poll_file_dialog();
     file_providers::tick(&mut app, &ctx);
     assert!(!app.file_dialog_open());
     assert!(!provider.saving());
@@ -847,10 +880,10 @@ fn failed_provider_chooser_delivery_releases_the_actual_dialog_without_a_local_w
 
 #[test]
 fn accepted_provider_chooser_callback_survives_a_later_dispatch_exception() {
-    let ctx = egui::Context::default();
     let (mut app, provider, written) = app(true);
+    let ctx = app.ctx().clone();
     menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
-    app.poll_file_dialog(&ctx, None);
+    app.poll_file_dialog();
     provider.publish_events_with(
         |metadata, _| {
             provider.resolve_dialog(metadata["requestId"].as_str().unwrap(), "provider", "drawing.psd").unwrap();
@@ -858,7 +891,7 @@ fn accepted_provider_chooser_callback_survives_a_later_dispatch_exception() {
         },
         |_| {},
     );
-    app.poll_file_dialog(&ctx, None);
+    app.poll_file_dialog();
     let capture = event(&provider, "save");
     assert!(provider.pending_for(app.session.active().unwrap().doc.id));
     assert_eq!(capture["destination"], "provider");
@@ -871,20 +904,20 @@ fn accepted_provider_chooser_callback_survives_a_later_dispatch_exception() {
 
 #[test]
 fn failed_provider_delivery_keeps_save_before_close_retryable_and_preserves_a_later_edit() {
-    let ctx = egui::Context::default();
     let (mut app, provider, written) = app(true);
+    let ctx = app.ctx().clone();
     menus::invoke(&mut app, &ctx, "file.close", json!({})).unwrap();
     crate::discard_ui::answer_control(&mut app, &ctx, "save").unwrap();
-    app.poll_file_dialog(&ctx, None);
+    app.poll_file_dialog();
     let dialog = event(&provider, "saveDialog");
     provider.resolve_dialog(dialog["requestId"].as_str().unwrap(), "provider", "drawing.psd").unwrap();
-    app.poll_file_dialog(&ctx, None);
+    app.poll_file_dialog();
     provider.publish_events_with(|_, _| Err("synthetic close-save delivery failure"), |_| {});
     file_providers::tick(&mut app, &ctx);
     crate::discard_ui::finish_provider_save(&mut app, &ctx);
     assert_eq!(app.session.documents().len(), 1);
     assert_eq!(app.session.active().unwrap().saved_revision, 2);
-    assert!(crate::discard_ui::inspect(&app).is_some());
+    assert!(crate::discard_ui::pending_command(&app).is_some());
     assert!(!app.saving());
     assert_eq!(event(&provider, "saveFailed")["revision"], "7");
     crate::discard_ui::answer_control(&mut app, &ctx, "save").unwrap();
@@ -898,7 +931,7 @@ fn failed_provider_delivery_keeps_save_before_close_retryable_and_preserves_a_la
     assert_eq!(app.session.active().unwrap().doc.layers, later.layers, "normal ACK filename bookkeeping must preserve the later edit");
     assert_eq!(app.session.active().unwrap().saved_revision, 7);
     assert!(app.session.active().unwrap().is_dirty());
-    assert!(crate::discard_ui::inspect(&app).is_some());
+    assert!(crate::discard_ui::pending_command(&app).is_some());
     assert!(written.borrow().is_empty());
 }
 
@@ -930,8 +963,8 @@ fn local_plain_save_relabels_only_the_step_from_this_save() {
 #[test]
 fn provider_tiff_answer_preserves_native_options_and_copy_checkpoint() {
     for discard_layers in [false, true] {
-        let ctx = egui::Context::default();
         let (mut app, provider, written) = app(true);
+        let ctx = app.ctx().clone();
         app.run("layer.new.layer", json!({"name":"Second layer"})).unwrap();
         let captured = app.session.active().unwrap().revision;
         let doc = app.session.active().unwrap().doc.id;
@@ -943,18 +976,22 @@ fn provider_tiff_answer_preserves_native_options_and_copy_checkpoint() {
         }));
         let journal = app.session.journal.clone();
         menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
-        app.poll_file_dialog(&ctx, None);
+        app.poll_file_dialog();
         let dialog = event(&provider, "saveDialog");
         provider.resolve_dialog(dialog["requestId"].as_str().unwrap(), "provider", "drawing.tif").unwrap();
-        app.poll_file_dialog(&ctx, None);
-        let prompt = app.tiff_options.as_mut().unwrap();
-        assert!(prompt.layered);
-        prompt.compression = photocraft_codecs::TiffCompression::Deflate;
-        prompt.pyramid = true;
-        prompt.transparency = false;
-        prompt.discard_layers = discard_layers;
-        let transparency = prompt.has_transparency.then_some(false);
-        crate::tiff_options_ui::confirm(&mut app, &ctx);
+        app.poll_file_dialog();
+        assert!(matches!(app.parked_save.as_ref().map(|save| &save.format), Some(crate::format_prompts::ParkedFormat::Tiff(_))));
+        let state = app.session.active().unwrap();
+        assert!(photocraft_engine::file_cmds::tiff_would_write_layers(&state.doc));
+        let transparency = state.doc.background().is_none().then_some(false);
+        let prompt = app.framework.dialogs.get_mut::<HostedFormatOptions>().unwrap();
+        prompt.set_json_field(&ctx, "compression", json!("zip")).unwrap();
+        prompt.set_json_field(&ctx, "pyramid", json!(true)).unwrap();
+        if transparency.is_some() {
+            prompt.set_json_field(&ctx, "transparency", json!(false)).unwrap();
+        }
+        prompt.set_json_field(&ctx, "discardLayers", json!(discard_layers)).unwrap();
+        crate::format_prompts::confirm(&mut app, &ctx);
         file_providers::capture(&mut app);
         assert_eq!(exports.borrow().as_slice(), &[(doc, photocraft_codecs::TiffCompression::Deflate, transparency, true, !discard_layers)]);
         assert_eq!(app.tiff_remembered.compression, photocraft_codecs::TiffCompression::Deflate);
@@ -979,8 +1016,8 @@ fn provider_tiff_answer_preserves_native_options_and_copy_checkpoint() {
 
 #[test]
 fn provider_capture_bypasses_the_native_save_commit_worker() {
-    let ctx = egui::Context::default();
     let (mut app, provider, written) = app(true);
+    let ctx = app.ctx().clone();
     let called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let worker_called = called.clone();
     app.services.save_file = Some(std::sync::Arc::new(move |_, _, _, _| {
@@ -1010,9 +1047,10 @@ fn provider_save_all_waits_for_each_durable_ack_before_closing_next_document() {
     app.session.active_mut().unwrap().revision = 11;
     app.session.active_mut().unwrap().saved_revision = 3;
     let mut h = egui_kittest::Harness::builder()
+        .with_context(app.ctx().clone())
         .with_size(egui::vec2(800.0, 600.0))
         .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, Default::default()))
-        .build_ui_state(|ui, app| crate::discard_ui::show(app, ui.ctx()), app);
+        .build_ui_state(|ui, app| crate::dialogs::run(app, ui), app);
     let ctx = h.ctx.clone();
     menus::invoke(h.state_mut(), &ctx, "file.closeAll", json!({})).unwrap();
     crate::discard_ui::answer_control(h.state_mut(), &ctx, "saveAll").unwrap();
@@ -1035,7 +1073,7 @@ fn provider_save_all_waits_for_each_durable_ack_before_closing_next_document() {
     file_providers::tick(h.state_mut(), &ctx);
     crate::discard_ui::finish_provider_save(h.state_mut(), &ctx);
     assert!(h.state().session.documents().is_empty());
-    assert!(crate::discard_ui::inspect(h.state()).is_none());
+    assert!(crate::discard_ui::pending_command(h.state()).is_none());
     assert!(h.state().ui.recent_files.is_empty());
     assert!(written.borrow().is_empty());
 }

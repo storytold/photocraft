@@ -10,7 +10,10 @@ use photocraft_doc::DocId;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::{FileDialogAnswer, FileDialogReply, PhotocraftApp};
+use crate::PhotocraftApp;
+
+/// One answer to the captured provider chooser, independent of platform picker types.
+type DialogReply = Box<dyn FnOnce(Result<Option<String>, String>) + Send>;
 
 const MAX_BYTES: usize = 80 * 1024 * 1024;
 const MAX_PENDING: usize = 16;
@@ -91,7 +94,7 @@ struct State {
     destinations: HashMap<DocId, String>,
     resolved_requests: HashMap<DocId, String>,
     dialog_doc: Option<DocId>,
-    dialogs: HashMap<String, (Option<DocId>, FileDialogReply)>,
+    dialogs: HashMap<String, (Option<DocId>, DialogReply)>,
     snapshot: Value,
 }
 
@@ -331,7 +334,7 @@ impl Host {
         s.provider.is_some() && s.enabled && s.dialog_doc.and_then(|doc| s.intents.get(&doc)).is_some_and(|intent| matches!(intent.as_str(), "save" | "saveAs"))
     }
 
-    pub fn dialog(&self, suggested: String, reply: FileDialogReply) {
+    pub fn dialog(&self, suggested: String, reply: impl FnOnce(Result<Option<String>, String>) + Send + 'static) {
         let mut s = self.state();
         let doc = s.dialog_doc.take();
         let request = if s.provider.is_none() || !valid_name(&suggested) || s.dialogs.len() >= MAX_PENDING || s.events.len() >= MAX_EVENTS {
@@ -340,12 +343,12 @@ impl Host {
             s.next_request("dialog")
         };
         let Ok(request) = request else {
-            reply.send(Some(FileDialogAnswer::Unavailable("file provider save dialog is unavailable or busy".into())));
+            reply(Err("file provider save dialog is unavailable or busy".into()));
             return;
         };
         let intent = doc.and_then(|d| s.intents.get(&d).cloned()).unwrap_or_else(|| "saveAs".into());
         s.event(json!({"type":"saveDialog","requestId":request,"documentId":doc.map(|d|d.0.to_string()),"intent":intent,"filename":suggested}), None);
-        s.dialogs.insert(request, (doc, reply));
+        s.dialogs.insert(request, (doc, Box::new(reply)));
     }
 
     pub fn resolve_dialog(&self, request: &str, destination: &str, name: &str) -> Result<(), String> {
@@ -360,13 +363,13 @@ impl Host {
                 s.destinations.remove(&doc);
                 s.resolved_requests.remove(&doc);
             }
-            reply.send(None);
+            reply(Ok(None));
         } else {
             if let Some(doc) = doc {
                 s.destinations.insert(doc, destination.into());
                 s.resolved_requests.insert(doc, request.into());
             }
-            reply.send(Some(FileDialogAnswer::SaveTo(name.into())));
+            reply(Ok(Some(name.into())));
         }
         Ok(())
     }
@@ -621,7 +624,7 @@ impl Host {
                         s.destinations.remove(&doc);
                         s.resolved_requests.remove(&doc);
                     }
-                    reply.send(Some(FileDialogAnswer::Unavailable("File provider save dialog delivery failed; you can retry.".into())));
+                    reply(Err("File provider save dialog delivery failed; you can retry.".into()));
                 }
             }
             _ => {}
@@ -823,7 +826,7 @@ fn open_would_retarget_ui(app: &PhotocraftApp, ctx: &egui::Context) -> bool {
     app.file_dialog_open()
         || app.save_options_open()
         || app.discard.is_some()
-        || !app.ui.dialogs.is_empty()
+        || app.dialog_open()
         || app.filter_preview.is_some()
         || !app.remove_pending.is_empty()
         || ctx.text_edit_focused()
@@ -835,8 +838,7 @@ fn open_would_retarget_ui(app: &PhotocraftApp, ctx: &egui::Context) -> bool {
                 || input.pointer.any_down()
                 || !input.keys_down.is_empty()
         })
-        || app.synthetic_batch.is_some()
-        || !app.synthetic.is_empty()
+        || !craft::ui::runtime::windows::WindowHost::of(ctx).injected_idle()
         || app.session.documents().iter().any(|state| crate::discard_ui::provider_ui_work(app, ctx, state.doc.id))
 }
 

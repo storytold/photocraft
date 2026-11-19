@@ -7,21 +7,26 @@
 //! keeps it (#4032). Otherwise the dialog starts at the quality and format it was last answered
 //! with, also after a restart, as Photoshop's does (see [`Start::for_active`]).
 //!
-//! The save is parked in [`Prompt`] while the modal is up (egui is immediate-mode) and written
+//! The save is parked (`format_prompts::ParkedSave`) while the hosted dialog is up and written
 //! once answered. Cancel drops the save. Scripts skip the prompt by passing `quality` or
 //! `jpegFormat`.
 //!
 //! Any save can ask: check [`wants_prompt`], then [`park`] (which starts where
-//! [`Start::for_active`] says) or [`park_at`] with a [`Start`] of its own, and return. The answer
-//! is written by [`confirm`] and journalled as the `record` command passed to `park`: with its
-//! path, `quality` (0–12, left out when the file's own quality was kept) and `jpegFormat`, or
-//! without the path for a plain `file.save`, which writes whichever file an action is played on
-//! ([`plain_save_step`]). File › Save over a flat JPEG that still holds the document asks too,
-//! as Photoshop does (#2223): `PhotocraftApp::save_flat_in_place`.
+//! [`Start::for_active`] says) and return. The answer is written by [`finish`] and journalled as
+//! the `record` command passed to `park`: with its path, `quality` (0–12, left out when the
+//! file's own quality was kept) and `jpegFormat`, or without the path for a plain `file.save`,
+//! which writes whichever file an action is played on ([`plain_save_step`]). File › Save over a
+//! flat JPEG that still holds the document asks too, as Photoshop does (#2223):
+//! `PhotocraftApp::save_flat_in_place`.
 
+use craft::ui::dialog::DialogId;
+use craft::ui::patterns::form_dialogs::{ExportOptionsKind, FormatOptions, HostedFormatOptions, JpegFormat as UiJpegFormat, JpegOptions, SizeEstimate};
+use craft::ui::runtime::memory::{SaveKey, saved_value, set_saved_value};
 use photocraft_codecs::JpegFormat;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::format_prompts::{self, ParkedFormat, ParkedSave};
 use crate::{ExportSettings, PhotocraftApp};
 
 mod size_readout;
@@ -101,16 +106,6 @@ pub fn recorded_choice(params: &Value, cmd: &str) -> Result<Option<JpegChoice>, 
     Ok((quality.is_some() || format.is_some()).then(|| JpegChoice { quality, format: format.unwrap_or_default() }))
 }
 
-/// Photoshop's name for a quality, in the UI language: Low, Medium, High or Maximum.
-pub fn quality_label(q: u8) -> &'static str {
-    match q {
-        0..=4 => tl!("Low"),
-        5..=7 => tl!("Medium"),
-        8..=9 => tl!("High"),
-        _ => tl!("Maximum"),
-    }
-}
-
 /// The 0–12 quality nearest an encoder quality (1–100), the inverse of the engine's mapping.
 pub fn quality_from_percent(q: u32) -> u8 {
     let q = f64::from(q.clamp(1, 100));
@@ -157,60 +152,83 @@ impl Start {
     }
 }
 
-/// Preferences ▸ remembered dialog settings: JPEG Options writes its last answer under this key
-/// and starts the next dialog from it, as Photoshop does (it keeps it across restarts). There is
-/// no command of this id; the key only names the dialog among the others.
-const REMEMBER_KEY: &str = "file.jpegOptions";
+/// The saved value JPEG Options writes its last answer under and starts the next dialog from, as
+/// Photoshop does (it keeps it across restarts).
+pub(crate) const REMEMBER_KEY: SaveKey = SaveKey::new("photocraft.file.jpegOptions");
 
-/// What the dialog was last answered with; a value that no longer fits (a hand-edited
-/// preferences file) is left out.
+/// The saved record of the last answer. A field that no longer fits is left out on its own when
+/// read (see [`remembered`]), so one bad value doesn't reset the other.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct Remembered {
+    /// The quality on the 0–12 scale.
+    pub(crate) quality: Option<u8>,
+    /// The format's name (`JpegFormat::name`).
+    pub(crate) jpeg_format: Option<String>,
+}
+
+/// What the dialog was last answered with, each part checked.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct Remembered {
+struct Last {
     quality: Option<u8>,
     format: Option<JpegFormat>,
 }
 
-fn remembered(app: &PhotocraftApp) -> Remembered {
-    let Some(Value::Object(saved)) = app.session.prefs().dialogs.get(REMEMBER_KEY) else { return Remembered::default() };
-    Remembered {
-        quality: saved.get("quality").and_then(Value::as_u64).and_then(|q| u8::try_from(q).ok()).filter(|&q| q <= MAX_QUALITY),
-        format: saved.get("jpegFormat").and_then(Value::as_str).and_then(JpegFormat::parse),
-    }
+fn remembered(app: &PhotocraftApp) -> Last {
+    let saved: Remembered = saved_value(app.ctx(), &REMEMBER_KEY);
+    Last { quality: saved.quality.filter(|&q| q <= MAX_QUALITY), format: saved.jpeg_format.as_deref().and_then(JpegFormat::parse) }
 }
 
 /// Records an answered dialog for the next one. A quality left on the opened file's own is not
 /// an answer: the earlier one stays, so saving a series of opened JPEGs doesn't forget what a
 /// new document was last saved at.
-fn remember(app: &mut PhotocraftApp, choice: JpegChoice) {
-    let before = remembered(app);
-    let quality = choice.quality.or(before.quality);
-    let mut saved = serde_json::Map::new();
-    if let Some(q) = quality {
-        saved.insert("quality".into(), q.into());
-    }
-    saved.insert("jpegFormat".into(), choice.format.name().into());
-    app.session.prefs.edit(|p| {
-        p.dialogs.insert(REMEMBER_KEY.into(), Value::Object(saved));
-    });
+fn remember(app: &PhotocraftApp, choice: JpegChoice) {
+    let quality = choice.quality.or(remembered(app).quality);
+    set_saved_value(app.ctx(), &REMEMBER_KEY, Remembered { quality, jpeg_format: Some(choice.format.name().into()) });
 }
 
-/// A save waiting on the JPEG Options answer.
-pub struct Prompt {
-    /// The document that requested the save, even if tabs change while this is open.
-    doc: photocraft_doc::DocId,
-    /// Where the document goes.
-    pub path: String,
-    /// Quality, 0–12.
-    pub quality: u8,
-    pub format: JpegFormat,
+/// What a parked JPEG save keeps besides the hosted dialog's answer.
+pub struct Parked {
     /// See [`Start::own_quality`].
-    pub own_quality: Option<u8>,
-    /// Save a Copy: the document keeps its path and unsaved changes.
-    pub copy: bool,
-    /// The step the answered save is recorded as, so an action being recorded keeps it:
-    /// `file.saveAs` for Save As (#2032), `file.saveACopy` for Save a Copy (#4373), and
-    /// `file.save` (with no params) for File › Save writing the document's own file (#3531).
-    pub record: &'static str,
+    own_quality: Option<u8>,
+    /// The sizes worked out for the dialog's footer.
+    readout: size_readout::Readout,
+    /// The estimate the dialog asked for and has not been answered yet.
+    asked: Option<Asked>,
+}
+
+impl Parked {
+    /// A parked JPEG save whose prompt started at `own_quality` (see [`Start::own_quality`]).
+    fn new(own_quality: Option<u8>) -> Self {
+        Parked { own_quality, readout: size_readout::Readout::default(), asked: None }
+    }
+}
+
+/// An estimate request: the dialog's revision and the settings it wants the size of.
+#[derive(Clone, Copy)]
+struct Asked {
+    revision: u64,
+    /// Quality on the 0–12 scale.
+    quality: u8,
+    format: JpegFormat,
+}
+
+/// The framework's format for the codec's.
+fn ui_format(format: JpegFormat) -> UiJpegFormat {
+    match format {
+        JpegFormat::Optimized => UiJpegFormat::BaselineOptimized,
+        JpegFormat::Progressive => UiJpegFormat::Progressive,
+        JpegFormat::Baseline => UiJpegFormat::Baseline,
+    }
+}
+
+/// The codec's format for the framework's.
+fn codec_format(format: UiJpegFormat) -> JpegFormat {
+    match format {
+        UiJpegFormat::BaselineOptimized => JpegFormat::Optimized,
+        UiJpegFormat::Progressive => JpegFormat::Progressive,
+        _ => JpegFormat::Baseline,
+    }
 }
 
 /// `true` when `path` names a JPEG (`.jpg`, `.jpeg`, `.jpe`, …).
@@ -226,112 +244,88 @@ pub fn wants_prompt(app: &PhotocraftApp, path: &str) -> bool {
 /// Parks the save of the active document to `path` behind the prompt, starting at
 /// [`Start::for_active`]. A prompt already waiting is never replaced.
 pub fn park(app: &mut PhotocraftApp, path: String, copy: bool, record: &'static str) -> Result<(), String> {
-    let start = Start::for_active(app);
-    park_at(app, path, copy, record, start)
+    park_dialog(app, path, copy, record).map(drop)
 }
 
-/// [`park`], starting at `start`.
-pub fn park_at(app: &mut PhotocraftApp, path: String, copy: bool, record: &'static str, start: Start) -> Result<(), String> {
-    if app.save_options_open() {
-        return Err(crate::SAVE_OPTIONS_OPEN.into());
-    }
+/// [`park`], returning the id of the dialog it opened.
+pub fn park_dialog(app: &mut PhotocraftApp, path: String, copy: bool, record: &'static str) -> Result<DialogId, String> {
     let doc = app.active_doc_id()?;
-    let Start { quality, own_quality, format } = start;
-    app.jpeg_options = Some(Prompt { doc, path, quality: quality.min(MAX_QUALITY), format, own_quality, copy, record });
-    Ok(())
+    let Start { quality, own_quality, format } = Start::for_active(app);
+    let mut options = JpegOptions::new(quality.min(MAX_QUALITY));
+    options.format = ui_format(format);
+    let dialog = HostedFormatOptions::new(app.ctx(), ExportOptionsKind::Jpeg).initial(FormatOptions::Jpeg(options));
+    format_prompts::park(app, ParkedSave { doc, path, copy, record, format: ParkedFormat::Jpeg(Parked::new(own_quality)) }, dialog)
 }
 
-pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    let size_source = size_readout::Source::of(app);
-    let Some(p) = &mut app.jpeg_options else { return };
-    let (mut ok, mut cancel) = (false, false);
-    let (mut quality, mut format) = (p.quality, p.format);
-    let modal = egui::Modal::new(egui::Id::unique("jpeg-options")).show(ctx, |ui| {
-        ui.set_max_width(360.0);
-        ui.label(egui::RichText::new(tl!("JPEG Options")).font(crate::theme::semibold(15.0)));
-        ui.add_space(4.0);
-        crate::widgets::hairline(ui);
-        ui.add_space(8.0);
-        crate::widgets::section_label(ui, tl!("Image Options"));
-        ui.horizontal(|ui| {
-            let quality_caption = ui.label(tl!("Quality"));
-            ui.add(egui::DragValue::new(&mut quality).range(0..=MAX_QUALITY).speed(0.1)).labelled_by(quality_caption.id);
-            // Photoshop's presets: picking one sets the quality it starts at.
-            let preset = craft_ui::ComboBox::from_id_salt("jpeg-quality-preset").selected_text(quality_label(quality)).show_ui(ui, |ui| {
-                for q in [3, 5, 8, 10] {
-                    if ui.selectable_label(quality_label(quality) == quality_label(q), quality_label(q)).clicked() {
-                        quality = q;
-                    }
-                }
-            });
-            let _ = preset.response.accessible_name(tl!("Preset"));
-        });
-        ui.add(egui::Slider::new(&mut quality, 0..=MAX_QUALITY).show_value(false)).accessible_name(tl!("Quality"));
-        ui.add_space(8.0);
-        crate::widgets::section_label(ui, tl!("Format Options"));
-        ui.radio_value(&mut format, JpegFormat::Baseline, tl!("Baseline (\"Standard\")"));
-        ui.radio_value(&mut format, JpegFormat::Optimized, tl!("Baseline Optimized"));
-        ui.radio_value(&mut format, JpegFormat::Progressive, tl!("Progressive"));
-        ui.add_space(12.0);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.spacing_mut().item_spacing.x = 10.0;
-            ok = crate::widgets::primary_button(ui, tl!("OK"), 84.0).clicked();
-            cancel = crate::widgets::secondary_button(ui, tl!("Cancel"), 84.0).clicked();
-            // How big the file will be with these options, at the left of the buttons.
-            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| size_readout::show(ui, size_source.as_ref(), quality, format));
-        });
-    });
-    cancel |= modal.should_close();
-    p.quality = quality.min(MAX_QUALITY);
-    p.format = format;
-    // A focused button takes Enter as its click without consuming the key: Enter on Cancel cancels.
-    if ok || (!cancel && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))) {
-        confirm(app, ctx);
-    } else if cancel {
-        app.jpeg_options = None;
-        app.ui.status = tl!("Save canceled").into();
-        app.ui.status_error = false;
+/// Answers the hosted dialog's request for the size of its current settings, once the worker has
+/// it. A pass applies only its own state: a second pass in a frame finds no new request, and the
+/// request still waiting for its encode is answered by whichever pass sees the size, once.
+pub(crate) fn poll_estimate(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    if !matches!(&app.parked_save, Some(ParkedSave { format: ParkedFormat::Jpeg(_), .. })) {
+        return;
+    }
+    let request = app.framework.dialogs.get_mut::<HostedFormatOptions>().and_then(|dialog| dialog.wanted_estimate());
+    if let Some(request) = request
+        && let (Some(ParkedSave { format: ParkedFormat::Jpeg(parked), .. }), FormatOptions::Jpeg(options)) = (&mut app.parked_save, request.options)
+    {
+        parked.asked = Some(Asked { revision: request.revision, quality: options.quality, format: codec_format(options.format) });
+    }
+    let asked = match &app.parked_save {
+        Some(ParkedSave { format: ParkedFormat::Jpeg(parked), .. }) => parked.asked,
+        _ => None,
+    };
+    let Some(asked) = asked else { return };
+    let source = size_readout::Source::of(app);
+    let Some(ParkedSave { format: ParkedFormat::Jpeg(parked), .. }) = &mut app.parked_save else { return };
+    // A document that can't be estimated (too large, or gone) answers "no estimate" at once.
+    let answer = match source.filter(size_readout::Source::estimable) {
+        None => Some(None),
+        Some(source) => {
+            let repaint = ctx.clone();
+            parked.readout.update(source.key(asked.quality, asked.format), || source.job(asked.quality, asked.format), move || repaint.request_repaint())
+        }
+    };
+    if let Some(size) = answer {
+        parked.asked = None;
+        if let Some(dialog) = app.framework.dialogs.get_mut::<HostedFormatOptions>() {
+            dialog.set_estimate(asked.revision, size.map(SizeEstimate::Exact));
+        }
     }
 }
 
-/// OK: writes the waiting save with the prompt's quality and format, and journals it.
-pub fn confirm(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    let Some(p) = app.jpeg_options.take() else { return };
+/// OK: writes the parked save with the dialog's quality and format, and journals it.
+pub(crate) fn finish(app: &mut PhotocraftApp, ctx: &egui::Context, save: ParkedSave, options: JpegOptions) {
+    let own_quality = match &save.format {
+        ParkedFormat::Jpeg(parked) => parked.own_quality,
+        _ => None,
+    };
+    let (quality, format) = (options.quality, codec_format(options.format));
     // Left where it started, an opened JPEG keeps its own quality exactly rather than the nearest
     // step on the 0–12 scale (95 would be written as 92). The recorded step then leaves the
     // quality out, so a replay keeps the file's own quality too, as File › Save does (#4032).
-    let own = p.own_quality.filter(|&q| quality_from_percent(u32::from(q)) == p.quality);
-    let choice = JpegChoice { quality: own.is_none().then_some(p.quality), format: p.format };
+    let own = own_quality.filter(|&q| quality_from_percent(u32::from(q)) == quality);
+    let choice = JpegChoice { quality: own.is_none().then_some(quality), format };
     remember(app, choice);
-    let step = if p.record == "file.save" {
+    let step = if save.record == "file.save" {
         // A plain Save writes whichever file the action is played on (#3531), with the answer.
         plain_save_step(Some(choice))
     } else {
-        let mut step = serde_json::json!({"path": p.path});
+        let mut step = save.step();
         choice.record(&mut step);
         step
     };
-    let mut settings = choice.apply(app.save_settings());
+    let mut settings = choice.apply(save.settings(app));
     if own.is_some() {
         settings.jpeg_quality = own;
     }
-    app.write_answered_save(ctx, p.doc, p.path, &settings, p.copy, (p.record, step));
+    let ParkedSave { doc, path, copy, record, .. } = save;
+    app.write_answered_save(ctx, doc, path, &settings, copy, (record, step));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
-
-    #[test]
-    fn jpeg_names() {
-        for p in ["a.jpg", "dir/sub/a.JPEG", "C:\\x\\y.jpe", "a.jpg.jpg"] {
-            assert!(is_jpeg_path(p), "{p}");
-        }
-        for p in ["a.jpg.psd", ".jpg", "jpg", "a.png", "a.jp2", ""] {
-            assert!(!is_jpeg_path(p), "{p}");
-        }
-    }
 
     #[test]
     fn choice_params() {
@@ -372,21 +366,11 @@ mod tests {
 
     #[test]
     fn quality_scale() {
-        assert_eq!([0, 4, 5, 7, 8, 9, 10, 12].map(quality_label), ["Low", "Low", "Medium", "Medium", "High", "High", "Maximum", "Maximum"]);
         // The prompt's starting quality maps back to the encoder quality it came from, near enough.
         for q in 0..=MAX_QUALITY {
             assert_eq!(quality_from_percent(u32::from(photocraft_engine::file_cmds::jpeg_quality(f64::from(q)))), q);
         }
         assert_eq!((quality_from_percent(0), quality_from_percent(85), quality_from_percent(1000)), (0, 10, 12));
-    }
-
-    #[test]
-    fn starts() {
-        assert_eq!(Start::own(95), Start { quality: 11, own_quality: Some(95), format: JpegFormat::Baseline });
-        assert_eq!(Start::own(0), Start { quality: 0, own_quality: Some(1), format: JpegFormat::Baseline });
-        assert_eq!(Start::own(255).own_quality, Some(100));
-        assert_eq!(Start::percent(85), Start { quality: 10, own_quality: None, format: JpegFormat::Baseline });
-        assert_eq!(Start::percent(u32::MAX).quality, MAX_QUALITY);
     }
 
     /// The desktop and web exporters write through `ExportSettings::io_options`: the format picked
@@ -410,18 +394,5 @@ mod tests {
         let (base, prog) = (write(JpegFormat::Baseline), write(JpegFormat::Progressive));
         assert!(sof(&base, 0xC0) && !sof(&base, 0xC2), "baseline");
         assert!(sof(&prog, 0xC2) && !sof(&prog, 0xC0), "progressive");
-    }
-
-    #[test]
-    fn choices_apply_and_record() {
-        let c = JpegChoice { quality: Some(10), format: JpegFormat::Optimized };
-        let s = c.apply(ExportSettings::default());
-        assert_eq!((s.jpeg_quality, s.jpeg_format), (Some(84), JpegFormat::Optimized));
-        let mut step = json!({"path": "a.jpg"});
-        c.record(&mut step);
-        assert_eq!(step, json!({"path": "a.jpg", "quality": 10, "jpegFormat": "optimized"}));
-        assert_eq!(choice_param(&step, "file.saveAs"), Ok(Some(c)), "a recorded step replays the same answer");
-        let unset = JpegChoice { quality: None, format: JpegFormat::Progressive }.apply(ExportSettings { jpeg_quality: Some(95), ..ExportSettings::default() });
-        assert_eq!(unset.jpeg_quality, Some(95), "no quality keeps the quality the save had");
     }
 }

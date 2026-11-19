@@ -83,11 +83,11 @@ impl Page {
     fn tick(&self, app: &mut PhotocraftApp) {
         // This is the actual public app-thread consumer, not a simulated ACK/checkpoint helper.
         file_providers::tick(app, &self.ctx);
-        app.poll_file_dialog(&self.ctx, None);
+        app.poll_file_dialog();
     }
     fn queue_dialog(&self, app: &mut PhotocraftApp) -> Result<(), JsValue> {
         app.save_as(None).map_err(error)?;
-        app.poll_file_dialog(&self.ctx, None);
+        app.poll_file_dialog();
         assert!(app.file_dialog_open());
         Ok(())
     }
@@ -100,7 +100,7 @@ impl Page {
         assert_eq!(dialogs.len(), 1, "the actual dialog must reach Window once");
         let dialog = dialogs.first().ok_or_else(|| error("missing real dialog"))?;
         self.api("resolveSaveDialog", &[text(dialog, "requestId")?.into(), "provider".into(), "delivery.pcraft".into()])?;
-        app.poll_file_dialog(&self.ctx, None);
+        app.poll_file_dialog();
         file_providers::capture(app);
         let snapshot = self.api("snapshot", &[])?;
         let documents = field(&snapshot, "documents")?.dyn_into::<Array>()?;
@@ -219,7 +219,7 @@ impl Drop for Page {
     }
 }
 
-fn application() -> Result<(PhotocraftApp, Host, Captures), JsValue> {
+fn application() -> Result<(Box<PhotocraftApp>, Host, Captures), JsValue> {
     let host = Host::default();
     let dialog = host.clone();
     let captures = Captures::default();
@@ -235,7 +235,13 @@ fn application() -> Result<(PhotocraftApp, Host, Captures), JsValue> {
             Ok((result.bytes, result.warnings))
         })),
         file_dialog: Some(Box::new(move |request, _, reply| match request {
-            FileDialogRequest::Save { suggested } if dialog.wants_dialog() => dialog.dialog(suggested, reply),
+            FileDialogRequest::Save { suggested } if dialog.wants_dialog() => dialog.dialog(suggested, move |answer| {
+                reply.send(match answer {
+                    Ok(Some(name)) => Some(FileDialogAnswer::SaveTo(name)),
+                    Ok(None) => None,
+                    Err(error) => Some(FileDialogAnswer::Unavailable(error)),
+                });
+            }),
             _ => reply.send(Some(FileDialogAnswer::Unavailable("fixture must not use a local file dialog".into()))),
         })),
         write: Some(Box::new(|_, _| Err("fixture must not use a device writer".into()))),
