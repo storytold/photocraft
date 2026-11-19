@@ -2,10 +2,16 @@ use super::{SPECS, command_specs};
 
 /// Menus, the Command Palette and the automation docs list commands in registry order, so the
 /// order is part of the behaviour. `command_ids.txt` pins it; regenerate the file from main when
-/// rebasing, adding each new command's id after its predecessor.
+/// rebasing, adding each new command's id after its predecessor. With `PHOTOCRAFT_WRITE_COMMAND_IDS`
+/// set, the test writes the file from the registry instead; review the diff before committing it.
 #[test]
 fn registered_command_ids_keep_their_order() {
     let ids: Vec<&str> = command_specs().iter().map(|c| c.id).collect();
+    if std::env::var_os("PHOTOCRAFT_WRITE_COMMAND_IDS").is_some() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/src/cmd/command_ids.txt");
+        std::fs::write(path, ids.iter().map(|id| format!("{id}\n")).collect::<String>()).expect("write command_ids.txt");
+        return;
+    }
     let expected: Vec<&str> = include_str!("command_ids.txt").lines().collect();
     if let Some(i) = ids.iter().zip(&expected).position(|(a, b)| a != b) {
         panic!("command {i} is {} where {} was registered{}", ids[i], expected[i], fragment_of(i));

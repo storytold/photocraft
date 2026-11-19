@@ -285,6 +285,7 @@ path.bendSegment
 path.convertPoint
 path.addAnchor
 path.deleteAnchor
+path.deleteSegment
 path.mergeShapeComponents
 path.setOperation
 select.quick
@@ -359,11 +360,15 @@ brush.presets.importImage
 gradient.presets.importGrd
 style.presets.importAsl
 style.presets.exportAsl
+actions.replace
 actions.load
 actions.save
 actions.stopMessage
 actions.menuItem
 actions.photoshopStep
+actions.clearAll
+actions.reset
+actions.undoLibrary
 actions.insertMenuItem
 actions.insertPath
 actions.allowToolRecording
@@ -379,6 +384,7 @@ swatches.add
 swatches.delete
 swatches.rename
 swatches.move
+swatches.moveGroup
 swatches.newGroup
 swatches.renameGroup
 swatches.deleteGroup
@@ -729,6 +735,7 @@ image.adjustments.shadowsHighlights
 image.adjustments.replaceColor
 image.adjustments.matchColor
 image.adjustments.hdrToning
+image.adjustments.blackWhite.auto
 image.adjustments.colorLookup.list
 layer.layerMask.apply
 layer.layerMask.fromTransparency
@@ -896,12 +903,14 @@ document.presets.list
 document.presets.get
 document.presets.save
 document.presets.delete
+document.presets.rename
 document.recent.list
 document.recent.add
 file.export.presets.list
 file.export.presets.get
 file.export.presets.save
 file.export.presets.delete
+file.export.presets.rename
 filter.render.flame
 filter.render.pictureFrame
 filter.render.tree
