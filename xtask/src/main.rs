@@ -40,12 +40,12 @@ commands:
                   tests (nextest --profile ci), panic_hunt, doctests, wasm and the i18n-report, with --locked
                   --features heif (stops at first failure). The gate splits it over its jobs: `lint` runs the
                   steps that need no test build; `archive` builds the tests into the nextest archive at
-                  $NEXTEST_ARCHIVE_FILE and runs the doctests; `tests --from <dir>` runs the tests from that archive
+                  $NEXTEST_ARCHIVE_FILE (the gate's build job, which then runs `doctest`); `tests --from <dir>` runs the tests from that archive
                   extracted to <dir> (without --from it builds them); `tests` runs the tests and panic_hunt on the partition in
                   $NEXTEST_PARTITION (`--gpu`: all of nextest's gpu test group, whatever the partition, each
                   test's output shown;
                   `--no-gpu`: every other test); `doctest` runs the doctests; `build` only builds what `tests`
-                  builds (the cache warm-up). $PHOTOCRAFT_CI_EXCLUDE (packages separated by spaces) leaves
+                  builds. $PHOTOCRAFT_CI_EXCLUDE (packages separated by spaces) leaves
                   packages out of the test build and the doctests
   corpus [--all | --pngsuite | --psd | --psd-tools | --pixls | --atn | --photoshop | --gimp] [--local] [--update-manifest]
                   show where test corpora live and their pins (xtask/src/corpus_pins.rs), or fetch
@@ -265,7 +265,7 @@ enum Part {
     Lint,
     /// The tests, which the gate splits over its shards (`ci tests`).
     Test,
-    /// The doctests, which the gate runs in one shard (`ci doctest`).
+    /// The doctests, which the gate's build job runs once the archive is uploaded (`ci doctest`).
     Doc,
 }
 
@@ -518,13 +518,13 @@ fn ci_from_args(args: &[&str], exclude: Vec<String>) -> Result<(CiPlan, CiOption
             options.build_only = true;
             &[Part::Test]
         }
-        // The gate's build job: the tests into the archive at $NEXTEST_ARCHIVE_FILE (which also
-        // carries this xtask, .config/nextest.toml), and the doctests, which need the rlibs.
+        // The gate's build job: the tests into the archive at $NEXTEST_ARCHIVE_FILE, which also
+        // carries this xtask (.config/nextest.toml).
         Some("archive") => {
             let file = std::env::var_os("NEXTEST_ARCHIVE_FILE").ok_or("ci archive: set NEXTEST_ARCHIVE_FILE to the archive to write")?;
             options.archive = Some(file.into());
             options.build_only = true;
-            &[Part::Test, Part::Doc]
+            &[Part::Test]
         }
         Some("tests") => {
             options.partition = tests_partition(options.selection, std::env::var("NEXTEST_PARTITION").ok());
