@@ -103,7 +103,7 @@ fn the_row_disables_the_documents_greyed_modes() {
         let ParamKind::Blend { modes, .. } = &row.kind else { panic!("Mode is a blend row") };
         assert_eq!(modes.len(), BlendMode::LAYER_MODES.len(), "{mode} {depth}");
         for m in BlendMode::LAYER_MODES {
-            assert_eq!(row.option_enabled(&m.key().to_string()), !want.contains(&m), "{mode} {depth}: {}", m.label());
+            assert_eq!(row.option_enabled(m.key()), !want.contains(&m), "{mode} {depth}: {}", m.label());
         }
     }
 }
