@@ -12,7 +12,7 @@ use crate::state::Tool;
 
 /// 800 x 600 with the saved path "Path 1" (a square and a triangle) targeted, and the square
 /// selected as a component.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 800, "height": 600, "background": "white"})).unwrap();
     let path = json!({"subpaths": [
@@ -30,11 +30,7 @@ fn app() -> PhotocraftApp {
 }
 
 fn press(app: &mut PhotocraftApp, key: Key, modifiers: Modifiers) {
-    let ctx = egui::Context::default();
-    let ev = egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
-    ctx.begin_pass(egui::RawInput { events: vec![ev], ..Default::default() });
-    crate::shortcuts::handle(app, &ctx);
-    ctx.end_pass().textures_delta.clear();
+    crate::canvas::testing::key(app, key, modifiers);
 }
 
 fn path_1(app: &PhotocraftApp) -> Path {
@@ -147,9 +143,7 @@ fn free_transform_path_still_owns_enter_and_escape() {
     let n = steps(&app);
     crate::menus::invoke(&mut app, &ctx, "edit.freeTransform", json!({})).unwrap();
     // 5 px down: an unchanged box commits nothing.
-    let t = app.ui.transform.as_mut().unwrap();
-    let [x0, y0, x1, y1] = t.rect;
-    t.quad = [[x0, y0 + 5.0], [x1, y0 + 5.0], [x1, y1 + 5.0], [x0, y1 + 5.0]];
+    app.ui.transform.as_mut().unwrap().edit_box(|b| *b = b.moved((0.0, 5.0).into()));
     press(&mut app, Key::Enter, Modifiers::NONE);
     assert!(app.ui.transform.is_none(), "Enter commits the transform");
     assert_eq!(steps(&app), n + 1, "one History step");

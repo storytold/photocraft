@@ -314,7 +314,7 @@ impl Blending {
         match name.to_ascii_lowercase().as_str() {
             "add" => Ok(Blending::Add { scale, offset }),
             "subtract" => Ok(Blending::Subtract { scale, offset }),
-            other => match crate::commands::blend_from_str(other) {
+            other => match crate::commands::parse_blend(other) {
                 Some(m) if m.is_separable() && !matches!(m, BlendMode::Dissolve | BlendMode::PassThrough) => Ok(Blending::Mode(m)),
                 _ => Err(format!("unsupported blending `{other}`")),
             },
