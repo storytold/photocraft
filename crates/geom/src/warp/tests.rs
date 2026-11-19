@@ -706,3 +706,49 @@ fn param_at_finds_points_beside_the_far_edges() {
         assert!((s - want.0).abs() < 1e-9 && (t - want.1).abs() < 1e-9, "{p:?}: {s} {t}");
     }
 }
+
+/// A cross-split grid as the reference application measured it (302 × 202 at (150, 125), split at 101.107/256 across
+/// and 100.165/256 down), a press 21.5 px below the horizontal split line: in the middle third of the line's segment
+/// the press pulls the line, in the third beside the crossing it moves the crossing with its handles rigidly.
+#[test]
+fn a_press_beside_a_crossing_moves_the_crossing_and_one_mid_segment_pulls_the_line() {
+    let mut base = BezierMesh::identity([150.0, 125.0, 452.0, 327.0], 1, 1);
+    let (u, v) = (101.1069 / 256.0, 100.1654 / 256.0);
+    assert!(base.split_u(u) && base.split_v(v));
+    let crossing_y = 125.0 + 202.0 * v;
+    let pull = |press: [f64; 2]| {
+        let (s, t) = base.param_at(press);
+        let mut m = base.clone();
+        m.pull_at(&base.points, s, t, press, [0.0, -25.0], 23.0);
+        m
+    };
+    // Beside the crossing (30 px right of the vertical split, 21.5 px below the horizontal one).
+    let beside = pull([299.5, crossing_y + 21.5]);
+    let nx = beside.nx();
+    for (i, (p, q)) in beside.points.iter().zip(&base.points).enumerate() {
+        let (x, y) = (i % nx, i / nx);
+        let block = (2..=4).contains(&x) && (2..=4).contains(&y);
+        let want = if block { [q[0], q[1] - 25.0] } else { *q };
+        assert!((p[0] - want[0]).abs() < 1e-9 && (p[1] - want[1]).abs() < 1e-9, "point {i} ({x}, {y}): {p:?} vs {want:?}");
+    }
+    // Mid-segment (the middle of the right-hand segment), as far below the line: the line bends, not one block.
+    let middle = pull([360.5, crossing_y + 21.5]);
+    let moved: Vec<usize> = (0..middle.points.len()).filter(|&i| (middle.points[i][1] - base.points[i][1]).abs() > 1e-9).collect();
+    assert!(moved.iter().any(|&i| i % nx >= 5), "the line's far part moves too: {moved:?}");
+}
+
+/// A press on a split line beside the crossing still pulls the line (a press a little off it moves the crossing).
+#[test]
+fn a_press_on_a_split_line_beside_the_crossing_pulls_the_line() {
+    let mut base = BezierMesh::identity([150.0, 125.0, 452.0, 327.0], 1, 1);
+    assert!(base.split_u(0.5) && base.split_v(0.5));
+    let press = [301.0, 251.0];
+    let (s, t) = base.param_at(press);
+    let mut m = base.clone();
+    m.pull_at(&base.points, s, t, press, [0.0, -25.0], 23.0);
+    let nx = m.nx();
+    // A line pull bends the line's segment: its handle below the crossing (column 3, row 5) moves too, which the
+    // rigid move of the crossing's block (columns and rows 2..=4) leaves alone.
+    let handle = 5 * nx + 3;
+    assert!((m.points[handle][1] - base.points[handle][1]).abs() > 1e-6, "the line's lower handle moves");
+}

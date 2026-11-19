@@ -678,6 +678,11 @@ pub struct BezierMesh {
     pub points: Vec<[f64; 2]>,
 }
 
+/// The share of a split grid's line reach within which a press beside an inner anchor still pulls the line (see
+/// `BezierMesh::beside_inner_anchor`): measured between 0 (a press on the line pulls it) and about 0.4 (one 21.5 px off
+/// moves the anchor).
+const ON_LINE_SHARE: f64 = 0.3;
+
 impl BezierMesh {
     /// The identity mesh over `bounds` with `cols × rows` patches (Photoshop's default is 1 × 1,
     /// a 4 × 4 control grid).
@@ -947,7 +952,8 @@ impl BezierMesh {
     /// - The unsplit Default grid bends smoothly ([`Self::pull_one_patch`]).
     /// - On a split grid, a press within `reach` of an anchor line (a split line or the border)
     ///   pulls that line: its segment bends by the one-patch rule along it, and its nearest point
-    ///   lands on the pointer. A moved anchor takes the points around it along; a moved handle
+    ///   lands on the pointer; except in the third of a segment next to an inner anchor, which moves
+    ///   as below. A moved anchor takes the points around it along; a moved handle
     ///   turns its anchor's frame, as dragging that handle does.
     /// - Anywhere else on a split grid, the grab moves part of the grid rigidly by `d`, chosen per
     ///   axis by where in its patch the press is: the near third moves the nearest anchor line with
@@ -964,6 +970,7 @@ impl BezierMesh {
         }
         if reach > 0.0
             && let Some(line) = self.nearest_anchor_line(press, s, t, reach)
+            && !self.beside_inner_anchor(line, press, reach)
         {
             self.pull_line(base, line, press, d);
             return;
@@ -995,6 +1002,24 @@ impl BezierMesh {
             (lo.saturating_sub(1), hi + 1)
         };
         (first, last.min(n - 1))
+    }
+
+    /// Whether a press near `line` but off it lies beside an inner anchor (a split line's crossing with another anchor
+    /// line, not the border): its nearest point on the line in the third of its segment next to that anchor, and more
+    /// than [`ON_LINE_SHARE`] of `reach` from the line. There the reference application moves the anchor with its
+    /// handles, as a press off the lines does, rather than pulling the line. Measured on split grids: a press 21.5 px
+    /// from a split line pulls the line mid-segment and moves the crossing beside it; one on the line pulls the line.
+    fn beside_inner_anchor(&self, (column, k, v): (bool, usize, f64), press: [f64; 2], reach: f64) -> bool {
+        let knots = if column { &self.vs } else { &self.us };
+        let (m, a) = Self::locate(knots, v);
+        if !((a < 1.0 / 3.0 && m > 0) || (a > 2.0 / 3.0 && m + 2 < knots.len())) {
+            return false;
+        }
+        let Some(&across) = (if column { self.us.get(k) } else { self.vs.get(k) }) else {
+            return false;
+        };
+        let on_line = if column { self.eval(across, v) } else { self.eval(v, across) };
+        (on_line[0] - press[0]).hypot(on_line[1] - press[1]) > reach * ON_LINE_SHARE
     }
 
     /// The anchor line (column `true` or row `false`, and its knot index) nearest `press`, if it
