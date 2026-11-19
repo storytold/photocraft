@@ -1,6 +1,7 @@
 //! Document ⇄ manifest conversion. Binary data is routed through a
 //! [`Sink`] (save) or [`Fetch`] (load) keyed by BLAKE3 hash.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use photocraft_color::{PixelFormat, SampleType};
@@ -123,11 +124,11 @@ fn video_m(v: &photocraft_doc::VideoData, sink: &mut dyn Sink) -> crate::manifes
     }
 }
 
-fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
+fn layer_m(l: &Layer, omit_smart_object_caches: &HashSet<LayerId>, sink: &mut dyn Sink) -> LayerM {
     let content = match &l.content {
         LayerContent::Raster(s) => ContentM::Raster { surface: surface_m(s, sink) },
         LayerContent::Group(g) => ContentM::Group {
-            children: g.children.iter().map(|c| layer_m(c, sink)).collect(),
+            children: g.children.iter().map(|c| layer_m(c, omit_smart_object_caches, sink)).collect(),
             expanded: g.expanded,
             artboard: g.artboard.clone(),
             frame_stroke: g.frame_stroke.clone(),
@@ -180,9 +181,10 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
                 SmartSource::Linked { path } => SmartSourceM::Linked { path: path.clone() },
             },
             vector_preview: s.vector_preview.as_ref().map(|preview| VectorPreviewM { source_hash: preview.source_hash, svg: sink.blob(&preview.svg) }),
+            raw_render_recipe: s.raw_render_recipe.clone(),
             transform: s.transform,
             smart_filters: s.smart_filters.clone(),
-            cache: s.cache.as_ref().map(|c| surface_m(c, sink)),
+            cache: s.cache.as_ref().filter(|_| !omit_smart_object_caches.contains(&l.id)).map(|c| surface_m(c, sink)),
             psd_raw: opt_blob(&s.psd_raw, sink),
             filters_enabled: s.filters_enabled,
             filter_mask: s.filter_mask.as_ref().map(|m| MaskM {
@@ -243,7 +245,7 @@ fn channel_m(c: &AlphaChannel, sink: &mut dyn Sink) -> ChannelM {
 
 /// Build native document manifest data, sending durable conversion provenance through the same bounded content sink as
 /// other stored data.
-pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> Result<DocM> {
+pub(crate) fn doc_m(d: &Document, omit_smart_object_caches: &HashSet<LayerId>, sink: &mut dyn Sink) -> Result<DocM> {
     let import_conversion = d.metadata.import_conversion.as_deref().map(|report| crate::import_conversion::to_manifest(report, sink)).transpose()?;
     Ok(DocM {
         id: d.id.0,
@@ -253,7 +255,7 @@ pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> Result<DocM> {
         mode: d.mode,
         depth: d.depth,
         icc_profile: opt_blob(&d.icc_profile, sink),
-        layers: d.layers.iter().map(|l| layer_m(l, sink)).collect(),
+        layers: d.layers.iter().map(|l| layer_m(l, omit_smart_object_caches, sink)).collect(),
         channels: d.channels.iter().map(|c| channel_m(c, sink)).collect(),
         guides: d.guides.clone(),
         ruler_origin: d.ruler_origin,
@@ -517,6 +519,7 @@ impl Loader<'_> {
                 contents_id,
                 source,
                 vector_preview,
+                raw_render_recipe,
                 transform,
                 smart_filters,
                 cache,
@@ -540,6 +543,7 @@ impl Loader<'_> {
                     }
                     None => None,
                 },
+                raw_render_recipe: raw_render_recipe.clone(),
                 transform: *transform,
                 smart_filters: smart_filters.clone(),
                 cache: self.opt_surface(cache)?,

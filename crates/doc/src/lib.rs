@@ -515,6 +515,17 @@ pub struct VectorPreview {
     pub svg: Arc<Vec<u8>>,
 }
 
+/// Settings used to render the encoded RAW source of a smart object.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RawRenderRecipe {
+    /// Recipe version. Version 1 uses default development settings except for the recorded demosaic method.
+    pub version: u8,
+    /// Lowercase identifier of the demosaic method used to render the source.
+    pub demosaic: String,
+    /// BLAKE3 hash of the encoded source bytes this recipe applies to.
+    pub source_hash: [u8; 32],
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct SmartObject {
     /// Ordinary layer duplicates share this identity; independent contents receive a fresh one.
@@ -523,6 +534,8 @@ pub struct SmartObject {
     pub source: SmartSource,
     /// Optional source-pixel display preview for AI/PDF/EPS; ignored after source bytes change.
     pub vector_preview: Option<VectorPreview>,
+    /// Development settings recorded when rendering an embedded RAW source.
+    pub raw_render_recipe: Option<RawRenderRecipe>,
     pub transform: Affine,
     pub smart_filters: Vec<SmartFilter>,
     /// Rendered appearance.
@@ -555,6 +568,7 @@ impl SmartObject {
             contents_id: SmartContentsId::fresh(),
             source,
             vector_preview: None,
+            raw_render_recipe: None,
             transform,
             smart_filters: Vec::new(),
             cache,

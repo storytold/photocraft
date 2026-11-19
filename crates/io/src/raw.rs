@@ -451,6 +451,88 @@ pub fn developed_demosaic(warnings: &[String]) -> Option<Demosaic> {
     Demosaic::from_id(id)
 }
 
+/// Renders the original identity placement recorded by Open as Smart Object. The caller's
+/// budget covers the optional work as well as the output. Every source comes from the bundle.
+pub fn render_smart_object_recipe(
+    doc: &photocraft_doc::Document,
+    smart: &photocraft_doc::SmartObject,
+    budget: u64,
+    ctl: &photocraft_raster::Interrupt<'_>,
+) -> Result<Option<photocraft_raster::Surface>, IoError> {
+    use photocraft_doc::SmartSource;
+    use photocraft_geom::Affine;
+
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    let (Some(recipe), SmartSource::Embedded { file_name, bytes }) = (&smart.raw_render_recipe, &smart.source) else { return Ok(None) };
+    if recipe.version != 1
+        || smart.transform != Affine::IDENTITY
+        || smart.perspective.is_some()
+        || smart.warp.is_some()
+        || smart.stack_mode.is_some()
+        || smart.vector_preview.is_some()
+        || (smart.filters_enabled && smart.smart_filters.iter().any(|f| f.visible))
+    {
+        return Ok(None);
+    }
+    let Some(demosaic) = Demosaic::from_id(&recipe.demosaic).filter(|method| method.id() == recipe.demosaic) else { return Ok(None) };
+    if !is_raw(bytes) || blake3::hash(bytes).as_bytes() != &recipe.source_hash {
+        return Ok(None);
+    }
+
+    let fmt = doc.pixel_format();
+    let (width, height) = photocraft_raw::probe_dimensions(bytes)?;
+    let (width, height) = (width as u64, height as u64);
+    let pixels = width.saturating_mul(height);
+    let tile = photocraft_geom::TILE_SIZE as u64;
+    let tiles = width.div_ceil(tile).saturating_mul(height.div_ceil(tile));
+    // Give the sensor, develop buffers and flattened output one bounded allowance each.
+    // The output phase includes the full RGBA f32 composite and tile-rounded U16 output.
+    let phase_budget = pixels.saturating_mul(16).saturating_add(photocraft_raster::stored_tiles_bytes(tiles, &fmt)).saturating_add(16 << 20);
+    let required = phase_budget.saturating_mul(3);
+    if !(1..=photocraft_compose::MAX_RENDER_PIXELS).contains(&pixels) || required > budget || photocraft_raster::headroom::ensure(required).is_err() {
+        return Ok(None);
+    }
+    let mut opts = DevelopOptions { demosaic, ..Default::default() };
+    opts.limits.max_alloc = opts.limits.max_alloc.min(phase_budget);
+    opts.limits.max_pixels = opts.limits.max_pixels.min(pixels);
+
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    let decoded = import_raw_with(file_name, bytes, &opts)?;
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    if developed_demosaic(&decoded.warnings) != Some(demosaic) || decoded.document.pixel_format() != fmt || decoded.document.icc_profile != doc.icc_profile {
+        return Ok(None);
+    }
+    let surface = photocraft_compose::flatten_to_surface(&decoded.document, fmt, None);
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    Ok(Some(surface))
+}
+
+/// Selects native Smart Object caches that the recorded RAW recipe reproduces pixel for pixel.
+/// Save requests without explicit cache omission need no source decoding.
+pub fn smart_object_cache_omissions(
+    doc: &photocraft_doc::Document,
+    ctl: &photocraft_raster::Interrupt<'_>,
+) -> Result<std::collections::HashSet<photocraft_doc::LayerId>, IoError> {
+    use photocraft_doc::LayerContent;
+
+    let budget = crate::memory::resolve_budget(crate::memory::MemorySnapshot::current(), None).soft_limit;
+    let mut omit = std::collections::HashSet::new();
+    for (_, _, layer) in doc.walk() {
+        ctl.check().map_err(|_| IoError::Cancelled)?;
+        let LayerContent::Smart(smart) = &layer.content else { continue };
+        let Some(saved) = &smart.cache else { continue };
+        let generation = photocraft_raster::spill::read_error_generation();
+        match render_smart_object_recipe(doc, smart, budget, ctl) {
+            Err(IoError::Cancelled) => return Err(IoError::Cancelled),
+            Ok(Some(rebuilt)) if saved == &rebuilt && generation == photocraft_raster::spill::read_error_generation() => {
+                omit.insert(layer.id);
+            }
+            _ => {}
+        }
+    }
+    Ok(omit)
+}
+
 /// Develops a raw file with explicit settings. Without `opts.camera_look`, a file without
 /// colour calibration gets one fitted to its embedded JPEG when that clearly helps.
 pub fn import_raw_with(name: &str, bytes: &[u8], opts: &DevelopOptions) -> Result<ImportResult, IoError> {

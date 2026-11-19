@@ -38,9 +38,10 @@ pub mod read;
 mod store;
 pub mod zip;
 
+use std::collections::HashSet;
 use std::path::Path;
 
-use photocraft_doc::Document;
+use photocraft_doc::{Document, LayerId};
 use photocraft_raster::Rgba8Image;
 
 pub use atomic::{atomic_write, atomic_write_no_follow, atomic_write_progress, atomic_write_stream, atomic_write_stream_progress};
@@ -96,8 +97,7 @@ impl From<craft_pcraft_format::Error> for FormatError {
 
 pub type Result<T> = std::result::Result<T, FormatError>;
 
-/// Previews to embed. The format crate cannot render (it sits beside the
-/// compositor), so callers provide them.
+/// Options for saving a native bundle. The format crate cannot render, so callers provide the previews.
 #[derive(Debug, Clone, Default)]
 pub struct SaveOptions {
     pub thumbnail: Option<Rgba8Image>,
@@ -108,6 +108,9 @@ pub struct SaveOptions {
     pub full_composite: Option<Rgba8Image>,
     /// The ICC profile of `full_composite`'s pixels, embedded in its PNG.
     pub full_composite_icc: Option<Vec<u8>>,
+    /// Omit the saved render cache for these Smart Object layers. Callers must first verify
+    /// that the cache can be reconstructed from the saved source. Empty by default.
+    pub omit_smart_object_caches: HashSet<LayerId>,
 }
 
 /// Limits applied while loading untrusted bundles.

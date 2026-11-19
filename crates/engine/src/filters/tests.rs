@@ -437,6 +437,7 @@ fn smart_object_records_smart_filter() {
                 cache: Some(cache),
                 psd_raw: None,
                 vector_preview: None,
+                raw_render_recipe: None,
                 filters_enabled: true,
                 filter_mask: None,
                 warp: None,

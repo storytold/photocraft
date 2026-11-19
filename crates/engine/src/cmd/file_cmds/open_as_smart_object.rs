@@ -70,8 +70,14 @@ fn apply(
     doc.duotone = src.duotone.clone();
 
     // Embedded (not linked): the original file name keeps its extension, so Edit Contents opens it.
+    let raw_render_recipe = photocraft_io::raw::developed_demosaic(&warnings).map(|method| photocraft_doc::RawRenderRecipe {
+        version: 1,
+        demosaic: method.id().into(),
+        source_hash: *blake3::hash(&bytes).as_bytes(),
+    });
     let source = SmartSource::Embedded { file_name: file.to_string(), bytes };
-    let so = SmartObject::new(source, Affine { m: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] }, Some(pixels));
+    let mut so = SmartObject::new(source, Affine { m: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] }, Some(pixels));
+    so.raw_render_recipe = raw_render_recipe;
     let layer = Layer::new(layer_name, LayerContent::Smart(so));
     let layer_id = layer.id;
     crate::layer_place::insert_new(&mut doc, None, layer, Place::AutoEditable);

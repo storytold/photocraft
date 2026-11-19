@@ -18,6 +18,7 @@ pub struct FormatChoices {
     pub jpeg: Option<jpeg_options_ui::JpegChoice>,
     pub tiff: Option<tiff_options_ui::TiffChoice>,
     pub maximize_compatibility: Option<bool>,
+    pub pcraft_render_caches: Option<bool>,
 }
 
 impl FormatChoices {
@@ -29,6 +30,7 @@ impl FormatChoices {
             jpeg: jpeg_options_ui::choice_param(params, cmd)?,
             tiff: tiff_options_ui::choice_param(params, cmd)?,
             maximize_compatibility: maximize_param(params, cmd)?,
+            pcraft_render_caches: photocraft_engine::file_cmds::pcraft_render_caches_param(params, cmd).map_err(|e| e.to_string())?,
         })
     }
 
@@ -41,6 +43,7 @@ impl FormatChoices {
             jpeg: jpeg_options_ui::recorded_choice(params, cmd)?,
             tiff: tiff_options_ui::choice_param(params, cmd)?,
             maximize_compatibility: maximize_param(params, cmd)?,
+            pcraft_render_caches: photocraft_engine::file_cmds::pcraft_render_caches_param(params, cmd).map_err(|e| e.to_string())?,
         })
     }
 
@@ -50,6 +53,7 @@ impl FormatChoices {
             tga_bits: self.tga_bits.or(settings.tga_bits),
             dds: self.dds.unwrap_or(settings.dds),
             psd_maximize_compatibility: self.maximize_compatibility.unwrap_or(settings.psd_maximize_compatibility),
+            pcraft_render_caches: self.pcraft_render_caches.unwrap_or(settings.pcraft_render_caches),
             ..settings
         };
         let settings = match self.tiff {
@@ -78,6 +82,9 @@ impl FormatChoices {
         }
         if let Some(maximize) = self.maximize_compatibility {
             step["maximizeCompatibility"] = maximize.into();
+        }
+        if let Some(keep) = self.pcraft_render_caches {
+            step["pcraftRenderCaches"] = keep.into();
         }
     }
 }
@@ -132,6 +139,8 @@ pub struct ExportSettings {
     /// `.pcraft`: also write the full-size composite (Preferences › File Handling › Save Full-Size
     /// Composite in .pcraft Files; see [`PhotocraftApp::save_settings`]). Off by default.
     pub pcraft_full_composite: bool,
+    /// Keep native Smart Object render caches. The encoder checks reconstruction if this is off.
+    pub pcraft_render_caches: bool,
     /// Embed the document's ICC profile when the format supports it. On for Save As and, unless
     /// Export As turns it off, for export.
     pub embed_icc: bool,
@@ -166,6 +175,7 @@ impl Default for ExportSettings {
             image_previews: true,
             psd_maximize_compatibility: true,
             pcraft_full_composite: false,
+            pcraft_render_caches: true,
             embed_icc: true,
             embed_metadata: true,
             document_path: None,
@@ -201,6 +211,7 @@ impl ExportSettings {
         opts.image_previews = self.image_previews;
         opts.psd_maximize_compatibility = self.psd_maximize_compatibility;
         opts.pcraft_full_composite = self.pcraft_full_composite;
+        opts.pcraft_render_caches = self.pcraft_render_caches;
         opts.document_path = self.document_path.clone();
         opts.pcraft_cache = self.pcraft_cache.clone();
         opts.read_linked_files = self.read_linked_files;

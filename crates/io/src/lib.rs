@@ -443,6 +443,8 @@ pub struct ExportOptions {
     /// omit it; check the manifest's `full_composite` member ([`photocraft_format::read_full_composite`]
     /// reads it). Off by default.
     pub pcraft_full_composite: bool,
+    /// Keep native Smart Object render caches. If disabled, omit only surfaces the recorded recipe reproduces exactly.
+    pub pcraft_render_caches: bool,
 }
 
 impl Default for ExportOptions {
@@ -462,6 +464,7 @@ impl Default for ExportOptions {
             read_linked_files: true,
             pdf_spot_plates: true,
             pcraft_full_composite: false,
+            pcraft_render_caches: true,
         }
     }
 }
@@ -1225,7 +1228,8 @@ fn export_stages_with_renderer(
             ctl.progress(PCRAFT_FULL_COMPOSITE_DONE);
         }
         let full_composite_icc = full_composite.as_ref().map(|_| pcraft_full_composite_icc(doc.as_ref()));
-        let previews = photocraft_format::SaveOptions { thumbnail, composite, full_composite, full_composite_icc };
+        let omit_smart_object_caches = if opts.pcraft_render_caches { Default::default() } else { raw::smart_object_cache_omissions(doc.as_ref(), ctl)? };
+        let previews = photocraft_format::SaveOptions { thumbnail, composite, full_composite, full_composite_icc, omit_smart_object_caches };
         let bytes = match &opts.pcraft_cache {
             Some(cache) => cache.encode(doc.as_ref(), &previews)?,
             None => photocraft_format::save_to_bytes(doc.as_ref(), &previews)?,

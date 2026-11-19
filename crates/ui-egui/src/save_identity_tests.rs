@@ -228,6 +228,30 @@ fn full_composite_preference_reaches_the_exporter() {
     }
 }
 
+#[test]
+fn native_cache_preference_and_override_reach_normal_and_automation_saves() {
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let mut app = app();
+    assert!(app.save_settings().pcraft_render_caches);
+    let log = seen.clone();
+    app.services.export = Some(Box::new(move |_, _, settings: &ExportSettings| {
+        log.borrow_mut().push(settings.io_options().pcraft_render_caches);
+        Ok((b"out".to_vec(), Vec::new()))
+    }));
+    let ctx = app.ctx().clone();
+    app.run("prefs.set", json!({"path": "fileHandling.pcraftRenderCaches", "value": false})).unwrap();
+    menus::invoke(&mut app, &ctx, "file.saveAs", json!({"path": "compact.pcraft"})).unwrap();
+    menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
+
+    let options = crate::FormatChoices::from_params(&json!({"pcraftRenderCaches": true}), "app.save").unwrap();
+    let mut step = json!({});
+    options.record(&mut step);
+    assert_eq!(crate::FormatChoices::from_step(&step, "app.save").unwrap(), options);
+    app.save_automation_with(Some("keep.pcraft".into()), options).unwrap();
+    assert_eq!(*seen.borrow(), [false, false, true]);
+    assert!(crate::FormatChoices::from_params(&json!({"pcraftRenderCaches": 0}), "app.save").is_err());
+}
+
 /// #2399: Save and Save As start at the opened file's own encoding: a JPEG's estimated quality,
 /// a WebP lossy (at its quality) or lossless; a new document keeps the codec defaults.
 #[test]

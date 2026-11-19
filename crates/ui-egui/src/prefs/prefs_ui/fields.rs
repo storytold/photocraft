@@ -214,6 +214,7 @@ fn label_override(key: &str) -> Option<&'static str> {
         "nudgeBundlePauseMs" => "Nudge Bundle Pause (ms)",
         "doNotAppendCopy" => "Do not append \"copy\" to filename when saving a copy",
         "pcraftFullComposite" => "Save Full-Size Composite in .pcraft Files",
+        "pcraftRenderCaches" => "Store Render Caches in .pcraft Files",
         "generatorEnabled" => "Enable Generator",
         "lowLatencyDrawing" => "Low-Latency Drawing (vsync off, applies at next launch)",
         "sizeLimitMb" => "Scratch Size Limit (MB, 0 = No Limit)",
