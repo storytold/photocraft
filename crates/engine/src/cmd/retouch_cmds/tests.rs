@@ -1636,12 +1636,16 @@ fn content_aware_move_preview_shows_the_result_without_touching_the_session() {
     assert!(content_aware_move_preview(&s, &json!({"offset": [70, 0], "mode": "copy"})).is_err());
 }
 
-/// A 30×30 object in the middle of a 400×300 selection (over the 256×256 a preview solves at full
-/// resolution) on a 700×400 canvas, dragged by (250, 60).
+/// A 30×30 object in a 60×60 selection, with two 8×8 pieces at the corners of a 400×300 bounding
+/// box (over the 256×256 a preview solves at full resolution) on a 700×400 canvas, dragged by
+/// (250, 60). The selection's bounds decide the preview's scale and placement; its few selected
+/// pixels are what the solves work on, which keeps them short.
 fn large_move(depth: u64) -> Session {
     let mut s = session(700, 400, depth, "rgb");
     paint_layer(&mut s, |x, y| if (195..225).contains(&x) && (145..175).contains(&y) { [0.05, 0.1, 0.9, 1.0] } else { texture(x, y) });
-    s.execute("select.rect", json!({"x": 10, "y": 10, "width": 400, "height": 300})).unwrap();
+    s.execute("select.rect", json!({"x": 180, "y": 130, "width": 60, "height": 60})).unwrap();
+    s.execute("select.rect", json!({"x": 10, "y": 10, "width": 8, "height": 8, "mode": "add"})).unwrap();
+    s.execute("select.rect", json!({"x": 402, "y": 302, "width": 8, "height": 8, "mode": "add"})).unwrap();
     s
 }
 
@@ -2298,7 +2302,9 @@ fn live_dab_strokes_commit_their_pixels_and_they_are_the_commands() {
 fn live_dab_batches_match_the_accumulating_renderer() {
     use photocraft_paint::{GrayTile, StrokeRenderer, TipShape};
 
-    for depth in DEPTHS {
+    // 8 bits (integers, and the measured Smudge mode only 8-bit RGB gets in `dab.rs`) and 32 bits (floats): 16 bits
+    // differs from 8 only in the raster's shared encode, which the live and the reference renderer both use (#15652).
+    for depth in [8, 32] {
         let mut s = session(200, 90, depth, "rgb");
         s.execute("layer.new.layer", json!({})).unwrap();
         paint_layer(&mut s, |x, y| {

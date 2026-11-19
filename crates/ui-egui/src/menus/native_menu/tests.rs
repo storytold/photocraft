@@ -219,3 +219,21 @@ fn opening_or_closing_a_workspace_without_input_rebuilds_the_menus() {
     app.framework.dialogs.cancel_by_id(&ctx, id);
     assert_eq!(state_hash(&app, None), closed, "and come back when it is cancelled");
 }
+
+/// The Contextual Task Bar's tick follows the bar when its Hide bar or `ui.set` turns it off without a menu click
+/// (#15489).
+#[test]
+fn the_task_bar_tick_follows_the_bar_hidden_without_a_menu_click() {
+    let (mut h, synced, _) = harness(true);
+    let ticked = |synced: &Synced| {
+        let bar = synced.borrow().last().cloned().expect("menus synced");
+        bar.find(&CommandRef::new("window.panel.contextualTaskBar")).and_then(|it| it.kind.checked())
+    };
+    assert_eq!(ticked(&synced), Some(true));
+    h.state_mut().ui.panels.context_task_bar = false;
+    h.run_steps(2);
+    assert_eq!(ticked(&synced), Some(false), "unticked once the bar is hidden");
+    h.state_mut().ui.panels.context_task_bar = true;
+    h.run_steps(2);
+    assert_eq!(ticked(&synced), Some(true), "ticked again once it shows");
+}
