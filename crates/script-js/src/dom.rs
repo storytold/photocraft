@@ -730,11 +730,24 @@ fn layer_remove(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<Js
 fn layer_duplicate(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let (doc, id) = layer_ref(this)?;
     // Made where it goes in one command (`moveTo` with `copy`), so a copy that can't go there,
-    // or a run stopped meanwhile, leaves no copy behind.
+    // or a run stopped meanwhile, leaves no copy behind; the destination is read first.
     let made = match arg(args, 0) {
         Some(rel) => {
             let (target, position) = destination(ctx, doc, rel, args.get(1))?;
-            edit(ctx, doc, "layer.moveTo", json!({ "layer": id, "target": target, "position": position, "copy": true }))?
+            // A copy of a group placed inside that group (`INSIDE` it, or at its end, beside its
+            // last layer) is not a move the app makes in one step: the copy is made first and
+            // then moved in, as a layer copied from the group would be.
+            let node = find(&inspect(ctx, doc)?["layers"], id).map(|(node, _)| node);
+            let inside_itself = node
+                .is_some_and(|node| node["children"].is_array() && (if target == id { position == "into" } else { find(&node["children"], target).is_some() }));
+            if inside_itself {
+                let made = edit(ctx, doc, "layer.duplicate", json!({ "layer": id }))?;
+                let new = made["layer"].as_u64().ok_or_else(|| error("the copy was not reported"))?;
+                edit(ctx, doc, "layer.moveTo", json!({ "layer": new, "target": target, "position": position }))?;
+                made
+            } else {
+                edit(ctx, doc, "layer.moveTo", json!({ "layer": id, "target": target, "position": position, "copy": true }))?
+            }
         }
         None => edit(ctx, doc, "layer.duplicate", json!({ "layer": id }))?,
     };

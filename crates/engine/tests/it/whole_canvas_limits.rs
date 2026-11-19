@@ -1,15 +1,16 @@
 //! Commands that render the whole canvas, or merge layers into an area that large, refuse a
-//! render past the compositor's per-render limit, as Save a Copy and Duplicate Merged already
-//! did, instead of building a composite of hundreds of gigabytes (the allocation aborted the
-//! app). The document is left as it was, and a merge of small layers on the same canvas still
-//! works.
+//! composite past the budget a command's working buffers may take (what Image Size resamples
+//! within) instead of building one of hundreds of gigabytes (the allocation aborted the app, or
+//! a save ran for hours). The document is left as it was, and a merge of small layers on the
+//! same canvas still works.
 
 use photocraft_doc::LayerId;
 use photocraft_engine::Session;
 use serde_json::{Value, json};
 
-const FLATTEN: &str = "300000×300000 canvas is too large to flatten";
-const MERGE: &str = "the merged area (300000×300000 px) is too large to render";
+/// The refusal names the composite's size.
+const FLATTEN: &str = "of working memory for a 300000 x 300000 px area";
+const MERGE: &str = "Merging the layers would need";
 
 /// The largest canvas `file.new` allows, with one small shape on a layer of its own (active).
 fn huge(background: &str) -> (Session, LayerId) {
@@ -40,7 +41,7 @@ fn refused(s: &mut Session, cmd: &str, params: Value, want: &str) {
 }
 
 #[test]
-fn whole_canvas_renders_refuse_a_canvas_past_the_render_limit() {
+fn whole_canvas_renders_refuse_a_canvas_past_the_budget() {
     for cmd in ["layer.flattenImage", "layer.stampVisible", "layer.stampDown", "edit.copyMerged"] {
         refused(&mut huge("white").0, cmd, json!({}), FLATTEN);
     }
@@ -62,7 +63,7 @@ fn whole_canvas_renders_refuse_a_canvas_past_the_render_limit() {
 }
 
 #[test]
-fn merges_refuse_an_area_past_the_render_limit() {
+fn merges_refuse_an_area_past_the_budget() {
     // The Background spans the whole canvas, so every merge that takes it does too.
     refused(&mut huge("white").0, "layer.mergeVisible", json!({}), MERGE);
     let (mut s, shape) = huge("white");
@@ -92,7 +93,7 @@ fn small_layers_on_the_largest_canvas_still_merge() {
 }
 
 #[test]
-fn save_a_copy_refuses_a_canvas_past_the_render_limit_in_every_format() {
+fn save_a_copy_refuses_a_canvas_past_the_budget_in_every_format() {
     let dir = tempfile::tempdir().unwrap();
     for ext in ["png", "jpg", "tif", "psb", "pcraft"] {
         let path = dir.path().join(format!("copy.{ext}"));
@@ -102,4 +103,23 @@ fn save_a_copy_refuses_a_canvas_past_the_render_limit_in_every_format() {
         // Refused up front, not after reading the canvas.
         assert!(started.elapsed() < std::time::Duration::from_secs(30), "{ext}: {:?}", started.elapsed());
     }
+}
+
+/// Indexed Color flattens the whole canvas: past the compositor's limit it is refused (the
+/// empty flatten used to reach a canvas-sized write and panic). Match Color's statistics of a
+/// source and printing read the whole canvas too, and are refused past the budget.
+#[test]
+fn indexed_color_match_color_and_print_refuse_the_largest_canvas() {
+    let (mut s, _) = huge("white");
+    refused(&mut s, "image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none", "transparency": false}), "too large to flatten");
+    // The huge document as Match Color's source, applied to a small one.
+    s.execute("file.new", json!({"width": 8, "height": 8, "resolution": 72})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("edit.fill", json!({"color": "#808080"})).unwrap();
+    refused(&mut s, "image.adjustments.matchColor", json!({"source": 0}), "reading the image's colours would need");
+    let (mut s, _) = huge("white");
+    let out = tempfile::tempdir().unwrap();
+    let out = out.path().join("print.pdf");
+    refused(&mut s, "file.print", json!({"output": out.to_string_lossy(), "scaleToFit": true}), "printing would need");
+    assert!(!out.exists());
 }

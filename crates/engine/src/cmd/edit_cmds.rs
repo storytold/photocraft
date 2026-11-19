@@ -287,17 +287,19 @@ fn lift_region(src: &Surface, sel: Option<&Surface>, r: Rect, n: usize) -> Resul
 }
 
 /// Merged composite of the visible document as a surface in the document's format.
-fn merged_surface(doc: &Document, cmd: &str) -> Result<Surface> {
-    super::file_cmds::check_flattenable(doc, cmd)?;
+fn merged_surface(doc: &Document, what: &str) -> Result<Surface> {
     let fmt = doc.pixel_format();
-    Ok(photocraft_compose::flatten_to_surface(doc, PixelFormat::new(fmt.mode, fmt.sample, true), None))
+    let fmt = PixelFormat::new(fmt.mode, fmt.sample, true);
+    // The composite is the size of the canvas: one past the budget can't be held.
+    crate::allocation::check_dense(doc.bounds(), fmt.bytes_per_pixel() as u64, what)?;
+    Ok(photocraft_compose::flatten_to_surface(doc, fmt, None))
 }
 
-fn copy(s: &mut Session, merged: bool, cmd: &str) -> Result<Value> {
+fn copy(s: &mut Session, merged: bool, what: &str) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let canvas = d.doc.bounds();
     let clip = if merged {
-        lift(&merged_surface(&d.doc, cmd)?, d.doc.selection.as_ref(), canvas)?
+        lift(&merged_surface(&d.doc, what)?, d.doc.selection.as_ref(), canvas)?
     } else {
         let id = d.active_layer.ok_or(EngineError::Other("no active layer".into()))?;
         let several = multi_copy_ids(d);
@@ -316,7 +318,7 @@ fn copy(s: &mut Session, merged: bool, cmd: &str) -> Result<Value> {
                 for l in &mut shown.layers {
                     l.visible = true;
                 }
-                let clip = lift(&merged_surface(&shown, cmd)?, None, canvas)?;
+                let clip = lift(&merged_surface(&shown, what)?, None, canvas)?;
                 let bounds = if clip.bounds.is_empty() { canvas } else { clip.bounds };
                 Clip { components: None, layers, bounds, ..clip }
             }
@@ -1221,7 +1223,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 if let Some(k) = crate::channel_clip::paste_color_target(s, p) {
                     return crate::channel_clip::cut(s, id, k);
                 }
-                let r = copy(s, false, "edit.cut")?;
+                let r = copy(s, false, "Cut")?;
                 let bg = s.tools.background;
                 s.edit("Cut Pixels", |doc, _| clear_selected(doc, id, bg))?;
                 Ok(r)
@@ -1240,11 +1242,11 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
                 match crate::channel_clip::copy(s, p)? {
                     Some(r) => Ok(r),
-                    None => copy(s, false, "edit.copy"),
+                    None => copy(s, false, "Copy"),
                 }
             }
         ),
-        spec!("edit.copyMerged", "Copy Merged", &["Edit"], Some("Cmd+Shift+C"), "{}", has_doc, |s, _| copy(s, true, "edit.copyMerged")),
+        spec!("edit.copyMerged", "Copy Merged", &["Edit"], Some("Cmd+Shift+C"), "{}", has_doc, |s, _| copy(s, true, "Copy Merged")),
         spec!(
             "edit.paste",
             "Paste",

@@ -8,8 +8,8 @@ use photocraft_raster::{Surface, to_rgba};
 /// Composite `layers` inside their visible composite bounds (effects included) and write the result directly into a
 /// tiled surface. Large merges used to hold both a full-canvas RGBA buffer and a second converted
 /// float buffer at once; banded rendering keeps only one compositor band plus the destination.
-/// Refused when the area is past the compositor's per-render limit
-/// ([`photocraft_compose::MAX_RENDER_PIXELS`]): a composite that large can't be held.
+/// Refused when the composite would be past the budget a command's dense buffers may take
+/// ([`crate::allocation::MAX_DENSE_BYTES`]): a composite that large can't be held.
 pub fn composite_layers(solo: &Document, format: photocraft_color::PixelFormat, background: Option<[f32; 3]>) -> crate::Result<Surface> {
     let canvas = solo.bounds();
     let area = solo
@@ -26,22 +26,15 @@ pub fn composite_layers(solo: &Document, format: photocraft_color::PixelFormat, 
     if area.is_empty() {
         return Ok(Surface::new(format));
     }
-    check_render_area(area)?;
+    check_render_area(area, format)?;
     // Also keeps a plain CMYK stack in its ink values (#3778).
     Ok(photocraft_compose::composite_to_surface(solo, area, format, background))
 }
 
-/// The refusal of a merge whose composite would be past the compositor's per-render limit.
-fn check_render_area(area: Rect) -> crate::Result<()> {
-    if u64::from(area.width()) * u64::from(area.height()) > photocraft_compose::MAX_RENDER_PIXELS {
-        return Err(crate::EngineError::Other(format!(
-            "the merged area ({}×{} px) is too large to render (limit {} pixels)",
-            area.width(),
-            area.height(),
-            photocraft_compose::MAX_RENDER_PIXELS
-        )));
-    }
-    Ok(())
+/// The refusal of a merge whose composite (`area` in `format`) would be past the budget a
+/// command's dense buffers may take.
+fn check_render_area(area: Rect, format: photocraft_color::PixelFormat) -> crate::Result<()> {
+    crate::allocation::check_dense(area, format.bytes_per_pixel() as u64, "Merging the layers")
 }
 
 /// [`composite_layers`] without cropping to the canvas: pixels of the layers that lie outside it are kept
@@ -71,7 +64,7 @@ pub fn composite_layers_uncropped(solo: &Document, format: photocraft_color::Pix
     if area.is_empty() {
         return Ok(Surface::new(format));
     }
-    check_render_area(area)?;
+    check_render_area(area, format)?;
     Ok(photocraft_compose::composite_to_surface(solo, area, format, None))
 }
 

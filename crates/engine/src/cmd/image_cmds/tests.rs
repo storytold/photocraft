@@ -403,6 +403,25 @@ fn the_largest_canvas_extends_the_background_without_reading_it_whole() {
     assert_eq!(bg.pixel(149_950 + 101, 150_000), vec![0.0, 1.0, 0.0, 1.0]);
 }
 
+/// A Background whose tiles still cover the largest canvas after it was made small again (its
+/// pixels outside the canvas are kept, as after a crop that keeps them) is blended tile by tile
+/// when the canvas grows back, not read as one box, and shows its own pixels there again.
+#[test]
+fn a_background_shrunk_and_grown_back_to_the_largest_canvas_is_blended_tile_by_tile() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 300000, "height": 300000, "resolution": 72})).unwrap();
+    s.execute("image.canvasSize", json!({"width": 10, "height": 10, "anchor": "topLeft"})).unwrap();
+    let started = std::time::Instant::now();
+    s.execute("image.canvasSize", json!({"width": 300000, "height": 300000, "anchor": "topLeft", "extensionColor": "#00ff00"})).unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(60), "{:?}", started.elapsed());
+    let d = doc(&s);
+    let bg = d.layers[0].surface().unwrap();
+    // The hidden white shows again over the extension colour, at the edges and inside.
+    for (x, y) in [(5, 5), (20, 5), (150_000, 150_000), (299_999, 299_999)] {
+        assert_eq!(bg.pixel(x, y), vec![1.0, 1.0, 1.0, 1.0], "({x}, {y})");
+    }
+}
+
 #[test]
 fn canvas_size_anchors_and_extends_background() {
     let mut s = session();

@@ -905,8 +905,9 @@ fn build() -> Vec<CommandSpec> {
         }),
         cmd!("layer.flattenImage", "Flatten Image", ["Layer"], None, "{}", has_doc, |s, _| {
             s.edit("Flatten Image", |doc, active| {
-                file_cmds::check_flattenable(doc, "layer.flattenImage")?;
                 let fmt = doc.pixel_format();
+                // The composite is the size of the canvas: one past the budget can't be held.
+                crate::allocation::check_dense(doc.bounds(), fmt.bytes_per_pixel() as u64, "Flatten Image")?;
                 let mut bg = Layer::raster("Background", fmt);
                 bg.locks.transparency = true;
                 bg.locks.position = true;

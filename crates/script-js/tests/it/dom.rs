@@ -707,9 +707,12 @@ fn a_duplicate_lands_where_it_is_placed() {
         $.writeln(names.join(','), ' ', g.layers.length, ' ', g.layers[0].name, ' ', inside.parent == g, ' ', below.name);
         try { a.duplicate(a, ElementPlacement.INSIDE); } catch (e) { $.writeln('refused'); }
         $.writeln(doc.layers.length);
+        // A group copied into itself: inside it, and at its end.
+        var gin = g.duplicate(g, ElementPlacement.INSIDE), gend = g.duplicate(g, ElementPlacement.PLACEATEND);
+        $.writeln(g.layers.length, ' ', gin.parent == g, ' ', gend.parent == g, ' ', doc.layers.length);
         "#,
     );
-    assert_eq!(lines, ["G,A,A copy,Background 1 A copy 2 true A copy", "refused", "4"]);
+    assert_eq!(lines, ["G,A,A copy,Background 1 A copy 2 true A copy", "refused", "4", "3 true true 4"]);
 }
 
 #[test]
