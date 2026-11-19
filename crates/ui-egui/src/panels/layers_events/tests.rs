@@ -572,6 +572,42 @@ fn menu_pick_values_run_their_rules() {
 
 // ------------------------------------------------------------------------------------ activation
 
+/// #10255: editing an existing adjustment reopens Properties in its customized tab group.
+#[test]
+fn double_clicking_an_adjustment_thumbnail_reopens_its_closed_properties_tab() {
+    use craft::behavior::dock::{Action, DockPlacement};
+    use egui_kittest::kittest::Queryable;
+
+    use crate::layers_panel_nodes;
+    use crate::panel_docking::{self, probe::group_of};
+
+    const NAME: &str = "Curves for Properties";
+    let mut session = Session::new();
+    session.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
+    session.execute("layer.newAdjustmentLayer.curves", json!({})).unwrap();
+    let curves = session.active().unwrap().active_layer.unwrap();
+    session.execute("layer.setProps", json!({"layer": curves.0, "name": NAME})).unwrap();
+    let mut app = app_of(session);
+    let ctx = app.ctx().clone();
+    panel_docking::apply(&mut app, vec![Action::move_beside("properties".into(), "layers".into(), DockPlacement::tab(None))]).unwrap();
+    let customized_tabs = group_of(&app, "layers");
+    assert!(customized_tabs.iter().any(|tab| tab == "properties"));
+    crate::menus::invoke(&mut app, &ctx, "window.panel.close", json!({"panel": "properties"})).unwrap();
+    crate::menus::invoke(&mut app, &ctx, "window.panel.layers", json!({"show": true})).unwrap();
+
+    let mut h = crate::shortcut_dispatch::tests::app_harness(app);
+    assert!(!panel_docking::is_shown(h.state(), "properties"), "Properties starts completely closed");
+    let thumbnail = layers_panel_nodes::thumb(&h, NAME, LayerPart::Pixels).center();
+    layers_panel_nodes::click(&mut h, thumbnail, egui::Modifiers::NONE);
+    assert!(!panel_docking::is_shown(h.state(), "properties"), "one click leaves Properties closed");
+    layers_panel_nodes::click(&mut h, thumbnail, egui::Modifiers::NONE);
+
+    assert!(panel_docking::is_front(h.state(), "properties"), "the double-click opens and selects Properties");
+    assert_eq!(group_of(h.state(), "properties"), customized_tabs, "Properties returns to its customized tab group");
+    assert_eq!(active(h.state()), Some(curves));
+    assert!(h.query_by_label("Clip to layer below").is_some(), "the active Curves layer's settings are visible");
+}
+
 /// An activation opens the right editor: a filter row's Blending Options part its blending dialog, the
 /// row its own editor (also on a smart object that is not the active layer), and the effects disclosure
 /// is a view change only.
