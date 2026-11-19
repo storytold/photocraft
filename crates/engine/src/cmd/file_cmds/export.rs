@@ -77,7 +77,7 @@ pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&
         let mut only = l.clone();
         only.visible = true;
         only.clipped = false;
-        one.layers = vec![only];
+        one.layers = vec![only].into();
         if trim {
             let mut bounds = Rect::EMPTY;
             let _ = photocraft_compose::render_bands(&one, one.bounds(), 0, |band| -> std::result::Result<(), ()> {
