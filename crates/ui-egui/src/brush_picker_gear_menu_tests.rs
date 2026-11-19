@@ -4,7 +4,7 @@ use serde_json::json;
 
 use super::*;
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default())
 }
 

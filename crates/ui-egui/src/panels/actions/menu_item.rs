@@ -51,7 +51,7 @@ pub(super) fn open(app: &mut PhotocraftApp, action: usize, at: Option<usize>) ->
         ParamDialog::command(KEY, tl!("Insert Menu Item"), rows).values(Bind::bound(fields))
     });
     app.held_insert_menu = Some(Held { dialog, revision: app.session.actions.list.revision(), target, gate, automated });
-    Ok(json!({"dialog": dialog}))
+    Ok(json!({"dialog": dialog.value()}))
 }
 
 /// The insertion the chooser's answer asks for, once the chooser, its action list and its authority are unchanged:

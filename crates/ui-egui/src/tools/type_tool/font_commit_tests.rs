@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 const FONTS: [&str; 2] = ["Inter", "JetBrains Mono"];
 
-type H = Harness<'static, PhotocraftApp>;
+type H = Harness<'static, Box<PhotocraftApp>>;
 
 use super::commit_tests::ime;
 
@@ -66,17 +66,29 @@ fn surrender_focus(h: &mut H) {
 /// A text layer `content` in an edit session in `FONTS[pattern % 2]`; patterns 2 and 3 style characters 2..4 in the other font.
 /// The full app frame, so the options bar and the Character panel both show their family fields.
 fn fixture(pattern: usize, content: &str) -> (H, LayerId) {
-    let content = content.to_owned();
-    let mut h = Harness::builder().with_size(vec2(1600.0, 1000.0)).with_max_steps(64).build_eframe(move |cc| {
+    let mut h = document();
+    let id = text_layer(&mut h, pattern, content);
+    (h, id)
+}
+
+/// [`fixture`]'s app with its document and the Type tool, before the text layer.
+fn document() -> H {
+    Harness::builder().with_size(vec2(1600.0, 1000.0)).with_max_steps(64).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), Services::default());
         app.session.edit_prefs(|p| p.type_.font_preview = photocraft_engine::prefs::FontPreview::Off);
         app.run("file.new", json!({"width": 240, "height": 160})).unwrap();
         app.sync_views();
         app.ui.tool = crate::state::Tool::Type;
-        app.run("type.create", json!({"text": content, "font": FONTS[pattern % 2], "size": 18})).unwrap();
         app
-    });
+    })
+}
+
+/// [`fixture`]'s text layer, made on `h` and edited.
+fn text_layer(h: &mut H, pattern: usize, content: &str) -> LayerId {
+    h.state_mut().run("type.create", json!({"text": content, "font": FONTS[pattern % 2], "size": 18})).unwrap();
+    // Settle as the harness does after its first frame.
+    let _ = h.run_ok();
     let id = h.state().session.active().unwrap().active_layer.unwrap();
     let ctx = h.ctx.clone();
     super::edit_active(h.state_mut(), &ctx).unwrap();
@@ -85,7 +97,22 @@ fn fixture(pattern: usize, content: &str) -> (H, LayerId) {
         h.state_mut().run("type.setStyle", json!({"layer": id.0, "range": [2, 4], "font": FONTS[1 - pattern % 2], "coalesce": key})).unwrap();
     }
     h.run_steps(3);
-    (h, id)
+    id
+}
+
+/// The past states of the document's history.
+fn past_len(h: &H) -> usize {
+    h.state().session.active().unwrap().history.past_len()
+}
+
+/// Undo back to `steps` past states: the document before the last case's text layer.
+fn undo_to(h: &mut H, steps: usize) {
+    while past_len(h) > steps {
+        let before = past_len(h);
+        h.state_mut().run("edit.undo", json!({})).unwrap_or_else(|e| panic!("undo: {e}"));
+        assert!(past_len(h) < before, "Undo takes back the last case");
+    }
+    let _ = h.run_ok();
 }
 
 /// Picks `font` in the first family field: open it, type the name, Enter, as `accept` says.
@@ -111,11 +138,15 @@ fn checkmark(h: &mut H) {
 
 #[test]
 fn caret_font_choices_style_only_subsequent_typing_including_ime() {
+    // One app: each case's text layer goes with Undo before the next case makes its own.
+    let mut h = document();
+    let base = past_len(&h);
     for original in 0..2 {
         for text in ["abcdef", "AéB👩‍💻", "ab\ncdé"] {
             let n = text.chars().count();
             for caret in [0, n / 2, n] {
-                let (mut h, id) = fixture(original, text);
+                undo_to(&mut h, base);
+                let id = text_layer(&mut h, original, text);
                 select(&mut h, [caret, caret]);
                 h.run();
                 let before = saved(&h, id);

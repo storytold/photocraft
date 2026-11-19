@@ -16,7 +16,7 @@ type Hosted = HostedAdjustDialog<AdjustValue, AdjustAsk>;
 
 const PREFIX_OF_KIND: &str = "image.adjustments.";
 
-fn app_with_image() -> PhotocraftApp {
+fn app_with_image() -> Box<PhotocraftApp> {
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
     s.execute("select.rect", json!({"x": 0, "y": 0, "width": 32, "height": 48})).unwrap();
@@ -25,7 +25,7 @@ fn app_with_image() -> PhotocraftApp {
     PhotocraftApp::new(s, crate::Services::default())
 }
 
-fn app_in_mode(mode: &str) -> PhotocraftApp {
+fn app_in_mode(mode: &str) -> Box<PhotocraftApp> {
     let mut session = photocraft_engine::Session::new();
     session.execute("file.new", json!({"width": 32, "height": 24, "mode": mode})).unwrap();
     PhotocraftApp::new(session, crate::Services::default())
@@ -121,14 +121,14 @@ fn cancel(app: &mut PhotocraftApp, ctx: &egui::Context, id: DialogId) {
     crate::dialogs::cancel(app, ctx, id).expect("the dialog cancels");
 }
 
-fn dialog_harness(app: PhotocraftApp, size: egui::Vec2) -> Harness<'static, PhotocraftApp> {
+fn dialog_harness(app: Box<PhotocraftApp>, size: egui::Vec2) -> Harness<'static, Box<PhotocraftApp>> {
     // Real frame times: a double-click's two clicks must land within the double-click time.
     let h = Harness::builder().with_context(app.ctx().clone()).with_size(size).with_step_dt(1.0 / 60.0).build_ui_state(|ui, app| crate::dialogs::run(app, ui), app);
     PhotocraftApp::setup_context(&h.ctx, crate::theme::AppTheme::pro());
     h
 }
 
-fn input(h: &mut Harness<'static, PhotocraftApp>, mods: egui::Modifiers, events: &[egui::Event]) {
+fn input(h: &mut Harness<'static, Box<PhotocraftApp>>, mods: egui::Modifiers, events: &[egui::Event]) {
     h.event(egui::Event::ModifiersChanged(mods));
     h.run_steps(1);
     for e in events {
@@ -140,7 +140,7 @@ fn input(h: &mut Harness<'static, PhotocraftApp>, mods: egui::Modifiers, events:
 }
 
 /// Holds Alt, which turns Cancel into Reset, and presses the Reset button.
-fn press_reset(h: &mut Harness<'static, PhotocraftApp>) {
+fn press_reset(h: &mut Harness<'static, Box<PhotocraftApp>>) {
     h.run_steps(2);
     h.event(egui::Event::ModifiersChanged(egui::Modifiers::ALT));
     h.run_steps(2);
@@ -150,7 +150,7 @@ fn press_reset(h: &mut Harness<'static, PhotocraftApp>) {
 }
 
 /// Opens `kind` in a harness over `app`.
-fn open_in_harness(app: PhotocraftApp, command: &str) -> (Harness<'static, PhotocraftApp>, DialogId) {
+fn open_in_harness(app: Box<PhotocraftApp>, command: &str) -> (Harness<'static, Box<PhotocraftApp>>, DialogId) {
     let mut h = dialog_harness(app, egui::vec2(1200.0, 900.0));
     let id = open(h.state_mut(), command).unwrap();
     h.run_steps(3);
@@ -550,7 +550,7 @@ fn curves_on_a_gray_target_seeds_neutral_fields_in_a_lab_document() {
 }
 
 /// Curves open in a harness over `app`.
-fn curves_harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+fn curves_harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = dialog_harness(app, egui::vec2(1200.0, 900.0));
     open(h.state_mut(), "image.adjustments.curves").unwrap();
     h.run_steps(4);
@@ -558,7 +558,7 @@ fn curves_harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
 }
 
 /// The Channel popup's selected value (its option labels are what it shows).
-fn popup_channels(h: &mut Harness<'static, PhotocraftApp>) -> Vec<String> {
+fn popup_channels(h: &mut Harness<'static, Box<PhotocraftApp>>) -> Vec<String> {
     h.query_all_by_role(egui::accesskit::Role::ComboBox).filter_map(|n| n.value().map(|s| s.to_string())).collect()
 }
 
@@ -918,7 +918,7 @@ fn rabbit_levels_live_mask_preview_matches_commit() {
 const SELECTIVE: &str = "image.adjustments.selectiveColor";
 
 /// A red left half and a blue right half, so each colour range has pixels to change.
-fn selective_app() -> PhotocraftApp {
+fn selective_app() -> Box<PhotocraftApp> {
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
     s.execute("select.rect", json!({"x": 0, "y": 0, "width": 32, "height": 48})).unwrap();
