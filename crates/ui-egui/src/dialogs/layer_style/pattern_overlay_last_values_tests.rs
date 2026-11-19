@@ -202,3 +202,69 @@ fn rejected_or_disabled_overlays_do_not_replace_the_last_ok() {
     let next = open_pattern_overlay(&mut app);
     assert_eq!(params(&app, next), expected);
 }
+
+fn open_with_two_overlays(app: &mut PhotocraftApp) -> DialogId {
+    let (pattern, _) = commit_custom_overlay(app);
+    new_document(app);
+    let effects = [40.0, 80.0].map(|opacity| json!({"kind": PATTERN.key(), "params": {"pattern": pattern.as_str(), "opacity": opacity}}));
+    app.run("layer.layerStyle.replace", json!({"effects": effects})).unwrap();
+    open_pattern_overlay(app)
+}
+
+fn assert_remembered_opacity(app: &mut PhotocraftApp, opacity: f64) {
+    new_document(app);
+    let next = open_pattern_overlay(app);
+    assert_eq!(params(app, next)["opacity"], json!(opacity));
+    cancel(app, next);
+}
+
+#[test]
+fn remembers_an_overlay_edited_to_match_its_sibling() {
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    let mut app = PhotocraftApp::new(Session::new(), crate::Services::default());
+    let dialog = open_with_two_overlays(&mut app);
+    let first = first_of(&app, dialog, PATTERN);
+    edit(&mut app, dialog, |draft| draft.set_param(first, "opacity", StyleValue::Number(80.0)));
+
+    let mut harness = Harness::builder().with_size(egui::vec2(1000.0, 680.0)).with_context(app.ctx().clone()).build_ui_state(
+        |ui, app: &mut Box<PhotocraftApp>| {
+            app.framework.dialogs.run(ui);
+            take(app, ui.ctx());
+        },
+        app,
+    );
+    harness.run_steps(4);
+    harness.get_by_label("OK").click();
+    harness.run_steps(4);
+
+    assert_remembered_opacity(harness.state_mut(), 80.0);
+}
+
+#[test]
+fn remembers_a_new_overlay_that_matches_an_existing_one() {
+    let mut app = PhotocraftApp::new(Session::new(), crate::Services::default());
+    let dialog = open_with_two_overlays(&mut app);
+    let style = &draft(&app, dialog).style;
+    let second = style.effect(style.instances(PATTERN).nth(1).unwrap()).unwrap();
+    let duplicate = style_params(PATTERN, &style_params_json(&second.params), None);
+
+    edit(&mut app, dialog, |draft| {
+        draft.add_instance(PATTERN, &duplicate);
+    });
+    ok(&mut app, dialog);
+
+    assert_remembered_opacity(&mut app, 80.0);
+}
+
+#[test]
+fn removing_an_overlay_does_not_remember_its_unchanged_sibling() {
+    let mut app = PhotocraftApp::new(Session::new(), crate::Services::default());
+    let dialog = open_with_two_overlays(&mut app);
+    let first = first_of(&app, dialog, PATTERN);
+
+    edit(&mut app, dialog, |draft| draft.remove_instance(first));
+    ok(&mut app, dialog);
+
+    assert_remembered_opacity(&mut app, 40.0);
+}

@@ -850,8 +850,8 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
     contour::answered(app, id);
 }
 
-fn pattern_overlay_values(layer: &Layer) -> impl Iterator<Item = Value> + '_ {
-    layer.effects.items.iter().filter(|fx| fx.enabled() && matches!(fx, Effect::PatternOverlay { .. })).map(|fx| values_of(fx, 0.0))
+fn enabled_pattern_overlay_params(effect: &Effect) -> Option<Value> {
+    (effect.enabled() && matches!(effect, Effect::PatternOverlay { .. })).then(|| values_of(effect, 0.0))
 }
 
 /// OK: replaces the layer's effects with the style's, as one history step.
@@ -860,15 +860,24 @@ fn finish(app: &mut PhotocraftApp, doc: photocraft_doc::DocId, layer: LayerId, s
         return fail(app, "Layer Style target document changed".into());
     };
     let light = f64::from(active.doc.global_light.angle);
-    let before: Vec<_> = active.doc.layer(layer).into_iter().flat_map(pattern_overlay_values).collect();
+    let before: HashMap<_, _> = active
+        .doc
+        .layer(layer)
+        .into_iter()
+        .flat_map(|layer| layer.effects.items.iter().enumerate())
+        .filter_map(|(i, effect)| enabled_pattern_overlay_params(effect).map(|params| (EffectId(i as u32 + 1), params)))
+        .collect();
     if let Err(error) = apply(style, layer, Some(light), |id, p| app.run(id, p)) {
         return fail(app, error);
     }
 
-    // Reuse applied values (including the resolved id and clamped values) only when OK added
-    // or edited the overlay. An unrelated Layer Style edit leaves this memory alone.
-    let mut applied = app.session.active().and_then(|s| s.doc.layer(layer)).into_iter().flat_map(pattern_overlay_values);
-    if let Some(params) = applied.find(|params| !before.contains(params)) {
+    // Replace keeps the draft order, so pair each applied effect with its draft ID.
+    // A new instance has no snapshot, even when it reuses the ID of a removed effect.
+    let mut applied = app.session.active().and_then(|s| s.doc.layer(layer)).into_iter().flat_map(|layer| &layer.effects.items).zip(&style.effects);
+    if let Some(params) = applied.find_map(|(effect, instance)| {
+        let params = enabled_pattern_overlay_params(effect)?;
+        (instance.params.get("fx").is_none() || before.get(&instance.id) != Some(&params)).then_some(params)
+    }) {
         last_pattern_overlay().store(app.framework.host(), &params);
     }
 }
