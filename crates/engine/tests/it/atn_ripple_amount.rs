@@ -1,6 +1,6 @@
 //! #7670: integer ATN Ripple amounts must never silently replace native fractions.
 use craft_psd::{atn, descriptor::Value as D};
-use photocraft_engine::actions_cmds::Action;
+use photocraft_engine::actions_cmds::{Action, ActionList, ActionStep, ActionsFile};
 use photocraft_engine::{Session, atn_cmds};
 use serde_json::{Value, json};
 
@@ -35,11 +35,11 @@ fn fractional_amounts_remain_native_and_are_refused_by_strict_export() {
         for size in ["small", "medium", "large"] {
             for amount in [81.4, -81.4, 0.5, -0.5, 998.9, -998.9] {
                 let params = json!({"amount": amount, "size": size});
-                let action = Action::new("Fractional Ripple", vec![(RIPPLE.into(), params.clone())]);
+                let action = Action::new("Fractional Ripple", vec![ActionStep::new(RIPPLE, params.clone())]);
                 let mut direct = fixture(depth);
                 direct.execute(RIPPLE, params).unwrap();
                 let mut native = fixture(depth);
-                native.actions.list.push(action.clone());
+                native.actions.list.push(action.clone()).unwrap();
                 native.execute("actions.play", json!({"action": "Fractional Ripple"})).unwrap();
                 assert_eq!(pixels(&direct), pixels(&native));
 
@@ -51,9 +51,9 @@ fn fractional_amounts_remain_native_and_are_refused_by_strict_export() {
                 if let Ok((bytes, skipped)) = atn_cmds::export("Ripple", &[&action], &[], false) {
                     let imported = atn_cmds::import(&bytes).unwrap();
                     assert!(skipped.is_empty() && imported.unsupported.is_empty() && imported.warnings.is_empty());
-                    let exported = imported.actions[0].steps[0].1["amount"].clone();
+                    let exported = imported.actions[0].steps[0].params["amount"].clone();
                     let mut replay = fixture(depth);
-                    replay.actions.list = imported.actions;
+                    replay.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
                     replay.execute("actions.play", json!({"action": "Fractional Ripple"})).unwrap();
                     let changed = pixels(&replay) != pixels(&direct);
                     if amount == 81.4 {
@@ -78,11 +78,11 @@ fn integer_amounts_sizes_and_defaults_preserve_playback() {
             }
         }
         for params in cases {
-            let action = Action::new("Integer Ripple", vec![(RIPPLE.into(), params.clone())]);
+            let action = Action::new("Integer Ripple", vec![ActionStep::new(RIPPLE, params.clone())]);
             let mut direct = fixture(depth);
             direct.execute(RIPPLE, params.clone()).unwrap();
             let mut native = fixture(depth);
-            native.actions.list.push(action.clone());
+            native.actions.list.push(action.clone()).unwrap();
             native.execute("actions.play", json!({"action": "Integer Ripple"})).unwrap();
             assert_eq!(pixels(&native), pixels(&direct));
 
@@ -97,9 +97,9 @@ fn integer_amounts_sizes_and_defaults_preserve_playback() {
             assert!(imported.unsupported.is_empty() && imported.warnings.is_empty());
             assert_eq!(imported.actions.len(), 1);
             assert_eq!(imported.actions[0].steps.len(), 1);
-            assert_eq!(imported.actions[0].steps[0].0, RIPPLE);
+            assert_eq!(imported.actions[0].steps[0].command, RIPPLE);
             let mut replay = fixture(depth);
-            replay.actions.list = imported.actions;
+            replay.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
             replay.execute("actions.play", json!({"action": "Integer Ripple"})).unwrap();
             assert_eq!(pixels(&replay), pixels(&direct), "depth {depth}: {params}");
         }
@@ -109,8 +109,10 @@ fn integer_amounts_sizes_and_defaults_preserve_playback() {
 /// Opt-in skipping reports precisely the lost edits, keeping the supported steps in order.
 #[test]
 fn skipping_fractional_amounts_reports_action_and_step() {
-    let action =
-        Action::new("Mixed Ripple", [10.0, 81.4, -20.0, -0.5].into_iter().map(|amount| (RIPPLE.into(), json!({"amount": amount, "size": "small"}))).collect());
+    let action = Action::new(
+        "Mixed Ripple",
+        [10.0, 81.4, -20.0, -0.5].into_iter().map(|amount| ActionStep::new(RIPPLE, json!({"amount": amount, "size": "small"}))).collect(),
+    );
     let error = atn_cmds::export("Ripple", &[&action], &[], false).unwrap_err();
     assert!(error.contains("step 2 of `Mixed Ripple`"), "{error}");
     assert!(error.contains(RIPPLE) && error.contains("skipUnsupported"), "{error}");
@@ -128,9 +130,9 @@ fn skipping_fractional_amounts_reports_action_and_step() {
     let steps = &imported.actions[0].steps;
     assert_eq!(steps.len(), 2);
     for (step, amount) in steps.iter().zip([10.0, -20.0]) {
-        assert_eq!(step.0, RIPPLE);
-        assert_eq!(step.1["amount"].as_f64(), Some(amount));
-        assert_eq!(step.1["size"], "small");
+        assert_eq!(step.command, RIPPLE);
+        assert_eq!(step.params["amount"].as_f64(), Some(amount));
+        assert_eq!(step.params["size"], "small");
     }
 }
 
@@ -149,7 +151,7 @@ fn non_pixel_targets_and_malformed_fields_are_still_refused() {
         json!({"amount": 1e100}),
         json!({"amount": 81, "size": "unknown"}),
     ] {
-        let action = Action::new("Unsupported Ripple", vec![(RIPPLE.into(), params.clone())]);
+        let action = Action::new("Unsupported Ripple", vec![ActionStep::new(RIPPLE, params.clone())]);
         assert!(atn_cmds::export("Ripple", &[&action], &[], false).is_err(), "{params}");
         let (bytes, skipped) = atn_cmds::export("Ripple", &[&action], &[], true).unwrap();
         assert_eq!(skipped, vec![atn_cmds::Skipped { action: "Unsupported Ripple".into(), step: 0, id: RIPPLE.into() }]);

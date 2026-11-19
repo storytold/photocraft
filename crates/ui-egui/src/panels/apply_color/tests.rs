@@ -9,7 +9,7 @@ use crate::state::Tool;
 const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
 
 /// Two type layers and two shape layers (black, the default colours), all selected.
-fn app(tool: Tool) -> (PhotocraftApp, Vec<LayerId>, Vec<LayerId>) {
+fn app(tool: Tool) -> (Box<PhotocraftApp>, Vec<LayerId>, Vec<LayerId>) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 300, "height": 200})).unwrap();
     app.sync_views();
@@ -140,10 +140,9 @@ fn a_swatch_and_the_color_picker_go_through_it() {
     assert_ne!(app.session.tools.foreground, [0.0, 0.0, 0.0, 1.0]);
     assert!(shapes.iter().all(|id| same(&app, *id)), "the swatch recoloured the shapes");
     // The Color Picker's OK for the foreground.
-    let mut f = serde_json::Map::new();
-    f.insert("__colorPicker".into(), json!("foreground"));
-    f.insert("color".into(), json!("#0000ff"));
-    crate::color_picker_ui::confirm(&mut app, &f).unwrap();
+    let picker = crate::color_picker_ui::open(&mut app, "foreground");
+    crate::color_picker_ui::testing::set_color(&mut app, picker, "#0000ff");
+    crate::dialogs::testing::confirm(&mut app, picker).unwrap();
     assert_eq!(app.session.tools.foreground, [0.0, 0.0, 1.0, 1.0]);
     assert!(shapes.iter().all(|id| same(&app, *id)), "the picker recoloured the shapes");
 }
