@@ -89,16 +89,19 @@ pub struct Framework {
     /// The runtime's keymap overrides. The runtime rebuilds its keymap when the `Arc` changes, so
     /// it is replaced only when the bindings it carries change.
     overrides: Arc<Overrides>,
-    /// What `overrides` was built from: the preferences' catalog revision and the actions list's revision.
+    /// What `overrides` was built from: the preferences' catalog revision and the catalog's generation.
     overrides_key: Option<(u64, u64)>,
     /// Advances each time `overrides` is replaced.
     overrides_generation: u64,
     /// The app's command catalog, built from `catalog_rows`.
     catalog: Option<AppCatalog>,
-    /// The rows `catalog` was built from ([`command_rows`](crate::shortcut_dispatch::command_rows)), the actions
-    /// list's revision they were built at (their one input that changes at run time), and the catalog's generation:
-    /// the runtime rebuilds its keymap when the generation changes, so it advances only when the rows are rebuilt.
+    /// The rows `catalog` was built from ([`command_rows`](crate::shortcut_dispatch::command_rows)), the action
+    /// names they were built from (their one input that changes at run time), the actions list's revision those names
+    /// were last read at, and the catalog's generation: the runtime rebuilds its keymap when the generation changes,
+    /// so it advances only when the names change. The revision is the fast check; it assumes the list is edited in
+    /// place or through `ActionList::replace`, which keep it moving forward.
     catalog_rows: Vec<craft::keymap::CommandDef>,
+    catalog_actions: Vec<String>,
     catalog_rows_rev: Option<u64>,
     catalog_generation: u64,
     /// How many times the rows and the overrides were built, for the count trials.
@@ -286,6 +289,7 @@ impl Framework {
             overrides_generation: 0,
             catalog: None,
             catalog_rows: Vec::new(),
+            catalog_actions: Vec::new(),
             catalog_rows_rev: None,
             catalog_generation: 0,
             #[cfg(test)]
@@ -506,11 +510,13 @@ impl Framework {
         (self.catalog_rows_rev == Some(actions_rev)).then_some(self.catalog_rows.as_slice())
     }
 
-    /// Takes `rows`, built at actions list revision `actions_rev`, as the catalog's rows: a new catalog generation.
-    fn set_catalog(&mut self, actions_rev: u64, rows: Vec<craft::keymap::CommandDef>) {
+    /// Takes `rows`, built from the action names `actions` at actions list revision `actions_rev`, as the catalog's
+    /// rows: a new catalog generation.
+    fn set_catalog(&mut self, actions_rev: u64, actions: Vec<String>, rows: Vec<craft::keymap::CommandDef>) {
         self.catalog_generation += 1;
         self.catalog = crate::shortcut_dispatch::catalog(rows.clone(), self.catalog_generation);
         self.catalog_rows = rows;
+        self.catalog_actions = actions;
         self.catalog_rows_rev = Some(actions_rev);
         #[cfg(test)]
         {
@@ -638,14 +644,22 @@ impl PhotocraftApp {
     /// runs them), the commands the canvas ran (`record_view_commands`, in `logic`) and whether a
     /// component refused its input.
     pub(crate) fn framework_before_input(&mut self, ctx: &egui::Context) {
-        // The catalog's rows change only with the actions list; the bindings also with the shortcut
-        // preferences.
-        let actions_rev = self.session.actions.list.revision();
+        // The catalog's rows change only with the action names; the bindings with the rows and the
+        // shortcut preferences.
+        let list = &self.session.actions.list;
+        let actions_rev = list.revision();
         if self.framework.catalog_rows_rev != Some(actions_rev) {
-            let rows = crate::shortcut_dispatch::command_rows(self);
-            self.framework.set_catalog(actions_rev, rows);
+            let same = self.framework.catalog_rows_rev.is_some()
+                && self.framework.catalog_actions.iter().map(String::as_str).eq(list.actions().iter().map(|action| action.name.as_str()));
+            if same {
+                self.framework.catalog_rows_rev = Some(actions_rev);
+            } else {
+                let actions = list.actions().iter().map(|action| action.name.clone()).collect();
+                let rows = crate::shortcut_dispatch::command_rows(self);
+                self.framework.set_catalog(actions_rev, actions, rows);
+            }
         }
-        let overrides_key = (self.session.prefs.catalog_rev(), actions_rev);
+        let overrides_key = (self.session.prefs.catalog_rev(), self.framework.catalog_generation);
         if self.framework.overrides_key != Some(overrides_key) {
             let overrides = crate::shortcut_dispatch::overrides(self, &self.framework.catalog_rows);
             self.framework.set_overrides(overrides_key, overrides);
