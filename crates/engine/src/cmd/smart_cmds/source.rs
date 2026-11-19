@@ -239,7 +239,9 @@ pub(super) fn flattened_source_with(src: &Document, fmt: PixelFormat, ctl: &Inte
         // The buffer `photocraft_compose::flatten` gives, composited in bands of about
         // [`BLOCK_PIXELS`] so a cancel is seen between them.
         check(ctl)?;
-        let mut px = Vec::new();
+        let too_large = || other("the smart object's contents are too large to render".to_string());
+        let pixels = usize::try_from(u64::from(b.width()) * u64::from(b.height())).map_err(|_| too_large())?;
+        let mut px = crate::allocation::capacity(pixels, "smart object source")?;
         let rows = i32::try_from(BLOCK_PIXELS / u64::from(b.width().max(1))).unwrap_or(i32::MAX);
         photocraft_compose::render_bands(src, b, rows, |band| {
             check(ctl)?;
