@@ -11,7 +11,7 @@ use crate::PhotocraftApp;
 use crate::panels::layers_tree::PhotoThumbs;
 
 /// A 2000 by 1000 document with a 20 by 10 red speck on layer "Speck".
-fn app() -> (PhotocraftApp, LayerId) {
+fn app() -> (Box<PhotocraftApp>, LayerId) {
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width": 2000, "height": 1000})).unwrap();
     let id = s.execute("layer.new.layer", json!({"name": "Speck"})).unwrap()["layer"].as_u64().unwrap();

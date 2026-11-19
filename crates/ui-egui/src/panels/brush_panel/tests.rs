@@ -14,7 +14,7 @@ use photocraft_engine::paint::{Control, GrayTile, MaskMode, Pattern, PatternStyl
 use super::brushes::{BrushKey, apply_events, parts_of, preset_rows, run_picks};
 use super::*;
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default())
 }
 
@@ -23,7 +23,7 @@ fn last_journal(app: &PhotocraftApp) -> Option<(String, Value)> {
 }
 
 /// The visible options caption, not the numeric field it names.
-fn caption_rect(h: &Harness<'_, PhotocraftApp>, text: &str) -> egui::Rect {
+fn caption_rect(h: &Harness<'_, Box<PhotocraftApp>>, text: &str) -> egui::Rect {
     h.query_all(egui_kittest::kittest::by().label(text).include_labels())
         .find(|n| n.accesskit_node().role() == egui::accesskit::Role::Label)
         .unwrap_or_else(|| panic!("the `{text}` caption"))
@@ -249,7 +249,7 @@ fn section_locks_round_trip_and_survive_preset_picks() {
 }
 
 /// A harness that shows the options bar with `tool` in the Studio (non-pro) theme.
-fn options_bar_harness(tool: crate::state::Tool) -> Harness<'static, PhotocraftApp> {
+fn options_bar_harness(tool: crate::state::Tool) -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = app();
     app.ui.tool = tool;
     // As tall as a window, so the bar's menus open in full below it.
@@ -381,7 +381,7 @@ fn mixer_brush_clean_brush_and_the_automatic_load_keep_the_foreground_out() {
 
 /// A harness that draws the registry body of `panel` (`"brushSettings"` or `"brushes"`) with
 /// `section` selected.
-fn harness(panel: &'static str, section: usize) -> Harness<'static, PhotocraftApp> {
+fn harness(panel: &'static str, section: usize) -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = app();
     app.ui.brush_section = section;
     let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1200.0, 900.0)).build_app(
@@ -431,8 +431,13 @@ fn editing_the_options_bar_amount_reenables_smoothing() {
 
 #[test]
 fn every_section_draws_without_issuing_commands() {
-    for (panel, view) in [("brushSettings", None), ("brushes", Some(PresetView::List)), ("brushes", Some(PresetView::Grid))] {
-        for section in 0..SECTIONS.len() {
+    // Brush Settings draws the selected section's controls, but only up to `CHECKBOX_ONLY_START`: a later section is
+    // reset to 0 before drawing (`brush_settings.rs`, tested by `checkbox_only_rows_cannot_restore_an_empty_properties_pane`).
+    // The Brushes panel does not read the section at all, so one run per view covers it (#15652).
+    for (panel, view, sections) in
+        [("brushSettings", None, 0..CHECKBOX_ONLY_START), ("brushes", Some(PresetView::List), 0..1), ("brushes", Some(PresetView::Grid), 0..1)]
+    {
+        for section in sections {
             let mut h = harness(panel, section);
             if let Some(view) = view {
                 h.state_mut().ui.brushes_panel.view = view;
@@ -465,9 +470,9 @@ fn kit(name: &str, group: &str, folder: &[&str]) -> paint::BrushPreset {
 }
 
 /// The rows `preset_rows` gives for `app`, drawn in a frame (the rows read the frame's environment).
-fn rows_of(app: PhotocraftApp, view: PresetView) -> Vec<PresetRow<BrushKey>> {
+fn rows_of(app: Box<PhotocraftApp>, view: PresetView) -> Vec<PresetRow<BrushKey>> {
     let mut h = Harness::builder().with_size(vec2(200.0, 200.0)).with_context(app.ctx().clone()).build_ui_state(
-        move |ui, st: &mut (PhotocraftApp, Vec<PresetRow<BrushKey>>)| {
+        move |ui, st: &mut (Box<PhotocraftApp>, Vec<PresetRow<BrushKey>>)| {
             st.1 = preset_rows(&st.0, &Env::of(ui), parts_of(view));
         },
         (app, Vec::new()),
@@ -502,7 +507,7 @@ fn preset_rows_nest_presets_in_panel_order() {
     assert_eq!(out.last().map(String::as_str), Some(format!("{}:Deep", max + 1).as_str()));
 }
 
-fn fixture() -> PhotocraftApp {
+fn fixture() -> Box<PhotocraftApp> {
     let mut app = app();
     app.session.tools.presets = vec![
         kit("A1", "Alpha", &[]),
@@ -594,11 +599,11 @@ fn brushes_panel_events_run_their_commands() {
 
 /// A fresh session with the Brush tool: shortcuts, the options bar and the Brush Settings body,
 /// in the default theme (#258).
-fn app_harness() -> Harness<'static, PhotocraftApp> {
+fn app_harness() -> Harness<'static, Box<PhotocraftApp>> {
     app_harness_with_language(crate::i18n::Lang::EN)
 }
 
-fn app_harness_with_language(lang: crate::i18n::Lang) -> Harness<'static, PhotocraftApp> {
+fn app_harness_with_language(lang: crate::i18n::Lang) -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = app();
     app.ui.tool = crate::state::Tool::Brush;
     let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1400.0, 900.0)).build_app(
@@ -767,7 +772,7 @@ fn fixed_size_shows_and_takes_the_unit_picked_on_its_fields() {
     );
     PhotocraftApp::setup_context(&h.ctx, crate::theme::AppTheme::pro());
     h.run_steps(4);
-    let has = |h: &Harness<'static, PhotocraftApp>, v: f64| h.query_all_by_role(Role::SpinButton).any(|n| n.accesskit_node().numeric_value() == Some(v));
+    let has = |h: &Harness<'static, Box<PhotocraftApp>>, v: f64| h.query_all_by_role(Role::SpinButton).any(|n| n.accesskit_node().numeric_value() == Some(v));
     assert!(has(&h, 100.0) && has(&h, 50.0));
 
     // A right-click on Width lists the units; Millimeters shows both sides in mm.

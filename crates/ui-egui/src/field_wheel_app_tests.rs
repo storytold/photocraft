@@ -10,7 +10,7 @@ use serde_json::json;
 use crate::PhotocraftApp;
 use crate::state::Tool;
 
-fn harness() -> Harness<'static, PhotocraftApp> {
+fn harness() -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), crate::Services::default());
@@ -23,11 +23,11 @@ fn harness() -> Harness<'static, PhotocraftApp> {
 }
 
 /// The value field showing `value`: the options bar's Smoothing is the brush's only one at 10.
-fn field<'a>(h: &'a Harness<'_, PhotocraftApp>, value: &str) -> egui_kittest::Node<'a> {
+fn field<'a>(h: &'a Harness<'_, Box<PhotocraftApp>>, value: &str) -> egui_kittest::Node<'a> {
     h.query_all_by_role(Role::SpinButton).find(|n| n.value().as_deref() == Some(value)).unwrap()
 }
 
-fn wheel(h: &mut Harness<'_, PhotocraftApp>, at: egui::Pos2, lines: f32, modifiers: egui::Modifiers) {
+fn wheel(h: &mut Harness<'_, Box<PhotocraftApp>>, at: egui::Pos2, lines: f32, modifiers: egui::Modifiers) {
     h.hover_at(at);
     h.run_steps(1);
     h.event(egui::Event::MouseWheel {
@@ -41,7 +41,7 @@ fn wheel(h: &mut Harness<'_, PhotocraftApp>, at: egui::Pos2, lines: f32, modifie
 }
 
 /// (zoom, centre) of the document's view.
-fn view(h: &Harness<'_, PhotocraftApp>) -> (f32, [f32; 2]) {
+fn view(h: &Harness<'_, Box<PhotocraftApp>>) -> (f32, [f32; 2]) {
     let v = &h.state().ui.views[0];
     (v.zoom, v.center)
 }
@@ -58,6 +58,12 @@ fn the_wheel_over_a_field_steps_it_without_a_click() {
     assert!(!field(&h, "21").is_focused(), "hovering doesn't put the cursor in the field");
     assert_eq!(view(&h), before, "the canvas didn't move");
 }
+
+/// Frames a wheel event gets to play out (0.25 s each, the harness's default step). egui's wheel smoothing reaches
+/// 90 % in 0.1 s and takes the rest under one point at once, so the smoothed tail of a notch (about 50 points) ends
+/// within three frames even at a 0.1 s step; four leave one to spare: the view after
+/// them is the one the old forty left.
+const TAIL_STEPS: usize = 4;
 
 /// How far a wheel of `delta` lines with `modifiers` over the canvas moves the view, a Smoothing
 /// field focused or not, once egui's smoothed scroll has run out. The field isn't stepped.
@@ -78,7 +84,7 @@ fn canvas_pan(focus: bool, delta: egui::Vec2, modifiers: egui::Modifiers) -> (f3
         phase: egui::TouchPhase::Move,
         modifiers,
     });
-    h.run_steps(40);
+    h.run_steps(TAIL_STEPS);
     assert!(h.query_all_by_role(Role::SpinButton).any(|n| n.value().as_deref() == Some("10")), "focus {focus}: the field wasn't stepped");
     let after = view(&h);
     (after.0 / before.0, [after.1[0] - before.1[0], after.1[1] - before.1[1]])
