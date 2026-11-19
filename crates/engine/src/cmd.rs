@@ -1318,11 +1318,14 @@ fn build() -> Vec<CommandSpec> {
                 }
                 let eyedropped = if matches!(kind.as_str(), "levels" | "curves") { crate::adjust_params::destructive_eyedropper(s, &kind, p)? } else { None };
                 // A smart filter re-runs its params, so it records what an eyedropper resolved
-                // to, not the sample (#3127).
+                // to, not the sample (#3127). The pick is a point curve read without smoothing,
+                // so the recording drops `smooth` and `pencil` as the picker itself does.
                 let recorded = eyedropped.as_ref().map(|adj| {
                     let mut q = p.clone();
                     if let (Value::Object(q), Value::Object(resolved)) = (&mut q, crate::adjust_params::to_params(adj)) {
                         q.remove("eyedropper");
+                        q.remove("smooth");
+                        q.remove("pencil");
                         q.extend(resolved);
                     }
                     q
