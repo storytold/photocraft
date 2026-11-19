@@ -79,6 +79,12 @@ pub fn overflow_button(ui: &mut Ui, id: egui::Id, r: Rect, tip: &str, labels: &[
                     let button = egui::Button::new(text)
                         .wrap_mode(egui::TextWrapMode::Truncate);
                     let response = ui.add(button).on_hover_text(*name);
+                    // Follow the pointer only when it moves over a row. This lets
+                    // arrow navigation continue from the hovered filename without
+                    // repeatedly stealing focus while the pointer is stationary.
+                    if response.hovered() && ui.input(|input| input.pointer.delta().length_sq() > 0.0) {
+                        response.request_focus();
+                    }
                     if response.gained_focus() {
                         response.scroll_to_me(None);
                     }
