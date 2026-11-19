@@ -607,8 +607,15 @@ impl PhotocraftApp {
     /// Place a file's bytes as a smart object layer (File › Place; `linked`: Place Linked, to that
     /// path), for files that weren't read from a path the command can read. With background jobs
     /// on it starts a job (`{"job", "pending": true}`; see [`crate::jobs_ui::track_place`]).
+    ///
+    /// As in the reference application, Place Embedded centres the file on a selection, removing
+    /// it (#14102); otherwise a place centres it on the part of the canvas in view (#14103).
     pub(crate) fn place_bytes(&mut self, name: &str, bytes: Vec<u8>, linked: Option<String>) -> Result<serde_json::Value, String> {
-        self.place_bytes_with(name, bytes, linked, &serde_json::json!({}))
+        let mut params = serde_json::json!({"centerOnSelection": linked.is_none()});
+        if let Some(centre) = visible_canvas_centre(self) {
+            params["center"] = serde_json::json!(centre);
+        }
+        self.place_bytes_with(name, bytes, linked, &params)
     }
 
     /// [`PhotocraftApp::place_bytes`] with the command's `params` (a frame to fill): a job where
@@ -640,6 +647,31 @@ impl PhotocraftApp {
             }
         }
     }
+}
+
+/// Where a place lands when only part of the canvas is in view (#14103): the centre of the part
+/// of the canvas the active view shows, in document pixels. `None` (the canvas centre) when the
+/// whole canvas is in view, and in the cases not measured in the reference application: a
+/// rotated view, or one that shows the canvas whole on one axis. `None` too when the place fills
+/// the active layer's frame, whose `center` is in the frame's own space.
+fn visible_canvas_centre(app: &PhotocraftApp) -> Option<[f64; 2]> {
+    let xf = crate::canvas::ViewXform::active(app)?;
+    if xf.rotation.abs() > 1e-6 {
+        return None;
+    }
+    let st = app.session.active()?;
+    if st.active_layer.is_some_and(|id| photocraft_engine::frame_cmds::frame_of(&st.doc, id).is_some()) {
+        return None;
+    }
+    let size = st.doc.size;
+    let (a, b) = (xf.to_doc(xf.rect.min), xf.to_doc(xf.rect.max));
+    // The shown span of the canvas on one axis, if the view cuts it there.
+    let cut = |axis: usize, len: u32| {
+        let len = f64::from(len);
+        let (lo, hi) = (a[axis].min(b[axis]).max(0.0), a[axis].max(b[axis]).min(len));
+        (lo < hi && (lo > 0.0 || hi < len)).then_some((lo + hi) / 2.0)
+    };
+    Some([cut(0, size.width)?, cut(1, size.height)?])
 }
 
 /// Order names like a file browser does: runs of digits by their value (`File_2` before

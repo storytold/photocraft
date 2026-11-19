@@ -1032,3 +1032,6 @@ mod red_eye_context_menu_tests;
 
 #[cfg(test)]
 mod clone_stamp_indexed_bar_tests;
+
+#[cfg(test)]
+mod place_visible_centre_tests;
