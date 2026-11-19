@@ -1,5 +1,5 @@
 use super::bevel::{BevelPaint, TextureCtx, bevel_geom, bevel_maps, satin_map};
-use super::distance::{INSIDE_EPS, Metric, dist_inside_by, dist_outside_by, local_coverage, stroke_outside_exact};
+use super::distance::{INSIDE_EPS, Metric, dist_outside_by, local_coverage, stroke_inside_distance, stroke_outside_exact};
 use super::paint::{dissolves_in, glow_map, paint_color, paint_fx, paint_glow, paint_pattern, rgb, shadow_map};
 use super::{
     Bevel, BevelStyle, BlendMode, Buffer, Effect, FxMaps, FxPaint, GlobalLight, Layer, MAX_REACH, Map, PREPARED_PATTERN_BYTES, Pattern, Placement,
@@ -110,7 +110,7 @@ pub(crate) fn build_maps_prepared(
     let exact_out = out_widths.iter().any(|&w| stroke_outside_exact(w));
     let (din, dout, dout_exact) = if has_stroke {
         (
-            Some(dist_inside_by(&shape, Metric::Chamfer)),
+            Some(stroke_inside_distance(&shape, matches!(layer.content, photocraft_doc::LayerContent::Raster(_)))),
             chamfer_out.then(|| dist_outside_by(&shape, Metric::Chamfer)),
             exact_out.then(|| dist_outside_by(&shape, Metric::Euclidean)),
         )
@@ -185,7 +185,7 @@ pub fn premerges_layer(layer: &Layer) -> bool {
 /// compositor paints them. The shape Stroke Emboss bevels (#8639).
 fn stroke_band(shape: &Map, st: &photocraft_doc::StrokeFx) -> Map {
     let (in_w, out_w) = stroke_widths(st);
-    let din = (in_w > 0.0).then(|| dist_inside_by(shape, Metric::Chamfer));
+    let din = (in_w > 0.0).then(|| stroke_inside_distance(shape, false));
     let metric = if stroke_outside_exact(out_w) { Metric::Euclidean } else { Metric::Chamfer };
     let dout = (out_w > 0.0).then(|| dist_outside_by(shape, metric));
     let mut band = Map::new(shape.w, shape.h, 0.0);

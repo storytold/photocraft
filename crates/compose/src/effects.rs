@@ -251,3 +251,6 @@ mod tests;
 
 #[cfg(test)]
 mod satin_size_one_tests;
+
+#[cfg(test)]
+mod stroke_partial_alpha_tests;

@@ -122,6 +122,7 @@ fn banded_fields_match_whole_region_within_reach() {
         FieldKind::ChokeInside,
         FieldKind::StrokeOutside,
         FieldKind::StrokeInside,
+        FieldKind::StrokeInsideRaster,
         FieldKind::StrokeOutsideExact,
         FieldKind::StrokeOutsideVector,
         FieldKind::StrokeOutsideVectorChamfer,
@@ -266,7 +267,7 @@ fn a_stroke_uses_the_chamfer_narrow_and_the_exact_field_wide() {
     let vector_wide = program(&stroke(40.0, StrokePosition::Outside), &light, true);
     assert!(vector_wide.fields.iter().any(|(k, _)| *k == FieldKind::StrokeOutsideVector), "{:?}", vector_wide.fields);
     let inner = program(&stroke(40.0, StrokePosition::Inside), &light, false);
-    assert!(inner.fields.iter().any(|(k, _)| *k == FieldKind::StrokeInside), "{:?}", inner.fields);
+    assert!(inner.fields.iter().any(|(k, _)| *k == FieldKind::StrokeInsideRaster), "{:?}", inner.fields);
     // The shadow / softer-glow spread is unchanged: still the chamfer.
     let Effect::DropShadow(mut s) = Effect::default_drop_shadow() else { unreachable!() };
     s.spread = 0.5;
