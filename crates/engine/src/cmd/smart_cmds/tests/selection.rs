@@ -45,7 +45,7 @@ fn selected_pixels_become_one_editable_smart_object_in_every_mode_and_depth() {
             let mut hidden = pixel(&doc, "Hidden", Rect::new(50, 40, 58, 44), [0.2, 0.9, 0.3, 1.0]);
             hidden.visible = false;
             let ids = [a.id, b.id, hidden.id];
-            doc.layers = vec![a, b, hidden];
+            doc.layers = vec![a, b, hidden].into();
             let mut selection = Surface::new(PixelFormat::GRAY8);
             selection.fill_rect(Rect::new(0, 0, 12, 12), &[0.5]);
             doc.selection = Some(selection);
@@ -99,7 +99,7 @@ fn selected_group_and_descendant_are_embedded_once() {
     let group_id = group.id;
     let b = pixel(&doc, "Outside", Rect::new(16, 0, 32, 16), [0.0, 0.0, 1.0, 1.0]);
     let b_id = b.id;
-    doc.layers = vec![group, b];
+    doc.layers = vec![group, b].into();
     let mut s = selected_session(doc, &[group_id, a_id, b_id]);
     convert(&mut s);
     assert_eq!(s.active().unwrap().doc.layers.len(), 1);
@@ -120,7 +120,7 @@ fn mixed_parent_selection_keeps_unselected_siblings_and_uses_the_top_selected_pa
     let lower = Layer::group("Lower parent", vec![a, keep_a.clone()]);
     let upper = Layer::group("Upper parent", vec![b, keep_b.clone()]);
     let (lower_id, upper_id) = (lower.id, upper.id);
-    doc.layers = vec![lower, upper];
+    doc.layers = vec![lower, upper].into();
     let original = doc.clone();
     let mut s = selected_session(doc, &[b_id, a_id]);
     let before = flat(&s);
@@ -144,7 +144,7 @@ fn explicit_layer_converts_only_that_layer_despite_multi_selection() {
     let a = pixel(&doc, "A", Rect::new(0, 0, 8, 8), [1.0, 0.0, 0.0, 1.0]);
     let b = pixel(&doc, "B", Rect::new(8, 0, 16, 8), [0.0, 0.0, 1.0, 1.0]);
     let (a_id, b_id) = (a.id, b.id);
-    doc.layers = vec![a, b.clone()];
+    doc.layers = vec![a, b.clone()].into();
     let mut s = selected_session(doc, &[a_id, b_id]);
     s.execute("layer.smartObjects.convertToSmartObject", json!({"layer": a_id.0})).unwrap();
     assert_eq!(s.active().unwrap().doc.layers.len(), 2);
@@ -160,7 +160,7 @@ fn combined_contents_survive_native_and_psd_save_open() {
         let a = pixel(&doc, "Bottom", Rect::new(-2, 4, 20, 20), [1.0, 0.0, 0.0, 1.0]);
         let b = pixel(&doc, "Top", Rect::new(10, 8, 24, 24), [0.0, 0.0, 1.0, 1.0]);
         let ids = [a.id, b.id];
-        doc.layers = vec![a, b];
+        doc.layers = vec![a, b].into();
         let mut s = selected_session(doc, &ids);
         let id = LayerId(convert(&mut s));
         let original = s.active().unwrap().doc.clone();
@@ -189,7 +189,7 @@ fn selected_ancestor_in_another_parent_cannot_remove_the_new_smart_object() {
     let lower = Layer::group("Selected parent", vec![a]);
     let upper = Layer::group("Unselected parent", vec![b, keep]);
     let (lower_id, upper_id) = (lower.id, upper.id);
-    doc.layers = vec![lower, upper];
+    doc.layers = vec![lower, upper].into();
     let mut s = selected_session(doc, &[lower_id, a_id, b_id]);
     let so = LayerId(convert(&mut s));
     let outer = &s.active().unwrap().doc;
@@ -210,7 +210,7 @@ fn an_all_hidden_selection_is_rejected_without_changing_document_selection_or_hi
     a.visible = false;
     b.visible = false;
     let ids = [a.id, b.id];
-    doc.layers = vec![a, b];
+    doc.layers = vec![a, b].into();
     let original = doc.clone();
     let mut s = selected_session(doc, &ids);
     let err = s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap_err();

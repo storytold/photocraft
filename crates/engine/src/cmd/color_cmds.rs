@@ -1116,7 +1116,7 @@ fn flatten_for_profile(doc: &mut Document, active: &mut Option<photocraft_doc::L
     background.locks.position = true;
     *crate::pixels_mut(&mut background)? = surface;
     *active = Some(background.id);
-    doc.layers = vec![background];
+    doc.layers = vec![background].into();
     Ok(())
 }
 
