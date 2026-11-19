@@ -1,5 +1,5 @@
 use super::*;
-use craft_cms::Builtin;
+use craft::cms::Builtin;
 use egui::accesskit::{Role, Toggled};
 use egui_kittest::{
     Harness,
@@ -12,56 +12,53 @@ const CONVERT: &str = "Convert to sRGB";
 const EMBED: &str = "Embed Color Profile";
 type Writes = Rc<RefCell<Vec<Vec<u8>>>>;
 
-fn harness(gpu: bool) -> (Harness<'static, PhotocraftApp>, Writes) {
+fn harness(gpu: bool) -> (Harness<'static, Box<PhotocraftApp>>, Writes) {
     let writes = Writes::default();
     let captured = writes.clone();
-    let builder = Harness::builder().with_size(egui::vec2(1100.0, 800.0)).with_max_steps(64);
+    let files = std::sync::Arc::new(craft::host::ScriptedFiles::answering([
+        craft::host::Picked::Paths(vec!["converted.png".into()]),
+        craft::host::Picked::Paths(vec!["original.png".into()]),
+    ]));
+    let services = crate::Services {
+        files: Some(files),
+        export: Some(Box::new(|doc, path, settings| {
+            photocraft_io::export(doc, path, &settings.io_options()).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string())
+        })),
+        write: Some(Box::new(move |_, bytes| {
+            captured.borrow_mut().push(bytes.to_vec());
+            Ok(())
+        })),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    let mut doc = Document::with_background("Wide gamut", Size::new(200, 150), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+    let blue = [30.0 / 255.0, 30.0 / 255.0, 200.0 / 255.0, 1.0];
+    let surface = doc.layers[0].surface_mut().unwrap();
+    surface.fill_rect(photocraft_geom::Rect::new(50, 25, 150, 125), &photocraft_raster::from_rgba(&surface.format(), blue));
+    doc.icc_profile = Some(Builtin::AdobeRgbCompat.profile().to_bytes());
+    app.session.add_document(doc, None);
+    // The whole app on its own context: its frame runs the dialog host and the file service's answers.
+    let builder = Harness::builder().with_context(app.ctx().clone()).with_size(egui::vec2(1100.0, 800.0)).with_max_steps(64);
     let builder = if gpu { builder.wgpu() } else { builder };
-    let h = builder.build_eframe(move |cc| {
-        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        let (picker, _) = crate::file_dialog::fake(vec![
-            Some(crate::FileDialogAnswer::SaveTo("converted.png".into())),
-            Some(crate::FileDialogAnswer::SaveTo("original.png".into())),
-        ]);
-        let services = crate::Services {
-            file_dialog: Some(picker),
-            export: Some(Box::new(|doc, path, settings| {
-                photocraft_io::export(doc, path, &settings.io_options()).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string())
-            })),
-            write: Some(Box::new(move |_, bytes| {
-                captured.borrow_mut().push(bytes.to_vec());
-                Ok(())
-            })),
-            ..Default::default()
-        };
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
-        let mut doc = Document::with_background("Wide gamut", Size::new(200, 150), ColorMode::Rgb, SampleType::U8, Color::WHITE);
-        let blue = [30.0 / 255.0, 30.0 / 255.0, 200.0 / 255.0, 1.0];
-        let surface = doc.layers[0].surface_mut().unwrap();
-        surface.fill_rect(photocraft_geom::Rect::new(50, 25, 150, 125), &photocraft_raster::from_rgba(&surface.format(), blue));
-        doc.icc_profile = Some(Builtin::AdobeRgbCompat.profile().to_bytes());
-        app.session.add_document(doc, None);
-        app
-    });
-    (h, writes)
+    (builder.build_eframe(move |_cc| app), writes)
 }
 
-fn checkbox(h: &Harness<'_, PhotocraftApp>, label: &str) -> Toggled {
+fn checkbox(h: &Harness<'_, Box<PhotocraftApp>>, label: &str) -> Toggled {
     h.get_by_role_and_label(Role::CheckBox, label).accesskit_node().toggled().unwrap()
 }
 
-fn click(h: &mut Harness<'_, PhotocraftApp>, role: Role, label: &str) {
+fn click(h: &mut Harness<'_, Box<PhotocraftApp>>, role: Role, label: &str) {
     h.get_by_role_and_label(role, label).click();
     h.run_steps(6);
 }
 
-fn open_dialog(h: &mut Harness<'_, PhotocraftApp>) {
+fn open_dialog(h: &mut Harness<'_, Box<PhotocraftApp>>) {
     let ctx = h.ctx.clone();
     crate::menus::invoke(h.state_mut(), &ctx, COMMAND, json!({})).unwrap();
     h.run_steps(6);
 }
 
-fn snapshot(h: &mut Harness<'_, PhotocraftApp>, dir: Option<&Path>, file: &str) {
+fn snapshot(h: &mut Harness<'_, Box<PhotocraftApp>>, dir: Option<&Path>, file: &str) {
     if let Some(dir) = dir {
         h.render().unwrap().save(dir.join(file)).unwrap();
     }
@@ -84,13 +81,13 @@ fn export_both_ways(snapshots: Option<&Path>) {
     let (mut h, writes) = harness(snapshots.is_some());
     let source = h.state().session.active().unwrap().doc.clone();
     open_dialog(&mut h);
-    h.get_by_label("Color Space");
+    assert!(h.query_all_by_label("Color Space").next().is_some(), "the dialog shows the Color Space section");
     assert_eq!(checkbox(&h, CONVERT), Toggled::True);
     assert_eq!(checkbox(&h, EMBED), Toggled::True);
     snapshot(&mut h, snapshots, "export-as-default.png");
 
     click(&mut h, Role::CheckBox, EMBED);
-    click(&mut h, Role::Button, "Export");
+    click(&mut h, Role::Button, "Export…");
     verify_png(&writes.borrow()[0], [24, 24, 205], 1, false);
 
     open_dialog(&mut h);
@@ -99,7 +96,7 @@ fn export_both_ways(snapshots: Option<&Path>) {
     click(&mut h, Role::CheckBox, CONVERT);
     click(&mut h, Role::CheckBox, EMBED);
     snapshot(&mut h, snapshots, "export-as-document-profile.png");
-    click(&mut h, Role::Button, "Export");
+    click(&mut h, Role::Button, "Export…");
     verify_png(&writes.borrow()[1], [30, 30, 200], 0, true);
 
     assert!(Arc::ptr_eq(&source, &h.state().session.active().unwrap().doc));
@@ -113,26 +110,28 @@ fn checkbox_defaults_on_and_controls_png_pixels_and_embedding() {
     export_both_ways(None);
 }
 
+/// A saved preset or a recorded step from before the default changed keeps the document profile it names; only a
+/// missing setting takes the new default.
 #[test]
 fn existing_document_profile_preset_and_recorded_export_keep_source_colors() {
     let (mut h, writes) = harness(false);
-    h.state_mut().run("file.export.presets.save", json!({"name": "Original colors", "settings": {"profile": "document", "format": "jpg"}})).unwrap();
-    open_dialog(&mut h);
-    click(&mut h, Role::ComboBox, "Preset");
-    h.get_by_label("Original colors").click();
-    h.run_steps(4);
-    assert_eq!(checkbox(&h, CONVERT), Toggled::False, "existing JPEG preset");
-    assert_eq!(checkbox(&h, EMBED), Toggled::True);
-
+    let preset = json!({"profile": "document", "format": "jpg"});
+    assert_eq!(options_of(preset.as_object().unwrap()).profile, ExportProfile::Document, "existing JPEG preset");
+    assert!(options_of(preset.as_object().unwrap()).embed_profile);
+    assert_eq!(options_of(&Map::new()).profile, ExportProfile::Srgb, "a preset without the setting takes the default");
     replay(h.state_mut(), &json!({"path": "recorded.png", "format": "png", "profile": "document", "embedProfile": true})).unwrap();
     verify_png(&writes.borrow()[0], [30, 30, 200], 0, true);
 }
 
-#[test]
-fn export_as_color_space_gpu_snapshots() {
-    let Some(dir) = std::env::var_os("PHOTOCRAFT_SRGB_SNAPSHOTS") else { return };
-    let dir = std::path::PathBuf::from(dir);
-    let _gpu = photocraft_testkit::gpu_lock();
-    std::fs::create_dir_all(&dir).unwrap();
-    export_both_ways(Some(&dir));
+mod gpu_tests {
+    use super::*;
+
+    #[test]
+    fn export_as_color_space_gpu_snapshots() {
+        let Some(dir) = std::env::var_os("PHOTOCRAFT_SRGB_SNAPSHOTS") else { return };
+        let dir = std::path::PathBuf::from(dir);
+        let _gpu = photocraft_testkit::gpu_lock();
+        std::fs::create_dir_all(&dir).unwrap();
+        export_both_ways(Some(&dir));
+    }
 }

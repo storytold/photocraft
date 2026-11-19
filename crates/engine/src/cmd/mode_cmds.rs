@@ -241,7 +241,7 @@ fn single_layer_surface(doc: &mut Document, active: &mut Option<LayerId>, mode: 
         *surf = pixels;
     }
     *active = Some(l.id);
-    doc.layers = vec![l];
+    doc.layers = vec![l].into();
     for ch in doc.channels.iter_mut() {
         let f = PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false);
         ch.surface = ch.surface.convert(PixelFormat { alpha: ch.surface.format().alpha, ..f });
@@ -600,6 +600,11 @@ fn custom_pattern_map(s: &Session, cmd: &str, p: &Value) -> Result<(Vec<f32>, us
 }
 
 fn bitmap(s: &mut Session, p: &Value) -> Result<Value> {
+    bitmap_in_bands(s, p, 0)
+}
+
+/// Convert with the requested compositor band height (zero chooses its normal budget).
+fn bitmap_in_bands(s: &mut Session, p: &Value, band_rows: i32) -> Result<Value> {
     const CMD: &str = "image.mode.bitmap";
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let input = f64::from(d.doc.resolution_dpi.max(1.0));
@@ -674,7 +679,7 @@ fn bitmap(s: &mut Session, p: &Value) -> Result<Value> {
         let n = fmt.channels();
         let mut out = Surface::new(fmt);
         let (mut gray, mut data) = (Vec::new(), Vec::new());
-        let _ = photocraft_compose::render_bands(doc, doc.bounds(), 0, |band| -> std::result::Result<(), std::convert::Infallible> {
+        let _ = photocraft_compose::render_bands(doc, doc.bounds(), band_rows, |band| -> std::result::Result<(), std::convert::Infallible> {
             gray.clear();
             gray.extend(band.px.iter().map(|q| {
                 // Over white, as the flattened image.

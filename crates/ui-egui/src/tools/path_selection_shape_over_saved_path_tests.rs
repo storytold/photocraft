@@ -14,7 +14,7 @@ const SAVED: &str = "Path 1";
 
 /// A rectangle shape at 500,100–700,200, a pixel layer "Red" above it, active, and the saved
 /// path "Path 1" (a square 100,300–200,400) selected in the Paths panel, with Path Selection.
-fn setup() -> (PhotocraftApp, LayerId) {
+fn setup() -> (Box<PhotocraftApp>, LayerId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 800, "height": 600, "background": "white"})).unwrap();
     app.run("shape.create", json!({"kind": "rect", "rect": [500, 100, 200, 100], "fill": "#2050c0"})).unwrap();
