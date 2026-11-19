@@ -141,9 +141,15 @@ pub(crate) fn mask_target_enabled(s: &Session, id: &str, p: &Value) -> Option<st
         Target::FilterMask if follows_filter_mask(id) && !PASTE_IDS.contains(&id) => {
             Some(addressed_layer(s, p).and_then(crate::smart_cmds::filter_mask_paintable))
         }
-        Target::Mask if edits_mask(id) => {
-            Some(addressed_layer(s, p).and_then(|l| if l.mask.is_some() { Ok(()) } else { Err("the target layer has no layer mask".into()) }))
-        }
+        Target::Mask if edits_mask(id) => Some(addressed_layer(s, p).and_then(|l| {
+            if l.mask.is_none() {
+                return Err("the target layer has no layer mask".into());
+            }
+            if id == "image.adjustments.gradientMap" {
+                crate::adjust_cmds::gradient_map_depth_allowed(s)?;
+            }
+            Ok(())
+        })),
         _ => None,
     }
 }

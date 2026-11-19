@@ -335,6 +335,15 @@ pub(crate) fn has_adjustable(s: &Session) -> std::result::Result<(), String> {
     }
 }
 
+/// Gradient Map is unavailable in 32-bit documents (#14696).
+pub(crate) fn gradient_map_depth_allowed(s: &Session) -> std::result::Result<(), String> {
+    let d = s.active().ok_or("no document open")?;
+    if d.doc.depth == photocraft_color::SampleType::F32 {
+        return Err("Gradient Map is not available in 32-bit documents".into());
+    }
+    Ok(())
+}
+
 /// Image › Adjustments › Gradient Map targets: like [`has_adjustable`], except 32-bit
 /// documents, Indexed Color documents and hidden pixel layers are unavailable (#14696).
 /// Targeted alpha channels / Quick Mask and layers inside hidden groups keep today's behaviour.
@@ -342,10 +351,8 @@ pub(crate) fn has_gradient_map_target(s: &Session) -> std::result::Result<(), St
     if crate::channel_cmds::edits_channel(s) {
         return Ok(());
     }
+    gradient_map_depth_allowed(s)?;
     let d = s.active().ok_or("no document open")?;
-    if d.doc.depth == photocraft_color::SampleType::F32 {
-        return Err("Gradient Map is not available in 32-bit documents".into());
-    }
     if d.doc.mode == photocraft_color::ColorMode::Indexed {
         return Err("Gradient Map is not available in Indexed Color mode".into());
     }

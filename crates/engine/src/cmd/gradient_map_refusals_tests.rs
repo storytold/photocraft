@@ -39,6 +39,21 @@ fn gradient_map_disabled_and_refused_in_32bit_documents() {
 }
 
 #[test]
+fn gradient_map_disabled_and_refused_on_layer_mask_in_32bit_documents() {
+    let mut s = new_doc(32, "rgb");
+    s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    let steps = s.active().unwrap().history.past_len();
+    let mask_target = json!({"target": "mask"});
+
+    assert!(!s.is_enabled_with("image.adjustments.gradientMap", &mask_target), "32-bit layer mask must grey out Gradient Map");
+    let mut params = gradient_params();
+    params.as_object_mut().unwrap().insert("target".into(), "mask".into());
+    let err = s.execute("image.adjustments.gradientMap", params).unwrap_err();
+    assert!(err.to_string().contains("32-bit"), "32-bit layer mask error: {err}");
+    assert_eq!(s.active().unwrap().history.past_len(), steps, "32-bit layer mask must not add history");
+}
+
+#[test]
 fn gradient_map_disabled_and_refused_on_hidden_pixel_layer() {
     let mut s = new_doc(8, "rgb");
     let id = s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
@@ -107,7 +122,8 @@ fn gradient_map_works_on_supported_modes_depths_locks_and_smart_objects() {
     let mut s = new_doc(8, "rgb");
     let id = s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
     s.execute("paint.stroke", json!({"points": [[2, 2], [14, 14]], "color": "#408040", "size": 6})).unwrap();
-    s.execute("layer.setProps", json!({"layer": id, "lockTransparency": true})).unwrap();
+    s.execute("layer.setProps", json!({"layer": id, "locks": {"transparency": true}})).unwrap();
+    assert!(s.active().unwrap().doc.layer(photocraft_doc::LayerId(id)).unwrap().locks.transparency, "Lock Transparent Pixels must be enabled");
     let steps = s.active().unwrap().history.past_len();
     assert!(s.is_enabled("image.adjustments.gradientMap"), "Lock Transparent Pixels must enable Gradient Map");
     s.execute("image.adjustments.gradientMap", gradient_params()).unwrap();
@@ -116,7 +132,8 @@ fn gradient_map_works_on_supported_modes_depths_locks_and_smart_objects() {
     // Lock Position
     let mut s = new_doc(8, "rgb");
     let id = s.active().unwrap().active_layer.unwrap().0;
-    s.execute("layer.setProps", json!({"layer": id, "lockPosition": true})).unwrap();
+    s.execute("layer.setProps", json!({"layer": id, "locks": {"position": true}})).unwrap();
+    assert!(s.active().unwrap().doc.layer(photocraft_doc::LayerId(id)).unwrap().locks.position, "Lock Position must be enabled");
     let steps = s.active().unwrap().history.past_len();
     assert!(s.is_enabled("image.adjustments.gradientMap"), "Lock Position must enable Gradient Map");
     s.execute("image.adjustments.gradientMap", gradient_params()).unwrap();
