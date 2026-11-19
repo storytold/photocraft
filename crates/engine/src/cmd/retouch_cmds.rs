@@ -22,7 +22,7 @@ use photocraft_raster::{Surface, from_rgba_into, to_rgba};
 use rayon::prelude::*;
 use serde_json::{Value, json};
 
-use crate::commands::{CommandSpec, blend_from_str};
+use crate::commands::{CommandSpec, parse_blend};
 use crate::{EngineError, Result, Session};
 
 mod art_history;

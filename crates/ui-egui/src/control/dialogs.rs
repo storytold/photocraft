@@ -199,14 +199,10 @@ fn dont_save_all(_: &Value, _: &Value) -> Vec<(String, Value)> {
     vec![pair("applyToAll", json!(true)), pair("choice", json!("dontSave"))]
 }
 
-/// A blend label such as "Multiply" to the Blend row's id; a string `blend_from_str` refuses passes through so the
+/// A blend label such as "Multiply" to the Blend row's id; a string `parse_blend` refuses passes through so the
 /// row refuses it.
 fn blend_id(value: &Value) -> Value {
-    value
-        .as_str()
-        .and_then(photocraft_engine::commands::blend_from_str)
-        .map(|mode| json!(crate::panels::layers_tree::blend_key(mode).to_string()))
-        .unwrap_or_else(|| value.clone())
+    value.as_str().and_then(photocraft_engine::commands::parse_blend).map(|mode| json!(mode.key().to_string())).unwrap_or_else(|| value.clone())
 }
 
 // PLAN: the framework field ids `mode` (Fill, Stroke) and `blend` (Smart Filter) are assumed (dialogs-w22 by request).

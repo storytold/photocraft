@@ -25,15 +25,9 @@ use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 
-/// The key the panel and the filter use for a blend mode: its label folded as the engine's
-/// `blend_from_str` reads it ("normal", "lineardodgeadd").
-pub(crate) fn blend_key(m: BlendMode) -> String {
-    m.key().to_string()
-}
-
 /// The blend mode a panel key names.
 pub(crate) fn blend_of(key: &str) -> Option<BlendMode> {
-    photocraft_engine::commands::blend_from_str(key)
+    photocraft_engine::commands::parse_blend(key)
 }
 
 /// A document label colour as the framework's (`None` for none), matched by name.
@@ -241,7 +235,7 @@ impl LayerTree for PhotoLayers<'_> {
         info.renamable = !info.background;
         info.clipped = l.clipped;
         info.linked = l.link_group.is_some();
-        info.blend_key = blend_key(l.blend);
+        info.blend_key = l.blend.key().to_string();
         info.blend_label = (!matches!(l.blend, BlendMode::Normal | BlendMode::PassThrough)).then(|| tl!(l.blend.label()).to_string());
         info.effect_kinds = l.effects.items.iter().filter(|e| e.enabled()).filter_map(effect_kind).collect();
         info.advanced_blending = l.excluded_channels != 0 || l.advanced != Default::default() || !l.blend_if.is_default();
@@ -371,7 +365,7 @@ impl LayerTree for PhotoLayers<'_> {
 
     fn properties(&self) -> Option<LayerProperties> {
         let l = self.st.active_layer.and_then(|id| self.layer(&id))?;
-        let mut p = LayerProperties::new(blend_key(l.blend));
+        let mut p = LayerProperties::new(l.blend.key().to_string());
         // Pass Through is a group's mode: offered only when every target is a group.
         p.group = self.targets().iter().all(|id| self.layer(id).is_some_and(Layer::is_group));
         p.opacity = f64::from(l.opacity) * 100.0;
