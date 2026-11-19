@@ -335,6 +335,64 @@ pub(crate) fn has_adjustable(s: &Session) -> std::result::Result<(), String> {
     }
 }
 
+/// The reference application's alert for Image › Adjustments › Exposure on a target it refuses.
+pub(crate) const EXPOSURE_UNAVAILABLE: &str = "The command \"Exposure\" is not currently available.";
+/// The reference application's alert for Exposure on an empty pixel layer.
+pub(crate) const EXPOSURE_EMPTY: &str = "Could not complete the Exposure command because the active layer is empty.";
+
+/// Image › Adjustments › Exposure's id.
+pub(crate) const EXPOSURE_ID: &str = "image.adjustments.exposure";
+
+/// Image › Adjustments › Exposure's targets with no params: the Channels panel's target, as
+/// [`exposure_enabled_with`] checks it, else [`has_adjustable`].
+pub(crate) fn exposure_target_enabled(s: &Session) -> std::result::Result<(), String> {
+    let p = crate::channel_cmds::inject_target(s, EXPOSURE_ID, Value::Null);
+    exposure_enabled_with(s, &p).unwrap_or_else(|| has_adjustable(s))
+}
+
+/// Exposure's precondition for a call with `p`, its target filled in from the Channels panel, as
+/// the reference application has it (#14632): [`has_adjustable`]'s, minus a layer mask (unlike
+/// Brightness/Contrast, Exposure does not work on one) and a hidden pixel layer, the active one or
+/// the one `"layer"` names, which grey the item. An alpha channel or Quick Mask target keeps
+/// [`has_adjustable`] alone, as before. `None` for a smart object's filter mask, which keeps its
+/// own check. A layer inside a hidden group keeps today's behaviour (not measured).
+pub(crate) fn exposure_enabled_with(s: &Session, p: &Value) -> Option<std::result::Result<(), String>> {
+    use crate::channel_cmds::Target;
+    let hidden = || {
+        let Ok(id) = crate::commands::layer_param(s, p) else { return false };
+        // Hidden pixel layers only: a hidden smart object (not measured) still takes Exposure as a
+        // smart filter, as today.
+        s.active().and_then(|d| d.doc.layer(id)).is_some_and(|l| !l.visible && matches!(l.content, LayerContent::Raster(_)))
+    };
+    match crate::channel_cmds::target_of(p) {
+        Target::Mask => Some(Err(EXPOSURE_UNAVAILABLE.into())),
+        Target::FilterMask => None,
+        Target::Alpha(_) | Target::QuickMask => Some(has_adjustable(s)),
+        Target::Pixels => Some(has_adjustable(s).and_then(|()| if hidden() { Err(EXPOSURE_UNAVAILABLE.into()) } else { Ok(()) })),
+    }
+}
+
+/// Why Exposure with `p` (its target filled in) must stop before it edits anything (#14632):
+/// [`exposure_enabled_with`]'s refusals, or an empty pixel layer. `Ok` for every target Exposure
+/// works on.
+pub(crate) fn exposure_refusal(s: &Session, p: &Value) -> Result<()> {
+    if let Some(Err(why)) = exposure_enabled_with(s, p) {
+        return Err(EngineError::Disabled(EXPOSURE_ID.into(), why));
+    }
+    // Only the resolved target counts: an explicit `"target":"pixels"` edits the layer even while
+    // the Channels panel targets an alpha channel or the Quick Mask.
+    if crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels {
+        return Ok(());
+    }
+    let id = crate::commands::layer_param(s, p)?;
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    let layer = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+    if matches!(layer.content, LayerContent::Raster(_)) && crate::layer_multi_cmds::layer_bounds(layer).is_none() {
+        return Err(EngineError::Other(EXPOSURE_EMPTY.into()));
+    }
+    Ok(())
+}
+
 /// The smart object an adjustment's pixels would go to: the layer the params resolve to (the
 /// active one by default), when the command edits its pixels and that layer is a smart object.
 /// `None` for a mask or channel target, or a layer that is not a smart object.

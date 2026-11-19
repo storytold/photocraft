@@ -133,8 +133,14 @@ fn edits_mask(id: &str) -> bool {
 }
 
 /// The precondition of `id` when `p` targets the active layer's mask (`"target":"mask"`): the
-/// layer needs a mask. None when another precondition applies.
+/// layer needs a mask. None when another precondition applies. Exposure checks every target but
+/// the filter mask itself, a layer mask and a hidden layer included (#14632).
 pub(crate) fn mask_target_enabled(s: &Session, id: &str, p: &Value) -> Option<std::result::Result<(), String>> {
+    if id == crate::adjust_cmds::EXPOSURE_ID
+        && let Some(r) = crate::adjust_cmds::exposure_enabled_with(s, p)
+    {
+        return Some(r);
+    }
     match target_of(p) {
         // The commands that paint, fill, filter or adjust the filter mask need a smart object with
         // smart filters, not a pixel layer. Paste keeps its own check (something to paste).

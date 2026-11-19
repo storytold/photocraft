@@ -88,6 +88,8 @@ pub mod edit_menu_cmds;
 mod enabled;
 pub mod eraser_cmds;
 pub mod export_preset_cmds;
+#[cfg(test)]
+mod exposure_target_refusal_tests;
 pub mod exr_cmds;
 pub mod extra_cmds;
 pub mod face_cmds;
@@ -1310,9 +1312,16 @@ fn build() -> Vec<CommandSpec> {
                 _ => None,
             },
             params,
-            enabled: crate::adjust_cmds::has_adjustable,
+            // Exposure refuses a hidden layer and a targeted layer mask as well (#14632).
+            enabled: match kind {
+                "exposure" => crate::adjust_cmds::exposure_target_enabled,
+                _ => crate::adjust_cmds::has_adjustable,
+            },
             run: |s, p| {
                 let kind = p.get("__kind").and_then(Value::as_str).unwrap_or("invert").to_string();
+                if kind == "exposure" {
+                    crate::adjust_cmds::exposure_refusal(s, p)?;
+                }
                 if matches!(kind.as_str(), "levels" | "curves") {
                     crate::channel_cmds::resolve_tone_target(s, false, p)?;
                 }
