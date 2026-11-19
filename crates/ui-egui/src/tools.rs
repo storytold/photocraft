@@ -1,3 +1,4 @@
+pub mod adjustment_brush;
 pub(super) mod align_bar;
 pub mod analysis;
 pub mod artboard_tool;

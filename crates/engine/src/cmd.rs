@@ -37,6 +37,9 @@ pub mod actions_cmds;
 pub mod actions_edit_cmds;
 pub mod adjust_cmds;
 mod adjust_params;
+pub mod adjustment_brush_cmds;
+#[cfg(test)]
+mod adjustment_brush_cmds_tests;
 pub mod align_cmds;
 pub mod analysis_cmds;
 pub mod artboard_cmds;
@@ -307,6 +310,7 @@ const SPECS: &[Fragment] = &[
     ("actions_edit_cmds", crate::actions_edit_cmds::specs),
     ("swatch_cmds", crate::swatch_cmds::specs),
     ("retouch_cmds", crate::retouch_cmds::specs),
+    ("adjustment_brush_cmds", crate::adjustment_brush_cmds::specs),
     ("redeye_cmds", crate::redeye_cmds::specs),
     ("image_cmds", crate::image_cmds::specs),
     ("perspective_crop_cmds", crate::perspective_crop_cmds::specs),
