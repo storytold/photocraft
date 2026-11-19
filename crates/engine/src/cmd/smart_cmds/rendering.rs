@@ -492,6 +492,9 @@ fn render_in_with_source(doc: &Document, sm: &SmartObject, ctx: &JobCtx, snapsho
     // A trusted UI render may have populated these stages. Check authority even on a hit.
     for filter in sm.smart_filters.iter().filter(|f| sm.filters_enabled && f.visible) {
         crate::jobs::authorize_render_command(&filter.command, &filter.params)?;
+        if filter.command == crate::plugin_cmds::RUN {
+            crate::plugin_cmds::check_color(doc, &filter.params)?;
+        }
     }
     let Some((name, original)) = snapshot.or_else(|| source_bytes(&doc.metadata, &sm.source)) else { return Ok(None) };
     let bytes = display_source(sm, &original);

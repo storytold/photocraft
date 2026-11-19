@@ -261,6 +261,8 @@ pub struct Session {
     filter_mask_layer: Option<LayerId>,
     /// Edit › Preferences, keyboard shortcuts, menu and toolbar customisation (see `prefs`).
     pub prefs: prefs::PrefsStore,
+    /// Trusted device backend supplied by the shell; headless sessions keep WASM.
+    pub plugin_accelerator: Option<Arc<dyn photocraft_plugins::acceleration::Accelerator>>,
     /// Edit menu state: Fade source, custom shape library (see `edit_menu_cmds`).
     pub edit_state: edit_menu_cmds::EditState,
     /// The pattern library (Window › Patterns; see `pattern.*`).

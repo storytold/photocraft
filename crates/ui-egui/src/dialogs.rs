@@ -434,6 +434,7 @@ pub(crate) fn prompts_take(app: &mut PhotocraftApp, ctx: &egui::Context) {
 
 /// The families that take their own results (one `take(app, ctx)` each), in order.
 pub(crate) const TAKERS: &[fn(&mut PhotocraftApp, &egui::Context)] = &[
+    plugin_dialog::take,
     alerts::take,
     discard_ui::take,
     open_prompt::take,
@@ -494,6 +495,7 @@ pub fn run(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     crate::filter_dialog::reconcile_match_color(app);
     filter_preview_ui::feed(app, ui.ctx());
     crate::prefs_ui::feed(app);
+    plugin_dialog::feed(app);
     app.framework.dialogs.run(ui);
     take_results(app, &ui.ctx().clone());
 }
@@ -519,6 +521,7 @@ pub fn confirm(app: &mut PhotocraftApp, ctx: &egui::Context, id: DialogId) -> Re
     if app.automation_input && crate::control::dialogs::is_save_answer(app, id) {
         crate::discard_ui::authorize_save(app, false)?;
     }
+    plugin_dialog::check(app, id)?;
     if !app.framework.dialogs.confirm_by_id(ctx, id) {
         if app.framework.dialogs.held_state(id) != Some(HeldOk::Waiting) {
             take_results(app, ctx);
@@ -743,6 +746,8 @@ mod paths_export_default_tests;
 #[cfg(test)]
 mod paths_export_document_bounds_tests;
 pub(crate) mod pattern_fill_ui;
+pub(crate) mod plugin_dialog;
+mod plugin_presets;
 pub mod preset_group_prompt;
 pub mod rasterize_prompt;
 pub mod screen_picker;
@@ -751,6 +756,7 @@ pub mod shape_dialog;
 pub(crate) mod shape_fill_ui;
 pub(crate) mod shared_picture;
 pub(super) mod sizing;
+pub(crate) mod skin_smooth_ui;
 pub mod smart_filter_dialog;
 pub mod snapshot_dialog;
 pub(crate) mod solid_fill_ui;

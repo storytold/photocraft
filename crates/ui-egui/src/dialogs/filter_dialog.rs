@@ -427,7 +427,7 @@ fn command_defaults(app: &PhotocraftApp, command: &str, params: &[Param]) -> Map
 /// The editing target the dialog captures when it opens, as the command's `target` parameter: the
 /// targeted filter mask or layer mask, else the selected colour channels. A spec dialog (a plug-in,
 /// a frame) takes a colour target only for several channels.
-fn captured_target(app: &PhotocraftApp, command: &str, spec_dialog: bool) -> Option<Value> {
+pub(super) fn captured_target(app: &PhotocraftApp, command: &str, spec_dialog: bool) -> Option<Value> {
     let follows = photocraft_engine::channel_cmds::follows_target(command);
     if app.filter_mask_targeted() && photocraft_engine::channel_cmds::follows_filter_mask(command) && (follows || spec_dialog) {
         Some(json!("filterMask"))
@@ -542,6 +542,9 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Result<DialogId, String> 
 /// A filter dialog for `command` whose parameters follow `spec` (registry notation) instead of the
 /// command's own; `fixed` params (e.g. a plug-in id) are passed through. It remembers nothing.
 pub fn open_with_spec(app: &mut PhotocraftApp, command: &str, label: &str, spec: &str, fixed: Map<String, Value>) -> DialogId {
+    if command == photocraft_engine::plugin_cmds::RUN {
+        return super::plugin_dialog::open(app, label, fixed);
+    }
     let params = params(app, command, spec);
     let mut fields = DialogFields::new();
     overlay(&params, &fixed, &mut fields);
@@ -1077,7 +1080,34 @@ pub(crate) fn preview_document_for_target(
     // reduced proxy doesn't scale: it runs at full size and the result is reduced (#218).
     let (run_k, reduce_k) = if command == "type.warpText" { (1, k) } else { (k, 1) };
     let mut proxy = crate::proxy::proxy_document(doc, run_k);
+    let selection = proxy.selection.clone();
     let mut p = params.clone();
+    if command == photocraft_engine::plugin_cmds::RUN
+        && let Some(rect) = params.get("__previewRegion")
+    {
+        let [x0, y0, x1, y1]: [i32; 4] = serde_json::from_value(rect.clone()).ok()?;
+        let k = i32::try_from(run_k.max(1)).ok()?;
+        let up = |x: i32| x.div_euclid(k).saturating_add(i32::from(x.rem_euclid(k) != 0));
+        let region = photocraft_geom::Rect::new(x0.div_euclid(k), y0.div_euclid(k), up(x1), up(y1)).intersect(&proxy.bounds());
+        let mut mask = photocraft_raster::Surface::new(photocraft_color::PixelFormat {
+            mode: photocraft_color::ColorMode::Grayscale,
+            sample: photocraft_color::SampleType::F32,
+            alpha: false,
+        });
+        // Preserve feathered selection coverage, with zero coverage outside the viewport.
+        for tile in region.tiles() {
+            if let Some(cancel) = cancel {
+                cancel.check().ok()?;
+            }
+            let row = tile.rect().intersect(&region);
+            let values = selection.as_ref().map_or_else(|| vec![1.0; row.width() as usize * row.height() as usize], |s| s.read_region(row));
+            mask.write_region(row, &values);
+        }
+        proxy.selection = Some(mask);
+        // A renderable smart object has its own shared filter mask. Carry the region to
+        // the new stage too, so that mask keeps its coverage, density and feather.
+        p["__previewRegion"] = json!([region.x0, region.y0, region.x1, region.y1]);
+    }
     if is_smart_edit(command) {
         let layer = match params.get("layer") {
             Some(id) => photocraft_doc::LayerId(id.as_u64()?),
@@ -1103,6 +1133,7 @@ pub(crate) fn preview_document_for_target(
         scale_preview_params(command, &mut p, run_k);
     }
     let mut s = photocraft_engine::Session::new();
+    s.plugin_accelerator = photocraft_plugins::acceleration::current();
     s.color.settings = color.clone();
     if let Some((foreground, background)) = tool_colors {
         s.tools.foreground = foreground;
@@ -1123,8 +1154,32 @@ pub(crate) fn preview_document_for_target(
         s.select_layer(id).ok()?;
     }
     s.active_mut()?.channel_view.target = target;
+    if command == photocraft_engine::plugin_cmds::RUN
+        && target == photocraft_engine::channel_cmds::ChannelTarget::Composite
+        && let Some(rect) = p.get("__previewRegion")
+    {
+        let [x0, y0, x1, y1]: [i32; 4] = serde_json::from_value(rect.clone()).ok()?;
+        if let Some((layer, surface)) = photocraft_engine::plugin_cmds::preview_smart_region(
+            &s,
+            &p,
+            photocraft_geom::Rect::new(x0, y0, x1, y1),
+            cancel.unwrap_or(&photocraft_engine::jobs::JobCtx::new()),
+        )
+        .ok()?
+        {
+            let mut result = (*s.active()?.doc).clone();
+            let photocraft_doc::LayerContent::Smart(sm) = &mut result.layer_mut(layer)?.content else { return None };
+            sm.cache = Some(surface);
+            result.selection = selection;
+            return Some(result);
+        }
+    }
     s.execute(command, p).ok()?;
-    s.active().map(|d| crate::proxy::proxy_document(&d.doc, reduce_k))
+    let mut result = crate::proxy::proxy_document(&s.active()?.doc, reduce_k);
+    if command == photocraft_engine::plugin_cmds::RUN && params.get("__previewRegion").is_some() {
+        result.selection = selection;
+    }
+    Some(result)
 }
 
 /// Whether `command` is a Smart Filter edit (its parameters or its blending) rather than a filter run on its own.
