@@ -155,7 +155,7 @@ jobs:
   gate:
     if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
     # Tracks @main so suite-wide CI fixes reach every app without a PR in each repository.
-    uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
+    uses: aiongg/craft-common-actions/.github/workflows/gate.yml@trial-build-once
     with:
       # egui/winit/rfd.
       packages: >-
@@ -184,6 +184,7 @@ jobs:
       # missing-translations report (`cargo xtask ci lint`, xtask/src/main.rs), and the CI scripts'
       # own tests.
       lint-command: python3 scripts/test-ci-gpu-lavapipe.py && python3 scripts/test-ci-windows-gpu-tests.py && cargo xtask ci lint
+      archive-command: cargo xtask ci archive
       test-shards: 4
       # The tests and panic_hunt with `--locked --features heif` (TEST_TARGETS in xtask/src/main.rs).
       shard-command: bash scripts/ci-test-shard.sh --gpu-shard
@@ -201,7 +202,7 @@ jobs:
     needs: platforms
     if: needs.platforms.outputs.windows == 'true'
     # Tracks @main so suite-wide CI fixes reach every app without a PR in each repository.
-    uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
+    uses: aiongg/craft-common-actions/.github/workflows/gate.yml@trial-build-once
     with:
       os: '["windows-latest"]'
       # The all-language UI tests shape real Japanese, Chinese, Korean and Devanagari labels with
@@ -231,6 +232,7 @@ jobs:
       timeout-minutes: 100
       warm-command: cargo xtask ci build
       lint-command: cargo xtask ci clippy
+      archive-command: cargo xtask ci archive
       test-shards: 6
       shard-command: bash scripts/ci-test-shard.sh
 
