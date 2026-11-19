@@ -375,32 +375,33 @@ mod tests {
 
     #[test]
     fn native_component_wide_angle_previews_and_commit_keep_unselected_samples() {
-        for mode in ["rgb", "cmyk", "lab"] {
-            for depth in [8, 16, 32] {
-                for alpha in [true, false] {
-                    let fixture = crate::distort_ui::component_tests::app(mode, depth);
-                    let mut app = if alpha { fixture } else { crate::distort_ui::component_tests::without_alpha(fixture) };
-                    let ctx = app.ctx().clone();
-                    open(&mut app, &ctx).unwrap();
-                    ui(&mut app, json!({"set": {"model": "fisheye", "focalLength": 10.0}})).unwrap();
-                    ui(&mut app, json!({"add": {"a": [8, 8], "b": [56, 16], "orientation": "horizontal"}})).unwrap();
-                    let layer = app.wide_angle.as_ref().unwrap().layer;
-                    let source = source_of(&app);
-                    let session = session_of(&app);
-                    let before = source.proxy.as_ref().clone();
-                    let pf = source.geometry.proxy_rect;
-                    let (preview, _) =
-                        preview_surface(&before, &proxy_params(&session, source.geometry.frame, source.geometry.scale), pf, &source.target, None).unwrap();
-                    source.state().run(&session).unwrap();
-                    crate::distort_ui::component_tests::protected(&before, &preview, pf);
-                    assert_ne!(preview.read_region(pf), before.read_region(pf));
-                    app.run("channel.target", json!({"channel":{"color":1}})).unwrap();
-                    ui(&mut app, json!({"commit": true})).unwrap();
-                    take(&mut app, &ctx);
-                    let after = app.session.active().unwrap().doc.layer(layer).unwrap().surface().unwrap();
-                    crate::distort_ui::component_tests::protected(&before, after, pf);
-                    assert_ne!(after.read_region(pf), before.read_region(pf));
-                }
+        // One depth per mode, each with and without alpha: the preview and commit have no branch on mode or depth, and
+        // `restrict_surface_impl` is generic over the sample width; alpha decides whether the warped layout differs
+        // from the original, so it stays a full axis (#15652).
+        for (mode, depth) in [("rgb", 8), ("cmyk", 16), ("lab", 32)] {
+            for alpha in [true, false] {
+                let fixture = crate::distort_ui::component_tests::app(mode, depth);
+                let mut app = if alpha { fixture } else { crate::distort_ui::component_tests::without_alpha(fixture) };
+                let ctx = app.ctx().clone();
+                open(&mut app, &ctx).unwrap();
+                ui(&mut app, json!({"set": {"model": "fisheye", "focalLength": 10.0}})).unwrap();
+                ui(&mut app, json!({"add": {"a": [8, 8], "b": [56, 16], "orientation": "horizontal"}})).unwrap();
+                let layer = app.wide_angle.as_ref().unwrap().layer;
+                let source = source_of(&app);
+                let session = session_of(&app);
+                let before = source.proxy.as_ref().clone();
+                let pf = source.geometry.proxy_rect;
+                let (preview, _) =
+                    preview_surface(&before, &proxy_params(&session, source.geometry.frame, source.geometry.scale), pf, &source.target, None).unwrap();
+                source.state().run(&session).unwrap();
+                crate::distort_ui::component_tests::protected(&before, &preview, pf);
+                assert_ne!(preview.read_region(pf), before.read_region(pf));
+                app.run("channel.target", json!({"channel":{"color":1}})).unwrap();
+                ui(&mut app, json!({"commit": true})).unwrap();
+                take(&mut app, &ctx);
+                let after = app.session.active().unwrap().doc.layer(layer).unwrap().surface().unwrap();
+                crate::distort_ui::component_tests::protected(&before, after, pf);
+                assert_ne!(after.read_region(pf), before.read_region(pf));
             }
         }
     }
