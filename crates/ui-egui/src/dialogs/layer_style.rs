@@ -468,6 +468,40 @@ fn blending_json(b: &Blending, layer: LayerId) -> Value {
 
 // ------------------------------------------------------------------ opening
 
+/// The edit order of enabled Pattern Overlays in the open dialog.
+#[derive(Default)]
+pub(crate) struct PatternOverlayEdits {
+    overlays: HashMap<EffectId, (StyleParams, u64)>,
+    edit_order: u64,
+}
+
+fn enabled_pattern_overlay_drafts(style: &LayerStyle) -> impl Iterator<Item = &EffectInstance> {
+    style.effects.iter().filter(|effect| effect.on && effect.kind == EffectKind::PatternOverlay)
+}
+
+impl PatternOverlayEdits {
+    fn new(style: &LayerStyle) -> Self {
+        Self { overlays: enabled_pattern_overlay_drafts(style).map(|effect| (effect.id, (effect.params.clone(), 0))).collect(), edit_order: 0 }
+    }
+
+    fn observe(&mut self, style: &LayerStyle) {
+        let enabled: HashSet<_> = enabled_pattern_overlay_drafts(style).map(|effect| effect.id).collect();
+        self.overlays.retain(|id, _| enabled.contains(id));
+        // An atomic preset can change several overlays in one pass. Use their draft order.
+        for effect in enabled_pattern_overlay_drafts(style) {
+            if self.overlays.get(&effect.id).is_some_and(|(params, _)| params == &effect.params) {
+                continue;
+            }
+            self.edit_order = self.edit_order.saturating_add(1);
+            self.overlays.insert(effect.id, (effect.params.clone(), self.edit_order));
+        }
+    }
+
+    fn order_of(&self, id: EffectId) -> Option<u64> {
+        self.overlays.get(&id).map(|(_, order)| *order).filter(|order| *order != 0)
+    }
+}
+
 fn last_pattern_overlay() -> Remembered<Value> {
     Remembered::new("photocraft.layerStyle.patternOverlay")
 }
@@ -509,6 +543,7 @@ pub fn open(app: &mut PhotocraftApp, select: Option<&str>) -> Option<DialogId> {
     let keys = blend_keys();
     let specs = specs(&keys, &user, light);
     let mut draft = LayerStyleDraft::new(draft_of(&layer, light, mode));
+    app.layer_style_pattern_edits = PatternOverlayEdits::new(&draft.style);
     match select {
         None => {
             if let Some(first) = draft.style.effects.first() {
@@ -805,13 +840,16 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
         app.layer_style_target = None;
         app.style_preview = None;
         discard_child(app, id);
+        let mut edits = std::mem::take(&mut app.layer_style_pattern_edits);
         if let DialogResult::Ok(style) = result {
-            finish(app, doc, layer, &style);
+            edits.observe(&style);
+            finish(app, doc, layer, &style, &edits);
         }
         return;
     }
     if app.framework.dialogs.get_by_id::<HostedLayerStyle>(id).is_none() {
         app.layer_style_target = None;
+        app.layer_style_pattern_edits = PatternOverlayEdits::default();
         return;
     }
     // The document or layer went away under the dialog: the cancel result is taken on the next pass.
@@ -848,6 +886,9 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     color_picker::answered(app, id);
     contour::answered(app, id);
+    if let Some(dialog) = app.framework.dialogs.get_by_id::<HostedLayerStyle>(id) {
+        app.layer_style_pattern_edits.observe(&dialog.draft().style);
+    }
 }
 
 fn enabled_pattern_overlay_params(effect: &Effect) -> Option<Value> {
@@ -855,7 +896,7 @@ fn enabled_pattern_overlay_params(effect: &Effect) -> Option<Value> {
 }
 
 /// OK: replaces the layer's effects with the style's, as one history step.
-fn finish(app: &mut PhotocraftApp, doc: photocraft_doc::DocId, layer: LayerId, style: &LayerStyle) {
+fn finish(app: &mut PhotocraftApp, doc: photocraft_doc::DocId, layer: LayerId, style: &LayerStyle, edits: &PatternOverlayEdits) {
     let Some(active) = app.session.active().filter(|s| s.doc.id == doc) else {
         return fail(app, "Layer Style target document changed".into());
     };
@@ -873,11 +914,15 @@ fn finish(app: &mut PhotocraftApp, doc: photocraft_doc::DocId, layer: LayerId, s
 
     // Replace keeps the draft order, so pair each applied effect with its draft ID.
     // A new instance has no snapshot, even when it reuses the ID of a removed effect.
-    let mut applied = app.session.active().and_then(|s| s.doc.layer(layer)).into_iter().flat_map(|layer| &layer.effects.items).zip(&style.effects);
-    if let Some(params) = applied.find_map(|(effect, instance)| {
-        let params = enabled_pattern_overlay_params(effect)?;
-        (instance.params.get("fx").is_none() || before.get(&instance.id) != Some(&params)).then_some(params)
-    }) {
+    let applied = app.session.active().and_then(|s| s.doc.layer(layer)).into_iter().flat_map(|layer| &layer.effects.items).zip(&style.effects);
+    let latest = applied
+        .filter_map(|(effect, instance)| {
+            let order = edits.order_of(instance.id)?;
+            let params = enabled_pattern_overlay_params(effect)?;
+            (instance.params.get("fx").is_none() || before.get(&instance.id) != Some(&params)).then_some((order, params))
+        })
+        .max_by_key(|(order, _)| *order);
+    if let Some((_, params)) = latest {
         last_pattern_overlay().store(app.framework.host(), &params);
     }
 }

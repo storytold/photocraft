@@ -268,3 +268,77 @@ fn removing_an_overlay_does_not_remember_its_unchanged_sibling() {
 
     assert_remembered_opacity(&mut app, 40.0);
 }
+
+fn two_overlay_ids(app: &PhotocraftApp, dialog: DialogId) -> [EffectId; 2] {
+    [0, 1].map(|index| draft(app, dialog).style.instances(PATTERN).nth(index).unwrap())
+}
+
+fn edit_on_pass(app: &mut PhotocraftApp, dialog: DialogId, change: impl FnOnce(&mut LayerStyleDraft)) {
+    edit(app, dialog, change);
+    let ctx = app.ctx().clone();
+    take(app, &ctx);
+}
+
+#[test]
+fn remembers_the_last_edit_when_both_overlay_values_change() {
+    let mut app = PhotocraftApp::new(Session::new(), crate::Services::default());
+    let dialog = open_with_two_overlays(&mut app);
+    let [first, second] = two_overlay_ids(&app, dialog);
+
+    edit_on_pass(&mut app, dialog, |draft| draft.set_param(first, "opacity", StyleValue::Number(50.0)));
+    edit_on_pass(&mut app, dialog, |draft| draft.set_param(second, "opacity", StyleValue::Number(90.0)));
+    ok(&mut app, dialog);
+
+    assert_remembered_opacity(&mut app, 90.0);
+}
+
+#[test]
+fn remembers_the_last_edit_in_the_ok_result_even_when_it_is_first_in_the_effect_list() {
+    let mut app = PhotocraftApp::new(Session::new(), crate::Services::default());
+    let dialog = open_with_two_overlays(&mut app);
+    let [first, second] = two_overlay_ids(&app, dialog);
+
+    edit_on_pass(&mut app, dialog, |draft| draft.set_param(second, "opacity", StyleValue::Number(90.0)));
+    edit(&mut app, dialog, |draft| draft.set_param(first, "opacity", StyleValue::Number(50.0)));
+    ok(&mut app, dialog);
+
+    assert_remembered_opacity(&mut app, 50.0);
+}
+
+#[test]
+fn an_undone_or_disabled_last_edit_does_not_replace_the_previous_edit() {
+    for undo in [true, false] {
+        let mut app = PhotocraftApp::new(Session::new(), crate::Services::default());
+        let dialog = open_with_two_overlays(&mut app);
+        let [first, second] = two_overlay_ids(&app, dialog);
+
+        edit_on_pass(&mut app, dialog, |draft| draft.set_param(first, "opacity", StyleValue::Number(50.0)));
+        edit_on_pass(&mut app, dialog, |draft| draft.set_param(second, "opacity", StyleValue::Number(90.0)));
+        edit(&mut app, dialog, |draft| {
+            if undo {
+                draft.set_param(second, "opacity", StyleValue::Number(80.0));
+            } else {
+                draft.toggle(second);
+            }
+        });
+        ok(&mut app, dialog);
+
+        assert_remembered_opacity(&mut app, 50.0);
+    }
+}
+
+#[test]
+fn remembers_a_new_overlay_that_reuses_a_deleted_overlays_id() {
+    let mut app = PhotocraftApp::new(Session::new(), crate::Services::default());
+    let dialog = open_with_two_overlays(&mut app);
+    let [first, second] = two_overlay_ids(&app, dialog);
+    let style = &draft(&app, dialog).style;
+    let defaults = style_params(PATTERN, &style_params_json(&style.effect(second).unwrap().params), None);
+
+    edit_on_pass(&mut app, dialog, |draft| draft.set_param(first, "opacity", StyleValue::Number(50.0)));
+    edit_on_pass(&mut app, dialog, |draft| draft.remove_instance(second));
+    edit(&mut app, dialog, |draft| assert_eq!(draft.add_instance(PATTERN, &defaults), second));
+    ok(&mut app, dialog);
+
+    assert_remembered_opacity(&mut app, 80.0);
+}
