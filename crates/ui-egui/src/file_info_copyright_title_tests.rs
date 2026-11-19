@@ -7,7 +7,7 @@ use crate::PhotocraftApp;
 
 use super::{tab_title_at, titled_name};
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 40, "height": 30, "name": "oracle"})).unwrap();
     app

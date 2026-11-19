@@ -652,7 +652,7 @@ fn hdr_toning(s: &mut Session, p: &Value) -> Result<Value> {
         bg.locks.position = true;
         crate::pixels_mut(&mut bg)?.write_region(doc.bounds(), &data);
         *active = Some(bg.id);
-        doc.layers = vec![bg];
+        doc.layers = vec![bg].into();
         doc.selection = None;
         Ok(())
     })?;

@@ -14,7 +14,7 @@ use crate::artboard_tool::bar;
 use crate::canvas::{ToolEvent, tool_event};
 use crate::state::Tool;
 
-fn app_with_depth(depth: u32) -> PhotocraftApp {
+fn app_with_depth(depth: u32) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 800, "height": 600, "depth": depth})).unwrap();
     app.sync_views();
@@ -24,7 +24,7 @@ fn app_with_depth(depth: u32) -> PhotocraftApp {
     app
 }
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     app_with_depth(8)
 }
 

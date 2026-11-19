@@ -344,7 +344,7 @@ pub fn build(spec: Spec) -> (Document, Handles) {
     let lv = t(levels);
     let background = doc.layers.remove(0);
     assert!(doc.layers.is_empty(), "unassembled layers: {:?}", doc.layers.iter().map(|l| &l.name).collect::<Vec<_>>());
-    doc.layers = vec![background, gallery, products, hero, header, footer, lv];
+    doc.layers = vec![background, gallery, products, hero, header, footer, lv].into();
     handles.closed_group = hero_id;
     (doc, handles)
 }

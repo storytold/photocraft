@@ -643,7 +643,7 @@ pub fn artboard_document(doc: &Document, id: LayerId) -> Result<Option<Document>
     let mut one = doc.clone();
     one.name = l.name.clone();
     one.size = Size::new(r.width(), r.height());
-    one.layers = vec![group];
+    one.layers = vec![group].into();
     one.channels.clear();
     one.selection = None;
     one.quick_mask = None;

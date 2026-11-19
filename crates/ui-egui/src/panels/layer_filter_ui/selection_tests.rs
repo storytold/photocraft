@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use crate::PhotocraftApp;
 
 /// "Red" and "Deep Pixel" (pixel layers) and "Hello" (type) over the Background, in the panel.
-fn harness() -> Harness<'static, PhotocraftApp> {
+fn harness() -> Harness<'static, Box<PhotocraftApp>> {
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
     s.execute("layer.new.layer", json!({"name": "Red"})).unwrap();
@@ -25,11 +25,11 @@ fn harness() -> Harness<'static, PhotocraftApp> {
     h
 }
 
-fn id(h: &Harness<'_, PhotocraftApp>, name: &str) -> LayerId {
+fn id(h: &Harness<'_, Box<PhotocraftApp>>, name: &str) -> LayerId {
     h.state().session.active().unwrap().doc.walk().into_iter().find(|(_, _, l)| l.name == name).map(|(_, _, l)| l.id).unwrap()
 }
 
-fn select(h: &mut Harness<'_, PhotocraftApp>, names: &[&str]) {
+fn select(h: &mut Harness<'_, Box<PhotocraftApp>>, names: &[&str]) {
     for (i, name) in names.iter().enumerate() {
         let layer = id(h, name).0;
         h.state_mut().session.execute("layer.select", json!({"layer": layer, "mode": if i == 0 { "replace" } else { "add" }})).unwrap();
@@ -38,7 +38,7 @@ fn select(h: &mut Harness<'_, PhotocraftApp>, names: &[&str]) {
 }
 
 /// The selected layers' names, bottom to top, and the active layer's.
-fn selection(h: &Harness<'_, PhotocraftApp>) -> (Vec<String>, Option<String>) {
+fn selection(h: &Harness<'_, Box<PhotocraftApp>>) -> (Vec<String>, Option<String>) {
     let st = h.state().session.active().unwrap();
     let name = |id: LayerId| st.doc.layer(id).unwrap().name.clone();
     (st.selected_layers().into_iter().map(name).collect(), st.active_layer.map(name))
