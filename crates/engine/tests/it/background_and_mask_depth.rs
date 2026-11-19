@@ -2,8 +2,6 @@ use photocraft_color::SampleType;
 use photocraft_engine::Session;
 use serde_json::{Value, json};
 
-const STYLES: [&str; 10] =
-    ["dropShadow", "innerShadow", "outerGlow", "innerGlow", "stroke", "colorOverlay", "gradientOverlay", "patternOverlay", "bevelEmboss", "satin"];
 const VECTOR_MASKS: [&str; 3] = ["layer.vectorMask.add", "layer.vectorMask.revealAll", "layer.vectorMask.hideAll"];
 
 fn background_only() -> Session {
@@ -25,10 +23,7 @@ fn converts_and_undoes(cmd: &str, params: Value) {
 }
 
 #[test]
-fn layer_styles_and_vector_masks_turn_the_background_into_a_layer() {
-    for kind in STYLES {
-        converts_and_undoes(&format!("layer.layerStyle.{kind}"), json!({}));
-    }
+fn whole_style_replacement_and_vector_masks_turn_the_background_into_a_layer() {
     for cmd in VECTOR_MASKS {
         converts_and_undoes(cmd, json!({}));
     }

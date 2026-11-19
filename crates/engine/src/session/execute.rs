@@ -178,6 +178,11 @@ impl Session {
         if let Some(why) = bitmap_mode_refusal(self, spec.id, params) {
             return Err(why.into());
         }
+        // Layer Style's read-only queries use the same receiver as dispatch, without
+        // temporarily changing the selection. Other style commands keep their own rules.
+        if commands::layer_style_rejects_background(spec.id) {
+            return commands::layer_style_allowed_with(self, params);
+        }
         channel_cmds::mask_target_enabled(self, spec.id, params).unwrap_or_else(|| (spec.enabled)(self))
     }
 
@@ -218,6 +223,9 @@ impl Session {
         };
         let Some(d) = self.active_mut() else { return Ok(None) };
         if d.doc.layer(target).is_none() {
+            if commands::layer_style_rejects_background(spec.id) {
+                return Err(EngineError::UnknownLayer { id: target, known: commands::layer_listing(&d.doc) });
+            }
             return Ok(None);
         }
         let active = d.active_layer.replace(target);

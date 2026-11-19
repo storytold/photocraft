@@ -421,8 +421,16 @@ impl LayerTree for PhotoLayers<'_> {
         adjustments.push(Entry::new("layer.newFillLayer.gradient".to_string(), tl!("Gradient…").to_string()));
         adjustments.push(Entry::new("layer.newFillLayer.pattern".to_string(), tl!("Pattern…").to_string()));
         footer.adjustment_menu = adjustments;
-        let mut styles = vec![Entry::new(String::new(), tl!("Blending Options…").to_string()), Entry::separator()];
-        styles.extend(crate::layer_style::KINDS.iter().map(|&(kind, label)| Entry::new(kind.to_string(), format!("{}…", tl!(label)))));
+        let session = &self.app.session;
+        let mut styles = vec![
+            Entry::new(String::new(), tl!("Blending Options…").to_string()).enabled(session.is_enabled("layer.layerStyle.blendingOptions")),
+            Entry::separator(),
+        ];
+        styles.extend(
+            crate::layer_style::KINDS.iter().map(|&(kind, label)| {
+                Entry::new(kind.to_string(), format!("{}…", tl!(label))).enabled(session.is_enabled(&format!("layer.layerStyle.{kind}")))
+            }),
+        );
         footer.style_menu = styles;
         footer
     }
