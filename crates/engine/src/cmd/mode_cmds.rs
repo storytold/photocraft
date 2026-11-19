@@ -241,7 +241,7 @@ fn single_layer_surface(doc: &mut Document, active: &mut Option<LayerId>, mode: 
         *surf = pixels;
     }
     *active = Some(l.id);
-    doc.layers = vec![l];
+    doc.layers = vec![l].into();
     for ch in doc.channels.iter_mut() {
         let f = PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false);
         ch.surface = ch.surface.convert(PixelFormat { alpha: ch.surface.format().alpha, ..f });
