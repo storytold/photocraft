@@ -43,7 +43,7 @@ fn alerted_once(app: &mut PhotocraftApp, before: &State) {
 }
 
 /// An Indexed Color document with stripes to heal, the Healing Brush active.
-fn indexed() -> PhotocraftApp {
+fn indexed() -> Box<PhotocraftApp> {
     let mut app = app();
     stripes(&mut app, 4, "pixels");
     to_indexed(&mut app);

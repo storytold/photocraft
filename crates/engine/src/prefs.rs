@@ -343,7 +343,7 @@ pub struct Interface {
     /// The theme id of the light slot.
     #[serde(deserialize_with = "theme_ids::theme")]
     pub light_theme: String,
-    /// Theme ids shown in the appearance button's context menu.
+    /// Theme ids starred in Preferences › Interface; #13581 decides where they show.
     #[serde(deserialize_with = "theme_ids::themes")]
     pub favorite_themes: Vec<String>,
     /// Pasteboard colour in standard screen mode (`canvasCustomColor` when "custom").
@@ -1413,8 +1413,8 @@ impl ToolbarCustomization {
     /// works with or without "Tool". `None` for a name that isn't a tool.
     pub fn tool_name(name: &str) -> Option<String> {
         let canonical = |key: &str| -> String { key.chars().take(1).flat_map(char::to_uppercase).chain(key.chars().skip(1)).collect() };
-        // Stored layouts hold canonical names: find those without allocating (the toolbar
-        // resolves its layout every frame).
+        // Stored layouts hold canonical names: find those without allocating (every layout
+        // resolves each of its names here).
         if let Some(key) = crate::shell_commands::TOOLS.iter().filter_map(|(id, _, _)| id.strip_prefix("tools.select.")).find(|k| k.eq_ignore_ascii_case(name))
         {
             return Some(canonical(key));
@@ -1897,6 +1897,7 @@ pub const LEGACY_PREFS_FILE: &str = "preferences.json";
 
 /// The settings store's options for the folder `dir` (in memory without one): `config.toml` there, importing
 /// [`LEGACY_PREFS_FILE`] through [`parse_legacy_prefs`] while there is none.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn store_options(dir: Option<&std::path::Path>) -> craft::settings::OpenOptions<SavedPrefs> {
     let location = dir.map_or(craft::settings::Location::Memory, |dir| craft::settings::Location::Dir(dir.to_path_buf()));
     let legacy = dir.map(|dir| craft::settings::LegacyFile { path: dir.join(LEGACY_PREFS_FILE), parse: parse_legacy_prefs }).into_iter().collect();
@@ -1906,6 +1907,7 @@ pub fn store_options(dir: Option<&std::path::Path>) -> craft::settings::OpenOpti
 /// The preferences saved in `dir` as the app's settings store loads them, read without opening the store
 /// (`craft::settings::SettingsStore::read`, which writes nothing): the launch reads before the window opens and
 /// `photocraft-cli mcp`. Defaults without a folder.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn read_saved(dir: Option<&std::path::Path>) -> SavedPrefs {
     craft::settings::SettingsStore::read(&store_options(dir)).0
 }
