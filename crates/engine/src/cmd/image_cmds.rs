@@ -1213,7 +1213,7 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
         let mut merged = Layer::new(if has_background { "Background" } else { "Layer 1" }, LayerContent::Raster(surf));
         merged.locks.transparency = has_background;
         merged.locks.position = has_background;
-        doc.layers = vec![merged];
+        doc.layers = vec![merged].into();
         // A merged-only copy has no original layers for saved comps to restore.
         // Don't carry dangling comp state into a single-layer flattened document.
         doc.layer_comps.clear();

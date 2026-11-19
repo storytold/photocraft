@@ -894,7 +894,7 @@ fn build() -> Vec<CommandSpec> {
                 bg.locks.position = true;
                 *crate::pixels_mut(&mut bg)? = photocraft_compose::flatten_to_surface(doc, fmt, Some([1.0, 1.0, 1.0]));
                 *active = Some(bg.id);
-                doc.layers = vec![bg];
+                doc.layers = vec![bg].into();
                 Ok(())
             })?;
             Ok(Value::Null)
