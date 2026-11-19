@@ -1,8 +1,8 @@
 use super::sampling::{AllLayers, sample_all_layers};
 use super::{
     BlendMode, BrushSettings, Document, EngineError, Footprint, IndexedParallelIterator, LayerId, ParallelIterator, ParallelSliceMut, PixelFormat, Rect,
-    Region, Result, Session, Smudge, Stroke, StrokePoint, Surface, ToneRange, Value, alpha_index, apply_dab_stroke, bad, blend_from_str, damage_json,
-    dodge_burn, flag, from_rgba_into, has_pixel_layer, json, local_blur, local_sharpen, num, parse_brush, run_stroke, sponge, string, to_rgba,
+    Region, Result, Session, Smudge, Stroke, StrokePoint, Surface, ToneRange, Value, alpha_index, apply_dab_stroke, bad, damage_json, dodge_burn, flag,
+    from_rgba_into, has_pixel_layer, json, local_blur, local_sharpen, num, parse_blend, parse_brush, run_stroke, sponge, string, to_rgba,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -206,7 +206,7 @@ pub(super) enum DabTool {
 fn smudge_mode(p: &Value, cmd: &str) -> Result<BlendMode> {
     use BlendMode::{Color, Darken, Hue, Lighten, Luminosity, Normal, Saturation};
     let Some(v) = p.get("mode") else { return Ok(Normal) };
-    let named = v.as_str().and_then(blend_from_str).filter(|m| matches!(m, Normal | Darken | Lighten | Hue | Saturation | Color | Luminosity));
+    let named = v.as_str().and_then(parse_blend).filter(|m| matches!(m, Normal | Darken | Lighten | Hue | Saturation | Color | Luminosity));
     named.ok_or_else(|| {
         let given = v.as_str().map_or_else(|| v.to_string(), str::to_owned);
         bad(cmd, format!("unknown mode `{given}` (normal|darken|lighten|hue|saturation|color|luminosity)"))
