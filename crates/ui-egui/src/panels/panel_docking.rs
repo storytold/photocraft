@@ -8,7 +8,7 @@
 use craft::behavior::dock::{Action, DockEdge, DockPlacement, Layout, Node, PanelPlace, PanelState, Permissions, SplitSize, Target};
 use craft::behavior::overlay::Side;
 use craft::behavior::{DockSide, EditEvent, EditEvents, IconId};
-use craft::ui::contract::{Bind, BodyCx, SizeLimits};
+use craft::ui::contract::{Bind, BodyCx, Lazy, SizeLimits};
 use craft::ui::docking::{
     DockCommands, DockConfig, DockEvent, DockPanels, DockScene, DockSizes, DockTo, DragUnit, FloatSpace, GroupAt, HidePanels, PanelSpec, actions, move_actions,
     request_actions,
@@ -202,7 +202,11 @@ impl DockPanels<String> for Panels<'_> {
             return Some(match at {
                 GroupAt::Measure(width) => super::toolbar::measure(self.app, ui, width),
                 GroupAt::Show(rect) => {
-                    super::toolbar::toolbar(self.app, ui);
+                    // The rail settles as a panel body does: while nothing it shows changed and no input reaches it,
+                    // the frame repaints its last run instead of running every tool button again (#15493).
+                    let version = super::region_versions::toolbar_drawn(self.app, ui);
+                    let app = &mut *self.app;
+                    Lazy::new("toolbar", 0.0).settles(true).content(version).show(ui, |ui| super::toolbar::toolbar(app, ui));
                     rect.height()
                 }
             });
