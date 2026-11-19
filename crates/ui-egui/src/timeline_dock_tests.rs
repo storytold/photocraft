@@ -152,12 +152,12 @@ fn playback_does_not_count_a_pass_while_a_background_job_blocks_the_frame_change
     assert_eq!(h.state().ui.timeline.plays_done, 1);
 }
 
-fn anim(h: &Harness<'static, PhotocraftApp>) -> photocraft_doc::FrameAnimation {
+fn anim(h: &Harness<'static, Box<PhotocraftApp>>) -> photocraft_doc::FrameAnimation {
     h.state().session.active().unwrap().doc.frame_animation.clone().unwrap()
 }
 
 /// Puts the pointer over the panel, as the timeline's keys need.
-fn hover_panel(h: &mut Harness<'static, PhotocraftApp>) -> egui::Rect {
+fn hover_panel(h: &mut Harness<'static, Box<PhotocraftApp>>) -> egui::Rect {
     let r = h.state().ui.timeline.panel_rect.expect("the panel was drawn");
     h.event(egui::Event::PointerMoved(r.center()));
     h.run_steps(2);
@@ -321,7 +321,7 @@ fn delete_over_the_timeline_keeps_the_last_frame_and_changes_nothing_else() {
     // Pixels on the active layer, which Edit › Clear (also bound to Delete) would wipe.
     h.state_mut().run("edit.fill", json!({"color": "#336699"})).unwrap();
     h.run_steps(2);
-    let steps = |h: &Harness<'static, PhotocraftApp>| h.state().session.active().unwrap().history.past_len();
+    let steps = |h: &Harness<'static, Box<PhotocraftApp>>| h.state().session.active().unwrap().history.past_len();
     let before = steps(&h);
     h.key_press(egui::Key::Delete);
     h.run_steps(2);
@@ -330,7 +330,7 @@ fn delete_over_the_timeline_keeps_the_last_frame_and_changes_nothing_else() {
 }
 
 /// The delay menu's "Other…" field, which starts at the frame's 0.2 seconds.
-fn other_field<'a>(h: &'a Harness<'static, PhotocraftApp>) -> egui_kittest::Node<'a> {
+fn other_field<'a>(h: &'a Harness<'static, Box<PhotocraftApp>>) -> egui_kittest::Node<'a> {
     h.query_all_by_role(egui::accesskit::Role::TextInput).find(|n| n.value().as_deref() == Some("0.2")).expect("the Other… field")
 }
 
