@@ -152,6 +152,8 @@ pub mod sample_cmds;
 #[cfg(test)]
 mod sample_zoom_box_tests;
 pub mod sampler_cmds;
+pub mod script_list_cmds;
+pub mod script_options_cmds;
 pub mod select_extra_cmds;
 pub mod selection_cmds;
 pub mod slice_cmds;
@@ -341,7 +343,8 @@ fn build() -> Vec<CommandSpec> {
                 if let Some(st) = s.active_mut() {
                     st.history.set_current_label("New");
                 }
-                Ok(json!({ "document": i }))
+                let (id, serial) = s.documents().get(i).map(|d| (d.doc.id.0, d.serial)).unzip();
+                Ok(json!({ "document": i, "id": id, "serial": serial }))
             }
         ),
         cmd!(
@@ -542,7 +545,7 @@ fn build() -> Vec<CommandSpec> {
             "Layer…",
             ["Layer", "New"],
             Some("Cmd+Shift+N"),
-            r##"{"name":str?,"clipToPrevious":bool=false (Use Previous Layer to Create Clipping Mask; inside a clip group the layer joins it anyway),"color":"none|red|orange|yellow|green|seafoam|blue|indigo|magenta|fuchsia|violet|gray"="none","mode":"Normal|Multiply|…"="Normal","opacity":0..1=1,"fillNeutral":bool=false (fill with the mode's neutral color: modes without one are an error),"position":"above|below"="above" (below: the Layers panel's Cmd/Ctrl-click; never under the Background)} (above the active layer, or the top layer inside it when it is an open group)"##,
+            r##"{"name":str?,"clipToPrevious":bool=false (Use Previous Layer to Create Clipping Mask; inside a clip group the layer joins it anyway),"color":"none|red|orange|yellow|green|seafoam|blue|indigo|magenta|fuchsia|violet|gray"="none","mode":"Normal|Multiply|…"="Normal","opacity":0..1=1,"fillNeutral":bool=false (fill with the mode's neutral color: modes without one are an error),"position":"above|below"="above" (below: the Layers panel's Cmd/Ctrl-click; never under the Background),"group":id? (the top layer inside this group, open or not; not with position)} (above the active layer, or the top layer inside it when it is an open group)"##,
             has_doc,
             crate::new_layer::run
         ),
@@ -551,18 +554,32 @@ fn build() -> Vec<CommandSpec> {
             "Group…",
             ["Layer", "New"],
             None,
-            r##"{"name":text?,"color":"none|red|orange|yellow|green|seafoam|blue|indigo|magenta|fuchsia|violet|gray"="none","mode":str="passThrough" (blend mode),"opacity":0..100=100 (percent),"position":"above|below"="above" (below: the Layers panel's Cmd/Ctrl-click; never under the Background)} (above the active layer, or inside it when it is an open group; clipped when it lands inside a clipping mask)"##,
+            r##"{"name":text?,"color":"none|red|orange|yellow|green|seafoam|blue|indigo|magenta|fuchsia|violet|gray"="none","mode":str="passThrough" (blend mode),"opacity":0..100=100 (percent),"position":"above|below"="above" (below: the Layers panel's Cmd/Ctrl-click; never under the Background),"group":id? (the top layer inside this group, open or not; not with position)} (above the active layer, or inside it when it is an open group; clipped when it lands inside a clipping mask)"##,
             has_doc,
             |s, p| {
-                let opts = crate::group_options::GroupOptions::parse("layer.new.group", p)?;
-                let below = crate::group_options::below("layer.new.group", p)?;
-                let place = if below { crate::layer_place::Place::Below } else { crate::layer_place::Place::Auto };
+                const CMD: &str = "layer.new.group";
+                let opts = crate::group_options::GroupOptions::parse(CMD, p)?;
+                let below = crate::group_options::below(CMD, p)?;
+                let into = crate::new_layer::group_param(CMD, p)?;
+                if into.is_some() && below {
+                    return Err(EngineError::BadParams { cmd: CMD.into(), msg: "give `group` or `position`, not both".into() });
+                }
+                let place = match (into, below) {
+                    (Some(_), _) => crate::layer_place::Place::Into,
+                    (None, true) => crate::layer_place::Place::Below,
+                    (None, false) => crate::layer_place::Place::Auto,
+                };
                 let id = s.edit("New Group", |doc, active| {
                     let name = opts.name.clone().unwrap_or_else(|| doc.next_layer_name("Group"));
                     let mut group = Layer::group(name, vec![]);
                     opts.apply(&mut group);
+                    // Checked inside the edit, so the group can't go away between the check and
+                    // the insert.
+                    if let Some(g) = into {
+                        crate::layer_place::check_into(doc, g, &group).map_err(|msg| EngineError::BadParams { cmd: CMD.into(), msg })?;
+                    }
                     let bg = crate::background_cmds::background_id(doc);
-                    let id = crate::layer_place::insert_new(doc, *active, group, place);
+                    let id = crate::layer_place::insert_new(doc, into.or(*active), group, place);
                     crate::background_cmds::keep_background_at_bottom(bg, doc)?;
                     *active = Some(id);
                     Ok(id)
@@ -1116,17 +1133,35 @@ fn build() -> Vec<CommandSpec> {
             label: "Inspect Document",
             menu: &[],
             shortcut: None,
-            params: r##"{"document":index?}"##,
+            params: r##"{"document":index?} or {"serial":n} (the document's never-reused serial from session.inspect); "history":false leaves out the History panel's rows"##,
             enabled: has_doc,
             run: |s, p| {
-                let d = match p.get("document") {
-                    Some(v) => {
-                        let i = v.as_u64().and_then(|v| usize::try_from(v).ok()).ok_or_else(|| bad("document.inspect", "`document` must be an index"))?;
-                        s.documents().get(i).ok_or_else(|| EngineError::Other(format!("no document at index {i}")))?
-                    }
-                    None => s.active().ok_or(EngineError::NoDocument)?,
+                let history = match p.get("history").filter(|v| !v.is_null()) {
+                    Some(v) => v.as_bool().ok_or_else(|| bad("document.inspect", "`history` must be true or false"))?,
+                    None => true,
                 };
-                Ok(inspect::document(d))
+                let d = if let Some(serial) = p.get("serial").filter(|v| !v.is_null()) {
+                    if p.get("document").is_some_and(|v| !v.is_null()) {
+                        return Err(bad("document.inspect", "give `document` or `serial`, not both"));
+                    }
+                    let n = serial.as_u64().ok_or_else(|| bad("document.inspect", "`serial` must be a document serial"))?;
+                    s.documents().iter().find(|d| d.serial == n).ok_or_else(|| EngineError::Other(format!("no open document has serial {n}")))?
+                } else {
+                    match p.get("document") {
+                        Some(v) => {
+                            let i = v.as_u64().and_then(|v| usize::try_from(v).ok()).ok_or_else(|| bad("document.inspect", "`document` must be an index"))?;
+                            s.documents().get(i).ok_or_else(|| EngineError::Other(format!("no document at index {i}")))?
+                        }
+                        None => s.active().ok_or(EngineError::NoDocument)?,
+                    }
+                };
+                let mut v = inspect::document(d);
+                if !history && let Some(m) = v.as_object_mut() {
+                    for k in ["history", "historyRedo", "historyIds"] {
+                        m.remove(k);
+                    }
+                }
+                Ok(v)
             },
             journal: false,
         },
@@ -1135,11 +1170,19 @@ fn build() -> Vec<CommandSpec> {
             label: "Activate Document",
             menu: &[],
             shortcut: None,
-            params: r##"{"document":index|{"index":uint}} or {"offset":int} (numeric document: zero-based tab index; typed index: one-based opening order; offset: places after the active document in opening order, before it when negative) → {document}"##,
+            params: r##"{"document":index|{"index":uint}} or {"offset":int} or {"serial":n} (numeric document: zero-based tab index; typed index: one-based opening order; offset: places after the active document in opening order, before it when negative; serial: the document's never-reused serial from session.inspect) → {document}"##,
             enabled: has_doc,
             run: |s, p| {
                 // A null key counts as omitted.
                 let given = |k: &str| p.get(k).filter(|v| !v.is_null());
+                if let Some(serial) = given("serial") {
+                    if given("document").is_some() || given("offset").is_some() {
+                        return Err(bad("document.activate", "give one of `document`, `offset` or `serial`"));
+                    }
+                    let n = serial.as_u64().ok_or_else(|| bad("document.activate", "`serial` must be a document serial"))?;
+                    let idx = s.documents().iter().position(|d| d.serial == n).ok_or_else(|| EngineError::Other(format!("no open document has serial {n}")))?;
+                    return if s.set_active(idx) { Ok(json!({"document": idx})) } else { Err(EngineError::NoDocument) };
+                }
                 let idx = match (given("document"), given("offset")) {
                     (Some(_), Some(_)) => return Err(bad("document.activate", "give `document` or `offset`, not both")),
                     (None, None) => return Err(bad("document.activate", "needs `document` (a tab index) or `offset`")),
@@ -1449,6 +1492,8 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::slice_cmds::specs());
     v.extend(crate::web_cmds::specs());
     v.extend(crate::automate_cmds::specs());
+    v.extend(crate::script_list_cmds::specs());
+    v.extend(crate::script_options_cmds::specs());
     v.extend(crate::print_cmds::specs());
     v.extend(crate::installed_profiles::specs());
     v.extend(crate::pick_cmds::specs());

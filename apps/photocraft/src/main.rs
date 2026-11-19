@@ -52,6 +52,7 @@ mod presentation;
 // The print portal needs the session bus (zbus, Linux only); its pure helpers are tested everywhere.
 #[cfg(any(target_os = "linux", test))]
 mod print_portal;
+mod scripts;
 mod services;
 // macOS gets one instance from LaunchServices (open-documents Apple events).
 #[cfg(any(not(target_os = "macos"), test))]
@@ -367,7 +368,19 @@ fn write_start_marker(sentinel: &gpu_startup::SharedSentinel, plan: &gpu_startup
     }
 }
 
+/// The allocator: the system's, counted, so a script host (this executable started with
+/// `--script-host`) can cap its own heap at its run's memory limit. The app sets no limit.
+#[cfg(not(target_arch = "wasm32"))]
+#[global_allocator]
+static HEAP: photocraft_script_js::isolate::HostAllocator = photocraft_script_js::isolate::host_allocator();
+
 fn main() -> eframe::Result {
+    // A script host (`photocraft --script-host`, started by the app to run one script in its own
+    // process) needs nothing of the app: no window, logging, crash guard or instance handoff.
+    #[cfg(not(target_arch = "wasm32"))]
+    if photocraft_script_js::isolate::script_host_requested() {
+        std::process::exit(photocraft_script_js::isolate::serve(&HEAP));
+    }
     // Before anything starts a thread: may re-execute this process with glibc tuned to return
     // the memory of closed documents (#8743).
     photocraft_engine::malloc_tuning::apply();

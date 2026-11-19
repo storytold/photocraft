@@ -33,14 +33,19 @@ pub(crate) struct NewLayer {
     neutral: Option<[f32; 3]>,
     below: bool,
     name: Option<String>,
+    group: Option<photocraft_doc::LayerId>,
 }
 
 /// `layer.new.layer`: a pixel layer where Photoshop puts a new one ([`crate::layer_place`]: above
 /// the active layer, inside it when it is an open group, below it with `position: below`, the Layers
 /// panel's ⌘/Ctrl-click), joining the clip group it lands in.
 pub fn run(s: &mut Session, p: &Value) -> Result<Value> {
-    let NewLayer { clip, mode, opacity, label, neutral, below, name } = parse(p)?;
-    let place = if below { crate::layer_place::Place::Below } else { crate::layer_place::Place::Auto };
+    let NewLayer { clip, mode, opacity, label, neutral, below, name, group } = parse(p)?;
+    let place = match (group, below) {
+        (Some(_), _) => crate::layer_place::Place::Into,
+        (None, true) => crate::layer_place::Place::Below,
+        (None, false) => crate::layer_place::Place::Auto,
+    };
     let id = s.edit("New Layer", |doc, active| {
         let name = name.clone().unwrap_or_else(|| doc.next_layer_name("Layer"));
         let mut layer = Layer::raster(name, doc.pixel_format());
@@ -53,7 +58,11 @@ pub fn run(s: &mut Session, p: &Value) -> Result<Value> {
             let px = photocraft_raster::from_rgba(&surface.format(), [rgb[0], rgb[1], rgb[2], 1.0]);
             surface.fill_rect(bounds, &px);
         }
-        let id = crate::layer_place::insert_new(doc, *active, layer, place);
+        // Checked inside the edit, so the group can't go away between the check and the insert.
+        if let Some(g) = group {
+            crate::layer_place::check_into(doc, g, &layer).map_err(bad)?;
+        }
+        let id = crate::layer_place::insert_new(doc, group.or(*active), layer, place);
         crate::clip_group::settle(doc, &[id], &Default::default(), clip);
         *active = Some(id);
         Ok(id)
@@ -99,7 +108,23 @@ pub(crate) fn parse(p: &Value) -> Result<NewLayer> {
         None | Some(Value::Null) => None,
         Some(v) => Some(v.as_str().ok_or_else(|| bad("`name` must be a string"))?.to_string()),
     };
-    Ok(NewLayer { clip, mode, opacity, label, neutral, below, name })
+    let group = group_param(CMD, p)?;
+    if group.is_some() && below {
+        return Err(bad("give `group` or `position`, not both"));
+    }
+    Ok(NewLayer { clip, mode, opacity, label, neutral, below, name, group })
+}
+
+/// The `group` param of New Layer and New Group: the id of the group the new layer goes inside,
+/// as its top child.
+pub(crate) fn group_param(cmd: &str, p: &Value) -> Result<Option<photocraft_doc::LayerId>> {
+    match p.get("group") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v
+            .as_u64()
+            .map(|g| Some(photocraft_doc::LayerId(g)))
+            .ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: "`group` must be a layer id".into() }),
+    }
 }
 
 #[cfg(test)]
@@ -184,6 +209,37 @@ mod tests {
         let l = st.doc.layers.last().unwrap();
         assert_eq!((l.blend, l.opacity, l.label, l.clipped), (BlendMode::Normal, 1.0, LabelColor::None, false));
         assert_eq!(l.surface().unwrap().tile_count(), 0);
+    }
+
+    /// `group` puts the new layer or group on top inside that group, collapsed or not, in one
+    /// step; a group that isn't there (or isn't a group) is an error that changes nothing.
+    #[test]
+    fn group_puts_the_new_layer_inside_that_group_or_changes_nothing() {
+        let mut s = busy("rgb", 8);
+        let a = s.execute("layer.new.layer", json!({"name": "A"})).unwrap()["layer"].as_u64().unwrap();
+        let g = s.execute("layer.groupLayers", json!({"layer": a})).unwrap()["layer"].as_u64().unwrap();
+        let top = s.execute("layer.new.layer", json!({"name": "Top"})).unwrap()["layer"].as_u64().unwrap();
+        let children = |s: &Session| {
+            let doc = &s.active().unwrap().doc;
+            doc.layer(photocraft_doc::LayerId(g)).unwrap().children().unwrap().iter().map(|l| l.name.clone()).collect::<Vec<_>>()
+        };
+        let steps = |s: &Session| s.active().unwrap().history.past_len();
+        // The active layer is outside the (collapsed) group; the new layers still go inside it.
+        assert_eq!(s.active().unwrap().active_layer, Some(photocraft_doc::LayerId(top)));
+        let before = steps(&s);
+        s.execute("layer.new.layer", json!({"name": "In", "group": g})).unwrap();
+        s.execute("layer.new.group", json!({"name": "Sub", "group": g})).unwrap();
+        assert_eq!(children(&s), ["A", "In", "Sub"]);
+        assert_eq!(steps(&s), before + 2);
+        // Not a group, no such layer, or with `position`: refused, nothing made.
+        let shown = s.active().unwrap().doc.clone();
+        for p in [json!({"group": top}), json!({"group": 999_999}), json!({"group": g, "position": "below"}), json!({"group": "x"})] {
+            assert!(s.execute("layer.new.layer", p.clone()).is_err(), "{p}");
+            assert!(s.execute("layer.new.group", p.clone()).is_err(), "{p}");
+        }
+        assert_eq!(steps(&s), before + 2);
+        assert_eq!(s.active().unwrap().doc.layers.len(), shown.layers.len());
+        assert_eq!(children(&s), ["A", "In", "Sub"]);
     }
 
     /// `position: below` (⌘/Ctrl-click on the panel button) lands under the active layer; the

@@ -65,7 +65,7 @@ id = "AUTO-219-8"
 target = "xtask check that every panel button routes through a command id"
 status = "partial"
 issue = 219
-note = "cargo xtask panel-commands (run by xtask ci and CI) fails on a shell click handler that changes the document or session directly; no allowlisted function left (the Color panel field dispatches tools.setColors)"
+note = "cargo xtask panel-commands (run by xtask ci and CI) fails on a shell click handler that changes the document or session directly; no allowlisted function left (xtask/src/panel_commands.rs:48, `ALLOWLIST` is empty; the Color panel field dispatches tools.setColors, crates/ui-egui/src/panels/color.rs:51)"
 
 [[item]]
 id = "AUTO-219-9"

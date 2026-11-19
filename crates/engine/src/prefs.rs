@@ -1638,6 +1638,8 @@ pub struct Preferences {
     pub recent_colors: Vec<String>,
     /// File › Scripts › Script Events Manager: event → script bindings.
     pub script_events: crate::automate_cmds::ScriptEvents,
+    /// File › Scripts › Scripts Manager: the JavaScript files the user loaded, with their tags.
+    pub scripts: crate::script_list_cmds::LoadedScripts,
     /// Layer Mask Display Options: the layer mask rubylith's colour and opacity.
     pub layer_mask_overlay: LayerMaskOverlay,
 }

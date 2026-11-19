@@ -143,7 +143,22 @@ what an agent can't finish alone.
   into one relative move, records keyboard document switches as opening-order offsets, and
   places recorded point text by canvas percentage. Duplicate layer names remain ambiguous and
   keep the id; paragraph text boxes still use absolute coordinates. AUTO-219-1 remains partial.
-- **Missing:** ExtendScript/UXP compatibility. `.atn` steps outside the
+- **Partial 2026-11-17 (#15225, draft):** `.js` / `.jsx` scripts run on the desktop through
+  File › Scripts › Browse… and the Scripts Manager (a list of loaded scripts with tags; the first
+  tag is `app.name` for that run), and as `file.scripts.run` steps in actions, each in a script
+  host process of its own. They get `alert` / `confirm` / `prompt`, ScriptUI dialogs and palettes
+  with live event handlers, the file and folder pickers, and a document model: documents
+  (`app.documents.add`, size in the ruler unit, `resizeImage`, `resizeCanvas`, `crop`, `trim`,
+  `duplicate`, `flatten`, `close`), layers and layer sets (name, visibility, opacity, fill, blend
+  mode, kind, bounds, add, move, duplicate, merge, remove, translate), type layers (contents,
+  size, font, position), History states, the selection, `saveAs` (JPEG, PNG, PSD, TIFF) and Save
+  for Web export to a file or folder the user chose in that run, `ActionDescriptor` custom
+  options kept between runs, and the ruler and type unit preferences. Still missing: most other
+  host objects (channels, paths, adjustment layers, layer styles), reading or writing files,
+  `#include`, ScriptUI resource strings, `executeAction`, and UXP. Scripts are off in the web
+  build until they can run in a Worker the page can stop: on the page's own thread a crafted
+  script could freeze or crash the tab.
+- **Missing:** ExtendScript/UXP compatibility beyond the above. `.atn` steps outside the
   mapped events (paths, scripts, Generative Fill, Filter Gallery effects other than Spatter,
   Duplicate Layers into a new document, Bitmap halftone screens…) load as kept Photoshop steps
   that fail at playback by name.

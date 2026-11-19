@@ -141,6 +141,8 @@ pub use cmd::render_cmds;
 pub use cmd::retouch_cmds;
 pub use cmd::sample_cmds;
 pub use cmd::sampler_cmds;
+pub use cmd::script_list_cmds;
+pub use cmd::script_options_cmds;
 pub use cmd::select_extra_cmds;
 pub use cmd::selection_cmds;
 pub use cmd::slice_cmds;
@@ -230,6 +232,8 @@ pub struct Session {
     typed_layer: Option<(photocraft_doc::DocId, LayerId)>,
     /// Coalescing key of the command being executed.
     coalesce_request: Option<String>,
+    /// The serial the last admitted document got ([`DocState::serial`]).
+    doc_serial: u64,
     /// The outer action's original document/history states, independent of command transactions.
     action_history: Option<actions_cmds::ActionHistory>,
     /// Weak leases expire when every copy of a suspended continuation is abandoned.
@@ -320,6 +324,9 @@ pub struct Session {
     /// A finished live stroke offered to the `paint.stroke` / `paint.pencil` that commits it
     /// ([`Session::offer_live_stroke`]).
     pub(crate) live_commit: Option<brush_cmds::LiveCommit>,
+    /// Custom options scripts keep for this session only (`scripts.customOptions.put` with
+    /// `persistent: false`). Not in the preferences, which are saved and rebuilt.
+    pub(crate) script_options: std::collections::BTreeMap<String, serde_json::Value>,
     /// Documents a background open decoded but held back until the user answers the profile
     /// prompt ([`ColorState::open_question`](color_cmds::ColorState::open_question)): `(id,
     /// document, source read-only)`. The shell takes them with [`Session::take_held_open`].

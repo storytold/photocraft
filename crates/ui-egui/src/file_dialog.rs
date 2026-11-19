@@ -153,6 +153,30 @@ impl PhotocraftApp {
         Ok(json!({ "fileDialog": kind }))
     }
 
+    /// [`Self::ask_file`] for a caller that must hear back however the dialog ends: `then` also
+    /// gets a cancel ([`Picked::Cancelled`]) and an unavailable dialog ([`Picked::Unavailable`]).
+    /// A path that is not valid Unicode comes as `Unavailable`. `Err` while a dialog is open, and
+    /// then `then` is not called.
+    pub(crate) fn ask_file_answer(
+        &mut self,
+        request: PickRequest,
+        then: impl FnOnce(&mut Self, Picked) -> Result<Value, String> + 'static,
+    ) -> Result<Value, String> {
+        if self.file_dialog.is_some() {
+            return Err("a file dialog is already open".into());
+        }
+        let saving = request.kind == PickKind::Save;
+        let then: Then = Box::new(move |app, picked| match picked {
+            Picked::Paths(paths) => match paths.iter().try_for_each(|p| path_text(p, saving).map(drop)) {
+                Ok(()) => then(app, Picked::Paths(paths)),
+                Err(why) => then(app, Picked::Unavailable(why)),
+            },
+            other => then(app, other),
+        });
+        self.file_dialog = Some(self.start_pick(request, then)?);
+        Ok(json!({ "fileDialog": "script" }))
+    }
+
     /// Hands `request` to the host's file service.
     #[cfg(not(target_arch = "wasm32"))]
     fn start_pick(&mut self, request: PickRequest, then: Then) -> Result<Pending, String> {
@@ -501,6 +525,14 @@ fn read_picked(picked: Picked) -> Result<(String, Vec<u8>), String> {
             Ok((path, bytes))
         }
         Picked::Cancelled | Picked::Unavailable(_) => Err(UNEXPECTED.into()),
+    }
+}
+
+#[cfg(test)]
+impl Pending {
+    /// Answer this dialog now, as a late answer from the platform would.
+    pub(crate) fn answer_now(self, app: &mut PhotocraftApp, picked: Picked) -> Result<Value, String> {
+        (self.then)(app, picked)
     }
 }
 

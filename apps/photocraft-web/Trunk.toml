@@ -8,3 +8,9 @@ filehash = true
 [serve]
 addresses = ["127.0.0.1"]
 port = 8765
+
+# Cross-origin isolation, as the packaged site's sample headers send it: the page and the script
+# Worker share memory (packaging/web/README.md › Scripts).
+[serve.headers]
+"Cross-Origin-Opener-Policy" = "same-origin"
+"Cross-Origin-Embedder-Policy" = "require-corp"

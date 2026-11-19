@@ -26,6 +26,9 @@ pub enum Place {
     /// Directly below the anchor (⌘-click on the Layers panel's New Layer or New Group button). Never
     /// under the Background, where it goes above instead.
     Below,
+    /// The top child of the anchor, a group whatever its state: a script's `artLayers.add()` on a
+    /// group's collection. The caller checks first that the group takes it ([`check_into`]).
+    Into,
 }
 
 /// The slot `layer` would take: its parent's path (empty for the root) and its index among the
@@ -52,6 +55,7 @@ pub fn insertion_point(doc: &Document, anchor: Option<LayerId>, layer: &Layer, p
         Place::Auto | Place::AutoEditable if takes_new_layers(target, path.len(), layer) && (place == Place::Auto || editable) => {
             (path.clone(), target.children().map_or(0, <[Layer]>::len))
         }
+        Place::Into if target.is_group() => (path.clone(), target.children().map_or(0, <[Layer]>::len)),
         Place::Below if crate::background_cmds::background_id(doc) != Some(target.id) => (parent.to_vec(), k),
         _ => (parent.to_vec(), k + 1),
     }
@@ -119,6 +123,27 @@ fn takes_new_layers(target: &Layer, depth: usize, layer: &Layer) -> bool {
     };
     // A frame holds its image only (`layer.frame.set`/`setContent`), never new layers.
     open && target.frame.is_none() && layer.artboard().is_none() && depth + subtree_depth(layer) <= MAX_GROUP_DEPTH
+}
+
+/// Can `layer` go inside the group `group` as its top child ([`Place::Into`])? Not when `group` is
+/// missing, isn't a group, is a frame (which holds its image only), or nesting would pass
+/// [`MAX_GROUP_DEPTH`]; an artboard never goes inside another group.
+pub(crate) fn check_into(doc: &Document, group: LayerId, layer: &Layer) -> std::result::Result<(), String> {
+    let path = doc.path_of(group).ok_or_else(|| format!("no layer has id {}", group.0))?;
+    let target = doc.layer_at(&path).ok_or_else(|| format!("no layer has id {}", group.0))?;
+    if !target.is_group() {
+        return Err(format!("layer {} is not a group", group.0));
+    }
+    if target.frame.is_some() {
+        return Err(format!("layer {} is a frame, which holds only its image", group.0));
+    }
+    if layer.artboard().is_some() {
+        return Err("an artboard can't go inside a group".into());
+    }
+    if path.len() + subtree_depth(layer) > MAX_GROUP_DEPTH {
+        return Err(format!("groups can't nest more than {MAX_GROUP_DEPTH} deep"));
+    }
+    Ok(())
 }
 
 /// Is `layer`'s content centred on the board at `rect`? A layer with no content is (it can go

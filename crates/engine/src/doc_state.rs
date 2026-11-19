@@ -33,6 +33,10 @@ pub struct DocState {
     pub(crate) damage_span: Option<(u64, u64)>,
     /// Coalescing key of the latest history step (see [`Session::execute`]'s `coalesce` param).
     pub coalesce: Option<String>,
+    /// Unique among all documents this session opened and never reused, unlike `doc.id`, which a
+    /// later document can take once this one closes. Lets a handle to a document (a script's
+    /// `Document`) tell its own document from a newer one. 0 until the session admits it.
+    pub serial: u64,
     /// Channels panel: targeted channel and eye toggles (view state, not history).
     pub channel_view: channel_cmds::ChannelView,
     /// Select › Isolate Layers: the Layers panel lists only these layers (empty = off; view state).
@@ -119,6 +123,7 @@ impl DocState {
             last_damage: None,
             damage_span: None,
             coalesce: None,
+            serial: 0,
             channel_view,
             isolated_layers: Vec::new(),
             symmetry: None,

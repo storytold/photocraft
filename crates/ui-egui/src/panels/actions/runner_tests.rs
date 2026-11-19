@@ -2155,3 +2155,36 @@ fn save_hook_closing_the_target_stops_an_imported_close_with_save() {
         assert!(app.session.actions.playback_stack.is_empty());
     }
 }
+
+fn paused_gate(_: &str, _: &Value) -> photocraft_engine::Result<()> {
+    Ok(())
+}
+
+/// A script step's edit runs under its playback's gate; a panic in it must not leave that gate
+/// on the session.
+#[test]
+fn a_panicking_paused_edit_restores_the_session_gate() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let token = app.paused_playbacks.pause("Scripted".into(), 1, Some(paused_gate));
+    assert!(app.session.authorize.is_none());
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = super::runner::within_paused(&mut app, token, |app| {
+            assert!(app.session.authorize.is_some(), "the edit runs under the playback's gate");
+            panic!("a command panicked");
+        });
+    }));
+    assert!(unwound.is_err(), "the panic goes on to the app's guard");
+    assert!(app.session.authorize.is_none(), "the session's own gate is back");
+}
+
+/// After a panic in a script step's edit the playback is over: nothing is left paused to
+/// continue it.
+#[test]
+fn a_panicking_paused_edit_ends_its_playback() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let token = app.paused_playbacks.pause("Scripted".into(), 1, None);
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = super::runner::within_paused(&mut app, token, |_| panic!("a command panicked"));
+    }));
+    assert!(!app.paused_playbacks.holds(token));
+}

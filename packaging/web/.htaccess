@@ -1,4 +1,5 @@
-# Apache (see HOSTING.md). Needs mod_mime; mod_deflate and mod_headers are optional.
+# Apache (see HOSTING.md). Needs mod_mime; mod_deflate is optional. mod_headers is optional for
+# the editor but scripts need it: without it the isolation headers below are not sent.
 AddType application/wasm .wasm
 AddType text/javascript .js
 
@@ -7,6 +8,9 @@ AddType text/javascript .js
 </IfModule>
 
 <IfModule mod_headers.c>
+  # Cross-origin isolation: the page and the script Worker share memory (HOSTING.md, Scripts).
+  Header set Cross-Origin-Opener-Policy "same-origin"
+  Header set Cross-Origin-Embedder-Policy "require-corp"
   <FilesMatch "\.(wasm|js)$">
     Header set Cache-Control "public, max-age=31536000, immutable"
   </FilesMatch>
@@ -14,8 +18,9 @@ AddType text/javascript .js
     Header set Cache-Control "no-cache"
   </FilesMatch>
   # app/: the app's loader and its list of parts keep their names from release to release; the
-  # parts (the app's wasm, gzipped and cut up) carry a content hash.
-  <FilesMatch "^(photocraft-web\.js|parts\.txt)$">
+  # parts (the app's wasm, gzipped and cut up) carry a content hash. The script Worker's files,
+  # beside index.html, keep their names too.
+  <FilesMatch "^(photocraft-web\.js|parts\.txt|photocraft-script-worker.*)$">
     Header set Cache-Control "no-cache"
   </FilesMatch>
   <FilesMatch "\.part-[a-z]+$">

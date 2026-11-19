@@ -62,6 +62,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("engine", Class::Layer(5)),
     ("ui-egui", Class::Layer(6)),
     ("automation", Class::Layer(6)),
+    ("script-js", Class::Layer(6)),
     ("platform", Class::Layer(6)),
     ("testkit", Class::Testkit),
     // L7 apps and tooling
