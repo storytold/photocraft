@@ -223,6 +223,7 @@ pub(crate) static PANELS: &[PanelEntry] = &[
     floating("gradientEditor", || tl!("Gradient Editor").to_string(), "blend", [520.0, 440.0], |app, ui| scrolled(app, ui, crate::gradient_ui::editor::show)),
     floating("measurementLog", || tl!("Measurement Log").to_string(), "ruler", [620.0, 320.0], crate::tools::analysis::log_panel::body),
     floating("notes", || tl!("Notes").to_string(), "square_plus", [260.0, 300.0], |app, ui| scrolled(app, ui, crate::tools::analysis::notes_panel::body)),
+    floating("aiAssistant", || tl!("AI Assistant").to_string(), "sparkles", [380.0, 580.0], super::ai_assistant::body),
 ];
 
 /// The Color panel menu's states, from the panel's own state.
@@ -304,6 +305,7 @@ fn float_rect(id: &str, size: [f32; 2]) -> Rect {
     let min = match id {
         "measurementLog" => pos2(REFERENCE_WIDTH - 300.0 - size[0], 470.0),
         "notes" => pos2(REFERENCE_WIDTH - 40.0 - size[0], 300.0),
+        "aiAssistant" => pos2(REFERENCE_WIDTH - 40.0 - size[0], 120.0),
         _ => pos2(400.0, 140.0),
     };
     Rect::from_min_size(min, vec2(size[0], size[1]))

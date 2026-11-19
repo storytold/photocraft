@@ -18,7 +18,7 @@ use crate::AutomationServices;
 pub(super) fn sync_agent_link(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let integrations = app.session.prefs().integrations.clone();
     let legacy = integrations.connect_agents;
-    let allowed = app.services.agent_switch.as_ref().map_or(legacy, |switch| switch.allows(legacy));
+    let allowed = legacy || app.services.agent_switch.as_ref().is_some_and(|switch| switch.allows(legacy));
     let Some(link) = app.services.agent_link.as_mut() else { return };
     let update = link.sync(allowed.then_some(&integrations.agents), &WindowHost::of(ctx));
     if update.stopped {

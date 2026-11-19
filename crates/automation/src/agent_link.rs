@@ -28,7 +28,7 @@ pub const LAUNCHER_APP_ID: &str = "photocraft";
 /// `AI-MCP` flag the launcher's switch, without it a Control Port saved in the preferences
 /// (`connect_agents`).
 pub fn agents_allowed_now(integrations: &Integrations) -> bool {
-    agents::agents_allowed(agents::mcp_flag(), agents::launcher_allows(LAUNCHER_APP_ID), integrations.connect_agents)
+    integrations.connect_agents || agents::agents_allowed(agents::mcp_flag(), agents::launcher_allows(LAUNCHER_APP_ID), integrations.connect_agents)
 }
 
 #[cfg(test)]
