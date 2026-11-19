@@ -88,6 +88,7 @@ pub(super) fn find_replace(s: &mut Session, p: &Value) -> Result<Value> {
             let count: usize = plan.iter().map(|(_, m)| m.len()).sum();
             if count == 0 {
                 s.edit_state.find_cursor = None;
+                s.edit_state.find_start = None;
                 return Ok(json!({"count": 0, "layers": 0}));
             }
             s.edit("Replace All Text", |doc, _| {
@@ -114,7 +115,9 @@ pub(super) fn find_replace(s: &mut Session, p: &Value) -> Result<Value> {
                 .as_ref()
                 .is_some_and(|c| c.find == find && c.case_sensitive == case && c.whole_word == whole && c.forward == forward && c.all_layers == all_layers);
             if !same_query {
+                // A new query starts a new round: forget both the cursor and the round origin.
                 s.edit_state.find_cursor = None;
+                s.edit_state.find_start = None;
             }
             let cursor = s.edit_state.find_cursor.as_ref().map(|c| (c.layer, c.start, c.end));
             let mut changed = None;

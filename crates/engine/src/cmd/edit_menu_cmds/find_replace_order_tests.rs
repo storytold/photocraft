@@ -154,6 +154,21 @@ fn find_next_single_layer_and_change_all_preserved() {
 }
 
 #[test]
+fn changed_query_starts_a_new_round_and_reaches_the_old_origin() {
+    let (mut s, [t1, t2, ..], _) = make_order_doc();
+    s.execute("layer.select", json!({"layer": t1.0})).unwrap();
+    // The round starts at T1: four hits there, then the match in T2.
+    for _ in 0..4 {
+        assert_eq!(find_next(&mut s, true, true).map(|h| h.0), Some(t1));
+    }
+    assert_eq!(find_next(&mut s, true, true), Some((t2, 4, 7, "cat".into())));
+
+    // A query that matches only in the old origin (T1) must be reachable from the cursor in T2.
+    let r = s.execute("edit.findAndReplaceText", json!({"find": "CAT", "action": "find", "forward": true, "allLayers": true, "caseSensitive": true})).unwrap();
+    assert_eq!((r["found"]["layer"].as_u64(), r["found"]["text"].as_str()), (Some(t1.0), Some("CAT")));
+}
+
+#[test]
 fn find_next_from_top_pixel_layer_wraps_to_bottom_type_layer() {
     let (mut s, [t1, ..], top_pixel) = make_order_doc();
     s.execute("layer.select", json!({"layer": top_pixel.0})).unwrap();
