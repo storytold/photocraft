@@ -599,19 +599,6 @@ pub(crate) fn rasterize_passes(
     warp: Option<&Warp>,
     per_colour: bool,
 ) -> Rendered {
-    rasterize_passes_with_rows(layout, transform, format, antialias, warp, per_colour, true)
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn rasterize_passes_with_rows(
-    layout: &TextLayout,
-    transform: &Affine,
-    format: PixelFormat,
-    antialias: AntiAlias,
-    warp: Option<&Warp>,
-    per_colour: bool,
-    sparse_rows: bool,
-) -> Rendered {
     let format = PixelFormat { alpha: true, ..format };
     let rect = ink_rect_warped(layout, transform, warp);
     let (w, h) = (rect.width() as usize, rect.height() as usize);
@@ -695,10 +682,6 @@ pub(crate) fn rasterize_passes_with_rows(
     let limits = Limits { bytes: budget.saturating_sub(deep), work: MAX_PASS_PIXELS.saturating_sub(pass_pixels) };
     if paint_color_glyphs(layout, &xf, warp, &format, antialias, &mut acc, (w, h), limits, &mut dirty_rows).is_none() {
         return nothing(format);
-    }
-    // The full-size oracle visits every row, as the original path did.
-    if !sparse_rows {
-        dirty_rows.fill(true);
     }
     // Unpremultiply.
     unpremultiply(&mut acc, w, n, stride, format.sample, &dirty_rows);
