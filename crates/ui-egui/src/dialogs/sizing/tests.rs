@@ -200,8 +200,10 @@ fn image_size_draws_width_and_height_with_values_and_unit() {
         let shown = value_of(&h, label);
         assert!(shown.iter().any(|v| v == want), "{label} shows {want}: {shown:?}");
     }
-    let pixels = h.query_all_by_label("Pixels").count();
-    assert!(pixels >= 2, "the Width and Height unit selects show Pixels ({pixels} nodes)");
+    for unit in ["Width unit", "Height unit"] {
+        let shown = value_of(&h, unit);
+        assert!(shown.iter().any(|v| v == "Pixels"), "the {unit} select shows Pixels: {shown:?}");
+    }
 
     let width = h.query_all_by_label("Width").find(|n| n.accesskit_node().value().is_some()).expect("the Width field");
     width.click();
