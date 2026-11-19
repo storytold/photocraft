@@ -31,6 +31,9 @@ struct Entries {
     builds: u64,
 }
 
+/// The history's generation and the snapshots' generation.
+type HistoryKey = (u64, u64);
+
 /// One document's values. Those keyed on the document revision are valid for `revision`; the History rows carry
 /// their own key.
 #[derive(Default)]
@@ -46,7 +49,7 @@ struct Entry {
     /// The uncovered rects and the display revision of the document they were measured on.
     uncovered: Option<(u64, Arc<[DocRect]>)>,
     /// The History rows and the history and snapshot generations they were built from.
-    history: Option<((u64, u64), Arc<[HistoryRow]>)>,
+    history: Option<(HistoryKey, Arc<[HistoryRow]>)>,
 }
 
 /// The layers of a document a Move tool drag moves, before the live text edit and Free Transform are added.
