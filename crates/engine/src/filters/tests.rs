@@ -338,11 +338,11 @@ fn recorded_last_filter_replays_the_filter_it_repeated() {
     s.execute("actions.stop", json!({})).unwrap();
     let steps = s.execute("actions.get", json!({"action": "Again"})).unwrap()["steps"].clone();
     assert_eq!(steps, json!([["filter.other.offset", {"horizontal": 3}]]));
-    let action = s.actions.list[0].clone();
+    let action = s.actions.list.actions()[0].clone();
 
     let mut fresh = session();
     paint_pattern(&mut fresh);
-    fresh.actions.list.push(action);
+    fresh.actions.list.push(action).unwrap();
     let played = fresh.execute("actions.play", json!({"action": "Again"})).unwrap();
     assert!(played.get("failed").is_none(), "{played}");
     let mut direct = session();

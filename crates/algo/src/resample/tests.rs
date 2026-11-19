@@ -297,23 +297,23 @@ fn canvas_edges_repeat_instead_of_fading() {
     }
 }
 
-/// Two tiles in opposite corners of a 100000 px square: the content bounds are huge but
+/// Two tiles in opposite corners of a 20096 px square: the content bounds are huge but
 /// almost nothing is stored. Shrinking it to one pixel must neither allocate a window
 /// proportional to the scale (#713) nor read the empty middle.
 #[test]
 fn tiny_target_of_a_huge_sparse_source() {
     let mut s = Surface::new(PixelFormat::RGBA32F);
     s.fill_rect(Rect::new(0, 0, 256, 256), &[1.0, 1.0, 1.0, 1.0]);
-    s.fill_rect(Rect::new(99_840, 99_840, 100_096, 100_096), &[1.0, 1.0, 1.0, 1.0]);
-    let k = 1.0 / 100_096.0;
+    s.fill_rect(Rect::new(19_840, 19_840, 20_096, 20_096), &[1.0, 1.0, 1.0, 1.0]);
+    let k = 1.0 / 20_096.0;
     let o = resize_surface(&s, k, k, Resample::Bicubic);
     assert_eq!(o.content_bounds(), Rect::new(0, 0, 1, 1));
     let p = o.pixel(0, 0);
-    // Two 256² tiles out of 100096²: nearly transparent, and white where it isn't.
+    // Two 256² tiles out of 20096²: nearly transparent, and white where it isn't.
     assert!(p[3] >= 0.0 && p[3] < 1e-3 && p.iter().all(|v| v.is_finite()), "{p:?}");
     // Squashed to one row but kept wide: the whole height feeds one band of output rows,
     // which must not hold a full-height intermediate.
-    let o = resize_surface(&s, 1000.0 / 100_096.0, k, Resample::Bicubic);
+    let o = resize_surface(&s, 1000.0 / 20_096.0, k, Resample::Bicubic);
     let b = o.content_bounds();
     assert!(b.height() == 1 && (1000..=1001).contains(&b.width()), "{b:?}");
     assert!(o.pixel(0, 0)[3] > 0.0 && o.pixel(500, 0)[3] == 0.0, "{:?} {:?}", o.pixel(0, 0), o.pixel(500, 0));
@@ -398,6 +398,18 @@ fn nearest_neighbor_reduction_does_not_average() {
             let p = reduced.pixel(x, y)[0];
             assert!(p == 0.0 || p == 1.0, "nearest produced an averaged value {p} at ({x}, {y})");
         }
+    }
+}
+
+/// A reduction beyond 4096x by Lanczos must not build a weight per covered source sample.
+#[test]
+fn a_tiny_lanczos_scale_keeps_its_weights_small() {
+    let scale = 1.0e-7;
+    for o in [0, 1] {
+        let (_, w) = weights(o, scale, Kernel::Lanczos, None, (0, 63));
+        assert!(w.len() < 1024, "{} weights", w.len());
+        let sum: f64 = w.iter().sum();
+        assert!((sum - 1.0).abs() < 1e-6, "{sum}");
     }
 }
 

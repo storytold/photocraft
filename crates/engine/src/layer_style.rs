@@ -9,7 +9,7 @@ use photocraft_doc::{
 };
 use serde_json::{Value, json};
 
-use crate::commands::{CommandSpec, blend_from_str};
+use crate::commands::{CommandSpec, parse_blend};
 use crate::presets::{always, bad};
 use crate::{EngineError, Result, Session};
 
@@ -512,7 +512,7 @@ pub fn contour_from_param(v: &Value) -> Option<Contour> {
 /// The contours of an `.shc` contour preset file (Contour Editor › Load…), as `contour` params.
 /// Points are rescaled from the file's `0..=255` levels; unusable curves are skipped.
 pub fn contours_from_shc(bytes: &[u8]) -> Result<Vec<Value>> {
-    let file = photocraft_psd::shc::parse(bytes).map_err(|e| EngineError::Other(format!("not a contour file: {e}")))?;
+    let file = craft_psd::shc::parse(bytes).map_err(|e| EngineError::Other(format!("not a contour file: {e}")))?;
     Ok(file
         .into_iter()
         .filter_map(|c| {
@@ -533,7 +533,7 @@ pub fn contour_to_shc(contour: &Contour) -> Result<Vec<u8>> {
 
 /// An `.shc` file holding every contour of `list` (Save Contours…).
 pub fn contour_to_shc_all(list: &[&Contour]) -> Result<Vec<u8>> {
-    let file: Vec<photocraft_psd::shc::ShcContour> = list
+    let file: Vec<craft_psd::shc::ShcContour> = list
         .iter()
         .map(|contour| {
             let (name, points) = match contour {
@@ -543,12 +543,12 @@ pub fn contour_to_shc_all(list: &[&Contour]) -> Result<Vec<u8>> {
             let points = points
                 .iter()
                 .enumerate()
-                .map(|(i, p)| photocraft_psd::shc::ShcPoint { input: p.input * 255.0, output: p.output * 255.0, continuous: !contour.is_corner(i) })
+                .map(|(i, p)| craft_psd::shc::ShcPoint { input: p.input * 255.0, output: p.output * 255.0, continuous: !contour.is_corner(i) })
                 .collect();
-            photocraft_psd::shc::ShcContour { name, points }
+            craft_psd::shc::ShcContour { name, points }
         })
         .collect();
-    photocraft_psd::shc::write(&file).map_err(|e| EngineError::Other(format!("can't write the contour: {e}")))
+    craft_psd::shc::write(&file).map_err(|e| EngineError::Other(format!("can't write the contour: {e}")))
 }
 
 /// An effect of `kind` with its factory settings (before params are applied).
@@ -714,7 +714,7 @@ fn overlay_common(c: &mut FxCommon, p: &Value) {
     if let Some(x) = b_of(p, "enabled") {
         c.enabled = x;
     }
-    if let Some(x) = p.get("blend").and_then(Value::as_str).and_then(blend_from_str) {
+    if let Some(x) = p.get("blend").and_then(Value::as_str).and_then(parse_blend) {
         c.blend = x;
     }
     if let Some(x) = f_of(p, "opacity") {
@@ -883,10 +883,10 @@ fn overlay_bevel(bv: &mut Bevel, p: &Value) {
     }
     overlay_contour(p, "glossContour", &mut bv.gloss_contour);
     overlay_bool(p, "glossAntiAlias", &mut bv.gloss_anti_alias);
-    if let Some(blend) = p.get("highlightBlend").and_then(Value::as_str).and_then(blend_from_str) {
+    if let Some(blend) = p.get("highlightBlend").and_then(Value::as_str).and_then(parse_blend) {
         bv.highlight.blend = blend;
     }
-    if let Some(blend) = p.get("shadowBlend").and_then(Value::as_str).and_then(blend_from_str) {
+    if let Some(blend) = p.get("shadowBlend").and_then(Value::as_str).and_then(parse_blend) {
         bv.shadow.blend = blend;
     }
     overlay_color(p, "highlightColor", &mut bv.highlight_color);
