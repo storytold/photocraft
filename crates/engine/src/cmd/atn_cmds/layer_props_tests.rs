@@ -150,3 +150,71 @@ fn expanded_properties_replay_like_direct_edits_at_every_depth() {
         }
     }
 }
+
+const ADJUSTMENT_COMMAND: &str = "layer.newAdjustmentLayer.brightnessContrast";
+const ADJUSTMENT_ACTION: &str = "Make adjustment";
+
+fn adjustment_session() -> Session {
+    let mut session = Session::new();
+    session.execute("file.new", json!({"width": 2, "height": 2})).unwrap();
+    session
+}
+
+fn set_adjustment_action(session: &mut Session, opacity: Option<f64>) {
+    let mut params = json!({"brightness": 100});
+    if let Some(opacity) = opacity {
+        params["opacity"] = json!(opacity);
+    }
+    let actions = vec![Action::new(ADJUSTMENT_ACTION, vec![ActionStep::new(ADJUSTMENT_COMMAND, params)])];
+    session.actions.list = ActionList::from_file(ActionsFile::new(actions, Vec::new()));
+}
+
+fn play_adjustment_opacity(session: &mut Session) -> f32 {
+    let result = session.execute("actions.play", json!({"action": ADJUSTMENT_ACTION})).unwrap();
+    assert!(result["failed"].is_null(), "{result}");
+    let state = session.active().unwrap();
+    state.doc.layer(state.active_layer.unwrap()).unwrap().opacity
+}
+
+#[test]
+fn adjustment_opacity_strict_export_refuses_loss_before_writing() {
+    let mut session = adjustment_session();
+    set_adjustment_action(&mut session, Some(0.371));
+    assert_eq!(play_adjustment_opacity(&mut session), 0.371_f32, "native playback keeps the finer opacity");
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("existing.atn");
+    let previous = b"existing action";
+    std::fs::write(&path, previous).unwrap();
+    let request = json!({"action": ADJUSTMENT_ACTION, "path": path, "skipUnsupported": false});
+    let error = session.execute("actions.save", request).unwrap_err().to_string();
+    assert!(error.contains(ADJUSTMENT_COMMAND), "{error}");
+    assert_eq!(std::fs::read(path).unwrap(), previous);
+
+    let saved = session.execute("actions.save", json!({"action": ADJUSTMENT_ACTION, "skipUnsupported": true})).unwrap();
+    assert_eq!(saved["skipped"], json!([{"action": ADJUSTMENT_ACTION, "step": 0, "id": ADJUSTMENT_COMMAND}]));
+    assert_eq!(saved["steps"], 0);
+}
+
+#[test]
+fn adjustment_opacity_strict_export_preserves_representable_values() {
+    for opacity in [None, Some(0.0), Some(95.0 / 255.0), Some(f64::from(95.0_f32 / 255.0)), Some(179.0 / 255.0), Some(1.0)] {
+        let mut source = adjustment_session();
+        set_adjustment_action(&mut source, opacity);
+        let expected = play_adjustment_opacity(&mut source);
+        let saved = source.execute("actions.save", json!({"action": ADJUSTMENT_ACTION})).unwrap();
+        assert_eq!(saved["skipped"], json!([]));
+        let data = saved["data"].as_str().unwrap();
+
+        let mut restored = adjustment_session();
+        restored.execute("actions.load", json!({"data": data})).unwrap();
+        assert_eq!(play_adjustment_opacity(&mut restored), expected, "{opacity:?}");
+
+        if opacity == Some(179.0 / 255.0) {
+            let bytes = photocraft_paint::tile::b64_decode(data).unwrap();
+            let file = atn::parse(&bytes).unwrap();
+            let using = get_obj(file.actions[0].items[0].descriptor.as_ref().unwrap(), "Usng").unwrap();
+            assert_eq!(get_num(using, "Opct"), Some(70.0), "keep the recorded whole percent");
+        }
+    }
+}

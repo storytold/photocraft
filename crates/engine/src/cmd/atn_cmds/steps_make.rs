@@ -619,8 +619,7 @@ pub(super) fn make_from(d: &Descriptor) -> Mapped {
                         return Mapped::Unsupported { harmless: false };
                     };
                     let Some((_, Value::Object(params))) = mapped.first_mut() else { return Mapped::Unsupported { harmless: false } };
-                    // Recorded layer opacity uses 0..255 even in a 16-bit document.
-                    params.insert("opacity".into(), ((opacity * 255.0 / 100.0).round() / 255.0).into());
+                    params.insert("opacity".into(), adjustment_opacity_from_percent(opacity).into());
                 }
                 // Name, blend mode and clipping travel on the same command; an unreadable value
                 // keeps the whole step rather than replaying a different layer (#8384).
@@ -712,14 +711,19 @@ pub(super) fn make_from(d: &Descriptor) -> Mapped {
     }
 }
 
-/// The percent to save for an adjustment layer's opacity. Loading quantises a recorded percent
-/// to 8 bits (70 % becomes 179/255); a whole percent that quantises to that same level is the
-/// one that was recorded, so it is saved back (load then save keeps `70`, not `70.196`).
-fn recorded_percent(opacity: f64) -> f64 {
+/// Recorded adjustment layer opacity uses 0..255 even in a 16-bit document.
+fn adjustment_opacity_from_percent(percent: f64) -> f64 {
+    (percent * 255.0 / 100.0).round() / 255.0
+}
+
+/// The percent to save when loading it preserves the layer's stored opacity. Prefer a whole
+/// percent that gives the same level, so loading and saving 70 % keeps its descriptor value.
+fn recorded_percent(opacity: f64) -> Option<f64> {
     let level = opacity * 255.0;
     let percent = opacity * 100.0;
     let whole = percent.round();
-    if (level - level.round()).abs() < 1e-6 && (whole * 255.0 / 100.0).round() == level.round() { whole } else { percent }
+    let recorded = if (level - level.round()).abs() < 1e-6 && (whole * 255.0 / 100.0).round() == level.round() { whole } else { percent };
+    (adjustment_opacity_from_percent(recorded) as f32 == opacity as f32).then_some(recorded)
 }
 
 /// Write a creation step, refusing native options the target descriptor cannot carry; Type to
@@ -916,7 +920,7 @@ fn adjustment_layer_to(id: &str, p: &Value) -> Option<Descriptor> {
     };
     let mut using = desc("AdjL").with("Type", D::Descriptor(t));
     if let Some(opacity) = opacity {
-        using = using.with("Opct", pct(recorded_percent(opacity)));
+        using = using.with("Opct", pct(recorded_percent(opacity)?));
     }
     if let Some(name) = name {
         using = using.with("Nm  ", text(name));
