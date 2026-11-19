@@ -1650,10 +1650,11 @@ fn large_move(depth: u64) -> Session {
 }
 
 #[test]
-fn content_aware_move_previews_large_selections_coarse_then_exact_at_all_depths() {
+fn content_aware_move_previews_large_selections_coarse_then_exact() {
     use crate::jobs::JobCtx;
     let p = json!({"offset": [250, 60]});
-    for depth in DEPTHS {
+    // The small move test covers all depths; the preview sequence needs one.
+    for depth in [8] {
         let mut s = large_move(depth);
         let before = s.active().unwrap().revision;
         let job = content_aware_move_preview(&s, &p).unwrap();
@@ -1684,9 +1685,6 @@ fn content_aware_move_previews_large_selections_coarse_then_exact_at_all_depths(
         let fine = job.refine().unwrap();
         assert!(!fine.is_coarse() && fine.refine().is_none());
         assert!(matches!(fine.run(&ctx), Err(EngineError::Cancelled)), "depth {depth}");
-        if depth != 8 {
-            continue;
-        }
         // The refined preview is the command's result, bit for bit.
         let (exact, _) = fine.run(&JobCtx::new()).unwrap();
         assert_eq!(s.active().unwrap().revision, before);
@@ -1700,15 +1698,21 @@ fn content_aware_move_previews_large_selections_coarse_then_exact_at_all_depths(
 #[test]
 fn content_aware_move_coarse_preview_handles_transform_extend_and_limits() {
     use crate::jobs::JobCtx;
-    let s = large_move(8);
+    let mut s = session(128, 64, 8, "rgb");
+    paint_layer(&mut s, with_object(20, 26));
+    s.execute("select.rect", json!({"x": 16, "y": 22, "width": 20, "height": 20})).unwrap();
     let px = |d: &Document, x, y| d.layers[0].surface().unwrap().rgba(x, y);
-    // Transform On Drop: turned 90° about the selection's centre (210, 160), then moved; the
-    // object sits at the centre, so it lands at (460, 220) either way.
-    let (turned, _) = content_aware_move_preview(&s, &json!({"offset": [250, 60], "rotate": 90})).unwrap().run(&JobCtx::new()).unwrap();
-    assert!(is_object(px(&turned, 460, 220)) && !is_object(px(&turned, 210, 160)));
+    // A 400-pixel selection is just over the preview budget. It turns about its centre and moves.
+    let preview = |p: &Value| content_aware_move::preview_with_pixel_budget(&s, p, 399);
+    let job = preview(&json!({"offset": [70, 0], "rotate": 90})).unwrap();
+    assert!(job.is_coarse());
+    let (turned, _) = job.run(&JobCtx::new()).unwrap();
+    assert!(is_object(px(&turned, 96, 32)) && !is_object(px(&turned, 26, 32)));
     // Extend keeps the original.
-    let (extended, _) = content_aware_move_preview(&s, &json!({"offset": [250, 60], "mode": "extend"})).unwrap().run(&JobCtx::new()).unwrap();
-    assert!(is_object(px(&extended, 460, 220)) && is_object(px(&extended, 210, 160)));
+    let job = preview(&json!({"offset": [70, 0], "mode": "extend"})).unwrap();
+    assert!(job.is_coarse());
+    let (extended, _) = job.run(&JobCtx::new()).unwrap();
+    assert!(is_object(px(&extended, 96, 32)) && is_object(px(&extended, 26, 32)));
     // Off the canvas, or past the command's own limit, is still an error.
     assert!(content_aware_move_preview(&s, &json!({"offset": [400, 0]})).is_err());
     let mut big = session(5000, 4000, 8, "rgb");
