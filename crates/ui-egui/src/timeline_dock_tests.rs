@@ -351,7 +351,7 @@ fn clicking_the_other_field_keeps_the_delay_menu_open_for_typing() {
 }
 
 /// Clicks frame `i` of the strip with `modifiers` held.
-fn click_frame(h: &mut Harness<'static, PhotocraftApp>, r: egui::Rect, i: usize, modifiers: egui::Modifiers) {
+fn click_frame(h: &mut Harness<'static, Box<PhotocraftApp>>, r: egui::Rect, i: usize, modifiers: egui::Modifiers) {
     let pos = egui::pos2(r.left() + 42.0 + i as f32 * 90.0, r.top() + 62.0);
     h.event_modifiers(egui::Event::PointerMoved(pos), modifiers);
     h.run_steps(1);
@@ -362,11 +362,11 @@ fn click_frame(h: &mut Harness<'static, PhotocraftApp>, r: egui::Rect, i: usize,
     h.run_steps(2);
 }
 
-fn selected(h: &Harness<'static, PhotocraftApp>) -> Vec<usize> {
+fn selected(h: &Harness<'static, Box<PhotocraftApp>>) -> Vec<usize> {
     crate::timeline_ui::selection(h.state()).into_iter().collect()
 }
 
-fn five_frames() -> Harness<'static, PhotocraftApp> {
+fn five_frames() -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = harness();
     for (i, s) in [1.0, 2.0, 3.0].iter().enumerate() {
         h.state_mut().run("animation.setDelay", json!({"seconds": s, "frames": [i]})).unwrap();
@@ -404,7 +404,7 @@ fn commands_cover_every_selected_frame() {
     assert_eq!(h.state().ui.timeline.clipboard.len(), 2);
     h.event(egui::Event::Paste(String::new()));
     h.run_steps(3);
-    let delays = |h: &Harness<'static, PhotocraftApp>| anim(h).frames.iter().map(|f| f.delay_ms).collect::<Vec<_>>();
+    let delays = |h: &Harness<'static, Box<PhotocraftApp>>| anim(h).frames.iter().map(|f| f.delay_ms).collect::<Vec<_>>();
     assert_eq!(delays(&h), [1000, 2000, 3000, 2000, 3000, 2000, 3000]);
     assert_eq!(selected(&h), [3, 4], "the pasted frames are selected");
     // Delete the selection.
