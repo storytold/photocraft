@@ -771,7 +771,8 @@ mod tests {
     #[test]
     fn a_pattern_at_the_area_limit_is_defined_and_paints() {
         let mut s = Session::new();
-        assert_eq!(photocraft_doc::pattern::max_paint_pixels(SampleType::U8), 8000 * 8000);
+        assert_eq!(MAX_DEFINE_EDGE, 8000);
+        assert!(photocraft_doc::pattern::max_paint_pixels(SampleType::U8) >= 8000 * 8000);
         assert_eq!(photocraft_doc::pattern::working_bytes_for(8000 * 8000, SampleType::U8), 8000 * 8000 * 4);
         let (side, max_px) = (80, 80 * 80);
         s.execute("file.new", json!({"width": side, "height": side, "depth": 8})).unwrap();
@@ -780,7 +781,8 @@ mod tests {
         define_with_max_pixels(&mut s, &json!({"name": "Largest"}), max_px).unwrap();
         let p = s.patterns.items.iter().find(|p| p.name == "Largest").unwrap();
         assert_eq!((p.width, p.height), (side, side));
-        assert!(p.is_paintable() && p.working_bytes() == max_px * 4);
+        // A small pattern uses the expanded float representation, unlike the largest 8-bit one.
+        assert!(p.is_paintable() && p.working_bytes() == max_px * 16);
         s.execute("file.new", json!({"width": 40, "height": 30, "depth": 8})).unwrap();
         s.execute("layer.newFillLayer.pattern", json!({"pattern": "Largest"})).unwrap();
         let [r, g, b, a] = pixel(&s, 5, 5);
