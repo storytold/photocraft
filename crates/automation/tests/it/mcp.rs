@@ -358,6 +358,7 @@ async fn bridge_doc_save_rejects_headless_only_options_instead_of_saving_with_de
     let client = connect(server).await;
     for params in [
         json!({"path": "out.jpg", "quality": 50}),
+        json!({"path": "out.jpg", "jpegSubsampling": "4:4:4"}),
         json!({"path": "out.png", "format": "png"}),
         json!({"path": "out.tif", "tiffLayers": true}),
         json!({"path": "out.pcraft", "pcraftFullComposite": true}),
@@ -423,6 +424,49 @@ async fn headless_doc_save_writes_targa_bits() {
     let r = call(&client, "doc_export", json!({"path": "bad.tga", "tgaBits": 8})).await;
     assert_eq!(r.is_error, Some(true), "{}", text(&r));
     assert!(!dir.join("bad.tga").exists());
+    client.cancel().await.unwrap();
+    cleanup(&dir);
+}
+
+/// The (horizontal, vertical) sampling factors of each JPEG component, read from the frame header.
+fn jpeg_sampling_factors(bytes: &[u8]) -> Vec<(u8, u8)> {
+    let mut i = 2;
+    while i + 4 <= bytes.len() {
+        let marker = bytes[i + 1];
+        let len = usize::from(u16::from_be_bytes([bytes[i + 2], bytes[i + 3]]));
+        if (0xC0..=0xCF).contains(&marker) && ![0xC4, 0xC8, 0xCC].contains(&marker) {
+            let n = usize::from(bytes[i + 9]);
+            return (0..n).map(|c| bytes[i + 11 + 3 * c]).map(|hv| (hv >> 4, hv & 0x0F)).collect();
+        }
+        i += 2 + len;
+    }
+    panic!("no frame header");
+}
+
+/// Headless `doc_save`/`doc_export` write the JPEG chroma sampling asked for: "4:4:4" keeps the
+/// chroma at full resolution, "4:2:0" and no choice subsample it. Any other value is refused and
+/// writes nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn headless_doc_save_writes_jpeg_subsampling() {
+    let dir = tmp("jpeg-subsampling");
+    let client = connect(headless_in(&dir)).await;
+    call(&client, "doc_new", json!({"width": 32, "height": 16, "background": "white"})).await;
+    let (s420, s444) = (vec![(2, 2), (1, 1), (1, 1)], vec![(1, 1), (1, 1), (1, 1)]);
+    for (tool, params, factors) in [
+        ("doc_export", json!({"path": "default.jpg", "quality": 95}), &s420),
+        ("doc_export", json!({"path": "420.jpg", "jpegSubsampling": "4:2:0"}), &s420),
+        ("doc_export", json!({"path": "444.jpg", "jpegSubsampling": "4:4:4", "quality": 95}), &s444),
+        ("doc_save", json!({"path": "saved444.jpg", "jpegSubsampling": "4:4:4"}), &s444),
+    ] {
+        let r = call(&client, tool, params.clone()).await;
+        assert_ne!(r.is_error, Some(true), "{params}: {}", text(&r));
+        let bytes = std::fs::read(dir.join(params["path"].as_str().unwrap())).unwrap();
+        assert_eq!(&jpeg_sampling_factors(&bytes), factors, "{tool} {params}");
+    }
+    let r = call(&client, "doc_export", json!({"path": "bad.jpg", "jpegSubsampling": "4:2:2"})).await;
+    assert_eq!(r.is_error, Some(true), "{}", text(&r));
+    assert!(text(&r).contains("jpegSubsampling"), "{}", text(&r));
+    assert!(!dir.join("bad.jpg").exists());
     client.cancel().await.unwrap();
     cleanup(&dir);
 }
@@ -559,6 +603,28 @@ async fn headless_doc_export_layers_takes_maximize_compatibility() {
     }
     let r = call(&client, "doc_export_layers", json!({"dir": "bad", "format": "psd", "maximizeCompatibility": "no"})).await;
     assert_eq!(r.is_error, Some(true), "{}", text(&r));
+    client.cancel().await.unwrap();
+    cleanup(&dir);
+}
+
+/// `doc_export_layers` passes `jpegSubsampling` on to the layer files; a bad value is refused.
+#[tokio::test(flavor = "multi_thread")]
+async fn headless_doc_export_layers_takes_jpeg_subsampling() {
+    let dir = tmp("export-layers-jpeg-subsampling");
+    let client = connect(headless_in(&dir)).await;
+    call(&client, "doc_new", json!({"width": 32, "height": 16, "background": "white", "name": "card"})).await;
+    for (params, factors) in [
+        (json!({"dir": "default", "format": "jpg", "quality": 12}), vec![(2, 2), (1, 1), (1, 1)]),
+        (json!({"dir": "full", "format": "jpg", "quality": 12, "jpegSubsampling": "4:4:4"}), vec![(1, 1), (1, 1), (1, 1)]),
+    ] {
+        let result = json_of(&call(&client, "doc_export_layers", params.clone()).await);
+        assert_eq!(result["count"], 1, "{params}: {result}");
+        let bytes = std::fs::read(dir.join(result["files"][0].as_str().unwrap())).unwrap();
+        assert_eq!(jpeg_sampling_factors(&bytes), factors, "{params}");
+    }
+    let r = call(&client, "doc_export_layers", json!({"dir": "bad", "format": "jpg", "jpegSubsampling": "4:1:1"})).await;
+    assert_eq!(r.is_error, Some(true), "{}", text(&r));
+    assert!(text(&r).contains("jpegSubsampling"), "{}", text(&r));
     client.cancel().await.unwrap();
     cleanup(&dir);
 }

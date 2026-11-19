@@ -17,6 +17,9 @@ pub(crate) struct SaveOpts {
     pub quality: Option<f64>,
     /// JPEG Options › Format Options (`"jpegFormat"`); unset, Baseline ("Standard").
     pub jpeg_format: Option<photocraft_codecs::JpegFormat>,
+    /// JPEG chroma sampling (`"jpegSubsampling"`): `Some(true)` is 4:2:0, `Some(false)` 4:4:4;
+    /// unset, the encoder's default (4:2:0 for RGB).
+    pub jpeg_chroma_subsampling: Option<bool>,
     /// TIFF: keep the layers. Off unless a command's params ask (`"tiffLayers": true`).
     pub tiff_layers: bool,
     /// Targa: 24 or 32 bits per pixel (`"tgaBits"`); unset, 32 with an alpha channel or
@@ -55,6 +58,7 @@ impl Default for SaveOpts {
         SaveOpts {
             quality: None,
             jpeg_format: None,
+            jpeg_chroma_subsampling: None,
             tiff_layers: false,
             tga_bits: None,
             dpx_bits: None,
@@ -72,8 +76,9 @@ impl Default for SaveOpts {
 }
 
 impl SaveOpts {
-    /// `quality`, `jpegFormat`, `tiffLayers` and `tgaBits` from command `cmd`'s params (a
-    /// `jpegFormat` it doesn't name or a `tgaBits` other than 24 or 32 is an error); the image
+    /// `quality`, `jpegFormat`, `jpegSubsampling`, `tiffLayers` and `tgaBits` from command `cmd`'s
+    /// params (a `jpegFormat` or `jpegSubsampling` it doesn't name or a `tgaBits` other than 24 or
+    /// 32 is an error); the image
     /// previews and the PSD merged image from the session's File Handling preferences (Ask When
     /// Saving has no dialog here, so it saves them, as Photoshop's Save As checkbox and its
     /// Maximize Compatibility checkbox both start on); `maximizeCompatibility` decides the merged
@@ -84,6 +89,7 @@ impl SaveOpts {
         Ok(SaveOpts {
             quality: f64_param(p, "quality"),
             jpeg_format: jpeg_format_param(p, cmd)?,
+            jpeg_chroma_subsampling: jpeg_subsampling_param(p, cmd)?,
             tiff_layers: p.get("tiffLayers").and_then(Value::as_bool).unwrap_or(false),
             tga_bits: tga_bits_param(p, cmd)?,
             dpx_bits: dpx_bits_param(p, cmd)?,
@@ -198,6 +204,21 @@ pub fn jpeg_format_param(p: &Value, cmd: &str) -> Result<Option<photocraft_codec
     }
 }
 
+/// The JPEG chroma sampling in `p` (`"jpegSubsampling": "4:2:0" | "4:4:4"`; absent or null: the
+/// encoder's default, 4:2:0 for RGB). `Some(true)` is 4:2:0, `Some(false)` 4:4:4, which keeps the
+/// colour of fine detail (saturated text and line art) at the cost of a larger file. Anything else
+/// is a bad parameter of command `cmd`. Shared like [`tga_bits_param`].
+pub fn jpeg_subsampling_param(p: &Value, cmd: &str) -> Result<Option<bool>> {
+    match p.get("jpegSubsampling") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => match v.as_str() {
+            Some("4:2:0") => Ok(Some(true)),
+            Some("4:4:4") => Ok(Some(false)),
+            _ => Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("`jpegSubsampling` must be \"4:2:0\" or \"4:4:4\", got {v}") }),
+        },
+    }
+}
+
 /// Photoshop's 0–12 JPEG quality as the encoder's 1–100 (0 → 1, 12 → 100, linear between; out of
 /// range is clamped, and NaN or infinite is 100).
 pub fn jpeg_quality(q: f64) -> u8 {
@@ -278,6 +299,9 @@ pub(crate) fn encode(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> R
     }
     if let Some(f) = save.jpeg_format {
         opts.encode.jpeg_format = f;
+    }
+    if let Some(sub) = save.jpeg_chroma_subsampling {
+        opts.encode.jpeg_chroma_subsampling = sub;
     }
     photocraft_io::export(doc, path, &opts).map(|r| (r.bytes, r.warnings)).map_err(|e| EngineError::Other(format!("{path}: {e}")))
 }

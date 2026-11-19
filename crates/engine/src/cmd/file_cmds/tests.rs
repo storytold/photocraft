@@ -1884,6 +1884,141 @@ fn bad_jpeg_formats_are_refused_before_writing() {
     }
 }
 
+/// The (horizontal, vertical) sampling factors in a JPEG's frame header, one per component,
+/// found by walking the segments (a marker byte pair can also occur inside a segment's data).
+fn jpeg_sampling_factors(bytes: &[u8]) -> Vec<(u8, u8)> {
+    let mut i = 2;
+    while i + 4 <= bytes.len() {
+        assert_eq!(bytes[i], 0xFF, "a segment starts at {i}");
+        let marker = bytes[i + 1];
+        let len = usize::from(u16::from_be_bytes([bytes[i + 2], bytes[i + 3]]));
+        // SOF0..SOF15, except DHT (C4), JPG (C8) and DAC (CC).
+        if (0xC0..=0xCF).contains(&marker) && ![0xC4, 0xC8, 0xCC].contains(&marker) {
+            let n = usize::from(bytes[i + 9]);
+            return (0..n).map(|c| bytes[i + 11 + 3 * c]).map(|hv| (hv >> 4, hv & 0x0F)).collect();
+        }
+        i += 2 + len;
+    }
+    panic!("no frame header");
+}
+
+/// `jpegSubsampling` picks the chroma sampling: "4:4:4" keeps the chroma at full resolution,
+/// "4:2:0" halves it both ways, and without it RGB stays 4:2:0 (PhotoCraft's default). The choice
+/// holds at any quality, scan format and depth.
+#[test]
+fn save_a_copy_writes_the_jpeg_subsampling_asked_for() {
+    let dir = tmp("jpeg-subsampling");
+    let (s420, s444) = (vec![(2, 2), (1, 1), (1, 1)], vec![(1, 1), (1, 1), (1, 1)]);
+    for depth in [8, 16, 32] {
+        let mut s = session(40, 30, depth);
+        for (params, factors) in [
+            (json!({}), &s420),
+            (json!({"jpegSubsampling": null, "quality": 12}), &s420),
+            (json!({"jpegSubsampling": "4:2:0", "quality": 12}), &s420),
+            (json!({"jpegSubsampling": "4:4:4", "quality": 12}), &s444),
+            (json!({"jpegSubsampling": "4:4:4", "quality": 3, "jpegFormat": "progressive"}), &s444),
+            (json!({"jpegSubsampling": "4:4:4", "jpegFormat": "optimized"}), &s444),
+        ] {
+            let out = join(&dir, "a.jpg");
+            let mut p = params.clone();
+            p["path"] = json!(out);
+            s.execute("file.saveACopy", p).unwrap();
+            let bytes = std::fs::read(&out).unwrap();
+            assert_eq!(&jpeg_sampling_factors(&bytes), factors, "{depth}-bit {params}");
+            assert_eq!(photocraft_io::import("a.jpg", &bytes).unwrap().document.size.width, 40, "{depth}-bit {params}");
+        }
+    }
+    // Layers to Files takes it too.
+    let mut s = session(40, 30, 8);
+    let layers = join(&dir, "layers");
+    std::fs::create_dir_all(&layers).unwrap();
+    s.execute("file.export.layersToFiles", json!({"dir": layers, "format": "jpg", "jpegSubsampling": "4:4:4"})).unwrap();
+    let written: Vec<_> = std::fs::read_dir(&layers).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).collect();
+    assert!(!written.is_empty());
+    for p in written {
+        assert_eq!(jpeg_sampling_factors(&std::fs::read(&p).unwrap()), s444, "{p:?}");
+    }
+}
+
+/// A Gray JPEG has one component and nothing to subsample, so every choice writes the same bytes,
+/// Baseline Optimized's fitted Huffman tables included (only subsampled RGB gives those up).
+#[test]
+fn gray_jpegs_ignore_the_subsampling_choice() {
+    let dir = tmp("jpeg-subsampling-gray");
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 40, "height": 30, "mode": "gray", "depth": 8, "background": "white"})).unwrap();
+    let out = join(&dir, "gray.jpg");
+    for format in ["baseline", "optimized"] {
+        let mut written = Vec::new();
+        for sub in [json!(null), json!("4:2:0"), json!("4:4:4")] {
+            s.execute("file.saveACopy", json!({"path": out, "jpegFormat": format, "jpegSubsampling": sub})).unwrap();
+            let bytes = std::fs::read(&out).unwrap();
+            assert_eq!(jpeg_sampling_factors(&bytes), [(1, 1)], "{format} {sub}");
+            written.push(bytes);
+        }
+        assert!(written.windows(2).all(|w| w[0] == w[1]), "{format}: every choice writes the same file");
+    }
+}
+
+/// Batch and both Image Processor modes save with the `jpegSubsampling` they are given.
+#[test]
+fn batch_and_image_processor_write_the_jpeg_subsampling_asked_for() {
+    let dir = tmp("jpeg-subsampling-batch");
+    let input = join(&dir, "in");
+    std::fs::create_dir_all(&input).unwrap();
+    png(&input, "a.png", 40, 20, "#ff0000");
+    let s444 = vec![(1, 1), (1, 1), (1, 1)];
+    let s420 = vec![(2, 2), (1, 1), (1, 1)];
+    for (sub, factors) in [(json!(null), &s420), (json!("4:4:4"), &s444)] {
+        let out = join(&dir, "batch");
+        let r = Session::new()
+            .execute("file.automate.batch", json!({"steps": [], "input": input, "output": out, "format": "jpg", "jpegSubsampling": sub}))
+            .unwrap();
+        assert_eq!(r["errors"], json!([]), "{r}");
+        assert_eq!(&jpeg_sampling_factors(&std::fs::read(join(&out, "a.jpg")).unwrap()), factors, "Batch {sub}");
+
+        let out = join(&dir, "processor");
+        let r = Session::new().execute("file.scripts.imageProcessor", json!({"input": input, "output": out, "format": "jpg", "jpegSubsampling": sub})).unwrap();
+        assert_eq!(r["errors"], json!([]), "{r}");
+        let file = r["files"][0].as_str().unwrap().to_owned();
+        assert_eq!(&jpeg_sampling_factors(&std::fs::read(&file).unwrap()), factors, "Image Processor {sub}");
+
+        let out = join(&dir, "per-format");
+        let r = Session::new().execute("file.scripts.imageProcessor", json!({"input": input, "output": out, "jpeg": {"jpegSubsampling": sub}})).unwrap();
+        assert_eq!(r["errors"], json!([]), "{r}");
+        let file = r["files"][0].as_str().unwrap().to_owned();
+        assert_eq!(&jpeg_sampling_factors(&std::fs::read(&file).unwrap()), factors, "Image Processor jpeg section {sub}");
+    }
+    let out = join(&dir, "bad");
+    for params in [
+        json!({"steps": [], "input": input, "output": out, "format": "jpg", "jpegSubsampling": "4:2:2"}),
+        json!({"input": input, "output": out, "format": "jpg", "jpegSubsampling": "4:2:2"}),
+        json!({"input": input, "output": out, "jpeg": {"jpegSubsampling": "4:2:2"}}),
+    ] {
+        let cmd = if params.get("steps").is_some() { "file.automate.batch" } else { "file.scripts.imageProcessor" };
+        let r = Session::new().execute(cmd, params.clone());
+        assert!(matches!(r, Err(EngineError::BadParams { .. })), "{params}: {r:?}");
+        assert!(!std::path::Path::new(&join(&out, "a.jpg")).exists(), "{params}");
+    }
+}
+
+/// A `jpegSubsampling` other than "4:2:0" or "4:4:4" is a bad parameter, reported before anything
+/// is written.
+#[test]
+fn bad_jpeg_subsamplings_are_refused_before_writing() {
+    let dir = tmp("jpeg-subsampling-bad");
+    let mut s = session(8, 8, 8);
+    for bad in [json!("444"), json!("4:2:2"), json!("4:4:4 "), json!(""), json!(444), json!(true), json!(["4:4:4"]), json!({"jpegSubsampling": "4:4:4"})] {
+        let out = join(&dir, "a.jpg");
+        let r = s.execute("file.saveACopy", json!({"path": out, "jpegSubsampling": bad}));
+        assert!(matches!(r, Err(EngineError::BadParams { .. })), "{bad}: {r:?}");
+        assert!(!std::path::Path::new(&out).exists(), "{bad}: nothing written");
+        let r = s.execute("file.export.layersToFiles", json!({"dir": dir, "format": "jpg", "jpegSubsampling": bad}));
+        assert!(matches!(r, Err(EngineError::BadParams { .. })), "{bad}: {r:?}");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "{bad}: no layer written");
+    }
+}
+
 /// Preferences › File Handling › Image Previews decides whether a PSD gets Photoshop's
 /// thumbnail resource (1036): Always and Ask When Saving write it, Never doesn't.
 #[test]

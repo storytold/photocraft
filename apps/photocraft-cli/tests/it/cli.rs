@@ -980,6 +980,52 @@ fn jpeg_format_chooses_the_scans() {
     }
 }
 
+/// `--jpeg-subsampling` picks the chroma sampling, read from the frame header: 4:4:4 keeps the
+/// chroma at full resolution, 4:2:0 and no flag subsample it. A value it doesn't name is a usage
+/// error and nothing is written.
+#[test]
+fn jpeg_subsampling_chooses_the_chroma_sampling() {
+    fn sampling_factors(bytes: &[u8]) -> Vec<(u8, u8)> {
+        let mut i = 2;
+        while i + 4 <= bytes.len() {
+            let marker = bytes[i + 1];
+            let len = usize::from(u16::from_be_bytes([bytes[i + 2], bytes[i + 3]]));
+            if (0xC0..=0xCF).contains(&marker) && ![0xC4, 0xC8, 0xCC].contains(&marker) {
+                let n = usize::from(bytes[i + 9]);
+                return (0..n).map(|c| bytes[i + 11 + 3 * c]).map(|hv| (hv >> 4, hv & 0x0F)).collect();
+            }
+            i += 2 + len;
+        }
+        panic!("no frame header");
+    }
+    let d = tmp("jpeg-subsampling");
+    let a = d.join("a.png");
+    write_png(&a, 16, 8, 3);
+    let (s420, s444) = (vec![(2, 2), (1, 1), (1, 1)], vec![(1, 1), (1, 1), (1, 1)]);
+    for (sub, extra, factors) in [(None, None, &s420), (Some("4:2:0"), None, &s420), (Some("4:4:4"), None, &s444), (Some("4:4:4"), Some("progressive"), &s444)]
+    {
+        let out = d.join("a.jpg");
+        let mut convert = bin();
+        convert.arg("convert").arg(&a).arg(&out).args(["--quality", "95"]);
+        if let Some(v) = sub {
+            convert.args(["--jpeg-subsampling", v]);
+        }
+        if let Some(f) = extra {
+            convert.args(["--jpeg-format", f]);
+        }
+        ok(&mut convert);
+        assert_eq!(&sampling_factors(&std::fs::read(&out).unwrap()), factors, "--jpeg-subsampling {sub:?} --jpeg-format {extra:?}");
+    }
+    for bad in ["444", "4:2:2", ""] {
+        let out = d.join("bad.jpg");
+        let o = bin().arg("convert").arg(&a).arg(&out).args(["--jpeg-subsampling", bad]).output().unwrap();
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert_eq!(o.status.code(), Some(2), "--jpeg-subsampling {bad}");
+        assert!(err.contains("--jpeg-subsampling") && err.contains("expected 4:2:0 or 4:4:4"), "--jpeg-subsampling {bad}: {err}");
+        assert!(!out.exists(), "--jpeg-subsampling {bad} wrote a file");
+    }
+}
+
 /// #9466: `--metadata none` leaves the document's XMP packet and free-form text out of a flat
 /// export from `convert`, `run --out` and `batch`, as Export As's Metadata: None does, and changes
 /// nothing else (pixels, ICC profile, resolution). The default, and `all`, keep them as before (the

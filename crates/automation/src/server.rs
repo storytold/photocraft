@@ -118,6 +118,9 @@ pub struct ExportLayersParams {
     /// Encoder quality, 0..12, for the formats that take one.
     #[serde(default)]
     pub quality: Option<f64>,
+    /// JPEG chroma sampling: "4:2:0" (PhotoCraft's default for RGB) or "4:4:4".
+    #[serde(default, rename = "jpegSubsampling")]
+    pub jpeg_subsampling: Option<String>,
     /// PSD/PSB: write the real merged image (Photoshop's Maximize Compatibility); false writes
     /// Photoshop's white placeholder (Bitmap, Indexed Color and Duotone documents still write the
     /// real image). Unset: the engine's Preferences › File Handling decides.
@@ -193,6 +196,11 @@ pub struct SaveParams {
     /// JPEG or WebP quality 1..100. A WebP saved with a quality is lossy; without one it is lossless.
     #[serde(default)]
     pub quality: Option<u8>,
+    /// JPEG chroma sampling: "4:2:0" (PhotoCraft's default for RGB) or "4:4:4", which keeps the
+    /// colour of fine detail such as saturated text and line art at the cost of a larger file.
+    /// Gray and CMYK JPEGs have no subsampled chroma either way.
+    #[serde(default, rename = "jpegSubsampling")]
+    pub jpeg_subsampling: Option<String>,
     /// TIFF: keep the layers (Photoshop layer data). Off by default: a flat TIFF.
     #[serde(default, rename = "tiffLayers")]
     pub tiff_layers: bool,
@@ -862,6 +870,9 @@ impl PhotocraftMcp {
         if let Some(v) = p.quality {
             opts.insert("quality".into(), json!(v));
         }
+        if let Some(v) = p.jpeg_subsampling {
+            opts.insert("jpegSubsampling".into(), json!(v));
+        }
         if let Some(v) = p.maximize_compatibility {
             opts.insert("maximizeCompatibility".into(), json!(v));
         }
@@ -1265,6 +1276,10 @@ impl PhotocraftMcp {
         if let Some(q) = p.quality.filter(|q| !(1..=100).contains(q)) {
             return Ok(fail(format!("`quality` must be a whole number from 1 to 100, got {q}")));
         }
+        let jpeg_subsampling = match photocraft_engine::file_cmds::jpeg_subsampling_param(&json!({"jpegSubsampling": p.jpeg_subsampling}), "save") {
+            Ok(sub) => sub,
+            Err(e) => return Ok(fail(e.to_string())),
+        };
         let dds_compression = match p.dds_compression.as_deref().map(|c| (c, photocraft_io::DdsCompression::from_name(c))) {
             None => None,
             Some((_, Some(c))) => Some(c),
@@ -1280,6 +1295,7 @@ impl PhotocraftMcp {
             let unsupported: Vec<&str> = [
                 p.format.is_some().then_some("format"),
                 p.quality.is_some().then_some("quality"),
+                jpeg_subsampling.is_some().then_some("jpegSubsampling"),
                 p.tiff_layers.then_some("tiffLayers"),
                 p.pcraft_full_composite.is_some().then_some("pcraftFullComposite"),
                 dpx_bits.is_some().then_some("dpxBits"),
@@ -1343,6 +1359,9 @@ impl PhotocraftMcp {
                     opts.encode.jpeg_quality = q;
                     opts.encode.webp_quality = q;
                     opts.encode.webp_lossless = false;
+                }
+                if let Some(sub) = jpeg_subsampling {
+                    opts.encode.jpeg_chroma_subsampling = sub;
                 }
                 let path = p.path.map(PathBuf::from);
                 let res = h.save(p.index, path.as_deref(), p.format.as_deref(), &opts);

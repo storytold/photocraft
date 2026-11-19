@@ -191,7 +191,12 @@ fn processor_format(s: &Session, key: &str, extension: &'static str, options: &V
         None
     };
     let (params, srgb) = match key {
-        "jpeg" => (json!({"quality": processor_number(options, "quality", 5.0, 12.0)?}), processor_bool(options, "convertToSrgb", false)?),
+        "jpeg" => {
+            // `SaveOpts::from_params` validates the choice; unset stays the encoder default.
+            let subsampling = options.get("jpegSubsampling").cloned().unwrap_or(Value::Null);
+            let params = json!({"quality": processor_number(options, "quality", 5.0, 12.0)?, "jpegSubsampling": subsampling});
+            (params, processor_bool(options, "convertToSrgb", false)?)
+        }
         "psd" => (json!({"maximizeCompatibility": processor_bool(options, "maximizeCompatibility", true)?}), false),
         _ => {
             let compression = if processor_bool(options, "lzw", false)? { "lzw" } else { "none" };
