@@ -2028,7 +2028,11 @@ fn every_paragraph_box_handle_resizes_the_box_with_snapping_on() {
     let scaled = Affine { m: [1.5, 0.0, 0.0, 0.75, 300.0, 300.0] };
     let rotated = Affine { m: [1.2 * 0.94, 1.2 * 0.342, -1.2 * 0.342, 1.2 * 0.94, 300.0, 300.0] };
     for ppp in [1.0, 2.0] {
-        for zoom in [0.25f32, 0.5, 1.0, 2.0] {
+        // The ends of the range only: the frame's handles and their grab area are screen-space parts of the
+        // framework's `TransformBox::text_frame` (`controls.rs`, `frame_box`) and the snap reach is a screen distance,
+        // so the zoom only scales the view, with no step in between. 25 % and 200 % at 1x and 2x span 12.5 % to
+        // 200 % in points, which holds 50 % and 100 %.
+        for zoom in [0.25f32, 2.0] {
             for (name, tf) in [("plain", None), ("scaled", Some(scaled)), ("rotated", Some(rotated))] {
                 let mut app = new_app();
                 assert!(app.ui.extras.snap, "snapping is on by default");
