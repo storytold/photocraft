@@ -41,5 +41,6 @@ pub(super) fn object_selection(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Op
     hint(ui, tl!("Drag a rectangle around the object"));
     Divider::vertical().show(ui);
     select_subject(ui, app, tl!("No subject found — try a rectangle around the object"));
+    crate::panels::options_bar::selection::select_and_mask(ui);
     None
 }
