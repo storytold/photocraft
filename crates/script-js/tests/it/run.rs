@@ -540,8 +540,9 @@ fn unit_value_and_document_handles_do_not_panic_on_hostile_input() {
     }
 }
 
-/// Allows `n` charges, then reports the time limit.
-struct Countdown(u32);
+/// Allows `n` charges, then reports the time limit: a time limit that doesn't depend on how fast
+/// the machine is.
+pub(crate) struct Countdown(pub(crate) u32);
 
 impl Budget for Countdown {
     fn charge(&mut self) -> bool {

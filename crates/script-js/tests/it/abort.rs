@@ -5,10 +5,11 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::Duration;
 
-use photocraft_script_js::{Host, HostError, RunOptions, Runner, Step, Unlimited, WallClock};
+use photocraft_script_js::{Host, HostError, RunOptions, Runner, Step, Unlimited};
 use serde_json::{Value, json};
+
+use crate::run::Countdown;
 
 #[derive(Default)]
 struct Lines(Rc<RefCell<Vec<String>>>);
@@ -71,8 +72,8 @@ fn the_time_limit_skips_finally_and_cannot_be_retried_from_catch() {
     let out = lines.0.clone();
     // Each `finally` would write a line after the stop, and the `catch` would loop forever.
     let src = "for (;;) { try { Math.random(); } catch (e) { for (;;) {} } finally { $.writeln('f'); } }";
-    let budget = WallClock::new(Duration::from_millis(50));
-    let mut r = Runner::new(src, Box::new(lines), Box::new(budget), RunOptions::default()).unwrap();
+    // Counted, not timed: the loop runs a few times on any machine before the limit.
+    let mut r = Runner::new(src, Box::new(lines), Box::new(Countdown(64)), RunOptions::default()).unwrap();
     let Step::Failed(m) = r.step() else { panic!("stopped") };
     assert!(m.contains("time limit"), "{m}");
     let written = out.borrow().len();
@@ -87,7 +88,9 @@ fn a_time_limit_stop_inside_an_async_function_after_await_is_not_lost() {
     let src = "(async function () { await 0; try { for (;;) { Math.random(); } } finally { $.writeln('f'); } })(); $.writeln('sync done');";
     let lines = Lines::default();
     let out = lines.0.clone();
-    let mut r = Runner::new(src, Box::new(lines), Box::new(WallClock::new(Duration::from_millis(50))), RunOptions::default()).unwrap();
+    // Counted, not timed: the synchronous part always finishes, however slow the machine, and the
+    // job's loop then spends the rest.
+    let mut r = Runner::new(src, Box::new(lines), Box::new(Countdown(64)), RunOptions::default()).unwrap();
     let Step::Failed(m) = r.step() else { panic!("the stop in the job ended the run") };
     assert!(m.contains("time limit"), "{m}");
     assert_eq!(*out.borrow(), ["sync done"], "the finally after the stop did not run");
