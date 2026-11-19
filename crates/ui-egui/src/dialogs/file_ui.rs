@@ -228,7 +228,7 @@ mod web_playback_tests {
     }
 
     /// A document of three layers, one of them shown by each of the three frames of a frame animation.
-    fn frame_animation_app() -> PhotocraftApp {
+    fn frame_animation_app() -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 16, "height": 12})).unwrap();
         app.run("layer.new.layer", json!({"name": "A"})).unwrap();
@@ -262,7 +262,7 @@ mod web_playback_tests {
     }
 
     /// A document whose three frames each show one layer, filled white (the Background), red and green.
-    fn colored_frame_animation_app() -> PhotocraftApp {
+    fn colored_frame_animation_app() -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 32, "height": 24})).unwrap();
         app.run("layer.new.layer", json!({"name": "A"})).unwrap();
