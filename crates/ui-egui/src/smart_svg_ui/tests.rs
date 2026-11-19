@@ -20,13 +20,13 @@ impl ExternalSvgSession for TestSession {
     }
 }
 
-struct NativeTestSession(Saves);
+struct NativeTestSession(Saves, &'static str);
 impl ExternalSvgSession for NativeTestSession {
     fn poll(&mut self) -> Option<Result<Vec<u8>, String>> {
         self.0.borrow_mut().pop_front()
     }
     fn poll_vector(&mut self) -> Option<Result<crate::ExternalVectorSave, String>> {
-        self.poll().map(|r| r.map(|bytes| crate::ExternalVectorSave { bytes, preview_svg: Some(SVG.as_bytes().to_vec()) }))
+        self.poll().map(|r| r.map(|bytes| crate::ExternalVectorSave { bytes, preview_svg: Some(self.1.as_bytes().to_vec()) }))
     }
 }
 
@@ -571,14 +571,23 @@ fn embedded_ai_link_table_handoff_preserves_source_until_saved_and_undo_restores
         assert_eq!(editor, ExternalSvgEditor::VectorCraft);
         assert_eq!(*source.bytes, original);
         assert_eq!(source.extension, "ai");
-        Ok(Box::new(NativeTestSession(queue.clone())))
+        // An empty, same-size preview is admissible and yields a real
+        // "nothing to draw" warning from the native update command.
+        let empty_preview = r#"<svg xmlns="http://www.w3.org/2000/svg" width="12" height="8"/>"#;
+        Ok(Box::new(NativeTestSession(queue.clone(), empty_preview)))
     }));
     open(&mut app);
     assert!(calls.borrow().is_empty());
     confirm(&mut app).unwrap();
     assert_eq!(app.session.active().unwrap().doc, before);
+    app.ui.notices.clear();
     saves.borrow_mut().push_back(Ok(b"%PDF-1.6\nedited native AI".to_vec()));
     poll(&mut app, &egui::Context::default());
+    assert_eq!(app.ui.notices.len(), 1);
+    let notice = &app.ui.notices[0];
+    assert!(notice.title.contains("Vector"), "{notice:?}");
+    assert_eq!(notice.tone, craft::theme::variant::Tone::Neutral);
+    assert!(notice.lines.iter().any(|line| line.contains("nothing to draw")));
     let layer = app.session.active().unwrap().doc.layer(id).unwrap();
     assert!(
         matches!(&layer.content,LayerContent::Smart(sm) if matches!(&sm.source,SmartSource::Embedded {file_name,bytes} if file_name=="Logo.ai" && bytes.as_slice()==b"%PDF-1.6\nedited native AI"))
@@ -651,6 +660,38 @@ fn finished_session_retains_final_save_until_target_is_safe() {
     assert_ne!(app.session.active().unwrap().doc, before);
     poll(&mut app, &ctx);
     assert!(app.smart_svg.editing.is_empty());
+}
+
+#[test]
+fn external_svg_save_back_reports_omissions_once_and_keeps_silent_updates_quiet() {
+    for omitted in [false, true] {
+        let (mut app, saves, _) = fixture();
+        open(&mut app);
+        app.smart_svg.pending.as_mut().unwrap().editor = Editor::Illustrator;
+        confirm(&mut app).unwrap();
+        app.ui.notices.clear();
+        let before = app.session.active().unwrap().doc.clone();
+        let child = if omitted { "<image width='2' height='2' href='data:image/png,%00'/>" } else { "" };
+        let svg = SVG.replace("red", "blue").replace("</svg>", &format!("{child}</svg>"));
+        saves.borrow_mut().push_back(Ok(svg.into_bytes()));
+        let ctx = egui::Context::default();
+        poll(&mut app, &ctx);
+        assert_ne!(app.session.active().unwrap().doc, before);
+        assert_eq!(app.smart_svg.editing.len(), 1, "the session keeps the successful new fingerprint");
+        if omitted {
+            assert_eq!(app.ui.notices.len(), 1);
+            assert!(app.ui.notices[0].title.contains("SVG"));
+            assert!(app.ui.notices[0].lines.iter().any(|line| line.contains("embedded") && line.contains("omitted")));
+            assert_eq!(app.ui.notices[0].tone, craft::theme::variant::Tone::Neutral);
+        } else {
+            assert!(app.ui.notices.is_empty(), "{:?}", app.ui.notices);
+        }
+        let notices = app.ui.notices.clone();
+        poll(&mut app, &ctx);
+        assert_eq!(app.ui.notices, notices, "polling the same completed save cannot duplicate a warning");
+        app.session.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(app.session.active().unwrap().doc, before);
+    }
 }
 
 #[test]
