@@ -5,8 +5,7 @@ use photocraft_engine::actions_cmds::{ActionList, ActionsFile};
 use photocraft_engine::{Session, atn_cmds};
 use serde_json::json;
 
-#[path = "../common/csh_fixture.rs"]
-mod csh_fixture;
+use crate::csh_fixture;
 
 const SHAPE_ID: &str = "original-fixture-square";
 
