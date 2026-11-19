@@ -209,6 +209,7 @@ pub use panels::color_hud;
 pub use panels::color_panel_ui;
 pub use panels::comps_ui;
 pub use panels::doc_props_ui;
+use panels::frame_strip_ui;
 pub use panels::histogram_panel;
 pub use panels::history_menu_ui;
 pub use panels::layer_filter_ui;
@@ -980,6 +981,8 @@ mod alt_click_tests;
 mod artboard_first_board_tests;
 #[cfg(test)]
 mod stroke_timing_tests;
+#[cfg(test)]
+mod timeline_dock_tests;
 
 #[cfg(test)]
 mod patch_reset_tool_tests;

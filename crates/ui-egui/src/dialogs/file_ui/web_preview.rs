@@ -34,6 +34,16 @@ pub fn proxy_resample(p: &Value, scale: f64) -> &str {
 /// holds the palette the preview showed. Only palette-affecting options shape it; the table is built from a
 /// proxy of at most 2048 px.
 pub fn prepare_table(app: &PhotocraftApp, p: &mut Value) -> Result<(), String> {
+    // An animated GIF gives each frame its own colours: one table made from the frame on show would be
+    // forced on all of them. It has no table to edit, so none is made (nor kept from another format).
+    if p.get("format").and_then(Value::as_str) == Some("gif") && app.session.active().is_some_and(|st| super::web::animation_frames(&st.doc).is_some()) {
+        if let Some(m) = p.as_object_mut() {
+            for key in ["colorTable", "colorTableEdits"] {
+                m.remove(key);
+            }
+        }
+        return Ok(());
+    }
     if !matches!(p.get("format").and_then(Value::as_str).unwrap_or("jpeg"), "gif" | "png8") || p.get("colorTable").is_some() {
         return Ok(());
     }
