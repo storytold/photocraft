@@ -1,8 +1,10 @@
 //! Batch over Source: Opened Files (#13673). With a destination folder the run writes a copy of
-//! every opened document; the document itself then closes only when it has nothing unsaved and a
-//! file of its own (the owner rule). A document with unsaved changes, a document that was never
-//! saved, a document whose step or write failed and a document the run never reached all keep
-//! their tabs, and without a destination nothing is written and nothing closes.
+//! every opened document; the document itself then closes only when that turn wrote this
+//! document's own copy, it has nothing unsaved and a file of its own, and it is still at the
+//! revision that copy holds (the owner rule). A document with unsaved changes, a document that was
+//! never saved, a document whose step or write failed, a document a later turn worked on and a
+//! document the run never reached all keep their tabs, and without a destination nothing is
+//! written and nothing closes.
 
 use super::*;
 
@@ -324,4 +326,80 @@ fn a_recorded_save_step_closes_the_document_as_the_save_left_it() {
     assert!(s.documents().is_empty(), "the recorded Save leaves nothing unsaved, so the document closes");
     assert_eq!(top_left(&join(&output, "a.png")), [0.0, 1.0, 1.0, 1.0], "the copy carries the edit the save marked");
     assert_eq!(std::fs::read(&source).unwrap(), before, "and Batch still wrote only the copy: the opened file keeps its bytes");
+}
+
+#[test]
+fn a_recorded_save_marks_a_document_clean_only_for_the_turn_that_wrote_it() {
+    let dir = tmp("save-marker-not-a-write");
+    let first = png(&dir, "a.png", 8, 6, "#ff0000");
+    let second = png(&dir, "b.png", 8, 6, "#0000ff");
+    let output = join(&dir, "results");
+    let before_first = std::fs::read(&first).unwrap();
+    let before_second = std::fs::read(&second).unwrap();
+    let mut s = open_as_documents(&[first.clone(), second.clone()]);
+    let result = s
+        .execute(
+            "file.automate.batch",
+            json!({
+                "source": "open", "output": output, "format": "png",
+                "steps": [
+                    ["document.activate", { "offset": 1 }],
+                    ["image.adjustments.invert", {}],
+                    ["file.save", {}],
+                    ["document.activate", { "offset": 1 }],
+                    ["file.saveACopy", {}]
+                ]
+            }),
+        )
+        .unwrap();
+    // Each turn works on the other tab and ends on a save point that selects its own tab again, so
+    // every copy holds the document as that document's own turn left it. `a.png` took its invert
+    // during `b.png`'s turn, and that turn's recorded Save marked `a.png` clean without ever
+    // writing it: a Save marker is proof a step ran, not proof a revision reached the disk.
+    assert_eq!(result["errors"], json!([]), "{result}");
+    assert_eq!(result["files"], json!([join(&output, "a.png"), join(&output, "b.png")]), "{result}");
+    // `b.png`'s own turn wrote its own invert, so it closes; `a.png` took its invert in the other
+    // turn and never had that revision written, so it keeps its tab.
+    assert_eq!(open_names(&s), ["a.png"], "the document whose later edit was never written keeps its tab");
+    let live = photocraft_compose::render(&s.documents()[0].doc, Rect::new(0, 0, 1, 1)).px[0];
+    assert_eq!(live, [0.0, 1.0, 1.0, 1.0], "and the open document still holds that edit");
+    assert!(!s.documents()[0].is_dirty(), "the recorded Save marked it clean, so only the open tab keeps the edit reachable");
+    assert_eq!(top_left(&join(&dir, "a.png")), [1.0, 0.0, 0.0, 1.0], "a.png keeps its source bytes");
+    assert_eq!(top_left(&join(&dir, "b.png")), [0.0, 0.0, 1.0, 1.0], "b.png keeps its source bytes");
+    assert_eq!(std::fs::read(&first).unwrap(), before_first, "and their bytes exactly");
+    assert_eq!(std::fs::read(&second).unwrap(), before_second, "and their bytes exactly");
+    assert_eq!(top_left(&join(&output, "a.png")), [1.0, 0.0, 0.0, 1.0], "a.png's copy predates the invert it took later");
+    assert_eq!(top_left(&join(&output, "b.png")), [1.0, 1.0, 0.0, 1.0], "b.png's copy carries the invert from its own turn");
+}
+
+#[test]
+fn a_document_whose_turn_wrote_another_documents_snapshot_stays_open() {
+    let dir = tmp("turn-wrote-another-document");
+    let first = png(&dir, "a.png", 8, 6, "#ff0000");
+    let second = png(&dir, "b.png", 8, 6, "#0000ff");
+    let output = join(&dir, "results");
+    let before_first = std::fs::read(&first).unwrap();
+    let before_second = std::fs::read(&second).unwrap();
+    let mut s = open_as_documents(&[first.clone(), second.clone()]);
+    let result = s
+        .execute(
+            "file.automate.batch",
+            json!({
+                "source": "open", "output": output, "format": "png",
+                "steps": [["document.activate", { "offset": 1 }], ["file.saveACopy", {}]]
+            }),
+        )
+        .unwrap();
+    assert_eq!(result["errors"], json!([]), "{result}");
+    assert_eq!(result["files"], json!([join(&output, "a.png"), join(&output, "b.png")]), "{result}");
+    // The routing itself is main's: a recorded Save a Copy selects the document active at its end,
+    // so each turn writes the other tab's snapshot under this input's planned name (as
+    // `batch_open_source_exports_later_edits_if_saved_document_stays_active` already pins). Only
+    // the closing decision changes here: neither copy is the document its input names, and a
+    // document the run never wrote keeps its tab.
+    assert_eq!(top_left(&join(&output, "a.png")), [0.0, 0.0, 1.0, 1.0], "a.png's planned copy holds b.png, pinned as today's routing");
+    assert_eq!(top_left(&join(&output, "b.png")), [1.0, 0.0, 0.0, 1.0], "b.png's planned copy holds a.png");
+    assert_eq!(std::fs::read(&first).unwrap(), before_first, "the opened files keep their bytes");
+    assert_eq!(std::fs::read(&second).unwrap(), before_second, "and their bytes exactly");
+    assert_eq!(open_paths(&s), vec![first, second], "neither document is the one its own turn wrote, so both keep their tabs");
 }
