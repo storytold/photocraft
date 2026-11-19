@@ -311,6 +311,7 @@ impl PruneCursor {
 
 #[derive(Clone, Debug)]
 pub struct Surface {
+    generation: u64,
     format: PixelFormat,
     default_pixel: Box<[u8]>,
     tiles: BTreeMap<TileCoord, Arc<Tile>>,
@@ -585,7 +586,23 @@ fn decode_tile_row_rgba(fmt: &PixelFormat, t: &[u8], base: usize, dst: &mut [[f3
     }
 }
 
+// Tokens identify a particular pixel state across surfaces and copy-on-write clones.
+static NEXT_SURFACE_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn fresh_surface_generation() -> u64 {
+    NEXT_SURFACE_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 impl Surface {
+    /// Equal generations identify the same pixel state, including across clones.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    fn note_mutation(&mut self) {
+        self.generation = fresh_surface_generation();
+    }
+
     /// Reads a region into a newly allocated buffer, returning an error instead of aborting if
     /// the requested pixel buffer cannot be represented or reserved.
     pub fn try_read_region(&self, r: Rect) -> Result<Vec<f32>, AllocationError> {
@@ -647,7 +664,7 @@ impl Surface {
 
     /// Transparent/zero surface.
     pub fn new(format: PixelFormat) -> Self {
-        Self { format, default_pixel: vec![0u8; format.bytes_per_pixel()].into_boxed_slice(), tiles: BTreeMap::new() }
+        Self { generation: fresh_surface_generation(), format, default_pixel: vec![0u8; format.bytes_per_pixel()].into_boxed_slice(), tiles: BTreeMap::new() }
     }
 
     /// Surface whose untouched pixels read as `pixel` (normalised channel values).
@@ -687,6 +704,7 @@ impl Surface {
 
     /// Mutable access to a tile, allocating it (filled with the default pixel) or un-sharing it.
     pub fn tile_mut(&mut self, c: TileCoord) -> &mut Tile {
+        self.note_mutation();
         let fmt = self.format;
         let dp = &self.default_pixel;
         let arc = self.tiles.entry(c).or_insert_with(|| Arc::new(Tile::filled(&fmt, dp)));
@@ -696,6 +714,7 @@ impl Surface {
     /// Fallible counterpart to [`Surface::tile_mut`]. Pixel storage is reserved before changing
     /// the surface, and a shared tile is copied only after its replacement has been allocated.
     pub fn try_tile_mut(&mut self, c: TileCoord) -> Result<&mut Tile, AllocationError> {
+        self.note_mutation();
         if let Some(tile) = self.tiles.get(&c) {
             drop(tile.try_bytes().map_err(AllocationError::ScratchRead)?);
         }
@@ -723,6 +742,7 @@ impl Surface {
     /// Writes a region using fallible pixel-tile allocations. Callers that need transactional
     /// document updates should perform this on their staged document copy and commit on success.
     pub fn try_write_region(&mut self, r: Rect, data: &[f32]) -> Result<(), AllocationError> {
+        self.note_mutation();
         let n = self.channels();
         let sample = self.format.sample;
         let expected = (r.width() as usize).checked_mul(r.height() as usize).and_then(|v| v.checked_mul(n)).ok_or(AllocationError::SizeOverflow)?;
@@ -804,6 +824,7 @@ impl Surface {
     /// large it is, and across every surface that shares `interner`. Tiles are copy-on-write, so
     /// editing one splits it off again. Returns the bytes no longer held by this surface alone.
     pub fn share_uniform_tiles(&mut self, interner: &mut TileInterner) -> usize {
+        self.note_mutation();
         let bpp = self.format.bytes_per_pixel();
         let mut saved = 0;
         for t in self.tiles.values_mut() {
@@ -826,6 +847,7 @@ impl Surface {
 
     /// Drop tiles that are entirely the default pixel.
     pub fn prune(&mut self) {
+        self.note_mutation();
         let dp = self.default_pixel.as_ref();
         let bpp = dp.len();
         self.tiles.retain(|_, t| t.bytes().chunks_exact(bpp).any(|px| px != dp));
@@ -844,6 +866,7 @@ impl Surface {
     /// before the last visited coordinate is not visited, one inserted after it is (and dropped
     /// when it holds only the default pixel, which reads the same as an absent tile).
     pub fn prune_batch(&mut self, cursor: &mut PruneCursor, max: usize) -> bool {
+        self.note_mutation();
         if cursor.done {
             return true;
         }
@@ -902,6 +925,7 @@ impl Surface {
     }
 
     pub fn write_pixel(&mut self, x: i32, y: i32, px: &[f32]) {
+        self.note_mutation();
         let (c, base) = self.locate(x, y);
         let n = self.channels();
         let sample = self.format.sample;
@@ -1099,6 +1123,7 @@ impl Surface {
     /// section that must not run another Rayon job on its stack. [`Surface::write_region_par`]
     /// writes the same bytes on all cores.
     pub fn write_region(&mut self, r: Rect, data: &[f32]) {
+        self.note_mutation();
         let n = self.channels();
         let w = r.width() as usize;
         assert_eq!(data.len(), w * r.height() as usize * n, "region data length mismatch");
@@ -1114,6 +1139,7 @@ impl Surface {
     /// queued Rayon job. Callers inside a `OnceLock` initializer or another section that must
     /// not do that use [`Surface::write_region`].
     pub fn write_region_par(&mut self, r: Rect, data: &[f32]) {
+        self.note_mutation();
         let n = self.channels();
         let w = r.width() as usize;
         assert_eq!(data.len(), w * r.height() as usize * n, "region data length mismatch");
@@ -1130,6 +1156,7 @@ impl Surface {
     /// pixel), so they can be edited elsewhere, e.g. in parallel: `Arc::unwrap_or_clone` copies a
     /// tile only if an undo snapshot still shares it. Give them back with [`Surface::put_tiles`].
     pub fn take_tiles(&mut self, r: Rect) -> Vec<(TileCoord, Arc<Tile>)> {
+        self.note_mutation();
         let fmt = self.format;
         let mut blank: Option<Arc<Tile>> = None;
         r.tiles()
@@ -1143,6 +1170,7 @@ impl Surface {
     /// Fallible counterpart to [`Surface::take_tiles`]. Reserves the complete result and any
     /// default tile before removing a tile, so a reservation failure leaves the surface intact.
     pub fn try_take_tiles(&mut self, r: Rect) -> Result<Vec<(TileCoord, Arc<Tile>)>, AllocationError> {
+        self.note_mutation();
         // Counted in u64 and checked before narrowing: on 32-bit targets the grid of a sparse
         // surface's bounds can pass `usize` (and visiting it to count it takes just as long).
         let count = usize::try_from(r.tile_count()).map_err(|_| AllocationError::SizeOverflow)?;
@@ -1162,6 +1190,7 @@ impl Surface {
 
     /// Put tiles back (see [`Surface::take_tiles`]); each replaces the tile at its coordinate.
     pub fn put_tiles(&mut self, tiles: impl IntoIterator<Item = (TileCoord, Arc<Tile>)>) {
+        self.note_mutation();
         for (c, t) in tiles {
             self.tiles.insert(c, t);
         }
@@ -1187,6 +1216,7 @@ impl Surface {
 
     /// Fill a rectangle with one pixel value.
     pub fn fill_rect(&mut self, r: Rect, px: &[f32]) {
+        self.note_mutation();
         let n = self.channels();
         let mut enc = vec![0u8; self.format.bytes_per_pixel()];
         encode_pixel(&self.format, &px[..n], &mut enc);
@@ -1224,6 +1254,7 @@ impl Surface {
 
     /// Write interleaved encoded bytes (same format as the surface) into `r`.
     pub fn write_interleaved(&mut self, r: Rect, bytes: &[u8]) {
+        self.note_mutation();
         let bpp = self.format.bytes_per_pixel();
         let w = r.width() as usize;
         assert_eq!(bytes.len(), w * r.height() as usize * bpp, "interleaved length mismatch");
@@ -1246,6 +1277,7 @@ impl Surface {
     ///
     /// This enters Rayon, as [`Surface::write_region_par`] does.
     pub fn try_write_interleaved(&mut self, r: Rect, bytes: &[u8]) -> Result<(), AllocationError> {
+        self.note_mutation();
         let bpp = self.format.bytes_per_pixel();
         let w = r.width() as usize;
         let expected = w.checked_mul(r.height() as usize).and_then(|v| v.checked_mul(bpp)).ok_or(AllocationError::SizeOverflow)?;
@@ -1273,6 +1305,7 @@ impl Surface {
     where
         F: Fn(i32, i32, &mut [u8]) + Sync,
     {
+        self.note_mutation();
         self.try_prepare_rows(r, |tiles, format, default_pixel| fill_tiles(tiles, r, format, default_pixel, &fill, &|| Ok(())))
     }
 
@@ -1282,6 +1315,7 @@ impl Surface {
     where
         F: Fn(i32, i32, &mut [u8]) + Sync,
     {
+        self.note_mutation();
         self.try_prepare_rows(r, |tiles, format, default_pixel| {
             fill_tiles(tiles, r, format, default_pixel, &fill, &|| ctl.check().map_err(RowWriteError::Cancelled))
         })
@@ -1347,7 +1381,8 @@ impl Surface {
     /// `content` must hold every pixel that isn't the default one (`content_bounds`, say): only
     /// tiles it reaches are kept.
     pub fn translated(&self, dx: i32, dy: i32, content: Rect) -> Surface {
-        let mut out = Surface { format: self.format, default_pixel: self.default_pixel.clone(), tiles: BTreeMap::new() };
+        let mut out =
+            Surface { generation: fresh_surface_generation(), format: self.format, default_pixel: self.default_pixel.clone(), tiles: BTreeMap::new() };
         let sources = || self.tiles.iter().filter(move |(c, _)| !c.rect().intersect(&content).is_empty());
         if dx % TILE_SIZE == 0 && dy % TILE_SIZE == 0 {
             let (tx, ty) = (dx / TILE_SIZE, dy / TILE_SIZE);
@@ -1375,6 +1410,7 @@ impl Surface {
     /// Applies `f` to every colour sample (not alpha), including the default pixel: a tone-curve
     /// change such as linearising when a document becomes 32-bit.
     pub fn map_color(&mut self, f: impl Fn(f32) -> f32) {
+        self.note_mutation();
         let format = self.format;
         let color = format.mode.color_channels();
         let n = format.channels();
