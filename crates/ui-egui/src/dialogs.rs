@@ -745,6 +745,8 @@ mod paths_export_document_bounds_tests;
 pub(crate) mod pattern_fill_ui;
 pub mod preset_group_prompt;
 pub mod rasterize_prompt;
+#[cfg(test)]
+mod scale_effects_layout_tests;
 pub mod screen_picker;
 pub mod select_mask_ui;
 pub mod shape_dialog;
