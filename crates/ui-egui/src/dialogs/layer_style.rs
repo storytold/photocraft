@@ -33,6 +33,8 @@ use serde_json::{Map, Value, json};
 
 use crate::{PhotocraftApp, color_picker_ui};
 
+#[cfg(test)]
+mod bevel_reset_angle_tests;
 pub(crate) mod color_picker;
 mod contour;
 mod gradient_field;
@@ -866,13 +868,26 @@ fn save_new_style(app: &mut PhotocraftApp, dialog: DialogId, layer: LayerId) {
 }
 
 /// Writes the user's default (or the factory defaults before the first Make Default) into the instance.
+/// An effect lit by the shared light takes the dialog's light angle, not the default's own `angle`
+/// (120 for the factory): the same seeding [`fresh_params`] and the draft's `add_instance` apply to a
+/// new instance, so Reset to Default leaves a globally lit effect at the shared angle (#14843).
 fn reset_to_default(app: &mut PhotocraftApp, dialog: DialogId, instance: EffectId) {
-    let Some(kind) = app.framework.dialogs.get_by_id::<HostedLayerStyle>(dialog).and_then(|d| d.draft().style.effect(instance)).map(|e| e.kind) else {
+    let Some((kind, light)) = app
+        .framework
+        .dialogs
+        .get_by_id::<HostedLayerStyle>(dialog)
+        .and_then(|d| d.draft().style.effect(instance).map(|e| (e.kind, f64::from(d.draft().style.global_light))))
+    else {
         return;
     };
     let Ok(v) = app.run("layer.layerStyle.defaultFor", json!({"kind": kind.key()})) else { return };
     let mut values = v["params"].clone();
     drop_from_to(&mut values);
+    if values.get("useGlobalLight").and_then(Value::as_bool) == Some(true)
+        && let Some(o) = values.as_object_mut()
+    {
+        o.insert("angle".into(), json!(light));
+    }
     let params = style_params(kind, &values, None);
     if let Some(d) = app.framework.dialogs.get_mut_by_id::<HostedLayerStyle>(dialog) {
         for (key, value) in params.0 {

@@ -128,7 +128,7 @@ fn row(setup: &[(&str, Value)]) -> (photocraft_engine::Session, LayerStyle) {
     (s, style)
 }
 
-fn harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
+pub(super) fn harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = Harness::builder().with_size(vec2(1500.0, 1000.0)).with_context(app.ctx().clone()).build_ui_state(
         |ui, app: &mut Box<PhotocraftApp>| {
             app.framework.dialogs.run(ui);
