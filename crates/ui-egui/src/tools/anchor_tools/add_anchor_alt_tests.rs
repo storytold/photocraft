@@ -1,6 +1,7 @@
 //! #12709: ⌥ with Add Anchor Point works on a whole subpath, as in the reference application. An
 //! ⌥-click on a segment selects the subpath and records nothing; an ⌥-drag on a segment copies the
 //! subpath and moves the copy (one step, Drag Path). ⌥ never turns the tool into Delete Anchor Point.
+//! The overlay reports these edits (craft-libs#2284); these tests check what PhotoCraft makes of them.
 
 use egui::Modifiers;
 use photocraft_doc::vector::Path;
@@ -10,14 +11,14 @@ use serde_json::json;
 use super::add_anchor_lock_tests::click_with_modifiers;
 use super::delete_anchor_targeted_path_tests::{select_layer, setup, shape_path, steps};
 use crate::PhotocraftApp;
-use crate::canvas::{ToolEvent, tool_event};
+use crate::canvas::testing;
 use crate::direct_select::PathRef;
 use crate::state::Tool;
 
 /// The epic's test document: the saved path "Path 1", targeted in the Paths panel, with the closed
 /// square A (100,300)-(300,500), the open line B (400,300)→(700,300) and the open S-curve C
 /// (400,450)→(700,450).
-fn path_one() -> PhotocraftApp {
+fn path_one() -> Box<PhotocraftApp> {
     let (mut app, _) = setup(Tool::AddAnchorPoint);
     let path = json!({"subpaths": [
         {"closed": true, "knots": [[100, 300], [300, 300], [300, 500], [100, 500]]},
@@ -37,11 +38,16 @@ fn undo_label(app: &PhotocraftApp) -> Option<&str> {
     app.session.active().unwrap().history.undo_label()
 }
 
+/// The canvas maps screen points in f32, so a drag lands within a hundredth of a pixel.
+fn near(got: Point, want: [f64; 2], what: &str) {
+    assert!((got.x - want[0]).abs() < 0.01 && (got.y - want[1]).abs() < 0.01, "{what}: got ({}, {}), want {want:?}", got.x, got.y);
+}
+
 fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2], mods: Modifiers) {
-    tool_event(app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, mods);
-    tool_event(app, ToolEvent::Move { x: (from[0] + to[0]) / 2.0, y: (from[1] + to[1]) / 2.0, pressure: 1.0 }, mods);
-    tool_event(app, ToolEvent::Move { x: to[0], y: to[1], pressure: 1.0 }, mods);
-    tool_event(app, ToolEvent::Up { x: to[0], y: to[1] }, mods);
+    testing::press(app, from, mods);
+    testing::move_to(app, [(from[0] + to[0]) / 2.0, (from[1] + to[1]) / 2.0], mods);
+    testing::move_to(app, to, mods);
+    testing::release(app, to, mods);
 }
 
 #[test]
@@ -69,9 +75,10 @@ fn alt_drag_on_a_segment_copies_the_subpath_and_moves_the_copy_in_one_drag_path_
     assert_eq!(p.subpaths[..3], before.subpaths[..], "A, B and C stay where they were");
     let copy = &p.subpaths[3];
     assert!(!copy.closed);
-    assert_eq!(copy.knots[0].anchor, Point::new(400.0, 500.0));
-    assert_eq!(copy.knots[1].anchor, Point::new(700.0, 500.0));
-    assert_eq!((copy.knots[0].out_ctrl, copy.knots[1].in_ctrl), (Point::new(500.0, 400.0), Point::new(600.0, 600.0)), "handles move with the copy");
+    near(copy.knots[0].anchor, [400.0, 500.0], "the copy's first anchor");
+    near(copy.knots[1].anchor, [700.0, 500.0], "the copy's last anchor");
+    near(copy.knots[0].out_ctrl, [500.0, 400.0], "handles move with the copy");
+    near(copy.knots[1].in_ctrl, [600.0, 600.0], "handles move with the copy");
     assert_eq!(steps(&app), n + 1);
     assert_eq!(undo_label(&app), Some("Drag Path"));
     assert_eq!(app.ui.direct_selection.anchors, vec![[3, 0], [3, 1]], "the copy is selected");
@@ -126,93 +133,10 @@ fn alt_drag_copies_a_subpath_of_the_active_shape_layer() {
     assert_eq!(after["subpaths"].as_array().map(Vec::len), Some(2), "{after}");
     assert_eq!(json_anchors(&after, 0), json_anchors(&before, 0), "the original stays");
     let moved: Vec<[f64; 2]> = json_anchors(&before, 0).into_iter().map(|[x, y]| [x, y - 40.0]).collect();
-    assert_eq!(json_anchors(&after, 1), moved);
+    assert_eq!(json_anchors(&after, 1).len(), moved.len());
+    for (got, want) in json_anchors(&after, 1).into_iter().zip(moved) {
+        near(Point::new(got[0], got[1]), want, "the copy moved up 40 px");
+    }
     assert_eq!(steps(&app), n + 1);
     assert_eq!(undo_label(&app), Some("Drag Path"));
-}
-
-#[test]
-fn alt_shows_no_anchor_to_add_and_the_plus_badge_everywhere() {
-    let mut app = path_one();
-    for at in [[200.0, 300.0], [200.0, 400.0]] {
-        app.hover_doc = Some(at);
-        assert_eq!(crate::canvas::tool_feedback::badge(&app, Tool::AddAnchorPoint, Modifiers::ALT), Some(crate::canvas::tool_feedback::Badge::Add), "{at:?}");
-    }
-    assert_eq!(crate::anchor_tools::effective(Tool::AddAnchorPoint, Modifiers::ALT), Some(Tool::AddAnchorPoint));
-    assert_eq!(crate::anchor_tools::effective(Tool::DeleteAnchorPoint, Modifiers::ALT), Some(Tool::AddAnchorPoint));
-}
-
-#[test]
-fn letting_go_of_alt_before_the_drag_starts_still_duplicates_the_subpath() {
-    // Through the real canvas: the tool sees the press only once egui recognises the drag, so the
-    // keys held at the press decide, as for the selection tools (CodeRabbit on #13977).
-    use egui::{Pos2, Rect, vec2};
-    let ctx = egui::Context::default();
-    let mut app = path_one();
-    app.run("view.actualPixels", json!({})).unwrap();
-    app.sync_views();
-    let mut view = app.ui.views[0].clone();
-    view.zoom = 1.0;
-    view.center = [400.0, 300.0];
-    view.fit_pending = false;
-    view.fill_pending = false;
-    let rect = Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0));
-    let frame = |app: &mut PhotocraftApp, events: Vec<egui::Event>| {
-        let input = egui::RawInput { screen_rect: Some(rect), events, ..Default::default() };
-        let mut out = ctx.run_ui(input, |ui| {
-            crate::canvas::canvas_view(app, ui, 0, rect, view.clone(), true);
-        });
-        out.textures_delta.clear();
-    };
-    let press = |pos: Pos2, pressed: bool, modifiers: Modifiers| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers };
-    let (alt, none) = (Modifiers::ALT, Modifiers::NONE);
-    let (before, n) = (path(&app), steps(&app));
-    // C's middle, (550,450) in the document, is the same screen point at 100 % centred on the document.
-    let start = Pos2::new(550.0, 450.0);
-    frame(&mut app, vec![egui::Event::ModifiersChanged(alt), egui::Event::PointerMoved(start)]);
-    frame(&mut app, vec![press(start, true, alt)]);
-    frame(&mut app, vec![egui::Event::ModifiersChanged(none), egui::Event::PointerMoved(start + vec2(0.0, 25.0))]);
-    frame(&mut app, vec![egui::Event::PointerMoved(start + vec2(0.0, 50.0))]);
-    frame(&mut app, vec![press(start + vec2(0.0, 50.0), false, none)]);
-    let p = path(&app);
-    assert_eq!(p.subpaths.len(), 4, "the subpath was copied, no anchor added: {:?}", p.subpaths.iter().map(|s| s.knots.len()).collect::<Vec<_>>());
-    assert_eq!(p.subpaths[..3], before.subpaths[..]);
-    assert_eq!((p.subpaths[3].knots[0].anchor, p.subpaths[3].knots[1].anchor), (Point::new(400.0, 500.0), Point::new(700.0, 500.0)));
-    assert_eq!((steps(&app), undo_label(&app)), (n + 1, Some("Drag Path")));
-}
-
-#[test]
-fn letting_go_of_alt_before_the_click_ends_still_selects_the_subpath() {
-    // Through the real canvas: a click is replayed on release, so the keys held at the press
-    // decide, as for Object Selection (CodeRabbit on #13977).
-    use egui::{Pos2, Rect, vec2};
-    let ctx = egui::Context::default();
-    let mut app = path_one();
-    app.run("view.actualPixels", json!({})).unwrap();
-    app.sync_views();
-    let mut view = app.ui.views[0].clone();
-    view.zoom = 1.0;
-    view.center = [400.0, 300.0];
-    view.fit_pending = false;
-    view.fill_pending = false;
-    let rect = Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0));
-    let frame = |app: &mut PhotocraftApp, events: Vec<egui::Event>| {
-        let input = egui::RawInput { screen_rect: Some(rect), events, ..Default::default() };
-        let mut out = ctx.run_ui(input, |ui| {
-            crate::canvas::canvas_view(app, ui, 0, rect, view.clone(), true);
-        });
-        out.textures_delta.clear();
-    };
-    let press = |pos: Pos2, pressed: bool, modifiers: Modifiers| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers };
-    let (alt, none) = (Modifiers::ALT, Modifiers::NONE);
-    let (before, n) = (path(&app), steps(&app));
-    // A's top edge, (200,300) in the document.
-    let at = Pos2::new(200.0, 300.0);
-    frame(&mut app, vec![egui::Event::ModifiersChanged(alt), egui::Event::PointerMoved(at)]);
-    frame(&mut app, vec![press(at, true, alt)]);
-    frame(&mut app, vec![egui::Event::ModifiersChanged(none)]);
-    frame(&mut app, vec![press(at, false, none)]);
-    frame(&mut app, vec![]);
-    assert_eq!((path(&app), steps(&app)), (before, n), "no anchor added, no History step");
-    assert_eq!(app.ui.direct_selection.anchors, vec![[0, 0], [0, 1], [0, 2], [0, 3]], "A's four anchors");
 }

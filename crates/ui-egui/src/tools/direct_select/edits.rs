@@ -341,6 +341,9 @@ fn edit_draft(app: &mut PhotocraftApp, edit: impl FnOnce(&mut EditPath) -> bool)
 }
 
 #[cfg(test)]
+#[path = "../anchor_tools/add_anchor_alt_tests.rs"]
+mod add_anchor_alt_tests;
+#[cfg(test)]
 #[path = "../anchor_tools/add_anchor_delete_key_tests.rs"]
 mod add_anchor_delete_key_tests;
 #[cfg(test)]
