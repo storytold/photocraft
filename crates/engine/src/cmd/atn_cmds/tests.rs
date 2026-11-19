@@ -4792,7 +4792,7 @@ fn make_of_the_current_document_imports_as_the_duplicate_command() {
     let d = desc("null").with("null", target_ref("Dcmn")).with("Nm  ", text("Mattifier copy"));
     let loaded = mapped_recording("Mk  ", d);
     assert!(loaded.unsupported.is_empty(), "{:?}", loaded.unsupported);
-    assert_eq!(loaded.actions[0].steps, vec![("image.duplicate".into(), json!({"name": "Mattifier copy"}))]);
+    assert_eq!(loaded.actions[0].steps, vec![ActionStep::new("image.duplicate", json!({"name": "Mattifier copy"}))]);
 }
 
 /// A document referenced by its recorded title duplicates like the `Dplc` handler does.
@@ -4801,7 +4801,7 @@ fn make_of_a_document_by_name_imports_as_the_duplicate_command() {
     let d = desc("null").with("null", D::Reference(vec![ReferenceItem::Name { class: class("Dcmn"), name: UnicodeString::new_nul("Mattifier.tif") }]));
     let loaded = mapped_recording("Mk  ", d);
     assert!(loaded.unsupported.is_empty(), "{:?}", loaded.unsupported);
-    assert_eq!(loaded.actions[0].steps, vec![("image.duplicate".into(), json!({}))]);
+    assert_eq!(loaded.actions[0].steps, vec![ActionStep::new("image.duplicate", json!({}))]);
 }
 
 /// The merged-contents form carries its `Mrgd` flag to the command's `mergedOnly` param.
@@ -4810,7 +4810,7 @@ fn make_document_duplicate_merged_flag_imports_as_merged_only() {
     let d = desc("null").with("null", target_ref("Dcmn")).with("Mrgd", D::Boolean(true));
     let loaded = mapped_recording("Mk  ", d);
     assert!(loaded.unsupported.is_empty(), "{:?}", loaded.unsupported);
-    assert_eq!(loaded.actions[0].steps, vec![("image.duplicate".into(), json!({"mergedOnly": true}))]);
+    assert_eq!(loaded.actions[0].steps, vec![ActionStep::new("image.duplicate", json!({"mergedOnly": true}))]);
 }
 
 /// The Mattifier shape of #15185: after the Make, Flatten Image and CMYK Color keep playing.
@@ -4841,7 +4841,7 @@ fn make_document_duplicate_keeps_the_action_running() {
 fn make_document_duplicate_round_trips_through_save() {
     let d = desc("null").with("null", target_ref("Dcmn")).with("Nm  ", text("Copy")).with("Mrgd", D::Boolean(true));
     let loaded = mapped_recording("Mk  ", d);
-    assert_eq!(loaded.actions[0].steps, vec![("image.duplicate".into(), json!({"name": "Copy", "mergedOnly": true}))]);
+    assert_eq!(loaded.actions[0].steps, vec![ActionStep::new("image.duplicate", json!({"name": "Copy", "mergedOnly": true}))]);
     let (saved, skipped) = export("Dup", &[&loaded.actions[0]], &[], false).unwrap();
     assert!(skipped.is_empty(), "{skipped:?}");
     assert_eq!(import(&saved).unwrap().actions[0].steps, loaded.actions[0].steps);
@@ -4864,10 +4864,10 @@ fn make_document_duplicate_name_must_round_trip() {
         let step = &loaded.actions[0].steps[0];
         if mapped {
             assert!(loaded.unsupported.is_empty(), "{name:?}");
-            assert_eq!(step.0, "image.duplicate", "{name:?}");
-            assert_eq!(step.1["name"], "Mattifier copy", "{name:?}");
+            assert_eq!(step.command, "image.duplicate", "{name:?}");
+            assert_eq!(step.params["name"], "Mattifier copy", "{name:?}");
         } else {
-            assert_eq!(step.0, PHOTOSHOP_STEP, "{name:?}");
+            assert_eq!(step.command, PHOTOSHOP_STEP, "{name:?}");
             let (saved, skipped) = export("Dup", &[&loaded.actions[0]], &[], false).unwrap();
             assert!(skipped.is_empty(), "{name:?}: {skipped:?}");
             let raw = atn::parse(&saved).unwrap();
@@ -4885,7 +4885,7 @@ fn make_document_duplicate_embedded_nul_name_reaches_the_copy() {
     let d = desc("null").with("null", target_ref("Dcmn")).with("Nm  ", D::Text(units()));
     let loaded = mapped_recording("Mk  ", d);
     assert!(loaded.unsupported.is_empty(), "{:?}", loaded.unsupported);
-    assert_eq!(loaded.actions[0].steps, vec![("image.duplicate".into(), json!({"name": "A\0B"}))]);
+    assert_eq!(loaded.actions[0].steps, vec![ActionStep::new("image.duplicate", json!({"name": "A\0B"}))]);
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 8, "height": 6, "name": "Nul"})).unwrap();
     let items = vec![item("Mk  ", "Make", Some(desc("null").with("null", target_ref("Dcmn")).with("Nm  ", D::Text(units()))))];
@@ -4949,12 +4949,12 @@ fn other_make_document_forms_stay_kept_steps() {
         desc("null").with("null", target).with("Usng", D::Descriptor(desc("Chnl"))),
     ] {
         let loaded = mapped_recording("Mk  ", d.clone());
-        assert_eq!(loaded.actions[0].steps[0].0, PHOTOSHOP_STEP, "{:?}", d.items);
+        assert_eq!(loaded.actions[0].steps[0].command, PHOTOSHOP_STEP, "{:?}", d.items);
     }
     // Duplicate Layer into a new document keeps its existing mapping.
     let layer_form = desc("null").with("null", class_ref("Dcmn")).with("Usng", target_ref("Lyr "));
     let loaded = mapped_recording("Mk  ", layer_form);
-    assert_eq!(loaded.actions[0].steps, vec![("layer.duplicate".into(), json!({"document": "new"}))]);
+    assert_eq!(loaded.actions[0].steps, vec![ActionStep::new("layer.duplicate", json!({"document": "new"}))]);
 }
 
 /// Every frame anchor survives import/export; unknown anchors stay available verbatim.
