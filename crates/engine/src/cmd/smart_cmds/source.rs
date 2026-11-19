@@ -418,11 +418,13 @@ pub(super) fn source_image_with(file_name: &str, bytes: &[u8], fmt: PixelFormat,
     source_image_inner(file_name, bytes, fmt, None, ctl)
 }
 
+#[cfg(test)]
 pub(super) fn source_image_classified(file_name: &str, bytes: &[u8], fmt: PixelFormat, svg: bool) -> Result<SourceImage> {
     source_image_classified_with(file_name, bytes, fmt, svg, &Interrupt::NONE)
 }
 
-/// [`source_image_classified`] that stops with [`EngineError::Cancelled`] once `ctl` is cancelled.
+/// Decodes with the format decision the caller already made, and stops with
+/// [`EngineError::Cancelled`] once `ctl` is cancelled.
 pub(super) fn source_image_classified_with(file_name: &str, bytes: &[u8], fmt: PixelFormat, svg: bool, ctl: &Interrupt) -> Result<SourceImage> {
     source_image_inner(file_name, bytes, fmt, Some(svg), ctl)
 }

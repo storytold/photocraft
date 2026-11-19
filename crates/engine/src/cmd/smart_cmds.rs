@@ -79,12 +79,8 @@ pub(crate) fn decode_source_with(file_name: &str, bytes: &[u8], ctl: &photocraft
     decode_source_classified_with(file_name, bytes, photocraft_io::svg::is_svg(bytes), ctl)
 }
 
-/// Reuse the central format decision made by this render operation.
-fn decode_source_classified(file_name: &str, bytes: &[u8], svg: bool) -> Result<Document> {
-    decode_source_classified_with(file_name, bytes, svg, &photocraft_raster::Interrupt::NONE)
-}
-
-/// [`decode_source_classified`] that stops with [`EngineError::Cancelled`] once `ctl` is cancelled.
+/// Decodes with the format decision the caller already made, and stops with
+/// [`EngineError::Cancelled`] once `ctl` is cancelled.
 fn decode_source_classified_with(file_name: &str, bytes: &[u8], svg: bool, ctl: &photocraft_raster::Interrupt) -> Result<Document> {
     let cancelled = |_| EngineError::Cancelled;
     ctl.check().map_err(cancelled)?;
