@@ -1136,137 +1136,6 @@ mod tests {
     }
 
     #[test]
-    fn abandoned_captures_finish_validation_and_stop_requesting_frames() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        let _lock = photocraft_testkit::gpu_lock();
-        let Ok(rs) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())
-        })) else {
-            return;
-        };
-        let gpu = crate::gpu_canvas::GpuCanvas::new(&rs);
-        for valid in [true, false] {
-            let count = Arc::new(AtomicUsize::new(0));
-            let polls = count.clone();
-            let future =
-                std::future::poll_fn(move |_| if polls.fetch_add(1, Ordering::SeqCst) < 2 { std::task::Poll::Pending } else { std::task::Poll::Ready(valid) });
-            let cache = Arc::new(Validated::new(Pipelines::build(&rs.device), future));
-            rs.renderer.write().callback_resources.insert(cache.clone());
-            for _ in 0..3 {
-                assert!(poll_validation(&gpu));
-            }
-            assert!(!validation_pending(&gpu));
-            assert!(!poll_validation(&gpu), "settled or failed validation cannot keep an idle view repainting");
-            assert_eq!(cache.get().is_some(), valid);
-            assert_eq!(count.load(Ordering::SeqCst), 3);
-        }
-    }
-
-    #[test]
-    fn resource_failures_stay_local_for_transform_and_native_move_captures() {
-        let _lock = photocraft_testkit::gpu_lock();
-        let Ok(rs) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())
-        })) else {
-            eprintln!("no software GPU adapter for local preview error handling");
-            return;
-        };
-        if !test_supported(&rs) {
-            return;
-        }
-        let doc = Document::with_background("local preview errors", Size::new(16, 8), ColorMode::Rgb, SampleType::U8, Color::WHITE);
-        let mut session = photocraft_engine::Session::new();
-        session.add_document(doc.clone(), None);
-        session.execute("channel.target", serde_json::json!({"channel":"red"})).unwrap();
-        let mut app = crate::PhotocraftApp::new(session, crate::Services::default());
-        app.sync_views();
-        crate::transform_tool::begin(&mut app, &egui::Context::default()).unwrap();
-        let mut t = crate::channel_transform_preview::Geometry::of(app.ui.transform.as_ref().unwrap());
-        t.quad = t.quad.map(|[x, y]| [x + 1.0, y]);
-        let view = app.session.active().unwrap().channel_view.clone();
-        let gpu = crate::gpu_canvas::GpuCanvas::new(&rs);
-        struct Reset(bool);
-        impl Drop for Reset {
-            fn drop(&mut self) {
-                FORCE_RESOURCE_ERROR.with(|flag| flag.set(self.0));
-            }
-        }
-        for factor in [1, 2] {
-            let id = Some(doc.layers[0].id);
-            let mut preview = test_wait(&rs, || Preview::new_move(&gpu, &doc, id, [0.0; 4], factor)).unwrap();
-            test_wait(&rs, || preview.texture_move(&t, &view, true, false, factor, doc.bounds())).unwrap();
-            {
-                let _reset = Reset(FORCE_RESOURCE_ERROR.with(|flag| flag.replace(true)));
-                let mut failed = Preview::new_move(&gpu, &doc, id, [0.0; 4], factor);
-                assert!(test_wait(&rs, || failed.as_mut()?.texture_move(&t, &view, true, false, factor, doc.bounds())).is_none());
-                if factor == 1 {
-                    let mut changed = t.clone();
-                    changed.warp = Some(Warp::custom(BezierMesh::identity(t.rect, 2, 2).map_points(|[x, y]| [x + 1.0, y]), t.rect));
-                    assert!(test_wait(&rs, || preview.texture(&changed, &view, true, false, factor)).is_none());
-                    assert!(preview.allocation_failed(), "a failed mesh allocation is remembered until the capture is released");
-                } else {
-                    let mut changed = t.clone();
-                    changed.quad = changed.quad.map(|[x, y]| [x + 1.0, y]);
-                    test_wait(&rs, || preview.texture_move(&changed, &view, true, false, factor, doc.bounds())).unwrap();
-                    assert!(!preview.allocation_failed(), "a uniform-only drag does not allocate or wait for resource scopes");
-                }
-                assert!(gpu.health().is_ok(), "a preview resource failure must not fault the shared GPU");
-            }
-            let mut recovered = test_wait(&rs, || Preview::new_move(&gpu, &doc, id, [0.0; 4], factor)).unwrap();
-            test_wait(&rs, || recovered.texture_move(&t, &view, true, false, factor, doc.bounds())).unwrap();
-            assert!(gpu.health().is_ok());
-            assert_eq!(doc.layers, app.session.active().unwrap().doc.layers, "captures and failed draws do not edit the document");
-        }
-    }
-
-    #[test]
-    fn deferred_resource_checks_settle_and_abandoned_captures_do_not_keep_repainting() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        let _lock = photocraft_testkit::gpu_lock();
-        let Ok(rs) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())
-        })) else {
-            return;
-        };
-        for valid in [false, true] {
-            let polls = Arc::new(AtomicUsize::new(0));
-            let count = polls.clone();
-            let validation = Arc::new(Validated::new(
-                (),
-                std::future::poll_fn(move |_| if count.fetch_add(1, Ordering::SeqCst) < 2 { std::task::Poll::Pending } else { std::task::Poll::Ready(valid) }),
-            ));
-            rs.renderer.write().callback_resources.insert(ResourceValidations(vec![Arc::downgrade(&validation)]));
-            for _ in 0..3 {
-                assert!(poll_validation_for(&rs));
-            }
-            assert!(!validation_pending_for(&rs));
-            assert!(!poll_validation_for(&rs));
-            assert_eq!(validation.get().is_some(), valid);
-            assert_eq!(polls.load(Ordering::SeqCst), 3);
-        }
-        let captures = std::cell::Cell::new(0);
-        let retained = test_wait(&rs, || {
-            captures.set(captures.get() + 1);
-            let count = Arc::new(AtomicUsize::new(0));
-            let check = Arc::new(Validated::new(
-                (),
-                std::future::poll_fn(move |_| if count.fetch_add(1, Ordering::SeqCst) < 2 { std::task::Poll::Pending } else { std::task::Poll::Ready(true) }),
-            ));
-            rs.renderer.write().callback_resources.insert(ResourceValidations(vec![Arc::downgrade(&check)]));
-            Some(check)
-        })
-        .unwrap();
-        assert!(retained.get().is_some());
-        assert_eq!(captures.get(), 1, "a returned capture stays alive while its resource scopes settle");
-        let pending = Arc::new(Validated::new((), std::future::pending()));
-        rs.renderer.write().callback_resources.insert(ResourceValidations(vec![Arc::downgrade(&pending)]));
-        assert!(validation_pending_for(&rs));
-        drop(pending);
-        assert!(!poll_validation_for(&rs));
-        assert!(!validation_pending_for(&rs));
-    }
-
-    #[test]
     fn unsupported_stacks_keep_the_cpu_oracle() {
         let doc = Document::with_background("eligibility", Size::new(4, 4), ColorMode::Rgb, SampleType::U8, Color::WHITE);
         let id = doc.layers[0].id;
@@ -1364,5 +1233,146 @@ mod tests {
         assert!(unfolded_boundary(&mapped, 1).is_none());
         assert!(unfolded_boundary(&mapped, 8).is_none());
         assert!(unfolded_boundary(&[[f64::NAN, 0.0]; 4], 2).is_none());
+    }
+
+    mod gpu_tests {
+        use super::*;
+
+        #[test]
+        fn abandoned_captures_finish_validation_and_stop_requesting_frames() {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            let _lock = photocraft_testkit::gpu_lock();
+            let Ok(rs) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())
+            })) else {
+                return;
+            };
+            let gpu = crate::gpu_canvas::GpuCanvas::new(&rs);
+            for valid in [true, false] {
+                let count = Arc::new(AtomicUsize::new(0));
+                let polls = count.clone();
+                let future =
+                    std::future::poll_fn(
+                        move |_| if polls.fetch_add(1, Ordering::SeqCst) < 2 { std::task::Poll::Pending } else { std::task::Poll::Ready(valid) },
+                    );
+                let cache = Arc::new(Validated::new(Pipelines::build(&rs.device), future));
+                rs.renderer.write().callback_resources.insert(cache.clone());
+                for _ in 0..3 {
+                    assert!(poll_validation(&gpu));
+                }
+                assert!(!validation_pending(&gpu));
+                assert!(!poll_validation(&gpu), "settled or failed validation cannot keep an idle view repainting");
+                assert_eq!(cache.get().is_some(), valid);
+                assert_eq!(count.load(Ordering::SeqCst), 3);
+            }
+        }
+
+        #[test]
+        fn resource_failures_stay_local_for_transform_and_native_move_captures() {
+            let _lock = photocraft_testkit::gpu_lock();
+            let Ok(rs) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())
+            })) else {
+                eprintln!("no software GPU adapter for local preview error handling");
+                return;
+            };
+            if !test_supported(&rs) {
+                return;
+            }
+            let doc = Document::with_background("local preview errors", Size::new(16, 8), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+            let mut session = photocraft_engine::Session::new();
+            session.add_document(doc.clone(), None);
+            session.execute("channel.target", serde_json::json!({"channel":"red"})).unwrap();
+            let mut app = crate::PhotocraftApp::new(session, crate::Services::default());
+            app.sync_views();
+            crate::transform_tool::begin(&mut app, &egui::Context::default()).unwrap();
+            let mut t = crate::channel_transform_preview::Geometry::of(app.ui.transform.as_ref().unwrap());
+            t.quad = t.quad.map(|[x, y]| [x + 1.0, y]);
+            let view = app.session.active().unwrap().channel_view.clone();
+            let gpu = crate::gpu_canvas::GpuCanvas::new(&rs);
+            struct Reset(bool);
+            impl Drop for Reset {
+                fn drop(&mut self) {
+                    FORCE_RESOURCE_ERROR.with(|flag| flag.set(self.0));
+                }
+            }
+            for factor in [1, 2] {
+                let id = Some(doc.layers[0].id);
+                let mut preview = test_wait(&rs, || Preview::new_move(&gpu, &doc, id, [0.0; 4], factor)).unwrap();
+                test_wait(&rs, || preview.texture_move(&t, &view, true, false, factor, doc.bounds())).unwrap();
+                {
+                    let _reset = Reset(FORCE_RESOURCE_ERROR.with(|flag| flag.replace(true)));
+                    let mut failed = Preview::new_move(&gpu, &doc, id, [0.0; 4], factor);
+                    assert!(test_wait(&rs, || failed.as_mut()?.texture_move(&t, &view, true, false, factor, doc.bounds())).is_none());
+                    if factor == 1 {
+                        let mut changed = t.clone();
+                        changed.warp = Some(Warp::custom(BezierMesh::identity(t.rect, 2, 2).map_points(|[x, y]| [x + 1.0, y]), t.rect));
+                        assert!(test_wait(&rs, || preview.texture(&changed, &view, true, false, factor)).is_none());
+                        assert!(preview.allocation_failed(), "a failed mesh allocation is remembered until the capture is released");
+                    } else {
+                        let mut changed = t.clone();
+                        changed.quad = changed.quad.map(|[x, y]| [x + 1.0, y]);
+                        test_wait(&rs, || preview.texture_move(&changed, &view, true, false, factor, doc.bounds())).unwrap();
+                        assert!(!preview.allocation_failed(), "a uniform-only drag does not allocate or wait for resource scopes");
+                    }
+                    assert!(gpu.health().is_ok(), "a preview resource failure must not fault the shared GPU");
+                }
+                let mut recovered = test_wait(&rs, || Preview::new_move(&gpu, &doc, id, [0.0; 4], factor)).unwrap();
+                test_wait(&rs, || recovered.texture_move(&t, &view, true, false, factor, doc.bounds())).unwrap();
+                assert!(gpu.health().is_ok());
+                assert_eq!(doc.layers, app.session.active().unwrap().doc.layers, "captures and failed draws do not edit the document");
+            }
+        }
+
+        #[test]
+        fn deferred_resource_checks_settle_and_abandoned_captures_do_not_keep_repainting() {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            let _lock = photocraft_testkit::gpu_lock();
+            let Ok(rs) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())
+            })) else {
+                return;
+            };
+            for valid in [false, true] {
+                let polls = Arc::new(AtomicUsize::new(0));
+                let count = polls.clone();
+                let validation = Arc::new(Validated::new(
+                    (),
+                    std::future::poll_fn(
+                        move |_| if count.fetch_add(1, Ordering::SeqCst) < 2 { std::task::Poll::Pending } else { std::task::Poll::Ready(valid) },
+                    ),
+                ));
+                rs.renderer.write().callback_resources.insert(ResourceValidations(vec![Arc::downgrade(&validation)]));
+                for _ in 0..3 {
+                    assert!(poll_validation_for(&rs));
+                }
+                assert!(!validation_pending_for(&rs));
+                assert!(!poll_validation_for(&rs));
+                assert_eq!(validation.get().is_some(), valid);
+                assert_eq!(polls.load(Ordering::SeqCst), 3);
+            }
+            let captures = std::cell::Cell::new(0);
+            let retained = test_wait(&rs, || {
+                captures.set(captures.get() + 1);
+                let count = Arc::new(AtomicUsize::new(0));
+                let check = Arc::new(Validated::new(
+                    (),
+                    std::future::poll_fn(
+                        move |_| if count.fetch_add(1, Ordering::SeqCst) < 2 { std::task::Poll::Pending } else { std::task::Poll::Ready(true) },
+                    ),
+                ));
+                rs.renderer.write().callback_resources.insert(ResourceValidations(vec![Arc::downgrade(&check)]));
+                Some(check)
+            })
+            .unwrap();
+            assert!(retained.get().is_some());
+            assert_eq!(captures.get(), 1, "a returned capture stays alive while its resource scopes settle");
+            let pending = Arc::new(Validated::new((), std::future::pending()));
+            rs.renderer.write().callback_resources.insert(ResourceValidations(vec![Arc::downgrade(&pending)]));
+            assert!(validation_pending_for(&rs));
+            drop(pending);
+            assert!(!poll_validation_for(&rs));
+            assert!(!validation_pending_for(&rs));
+        }
     }
 }

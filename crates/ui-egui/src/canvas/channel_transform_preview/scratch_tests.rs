@@ -227,6 +227,7 @@ fn cpu_move_bounds_retry() {
 }
 
 fn gpu_off_canvas_retry() {
+    let _gpu = photocraft_testkit::gpu_lock();
     let Ok(rs) =
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())))
     else {
@@ -282,7 +283,7 @@ fn channel_previews_refuse_scratch_placeholders_and_recover() {
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
-                "canvas::channel_transform_preview::scratch_tests::channel_previews_refuse_scratch_placeholders_and_recover",
+                "canvas::channel_transform_preview::scratch_gpu_tests::channel_previews_refuse_scratch_placeholders_and_recover",
                 "--nocapture",
                 "--test-threads=1",
             ])

@@ -2224,5 +2224,26 @@ fn a_waiting_new_layer_click_keeps_the_layer_it_was_made_on() {
     assert_eq!(st.active_layer, Some(new));
 }
 
+/// #15547: once Escape or Enter ends Free Transform, the options bar shows the active tool's members again in the
+/// next frame, not the transform fields.
+#[test]
+fn ending_the_transform_brings_back_the_tools_options_bar() {
+    use egui_kittest::kittest::Queryable as _;
+    for key in [egui::Key::Escape, egui::Key::Enter] {
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        app.ui.tool = Tool::Gradient;
+        let mut h = harness(app, egui::vec2(1400.0, 900.0));
+        h.run_steps(4);
+        let ctx = h.ctx.clone();
+        crate::menus::invoke(h.state_mut(), &ctx, "edit.freeTransform", json!({})).unwrap();
+        h.run_steps(2);
+        assert!(h.query_by_label("Reverse").is_none(), "the transform fields replace the Gradient members");
+        h.key_press(key);
+        h.run_steps(2);
+        assert!(h.state().ui.transform.is_none(), "{key:?} ended the transform");
+        assert!(h.query_by_label("Reverse").is_some(), "after {key:?} the Gradient members are back");
+    }
+}
+
 #[path = "channel_merge_tests.rs"]
 mod channel_merge_tests;

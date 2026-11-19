@@ -84,7 +84,7 @@ pub(super) fn validated<T>(device: &wgpu::Device, build: impl FnOnce() -> T) -> 
 }
 
 #[cfg(test)]
-mod tests {
+mod gpu_tests {
     use super::*;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};

@@ -46,68 +46,6 @@ fn retained_channel_source_preflight_tracks_memory_usage_changes() {
 }
 
 #[test]
-fn reduced_gpu_preview_reports_native_reach_before_any_commit_and_recovers() {
-    let _lock = photocraft_testkit::gpu_lock();
-    let Ok(rs) =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())))
-    else {
-        return;
-    };
-    if !crate::channel_transform_gpu::test_supported(&rs) {
-        return;
-    }
-    for colors in [vec![1], vec![0, 2]] {
-        let mut a = super::tests::app();
-        let mut doc = Document::with_background("native preview limits", Size::new(6000, 1000), ColorMode::Rgb, SampleType::U8, Color::WHITE);
-        let bounds = doc.bounds();
-        doc.layers[0].surface_mut().unwrap().fill_rect(bounds, &[0.2, 0.4, 0.6, 1.0]);
-        a.session.add_document(doc, None);
-        a.set_wgpu(rs.clone());
-        a.run("channel.target", json!({"colors":colors})).unwrap();
-        let before = a.session.active().unwrap().doc.clone();
-        let index = a.session.active_index().unwrap();
-        let ctx = egui::Context::default();
-        crate::transform_tool::begin(&mut a, &ctx).unwrap();
-        let layer = a.session.active().unwrap().active_layer;
-        a.transform_preview.as_mut().unwrap().channel = Some(Box::new(Preview::new(&before, layer, a.session.tools.background, true).unwrap()));
-        crate::channel_transform_preview::edit(&mut a, |t| {
-            t.quad = t.quad.map(|[x, y]| [x + 16.0, y]);
-        });
-        let good = a.ui.transform.as_ref().unwrap().quad_array();
-        assert!(a.transform_preview.as_ref().unwrap().channel.as_ref().unwrap().factor > 1);
-        let gpu = crate::channel_transform_gpu::test_wait(&rs, || texture(&mut a, &ctx, index, None)).unwrap();
-        assert!(a.transform_preview.as_ref().unwrap().channel.as_ref().unwrap().gpu.is_some());
-        let old = a.transform_preview.as_ref().unwrap().channel.as_ref().unwrap().shown.clone();
-        let mut expected = Preview::new(&before, layer, a.session.tools.background, true).unwrap();
-        expected.update(&crate::channel_transform_preview::Geometry::of(a.ui.transform.as_ref().unwrap())).unwrap();
-        let offset = f64::from(photocraft_algo::transform::WARP_REACH) + 64.0;
-        crate::channel_transform_preview::edit(&mut a, |t| {
-            t.quad = good.map(|[x, y]| [x + offset, y]);
-        });
-        let cpu = texture(&mut a, &ctx, index, None).unwrap();
-        assert_ne!(cpu, gpu, "a first refused geometry never returns the GPU texture");
-        assert!(a.ui.status_error && a.ui.status.contains("reach"), "{}", a.ui.status);
-        let shown = &a.transform_preview.as_ref().unwrap().channel.as_ref().unwrap().shown;
-        assert!(!Arc::ptr_eq(&old, shown), "the last valid GPU geometry must be materialized");
-        assert_eq!(shown.layers[0].surface(), expected.shown.layers[0].surface());
-        let message = a.ui.status.clone();
-        a.run("channel.setVisible", json!({"channel":"composite","visible":false})).unwrap();
-        assert_eq!(texture(&mut a, &ctx, index, None), Some(cpu));
-        assert_eq!(a.ui.status, message);
-        assert!(Arc::ptr_eq(&before, &a.session.active().unwrap().doc));
-        crate::channel_transform_preview::edit(&mut a, |t| {
-            t.quad = good;
-        });
-        assert_eq!(crate::channel_transform_gpu::test_wait(&rs, || texture(&mut a, &ctx, index, None)), Some(gpu));
-        assert!(!a.ui.status_error, "{}", a.ui.status);
-        crate::transform_tool::cancel(&mut a);
-        assert!(Arc::ptr_eq(&before, &a.session.active().unwrap().doc));
-        assert_eq!(a.session.active().unwrap().channel_view.visible_colors(3), 0);
-        ctx.tex_manager().write().take_delta().clear();
-    }
-}
-
-#[test]
 fn reduced_mask_saved_channel_and_quick_mask_refuse_native_reach() {
     use photocraft_color::PixelFormat;
     use photocraft_doc::{AlphaChannel, Layer, LayerMask};
@@ -226,6 +164,72 @@ fn sparse_selected_scalar_channel_transform_uses_a_bounded_native_display() {
             assert!(Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
             crate::transform_tool::cancel(&mut app);
             assert_eq!(app.session.active().unwrap().channel_view, eyes);
+            ctx.tex_manager().write().take_delta().clear();
+        }
+    }
+}
+
+mod gpu_tests {
+    use super::*;
+
+    #[test]
+    fn reduced_gpu_preview_reports_native_reach_before_any_commit_and_recovers() {
+        let _lock = photocraft_testkit::gpu_lock();
+        let Ok(rs) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())
+        })) else {
+            return;
+        };
+        if !crate::channel_transform_gpu::test_supported(&rs) {
+            return;
+        }
+        for colors in [vec![1], vec![0, 2]] {
+            let mut a = super::super::tests::app();
+            let mut doc = Document::with_background("native preview limits", Size::new(6000, 1000), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+            let bounds = doc.bounds();
+            doc.layers[0].surface_mut().unwrap().fill_rect(bounds, &[0.2, 0.4, 0.6, 1.0]);
+            a.session.add_document(doc, None);
+            a.set_wgpu(rs.clone());
+            a.run("channel.target", json!({"colors":colors})).unwrap();
+            let before = a.session.active().unwrap().doc.clone();
+            let index = a.session.active_index().unwrap();
+            let ctx = egui::Context::default();
+            crate::transform_tool::begin(&mut a, &ctx).unwrap();
+            let layer = a.session.active().unwrap().active_layer;
+            a.transform_preview.as_mut().unwrap().channel = Some(Box::new(Preview::new(&before, layer, a.session.tools.background, true).unwrap()));
+            crate::channel_transform_preview::edit(&mut a, |t| {
+                t.quad = t.quad.map(|[x, y]| [x + 16.0, y]);
+            });
+            let good = a.ui.transform.as_ref().unwrap().quad_array();
+            assert!(a.transform_preview.as_ref().unwrap().channel.as_ref().unwrap().factor > 1);
+            let gpu = crate::channel_transform_gpu::test_wait(&rs, || texture(&mut a, &ctx, index, None)).unwrap();
+            assert!(a.transform_preview.as_ref().unwrap().channel.as_ref().unwrap().gpu.is_some());
+            let old = a.transform_preview.as_ref().unwrap().channel.as_ref().unwrap().shown.clone();
+            let mut expected = Preview::new(&before, layer, a.session.tools.background, true).unwrap();
+            expected.update(&crate::channel_transform_preview::Geometry::of(a.ui.transform.as_ref().unwrap())).unwrap();
+            let offset = f64::from(photocraft_algo::transform::WARP_REACH) + 64.0;
+            crate::channel_transform_preview::edit(&mut a, |t| {
+                t.quad = good.map(|[x, y]| [x + offset, y]);
+            });
+            let cpu = texture(&mut a, &ctx, index, None).unwrap();
+            assert_ne!(cpu, gpu, "a first refused geometry never returns the GPU texture");
+            assert!(a.ui.status_error && a.ui.status.contains("reach"), "{}", a.ui.status);
+            let shown = &a.transform_preview.as_ref().unwrap().channel.as_ref().unwrap().shown;
+            assert!(!Arc::ptr_eq(&old, shown), "the last valid GPU geometry must be materialized");
+            assert_eq!(shown.layers[0].surface(), expected.shown.layers[0].surface());
+            let message = a.ui.status.clone();
+            a.run("channel.setVisible", json!({"channel":"composite","visible":false})).unwrap();
+            assert_eq!(texture(&mut a, &ctx, index, None), Some(cpu));
+            assert_eq!(a.ui.status, message);
+            assert!(Arc::ptr_eq(&before, &a.session.active().unwrap().doc));
+            crate::channel_transform_preview::edit(&mut a, |t| {
+                t.quad = good;
+            });
+            assert_eq!(crate::channel_transform_gpu::test_wait(&rs, || texture(&mut a, &ctx, index, None)), Some(gpu));
+            assert!(!a.ui.status_error, "{}", a.ui.status);
+            crate::transform_tool::cancel(&mut a);
+            assert!(Arc::ptr_eq(&before, &a.session.active().unwrap().doc));
+            assert_eq!(a.session.active().unwrap().channel_view.visible_colors(3), 0);
             ctx.tex_manager().write().take_delta().clear();
         }
     }

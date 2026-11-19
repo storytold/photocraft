@@ -90,43 +90,47 @@ fn colour_set_refuses_start_if_any_edited_component_is_hidden() {
     }
 }
 
-#[test]
-fn differently_sparse_colour_sets_use_scalar_outlines_or_the_cpu_oracle() {
-    use photocraft_color::{Color, ColorMode, SampleType};
-    use photocraft_doc::{Document, Size};
-    use photocraft_geom::Rect;
-    let _lock = photocraft_testkit::gpu_lock();
-    let Ok(rs) =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())))
-    else {
-        eprintln!("No GPU adapter available; skipping GPU oracle comparison");
-        return;
-    };
-    if !crate::channel_transform_gpu::test_supported(&rs) {
-        return;
+mod gpu_tests {
+    use super::*;
+
+    #[test]
+    fn differently_sparse_colour_sets_use_scalar_outlines_or_the_cpu_oracle() {
+        use photocraft_color::{Color, ColorMode, SampleType};
+        use photocraft_doc::{Document, Size};
+        use photocraft_geom::Rect;
+        let _lock = photocraft_testkit::gpu_lock();
+        let Ok(rs) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())
+        })) else {
+            eprintln!("No GPU adapter available; skipping GPU oracle comparison");
+            return;
+        };
+        if !crate::channel_transform_gpu::test_supported(&rs) {
+            return;
+        }
+        let gpu = crate::gpu_canvas::GpuCanvas::new(&rs);
+        let mut doc = Document::with_background("different scalar outlines", Size::new(32, 24), ColorMode::Rgb, SampleType::F32, Color::WHITE);
+        doc.layers[0].surface_mut().unwrap().fill_rect(Rect::new(2, 2, 8, 8), &[0.2, 1.0, 1.0, 1.0]);
+        let layer = Some(doc.layers[0].id);
+        let mut a = super::super::tests::app();
+        a.session.add_document(doc.clone(), None);
+        a.run("channel.target", json!({"colors":[0,2]})).unwrap();
+        crate::transform_tool::begin(&mut a, &egui::Context::default()).unwrap();
+        let view = a.session.active().unwrap().channel_view.clone();
+        let mut t = crate::channel_transform_preview::Geometry::of(a.ui.transform.as_ref().unwrap());
+        t.quad = t.quad.map(|[x, y]| [x + 2.0, y]);
+        let mut fast = crate::channel_transform_gpu::test_wait(&rs, || crate::channel_transform_gpu::Preview::new(&gpu, &doc, layer, [1.0; 4])).unwrap();
+        assert!(
+            crate::channel_transform_gpu::test_wait(&rs, || fast.texture(&t, &view, false, false, 1)).is_none(),
+            "different affine edge-repeat bounds retain the scalar oracle"
+        );
+        t.warp = Some(Warp::custom(BezierMesh::identity(t.rect, 1, 1).map_points(|p| [p[0] + 2.0, p[1]]), t.rect));
+        assert!(crate::channel_transform_gpu::test_wait(&rs, || fast.texture(&t, &view, false, false, 1)).is_some(), "a full-frame Warp has common coverage");
+        let mut cpu = Preview::new(&doc, layer, [1.0; 4], false).unwrap();
+        cpu.update(&t).unwrap();
+        let expected = cpu.image(&view, crate::channel_view::Look::default(), None, &crate::channel_view::Screen::default());
+        let actual = fast.readback();
+        assert!(actual.iter().zip(&expected.pixels).all(|(a, b)| a.to_array().into_iter().zip(b.to_array()).all(|(a, b)| a.abs_diff(b) <= 2)));
+        assert!(gpu.health().is_ok());
     }
-    let gpu = crate::gpu_canvas::GpuCanvas::new(&rs);
-    let mut doc = Document::with_background("different scalar outlines", Size::new(32, 24), ColorMode::Rgb, SampleType::F32, Color::WHITE);
-    doc.layers[0].surface_mut().unwrap().fill_rect(Rect::new(2, 2, 8, 8), &[0.2, 1.0, 1.0, 1.0]);
-    let layer = Some(doc.layers[0].id);
-    let mut a = super::tests::app();
-    a.session.add_document(doc.clone(), None);
-    a.run("channel.target", json!({"colors":[0,2]})).unwrap();
-    crate::transform_tool::begin(&mut a, &egui::Context::default()).unwrap();
-    let view = a.session.active().unwrap().channel_view.clone();
-    let mut t = crate::channel_transform_preview::Geometry::of(a.ui.transform.as_ref().unwrap());
-    t.quad = t.quad.map(|[x, y]| [x + 2.0, y]);
-    let mut fast = crate::channel_transform_gpu::test_wait(&rs, || crate::channel_transform_gpu::Preview::new(&gpu, &doc, layer, [1.0; 4])).unwrap();
-    assert!(
-        crate::channel_transform_gpu::test_wait(&rs, || fast.texture(&t, &view, false, false, 1)).is_none(),
-        "different affine edge-repeat bounds retain the scalar oracle"
-    );
-    t.warp = Some(Warp::custom(BezierMesh::identity(t.rect, 1, 1).map_points(|p| [p[0] + 2.0, p[1]]), t.rect));
-    assert!(crate::channel_transform_gpu::test_wait(&rs, || fast.texture(&t, &view, false, false, 1)).is_some(), "a full-frame Warp has common coverage");
-    let mut cpu = Preview::new(&doc, layer, [1.0; 4], false).unwrap();
-    cpu.update(&t).unwrap();
-    let expected = cpu.image(&view, crate::channel_view::Look::default(), None, &crate::channel_view::Screen::default());
-    let actual = fast.readback();
-    assert!(actual.iter().zip(&expected.pixels).all(|(a, b)| a.to_array().into_iter().zip(b.to_array()).all(|(a, b)| a.abs_diff(b) <= 2)));
-    assert!(gpu.health().is_ok());
 }
