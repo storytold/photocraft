@@ -436,7 +436,7 @@ fn cmd_click_with_the_brush_picks_the_layer_under_the_pointer() {
 }
 
 /// The text layer's translation.
-fn text_offset(h: &Harness<'static, PhotocraftApp>, id: photocraft_doc::LayerId) -> (f64, f64) {
+fn text_offset(h: &Harness<'static, Box<PhotocraftApp>>, id: photocraft_doc::LayerId) -> (f64, f64) {
     match &h.state().session.active().unwrap().doc.layer(id).unwrap().content {
         photocraft_doc::LayerContent::Text(t) => (t.transform.m[4], t.transform.m[5]),
         _ => panic!("not a text layer"),
@@ -444,12 +444,12 @@ fn text_offset(h: &Harness<'static, PhotocraftApp>, id: photocraft_doc::LayerId)
 }
 
 /// The layer count of the active document.
-fn layer_count(h: &Harness<'static, PhotocraftApp>) -> usize {
+fn layer_count(h: &Harness<'static, Box<PhotocraftApp>>) -> usize {
     h.state().session.active().unwrap().doc.layers.len()
 }
 
 /// Whether ⌘ is the Move tool as the app stands: the Move stand-in takes a ⌘ press and a ⌘ press on a guide takes it.
-fn cmd_is_move(h: &Harness<'static, PhotocraftApp>) -> bool {
+fn cmd_is_move(h: &Harness<'static, Box<PhotocraftApp>>) -> bool {
     let app = h.state();
     let stand_in = crate::canvas::tools::command_stand_in_now(app);
     assert_eq!(crate::canvas::rulers::moves_with_command(app, app.ui.tool), stand_in, "the guides follow the stand-in");
@@ -513,7 +513,7 @@ fn cmd_after_committing_type_moves_and_duplicates_the_text_layer() {
 /// An open type box counts as editing whatever is in it, as in Photoshop: ⌘ held is not the Move
 /// tool, ⌘-arrows and ⌘⌥-arrows leave the text layer where it is (no nudge, no copy), a ⌘ press
 /// on a guide does not take it, and the box stays open on `layer`.
-fn assert_cmd_is_the_type_boxs(h: &mut Harness<'static, PhotocraftApp>, tool: Tool, layer: photocraft_doc::LayerId, why: &str) {
+fn assert_cmd_is_the_type_boxs(h: &mut Harness<'static, Box<PhotocraftApp>>, tool: Tool, layer: photocraft_doc::LayerId, why: &str) {
     assert_eq!(h.state().ui.text_edit.as_ref().map(|e| e.layer), Some(layer.0), "{tool:?} {why}: the box is open");
     let (x0, y0) = text_offset(h, layer);
     let n0 = layer_count(h);
