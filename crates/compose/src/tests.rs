@@ -470,6 +470,41 @@ fn adjustment_fill_changes_the_special_blend_modes() {
     }
 }
 
+/// #15696: clipping an opaque layer to an opaque base that it covers hides nothing, so its Fill
+/// keeps the special eight's blend instead of reading as Opacity, in every depth.
+#[test]
+fn clipped_layer_fill_blends_like_an_unclipped_one() {
+    let modes = [
+        BlendMode::ColorBurn,
+        BlendMode::LinearBurn,
+        BlendMode::ColorDodge,
+        BlendMode::LinearDodge,
+        BlendMode::VividLight,
+        BlendMode::LinearLight,
+        BlendMode::HardMix,
+        BlendMode::Difference,
+    ];
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for mode in modes {
+            let mut d = Document::new("clip fill", Size::new(1, 1), ColorMode::Rgb, depth);
+            let fmt = d.pixel_format();
+            for (name, rgb) in [("base", [90.0, 110.0, 130.0]), ("top", [200.0, 150.0, 80.0])] {
+                let mut l = Layer::raster(name, fmt);
+                let c = rgb.map(|v: f32| v / 255.0);
+                l.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 1, 1), &photocraft_raster::from_rgba(&fmt, [c[0], c[1], c[2], 1.0]));
+                d.layers.push(l);
+            }
+            let top = d.layers.last_mut().unwrap();
+            top.blend = mode;
+            top.fill_opacity = 0.3;
+            let unclipped = px(&d, 0, 0);
+            d.layers.last_mut().unwrap().clipped = true;
+            let clipped = px(&d, 0, 0);
+            assert!(clipped.iter().zip(unclipped).all(|(c, u)| (c - u).abs() < 1e-4), "{depth:?} {mode:?}: {clipped:?} vs {unclipped:?}");
+        }
+    }
+}
+
 /// One opaque pixel: `top` in `mode` over `bottom`, in a document of `depth`.
 fn blend_px(depth: SampleType, mode: BlendMode, bottom: [f32; 3], top: [f32; 3]) -> [f32; 4] {
     let mut d = Document::new("b", Size::new(1, 1), ColorMode::Rgb, depth);

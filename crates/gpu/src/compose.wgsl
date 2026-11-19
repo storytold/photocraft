@@ -971,7 +971,13 @@ fn fs_atop(in: VOut) -> @location(0) vec4<f32> {
     if (op.mode == M_DISSOLVE) {
         return select(base, vec4(s.rgb, base.a), dissolve_noise(doc_px(p)) < s.a * op.opacity);
     }
-    let r = composite_g(op.mode, vec4(base.rgb, 1.0), s, op.opacity, (op.flags & F_TEXT_GAMMA) != 0u);
+    let gamma_on = (op.flags & F_TEXT_GAMMA) != 0u;
+    // Below 100% Fill only for the special eight (planner's `adjustment_fill`, #15696).
+    if (op.fill < 1.0) {
+        let r = composite_fill(op.mode, vec4(base.rgb, 1.0), s, op.opacity, op.fill, gamma_on);
+        return vec4(r.rgb, base.a);
+    }
+    let r = composite_g(op.mode, vec4(base.rgb, 1.0), s, op.opacity, gamma_on);
     return vec4(r.rgb, base.a);
 }
 

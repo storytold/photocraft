@@ -779,7 +779,8 @@ impl<'a> Planner<'a> {
         p.a = Some(base);
         p.b = Some(content);
         p.mode = layer.blend;
-        p.opacity = opacity;
+        // Fill stays inside the special eight's blend, as for a layer that isn't clipped (#15696).
+        (p.opacity, p.fill) = adjustment_fill(layer, opacity);
         p.flags = gamma_flag(layer);
         p.extra[3] = photocraft_compose::text_gamma(layer);
         Ok(self.emit(p))
@@ -1451,7 +1452,8 @@ impl<'a> Planner<'a> {
     }
 }
 
-/// Adjustment Fill belongs inside the special blend modes; other modes use it as coverage.
+/// Fill of an adjustment or a clipped layer belongs inside the special blend modes; other modes
+/// use it as coverage.
 fn adjustment_fill(layer: &Layer, opacity: f32) -> (f32, f32) {
     if layer.fill_opacity < 1.0 && photocraft_compose::psblend::fill_is_special(layer.blend) { (layer.opacity, layer.fill_opacity) } else { (opacity, 1.0) }
 }
