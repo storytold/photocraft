@@ -15,8 +15,15 @@ use photocraft_engine::prefs::ToolbarCustomization;
 use super::tool_commands;
 
 #[cfg(test)]
+#[path = "toolbar_docking_tests.rs"]
+mod toolbar_docking_tests;
+#[cfg(test)]
 #[path = "toolbar_tab_reveal_tests.rs"]
 mod toolbar_tab_reveal_tests;
+
+#[cfg(test)]
+#[path = "toolbar_measure_tests.rs"]
+mod toolbar_measure_tests;
 
 // ----------------------------------------------------------------------------- toolbar
 
@@ -154,7 +161,13 @@ fn quick_mask_button(app: &PhotocraftApp, ui: &mut egui::Ui) {
     let _ = FlyoutButton::new(&tools, &0).id_salt("quick-mask").selected(on).show(ui);
 }
 
-/// The rail over `slots`, its flyouts and drawer opening on `opens`, the side of the canvas.
+/// The side of the toolbar its tool flyouts, "…" flyout and Edit Toolbar drawer open on: the end (the right in a
+/// left-to-right layout) wherever the toolbar is docked or floats, as in the reference application, which opens them
+/// to the right even when the toolbar sits on the right between the dock's columns. The overlay flips them to the
+/// other side only when they would leave the window.
+const FLYOUTS_OPEN: Side = Side::End;
+
+/// The rail over `slots`, its flyouts and drawer opening on `opens`.
 fn rail<'a>(slots: &'a [ToolSlot<Tool>], current: &'a Tool, remembered: &'a LastUsed<Tool>, opens: Side, editing: bool) -> ToolRail<'a, Tool> {
     let rail = ToolRail::new(Label::Empty, slots, current, remembered).opens(opens).edit_toolbar(tl!("Edit Toolbar…").to_string());
     // The drawer's open flag is the one source of "editing".
@@ -179,12 +192,68 @@ fn footer(app: &mut PhotocraftApp, ui: &mut egui::Ui, rail: RailFooter) {
     });
 }
 
+/// What the rail's measured height depends on: the width and room it is laid out in, the slots (the same `Arc` while
+/// the preferences are the same), where its flyouts open, the Edit Toolbar drawer, and the scale, direction and resolved
+/// tokens (theme, density, text size) it is drawn with. The current and remembered tools change which icon a button
+/// shows, not its size, and the footer's buttons keep their sizes whatever they show.
+#[derive(Clone)]
+struct MeasureKey {
+    width: u32,
+    room: [u32; 2],
+    slots: std::sync::Arc<[ToolSlot<Tool>]>,
+    opens: Side,
+    editing: bool,
+    pixels_per_point: u32,
+    rtl: bool,
+    tokens: std::sync::Arc<craft::ui::style::UiTokens>,
+}
+
+impl PartialEq for MeasureKey {
+    fn eq(&self, other: &Self) -> bool {
+        (self.width, self.room, self.opens, self.editing, self.pixels_per_point, self.rtl)
+            == (other.width, other.room, other.opens, other.editing, other.pixels_per_point, other.rtl)
+            && std::sync::Arc::ptr_eq(&self.slots, &other.slots)
+            && std::sync::Arc::ptr_eq(&self.tokens, &other.tokens)
+    }
+}
+
 /// The height of the toolbar's rail laid out `width` wide: as many tool columns as `width` holds, with the footer.
+///
+/// The dock asks for it on every frame before it shows the rail, and a measuring run of the rail (every tool button
+/// and the footer, each resolving its command) was the largest part of the UI pass (#15493). The last height is kept
+/// with what it depends on ([`MeasureKey`]) and measured again only when one of them changes.
 pub(crate) fn measure(app: &mut PhotocraftApp, ui: &egui::Ui, width: f32) -> f32 {
+    thread_local! {
+        static LAST: std::cell::RefCell<Option<(MeasureKey, f32)>> = const { std::cell::RefCell::new(None) };
+    }
+    let slots = app.toolbar_slots.get(&app.session.prefs);
+    let (opens, editing) = (FLYOUTS_OPEN, app.ui.toolbar_drawer);
+    let env = craft::ui::runtime::env::Env::of(ui);
+    let room = ui.available_size();
+    let key = MeasureKey {
+        width: width.to_bits(),
+        room: [room.x.to_bits(), room.y.to_bits()],
+        slots: std::sync::Arc::clone(&slots),
+        opens,
+        editing,
+        pixels_per_point: ui.ctx().pixels_per_point().to_bits(),
+        rtl: env.direction.is_rtl(),
+        tokens: std::sync::Arc::clone(&env.tokens),
+    };
+    if let Some(height) = LAST.with(|last| last.borrow().as_ref().filter(|(kept, _)| *kept == key).map(|(_, height)| *height)) {
+        return height;
+    }
+    let height = measure_now(app, ui, width);
+    LAST.with(|last| *last.borrow_mut() = Some((key, height)));
+    height
+}
+
+/// [`measure`] without the kept height: a measuring run of the rail.
+fn measure_now(app: &mut PhotocraftApp, ui: &egui::Ui, width: f32) -> f32 {
     let slots = app.toolbar_slots.get(&app.session.prefs);
     let remembered = last_used(&slots, &app.ui.group_tools);
     let current = app.ui.tool;
-    let (opens, editing) = (crate::panel_docking::toolbar_opens(app), app.ui.toolbar_drawer);
+    let (opens, editing) = (FLYOUTS_OPEN, app.ui.toolbar_drawer);
     rail(&slots, &current, &remembered, opens, editing).measure_rail(ui, width, |ui, at| footer(app, ui, at)).y
 }
 
@@ -199,7 +268,7 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let slots = app.toolbar_slots.get(&app.session.prefs);
     let remembered = last_used(&slots, &app.ui.group_tools);
     let current = app.ui.tool;
-    let (opens, editing) = (crate::panel_docking::toolbar_opens(app), app.ui.toolbar_drawer);
+    let (opens, editing) = (FLYOUTS_OPEN, app.ui.toolbar_drawer);
     let out = rail(&slots, &current, &remembered, opens, editing).show_rail(ui, |ui, at| footer(app, ui, at));
 
     if let Some(tool) = out.select {
