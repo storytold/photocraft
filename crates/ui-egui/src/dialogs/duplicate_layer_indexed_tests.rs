@@ -1,6 +1,6 @@
 //! Duplicate Layer's Destination › Document list leaves out documents a layer can't be copied
 //! into, as Photoshop leaves out Indexed Color documents (#14612). The rest keep tab order and
-//! their own document index on OK.
+//! their own document on OK.
 use super::destinations;
 use crate::PhotocraftApp;
 use crate::new_layer_ui::testing::{set, top};
@@ -34,6 +34,11 @@ fn keys(app: &PhotocraftApp) -> Vec<String> {
     destinations(app).into_iter().map(|(key, _)| key).collect()
 }
 
+/// The keys the documents at these tab indices have: their ids.
+fn ids(app: &PhotocraftApp, tabs: &[usize]) -> Vec<String> {
+    tabs.iter().map(|&i| app.session.documents()[i].doc.id.0.to_string()).collect()
+}
+
 #[test]
 fn indexed_documents_are_left_out_and_the_other_modes_keep_tab_order() {
     let app = app_with(&[
@@ -49,7 +54,7 @@ fn indexed_documents_are_left_out_and_the_other_modes_keep_tab_order() {
     assert_eq!(modes[5], (ColorMode::Rgb, 16));
     let names: Vec<_> = destinations(&app).into_iter().map(|(_, name)| name).collect();
     assert_eq!(names, ["Poster", "Print", "Gray", "Lab", "Deep"]);
-    assert_eq!(keys(&app), ["0", "2", "3", "4", "5"], "each entry keeps its document's index");
+    assert_eq!(keys(&app), ids(&app, &[0, 2, 3, 4, 5]), "each entry is keyed by its document");
 }
 
 #[test]
@@ -61,19 +66,21 @@ fn bitmap_and_multichannel_documents_are_left_out_too() {
     ]);
     assert_eq!(app.session.documents()[1].doc.mode, ColorMode::Bitmap);
     assert_eq!(app.session.documents()[2].doc.mode, ColorMode::Multichannel);
-    assert_eq!(keys(&app), ["0", "3"], "layer.copyToDocument refuses both modes");
+    assert_eq!(keys(&app), ids(&app, &[0, 3]), "layer.copyToDocument refuses both modes");
 }
 
 #[test]
 fn ok_on_the_document_after_an_indexed_one_copies_into_that_document() {
     let mut app = app_with(&[("Palette", "rgb", &[indexed()]), ("Card", "rgb", &[])]);
-    assert_eq!(keys(&app), ["0", "2"]);
+    assert_eq!(keys(&app), ids(&app, &[0, 2]));
     let ctx = app.ctx().clone();
     crate::menus::invoke(&mut app, &ctx, "layer.duplicate", json!({})).unwrap();
     let dialog = top(&app);
     let palette_layers = app.session.documents()[1].doc.layer_count();
-    assert!(set(&mut app, dialog, "document", json!("1")).is_err(), "the Indexed document is not a choice");
-    set(&mut app, dialog, "document", json!("2")).unwrap();
+    let palette = ids(&app, &[1]).remove(0);
+    assert!(set(&mut app, dialog, "document", json!(palette)).is_err(), "the Indexed document is not a choice");
+    let card = ids(&app, &[2]).remove(0);
+    set(&mut app, dialog, "document", json!(card)).unwrap();
     crate::dialogs::confirm(&mut app, &ctx, dialog).unwrap();
     // The passes after OK deliver the held answer to the family that runs it.
     for _ in 0..2 {
@@ -89,5 +96,5 @@ fn ok_on_the_document_after_an_indexed_one_copies_into_that_document() {
 fn the_source_stays_listed_whatever_its_mode() {
     let mut app = app_with(&[("Palette", "rgb", &[indexed()]), ("Card", "rgb", &[])]);
     app.session.set_active(1);
-    assert_eq!(keys(&app), ["0", "1", "2"], "duplicating within the source is a plain duplicate");
+    assert_eq!(keys(&app), ids(&app, &[0, 1, 2]), "duplicating within the source is a plain duplicate");
 }
