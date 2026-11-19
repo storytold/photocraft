@@ -227,7 +227,7 @@ pub(crate) fn measure(app: &mut PhotocraftApp, ui: &egui::Ui, width: f32) -> f32
         static LAST: std::cell::RefCell<Option<(MeasureKey, f32)>> = const { std::cell::RefCell::new(None) };
     }
     let slots = app.toolbar_slots.get(&app.session.prefs);
-    let (opens, editing) = (crate::panel_docking::toolbar_opens(app), app.ui.toolbar_drawer);
+    let (opens, editing) = (FLYOUTS_OPEN, app.ui.toolbar_drawer);
     let env = craft::ui::runtime::env::Env::of(ui);
     let room = ui.available_size();
     let key = MeasureKey {
