@@ -66,10 +66,9 @@ pub(crate) fn rotate_arbitrary(s: &mut Session, p: &Value) -> Result<Value> {
     rotate_arbitrary_with(s, p, true)
 }
 
-/// [`rotate_arbitrary`]; `image_rotation` is true on the Image Rotation path and decides two
-/// things there: count points stay where they were (#11762) and the selection is dropped, in the
-/// same history step, so one undo brings it back (#14507). The Crop tool's straighten turn and the
-/// Ruler's Straighten pass false: they move count points with the image and warp the selection.
+/// Image Rotation rounds to hundredths of a degree, keeps count points in place (#11762),
+/// and drops the selection in the same history step (#14507). Crop and Ruler straightening
+/// use the full angle, move count points with the image, and warp the selection.
 pub(crate) fn rotate_arbitrary_with(s: &mut Session, p: &Value, image_rotation: bool) -> Result<Value> {
     const CMD: &str = "image.rotation.arbitrary";
     // At full precision: an f32 angle can grow the canvas 1 px past what `rotated_size` gives callers.
@@ -82,6 +81,7 @@ pub(crate) fn rotate_arbitrary_with(s: &mut Session, p: &Value, image_rotation: 
         "ccw" => -angle,
         d => return Err(bad(CMD, format!("direction `{d}` (cw|ccw)"))),
     };
+    let deg = if image_rotation { (deg * 100.0).round() % 36_000.0 / 100.0 } else { deg };
     if deg.rem_euclid(360.0).abs() < 1e-9 {
         return Ok(json!({"width": s.active().map(|d| d.doc.size.width), "height": s.active().map(|d| d.doc.size.height)}));
     }
@@ -837,3 +837,7 @@ pub fn display_document(doc: &Document) -> Option<Document> {
 mod rotate_canvas_selection_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "rotate_canvas_tiny_angle_tests.rs"]
+mod rotate_canvas_tiny_angle_tests;

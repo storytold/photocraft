@@ -91,13 +91,13 @@ fn rotate_arbitrary_keeps_the_background_opaque_with_a_translucent_background_co
 }
 
 #[test]
-fn rotate_arbitrary_keeps_the_full_precision_angle() {
+fn straighten_keeps_the_full_precision_angle() {
     // Rounded to f32 this angle crosses a whole pixel: 1003 px instead of 1002, so a rotated crop
     // that sized its canvas with `rotated_size` at f64 would land 1 px off.
     let angle = 0.114_706_514_493_370_71;
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 1000, "height": 1000})).unwrap();
-    let r = s.execute("image.rotation.arbitrary", json!({"angle": angle})).unwrap();
+    let r = rotate_arbitrary_with(&mut s, &json!({"angle": angle}), false).unwrap();
     assert_eq!(rotated_size(Size::new(1000, 1000), angle), Size::new(1002, 1002));
     assert_eq!((r["width"].as_u64(), r["height"].as_u64()), (Some(1002), Some(1002)));
 }
