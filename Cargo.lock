@@ -1803,6 +1803,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-ipp"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=e7873217287876f76a045550369c90a541693c33#e7873217287876f76a045550369c90a541693c33"
+
+[[package]]
 name = "craft-jpeg"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=18ffc07519b15f5ef39e752aa0f405261fec8ebb#18ffc07519b15f5ef39e752aa0f405261fec8ebb"
@@ -6477,7 +6482,6 @@ name = "photocraft-format"
 version = "0.23.1"
 dependencies = [
  "blake3",
- "craft-file-formats",
  "craft-image-codecs",
  "craft-pcraft-bundle",
  "craft-pcraft-format",
@@ -6576,6 +6580,9 @@ dependencies = [
 [[package]]
 name = "photocraft-ipp"
 version = "0.23.1"
+dependencies = [
+ "craft-ipp",
+]
 
 [[package]]
 name = "photocraft-ops"

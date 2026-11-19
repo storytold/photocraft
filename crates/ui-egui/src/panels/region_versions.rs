@@ -9,9 +9,10 @@ use std::hash::{Hash, Hasher};
 use super::{PhotocraftApp, chrome_ui};
 use crate::color_picker_ui::PickWindow;
 
-/// The version of the options bar: the Zoom tool's members show the active view.
+/// The version of the options bar: the Zoom tool's members show the active view, and an open Free Transform shows
+/// its own members in place of the tool's (Escape ends it without a command, #15547).
 pub(crate) fn options_bar(app: &PhotocraftApp) -> u64 {
-    version(app, view(app))
+    version(app, (view(app), app.ui.transform.is_some()))
 }
 
 /// The version of the status bar: the zoom readout of the active view, the status message and the item it shows, the
