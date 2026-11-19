@@ -139,11 +139,23 @@ fn reach(m: &Map) -> [i64; 4] {
     edge
 }
 
-/// Assert each edge's ramp against `want` within `tol` levels.
-fn assert_edges(m: &Map, want: &[&[f32]; 4], tol: f32, what: &str) {
+/// The samples the issue's 3-level bar does not reach, each with the bar this test accepts for it:
+/// the four pixels #15302 still lists as missing the bar, at top/left 2 and 4 px out and
+/// bottom/right 2 and 3 px out, plus their mirrored edges. Measured at this head (map R levels):
+/// top/left 2 px out 47.6 against 51 (3.4 off), top/left 4 px out 171.8 against 175 (3.2),
+/// bottom/right 2 px out 81.9 against 86 (4.1), bottom/right 3 px out 148.4 against 153 (4.6); the
+/// worst compliant sample sits 2.8 off. #15302 (a different blur profile) owns closing them. Every
+/// other sample keeps the issue's 3, so a new drift elsewhere cannot hide behind this list.
+const ACCEPTED_OUTLIERS: [(&str, usize, f32); 8] =
+    [("top", 2, 5.0), ("top", 4, 5.0), ("left", 2, 5.0), ("left", 4, 5.0), ("bottom", 2, 5.0), ("bottom", 3, 5.0), ("right", 2, 5.0), ("right", 3, 5.0)];
+
+/// Assert each edge's ramp against `want`: within `tol` levels, except for the samples named in
+/// `outliers`, each with its own accepted bar.
+fn assert_edges(m: &Map, want: &[&[f32]; 4], tol: f32, outliers: &[(&str, usize, f32)], what: &str) {
     for ((side, got), w) in ["top", "left", "bottom", "right"].iter().zip(ramps(m)).zip(want) {
         for (d, (got, want)) in got.iter().zip(*w).enumerate() {
-            assert!((got - want).abs() <= tol, "{what}, {side} edge, {d} px out: {got:.1} vs measured {want} (within {tol})");
+            let bar = outliers.iter().find(|(o, o_d, _)| *o == *side && *o_d == d).map_or(tol, |(_, _, bar)| *bar);
+            assert!((got - want).abs() <= bar, "{what}, {side} edge, {d} px out: {got:.1} vs measured {want} (within {bar})");
         }
     }
 }
@@ -158,20 +170,18 @@ fn bit_hash(m: &Map) -> u64 {
 }
 
 /// Done when: on the issue's test document, Size 10 Gaussian with Anti-aliased gives the measured
-/// top/left and bottom/right profiles. Fourteen of the eighteen measured values land within the
-/// issue's 3 levels; the four that do not are 4.6 (bottom, 3 px out: 148.4 against 153), 4.1
-/// (bottom, 2 px out: 81.9 against 86), 3.4 (top, 3 px out) and 3.2 (top, 4 px out). Those are the
-/// samples where the off-path profile already sits up to 2.5 levels from the reference (today reads
-/// 6 24 65 128 195 233 248 252 254 where it reads 6 25 67 131 196 234 249 253 255), and the 50 %
-/// Range maps that coverage onto the steepest part of the Gaussian contour, where one percent of
-/// contour error is two to three levels. The tolerance here is 5 so the test states what this
-/// actually reaches.
+/// top/left and bottom/right profiles within the issue's 3 levels - at every sample but the four
+/// #15302 lists: 3.4 off at top/left 2 px out, 3.2 at top/left 4 px out, 4.1 at bottom/right 2 px
+/// out and 4.6 at bottom/right 3 px out. Those sit on the steepest part of the Gaussian contour,
+/// where the 50 % Range turns one percent of contour error into two to three levels, and #15302
+/// (a different blur profile) owns closing them; [`ACCEPTED_OUTLIERS`] names them and nothing else,
+/// so every other sample is pinned at 3.
 #[test]
 fn anti_aliased_gaussian_gives_both_measured_profiles() {
     let tl: &[f32] = &[2.0, 17.0, 51.0, 108.0, 175.0, 223.0, 245.0, 252.0, 254.0, 255.0];
     let br: &[f32] = &[11.0, 37.0, 86.0, 153.0, 210.0, 240.0, 251.0, 254.0];
     let want: [&[f32]; 4] = [tl, tl, br, br];
-    assert_edges(&map(10.0, 0.0, gaussian(), true, GlowTechnique::Softer), &want, 5.0, "Size 10 Gaussian, Anti-aliased");
+    assert_edges(&map(10.0, 0.0, gaussian(), true, GlowTechnique::Softer), &want, 3.0, &ACCEPTED_OUTLIERS, "Size 10 Gaussian, Anti-aliased");
 }
 
 /// The asymmetry the issue measures (its bounds grow by one pixel at the left and top, from

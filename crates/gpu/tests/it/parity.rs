@@ -3658,9 +3658,11 @@ fn outer_glow_ramps(px: &[[f32; 4]]) -> [Vec<f32>; 4] {
 /// Done when (#14951): the GPU map program honours the Anti-aliased checkbox like the CPU. The
 /// whole document (400 x 300 also runs the paged 256 px compositor, where the sub-pixel shift has
 /// to inflate the map windows) matches the CPU reference within one 8-bit step, and the GPU's four
-/// edge ramps land on the issue's measured profile within 5 levels - the bar the compose-side test
-/// states, where 14 of the 18 measured pixels reach 3. The Anti-aliased-off render does not reach
-/// these ramps at all, at either the top or the bottom edge.
+/// edge ramps land on the issue's measured profile within its 3 levels - except for the eight
+/// samples the outlier list below names (the four pixels #15302 still lists as missing the bar,
+/// plus their mirrored edges), each with the wider bar the compose-side test accepts for the same
+/// pixels. The Anti-aliased-off render does not reach these ramps at all, at either the top or the
+/// bottom edge.
 #[test]
 fn anti_aliased_outer_glow_matches_the_cpu_ramps() {
     let Some(mut g) = gpu() else { return };
@@ -3672,9 +3674,18 @@ fn anti_aliased_outer_glow_matches_the_cpu_ramps() {
     let gpu_off = render_to_vec(&mut g.comp, &g.device, &g.queue, &off, off.bounds()).expect("gpu render, Anti-aliased off");
     let tl: &[f32] = &[2.0, 17.0, 51.0, 108.0, 175.0, 223.0, 245.0, 252.0, 254.0, 255.0];
     let br: &[f32] = &[11.0, 37.0, 86.0, 153.0, 210.0, 240.0, 251.0, 254.0];
+    // Accepted outliers (#15302): measured at this head the GPU sits 3.1 (top / left, 2 px out:
+    // 47.7 against 51), 3.2 (top / left, 4 px out: 171.8 against 175), 4.1 (bottom / right, 2 px
+    // out: 81.9 against 86) and 4.5 levels (bottom / right, 3 px out: 148.5 against 153) off - the
+    // same four pixels #15302 lists, with the CPU within 0.1 level of the GPU at each. The worst
+    // compliant sample here is 2.8 off. #15302 owns closing these four; every other sample keeps
+    // the issue's 3 levels.
+    let outliers: [(&str, usize, f32); 8] =
+        [("top", 2, 5.0), ("top", 4, 5.0), ("left", 2, 5.0), ("left", 4, 5.0), ("bottom", 2, 5.0), ("bottom", 3, 5.0), ("right", 2, 5.0), ("right", 3, 5.0)];
     for ((side, got), want) in ["top", "left", "bottom", "right"].iter().zip(outer_glow_ramps(&gpu_on)).zip([tl, tl, br, br]) {
         for (d, (got, want)) in got.iter().zip(want).enumerate() {
-            assert!((got - want).abs() <= 5.0, "GPU {side} edge, {d} px out: {got:.1} vs measured {want}");
+            let bar = outliers.iter().find(|(o, o_d, _)| *o == *side && *o_d == d).map_or(3.0f32, |(_, _, bar)| *bar);
+            assert!((got - want).abs() <= bar, "GPU {side} edge, {d} px out: {got:.1} vs measured {want} (within {bar})");
         }
     }
     let ramps_on = outer_glow_ramps(&gpu_on);
