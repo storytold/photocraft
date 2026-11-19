@@ -2164,3 +2164,16 @@ fn type_create_in_place_keeps_a_users_name_that_reads_like_the_apps() {
     s.execute("type.create", json!({"x": 0, "y": 0, "text": "Caption", "layer": given.0, "name": "Title"})).unwrap();
     assert_eq!(name(&s, given), "Title");
 }
+
+#[test]
+fn sessions_share_builtin_brushes_until_edited() {
+    let mut first = Session::new();
+    let second = Session::new();
+    assert!(std::sync::Arc::ptr_eq(&first.tools.presets, &second.tools.presets));
+    let count = second.tools.presets.len();
+    first.execute("brush.presets.save", serde_json::json!({"name": "Session-only test brush"})).unwrap();
+    assert_eq!(second.tools.presets.len(), count);
+    assert!(second.tools.presets.iter().all(|preset| preset.name != "Session-only test brush"));
+    assert!(first.tools.presets.iter().any(|preset| preset.name == "Session-only test brush"));
+    assert!(!std::sync::Arc::ptr_eq(&first.tools.presets, &second.tools.presets));
+}
