@@ -12,7 +12,7 @@ const INDEXED: &str = "Could not use the dodge tool because it does not work wit
 const BITMAP: &str = "Could not use the dodge tool because it does not work with Bitmap images (convert image to Grayscale mode to edit).";
 
 /// A session with one 64 × 64 document of `mode` and `depth`, filled mid grey.
-fn session(mode: ColorMode, depth: SampleType) -> Session {
+pub(super) fn session(mode: ColorMode, depth: SampleType) -> Session {
     let mut s = Session::new();
     s.add_document(Document::with_background("t", Size::new(64, 64), mode, depth, Color::rgb(0.5, 0.5, 0.5)), None);
     s
@@ -22,11 +22,11 @@ fn stroke() -> Value {
     json!({"points": [[20, 32], [44, 32]], "size": 20, "hardness": 100, "range": "midtones", "exposure": 100})
 }
 
-fn steps(s: &Session) -> usize {
+pub(super) fn steps(s: &Session) -> usize {
     s.active().unwrap().history.past_len()
 }
 
-fn pixels(s: &Session) -> Vec<f32> {
+pub(super) fn pixels(s: &Session) -> Vec<f32> {
     let st = s.active().unwrap();
     let surf = st.doc.layers[0].surface().unwrap();
     (0..64).flat_map(|y| (0..64).flat_map(move |x| surf.pixel(x, y))).collect()

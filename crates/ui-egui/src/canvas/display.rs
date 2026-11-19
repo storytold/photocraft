@@ -1,27 +1,10 @@
 use super::strokes::live_stroke;
-use super::{Color32, Document, LayerContent, PhotocraftApp, TextureOptions};
+use super::{Document, PhotocraftApp};
+use photocraft_doc::LayerContent;
 
-pub(super) fn checker(app: &mut PhotocraftApp, ctx: &egui::Context) -> egui::TextureId {
-    // Preferences › Transparency & Gamut colours (the texture is rebuilt when they change).
-    let [ca, cb] = app.session.prefs().transparency_and_gamut.colors();
-    if app.prefs_rt.checker_key != Some([ca, cb]) {
-        app.prefs_rt.checker_key = Some([ca, cb]);
-        app.checker = None;
-    }
-    app.checker
-        .get_or_insert_with(|| {
-            let (a, b) = (Color32::from_rgb(ca[0], ca[1], ca[2]), Color32::from_rgb(cb[0], cb[1], cb[2]));
-            let img = egui::ColorImage::new([2, 2], vec![a, b, b, a]);
-            let opts = TextureOptions {
-                magnification: egui::TextureFilter::Nearest,
-                minification: egui::TextureFilter::Nearest,
-                wrap_mode: egui::TextureWrapMode::Repeat,
-                mipmap_mode: None,
-            };
-            ctx.load_texture("checker", img, opts)
-        })
-        .id()
-}
+/// The gradient a tool proposes this pass, shown over the document before it is committed: the layer it fills and the
+/// fill (`gradient_ui::live_overlay::show`'s answer).
+pub(crate) type LiveProposal<'a> = Option<&'a (photocraft_doc::LayerId, photocraft_doc::Fill)>;
 
 fn buffer_to_image(buf: &photocraft_compose::Buffer) -> egui::ColorImage {
     // `buf.to_rgba8()` then `color_image`, fused: one parallel pass, no intermediate image.
@@ -83,17 +66,29 @@ pub(crate) fn canvas_display(
 ) -> (Option<std::sync::Arc<photocraft_engine::display_color::CanvasDisplay>>, u64) {
     match app.session.color.canvas_display_for(doc, display.or(app.session.color.main_display)) {
         Ok(d) => {
-            let k = d.key;
+            let k = d.key ^ ink_preview_key(doc);
             (Some(d), k)
         }
-        Err(_) => (None, 0),
+        Err(_) => (None, ink_preview_key(doc)),
+    }
+}
+
+/// What a Multichannel document's ink preview depends on beyond its pixels: Color Settings ›
+/// Spot (the dot gain the compositor adds). Folded into the display key, so changing the
+/// setting redraws open Multichannel documents; other modes don't print inks.
+pub(super) fn ink_preview_key(doc: &Document) -> u64 {
+    if doc.mode == photocraft_color::ColorMode::Multichannel {
+        u64::from(photocraft_compose::multichannel::spot_dot_gain().to_bits()).wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1 << 62
+    } else {
+        0
     }
 }
 
 /// [`canvas_display`]'s key for the GPU canvas texture: what the texture stores, the same on
-/// every display (the display LUT holds the monitor profile).
-pub(super) fn texture_key(display: Option<&photocraft_engine::display_color::CanvasDisplay>) -> u64 {
-    display.map_or(0, |d| d.texture_key)
+/// every display (the display LUT holds the monitor profile), with the ink preview (Multichannel
+/// documents fill it from the CPU compositor, which adds the Spot dot gain).
+pub(super) fn texture_key(display: Option<&photocraft_engine::display_color::CanvasDisplay>, doc: &Document) -> u64 {
+    display.map_or(0, |d| d.texture_key) ^ ink_preview_key(doc)
 }
 
 /// `app.canvases` key: CPU canvas textures are per document and display (they hold monitor
@@ -105,8 +100,14 @@ pub(crate) fn cache_key(doc: photocraft_doc::DocId, display: Option<u32>) -> (ph
 /// `app.canvases` output of the GPU canvas state (one texture per document for all displays).
 pub(crate) const GPU_OUTPUT: u32 = u32::MAX;
 
-/// The document to render: the committed one, or a clone with the live adjustment preview applied.
+/// The document to render: the committed one, or a clone with the live adjustment preview applied. It shows no
+/// proposed gradient: only a canvas picture does ([`display_doc_live`]).
 pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> (std::sync::Arc<Document>, u64) {
+    display_doc_live(app, idx, None)
+}
+
+/// [`display_doc`] with the gradient `live` a tool proposes this pass. Nothing is kept for the next pass.
+pub(crate) fn display_doc_live(app: &mut PhotocraftApp, idx: usize, live: LiveProposal<'_>) -> (std::sync::Arc<Document>, u64) {
     if let Some(shown) = crate::frame_tool::display_doc(app, idx) {
         return shown;
     }
@@ -138,9 +139,6 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> (std::sync::Ar
     if let Some(shown) = crate::type_box_preview::display_doc(app, idx) {
         return shown;
     }
-    // Vanishing Point's strokes over the document as it is now (the Layers panel may have
-    // changed it since the options bar synced them this frame).
-    crate::vp_ui::sync_preview(app);
     // Puppet / Perspective Warp previews hide the layer they draw on a mesh.
     if let Some(shown) = crate::distort_ui::display_doc(app, idx) {
         return shown;
@@ -150,7 +148,8 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> (std::sync::Ar
         return shown;
     }
     // Gradient tool (live) drag, or a stop dragged in the Properties panel.
-    if let Some(shown) = crate::gradient_ui::display_doc(app, idx) {
+    // PLAN: assumed `gradient_ui::display_doc(app, idx, live: LiveProposal<'_>)` (tools-w44); the tree still has the two-argument form
+    if let Some(shown) = crate::gradient_ui::display_doc(app, idx, live) {
         return shown;
     }
     // Move tool drag: the moving layers at the pointer.
@@ -177,7 +176,7 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> (std::sync::Ar
     crate::transform_tool::follow_edits(app);
     let st = &app.session.documents()[idx];
     if let Some(l) = live_stroke(app, idx) {
-        return (l.stroke.doc().clone(), l.display_key());
+        return (l.doc().clone(), l.display_key());
     }
     if let (Some(t), Some(pv)) = (&app.ui.transform, &app.transform_preview)
         && app.session.active_index() == Some(idx)
@@ -186,30 +185,12 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> (std::sync::Ar
     {
         return (pv.doc.clone(), crate::transform_tool::preview_key(pv.session));
     }
-    // Layer Style dialog: show its effects live (Cancel just drops the preview).
-    let style = app.ui.dialogs.iter().find(|d| d.kind == crate::state::DialogKind::LayerStyle);
-    // The Preview checkbox off shows the document as it was when the dialog opened;
-    // edits still land in the dialog state and OK applies them whatever it says.
-    let preview_on = style.and_then(|d| d.fields.get("preview")).and_then(serde_json::Value::as_bool).unwrap_or(true);
-    if style.is_none() || !preview_on {
-        app.style_preview = None;
+    // Layer Style dialog: show its effects live (Cancel just drops the preview). Before the steps below, which build
+    // from the committed document and would hide it.
+    if let Some(shown) = crate::layer_style::display_doc(app, idx) {
+        return shown;
     }
-    if let Some(d) = style.filter(|_| preview_on)
-        && app.session.active_index() == Some(idx)
-    {
-        let fields = crate::layer_style::color_picker::preview_fields(app, d.id, &d.fields);
-        let key = (crate::layer_style::preview_hash(&fields) ^ st.revision.wrapping_mul(0x9e37_79b9_7f4a_7c15)) | 1 << 63;
-        if app.style_preview.as_ref().map(|p| p.0) != Some(key) {
-            let shown = crate::layer_style::preview_document(&st.doc, &app.session.patterns, &fields).map(std::sync::Arc::new);
-            if let Err(error) = &shown {
-                log::warn!("Layer Style preview: {error}");
-            }
-            app.style_preview = Some((key, shown));
-        }
-        if let Some((_, Ok(doc))) = &app.style_preview {
-            return (doc.clone(), key);
-        }
-    }
+    let st = &app.session.documents()[idx];
     let revision = st.revision;
     let snapshot = st.doc.clone();
     if let Some((layer, params)) = app.live_adjust.clone()

@@ -2,7 +2,7 @@ use super::params::{color, f64p, layer_id, op_from, parse_path, path_json};
 use super::shape::{map_path, map_shape, transform_shape, with_shape};
 use super::{
     Affine, BlendMode, ClippingPath, Color, Document, EngineError, LayerContent, LayerId, NamedPath, Path, Rect, Result, SelectionMode, Session, Value, bad,
-    blend_from_str, json, sel, vector,
+    json, parse_blend, sel, vector,
 };
 
 // ---------------------------------------------------------------------------
@@ -73,12 +73,31 @@ pub(super) fn paths_list(s: &Session) -> Result<Value> {
     }))
 }
 
+/// The tools that override these shared commands' normal History labels with their own name:
+/// Freeform Pen (#12829), the Line tool (#13244) and the Triangle tool (#13354).
+const TOOL_HISTORY_NAMES: [&str; 3] = ["Freeform Pen", "Line Tool", "Triangle Tool"];
+
+/// Validate before editing so malformed automation input cannot change the document.
+pub(super) fn pen_history_name<'a>(p: &Value, cmd: &str, default: &'a str) -> Result<&'a str> {
+    match p.get("historyName") {
+        None | Some(Value::Null) => Ok(default),
+        Some(v) => TOOL_HISTORY_NAMES
+            .into_iter()
+            .find(|&n| v.as_str() == Some(n))
+            .ok_or_else(|| bad(cmd, "`historyName` must be \"Freeform Pen\", \"Line Tool\" or \"Triangle Tool\"")),
+    }
+}
+
+/// Replaces the Work Path or a saved path, or appends subpaths with the requested operation.
+/// The optional Freeform Pen or Line Tool history label overrides the normal Work Path or Save
+/// Path label.
 pub(super) fn path_set(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "path.set";
     let path = parse_path(p.get("path").ok_or_else(|| bad(CMD, "missing `path`"))?).map_err(|e| bad(CMD, e))?;
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
     let append = p.get("op").and_then(Value::as_str).map(|o| op_from(o).ok_or_else(|| bad(CMD, format!("unknown op `{o}`")))).transpose()?;
-    s.edit(if is_work(name.as_deref()) { "Work Path" } else { "Save Path" }, |doc, _| {
+    let label = pen_history_name(p, CMD, if is_work(name.as_deref()) { "Work Path" } else { "Save Path" })?;
+    s.edit(label, |doc, _| {
         let merge = |old: Option<&Path>, new: Path| -> Result<Path> {
             let merged = match (old, append) {
                 (Some(o), Some(op)) => {
@@ -425,7 +444,7 @@ pub(super) fn path_fill(s: &mut Session, p: &Value) -> Result<Value> {
     let rgb = c.to_rgb();
     let src = [rgb[0], rgb[1], rgb[2], c.alpha];
     let opacity = (f64p(p, "opacity").unwrap_or(100.0) / 100.0).clamp(0.0, 1.0) as f32;
-    let mode = p.get("mode").and_then(Value::as_str).and_then(blend_from_str).unwrap_or(BlendMode::Normal);
+    let mode = p.get("mode").and_then(Value::as_str).and_then(parse_blend).unwrap_or(BlendMode::Normal);
     let feather = f64p(p, "feather").unwrap_or(0.0) as f32;
     let aa = p.get("antiAlias").and_then(Value::as_bool).unwrap_or(true);
     let id = layer_id(s, p)?;

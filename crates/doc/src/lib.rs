@@ -15,6 +15,8 @@ pub mod blend_if;
 pub mod comps;
 pub mod effects;
 pub mod frame;
+pub mod import_conversion;
+pub mod layer_tree;
 pub mod mode;
 pub mod pattern;
 pub mod slices;
@@ -873,6 +875,9 @@ pub type PsdGlobalBlock = ([u8; 4], [u8; 4], Arc<Vec<u8>>);
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Metadata {
+    /// Historical conversion information; never consulted by native rendering or editing.
+    /// Shared so document/history clones do not duplicate report entries, strings or retained payloads.
+    pub import_conversion: Option<Arc<import_conversion::ImportConversion>>,
     /// The XMP packet as stored, kept as text so properties PhotoCraft doesn't model survive.
     /// Shared like the other payloads here: cloning a document or a history state never copies
     /// it (#4535).
@@ -897,7 +902,7 @@ pub struct Document {
     pub depth: SampleType,
     pub icc_profile: Option<Arc<Vec<u8>>>,
     /// Bottom-to-top.
-    pub layers: Vec<Layer>,
+    pub layers: layer_tree::LayerTree,
     pub channels: Vec<AlphaChannel>,
     pub guides: Guides,
     /// The rulers' zero point in document pixels (`[x, y]`), dragged from the ruler corner. The
@@ -972,6 +977,13 @@ pub struct FileEncoding {
     /// side by side; saving a stereo PNG keeps this eye-order mark (#6063).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub png_stereo: Option<u8>,
+    /// How many images (frames, pages, parts, icon sizes) the file held when it held more than
+    /// the one the document was opened from; `u32::MAX` when the count is unknown. File › Save
+    /// then goes through Save As rather than writing one image over all of them (#5733). Kept in
+    /// `.pcraft` on purpose: crash recovery reopens the autosaved bundle at the original path,
+    /// where the count must still hold. A document's own Save or Save As clears it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_images: Option<u32>,
 }
 
 impl FileEncoding {
@@ -993,7 +1005,7 @@ impl Document {
             mode,
             depth,
             icc_profile: None,
-            layers: Vec::new(),
+            layers: Default::default(),
             channels: Vec::new(),
             guides: Guides::default(),
             ruler_origin: [0.0, 0.0],
@@ -1150,18 +1162,7 @@ impl Document {
     }
 
     pub fn path_of(&self, id: LayerId) -> Option<LayerPath> {
-        fn rec(layers: &[Layer], id: LayerId, path: &mut LayerPath) -> bool {
-            for (i, l) in layers.iter().enumerate() {
-                path.push(i);
-                if l.id == id || l.children().is_some_and(|ch| rec(ch, id, path)) {
-                    return true;
-                }
-                path.pop();
-            }
-            false
-        }
-        let mut path = Vec::new();
-        rec(&self.layers, id, &mut path).then_some(path)
+        self.layers.index().path(id).map(<[usize]>::to_vec)
     }
 
     /// The locks in force on the layer at `path`: its own and those of every group around it,
@@ -1200,10 +1201,7 @@ impl Document {
     }
 
     pub fn layer(&self, id: LayerId) -> Option<&Layer> {
-        fn rec(layers: &[Layer], id: LayerId) -> Option<&Layer> {
-            layers.iter().find_map(|l| if l.id == id { Some(l) } else { l.children().and_then(|ch| rec(ch, id)) })
-        }
-        rec(&self.layers, id)
+        self.layer_at(self.layers.index().path(id)?)
     }
 
     pub fn layer_mut(&mut self, id: LayerId) -> Option<&mut Layer> {
@@ -1381,6 +1379,32 @@ mod tests {
         assert_eq!(d.unused_link_group(), Some(1));
         with(&mut d, &[0, 1, 2, 4, u64::MAX]);
         assert_eq!(d.unused_link_group(), Some(3));
+    }
+
+    /// Id lookups share one index per document state: 100 lookups on 200 layers build it once,
+    /// an edit builds it once more, and a clone built after the edit has its own.
+    #[test]
+    fn layer_lookups_share_one_index_per_state() {
+        let mut d = doc();
+        for i in 0..199 {
+            d.layers.push(Layer::raster(format!("l{i}"), PixelFormat::RGBA8));
+        }
+        let ids: Vec<LayerId> = d.layers.iter().map(|l| l.id).collect();
+        let first = d.layers.index().serial();
+        for i in 0..100 {
+            let id = ids[i * 2];
+            assert_eq!(d.layer(id).unwrap().id, id);
+            assert_eq!(d.path_of(id), Some(vec![i * 2]));
+        }
+        assert_eq!(d.layers.index().serial(), first);
+        assert!(d.shift(ids[10], 1));
+        assert_eq!(d.path_of(ids[10]), Some(vec![11]));
+        let second = d.layers.index().serial();
+        assert_ne!(second, first);
+        d.layer_mut(ids[3]).unwrap().name = "x".into();
+        let copy = d.clone();
+        assert_ne!(copy.layers.index().serial(), d.layers.index().serial());
+        assert_eq!(copy.layer(ids[3]).unwrap().name, "x");
     }
 
     #[test]

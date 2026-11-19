@@ -396,21 +396,22 @@ fn channel_readouts_read_ink_and_masked_percent() {
     s.execute("channel.new", json!({"name": "Alpha 1", "fill": "selection"})).unwrap();
     s.execute("select.deselect", json!({})).unwrap();
     let doc = &s.active().unwrap().doc;
-    let inside = channel_readouts(doc, 15, 15);
+    let inside = channel_readouts(doc, 15.5, 15.5, 1);
     assert_eq!(
         inside,
         vec![ChannelReadout { name: "Ink Red".into(), spot: true, percent: 100 }, ChannelReadout { name: "Alpha 1".into(), spot: false, percent: 0 },]
     );
-    let outside = channel_readouts(doc, 50, 50);
+    let outside = channel_readouts(doc, 50.5, 50.5, 1);
     assert_eq!(outside.iter().map(|c| c.percent).collect::<Vec<_>>(), vec![0, 100]);
     assert_eq!(total_spot_ink(&inside), 100, "spot inks only, the alpha channel left out");
     assert_eq!(total_spot_ink(&outside), 0);
-    assert!(channel_readouts(doc, -1, 5).is_empty());
-    assert!(channel_readouts(doc, 5, 80).is_empty());
-    assert!(channel_readouts(&session().active().unwrap().doc, 5, 5).is_empty(), "no extra channels");
+    assert!(channel_readouts(doc, -1.0, 5.0, 1).is_empty());
+    assert!(channel_readouts(doc, 5.0, 80.0, 1).is_empty());
+    assert!(channel_readouts(&session().active().unwrap().doc, 5.0, 5.0, 1).is_empty(), "no extra channels");
 }
 
-/// `document.sampleChannels` reads the channels at a pixel; bad params are errors, not panics.
+/// `document.sampleChannels` reads the channels at a point, over the Sample Size box when one is
+/// given; bad params are errors, not panics.
 #[test]
 fn sample_channels_command() {
     let mut s = session();
@@ -421,14 +422,32 @@ fn sample_channels_command() {
     let r = s.execute("document.sampleChannels", json!({"x": 60, "y": 3})).unwrap();
     assert_eq!(r[0]["percent"], 0);
     assert_eq!(s.execute("document.sampleChannels", json!({"x": 500, "y": 3})).unwrap(), json!([]), "off the canvas");
-    for bad in [json!({}), json!({"x": "a", "y": 1}), json!({"x": 1, "y": f64::NAN}), json!({"x": 1e300, "y": 1}), json!({"x": 1})] {
+    assert_eq!(s.execute("document.sampleChannels", json!({"x": 1e300, "y": 1})).unwrap(), json!([]), "far off the canvas");
+    // The ink ends at x = 50: a 3 × 3 box centred on pixel 49 holds two inked columns of three.
+    let mut edge = |extra: Value| {
+        let mut p = json!({"x": 49.5, "y": 3});
+        p.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        s.execute("document.sampleChannels", p).unwrap()[0]["percent"].clone()
+    };
+    assert_eq!(edge(json!({})), 100, "Point Sample by default");
+    assert_eq!(edge(json!({"size": 3})), 67, "the mean over the 3 × 3 box");
+    assert_eq!(edge(json!({"size": 3, "zoom": 4.0})), 67, "above 100 % the box is the centred square");
+    assert_eq!(edge(json!({"size": 3, "zoom": 1.0})), 50, "at 100 % it is the pixels 48 to 51, as document.sampleColor reads");
+    for bad in [
+        json!({}),
+        json!({"x": "a", "y": 1}),
+        json!({"x": 1, "y": f64::NAN}),
+        json!({"x": 1}),
+        json!({"x": 1, "y": 1, "size": 4}),
+        json!({"x": 1, "y": 1, "zoom": 0}),
+    ] {
         assert!(s.execute("document.sampleChannels", bad.clone()).is_err(), "{bad}");
     }
     assert!(Session::new().execute("document.sampleChannels", json!({"x": 1, "y": 1})).is_err(), "no document");
 }
 
-/// The sampler list carries every readout and the channels, so the Info panel's readout modes
-/// read the same numbers for a point as for the pointer.
+/// The sampler list carries every readout mode and the channels of each point, averaged over the
+/// Sample Size like its RGB and CMYK.
 #[test]
 fn list_reports_every_readout_and_the_channels() {
     let mut s = session();
@@ -449,6 +468,11 @@ fn list_reports_every_readout_and_the_channels() {
     assert_eq!(p[0]["channels"], json!([{"name": "Ink Red", "spot": true, "percent": 100}]));
     assert_eq!(p[1]["channels"][0]["percent"], 0);
     assert_eq!((p[0]["totalSpotInk"].as_i64(), p[1]["totalSpotInk"].as_i64()), (Some(100), Some(0)), "Total Spot Ink per point");
+    // A point on the ink's last column: Point Sample reads all ink, a 3 × 3 Average two columns of three.
+    s.execute("view.colorSamplers.add", json!({"x": 49, "y": 6})).unwrap();
+    let at = |s: &mut Session, size: u32| s.execute("view.colorSamplers.list", json!({"size": size})).unwrap()["samplers"][2].clone();
+    assert_eq!((at(&mut s, 1)["channels"][0]["percent"].as_i64(), at(&mut s, 1)["totalSpotInk"].as_i64()), (Some(100), Some(100)));
+    assert_eq!((at(&mut s, 3)["channels"][0]["percent"].as_i64(), at(&mut s, 3)["totalSpotInk"].as_i64()), (Some(67), Some(67)));
 }
 
 /// Lab goes through the document's profile: the same red reads more saturated (a larger a*) in

@@ -4,11 +4,12 @@
 //! Points are per-document view state ([`crate::DocState::color_samplers`]): they belong to their
 //! document, are discarded when it closes, and are not saved to `.pcraft` or PSD. Placing, moving
 //! and removing them changes no pixels and adds no History step, so they are not journaled. Each
-//! point reads one composite pixel (no averaging); its values match the Info panel's pointer
-//! readout: every colour readout mode ([`Readouts`]) plus the extra channels' ink
-//! ([`channel_readouts`]).
+//! point reads the Sample Size average around its pixel (#11732) and reports every colour
+//! readout mode ([`Readouts`]; the Info panel shows the RGB and CMYK of them) plus the extra
+//! channels' ink ([`channel_readouts`]).
 
 use photocraft_doc::Document;
+use photocraft_geom::Rect;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -17,6 +18,12 @@ use crate::{DocState, EngineError, Result, Session};
 
 /// Photoshop's Color Sampler limit: at most 10 points per document.
 pub const MAX_SAMPLERS: usize = 10;
+
+/// The refusal `view.colorSamplers.add` gives at [`MAX_SAMPLERS`], so a caller can tell it from
+/// other failures.
+pub fn limit_message() -> String {
+    format!("Color Sampler limit reached: at most {MAX_SAMPLERS} points per document")
+}
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
@@ -35,8 +42,8 @@ pub fn device_cmyk(r: f32, g: f32, b: f32) -> [i32; 4] {
     photocraft_color::convert::rgb_to_cmyk([unit(r), unit(g), unit(b)]).map(|v| (unit(v) * 100.0).round() as i32)
 }
 
-/// Every colour readout of one composite sample, as the Info panel's readout modes show it
-/// (Photoshop's Panel Options › Color Readout): RGB 0–255, colour-managed CMYK percentages,
+/// Every colour readout of one composite sample, as the readout modes of Photoshop's Info panel
+/// show it (Panel Options › Color Readout): RGB 0–255, colour-managed CMYK percentages,
 /// Grayscale, HSB, HSL, Lab, Web Color, Total Ink and Opacity.
 ///
 /// Verified against Photoshop 2027's Info panel (2026-10-28, flat swatches): Grayscale is
@@ -92,17 +99,16 @@ pub fn readouts(doc: &Document, rgba: [f32; 4]) -> Readouts {
 
 /// CIE Lab (D50) of composite `rgb` through the document's profile (the compositor's output
 /// profile, so an Adobe RGB document's red is not read as sRGB red), the same transform Color
-/// Range uses; the sRGB maths only when no transform can be built.
+/// Range uses; the sRGB maths only when the transform cannot be built or run.
 fn lab(doc: &Document, rgb: [f32; 3]) -> [f32; 3] {
     let src = crate::color_cmds::composite_profile(doc);
-    match photocraft_cms::cached(&src, photocraft_cms::Builtin::LabD50.profile(), photocraft_cms::TransformOptions::default()) {
-        Ok(t) => {
-            let mut out = [0.0f32; 3];
-            t.eval(&rgb, &mut out);
-            // The Lab profile's normalised encoding (ICC v4) → L 0–100, a and b −128–127.
-            [out[0] * 100.0, out[1] * 255.0 - 128.0, out[2] * 255.0 - 128.0]
-        }
-        Err(_) => photocraft_color::convert::srgb_to_lab(rgb),
+    let mut out = [0.0f32; 3];
+    let converted =
+        craft_cms::cached(&src, craft_cms::Builtin::LabD50.profile(), craft_cms::TransformOptions::default()).ok().and_then(|t| t.eval(&rgb, &mut out).ok());
+    match converted {
+        // The Lab profile's normalised encoding (ICC v4) → L 0–100, a and b −128–127.
+        Some(_) => [out[0] * 100.0, out[1] * 255.0 - 128.0, out[2] * 255.0 - 128.0],
+        None => photocraft_color::convert::srgb_to_lab(rgb),
     }
 }
 
@@ -116,21 +122,36 @@ pub struct ChannelReadout {
     pub percent: i32,
 }
 
-/// The reading of every extra (alpha and spot) channel of `doc` at pixel `(x, y)`, in
-/// Channels-panel order: one pixel, no averaging. Empty off the canvas.
-pub fn channel_readouts(doc: &Document, x: i32, y: i32) -> Vec<ChannelReadout> {
-    if !doc.bounds().contains(x, y) {
+/// The reading of every extra (alpha and spot) channel of `doc` over `rect` (document pixels,
+/// inside the canvas), in Channels-panel order: each channel's mean over the box, so a Sample
+/// Size above Point Sample averages the channels over the same pixels as the colour readout.
+/// Empty for an empty box.
+pub fn channel_readouts_in(doc: &Document, rect: Rect) -> Vec<ChannelReadout> {
+    if rect.is_empty() {
         return Vec::new();
     }
     doc.channels
         .iter()
         .map(|ch| {
-            let v = ch.surface.pixel(x, y).first().copied().unwrap_or(0.0);
-            let v = if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) };
+            let step = ch.surface.format().channels().max(1);
+            let px = ch.surface.read_region(rect);
+            let (mut sum, mut n) = (0.0f64, 0u64);
+            for v in px.iter().step_by(step) {
+                sum += if v.is_nan() { 0.0 } else { f64::from(v.clamp(0.0, 1.0)) };
+                n += 1;
+            }
+            let v = if n == 0 { 0.0 } else { sum / n as f64 };
             let ink = if ch.spot.is_some() { v } else { 1.0 - v };
             ChannelReadout { name: ch.name.clone(), spot: ch.spot.is_some(), percent: (ink * 100.0).round() as i32 }
         })
         .collect()
+}
+
+/// [`channel_readouts_in`] at document point `(x, y)` with Sample Size `size`: the pixel under
+/// the point, or the `size` × `size` square centred on it, clipped to the canvas
+/// ([`crate::sample_cmds::sample_rect`]). Empty off the canvas.
+pub fn channel_readouts(doc: &Document, x: f64, y: f64, size: u32) -> Vec<ChannelReadout> {
+    crate::sample_cmds::sample_rect(x, y, size, doc.bounds()).map(|r| channel_readouts_in(doc, r)).unwrap_or_default()
 }
 
 /// Total Spot Ink: every spot channel's ink % at the pixel added up (alpha channels left out). A
@@ -139,23 +160,34 @@ pub fn total_spot_ink(channels: &[ChannelReadout]) -> i32 {
     channels.iter().filter(|c| c.spot).map(|c| c.percent).sum()
 }
 
+/// The Sample Size a sampler readout of `doc` uses for `size`: Bitmap and Multichannel documents
+/// were not measured, so they keep the Point Sample reading at every size.
+fn sampler_size(doc: &Document, size: u32) -> u32 {
+    if matches!(doc.mode, photocraft_color::ColorMode::Bitmap | photocraft_color::ColorMode::Multichannel) { 1 } else { size }
+}
+
 /// The Info-panel values for a sample point at document pixel `pos`: composite RGB 0–255 and
-/// colour-managed CMYK percentages (the document's CMYK profile when it has one). One composite
-/// pixel, no averaging.
-pub fn readout(doc: &Document, pos: [f64; 2]) -> ([i32; 3], [i32; 4]) {
-    let r = readouts(doc, crate::sample_cmds::sample_color(doc, None, pos[0], pos[1], 1, crate::sample_cmds::SampleLayers::All));
+/// colour-managed CMYK percentages (the document's CMYK profile when it has one), averaged over
+/// the `size` × `size` box of document pixels centred on it (#11732: the Sample Size the Color
+/// Sampler shares with the Eyedropper; 1 is Point Sample). The box is in document pixels, so the
+/// zoom never changes it. Bitmap and Multichannel documents keep the Point Sample reading
+/// ([`sampler_size`]).
+pub fn readout(doc: &Document, pos: [f64; 2], size: u32) -> ([i32; 3], [i32; 4]) {
+    let rgba = crate::sample_cmds::sample_color(doc, None, pos[0], pos[1], sampler_size(doc, size), crate::sample_cmds::SampleLayers::All);
+    let r = readouts(doc, rgba);
     (r.rgb, r.cmyk)
 }
 
-/// One point as the list command reports it: its number and position, every [`Readouts`] field,
-/// `totalSpotInk` ([`total_spot_ink`]) and `channels` ([`channel_readouts`]).
-pub fn point_json(doc: &Document, index: usize, pos: [f64; 2]) -> Value {
-    let rgba = crate::sample_cmds::sample_color(doc, None, pos[0], pos[1], 1, crate::sample_cmds::SampleLayers::All);
+/// One point as the list command reports it, read with Sample Size `size`: its number and
+/// position, every [`Readouts`] field, `totalSpotInk` ([`total_spot_ink`]) and `channels`
+/// ([`channel_readouts`], averaged over the same box).
+pub fn point_json(doc: &Document, index: usize, pos: [f64; 2], size: u32) -> Value {
+    let size = sampler_size(doc, size);
+    let rgba = crate::sample_cmds::sample_color(doc, None, pos[0], pos[1], size, crate::sample_cmds::SampleLayers::All);
     let mut v = json!({"index": index, "number": index + 1, "position": [pos[0], pos[1]]});
     if let (Some(o), Ok(Value::Object(r))) = (v.as_object_mut(), serde_json::to_value(readouts(doc, rgba))) {
         o.extend(r);
-        // Points sit on whole pixels inside the canvas (`pixel`), so the casts are exact.
-        let channels = channel_readouts(doc, pos[0] as i32, pos[1] as i32);
+        let channels = channel_readouts(doc, pos[0], pos[1], size);
         o.insert("totalSpotInk".into(), json!(total_spot_ink(&channels)));
         o.insert("channels".into(), json!(channels));
     }
@@ -164,23 +196,19 @@ pub fn point_json(doc: &Document, index: usize, pos: [f64; 2]) -> Value {
 
 fn sample_channels(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "document.sampleChannels";
-    let c = |k: &str| -> Result<i32> {
-        p.get(k)
-            .and_then(Value::as_f64)
-            .map(f64::floor)
-            .filter(|v| v.is_finite() && *v >= f64::from(i32::MIN) && *v <= f64::from(i32::MAX))
-            .map(|v| v as i32)
-            .ok_or_else(|| bad(CMD, format!("`{k}` must be a finite number (document pixels)")))
-    };
-    let (x, y) = (c("x")?, c("y")?);
+    let (x, y) = (coord(CMD, p, "x")?, coord(CMD, p, "y")?);
+    let size = crate::sample_cmds::size_param(CMD, p)?;
+    let zoom = crate::sample_cmds::zoom_param(CMD, p)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    Ok(json!(channel_readouts(&st.doc, x, y)))
+    let rect = crate::sample_cmds::sample_rect_at(x, y, size, zoom, st.doc.bounds());
+    Ok(json!(rect.map(|r| channel_readouts_in(&st.doc, r)).unwrap_or_default()))
 }
 
-fn list_json(doc: &Document, points: &[[f64; 2]]) -> Value {
+fn list_json(doc: &Document, points: &[[f64; 2]], size: u32) -> Value {
     json!({
         "max": MAX_SAMPLERS,
-        "samplers": points.iter().enumerate().map(|(i, p)| point_json(doc, i, *p)).collect::<Vec<_>>(),
+        "size": size,
+        "samplers": points.iter().enumerate().map(|(i, p)| point_json(doc, i, *p, size)).collect::<Vec<_>>(),
     })
 }
 
@@ -222,14 +250,15 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "view.colorSamplers.add";
     let x = coord(CMD, p, "x")?;
     let y = coord(CMD, p, "y")?;
+    let size = crate::sample_cmds::size_param(CMD, p)?;
     change(s, |st| {
         let pos = pixel(&st.doc, x, y).ok_or_else(|| EngineError::Other("the sample point is outside the canvas".into()))?;
         if st.color_samplers.len() >= MAX_SAMPLERS {
-            return Err(EngineError::Other(format!("Color Sampler limit reached: at most {MAX_SAMPLERS} points per document")));
+            return Err(EngineError::Other(limit_message()));
         }
         st.color_samplers.push(pos);
         let i = st.color_samplers.len() - 1;
-        Ok(json!({"index": i, "count": st.color_samplers.len(), "point": point_json(&st.doc, i, pos)}))
+        Ok(json!({"index": i, "count": st.color_samplers.len(), "point": point_json(&st.doc, i, pos, size)}))
     })
 }
 
@@ -238,6 +267,7 @@ fn move_point(s: &mut Session, p: &Value) -> Result<Value> {
     let i = index_param(CMD, p)?;
     let x = coord(CMD, p, "x")?;
     let y = coord(CMD, p, "y")?;
+    let size = crate::sample_cmds::size_param(CMD, p)?;
     change(s, |st| {
         let n = st.color_samplers.len();
         if i >= n {
@@ -245,7 +275,7 @@ fn move_point(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let pos = pixel(&st.doc, x, y).ok_or_else(|| EngineError::Other("the sample point is outside the canvas".into()))?;
         st.color_samplers[i] = pos;
-        Ok(json!({"index": i, "point": point_json(&st.doc, i, pos)}))
+        Ok(json!({"index": i, "point": point_json(&st.doc, i, pos, size)}))
     })
 }
 
@@ -270,9 +300,10 @@ fn clear(s: &mut Session, _p: &Value) -> Result<Value> {
     })
 }
 
-fn list(s: &mut Session, _p: &Value) -> Result<Value> {
+fn list(s: &mut Session, p: &Value) -> Result<Value> {
+    let size = crate::sample_cmds::size_param("view.colorSamplers.list", p)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    Ok(list_json(&st.doc, &st.color_samplers))
+    Ok(list_json(&st.doc, &st.color_samplers, size))
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -282,7 +313,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Add Color Sampler",
             menu: &[],
             shortcut: None,
-            params: r##"{"x":f64,"y":f64} → the new point {index, number, position, rgb, cmyk, gray, hsb, hsl, lab, web, totalInk, opacity, totalSpotInk, channels:[{name, spot, percent}]}; errors at the 10-point limit or off the canvas"##,
+            params: r##"{"x":f64,"y":f64,"size":1|3|5|11|31|51|101|"point"=1 (the Sample Size the readout averages over, in document pixels)} → the new point {index, number, position, rgb, cmyk, gray, hsb, hsl, lab, web, totalInk, opacity, totalSpotInk, channels:[{name, spot, percent}]}; errors at the 10-point limit or off the canvas"##,
             enabled: has_doc,
             run: add,
             journal: false,
@@ -292,7 +323,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Move Color Sampler",
             menu: &[],
             shortcut: None,
-            params: r##"{"index":n,"x":f64,"y":f64}"##,
+            params: r##"{"index":n,"x":f64,"y":f64,"size":1|3|5|11|31|51|101|"point"=1}"##,
             enabled: has_doc,
             run: move_point,
             journal: false,
@@ -322,7 +353,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Color Samplers",
             menu: &[],
             shortcut: None,
-            params: r##"{} → {max, samplers:[{index, number, position, rgb, cmyk, gray, hsb, hsl, lab, web, totalInk, opacity, totalSpotInk, channels:[{name, spot, percent}]}]} (every Info panel readout of each point: RGB 0–255, CMYK %, Grayscale K %, HSB, HSL, Lab, web hex, Total Ink % (the CMYK plates), composite Opacity %, Total Spot Ink % (every spot channel added up) and each alpha/spot channel's % as a channel targeted alone reads it)"##,
+            params: r##"{"size":1|3|5|11|31|51|101|"point"=1 (Sample Size: each readout is the size × size average of document pixels around the point)} → {max, size, samplers:[{index, number, position, rgb, cmyk, gray, hsb, hsl, lab, web, totalInk, opacity, totalSpotInk, channels:[{name, spot, percent}]}]} (each point's colour in every readout mode: RGB 0–255, CMYK %, Grayscale K %, HSB, HSL, Lab, web hex, Total Ink % (the CMYK plates), composite Opacity %, Total Spot Ink % (every spot channel added up) and each alpha/spot channel's %, as a channel targeted alone reads it, averaged over the same box)"##,
             enabled: has_doc,
             run: list,
             journal: false,
@@ -332,7 +363,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Sample Channels",
             menu: &[],
             shortcut: None,
-            params: r##"{"x":i32,"y":i32} → [{name, spot, percent}] (every alpha and spot channel's reading at that pixel, in Channels-panel order: ink % for a spot channel, masked % for an alpha channel with white = 0 %; one pixel, no averaging; empty off the canvas)"##,
+            params: r##"{"x":f64,"y":f64,"size":"point"|1|3|5|11|31|51|101=1,"zoom":f64? (as `document.sampleColor`: the Sample Size and the view zoom its box follows)} → [{name, spot, percent}] (every alpha and spot channel's reading at that point, in Channels-panel order: ink % for a spot channel, masked % for an alpha channel with white = 0 %; the pixel under the point, or the mean over the same box `document.sampleColor` averages; empty off the canvas)"##,
             enabled: has_doc,
             run: sample_channels,
             journal: false,
@@ -345,3 +376,6 @@ mod tests;
 
 #[cfg(test)]
 mod pixel_centre_tests;
+
+#[cfg(test)]
+mod sample_size_tests;
