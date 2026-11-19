@@ -145,7 +145,7 @@ fn histogram_follows_preview_and_view_changes_do_not_render_or_edit() {
 }
 
 /// A layer with tonal variation, a selection over part of it and the dialog open on it.
-fn worker_app() -> (PhotocraftApp, egui::Context) {
+fn worker_app() -> (Box<PhotocraftApp>, egui::Context) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     let ctx = app.ctx().clone();
     app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
@@ -307,7 +307,7 @@ std::thread_local! {
 /// that open raws take turns: a parallel test's open would otherwise evict the decode another
 /// test is about to take. The turn is held until the test's thread ends (nextest runs each test
 /// in its own process, where this costs nothing).
-fn raw_app() -> (PhotocraftApp, Vec<u8>) {
+fn raw_app() -> (Box<PhotocraftApp>, Vec<u8>) {
     use photocraft_raw::testgen::{DngSpec, mosaic, scene};
     static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
     RAW_OPEN_TURN.with(|held| {
@@ -937,7 +937,7 @@ const LIGHTROOM_SIDECAR: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="
 /// `raw_app` whose `write` service records what it is asked to write, and a raw file in a fresh
 /// folder with `sidecar` beside it when given. Returns the app, the raw's bytes, the folder,
 /// the raw's path and the recorded writes.
-fn raw_with_sidecar(tag: &str, sidecar: Option<&str>) -> (PhotocraftApp, Vec<u8>, std::path::PathBuf, String, Written) {
+fn raw_with_sidecar(tag: &str, sidecar: Option<&str>) -> (Box<PhotocraftApp>, Vec<u8>, std::path::PathBuf, String, Written) {
     let (mut app, dng) = raw_app();
     let dir = std::env::temp_dir().join(format!("photocraft-sidecar-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

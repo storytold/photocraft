@@ -12,7 +12,7 @@ use super::{PhotocraftApp, Tool, ToolEvent, testing, tool_event};
 const M: egui::Modifiers = egui::Modifiers::NONE;
 
 /// A document with an empty layer and `tool` set up to paint a short stroke on it.
-fn app_for(tool: Tool) -> PhotocraftApp {
+fn app_for(tool: Tool) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     testing::still_clock(&mut app);
     app.run("file.new", json!({"width": 160, "height": 60, "background": "#00ff00"})).unwrap();

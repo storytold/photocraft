@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use crate::panels::registry;
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     PhotocraftApp::new(photocraft_engine::Session::new(), Default::default())
 }
 
