@@ -286,7 +286,22 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
     let mut cut_parts: Option<CutPartsOf> = None;
     for id in &ids {
         let src_layer = sdoc.layer(*id).ok_or(EngineError::NoLayer(*id))?;
-        let mut l = if selection {
+        let mut l = if selection_only {
+            let parts = match floating.as_ref().filter(|f| f.layer == *id) {
+                Some(f) if f.parts.is_mask() => return Err(bad("a floating layer mask cannot be transferred as selected pixels")),
+                Some(f) => f.parts.clone(),
+                None => std::sync::Arc::new(crate::float_cmds::CutParts::new(&sdoc, *id, true, s.tools.background, false)?),
+            };
+            if parts.selected_pixels().content_bounds().is_empty() {
+                return Err(bad("the selected pixels are empty"));
+            }
+            let mut layer = Layer::new(src_layer.name.clone(), LayerContent::Raster(parts.selected_pixels().clone()));
+            layer.opacity = src_layer.opacity;
+            if let Some(f) = floating.as_ref().filter(|f| f.layer == *id) {
+                crate::commands::translate_layer(&sdoc, &mut layer, f.offset.0, f.offset.1);
+            }
+            layer
+        } else if selection {
             // A floating selection travels as its piece; otherwise the selection is lifted from
             // the layer's pixels, or from its mask when the mask is the target.
             let floating_parts = floating.as_ref().filter(|f| f.layer == *id).map(|f| {
@@ -333,21 +348,6 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
             layer.opacity = src_layer.opacity;
             if float_off != (0, 0) {
                 crate::commands::translate_layer(&sdoc, &mut layer, float_off.0, float_off.1);
-            }
-            layer
-        } else if selection_only {
-            let parts = match floating.as_ref().filter(|f| f.layer == *id) {
-                Some(f) if f.parts.is_mask() => return Err(bad("a floating layer mask cannot be transferred as selected pixels")),
-                Some(f) => f.parts.clone(),
-                None => std::sync::Arc::new(crate::float_cmds::CutParts::new(&sdoc, *id, true, s.tools.background, false)?),
-            };
-            if parts.selected_pixels().content_bounds().is_empty() {
-                return Err(bad("the selected pixels are empty"));
-            }
-            let mut layer = Layer::new(src_layer.name.clone(), LayerContent::Raster(parts.selected_pixels().clone()));
-            layer.opacity = src_layer.opacity;
-            if let Some(f) = floating.as_ref().filter(|f| f.layer == *id) {
-                crate::commands::translate_layer(&sdoc, &mut layer, f.offset.0, f.offset.1);
             }
             layer
         } else {
@@ -466,8 +466,9 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
         crate::layer_multi_cmds::check_group_depth(doc, "Copy Layers")?;
         Ok(new)
     });
-    // Nothing succeeded: restore the pre-cut source state (and keep it active) so a destination
-    // failure never empties the source or drops an earlier coalesced edit.
+    // Nothing changed: the source stays the active document.
+    // If destination insert fails, restore the pre-cut source state (and keep it active) so a
+    // destination failure never empties the source or drops an earlier coalesced edit.
     if edited.is_err() {
         s.set_active(src);
         if let (Some(saved), Some(st)) = (prior_src, s.active_mut()) {

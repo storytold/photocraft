@@ -42,6 +42,7 @@ pub(crate) fn begin(app: &mut PhotocraftApp, p: [f64; 2], add: bool, move_auto_s
 
 /// [`begin`], recording the locked layer or Background the press hit: a drag toward another
 /// document's tab transfers it (#11971).
+#[cfg(test)]
 pub(crate) fn begin_with_layer(
     app: &mut PhotocraftApp,
     p: [f64; 2],

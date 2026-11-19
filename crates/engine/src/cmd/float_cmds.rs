@@ -47,9 +47,13 @@ pub struct CutParts {
 
 impl CutParts {
     /// Selected pixels in source-document coordinates, including soft coverage.
-    #[allow(dead_code)]
     pub(crate) fn selected_pixels(&self) -> &Surface {
         &self.piece
+    }
+
+    /// Whether the floating piece contains a layer mask rather than layer pixels.
+    pub fn is_mask(&self) -> bool {
+        self.mask
     }
 
     /// Split `layer` of `doc` by its selection. With `copy` the selected pixels stay in the layer
@@ -109,11 +113,6 @@ impl CutParts {
     /// The selection the moved pixels take, where they were cut (`None`: the selection stays).
     pub fn outline(&self) -> Option<&Surface> {
         self.outline.as_ref()
-    }
-
-    /// Whether this floating piece is a layer mask (`"target":"mask"`).
-    pub fn is_mask(&self) -> bool {
-        self.mask
     }
 
     /// The floating pixel or mask piece and its bounds.

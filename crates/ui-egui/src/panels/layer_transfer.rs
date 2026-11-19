@@ -317,8 +317,6 @@ pub fn finish(app: &mut PhotocraftApp, ctx: &egui::Context) {
     clear(ctx);
 }
 
-/// The refused Move press ended in this window: no button is held, and the window recorded for
-
 /// Run before canvases process release: a tiled destination must take over the
 /// drag before the source can commit it as an ordinary move.
 pub(crate) fn prepare(app: &mut PhotocraftApp, ctx: &egui::Context) {

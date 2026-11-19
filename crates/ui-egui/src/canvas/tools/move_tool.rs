@@ -49,13 +49,15 @@ struct Run {
     offset: (i32, i32),
     /// The pointer left its press ([`MoveGesture::left_press`]): a press that never does is a click and moves nothing.
     moved: bool,
+    /// The refusal message was shown.
+    prompted: bool,
     /// The float at the press of a pixels drag (an ⌥-drag drops it and floats a copy).
     floating_before: Option<Floating>,
 }
 
 impl Run {
     fn plain(kind: Kind, start: [f64; 2]) -> Self {
-        Run { kind, gesture: None, start, box_rect: None, delta: [0.0; 2], offset: (0, 0), moved: false, floating_before: None }
+        Run { kind, gesture: None, start, box_rect: None, delta: [0.0; 2], offset: (0, 0), moved: false, prompted: false, floating_before: None }
     }
 }
 
@@ -217,8 +219,9 @@ fn press_at(app: &mut PhotocraftApp, p: [f64; 2], mods: Mods, style: ConstrainSt
     if standing_in && super::family(app.ui.tool) == super::Family::Selection && crate::move_lock::blocked(app, true) {
         return (ToolAction::Claimed, Some(Run::plain(Kind::Refused, p)));
     }
-    let marquee = |app: &mut PhotocraftApp, add: bool, auto: bool, clear: bool, grabbed: Option<photocraft_doc::LayerId>| {
-        crate::move_box::begin_with_layer(app, p, add, grabbed, auto, clear);
+    let marquee = |app: &mut PhotocraftApp, add: bool, auto: bool, clear: bool| {
+        // PLAN: assumed `move_box::begin(app, p, add, move_auto_select, clear_on_empty)` as today.
+        crate::move_box::begin(app, p, add, auto, clear);
         (ToolAction::Claimed, Some(Run::plain(Kind::Marquee, p)))
     };
     let pixels_now = crate::move_ui::moves_selected_pixels_with(app, Tool::Move);
@@ -249,39 +252,41 @@ fn press_at(app: &mut PhotocraftApp, p: [f64; 2], mods: Mods, style: ConstrainSt
             if empty || auto {
                 if !empty {
                     // Pressing locked selected pixels is a move-lock refusal; otherwise a
-                    // locked-only hit can start a marquee (#4058). The press is recorded either way:
-                    // it can still show the lock message and become a transfer (#11971).
+                    // locked-only hit can start a marquee (#4058).
+
                     if inside_selection(app, p) && crate::move_lock::blocked(app, standing_in) {
                         record_refused_press(app, p);
                         return (ToolAction::Claimed, Some(Run::plain(Kind::Refused, p)));
                     }
-                }
-                // A position-locked layer (the Background) is skipped by the rule the probe used,
-                // so find it without that rule: a drag that starts on it can still transfer it.
-                let locked = if empty { None } else { locked_hit_at(app, p) };
-                if !empty && !mods.shift {
                     // Shift preserves the base selection for its additive marquee.
-                    let _ = app.run("select.deselectLayers", json!({}));
+                    if !mods.shift {
+                        let _ = app.run("select.deselectLayers", json!({}));
+                    }
                 }
-                return marquee(app, mods.shift, auto, auto && !empty, locked);
+                let locked = if empty { None } else { locked_hit_at(app, p) };
+                let res = marquee(app, mods.shift, auto, auto && !empty);
+                if let (Some(layer), Some(b)) = (locked, app.layer_box.as_mut()) {
+                    b.grabbed_layer = Some(layer);
+                }
+                return res;
             }
         } else {
             let hit_layer = probe.as_ref().ok().and_then(|v| v["layer"].as_u64()).map(photocraft_doc::LayerId);
-            // The transfer candidate is probed independently of the ordinary pick: an All-locked or
-            // position-locked layer above the picked one is what a drag toward another document
-            // transfers (Auto-Select skips locked layers, the transfer does not), while the ordinary
-            // pick keeps the same-document selection. Only another document makes that possible.
+            let locked_hit = !auto
+                && hit_layer.is_some_and(|id| locked_layer(app, id));
             let transfer_candidate = if app.session.documents().len() > 1 { locked_hit_at(app, p) } else { None };
-            let locked_hit = transfer_candidate.is_some() || (!auto && hit_layer.is_some_and(|id| locked_layer(app, id)));
+            let locked_hit = locked_hit || transfer_candidate.is_some();
             let active_before = app.session.active().and_then(|st| st.active_layer);
             let revealed = crate::layer_reveal::mark(app);
             let _ = app.run("layer.pickAt", json!({"x": p[0], "y": p[1], "target": target, "mode": mode, "moveAutoSelect": auto}));
             note_move_pick(app, active_before);
             crate::layer_reveal::file(app, revealed);
             if locked_hit {
-                // The locked layer under the pointer is what a drag toward another document transfers
-                // (#11971); Auto-Select skips locked layers, the transfer does not.
-                return marquee(app, mods.shift, false, false, transfer_candidate.or(hit_layer));
+                let res = marquee(app, mods.shift, false, false);
+                if let Some(b) = app.layer_box.as_mut() {
+                    b.grabbed_layer = transfer_candidate.or(hit_layer);
+                }
+                return res;
             }
         }
     }
@@ -382,15 +387,13 @@ impl CanvasTool for MoveRun<'_> {
             }
             Kind::Refused => {
                 self.scope.with_app(|app| {
-                    // Mid-drag a transfer may still take the press (#11971): the message then comes
-                    // from the release, not from the pointer passing over the source canvas.
                     if crate::panels::layer_transfer::armed(app) {
                         return;
                     }
                     if app.move_blocked_start.is_some_and(|s| s != [at.x, at.y]) {
                         app.move_blocked_moved = true;
                     }
-                    if !may_transfer(app) {
+                    if !may_transfer(app) && !std::mem::replace(&mut run.prompted, true) {
                         app.clear_move_blocked();
                         crate::move_lock::prompt(app);
                     }
@@ -409,10 +412,8 @@ impl CanvasTool for MoveRun<'_> {
                 crate::move_box::release(app, [at.x, at.y]);
             }
             Kind::Refused => {
-                // Photoshop says it once the pointer has left the press; a transfer that took the
-                // press has already ended it (#11971).
                 let show_lock = app.move_blocked_moved || app.move_blocked_start.is_some_and(|s| s != [at.x, at.y]);
-                if show_lock && !crate::panels::layer_transfer::armed(app) {
+                if show_lock && !crate::panels::layer_transfer::armed(app) && !run.prompted {
                     crate::move_lock::prompt(app);
                 }
             }

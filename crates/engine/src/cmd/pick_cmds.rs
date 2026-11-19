@@ -87,34 +87,40 @@ fn top_group(doc: &Document, id: LayerId) -> LayerId {
 /// The topmost selectable layer at (x, y), or its outermost group if `group` is set.
 /// Type layers hit across their text bounds. Effective Lock All is skipped. Position-locked layers remain selectable.
 pub fn auto_select_target(doc: &Document, x: i32, y: i32, group: bool) -> Option<LayerId> {
-    pick_target(doc, x, y, group, false, false)
+    pick_target(doc, x, y, group, false)
 }
 
 /// The Move tool's Auto-Select target, matching `layer.pickAt` with `moveAutoSelect` enabled.
 /// Both effective Position and All locks are skipped before resolving the group.
 pub fn move_auto_select_target(doc: &Document, x: i32, y: i32, group: bool) -> Option<LayerId> {
-    pick_target(doc, x, y, group, true, false)
+    pick_target(doc, x, y, group, true)
 }
 
 /// Choose the topmost hit eligible for selection before resolving its group. An effective Lock
 /// All excludes a layer from selection here. Move Auto-Select also skips effective Position locks.
+fn pick_target(doc: &Document, x: i32, y: i32, group: bool, move_auto_select: bool) -> Option<LayerId> {
+    let hit = layers_hit(doc, x, y, true).into_iter().find(|id| {
+        let locks = doc.effective_locks(*id);
+        !locks.all && (!move_auto_select || !locks.position)
+    })?;
+    Some(if group { top_group(doc, hit) } else { hit })
+}
+
 /// `include_locked` names a layer with an effective Lock All as well, in either Auto-Select mode,
 /// so a probe can report it as a transfer candidate; such a layer is never selected. A layer with
 /// an effective Position lock is named the same way: this probe skips those layers, so the group
-/// around one is not the target either.
-fn pick_target(doc: &Document, x: i32, y: i32, group: bool, move_auto_select: bool, include_locked: bool) -> Option<LayerId> {
+/// around one is not the target either (#11971).
+fn pick_target_with_locked(doc: &Document, x: i32, y: i32, group: bool, move_auto_select: bool, include_locked: bool) -> Option<LayerId> {
+    if !include_locked {
+        return pick_target(doc, x, y, group, move_auto_select);
+    }
     let hit = layers_hit(doc, x, y, true).into_iter().find(|id| {
         let locks = doc.effective_locks(*id);
         let all_locked = locks.all;
-        (include_locked || !all_locked) && (all_locked || !move_auto_select || !locks.position)
+        all_locked || !move_auto_select || !locks.position
     })?;
-    // With Move Target Group a layer with an effective Lock All keeps its own identity: it is what
-    // a cross-document drag transfers, and resolving its group first would hide the lock from the
-    // caller's transfer check (the group around it is not locked). A Position lock is the same
-    // case: the transfer probe skips those layers, so the group around one is not the target
-    // either, and the caller's check on the returned layer is what reports the lock.
     let locks = doc.effective_locks(hit);
-    if include_locked && (locks.all || locks.position) {
+    if locks.all || locks.position {
         return Some(hit);
     }
     Some(if group { top_group(doc, hit) } else { hit })
@@ -135,7 +141,7 @@ fn pick(s: &mut Session, p: &Value) -> Result<Value> {
     let group = p.get("target").and_then(Value::as_str) == Some("group");
     let move_auto_select = p.get("moveAutoSelect").and_then(Value::as_bool).unwrap_or(false);
     let include_locked = p.get("includeLocked").and_then(Value::as_bool).unwrap_or(false);
-    let Some(target) = pick_target(&doc, x, y, group, move_auto_select, include_locked) else { return Ok(json!({ "layer": null })) };
+    let Some(target) = pick_target_with_locked(&doc, x, y, group, move_auto_select, include_locked) else { return Ok(json!({ "layer": null })) };
     // A layer with an effective Lock All is only named, never selected.
     if p.get("select").and_then(Value::as_bool).unwrap_or(true) && !doc.effective_locks(target).all {
         let mode = p.get("mode").and_then(Value::as_str).unwrap_or("replace");

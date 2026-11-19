@@ -408,20 +408,20 @@ fn a_move_tool_mask_selection_drag_onto_a_tab_copies_the_mask_and_leaves_layer_p
     // leave both unchanged, and a mask-only change has to fail the mask assertion (#11971).
     let src_doc = h.state().session.active().unwrap().doc.id;
     let src_layer = h.state().session.active().unwrap().active_layer;
-    let layer_pixel = |h: &Harness<'static, PhotocraftApp>| {
+    let layer_pixel = |h: &Harness<'static, Box<PhotocraftApp>>| {
         let st = h.state().session.documents().iter().find(|s| s.doc.id == src_doc).unwrap();
         let layer = src_layer.and_then(|id| st.doc.layer(id)).unwrap();
         let mut px = [0.0f32; 4];
         layer.surface().unwrap().read_pixel(6, 8, &mut px);
         px
     };
-    let mask_sample = |h: &Harness<'static, PhotocraftApp>| {
+    let mask_sample = |h: &Harness<'static, Box<PhotocraftApp>>| {
         let st = h.state().session.documents().iter().find(|s| s.doc.id == src_doc).unwrap();
         let layer = src_layer.and_then(|id| st.doc.layer(id)).unwrap();
         layer.mask.as_ref().unwrap().value(6, 8)
     };
     let selection_present =
-        |h: &Harness<'static, PhotocraftApp>| h.state().session.documents().iter().find(|s| s.doc.id == src_doc).is_some_and(|s| s.doc.selection.is_some());
+        |h: &Harness<'static, Box<PhotocraftApp>>| h.state().session.documents().iter().find(|s| s.doc.id == src_doc).is_some_and(|s| s.doc.selection.is_some());
     let before_mask = mask_sample(&h);
     let before_pixel = layer_pixel(&h);
     let before_selection = selection_present(&h);
