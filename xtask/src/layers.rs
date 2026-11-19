@@ -102,8 +102,9 @@ pub const UI_CRATES: &[&str] = &["egui", "eframe", "winit", "egui_kittest", "cra
 
 /// Facade crates that are a UI toolkit dependency only with some of their features (#15467): `craft` carries the
 /// whole craft UI framework behind `ui` (and the features that turn it on), while lower layers use its non-UI parts
-/// (imaging, fonts, keymap, settings). Feature names ending in `*` are prefixes.
-pub const UI_FEATURES: &[(&str, &[&str])] = &[("craft", &["ui", "ui-*", "screen-testing"])];
+/// (imaging, fonts, keymap, settings). `keymap-egui` adds the keymap's egui key conversions, which bring egui itself.
+/// Feature names ending in `*` are prefixes.
+pub const UI_FEATURES: &[(&str, &[&str])] = &[("craft", &["ui", "ui-*", "screen-testing", "keymap-egui"])];
 
 /// First layer allowed to use UI crates.
 pub const UI_MIN_LAYER: u8 = 6;
@@ -253,13 +254,26 @@ pub fn from_metadata(meta: &Value) -> Result<Vec<Crate>, String> {
                 _ => DepKind::Normal,
             };
             let workspace = members.contains(&dname.as_str()) || d["path"].is_string();
-            let features = d["features"].as_array().into_iter().flatten().filter_map(|f| f.as_str().map(str::to_owned)).collect();
+            let mut features: Vec<String> = d["features"].as_array().into_iter().flatten().filter_map(|f| f.as_str().map(str::to_owned)).collect();
+            // The package's own `[features]` can turn on a dependency's features (`default = ["craft/ui"]`), named by
+            // the dependency's key, which is its rename when it has one. Any of them may be on, so all count.
+            let key = d["rename"].as_str().unwrap_or(&dname);
+            features.extend(forwarded_features(&p["features"], key));
             deps.push(Dep { name: dname, kind, workspace, features });
         }
         out.push(Crate { name, deps });
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(out)
+}
+
+/// The features of dependency `key` that the package's `[features]` table (`features` in `cargo metadata`) turns on:
+/// `key/feat` and `key?/feat` entries.
+fn forwarded_features<'a>(table: &'a Value, key: &'a str) -> impl Iterator<Item = String> + 'a {
+    table.as_object().into_iter().flat_map(|t| t.values()).filter_map(Value::as_array).flatten().filter_map(Value::as_str).filter_map(move |entry| {
+        let (dep, feature) = entry.split_once('/')?;
+        (dep.strip_suffix('?').unwrap_or(dep) == key).then(|| feature.to_owned())
+    })
 }
 
 pub fn describe(class: Option<Class>) -> String {
@@ -396,6 +410,36 @@ mod tests {
         let g = from_metadata(&meta).unwrap();
         assert_eq!(g[0].deps[0].features, ["keymap", "ui"]);
         assert!(matches!(check(&g)[..], [Violation::UiBelowL6 { .. }]));
+    }
+
+    /// The keymap's egui conversions bring egui; the plain keymap does not.
+    #[test]
+    fn keymap_egui_is_a_ui_feature() {
+        assert!(matches!(check(&[with_features("photocraft-engine", "craft", Normal, &["keymap-egui"])])[..], [Violation::UiBelowL6 { .. }]));
+        assert!(check(&[with_features("photocraft-engine", "craft", Normal, &["keymap"])]).is_empty());
+    }
+
+    /// A UI feature turned on by the package's own `[features]` (also through a renamed dependency) counts; other
+    /// forwarded features don't.
+    #[test]
+    fn metadata_reads_features_forwarded_by_the_package() {
+        let meta = |features: &str, rename: &str| -> Value {
+            serde_json::from_str(&format!(
+                r#"{{"packages":[{{"name":"photocraft-engine","features":{features},"dependencies":[
+                    {{"name":"craft","kind":null,"features":["keymap"]{rename}}}]}}]}}"#
+            ))
+            .unwrap()
+        };
+        for (features, rename) in [(r#"{"default":["craft/ui"]}"#, ""), (r#"{"gui":["c?/ui"]}"#, r#","rename":"c""#)] {
+            let g = from_metadata(&meta(features, rename)).unwrap();
+            assert!(matches!(check(&g)[..], [Violation::UiBelowL6 { .. }]), "{features}");
+        }
+        for (features, rename) in
+            [(r#"{"default":["craft/imaging"]}"#, ""), (r#"{"gui":["other/ui","dep:craft"]}"#, ""), (r#"{"gui":["craft/ui"]}"#, r#","rename":"c""#)]
+        {
+            let g = from_metadata(&meta(features, rename)).unwrap();
+            assert!(check(&g).is_empty(), "{features} {rename}: {:?}", check(&g));
+        }
     }
 
     #[test]
