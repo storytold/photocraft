@@ -180,3 +180,34 @@ fn warp_grid_and_splits_keep_the_saved_pixels_of_a_frame_matching_neither_box() 
         assert!(smart(&s.active().unwrap().doc, id).unwrap().warp.is_some(), "{cmd} stores the warp");
     }
 }
+
+#[test]
+fn warp_grid_that_reshapes_an_edited_mesh_fails_rather_than_keep_mismatched_pixels() {
+    let (mut s, id) = placed((100.0, 100.0));
+    s.active_mut().unwrap().active_layer = Some(id);
+    s.execute("edit.transform.warpGrid", json!({"size": 3})).unwrap();
+    let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+    let LayerContent::Smart(sm) = &mut doc.layer_mut(id).unwrap().content else { panic!("a smart object") };
+    let mesh = sm.warp.as_mut().and_then(|w| w.mesh.as_mut()).expect("a 3 × 3 mesh");
+    // An inner control point, moved: a single patch can't follow that bend.
+    mesh.points[3 * 10 + 4][1] += 20.0;
+    let error = s.execute("edit.transform.warpGrid", json!({"size": 1})).unwrap_err();
+    assert!(error.to_string().contains("cropped"), "{error}");
+    assert_eq!(cache(&s, id).content_bounds(), Rect::new(20, 30, 120, 80), "the edit is undone");
+}
+
+fn deny_invert(id: &str, _: &serde_json::Value) -> crate::Result<()> {
+    if id == "image.adjustments.invert" { Err(EngineError::Other("invert isn't allowed here".into())) } else { Ok(()) }
+}
+
+#[test]
+fn warp_grid_reports_a_smart_filter_the_session_may_not_run() {
+    let (mut s, id) = placed((100.0, 100.0));
+    s.active_mut().unwrap().active_layer = Some(id);
+    let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+    let LayerContent::Smart(sm) = &mut doc.layer_mut(id).unwrap().content else { panic!("a smart object") };
+    sm.smart_filters.push(SmartFilter { command: "image.adjustments.invert".into(), params: json!({}), blend: BlendMode::Normal, opacity: 1.0, visible: true });
+    s.authorize = Some(deny_invert);
+    let error = s.execute("edit.transform.warpGrid", json!({"size": 3})).unwrap_err();
+    assert!(error.to_string().contains("isn't allowed"), "{error}");
+}

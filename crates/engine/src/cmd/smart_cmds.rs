@@ -100,6 +100,12 @@ fn decode_placed_source(file_name: &str, bytes: &[u8], sm: &SmartObject) -> Resu
     }
 }
 
+/// Whether `sm`'s contents are a PDF placed with a frame (`Sz  `), which is drawn cropped to it
+/// (#15650). PDF contents hold no smart objects of their own.
+pub(crate) fn is_placed_pdf(doc: &Document, sm: &SmartObject) -> bool {
+    source::source_bytes(&doc.metadata, &sm.source).is_some_and(|(_, bytes)| source::placed_pdf(&bytes, sm).is_some())
+}
+
 fn base_name(path: &str) -> String {
     path.rsplit(['/', '\\']).next().unwrap_or(path).to_string()
 }

@@ -639,19 +639,38 @@ fn split(s: &mut Session, p: &Value, cmd: &str, how: Split) -> Result<Value> {
         if let Some(Layer { content: LayerContent::Smart(sm), .. }) = doc.layer_mut(id) {
             sm.warp = Some(out.clone());
         }
-        refresh_keeping_saved(doc, id)
+        refresh_keeping_saved(doc, id, &w, &out)
     })?;
     Ok(json!({"layer": id.0, "warp": out}))
 }
 
-/// Re-renders smart object `id` after its warp's mesh changed without changing its surface (a
-/// split or a new grid). A source that can't be drawn keeps the pixels it was saved with, as a
-/// transform does.
-fn refresh_keeping_saved(doc: &mut Document, id: LayerId) -> Result<()> {
+/// Re-renders smart object `id` after its warp changed from `before` to `after` (a split or a new
+/// grid). When a placed PDF can't be drawn in its frame (#15650) and the warp still bends its
+/// contents the same way, the pixels it was saved with stay, as a transform keeps them; any other
+/// failure, including a smart filter the session may not run, is the command's.
+fn refresh_keeping_saved(doc: &mut Document, id: LayerId, before: &Warp, after: &Warp) -> Result<()> {
+    let Some(LayerContent::Smart(sm)) = doc.layer(id).map(|l| &l.content) else { return Err(EngineError::NoLayer(id)) };
+    for f in sm.smart_filters.iter().filter(|f| sm.filters_enabled && f.visible) {
+        crate::jobs::authorize_render_command(&f.command, &f.params)?;
+    }
+    let keeps = sm.cache.is_some() && crate::smart_cmds::is_placed_pdf(doc, sm) && same_surface(before, after);
     match crate::smart_cmds::refresh(doc, id) {
-        Err(_) if matches!(doc.layer(id).map(|l| &l.content), Some(LayerContent::Smart(sm)) if sm.cache.is_some()) => Ok(()),
+        Err(_) if keeps => Ok(()),
         r => r.map(|_| ()),
     }
+}
+
+/// Whether warps `a` and `b` map their contents alike: their surfaces agree to a hundredth of a
+/// pixel over a 16 × 16 grid.
+fn same_surface(a: &Warp, b: &Warp) -> bool {
+    let (a, b) = (a.to_mesh(1, 1), b.to_mesh(1, 1));
+    let steps = (0..=16).map(|i| f64::from(i) / 16.0);
+    steps.clone().all(|s| {
+        steps.clone().all(|t| {
+            let (p, q) = (a.eval(s, t), b.eval(s, t));
+            (p[0] - q[0]).hypot(p[1] - q[1]) < 0.01
+        })
+    })
 }
 
 /// Square preset size. `"default"` is 1. Numbers outside 1..=64 are rejected, not clamped.
@@ -715,7 +734,7 @@ fn grid(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(Layer { content: LayerContent::Smart(sm), .. }) = doc.layer_mut(id) {
             sm.warp = Some(out.clone());
         }
-        refresh_keeping_saved(doc, id)
+        refresh_keeping_saved(doc, id, &w, &out)
     })?;
     Ok(json!({"layer": id.0, "warp": out}))
 }
