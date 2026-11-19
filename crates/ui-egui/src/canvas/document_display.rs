@@ -439,17 +439,12 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, 
         view.pending.drain(..queued.len().min(view.pending.len()));
     }
     let canvas_output = shown.output;
-    if let Some(next) = canvas_output.view.as_ref() {
-        view.set_from(next, ppp);
-    }
-    // The scroll bars' and the compass's change: the bars drag the view, the compass turns it.
-    if let Some(next) = turned.as_ref() {
-        view.set_from(next, ppp);
-    }
     let response = hosted.unwrap_or_default();
-    // A view a tool set (the Crop tool's slide) is the one the app keeps; the canvas's own otherwise.
-    if let Some(next) = response.view.as_ref() {
-        view.set_from(next, ppp);
+    // The host also echoes the canvas's view (for example when rulers inset its rect). Only an actual tool
+    // edit takes precedence over the scroll bars or compass.
+    let tool_view = response.view.filter(|next| Some(*next) != canvas_output.view);
+    if let Some(next) = tool_view.or(turned).or(canvas_output.view) {
+        view.set_from(&next, ppp);
     }
     Shown { output: canvas_output, response, guides, overlay_context }
 }
@@ -621,14 +616,24 @@ mod tests {
     /// #15529: a fitting document can still move through its scroll bars when Overscroll is on.
     #[test]
     fn canvas_scrollbars_follow_overscroll_for_a_fitting_document() {
+        check_canvas_scrollbar_overscroll(false);
+    }
+
+    #[test]
+    fn canvas_scrollbars_follow_overscroll_with_rulers() {
+        check_canvas_scrollbar_overscroll(true);
+    }
+
+    fn check_canvas_scrollbar_overscroll(rulers: bool) {
         use egui::accesskit::Role;
         use egui::{Event, PointerButton, pos2, vec2};
         use egui_kittest::kittest::{NodeT, Queryable};
 
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).with_pixels_per_point(1.0).build_eframe(|cc| {
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).with_pixels_per_point(1.0).build_eframe(move |cc| {
             PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
             let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), crate::Services::default());
             app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+            app.ui.extras.rulers = rulers;
             app
         });
         h.run_steps(6);
@@ -650,6 +655,9 @@ mod tests {
             let vertical = h.get_by_role_and_label(Role::ScrollBar, "Vertical scroll bar");
             let track = horizontal.rect();
             let thumb_center = vertical.rect().center();
+            if rulers {
+                assert!(vertical.rect().top() < view.rect.top(), "the visible view is inset below the rulers");
+            }
             let room = |length: f32, document: f64| if overscroll { f64::from(length) - document } else { 0.0 };
             let x_room = room(view.rect.width(), 400.0);
             let y_room = room(view.rect.height(), 300.0);
