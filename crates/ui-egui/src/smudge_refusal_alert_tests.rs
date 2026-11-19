@@ -7,7 +7,7 @@ use serde_json::json;
 
 use super::brush_refusal_alert_tests::{active, alerts, app, refused, steps, stroke};
 use super::*;
-use crate::control::{ControlRequest, Outcome, handle};
+use crate::control::{ControlRequest, Reply, handle};
 
 #[test]
 fn a_hidden_target_layer() {
@@ -54,7 +54,7 @@ fn the_alert_is_listed_and_confirmed_over_the_control_channel() {
     let mut call = |method: &str, params: serde_json::Value| {
         let (req, _rx) = ControlRequest::new(method, params);
         match handle(&mut app, &ctx, &req) {
-            Outcome::Done(v) => v,
+            Reply::Done(v) => v,
             _ => panic!("{method}: expected an immediate reply"),
         }
     };
