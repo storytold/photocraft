@@ -98,3 +98,20 @@ fn the_raster_distance_preserves_the_opaque_interior_and_subpixel_outline() {
     assert_eq!(raster[mid + 11], 0.0, "the translucent interior is covered");
     assert_eq!(raster[mid + 15], inside[mid + 15], "the fully transparent pixel stays outside");
 }
+
+#[test]
+fn stroke_partial_alpha_keeps_intrinsic_alpha_for_inside_and_fills_it_for_center() {
+    for position in [StrokePosition::Inside, StrokePosition::Center] {
+        let mut doc = fixture(SampleType::U8, position);
+        let background = doc.layers[0].id;
+        doc.remove(background).unwrap();
+        let pixels = crate::render(&doc, doc.bounds());
+        for (x, source_alpha) in [(120, 128.0 / 255.0), (200, 64.0 / 255.0)] {
+            let actual = pixels.get(x, 60);
+            let expected_alpha = if position == StrokePosition::Inside { source_alpha } else { 1.0 };
+            assert_eq!(&actual[..3], &[0.0, 0.0, 1.0], "{position:?} at x={x}");
+            assert!((actual[3] - expected_alpha).abs() < 1e-6, "{position:?} at x={x}: {actual:?}");
+        }
+        assert_eq!(pixels.get(80, 60), [0.0; 4]);
+    }
+}
