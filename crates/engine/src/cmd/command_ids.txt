@@ -682,6 +682,7 @@ view.colorSamplers.move
 view.colorSamplers.delete
 view.colorSamplers.clear
 view.colorSamplers.list
+document.sampleChannels
 tools.decreaseBrushSize
 tools.increaseBrushSize
 tools.decreaseBrushHardness
