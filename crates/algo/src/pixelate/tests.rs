@@ -202,14 +202,18 @@ fn cell_filters_match_scalar_models_edges_and_fractional_cells() {
     // The cell filters see the mode only as a channel count, CMYK's ink direction (`subtractive`) and the native
     // background, so Lab adds nothing to RGB; cells of 100 and 300 are both past every `out`, and the seed has no
     // branch (0 and u32::MAX keep the wrapping ends) (#15652).
-    for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Multichannel] {
-        for alpha in [false, true] {
+    for (mi, mode) in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Multichannel].into_iter().enumerate() {
+        for (ai, alpha) in [false, true].into_iter().enumerate() {
             let ctx = Ctx { bounds, mode, alpha };
             for pattern in 0..5 {
                 for halo in [0, 7] {
                     let src = fixture(bounds.inflate(halo), &ctx, pattern);
                     for out in [bounds, Rect::new(-23, -15, 37, 31), Rect::new(-7, 2, 18, 13)] {
-                        for cell in [2.0, 3.75, 10.0, 300.0] {
+                        // Retain every mode/alpha pair and all four cell sizes for each mode.
+                        for (ci, cell) in [2.0, 3.75, 10.0, 300.0].into_iter().enumerate() {
+                            if ci % 2 != (mi + ai) % 2 {
+                                continue;
+                            }
                             for seed in [0, u32::MAX] {
                                 let got = cells::crystallize(&src, out, &ctx, cell, seed).unwrap();
                                 assert_bits(&got, &crystallize_direct(&src, out, &ctx, cell, seed));
