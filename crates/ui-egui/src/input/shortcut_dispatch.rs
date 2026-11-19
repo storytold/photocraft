@@ -10,7 +10,9 @@
 //! shortcut whose command is disabled in the current state reports why on the status bar instead
 //! of doing nothing silently, as the greyed menu item shows.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
+
+use rustc_hash::FxHashMap;
 
 use craft::color_ui::ui::SwatchesCommand;
 use craft::keymap::{Binding, Chord, CommandDef, CommandKind, Overrides, Scope};
@@ -160,10 +162,10 @@ fn bridge_of(command: &CommandRef) -> Option<(&'static str, Bridged)> {
 }
 
 /// Runtime rows indexed by id, keeping the first row if an id appears more than once.
-fn runtime_by_id() -> &'static HashMap<&'static str, Bridged> {
-    static TABLE: std::sync::OnceLock<HashMap<&'static str, Bridged>> = std::sync::OnceLock::new();
+fn runtime_by_id() -> &'static FxHashMap<&'static str, Bridged> {
+    static TABLE: std::sync::OnceLock<FxHashMap<&'static str, Bridged>> = std::sync::OnceLock::new();
     TABLE.get_or_init(|| {
-        let mut table = HashMap::new();
+        let mut table = FxHashMap::default();
         for &(id, bridged) in RUNTIME_COMMANDS {
             table.entry(id).or_insert(bridged);
         }
