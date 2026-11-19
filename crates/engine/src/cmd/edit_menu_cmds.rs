@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::channel_cmds::Target;
-use crate::commands::{CommandSpec, blend_from_str, int, layer_param};
+use crate::commands::{CommandSpec, int, layer_param, parse_blend};
 use crate::{EngineError, Result, Session};
 
 // ------------------------------------------------------------------ state

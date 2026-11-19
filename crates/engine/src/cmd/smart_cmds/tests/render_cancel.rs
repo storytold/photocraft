@@ -68,7 +68,7 @@ fn sources() -> Vec<(&'static str, String, Vec<u8>, SmartObject)> {
         Some(block(&doc.pixel_format(), nonce, Rect::new(0, 2, 30, 28))),
     );
     let mut nested = layered(nonce, 0);
-    nested.layers = vec![Layer::new("inner", LayerContent::Smart(inner))];
+    nested.layers = vec![Layer::new("inner", LayerContent::Smart(inner))].into();
     let scale = Affine { m: [1.5, 0.0, 0.0, 1.5, 3.25, 1.5] };
     type Kind<'a> = (&'static str, &'a str, Vec<u8>, Option<StackMode>, Affine);
     let kinds: Vec<Kind> = vec![
@@ -138,7 +138,7 @@ fn a_cmyk_or_lab_source_checks_for_a_cancel_between_bands() {
         // Three bands of 1 Mpx at most: 256, 256 and 8 rows.
         let mut doc = Document::new("bands", Size::new(4096, 520), mode, SampleType::U8);
         let layer_fmt = doc.pixel_format();
-        doc.layers = vec![Layer::new("block", LayerContent::Raster(block(&layer_fmt, 3, Rect::new(10, 200, 4000, 300))))];
+        doc.layers = vec![Layer::new("block", LayerContent::Raster(block(&layer_fmt, 3, Rect::new(10, 200, 4000, 300))))].into();
         let at = CancelAt::new(usize::MAX);
         let cancel = || at.cancelled();
         let banded = flattened_source_with(&doc, fmt, &Interrupt::cancel_only(&cancel)).unwrap();

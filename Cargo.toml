@@ -176,6 +176,10 @@ opt-level = 0
 [profile.test.package.photocraft-engine]
 opt-level = 0
 
+# Only the exhaustive rounding proof needs maximum optimization; algo stays at its usual level.
+[profile.test.package.photocraft-oil-round-proof]
+opt-level = 3
+
 # Test builds compile the craft UI framework (the `craft` facade and the craft-libs crates behind
 # it) below the opt-level 2 of `package."*"` above. The workspace unifies the facade's features, so
 # every crate that uses `craft`, photocraft-text included, waits for the whole framework. At 2 the
