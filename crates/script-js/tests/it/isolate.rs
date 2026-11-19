@@ -23,6 +23,16 @@ const GRACE: Duration = Duration::from_secs(5);
 
 /// The host executable: this crate's own, or another one that serves `--script-host` (such as
 /// the app's release binary) named by `PHOTOCRAFT_TEST_SCRIPT_HOST`.
+/// The full name the test harness knows test `f` of this module by (`isolate::f`), for running
+/// it alone in a copy of this test binary.
+#[cfg(unix)]
+fn test_name(f: &str) -> String {
+    match module_path!().split_once("::") {
+        Some((_, module)) => format!("{module}::{f}"),
+        None => f.to_owned(),
+    }
+}
+
 fn host_program() -> std::path::PathBuf {
     std::env::var_os("PHOTOCRAFT_TEST_SCRIPT_HOST").map_or_else(|| env!("CARGO_BIN_EXE_photocraft-script-host").into(), Into::into)
 }
@@ -523,7 +533,7 @@ fn a_memory_marker_read_after_the_host_exited_still_counts() {
     // to deliver the marker late, as a pipe being drained would. The host waits a moment so the
     // writer has started before it aborts.
     let exe = std::env::current_exe().unwrap();
-    let script = format!("{LATE_MARKER}=1 '{}' --exact late_marker_writer --quiet >/dev/null & sleep 0.5; kill -ABRT $$", exe.display());
+    let script = format!("{LATE_MARKER}=1 '{}' --exact {} --quiet >/dev/null & sleep 0.5; kill -ABRT $$", exe.display(), test_name("late_marker_writer"));
     let seen = stand_in("late-stderr", &[], &script, Duration::ZERO);
     report("late stderr", &seen);
     assert_eq!(failure(&seen).kind, FailureKind::MemoryLimit);
@@ -747,7 +757,7 @@ fn the_host_exits_when_the_app_dies() {
         return;
     }
     let mut app = Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "the_host_exits_when_the_app_dies", "--nocapture", "--test-threads=1"])
+        .args(["--exact", &test_name("the_host_exits_when_the_app_dies"), "--nocapture", "--test-threads=1"])
         .env(STAND_IN_APP, "1")
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

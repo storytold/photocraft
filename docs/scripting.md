@@ -52,7 +52,7 @@ per-run budget (`ui-egui/src/scripts.rs`).
 
 ## What is tested
 
-| Platform | Unit and integration tests (`photocraft-script-js`) | Script host process tests (`tests/isolate.rs`) | App tests (`ui-egui` scripts, actions) | By hand |
+| Platform | Unit and integration tests (`photocraft-script-js`) | Script host process tests (`tests/it/isolate.rs`) | App tests (`ui-egui` scripts, actions) | By hand |
 |---|---|---|---|---|
 | Linux x86_64 | CI (gate) and locally | CI (gate) and locally | CI (gate) and locally | Not yet |
 | Windows x64 | CI (Windows unit and integration jobs) | CI (Windows integration job; the Unix-only ones are skipped) | CI (Windows unit job) | Not yet |
@@ -61,10 +61,10 @@ per-run budget (`ui-egui/src/scripts.rs`).
 | FreeBSD | Not run on pull requests | Not run | Not run | Not yet |
 | Web (wasm) | The page's side (`isolate/web_job.rs`) on every platform, with a fake Worker; the Worker itself is compile-checked for wasm32 by the web build job | — | The web app's script service with a fake Worker (`photocraft-web/src/scripts.rs`) | Not yet |
 
-The tests run scripts against a real session (`tests/dom.rs`, `tests/run.rs`), against hostile
-script hosts that forge or flood messages (`tests/isolate.rs`), and through the app with a fake
+The tests run scripts against a real session (`tests/it/dom.rs`, `tests/it/run.rs`), against hostile
+script hosts that forge or flood messages (`tests/it/isolate.rs`), and through the app with a fake
 script service (`ui-egui/src/scripts/tests.rs`). Published community scripts run unchanged
-in `tests/community.rs`:
+in `tests/it/community.rs`:
 
 - **Export Layer Coordinates** runs to its end: it asks for a folder, walks the layers into
   groups, and reports. It also writes a text file, and scripts can't do that yet. The script

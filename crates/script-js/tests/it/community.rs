@@ -1,5 +1,5 @@
 //! Real-world community scripts, run end to end against a session as they were published. Each
-//! fixture in `tests/community/` keeps its licence beside it (`<name>.LICENSE`) and its source in
+//! fixture in `tests/it/community/` keeps its licence beside it (`<name>.LICENSE`) and its source in
 //! `ATTRIBUTION.md`. The scripts are unchanged; what a test asserts is what PhotoCraft does with
 //! them, including where a script reaches something PhotoCraft doesn't offer yet.
 

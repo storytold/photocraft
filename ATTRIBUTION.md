@@ -107,12 +107,12 @@ Files copied into `corpus/` by hand (tiff, exr, raw) must be MIT, BSD or CC0.
 
 ## Community script fixtures
 
-Real-world Photoshop scripts, unchanged, that `crates/script-js/tests/community.rs` runs as far as scripts can go today: Export Layer Coordinates reaches its report but writes no file, and Export Layers To Files (Fast) stops where it reads its dialog's resource file. Each licence sits next to its script.
+Real-world Photoshop scripts, unchanged, that `crates/script-js/tests/it/community.rs` runs as far as scripts can go today: Export Layer Coordinates reaches its report but writes no file, and Export Layers To Files (Fast) stops where it reads its dialog's resource file. Each licence sits next to its script.
 
 | Path | Title | Author | Source | License |
 |---|---|---|---|---|
-| `crates/script-js/tests/community/export_layer_coordinates.jsx` | Export Layer Coordinates (writes each layer's name and position to a text file) | Chris DeLuca | [bronzehedwick/Adobe-Export-Scripts](https://github.com/bronzehedwick/Adobe-Export-Scripts) at `28027a831974f95c482f297f63119ce6430d743a`, `Photoshop/Export Layer Coordinates Photoshop.jsx` | MIT, [`export_layer_coordinates.LICENSE`](crates/script-js/tests/community/export_layer_coordinates.LICENSE) |
-| `crates/script-js/tests/community/export_layers_to_files_fast.jsx` | Export Layers To Files (Fast) v2.7.1 | The Export Layers To Files (Fast) contributors | [antipalindrome/Photoshop-Export-Layers-to-Files-Fast](https://github.com/antipalindrome/Photoshop-Export-Layers-to-Files-Fast) at `40492edacbf8a7116c4750e9c591569fa20576dd` | MIT, [`export_layers_to_files_fast.LICENSE`](crates/script-js/tests/community/export_layers_to_files_fast.LICENSE) |
+| `crates/script-js/tests/it/community/export_layer_coordinates.jsx` | Export Layer Coordinates (writes each layer's name and position to a text file) | Chris DeLuca | [bronzehedwick/Adobe-Export-Scripts](https://github.com/bronzehedwick/Adobe-Export-Scripts) at `28027a831974f95c482f297f63119ce6430d743a`, `Photoshop/Export Layer Coordinates Photoshop.jsx` | MIT, [`export_layer_coordinates.LICENSE`](crates/script-js/tests/it/community/export_layer_coordinates.LICENSE) |
+| `crates/script-js/tests/it/community/export_layers_to_files_fast.jsx` | Export Layers To Files (Fast) v2.7.1 | The Export Layers To Files (Fast) contributors | [antipalindrome/Photoshop-Export-Layers-to-Files-Fast](https://github.com/antipalindrome/Photoshop-Export-Layers-to-Files-Fast) at `40492edacbf8a7116c4750e9c591569fa20576dd` | MIT, [`export_layers_to_files_fast.LICENSE`](crates/script-js/tests/it/community/export_layers_to_files_fast.LICENSE) |
 
 ## Embedded-vector editor source
 
