@@ -318,6 +318,30 @@ fn inside(a: f32) -> bool {
     a > INSIDE_EPS
 }
 
+/// Coverage of an inside stroke before the layer applies its own alpha.
+#[inline]
+fn inside_stroke_coverage(alpha: f32, distance: f32, limit: f32) -> f32 {
+    if inside(alpha) { (limit - distance).clamp(0.0, 1.0) } else { 0.0 }
+}
+
+/// A Normal stroke replaces the layer beneath its band by coverage, then adds its own paint.
+#[inline]
+fn replace_under_stroke(pixel: &mut [f32; 4], paint: [f32; 4], coverage: f32) {
+    if paint[3] <= 0.0 {
+        return;
+    }
+    let kept = pixel[3] * (1.0 - coverage.clamp(0.0, 1.0));
+    let alpha = kept + paint[3];
+    if alpha > 0.0 {
+        *pixel = [
+            (pixel[0] * kept + paint[0] * paint[3]) / alpha,
+            (pixel[1] * kept + paint[1] * paint[3]) / alpha,
+            (pixel[2] * kept + paint[2] * paint[3]) / alpha,
+            alpha.min(1.0),
+        ];
+    }
+}
+
 /// An effect map as a fraction of the shape's own coverage.
 fn relative_to_shape(m: Map, shape: &Map) -> Map {
     let v = m.v.iter().zip(&shape.v).map(|(m, a)| if inside(*a) { (m / a).min(1.0) } else { 0.0 }).collect();
@@ -570,25 +594,31 @@ impl<'a> EffectPass<'a> {
             if in_w <= 0.0 {
                 continue;
             }
-            let mut m = Map::new(self.w, self.h, 0.0);
-            for ((mv, a), dv) in m.v.iter_mut().zip(&shape.v).zip(&fields.din) {
-                *mv = if inside(*a) { (in_w + 0.5 - dv).clamp(0.0, 1.0) } else { 0.0 };
-            }
-            if st.common.blend == BlendMode::Normal {
-                // A Normal stroke replaces the layer under it instead of blending with it
-                // (Photoshop): at 50 % opacity an opaque pixel under the stroke turns into the
-                // stroke colour at 50 % alpha, not a 50/50 mix.
-                let mut stroke_px = alloc.filled(self.big, [0.0; 4])?;
-                paint_fx(&mut stroke_px, &m, &st.paint, self.stroke_frame(st), self.anchor, self.big, BlendMode::Normal, st.common.opacity, self.patterns);
-                for ((p, s), cov) in lay.px.iter_mut().zip(&stroke_px.px).zip(&m.v) {
-                    if s[3] <= 0.0 {
+            let limit = in_w + 0.5;
+            let opacity = st.common.opacity;
+            if let (BlendMode::Normal, FxPaint::Color(color)) = (st.common.blend, &st.paint) {
+                // Solid colour is constant, so we can paint and replace in one pass.
+                let [r, g, b] = rgb(color);
+                for ((pixel, &a), &distance) in lay.px.iter_mut().zip(&shape.v).zip(&fields.din) {
+                    let coverage = inside_stroke_coverage(a, distance, limit);
+                    let alpha = coverage * opacity;
+                    if alpha <= 0.0 {
                         continue;
                     }
-                    let kept = p[3] * (1.0 - cov.clamp(0.0, 1.0));
-                    let alpha = kept + s[3];
-                    if alpha > 0.0 {
-                        *p = [(p[0] * kept + s[0] * s[3]) / alpha, (p[1] * kept + s[1] * s[3]) / alpha, (p[2] * kept + s[2] * s[3]) / alpha, alpha.min(1.0)];
-                    }
+                    let paint = psblend::composite(BlendMode::Normal, [0.0; 4], [r, g, b, alpha], 1.0);
+                    replace_under_stroke(pixel, paint, coverage);
+                }
+                continue;
+            }
+            let mut m = Map::new(self.w, self.h, 0.0);
+            for ((coverage, &a), &distance) in m.v.iter_mut().zip(&shape.v).zip(&fields.din) {
+                *coverage = inside_stroke_coverage(a, distance, limit);
+            }
+            if st.common.blend == BlendMode::Normal {
+                let mut stroke_px = alloc.filled(self.big, [0.0; 4])?;
+                paint_fx(&mut stroke_px, &m, &st.paint, self.stroke_frame(st), self.anchor, self.big, BlendMode::Normal, opacity, self.patterns);
+                for ((pixel, &paint), &coverage) in lay.px.iter_mut().zip(&stroke_px.px).zip(&m.v) {
+                    replace_under_stroke(pixel, paint, coverage);
                 }
             } else {
                 paint_fx(lay, &m, &st.paint, self.stroke_frame(st), self.anchor, self.big, st.common.blend, st.common.opacity, self.patterns);
