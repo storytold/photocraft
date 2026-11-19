@@ -235,7 +235,9 @@ pub(crate) mod params {
                 // An editor of Record Again or of a paused menu step: its answer is judged as the step requires, with the
                 // values OK runs.
                 let params = crate::filter_dialog::command_params(&result.key, &result.fields);
-                crate::actions::check_editor(app, id, &result.key, &params).map_err(Label::from)
+                // The Define Pattern / Brush Preset blank-name refusal holds here too, before the step judges the answer.
+                let named = params.as_object().map_or(Ok(()), |fields| crate::dialogs::define_name::check(app, &result.key, fields));
+                named.and_then(|()| crate::actions::check_editor(app, id, &result.key, &params).map_err(Label::from))
             } else {
                 match family_for(&result.key).and_then(|family| family.check) {
                     Some(check) => check(app, &result),
