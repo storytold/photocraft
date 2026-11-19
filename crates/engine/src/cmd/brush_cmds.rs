@@ -448,7 +448,7 @@ fn with_blend_mode(mut b: BrushSettings, p: &Value) -> BrushSettings {
     } else if p.get("mode").and_then(Value::as_str).is_some_and(|m| m.eq_ignore_ascii_case("behind")) {
         b.mode = photocraft_color::BlendMode::Normal;
         b.behind = true;
-    } else if let Some(m) = p.get("mode").and_then(Value::as_str).and_then(crate::commands::blend_from_str) {
+    } else if let Some(m) = p.get("mode").and_then(Value::as_str).and_then(crate::commands::parse_blend) {
         b.mode = m;
         b.behind = false;
     }
@@ -980,9 +980,9 @@ fn name_param(p: &Value, cmd: &str) -> Result<String> {
 
 /// Replace the preset of that name, or append it at the end of the list.
 fn upsert(s: &mut Session, preset: BrushPreset) {
-    match s.tools.presets.iter_mut().find(|x| x.name.eq_ignore_ascii_case(&preset.name)) {
+    match std::sync::Arc::make_mut(&mut s.tools.presets).iter_mut().find(|x| x.name.eq_ignore_ascii_case(&preset.name)) {
         Some(x) => *x = preset,
-        None => s.tools.presets.push(preset),
+        None => std::sync::Arc::make_mut(&mut s.tools.presets).push(preset),
     }
     s.brush_presets_changed();
 }
@@ -1010,7 +1010,7 @@ fn presets_delete(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "brush.presets.delete";
     let name = name_param(p, cmd)?;
     let before = s.tools.presets.len();
-    s.tools.presets.retain(|x| !x.name.eq_ignore_ascii_case(&name));
+    std::sync::Arc::make_mut(&mut s.tools.presets).retain(|x| !x.name.eq_ignore_ascii_case(&name));
     if s.tools.presets.len() == before {
         return Err(bad(cmd, format!("no brush preset named `{name}`")));
     }
@@ -1043,7 +1043,10 @@ fn presets_update(s: &mut Session, p: &Value) -> Result<Value> {
         Some(patch) => merge_brush(&s.tools.brush, patch, cmd)?,
         None => s.tools.brush.clone(),
     };
-    let pr = s.tools.presets.iter_mut().find(|x| x.name.eq_ignore_ascii_case(&name)).ok_or_else(|| bad(cmd, format!("no brush preset named `{name}`")))?;
+    let pr = std::sync::Arc::make_mut(&mut s.tools.presets)
+        .iter_mut()
+        .find(|x| x.name.eq_ignore_ascii_case(&name))
+        .ok_or_else(|| bad(cmd, format!("no brush preset named `{name}`")))?;
     pr.brush = brush;
     pr.builtin = false;
     let (name, group) = (pr.name.clone(), pr.group.clone());

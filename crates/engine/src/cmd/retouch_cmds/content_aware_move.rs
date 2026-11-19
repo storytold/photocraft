@@ -696,12 +696,18 @@ impl ContentAwarePreview {
 /// Prepare the preview of `paint.contentAwareMove` with params `p` on the active document. Errors
 /// as the command does (bad params, nothing to move, a selection larger than the command takes).
 pub fn preview(s: &Session, p: &Value) -> Result<ContentAwarePreview> {
+    preview_with_pixel_budget(s, p, PREVIEW_MAX_PIXELS)
+}
+
+/// Prepare a preview with a bound on the number of pixels solved at full resolution.
+pub(crate) fn preview_with_pixel_budget(s: &Session, p: &Value, max_pixels: u64) -> Result<ContentAwarePreview> {
     let captured = crate::channel_cmds::inject_target(s, CMD, p.clone());
     let p = &captured;
     let plan = plan(s, p, PREVIEW_MARGIN)?;
     let px = |r: Rect| u64::from(r.width()) * u64::from(r.height());
     let pixels = px(plan.area).max(px(plan.dest));
-    let scale = if pixels > PREVIEW_MAX_PIXELS { (PREVIEW_MAX_PIXELS as f64 / pixels as f64).sqrt() } else { 1.0 };
+    let max_pixels = max_pixels.max(1);
+    let scale = if pixels > max_pixels { (max_pixels as f64 / pixels as f64).sqrt() } else { 1.0 };
     let d = s.active().ok_or(EngineError::NoDocument)?;
     Ok(ContentAwarePreview { colors: crate::color_channels::target(s, p)?, doc: d.doc.clone(), plan, params: p.clone(), scale })
 }
